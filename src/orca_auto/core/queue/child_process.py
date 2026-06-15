@@ -175,13 +175,25 @@ def request_job_cancellation(
     terminate_process_fn: Callable[[Any], None],
 ) -> None:
     try:
-        send_signal = getattr(proc, "send_signal", None)
-        if callable(send_signal):
-            send_signal(cancel_signal)
-        else:
-            os.kill(proc.pid, cancel_signal)
+        pid = getattr(proc, "pid", None)
+        if pid is not None:
+            try:
+                os.killpg(pid, cancel_signal)
+                return
+            except (OSError, ProcessLookupError, PermissionError):
+                pass
+
+        _send_process_cancellation_signal(proc, cancel_signal)
     except (OSError, ProcessLookupError, PermissionError):
         terminate_process_fn(proc)
+
+
+def _send_process_cancellation_signal(proc: Any, cancel_signal: int) -> None:
+    send_signal = getattr(proc, "send_signal", None)
+    if callable(send_signal):
+        send_signal(cancel_signal)
+        return
+    os.kill(proc.pid, cancel_signal)
 
 
 __all__ = [

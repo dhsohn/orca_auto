@@ -42,7 +42,7 @@ def pop_completed_worker_jobs(
     *,
     poll_job: Callable[[T], int | None],
     finalize_finished: Callable[[str, T, int], None],
-    on_finalize_error: Callable[[str, T, int, Exception], None] | None = None,
+    on_finalize_error: Callable[[str, T, int, Exception], bool | None] | None = None,
 ) -> int:
     completed: list[tuple[str, T, int]] = []
     for queue_id, job in list(running.items()):
@@ -52,17 +52,23 @@ def pop_completed_worker_jobs(
         completed.append((queue_id, job, rc))
 
     for queue_id, job, rc in completed:
+        remove_running_job = False
         try:
             finalize_finished(queue_id, job, rc)
         except Exception as exc:  # noqa: BLE001
             # Without a handler the caller keeps the historical re-raise contract.
             # With one (the supervised loop), a single job's finalize failure is
-            # isolated so the long-running worker survives. KeyboardInterrupt and
-            # SystemExit are BaseException and intentionally still propagate.
+            # isolated so the long-running worker survives. The handler must opt
+            # in to dropping the job after it has made queue state safe.
+            # KeyboardInterrupt and SystemExit are BaseException and intentionally
+            # still propagate.
             if on_finalize_error is None:
                 raise
-            on_finalize_error(queue_id, job, rc, exc)
-        finally:
+            remove_running_job = bool(on_finalize_error(queue_id, job, rc, exc))
+        else:
+            remove_running_job = True
+
+        if remove_running_job:
             running.pop(queue_id, None)
     return len(completed)
 
@@ -164,14 +170,15 @@ class QueueWorkerLoop:
             on_finalize_error=self._on_finalize_error,
         )
 
-    def _on_finalize_error(self, queue_id: str, job: Any, rc: int, exc: Exception) -> None:
+    def _on_finalize_error(self, queue_id: str, job: Any, rc: int, exc: Exception) -> bool:
         del job
         LOGGER.error(
-            "worker job finalize failed; dropping job to keep worker alive: queue_id=%s rc=%s",
+            "worker job finalize failed; keeping job for retry: queue_id=%s rc=%s",
             queue_id,
             rc,
             exc_info=exc,
         )
+        return False
 
     def _running_jobs(self) -> list[tuple[str, Any]]:
         return list(self._running.items())

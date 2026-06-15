@@ -250,6 +250,57 @@ def test_cmd_run_dir_reports_ambiguous_layout(
     assert "Ambiguous workflow_dir" in capsys.readouterr().err
 
 
+def test_cmd_run_dir_workflow_type_override_resolves_ambiguous_layout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workflow_dir = tmp_path / "ambiguous_job"
+    workflow_root = tmp_path / "manifest_workflows"
+    workflow_root.mkdir()
+    workflow_dir.mkdir()
+    (workflow_dir / "flow.yaml").write_text(
+        f"workflow_root: {workflow_root}\n",
+        encoding="utf-8",
+    )
+    (workflow_dir / "reactant.xyz").write_text("x", encoding="utf-8")
+    (workflow_dir / "product.xyz").write_text("x", encoding="utf-8")
+    (workflow_dir / "input.xyz").write_text("x", encoding="utf-8")
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        cli_run_dir,
+        "create_conformer_screening_workflow",
+        lambda **kwargs: captured.update(kwargs) or _create_payload("conformer_screening"),
+    )
+
+    args = SimpleNamespace(
+        workflow_dir=str(workflow_dir),
+        workflow_type="conformer_screening",
+        workflow_root=None,
+        reactant_xyz=None,
+        product_xyz=None,
+        input_xyz=None,
+        crest_mode=None,
+        priority=None,
+        max_cores=None,
+        max_memory_gb=None,
+        max_crest_candidates=None,
+        max_xtb_stages=None,
+        max_orca_stages=None,
+        orca_route_line=None,
+        charge=None,
+        multiplicity=None,
+        orca_auto_config=None,
+        json=False,
+    )
+
+    assert cli_run_dir.cmd_run_dir(args) == 0
+    assert "workflow_id: wf_create_conformer_screening" in capsys.readouterr().out
+    assert captured["input_xyz"] == str((workflow_dir / "input.xyz").resolve())
+    assert captured["workflow_root"] == str(workflow_root.resolve())
+
+
 def test_cmd_run_dir_requires_manifest_before_materializing_workflow(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

@@ -17,6 +17,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     env:
       PYTHONDONTWRITEBYTECODE: "1"
+      PYTHON_BIN: python
     steps:
       - name: Checkout
         uses: actions/checkout@v4

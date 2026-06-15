@@ -598,7 +598,7 @@ def test_pop_completed_worker_jobs_finalizes_and_removes_finished_jobs() -> None
     assert list(running) == ["q-running"]
 
 
-def test_pop_completed_worker_jobs_removes_finished_job_when_finalizer_raises() -> None:
+def test_pop_completed_worker_jobs_keeps_finished_job_when_finalizer_raises() -> None:
     running = {"q-done": SimpleNamespace(rc=0)}
 
     with pytest.raises(RuntimeError, match="finalizer failed"):
@@ -610,7 +610,7 @@ def test_pop_completed_worker_jobs_removes_finished_job_when_finalizer_raises() 
             ),
         )
 
-    assert running == {}
+    assert list(running) == ["q-done"]
 
 
 def test_pop_completed_worker_jobs_isolates_finalize_error_when_handler_supplied() -> None:
@@ -636,6 +636,33 @@ def test_pop_completed_worker_jobs_isolates_finalize_error_when_handler_supplied
     assert count == 2
     assert finalized == ["q-good"]
     assert errors == [("q-bad", 1, "boom")]
+    assert list(running) == ["q-bad"]
+
+
+def test_pop_completed_worker_jobs_removes_failed_finalize_when_handler_recovers() -> None:
+    running = {
+        "q-bad": SimpleNamespace(rc=1),
+        "q-good": SimpleNamespace(rc=0),
+    }
+    recovered: list[str] = []
+
+    def finalize(queue_id: str, _job: object, _rc: int) -> None:
+        if queue_id == "q-bad":
+            raise RuntimeError("boom")
+
+    def recover(queue_id: str, _job: object, _rc: int, _exc: Exception) -> bool:
+        recovered.append(queue_id)
+        return True
+
+    count = worker_common.pop_completed_worker_jobs(
+        running,
+        poll_job=lambda job: job.rc,
+        finalize_finished=finalize,
+        on_finalize_error=recover,
+    )
+
+    assert count == 2
+    assert recovered == ["q-bad"]
     assert running == {}
 
 
@@ -655,7 +682,7 @@ def test_queue_worker_loop_survives_finalize_error_and_logs(
     with caplog.at_level(logging.ERROR):
         loop._check_completed_jobs()  # must not raise: a finalize failure cannot kill the worker
 
-    assert loop._running == {}
+    assert list(loop._running) == ["q-1"]
     assert any("finalize failed" in record.getMessage() for record in caplog.records)
 
 
@@ -889,7 +916,7 @@ def test_finalize_process_finished_job_skips_terminal_mark_when_entry_was_requeu
     assert released == ["slot-1"]
 
 
-def test_finalize_process_finished_job_releases_slot_when_terminal_mark_raises(
+def test_finalize_process_finished_job_keeps_slot_when_terminal_mark_raises(
     tmp_path: Path,
 ) -> None:
     queue_root = tmp_path / "queue"
@@ -933,7 +960,63 @@ def test_finalize_process_finished_job_releases_slot_when_terminal_mark_raises(
             ),
         )
 
+    assert released == []
+
+
+def test_finalize_process_finished_job_releases_slot_when_completed_side_effect_raises(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    queue_root = tmp_path / "queue"
+    current = _entry("q-1", status="running")
+    completed: list[str] = []
+    side_effects: list[str] = []
+    released: list[str] = []
+    worker = SimpleNamespace(
+        cfg=object(),
+        allowed_root=queue_root,
+        admission_root=tmp_path / "admission",
+        _release_admission_slot=released.append,
+    )
+    job = SimpleNamespace(
+        queue_root=queue_root,
+        reaction_dir=str(tmp_path / "rxn"),
+        admission_token="slot-1",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        lifecycle_helpers.finalize_process_finished_job(
+            worker,
+            "q-1",
+            job,
+            rc=0,
+            hooks=lifecycle_helpers.EngineQueueProcessLifecycleHooks(
+                queue_entry_id_fn=lambda entry: entry.queue_id,
+                queue_entry_app_name_fn=lambda _entry: "app",
+                queue_entry_task_id_fn=lambda _entry: "task",
+                update_slot_metadata_fn=lambda *_args, **_kwargs: None,
+                terminate_process_fn=lambda _proc: None,
+                mark_failed_fn=lambda *_args, **_kwargs: None,
+                upsert_running_job_record_fn=lambda *_args, **_kwargs: None,
+                get_run_id_from_state_fn=lambda _reaction_dir: "run-1",
+                get_cancel_requested_fn=lambda *_args, **_kwargs: False,
+                mark_cancelled_fn=lambda *_args, **_kwargs: None,
+                mark_completed_fn=lambda _root, queue_id, **_kwargs: completed.append(queue_id),
+                upsert_terminal_job_record_fn=lambda *_args, **_kwargs: side_effects.append(
+                    "record"
+                ),
+                notify_terminal_job_from_state_fn=lambda *_args, **_kwargs: True,
+                find_queue_entry_fn=lambda _root, _queue_id: current,
+                on_completed_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    RuntimeError("organize failed")
+                ),
+            ),
+        )
+
+    assert completed == ["q-1"]
+    assert side_effects == ["record"]
     assert released == ["slot-1"]
+    assert any("completed-job side effect" in record.getMessage() for record in caplog.records)
 
 
 def test_reconcile_orphaned_running_with_policy_preserves_roots_and_reason(
@@ -1096,8 +1179,33 @@ def test_request_job_cancellation_uses_signal_then_kill_fallback(
     )
     assert sent_signals == [15]
 
+    proc = FakeManagedProcess(pid=4242)
+    killpg_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        child_process_helpers.os,
+        "killpg",
+        lambda pid, signal_value: killpg_calls.append((pid, signal_value)),
+    )
+
+    child_process_helpers.request_job_cancellation(
+        proc,
+        cancel_signal=15,
+        terminate_process_fn=lambda _proc: pytest.fail("killpg should be enough"),
+    )
+
+    assert killpg_calls == [(4242, 15)]
+    assert proc.sent_signals == []
+
     killed: list[tuple[int, int]] = []
     terminated: list[int] = []
+
+    monkeypatch.setattr(
+        child_process_helpers.os,
+        "killpg",
+        lambda _pid, _signal_value: (_ for _ in ()).throw(
+            ProcessLookupError("missing process group")
+        ),
+    )
 
     def fake_kill(pid: int, signal_value: int) -> None:
         killed.append((pid, signal_value))

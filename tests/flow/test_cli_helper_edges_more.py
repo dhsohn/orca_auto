@@ -164,6 +164,27 @@ def test_run_dir_workflow_options_apply_cli_manifest_section_default_precedence(
     assert options.max_orca_stages == 3
 
 
+def test_required_workflow_root_uses_manifest_before_shared_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manifest_root = tmp_path / "manifest_workflows"
+    monkeypatch.setattr(
+        run_dir_options,
+        "_cli_workflow_root_for_args",
+        lambda args, *, config_path=None: (_ for _ in ()).throw(
+            AssertionError("shared config should not be read")
+        ),
+    )
+
+    resolved = run_dir_options._resolve_required_workflow_root(
+        SimpleNamespace(workflow_root=None, config=None, orca_auto_config=None),
+        {"workflow": {"root": str(manifest_root)}},
+    )
+
+    assert resolved == str(manifest_root.resolve())
+
+
 @pytest.mark.parametrize(
     ("manifest", "sections", "message"),
     [

@@ -88,8 +88,6 @@ def mark_terminal_process_queue_entry(
     elif rc == 0:
         logger.info("Job completed: %s (rc=%d)", queue_id, rc)
         hooks.mark_completed_fn(queue_root, queue_id, run_id=run_id)
-        if hooks.on_completed_fn is not None:
-            hooks.on_completed_fn(worker, job)
     else:
         logger.warning("Job failed: %s (rc=%d)", queue_id, rc)
         hooks.mark_failed_fn(
@@ -128,9 +126,15 @@ def record_terminal_process_side_effects(
     queue_id: str,
     job: Any,
     *,
+    rc: int,
     hooks: EngineQueueProcessLifecycleHooks,
     logger: logging.Logger = LOGGER,
 ) -> None:
+    if rc == 0 and hooks.on_completed_fn is not None:
+        try:
+            hooks.on_completed_fn(worker, job)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to run completed-job side effect for %s: %s", queue_id, exc)
     run_terminal_process_side_effects(
         worker,
         queue_id,
@@ -152,16 +156,16 @@ def finalize_process_finished_job(
     rc: int,
     hooks: EngineQueueProcessLifecycleHooks,
 ) -> None:
+    marked_terminal = mark_terminal_process_queue_entry(
+        worker,
+        queue_id,
+        job,
+        rc=rc,
+        hooks=hooks,
+    )
     try:
-        marked_terminal = mark_terminal_process_queue_entry(
-            worker,
-            queue_id,
-            job,
-            rc=rc,
-            hooks=hooks,
-        )
         if marked_terminal:
-            record_terminal_process_side_effects(worker, queue_id, job, hooks=hooks)
+            record_terminal_process_side_effects(worker, queue_id, job, rc=rc, hooks=hooks)
     finally:
         worker._release_admission_slot(job.admission_token)
 

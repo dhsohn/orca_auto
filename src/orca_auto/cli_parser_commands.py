@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from orca_auto import cli_handlers
-from orca_auto.flow.templates import WORKFLOW_SCAFFOLD_SHORTCUTS
+from orca_auto.flow.templates import WORKFLOW_SCAFFOLD_SHORTCUTS, WORKFLOW_TEMPLATE_IDS
 
 from .cli_parser_common import (
     add_engine_config_argument,
@@ -46,6 +46,32 @@ def add_run_dir_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         type=int,
         default=None,
         help="Queue priority when submission is enqueued (lower = higher)",
+    )
+    run_dir_parser.add_argument(
+        "--workflow-type",
+        choices=sorted(WORKFLOW_TEMPLATE_IDS),
+        default=None,
+        help="Workflow type to use when a workflow run directory is ambiguous",
+    )
+    run_dir_parser.add_argument(
+        "--workflow-root",
+        default=None,
+        help="Workflow workspace root for materialized workflow run directories",
+    )
+    run_dir_parser.add_argument(
+        "--reactant-xyz",
+        default=None,
+        help="Reaction workflow reactant XYZ path, overriding flow.yaml/default names",
+    )
+    run_dir_parser.add_argument(
+        "--product-xyz",
+        default=None,
+        help="Reaction workflow product XYZ path, overriding flow.yaml/default names",
+    )
+    run_dir_parser.add_argument(
+        "--input-xyz",
+        default=None,
+        help="Conformer workflow input XYZ path, overriding flow.yaml/default names",
     )
     add_resource_override_arguments(run_dir_parser)
     add_json_argument(run_dir_parser, help_text="Print JSON output for workflow submission")

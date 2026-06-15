@@ -243,10 +243,12 @@ Workflow notes:
 - If a directory mixes raw ORCA `*.inp` files with scaffold-style filenames but does not include `flow.yaml`, `run-dir` prefers ORCA direct submission
 - reaction-path and conformer workflows create and submit xTB/CREST stages internally
 - `reaction_ts_search` expands all selected reactant x product CREST pairs into xTB child jobs, waits for the full xTB phase to reach terminal states, and then batches any matching ORCA OptTS child jobs from the retained `ts_guess` artifacts
-- `conformer_search` starts with one CREST child job and then hands off up to 20 retained conformers to ORCA child jobs in the next workflow cycle
-- Set top-level `workflow.root` in `orca_auto.yaml` before using workflow commands
-- Public `run-dir` accepts `--max-cores` and `--max-memory-gb` for workflow
-  resource requests. Other workflow settings come from `flow.yaml` and
+- `conformer_screening` starts with one CREST child job and then hands off up to 20 retained conformers to ORCA child jobs in the next workflow cycle. The scaffold shortcut is `orca_auto scaffold conformer_search <path>`.
+- Set `workflow.root` in `orca_auto.yaml`, `workflow_root`/`workflow.root` in
+  `flow.yaml`, or pass `--workflow-root` before using workflow commands.
+- Public `run-dir` accepts `--workflow-type`, `--reactant-xyz`,
+  `--product-xyz`, `--input-xyz`, `--max-cores`, and `--max-memory-gb` for
+  workflow overrides. Other workflow settings come from `flow.yaml` and
   `orca_auto.yaml`.
 - CREST topology overrides can be placed under `crest:` in `flow.yaml`, including `gfn: ff`, `no_preopt: true`, `noreftopo: true`, `notopo: true`, and `nocbonds: true`
 - `scaffold ts_search` and `scaffold conformer_search` write `flow.yaml` with `crest_mode: standard` by default; change it to `nci` when needed

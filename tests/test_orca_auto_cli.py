@@ -122,7 +122,23 @@ def test_build_parser_parses_unified_run_dir_commands() -> None:
         ]
     )
     workflow_args = parser.parse_args(
-        ["run-dir", "/tmp/workflow-inputs", "--priority", "6", "--json"]
+        [
+            "run-dir",
+            "/tmp/workflow-inputs",
+            "--priority",
+            "6",
+            "--workflow-type",
+            "reaction_ts_search",
+            "--workflow-root",
+            "/tmp/workflows",
+            "--reactant-xyz",
+            "/tmp/reactant.xyz",
+            "--product-xyz",
+            "/tmp/product.xyz",
+            "--input-xyz",
+            "/tmp/input.xyz",
+            "--json",
+        ]
     )
 
     assert orca_args.command == "run-dir"
@@ -136,6 +152,11 @@ def test_build_parser_parses_unified_run_dir_commands() -> None:
 
     assert workflow_args.path == "/tmp/workflow-inputs"
     assert workflow_args.priority == 6
+    assert workflow_args.workflow_type == "reaction_ts_search"
+    assert workflow_args.workflow_root == "/tmp/workflows"
+    assert workflow_args.reactant_xyz == "/tmp/reactant.xyz"
+    assert workflow_args.product_xyz == "/tmp/product.xyz"
+    assert workflow_args.input_xyz == "/tmp/input.xyz"
     assert workflow_args.json is True
     assert workflow_args.func is cli_run_dir.cmd_run_dir
 

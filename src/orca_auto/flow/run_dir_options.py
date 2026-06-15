@@ -186,17 +186,36 @@ def _resolve_positive_int_option_with_section(
     )
 
 
+def _manifest_workflow_root(manifest: dict[str, Any]) -> str | None:
+    workflow_root = normalize_text(manifest.get("workflow_root"))
+    if workflow_root:
+        return workflow_root
+
+    workflow_section = manifest.get("workflow")
+    if isinstance(workflow_section, dict):
+        workflow_root = normalize_text(workflow_section.get("root"))
+        if workflow_root:
+            return workflow_root
+    return None
+
+
 def _resolve_required_workflow_root(args: Any, manifest: dict[str, Any]) -> str:
-    del manifest
     # Attribute access keeps the cli_common monkeypatch seam used by tests.
     resolved_workflow_root = cli_common._discover_workflow_root(
         getattr(args, "workflow_root", None)
     )
     if not resolved_workflow_root:
+        resolved_workflow_root = cli_common._discover_workflow_root(
+            _manifest_workflow_root(manifest)
+        )
+    if not resolved_workflow_root:
         config_path = getattr(args, "orca_auto_config", None) or getattr(args, "config", None)
         resolved_workflow_root = _cli_workflow_root_for_args(args, config_path=config_path)
     if not resolved_workflow_root:
-        raise ValueError("workflow_root is not configured. Set workflow.root in orca_auto.yaml.")
+        raise ValueError(
+            "workflow_root is not configured. Pass --workflow-root, set workflow_root "
+            "in flow.yaml, or set workflow.root in orca_auto.yaml."
+        )
     return resolved_workflow_root
 
 
