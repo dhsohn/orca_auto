@@ -648,7 +648,7 @@ def _build_advance_deps(
     *,
     deps_provider: _LazyOrchestrationDeps | None = None,
 ) -> OrchestrationAdvanceDeps:
-    from orca_auto.flow.orchestration.advance import (
+    from orca_auto.flow.orchestration.workflow_cancellation import (
         _cancel_active_workflow_stages,
         _cancel_stage_activity,
     )

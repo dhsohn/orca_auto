@@ -38,9 +38,6 @@ from .engine_requests import (
     EngineJobTerminalRequest,
 )
 from .engine_specs import (
-    _CREST_JOB_NOTIFICATIONS,
-    _ENGINE_LINE_SENDER,
-    _XTB_JOB_NOTIFICATIONS,
     notify_crest_job_finished,
     notify_crest_job_queued,
     notify_crest_job_started,
@@ -65,9 +62,6 @@ __all__ = [
     "EngineJobTerminalRequest",
     "EngineNotificationModule",
     "EngineNotifier",
-    "_CREST_JOB_NOTIFICATIONS",
-    "_ENGINE_LINE_SENDER",
-    "_XTB_JOB_NOTIFICATIONS",
     "build_engine_job_notifications",
     "build_engine_notification_module",
     "build_engine_notifier",

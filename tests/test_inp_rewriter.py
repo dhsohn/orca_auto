@@ -189,13 +189,13 @@ class TestInpRewriter(unittest.TestCase):
         self.assertIn("no_geometry_file_found", actions)
 
     def test_find_block_range_does_not_mutate_lines(self) -> None:
-        """_find_block_range must not append 'end' to the shared lines list.
+        """find_block_range must not append 'end' to the shared lines list.
 
-        Before the fix, calling _find_block_range on an unclosed block would
+        Before the fix, calling find_block_range on an unclosed block would
         append 'end' to lines, corrupting subsequent block lookups. This test
         verifies repeated reads of unclosed blocks do NOT change the line count.
         """
-        from orca_auto.orca.inp_rewriter import _find_block_range
+        from orca_auto.orca.input_blocks import find_block_range
 
         lines = [
             "! OptTS Freq IRC",
@@ -212,12 +212,12 @@ class TestInpRewriter(unittest.TestCase):
             "*",
         ]
         original_len = len(lines)
-        pal_rng = _find_block_range(lines, "pal")
+        pal_rng = find_block_range(lines, "pal")
         self.assertIsNotNone(pal_rng)
         self.assertEqual(len(lines), original_len)
 
-        # _find_block_range for %scf should still return correct unclosed range
-        rng = _find_block_range(lines, "scf")
+        # find_block_range for %scf should still return correct unclosed range
+        rng = find_block_range(lines, "scf")
         self.assertIsNotNone(rng)
         assert rng is not None
         start, end, needs_close = rng
