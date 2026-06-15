@@ -61,6 +61,12 @@ def _submission_admission_root_from_config(
 
     if engine:
         raw = engine_config_mapping(raw, engine, inherit_keys=("scheduler", "workflow"))
+    if engine == "orca":
+        return scheduler_admission_root(
+            path,
+            mapping_section(raw, "scheduler"),
+            default_when_missing=bool(mapping_section(raw, "scheduler")),
+        )
     return runtime_admission_root(
         path,
         mapping_section(raw, "runtime"),

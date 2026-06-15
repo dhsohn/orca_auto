@@ -143,7 +143,7 @@ def test_engine_runtime_paths_reports_engine_scoped_runtime_keys(tmp_path: Path)
         engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
 
 
-def test_engine_runtime_paths_rejects_orca_runtime_scheduler_keys(tmp_path: Path) -> None:
+def test_engine_runtime_paths_ignores_orca_runtime_scheduler_keys(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "\n".join(
@@ -151,19 +151,16 @@ def test_engine_runtime_paths_rejects_orca_runtime_scheduler_keys(tmp_path: Path
                 "orca:",
                 "  runtime:",
                 "    allowed_root: /tmp/runs",
-                "    admission_root: /tmp/legacy-admission",
+                "    admission_root: /tmp/runtime-admission",
                 "",
             ]
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError) as exc:
-        engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
-    message = str(exc.value)
-    assert "orca.runtime.admission_root" in message
-    assert "scheduler.max_active_simulations" in message
-    assert "scheduler.admission_root" in message
+    assert engine_runtime.engine_runtime_paths(str(config_path), engine="orca") == {
+        "allowed_root": Path("/tmp/runs"),
+    }
 
 
 def test_engine_runtime_paths_requires_workflow_root_for_xtb(tmp_path: Path) -> None:

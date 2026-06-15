@@ -248,12 +248,11 @@ class TestConfigValidation(unittest.TestCase):
             self.assertEqual(cfg.runtime.resolved_admission_limit, 6)
             self.assertEqual(cfg.runtime.resolved_admission_root, str(root / "admission"))
 
-    def test_orca_runtime_accepts_legacy_scheduler_keys_with_warning(self) -> None:
+    def test_orca_runtime_scheduler_keys_are_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
             allowed.mkdir()
-            legacy_admission = root / "legacy-admission"
             fake_orca = root / "orca"
             _write_fake_executable(fake_orca)
 
@@ -263,24 +262,20 @@ class TestConfigValidation(unittest.TestCase):
                     "runtime": {
                         "allowed_root": str(allowed),
                         "max_concurrent": 6,
-                        "admission_root": str(legacy_admission),
+                        "admission_root": str(root / "runtime-admission"),
                         "admission_limit": 3,
                     },
                     "paths": {"orca_executable": str(fake_orca)},
                 },
             )
 
-            with self.assertLogs("orca_auto.orca.config", level="WARNING") as logs:
-                cfg = load_config(str(cfg_path))
+            cfg = load_config(str(cfg_path))
 
-            warning_text = "\n".join(logs.output)
-            self.assertIn("orca.runtime.max_concurrent", warning_text)
-            self.assertIn("scheduler.max_active_simulations", warning_text)
-            self.assertEqual(cfg.runtime.max_concurrent, 6)
-            self.assertEqual(cfg.runtime.admission_root, str(legacy_admission))
-            self.assertEqual(cfg.runtime.admission_limit, 3)
+            self.assertEqual(cfg.runtime.max_concurrent, 4)
+            self.assertEqual(cfg.runtime.admission_root, str(allowed))
+            self.assertIsNone(cfg.runtime.admission_limit)
 
-    def test_scheduler_section_wins_over_legacy_runtime_scheduler_keys(self) -> None:
+    def test_scheduler_section_is_the_only_scheduler_source(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -299,19 +294,15 @@ class TestConfigValidation(unittest.TestCase):
                     "runtime": {
                         "allowed_root": str(allowed),
                         "max_concurrent": 2,
-                        "admission_root": str(root / "legacy-admission"),
+                        "admission_root": str(root / "runtime-admission"),
                         "admission_limit": 2,
                     },
                     "paths": {"orca_executable": str(fake_orca)},
                 },
             )
 
-            with self.assertLogs("orca_auto.orca.config", level="WARNING") as logs:
-                cfg = load_config(str(cfg_path))
+            cfg = load_config(str(cfg_path))
 
-            self.assertIn(
-                "ignored because top-level scheduler settings are present", "\n".join(logs.output)
-            )
             self.assertEqual(cfg.runtime.max_concurrent, 7)
             self.assertEqual(cfg.runtime.admission_root, str(scheduler_admission))
             self.assertEqual(cfg.runtime.admission_limit, 7)

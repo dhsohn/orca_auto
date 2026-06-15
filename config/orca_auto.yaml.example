@@ -69,9 +69,6 @@ orca:
     # Retry count after the initial attempt.
     # Example: 2 means "1 initial run + up to 2 retries" = 3 total attempts.
     default_max_retries: 2
-    # Do not add runtime.max_concurrent, runtime.admission_root, or
-    # runtime.admission_limit here. Shared scheduling is configured only under
-    # the top-level scheduler section.
   paths:
     # Linux path to the ORCA executable.
     orca_executable: /home/user/opt/orca/orca

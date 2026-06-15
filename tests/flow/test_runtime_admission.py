@@ -36,6 +36,31 @@ def test_submission_admission_root_for_internal_engine_uses_scheduler_default(
     assert root == (tmp_path / "admission").resolve()
 
 
+def test_submission_admission_root_for_orca_ignores_runtime_admission_root(
+    tmp_path: Path,
+) -> None:
+    scheduler_root = tmp_path / "scheduler-admission"
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "scheduler:",
+                f"  admission_root: {scheduler_root}",
+                "orca:",
+                "  runtime:",
+                "    allowed_root: /tmp/runs",
+                "    admission_root: /tmp/runtime-admission",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    root = runtime_admission._submission_admission_root_from_config(config, engine="orca")
+
+    assert root == scheduler_root.resolve()
+
+
 def test_submission_admission_has_capacity_uses_first_resolved_engine_root(
     tmp_path: Path,
 ) -> None:
