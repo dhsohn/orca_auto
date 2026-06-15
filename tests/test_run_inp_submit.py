@@ -292,6 +292,42 @@ class TestRunInpSubmit(unittest.TestCase):
     @patch("orca_auto.orca.commands.run_inp.load_config")
     @patch("orca_auto.orca.commands.run_inp.notify_queue_enqueued_event", return_value=True)
     @patch("orca_auto.orca.queue_worker.read_worker_pid", return_value=None)
+    @patch(
+        "orca_auto.orca.commands.run_inp._run_inp_submission.upsert_queued_job_record",
+        side_effect=RuntimeError("index write failed"),
+    )
+    def test_submit_reaction_dir_to_queue_succeeds_when_tracking_side_effect_fails(
+        self,
+        mock_upsert: MagicMock,
+        mock_read_worker_pid: MagicMock,
+        mock_notify_queue: MagicMock,
+        mock_load_config: MagicMock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = _make_cfg(tmp)
+            mock_load_config.return_value = cfg
+            reaction_dir = root / "rxn"
+            _write_inp(reaction_dir)
+
+            submission = submit_reaction_dir_to_queue(_make_args(root, reaction_dir, priority=3))
+
+            entries = list_queue(root)
+
+            self.assertEqual(submission.status, "submitted")
+            self.assertEqual(len(entries), 1)
+            self.assertFalse((root / "job_locations.json").exists())
+            result = submission.queued_result
+            self.assertIsNotNone(result)
+            assert result is not None
+            self.assertIn("queue submission succeeded", result.worker_info.detail or "")
+            mock_upsert.assert_called_once()
+            mock_read_worker_pid.assert_called_once()
+            mock_notify_queue.assert_called_once()
+
+    @patch("orca_auto.orca.commands.run_inp.load_config")
+    @patch("orca_auto.orca.commands.run_inp.notify_queue_enqueued_event", return_value=True)
+    @patch("orca_auto.orca.queue_worker.read_worker_pid", return_value=None)
     def test_submit_reaction_dir_to_queue_reads_metadata_from_input_even_when_flags_are_present(
         self,
         mock_read_worker_pid: MagicMock,

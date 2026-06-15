@@ -127,16 +127,10 @@ def test_build_parser_parses_unified_run_dir_commands() -> None:
             "/tmp/workflow-inputs",
             "--priority",
             "6",
-            "--workflow-type",
-            "reaction_ts_search",
-            "--workflow-root",
-            "/tmp/workflows",
-            "--reactant-xyz",
-            "/tmp/reactant.xyz",
-            "--product-xyz",
-            "/tmp/product.xyz",
-            "--input-xyz",
-            "/tmp/input.xyz",
+            "--max-cores",
+            "12",
+            "--max-memory-gb",
+            "48",
             "--json",
         ]
     )
@@ -152,13 +146,26 @@ def test_build_parser_parses_unified_run_dir_commands() -> None:
 
     assert workflow_args.path == "/tmp/workflow-inputs"
     assert workflow_args.priority == 6
-    assert workflow_args.workflow_type == "reaction_ts_search"
-    assert workflow_args.workflow_root == "/tmp/workflows"
-    assert workflow_args.reactant_xyz == "/tmp/reactant.xyz"
-    assert workflow_args.product_xyz == "/tmp/product.xyz"
-    assert workflow_args.input_xyz == "/tmp/input.xyz"
+    assert not hasattr(workflow_args, "workflow_type")
+    assert not hasattr(workflow_args, "workflow_root")
+    assert not hasattr(workflow_args, "reactant_xyz")
+    assert not hasattr(workflow_args, "product_xyz")
+    assert not hasattr(workflow_args, "input_xyz")
+    assert workflow_args.max_cores == 12
+    assert workflow_args.max_memory_gb == 48
     assert workflow_args.json is True
     assert workflow_args.func is cli_run_dir.cmd_run_dir
+
+
+@pytest.mark.parametrize(
+    "removed_option",
+    ["--workflow-type", "--workflow-root", "--reactant-xyz", "--product-xyz", "--input-xyz"],
+)
+def test_run_dir_parser_rejects_internal_workflow_options(removed_option: str) -> None:
+    parser = unified_cli.build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run-dir", "/tmp/workflow-inputs", removed_option, "value"])
 
 
 def test_build_parser_parses_unified_init_scaffold_organize_and_scan_notify_commands() -> None:

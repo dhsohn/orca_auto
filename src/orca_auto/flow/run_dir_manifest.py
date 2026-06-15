@@ -73,7 +73,7 @@ def _resolve_run_dir_workflow_type(
     if workflow_layout.is_ambiguous:
         raise ValueError(
             "Ambiguous workflow_dir: found both reaction inputs and conformer input. "
-            "Pass --workflow-type to choose one."
+            "Set workflow_type in flow.yaml to choose one."
         )
     inferred_workflow_type = workflow_layout.inferred_workflow_type
     if inferred_workflow_type:

@@ -13,6 +13,11 @@ DEFAULT_CONFIG_FILENAME = "orca_auto.yaml"
 DEFAULT_SHARED_ADMISSION_DIRNAME = "admission"
 SECURE_CONFIG_FILE_MODE = 0o600
 YAML_CONFIG_LOAD_EXCEPTIONS = (OSError, ValueError, yaml.YAMLError)
+LEGACY_ORCA_RUNTIME_SCHEDULER_KEYS = (
+    "max_concurrent",
+    "admission_root",
+    "admission_limit",
+)
 
 
 def config_env_value(env_var: str = ORCA_AUTO_CONFIG_ENV_VAR) -> str:
@@ -95,6 +100,48 @@ def load_required_yaml_mapping(
 def mapping_section(raw: dict[str, Any] | None, key: str) -> dict[str, Any]:
     section = raw.get(key) if isinstance(raw, dict) else None
     return section if isinstance(section, dict) else {}
+
+
+def legacy_orca_runtime_scheduler_keys(runtime: dict[str, Any] | None) -> tuple[str, ...]:
+    runtime_raw = runtime if isinstance(runtime, dict) else {}
+    return tuple(key for key in LEGACY_ORCA_RUNTIME_SCHEDULER_KEYS if key in runtime_raw)
+
+
+def legacy_orca_runtime_scheduler_migration_message(
+    runtime: dict[str, Any] | None,
+    *,
+    section_label: str = "orca.runtime",
+) -> str:
+    legacy_keys = legacy_orca_runtime_scheduler_keys(runtime)
+    qualified = ", ".join(f"{section_label}.{key}" for key in legacy_keys)
+    return (
+        "Legacy ORCA runtime scheduler settings are deprecated"
+        f"{f': {qualified}' if qualified else ''}. Move concurrency settings to "
+        "top-level scheduler.max_active_simulations and move the shared admission path to "
+        "top-level scheduler.admission_root. Remove admission_limit; the scheduler limit "
+        "now follows scheduler.max_active_simulations."
+    )
+
+
+def reject_mixed_orca_scheduler_config(
+    runtime: dict[str, Any] | None,
+    scheduler: dict[str, Any] | None,
+    *,
+    section_label: str = "orca.runtime",
+) -> None:
+    scheduler_raw = scheduler if isinstance(scheduler, dict) else {}
+    if not scheduler_raw:
+        return
+    legacy_keys = legacy_orca_runtime_scheduler_keys(runtime)
+    if not legacy_keys:
+        return
+    raise ValueError(
+        "Mixed ORCA scheduler configuration is not accepted. "
+        + legacy_orca_runtime_scheduler_migration_message(
+            runtime,
+            section_label=section_label,
+        )
+    )
 
 
 def resolve_configured_path(value: Any) -> Path | None:

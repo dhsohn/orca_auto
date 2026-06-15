@@ -5,8 +5,10 @@ from typing import Any
 
 from orca_auto.core.config.files import (
     engine_config_mapping,
+    legacy_orca_runtime_scheduler_keys,
     load_yaml_mapping,
     mapping_section,
+    reject_mixed_orca_scheduler_config,
     resolve_configured_path,
     runtime_admission_root,
     scheduler_admission_root,
@@ -67,11 +69,22 @@ def _configured_runtime_paths(
         raise ValueError(f"Missing {_runtime_allowed_root_label(engine)} in config: {path}")
 
     if engine == "orca":
-        admission_root = scheduler_admission_root(
-            path,
-            scheduler,
-            default_when_missing=bool(scheduler),
-        )
+        reject_mixed_orca_scheduler_config(runtime, scheduler)
+        if legacy_orca_runtime_scheduler_keys(runtime):
+            admission_root = runtime_admission_root(
+                path,
+                runtime,
+                scheduler,
+                default_when_scheduler_present=False,
+            )
+            if admission_root is None:
+                admission_root = resolved_runtime_paths["allowed_root"]
+        else:
+            admission_root = scheduler_admission_root(
+                path,
+                scheduler,
+                default_when_missing=bool(scheduler),
+            )
     else:
         admission_root = runtime_admission_root(path, runtime, scheduler)
     if admission_root is not None:

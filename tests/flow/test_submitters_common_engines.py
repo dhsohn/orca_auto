@@ -112,7 +112,7 @@ def test_engine_runtime_paths_reports_engine_scoped_runtime_keys(tmp_path: Path)
         engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
 
 
-def test_engine_runtime_paths_ignores_orca_runtime_scheduler_keys(tmp_path: Path) -> None:
+def test_engine_runtime_paths_uses_legacy_orca_runtime_admission_root(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "\n".join(
@@ -129,7 +129,29 @@ def test_engine_runtime_paths_ignores_orca_runtime_scheduler_keys(tmp_path: Path
 
     assert engine_runtime.engine_runtime_paths(str(config_path), engine="orca") == {
         "allowed_root": Path("/tmp/runs"),
+        "admission_root": Path("/tmp/runtime-admission"),
     }
+
+
+def test_engine_runtime_paths_rejects_mixed_orca_scheduler_settings(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "scheduler:",
+                "  max_active_simulations: 4",
+                "orca:",
+                "  runtime:",
+                "    allowed_root: /tmp/runs",
+                "    admission_root: /tmp/runtime-admission",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Mixed ORCA scheduler configuration"):
+        engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
 
 
 def test_engine_runtime_paths_requires_workflow_root_for_xtb(tmp_path: Path) -> None:

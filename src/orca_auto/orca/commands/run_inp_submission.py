@@ -255,6 +255,58 @@ def upsert_queued_job_record(
     )
 
 
+def record_queued_job_side_effect(
+    cfg: Any,
+    *,
+    reaction_dir: Path,
+    selected_inp: Path | None,
+    job_id: str,
+    queue_metadata: dict[str, Any],
+    deps: Any,
+) -> str | None:
+    try:
+        upsert_queued_job_record(
+            cfg,
+            reaction_dir=reaction_dir,
+            selected_inp=selected_inp,
+            job_id=job_id,
+            queue_metadata=queue_metadata,
+            deps=deps,
+        )
+    except Exception as exc:
+        logger.warning(
+            "queued job record update failed after queue submission succeeded: "
+            "reaction_dir=%s job_id=%s error=%s",
+            reaction_dir,
+            job_id,
+            exc,
+            exc_info=True,
+        )
+        return "queued job record update failed; queue submission succeeded"
+    return None
+
+
+def worker_status_with_detail(
+    worker_info: WorkerStatusInfo,
+    detail: str | None,
+) -> WorkerStatusInfo:
+    from .run_inp_context import WorkerStatusInfo
+
+    if not detail:
+        return worker_info
+    worker_detail = worker_info.detail
+    if worker_detail:
+        worker_detail = f"{worker_detail}; {detail}"
+    else:
+        worker_detail = detail
+    return WorkerStatusInfo(
+        status=worker_info.status,
+        pid=worker_info.pid,
+        log_file=worker_info.log_file,
+        detail=worker_detail,
+    )
+
+
 def create_queued_submission(
     cfg: Any,
     args: Any,
@@ -289,12 +341,13 @@ def create_queued_submission(
     )
 
     task_id = submission.queue_adapter.queue_entry_task_id(entry)
+    side_effect_warning = None
     if task_id:
-        upsert_queued_job_record(
+        side_effect_warning = record_queued_job_side_effect(
             cfg,
             reaction_dir=reaction_dir,
             selected_inp=selected_inp,
-            job_id=task_id,
+            job_id=str(task_id),
             queue_metadata=queue_metadata,
             deps=deps,
         )
@@ -303,6 +356,7 @@ def create_queued_submission(
         worker_status_for_submission(allowed_root),
         queue_entry_worker_log(entry, deps=deps),
     )
+    worker_info = worker_status_with_detail(worker_info, side_effect_warning)
     return QueuedSubmissionResult(
         entry=entry,
         reaction_dir=reaction_dir,

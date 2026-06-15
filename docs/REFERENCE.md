@@ -170,6 +170,12 @@ Field descriptions for the `orca` section:
 
 Notes:
 
+- Legacy `orca.runtime.max_concurrent`, `orca.runtime.admission_root`, and
+  `orca.runtime.admission_limit` are accepted only when `scheduler` is absent,
+  with a migration warning. Do not mix them with top-level `scheduler.*`; move
+  concurrency to `scheduler.max_active_simulations` and the shared admission
+  path to `scheduler.admission_root`.
+
 - `default_max_retries=2` means `1 initial + 2 retries = 3 total attempts`
 - Windows-style paths such as `C:\...` and `/mnt/c/...` are not supported in config
 
@@ -244,12 +250,11 @@ Workflow notes:
 - reaction-path and conformer workflows create and submit xTB/CREST stages internally
 - `reaction_ts_search` expands all selected reactant x product CREST pairs into xTB child jobs, waits for the full xTB phase to reach terminal states, and then batches any matching ORCA OptTS child jobs from the retained `ts_guess` artifacts
 - `conformer_screening` starts with one CREST child job and then hands off up to 20 retained conformers to ORCA child jobs in the next workflow cycle. The scaffold shortcut is `orca_auto scaffold conformer_search <path>`.
-- Set `workflow.root` in `orca_auto.yaml`, `workflow_root`/`workflow.root` in
-  `flow.yaml`, or pass `--workflow-root` before using workflow commands.
-- Public `run-dir` accepts `--workflow-type`, `--reactant-xyz`,
-  `--product-xyz`, `--input-xyz`, `--max-cores`, and `--max-memory-gb` for
-  workflow overrides. Other workflow settings come from `flow.yaml` and
-  `orca_auto.yaml`.
+- Set `workflow.root` in `orca_auto.yaml` or `workflow_root`/`workflow.root` in
+  `flow.yaml` before submitting workflow directories.
+- Public workflow `run-dir` reads workflow type and XYZ inputs from `flow.yaml`
+  or the standard filenames written by `scaffold`; it accepts only
+  `--max-cores` and `--max-memory-gb` as workflow resource overrides.
 - CREST topology overrides can be placed under `crest:` in `flow.yaml`, including `gfn: ff`, `no_preopt: true`, `noreftopo: true`, `notopo: true`, and `nocbonds: true`
 - `scaffold ts_search` and `scaffold conformer_search` write `flow.yaml` with `crest_mode: standard` by default; change it to `nci` when needed
 

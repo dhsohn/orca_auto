@@ -248,7 +248,7 @@ class TestConfigValidation(unittest.TestCase):
             self.assertEqual(cfg.runtime.resolved_admission_limit, 6)
             self.assertEqual(cfg.runtime.resolved_admission_root, str(root / "admission"))
 
-    def test_orca_runtime_scheduler_keys_are_ignored(self) -> None:
+    def test_legacy_orca_runtime_scheduler_keys_are_loaded_with_warning(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -269,13 +269,16 @@ class TestConfigValidation(unittest.TestCase):
                 },
             )
 
-            cfg = load_config(str(cfg_path))
+            with self.assertLogs("orca_auto.orca.config", level="WARNING") as logs:
+                cfg = load_config(str(cfg_path))
 
-            self.assertEqual(cfg.runtime.max_concurrent, 4)
-            self.assertEqual(cfg.runtime.admission_root, str(allowed))
-            self.assertIsNone(cfg.runtime.admission_limit)
+            self.assertEqual(cfg.runtime.max_concurrent, 6)
+            self.assertEqual(cfg.runtime.admission_root, str(root / "runtime-admission"))
+            self.assertEqual(cfg.runtime.admission_limit, 3)
+            self.assertIn("Legacy ORCA runtime scheduler settings", "\n".join(logs.output))
+            self.assertIn("scheduler.max_active_simulations", "\n".join(logs.output))
 
-    def test_scheduler_section_is_the_only_scheduler_source(self) -> None:
+    def test_mixed_scheduler_and_legacy_orca_runtime_scheduler_keys_raise(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -301,11 +304,13 @@ class TestConfigValidation(unittest.TestCase):
                 },
             )
 
-            cfg = load_config(str(cfg_path))
+            with self.assertRaises(ValueError) as ctx:
+                load_config(str(cfg_path))
 
-            self.assertEqual(cfg.runtime.max_concurrent, 7)
-            self.assertEqual(cfg.runtime.admission_root, str(scheduler_admission))
-            self.assertEqual(cfg.runtime.admission_limit, 7)
+            message = str(ctx.exception)
+            self.assertIn("Mixed ORCA scheduler configuration", message)
+            self.assertIn("orca.runtime.max_concurrent", message)
+            self.assertIn("scheduler.max_active_simulations", message)
 
     def test_behavior_auto_organize_is_loaded(self) -> None:
         with tempfile.TemporaryDirectory() as td:

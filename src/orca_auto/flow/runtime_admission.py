@@ -8,8 +8,10 @@ from orca_auto.core.admission import AdmissionStoreCorruptError, active_slot_cou
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
     engine_config_mapping,
+    legacy_orca_runtime_scheduler_keys,
     load_yaml_mapping,
     mapping_section,
+    reject_mixed_orca_scheduler_config,
     runtime_admission_root,
     scheduler_admission_root,
     workflow_root_from_mapping,
@@ -35,8 +37,21 @@ def submission_admission_limit_from_config(
         )
         return None
 
-    scheduler = mapping_section(raw, "scheduler")
-    return positive_int_fn(scheduler.get("max_active_simulations"))
+    top_level_scheduler = mapping_section(raw, "scheduler")
+    orca_raw = engine_config_mapping(raw, "orca", inherit_keys=("scheduler", "workflow"))
+    orca_runtime = mapping_section(orca_raw, "runtime")
+    effective_scheduler = mapping_section(orca_raw, "scheduler") or top_level_scheduler
+    reject_mixed_orca_scheduler_config(orca_runtime, effective_scheduler)
+
+    scheduler_limit = positive_int_fn(effective_scheduler.get("max_active_simulations"))
+    if scheduler_limit is not None:
+        return scheduler_limit
+
+    if not legacy_orca_runtime_scheduler_keys(orca_runtime):
+        return None
+    return positive_int_fn(orca_runtime.get("admission_limit")) or positive_int_fn(
+        orca_runtime.get("max_concurrent")
+    )
 
 
 def _submission_admission_root_from_config(
@@ -62,10 +77,24 @@ def _submission_admission_root_from_config(
     if engine:
         raw = engine_config_mapping(raw, engine, inherit_keys=("scheduler", "workflow"))
     if engine == "orca":
+        scheduler = mapping_section(raw, "scheduler")
+        runtime = mapping_section(raw, "runtime")
+        reject_mixed_orca_scheduler_config(runtime, scheduler)
+        if legacy_orca_runtime_scheduler_keys(runtime):
+            admission_root = runtime_admission_root(
+                path,
+                runtime,
+                scheduler,
+                default_when_scheduler_present=False,
+            )
+            if admission_root is not None:
+                return admission_root
+            allowed_root = runtime.get("allowed_root")
+            return Path(allowed_root).expanduser().resolve() if allowed_root else None
         return scheduler_admission_root(
             path,
-            mapping_section(raw, "scheduler"),
-            default_when_missing=bool(mapping_section(raw, "scheduler")),
+            scheduler,
+            default_when_missing=bool(scheduler),
         )
     return runtime_admission_root(
         path,
@@ -115,7 +144,7 @@ def submission_admission_has_capacity(
             admission_root,
             exc,
         )
-        return None
+        return False
 
 
 def workflow_submission_has_capacity(
