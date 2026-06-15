@@ -52,8 +52,8 @@ def _missing_required_settings_error(path: Path, missing_keys: list[str]) -> Val
     keys = ", ".join(missing_keys)
     return ValueError(
         "Config is missing required settings: "
-        f"{keys}. orca_auto no longer assumes personal defaults like ~/orca_runs or "
-        f"~/opt/orca/orca. Update {path} with explicit Linux paths."
+        f"{keys}. Update {path} with explicit Linux paths for run roots and the "
+        "ORCA executable."
     )
 
 

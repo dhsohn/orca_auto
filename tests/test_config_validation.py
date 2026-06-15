@@ -352,7 +352,7 @@ class TestConfigValidation(unittest.TestCase):
                 load_config(str(cfg_path))
             self.assertIn("orca.runtime.allowed_root", str(ctx.exception))
             self.assertIn("orca.paths.orca_executable", str(ctx.exception))
-            self.assertIn("no longer assumes personal defaults", str(ctx.exception))
+            self.assertIn("explicit Linux paths", str(ctx.exception))
 
     def test_organized_root_defaults_next_to_allowed_root(self) -> None:
         with tempfile.TemporaryDirectory() as td:

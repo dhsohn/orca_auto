@@ -82,7 +82,6 @@ Notes:
 - `default_max_retries: 2` means `1 initial + 2 retries = 3` total attempts.
 - `scheduler.max_active_simulations` is the shared cap across ORCA, internal xTB workflow stages, and internal CREST workflow stages.
 - `workflow.root` is the workflow root used by the unified CLI and workflow worker.
-- Internal xTB/CREST runtimes no longer use a shared `workflow.root/internal/...` root.
 - Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and organized outputs live only under `workflow.root/<workflow_id>/internal/<engine>/{runs,outputs}`.
 - The full template lives at [config/orca_auto.yaml.example](config/orca_auto.yaml.example).
 

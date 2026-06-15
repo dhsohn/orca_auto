@@ -130,7 +130,7 @@ def test_engine_artifact_payload_preserves_engine_payload(
     assert payload["engine_payload"] == engine_payload
 
 
-def test_engine_artifact_loader_rejects_old_or_unknown_payloads(tmp_path: Path) -> None:
+def test_engine_artifact_loader_rejects_invalid_or_unknown_payloads(tmp_path: Path) -> None:
     path = tmp_path / "job_state.json"
 
     path.write_text(json.dumps({"status": "completed"}), encoding="utf-8")

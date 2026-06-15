@@ -2,8 +2,6 @@
 
 Periodically scans kb_dirs to detect newly completed/changed ORCA calculations
 and registers them in the DFT index.
-
-Ported from ollama_bot — removed Telegram/CREST dependencies, switched to synchronous.
 """
 
 from __future__ import annotations

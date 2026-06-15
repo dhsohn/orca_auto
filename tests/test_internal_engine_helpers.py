@@ -185,7 +185,7 @@ def test_internal_engine_queue_worker_facade_uses_late_bound_bindings(
         started_commands.append(command)
         return "process"
 
-    reserve_slot_token = {"value": "old-token"}
+    reserve_slot_token = {"value": "initial-token"}
 
     def reserve_slot_fn(*_args: Any, **_kwargs: Any) -> str:
         return reserve_slot_token["value"]

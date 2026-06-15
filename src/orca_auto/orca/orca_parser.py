@@ -2,10 +2,6 @@
 
 Extracts key metadata such as energy, method, basis set, convergence status,
 and coordinates from ORCA calculation results.
-
-Ported from ollama_bot — complements out_analyzer.py (status determination):
-  - orca_parser: detailed data extraction (energy, thermodynamics, formula, coordinates, etc.)
-  - out_analyzer: quick status determination (success/failure/retry)
 """
 
 from __future__ import annotations
