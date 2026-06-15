@@ -114,7 +114,7 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
     )
     try:
         ctx.notify_retry(retry_notification)
-    except Exception:
+    except Exception:  # noqa: BLE001
         logger.warning(
             "Retry notification callback failed for attempt %d",
             ctx.execution_index,

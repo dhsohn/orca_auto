@@ -68,7 +68,7 @@ def _start_xtb_worker_thread(
                     xtb_queue_cmd.load_config(str(smoke_workspace.xtb_config_path)),
                 )
             )
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001
             xtb_errors.append(exc)
 
     xtb_thread = threading.Thread(target=_run_xtb_process_one)

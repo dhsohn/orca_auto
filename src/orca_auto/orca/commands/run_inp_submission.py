@@ -273,7 +273,7 @@ def record_queued_job_side_effect(
             queue_metadata=queue_metadata,
             deps=deps,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning(
             "queued job record update failed after queue submission succeeded: "
             "reaction_dir=%s job_id=%s error=%s",

@@ -177,7 +177,7 @@ def _resolve_execution_input(request: ExecutionInputRequest) -> tuple[Path | Non
             to_resolved_local=request.to_resolved_local,
             save_state=request.save_state,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         logger.warning(
             "Failed while recovering missing retry input for attempt %d",
             request.execution_index,

@@ -85,7 +85,7 @@ def _install_supervisor_signal_handlers(shutdown: _SupervisorShutdown) -> dict[A
         try:
             previous_handlers[sig] = signal.getsignal(sig)
             signal.signal(sig, _request_shutdown)
-        except Exception:
+        except Exception:  # noqa: BLE001
             LOGGER.debug("failed to install worker supervisor signal handler", exc_info=True)
             continue
     return previous_handlers
@@ -95,7 +95,7 @@ def _restore_signal_handlers(previous_handlers: dict[Any, Any]) -> None:
     for sig, handler in previous_handlers.items():
         try:
             signal.signal(sig, handler)
-        except Exception:
+        except Exception:  # noqa: BLE001
             LOGGER.debug("failed to restore worker supervisor signal handler", exc_info=True)
             continue
 

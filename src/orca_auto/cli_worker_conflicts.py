@@ -97,7 +97,7 @@ def _detect_existing_orca_worker_conflict(
         from orca_auto.orca.queue_worker import read_worker_pid as _read_orca_worker_pid
 
         cfg = _load_orca_config(str(config_path))
-    except Exception:
+    except Exception:  # noqa: BLE001
         LOGGER.debug("failed to inspect existing ORCA worker config", exc_info=True)
         return None
 

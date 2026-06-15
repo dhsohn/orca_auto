@@ -47,7 +47,7 @@ def notify_attempt_started(ctx: AttemptStartedNotification) -> None:
     )
     try:
         ctx.notify_started(notification)
-    except Exception:
+    except Exception:  # noqa: BLE001
         logger.warning(
             "Started notification callback failed for attempt %d",
             ctx.execution_index,

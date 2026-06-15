@@ -187,7 +187,7 @@ def test_concurrent_read_write(tmp_path: Path) -> None:
             for _ in range(20):
                 index.query({"method": "B3LYP"})
                 index.get_stats()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 
     def writer() -> None:
@@ -195,7 +195,7 @@ def test_concurrent_read_write(tmp_path: Path) -> None:
             out_path = str(kb_dir / "job1" / "calc.out")
             for _ in range(10):
                 index.upsert_single(out_path)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 
     threads = [

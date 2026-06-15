@@ -374,7 +374,7 @@ def _finalize_and_emit(request: FinalizeAndEmitRequest) -> int:
         )
         try:
             notify_result = request.notify_finished(notification)
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning(
                 "Finished notification callback failed for reaction_dir=%s",
                 request.reaction_dir,

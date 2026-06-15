@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from orca_auto.core.utils import process as process_utils
-from orca_auto.core.utils.persistence import now_utc_iso
+from orca_auto.core.utils.persistence import atomic_write_text, now_utc_iso
 
 LOGGER = logging.getLogger(__name__)
 
@@ -140,9 +140,9 @@ def worker_pid_file_path(allowed_root: Path | str, file_name: str = "queue_worke
 
 def write_worker_pid_file(allowed_root: Path | str, file_name: str = "queue_worker.pid") -> None:
     payload = current_worker_pid_payload()
-    worker_pid_file_path(allowed_root, file_name).write_text(
+    atomic_write_text(
+        worker_pid_file_path(allowed_root, file_name),
         json.dumps(payload, ensure_ascii=True) + "\n",
-        encoding="utf-8",
     )
 
 
