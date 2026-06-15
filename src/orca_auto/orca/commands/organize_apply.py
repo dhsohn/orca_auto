@@ -187,22 +187,44 @@ def _apply_one_organize_plan(
     plan: OrganizePlan,
     deps: OrganizeApplyDependencies,
 ) -> _PlanApplyResult:
-    moved = False
     try:
         with deps.acquire_index_lock(organized_root):
-            index = deps.load_index(organized_root)
-            conflict_result = _call_plan_conflict_result(plan, index, deps=deps)
-            if conflict_result is not None:
-                return conflict_result
-
-            deps.execute_move(plan)
-            moved = True
-            return _call_bookkeep_successful_move(
-                cfg,
-                organized_root=organized_root,
-                plan=plan,
-                deps=deps,
+            return _apply_locked_organize_plan(
+                cfg, organized_root=organized_root, plan=plan, deps=deps
             )
+    except Exception as exc:  # noqa: BLE001
+        # Reached only when the index lock itself cannot be acquired; per-plan
+        # failures inside the lock are handled in _apply_locked_organize_plan.
+        deps.log.error("Organize apply failed for %s: %s", plan.run_id, exc)
+        return _PlanApplyResult(plan.run_id, "failed", f"apply_failed: {exc}")
+
+
+def _apply_locked_organize_plan(
+    cfg: AppConfig,
+    *,
+    organized_root: Path,
+    plan: OrganizePlan,
+    deps: OrganizeApplyDependencies,
+) -> _PlanApplyResult:
+    # Runs while the index lock is held, so a failed move is rolled back before
+    # the lock is released. A concurrent organizer therefore never observes the
+    # transient moved-but-unrecorded state that an outside-the-lock rollback
+    # would briefly expose.
+    moved = False
+    try:
+        index = deps.load_index(organized_root)
+        conflict_result = _call_plan_conflict_result(plan, index, deps=deps)
+        if conflict_result is not None:
+            return conflict_result
+
+        deps.execute_move(plan)
+        moved = True
+        return _call_bookkeep_successful_move(
+            cfg,
+            organized_root=organized_root,
+            plan=plan,
+            deps=deps,
+        )
     except Exception as exc:  # noqa: BLE001
         deps.log.error("Organize apply failed for %s: %s", plan.run_id, exc)
         failure_reason = f"apply_failed: {exc}"

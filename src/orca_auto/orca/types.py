@@ -34,6 +34,7 @@ class RunState(TypedDict, total=False):
     reaction_dir: str
     selected_inp: str
     max_retries: int
+    max_memory_gb_per_task: int
     status: str
     started_at: str
     updated_at: str

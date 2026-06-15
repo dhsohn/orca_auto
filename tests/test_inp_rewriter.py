@@ -162,6 +162,37 @@ class TestInpRewriter(unittest.TestCase):
         self.assertIn("geometry_restart_from_rxn.retry05.xyz", actions)
         self.assertIn("* xyzfile 0 1 rxn.retry05.xyz", text)
 
+    def test_rewrite_for_retry_clamps_maxcore_to_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "rxn.inp"
+            dst = root / "rxn.retry01.inp"
+            src.write_text(
+                "! Opt\n%pal\n  nprocs 8\nend\n%maxcore 100000\n"
+                "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                encoding="utf-8",
+            )
+            actions = rewrite_for_retry(src, dst, root, step=1, max_memory_gb=32)
+            text = dst.read_text(encoding="utf-8")
+        # 32 GB across 8 cores -> 4096 MB per-core ceiling.
+        self.assertIn("%maxcore 4096", text)
+        self.assertNotIn("%maxcore 100000", text)
+        self.assertIn("maxcore_clamped_to_budget", actions)
+
+    def test_rewrite_for_retry_leaves_within_budget_maxcore_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "rxn.inp"
+            dst = root / "rxn.retry01.inp"
+            src.write_text(
+                "! Opt\n%pal\n  nprocs 8\nend\n%maxcore 2000\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                encoding="utf-8",
+            )
+            actions = rewrite_for_retry(src, dst, root, step=1, max_memory_gb=32)
+            text = dst.read_text(encoding="utf-8")
+        self.assertIn("%maxcore 2000", text)
+        self.assertNotIn("maxcore_clamped_to_budget", actions)
+
     def test_fallbacks_to_latest_geometry_when_previous_xyz_missing(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

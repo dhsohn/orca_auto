@@ -18,6 +18,7 @@ from .input_blocks import (
     set_moinp as _set_moinp,
 )
 from .resource_directives import (
+    clamp_maxcore_to_budget,
     ensure_submission_resource_request,
     maxcore_mb_per_core,
     read_resource_request_from_input,
@@ -39,7 +40,12 @@ __all__ = [
 
 
 def rewrite_for_retry(
-    source_inp: Path, target_inp: Path, reaction_dir: Path, step: int
+    source_inp: Path,
+    target_inp: Path,
+    reaction_dir: Path,
+    step: int,
+    *,
+    max_memory_gb: int | None = None,
 ) -> List[str]:
     lines = source_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
     actions: List[str] = []
@@ -47,6 +53,9 @@ def rewrite_for_retry(
     actions.extend(_apply_retry_recipe(lines, step))
     _apply_checkpoint_restart(lines, actions, source_inp, target_inp)
     _apply_geometry_restart(lines, actions, source_inp, target_inp, reaction_dir)
+
+    if max_memory_gb is not None and clamp_maxcore_to_budget(lines, max_memory_gb=max_memory_gb):
+        actions.append("maxcore_clamped_to_budget")
 
     target_inp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return actions

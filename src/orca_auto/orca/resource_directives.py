@@ -160,3 +160,24 @@ def increase_maxcore(lines: List[str]) -> bool:
     if new_value <= current:
         new_value = current + 1000
     return set_maxcore(lines, new_value)
+
+
+def clamp_maxcore_to_budget(lines: List[str], *, max_memory_gb: int) -> bool:
+    """Cap ``%maxcore`` so per-core memory stays within the per-task budget.
+
+    Retry recipes escalate ``%maxcore`` (see :func:`increase_maxcore`); without
+    a ceiling the value can grow past ``max_memory_gb_per_task`` across repeated
+    retries. The per-core ceiling is derived from the input's own ``nprocs`` so
+    ``nprocs * maxcore`` does not exceed the configured budget. Returns ``True``
+    when the input was changed.
+    """
+    if max_memory_gb <= 0:
+        return False
+    current = read_maxcore(lines)
+    if current is None:
+        return False
+    cores = read_nprocs(lines) or 1
+    ceiling = maxcore_mb_per_core(max_memory_gb=max_memory_gb, max_cores=cores)
+    if current <= ceiling:
+        return False
+    return set_maxcore(lines, ceiling)

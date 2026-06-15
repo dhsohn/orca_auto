@@ -76,6 +76,7 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
             target_inp=next_inp,
             reaction_dir=ctx.reaction_dir,
             step=patch_step,
+            max_memory_gb=ctx.state.get("max_memory_gb_per_task"),
         )
     except Exception as exc:  # noqa: BLE001
         ctx.state["attempts"][-1]["patch_actions"] = [f"rewrite_failed:{exc}"]

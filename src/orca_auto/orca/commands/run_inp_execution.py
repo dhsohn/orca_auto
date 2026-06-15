@@ -159,6 +159,9 @@ def run_with_state(
     execution = deps.execution
     notify_started, notify_finished, notify_retry = execution._notification_callbacks(cfg)
     runner = runner_cls(cfg.paths.orca_executable)
+    # Carry the per-task memory budget into the run so retry rewrites can cap
+    # escalated %maxcore (see inp_rewriter.rewrite_for_retry).
+    state["max_memory_gb_per_task"] = int(cfg.resources.max_memory_gb_per_task)
     return execution.run_attempts(
         reaction_dir,
         selected_inp,

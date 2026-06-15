@@ -118,6 +118,7 @@ def _recover_missing_retry_input(request: MissingRetryInputRecoveryRequest) -> t
         target_inp=request.current_inp,
         reaction_dir=request.reaction_dir,
         step=request.retry_recipe_step(request.retries_used),
+        max_memory_gb=request.state.get("max_memory_gb_per_task"),
     )
     actions = _ensure_patch_actions_list(last_attempt)
     actions.append(f"resume_recreated_missing_input:{request.current_inp.name}")
