@@ -104,7 +104,7 @@ commands:
 - `init`
 - `scaffold <ts_search|conformer_search>`
 - `organize orca`
-- `scan-notify` (alias: `monitor`)
+- `scan-notify`
 Activate `.venv` first, or call `.venv/bin/orca_auto ...` directly.
 By default, config is resolved from `ORCA_AUTO_CONFIG`, then `<repo_root>/config/orca_auto.yaml`, then `~/orca_auto/config/orca_auto.yaml`.
 Add `--config <path>` only when you want to override default config discovery.
@@ -302,7 +302,7 @@ Options:
 - `organize orca --rebuild-index`: Rebuild the ORCA JSONL index
 - `--apply`: Perform actual moves; otherwise the command is a dry run
 
-### 7.6 `scan-notify` (alias: `monitor`)
+### 7.6 `scan-notify`
 
 ```bash
 orca_auto scan-notify
@@ -312,7 +312,6 @@ Behavior:
 
 - `scan-notify` runs a one-shot scan of the configured ORCA root and sends
   Telegram discovery alerts, then exits. It is not a live monitor.
-- `monitor` is a backward-compatible alias for `scan-notify`.
 
 ### 7.7 Long-Running Services
 

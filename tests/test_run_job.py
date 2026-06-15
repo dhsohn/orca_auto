@@ -311,25 +311,6 @@ def test_run_worker_child_job_releases_slot_when_entry_not_running(
     assert released == [(str(admission_root), "slot-1")]
 
 
-def test_worker_job_main_rejects_legacy_reaction_dir_args() -> None:
-    with pytest.raises(SystemExit):
-        worker_job.main(
-            [
-                "--config",
-                "/tmp/config.yaml",
-                "--reaction-dir",
-                "/tmp/rxn",
-                "--force",
-                "--admission-token",
-                "slot_123",
-                "--admission-app-name",
-                "orca_auto_orca",
-                "--admission-task-id",
-                "task_123",
-            ]
-        )
-
-
 @patch("orca_auto.core.engines.orca_execution.run_worker_child_job", return_value=6)
 def test_worker_job_main_returns_queue_child_status(mock_run_child: MagicMock) -> None:
     rc = worker_job.main(

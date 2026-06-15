@@ -984,7 +984,7 @@ def test_internal_engine_queue_module_create_from_definition_uses_queue_contract
         spec=InternalEngineSpec(
             engine="demo",
             worker_job_module="orca_auto.demo.worker_execution",
-            worker_pid_file_name="legacy_worker.pid",
+            worker_pid_file_name="spec_worker.pid",
         ),
         poll_interval_seconds=5,
         shutdown_grace_seconds=1.0,
@@ -1071,7 +1071,7 @@ def test_internal_engine_queue_module_create_from_definition_accepts_queue_overr
         spec=InternalEngineSpec(
             engine="demo",
             worker_job_module="orca_auto.demo.worker_execution",
-            worker_pid_file_name="legacy_worker.pid",
+            worker_pid_file_name="spec_worker.pid",
         ),
         poll_interval_seconds=5,
         shutdown_grace_seconds=1.0,

@@ -204,9 +204,9 @@ def admission_lock(root: str | Path) -> Iterator[None]:
 class AdmissionStore:
     """Persistence facade for one admission root.
 
-    Module-level functions remain the compatibility API. New code can use this
-    object to keep root resolution and lock/load/save mutation semantics in one
-    place instead of repeating that pattern at each call site.
+    Module-level functions remain the public API. New code can use this object
+    to keep root resolution and lock/load/save mutation semantics in one place
+    instead of repeating that pattern at each call site.
     """
 
     root: Path

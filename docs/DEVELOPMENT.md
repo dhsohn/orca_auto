@@ -40,7 +40,7 @@ User-facing docs should standardize on these command forms:
 - `orca_auto init`
 - `orca_auto scaffold <ts_search|conformer_search> <path>`
 - `orca_auto organize orca ...`
-- `orca_auto scan-notify` (alias: `orca_auto monitor`)
+- `orca_auto scan-notify`
 
 Long-running services are not part of the public CLI surface. Users should run
 them only through the `systemd/` units.
@@ -65,7 +65,7 @@ from orca_auto.core.admission import reserve_slot
 from orca_auto.core.indexing import get_job_location
 ```
 
-Keep imports under `orca_auto.*`; avoid top-level aliases or compatibility shims.
+Keep imports under `orca_auto.*`; avoid top-level aliases or alternate shims.
 
 ## Test Layout
 
@@ -107,7 +107,7 @@ Prefer tests that assert observable behavior: returned payloads, persisted
 files, CLI output, state transitions, process commands, and public facade
 contracts. Internal delegation tests such as `delegates_to`, `uses_*_helper`,
 `forwards_*`, and `reexports_*` should be kept only when they protect an
-intentional compatibility facade or plugin boundary.
+intentional public facade or plugin boundary.
 
 Use `make structural-tests` before large refactors to list likely
 implementation-coupled tests. Treat it as an audit report, not a failure gate.
@@ -120,8 +120,8 @@ implementation-coupled tests. Treat it as an audit report, not a failure gate.
 - Shared engine definitions, queue workers, child entrypoints, artifacts, and
   registry helpers live under `orca_auto.core.engines`
 - Internal xTB/CREST implementations live under `orca_auto.flow.engines`
-- Keep top-level alias packages, legacy console-script aliases, and alternate
-  runtime readers out of the codebase
+- Keep top-level alias packages, console-script aliases, and alternate runtime
+  readers out of the codebase
 
 ## Internal Engine Workers
 

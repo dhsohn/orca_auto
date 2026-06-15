@@ -56,7 +56,7 @@ def pop_completed_worker_jobs(
         try:
             finalize_finished(queue_id, job, rc)
         except Exception as exc:  # noqa: BLE001
-            # Without a handler the caller keeps the historical re-raise contract.
+            # Without a handler the caller keeps the default re-raise behavior.
             # With one (the supervised loop), a single job's finalize failure is
             # isolated so the long-running worker survives. The handler must opt
             # in to dropping the job after it has made queue state safe.

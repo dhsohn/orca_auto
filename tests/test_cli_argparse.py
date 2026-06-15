@@ -32,8 +32,7 @@ def test_parser_error_suggests_subcommand(capsys: pytest.CaptureFixture[str]) ->
     assert "did you mean `queue`?" in stderr
 
 
-def test_scan_notify_alias_preserves_monitor(capsys: pytest.CaptureFixture[str]) -> None:
+def test_scan_notify_parses_canonical_command() -> None:
     parser = unified_cli.build_parser()
-    monitor_args = parser.parse_args(["monitor", "--orca_auto-config", "/tmp/orca_auto.yaml"])
     scan_args = parser.parse_args(["scan-notify", "--orca_auto-config", "/tmp/orca_auto.yaml"])
-    assert monitor_args.func is scan_args.func
+    assert scan_args.command == "scan-notify"

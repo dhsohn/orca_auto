@@ -556,15 +556,6 @@ def test_engine_specific_modules_export_common_queue_worker_factories() -> None:
         assert not inspect.isclass(module.QueueWorker)
 
 
-def test_crest_queue_runtime_execution_keeps_legacy_builder_alias() -> None:
-    from orca_auto.flow.engines.crest import queue_runtime_execution
-
-    assert (
-        queue_runtime_execution.build_queue_runtime_worker_dependencies
-        is queue_runtime_execution.build_queue_runtime_worker_execution_dependencies
-    )
-
-
 def test_engine_queue_runtime_modules_use_definition_pid_contracts() -> None:
     from orca_auto.core.engines import get_engine_definition
     from orca_auto.flow.engines.crest import queue_runtime as crest_queue_runtime

@@ -161,7 +161,7 @@ def test_build_parser_parses_unified_run_dir_commands() -> None:
     assert workflow_args.func is cli_run_dir.cmd_run_dir
 
 
-def test_build_parser_parses_unified_init_scaffold_organize_and_monitor_commands() -> None:
+def test_build_parser_parses_unified_init_scaffold_organize_and_scan_notify_commands() -> None:
     parser = unified_cli.build_parser()
 
     init_args = parser.parse_args(["init", "--orca_auto-config", "/tmp/orca_auto.yaml", "--force"])
@@ -180,7 +180,7 @@ def test_build_parser_parses_unified_init_scaffold_organize_and_monitor_commands
             "--apply",
         ]
     )
-    monitor_args = parser.parse_args(["monitor", "--orca_auto-config", "/tmp/orca_auto.yaml"])
+    monitor_args = parser.parse_args(["scan-notify", "--orca_auto-config", "/tmp/orca_auto.yaml"])
 
     assert init_args.command == "init"
     assert init_args.force is True
@@ -206,7 +206,7 @@ def test_build_parser_parses_unified_init_scaffold_organize_and_monitor_commands
     assert organize_args.apply is True
     assert organize_args.func is cli_run_dir.cmd_orca_organize
 
-    assert monitor_args.command == "monitor"
+    assert monitor_args.command == "scan-notify"
     assert monitor_args.config == "/tmp/orca_auto.yaml"
     assert monitor_args.func is cli_monitor.cmd_orca_monitor
 
@@ -350,9 +350,9 @@ def test_classify_existing_orca_worker_distinguishes_orca_auto_and_unknown(
             25,
         ),
         (
-            ["monitor", "--orca_auto-config", "/tmp/orca_auto.yaml"],
+            ["scan-notify", "--orca_auto-config", "/tmp/orca_auto.yaml"],
             "cmd_orca_monitor",
-            {"command": "monitor", "config": "/tmp/orca_auto.yaml"},
+            {"command": "scan-notify", "config": "/tmp/orca_auto.yaml"},
             29,
         ),
     ],

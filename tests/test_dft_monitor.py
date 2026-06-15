@@ -175,8 +175,8 @@ def test_symlink_dedup(tmp_path: Path) -> None:
     kb_dir = tmp_path / "kb"
     run_dir = kb_dir / "run_dir"
     run_dir.mkdir(parents=True)
-    alias_dir = tmp_path / "run_alias"
-    alias_dir.symlink_to(run_dir, target_is_directory=True)
+    link_dir = tmp_path / "run_link"
+    link_dir.symlink_to(run_dir, target_is_directory=True)
 
     out_file = run_dir / "running.out"
     out_file.write_text(_RUNNING_OPT_OUT, encoding="utf-8")
@@ -185,8 +185,8 @@ def test_symlink_dedup(tmp_path: Path) -> None:
     state_file = str(tmp_path / "automation" / "state.json")
     index = _make_index(tmp_path)
 
-    # Baseline with alias path first
-    monitor1 = DFTMonitor(index, [str(alias_dir)], state_file=state_file)
+    # Baseline with symlink path first
+    monitor1 = DFTMonitor(index, [str(link_dir)], state_file=state_file)
     monitor1.scan()
 
     # Restart with real path — should not produce duplicate notifications

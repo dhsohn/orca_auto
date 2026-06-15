@@ -64,11 +64,7 @@ def build_queue_runtime_worker_execution_dependencies(
     )
 
 
-build_queue_runtime_worker_dependencies = build_queue_runtime_worker_execution_dependencies
-
-
 __all__ = [
     "CrestQueueRuntimeWorkerExecutionCallbacks",
-    "build_queue_runtime_worker_dependencies",
     "build_queue_runtime_worker_execution_dependencies",
 ]

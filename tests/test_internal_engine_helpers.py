@@ -4,8 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from orca_auto.core.queue.child_process import reconcile_orphaned_child_queue_entries
 from orca_auto.core.queue.internal_engine import (
     InternalEngineQueueRuntime,
@@ -47,44 +45,6 @@ def _facade_deps(*, time_module: Any | None = None, **overrides: Any) -> Any:
         InternalEngineQueueWorkerFacadeCallbacks(**callback_values),
         time_module=time_module or SimpleNamespace(sleep=lambda _seconds: None),
     )
-
-
-def test_internal_engine_worker_child_rejects_legacy_admission_parser_arg() -> None:
-    child = InternalEngineSpec(
-        engine="demo",
-        worker_job_module="orca_auto.demo.worker_execution",
-    ).worker_child(RuntimeError)
-
-    with pytest.raises(SystemExit):
-        child.build_parser().parse_args(
-            [
-                "--config",
-                "/tmp/orca_auto.yaml",
-                "--queue-root",
-                "/tmp/queue",
-                "--queue-id",
-                "queue-1",
-                "--admission-root",
-                "/tmp/admission",
-                "--admission-token",
-                "slot-1",
-            ]
-        )
-
-    args = child.build_parser().parse_args(
-        [
-            "--config",
-            "/tmp/orca_auto.yaml",
-            "--queue-root",
-            "/tmp/queue",
-            "--queue-id",
-            "queue-1",
-            "--admission-token",
-            "slot-1",
-        ]
-    )
-    assert not hasattr(args, "admission_root")
-    assert args.admission_token == "slot-1"
 
 
 def test_internal_engine_lifecycle_policy_preserves_roots_and_recovers_job_entry(

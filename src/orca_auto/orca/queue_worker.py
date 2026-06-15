@@ -39,13 +39,8 @@ from orca_auto.core.queue.internal_engine import (
 )
 from orca_auto.core.queue.lifecycle import (
     EngineQueueProcessLifecycleHooks,
-    EngineQueueProcessReconcileHooks,
-    EngineQueueProcessShutdownHooks,
-    EngineQueueTerminalSideEffectHooks,
     cancel_running_process_job,
     finalize_process_finished_job,
-    reconcile_orphaned_process_entries,
-    shutdown_running_process_job,
 )
 from orca_auto.core.queue.lifecycle import (
     job_queue_root as _lifecycle_job_queue_root,
@@ -97,51 +92,10 @@ from .queue_adapter import (
 )
 from .queue_worker_deps import (
     OrcaQueueWorkerFacadeBindings,
-    OrcaQueueWorkerFacadeCallbacks,
     build_late_bound_orca_runtime_facade_deps,
-    build_orca_runtime_facade_deps,
 )
 from .state import load_organized_ref, load_report_json, load_state
 from .telegram_notifier import notify_run_finished_event
-
-# Preserve historical facade attributes for external imports and monkeypatching.
-_LEGACY_COMPAT_EXPORTS = (
-    EngineQueueProcessReconcileHooks,
-    EngineQueueProcessShutdownHooks,
-    EngineQueueTerminalSideEffectHooks,
-    OrcaQueueWorkerFacadeCallbacks,
-    activate_reserved_slot,
-    build_orca_runtime_facade_deps,
-    build_run_finished_notification,
-    coerce_resource_request,
-    finished_notification_already_sent,
-    list_slots,
-    load_config,
-    load_organized_ref,
-    load_report_json,
-    load_state,
-    mark_cancelled,
-    mark_completed,
-    mark_finished_notification_sent,
-    notify_run_finished_event,
-    queue_entry_app_name,
-    queue_entry_metadata,
-    reconcile_orphaned_process_entries,
-    reconcile_orphaned_running_entries,
-    reconcile_stale_slots,
-    record_from_artifacts,
-    release_slot,
-    requeue_running_entry,
-    resolve_job_metadata,
-    resource_dict,
-    selected_input_artifacts,
-    shutdown_running_process_job,
-    time,
-    upsert_job_record,
-    update_slot_metadata,
-    worker_log_path,
-    read_resource_request_from_input,
-)
 
 logger = logging.getLogger(__name__)
 

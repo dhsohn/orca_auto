@@ -143,7 +143,7 @@ class TestMonitorFormatting:
         report = _sample_report()
         text = format_monitor_message(report)
         assert has_monitor_updates(report) is True
-        assert "orca_auto monitor" in text
+        assert "orca_auto scan-notify" in text
         assert "New Calculations Detected" in text
         assert "CH4" in text
         assert "C6H6" in text

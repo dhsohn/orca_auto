@@ -102,7 +102,7 @@ def format_monitor_message(report: ScanReport, *, now: datetime | None = None) -
         current_time = now.astimezone()
     else:
         current_time = now
-    header = f"\u2699\ufe0f <b>orca_auto monitor</b>  <code>{current_time.strftime('%Y-%m-%d %H:%M %Z')}</code>"
+    header = f"\u2699\ufe0f <b>orca_auto scan-notify</b>  <code>{current_time.strftime('%Y-%m-%d %H:%M %Z')}</code>"
     divider = "\u2500" * 28
     scope = (
         "\U0001f50d <b>Scope</b>\n"

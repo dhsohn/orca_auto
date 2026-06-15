@@ -165,9 +165,9 @@ def save_entries(root: str | Path, entries: Sequence[QueueEntry]) -> None:
 class QueueStore:
     """Persistence facade for one queue root.
 
-    The module-level functions remain the public compatibility API. Newer code
-    can use this object to keep the queue root plus load/save overrides together
-    instead of repeating the lock/load/mutate/save pattern at every call site.
+    The module-level functions remain the public API. Newer code can use this
+    object to keep the queue root plus load/save overrides together instead of
+    repeating the lock/load/mutate/save pattern at every call site.
     """
 
     root: Path

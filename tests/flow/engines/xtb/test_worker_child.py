@@ -4,8 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.flow.engines.xtb import execution as worker_child
 
@@ -110,36 +108,3 @@ def test_run_worker_child_job_returns_failure_when_entry_is_not_running(
 
     assert rc == 1
     assert released == [("/tmp/admission", "slot-1")]
-
-
-def test_build_parser_rejects_legacy_admission_root_argument() -> None:
-    with pytest.raises(SystemExit):
-        worker_child.build_parser().parse_args(
-            [
-                "--config",
-                "/tmp/orca_auto.yaml",
-                "--queue-root",
-                "/tmp/queue",
-                "--queue-id",
-                "queue-1",
-                "--admission-root",
-                "/tmp/admission",
-                "--admission-token",
-                "slot-1",
-            ]
-        )
-
-    args = worker_child.build_parser().parse_args(
-        [
-            "--config",
-            "/tmp/orca_auto.yaml",
-            "--queue-root",
-            "/tmp/queue",
-            "--queue-id",
-            "queue-1",
-            "--admission-token",
-            "slot-1",
-        ]
-    )
-    assert not hasattr(args, "admission_root")
-    assert args.admission_token == "slot-1"

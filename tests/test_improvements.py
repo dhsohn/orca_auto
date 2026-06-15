@@ -273,5 +273,5 @@ class TestCLILogFileFlag(unittest.TestCase):
         from orca_auto.cli import build_parser
 
         parser = build_parser()
-        args = parser.parse_args(["monitor", "--log-file", "/tmp/test.log"])
+        args = parser.parse_args(["scan-notify", "--log-file", "/tmp/test.log"])
         self.assertEqual(args.log_file, "/tmp/test.log")

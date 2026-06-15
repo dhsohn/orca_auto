@@ -143,13 +143,10 @@ def add_organize_parser(subparsers: argparse._SubParsersAction[argparse.Argument
 
 
 def add_monitor_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    # ``scan-notify`` is the canonical name; this command performs a single
-    # filesystem scan and sends Telegram alerts, then exits. ``monitor`` is kept
-    # as a backward-compatible alias but is misleading (it is not a live
-    # monitor), so it is no longer the primary name.
+    # ``scan-notify`` performs a single filesystem scan and sends Telegram
+    # alerts, then exits.
     monitor_parser = subparsers.add_parser(
         "scan-notify",
-        aliases=["monitor"],
         help=(
             "Run a one-shot scan for newly discovered DFT results (or scan "
             "failures) and send ORCA Telegram alerts. Not a live monitor."
