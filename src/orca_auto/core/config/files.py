@@ -13,11 +13,6 @@ DEFAULT_CONFIG_FILENAME = "orca_auto.yaml"
 DEFAULT_SHARED_ADMISSION_DIRNAME = "admission"
 SECURE_CONFIG_FILE_MODE = 0o600
 YAML_CONFIG_LOAD_EXCEPTIONS = (OSError, ValueError, yaml.YAMLError)
-LEGACY_ORCA_RUNTIME_SCHEDULER_KEYS = (
-    "max_concurrent",
-    "admission_root",
-    "admission_limit",
-)
 
 
 def config_env_value(env_var: str = ORCA_AUTO_CONFIG_ENV_VAR) -> str:
@@ -102,48 +97,6 @@ def mapping_section(raw: dict[str, Any] | None, key: str) -> dict[str, Any]:
     return section if isinstance(section, dict) else {}
 
 
-def legacy_orca_runtime_scheduler_keys(runtime: dict[str, Any] | None) -> tuple[str, ...]:
-    runtime_raw = runtime if isinstance(runtime, dict) else {}
-    return tuple(key for key in LEGACY_ORCA_RUNTIME_SCHEDULER_KEYS if key in runtime_raw)
-
-
-def legacy_orca_runtime_scheduler_migration_message(
-    runtime: dict[str, Any] | None,
-    *,
-    section_label: str = "orca.runtime",
-) -> str:
-    legacy_keys = legacy_orca_runtime_scheduler_keys(runtime)
-    qualified = ", ".join(f"{section_label}.{key}" for key in legacy_keys)
-    return (
-        "Legacy ORCA runtime scheduler settings are deprecated"
-        f"{f': {qualified}' if qualified else ''}. Move concurrency settings to "
-        "top-level scheduler.max_active_simulations and move the shared admission path to "
-        "top-level scheduler.admission_root. Remove admission_limit; the scheduler limit "
-        "now follows scheduler.max_active_simulations."
-    )
-
-
-def reject_mixed_orca_scheduler_config(
-    runtime: dict[str, Any] | None,
-    scheduler: dict[str, Any] | None,
-    *,
-    section_label: str = "orca.runtime",
-) -> None:
-    scheduler_raw = scheduler if isinstance(scheduler, dict) else {}
-    if not scheduler_raw:
-        return
-    legacy_keys = legacy_orca_runtime_scheduler_keys(runtime)
-    if not legacy_keys:
-        return
-    raise ValueError(
-        "Mixed ORCA scheduler configuration is not accepted. "
-        + legacy_orca_runtime_scheduler_migration_message(
-            runtime,
-            section_label=section_label,
-        )
-    )
-
-
 def resolve_configured_path(value: Any) -> Path | None:
     text = normalize_text(value)
     return Path(text).expanduser().resolve() if text else None
@@ -182,26 +135,6 @@ def scheduler_admission_root(
     if admission_root is None and default_when_missing:
         admission_root = resolve_configured_path(default_shared_admission_root(Path(config_path)))
     return admission_root
-
-
-def runtime_admission_root(
-    config_path: str | Path,
-    runtime: dict[str, Any] | None,
-    scheduler: dict[str, Any] | None,
-    *,
-    default_when_scheduler_present: bool = True,
-) -> Path | None:
-    runtime_raw = runtime if isinstance(runtime, dict) else {}
-    admission_root = resolve_configured_path(runtime_raw.get("admission_root"))
-    if admission_root is not None:
-        return admission_root
-
-    scheduler_raw = scheduler if isinstance(scheduler, dict) else {}
-    return scheduler_admission_root(
-        config_path,
-        scheduler_raw,
-        default_when_missing=default_when_scheduler_present and bool(scheduler_raw),
-    )
 
 
 def workflow_root_from_mapping(raw: dict[str, Any] | None) -> str:

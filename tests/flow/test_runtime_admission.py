@@ -39,7 +39,7 @@ def test_submission_admission_root_for_internal_engine_uses_scheduler_default(
     assert root == (tmp_path / "admission").resolve()
 
 
-def test_submission_admission_root_for_orca_uses_legacy_runtime_admission_root(
+def test_submission_admission_root_for_orca_ignores_runtime_admission_setting(
     tmp_path: Path,
 ) -> None:
     runtime_root = tmp_path / "runtime-admission"
@@ -59,10 +59,10 @@ def test_submission_admission_root_for_orca_uses_legacy_runtime_admission_root(
 
     root = runtime_admission._submission_admission_root_from_config(config, engine="orca")
 
-    assert root == runtime_root.resolve()
+    assert root is None
 
 
-def test_submission_admission_root_for_orca_rejects_mixed_scheduler_settings(
+def test_submission_admission_root_for_orca_uses_scheduler_with_runtime_key_present(
     tmp_path: Path,
 ) -> None:
     scheduler_root = tmp_path / "scheduler-admission"
@@ -82,11 +82,13 @@ def test_submission_admission_root_for_orca_rejects_mixed_scheduler_settings(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="Mixed ORCA scheduler configuration"):
+    assert (
         runtime_admission._submission_admission_root_from_config(config, engine="orca")
+        == scheduler_root.resolve()
+    )
 
 
-def test_submission_admission_limit_uses_legacy_orca_runtime_limit(tmp_path: Path) -> None:
+def test_submission_admission_limit_ignores_orca_runtime_scheduler_keys(tmp_path: Path) -> None:
     config = tmp_path / "orca_auto.yaml"
     config.write_text(
         "\n".join(
@@ -102,7 +104,7 @@ def test_submission_admission_limit_uses_legacy_orca_runtime_limit(tmp_path: Pat
         encoding="utf-8",
     )
 
-    assert runtime_admission.submission_admission_limit_from_config(config) == 3
+    assert runtime_admission.submission_admission_limit_from_config(config) is None
 
 
 def test_submission_admission_has_capacity_uses_first_resolved_engine_root(

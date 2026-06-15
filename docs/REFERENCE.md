@@ -170,12 +170,6 @@ Field descriptions for the `orca` section:
 
 Notes:
 
-- Legacy `orca.runtime.max_concurrent`, `orca.runtime.admission_root`, and
-  `orca.runtime.admission_limit` are accepted only when `scheduler` is absent,
-  with a migration warning. Do not mix them with top-level `scheduler.*`; move
-  concurrency to `scheduler.max_active_simulations` and the shared admission
-  path to `scheduler.admission_root`.
-
 - `default_max_retries=2` means `1 initial + 2 retries = 3 total attempts`
 - Windows-style paths such as `C:\...` and `/mnt/c/...` are not supported in config
 

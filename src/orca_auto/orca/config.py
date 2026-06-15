@@ -10,10 +10,7 @@ from orca_auto.core.config import engines as _config_engines
 from orca_auto.core.config.files import (
     default_shared_admission_root,
     engine_config_mapping,
-    legacy_orca_runtime_scheduler_keys,
-    legacy_orca_runtime_scheduler_migration_message,
     load_required_yaml_mapping,
-    reject_mixed_orca_scheduler_config,
     workflow_root_from_mapping,
 )
 from orca_auto.core.config.schema import (
@@ -131,30 +128,9 @@ def _required_runtime_paths(
 def _scheduler_runtime_settings(
     path: Path,
     scheduler_raw: Dict[str, Any],
-    runtime_raw: Dict[str, Any],
     allowed_root: str,
 ) -> tuple[int, str, int | None]:
     scheduler_enabled = bool(scheduler_raw)
-    reject_mixed_orca_scheduler_config(runtime_raw, scheduler_raw)
-    if not scheduler_enabled and legacy_orca_runtime_scheduler_keys(runtime_raw):
-        max_concurrent = _config_engines.normalize_max_concurrent(
-            runtime_raw.get("max_concurrent"),
-            RuntimeConfig.max_concurrent,
-        )
-        admission_root = _config_engines.as_str(
-            runtime_raw.get("admission_root"),
-            allowed_root,
-        )
-        admission_limit = _config_engines.normalize_admission_limit(
-            runtime_raw.get("admission_limit"),
-            max_concurrent,
-        )
-        logger.warning(
-            "%s",
-            legacy_orca_runtime_scheduler_migration_message(runtime_raw),
-        )
-        return max_concurrent, admission_root, admission_limit
-
     settings = _config_engines.scheduler_runtime_settings(
         scheduler_raw,
         default_max_active=RuntimeConfig.max_concurrent,
@@ -204,7 +180,6 @@ def load_config(config_path: str) -> AppConfig:
     max_concurrent, admission_root, admission_limit = _scheduler_runtime_settings(
         path,
         scheduler_raw,
-        runtime_raw,
         allowed_root,
     )
     telegram_cfg = telegram_config_from_mapping(telegram_raw)

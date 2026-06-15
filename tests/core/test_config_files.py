@@ -11,7 +11,6 @@ from orca_auto.core.config.files import (
     load_yaml_mapping,
     mapping_section,
     resolve_configured_path,
-    runtime_admission_root,
     scheduler_admission_root,
     secure_config_file_permissions,
     workflow_root_from_mapping,
@@ -70,21 +69,8 @@ def test_configured_path_and_admission_root_helpers(tmp_path: Path) -> None:
 
     assert resolve_configured_path("  ") is None
     assert resolve_configured_path(runtime_root) == runtime_root.resolve()
-    assert (
-        runtime_admission_root(
-            config_path,
-            {"admission_root": runtime_root},
-            {"admission_root": scheduler_root},
-        )
-        == runtime_root.resolve()
-    )
-    assert (
-        runtime_admission_root(
-            config_path,
-            {},
-            {"admission_root": scheduler_root},
-        )
-        == scheduler_root.resolve()
+    assert scheduler_admission_root(config_path, {"admission_root": scheduler_root}) == (
+        scheduler_root.resolve()
     )
     assert scheduler_admission_root(config_path, {}, default_when_missing=True) == (
         config_path.resolve().parent / "admission"
