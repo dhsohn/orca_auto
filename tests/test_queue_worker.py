@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import signal
 import subprocess
 import tempfile
@@ -836,7 +837,7 @@ class TestFillSlots(unittest.TestCase):
                 "orca_auto.orca.queue_worker.start_background_process"
             ) as mock_start_background_process:
                 mock_proc = MagicMock()
-                mock_proc.pid = 4109
+                mock_proc.pid = os.getpid()
                 mock_start_background_process.return_value = mock_proc
                 worker._fill_slots()
 
@@ -845,6 +846,9 @@ class TestFillSlots(unittest.TestCase):
             self.assertEqual(slots[0].queue_id, entry.queue_id)
             self.assertEqual(slots[0].app_name, entry.app_name)
             self.assertEqual(slots[0].task_id, entry.task_id)
+            self.assertEqual(slots[0].state, "active")
+            self.assertEqual(slots[0].owner_pid, os.getpid())
+            self.assertEqual(slots[0].work_dir, str(rxn))
 
     def test_fill_slots_preserves_task_id_across_slot_and_worker_handoff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -861,7 +865,7 @@ class TestFillSlots(unittest.TestCase):
                 "orca_auto.orca.queue_worker.start_background_process"
             ) as mock_start_background_process:
                 mock_proc = MagicMock()
-                mock_proc.pid = 4110
+                mock_proc.pid = os.getpid()
                 mock_start_background_process.return_value = mock_proc
                 worker._fill_slots()
 

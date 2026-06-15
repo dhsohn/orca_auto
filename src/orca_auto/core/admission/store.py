@@ -175,12 +175,21 @@ def _metadata_updated_slot(
     slot: AdmissionSlot,
     update: AdmissionSlotMetadataUpdate,
 ) -> AdmissionSlot:
+    resolved_owner_pid = update.owner_pid if update.owner_pid is not None else slot.owner_pid
     return replace(
         slot,
+        state=slot.state if update.state is None else update.state.strip() or slot.state,
         queue_id=slot.queue_id if update.queue_id is None else update.queue_id.strip(),
         app_name=slot.app_name if update.app_name is None else update.app_name.strip(),
         task_id=slot.task_id if update.task_id is None else update.task_id.strip(),
         workflow_id=slot.workflow_id if update.workflow_id is None else update.workflow_id.strip(),
+        work_dir=slot.work_dir if update.work_dir is None else _normalize_work_dir(update.work_dir),
+        owner_pid=resolved_owner_pid,
+        process_start_ticks=(
+            slot.process_start_ticks
+            if update.owner_pid is None
+            else _process_start_ticks(resolved_owner_pid)
+        ),
     )
 
 
@@ -429,19 +438,25 @@ def update_slot_metadata(
     root: str | Path,
     token: str,
     *,
+    state: str | None = None,
     queue_id: str | None = None,
     app_name: str | None = None,
     task_id: str | None = None,
     workflow_id: str | None = None,
+    work_dir: str | Path | None = None,
+    owner_pid: int | None = None,
 ) -> AdmissionSlot | None:
     return update_slot_metadata_with_update(
         root,
         token,
         AdmissionSlotMetadataUpdate(
+            state=state,
             queue_id=queue_id,
             app_name=app_name,
             task_id=task_id,
             workflow_id=workflow_id,
+            work_dir=work_dir,
+            owner_pid=owner_pid,
         ),
     )
 

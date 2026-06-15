@@ -211,19 +211,25 @@ class TestAdmissionStore(unittest.TestCase):
             updated = admission_update_slot_metadata(
                 root,
                 token or "",
+                state="active",
                 queue_id="q_123",
                 app_name="orca_auto_orca",
                 task_id="orca_task_123",
                 workflow_id="wf_123",
+                work_dir=root / "rxn",
+                owner_pid=os.getpid(),
             )
 
             self.assertTrue(updated)
             slots = list_slots(root)
             self.assertEqual(len(slots), 1)
+            self.assertEqual(slots[0].state, "active")
             self.assertEqual(slots[0].queue_id, "q_123")
             self.assertEqual(slots[0].app_name, "orca_auto_orca")
             self.assertEqual(slots[0].task_id, "orca_task_123")
             self.assertEqual(slots[0].workflow_id, "wf_123")
+            self.assertEqual(slots[0].work_dir, str(root / "rxn"))
+            self.assertEqual(slots[0].owner_pid, os.getpid())
 
     def test_local_store_reports_missing_activation_release_and_metadata_update(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

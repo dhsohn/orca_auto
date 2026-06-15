@@ -49,9 +49,9 @@ def terminate_process_group(
     sigterm: int | None = None,
     sigkill: int | None = None,
     deps: ProcessGroupTerminationDeps | None = None,
-) -> None:
+) -> bool:
     if proc.poll() is not None:
-        return
+        return True
     active_deps = deps or ProcessGroupTerminationDeps()
     active_killpg = killpg_fn
     if active_killpg is None:
@@ -72,7 +72,10 @@ def terminate_process_group(
 
     try:
         proc.wait(timeout=graceful_timeout)
+        return True
     except subprocess.TimeoutExpired:
+        if proc.poll() is not None:
+            return True
         try:
             active_killpg(proc.pid, active_sigkill)
         except (ProcessLookupError, PermissionError):
@@ -82,8 +85,12 @@ def terminate_process_group(
                 logger.debug("failed to kill process after group kill failed", exc_info=True)
         try:
             proc.wait(timeout=kill_timeout)
+            return True
         except subprocess.TimeoutExpired:
+            if proc.poll() is not None:
+                return True
             logger.debug("process did not exit after kill timeout: pid=%s", proc.pid)
+            return False
 
 
 def install_shutdown_signal_handlers(

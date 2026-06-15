@@ -687,7 +687,7 @@ def test_queue_worker_loop_survives_finalize_error_and_logs(
 
 
 def test_terminate_process_group_handles_finished_process() -> None:
-    worker_common.terminate_process_group(SimpleNamespace(poll=lambda: 0))
+    assert worker_common.terminate_process_group(SimpleNamespace(poll=lambda: 0))
 
 
 def test_terminate_process_group_falls_back_to_proc_methods() -> None:
@@ -705,7 +705,7 @@ def test_terminate_process_group_falls_back_to_proc_methods() -> None:
         ],
     )
 
-    worker_common.terminate_process_group(
+    assert not worker_common.terminate_process_group(
         proc,
         graceful_timeout=1,
         kill_timeout=2,
@@ -718,6 +718,57 @@ def test_terminate_process_group_falls_back_to_proc_methods() -> None:
     assert proc.terminate_calls == 1
     assert proc.kill_calls == 1
     assert proc.wait_calls == [1, 2]
+
+
+def test_terminate_process_group_returns_true_after_forced_exit() -> None:
+    proc = FakeManagedProcess(
+        pid=124,
+        wait_side_effects=[
+            subprocess.TimeoutExpired(cmd="worker", timeout=1),
+            0,
+        ],
+    )
+    killpg, killpg_calls = recording_killpg()
+
+    assert worker_common.terminate_process_group(
+        proc,
+        graceful_timeout=1,
+        kill_timeout=2,
+        killpg_fn=killpg,
+        sigterm=15,
+        sigkill=9,
+    )
+
+    assert killpg_calls == [(124, 15), (124, 9)]
+    assert proc.wait_calls == [1, 2]
+
+
+def test_shutdown_running_process_job_keeps_running_state_when_process_survives(
+    tmp_path: Path,
+) -> None:
+    worker = SimpleNamespace(
+        _release_admission_slot=lambda token: released.append(token),
+    )
+    job = SimpleNamespace(
+        process=object(),
+        queue_root=tmp_path / "queue",
+        admission_token="slot-1",
+    )
+    requeued: list[tuple[Path, str]] = []
+    released: list[str] = []
+
+    lifecycle_helpers.shutdown_running_process_job(
+        worker,
+        "queue-1",
+        job,
+        hooks=lifecycle_helpers.EngineQueueProcessShutdownHooks(
+            terminate_process_fn=lambda _process: False,
+            requeue_running_entry_fn=lambda root, queue_id: requeued.append((root, queue_id)),
+        ),
+    )
+
+    assert requeued == []
+    assert released == []
 
 
 def test_install_shutdown_signal_handlers_invokes_callback(
@@ -1137,6 +1188,40 @@ def test_shutdown_child_process_with_grace_forces_after_deadline(
 
     assert calls == ["terminate", "sleep:0.1", "force"]
     assert finalized == [(job, 9)]
+
+
+def test_shutdown_child_process_with_grace_skips_finalize_when_force_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    monotonic_values = iter([0.0, 0.2])
+
+    class Process:
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            calls.append("terminate")
+
+    job = SimpleNamespace(process=Process())
+    finalized: list[int] = []
+
+    monkeypatch.setattr(child_process_helpers.time, "monotonic", lambda: next(monotonic_values))
+
+    def force_terminate(_proc: Process) -> bool:
+        calls.append("force")
+        return False
+
+    child_process_helpers.shutdown_child_process_with_grace(
+        job,
+        terminate_process_fn=force_terminate,
+        finalize_child_exit_fn=lambda _job, rc: finalized.append(rc),
+        grace_seconds=0.1,
+        sleep_fn=lambda seconds: calls.append(f"sleep:{seconds}"),
+    )
+
+    assert calls == ["terminate", "force"]
+    assert finalized == []
 
 
 def test_shutdown_child_process_with_grace_continues_when_terminate_raises(

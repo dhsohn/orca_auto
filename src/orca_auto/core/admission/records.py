@@ -51,10 +51,13 @@ class AdmissionSlotActivation:
 
 @dataclass(frozen=True)
 class AdmissionSlotMetadataUpdate:
+    state: str | None = None
     queue_id: str | None = None
     app_name: str | None = None
     task_id: str | None = None
     workflow_id: str | None = None
+    work_dir: str | Path | None = None
+    owner_pid: int | None = None
 
 
 def slot_to_dict(slot: AdmissionSlot) -> dict[str, object]:

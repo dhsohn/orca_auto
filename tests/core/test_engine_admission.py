@@ -144,6 +144,7 @@ def test_attach_started_process_metadata_updates_identity_and_running_record(
         queue_id="queue-1",
         app_name="orca_auto_orca",
         task_id="task-1",
+        metadata={"reaction_dir": str(tmp_path / "rxn")},
     )
     process = SimpleNamespace(pid=321)
     updated: list[dict[str, Any]] = []
@@ -174,9 +175,12 @@ def test_attach_started_process_metadata_updates_identity_and_running_record(
         {
             "root": "/tmp/admission",
             "token": "slot-1",
+            "state": "active",
             "queue_id": "queue-1",
             "app_name": "orca_auto_orca",
             "task_id": "task-1",
+            "owner_pid": 321,
+            "work_dir": str(tmp_path / "rxn"),
         }
     ]
     assert running == [(cfg, entry)]

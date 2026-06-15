@@ -43,9 +43,18 @@ def shutdown_running_process_job(
     job: Any,
     *,
     hooks: EngineQueueProcessShutdownHooks,
+    logger: logging.Logger = LOGGER,
 ) -> None:
+    terminated = hooks.terminate_process_fn(job.process)
+    if terminated is False:
+        logger.error(
+            "Process for running job %s did not stop; leaving queue entry running "
+            "and retaining admission slot %s",
+            queue_id,
+            getattr(job, "admission_token", ""),
+        )
+        return
     try:
-        hooks.terminate_process_fn(job.process)
         hooks.requeue_running_entry_fn(job_queue_root(worker, job), queue_id)
     finally:
         worker._release_admission_slot(job.admission_token)

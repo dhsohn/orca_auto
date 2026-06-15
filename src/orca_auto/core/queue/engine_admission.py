@@ -135,12 +135,16 @@ def attach_started_process_metadata(
     logger: logging.Logger = LOGGER,
 ) -> bool:
     queue_id = queue_entry_id_fn(entry)
+    work_dir = queue_entry_work_dir(entry)
     attached = update_slot_metadata_fn(
         admission_root,
         admission_token,
+        state="active",
         queue_id=queue_id,
         app_name=queue_entry_app_name_fn(entry),
         task_id=queue_entry_task_id_fn(entry),
+        owner_pid=process.pid,
+        work_dir=work_dir,
     )
     if not attached:
         logger.error(

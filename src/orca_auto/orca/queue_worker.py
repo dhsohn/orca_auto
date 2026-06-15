@@ -279,9 +279,9 @@ def _start_background_job_process(
     )
 
 
-def _terminate_process(proc: _ManagedProcess) -> None:
+def _terminate_process(proc: _ManagedProcess) -> bool:
     """Terminate the background run process and escalate if it does not stop."""
-    terminate_process_group(proc)
+    return terminate_process_group(proc)
 
 
 def _tracking_callbacks() -> _tracking_helpers.OrcaQueueWorkerTrackingCallbacks:

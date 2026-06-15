@@ -162,9 +162,21 @@ def shutdown_child_process_with_grace(
         sleep_fn(0.1)
 
     if job.process.poll() is None:
-        terminate_process_fn(job.process)
+        terminated = terminate_process_fn(job.process)
+        if terminated is False and job.process.poll() is None:
+            LOGGER.error(
+                "Child worker process did not stop after forced termination; "
+                "skipping queue finalization for now"
+            )
+            return
 
     rc = job.process.poll()
+    if rc is None:
+        LOGGER.error(
+            "Child worker process is still running after forced termination; "
+            "skipping queue finalization for now"
+        )
+        return
     finalize_child_exit_fn(job, int(rc) if rc is not None else 0)
 
 

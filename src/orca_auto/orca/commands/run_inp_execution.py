@@ -29,6 +29,12 @@ def select_latest_inp(reaction_dir: Path) -> Path:
     if not candidates:
         candidates = all_candidates
     candidates.sort(key=lambda p: (p.stat().st_mtime_ns, p.name.lower()), reverse=True)
+    if len(candidates) > 1:
+        logging.getLogger(__name__).warning(
+            "Multiple ORCA .inp candidates found in %s; selected newest input %s",
+            reaction_dir,
+            candidates[0].name,
+        )
     return candidates[0]
 
 

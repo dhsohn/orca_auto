@@ -119,6 +119,24 @@ class TestCli(unittest.TestCase):
             selected = _select_latest_inp(reaction)
         self.assertEqual(selected.name, "rxn.inp")
 
+    def test_select_latest_inp_warns_when_multiple_base_inputs_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            older = reaction / "a.inp"
+            newer = reaction / "b.inp"
+            older.write_text("! Opt\n", encoding="utf-8")
+            time.sleep(0.01)
+            newer.write_text("! Opt\n", encoding="utf-8")
+
+            with self.assertLogs(
+                "orca_auto.orca.commands.run_inp_execution",
+                level="WARNING",
+            ) as logs:
+                selected = _select_latest_inp(reaction)
+
+        self.assertEqual(selected.name, "b.inp")
+        self.assertIn("Multiple ORCA .inp candidates", "\n".join(logs.output))
+
     def test_retry_inp_path_uses_canonical_base_stem(self) -> None:
         retry_base = Path("/tmp/rxn.retry03.inp")
         retry_next = _retry_inp_path(retry_base, 1)
