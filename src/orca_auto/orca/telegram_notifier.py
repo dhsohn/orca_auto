@@ -183,7 +183,10 @@ def format_run_finished_event(event: RunFinishedNotification) -> str:
     """Format an immediate terminal run notification."""
     reaction_dir = Path(event["reaction_dir"])
     status = str(event["status"]).strip().lower()
-    title = "orca_auto ORCA Completed" if status == "completed" else "orca_auto ORCA Failed"
+    title = {
+        "completed": "orca_auto ORCA Completed",
+        "cancelled": "orca_auto ORCA Cancelled",
+    }.get(status, "orca_auto ORCA Failed")
     status_text = status or "unknown"
     lines = [
         f"<b>{escape_html(title)}</b>",

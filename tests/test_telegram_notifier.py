@@ -184,6 +184,13 @@ class TestFormatRunFinishedEvent:
         assert "rxn.retry01.out" in text
         assert "&lt;demo&gt;" in text
 
+    def test_cancelled_status_renders_cancelled_title(self) -> None:
+        event = {**_sample_finished_event(), "status": "cancelled", "reason": "cancel_requested"}
+        text = format_run_finished_event(event)
+        assert "orca_auto ORCA Cancelled" in text
+        assert "orca_auto ORCA Failed" not in text
+        assert "cancelled" in text
+
 
 class TestSendMessage:
     def test_disabled_config_returns_false(self) -> None:

@@ -34,11 +34,18 @@ from orca_auto.orca.queue_worker import (
     QueueWorker,
     _get_run_id_from_state,
     _notify_terminal_job_from_state,
+    _record_cancelled_run_state,
     _RunningJob,
     _terminate_process,
     read_worker_pid,
 )
-from orca_auto.orca.state import finalize_state, load_state, report_json_path, save_state
+from orca_auto.orca.state import (
+    finalize_state,
+    load_state,
+    new_state,
+    report_json_path,
+    save_state,
+)
 from tests.engine_artifact_helpers import orca_artifact_payload
 from tests.process_helpers import patch_missing_process_group, preserved_signal_handlers
 from tests.queue_worker_helpers import (
@@ -82,6 +89,48 @@ def test_lifecycle_callbacks_use_current_queue_worker_symbols() -> None:
     assert callbacks.on_completed is not None
     callbacks.on_completed(worker, job)
     worker._auto_organize_terminal_job.assert_called_once_with(job)
+
+
+def test_record_cancelled_run_state_writes_terminal_cancelled(tmp_path: Path) -> None:
+    # A cancelled run is stopped by a signal and never writes its own terminal
+    # result, so the worker records a cancelled outcome on its behalf. Without it
+    # the run state lingers as "running" (job never leaves the list, no notify).
+    state = new_state(tmp_path, tmp_path / "job.inp", max_retries=3)
+    state["status"] = "running"
+    save_state(tmp_path, state)
+
+    run_id = _record_cancelled_run_state(tmp_path)
+
+    assert run_id == state["run_id"]
+    written = load_state(tmp_path)
+    assert written is not None
+    assert written["status"] == "cancelled"
+    assert written["final_result"] is not None
+    assert written["final_result"]["status"] == "cancelled"
+    assert written["final_result"]["reason"] == "cancel_requested"
+
+
+def test_record_cancelled_run_state_keeps_existing_terminal_result(tmp_path: Path) -> None:
+    # If a real terminal outcome landed just before cancellation, don't clobber it.
+    state = new_state(tmp_path, tmp_path / "job.inp", max_retries=3)
+    finalize_state(
+        tmp_path,
+        state,
+        status="completed",
+        final_result={
+            "status": "completed",
+            "analyzer_status": "completed",
+            "reason": "normal_termination",
+            "completed_at": "t",
+            "last_out_path": None,
+        },
+    )
+
+    _record_cancelled_run_state(tmp_path)
+
+    written = load_state(tmp_path)
+    assert written is not None
+    assert written["final_result"]["status"] == "completed"
 
 
 class TestTerminateProcess(unittest.TestCase):

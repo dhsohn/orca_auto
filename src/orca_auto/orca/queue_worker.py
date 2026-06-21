@@ -61,8 +61,10 @@ from . import queue_worker_lifecycle as _lifecycle_helpers
 from . import queue_worker_runtime as _runtime_helpers
 from . import queue_worker_tracking as _tracking_helpers
 from .attempt_reporting import (
+    build_final_result,
     build_run_finished_notification,
     finished_notification_already_sent,
+    last_out_path_from_state,
     mark_finished_notification_sent,
 )
 from .config import AppConfig, load_config
@@ -88,13 +90,15 @@ from .queue_adapter import (
     queue_entry_task_id,
     reconcile_orphaned_running_entries,
     requeue_running_entry,
+    update_terminal,
     worker_log_path,
 )
 from .queue_worker_deps import (
     OrcaQueueWorkerFacadeBindings,
     build_late_bound_orca_runtime_facade_deps,
 )
-from .state import load_organized_ref, load_report_json, load_state
+from .state import finalize_state, load_organized_ref, load_report_json, load_state
+from .statuses import AnalyzerStatus
 from .telegram_notifier import notify_run_finished_event
 
 logger = logging.getLogger(__name__)
@@ -485,6 +489,59 @@ def _check_orca_cancel_requests(worker: EngineQueueWorker) -> None:
     )
 
 
+def _record_cancelled_run_state(job_dir: Path) -> str | None:
+    """Write a terminal "cancelled" run state for an interrupted run.
+
+    A cancelled run is stopped by a signal and never writes its own terminal
+    result, so the run state lingers as ``running``. That leaves a stale run
+    snapshot in the activity list and starves the terminal Telegram notification
+    (which requires ``final_result``). Persist a cancelled outcome here. Returns
+    the run_id when known so the queue entry can be matched to this snapshot.
+    """
+    state = load_state(job_dir)
+    if state is None:
+        return None
+    run_id = str(state.get("run_id") or "").strip() or None
+    final_result = state.get("final_result")
+    if isinstance(final_result, dict) and str(final_result.get("status") or "").strip():
+        # A real terminal outcome was already recorded (e.g. the run finished just
+        # before cancellation landed); do not clobber it.
+        return run_id
+    cancelled_result = build_final_result(
+        status="cancelled",
+        analyzer_status=AnalyzerStatus.INCOMPLETE,
+        reason="cancel_requested",
+        last_out_path=last_out_path_from_state(state),
+    )
+    finalize_state(job_dir, state, status="cancelled", final_result=cancelled_result)
+    return run_id
+
+
+def _finalize_cancelled_run(worker: EngineQueueWorker, job: _RunningJob) -> None:
+    """Record the cancelled outcome and notify, mirroring terminal finalization.
+
+    The proactive cancel path stops the child and marks the queue entry cancelled
+    but, unlike a natural exit, never runs the terminal side effects. Do them here
+    so the cancelled job leaves the active queue list and the user is told it
+    stopped.
+    """
+    reaction_dir = str(getattr(job, "reaction_dir", "") or "").strip()
+    if not reaction_dir:
+        return
+    try:
+        run_id = _record_cancelled_run_state(Path(reaction_dir).expanduser().resolve())
+        if run_id:
+            # Stamp run_id on the cancelled entry so the activity view matches the
+            # run snapshot to this queue record instead of listing it twice.
+            update_terminal(_job_queue_root(worker, job), job.queue_id, "cancelled", run_id=run_id)
+        _upsert_terminal_job_record(
+            worker.cfg, reaction_dir, fallback_job_id=getattr(job, "task_id", None)
+        )
+        _notify_terminal_job_from_state(worker.cfg, reaction_dir)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to finalize cancelled run for %s: %s", reaction_dir, exc)
+
+
 def _cancel_orca_running_job(worker: EngineQueueWorker, queue_id: str, job: _RunningJob) -> None:
     cancel_running_process_job(
         worker,
@@ -492,6 +549,7 @@ def _cancel_orca_running_job(worker: EngineQueueWorker, queue_id: str, job: _Run
         job,
         hooks=_orca_worker_lifecycle_hooks(),
     )
+    _finalize_cancelled_run(worker, job)
 
 
 def QueueWorker(
