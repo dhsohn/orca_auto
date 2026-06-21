@@ -474,9 +474,7 @@ def test_mark_cancelled_requeue_cancel_and_update_terminal_cover_missing_and_wro
     _save_entries(
         root,
         [
-            _entry(
-                "q_running", str(root / "running"), QueueStatus.RUNNING.value, cancel_requested=True
-            ),
+            _entry("q_running", str(root / "running"), QueueStatus.RUNNING.value),
             _entry("q_terminal", str(root / "terminal"), QueueStatus.COMPLETED.value),
         ],
     )
@@ -488,6 +486,20 @@ def test_mark_cancelled_requeue_cancel_and_update_terminal_cover_missing_and_wro
     assert entries["q_running"].status == QueueStatus.PENDING
     assert entries["q_running"].started_at == ""
     assert entries["q_running"].cancel_requested is False
+
+    # A cancel requested mid-run must not be undone by the shutdown requeue path:
+    # the entry is cancelled (terminal), not returned to pending for a resume.
+    _save_entries(
+        root,
+        [
+            _entry(
+                "q_running", str(root / "running"), QueueStatus.RUNNING.value, cancel_requested=True
+            ),
+        ],
+    )
+    assert queue_adapter.requeue_running_entry(root, "q_running") is True
+    entries = {entry.queue_id: entry for entry in queue_adapter.list_queue(root)}
+    assert entries["q_running"].status == QueueStatus.CANCELLED
 
     _save_entries(
         root,

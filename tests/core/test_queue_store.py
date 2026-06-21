@@ -393,6 +393,35 @@ def test_requeue_running_entry_returns_running_entry_to_pending(
     assert store.requeue_running_entry(tmp_path, "missing-queue-id") is None
 
 
+def test_requeue_running_entry_cancels_when_cancel_requested(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # A cancel arriving while the entry runs must not be resurrected by the
+    # worker-shutdown requeue path: workers deliver cancellation as a SIGTERM the
+    # run treats as a shutdown requeue, which previously cleared cancel_requested
+    # and let the cancelled job be dequeued and resumed.
+    _install_deterministic_helpers(monkeypatch)
+
+    running = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="running",
+        task_kind="kind",
+        engine="engine",
+    )
+    assert store.dequeue_next(tmp_path) is not None
+    assert store.request_cancel(tmp_path, running.queue_id) is not None
+
+    updated = store.requeue_running_entry(tmp_path, running.queue_id)
+    assert updated is not None
+    assert updated.status == QueueStatus.CANCELLED
+    assert updated.finished_at != ""
+
+    # The cancelled entry is terminal and is never handed back out for a resume.
+    assert store.dequeue_next(tmp_path) is None
+
+
 def test_clear_terminal_removes_terminal_entries_and_can_keep_latest(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

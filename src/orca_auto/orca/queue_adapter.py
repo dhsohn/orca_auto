@@ -246,7 +246,11 @@ def mark_cancelled(allowed_root: Path, queue_id: str) -> bool:
 
 
 def requeue_running_entry(allowed_root: Path, queue_id: str) -> bool:
-    """Return a running queue entry back to pending during worker shutdown."""
+    """Return a running queue entry back to pending during worker shutdown.
+
+    If a cancel was requested for the entry, it is marked cancelled instead of
+    requeued so a cancelled job is not resumed (see core queue store).
+    """
     return (
         _queue_store.requeue_running_entry(
             allowed_root,

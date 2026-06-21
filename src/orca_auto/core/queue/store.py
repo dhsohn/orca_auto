@@ -434,6 +434,20 @@ def requeue_running_entry(
         for index, entry in enumerate(entries):
             if entry.queue_id != queue_id or entry.status != QueueStatus.RUNNING:
                 continue
+            if entry.cancel_requested:
+                # A cancel was requested while this entry was running. Requeueing it
+                # for resume would clear cancel_requested and let the worker dequeue
+                # and resume the very job the user cancelled. Honor the cancellation
+                # instead so the stop is terminal. Workers deliver cancellation as a
+                # SIGTERM that the run interprets as a worker-shutdown requeue, so this
+                # is the chokepoint that keeps "cancel" from turning into "resume".
+                updated = replace(
+                    entry,
+                    status=QueueStatus.CANCELLED,
+                    finished_at=now_utc_iso(),
+                )
+                entries[index] = updated
+                return updated, True
             updated = replace(
                 entry,
                 status=QueueStatus.PENDING,
