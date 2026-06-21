@@ -60,6 +60,17 @@ class _ListTestBase(unittest.TestCase):
             "final_result": {"status": status},
         }
         save_state(reaction_dir, state)
+        if status in {"running", "retrying"}:
+            # A genuinely in-progress run holds a live run lock; without it the
+            # activity list now treats the run as a stale/failed leftover.
+            from orca_auto.core.utils.process_tracking import (
+                RUN_LOCK_FILE_NAME,
+                current_process_lock_payload,
+            )
+
+            (reaction_dir / RUN_LOCK_FILE_NAME).write_text(
+                json.dumps(current_process_lock_payload()), encoding="utf-8"
+            )
 
 
 class TestListEmpty(_ListTestBase):

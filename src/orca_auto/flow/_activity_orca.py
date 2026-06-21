@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_SOURCE
 from orca_auto.core.utils import normalize_text
+from orca_auto.core.utils.process_tracking import active_run_lock_pid
 
 from ._activity_model import ActivityRecord
 
+_LOGGER = logging.getLogger(__name__)
 _ORCA_ACTIVE_QUEUE_STATUSES = frozenset({"pending", "running"})
+_ORCA_TERMINAL_QUEUE_STATUSES = frozenset({"completed", "failed", "cancelled"})
+# Snapshot run states that imply a live process; without a live run lock the run
+# was cancelled/killed/crashed and must not keep showing as in progress.
+_STALE_SNAPSHOT_STATUSES = frozenset({"running", "retrying"})
 
 
 def snapshot_matches_entry(
@@ -150,6 +157,21 @@ def snapshot_reaction_dir(snapshot: Any) -> str:
         return str(reaction_dir_obj)
 
 
+def _snapshot_display_status(snapshot: Any) -> str:
+    status = normalize_text(getattr(snapshot, "status", "")).lower() or "unknown"
+    if status not in _STALE_SNAPSHOT_STATUSES:
+        return status
+    reaction_dir = snapshot_reaction_dir(snapshot)
+    if not reaction_dir:
+        return status
+    # An orphan snapshot still parked at a running status with no live run lock is
+    # stale (the run was cancelled/killed/crashed); surface it as failed instead of
+    # leaving it stuck "in progress" in the activity list.
+    if active_run_lock_pid(Path(reaction_dir), logger=_LOGGER) is None:
+        return "failed"
+    return status
+
+
 def snapshot_record(snapshot: Any, *, allowed_root: Path, deps: Any) -> ActivityRecord:
     reaction_dir = snapshot_reaction_dir(snapshot)
     run_id = normalize_text(getattr(snapshot, "run_id", ""))
@@ -164,7 +186,7 @@ def snapshot_record(snapshot: Any, *, allowed_root: Path, deps: Any) -> Activity
         activity_id=run_id or label,
         kind="job",
         engine="orca",
-        status=normalize_text(getattr(snapshot, "status", "")) or "unknown",
+        status=_snapshot_display_status(snapshot),
         label=label,
         source=ORCA_AUTO_ORCA_SOURCE,
         submitted_at=started_at,
@@ -191,6 +213,38 @@ def snapshot_record(snapshot: Any, *, allowed_root: Path, deps: Any) -> Activity
     )
 
 
+def _resolved_entry_reaction_dir(queue_adapter: Any, entry: Any) -> str:
+    reaction_dir = normalize_text(queue_adapter.queue_entry_reaction_dir(entry))
+    if not reaction_dir:
+        return ""
+    try:
+        return str(Path(reaction_dir).expanduser().resolve())
+    except OSError:
+        return reaction_dir
+
+
+def superseded_snapshot_dirs(queue_adapter: Any, entries: list[Any]) -> set[str]:
+    """Reaction dirs whose only queue state is terminal.
+
+    A finished/cancelled queue entry supersedes any run snapshot still parked at
+    "running" for the same dir. Without this a cancelled job keeps showing as in
+    progress, because its stale snapshot is listed as a separate active row even
+    though the queue already recorded a terminal outcome.
+    """
+    active: set[str] = set()
+    terminal: set[str] = set()
+    for entry in entries:
+        reaction_dir = _resolved_entry_reaction_dir(queue_adapter, entry)
+        if not reaction_dir:
+            continue
+        status = normalize_text(queue_adapter.queue_entry_status(entry))
+        if status in _ORCA_ACTIVE_QUEUE_STATUSES:
+            active.add(reaction_dir)
+        elif status in _ORCA_TERMINAL_QUEUE_STATUSES:
+            terminal.add(reaction_dir)
+    return terminal - active
+
+
 def orca_records(
     *,
     config_path: str,
@@ -208,6 +262,7 @@ def orca_records(
     snapshots = list(run_snapshot.collect_run_snapshots(allowed_root))
     snapshot_by_run_id, snapshot_by_dir = snapshot_indexes(snapshots)
     represented_snapshot_keys: set[str] = set()
+    superseded_dirs = superseded_snapshot_dirs(queue_adapter, queue_entries)
     rows: list[ActivityRecord] = []
 
     for entry in queue_entries:
@@ -220,7 +275,10 @@ def orca_records(
 
     for snapshot in snapshots:
         snapshot_key = normalize_text(getattr(snapshot, "key", ""))
-        if not snapshot_key or snapshot_key not in represented_snapshot_keys:
-            rows.append(snapshot_record(snapshot, allowed_root=allowed_root, deps=deps))
+        if snapshot_key and snapshot_key in represented_snapshot_keys:
+            continue
+        if snapshot_reaction_dir(snapshot) in superseded_dirs:
+            continue
+        rows.append(snapshot_record(snapshot, allowed_root=allowed_root, deps=deps))
 
     return rows

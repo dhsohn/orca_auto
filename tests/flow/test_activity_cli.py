@@ -468,6 +468,85 @@ def test_orca_records_merge_queue_entries_and_snapshots(
     assert by_id["run-2"].metadata["selected_inp_name"] == "orphan.inp"
 
 
+def test_orca_records_suppress_stale_snapshot_for_terminal_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A cancelled queue entry whose run state still reads "running" must not keep
+    # showing the job as in progress: the stale snapshot is superseded by the
+    # terminal queue outcome and should not be listed as a separate active row.
+    allowed = tmp_path / "orca"
+    allowed.mkdir()
+    reaction_dir = allowed / "ts3"
+    reaction_dir.mkdir()
+    entries = [
+        QueueEntry(
+            queue_id="q-cancel",
+            app_name="orca_auto_orca",
+            task_id="task-ts3",
+            task_kind="orca_run",
+            engine="orca",
+            status=QueueStatus.CANCELLED,
+            priority=3,
+            enqueued_at="2026-04-26T00:00:00+00:00",
+            started_at="2026-04-26T00:01:00+00:00",
+            finished_at="2026-04-26T00:05:00+00:00",
+            metadata={"reaction_dir": str(reaction_dir)},
+        ),
+    ]
+    snapshots = [
+        SimpleNamespace(
+            key="snap-stale",
+            run_id="",
+            reaction_dir=reaction_dir,
+            status="running",
+            name="ts3",
+            completed_at="",
+            updated_at="2026-04-26T00:04:00+00:00",
+            started_at="2026-04-26T00:01:00+00:00",
+            attempts=1,
+            selected_inp_name="ts3.inp",
+            job_type="optts",
+        ),
+    ]
+
+    from orca_auto.orca import queue_adapter, run_snapshot
+
+    monkeypatch.setattr(
+        activity, "engine_runtime_paths", lambda config_path, *, engine: {"allowed_root": allowed}
+    )
+    monkeypatch.setattr(queue_adapter, "reconcile_orphaned_running_entries", lambda root: None)
+    monkeypatch.setattr(queue_adapter, "list_queue", lambda root: entries)
+    monkeypatch.setattr(run_snapshot, "collect_run_snapshots", lambda root: snapshots)
+
+    rows = _activity_orca.orca_records(
+        config_path="/tmp/cfg.yaml",
+        deps=activity._orca_activity_deps(),
+    )
+
+    # Only the cancelled queue record remains; the stale running snapshot is gone.
+    assert {row.activity_id: row.status for row in rows} == {"q-cancel": "cancelled"}
+
+
+def test_snapshot_display_status_marks_dead_running_as_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running = SimpleNamespace(status="running", reaction_dir=Path("/tmp/rxn"))
+
+    # No live run lock -> the run is gone; show it as failed, not in progress.
+    monkeypatch.setattr(_activity_orca, "active_run_lock_pid", lambda *a, **k: None)
+    assert _activity_orca._snapshot_display_status(running) == "failed"
+
+    # A live run lock -> genuinely running, leave it as running.
+    monkeypatch.setattr(_activity_orca, "active_run_lock_pid", lambda *a, **k: 4242)
+    assert _activity_orca._snapshot_display_status(running) == "running"
+
+    # Terminal statuses are never reinterpreted, regardless of the lock.
+    done = SimpleNamespace(status="completed", reaction_dir=Path("/tmp/rxn"))
+    monkeypatch.setattr(_activity_orca, "active_run_lock_pid", lambda *a, **k: None)
+    assert _activity_orca._snapshot_display_status(done) == "completed"
+
+
 def test_match_activity_record_and_cancel_error_edges(monkeypatch: pytest.MonkeyPatch) -> None:
     records = [
         activity.ActivityRecord(
