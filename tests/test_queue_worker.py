@@ -99,9 +99,10 @@ def test_record_cancelled_run_state_writes_terminal_cancelled(tmp_path: Path) ->
     state["status"] = "running"
     save_state(tmp_path, state)
 
-    run_id = _record_cancelled_run_state(tmp_path)
+    run_id, terminal_status = _record_cancelled_run_state(tmp_path)
 
     assert run_id == state["run_id"]
+    assert terminal_status == "cancelled"
     written = load_state(tmp_path)
     assert written is not None
     assert written["status"] == "cancelled"
@@ -126,10 +127,15 @@ def test_record_cancelled_run_state_keeps_existing_terminal_result(tmp_path: Pat
         },
     )
 
-    _record_cancelled_run_state(tmp_path)
+    run_id, terminal_status = _record_cancelled_run_state(tmp_path)
 
+    # The pre-existing terminal outcome is preserved and reported back so the
+    # caller can reconcile the queue entry to "completed" instead of "cancelled".
+    assert run_id == state["run_id"]
+    assert terminal_status == "completed"
     written = load_state(tmp_path)
     assert written is not None
+    assert written["final_result"] is not None
     assert written["final_result"]["status"] == "completed"
 
 
@@ -763,6 +769,83 @@ class TestQueueWorkerMethods(unittest.TestCase):
             self.worker._shutdown_all()
         self.assertEqual(len(self.worker._running), 0)
         mock_requeue.assert_called_once_with(self.root, entry.queue_id)
+
+    def test_shutdown_finalizes_cancel_requested_job(self) -> None:
+        # A cancel pending when the worker shuts down must be finalized (terminal +
+        # run state written), not requeued for resume: the shutdown path routes it
+        # through the same cancel finalization as the proactive loop.
+        rxn = self.root / "mol_shut_cancel"
+        rxn.mkdir()
+        entry = enqueue(self.root, str(rxn))
+        dequeue_next(self.root)
+        cancel(self.root, entry.queue_id)
+
+        state = new_state(rxn, rxn / "job.inp", max_retries=3)
+        state["status"] = "running"
+        save_state(rxn, state)
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        self.worker._running[entry.queue_id] = _RunningJob(
+            queue_id=entry.queue_id,
+            reaction_dir=str(rxn),
+            process=mock_proc,
+            admission_token="slot_shut_cancel",
+        )
+        with (
+            patch("orca_auto.orca.queue_worker._terminate_process"),
+            patch("orca_auto.orca.queue_worker.requeue_running_entry") as mock_requeue,
+        ):
+            self.worker._shutdown_all()
+
+        mock_requeue.assert_not_called()
+        self.assertNotIn(entry.queue_id, self.worker._running)
+        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
+        self.assertEqual(queue_entries[entry.queue_id].status.value, "cancelled")
+        written = load_state(rxn)
+        assert written is not None
+        assert written["final_result"] is not None
+        self.assertEqual(written["final_result"]["status"], "cancelled")
+
+    def test_finalize_cancelled_run_reconciles_completed_outcome(self) -> None:
+        # A run that completed in the instant before the cancel landed must not be
+        # mislabeled "cancelled": the queue entry is reconciled to the real terminal
+        # outcome recorded in the run state so entry, snapshot, and notify agree.
+        rxn = self.root / "mol_done"
+        rxn.mkdir()
+        entry = enqueue(self.root, str(rxn))
+        dequeue_next(self.root)
+        # Mirror cancel_running_process_job, which marks the entry cancelled first.
+        queue_worker_mod.update_terminal(self.root, entry.queue_id, "cancelled")
+
+        state = new_state(rxn, rxn / "job.inp", max_retries=3)
+        finalize_state(
+            rxn,
+            state,
+            status="completed",
+            final_result={
+                "status": "completed",
+                "analyzer_status": "completed",
+                "reason": "normal_termination",
+                "completed_at": "t",
+                "last_out_path": None,
+            },
+        )
+
+        job = _RunningJob(
+            queue_id=entry.queue_id,
+            reaction_dir=str(rxn),
+            process=MagicMock(),
+            admission_token="slot_done",
+        )
+        queue_worker_mod._finalize_cancelled_run(self.worker, job)
+
+        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
+        self.assertEqual(queue_entries[entry.queue_id].status.value, "completed")
+        written = load_state(rxn)
+        assert written is not None
+        assert written["final_result"] is not None
+        self.assertEqual(written["final_result"]["status"], "completed")
 
     @patch("orca_auto.core.queue.worker.signal.signal")
     @patch("orca_auto.orca.queue_worker.time.sleep", side_effect=KeyboardInterrupt)

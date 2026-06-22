@@ -441,10 +441,13 @@ def requeue_running_entry(
                 # instead so the stop is terminal. Workers deliver cancellation as a
                 # SIGTERM that the run interprets as a worker-shutdown requeue, so this
                 # is the chokepoint that keeps "cancel" from turning into "resume".
+                # Clear cancel_requested: it has now been honored, so the terminal
+                # entry should not keep advertising a pending cancellation.
                 updated = replace(
                     entry,
                     status=QueueStatus.CANCELLED,
                     finished_at=now_utc_iso(),
+                    cancel_requested=False,
                 )
                 entries[index] = updated
                 return updated, True

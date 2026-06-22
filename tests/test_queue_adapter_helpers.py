@@ -500,6 +500,7 @@ def test_mark_cancelled_requeue_cancel_and_update_terminal_cover_missing_and_wro
     assert queue_adapter.requeue_running_entry(root, "q_running") is True
     entries = {entry.queue_id: entry for entry in queue_adapter.list_queue(root)}
     assert entries["q_running"].status == QueueStatus.CANCELLED
+    assert entries["q_running"].cancel_requested is False
 
     _save_entries(
         root,

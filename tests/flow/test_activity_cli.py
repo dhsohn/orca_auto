@@ -528,6 +528,71 @@ def test_orca_records_suppress_stale_snapshot_for_terminal_entry(
     assert {row.activity_id: row.status for row in rows} == {"q-cancel": "cancelled"}
 
 
+def test_orca_records_keep_live_snapshot_despite_terminal_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A genuinely live re-run that shares a reaction dir with an older terminal
+    # queue entry must NOT be suppressed: the live run lock means it is in progress,
+    # so the snapshot row is kept alongside the terminal queue row.
+    allowed = tmp_path / "orca"
+    allowed.mkdir()
+    reaction_dir = allowed / "ts4"
+    reaction_dir.mkdir()
+    entries = [
+        QueueEntry(
+            queue_id="q-done",
+            app_name="orca_auto_orca",
+            task_id="task-ts4",
+            task_kind="orca_run",
+            engine="orca",
+            status=QueueStatus.COMPLETED,
+            priority=3,
+            enqueued_at="2026-04-26T00:00:00+00:00",
+            started_at="2026-04-26T00:01:00+00:00",
+            finished_at="2026-04-26T00:05:00+00:00",
+            metadata={"reaction_dir": str(reaction_dir)},
+        ),
+    ]
+    snapshots = [
+        SimpleNamespace(
+            key="snap-live",
+            run_id="",
+            reaction_dir=reaction_dir,
+            status="running",
+            name="ts4",
+            completed_at="",
+            updated_at="2026-04-26T00:10:00+00:00",
+            started_at="2026-04-26T00:09:00+00:00",
+            attempts=1,
+            selected_inp_name="ts4.inp",
+            job_type="optts",
+        ),
+    ]
+
+    from orca_auto.orca import queue_adapter, run_snapshot
+
+    monkeypatch.setattr(
+        activity, "engine_runtime_paths", lambda config_path, *, engine: {"allowed_root": allowed}
+    )
+    monkeypatch.setattr(queue_adapter, "reconcile_orphaned_running_entries", lambda root: None)
+    monkeypatch.setattr(queue_adapter, "list_queue", lambda root: entries)
+    monkeypatch.setattr(run_snapshot, "collect_run_snapshots", lambda root: snapshots)
+    # A live run lock holds the dir -> the snapshot is a genuine in-progress re-run.
+    monkeypatch.setattr(_activity_orca, "active_run_lock_pid", lambda *a, **k: 4242)
+
+    rows = _activity_orca.orca_records(
+        config_path="/tmp/cfg.yaml",
+        deps=activity._orca_activity_deps(),
+    )
+
+    # Both the terminal queue row and the live running snapshot row are present.
+    assert {row.activity_id: row.status for row in rows} == {
+        "q-done": "completed",
+        "ts4": "running",
+    }
+
+
 def test_snapshot_display_status_marks_dead_running_as_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

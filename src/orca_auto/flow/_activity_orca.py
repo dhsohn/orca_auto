@@ -245,6 +245,20 @@ def superseded_snapshot_dirs(queue_adapter: Any, entries: list[Any]) -> set[str]
     return terminal - active
 
 
+def _snapshot_is_superseded(snapshot: Any, superseded_dirs: set[str]) -> bool:
+    """Whether a stale snapshot is superseded by a terminal queue entry.
+
+    A snapshot is only superseded when its dir has a terminal-only queue outcome
+    *and* the run is no longer live. A live run lock means a genuinely running
+    re-run shares the dir with an older terminal entry; suppressing it would hide
+    an in-progress job, so defer to the live process and keep the row.
+    """
+    reaction_dir = snapshot_reaction_dir(snapshot)
+    if reaction_dir not in superseded_dirs:
+        return False
+    return active_run_lock_pid(Path(reaction_dir), logger=_LOGGER) is None
+
+
 def orca_records(
     *,
     config_path: str,
@@ -277,7 +291,7 @@ def orca_records(
         snapshot_key = normalize_text(getattr(snapshot, "key", ""))
         if snapshot_key and snapshot_key in represented_snapshot_keys:
             continue
-        if snapshot_reaction_dir(snapshot) in superseded_dirs:
+        if _snapshot_is_superseded(snapshot, superseded_dirs):
             continue
         rows.append(snapshot_record(snapshot, allowed_root=allowed_root, deps=deps))
 

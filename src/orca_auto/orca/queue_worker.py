@@ -424,6 +424,15 @@ def _reconcile_worker_state(worker: Any) -> None:
 
 
 def _shutdown_running_job(worker: Any, queue_id: str, job: Any) -> None:
+    if get_cancel_requested(_job_queue_root(worker, job), queue_id):
+        # A cancel landed before the worker loop could process it proactively. The
+        # shared requeue chokepoint would still honor it (mark the entry cancelled
+        # instead of requeuing for resume) but skip the terminal side effects --
+        # the cancelled run state and the notification. Route it through the same
+        # finalize path as a proactive cancel so the user is told it stopped and no
+        # stale "running" run state lingers.
+        _cancel_orca_running_job(worker, queue_id, job)
+        return
     _lifecycle_helpers.shutdown_running_job(
         worker,
         queue_id,
@@ -489,24 +498,32 @@ def _check_orca_cancel_requests(worker: EngineQueueWorker) -> None:
     )
 
 
-def _record_cancelled_run_state(job_dir: Path) -> str | None:
+def _record_cancelled_run_state(job_dir: Path) -> tuple[str | None, str | None]:
     """Write a terminal "cancelled" run state for an interrupted run.
 
     A cancelled run is stopped by a signal and never writes its own terminal
     result, so the run state lingers as ``running``. That leaves a stale run
     snapshot in the activity list and starves the terminal Telegram notification
-    (which requires ``final_result``). Persist a cancelled outcome here. Returns
-    the run_id when known so the queue entry can be matched to this snapshot.
+    (which requires ``final_result``). Persist a cancelled outcome here.
+
+    Returns ``(run_id, terminal_status)``: the run_id when known (so the queue
+    entry can be matched to this snapshot) and the terminal status now recorded
+    in the run state -- "cancelled" when we wrote it, or a pre-existing terminal
+    status we refused to clobber. Both are ``None`` when there is no run state.
     """
     state = load_state(job_dir)
     if state is None:
-        return None
+        return None, None
     run_id = str(state.get("run_id") or "").strip() or None
     final_result = state.get("final_result")
-    if isinstance(final_result, dict) and str(final_result.get("status") or "").strip():
-        # A real terminal outcome was already recorded (e.g. the run finished just
-        # before cancellation landed); do not clobber it.
-        return run_id
+    if isinstance(final_result, dict):
+        existing_status = str(final_result.get("status") or "").strip()
+        if existing_status:
+            # A real terminal outcome was already recorded (e.g. the run finished
+            # just before cancellation landed); do not clobber it, and report the
+            # real status so the queue entry is reconciled to what actually
+            # happened instead of being mislabeled "cancelled".
+            return run_id, existing_status
     cancelled_result = build_final_result(
         status="cancelled",
         analyzer_status=AnalyzerStatus.INCOMPLETE,
@@ -514,7 +531,7 @@ def _record_cancelled_run_state(job_dir: Path) -> str | None:
         last_out_path=last_out_path_from_state(state),
     )
     finalize_state(job_dir, state, status="cancelled", final_result=cancelled_result)
-    return run_id
+    return run_id, "cancelled"
 
 
 def _finalize_cancelled_run(worker: EngineQueueWorker, job: _RunningJob) -> None:
@@ -529,11 +546,20 @@ def _finalize_cancelled_run(worker: EngineQueueWorker, job: _RunningJob) -> None
     if not reaction_dir:
         return
     try:
-        run_id = _record_cancelled_run_state(Path(reaction_dir).expanduser().resolve())
-        if run_id:
-            # Stamp run_id on the cancelled entry so the activity view matches the
-            # run snapshot to this queue record instead of listing it twice.
-            update_terminal(_job_queue_root(worker, job), job.queue_id, "cancelled", run_id=run_id)
+        run_id, terminal_status = _record_cancelled_run_state(
+            Path(reaction_dir).expanduser().resolve()
+        )
+        if terminal_status:
+            # Reconcile the queue entry to the outcome actually recorded in the run
+            # state and stamp run_id so the activity view matches the snapshot to
+            # this record instead of listing it twice. cancel_running_process_job
+            # already marked the entry "cancelled"; if the run had in fact finished
+            # just before the cancel landed, correct it to the real terminal status
+            # so the entry, snapshot, and notification all agree.
+            queue_status = (
+                terminal_status if terminal_status in ("completed", "cancelled") else "failed"
+            )
+            update_terminal(_job_queue_root(worker, job), job.queue_id, queue_status, run_id=run_id)
         _upsert_terminal_job_record(
             worker.cfg, reaction_dir, fallback_job_id=getattr(job, "task_id", None)
         )

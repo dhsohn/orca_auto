@@ -417,6 +417,8 @@ def test_requeue_running_entry_cancels_when_cancel_requested(
     assert updated is not None
     assert updated.status == QueueStatus.CANCELLED
     assert updated.finished_at != ""
+    # The cancel has been honored; the terminal entry no longer advertises it.
+    assert updated.cancel_requested is False
 
     # The cancelled entry is terminal and is never handed back out for a resume.
     assert store.dequeue_next(tmp_path) is None
