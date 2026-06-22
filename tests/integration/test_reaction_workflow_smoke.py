@@ -7,14 +7,15 @@ from typing import Any
 
 import yaml
 
+from orca_auto.core.admission import list_slots
 from orca_auto.core.queue import list_queue
+from orca_auto.core.queue.processes import worker_pid_file_path
 from orca_auto.flow.adapters.xtb import load_xtb_artifact_contract
 from orca_auto.flow.engines.crest import queue_runtime as crest_queue_cmd
 from orca_auto.flow.engines.xtb import queue_runtime as xtb_queue_cmd
 from orca_auto.flow.orchestration import advance_workflow, create_reaction_ts_search_workflow
 from orca_auto.flow.registry import sync_workflow_registry
 from orca_auto.flow.state import load_workflow_payload, resolve_workflow_workspace, workflow_summary
-from tests.engine_process_helpers import process_one_crest_for_test, process_one_xtb_for_test
 
 
 def _write_xyz(path: Path, *, comment: str, bond: float) -> None:
@@ -162,12 +163,21 @@ def _submit_reaction_crest_stages(
     return payload
 
 
-def _process_reaction_crest_queue(smoke_workspace: Any, capsys: Any) -> None:
+def _process_reaction_crest_queue(case: ReactionWorkflowSmokeCase, smoke_workspace: Any) -> None:
     cfg = crest_queue_cmd.load_config(str(smoke_workspace.crest_config_path))
-    assert process_one_crest_for_test(crest_queue_cmd, cfg) == "processed"
-    assert process_one_crest_for_test(crest_queue_cmd, cfg) == "processed"
-    output = capsys.readouterr().out
-    assert output.count("status: completed") == 2
+    worker = crest_queue_cmd.QueueWorker(
+        cfg,
+        str(smoke_workspace.crest_config_path),
+        max_concurrent=1,
+    )
+    worker.poll_interval_seconds = 0.05
+    assert worker.run_once(idle_message=None, blocked_message=None) == 0
+    assert worker.run_once(idle_message=None, blocked_message=None) == 0
+    assert list_slots(smoke_workspace.admission_root) == []
+    assert not worker_pid_file_path(
+        case.crest_root,
+        crest_queue_cmd.WORKER_PID_FILE,
+    ).exists()
 
 
 def _advance_to_xtb_submission(
@@ -199,11 +209,20 @@ def _advance_to_xtb_submission(
     return payload
 
 
-def _process_reaction_xtb_queue(smoke_workspace: Any, capsys: Any) -> None:
+def _process_reaction_xtb_queue(case: ReactionWorkflowSmokeCase, smoke_workspace: Any) -> None:
     cfg = xtb_queue_cmd.load_config(str(smoke_workspace.xtb_config_path))
-    assert process_one_xtb_for_test(xtb_queue_cmd, cfg) == "processed"
-    output = capsys.readouterr().out
-    assert "status: completed" in output
+    worker = xtb_queue_cmd.QueueWorker(
+        cfg,
+        str(smoke_workspace.xtb_config_path),
+        max_concurrent=1,
+    )
+    worker.poll_interval_seconds = 0.05
+    assert worker.run_once(idle_message=None, blocked_message=None) == 0
+    assert list_slots(smoke_workspace.admission_root) == []
+    assert not worker_pid_file_path(
+        case.xtb_root,
+        xtb_queue_cmd.WORKER_PID_FILE,
+    ).exists()
 
 
 def _advance_to_orca_handoff(
@@ -286,13 +305,12 @@ def smoke_workspace_path(case: ReactionWorkflowSmokeCase) -> Path:
 
 def test_reaction_ts_workflow_executes_fake_crest_and_xtb_before_orca_handoff(
     smoke_workspace: Any,
-    capsys: Any,
 ) -> None:
     case = _create_reaction_workflow_smoke_case(smoke_workspace)
     _assert_initial_reaction_plan(case)
     _submit_reaction_crest_stages(case, smoke_workspace)
-    _process_reaction_crest_queue(smoke_workspace, capsys)
+    _process_reaction_crest_queue(case, smoke_workspace)
     _advance_to_xtb_submission(case, smoke_workspace)
-    _process_reaction_xtb_queue(smoke_workspace, capsys)
+    _process_reaction_xtb_queue(case, smoke_workspace)
     payload = _advance_to_orca_handoff(case, smoke_workspace)
     _assert_reaction_workflow_persisted(case, payload)
