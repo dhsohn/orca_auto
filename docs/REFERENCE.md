@@ -56,8 +56,9 @@ Operational consequences:
     orca_auto/
       core/               # Shared chemistry-platform infrastructure
       flow/               # Workflow orchestration package
-      xtb/                # xTB engine package
-      crest/              # CREST engine package
+        engines/
+          xtb/            # Internal xTB workflow-stage engine
+          crest/          # Internal CREST workflow-stage engine
       orca/               # Canonical ORCA implementation
         commands/
         runtime/

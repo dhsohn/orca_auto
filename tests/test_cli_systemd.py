@@ -21,6 +21,14 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
     config_path.write_text(
         "\n".join(
             [
+                "scheduler:",
+                f"  admission_root: {repo / 'admission'}",
+                "workflow:",
+                f"  root: {repo / 'workflow_runs'}",
+                "orca:",
+                "  runtime:",
+                f"    allowed_root: {repo / 'orca_runs'}",
+                f"    organized_root: {repo / 'orca_outputs'}",
                 "telegram:",
                 "  bot_token: token",
                 "  chat_id: chat",
@@ -57,6 +65,23 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
     assert f"WorkingDirectory={repo.resolve(strict=False)}" in worker_content
     assert f"Environment=ORCA_AUTO_CONFIG={config_path.resolve(strict=False)}" in worker_content
     assert f"ExecStart={repo.resolve(strict=False)}/.venv/bin/python" in worker_content
+    assert "NoNewPrivileges=true" in worker_content
+    assert "PrivateTmp=true" in worker_content
+    assert "ProtectSystem=full" in worker_content
+    assert "ProtectHome=read-only" in worker_content
+    assert "UMask=0077" in worker_content
+    assert "KillMode=control-group" in worker_content
+    assert "TimeoutStopSec=30" in worker_content
+    assert (
+        "ReadWritePaths="
+        f"{repo.resolve(strict=False) / 'admission'} "
+        f"{repo.resolve(strict=False) / 'workflow_runs'} "
+        f"{repo.resolve(strict=False) / 'orca_runs'} "
+        f"{repo.resolve(strict=False) / 'orca_outputs'}"
+    ) in worker_content
+    bot_content = unit_by_name["orca_auto-bot@.service"].content
+    assert "ProtectHome=read-only" in bot_content
+    assert f"ReadWritePaths={repo.resolve(strict=False) / 'admission'}" in bot_content
     assert unit_by_name["orca_auto-runtime@.target"].destination == (
         unit_dir.resolve(strict=False) / "orca_auto-runtime@.target"
     )

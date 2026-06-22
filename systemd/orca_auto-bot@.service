@@ -9,8 +9,17 @@ Type=simple
 User=%i
 WorkingDirectory=/home/%i/orca_auto
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=ORCA_AUTO_CONFIG=/home/%i/orca_auto/config/orca_auto.yaml
 ExecStart=/home/%i/orca_auto/.venv/bin/python -m orca_auto.flow.telegram_bot
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+# ORCA_AUTO_READ_WRITE_PATHS
+UMask=0077
+KillMode=control-group
+TimeoutStopSec=30
 Restart=always
 RestartSec=5
 
