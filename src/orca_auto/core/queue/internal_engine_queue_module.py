@@ -32,6 +32,7 @@ class InternalEngineQueueModule:
         poll_interval_seconds: int,
         shutdown_grace_seconds: float,
         deps: InternalEngineQueueWorkerDeps,
+        dequeue_entry_if_pending: Callable[[Path, str], Any | None] | None = None,
     ) -> InternalEngineQueueModule:
         runtime = InternalEngineQueueRuntime.create(
             spec=spec,
@@ -39,6 +40,7 @@ class InternalEngineQueueModule:
             runtime_roots_for_cfg=runtime_roots_for_cfg,
             list_queue=list_queue,
             dequeue_next=dequeue_next,
+            dequeue_entry_if_pending=dequeue_entry_if_pending,
         )
         return cls(
             runtime=runtime,
@@ -62,6 +64,7 @@ class InternalEngineQueueModule:
         runtime_roots_for_cfg: Callable[[Any], tuple[Path, ...]] | None = None,
         list_queue: Callable[[str | Path], list[Any]] | None = None,
         dequeue_next: Callable[[Path], Any | None] | None = None,
+        dequeue_entry_if_pending: Callable[[Path, str], Any | None] | None = None,
     ) -> InternalEngineQueueModule:
         queue_functions = definition.queue_functions
         if queue_functions is None:
@@ -77,6 +80,8 @@ class InternalEngineQueueModule:
             runtime_roots_for_cfg=runtime_roots_for_cfg or queue_functions.runtime_roots_for_cfg,
             list_queue=list_queue or queue_functions.list_queue,
             dequeue_next=dequeue_next or queue_functions.dequeue_next,
+            dequeue_entry_if_pending=dequeue_entry_if_pending
+            or queue_functions.dequeue_entry_if_pending,
             worker_pid_file_name=worker_pid_file_name,
         )
         return cls(

@@ -25,6 +25,7 @@ from .worker_child import build_worker_child_command_for_engine
 QueueEntryById = Callable[[str | Path, str], Any | None]
 QueueList = Callable[[str | Path], list[Any]]
 QueueDequeuer = Callable[[Path], Any | None]
+QueueEntryDequeuer = Callable[[Path, str], Any | None]
 RuntimeRootsBuilder = Callable[[Any], tuple[Path, ...]]
 WorkerChildCommandBuilder = Callable[..., list[str]]
 WorkerChildRunner = Callable[..., int]
@@ -106,6 +107,12 @@ def _default_dequeue_next(root: Path) -> Any | None:
     return dequeue_next(root)
 
 
+def _default_dequeue_entry_if_pending(root: Path, queue_id: str) -> Any | None:
+    from orca_auto.core.queue import dequeue_entry_if_pending
+
+    return dequeue_entry_if_pending(root, queue_id)
+
+
 def build_queue_engine_definition(
     *,
     engine: str,
@@ -115,6 +122,7 @@ def build_queue_engine_definition(
     worker_pid_file_name: str,
     list_queue: QueueList | None = None,
     dequeue_next: QueueDequeuer | None = None,
+    dequeue_entry_if_pending: QueueEntryDequeuer | None = None,
     build_worker_child_command: WorkerChildCommandBuilder | None = None,
     runtime_roots_for_cfg: RuntimeRootsBuilder | None = None,
     queue_entry_by_id: QueueEntryById | None = None,
@@ -126,6 +134,7 @@ def build_queue_engine_definition(
     runtime_roots = runtime_roots_for_cfg or build_engine_runtime_roots(engine)
     queue_lister = list_queue or _default_list_queue
     queue_dequeuer = dequeue_next or _default_dequeue_next
+    queue_entry_dequeuer = dequeue_entry_if_pending or _default_dequeue_entry_if_pending
     worker_child_command = build_worker_child_command or build_worker_child_command_for_engine(
         engine_id
     )
@@ -141,6 +150,7 @@ def build_queue_engine_definition(
             runtime_roots_for_cfg=runtime_roots,
             list_queue=queue_lister,
             dequeue_next=queue_dequeuer,
+            dequeue_entry_if_pending=queue_entry_dequeuer,
             queue_entry_by_id=queue_entry_by_id or build_queue_entry_by_id(queue_lister),
             worker_pid_file_name=worker_pid_file_name,
         ),

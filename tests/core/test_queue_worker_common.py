@@ -14,6 +14,7 @@ from orca_auto.core.queue import child_process as child_process_helpers
 from orca_auto.core.queue import lifecycle as lifecycle_helpers
 from orca_auto.core.queue import processes as process_helpers
 from orca_auto.core.queue import worker as worker_common
+from orca_auto.core.queue import worker_process as worker_process_helpers
 from orca_auto.core.queue.dependencies import (
     build_dependency_container,
     dependency_group,
@@ -190,6 +191,59 @@ def test_dequeue_next_across_roots_selects_best_pending_entry(tmp_path: Path) ->
     )
 
     assert result == (second, queues[second][0])
+
+
+def test_dequeue_next_across_roots_dequeues_selected_queue_id(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    winner = _entry("winner", priority=1, enqueued_at="2026-01-01T00:00:00Z")
+    queues = {
+        first: [_entry("wrong-root-entry", priority=5)],
+        second: [winner, _entry("same-root-later", priority=9)],
+    }
+    dequeued_ids: list[tuple[Path, str]] = []
+
+    def dequeue_entry(root: Path, queue_id: str) -> SimpleNamespace | None:
+        dequeued_ids.append((root, queue_id))
+        for entry in queues[root]:
+            if entry.queue_id == queue_id:
+                return entry
+        return None
+
+    def fail_dequeue_next(_root: Path) -> SimpleNamespace | None:
+        pytest.fail("dequeue_next should not ignore selected id")
+
+    result = worker_common.dequeue_next_across_roots(
+        (first, second),
+        list_queue_fn=lambda root: queues[root],
+        dequeue_next_fn=fail_dequeue_next,
+        dequeue_entry_fn=dequeue_entry,
+    )
+
+    assert result == (second, winner)
+    assert dequeued_ids == [(second, "winner")]
+
+
+def test_dequeue_next_across_roots_returns_none_when_selected_entry_disappears(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+
+    def fail_dequeue_next(_root: Path) -> SimpleNamespace | None:
+        pytest.fail("dequeue_next should not run with id dequeuer")
+
+    def missing_entry(_root: Path, _queue_id: str) -> SimpleNamespace | None:
+        return None
+
+    result = worker_common.dequeue_next_across_roots(
+        (first, second),
+        list_queue_fn=lambda _root: [_entry("pending")],
+        dequeue_next_fn=fail_dequeue_next,
+        dequeue_entry_fn=missing_entry,
+    )
+
+    assert result is None
 
 
 def test_dequeue_next_across_roots_returns_none_when_selected_root_dequeues_empty(
@@ -446,6 +500,53 @@ def test_hooked_pidfile_child_worker_runs_engine_hooks(tmp_path: Path) -> None:
         "reconcile",
     ]
     assert all(args[0] is worker for _name, args in calls)
+
+
+def test_pidfile_child_worker_run_once_returns_error_when_singleton_lock_held(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg = _cfg(allowed_root=str(tmp_path), admission_root=str(tmp_path / "admission"))
+    deps = SimpleNamespace(
+        poll_interval_seconds=1,
+        time=SimpleNamespace(sleep=lambda _seconds: None),
+        admission_root=lambda _cfg: str(tmp_path / "admission"),
+        release_slot=lambda _root, _token: None,
+        reserve_dequeued_entry=lambda *args, **kwargs: ("idle", None),
+        dequeue_next_entry=lambda _cfg: None,
+        start_background_job_process=lambda **_kwargs: None,
+        try_reserve_admission_slot=lambda _cfg: None,
+    )
+    hooks = worker_common.PidFileChildProcessQueueWorkerHooks(
+        handle_worker_start_error=lambda *_args: None,
+        on_worker_process_started=lambda *_args: True,
+        finalize_completed_job=lambda *_args: None,
+        shutdown_running_job=lambda *_args: None,
+        reconcile_worker_state=lambda _worker: None,
+    )
+    worker = worker_common.HookedPidFileChildProcessQueueWorker(
+        cfg,
+        config_path="/tmp/config.yaml",
+        max_concurrent=1,
+        deps=deps,
+        hooks=hooks,
+        worker_pid_file_name="engine.pid",
+    )
+    lock_calls: list[tuple[Path, float]] = []
+
+    def locked_file_lock(path: Path, *, timeout_seconds: float) -> object:
+        lock_calls.append((path, timeout_seconds))
+        raise TimeoutError("held")
+
+    monkeypatch.setattr(worker_process_helpers, "file_lock", locked_file_lock)
+
+    assert worker.run_once(idle_message=None, blocked_message=None) == 1
+
+    captured = capsys.readouterr()
+    assert "queue worker already running" in captured.err
+    assert lock_calls == [(tmp_path / "engine.pid.lock", 0.0)]
+    assert not worker._pid_file_path().exists()
 
 
 def test_child_worker_rejected_attach_terminates_and_marks_start_error(tmp_path: Path) -> None:

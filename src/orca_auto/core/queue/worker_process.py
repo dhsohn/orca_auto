@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import contextlib
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+from orca_auto.core.utils.lock import file_lock
 
 from .processes import (
     remove_worker_pid_file,
@@ -27,10 +30,14 @@ class PidFileChildProcessQueueWorkerHooks:
 
 class QueueWorkerPidFileMixin:
     worker_pid_file_name = "queue_worker.pid"
+    worker_lock_timeout_seconds = 0.0
     allowed_root: Path
 
     def _pid_file_path(self) -> Path:
         return worker_pid_file_path(self.allowed_root, self.worker_pid_file_name)
+
+    def _lock_file_path(self) -> Path:
+        return self._pid_file_path().with_name(f"{self.worker_pid_file_name}.lock")
 
     def _write_pid_file(self) -> None:
         write_worker_pid_file(self.allowed_root, self.worker_pid_file_name)
@@ -253,6 +260,38 @@ class PidFileChildProcessQueueWorker(QueueWorkerPidFileMixin, ChildProcessQueueW
         self.allowed_root = Path(str(raw_allowed_root)).expanduser().resolve()
         if admission_root is not None:
             self.admission_root = Path(str(admission_root)).expanduser().resolve()
+
+    def run(self) -> int:
+        lock_path = self._lock_file_path()
+        try:
+            with file_lock(lock_path, timeout_seconds=self.worker_lock_timeout_seconds):
+                return super().run()
+        except TimeoutError:
+            print(
+                f"error: queue worker already running (lock={lock_path})",
+                file=sys.stderr,
+            )
+            return 1
+
+    def run_once(
+        self,
+        *,
+        idle_message: str | None = "No pending jobs.",
+        blocked_message: str | None = "status: waiting_for_slot",
+    ) -> int:
+        lock_path = self._lock_file_path()
+        try:
+            with file_lock(lock_path, timeout_seconds=self.worker_lock_timeout_seconds):
+                return super().run_once(
+                    idle_message=idle_message,
+                    blocked_message=blocked_message,
+                )
+        except TimeoutError:
+            print(
+                f"error: queue worker already running (lock={lock_path})",
+                file=sys.stderr,
+            )
+            return 1
 
     def _before_run(self) -> None:
         self._write_pid_file()

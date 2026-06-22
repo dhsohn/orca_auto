@@ -310,6 +310,52 @@ def test_dequeue_next_respects_priority_time_and_insertion_order(
     assert store.dequeue_next(tmp_path) is None
 
 
+def test_dequeue_entry_if_pending_only_runs_selected_pending_entry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    _queue_file(tmp_path).write_text(
+        json.dumps(
+            [
+                _entry("q-1", task_id="a", priority=1, enqueued_at="2026-04-19T00:00:01+00:00"),
+                _entry("q-2", task_id="b", priority=9, enqueued_at="2026-04-19T00:00:02+00:00"),
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    picked = store.dequeue_entry_if_pending(tmp_path, "q-2")
+
+    assert picked is not None
+    assert picked.queue_id == "q-2"
+    assert picked.status == QueueStatus.RUNNING
+    entries = store.list_queue(tmp_path)
+    assert [(entry.queue_id, entry.status) for entry in entries] == [
+        ("q-1", QueueStatus.PENDING),
+        ("q-2", QueueStatus.RUNNING),
+    ]
+    assert store.dequeue_entry_if_pending(tmp_path, "q-1-missing") is None
+    assert store.dequeue_entry_if_pending(tmp_path, "q-2") is None
+
+
+def test_dequeue_entry_if_pending_ignores_cancel_requested_entry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    _queue_file(tmp_path).write_text(
+        json.dumps([_entry("q-cancel", cancel_requested=True)], indent=2),
+        encoding="utf-8",
+    )
+
+    assert store.dequeue_entry_if_pending(tmp_path, "q-cancel") is None
+    entries = store.list_queue(tmp_path)
+    assert entries[0].status == QueueStatus.PENDING
+    assert entries[0].cancel_requested is True
+
+
 def test_request_cancel_handles_pending_running_and_terminal_entries(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

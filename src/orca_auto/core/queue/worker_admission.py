@@ -81,6 +81,7 @@ def dequeue_next_across_roots(
     *,
     list_queue_fn: Callable[[Path], list[T]],
     dequeue_next_fn: Callable[[Path], T | None],
+    dequeue_entry_fn: Callable[[Path, str], T | None] | None = None,
 ) -> tuple[Path, T] | None:
     if len(roots) == 1:
         entry = dequeue_next_fn(roots[0])
@@ -89,6 +90,7 @@ def dequeue_next_across_roots(
         return roots[0], entry
 
     selected_root: Path | None = None
+    selected_queue_id = ""
     selected_key: tuple[int, str, int, int] | None = None
 
     for root_index, root in enumerate(roots):
@@ -106,11 +108,15 @@ def dequeue_next_across_roots(
             if selected_key is None or key < selected_key:
                 selected_key = key
                 selected_root = root
+                selected_queue_id = str(getattr(entry, "queue_id", "")).strip()
 
     if selected_root is None:
         return None
 
-    entry = dequeue_next_fn(selected_root)
+    if dequeue_entry_fn is not None and selected_queue_id:
+        entry = dequeue_entry_fn(selected_root, selected_queue_id)
+    else:
+        entry = dequeue_next_fn(selected_root)
     if entry is None:
         return None
     return selected_root, entry

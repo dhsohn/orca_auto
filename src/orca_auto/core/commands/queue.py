@@ -22,6 +22,7 @@ class QueueRuntime:
     list_queue_fn: Callable[[Path], list[Any]]
     dequeue_next_fn: Callable[[Path], Any | None]
     dequeue_next_across_roots_fn: Callable[..., tuple[Path, Any] | None]
+    dequeue_entry_if_pending_fn: Callable[[Path, str], Any | None] | None = None
 
     def queue_roots(self, cfg: Any) -> tuple[Path, ...]:
         return queue_roots(
@@ -42,6 +43,7 @@ class QueueRuntime:
             queue_roots_fn=self.queue_roots,
             list_queue_fn=self.list_queue_fn,
             dequeue_next_fn=self.dequeue_next_fn,
+            dequeue_entry_if_pending_fn=self.dequeue_entry_if_pending_fn,
             dequeue_next_across_roots_fn=self.dequeue_next_across_roots_fn,
         )
 
@@ -78,11 +80,13 @@ def dequeue_next_entry(
     list_queue_fn: Callable[[Path], list[Any]],
     dequeue_next_fn: Callable[[Path], Any | None],
     dequeue_next_across_roots_fn: Callable[..., tuple[Path, Any] | None],
+    dequeue_entry_if_pending_fn: Callable[[Path, str], Any | None] | None = None,
 ) -> tuple[Path, Any] | None:
     return dequeue_next_across_roots_fn(
         existing_queue_roots(queue_roots_fn(cfg)),
         list_queue_fn=list_queue_fn,
         dequeue_next_fn=dequeue_next_fn,
+        dequeue_entry_fn=dequeue_entry_if_pending_fn,
     )
 
 

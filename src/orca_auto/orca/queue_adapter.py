@@ -51,6 +51,7 @@ __all__ = [
     "cancel",
     "cancel_pending_entry",
     "clear_terminal",
+    "dequeue_entry_if_pending",
     "dequeue_next",
     "enqueue",
     "get_active_entry_for_reaction_dir",
@@ -175,6 +176,24 @@ def dequeue_next(allowed_root: Path) -> Optional[QueueEntry]:
     """Return the highest-priority pending entry and mark it running."""
     entry = _queue_store.dequeue_next(
         allowed_root,
+        load_entries_fn=_load_entries,
+        save_entries_fn=_queue_store.save_entries,
+    )
+    if entry is None:
+        return None
+    logger.info(
+        "Dequeued: %s (queue_id=%s)",
+        queue_entry_reaction_dir(entry),
+        queue_entry_id(entry),
+    )
+    return entry
+
+
+def dequeue_entry_if_pending(allowed_root: Path, queue_id: str) -> Optional[QueueEntry]:
+    """Mark a selected pending ORCA queue entry running if it is still eligible."""
+    entry = _queue_store.dequeue_entry_if_pending(
+        allowed_root,
+        queue_id,
         load_entries_fn=_load_entries,
         save_entries_fn=_queue_store.save_entries,
     )

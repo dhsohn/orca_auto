@@ -25,6 +25,7 @@ class InternalEngineQueueRuntime:
         runtime_roots_for_cfg: Callable[[Any], tuple[Path, ...]],
         list_queue: Callable[[str | Path], list[Any]],
         dequeue_next: Callable[[Path], Any | None],
+        dequeue_entry_if_pending: Callable[[Path, str], Any | None] | None = None,
         worker_pid_file_name: str | None = None,
     ) -> InternalEngineQueueRuntime:
         pid_file_name = worker_pid_file_name or spec.worker_pid_file_name
@@ -37,6 +38,7 @@ class InternalEngineQueueRuntime:
                 runtime_roots_for_cfg=runtime_roots_for_cfg,
                 list_queue=list_queue,
                 dequeue_next=dequeue_next,
+                dequeue_entry_if_pending=dequeue_entry_if_pending,
                 worker_pid_file_name=pid_file_name,
             ),
         )

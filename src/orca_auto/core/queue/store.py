@@ -382,6 +382,28 @@ def dequeue_next(
     ).mutate_entries(dequeue)
 
 
+def dequeue_entry_if_pending(
+    root: str | Path,
+    queue_id: str,
+    *,
+    load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
+    save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
+) -> QueueEntry | None:
+    """Mark one selected pending entry running if it is still eligible."""
+
+    def dequeue(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
+        if entry.status != QueueStatus.PENDING or entry.cancel_requested:
+            return None, None
+        updated = replace(entry, status=QueueStatus.RUNNING, started_at=now_utc_iso())
+        return updated, updated
+
+    return QueueStore.for_root(
+        root,
+        load_entries_fn=load_entries_fn,
+        save_entries_fn=save_entries_fn,
+    ).mutate_entry_by_id(queue_id, dequeue, missing_result=None)
+
+
 def request_cancel(
     root: str | Path,
     queue_id: str,
