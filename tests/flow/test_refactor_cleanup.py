@@ -57,18 +57,20 @@ def test_orchestration_deps_use_explicit_overrides_not_public_module_fallback(
     )
 
 
-def test_orchestration_stage_deps_keep_grouped_dependency_contract() -> None:
+def test_orchestration_stage_deps_require_explicit_group_access() -> None:
     def fake_normalize(value: object) -> str:
         return f"normalized:{value}"
 
     deps = orchestration_deps(overrides={"_normalize_text": fake_normalize})
 
-    assert deps.stages._normalize_text is deps.stages.support._normalize_text
-    assert deps.stages._normalize_text("x") == "normalized:x"
-    assert deps.stages._append_unique_artifact is deps.stages.runtime._append_unique_artifact
+    assert deps.stages.support._normalize_text("x") == "normalized:x"
+    assert deps.stages.runtime._append_unique_artifact is not None
     missing_dep = "_not_a_stage_dep"
     with pytest.raises(AttributeError, match="OrchestrationStageDeps"):
         getattr(deps.stages, missing_dep)
+    removed_passthrough_dep = "_normalize_text"
+    with pytest.raises(AttributeError, match="OrchestrationStageDeps"):
+        getattr(deps.stages, removed_passthrough_dep)
 
 
 def test_stage_dep_registry_matches_group_dataclasses() -> None:
@@ -133,8 +135,8 @@ def test_bound_stage_deps_reuse_lazy_orchestration_context(
 
     deps = orchestration_deps()
     rows: list[dict[str, Any]] = []
-    deps.stages._append_unique_artifact(rows, kind="xyz", path="a.xyz")
-    deps.stages._append_unique_artifact(rows, kind="log", path="b.log", deps=None)
+    deps.stages.runtime._append_unique_artifact(rows, kind="xyz", path="a.xyz")
+    deps.stages.runtime._append_unique_artifact(rows, kind="log", path="b.log", deps=None)
 
     assert calls == 1
     assert [row["path"] for row in rows] == ["a.xyz", "b.log"]

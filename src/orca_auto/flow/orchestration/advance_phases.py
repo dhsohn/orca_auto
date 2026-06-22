@@ -218,7 +218,7 @@ def _finalize_advanced_workflow(
     o = context.deps
     payload_view = WorkflowPayloadView(payload)
     payload_view.set_status(o.stages.workflow._recompute_workflow_status(payload))
-    if payload_view.status(o.stages._normalize_text) == STATUS_FAILED:
+    if payload_view.status(o.stages.support._normalize_text) == STATUS_FAILED:
         o.advance._cancel_active_workflow_stages(payload, config=config)
         payload_view.set_status(o.stages.workflow._recompute_workflow_status(payload))
 
@@ -227,7 +227,7 @@ def _finalize_advanced_workflow(
         return
     metadata["last_advanced_at"] = o.persistence.now_utc_iso()
     metadata["sync_only"] = bool(context.sync_only)
-    payload_status = payload_view.status(o.stages._normalize_text)
+    payload_status = payload_view.status(o.stages.support._normalize_text)
     final_child_sync_pending = (
         is_stage_terminal_status(payload_status)
         or payload_status in {STATUS_CANCEL_REQUESTED, STATUS_CANCEL_FAILED}

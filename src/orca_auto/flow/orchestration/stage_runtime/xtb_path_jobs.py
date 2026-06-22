@@ -19,7 +19,7 @@ from orca_auto.flow.orchestration.stage_views import WorkflowStageView, Workflow
 
 
 def _write_xtb_recipe_xcontrol(o: Any, job_dir: Path, recipe: dict[str, Any]) -> str:
-    xcontrol_name = o.stages._normalize_text(recipe.get("xcontrol_name"))
+    xcontrol_name = o.stages.support._normalize_text(recipe.get("xcontrol_name"))
     if xcontrol_name:
         (job_dir / xcontrol_name).write_text(
             "\n".join(str(line) for line in recipe.get("xcontrol_lines", ())) + "\n",
@@ -52,8 +52,10 @@ def _base_xtb_path_manifest(
         if key not in reserved_keys:
             manifest_payload[key] = value
     manifest_payload["resources"] = {
-        "max_cores": o.stages._safe_int(task_resource_request.get("max_cores"), default=8),
-        "max_memory_gb": o.stages._safe_int(task_resource_request.get("max_memory_gb"), default=32),
+        "max_cores": o.stages.support._safe_int(task_resource_request.get("max_cores"), default=8),
+        "max_memory_gb": o.stages.support._safe_int(
+            task_resource_request.get("max_memory_gb"), default=32
+        ),
     }
     return manifest_payload
 
@@ -72,7 +74,7 @@ def _write_xtb_path_manifest(
     overrides = _manifest_override_mapping(payload.get("job_manifest_overrides"))
     manifest_payload = _base_xtb_path_manifest(o, task_view, overrides)
     namespace = (
-        o.stages._normalize_text(recipe.get("namespace"))
+        o.stages.support._normalize_text(recipe.get("namespace"))
         or str(overrides.get("namespace", "")).strip()
     )
     xcontrol_name = _write_xtb_recipe_xcontrol(o, job_dir, recipe)
@@ -82,7 +84,7 @@ def _write_xtb_path_manifest(
     selected_xcontrol_name = xcontrol_name or xcontrol_override_name
 
     manifest_payload["reaction_key"] = (
-        o.stages._normalize_text(payload.get("reaction_key")) or stage_id
+        o.stages.support._normalize_text(payload.get("reaction_key")) or stage_id
     )
     manifest_payload["reactant_xyz"] = reactant_target.name
     manifest_payload["product_xyz"] = product_target.name
@@ -115,8 +117,8 @@ def _record_xtb_path_job_payload(
         reactant_target=reactant_target,
         product_target=product_target,
         attempt_number=attempt_number,
-        reaction_key=o.stages._normalize_text(payload.get("reaction_key")),
-        normalize_text=o.stages._normalize_text,
+        reaction_key=o.stages.support._normalize_text(payload.get("reaction_key")),
+        normalize_text=o.stages.support._normalize_text,
     )
 
 
@@ -130,7 +132,7 @@ def _record_xtb_path_job_metadata(
     stage_view.record_xtb_path_job_metadata(
         recipe=recipe,
         attempt_number=attempt_number,
-        normalize_text=o.stages._normalize_text,
+        normalize_text=o.stages.support._normalize_text,
     )
 
 
@@ -153,9 +155,9 @@ def _record_xtb_path_attempt(
         if selected_xcontrol_name
         else "",
         namespace=namespace,
-        reaction_key=o.stages._normalize_text(payload.get("reaction_key")),
+        reaction_key=o.stages.support._normalize_text(payload.get("reaction_key")),
         attempt_number=attempt_number,
-        normalize_text=o.stages._normalize_text,
+        normalize_text=o.stages.support._normalize_text,
     )
 
 
@@ -172,7 +174,7 @@ def write_xtb_path_job_impl(
     stage_view = WorkflowStageView(stage)
     task_view = stage_view.task
     payload = task_view.payload(o)
-    recipe = o.stages._xtb_retry_recipe(attempt_number)
+    recipe = o.stages.runtime._xtb_retry_recipe(attempt_number)
     stage_id = stage_view.stage_id(o)
     job_dir = _xtb_path_job_dir(xtb_allowed_root, stage_id, attempt_number)
     reactant_target, product_target = _materialize_xtb_path_inputs(payload, job_dir=job_dir)
@@ -225,10 +227,10 @@ def ensure_xtb_job_dir_impl(
     o = _orchestration_context(deps)
     task_view = WorkflowStageView(stage).task
     payload = task_view.payload(o)
-    existing = o.stages._normalize_text(payload.get("job_dir"))
+    existing = o.stages.support._normalize_text(payload.get("job_dir"))
     if existing:
         return existing
-    return o.stages._write_xtb_path_job(
+    return o.stages.runtime._write_xtb_path_job(
         stage, xtb_allowed_root=xtb_allowed_root, workflow_id=workflow_id, attempt_number=0
     )
 

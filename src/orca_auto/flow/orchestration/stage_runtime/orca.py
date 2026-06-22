@@ -17,8 +17,8 @@ from orca_auto.flow.orchestration.stage_views import WorkflowStageView, Workflow
 
 def _orca_submission_resource_kwargs(o: Any, enqueue_payload: dict[str, Any]) -> dict[str, Any]:
     resource_kwargs: dict[str, Any] = {}
-    max_cores = o.stages._safe_int(enqueue_payload.get("max_cores"), default=0)
-    max_memory_gb = o.stages._safe_int(enqueue_payload.get("max_memory_gb"), default=0)
+    max_cores = o.stages.support._safe_int(enqueue_payload.get("max_cores"), default=0)
+    max_memory_gb = o.stages.support._safe_int(enqueue_payload.get("max_memory_gb"), default=0)
     if max_cores > 0:
         resource_kwargs["max_cores"] = max_cores
     if max_memory_gb > 0:
@@ -68,14 +68,14 @@ def _load_orca_contract(
     reaction_dir_hint: str,
     orca_config: str | None,
 ) -> Any | None:
-    allowed_root = o.stages._load_config_root(orca_config, engine="orca")
+    allowed_root = o.stages.support._load_config_root(orca_config, engine="orca")
     organized_root = _workflow_internal_organized_root(
         reaction_dir_hint, engine="orca"
-    ) or o.stages._load_config_organized_root(orca_config, engine="orca")
+    ) or o.stages.support._load_config_organized_root(orca_config, engine="orca")
     target = (
-        o.stages._normalize_text(stage_metadata.get("run_id"))
+        o.stages.support._normalize_text(stage_metadata.get("run_id"))
         or reaction_dir_hint
-        or o.stages._normalize_text(stage_metadata.get("queue_id"))
+        or o.stages.support._normalize_text(stage_metadata.get("queue_id"))
     )
     if not target:
         return None
@@ -83,8 +83,8 @@ def _load_orca_contract(
         target=target,
         orca_allowed_root=allowed_root,
         orca_organized_root=organized_root,
-        queue_id=o.stages._normalize_text(stage_metadata.get("queue_id")),
-        run_id=o.stages._normalize_text(stage_metadata.get("run_id")),
+        queue_id=o.stages.support._normalize_text(stage_metadata.get("queue_id")),
+        run_id=o.stages.support._normalize_text(stage_metadata.get("run_id")),
         reaction_dir=reaction_dir_hint,
     )
 
@@ -98,9 +98,9 @@ def _apply_orca_contract(
     contract: Any,
 ) -> None:
     _apply_contract_status(stage, task, contract.status)
-    task_view.update_orca_contract_payload(contract, o.stages._normalize_text)
-    stage_view.update_orca_contract_metadata(contract, o.stages._normalize_text)
-    stage_view.update_orca_attempt_metadata(contract, task_view, o.stages._normalize_text)
+    task_view.update_orca_contract_payload(contract, o.stages.support._normalize_text)
+    stage_view.update_orca_contract_metadata(contract, o.stages.support._normalize_text)
+    stage_view.update_orca_attempt_metadata(contract, task_view, o.stages.support._normalize_text)
 
 
 def _orca_output_artifacts(o: Any, contract: Any) -> list[dict[str, Any]]:
@@ -168,7 +168,7 @@ def _orca_output_artifact_specs(contract: Any) -> tuple[dict[str, Any], ...]:
 def _append_orca_output_artifact(
     o: Any, artifacts: list[dict[str, Any]], spec: dict[str, Any]
 ) -> None:
-    o.stages._append_unique_artifact(
+    o.stages.runtime._append_unique_artifact(
         artifacts,
         kind=spec["kind"],
         path=spec["path"],
@@ -193,7 +193,7 @@ def sync_orca_stage_impl(
     enqueue_payload = task.get("enqueue_payload")
     if not isinstance(enqueue_payload, dict):
         return
-    reaction_dir_hint = o.stages._normalize_text(
+    reaction_dir_hint = o.stages.support._normalize_text(
         context.task_payload.get("reaction_dir") or enqueue_payload.get("reaction_dir")
     )
     if context.should_submit(submit_ready=submit_ready, config_path=orca_config):
@@ -236,16 +236,16 @@ def completed_orca_stage_impl(
     task = stage.get("task")
     if not isinstance(task, dict):
         return None
-    payload = o.stages._task_payload_dict(task)
-    enqueue_payload = o.stages._coerce_mapping(task.get("enqueue_payload"))
-    stage_metadata = o.stages._stage_metadata(stage)
-    reaction_dir_hint = o.stages._normalize_text(
+    payload = o.stages.support._task_payload_dict(task)
+    enqueue_payload = o.stages.support._coerce_mapping(task.get("enqueue_payload"))
+    stage_metadata = o.stages.support._stage_metadata(stage)
+    reaction_dir_hint = o.stages.support._normalize_text(
         payload.get("reaction_dir") or enqueue_payload.get("reaction_dir")
     )
     target = (
-        o.stages._normalize_text(stage_metadata.get("run_id"))
+        o.stages.support._normalize_text(stage_metadata.get("run_id"))
         or reaction_dir_hint
-        or o.stages._normalize_text(stage_metadata.get("queue_id"))
+        or o.stages.support._normalize_text(stage_metadata.get("queue_id"))
     )
     if not target:
         return None
@@ -254,12 +254,12 @@ def completed_orca_stage_impl(
         engine="orca",
         target=target,
         stage=stage,
-        orca_allowed_root=o.stages._load_config_root(orca_config, engine="orca"),
+        orca_allowed_root=o.stages.support._load_config_root(orca_config, engine="orca"),
         orca_organized_root=(
             _workflow_internal_organized_root(reaction_dir_hint, engine="orca")
-            or o.stages._load_config_organized_root(orca_config, engine="orca")
+            or o.stages.support._load_config_organized_root(orca_config, engine="orca")
         ),
-        queue_id=o.stages._normalize_text(stage_metadata.get("queue_id")),
-        run_id=o.stages._normalize_text(stage_metadata.get("run_id")),
+        queue_id=o.stages.support._normalize_text(stage_metadata.get("queue_id")),
+        run_id=o.stages.support._normalize_text(stage_metadata.get("run_id")),
         reaction_dir=reaction_dir_hint,
     )

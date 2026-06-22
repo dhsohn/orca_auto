@@ -41,7 +41,7 @@ def _completed_crest_stage_for_orca(
     )
     if crest_stage is None:
         return None
-    return o.stages._completed_crest_stage(crest_stage, crest_config=crest_config)
+    return o.stages.runtime._completed_crest_stage(crest_stage, crest_config=crest_config)
 
 
 def _crest_orca_stage_plan(
@@ -58,10 +58,13 @@ def _crest_orca_stage_plan(
         payload,
         crest_config=crest_config,
     )
-    if crest_contract is None or o.stages._load_config_root(orca_config, engine="orca") is None:
+    if (
+        crest_contract is None
+        or o.stages.support._load_config_root(orca_config, engine="orca") is None
+    ):
         return None
-    payload_metadata = o.stages._coerce_mapping(payload.get("metadata"))
-    workspace_dir_text = o.stages._normalize_text(payload_metadata.get("workspace_dir"))
+    payload_metadata = o.stages.support._coerce_mapping(payload.get("metadata"))
+    workspace_dir_text = o.stages.support._normalize_text(payload_metadata.get("workspace_dir"))
     workspace_dir = (
         Path(workspace_dir_text).expanduser().resolve()
         if workspace_dir_text

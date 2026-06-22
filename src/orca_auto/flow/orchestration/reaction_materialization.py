@@ -65,13 +65,15 @@ def _completed_reaction_crest_contracts(
     *,
     crest_config: str | None,
 ) -> tuple[Any, Any] | None:
-    roles = o.stages._completed_crest_roles(payload)
+    roles = o.stages.runtime._completed_crest_roles(payload)
     if set(roles.keys()) != {"reactant", "product"}:
         return None
-    reactant_contract = o.stages._completed_crest_stage(
+    reactant_contract = o.stages.runtime._completed_crest_stage(
         roles["reactant"], crest_config=crest_config
     )
-    product_contract = o.stages._completed_crest_stage(roles["product"], crest_config=crest_config)
+    product_contract = o.stages.runtime._completed_crest_stage(
+        roles["product"], crest_config=crest_config
+    )
     if reactant_contract is None or product_contract is None:
         return None
     return reactant_contract, product_contract
@@ -149,7 +151,7 @@ def append_reaction_xtb_stages_impl(
     created = 0
     for endpoint_pair in plan.endpoint_pairs:
         created += 1
-        stage = o.stages._new_xtb_stage(
+        stage = o.stages.builders._new_xtb_stage(
             workflow_id=str(payload.get("workflow_id", "")),
             stage_id=f"xtb_path_search_{created:02d}",
             reaction_key=f"{payload.get('reaction_key', 'reaction')}_{created:02d}",
@@ -159,7 +161,9 @@ def append_reaction_xtb_stages_impl(
             max_cores=int(plan.params.get("max_cores", 8) or 8),
             max_memory_gb=int(plan.params.get("max_memory_gb", 32) or 32),
             max_handoff_retries=int(plan.params.get("max_xtb_handoff_retries", 2) or 2),
-            manifest_overrides=o.stages._coerce_mapping(plan.params.get("xtb_job_manifest")),
+            manifest_overrides=o.stages.support._coerce_mapping(
+                plan.params.get("xtb_job_manifest")
+            ),
         )
         if plan.pairing_enabled:
             pairing_metadata = dict(endpoint_pair.metadata)

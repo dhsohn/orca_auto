@@ -52,8 +52,8 @@ def advance_workflow(
             deps=o,
             workflow_root_path=workflow_root_path,
             workspace_dir=workspace_dir,
-            workflow_id=o.stages._normalize_text(payload.get("workflow_id")),
-            template_name=o.stages._normalize_text(payload.get("template_name")),
+            workflow_id=o.stages.support._normalize_text(payload.get("workflow_id")),
+            template_name=o.stages.support._normalize_text(payload.get("template_name")),
             sync_only=sync_only,
             submit_ready=bool(submit_ready) and not sync_only,
         )

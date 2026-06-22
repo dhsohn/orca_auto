@@ -25,9 +25,9 @@ def xtb_handoff_status_impl(
             "status": "ready",
             "reason": "",
             "message": "",
-            "artifact_path": o.stages._normalize_text(inputs[0].artifact_path),
+            "artifact_path": o.stages.support._normalize_text(inputs[0].artifact_path),
         }
-    error = o.stages._reaction_ts_guess_error(contract)
+    error = o.stages.support._reaction_ts_guess_error(contract)
     return {
         "status": "failed",
         "reason": error["reason"],
@@ -46,9 +46,9 @@ def stage_has_xtb_candidates_impl(
     for artifact in artifacts:
         if not isinstance(artifact, dict):
             continue
-        if o.stages._normalize_text(artifact.get("kind")) != "xtb_candidate":
+        if o.stages.support._normalize_text(artifact.get("kind")) != "xtb_candidate":
             continue
-        if o.stages._normalize_text(artifact.get("path")):
+        if o.stages.support._normalize_text(artifact.get("path")):
             return True
     return False
 

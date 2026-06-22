@@ -75,11 +75,11 @@ def xtb_path_retry_limit_impl(
     task = stage.get("task")
     if not isinstance(task, dict):
         return 2
-    payload = o.stages._task_payload_dict(task)
-    metadata = o.stages._coerce_mapping(task.get("metadata"))
+    payload = o.stages.support._task_payload_dict(task)
+    metadata = o.stages.support._coerce_mapping(task.get("metadata"))
     return max(
         0,
-        o.stages._safe_int(
+        o.stages.support._safe_int(
             payload.get("max_handoff_retries", metadata.get("max_handoff_retries", 2)),
             default=2,
         ),

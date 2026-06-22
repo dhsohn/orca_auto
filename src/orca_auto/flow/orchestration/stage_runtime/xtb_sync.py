@@ -76,7 +76,7 @@ def _apply_xtb_contract(
 
     current_attempt = stage_view.xtb_current_attempt_number()
     handoff = (
-        o.stages._xtb_handoff_status(contract)
+        o.stages.runtime._xtb_handoff_status(contract)
         if task_view.kind(o) == "path_search"
         else _empty_xtb_handoff()
     )
@@ -94,7 +94,9 @@ def _apply_xtb_contract(
             "handoff_status": handoff["status"],
             "handoff_reason": handoff["reason"],
             "handoff_message": handoff["message"],
-            "completed_at": o.stages._normalize_text(contract.analysis_summary.get("completed_at")),
+            "completed_at": o.stages.support._normalize_text(
+                contract.analysis_summary.get("completed_at")
+            ),
         },
     )
     stage_view.set_reaction_handoff(handoff)
@@ -112,7 +114,7 @@ def _xtb_handoff_retry_candidate(
 ) -> bool:
     return (
         submit_ready
-        and bool(o.stages._normalize_text(xtb_config))
+        and bool(o.stages.support._normalize_text(xtb_config))
         and task_view.kind(o) == "path_search"
         and handoff["status"] == STATUS_FAILED
         and status_in(stage_view.raw.get("status"), {STATUS_COMPLETED, STATUS_FAILED})
@@ -124,8 +126,10 @@ def _xtb_handoff_retry_budget(
     stage: dict[str, Any],
     stage_metadata: dict[str, Any],
 ) -> tuple[int, int]:
-    retries_used = o.stages._safe_int(stage_metadata.get("xtb_handoff_retries_used"), default=0)
-    retry_limit = o.stages._xtb_path_retry_limit(stage)
+    retries_used = o.stages.support._safe_int(
+        stage_metadata.get("xtb_handoff_retries_used"), default=0
+    )
+    retry_limit = o.stages.runtime._xtb_path_retry_limit(stage)
     return retries_used, retry_limit
 
 
@@ -174,7 +178,7 @@ def _submit_xtb_handoff_retry(
 ) -> dict[str, Any]:
     stage = stage_view.raw
     task = task_view.raw
-    retry_job_dir = o.stages._write_xtb_path_job(
+    retry_job_dir = o.stages.runtime._write_xtb_path_job(
         stage,
         xtb_allowed_root=xtb_runtime_paths["allowed_root"],
         workflow_id=workflow_id,

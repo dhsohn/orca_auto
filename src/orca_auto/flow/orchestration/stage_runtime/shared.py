@@ -49,9 +49,9 @@ class EngineStageSyncContext:
 
     def should_submit(self, *, submit_ready: bool, config_path: str | None) -> bool:
         return (
-            self.o.stages._normalize_text(self.task.get("status")) == STATUS_PLANNED
+            self.o.stages.support._normalize_text(self.task.get("status")) == STATUS_PLANNED
             and submit_ready
-            and bool(self.o.stages._normalize_text(config_path))
+            and bool(self.o.stages.support._normalize_text(config_path))
         )
 
     def set_submission_result(self, submission: dict[str, Any]) -> None:
@@ -69,7 +69,7 @@ def _engine_stage_sync_context(
 ) -> EngineStageSyncContext | None:
     o = _orchestration_context(deps)
     task = stage.get("task")
-    if not isinstance(task, dict) or o.stages._normalize_text(task.get("engine")) != engine:
+    if not isinstance(task, dict) or o.stages.support._normalize_text(task.get("engine")) != engine:
         return None
     stage_view = WorkflowStageView(stage)
     task_view = stage_view.task
@@ -77,8 +77,8 @@ def _engine_stage_sync_context(
         o=o,
         stage=stage,
         task=task,
-        task_payload=o.stages._task_payload_dict(task),
-        stage_metadata=o.stages._stage_metadata(stage),
+        task_payload=o.stages.support._task_payload_dict(task),
+        stage_metadata=o.stages.support._stage_metadata(stage),
         engine=engine,
         stage_view=stage_view,
         task_view=task_view,
@@ -199,13 +199,13 @@ def _engine_job_dir_contract_lookup(
     config_path: str | None,
     engine: str,
 ) -> tuple[str, Path] | None:
-    job_dir_target = o.stages._normalize_text(task_payload.get("job_dir"))
+    job_dir_target = o.stages.support._normalize_text(task_payload.get("job_dir"))
     index_root = (
         runtime_paths["allowed_root"]
-        or o.stages._load_config_root(config_path, engine=engine)
+        or o.stages.support._load_config_root(config_path, engine=engine)
         or Path(job_dir_target or ".").resolve().parent
     )
-    target = job_dir_target or o.stages._submission_target(stage)
+    target = job_dir_target or o.stages.support._submission_target(stage)
     if not target:
         return None
     return target, index_root
@@ -261,12 +261,15 @@ def append_unique_artifact_impl(
     deps: OrchestrationDeps | None = None,
 ) -> None:
     o = _orchestration_context(deps)
-    path_text = o.stages._normalize_text(path)
+    path_text = o.stages.support._normalize_text(path)
     if not path_text:
         return
-    key = (o.stages._normalize_text(kind), path_text)
+    key = (o.stages.support._normalize_text(kind), path_text)
     seen = {
-        (o.stages._normalize_text(item.get("kind")), o.stages._normalize_text(item.get("path")))
+        (
+            o.stages.support._normalize_text(item.get("kind")),
+            o.stages.support._normalize_text(item.get("path")),
+        )
         for item in rows
         if isinstance(item, dict)
     }
@@ -274,7 +277,7 @@ def append_unique_artifact_impl(
         return
     rows.append(
         {
-            "kind": o.stages._normalize_text(kind) or "artifact",
+            "kind": o.stages.support._normalize_text(kind) or "artifact",
             "path": path_text,
             "selected": bool(selected),
             "metadata": dict(metadata or {}),

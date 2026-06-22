@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 AnyCallable = Callable[..., Any]
 WorkflowPayload = dict[str, Any]
@@ -162,12 +162,6 @@ _ORCHESTRATION_STAGE_DEP_GROUPS: Mapping[str, tuple[str, ...]] = {
     group.name: group.dep_names for group in _ORCHESTRATION_STAGE_DEP_REGISTRY
 }
 
-_ORCHESTRATION_STAGE_DEP_TARGETS: Mapping[str, str] = {
-    dep_name: group_name
-    for group_name, dep_names in _ORCHESTRATION_STAGE_DEP_GROUPS.items()
-    for dep_name in dep_names
-}
-
 
 @dataclass(frozen=True)
 class OrchestrationStageDeps:
@@ -176,14 +170,6 @@ class OrchestrationStageDeps:
     runtime: OrchestrationStageRuntimeDeps
     support: OrchestrationStageSupportDeps
     workflow: OrchestrationStageWorkflowDeps
-
-    _PASSTHROUGH_TARGETS: ClassVar[Mapping[str, str]] = _ORCHESTRATION_STAGE_DEP_TARGETS
-
-    def __getattr__(self, name: str) -> Any:
-        group_name = self._PASSTHROUGH_TARGETS.get(name)
-        if group_name is None:
-            raise AttributeError(f"{type(self).__name__!s} has no attribute {name!r}")
-        return getattr(getattr(self, group_name), name)
 
 
 @dataclass(frozen=True)
@@ -230,7 +216,6 @@ __all__ = [
     "_ORCHESTRATION_STAGE_BUILDER_GROUP",
     "_ORCHESTRATION_STAGE_DEP_GROUPS",
     "_ORCHESTRATION_STAGE_DEP_REGISTRY",
-    "_ORCHESTRATION_STAGE_DEP_TARGETS",
     "_ORCHESTRATION_STAGE_MATERIALIZATION_GROUP",
     "_ORCHESTRATION_STAGE_RUNTIME_GROUP",
     "_ORCHESTRATION_STAGE_SUPPORT_GROUP",

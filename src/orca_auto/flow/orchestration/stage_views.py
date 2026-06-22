@@ -47,7 +47,7 @@ class WorkflowTaskView(
 
     def payload(self, o: Any) -> dict[str, Any]:
         if o is not None:
-            return o.stages._task_payload_dict(self.raw)
+            return o.stages.support._task_payload_dict(self.raw)
         return _mapping_field(self.raw, "payload")
 
     def metadata(self, o: Any) -> dict[str, Any]:
@@ -78,13 +78,13 @@ class WorkflowTaskView(
         return normalize_text(self.raw.get(key))
 
     def engine(self, o: Any) -> str:
-        return o.stages._normalize_text(self.raw.get("engine")).lower()
+        return o.stages.support._normalize_text(self.raw.get("engine")).lower()
 
     def kind(self, o: Any) -> str:
-        return o.stages._normalize_text(self.raw.get("task_kind")).lower()
+        return o.stages.support._normalize_text(self.raw.get("task_kind")).lower()
 
     def status(self, o: Any) -> str:
-        return o.stages._normalize_text(self.raw.get("status")).lower()
+        return o.stages.support._normalize_text(self.raw.get("status")).lower()
 
     def status_with(self, normalize_text: Callable[[Any], str]) -> str:
         return self.text_field("status", normalize_text).lower()
@@ -195,7 +195,7 @@ class WorkflowStageView(
 
     def metadata(self, o: Any) -> dict[str, Any]:
         if o is not None:
-            return o.stages._stage_metadata(self.raw)
+            return o.stages.support._stage_metadata(self.raw)
         return _mapping_field(self.raw, "metadata")
 
     def existing_metadata(self) -> dict[str, Any] | None:
@@ -205,13 +205,13 @@ class WorkflowStageView(
         return normalize_text(self.raw.get(key))
 
     def stage_id(self, o: Any) -> str:
-        return o.stages._normalize_text(self.raw.get("stage_id"))
+        return o.stages.support._normalize_text(self.raw.get("stage_id"))
 
     def stage_id_with(self, normalize_text: Callable[[Any], str]) -> str:
         return self.text_field("stage_id", normalize_text)
 
     def status(self, o: Any) -> str:
-        return o.stages._normalize_text(self.raw.get("status")).lower()
+        return o.stages.support._normalize_text(self.raw.get("status")).lower()
 
     def status_with(self, normalize_text: Callable[[Any], str]) -> str:
         return self.text_field("status", normalize_text).lower()
@@ -302,15 +302,15 @@ def _engine_stage_views(
 
 
 def _request_params(o: Any, payload: dict[str, Any]) -> dict[str, Any]:
-    metadata = o.stages._coerce_mapping(payload.get("metadata"))
-    request = o.stages._coerce_mapping(metadata.get("request"))
-    return o.stages._coerce_mapping(request.get("parameters"))
+    metadata = o.stages.support._coerce_mapping(payload.get("metadata"))
+    request = o.stages.support._coerce_mapping(metadata.get("request"))
+    return o.stages.support._coerce_mapping(request.get("parameters"))
 
 
 def _clear_workflow_error_scope(o: Any, payload_metadata: dict[str, Any], scopes: set[str]) -> None:
     workflow_error = payload_metadata.get("workflow_error")
     if (
         isinstance(workflow_error, dict)
-        and o.stages._normalize_text(workflow_error.get("scope")) in scopes
+        and o.stages.support._normalize_text(workflow_error.get("scope")) in scopes
     ):
         payload_metadata.pop("workflow_error", None)

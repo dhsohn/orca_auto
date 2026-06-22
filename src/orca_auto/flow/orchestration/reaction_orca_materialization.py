@@ -48,10 +48,10 @@ def _load_xtb_contract_for_stage(
     view = WorkflowStageView.from_raw(xtb_stage)
     if view is None or not view.task.raw:
         return None
-    payload_dict = o.stages._task_payload_dict(view.task.raw)
-    target = o.stages._normalize_text(payload_dict.get("job_dir")) or o.stages._submission_target(
-        xtb_stage
-    )
+    payload_dict = o.stages.support._task_payload_dict(view.task.raw)
+    target = o.stages.support._normalize_text(
+        payload_dict.get("job_dir")
+    ) or o.stages.support._submission_target(xtb_stage)
     if not target:
         return None
     try:
@@ -79,21 +79,21 @@ def _xtb_ts_guess_inputs(o: Any, contract: Any) -> list[Any]:
 
 
 def _record_xtb_handoff_error(o: Any, xtb_stage: dict[str, Any], contract: Any) -> dict[str, str]:
-    stage_metadata = o.stages._stage_metadata(xtb_stage)
-    error = o.stages._reaction_ts_guess_error(contract)
+    stage_metadata = o.stages.support._stage_metadata(xtb_stage)
+    error = o.stages.support._reaction_ts_guess_error(contract)
     stage_metadata["reaction_handoff_status"] = "failed"
     stage_metadata["reaction_handoff_reason"] = error["reason"]
     stage_metadata["reaction_handoff_message"] = error["message"]
     return {
         "stage_id": WorkflowStageView(xtb_stage).stage_id(o),
-        "job_id": o.stages._normalize_text(getattr(contract, "job_id", "")),
+        "job_id": o.stages.support._normalize_text(getattr(contract, "job_id", "")),
         "reason": error["reason"],
         "message": error["message"],
     }
 
 
 def _mark_xtb_handoff_ready(o: Any, xtb_stage: dict[str, Any]) -> None:
-    stage_metadata = o.stages._stage_metadata(xtb_stage)
+    stage_metadata = o.stages.support._stage_metadata(xtb_stage)
     stage_metadata.pop("reaction_handoff_reason", None)
     stage_metadata.pop("reaction_handoff_message", None)
     stage_metadata["reaction_handoff_status"] = "ready"
@@ -104,15 +104,17 @@ def _reaction_orca_candidate_pool_rows(
 ) -> list[tuple[int, int, str, Any]]:
     rows: list[tuple[int, int, str, Any]] = []
     for candidate in inputs:
-        candidate_path = o.stages._normalize_text(candidate.artifact_path)
+        candidate_path = o.stages.support._normalize_text(candidate.artifact_path)
         if not candidate_path:
             continue
         candidate_metadata = {
             **dict(candidate.metadata),
             "xtb_stage_id": WorkflowStageView(xtb_stage).stage_id(o),
             "xtb_stage_order": int(stage_order),
-            "xtb_source_job_id": o.stages._normalize_text(getattr(contract, "job_id", "")),
-            "xtb_source_job_type": o.stages._normalize_text(getattr(contract, "job_type", "")),
+            "xtb_source_job_id": o.stages.support._normalize_text(getattr(contract, "job_id", "")),
+            "xtb_source_job_type": o.stages.support._normalize_text(
+                getattr(contract, "job_type", "")
+            ),
         }
         rows.append(
             (
@@ -183,14 +185,14 @@ def _remaining_orca_candidates(
     o: Any, existing: list[dict[str, Any]], ordered_candidates: list[Any]
 ) -> list[Any]:
     attempted_paths = {
-        o.stages._reaction_orca_source_candidate_path(stage)
+        o.stages.support._reaction_orca_source_candidate_path(stage)
         for stage in existing
-        if o.stages._reaction_orca_source_candidate_path(stage)
+        if o.stages.support._reaction_orca_source_candidate_path(stage)
     }
     return [
         candidate
         for candidate in ordered_candidates
-        if o.stages._normalize_text(candidate.artifact_path) not in attempted_paths
+        if o.stages.support._normalize_text(candidate.artifact_path) not in attempted_paths
     ]
 
 
@@ -225,10 +227,10 @@ def _reaction_orca_stage_plan(
     xtb_stages = _completed_or_recoverable_xtb_stages(o, payload)
     if not xtb_stages:
         return None
-    xtb_allowed_root = o.stages._load_config_root(xtb_config, engine="xtb")
+    xtb_allowed_root = o.stages.support._load_config_root(xtb_config, engine="xtb")
     if xtb_allowed_root is None:
         return None
-    if o.stages._load_config_root(orca_config, engine="orca") is None:
+    if o.stages.support._load_config_root(orca_config, engine="orca") is None:
         return None
     orca_runtime_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="orca")
     params = _request_params(o, payload)
@@ -301,7 +303,7 @@ def _annotate_reaction_orca_stage(
     next_index: int,
     offset: int,
 ) -> None:
-    stage_metadata = o.stages._stage_metadata(stage)
+    stage_metadata = o.stages.support._stage_metadata(stage)
     stage_metadata["reaction_candidate_attempt_index"] = next_index
     stage_metadata["reaction_candidate_pool_size"] = len(plan.ordered_candidates)
     stage_metadata["reaction_remaining_candidates_after_this"] = max(

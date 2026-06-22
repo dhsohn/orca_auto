@@ -37,7 +37,7 @@ def ensure_crest_job_dir_impl(
     stage_view = WorkflowStageView(stage)
     task_view = stage_view.task
     payload = task_view.payload(o)
-    existing = o.stages._normalize_text(payload.get("job_dir"))
+    existing = o.stages.support._normalize_text(payload.get("job_dir"))
     if existing:
         return existing
     stage_id = stage_view.stage_id(o)
@@ -48,7 +48,7 @@ def ensure_crest_job_dir_impl(
     overrides = _manifest_override_mapping(payload.get("job_manifest_overrides"))
     task_resource_request = task_view.resource_request()
     manifest_payload: dict[str, Any] = {
-        "mode": o.stages._normalize_text(payload.get("mode")) or "standard",
+        "mode": o.stages.support._normalize_text(payload.get("mode")) or "standard",
         "speed": "quick",
         "gfn": 2,
     }
@@ -57,8 +57,10 @@ def ensure_crest_job_dir_impl(
             continue
         manifest_payload[key] = value
     manifest_payload["resources"] = {
-        "max_cores": o.stages._safe_int(task_resource_request.get("max_cores"), default=8),
-        "max_memory_gb": o.stages._safe_int(task_resource_request.get("max_memory_gb"), default=32),
+        "max_cores": o.stages.support._safe_int(task_resource_request.get("max_cores"), default=8),
+        "max_memory_gb": o.stages.support._safe_int(
+            task_resource_request.get("max_memory_gb"), default=32
+        ),
     }
     manifest_payload["input_xyz"] = "input.xyz"
     (job_dir / "crest_job.yaml").write_text(
@@ -79,7 +81,7 @@ def _submit_crest_stage(
     workflow_id: str,
 ) -> None:
     task_view = WorkflowTaskView(task)
-    job_dir = o.stages._ensure_crest_job_dir(
+    job_dir = o.stages.runtime._ensure_crest_job_dir(
         stage,
         crest_allowed_root=crest_runtime_paths["allowed_root"],
         workflow_id=workflow_id,
@@ -189,14 +191,14 @@ def completed_crest_roles_impl(
             continue
         task_payload = task_view.existing_payload()
         stage_metadata = stage_view.existing_metadata() or {}
-        role = o.stages._normalize_text(stage_metadata.get("input_role")).lower()
+        role = o.stages.support._normalize_text(stage_metadata.get("input_role")).lower()
         if not role and isinstance(task_payload, dict):
-            role = o.stages._normalize_text(task_payload.get("input_role")).lower()
+            role = o.stages.support._normalize_text(task_payload.get("input_role")).lower()
         if role:
             latest_by_role[role] = stage_view.raw
     rows: dict[str, dict[str, Any]] = {}
     for role, stage in latest_by_role.items():
-        status = WorkflowStageView(stage).status_pair_with(o.stages._normalize_text)
+        status = WorkflowStageView(stage).status_pair_with(o.stages.support._normalize_text)
         if status.stage == "completed" and status.task in {"", "completed"}:
             rows[role] = stage
     return rows
@@ -213,17 +215,17 @@ def completed_crest_stage_impl(
     if task_view is None:
         return None
     payload = task_view.payload(o)
-    job_dir_target = o.stages._normalize_text(payload.get("job_dir"))
+    job_dir_target = o.stages.support._normalize_text(payload.get("job_dir"))
     index_root = (
         _workflow_internal_runs_root(job_dir_target, engine="crest")
-        or o.stages._load_config_root(crest_config, engine="crest")
+        or o.stages.support._load_config_root(crest_config, engine="crest")
         or (
             Path(job_dir_target).expanduser().resolve().parent
             if job_dir_target
             else Path(".").resolve().parent
         )
     )
-    target = job_dir_target or o.stages._submission_target(stage)
+    target = job_dir_target or o.stages.support._submission_target(stage)
     if not target:
         return None
     return _load_contract_or_none(

@@ -79,7 +79,7 @@ def _cancel_crest_target(
     target: str,
     config: WorkflowEngineOptions,
 ) -> dict[str, Any]:
-    config_path = deps.stages._normalize_text(config.crest.config)
+    config_path = deps.stages.support._normalize_text(config.crest.config)
     if not config_path:
         return _missing_engine_config_cancel_result()
     return deps.engines.crest_cancel_target(target=target, config_path=config_path)
@@ -90,7 +90,7 @@ def _cancel_xtb_target(
     target: str,
     config: WorkflowEngineOptions,
 ) -> dict[str, Any]:
-    config_path = deps.stages._normalize_text(config.xtb.config)
+    config_path = deps.stages.support._normalize_text(config.xtb.config)
     if not config_path:
         return _missing_engine_config_cancel_result()
     return deps.engines.xtb_cancel_target(target=target, config_path=config_path)
@@ -101,7 +101,7 @@ def _cancel_orca_target(
     target: str,
     config: WorkflowEngineOptions,
 ) -> dict[str, Any]:
-    config_path = deps.stages._normalize_text(config.orca.config)
+    config_path = deps.stages.support._normalize_text(config.orca.config)
     if not config_path:
         return _missing_engine_config_cancel_result()
     return deps.engines.orca_cancel_target(
@@ -160,7 +160,7 @@ def _cancel_stage_activity_outcome(
         return _StageCancelOutcome.skipped("not_cancellable")
 
     engine = stage_view.task_engine(o)
-    cancel_target = o.stages._submission_target(stage)
+    cancel_target = o.stages.support._submission_target(stage)
     if not cancel_target:
         stage_view.set_status_pair(stage_status=STATUS_CANCELLED, task_status=STATUS_CANCELLED)
         return _StageCancelOutcome(status=STATUS_CANCELLED, mode="local")
@@ -177,7 +177,7 @@ def _cancel_stage_activity_outcome(
         stage_view.set_status_pair(stage_status=result["status"], task_status=result["status"])
         return _StageCancelOutcome(status=result["status"])
     return _StageCancelOutcome.failed(
-        o.stages._normalize_text(result.get("reason")) or STATUS_CANCEL_FAILED
+        o.stages.support._normalize_text(result.get("reason")) or STATUS_CANCEL_FAILED
     )
 
 
