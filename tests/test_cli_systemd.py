@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from argparse import Namespace
 from pathlib import Path
@@ -18,6 +19,7 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
     python_path.parent.mkdir(parents=True)
     config_path.parent.mkdir(parents=True)
     python_path.write_text("#!/usr/bin/env python\n", encoding="utf-8")
+    python_path.chmod(0o755)
     config_path.write_text(
         "\n".join(
             [
@@ -85,6 +87,33 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
     assert unit_by_name["orca_auto-runtime@.target"].destination == (
         unit_dir.resolve(strict=False) / "orca_auto-runtime@.target"
     )
+
+
+def test_rendered_systemd_units_pass_systemd_analyze_verify(tmp_path: Path) -> None:
+    if shutil.which("systemd-analyze") is None:
+        pytest.skip("systemd-analyze is not installed")
+    repo, config_path = _make_repo(tmp_path)
+    unit_dir = tmp_path / "units"
+
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=repo,
+        config=config_path,
+        unit_dir=unit_dir,
+        is_root=lambda: True,
+    )
+    unit_dir.mkdir()
+    for unit in plan.units:
+        unit.destination.write_text(unit.content, encoding="utf-8")
+
+    result = subprocess.run(
+        ["systemd-analyze", "verify", *(str(unit.destination) for unit in plan.units)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_build_systemd_install_plan_worker_only_enables_worker_service(tmp_path: Path) -> None:
