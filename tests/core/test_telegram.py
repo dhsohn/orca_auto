@@ -15,6 +15,7 @@ from orca_auto.core.config.schema import TelegramConfig
 from orca_auto.core.notifications import telegram_api as telegram_api_mod
 from orca_auto.core.notifications import telegram_config as telegram_config_mod
 from orca_auto.core.notifications import telegram_format as telegram_format_mod
+from orca_auto.core.notifications import telegram_network as telegram_network_mod
 from orca_auto.core.notifications import telegram_transport as telegram_transport_mod
 
 
@@ -221,6 +222,49 @@ def test_http_error_handling_reads_error_body(monkeypatch: pytest.MonkeyPatch) -
     assert result.error == "telegram_http_error:HTTP Error 401: Unauthorized"
 
 
+def test_log_telegram_send_failure_redacts_and_bounds_response_body() -> None:
+    warnings: list[tuple[str, tuple[Any, ...]]] = []
+
+    class FakeLogger:
+        def warning(self, message: str, *args: Any) -> None:
+            warnings.append((message, args))
+
+    body = (
+        json.dumps(
+            {
+                "ok": False,
+                "description": "bad token 123456:abcdefghijklmnopqrstuvwxyz",
+                "chat_id": "123456789",
+                "text": "secret payload",
+                "nested": {"message": "private message"},
+            }
+        )
+        + "\n"
+        + ("x" * 400)
+    )
+
+    telegram_transport_mod.log_telegram_send_failure(
+        FakeLogger(),  # type: ignore[arg-type]
+        telegram_transport_mod.TelegramSendResult(
+            sent=False,
+            status_code=400,
+            error="telegram_http_400",
+            response_text=body,
+        ),
+    )
+
+    assert len(warnings) == 1
+    assert warnings[0][0] == "telegram_send_failed: status=%s error=%s body=%s"
+    logged_body = warnings[0][1][2]
+    assert "123456:abcdefghijklmnopqrstuvwxyz" not in logged_body
+    assert "123456789" not in logged_body
+    assert "secret payload" not in logged_body
+    assert "private message" not in logged_body
+    assert "<redacted>" in logged_body
+    assert "\n" not in logged_body
+    assert len(logged_body) <= 303
+
+
 def test_http_error_handling_leaves_response_text_empty_when_read_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -290,6 +334,26 @@ def test_network_unreachable_retries_with_ipv4_fallback(monkeypatch: pytest.Monk
     assert len(calls) == 2
     assert calls[0][0] == "https://api.telegram.org/botbot-token/sendMessage"
     assert calls[1][0] == "https://api.telegram.org/botbot-token/sendMessage"
+
+
+def test_ipv4_fallback_resolver_override_is_hostname_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results = [
+        (telegram_network_mod.socket.AF_INET6, None, None, None, ("::1", 443)),
+        (telegram_network_mod.socket.AF_INET, None, None, None, ("127.0.0.1", 443)),
+    ]
+
+    def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        return results
+
+    monkeypatch.setattr(telegram_network_mod.socket, "getaddrinfo", fake_getaddrinfo)
+
+    with telegram_network_mod._force_ipv4_resolution("api.telegram.org"):
+        assert telegram_network_mod.socket.getaddrinfo("api.telegram.org", 443) == [results[1]]
+        assert telegram_network_mod.socket.getaddrinfo("example.org", 443) == results
+
+    assert telegram_network_mod.socket.getaddrinfo is fake_getaddrinfo
 
 
 def test_build_telegram_transport_uses_defaults() -> None:
@@ -434,7 +498,14 @@ def test_telegram_api_client_logs_non_ok_and_transport_failures(
     responses = iter(
         [
             _FakeResponse(
-                body='{"ok": false, "description": "chat not found"}',
+                body=json.dumps(
+                    {
+                        "ok": False,
+                        "description": "chat not found",
+                        "chat_id": "123456789",
+                        "text": "private text",
+                    }
+                ),
                 status=200,
             ),
             HTTPError(
@@ -442,7 +513,9 @@ def test_telegram_api_client_logs_non_ok_and_transport_failures(
                 code=429,
                 msg="Too Many Requests",
                 hdrs=Message(),
-                fp=BytesIO(b"retry later"),
+                fp=BytesIO(
+                    b'{"description":"retry later","token":"123456:abcdefghijklmnopqrstuvwxyz"}'
+                ),
             ),
             RuntimeError("socket closed"),
         ]
@@ -466,4 +539,13 @@ def test_telegram_api_client_logs_non_ok_and_transport_failures(
         "telegram_api_http_error: method=%s status=%d body=%s",
         "telegram_api_failed: method=%s error=%s",
     ]
-    assert warnings[1][1] == ("sendMessage", 429, "retry later")
+    response_log = warnings[0][1][1]
+    assert "123456789" not in response_log
+    assert "private text" not in response_log
+    assert "<redacted>" in response_log
+
+    http_body_log = warnings[1][1][2]
+    assert warnings[1][1][:2] == ("sendMessage", 429)
+    assert "retry later" in http_body_log
+    assert "123456:abcdefghijklmnopqrstuvwxyz" not in http_body_log
+    assert "<redacted>" in http_body_log

@@ -115,7 +115,9 @@ def urlopen_with_ipv4_fallback(
     """Retry one request with hostname-scoped IPv4 resolution after IPv6 routing failure.
 
     urllib does not expose per-request address-family selection, so the fallback
-    uses a short-lived resolver override guarded by a module lock.
+    uses a short-lived process-global resolver override guarded by a module lock.
+    Only the request hostname is filtered while the override is active; lookups
+    for other hostnames still delegate to the original resolver unchanged.
     """
     try:
         return urlopen_fn(request, timeout=timeout)

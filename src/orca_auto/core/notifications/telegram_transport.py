@@ -17,6 +17,7 @@ from .telegram_config import (
     TelegramConfigLike,
 )
 from .telegram_format import MAX_TELEGRAM_MESSAGE_LENGTH, escape_html, split_telegram_message
+from .telegram_logging import safe_log_body
 from .telegram_network import (
     _is_retryable_http_status,
     _is_timeout_error,
@@ -61,7 +62,7 @@ def log_telegram_send_failure(logger: logging.Logger, result: Any) -> None:
             "telegram_send_failed: status=%s error=%s body=%s",
             status_code,
             error,
-            response_text,
+            safe_log_body(response_text),
         )
     elif error:
         logger.warning("telegram_send_failed: %s", error)

@@ -47,8 +47,10 @@ def test_default_config_path_prefers_env_var(monkeypatch: pytest.MonkeyPatch) ->
 @pytest.mark.parametrize("env_value", [None, "   "], ids=["unset", "blank"])
 def test_default_config_path_falls_back_to_repo_config(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     env_value: str | None,
 ) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
     if env_value is None:
         monkeypatch.delenv(config_mod.CONFIG_ENV_VAR, raising=False)
     else:

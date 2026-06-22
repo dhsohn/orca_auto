@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -87,6 +88,27 @@ def _read_unit_template(template_root: Path, name: str) -> str:
 
 
 _SYSTEMD_READ_WRITE_PLACEHOLDER = "# ORCA_AUTO_READ_WRITE_PATHS"
+_TARGET_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]*[$]?$")
+
+
+def _validate_target_user(target_user: str) -> str:
+    if not _TARGET_USER_PATTERN.fullmatch(target_user):
+        raise ValueError("--user must be a Linux account name matching ^[a-z_][a-z0-9_-]*[$]?$")
+    return target_user
+
+
+def _systemd_path_text(path: Path, *, label: str) -> str:
+    text = str(path)
+    if not text.startswith("/"):
+        raise ValueError(f"{label} must be absolute for systemd unit rendering: {text}")
+    if any(
+        character.isspace() or ord(character) < 32 or ord(character) == 127 for character in text
+    ):
+        raise ValueError(
+            f"{label} must not contain whitespace or control characters for "
+            f"systemd unit rendering: {text}"
+        )
+    return text
 
 
 def _append_absolute_path(paths: list[Path], value: Any) -> None:
@@ -159,13 +181,13 @@ def _render_read_write_paths(config: Path) -> str:
     paths = _configured_read_write_paths(config)
     if not paths:
         return "# ReadWritePaths omitted: config runtime paths unavailable at render time"
-    joined = " ".join(str(path) for path in paths)
+    joined = " ".join(_systemd_path_text(path, label="ReadWritePaths path") for path in paths)
     return f"ReadWritePaths={joined}"
 
 
 def _render_unit_template(template: str, *, repo: Path, config: Path) -> str:
-    repo_text = str(repo)
-    config_text = str(config)
+    repo_text = _systemd_path_text(repo, label="--repo")
+    config_text = _systemd_path_text(config, label="--config")
     read_write_paths = _render_read_write_paths(config)
     rendered = template.replace("/home/%i/orca_auto", repo_text)
     lines = []
@@ -350,6 +372,7 @@ def build_systemd_install_plan(
     user_text = normalize_text(target_user)
     if not user_text:
         raise ValueError("--user is required")
+    user_text = _validate_target_user(user_text)
 
     repo_text = normalize_text(repo)
     if not repo_text:

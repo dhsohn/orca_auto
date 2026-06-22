@@ -191,6 +191,14 @@ installs `.[dev]`, then runs `ruff check`, `ruff format --check`, `mypy`, and
 the coverage-gated pytest suite. Pass pytest selectors directly to the script when you want a narrower
 loop, for example `bash scripts/check.sh tests/flow -q`.
 
+CI also runs Gitleaks secret scanning, ShellCheck for `scripts/*.sh`, rendered
+systemd unit verification, the Python 3.11/3.12/3.13 check matrix, and a wheel
+smoke test that confirms typed-package metadata. These checks exercise the
+queue, workflow, parser, notification, and fake-engine integration paths without
+requiring a licensed ORCA binary. They do not prove that a local ORCA/OpenMPI
+installation is valid, that your site scheduler allows the requested resources,
+or that Telegram credentials and network delivery work in your deployment.
+
 To clear local Python/test/tool caches after a large refactor:
 
 ```bash

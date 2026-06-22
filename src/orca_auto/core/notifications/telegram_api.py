@@ -8,6 +8,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .telegram_config import DEFAULT_TELEGRAM_BASE_URL, DEFAULT_TIMEOUT_SECONDS
+from .telegram_logging import safe_log_body
 from .telegram_network import (
     _read_http_error_body,
 )
@@ -63,7 +64,7 @@ class TelegramApiClient:
                 self.logger.warning(
                     "telegram_api_error: method=%s response=%s",
                     method,
-                    result,
+                    safe_log_body(result),
                 )
                 return None
         except HTTPError as exc:
@@ -72,7 +73,7 @@ class TelegramApiClient:
                 "telegram_api_http_error: method=%s status=%d body=%s",
                 method,
                 exc.code,
-                body,
+                safe_log_body(body),
             )
             return None
         except Exception as exc:  # noqa: BLE001

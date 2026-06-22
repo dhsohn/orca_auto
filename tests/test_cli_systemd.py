@@ -157,6 +157,62 @@ def test_rendered_systemd_units_pass_systemd_analyze_verify(tmp_path: Path) -> N
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_build_systemd_install_plan_rejects_unsafe_user(tmp_path: Path) -> None:
+    repo, config_path = _make_repo(tmp_path)
+
+    with pytest.raises(ValueError, match="--user must be a Linux account name"):
+        systemd_plan.build_systemd_install_plan(
+            target_user="alice/../../evil",
+            repo=repo,
+            config=config_path,
+            unit_dir=tmp_path / "units",
+            is_root=lambda: True,
+        )
+
+
+def test_build_systemd_install_plan_rejects_paths_that_break_unit_syntax(
+    tmp_path: Path,
+) -> None:
+    repo, config_path = _make_repo(tmp_path / "with space")
+
+    with pytest.raises(ValueError, match="--repo must not contain whitespace"):
+        systemd_plan.build_systemd_install_plan(
+            target_user="alice",
+            repo=repo,
+            config=config_path,
+            unit_dir=tmp_path / "units",
+            is_root=lambda: True,
+        )
+
+
+def test_systemd_read_write_paths_reject_whitespace_from_config(tmp_path: Path) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    config_path.write_text(
+        "\n".join(
+            [
+                "scheduler:",
+                f"  admission_root: {repo / 'admission'}",
+                "workflow:",
+                f"  root: {repo / 'workflow runs'}",
+                "telegram:",
+                "  bot_token: token",
+                "  chat_id: chat",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="ReadWritePaths path must not contain whitespace"):
+        systemd_plan.build_systemd_install_plan(
+            target_user="alice",
+            repo=repo,
+            config=config_path,
+            unit_dir=tmp_path / "units",
+            is_root=lambda: True,
+        )
+
+
 def test_build_systemd_install_plan_worker_only_enables_worker_service(tmp_path: Path) -> None:
     repo, config_path = _make_repo(tmp_path)
 

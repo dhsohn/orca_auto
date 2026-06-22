@@ -59,9 +59,9 @@ if ! "$PYTHON_BIN" -m venv .venv >/dev/null 2>&1; then
   "$PYTHON_BIN" -m pip install --user virtualenv
   "$PYTHON_BIN" -m virtualenv .venv
 fi
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e .
+VENV_PY="$ROOT/.venv/bin/python"
+"$VENV_PY" -m pip install --upgrade pip
+"$VENV_PY" -m pip install -e .
 
 CONFIG="$ROOT/config/orca_auto.yaml"
 if [[ ! -f "$CONFIG" ]]; then
