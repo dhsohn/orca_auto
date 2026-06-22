@@ -346,9 +346,9 @@ wsl --shutdown
 
 This repository includes service assets under `systemd/`:
 
-- [`systemd/orca_auto-runtime@.target`](/home/daehyupsohn/orca_auto/systemd/orca_auto-runtime@.target)
-- [`systemd/orca_auto-queue-worker@.service`](/home/daehyupsohn/orca_auto/systemd/orca_auto-queue-worker@.service)
-- [`systemd/orca_auto-bot@.service`](/home/daehyupsohn/orca_auto/systemd/orca_auto-bot@.service)
+- [`systemd/orca_auto-runtime@.target`](../systemd/orca_auto-runtime@.target)
+- [`systemd/orca_auto-queue-worker@.service`](../systemd/orca_auto-queue-worker@.service)
+- [`systemd/orca_auto-bot@.service`](../systemd/orca_auto-bot@.service)
 
 Recommended always-on runtime install flow when Telegram is configured:
 

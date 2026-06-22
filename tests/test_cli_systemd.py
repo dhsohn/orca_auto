@@ -89,6 +89,47 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
     )
 
 
+def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
+    tmp_path: Path,
+) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    config_path.write_text(
+        "\n".join(
+            [
+                "workflow:",
+                f"  root: {repo / 'workflow_runs'}",
+                "orca:",
+                "  runtime:",
+                f"    allowed_root: {repo / 'orca_runs'}",
+                f"    organized_root: {repo / 'orca_outputs'}",
+                "telegram:",
+                "  bot_token: token",
+                "  chat_id: chat",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=repo,
+        config=config_path,
+        unit_dir=tmp_path / "units",
+        is_root=lambda: True,
+    )
+
+    unit_by_name = {unit.name: unit for unit in plan.units}
+    worker_content = unit_by_name["orca_auto-queue-worker@.service"].content
+    assert (
+        "ReadWritePaths="
+        f"{config_path.parent.resolve(strict=False) / 'admission'} "
+        f"{repo.resolve(strict=False) / 'workflow_runs'} "
+        f"{repo.resolve(strict=False) / 'orca_runs'} "
+        f"{repo.resolve(strict=False) / 'orca_outputs'}"
+    ) in worker_content
+
+
 def test_rendered_systemd_units_pass_systemd_analyze_verify(tmp_path: Path) -> None:
     if shutil.which("systemd-analyze") is None:
         pytest.skip("systemd-analyze is not installed")

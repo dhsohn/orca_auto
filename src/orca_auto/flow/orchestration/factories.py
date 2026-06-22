@@ -6,13 +6,13 @@ from pathlib import Path
 from typing import Any, cast
 
 from orca_auto.core.utils import now_utc_iso, timestamped_token
-from orca_auto.flow.contracts import WorkflowStageWithTaskPayload
 from orca_auto.flow.orchestration.builders import (
     create_conformer_screening_workflow_impl,
     create_reaction_ts_search_workflow_impl,
 )
 from orca_auto.flow.orchestration.requests import (
     ConformerScreeningWorkflowRequest,
+    NewCrestStageFactory,
     ReactionTsSearchWorkflowCreationContext,
     ReactionTsSearchWorkflowRequest,
     WorkflowCreationContext,
@@ -30,10 +30,7 @@ class WorkflowFactoryDeps:
     workflow_id_factory: Callable[[str], str] = timestamped_token
     copy_input_fn: Callable[[str, Path], str] = _copy_input_impl
     now_utc_iso_fn: Callable[[], str] = now_utc_iso
-    new_crest_stage_fn: Callable[..., WorkflowStageWithTaskPayload] = cast(
-        Callable[..., WorkflowStageWithTaskPayload],
-        new_crest_stage_impl,
-    )
+    new_crest_stage_fn: NewCrestStageFactory = new_crest_stage_impl
     write_workflow_payload_fn: Callable[[Path, dict[str, Any]], Any] = write_workflow_payload
     sync_workflow_registry_fn: Callable[[Path, Path, dict[str, Any]], Any] = sync_workflow_registry
     load_xyz_atom_sequence_fn: Callable[[str], tuple[str, ...]] = load_xyz_atom_sequence

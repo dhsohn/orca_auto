@@ -133,15 +133,16 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
 
     paths: list[Path] = []
     scheduler_raw = mapping_section(raw, "scheduler")
+    workflow_raw = mapping_section(raw, "workflow")
+    workflow_root_configured = bool(normalize_text(workflow_raw.get("root")))
     admission_root = scheduler_admission_root(
         config_path,
         scheduler_raw,
-        default_when_missing=bool(scheduler_raw),
+        default_when_missing=bool(scheduler_raw) or workflow_root_configured,
     )
     if admission_root is not None:
         paths.append(admission_root)
 
-    workflow_raw = mapping_section(raw, "workflow")
     _append_absolute_path(paths, workflow_raw.get("root"))
 
     orca_raw = mapping_section(raw, "orca") or raw

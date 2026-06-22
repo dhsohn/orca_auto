@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from orca_auto.flow.contracts.workflow import WorkflowStageWithTaskPayload
 
@@ -47,12 +47,29 @@ class ConformerScreeningWorkflowRequest:
     crest_job_manifest: dict[str, Any] | None = None
 
 
+class NewCrestStageFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        workflow_id: str,
+        template_name: str,
+        stage_id: str,
+        source_path: str,
+        input_role: str,
+        mode: str,
+        priority: int,
+        max_cores: int,
+        max_memory_gb: int,
+        manifest_overrides: dict[str, Any] | None = None,
+    ) -> WorkflowStageWithTaskPayload: ...
+
+
 @dataclass(frozen=True)
 class WorkflowCreationContext:
     workflow_id_factory: Callable[[str], str]
     copy_input_fn: Callable[[str, Path], str]
     now_utc_iso_fn: Callable[[], str]
-    new_crest_stage_fn: Callable[..., WorkflowStageWithTaskPayload]
+    new_crest_stage_fn: NewCrestStageFactory
     write_workflow_payload_fn: Callable[[Path, dict[str, Any]], Any]
     sync_workflow_registry_fn: Callable[[Path, Path, dict[str, Any]], Any]
 
@@ -76,6 +93,7 @@ class WorkflowPersistenceContext:
 
 __all__ = [
     "ConformerScreeningWorkflowRequest",
+    "NewCrestStageFactory",
     "ReactionTsSearchWorkflowCreationContext",
     "ReactionTsSearchWorkflowRequest",
     "WorkflowCreationContext",
