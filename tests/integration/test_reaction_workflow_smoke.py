@@ -16,6 +16,7 @@ from orca_auto.flow.engines.xtb import queue_runtime as xtb_queue_cmd
 from orca_auto.flow.orchestration import advance_workflow, create_reaction_ts_search_workflow
 from orca_auto.flow.registry import sync_workflow_registry
 from orca_auto.flow.state import load_workflow_payload, resolve_workflow_workspace, workflow_summary
+from orca_auto.orca import queue_worker as orca_queue_cmd
 
 
 def _write_xyz(path: Path, *, comment: str, bond: float) -> None:
@@ -34,7 +35,45 @@ def _write_xyz(path: Path, *, comment: str, bond: float) -> None:
     )
 
 
-def _write_orca_config(path: Path, *, allowed_root: Path, organized_root: Path) -> None:
+def _write_fake_orca(binary_path: Path, counter_path: Path) -> None:
+    binary_path.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import sys",
+                "from pathlib import Path",
+                f"counter = Path({str(counter_path)!r})",
+                "count = 0",
+                "if counter.exists():",
+                "    try:",
+                "        count = int(counter.read_text(encoding='utf-8').strip() or '0')",
+                "    except ValueError:",
+                "        count = 0",
+                "counter.write_text(str(count + 1), encoding='utf-8')",
+                "inp_name = Path(sys.argv[1]).name if len(sys.argv) > 1 else '<missing>'",
+                "print(f'Fake ORCA consumed {inp_name}')",
+                "print('THE OPTIMIZATION HAS CONVERGED')",
+                "print('VIBRATIONAL FREQUENCIES')",
+                "print('  1: -512.34 cm**-1')",
+                "print('  2:  120.00 cm**-1')",
+                "print('TOTAL RUN TIME: 0 days 0 hours 0 minutes 1 seconds')",
+                "print('****ORCA TERMINATED NORMALLY****')",
+                "raise SystemExit(0)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    binary_path.chmod(0o755)
+
+
+def _write_orca_config(
+    path: Path,
+    *,
+    allowed_root: Path,
+    organized_root: Path,
+    orca_executable: Path,
+) -> None:
     payload: dict[str, Any] = {}
     if path.exists():
         loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -44,9 +83,10 @@ def _write_orca_config(path: Path, *, allowed_root: Path, organized_root: Path) 
         "runtime": {
             "allowed_root": str(allowed_root.resolve()),
             "organized_root": str(organized_root.resolve()),
+            "default_max_retries": 0,
         },
         "paths": {
-            "orca_executable": "/opt/orca/orca",
+            "orca_executable": str(orca_executable.resolve()),
         },
     }
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -77,6 +117,8 @@ class ReactionWorkflowSmokeCase:
     crest_root: Path
     xtb_root: Path
     orca_root: Path
+    orca_queue_root: Path
+    fake_orca_counter: Path
     config_path: Path
 
 
@@ -88,11 +130,17 @@ def _create_reaction_workflow_smoke_case(smoke_workspace: Any) -> ReactionWorkfl
 
     orca_allowed_root = smoke_workspace.root / "reaction_orca_runs"
     orca_organized_root = smoke_workspace.root / "reaction_orca_outputs"
+    fake_orca_counter = smoke_workspace.root / "fake_orca_counter.txt"
+    fake_orca = smoke_workspace.root / "bin" / "fake_orca"
     orca_allowed_root.mkdir(parents=True, exist_ok=True)
     orca_organized_root.mkdir(parents=True, exist_ok=True)
+    _write_fake_orca(fake_orca, fake_orca_counter)
     config_path = smoke_workspace.config_path
     _write_orca_config(
-        config_path, allowed_root=orca_allowed_root, organized_root=orca_organized_root
+        config_path,
+        allowed_root=orca_allowed_root,
+        organized_root=orca_organized_root,
+        orca_executable=fake_orca,
     )
 
     reactant_xyz = smoke_workspace.root / "reaction_inputs" / "reactant.xyz"
@@ -121,6 +169,8 @@ def _create_reaction_workflow_smoke_case(smoke_workspace: Any) -> ReactionWorkfl
         crest_root=workspace_dir / "01_crest",
         xtb_root=workspace_dir / "02_xtb",
         orca_root=workspace_dir / "03_orca",
+        orca_queue_root=orca_allowed_root,
+        fake_orca_counter=fake_orca_counter,
         config_path=config_path,
     )
 
@@ -271,6 +321,79 @@ def _advance_to_orca_handoff(
     return payload
 
 
+def _submit_reaction_orca_stage(
+    case: ReactionWorkflowSmokeCase,
+    smoke_workspace: Any,
+) -> dict[str, Any]:
+    payload = advance_workflow(
+        target=case.workflow_id,
+        workflow_root=case.workflow_root,
+        crest_config=str(smoke_workspace.crest_config_path),
+        xtb_config=str(smoke_workspace.xtb_config_path),
+        orca_config=str(case.config_path),
+        submit_ready=True,
+    )
+    orca_stages = _engine_stages(payload, "orca")
+    assert len(orca_stages) == 1
+    orca_stage = orca_stages[0]
+    assert orca_stage["status"] in {"queued", "running"}
+    assert orca_stage["metadata"]["queue_id"]
+
+    queue_entries = list_queue(case.orca_queue_root)
+    assert len(queue_entries) == 1
+    assert queue_entries[0].queue_id == orca_stage["metadata"]["queue_id"]
+    assert _queue_status(queue_entries[0]) == "pending"
+    assert not case.fake_orca_counter.exists()
+    return payload
+
+
+def _process_reaction_orca_queue(case: ReactionWorkflowSmokeCase) -> None:
+    cfg = orca_queue_cmd.load_config(str(case.config_path))
+    worker = orca_queue_cmd.QueueWorker(
+        cfg,
+        str(case.config_path),
+        max_concurrent=1,
+        auto_organize=False,
+    )
+    worker.poll_interval_seconds = 0.05
+    assert worker.run_once(idle_message=None, blocked_message=None) == 0
+    assert case.fake_orca_counter.read_text(encoding="utf-8") == "1"
+    assert list_slots(smoke_workspace_path(case) / "admission") == []
+    assert not worker_pid_file_path(
+        case.orca_queue_root,
+        orca_queue_cmd.WORKER_PID_FILE,
+    ).exists()
+
+
+def _sync_completed_orca_stage(
+    case: ReactionWorkflowSmokeCase,
+    smoke_workspace: Any,
+) -> dict[str, Any]:
+    payload = advance_workflow(
+        target=case.workflow_id,
+        workflow_root=case.workflow_root,
+        crest_config=str(smoke_workspace.crest_config_path),
+        xtb_config=str(smoke_workspace.xtb_config_path),
+        orca_config=str(case.config_path),
+        submit_ready=True,
+    )
+    orca_stages = _engine_stages(payload, "orca")
+    assert len(orca_stages) == 1
+    orca_stage = orca_stages[0]
+    assert orca_stage["status"] == "completed"
+    assert orca_stage["metadata"]["attempt_count"] == 1
+    artifact_kinds = {
+        str(artifact.get("kind"))
+        for artifact in orca_stage.get("output_artifacts", [])
+        if isinstance(artifact, dict)
+    }
+    assert {"orca_run_state", "orca_report_json", "orca_report_md"} <= artifact_kinds
+    queue_entries = list_queue(case.orca_queue_root)
+    assert len(queue_entries) == 1
+    assert _queue_status(queue_entries[0]) == "completed"
+    return payload
+
+
 def _assert_reaction_workflow_persisted(
     case: ReactionWorkflowSmokeCase,
     payload: dict[str, Any],
@@ -293,7 +416,7 @@ def _assert_reaction_workflow_persisted(
     )
     assert persisted_summary["workflow_id"] == case.workflow_id
     assert persisted_record.stage_count == 4
-    assert persisted_record.status in {"planned", "running"}
+    assert persisted_record.status == "completed"
     admission_path = smoke_workspace_path(case) / "admission" / "admission_slots.json"
     if admission_path.exists():
         assert json.loads(admission_path.read_text(encoding="utf-8")) == []
@@ -303,7 +426,7 @@ def smoke_workspace_path(case: ReactionWorkflowSmokeCase) -> Path:
     return case.workflow_root.parent
 
 
-def test_reaction_ts_workflow_executes_fake_crest_and_xtb_before_orca_handoff(
+def test_reaction_ts_workflow_executes_fake_crest_xtb_and_orca_full_lifecycle(
     smoke_workspace: Any,
 ) -> None:
     case = _create_reaction_workflow_smoke_case(smoke_workspace)
@@ -312,5 +435,8 @@ def test_reaction_ts_workflow_executes_fake_crest_and_xtb_before_orca_handoff(
     _process_reaction_crest_queue(case, smoke_workspace)
     _advance_to_xtb_submission(case, smoke_workspace)
     _process_reaction_xtb_queue(case, smoke_workspace)
-    payload = _advance_to_orca_handoff(case, smoke_workspace)
+    _advance_to_orca_handoff(case, smoke_workspace)
+    _submit_reaction_orca_stage(case, smoke_workspace)
+    _process_reaction_orca_queue(case)
+    payload = _sync_completed_orca_stage(case, smoke_workspace)
     _assert_reaction_workflow_persisted(case, payload)
