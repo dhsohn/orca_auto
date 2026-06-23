@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from orca_auto.core.activity_icons import activity_status_icon
+from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.paths import resolve_artifact_path
 from orca_auto.core.utils import parse_iso_utc as _parse_iso_utc
 
@@ -97,9 +98,9 @@ def _dir_key(path: Path) -> str:
         return str(path)
 
 
-def _original_run_dir(record: Any) -> Path | None:
-    raw = getattr(record, "original_run_dir", "")
-    if not isinstance(raw, str) or not raw.strip():
+def _original_run_dir(record: JobLocationRecord) -> Path | None:
+    raw = record.original_run_dir
+    if not raw.strip():
         return None
     try:
         return Path(raw).expanduser().resolve()

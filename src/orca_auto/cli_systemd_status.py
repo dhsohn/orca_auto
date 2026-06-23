@@ -41,9 +41,9 @@ def _service_units_for_user(target_user: str) -> tuple[tuple[str, str], ...]:
 
 
 def _single_line_command_output(completed: subprocess.CompletedProcess[Any]) -> str:
-    output = normalize_text(getattr(completed, "stdout", ""))
+    output = normalize_text(completed.stdout)
     if not output:
-        output = normalize_text(getattr(completed, "stderr", ""))
+        output = normalize_text(completed.stderr)
     if not output:
         output = f"exit {completed.returncode}"
     return output.splitlines()[0]
