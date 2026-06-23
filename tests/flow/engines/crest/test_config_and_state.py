@@ -106,12 +106,20 @@ def test_as_bool_normalizes_truthy_and_falsy_strings(
     assert config_mod.as_bool(value, default) is expected
 
 
+def _write_fake_executable(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
 def test_load_config_reads_and_normalizes_all_sections(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow_root = tmp_path / "workflow_root"
     workflow_root.mkdir()
+    fake_crest = _write_fake_executable(tmp_path / "bin" / "crest")
     config_path = _write_config(
         tmp_path / "orca_auto.yaml",
         f"""
@@ -121,7 +129,7 @@ def test_load_config_reads_and_normalizes_all_sections(
         workflow:
           root: {workflow_root}
           paths:
-            crest_executable: " /opt/crest "
+            crest_executable: " {fake_crest} "
         behavior:
           auto_organize_on_terminal: "yes"
         resources:
@@ -141,7 +149,7 @@ def test_load_config_reads_and_normalizes_all_sections(
     assert cfg.runtime.max_concurrent == 6
     assert cfg.runtime.admission_root == "/tmp/admission"
     assert cfg.runtime.admission_limit == 6
-    assert cfg.paths.crest_executable == "/opt/crest"
+    assert cfg.paths.crest_executable == str(fake_crest.resolve())
     assert not hasattr(cfg.behavior, "auto_organize_on_terminal")
     assert cfg.resources.max_cores_per_task == 12
     assert cfg.resources.max_memory_gb_per_task == 48

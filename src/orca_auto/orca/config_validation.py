@@ -9,8 +9,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.engine_runner import validate_executable_file
-from orca_auto.core.paths import is_rejected_windows_path, is_subpath
+from orca_auto.core.paths import (
+    is_rejected_windows_path,
+    is_subpath,
+    validate_configured_executable_path,
+)
 
 
 def _validate_config(cfg: Any) -> None:
@@ -30,23 +33,10 @@ def _validate_config(cfg: Any) -> None:
             )
         if not Path(path_val).is_absolute():
             raise ValueError(f"{label} must be an absolute Linux path: {path_val!r}")
-    if cfg.paths.orca_executable.lower().endswith(".exe"):
-        raise ValueError(
-            f"orca_executable must point to Linux ORCA binary, not Windows executable: {cfg.paths.orca_executable!r}"
-        )
-
-    validate_executable_file(
+    validate_configured_executable_path(
         cfg.paths.orca_executable,
-        missing_message=lambda _resolved: (
-            f"orca_executable not found: {cfg.paths.orca_executable!r}. "
-            "Verify the path points to an existing ORCA binary."
-        ),
-        not_file_message=lambda _resolved: (
-            f"orca_executable is not a file: {cfg.paths.orca_executable!r}"
-        ),
-        not_executable_message=lambda _resolved: (
-            f"orca_executable is not executable: {cfg.paths.orca_executable!r}"
-        ),
+        label="orca_executable",
+        display_name="ORCA",
     )
 
     allowed_root = Path(cfg.runtime.allowed_root)

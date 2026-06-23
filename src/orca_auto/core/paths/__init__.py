@@ -10,6 +10,8 @@ from .validation import (
     resolve_local_path,
     resolved_path_text,
     safe_is_subpath,
+    validate_configured_executable_path,
+    validate_executable_file,
     validate_job_dir,
 )
 from .workflow import (
@@ -39,6 +41,8 @@ __all__ = [
     "resolve_local_path",
     "resolved_path_text",
     "safe_is_subpath",
+    "validate_configured_executable_path",
+    "validate_executable_file",
     "validate_job_dir",
     "workflow_root_dir",
     "workflow_stage_dirnames_for_engine",

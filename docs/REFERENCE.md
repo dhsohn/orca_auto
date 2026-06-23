@@ -172,7 +172,11 @@ Field descriptions for the `orca` section:
 Notes:
 
 - `default_max_retries=2` means `1 initial + 2 retries = 3 total attempts`
-- Windows-style paths such as `C:\...` and `/mnt/c/...` are not supported in config
+- Windows-style paths such as `C:\...`, `C:/...`, and `/mnt/c/...` are not supported in config
+- Configured executable paths for ORCA, xTB, and CREST must be absolute Linux
+  paths to existing executable files and must not end in `.exe`. If
+  `workflow.paths.xtb_executable` or `workflow.paths.crest_executable` is left
+  blank, the workflow runner falls back to PATH lookup at execution time.
 
 ## 7) CLI Usage
 
