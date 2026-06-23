@@ -1,11 +1,42 @@
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from orca_auto.core.utils.coercion import normalize_text, safe_int
 from orca_auto.flow.xyz_utils import load_xyz_frames
+
+
+def _safe_xcontrol_target_name(value: Any, *, fallback_name: str) -> str:
+    text = normalize_text(value) or fallback_name
+    text = text.strip()
+    if not text or text in {".", ".."}:
+        raise ValueError("xcontrol target must be a plain file name")
+
+    posix = PurePosixPath(text)
+    windows = PureWindowsPath(text)
+    if (
+        posix.is_absolute()
+        or windows.is_absolute()
+        or bool(windows.drive)
+        or ".." in posix.parts
+        or ".." in windows.parts
+    ):
+        raise ValueError(f"xcontrol target must be a plain file name: {text!r}")
+    if "/" in text or "\\" in text:
+        raise ValueError(f"xcontrol target must be a plain file name: {text!r}")
+    return text
+
+
+def _safe_xcontrol_target_path(job_dir: Path, target_name: str) -> Path:
+    job_dir_resolved = job_dir.expanduser().resolve()
+    target = (job_dir_resolved / target_name).resolve()
+    try:
+        target.relative_to(job_dir_resolved)
+    except ValueError as exc:
+        raise ValueError(f"xcontrol target escapes job_dir: {target}") from exc
+    return target
 
 
 def _materialize_xtb_override_xcontrol(
@@ -17,12 +48,16 @@ def _materialize_xtb_override_xcontrol(
     xcontrol_file = normalize_text(overrides.get("xcontrol_file"))
     xcontrol_text = normalize_text(overrides.get("xcontrol_text"))
     xcontrol_lines_value = overrides.get("xcontrol_lines")
-    target_name = normalize_text(overrides.get("xcontrol")) or fallback_name
+    target_name = _safe_xcontrol_target_name(
+        overrides.get("xcontrol"),
+        fallback_name=fallback_name,
+    )
+    target_path = _safe_xcontrol_target_path(job_dir, target_name)
 
     if xcontrol_file:
         source = Path(xcontrol_file).expanduser().resolve()
         if source.exists() and source.is_file():
-            shutil.copy2(source, job_dir / target_name)
+            shutil.copy2(source, target_path)
             return target_name
 
     lines: list[str] = []
@@ -34,7 +69,7 @@ def _materialize_xtb_override_xcontrol(
         lines = xcontrol_text.splitlines()
 
     if lines:
-        (job_dir / target_name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        target_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return target_name
 
     return ""

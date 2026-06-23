@@ -5,11 +5,15 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 import yaml
 
 from orca_auto.flow import orchestration
 from orca_auto.flow.orchestration.deps import orchestration_deps
 from orca_auto.flow.orchestration.stage_runtime.crest import ensure_crest_job_dir_impl
+from orca_auto.flow.orchestration.stage_runtime.xtb_inputs import (
+    _materialize_xtb_override_xcontrol,
+)
 from orca_auto.flow.orchestration.stage_runtime.xtb_path_jobs import write_xtb_path_job_impl
 from orca_auto.flow.orchestration.stage_runtime.xtb_retry import (
     xtb_current_attempt_number_impl,
@@ -92,6 +96,48 @@ def test_xtb_retry_helpers_and_job_writer_materialize_attempt_files(tmp_path: Pa
 
     metadata["xtb_active_attempt_number"] = 4
     assert xtb_current_attempt_number_impl(stage) == 4
+
+
+@pytest.mark.parametrize(
+    "target_name",
+    (
+        "../escape.inp",
+        "/tmp/escape.inp",
+        "nested/escape.inp",
+        "nested\\escape.inp",
+        "C:\\temp\\escape.inp",
+        "C:escape.inp",
+        "..",
+        ".",
+    ),
+)
+def test_xtb_xcontrol_target_name_rejects_paths(
+    tmp_path: Path,
+    target_name: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+
+    with pytest.raises(ValueError, match="xcontrol target"):
+        _materialize_xtb_override_xcontrol(
+            job_dir,
+            overrides={"xcontrol": target_name, "xcontrol_text": "$path"},
+        )
+
+    assert not (tmp_path / "escape.inp").exists()
+
+
+def test_xtb_xcontrol_target_name_allows_plain_filename(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+
+    target_name = _materialize_xtb_override_xcontrol(
+        job_dir,
+        overrides={"xcontrol": "custom_xcontrol.inp", "xcontrol_text": "$path"},
+    )
+
+    assert target_name == "custom_xcontrol.inp"
+    assert (job_dir / "custom_xcontrol.inp").read_text(encoding="utf-8") == "$path\n"
 
 
 def test_xtb_job_writer_materializes_ranked_multiframe_inputs(tmp_path: Path) -> None:
