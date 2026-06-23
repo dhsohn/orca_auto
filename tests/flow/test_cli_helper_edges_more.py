@@ -107,6 +107,112 @@ def test_cli_run_dir_manifest_and_path_resolution_edges(
     ) == str((workflow_dir / "inputs" / "input.xyz").resolve())
 
 
+def test_run_dir_manifest_input_paths_reject_external_manifest_values(
+    tmp_path: Path,
+) -> None:
+    workflow_dir = tmp_path / "workflow_dir"
+    workflow_dir.mkdir()
+    outside = tmp_path / "outside" / "input.xyz"
+    outside.parent.mkdir()
+    outside.write_text("1\nexternal\nH 0 0 0\n", encoding="utf-8")
+    (workflow_dir / "linked.xyz").symlink_to(outside)
+
+    for raw_path in (str(outside), "../outside/input.xyz", "linked.xyz"):
+        with pytest.raises(ValueError, match="input_xyz.*allow_external_inputs"):
+            run_dir_manifest._resolve_run_dir_path(
+                workflow_dir,
+                explicit=None,
+                manifest={"input_xyz": raw_path},
+                key="input_xyz",
+                default_names=("unused.xyz",),
+            )
+
+
+def test_run_dir_manifest_allows_external_input_paths_with_explicit_opt_in(
+    tmp_path: Path,
+) -> None:
+    workflow_dir = tmp_path / "workflow_dir"
+    workflow_dir.mkdir()
+    outside = tmp_path / "outside" / "input.xyz"
+    outside.parent.mkdir()
+    outside.write_text("1\nexternal\nH 0 0 0\n", encoding="utf-8")
+
+    assert run_dir_manifest._resolve_run_dir_path(
+        workflow_dir,
+        explicit=None,
+        manifest={"allow_external_inputs": True, "input_xyz": str(outside)},
+        key="input_xyz",
+        default_names=("unused.xyz",),
+    ) == str(outside.resolve())
+
+
+def test_run_dir_cli_explicit_input_path_can_be_external_without_manifest_opt_in(
+    tmp_path: Path,
+) -> None:
+    workflow_dir = tmp_path / "workflow_dir"
+    workflow_dir.mkdir()
+    outside = tmp_path / "outside" / "input.xyz"
+    outside.parent.mkdir()
+    outside.write_text("1\nexternal\nH 0 0 0\n", encoding="utf-8")
+
+    assert run_dir_manifest._resolve_run_dir_path(
+        workflow_dir,
+        explicit=str(outside),
+        manifest={},
+        key="input_xyz",
+        default_names=("unused.xyz",),
+    ) == str(outside.resolve())
+
+
+def test_run_dir_manifest_rejects_windows_style_input_paths(
+    tmp_path: Path,
+) -> None:
+    workflow_dir = tmp_path / "workflow_dir"
+    workflow_dir.mkdir()
+
+    with pytest.raises(ValueError, match="input_xyz.*Linux/POSIX"):
+        run_dir_manifest._resolve_run_dir_path(
+            workflow_dir,
+            explicit=None,
+            manifest={"allow_external_inputs": True, "input_xyz": r"C:\\Users\\me\\input.xyz"},
+            key="input_xyz",
+            default_names=("unused.xyz",),
+        )
+
+
+def test_run_dir_manifest_engine_paths_reject_external_by_default(
+    tmp_path: Path,
+) -> None:
+    workflow_dir = tmp_path / "workflow_dir"
+    workflow_dir.mkdir()
+    outside = tmp_path / "outside" / "path.inp"
+    outside.parent.mkdir()
+    outside.write_text("$path\n$end\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="xcontrol_file.*allow_external_inputs"):
+        run_dir_manifest._resolve_run_dir_manifest_sections(
+            workflow_dir,
+            {"xtb": {"xcontrol_file": str(outside)}},
+        )
+
+
+def test_run_dir_manifest_engine_paths_allow_external_with_explicit_opt_in(
+    tmp_path: Path,
+) -> None:
+    workflow_dir = tmp_path / "workflow_dir"
+    workflow_dir.mkdir()
+    outside = tmp_path / "outside" / "path.inp"
+    outside.parent.mkdir()
+    outside.write_text("$path\n$end\n", encoding="utf-8")
+
+    sections = run_dir_manifest._resolve_run_dir_manifest_sections(
+        workflow_dir,
+        {"allow_external_inputs": True, "xtb": {"xcontrol_file": str(outside)}},
+    )
+
+    assert sections.xtb == {"xcontrol_file": str(outside.resolve())}
+
+
 def test_run_dir_workflow_options_apply_cli_manifest_section_default_precedence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
