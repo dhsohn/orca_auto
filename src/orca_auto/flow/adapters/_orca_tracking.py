@@ -41,15 +41,14 @@ def tracked_artifact_context_impl(
                 exc,
             )
             continue
-        job_dir = getattr(context, "job_dir", None)
-        if job_dir is None:
+        if context.job_dir is None:
             continue
         return (
-            job_dir,
-            getattr(context, "record", None),
-            _dict_payload(getattr(context, "state", None)),
-            _dict_payload(getattr(context, "report", None)),
-            _dict_payload(getattr(context, "organized_ref", None)),
+            context.job_dir,
+            context.record,
+            _dict_payload(context.state),
+            _dict_payload(context.report),
+            _dict_payload(context.organized_ref),
         )
     return None, None, {}, {}, {}
 
@@ -89,19 +88,16 @@ def tracked_runtime_context_impl(
     except FileNotFoundError:
         return None
 
-    artifact = getattr(context, "artifact", None)
-    if artifact is None:
-        return None
-
-    queue_entry = getattr(context, "queue_entry", None)
+    artifact = context.artifact
+    queue_entry = context.queue_entry
     return (
-        getattr(artifact, "job_dir", None),
-        getattr(artifact, "record", None),
-        _dict_payload(getattr(artifact, "state", None)),
-        _dict_payload(getattr(artifact, "report", None)),
-        _dict_payload(getattr(artifact, "organized_ref", None)),
+        artifact.job_dir,
+        artifact.record,
+        _dict_payload(artifact.state),
+        _dict_payload(artifact.report),
+        _dict_payload(artifact.organized_ref),
         dict(queue_entry) if isinstance(queue_entry, dict) else None,
-        getattr(context, "organized_dir", None),
+        context.organized_dir,
     )
 
 

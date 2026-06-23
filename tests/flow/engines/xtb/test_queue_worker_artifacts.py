@@ -61,6 +61,7 @@ def test_write_execution_artifacts_includes_ranking_summary_lines(tmp_path: Path
     entry = SimpleNamespace(
         task_id="job-1",
         queue_id="queue-1",
+        app_name="orca_auto",
         metadata={"job_dir": str(job_dir)},
     )
     result = queue_cmd.XtbRunResult(

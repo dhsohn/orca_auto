@@ -596,7 +596,27 @@ def test_orca_records_keep_live_snapshot_despite_terminal_entry(
 def test_snapshot_display_status_marks_dead_running_as_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    running = SimpleNamespace(status="running", reaction_dir=Path("/tmp/rxn"))
+    from orca_auto.orca.run_snapshot import RunSnapshot
+
+    def _snap(status: str) -> RunSnapshot:
+        return RunSnapshot(
+            key="k",
+            name="rxn",
+            reaction_dir=Path("/tmp/rxn"),
+            run_id="r",
+            status=status,
+            started_at="",
+            updated_at="",
+            completed_at="",
+            selected_inp_name="",
+            attempts=0,
+            latest_out_path=None,
+            final_reason="",
+            elapsed=0.0,
+            elapsed_text="",
+        )
+
+    running = _snap("running")
 
     # No live run lock -> the run is gone; show it as failed, not in progress.
     monkeypatch.setattr(_activity_orca, "active_run_lock_pid", lambda *a, **k: None)
@@ -607,7 +627,7 @@ def test_snapshot_display_status_marks_dead_running_as_failed(
     assert _activity_orca._snapshot_display_status(running) == "running"
 
     # Terminal statuses are never reinterpreted, regardless of the lock.
-    done = SimpleNamespace(status="completed", reaction_dir=Path("/tmp/rxn"))
+    done = _snap("completed")
     monkeypatch.setattr(_activity_orca, "active_run_lock_pid", lambda *a, **k: None)
     assert _activity_orca._snapshot_display_status(done) == "completed"
 

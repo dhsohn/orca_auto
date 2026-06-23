@@ -54,6 +54,7 @@ def _entry(
     *,
     task_id: str = "job-001",
     queue_id: str = "queue-001",
+    app_name: str = "orca_auto",
     started_at: str | None = "2026-04-19T00:00:00+00:00",
     mode: str = "standard",
     molecule_key: str = "",
@@ -61,6 +62,7 @@ def _entry(
     return SimpleNamespace(
         task_id=task_id,
         queue_id=queue_id,
+        app_name=app_name,
         started_at=started_at,
         metadata={
             "job_dir": str(job_dir),

@@ -21,6 +21,7 @@ def _cfg(tmp_path: Path) -> SimpleNamespace:
 def _entry(job_dir: Path, selected_xyz: Path) -> SimpleNamespace:
     return SimpleNamespace(
         queue_id="queue-1",
+        app_name="orca_auto",
         task_id="job-1",
         started_at="2026-04-20T00:00:00Z",
         metadata={

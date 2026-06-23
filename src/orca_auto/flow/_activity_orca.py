@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_SOURCE
 from orca_auto.core.utils import normalize_text
 from orca_auto.core.utils.process_tracking import active_run_lock_pid
 
 from ._activity_model import ActivityRecord
+
+if TYPE_CHECKING:
+    from orca_auto.orca.run_snapshot import RunSnapshot
 
 _LOGGER = logging.getLogger(__name__)
 _ORCA_ACTIVE_QUEUE_STATUSES = frozenset({"pending", "running"})
@@ -21,9 +24,9 @@ _STALE_SNAPSHOT_STATUSES = frozenset({"running", "retrying"})
 def snapshot_matches_entry(
     queue_adapter: Any,
     entry: Any,
-    snapshot_by_run_id: dict[str, Any],
-    snapshot_by_dir: dict[str, Any],
-) -> Any | None:
+    snapshot_by_run_id: dict[str, RunSnapshot],
+    snapshot_by_dir: dict[str, RunSnapshot],
+) -> RunSnapshot | None:
     run_id = normalize_text(queue_adapter.queue_entry_run_id(entry))
     if run_id:
         return snapshot_by_run_id.get(run_id)
@@ -39,11 +42,11 @@ def snapshot_matches_entry(
     return snapshot_by_dir.get(resolved)
 
 
-def queue_represents_snapshot(queue_adapter: Any, entry: Any, snapshot: Any) -> bool:
+def queue_represents_snapshot(queue_adapter: Any, entry: Any, snapshot: RunSnapshot | None) -> bool:
     if snapshot is None:
         return False
     run_id = normalize_text(queue_adapter.queue_entry_run_id(entry))
-    if run_id and run_id == normalize_text(getattr(snapshot, "run_id", "")):
+    if run_id and run_id == normalize_text(snapshot.run_id):
         return True
     if normalize_text(queue_adapter.queue_entry_status(entry)) not in _ORCA_ACTIVE_QUEUE_STATUSES:
         return False
@@ -52,22 +55,18 @@ def queue_represents_snapshot(queue_adapter: Any, entry: Any, snapshot: Any) -> 
         resolved = str(Path(reaction_dir).expanduser().resolve())
     except OSError:
         resolved = reaction_dir
-    return resolved == normalize_text(
-        getattr(
-            getattr(snapshot, "reaction_dir", None),
-            "resolve",
-            lambda: getattr(snapshot, "reaction_dir", ""),
-        )()
-    )
+    return resolved == normalize_text(snapshot.reaction_dir.resolve())
 
 
-def snapshot_indexes(snapshots: list[Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def snapshot_indexes(
+    snapshots: list[RunSnapshot],
+) -> tuple[dict[str, RunSnapshot], dict[str, RunSnapshot]]:
     snapshot_by_run_id = {
-        normalize_text(getattr(snapshot, "run_id", "")): snapshot
+        normalize_text(snapshot.run_id): snapshot
         for snapshot in snapshots
-        if normalize_text(getattr(snapshot, "run_id", ""))
+        if normalize_text(snapshot.run_id)
     }
-    snapshot_by_dir: dict[str, Any] = {}
+    snapshot_by_dir: dict[str, RunSnapshot] = {}
     for snapshot in snapshots:
         try:
             snapshot_by_dir[str(Path(snapshot.reaction_dir).expanduser().resolve())] = snapshot
@@ -76,20 +75,20 @@ def snapshot_indexes(snapshots: list[Any]) -> tuple[dict[str, Any], dict[str, An
     return snapshot_by_run_id, snapshot_by_dir
 
 
-def queue_entry_status(queue_adapter: Any, entry: Any, snapshot: Any) -> str:
+def queue_entry_status(queue_adapter: Any, entry: Any, snapshot: RunSnapshot | None) -> str:
     status = normalize_text(queue_adapter.queue_entry_status(entry)) or "unknown"
     if bool(getattr(entry, "cancel_requested", False)) and status == "running":
         return "cancel_requested"
     if snapshot is None or status != "running":
         return status
-    snapshot_status = normalize_text(getattr(snapshot, "status", ""))
+    snapshot_status = normalize_text(snapshot.status)
     return snapshot_status if snapshot_status and snapshot_status != "running" else status
 
 
 def queue_record(
     queue_adapter: Any,
     entry: Any,
-    snapshot: Any,
+    snapshot: RunSnapshot | None,
     *,
     allowed_root: Path,
     deps: Any,
@@ -100,8 +99,11 @@ def queue_record(
     task_id = normalize_text(queue_adapter.queue_entry_task_id(entry))
     run_id = normalize_text(queue_adapter.queue_entry_run_id(entry))
     reaction_dir = normalize_text(queue_adapter.queue_entry_reaction_dir(entry))
+    snapshot_name = snapshot.name if snapshot is not None else ""
+    snapshot_completed_at = snapshot.completed_at if snapshot is not None else ""
+    snapshot_updated_at = snapshot.updated_at if snapshot is not None else ""
     label = (
-        normalize_text(getattr(snapshot, "name", ""))
+        normalize_text(snapshot_name)
         or normalize_text(Path(reaction_dir).name if reaction_dir else "")
         or queue_id
         or task_id
@@ -110,8 +112,8 @@ def queue_record(
     started_at = normalize_text(getattr(entry, "started_at", ""))
     finished_at = normalize_text(getattr(entry, "finished_at", ""))
     updated_at = (
-        normalize_text(getattr(snapshot, "completed_at", ""))
-        or normalize_text(getattr(snapshot, "updated_at", ""))
+        normalize_text(snapshot_completed_at)
+        or normalize_text(snapshot_updated_at)
         or finished_at
         or started_at
         or submitted_at
@@ -147,18 +149,15 @@ def queue_record(
     )
 
 
-def snapshot_reaction_dir(snapshot: Any) -> str:
-    reaction_dir_obj = getattr(snapshot, "reaction_dir", None)
-    if reaction_dir_obj is None:
-        return ""
+def snapshot_reaction_dir(snapshot: RunSnapshot) -> str:
     try:
-        return str(Path(reaction_dir_obj).expanduser().resolve())
+        return str(snapshot.reaction_dir.expanduser().resolve())
     except OSError:
-        return str(reaction_dir_obj)
+        return str(snapshot.reaction_dir)
 
 
-def _snapshot_display_status(snapshot: Any) -> str:
-    status = normalize_text(getattr(snapshot, "status", "")).lower() or "unknown"
+def _snapshot_display_status(snapshot: RunSnapshot) -> str:
+    status = normalize_text(snapshot.status).lower() or "unknown"
     if status not in _STALE_SNAPSHOT_STATUSES:
         return status
     reaction_dir = snapshot_reaction_dir(snapshot)
@@ -172,16 +171,16 @@ def _snapshot_display_status(snapshot: Any) -> str:
     return status
 
 
-def snapshot_record(snapshot: Any, *, allowed_root: Path, deps: Any) -> ActivityRecord:
+def snapshot_record(snapshot: RunSnapshot, *, allowed_root: Path, deps: Any) -> ActivityRecord:
     reaction_dir = snapshot_reaction_dir(snapshot)
-    run_id = normalize_text(getattr(snapshot, "run_id", ""))
+    run_id = normalize_text(snapshot.run_id)
     label = (
-        normalize_text(getattr(snapshot, "name", ""))
+        normalize_text(snapshot.name)
         or normalize_text(Path(reaction_dir).name if reaction_dir else "")
         or run_id
     )
-    started_at = normalize_text(getattr(snapshot, "started_at", ""))
-    completed_at = normalize_text(getattr(snapshot, "completed_at", ""))
+    started_at = normalize_text(snapshot.started_at)
+    completed_at = normalize_text(snapshot.completed_at)
     return ActivityRecord(
         activity_id=run_id or label,
         kind="job",
@@ -190,24 +189,24 @@ def snapshot_record(snapshot: Any, *, allowed_root: Path, deps: Any) -> Activity
         label=label,
         source=ORCA_AUTO_ORCA_SOURCE,
         submitted_at=started_at,
-        updated_at=completed_at
-        or normalize_text(getattr(snapshot, "updated_at", ""))
-        or started_at,
+        updated_at=completed_at or normalize_text(snapshot.updated_at) or started_at,
         cancel_target=run_id or reaction_dir,
         aliases=deps._unique_texts(
             [
                 run_id,
                 *list(deps._path_aliases(reaction_dir, root=allowed_root)),
-                normalize_text(getattr(snapshot, "name", "")),
+                normalize_text(snapshot.name),
             ]
         ),
         metadata={
             "run_id": run_id,
             "reaction_dir": reaction_dir,
             "allowed_root": str(allowed_root),
-            "attempts": getattr(snapshot, "attempts", 0),
-            "selected_inp_name": normalize_text(getattr(snapshot, "selected_inp_name", "")),
-            "job_type": normalize_text(getattr(snapshot, "job_type", "")),
+            "attempts": snapshot.attempts,
+            "selected_inp_name": normalize_text(snapshot.selected_inp_name),
+            # RunSnapshot carries no job_type; orphan-snapshot rows have always had
+            # this empty. Kept for metadata-shape parity with queue_record.
+            "job_type": "",
             **deps._timestamp_metadata(started_at=started_at, finished_at=completed_at),
         },
     )
@@ -245,7 +244,7 @@ def superseded_snapshot_dirs(queue_adapter: Any, entries: list[Any]) -> set[str]
     return terminal - active
 
 
-def _snapshot_is_superseded(snapshot: Any, superseded_dirs: set[str]) -> bool:
+def _snapshot_is_superseded(snapshot: RunSnapshot, superseded_dirs: set[str]) -> bool:
     """Whether a stale snapshot is superseded by a terminal queue entry.
 
     A snapshot is only superseded when its dir has a terminal-only queue outcome
@@ -285,10 +284,10 @@ def orca_records(
             queue_record(queue_adapter, entry, snapshot, allowed_root=allowed_root, deps=deps)
         )
         if snapshot is not None and queue_represents_snapshot(queue_adapter, entry, snapshot):
-            represented_snapshot_keys.add(normalize_text(getattr(snapshot, "key", "")))
+            represented_snapshot_keys.add(normalize_text(snapshot.key))
 
     for snapshot in snapshots:
-        snapshot_key = normalize_text(getattr(snapshot, "key", ""))
+        snapshot_key = normalize_text(snapshot.key)
         if snapshot_key and snapshot_key in represented_snapshot_keys:
             continue
         if _snapshot_is_superseded(snapshot, superseded_dirs):

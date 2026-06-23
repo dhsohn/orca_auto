@@ -161,6 +161,7 @@ def make_entry(
     *,
     queue_id: str = "queue-1",
     job_id: str = "job-1",
+    app_name: str = "orca_auto",
     job_type: str = "path_search",
     reaction_key: str = "reaction-1",
     input_summary: dict[str, object] | None = None,
@@ -170,6 +171,7 @@ def make_entry(
     return SimpleNamespace(
         queue_id=queue_id,
         task_id=job_id,
+        app_name=app_name,
         metadata={
             "job_dir": str(job_dir),
             "selected_input_xyz": str(selected_input_xyz),

@@ -20,6 +20,8 @@ from orca_auto.core.engines.artifacts import (
 )
 from orca_auto.core.queue import execution as _queue_execution
 
+from .types import QueueEntry
+
 
 @dataclass(frozen=True)
 class TerminalArtifactPayloads:
@@ -81,7 +83,7 @@ def default_entry_resource_request(cfg: Any, entry: Any) -> dict[str, int]:
 
 
 def build_running_state_payload(
-    entry: Any,
+    entry: QueueEntry,
     *,
     job_dir: Path,
     selected_input_xyz: str,
@@ -103,11 +105,11 @@ def build_running_state_payload(
     return build_engine_artifact_payload(
         engine=engine,
         job=EngineArtifactJob(
-            id=str(getattr(entry, "task_id", "") or ""),
-            queue_id=str(getattr(entry, "queue_id", "") or ""),
+            id=entry.task_id,
+            queue_id=entry.queue_id,
             dir=str(job_dir),
-            app_name=str(getattr(entry, "app_name", "") or ""),
-            task_id=str(getattr(entry, "task_id", "") or ""),
+            app_name=entry.app_name,
+            task_id=entry.task_id,
         ),
         status=EngineArtifactStatus(
             state="running",
@@ -139,7 +141,7 @@ def build_running_state_payload(
 
 
 def write_running_state_artifact(
-    entry: Any,
+    entry: QueueEntry,
     *,
     job_dir_text: str,
     selected_input_xyz: str,
@@ -175,7 +177,7 @@ def write_running_state_artifact(
 
 
 def write_running_engine_state_artifact(
-    entry: Any,
+    entry: QueueEntry,
     *,
     job_dir_text: str,
     started_at: str,
@@ -205,7 +207,7 @@ def write_running_engine_state_artifact(
 
 
 def build_terminal_state_payload(
-    entry: Any,
+    entry: QueueEntry,
     result: Any,
     *,
     job_dir_text: str,
@@ -224,11 +226,11 @@ def build_terminal_state_payload(
     return build_engine_artifact_payload(
         engine=engine,
         job=EngineArtifactJob(
-            id=str(getattr(entry, "task_id", "") or ""),
-            queue_id=str(getattr(entry, "queue_id", "") or ""),
+            id=entry.task_id,
+            queue_id=entry.queue_id,
             dir=job_dir_text,
-            app_name=str(getattr(entry, "app_name", "") or ""),
-            task_id=str(getattr(entry, "task_id", "") or ""),
+            app_name=entry.app_name,
+            task_id=entry.task_id,
         ),
         status=EngineArtifactStatus(
             state=result.status,
@@ -267,7 +269,7 @@ def build_terminal_state_payload(
 
 
 def build_terminal_report_payload(
-    entry: Any,
+    entry: QueueEntry,
     result: Any,
     *,
     selected_input_xyz: str,
@@ -296,7 +298,7 @@ def build_terminal_report_payload(
 
 
 def build_terminal_artifact_payloads(
-    entry: Any,
+    entry: QueueEntry,
     result: Any,
     *,
     job_dir_text: str,
@@ -333,7 +335,7 @@ def build_terminal_artifact_payloads(
 
 
 def write_terminal_execution_artifacts(
-    entry: Any,
+    entry: QueueEntry,
     result: Any,
     *,
     job_dir_text: str,
@@ -369,7 +371,7 @@ def write_terminal_execution_artifacts(
 
 
 def write_terminal_engine_artifacts(
-    entry: Any,
+    entry: QueueEntry,
     result: Any,
     *,
     job_dir_text: str,
@@ -405,7 +407,7 @@ def write_terminal_engine_artifacts(
 
 
 def terminal_report_lines(
-    entry: Any,
+    entry: QueueEntry,
     result: Any,
     *,
     title: str,
@@ -434,7 +436,7 @@ def terminal_report_lines(
 
 def build_terminal_result(
     result_cls: type,
-    entry: Any,
+    entry: QueueEntry,
     *,
     job_dir: Path,
     selected_xyz: Path,
