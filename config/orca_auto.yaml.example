@@ -35,7 +35,9 @@ workflow:
   # activity inspection.
   root: /home/user/orca_auto/workflow_root
   paths:
-    # Executables used by workflow-managed internal stages.
+    # Executables used by workflow-managed internal stages. If set, each value
+    # must be an absolute Linux path to an existing executable file. Leave blank
+    # only when you intentionally want PATH lookup at runtime.
     xtb_executable: /home/user/bin/xtb-dist/bin/xtb
     crest_executable: /home/user/bin/crest/crest
   # Internal xTB/CREST runtime roots are derived automatically and are not set

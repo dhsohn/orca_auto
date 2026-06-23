@@ -1,38 +1,13 @@
 from __future__ import annotations
 
-import os
 import shutil
-from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from orca_auto.core.config import engines as _config_engines
-
-ExecutableErrorMessage = str | Callable[[Path], str]
-
-
-def _executable_error_message(message: ExecutableErrorMessage, path: Path) -> str:
-    if callable(message):
-        return message(path)
-    return message
-
-
-def validate_executable_file(
-    path_value: str | Path,
-    *,
-    missing_message: ExecutableErrorMessage,
-    not_file_message: ExecutableErrorMessage,
-    not_executable_message: ExecutableErrorMessage,
-    access_fn: Callable[[str, int], bool] = os.access,
-) -> Path:
-    path = Path(path_value).expanduser().resolve()
-    if not path.exists():
-        raise ValueError(_executable_error_message(missing_message, path))
-    if not path.is_file():
-        raise ValueError(_executable_error_message(not_file_message, path))
-    if not access_fn(str(path), os.X_OK):
-        raise ValueError(_executable_error_message(not_executable_message, path))
-    return path
+from orca_auto.core.paths import (
+    validate_configured_executable_path,
+    validate_executable_file,
+)
 
 
 def resolve_configured_executable(
@@ -44,17 +19,10 @@ def resolve_configured_executable(
 ) -> str:
     configured = str(getattr(cfg.paths, path_attr, "")).strip()
     if configured:
-        path = validate_executable_file(
+        path = validate_configured_executable_path(
             configured,
-            missing_message=lambda resolved: (
-                f"Configured {display_name} executable not found: {resolved}"
-            ),
-            not_file_message=lambda resolved: (
-                f"Configured {display_name} executable is not a file: {resolved}"
-            ),
-            not_executable_message=lambda resolved: (
-                f"Configured {display_name} executable is not executable: {resolved}"
-            ),
+            label=f"Configured {display_name} executable",
+            display_name=display_name,
         )
         return str(path)
 

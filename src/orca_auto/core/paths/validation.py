@@ -1,14 +1,81 @@
 from __future__ import annotations
 
+import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 
-_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:\\")
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+_WINDOWS_UNC_RE = re.compile(r"^\\\\")
 _WSL_WINDOWS_MOUNT_RE = re.compile(r"^/mnt/[a-zA-Z](/|$)")
+
+ExecutableErrorMessage = str | Callable[[Path], str]
 
 
 def is_rejected_windows_path(path_text: str) -> bool:
-    return bool(_WINDOWS_DRIVE_RE.match(path_text) or _WSL_WINDOWS_MOUNT_RE.match(path_text))
+    text = str(path_text).strip()
+    return bool(
+        _WINDOWS_DRIVE_RE.match(text)
+        or _WINDOWS_UNC_RE.match(text)
+        or _WSL_WINDOWS_MOUNT_RE.match(text)
+    )
+
+
+def _executable_error_message(message: ExecutableErrorMessage, path: Path) -> str:
+    if callable(message):
+        return message(path)
+    return message
+
+
+def validate_executable_file(
+    path_value: str | Path,
+    *,
+    missing_message: ExecutableErrorMessage,
+    not_file_message: ExecutableErrorMessage,
+    not_executable_message: ExecutableErrorMessage,
+    access_fn: Callable[[str, int], bool] = os.access,
+) -> Path:
+    path = Path(path_value).expanduser().resolve()
+    if not path.exists():
+        raise ValueError(_executable_error_message(missing_message, path))
+    if not path.is_file():
+        raise ValueError(_executable_error_message(not_file_message, path))
+    if not access_fn(str(path), os.X_OK):
+        raise ValueError(_executable_error_message(not_executable_message, path))
+    return path
+
+
+def validate_configured_executable_path(
+    path_value: str | Path,
+    *,
+    label: str,
+    display_name: str,
+    access_fn: Callable[[str, int], bool] = os.access,
+) -> Path:
+    text = str(path_value).strip()
+    if not text:
+        raise ValueError(f"{label} is required.")
+    if is_rejected_windows_path(text):
+        raise ValueError(
+            f"{label} must be a Linux path (Windows paths are not supported): {text!r}"
+        )
+    candidate = Path(text).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError(f"{label} must be an absolute Linux path: {text!r}")
+    if text.lower().endswith(".exe"):
+        raise ValueError(
+            f"{label} must point to Linux {display_name} binary, not Windows executable: {text!r}"
+        )
+    return validate_executable_file(
+        candidate,
+        missing_message=lambda _resolved: (
+            f"{label} not found: {text!r}. "
+            f"Verify the path points to an existing {display_name} binary."
+        ),
+        not_file_message=lambda _resolved: f"{label} is not a file: {text!r}",
+        not_executable_message=lambda _resolved: f"{label} is not executable: {text!r}",
+        access_fn=access_fn,
+    )
 
 
 def resolve_local_path(path_text: str | Path) -> Path:

@@ -31,9 +31,17 @@ def test_default_config_path_prefers_env(monkeypatch: pytest.MonkeyPatch) -> Non
     assert default_config_path().endswith("/config/orca_auto.yaml")
 
 
+def _write_fake_executable(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
 def test_load_config_parses_defaults_and_normalizes_values(tmp_path: Path) -> None:
     workflow_root = tmp_path / "workflow_root"
     workflow_root.mkdir()
+    fake_xtb = _write_fake_executable(tmp_path / "bin" / "xtb")
     config_path = tmp_path / "orca_auto.yaml"
     config_path.write_text(
         yaml.safe_dump(
@@ -44,7 +52,7 @@ def test_load_config_parses_defaults_and_normalizes_values(tmp_path: Path) -> No
                 "workflow": {
                     "root": str(workflow_root),
                     "paths": {
-                        "xtb_executable": " /opt/xtb ",
+                        "xtb_executable": f" {fake_xtb} ",
                     },
                 },
                 "behavior": {
@@ -71,7 +79,7 @@ def test_load_config_parses_defaults_and_normalizes_values(tmp_path: Path) -> No
     assert cfg.runtime.max_concurrent == 6
     assert cfg.runtime.admission_root == str(tmp_path / "admission")
     assert cfg.runtime.admission_limit == 6
-    assert cfg.paths.xtb_executable == "/opt/xtb"
+    assert cfg.paths.xtb_executable == str(fake_xtb.resolve())
     assert not hasattr(cfg.behavior, "auto_organize_on_terminal")
     assert cfg.resources.max_cores_per_task == 1
     assert cfg.resources.max_memory_gb_per_task == 1

@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
+from orca_auto.core.paths import validate_configured_executable_path
+
 from .files import (
     ORCA_AUTO_CONFIG_ENV_VAR,
     default_config_path_from_repo_root,
@@ -212,11 +214,29 @@ def _resource_config(resources_raw: dict[str, Any]) -> CommonResourceConfig:
     return resource_config_from_mapping(resources_raw)
 
 
+def _validate_workflow_engine_executable(
+    value: str,
+    *,
+    executable_key: str,
+    display_name: str,
+) -> str:
+    if not value:
+        return ""
+    return str(
+        validate_configured_executable_path(
+            value,
+            label=f"workflow.paths.{executable_key}",
+            display_name=display_name,
+        )
+    )
+
+
 def load_workflow_engine_config(
     config_path: str | None,
     *,
     default_config_path_fn: Callable[[], str],
     executable_key: str,
+    executable_display_name: str,
     paths_cls: Callable[..., Any],
     behavior_cls: Callable[..., Any],
     app_config_cls: Callable[..., _AppConfigT],
@@ -230,12 +250,17 @@ def load_workflow_engine_config(
     resources_raw = mapping_section(raw, "resources")
     telegram_raw = mapping_section(raw, "telegram")
     workflow_root = _required_workflow_root(raw, path)
+    executable_value = _validate_workflow_engine_executable(
+        as_str(workflow_paths_raw.get(executable_key)),
+        executable_key=executable_key,
+        display_name=executable_display_name,
+    )
 
     return app_config_cls(
         runtime=_runtime_config_from_scheduler(path, scheduler_raw, workflow_root),
         workflow_root=workflow_root,
         paths=paths_cls(
-            **{executable_key: as_str(workflow_paths_raw.get(executable_key))},
+            **{executable_key: executable_value},
         ),
         behavior=behavior_cls(),
         resources=_resource_config(resources_raw),
@@ -248,6 +273,7 @@ def load_xtb_config(config_path: str | None = None) -> WorkflowEngineAppConfig:
         config_path,
         default_config_path_fn=default_shared_config_path,
         executable_key="xtb_executable",
+        executable_display_name="xTB",
         paths_cls=WorkflowEnginePathsConfig,
         behavior_cls=WorkflowEngineBehaviorConfig,
         app_config_cls=WorkflowEngineAppConfig,
@@ -259,6 +285,7 @@ def load_crest_config(config_path: str | None = None) -> WorkflowEngineAppConfig
         config_path,
         default_config_path_fn=default_shared_config_path,
         executable_key="crest_executable",
+        executable_display_name="CREST",
         paths_cls=WorkflowEnginePathsConfig,
         behavior_cls=WorkflowEngineBehaviorConfig,
         app_config_cls=WorkflowEngineAppConfig,
