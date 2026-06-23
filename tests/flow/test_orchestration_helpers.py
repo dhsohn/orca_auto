@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from orca_auto.flow.contracts import WorkflowStageInput
+from orca_auto.flow.contracts.xtb import XtbArtifactContract, XtbCandidateArtifact
 from orca_auto.flow.orchestration.deps import orchestration_deps
 from orca_auto.flow.orchestration.lifecycle import (
     downstream_terminal_result_impl,
@@ -316,8 +317,16 @@ def test_xtb_handoff_status_and_ts_guess_error_cover_ready_and_failure() -> None
         "artifact_path": "",
     }
 
-    invalid_contract = SimpleNamespace(
-        candidate_details=(SimpleNamespace(kind="ts_guess", path="/tmp/xtbpath_ts.xyz", rank=1),)
+    invalid_contract = XtbArtifactContract(
+        job_id="",
+        job_type="",
+        status="",
+        reason="",
+        job_dir="",
+        latest_known_path="",
+        candidate_details=(
+            XtbCandidateArtifact(rank=1, kind="ts_guess", path="/tmp/xtbpath_ts.xyz"),
+        ),
     )
     deps = orchestration_deps(
         overrides={

@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from orca_auto.flow.contracts.xtb import XtbArtifactContract
 
 AnyCallable = Callable[..., Any]
 WorkflowPayload = dict[str, Any]
@@ -287,7 +290,7 @@ class ConfigRootLoader(Protocol):
 
 
 class ReactionContractErrorMapper(Protocol):
-    def __call__(self, contract: Any) -> dict[str, str]: ...
+    def __call__(self, contract: XtbArtifactContract) -> dict[str, str]: ...
 
 
 class ReactionOrcaCandidatePathResolver(Protocol):

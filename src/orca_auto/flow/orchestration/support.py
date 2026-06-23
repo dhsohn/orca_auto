@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.flow.contracts.workflow import workflow_stage_metadata, workflow_task_payload_dict
@@ -9,6 +9,9 @@ from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.deps import (
     orchestration_context as _orchestration_context,
 )
+
+if TYPE_CHECKING:
+    from orca_auto.flow.contracts.xtb import XtbArtifactContract
 
 
 def _runtime_paths_for_engine(
@@ -86,17 +89,17 @@ def task_payload_dict_impl(task: dict[str, Any]) -> dict[str, Any]:
 
 
 def reaction_ts_guess_error_impl(
-    contract: Any, *, deps: OrchestrationDeps | None = None
+    contract: XtbArtifactContract, *, deps: OrchestrationDeps | None = None
 ) -> dict[str, str]:
     o = _orchestration_context(deps)
     details = sorted(
         [
             item
-            for item in getattr(contract, "candidate_details", ())
-            if o.stages.support._normalize_text(getattr(item, "kind", "")) == "ts_guess"
-            and o.stages.support._normalize_text(getattr(item, "path", ""))
+            for item in contract.candidate_details
+            if o.stages.support._normalize_text(item.kind) == "ts_guess"
+            and o.stages.support._normalize_text(item.path)
         ],
-        key=lambda item: rank if (rank := int(getattr(item, "rank", 0) or 0)) > 0 else 10_000,
+        key=lambda item: item.rank if item.rank > 0 else 10_000,
     )
     if not details:
         return {
