@@ -250,6 +250,17 @@ Workflow notes:
 - Public workflow `run-dir` reads workflow type and XYZ inputs from `flow.yaml`
   or the standard filenames written by `scaffold`; it accepts only
   `--max-cores` and `--max-memory-gb` as workflow resource overrides.
+- Manifest-controlled input paths (`reactant_xyz`, `product_xyz`, `input_xyz`,
+  and `xtb.xcontrol_file`) default to the submitted workflow directory trust
+  boundary: relative paths are resolved from `workflow_dir`, absolute paths or
+  `..` escapes must still resolve inside that directory. To intentionally reuse
+  trusted local files outside the workflow directory, set
+  `allow_external_inputs: true` in `flow.yaml`; CLI-supplied input path overrides
+  are treated as an explicit operator action and may point outside. Use
+  Linux/WSL POSIX paths, not Windows drive paths such as `C:\\...`.
+- xTB `xcontrol` target names are separate from `xcontrol_file` source paths:
+  `xcontrol_file` names the source file to copy, while `xcontrol` must be a
+  plain file name materialized inside the xTB job directory.
 - CREST topology overrides can be placed under `crest:` in `flow.yaml`, including `gfn: ff`, `no_preopt: true`, `noreftopo: true`, `notopo: true`, and `nocbonds: true`
 - `scaffold ts_search` and `scaffold conformer_search` write `flow.yaml` with `crest_mode: standard` by default; change it to `nci` when needed
 

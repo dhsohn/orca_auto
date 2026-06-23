@@ -13,6 +13,9 @@ from .manifest import (
     load_flow_manifest as _shared_load_flow_manifest,
 )
 from .manifest import (
+    manifest_allows_external_inputs as _shared_manifest_allows_external_inputs,
+)
+from .manifest import (
     manifest_mapping as _shared_manifest_mapping,
 )
 from .manifest import (
@@ -20,6 +23,9 @@ from .manifest import (
 )
 from .manifest import (
     resolve_engine_manifest as _shared_resolve_engine_manifest,
+)
+from .manifest import (
+    resolve_manifest_file_value as _shared_resolve_manifest_file_value,
 )
 from .run_dir_layout import (
     STANDARD_CONFORMER_INPUT_FILENAME,
@@ -47,13 +53,22 @@ def _resolve_run_dir_path(
     default_names: tuple[str, ...],
 ) -> str:
     candidate_text = normalize_text(explicit)
-    if not candidate_text:
-        candidate_text = normalize_text(manifest.get(key))
     if candidate_text:
-        candidate = Path(candidate_text).expanduser()
-        if not candidate.is_absolute():
-            candidate = workflow_dir / candidate
-        return str(candidate.resolve())
+        return _shared_resolve_manifest_file_value(
+            workflow_dir,
+            candidate_text,
+            allow_external_inputs=True,
+            field_name=key,
+        )
+
+    candidate_text = normalize_text(manifest.get(key))
+    if candidate_text:
+        return _shared_resolve_manifest_file_value(
+            workflow_dir,
+            candidate_text,
+            allow_external_inputs=_shared_manifest_allows_external_inputs(manifest),
+            field_name=key,
+        )
 
     for name in default_names:
         candidate = workflow_dir / name
