@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from orca_auto.core.statuses import is_queue_active_status
 from orca_auto.flow._workflow_phases import phase_finished
@@ -19,6 +19,9 @@ from orca_auto.flow.orchestration.stage_views import (
     _stage_views,
 )
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
+
+if TYPE_CHECKING:
+    from orca_auto.flow.contracts.xtb import XtbArtifactContract
 
 
 @dataclass(frozen=True)
@@ -44,7 +47,7 @@ def _completed_or_recoverable_xtb_stages(o: Any, payload: dict[str, Any]) -> lis
 
 def _load_xtb_contract_for_stage(
     o: Any, xtb_stage: dict[str, Any], *, xtb_allowed_root: Path
-) -> Any | None:
+) -> XtbArtifactContract | None:
     view = WorkflowStageView.from_raw(xtb_stage)
     if view is None or not view.task.raw:
         return None
@@ -60,11 +63,11 @@ def _load_xtb_contract_for_stage(
         return None
 
 
-def _xtb_ts_guess_inputs(o: Any, contract: Any) -> list[Any]:
+def _xtb_ts_guess_inputs(o: Any, contract: XtbArtifactContract) -> list[Any]:
     max_candidate_count = max(
         1,
-        len(getattr(contract, "candidate_details", ()) or ()),
-        len(getattr(contract, "selected_candidate_paths", ()) or ()),
+        len(contract.candidate_details),
+        len(contract.selected_candidate_paths),
     )
     return o.engines.select_xtb_downstream_inputs(
         contract,
@@ -78,7 +81,9 @@ def _xtb_ts_guess_inputs(o: Any, contract: Any) -> list[Any]:
     )
 
 
-def _record_xtb_handoff_error(o: Any, xtb_stage: dict[str, Any], contract: Any) -> dict[str, str]:
+def _record_xtb_handoff_error(
+    o: Any, xtb_stage: dict[str, Any], contract: XtbArtifactContract
+) -> dict[str, str]:
     stage_metadata = o.stages.support._stage_metadata(xtb_stage)
     error = o.stages.support._reaction_ts_guess_error(contract)
     stage_metadata["reaction_handoff_status"] = "failed"
@@ -86,7 +91,7 @@ def _record_xtb_handoff_error(o: Any, xtb_stage: dict[str, Any], contract: Any) 
     stage_metadata["reaction_handoff_message"] = error["message"]
     return {
         "stage_id": WorkflowStageView(xtb_stage).stage_id(o),
-        "job_id": o.stages.support._normalize_text(getattr(contract, "job_id", "")),
+        "job_id": o.stages.support._normalize_text(contract.job_id),
         "reason": error["reason"],
         "message": error["message"],
     }
@@ -100,7 +105,11 @@ def _mark_xtb_handoff_ready(o: Any, xtb_stage: dict[str, Any]) -> None:
 
 
 def _reaction_orca_candidate_pool_rows(
-    o: Any, xtb_stage: dict[str, Any], contract: Any, inputs: list[Any], stage_order: int
+    o: Any,
+    xtb_stage: dict[str, Any],
+    contract: XtbArtifactContract,
+    inputs: list[Any],
+    stage_order: int,
 ) -> list[tuple[int, int, str, Any]]:
     rows: list[tuple[int, int, str, Any]] = []
     for candidate in inputs:
@@ -111,10 +120,8 @@ def _reaction_orca_candidate_pool_rows(
             **dict(candidate.metadata),
             "xtb_stage_id": WorkflowStageView(xtb_stage).stage_id(o),
             "xtb_stage_order": int(stage_order),
-            "xtb_source_job_id": o.stages.support._normalize_text(getattr(contract, "job_id", "")),
-            "xtb_source_job_type": o.stages.support._normalize_text(
-                getattr(contract, "job_type", "")
-            ),
+            "xtb_source_job_id": o.stages.support._normalize_text(contract.job_id),
+            "xtb_source_job_type": o.stages.support._normalize_text(contract.job_type),
         }
         rows.append(
             (

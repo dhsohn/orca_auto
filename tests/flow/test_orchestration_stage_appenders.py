@@ -482,7 +482,12 @@ def test_append_reaction_orca_stages_sets_xtb_handoff_workflow_error_when_no_can
             }
         ],
     }
-    contract = SimpleNamespace(job_id="xtb_job_01", job_type="path_search", candidate_details=())
+    contract = SimpleNamespace(
+        job_id="xtb_job_01",
+        job_type="path_search",
+        candidate_details=(),
+        selected_candidate_paths=(),
+    )
 
     deps = orchestration_deps(
         overrides={
@@ -708,7 +713,12 @@ def test_append_reaction_orca_stages_appends_unattempted_candidate_without_mutat
             },
         ],
     }
-    contract = SimpleNamespace(job_id="xtb_job_02", job_type="path_search")
+    contract = SimpleNamespace(
+        job_id="xtb_job_02",
+        job_type="path_search",
+        candidate_details=(),
+        selected_candidate_paths=(),
+    )
 
     deps = orchestration_deps(
         overrides={
@@ -773,7 +783,12 @@ def test_append_reaction_orca_stages_materializes_under_workflow_orca_stage_root
             }
         ],
     }
-    contract = SimpleNamespace(job_id="xtb_job_local", job_type="path_search", candidate_details=())
+    contract = SimpleNamespace(
+        job_id="xtb_job_local",
+        job_type="path_search",
+        candidate_details=(),
+        selected_candidate_paths=(),
+    )
     build_calls: list[dict[str, Any]] = []
 
     def fake_build_materialized_orca_stage(**kwargs: Any) -> Any:
