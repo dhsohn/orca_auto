@@ -16,6 +16,18 @@ class TestCompletionRules(unittest.TestCase):
         self.assertEqual(mode.kind, "ts")
         self.assertTrue(mode.require_irc)
 
+    def test_detect_scants_as_ts_without_irc_requirement(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "rxn.inp"
+            inp.write_text(
+                "! ScanTS B3LYP def2-SVP Freq\n* xyzfile 0 1 input.xyz\n",
+                encoding="utf-8",
+            )
+            mode = detect_completion_mode(inp)
+        self.assertEqual(mode.kind, "ts")
+        self.assertFalse(mode.require_irc)
+        self.assertEqual(mode.route_line, "! ScanTS B3LYP def2-SVP Freq")
+
     def test_detect_opt_without_irc(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             inp = Path(td) / "rxn.inp"

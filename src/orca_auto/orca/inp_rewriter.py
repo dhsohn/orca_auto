@@ -26,6 +26,7 @@ from .resource_directives import (
 from .retry_recipes import (
     apply_retry_recipe as _apply_retry_recipe,
 )
+from .scants import prepare_scants_optts_fallback_input
 
 __all__ = [
     "GEOM_HEADER_RE",
@@ -34,6 +35,7 @@ __all__ = [
     "ensure_submission_resource_request",
     "maxcore_mb_per_core",
     "prepare_checkpoint_restart_input",
+    "prepare_scants_optts_fallback_input",
     "read_resource_request_from_input",
     "rewrite_for_retry",
 ]

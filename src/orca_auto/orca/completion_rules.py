@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-TS_ROUTE_RE = re.compile(r"\b(OPTTS|NEB-TS)\b", re.IGNORECASE)
+TS_ROUTE_RE = re.compile(r"\b(OPTTS|SCANTS|NEB-TS)\b", re.IGNORECASE)
 IRC_ROUTE_RE = re.compile(r"\bIRC\b", re.IGNORECASE)
 
 

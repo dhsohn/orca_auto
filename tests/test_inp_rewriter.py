@@ -255,3 +255,35 @@ class TestInpRewriter(unittest.TestCase):
         self.assertEqual(start, 5)
         self.assertTrue(needs_close)
         self.assertEqual(len(lines), original_len)
+
+    def test_geom_retry_keys_are_inserted_outside_nested_scan_block(self) -> None:
+        from orca_auto.orca.input_blocks import set_block_key_value
+
+        lines = [
+            "! ScanTS B3LYP def2-SVP Freq",
+            "%geom",
+            "  MaxIter 200",
+            "  Scan",
+            "    B 4 20 = 1.86, 3.40, 32",
+            "  end",
+            "end",
+            "* xyzfile 0 1 input.xyz",
+        ]
+
+        changed = set_block_key_value(lines, "geom", "Calc_Hess", "true")
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            lines,
+            [
+                "! ScanTS B3LYP def2-SVP Freq",
+                "%geom",
+                "  MaxIter 200",
+                "  Scan",
+                "    B 4 20 = 1.86, 3.40, 32",
+                "  end",
+                "  Calc_Hess true",
+                "end",
+                "* xyzfile 0 1 input.xyz",
+            ],
+        )

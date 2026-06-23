@@ -10,6 +10,7 @@ GEOM_HEADER_RE = re.compile(
 )
 BLOCK_START_RE = re.compile(r"^\s*%([A-Za-z0-9_\-]+)")
 MOINP_RE = re.compile(r"^\s*%moinp\b", re.IGNORECASE)
+NESTED_BLOCK_NAMES = {"scan", "constraints"}
 
 
 def find_route_idx(lines: List[str]) -> Optional[int]:
@@ -50,8 +51,16 @@ def find_block_range(lines: List[str], block_name: str) -> Optional[Tuple[int, i
             continue
         if m.group(1).lower() != name:
             continue
+        nested_depth = 0
         for j in range(i + 1, len(lines)):
-            if lines[j].strip().lower() == "end":
+            stripped = lines[j].strip().lower()
+            if stripped in NESTED_BLOCK_NAMES:
+                nested_depth += 1
+                continue
+            if stripped == "end":
+                if nested_depth > 0:
+                    nested_depth -= 1
+                    continue
                 return i, j, False
         return i, len(lines), True
     return None

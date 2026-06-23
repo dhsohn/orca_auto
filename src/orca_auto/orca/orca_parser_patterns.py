@@ -70,6 +70,7 @@ _ERROR_TERMINATION_RE = re.compile(
 # Known calculation type keywords (searched in input line)
 _CALC_TYPE_KEYWORDS: dict[str, str] = {
     "OPTTS": "ts",
+    "SCANTS": "ts",
     "TS": "ts",
     "OPT": "opt",
     "FREQ": "freq",

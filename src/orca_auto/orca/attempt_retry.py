@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict
 
 from .attempt_reporting import build_retry_notification, exit_with_result
-from .inp_rewriter import prepare_checkpoint_restart_input, rewrite_for_retry
+from .inp_rewriter import (
+    prepare_checkpoint_restart_input,
+    prepare_scants_optts_fallback_input,
+    rewrite_for_retry,
+)
 from .out_analyzer import OutAnalysis
 from .state import save_state
 from .state_machine import MAX_RETRY_RECIPES
@@ -71,13 +75,21 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
     next_inp = ctx.retry_inp_path(ctx.selected_inp, next_retry_number)
     patch_step = retry_recipe_step(next_retry_number)
     try:
-        patch_actions = rewrite_for_retry(
+        prepared_scants, patch_actions = prepare_scants_optts_fallback_input(
             source_inp=ctx.current_inp,
             target_inp=next_inp,
             reaction_dir=ctx.reaction_dir,
-            step=patch_step,
+            out_path=ctx.out_path,
             max_memory_gb=ctx.state.get("max_memory_gb_per_task"),
         )
+        if prepared_scants is None:
+            patch_actions = rewrite_for_retry(
+                source_inp=ctx.current_inp,
+                target_inp=next_inp,
+                reaction_dir=ctx.reaction_dir,
+                step=patch_step,
+                max_memory_gb=ctx.state.get("max_memory_gb_per_task"),
+            )
     except Exception as exc:  # noqa: BLE001
         ctx.state["attempts"][-1]["patch_actions"] = [f"rewrite_failed:{exc}"]
         return exit_with_result(

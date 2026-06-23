@@ -57,6 +57,26 @@ def test_utf16_completed_output_is_parsed(tmp_path: Path) -> None:
     assert result.method == "B3LYP"
 
 
+def test_scants_route_is_classified_as_ts_freq(tmp_path: Path) -> None:
+    out_file = tmp_path / "scants.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "! ScanTS B3LYP def2-SVP Freq",
+                "* xyzfile 0 1 input.xyz",
+                "FINAL SINGLE POINT ENERGY      -100.123456",
+                "ORCA finished by error termination in Startup",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output(str(out_file))
+
+    assert result.calc_type == "ts+freq"
+    assert result.status == "failed"
+
+
 # ---------------------------------------------------------------------------
 # parse_opt_progress tests
 # ---------------------------------------------------------------------------
