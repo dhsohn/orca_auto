@@ -55,10 +55,6 @@ def build_dft_query(filters: dict[str, Any]) -> tuple[str, list[Any]]:
     return sql, params
 
 
-def recent_filters(limit: int = 10) -> dict[str, Any]:
-    return {"order_by": "mtime DESC", "limit": limit}
-
-
 def lowest_energy_filters(formula: str | None = None, limit: int = 5) -> dict[str, Any]:
     filters: dict[str, Any] = {
         "order_by": "energy_hartree ASC",

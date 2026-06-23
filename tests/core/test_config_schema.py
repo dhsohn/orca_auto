@@ -52,7 +52,6 @@ def test_common_runtime_config_resolved_admission_root(
     [
         (4, None, 4),
         (0, None, 1),
-        (3, -7, 1),
         (3, 2, 2),
     ],
 )
@@ -71,19 +70,45 @@ def test_common_runtime_config_resolved_admission_limit_lower_bounds(
     assert config.resolved_admission_limit == expected_limit
 
 
+@pytest.mark.parametrize("admission_limit", [-7, 0, "bad", True])
+def test_common_runtime_config_rejects_invalid_explicit_admission_limit(
+    admission_limit: object,
+) -> None:
+    config = CommonRuntimeConfig(
+        allowed_root="/allowed",
+        organized_root="/organized",
+        max_concurrent=3,
+        admission_limit=cast(Any, admission_limit),
+    )
+
+    with pytest.raises(ValueError, match="admission_limit must be an integer >= 1"):
+        _ = config.resolved_admission_limit
+
+
 def test_retry_runtime_config_normalizes_shared_runtime_fields() -> None:
     config = SiblingRetryRuntimeConfig(
         allowed_root="/runs/engine",
         default_max_retries=cast(Any, "-2"),
         max_concurrent=cast(Any, "0"),
-        admission_limit=cast(Any, "bad"),
+        admission_limit=cast(Any, "2"),
     )
 
     assert config.organized_root == "/runs/engine_outputs"
     assert config.default_max_retries == 0
     assert config.max_concurrent == 1
     assert config.admission_root == "/runs/engine"
-    assert config.admission_limit == 1
+    assert config.admission_limit == 2
+
+
+@pytest.mark.parametrize("admission_limit", ["bad", "0", -1, True])
+def test_retry_runtime_config_rejects_invalid_explicit_admission_limit(
+    admission_limit: object,
+) -> None:
+    with pytest.raises(ValueError, match="admission_limit must be an integer >= 1"):
+        SiblingRetryRuntimeConfig(
+            allowed_root="/runs/engine",
+            admission_limit=cast(Any, admission_limit),
+        )
 
 
 @pytest.mark.parametrize(
@@ -170,6 +195,7 @@ def test_as_float_returns_config_default_for_invalid_values(
         ("7", 7),
         ("0", None),
         ("bad", None),
+        (True, None),
         (None, None),
     ],
 )
@@ -206,9 +232,6 @@ def test_normalize_max_concurrent(value: object, default: int, expected: int) ->
     [
         (None, 4, None),
         ("2", 4, 2),
-        ("0", 4, 4),
-        ("bad", 4, 4),
-        (True, 4, 1),
     ],
 )
 def test_normalize_admission_limit(
@@ -217,6 +240,12 @@ def test_normalize_admission_limit(
     expected: int | None,
 ) -> None:
     assert normalize_admission_limit(value, max_concurrent) == expected
+
+
+@pytest.mark.parametrize("value", ["0", "bad", -1, True])
+def test_normalize_admission_limit_rejects_invalid_explicit_values(value: object) -> None:
+    with pytest.raises(ValueError, match="admission_limit must be an integer >= 1"):
+        normalize_admission_limit(value, 4)
 
 
 @pytest.mark.parametrize(

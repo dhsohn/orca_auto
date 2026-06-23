@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from orca_auto.flow.contracts import WorkflowStageInput
 from orca_auto.flow.orchestration.deps import orchestration_deps
 from orca_auto.flow.orchestration.materialization import (
@@ -516,6 +518,89 @@ def test_append_reaction_orca_stages_sets_xtb_handoff_workflow_error_when_no_can
         "reason": "xtb_ts_guess_missing",
         "message": "missing ts guess",
     }
+
+
+def test_append_reaction_orca_stages_waits_when_xtb_contract_is_missing(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_reaction_missing_xtb_contract",
+        "metadata": {"request": {"parameters": {"max_orca_stages": 2}}},
+        "stages": [
+            {
+                "stage_id": "xtb_path_search_01",
+                "status": "completed",
+                "metadata": {},
+                "task": {
+                    "engine": "xtb",
+                    "payload": {"job_dir": "/tmp/xtb_job_missing"},
+                },
+            }
+        ],
+    }
+
+    deps = orchestration_deps(
+        overrides={
+            "_load_config_root": lambda path, **kwargs: (
+                tmp_path / ("xtb" if "xtb" in str(path) else "orca")
+            ),
+            "load_xtb_artifact_contract": lambda **kwargs: (_ for _ in ()).throw(
+                FileNotFoundError("xTB artifact files not found")
+            ),
+        }
+    )
+
+    created = append_reaction_orca_stages_impl(
+        payload,
+        workspace_dir=tmp_path,
+        xtb_config="/tmp/xtb.yaml",
+        orca_config="/tmp/orca.yaml",
+        deps=deps,
+    )
+
+    assert created is False
+    assert "workflow_error" not in payload["metadata"]
+    assert "reaction_handoff_status" not in payload["stages"][0]["metadata"]
+
+
+def test_append_reaction_orca_stages_propagates_corrupt_xtb_contract(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_reaction_corrupt_xtb_contract",
+        "metadata": {"request": {"parameters": {"max_orca_stages": 2}}},
+        "stages": [
+            {
+                "stage_id": "xtb_path_search_01",
+                "status": "completed",
+                "metadata": {},
+                "task": {
+                    "engine": "xtb",
+                    "payload": {"job_dir": "/tmp/xtb_job_corrupt"},
+                },
+            }
+        ],
+    }
+
+    deps = orchestration_deps(
+        overrides={
+            "_load_config_root": lambda path, **kwargs: (
+                tmp_path / ("xtb" if "xtb" in str(path) else "orca")
+            ),
+            "load_xtb_artifact_contract": lambda **kwargs: (_ for _ in ()).throw(
+                ValueError("corrupt xTB artifact payload")
+            ),
+        }
+    )
+
+    with pytest.raises(ValueError, match="corrupt xTB artifact payload"):
+        append_reaction_orca_stages_impl(
+            payload,
+            workspace_dir=tmp_path,
+            xtb_config="/tmp/xtb.yaml",
+            orca_config="/tmp/orca.yaml",
+            deps=deps,
+        )
 
 
 def test_append_reaction_orca_stages_waits_for_all_xtb_children_to_finish(

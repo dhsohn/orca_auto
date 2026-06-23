@@ -118,6 +118,88 @@ def test_tracked_contract_payload_returns_indexed_job_location_payload(
     )
 
 
+def test_tracked_contract_payload_returns_none_for_missing_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _orca_tracking,
+        "load_orca_contract_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError("missing")),
+    )
+
+    assert (
+        _orca_tracking.load_orca_contract_payload_impl(
+            index_root=tmp_path / "orca_runs",
+            organized_root=tmp_path / "orca_outputs",
+            target="missing_job",
+            queue_id="",
+            run_id="",
+            reaction_dir="",
+        )
+        is None
+    )
+
+
+def test_tracked_contract_payload_propagates_corrupt_payload_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _orca_tracking,
+        "load_orca_contract_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("corrupt payload")),
+    )
+
+    with pytest.raises(ValueError, match="corrupt payload"):
+        _orca_tracking.load_orca_contract_payload_impl(
+            index_root=tmp_path / "orca_runs",
+            organized_root=tmp_path / "orca_outputs",
+            target="corrupt_job",
+            queue_id="",
+            run_id="",
+            reaction_dir="",
+        )
+
+
+def test_tracked_runtime_context_propagates_corrupt_runtime_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _orca_tracking,
+        "load_job_runtime_context",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("corrupt runtime")),
+    )
+
+    with pytest.raises(ValueError, match="corrupt runtime"):
+        _orca_tracking.tracked_runtime_context_impl(
+            index_root=tmp_path / "orca_runs",
+            organized_root=tmp_path / "orca_outputs",
+            target="corrupt_runtime",
+            queue_id="",
+            run_id="",
+            reaction_dir="",
+        )
+
+
+def test_tracked_artifact_context_propagates_corrupt_context_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _orca_tracking,
+        "load_job_artifact_context",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("corrupt context")),
+    )
+
+    with pytest.raises(ValueError, match="corrupt context"):
+        _orca_tracking.tracked_artifact_context_impl(
+            index_root=tmp_path / "orca_runs",
+            targets=("corrupt_context",),
+        )
+
+
 def test_load_orca_artifact_contract_uses_tracked_record_organized_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

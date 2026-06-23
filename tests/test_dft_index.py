@@ -219,7 +219,7 @@ def test_removed_file_is_cleaned_from_index(tmp_path: Path) -> None:
     index = DFTIndex()
     index.initialize(db_path)
     index.index_calculations([str(kb_dir)])
-    assert index._count() == 1
+    assert len(index.query({})) == 1
 
     # Re-index after deleting file
     (kb_dir / "job1" / "calc.out").unlink()

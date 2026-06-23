@@ -17,6 +17,19 @@ from orca_auto.core.config.files import (
 from . import _runtime_common
 
 LOGGER = logging.getLogger(__name__)
+_SUBMISSION_ADMISSION_CONFIG_KEYS = frozenset({"admission_root", "max_active_simulations"})
+
+
+def _scheduler_section_has_admission_controls(scheduler: dict[str, Any]) -> bool:
+    return any(key in scheduler for key in _SUBMISSION_ADMISSION_CONFIG_KEYS)
+
+
+def _submission_admission_configured(raw: dict[str, Any]) -> bool:
+    top_level_scheduler = mapping_section(raw, "scheduler")
+    if _scheduler_section_has_admission_controls(top_level_scheduler):
+        return True
+    orca_raw = engine_config_mapping(raw, "orca", inherit_keys=("scheduler", "workflow"))
+    return _scheduler_section_has_admission_controls(mapping_section(orca_raw, "scheduler"))
 
 
 def submission_admission_limit_from_config(
@@ -89,9 +102,20 @@ def submission_admission_has_capacity(
     active_slot_count_fn: Callable[[Path], int] = active_slot_count,
     engine_runtime_paths_fn: Callable[..., dict[str, Any]] | None = None,
 ) -> bool | None:
+    try:
+        _, raw = load_yaml_mapping(config_path)
+    except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
+        LOGGER.debug(
+            "submission_admission_capacity_config_load_failed: config_path=%s error=%s",
+            config_path,
+            exc,
+        )
+        return False
+
+    admission_configured = _submission_admission_configured(raw)
     limit = submission_admission_limit_from_config_fn(config_path)
     if limit is None:
-        return None
+        return False if admission_configured else None
     admission_root: Path | None = None
     for engine in (None, "xtb", "crest", "orca"):
         try:
@@ -112,7 +136,7 @@ def submission_admission_has_capacity(
             admission_root = candidate
             break
     if not isinstance(admission_root, Path):
-        return None
+        return False if admission_configured else None
     try:
         return active_slot_count_fn(admission_root) < limit
     except (AdmissionStoreCorruptError, OSError) as exc:

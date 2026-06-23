@@ -191,7 +191,7 @@ def test_load_config_applies_defaults_for_missing_or_invalid_sections(tmp_path: 
         tmp_path / "orca_auto.yaml",
         f"""
         scheduler:
-          max_active_simulations: 0
+          max_active_simulations: 1
         workflow:
           root: {workflow_root}
           paths: []
@@ -214,6 +214,29 @@ def test_load_config_applies_defaults_for_missing_or_invalid_sections(tmp_path: 
     assert cfg.resources.max_memory_gb_per_task == 32
     assert cfg.telegram.bot_token == ""
     assert cfg.telegram.chat_id == ""
+
+
+@pytest.mark.parametrize("value", [0, -1, "bad", True])
+def test_load_config_rejects_invalid_explicit_scheduler_max_active_simulations(
+    tmp_path: Path,
+    value: object,
+) -> None:
+    workflow_root = tmp_path / "workflow_root"
+    workflow_root.mkdir()
+    config_path = _write_config(
+        tmp_path / "orca_auto.yaml",
+        f"""
+        scheduler:
+          max_active_simulations: {value!r}
+        workflow:
+          root: {workflow_root}
+        """,
+    )
+
+    with pytest.raises(
+        ValueError, match="scheduler.max_active_simulations must be an integer >= 1"
+    ):
+        config_mod.load_crest_config(str(config_path))
 
 
 def test_load_config_rejects_missing_file(tmp_path: Path) -> None:

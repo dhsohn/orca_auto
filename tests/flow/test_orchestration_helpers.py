@@ -27,6 +27,9 @@ from orca_auto.flow.orchestration.stage_runtime.orca import (
     completed_orca_stage_impl as _completed_orca_stage,
 )
 from orca_auto.flow.orchestration.stage_runtime.shared import (
+    _load_contract_or_none,
+)
+from orca_auto.flow.orchestration.stage_runtime.shared import (
     append_unique_artifact_impl as _append_unique_artifact,
 )
 from orca_auto.flow.orchestration.stage_runtime.xtb_handoff import (
@@ -76,6 +79,32 @@ def _workflow_has_active_children(
         normalize_text_fn=_normalize_text,
         workflow_has_active_downstream_fn=lambda current_payload: active_downstream,
     )
+
+
+def test_load_contract_or_none_returns_none_for_missing_contract() -> None:
+    def missing_loader(**kwargs: Any) -> object:
+        raise FileNotFoundError("contract is not materialized yet")
+
+    assert (
+        _load_contract_or_none(
+            missing_loader,
+            engine="xtb",
+            target="xtb_job_missing",
+        )
+        is None
+    )
+
+
+def test_load_contract_or_none_propagates_corrupt_contract_errors() -> None:
+    def corrupt_loader(**kwargs: Any) -> object:
+        raise ValueError("corrupt artifact payload")
+
+    with pytest.raises(ValueError, match="corrupt artifact payload"):
+        _load_contract_or_none(
+            corrupt_loader,
+            engine="xtb",
+            target="xtb_job_corrupt",
+        )
 
 
 def _stage_failure_is_recoverable(stage: dict[str, Any]) -> bool:

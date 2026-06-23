@@ -36,6 +36,9 @@ from .schema import (
     as_str as as_str,
 )
 from .schema import (
+    explicit_positive_int as explicit_positive_int,
+)
+from .schema import (
     normalize_admission_limit as normalize_admission_limit,
 )
 from .schema import (
@@ -161,7 +164,13 @@ def scheduler_runtime_settings(
     admission_limit_enabled: bool,
     reject_nonpositive: bool = False,
 ) -> SchedulerRuntimeSettings:
-    raw_max_active = as_int(scheduler_raw.get("max_active_simulations"), default_max_active)
+    if "max_active_simulations" in scheduler_raw:
+        raw_max_active = explicit_positive_int(
+            scheduler_raw.get("max_active_simulations"),
+            field_name="scheduler.max_active_simulations",
+        )
+    else:
+        raw_max_active = default_max_active
     if reject_nonpositive and raw_max_active < 1:
         raise ValueError("scheduler.max_active_simulations must be an integer >= 1.")
     max_active = max(1, raw_max_active)

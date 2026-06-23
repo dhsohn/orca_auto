@@ -84,12 +84,6 @@ def _queue_terminal_width() -> int | None:
     return _activity_rendering._terminal_max_width()
 
 
-def _queue_table_lines(rows: Sequence[tuple[int, dict[str, Any]]]) -> list[str]:
-    return _activity_rendering.queue_table_lines(
-        rows, now=_queue_table_now(), max_width=_queue_terminal_width()
-    )
-
-
 def _queue_list_text_lines(
     rows: Sequence[tuple[int, dict[str, Any]]],
     *,

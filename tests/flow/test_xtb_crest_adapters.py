@@ -308,6 +308,15 @@ def test_select_xtb_downstream_inputs_ignores_selected_paths_when_details_are_em
     assert stage_inputs == ()
 
 
+def test_load_xtb_artifact_contract_rejects_invalid_artifact_json(tmp_path: Path) -> None:
+    job_dir = tmp_path / "xtb_corrupt_json"
+    job_dir.mkdir(parents=True)
+    (job_dir / "job_report.json").write_text("{not valid json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not valid JSON"):
+        load_xtb_artifact_contract(xtb_index_root=tmp_path, target=str(job_dir))
+
+
 def test_load_xtb_artifact_contract_rejects_non_xtb_index_records(tmp_path: Path) -> None:
     index_root = tmp_path / "xtb_index"
     job_dir = tmp_path / "xtb_wrong_app"

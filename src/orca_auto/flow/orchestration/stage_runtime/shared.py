@@ -95,7 +95,7 @@ def _load_contract_or_none(
 ) -> Any | None:
     try:
         return load_contract(target=target, **kwargs)
-    except Exception:  # noqa: BLE001
+    except FileNotFoundError:
         _LOGGER.debug(
             "Failed to load %s artifact contract for target %r; returning None (stage_id=%r)",
             engine,

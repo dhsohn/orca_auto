@@ -235,7 +235,7 @@ def test_sync_crest_stage_returns_without_target_when_not_submitted_and_no_queue
     assert "output_artifacts" not in stage
 
 
-def test_sync_crest_stage_returns_cleanly_when_contract_lookup_raises(
+def test_sync_crest_stage_returns_cleanly_when_contract_lookup_is_missing(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -255,7 +255,7 @@ def test_sync_crest_stage_returns_cleanly_when_contract_lookup_raises(
         overrides={
             "_load_config_root": lambda path, **kwargs: tmp_path / "crest_allowed",
             "load_crest_artifact_contract": lambda **kwargs: (_ for _ in ()).throw(
-                RuntimeError("boom")
+                FileNotFoundError("not materialized yet")
             ),
         }
     )
@@ -281,3 +281,38 @@ def test_sync_crest_stage_returns_cleanly_when_contract_lookup_raises(
         and record.exc_info
         for record in caplog.records
     )
+
+
+def test_sync_crest_stage_propagates_corrupt_contract_lookup_errors(
+    tmp_path: Path,
+) -> None:
+    stage: dict[str, Any] = {
+        "stage_id": "crest_nci_04",
+        "status": "submitted",
+        "metadata": {"queue_id": "q_existing"},
+        "task": {
+            "engine": "crest",
+            "status": "submitted",
+            "payload": {"job_dir": str(tmp_path / "job_dir"), "selected_input_xyz": ""},
+            "enqueue_payload": {"priority": 5},
+        },
+    }
+
+    deps = orchestration_deps(
+        overrides={
+            "_load_config_root": lambda path, **kwargs: tmp_path / "crest_allowed",
+            "load_crest_artifact_contract": lambda **kwargs: (_ for _ in ()).throw(
+                RuntimeError("corrupt crest contract")
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="corrupt crest contract"):
+        sync_crest_stage_impl(
+            stage,
+            crest_config="/tmp/crest.yaml",
+            submit_ready=False,
+            workflow_id="wf_04",
+            workspace_dir=tmp_path / "workspace" / "wf_04",
+            deps=deps,
+        )

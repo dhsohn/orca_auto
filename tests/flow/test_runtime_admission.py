@@ -15,6 +15,26 @@ def test_submission_admission_limit_returns_none_for_unreadable_config(tmp_path:
     )
 
 
+def test_submission_admission_has_capacity_fails_closed_for_unreadable_config(
+    tmp_path: Path,
+) -> None:
+    assert runtime_admission.submission_admission_has_capacity(tmp_path / "missing.yaml") is False
+
+
+@pytest.mark.parametrize("raw_limit", ["not-an-int", "true"])
+def test_submission_admission_has_capacity_fails_closed_for_invalid_configured_limit(
+    tmp_path: Path,
+    raw_limit: str,
+) -> None:
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text(
+        f"scheduler:\n  max_active_simulations: {raw_limit}\n",
+        encoding="utf-8",
+    )
+
+    assert runtime_admission.submission_admission_has_capacity(config) is False
+
+
 def test_submission_admission_root_for_internal_engine_requires_workflow_root(
     tmp_path: Path,
 ) -> None:
@@ -131,6 +151,28 @@ def test_submission_admission_has_capacity_uses_first_resolved_engine_root(
         is True
     )
     assert calls == [None, "xtb"]
+
+
+def test_submission_admission_has_capacity_fails_closed_when_configured_root_lookup_fails(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text("scheduler:\n  max_active_simulations: 2\n", encoding="utf-8")
+
+    def broken_engine_runtime_paths(
+        _config_path: str,
+        *,
+        engine: str | None = None,
+    ) -> dict[str, Any]:
+        raise ValueError(f"cannot resolve {engine or 'shared'} admission root")
+
+    assert (
+        runtime_admission.submission_admission_has_capacity(
+            config,
+            engine_runtime_paths_fn=broken_engine_runtime_paths,
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(

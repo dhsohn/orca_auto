@@ -26,12 +26,12 @@ if TYPE_CHECKING:
     )
 
 AnyCallable = Callable[..., Any]
-StageDepFallbackFactory = Callable[
+StageDepDefaultFactory = Callable[
     [Mapping[str, Any] | None, "_LazyOrchestrationDeps"], Mapping[str, Any]
 ]
 
 
-# Generic override/fallback machinery.
+# Generic override/default dependency wiring machinery.
 
 
 class _LazyOrchestrationDeps:
@@ -60,60 +60,50 @@ class _LazyOrchestrationDeps:
         return self._deps
 
 
-def _override(overrides: Mapping[str, Any] | None, name: str, fallback: Any) -> Any:
+def _override(overrides: Mapping[str, Any] | None, name: str, default: Any) -> Any:
     if overrides is not None and name in overrides:
         return overrides[name]
-    return fallback
+    return default
 
 
 @dataclass(frozen=True)
-class _StageDepFallbackGroup:
+class _StageDepDefaultGroup:
     dep_group: _OrchestrationStageDepGroup
-    fallbacks: Mapping[str, Any]
+    defaults: Mapping[str, Any]
 
     def build(self, overrides: Mapping[str, Any] | None) -> Any:
         return _build_dep_dataclass(
             self.dep_group.deps_type,
             overrides,
-            self.fallbacks,
+            self.defaults,
             label=f"stage dependency group {self.dep_group.name!r}",
         )
 
 
 @dataclass(frozen=True)
-class _StageDepFallbackSpec:
+class _StageDepDefaultSpec:
     dep_group: _OrchestrationStageDepGroup
-    fallback_factory: StageDepFallbackFactory
+    default_factory: StageDepDefaultFactory
 
     def build(
         self, overrides: Mapping[str, Any] | None, deps_provider: _LazyOrchestrationDeps
-    ) -> _StageDepFallbackGroup:
-        return _StageDepFallbackGroup(
+    ) -> _StageDepDefaultGroup:
+        return _StageDepDefaultGroup(
             self.dep_group,
-            self.fallback_factory(overrides, deps_provider),
+            self.default_factory(overrides, deps_provider),
         )
 
 
 @dataclass(frozen=True)
-class _StageDepFallbackRegistry:
-    specs: tuple[_StageDepFallbackSpec, ...]
+class _StageDepDefaultRegistry:
+    specs: tuple[_StageDepDefaultSpec, ...]
 
     def build_groups(
         self,
         overrides: Mapping[str, Any] | None,
         deps_provider: _LazyOrchestrationDeps,
-    ) -> tuple[_StageDepFallbackGroup, ...]:
+    ) -> tuple[_StageDepDefaultGroup, ...]:
         return tuple(spec.build(overrides, deps_provider) for spec in self.specs)
-
-    def flat_fallbacks(
-        self,
-        overrides: Mapping[str, Any] | None,
-        deps_provider: _LazyOrchestrationDeps,
-    ) -> dict[str, Any]:
-        fallbacks: dict[str, Any] = {}
-        for group in self.build_groups(overrides, deps_provider):
-            fallbacks.update(group.fallbacks)
-        return fallbacks
 
     def build_deps(
         self,
@@ -133,39 +123,39 @@ def _apply_overrides(
     overrides: Mapping[str, Any] | None,
     items: Mapping[str, Any],
 ) -> dict[str, Any]:
-    return {name: _override(overrides, name, fallback) for name, fallback in items.items()}
+    return {name: _override(overrides, name, default) for name, default in items.items()}
 
 
-def _validate_dep_fallbacks(
+def _validate_dep_defaults(
     deps_type: type[Any],
-    fallbacks: Mapping[str, Any],
+    defaults: Mapping[str, Any],
     *,
     label: str | None = None,
 ) -> None:
     expected = tuple(field.name for field in fields(deps_type))
     expected_names = set(expected)
-    fallback_names = tuple(fallbacks)
-    actual_names = set(fallback_names)
+    default_names = tuple(defaults)
+    actual_names = set(default_names)
     if actual_names == expected_names:
         return
 
     missing = tuple(name for name in expected if name not in actual_names)
-    unexpected = tuple(name for name in fallback_names if name not in expected_names)
+    unexpected = tuple(name for name in default_names if name not in expected_names)
     deps_label = label or deps_type.__name__
     raise ValueError(
-        f"{deps_label} fallback mismatch: missing={missing!r} unexpected={unexpected!r}"
+        f"{deps_label} default mismatch: missing={missing!r} unexpected={unexpected!r}"
     )
 
 
 def _build_dep_dataclass(
     deps_type: type[Any],
     overrides: Mapping[str, Any] | None,
-    fallbacks: Mapping[str, Any],
+    defaults: Mapping[str, Any],
     *,
     label: str | None = None,
 ) -> Any:
-    _validate_dep_fallbacks(deps_type, fallbacks, label=label)
-    return deps_type(**_apply_overrides(overrides, fallbacks))
+    _validate_dep_defaults(deps_type, defaults, label=label)
+    return deps_type(**_apply_overrides(overrides, defaults))
 
 
 def _deps_provider(
@@ -189,32 +179,32 @@ def _bind_many_with_deps(
     deps_provider: _LazyOrchestrationDeps,
     items: Mapping[str, AnyCallable],
 ) -> dict[str, AnyCallable]:
-    return {name: _bind_with_deps(deps_provider, fallback) for name, fallback in items.items()}
+    return {name: _bind_with_deps(deps_provider, default) for name, default in items.items()}
 
 
-# Workflow-level fallback implementations (thread overrides through nested helpers).
+# Workflow-level default implementations (thread overrides through nested helpers).
 
 
-def _coerce_mapping_fallback(value: Any) -> dict[str, Any]:
+def _coerce_mapping_default(value: Any) -> dict[str, Any]:
     from orca_auto.core.utils import mapping_or_empty
 
     return mapping_or_empty(value)
 
 
-def _normalize_text_fallback(value: Any) -> str:
+def _normalize_text_default(value: Any) -> str:
     from orca_auto.core.utils import normalize_text
 
     return normalize_text(value)
 
 
-def _safe_int_fallback(value: Any, *, default: int = 0) -> int:
+def _safe_int_default(value: Any, *, default: int = 0) -> int:
     from orca_auto.core.utils import safe_int
 
     return safe_int(value, default=default)
 
 
 def _normalize_text_override(overrides: Mapping[str, Any] | None = None) -> Any:
-    return _override(overrides, "_normalize_text", _normalize_text_fallback)
+    return _override(overrides, "_normalize_text", _normalize_text_default)
 
 
 def _stage_metadata_override(overrides: Mapping[str, Any] | None = None) -> Any:
@@ -231,12 +221,12 @@ def _stage_failure_is_recoverable_override(
         return override
 
     def stage_failure_is_recoverable(stage: dict[str, Any]) -> bool:
-        return _stage_failure_is_recoverable_fallback(stage, overrides=overrides)
+        return _stage_failure_is_recoverable_default(stage, overrides=overrides)
 
     return stage_failure_is_recoverable
 
 
-def _workflow_sync_only_fallback(
+def _workflow_sync_only_default(
     payload: dict[str, Any],
     *,
     overrides: Mapping[str, Any] | None = None,
@@ -249,7 +239,7 @@ def _workflow_sync_only_fallback(
     )
 
 
-def _workflow_has_active_children_fallback(
+def _workflow_has_active_children_default(
     payload: dict[str, Any],
     *,
     overrides: Mapping[str, Any] | None = None,
@@ -264,7 +254,7 @@ def _workflow_has_active_children_fallback(
     )
 
 
-def _stage_failure_is_recoverable_fallback(
+def _stage_failure_is_recoverable_default(
     stage: dict[str, Any],
     *,
     overrides: Mapping[str, Any] | None = None,
@@ -278,7 +268,7 @@ def _stage_failure_is_recoverable_fallback(
     )
 
 
-def _recompute_workflow_status_fallback(
+def _recompute_workflow_status_default(
     payload: dict[str, Any],
     *,
     overrides: Mapping[str, Any] | None = None,
@@ -302,7 +292,7 @@ def _recompute_workflow_status_fallback(
     )
 
 
-def _persist_workflow_progress_fallback(
+def _persist_workflow_progress_default(
     workflow_root: Path,
     workspace_dir: Path,
     payload: dict[str, Any],
@@ -332,7 +322,7 @@ def _persist_workflow_progress_fallback(
     )
 
 
-def _maybe_notify_workflow_phase_summary_fallback(
+def _maybe_notify_workflow_phase_summary_default(
     payload: dict[str, Any],
     *,
     config_path: str | None,
@@ -351,11 +341,11 @@ def _maybe_notify_workflow_phase_summary_fallback(
     )
 
 
-# Per-group stage dependency fallbacks. All five share the registry dispatch
+# Per-group stage dependency defaults. All five share the registry dispatch
 # signature (overrides, deps_provider) and del what they do not need.
 
 
-def _stage_builder_fallbacks(
+def _stage_builder_defaults(
     overrides: Mapping[str, Any] | None,
     deps_provider: _LazyOrchestrationDeps,
 ) -> dict[str, Any]:
@@ -367,7 +357,7 @@ def _stage_builder_fallbacks(
     }
 
 
-def _stage_materialization_fallbacks(
+def _stage_materialization_defaults(
     overrides: Mapping[str, Any] | None,
     deps_provider: _LazyOrchestrationDeps,
 ) -> dict[str, Any]:
@@ -388,7 +378,7 @@ def _stage_materialization_fallbacks(
     )
 
 
-def _stage_runtime_fallbacks(
+def _stage_runtime_defaults(
     overrides: Mapping[str, Any] | None,
     deps_provider: _LazyOrchestrationDeps,
 ) -> dict[str, Any]:
@@ -437,7 +427,7 @@ def _stage_runtime_fallbacks(
     }
 
 
-def _stage_support_fallbacks(
+def _stage_support_defaults(
     overrides: Mapping[str, Any] | None,
     deps_provider: _LazyOrchestrationDeps,
 ) -> dict[str, Any]:
@@ -467,38 +457,38 @@ def _stage_support_fallbacks(
                 "_submission_target": submission_target_impl,
             },
         ),
-        "_coerce_mapping": _coerce_mapping_fallback,
-        "_normalize_text": _normalize_text_fallback,
-        "_safe_int": _safe_int_fallback,
+        "_coerce_mapping": _coerce_mapping_default,
+        "_normalize_text": _normalize_text_default,
+        "_safe_int": _safe_int_default,
         "_stage_metadata": stage_metadata_impl,
         "_task_payload_dict": task_payload_dict_impl,
     }
 
 
-def _stage_workflow_fallbacks(
+def _stage_workflow_defaults(
     overrides: Mapping[str, Any] | None,
     deps_provider: _LazyOrchestrationDeps,
 ) -> dict[str, Any]:
     del deps_provider
     return {
         "_maybe_notify_workflow_phase_summary": partial(
-            _maybe_notify_workflow_phase_summary_fallback,
+            _maybe_notify_workflow_phase_summary_default,
             overrides=overrides,
         ),
         "_persist_workflow_progress": partial(
-            _persist_workflow_progress_fallback,
+            _persist_workflow_progress_default,
             overrides=overrides,
         ),
         "_recompute_workflow_status": partial(
-            _recompute_workflow_status_fallback,
+            _recompute_workflow_status_default,
             overrides=overrides,
         ),
         "_stage_failure_is_recoverable": _stage_failure_is_recoverable_override(overrides),
         "_workflow_has_active_children": partial(
-            _workflow_has_active_children_fallback,
+            _workflow_has_active_children_default,
             overrides=overrides,
         ),
-        "_workflow_sync_only": partial(_workflow_sync_only_fallback, overrides=overrides),
+        "_workflow_sync_only": partial(_workflow_sync_only_default, overrides=overrides),
     }
 
 
@@ -601,33 +591,19 @@ def _build_engine_deps(overrides: Mapping[str, Any] | None) -> OrchestrationEngi
     )
 
 
-def _stage_dep_fallback_registry() -> _StageDepFallbackRegistry:
-    return _StageDepFallbackRegistry(
+def _stage_dep_default_registry() -> _StageDepDefaultRegistry:
+    return _StageDepDefaultRegistry(
         (
-            _StageDepFallbackSpec(_ORCHESTRATION_STAGE_BUILDER_GROUP, _stage_builder_fallbacks),
-            _StageDepFallbackSpec(
+            _StageDepDefaultSpec(_ORCHESTRATION_STAGE_BUILDER_GROUP, _stage_builder_defaults),
+            _StageDepDefaultSpec(
                 _ORCHESTRATION_STAGE_MATERIALIZATION_GROUP,
-                _stage_materialization_fallbacks,
+                _stage_materialization_defaults,
             ),
-            _StageDepFallbackSpec(_ORCHESTRATION_STAGE_RUNTIME_GROUP, _stage_runtime_fallbacks),
-            _StageDepFallbackSpec(_ORCHESTRATION_STAGE_SUPPORT_GROUP, _stage_support_fallbacks),
-            _StageDepFallbackSpec(_ORCHESTRATION_STAGE_WORKFLOW_GROUP, _stage_workflow_fallbacks),
+            _StageDepDefaultSpec(_ORCHESTRATION_STAGE_RUNTIME_GROUP, _stage_runtime_defaults),
+            _StageDepDefaultSpec(_ORCHESTRATION_STAGE_SUPPORT_GROUP, _stage_support_defaults),
+            _StageDepDefaultSpec(_ORCHESTRATION_STAGE_WORKFLOW_GROUP, _stage_workflow_defaults),
         )
     )
-
-
-def _stage_dep_fallbacks(
-    overrides: Mapping[str, Any] | None,
-    deps_provider: _LazyOrchestrationDeps,
-) -> dict[str, Any]:
-    return _stage_dep_fallback_registry().flat_fallbacks(overrides, deps_provider)
-
-
-def _stage_dep_fallback_groups(
-    overrides: Mapping[str, Any] | None,
-    deps_provider: _LazyOrchestrationDeps,
-) -> tuple[_StageDepFallbackGroup, ...]:
-    return _stage_dep_fallback_registry().build_groups(overrides, deps_provider)
 
 
 def _build_stage_deps(
@@ -636,7 +612,7 @@ def _build_stage_deps(
     deps_provider: _LazyOrchestrationDeps | None = None,
 ) -> OrchestrationStageDeps:
     provider = _deps_provider(overrides, deps_provider)
-    return _stage_dep_fallback_registry().build_deps(
+    return _stage_dep_default_registry().build_deps(
         OrchestrationStageDeps,
         overrides,
         provider,
@@ -672,11 +648,11 @@ def _build_advance_deps(
 
 __all__ = [
     "AnyCallable",
-    "StageDepFallbackFactory",
+    "StageDepDefaultFactory",
     "_LazyOrchestrationDeps",
-    "_StageDepFallbackGroup",
-    "_StageDepFallbackRegistry",
-    "_StageDepFallbackSpec",
+    "_StageDepDefaultGroup",
+    "_StageDepDefaultRegistry",
+    "_StageDepDefaultSpec",
     "_apply_overrides",
     "_bind_many_with_deps",
     "_bind_with_deps",
@@ -686,27 +662,25 @@ __all__ = [
     "_build_engine_deps",
     "_build_persistence_deps",
     "_build_stage_deps",
-    "_coerce_mapping_fallback",
+    "_coerce_mapping_default",
     "_deps_provider",
-    "_maybe_notify_workflow_phase_summary_fallback",
-    "_normalize_text_fallback",
+    "_maybe_notify_workflow_phase_summary_default",
+    "_normalize_text_default",
     "_normalize_text_override",
     "_override",
-    "_persist_workflow_progress_fallback",
-    "_recompute_workflow_status_fallback",
-    "_safe_int_fallback",
-    "_stage_builder_fallbacks",
-    "_stage_dep_fallback_groups",
-    "_stage_dep_fallback_registry",
-    "_stage_dep_fallbacks",
-    "_stage_failure_is_recoverable_fallback",
+    "_persist_workflow_progress_default",
+    "_recompute_workflow_status_default",
+    "_safe_int_default",
+    "_stage_builder_defaults",
+    "_stage_dep_default_registry",
+    "_stage_failure_is_recoverable_default",
     "_stage_failure_is_recoverable_override",
-    "_stage_materialization_fallbacks",
+    "_stage_materialization_defaults",
     "_stage_metadata_override",
-    "_stage_runtime_fallbacks",
-    "_stage_support_fallbacks",
-    "_stage_workflow_fallbacks",
-    "_validate_dep_fallbacks",
-    "_workflow_has_active_children_fallback",
-    "_workflow_sync_only_fallback",
+    "_stage_runtime_defaults",
+    "_stage_support_defaults",
+    "_stage_workflow_defaults",
+    "_validate_dep_defaults",
+    "_workflow_has_active_children_default",
+    "_workflow_sync_only_default",
 ]

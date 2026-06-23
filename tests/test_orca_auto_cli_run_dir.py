@@ -309,6 +309,5 @@ def test_workflow_run_dir_layout_properties_and_manifest_detection(tmp_path: Pat
     (target / "product.xyz").write_text("1\np\nH 0 0 1\n", encoding="utf-8")
     layout = inspect_workflow_run_dir(target)
 
-    assert layout.is_workflow_dir is True
     assert layout.has_reaction_inputs is True
     assert layout.inferred_workflow_type == "reaction_ts_search"

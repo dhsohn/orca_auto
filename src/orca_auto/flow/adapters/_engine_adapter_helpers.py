@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.indexing import JobLocationRecord
-from orca_auto.core.utils.persistence import load_json_mapping_file
 
 
 @dataclass(frozen=True)
@@ -121,7 +121,21 @@ def first_normalized_text(*values: Any, default: str = "") -> str:
 
 
 def load_json_dict(path: Path) -> dict[str, Any]:
-    return load_json_mapping_file(path) or {}
+    if not path.exists():
+        return {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise ValueError(f"artifact JSON cannot be read: {path}") from exc
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"artifact file is not valid JSON: {path}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"artifact file must contain a JSON object: {path}")
+    return raw
 
 
 def direct_dir_target(

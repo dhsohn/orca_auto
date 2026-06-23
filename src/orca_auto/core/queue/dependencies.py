@@ -17,7 +17,7 @@ AdmissionReserver = Callable[[Any], str | None]
 
 
 class SlotReleaser(Protocol):
-    def __call__(self, __admission_root: str | Path, __admission_token: str) -> object: ...
+    def __call__(self, admission_root: str | Path, admission_token: str, /) -> object: ...
 
 
 class DequeuedEntryReserver(Protocol):

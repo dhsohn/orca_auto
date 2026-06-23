@@ -13,7 +13,6 @@ from .dft_index_queries import (
     build_dft_query,
     comparison_filters,
     lowest_energy_filters,
-    recent_filters,
 )
 from .dft_index_scanner import DFTIndexScanner, normalize_status_override
 from .dft_index_store import DFTIndexStore
@@ -105,9 +104,6 @@ class DFTIndex:
             logger.warning("dft_upsert_failed: path=%s error=%s", file_path, exc)
             return False
 
-    def _count(self) -> int:
-        return self._store.count()
-
     # ------------------------------------------------------------------
     # Query methods
     # ------------------------------------------------------------------
@@ -125,10 +121,6 @@ class DFTIndex:
     def get_stats(self) -> dict[str, Any]:
         """Return overall index statistics."""
         return self._store.stats()
-
-    def get_recent(self, limit: int = 10) -> list[dict[str, Any]]:
-        """Return the most recently modified calculation results."""
-        return self.query(recent_filters(limit))
 
     def get_lowest_energy(
         self,

@@ -33,10 +33,6 @@ class WorkflowRunDirLayout:
             return CONFORMER_SCREENING_TEMPLATE_ID
         return None
 
-    @property
-    def is_workflow_dir(self) -> bool:
-        return self.has_manifest or self.has_reaction_inputs or self.has_conformer_input
-
 
 def inspect_workflow_run_dir(path: str | Path) -> WorkflowRunDirLayout:
     target = Path(path).expanduser().resolve()

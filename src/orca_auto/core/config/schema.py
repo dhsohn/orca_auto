@@ -41,10 +41,23 @@ def as_float(value: Any, default: float) -> float:
 
 
 def positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
     parsed = safe_int(value, default=None)
     if parsed is None:
         return None
     return parsed if parsed > 0 else None
+
+
+def explicit_positive_int(value: Any, *, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer >= 1.")
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError(f"{field_name} must be an integer >= 1.")
+    parsed = safe_int(value, default=None)
+    if parsed is None or parsed < 1:
+        raise ValueError(f"{field_name} must be an integer >= 1.")
+    return parsed
 
 
 def normalize_default_max_retries(value: Any, default: int = 2) -> int:
@@ -56,29 +69,19 @@ def normalize_max_concurrent(value: Any, default: int = 4) -> int:
 
 
 def normalize_admission_limit(value: Any, max_concurrent: int) -> int | None:
+    del max_concurrent
     if value is None:
         return None
-    fallback = normalize_max_concurrent(max_concurrent, 1)
-    try:
-        if isinstance(value, (bool, int, float, str)):
-            normalized_limit = int(value)
-        else:
-            normalized_limit = fallback
-    except (TypeError, ValueError):
-        normalized_limit = fallback
-    if normalized_limit < 1:
-        return fallback
-    return normalized_limit
+    if value == "":
+        return None
+    return explicit_positive_int(value, field_name="admission_limit")
 
 
 def resolved_admission_limit(admission_limit: Any, max_concurrent: Any) -> int:
     fallback = normalize_max_concurrent(max_concurrent, 1)
     if admission_limit in (None, ""):
         return fallback
-    try:
-        return max(1, int(admission_limit))
-    except (TypeError, ValueError):
-        return fallback
+    return explicit_positive_int(admission_limit, field_name="admission_limit")
 
 
 class RuntimeAdmissionMixin:

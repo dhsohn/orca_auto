@@ -141,7 +141,7 @@ def test_running_calc_not_indexed(tmp_path: Path) -> None:
     assert len(report.new_results) == 1
     assert report.new_results[0].status == "running"
     # Running calculations should not be stored in the index
-    assert index._count() == 0
+    assert index.query({}) == []
 
     index.close()
 
@@ -166,7 +166,7 @@ def test_running_calc_change_detected_even_if_mtime_moves_backward(tmp_path: Pat
     report = monitor.scan()
     assert len(report.new_results) == 1
     assert report.new_results[0].status == "running"
-    assert index._count() == 0
+    assert index.query({}) == []
 
     index.close()
 

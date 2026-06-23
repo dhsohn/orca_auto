@@ -15,6 +15,8 @@ def safe_int(value: Any) -> int | None:
 
 
 def positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
     parsed = safe_int(value)
     if parsed is None or parsed <= 0:
         return None

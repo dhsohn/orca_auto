@@ -33,7 +33,7 @@ def tracked_artifact_context_impl(
             continue
         try:
             context = load_job_artifact_context(index_root, target)
-        except Exception as exc:  # noqa: BLE001
+        except FileNotFoundError as exc:
             LOGGER.debug(
                 "orca_artifact_context_load_failed: index_root=%s target=%s error=%s",
                 index_root,
@@ -86,7 +86,7 @@ def tracked_runtime_context_impl(
             run_id=run_id,
             reaction_dir=reaction_dir,
         )
-    except Exception:  # noqa: BLE001
+    except FileNotFoundError:
         return None
 
     artifact = getattr(context, "artifact", None)
@@ -123,7 +123,7 @@ def _contract_payload_from_loader(
             run_id=run_id,
             reaction_dir=reaction_dir,
         )
-    except Exception:  # noqa: BLE001
+    except FileNotFoundError:
         return None
     if not isinstance(payload, dict):
         return None

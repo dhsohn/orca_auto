@@ -83,69 +83,6 @@ def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli_common, "shared_workflow_root_from_config", lambda config_path: None)
 
 
-def test_queue_table_lines_align_wide_headers_and_icons(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=timezone.utc)
-    )
-
-    lines = unified_cli._queue_table_lines(
-        [
-            (
-                0,
-                {
-                    "activity_id": "wf-1",
-                    "kind": "workflow",
-                    "engine": "workflow",
-                    "status": "running",
-                    "label": "reaction-case",
-                    "source": "orca_auto_flow",
-                    "submitted_at": "2026-04-26T01:30:00+00:00",
-                    "updated_at": "2026-04-26T02:00:00+00:00",
-                    "metadata": {
-                        "template_name": "reaction_ts_search",
-                        "request_parameters": {"crest_mode": "nci"},
-                    },
-                },
-            ),
-            (
-                1,
-                {
-                    "activity_id": "orca-q-very-long-child-id",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "retrying",
-                    "label": "queued-ts",
-                    "source": "orca_auto_orca",
-                    "submitted_at": "2026-04-26T02:00:00+00:00",
-                    "updated_at": "2026-04-26T02:20:00+00:00",
-                    "metadata": {
-                        "task_kind": "optts_freq",
-                    },
-                },
-            ),
-            (
-                0,
-                {
-                    "activity_id": "custom-q-1",
-                    "kind": "job",
-                    "engine": "custom",
-                    "status": "failed",
-                    "label": "very-long-detail-label-for-width-checking-and-truncation",
-                    "source": "custom",
-                    "submitted_at": "2026-04-26T02:10:00+00:00",
-                    "updated_at": "2026-04-26T02:40:00+00:00",
-                },
-            ),
-        ]
-    )
-
-    widths = [unified_cli._queue_display_width(line) for line in lines]
-    assert len(set(widths)) == 1
-    assert "..." in lines[-1]
-
-
 def test_queue_elapsed_prefers_attempt_anchor_metadata() -> None:
     now = datetime(2026, 4, 26, 3, 0, 0, tzinfo=timezone.utc)
 

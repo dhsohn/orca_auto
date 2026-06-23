@@ -308,6 +308,31 @@ class TestConfigValidation(unittest.TestCase):
             self.assertEqual(cfg.runtime.admission_root, str(scheduler_admission))
             self.assertEqual(cfg.runtime.admission_limit, 7)
 
+    def test_scheduler_max_active_simulations_rejects_invalid_explicit_values(self) -> None:
+        for value in ("bad", 0, -1, True):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                allowed = root / "orca_runs"
+                allowed.mkdir()
+                fake_orca = root / "orca"
+                _write_fake_executable(fake_orca)
+
+                cfg_path = _write_orca_config(
+                    root / "orca_auto.yaml",
+                    {
+                        "scheduler": {"max_active_simulations": value},
+                        "runtime": {"allowed_root": str(allowed)},
+                        "paths": {"orca_executable": str(fake_orca)},
+                    },
+                )
+
+                with self.assertRaises(ValueError) as ctx:
+                    load_config(str(cfg_path))
+                self.assertIn(
+                    "scheduler.max_active_simulations must be an integer >= 1",
+                    str(ctx.exception),
+                )
+
     def test_behavior_auto_organize_is_loaded(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

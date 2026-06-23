@@ -130,7 +130,8 @@ def test_resolve_admission_limit_falls_back_and_handles_invalid_values() -> None
         worker_common.resolve_admission_limit(_cfg(resolved_admission_limit=0, max_concurrent=7))
         == 7
     )
-    assert worker_common.resolve_admission_limit(_cfg(resolved_admission_limit="bad")) == 1
+    with pytest.raises(ValueError, match="admission_limit must be an integer >= 1"):
+        worker_common.resolve_admission_limit(_cfg(resolved_admission_limit="bad"))
 
 
 def test_reserve_queue_worker_slot_uses_common_resolved_values() -> None:
