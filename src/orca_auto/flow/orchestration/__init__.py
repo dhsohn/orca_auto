@@ -1,114 +1,57 @@
 from __future__ import annotations
 
-from importlib import import_module
 from pathlib import Path
-from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from .requests import ConformerScreeningWorkflowRequest, ReactionTsSearchWorkflowRequest
+from orca_auto.core.utils import normalize_text, now_utc_iso, timestamped_token
+from orca_auto.flow.registry import sync_workflow_registry
+from orca_auto.flow.state import write_workflow_payload
+from orca_auto.flow.xyz_utils import load_xyz_atom_sequence
 
-_EXPORTS: dict[str, tuple[str, str]] = {
-    "ConformerScreeningWorkflowRequest": (
-        ".requests",
-        "ConformerScreeningWorkflowRequest",
-    ),
-    "ReactionTsSearchWorkflowRequest": (".requests", "ReactionTsSearchWorkflowRequest"),
-    "WorkflowFactoryDeps": (".factories", "WorkflowFactoryDeps"),
-    "advance_workflow": (".advance", "advance_workflow"),
-    "cancel_materialized_workflow": (".advance", "cancel_materialized_workflow"),
-    "load_xyz_atom_sequence": ("orca_auto.flow.xyz_utils", "load_xyz_atom_sequence"),
-    "normalize_text": ("orca_auto.core.utils", "normalize_text"),
-    "now_utc_iso": ("orca_auto.core.utils", "now_utc_iso"),
-    "sync_workflow_registry": ("orca_auto.flow.registry", "sync_workflow_registry"),
-    "timestamped_token": ("orca_auto.core.utils", "timestamped_token"),
-    "write_workflow_payload": ("orca_auto.flow.state", "write_workflow_payload"),
-}
-
-_SUBMODULES: dict[str, str] = {
-    "advance": ".advance",
-    "advance_phases": ".advance_phases",
-    "builders": ".builders",
-    "crest_orca_materialization": ".crest_orca_materialization",
-    "dep_builders": ".dep_builders",
-    "deps": ".deps",
-    "factories": ".factories",
-    "lifecycle": ".lifecycle",
-    "materialization": ".materialization",
-    "reaction_materialization": ".reaction_materialization",
-    "reaction_orca_materialization": ".reaction_orca_materialization",
-    "requests": ".requests",
-    "stage_builders": ".stage_builders",
-    "stage_runtime": ".stage_runtime",
-    "stage_view_mutators": ".stage_view_mutators",
-    "stage_views": ".stage_views",
-    "support": ".support",
-    "template_builders": ".template_builders",
-    "workflow_builders": ".workflow_builders",
-    "workflow_cancellation": ".workflow_cancellation",
-}
-
-_MISSING = object()
+from .advance import advance_workflow, cancel_materialized_workflow
+from .factories import (
+    WorkflowFactoryDeps,
+)
+from .factories import (
+    create_conformer_screening_workflow_from_request as _create_conformer_screening_workflow_from_request,
+)
+from .factories import (
+    create_reaction_ts_search_workflow_from_request as _create_reaction_ts_search_workflow_from_request,
+)
+from .requests import ConformerScreeningWorkflowRequest, ReactionTsSearchWorkflowRequest
+from .stage_builders import new_crest_stage_impl
+from .workflow_builders import _copy_input_impl
 
 
-def _import_from(module_name: str, attr_name: str) -> Any:
-    module = import_module(module_name, __name__)
-    return getattr(module, attr_name)
-
-
-def _load_export(name: str) -> Any:
-    value = _import_from(*_EXPORTS[name])
-    globals()[name] = value
-    return value
-
-
-def _load_submodule(name: str) -> ModuleType:
-    module = import_module(_SUBMODULES[name], __name__)
-    globals()[name] = module
-    return module
-
-
-def _resolve(name: str) -> Any:
-    value = globals().get(name, _MISSING)
-    if value is _MISSING:
-        return __getattr__(name)
-    return value
-
-
-def _workflow_factory_deps() -> Any:
-    factory_deps_type = _resolve("WorkflowFactoryDeps")
-    workflow_builders = _load_submodule("workflow_builders")
-    stage_builders = _load_submodule("stage_builders")
-    return factory_deps_type(
-        normalize_text=_resolve("normalize_text"),
-        workflow_id_factory=_resolve("timestamped_token"),
-        copy_input_fn=workflow_builders._copy_input_impl,
-        now_utc_iso_fn=_resolve("now_utc_iso"),
-        new_crest_stage_fn=stage_builders.new_crest_stage_impl,
-        write_workflow_payload_fn=_resolve("write_workflow_payload"),
-        sync_workflow_registry_fn=_resolve("sync_workflow_registry"),
-        load_xyz_atom_sequence_fn=_resolve("load_xyz_atom_sequence"),
+def _workflow_factory_deps() -> WorkflowFactoryDeps:
+    return WorkflowFactoryDeps(
+        normalize_text=normalize_text,
+        workflow_id_factory=timestamped_token,
+        copy_input_fn=_copy_input_impl,
+        now_utc_iso_fn=now_utc_iso,
+        new_crest_stage_fn=new_crest_stage_impl,
+        write_workflow_payload_fn=write_workflow_payload,
+        sync_workflow_registry_fn=sync_workflow_registry,
+        load_xyz_atom_sequence_fn=load_xyz_atom_sequence,
     )
 
 
 def create_reaction_ts_search_workflow_from_request(
     request: ReactionTsSearchWorkflowRequest,
 ) -> dict[str, Any]:
-    factory = _import_from(
-        ".factories",
-        "create_reaction_ts_search_workflow_from_request",
+    return _create_reaction_ts_search_workflow_from_request(
+        request,
+        deps=_workflow_factory_deps(),
     )
-    return factory(request, deps=_workflow_factory_deps())
 
 
 def create_conformer_screening_workflow_from_request(
     request: ConformerScreeningWorkflowRequest,
 ) -> dict[str, Any]:
-    factory = _import_from(
-        ".factories",
-        "create_conformer_screening_workflow_from_request",
+    return _create_conformer_screening_workflow_from_request(
+        request,
+        deps=_workflow_factory_deps(),
     )
-    return factory(request, deps=_workflow_factory_deps())
 
 
 def create_reaction_ts_search_workflow(
@@ -134,9 +77,8 @@ def create_reaction_ts_search_workflow(
     source_job_id: str = "",
     source_job_type: str = "",
 ) -> dict[str, Any]:
-    request_type = _resolve("ReactionTsSearchWorkflowRequest")
     return create_reaction_ts_search_workflow_from_request(
-        request_type(
+        ReactionTsSearchWorkflowRequest(
             reactant_xyz=reactant_xyz,
             product_xyz=product_xyz,
             workflow_root=workflow_root,
@@ -176,9 +118,8 @@ def create_conformer_screening_workflow(
     multiplicity: int = 1,
     crest_job_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    request_type = _resolve("ConformerScreeningWorkflowRequest")
     return create_conformer_screening_workflow_from_request(
-        request_type(
+        ConformerScreeningWorkflowRequest(
             input_xyz=input_xyz,
             workflow_root=workflow_root,
             workflow_id=workflow_id,
@@ -193,18 +134,6 @@ def create_conformer_screening_workflow(
             crest_job_manifest=crest_job_manifest,
         )
     )
-
-
-def __getattr__(name: str) -> Any:
-    if name in _EXPORTS:
-        return _load_export(name)
-    if name in _SUBMODULES:
-        return _load_submodule(name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(_EXPORTS) | set(_SUBMODULES))
 
 
 __all__ = [
