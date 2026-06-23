@@ -26,7 +26,12 @@ from .resource_directives import (
 from .retry_recipes import (
     apply_retry_recipe as _apply_retry_recipe,
 )
-from .scants import prepare_scants_optts_fallback_input
+from .scants import (
+    apply_scants_optts_resume_rewrite,
+    apply_scants_relaxed_scan_resume_rewrite,
+    input_uses_scants,
+    prepare_scants_optts_fallback_input,
+)
 
 __all__ = [
     "GEOM_HEADER_RE",
@@ -73,7 +78,26 @@ def prepare_checkpoint_restart_input(
     if not _apply_checkpoint_restart(lines, actions, source_inp, target_inp):
         return None, []
 
-    _apply_geometry_restart(lines, actions, source_inp, target_inp, reaction_dir)
+    # ORCA writes the same-stem XYZ during relaxed ScanTS scan steps too, so the
+    # file alone cannot prove that ORCA has entered OPTTS refinement.  Promote a
+    # resumed ScanTS input to OPTTS only when the previous output either contains
+    # an explicit TS-refinement marker or a completed actual-energy scan surface
+    # from which we can select the maximum numbered scan point.
+    scants_resume_actions: List[str] = []
+    uses_scants = input_uses_scants(source_inp)
+    if uses_scants:
+        scants_resume_actions = apply_scants_optts_resume_rewrite(
+            lines=lines,
+            source_inp=source_inp,
+            target_inp=target_inp,
+            out_path=source_inp.with_suffix(".out"),
+        )
+        actions.extend(scants_resume_actions)
+
+    if not scants_resume_actions:
+        if uses_scants:
+            actions.extend(apply_scants_relaxed_scan_resume_rewrite(lines, source_inp))
+        _apply_geometry_restart(lines, actions, source_inp, target_inp, reaction_dir)
     target_inp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return target_inp, actions
 
