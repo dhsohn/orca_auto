@@ -6,6 +6,7 @@ orca_auto is a queue-first interface for ORCA and workflow orchestration on Linu
 
 ## Docs
 
+- Architecture overview: [ARCHITECTURE.md](ARCHITECTURE.md) ([한국어](ARCHITECTURE(ko).md))
 - Quickstart: [docs/QUICKSTART.md](docs/QUICKSTART.md)
 - Runtime and command reference: [docs/REFERENCE.md](docs/REFERENCE.md)
 - WSL and `systemd` runtime setup: [systemd/README.md](systemd/README.md)
