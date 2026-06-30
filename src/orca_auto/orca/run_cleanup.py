@@ -3,14 +3,23 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from .queue_adapter import clear_terminal
-from .run_snapshot import collect_run_snapshots
+from orca_auto.core.utils.process_tracking import active_run_lock_pid
+
+from .queue_adapter import (
+    TERMINAL_STATUSES,
+    clear_terminal,
+    list_queue,
+    queue_entry_reaction_dir,
+    queue_entry_status,
+)
+from .run_snapshot import RunSnapshot, collect_run_snapshots
 from .state import STATE_FILE_NAME
 from .statuses import RunStatus
 
 logger = logging.getLogger(__name__)
 
 _TERMINAL_RUN_STATUSES = frozenset({RunStatus.COMPLETED.value, RunStatus.FAILED.value})
+_STALE_ACTIVE_RUN_STATUSES = frozenset({RunStatus.RUNNING.value, RunStatus.RETRYING.value})
 
 
 def _resolved_path_text(path_text: str) -> str:
@@ -23,12 +32,47 @@ def _resolved_path_text(path_text: str) -> str:
         return text
 
 
+def _terminal_queue_reaction_dirs(allowed_root: Path) -> set[str]:
+    reaction_dirs: set[str] = set()
+    for entry in list_queue(allowed_root):
+        if queue_entry_status(entry) not in TERMINAL_STATUSES:
+            continue
+        reaction_dir = _resolved_path_text(queue_entry_reaction_dir(entry))
+        if reaction_dir:
+            reaction_dirs.add(reaction_dir)
+    return reaction_dirs
+
+
+def _snapshot_has_live_run_lock(snapshot: RunSnapshot) -> bool:
+    return active_run_lock_pid(snapshot.reaction_dir, logger=logger) is not None
+
+
+def _should_clear_snapshot(
+    snapshot: RunSnapshot,
+    *,
+    terminal_queue_reaction_dirs: set[str],
+) -> bool:
+    status = snapshot.status
+    if status in _TERMINAL_RUN_STATUSES:
+        return True
+    if status not in _STALE_ACTIVE_RUN_STATUSES:
+        return False
+    reaction_dir = _resolved_path_text(str(snapshot.reaction_dir))
+    if reaction_dir not in terminal_queue_reaction_dirs:
+        return False
+    return not _snapshot_has_live_run_lock(snapshot)
+
+
 def clear_terminal_run_states(allowed_root: Path) -> int:
+    terminal_queue_reaction_dirs = _terminal_queue_reaction_dirs(allowed_root)
     cleared_state_paths: set[str] = set()
     run_count = 0
 
     for snapshot in collect_run_snapshots(allowed_root):
-        if snapshot.status not in _TERMINAL_RUN_STATUSES:
+        if not _should_clear_snapshot(
+            snapshot,
+            terminal_queue_reaction_dirs=terminal_queue_reaction_dirs,
+        ):
             continue
 
         state_path = snapshot.reaction_dir / STATE_FILE_NAME
@@ -49,4 +93,6 @@ def clear_terminal_run_states(allowed_root: Path) -> int:
 
 
 def clear_terminal_entries(allowed_root: Path) -> tuple[int, int]:
-    return clear_terminal(allowed_root), clear_terminal_run_states(allowed_root)
+    run_count = clear_terminal_run_states(allowed_root)
+    queue_count = clear_terminal(allowed_root)
+    return queue_count, run_count
