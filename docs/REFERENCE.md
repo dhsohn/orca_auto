@@ -305,7 +305,25 @@ workflow-child visibility policy, except it omits the `ID` column so each row fi
 single line on narrow mobile screens. Its actions message offers per-activity cancel
 buttons plus refresh and "clear finished" buttons (the latter equivalent to `/list clear`).
 
-### 7.5 `organize`
+`queue list --watch` continuously refreshes the list until interrupted; `--interval` sets
+the refresh seconds (default 2.0). `queue list clear` prunes completed, failed, and
+cancelled entries from the unified list.
+
+### 7.5 CLI Output and Global Flags
+
+- Table output is colorized by status when stdout is a terminal. Color is disabled
+  automatically when piped or when `NO_COLOR` is set, and can be forced off with
+  `--no-color` (e.g. `orca_auto --no-color queue list`). The `queue cancel`, `run-dir`,
+  and `service status` outputs colorize status fields the same way.
+- `orca_auto --version` prints the installed version, and running `orca_auto` with no
+  command prints help. Errors and recovery hints are written to stderr.
+- `orca_auto service status --json` emits machine-readable output for scripting.
+- The Telegram bot supports `/cancel <target>` with confirmation via inline buttons before
+  cancelling. In the `/list` actions message the cancel button still routes through that
+  confirmation step; when more than eight activities are cancellable the message notes how
+  many are shown, and executing a cancel or clear auto-refreshes the list.
+
+### 7.6 `organize`
 
 ```bash
 orca_auto organize orca --root '/absolute/path/to/orca_runs'
@@ -319,7 +337,7 @@ Options:
 - `organize orca --rebuild-index`: Rebuild the ORCA JSONL index
 - `--apply`: Perform actual moves; otherwise the command is a dry run
 
-### 7.6 `scan-notify`
+### 7.7 `scan-notify`
 
 ```bash
 orca_auto scan-notify
@@ -330,7 +348,7 @@ Behavior:
 - `scan-notify` runs a one-shot scan of the configured ORCA root and sends
   Telegram discovery alerts, then exits. It is not a live monitor.
 
-### 7.7 Long-Running Services
+### 7.8 Long-Running Services
 
 Long-running worker and Telegram bot processes are managed through `systemd`
 only. Public CLI commands do not start those services directly.

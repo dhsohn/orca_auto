@@ -8,7 +8,7 @@ orca_auto is a queue-first interface for ORCA and workflow orchestration on Linu
 
 ## Docs
 
-- Architecture overview: [ARCHITECTURE.md](ARCHITECTURE.md) ([한국어](ARCHITECTURE(ko).md))
+- Architecture overview: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ([한국어](docs/ARCHITECTURE(ko).md))
 - Quickstart: [docs/QUICKSTART.md](docs/QUICKSTART.md) ([한국어](docs/QUICKSTART(ko).md))
 - Runtime and command reference: [docs/REFERENCE.md](docs/REFERENCE.md) ([한국어](docs/REFERENCE(ko).md))
 - WSL and `systemd` runtime setup: [systemd/README.md](systemd/README.md) ([한국어](systemd/README(ko).md))
@@ -107,7 +107,7 @@ orca_auto run-dir '/home/user/workflow_inputs/reaction_case'
 
 # inspect and maintain
 orca_auto queue list --engine orca
-orca_auto queue list clear
+orca_auto queue list clear      # prune completed/failed/cancelled
 orca_auto queue cancel <target>
 orca_auto service status
 orca_auto service restart
@@ -115,61 +115,30 @@ orca_auto organize orca --root '/home/user/orca_runs' --apply
 orca_auto scan-notify
 ```
 
-`queue list` prints a compact table with `Status`, `Name`, `Detail`, `ID`, and `Elapsed`
-columns that adapt to the terminal width (long values are truncated with `...`).
-Workflow child simulations stay grouped under their parent workflow with indentation.
-By default, only ORCA child jobs are expanded in the combined text view; internal xTB/CREST
-workflow children stay hidden unless you ask for them with filters or `--json`.
-Use `orca_auto queue list clear` to prune completed, failed, and cancelled entries from
-the unified list. The Telegram bot uses the same `/list` table layout (minus the `ID`
-column, so each row fits on one line on mobile) and supports the same cleanup via
-`/list clear`.
-The `active_simulations` line counts only simulations that currently consume the shared
-`scheduler.max_active_simulations` slots.
+`queue list` prints a compact, terminal-width-aware table; workflow children are grouped
+and indented under their parent. The Telegram bot mirrors the same surface (`/list`,
+`/cancel`) with inline buttons. For the full command reference — table columns, the
+`--watch`/`--json`/`--no-color` flags, color and exit behavior, and the Telegram bot —
+see [docs/REFERENCE.md](docs/REFERENCE.md) §7.
 
-CLI table output is colorized by status when stdout is a terminal; color is disabled
-automatically when piped or when `NO_COLOR` is set, and can be forced off with
-`--no-color` (e.g. `orca_auto --no-color queue list`). `orca_auto --version` prints the
-installed version, and running `orca_auto` with no command prints help. Errors and
-recovery hints are written to stderr. The `queue cancel`, `run-dir`, and `service status`
-outputs colorize status fields the same way.
+## Services
 
-`orca_auto queue list --watch` continuously refreshes the list until interrupted
-(`--interval` sets the refresh seconds, default 2.0). `orca_auto service status --json`
-emits machine-readable output for scripting.
-
-The Telegram bot supports `/cancel <target>` with confirmation via inline buttons before cancelling.
-`/list` follows the table with an actions message carrying a per-activity cancel button
-for each active item plus refresh and "clear finished" buttons, so cancellation, refresh,
-and pruning completed/failed/cancelled entries (the same as `/list clear`) are each one tap
-(the cancel button still routes through the confirmation step); when more than eight
-activities are cancellable the actions message notes how many are shown, and executing a
-cancel or clear auto-refreshes the list.
-
-Long-running services are managed through `systemd` only. After `orca_auto.yaml`
-is configured, enable the combined runtime target once and let `systemd` start
-both the worker and the bot automatically:
+Long-running services (the queue worker and Telegram bot) are managed through `systemd`
+only. After `orca_auto.yaml` is configured, enable the combined runtime target once and
+let `systemd` keep both running:
 
 ```bash
 cd <repo_root>
 orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 orca_auto service status
-```
-
-If Telegram is not configured yet, the installer enables only the queue worker.
-Run the same command again after setting `telegram.bot_token` and
-`telegram.chat_id` to enable the full runtime target.
-
-Restart examples:
-
-```bash
 orca_auto service restart
 ```
 
-If you edited files under `systemd/`, run `sudo systemctl daemon-reload` before restarting.
-
-If you want only the worker managed automatically, enable
-`orca_auto-queue-worker@$(whoami)` instead.
+If Telegram is not configured yet, the installer enables only the queue worker; run the
+same command again after setting `telegram.bot_token` and `telegram.chat_id` to enable the
+full runtime target. If you edited files under `systemd/`, run
+`sudo systemctl daemon-reload` before restarting. See
+[systemd/README.md](systemd/README.md) for the full runtime setup.
 
 ## Runtime Notes
 

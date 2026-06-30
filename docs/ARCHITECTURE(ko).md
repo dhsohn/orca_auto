@@ -4,9 +4,9 @@
 설명합니다. 패키지 레이아웃, 큐/워커 라이프사이클, 공용 엔진 추상화, 워크플로우
 오케스트레이션 계층에 대한 개념 모델이 필요한 개발자와 운영자를 대상으로 합니다.
 
-작업 단위의 사용법은 [README.md](README.md), [docs/QUICKSTART.md](docs/QUICKSTART.md),
-[docs/REFERENCE.md](docs/REFERENCE.md)를 참고하세요. 패키지/임포트 규칙은
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)에 있습니다.
+작업 단위의 사용법은 [README.md](../README.md), [QUICKSTART.md](QUICKSTART.md),
+[REFERENCE.md](REFERENCE.md)를 참고하세요. 패키지/임포트 규칙은
+[DEVELOPMENT.md](DEVELOPMENT.md)에 있습니다.
 
 > 이 문서는 [ARCHITECTURE.md](ARCHITECTURE.md)(영어판)의 한국어 번역본입니다.
 
@@ -248,7 +248,7 @@ python -m orca_auto.core.engines.worker_child \
   `organize_index.py`가 탐색용 JSONL 인덱스를 유지합니다.
 
 ORCA가 다운스트림에 노출하는 필드("계약 동결")는
-[docs/REFERENCE.md](docs/REFERENCE.md) §11.1에 문서화되어 있습니다 —
+[REFERENCE.md](REFERENCE.md) §11.1에 문서화되어 있습니다 —
 `reaction_dir`는 ORCA 큐 및 다운스트림 계약 필드로 남습니다.
 
 ---

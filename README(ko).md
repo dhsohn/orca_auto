@@ -14,7 +14,7 @@ orca_auto는 Linux 및 WSL 환경에서 ORCA 실행과 워크플로우 오케스
 
 ## 문서
 
-- 아키텍처 개요: [ARCHITECTURE(ko).md](ARCHITECTURE(ko).md) ([English](ARCHITECTURE.md))
+- 아키텍처 개요: [docs/ARCHITECTURE(ko).md](docs/ARCHITECTURE(ko).md) ([English](docs/ARCHITECTURE.md))
 - 빠른 시작: [docs/QUICKSTART(ko).md](docs/QUICKSTART(ko).md) ([English](docs/QUICKSTART.md))
 - 런타임 및 명령어 레퍼런스: [docs/REFERENCE(ko).md](docs/REFERENCE(ko).md) ([English](docs/REFERENCE.md))
 - WSL 및 `systemd` 런타임 설정: [systemd/README(ko).md](systemd/README(ko).md) ([English](systemd/README.md))
@@ -119,7 +119,7 @@ orca_auto run-dir '/home/user/workflow_inputs/reaction_case'
 
 # 조회 및 유지보수
 orca_auto queue list --engine orca
-orca_auto queue list clear
+orca_auto queue list clear      # 완료/실패/취소 항목 정리
 orca_auto queue cancel <target>
 orca_auto service status
 orca_auto service restart
@@ -127,58 +127,30 @@ orca_auto organize orca --root '/home/user/orca_runs' --apply
 orca_auto scan-notify
 ```
 
-`queue list`는 터미널 너비에 맞춰 조정되는 `Status`, `Name`, `Detail`, `ID`, `Elapsed`
-컬럼의 간결한 표를 출력합니다(긴 값은 `...`로 잘립니다). 워크플로우 자식 시뮬레이션은
-부모 워크플로우 아래에 들여쓰기되어 묶여 표시됩니다. 기본적으로 통합 텍스트 뷰에서는
-ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 워크플로우 자식은 필터나 `--json`으로
-요청하지 않는 한 숨겨집니다. 통합 목록에서 완료/실패/취소 항목을 정리하려면
-`orca_auto queue list clear`를 사용하세요. Telegram 봇은 동일한 `/list` 표 레이아웃을
-사용하며(모바일에서 한 줄에 맞도록 `ID` 컬럼은 제외), `/list clear`로 동일한 정리를
-지원합니다. `active_simulations` 줄은 공유 `scheduler.max_active_simulations` 슬롯을
-현재 소비 중인 시뮬레이션만 셉니다.
+`queue list`는 터미널 너비에 맞춰 조정되는 간결한 표를 출력하며, 워크플로우 자식은
+부모 아래에 들여쓰기되어 묶입니다. Telegram 봇은 동일한 표면(`/list`, `/cancel`)을
+인라인 버튼으로 제공합니다. 표 컬럼, `--watch`/`--json`/`--no-color` 플래그, 색상·종료
+동작, Telegram 봇 등 전체 명령 레퍼런스는
+[docs/REFERENCE(ko).md](docs/REFERENCE(ko).md) §7을 참고하세요.
 
-CLI 표 출력은 stdout이 터미널일 때 상태별로 색상이 입혀집니다. 파이프로 연결되거나
-`NO_COLOR`가 설정되면 색상이 자동으로 비활성화되며, `--no-color`로 강제로 끌 수도
-있습니다(예: `orca_auto --no-color queue list`). `orca_auto --version`은 설치된 버전을
-출력하고, 명령 없이 `orca_auto`를 실행하면 도움말이 표시됩니다. 오류와 복구 힌트는
-stderr로 출력됩니다. `queue cancel`, `run-dir`, `service status` 출력도 동일한 방식으로
-상태 필드에 색상을 입힙니다.
+## 서비스
 
-`orca_auto queue list --watch`는 중단할 때까지 목록을 계속 갱신합니다(`--interval`로
-새로고침 초를 설정, 기본 2.0). `orca_auto service status --json`은 스크립팅을 위한
-기계 판독용 출력을 내보냅니다.
-
-Telegram 봇은 인라인 버튼을 통한 확인 후 취소를 수행하는 `/cancel <target>`을
-지원합니다. `/list`는 표 뒤에, 활성 항목별 취소 버튼과 새로고침·"완료 정리" 버튼을
-담은 액션 메시지를 함께 보내므로, 취소·새로고침·완료/실패/취소 항목 정리(`/list clear`와
-동일)를 각각 한 번의 탭으로 수행할 수 있습니다(취소 버튼은 여전히 확인 단계를 거칩니다).
-취소 가능한 활동이 8개를 초과하면 액션 메시지가 표시된 개수를 안내하며, 취소나 정리를
-실행하면 목록이 자동으로 새로고침됩니다.
-
-장기 실행 서비스는 오직 `systemd`로만 관리됩니다. `orca_auto.yaml` 설정을 마친 뒤,
-통합 런타임 타깃을 한 번 활성화하면 `systemd`가 워커와 봇을 자동으로 시작합니다:
+장기 실행 서비스(큐 워커와 Telegram 봇)는 오직 `systemd`로만 관리됩니다.
+`orca_auto.yaml` 설정을 마친 뒤, 통합 런타임 타깃을 한 번 활성화하면 `systemd`가 둘 다
+계속 실행합니다:
 
 ```bash
 cd <repo_root>
 orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 orca_auto service status
-```
-
-Telegram이 아직 설정되지 않았다면 설치 프로그램은 큐 워커만 활성화합니다.
-`telegram.bot_token`과 `telegram.chat_id`를 설정한 뒤 같은 명령을 다시 실행하면
-전체 런타임 타깃이 활성화됩니다.
-
-재시작 예시:
-
-```bash
 orca_auto service restart
 ```
 
-`systemd/` 아래 파일을 수정했다면, 재시작 전에 `sudo systemctl daemon-reload`를
-실행하세요.
-
-워커만 자동 관리되기를 원한다면, 대신 `orca_auto-queue-worker@$(whoami)`를
-활성화하세요.
+Telegram이 아직 설정되지 않았다면 설치 프로그램은 큐 워커만 활성화합니다.
+`telegram.bot_token`과 `telegram.chat_id`를 설정한 뒤 같은 명령을 다시 실행하면 전체
+런타임 타깃이 활성화됩니다. `systemd/` 아래 파일을 수정했다면, 재시작 전에
+`sudo systemctl daemon-reload`를 실행하세요. 전체 런타임 설정은
+[systemd/README(ko).md](systemd/README(ko).md)를 참고하세요.
 
 ## 런타임 노트
 

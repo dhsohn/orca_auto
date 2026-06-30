@@ -7,9 +7,9 @@ the system at runtime. It is aimed at developers and operators who need a mental
 model of the package layout, the queue/worker lifecycle, the shared engine
 abstraction, and the workflow orchestration layer.
 
-For task-level usage see [README.md](README.md), [docs/QUICKSTART.md](docs/QUICKSTART.md),
-and [docs/REFERENCE.md](docs/REFERENCE.md). For package and import conventions see
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+For task-level usage see [README.md](../README.md), [QUICKSTART.md](QUICKSTART.md),
+and [REFERENCE.md](REFERENCE.md). For package and import conventions see
+[DEVELOPMENT.md](DEVELOPMENT.md).
 
 ---
 
@@ -253,7 +253,7 @@ logic. Notable pieces:
   `organize_index.py` maintain a JSONL index for discovery.
 
 The fields ORCA exposes downstream (the "contract freeze") are documented in
-[docs/REFERENCE.md](docs/REFERENCE.md) §11.1 — `reaction_dir` remains the ORCA
+[REFERENCE.md](REFERENCE.md) §11.1 — `reaction_dir` remains the ORCA
 queue and downstream contract field.
 
 ---

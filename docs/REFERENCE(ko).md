@@ -321,7 +321,25 @@ ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 자식 작업은 잡음을 
 그 액션 메시지는 활동별 취소 버튼과 새로고침·"완료 정리" 버튼(후자는 `/list clear`와
 동등)을 제공합니다.
 
-### 7.5 `organize`
+`queue list --watch`는 중단할 때까지 목록을 계속 갱신합니다. `--interval`로 새로고침
+초를 설정합니다(기본 2.0). `queue list clear`는 통합 목록에서 완료/실패/취소 항목을
+정리합니다.
+
+### 7.5 CLI 출력 및 전역 플래그
+
+- 표 출력은 stdout이 터미널일 때 상태별로 색상이 입혀집니다. 파이프로 연결되거나
+  `NO_COLOR`가 설정되면 색상이 자동으로 비활성화되며, `--no-color`로 강제로 끌 수
+  있습니다(예: `orca_auto --no-color queue list`). `queue cancel`, `run-dir`,
+  `service status` 출력도 동일한 방식으로 상태 필드에 색상을 입힙니다.
+- `orca_auto --version`은 설치된 버전을 출력하고, 명령 없이 `orca_auto`를 실행하면
+  도움말이 표시됩니다. 오류와 복구 힌트는 stderr로 출력됩니다.
+- `orca_auto service status --json`은 스크립팅을 위한 기계 판독용 출력을 내보냅니다.
+- Telegram 봇은 인라인 버튼을 통한 확인 후 취소하는 `/cancel <target>`을 지원합니다.
+  `/list` 액션 메시지의 취소 버튼도 그 확인 단계를 거칩니다. 취소 가능한 활동이 8개를
+  초과하면 메시지가 표시된 개수를 안내하며, 취소나 정리를 실행하면 목록이 자동으로
+  새로고침됩니다.
+
+### 7.6 `organize`
 
 ```bash
 orca_auto organize orca --root '/absolute/path/to/orca_runs'
@@ -335,7 +353,7 @@ orca_auto organize orca --root '/absolute/path/to/orca_runs' --apply
 - `organize orca --rebuild-index`: ORCA JSONL 인덱스 재구축
 - `--apply`: 실제 이동 수행. 없으면 명령은 드라이런(dry run)
 
-### 7.6 `scan-notify`
+### 7.7 `scan-notify`
 
 ```bash
 orca_auto scan-notify
@@ -346,7 +364,7 @@ orca_auto scan-notify
 - `scan-notify`는 설정된 ORCA 루트를 일회성으로 스캔해 Telegram 발견 알림을 보낸 뒤
   종료합니다. 실시간 모니터가 아닙니다.
 
-### 7.7 장기 실행 서비스
+### 7.8 장기 실행 서비스
 
 장기 실행 워커와 Telegram 봇 프로세스는 오직 `systemd`로만 관리됩니다. 공개 CLI 명령은
 그 서비스들을 직접 시작하지 않습니다.
