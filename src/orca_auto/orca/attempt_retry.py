@@ -12,13 +12,13 @@ from .inp_rewriter import (
     rewrite_for_retry,
 )
 from .out_analyzer import OutAnalysis
+from .retry_policy import RetryRecipeName, retry_recipe_name_for_input
 from .scants import (
     highest_scants_surface_point,
     input_uses_scants,
     prepare_scants_reverse_scan_retry_input,
 )
 from .state import save_state
-from .state_machine import MAX_RETRY_RECIPES
 from .statuses import RunStatus
 from .types import RetryNotification, RunFinishedNotification, RunState
 
@@ -43,13 +43,15 @@ class RetryAttemptRequest:
     notify_retry: Callable[[RetryNotification], Any] | None
 
 
-def retry_recipe_step(retry_number: int) -> int:
-    """Map retry number to available recipe steps.
+def retry_recipe_step(retry_number: int) -> RetryRecipeName:
+    """Legacy helper retained for retry-input recovery call sites.
 
-    With the current recipe set, retries beyond the final step re-use that step.
+    Normal retry preparation now selects recipes from the calculation-type policy.
+    Recovery without an input path falls back to a no-route-rewrite copy instead
+    of the old global TightSCF/geometry-hardening ladder.
     """
-    retry_number = max(1, int(retry_number))
-    return min(retry_number, MAX_RETRY_RECIPES)
+    del retry_number
+    return "no_route_rewrite"
 
 
 def resume_checkpoint_inp_path(current_inp: Path) -> Path:
@@ -122,7 +124,7 @@ def _prepare_scants_reverse_scan_after_maximum(
 def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
     next_retry_number = ctx.retries_used + 1
     next_inp = ctx.retry_inp_path(ctx.selected_inp, next_retry_number)
-    patch_step = retry_recipe_step(next_retry_number)
+    patch_step = retry_recipe_name_for_input(ctx.selected_inp, next_retry_number)
     try:
         uses_scants = input_uses_scants(ctx.current_inp) or input_uses_scants(ctx.selected_inp)
         scants_surface_maximum_seen = _output_has_scants_actual_surface_maximum(ctx)

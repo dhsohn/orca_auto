@@ -4,12 +4,15 @@ from typing import Callable, List
 
 from .input_blocks import ensure_route_keywords, set_block_key_value
 from .resource_directives import increase_maxcore
+from .retry_policy import RetryRecipeName
 
 RetryRecipe = Callable[[List[str]], List[str]]
 
 
-def apply_retry_recipe(lines: List[str], step: int) -> List[str]:
-    recipe = RETRY_RECIPES.get(step)
+def apply_retry_recipe(lines: List[str], recipe_name: RetryRecipeName | int) -> List[str]:
+    if recipe_name == "scants_retry" or recipe_name == "no_route_rewrite":
+        return []
+    recipe = RETRY_RECIPES.get(recipe_name)
     if recipe is None:
         return ["no_recipe_applied"]
     return recipe(lines)

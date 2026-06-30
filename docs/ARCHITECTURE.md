@@ -239,10 +239,18 @@ logic. Notable pieces:
   `output_status.py`, `completion_rules.py`): determines completion by mode —
   TS mode (`OptTS`/`NEB-TS`, requires exactly one imaginary frequency, plus an
   IRC marker when the route has `IRC`) vs Opt mode (normal termination).
-- **Conservative retry** (`retry_recipes.py`): a fixed escalation order
-  (`TightSCF SlowConv` + `%scf MaxIter 300`, then `%geom Calc_Hess`/`Recalc_Hess`).
-  Charge and multiplicity are **never** auto-changed; the original `.inp` is
-  preserved; retries are written as `<name>.retryNN.inp`.
+- **Calculation-type retry policy** (`retry_policy.py`, `retry_recipes.py`):
+  retry counts and rewrites are fixed by ORCA route type, not by the raw user
+  retry count. Generic `TightSCF`/`SlowConv` escalation is not applied. Generic
+  `Opt`/`Opt+Freq`/`Freq`/single-point routes do not get automatic retries;
+  failed `.xyz`/`.gbw` artifacts are not reused as a generic rerun strategy.
+  Standalone `OptTS`/`NEB-TS` also has no automatic retry; Hessian hardening is
+  left to explicit user input. `ScanTS` uses only ScanTS-specific
+  continuation/reverse-scan logic from scan artifacts. If no route-specific
+  rewrite is available, retry fails closed rather than repeating the identical
+  input. Charge and multiplicity are
+  **never** auto-changed; the original `.inp` is preserved; retries are written
+  as `<name>.retryNN.inp`.
 - **Restart/resume:** for retry/resume it generates a restart input with
   `MORead` + `%moinp` when a matching non-empty `.gbw` checkpoint exists; resumed
   inputs are written as `*.resume.inp` so user input is never mutated.
@@ -371,7 +379,9 @@ constructors. Notable rules:
 - `scheduler.max_active_simulations` is the shared admission cap.
 - `scheduler.admission_root` is the shared slot-coordination root.
 - `workflow.root` enables workflow supervision and scopes internal-engine runs.
-- `default_max_retries: 2` means `1 initial + 2 retries = 3 attempts`.
+- `default_max_retries: 0` disables ORCA retries; any positive value enables the
+  calculation-type retry policy, whose per-route caps are recorded in
+  `job_state.json`/queue metadata.
 
 ---
 

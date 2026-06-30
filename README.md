@@ -83,7 +83,8 @@ Notes:
 
 - Use Linux paths only; Windows drive paths, `/mnt/<drive>/...`, relative executable paths, and `.exe` binaries are rejected.
 - Configured ORCA/xTB/CREST executable paths must point to existing executable Linux binaries. Leave `workflow.paths.xtb_executable` or `workflow.paths.crest_executable` blank only when you intentionally want PATH lookup at runtime.
-- `default_max_retries: 2` means `1 initial + 2 retries = 3` total attempts.
+- `default_max_retries: 0` disables ORCA retries; any positive value enables the
+  calculation-type retry policy, capped by ORCA route type.
 - `scheduler.max_active_simulations` is the shared cap across ORCA, internal xTB workflow stages, and internal CREST workflow stages.
 - `workflow.root` is the workflow root used by the unified CLI and workflow worker.
 - Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and organized outputs live only under `workflow.root/<workflow_id>/internal/<engine>/{runs,outputs}`.

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict
 
 from .inp_rewriter import rewrite_for_retry
+from .retry_policy import RetryRecipeName
 from .state_machine import decide_attempt_outcome
 from .statuses import AnalyzerStatus
 from .types import AttemptRecord, RunFinishedNotification, RunState
@@ -20,7 +21,7 @@ class MissingRetryInputRecoveryRequest:
     selected_inp: Path
     current_inp: Path
     retries_used: int
-    retry_recipe_step: Callable[[int], int]
+    retry_recipe_step: Callable[[int], RetryRecipeName | int]
     to_resolved_local: Callable[[str], Path]
     save_state: Callable[[Path, RunState], Path]
 
@@ -33,7 +34,7 @@ class ExecutionInputRequest:
     execution_index: int
     retries_used: int
     retry_inp_path: Callable[[Path, int], Path]
-    retry_recipe_step: Callable[[int], int]
+    retry_recipe_step: Callable[[int], RetryRecipeName | int]
     to_resolved_local: Callable[[str], Path]
     save_state: Callable[[Path, RunState], Path]
 
@@ -74,7 +75,7 @@ def recover_missing_retry_input(
     selected_inp: Path,
     current_inp: Path,
     retries_used: int,
-    retry_recipe_step: Callable[[int], int],
+    retry_recipe_step: Callable[[int], RetryRecipeName | int],
     to_resolved_local: Callable[[str], Path],
     save_state: Callable[[Path, RunState], Path],
 ) -> tuple[bool, str]:
@@ -119,6 +120,7 @@ def _recover_missing_retry_input(request: MissingRetryInputRecoveryRequest) -> t
         reaction_dir=request.reaction_dir,
         step=request.retry_recipe_step(request.retries_used),
         max_memory_gb=request.state.get("max_memory_gb_per_task"),
+        allow_no_effective_change=True,
     )
     actions = _ensure_patch_actions_list(last_attempt)
     actions.append(f"resume_recreated_missing_input:{request.current_inp.name}")
@@ -135,7 +137,7 @@ def resolve_execution_input(
     execution_index: int,
     retries_used: int,
     retry_inp_path: Callable[[Path, int], Path],
-    retry_recipe_step: Callable[[int], int],
+    retry_recipe_step: Callable[[int], RetryRecipeName | int],
     to_resolved_local: Callable[[str], Path],
     save_state: Callable[[Path, RunState], Path],
 ) -> tuple[Path | None, str | None]:

@@ -126,8 +126,9 @@ class TestNewRecipeSteps(unittest.TestCase):
             src = root / "rxn.inp"
             dst = root / "rxn.retry05.inp"
             src.write_text(self.BASE_INP, encoding="utf-8")
-            actions = rewrite_for_retry(src, dst, root, step=5)
-        self.assertIn("no_recipe_applied", actions)
+            with self.assertRaisesRegex(RuntimeError, "no_retry_rewrite_available"):
+                rewrite_for_retry(src, dst, root, step=5)
+        self.assertFalse(dst.exists())
 
 
 class TestDecideAttemptOutcomeExpanded(unittest.TestCase):
