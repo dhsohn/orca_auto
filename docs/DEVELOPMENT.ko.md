@@ -137,4 +137,4 @@ ORCA 고유의 상태, 재시도, 입력 선택, 리포트, 자동 정리 동작
 
 ## 관련 문서
 
-- [REFERENCE(ko).md](REFERENCE(ko).md): 런타임 및 동작 레퍼런스
+- [REFERENCE.ko.md](REFERENCE.ko.md): 런타임 및 동작 레퍼런스

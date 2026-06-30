@@ -660,4 +660,4 @@ pytest tests/test_run_job.py tests/test_queue_worker.py -q
 pytest tests/core/test_engine_child.py tests/core/test_engine_admission.py -q
 ```
 
-패키지 레이아웃과 임포트 안내는 [DEVELOPMENT(ko).md](DEVELOPMENT(ko).md)를 참고하세요.
+패키지 레이아웃과 임포트 안내는 [DEVELOPMENT.ko.md](DEVELOPMENT.ko.md)를 참고하세요.

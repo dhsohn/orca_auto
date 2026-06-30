@@ -2,17 +2,17 @@
 
 [![CI](https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml/badge.svg)](https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml)
 
-**English** | [한국어](README(ko).md)
+**English** | [한국어](README.ko.md)
 
 orca_auto is a queue-first interface for ORCA and workflow orchestration on Linux and WSL. xTB and CREST remain part of the runtime, but they are now used internally for workflow stages rather than as standalone public surfaces. It submits work durably, runs it under supervised workers, records per-job state and reports, and organizes completed outputs.
 
 ## Docs
 
-- Architecture overview: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ([한국어](docs/ARCHITECTURE(ko).md))
-- Quickstart: [docs/QUICKSTART.md](docs/QUICKSTART.md) ([한국어](docs/QUICKSTART(ko).md))
-- Runtime and command reference: [docs/REFERENCE.md](docs/REFERENCE.md) ([한국어](docs/REFERENCE(ko).md))
-- WSL and `systemd` runtime setup: [systemd/README.md](systemd/README.md) ([한국어](systemd/README(ko).md))
-- Package layout and development notes: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) ([한국어](docs/DEVELOPMENT(ko).md))
+- Architecture overview: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ([한국어](docs/ARCHITECTURE.ko.md))
+- Quickstart: [docs/QUICKSTART.md](docs/QUICKSTART.md) ([한국어](docs/QUICKSTART.ko.md))
+- Runtime and command reference: [docs/REFERENCE.md](docs/REFERENCE.md) ([한국어](docs/REFERENCE.ko.md))
+- WSL and `systemd` runtime setup: [systemd/README.md](systemd/README.md) ([한국어](systemd/README.ko.md))
+- Package layout and development notes: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) ([한국어](docs/DEVELOPMENT.ko.md))
 
 ## Install
 

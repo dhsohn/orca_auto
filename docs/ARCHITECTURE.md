@@ -1,6 +1,6 @@
 # orca_auto Architecture
 
-**English** | [한국어](ARCHITECTURE(ko).md)
+**English** | [한국어](ARCHITECTURE.ko.md)
 
 This document describes how orca_auto is structured and how work flows through
 the system at runtime. It is aimed at developers and operators who need a mental

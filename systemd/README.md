@@ -1,6 +1,6 @@
 # systemd assets
 
-**English** | [한국어](README(ko).md)
+**English** | [한국어](README.ko.md)
 
 This directory is the single home for long-running orca_auto service assets.
 

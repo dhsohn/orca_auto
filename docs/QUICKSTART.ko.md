@@ -79,5 +79,5 @@ orca_auto service restart
 orca_auto queue list --refresh
 ```
 
-서비스가 여전히 기대대로 동작하지 않으면, [systemd/README(ko).md](../systemd/README(ko).md)의
+서비스가 여전히 기대대로 동작하지 않으면, [systemd/README.ko.md](../systemd/README.ko.md)의
 더 깊은 systemd 명령을 사용하세요.

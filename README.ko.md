@@ -14,11 +14,11 @@ orca_auto는 Linux 및 WSL 환경에서 ORCA 실행과 워크플로우 오케스
 
 ## 문서
 
-- 아키텍처 개요: [docs/ARCHITECTURE(ko).md](docs/ARCHITECTURE(ko).md) ([English](docs/ARCHITECTURE.md))
-- 빠른 시작: [docs/QUICKSTART(ko).md](docs/QUICKSTART(ko).md) ([English](docs/QUICKSTART.md))
-- 런타임 및 명령어 레퍼런스: [docs/REFERENCE(ko).md](docs/REFERENCE(ko).md) ([English](docs/REFERENCE.md))
-- WSL 및 `systemd` 런타임 설정: [systemd/README(ko).md](systemd/README(ko).md) ([English](systemd/README.md))
-- 패키지 레이아웃 및 개발 노트: [docs/DEVELOPMENT(ko).md](docs/DEVELOPMENT(ko).md) ([English](docs/DEVELOPMENT.md))
+- 아키텍처 개요: [docs/ARCHITECTURE.ko.md](docs/ARCHITECTURE.ko.md) ([English](docs/ARCHITECTURE.md))
+- 빠른 시작: [docs/QUICKSTART.ko.md](docs/QUICKSTART.ko.md) ([English](docs/QUICKSTART.md))
+- 런타임 및 명령어 레퍼런스: [docs/REFERENCE.ko.md](docs/REFERENCE.ko.md) ([English](docs/REFERENCE.md))
+- WSL 및 `systemd` 런타임 설정: [systemd/README.ko.md](systemd/README.ko.md) ([English](systemd/README.md))
+- 패키지 레이아웃 및 개발 노트: [docs/DEVELOPMENT.ko.md](docs/DEVELOPMENT.ko.md) ([English](docs/DEVELOPMENT.md))
 
 ## 설치
 
@@ -131,7 +131,7 @@ orca_auto scan-notify
 부모 아래에 들여쓰기되어 묶입니다. Telegram 봇은 동일한 표면(`/list`, `/cancel`)을
 인라인 버튼으로 제공합니다. 표 컬럼, `--watch`/`--json`/`--no-color` 플래그, 색상·종료
 동작, Telegram 봇 등 전체 명령 레퍼런스는
-[docs/REFERENCE(ko).md](docs/REFERENCE(ko).md) §7을 참고하세요.
+[docs/REFERENCE.ko.md](docs/REFERENCE.ko.md) §7을 참고하세요.
 
 ## 서비스
 
@@ -150,7 +150,7 @@ Telegram이 아직 설정되지 않았다면 설치 프로그램은 큐 워커�
 `telegram.bot_token`과 `telegram.chat_id`를 설정한 뒤 같은 명령을 다시 실행하면 전체
 런타임 타깃이 활성화됩니다. `systemd/` 아래 파일을 수정했다면, 재시작 전에
 `sudo systemctl daemon-reload`를 실행하세요. 전체 런타임 설정은
-[systemd/README(ko).md](systemd/README(ko).md)를 참고하세요.
+[systemd/README.ko.md](systemd/README.ko.md)를 참고하세요.
 
 ## 런타임 노트
 
@@ -163,7 +163,7 @@ Telegram이 아직 설정되지 않았다면 설치 프로그램은 큐 워커�
   `.gbw` 파일을 사용해 `MORead`와 `%moinp`가 포함된 재시작 입력을 생성합니다.
 - 완료된 ORCA 실행은 `job_state.json`, `job_report.json`, `job_report.md` 같은 상태 및
   리포트 파일을 기록합니다.
-- 무인 WSL 또는 Linux 실행을 위해서는 [systemd/README(ko).md](systemd/README(ko).md)의
+- 무인 WSL 또는 Linux 실행을 위해서는 [systemd/README.ko.md](systemd/README.ko.md)의
   `systemd` 자산을 사용하세요.
 
 ## 테스트
