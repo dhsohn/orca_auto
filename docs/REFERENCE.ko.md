@@ -164,7 +164,8 @@ orca:
 
 - `orca.runtime.allowed_root`: 실행이 허용되는 루트 디렉터리
 - `orca.runtime.organized_root`: 정리된 출력의 루트
-- `orca.runtime.default_max_retries`: 최초 시도 이후 최대 재시도 횟수
+- `orca.runtime.default_max_retries`: `0`이면 ORCA 재시도 비활성화, 양수면
+  계산 종류별 재시도 정책 활성화
 - `scheduler.max_active_simulations`: ORCA, 내부 xTB 단계, 내부 CREST 단계 전반에 걸친
   공유 활성 실행 총 상한
 - `scheduler.admission_root`: 머신 전역 슬롯 조율을 위한 공유 admission 루트
@@ -181,7 +182,8 @@ orca:
 
 참고:
 
-- `default_max_retries=2`는 `최초 1회 + 재시도 2회 = 총 3회 시도`를 의미합니다.
+- `default_max_retries=0`은 ORCA 재시도를 비활성화합니다. 양수 값은 계산 종류별
+  재시도 정책을 활성화하며, 실제 재시도 횟수는 ORCA route 종류별 cap을 따릅니다.
 - `C:\...`, `C:/...`, `/mnt/c/...` 같은 Windows 스타일 경로는 설정에서 지원되지
   않습니다.
 - ORCA, xTB, CREST의 설정된 실행 경로는 실제 존재하는 실행 파일을 가리키는 절대 Linux
@@ -468,17 +470,20 @@ Opt 모드 완료:
 - `incomplete`
 - `unknown_failure`
 
-재시도 수정 순서:
+재시도 정책:
 
-1. `TightSCF SlowConv`와 `%scf MaxIter 300` 추가
-2. `%geom Calc_Hess true`, `Recalc_Hess 5`, `MaxIter 300` 추가
-3. 재시도가 더 허용되면 마지막 보수적 재시도 레시피를 재사용
+- `Opt`, `Opt+Freq`, `Freq`, single-point route: 자동 재시도하지 않습니다. 실패한
+  `*.xyz`/`.gbw` artifact를 generic restart 근거로 보지 않습니다.
+- standalone `OptTS`/`NEB-TS`: 자동 재시도하지 않습니다. Hessian hardening은
+  자동 fallback이 아니라 사용자가 명시하는 입력 선택으로 남깁니다.
+- `ScanTS`: 최대 2회, scan artifact 기반의 ScanTS 전용 continuation/reverse-scan
+  로직만 사용합니다. 일반 SCF/geometry hardening은 적용하지 않습니다.
 
 지오메트리 재시작 규칙:
 
-- 직전 시도의 일치하는 `*.xyz`를 우선 사용
-- 가장 최근 `*_trj.xyz` 또는 `.xyz`로 대체
-- 재시작 지오메트리가 없으면 원본 지오메트리 블록 유지
+- 일반 geometry/checkpoint restart는 non-ScanTS retry 정책에 포함하지 않습니다.
+- ScanTS는 numbered scan `*.NNN.xyz` artifact를 continuation/reverse scan에 사용할 수 있습니다.
+- route별 rewrite가 없으면 원본 지오메트리를 그대로 반복하지 않고 fail-closed합니다.
 
 원칙:
 

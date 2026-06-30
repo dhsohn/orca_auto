@@ -191,7 +191,7 @@ class TestRunInpSubmit(unittest.TestCase):
             self.assertEqual(metadata["selected_inp"], str(reaction_dir / "rxn.inp"))
             self.assertEqual(metadata["selected_input_path"], str(reaction_dir / "rxn.inp"))
             self.assertEqual(metadata["selected_input_xyz"], "")
-            self.assertEqual(metadata["max_retries"], 2)
+            self.assertEqual(metadata["max_retries"], 0)
             self.assertEqual(metadata["submitted_via"], "run_inp")
             self.assertEqual(metadata["job_type"], "opt")
             self.assertEqual(

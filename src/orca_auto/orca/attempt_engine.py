@@ -18,6 +18,7 @@ from .attempt_retry import (
 from .completion_rules import detect_completion_mode
 from .orca_runner import WorkerShutdownInterrupt
 from .out_analyzer import OutAnalysis, analyze_output
+from .retry_policy import RetryRecipeName, effective_max_retries
 from .state import now_utc_iso, save_state
 from .state_machine import decide_attempt_outcome
 from .statuses import AnalyzerStatus, RunStatus
@@ -90,7 +91,7 @@ class RecordedAttemptResult:
     analysis: OutAnalysis
 
 
-def _retry_recipe_step(retry_number: int) -> int:
+def _retry_recipe_step(retry_number: int) -> RetryRecipeName:
     return retry_recipe_step(retry_number)
 
 
@@ -426,13 +427,27 @@ def run_attempts(
     notify_finished: Callable[[RunFinishedNotification], Any] | None = None,
     notify_retry: Callable[[RetryNotification], Any] | None = None,
 ) -> int:
+    policy_max_retries = effective_max_retries(
+        selected_inp,
+        configured_max_retries=max_retries,
+    )
+    if resumed:
+        stored_max_retries = max(0, int(state.get("max_retries", policy_max_retries)))
+        # Retry policy controls new calculation-failure retries.  Resumed crashed
+        # or interrupted runs keep their persisted retry budget so recovery can
+        # continue the in-flight run rather than being reclassified as a fresh
+        # no-retry Opt/Freq failure.
+        policy_max_retries = max(policy_max_retries, stored_max_retries)
+    if state.get("max_retries") != policy_max_retries:
+        state["max_retries"] = policy_max_retries
+        save_state(reaction_dir, state)
     ctx = AttemptRunContext(
         reaction_dir=reaction_dir,
         selected_inp=selected_inp,
         state=state,
         resumed=resumed,
         runner=runner,
-        max_retries=max_retries,
+        max_retries=policy_max_retries,
         retry_inp_path=retry_inp_path,
         to_resolved_local=to_resolved_local,
         emit=emit,

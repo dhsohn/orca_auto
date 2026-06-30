@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 
 from ..input_artifacts import selected_input_artifacts
+from ..retry_policy import effective_max_retries
 
 if TYPE_CHECKING:
     from ..types import QueueEnqueuedNotification
@@ -194,9 +195,13 @@ def build_queue_metadata(
     artifacts = selected_input_artifacts(selected_inp)
     job_type, molecule_key = resolve_job_metadata(artifacts.selected_inp, reaction_dir)
     requested = resource_request_from_selected_inp(cfg, selected_inp, deps=deps, logger=logger)
+    assert selected_inp is not None
     metadata: dict[str, Any] = {
         "submitted_via": "run_inp",
-        "max_retries": max(0, int(cfg.runtime.default_max_retries)),
+        "max_retries": effective_max_retries(
+            selected_inp,
+            configured_max_retries=max(0, int(cfg.runtime.default_max_retries)),
+        ),
         "job_type": job_type,
         "molecule_key": molecule_key,
         "resource_request": requested,

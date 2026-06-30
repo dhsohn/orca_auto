@@ -161,7 +161,8 @@ Field descriptions for the `orca` section:
 
 - `orca.runtime.allowed_root`: Root directory permitted for execution
 - `orca.runtime.organized_root`: Root for organized outputs
-- `orca.runtime.default_max_retries`: Maximum retry count after the initial attempt
+- `orca.runtime.default_max_retries`: `0` disables ORCA retries; positive values
+  enable the calculation-type retry policy
 - `scheduler.max_active_simulations`: Shared total active-run cap across ORCA, internal xTB stages, and internal CREST stages
 - `scheduler.admission_root`: Shared admission root for machine-wide slot coordination
 - `workflow.root`: Workflow root for workflow creation, activity inspection, and the integrated workflow worker
@@ -173,7 +174,8 @@ Field descriptions for the `orca` section:
 
 Notes:
 
-- `default_max_retries=2` means `1 initial + 2 retries = 3 total attempts`
+- `default_max_retries=0` disables ORCA retries; any positive value enables the
+  calculation-type retry policy, which caps retries by ORCA route type
 - Windows-style paths such as `C:\...`, `C:/...`, and `/mnt/c/...` are not supported in config
 - Configured executable paths for ORCA, xTB, and CREST must be absolute Linux
   paths to existing executable files and must not end in `.exe`. If
@@ -450,17 +452,21 @@ Representative statuses:
 - `incomplete`
 - `unknown_failure`
 
-Retry modification order:
+Retry policy:
 
-1. Add `TightSCF SlowConv` plus `%scf MaxIter 300`
-2. Add `%geom Calc_Hess true`, `Recalc_Hess 5`, `MaxIter 300`
-3. Reuse the last conservative retry recipe if more retries are allowed
+- `Opt`, `Opt+Freq`, `Freq`, and single-point routes: no automatic retry. Failed
+  `*.xyz`/`.gbw` artifacts are not treated as useful generic restart evidence.
+- Standalone `OptTS`/`NEB-TS`: no automatic retry. Hessian hardening remains an
+  explicit input choice rather than an automatic fallback.
+- `ScanTS`: up to two retries through ScanTS-specific continuation/reverse-scan
+  logic from scan artifacts only. Generic SCF/geometry hardening is not applied.
 
 Geometry restart rules:
 
-- Prefer the previous attempt's matching `*.xyz`
-- Fall back to the most recent `*_trj.xyz` or `.xyz`
-- Keep the original geometry block if no restart geometry is available
+- Generic geometry/checkpoint restart is not part of normal non-ScanTS retry.
+- ScanTS may use numbered scan `*.NNN.xyz` artifacts for continuation/reverse scans.
+- Fail closed instead of repeating the original geometry unchanged if no
+  route-specific rewrite is available.
 
 Principles:
 

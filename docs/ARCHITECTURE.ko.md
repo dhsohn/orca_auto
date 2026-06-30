@@ -234,10 +234,16 @@ python -m orca_auto.core.engines.worker_child \
   `completion_rules.py`): 모드별로 완료를 판정합니다 — TS 모드(`OptTS`/`NEB-TS`,
   허수 진동수 정확히 1개 필요, 경로에 `IRC`가 있으면 IRC 마커도 필요) vs Opt
   모드(정상 종료).
-- **보수적 재시도**(`retry_recipes.py`): 고정된 에스컬레이션 순서(`TightSCF
-  SlowConv` + `%scf MaxIter 300`, 그 다음 `%geom Calc_Hess`/`Recalc_Hess`).
-  전하와 다중도는 **절대** 자동 변경하지 않으며, 원본 `.inp`는 보존되고, 재시도는
-  `<name>.retryNN.inp`로 기록됩니다.
+- **계산 종류별 재시도 정책**(`retry_policy.py`, `retry_recipes.py`): 재시도
+  횟수와 rewrite는 사용자가 입력한 숫자를 그대로 따르지 않고 ORCA route 종류별
+  고정 정책을 따릅니다. 일반 `TightSCF`/`SlowConv` 에스컬레이션은 적용하지
+  않습니다. 일반 `Opt`/`Opt+Freq`/`Freq`/single-point route는 자동 재시도하지
+  않으며, 실패한 `.xyz`/`.gbw` artifact를 generic rerun 전략으로 재사용하지
+  않습니다. standalone `OptTS`/`NEB-TS`도 자동 재시도하지 않으며, Hessian
+  hardening은 사용자가 명시한 입력으로 남깁니다. `ScanTS`는 scan artifact 기반의
+  ScanTS 전용 continuation/reverse-scan 로직만 사용합니다. route별 rewrite가 없으면 동일 입력을 반복하지 않고 fail-closed 합니다. 전하와 다중도는 **절대**
+  자동 변경하지 않으며, 원본 `.inp`는 보존되고, 재시도는 `<name>.retryNN.inp`로
+  기록됩니다.
 - **재시작/재개:** 재시도/재개 시, 일치하는 비어 있지 않은 `.gbw` 체크포인트가
   있으면 `MORead` + `%moinp`로 재시작 입력을 생성합니다. 재개된 입력은
   `*.resume.inp`로 기록되어 사용자 입력이 변경되지 않습니다.
@@ -366,7 +372,9 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 - `scheduler.max_active_simulations`는 공유 어드미션 상한입니다.
 - `scheduler.admission_root`는 공유 슬롯 조정 루트입니다.
 - `workflow.root`는 워크플로우 감독을 활성화하고 내부 엔진 실행을 스코프합니다.
-- `default_max_retries: 2`는 `초기 1회 + 재시도 2회 = 총 3회 시도`를 의미합니다.
+- `default_max_retries: 0`은 ORCA 재시도를 비활성화합니다. 양수 값은 계산
+  종류별 재시도 정책을 활성화하며, 실제 route별 cap은 `job_state.json`/큐 metadata에
+  기록됩니다.
 
 ---
 

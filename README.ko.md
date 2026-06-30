@@ -92,7 +92,8 @@ orca:
 - 설정된 ORCA/xTB/CREST 실행 경로는 실제로 존재하는 실행 가능한 Linux 바이너리를
   가리켜야 합니다. 런타임에 PATH 탐색을 의도하는 경우에만
   `workflow.paths.xtb_executable` 또는 `workflow.paths.crest_executable`을 비워 두세요.
-- `default_max_retries: 2`는 `최초 1회 + 재시도 2회 = 총 3회 시도`를 의미합니다.
+- `default_max_retries: 0`은 ORCA 재시도를 비활성화합니다. 양수 값은 ORCA route
+  종류별 cap을 따르는 계산 종류별 재시도 정책을 활성화합니다.
 - `scheduler.max_active_simulations`는 ORCA, 내부 xTB 워크플로우 단계, 내부 CREST
   워크플로우 단계 전반에 걸친 공유 상한입니다.
 - `workflow.root`는 통합 CLI와 워크플로우 워커가 사용하는 워크플로우 루트입니다.

@@ -8,7 +8,6 @@ from .state import load_state, new_state, save_state
 from .statuses import AnalyzerStatus, RunStatus
 from .types import RunState
 
-MAX_RETRY_RECIPES = 4
 RESUMABLE_RUN_STATUSES = {RunStatus.RUNNING.value, RunStatus.RETRYING.value}
 RESUMABLE_FAILED_REASONS = {"interrupted_by_user", "worker_shutdown", "crashed_recovery"}
 
@@ -102,7 +101,15 @@ def load_or_create_state(
     else:
         state = new_state(reaction_dir, selected_inp, max_retries=max_retries)
 
-    state["max_retries"] = max_retries
+    if resumed:
+        attempts = state.get("attempts")
+        attempt_count = len(attempts) if isinstance(attempts, list) else 0
+        if attempt_count <= 1:
+            state["max_retries"] = max(0, int(state.get("max_retries", max_retries)), max_retries)
+        else:
+            state["max_retries"] = max_retries
+    else:
+        state["max_retries"] = max_retries
     if not isinstance(state.get("attempts"), list):
         state["attempts"] = []
     save_state(reaction_dir, state)

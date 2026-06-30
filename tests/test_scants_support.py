@@ -748,7 +748,7 @@ def test_failed_scants_without_surface_maximum_or_numbered_xyz_fails_closed(
     assert "geometry_restart_from_rxn.xyz" not in actions
 
 
-def test_failed_scants_second_retry_adds_scf_without_checkpoint_restart(
+def test_failed_scants_second_failure_fails_closed_without_generic_hardening(
     tmp_path: Path,
 ) -> None:
     selected_inp = tmp_path / "rxn.inp"
@@ -760,28 +760,29 @@ def test_failed_scants_second_retry_adds_scf_without_checkpoint_restart(
         selected_inp,
         resumed=False,
         runner=runner,
-        max_retries=2,
+        max_retries=8,
     )
     retry01_inp = tmp_path / "rxn.retry01.inp"
     retry02_inp = tmp_path / "rxn.retry02.inp"
-    retry02_text = retry02_inp.read_text(encoding="utf-8")
+    retry01_text = retry01_inp.read_text(encoding="utf-8")
 
-    assert rc == 0
-    assert runner.seen == [selected_inp, retry01_inp, retry02_inp]
-    assert "ScanTS" in retry02_text
-    assert "OPTTS" not in retry02_text
-    assert "TightSCF" in retry02_text
-    assert "SlowConv" in retry02_text
-    assert "%scf" in retry02_text
-    assert "  MaxIter 300" in retry02_text
-    assert "B 4 20 = 3.44967742, 3.69806452, 6" in retry02_text
-    assert "* xyzfile 0 1 rxn.032.xyz" in retry02_text
-    assert "rxn.retry01.xyz" not in retry02_text
-    assert "rxn.retry01.gbw" not in retry02_text
-    assert "%moinp" not in retry02_text
-    assert "MORead" not in retry02_text
+    assert rc == 1
+    assert runner.seen == [selected_inp, retry01_inp]
+    assert not retry02_inp.exists()
+    assert "ScanTS" in retry01_text
+    assert "OPTTS" not in retry01_text
+    assert "TightSCF" not in retry01_text
+    assert "SlowConv" not in retry01_text
+    assert "%scf" not in retry01_text
+    assert "B 4 20 = 3.44967742, 3.69806452, 6" in retry01_text
+    assert "* xyzfile 0 1 rxn.032.xyz" in retry01_text
+    assert "rxn.retry01.xyz" not in retry01_text
+    assert "rxn.retry01.gbw" not in retry01_text
+    assert "%moinp" not in retry01_text
+    assert "MORead" not in retry01_text
+    assert saved.get("status") == "failed"
     actions = _attempt_actions(saved, index=1)
-    assert "route_add_tightscf_slowconv" in actions
-    assert "scf_maxiter_300" in actions
-    assert "scants_retry_preserved_source_geometry" in actions
+    assert "rewrite_failed:no_scants_retry_input" in actions
+    assert "route_add_tightscf_slowconv" not in actions
+    assert "scf_maxiter_300" not in actions
     assert "checkpoint_restart_from_rxn.retry01.gbw" not in actions

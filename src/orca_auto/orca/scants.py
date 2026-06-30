@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,11 +8,9 @@ from typing import List
 from .input_blocks import (
     GEOM_HEADER_RE,
     MOINP_RE,
-    ensure_route_keywords,
     find_block_range,
     find_route_idx,
     replace_geometry_with_xyzfile,
-    set_block_key_value,
 )
 from .resource_directives import clamp_maxcore_to_budget
 
@@ -204,32 +201,19 @@ def apply_scants_failed_scan_retry_rewrite(
     cleanup_actions = _remove_checkpoint_restart_directives(lines)
     recipe_actions: List[str] = []
 
-    if retry_number == 1:
-        if source_inp is None or target_inp is None:
-            return []
-        recipe_actions.extend(
-            _continue_simple_scan_from_last_numbered_xyz(
-                lines,
-                source_inp=source_inp,
-                target_inp=target_inp,
-                min_extension_steps=6,
-                extension_fraction=0.20,
-            )
+    if retry_number < 1:
+        return []
+    if source_inp is None or target_inp is None:
+        return []
+    recipe_actions.extend(
+        _continue_simple_scan_from_last_numbered_xyz(
+            lines,
+            source_inp=source_inp,
+            target_inp=target_inp,
+            min_extension_steps=6,
+            extension_fraction=0.20,
         )
-    elif retry_number == 2:
-        if ensure_route_keywords(lines, ["TightSCF", "SlowConv"]):
-            recipe_actions.append("route_add_tightscf_slowconv")
-        if set_block_key_value(lines, "scf", "MaxIter", "300"):
-            recipe_actions.append("scf_maxiter_300")
-    elif retry_number == 3:
-        recipe_actions.extend(_increase_simple_scan_points(lines, multiplier=1.5))
-        if set_block_key_value(lines, "geom", "MaxIter", "300"):
-            recipe_actions.append("geom_maxiter_300")
-    else:
-        if set_block_key_value(lines, "geom", "MaxIter", "500"):
-            recipe_actions.append("geom_maxiter_500")
-        if ensure_route_keywords(lines, ["TightSCF", "SlowConv"]):
-            recipe_actions.append("route_add_tightscf_slowconv")
+    )
 
     if not recipe_actions:
         return []
@@ -528,35 +512,6 @@ def _continue_simple_scan_line(
         f"{match.group('prefix')}{_format_scan_float(next_start)}"
         f"{match.group('sep1')}{_format_scan_float(extended_end)}"
         f"{match.group('sep2')}{new_points}{match.group('suffix')}"
-    )
-
-
-def _increase_simple_scan_points(lines: list[str], *, multiplier: float) -> List[str]:
-    scan_line_indices = _simple_scan_coord_line_indices(lines)
-    if not scan_line_indices:
-        return []
-    if not _scan_lines_share_total_points(lines, scan_line_indices):
-        return []
-
-    first_match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[scan_line_indices[0]])
-    if first_match is None:
-        return []
-    old_points = int(first_match.group("points"))
-    new_points = max(old_points + 1, math.ceil(old_points * multiplier))
-
-    for line_idx in scan_line_indices:
-        lines[line_idx] = _replace_simple_scan_line_points(lines[line_idx], new_points)
-    return [f"scants_scan_points_increased_from_{old_points}_to_{new_points}"]
-
-
-def _replace_simple_scan_line_points(line: str, points: int) -> str:
-    match = _SIMPLE_SCAN_COORD_LINE_RE.match(line)
-    if match is None:
-        return line
-    return (
-        f"{match.group('prefix')}{match.group('start')}"
-        f"{match.group('sep1')}{match.group('end')}"
-        f"{match.group('sep2')}{points}{match.group('suffix')}"
     )
 
 
