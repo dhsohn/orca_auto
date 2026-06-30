@@ -1,5 +1,7 @@
 # orca_auto Development Notes
 
+**English** | [한국어](DEVELOPMENT(ko).md)
+
 This repository now uses a monorepo-style package layout under `src/orca_auto`.
 
 ## Canonical Import Rules

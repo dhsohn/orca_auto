@@ -1,5 +1,7 @@
 # orca_auto Quickstart
 
+**English** | [한국어](QUICKSTART(ko).md)
+
 This guide is the shortest path from a fresh checkout to a supervised
 orca_auto queue worker.
 

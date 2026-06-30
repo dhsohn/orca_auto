@@ -1,5 +1,7 @@
 # orca_auto Detailed Reference
 
+**English** | [한국어](REFERENCE(ko).md)
+
 orca_auto is a queue-first executor for ORCA and workflow orchestration. ORCA
 uses the shared internal-engine queue lifecycle for worker admission, child
 entry execution, terminal side effects, and orphan recovery while preserving
