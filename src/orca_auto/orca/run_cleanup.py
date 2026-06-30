@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from orca_auto.core.statuses import STATUS_CANCELLED
 from orca_auto.core.utils.process_tracking import active_run_lock_pid
 
 from .queue_adapter import (
@@ -19,7 +20,9 @@ from .statuses import RunStatus
 
 logger = logging.getLogger(__name__)
 
-_TERMINAL_RUN_STATUSES = frozenset({RunStatus.COMPLETED.value, RunStatus.FAILED.value})
+_TERMINAL_RUN_STATUSES = frozenset(
+    {RunStatus.COMPLETED.value, RunStatus.FAILED.value, STATUS_CANCELLED}
+)
 _STALE_ACTIVE_RUN_STATUSES = frozenset({RunStatus.RUNNING.value, RunStatus.RETRYING.value})
 
 

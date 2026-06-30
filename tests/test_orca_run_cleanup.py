@@ -195,6 +195,31 @@ def test_clear_terminal_entries_removes_cancelled_queue_stale_running_state(
     assert not state_path(reaction_dir).exists()
 
 
+def test_clear_terminal_entries_removes_cancelled_queue_cancelled_run_state(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "rxn_cancelled_state"
+    allowed_root.mkdir()
+    _write_state(reaction_dir, run_id="run_cancelled", status="cancelled")
+
+    entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
+    queue_adapter.dequeue_next(allowed_root)
+    queue_adapter.update_terminal(
+        allowed_root,
+        entry.queue_id,
+        "cancelled",
+        run_id="run_cancelled",
+    )
+
+    assert state_path(reaction_dir).exists()
+
+    assert run_cleanup.clear_terminal_entries(allowed_root) == (1, 1)
+
+    assert queue_adapter.list_queue(allowed_root) == []
+    assert not state_path(reaction_dir).exists()
+
+
 def test_clear_terminal_entries_keeps_live_running_state_despite_terminal_queue(
     tmp_path: Path,
 ) -> None:
