@@ -6,6 +6,7 @@ from pathlib import Path
 from orca_auto.core.utils.process_tracking import active_run_lock_pid
 
 from .queue_adapter import (
+    ACTIVE_STATUSES,
     TERMINAL_STATUSES,
     clear_terminal,
     list_queue,
@@ -33,14 +34,20 @@ def _resolved_path_text(path_text: str) -> str:
 
 
 def _terminal_queue_reaction_dirs(allowed_root: Path) -> set[str]:
-    reaction_dirs: set[str] = set()
+    active_dirs: set[str] = set()
+    terminal_dirs: set[str] = set()
     for entry in list_queue(allowed_root):
-        if queue_entry_status(entry) not in TERMINAL_STATUSES:
+        status = queue_entry_status(entry)
+        if status not in ACTIVE_STATUSES and status not in TERMINAL_STATUSES:
             continue
         reaction_dir = _resolved_path_text(queue_entry_reaction_dir(entry))
-        if reaction_dir:
-            reaction_dirs.add(reaction_dir)
-    return reaction_dirs
+        if not reaction_dir:
+            continue
+        if status in ACTIVE_STATUSES:
+            active_dirs.add(reaction_dir)
+        elif status in TERMINAL_STATUSES:
+            terminal_dirs.add(reaction_dir)
+    return terminal_dirs - active_dirs
 
 
 def _snapshot_has_live_run_lock(snapshot: RunSnapshot) -> bool:

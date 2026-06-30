@@ -213,3 +213,22 @@ def test_clear_terminal_entries_keeps_live_running_state_despite_terminal_queue(
 
     assert queue_adapter.list_queue(allowed_root) == []
     assert state_path(reaction_dir).exists()
+
+
+def test_clear_terminal_entries_keeps_state_when_same_dir_has_active_entry(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "rxn_active_retry"
+    allowed_root.mkdir()
+    _write_state(reaction_dir, run_id="run_active", status="running")
+
+    old_entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
+    queue_adapter.mark_completed(allowed_root, old_entry.queue_id)
+    active_entry = queue_adapter.enqueue(allowed_root, str(reaction_dir), force=True)
+
+    assert run_cleanup.clear_terminal_entries(allowed_root) == (1, 0)
+
+    remaining = queue_adapter.list_queue(allowed_root)
+    assert [entry.queue_id for entry in remaining] == [active_entry.queue_id]
+    assert state_path(reaction_dir).exists()
