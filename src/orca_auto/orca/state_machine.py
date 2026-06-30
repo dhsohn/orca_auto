@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -10,6 +11,7 @@ from .types import RunState
 
 RESUMABLE_RUN_STATUSES = {RunStatus.RUNNING.value, RunStatus.RETRYING.value}
 RESUMABLE_FAILED_REASONS = {"interrupted_by_user", "worker_shutdown", "crashed_recovery"}
+_RETRY_STEM_RE = re.compile(r"\.retry\d+$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,19 @@ def is_resumable_state(state: RunState) -> bool:
     return False
 
 
+def _retry_inp_path(selected_inp: Path, retry_number: int) -> Path:
+    base_stem = _RETRY_STEM_RE.sub("", selected_inp.stem)
+    if not base_stem:
+        base_stem = selected_inp.stem
+    return selected_inp.with_name(f"{base_stem}.retry{retry_number:02d}.inp")
+
+
+def _prepared_next_retry_input_exists(selected_inp: Path, attempt_count: int) -> bool:
+    if attempt_count < 1:
+        return False
+    return _retry_inp_path(selected_inp, attempt_count).exists()
+
+
 def load_or_create_state(
     reaction_dir: Path,
     selected_inp: Path,
@@ -104,7 +119,7 @@ def load_or_create_state(
     if resumed:
         attempts = state.get("attempts")
         attempt_count = len(attempts) if isinstance(attempts, list) else 0
-        if attempt_count <= 1:
+        if attempt_count <= 1 or _prepared_next_retry_input_exists(selected_inp, attempt_count):
             state["max_retries"] = max(0, int(state.get("max_retries", max_retries)), max_retries)
         else:
             state["max_retries"] = max_retries

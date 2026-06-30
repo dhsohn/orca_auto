@@ -573,3 +573,22 @@ class TestRetryPolicy(unittest.TestCase):
             self.assertEqual(retry_recipe_name_for_input(scants, 2), "scants_retry")
             self.assertEqual(retry_recipe_name_for_input(opt, 1), "no_route_rewrite")
             self.assertEqual(retry_recipe_name_for_input(optts, 1), "no_route_rewrite")
+
+    def test_policy_reads_split_simple_route_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            scants = root / "split_scants.inp"
+            scants.write_text(
+                "! B3LYP def2-SVP\n! ScanTS Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                encoding="utf-8",
+            )
+            optts = root / "split_optts.inp"
+            optts.write_text(
+                "! B3LYP def2-SVP\n! OptTS Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(retry_policy_for_input(scants).name, "scants")
+            self.assertEqual(effective_max_retries(scants, configured_max_retries=8), 2)
+            self.assertEqual(retry_policy_for_input(optts).name, "standalone_ts")
+            self.assertEqual(effective_max_retries(optts, configured_max_retries=8), 0)
