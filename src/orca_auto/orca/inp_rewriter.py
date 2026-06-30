@@ -31,6 +31,7 @@ from .scants import (
     apply_scants_relaxed_scan_resume_rewrite,
     input_uses_scants,
     prepare_scants_optts_fallback_input,
+    prepare_scants_scan_retry_input,
 )
 
 __all__ = [
@@ -41,6 +42,7 @@ __all__ = [
     "maxcore_mb_per_core",
     "prepare_checkpoint_restart_input",
     "prepare_scants_optts_fallback_input",
+    "prepare_scants_scan_retry_input",
     "read_resource_request_from_input",
     "rewrite_for_retry",
 ]
