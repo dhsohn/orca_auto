@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from orca_auto.orca import run_cleanup
+from orca_auto.orca import queue_adapter, run_cleanup
 from orca_auto.orca.run_snapshot import RunSnapshot
 from orca_auto.orca.state import save_state, state_path
 
@@ -172,3 +172,88 @@ def test_clear_terminal_entries_reports_queue_and_run_state_counts(tmp_path: Pat
         ),
     ):
         assert run_cleanup.clear_terminal_entries(allowed_root) == (2, 3)
+
+
+def test_clear_terminal_entries_removes_cancelled_queue_stale_running_state(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "rxn_cancelled"
+    allowed_root.mkdir()
+    _write_state(reaction_dir, run_id="run_cancelled", status="running")
+
+    entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
+    queue_adapter.dequeue_next(allowed_root)
+    queue_adapter.cancel(allowed_root, entry.queue_id)
+    queue_adapter.requeue_running_entry(allowed_root, entry.queue_id)
+
+    assert state_path(reaction_dir).exists()
+
+    assert run_cleanup.clear_terminal_entries(allowed_root) == (1, 1)
+
+    assert queue_adapter.list_queue(allowed_root) == []
+    assert not state_path(reaction_dir).exists()
+
+
+def test_clear_terminal_entries_removes_cancelled_queue_cancelled_run_state(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "rxn_cancelled_state"
+    allowed_root.mkdir()
+    _write_state(reaction_dir, run_id="run_cancelled", status="cancelled")
+
+    entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
+    queue_adapter.dequeue_next(allowed_root)
+    queue_adapter.update_terminal(
+        allowed_root,
+        entry.queue_id,
+        "cancelled",
+        run_id="run_cancelled",
+    )
+
+    assert state_path(reaction_dir).exists()
+
+    assert run_cleanup.clear_terminal_entries(allowed_root) == (1, 1)
+
+    assert queue_adapter.list_queue(allowed_root) == []
+    assert not state_path(reaction_dir).exists()
+
+
+def test_clear_terminal_entries_keeps_live_running_state_despite_terminal_queue(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "rxn_live_rerun"
+    allowed_root.mkdir()
+    _write_state(reaction_dir, run_id="run_live", status="running")
+
+    entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
+    queue_adapter.dequeue_next(allowed_root)
+    queue_adapter.cancel(allowed_root, entry.queue_id)
+    queue_adapter.requeue_running_entry(allowed_root, entry.queue_id)
+
+    with patch("orca_auto.orca.run_cleanup.active_run_lock_pid", return_value=12345):
+        assert run_cleanup.clear_terminal_entries(allowed_root) == (1, 0)
+
+    assert queue_adapter.list_queue(allowed_root) == []
+    assert state_path(reaction_dir).exists()
+
+
+def test_clear_terminal_entries_keeps_state_when_same_dir_has_active_entry(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "rxn_active_retry"
+    allowed_root.mkdir()
+    _write_state(reaction_dir, run_id="run_active", status="running")
+
+    old_entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
+    queue_adapter.mark_completed(allowed_root, old_entry.queue_id)
+    active_entry = queue_adapter.enqueue(allowed_root, str(reaction_dir), force=True)
+
+    assert run_cleanup.clear_terminal_entries(allowed_root) == (1, 0)
+
+    remaining = queue_adapter.list_queue(allowed_root)
+    assert [entry.queue_id for entry in remaining] == [active_entry.queue_id]
+    assert state_path(reaction_dir).exists()
