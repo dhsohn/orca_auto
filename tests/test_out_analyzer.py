@@ -156,6 +156,25 @@ class TestOutAnalyzer(unittest.TestCase):
         self.assertEqual(result.status, "error_disk_io")
         self.assertEqual(result.reason, "disk_write_failed")
 
+    def test_zero_distance_geometry_error(self) -> None:
+        payload = "\n".join(
+            [
+                "Calculating Nuclear repulsion ... Error (ORCA_GTOINT/SHARK): ",
+                "Zero distance encountered between atoms 61 and 20",
+                "ORCA finished by error termination in Startup",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "a.out"
+            out.write_text(payload, encoding="utf-8")
+            result = analyze_output(
+                out, CompletionMode(kind="ts", require_irc=False, route_line="! ScanTS")
+            )
+        self.assertEqual(result.status, AnalyzerStatus.ERROR_GEOMETRY)
+        self.assertEqual(result.reason, "geometry_zero_distance")
+        self.assertTrue(result.markers["geometry_zero_distance"])
+        self.assertTrue(result.markers["generic_error_termination"])
+
     def test_empty_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "a.out"

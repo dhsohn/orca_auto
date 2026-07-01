@@ -448,6 +448,9 @@ Representative statuses:
 - `error_scfgrad_abort`
 - `error_multiplicity_impossible`
 - `error_disk_io`
+- `error_memory`
+- `error_geometry` (for example ORCA zero-distance geometry collapse)
+- `geom_not_converged`
 - `ts_not_found`
 - `incomplete`
 - `unknown_failure`

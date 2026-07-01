@@ -32,6 +32,7 @@ BooleanMarkerName = Literal[
     "generic_error_termination",
     "ts_failure_marker",
     "memory_error",
+    "geometry_zero_distance",
     "geom_not_converged",
 ]
 
@@ -49,6 +50,7 @@ class OutMarkers(TypedDict):
     generic_error_termination: bool
     ts_failure_marker: bool
     memory_error: bool
+    geometry_zero_distance: bool
     geom_not_converged: bool
     total_run_time_seen: bool
 
@@ -64,6 +66,10 @@ _MARKER_RULES: tuple[tuple[BooleanMarkerName, tuple[str, ...]], ...] = (
     ("generic_error_termination", ERROR_TERMINATION_NEEDLES),
     ("ts_failure_marker", ("NO ACCEPTABLE TS", "FAILED TO FIND TS")),
     ("memory_error", ("OUT OF MEMORY", "INSUFFICIENT MEMORY", "CANNOT ALLOCATE MEMORY")),
+    (
+        "geometry_zero_distance",
+        ("ZERO DISTANCE ENCOUNTERED", "ZERO DISTANCE BETWEEN ATOMS"),
+    ),
     (
         "geom_not_converged",
         ("THE OPTIMIZATION DID NOT CONVERGE", "OPTIMIZATION HAS NOT YET CONVERGED"),
@@ -92,6 +98,7 @@ def _default_markers(out_path: Path) -> OutMarkers:
         "generic_error_termination": False,
         "ts_failure_marker": False,
         "memory_error": False,
+        "geometry_zero_distance": False,
         "geom_not_converged": False,
         "total_run_time_seen": False,
     }
@@ -157,6 +164,11 @@ def _marker_error_analysis(markers: OutMarkers) -> OutAnalysis | None:
         ),
         ("disk_io_error", AnalyzerStatus.ERROR_DISK_IO, "disk_write_failed"),
         ("memory_error", AnalyzerStatus.ERROR_MEMORY, "out_of_memory"),
+        (
+            "geometry_zero_distance",
+            AnalyzerStatus.ERROR_GEOMETRY,
+            "geometry_zero_distance",
+        ),
         ("scfgrad_abort", AnalyzerStatus.ERROR_SCFGRAD_ABORT, "scf_gradient_abort"),
         ("scf_error", AnalyzerStatus.ERROR_SCF, "scf_not_converged"),
     )

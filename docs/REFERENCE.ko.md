@@ -466,6 +466,9 @@ Opt 모드 완료:
 - `error_scfgrad_abort`
 - `error_multiplicity_impossible`
 - `error_disk_io`
+- `error_memory`
+- `error_geometry` (예: ORCA zero-distance geometry collapse)
+- `geom_not_converged`
 - `ts_not_found`
 - `incomplete`
 - `unknown_failure`
