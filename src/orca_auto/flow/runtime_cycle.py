@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from . import _runtime_common
 from .runtime_models import WorkflowRuntimeContext, _WorkflowCycle, _WorkflowCycleProgress
@@ -21,7 +22,7 @@ class WorkflowCycleDeps:
 def workflow_lease_expires_at(lease_seconds: float) -> str:
     if lease_seconds <= 0:
         return ""
-    return (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).isoformat()
+    return (datetime.now(UTC) + timedelta(seconds=lease_seconds)).isoformat()
 
 
 def start_workflow_cycle_with_deps(

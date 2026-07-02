@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from orca_auto.core.admission import active_slot_count
 from orca_auto.core.utils import now_utc_iso, timestamped_token

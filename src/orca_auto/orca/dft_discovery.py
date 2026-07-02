@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -61,7 +61,7 @@ def _discover_orca_outputs_targets(
     recent_completed_window_minutes: int | None,
 ) -> list[DiscoveredTarget]:
     targets: dict[str, DiscoveredTarget] = {}
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
 
     # job_state-only policy: job_report is completely ignored.
     for state_path in kb_path.rglob("job_state.json"):
@@ -168,7 +168,7 @@ def _is_recent_completed_output(
         return (-allowed_future_skew) <= age <= window
 
     try:
-        mtime_dt = datetime.fromtimestamp(output_path.stat().st_mtime, tz=timezone.utc)
+        mtime_dt = datetime.fromtimestamp(output_path.stat().st_mtime, tz=UTC)
     except OSError:
         return False
     age = now_utc - mtime_dt

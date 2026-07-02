@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
 
 from .input_blocks import (
     GEOM_HEADER_RE,
@@ -161,7 +160,7 @@ def highest_numbered_scan_xyz(source_inp: Path) -> tuple[int, Path] | None:
     return None
 
 
-def apply_scants_relaxed_scan_resume_rewrite(lines: list[str], source_inp: Path) -> List[str]:
+def apply_scants_relaxed_scan_resume_rewrite(lines: list[str], source_inp: Path) -> list[str]:
     last_index = highest_numbered_scan_xyz_index(source_inp)
     if last_index is None:
         return []
@@ -189,7 +188,7 @@ def apply_scants_failed_scan_retry_rewrite(
     retry_number: int,
     source_inp: Path | None = None,
     target_inp: Path | None = None,
-) -> List[str]:
+) -> list[str]:
     """Rewrite failed ScanTS retries without checkpoint/last-geometry restarts.
 
     ScanTS failures can leave the same-stem ``*.xyz`` and ``*.gbw`` in a chemically
@@ -198,7 +197,7 @@ def apply_scants_failed_scan_retry_rewrite(
     or replacing the geometry with the latest attempt artifact.
     """
     cleanup_actions = _remove_checkpoint_restart_directives(lines)
-    recipe_actions: List[str] = []
+    recipe_actions: list[str] = []
 
     if retry_number < 1:
         return []
@@ -288,8 +287,8 @@ def _resume_simple_scan_line(line: str, *, completed_points: int) -> str | None:
     )
 
 
-def _remove_checkpoint_restart_directives(lines: list[str]) -> List[str]:
-    actions: List[str] = []
+def _remove_checkpoint_restart_directives(lines: list[str]) -> list[str]:
+    actions: list[str] = []
     if _remove_route_keywords(lines, {"MOREAD"}):
         actions.append("route_remove_moread")
 
@@ -419,7 +418,7 @@ def _reverse_simple_scan_path(
     source_inp: Path,
     selected_inp: Path,
     target_inp: Path,
-) -> List[str]:
+) -> list[str]:
     shared = _scan_lines_with_shared_total(lines)
     if shared is None:
         return []
@@ -507,7 +506,7 @@ def _continue_simple_scan_from_last_numbered_xyz(
     target_inp: Path,
     min_extension_steps: int,
     extension_fraction: float | None,
-) -> List[str]:
+) -> list[str]:
     last_scan_xyz = highest_numbered_scan_xyz(source_inp)
     if last_scan_xyz is None:
         return []
@@ -554,7 +553,7 @@ def _complete_simple_scan_to_original_endpoint(
     *,
     source_inp: Path,
     target_inp: Path,
-) -> List[str]:
+) -> list[str]:
     last_scan_xyz = highest_numbered_scan_xyz(source_inp)
     if last_scan_xyz is None:
         return []
@@ -587,7 +586,7 @@ def _complete_simple_scan_to_original_endpoint(
     ]
 
 
-def _replace_scants_route_with_endpoint_opt(lines: list[str]) -> List[str]:
+def _replace_scants_route_with_endpoint_opt(lines: list[str]) -> list[str]:
     route_idx = find_route_idx(lines)
     if route_idx is None:
         return []
@@ -639,7 +638,7 @@ def _first_scants_route_line(inp_path: Path) -> str:
     return ""
 
 
-def _restore_selected_scants_route(lines: list[str], selected_inp: Path) -> List[str]:
+def _restore_selected_scants_route(lines: list[str], selected_inp: Path) -> list[str]:
     route = _first_scants_route_line(selected_inp)
     if not route:
         return []
@@ -692,7 +691,7 @@ def prepare_scants_endpoint_scan_input(
     source_inp: Path,
     target_inp: Path,
     max_memory_gb: int | None = None,
-) -> tuple[Path | None, List[str]]:
+) -> tuple[Path | None, list[str]]:
     if not input_uses_scants(source_inp):
         return None, []
 
@@ -724,7 +723,7 @@ def prepare_scants_scan_retry_input(
     target_inp: Path,
     retry_number: int,
     max_memory_gb: int | None = None,
-) -> tuple[Path | None, List[str]]:
+) -> tuple[Path | None, list[str]]:
     if not input_uses_scants(source_inp):
         return None, []
 
@@ -751,12 +750,12 @@ def prepare_scants_reverse_scan_retry_input(
     selected_inp: Path,
     target_inp: Path,
     max_memory_gb: int | None = None,
-) -> tuple[Path | None, List[str]]:
+) -> tuple[Path | None, list[str]]:
     if not input_uses_scants(selected_inp):
         return None, []
 
     lines = source_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
-    actions: List[str] = []
+    actions: list[str] = []
     if not input_uses_scants(source_inp):
         route_actions = _restore_selected_scants_route(lines, selected_inp)
         if not route_actions:
@@ -787,7 +786,7 @@ def prepare_scants_optts_fallback_input(
     reaction_dir: Path,
     out_path: Path,
     max_memory_gb: int | None = None,
-) -> tuple[Path | None, List[str]]:
+) -> tuple[Path | None, list[str]]:
     if not input_uses_scants(source_inp):
         return None, []
 
@@ -796,7 +795,7 @@ def prepare_scants_optts_fallback_input(
         return None, []
 
     lines = source_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
-    actions: List[str] = []
+    actions: list[str] = []
 
     if _replace_scants_route_with_optts(lines):
         actions.append("scants_fallback_to_optts")
@@ -820,12 +819,12 @@ def apply_scants_optts_resume_rewrite(
     source_inp: Path,
     target_inp: Path,
     out_path: Path,
-) -> List[str]:
+) -> list[str]:
     guess_xyz = scants_optts_resume_guess_xyz_for_output(source_inp, out_path)
     if guess_xyz is None:
         return []
 
-    actions: List[str] = []
+    actions: list[str] = []
     if _replace_scants_route_with_optts(lines):
         actions.append("scants_resume_to_optts")
     if _remove_geom_scan_subblock(lines):

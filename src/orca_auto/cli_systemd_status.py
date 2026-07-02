@@ -5,8 +5,9 @@ import getpass
 import json
 import shutil
 import subprocess
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
+from typing import Any
 
 from orca_auto import cli_style
 from orca_auto.cli_errors import emit_error

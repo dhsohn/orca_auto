@@ -91,7 +91,7 @@ def test_normalize_work_dir_handles_none_blank_and_resolve_failure(
         def __init__(self, value: str) -> None:
             self.value = value
 
-        def expanduser(self) -> "ExplodingPath":
+        def expanduser(self) -> ExplodingPath:
             return self
 
         def resolve(self) -> str:

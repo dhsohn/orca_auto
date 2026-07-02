@@ -3,8 +3,9 @@ from __future__ import annotations
 import argparse
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from orca_auto.core.admission import (
     activate_reserved_slot,

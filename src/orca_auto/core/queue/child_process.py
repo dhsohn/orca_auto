@@ -5,9 +5,9 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 LOGGER = logging.getLogger(__name__)
 

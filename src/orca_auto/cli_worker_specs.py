@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from orca_auto.cli_common import (
     _discover_shared_config_path,

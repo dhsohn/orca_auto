@@ -5,7 +5,6 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 from .inp_rewriter import GEOM_HEADER_RE
 
@@ -36,7 +35,7 @@ def resolve_molecule_key(inp_path: Path) -> MoleculeKeyResolution:
     )
 
 
-def _find_user_tag(inp_path: Path) -> Optional[str]:
+def _find_user_tag(inp_path: Path) -> str | None:
     try:
         with inp_path.open("r", encoding="utf-8", errors="ignore") as handle:
             for line in handle:
@@ -48,7 +47,7 @@ def _find_user_tag(inp_path: Path) -> Optional[str]:
     return None
 
 
-def _parse_formula_from_inp(inp_path: Path) -> Optional[str]:
+def _parse_formula_from_inp(inp_path: Path) -> str | None:
     try:
         lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
     except OSError:
@@ -77,8 +76,8 @@ def _parse_formula_from_inp(inp_path: Path) -> Optional[str]:
     return None
 
 
-def _parse_inline_xyz(lines: List[str], start: int) -> List[str]:
-    atoms: List[str] = []
+def _parse_inline_xyz(lines: list[str], start: int) -> list[str]:
+    atoms: list[str] = []
     for i in range(start, len(lines)):
         stripped = lines[i].strip()
         if stripped == "*":
@@ -89,8 +88,8 @@ def _parse_inline_xyz(lines: List[str], start: int) -> List[str]:
     return atoms
 
 
-def _parse_xyz_file(xyz_path: Path) -> List[str]:
-    atoms: List[str] = []
+def _parse_xyz_file(xyz_path: Path) -> list[str]:
+    atoms: list[str] = []
     try:
         lines = xyz_path.read_text(encoding="utf-8", errors="ignore").splitlines()
     except OSError:
@@ -105,12 +104,12 @@ def _parse_xyz_file(xyz_path: Path) -> List[str]:
     return atoms
 
 
-def _atoms_to_hill_formula(atoms: List[str]) -> Optional[str]:
+def _atoms_to_hill_formula(atoms: list[str]) -> str | None:
     if not atoms:
         return None
 
     counts = Counter(atoms)
-    parts: List[str] = []
+    parts: list[str] = []
 
     if "C" in counts:
         parts.append("C" + (str(counts["C"]) if counts["C"] > 1 else ""))

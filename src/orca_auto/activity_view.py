@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from orca_auto.core.admission import AdmissionStoreCorruptError, active_slot_count
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Callable, Sequence
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
+from typing import Any
 
 from orca_auto.core.activity_icons import activity_status_icon
 from orca_auto.core.statuses import QUEUE_ACTIVE_STATUSES
@@ -19,7 +20,7 @@ _GENERIC_WORKFLOW_LABELS = frozenset({"input", "input_xyz", "molecule"})
 
 
 def queue_table_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def parse_activity_timestamp(value: Any) -> datetime | None:
@@ -33,8 +34,8 @@ def parse_activity_timestamp(value: Any) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def queue_elapsed_started_at(item: dict[str, Any]) -> datetime | None:

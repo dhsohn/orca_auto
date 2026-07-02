@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, Sequence
+from typing import Any
 
 from orca_auto import activity_labels as _activity_labels
 from orca_auto import terminal_table as _terminal_table

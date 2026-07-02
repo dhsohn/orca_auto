@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from ..result_organizer_models import OrganizePlan, SkipReason
 
 
-def emit_organize(payload: Dict[str, Any]) -> None:
+def emit_organize(payload: dict[str, Any]) -> None:
     for key in [
         "action",
         "to_organize",
@@ -30,7 +30,7 @@ def emit_organize(payload: Dict[str, Any]) -> None:
         print(f"  {r.get('run_id', '?')}: {r.get('organized_path', '?')}")
 
 
-def plan_to_dict(plan: OrganizePlan) -> Dict[str, Any]:
+def plan_to_dict(plan: OrganizePlan) -> dict[str, Any]:
     return {
         "run_id": plan.run_id,
         "source_dir": str(plan.source_dir),
@@ -44,7 +44,7 @@ def plan_to_dict(plan: OrganizePlan) -> Dict[str, Any]:
 def build_dry_run_summary(
     plans: list[OrganizePlan],
     skips_list: list[SkipReason],
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "action": "dry_run",
         "to_organize": len(plans),

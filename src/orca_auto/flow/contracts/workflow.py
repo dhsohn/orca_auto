@@ -142,7 +142,7 @@ class WorkflowTask:
         submission_result: dict[str, Any] | None = None,
         depends_on: list[str] | tuple[str, ...] | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> "WorkflowTask":
+    ) -> WorkflowTask:
         request = resource_request or {}
         return cls(
             task_id=normalize_text(task_id, none="None"),

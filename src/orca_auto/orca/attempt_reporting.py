@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping
+from typing import Any
 
 from .state import finalize_state, now_utc_iso, state_path, write_report_files
 from .statuses import AnalyzerStatus, RunStatus
@@ -76,7 +77,7 @@ class FinalizeAndEmitRequest:
     reason: str
     final_result: RunFinalResult
     exit_code: int
-    emit: Callable[[Dict[str, Any]], None]
+    emit: Callable[[dict[str, Any]], None]
     notify_finished: Callable[[RunFinishedNotification], Any] | None = None
 
 
@@ -91,7 +92,7 @@ class ExitResultRequest:
     last_out_path: str | None
     resumed: bool | None
     exit_code: int
-    emit: Callable[[Dict[str, Any]], None]
+    emit: Callable[[dict[str, Any]], None]
     extra: Mapping[str, object] | None = None
     notify_finished: Callable[[RunFinishedNotification], Any] | None = None
 
@@ -332,7 +333,7 @@ def finalize_and_emit(
     reason: str,
     final_result: RunFinalResult,
     exit_code: int,
-    emit: Callable[[Dict[str, Any]], None],
+    emit: Callable[[dict[str, Any]], None],
     notify_finished: Callable[[RunFinishedNotification], Any] | None = None,
 ) -> int:
     return _finalize_and_emit(
@@ -357,7 +358,7 @@ def _finalize_and_emit(request: FinalizeAndEmitRequest) -> int:
         status=run_status_text(request.status),
         final_result=request.final_result,
     )
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "status": run_status_text(request.status),
         "reason": request.reason,
         "reaction_dir": str(request.reaction_dir),
@@ -406,7 +407,7 @@ def exit_with_result(
     last_out_path: str | None,
     resumed: bool | None,
     exit_code: int,
-    emit: Callable[[Dict[str, Any]], None],
+    emit: Callable[[dict[str, Any]], None],
     extra: Mapping[str, object] | None = None,
     notify_finished: Callable[[RunFinishedNotification], Any] | None = None,
 ) -> int:

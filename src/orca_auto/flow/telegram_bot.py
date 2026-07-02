@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from orca_auto.activity_presenter import queue_list_text_presentation
 from orca_auto.activity_rendering import queue_clear_lines, queue_list_text_lines

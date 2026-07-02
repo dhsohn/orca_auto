@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from orca_auto.core.utils import process as process_utils
 from orca_auto.core.utils import process_lock

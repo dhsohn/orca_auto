@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from . import child_entrypoint as _child_entrypoint
 from .child_execution import build_queue_entry_lookup as _build_queue_entry_lookup

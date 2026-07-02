@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 import re
 from pathlib import Path
-from typing import List, Optional
 
 from .input_blocks import (
     BLOCK_START_RE,
@@ -18,7 +17,7 @@ DEFAULT_MAXCORE_MB = 4000
 MAXCORE_INCREASE_FACTOR = 1.5
 
 
-def read_maxcore(lines: List[str]) -> Optional[int]:
+def read_maxcore(lines: list[str]) -> int | None:
     for line in lines:
         m = MAXCORE_RE.match(line)
         if m:
@@ -29,7 +28,7 @@ def read_maxcore(lines: List[str]) -> Optional[int]:
     return None
 
 
-def read_nprocs(lines: List[str]) -> Optional[int]:
+def read_nprocs(lines: list[str]) -> int | None:
     in_pal_block = False
     for line in lines:
         block_match = BLOCK_START_RE.match(line)
@@ -58,7 +57,7 @@ def _is_block_start(block_match: re.Match[str] | None, name: str) -> bool:
     return bool(block_match and block_match.group(1).lower() == name)
 
 
-def read_nprocs_from_text(text: str) -> Optional[int]:
+def read_nprocs_from_text(text: str) -> int | None:
     nprocs_match = NPROCS_RE.search(text)
     if not nprocs_match:
         return None
@@ -83,7 +82,7 @@ def maxcore_mb_per_core(*, max_memory_gb: int, max_cores: int) -> int:
     return max(1, total_mb // max(1, int(max_cores)))
 
 
-def resource_request_from_lines(lines: List[str]) -> dict[str, int]:
+def resource_request_from_lines(lines: list[str]) -> dict[str, int]:
     max_cores = read_nprocs(lines)
     maxcore_mb = read_maxcore(lines)
     if max_cores is None or maxcore_mb is None or maxcore_mb <= 0:
@@ -134,7 +133,7 @@ def ensure_submission_resource_request(
     return resource_request, actions
 
 
-def set_maxcore(lines: List[str], value_mb: int) -> bool:
+def set_maxcore(lines: list[str], value_mb: int) -> bool:
     for i, line in enumerate(lines):
         m = MAXCORE_RE.match(line)
         if m:
@@ -152,7 +151,7 @@ def set_maxcore(lines: List[str], value_mb: int) -> bool:
     return True
 
 
-def increase_maxcore(lines: List[str]) -> bool:
+def increase_maxcore(lines: list[str]) -> bool:
     current = read_maxcore(lines)
     if current is None:
         return set_maxcore(lines, DEFAULT_MAXCORE_MB)
@@ -162,7 +161,7 @@ def increase_maxcore(lines: List[str]) -> bool:
     return set_maxcore(lines, new_value)
 
 
-def clamp_maxcore_to_budget(lines: List[str], *, max_memory_gb: int) -> bool:
+def clamp_maxcore_to_budget(lines: list[str], *, max_memory_gb: int) -> bool:
     """Cap ``%maxcore`` so per-core memory stays within the per-task budget.
 
     Retry recipes escalate ``%maxcore`` (see :func:`increase_maxcore`); without

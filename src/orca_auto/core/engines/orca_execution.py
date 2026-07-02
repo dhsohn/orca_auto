@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import subprocess
 from argparse import Namespace
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Type
+from typing import Any
 
 from orca_auto.core.admission import release_slot
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_APP_NAME
@@ -223,7 +224,7 @@ def execute_run_job(
     reservation_token: str | None = None,
     admission_app_name: str | None = None,
     admission_task_id: str | None = None,
-    runner_cls: Type[OrcaRunner] = OrcaRunner,
+    runner_cls: type[OrcaRunner] = OrcaRunner,
 ) -> int:
     return _cmd_run_inp_execute(
         Namespace(

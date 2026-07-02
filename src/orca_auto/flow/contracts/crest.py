@@ -48,7 +48,7 @@ class CrestDownstreamPolicy:
     max_candidates: int = 3
 
     @classmethod
-    def build(cls, *, max_candidates: int = 3) -> "CrestDownstreamPolicy":
+    def build(cls, *, max_candidates: int = 3) -> CrestDownstreamPolicy:
         return cls(max_candidates=max(1, int(max_candidates)))
 
 

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from orca_auto.core.config.schema import resolved_admission_limit
 from orca_auto.orca.admission_env import (

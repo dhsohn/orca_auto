@@ -139,7 +139,7 @@ def test_resolve_candidate_path_returns_none_when_resolve_raises_oserror(
         def __init__(self, value: str) -> None:
             self.value = value
 
-        def expanduser(self) -> "ExplodingPath":
+        def expanduser(self) -> ExplodingPath:
             return self
 
         def resolve(self) -> Path:

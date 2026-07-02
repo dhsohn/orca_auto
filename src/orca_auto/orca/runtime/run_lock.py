@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator
+from typing import Any
 
 from orca_auto.core.utils import process_lock
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME, current_process_lock_payload
@@ -15,7 +16,7 @@ LOCK_FILE_NAME = RUN_LOCK_FILE_NAME
 
 
 def _run_lock_active_error(
-    lock_pid: int, lock_info: Dict[str, Any], lock_path: Path
+    lock_pid: int, lock_info: dict[str, Any], lock_path: Path
 ) -> RuntimeError:
     started_at = lock_info.get("started_at")
     started = started_at if isinstance(started_at, str) and started_at else "unknown"

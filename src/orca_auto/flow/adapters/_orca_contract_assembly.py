@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_APP_NAME
 from orca_auto.orca import _job_location_contract_payload as _canonical_payload

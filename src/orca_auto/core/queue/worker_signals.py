@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import signal
-from typing import Callable
+from collections.abc import Callable
 
 from .processes import (
     ShutdownSignalDeps,

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict
+from typing import Any
 
 from .attempt_reporting import build_retry_notification, exit_with_result
 from .inp_rewriter import (
@@ -39,7 +40,7 @@ class RetryAttemptRequest:
     max_retries: int
     analysis: OutAnalysis
     retry_inp_path: Callable[[Path, int], Path]
-    emit: Callable[[Dict[str, Any]], None]
+    emit: Callable[[dict[str, Any]], None]
     notify_finished: Callable[[RunFinishedNotification], Any] | None
     notify_retry: Callable[[RetryNotification], Any] | None
 

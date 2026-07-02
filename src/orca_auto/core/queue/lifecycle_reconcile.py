@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from types import SimpleNamespace
-from typing import Any, Callable, Iterable
+from typing import Any
 
 from .child_process import reconcile_orphaned_child_queue_entries
 from .lifecycle_hooks import (

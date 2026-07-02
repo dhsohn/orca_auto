@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -84,7 +84,7 @@ def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_queue_elapsed_prefers_attempt_anchor_metadata() -> None:
-    now = datetime(2026, 4, 26, 3, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
 
     assert (
         unified_cli._queue_elapsed_text(
@@ -117,7 +117,7 @@ def test_cmd_queue_list_filters_text_output(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
-        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=timezone.utc)
+        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
     monkeypatch.setattr(
         unified_cli,
@@ -197,7 +197,7 @@ def test_cmd_queue_list_hides_non_orca_workflow_children_in_default_text_output(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
-        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=timezone.utc)
+        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
     monkeypatch.setattr(
         unified_cli,
@@ -316,7 +316,7 @@ def test_cmd_queue_list_shows_all_workflow_child_jobs(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
-        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=timezone.utc)
+        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
     child_rows = [
         {

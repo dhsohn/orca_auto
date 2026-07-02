@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -125,7 +125,7 @@ def test_find_latest_out_in_dir_handles_non_dir_stat_errors_and_latest_selection
     old_out.write_text("old", encoding="utf-8")
     newest_out.write_text("new", encoding="utf-8")
 
-    now = datetime.now(timezone.utc).timestamp()
+    now = datetime.now(UTC).timestamp()
     os.utime(old_out, (now - 20, now - 20))
     os.utime(newest_out, (now - 5, now - 5))
 
@@ -152,7 +152,7 @@ def test_find_latest_out_in_dir_handles_non_dir_stat_errors_and_latest_selection
 def test_recent_completed_output_accepts_none_or_negative_window(tmp_path: Path) -> None:
     out_path = tmp_path / "calc.out"
     out_path.write_text("done", encoding="utf-8")
-    now_utc = datetime(2026, 3, 22, 12, 0, tzinfo=timezone.utc)
+    now_utc = datetime(2026, 3, 22, 12, 0, tzinfo=UTC)
 
     assert discovery._is_recent_completed_output(
         data=_state_payload(status="running"),
@@ -173,7 +173,7 @@ def test_recent_completed_output_respects_status_completed_at_and_future_skew(
 ) -> None:
     out_path = tmp_path / "calc.out"
     out_path.write_text("done", encoding="utf-8")
-    now_utc = datetime(2026, 3, 22, 12, 0, tzinfo=timezone.utc)
+    now_utc = datetime(2026, 3, 22, 12, 0, tzinfo=UTC)
 
     assert not discovery._is_recent_completed_output(
         data=_state_payload(status="running", final_result={"status": "failed"}),
@@ -214,7 +214,7 @@ def test_recent_completed_output_uses_mtime_fallback_and_handles_stat_error(
 ) -> None:
     out_path = tmp_path / "calc.out"
     out_path.write_text("done", encoding="utf-8")
-    now_utc = datetime(2026, 3, 22, 12, 0, tzinfo=timezone.utc)
+    now_utc = datetime(2026, 3, 22, 12, 0, tzinfo=UTC)
     mtime = (now_utc - timedelta(minutes=10)).timestamp()
     os.utime(out_path, (mtime, mtime))
 
@@ -254,13 +254,13 @@ def test_parse_iso_datetime_utc_covers_invalid_naive_z_and_offset_inputs() -> No
     assert discovery._parse_iso_datetime_utc("") is None
 
     assert discovery._parse_iso_datetime_utc("2026-03-22T12:00:00") == datetime(
-        2026, 3, 22, 12, 0, tzinfo=timezone.utc
+        2026, 3, 22, 12, 0, tzinfo=UTC
     )
     assert discovery._parse_iso_datetime_utc("2026-03-22T12:00:00Z") == datetime(
-        2026, 3, 22, 12, 0, tzinfo=timezone.utc
+        2026, 3, 22, 12, 0, tzinfo=UTC
     )
     assert discovery._parse_iso_datetime_utc("2026-03-22T21:00:00+09:00") == datetime(
-        2026, 3, 22, 12, 0, tzinfo=timezone.utc
+        2026, 3, 22, 12, 0, tzinfo=UTC
     )
 
 

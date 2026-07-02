@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from orca_auto.core.admission import activate_reserved_slot, release_slot
 from orca_auto.core.config.engines import load_xtb_config as load_config

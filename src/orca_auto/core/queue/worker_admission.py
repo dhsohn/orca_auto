@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from orca_auto.core.admission import reserve_slot
 from orca_auto.core.config.schema import resolved_admission_limit

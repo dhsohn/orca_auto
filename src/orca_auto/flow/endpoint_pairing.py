@@ -104,7 +104,7 @@ class EndpointPairingPolicy:
         value: Any,
         *,
         default_max_pairs: int = 0,
-    ) -> "EndpointPairingPolicy":
+    ) -> EndpointPairingPolicy:
         if value is None or value == "":
             return cls(enabled=False)
         if isinstance(value, bool):

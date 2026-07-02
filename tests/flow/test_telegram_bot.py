@@ -742,7 +742,7 @@ def test_api_call_handles_success_api_error_http_error_and_generic_error(monkeyp
         def __init__(self, payload: dict[str, Any]) -> None:
             self.payload = payload
 
-        def __enter__(self) -> "Response":
+        def __enter__(self) -> Response:
             return self
 
         def __exit__(self, *args: object) -> None:
@@ -848,7 +848,7 @@ def test_telegram_from_config_path_handles_empty_missing_invalid_and_missing_sec
         def __init__(self, _value: object) -> None:
             pass
 
-        def expanduser(self) -> "BadPath":
+        def expanduser(self) -> BadPath:
             raise OSError("bad path")
 
     monkeypatch.setattr(bot, "Path", BadPath)

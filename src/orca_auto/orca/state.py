@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, cast
+from typing import Any, cast
 
 from orca_auto.core.artifacts import (
     ORGANIZED_REF_FILE,
@@ -63,11 +64,11 @@ def organized_ref_path(reaction_dir: Path) -> Path:
     return reaction_dir / ORGANIZED_REF_NAME
 
 
-def _load_json_dict(path: Path) -> Dict[str, Any] | None:
+def _load_json_dict(path: Path) -> dict[str, Any] | None:
     return load_json_mapping_file(path)
 
 
-def _dict(value: Any) -> Dict[str, Any]:
+def _dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
@@ -75,7 +76,7 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _state_from_normalized_payload(payload: Dict[str, Any]) -> RunState | None:
+def _state_from_normalized_payload(payload: dict[str, Any]) -> RunState | None:
     if int(payload.get("schema_version", 0) or 0) != 1:
         return None
     if _text(payload.get("engine")) != "orca":
@@ -95,12 +96,12 @@ def _state_from_normalized_payload(payload: Dict[str, Any]) -> RunState | None:
         "started_at": _text(timestamps.get("started_at")),
         "updated_at": _text(timestamps.get("updated_at")),
         "attempts": list(engine_payload.get("attempts") or []),
-        "final_result": cast(Optional[RunFinalResult], engine_payload.get("final_result")),
+        "final_result": cast(RunFinalResult | None, engine_payload.get("final_result")),
     }
     return state
 
 
-def load_state(reaction_dir: Path) -> Optional[RunState]:
+def load_state(reaction_dir: Path) -> RunState | None:
     raw = _load_json_dict(state_path(reaction_dir))
     if raw is None:
         return None
@@ -108,7 +109,7 @@ def load_state(reaction_dir: Path) -> Optional[RunState]:
     return normalized
 
 
-def load_report_json(reaction_dir: Path) -> Dict[str, Any] | None:
+def load_report_json(reaction_dir: Path) -> dict[str, Any] | None:
     payload = _load_json_dict(report_json_path(reaction_dir))
     if payload is None:
         return None
@@ -119,7 +120,7 @@ def load_report_json(reaction_dir: Path) -> Dict[str, Any] | None:
     return payload
 
 
-def load_organized_ref(reaction_dir: Path) -> Dict[str, Any] | None:
+def load_organized_ref(reaction_dir: Path) -> dict[str, Any] | None:
     return _load_json_dict(organized_ref_path(reaction_dir))
 
 
@@ -174,7 +175,7 @@ def finalize_state(
     write_state(reaction_dir, state)
 
 
-def _normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any]) -> Dict[str, Any]:
+def _normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str, Any]:
     attempts = state.get("attempts")
     if not isinstance(attempts, list):
         attempts = []
@@ -233,7 +234,7 @@ def _normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any])
     )
 
 
-def write_report_json(reaction_dir: Path, report_payload: Dict[str, Any]) -> Path:
+def write_report_json(reaction_dir: Path, report_payload: dict[str, Any]) -> Path:
     path = report_json_path(reaction_dir)
     if int(report_payload.get("schema_version", 0) or 0) == 1:
         payload = report_payload
@@ -248,7 +249,7 @@ def write_report_json(reaction_dir: Path, report_payload: Dict[str, Any]) -> Pat
             "started_at": _text(report_payload.get("started_at")),
             "updated_at": _text(report_payload.get("updated_at")),
             "attempts": list(report_payload.get("attempts") or []),
-            "final_result": cast(Optional[RunFinalResult], report_payload.get("final_result")),
+            "final_result": cast(RunFinalResult | None, report_payload.get("final_result")),
         }
         payload = _normalized_payload_from_state(reaction_dir, state)
     atomic_write_json(path, payload, ensure_ascii=True, indent=2)
@@ -261,7 +262,7 @@ def write_report_md(reaction_dir: Path, markdown: str) -> Path:
     return path
 
 
-def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> Dict[str, str]:
+def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str, str]:
     report_payload = _normalized_payload_from_state(reaction_dir, state)
     json_path = write_report_json(reaction_dir, report_payload)
     md_path = write_report_md(
@@ -271,7 +272,7 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> Dict[str
     return {"report_json": str(json_path), "report_md": str(md_path)}
 
 
-def write_organized_ref(reaction_dir: Path, payload: Dict[str, Any]) -> Path:
+def write_organized_ref(reaction_dir: Path, payload: dict[str, Any]) -> Path:
     path = organized_ref_path(reaction_dir)
     atomic_write_json(path, payload, ensure_ascii=True, indent=2)
     return path

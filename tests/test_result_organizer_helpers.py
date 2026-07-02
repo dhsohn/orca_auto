@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import errno
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Mapping
 from unittest.mock import patch
 
 import pytest

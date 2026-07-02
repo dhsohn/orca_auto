@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from orca_auto.core.app_ids import ORCA_AUTO_REPO_ROOT_ENV_VAR
 from orca_auto.core.config import TelegramConfig

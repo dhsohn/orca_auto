@@ -6,15 +6,16 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, NoReturn, Optional
+from typing import Any, NoReturn
 
 from orca_auto.core.utils import process as process_utils
 
 
-def parse_lock_info(lock_path: Path) -> Dict[str, Any]:
+def parse_lock_info(lock_path: Path) -> dict[str, Any]:
     try:
         raw = lock_path.read_text(encoding="utf-8").strip()
     except OSError:
@@ -37,11 +38,11 @@ def parse_lock_info(lock_path: Path) -> Dict[str, Any]:
     return _empty_lock_info()
 
 
-def _empty_lock_info() -> Dict[str, Any]:
+def _empty_lock_info() -> dict[str, Any]:
     return {"pid": None, "started_at": None, "process_start_ticks": None}
 
 
-def _positive_int(value: Any) -> Optional[int]:
+def _positive_int(value: Any) -> int | None:
     if isinstance(value, int) and value > 0:
         return value
     if isinstance(value, str):
@@ -53,7 +54,7 @@ def _positive_int(value: Any) -> Optional[int]:
     return None
 
 
-def _nonempty_string(value: Any) -> Optional[str]:
+def _nonempty_string(value: Any) -> str | None:
     if isinstance(value, str) and value.strip():
         return value
     return None
@@ -84,7 +85,7 @@ def _lock_owner_alive(
     lock_pid: int,
     lock_start_ticks: Any,
     is_process_alive_fn: Callable[[int], bool],
-    process_start_ticks_fn: Callable[[int], Optional[int]],
+    process_start_ticks_fn: Callable[[int], int | None],
     logger: logging.Logger,
     stale_pid_reuse_log_template: str,
     lock_path: Path,
@@ -107,7 +108,7 @@ def _lock_owner_alive(
 
 def _raise_lock_timeout(
     *,
-    timeout_seconds: Optional[int],
+    timeout_seconds: int | None,
     lock_path: Path,
     timeout_error_builder: Callable[[Path, int], RuntimeError] | None,
 ) -> NoReturn:
@@ -120,14 +121,14 @@ def _raise_lock_timeout(
 def _handle_existing_lock(
     *,
     lock_path: Path,
-    lock_info: Dict[str, Any],
+    lock_info: dict[str, Any],
     is_process_alive_fn: Callable[[int], bool],
-    process_start_ticks_fn: Callable[[int], Optional[int]],
+    process_start_ticks_fn: Callable[[int], int | None],
     logger: logging.Logger,
     stale_pid_reuse_log_template: str,
     stale_lock_log_template: str,
     deadline: float | None,
-    active_lock_error_builder: Callable[[int, Dict[str, Any], Path], RuntimeError] | None,
+    active_lock_error_builder: Callable[[int, dict[str, Any], Path], RuntimeError] | None,
     unreadable_lock_error_builder: Callable[[Path], RuntimeError] | None,
     stale_remove_error_builder: Callable[[int, Path, OSError], RuntimeError] | None,
 ) -> bool:
@@ -199,27 +200,27 @@ def is_process_alive(pid: int) -> bool:
     return True
 
 
-def process_start_ticks(pid: int) -> Optional[int]:
+def process_start_ticks(pid: int) -> int | None:
     return process_utils.process_start_ticks(pid, proc_root=Path("/proc"))
 
 
-def current_process_start_ticks() -> Optional[int]:
+def current_process_start_ticks() -> int | None:
     return process_start_ticks(os.getpid())
 
 
 @dataclass(frozen=True)
 class FileLockOptions:
     lock_path: Path
-    lock_payload_obj: Dict[str, Any]
-    timeout_seconds: Optional[int] = None
+    lock_payload_obj: dict[str, Any]
+    timeout_seconds: int | None = None
     poll_interval_seconds: float = 0.5
 
 
 @dataclass(frozen=True)
 class FileLockDeps:
-    parse_lock_info: Callable[[Path], Dict[str, Any]]
+    parse_lock_info: Callable[[Path], dict[str, Any]]
     is_process_alive: Callable[[int], bool]
-    process_start_ticks: Callable[[int], Optional[int]]
+    process_start_ticks: Callable[[int], int | None]
     logger: logging.Logger
 
 
@@ -233,7 +234,7 @@ class FileLockMessages:
 
 @dataclass(frozen=True)
 class FileLockErrorBuilders:
-    active_lock_error_builder: Callable[[int, Dict[str, Any], Path], RuntimeError] | None = None
+    active_lock_error_builder: Callable[[int, dict[str, Any], Path], RuntimeError] | None = None
     unreadable_lock_error_builder: Callable[[Path], RuntimeError] | None = None
     timeout_error_builder: Callable[[Path, int], RuntimeError] | None = None
     stale_remove_error_builder: Callable[[int, Path, OSError], RuntimeError] | None = None
@@ -302,18 +303,18 @@ def acquire_file_lock_from_options(
 def acquire_file_lock(
     *,
     lock_path: Path,
-    lock_payload_obj: Dict[str, Any],
-    parse_lock_info_fn: Callable[[Path], Dict[str, Any]],
+    lock_payload_obj: dict[str, Any],
+    parse_lock_info_fn: Callable[[Path], dict[str, Any]],
     is_process_alive_fn: Callable[[int], bool],
-    process_start_ticks_fn: Callable[[int], Optional[int]],
+    process_start_ticks_fn: Callable[[int], int | None],
     logger: logging.Logger,
     acquired_log_template: str,
     released_log_template: str,
     stale_pid_reuse_log_template: str,
     stale_lock_log_template: str,
-    timeout_seconds: Optional[int] = None,
+    timeout_seconds: int | None = None,
     poll_interval_seconds: float = 0.5,
-    active_lock_error_builder: Callable[[int, Dict[str, Any], Path], RuntimeError] | None = None,
+    active_lock_error_builder: Callable[[int, dict[str, Any], Path], RuntimeError] | None = None,
     unreadable_lock_error_builder: Callable[[Path], RuntimeError] | None = None,
     timeout_error_builder: Callable[[Path, int], RuntimeError] | None = None,
     stale_remove_error_builder: Callable[[int, Path, OSError], RuntimeError] | None = None,

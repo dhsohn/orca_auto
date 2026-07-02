@@ -24,7 +24,7 @@ class _FakeResponse:
     body: str
     status: int
 
-    def __enter__(self) -> "_FakeResponse":
+    def __enter__(self) -> _FakeResponse:
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Literal[False]:

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast
 
 from .completion_rules import CompletionMode
 from .output_status import ERROR_TERMINATION_NEEDLES, NORMAL_TERMINATION_NEEDLES

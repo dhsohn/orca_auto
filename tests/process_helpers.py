@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import signal
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 from unittest.mock import patch
 
 

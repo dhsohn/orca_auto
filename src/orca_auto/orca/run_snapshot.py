@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from orca_auto.core.activity_icons import activity_status_icon
 from orca_auto.core.indexing import JobLocationRecord
@@ -65,7 +66,7 @@ def _compute_elapsed(state: Mapping[str, Any]) -> float:
         if ended is not None:
             return (ended - started).total_seconds()
 
-    return (datetime.now(timezone.utc) - started).total_seconds()
+    return (datetime.now(UTC) - started).total_seconds()
 
 
 def _latest_out_path(reaction_dir: Path, state: Mapping[str, Any]) -> Path | None:
@@ -203,7 +204,7 @@ def sort_snapshots_by_started(snapshots: Iterable[RunSnapshot]) -> list[RunSnaps
     def _key(snapshot: RunSnapshot) -> tuple[int, datetime]:
         parsed = parse_iso_utc(snapshot.started_at)
         if parsed is None:
-            return (1, datetime.min.replace(tzinfo=timezone.utc))
+            return (1, datetime.min.replace(tzinfo=UTC))
         return (0, parsed)
 
     return sorted(snapshots, key=_key)
@@ -212,6 +213,6 @@ def sort_snapshots_by_started(snapshots: Iterable[RunSnapshot]) -> list[RunSnaps
 def sort_snapshots_by_completed(snapshots: Iterable[RunSnapshot]) -> list[RunSnapshot]:
     def _key(snapshot: RunSnapshot) -> datetime:
         parsed = parse_iso_utc(snapshot.completed_at) or parse_iso_utc(snapshot.updated_at)
-        return parsed or datetime.min.replace(tzinfo=timezone.utc)
+        return parsed or datetime.min.replace(tzinfo=UTC)
 
     return sorted(snapshots, key=_key, reverse=True)

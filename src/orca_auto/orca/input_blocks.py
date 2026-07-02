@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 GEOM_HEADER_RE = re.compile(
     r"^\s*\*\s+(xyzfile|xyz)\s+(-?\d+)\s+(\d+)(?:\s+(.*))?$",
@@ -13,7 +12,7 @@ MOINP_RE = re.compile(r"^\s*%moinp\b", re.IGNORECASE)
 NESTED_BLOCK_NAMES = {"scan", "constraints"}
 
 
-def find_route_idx(lines: List[str]) -> Optional[int]:
+def find_route_idx(lines: list[str]) -> int | None:
     for idx, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith("!"):
@@ -21,7 +20,7 @@ def find_route_idx(lines: List[str]) -> Optional[int]:
     return None
 
 
-def ensure_route_keywords(lines: List[str], keywords: List[str]) -> bool:
+def ensure_route_keywords(lines: list[str], keywords: list[str]) -> bool:
     idx = find_route_idx(lines)
     if idx is None:
         lines.insert(0, "! " + " ".join(keywords))
@@ -36,14 +35,14 @@ def ensure_route_keywords(lines: List[str], keywords: List[str]) -> bool:
     return True
 
 
-def find_geometry_start(lines: List[str]) -> Optional[int]:
+def find_geometry_start(lines: list[str]) -> int | None:
     for idx, line in enumerate(lines):
         if GEOM_HEADER_RE.match(line.strip()):
             return idx
     return None
 
 
-def find_block_range(lines: List[str], block_name: str) -> Optional[Tuple[int, int, bool]]:
+def find_block_range(lines: list[str], block_name: str) -> tuple[int, int, bool] | None:
     name = block_name.lower()
     for i, line in enumerate(lines):
         m = BLOCK_START_RE.match(line)
@@ -66,7 +65,7 @@ def find_block_range(lines: List[str], block_name: str) -> Optional[Tuple[int, i
     return None
 
 
-def set_block_key_value(lines: List[str], block_name: str, key: str, value: str) -> bool:
+def set_block_key_value(lines: list[str], block_name: str, key: str, value: str) -> bool:
     rng = find_block_range(lines, block_name)
     key_lower = key.lower()
 
@@ -116,7 +115,7 @@ def quote_orca_path(path_text: str) -> str:
     return f'"{escaped}"'
 
 
-def set_moinp(lines: List[str], checkpoint: Path, base_dir: Path) -> bool:
+def set_moinp(lines: list[str], checkpoint: Path, base_dir: Path) -> bool:
     ref = quote_orca_path(format_relative_or_absolute(checkpoint, base_dir))
     new_line = f"%moinp {ref}"
     for idx, line in enumerate(lines):
@@ -134,7 +133,7 @@ def set_moinp(lines: List[str], checkpoint: Path, base_dir: Path) -> bool:
     return True
 
 
-def geometry_range(lines: List[str]) -> Optional[Tuple[int, int, int, int]]:
+def geometry_range(lines: list[str]) -> tuple[int, int, int, int] | None:
     for start, line in enumerate(lines):
         m = GEOM_HEADER_RE.match(line.strip())
         if not m:
@@ -153,7 +152,7 @@ def geometry_range(lines: List[str]) -> Optional[Tuple[int, int, int, int]]:
     return None
 
 
-def replace_geometry_with_xyzfile(lines: List[str], geom_file: Path, base_dir: Path) -> bool:
+def replace_geometry_with_xyzfile(lines: list[str], geom_file: Path, base_dir: Path) -> bool:
     geo = geometry_range(lines)
     if geo is None:
         return False
