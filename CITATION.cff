@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use orca_auto in research or published work, please cite the software repository or the release you used."
+title: "orca_auto: queue-first ORCA workflow automation for Linux and WSL"
+type: software
+authors:
+  - family-names: Sohn
+    given-names: Dae Hyup
+repository-code: "https://github.com/dhsohn/orca_auto"
+url: "https://github.com/dhsohn/orca_auto"
+license: MIT
+version: "0.1.0"
+keywords:
+  - computational chemistry
+  - ORCA
+  - density functional theory
+  - transition states
+  - workflow automation
+  - research software
+abstract: >-
+  orca_auto is a queue-first runtime and observability layer for ORCA-centered
+  computational chemistry workflows on Linux and WSL. It submits work durably,
+  runs jobs under supervised workers, records per-job state and reports, and
+  organizes completed outputs while keeping ORCA input files as the chemistry-facing
+  contract.
