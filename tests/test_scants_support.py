@@ -743,9 +743,7 @@ def test_endpoint_scan_route_rewrite_does_not_duplicate_opt(tmp_path: Path) -> N
 
     assert prepared == target_inp
     route = next(
-        line
-        for line in target_inp.read_text(encoding="utf-8").splitlines()
-        if line.startswith("!")
+        line for line in target_inp.read_text(encoding="utf-8").splitlines() if line.startswith("!")
     )
     assert route.split().count("Opt") == 1
     assert "ScanTS" not in route
