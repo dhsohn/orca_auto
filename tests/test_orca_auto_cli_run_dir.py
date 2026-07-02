@@ -10,7 +10,7 @@ import pytest
 from orca_auto import cli_common
 from orca_auto import cli_handlers as cli_run_dir
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
-from orca_auto.flow.run_dir_layout import WorkflowRunDirLayout, inspect_workflow_run_dir
+from orca_auto.flow.run_dir.layout import WorkflowRunDirLayout, inspect_workflow_run_dir
 
 
 def test_cli_common_discovers_config_from_explicit_env_and_repo_candidate(

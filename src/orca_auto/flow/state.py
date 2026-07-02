@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .workflow_artifacts import workflow_artifacts
-from .workflow_store import (
+from .workflow.artifacts import workflow_artifacts
+from .workflow.store import (
     WORKFLOW_FILE_NAME,
     WORKFLOW_LOCK_NAME,
     WORKFLOW_STAGE_DIRNAME_ALIASES,
@@ -23,7 +23,7 @@ from .workflow_store import (
     workflow_workspace_internal_engine_paths_from_path,
     write_workflow_payload,
 )
-from .workflow_summary import (
+from .workflow.summary import (
     list_workflow_summaries,
     workflow_has_active_downstream,
     workflow_summary,

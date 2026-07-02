@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import _runtime_common
-from .runtime_models import StageTransitionContext
+from .runtime import _common as _runtime_common
+from .runtime.models import StageTransitionContext
 
 
 def stage_key(stage: dict[str, Any], index: int) -> str:

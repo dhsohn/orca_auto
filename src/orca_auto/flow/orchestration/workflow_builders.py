@@ -19,7 +19,7 @@ from orca_auto.flow.orchestration.requests import (
     WorkflowCreationContext,
     WorkflowPersistenceContext,
 )
-from orca_auto.flow.workflow_store import acquire_workflow_create_lock
+from orca_auto.flow.workflow.store import acquire_workflow_create_lock
 
 _REACTION_TS_SEARCH_CREST_MANIFEST_DEFAULTS: dict[str, Any] = {"rthr": 0.3}
 

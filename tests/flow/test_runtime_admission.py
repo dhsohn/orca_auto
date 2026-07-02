@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from orca_auto.core.admission import AdmissionStoreCorruptError
-from orca_auto.flow import runtime_admission
+from orca_auto.flow.runtime import admission as runtime_admission
 
 
 def test_submission_admission_limit_returns_none_for_unreadable_config(tmp_path: Path) -> None:

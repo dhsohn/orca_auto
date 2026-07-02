@@ -2,7 +2,7 @@ from __future__ import annotations
 
 ORCA_AUTO_CLI_MODULE = "orca_auto.cli"
 ORCA_AUTO_CLI_COMMAND = f"python -m {ORCA_AUTO_CLI_MODULE}"
-ORCA_AUTO_WORKFLOW_WORKER_MODULE = "orca_auto.flow.cli_workflow"
+ORCA_AUTO_WORKFLOW_WORKER_MODULE = "orca_auto.flow.cli.workflow"
 
 ORCA_AUTO_ORCA_APP_NAME = "orca_auto_orca"
 

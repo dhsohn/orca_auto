@@ -17,7 +17,7 @@ from orca_auto.core.utils import (
     normalize_text as _normalize_text,
 )
 
-from .registry_store import (
+from .registry.store import (
     WorkflowRegistryCorruptError,
     _read_existing_json,
     _registry_lock_path,

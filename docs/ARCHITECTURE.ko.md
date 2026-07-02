@@ -71,8 +71,8 @@ src/orca_auto/
     ├── submitters/      # ORCA / 내부 엔진 제출 빌더
     ├── templates.py     # 워크플로우 템플릿 레지스트리
     ├── manifest.py      # flow.yaml 파싱
-    ├── registry*.py     # 워크플로우 레지스트리 + 저널
-    └── telegram_bot*.py # 통합 텔레그램 봇
+    ├── registry/        # 워크플로우 레지스트리 + 저널
+    └── telegram/        # 통합 텔레그램 봇
 ```
 
 ### 임포트 규칙 (DEVELOPMENT.md 기준)
@@ -348,7 +348,7 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 (`engine_notifier.py`, `engine_delivery.py`)을 제공합니다. 각 `EngineDefinition`은
 `job_started` / `job_finished` / `retry` 훅을 등록할 수 있습니다.
 
-`flow/telegram_bot*.py`는 통합 텔레그램 봇입니다. `queue list` 테이블을
+`flow/telegram/`은 통합 텔레그램 봇입니다. `queue list` 테이블을
 `/list`(모바일을 위해 ID 열 제외)로 반영하고, 인라인 버튼 확인을 통한
 `/cancel <target>`과, 활동별 취소 / 새로고침 / "완료 항목 정리" 액션을 지원합니다.
 워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST 및 반응 경로 xTB 자식

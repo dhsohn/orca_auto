@@ -8,7 +8,8 @@ from typing import Any
 import pytest
 
 from orca_auto import cli_common
-from orca_auto.flow import cli_run_dir, run_dir_options
+from orca_auto.flow.cli import run_dir as cli_run_dir
+from orca_auto.flow.run_dir import options as run_dir_options
 
 
 def _create_payload(template_name: str) -> dict[str, Any]:

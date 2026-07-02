@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from orca_auto.flow import cli_workflow
+from orca_auto.flow.cli import workflow as cli_workflow
 
 
 def test_emit_worker_payload_formats_text_and_json(capsys) -> None:

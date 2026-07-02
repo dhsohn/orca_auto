@@ -330,7 +330,7 @@ def _maybe_notify_workflow_phase_summary_default(
     extra_lines: list[str] | None = None,
     overrides: Mapping[str, Any] | None = None,
 ) -> bool:
-    from orca_auto.flow.workflow_notifications import maybe_notify_workflow_phase_summary
+    from orca_auto.flow.workflow.notifications import maybe_notify_workflow_phase_summary
 
     return maybe_notify_workflow_phase_summary(
         payload=payload,

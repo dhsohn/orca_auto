@@ -12,7 +12,6 @@ from orca_auto.core.statuses import (
     STATUS_FAILED,
     is_stage_terminal_status,
 )
-from orca_auto.flow._workflow_phases import phase_finished
 from orca_auto.flow.contracts.workflow import workflow_stage_dicts
 from orca_auto.flow.engine_options import WorkflowEngineOptions
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
@@ -20,6 +19,7 @@ from orca_auto.flow.orchestration.deps import (
     orchestration_context as _orchestration_context,
 )
 from orca_auto.flow.orchestration.stage_views import WorkflowPayloadView
+from orca_auto.flow.workflow._phases import phase_finished
 
 
 @dataclass(frozen=True)

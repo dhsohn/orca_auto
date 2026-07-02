@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from orca_auto.core.config import TelegramConfig
-from orca_auto.flow.telegram_bot import TelegramBotSettings
+from orca_auto.flow.telegram.bot import TelegramBotSettings
 
 
 def telegram_bot_settings(

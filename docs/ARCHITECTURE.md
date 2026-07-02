@@ -72,8 +72,8 @@ src/orca_auto/
     ├── submitters/      # ORCA / internal-engine submission builders
     ├── templates.py     # Workflow template registry
     ├── manifest.py      # flow.yaml parsing
-    ├── registry*.py     # Workflow registry + journal
-    └── telegram_bot*.py # Unified Telegram bot
+    ├── registry/        # Workflow registry + journal
+    └── telegram/        # Unified Telegram bot
 ```
 
 ### Import rules (from DEVELOPMENT.md)
@@ -355,7 +355,7 @@ consume ORCA results without coupling to ORCA internals.
 engine notification hook layer (`engine_notifier.py`, `engine_delivery.py`). Each
 `EngineDefinition` can register `job_started` / `job_finished` / `retry` hooks.
 
-`flow/telegram_bot*.py` is the unified Telegram bot. It mirrors the `queue list`
+`flow/telegram/` is the unified Telegram bot. It mirrors the `queue list`
 table as `/list` (minus the ID column for mobile), supports `/cancel <target>`
 with inline-button confirmation, and per-activity cancel / refresh / "clear
 finished" actions. Workflow alerts keep per-job ORCA messages but summarize
