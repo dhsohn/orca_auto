@@ -56,6 +56,7 @@ from orca_auto.core.queue.worker import (
     start_background_process,
     terminate_process_group,
 )
+from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED
 
 from . import queue_worker_lifecycle as _lifecycle_helpers
 from . import queue_worker_runtime as _runtime_helpers
@@ -211,7 +212,7 @@ def _try_reserve_admission_slot(cfg: AppConfig) -> str | None:
     if admission_token is None:
         logger.debug(
             "Queue worker admission paused: admission slots are full (admission_limit=%d)",
-            int(getattr(cfg.runtime, "resolved_admission_limit", 1)),
+            cfg.runtime.resolved_admission_limit,
         )
     return admission_token
 
@@ -302,7 +303,7 @@ def _notify_terminal_job_from_state(cfg: AppConfig, reaction_dir: str) -> bool:
 
 
 def _worker_admission_limit(cfg: AppConfig, fallback_max_concurrent: int) -> int:
-    raw_limit = getattr(cfg.runtime, "admission_limit", None)
+    raw_limit = cfg.runtime.admission_limit
     if raw_limit in (None, "", 0):
         raw_limit = fallback_max_concurrent
     return resolved_admission_limit(raw_limit, fallback_max_concurrent)
@@ -312,7 +313,7 @@ def _worker_config_with_effective_concurrency(
     cfg: AppConfig,
     configured_max: int,
 ) -> AppConfig:
-    if getattr(cfg.runtime, "admission_limit", None) not in (None, "", 0):
+    if cfg.runtime.admission_limit not in (None, "", 0):
         return cfg
     worker_cfg = copy.copy(cfg)
     worker_cfg.runtime = copy.copy(cfg.runtime)
@@ -525,13 +526,13 @@ def _record_cancelled_run_state(job_dir: Path) -> tuple[str | None, str | None]:
             # happened instead of being mislabeled "cancelled".
             return run_id, existing_status
     cancelled_result = build_final_result(
-        status="cancelled",
+        status=STATUS_CANCELLED,
         analyzer_status=AnalyzerStatus.INCOMPLETE,
         reason="cancel_requested",
         last_out_path=last_out_path_from_state(state),
     )
-    finalize_state(job_dir, state, status="cancelled", final_result=cancelled_result)
-    return run_id, "cancelled"
+    finalize_state(job_dir, state, status=STATUS_CANCELLED, final_result=cancelled_result)
+    return run_id, STATUS_CANCELLED
 
 
 def _finalize_cancelled_run(worker: EngineQueueWorker, job: _RunningJob) -> None:
@@ -542,7 +543,7 @@ def _finalize_cancelled_run(worker: EngineQueueWorker, job: _RunningJob) -> None
     so the cancelled job leaves the active queue list and the user is told it
     stopped.
     """
-    reaction_dir = str(getattr(job, "reaction_dir", "") or "").strip()
+    reaction_dir = job.reaction_dir.strip()
     if not reaction_dir:
         return
     try:
@@ -557,12 +558,12 @@ def _finalize_cancelled_run(worker: EngineQueueWorker, job: _RunningJob) -> None
             # just before the cancel landed, correct it to the real terminal status
             # so the entry, snapshot, and notification all agree.
             queue_status = (
-                terminal_status if terminal_status in ("completed", "cancelled") else "failed"
+                terminal_status
+                if terminal_status in (STATUS_COMPLETED, STATUS_CANCELLED)
+                else STATUS_FAILED
             )
             update_terminal(_job_queue_root(worker, job), job.queue_id, queue_status, run_id=run_id)
-        _upsert_terminal_job_record(
-            worker.cfg, reaction_dir, fallback_job_id=getattr(job, "task_id", None)
-        )
+        _upsert_terminal_job_record(worker.cfg, reaction_dir, fallback_job_id=job.task_id)
         _notify_terminal_job_from_state(worker.cfg, reaction_dir)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to finalize cancelled run for %s: %s", reaction_dir, exc)

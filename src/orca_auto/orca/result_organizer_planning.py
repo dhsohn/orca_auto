@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any
 
 from orca_auto.core.paths import is_subpath, resolve_artifact_path
 
@@ -21,7 +22,7 @@ SP_RE = re.compile(r"\b(SP|Energy)\b", re.IGNORECASE)
 FREQ_RE = re.compile(r"\b(Freq|NumFreq|AnFreq)\b", re.IGNORECASE)
 
 
-def _resolve_existing_artifact(path_text: str, reaction_dir: Path) -> Optional[Path]:
+def _resolve_existing_artifact(path_text: str, reaction_dir: Path) -> Path | None:
     return resolve_artifact_path(path_text, reaction_dir)
 
 
@@ -102,9 +103,7 @@ def _attempt_is_successful(attempt: Mapping[str, Any]) -> bool:
     return return_code == 0
 
 
-def _last_successful_attempt_inp_path(
-    state: Mapping[str, Any], reaction_dir: Path
-) -> Optional[Path]:
+def _last_successful_attempt_inp_path(state: Mapping[str, Any], reaction_dir: Path) -> Path | None:
     attempts = state.get("attempts")
     if not isinstance(attempts, list):
         return None
@@ -127,7 +126,7 @@ def _last_successful_attempt_inp_path(
     return None
 
 
-def _final_out_path(state: Mapping[str, Any], reaction_dir: Path) -> Optional[Path]:
+def _final_out_path(state: Mapping[str, Any], reaction_dir: Path) -> Path | None:
     final_result = state.get("final_result")
     if not isinstance(final_result, dict):
         return None
@@ -137,7 +136,7 @@ def _final_out_path(state: Mapping[str, Any], reaction_dir: Path) -> Optional[Pa
     return _resolve_existing_artifact(last_out_path, reaction_dir)
 
 
-def _attempt_inp_path(attempt: Mapping[str, Any], reaction_dir: Path) -> Optional[Path]:
+def _attempt_inp_path(attempt: Mapping[str, Any], reaction_dir: Path) -> Path | None:
     inp_path_text = attempt.get("inp_path")
     if not isinstance(inp_path_text, str) or not inp_path_text.strip():
         return None
@@ -146,7 +145,7 @@ def _attempt_inp_path(attempt: Mapping[str, Any], reaction_dir: Path) -> Optiona
 
 def _attempt_matches_final_out(
     attempt: Mapping[str, Any],
-    final_out_path: Optional[Path],
+    final_out_path: Path | None,
     reaction_dir: Path,
 ) -> bool:
     if final_out_path is None:
@@ -158,9 +157,7 @@ def _attempt_matches_final_out(
     return out_path is not None and out_path == final_out_path
 
 
-def select_organize_metadata_inp_path(
-    state: Mapping[str, Any], reaction_dir: Path
-) -> Optional[Path]:
+def select_organize_metadata_inp_path(state: Mapping[str, Any], reaction_dir: Path) -> Path | None:
     selected_inp_value = state.get("selected_inp")
     selected_inp_path = None
     selected_resolution = None
@@ -190,7 +187,7 @@ def select_organize_metadata_inp_path(
 def resolve_organize_metadata(
     state: Mapping[str, Any],
     reaction_dir: Path,
-) -> tuple[Optional[Path], str, str]:
+) -> tuple[Path | None, str, str]:
     inp_path = select_organize_metadata_inp_path(state, reaction_dir)
     if inp_path is None or not inp_path.exists():
         return None, "other", "unknown"
@@ -245,7 +242,7 @@ def compute_organize_plan(
 def plan_single(
     reaction_dir: Path,
     organized_root: Path,
-) -> tuple[Optional[OrganizePlan], Optional[SkipReason]]:
+) -> tuple[OrganizePlan | None, SkipReason | None]:
     state, skip = check_eligibility(reaction_dir)
     if skip is not None:
         return None, skip

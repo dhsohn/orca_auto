@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from .state import load_state, new_state, save_state
 from .statuses import AnalyzerStatus, RunStatus

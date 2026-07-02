@@ -5,6 +5,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_SOURCE
+from orca_auto.core.statuses import (
+    STATUS_PENDING,
+    STATUS_RETRYING,
+    STATUS_RUNNING,
+    TERMINAL_STATUSES,
+)
 from orca_auto.core.utils import normalize_text
 from orca_auto.core.utils.process_tracking import active_run_lock_pid
 
@@ -14,11 +20,11 @@ if TYPE_CHECKING:
     from orca_auto.orca.run_snapshot import RunSnapshot
 
 _LOGGER = logging.getLogger(__name__)
-_ORCA_ACTIVE_QUEUE_STATUSES = frozenset({"pending", "running"})
-_ORCA_TERMINAL_QUEUE_STATUSES = frozenset({"completed", "failed", "cancelled"})
+_ORCA_ACTIVE_QUEUE_STATUSES = frozenset({STATUS_PENDING, STATUS_RUNNING})
+_ORCA_TERMINAL_QUEUE_STATUSES = TERMINAL_STATUSES
 # Snapshot run states that imply a live process; without a live run lock the run
 # was cancelled/killed/crashed and must not keep showing as in progress.
-_STALE_SNAPSHOT_STATUSES = frozenset({"running", "retrying"})
+_STALE_SNAPSHOT_STATUSES = frozenset({STATUS_RUNNING, STATUS_RETRYING})
 
 
 def snapshot_matches_entry(

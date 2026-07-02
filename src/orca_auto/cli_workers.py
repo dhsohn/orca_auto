@@ -5,8 +5,9 @@ import logging
 import signal
 import subprocess
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 from orca_auto.cli_errors import emit_error
 from orca_auto.cli_worker_conflicts import (

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +22,7 @@ from orca_auto.orca.state import save_state, state_path
 class _FrozenDateTime(datetime):
     @classmethod
     def now(cls, tz=None):  # type: ignore[override]
-        current = cls(2026, 1, 10, 12, 0, 0, tzinfo=timezone.utc)
+        current = cls(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
         if tz is None:
             return current
         return current.astimezone(tz)
@@ -59,13 +59,13 @@ def test_parse_iso_utc_handles_invalid_z_naive_and_offset_values() -> None:
     assert parse_iso_utc("not-a-timestamp") is None
 
     parsed_z = parse_iso_utc("2026-01-10T12:00:00Z")
-    assert parsed_z == datetime(2026, 1, 10, 12, 0, 0, tzinfo=timezone.utc)
+    assert parsed_z == datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
 
     parsed_naive = parse_iso_utc("2026-01-10T12:00:00")
-    assert parsed_naive == datetime(2026, 1, 10, 12, 0, 0, tzinfo=timezone.utc)
+    assert parsed_naive == datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
 
     parsed_offset = parse_iso_utc("2026-01-10T21:00:00+09:00")
-    assert parsed_offset == datetime(2026, 1, 10, 12, 0, 0, tzinfo=timezone.utc)
+    assert parsed_offset == datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
 
 
 def test_elapsed_text_formats_negative_hour_minute_and_second_ranges() -> None:
@@ -149,8 +149,8 @@ def test_latest_out_path_falls_back_to_latest_output_in_directory(tmp_path: Path
     newer.write_text("new", encoding="utf-8")
     older.touch()
     newer.touch()
-    older_mtime = datetime(2026, 1, 10, 11, 0, 0, tzinfo=timezone.utc).timestamp()
-    newer_mtime = datetime(2026, 1, 10, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+    older_mtime = datetime(2026, 1, 10, 11, 0, 0, tzinfo=UTC).timestamp()
+    newer_mtime = datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC).timestamp()
     older.touch()
     newer.touch()
     import os

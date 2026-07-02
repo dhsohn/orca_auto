@@ -83,8 +83,8 @@ def test_xtb_retry_helpers_and_job_writer_materialize_attempt_files(tmp_path: Pa
     assert (job_path / "path_retry_02.inp").read_text(encoding="utf-8").startswith("$path")
     assert "namespace: retry_02" in (job_path / "xtb_job.yaml").read_text(encoding="utf-8")
     assert payload["job_dir"] == str(job_path)
-    assert payload["selected_input_xyz"] == str((job_path / "reactants" / "r1.xyz"))
-    assert payload["secondary_input_xyz"] == str((job_path / "products" / "p1.xyz"))
+    assert payload["selected_input_xyz"] == str(job_path / "reactants" / "r1.xyz")
+    assert payload["secondary_input_xyz"] == str(job_path / "products" / "p1.xyz")
     assert payload["xtb_active_attempt_number"] == 2
     assert payload["xtb_retry_recipe_id"] == "path_input_refined"
     assert metadata["xtb_active_attempt_number"] == 2

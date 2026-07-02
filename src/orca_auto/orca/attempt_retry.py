@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict
+from typing import Any
 
 from .attempt_reporting import build_retry_notification, exit_with_result
 from .inp_rewriter import (
@@ -39,9 +40,12 @@ class RetryAttemptRequest:
     max_retries: int
     analysis: OutAnalysis
     retry_inp_path: Callable[[Path, int], Path]
-    emit: Callable[[Dict[str, Any]], None]
+    emit: Callable[[dict[str, Any]], None]
     notify_finished: Callable[[RunFinishedNotification], Any] | None
     notify_retry: Callable[[RetryNotification], Any] | None
+
+    def max_memory_gb_per_task(self) -> int | None:
+        return self.state.get("max_memory_gb_per_task")
 
 
 def retry_recipe_step(retry_number: int) -> RetryRecipeName:
@@ -146,14 +150,14 @@ def _prepare_scants_retry_after_surface_maximum(
         source_inp=ctx.current_inp,
         selected_inp=ctx.selected_inp,
         target_inp=next_inp,
-        max_memory_gb=ctx.state.get("max_memory_gb_per_task"),
+        max_memory_gb=ctx.max_memory_gb_per_task(),
     )
     if prepared is not None:
         return prepared, actions
     return prepare_scants_endpoint_scan_input(
         source_inp=ctx.current_inp,
         target_inp=next_inp,
-        max_memory_gb=ctx.state.get("max_memory_gb_per_task"),
+        max_memory_gb=ctx.max_memory_gb_per_task(),
     )
 
 
@@ -171,7 +175,7 @@ def _prepare_scants_reverse_scan_after_endpoint_scan(
         source_inp=ctx.current_inp,
         selected_inp=ctx.selected_inp,
         target_inp=next_inp,
-        max_memory_gb=ctx.state.get("max_memory_gb_per_task"),
+        max_memory_gb=ctx.max_memory_gb_per_task(),
     )
 
 
@@ -200,7 +204,7 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
                 source_inp=scants_retry_source,
                 target_inp=next_inp,
                 retry_number=next_retry_number,
-                max_memory_gb=ctx.state.get("max_memory_gb_per_task"),
+                max_memory_gb=ctx.max_memory_gb_per_task(),
             )
         if prepared_scants is None:
             if uses_scants:
@@ -210,7 +214,7 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
                 target_inp=next_inp,
                 reaction_dir=ctx.reaction_dir,
                 step=patch_step,
-                max_memory_gb=ctx.state.get("max_memory_gb_per_task"),
+                max_memory_gb=ctx.max_memory_gb_per_task(),
             )
     except Exception as exc:  # noqa: BLE001
         ctx.state["attempts"][-1]["patch_actions"] = [f"rewrite_failed:{exc}"]

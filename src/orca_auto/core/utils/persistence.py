@@ -5,7 +5,7 @@ import json
 import os
 import tempfile
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from secrets import token_hex
 from typing import Any
@@ -32,7 +32,7 @@ _DIR_FSYNC_UNSUPPORTED_ERRNOS = {
 
 
 def now_utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def parse_iso_utc(value: Any) -> datetime | None:
@@ -46,12 +46,12 @@ def parse_iso_utc(value: Any) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def timestamped_token(prefix: str, *, token_bytes: int = 3) -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     return f"{prefix}_{stamp}_{token_hex(token_bytes)}"
 
 

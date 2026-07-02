@@ -7,7 +7,6 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import List
 
 from orca_auto.core.queue.processes import ProcessGroupTerminationDeps, terminate_process_group
 
@@ -56,7 +55,7 @@ class OrcaRunner:
         out = inp.with_suffix(".out")
         cwd = str(inp.parent)
 
-        command: List[str] = [self.orca_executable, inp.name]
+        command: list[str] = [self.orca_executable, inp.name]
         logger.info("Running ORCA: %s in %s", command, cwd)
 
         return_code = 1

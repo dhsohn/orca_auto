@@ -6,8 +6,8 @@ import tempfile
 import time
 import unittest
 from argparse import Namespace
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 from unittest.mock import MagicMock, patch
 
 from orca_auto import cli as unified_cli

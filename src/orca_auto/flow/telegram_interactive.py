@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from orca_auto.activity_view import queue_list_default_visible_items
 from orca_auto.core.notifications import escape_html

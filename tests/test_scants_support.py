@@ -6,11 +6,14 @@ from types import SimpleNamespace
 import pytest
 
 from orca_auto.orca.attempt_engine import run_attempts
+from orca_auto.orca.retry_policy import retry_policy_for_input
 from orca_auto.orca.scants import (
     apply_scants_failed_scan_retry_rewrite,
     apply_scants_relaxed_scan_resume_rewrite,
+    input_uses_scants,
     prepare_scants_endpoint_scan_input,
     prepare_scants_optts_fallback_input,
+    prepare_scants_scan_retry_input,
 )
 from orca_auto.orca.state import load_state, new_state, save_state
 from orca_auto.orca.types import RunState
@@ -405,6 +408,46 @@ def _attempt_actions(saved: RunState, index: int = 0) -> list[str]:
     actions = attempt.get("patch_actions")
     assert isinstance(actions, list)
     return [str(action) for action in actions]
+
+
+def test_scants_detection_agrees_with_retry_policy_for_block_before_route(
+    tmp_path: Path,
+) -> None:
+    """A %-block before the route line must not split the ScanTS predicates.
+
+    retry_policy classifies inputs by scanning every route line, so the scants
+    rewriters must use the same whole-file scan; otherwise the policy assigns
+    ScanTS retries that every rewriter then refuses to prepare.
+    """
+    source_inp = tmp_path / "rxn.inp"
+    source_inp.write_text(
+        "\n".join(
+            [
+                "%maxcore 3000",
+                "! B3LYP ScanTS",
+                "%geom",
+                "  Scan",
+                "    B 4 20 = 1.86, 3.40, 32",
+                "  end",
+                "end",
+                "* xyzfile 0 1 input.xyz",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert input_uses_scants(source_inp)
+    assert retry_policy_for_input(source_inp).name == "scants"
+
+    _write_scan_xyz_series(tmp_path, "rxn", count=8)
+    prepared, actions = prepare_scants_scan_retry_input(
+        source_inp=source_inp,
+        target_inp=tmp_path / "rxn.retry01.inp",
+        retry_number=1,
+    )
+    assert prepared is not None
+    assert "scants_scan_range_continued_after_point_008" in actions
 
 
 @pytest.mark.parametrize(

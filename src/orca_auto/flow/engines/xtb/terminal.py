@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from orca_auto.core.queue import engine_execution as _engine_execution
 from orca_auto.core.queue import execution as _queue_execution

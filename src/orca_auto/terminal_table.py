@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import shutil
 import unicodedata
-from typing import Any, Callable, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 
 # Gap rendered between adjacent table columns.
 QUEUE_COLUMN_GAP = "  "

@@ -5,9 +5,10 @@ import logging
 import os
 import signal
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from orca_auto.core.utils import process as process_utils
 from orca_auto.core.utils.persistence import atomic_write_text, now_utc_iso

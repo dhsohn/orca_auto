@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Sequence
+from typing import Any
 
 from orca_auto.activity_rendering import queue_list_text_lines
 from orca_auto.activity_view import (

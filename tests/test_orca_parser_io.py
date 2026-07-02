@@ -17,7 +17,7 @@ def test_read_orca_text_uses_bom_when_present(tmp_path: Path) -> None:
     utf16_path.write_bytes("energy = -1.0".encode("utf-16"))
 
     utf8_path = tmp_path / "utf8.out"
-    utf8_path.write_bytes("\ufeffnormal termination".encode("utf-8"))
+    utf8_path.write_bytes("\ufeffnormal termination".encode())
 
     assert read_orca_text(str(utf16_path)) == "energy = -1.0"
     assert read_orca_text(str(utf8_path)) == "normal termination"

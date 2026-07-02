@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, TypedDict
 
 
 class AttemptRecord(TypedDict, total=False):
@@ -10,8 +10,8 @@ class AttemptRecord(TypedDict, total=False):
     return_code: int
     analyzer_status: str
     analyzer_reason: str
-    markers: Dict[str, Any]
-    patch_actions: List[str]
+    markers: dict[str, Any]
+    patch_actions: list[str]
     started_at: str
     ended_at: str
 
@@ -21,7 +21,7 @@ class RunFinalResult(TypedDict, total=False):
     analyzer_status: str
     reason: str
     completed_at: str
-    last_out_path: Optional[str]
+    last_out_path: str | None
     resumed: bool
     skipped_execution: bool
     runner_error: str
@@ -38,8 +38,8 @@ class RunState(TypedDict, total=False):
     status: str
     started_at: str
     updated_at: str
-    attempts: List[AttemptRecord]
-    final_result: Optional[RunFinalResult]
+    attempts: list[AttemptRecord]
+    final_result: RunFinalResult | None
 
 
 class RetryNotification(TypedDict):
@@ -53,7 +53,7 @@ class RetryNotification(TypedDict):
     max_retries: int
     analyzer_status: str
     analyzer_reason: str
-    patch_actions: List[str]
+    patch_actions: list[str]
     resumed: bool
 
 
@@ -79,7 +79,7 @@ class RunFinishedNotification(TypedDict):
     attempt_count: int
     max_retries: int
     completed_at: str
-    last_out_path: Optional[str]
+    last_out_path: str | None
     resumed: bool
     skipped_execution: bool
 

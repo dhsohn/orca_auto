@@ -5,9 +5,10 @@ import os
 import signal
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from orca_auto.core.admission import activate_reserved_slot, release_slot
 from orca_auto.core.config.engines import load_crest_config as load_config

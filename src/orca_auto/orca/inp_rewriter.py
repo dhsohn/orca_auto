@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
 
 from .input_blocks import (
     BLOCK_START_RE,
     GEOM_HEADER_RE,
     MOINP_RE,
+    nonempty_file,
 )
 from .input_blocks import (
     ensure_route_keywords as _ensure_route_keywords,
@@ -57,9 +57,9 @@ def rewrite_for_retry(
     *,
     max_memory_gb: int | None = None,
     allow_no_effective_change: bool = False,
-) -> List[str]:
+) -> list[str]:
     lines = source_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
-    actions: List[str] = []
+    actions: list[str] = []
 
     actions.extend(_apply_retry_recipe(lines, step))
     if isinstance(step, int):
@@ -79,7 +79,7 @@ def rewrite_for_retry(
     return actions
 
 
-def _has_effective_retry_change(actions: List[str]) -> bool:
+def _has_effective_retry_change(actions: list[str]) -> bool:
     return any(
         action.startswith("checkpoint_restart_from_")
         or action.startswith("geometry_restart_from_")
@@ -96,9 +96,9 @@ def prepare_checkpoint_restart_input(
     source_inp: Path,
     target_inp: Path,
     reaction_dir: Path,
-) -> tuple[Path | None, List[str]]:
+) -> tuple[Path | None, list[str]]:
     lines = source_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
-    actions: List[str] = []
+    actions: list[str] = []
     if not _apply_checkpoint_restart(lines, actions, source_inp, target_inp):
         return None, []
 
@@ -107,7 +107,7 @@ def prepare_checkpoint_restart_input(
     # resumed ScanTS input to OPTTS only when the previous output either contains
     # an explicit TS-refinement marker or a completed actual-energy scan surface
     # from which we can select the maximum numbered scan point.
-    scants_resume_actions: List[str] = []
+    scants_resume_actions: list[str] = []
     uses_scants = input_uses_scants(source_inp)
     if uses_scants:
         scants_resume_actions = apply_scants_optts_resume_rewrite(
@@ -127,8 +127,8 @@ def prepare_checkpoint_restart_input(
 
 
 def _apply_checkpoint_restart(
-    lines: List[str],
-    actions: List[str],
+    lines: list[str],
+    actions: list[str],
     source_inp: Path,
     target_inp: Path,
 ) -> bool:
@@ -149,17 +149,12 @@ def _apply_checkpoint_restart(
 
 def _matching_checkpoint_gbw(source_inp: Path) -> Path | None:
     candidate = source_inp.with_suffix(".gbw")
-    try:
-        if candidate.exists() and candidate.stat().st_size > 0:
-            return candidate
-    except OSError:
-        return None
-    return None
+    return candidate if nonempty_file(candidate) else None
 
 
 def _apply_geometry_restart(
-    lines: List[str],
-    actions: List[str],
+    lines: list[str],
+    actions: list[str],
     source_inp: Path,
     target_inp: Path,
     reaction_dir: Path,
@@ -178,14 +173,14 @@ def _apply_geometry_restart(
             actions.append("geometry_restart_not_applied")
 
 
-def _previous_attempt_xyz(source_inp: Path) -> Optional[Path]:
+def _previous_attempt_xyz(source_inp: Path) -> Path | None:
     candidate = source_inp.with_suffix(".xyz")
     if candidate.exists():
         return candidate
     return None
 
 
-def _latest_geometry_file(reaction_dir: Path) -> Optional[Path]:
+def _latest_geometry_file(reaction_dir: Path) -> Path | None:
     candidates = {p.resolve(): p for p in reaction_dir.glob("*.xyz")}
     if not candidates:
         return None

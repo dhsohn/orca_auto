@@ -95,7 +95,7 @@ def test_resolve_candidate_path_and_direct_dir_target_cover_existing_and_oserror
     assert _orca_path_helpers.direct_dir_target_impl(str(tmp_path / "missing")) is None
 
     class _ExpandUserBroken:
-        def expanduser(self) -> "_ExpandUserBroken":
+        def expanduser(self) -> _ExpandUserBroken:
             raise OSError("bad path")
 
     monkeypatch.setattr(_orca_path_helpers, "Path", lambda raw: _ExpandUserBroken())

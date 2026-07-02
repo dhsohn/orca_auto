@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict
+from typing import Any
 
 from ..config import AppConfig, load_config
 from ..job_locations import reindex_job_locations
@@ -81,7 +82,7 @@ def apply_organize_plans(
     *,
     notify_summary: bool,
     deps: _organize_apply.OrganizeApplyDependencies | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return _organize_apply._apply_organize_plans(
         plans,
         skips,
@@ -135,10 +136,10 @@ def cmd_organize_apply(
     organized_root: Path,
     cfg: AppConfig,
     *,
-    apply_plans_fn: Callable[..., Dict[str, Any]] | None = None,
-    finalize_batch_apply_fn: Callable[[Dict[str, Any], Any, list[Dict[str, Any]]], int]
+    apply_plans_fn: Callable[..., dict[str, Any]] | None = None,
+    finalize_batch_apply_fn: Callable[[dict[str, Any], Any, list[dict[str, Any]]], int]
     | None = None,
-    emit_organize_fn: Callable[[Dict[str, Any]], None] | None = None,
+    emit_organize_fn: Callable[[dict[str, Any]], None] | None = None,
 ) -> int:
     apply_plans = apply_plans_fn or apply_organize_plans
     finalize = finalize_batch_apply_fn or finalize_batch_apply
@@ -158,7 +159,7 @@ def cmd_organize_apply(
     )
 
 
-def organize_no_plan_result(reaction_dir: Path, skips: list[SkipReason]) -> Dict[str, Any]:
+def organize_no_plan_result(reaction_dir: Path, skips: list[SkipReason]) -> dict[str, Any]:
     if skips:
         first_skip = skips[0]
         return {
@@ -173,7 +174,7 @@ def organize_no_plan_result(reaction_dir: Path, skips: list[SkipReason]) -> Dict
     }
 
 
-def organize_failure_result(reaction_dir: Path, summary: Dict[str, Any]) -> Dict[str, Any]:
+def organize_failure_result(reaction_dir: Path, summary: dict[str, Any]) -> dict[str, Any]:
     failure = next(
         (item for item in summary["failures"] if isinstance(item, dict)),
         {},
@@ -186,7 +187,7 @@ def organize_failure_result(reaction_dir: Path, summary: Dict[str, Any]) -> Dict
     }
 
 
-def organize_success_result(organized: list[Any]) -> Dict[str, Any] | None:
+def organize_success_result(organized: list[Any]) -> dict[str, Any] | None:
     if not organized:
         return None
     plan = organized[0].get("_plan") if isinstance(organized[0], dict) else None
@@ -207,7 +208,7 @@ def organize_skipped_result(
     *,
     skipped_results: list[Any],
     skips: list[SkipReason],
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if skipped_results:
         skipped_item = skipped_results[0]
         return {
@@ -227,8 +228,8 @@ def organize_reaction_dir(
     resolved_organized_root_fn: Callable[[AppConfig, str | Path], Path] | None = None,
     resolve_scope_fn: Callable[..., tuple[list[OrganizePlan], list[SkipReason]] | None]
     | None = None,
-    apply_plans_fn: Callable[..., Dict[str, Any]] | None = None,
-) -> Dict[str, Any]:
+    apply_plans_fn: Callable[..., dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     resolve_root = resolved_organized_root_fn or resolved_organized_root
     resolve_scope = resolve_scope_fn or resolve_organize_scope
     apply_plans = apply_plans_fn or apply_organize_plans
@@ -280,11 +281,11 @@ def cmd_organize(
     load_config_fn: Callable[[Any], AppConfig] | None = None,
     rebuild_index_fn: Callable[[Path], int] | None = None,
     reindex_job_locations_fn: Callable[[AppConfig], int] | None = None,
-    emit_organize_fn: Callable[[Dict[str, Any]], None] | None = None,
+    emit_organize_fn: Callable[[dict[str, Any]], None] | None = None,
     resolved_organized_root_fn: Callable[[AppConfig, str | Path], Path] | None = None,
     resolve_scope_fn: Callable[..., tuple[list[OrganizePlan], list[SkipReason]] | None]
     | None = None,
-    build_dry_run_summary_fn: Callable[[list[OrganizePlan], list[SkipReason]], Dict[str, Any]]
+    build_dry_run_summary_fn: Callable[[list[OrganizePlan], list[SkipReason]], dict[str, Any]]
     | None = None,
     cmd_apply_fn: Callable[[list[OrganizePlan], list[SkipReason], Path, AppConfig], int]
     | None = None,

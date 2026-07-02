@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import contextlib
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from orca_auto.core.utils.lock import file_lock
 

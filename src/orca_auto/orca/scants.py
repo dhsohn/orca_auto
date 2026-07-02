@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
 
 from .input_blocks import (
     GEOM_HEADER_RE,
     MOINP_RE,
+    file_route_lines,
     find_block_range,
     find_route_idx,
+    nonempty_file,
     replace_geometry_with_xyzfile,
+    route_line_indices,
 )
 from .resource_directives import clamp_maxcore_to_budget
 
@@ -38,17 +41,13 @@ class ScanTSSurfacePoint:
 
 
 def input_uses_scants(inp_path: Path) -> bool:
-    try:
-        for line in inp_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            if stripped.startswith("!"):
-                return bool(SCANTS_ROUTE_RE.search(stripped))
-            return False
-    except OSError:
-        return False
-    return False
+    """True when any route line requests ScanTS.
+
+    Scans every route line (matching the whole-file scan retry_policy uses to
+    classify inputs) so the retry policy and the ScanTS rewriters can never
+    disagree about whether an input is a ScanTS job.
+    """
+    return bool(_first_scants_route_line(inp_path))
 
 
 def parse_scants_actual_surface(out_path: Path) -> list[ScanTSSurfacePoint]:
@@ -92,12 +91,7 @@ def scants_guess_xyz_for_output(source_inp: Path, out_path: Path) -> Path | None
     if point is None:
         return None
     candidate = source_inp.with_name(f"{source_inp.stem}.{point.index:03d}.xyz")
-    try:
-        if candidate.exists() and candidate.stat().st_size > 0:
-            return candidate
-    except OSError:
-        return None
-    return None
+    return candidate if nonempty_file(candidate) else None
 
 
 def output_indicates_scants_optts_refinement(out_path: Path) -> bool:
@@ -114,12 +108,7 @@ def output_indicates_scants_optts_refinement(out_path: Path) -> bool:
 
 def _same_stem_xyz(source_inp: Path) -> Path | None:
     candidate = source_inp.with_suffix(".xyz")
-    try:
-        if candidate.exists() and candidate.stat().st_size > 0:
-            return candidate
-    except OSError:
-        return None
-    return None
+    return candidate if nonempty_file(candidate) else None
 
 
 def scants_optts_resume_guess_xyz_for_output(source_inp: Path, out_path: Path) -> Path | None:
@@ -130,38 +119,25 @@ def scants_optts_resume_guess_xyz_for_output(source_inp: Path, out_path: Path) -
     return scants_guess_xyz_for_output(source_inp, out_path)
 
 
-def highest_numbered_scan_xyz_index(source_inp: Path) -> int | None:
+def highest_numbered_scan_xyz(source_inp: Path) -> tuple[int, Path] | None:
     pattern = re.compile(rf"^{re.escape(source_inp.stem)}\.(\d{{3}})\.xyz$")
-    best: int | None = None
+    best: tuple[int, Path] | None = None
     for candidate in source_inp.parent.glob("*.xyz"):
         match = pattern.match(candidate.name)
-        if match is None:
-            continue
-        try:
-            if candidate.stat().st_size <= 0:
-                continue
-        except OSError:
+        if match is None or not nonempty_file(candidate):
             continue
         index = int(match.group(1))
-        if best is None or index > best:
-            best = index
+        if best is None or index > best[0]:
+            best = (index, candidate)
     return best
 
 
-def highest_numbered_scan_xyz(source_inp: Path) -> tuple[int, Path] | None:
-    index = highest_numbered_scan_xyz_index(source_inp)
-    if index is None:
-        return None
-    candidate = source_inp.with_name(f"{source_inp.stem}.{index:03d}.xyz")
-    try:
-        if candidate.exists() and candidate.stat().st_size > 0:
-            return index, candidate
-    except OSError:
-        return None
-    return None
+def highest_numbered_scan_xyz_index(source_inp: Path) -> int | None:
+    last_scan_xyz = highest_numbered_scan_xyz(source_inp)
+    return None if last_scan_xyz is None else last_scan_xyz[0]
 
 
-def apply_scants_relaxed_scan_resume_rewrite(lines: list[str], source_inp: Path) -> List[str]:
+def apply_scants_relaxed_scan_resume_rewrite(lines: list[str], source_inp: Path) -> list[str]:
     last_index = highest_numbered_scan_xyz_index(source_inp)
     if last_index is None:
         return []
@@ -171,15 +147,14 @@ def apply_scants_relaxed_scan_resume_rewrite(lines: list[str], source_inp: Path)
         return []
     scan_line_indices, _total_points = shared
 
-    rewritten_lines: list[tuple[int, str]] = []
-    for line_idx in scan_line_indices:
-        rewritten = _resume_simple_scan_line(lines[line_idx], completed_points=last_index)
-        if rewritten is None or rewritten == lines[line_idx]:
-            return []
-        rewritten_lines.append((line_idx, rewritten))
-
-    for line_idx, rewritten in rewritten_lines:
-        lines[line_idx] = rewritten
+    rewrites = _scan_line_rewrites(
+        lines,
+        scan_line_indices,
+        lambda line, _offset: _resume_simple_scan_line(line, completed_points=last_index),
+    )
+    if rewrites is None:
+        return []
+    _apply_line_rewrites(lines, rewrites)
     return [f"scants_scan_range_resumed_after_point_{last_index:03d}"]
 
 
@@ -189,7 +164,7 @@ def apply_scants_failed_scan_retry_rewrite(
     retry_number: int,
     source_inp: Path | None = None,
     target_inp: Path | None = None,
-) -> List[str]:
+) -> list[str]:
     """Rewrite failed ScanTS retries without checkpoint/last-geometry restarts.
 
     ScanTS failures can leave the same-stem ``*.xyz`` and ``*.gbw`` in a chemically
@@ -198,7 +173,7 @@ def apply_scants_failed_scan_retry_rewrite(
     or replacing the geometry with the latest attempt artifact.
     """
     cleanup_actions = _remove_checkpoint_restart_directives(lines)
-    recipe_actions: List[str] = []
+    recipe_actions: list[str] = []
 
     if retry_number < 1:
         return []
@@ -241,16 +216,6 @@ def _simple_scan_coord_line_indices(lines: list[str]) -> list[int]:
     return indices
 
 
-def _scan_lines_share_total_points(lines: list[str], indices: list[int]) -> bool:
-    totals: set[int] = set()
-    for idx in indices:
-        match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[idx])
-        if match is None:
-            return False
-        totals.add(int(match.group("points")))
-    return len(totals) == 1
-
-
 def _scan_lines_with_shared_total(lines: list[str]) -> tuple[list[int], int] | None:
     """Return simple-scan coordinate line indices with their shared point total.
 
@@ -260,12 +225,39 @@ def _scan_lines_with_shared_total(lines: list[str]) -> tuple[list[int], int] | N
     scan_line_indices = _simple_scan_coord_line_indices(lines)
     if not scan_line_indices:
         return None
-    if not _scan_lines_share_total_points(lines, scan_line_indices):
+    totals: set[int] = set()
+    for idx in scan_line_indices:
+        match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[idx])
+        if match is None:
+            return None
+        totals.add(int(match.group("points")))
+    if len(totals) != 1:
         return None
-    first_match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[scan_line_indices[0]])
-    if first_match is None:
-        return None
-    return scan_line_indices, int(first_match.group("points"))
+    return scan_line_indices, totals.pop()
+
+
+def _scan_line_rewrites(
+    lines: list[str],
+    indices: list[int],
+    rewriter: Callable[[str, int], str | None],
+) -> list[tuple[int, str]] | None:
+    """Build an all-or-nothing rewrite plan for the given scan lines.
+
+    Returns ``None`` when any line fails to rewrite (or rewrites to itself) so
+    callers never apply a partial scan mutation.
+    """
+    rewrites: list[tuple[int, str]] = []
+    for offset, line_idx in enumerate(indices):
+        rewritten = rewriter(lines[line_idx], offset)
+        if rewritten is None or rewritten == lines[line_idx]:
+            return None
+        rewrites.append((line_idx, rewritten))
+    return rewrites
+
+
+def _apply_line_rewrites(lines: list[str], rewrites: list[tuple[int, str]]) -> None:
+    for line_idx, rewritten in rewrites:
+        lines[line_idx] = rewritten
 
 
 def _resume_simple_scan_line(line: str, *, completed_points: int) -> str | None:
@@ -288,8 +280,8 @@ def _resume_simple_scan_line(line: str, *, completed_points: int) -> str | None:
     )
 
 
-def _remove_checkpoint_restart_directives(lines: list[str]) -> List[str]:
-    actions: List[str] = []
+def _remove_checkpoint_restart_directives(lines: list[str]) -> list[str]:
+    actions: list[str] = []
     if _remove_route_keywords(lines, {"MOREAD"}):
         actions.append("route_remove_moread")
 
@@ -419,7 +411,7 @@ def _reverse_simple_scan_path(
     source_inp: Path,
     selected_inp: Path,
     target_inp: Path,
-) -> List[str]:
+) -> list[str]:
     shared = _scan_lines_with_shared_total(lines)
     if shared is None:
         return []
@@ -438,43 +430,39 @@ def _reverse_simple_scan_path(
     is_continuation = (
         source_inp.resolve() != selected_inp.resolve() and completed_points is not None
     )
-    selected_lines: list[str] = []
-    selected_scan_line_indices: list[int] = []
     if is_continuation:
+        assert completed_points is not None
+        completed = completed_points
         selected_lines = selected_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
-        selected_scan_line_indices = _simple_scan_coord_line_indices(selected_lines)
+        selected_shared = _scan_lines_with_shared_total(selected_lines)
+        if selected_shared is None:
+            return []
+        selected_scan_line_indices, _selected_points = selected_shared
         if len(selected_scan_line_indices) != len(scan_line_indices):
             return []
-        if not _scan_lines_share_total_points(selected_lines, selected_scan_line_indices):
-            return []
+        # Every source scan line shares `source_points` (verified above), so the
+        # reversed continuation always spans completed + source points.
+        total_points = completed + source_points
 
-    rewritten_lines: list[tuple[int, str]] = []
-    total_points: int | None = None
-    for offset, line_idx in enumerate(scan_line_indices):
-        if is_continuation:
-            assert completed_points is not None
-            original_line = selected_lines[selected_scan_line_indices[offset]]
-            rewritten = _reverse_continuation_scan_line(
-                lines[line_idx],
-                original_line,
-                completed_points=completed_points,
+        def _rewriter(line: str, offset: int) -> str | None:
+            return _reverse_continuation_scan_line(
+                line,
+                selected_lines[selected_scan_line_indices[offset]],
+                completed_points=completed,
             )
-            source_match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[line_idx])
-            total_points = (
-                completed_points + int(source_match.group("points")) if source_match else None
-            )
-        else:
-            rewritten = _reverse_simple_scan_line(lines[line_idx])
-            source_match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[line_idx])
-            total_points = int(source_match.group("points")) if source_match else None
-        if rewritten is None or rewritten == lines[line_idx] or total_points is None:
-            return []
-        rewritten_lines.append((line_idx, rewritten))
+    else:
+        total_points = source_points
 
+        def _rewriter(line: str, offset: int) -> str | None:
+            del offset
+            return _reverse_simple_scan_line(line)
+
+    rewrites = _scan_line_rewrites(lines, scan_line_indices, _rewriter)
+    if rewrites is None:
+        return []
     if not replace_geometry_with_xyzfile(lines, geometry_file, target_inp.parent):
         return []
-    for line_idx, rewritten in rewritten_lines:
-        lines[line_idx] = rewritten
+    _apply_line_rewrites(lines, rewrites)
 
     actions = [
         "scants_reverse_scan",
@@ -507,7 +495,7 @@ def _continue_simple_scan_from_last_numbered_xyz(
     target_inp: Path,
     min_extension_steps: int,
     extension_fraction: float | None,
-) -> List[str]:
+) -> list[str]:
     last_scan_xyz = highest_numbered_scan_xyz(source_inp)
     if last_scan_xyz is None:
         return []
@@ -526,22 +514,21 @@ def _continue_simple_scan_from_last_numbered_xyz(
     if extension_steps <= 0 or new_points <= 0:
         return []
 
-    rewritten_lines: list[tuple[int, str]] = []
-    for line_idx in scan_line_indices:
-        rewritten = _continue_simple_scan_line(
-            lines[line_idx],
+    rewrites = _scan_line_rewrites(
+        lines,
+        scan_line_indices,
+        lambda line, _offset: _continue_simple_scan_line(
+            line,
             completed_points=last_index,
             extension_steps=extension_steps,
             new_points=new_points,
-        )
-        if rewritten is None or rewritten == lines[line_idx]:
-            return []
-        rewritten_lines.append((line_idx, rewritten))
-
+        ),
+    )
+    if rewrites is None:
+        return []
     if not replace_geometry_with_xyzfile(lines, geometry_file, target_inp.parent):
         return []
-    for line_idx, rewritten in rewritten_lines:
-        lines[line_idx] = rewritten
+    _apply_line_rewrites(lines, rewrites)
     return [
         f"scants_scan_endpoint_extended_by_{extension_steps:03d}_step",
         f"scants_scan_range_continued_after_point_{last_index:03d}",
@@ -554,7 +541,7 @@ def _complete_simple_scan_to_original_endpoint(
     *,
     source_inp: Path,
     target_inp: Path,
-) -> List[str]:
+) -> list[str]:
     last_scan_xyz = highest_numbered_scan_xyz(source_inp)
     if last_scan_xyz is None:
         return []
@@ -568,17 +555,16 @@ def _complete_simple_scan_to_original_endpoint(
     if new_points <= 0:
         return []
 
-    rewritten_lines: list[tuple[int, str]] = []
-    for line_idx in scan_line_indices:
-        rewritten = _resume_simple_scan_line(lines[line_idx], completed_points=last_index)
-        if rewritten is None or rewritten == lines[line_idx]:
-            return []
-        rewritten_lines.append((line_idx, rewritten))
-
+    rewrites = _scan_line_rewrites(
+        lines,
+        scan_line_indices,
+        lambda line, _offset: _resume_simple_scan_line(line, completed_points=last_index),
+    )
+    if rewrites is None:
+        return []
     if not replace_geometry_with_xyzfile(lines, geometry_file, target_inp.parent):
         return []
-    for line_idx, rewritten in rewritten_lines:
-        lines[line_idx] = rewritten
+    _apply_line_rewrites(lines, rewrites)
     return [
         "scants_endpoint_scan_to_original_endpoint",
         f"scants_endpoint_scan_from_point_{last_index:03d}",
@@ -587,16 +573,19 @@ def _complete_simple_scan_to_original_endpoint(
     ]
 
 
-def _replace_scants_route_with_endpoint_opt(lines: list[str]) -> List[str]:
-    route_idx = find_route_idx(lines)
+def _scants_route_idx(lines: list[str]) -> int | None:
+    for idx in route_line_indices(lines):
+        tokens = lines[idx].strip()[1:].split()
+        if any(token.upper() == "SCANTS" for token in tokens):
+            return idx
+    return None
+
+
+def _replace_scants_route_with_endpoint_opt(lines: list[str]) -> list[str]:
+    route_idx = _scants_route_idx(lines)
     if route_idx is None:
         return []
-    stripped = lines[route_idx].strip()
-    if not stripped.startswith("!"):
-        return []
-    tokens = stripped[1:].split()
-    if not any(token.upper() == "SCANTS" for token in tokens):
-        return []
+    tokens = lines[route_idx].strip()[1:].split()
 
     rewritten: list[str] = []
     inserted_opt = False
@@ -627,25 +616,27 @@ def _replace_scants_route_with_endpoint_opt(lines: list[str]) -> List[str]:
 
 
 def _first_scants_route_line(inp_path: Path) -> str:
-    try:
-        for line in inp_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            if stripped.startswith("!") and SCANTS_ROUTE_RE.search(stripped):
-                return stripped
-    except OSError:
-        return ""
+    for line in file_route_lines(inp_path):
+        if SCANTS_ROUTE_RE.search(line):
+            return line
     return ""
 
 
-def _restore_selected_scants_route(lines: list[str], selected_inp: Path) -> List[str]:
-    route = _first_scants_route_line(selected_inp)
-    if not route:
+def _restore_selected_scants_route(lines: list[str], selected_inp: Path) -> list[str]:
+    selected_routes = file_route_lines(selected_inp)
+    scants_ordinal = next(
+        (idx for idx, line in enumerate(selected_routes) if SCANTS_ROUTE_RE.search(line)),
+        None,
+    )
+    if scants_ordinal is None:
         return []
-    route_idx = find_route_idx(lines)
-    if route_idx is None:
+    # The endpoint-scan rewrite replaced the ScanTS route line in place, so the
+    # route-line order matches the selected input; restore the same ordinal line.
+    route = selected_routes[scants_ordinal]
+    indices = route_line_indices(lines)
+    if scants_ordinal >= len(indices):
         return []
+    route_idx = indices[scants_ordinal]
     if lines[route_idx].strip() == route:
         return []
     lines[route_idx] = route
@@ -687,12 +678,26 @@ def _format_scan_float(value: float) -> str:
     return text
 
 
+def _write_prepared_input(
+    lines: list[str],
+    *,
+    target_inp: Path,
+    actions: list[str],
+    max_memory_gb: int | None,
+) -> tuple[Path, list[str]]:
+    """Shared tail of the ``prepare_scants_*`` builders: clamp maxcore and write."""
+    if max_memory_gb is not None and clamp_maxcore_to_budget(lines, max_memory_gb=max_memory_gb):
+        actions.append("maxcore_clamped_to_budget")
+    target_inp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return target_inp, actions
+
+
 def prepare_scants_endpoint_scan_input(
     *,
     source_inp: Path,
     target_inp: Path,
     max_memory_gb: int | None = None,
-) -> tuple[Path | None, List[str]]:
+) -> tuple[Path | None, list[str]]:
     if not input_uses_scants(source_inp):
         return None, []
 
@@ -710,12 +715,9 @@ def prepare_scants_endpoint_scan_input(
         return None, []
     actions.extend(route_actions)
     actions.extend(scan_actions)
-
-    if max_memory_gb is not None and clamp_maxcore_to_budget(lines, max_memory_gb=max_memory_gb):
-        actions.append("maxcore_clamped_to_budget")
-
-    target_inp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    return target_inp, actions
+    return _write_prepared_input(
+        lines, target_inp=target_inp, actions=actions, max_memory_gb=max_memory_gb
+    )
 
 
 def prepare_scants_scan_retry_input(
@@ -724,7 +726,7 @@ def prepare_scants_scan_retry_input(
     target_inp: Path,
     retry_number: int,
     max_memory_gb: int | None = None,
-) -> tuple[Path | None, List[str]]:
+) -> tuple[Path | None, list[str]]:
     if not input_uses_scants(source_inp):
         return None, []
 
@@ -737,12 +739,9 @@ def prepare_scants_scan_retry_input(
     )
     if not actions:
         return None, []
-
-    if max_memory_gb is not None and clamp_maxcore_to_budget(lines, max_memory_gb=max_memory_gb):
-        actions.append("maxcore_clamped_to_budget")
-
-    target_inp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    return target_inp, actions
+    return _write_prepared_input(
+        lines, target_inp=target_inp, actions=actions, max_memory_gb=max_memory_gb
+    )
 
 
 def prepare_scants_reverse_scan_retry_input(
@@ -751,12 +750,12 @@ def prepare_scants_reverse_scan_retry_input(
     selected_inp: Path,
     target_inp: Path,
     max_memory_gb: int | None = None,
-) -> tuple[Path | None, List[str]]:
+) -> tuple[Path | None, list[str]]:
     if not input_uses_scants(selected_inp):
         return None, []
 
     lines = source_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
-    actions: List[str] = []
+    actions: list[str] = []
     if not input_uses_scants(source_inp):
         route_actions = _restore_selected_scants_route(lines, selected_inp)
         if not route_actions:
@@ -772,12 +771,9 @@ def prepare_scants_reverse_scan_retry_input(
     if not reverse_actions:
         return None, []
     actions.extend(reverse_actions)
-
-    if max_memory_gb is not None and clamp_maxcore_to_budget(lines, max_memory_gb=max_memory_gb):
-        actions.append("maxcore_clamped_to_budget")
-
-    target_inp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    return target_inp, actions
+    return _write_prepared_input(
+        lines, target_inp=target_inp, actions=actions, max_memory_gb=max_memory_gb
+    )
 
 
 def prepare_scants_optts_fallback_input(
@@ -787,7 +783,7 @@ def prepare_scants_optts_fallback_input(
     reaction_dir: Path,
     out_path: Path,
     max_memory_gb: int | None = None,
-) -> tuple[Path | None, List[str]]:
+) -> tuple[Path | None, list[str]]:
     if not input_uses_scants(source_inp):
         return None, []
 
@@ -796,22 +792,18 @@ def prepare_scants_optts_fallback_input(
         return None, []
 
     lines = source_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
-    actions: List[str] = []
+    actions: list[str] = []
 
     if _replace_scants_route_with_optts(lines):
         actions.append("scants_fallback_to_optts")
     if _remove_geom_scan_subblock(lines):
         actions.append("scants_scan_block_removed")
-    if replace_geometry_with_xyzfile(lines, guess_xyz, target_inp.parent):
-        actions.append(f"scants_guess_from_{guess_xyz.name}")
-    else:
+    if not replace_geometry_with_xyzfile(lines, guess_xyz, target_inp.parent):
         return None, []
-
-    if max_memory_gb is not None and clamp_maxcore_to_budget(lines, max_memory_gb=max_memory_gb):
-        actions.append("maxcore_clamped_to_budget")
-
-    target_inp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    return target_inp, actions
+    actions.append(f"scants_guess_from_{guess_xyz.name}")
+    return _write_prepared_input(
+        lines, target_inp=target_inp, actions=actions, max_memory_gb=max_memory_gb
+    )
 
 
 def apply_scants_optts_resume_rewrite(
@@ -820,12 +812,12 @@ def apply_scants_optts_resume_rewrite(
     source_inp: Path,
     target_inp: Path,
     out_path: Path,
-) -> List[str]:
+) -> list[str]:
     guess_xyz = scants_optts_resume_guess_xyz_for_output(source_inp, out_path)
     if guess_xyz is None:
         return []
 
-    actions: List[str] = []
+    actions: list[str] = []
     if _replace_scants_route_with_optts(lines):
         actions.append("scants_resume_to_optts")
     if _remove_geom_scan_subblock(lines):
@@ -838,27 +830,21 @@ def apply_scants_optts_resume_rewrite(
 
 
 def _replace_scants_route_with_optts(lines: list[str]) -> bool:
-    for idx, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+    route_idx = _scants_route_idx(lines)
+    if route_idx is None:
+        return False
+    tokens = lines[route_idx].strip()[1:].split()
+    rewritten: list[str] = []
+    inserted_optts = False
+    for token in tokens:
+        if token.upper() == "SCANTS":
+            if not inserted_optts:
+                rewritten.append("OPTTS")
+                inserted_optts = True
             continue
-        if not stripped.startswith("!"):
-            return False
-        tokens = stripped[1:].split()
-        if not any(token.upper() == "SCANTS" for token in tokens):
-            return False
-        rewritten: list[str] = []
-        inserted_optts = False
-        for token in tokens:
-            if token.upper() == "SCANTS":
-                if not inserted_optts:
-                    rewritten.append("OPTTS")
-                    inserted_optts = True
-                continue
-            rewritten.append(token)
-        lines[idx] = "! " + " ".join(rewritten)
-        return True
-    return False
+        rewritten.append(token)
+    lines[route_idx] = "! " + " ".join(rewritten)
+    return True
 
 
 def _remove_geom_scan_subblock(lines: list[str]) -> bool:

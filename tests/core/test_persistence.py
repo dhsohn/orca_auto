@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import errno
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -10,13 +10,13 @@ import pytest
 
 from orca_auto.core.utils import persistence
 
-FIXED_NOW = datetime(2026, 4, 19, 12, 34, 56, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2026, 4, 19, 12, 34, 56, tzinfo=UTC)
 
 
 class _FixedDatetime:
     @classmethod
     def now(cls, tz: timezone | None = None) -> datetime:
-        assert tz is timezone.utc
+        assert tz is UTC
         return FIXED_NOW
 
 

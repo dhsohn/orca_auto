@@ -4,9 +4,10 @@ import argparse
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 from orca_auto.cli_errors import emit_error
 from orca_auto.systemd_plan import (

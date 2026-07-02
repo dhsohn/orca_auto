@@ -61,11 +61,7 @@ def write_workflow_worker_state(
         "worker_session_id": _normalize_text(worker_session_id),
         "status": _normalize_text(status),
         "workflow_root": str(
-            (
-                Path(workflow_root_path).expanduser().resolve()
-                if workflow_root_path
-                else resolved_root
-            )
+            Path(workflow_root_path).expanduser().resolve() if workflow_root_path else resolved_root
         ),
         "pid": os.getpid(),
         "hostname": socket.gethostname(),

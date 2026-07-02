@@ -4,7 +4,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, ClassVar, Dict
+from typing import Any, ClassVar
 
 from ..config import AppConfig
 from ..result_organizer_models import OrganizePlan, SkipReason
@@ -19,15 +19,15 @@ class _PlanApplyResult:
     reason: str = ""
     plan: OrganizePlan | None = None
 
-    def to_result_payload(self) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"run_id": self.run_id, "action": self.action}
+    def to_result_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"run_id": self.run_id, "action": self.action}
         if self.reason:
             payload["reason"] = self.reason
         if self.plan is not None:
             payload["_plan"] = self.plan
         return payload
 
-    def to_failure_payload(self) -> Dict[str, Any]:
+    def to_failure_payload(self) -> dict[str, Any]:
         return {"run_id": self.run_id, "reason": self.reason}
 
 
@@ -106,7 +106,7 @@ class OrganizeApplyDependencies:
 
 def _plan_conflict_result(
     plan: OrganizePlan,
-    index: Dict[str, Dict[str, Any]],
+    index: dict[str, dict[str, Any]],
     *,
     deps: OrganizeApplyDependencies,
 ) -> _PlanApplyResult | None:
@@ -241,10 +241,10 @@ def _apply_locked_organize_plan(
 
 def _build_apply_summary(
     *,
-    results: list[Dict[str, Any]],
-    failures: list[Dict[str, Any]],
+    results: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
     skips: list[SkipReason],
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     organized = [r for r in results if r.get("action") == "moved"]
     skipped_results = [r for r in results if r.get("action") == "skipped"]
 
@@ -268,9 +268,9 @@ def _apply_organize_plans(
     *,
     notify_summary: bool,
     deps: OrganizeApplyDependencies,
-) -> Dict[str, Any]:
-    results: list[Dict[str, Any]] = []
-    failures: list[Dict[str, Any]] = []
+) -> dict[str, Any]:
+    results: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
 
     for plan in plans:
         result = _call_apply_one_organize_plan(
@@ -297,7 +297,7 @@ def _apply_organize_plans(
 
 def _call_plan_conflict_result(
     plan: OrganizePlan,
-    index: Dict[str, Dict[str, Any]],
+    index: dict[str, dict[str, Any]],
     *,
     deps: OrganizeApplyDependencies,
 ) -> _PlanApplyResult | None:

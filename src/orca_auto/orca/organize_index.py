@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Mapping, Optional
+from typing import Any
 
 from orca_auto.core.utils import process_lock
 
@@ -27,12 +28,12 @@ def records_path(organized_root: Path) -> Path:
     return index_dir(organized_root) / RECORDS_FILE_NAME
 
 
-def load_index(organized_root: Path) -> Dict[str, Dict[str, Any]]:
+def load_index(organized_root: Path) -> dict[str, dict[str, Any]]:
     rp = records_path(organized_root)
     if not rp.exists():
         return {}
 
-    result: Dict[str, Dict[str, Any]] = {}
+    result: dict[str, dict[str, Any]] = {}
     try:
         text = rp.read_text(encoding="utf-8")
     except OSError:
@@ -80,7 +81,7 @@ def _build_index_record(
     organized_root: Path,
     reaction_dir: Path,
     state: Mapping[str, Any],
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     if state.get("status") != "completed":
         return None
     final_result = state.get("final_result")
@@ -140,7 +141,7 @@ def rebuild_index(organized_root: Path) -> int:
     idir = index_dir(organized_root)
     idir.mkdir(parents=True, exist_ok=True)
 
-    records: List[Dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
     if not root_exists:
         atomic_write_text(records_path(organized_root), "")
         return 0
@@ -174,7 +175,7 @@ def _assert_index_locked(organized_root: Path) -> None:
         )
 
 
-def _append_jsonl_entry(path: Path, entry: Dict[str, Any]) -> None:
+def _append_jsonl_entry(path: Path, entry: dict[str, Any]) -> None:
     line = json.dumps(entry, ensure_ascii=True) + "\n"
     with path.open("a", encoding="utf-8") as handle:
         handle.write(line)
@@ -182,14 +183,14 @@ def _append_jsonl_entry(path: Path, entry: Dict[str, Any]) -> None:
         os.fsync(handle.fileno())
 
 
-def append_record(organized_root: Path, record: Dict[str, Any]) -> None:
+def append_record(organized_root: Path, record: dict[str, Any]) -> None:
     _assert_index_locked(organized_root)
     idir = index_dir(organized_root)
     idir.mkdir(parents=True, exist_ok=True)
     _append_jsonl_entry(records_path(organized_root), record)
 
 
-def append_failed_rollback(organized_root: Path, entry: Dict[str, Any]) -> None:
+def append_failed_rollback(organized_root: Path, entry: dict[str, Any]) -> None:
     _assert_index_locked(organized_root)
     idir = index_dir(organized_root)
     idir.mkdir(parents=True, exist_ok=True)
@@ -207,7 +208,7 @@ def acquire_index_lock(organized_root: Path, timeout_seconds: int = 30) -> Itera
     idir = index_dir(organized_root)
     idir.mkdir(parents=True, exist_ok=True)
     lock_path = idir / LOCK_FILE_NAME
-    lock_payload_obj: Dict[str, Any] = {"pid": os.getpid(), "started_at": now_utc_iso()}
+    lock_payload_obj: dict[str, Any] = {"pid": os.getpid(), "started_at": now_utc_iso()}
     current_start_ticks = process_lock.current_process_start_ticks()
     if current_start_ticks is not None:
         lock_payload_obj["process_start_ticks"] = current_start_ticks

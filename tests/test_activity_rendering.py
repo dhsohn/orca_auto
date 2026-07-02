@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from orca_auto import activity_rendering as rendering
 
@@ -24,7 +24,7 @@ def test_queue_elapsed_uses_restart_metadata_and_clamps_negative_durations() -> 
     assert (
         rendering._queue_elapsed_text(
             running,
-            now=datetime(2026, 5, 20, 0, 1, 15, tzinfo=timezone.utc),
+            now=datetime(2026, 5, 20, 0, 1, 15, tzinfo=UTC),
         )
         == "00:01:05"
     )
@@ -64,7 +64,7 @@ def test_queue_table_lines_truncates_wide_unicode_without_column_drift(monkeypat
     monkeypatch.setattr(
         rendering,
         "_queue_table_now",
-        lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=timezone.utc),
+        lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=UTC),
     )
     rows = [
         (
@@ -126,7 +126,7 @@ def test_queue_table_lines_omits_id_column_when_disabled(monkeypatch) -> None:
     monkeypatch.setattr(
         rendering,
         "_queue_table_now",
-        lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=timezone.utc),
+        lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=UTC),
     )
 
     lines = rendering.queue_table_lines(_basic_rows(), include_id=False)
@@ -144,7 +144,7 @@ def test_queue_table_lines_fits_within_max_width(monkeypatch) -> None:
     monkeypatch.setattr(
         rendering,
         "_queue_table_now",
-        lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=timezone.utc),
+        lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=UTC),
     )
 
     lines = rendering.queue_table_lines(_basic_rows(), max_width=50)
@@ -158,7 +158,7 @@ def test_queue_table_lines_shrinks_detail_before_id(monkeypatch) -> None:
     monkeypatch.setattr(
         rendering,
         "_queue_table_now",
-        lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=timezone.utc),
+        lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=UTC),
     )
 
     rows = [

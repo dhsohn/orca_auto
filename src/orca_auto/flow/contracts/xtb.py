@@ -21,7 +21,7 @@ class XtbCandidateArtifact:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_raw(cls, raw: dict[str, Any]) -> "XtbCandidateArtifact":
+    def from_raw(cls, raw: dict[str, Any]) -> XtbCandidateArtifact:
         metadata = {
             str(key): value
             for key, value in raw.items()
@@ -101,7 +101,7 @@ class XtbDownstreamPolicy:
         max_candidates: int = 3,
         selected_only: bool = True,
         allowed_kinds: list[str] | tuple[str, ...] | None = None,
-    ) -> "XtbDownstreamPolicy":
+    ) -> XtbDownstreamPolicy:
         kinds = tuple(
             text
             for item in (preferred_kinds or cls().preferred_kinds)

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Protocol
+from typing import Any, Protocol
 
 from .attempt_notifications import AttemptStartedNotification, notify_attempt_started
 from .attempt_reporting import exit_with_result as _exit_with_result
@@ -53,7 +54,7 @@ class AttemptRunContext:
     max_retries: int
     retry_inp_path: Callable[[Path, int], Path]
     to_resolved_local: Callable[[str], Path]
-    emit: Callable[[Dict[str, Any]], None]
+    emit: Callable[[dict[str, Any]], None]
     notify_started: Callable[[RunStartedNotification], Any] | None
     notify_finished: Callable[[RunFinishedNotification], Any] | None
     notify_retry: Callable[[RetryNotification], Any] | None
@@ -157,7 +158,7 @@ def _finish_attempt(
     reason: str,
     last_out_path: str | None,
     exit_code: int,
-    extra: Dict[str, Any] | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> int:
     return _exit_with_result(
         ctx.reaction_dir,
@@ -429,7 +430,7 @@ def run_attempts(
     max_retries: int,
     retry_inp_path: Callable[[Path, int], Path],
     to_resolved_local: Callable[[str], Path],
-    emit: Callable[[Dict[str, Any]], None],
+    emit: Callable[[dict[str, Any]], None],
     notify_started: Callable[[RunStartedNotification], Any] | None = None,
     notify_finished: Callable[[RunFinishedNotification], Any] | None = None,
     notify_retry: Callable[[RetryNotification], Any] | None = None,

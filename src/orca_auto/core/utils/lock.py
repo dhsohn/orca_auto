@@ -3,9 +3,9 @@ from __future__ import annotations
 import fcntl
 import os
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import Iterator
 
 from .persistence import now_utc_iso
 

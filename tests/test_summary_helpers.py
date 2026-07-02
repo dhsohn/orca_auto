@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 from unittest.mock import patch
@@ -13,7 +13,7 @@ from orca_auto.orca.run_snapshot import RunSnapshot
 class _FrozenDateTime(datetime):
     @classmethod
     def frozen_now(cls) -> datetime:
-        return cls(2026, 1, 10, 12, 0, 0, tzinfo=timezone.utc)
+        return cls(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
 
     @classmethod
     def now(cls, tz=None):  # type: ignore[override]

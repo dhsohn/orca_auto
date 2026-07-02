@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import suppress
-from typing import Any, Dict, Mapping
+from typing import Any
 
 from ..config import AppConfig
 from ..job_locations import resource_dict, upsert_job_record
@@ -11,7 +12,7 @@ from ..state import ORGANIZED_REF_NAME, now_utc_iso, write_organized_ref
 from ..types import RunState
 
 
-def build_index_record(plan: OrganizePlan, state: Mapping[str, Any]) -> Dict[str, Any]:
+def build_index_record(plan: OrganizePlan, state: Mapping[str, Any]) -> dict[str, Any]:
     final_result = state.get("final_result")
     if not isinstance(final_result, dict):
         final_result = {}

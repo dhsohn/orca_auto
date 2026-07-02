@@ -4,7 +4,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from html import unescape
 from pathlib import Path
 from typing import Any
@@ -58,7 +58,7 @@ class ProgressSnapshot:
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _human_duration(seconds: float) -> str:
@@ -82,7 +82,7 @@ def _elapsed_from_started(value: Any) -> str:
 
 def _updated_ago_text(path: Path) -> str:
     try:
-        updated = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        updated = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
     except OSError:
         return "n/a"
 

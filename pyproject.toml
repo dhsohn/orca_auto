@@ -64,7 +64,10 @@ line-length = 100
 # Layout (including line length) is owned by `ruff format`, which
 # `scripts/check.sh` enforces via `ruff format --check`. `E501` is intentionally
 # omitted so the formatter stays the single source of truth for line wrapping.
-select = ["E4", "E7", "E9", "F", "I", "B", "BLE"]
+select = ["E4", "E7", "E9", "F", "I", "B", "BLE", "UP"]
+# UP042 (str-Enum -> StrEnum) changes `str()`/format semantics of status enums
+# that are serialized and compared as plain strings; keep the str mixin.
+ignore = ["UP042"]
 
 [tool.mypy]
 python_version = "3.11"

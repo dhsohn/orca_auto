@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict
+from typing import Any
 
 from .attempt_retry import state_pending_scants_reverse_after_endpoint_scan
 from .inp_rewriter import rewrite_for_retry
@@ -49,7 +50,7 @@ class ResumeTerminalDecisionRequest:
     max_retries: int
     last_out_path_from_state: Callable[[RunState], str | None]
     exit_with_result: Callable[..., int]
-    emit: Callable[[Dict[str, Any]], None]
+    emit: Callable[[dict[str, Any]], None]
     notify_finished: Callable[[RunFinishedNotification], Any] | None = None
 
 
@@ -207,7 +208,7 @@ def resume_terminal_decision(
     max_retries: int,
     last_out_path_from_state: Callable[[RunState], str | None],
     exit_with_result: Callable[..., int],
-    emit: Callable[[Dict[str, Any]], None],
+    emit: Callable[[dict[str, Any]], None],
     notify_finished: Callable[[RunFinishedNotification], Any] | None = None,
 ) -> int | None:
     return _resume_terminal_decision(

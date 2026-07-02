@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any
 
 from ..config import AppConfig
 from ..result_organizer_models import SkipReason
@@ -30,7 +30,7 @@ def _organize_summary_parts(
 
 
 def _format_organized_line(
-    item: Dict[str, Any],
+    item: dict[str, Any],
     *,
     escape_html_fn: Callable[[Any], str] = escape_html,
 ) -> str:
@@ -49,7 +49,7 @@ def _format_organized_line(
 
 
 def _organized_section(
-    organized: list[Dict[str, Any]],
+    organized: list[dict[str, Any]],
     *,
     escape_html_fn: Callable[[Any], str] = escape_html,
 ) -> str | None:
@@ -68,7 +68,7 @@ def _organized_section(
 
 
 def _failure_section(
-    failures: list[Dict[str, Any]],
+    failures: list[dict[str, Any]],
     *,
     escape_html_fn: Callable[[Any], str] = escape_html,
 ) -> str | None:
@@ -104,9 +104,9 @@ def _skip_section(
 
 
 def _build_organize_message(
-    organized: list[Dict[str, Any]],
-    skipped: list[Dict[str, Any]],
-    failures: list[Dict[str, Any]],
+    organized: list[dict[str, Any]],
+    skipped: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
     skips: list[SkipReason],
     *,
     escape_html_fn: Callable[[Any], str] = escape_html,
@@ -147,12 +147,12 @@ def _build_organize_message(
 def _send_organize_notification(
     cfg: AppConfig,
     *,
-    organized: list[Dict[str, Any]],
-    skipped_results: list[Dict[str, Any]],
-    failures: list[Dict[str, Any]],
+    organized: list[dict[str, Any]],
+    skipped_results: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
     skips: list[SkipReason],
     build_message_fn: Callable[
-        [list[Dict[str, Any]], list[Dict[str, Any]], list[Dict[str, Any]], list[SkipReason]],
+        [list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[SkipReason]],
         str | None,
     ] = _build_organize_message,
     send_message_fn: Callable[[Any, str], bool] = send_message,

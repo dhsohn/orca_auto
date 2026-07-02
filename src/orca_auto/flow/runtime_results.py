@@ -1,20 +1,34 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+
+from orca_auto.core.statuses import (
+    STATUS_CANCEL_FAILED,
+    STATUS_CANCEL_REQUESTED,
+    STATUS_CANCELLED,
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    STATUS_QUEUED,
+    STATUS_RUNNING,
+    STATUS_SUBMITTED,
+)
 
 from . import _runtime_common
 from .runtime_models import WorkflowAdvanceResult
 
 TERMINAL_WORKFLOW_STATUSES = frozenset(
     {
-        "completed",
-        "failed",
-        "cancelled",
-        "cancel_failed",
+        STATUS_COMPLETED,
+        STATUS_FAILED,
+        STATUS_CANCELLED,
+        STATUS_CANCEL_FAILED,
     }
 )
-ACTIVE_TERMINAL_SYNC_STATUSES = frozenset({"queued", "running", "submitted", "cancel_requested"})
+ACTIVE_TERMINAL_SYNC_STATUSES = frozenset(
+    {STATUS_QUEUED, STATUS_RUNNING, STATUS_SUBMITTED, STATUS_CANCEL_REQUESTED}
+)
 
 
 def workflow_advance_failed_result(

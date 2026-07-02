@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 from orca_auto.orca.result_organizer_filesystem import check_conflict
 from orca_auto.orca.result_organizer_planning import (

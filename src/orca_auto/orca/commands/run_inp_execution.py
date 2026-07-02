@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Type
+from typing import Any
 
 from orca_auto.core.utils.process_lock import parse_lock_info
 from orca_auto.core.utils.process_tracking import active_run_lock_pid
@@ -45,7 +45,7 @@ def retry_inp_path(selected_inp: Path, retry_number: int) -> Path:
     return selected_inp.with_name(f"{base_stem}.retry{retry_number:02d}.inp")
 
 
-def existing_completed_out(selected_inp: Path) -> Dict[str, Any] | None:
+def existing_completed_out(selected_inp: Path) -> dict[str, Any] | None:
     base_stem = RETRY_INP_RE.sub("", selected_inp.stem)
     if not base_stem:
         base_stem = selected_inp.stem
@@ -150,7 +150,7 @@ def run_with_state(
     cfg: Any,
     reaction_dir: Path,
     selected_inp: Path,
-    runner_cls: Type[Any],
+    runner_cls: type[Any],
     max_retries: int,
     resumed: bool,
     state: Any,
@@ -219,7 +219,7 @@ def execute_locked_run(
     args: Any,
     context: Any,
     *,
-    runner_cls: Type[Any],
+    runner_cls: type[Any],
     deps: Any,
 ) -> int:
     execution = deps.execution
@@ -265,7 +265,7 @@ def execute_locked_run(
 def cmd_run_inp_execute(
     args: Any,
     *,
-    runner_cls: Type[Any],
+    runner_cls: type[Any],
     cfg: Any | None,
     reaction_dir: Path | None,
     selected_inp: Path | None,

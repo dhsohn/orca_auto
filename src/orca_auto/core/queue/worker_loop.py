@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import MutableMapping
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable, MutableMapping
+from typing import Any, TypeVar
 
 from .worker_models import SlotFillResult
 from .worker_signals import install_shutdown_signal_handlers

@@ -6,7 +6,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
@@ -172,7 +172,7 @@ def enqueue(
     return entry
 
 
-def dequeue_next(allowed_root: Path) -> Optional[QueueEntry]:
+def dequeue_next(allowed_root: Path) -> QueueEntry | None:
     """Return the highest-priority pending entry and mark it running."""
     entry = _queue_store.dequeue_next(
         allowed_root,
@@ -189,7 +189,7 @@ def dequeue_next(allowed_root: Path) -> Optional[QueueEntry]:
     return entry
 
 
-def dequeue_entry_if_pending(allowed_root: Path, queue_id: str) -> Optional[QueueEntry]:
+def dequeue_entry_if_pending(allowed_root: Path, queue_id: str) -> QueueEntry | None:
     """Mark a selected pending ORCA queue entry running if it is still eligible."""
     entry = _queue_store.dequeue_entry_if_pending(
         allowed_root,
@@ -281,7 +281,7 @@ def requeue_running_entry(allowed_root: Path, queue_id: str) -> bool:
     )
 
 
-def cancel(allowed_root: Path, queue_id: str) -> Optional[QueueEntry]:
+def cancel(allowed_root: Path, queue_id: str) -> QueueEntry | None:
     """Cancel a queue entry."""
 
     def cancel_entry(current: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:

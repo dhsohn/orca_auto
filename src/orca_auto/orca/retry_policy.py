@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from .input_blocks import file_route_lines
+
 RetryRecipeName = Literal["scants_retry", "no_route_rewrite"]
 
 _ROUTE_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?")
@@ -84,23 +86,8 @@ def retry_recipe_name_for_input(inp_path: Path, retry_number: int) -> RetryRecip
 
 
 def _route_tokens(inp_path: Path) -> set[str]:
-    route = _route_text(inp_path)
+    route = "\n".join(line[1:] for line in file_route_lines(inp_path))
     return {match.group(0).upper() for match in _ROUTE_WORD_RE.finditer(route)}
-
-
-def _route_text(inp_path: Path) -> str:
-    routes: list[str] = []
-    try:
-        with inp_path.open("r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                if stripped.startswith("!"):
-                    routes.append(stripped[1:])
-    except OSError:
-        return ""
-    return "\n".join(routes)
 
 
 __all__ = [

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Dict
+from typing import Any, ClassVar
 
 from orca_auto.core.config import CommonResourceConfig, TelegramConfig
 from orca_auto.core.config import engines as _config_engines
@@ -94,7 +94,7 @@ class AppConfig:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
 
 
-def _load_raw_config(path: Path) -> Dict[str, Any]:
+def _load_raw_config(path: Path) -> dict[str, Any]:
     _, parsed = load_required_yaml_mapping(
         path,
         missing_error=_missing_config_error,
@@ -103,15 +103,15 @@ def _load_raw_config(path: Path) -> Dict[str, Any]:
     return parsed
 
 
-def _section_mapping(raw: Dict[str, Any], key: str) -> Dict[str, Any]:
+def _section_mapping(raw: dict[str, Any], key: str) -> dict[str, Any]:
     section = raw.get(key, {})
     return section if isinstance(section, dict) else {}
 
 
 def _required_runtime_paths(
     path: Path,
-    runtime_raw: Dict[str, Any],
-    paths_raw: Dict[str, Any],
+    runtime_raw: dict[str, Any],
+    paths_raw: dict[str, Any],
 ) -> tuple[str, str]:
     allowed_root = _config_engines.as_nonempty_str(runtime_raw.get("allowed_root"), "")
     orca_executable = _config_engines.as_nonempty_str(paths_raw.get("orca_executable"), "")
@@ -127,7 +127,7 @@ def _required_runtime_paths(
 
 def _scheduler_runtime_settings(
     path: Path,
-    scheduler_raw: Dict[str, Any],
+    scheduler_raw: dict[str, Any],
     allowed_root: str,
 ) -> tuple[int, str, int | None]:
     scheduler_enabled = bool(scheduler_raw)

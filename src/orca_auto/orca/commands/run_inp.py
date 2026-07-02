@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
-from typing import Any, Callable, Type
+from typing import Any
 
 from orca_auto.core.admission import (
     AdmissionLimitReachedError,
@@ -273,7 +274,7 @@ def _run_with_state(
     cfg: Any,
     reaction_dir: Path,
     selected_inp: Path,
-    runner_cls: Type[OrcaRunner],
+    runner_cls: type[OrcaRunner],
     max_retries: int,
     resumed: bool,
     state: Any,
@@ -294,7 +295,7 @@ def _execute_locked_run(
     args: Any,
     context: RunExecutionContext,
     *,
-    runner_cls: Type[OrcaRunner],
+    runner_cls: type[OrcaRunner],
 ) -> int:
     return _run_inp_execution.execute_locked_run(
         args,
@@ -307,7 +308,7 @@ def _execute_locked_run(
 def _cmd_run_inp_execute(
     args: Any,
     *,
-    runner_cls: Type[OrcaRunner] = OrcaRunner,
+    runner_cls: type[OrcaRunner] = OrcaRunner,
     cfg: Any | None = None,
     reaction_dir: Path | None = None,
     selected_inp: Path | None = None,
@@ -329,7 +330,7 @@ def _cmd_run_inp_execute(
     )
 
 
-def _cmd_run_inp_submit(args: Any, *, runner_cls: Type[OrcaRunner] = OrcaRunner) -> int:
+def _cmd_run_inp_submit(args: Any, *, runner_cls: type[OrcaRunner] = OrcaRunner) -> int:
     return _run_inp_submission.cmd_run_inp_submit(
         args,
         runner_cls=runner_cls,
@@ -342,5 +343,5 @@ def submit_reaction_dir_to_queue(args: Any) -> DirectQueueSubmission:
     return _run_inp_submission.submit_reaction_dir_to_queue(args, deps=_run_inp_deps())
 
 
-def cmd_run_inp(args: Any, *, runner_cls: Type[OrcaRunner] = OrcaRunner) -> int:
+def cmd_run_inp(args: Any, *, runner_cls: type[OrcaRunner] = OrcaRunner) -> int:
     return _cmd_run_inp_submit(args, runner_cls=runner_cls)

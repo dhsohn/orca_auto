@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any
 
 from orca_auto.core.config.files import default_config_path_from_repo_root
 from orca_auto.core.paths import is_subpath, validate_job_dir
@@ -84,15 +85,15 @@ def _human_bytes(n: int) -> str:
 
 
 def finalize_batch_apply(
-    summary: Dict[str, Any],
-    emit_fn: Callable[[Dict[str, Any]], None],
-    failures: List[Dict[str, Any]],
+    summary: dict[str, Any],
+    emit_fn: Callable[[dict[str, Any]], None],
+    failures: list[dict[str, Any]],
 ) -> int:
     emit_fn(summary)
     return 1 if failures else 0
 
 
-def _emit(payload: Dict[str, Any]) -> None:
+def _emit(payload: dict[str, Any]) -> None:
     fields = [
         ("status", "status"),
         ("job_dir", "job_dir"),
