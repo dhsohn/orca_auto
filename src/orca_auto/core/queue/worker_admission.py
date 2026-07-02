@@ -39,8 +39,7 @@ def resolve_admission_limit(cfg: Any) -> int:
     raw = getattr(cfg.runtime, "resolved_admission_limit", None)
     if raw not in (None, "", 0):
         return resolved_admission_limit(raw, 1)
-    if raw in (None, "", 0):
-        raw = getattr(cfg.runtime, "admission_limit", None)
+    raw = getattr(cfg.runtime, "admission_limit", None)
     fallback = getattr(cfg.runtime, "max_concurrent", 1)
     if raw in (None, "", 0):
         raw = fallback

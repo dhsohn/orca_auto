@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED
+
 from . import child_entrypoint as _child_entrypoint
 from .child_entrypoint import ChildWorkerEntrypointJob
 from .child_execution import ChildWorkerShutdownController
@@ -243,7 +245,7 @@ def run_engine_worker_child_job(
 def outcome_exit_code(
     outcome: Any,
     *,
-    success_statuses: set[str] | frozenset[str] = frozenset({"completed", "cancelled"}),
+    success_statuses: set[str] | frozenset[str] = frozenset({STATUS_COMPLETED, STATUS_CANCELLED}),
 ) -> int:
     status = str(getattr(outcome.result, "status", "")).strip().lower()
     return 0 if status in success_statuses else 1

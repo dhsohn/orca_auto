@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.statuses import STATUS_CANCELLED
 from orca_auto.core.utils import normalize_text as _normalize_text
 
 from .registry import sync_workflow_registry
@@ -18,7 +19,7 @@ from .restart_stage_ops import (
 from .state import workflow_summary, write_workflow_payload
 from .workflow_status import WORKFLOW_FAILED_STATUSES
 
-_RESTARTABLE_WORKFLOW_STATUSES = frozenset({*WORKFLOW_FAILED_STATUSES, "cancelled"})
+_RESTARTABLE_WORKFLOW_STATUSES = frozenset({*WORKFLOW_FAILED_STATUSES, STATUS_CANCELLED})
 
 
 @dataclass(frozen=True)

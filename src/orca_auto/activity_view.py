@@ -11,12 +11,17 @@ from orca_auto.core.paths.workflow import (
     WORKFLOW_STAGE_DIRNAMES,
     workflow_stage_dirnames_for_engine,
 )
+from orca_auto.core.statuses import (
+    STATUS_CANCEL_REQUESTED,
+    STATUS_RETRYING,
+    STATUS_RUNNING,
+)
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.engine_runtime import engine_runtime_paths
 
 LOGGER = logging.getLogger(__name__)
 
-ACTIVE_SIMULATION_STATUSES = frozenset({"running", "retrying", "cancel_requested"})
+ACTIVE_SIMULATION_STATUSES = frozenset({STATUS_RUNNING, STATUS_RETRYING, STATUS_CANCEL_REQUESTED})
 DEFAULT_COMBINED_WORKFLOW_CHILD_ENGINES = frozenset({"orca"})
 ActivityItem = dict[str, Any]
 TopLevelToken = tuple[str, str | int]
