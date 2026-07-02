@@ -244,8 +244,9 @@ python -m orca_auto.core.engines.worker_child \
   ScanTS 전용 continuation, endpoint-completion, reverse-scan 로직만 사용합니다.
   maximum이 계획된 scan endpoint 전에 나타나면 ORCA가 먼저 일반 relaxed scan으로
   endpoint를 완료합니다(`ScanTS` -> `Opt`, `Freq`/`IRC` 제거). 그 다음 실제
-  endpoint xyz에서 역방향 `ScanTS`를 시작합니다. route별 rewrite가 없으면 동일
-  입력을 반복하지 않고 fail-closed 합니다. 전하와 다중도는 **절대**
+  endpoint xyz에서 역방향 `ScanTS`를 시작합니다. 중간 단계인 endpoint 완료는
+  (crash/resume를 거치더라도) 전체 성공으로 보고되지 않습니다. route별
+  rewrite가 없으면 동일 입력을 반복하지 않고 fail-closed 합니다. 전하와 다중도는 **절대**
   자동 변경하지 않으며, 원본 `.inp`는 보존되고, 재시도는 `<name>.retryNN.inp`로
   기록됩니다.
 - **재시작/재개:** 재시도/재개 시, 일치하는 비어 있지 않은 `.gbw` 체크포인트가

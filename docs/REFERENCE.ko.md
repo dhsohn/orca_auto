@@ -480,7 +480,9 @@ Opt 모드 완료:
   endpoint-completion, reverse-scan 로직만 사용합니다. maximum을 계획된 endpoint
   전에 찾은 경우에는 먼저 일반 relaxed scan으로 endpoint를 완료합니다(`ScanTS` ->
   `Opt`, `Freq`/`IRC` 제거). 그 뒤 실제 endpoint xyz에서 역방향 ScanTS를
-  생성합니다. 일반 SCF/geometry hardening은 적용하지 않습니다.
+  생성합니다. endpoint-completion scan의 완료는 (crash/resume를 거치더라도)
+  전체 성공으로 보고되지 않으며, 항상 역방향 `ScanTS`로 이어집니다. 일반
+  SCF/geometry hardening은 적용하지 않습니다.
 
 지오메트리 재시작 규칙:
 

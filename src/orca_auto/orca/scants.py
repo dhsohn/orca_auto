@@ -613,9 +613,15 @@ def _replace_scants_route_with_endpoint_opt(lines: list[str]) -> List[str]:
     for token in tokens:
         upper = token.upper()
         if upper == "SCANTS":
-            if not inserted_opt and "OPT" not in {item.upper() for item in rewritten}:
+            if not inserted_opt:
                 rewritten.append("Opt")
                 inserted_opt = True
+            continue
+        if upper == "OPT":
+            if inserted_opt:
+                continue
+            inserted_opt = True
+            rewritten.append(token)
             continue
         if upper in {"FREQ", "NUMFREQ", "ANFREQ", "IRC"}:
             removed_post_scan_tokens = True

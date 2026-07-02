@@ -9,9 +9,10 @@ from orca_auto.orca.attempt_engine import run_attempts
 from orca_auto.orca.scants import (
     apply_scants_failed_scan_retry_rewrite,
     apply_scants_relaxed_scan_resume_rewrite,
+    prepare_scants_endpoint_scan_input,
     prepare_scants_optts_fallback_input,
 )
-from orca_auto.orca.state import load_state, new_state
+from orca_auto.orca.state import load_state, new_state, save_state
 from orca_auto.orca.types import RunState
 
 
@@ -161,6 +162,28 @@ class _ScanTsContinuationEarlyMaximumEndpointReverseRunner(_CaptureSuccessRunner
             return SimpleNamespace(out_path=str(out_path), return_code=0)
         if len(self.seen) == 3:
             _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=3)
+            out_path.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
+            return SimpleNamespace(out_path=str(out_path), return_code=0)
+        out_path.write_text(
+            "\n".join(
+                [
+                    "VIBRATIONAL FREQUENCIES",
+                    "  1   -150.00 cm**-1",
+                    "  2    120.00 cm**-1",
+                    "****ORCA TERMINATED NORMALLY****",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(out_path=str(out_path), return_code=0)
+
+
+class _ScanTsResumeEndpointRerunRunner(_CaptureSuccessRunner):
+    def run(self, inp_path: Path) -> SimpleNamespace:
+        self.seen.append(inp_path)
+        out_path = inp_path.with_suffix(".out")
+        if len(self.seen) == 1:
+            _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=29)
             out_path.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
             return SimpleNamespace(out_path=str(out_path), return_code=0)
         out_path.write_text(
@@ -689,6 +712,106 @@ def test_failed_scants_with_early_surface_maximum_completes_endpoint_then_revers
     assert "geometry_restart_from_rxn.retry01.029.xyz" in reverse_actions
     assert "scants_fallback_to_optts" not in endpoint_actions + reverse_actions
     assert "checkpoint_restart_from_rxn.gbw" not in endpoint_actions + reverse_actions
+
+
+def test_endpoint_scan_route_rewrite_does_not_duplicate_opt(tmp_path: Path) -> None:
+    source_inp = tmp_path / "rxn.inp"
+    source_inp.write_text(
+        "\n".join(
+            [
+                "! ScanTS Opt B3LYP def2-SVP Freq",
+                "",
+                "%geom",
+                "  Scan",
+                "    B 4 20 = 1.86, 3.40, 32",
+                "  end",
+                "end",
+                "",
+                "* xyzfile 0 1 input.xyz",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_scan_xyz_series(tmp_path, "rxn", count=3)
+    target_inp = tmp_path / "rxn.retry01.inp"
+
+    prepared, actions = prepare_scants_endpoint_scan_input(
+        source_inp=source_inp,
+        target_inp=target_inp,
+    )
+
+    assert prepared == target_inp
+    route = next(
+        line
+        for line in target_inp.read_text(encoding="utf-8").splitlines()
+        if line.startswith("!")
+    )
+    assert route.split().count("Opt") == 1
+    assert "ScanTS" not in route
+    assert "Freq" not in route
+    assert "scants_endpoint_scan_route_to_opt" in actions
+
+
+def test_resume_after_completed_endpoint_scan_continues_to_reverse_scan(
+    tmp_path: Path,
+) -> None:
+    selected_inp = tmp_path / "rxn.inp"
+    _write_scants_input(selected_inp)
+    first_runner = _ScanTsFallbackRunner()
+    rc, _saved = _run_attempt(
+        tmp_path,
+        selected_inp,
+        resumed=False,
+        runner=first_runner,
+        max_retries=3,
+    )
+    assert rc == 0
+
+    # Simulate a crash after the completed endpoint-scan attempt was recorded
+    # but before the reverse-scan retry input was prepared.
+    state = load_state(tmp_path)
+    assert state is not None
+    attempts = state["attempts"]
+    assert isinstance(attempts, list)
+    del attempts[2:]
+    attempts[1]["patch_actions"] = []
+    state["status"] = "retrying"
+    state["final_result"] = None
+    save_state(tmp_path, state)
+    (tmp_path / "rxn.retry02.inp").unlink()
+    (tmp_path / "rxn.retry02.out").unlink()
+
+    resume_runner = _ScanTsResumeEndpointRerunRunner()
+    rc = run_attempts(
+        tmp_path,
+        selected_inp,
+        state,
+        resumed=True,
+        runner=resume_runner,
+        max_retries=3,
+        retry_inp_path=_retry_inp_path,
+        to_resolved_local=lambda raw: Path(raw),
+        emit=lambda _payload: None,
+    )
+    saved = load_state(tmp_path)
+    assert saved is not None
+
+    recovered_endpoint_inp = tmp_path / "rxn.retry02.inp"
+    reverse_inp = tmp_path / "rxn.retry03.inp"
+
+    assert rc == 0
+    # Without the pending-reverse guard, resume finished the run as COMPLETED
+    # off the intermediate endpoint scan without running anything.
+    assert resume_runner.seen == [recovered_endpoint_inp, reverse_inp]
+    reverse_text = reverse_inp.read_text(encoding="utf-8")
+    assert "ScanTS" in reverse_text
+    assert "B 4 20 = 3.40, 1.86, 32" in reverse_text
+    assert "* xyzfile 0 1 rxn.retry02.029.xyz" in reverse_text
+    assert saved.get("status") == "completed"
+    reverse_actions = _attempt_actions(saved, index=2)
+    assert "scants_reverse_scan" in reverse_actions
+    assert "scants_reverse_scan_route_restored" in reverse_actions
 
 
 def test_reverse_scan_derived_maximum_fails_closed_without_optts_hardening(

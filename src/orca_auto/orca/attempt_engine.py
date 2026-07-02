@@ -14,7 +14,7 @@ from .attempt_retry import (
     prepare_resumed_checkpoint_input,
     prepare_retry_attempt,
     retry_recipe_step,
-    state_recent_attempt_prepared_scants_endpoint_scan,
+    state_pending_scants_reverse_after_endpoint_scan,
 )
 from .completion_rules import detect_completion_mode
 from .orca_runner import WorkerShutdownInterrupt
@@ -357,7 +357,7 @@ def _finish_decision_or_prepare_retry(
     analysis = result.analysis
     if (
         analysis.status == AnalyzerStatus.COMPLETED
-        and state_recent_attempt_prepared_scants_endpoint_scan(ctx.state)
+        and state_pending_scants_reverse_after_endpoint_scan(ctx.state)
     ):
         decision = None
     else:

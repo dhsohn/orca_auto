@@ -98,16 +98,25 @@ def _state_has_scants_reverse_scan(state: RunState) -> bool:
     )
 
 
-def state_recent_attempt_prepared_scants_endpoint_scan(state: RunState) -> bool:
+def state_pending_scants_reverse_after_endpoint_scan(state: RunState) -> bool:
+    """True from endpoint-scan preparation until a reverse scan is prepared.
+
+    While pending, a COMPLETED attempt is only the intermediate relaxed endpoint
+    scan, not the requested ScanTS result, so the run must not finish
+    successfully — including on crash-resume, where recovery attempts may sit
+    between the endpoint-scan preparation and the completed attempt.
+    """
     attempts = state.get("attempts")
-    if not isinstance(attempts, list) or not attempts:
+    if not isinstance(attempts, list):
         return False
-    for attempt in attempts[-2:]:
-        if any(
-            action.startswith("scants_endpoint_scan") for action in _attempt_patch_actions(attempt)
-        ):
-            return True
-    return False
+    pending = False
+    for attempt in attempts:
+        actions = _attempt_patch_actions(attempt)
+        if any(action.startswith("scants_reverse_scan") for action in actions):
+            pending = False
+        elif any(action.startswith("scants_endpoint_scan") for action in actions):
+            pending = True
+    return pending
 
 
 def _output_has_scants_actual_surface_maximum(ctx: RetryAttemptRequest) -> bool:
@@ -146,7 +155,7 @@ def _prepare_scants_reverse_scan_after_endpoint_scan(
     *,
     next_inp: Path,
 ) -> tuple[Path | None, list[str]]:
-    if not state_recent_attempt_prepared_scants_endpoint_scan(ctx.state):
+    if not state_pending_scants_reverse_after_endpoint_scan(ctx.state):
         return None, []
     if _state_has_scants_reverse_scan(ctx.state):
         return None, []
@@ -164,7 +173,7 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
     patch_step = retry_recipe_name_for_input(ctx.selected_inp, next_retry_number)
     try:
         uses_scants = input_uses_scants(ctx.current_inp) or input_uses_scants(ctx.selected_inp)
-        scants_endpoint_scan_seen = state_recent_attempt_prepared_scants_endpoint_scan(ctx.state)
+        scants_endpoint_scan_seen = state_pending_scants_reverse_after_endpoint_scan(ctx.state)
         scants_surface_maximum_seen = _output_has_scants_actual_surface_maximum(ctx)
         prepared_scants, patch_actions = _prepare_scants_reverse_scan_after_endpoint_scan(
             ctx,
@@ -247,5 +256,5 @@ __all__ = [
     "prepare_retry_attempt",
     "resume_checkpoint_inp_path",
     "retry_recipe_step",
-    "state_recent_attempt_prepared_scants_endpoint_scan",
+    "state_pending_scants_reverse_after_endpoint_scan",
 ]

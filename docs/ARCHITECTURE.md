@@ -249,8 +249,10 @@ logic. Notable pieces:
   endpoint-completion, and reverse-scan logic from scan artifacts. If a maximum
   appears before the planned scan endpoint, ORCA first completes that endpoint
   with an ordinary relaxed scan (`ScanTS` -> `Opt`, no `Freq`/`IRC`), then starts
-  the reverse `ScanTS` from the real endpoint xyz. If no route-specific rewrite is
-  available, retry fails closed rather than repeating the identical input. Charge
+  the reverse `ScanTS` from the real endpoint xyz. The intermediate endpoint
+  completion is never reported as overall success, even across crash/resume. If no
+  route-specific rewrite is available, retry fails closed rather than repeating
+  the identical input. Charge
   and multiplicity are
   **never** auto-changed; the original `.inp` is preserved; retries are written
   as `<name>.retryNN.inp`.

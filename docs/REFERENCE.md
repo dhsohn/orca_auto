@@ -462,7 +462,9 @@ Retry policy:
   and reverse-scan logic from scan artifacts only. If a maximum is found before the
   planned endpoint, orca_auto first completes the endpoint with an ordinary relaxed
   scan (`ScanTS` -> `Opt`, no `Freq`/`IRC`), then reverses from that real endpoint
-  xyz. Generic SCF/geometry hardening is not applied.
+  xyz. A completed endpoint-completion scan is never reported as overall success —
+  including across crash/resume — the run always continues to the reverse
+  `ScanTS`. Generic SCF/geometry hardening is not applied.
 
 Geometry restart rules:
 
