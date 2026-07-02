@@ -166,11 +166,10 @@ def apply_scants_relaxed_scan_resume_rewrite(lines: list[str], source_inp: Path)
     if last_index is None:
         return []
 
-    scan_line_indices = _simple_scan_coord_line_indices(lines)
-    if not scan_line_indices:
+    shared = _scan_lines_with_shared_total(lines)
+    if shared is None:
         return []
-    if not _scan_lines_share_total_points(lines, scan_line_indices):
-        return []
+    scan_line_indices, _total_points = shared
 
     rewritten_lines: list[tuple[int, str]] = []
     for line_idx in scan_line_indices:
@@ -252,6 +251,23 @@ def _scan_lines_share_total_points(lines: list[str], indices: list[int]) -> bool
     return len(totals) == 1
 
 
+def _scan_lines_with_shared_total(lines: list[str]) -> tuple[list[int], int] | None:
+    """Return simple-scan coordinate line indices with their shared point total.
+
+    Yields ``None`` unless the geometry block holds at least one simple-scan
+    coordinate line and every such line declares the same total point count.
+    """
+    scan_line_indices = _simple_scan_coord_line_indices(lines)
+    if not scan_line_indices:
+        return None
+    if not _scan_lines_share_total_points(lines, scan_line_indices):
+        return None
+    first_match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[scan_line_indices[0]])
+    if first_match is None:
+        return None
+    return scan_line_indices, int(first_match.group("points"))
+
+
 def _resume_simple_scan_line(line: str, *, completed_points: int) -> str | None:
     match = _SIMPLE_SCAN_COORD_LINE_RE.match(line)
     if match is None:
@@ -318,13 +334,6 @@ def _xyzfile_name_from_geometry(lines: list[str]) -> str | None:
         raw_ref = (match.group(4) or "").strip().strip('"')
         return Path(raw_ref).name
     return None
-
-
-def _numbered_xyz_index_from_geometry(lines: list[str]) -> int | None:
-    name = _xyzfile_name_from_geometry(lines)
-    if name is None:
-        return None
-    return _numbered_xyz_index_from_name(name)
 
 
 def _cumulative_numbered_xyz_index_from_geometry(
@@ -411,16 +420,10 @@ def _reverse_simple_scan_path(
     selected_inp: Path,
     target_inp: Path,
 ) -> List[str]:
-    scan_line_indices = _simple_scan_coord_line_indices(lines)
-    if not scan_line_indices:
+    shared = _scan_lines_with_shared_total(lines)
+    if shared is None:
         return []
-    if not _scan_lines_share_total_points(lines, scan_line_indices):
-        return []
-
-    first_match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[scan_line_indices[0]])
-    if first_match is None:
-        return []
-    source_points = int(first_match.group("points"))
+    scan_line_indices, source_points = shared
     last_scan_xyz = highest_numbered_scan_xyz(source_inp)
     if last_scan_xyz is None:
         return []
@@ -510,16 +513,10 @@ def _continue_simple_scan_from_last_numbered_xyz(
         return []
     last_index, geometry_file = last_scan_xyz
 
-    scan_line_indices = _simple_scan_coord_line_indices(lines)
-    if not scan_line_indices:
+    shared = _scan_lines_with_shared_total(lines)
+    if shared is None:
         return []
-    if not _scan_lines_share_total_points(lines, scan_line_indices):
-        return []
-
-    first_match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[scan_line_indices[0]])
-    if first_match is None:
-        return []
-    old_points = int(first_match.group("points"))
+    scan_line_indices, old_points = shared
     extension_steps = _scan_endpoint_extension_steps(
         old_points,
         min_extension_steps=min_extension_steps,
@@ -563,16 +560,10 @@ def _complete_simple_scan_to_original_endpoint(
         return []
     last_index, geometry_file = last_scan_xyz
 
-    scan_line_indices = _simple_scan_coord_line_indices(lines)
-    if not scan_line_indices:
+    shared = _scan_lines_with_shared_total(lines)
+    if shared is None:
         return []
-    if not _scan_lines_share_total_points(lines, scan_line_indices):
-        return []
-
-    first_match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[scan_line_indices[0]])
-    if first_match is None:
-        return []
-    total_points = int(first_match.group("points"))
+    scan_line_indices, total_points = shared
     new_points = total_points - last_index
     if new_points <= 0:
         return []

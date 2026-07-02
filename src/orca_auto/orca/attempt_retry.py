@@ -126,11 +126,18 @@ def _output_has_scants_actual_surface_maximum(ctx: RetryAttemptRequest) -> bool:
     )
 
 
-def _prepare_scants_reverse_scan_after_maximum(
+def _prepare_scants_retry_after_surface_maximum(
     ctx: RetryAttemptRequest,
     *,
     next_inp: Path,
 ) -> tuple[Path | None, list[str]]:
+    """Reverse the scan from a fresh surface maximum, or finish the endpoint first.
+
+    A direct reverse scan is only valid once the forward scan has reached its
+    planned endpoint. When the maximum appears early, ``prepare_scants_reverse_...``
+    fails closed and we fall back to completing the endpoint with a relaxed scan;
+    the reverse scan then runs on the next retry off that real endpoint geometry.
+    """
     if not _output_has_scants_actual_surface_maximum(ctx):
         return None, []
     if _state_has_scants_reverse_scan(ctx.state):
@@ -155,6 +162,7 @@ def _prepare_scants_reverse_scan_after_endpoint_scan(
     *,
     next_inp: Path,
 ) -> tuple[Path | None, list[str]]:
+    """Reverse the scan once a preceding relaxed endpoint scan supplied the endpoint."""
     if not state_pending_scants_reverse_after_endpoint_scan(ctx.state):
         return None, []
     if _state_has_scants_reverse_scan(ctx.state):
@@ -180,7 +188,7 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
             next_inp=next_inp,
         )
         if prepared_scants is None:
-            prepared_scants, patch_actions = _prepare_scants_reverse_scan_after_maximum(
+            prepared_scants, patch_actions = _prepare_scants_retry_after_surface_maximum(
                 ctx,
                 next_inp=next_inp,
             )
