@@ -13,6 +13,11 @@ orca_auto is a queue-first interface for ORCA and workflow orchestration on Linu
 - Runtime and command reference: [docs/REFERENCE.md](docs/REFERENCE.md) ([한국어](docs/REFERENCE.ko.md))
 - WSL and `systemd` runtime setup: [systemd/README.md](systemd/README.md) ([한국어](systemd/README.ko.md))
 - Package layout and development notes: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) ([한국어](docs/DEVELOPMENT.ko.md))
+- Validation and testing boundaries: [docs/VALIDATION.md](docs/VALIDATION.md)
+- Release process: [docs/RELEASE.md](docs/RELEASE.md)
+- Contributing and PR workflow: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Release history: [CHANGELOG.md](CHANGELOG.md)
+- Executable fake ORCA smoke example: [examples/fake_orca_smoke/README.md](examples/fake_orca_smoke/README.md)
 
 ## Install
 

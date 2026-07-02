@@ -1,0 +1,37 @@
+name: Feature request
+description: Propose a reusable workflow, CLI, reporting, or documentation improvement.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: What research workflow gap would this close?
+      placeholder: As a user running ..., I need ... because ...
+    validations:
+      required: true
+  - type: textarea
+    id: current-workaround
+    attributes:
+      label: Current workaround
+      description: How do you handle this today, and what is brittle about it?
+  - type: textarea
+    id: proposed-changes
+    attributes:
+      label: Proposed changes
+      description: Describe the CLI/config/report/docs change you want. Keep one-off site scripting out of scope.
+      placeholder: Add ...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Could this be handled by ORCA input, site scheduler scripts, existing workflow tools, or documentation instead?
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification idea
+      description: What automated or manual check would prove this works?
+      placeholder: Unit test, fake-engine smoke, real ORCA acceptance, docs example, etc.

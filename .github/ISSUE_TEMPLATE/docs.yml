@@ -1,0 +1,38 @@
+name: Documentation improvement
+description: Report missing, stale, confusing, or unsafe documentation.
+title: "docs: "
+labels: ["documentation"]
+body:
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: What were you trying to understand or do?
+    validations:
+      required: true
+  - type: textarea
+    id: location
+    attributes:
+      label: Documentation location
+      description: Link or name the README/docs/example section involved.
+      placeholder: README.md, docs/REFERENCE.md, examples/fake_orca_smoke/README.md, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is missing, wrong, ambiguous, or risky?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-change
+    attributes:
+      label: Proposed change
+      description: If you know the fix, describe it.
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: How should the documentation claim be checked?
+      placeholder: Run command, fake-engine example, manual ORCA acceptance, link check, etc.
