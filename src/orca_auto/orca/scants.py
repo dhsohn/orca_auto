@@ -166,11 +166,10 @@ def apply_scants_relaxed_scan_resume_rewrite(lines: list[str], source_inp: Path)
     if last_index is None:
         return []
 
-    scan_line_indices = _simple_scan_coord_line_indices(lines)
-    if not scan_line_indices:
+    shared = _scan_lines_with_shared_total(lines)
+    if shared is None:
         return []
-    if not _scan_lines_share_total_points(lines, scan_line_indices):
-        return []
+    scan_line_indices, _total_points = shared
 
     rewritten_lines: list[tuple[int, str]] = []
     for line_idx in scan_line_indices:
@@ -252,6 +251,23 @@ def _scan_lines_share_total_points(lines: list[str], indices: list[int]) -> bool
     return len(totals) == 1
 
 
+def _scan_lines_with_shared_total(lines: list[str]) -> tuple[list[int], int] | None:
+    """Return simple-scan coordinate line indices with their shared point total.
+
+    Yields ``None`` unless the geometry block holds at least one simple-scan
+    coordinate line and every such line declares the same total point count.
+    """
+    scan_line_indices = _simple_scan_coord_line_indices(lines)
+    if not scan_line_indices:
+        return None
+    if not _scan_lines_share_total_points(lines, scan_line_indices):
+        return None
+    first_match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[scan_line_indices[0]])
+    if first_match is None:
+        return None
+    return scan_line_indices, int(first_match.group("points"))
+
+
 def _resume_simple_scan_line(line: str, *, completed_points: int) -> str | None:
     match = _SIMPLE_SCAN_COORD_LINE_RE.match(line)
     if match is None:
@@ -303,17 +319,66 @@ def _remove_route_keywords(lines: list[str], keywords: set[str]) -> bool:
     return True
 
 
-def _numbered_xyz_index_from_geometry(lines: list[str]) -> int | None:
+def _numbered_xyz_index_from_name(name: str) -> int | None:
+    xyz_match = re.match(r"^.+\.(\d{3})\.xyz$", name, re.IGNORECASE)
+    if xyz_match is None:
+        return None
+    return int(xyz_match.group(1))
+
+
+def _xyzfile_name_from_geometry(lines: list[str]) -> str | None:
     for line in lines:
         match = GEOM_HEADER_RE.match(line.strip())
         if match is None or match.group(1).lower() != "xyzfile":
             continue
         raw_ref = (match.group(4) or "").strip().strip('"')
-        name = Path(raw_ref).name
-        xyz_match = re.match(r"^.+\.(\d{3})\.xyz$", name, re.IGNORECASE)
-        if xyz_match is not None:
-            return int(xyz_match.group(1))
+        return Path(raw_ref).name
     return None
+
+
+def _cumulative_numbered_xyz_index_from_geometry(
+    lines: list[str],
+    *,
+    source_inp: Path,
+    seen: set[Path] | None = None,
+) -> int | None:
+    name = _xyzfile_name_from_geometry(lines)
+    if name is None:
+        return None
+    index = _numbered_xyz_index_from_name(name)
+    if index is None:
+        return None
+
+    stem_match = re.match(r"^(?P<stem>.+)\.\d{3}\.xyz$", name, re.IGNORECASE)
+    if stem_match is None:
+        return index
+    parent_inp = source_inp.with_name(f"{stem_match.group('stem')}.inp")
+    try:
+        parent_resolved = parent_inp.resolve()
+        source_resolved = source_inp.resolve()
+    except OSError:
+        return index
+    if parent_resolved == source_resolved:
+        return index
+
+    seen_paths = set(seen or set())
+    if parent_resolved in seen_paths:
+        return index
+    try:
+        if not parent_inp.exists():
+            return index
+        parent_lines = parent_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return index
+    seen_paths.add(source_resolved)
+    parent_index = _cumulative_numbered_xyz_index_from_geometry(
+        parent_lines,
+        source_inp=parent_inp,
+        seen=seen_paths,
+    )
+    if parent_index is None:
+        return index
+    return parent_index + index
 
 
 def _reverse_simple_scan_line(line: str) -> str | None:
@@ -355,18 +420,21 @@ def _reverse_simple_scan_path(
     selected_inp: Path,
     target_inp: Path,
 ) -> List[str]:
+    shared = _scan_lines_with_shared_total(lines)
+    if shared is None:
+        return []
+    scan_line_indices, source_points = shared
     last_scan_xyz = highest_numbered_scan_xyz(source_inp)
     if last_scan_xyz is None:
         return []
-    _last_index, geometry_file = last_scan_xyz
-
-    scan_line_indices = _simple_scan_coord_line_indices(lines)
-    if not scan_line_indices:
-        return []
-    if not _scan_lines_share_total_points(lines, scan_line_indices):
+    last_index, geometry_file = last_scan_xyz
+    if last_index < source_points:
         return []
 
-    completed_points = _numbered_xyz_index_from_geometry(lines)
+    completed_points = _cumulative_numbered_xyz_index_from_geometry(
+        lines,
+        source_inp=source_inp,
+    )
     is_continuation = (
         source_inp.resolve() != selected_inp.resolve() and completed_points is not None
     )
@@ -445,16 +513,10 @@ def _continue_simple_scan_from_last_numbered_xyz(
         return []
     last_index, geometry_file = last_scan_xyz
 
-    scan_line_indices = _simple_scan_coord_line_indices(lines)
-    if not scan_line_indices:
+    shared = _scan_lines_with_shared_total(lines)
+    if shared is None:
         return []
-    if not _scan_lines_share_total_points(lines, scan_line_indices):
-        return []
-
-    first_match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[scan_line_indices[0]])
-    if first_match is None:
-        return []
-    old_points = int(first_match.group("points"))
+    scan_line_indices, old_points = shared
     extension_steps = _scan_endpoint_extension_steps(
         old_points,
         min_extension_steps=min_extension_steps,
@@ -485,6 +547,109 @@ def _continue_simple_scan_from_last_numbered_xyz(
         f"scants_scan_range_continued_after_point_{last_index:03d}",
         f"geometry_restart_from_{geometry_file.name}",
     ]
+
+
+def _complete_simple_scan_to_original_endpoint(
+    lines: list[str],
+    *,
+    source_inp: Path,
+    target_inp: Path,
+) -> List[str]:
+    last_scan_xyz = highest_numbered_scan_xyz(source_inp)
+    if last_scan_xyz is None:
+        return []
+    last_index, geometry_file = last_scan_xyz
+
+    shared = _scan_lines_with_shared_total(lines)
+    if shared is None:
+        return []
+    scan_line_indices, total_points = shared
+    new_points = total_points - last_index
+    if new_points <= 0:
+        return []
+
+    rewritten_lines: list[tuple[int, str]] = []
+    for line_idx in scan_line_indices:
+        rewritten = _resume_simple_scan_line(lines[line_idx], completed_points=last_index)
+        if rewritten is None or rewritten == lines[line_idx]:
+            return []
+        rewritten_lines.append((line_idx, rewritten))
+
+    if not replace_geometry_with_xyzfile(lines, geometry_file, target_inp.parent):
+        return []
+    for line_idx, rewritten in rewritten_lines:
+        lines[line_idx] = rewritten
+    return [
+        "scants_endpoint_scan_to_original_endpoint",
+        f"scants_endpoint_scan_from_point_{last_index:03d}",
+        f"scants_endpoint_scan_points_{new_points}",
+        f"geometry_restart_from_{geometry_file.name}",
+    ]
+
+
+def _replace_scants_route_with_endpoint_opt(lines: list[str]) -> List[str]:
+    route_idx = find_route_idx(lines)
+    if route_idx is None:
+        return []
+    stripped = lines[route_idx].strip()
+    if not stripped.startswith("!"):
+        return []
+    tokens = stripped[1:].split()
+    if not any(token.upper() == "SCANTS" for token in tokens):
+        return []
+
+    rewritten: list[str] = []
+    inserted_opt = False
+    removed_post_scan_tokens = False
+    for token in tokens:
+        upper = token.upper()
+        if upper == "SCANTS":
+            if not inserted_opt:
+                rewritten.append("Opt")
+                inserted_opt = True
+            continue
+        if upper == "OPT":
+            if inserted_opt:
+                continue
+            inserted_opt = True
+            rewritten.append(token)
+            continue
+        if upper in {"FREQ", "NUMFREQ", "ANFREQ", "IRC"}:
+            removed_post_scan_tokens = True
+            continue
+        rewritten.append(token)
+    lines[route_idx] = "! " + " ".join(rewritten)
+
+    actions = ["scants_endpoint_scan_route_to_opt"]
+    if removed_post_scan_tokens:
+        actions.append("scants_endpoint_scan_removed_freq_irc")
+    return actions
+
+
+def _first_scants_route_line(inp_path: Path) -> str:
+    try:
+        for line in inp_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.startswith("!") and SCANTS_ROUTE_RE.search(stripped):
+                return stripped
+    except OSError:
+        return ""
+    return ""
+
+
+def _restore_selected_scants_route(lines: list[str], selected_inp: Path) -> List[str]:
+    route = _first_scants_route_line(selected_inp)
+    if not route:
+        return []
+    route_idx = find_route_idx(lines)
+    if route_idx is None:
+        return []
+    if lines[route_idx].strip() == route:
+        return []
+    lines[route_idx] = route
+    return ["scants_reverse_scan_route_restored"]
 
 
 def _continue_simple_scan_line(
@@ -522,6 +687,37 @@ def _format_scan_float(value: float) -> str:
     return text
 
 
+def prepare_scants_endpoint_scan_input(
+    *,
+    source_inp: Path,
+    target_inp: Path,
+    max_memory_gb: int | None = None,
+) -> tuple[Path | None, List[str]]:
+    if not input_uses_scants(source_inp):
+        return None, []
+
+    lines = source_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
+    actions = _remove_checkpoint_restart_directives(lines)
+    route_actions = _replace_scants_route_with_endpoint_opt(lines)
+    if not route_actions:
+        return None, []
+    scan_actions = _complete_simple_scan_to_original_endpoint(
+        lines,
+        source_inp=source_inp,
+        target_inp=target_inp,
+    )
+    if not scan_actions:
+        return None, []
+    actions.extend(route_actions)
+    actions.extend(scan_actions)
+
+    if max_memory_gb is not None and clamp_maxcore_to_budget(lines, max_memory_gb=max_memory_gb):
+        actions.append("maxcore_clamped_to_budget")
+
+    target_inp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return target_inp, actions
+
+
 def prepare_scants_scan_retry_input(
     *,
     source_inp: Path,
@@ -556,11 +752,17 @@ def prepare_scants_reverse_scan_retry_input(
     target_inp: Path,
     max_memory_gb: int | None = None,
 ) -> tuple[Path | None, List[str]]:
-    if not input_uses_scants(source_inp):
+    if not input_uses_scants(selected_inp):
         return None, []
 
     lines = source_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
-    actions = _remove_checkpoint_restart_directives(lines)
+    actions: List[str] = []
+    if not input_uses_scants(source_inp):
+        route_actions = _restore_selected_scants_route(lines, selected_inp)
+        if not route_actions:
+            return None, []
+        actions.extend(route_actions)
+    actions.extend(_remove_checkpoint_restart_directives(lines))
     reverse_actions = _reverse_simple_scan_path(
         lines,
         source_inp=source_inp,

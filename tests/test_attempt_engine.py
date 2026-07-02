@@ -555,7 +555,7 @@ class TestRetryPolicy(unittest.TestCase):
             self.assertEqual(retry_policy_for_input(optts).name, "standalone_ts")
             self.assertEqual(effective_max_retries(optts, configured_max_retries=8), 0)
             self.assertEqual(retry_policy_for_input(scants).name, "scants")
-            self.assertEqual(effective_max_retries(scants, configured_max_retries=8), 2)
+            self.assertEqual(effective_max_retries(scants, configured_max_retries=8), 3)
             self.assertEqual(retry_policy_for_input(freq).name, "freq")
             self.assertEqual(effective_max_retries(freq, configured_max_retries=8), 0)
             self.assertEqual(effective_max_retries(scants, configured_max_retries=0), 0)
@@ -589,6 +589,6 @@ class TestRetryPolicy(unittest.TestCase):
             )
 
             self.assertEqual(retry_policy_for_input(scants).name, "scants")
-            self.assertEqual(effective_max_retries(scants, configured_max_retries=8), 2)
+            self.assertEqual(effective_max_retries(scants, configured_max_retries=8), 3)
             self.assertEqual(retry_policy_for_input(optts).name, "standalone_ts")
             self.assertEqual(effective_max_retries(optts, configured_max_retries=8), 0)

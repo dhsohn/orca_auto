@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict
 
+from .attempt_retry import state_pending_scants_reverse_after_endpoint_scan
 from .inp_rewriter import rewrite_for_retry
 from .retry_policy import RetryRecipeName
-from .state_machine import decide_attempt_outcome
+from .state_machine import decide_attempt_outcome, parse_analyzer_status
 from .statuses import AnalyzerStatus
 from .types import AttemptRecord, RunFinishedNotification, RunState
 
@@ -242,6 +243,15 @@ def _resume_terminal_decision(request: ResumeTerminalDecisionRequest) -> int | N
     analyzer_reason = (
         _as_non_empty_text(last_attempt.get("analyzer_reason")) or "resume_last_attempt"
     )
+    # A COMPLETED attempt while the ScanTS reverse scan is still pending is only
+    # the intermediate relaxed endpoint scan; resume must continue the run
+    # instead of finishing it as an overall success.
+    if parse_analyzer_status(
+        analyzer_status
+    ) == AnalyzerStatus.COMPLETED and state_pending_scants_reverse_after_endpoint_scan(
+        request.state
+    ):
+        return None
     decision = decide_attempt_outcome(
         analyzer_status=analyzer_status,
         analyzer_reason=analyzer_reason,
