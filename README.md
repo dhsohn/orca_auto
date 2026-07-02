@@ -6,6 +6,12 @@
 
 orca_auto is a queue-first interface for ORCA and workflow orchestration on Linux and WSL. xTB and CREST remain part of the runtime, but they are now used internally for workflow stages rather than as standalone public surfaces. It submits work durably, runs it under supervised workers, records per-job state and reports, and organizes completed outputs.
 
+## Statement of need
+
+Computational chemistry projects often outgrow one-shot ORCA commands and ad hoc shell loops. Users need durable submission, supervised execution, restart-aware queue state, consistent job reports, and an explicit record of which calculation failed and what next action is safe. ORCA remains the electronic-structure engine; orca_auto adds the Linux/WSL runtime and observability layer around ORCA-centered workflows.
+
+The project is intended for researchers running repeated ORCA calculations, transition-state searches, and reaction or conformer workflows who want auditable state and recovery behavior without adopting a general workflow platform. It focuses on CLI, configuration, queue, report, retry, and organized-output contracts rather than replacing chemical judgment, site scheduler policy, or ORCA input design. See [docs/RELATED_WORK.md](docs/RELATED_WORK.md) for scope and ecosystem positioning.
+
 ## Docs
 
 - Architecture overview: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ([한국어](docs/ARCHITECTURE.ko.md))
@@ -13,6 +19,7 @@ orca_auto is a queue-first interface for ORCA and workflow orchestration on Linu
 - Runtime and command reference: [docs/REFERENCE.md](docs/REFERENCE.md) ([한국어](docs/REFERENCE.ko.md))
 - WSL and `systemd` runtime setup: [systemd/README.md](systemd/README.md) ([한국어](systemd/README.ko.md))
 - Package layout and development notes: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) ([한국어](docs/DEVELOPMENT.ko.md))
+- Related work and project scope: [docs/RELATED_WORK.md](docs/RELATED_WORK.md)
 - Validation and testing boundaries: [docs/VALIDATION.md](docs/VALIDATION.md)
 - Release process: [docs/RELEASE.md](docs/RELEASE.md)
 - Contributing and PR workflow: [CONTRIBUTING.md](CONTRIBUTING.md)
@@ -183,3 +190,9 @@ To clear local Python/test/tool caches after a large refactor:
 ```bash
 bash scripts/clean_artifacts.sh
 ```
+
+## Citation, support, and security
+
+- Citation metadata: [CITATION.cff](CITATION.cff)
+- Support policy and issue triage boundaries: [SUPPORT.md](SUPPORT.md)
+- Security reporting and sensitive-data guidelines: [SECURITY.md](SECURITY.md)
