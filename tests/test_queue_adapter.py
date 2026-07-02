@@ -6,7 +6,7 @@ from pathlib import Path
 
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.orca.queue_adapter import (
+from orca_auto.orca.queue.adapter import (
     DuplicateEntryError,
     cancel,
     clear_terminal,

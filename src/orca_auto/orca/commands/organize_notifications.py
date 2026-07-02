@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from ..config import AppConfig
-from ..result_organizer_models import SkipReason
+from ..result_organizer.models import SkipReason
 from ..telegram_notifier import escape_html, send_message
 
 logger = logging.getLogger(__name__)

@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from orca_auto.orca import _job_location_contracts
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RuntimeConfig
+from orca_auto.orca.job_locations import _contracts as _job_location_contracts
 from orca_auto.orca.job_locations import (
     collect_reindex_payload,
     index_root_for_cfg,

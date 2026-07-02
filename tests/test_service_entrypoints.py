@@ -5,7 +5,8 @@ from argparse import Namespace
 from orca_auto import cli as orca_auto_cli
 from orca_auto import cli_workers
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
-from orca_auto.flow import cli_workflow, telegram_bot
+from orca_auto.flow.cli import workflow as cli_workflow
+from orca_auto.flow.telegram import bot as telegram_bot
 
 
 def test_bot_module_main_uses_shared_config(monkeypatch) -> None:

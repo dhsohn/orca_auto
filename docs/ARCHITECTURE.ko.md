@@ -57,8 +57,8 @@ src/orca_auto/
 │   ├── commands/        # init, run_inp, queue, organize, monitor
 │   ├── runtime/         # 실행 락
 │   ├── engine.py        # ORCA EngineDefinition 배선
-│   ├── attempt_*.py     # 시도 엔진, 재시도, 재개, 리포팅
-│   ├── orca_parser*.py  # ORCA 출력 파싱
+│   ├── attempt/         # 시도 엔진, 재시도, 재개, 리포팅
+│   ├── parser/          # ORCA 출력 파싱
 │   ├── state*.py        # 작업별 상태 머신 + 영속화
 │   └── ...              # 재시도 레시피, 완료 규칙, 정리, 인덱싱
 │
@@ -71,8 +71,8 @@ src/orca_auto/
     ├── submitters/      # ORCA / 내부 엔진 제출 빌더
     ├── templates.py     # 워크플로우 템플릿 레지스트리
     ├── manifest.py      # flow.yaml 파싱
-    ├── registry*.py     # 워크플로우 레지스트리 + 저널
-    └── telegram_bot*.py # 통합 텔레그램 봇
+    ├── registry/        # 워크플로우 레지스트리 + 저널
+    └── telegram/        # 통합 텔레그램 봇
 ```
 
 ### 임포트 규칙 (DEVELOPMENT.md 기준)
@@ -84,6 +84,13 @@ src/orca_auto/
 
 `orca_auto.orca`는 ORCA 로직의 유일한 구현 진실 공급원입니다. 최상위 별칭
 패키지나 대체 런타임 심(shim)은 존재하지 않습니다.
+
+계층은 방향성이 있으며 import-linter(`lint-imports`, `pyproject.toml`에 설정,
+`scripts/check.sh`와 CI가 실행)로 강제됩니다: `flow`는 `orca`와 `core`를
+임포트할 수 있고, `orca`는 `core`만, `core`는 어느 쪽도 임포트하지 않습니다.
+엔진 배선은 지연 문자열 모듈 경로(`core/engines/registry.py`,
+`core/queue/worker/admission.py`)로만 계층을 넘습니다 — 의도된 플러그인
+심(seam)이며, 임포트 그래프에 일부러 드러나지 않습니다.
 
 ---
 
@@ -107,7 +114,7 @@ src/orca_auto/
             systemd 감독                                  ▼
   ┌────────────────────────┐            ┌──────────────────────────────┐
   │ orca_auto-queue-worker  │ ─────────▶ │  큐 워커 루프                 │
-  │ orca_auto-bot           │            │  core/queue/worker_loop.py    │
+  │ orca_auto-bot           │            │  core/queue/worker/loop.py    │
   │ orca_auto-runtime@.target│           └─────────────┬────────────────┘
   └────────────────────────┘                          │ 어드미션 슬롯 예약
                                                        │ 큐 id로 자식 생성
@@ -228,9 +235,9 @@ python -m orca_auto.core.engines.worker_child \
 
 - **입력 선택:** 실제 실행이 시작될 때, ORCA는 대상 디렉터리에서 가장 최근에
   수정된 `*.inp`를 선택합니다.
-- **시도 엔진**(`attempt_engine.py`, `attempt_retry.py`, `attempt_resume.py`):
+- **시도 엔진**(`attempt/engine.py`, `attempt/retry.py`, `attempt/resume.py`):
   시도를 실행하고 출력을 파싱·분류한 뒤 재시도 여부를 결정합니다.
-- **출력 분석**(`orca_parser*.py`, `out_analyzer.py`, `output_status.py`,
+- **출력 분석**(`parser/`, `out_analyzer.py`, `output_status.py`,
   `completion_rules.py`): 모드별로 완료를 판정합니다 — TS 모드(`OptTS`/`NEB-TS`,
   허수 진동수 정확히 1개 필요, 경로에 `IRC`가 있으면 IRC 마커도 필요) vs Opt
   모드(정상 종료).
@@ -254,7 +261,7 @@ python -m orca_auto.core.engines.worker_child \
   `*.resume.inp`로 기록되어 사용자 입력이 변경되지 않습니다.
 - **상태 & 리포트:** `state.py`/`state_machine.py`가 `job_state.json`을
   영속화하고, 완료 시 `job_report.json`과 `job_report.md`를 작성합니다.
-- **정리 & 인덱스:** `result_organizer_*.py`가 완료 출력을 정리 루트로 이동하고
+- **정리 & 인덱스:** `result_organizer/`가 완료 출력을 정리 루트로 이동하고
   원본 디렉터리에 `organized_ref.json` 스텁을 남깁니다. `dft_index*.py`와
   `organize_index.py`가 탐색용 JSONL 인덱스를 유지합니다.
 
@@ -348,7 +355,7 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 (`engine_notifier.py`, `engine_delivery.py`)을 제공합니다. 각 `EngineDefinition`은
 `job_started` / `job_finished` / `retry` 훅을 등록할 수 있습니다.
 
-`flow/telegram_bot*.py`는 통합 텔레그램 봇입니다. `queue list` 테이블을
+`flow/telegram/`은 통합 텔레그램 봇입니다. `queue list` 테이블을
 `/list`(모바일을 위해 ID 열 제외)로 반영하고, 인라인 버튼 확인을 통한
 `/cancel <target>`과, 활동별 취소 / 새로고침 / "완료 항목 정리" 액션을 지원합니다.
 워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST 및 반응 경로 xTB 자식
@@ -424,7 +431,7 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 ## 13. 품질 게이트
 
 `scripts/check.sh`가 로컬과 CI 공용 엔트리포인트입니다: `.venv`를 생성/복구하고
-`.[dev]`를 설치한 뒤 `ruff check`, `ruff format --check`, `mypy`, 그리고 커버리지
+`.[dev]`를 설치한 뒤 `ruff check`, `ruff format --check`, `mypy`, `lint-imports`, 그리고 커버리지
 게이트가 걸린 pytest 스위트를 실행합니다. CI는 추가로 Gitleaks, ShellCheck,
 렌더링된 systemd 유닛 검증, Python 3.11/3.12/3.13 매트릭스, 휠 타입 메타데이터
 스모크 테스트를 실행합니다.

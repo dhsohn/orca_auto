@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from orca_auto.core.queue import engine_admission
+from orca_auto.core.queue.engine import admission as engine_admission
 
 
 def test_start_engine_child_process_can_include_or_omit_admission_root(tmp_path: Path) -> None:

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue import engine_execution as _engine_execution
+from orca_auto.core.queue.engine import execution as _engine_execution
 from orca_auto.flow.engines.crest import artifacts as _queue_artifacts
 
 from .job_locations import molecule_key_from_selected_xyz

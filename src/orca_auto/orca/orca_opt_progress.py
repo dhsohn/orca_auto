@@ -5,15 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .orca_chemistry import build_formula
-from .orca_parser_extractors import parse_coordinates, parse_input_line, parse_wall_time
-from .orca_parser_io import read_orca_text
-from .orca_parser_patterns import (
+from .output_status import has_error_termination, has_normal_termination
+from .parser.extractors import parse_coordinates, parse_input_line, parse_wall_time
+from .parser.io import read_orca_text
+from .parser.patterns import (
     _CONVERGENCE_ITEM_RE,
     _ENERGY_RE,
     _OPT_CONVERGED_RE,
     _OPT_CYCLE_RE,
 )
-from .output_status import has_error_termination, has_normal_termination
 
 
 @dataclass

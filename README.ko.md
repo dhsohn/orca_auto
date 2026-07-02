@@ -174,7 +174,7 @@ make test
 ```
 
 `make test`는 `scripts/check.sh`를 실행하며, 이 스크립트는 `.venv`를 생성/복구하고,
-`.[dev]`를 설치한 뒤, `ruff check`, `ruff format --check`, `mypy`, 그리고 커버리지
+`.[dev]`를 설치한 뒤, `ruff check`, `ruff format --check`, `mypy`, `lint-imports`, 그리고 커버리지
 게이트가 걸린 pytest 스위트를 실행합니다. 더 좁은 루프를 원하면 pytest 선택자를
 스크립트에 직접 전달하세요. 예: `bash scripts/check.sh tests/flow -q`.
 

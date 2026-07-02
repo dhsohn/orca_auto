@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from orca_auto.orca import queue_adapter, run_cleanup
+from orca_auto.orca import run_cleanup
+from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.run_snapshot import RunSnapshot
 from orca_auto.orca.state import save_state, state_path
 

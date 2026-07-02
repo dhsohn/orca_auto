@@ -6,8 +6,10 @@ from typing import Any
 
 import pytest
 
-from orca_auto.flow import _registry_notifications as registry_notifications
-from orca_auto.flow import registry, registry_store, worker_state_store, workflow_journal
+from orca_auto.flow import registry, worker_state_store
+from orca_auto.flow.registry import _notifications as registry_notifications
+from orca_auto.flow.registry import store as registry_store
+from orca_auto.flow.workflow import journal as workflow_journal
 from tests.flow.registry_test_helpers import (
     patch_file_locks as _patch_file_locks,
 )

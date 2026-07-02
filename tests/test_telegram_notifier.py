@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from orca_auto.core.notifications import MAX_TELEGRAM_MESSAGE_LENGTH
 from orca_auto.orca.config import TelegramConfig
-from orca_auto.orca.dft_monitor import MonitorResult, ScanReport
+from orca_auto.orca.dft.monitor import MonitorResult, ScanReport
 from orca_auto.orca.telegram_notifier import (
     _status_icon,
     escape_html,

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from orca_auto.orca.attempt_engine import run_attempts
+from orca_auto.orca.attempt.engine import run_attempts
 from orca_auto.orca.orca_runner import WorkerShutdownInterrupt
 from orca_auto.orca.retry_policy import (
     effective_max_retries,

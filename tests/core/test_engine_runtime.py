@@ -5,16 +5,16 @@ from types import SimpleNamespace
 from typing import Any
 
 from orca_auto.core.engines.definitions import EngineDefinition, EngineQueueFunctions
-from orca_auto.core.queue.engine_runtime import EngineQueueRuntime
+from orca_auto.core.queue.engine.runtime import EngineQueueRuntime
 from orca_auto.core.queue.internal_engine import InternalEngineQueueModule, InternalEngineSpec
-from orca_auto.core.queue.internal_engine_worker_deps import (
+from orca_auto.core.queue.internal_engine.worker_deps import (
     InternalEngineQueueWorkerDeps,
     InternalEngineQueueWorkerFacadeBindings,
     InternalEngineQueueWorkerFacadeCallbacks,
     build_internal_engine_queue_worker_deps,
     build_late_bound_internal_engine_queue_worker_deps,
 )
-from orca_auto.core.queue.worker_execution_dependencies import (
+from orca_auto.core.queue.worker.execution_dependencies import (
     WorkerAdmissionDependencies,
     WorkerConfigDependencies,
     WorkerProcessDependencyCallbacks,

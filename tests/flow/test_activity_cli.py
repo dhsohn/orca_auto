@@ -13,14 +13,12 @@ from orca_auto.core.app_ids import (
     ORCA_AUTO_REPO_ROOT_ENV_VAR,
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.flow import (
-    _activity_cancel,
-    _activity_list,
-    _activity_model,
-    _activity_orca,
-    _activity_sources,
-    activity,
-)
+from orca_auto.flow import activity
+from orca_auto.flow.activity import _cancel as _activity_cancel
+from orca_auto.flow.activity import _list as _activity_list
+from orca_auto.flow.activity import _model as _activity_model
+from orca_auto.flow.activity import _orca as _activity_orca
+from orca_auto.flow.activity import _sources as _activity_sources
 
 
 def test_list_activities_merges_workflows_and_standalone_sources(monkeypatch) -> None:
@@ -440,7 +438,8 @@ def test_orca_records_merge_queue_entries_and_snapshots(
     ]
     reconciled: list[Path] = []
 
-    from orca_auto.orca import queue_adapter, run_snapshot
+    from orca_auto.orca import run_snapshot
+    from orca_auto.orca.queue import adapter as queue_adapter
 
     monkeypatch.setattr(
         activity, "engine_runtime_paths", lambda config_path, *, engine: {"allowed_root": allowed}
@@ -510,7 +509,8 @@ def test_orca_records_suppress_stale_snapshot_for_terminal_entry(
         ),
     ]
 
-    from orca_auto.orca import queue_adapter, run_snapshot
+    from orca_auto.orca import run_snapshot
+    from orca_auto.orca.queue import adapter as queue_adapter
 
     monkeypatch.setattr(
         activity, "engine_runtime_paths", lambda config_path, *, engine: {"allowed_root": allowed}
@@ -570,7 +570,8 @@ def test_orca_records_keep_live_snapshot_despite_terminal_entry(
         ),
     ]
 
-    from orca_auto.orca import queue_adapter, run_snapshot
+    from orca_auto.orca import run_snapshot
+    from orca_auto.orca.queue import adapter as queue_adapter
 
     monkeypatch.setattr(
         activity, "engine_runtime_paths", lambda config_path, *, engine: {"allowed_root": allowed}

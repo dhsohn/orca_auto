@@ -10,7 +10,7 @@ from orca_auto.cli_common import (
 )
 from orca_auto.cli_errors import emit_error
 from orca_auto.core.utils import normalize_text
-from orca_auto.flow.run_dir_layout import inspect_workflow_run_dir
+from orca_auto.flow.run_dir.layout import inspect_workflow_run_dir
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -97,7 +97,7 @@ def cmd_run_dir(args: Any) -> int:
 
 
 def cmd_workflow_run_dir(args: argparse.Namespace) -> int:
-    from orca_auto.flow.cli_run_dir import cmd_run_dir as _cmd_workflow_run_dir
+    from orca_auto.flow.cli.run_dir import cmd_run_dir as _cmd_workflow_run_dir
 
     shared_config = _engine_config_for_command(args)
     if shared_config:

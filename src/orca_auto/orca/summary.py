@@ -11,7 +11,7 @@ from typing import Any
 
 from orca_auto.core.paths import is_subpath
 
-from .orca_parser import parse_opt_progress
+from .parser import parse_opt_progress
 from .run_snapshot import (
     RunSnapshot,
     collect_run_snapshots,

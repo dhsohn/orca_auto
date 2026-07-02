@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from orca_auto.core.queue.worker_execution_dependencies import (
+from orca_auto.core.queue.worker.execution_dependencies import (
     WorkerProcessDependencyCallbacks,
     build_worker_process_dependency_groups,
     worker_process_dependency_callbacks_from_attrs,

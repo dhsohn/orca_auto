@@ -8,14 +8,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orca_auto.core.engines import orca_execution as worker_job
-from orca_auto.core.engines.orca_execution import execute_run_job
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.orca import worker_execution as worker_job
 from orca_auto.orca.orca_runner import WorkerShutdownInterrupt
-from orca_auto.orca.queue_adapter import dequeue_next, enqueue, list_queue
+from orca_auto.orca.queue.adapter import dequeue_next, enqueue, list_queue
+from orca_auto.orca.worker_execution import execute_run_job
 
 
-@patch("orca_auto.core.engines.orca_execution._cmd_run_inp_execute", return_value=7)
+@patch("orca_auto.orca.worker_execution._cmd_run_inp_execute", return_value=7)
 def test_execute_run_job_builds_run_inp_execution_request(mock_execute: MagicMock) -> None:
     rc = execute_run_job(
         "/tmp/config.yaml",
@@ -311,7 +311,7 @@ def test_run_worker_child_job_releases_slot_when_entry_not_running(
     assert released == [(str(admission_root), "slot-1")]
 
 
-@patch("orca_auto.core.engines.orca_execution.run_worker_child_job", return_value=6)
+@patch("orca_auto.orca.worker_execution.run_worker_child_job", return_value=6)
 def test_worker_job_main_returns_queue_child_status(mock_run_child: MagicMock) -> None:
     rc = worker_job.main(
         [

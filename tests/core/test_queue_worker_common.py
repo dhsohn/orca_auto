@@ -10,16 +10,16 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.queue import child_process as child_process_helpers
 from orca_auto.core.queue import lifecycle as lifecycle_helpers
 from orca_auto.core.queue import processes as process_helpers
 from orca_auto.core.queue import worker as worker_common
-from orca_auto.core.queue import worker_process as worker_process_helpers
+from orca_auto.core.queue.child import process as child_process_helpers
 from orca_auto.core.queue.dependencies import (
     build_dependency_container,
     dependency_group,
     resolve_dependency_groups,
 )
+from orca_auto.core.queue.worker import process as worker_process_helpers
 from tests.process_helpers import FakeManagedProcess, recording_killpg
 
 

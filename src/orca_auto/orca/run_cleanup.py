@@ -6,7 +6,7 @@ from pathlib import Path
 from orca_auto.core.statuses import STATUS_CANCELLED
 from orca_auto.core.utils.process_tracking import active_run_lock_pid
 
-from .queue_adapter import (
+from .queue.adapter import (
     ACTIVE_STATUSES,
     TERMINAL_STATUSES,
     clear_terminal,

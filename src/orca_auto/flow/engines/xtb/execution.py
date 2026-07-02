@@ -16,7 +16,6 @@ from orca_auto.core.engines.worker_child import (
 from orca_auto.core.notifications.engines import (
     notify_xtb_job_started as notify_job_started,
 )
-from orca_auto.core.queue import engine_execution as _engine_execution
 from orca_auto.core.queue import execution as _queue_execution
 from orca_auto.core.queue import (
     get_cancel_requested,
@@ -26,11 +25,12 @@ from orca_auto.core.queue import (
     mark_failed,
     requeue_running_entry,
 )
-from orca_auto.core.queue import worker_execution_dependencies as _worker_dependencies
+from orca_auto.core.queue.engine import execution as _engine_execution
 from orca_auto.core.queue.internal_engine import (
     InternalEngineSpec,
     create_worker_shutdown_exception_type,
 )
+from orca_auto.core.queue.worker import execution_dependencies as _worker_dependencies
 from orca_auto.core.queue.worker import (
     install_shutdown_signal_handlers,
     resolve_admission_root,

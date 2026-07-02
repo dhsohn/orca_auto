@@ -58,8 +58,8 @@ src/orca_auto/
 │   ├── commands/        # init, run_inp, queue, organize, monitor
 │   ├── runtime/         # Run locks
 │   ├── engine.py        # ORCA EngineDefinition wiring
-│   ├── attempt_*.py     # Attempt engine, retry, resume, reporting
-│   ├── orca_parser*.py  # ORCA output parsing
+│   ├── attempt/         # Attempt engine, retry, resume, reporting
+│   ├── parser/          # ORCA output parsing
 │   ├── state*.py        # Per-job state machine + persistence
 │   └── ...              # retry recipes, completion rules, organize, indexing
 │
@@ -72,8 +72,8 @@ src/orca_auto/
     ├── submitters/      # ORCA / internal-engine submission builders
     ├── templates.py     # Workflow template registry
     ├── manifest.py      # flow.yaml parsing
-    ├── registry*.py     # Workflow registry + journal
-    └── telegram_bot*.py # Unified Telegram bot
+    ├── registry/        # Workflow registry + journal
+    └── telegram/        # Unified Telegram bot
 ```
 
 ### Import rules (from DEVELOPMENT.md)
@@ -85,6 +85,13 @@ src/orca_auto/
 
 `orca_auto.orca` is the only implementation source of truth for ORCA logic.
 There are no top-level alias packages or alternate runtime shims.
+
+Layering is directional and enforced by import-linter (`lint-imports`,
+configured in `pyproject.toml`, run by `scripts/check.sh` and CI): `flow` may
+import `orca` and `core`; `orca` may import only `core`; `core` imports
+neither. Engine wiring crosses layers exclusively through lazy string module
+paths (`core/engines/registry.py`, `core/queue/worker/admission.py`) — the
+deliberate plugin seam, invisible to the import graph on purpose.
 
 ---
 
@@ -108,7 +115,7 @@ from execution by a durable, on-disk queue.
             systemd supervises                            ▼
   ┌────────────────────────┐            ┌──────────────────────────────┐
   │ orca_auto-queue-worker  │ ─────────▶ │  Queue worker loop            │
-  │ orca_auto-bot           │            │  core/queue/worker_loop.py    │
+  │ orca_auto-bot           │            │  core/queue/worker/loop.py    │
   │ orca_auto-runtime@.target│           └─────────────┬────────────────┘
   └────────────────────────┘                          │ reserve admission slot
                                                        │ spawn child by queue id
@@ -232,10 +239,10 @@ logic. Notable pieces:
 
 - **Input selection:** when execution actually starts, ORCA selects the most
   recently modified `*.inp` in the target directory.
-- **Attempt engine** (`attempt_engine.py`, `attempt_retry.py`,
-  `attempt_resume.py`): runs an attempt, parses output, classifies the result,
+- **Attempt engine** (`attempt/engine.py`, `attempt/retry.py`,
+  `attempt/resume.py`): runs an attempt, parses output, classifies the result,
   and decides whether to retry.
-- **Output analysis** (`orca_parser*.py`, `out_analyzer.py`,
+- **Output analysis** (`parser/`, `out_analyzer.py`,
   `output_status.py`, `completion_rules.py`): determines completion by mode —
   TS mode (`OptTS`/`NEB-TS`, requires exactly one imaginary frequency, plus an
   IRC marker when the route has `IRC`) vs Opt mode (normal termination).
@@ -261,7 +268,7 @@ logic. Notable pieces:
   inputs are written as `*.resume.inp` so user input is never mutated.
 - **State & reports:** `state.py`/`state_machine.py` persist `job_state.json`;
   completion writes `job_report.json` and `job_report.md`.
-- **Organize & index:** `result_organizer_*.py` moves completed outputs into the
+- **Organize & index:** `result_organizer/` moves completed outputs into the
   organized root and leaves an `organized_ref.json` stub; `dft_index*.py` and
   `organize_index.py` maintain a JSONL index for discovery.
 
@@ -355,7 +362,7 @@ consume ORCA results without coupling to ORCA internals.
 engine notification hook layer (`engine_notifier.py`, `engine_delivery.py`). Each
 `EngineDefinition` can register `job_started` / `job_finished` / `retry` hooks.
 
-`flow/telegram_bot*.py` is the unified Telegram bot. It mirrors the `queue list`
+`flow/telegram/` is the unified Telegram bot. It mirrors the `queue list`
 table as `/list` (minus the ID column for mobile), supports `/cancel <target>`
 with inline-button confirmation, and per-activity cancel / refresh / "clear
 finished" actions. Workflow alerts keep per-job ORCA messages but summarize
@@ -432,7 +439,7 @@ place to add user commands.
 
 `scripts/check.sh` is the shared local + CI entrypoint: it creates/repairs
 `.venv`, installs `.[dev]`, then runs `ruff check`, `ruff format --check`,
-`mypy`, and the coverage-gated pytest suite. CI additionally runs Gitleaks,
+`mypy`, `lint-imports`, and the coverage-gated pytest suite. CI additionally runs Gitleaks,
 ShellCheck, rendered systemd unit verification, a Python 3.11/3.12/3.13 matrix,
 and a wheel typed-metadata smoke test.
 

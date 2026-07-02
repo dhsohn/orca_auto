@@ -8,7 +8,7 @@ from orca_auto.orca.commands.organize_notifications import _build_organize_messa
 from orca_auto.orca.commands.organize_output import build_dry_run_summary
 from orca_auto.orca.commands.organize_service import resolve_organize_scope
 from orca_auto.orca.config import AppConfig, PathsConfig, RuntimeConfig, TelegramConfig
-from orca_auto.orca.result_organizer_models import OrganizePlan, SkipReason
+from orca_auto.orca.result_organizer.models import OrganizePlan, SkipReason
 
 
 def _make_cfg(tmp: str) -> AppConfig:

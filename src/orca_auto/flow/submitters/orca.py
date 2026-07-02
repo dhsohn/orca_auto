@@ -77,7 +77,7 @@ def _queued_payload(
     priority: int,
     force: bool,
 ) -> dict[str, Any]:
-    from orca_auto.orca import queue_adapter
+    from orca_auto.orca.queue import adapter as queue_adapter
 
     entry = result.entry
     parsed = {
@@ -130,8 +130,8 @@ def _cancel_request(*, target: str, config_path: str) -> _OrcaDirectCancelReques
 
 
 def _find_orca_cancel_entry(request: _OrcaDirectCancelRequest) -> tuple[Path, Any] | None:
-    from orca_auto.orca import queue_adapter
     from orca_auto.orca.config import load_config
+    from orca_auto.orca.queue import adapter as queue_adapter
 
     cfg = load_config(request.config_path)
     allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
@@ -145,7 +145,7 @@ def _find_orca_cancel_entry(request: _OrcaDirectCancelRequest) -> tuple[Path, An
 
 
 def _request_orca_cancel(allowed_root: Path, entry: Any) -> Any | None:
-    from orca_auto.orca import queue_adapter
+    from orca_auto.orca.queue import adapter as queue_adapter
 
     return queue_adapter.cancel(allowed_root, queue_adapter.queue_entry_id(entry))
 
@@ -155,7 +155,7 @@ def _cancel_success_payload(
     command_argv: list[str],
     updated: Any,
 ) -> dict[str, Any]:
-    from orca_auto.orca import queue_adapter
+    from orca_auto.orca.queue import adapter as queue_adapter
 
     status = display_status(updated)
     parsed_stdout = _engine_models._text_fields(

@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import _runtime_common
-from .runtime_models import StageTransitionContext, WorkflowJournalEventPayload
+from .runtime import _common as _runtime_common
+from .runtime.models import StageTransitionContext, WorkflowJournalEventPayload
 from .stage_event_metadata import (
     stage_event_metadata,
     stage_handoff_event_type,

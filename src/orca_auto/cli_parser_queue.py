@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from orca_auto import cli_queue, cli_workers
-from orca_auto.flow.cli_worker_options import (
+from orca_auto.flow.cli.worker_options import (
     WorkflowWorkerOptionConfig,
     add_workflow_worker_cli_options,
 )

@@ -13,7 +13,7 @@ from orca_auto.orca.commands.organize_service import (
 )
 from orca_auto.orca.commands.organize_tracking import build_index_record
 from orca_auto.orca.config import AppConfig, PathsConfig, RuntimeConfig
-from orca_auto.orca.result_organizer_models import OrganizePlan, SkipReason
+from orca_auto.orca.result_organizer.models import OrganizePlan, SkipReason
 
 
 def _make_plan(root: Path, name: str = "rxn1") -> OrganizePlan:

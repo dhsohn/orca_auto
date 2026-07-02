@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from orca_auto import cli_handlers as cli_run_dir
-from orca_auto.flow import cli_run_dir as flow_cli
+from orca_auto.flow.cli import run_dir as flow_cli
 from orca_auto.flow.restart import restart_failed_workflow
 
 

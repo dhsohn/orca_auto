@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
 from .cancellable import run_cancellable_engine_process
-from .engine_lifecycle import EngineWorkerLifecycle, run_engine_worker_lifecycle
+from .engine.lifecycle import EngineWorkerLifecycle, run_engine_worker_lifecycle
 
 DependencyT = TypeVar("DependencyT", covariant=True)
 

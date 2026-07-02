@@ -42,6 +42,7 @@ Issues = "https://github.com/dhsohn/orca_auto/issues"
 
 [project.optional-dependencies]
 dev = [
+    "import-linter>=2.12",
     "mypy>=1.19.1",
     "pytest>=9.0",
     "pytest-cov>=7.0.0",
@@ -107,8 +108,8 @@ module = [
     "orca_auto.core.queue.processes",
     "orca_auto.core.queue.resource_requests",
     "orca_auto.core.queue.types",
-    "orca_auto.core.queue.worker_models",
-    "orca_auto.core.queue.worker_signals",
+    "orca_auto.core.queue.worker.models",
+    "orca_auto.core.queue.worker.signals",
     "orca_auto.core.statuses",
     "orca_auto.core.utils.coercion",
     "orca_auto.core.utils.lock",
@@ -123,6 +124,23 @@ no_implicit_optional = true
 strict_equality = true
 warn_return_any = true
 warn_unused_ignores = true
+
+# Layering is enforced by import-linter (`lint-imports`, run by scripts/check.sh
+# and therefore by CI). Engine wiring crosses layers only through lazy string
+# module paths (core/engines/registry.py, core/queue/worker/admission.py); that
+# is the deliberate plugin seam and is invisible to the import graph on purpose.
+[tool.importlinter]
+root_packages = ["orca_auto"]
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Layered architecture: flow -> orca -> core"
+type = "layers"
+layers = [
+    "orca_auto.flow",
+    "orca_auto.orca",
+    "orca_auto.core",
+]
 
 [tool.coverage.run]
 source = ["src/orca_auto"]

@@ -8,9 +8,9 @@ from typing import Any
 
 from orca_auto.core.queue.worker import resolve_worker_auto_organize
 
-from .. import queue_worker as _queue_worker_runtime
 from ..config import load_config
-from ..queue_worker import QueueWorker, read_worker_pid
+from ..queue import worker as _queue_worker_runtime
+from ..queue.worker import QueueWorker, read_worker_pid
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from orca_auto.core.statuses import is_queue_active_status
-from orca_auto.flow._workflow_phases import phase_finished
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.deps import (
     orchestration_context as _orchestration_context,
@@ -19,6 +18,7 @@ from orca_auto.flow.orchestration.stage_views import (
     _stage_views,
 )
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
+from orca_auto.flow.workflow._phases import phase_finished
 
 if TYPE_CHECKING:
     from orca_auto.flow.contracts.xtb import XtbArtifactContract

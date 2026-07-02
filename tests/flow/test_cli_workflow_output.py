@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from orca_auto.flow import cli_workflow_output as output
+from orca_auto.flow.cli import workflow_output as output
 
 
 def test_emit_worker_payload_json_pretty_only_for_single_cycle(capsys) -> None:

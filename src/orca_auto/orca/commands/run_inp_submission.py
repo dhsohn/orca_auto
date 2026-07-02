@@ -101,7 +101,7 @@ def emit_queued_submission(
 
 
 def worker_status_for_submission(allowed_root: Path) -> WorkerStatusInfo:
-    from ..queue_worker import read_worker_pid
+    from ..queue.worker import read_worker_pid
     from .run_inp_context import WorkerStatusInfo
 
     pid = read_worker_pid(allowed_root)
@@ -320,7 +320,7 @@ def create_queued_submission(
     selected_inp: Path | None = None,
     deps: Any,
 ) -> QueuedSubmissionResult:
-    from ..queue_adapter import enqueue
+    from ..queue.adapter import enqueue
 
     submission = deps.submission
     allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
@@ -408,7 +408,7 @@ def submit_reaction_dir_to_queue(
         )
 
     try:
-        from ..queue_adapter import DuplicateEntryError
+        from ..queue.adapter import DuplicateEntryError
 
         queued = create_queued_submission(
             context.cfg,

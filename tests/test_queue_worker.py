@@ -1,4 +1,4 @@
-"""Tests for orca_auto.orca.queue_worker foreground worker job execution helpers."""
+"""Tests for orca_auto.orca.queue.worker foreground worker job execution helpers."""
 
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ from orca_auto.core.admission import (
     reserve_slot,
 )
 from orca_auto.core.queue.types import QueueEntry
-from orca_auto.orca import queue_worker as queue_worker_mod
 from orca_auto.orca.config import AppConfig, RuntimeConfig, TelegramConfig
-from orca_auto.orca.queue_adapter import (
+from orca_auto.orca.queue import worker as queue_worker_mod
+from orca_auto.orca.queue.adapter import (
     cancel,
     dequeue_next,
     enqueue,
@@ -29,7 +29,7 @@ from orca_auto.orca.queue_adapter import (
     queue_entry_reaction_dir,
     requeue_running_entry,
 )
-from orca_auto.orca.queue_worker import (
+from orca_auto.orca.queue.worker import (
     DEFAULT_MAX_CONCURRENT,
     QueueWorker,
     _get_run_id_from_state,
@@ -65,7 +65,7 @@ def test_tracking_callbacks_use_current_queue_worker_symbols() -> None:
         return True
 
     with patch(
-        "orca_auto.orca.queue_worker.notify_run_finished_event",
+        "orca_auto.orca.queue.worker.notify_run_finished_event",
         new=notify_run_finished_event,
     ):
         callbacks = queue_worker_mod._tracking_callbacks()
@@ -79,7 +79,7 @@ def test_lifecycle_callbacks_use_current_queue_worker_symbols() -> None:
     def terminate_process(proc: object) -> None:
         del proc
 
-    with patch("orca_auto.orca.queue_worker._terminate_process", new=terminate_process):
+    with patch("orca_auto.orca.queue.worker._terminate_process", new=terminate_process):
         callbacks = queue_worker_mod._lifecycle_callbacks()
 
     worker = MagicMock()
@@ -290,7 +290,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.worker._fill_slots()
         self.assertEqual(len(self.worker._running), 0)
 
-    @patch("orca_auto.orca.queue_worker.start_background_process")
+    @patch("orca_auto.orca.queue.worker.start_background_process")
     def test_start_job(self, mock_start_background_process: MagicMock) -> None:
         mock_proc = MagicMock()
         mock_proc.pid = 4321
@@ -329,12 +329,12 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(_command_arg(command, "--admission-token"), token or "")
         self.assertNotIn("--reaction-dir", command)
 
-    @patch("orca_auto.orca.queue_worker.upsert_job_record")
+    @patch("orca_auto.orca.queue.worker.upsert_job_record")
     @patch(
-        "orca_auto.orca.queue_worker.resolve_job_metadata",
+        "orca_auto.orca.queue.worker.resolve_job_metadata",
         side_effect=AssertionError("should use queue metadata"),
     )
-    @patch("orca_auto.orca.queue_worker.start_background_process")
+    @patch("orca_auto.orca.queue.worker.start_background_process")
     def test_start_job_prefers_queue_metadata_for_tracking(
         self,
         mock_start_background_process: MagicMock,
@@ -389,7 +389,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
 
     @patch(
-        "orca_auto.orca.queue_worker.start_background_process",
+        "orca_auto.orca.queue.worker.start_background_process",
         side_effect=OSError("spawn failed"),
     )
     def test_start_job_oserror(self, mock_start_background_process: MagicMock) -> None:
@@ -411,10 +411,10 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(active_slot_count(self.root), 0)
 
     @patch(
-        "orca_auto.orca.queue_worker.update_slot_metadata",
+        "orca_auto.orca.queue.worker.update_slot_metadata",
         side_effect=RuntimeError("metadata store down"),
     )
-    @patch("orca_auto.orca.queue_worker.start_background_process")
+    @patch("orca_auto.orca.queue.worker.start_background_process")
     def test_start_job_attach_error_releases_slot_and_terminates_process(
         self,
         mock_start_background_process: MagicMock,
@@ -487,7 +487,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.worker._check_completed_jobs()
         self.assertEqual(len(self.worker._running), 0)
 
-    @patch("orca_auto.orca.queue_worker._upsert_terminal_job_record")
+    @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
     @patch(
         "orca_auto.orca.commands.organize.organize_reaction_dir",
         return_value={"action": "organized", "target_dir": "/tmp/out"},
@@ -533,7 +533,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_upsert_terminal.assert_called_once()
         self.assertEqual(active_slot_count(self.root), 0)
 
-    @patch("orca_auto.orca.queue_worker._upsert_terminal_job_record")
+    @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
     @patch("orca_auto.orca.commands.organize.organize_reaction_dir")
     def test_finalize_finished_job_skips_auto_organize_when_disabled(
         self,
@@ -568,8 +568,8 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_organize.assert_not_called()
         mock_upsert_terminal.assert_called_once()
 
-    @patch("orca_auto.orca.queue_worker._upsert_terminal_job_record")
-    @patch("orca_auto.orca.queue_worker.notify_run_finished_event", return_value=True)
+    @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
+    @patch("orca_auto.orca.queue.worker.notify_run_finished_event", return_value=True)
     def test_finalize_finished_job_sends_parent_terminal_notification_when_unmarked(
         self,
         mock_notify: MagicMock,
@@ -614,7 +614,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         assert final_result is not None
         self.assertIn("telegram_finished_notification_sent_at", final_result)
 
-    @patch("orca_auto.orca.queue_worker.notify_run_finished_event", return_value=True)
+    @patch("orca_auto.orca.queue.worker.notify_run_finished_event", return_value=True)
     def test_terminal_notification_skips_when_state_already_marked(
         self,
         mock_notify: MagicMock,
@@ -636,7 +636,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertFalse(_notify_terminal_job_from_state(cfg, str(rxn)))
         mock_notify.assert_not_called()
 
-    @patch("orca_auto.orca.queue_worker._upsert_terminal_job_record")
+    @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
     @patch("orca_auto.orca.commands.organize.organize_reaction_dir")
     def test_finalize_finished_job_does_not_auto_organize_failed_run(
         self,
@@ -674,7 +674,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(queue_entries[0].status.value, "failed")
         mock_upsert_terminal.assert_called_once()
 
-    @patch("orca_auto.orca.queue_worker._upsert_terminal_job_record")
+    @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
     @patch("orca_auto.orca.commands.organize.organize_reaction_dir")
     def test_finalize_finished_job_marks_cancelled_when_cancel_requested(
         self,
@@ -724,7 +724,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.worker._check_completed_jobs()
         self.assertEqual(len(self.worker._running), 1)
 
-    @patch("orca_auto.orca.queue_worker.mark_cancelled", return_value=True)
+    @patch("orca_auto.orca.queue.worker.mark_cancelled", return_value=True)
     def test_check_cancel_requests(self, mock_mark_cancelled: MagicMock) -> None:
         rxn = self.root / "mol_cancel"
         rxn.mkdir()
@@ -741,7 +741,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process=mock_proc,
             admission_token="slot_cancel",
         )
-        with patch("orca_auto.orca.queue_worker._terminate_process"):
+        with patch("orca_auto.orca.queue.worker._terminate_process"):
             self.worker._check_cancel_requests()
         self.assertNotIn(entry.queue_id, self.worker._running)
         mock_mark_cancelled.assert_called_once_with(self.root, entry.queue_id)
@@ -750,7 +750,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.worker._shutdown_all()
         self.assertEqual(len(self.worker._running), 0)
 
-    @patch("orca_auto.orca.queue_worker.requeue_running_entry", return_value=True)
+    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
     def test_shutdown_all_with_running(self, mock_requeue: MagicMock) -> None:
         rxn = self.root / "mol_shut"
         rxn.mkdir()
@@ -765,7 +765,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process=mock_proc,
             admission_token="slot_shutdown",
         )
-        with patch("orca_auto.orca.queue_worker._terminate_process"):
+        with patch("orca_auto.orca.queue.worker._terminate_process"):
             self.worker._shutdown_all()
         self.assertEqual(len(self.worker._running), 0)
         mock_requeue.assert_called_once_with(self.root, entry.queue_id)
@@ -793,8 +793,8 @@ class TestQueueWorkerMethods(unittest.TestCase):
             admission_token="slot_shut_cancel",
         )
         with (
-            patch("orca_auto.orca.queue_worker._terminate_process"),
-            patch("orca_auto.orca.queue_worker.requeue_running_entry") as mock_requeue,
+            patch("orca_auto.orca.queue.worker._terminate_process"),
+            patch("orca_auto.orca.queue.worker.requeue_running_entry") as mock_requeue,
         ):
             self.worker._shutdown_all()
 
@@ -848,7 +848,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(written["final_result"]["status"], "completed")
 
     @patch("orca_auto.core.queue.worker.signal.signal")
-    @patch("orca_auto.orca.queue_worker.time.sleep", side_effect=KeyboardInterrupt)
+    @patch("orca_auto.orca.queue.worker.time.sleep", side_effect=KeyboardInterrupt)
     def test_run_keyboard_interrupt(
         self,
         mock_sleep: MagicMock,
@@ -861,7 +861,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertFalse(self.worker._pid_file_path().exists())
 
     @patch("orca_auto.core.queue.worker.signal.signal")
-    @patch("orca_auto.orca.queue_worker.time.sleep")
+    @patch("orca_auto.orca.queue.worker.time.sleep")
     def test_run_shutdown_flag(
         self,
         mock_sleep: MagicMock,
@@ -947,7 +947,7 @@ class TestFillSlots(unittest.TestCase):
             enqueue(root, str(rxn))
 
             with patch(
-                "orca_auto.orca.queue_worker.start_background_process"
+                "orca_auto.orca.queue.worker.start_background_process"
             ) as mock_start_background_process:
                 mock_proc = MagicMock()
                 mock_proc.pid = 4101
@@ -966,7 +966,7 @@ class TestFillSlots(unittest.TestCase):
             entry = enqueue(root, str(rxn))
 
             with patch(
-                "orca_auto.orca.queue_worker.start_background_process"
+                "orca_auto.orca.queue.worker.start_background_process"
             ) as mock_start_background_process:
                 mock_proc = MagicMock()
                 mock_proc.pid = os.getpid()
@@ -994,7 +994,7 @@ class TestFillSlots(unittest.TestCase):
             self.assertNotEqual(entry.queue_id, entry.task_id)
 
             with patch(
-                "orca_auto.orca.queue_worker.start_background_process"
+                "orca_auto.orca.queue.worker.start_background_process"
             ) as mock_start_background_process:
                 mock_proc = MagicMock()
                 mock_proc.pid = os.getpid()
@@ -1034,7 +1034,7 @@ class TestFillSlots(unittest.TestCase):
                 enqueue(root, str(d))
 
             with patch(
-                "orca_auto.orca.queue_worker.start_background_process"
+                "orca_auto.orca.queue.worker.start_background_process"
             ) as mock_start_background_process:
                 mock_proc = MagicMock()
                 mock_proc.pid = 4102
@@ -1054,7 +1054,7 @@ class TestFillSlots(unittest.TestCase):
                 enqueue(root, str(reaction_dir))
 
             with patch(
-                "orca_auto.orca.queue_worker.start_background_process"
+                "orca_auto.orca.queue.worker.start_background_process"
             ) as mock_start_background_process:
                 mock_start_background_process.side_effect = [
                     MagicMock(pid=4103),
@@ -1113,7 +1113,7 @@ class TestFillSlots(unittest.TestCase):
             )
 
             with patch(
-                "orca_auto.orca.queue_worker.start_background_process"
+                "orca_auto.orca.queue.worker.start_background_process"
             ) as mock_start_background_process:
                 mock_start_background_process.return_value = MagicMock(pid=4106)
                 worker._check_completed_jobs()
@@ -1155,7 +1155,7 @@ class TestFillSlots(unittest.TestCase):
             self.assertIsNotNone(token)
             try:
                 with patch(
-                    "orca_auto.orca.queue_worker.start_background_process"
+                    "orca_auto.orca.queue.worker.start_background_process"
                 ) as mock_start_background_process:
                     worker._fill_slots()
             finally:
@@ -1192,7 +1192,7 @@ class TestFillSlots(unittest.TestCase):
             enqueue(root, str(queued))
 
             with patch(
-                "orca_auto.orca.queue_worker.start_background_process"
+                "orca_auto.orca.queue.worker.start_background_process"
             ) as mock_start_background_process:
                 mock_proc = MagicMock()
                 mock_proc.pid = 4108

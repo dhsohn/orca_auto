@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.notifications import MAX_TELEGRAM_MESSAGE_LENGTH, TelegramSendResult
-from orca_auto.flow import workflow_notifications
+from orca_auto.flow.workflow import notifications as workflow_notifications
 
 
 class _FakeTransport:

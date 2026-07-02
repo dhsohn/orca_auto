@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from orca_auto.orca.attempt_reporting import (
+from orca_auto.orca.attempt.reporting import (
     build_final_result,
     exit_with_result,
     last_out_path_from_state,

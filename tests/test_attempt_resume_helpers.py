@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import patch
 
-from orca_auto.orca import attempt_resume
+from orca_auto.orca.attempt import resume as attempt_resume
 from orca_auto.orca.state import new_state, state_path
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
 from orca_auto.orca.types import AttemptRecord, RunFinishedNotification, RunState
@@ -101,7 +101,7 @@ def test_recover_missing_retry_input_success_creates_patch_actions_and_saves_sta
     state = cast(RunState, {"attempts": [{"inp_path": str(source_inp), "patch_actions": "bad"}]})
 
     with patch(
-        "orca_auto.orca.attempt_resume.rewrite_for_retry", return_value=["patch_one"]
+        "orca_auto.orca.attempt.resume.rewrite_for_retry", return_value=["patch_one"]
     ) as rewrite_mock:
         saved_paths: list[Path] = []
 
@@ -166,7 +166,7 @@ def test_resolve_execution_input_covers_existing_retry_recovery_exception_and_su
 
     retry_path.unlink()
     with patch(
-        "orca_auto.orca.attempt_resume.recover_missing_retry_input",
+        "orca_auto.orca.attempt.resume.recover_missing_retry_input",
         side_effect=RuntimeError("boom"),
     ):
         current_inp, reason = attempt_resume.resolve_execution_input(
@@ -190,7 +190,7 @@ def test_resolve_execution_input_covers_existing_retry_recovery_exception_and_su
         return True, "resume_recovered"
 
     with patch(
-        "orca_auto.orca.attempt_resume.recover_missing_retry_input", side_effect=_recover_and_create
+        "orca_auto.orca.attempt.resume.recover_missing_retry_input", side_effect=_recover_and_create
     ):
         current_inp, reason = attempt_resume.resolve_execution_input(
             reaction_dir=reaction_dir,

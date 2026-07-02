@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from orca_auto.flow import workflow_status
+from orca_auto.flow.workflow import status as workflow_status
 
 
 def test_workflow_status_helpers_cover_terminal_attention_and_current_stage_selection() -> None:

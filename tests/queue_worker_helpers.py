@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orca_auto.orca.attempt_reporting import build_final_result
+from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, RuntimeConfig
 from orca_auto.orca.state import finalize_state, new_state
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus

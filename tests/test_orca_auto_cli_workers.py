@@ -150,7 +150,7 @@ def test_build_worker_specs_defaults_to_all_workers_when_workflow_root_is_config
     assert specs[2].argv[-2:] == ("--engine", "xtb")
     assert specs[-1].argv[1:3] == (
         "-m",
-        "orca_auto.flow.cli_workflow",
+        "orca_auto.flow.cli.workflow",
     )
     assert "--workflow-root" in specs[-1].argv
     assert "/tmp/workflows" in specs[-1].argv
@@ -552,7 +552,7 @@ def test_cmd_queue_worker_json_outputs_commands(
             argv=(
                 "python",
                 "-m",
-                "orca_auto.flow.cli_workflow",
+                "orca_auto.flow.cli.workflow",
                 "--workflow-root",
                 "/tmp/workflows",
             ),
@@ -569,7 +569,7 @@ def test_cmd_queue_worker_json_outputs_commands(
     assert result == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["workers"][0]["app"] == "workflow"
-    assert payload["workers"][0]["argv"][2] == "orca_auto.flow.cli_workflow"
+    assert payload["workers"][0]["argv"][2] == "orca_auto.flow.cli.workflow"
 
 
 def test_worker_spec_to_dict_redacts_unrelated_environment_keys() -> None:
@@ -656,7 +656,7 @@ def test_worker_tail_and_workflow_spec_include_optional_flags() -> None:
     assert spec.restart_on_clean_exit is False
     assert spec.argv[1:] == (
         "-m",
-        "orca_auto.flow.cli_workflow",
+        "orca_auto.flow.cli.workflow",
         "--workflow-root",
         str(Path("/tmp/workflows").resolve()),
         "--orca_auto-config",
@@ -751,7 +751,7 @@ def test_detect_existing_orca_worker_conflict_edges(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import orca_auto.orca.config as orca_config
-    import orca_auto.orca.queue_worker as orca_queue_worker
+    import orca_auto.orca.queue.worker as orca_queue_worker
 
     args = argparse.Namespace(orca_auto_config="/tmp/orca_auto.yaml")
 

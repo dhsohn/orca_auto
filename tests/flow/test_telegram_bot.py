@@ -13,7 +13,7 @@ import pytest
 from orca_auto.core.config import TelegramConfig
 from orca_auto.core.notifications import telegram_api as telegram_api_mod
 from orca_auto.core.notifications import telegram_format as telegram_format_mod
-from orca_auto.flow import telegram_bot as bot
+from orca_auto.flow.telegram import bot as bot
 from tests.flow_factories import telegram_bot_settings
 
 

@@ -14,10 +14,10 @@ from ..organize_index import (
     load_index,
     rebuild_index,
 )
-from ..result_organizer_filesystem import check_conflict, execute_move, rollback_move
-from ..result_organizer_models import OrganizePlan, SkipReason
-from ..result_organizer_planning import plan_root_scan, plan_single
-from ..result_organizer_state import sync_state_after_move, sync_state_after_rollback
+from ..result_organizer.filesystem import check_conflict, execute_move, rollback_move
+from ..result_organizer.models import OrganizePlan, SkipReason
+from ..result_organizer.planning import plan_root_scan, plan_single
+from ..result_organizer.state import sync_state_after_move, sync_state_after_rollback
 from ..state import now_utc_iso
 from . import organize_apply as _organize_apply
 from . import organize_notifications as _organize_notifications

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from orca_auto.core.indexing import JobLocationRecord
-from orca_auto.orca import _job_location_runtime_context as runtime_context
+from orca_auto.orca.job_locations import _runtime_context as runtime_context
 
 
 def _record(job_id: str, job_dir: Path, *, original_dir: Path | None = None) -> JobLocationRecord:

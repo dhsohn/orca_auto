@@ -9,7 +9,9 @@ import pytest
 
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.orca import queue_adapter, queue_entries, queue_orphans
+from orca_auto.orca.queue import adapter as queue_adapter
+from orca_auto.orca.queue import entries as queue_entries
+from orca_auto.orca.queue import orphans as queue_orphans
 from orca_auto.orca.state import report_json_path
 from orca_auto.orca.statuses import RunStatus
 from tests.engine_artifact_helpers import orca_artifact_payload
@@ -185,7 +187,7 @@ def test_apply_terminal_reconciliation_updates_fields_and_clears_completed_error
         finished_at=None,
         error="stale_error",
     )
-    with patch("orca_auto.orca.queue_orphans._now_iso", return_value="2026-03-10T06:00:00+00:00"):
+    with patch("orca_auto.orca.queue.orphans._now_iso", return_value="2026-03-10T06:00:00+00:00"):
         completed_entry = queue_orphans.apply_terminal_reconciliation(
             completed_entry,
             status=QueueStatus.COMPLETED.value,
@@ -392,17 +394,17 @@ def test_reconcile_orphaned_running_entries_covers_state_terminal_paths_and_pend
         return None
 
     with (
-        patch("orca_auto.orca.queue_orphans.read_worker_pid", return_value=None),
+        patch("orca_auto.orca.queue.orphans.read_worker_pid", return_value=None),
         patch(
-            "orca_auto.orca.queue_orphans.active_lock_pid",
+            "orca_auto.orca.queue.orphans.active_lock_pid",
             return_value=None,
         ),
         patch(
-            "orca_auto.orca.queue_orphans.load_state",
+            "orca_auto.orca.queue.orphans.load_state",
             side_effect=_load_state,
         ),
         patch(
-            "orca_auto.orca.queue_orphans.terminal_report_data",
+            "orca_auto.orca.queue.orphans.terminal_report_data",
             return_value=None,
         ),
     ):
@@ -435,9 +437,9 @@ def test_reconcile_orphaned_running_entries_skips_blank_dirs_and_active_locks(
     )
 
     with (
-        patch("orca_auto.orca.queue_orphans.read_worker_pid", return_value=None),
+        patch("orca_auto.orca.queue.orphans.read_worker_pid", return_value=None),
         patch(
-            "orca_auto.orca.queue_orphans.active_lock_pid",
+            "orca_auto.orca.queue.orphans.active_lock_pid",
             side_effect=lambda reaction_dir: 999 if reaction_dir == locked_dir else None,
         ),
     ):

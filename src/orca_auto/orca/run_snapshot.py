@@ -11,7 +11,7 @@ from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.paths import resolve_artifact_path
 from orca_auto.core.utils import parse_iso_utc as _parse_iso_utc
 
-from .dft_discovery import _find_latest_out_in_dir
+from .dft.discovery import _find_latest_out_in_dir
 from .job_locations import list_job_location_records, resolve_record_job_dir
 from .state import STATE_FILE_NAME, load_state
 

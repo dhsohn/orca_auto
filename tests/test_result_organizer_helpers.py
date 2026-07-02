@@ -9,10 +9,10 @@ from unittest.mock import patch
 
 import pytest
 
-from orca_auto.orca import result_organizer_filesystem as organizer_fs
-from orca_auto.orca import result_organizer_planning as organizer_planning
-from orca_auto.orca import result_organizer_state as organizer_state
-from orca_auto.orca.result_organizer_models import OrganizePlan
+from orca_auto.orca.result_organizer import filesystem as organizer_fs
+from orca_auto.orca.result_organizer import planning as organizer_planning
+from orca_auto.orca.result_organizer import state as organizer_state
+from orca_auto.orca.result_organizer.models import OrganizePlan
 from orca_auto.orca.state import report_json_path, save_state
 
 
@@ -99,7 +99,7 @@ def test_metadata_selection_and_eligibility_cover_missing_artifacts_and_attempt_
         "final_result": {"last_out_path": str(retry_out)},
     }
     with patch(
-        "orca_auto.orca.result_organizer_planning.resolve_molecule_key",
+        "orca_auto.orca.result_organizer.planning.resolve_molecule_key",
         side_effect=[
             SimpleNamespace(source="directory_fallback", key="selected"),
             SimpleNamespace(source="parsed_input", key="retry"),
@@ -149,7 +149,7 @@ def test_plan_root_scan_handles_scan_errors_and_skips_special_dirs(tmp_path: Pat
             "pathlib.Path.is_symlink", autospec=True, side_effect=lambda path: path == symlink_dir
         ),
         patch(
-            "orca_auto.orca.result_organizer_planning.plan_single",
+            "orca_auto.orca.result_organizer.planning.plan_single",
             return_value=(plan, None),
         ) as plan_single,
     ):
@@ -179,7 +179,7 @@ def test_move_helpers_cover_copytree_execute_and_rollback_paths(tmp_path: Path) 
     cross_source.mkdir()
     (cross_source / "nested").mkdir()
     (cross_source / "nested" / "calc.out").write_text("done", encoding="utf-8")
-    with patch("orca_auto.orca.result_organizer_filesystem._fsync_directory"):
+    with patch("orca_auto.orca.result_organizer.filesystem._fsync_directory"):
         organizer_fs._cross_device_move(cross_source, cross_target)
     assert not cross_source.exists()
     assert (cross_target / "nested" / "calc.out").read_text(encoding="utf-8") == "done"
@@ -188,18 +188,18 @@ def test_move_helpers_cover_copytree_execute_and_rollback_paths(tmp_path: Path) 
     plan.source_dir.mkdir()
     with (
         patch(
-            "orca_auto.orca.result_organizer_filesystem.os.rename",
+            "orca_auto.orca.result_organizer.filesystem.os.rename",
             side_effect=OSError(errno.EXDEV, "cross-device"),
         ),
         patch(
-            "orca_auto.orca.result_organizer_filesystem._cross_device_move",
+            "orca_auto.orca.result_organizer.filesystem._cross_device_move",
         ) as cross_move,
     ):
         organizer_fs.execute_move(plan)
     cross_move.assert_called_once_with(plan.source_dir, plan.target_abs_path)
 
     with patch(
-        "orca_auto.orca.result_organizer_filesystem.os.rename",
+        "orca_auto.orca.result_organizer.filesystem.os.rename",
         side_effect=OSError(errno.EPERM, "nope"),
     ):
         with pytest.raises(OSError):
@@ -219,11 +219,11 @@ def test_move_helpers_cover_copytree_execute_and_rollback_paths(tmp_path: Path) 
     rollback_plan = _plan(shutil_source, shutil_target)
     with (
         patch(
-            "orca_auto.orca.result_organizer_filesystem.os.rename",
+            "orca_auto.orca.result_organizer.filesystem.os.rename",
             side_effect=OSError(errno.EXDEV, "cross-device"),
         ),
         patch(
-            "orca_auto.orca.result_organizer_filesystem._cross_device_move",
+            "orca_auto.orca.result_organizer.filesystem._cross_device_move",
         ) as cross_move,
     ):
         organizer_fs.rollback_move(rollback_plan)
@@ -318,11 +318,11 @@ def test_fsync_directory_closes_descriptor(tmp_path: Path) -> None:
     path = tmp_path / "dir"
     path.mkdir()
     with (
-        patch("orca_auto.orca.result_organizer_filesystem.os.open", return_value=7) as open_mock,
+        patch("orca_auto.orca.result_organizer.filesystem.os.open", return_value=7) as open_mock,
         patch(
-            "orca_auto.orca.result_organizer_filesystem.os.fsync",
+            "orca_auto.orca.result_organizer.filesystem.os.fsync",
         ) as fsync_mock,
-        patch("orca_auto.orca.result_organizer_filesystem.os.close") as close_mock,
+        patch("orca_auto.orca.result_organizer.filesystem.os.close") as close_mock,
     ):
         organizer_fs._fsync_directory(path)
 

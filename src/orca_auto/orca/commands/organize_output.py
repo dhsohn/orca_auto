@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..result_organizer_models import OrganizePlan, SkipReason
+from ..result_organizer.models import OrganizePlan, SkipReason
 
 
 def emit_organize(payload: dict[str, Any]) -> None:
