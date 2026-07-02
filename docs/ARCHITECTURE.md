@@ -245,10 +245,13 @@ logic. Notable pieces:
   `Opt`/`Opt+Freq`/`Freq`/single-point routes do not get automatic retries;
   failed `.xyz`/`.gbw` artifacts are not reused as a generic rerun strategy.
   Standalone `OptTS`/`NEB-TS` also has no automatic retry; Hessian hardening is
-  left to explicit user input. `ScanTS` uses only ScanTS-specific
-  continuation/reverse-scan logic from scan artifacts. If no route-specific
-  rewrite is available, retry fails closed rather than repeating the identical
-  input. Charge and multiplicity are
+  left to explicit user input. `ScanTS` uses only ScanTS-specific continuation,
+  endpoint-completion, and reverse-scan logic from scan artifacts. If a maximum
+  appears before the planned scan endpoint, ORCA first completes that endpoint
+  with an ordinary relaxed scan (`ScanTS` -> `Opt`, no `Freq`/`IRC`), then starts
+  the reverse `ScanTS` from the real endpoint xyz. If no route-specific rewrite is
+  available, retry fails closed rather than repeating the identical input. Charge
+  and multiplicity are
   **never** auto-changed; the original `.inp` is preserved; retries are written
   as `<name>.retryNN.inp`.
 - **Restart/resume:** for retry/resume it generates a restart input with

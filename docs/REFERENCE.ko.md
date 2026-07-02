@@ -476,8 +476,11 @@ Opt 모드 완료:
   `*.xyz`/`.gbw` artifact를 generic restart 근거로 보지 않습니다.
 - standalone `OptTS`/`NEB-TS`: 자동 재시도하지 않습니다. Hessian hardening은
   자동 fallback이 아니라 사용자가 명시하는 입력 선택으로 남깁니다.
-- `ScanTS`: 최대 2회, scan artifact 기반의 ScanTS 전용 continuation/reverse-scan
-  로직만 사용합니다. 일반 SCF/geometry hardening은 적용하지 않습니다.
+- `ScanTS`: 최대 3회까지 scan artifact 기반의 ScanTS 전용 continuation,
+  endpoint-completion, reverse-scan 로직만 사용합니다. maximum을 계획된 endpoint
+  전에 찾은 경우에는 먼저 일반 relaxed scan으로 endpoint를 완료합니다(`ScanTS` ->
+  `Opt`, `Freq`/`IRC` 제거). 그 뒤 실제 endpoint xyz에서 역방향 ScanTS를
+  생성합니다. 일반 SCF/geometry hardening은 적용하지 않습니다.
 
 지오메트리 재시작 규칙:
 

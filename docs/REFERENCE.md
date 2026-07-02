@@ -458,8 +458,11 @@ Retry policy:
   `*.xyz`/`.gbw` artifacts are not treated as useful generic restart evidence.
 - Standalone `OptTS`/`NEB-TS`: no automatic retry. Hessian hardening remains an
   explicit input choice rather than an automatic fallback.
-- `ScanTS`: up to two retries through ScanTS-specific continuation/reverse-scan
-  logic from scan artifacts only. Generic SCF/geometry hardening is not applied.
+- `ScanTS`: up to three retries through ScanTS-specific continuation, endpoint-completion,
+  and reverse-scan logic from scan artifacts only. If a maximum is found before the
+  planned endpoint, orca_auto first completes the endpoint with an ordinary relaxed
+  scan (`ScanTS` -> `Opt`, no `Freq`/`IRC`), then reverses from that real endpoint
+  xyz. Generic SCF/geometry hardening is not applied.
 
 Geometry restart rules:
 

@@ -33,8 +33,8 @@ _RETRY_POLICIES: dict[str, RetryPolicy] = {
     # rerun.
     "scants": RetryPolicy(
         name="scants",
-        max_retries=2,
-        recipes=("scants_retry", "scants_retry"),
+        max_retries=3,
+        recipes=("scants_retry", "scants_retry", "scants_retry"),
     ),
     # Standalone OPTTS/NEB-TS retries are intentionally disabled. Failed TS-search
     # artifacts are not reused, and Hessian hardening is left as an explicit user
