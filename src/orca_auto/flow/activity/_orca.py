@@ -269,7 +269,8 @@ def orca_records(
     config_path: str,
     deps: Any,
 ) -> list[ActivityRecord]:
-    from orca_auto.orca import queue_adapter, run_snapshot
+    from orca_auto.orca import run_snapshot
+    from orca_auto.orca.queue import adapter as queue_adapter
 
     runtime_paths = deps.engine_runtime_paths(config_path, engine="orca")
     allowed_root = runtime_paths["allowed_root"]

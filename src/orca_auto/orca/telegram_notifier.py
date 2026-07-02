@@ -16,7 +16,7 @@ from orca_auto.core.notifications import (
 
 if TYPE_CHECKING:
     from .config import TelegramConfig
-    from .dft_monitor import ScanReport
+    from .dft.monitor import ScanReport
     from .types import (
         QueueEnqueuedNotification,
         RetryNotification,

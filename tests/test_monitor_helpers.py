@@ -7,7 +7,7 @@ from unittest.mock import patch
 from orca_auto.orca.commands import _helpers as command_helpers
 from orca_auto.orca.commands import monitor
 from orca_auto.orca.config import AppConfig, PathsConfig, RuntimeConfig, TelegramConfig
-from orca_auto.orca.dft_monitor import MonitorResult, ScanReport
+from orca_auto.orca.dft.monitor import MonitorResult, ScanReport
 
 
 def _cfg(allowed_root: Path, *, telegram_enabled: bool = True) -> AppConfig:

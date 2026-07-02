@@ -10,22 +10,23 @@ import hashlib
 import os
 from dataclasses import dataclass, field
 
-from .orca_chemistry import build_formula as _build_formula
-from .orca_opt_progress import OptProgress, OptStep, parse_opt_progress
-from .orca_parser_extractors import (
+from ..orca_chemistry import build_formula as _build_formula
+from ..orca_opt_progress import OptProgress, OptStep, parse_opt_progress
+from ..output_status import coarse_orca_status
+from .extractors import (
     parse_coordinates as _parse_coordinates,
 )
-from .orca_parser_extractors import (
+from .extractors import (
     parse_frequencies as _parse_frequencies,
 )
-from .orca_parser_extractors import (
+from .extractors import (
     parse_input_line as _parse_input_line,
 )
-from .orca_parser_extractors import (
+from .extractors import (
     parse_wall_time as _parse_wall_time,
 )
-from .orca_parser_io import read_orca_text as _read_orca_text
-from .orca_parser_patterns import (
+from .io import read_orca_text as _read_orca_text
+from .patterns import (
     _CHARGE_MULT_RE,
     _ENERGY_RE,
     _ENTHALPY_RE,
@@ -33,7 +34,6 @@ from .orca_parser_patterns import (
     _OPT_CONVERGED_RE,
     _OPT_NOT_CONVERGED_RE,
 )
-from .output_status import coarse_orca_status
 
 # ---------------------------------------------------------------------------
 # Constants

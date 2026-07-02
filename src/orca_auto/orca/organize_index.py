@@ -98,7 +98,7 @@ def _build_index_record(
         rel = reaction_dir
     organized_path = str(rel)
 
-    from .result_organizer_planning import detect_job_type, resolve_organize_metadata
+    from .result_organizer.planning import detect_job_type, resolve_organize_metadata
 
     selected_inp = state.get("selected_inp", "")
     inp_path, job_type, molecule_key = resolve_organize_metadata(state, reaction_dir)

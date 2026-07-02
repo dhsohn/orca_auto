@@ -751,7 +751,7 @@ def test_detect_existing_orca_worker_conflict_edges(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import orca_auto.orca.config as orca_config
-    import orca_auto.orca.queue_worker as orca_queue_worker
+    import orca_auto.orca.queue.worker as orca_queue_worker
 
     args = argparse.Namespace(orca_auto_config="/tmp/orca_auto.yaml")
 

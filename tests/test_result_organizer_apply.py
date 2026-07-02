@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
-from orca_auto.orca import result_organizer_filesystem as organizer_fs
-from orca_auto.orca import result_organizer_planning as organizer_planning
-from orca_auto.orca import result_organizer_state as organizer_state
-from orca_auto.orca.result_organizer_models import OrganizePlan
+from orca_auto.orca.result_organizer import filesystem as organizer_fs
+from orca_auto.orca.result_organizer import planning as organizer_planning
+from orca_auto.orca.result_organizer import state as organizer_state
+from orca_auto.orca.result_organizer.models import OrganizePlan
 from orca_auto.orca.state import save_state
 
 
@@ -63,7 +63,7 @@ def test_attempt_and_metadata_helpers_cover_edge_cases(tmp_path: Path) -> None:
         "final_result": {"last_out_path": str(retry_out)},
     }
 
-    with patch("orca_auto.orca.result_organizer_planning.resolve_molecule_key") as resolve_key:
+    with patch("orca_auto.orca.result_organizer.planning.resolve_molecule_key") as resolve_key:
         resolve_key.side_effect = [
             type("Resolution", (), {"source": "directory_fallback", "key": "unknown"})(),
             type("Resolution", (), {"source": "input_file", "key": "H2"})(),
@@ -122,10 +122,10 @@ def test_execute_move_and_rollback_cover_cross_device_and_existing_source(tmp_pa
 
     with (
         patch(
-            "orca_auto.orca.result_organizer_filesystem.os.rename",
+            "orca_auto.orca.result_organizer.filesystem.os.rename",
             side_effect=OSError(errno.EXDEV, "cross-device"),
         ),
-        patch("orca_auto.orca.result_organizer_filesystem._cross_device_move") as cross_device_move,
+        patch("orca_auto.orca.result_organizer.filesystem._cross_device_move") as cross_device_move,
     ):
         organizer_fs.execute_move(plan)
 
@@ -137,10 +137,10 @@ def test_execute_move_and_rollback_cover_cross_device_and_existing_source(tmp_pa
     plan.target_abs_path.mkdir(parents=True, exist_ok=True)
     with (
         patch(
-            "orca_auto.orca.result_organizer_filesystem.os.rename",
+            "orca_auto.orca.result_organizer.filesystem.os.rename",
             side_effect=OSError(errno.EXDEV, "cross-device"),
         ),
-        patch("orca_auto.orca.result_organizer_filesystem._cross_device_move") as cross_device_move,
+        patch("orca_auto.orca.result_organizer.filesystem._cross_device_move") as cross_device_move,
     ):
         organizer_fs.rollback_move(plan)
 
@@ -244,9 +244,9 @@ def test_moved_path_helpers_and_fsync_directory_cover_noop_and_success(tmp_path:
     ) == str(target_dir / "missing.inp")
 
     with (
-        patch("orca_auto.orca.result_organizer_filesystem.os.open", return_value=11) as os_open,
-        patch("orca_auto.orca.result_organizer_filesystem.os.fsync") as fsync,
-        patch("orca_auto.orca.result_organizer_filesystem.os.close") as close,
+        patch("orca_auto.orca.result_organizer.filesystem.os.open", return_value=11) as os_open,
+        patch("orca_auto.orca.result_organizer.filesystem.os.fsync") as fsync,
+        patch("orca_auto.orca.result_organizer.filesystem.os.close") as close,
     ):
         organizer_fs._fsync_directory(target_dir)
 

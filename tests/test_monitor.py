@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from orca_auto.orca.config import AppConfig, PathsConfig, RuntimeConfig, TelegramConfig
-from orca_auto.orca.dft_monitor import MonitorResult, ParseFailure, ScanReport
+from orca_auto.orca.dft.monitor import MonitorResult, ParseFailure, ScanReport
 from orca_auto.orca.telegram_notifier import (
     _format_monitor_dft_section,
     _format_monitor_failure_section,

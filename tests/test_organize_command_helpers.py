@@ -8,7 +8,7 @@ from orca_auto.orca.commands.organize_notifications import (
     _build_organize_message,
 )
 from orca_auto.orca.commands.organize_tracking import build_index_record
-from orca_auto.orca.result_organizer_models import OrganizePlan, SkipReason
+from orca_auto.orca.result_organizer.models import OrganizePlan, SkipReason
 
 
 def _plan(*, run_id: str = "run_1234567890ab") -> OrganizePlan:

@@ -9,8 +9,8 @@ import pytest
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.flow.submitters import orca as orca_submitter
 from orca_auto.orca import config as orca_config
-from orca_auto.orca import queue_adapter
 from orca_auto.orca.commands import run_inp as run_inp_cmd
+from orca_auto.orca.queue import adapter as queue_adapter
 from tests.flow.factories import install_orca_timestamps, install_orca_workflow_io
 
 

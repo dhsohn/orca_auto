@@ -13,9 +13,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .dft_discovery import discover_orca_targets
-from .dft_index import DFTIndex
-from .orca_parser import parse_orca_output
+from ..parser import parse_orca_output
+from .discovery import discover_orca_targets
+from .index import DFTIndex
 
 logger = logging.getLogger(__name__)
 

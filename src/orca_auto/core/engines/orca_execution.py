@@ -25,7 +25,7 @@ from orca_auto.core.queue.worker.execution_dependencies import run_worker_child_
 from orca_auto.orca.commands.run_inp import _cmd_run_inp_execute
 from orca_auto.orca.config import load_config
 from orca_auto.orca.orca_runner import OrcaRunner, WorkerShutdownInterrupt
-from orca_auto.orca.queue_adapter import (
+from orca_auto.orca.queue.adapter import (
     list_queue,
     queue_entry_app_name,
     queue_entry_force,

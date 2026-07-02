@@ -6,8 +6,8 @@ import logging
 from typing import Any
 
 from ..config import AppConfig, load_config
-from ..dft_index import DFTIndex
-from ..dft_monitor import DFTMonitor
+from ..dft.index import DFTIndex
+from ..dft.monitor import DFTMonitor
 from ..telegram_notifier import has_monitor_updates, notify_monitor_report
 from ._helpers import _to_resolved_local
 

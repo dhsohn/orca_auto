@@ -16,7 +16,7 @@ from orca_auto.flow.engines.xtb import queue_runtime as xtb_queue_cmd
 from orca_auto.flow.orchestration import advance_workflow, create_reaction_ts_search_workflow
 from orca_auto.flow.registry import sync_workflow_registry
 from orca_auto.flow.state import load_workflow_payload, resolve_workflow_workspace, workflow_summary
-from orca_auto.orca import queue_worker as orca_queue_cmd
+from orca_auto.orca.queue import worker as orca_queue_cmd
 
 
 def _write_xyz(path: Path, *, comment: str, bond: float) -> None:

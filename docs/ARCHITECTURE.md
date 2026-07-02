@@ -58,8 +58,8 @@ src/orca_auto/
 │   ├── commands/        # init, run_inp, queue, organize, monitor
 │   ├── runtime/         # Run locks
 │   ├── engine.py        # ORCA EngineDefinition wiring
-│   ├── attempt_*.py     # Attempt engine, retry, resume, reporting
-│   ├── orca_parser*.py  # ORCA output parsing
+│   ├── attempt/         # Attempt engine, retry, resume, reporting
+│   ├── parser/          # ORCA output parsing
 │   ├── state*.py        # Per-job state machine + persistence
 │   └── ...              # retry recipes, completion rules, organize, indexing
 │
@@ -232,10 +232,10 @@ logic. Notable pieces:
 
 - **Input selection:** when execution actually starts, ORCA selects the most
   recently modified `*.inp` in the target directory.
-- **Attempt engine** (`attempt_engine.py`, `attempt_retry.py`,
-  `attempt_resume.py`): runs an attempt, parses output, classifies the result,
+- **Attempt engine** (`attempt/engine.py`, `attempt/retry.py`,
+  `attempt/resume.py`): runs an attempt, parses output, classifies the result,
   and decides whether to retry.
-- **Output analysis** (`orca_parser*.py`, `out_analyzer.py`,
+- **Output analysis** (`parser/`, `out_analyzer.py`,
   `output_status.py`, `completion_rules.py`): determines completion by mode —
   TS mode (`OptTS`/`NEB-TS`, requires exactly one imaginary frequency, plus an
   IRC marker when the route has `IRC`) vs Opt mode (normal termination).
@@ -261,7 +261,7 @@ logic. Notable pieces:
   inputs are written as `*.resume.inp` so user input is never mutated.
 - **State & reports:** `state.py`/`state_machine.py` persist `job_state.json`;
   completion writes `job_report.json` and `job_report.md`.
-- **Organize & index:** `result_organizer_*.py` moves completed outputs into the
+- **Organize & index:** `result_organizer/` moves completed outputs into the
   organized root and leaves an `organized_ref.json` stub; `dft_index*.py` and
   `organize_index.py` maintain a JSONL index for discovery.
 

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_APP_NAME
-from orca_auto.orca import _job_location_contract_payload as _canonical_payload
+from orca_auto.orca.job_locations import _contract_payload as _canonical_payload
 
 from . import _orca_contract_context as _contract_context
 from ._orca_contract_status import StatusPayload

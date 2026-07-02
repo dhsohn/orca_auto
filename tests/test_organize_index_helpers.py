@@ -147,7 +147,7 @@ def test_rebuild_index_falls_back_to_first_inp_when_metadata_missing(tmp_path: P
     )
 
     with patch(
-        "orca_auto.orca.result_organizer_planning.resolve_organize_metadata",
+        "orca_auto.orca.result_organizer.planning.resolve_organize_metadata",
         return_value=(None, "other", "unknown"),
     ):
         assert organize_index.rebuild_index(organized_root) == 1

@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-import orca_auto.orca.dft_discovery as discovery
+import orca_auto.orca.dft.discovery as discovery
 from tests.engine_artifact_helpers import orca_artifact_payload
 
 

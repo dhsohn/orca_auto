@@ -57,8 +57,8 @@ src/orca_auto/
 │   ├── commands/        # init, run_inp, queue, organize, monitor
 │   ├── runtime/         # 실행 락
 │   ├── engine.py        # ORCA EngineDefinition 배선
-│   ├── attempt_*.py     # 시도 엔진, 재시도, 재개, 리포팅
-│   ├── orca_parser*.py  # ORCA 출력 파싱
+│   ├── attempt/         # 시도 엔진, 재시도, 재개, 리포팅
+│   ├── parser/          # ORCA 출력 파싱
 │   ├── state*.py        # 작업별 상태 머신 + 영속화
 │   └── ...              # 재시도 레시피, 완료 규칙, 정리, 인덱싱
 │
@@ -228,9 +228,9 @@ python -m orca_auto.core.engines.worker_child \
 
 - **입력 선택:** 실제 실행이 시작될 때, ORCA는 대상 디렉터리에서 가장 최근에
   수정된 `*.inp`를 선택합니다.
-- **시도 엔진**(`attempt_engine.py`, `attempt_retry.py`, `attempt_resume.py`):
+- **시도 엔진**(`attempt/engine.py`, `attempt/retry.py`, `attempt/resume.py`):
   시도를 실행하고 출력을 파싱·분류한 뒤 재시도 여부를 결정합니다.
-- **출력 분석**(`orca_parser*.py`, `out_analyzer.py`, `output_status.py`,
+- **출력 분석**(`parser/`, `out_analyzer.py`, `output_status.py`,
   `completion_rules.py`): 모드별로 완료를 판정합니다 — TS 모드(`OptTS`/`NEB-TS`,
   허수 진동수 정확히 1개 필요, 경로에 `IRC`가 있으면 IRC 마커도 필요) vs Opt
   모드(정상 종료).
@@ -254,7 +254,7 @@ python -m orca_auto.core.engines.worker_child \
   `*.resume.inp`로 기록되어 사용자 입력이 변경되지 않습니다.
 - **상태 & 리포트:** `state.py`/`state_machine.py`가 `job_state.json`을
   영속화하고, 완료 시 `job_report.json`과 `job_report.md`를 작성합니다.
-- **정리 & 인덱스:** `result_organizer_*.py`가 완료 출력을 정리 루트로 이동하고
+- **정리 & 인덱스:** `result_organizer/`가 완료 출력을 정리 루트로 이동하고
   원본 디렉터리에 `organized_ref.json` 스텁을 남깁니다. `dft_index*.py`와
   `organize_index.py`가 탐색용 JSONL 인덱스를 유지합니다.
 

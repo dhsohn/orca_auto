@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from .result_organizer_models import OrganizePlan
+from .models import OrganizePlan
 
 
 def check_conflict(

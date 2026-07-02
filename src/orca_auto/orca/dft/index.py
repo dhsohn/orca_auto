@@ -9,14 +9,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .dft_index_queries import (
+from ..parser import parse_orca_output
+from .index_queries import (
     build_dft_query,
     comparison_filters,
     lowest_energy_filters,
 )
-from .dft_index_scanner import DFTIndexScanner, normalize_status_override
-from .dft_index_store import DFTIndexStore
-from .orca_parser import parse_orca_output
+from .index_scanner import DFTIndexScanner, normalize_status_override
+from .index_store import DFTIndexStore
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ from typing import Any
 
 from orca_auto.core.statuses import STATUS_RUNNING
 
-from .config import AppConfig
+from ..config import AppConfig
 
 logger = logging.getLogger(__name__)
 

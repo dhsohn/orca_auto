@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from orca_auto.orca.attempt_engine import run_attempts
+from orca_auto.orca.attempt.engine import run_attempts
 from orca_auto.orca.retry_policy import retry_policy_for_input
 from orca_auto.orca.scants import (
     apply_scants_failed_scan_retry_rewrite,

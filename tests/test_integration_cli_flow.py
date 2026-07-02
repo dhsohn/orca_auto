@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from orca_auto.core.queue.types import QueueStatus
-from orca_auto.orca.queue_adapter import (
+from orca_auto.orca.queue.adapter import (
     list_queue,
     queue_entry_force,
     queue_entry_reaction_dir,

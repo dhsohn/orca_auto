@@ -7,7 +7,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from orca_auto.orca.dft_discovery import discover_orca_targets
+from orca_auto.orca.dft.discovery import discover_orca_targets
 from tests.engine_artifact_helpers import orca_artifact_payload
 
 

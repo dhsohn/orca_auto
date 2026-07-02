@@ -63,7 +63,7 @@ def auto_organize_terminal_job(
     try:
         organize = organize_reaction_dir_fn
         if organize is None:
-            from .commands.organize import organize_reaction_dir as organize
+            from ..commands.organize import organize_reaction_dir as organize
 
         assert organize is not None
         result = organize(

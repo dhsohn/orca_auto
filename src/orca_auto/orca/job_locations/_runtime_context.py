@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ._job_location_tracking import TrackedJobDirDeps
-from ._job_location_tracking import matching_tracked_job_dirs as _matching_tracked_job_dirs
+from ._tracking import TrackedJobDirDeps
+from ._tracking import matching_tracked_job_dirs as _matching_tracked_job_dirs
 
 
 def matching_tracked_job_dirs(index_root: str | Path, target: str, *, deps: Any) -> list[Path]:

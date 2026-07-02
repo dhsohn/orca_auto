@@ -5,7 +5,7 @@ from pathlib import Path
 
 from orca_auto.orca.commands.organize_notifications import _build_organize_message
 from orca_auto.orca.commands.organize_output import build_dry_run_summary
-from orca_auto.orca.result_organizer_models import OrganizePlan, SkipReason
+from orca_auto.orca.result_organizer.models import OrganizePlan, SkipReason
 
 
 def _sample_plan() -> OrganizePlan:

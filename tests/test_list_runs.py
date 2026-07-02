@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from orca_auto.cli import main
-from orca_auto.orca.queue_adapter import dequeue_next, enqueue, mark_completed
+from orca_auto.orca.queue.adapter import dequeue_next, enqueue, mark_completed
 from orca_auto.orca.state import report_json_path, save_state, state_path
 from tests.engine_artifact_helpers import orca_artifact_payload
 

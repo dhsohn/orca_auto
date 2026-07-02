@@ -14,11 +14,11 @@ from orca_auto.core.admission import (
     activate_reserved_slot as _activate_reserved_slot,
 )
 
-from .. import queue_adapter as _queue_adapter
-from ..attempt_engine import _exit_with_result, run_attempts
+from ..attempt.engine import _exit_with_result, run_attempts
 from ..config import load_config
 from ..inp_rewriter import ensure_submission_resource_request, read_resource_request_from_input
 from ..orca_runner import OrcaRunner
+from ..queue import adapter as _queue_adapter
 from ..runtime.run_lock import acquire_run_lock
 from ..state import save_state
 from ..state_machine import load_or_create_state

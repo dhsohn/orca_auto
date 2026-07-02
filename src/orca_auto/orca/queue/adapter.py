@@ -12,7 +12,7 @@ from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import now_utc_iso, timestamped_token
 
-from .queue_entries import (
+from .entries import (
     ACTIVE_STATUSES,
     QUEUE_APP_NAME,
     QUEUE_ENGINE,
@@ -34,7 +34,7 @@ from .queue_entries import (
     queue_entry_status,
     queue_entry_task_id,
 )
-from .queue_orphans import reconcile_orphaned_running_entries
+from .orphans import reconcile_orphaned_running_entries
 
 logger = logging.getLogger(__name__)
 

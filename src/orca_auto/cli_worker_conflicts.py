@@ -94,7 +94,7 @@ def _detect_existing_orca_worker_conflict(
 
     try:
         from orca_auto.orca.config import load_config as _load_orca_config
-        from orca_auto.orca.queue_worker import read_worker_pid as _read_orca_worker_pid
+        from orca_auto.orca.queue.worker import read_worker_pid as _read_orca_worker_pid
 
         cfg = _load_orca_config(str(config_path))
     except Exception:  # noqa: BLE001

@@ -4,8 +4,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from . import _job_location_contract_payload as _contract_payload
-from ._job_location_models import (
+from . import _contract_payload as _contract_payload
+from ._models import (
     JobRuntimeContext,
     OrcaContractPayloadContext,
     OrcaContractResolvedFields,

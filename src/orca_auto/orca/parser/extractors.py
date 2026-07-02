@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .orca_parser_patterns import (
+from .patterns import (
     _BASIS_KEYWORDS,
     _CALC_TYPE_KEYWORDS,
     _COORD_LINE_RE,

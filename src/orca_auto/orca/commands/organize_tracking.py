@@ -7,7 +7,7 @@ from typing import Any
 from ..config import AppConfig
 from ..job_locations import resource_dict, upsert_job_record
 from ..organize_index import to_reaction_relative_path
-from ..result_organizer_models import OrganizePlan
+from ..result_organizer.models import OrganizePlan
 from ..state import ORGANIZED_REF_NAME, now_utc_iso, write_organized_ref
 from ..types import RunState
 

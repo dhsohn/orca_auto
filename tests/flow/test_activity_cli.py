@@ -438,7 +438,8 @@ def test_orca_records_merge_queue_entries_and_snapshots(
     ]
     reconciled: list[Path] = []
 
-    from orca_auto.orca import queue_adapter, run_snapshot
+    from orca_auto.orca import run_snapshot
+    from orca_auto.orca.queue import adapter as queue_adapter
 
     monkeypatch.setattr(
         activity, "engine_runtime_paths", lambda config_path, *, engine: {"allowed_root": allowed}
@@ -508,7 +509,8 @@ def test_orca_records_suppress_stale_snapshot_for_terminal_entry(
         ),
     ]
 
-    from orca_auto.orca import queue_adapter, run_snapshot
+    from orca_auto.orca import run_snapshot
+    from orca_auto.orca.queue import adapter as queue_adapter
 
     monkeypatch.setattr(
         activity, "engine_runtime_paths", lambda config_path, *, engine: {"allowed_root": allowed}
@@ -568,7 +570,8 @@ def test_orca_records_keep_live_snapshot_despite_terminal_entry(
         ),
     ]
 
-    from orca_auto.orca import queue_adapter, run_snapshot
+    from orca_auto.orca import run_snapshot
+    from orca_auto.orca.queue import adapter as queue_adapter
 
     monkeypatch.setattr(
         activity, "engine_runtime_paths", lambda config_path, *, engine: {"allowed_root": allowed}

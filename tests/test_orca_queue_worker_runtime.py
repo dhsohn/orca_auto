@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from orca_auto.orca import queue_worker_runtime
+from orca_auto.orca.queue import worker_runtime as queue_worker_runtime
 
 
 def test_make_running_job_attaches_queue_root(tmp_path: Path) -> None:

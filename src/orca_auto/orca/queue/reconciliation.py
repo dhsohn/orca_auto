@@ -9,7 +9,7 @@ from typing import Any
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
-from .statuses import RunStatus
+from ..statuses import RunStatus
 
 
 def load_report_payload(

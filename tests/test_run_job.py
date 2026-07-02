@@ -12,7 +12,7 @@ from orca_auto.core.engines import orca_execution as worker_job
 from orca_auto.core.engines.orca_execution import execute_run_job
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.orca_runner import WorkerShutdownInterrupt
-from orca_auto.orca.queue_adapter import dequeue_next, enqueue, list_queue
+from orca_auto.orca.queue.adapter import dequeue_next, enqueue, list_queue
 
 
 @patch("orca_auto.core.engines.orca_execution._cmd_run_inp_execute", return_value=7)

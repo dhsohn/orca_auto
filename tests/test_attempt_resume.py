@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from orca_auto.orca.attempt_resume import (
+from orca_auto.orca.attempt.resume import (
     recover_missing_retry_input,
     resolve_execution_input,
     resume_terminal_decision,
@@ -33,7 +33,7 @@ class TestAttemptResume(unittest.TestCase):
             )
 
             with patch(
-                "orca_auto.orca.attempt_resume.rewrite_for_retry",
+                "orca_auto.orca.attempt.resume.rewrite_for_retry",
                 return_value=["route_add_tightscf_slowconv"],
             ):
                 recovered, reason = recover_missing_retry_input(
@@ -87,7 +87,7 @@ class TestAttemptResume(unittest.TestCase):
             state = new_state(reaction_dir, selected_inp, max_retries=2)
             state["attempts"].append({"inp_path": str(selected_inp), "patch_actions": []})
 
-            with patch("orca_auto.orca.attempt_resume.rewrite_for_retry", return_value=[]):
+            with patch("orca_auto.orca.attempt.resume.rewrite_for_retry", return_value=[]):
                 current_inp, reason = resolve_execution_input(
                     reaction_dir=reaction_dir,
                     selected_inp=selected_inp,

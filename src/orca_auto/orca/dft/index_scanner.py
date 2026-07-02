@@ -4,7 +4,7 @@ import hashlib
 import logging
 from pathlib import Path
 
-from .dft_discovery import discover_orca_targets
+from .discovery import discover_orca_targets
 
 logger = logging.getLogger(__name__)
 

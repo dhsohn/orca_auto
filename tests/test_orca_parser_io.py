@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orca_auto.orca.orca_parser_io import read_orca_text
+from orca_auto.orca.parser.io import read_orca_text
 
 
 def test_read_orca_text_handles_empty_files(tmp_path: Path) -> None:
