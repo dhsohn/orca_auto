@@ -14,14 +14,14 @@ from orca_auto.core.engines.worker_child import (
     WORKER_CHILD_MODULE,
     build_worker_child_command_for_engine,
 )
-from orca_auto.core.queue import engine_execution as _engine_execution
-from orca_auto.core.queue.child_execution import find_queue_entry_by_id
+from orca_auto.core.queue.child.execution import find_queue_entry_by_id
+from orca_auto.core.queue.engine import execution as _engine_execution
 from orca_auto.core.queue.internal_engine import InternalEngineSpec
 from orca_auto.core.queue.worker import (
     install_shutdown_signal_handlers,
     resolve_admission_root,
 )
-from orca_auto.core.queue.worker_execution_dependencies import run_worker_child_entrypoint
+from orca_auto.core.queue.worker.execution_dependencies import run_worker_child_entrypoint
 from orca_auto.orca.commands.run_inp import _cmd_run_inp_execute
 from orca_auto.orca.config import load_config
 from orca_auto.orca.orca_runner import OrcaRunner, WorkerShutdownInterrupt

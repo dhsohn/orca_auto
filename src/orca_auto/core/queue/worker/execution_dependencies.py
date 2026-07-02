@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import child_entrypoint as _child_entrypoint
-from .child_execution import build_queue_entry_lookup as _build_queue_entry_lookup
-from .dependencies import build_dependency_container
-from .internal_worker import (
+from ..child import entrypoint as _child_entrypoint
+from ..child.execution import build_queue_entry_lookup as _build_queue_entry_lookup
+from ..dependencies import build_dependency_container
+from ..internal_worker import (
     build_internal_worker_process_default_factories,
     build_internal_worker_process_dependencies,
     build_internal_worker_queue_dependencies,

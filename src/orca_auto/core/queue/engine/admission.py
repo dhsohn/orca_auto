@@ -5,7 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .worker import reserve_engine_queue_worker_slot
+from ..worker import reserve_engine_queue_worker_slot
 
 LOGGER = logging.getLogger(__name__)
 

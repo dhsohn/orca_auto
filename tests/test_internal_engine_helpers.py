@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from orca_auto.core.queue.child_process import reconcile_orphaned_child_queue_entries
+from orca_auto.core.queue.child.process import reconcile_orphaned_child_queue_entries
 from orca_auto.core.queue.internal_engine import (
     InternalEngineQueueRuntime,
     InternalEngineQueueWorkerFacade,

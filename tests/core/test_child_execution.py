@@ -5,7 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from orca_auto.core.queue import child_entrypoint, child_execution
+from orca_auto.core.queue.child import entrypoint as child_entrypoint
+from orca_auto.core.queue.child import execution as child_execution
 
 
 def test_child_worker_shutdown_controller_tracks_request() -> None:

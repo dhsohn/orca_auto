@@ -7,13 +7,13 @@ from typing import Any
 
 from orca_auto.core.statuses import TERMINAL_STATUSES
 
-from . import engine_admission as _engine_admission
-from .child_process import status_matches
-from .lifecycle_hooks import (
+from ..child.process import status_matches
+from ..engine import admission as _engine_admission
+from ..types import QueueStatus
+from .hooks import (
     EngineQueueProcessLifecycleHooks,
     EngineQueueTerminalSideEffectHooks,
 )
-from .types import QueueStatus
 
 LOGGER = logging.getLogger("orca_auto.core.queue.lifecycle")
 

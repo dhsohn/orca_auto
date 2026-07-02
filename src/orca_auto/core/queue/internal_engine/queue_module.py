@@ -7,9 +7,9 @@ from typing import Any
 
 from orca_auto.core.engines.definitions import EngineDefinition
 
-from .internal_engine_runtime import InternalEngineQueueRuntime
-from .internal_engine_spec import InternalEngineSpec
-from .internal_engine_worker_facade import (
+from .runtime import InternalEngineQueueRuntime
+from .spec import InternalEngineSpec
+from .worker_facade import (
     InternalEngineQueueWorkerDeps,
     InternalEngineQueueWorkerFacade,
 )

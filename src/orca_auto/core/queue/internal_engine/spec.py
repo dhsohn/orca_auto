@@ -4,9 +4,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .internal_engine_child import InternalEngineWorkerChild
-from .internal_engine_policies import InternalEngineAdmission, InternalEngineLifecycle
-from .internal_engine_status import entry_status_is_running
+from .child import InternalEngineWorkerChild
+from .policies import InternalEngineAdmission, InternalEngineLifecycle
+from .status import entry_status_is_running
 
 
 @dataclass

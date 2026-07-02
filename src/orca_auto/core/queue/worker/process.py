@@ -9,14 +9,14 @@ from typing import Any
 
 from orca_auto.core.utils.lock import file_lock
 
-from .processes import (
+from ..processes import (
     remove_worker_pid_file,
     worker_pid_file_path,
     write_worker_pid_file,
 )
-from .worker_loop import QueueWorkerLoop
-from .worker_models import BackgroundRunningJob
-from .worker_signals import install_shutdown_signal_handlers as _install_shutdown_signal_handlers
+from .loop import QueueWorkerLoop
+from .models import BackgroundRunningJob
+from .signals import install_shutdown_signal_handlers as _install_shutdown_signal_handlers
 
 
 @dataclass(frozen=True)

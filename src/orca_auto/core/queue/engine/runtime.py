@@ -7,25 +7,25 @@ from typing import Any
 
 from orca_auto.core.commands.queue import QueueRuntime, run_pidfile_queue_worker_command
 
-from .dependencies import ChildQueueWorkerDeps
-from .engine_admission import (
-    reserve_engine_admission_slot,
-    start_engine_child_process,
-)
-from .engine_runtime_hooks import (
-    attach_started_child_process,
-    build_child_worker_hooks,
-    shutdown_child_job,
-)
-from .worker import (
+from ..dependencies import ChildQueueWorkerDeps
+from ..worker import (
     PidFileChildProcessQueueWorkerHooks,
     dequeue_next_across_roots,
     make_child_queue_worker_deps,
     read_worker_pid_file,
     resolve_admission_root,
 )
-from .worker import (
+from ..worker import (
     queue_entry_by_id as _queue_entry_by_id,
+)
+from .admission import (
+    reserve_engine_admission_slot,
+    start_engine_child_process,
+)
+from .runtime_hooks import (
+    attach_started_child_process,
+    build_child_worker_hooks,
+    shutdown_child_job,
 )
 
 

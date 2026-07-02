@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue import child_execution as _child_execution
+from orca_auto.core.queue.child import execution as _child_execution
 
 
 @dataclass(frozen=True)

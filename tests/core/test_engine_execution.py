@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.queue import engine_execution
+from orca_auto.core.queue.engine import execution as engine_execution
 
 
 def test_object_attribute_fields_extracts_named_context_values() -> None:

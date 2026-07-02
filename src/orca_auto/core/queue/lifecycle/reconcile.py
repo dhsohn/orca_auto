@@ -4,13 +4,13 @@ from collections.abc import Callable, Iterable
 from types import SimpleNamespace
 from typing import Any
 
-from .child_process import reconcile_orphaned_child_queue_entries
-from .lifecycle_hooks import (
+from ..child.process import reconcile_orphaned_child_queue_entries
+from ..types import QueueStatus
+from .hooks import (
     EngineQueueProcessReconcileHooks,
     OrphanedRunningPolicy,
 )
-from .lifecycle_terminal import entry_status_is_running
-from .types import QueueStatus
+from .terminal import entry_status_is_running
 
 
 def reconcile_orphaned_process_entries(

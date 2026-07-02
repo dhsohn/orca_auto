@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from .internal_engine_runtime import InternalEngineQueueRuntime
+from .runtime import InternalEngineQueueRuntime
 
 SlotReleaser = Callable[[str | Path, str], object]
 BackgroundProcessStarter = Callable[[list[str]], Any]

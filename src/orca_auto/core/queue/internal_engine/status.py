@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .child_process import status_matches
-from .types import QueueStatus
+from ..child.process import status_matches
+from ..types import QueueStatus
 
 
 def entry_status_is_running(entry: Any) -> bool:

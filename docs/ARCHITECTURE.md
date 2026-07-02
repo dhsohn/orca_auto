@@ -108,7 +108,7 @@ from execution by a durable, on-disk queue.
             systemd supervises                            ▼
   ┌────────────────────────┐            ┌──────────────────────────────┐
   │ orca_auto-queue-worker  │ ─────────▶ │  Queue worker loop            │
-  │ orca_auto-bot           │            │  core/queue/worker_loop.py    │
+  │ orca_auto-bot           │            │  core/queue/worker/loop.py    │
   │ orca_auto-runtime@.target│           └─────────────┬────────────────┘
   └────────────────────────┘                          │ reserve admission slot
                                                        │ spawn child by queue id

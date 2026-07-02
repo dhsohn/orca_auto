@@ -7,9 +7,9 @@ from typing import Any, TypeVar
 from orca_auto.core.admission import reserve_slot
 from orca_auto.core.config.schema import resolved_admission_limit
 
-from .child_execution import find_queue_entry_by_id
-from .dependencies import ChildQueueWorkerDeps
-from .worker_models import ReservedQueueEntry
+from ..child.execution import find_queue_entry_by_id
+from ..dependencies import ChildQueueWorkerDeps
+from .models import ReservedQueueEntry
 
 T = TypeVar("T")
 

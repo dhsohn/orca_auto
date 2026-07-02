@@ -107,7 +107,7 @@ src/orca_auto/
             systemd 감독                                  ▼
   ┌────────────────────────┐            ┌──────────────────────────────┐
   │ orca_auto-queue-worker  │ ─────────▶ │  큐 워커 루프                 │
-  │ orca_auto-bot           │            │  core/queue/worker_loop.py    │
+  │ orca_auto-bot           │            │  core/queue/worker/loop.py    │
   │ orca_auto-runtime@.target│           └─────────────┬────────────────┘
   └────────────────────────┘                          │ 어드미션 슬롯 예약
                                                        │ 큐 id로 자식 생성

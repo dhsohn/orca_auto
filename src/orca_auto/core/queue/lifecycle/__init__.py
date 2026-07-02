@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import logging
 
-from .child_process import (
+from ..child.process import (
     reconcile_orphaned_child_queue_entries as reconcile_orphaned_child_queue_entries,
 )
-from .child_process import (
+from ..child.process import (
     shutdown_child_process_with_grace as shutdown_child_process_with_grace,
 )
-from .child_process import (
+from ..child.process import (
     status_matches as status_matches,
 )
-from .lifecycle_hooks import (
+from ..types import QueueStatus as QueueStatus
+from .hooks import (
     ChildExitPolicy,
     EngineQueueProcessLifecycleHooks,
     EngineQueueProcessReconcileHooks,
@@ -19,13 +20,13 @@ from .lifecycle_hooks import (
     EngineQueueTerminalSideEffectHooks,
     OrphanedRunningPolicy,
 )
-from .lifecycle_reconcile import (
+from .reconcile import (
     live_worker_pid_slots,
     reconcile_orphaned_process_entries,
     reconcile_orphaned_running,
     reconcile_orphaned_running_with_policy,
 )
-from .lifecycle_shutdown import (
+from .shutdown import (
     cancel_running_process_job,
     finalize_child_exit_with_policy,
     finalize_child_worker_exit,
@@ -33,7 +34,7 @@ from .lifecycle_shutdown import (
     shutdown_running_job,
     shutdown_running_process_job,
 )
-from .lifecycle_terminal import (
+from .terminal import (
     attach_started_process_metadata,
     entry_status_is,
     entry_status_is_running,
@@ -45,7 +46,6 @@ from .lifecycle_terminal import (
     run_terminal_process_side_effects,
     sync_terminal_running_entries,
 )
-from .types import QueueStatus as QueueStatus
 
 LOGGER = logging.getLogger(__name__)
 

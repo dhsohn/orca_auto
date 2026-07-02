@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.queue import child_execution
+from orca_auto.core.queue.child import execution as child_execution
 from orca_auto.flow.engines.xtb import execution as worker_job
 
 

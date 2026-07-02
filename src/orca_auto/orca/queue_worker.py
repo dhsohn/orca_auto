@@ -32,7 +32,7 @@ from orca_auto.core.engines.queue_worker import (
     build_engine_queue_worker,
     build_runtime_engine_queue_worker,
 )
-from orca_auto.core.queue.engine_execution import coerce_resource_request
+from orca_auto.core.queue.engine.execution import coerce_resource_request
 from orca_auto.core.queue.internal_engine import (
     InternalEngineQueueModule,
     InternalEngineSpec,

@@ -4,9 +4,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import lifecycle as _queue_lifecycle
-from .engine_admission import attach_started_process
-from .worker import PidFileChildProcessQueueWorkerHooks, engine_queue_worker_source
+from .. import lifecycle as _queue_lifecycle
+from ..worker import PidFileChildProcessQueueWorkerHooks, engine_queue_worker_source
+from .admission import attach_started_process
 
 
 def attach_started_child_process(

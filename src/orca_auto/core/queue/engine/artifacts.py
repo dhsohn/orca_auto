@@ -20,7 +20,7 @@ from orca_auto.core.engines.artifacts import (
 )
 from orca_auto.core.queue import execution as _queue_execution
 
-from .types import QueueEntry
+from ..types import QueueEntry
 
 
 @dataclass(frozen=True)
@@ -67,13 +67,13 @@ def is_resumed_state(
 def default_engine_resource_caps(cfg: Any) -> dict[str, int]:
     from orca_auto.core.indexing.engines import resource_dict
 
-    from .resource_requests import engine_resource_caps
+    from ..resource_requests import engine_resource_caps
 
     return engine_resource_caps(cfg, resource_dict_fn=resource_dict)
 
 
 def default_entry_resource_request(cfg: Any, entry: Any) -> dict[str, int]:
-    from .resource_requests import entry_resource_request
+    from ..resource_requests import entry_resource_request
 
     return entry_resource_request(
         cfg,

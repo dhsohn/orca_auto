@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from .internal_engine_child import (
+from .child import (
     InternalEngineWorkerChild,
     create_worker_shutdown_exception_type,
 )
-from .internal_engine_policies import InternalEngineAdmission, InternalEngineLifecycle
-from .internal_engine_queue_module import InternalEngineQueueModule
-from .internal_engine_runtime import InternalEngineQueueRuntime
-from .internal_engine_spec import (
+from .policies import InternalEngineAdmission, InternalEngineLifecycle
+from .queue_module import InternalEngineQueueModule
+from .runtime import InternalEngineQueueRuntime
+from .spec import (
     InternalEngineSpec,
     InternalEngineWorkerChildModuleFacade,
 )
-from .internal_engine_status import entry_status_is_running
-from .internal_engine_worker_deps import (
+from .status import entry_status_is_running
+from .worker_deps import (
     InternalEngineQueueWorkerDeps,
     InternalEngineQueueWorkerDepsResolver,
     InternalEngineQueueWorkerFacadeBindings,
@@ -21,7 +21,7 @@ from .internal_engine_worker_deps import (
     build_late_bound_internal_engine_queue_worker_deps,
     build_late_bound_internal_engine_queue_worker_facade_callbacks,
 )
-from .internal_engine_worker_facade import (
+from .worker_facade import (
     InternalEngineQueueWorkerCommandRunner,
     InternalEngineQueueWorkerFacade,
     InternalEngineQueueWorkerLifecycleFacade,

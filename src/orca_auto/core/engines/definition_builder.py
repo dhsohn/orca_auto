@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.indexing.roots import runtime_roots_for_cfg as _runtime_roots_for_cfg
-from orca_auto.core.queue.child_execution import build_queue_entry_lookup
+from orca_auto.core.queue.child.execution import build_queue_entry_lookup
 
 from .artifacts import (
     build_engine_artifact_payload,

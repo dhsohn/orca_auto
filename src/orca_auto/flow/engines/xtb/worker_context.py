@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue import engine_execution as _engine_execution
 from orca_auto.core.queue import execution as _queue_execution
+from orca_auto.core.queue.engine import execution as _engine_execution
 
 from .job_locations import reaction_key_from_job_dir
 from .state import load_state, state_matches_job

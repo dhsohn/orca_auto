@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import signal as signal
 
-from .child_process import (
+from ..child.process import (
     build_background_worker_command,
     live_queue_ids_for_slots,
     reconcile_orphaned_child_queue_entries,
@@ -12,7 +12,7 @@ from .child_process import (
     start_background_process,
     status_matches,
 )
-from .processes import (
+from ..processes import (
     ManagedProcess,
     ShutdownSignalDeps,
     current_worker_pid_payload,
@@ -23,7 +23,7 @@ from .processes import (
     worker_pid_file_path,
     write_worker_pid_file,
 )
-from .worker_admission import (
+from .admission import (
     config_path_for_worker,
     dequeue_next_across_roots,
     engine_queue_worker_source,
@@ -36,18 +36,18 @@ from .worker_admission import (
     resolve_admission_root,
     resolve_worker_auto_organize,
 )
-from .worker_loop import (
+from .loop import (
     QueueWorkerLoop,
     fill_worker_slots,
     pop_completed_worker_jobs,
 )
-from .worker_models import (
+from .models import (
     BackgroundRunningJob,
     EngineRunningJob,
     ReservedQueueEntry,
     SlotFillResult,
 )
-from .worker_process import (
+from .process import (
     ChildProcessQueueWorker,
     HookedPidFileChildProcessQueueWorker,
     PidFileChildProcessQueueWorker,

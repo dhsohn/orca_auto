@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue import engine_execution as _engine_execution
 from orca_auto.core.queue import execution as _queue_execution
+from orca_auto.core.queue.engine import execution as _engine_execution
 from orca_auto.flow.engines.crest import artifacts as _queue_artifacts
 from orca_auto.flow.engines.crest.runner import CrestRunResult
 from orca_auto.flow.engines.crest.worker_context import ExecutionContext

@@ -5,8 +5,8 @@ import time
 from collections.abc import Callable, MutableMapping
 from typing import Any, TypeVar
 
-from .worker_models import SlotFillResult
-from .worker_signals import install_shutdown_signal_handlers
+from .models import SlotFillResult
+from .signals import install_shutdown_signal_handlers
 
 LOGGER = logging.getLogger(__name__)
 

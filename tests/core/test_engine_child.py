@@ -4,8 +4,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from orca_auto.core.queue import child_execution, engine_child
-from orca_auto.core.queue.child_entrypoint import ChildWorkerEntrypointJob
+from orca_auto.core.queue.child import execution as child_execution
+from orca_auto.core.queue.child.entrypoint import ChildWorkerEntrypointJob
+from orca_auto.core.queue.engine import child as engine_child
 from orca_auto.core.queue.internal_engine import InternalEngineSpec
 
 

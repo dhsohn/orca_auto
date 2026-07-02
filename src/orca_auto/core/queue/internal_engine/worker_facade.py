@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .internal_engine_runtime import InternalEngineQueueRuntime
-from .internal_engine_worker_deps import (
+from .runtime import InternalEngineQueueRuntime
+from .worker_deps import (
     InternalEngineQueueWorkerDeps,
     InternalEngineQueueWorkerDepsResolver,
 )

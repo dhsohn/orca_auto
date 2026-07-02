@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import engine_admission as _engine_admission
-from . import internal_engine_runtime_adapters as _runtime_adapters
-from .engine_runtime import EngineQueueRuntime
-from .internal_engine_spec import InternalEngineSpec
+from ..engine import admission as _engine_admission
+from ..engine.runtime import EngineQueueRuntime
+from . import runtime_adapters as _runtime_adapters
+from .spec import InternalEngineSpec
 
 
 @dataclass(frozen=True)

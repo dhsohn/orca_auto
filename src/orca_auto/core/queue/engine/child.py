@@ -7,10 +7,10 @@ from typing import Any
 
 from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED
 
-from . import child_entrypoint as _child_entrypoint
-from .child_entrypoint import ChildWorkerEntrypointJob
-from .child_execution import ChildWorkerShutdownController
-from .worker import build_background_worker_command
+from ..child import entrypoint as _child_entrypoint
+from ..child.entrypoint import ChildWorkerEntrypointJob
+from ..child.execution import ChildWorkerShutdownController
+from ..worker import build_background_worker_command
 
 
 @dataclass(frozen=True)

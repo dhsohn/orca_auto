@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import child_execution as _child_execution
-from . import engine_child as _engine_child
-from .internal_engine_status import entry_status_is_running
+from ..child import execution as _child_execution
+from ..engine import child as _engine_child
+from .status import entry_status_is_running
 
 
 class _WorkerShutdownRequestedBase(RuntimeError):

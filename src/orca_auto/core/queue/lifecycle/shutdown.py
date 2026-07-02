@@ -8,13 +8,13 @@ from typing import Any
 
 from orca_auto.core.statuses import STATUS_CANCEL_REQUESTED
 
-from .child_process import shutdown_child_process_with_grace
-from .lifecycle_hooks import (
+from ..child.process import shutdown_child_process_with_grace
+from .hooks import (
     ChildExitPolicy,
     EngineQueueProcessLifecycleHooks,
     EngineQueueProcessShutdownHooks,
 )
-from .lifecycle_terminal import entry_status_is_running, job_queue_root
+from .terminal import entry_status_is_running, job_queue_root
 
 LOGGER = logging.getLogger("orca_auto.core.queue.lifecycle")
 

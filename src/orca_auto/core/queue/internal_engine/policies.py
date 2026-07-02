@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import engine_admission as _engine_admission
-from . import lifecycle as _queue_lifecycle
-from .worker_admission import engine_queue_worker_source
+from .. import lifecycle as _queue_lifecycle
+from ..engine import admission as _engine_admission
+from ..worker.admission import engine_queue_worker_source
 
 
 @dataclass(frozen=True)
