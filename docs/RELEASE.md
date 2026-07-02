@@ -1,0 +1,101 @@
+# Release process
+
+**English only for now.** This file describes the repository operating process;
+release notes can be mirrored into Korean documentation later when the release
+surface stabilizes.
+
+orca_auto is not currently being prepared for a JOSS submission. This release
+process intentionally excludes paper drafting and Zenodo archiving while keeping
+the useful open-source software hygiene: issues, focused branches, reviewable
+PRs, changelog entries, tags, and reproducible verification.
+
+## Release goals
+
+A release should answer three questions clearly:
+
+1. What user-visible or maintainer-visible problem motivated the release?
+2. What changed in CLI/config/report/retry/docs behavior?
+3. What verification evidence shows the release is safe to tag?
+
+Use the same structure in release PRs and GitHub release notes:
+
+```text
+## Motivation
+
+## Changes
+
+## Verification
+```
+
+## Version policy
+
+`pyproject.toml` is the source of truth for the package version.
+
+- Patch version: bug fixes, documentation, tests, CI, or narrow retry/reporting
+  hardening that preserves public contracts.
+- Minor version: new public CLI/config/report behavior, new workflow surfaces,
+  or meaningful compatibility additions.
+- Major version: reserved for future stable public API breaks.
+
+Until the project declares a stable 1.0 contract, prefer conservative release
+notes that state exactly which surfaces are expected to remain compatible.
+
+## Pre-release checklist
+
+Create a release-prep issue and branch from `origin/main`, then verify:
+
+- [ ] `CHANGELOG.md` has an entry for the release version and date.
+- [ ] `pyproject.toml` version matches the changelog entry.
+- [ ] `README.md`, `docs/REFERENCE.md`, and example docs match current public
+      CLI/config/report behavior.
+- [ ] Any behavior changes have tests and a clear migration note if needed.
+- [ ] `bash scripts/check.sh` passes.
+- [ ] `bash examples/fake_orca_smoke/run.sh` passes.
+- [ ] A wheel can be built and inspected for `orca_auto/py.typed`.
+- [ ] If ORCA runtime semantics changed, at least one manual real-ORCA
+      acceptance check is recorded in the PR.
+- [ ] The PR body records Motivation, Changes, and Verification.
+
+Suggested local commands:
+
+```bash
+bash scripts/check.sh
+bash examples/fake_orca_smoke/run.sh
+python -m pip wheel . --no-deps -w /tmp/orca_auto-wheel-smoke
+```
+
+## Tagging
+
+After the release PR is merged and `main` is up to date:
+
+```bash
+git checkout main
+git pull --ff-only origin main
+git tag -a vX.Y.Z -m "orca_auto vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+Then create a GitHub release from the tag. The release body should include the
+same three sections:
+
+```text
+## Motivation
+
+## Changes
+
+## Verification
+```
+
+Do not create a Zenodo archive as part of the current process unless the project
+policy changes in a later issue/PR.
+
+## Post-release checks
+
+After the tag and GitHub release exist:
+
+- [ ] Confirm the tag points at the intended merge commit.
+- [ ] Confirm GitHub Actions completed for the release commit or tag.
+- [ ] Install from the tag in a fresh temporary virtual environment when a user
+      report or release risk justifies it.
+- [ ] Open follow-up issues for any deferred docs, Korean translations, or manual
+      ORCA acceptance gaps.
