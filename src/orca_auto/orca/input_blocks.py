@@ -20,6 +20,24 @@ def find_route_idx(lines: list[str]) -> int | None:
     return None
 
 
+def route_line_indices(lines: list[str]) -> list[int]:
+    return [idx for idx, line in enumerate(lines) if line.strip().startswith("!")]
+
+
+def file_route_lines(inp_path: Path) -> list[str]:
+    """All route (``!``) lines of an ORCA input, stripped; ``[]`` when unreadable.
+
+    ORCA accepts multiple route lines and allows ``%`` blocks before them, so
+    callers deciding "does this input request X" must scan every route line,
+    not just the first one.
+    """
+    try:
+        lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return []
+    return [lines[idx].strip() for idx in route_line_indices(lines)]
+
+
 def ensure_route_keywords(lines: list[str], keywords: list[str]) -> bool:
     idx = find_route_idx(lines)
     if idx is None:

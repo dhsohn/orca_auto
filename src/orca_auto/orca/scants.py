@@ -7,9 +7,11 @@ from pathlib import Path
 from .input_blocks import (
     GEOM_HEADER_RE,
     MOINP_RE,
+    file_route_lines,
     find_block_range,
     find_route_idx,
     replace_geometry_with_xyzfile,
+    route_line_indices,
 )
 from .resource_directives import clamp_maxcore_to_budget
 
@@ -37,17 +39,13 @@ class ScanTSSurfacePoint:
 
 
 def input_uses_scants(inp_path: Path) -> bool:
-    try:
-        for line in inp_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            if stripped.startswith("!"):
-                return bool(SCANTS_ROUTE_RE.search(stripped))
-            return False
-    except OSError:
-        return False
-    return False
+    """True when any route line requests ScanTS.
+
+    Scans every route line (matching the whole-file scan retry_policy uses to
+    classify inputs) so the retry policy and the ScanTS rewriters can never
+    disagree about whether an input is a ScanTS job.
+    """
+    return bool(_first_scants_route_line(inp_path))
 
 
 def parse_scants_actual_surface(out_path: Path) -> list[ScanTSSurfacePoint]:
@@ -586,16 +584,19 @@ def _complete_simple_scan_to_original_endpoint(
     ]
 
 
+def _scants_route_idx(lines: list[str]) -> int | None:
+    for idx in route_line_indices(lines):
+        tokens = lines[idx].strip()[1:].split()
+        if any(token.upper() == "SCANTS" for token in tokens):
+            return idx
+    return None
+
+
 def _replace_scants_route_with_endpoint_opt(lines: list[str]) -> list[str]:
-    route_idx = find_route_idx(lines)
+    route_idx = _scants_route_idx(lines)
     if route_idx is None:
         return []
-    stripped = lines[route_idx].strip()
-    if not stripped.startswith("!"):
-        return []
-    tokens = stripped[1:].split()
-    if not any(token.upper() == "SCANTS" for token in tokens):
-        return []
+    tokens = lines[route_idx].strip()[1:].split()
 
     rewritten: list[str] = []
     inserted_opt = False
@@ -626,25 +627,27 @@ def _replace_scants_route_with_endpoint_opt(lines: list[str]) -> list[str]:
 
 
 def _first_scants_route_line(inp_path: Path) -> str:
-    try:
-        for line in inp_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            if stripped.startswith("!") and SCANTS_ROUTE_RE.search(stripped):
-                return stripped
-    except OSError:
-        return ""
+    for line in file_route_lines(inp_path):
+        if SCANTS_ROUTE_RE.search(line):
+            return line
     return ""
 
 
 def _restore_selected_scants_route(lines: list[str], selected_inp: Path) -> list[str]:
-    route = _first_scants_route_line(selected_inp)
-    if not route:
+    selected_routes = file_route_lines(selected_inp)
+    scants_ordinal = next(
+        (idx for idx, line in enumerate(selected_routes) if SCANTS_ROUTE_RE.search(line)),
+        None,
+    )
+    if scants_ordinal is None:
         return []
-    route_idx = find_route_idx(lines)
-    if route_idx is None:
+    # The endpoint-scan rewrite replaced the ScanTS route line in place, so the
+    # route-line order matches the selected input; restore the same ordinal line.
+    route = selected_routes[scants_ordinal]
+    indices = route_line_indices(lines)
+    if scants_ordinal >= len(indices):
         return []
+    route_idx = indices[scants_ordinal]
     if lines[route_idx].strip() == route:
         return []
     lines[route_idx] = route
@@ -837,27 +840,21 @@ def apply_scants_optts_resume_rewrite(
 
 
 def _replace_scants_route_with_optts(lines: list[str]) -> bool:
-    for idx, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+    route_idx = _scants_route_idx(lines)
+    if route_idx is None:
+        return False
+    tokens = lines[route_idx].strip()[1:].split()
+    rewritten: list[str] = []
+    inserted_optts = False
+    for token in tokens:
+        if token.upper() == "SCANTS":
+            if not inserted_optts:
+                rewritten.append("OPTTS")
+                inserted_optts = True
             continue
-        if not stripped.startswith("!"):
-            return False
-        tokens = stripped[1:].split()
-        if not any(token.upper() == "SCANTS" for token in tokens):
-            return False
-        rewritten: list[str] = []
-        inserted_optts = False
-        for token in tokens:
-            if token.upper() == "SCANTS":
-                if not inserted_optts:
-                    rewritten.append("OPTTS")
-                    inserted_optts = True
-                continue
-            rewritten.append(token)
-        lines[idx] = "! " + " ".join(rewritten)
-        return True
-    return False
+        rewritten.append(token)
+    lines[route_idx] = "! " + " ".join(rewritten)
+    return True
 
 
 def _remove_geom_scan_subblock(lines: list[str]) -> bool:
