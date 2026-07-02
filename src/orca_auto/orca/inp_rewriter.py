@@ -6,6 +6,7 @@ from .input_blocks import (
     BLOCK_START_RE,
     GEOM_HEADER_RE,
     MOINP_RE,
+    nonempty_file,
 )
 from .input_blocks import (
     ensure_route_keywords as _ensure_route_keywords,
@@ -148,12 +149,7 @@ def _apply_checkpoint_restart(
 
 def _matching_checkpoint_gbw(source_inp: Path) -> Path | None:
     candidate = source_inp.with_suffix(".gbw")
-    try:
-        if candidate.exists() and candidate.stat().st_size > 0:
-            return candidate
-    except OSError:
-        return None
-    return None
+    return candidate if nonempty_file(candidate) else None
 
 
 def _apply_geometry_restart(

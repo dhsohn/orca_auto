@@ -12,6 +12,14 @@ MOINP_RE = re.compile(r"^\s*%moinp\b", re.IGNORECASE)
 NESTED_BLOCK_NAMES = {"scan", "constraints"}
 
 
+def nonempty_file(path: Path) -> bool:
+    """True when ``path`` exists with size > 0; False when missing or unreadable."""
+    try:
+        return path.exists() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def find_route_idx(lines: list[str]) -> int | None:
     for idx, line in enumerate(lines):
         stripped = line.strip()
