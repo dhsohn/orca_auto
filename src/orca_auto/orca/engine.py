@@ -16,7 +16,7 @@ ENGINE_DEFINITION = build_queue_engine_definition(
     engine="orca",
     load_config=load_config,
     run_worker_child_job=build_lazy_worker_child_runner(
-        "orca_auto.core.engines.orca_execution",
+        "orca_auto.orca.worker_execution",
         "run_worker_child_job",
     ),
     queue_worker_runner=build_lazy_queue_worker_runner("orca_auto.orca.commands.queue"),

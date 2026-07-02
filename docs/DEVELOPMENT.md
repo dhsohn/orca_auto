@@ -13,6 +13,13 @@ This repository now uses a monorepo-style package layout under `src/orca_auto`.
 
 New code, tests, and docs should import from `orca_auto.*`.
 
+The three packages form enforced layers — `flow` → `orca` → `core` — checked
+by import-linter (`lint-imports`, configured in `pyproject.toml` and run by
+`scripts/check.sh`, so also by CI). Higher layers may import lower ones; the
+reverse fails the build. Cross-layer engine wiring goes through the lazy
+string module registries (`core/engines/registry.py`,
+`core/queue/worker/admission.py`) instead of imports.
+
 ## Current Package Layout
 
 ```text
@@ -91,7 +98,7 @@ bash scripts/clean_artifacts.sh
 
 - `scripts/check.sh` is the shared local and CI entrypoint. It creates or
   repairs `.venv`, installs `.[dev]`, then runs `ruff check`,
-  `ruff format --check`, `mypy`, and pytest with the coverage gate.
+  `ruff format --check`, `mypy`, `lint-imports`, and pytest with the coverage gate.
 - Ruff explicitly enables import sorting (`I`) and Bugbear (`B`) alongside the
   default Pyflakes/pycodestyle safety rules.
 - `ruff format` is the canonical formatter and is gated via

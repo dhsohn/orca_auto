@@ -22,11 +22,6 @@ from orca_auto.core.admission import (
     update_slot_metadata,
 )
 from orca_auto.core.config.schema import resolved_admission_limit
-from orca_auto.core.engines.orca_execution import (
-    WORKER_JOB_MODULE,
-    BackgroundRunJobProcess,
-    build_worker_child_command,
-)
 from orca_auto.core.engines.queue_worker import (
     EngineQueueWorker,
     build_engine_queue_worker,
@@ -57,6 +52,11 @@ from orca_auto.core.queue.worker import (
     terminate_process_group,
 )
 from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED
+from orca_auto.orca.worker_execution import (
+    WORKER_JOB_MODULE,
+    BackgroundRunJobProcess,
+    build_worker_child_command,
+)
 
 from ..attempt.reporting import (
     build_final_result,

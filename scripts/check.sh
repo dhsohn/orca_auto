@@ -65,5 +65,8 @@ echo "[check] Ruff format"
 echo "[check] mypy"
 "$VENV_PY" -m mypy
 
+echo "[check] import-linter"
+"$VENV_DIR/bin/lint-imports"
+
 echo "[check] pytest"
 "$VENV_PY" -m pytest --cov --cov-report=term-missing -q "$@"

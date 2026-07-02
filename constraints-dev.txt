@@ -1,5 +1,6 @@
 # Keep the direct development toolchain stable across CI and local installs.
 # Runtime dependencies remain declared in pyproject.toml.
+import-linter==2.12
 mypy==1.19.1
 pytest==9.0.2
 pytest-cov==7.0.0

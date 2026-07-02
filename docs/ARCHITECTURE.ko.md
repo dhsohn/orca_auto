@@ -85,6 +85,13 @@ src/orca_auto/
 `orca_auto.orca`는 ORCA 로직의 유일한 구현 진실 공급원입니다. 최상위 별칭
 패키지나 대체 런타임 심(shim)은 존재하지 않습니다.
 
+계층은 방향성이 있으며 import-linter(`lint-imports`, `pyproject.toml`에 설정,
+`scripts/check.sh`와 CI가 실행)로 강제됩니다: `flow`는 `orca`와 `core`를
+임포트할 수 있고, `orca`는 `core`만, `core`는 어느 쪽도 임포트하지 않습니다.
+엔진 배선은 지연 문자열 모듈 경로(`core/engines/registry.py`,
+`core/queue/worker/admission.py`)로만 계층을 넘습니다 — 의도된 플러그인
+심(seam)이며, 임포트 그래프에 일부러 드러나지 않습니다.
+
 ---
 
 ## 3. 런타임 모델: 제출 → 큐 → 워커 → 자식
@@ -424,7 +431,7 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 ## 13. 품질 게이트
 
 `scripts/check.sh`가 로컬과 CI 공용 엔트리포인트입니다: `.venv`를 생성/복구하고
-`.[dev]`를 설치한 뒤 `ruff check`, `ruff format --check`, `mypy`, 그리고 커버리지
+`.[dev]`를 설치한 뒤 `ruff check`, `ruff format --check`, `mypy`, `lint-imports`, 그리고 커버리지
 게이트가 걸린 pytest 스위트를 실행합니다. CI는 추가로 Gitleaks, ShellCheck,
 렌더링된 systemd 유닛 검증, Python 3.11/3.12/3.13 매트릭스, 휠 타입 메타데이터
 스모크 테스트를 실행합니다.

@@ -86,6 +86,13 @@ src/orca_auto/
 `orca_auto.orca` is the only implementation source of truth for ORCA logic.
 There are no top-level alias packages or alternate runtime shims.
 
+Layering is directional and enforced by import-linter (`lint-imports`,
+configured in `pyproject.toml`, run by `scripts/check.sh` and CI): `flow` may
+import `orca` and `core`; `orca` may import only `core`; `core` imports
+neither. Engine wiring crosses layers exclusively through lazy string module
+paths (`core/engines/registry.py`, `core/queue/worker/admission.py`) — the
+deliberate plugin seam, invisible to the import graph on purpose.
+
 ---
 
 ## 3. Runtime Model: Submit → Queue → Worker → Child
@@ -432,7 +439,7 @@ place to add user commands.
 
 `scripts/check.sh` is the shared local + CI entrypoint: it creates/repairs
 `.venv`, installs `.[dev]`, then runs `ruff check`, `ruff format --check`,
-`mypy`, and the coverage-gated pytest suite. CI additionally runs Gitleaks,
+`mypy`, `lint-imports`, and the coverage-gated pytest suite. CI additionally runs Gitleaks,
 ShellCheck, rendered systemd unit verification, a Python 3.11/3.12/3.13 matrix,
 and a wheel typed-metadata smoke test.
 

@@ -15,6 +15,13 @@
 
 새 코드, 테스트, 문서는 `orca_auto.*`에서 임포트해야 합니다.
 
+세 패키지는 강제되는 계층 — `flow` → `orca` → `core` — 을 이룹니다.
+import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
+실행하므로 CI에서도 검사)가 확인합니다. 상위 계층은 하위 계층을 임포트할 수
+있지만 그 역방향은 빌드 실패입니다. 계층을 넘는 엔진 배선은 임포트 대신 지연
+문자열 모듈 레지스트리(`core/engines/registry.py`,
+`core/queue/worker/admission.py`)를 사용합니다.
+
 ## 현재 패키지 레이아웃
 
 ```text
@@ -92,7 +99,7 @@ bash scripts/clean_artifacts.sh
 ## 품질 게이트
 
 - `scripts/check.sh`는 로컬과 CI가 공유하는 진입점입니다. `.venv`를 생성/복구하고,
-  `.[dev]`를 설치한 뒤, `ruff check`, `ruff format --check`, `mypy`, 그리고 커버리지
+  `.[dev]`를 설치한 뒤, `ruff check`, `ruff format --check`, `mypy`, `lint-imports`, 그리고 커버리지
   게이트가 걸린 pytest를 실행합니다.
 - Ruff는 기본 Pyflakes/pycodestyle 안전 규칙과 함께 임포트 정렬(`I`)과 Bugbear(`B`)를
   명시적으로 활성화합니다.
