@@ -495,27 +495,19 @@ Opt 모드 완료:
   `*.xyz`/`.gbw` artifact를 generic restart 근거로 보지 않습니다.
 - standalone `OptTS`/`NEB-TS`: 자동 재시도하지 않습니다. Hessian hardening은
   자동 fallback이 아니라 사용자가 명시하는 입력 선택으로 남깁니다.
-- `ScanTS`: 최대 3회까지 scan artifact 기반의 ScanTS 전용 continuation,
-  endpoint-completion, reverse-scan 로직만 사용합니다. scan이 이미 maximum을
-  포착한 뒤 ORCA의 TS-guess refinement가 zero-distance 지오메트리로 abort한
-  경우에는, refinement를 우회해 최고 에너지 surface point에서 곧바로 OptTS
-  재시도를 1회 수행합니다(`ScanTS` -> `OptTS`, scan 블록 제거). 그 시도마저
-  실패하면 아래의 일반 체인이 크래시한 scan의 artifact에서 이어집니다.
-  maximum을 계획된 endpoint
-  전에 찾은 경우에는 먼저 일반 relaxed scan으로 endpoint를 완료합니다(`ScanTS` ->
-  `Opt`, `Freq`/`IRC` 제거). 그 뒤 실제 endpoint xyz에서 역방향 ScanTS를
-  생성합니다. endpoint-completion scan의 완료는 (crash/resume를 거치더라도)
-  전체 성공으로 보고되지 않으며, 항상 역방향 `ScanTS`로 이어집니다. 예외:
-  조립된 정방향 프로파일(정방향 구간 + endpoint-completion 구간)에 0.5 kcal/mol
-  이상의 내부 maximum이 없으면 해당 좌표는 무장벽이므로, 의미 없는 역방향
-  scan을 실행하는 대신 `scan_profile_no_barrier` 사유로 즉시 실패 처리합니다.
-  ScanTS 레시피 체인이 소진되면 `scants_recipes_exhausted` 사유로 실패합니다.
-  일반 SCF/geometry hardening은 적용하지 않습니다.
+- `ScanTS`: retry는 **계산 실패에서만** 발동하며 scan artifact를 사용합니다.
+  scan 도중 크래시(surface 테이블 없음)는 마지막 numbered point에서 scan을
+  이어가고, scan이 maximum을 포착한 뒤 ORCA의 TS-guess refinement가
+  zero-distance로 abort하면 refinement를 우회해 최고 에너지 surface point에서
+  OptTS 재시도를 1회 수행합니다(`ScanTS` -> `OptTS`, scan 블록 제거). scan이
+  완주된 뒤의 실패는 — `ts_not_found`를 포함해 — `scants_recipes_exhausted`로
+  종료됩니다: endpoint 연장·역방향 탐색은 권장 TS 탐색 경로인 `scan_ts_search`
+  워크플로우가 담당합니다. 일반 SCF/geometry hardening은 적용하지 않습니다.
 
 지오메트리 재시작 규칙:
 
 - 일반 geometry/checkpoint restart는 non-ScanTS retry 정책에 포함하지 않습니다.
-- ScanTS는 numbered scan `*.NNN.xyz` artifact를 continuation/reverse scan에 사용할 수 있습니다.
+- ScanTS는 numbered scan `*.NNN.xyz` artifact를 continuation retry에 사용할 수 있습니다.
 - route별 rewrite가 없으면 원본 지오메트리를 그대로 반복하지 않고 fail-closed합니다.
 
 원칙:

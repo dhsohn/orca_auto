@@ -252,18 +252,13 @@ logic. Notable pieces:
   `Opt`/`Opt+Freq`/`Freq`/single-point routes do not get automatic retries;
   failed `.xyz`/`.gbw` artifacts are not reused as a generic rerun strategy.
   Standalone `OptTS`/`NEB-TS` also has no automatic retry; Hessian hardening is
-  left to explicit user input. `ScanTS` uses only ScanTS-specific continuation,
-  endpoint-completion, and reverse-scan logic from scan artifacts. When ORCA's
-  TS-guess refinement corrupts the geometry (zero distance) after the scan
-  bracketed a maximum, one OptTS retry runs directly from the highest surface
-  point before the ordinary chain resumes. If a maximum
-  appears before the planned scan endpoint, ORCA first completes that endpoint
-  with an ordinary relaxed scan (`ScanTS` -> `Opt`, no `Freq`/`IRC`), then starts
-  the reverse `ScanTS` from the real endpoint xyz. The intermediate endpoint
-  completion is never reported as overall success, even across crash/resume.
-  When the assembled forward profile shows no interior maximum above the noise
-  threshold, the run stops with `scan_profile_no_barrier` instead of running a
-  reverse scan that can only mirror the same monotonic profile. If no
+  left to explicit user input. `ScanTS` retries fire only on calculation
+  failures, from scan artifacts: a mid-scan crash continues from the last
+  numbered scan point, and a zero-distance abort in ORCA's TS-guess refinement
+  gets one OptTS retry from the highest surface point. Failures after a
+  finished scan (including `ts_not_found`) end the run with
+  `scants_recipes_exhausted` — endpoint extension and reverse-scan exploration
+  belongs to the `scan_ts_search` workflow. If no
   route-specific rewrite is available, retry fails closed rather than repeating
   the identical input (`scants_recipes_exhausted` for an exhausted ScanTS
   recipe chain). Charge

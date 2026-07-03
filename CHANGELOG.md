@@ -63,6 +63,19 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `scan_profile_no_barrier` instead of spending hours on a reverse scan that
   can only mirror the same monotonic profile.
 
+### Removed
+
+- ScanTS completion-triggered retry recipes (endpoint-completion scan, reverse
+  scan, and the barrierless-profile stop between them): these fired after
+  non-failure outcomes such as `ts_not_found`, violating the
+  retry-only-on-calculation-failure rule. The strategies live on as proper
+  `scan_ts_search` workflow stages (scan extension and reverse rescue). ScanTS
+  keeps its failure-triggered recipes only — mid-scan crash continuation and
+  the zero-distance OptTS refinement fallback; any failure after a finished
+  scan now ends with `scants_recipes_exhausted`. Surface/coordinate parsing,
+  prominence analysis, and the ScanTS HTML report are unchanged, so historical
+  ScanTS runs stay readable.
+
 ### Changed
 
 - An exhausted ScanTS retry-recipe chain now reports the actionable reason
