@@ -252,15 +252,21 @@ python -m orca_auto.core.engines.worker_child \
   maximum이 계획된 scan endpoint 전에 나타나면 ORCA가 먼저 일반 relaxed scan으로
   endpoint를 완료합니다(`ScanTS` -> `Opt`, `Freq`/`IRC` 제거). 그 다음 실제
   endpoint xyz에서 역방향 `ScanTS`를 시작합니다. 중간 단계인 endpoint 완료는
-  (crash/resume를 거치더라도) 전체 성공으로 보고되지 않습니다. route별
-  rewrite가 없으면 동일 입력을 반복하지 않고 fail-closed 합니다. 전하와 다중도는 **절대**
+  (crash/resume를 거치더라도) 전체 성공으로 보고되지 않습니다. 조립된 정방향
+  프로파일에 노이즈 임계값 이상의 내부 maximum이 없으면, 같은 단조 프로파일을
+  거울처럼 반복할 뿐인 역방향 scan을 실행하는 대신 `scan_profile_no_barrier`
+  사유로 종료합니다. route별 rewrite가 없으면 동일 입력을 반복하지 않고
+  fail-closed 합니다(ScanTS 레시피 체인 소진 시 `scants_recipes_exhausted`). 전하와 다중도는 **절대**
   자동 변경하지 않으며, 원본 `.inp`는 보존되고, 재시도는 `<name>.retryNN.inp`로
   기록됩니다.
 - **재시작/재개:** 재시도/재개 시, 일치하는 비어 있지 않은 `.gbw` 체크포인트가
   있으면 `MORead` + `%moinp`로 재시작 입력을 생성합니다. 재개된 입력은
   `*.resume.inp`로 기록되어 사용자 입력이 변경되지 않습니다.
 - **상태 & 리포트:** `state.py`/`state_machine.py`가 `job_state.json`을
-  영속화하고, 완료 시 `job_report.json`과 `job_report.md`를 작성합니다.
+  영속화하고, 완료 시 `job_report.json`과 `job_report.md`를 작성합니다. Opt,
+  OptTS/NEB-TS, ScanTS 작업은 추가로 `job_report.html`(`report/`)을 생성합니다 —
+  scan 에너지 프로파일(ScanTS) 또는 최적화 수렴 궤적(Opt/OptTS), 재시도 레시피
+  체인, 진동 요약을 담은 단일 파일 시각 리포트입니다.
 - **정리 & 인덱스:** `result_organizer/`가 완료 출력을 정리 루트로 이동하고
   원본 디렉터리에 `organized_ref.json` 스텁을 남깁니다. `dft_index*.py`와
   `organize_index.py`가 탐색용 JSONL 인덱스를 유지합니다.
@@ -341,6 +347,7 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 | `organized_ref.json`        | orca (organize)  | 출력 정리 후 남는 스텁                    |
 | 작업 위치 인덱스 (JSONL)    | core/indexing    | 각 작업 출력의 현재 위치                 |
 | `workflow.json`             | flow             | 내구성 워크플로우 페이로드               |
+| `workflow_report.html`      | flow (report)    | 실시간 갱신 워크플로우 시각 요약         |
 | 워크플로우 레지스트리 + 저널| flow/registry    | 워크플로우 간 목록 + 이벤트 이력         |
 
 큐 항목, 추적된 작업 위치 레코드, 정리 스텁은 각각 동결된 다운스트림 필드 집합을

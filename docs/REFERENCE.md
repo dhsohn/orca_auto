@@ -253,6 +253,10 @@ Workflow notes:
 - reaction-path and conformer workflows create and submit xTB/CREST stages internally
 - `reaction_ts_search` expands all selected reactant x product CREST pairs into xTB child jobs, waits for the full xTB phase to reach terminal states, and then batches any matching ORCA OptTS child jobs from the retained `ts_guess` artifacts
 - `conformer_screening` starts with one CREST child job and then hands off up to 20 retained conformers to ORCA child jobs in the next workflow cycle. The scaffold shortcut is `orca_auto scaffold conformer_search <path>`.
+- Every workflow advance rewrites `workflow_report.html` in the workflow
+  workspace: a self-contained visual summary with the stage chain, the
+  CREST → (xTB) → ORCA funnel, and a ranked ORCA results table (relative
+  energies, imaginary-frequency counts, links to per-job `job_report.html`).
 - Set `workflow.root` in `orca_auto.yaml` or `workflow_root`/`workflow.root` in
   `flow.yaml` before submitting workflow directories.
 - Public workflow `run-dir` reads workflow type and XYZ inputs from `flow.yaml`
@@ -467,7 +471,12 @@ Retry policy:
   scan (`ScanTS` -> `Opt`, no `Freq`/`IRC`), then reverses from that real endpoint
   xyz. A completed endpoint-completion scan is never reported as overall success —
   including across crash/resume — the run always continues to the reverse
-  `ScanTS`. Generic SCF/geometry hardening is not applied.
+  `ScanTS`. Exception: when the assembled forward profile (forward segments plus
+  the endpoint-completion segment) has no interior maximum above 0.5 kcal/mol,
+  the coordinate is barrierless and the run fails immediately with reason
+  `scan_profile_no_barrier` instead of running a pointless reverse scan. When
+  the ScanTS recipe chain is exhausted, the run fails with reason
+  `scants_recipes_exhausted`. Generic SCF/geometry hardening is not applied.
 
 Geometry restart rules:
 
@@ -490,6 +499,11 @@ Generated in the job directory:
 - `job_state.json`
 - `job_report.json`
 - `job_report.md`
+- `job_report.html` (Opt, OptTS/NEB-TS, and ScanTS jobs): self-contained visual
+  report with the scan energy profile (ScanTS) or optimization convergence trace
+  (Opt/OptTS), the retry-recipe chain, and a vibrational summary (imaginary
+  modes, dominant atom displacements, and — for ScanTS — alignment with the
+  scanned coordinate)
 - `organized_ref.json` after organize leaves a stub in the original run directory
 
 Important `job_state.json` fields:
