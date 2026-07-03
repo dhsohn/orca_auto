@@ -388,7 +388,7 @@ class TestConfigValidation(unittest.TestCase):
             self.assertIn("orca.runtime.allowed_root", str(ctx.exception))
             self.assertIn("orca.paths.orca_executable", str(ctx.exception))
 
-    def test_configured_organized_root_is_ignored_with_warning(self) -> None:
+    def test_stale_organized_root_key_is_silently_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -408,12 +408,8 @@ class TestConfigValidation(unittest.TestCase):
                     "paths": {"orca_executable": str(fake_orca)},
                 },
             )
-            with self.assertLogs("orca_auto.orca.config", level="WARNING") as logs:
-                cfg = load_config(str(cfg_path))
+            cfg = load_config(str(cfg_path))
             self.assertEqual(cfg.runtime.organized_root, str(allowed))
-            self.assertTrue(
-                any("organized_root is deprecated" in message for message in logs.output)
-            )
 
     def test_nonexistent_orca_executable_raises(self) -> None:
         with tempfile.TemporaryDirectory() as td:

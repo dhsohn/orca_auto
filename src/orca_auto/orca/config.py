@@ -157,16 +157,6 @@ def load_config(config_path: str) -> AppConfig:
     resources_raw = _section_mapping(raw, "resources")
 
     allowed_root, orca_executable = _required_runtime_paths(path, runtime_raw, paths_raw)
-    configured_organized_root = _config_engines.as_nonempty_str(
-        runtime_raw.get("organized_root"), ""
-    )
-    if configured_organized_root:
-        logger.warning(
-            "orca.runtime.organized_root is deprecated and ignored (the organize "
-            "feature was removed); completed runs stay under allowed_root. "
-            "Remove the key from %s.",
-            path,
-        )
     default_max_retries = _config_engines.as_int(
         runtime_raw.get("default_max_retries"),
         RuntimeConfig.default_max_retries,
