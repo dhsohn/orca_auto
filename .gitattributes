@@ -1,0 +1,5 @@
+# orca_auto is Linux/WSL-first: every text file is committed and checked out
+# with LF endings, regardless of the local core.autocrlf setting. This keeps
+# Windows-side tooling from flipping the whole working tree to CRLF (which
+# breaks bash scripts and floods git status with spurious diffs).
+* text=auto eol=lf
