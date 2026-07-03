@@ -268,6 +268,10 @@ ORCA 고유 노트:
 - `conformer_screening`은 하나의 CREST 자식 작업으로 시작한 뒤, 다음 워크플로우
   사이클에서 보존된 conformer를 최대 20개까지 ORCA 자식 작업으로 넘깁니다. 스캐폴드
   단축 명령은 `orca_auto scaffold conformer_search <path>`입니다.
+- 워크플로우가 advance될 때마다 워크스페이스에 `workflow_report.html`을 다시
+  씁니다: 스테이지 체인, CREST → (xTB) → ORCA 깔때기 요약, ORCA 결과 순위표
+  (상대 에너지, 허수 진동수, 개별 작업 `job_report.html` 링크)를 담은 단일 파일
+  시각 요약입니다.
 - 워크플로우 디렉터리를 제출하기 전에 `orca_auto.yaml`에 `workflow.root`를 설정하거나
   `flow.yaml`에 `workflow_root`/`workflow.root`를 설정하세요.
 - 공개 워크플로우 `run-dir`는 `flow.yaml` 또는 `scaffold`가 작성한 표준 파일명에서
@@ -484,8 +488,12 @@ Opt 모드 완료:
   전에 찾은 경우에는 먼저 일반 relaxed scan으로 endpoint를 완료합니다(`ScanTS` ->
   `Opt`, `Freq`/`IRC` 제거). 그 뒤 실제 endpoint xyz에서 역방향 ScanTS를
   생성합니다. endpoint-completion scan의 완료는 (crash/resume를 거치더라도)
-  전체 성공으로 보고되지 않으며, 항상 역방향 `ScanTS`로 이어집니다. 일반
-  SCF/geometry hardening은 적용하지 않습니다.
+  전체 성공으로 보고되지 않으며, 항상 역방향 `ScanTS`로 이어집니다. 예외:
+  조립된 정방향 프로파일(정방향 구간 + endpoint-completion 구간)에 0.5 kcal/mol
+  이상의 내부 maximum이 없으면 해당 좌표는 무장벽이므로, 의미 없는 역방향
+  scan을 실행하는 대신 `scan_profile_no_barrier` 사유로 즉시 실패 처리합니다.
+  ScanTS 레시피 체인이 소진되면 `scants_recipes_exhausted` 사유로 실패합니다.
+  일반 SCF/geometry hardening은 적용하지 않습니다.
 
 지오메트리 재시작 규칙:
 
@@ -507,6 +515,10 @@ Opt 모드 완료:
 - `job_state.json`
 - `job_report.json`
 - `job_report.md`
+- `job_report.html` (Opt, OptTS/NEB-TS, ScanTS 작업): scan 에너지
+  프로파일(ScanTS) 또는 최적화 수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동
+  요약(허수 모드, 주요 원자 변위, ScanTS의 경우 스캔 좌표와의 일치도)을 담은
+  단일 파일 시각 리포트
 - organize가 원본 실행 디렉터리에 스텁을 남긴 뒤의 `organized_ref.json`
 
 주요 `job_state.json` 필드:

@@ -33,6 +33,7 @@ from orca_auto.core.utils.persistence import (
     now_utc_iso as _now_utc_iso,
 )
 
+from .report import write_job_html_report
 from .types import RunFinalResult, RunState
 
 logger = logging.getLogger(__name__)
@@ -269,7 +270,11 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
         reaction_dir,
         "\n".join(build_engine_report_markdown(report_payload)),
     )
-    return {"report_json": str(json_path), "report_md": str(md_path)}
+    reports = {"report_json": str(json_path), "report_md": str(md_path)}
+    html_path = write_job_html_report(reaction_dir, state)
+    if html_path is not None:
+        reports["report_html"] = str(html_path)
+    return reports
 
 
 def write_organized_ref(reaction_dir: Path, payload: dict[str, Any]) -> Path:

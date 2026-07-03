@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +18,10 @@ from .input_blocks import (
 from .resource_directives import clamp_maxcore_to_budget
 
 SCANTS_ROUTE_RE = re.compile(r"\bSCANTS\b", re.IGNORECASE)
+# Interior scan-profile maxima below this prominence are endpoint/vdW noise, not
+# a barrier a reverse ScanTS could locate.
+SCANTS_BARRIER_NOISE_KCAL = 0.5
+_KCAL_PER_HARTREE = 627.5094740631
 _FLOAT_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?")
 _GEOM_SCAN_START_RE = re.compile(r"^\s*scan\s*$", re.IGNORECASE)
 _GEOM_END_RE = re.compile(r"^\s*end\s*$", re.IGNORECASE)
@@ -38,6 +42,19 @@ class ScanTSSurfacePoint:
     index: int
     coordinates: tuple[float, ...]
     energy: float
+
+
+@dataclass(frozen=True)
+class ScanCoordinateSpec:
+    kind: str
+    atoms: tuple[int, ...]
+    start: float
+    end: float
+    points: int
+
+    def label(self) -> str:
+        atom_text = ",".join(str(atom) for atom in self.atoms)
+        return f"{self.kind}({atom_text})"
 
 
 def input_uses_scants(inp_path: Path) -> bool:
@@ -84,6 +101,55 @@ def highest_scants_surface_point(out_path: Path) -> ScanTSSurfacePoint | None:
     if not points:
         return None
     return max(points, key=lambda point: (point.energy, -point.index))
+
+
+def scan_profile_interior_barrier_kcal(energies: Sequence[float]) -> float | None:
+    """Prominence in kcal/mol of the highest interior maximum along a scan profile.
+
+    Prominence is the smaller of the climbs from the lowest energy on either
+    side of a point, so a profile that is monotonic up to noise scores ~0 while
+    a genuine barrier scores its height above the shallower flank. ``None``
+    when fewer than three points exist (no interior point to judge).
+    """
+    if len(energies) < 3:
+        return None
+    suffix_min = list(energies)
+    for idx in range(len(suffix_min) - 2, -1, -1):
+        suffix_min[idx] = min(suffix_min[idx], suffix_min[idx + 1])
+    best = 0.0
+    prefix_min = energies[0]
+    for idx in range(1, len(energies) - 1):
+        prominence = min(energies[idx] - prefix_min, energies[idx] - suffix_min[idx + 1])
+        best = max(best, prominence)
+        prefix_min = min(prefix_min, energies[idx])
+    return best * _KCAL_PER_HARTREE
+
+
+def first_scan_coordinate_spec(inp_path: Path) -> ScanCoordinateSpec | None:
+    """Kind, atom indices, and range of the first simple scan coordinate line."""
+    try:
+        lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return None
+    for idx in _simple_scan_coord_line_indices(lines):
+        match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[idx])
+        if match is None:
+            continue
+        prefix_tokens = match.group("prefix").split("=")[0].split()
+        if len(prefix_tokens) < 2:
+            continue
+        try:
+            atoms = tuple(int(token) for token in prefix_tokens[1:])
+        except ValueError:
+            continue
+        return ScanCoordinateSpec(
+            kind=prefix_tokens[0].upper(),
+            atoms=atoms,
+            start=float(match.group("start")),
+            end=float(match.group("end")),
+            points=int(match.group("points")),
+        )
+    return None
 
 
 def scants_guess_xyz_for_output(source_inp: Path, out_path: Path) -> Path | None:

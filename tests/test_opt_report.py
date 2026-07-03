@@ -1,0 +1,193 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from orca_auto.orca.report import collect_opt_report_data, write_job_html_report
+
+_OPT_CYCLES_BLOCK = """
+                *** Geometry Optimization Cycle   1 ***
+
+FINAL SINGLE POINT ENERGY      -100.00000000
+
+                *** Geometry Optimization Cycle   2 ***
+
+FINAL SINGLE POINT ENERGY      -100.00500000
+
+                *** Geometry Optimization Cycle   3 ***
+
+FINAL SINGLE POINT ENERGY      -100.00520000
+
+                    ***********************HURRAY********************
+                    ***        THE OPTIMIZATION HAS CONVERGED     ***
+                    *************************************************
+"""
+
+_COORDS_BLOCK = """
+---------------------------------
+CARTESIAN COORDINATES (ANGSTROEM)
+---------------------------------
+  H      0.000000    0.000000    0.000000
+  O      1.200000    0.000000    0.000000
+  O      3.000000    0.000000    0.000000
+
+"""
+
+_FREQ_TS_BLOCK = """
+-----------------------
+VIBRATIONAL FREQUENCIES
+-----------------------
+
+     0:       0.00 cm**-1
+     1:       0.00 cm**-1
+     2:       0.00 cm**-1
+     3:       0.00 cm**-1
+     4:       0.00 cm**-1
+     5:       0.00 cm**-1
+     6:    -410.20 cm**-1 ***imaginary mode***
+     7:     120.00 cm**-1
+     8:     300.00 cm**-1
+
+------------
+NORMAL MODES
+------------
+
+                  0          1          2          3          4          5
+      0       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
+      1       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
+      2       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
+      3       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
+      4       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
+      5       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
+      6       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
+      7       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
+      8       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
+                  6          7          8
+      0       0.800000   0.100000   0.000000
+      1       0.000000   0.000000   0.100000
+      2       0.000000   0.000000   0.000000
+      3      -0.400000   0.200000   0.000000
+      4       0.000000   0.000000   0.300000
+      5       0.000000   0.000000   0.000000
+      6       0.000000   0.500000   0.000000
+      7       0.000000   0.000000   0.700000
+      8       0.000000   0.000000   0.000000
+
+IR SPECTRUM
+"""
+
+
+def _write_inp(path: Path, route: str) -> None:
+    path.write_text(f"{route}\n\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
+
+
+def _write_opt_out(path: Path, *, freq_block: str = "") -> None:
+    path.write_text(
+        "! Opt B3LYP def2-SVP\n"
+        + _COORDS_BLOCK
+        + _OPT_CYCLES_BLOCK
+        + freq_block
+        + "\n****ORCA TERMINATED NORMALLY****\n",
+        encoding="utf-8",
+    )
+
+
+def _state(reaction_dir: Path, out_path: Path, *, reason: str) -> dict[str, Any]:
+    return {
+        "job_id": "job_test",
+        "run_id": "run_test",
+        "reaction_dir": str(reaction_dir),
+        "selected_inp": str(reaction_dir / "rxn.inp"),
+        "max_retries": 3,
+        "status": "completed",
+        "started_at": "2026-07-03T01:00:00+00:00",
+        "updated_at": "2026-07-03T04:00:00+00:00",
+        "attempts": [
+            {
+                "index": 1,
+                "inp_path": str(reaction_dir / "rxn.inp"),
+                "out_path": str(out_path),
+                "return_code": 0,
+                "analyzer_status": "completed",
+                "analyzer_reason": reason,
+                "markers": {},
+                "patch_actions": [],
+                "started_at": "2026-07-03T01:00:00+00:00",
+                "ended_at": "2026-07-03T02:15:00+00:00",
+            }
+        ],
+        "final_result": {
+            "status": "completed",
+            "analyzer_status": "completed",
+            "reason": reason,
+            "completed_at": "2026-07-03T02:15:30+00:00",
+            "last_out_path": str(out_path),
+        },
+    }
+
+
+def test_collect_opt_report_parses_cycles_and_convergence(tmp_path: Path) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
+    out_path = tmp_path / "rxn.out"
+    _write_opt_out(out_path)
+
+    data = collect_opt_report_data(
+        tmp_path, _state(tmp_path, out_path, reason="normal_termination"), kind="opt"
+    )
+
+    assert data is not None
+    assert data.kind == "opt"
+    assert [cycle for cycle, _ in data.steps] == [1, 2, 3]
+    assert data.final_energy == pytest.approx(-100.0052)
+    assert data.opt_converged
+    assert data.imaginary_count is None
+    assert data.mode_summaries == ()
+
+
+def test_opt_report_html_renders_convergence_chart(tmp_path: Path) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
+    out_path = tmp_path / "rxn.out"
+    _write_opt_out(out_path)
+
+    path = write_job_html_report(tmp_path, _state(tmp_path, out_path, reason="normal_termination"))
+
+    assert path == tmp_path / "job_report.html"
+    text = path.read_text(encoding="utf-8")
+    assert "Opt report" in text
+    assert "Optimization convergence" in text
+    assert "<polyline" in text
+    assert "initial Opt" in text
+    assert "converged" in text
+    assert "No frequency calculation found" in text
+
+
+def test_optts_report_summarizes_imaginary_mode(tmp_path: Path) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! OptTS B3LYP def2-SVP Freq")
+    out_path = tmp_path / "rxn.out"
+    _write_opt_out(out_path, freq_block=_FREQ_TS_BLOCK)
+
+    path = write_job_html_report(tmp_path, _state(tmp_path, out_path, reason="ts_criteria_met"))
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "TS report" in text
+    assert "initial OptTS" in text
+    assert "imaginary mode" in text
+    assert "-410.2" in text
+    assert "as expected for a TS" in text
+    assert "TS criteria met" in text
+
+
+def test_opt_report_flags_unexpected_imaginary_mode(tmp_path: Path) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! Opt Freq B3LYP def2-SVP")
+    out_path = tmp_path / "rxn.out"
+    _write_opt_out(out_path, freq_block=_FREQ_TS_BLOCK)
+
+    path = write_job_html_report(tmp_path, _state(tmp_path, out_path, reason="normal_termination"))
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "Opt report" in text
+    assert "expected 0 for a minimum" in text

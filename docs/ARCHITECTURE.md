@@ -257,9 +257,13 @@ logic. Notable pieces:
   appears before the planned scan endpoint, ORCA first completes that endpoint
   with an ordinary relaxed scan (`ScanTS` -> `Opt`, no `Freq`/`IRC`), then starts
   the reverse `ScanTS` from the real endpoint xyz. The intermediate endpoint
-  completion is never reported as overall success, even across crash/resume. If no
+  completion is never reported as overall success, even across crash/resume.
+  When the assembled forward profile shows no interior maximum above the noise
+  threshold, the run stops with `scan_profile_no_barrier` instead of running a
+  reverse scan that can only mirror the same monotonic profile. If no
   route-specific rewrite is available, retry fails closed rather than repeating
-  the identical input. Charge
+  the identical input (`scants_recipes_exhausted` for an exhausted ScanTS
+  recipe chain). Charge
   and multiplicity are
   **never** auto-changed; the original `.inp` is preserved; retries are written
   as `<name>.retryNN.inp`.
@@ -267,7 +271,10 @@ logic. Notable pieces:
   `MORead` + `%moinp` when a matching non-empty `.gbw` checkpoint exists; resumed
   inputs are written as `*.resume.inp` so user input is never mutated.
 - **State & reports:** `state.py`/`state_machine.py` persist `job_state.json`;
-  completion writes `job_report.json` and `job_report.md`.
+  completion writes `job_report.json` and `job_report.md`; Opt, OptTS/NEB-TS,
+  and ScanTS jobs also get `job_report.html` (`report/`), a self-contained
+  visual report — scan energy profile (ScanTS) or optimization convergence
+  trace (Opt/OptTS), retry-recipe chain, and vibrational summary.
 - **Organize & index:** `result_organizer/` moves completed outputs into the
   organized root and leaves an `organized_ref.json` stub; `dft_index*.py` and
   `organize_index.py` maintain a JSONL index for discovery.
@@ -348,6 +355,7 @@ orca_auto is disk-backed throughout. Concurrency safety comes from file locks
 | `organized_ref.json`        | orca (organize)  | Stub left after outputs are organized    |
 | job-location index (JSONL)  | core/indexing    | Where each job's outputs currently live  |
 | `workflow.json`             | flow             | Durable workflow payload                 |
+| `workflow_report.html`      | flow (report)    | Live visual workflow summary             |
 | workflow registry + journal | flow/registry    | Cross-workflow listing + event history   |
 
 The queue entry, tracked job-location record, and organize stub each expose a

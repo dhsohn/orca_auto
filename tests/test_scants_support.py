@@ -14,6 +14,7 @@ from orca_auto.orca.scants import (
     prepare_scants_endpoint_scan_input,
     prepare_scants_optts_fallback_input,
     prepare_scants_scan_retry_input,
+    scan_profile_interior_barrier_kcal,
 )
 from orca_auto.orca.state import load_state, new_state, save_state
 from orca_auto.orca.types import RunState
@@ -166,6 +167,63 @@ class _ScanTsContinuationEarlyMaximumEndpointReverseRunner(_CaptureSuccessRunner
         if len(self.seen) == 3:
             _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=3)
             out_path.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
+            return SimpleNamespace(out_path=str(out_path), return_code=0)
+        out_path.write_text(
+            "\n".join(
+                [
+                    "VIBRATIONAL FREQUENCIES",
+                    "  1   -150.00 cm**-1",
+                    "  2    120.00 cm**-1",
+                    "****ORCA TERMINATED NORMALLY****",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(out_path=str(out_path), return_code=0)
+
+
+class _ScanTsEndpointProfileRunner(_CaptureSuccessRunner):
+    """Early-maximum ScanTS failure, then an endpoint scan printing the given surface.
+
+    Any later attempt reports a found TS so barrier-carrying profiles can run
+    the reverse scan to a successful finish.
+    """
+
+    def __init__(
+        self,
+        *,
+        forward_energies: list[float],
+        endpoint_energies: list[float],
+    ) -> None:
+        super().__init__()
+        self._forward_energies = forward_energies
+        self._endpoint_energies = endpoint_energies
+
+    def run(self, inp_path: Path) -> SimpleNamespace:
+        self.seen.append(inp_path)
+        out_path = inp_path.with_suffix(".out")
+        if len(self.seen) == 1:
+            _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=3)
+            inp_path.with_suffix(".xyz").write_text(
+                "2\ninvalid refined guess\nH 0 0 0\nH 0 0 0\n",
+                encoding="utf-8",
+            )
+            _write_actual_surface_out(out_path, self._forward_energies)
+            out_path.write_text(
+                out_path.read_text(encoding="utf-8")
+                + "ORCA finished by error termination in Startup\n"
+                + "[file orca_tools/qcmsg.cpp, line 394]:\n"
+                + "  .... aborting the run\n",
+                encoding="utf-8",
+            )
+            return SimpleNamespace(out_path=str(out_path), return_code=0)
+        if len(self.seen) == 2:
+            _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=29)
+            _write_actual_surface_out(out_path, self._endpoint_energies)
+            out_path.write_text(
+                out_path.read_text(encoding="utf-8") + "****ORCA TERMINATED NORMALLY****\n",
+                encoding="utf-8",
+            )
             return SimpleNamespace(out_path=str(out_path), return_code=0)
         out_path.write_text(
             "\n".join(
@@ -377,6 +435,26 @@ def _write_surface_scan_failure(inp_path: Path, out_path: Path, *, xyz_count: in
         + "ORCA finished by error termination in Startup\n"
         + "[file orca_tools/qcmsg.cpp, line 394]:\n"
         + "  .... aborting the run\n",
+        encoding="utf-8",
+    )
+
+
+def _write_actual_surface_out(path: Path, energies: list[float]) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                "**** RELAXED SURFACE SCAN DONE ***",
+                "RELAXED SURFACE SCAN RESULTS",
+                "The Calculated Surface using the 'Actual Energy'",
+                *(
+                    f"   {1.86 + 0.05 * idx:.8f} {energy:.8f}"
+                    for idx, energy in enumerate(energies)
+                ),
+                "The Calculated Surface using the SCF energy",
+                "   1.86000000 -101.00000000",
+                "",
+            ]
+        ),
         encoding="utf-8",
     )
 
@@ -757,6 +835,87 @@ def test_failed_scants_with_early_surface_maximum_completes_endpoint_then_revers
     assert "checkpoint_restart_from_rxn.gbw" not in endpoint_actions + reverse_actions
 
 
+def test_scan_profile_interior_barrier_prominence() -> None:
+    kcal_per_hartree = 627.5094740631
+
+    assert scan_profile_interior_barrier_kcal([-100.0, -99.9]) is None
+    assert scan_profile_interior_barrier_kcal([-100.0, -100.1, -100.2, -100.3]) == pytest.approx(
+        0.0
+    )
+    # Maximum at the profile edge is not an interior barrier.
+    assert scan_profile_interior_barrier_kcal([-99.9, -100.0, -100.1]) == pytest.approx(0.0)
+    # Interior hump of 0.00015 Ha above the shallower flank.
+    noise = scan_profile_interior_barrier_kcal([-100.0, -99.99985, -100.0002, -100.001])
+    assert noise == pytest.approx(0.00015 * kcal_per_hartree, rel=1e-6)
+    barrier = scan_profile_interior_barrier_kcal([-100.0, -99.99, -100.02])
+    assert barrier == pytest.approx(0.01 * kcal_per_hartree, rel=1e-6)
+
+
+def test_completed_endpoint_scan_with_barrierless_profile_stops_without_reverse_scan(
+    tmp_path: Path,
+) -> None:
+    selected_inp = tmp_path / "rxn.inp"
+    _write_scants_input(selected_inp)
+    runner = _ScanTsEndpointProfileRunner(
+        # Tiny endpoint hump (~0.09 kcal/mol), then monotonic descent: no TS
+        # anywhere along the coordinate, so the reverse scan must be skipped.
+        forward_energies=[-100.0, -99.99985, -99.9999],
+        endpoint_energies=[-100.0002, -100.0006, -100.0012, -100.003],
+    )
+
+    rc, saved = _run_attempt(
+        tmp_path,
+        selected_inp,
+        resumed=False,
+        runner=runner,
+        max_retries=3,
+    )
+    endpoint_inp = tmp_path / "rxn.retry01.inp"
+    reverse_inp = tmp_path / "rxn.retry02.inp"
+
+    assert rc == 1
+    assert runner.seen == [selected_inp, endpoint_inp]
+    assert not reverse_inp.exists()
+    assert saved.get("status") == "failed"
+    final_result = saved.get("final_result")
+    assert isinstance(final_result, dict)
+    assert final_result.get("reason") == "scan_profile_no_barrier"
+    actions = _attempt_actions(saved, index=1)
+    assert "scants_retry_stopped:scan_profile_no_barrier" in actions
+
+
+def test_completed_endpoint_scan_with_interior_barrier_still_reverses(
+    tmp_path: Path,
+) -> None:
+    selected_inp = tmp_path / "rxn.inp"
+    _write_scants_input(selected_inp)
+    runner = _ScanTsEndpointProfileRunner(
+        forward_energies=[-100.0, -99.99985, -99.9999],
+        # Interior maximum ~1.1 kcal/mol above the shallower flank: a real
+        # barrier, so the reverse scan must still run.
+        endpoint_energies=[-100.0002, -99.9985, -100.002, -100.004],
+    )
+
+    rc, saved = _run_attempt(
+        tmp_path,
+        selected_inp,
+        resumed=False,
+        runner=runner,
+        max_retries=3,
+    )
+    endpoint_inp = tmp_path / "rxn.retry01.inp"
+    reverse_inp = tmp_path / "rxn.retry02.inp"
+    reverse_text = reverse_inp.read_text(encoding="utf-8")
+
+    assert rc == 0
+    assert runner.seen == [selected_inp, endpoint_inp, reverse_inp]
+    assert "ScanTS" in reverse_text
+    assert "B 4 20 = 3.40, 1.86, 32" in reverse_text
+    assert saved.get("status") == "completed"
+    reverse_actions = _attempt_actions(saved, index=1)
+    assert "scants_reverse_scan" in reverse_actions
+
+
 def test_endpoint_scan_route_rewrite_does_not_duplicate_opt(tmp_path: Path) -> None:
     source_inp = tmp_path / "rxn.inp"
     source_inp.write_text(
@@ -881,8 +1040,11 @@ def test_reverse_scan_derived_maximum_fails_closed_without_optts_hardening(
     assert "TightSCF" not in retry01_text
     assert "SlowConv" not in retry01_text
     assert saved.get("status") == "failed"
+    final_result = saved.get("final_result")
+    assert isinstance(final_result, dict)
+    assert final_result.get("reason") == "scants_recipes_exhausted"
     actions = _attempt_actions(saved, index=1)
-    assert "rewrite_failed:no_scants_retry_input" in actions
+    assert "scants_retry_stopped:scants_recipes_exhausted" in actions
     assert not any(action.startswith("scf_") for action in actions)
 
 
@@ -1014,8 +1176,11 @@ def test_failed_scants_without_surface_maximum_or_numbered_xyz_fails_closed(
     assert runner.seen == [selected_inp]
     assert not retry_inp.exists()
     assert saved.get("status") == "failed"
+    final_result = saved.get("final_result")
+    assert isinstance(final_result, dict)
+    assert final_result.get("reason") == "scants_recipes_exhausted"
     actions = _attempt_actions(saved)
-    assert "rewrite_failed:no_scants_retry_input" in actions
+    assert "scants_retry_stopped:scants_recipes_exhausted" in actions
     assert "checkpoint_restart_from_rxn.gbw" not in actions
     assert "geometry_restart_from_rxn.xyz" not in actions
 
@@ -1053,8 +1218,11 @@ def test_failed_scants_second_failure_fails_closed_without_generic_hardening(
     assert "%moinp" not in retry01_text
     assert "MORead" not in retry01_text
     assert saved.get("status") == "failed"
+    final_result = saved.get("final_result")
+    assert isinstance(final_result, dict)
+    assert final_result.get("reason") == "scants_recipes_exhausted"
     actions = _attempt_actions(saved, index=1)
-    assert "rewrite_failed:no_scants_retry_input" in actions
+    assert "scants_retry_stopped:scants_recipes_exhausted" in actions
     assert "route_add_tightscf_slowconv" not in actions
     assert "scf_maxiter_300" not in actions
     assert "checkpoint_restart_from_rxn.retry01.gbw" not in actions
