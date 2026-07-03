@@ -253,7 +253,10 @@ logic. Notable pieces:
   failed `.xyz`/`.gbw` artifacts are not reused as a generic rerun strategy.
   Standalone `OptTS`/`NEB-TS` also has no automatic retry; Hessian hardening is
   left to explicit user input. `ScanTS` uses only ScanTS-specific continuation,
-  endpoint-completion, and reverse-scan logic from scan artifacts. If a maximum
+  endpoint-completion, and reverse-scan logic from scan artifacts. When ORCA's
+  TS-guess refinement corrupts the geometry (zero distance) after the scan
+  bracketed a maximum, one OptTS retry runs directly from the highest surface
+  point before the ordinary chain resumes. If a maximum
   appears before the planned scan endpoint, ORCA first completes that endpoint
   with an ordinary relaxed scan (`ScanTS` -> `Opt`, no `Freq`/`IRC`), then starts
   the reverse `ScanTS` from the real endpoint xyz. The intermediate endpoint

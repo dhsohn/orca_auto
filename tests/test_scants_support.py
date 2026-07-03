@@ -239,6 +239,59 @@ class _ScanTsEndpointProfileRunner(_CaptureSuccessRunner):
         return SimpleNamespace(out_path=str(out_path), return_code=0)
 
 
+class _ScanTsRefinementCrashOpttsRunner(_CaptureSuccessRunner):
+    """Zero-distance crash in ORCA's TS-guess refinement, then OptTS finds the TS."""
+
+    def run(self, inp_path: Path) -> SimpleNamespace:
+        self.seen.append(inp_path)
+        out_path = inp_path.with_suffix(".out")
+        if len(self.seen) == 1:
+            _write_refinement_zero_distance_out(inp_path, out_path)
+            return SimpleNamespace(out_path=str(out_path), return_code=0)
+        out_path.write_text(
+            "\n".join(
+                [
+                    "VIBRATIONAL FREQUENCIES",
+                    "  1   -150.00 cm**-1",
+                    "  2    120.00 cm**-1",
+                    "****ORCA TERMINATED NORMALLY****",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(out_path=str(out_path), return_code=0)
+
+
+class _ScanTsOpttsFallbackFailsThenChainRunner(_CaptureSuccessRunner):
+    """Refinement crash, failed OptTS fallback, then the ordinary chain resumes."""
+
+    def run(self, inp_path: Path) -> SimpleNamespace:
+        self.seen.append(inp_path)
+        out_path = inp_path.with_suffix(".out")
+        if len(self.seen) == 1:
+            _write_refinement_zero_distance_out(inp_path, out_path)
+            return SimpleNamespace(out_path=str(out_path), return_code=0)
+        if len(self.seen) == 2:
+            _write_ts_not_found_out(out_path)
+            return SimpleNamespace(out_path=str(out_path), return_code=0)
+        if len(self.seen) == 3:
+            _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=29)
+            out_path.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
+            return SimpleNamespace(out_path=str(out_path), return_code=0)
+        out_path.write_text(
+            "\n".join(
+                [
+                    "VIBRATIONAL FREQUENCIES",
+                    "  1   -150.00 cm**-1",
+                    "  2    120.00 cm**-1",
+                    "****ORCA TERMINATED NORMALLY****",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(out_path=str(out_path), return_code=0)
+
+
 class _ScanTsResumeEndpointRerunRunner(_CaptureSuccessRunner):
     def run(self, inp_path: Path) -> SimpleNamespace:
         self.seen.append(inp_path)
@@ -452,6 +505,31 @@ def _write_actual_surface_out(path: Path, energies: list[float]) -> None:
                 ),
                 "The Calculated Surface using the SCF energy",
                 "   1.86000000 -101.00000000",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_refinement_zero_distance_out(inp_path: Path, out_path: Path) -> None:
+    """Scan finished (surface bracketed a maximum at point 2), then ORCA's
+    TS-guess refinement constructed a zero-distance geometry and aborted."""
+    _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=3)
+    inp_path.with_suffix(".xyz").write_text(
+        "2\ncorrupted refinement geometry\nH 0 0 0\nH 0 0 0\n",
+        encoding="utf-8",
+    )
+    _write_surface_scan_done_out(out_path)
+    out_path.write_text(
+        out_path.read_text(encoding="utf-8")
+        + "\n".join(
+            [
+                "REFINING THE TS GUESS STRUCTURE",
+                "Error (ORCA_GTOINT/SHARK): Zero distance encountered between atoms 4 and 20",
+                "ORCA finished by error termination in Startup",
+                "[file orca_tools/qcmsg.cpp, line 394]:",
+                "  .... aborting the run",
                 "",
             ]
         ),
@@ -833,6 +911,79 @@ def test_failed_scants_with_early_surface_maximum_completes_endpoint_then_revers
     assert "geometry_restart_from_rxn.retry01.029.xyz" in reverse_actions
     assert "scants_fallback_to_optts" not in endpoint_actions + reverse_actions
     assert "checkpoint_restart_from_rxn.gbw" not in endpoint_actions + reverse_actions
+
+
+def test_zero_distance_refinement_crash_retries_as_optts_from_maximum(
+    tmp_path: Path,
+) -> None:
+    selected_inp = tmp_path / "rxn.inp"
+    _write_scants_input(selected_inp)
+    runner = _ScanTsRefinementCrashOpttsRunner()
+
+    rc, saved = _run_attempt(
+        tmp_path,
+        selected_inp,
+        resumed=False,
+        runner=runner,
+        max_retries=3,
+    )
+    retry01_inp = tmp_path / "rxn.retry01.inp"
+    retry01_text = retry01_inp.read_text(encoding="utf-8")
+
+    assert rc == 0
+    assert runner.seen == [selected_inp, retry01_inp]
+    assert "OPTTS" in retry01_text
+    assert "ScanTS" not in retry01_text
+    assert "Scan" not in retry01_text
+    assert "Freq" in retry01_text
+    # Guess is the HIGHEST surface point (index 2), not the corrupted same-stem
+    # rxn.xyz that ORCA's refinement left behind.
+    assert "* xyzfile 0 1 rxn.002.xyz" in retry01_text
+    assert "rxn.xyz" not in retry01_text
+    assert saved.get("status") == "completed"
+    actions = _attempt_actions(saved)
+    assert "scants_fallback_to_optts" in actions
+    assert "scants_scan_block_removed" in actions
+    assert "scants_guess_from_rxn.002.xyz" in actions
+    report_html = (tmp_path / "job_report.html").read_text(encoding="utf-8")
+    assert "OptTS fallback (scan maximum)" in report_html
+
+
+def test_failed_optts_fallback_resumes_endpoint_and_reverse_chain(
+    tmp_path: Path,
+) -> None:
+    selected_inp = tmp_path / "rxn.inp"
+    _write_scants_input(selected_inp)
+    runner = _ScanTsOpttsFallbackFailsThenChainRunner()
+
+    rc, saved = _run_attempt(
+        tmp_path,
+        selected_inp,
+        resumed=False,
+        runner=runner,
+        max_retries=3,
+    )
+    optts_inp = tmp_path / "rxn.retry01.inp"
+    endpoint_inp = tmp_path / "rxn.retry02.inp"
+    reverse_inp = tmp_path / "rxn.retry03.inp"
+    endpoint_text = endpoint_inp.read_text(encoding="utf-8")
+    reverse_text = reverse_inp.read_text(encoding="utf-8")
+
+    assert rc == 0
+    assert runner.seen == [selected_inp, optts_inp, endpoint_inp, reverse_inp]
+    # After the failed OptTS fallback the chain resumes from the crashed ScanTS
+    # attempt's artifacts: endpoint completion first, then the reverse scan.
+    assert "Opt" in endpoint_text
+    assert "OPTTS" not in endpoint_text
+    assert "B 4 20 = 2.00903226, 3.40, 29" in endpoint_text
+    assert "* xyzfile 0 1 rxn.003.xyz" in endpoint_text
+    assert "ScanTS" in reverse_text
+    assert "B 4 20 = 3.40, 1.86, 32" in reverse_text
+    assert "* xyzfile 0 1 rxn.retry02.029.xyz" in reverse_text
+    assert saved.get("status") == "completed"
+    all_actions = [action for index in range(4) for action in _attempt_actions(saved, index=index)]
+    # The fallback fires exactly once per run.
+    assert all_actions.count("scants_fallback_to_optts") == 1
 
 
 def test_scan_profile_interior_barrier_prominence() -> None:

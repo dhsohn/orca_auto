@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +19,7 @@ from ..scants import (
     input_uses_scants,
     parse_scants_actual_surface,
     prepare_scants_endpoint_scan_input,
+    prepare_scants_optts_fallback_input,
     prepare_scants_reverse_scan_retry_input,
     scan_profile_interior_barrier_kcal,
 )
@@ -112,6 +113,72 @@ def _state_has_scants_reverse_scan(state: RunState) -> bool:
         action.startswith("scants_reverse_scan")
         for attempt in attempts
         for action in _attempt_patch_actions(attempt)
+    )
+
+
+def _state_has_scants_optts_fallback(state: RunState) -> bool:
+    attempts = state.get("attempts")
+    if not isinstance(attempts, list):
+        return False
+    return any(
+        action.startswith("scants_fallback_to_optts")
+        for attempt in attempts
+        for action in _attempt_patch_actions(attempt)
+    )
+
+
+def _scants_chain_request(ctx: RetryAttemptRequest) -> RetryAttemptRequest:
+    """Redirect the scan-recipe chain at the crashed ScanTS attempt.
+
+    When the current attempt is a failed OptTS fallback, its input is no
+    longer a ScanTS input and its output carries no scan surface, so the
+    endpoint/reverse recipes would fail closed. Pointing the chain back at the
+    ScanTS attempt the fallback was prepared from (its scan artifacts are
+    still on disk) keeps those recipes available after the fallback.
+    """
+    attempts = ctx.state.get("attempts")
+    if not isinstance(attempts, list) or len(attempts) < 2:
+        return ctx
+    creator = attempts[-2]
+    if not isinstance(creator, dict):
+        return ctx
+    creating_actions = _attempt_patch_actions(creator)
+    if not any(action.startswith("scants_fallback_to_optts") for action in creating_actions):
+        return ctx
+    inp_raw = str(creator.get("inp_path") or "").strip()
+    out_raw = str(creator.get("out_path") or "").strip()
+    if not inp_raw or not out_raw:
+        return ctx
+    return replace(ctx, current_inp=Path(inp_raw), out_path=Path(out_raw))
+
+
+def _prepare_scants_optts_fallback(
+    ctx: RetryAttemptRequest,
+    *,
+    next_inp: Path,
+) -> tuple[Path | None, list[str]]:
+    """Bypass ORCA's TS-guess refinement after it corrupted the geometry.
+
+    ORCA 6.x's ScanTS refinement can construct a geometry with the scanned
+    pair at zero distance and abort at the next SCF startup. A surface table
+    in the output means the scan itself finished and bracketed a maximum whose
+    numbered ``*.NNN.xyz`` is intact on disk, so retry as plain OptTS from
+    that maximum, skipping the refinement entirely. One shot per run; when the
+    OptTS attempt fails too, ``_scants_chain_request`` resumes the ordinary
+    endpoint/reverse chain from the crashed ScanTS attempt.
+    """
+    if not ctx.analysis.markers["geometry_zero_distance"]:
+        return None, []
+    if not input_uses_scants(ctx.current_inp):
+        return None, []
+    if _state_has_scants_optts_fallback(ctx.state):
+        return None, []
+    return prepare_scants_optts_fallback_input(
+        source_inp=ctx.current_inp,
+        target_inp=next_inp,
+        reaction_dir=ctx.reaction_dir,
+        out_path=ctx.out_path,
+        max_memory_gb=ctx.max_memory_gb_per_task(),
     )
 
 
@@ -239,22 +306,29 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
     next_inp = ctx.retry_inp_path(ctx.selected_inp, next_retry_number)
     patch_step = retry_recipe_name_for_input(ctx.selected_inp, next_retry_number)
     try:
-        uses_scants = input_uses_scants(ctx.current_inp) or input_uses_scants(ctx.selected_inp)
-        scants_endpoint_scan_seen = state_pending_scants_reverse_after_endpoint_scan(ctx.state)
-        scants_surface_maximum_seen = _output_has_scants_actual_surface_maximum(ctx)
-        prepared_scants, patch_actions = _prepare_scants_reverse_scan_after_endpoint_scan(
-            ctx,
-            next_inp=next_inp,
+        chain_ctx = _scants_chain_request(ctx)
+        uses_scants = input_uses_scants(chain_ctx.current_inp) or input_uses_scants(
+            ctx.selected_inp
         )
+        scants_endpoint_scan_seen = state_pending_scants_reverse_after_endpoint_scan(ctx.state)
+        scants_surface_maximum_seen = _output_has_scants_actual_surface_maximum(chain_ctx)
+        prepared_scants, patch_actions = _prepare_scants_optts_fallback(ctx, next_inp=next_inp)
+        if prepared_scants is None:
+            prepared_scants, patch_actions = _prepare_scants_reverse_scan_after_endpoint_scan(
+                chain_ctx,
+                next_inp=next_inp,
+            )
         if prepared_scants is None:
             prepared_scants, patch_actions = _prepare_scants_retry_after_surface_maximum(
-                ctx,
+                chain_ctx,
                 next_inp=next_inp,
             )
         if prepared_scants is None and (scants_surface_maximum_seen or scants_endpoint_scan_seen):
             raise ScantsRetryStop("scants_recipes_exhausted")
         if prepared_scants is None:
-            scants_retry_source = ctx.selected_inp if next_retry_number == 1 else ctx.current_inp
+            scants_retry_source = (
+                ctx.selected_inp if next_retry_number == 1 else chain_ctx.current_inp
+            )
             prepared_scants, patch_actions = prepare_scants_scan_retry_input(
                 source_inp=scants_retry_source,
                 target_inp=next_inp,

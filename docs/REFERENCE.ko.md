@@ -484,7 +484,12 @@ Opt 모드 완료:
 - standalone `OptTS`/`NEB-TS`: 자동 재시도하지 않습니다. Hessian hardening은
   자동 fallback이 아니라 사용자가 명시하는 입력 선택으로 남깁니다.
 - `ScanTS`: 최대 3회까지 scan artifact 기반의 ScanTS 전용 continuation,
-  endpoint-completion, reverse-scan 로직만 사용합니다. maximum을 계획된 endpoint
+  endpoint-completion, reverse-scan 로직만 사용합니다. scan이 이미 maximum을
+  포착한 뒤 ORCA의 TS-guess refinement가 zero-distance 지오메트리로 abort한
+  경우에는, refinement를 우회해 최고 에너지 surface point에서 곧바로 OptTS
+  재시도를 1회 수행합니다(`ScanTS` -> `OptTS`, scan 블록 제거). 그 시도마저
+  실패하면 아래의 일반 체인이 크래시한 scan의 artifact에서 이어집니다.
+  maximum을 계획된 endpoint
   전에 찾은 경우에는 먼저 일반 relaxed scan으로 endpoint를 완료합니다(`ScanTS` ->
   `Opt`, `Freq`/`IRC` 제거). 그 뒤 실제 endpoint xyz에서 역방향 ScanTS를
   생성합니다. endpoint-completion scan의 완료는 (crash/resume를 거치더라도)

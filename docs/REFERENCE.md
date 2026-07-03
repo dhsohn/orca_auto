@@ -466,7 +466,12 @@ Retry policy:
 - Standalone `OptTS`/`NEB-TS`: no automatic retry. Hessian hardening remains an
   explicit input choice rather than an automatic fallback.
 - `ScanTS`: up to three retries through ScanTS-specific continuation, endpoint-completion,
-  and reverse-scan logic from scan artifacts only. If a maximum is found before the
+  and reverse-scan logic from scan artifacts only. When ORCA's TS-guess refinement
+  aborts with a zero-distance geometry after the scan already bracketed a maximum,
+  one OptTS retry is attempted directly from the highest surface point
+  (`ScanTS` -> `OptTS`, scan block removed), bypassing the refinement; if that
+  attempt also fails, the ordinary chain below resumes from the crashed scan's
+  artifacts. If a maximum is found before the
   planned endpoint, orca_auto first completes the endpoint with an ordinary relaxed
   scan (`ScanTS` -> `Opt`, no `Freq`/`IRC`), then reverses from that real endpoint
   xyz. A completed endpoint-completion scan is never reported as overall success —
