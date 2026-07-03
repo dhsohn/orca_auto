@@ -247,18 +247,13 @@ python -m orca_auto.core.engines.worker_child \
   않습니다. 일반 `Opt`/`Opt+Freq`/`Freq`/single-point route는 자동 재시도하지
   않으며, 실패한 `.xyz`/`.gbw` artifact를 generic rerun 전략으로 재사용하지
   않습니다. standalone `OptTS`/`NEB-TS`도 자동 재시도하지 않으며, Hessian
-  hardening은 사용자가 명시한 입력으로 남깁니다. `ScanTS`는 scan artifact 기반의
-  ScanTS 전용 continuation, endpoint-completion, reverse-scan 로직만 사용합니다.
-  scan이 maximum을 포착한 뒤 ORCA의 TS-guess refinement가 지오메트리를
-  망가뜨리면(zero distance), 일반 체인을 재개하기 전에 최고 에너지 surface
-  point에서 OptTS 재시도를 1회 수행합니다.
-  maximum이 계획된 scan endpoint 전에 나타나면 ORCA가 먼저 일반 relaxed scan으로
-  endpoint를 완료합니다(`ScanTS` -> `Opt`, `Freq`/`IRC` 제거). 그 다음 실제
-  endpoint xyz에서 역방향 `ScanTS`를 시작합니다. 중간 단계인 endpoint 완료는
-  (crash/resume를 거치더라도) 전체 성공으로 보고되지 않습니다. 조립된 정방향
-  프로파일에 노이즈 임계값 이상의 내부 maximum이 없으면, 같은 단조 프로파일을
-  거울처럼 반복할 뿐인 역방향 scan을 실행하는 대신 `scan_profile_no_barrier`
-  사유로 종료합니다. route별 rewrite가 없으면 동일 입력을 반복하지 않고
+  hardening은 사용자가 명시한 입력으로 남깁니다. `ScanTS` retry는 **계산
+  실패에서만** scan artifact 기반으로 발동합니다: scan 도중 크래시는 마지막
+  numbered point에서 이어가고, TS-guess refinement의 zero-distance abort는
+  최고 에너지 surface point에서 OptTS 재시도를 1회 수행합니다. scan 완주 후의
+  실패(`ts_not_found` 포함)는 `scants_recipes_exhausted`로 종료됩니다 —
+  endpoint 연장·역방향 탐색은 `scan_ts_search` 워크플로우가 담당합니다.
+  route별 rewrite가 없으면 동일 입력을 반복하지 않고
   fail-closed 합니다(ScanTS 레시피 체인 소진 시 `scants_recipes_exhausted`). 전하와 다중도는 **절대**
   자동 변경하지 않으며, 원본 `.inp`는 보존되고, 재시도는 `<name>.retryNN.inp`로
   기록됩니다.

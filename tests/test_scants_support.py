@@ -11,7 +11,6 @@ from orca_auto.orca.scants import (
     apply_scants_failed_scan_retry_rewrite,
     apply_scants_relaxed_scan_resume_rewrite,
     input_uses_scants,
-    prepare_scants_endpoint_scan_input,
     prepare_scants_optts_fallback_input,
     prepare_scants_scan_retry_input,
     scan_profile_interior_barrier_kcal,
@@ -27,55 +26,6 @@ class _CaptureSuccessRunner:
     def run(self, inp_path: Path) -> SimpleNamespace:
         self.seen.append(inp_path)
         out_path = inp_path.with_suffix(".out")
-        out_path.write_text(
-            "\n".join(
-                [
-                    "VIBRATIONAL FREQUENCIES",
-                    "  1   -150.00 cm**-1",
-                    "  2    120.00 cm**-1",
-                    "****ORCA TERMINATED NORMALLY****",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        return SimpleNamespace(out_path=str(out_path), return_code=0)
-
-
-class _ScanTsFallbackRunner(_CaptureSuccessRunner):
-    def run(self, inp_path: Path) -> SimpleNamespace:
-        self.seen.append(inp_path)
-        out_path = inp_path.with_suffix(".out")
-        if len(self.seen) == 1:
-            _write_surface_scan_failure(inp_path, out_path, xyz_count=3)
-            return SimpleNamespace(out_path=str(out_path), return_code=0)
-        if len(self.seen) == 2:
-            _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=29)
-            out_path.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
-            return SimpleNamespace(out_path=str(out_path), return_code=0)
-        out_path.write_text(
-            "\n".join(
-                [
-                    "VIBRATIONAL FREQUENCIES",
-                    "  1   -150.00 cm**-1",
-                    "  2    120.00 cm**-1",
-                    "****ORCA TERMINATED NORMALLY****",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        return SimpleNamespace(out_path=str(out_path), return_code=0)
-
-
-class _ScanTsOpttsFailureReverseRunner(_CaptureSuccessRunner):
-    def run(self, inp_path: Path) -> SimpleNamespace:
-        self.seen.append(inp_path)
-        out_path = inp_path.with_suffix(".out")
-        if len(self.seen) == 1:
-            _write_surface_scan_failure(inp_path, out_path, xyz_count=32)
-            return SimpleNamespace(out_path=str(out_path), return_code=0)
-        if len(self.seen) == 2:
-            _write_ts_not_found_out(out_path)
-            return SimpleNamespace(out_path=str(out_path), return_code=0)
         out_path.write_text(
             "\n".join(
                 [
@@ -147,98 +97,6 @@ class _ScanTsContinuationOpttsFailureReverseRunner(_CaptureSuccessRunner):
         return SimpleNamespace(out_path=str(out_path), return_code=0)
 
 
-class _ScanTsContinuationEarlyMaximumEndpointReverseRunner(_CaptureSuccessRunner):
-    def run(self, inp_path: Path) -> SimpleNamespace:
-        self.seen.append(inp_path)
-        out_path = inp_path.with_suffix(".out")
-        if len(self.seen) == 1:
-            _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=32)
-            out_path.write_text(
-                "ORCA finished by error termination in Startup\n"
-                "[file orca_tools/qcmsg.cpp, line 394]:\n"
-                "  .... aborting the run\n",
-                encoding="utf-8",
-            )
-            return SimpleNamespace(out_path=str(out_path), return_code=0)
-        if len(self.seen) == 2:
-            _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=3)
-            _write_surface_scan_done_out(out_path)
-            return SimpleNamespace(out_path=str(out_path), return_code=0)
-        if len(self.seen) == 3:
-            _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=3)
-            out_path.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
-            return SimpleNamespace(out_path=str(out_path), return_code=0)
-        out_path.write_text(
-            "\n".join(
-                [
-                    "VIBRATIONAL FREQUENCIES",
-                    "  1   -150.00 cm**-1",
-                    "  2    120.00 cm**-1",
-                    "****ORCA TERMINATED NORMALLY****",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        return SimpleNamespace(out_path=str(out_path), return_code=0)
-
-
-class _ScanTsEndpointProfileRunner(_CaptureSuccessRunner):
-    """Early-maximum ScanTS failure, then an endpoint scan printing the given surface.
-
-    Any later attempt reports a found TS so barrier-carrying profiles can run
-    the reverse scan to a successful finish.
-    """
-
-    def __init__(
-        self,
-        *,
-        forward_energies: list[float],
-        endpoint_energies: list[float],
-    ) -> None:
-        super().__init__()
-        self._forward_energies = forward_energies
-        self._endpoint_energies = endpoint_energies
-
-    def run(self, inp_path: Path) -> SimpleNamespace:
-        self.seen.append(inp_path)
-        out_path = inp_path.with_suffix(".out")
-        if len(self.seen) == 1:
-            _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=3)
-            inp_path.with_suffix(".xyz").write_text(
-                "2\ninvalid refined guess\nH 0 0 0\nH 0 0 0\n",
-                encoding="utf-8",
-            )
-            _write_actual_surface_out(out_path, self._forward_energies)
-            out_path.write_text(
-                out_path.read_text(encoding="utf-8")
-                + "ORCA finished by error termination in Startup\n"
-                + "[file orca_tools/qcmsg.cpp, line 394]:\n"
-                + "  .... aborting the run\n",
-                encoding="utf-8",
-            )
-            return SimpleNamespace(out_path=str(out_path), return_code=0)
-        if len(self.seen) == 2:
-            _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=29)
-            _write_actual_surface_out(out_path, self._endpoint_energies)
-            out_path.write_text(
-                out_path.read_text(encoding="utf-8") + "****ORCA TERMINATED NORMALLY****\n",
-                encoding="utf-8",
-            )
-            return SimpleNamespace(out_path=str(out_path), return_code=0)
-        out_path.write_text(
-            "\n".join(
-                [
-                    "VIBRATIONAL FREQUENCIES",
-                    "  1   -150.00 cm**-1",
-                    "  2    120.00 cm**-1",
-                    "****ORCA TERMINATED NORMALLY****",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        return SimpleNamespace(out_path=str(out_path), return_code=0)
-
-
 class _ScanTsRefinementCrashOpttsRunner(_CaptureSuccessRunner):
     """Zero-distance crash in ORCA's TS-guess refinement, then OptTS finds the TS."""
 
@@ -275,28 +133,6 @@ class _ScanTsOpttsFallbackFailsThenChainRunner(_CaptureSuccessRunner):
             _write_ts_not_found_out(out_path)
             return SimpleNamespace(out_path=str(out_path), return_code=0)
         if len(self.seen) == 3:
-            _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=29)
-            out_path.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
-            return SimpleNamespace(out_path=str(out_path), return_code=0)
-        out_path.write_text(
-            "\n".join(
-                [
-                    "VIBRATIONAL FREQUENCIES",
-                    "  1   -150.00 cm**-1",
-                    "  2    120.00 cm**-1",
-                    "****ORCA TERMINATED NORMALLY****",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        return SimpleNamespace(out_path=str(out_path), return_code=0)
-
-
-class _ScanTsResumeEndpointRerunRunner(_CaptureSuccessRunner):
-    def run(self, inp_path: Path) -> SimpleNamespace:
-        self.seen.append(inp_path)
-        out_path = inp_path.with_suffix(".out")
-        if len(self.seen) == 1:
             _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=29)
             out_path.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
             return SimpleNamespace(out_path=str(out_path), return_code=0)
@@ -826,6 +662,56 @@ def test_resumed_scants_after_scan_done_uses_highest_surface_xyz(tmp_path: Path)
     assert "resume_geometry_restart_from_tsopt.002.xyz" in actions
 
 
+def test_resume_finalizes_finished_scants_scan_as_exhausted(tmp_path: Path) -> None:
+    selected_inp = tmp_path / "tsopt.inp"
+    _write_scants_input(selected_inp)
+    out_path = selected_inp.with_suffix(".out")
+    _write_surface_scan_done_out(out_path)
+
+    # A worker crashed after recording a finished ScanTS scan that did not
+    # verify a TS, before the retry decision ran.
+    state = new_state(tmp_path, selected_inp, max_retries=3)
+    state["status"] = "retrying"
+    state["attempts"].append(
+        {
+            "index": 1,
+            "inp_path": str(selected_inp),
+            "out_path": str(out_path),
+            "return_code": 0,
+            "analyzer_status": "ts_not_found",
+            "analyzer_reason": "ts_criteria_failed",
+            "markers": {"geometry_zero_distance": False},
+            "patch_actions": [],
+            "started_at": "2026-07-03T01:00:00+00:00",
+            "ended_at": "2026-07-03T02:00:00+00:00",
+        }
+    )
+    save_state(tmp_path, state)
+
+    runner = _CaptureSuccessRunner()
+    rc = run_attempts(
+        tmp_path,
+        selected_inp,
+        state,
+        resumed=True,
+        runner=runner,
+        max_retries=3,
+        retry_inp_path=_retry_inp_path,
+        to_resolved_local=lambda raw: Path(raw),
+        emit=lambda _payload: None,
+    )
+    saved = load_state(tmp_path)
+    assert saved is not None
+
+    # Resume must not recover/run a missing retry01: the scan already finished.
+    assert rc == 1
+    assert runner.seen == []
+    assert not (tmp_path / "tsopt.retry01.inp").exists()
+    final_result = saved.get("final_result")
+    assert isinstance(final_result, dict)
+    assert final_result.get("reason") == "scants_recipes_exhausted"
+
+
 def test_scants_optts_fallback_builder_still_uses_highest_surface_xyz(
     tmp_path: Path,
 ) -> None:
@@ -855,62 +741,6 @@ def test_scants_optts_fallback_builder_still_uses_highest_surface_xyz(
     assert "* xyzfile 0 1 rxn.xyz" not in retry_text
     assert "scants_fallback_to_optts" in actions
     assert "scants_guess_from_rxn.002.xyz" in actions
-
-
-def test_failed_scants_with_early_surface_maximum_completes_endpoint_then_reverses(
-    tmp_path: Path,
-) -> None:
-    selected_inp = tmp_path / "rxn.inp"
-    _write_scants_input(selected_inp)
-    selected_inp.with_suffix(".gbw").write_bytes(b"stale checkpoint")
-    runner = _ScanTsFallbackRunner()
-
-    rc, saved = _run_attempt(
-        tmp_path,
-        selected_inp,
-        resumed=False,
-        runner=runner,
-        max_retries=2,
-    )
-    endpoint_inp = tmp_path / "rxn.retry01.inp"
-    reverse_inp = tmp_path / "rxn.retry02.inp"
-    endpoint_text = endpoint_inp.read_text(encoding="utf-8")
-    reverse_text = reverse_inp.read_text(encoding="utf-8")
-
-    assert rc == 0
-    assert runner.seen == [selected_inp, endpoint_inp, reverse_inp]
-    assert "Opt" in endpoint_text
-    assert "ScanTS" not in endpoint_text
-    assert "Freq" not in endpoint_text
-    assert "B 4 20 = 2.00903226, 3.40, 29" in endpoint_text
-    assert "* xyzfile 0 1 rxn.003.xyz" in endpoint_text
-    assert "%moinp" not in endpoint_text
-    assert "MORead" not in endpoint_text
-    assert "ScanTS" in reverse_text
-    assert "OPTTS" not in reverse_text
-    assert "B 4 20 = 3.40, 1.86, 32" in reverse_text
-    assert "* xyzfile 0 1 rxn.retry01.029.xyz" in reverse_text
-    assert "* xyzfile 0 1 input.xyz" not in reverse_text
-    assert "* xyzfile 0 1 rxn.003.xyz" not in reverse_text
-    assert "rxn.xyz" not in reverse_text
-    assert "%moinp" not in reverse_text
-    assert "MORead" not in reverse_text
-    assert saved.get("status") == "completed"
-    endpoint_actions = _attempt_actions(saved)
-    assert "scants_endpoint_scan_route_to_opt" in endpoint_actions
-    assert "scants_endpoint_scan_removed_freq_irc" in endpoint_actions
-    assert "scants_endpoint_scan_to_original_endpoint" in endpoint_actions
-    assert "scants_endpoint_scan_from_point_003" in endpoint_actions
-    assert "scants_endpoint_scan_points_29" in endpoint_actions
-    assert "geometry_restart_from_rxn.003.xyz" in endpoint_actions
-    reverse_actions = _attempt_actions(saved, index=1)
-    assert "scants_reverse_scan" in reverse_actions
-    assert "scants_reverse_scan_route_restored" in reverse_actions
-    assert "scants_reverse_scan_from_continuation_after_point_003" in reverse_actions
-    assert "scants_reverse_scan_points_32" in reverse_actions
-    assert "geometry_restart_from_rxn.retry01.029.xyz" in reverse_actions
-    assert "scants_fallback_to_optts" not in endpoint_actions + reverse_actions
-    assert "checkpoint_restart_from_rxn.gbw" not in endpoint_actions + reverse_actions
 
 
 def test_zero_distance_refinement_crash_retries_as_optts_from_maximum(
@@ -949,7 +779,7 @@ def test_zero_distance_refinement_crash_retries_as_optts_from_maximum(
     assert "OptTS fallback (scan maximum)" in report_html
 
 
-def test_failed_optts_fallback_resumes_endpoint_and_reverse_chain(
+def test_failed_optts_fallback_exhausts_recipes(
     tmp_path: Path,
 ) -> None:
     selected_inp = tmp_path / "rxn.inp"
@@ -964,103 +794,18 @@ def test_failed_optts_fallback_resumes_endpoint_and_reverse_chain(
         max_retries=3,
     )
     optts_inp = tmp_path / "rxn.retry01.inp"
-    endpoint_inp = tmp_path / "rxn.retry02.inp"
-    reverse_inp = tmp_path / "rxn.retry03.inp"
-    endpoint_text = endpoint_inp.read_text(encoding="utf-8")
-    reverse_text = reverse_inp.read_text(encoding="utf-8")
 
-    assert rc == 0
-    assert runner.seen == [selected_inp, optts_inp, endpoint_inp, reverse_inp]
-    # After the failed OptTS fallback the chain resumes from the crashed ScanTS
-    # attempt's artifacts: endpoint completion first, then the reverse scan.
-    assert "Opt" in endpoint_text
-    assert "OPTTS" not in endpoint_text
-    assert "B 4 20 = 2.00903226, 3.40, 29" in endpoint_text
-    assert "* xyzfile 0 1 rxn.003.xyz" in endpoint_text
-    assert "ScanTS" in reverse_text
-    assert "B 4 20 = 3.40, 1.86, 32" in reverse_text
-    assert "* xyzfile 0 1 rxn.retry02.029.xyz" in reverse_text
-    assert saved.get("status") == "completed"
-    all_actions = [action for index in range(4) for action in _attempt_actions(saved, index=index)]
-    # The fallback fires exactly once per run.
-    assert all_actions.count("scants_fallback_to_optts") == 1
-
-
-class _ScanTsFallbackResumeRunner(_CaptureSuccessRunner):
-    """Resume runner: recreated OptTS copy fails again, then the endpoint scan runs."""
-
-    def run(self, inp_path: Path) -> SimpleNamespace:
-        self.seen.append(inp_path)
-        out_path = inp_path.with_suffix(".out")
-        if len(self.seen) == 1:
-            _write_ts_not_found_out(out_path)
-            return SimpleNamespace(out_path=str(out_path), return_code=0)
-        _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=29)
-        out_path.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
-        return SimpleNamespace(out_path=str(out_path), return_code=0)
-
-
-def test_resume_after_failed_optts_fallback_resumes_chain(tmp_path: Path) -> None:
-    selected_inp = tmp_path / "rxn.inp"
-    _write_scants_input(selected_inp)
-    first_runner = _ScanTsOpttsFallbackFailsThenChainRunner()
-    rc, _saved = _run_attempt(
-        tmp_path,
-        selected_inp,
-        resumed=False,
-        runner=first_runner,
-        max_retries=3,
-    )
-    assert rc == 0
-
-    # Simulate a worker crash right after the failed OptTS fallback attempt was
-    # recorded but before the next retry input was written.
-    state = load_state(tmp_path)
-    assert state is not None
-    attempts = state["attempts"]
-    assert isinstance(attempts, list)
-    del attempts[2:]
-    attempts[1]["patch_actions"] = []
-    state["status"] = "retrying"
-    state["final_result"] = None
-    save_state(tmp_path, state)
-    for name in ("rxn.retry02.inp", "rxn.retry02.out", "rxn.retry03.inp", "rxn.retry03.out"):
-        (tmp_path / name).unlink()
-
-    resume_runner = _ScanTsFallbackResumeRunner()
-    rc = run_attempts(
-        tmp_path,
-        selected_inp,
-        state,
-        resumed=True,
-        runner=resume_runner,
-        max_retries=3,
-        retry_inp_path=_retry_inp_path,
-        to_resolved_local=lambda raw: Path(raw),
-        emit=lambda _payload: None,
-    )
-    recreated_optts_inp = tmp_path / "rxn.retry02.inp"
-    endpoint_inp = tmp_path / "rxn.retry03.inp"
-    reverse_inp = tmp_path / "rxn.retry04.inp"
-
-    # Recovery reran a copy of the OptTS fallback; the chain redirection then
-    # produced the endpoint scan from the crashed ScanTS artifacts instead of
-    # exhausting the recipes. The reverse input is prepared but exceeds the
-    # ScanTS retry budget after the resume rerun consumed one slot.
-    assert resume_runner.seen == [recreated_optts_inp, endpoint_inp]
-    assert "OPTTS" in recreated_optts_inp.read_text(encoding="utf-8")
-    endpoint_text = endpoint_inp.read_text(encoding="utf-8")
-    assert "B 4 20 = 2.00903226, 3.40, 29" in endpoint_text
-    assert "* xyzfile 0 1 rxn.003.xyz" in endpoint_text
-    reverse_text = reverse_inp.read_text(encoding="utf-8")
-    assert "B 4 20 = 3.40, 1.86, 32" in reverse_text
-    assert "* xyzfile 0 1 rxn.retry03.029.xyz" in reverse_text
+    # The one-shot OptTS fallback runs; when it fails too, the run ends —
+    # endpoint/reverse exploration now belongs to the scan_ts_search workflow.
     assert rc == 1
-    saved = load_state(tmp_path)
-    assert saved is not None
+    assert runner.seen == [selected_inp, optts_inp]
+    assert not (tmp_path / "rxn.retry02.inp").exists()
+    assert saved.get("status") == "failed"
     final_result = saved.get("final_result")
     assert isinstance(final_result, dict)
-    assert final_result.get("reason") == "retry_limit_reached"
+    assert final_result.get("reason") == "scants_recipes_exhausted"
+    all_actions = [action for index in range(2) for action in _attempt_actions(saved, index=index)]
+    assert all_actions.count("scants_fallback_to_optts") == 1
 
 
 def test_scan_profile_interior_barrier_prominence() -> None:
@@ -1079,170 +824,7 @@ def test_scan_profile_interior_barrier_prominence() -> None:
     assert barrier == pytest.approx(0.01 * kcal_per_hartree, rel=1e-6)
 
 
-def test_completed_endpoint_scan_with_barrierless_profile_stops_without_reverse_scan(
-    tmp_path: Path,
-) -> None:
-    selected_inp = tmp_path / "rxn.inp"
-    _write_scants_input(selected_inp)
-    runner = _ScanTsEndpointProfileRunner(
-        # Tiny endpoint hump (~0.09 kcal/mol), then monotonic descent: no TS
-        # anywhere along the coordinate, so the reverse scan must be skipped.
-        forward_energies=[-100.0, -99.99985, -99.9999],
-        endpoint_energies=[-100.0002, -100.0006, -100.0012, -100.003],
-    )
-
-    rc, saved = _run_attempt(
-        tmp_path,
-        selected_inp,
-        resumed=False,
-        runner=runner,
-        max_retries=3,
-    )
-    endpoint_inp = tmp_path / "rxn.retry01.inp"
-    reverse_inp = tmp_path / "rxn.retry02.inp"
-
-    assert rc == 1
-    assert runner.seen == [selected_inp, endpoint_inp]
-    assert not reverse_inp.exists()
-    assert saved.get("status") == "failed"
-    final_result = saved.get("final_result")
-    assert isinstance(final_result, dict)
-    assert final_result.get("reason") == "scan_profile_no_barrier"
-    actions = _attempt_actions(saved, index=1)
-    assert "scants_retry_stopped:scan_profile_no_barrier" in actions
-
-
-def test_completed_endpoint_scan_with_interior_barrier_still_reverses(
-    tmp_path: Path,
-) -> None:
-    selected_inp = tmp_path / "rxn.inp"
-    _write_scants_input(selected_inp)
-    runner = _ScanTsEndpointProfileRunner(
-        forward_energies=[-100.0, -99.99985, -99.9999],
-        # Interior maximum ~1.1 kcal/mol above the shallower flank: a real
-        # barrier, so the reverse scan must still run.
-        endpoint_energies=[-100.0002, -99.9985, -100.002, -100.004],
-    )
-
-    rc, saved = _run_attempt(
-        tmp_path,
-        selected_inp,
-        resumed=False,
-        runner=runner,
-        max_retries=3,
-    )
-    endpoint_inp = tmp_path / "rxn.retry01.inp"
-    reverse_inp = tmp_path / "rxn.retry02.inp"
-    reverse_text = reverse_inp.read_text(encoding="utf-8")
-
-    assert rc == 0
-    assert runner.seen == [selected_inp, endpoint_inp, reverse_inp]
-    assert "ScanTS" in reverse_text
-    assert "B 4 20 = 3.40, 1.86, 32" in reverse_text
-    assert saved.get("status") == "completed"
-    reverse_actions = _attempt_actions(saved, index=1)
-    assert "scants_reverse_scan" in reverse_actions
-
-
-def test_endpoint_scan_route_rewrite_does_not_duplicate_opt(tmp_path: Path) -> None:
-    source_inp = tmp_path / "rxn.inp"
-    source_inp.write_text(
-        "\n".join(
-            [
-                "! ScanTS Opt B3LYP def2-SVP Freq",
-                "",
-                "%geom",
-                "  Scan",
-                "    B 4 20 = 1.86, 3.40, 32",
-                "  end",
-                "end",
-                "",
-                "* xyzfile 0 1 input.xyz",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    _write_scan_xyz_series(tmp_path, "rxn", count=3)
-    target_inp = tmp_path / "rxn.retry01.inp"
-
-    prepared, actions = prepare_scants_endpoint_scan_input(
-        source_inp=source_inp,
-        target_inp=target_inp,
-    )
-
-    assert prepared == target_inp
-    route = next(
-        line for line in target_inp.read_text(encoding="utf-8").splitlines() if line.startswith("!")
-    )
-    assert route.split().count("Opt") == 1
-    assert "ScanTS" not in route
-    assert "Freq" not in route
-    assert "scants_endpoint_scan_route_to_opt" in actions
-
-
-def test_resume_after_completed_endpoint_scan_continues_to_reverse_scan(
-    tmp_path: Path,
-) -> None:
-    selected_inp = tmp_path / "rxn.inp"
-    _write_scants_input(selected_inp)
-    first_runner = _ScanTsFallbackRunner()
-    rc, _saved = _run_attempt(
-        tmp_path,
-        selected_inp,
-        resumed=False,
-        runner=first_runner,
-        max_retries=3,
-    )
-    assert rc == 0
-
-    # Simulate a crash after the completed endpoint-scan attempt was recorded
-    # but before the reverse-scan retry input was prepared.
-    state = load_state(tmp_path)
-    assert state is not None
-    attempts = state["attempts"]
-    assert isinstance(attempts, list)
-    del attempts[2:]
-    attempts[1]["patch_actions"] = []
-    state["status"] = "retrying"
-    state["final_result"] = None
-    save_state(tmp_path, state)
-    (tmp_path / "rxn.retry02.inp").unlink()
-    (tmp_path / "rxn.retry02.out").unlink()
-
-    resume_runner = _ScanTsResumeEndpointRerunRunner()
-    rc = run_attempts(
-        tmp_path,
-        selected_inp,
-        state,
-        resumed=True,
-        runner=resume_runner,
-        max_retries=3,
-        retry_inp_path=_retry_inp_path,
-        to_resolved_local=lambda raw: Path(raw),
-        emit=lambda _payload: None,
-    )
-    saved = load_state(tmp_path)
-    assert saved is not None
-
-    recovered_endpoint_inp = tmp_path / "rxn.retry02.inp"
-    reverse_inp = tmp_path / "rxn.retry03.inp"
-
-    assert rc == 0
-    # Without the pending-reverse guard, resume finished the run as COMPLETED
-    # off the intermediate endpoint scan without running anything.
-    assert resume_runner.seen == [recovered_endpoint_inp, reverse_inp]
-    reverse_text = reverse_inp.read_text(encoding="utf-8")
-    assert "ScanTS" in reverse_text
-    assert "B 4 20 = 3.40, 1.86, 32" in reverse_text
-    assert "* xyzfile 0 1 rxn.retry02.029.xyz" in reverse_text
-    assert saved.get("status") == "completed"
-    reverse_actions = _attempt_actions(saved, index=2)
-    assert "scants_reverse_scan" in reverse_actions
-    assert "scants_reverse_scan_route_restored" in reverse_actions
-
-
-def test_reverse_scan_derived_maximum_fails_closed_without_optts_hardening(
+def test_surface_maximum_failure_without_zero_distance_exhausts_immediately(
     tmp_path: Path,
 ) -> None:
     selected_inp = tmp_path / "rxn.inp"
@@ -1256,27 +838,22 @@ def test_reverse_scan_derived_maximum_fails_closed_without_optts_hardening(
         runner=runner,
         max_retries=4,
     )
-    retry01_inp = tmp_path / "rxn.retry01.inp"
-    retry02_inp = tmp_path / "rxn.retry02.inp"
-    retry01_text = retry01_inp.read_text(encoding="utf-8")
 
+    # The scan finished (surface table present) before the failure, so this is
+    # not a mid-scan crash: no continuation, no hardening — the run ends.
     assert rc == 1
-    assert runner.seen == [selected_inp, retry01_inp]
-    assert not retry02_inp.exists()
-    assert "ScanTS" in retry01_text
-    assert "OPTTS" not in retry01_text
-    assert "TightSCF" not in retry01_text
-    assert "SlowConv" not in retry01_text
+    assert runner.seen == [selected_inp]
+    assert not (tmp_path / "rxn.retry01.inp").exists()
     assert saved.get("status") == "failed"
     final_result = saved.get("final_result")
     assert isinstance(final_result, dict)
     assert final_result.get("reason") == "scants_recipes_exhausted"
-    actions = _attempt_actions(saved, index=1)
+    actions = _attempt_actions(saved)
     assert "scants_retry_stopped:scants_recipes_exhausted" in actions
     assert not any(action.startswith("scf_") for action in actions)
 
 
-def test_scants_continuation_maximum_retries_combined_reverse_scan(
+def test_scants_continuation_then_surface_maximum_failure_exhausts(
     tmp_path: Path,
 ) -> None:
     selected_inp = tmp_path / "rxn.inp"
@@ -1291,69 +868,21 @@ def test_scants_continuation_maximum_retries_combined_reverse_scan(
         max_retries=3,
     )
     retry01_inp = tmp_path / "rxn.retry01.inp"
-    retry02_inp = tmp_path / "rxn.retry02.inp"
-    retry02_text = retry02_inp.read_text(encoding="utf-8")
+    retry01_text = retry01_inp.read_text(encoding="utf-8")
 
-    assert rc == 0
-    assert runner.seen == [selected_inp, retry01_inp, retry02_inp]
-    assert "ScanTS" in retry02_text
-    assert "OPTTS" not in retry02_text
-    assert "TightSCF" not in retry02_text
-    assert "SlowConv" not in retry02_text
-    assert "B 4 20 = 3.69806452, 1.86, 38" in retry02_text
-    assert "B 4 20 = 3.44967742, 3.69806452, 6" not in retry02_text
-    assert "* xyzfile 0 1 rxn.retry01.006.xyz" in retry02_text
-    assert "* xyzfile 0 1 input.xyz" not in retry02_text
-    assert "* xyzfile 0 1 rxn.032.xyz" not in retry02_text
-    actions = _attempt_actions(saved, index=1)
-    assert "scants_reverse_scan" in actions
-    assert "scants_reverse_scan_from_continuation_after_point_032" in actions
-    assert "scants_reverse_scan_points_38" in actions
-    assert "geometry_restart_from_rxn.retry01.006.xyz" in actions
-
-
-def test_scants_continuation_early_maximum_completes_endpoint_then_reverses_38_points(
-    tmp_path: Path,
-) -> None:
-    selected_inp = tmp_path / "rxn.inp"
-    _write_scants_input(selected_inp)
-    runner = _ScanTsContinuationEarlyMaximumEndpointReverseRunner()
-
-    rc, saved = _run_attempt(
-        tmp_path,
-        selected_inp,
-        resumed=False,
-        runner=runner,
-        max_retries=3,
-    )
-    retry01_inp = tmp_path / "rxn.retry01.inp"
-    endpoint_inp = tmp_path / "rxn.retry02.inp"
-    reverse_inp = tmp_path / "rxn.retry03.inp"
-    endpoint_text = endpoint_inp.read_text(encoding="utf-8")
-    reverse_text = reverse_inp.read_text(encoding="utf-8")
-
-    assert rc == 0
-    assert runner.seen == [selected_inp, retry01_inp, endpoint_inp, reverse_inp]
-    assert "Opt" in endpoint_text
-    assert "ScanTS" not in endpoint_text
-    assert "B 4 20 = 3.59870968, 3.69806452, 3" in endpoint_text
-    assert "* xyzfile 0 1 rxn.retry01.003.xyz" in endpoint_text
-    assert "ScanTS" in reverse_text
-    assert "OPTTS" not in reverse_text
-    assert "B 4 20 = 3.69806452, 1.86, 38" in reverse_text
-    assert "B 4 20 = 3.59870968, 3.69806452, 3" not in reverse_text
-    assert "* xyzfile 0 1 rxn.retry02.003.xyz" in reverse_text
-    assert "* xyzfile 0 1 rxn.retry01.003.xyz" not in reverse_text
-    endpoint_actions = _attempt_actions(saved, index=1)
-    assert "scants_endpoint_scan_to_original_endpoint" in endpoint_actions
-    assert "scants_endpoint_scan_from_point_003" in endpoint_actions
-    assert "scants_endpoint_scan_points_3" in endpoint_actions
-    reverse_actions = _attempt_actions(saved, index=2)
-    assert "scants_reverse_scan" in reverse_actions
-    assert "scants_reverse_scan_route_restored" in reverse_actions
-    assert "scants_reverse_scan_from_continuation_after_point_035" in reverse_actions
-    assert "scants_reverse_scan_points_38" in reverse_actions
-    assert "geometry_restart_from_rxn.retry02.003.xyz" in reverse_actions
+    # Mid-scan crash without a surface -> continuation retry (a genuine
+    # calculation-failure recipe). The continuation then fails WITH a surface
+    # table, so the run ends instead of chaining a reverse scan.
+    assert rc == 1
+    assert runner.seen == [selected_inp, retry01_inp]
+    assert "ScanTS" in retry01_text
+    assert "B 4 20 = 3.44967742, 3.69806452, 6" in retry01_text
+    assert "* xyzfile 0 1 rxn.032.xyz" in retry01_text
+    assert not (tmp_path / "rxn.retry02.inp").exists()
+    assert saved.get("status") == "failed"
+    final_result = saved.get("final_result")
+    assert isinstance(final_result, dict)
+    assert final_result.get("reason") == "scants_recipes_exhausted"
 
 
 def test_failed_scants_without_surface_maximum_continues_from_last_numbered_xyz(

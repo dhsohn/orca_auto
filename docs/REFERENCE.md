@@ -480,28 +480,21 @@ Retry policy:
   `*.xyz`/`.gbw` artifacts are not treated as useful generic restart evidence.
 - Standalone `OptTS`/`NEB-TS`: no automatic retry. Hessian hardening remains an
   explicit input choice rather than an automatic fallback.
-- `ScanTS`: up to three retries through ScanTS-specific continuation, endpoint-completion,
-  and reverse-scan logic from scan artifacts only. When ORCA's TS-guess refinement
-  aborts with a zero-distance geometry after the scan already bracketed a maximum,
-  one OptTS retry is attempted directly from the highest surface point
-  (`ScanTS` -> `OptTS`, scan block removed), bypassing the refinement; if that
-  attempt also fails, the ordinary chain below resumes from the crashed scan's
-  artifacts. If a maximum is found before the
-  planned endpoint, orca_auto first completes the endpoint with an ordinary relaxed
-  scan (`ScanTS` -> `Opt`, no `Freq`/`IRC`), then reverses from that real endpoint
-  xyz. A completed endpoint-completion scan is never reported as overall success —
-  including across crash/resume — the run always continues to the reverse
-  `ScanTS`. Exception: when the assembled forward profile (forward segments plus
-  the endpoint-completion segment) has no interior maximum above 0.5 kcal/mol,
-  the coordinate is barrierless and the run fails immediately with reason
-  `scan_profile_no_barrier` instead of running a pointless reverse scan. When
-  the ScanTS recipe chain is exhausted, the run fails with reason
-  `scants_recipes_exhausted`. Generic SCF/geometry hardening is not applied.
+- `ScanTS`: retries fire ONLY on calculation failures, from scan artifacts.
+  A mid-scan crash (no surface table yet) continues the scan from the last
+  numbered point; a zero-distance abort in ORCA's TS-guess refinement (after
+  the scan bracketed a maximum) gets one OptTS retry directly from the highest
+  surface point (`ScanTS` -> `OptTS`, scan block removed), bypassing the
+  refinement. Any failure after a finished scan — including `ts_not_found` —
+  ends the run with `scants_recipes_exhausted`: endpoint-extension and
+  reverse-scan exploration belongs to the `scan_ts_search` workflow, which is
+  the recommended TS-search path. Generic SCF/geometry hardening is not
+  applied.
 
 Geometry restart rules:
 
 - Generic geometry/checkpoint restart is not part of normal non-ScanTS retry.
-- ScanTS may use numbered scan `*.NNN.xyz` artifacts for continuation/reverse scans.
+- ScanTS may use numbered scan `*.NNN.xyz` artifacts for continuation retries.
 - Fail closed instead of repeating the original geometry unchanged if no
   route-specific rewrite is available.
 
