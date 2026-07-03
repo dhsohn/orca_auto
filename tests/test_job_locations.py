@@ -674,9 +674,7 @@ def test_reindex_job_locations_skips_workflow_workspace_jobs() -> None:
         standalone = allowed_root / "rxn_standalone"
         standalone.mkdir(parents=True)
         standalone_inp = standalone / "calc.inp"
-        standalone_inp.write_text(
-            "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8"
-        )
+        standalone_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
         _write_orca_state(
             standalone,
             job_id="job_standalone",
@@ -689,9 +687,7 @@ def test_reindex_job_locations_skips_workflow_workspace_jobs() -> None:
         stage_job.mkdir(parents=True)
         (workspace / "workflow.json").write_text("{}", encoding="utf-8")
         stage_inp = stage_job / "calc.inp"
-        stage_inp.write_text(
-            "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8"
-        )
+        stage_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
         _write_orca_state(
             stage_job,
             job_id="job_workflow_internal",

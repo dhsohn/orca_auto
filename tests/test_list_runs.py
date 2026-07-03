@@ -38,7 +38,6 @@ class _ListTestBase(unittest.TestCase):
         )
         return config
 
-
     def _activate_admission_slot(self, allowed_root: Path, reaction_dir: Path) -> None:
         """Mirror a live run: an active slot in <runs root>/.admission."""
         admission_root = allowed_root / ".admission"
