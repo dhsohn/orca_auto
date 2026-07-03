@@ -54,8 +54,10 @@ def render_orca_input(
     max_memory_gb: int,
     xyz_filename: str,
     default_route_line: str = "r2scan-3c TightSCF",
+    geom_block: str = "",
 ) -> str:
     parsed_multiplicity = _positive_multiplicity(multiplicity)
+    geom_lines = [*geom_block.splitlines(), ""] if geom_block.strip() else []
     return "\n".join(
         [
             ensure_route_line(route_line, default=default_route_line),
@@ -65,6 +67,7 @@ def render_orca_input(
             "end",
             f"%maxcore {maxcore_mb_per_core(max_memory_gb=max_memory_gb, max_cores=max_cores)}",
             "",
+            *geom_lines,
             f"* xyzfile {int(charge)} {parsed_multiplicity} {xyz_filename}",
             "",
         ]
@@ -203,6 +206,7 @@ class OrcaStageMaterializationRequest:
     inp_filename: str = "input.inp"
     source_frame_index: int = 0
     extra_source_payload: dict[str, Any] | None = None
+    geom_block: str = ""
 
 
 @dataclass(frozen=True)
@@ -225,6 +229,7 @@ class OrcaStageBuildContext:
     xyz_filename: str
     inp_filename: str
     input_label: str | None = None
+    geom_block: str = ""
 
     @property
     def resource_request(self) -> dict[str, int]:
@@ -255,6 +260,7 @@ class OrcaStageBuildContext:
             inp_filename=self.inp_filename,
             source_frame_index=_candidate_source_frame_index(self.candidate),
             extra_source_payload=extra_source_payload,
+            geom_block=self.geom_block,
         )
 
 
@@ -372,6 +378,7 @@ def _write_orca_input_file(
             max_cores=request.max_cores,
             max_memory_gb=request.max_memory_gb,
             xyz_filename=xyz_filename,
+            geom_block=request.geom_block,
         ),
         encoding="utf-8",
     )
@@ -415,6 +422,7 @@ def build_materialized_orca_stage(
     xyz_filename: str,
     inp_filename: str,
     input_label: str | None = None,
+    geom_block: str = "",
 ) -> WorkflowStage:
     return build_materialized_orca_stage_from_context(
         OrcaStageBuildContext(
@@ -436,6 +444,7 @@ def build_materialized_orca_stage(
             xyz_filename=xyz_filename,
             inp_filename=inp_filename,
             input_label=input_label,
+            geom_block=geom_block,
         )
     )
 

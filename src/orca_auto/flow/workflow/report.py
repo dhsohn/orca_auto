@@ -89,6 +89,13 @@ def _stage_metadata(stage: Mapping[str, Any]) -> dict[str, Any]:
     return metadata if isinstance(metadata, dict) else {}
 
 
+def _task_kind(stage: Mapping[str, Any]) -> str:
+    task = stage.get("task")
+    if not isinstance(task, dict):
+        return ""
+    return _text(task.get("task_kind"))
+
+
 def _stage_artifacts(stage: Mapping[str, Any], kind: str) -> list[dict[str, Any]]:
     artifacts = stage.get("output_artifacts")
     if not isinstance(artifacts, list):
@@ -321,7 +328,11 @@ def collect_workflow_report_data(
             xtb_total = (xtb_total or 0) + candidates
         elif stage_kind == "orca_stage":
             result = _orca_stage_result(stage, workspace_dir)
-            orca_results.append(result)
+            # A relaxed scan is a prerequisite, not a TS candidate: keep it in
+            # the stage chain but out of the ranked candidate table so its
+            # non-stationary energy never sets the ΔE baseline.
+            if _task_kind(stage) != "relaxed_scan":
+                orca_results.append(result)
             detail_parts = [part for part in (result.label, result.reason) if part]
             detail = " · ".join(detail_parts)
         stage_rows.append(
@@ -482,7 +493,11 @@ def render_workflow_report_html(data: WorkflowReportData) -> str:
 
     sections: list[tuple[str, str]] = [("Stage chain", _stage_table_html(data))]
     chart = _energy_chart_svg(data)
-    orca_heading = "TS candidates" if data.template_name == "reaction_ts_search" else "ORCA results"
+    orca_heading = (
+        "TS candidates"
+        if data.template_name in ("reaction_ts_search", "scan_ts_search")
+        else "ORCA results"
+    )
     sections.append((orca_heading, _orca_table_html(data)))
     if chart:
         sections.append(("Relative energies", chart))

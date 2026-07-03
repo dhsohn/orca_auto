@@ -16,6 +16,7 @@ from orca_auto.flow.orchestration.requests import (
     ConformerScreeningWorkflowRequest,
     ReactionTsSearchWorkflowCreationContext,
     ReactionTsSearchWorkflowRequest,
+    ScanTsSearchWorkflowRequest,
     WorkflowCreationContext,
     WorkflowPersistenceContext,
 )
@@ -196,7 +197,7 @@ def _copy_reaction_inputs(
 
 
 def _copy_conformer_input(
-    request: ConformerScreeningWorkflowRequest,
+    request: ConformerScreeningWorkflowRequest | ScanTsSearchWorkflowRequest,
     workspace: _WorkflowWorkspace,
     context: WorkflowCreationContext,
 ) -> _ConformerWorkflowInput:

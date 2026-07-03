@@ -253,6 +253,15 @@ Workflow notes:
 - reaction-path and conformer workflows create and submit xTB/CREST stages internally
 - `reaction_ts_search` expands all selected reactant x product CREST pairs into xTB child jobs, waits for the full xTB phase to reach terminal states, and then batches any matching ORCA OptTS child jobs from the retained `ts_guess` artifacts
 - `conformer_screening` starts with one CREST child job and then hands off up to 20 retained conformers to ORCA child jobs in the next workflow cycle. The scaffold shortcut is `orca_auto scaffold conformer_search <path>`.
+- `scan_ts_search` starts with an ORCA relaxed scan built from `orca.route_line`
+  plus the required `scan_coordinate` manifest key (ORCA scan syntax, 0-based
+  atom indices). When the scan completes, one OptTS+Freq child job is chained
+  per interior maximum of the profile with prominence above
+  `barrier_threshold_kcal` (default 0.5; endpoints excluded; capped by
+  `max_orca_stages`; route from `orca_optts_route_line`), and the workflow
+  report ranks the candidates. A barrierless profile fails the workflow with
+  `scan_profile_no_barrier`. The scaffold shortcut is
+  `orca_auto scaffold scan_ts <path>`.
 - Every workflow advance rewrites `workflow_report.html` in the workflow
   workspace: a self-contained visual summary with the stage chain, the
   CREST → (xTB) → ORCA funnel, and a ranked ORCA results table (relative

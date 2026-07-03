@@ -195,6 +195,22 @@ def _sync_orca_phase(
         )
 
 
+def _append_scan_optts_phase(
+    payload: dict[str, Any], context: AdvanceContext, _config: WorkflowEngineOptions
+) -> None:
+    """Fan out OptTS candidates once the scan_ts_search relaxed scan completed.
+
+    Runs after the ORCA sync so it sees the scan stage's fresh terminal status;
+    the appended stages are submitted by the next advance cycle's sync.
+    """
+    if context.sync_only or context.template_name != "scan_ts_search":
+        return
+    context.deps.stages.materialization._append_scan_optts_stages(
+        payload,
+        workspace_dir=context.workspace_dir,
+    )
+
+
 def _advance_phases(config: WorkflowEngineOptions) -> tuple[AdvancePhase, ...]:
     def bind(phase: ConfiguredAdvancePhase) -> AdvancePhase:
         return lambda payload, context: phase(payload, context, config)
@@ -209,6 +225,7 @@ def _advance_phases(config: WorkflowEngineOptions) -> tuple[AdvancePhase, ...]:
         bind(_notify_xtb_phase),
         bind(_append_conformer_orca_phase),
         bind(_sync_orca_phase),
+        bind(_append_scan_optts_phase),
     )
 
 
@@ -247,6 +264,7 @@ __all__ = [
     "_append_conformer_orca_phase",
     "_append_reaction_orca_phase",
     "_append_reaction_xtb_phase",
+    "_append_scan_optts_phase",
     "_checkpoint_advance_phase",
     "_clear_xtb_handoff_phase",
     "_finalize_advanced_workflow",

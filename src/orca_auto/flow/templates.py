@@ -7,9 +7,11 @@ from orca_auto.core.utils.coercion import normalize_text
 
 REACTION_TS_SEARCH_TEMPLATE_ID = "reaction_ts_search"
 CONFORMER_SCREENING_TEMPLATE_ID = "conformer_screening"
+SCAN_TS_SEARCH_TEMPLATE_ID = "scan_ts_search"
 
 REACTION_TS_SEARCH_SHORTCUT = "ts_search"
 CONFORMER_SCREENING_SHORTCUT = "conformer_search"
+SCAN_TS_SEARCH_SHORTCUT = "scan_ts"
 
 STANDARD_REACTION_REACTANT_FILENAME = "reactant.xyz"
 STANDARD_REACTION_PRODUCT_FILENAME = "product.xyz"
@@ -37,6 +39,12 @@ WORKFLOW_TEMPLATES: tuple[WorkflowTemplateSpec, ...] = (
         display_label=CONFORMER_SCREENING_SHORTCUT,
         scaffold_help="Create a conformer-screening scaffold.",
     ),
+    WorkflowTemplateSpec(
+        template_id=SCAN_TS_SEARCH_TEMPLATE_ID,
+        cli_shortcut=SCAN_TS_SEARCH_SHORTCUT,
+        display_label=SCAN_TS_SEARCH_SHORTCUT,
+        scaffold_help="Create a relaxed-scan TS-search scaffold.",
+    ),
 )
 
 WORKFLOW_TEMPLATE_BY_ID = {template.template_id: template for template in WORKFLOW_TEMPLATES}
@@ -54,7 +62,9 @@ def normalize_workflow_template_id(value: Any) -> str:
     text = normalize_text(value).lower()
     if text in WORKFLOW_TEMPLATE_IDS:
         return text
-    raise ValueError("workflow_type must be one of: reaction_ts_search, conformer_screening")
+    raise ValueError(
+        "workflow_type must be one of: reaction_ts_search, conformer_screening, scan_ts_search"
+    )
 
 
 def workflow_template_id_or_none(value: Any) -> str | None:

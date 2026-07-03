@@ -9,12 +9,14 @@ from orca_auto.core.utils import now_utc_iso, timestamped_token
 from orca_auto.flow.orchestration.builders import (
     create_conformer_screening_workflow_impl,
     create_reaction_ts_search_workflow_impl,
+    create_scan_ts_search_workflow_impl,
 )
 from orca_auto.flow.orchestration.requests import (
     ConformerScreeningWorkflowRequest,
     NewCrestStageFactory,
     ReactionTsSearchWorkflowCreationContext,
     ReactionTsSearchWorkflowRequest,
+    ScanTsSearchWorkflowRequest,
     WorkflowCreationContext,
 )
 from orca_auto.flow.orchestration.stage_builders import new_crest_stage_impl
@@ -151,10 +153,57 @@ def create_conformer_screening_workflow_from_request(
     )
 
 
+def _normalized_scan_ts_request(
+    request: ScanTsSearchWorkflowRequest,
+    *,
+    deps: WorkflowFactoryDeps,
+) -> ScanTsSearchWorkflowRequest:
+    scan_coordinate = deps.normalize_text(request.scan_coordinate)
+    if "=" not in scan_coordinate or "," not in scan_coordinate:
+        raise ValueError(
+            "scan_ts_search requires scan_coordinate like 'B 20 61 = 1.80, 5.00, 32'. "
+            f"got={request.scan_coordinate!r}"
+        )
+    threshold = float(request.barrier_threshold_kcal)
+    if threshold <= 0:
+        raise ValueError(f"barrier_threshold_kcal must be > 0. got={threshold}")
+    return replace(
+        request,
+        scan_coordinate=scan_coordinate,
+        barrier_threshold_kcal=threshold,
+        max_cores=_positive_int_field(request.max_cores, field_name="max_cores"),
+        max_memory_gb=_positive_int_field(
+            request.max_memory_gb,
+            field_name="max_memory_gb",
+        ),
+        max_orca_stages=_positive_int_field(
+            request.max_orca_stages,
+            field_name="max_orca_stages",
+        ),
+        multiplicity=_positive_int_field(request.multiplicity, field_name="multiplicity"),
+    )
+
+
+def create_scan_ts_search_workflow_from_request(
+    request: ScanTsSearchWorkflowRequest,
+    *,
+    deps: WorkflowFactoryDeps,
+) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        create_scan_ts_search_workflow_impl(
+            request=_normalized_scan_ts_request(request, deps=deps),
+            context=deps.workflow_context(),
+        ),
+    )
+
+
 __all__ = [
     "ConformerScreeningWorkflowRequest",
     "ReactionTsSearchWorkflowRequest",
+    "ScanTsSearchWorkflowRequest",
     "WorkflowFactoryDeps",
     "create_conformer_screening_workflow_from_request",
     "create_reaction_ts_search_workflow_from_request",
+    "create_scan_ts_search_workflow_from_request",
 ]
