@@ -289,6 +289,26 @@ def test_relaxed_scan_excluded_from_ts_candidate_ranking(tmp_path: Path) -> None
     }
 
 
+def test_cancelled_forward_candidates_do_not_trigger_reverse_scan(tmp_path: Path) -> None:
+    payload = _create_workflow(tmp_path)
+    workspace = tmp_path / "root" / "wf_scan_ts_test"
+    scan_stage = payload["stages"][0]
+    scan_stage["status"] = "completed"
+    _write_scan_results(scan_stage, [-100.0, -99.5, -100.2, -99.85, -100.3, -99.3])
+    assert append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+    forward_optts = [s for s in payload["stages"] if s["stage_id"].startswith("orca_optts_freq_")]
+
+    # Workflow cancellation transitions the forward candidates to cancelled;
+    # this must NOT be treated as "every candidate failed to verify a TS", so
+    # no reverse scan is appended and no exhaustion error is recorded.
+    for stage in forward_optts:
+        stage["status"] = "cancelled"
+
+    assert not append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+    assert not any(s["stage_id"] == "orca_scan_reverse_01" for s in payload["stages"])
+    assert "workflow_error" not in payload.get("metadata", {})
+
+
 def test_incomplete_scan_does_not_fan_out(tmp_path: Path) -> None:
     payload = _create_workflow(tmp_path)
     workspace = tmp_path / "root" / "wf_scan_ts_test"

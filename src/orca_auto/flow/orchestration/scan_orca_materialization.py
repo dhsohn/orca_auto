@@ -24,7 +24,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.statuses import is_stage_terminal_status
+from orca_auto.core.statuses import (
+    STATUS_CANCEL_FAILED,
+    STATUS_CANCEL_REQUESTED,
+    STATUS_CANCELLED,
+    STATUS_COMPLETED,
+    is_stage_terminal_status,
+)
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.flow._orca_stage_materialization import build_materialized_orca_stage
 from orca_auto.flow.contracts import WorkflowStageInput
@@ -111,12 +117,25 @@ def _optts_stages(payload: dict[str, Any], *, direction: str) -> list[dict[str, 
     return stages
 
 
+_CANCEL_STATUSES = frozenset({STATUS_CANCELLED, STATUS_CANCEL_REQUESTED, STATUS_CANCEL_FAILED})
+
+
 def _all_terminal_none_verified(stages: list[dict[str, Any]]) -> bool:
+    """True when every candidate reached a non-verifying terminal state.
+
+    A cancellation in progress transitions candidates to cancelled without a
+    TS verdict; those must NOT count as "failed to verify a TS" — otherwise a
+    reverse scan (or an exhaustion error) would be appended mid-cancellation,
+    and since terminal/cancel sync runs with submit_ready=False the new stage
+    never submits and the workflow can get stuck in cancel_requested.
+    """
     if not stages:
         return False
     statuses = [_stage_status(stage) for stage in stages]
+    if any(status in _CANCEL_STATUSES for status in statuses):
+        return False
     return all(is_stage_terminal_status(status) for status in statuses) and not any(
-        status == "completed" for status in statuses
+        status == STATUS_COMPLETED for status in statuses
     )
 
 
