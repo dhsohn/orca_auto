@@ -135,21 +135,35 @@ def _scants_chain_request(ctx: RetryAttemptRequest) -> RetryAttemptRequest:
     endpoint/reverse recipes would fail closed. Pointing the chain back at the
     ScanTS attempt the fallback was prepared from (its scan artifacts are
     still on disk) keeps those recipes available after the fallback.
+
+    Resume recovery recreates a missing retry input as a plain copy of the
+    previous attempt, so after a worker restart the current attempt may be a
+    copy-of-a-copy of the fallback; the walk follows
+    ``resume_recreated_missing_input`` markers back to the attempt the copies
+    originated from before looking for the fallback marker.
     """
+    if input_uses_scants(ctx.current_inp):
+        return ctx
     attempts = ctx.state.get("attempts")
-    if not isinstance(attempts, list) or len(attempts) < 2:
+    if not isinstance(attempts, list):
         return ctx
-    creator = attempts[-2]
-    if not isinstance(creator, dict):
+    cursor = len(attempts) - 1
+    while cursor >= 1:
+        creator = attempts[cursor - 1]
+        if not isinstance(creator, dict):
+            return ctx
+        creating_actions = _attempt_patch_actions(creator)
+        if any(action.startswith("scants_fallback_to_optts") for action in creating_actions):
+            inp_raw = str(creator.get("inp_path") or "").strip()
+            out_raw = str(creator.get("out_path") or "").strip()
+            if not inp_raw or not out_raw:
+                return ctx
+            return replace(ctx, current_inp=Path(inp_raw), out_path=Path(out_raw))
+        if any(action.startswith("resume_recreated_missing_input") for action in creating_actions):
+            cursor -= 1
+            continue
         return ctx
-    creating_actions = _attempt_patch_actions(creator)
-    if not any(action.startswith("scants_fallback_to_optts") for action in creating_actions):
-        return ctx
-    inp_raw = str(creator.get("inp_path") or "").strip()
-    out_raw = str(creator.get("out_path") or "").strip()
-    if not inp_raw or not out_raw:
-        return ctx
-    return replace(ctx, current_inp=Path(inp_raw), out_path=Path(out_raw))
+    return ctx
 
 
 def _prepare_scants_optts_fallback(

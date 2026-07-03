@@ -986,6 +986,83 @@ def test_failed_optts_fallback_resumes_endpoint_and_reverse_chain(
     assert all_actions.count("scants_fallback_to_optts") == 1
 
 
+class _ScanTsFallbackResumeRunner(_CaptureSuccessRunner):
+    """Resume runner: recreated OptTS copy fails again, then the endpoint scan runs."""
+
+    def run(self, inp_path: Path) -> SimpleNamespace:
+        self.seen.append(inp_path)
+        out_path = inp_path.with_suffix(".out")
+        if len(self.seen) == 1:
+            _write_ts_not_found_out(out_path)
+            return SimpleNamespace(out_path=str(out_path), return_code=0)
+        _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=29)
+        out_path.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
+        return SimpleNamespace(out_path=str(out_path), return_code=0)
+
+
+def test_resume_after_failed_optts_fallback_resumes_chain(tmp_path: Path) -> None:
+    selected_inp = tmp_path / "rxn.inp"
+    _write_scants_input(selected_inp)
+    first_runner = _ScanTsOpttsFallbackFailsThenChainRunner()
+    rc, _saved = _run_attempt(
+        tmp_path,
+        selected_inp,
+        resumed=False,
+        runner=first_runner,
+        max_retries=3,
+    )
+    assert rc == 0
+
+    # Simulate a worker crash right after the failed OptTS fallback attempt was
+    # recorded but before the next retry input was written.
+    state = load_state(tmp_path)
+    assert state is not None
+    attempts = state["attempts"]
+    assert isinstance(attempts, list)
+    del attempts[2:]
+    attempts[1]["patch_actions"] = []
+    state["status"] = "retrying"
+    state["final_result"] = None
+    save_state(tmp_path, state)
+    for name in ("rxn.retry02.inp", "rxn.retry02.out", "rxn.retry03.inp", "rxn.retry03.out"):
+        (tmp_path / name).unlink()
+
+    resume_runner = _ScanTsFallbackResumeRunner()
+    rc = run_attempts(
+        tmp_path,
+        selected_inp,
+        state,
+        resumed=True,
+        runner=resume_runner,
+        max_retries=3,
+        retry_inp_path=_retry_inp_path,
+        to_resolved_local=lambda raw: Path(raw),
+        emit=lambda _payload: None,
+    )
+    recreated_optts_inp = tmp_path / "rxn.retry02.inp"
+    endpoint_inp = tmp_path / "rxn.retry03.inp"
+    reverse_inp = tmp_path / "rxn.retry04.inp"
+
+    # Recovery reran a copy of the OptTS fallback; the chain redirection then
+    # produced the endpoint scan from the crashed ScanTS artifacts instead of
+    # exhausting the recipes. The reverse input is prepared but exceeds the
+    # ScanTS retry budget after the resume rerun consumed one slot.
+    assert resume_runner.seen == [recreated_optts_inp, endpoint_inp]
+    assert "OPTTS" in recreated_optts_inp.read_text(encoding="utf-8")
+    endpoint_text = endpoint_inp.read_text(encoding="utf-8")
+    assert "B 4 20 = 2.00903226, 3.40, 29" in endpoint_text
+    assert "* xyzfile 0 1 rxn.003.xyz" in endpoint_text
+    reverse_text = reverse_inp.read_text(encoding="utf-8")
+    assert "B 4 20 = 3.40, 1.86, 32" in reverse_text
+    assert "* xyzfile 0 1 rxn.retry03.029.xyz" in reverse_text
+    assert rc == 1
+    saved = load_state(tmp_path)
+    assert saved is not None
+    final_result = saved.get("final_result")
+    assert isinstance(final_result, dict)
+    assert final_result.get("reason") == "retry_limit_reached"
+
+
 def test_scan_profile_interior_barrier_prominence() -> None:
     kcal_per_hartree = 627.5094740631
 
