@@ -249,6 +249,9 @@ python -m orca_auto.core.engines.worker_child \
   않습니다. standalone `OptTS`/`NEB-TS`도 자동 재시도하지 않으며, Hessian
   hardening은 사용자가 명시한 입력으로 남깁니다. `ScanTS`는 scan artifact 기반의
   ScanTS 전용 continuation, endpoint-completion, reverse-scan 로직만 사용합니다.
+  scan이 maximum을 포착한 뒤 ORCA의 TS-guess refinement가 지오메트리를
+  망가뜨리면(zero distance), 일반 체인을 재개하기 전에 최고 에너지 surface
+  point에서 OptTS 재시도를 1회 수행합니다.
   maximum이 계획된 scan endpoint 전에 나타나면 ORCA가 먼저 일반 relaxed scan으로
   endpoint를 완료합니다(`ScanTS` -> `Opt`, `Freq`/`IRC` 제거). 그 다음 실제
   endpoint xyz에서 역방향 `ScanTS`를 시작합니다. 중간 단계인 endpoint 완료는
