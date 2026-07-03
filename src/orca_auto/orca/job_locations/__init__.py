@@ -23,7 +23,6 @@ from ..state import (
     REPORT_JSON_NAME,
     REPORT_MD_NAME,
     STATE_FILE_NAME,
-    load_organized_ref,
     load_report_json,
     load_state,
 )
@@ -79,7 +78,6 @@ __all__ = [
     "load_job_artifact_context",
     "load_job_artifacts",
     "load_job_runtime_context",
-    "load_organized_ref",
     "load_orca_contract_payload",
     "load_report_json",
     "load_state",

@@ -184,7 +184,7 @@ def test_engine_runtime_paths_requires_workflow_root_for_xtb(tmp_path: Path) -> 
 
 def test_engine_runtime_paths_requires_runtime_allowed_root(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("runtime:\n  organized_root: /tmp/organized\n", encoding="utf-8")
+    config_path.write_text("runtime:\n  default_max_retries: 0\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="Missing runtime.allowed_root"):
         engine_runtime.engine_runtime_paths(str(config_path))
@@ -220,7 +220,6 @@ def test_engine_runtime_paths_derives_internal_engine_roots_from_workflow_root(
     assert engine_runtime.engine_runtime_paths(str(config_path), engine="xtb") == {
         "workflow_root": workflow_root.resolve(),
         "allowed_root": workflow_root.resolve(),
-        "organized_root": workflow_root.resolve(),
         "admission_root": admission_root.resolve(),
     }
     assert (

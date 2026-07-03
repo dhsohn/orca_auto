@@ -53,7 +53,6 @@ class XtbArtifactContract:
     reason: str
     job_dir: str
     latest_known_path: str
-    organized_output_dir: str = ""
     reaction_key: str = ""
     selected_input_xyz: str = ""
     selected_candidate_paths: tuple[str, ...] = ()
@@ -70,7 +69,6 @@ class XtbArtifactContract:
             "reason": self.reason,
             "job_dir": self.job_dir,
             "latest_known_path": self.latest_known_path,
-            "organized_output_dir": self.organized_output_dir,
             "reaction_key": self.reaction_key,
             "selected_input_xyz": self.selected_input_xyz,
             "selected_candidate_paths": list(self.selected_candidate_paths),

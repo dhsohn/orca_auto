@@ -12,7 +12,6 @@ class JobLocationRecord:
     original_run_dir: str
     molecule_key: str = ""
     selected_input_xyz: str = ""
-    organized_output_dir: str = ""
     latest_known_path: str = ""
     resource_request: dict[str, int] = field(default_factory=dict)
     resource_actual: dict[str, int] = field(default_factory=dict)

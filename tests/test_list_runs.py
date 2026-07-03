@@ -221,7 +221,6 @@ class TestListStandaloneRuns(_ListTestBase):
                             "original_run_dir": str(allowed / "project" / "rxn_tracked"),
                             "molecule_key": "rxn_tracked",
                             "selected_input_xyz": str(organized / "tracked.inp"),
-                            "organized_output_dir": str(organized),
                             "latest_known_path": str(organized),
                             "resource_request": {},
                             "resource_actual": {},

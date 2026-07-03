@@ -43,9 +43,6 @@ from orca_auto.flow.orchestration.support import (
     clear_reaction_xtb_handoff_error_if_recovering_impl as _clear_reaction_xtb_handoff_error_if_recovering,
 )
 from orca_auto.flow.orchestration.support import (
-    load_config_organized_root_impl as _load_config_organized_root,
-)
-from orca_auto.flow.orchestration.support import (
     load_config_root_impl as _load_config_root,
 )
 from orca_auto.flow.orchestration.support import (
@@ -184,7 +181,6 @@ def test_latest_child_stage_summary_and_terminal_result_extract_relevant_fields(
             "queue_id": "q_1",
             "run_id": "run_1",
             "latest_known_path": "/tmp/rxn",
-            "organized_output_dir": "/tmp/out",
             "completed_at": "2026-04-19T00:10:00+00:00",
         },
         {
@@ -209,7 +205,6 @@ def test_latest_child_stage_summary_and_terminal_result_extract_relevant_fields(
         "queue_id": "q_1",
         "run_id": "run_1",
         "latest_known_path": "/tmp/rxn",
-        "organized_output_dir": "/tmp/out",
         "completed_at": "2026-04-19T00:10:00+00:00",
     }
 
@@ -254,19 +249,10 @@ def test_submission_target_and_config_roots_follow_precedence() -> None:
         overrides={
             "engine_runtime_paths": lambda path, **kwargs: {
                 "allowed_root": Path("/tmp/allowed"),
-                "organized_root": Path("/tmp/organized"),
             }
         }
     )
     assert _load_config_root("/tmp/config.yaml", deps=deps) == Path("/tmp/allowed")
-    assert _load_config_organized_root("/tmp/config.yaml", deps=deps) == Path("/tmp/organized")
-
-    deps = orchestration_deps(
-        overrides={
-            "engine_runtime_paths": lambda path, **kwargs: {"allowed_root": Path("/tmp/allowed")}
-        }
-    )
-    assert _load_config_organized_root("/tmp/config.yaml", deps=deps) == Path("/tmp/allowed")
 
     deps = orchestration_deps(
         overrides={
@@ -274,7 +260,6 @@ def test_submission_target_and_config_roots_follow_precedence() -> None:
         }
     )
     assert _load_config_root("/tmp/config.yaml", deps=deps) is None
-    assert _load_config_organized_root("/tmp/config.yaml", deps=deps) is None
     assert _load_config_root(None) is None
 
 
@@ -487,7 +472,6 @@ def test_completed_role_and_contract_helpers_use_expected_targets() -> None:
     deps = orchestration_deps(
         overrides={
             "_load_config_root": lambda path, **kwargs: Path("/tmp/orca_allowed"),
-            "_load_config_organized_root": lambda path, **kwargs: Path("/tmp/orca_organized"),
             "load_orca_artifact_contract": fake_load_orca_artifact_contract,
         }
     )
@@ -499,7 +483,6 @@ def test_completed_role_and_contract_helpers_use_expected_targets() -> None:
         {
             "target": "run_1",
             "orca_allowed_root": Path("/tmp/orca_allowed"),
-            "orca_organized_root": Path("/tmp/orca_organized"),
             "queue_id": "q_1",
             "run_id": "run_1",
             "reaction_dir": "/tmp/reaction_dir",

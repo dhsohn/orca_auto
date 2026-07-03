@@ -38,7 +38,6 @@ def workflow_workspace_internal_engine_paths(
     stage_base = workspace / stage_name
     return {
         "allowed_root": stage_base,
-        "organized_root": stage_base,
     }
 
 
@@ -153,10 +152,7 @@ def iter_workflow_runtime_workspaces(
                     engine=engine_text,
                     stage_dirname=stage_dirname,
                 )
-                if (
-                    runtime_paths["allowed_root"].exists()
-                    or runtime_paths["organized_root"].exists()
-                ):
+                if runtime_paths["allowed_root"].exists():
                     candidates.append(item)
                     break
             continue

@@ -75,7 +75,7 @@ from ..job_locations import (
     resource_dict,
     upsert_job_record,
 )
-from ..state import finalize_state, load_organized_ref, load_report_json, load_state
+from ..state import finalize_state, load_report_json, load_state
 from ..statuses import AnalyzerStatus
 from ..telegram_notifier import notify_run_finished_event
 from . import worker_lifecycle as _lifecycle_helpers
@@ -248,7 +248,6 @@ def _tracking_callbacks() -> _tracking_helpers.OrcaQueueWorkerTrackingCallbacks:
         build_run_finished_notification=build_run_finished_notification,
         coerce_resource_request=coerce_resource_request,
         finished_notification_already_sent=finished_notification_already_sent,
-        load_organized_ref=load_organized_ref,
         load_report_json=load_report_json,
         load_state=load_state,
         mark_finished_notification_sent=mark_finished_notification_sent,

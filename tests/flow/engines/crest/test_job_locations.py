@@ -20,20 +20,16 @@ from orca_auto.flow.engines.crest.job_locations import (
 from orca_auto.flow.engines.crest.state import write_report_json, write_state
 
 
-def _make_cfg(tmp_path: Path) -> tuple[AppConfig, Path, Path]:
+def _make_cfg(tmp_path: Path) -> tuple[AppConfig, Path]:
     allowed_root = tmp_path / "allowed"
-    organized_root = tmp_path / "organized"
     allowed_root.mkdir()
-    organized_root.mkdir()
     return (
         AppConfig(
             runtime=CommonRuntimeConfig(
                 allowed_root=str(allowed_root),
-                organized_root=str(organized_root),
             )
         ),
         allowed_root.resolve(),
-        organized_root.resolve(),
     )
 
 
@@ -66,7 +62,7 @@ def test_build_job_location_record_merges_existing_fields_and_defaults_actual_re
     tmp_path: Path,
 ) -> None:
     original_dir = tmp_path / "runs" / "job-001"
-    organized_dir = tmp_path / "organized" / "water" / "job-001"
+    rerun_dir = tmp_path / "reruns" / "job-001"
     selected_xyz = _write_xyz(original_dir / "Water.xyz")
     existing = JobLocationRecord(
         job_id="job-001",
@@ -76,8 +72,7 @@ def test_build_job_location_record_merges_existing_fields_and_defaults_actual_re
         original_run_dir=str(original_dir.resolve()),
         molecule_key="water",
         selected_input_xyz=str(selected_xyz.resolve()),
-        organized_output_dir=str(organized_dir.resolve()),
-        latest_known_path=str(organized_dir.resolve()),
+        latest_known_path=str(original_dir.resolve()),
         resource_request={"max_cores": 4, "max_memory_gb": 8},
         resource_actual={},
     )
@@ -86,7 +81,7 @@ def test_build_job_location_record_merges_existing_fields_and_defaults_actual_re
         existing=existing,
         job_id=" job-001 ",
         status=" completed ",
-        job_dir=tmp_path / "reruns" / "job-001",
+        job_dir=rerun_dir,
         mode="nci",
         selected_input_xyz="",
         resource_request={"max_cores": 6, "max_memory_gb": 12},
@@ -98,8 +93,7 @@ def test_build_job_location_record_merges_existing_fields_and_defaults_actual_re
     assert record.original_run_dir == str(original_dir.resolve())
     assert record.selected_input_xyz == str(selected_xyz.resolve())
     assert record.molecule_key == "water"
-    assert record.organized_output_dir == str(organized_dir.resolve())
-    assert record.latest_known_path == str(organized_dir.resolve())
+    assert record.latest_known_path == str(rerun_dir.resolve())
     assert record.resource_request == {"max_cores": 6, "max_memory_gb": 12}
     assert record.resource_actual == {"max_cores": 6, "max_memory_gb": 12}
 
@@ -108,9 +102,7 @@ def test_resolve_latest_job_dir_prefers_indexed_candidates_and_path_lookup(tmp_p
     index_root = tmp_path / "allowed"
     index_root.mkdir()
     original_dir = tmp_path / "runs" / "job-123"
-    organized_dir = tmp_path / "organized" / "water" / "job-123"
     original_dir.mkdir(parents=True)
-    organized_dir.mkdir(parents=True)
 
     upsert_job_location(
         index_root,
@@ -122,17 +114,14 @@ def test_resolve_latest_job_dir_prefers_indexed_candidates_and_path_lookup(tmp_p
             original_run_dir=str(original_dir.resolve()),
             molecule_key="water",
             selected_input_xyz="",
-            organized_output_dir=str(organized_dir.resolve()),
             latest_known_path=str((tmp_path / "missing" / "job-123").resolve()),
             resource_request={},
             resource_actual={},
         ),
     )
 
-    assert resolve_latest_job_dir(index_root, "job-123") == organized_dir.resolve()
-    assert (
-        resolve_latest_job_dir(index_root, str(original_dir.resolve())) == organized_dir.resolve()
-    )
+    assert resolve_latest_job_dir(index_root, "job-123") == original_dir.resolve()
+    assert resolve_latest_job_dir(index_root, str(original_dir.resolve())) == original_dir.resolve()
 
 
 def test_resolve_latest_job_dir_falls_back_to_existing_target_directory(tmp_path: Path) -> None:
@@ -186,7 +175,6 @@ def test_resolve_latest_job_dir_skips_blank_and_unresolvable_indexed_candidates(
             original_run_dir=str(fallback_dir),
             molecule_key="water",
             selected_input_xyz="",
-            organized_output_dir=str(broken_indexed_path),
             latest_known_path="",
             resource_request={},
             resource_actual={},
@@ -224,7 +212,6 @@ def test_resolve_latest_job_dir_returns_none_when_indexed_candidates_are_unusabl
             original_run_dir=str(missing_dir),
             molecule_key="sample",
             selected_input_xyz="",
-            organized_output_dir=str(broken_indexed_path),
             latest_known_path="",
             resource_request={},
             resource_actual={},
@@ -272,7 +259,6 @@ def test_load_job_artifacts_reads_files_for_resolved_job(tmp_path: Path) -> None
             original_run_dir=str(original_dir.resolve()),
             molecule_key="sample",
             selected_input_xyz=str(selected_xyz.resolve()),
-            organized_output_dir=str(job_dir.resolve()),
             latest_known_path=str(job_dir.resolve()),
             resource_request={},
             resource_actual={},
@@ -288,11 +274,9 @@ def test_load_job_artifacts_reads_files_for_resolved_job(tmp_path: Path) -> None
 
 
 def test_record_from_artifacts_merges_sources_and_existing_values(tmp_path: Path) -> None:
-    job_dir = tmp_path / "organized" / "job-300"
-    original_dir = tmp_path / "runs" / "job-300"
+    job_dir = tmp_path / "runs" / "job-300"
     selected_xyz = _write_xyz(tmp_path / "inputs" / "Fancy Name.xyz")
     job_dir.mkdir(parents=True)
-    original_dir.mkdir(parents=True)
     existing = JobLocationRecord(
         job_id="job-old",
         app_name="orca_auto_crest",
@@ -301,7 +285,6 @@ def test_record_from_artifacts_merges_sources_and_existing_values(tmp_path: Path
         original_run_dir="",
         molecule_key="",
         selected_input_xyz="",
-        organized_output_dir="",
         latest_known_path="",
         resource_request={},
         resource_actual={"max_cores": 2, "max_memory_gb": 3},
@@ -312,13 +295,9 @@ def test_record_from_artifacts_merges_sources_and_existing_values(tmp_path: Path
         state={"job_id": "job-300", "status": "completed"},
         report={
             "mode": "nci",
-            "original_run_dir": str(original_dir.resolve()),
-            "resource_request": {"max_cores": "8", "max_memory_gb": "16"},
-        },
-        organized_ref={
+            "original_run_dir": str(job_dir.resolve()),
             "selected_input_xyz": str(selected_xyz.resolve()),
-            "organized_output_dir": str(job_dir.resolve()),
-            "resource_actual": "invalid",
+            "resource_request": {"max_cores": "8", "max_memory_gb": "16"},
         },
         existing=existing,
     )
@@ -327,10 +306,9 @@ def test_record_from_artifacts_merges_sources_and_existing_values(tmp_path: Path
     assert record.job_id == "job-300"
     assert record.status == "completed"
     assert record.job_type == "crest_nci_conformer_search"
-    assert record.original_run_dir == str(original_dir.resolve())
+    assert record.original_run_dir == str(job_dir.resolve())
     assert record.selected_input_xyz == str(selected_xyz.resolve())
     assert record.molecule_key == "fancy_name"
-    assert record.organized_output_dir == str(job_dir.resolve())
     assert record.latest_known_path == str(job_dir.resolve())
     assert record.resource_request == {"max_cores": 8, "max_memory_gb": 16}
     assert record.resource_actual == {"max_cores": 2, "max_memory_gb": 3}
@@ -342,7 +320,6 @@ def test_record_from_artifacts_returns_none_without_job_id(tmp_path: Path) -> No
             job_dir=tmp_path / "job-without-id",
             state={},
             report={},
-            organized_ref={},
             existing=None,
         )
         is None
@@ -363,7 +340,6 @@ def test_record_from_artifacts_defaults_invalid_resource_request_without_existin
             "resource_request": "invalid",
         },
         report={"selected_input_xyz": str(selected_xyz.resolve())},
-        organized_ref={},
         existing=None,
     )
 
@@ -373,17 +349,15 @@ def test_record_from_artifacts_defaults_invalid_resource_request_without_existin
 
 
 def test_upsert_job_record_writes_and_updates_existing_index_entry(tmp_path: Path) -> None:
-    cfg, allowed_root, organized_root = _make_cfg(tmp_path)
-    original_dir = allowed_root / "runs" / "job-500"
-    organized_dir = organized_root / "standard" / "water_sample" / "job-500"
-    selected_xyz = _write_xyz(original_dir / "Water Sample.xyz")
-    organized_dir.mkdir(parents=True)
+    cfg, allowed_root = _make_cfg(tmp_path)
+    job_dir = allowed_root / "runs" / "job-500"
+    selected_xyz = _write_xyz(job_dir / "Water Sample.xyz")
 
     first = upsert_job_record(
         cfg,
         job_id="job-500",
         status="running",
-        job_dir=original_dir,
+        job_dir=job_dir,
         mode="standard",
         selected_input_xyz=str(selected_xyz.resolve()),
         resource_request={"max_cores": 4, "max_memory_gb": 8},
@@ -392,26 +366,24 @@ def test_upsert_job_record_writes_and_updates_existing_index_entry(tmp_path: Pat
         cfg,
         job_id="job-500",
         status="completed",
-        job_dir=organized_dir,
+        job_dir=job_dir,
         mode="nci",
         selected_input_xyz="",
-        organized_output_dir=organized_dir,
         resource_request={"max_cores": 6, "max_memory_gb": 12},
         resource_actual={"max_cores": 5, "max_memory_gb": 10},
     )
     stored = get_job_location(allowed_root, "job-500")
 
-    assert first.original_run_dir == str(original_dir.resolve())
-    assert first.latest_known_path == str(original_dir.resolve())
+    assert first.original_run_dir == str(job_dir.resolve())
+    assert first.latest_known_path == str(job_dir.resolve())
     assert first.resource_actual == {"max_cores": 4, "max_memory_gb": 8}
     assert stored == updated
     assert stored is not None
     assert stored.status == "completed"
     assert stored.job_type == "crest_nci_conformer_search"
-    assert stored.original_run_dir == str(original_dir.resolve())
+    assert stored.original_run_dir == str(job_dir.resolve())
     assert stored.selected_input_xyz == str(selected_xyz.resolve())
     assert stored.molecule_key == "water_sample"
-    assert stored.organized_output_dir == str(organized_dir.resolve())
-    assert stored.latest_known_path == str(organized_dir.resolve())
+    assert stored.latest_known_path == str(job_dir.resolve())
     assert stored.resource_request == {"max_cores": 6, "max_memory_gb": 12}
     assert stored.resource_actual == {"max_cores": 5, "max_memory_gb": 10}

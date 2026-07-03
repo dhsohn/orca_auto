@@ -354,9 +354,6 @@ def test_terminal_summary_helpers_cover_status_reason_and_metadata(
             "status": {},
             "engine_payload": {"job_type": "ranking"},
         },
-        load_organized_ref_fn=lambda _job_dir: {
-            "organized_output_dir": str(tmp_path / "organized")
-        },
         queue_entry_by_id_fn=lambda _root, _queue_id: SimpleNamespace(
             status=SimpleNamespace(value="cancelled"),
             error="",
@@ -368,7 +365,6 @@ def test_terminal_summary_helpers_cover_status_reason_and_metadata(
         job_id="job-1",
         status="cancelled",
         reason="cancel_requested",
-        organized_output_dir=str(tmp_path / "organized"),
         metadata_update={"job_type": "ranking"},
     )
     assert terminal_mod.terminal_status({}, {}, None, 0) == "completed"
@@ -381,7 +377,6 @@ def test_terminal_summary_helpers_cover_status_reason_and_metadata(
 
     terminal_mod.print_terminal_summary(summary)
     output = capsys.readouterr().out
-    assert f"organized_output_dir: {tmp_path / 'organized'}" in output
     assert "status: cancelled" in output
 
 

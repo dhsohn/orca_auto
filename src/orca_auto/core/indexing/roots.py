@@ -50,7 +50,7 @@ def runtime_roots_for_cfg(cfg: Any, *, engine: str) -> tuple[Path, ...]:
                 stage_dirname=stage_dirname,
             )
             allowed_root = runtime_paths["allowed_root"]
-            if allowed_root.exists() or runtime_paths["organized_root"].exists():
+            if allowed_root.exists():
                 append_unique_root(roots, allowed_root)
     return tuple(roots)
 
@@ -132,7 +132,7 @@ def resolve_latest_job_dir(
             return None
         return resolved if resolved.exists() and resolved.is_dir() else None
 
-    candidates = [record.latest_known_path, record.organized_output_dir, record.original_run_dir]
+    candidates = [record.latest_known_path, record.original_run_dir]
     for latest in candidates:
         if not latest:
             continue

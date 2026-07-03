@@ -22,21 +22,19 @@ from orca_auto.core.config.schema import (
 
 
 @pytest.mark.parametrize(
-    ("allowed_root", "organized_root", "admission_root", "expected_root"),
+    ("allowed_root", "admission_root", "expected_root"),
     [
-        ("/allowed", "/organized", None, "/allowed"),
-        ("/allowed", "/organized", "/custom", "/custom"),
+        ("/allowed", None, "/allowed"),
+        ("/allowed", "/custom", "/custom"),
     ],
 )
 def test_common_runtime_config_resolved_admission_root(
     allowed_root: str,
-    organized_root: str,
     admission_root: str | None,
     expected_root: str,
 ) -> None:
     config = CommonRuntimeConfig(
         allowed_root=allowed_root,
-        organized_root=organized_root,
         admission_root=admission_root,
     )
 
@@ -58,7 +56,6 @@ def test_common_runtime_config_resolved_admission_limit_lower_bounds(
 ) -> None:
     config = CommonRuntimeConfig(
         allowed_root="/allowed",
-        organized_root="/organized",
         max_concurrent=max_concurrent,
         admission_limit=admission_limit,
     )
@@ -72,7 +69,6 @@ def test_common_runtime_config_rejects_invalid_explicit_admission_limit(
 ) -> None:
     config = CommonRuntimeConfig(
         allowed_root="/allowed",
-        organized_root="/organized",
         max_concurrent=3,
         admission_limit=cast(Any, admission_limit),
     )
@@ -89,7 +85,6 @@ def test_retry_runtime_config_normalizes_shared_runtime_fields() -> None:
         admission_limit=cast(Any, "2"),
     )
 
-    assert config.organized_root == "/runs/engine"
     assert config.default_max_retries == 0
     assert config.max_concurrent == 1
     assert config.admission_root == "/runs/engine"

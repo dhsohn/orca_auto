@@ -33,7 +33,6 @@ from orca_auto.flow.engines.xtb.worker_context import (
 @dataclass(frozen=True)
 class WorkerExecutionOutcome:
     result: XtbRunResult
-    organized_output_dir: str = ""
 
 
 def write_running_state(

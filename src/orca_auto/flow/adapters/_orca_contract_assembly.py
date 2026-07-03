@@ -34,22 +34,18 @@ class OrcaContractLoaderDeps:
             Any,
             ContractPayload,
             ContractPayload,
-            ContractPayload,
             ContractPayload | None,
-            Path | None,
         ]
         | None,
     ]
     tracked_artifact_context_fn: Callable[
-        ..., tuple[Path | None, Any, ContractPayload, ContractPayload, ContractPayload]
+        ..., tuple[Path | None, Any, ContractPayload, ContractPayload]
     ]
     find_queue_entry_fn: Callable[..., ContractPayload | None]
     queue_entry_metadata_value_fn: Callable[[ContractPayload | None, str], Any]
     resolve_candidate_path_fn: Callable[[Any], Path | None]
     direct_dir_target_fn: Callable[[str], Path | None]
-    record_organized_dir_fn: Callable[[Any], Path | None]
     load_json_dict_fn: Callable[[Path], ContractPayload]
-    load_tracked_organized_ref_fn: Callable[[Any, Path | None], ContractPayload]
     status_from_payloads_fn: Callable[..., StatusTuple]
     resolve_artifact_path_fn: Callable[[Any, Path | None], str]
     derive_selected_input_xyz_fn: Callable[[str], str]
@@ -80,7 +76,6 @@ class _ContractPayloadContext:
     reaction_dir: str
     current_dir: Path | None
     latest_known_path: str
-    organized_output_dir: str
     optimized_xyz_path: str
     queue_entry: ContractPayload
     selected_inp: str
@@ -133,7 +128,6 @@ def load_orca_artifact_contract_impl(
     *,
     target: str,
     orca_allowed_root: str | Path | None,
-    orca_organized_root: str | Path | None,
     queue_id: str,
     run_id: str,
     reaction_dir: str,
@@ -142,7 +136,7 @@ def load_orca_artifact_contract_impl(
     request = _contract_context.LoadRequest(
         target=target, queue_id=queue_id, run_id=run_id, reaction_dir=reaction_dir
     )
-    roots = _contract_context.resolve_roots(orca_allowed_root, orca_organized_root, deps)
+    roots = _contract_context.resolve_roots(orca_allowed_root, deps)
     context = _load_contract_context(request, roots, deps)
     return _contract_from_context(request, roots, context, deps)
 
@@ -177,7 +171,6 @@ def _contract_from_payload(
         latest_known_path=deps.normalize_text_fn(
             payload.get("latest_known_path") or request.target
         ),
-        organized_output_dir=deps.normalize_text_fn(payload.get("organized_output_dir")),
         optimized_xyz_path=deps.normalize_text_fn(payload.get("optimized_xyz_path")),
         queue_id=deps.normalize_text_fn(payload.get("queue_id") or request.queue_id),
         queue_status=deps.normalize_text_fn(payload.get("queue_status")).lower(),
@@ -208,7 +201,6 @@ def _load_contract_context(
     _contract_context.set_current_dir(request, context, deps)
     _contract_context.load_context_payloads(context, deps)
     context.resolved_run_id = _contract_context.resolve_run_id(request, context, deps)
-    _contract_context.resolve_organized_context(request, context, deps)
     return context
 
 
@@ -254,7 +246,6 @@ def _payload_from_context(
         reaction_dir=request.reaction_dir,
         current_dir=context.current_dir,
         latest_known_path=latest_known_path,
-        organized_output_dir=_organized_output_dir(context, roots, deps),
         optimized_xyz_path=paths.optimized_xyz_path,
         queue_entry=queue,
         selected_inp=paths.selected_inp,
@@ -285,8 +276,6 @@ def _latest_known_path(
     )
     if record_path:
         return record_path
-    if context.organized_dir is not None:
-        return str(context.organized_dir)
     if context.current_dir is not None:
         return str(context.current_dir)
     return deps.normalize_text_fn(request.target)
@@ -327,7 +316,6 @@ def _artifact_paths(
         selected_inp=selected_inp,
         selected_input_xyz=selected_input_xyz,
         current_dir=context.current_dir,
-        organized_dir=context.organized_dir,
         latest_known_path=latest_known_path,
         last_out_path=last_out_path,
     )
@@ -338,16 +326,12 @@ def _selected_input_source(context: _contract_context.LoaderContext) -> Any:
     return (
         context.state.get("selected_inp")
         or context.report.get("selected_inp")
-        or context.organized_ref.get("selected_inp")
-        or context.organized_ref.get("selected_input_xyz")
         or (context.tracked_record.selected_input_xyz if context.tracked_record is not None else "")
     )
 
 
 def _selected_xyz_source(context: _contract_context.LoaderContext) -> Any:
-    return context.organized_ref.get("selected_input_xyz") or (
-        context.tracked_record.selected_input_xyz if context.tracked_record is not None else ""
-    )
+    return context.tracked_record.selected_input_xyz if context.tracked_record is not None else ""
 
 
 def _last_out_source(context: _contract_context.LoaderContext) -> Any:
@@ -385,25 +369,6 @@ def _ensure_orca_record(tracked_record: Any) -> None:
         and tracked_record.app_name != ORCA_AUTO_ORCA_APP_NAME
     ):
         raise ValueError(f"Expected orca_auto_orca index record, got: {tracked_record.app_name}")
-
-
-def _organized_output_dir(
-    context: _contract_context.LoaderContext,
-    roots: _contract_context.LoadRoots,
-    deps: OrcaContractLoaderDeps,
-) -> str:
-    record_output = (
-        context.tracked_record.organized_output_dir if context.tracked_record is not None else ""
-    )
-    current_output = ""
-    if context.current_dir is not None and deps.is_subpath_fn(context.current_dir, roots.organized):
-        current_output = str(context.current_dir)
-    return deps.normalize_text_fn(
-        record_output
-        or context.organized_ref.get("organized_output_dir")
-        or (str(context.organized_dir) if context.organized_dir is not None else "")
-        or current_output
-    )
 
 
 __all__ = [

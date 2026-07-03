@@ -126,7 +126,6 @@ def prefer_orca_optimized_xyz(
     selected_inp: str,
     selected_input_xyz: str,
     current_dir: Path | None,
-    organized_dir: Path | None,
     latest_known_path: str,
     last_out_path: str,
 ) -> str:
@@ -139,7 +138,6 @@ def prefer_orca_optimized_xyz(
         if selected_inp_path is not None and not selected_inp_path.is_dir()
         else None,
         current_dir,
-        organized_dir,
         path_or_parent(latest_known_path),
         last_out.parent if last_out is not None and not last_out.is_dir() else None,
     )

@@ -197,7 +197,6 @@ def test_stage_transition_event_payloads_emit_completion_and_failure_without_xtb
             "task_status": "completed",
             "engine": "crest",
             "task_kind": "conformer_search",
-            "organized_output_dir": "/tmp/crest_done",
         },
         {
             "stage_id": "xtb_submit_fail_1",
@@ -221,7 +220,6 @@ def test_stage_transition_event_payloads_emit_completion_and_failure_without_xtb
         "workflow_stage_completed",
         "workflow_stage_failed",
     ]
-    assert events[0]["metadata"]["organized_output_dir"] == "/tmp/crest_done"
     assert events[1]["reason"] == "submit_failed"
 
 

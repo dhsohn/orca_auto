@@ -35,7 +35,6 @@ _STALE_STAGE_METADATA_KEYS = frozenset(
         "orca_latest_attempt_number",
         "orca_latest_attempt_status",
         "optimized_xyz_path",
-        "organized_output_dir",
         "queue_id",
         "queue_status",
         "reason",

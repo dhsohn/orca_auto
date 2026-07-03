@@ -436,7 +436,6 @@ def _stage_support_defaults(
     del overrides
     from orca_auto.flow.orchestration.support import (
         clear_reaction_xtb_handoff_error_if_recovering_impl,
-        load_config_organized_root_impl,
         load_config_root_impl,
         reaction_orca_source_candidate_path_impl,
         reaction_ts_guess_error_impl,
@@ -452,7 +451,6 @@ def _stage_support_defaults(
                 "_clear_reaction_xtb_handoff_error_if_recovering": (
                     clear_reaction_xtb_handoff_error_if_recovering_impl
                 ),
-                "_load_config_organized_root": load_config_organized_root_impl,
                 "_load_config_root": load_config_root_impl,
                 "_reaction_orca_source_candidate_path": reaction_orca_source_candidate_path_impl,
                 "_reaction_ts_guess_error": reaction_ts_guess_error_impl,

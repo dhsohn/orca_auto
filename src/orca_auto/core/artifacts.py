@@ -9,7 +9,6 @@ JOB_REPORT_JSON_FILE = "job_report.json"
 JOB_REPORT_MD_FILE = "job_report.md"
 JOB_REPORT_HTML_FILE = "job_report.html"
 WORKFLOW_REPORT_HTML_FILE = "workflow_report.html"
-ORGANIZED_REF_FILE = "organized_ref.json"
 QUEUE_FILE = "queue.json"
 RECORDS_JSONL_FILE = "records.jsonl"
 WORKFLOW_FILE = "workflow.json"
@@ -24,7 +23,6 @@ __all__ = [
     "JOB_REPORT_JSON_FILE",
     "JOB_REPORT_MD_FILE",
     "JOB_STATE_FILE",
-    "ORGANIZED_REF_FILE",
     "QUEUE_FILE",
     "RECORDS_JSONL_FILE",
     "RUN_REPORT_HTML_FILE",

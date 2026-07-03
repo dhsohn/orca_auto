@@ -10,7 +10,6 @@ from orca_auto.flow.orchestration.stage_runtime.shared import (
     _engine_stage_sync_context,
     _load_contract_or_none,
     _orchestration_context,
-    _workflow_internal_organized_root,
 )
 from orca_auto.flow.orchestration.stage_views import WorkflowStageView, WorkflowTaskView
 
@@ -69,9 +68,6 @@ def _load_orca_contract(
     orca_config: str | None,
 ) -> Any | None:
     allowed_root = o.stages.support._load_config_root(orca_config, engine="orca")
-    organized_root = _workflow_internal_organized_root(
-        reaction_dir_hint, engine="orca"
-    ) or o.stages.support._load_config_organized_root(orca_config, engine="orca")
     target = (
         o.stages.support._normalize_text(stage_metadata.get("run_id"))
         or reaction_dir_hint
@@ -82,7 +78,6 @@ def _load_orca_contract(
     return o.engines.load_orca_artifact_contract(
         target=target,
         orca_allowed_root=allowed_root,
-        orca_organized_root=organized_root,
         queue_id=o.stages.support._normalize_text(stage_metadata.get("queue_id")),
         run_id=o.stages.support._normalize_text(stage_metadata.get("run_id")),
         reaction_dir=reaction_dir_hint,
@@ -154,13 +149,7 @@ def _orca_output_artifact_specs(contract: Any) -> tuple[dict[str, Any], ...]:
             "kind": "orca_output_dir",
             "path": contract.latest_known_path,
             "selected": contract.status in {"completed", "failed", "cancelled"},
-            "metadata": {"organized": bool(contract.organized_output_dir)},
-        },
-        {
-            "kind": "orca_organized_output_dir",
-            "path": contract.organized_output_dir,
-            "selected": bool(contract.organized_output_dir),
-            "metadata": {"run_id": contract.run_id},
+            "metadata": {},
         },
     )
 
@@ -255,10 +244,6 @@ def completed_orca_stage_impl(
         target=target,
         stage=stage,
         orca_allowed_root=o.stages.support._load_config_root(orca_config, engine="orca"),
-        orca_organized_root=(
-            _workflow_internal_organized_root(reaction_dir_hint, engine="orca")
-            or o.stages.support._load_config_organized_root(orca_config, engine="orca")
-        ),
         queue_id=o.stages.support._normalize_text(stage_metadata.get("queue_id")),
         run_id=o.stages.support._normalize_text(stage_metadata.get("run_id")),
         reaction_dir=reaction_dir_hint,

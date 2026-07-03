@@ -87,7 +87,6 @@ class OrcaArtifactContractLoader(Protocol):
         *,
         target: str,
         orca_allowed_root: WorkflowWorkspace | None = None,
-        orca_organized_root: WorkflowWorkspace | None = None,
         queue_id: str = "",
         run_id: str = "",
         reaction_dir: str = "",
@@ -422,7 +421,6 @@ class OrchestrationStageRuntimeDeps:
 class OrchestrationStageSupportDeps:
     _clear_reaction_xtb_handoff_error_if_recovering: Callable[[WorkflowPayload], None]
     _coerce_mapping: MappingCoercer
-    _load_config_organized_root: ConfigRootLoader
     _load_config_root: ConfigRootLoader
     _normalize_text: TextNormalizer
     _reaction_orca_source_candidate_path: ReactionOrcaCandidatePathResolver

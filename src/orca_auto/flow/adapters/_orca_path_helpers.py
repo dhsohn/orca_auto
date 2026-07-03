@@ -137,7 +137,6 @@ def prefer_orca_optimized_xyz_impl(
     selected_inp: str,
     selected_input_xyz: str,
     current_dir: Path | None,
-    organized_dir: Path | None,
     latest_known_path: str,
     last_out_path: str,
 ) -> str:
@@ -148,7 +147,6 @@ def prefer_orca_optimized_xyz_impl(
     search_dirs = iter_existing_dirs_impl(
         _parent_if_present(selected_inp_path),
         current_dir,
-        organized_dir,
         _path_or_parent(resolve_candidate_path_impl(latest_known_path)),
         _parent_if_present(last_out),
     )

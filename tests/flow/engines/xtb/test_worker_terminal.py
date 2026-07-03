@@ -150,7 +150,7 @@ def test_finalize_execution_result_syncs_terminal_side_effects(
         emit_output=False,
     )
 
-    assert outcome == worker_terminal.WorkerExecutionOutcome(result=result, organized_output_dir="")
+    assert outcome == worker_terminal.WorkerExecutionOutcome(result=result)
     assert completed_calls == [
         (str(queue_root), "queue-1", {"candidate_count": 1, "job_type": "path_search"})
     ]

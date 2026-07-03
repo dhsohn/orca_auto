@@ -12,7 +12,7 @@ from orca_auto.core.paths.workflow import (
     workflow_workspace_internal_engine_paths,
 )
 
-from .state import load_organized_ref, load_report_json, load_state
+from .state import load_report_json, load_state
 
 
 def job_type_identifier(job_type: str) -> str:
@@ -42,7 +42,6 @@ _LOCATION_EXPORTS = build_store_backed_engine_job_location_exports(
     ),
     load_state_fn=load_state,
     load_report_json_fn=load_report_json,
-    load_organized_ref_fn=load_organized_ref,
     payload_kind_kwarg="job_type",
     molecule_key_kwarg="reaction_key",
     default_payload_kind_kwarg="default_job_type",

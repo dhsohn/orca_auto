@@ -129,12 +129,6 @@ def _collect_stage_runtime_artifacts(
         source="stage.metadata",
     )
     collector.add(
-        kind="organized_output_dir",
-        path_value=stage_metadata.get("organized_output_dir"),
-        stage_id=stage_id,
-        source="stage.metadata",
-    )
-    collector.add(
         kind="last_out_path",
         path_value=task_payload.get("last_out_path"),
         stage_id=stage_id,
@@ -208,12 +202,6 @@ def _collect_metadata_artifacts(collector: _WorkflowArtifactRows, data: dict[str
     collector.add(
         kind="downstream_latest_known_path",
         path_value=latest_stage.get("latest_known_path"),
-        source="metadata.downstream_reaction_workflow",
-        metadata={"stage_id": _normalize_text(latest_stage.get("stage_id"))},
-    )
-    collector.add(
-        kind="downstream_organized_output_dir",
-        path_value=latest_stage.get("organized_output_dir"),
         source="metadata.downstream_reaction_workflow",
         metadata={"stage_id": _normalize_text(latest_stage.get("stage_id"))},
     )

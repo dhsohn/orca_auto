@@ -22,7 +22,7 @@ def _disable_tracking_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         _orca_tracking,
         "tracked_artifact_context_impl",
-        lambda **kwargs: (None, None, {}, {}, {}),
+        lambda **kwargs: (None, None, {}, {}),
     )
 
 
@@ -36,7 +36,6 @@ def test_load_orca_artifact_contract_short_circuits_on_tracked_payload(
         "state_status": " completed ",
         "reaction_dir": f" {tmp_path / 'rxn_payload'} ",
         "latest_known_path": f" {tmp_path / 'outputs' / 'run_payload_1'} ",
-        "organized_output_dir": f" {tmp_path / 'outputs' / 'run_payload_1'} ",
         "optimized_xyz_path": f" {tmp_path / 'outputs' / 'run_payload_1' / 'final.xyz'} ",
         "queue_id": " q_payload_1 ",
         "queue_status": " COMPLETED ",
@@ -76,7 +75,6 @@ def test_load_orca_artifact_contract_short_circuits_on_tracked_payload(
     contract = orca_adapter.load_orca_artifact_contract(
         target="job_payload_1",
         orca_allowed_root=tmp_path / "orca_runs",
-        orca_organized_root=tmp_path / "orca_outputs",
     )
 
     assert contract.run_id == "run_payload_1"
@@ -108,7 +106,6 @@ def test_tracked_contract_payload_returns_indexed_job_location_payload(
     assert (
         _orca_tracking.load_orca_contract_payload_impl(
             index_root=tmp_path / "orca_runs",
-            organized_root=tmp_path / "orca_outputs",
             target="job_location_helper",
             queue_id="",
             run_id="",
@@ -131,7 +128,6 @@ def test_tracked_contract_payload_returns_none_for_missing_payload(
     assert (
         _orca_tracking.load_orca_contract_payload_impl(
             index_root=tmp_path / "orca_runs",
-            organized_root=tmp_path / "orca_outputs",
             target="missing_job",
             queue_id="",
             run_id="",
@@ -154,7 +150,6 @@ def test_tracked_contract_payload_propagates_corrupt_payload_errors(
     with pytest.raises(ValueError, match="corrupt payload"):
         _orca_tracking.load_orca_contract_payload_impl(
             index_root=tmp_path / "orca_runs",
-            organized_root=tmp_path / "orca_outputs",
             target="corrupt_job",
             queue_id="",
             run_id="",
@@ -175,7 +170,6 @@ def test_tracked_runtime_context_propagates_corrupt_runtime_errors(
     with pytest.raises(ValueError, match="corrupt runtime"):
         _orca_tracking.tracked_runtime_context_impl(
             index_root=tmp_path / "orca_runs",
-            organized_root=tmp_path / "orca_outputs",
             target="corrupt_runtime",
             queue_id="",
             run_id="",
@@ -200,30 +194,27 @@ def test_tracked_artifact_context_propagates_corrupt_context_errors(
         )
 
 
-def test_load_orca_artifact_contract_uses_tracked_record_organized_output(
+def test_load_orca_artifact_contract_uses_tracked_record_job_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
-    organized_root = tmp_path / "orca_outputs"
-    stub_dir = allowed_root / "rxn_stub"
-    organized_dir = organized_root / "opt" / "H2" / "run_tracked_output"
-    stub_dir.mkdir(parents=True)
-    organized_dir.mkdir(parents=True)
+    job_dir = allowed_root / "opt" / "H2" / "run_tracked_output"
+    job_dir.mkdir(parents=True)
 
-    inp = organized_dir / "rxn.inp"
-    xyz = organized_dir / "rxn.xyz"
-    out = organized_dir / "rxn.out"
+    inp = job_dir / "rxn.inp"
+    xyz = job_dir / "rxn.xyz"
+    out = job_dir / "rxn.out"
     inp.write_text("! Opt\n* xyzfile 0 1 rxn.xyz\n", encoding="utf-8")
     xyz.write_text("2\ncomment\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
     out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
 
     _write_json(
-        organized_dir / "job_state.json",
+        job_dir / "job_state.json",
         orca_artifact_payload(
             job_id="run_tracked_output",
             run_id="run_tracked_output",
-            reaction_dir=str(organized_dir),
+            reaction_dir=str(job_dir),
             selected_inp=str(inp),
             final_result={
                 "status": "completed",
@@ -235,11 +226,11 @@ def test_load_orca_artifact_contract_uses_tracked_record_organized_output(
         ),
     )
     _write_json(
-        organized_dir / "job_report.json",
+        job_dir / "job_report.json",
         orca_artifact_payload(
             job_id="run_tracked_output",
             run_id="run_tracked_output",
-            reaction_dir=str(organized_dir),
+            reaction_dir=str(job_dir),
             selected_inp=str(inp),
             final_result={
                 "status": "completed",
@@ -254,9 +245,8 @@ def test_load_orca_artifact_contract_uses_tracked_record_organized_output(
         app_name="orca_auto_orca",
         status="completed",
         selected_input_xyz=str(inp),
-        latest_known_path=str(organized_dir),
-        organized_output_dir=str(organized_dir),
-        original_run_dir=str(stub_dir),
+        latest_known_path=str(job_dir),
+        original_run_dir=str(job_dir),
         resource_request={},
         resource_actual={},
     )
@@ -266,7 +256,7 @@ def test_load_orca_artifact_contract_uses_tracked_record_organized_output(
     monkeypatch.setattr(
         _orca_tracking,
         "tracked_artifact_context_impl",
-        lambda **kwargs: (stub_dir, tracked_record, {}, {}, {}),
+        lambda **kwargs: (job_dir, tracked_record, {}, {}),
     )
     monkeypatch.setattr(
         _orca_local_lookup,
@@ -280,29 +270,20 @@ def test_load_orca_artifact_contract_uses_tracked_record_organized_output(
         "find_queue_entry_impl",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("queue fallback should not run")),
     )
-    monkeypatch.setattr(
-        _orca_local_lookup,
-        "find_organized_record_impl",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("organized-record fallback should not run")
-        ),
-    )
 
     contract = orca_adapter.load_orca_artifact_contract(
         target="job_tracked_output",
         orca_allowed_root=allowed_root,
-        orca_organized_root=organized_root,
     )
 
     assert contract.status == "completed"
     assert contract.queue_id == ""
     assert contract.queue_status == ""
     assert contract.run_id == "run_tracked_output"
-    assert contract.reaction_dir == str(organized_dir.resolve())
-    assert contract.latest_known_path == str(organized_dir.resolve())
-    assert contract.organized_output_dir == str(organized_dir.resolve())
-    assert contract.run_state_path == str((organized_dir / "job_state.json").resolve())
-    assert contract.report_json_path == str((organized_dir / "job_report.json").resolve())
+    assert contract.reaction_dir == str(job_dir.resolve())
+    assert contract.latest_known_path == str(job_dir.resolve())
+    assert contract.run_state_path == str((job_dir / "job_state.json").resolve())
+    assert contract.report_json_path == str((job_dir / "job_report.json").resolve())
     assert contract.selected_inp == str(inp.resolve())
     assert contract.selected_input_xyz == str(xyz.resolve())
 
@@ -433,7 +414,6 @@ def test_load_orca_artifact_contract_propagates_resource_request_and_actual(
         status="queued",
         original_run_dir=str(run_dir),
         selected_input_xyz="",
-        organized_output_dir="",
         latest_known_path=str(run_dir),
         resource_request=record_request,
         resource_actual=record_actual,
@@ -443,7 +423,7 @@ def test_load_orca_artifact_contract_propagates_resource_request_and_actual(
     monkeypatch.setattr(
         _orca_tracking,
         "tracked_artifact_context_impl",
-        lambda **kwargs: (run_dir, tracked_record, {}, {}, {}),
+        lambda **kwargs: (run_dir, tracked_record, {}, {}),
     )
     monkeypatch.setattr(
         _orca_local_lookup,

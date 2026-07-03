@@ -83,7 +83,6 @@ from .queue_runtime_execution import (
 )
 from .runner import XtbRunResult, finalize_xtb_job, run_xtb_ranking_job, start_xtb_job
 from .state import (
-    load_organized_ref,
     load_report_json,
     load_state,
 )
@@ -239,7 +238,6 @@ def _runtime_terminal_callbacks() -> _runtime_terminal.XtbQueueRuntimeTerminalCa
         list_slots=list_slots,
         load_state=load_state,
         load_report_json=load_report_json,
-        load_organized_ref=load_organized_ref,
         mark_completed=mark_completed,
         mark_cancelled=mark_cancelled,
         mark_failed=mark_failed,

@@ -136,7 +136,6 @@ def test_sync_crest_stage_submits_and_materializes_retained_conformers(
         status="completed",
         job_id="crest_job_01",
         latest_known_path="/tmp/crest_done",
-        organized_output_dir="/tmp/crest_outputs/run_01",
         selected_input_xyz="/tmp/crest_done/input.xyz",
         retained_conformer_paths=(
             "/tmp/crest_done/conf_01.xyz",
@@ -191,7 +190,6 @@ def test_sync_crest_stage_submits_and_materializes_retained_conformers(
     assert metadata["queue_id"] == "q_crest_01"
     assert metadata["child_job_id"] == "crest_job_01"
     assert metadata["latest_known_path"] == "/tmp/crest_done"
-    assert metadata["organized_output_dir"] == "/tmp/crest_outputs/run_01"
     assert stage["output_artifacts"] == [
         {
             "kind": "crest_conformer",

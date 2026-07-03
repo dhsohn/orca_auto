@@ -29,7 +29,6 @@ def _cfg(tmp_path: Path) -> AppConfig:
     return AppConfig(
         runtime=CommonRuntimeConfig(
             allowed_root=str(tmp_path / "runs"),
-            organized_root=str(tmp_path / "organized"),
         ),
         paths=PathsConfig(crest_executable="/opt/crest"),
         behavior=BehaviorConfig(),

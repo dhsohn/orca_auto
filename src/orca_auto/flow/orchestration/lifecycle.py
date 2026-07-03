@@ -84,7 +84,6 @@ def latest_child_stage_summary_impl(
         "queue_id": normalize_text_fn(chosen.get("queue_id")),
         "run_id": normalize_text_fn(chosen.get("run_id")),
         "latest_known_path": normalize_text_fn(chosen.get("latest_known_path")),
-        "organized_output_dir": normalize_text_fn(chosen.get("organized_output_dir")),
         "completed_at": normalize_text_fn(chosen.get("completed_at")),
     }
 

@@ -84,7 +84,6 @@ def test_engine_artifact_payload_has_common_shape(engine: str, state: str) -> No
         "manifest_path",
         "stdout_log",
         "stderr_log",
-        "organized_dir",
     }
     assert payload["engine_payload"]["engine_specific"] == engine
 

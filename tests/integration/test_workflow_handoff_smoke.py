@@ -34,7 +34,7 @@ def _write_xyz(path: Path) -> None:
     )
 
 
-def _write_orca_config(path: Path, *, allowed_root: Path, organized_root: Path) -> None:
+def _write_orca_config(path: Path, *, allowed_root: Path) -> None:
     payload: dict[str, Any] = {}
     if path.exists():
         loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -43,7 +43,6 @@ def _write_orca_config(path: Path, *, allowed_root: Path, organized_root: Path) 
     payload["orca"] = {
         "runtime": {
             "allowed_root": str(allowed_root.resolve()),
-            "organized_root": str(organized_root.resolve()),
         },
         "paths": {
             "orca_executable": "/opt/orca/orca",
@@ -83,15 +82,12 @@ def _create_conformer_workflow_smoke_case(smoke_workspace: Any) -> ConformerWork
     workflow_root.mkdir(parents=True, exist_ok=True)
 
     orca_allowed_root = smoke_workspace.root / "orca_runs"
-    orca_organized_root = smoke_workspace.root / "orca_outputs"
     orca_allowed_root.mkdir(parents=True, exist_ok=True)
-    orca_organized_root.mkdir(parents=True, exist_ok=True)
 
     orca_config_path = smoke_workspace.config_path
     _write_orca_config(
         orca_config_path,
         allowed_root=orca_allowed_root,
-        organized_root=orca_organized_root,
     )
 
     input_xyz = smoke_workspace.root / "workflow_inputs" / "input.xyz"
@@ -191,7 +187,6 @@ def _advance_completed_crest_handoff(
     assert crest_stage["task"]["status"] == "completed"
     assert crest_metadata["queue_id"] == submitted_metadata["queue_id"]
     assert crest_metadata["child_job_id"] == submitted_metadata["child_job_id"]
-    assert not crest_metadata["organized_output_dir"]
     assert crest_metadata["latest_known_path"]
     assert Path(crest_metadata["latest_known_path"]).exists()
     assert Path(crest_metadata["latest_known_path"]).is_relative_to(case.workspace_dir / "01_crest")

@@ -48,9 +48,6 @@ def test_runtime_roots_for_cfg_deduplicates_workflow_engine_roots(
             "allowed_root": first_engine_root
             if workspace == first_workspace
             else second_engine_root,
-            "organized_root": first_engine_root
-            if workspace == first_workspace
-            else second_engine_root,
         },
     )
 

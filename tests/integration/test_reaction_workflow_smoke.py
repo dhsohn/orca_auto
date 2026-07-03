@@ -71,7 +71,6 @@ def _write_orca_config(
     path: Path,
     *,
     allowed_root: Path,
-    organized_root: Path,
     orca_executable: Path,
 ) -> None:
     payload: dict[str, Any] = {}
@@ -82,7 +81,6 @@ def _write_orca_config(
     payload["orca"] = {
         "runtime": {
             "allowed_root": str(allowed_root.resolve()),
-            "organized_root": str(organized_root.resolve()),
             "default_max_retries": 0,
         },
         "paths": {
@@ -129,17 +127,14 @@ def _create_reaction_workflow_smoke_case(smoke_workspace: Any) -> ReactionWorkfl
     workflow_root.mkdir(parents=True, exist_ok=True)
 
     orca_allowed_root = smoke_workspace.root / "reaction_orca_runs"
-    orca_organized_root = smoke_workspace.root / "reaction_orca_outputs"
     fake_orca_counter = smoke_workspace.root / "fake_orca_counter.txt"
     fake_orca = smoke_workspace.root / "bin" / "fake_orca"
     orca_allowed_root.mkdir(parents=True, exist_ok=True)
-    orca_organized_root.mkdir(parents=True, exist_ok=True)
     _write_fake_orca(fake_orca, fake_orca_counter)
     config_path = smoke_workspace.config_path
     _write_orca_config(
         config_path,
         allowed_root=orca_allowed_root,
-        organized_root=orca_organized_root,
         orca_executable=fake_orca,
     )
 

@@ -207,7 +207,6 @@ def _runtime_config_from_scheduler(
     )
     return CommonRuntimeConfig(
         allowed_root=workflow_root,
-        organized_root=workflow_root,
         max_concurrent=scheduler.max_active,
         admission_root=scheduler.admission_root,
         admission_limit=scheduler.admission_limit,

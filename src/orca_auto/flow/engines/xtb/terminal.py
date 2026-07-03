@@ -17,7 +17,6 @@ class TerminalSummary:
     job_id: str
     status: str
     reason: str
-    organized_output_dir: str = ""
     metadata_update: dict[str, Any] = field(default_factory=dict)
 
 
@@ -52,8 +51,6 @@ class _XtbTerminalPaths:
 
 
 def print_terminal_summary(summary: TerminalSummary) -> None:
-    if summary.organized_output_dir:
-        print(f"organized_output_dir: {summary.organized_output_dir}")
     print(f"queue_id: {summary.queue_id}")
     print(f"job_id: {summary.job_id}")
     print(f"status: {summary.status}")
@@ -129,12 +126,10 @@ def _flatten_engine_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if int(payload.get("schema_version", 0) or 0) != 1:
         return {}
     status = _mapping(payload.get("status"))
-    artifacts = _mapping(payload.get("artifacts"))
     engine_payload = _mapping(payload.get("engine_payload"))
     flattened = dict(engine_payload)
     flattened.setdefault("status", str(status.get("state", "")).strip())
     flattened.setdefault("reason", str(status.get("reason", "")).strip())
-    flattened.setdefault("organized_output_dir", str(artifacts.get("organized_dir", "")).strip())
     return flattened
 
 
@@ -150,30 +145,20 @@ def load_terminal_summary(
     job_dir_fn: Callable[[Any], Path],
     load_state_fn: Callable[[Path], dict[str, Any] | None],
     load_report_json_fn: Callable[[Path], dict[str, Any] | None],
-    load_organized_ref_fn: Callable[[Path], dict[str, Any] | None],
     queue_entry_by_id_fn: Callable[[Path, str], Any | None],
 ) -> TerminalSummary:
     job_dir = job_dir_fn(entry)
     state = load_state_fn(job_dir) or {}
     report = load_report_json_fn(job_dir) or {}
-    organized_ref = load_organized_ref_fn(job_dir) or {}
     refreshed = queue_entry_by_id_fn(queue_root, entry.queue_id)
 
     status = terminal_status(state, report, refreshed, rc)
     reason = terminal_reason(state, report, refreshed, status=status, rc=rc)
-    organized_output_dir = str(
-        organized_ref.get("organized_output_dir")
-        or _flatten_engine_payload(report).get("organized_output_dir")
-        or _flatten_engine_payload(state).get("organized_output_dir")
-        or ""
-    ).strip()
-
     return TerminalSummary(
         queue_id=entry.queue_id,
         job_id=entry.task_id,
         status=status,
         reason=reason,
-        organized_output_dir=organized_output_dir,
         metadata_update=terminal_metadata_update(state, report, entry),
     )
 
@@ -283,7 +268,6 @@ def _notify_terminal_finished(
         job_dir=paths.job_dir,
         selected_xyz=paths.selected_xyz,
         candidate_count=result.candidate_count,
-        organized_output_dir=Path(sync_result) if sync_result else None,
         resource_request=result.resource_request,
         resource_actual=result.resource_actual,
     )
@@ -298,7 +282,6 @@ def _emit_terminal_summary(request: XtbTerminalFinalizationRequest, sync_result:
             job_id=entry.task_id,
             status=result.status,
             reason=result.reason,
-            organized_output_dir=sync_result,
         )
     )
 
@@ -326,7 +309,6 @@ def _terminal_sync_actions(
         emit_output=lambda sync_result: _emit_terminal_summary(request, sync_result),
         build_outcome=lambda sync_result: request.outcome_cls(
             result=request.result,
-            organized_output_dir=sync_result,
         ),
     )
 

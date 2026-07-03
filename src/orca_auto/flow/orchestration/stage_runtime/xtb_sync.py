@@ -87,7 +87,6 @@ def _apply_xtb_contract(
             "status": contract.status,
             "reason": contract.reason,
             "latest_known_path": contract.latest_known_path,
-            "organized_output_dir": contract.organized_output_dir,
             "candidate_count": len(contract.candidate_details),
             "selected_candidate_paths": list(contract.selected_candidate_paths),
             "analysis_summary": dict(contract.analysis_summary),

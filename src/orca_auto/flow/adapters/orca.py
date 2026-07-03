@@ -34,9 +34,7 @@ def _contract_loader_deps() -> OrcaContractLoaderDeps:
         queue_entry_metadata_value_fn=_local_lookup.queue_entry_metadata_value_impl,
         resolve_candidate_path_fn=_path_helpers.resolve_candidate_path_impl,
         direct_dir_target_fn=_path_helpers.direct_dir_target_impl,
-        record_organized_dir_fn=_local_lookup.record_organized_dir_impl,
         load_json_dict_fn=_local_lookup.load_json_dict_impl,
-        load_tracked_organized_ref_fn=_local_lookup.load_tracked_organized_ref_impl,
         status_from_payloads_fn=partial(
             _contract_status.status_from_payloads_impl,
             normalize_text_fn=normalize_text,
@@ -63,19 +61,14 @@ def load_orca_artifact_contract(
     *,
     target: str,
     orca_allowed_root: str | Path | None = None,
-    orca_organized_root: str | Path | None = None,
     queue_id: str = "",
     run_id: str = "",
     reaction_dir: str = "",
 ) -> OrcaArtifactContract:
     deps = _contract_loader_deps()
     allowed_root = Path(orca_allowed_root).expanduser().resolve() if orca_allowed_root else None
-    organized_root = (
-        Path(orca_organized_root).expanduser().resolve() if orca_organized_root else None
-    )
     payload = _orca_tracking.load_orca_contract_payload_impl(
         index_root=allowed_root,
-        organized_root=organized_root,
         target=target,
         queue_id=queue_id,
         run_id=run_id,
@@ -94,7 +87,6 @@ def load_orca_artifact_contract(
     return load_orca_artifact_contract_impl(
         target=target,
         orca_allowed_root=allowed_root,
-        orca_organized_root=organized_root,
         queue_id=queue_id,
         run_id=run_id,
         reaction_dir=reaction_dir,

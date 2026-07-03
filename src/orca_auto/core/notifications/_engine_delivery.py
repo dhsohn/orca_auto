@@ -4,7 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ._engine_rendering import EngineEventField, event_lines, organize_summary_lines
+from ._engine_rendering import EngineEventField, event_lines
 
 
 def is_workflow_child(job_dir: Path, *, engine: str) -> bool:
@@ -32,25 +32,5 @@ def send_job_event(
             headline=headline,
             fields=fields,
             extra_lines=extra_lines,
-        ),
-    )
-
-
-def send_organize_summary(
-    cfg: Any,
-    *,
-    label: str,
-    organized_count: int,
-    skipped_count: int,
-    root: Path,
-    send_fn: Callable[[Any, list[str]], bool],
-) -> bool:
-    return send_fn(
-        cfg,
-        organize_summary_lines(
-            label=label,
-            organized_count=organized_count,
-            skipped_count=skipped_count,
-            root=root,
         ),
     )

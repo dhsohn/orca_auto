@@ -218,7 +218,6 @@ def queue_name_text(item: dict[str, Any]) -> str:
             "job_dir",
             "original_run_dir",
             "latest_known_path",
-            "organized_output_dir",
         ),
     )
     if path_name:

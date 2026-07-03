@@ -26,7 +26,6 @@ class EngineLocationRecordRequest:
     job_dir: Path
     payload_kind: str
     selected_input_xyz: str
-    organized_output_dir: Path | None = None
     molecule_key: str = ""
     resource_request: dict[str, int] | None = None
     resource_actual: dict[str, int] | None = None
@@ -85,13 +84,6 @@ def _resource_payload(
     return dict(provided or existing_payload)
 
 
-def _organized_output_dir(
-    existing: JobLocationRecord | None,
-    organized_output_dir: Path | None,
-) -> Path | None:
-    return organized_output_dir or _resolved_existing_path(existing, "organized_output_dir")
-
-
 def build_job_location_record(
     *,
     existing: JobLocationRecord | None = None,
@@ -102,7 +94,6 @@ def build_job_location_record(
     job_dir: Path,
     selected_input_xyz: str,
     molecule_key: str = "",
-    organized_output_dir: Path | None = None,
     resource_request: dict[str, int] | None = None,
     resource_actual: dict[str, int] | None = None,
     default_molecule_key_fn: Callable[[Path, str], str] | None = None,
@@ -131,8 +122,6 @@ def build_job_location_record(
         or resource_request_text
     )
 
-    organized_dir = _organized_output_dir(existing, organized_output_dir)
-    latest_known_path = organized_dir or resolved_job_dir
     return JobLocationRecord(
         job_id=normalize_text(job_id),
         app_name=app_name,
@@ -141,8 +130,7 @@ def build_job_location_record(
         original_run_dir=str(original_run_dir),
         molecule_key=molecule_key_text,
         selected_input_xyz=selected_input_xyz_text,
-        organized_output_dir=str(organized_dir.resolve()) if organized_dir is not None else "",
-        latest_known_path=str(latest_known_path.resolve()),
+        latest_known_path=str(resolved_job_dir.resolve()),
         resource_request=resource_request_text,
         resource_actual=resource_actual_text,
     )
@@ -157,7 +145,6 @@ def build_engine_job_location_record(
     job_dir: Path,
     payload_kind: str,
     selected_input_xyz: str,
-    organized_output_dir: Path | None = None,
     molecule_key: str = "",
     resource_request: dict[str, int] | None = None,
     resource_actual: dict[str, int] | None = None,
@@ -171,7 +158,6 @@ def build_engine_job_location_record(
         job_dir=job_dir,
         selected_input_xyz=selected_input_xyz,
         molecule_key=molecule_key,
-        organized_output_dir=organized_output_dir,
         resource_request=resource_request,
         resource_actual=resource_actual,
         default_molecule_key_fn=spec.default_molecule_key,

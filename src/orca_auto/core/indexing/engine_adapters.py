@@ -82,7 +82,6 @@ class EngineLocationArtifacts:
     spec: EngineLocationSpec
     load_state_fn: Callable[[Path], dict[str, Any] | None]
     load_report_json_fn: Callable[[Path], dict[str, Any] | None]
-    load_organized_ref_fn: Callable[[Path], dict[str, Any] | None]
 
     def load_job_artifacts(
         self,
@@ -125,7 +124,6 @@ class EngineLocationArtifacts:
         job_dir: Path,
         state: dict[str, Any] | None,
         report: dict[str, Any] | None,
-        organized_ref: dict[str, Any] | None,
         existing: JobLocationRecord | None = None,
         default_payload_kind: str | None = None,
     ) -> JobLocationRecord | None:
@@ -135,7 +133,6 @@ class EngineLocationArtifacts:
             job_dir=job_dir,
             state=state,
             report=report,
-            organized_ref=organized_ref,
             existing=existing,
             default_payload_kind=default_payload_kind,
         )
@@ -147,7 +144,6 @@ class EngineLocationArtifacts:
             job_dir=resolved_job_dir,
             state=self.load_state_fn(resolved_job_dir),
             report=self.load_report_json_fn(resolved_job_dir),
-            organized_ref=self.load_organized_ref_fn(resolved_job_dir),
         )
 
 

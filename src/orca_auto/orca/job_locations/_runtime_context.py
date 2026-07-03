@@ -18,7 +18,6 @@ def matching_tracked_job_dirs(index_root: str | Path, target: str, *, deps: Any)
             resolve_record_job_dir=deps.resolve_record_job_dir,
             load_state=deps.load_state,
             load_report_json=deps.load_report_json,
-            load_organized_ref=deps.load_organized_ref,
             resolve_existing_job_dir=deps.resolve_existing_job_dir,
         ),
     )
@@ -41,18 +40,16 @@ class _RuntimeArtifactSnapshot:
     report: dict[str, Any]
     current_dir: Path | None
     resolved_run_id: str
-    organized_dir: Path | None
 
 
 def _dict_payload(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
-def _artifact_payloads(artifact: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+def _artifact_payloads(artifact: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     return (
         _dict_payload(artifact.state),
         _dict_payload(artifact.report),
-        _dict_payload(artifact.organized_ref),
     )
 
 
@@ -97,7 +94,6 @@ def _hydrate_artifact_context(artifact: Any, *, deps: Any) -> Any:
         job_dir=artifact.job_dir,
         state=artifact.state,
         report=artifact.report,
-        organized_ref=deps._hydrated_organized_ref(artifact),
     )
 
 
@@ -106,7 +102,6 @@ def _resolved_run_id(
     run_id: str,
     state: dict[str, Any],
     report: dict[str, Any],
-    organized_ref: dict[str, Any],
     queue_entry: dict[str, Any] | None,
     deps: Any,
 ) -> str:
@@ -114,78 +109,7 @@ def _resolved_run_id(
         deps.normalize_text(run_id)
         or deps.normalize_text(state.get("run_id"))
         or deps.normalize_text(report.get("run_id"))
-        or deps.normalize_text(organized_ref.get("run_id"))
         or deps.normalize_text(deps.queue_entry_metadata_value(queue_entry, "run_id"))
-    )
-
-
-def _refresh_from_organized_dir(
-    *,
-    index_root: Path,
-    artifact: Any,
-    organized_dir: Path,
-    target: str,
-    resolved_run_id: str,
-    reaction_dir: str,
-    deps: Any,
-) -> Any:
-    refreshed = deps._first_artifact_context(
-        index_root,
-        (str(organized_dir), target, resolved_run_id, reaction_dir),
-    )
-    refreshed_dir = refreshed.job_dir or organized_dir
-    return deps._job_artifact_context(
-        record=refreshed.record or artifact.record,
-        job_dir=refreshed_dir,
-        state=refreshed.state or dict(deps.load_state(refreshed_dir) or {}),
-        report=refreshed.report or deps.load_report_json(refreshed_dir),
-        organized_ref=deps._hydrated_organized_ref(refreshed)
-        or deps.load_organized_ref(refreshed_dir),
-    )
-
-
-def _needs_organized_refresh(
-    *,
-    organized_dir: Path | None,
-    current_dir: Path | None,
-    state: dict[str, Any],
-    report: dict[str, Any],
-) -> bool:
-    return organized_dir is not None and (
-        current_dir is None or not current_dir.exists() or (not state and not report)
-    )
-
-
-def _refresh_artifact_if_needed(
-    *,
-    index_root: Path,
-    artifact: Any,
-    organized_dir: Path | None,
-    current_dir: Path | None,
-    state: dict[str, Any],
-    report: dict[str, Any],
-    target: str,
-    resolved_run_id: str,
-    reaction_dir: str,
-    deps: Any,
-) -> Any:
-    if organized_dir is None:
-        return artifact
-    if not _needs_organized_refresh(
-        organized_dir=organized_dir,
-        current_dir=current_dir,
-        state=state,
-        report=report,
-    ):
-        return artifact
-    return _refresh_from_organized_dir(
-        index_root=index_root,
-        artifact=artifact,
-        organized_dir=organized_dir,
-        target=target,
-        resolved_run_id=resolved_run_id,
-        reaction_dir=reaction_dir,
-        deps=deps,
     )
 
 
@@ -234,7 +158,7 @@ def _runtime_artifact_snapshot(
     artifact: Any,
     deps: Any,
 ) -> _RuntimeArtifactSnapshot:
-    state_payload, report_payload, organized_ref_payload = _artifact_payloads(artifact)
+    state_payload, report_payload = _artifact_payloads(artifact)
     queue_reaction_dir = _queue_reaction_dir(inputs.queue_entry, deps=deps)
     current_dir = _current_runtime_dir(
         artifact=artifact,
@@ -246,7 +170,6 @@ def _runtime_artifact_snapshot(
         run_id=inputs.run_id,
         state=state_payload,
         report=report_payload,
-        organized_ref=organized_ref_payload,
         queue_entry=inputs.queue_entry,
         deps=deps,
     )
@@ -256,27 +179,6 @@ def _runtime_artifact_snapshot(
         report=report_payload,
         current_dir=current_dir,
         resolved_run_id=resolved_run_id,
-        organized_dir=deps._record_organized_dir(artifact.record),
-    )
-
-
-def _refresh_runtime_artifact_if_needed(
-    *,
-    inputs: _RuntimeInputs,
-    snapshot: _RuntimeArtifactSnapshot,
-    deps: Any,
-) -> Any:
-    return _refresh_artifact_if_needed(
-        index_root=inputs.index_root,
-        artifact=snapshot.artifact,
-        organized_dir=snapshot.organized_dir,
-        current_dir=snapshot.current_dir,
-        state=snapshot.state,
-        report=snapshot.report,
-        target=inputs.target,
-        resolved_run_id=snapshot.resolved_run_id,
-        reaction_dir=inputs.reaction_dir,
-        deps=deps,
     )
 
 
@@ -284,13 +186,11 @@ def load_job_runtime_context(
     index_root: str | Path,
     target: str,
     *,
-    organized_root: str | Path | None = None,
     queue_id: str = "",
     run_id: str = "",
     reaction_dir: str = "",
     deps: Any,
 ) -> Any:
-    del organized_root
     inputs = _runtime_inputs(
         index_root,
         target=target,
@@ -300,19 +200,8 @@ def load_job_runtime_context(
         deps=deps,
     )
     artifact = _load_initial_runtime_artifact(inputs, deps=deps)
-    snapshot = _runtime_artifact_snapshot(
-        inputs=inputs,
-        artifact=artifact,
-        deps=deps,
-    )
-    artifact = _refresh_runtime_artifact_if_needed(
-        inputs=inputs,
-        snapshot=snapshot,
-        deps=deps,
-    )
 
     return deps.JobRuntimeContext(
         artifact=artifact,
         queue_entry=inputs.queue_entry,
-        organized_dir=snapshot.organized_dir,
     )

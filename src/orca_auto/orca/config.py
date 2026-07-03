@@ -167,7 +167,6 @@ def load_config(config_path: str) -> AppConfig:
     cfg = AppConfig(
         runtime=CommonRuntimeConfig(
             allowed_root=allowed_root,
-            organized_root=allowed_root,
             default_max_retries=max(0, default_max_retries),
             max_concurrent=max_concurrent,
             admission_root=admission_root,

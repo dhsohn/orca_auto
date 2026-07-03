@@ -15,9 +15,7 @@ def _cfg(allowed_root: Path, *, telegram_enabled: bool = True) -> AppConfig:
         TelegramConfig(bot_token="token", chat_id="1234") if telegram_enabled else TelegramConfig()
     )
     return AppConfig(
-        runtime=RuntimeConfig(
-            allowed_root=str(allowed_root), organized_root=str(allowed_root.parent / "outputs")
-        ),
+        runtime=RuntimeConfig(allowed_root=str(allowed_root)),
         paths=PathsConfig(orca_executable="/usr/bin/orca"),
         telegram=telegram,
     )
@@ -30,11 +28,8 @@ def test_default_config_path_prefers_environment_variable(monkeypatch) -> None:
 
 def test_validate_root_scan_dir_rejects_non_directory_and_mismatch(tmp_path: Path) -> None:
     allowed_root = tmp_path / "allowed"
-    organized_root = tmp_path / "organized"
     allowed_root.mkdir()
-    organized_root.mkdir()
     cfg = _cfg(allowed_root)
-    cfg.runtime.organized_root = str(organized_root)
 
     bad_file = tmp_path / "file.txt"
     bad_file.write_text("x", encoding="utf-8")

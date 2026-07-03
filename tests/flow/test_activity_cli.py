@@ -356,7 +356,6 @@ def test_runtime_path_and_engine_root_edges(
         "workflow_workspace_internal_engine_paths",
         lambda workspace_dir, *, engine, stage_dirname=None: {
             "allowed_root": runtime_a if workspace_dir == workspace_a else runtime_b,
-            "organized_root": runtime_a if workspace_dir == workspace_a else runtime_b,
         },
     )
     assert _activity_list.engine_queue_roots(

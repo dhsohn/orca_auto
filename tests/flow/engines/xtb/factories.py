@@ -24,7 +24,6 @@ def make_cfg(tmp_path: Path) -> SimpleNamespace:
     return SimpleNamespace(
         runtime=SimpleNamespace(
             allowed_root=str(allowed_root),
-            organized_root=str(organized_root),
             max_concurrent=2,
             admission_root=str(admission_root),
             admission_limit=2,
@@ -39,7 +38,6 @@ def make_runner_cfg(tmp_path: Path, *, xtb_executable: str = "") -> AppConfig:
     return AppConfig(
         runtime=CommonRuntimeConfig(
             allowed_root=str(tmp_path / "allowed"),
-            organized_root=str(tmp_path / "organized"),
         ),
         paths=PathsConfig(xtb_executable=xtb_executable),
         resources=CommonResourceConfig(max_cores_per_task=4, max_memory_gb_per_task=12),

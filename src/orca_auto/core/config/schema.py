@@ -85,7 +85,6 @@ def resolved_admission_limit(admission_limit: Any, max_concurrent: Any) -> int:
 
 class RuntimeAdmissionMixin:
     allowed_root: str
-    organized_root: str
     max_concurrent: int
     admission_root: str | None
     admission_limit: int | None
@@ -102,7 +101,6 @@ class RuntimeAdmissionMixin:
 @dataclass(frozen=True)
 class CommonRuntimeConfig(RuntimeAdmissionMixin):
     allowed_root: str
-    organized_root: str
     max_concurrent: int = 4
     admission_root: str | None = None
     admission_limit: int | None = None
@@ -111,7 +109,6 @@ class CommonRuntimeConfig(RuntimeAdmissionMixin):
 @dataclass
 class RetryRuntimeConfig(RuntimeAdmissionMixin):
     allowed_root: str = ""
-    organized_root: str = ""
     default_max_retries: int = 2
     max_concurrent: int = 4
     admission_root: str | None = ""
@@ -126,8 +123,6 @@ class RetryRuntimeConfig(RuntimeAdmissionMixin):
             self.max_concurrent,
             4,
         )
-        if not self.organized_root and self.allowed_root:
-            self.organized_root = self.allowed_root
         if not self.admission_root and self.allowed_root:
             self.admission_root = self.allowed_root
         self.admission_limit = normalize_admission_limit(

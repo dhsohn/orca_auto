@@ -367,7 +367,6 @@ class TestConfigValidation(unittest.TestCase):
                 },
             )
             cfg = load_config(str(cfg_path))
-            self.assertEqual(cfg.runtime.organized_root, str(allowed))
             self.assertEqual(cfg.runtime.default_max_retries, 2)
             self.assertEqual(cfg.runtime.max_concurrent, 4)
 
@@ -393,8 +392,6 @@ class TestConfigValidation(unittest.TestCase):
             root = Path(td)
             allowed = root / "orca_runs"
             allowed.mkdir()
-            organized = root / "orca_outputs"
-            organized.mkdir()
             fake_orca = root / "orca"
             _write_fake_executable(fake_orca)
 
@@ -403,13 +400,13 @@ class TestConfigValidation(unittest.TestCase):
                 {
                     "runtime": {
                         "allowed_root": str(allowed),
-                        "organized_root": str(organized),
+                        "organized_root": str(root / "orca_outputs"),
                     },
                     "paths": {"orca_executable": str(fake_orca)},
                 },
             )
             cfg = load_config(str(cfg_path))
-            self.assertEqual(cfg.runtime.organized_root, str(allowed))
+            self.assertEqual(cfg.runtime.allowed_root, str(allowed))
 
     def test_nonexistent_orca_executable_raises(self) -> None:
         with tempfile.TemporaryDirectory() as td:

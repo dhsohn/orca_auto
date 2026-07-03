@@ -23,11 +23,21 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Removed
 
+- The remaining `organized_*` read-side plumbing (completes the organize
+  removal): the `organized_output_dir` field on `JobLocationRecord` and on the
+  ORCA/xTB/CREST artifact contracts, the `organized_ref` / `load_organized_ref`
+  DI seam threaded through the generic engine indexing service, adapters, and
+  contract loaders, the `organized_dir` / `orca_organized_root` resolution in
+  the ORCA contract assembly and job-location runtime context, the unused
+  `organized_root` runtime config field, the dead `organize`-summary
+  notification helpers, and the hardcoded `"organized_dir": ""` artifact keys.
+  All of it was uniformly empty/None (nothing populated it once the organize
+  feature was gone) and the workflow stage handoff already uses
+  `latest_known_path`; removal is behaviour-preserving.
 - The unused `organized_ref.json` write machinery: `write_organized_ref` in
   the ORCA state module, the shared engine-state write method/field, and the
   xtb/crest re-exports. Nothing has written these stubs since the organize
-  feature was removed; readers stay until the remaining organized_* read
-  plumbing is stripped.
+  feature was removed.
 - The dead numbered retry-recipe system: `RETRY_RECIPES` and `retry_step_1..4`
   / `set_geom_retry_keys` (`retry_recipes.py`), the `isinstance(step, int)`
   branch and `RetryRecipeName | int` unions in `inp_rewriter`/`resume`, and the

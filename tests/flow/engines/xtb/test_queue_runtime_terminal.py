@@ -32,7 +32,6 @@ def _callbacks(**overrides: Any) -> queue_runtime_terminal.XtbQueueRuntimeTermin
         "list_slots": lambda _root: ["slot"],
         "load_state": lambda _job_dir: None,
         "load_report_json": lambda _job_dir: None,
-        "load_organized_ref": lambda _job_dir: None,
         "mark_completed": lambda *_args, **_kwargs: None,
         "mark_cancelled": lambda *_args, **_kwargs: None,
         "mark_failed": lambda *_args, **_kwargs: None,

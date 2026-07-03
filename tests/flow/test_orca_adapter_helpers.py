@@ -110,7 +110,6 @@ def test_prefer_orca_optimized_xyz_prefers_matching_input_stem(tmp_path: Path) -
         selected_inp=str(selected_inp),
         selected_input_xyz=str(selected_xyz),
         current_dir=current_dir,
-        organized_dir=None,
         latest_known_path="",
         last_out_path="",
     )
@@ -134,7 +133,6 @@ def test_prefer_orca_optimized_xyz_falls_back_to_latest_non_source_xyz(tmp_path:
         selected_inp="",
         selected_input_xyz=str(source_xyz),
         current_dir=current_dir,
-        organized_dir=None,
         latest_known_path="",
         last_out_path="",
     )
