@@ -285,6 +285,8 @@ def _scan_ts_scan_stage(
     stage_metadata = stage_dict.setdefault("metadata", {})
     if isinstance(stage_metadata, dict):
         stage_metadata["workflow_fatal"] = True
+        stage_metadata["scan_direction"] = "forward"
+        stage_metadata["scan_coordinate"] = str(request.scan_coordinate).strip()
     return cast(WorkflowStagePayload, stage_dict)
 
 
@@ -306,6 +308,7 @@ def _scan_ts_template_request(
             "max_cores": int(request.max_cores),
             "max_memory_gb": int(request.max_memory_gb),
             "max_orca_stages": int(request.max_orca_stages),
+            "max_scan_extensions": int(request.max_scan_extensions),
             "orca_route_line": str(request.orca_route_line),
             "orca_optts_route_line": str(request.orca_optts_route_line),
             "scan_coordinate": str(request.scan_coordinate),

@@ -126,8 +126,8 @@ def test_candidate_cap_respects_max_orca_stages(tmp_path: Path) -> None:
     assert [stage["stage_id"] for stage in payload["stages"][1:]] == ["orca_optts_freq_01"]
 
 
-def test_barrierless_scan_records_no_barrier_error(tmp_path: Path) -> None:
-    payload = _create_workflow(tmp_path)
+def test_barrierless_scan_records_no_barrier_error_without_extensions(tmp_path: Path) -> None:
+    payload = _create_workflow(tmp_path, max_scan_extensions=0)
     workspace = tmp_path / "root" / "wf_scan_ts_test"
     scan_stage = payload["stages"][0]
     scan_stage["status"] = "completed"
@@ -139,6 +139,105 @@ def test_barrierless_scan_records_no_barrier_error(tmp_path: Path) -> None:
     error = payload["metadata"]["workflow_error"]
     assert error["scope"] == "scan_ts_search_no_barrier"
     assert error["reason"] == "scan_profile_no_barrier"
+
+
+def test_barrierless_scan_extends_then_finds_barrier_in_extension(tmp_path: Path) -> None:
+    payload = _create_workflow(tmp_path)
+    workspace = tmp_path / "root" / "wf_scan_ts_test"
+    scan_stage = payload["stages"][0]
+    scan_stage["status"] = "completed"
+    # Monotonic over the requested range: the maximum lies beyond the endpoint.
+    _write_scan_results(scan_stage, [-100.3, -100.2, -100.1, -100.0])
+
+    created = append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+
+    assert created
+    extension = payload["stages"][1]
+    assert extension["stage_id"] == "orca_scan_02"
+    assert extension["metadata"]["scan_direction"] == "forward"
+    assert extension["metadata"]["workflow_fatal"] is True
+    # Original spec "B 0 1 = 1.20, 3.00, 10" -> step 0.2, extension of
+    # max(6, round(9 * 0.2)) = 6 points continuing past the endpoint.
+    assert extension["metadata"]["scan_coordinate"] == "B 0 1 = 3.2, 4.2, 6"
+    extension_inp = Path(extension["task"]["payload"]["selected_inp"]).read_text(encoding="utf-8")
+    assert "B 0 1 = 3.2, 4.2, 6" in extension_inp
+    assert "workflow_error" not in payload.get("metadata", {})
+
+    # The extension completes with a barrier: fan-out maps the maximum back to
+    # the extension stage's numbered xyz on the COMBINED profile.
+    extension["status"] = "completed"
+    _write_scan_results(extension, [-99.9, -99.5, -99.8, -100.0, -100.1, -100.2])
+
+    assert append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+    optts = [s for s in payload["stages"] if s["stage_id"].startswith("orca_optts_freq_")]
+    assert len(optts) >= 1
+    top_meta = optts[0]["input_artifacts"][0]["metadata"]
+    assert top_meta["scan_stage_id"] == "orca_scan_02"
+    assert top_meta["scan_direction"] == "forward"
+    assert "scan.002.xyz" in optts[0]["input_artifacts"][0]["path"]
+
+
+def test_extension_exhausted_records_no_barrier_error(tmp_path: Path) -> None:
+    payload = _create_workflow(tmp_path)
+    workspace = tmp_path / "root" / "wf_scan_ts_test"
+    scan_stage = payload["stages"][0]
+    scan_stage["status"] = "completed"
+    _write_scan_results(scan_stage, [-100.3, -100.2, -100.1, -100.0])
+    assert append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+    extension = payload["stages"][1]
+    extension["status"] = "completed"
+    _write_scan_results(extension, [-99.9, -99.8, -99.7, -99.6, -99.5, -99.4])
+
+    created = append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+
+    assert not created
+    assert payload["metadata"]["workflow_error"]["reason"] == "scan_profile_no_barrier"
+
+
+def test_failed_forward_candidates_trigger_reverse_scan_and_fanout(tmp_path: Path) -> None:
+    payload = _create_workflow(tmp_path)
+    workspace = tmp_path / "root" / "wf_scan_ts_test"
+    scan_stage = payload["stages"][0]
+    scan_stage["status"] = "completed"
+    _write_scan_results(scan_stage, [-100.0, -99.5, -100.2, -99.85, -100.3, -99.3])
+    assert append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+    forward_optts = [s for s in payload["stages"] if s["stage_id"].startswith("orca_optts_freq_")]
+    for stage in forward_optts:
+        stage["status"] = "failed"
+
+    # All forward candidates failed verification -> reverse scan stage appended,
+    # walking the full range back from the forward endpoint.
+    assert append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+    reverse = next(s for s in payload["stages"] if s["stage_id"] == "orca_scan_reverse_01")
+    assert reverse["metadata"]["scan_direction"] == "reverse"
+    assert reverse["metadata"]["workflow_fatal"] is True
+    assert reverse["metadata"]["scan_coordinate"] == "B 0 1 = 3, 1.2, 10"
+    assert "workflow_error" not in payload.get("metadata", {})
+
+    # Reverse scan completes with its own interior maximum -> reverse fan-out
+    # with continued stage numbering.
+    reverse["status"] = "completed"
+    _write_scan_results(reverse, [-100.0, -99.6, -100.4, -100.5])
+
+    assert append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+    reverse_optts = [
+        s
+        for s in payload["stages"]
+        if s["stage_id"].startswith("orca_optts_freq_")
+        and s["input_artifacts"][0]["metadata"]["scan_direction"] == "reverse"
+    ]
+    assert len(reverse_optts) == 1
+    assert reverse_optts[0]["stage_id"] == f"orca_optts_freq_{len(forward_optts) + 1:02d}"
+    assert reverse_optts[0]["input_artifacts"][0]["metadata"]["scan_stage_id"] == (
+        "orca_scan_reverse_01"
+    )
+
+    # Reverse candidates also fail -> candidates exhausted.
+    for stage in reverse_optts:
+        stage["status"] = "failed"
+    assert not append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+    assert payload["metadata"]["workflow_error"]["scope"] == ("scan_ts_search_candidates_exhausted")
+    assert payload["metadata"]["workflow_error"]["reason"] == "ts_candidates_exhausted"
 
 
 def _recompute_status(payload: dict) -> str:
@@ -188,6 +287,26 @@ def test_relaxed_scan_excluded_from_ts_candidate_ranking(tmp_path: Path) -> None
         "orca_optts_freq_01",
         "orca_optts_freq_02",
     }
+
+
+def test_cancelled_forward_candidates_do_not_trigger_reverse_scan(tmp_path: Path) -> None:
+    payload = _create_workflow(tmp_path)
+    workspace = tmp_path / "root" / "wf_scan_ts_test"
+    scan_stage = payload["stages"][0]
+    scan_stage["status"] = "completed"
+    _write_scan_results(scan_stage, [-100.0, -99.5, -100.2, -99.85, -100.3, -99.3])
+    assert append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+    forward_optts = [s for s in payload["stages"] if s["stage_id"].startswith("orca_optts_freq_")]
+
+    # Workflow cancellation transitions the forward candidates to cancelled;
+    # this must NOT be treated as "every candidate failed to verify a TS", so
+    # no reverse scan is appended and no exhaustion error is recorded.
+    for stage in forward_optts:
+        stage["status"] = "cancelled"
+
+    assert not append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+    assert not any(s["stage_id"] == "orca_scan_reverse_01" for s in payload["stages"])
+    assert "workflow_error" not in payload.get("metadata", {})
 
 
 def test_incomplete_scan_does_not_fan_out(tmp_path: Path) -> None:

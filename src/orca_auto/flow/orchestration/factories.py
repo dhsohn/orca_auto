@@ -167,10 +167,14 @@ def _normalized_scan_ts_request(
     threshold = float(request.barrier_threshold_kcal)
     if threshold <= 0:
         raise ValueError(f"barrier_threshold_kcal must be > 0. got={threshold}")
+    max_scan_extensions = int(request.max_scan_extensions)
+    if max_scan_extensions < 0:
+        raise ValueError(f"max_scan_extensions must be >= 0. got={max_scan_extensions}")
     return replace(
         request,
         scan_coordinate=scan_coordinate,
         barrier_threshold_kcal=threshold,
+        max_scan_extensions=max_scan_extensions,
         max_cores=_positive_int_field(request.max_cores, field_name="max_cores"),
         max_memory_gb=_positive_int_field(
             request.max_memory_gb,

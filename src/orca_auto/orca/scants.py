@@ -165,6 +165,36 @@ def scan_profile_interior_maxima(
     return candidates
 
 
+def parse_scan_coordinate(text: str) -> ScanCoordinateSpec | None:
+    """Spec from a bare scan-coordinate string like ``B 0 1 = 1.20, 3.00, 10``."""
+    match = _SIMPLE_SCAN_COORD_LINE_RE.match(text.strip())
+    if match is None:
+        return None
+    prefix_tokens = match.group("prefix").split("=")[0].split()
+    if len(prefix_tokens) < 2:
+        return None
+    try:
+        atoms = tuple(int(token) for token in prefix_tokens[1:])
+    except ValueError:
+        return None
+    return ScanCoordinateSpec(
+        kind=prefix_tokens[0].upper(),
+        atoms=atoms,
+        start=float(match.group("start")),
+        end=float(match.group("end")),
+        points=int(match.group("points")),
+    )
+
+
+def format_scan_coordinate(spec: ScanCoordinateSpec) -> str:
+    """The canonical scan-coordinate string ``parse_scan_coordinate`` accepts."""
+    atoms = " ".join(str(atom) for atom in spec.atoms)
+    return (
+        f"{spec.kind} {atoms} = {_format_scan_float(spec.start)}, "
+        f"{_format_scan_float(spec.end)}, {spec.points}"
+    )
+
+
 def first_scan_coordinate_spec(inp_path: Path) -> ScanCoordinateSpec | None:
     """Kind, atom indices, and range of the first simple scan coordinate line."""
     try:
@@ -172,23 +202,9 @@ def first_scan_coordinate_spec(inp_path: Path) -> ScanCoordinateSpec | None:
     except OSError:
         return None
     for idx in _simple_scan_coord_line_indices(lines):
-        match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[idx])
-        if match is None:
-            continue
-        prefix_tokens = match.group("prefix").split("=")[0].split()
-        if len(prefix_tokens) < 2:
-            continue
-        try:
-            atoms = tuple(int(token) for token in prefix_tokens[1:])
-        except ValueError:
-            continue
-        return ScanCoordinateSpec(
-            kind=prefix_tokens[0].upper(),
-            atoms=atoms,
-            start=float(match.group("start")),
-            end=float(match.group("end")),
-            points=int(match.group("points")),
-        )
+        spec = parse_scan_coordinate(lines[idx])
+        if spec is not None:
+            return spec
     return None
 
 
