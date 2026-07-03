@@ -50,6 +50,7 @@ class ScanSegment:
 @dataclass(frozen=True)
 class ScantsReportData:
     title: str
+    kind: str
     job_id: str
     status: str
     reason: str
@@ -67,28 +68,40 @@ class ScantsReportData:
     frequency_attempt_index: int | None
     last_out_name: str
 
+    def kind_label(self) -> str:
+        return "ScanTS" if self.kind == "scants" else "Relaxed scan"
+
 
 def collect_scants_report_data(
     reaction_dir: Path,
     state: Mapping[str, Any],
+    *,
+    kind: str = "scants",
 ) -> ScantsReportData | None:
+    """Report data for ScanTS (``kind="scants"``) and plain relaxed scans.
+
+    A relaxed scan (``! Opt`` route with a ``%geom Scan`` block) prints the
+    same actual-energy surface table, so it shares the profile chart, barrier
+    prominence, and vibrational summary; only the TS-hunt wording differs.
+    """
     selected_raw = str(state.get("selected_inp") or "").strip()
     if not selected_raw:
         return None
     selected_inp = Path(selected_raw)
-    if not input_uses_scants(selected_inp):
+    if kind == "scants" and not input_uses_scants(selected_inp):
         return None
 
     route_lines = file_route_lines(selected_inp)
     scan_spec = first_scan_coordinate_spec(selected_inp)
     attempts = attempt_dicts(state)
 
+    initial_label = "initial ScanTS" if kind == "scants" else "initial relaxed scan"
     rows: list[AttemptReportRow] = []
     segments: list[ScanSegment] = []
     forward_energies: list[float] = []
     for position, attempt in enumerate(attempts):
         if position == 0:
-            label, direction = "initial ScanTS", "forward"
+            label, direction = initial_label, "forward"
         else:
             label, direction = attempt_role(attempt_actions(attempts[position - 1]))
         out_raw = str(attempt.get("out_path") or "").strip()
@@ -133,6 +146,7 @@ def collect_scants_report_data(
 
     return ScantsReportData(
         title=reaction_dir.name or str(reaction_dir),
+        kind=kind,
         job_id=str(state.get("job_id") or ""),
         status=str(state.get("status") or ""),
         reason=str(final_payload.get("reason") or ""),
@@ -156,6 +170,7 @@ def collect_scants_report_data(
 
 _SEGMENT_STYLES = {
     "initial ScanTS": ("#2f6fb2", ""),
+    "initial relaxed scan": ("#2f6fb2", ""),
     "scan continuation": ("#2f6fb2", ""),
     "retry": ("#2f6fb2", ""),
     "resume": ("#2f6fb2", ""),
@@ -194,22 +209,29 @@ def _profile_chart_svg(data: ScantsReportData) -> str:
 
 
 def _metric_cards(data: ScantsReportData) -> str:
+    scants = data.kind == "scants"
     cards = []
     if data.forward_barrier_kcal is not None:
         below = data.forward_barrier_kcal < SCANTS_BARRIER_NOISE_KCAL
-        cards.append(
-            metric_card(
-                "Forward interior barrier",
-                f"{data.forward_barrier_kcal:.2f} <small>kcal/mol</small>",
+        if scants:
+            barrier_note = (
                 f"below {SCANTS_BARRIER_NOISE_KCAL} noise threshold"
                 if below
-                else f"above {SCANTS_BARRIER_NOISE_KCAL} noise threshold",
+                else f"above {SCANTS_BARRIER_NOISE_KCAL} noise threshold"
+            )
+        else:
+            barrier_note = "prominence over the shallower flank"
+        cards.append(
+            metric_card(
+                "Forward interior barrier" if scants else "Interior barrier",
+                f"{data.forward_barrier_kcal:.2f} <small>kcal/mol</small>",
+                barrier_note,
             )
         )
     if data.forward_drop_kcal is not None:
         cards.append(
             metric_card(
-                "Forward profile span",
+                "Forward profile span" if scants else "Profile span",
                 f"{data.forward_drop_kcal:+.1f} <small>kcal/mol</small>",
                 "endpoint relative to scan start",
             )
@@ -263,7 +285,7 @@ def render_scants_report_html(data: ScantsReportData) -> str:
     alignment_label = data.scan_spec.label() if data.scan_spec is not None else None
 
     page = ReportPage(
-        title=f"{data.title} · ScanTS report",
+        title=f"{data.title} · {data.kind_label()} report",
         badges=tuple(badges),
         meta_html=meta_html,
         verdict_html=verdict_note(data.reason, fallback_reason),

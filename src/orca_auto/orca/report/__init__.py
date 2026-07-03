@@ -1,10 +1,11 @@
 """Self-contained HTML job reports written next to ``job_report.md``.
 
-``write_job_html_report`` picks the report flavor from the selected input's
-route lines: ScanTS jobs get the scan-profile report, other TS routes
-(OptTS/NEB-TS) and plain Opt jobs get the optimization report. Jobs without an
-optimization (single points, bare Freq) get no HTML report. Report generation
-must never break run finalization, so every error is logged and swallowed.
+``write_job_html_report`` picks the report flavor from the selected input:
+ScanTS jobs and plain relaxed scans (Opt route + ``%geom Scan`` block) get the
+scan-profile report, other TS routes (OptTS/NEB-TS) and plain Opt jobs get the
+optimization report. Jobs without an optimization (single points, bare Freq)
+get no HTML report. Report generation must never break run finalization, so
+every error is logged and swallowed.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from orca_auto.core.utils.persistence import atomic_write_text
 
 from ..completion_rules import TS_ROUTE_RE
 from ..input_blocks import file_route_lines
-from ..scants import input_uses_scants
+from ..scants import first_scan_coordinate_spec, input_uses_scants
 from .frequencies import FrequencyAnalysis, parse_frequency_analysis
 from .opt import OptReportData, collect_opt_report_data, render_opt_report_html
 from .scants import ScantsReportData, collect_scants_report_data, render_scants_report_html
@@ -44,6 +45,11 @@ def _render_job_report(reaction_dir: Path, state: Mapping[str, Any]) -> str | No
     if TS_ROUTE_RE.search(routes):
         kind = "ts"
     elif _OPT_ROUTE_RE.search(routes):
+        # A plain relaxed scan (Opt route + %geom Scan block) is about the
+        # energy profile, not the convergence trace: use the scan report.
+        if first_scan_coordinate_spec(selected_inp) is not None:
+            scan_data = collect_scants_report_data(reaction_dir, state, kind="scan")
+            return None if scan_data is None else render_scants_report_html(scan_data)
         kind = "opt"
     else:
         return None

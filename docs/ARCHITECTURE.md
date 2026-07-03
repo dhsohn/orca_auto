@@ -272,9 +272,10 @@ logic. Notable pieces:
   inputs are written as `*.resume.inp` so user input is never mutated.
 - **State & reports:** `state.py`/`state_machine.py` persist `job_state.json`;
   completion writes `job_report.json` and `job_report.md`; Opt, OptTS/NEB-TS,
-  and ScanTS jobs also get `job_report.html` (`report/`), a self-contained
-  visual report — scan energy profile (ScanTS) or optimization convergence
-  trace (Opt/OptTS), retry-recipe chain, and vibrational summary.
+  ScanTS, and relaxed-scan jobs also get `job_report.html` (`report/`), a
+  self-contained visual report — scan energy profile (ScanTS and plain relaxed
+  scans) or optimization convergence trace (Opt/OptTS), retry-recipe chain,
+  and vibrational summary.
 - **Organize & index:** `result_organizer/` moves completed outputs into the
   organized root and leaves an `organized_ref.json` stub; `dft_index*.py` and
   `organize_index.py` maintain a JSONL index for discovery.

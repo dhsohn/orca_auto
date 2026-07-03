@@ -19,6 +19,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   results table (relative energies from `.engrad`, imaginary-frequency counts,
   links to per-job `job_report.html`). Covers both `conformer_screening`
   (conformer ranking) and `reaction_ts_search` (TS-candidate ranking).
+- Relaxed-scan HTML report: plain relaxed scans (`Opt` route with a
+  `%geom Scan` block) now get the scan-profile flavor of `job_report.html`
+  (energy profile, interior-barrier prominence, scan-coordinate alignment)
+  instead of the optimization-convergence flavor.
 - HTML job reports: Opt, OptTS/NEB-TS, and ScanTS jobs now write a
   self-contained `job_report.html` next to `job_report.md` for successful and
   failed runs alike (shared renderer in `orca/report/`). ScanTS reports show
