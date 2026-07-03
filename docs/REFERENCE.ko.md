@@ -270,12 +270,16 @@ ORCA 고유 노트:
   단축 명령은 `orca_auto scaffold conformer_search <path>`입니다.
 - `scan_ts_search`는 `orca.route_line`과 필수 manifest 키 `scan_coordinate`
   (ORCA scan 문법, 0-based 원자 인덱스)로 만든 ORCA relaxed scan으로 시작합니다.
-  scan이 완료되면 프로파일의 내부 maximum마다(prominence ≥
+  scan이 완료되면 결합 프로파일의 내부 maximum마다(prominence ≥
   `barrier_threshold_kcal`, 기본 0.5; 끝점 제외; `max_orca_stages`로 상한;
   route는 `orca_optts_route_line`) OptTS+Freq 자식 작업을 하나씩 체인하고,
-  워크플로우 리포트가 후보들을 랭킹합니다. 무장벽 프로파일은
-  `scan_profile_no_barrier`로 실패 처리됩니다. 스캐폴드 단축 명령은
-  `orca_auto scaffold scan_ts <path>`입니다.
+  워크플로우 리포트가 후보들을 랭킹합니다. 무장벽 프로파일은 먼저 최대
+  `max_scan_extensions`(기본 1)회까지 이전 끝점 너머로 연장 scan 스테이지를
+  붙이고(각 max(6, 범위의 20%) 포인트), 그 후에야 `scan_profile_no_barrier`로
+  실패합니다. 정방향 후보가 전부 TS 검증에 실패하면 정방향 끝점 지오메트리에서
+  전체 범위를 되짚는 역방향 scan 스테이지가 붙고 그 내부 maximum들이 2차
+  후보로 fan-out됩니다. 그것까지 소진되면 `ts_candidates_exhausted`로
+  실패합니다. 스캐폴드 단축 명령은 `orca_auto scaffold scan_ts <path>`입니다.
 - 워크플로우가 advance될 때마다 워크스페이스에 `workflow_report.html`을 다시
   씁니다: 스테이지 체인, CREST → (xTB) → ORCA 깔때기 요약, ORCA 결과 순위표
   (상대 에너지, 허수 진동수, 개별 작업 `job_report.html` 링크)를 담은 단일 파일

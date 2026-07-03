@@ -10,6 +10,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Added
 
+- `scan_ts_search` scan extension and reverse rescue: the recovery strategies
+  proven in the ScanTS retry chain, re-homed as proper workflow stages. A
+  completed forward scan with no interior barrier gets up to
+  `max_scan_extensions` (default 1) extension scan stages continuing past the
+  endpoint before `scan_profile_no_barrier` is recorded; when every forward
+  OptTS candidate finishes without verifying a TS, a reverse scan stage walks
+  the full range back from the forward endpoint (scan hysteresis yields new
+  maximum geometries) and its maxima fan out as a second candidate batch,
+  failing with `ts_candidates_exhausted` only when those are spent too.
 - `scan_ts_search` workflow template (scaffold shortcut `scan_ts`): an ORCA
   relaxed-scan stage (route + `scan_coordinate` from `flow.yaml`) followed by
   automatic fan-out of one OptTS+Freq child job per interior maximum of the

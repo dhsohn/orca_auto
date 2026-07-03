@@ -58,6 +58,7 @@ class ScanTsSearchWorkflowRequest:
     max_cores: int = 8
     max_memory_gb: int = 32
     max_orca_stages: int = 5
+    max_scan_extensions: int = 1
     orca_route_line: str = "! Opt r2scan-3c TightSCF"
     orca_optts_route_line: str = "! OptTS Freq r2scan-3c TightSCF"
     barrier_threshold_kcal: float = 0.5

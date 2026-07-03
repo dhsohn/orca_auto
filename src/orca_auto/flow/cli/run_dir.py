@@ -202,6 +202,7 @@ _SCAN_TS_RUN_DIR_WORKFLOW_SPEC = _RunDirWorkflowCreationSpec(
 _SCAN_TS_OPTIONAL_MANIFEST_KEYS = (
     "orca_optts_route_line",
     "barrier_threshold_kcal",
+    "max_scan_extensions",
 )
 
 
@@ -221,7 +222,9 @@ def _create_scan_ts_run_dir_workflow(
     workflow_kwargs["scan_coordinate"] = scan_coordinate
     for key in _SCAN_TS_OPTIONAL_MANIFEST_KEYS:
         value = config.manifest.get(key)
-        if value is not None and normalize_text(value):
+        # `is not None` (not truthiness): `max_scan_extensions: 0` is a valid
+        # override that disables scan extensions.
+        if value is not None and (not isinstance(value, str) or value.strip()):
             workflow_kwargs[key] = value
     return create_scan_ts_search_workflow(**workflow_kwargs)
 

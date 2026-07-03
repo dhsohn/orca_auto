@@ -256,11 +256,17 @@ Workflow notes:
 - `scan_ts_search` starts with an ORCA relaxed scan built from `orca.route_line`
   plus the required `scan_coordinate` manifest key (ORCA scan syntax, 0-based
   atom indices). When the scan completes, one OptTS+Freq child job is chained
-  per interior maximum of the profile with prominence above
+  per interior maximum of the combined profile with prominence above
   `barrier_threshold_kcal` (default 0.5; endpoints excluded; capped by
   `max_orca_stages`; route from `orca_optts_route_line`), and the workflow
-  report ranks the candidates. A barrierless profile fails the workflow with
-  `scan_profile_no_barrier`. The scaffold shortcut is
+  report ranks the candidates. A barrierless profile first gets up to
+  `max_scan_extensions` (default 1) extension scan stages continuing past the
+  previous endpoint (max(6, 20% of the range) extra points each) before the
+  workflow fails with `scan_profile_no_barrier`. When every forward candidate
+  finishes without verifying a TS, a reverse scan stage walks the full range
+  back from the forward endpoint geometry and its interior maxima fan out as a
+  second candidate batch; only when those are exhausted too does the workflow
+  fail with `ts_candidates_exhausted`. The scaffold shortcut is
   `orca_auto scaffold scan_ts <path>`.
 - Every workflow advance rewrites `workflow_report.html` in the workflow
   workspace: a self-contained visual summary with the stage chain, the
