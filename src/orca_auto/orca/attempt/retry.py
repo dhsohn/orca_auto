@@ -14,10 +14,13 @@ from ..inp_rewriter import (
 from ..out_analyzer import OutAnalysis
 from ..retry_policy import RetryRecipeName, retry_recipe_name_for_input
 from ..scants import (
+    SCANTS_BARRIER_NOISE_KCAL,
     highest_scants_surface_point,
     input_uses_scants,
+    parse_scants_actual_surface,
     prepare_scants_endpoint_scan_input,
     prepare_scants_reverse_scan_retry_input,
+    scan_profile_interior_barrier_kcal,
 )
 from ..state import save_state
 from ..statuses import RunStatus
@@ -25,6 +28,16 @@ from ..types import RetryNotification, RunFinishedNotification, RunState
 from .reporting import build_retry_notification, exit_with_result
 
 logger = logging.getLogger(__name__)
+
+
+class ScantsRetryStop(RuntimeError):
+    """Deliberate end of the ScanTS retry chain, carrying a report-facing reason.
+
+    Separates "the recipe chain has nothing left to try" and "the scan profile
+    proves another scan is pointless" from genuine rewrite crashes, so the
+    final report carries an actionable reason instead of the generic
+    ``rewrite_failed``.
+    """
 
 
 @dataclass(frozen=True)
@@ -130,6 +143,47 @@ def _output_has_scants_actual_surface_maximum(ctx: RetryAttemptRequest) -> bool:
     )
 
 
+def _prior_attempt_surface_energies(state: RunState) -> list[float]:
+    energies: list[float] = []
+    attempts = state.get("attempts")
+    if not isinstance(attempts, list):
+        return energies
+    for attempt in attempts[:-1]:
+        if not isinstance(attempt, dict):
+            continue
+        out_raw = attempt.get("out_path")
+        if not isinstance(out_raw, str) or not out_raw.strip():
+            continue
+        energies.extend(point.energy for point in parse_scants_actual_surface(Path(out_raw)))
+    return energies
+
+
+def _stop_when_scan_profile_has_no_barrier(ctx: RetryAttemptRequest) -> None:
+    """Fail the run when the completed forward profile is barrierless.
+
+    Once the endpoint scan has finished, the forward surface segments plus the
+    endpoint segment cover the whole scan range. Without an interior maximum
+    above the noise threshold there is no TS along this coordinate, so a
+    reverse ScanTS would only mirror the same monotonic profile; stop with a
+    chemistry-actionable reason instead. Skipped (fail-open) when the endpoint
+    attempt printed no surface, since the range is then not fully explored.
+    """
+    endpoint_energies = [point.energy for point in parse_scants_actual_surface(ctx.out_path)]
+    if not endpoint_energies:
+        return
+    energies = _prior_attempt_surface_energies(ctx.state) + endpoint_energies
+    barrier_kcal = scan_profile_interior_barrier_kcal(energies)
+    if barrier_kcal is None or barrier_kcal >= SCANTS_BARRIER_NOISE_KCAL:
+        return
+    logger.info(
+        "ScanTS forward profile is barrierless (max interior prominence %.3f kcal/mol "
+        "over %d points); skipping reverse scan",
+        barrier_kcal,
+        len(energies),
+    )
+    raise ScantsRetryStop("scan_profile_no_barrier")
+
+
 def _prepare_scants_retry_after_surface_maximum(
     ctx: RetryAttemptRequest,
     *,
@@ -171,6 +225,7 @@ def _prepare_scants_reverse_scan_after_endpoint_scan(
         return None, []
     if _state_has_scants_reverse_scan(ctx.state):
         return None, []
+    _stop_when_scan_profile_has_no_barrier(ctx)
     return prepare_scants_reverse_scan_retry_input(
         source_inp=ctx.current_inp,
         selected_inp=ctx.selected_inp,
@@ -197,7 +252,7 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
                 next_inp=next_inp,
             )
         if prepared_scants is None and (scants_surface_maximum_seen or scants_endpoint_scan_seen):
-            raise RuntimeError("no_scants_retry_input")
+            raise ScantsRetryStop("scants_recipes_exhausted")
         if prepared_scants is None:
             scants_retry_source = ctx.selected_inp if next_retry_number == 1 else ctx.current_inp
             prepared_scants, patch_actions = prepare_scants_scan_retry_input(
@@ -208,7 +263,7 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
             )
         if prepared_scants is None:
             if uses_scants:
-                raise RuntimeError("no_scants_retry_input")
+                raise ScantsRetryStop("scants_recipes_exhausted")
             patch_actions = rewrite_for_retry(
                 source_inp=ctx.current_inp,
                 target_inp=next_inp,
@@ -216,6 +271,22 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
                 step=patch_step,
                 max_memory_gb=ctx.max_memory_gb_per_task(),
             )
+    except ScantsRetryStop as stop:
+        reason = str(stop)
+        ctx.state["attempts"][-1]["patch_actions"] = [f"scants_retry_stopped:{reason}"]
+        return exit_with_result(
+            ctx.reaction_dir,
+            ctx.state,
+            ctx.selected_inp,
+            status=RunStatus.FAILED,
+            analyzer_status=ctx.analysis.status,
+            reason=reason,
+            last_out_path=str(ctx.out_path),
+            resumed=ctx.resumed,
+            exit_code=1,
+            emit=ctx.emit,
+            notify_finished=ctx.notify_finished,
+        )
     except Exception as exc:  # noqa: BLE001
         ctx.state["attempts"][-1]["patch_actions"] = [f"rewrite_failed:{exc}"]
         return exit_with_result(
@@ -264,6 +335,7 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
 
 __all__ = [
     "RetryAttemptRequest",
+    "ScantsRetryStop",
     "prepare_resumed_checkpoint_input",
     "prepare_retry_attempt",
     "resume_checkpoint_inp_path",
