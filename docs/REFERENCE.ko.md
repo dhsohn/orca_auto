@@ -515,10 +515,11 @@ Opt 모드 완료:
 - `job_state.json`
 - `job_report.json`
 - `job_report.md`
-- `job_report.html` (Opt, OptTS/NEB-TS, ScanTS 작업): scan 에너지
-  프로파일(ScanTS) 또는 최적화 수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동
-  요약(허수 모드, 주요 원자 변위, ScanTS의 경우 스캔 좌표와의 일치도)을 담은
-  단일 파일 시각 리포트
+- `job_report.html` (Opt, OptTS/NEB-TS, ScanTS, relaxed scan 작업): scan 에너지
+  프로파일(ScanTS 및 일반 relaxed scan — `Opt` route + `%geom Scan` 블록) 또는
+  최적화 수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동 요약(허수 모드, 주요
+  원자 변위, scan 작업의 경우 스캔 좌표와의 일치도)을 담은 단일 파일 시각
+  리포트
 - organize가 원본 실행 디렉터리에 스텁을 남긴 뒤의 `organized_ref.json`
 
 주요 `job_state.json` 필드:

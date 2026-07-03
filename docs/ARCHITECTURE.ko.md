@@ -264,9 +264,10 @@ python -m orca_auto.core.engines.worker_child \
   `*.resume.inp`로 기록되어 사용자 입력이 변경되지 않습니다.
 - **상태 & 리포트:** `state.py`/`state_machine.py`가 `job_state.json`을
   영속화하고, 완료 시 `job_report.json`과 `job_report.md`를 작성합니다. Opt,
-  OptTS/NEB-TS, ScanTS 작업은 추가로 `job_report.html`(`report/`)을 생성합니다 —
-  scan 에너지 프로파일(ScanTS) 또는 최적화 수렴 궤적(Opt/OptTS), 재시도 레시피
-  체인, 진동 요약을 담은 단일 파일 시각 리포트입니다.
+  OptTS/NEB-TS, ScanTS, relaxed scan 작업은 추가로 `job_report.html`(`report/`)을
+  생성합니다 — scan 에너지 프로파일(ScanTS 및 일반 relaxed scan) 또는 최적화
+  수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동 요약을 담은 단일 파일 시각
+  리포트입니다.
 - **정리 & 인덱스:** `result_organizer/`가 완료 출력을 정리 루트로 이동하고
   원본 디렉터리에 `organized_ref.json` 스텁을 남깁니다. `dft_index*.py`와
   `organize_index.py`가 탐색용 JSONL 인덱스를 유지합니다.

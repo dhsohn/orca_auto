@@ -499,11 +499,12 @@ Generated in the job directory:
 - `job_state.json`
 - `job_report.json`
 - `job_report.md`
-- `job_report.html` (Opt, OptTS/NEB-TS, and ScanTS jobs): self-contained visual
-  report with the scan energy profile (ScanTS) or optimization convergence trace
-  (Opt/OptTS), the retry-recipe chain, and a vibrational summary (imaginary
-  modes, dominant atom displacements, and — for ScanTS — alignment with the
-  scanned coordinate)
+- `job_report.html` (Opt, OptTS/NEB-TS, ScanTS, and relaxed-scan jobs):
+  self-contained visual report with the scan energy profile (ScanTS and plain
+  relaxed scans, i.e. `Opt` routes with a `%geom Scan` block) or optimization
+  convergence trace (Opt/OptTS), the retry-recipe chain, and a vibrational
+  summary (imaginary modes, dominant atom displacements, and — for scans —
+  alignment with the scanned coordinate)
 - `organized_ref.json` after organize leaves a stub in the original run directory
 
 Important `job_state.json` fields:

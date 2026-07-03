@@ -228,6 +228,46 @@ def test_write_job_html_report_renders_scants_sections(tmp_path: Path) -> None:
     assert "TS criteria met" in text
 
 
+def test_relaxed_scan_gets_profile_report_not_opt_report(tmp_path: Path) -> None:
+    inp = tmp_path / "rxn.inp"
+    inp.write_text(
+        "\n".join(
+            [
+                "! Opt B3LYP def2-SVP",
+                "",
+                "%geom",
+                "  Scan",
+                "    B 0 1 = 1.86, 1.96, 3",
+                "  end",
+                "end",
+                "",
+                "* xyzfile 0 1 input.xyz",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "rxn.out"
+    _write_ts_out(out_path)
+
+    path = write_job_html_report(tmp_path, _state(tmp_path, out_path))
+
+    assert path == tmp_path / "job_report.html"
+    text = path.read_text(encoding="utf-8")
+    assert "Relaxed scan report" in text
+    assert "ScanTS" not in text
+    assert "Scan energy profile" in text
+    assert "<polyline" in text
+    assert "initial relaxed scan" in text
+    assert "Interior barrier" in text
+    assert "prominence over the shallower flank" in text
+    assert "Optimization convergence" not in text
+    # Freq block present in the fixture out: the vibrational summary and the
+    # scan-coordinate alignment apply to relaxed scans too.
+    assert "B(0,1)" in text
+    assert "85%" in text
+
+
 def test_write_report_files_includes_html_for_scants(tmp_path: Path) -> None:
     _write_scants_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
