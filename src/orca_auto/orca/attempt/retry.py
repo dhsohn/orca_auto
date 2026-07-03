@@ -23,8 +23,8 @@ from ..scants import (
     prepare_scants_endpoint_scan_input,
     prepare_scants_optts_fallback_input,
     prepare_scants_reverse_scan_retry_input,
+    relaxed_scan_interior_maximum_xyz,
     scan_profile_interior_barrier_kcal,
-    scants_guess_xyz_for_output,
 )
 from ..state import save_state
 from ..statuses import RunStatus
@@ -130,15 +130,25 @@ def _state_has_scants_optts_fallback(state: RunState) -> bool:
     )
 
 
-def _state_has_relaxed_scan_optts_chain(state: RunState) -> bool:
+def _relaxed_scan_chain_attempt_recorded(state: RunState) -> bool:
+    """True once an attempt AFTER the chain preparation exists.
+
+    The ``relaxed_scan_optts_chain`` marker lands on the completed scan
+    attempt when the OptTS input is prepared; the chain attempt itself is the
+    NEXT recorded attempt. A marker on the final attempt therefore means the
+    chain is still pending — the crash window between preparing the retry
+    input and the OptTS attempt starting must not finalize the run.
+    """
     attempts = state.get("attempts")
     if not isinstance(attempts, list):
         return False
-    return any(
-        action.startswith("relaxed_scan_optts_chain")
-        for attempt in attempts
-        for action in _attempt_patch_actions(attempt)
-    )
+    for position, attempt in enumerate(attempts):
+        if any(
+            action.startswith("relaxed_scan_optts_chain")
+            for action in _attempt_patch_actions(attempt)
+        ):
+            return position < len(attempts) - 1
+    return False
 
 
 def relaxed_scan_optts_chain_pending(
@@ -150,13 +160,14 @@ def relaxed_scan_optts_chain_pending(
 ) -> bool:
     """True when a completed relaxed scan must chain into an OptTS attempt.
 
-    Requires a plain relaxed-scan job, no chain attempt yet, an interior
-    maximum above the noise threshold in the completed scan's surface, and the
-    maximum's numbered xyz on disk. While pending, a COMPLETED attempt is only
-    the intermediate scan, so the run must not finish successfully — including
-    on crash-resume. A monotonic profile completes as an ordinary scan.
+    Requires a plain relaxed-scan job, no recorded chain attempt yet, an
+    interior maximum above the noise threshold in the completed scan's
+    surface, and that maximum's numbered xyz on disk. While pending, a
+    COMPLETED attempt is only the intermediate scan, so the run must not
+    finish successfully — including on crash-resume. A monotonic profile
+    completes as an ordinary scan.
     """
-    if _state_has_relaxed_scan_optts_chain(state):
+    if _relaxed_scan_chain_attempt_recorded(state):
         return False
     if not input_uses_relaxed_scan(selected_inp):
         return False
@@ -164,7 +175,7 @@ def relaxed_scan_optts_chain_pending(
     barrier_kcal = scan_profile_interior_barrier_kcal(energies)
     if barrier_kcal is None or barrier_kcal < SCANTS_BARRIER_NOISE_KCAL:
         return False
-    return scants_guess_xyz_for_output(source_inp, out_path) is not None
+    return relaxed_scan_interior_maximum_xyz(source_inp, out_path) is not None
 
 
 def _prepare_relaxed_scan_optts_chain(

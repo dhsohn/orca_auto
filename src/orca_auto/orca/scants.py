@@ -119,26 +119,54 @@ def highest_scants_surface_point(out_path: Path) -> ScanTSSurfacePoint | None:
     return max(points, key=lambda point: (point.energy, -point.index))
 
 
-def scan_profile_interior_barrier_kcal(energies: Sequence[float]) -> float | None:
-    """Prominence in kcal/mol of the highest interior maximum along a scan profile.
+def _interior_barrier_prominence(energies: Sequence[float]) -> tuple[float, int] | None:
+    """(prominence in kcal/mol, list index) of the most prominent interior point.
 
     Prominence is the smaller of the climbs from the lowest energy on either
-    side of a point, so a profile that is monotonic up to noise scores ~0 while
-    a genuine barrier scores its height above the shallower flank. ``None``
-    when fewer than three points exist (no interior point to judge).
+    side of a point. ``None`` when fewer than three points exist.
     """
     if len(energies) < 3:
         return None
     suffix_min = list(energies)
     for idx in range(len(suffix_min) - 2, -1, -1):
         suffix_min[idx] = min(suffix_min[idx], suffix_min[idx + 1])
-    best = 0.0
+    best = float("-inf")
+    best_idx = 1
     prefix_min = energies[0]
     for idx in range(1, len(energies) - 1):
         prominence = min(energies[idx] - prefix_min, energies[idx] - suffix_min[idx + 1])
-        best = max(best, prominence)
+        if prominence > best:
+            best = prominence
+            best_idx = idx
         prefix_min = min(prefix_min, energies[idx])
-    return best * _KCAL_PER_HARTREE
+    return max(best, 0.0) * _KCAL_PER_HARTREE, best_idx
+
+
+def scan_profile_interior_barrier_kcal(energies: Sequence[float]) -> float | None:
+    """Prominence in kcal/mol of the highest interior maximum along a scan profile.
+
+    A profile that is monotonic up to noise scores ~0 while a genuine barrier
+    scores its height above the shallower flank. ``None`` when fewer than
+    three points exist (no interior point to judge).
+    """
+    result = _interior_barrier_prominence(energies)
+    return None if result is None else result[0]
+
+
+def relaxed_scan_interior_maximum_xyz(source_inp: Path, out_path: Path) -> Path | None:
+    """Numbered xyz of the scan's most prominent INTERIOR maximum.
+
+    Deliberately not the global surface maximum: in a profile like
+    low -> interior barrier -> well -> higher endpoint, the OptTS chain must
+    start from the interior barrier it detected, not the endpoint.
+    """
+    points = parse_scants_actual_surface(out_path)
+    result = _interior_barrier_prominence([point.energy for point in points])
+    if result is None:
+        return None
+    _, list_idx = result
+    candidate = source_inp.with_name(f"{source_inp.stem}.{points[list_idx].index:03d}.xyz")
+    return candidate if nonempty_file(candidate) else None
 
 
 def first_scan_coordinate_spec(inp_path: Path) -> ScanCoordinateSpec | None:
@@ -907,7 +935,7 @@ def prepare_relaxed_scan_optts_chain_input(
     """
     if not input_uses_relaxed_scan(source_inp):
         return None, []
-    guess_xyz = scants_guess_xyz_for_output(source_inp, out_path)
+    guess_xyz = relaxed_scan_interior_maximum_xyz(source_inp, out_path)
     if guess_xyz is None:
         return None, []
 

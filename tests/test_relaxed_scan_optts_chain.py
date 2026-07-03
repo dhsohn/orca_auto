@@ -245,6 +245,82 @@ def test_failed_scan_ends_without_generic_hardening(tmp_path: Path) -> None:
     assert _final_reason(saved) == "relaxed_scan_recipes_exhausted"
 
 
+def test_chain_targets_interior_maximum_not_global_maximum(tmp_path: Path) -> None:
+    selected_inp = tmp_path / "rxn.inp"
+    _write_relaxed_scan_input(selected_inp)
+
+    class _HighEndpointScanRunner:
+        def __init__(self) -> None:
+            self.seen: list[Path] = []
+
+        def run(self, inp_path: Path) -> SimpleNamespace:
+            self.seen.append(inp_path)
+            out_path = inp_path.with_suffix(".out")
+            if len(self.seen) == 1:
+                _write_scan_xyz_series(inp_path.parent, inp_path.stem, count=4)
+                # low -> interior barrier (point 2) -> well -> HIGHER endpoint
+                # (point 4, global maximum). The chain must start from the
+                # interior barrier, not the endpoint.
+                _write_scan_out(out_path, [-100.0, -99.5, -100.2, -99.3])
+                return SimpleNamespace(out_path=str(out_path), return_code=0)
+            out_path.write_text(_TS_FOUND_OUT, encoding="utf-8")
+            return SimpleNamespace(out_path=str(out_path), return_code=0)
+
+    runner = _HighEndpointScanRunner()
+    rc, saved = _run(tmp_path, selected_inp, runner=runner)
+    optts_text = (tmp_path / "rxn.retry01.inp").read_text(encoding="utf-8")
+
+    assert rc == 0
+    assert saved.get("status") == "completed"
+    assert "* xyzfile 0 1 rxn.002.xyz" in optts_text
+    assert "rxn.004.xyz" not in optts_text
+
+
+def test_resume_in_prepared_chain_window_runs_the_optts_input(tmp_path: Path) -> None:
+    selected_inp = tmp_path / "rxn.inp"
+    _write_relaxed_scan_input(selected_inp)
+    first_runner = _ScanWithBarrierRunner(optts_out=_TS_FOUND_OUT)
+    rc, _saved = _run(tmp_path, selected_inp, runner=first_runner)
+    assert rc == 0
+
+    # Simulate a crash AFTER the chain input was prepared and the marker saved
+    # on the completed scan attempt, but BEFORE the OptTS attempt started:
+    # the marker stays on the final attempt and rxn.retry01.inp is on disk.
+    state = load_state(tmp_path)
+    assert state is not None
+    attempts = state["attempts"]
+    assert isinstance(attempts, list)
+    del attempts[1:]
+    assert any(
+        str(action).startswith("relaxed_scan_optts_chain")
+        for action in attempts[0]["patch_actions"]
+    )
+    state["status"] = "retrying"
+    state["final_result"] = None
+    save_state(tmp_path, state)
+    (tmp_path / "rxn.retry01.out").unlink()
+
+    class _OpttsOnlyRunner:
+        def __init__(self) -> None:
+            self.seen: list[Path] = []
+
+        def run(self, inp_path: Path) -> SimpleNamespace:
+            self.seen.append(inp_path)
+            out_path = inp_path.with_suffix(".out")
+            out_path.write_text(_TS_FOUND_OUT, encoding="utf-8")
+            return SimpleNamespace(out_path=str(out_path), return_code=0)
+
+    resume_runner = _OpttsOnlyRunner()
+    rc, saved = _run(tmp_path, selected_inp, runner=resume_runner, resumed=True, state=state)
+
+    # Resume must not finalize the run off the completed scan; it must run the
+    # already-prepared OptTS input.
+    assert rc == 0
+    assert resume_runner.seen == [tmp_path / "rxn.retry01.inp"]
+    assert saved.get("status") == "completed"
+    assert _final_reason(saved) == "ts_criteria_met"
+
+
 def test_resume_after_completed_scan_continues_to_optts(tmp_path: Path) -> None:
     selected_inp = tmp_path / "rxn.inp"
     _write_relaxed_scan_input(selected_inp)
