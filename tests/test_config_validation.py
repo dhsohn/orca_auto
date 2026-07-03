@@ -349,7 +349,7 @@ class TestConfigValidation(unittest.TestCase):
             self.assertIn("orca.paths.orca_executable", str(ctx.exception))
             self.assertIn("explicit Linux paths", str(ctx.exception))
 
-    def test_organized_root_defaults_next_to_allowed_root(self) -> None:
+    def test_organized_root_collapses_to_allowed_root(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -367,7 +367,7 @@ class TestConfigValidation(unittest.TestCase):
                 },
             )
             cfg = load_config(str(cfg_path))
-            self.assertEqual(cfg.runtime.organized_root, str(root / "orca_outputs"))
+            self.assertEqual(cfg.runtime.organized_root, str(allowed))
             self.assertEqual(cfg.runtime.default_max_retries, 2)
             self.assertEqual(cfg.runtime.max_concurrent, 4)
 
@@ -378,7 +378,6 @@ class TestConfigValidation(unittest.TestCase):
                 {
                     "runtime": {
                         "allowed_root": "/path/to/orca_runs",
-                        "organized_root": "/path/to/orca_outputs",
                     },
                     "paths": {"orca_executable": "/path/to/orca/orca"},
                 },
@@ -387,65 +386,9 @@ class TestConfigValidation(unittest.TestCase):
                 load_config(str(cfg_path))
             self.assertIn("template placeholder paths", str(ctx.exception))
             self.assertIn("orca.runtime.allowed_root", str(ctx.exception))
-            self.assertIn("orca.runtime.organized_root", str(ctx.exception))
             self.assertIn("orca.paths.orca_executable", str(ctx.exception))
 
-    def test_windows_organized_root_raises(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            cfg_path = _write_orca_config(
-                Path(td) / "orca_auto.yaml",
-                {
-                    "runtime": {
-                        "allowed_root": "/home/user/orca_runs",
-                        "organized_root": "C:\\orca_outputs",
-                    },
-                    "paths": {"orca_executable": "/opt/orca/orca"},
-                },
-            )
-            with self.assertRaises(ValueError) as ctx:
-                load_config(str(cfg_path))
-            self.assertIn("Linux path", str(ctx.exception))
-
-    def test_relative_organized_root_raises(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            cfg_path = _write_orca_config(
-                Path(td) / "orca_auto.yaml",
-                {
-                    "runtime": {
-                        "allowed_root": "/home/user/orca_runs",
-                        "organized_root": "./outputs",
-                    },
-                    "paths": {"orca_executable": "/opt/orca/orca"},
-                },
-            )
-            with self.assertRaises(ValueError) as ctx:
-                load_config(str(cfg_path))
-            self.assertIn("absolute Linux path", str(ctx.exception))
-
-    def test_organized_root_inside_allowed_root_raises(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            allowed = root / "runs"
-            organized = allowed / "outputs"
-            allowed.mkdir()
-            organized.mkdir()
-            fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
-            cfg_path = _write_orca_config(
-                root / "orca_auto.yaml",
-                {
-                    "runtime": {
-                        "allowed_root": str(allowed),
-                        "organized_root": str(organized),
-                    },
-                    "paths": {"orca_executable": str(fake_orca)},
-                },
-            )
-            with self.assertRaises(ValueError) as ctx:
-                load_config(str(cfg_path))
-            self.assertIn("must not contain each other", str(ctx.exception))
-
-    def test_organized_root_set_correctly(self) -> None:
+    def test_configured_organized_root_is_ignored_with_warning(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -465,8 +408,12 @@ class TestConfigValidation(unittest.TestCase):
                     "paths": {"orca_executable": str(fake_orca)},
                 },
             )
-            cfg = load_config(str(cfg_path))
-            self.assertEqual(cfg.runtime.organized_root, str(organized))
+            with self.assertLogs("orca_auto.orca.config", level="WARNING") as logs:
+                cfg = load_config(str(cfg_path))
+            self.assertEqual(cfg.runtime.organized_root, str(allowed))
+            self.assertTrue(
+                any("organized_root is deprecated" in message for message in logs.output)
+            )
 
     def test_nonexistent_orca_executable_raises(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 from orca_auto.core.config import CommonResourceConfig, TelegramConfig
 from orca_auto.core.config import engines as _config_engines
@@ -15,7 +15,6 @@ from orca_auto.core.config.files import (
 )
 from orca_auto.core.config.schema import (
     RetryRuntimeConfig,
-    default_sibling_organized_root,
     telegram_config_from_mapping,
 )
 
@@ -25,7 +24,6 @@ logger = logging.getLogger(__name__)
 
 _CONFIG_TEMPLATE_RELATIVE_PATH = Path("config") / "orca_auto.yaml.example"
 _TEMPLATE_ALLOWED_ROOT = "/path/to/orca_runs"
-_TEMPLATE_ORGANIZED_ROOT = "/path/to/orca_outputs"
 _TEMPLATE_ORCA_EXECUTABLE = "/path/to/orca/orca"
 
 
@@ -34,17 +32,12 @@ def _config_template_path() -> Path:
     return repo_root / _CONFIG_TEMPLATE_RELATIVE_PATH
 
 
-def _default_organized_root(allowed_root: str) -> str:
-    return default_sibling_organized_root(allowed_root, "orca_outputs")
-
-
 def _missing_config_error(path: Path) -> ValueError:
     template_path = _config_template_path()
     return ValueError(
         "Config file not found: "
         f"{path}. Copy {template_path} to {path} and set explicit Linux paths for "
-        "orca.runtime.allowed_root, orca.runtime.organized_root, and "
-        "orca.paths.orca_executable."
+        "orca.runtime.allowed_root and orca.paths.orca_executable."
     )
 
 
@@ -68,7 +61,7 @@ def _placeholder_settings_error(path: Path, placeholder_keys: list[str]) -> Valu
 @dataclass
 class CommonRuntimeConfig(RetryRuntimeConfig):
     # max retry count, not total execution count
-    default_organized_root_name: ClassVar[str] = "orca_outputs"
+    pass
 
 
 RuntimeConfig = CommonRuntimeConfig
@@ -147,8 +140,6 @@ def _placeholder_keys(cfg: AppConfig) -> list[str]:
     placeholder_keys: list[str] = []
     if cfg.runtime.allowed_root == _TEMPLATE_ALLOWED_ROOT:
         placeholder_keys.append("orca.runtime.allowed_root")
-    if cfg.runtime.organized_root == _TEMPLATE_ORGANIZED_ROOT:
-        placeholder_keys.append("orca.runtime.organized_root")
     if cfg.paths.orca_executable == _TEMPLATE_ORCA_EXECUTABLE:
         placeholder_keys.append("orca.paths.orca_executable")
     return placeholder_keys
@@ -166,10 +157,16 @@ def load_config(config_path: str) -> AppConfig:
     resources_raw = _section_mapping(raw, "resources")
 
     allowed_root, orca_executable = _required_runtime_paths(path, runtime_raw, paths_raw)
-    organized_root = _config_engines.as_nonempty_str(
-        runtime_raw.get("organized_root"),
-        _default_organized_root(allowed_root),
+    configured_organized_root = _config_engines.as_nonempty_str(
+        runtime_raw.get("organized_root"), ""
     )
+    if configured_organized_root:
+        logger.warning(
+            "orca.runtime.organized_root is deprecated and ignored (the organize "
+            "feature was removed); completed runs stay under allowed_root. "
+            "Remove the key from %s.",
+            path,
+        )
     default_max_retries = _config_engines.as_int(
         runtime_raw.get("default_max_retries"),
         RuntimeConfig.default_max_retries,
@@ -184,7 +181,7 @@ def load_config(config_path: str) -> AppConfig:
     cfg = AppConfig(
         runtime=CommonRuntimeConfig(
             allowed_root=allowed_root,
-            organized_root=organized_root,
+            organized_root=allowed_root,
             default_max_retries=max(0, default_max_retries),
             max_concurrent=max_concurrent,
             admission_root=admission_root,
@@ -205,9 +202,8 @@ def load_config(config_path: str) -> AppConfig:
     _validate_config(cfg)
 
     logger.info(
-        "Config loaded: allowed_root=%s, organized_root=%s, admission_root=%s, orca_executable=%s, max_concurrent=%d, admission_limit=%d",
+        "Config loaded: allowed_root=%s, admission_root=%s, orca_executable=%s, max_concurrent=%d, admission_limit=%d",
         cfg.runtime.allowed_root,
-        cfg.runtime.organized_root,
         cfg.runtime.resolved_admission_root,
         cfg.paths.orca_executable,
         cfg.runtime.max_concurrent,

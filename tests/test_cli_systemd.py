@@ -30,7 +30,6 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
                 "orca:",
                 "  runtime:",
                 f"    allowed_root: {repo / 'orca_runs'}",
-                f"    organized_root: {repo / 'orca_outputs'}",
                 "telegram:",
                 "  bot_token: token",
                 "  chat_id: chat",
@@ -78,8 +77,7 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
         "ReadWritePaths="
         f"{repo.resolve(strict=False) / 'admission'} "
         f"{repo.resolve(strict=False) / 'workflow_runs'} "
-        f"{repo.resolve(strict=False) / 'orca_runs'} "
-        f"{repo.resolve(strict=False) / 'orca_outputs'}"
+        f"{repo.resolve(strict=False) / 'orca_runs'}"
     ) in worker_content
     bot_content = unit_by_name["orca_auto-bot@.service"].content
     assert "ProtectHome=read-only" in bot_content
@@ -101,7 +99,6 @@ def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
                 "orca:",
                 "  runtime:",
                 f"    allowed_root: {repo / 'orca_runs'}",
-                f"    organized_root: {repo / 'orca_outputs'}",
                 "telegram:",
                 "  bot_token: token",
                 "  chat_id: chat",
@@ -125,8 +122,7 @@ def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
         "ReadWritePaths="
         f"{config_path.parent.resolve(strict=False) / 'admission'} "
         f"{repo.resolve(strict=False) / 'workflow_runs'} "
-        f"{repo.resolve(strict=False) / 'orca_runs'} "
-        f"{repo.resolve(strict=False) / 'orca_outputs'}"
+        f"{repo.resolve(strict=False) / 'orca_runs'}"
     ) in worker_content
 
 

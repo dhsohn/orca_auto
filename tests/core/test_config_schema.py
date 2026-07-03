@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 import pytest
 
@@ -19,10 +19,6 @@ from orca_auto.core.config.schema import (
     positive_int,
     telegram_config_from_mapping,
 )
-
-
-class SiblingRetryRuntimeConfig(RetryRuntimeConfig):
-    default_organized_root_name: ClassVar[str] = "engine_outputs"
 
 
 @pytest.mark.parametrize(
@@ -86,14 +82,14 @@ def test_common_runtime_config_rejects_invalid_explicit_admission_limit(
 
 
 def test_retry_runtime_config_normalizes_shared_runtime_fields() -> None:
-    config = SiblingRetryRuntimeConfig(
+    config = RetryRuntimeConfig(
         allowed_root="/runs/engine",
         default_max_retries=cast(Any, "-2"),
         max_concurrent=cast(Any, "0"),
         admission_limit=cast(Any, "2"),
     )
 
-    assert config.organized_root == "/runs/engine_outputs"
+    assert config.organized_root == "/runs/engine"
     assert config.default_max_retries == 0
     assert config.max_concurrent == 1
     assert config.admission_root == "/runs/engine"
@@ -105,7 +101,7 @@ def test_retry_runtime_config_rejects_invalid_explicit_admission_limit(
     admission_limit: object,
 ) -> None:
     with pytest.raises(ValueError, match="admission_limit must be an integer >= 1"):
-        SiblingRetryRuntimeConfig(
+        RetryRuntimeConfig(
             allowed_root="/runs/engine",
             admission_limit=cast(Any, admission_limit),
         )

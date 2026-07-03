@@ -12,10 +12,10 @@ import yaml
 
 from orca_auto.core.config.files import secure_config_file_permissions
 from orca_auto.core.engine_runner import validate_executable_file
-from orca_auto.core.paths import is_rejected_windows_path, is_subpath
+from orca_auto.core.paths import is_rejected_windows_path
 from orca_auto.core.utils.persistence import atomic_write_text
 
-from ..config import _default_organized_root, load_config
+from ..config import load_config
 from ._helpers import default_config_path
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 class _PromptedEngineRuntime(TypedDict):
     allowed_root: str
-    organized_root: str
     executable: str
 
 
@@ -148,29 +147,6 @@ def _ensure_directory(path: Path, *, label: str) -> bool:
     return True
 
 
-def _default_engine_organized_root(allowed_root: Path, *, engine_key: str) -> str:
-    if engine_key == "orca":
-        return _default_organized_root(str(allowed_root))
-    return str(allowed_root.parent / f"{engine_key}_outputs")
-
-
-def _prompt_organized_root(allowed_root: Path, *, engine_key: str, engine_label: str) -> str:
-    default_path = _default_engine_organized_root(allowed_root, engine_key=engine_key)
-    while True:
-        path = _prompt_directory_path(
-            f"{engine_label} organized_root directory", default=default_path
-        )
-        if is_subpath(path, allowed_root) or is_subpath(allowed_root, path):
-            print(
-                "organized_root and allowed_root must not contain each other. "
-                f"allowed_root={allowed_root}, organized_root={path}"
-            )
-            continue
-        if not _ensure_directory(path, label=f"{engine_key}.organized_root"):
-            continue
-        return str(path)
-
-
 def _prompt_int(label: str, *, default: str, minimum: int) -> int:
     while True:
         raw = _prompt_text(label, default)
@@ -224,14 +200,8 @@ def _prompt_engine_runtime(
     allowed_root = _prompt_directory_path(f"{engine_label} allowed_root directory")
     while not _ensure_directory(allowed_root, label=f"{engine_key}.allowed_root"):
         allowed_root = _prompt_directory_path(f"{engine_label} allowed_root directory")
-    organized_root = _prompt_organized_root(
-        allowed_root,
-        engine_key=engine_key,
-        engine_label=engine_label,
-    )
     return {
         "allowed_root": str(allowed_root),
-        "organized_root": organized_root,
         "executable": executable,
     }
 
@@ -328,7 +298,6 @@ def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
         "orca": {
             "runtime": {
                 "allowed_root": str(values.orca_runtime["allowed_root"]),
-                "organized_root": str(values.orca_runtime["organized_root"]),
                 "default_max_retries": values.orca_runtime["default_max_retries"],
             },
             "paths": {

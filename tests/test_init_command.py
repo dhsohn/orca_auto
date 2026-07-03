@@ -108,28 +108,6 @@ def test_ensure_directory_covers_existing_decline_and_create(capsys, tmp_path: P
     assert missing.is_dir()
 
 
-def test_prompt_organized_root_retries_when_nested_under_allowed_root(
-    capsys, tmp_path: Path
-) -> None:
-    allowed_root = (tmp_path / "allowed").resolve()
-    allowed_root.mkdir()
-    nested = allowed_root / "organized"
-    valid = (tmp_path / "organized").resolve()
-
-    with (
-        patch(
-            "orca_auto.orca.commands.init._prompt_directory_path",
-            side_effect=[nested, valid],
-        ),
-        patch("orca_auto.orca.commands.init._ensure_directory", return_value=True),
-    ):
-        assert init._prompt_organized_root(
-            allowed_root, engine_key="orca", engine_label="ORCA"
-        ) == str(valid)
-
-    assert "must not contain each other" in capsys.readouterr().out
-
-
 def test_prompt_default_max_retries_and_max_active_simulations_validate(capsys) -> None:
     with patch("orca_auto.orca.commands.init._prompt_text", side_effect=["abc", "-1", "2"]):
         assert init._prompt_default_max_retries() == 2
@@ -243,7 +221,6 @@ def test_cmd_init_handles_write_or_load_failure(tmp_path: Path, capsys) -> None:
             "orca_auto.orca.commands.init._prompt_orca_runtime",
             return_value={
                 "allowed_root": str(orca_allowed_root),
-                "organized_root": str(tmp_path / "orca_organized"),
                 "default_max_retries": 2,
                 "executable": "/usr/bin/orca",
             },
@@ -282,7 +259,6 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
     config_path = tmp_path / "orca_auto.yaml"
     workflow_root = tmp_path / "workflow_root"
     orca_allowed_root = tmp_path / "orca_allowed"
-    orca_organized_root = tmp_path / "orca_organized"
 
     with (
         patch("orca_auto.orca.commands.init.default_config_path", return_value=str(config_path)),
@@ -294,7 +270,6 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
             "orca_auto.orca.commands.init._prompt_orca_runtime",
             return_value={
                 "allowed_root": str(orca_allowed_root),
-                "organized_root": str(orca_organized_root),
                 "default_max_retries": 2,
                 "executable": "/usr/bin/orca",
             },
@@ -352,7 +327,6 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
         "orca": {
             "runtime": {
                 "allowed_root": str(orca_allowed_root),
-                "organized_root": str(orca_organized_root),
                 "default_max_retries": 2,
             },
             "paths": {"orca_executable": "/usr/bin/orca"},

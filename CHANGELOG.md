@@ -10,6 +10,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Removed
 
+- The `orca.runtime.organized_root` config key and the `orca_outputs` sibling
+  directory: with organize gone, the organized root always collapses to
+  `allowed_root`. A configured `organized_root` is ignored with a deprecation
+  warning, `orca_auto init` no longer prompts for it, and rendered systemd
+  units no longer grant ReadWritePaths to an outputs directory.
 - The `organize` feature: the `orca_auto organize orca` CLI command, the
   `result_organizer` module and its JSONL organize index, the
   `behavior.auto_organize_on_terminal` config key, and the worker's

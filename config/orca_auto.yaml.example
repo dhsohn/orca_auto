@@ -56,12 +56,9 @@ telegram:
 
 orca:
   runtime:
-    # Root directory where ORCA jobs are allowed to execute.
+    # Root directory where ORCA jobs are allowed to execute. Completed runs
+    # stay here, keeping their submitted directory names.
     allowed_root: /home/user/orca_runs
-    # Root directory where organized ORCA outputs are collected.
-    # If omitted, orca_auto defaults to a sibling directory named
-    # "orca_outputs".
-    organized_root: /home/user/orca_outputs
     # Retry count after the initial attempt.
     # Example: 2 means "1 initial run + up to 2 retries" = 3 total attempts.
     default_max_retries: 2

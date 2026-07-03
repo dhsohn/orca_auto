@@ -85,7 +85,6 @@ telegram:
 orca:
   runtime:
     allowed_root: /home/user/orca_runs
-    organized_root: /home/user/orca_outputs
     default_max_retries: 2
   paths:
     orca_executable: /home/user/opt/orca/orca

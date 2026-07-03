@@ -122,18 +122,6 @@ def _append_absolute_path(paths: list[Path], value: Any) -> None:
     paths.append(candidate.resolve(strict=False))
 
 
-def _append_default_orca_organized_root(paths: list[Path], runtime_raw: dict[str, Any]) -> None:
-    if normalize_text(runtime_raw.get("organized_root")):
-        return
-    allowed_text = normalize_text(runtime_raw.get("allowed_root"))
-    if not allowed_text:
-        return
-    allowed_root = Path(allowed_text).expanduser()
-    if not allowed_root.is_absolute():
-        return
-    paths.append((allowed_root.parent / "orca_outputs").resolve(strict=False))
-
-
 def _dedupe_paths(paths: Sequence[Path]) -> tuple[Path, ...]:
     deduped: list[Path] = []
     seen: set[str] = set()
@@ -171,8 +159,6 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
     orca_raw = mapping_section(raw, "orca") or raw
     orca_runtime_raw = mapping_section(orca_raw, "runtime")
     _append_absolute_path(paths, orca_runtime_raw.get("allowed_root"))
-    _append_absolute_path(paths, orca_runtime_raw.get("organized_root"))
-    _append_default_orca_organized_root(paths, orca_runtime_raw)
     _append_absolute_path(paths, orca_runtime_raw.get("admission_root"))
 
     return _dedupe_paths(paths)

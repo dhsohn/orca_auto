@@ -146,7 +146,6 @@ telegram:
 orca:
   runtime:
     allowed_root: "/path/to/orca_runs"
-    organized_root: "/path/to/orca_outputs"
     default_max_retries: 2
   paths:
     orca_executable: "/path/to/orca/orca"
@@ -154,8 +153,8 @@ orca:
 
 Field descriptions for the `orca` section:
 
-- `orca.runtime.allowed_root`: Root directory permitted for execution
-- `orca.runtime.organized_root`: Root for organized outputs
+- `orca.runtime.allowed_root`: Root directory permitted for execution;
+  completed runs stay here under their submitted directory names
 - `orca.runtime.default_max_retries`: `0` disables ORCA retries; positive values
   enable the calculation-type retry policy
 - `scheduler.max_active_simulations`: Shared total active-run cap across ORCA, internal xTB stages, and internal CREST stages

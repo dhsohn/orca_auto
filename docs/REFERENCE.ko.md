@@ -149,7 +149,6 @@ telegram:
 orca:
   runtime:
     allowed_root: "/path/to/orca_runs"
-    organized_root: "/path/to/orca_outputs"
     default_max_retries: 2
   paths:
     orca_executable: "/path/to/orca/orca"
@@ -157,8 +156,8 @@ orca:
 
 `orca` 섹션 필드 설명:
 
-- `orca.runtime.allowed_root`: 실행이 허용되는 루트 디렉터리
-- `orca.runtime.organized_root`: 정리된 출력의 루트
+- `orca.runtime.allowed_root`: 실행이 허용되는 루트 디렉터리.
+  완료된 실행은 제출 당시 디렉터리 이름 그대로 이곳에 남습니다
 - `orca.runtime.default_max_retries`: `0`이면 ORCA 재시도 비활성화, 양수면
   계산 종류별 재시도 정책 활성화
 - `scheduler.max_active_simulations`: ORCA, 내부 xTB 단계, 내부 CREST 단계 전반에 걸친
