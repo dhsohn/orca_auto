@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ..inp_rewriter import rewrite_for_retry
 from ..retry_policy import RetryRecipeName
+from ..scants import highest_scants_surface_point, input_uses_scants
 from ..state_machine import decide_attempt_outcome
-from ..statuses import AnalyzerStatus
+from ..statuses import AnalyzerStatus, RunStatus
 from ..types import AttemptRecord, RunFinishedNotification, RunState
 
 logger = logging.getLogger(__name__)
@@ -225,6 +226,38 @@ def resume_terminal_decision(
     )
 
 
+def _scants_surface_exhausted_on_resume(state: RunState, last_attempt: Mapping[str, Any]) -> bool:
+    """Match the live surface-table exhaustion shield during crash/resume.
+
+    A finished ScanTS scan (its output has an actual-energy surface table) that
+    did not verify a TS ends the run with ``scants_recipes_exhausted`` in the
+    live retry path; without this, resume would treat ``ts_not_found`` as
+    non-terminal and recover a missing retry input, re-running after an
+    already-finished scan. Excludes the fresh zero-distance case, which still
+    gets its one OptTS refinement fallback.
+    """
+    inp_raw = _as_non_empty_text(last_attempt.get("inp_path"))
+    out_raw = _as_non_empty_text(last_attempt.get("out_path"))
+    if inp_raw is None or out_raw is None:
+        return False
+    if not input_uses_scants(Path(inp_raw)):
+        return False
+    if highest_scants_surface_point(Path(out_raw)) is None:
+        return False
+    markers = last_attempt.get("markers")
+    zero_distance = (
+        bool(markers.get("geometry_zero_distance")) if isinstance(markers, dict) else (False)
+    )
+    fallback_used = any(
+        str(action).startswith("scants_fallback_to_optts")
+        for attempt in state.get("attempts", [])
+        if isinstance(attempt, dict)
+        for action in (attempt.get("patch_actions") or [])
+    )
+    # A fresh zero-distance abort still deserves the one-shot OptTS fallback.
+    return not (zero_distance and not fallback_used)
+
+
 def _resume_terminal_decision(request: ResumeTerminalDecisionRequest) -> int | None:
     if not request.resumed:
         return None
@@ -243,6 +276,29 @@ def _resume_terminal_decision(request: ResumeTerminalDecisionRequest) -> int | N
     analyzer_reason = (
         _as_non_empty_text(last_attempt.get("analyzer_reason")) or "resume_last_attempt"
     )
+    if decide_attempt_outcome(
+        analyzer_status=analyzer_status,
+        analyzer_reason=analyzer_reason,
+        retries_used=retries_used,
+        max_retries=request.max_retries,
+    ) is None and _scants_surface_exhausted_on_resume(request.state, last_attempt):
+        last_out_path = _as_non_empty_text(
+            last_attempt.get("out_path")
+        ) or request.last_out_path_from_state(request.state)
+        logger.info("Resume finalizing finished ScanTS scan as scants_recipes_exhausted")
+        return request.exit_with_result(
+            request.reaction_dir,
+            request.state,
+            request.selected_inp,
+            status=RunStatus.FAILED,
+            analyzer_status=analyzer_status,
+            reason="scants_recipes_exhausted",
+            last_out_path=last_out_path,
+            resumed=request.resumed,
+            exit_code=1,
+            emit=request.emit,
+            notify_finished=request.notify_finished,
+        )
     decision = decide_attempt_outcome(
         analyzer_status=analyzer_status,
         analyzer_reason=analyzer_reason,

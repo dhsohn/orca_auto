@@ -15,7 +15,7 @@ from orca_auto.orca.scants import (
     prepare_scants_scan_retry_input,
     scan_profile_interior_barrier_kcal,
 )
-from orca_auto.orca.state import load_state, new_state
+from orca_auto.orca.state import load_state, new_state, save_state
 from orca_auto.orca.types import RunState
 
 
@@ -660,6 +660,56 @@ def test_resumed_scants_after_scan_done_uses_highest_surface_xyz(tmp_path: Path)
     actions = _attempt_actions(saved)
     assert "resume_scants_resume_to_optts" in actions
     assert "resume_geometry_restart_from_tsopt.002.xyz" in actions
+
+
+def test_resume_finalizes_finished_scants_scan_as_exhausted(tmp_path: Path) -> None:
+    selected_inp = tmp_path / "tsopt.inp"
+    _write_scants_input(selected_inp)
+    out_path = selected_inp.with_suffix(".out")
+    _write_surface_scan_done_out(out_path)
+
+    # A worker crashed after recording a finished ScanTS scan that did not
+    # verify a TS, before the retry decision ran.
+    state = new_state(tmp_path, selected_inp, max_retries=3)
+    state["status"] = "retrying"
+    state["attempts"].append(
+        {
+            "index": 1,
+            "inp_path": str(selected_inp),
+            "out_path": str(out_path),
+            "return_code": 0,
+            "analyzer_status": "ts_not_found",
+            "analyzer_reason": "ts_criteria_failed",
+            "markers": {"geometry_zero_distance": False},
+            "patch_actions": [],
+            "started_at": "2026-07-03T01:00:00+00:00",
+            "ended_at": "2026-07-03T02:00:00+00:00",
+        }
+    )
+    save_state(tmp_path, state)
+
+    runner = _CaptureSuccessRunner()
+    rc = run_attempts(
+        tmp_path,
+        selected_inp,
+        state,
+        resumed=True,
+        runner=runner,
+        max_retries=3,
+        retry_inp_path=_retry_inp_path,
+        to_resolved_local=lambda raw: Path(raw),
+        emit=lambda _payload: None,
+    )
+    saved = load_state(tmp_path)
+    assert saved is not None
+
+    # Resume must not recover/run a missing retry01: the scan already finished.
+    assert rc == 1
+    assert runner.seen == []
+    assert not (tmp_path / "tsopt.retry01.inp").exists()
+    final_result = saved.get("final_result")
+    assert isinstance(final_result, dict)
+    assert final_result.get("reason") == "scants_recipes_exhausted"
 
 
 def test_scants_optts_fallback_builder_still_uses_highest_surface_xyz(
