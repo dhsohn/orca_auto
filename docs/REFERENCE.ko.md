@@ -499,13 +499,6 @@ Opt 모드 완료:
   scan을 실행하는 대신 `scan_profile_no_barrier` 사유로 즉시 실패 처리합니다.
   ScanTS 레시피 체인이 소진되면 `scants_recipes_exhausted` 사유로 실패합니다.
   일반 SCF/geometry hardening은 적용하지 않습니다.
-- 일반 relaxed scan(`Opt` route + `%geom Scan` 블록): 완료된 scan 프로파일에
-  0.5 kcal/mol 이상의 내부 maximum이 있으면 최고 에너지 surface point에서 OptTS
-  시도를 1회 자동 체인합니다(`Opt` -> `OptTS`, `Freq` 없으면 추가, scan 블록
-  제거). 최종 판정은 TS 기준을 따릅니다 — ORCA의 ScanTS 래퍼를 거치지 않고
-  표준 scan-후-OptTS 워크플로우를 자동화한 것입니다. 단조 프로파일은 일반
-  scan으로 완료됩니다. relaxed scan에는 다른 자동 레시피가 없으며, scan 실패나
-  체인된 TS 미검증은 `relaxed_scan_recipes_exhausted`로 종료됩니다.
 
 지오메트리 재시작 규칙:
 

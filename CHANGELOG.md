@@ -19,14 +19,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   results table (relative energies from `.engrad`, imaginary-frequency counts,
   links to per-job `job_report.html`). Covers both `conformer_screening`
   (conformer ranking) and `reaction_ts_search` (TS-candidate ranking).
-- Relaxed scan → OptTS auto-chain: a plain relaxed scan (`Opt` route with a
-  `%geom Scan` block) whose completed profile carries an interior maximum
-  above 0.5 kcal/mol now automatically chains one OptTS attempt from the
-  highest surface point (`Opt` -> `OptTS`, `Freq` added when missing, scan
-  block removed) and the run is judged by the TS criteria — the standard
-  scan-then-OptTS workflow, automated without ORCA's buggy ScanTS wrapper.
-  Monotonic profiles complete as ordinary scans; a failed scan or an
-  unverified chained TS ends with `relaxed_scan_recipes_exhausted`.
 - ScanTS OptTS fallback: when ORCA's TS-guess refinement aborts with a
   zero-distance geometry after the scan already bracketed a maximum (an ORCA
   6.x bug observed on TS6/TS8), the retry chain now runs one plain OptTS

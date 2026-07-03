@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Literal
 
 from .input_blocks import file_route_lines
-from .scants import input_uses_relaxed_scan
 
 RetryRecipeName = Literal["scants_retry", "no_route_rewrite"]
 
@@ -47,15 +46,6 @@ _RETRY_POLICIES: dict[str, RetryPolicy] = {
         max_retries=0,
         recipes=(),
     ),
-    # A plain relaxed scan (Opt route + %geom Scan block) chains one OptTS+Freq
-    # attempt from the interior maximum when the completed profile carries a
-    # genuine barrier; the second slot is headroom for a crash-resume rerun.
-    # There is no generic hardening: without the chain the run ends.
-    "relaxed_scan": RetryPolicy(
-        name="relaxed_scan",
-        max_retries=2,
-        recipes=("scants_retry", "scants_retry"),
-    ),
     "opt_freq": RetryPolicy(name="opt_freq", max_retries=0, recipes=()),
     "opt": RetryPolicy(name="opt", max_retries=0, recipes=()),
     "freq": RetryPolicy(name="freq", max_retries=0, recipes=()),
@@ -75,8 +65,6 @@ def retry_policy_for_input(inp_path: Path) -> RetryPolicy:
         return _RETRY_POLICIES["standalone_ts"]
     has_opt = "OPT" in tokens
     has_freq = bool(tokens & _FREQ_TOKENS)
-    if has_opt and input_uses_relaxed_scan(inp_path):
-        return _RETRY_POLICIES["relaxed_scan"]
     if has_opt and has_freq:
         return _RETRY_POLICIES["opt_freq"]
     if has_opt:

@@ -482,14 +482,6 @@ Retry policy:
   `scan_profile_no_barrier` instead of running a pointless reverse scan. When
   the ScanTS recipe chain is exhausted, the run fails with reason
   `scants_recipes_exhausted`. Generic SCF/geometry hardening is not applied.
-- Plain relaxed scans (`Opt` route with a `%geom Scan` block): when the completed
-  scan's profile carries an interior maximum above 0.5 kcal/mol, one OptTS
-  attempt is chained automatically from the highest surface point (`Opt` ->
-  `OptTS`, `Freq` added when missing, scan block removed) and the run is judged
-  by the TS criteria — this automates the standard scan-then-OptTS workflow
-  without going through ORCA's ScanTS wrapper. A monotonic profile completes as
-  an ordinary scan. Relaxed scans have no other automatic recipes; a failed scan
-  or an unverified chained TS ends with `relaxed_scan_recipes_exhausted`.
 
 Geometry restart rules:
 
