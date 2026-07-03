@@ -268,6 +268,14 @@ ORCA 고유 노트:
 - `conformer_screening`은 하나의 CREST 자식 작업으로 시작한 뒤, 다음 워크플로우
   사이클에서 보존된 conformer를 최대 20개까지 ORCA 자식 작업으로 넘깁니다. 스캐폴드
   단축 명령은 `orca_auto scaffold conformer_search <path>`입니다.
+- `scan_ts_search`는 `orca.route_line`과 필수 manifest 키 `scan_coordinate`
+  (ORCA scan 문법, 0-based 원자 인덱스)로 만든 ORCA relaxed scan으로 시작합니다.
+  scan이 완료되면 프로파일의 내부 maximum마다(prominence ≥
+  `barrier_threshold_kcal`, 기본 0.5; 끝점 제외; `max_orca_stages`로 상한;
+  route는 `orca_optts_route_line`) OptTS+Freq 자식 작업을 하나씩 체인하고,
+  워크플로우 리포트가 후보들을 랭킹합니다. 무장벽 프로파일은
+  `scan_profile_no_barrier`로 실패 처리됩니다. 스캐폴드 단축 명령은
+  `orca_auto scaffold scan_ts <path>`입니다.
 - 워크플로우가 advance될 때마다 워크스페이스에 `workflow_report.html`을 다시
   씁니다: 스테이지 체인, CREST → (xTB) → ORCA 깔때기 요약, ORCA 결과 순위표
   (상대 에너지, 허수 진동수, 개별 작업 `job_report.html` 링크)를 담은 단일 파일

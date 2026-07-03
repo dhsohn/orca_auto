@@ -10,6 +10,7 @@ from orca_auto.flow.templates import (
     CONFORMER_SCREENING_SHORTCUT,
     CONFORMER_SCREENING_TEMPLATE_ID,
     REACTION_TS_SEARCH_TEMPLATE_ID,
+    SCAN_TS_SEARCH_TEMPLATE_ID,
     STANDARD_CONFORMER_INPUT_FILENAME,
     STANDARD_REACTION_PRODUCT_FILENAME,
     STANDARD_REACTION_REACTANT_FILENAME,
@@ -131,6 +132,31 @@ def _manifest(workflow_type: str, crest_mode: str) -> str:
                 "",
             ]
         )
+    if workflow_type == SCAN_TS_SEARCH_TEMPLATE_ID:
+        return "\n".join(
+            [
+                "# orca_auto workflow scaffold manifest",
+                f"workflow_type: {SCAN_TS_SEARCH_TEMPLATE_ID}",
+                "# Relaxed-scan coordinate (0-based atom indices): kind atoms = start, end, points",
+                'scan_coordinate: "B 0 1 = 1.20, 3.00, 16"',
+                "priority: 10",
+                "# One OptTS+Freq child job per interior maximum of the scan profile,",
+                "# ranked by prominence; endpoints never become candidates.",
+                "max_orca_stages: 5",
+                "# Interior maxima below this prominence are treated as noise.",
+                "barrier_threshold_kcal: 0.5",
+                "resources:",
+                "  max_cores: 8",
+                "  max_memory_gb: 32",
+                "orca:",
+                '  route_line: "! Opt r2scan-3c TightSCF"',
+                "  charge: 0",
+                "  multiplicity: 1",
+                "# Route for the chained OptTS candidates (Freq keeps TS verification).",
+                'orca_optts_route_line: "! OptTS Freq r2scan-3c TightSCF"',
+                "",
+            ]
+        )
     raise ValueError(f"Unsupported workflow scaffold type: {workflow_type}")
 
 
@@ -155,6 +181,14 @@ def _readme(root: Path, workflow_type: str) -> str:
             "`gfn: ff`, `noreftopo: true`, `notopo: true`, or `nocbonds: true` "
             "when topology filtering is too strict.",
             f"- {CONFORMER_SCREENING_SHORTCUT} hands off up to 20 retained CREST conformers to ORCA child jobs by default.",
+        ]
+    elif workflow_type == SCAN_TS_SEARCH_TEMPLATE_ID:
+        lines = [
+            f"- Replace `{STANDARD_CONFORMER_INPUT_FILENAME}` with your starting geometry.",
+            "- Set `scan_coordinate` in `flow.yaml` (0-based atom indices, ORCA scan syntax).",
+            f"- {SCAN_TS_SEARCH_TEMPLATE_ID} runs an ORCA relaxed scan, then chains one "
+            "OptTS+Freq child job per interior maximum of the profile (ranked by "
+            "prominence); the workflow report ranks the verified candidates.",
         ]
     else:
         raise ValueError(f"Unsupported workflow scaffold type: {workflow_type}")

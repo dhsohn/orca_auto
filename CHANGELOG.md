@@ -10,6 +10,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Added
 
+- `scan_ts_search` workflow template (scaffold shortcut `scan_ts`): an ORCA
+  relaxed-scan stage (route + `scan_coordinate` from `flow.yaml`) followed by
+  automatic fan-out of one OptTS+Freq child job per interior maximum of the
+  scan profile with prominence above `barrier_threshold_kcal` (default 0.5),
+  each started from that maximum's numbered scan geometry and ranked in the
+  workflow report's TS-candidates table. Profile endpoints never become
+  candidates; a barrierless profile fails the workflow with
+  `scan_profile_no_barrier`. Replaces the reverted job-level relaxed-scan
+  auto-chain (#24) with per-candidate queue visibility: individual child jobs
+  stay individual.
 - JOSS-style open-source operating materials: contribution guidance, issue and
   pull request templates, release checklist, validation documentation, and a
   fake ORCA smoke example.
