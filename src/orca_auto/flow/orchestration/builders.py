@@ -5,12 +5,14 @@ from orca_auto.flow.orchestration.requests import (
     ConformerScreeningWorkflowRequest,
     ReactionTsSearchWorkflowCreationContext,
     ReactionTsSearchWorkflowRequest,
+    ScanTsSearchWorkflowRequest,
     WorkflowCreationContext,
 )
 from orca_auto.flow.orchestration.stage_builders import new_crest_stage_impl, new_xtb_stage_impl
 from orca_auto.flow.orchestration.template_builders import (
     _conformer_template_build,
     _reaction_template_build,
+    _scan_ts_template_build,
 )
 from orca_auto.flow.orchestration.workflow_builders import (
     _REACTION_TS_SEARCH_CREST_MANIFEST_DEFAULTS,
@@ -80,9 +82,31 @@ def create_conformer_screening_workflow_impl(
     )
 
 
+def create_scan_ts_search_workflow_impl(
+    *,
+    request: ScanTsSearchWorkflowRequest,
+    context: WorkflowCreationContext,
+) -> WorkflowPlanPayload:
+    workspace = _workflow_workspace(
+        workflow_id=request.workflow_id,
+        workflow_root=request.workflow_root,
+        default_id_prefix="wf_scan_ts",
+        context=context,
+    )
+    copied_input = _copy_conformer_input(request, workspace, context)
+    template_build = _scan_ts_template_build(request, workspace, copied_input)
+    return _persist_workflow(
+        persistence_context=_persistence_context(workspace, template_build.request),
+        request=template_build.request,
+        stages=template_build.stages,
+        creation_context=context,
+    )
+
+
 __all__ = [
     "create_conformer_screening_workflow_impl",
     "create_reaction_ts_search_workflow_impl",
+    "create_scan_ts_search_workflow_impl",
     "new_crest_stage_impl",
     "new_xtb_stage_impl",
 ]

@@ -397,6 +397,7 @@ class OrchestrationStageMaterializationDeps:
     _append_crest_orca_stages: StageMaterializer
     _append_reaction_orca_stages: StageMaterializer
     _append_reaction_xtb_stages: StageMaterializer
+    _append_scan_optts_stages: StageMaterializer
 
 
 @dataclass(frozen=True)

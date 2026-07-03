@@ -18,7 +18,14 @@ from .factories import (
 from .factories import (
     create_reaction_ts_search_workflow_from_request as _create_reaction_ts_search_workflow_from_request,
 )
-from .requests import ConformerScreeningWorkflowRequest, ReactionTsSearchWorkflowRequest
+from .factories import (
+    create_scan_ts_search_workflow_from_request as _create_scan_ts_search_workflow_from_request,
+)
+from .requests import (
+    ConformerScreeningWorkflowRequest,
+    ReactionTsSearchWorkflowRequest,
+    ScanTsSearchWorkflowRequest,
+)
 from .stage_builders import new_crest_stage_impl
 from .workflow_builders import _copy_input_impl
 
@@ -103,6 +110,50 @@ def create_reaction_ts_search_workflow(
     )
 
 
+def create_scan_ts_search_workflow_from_request(
+    request: ScanTsSearchWorkflowRequest,
+) -> dict[str, Any]:
+    return _create_scan_ts_search_workflow_from_request(
+        request,
+        deps=_workflow_factory_deps(),
+    )
+
+
+def create_scan_ts_search_workflow(
+    *,
+    input_xyz: str,
+    scan_coordinate: str,
+    workflow_root: str | Path,
+    workflow_id: str | None = None,
+    priority: int = 10,
+    max_cores: int = 8,
+    max_memory_gb: int = 32,
+    max_orca_stages: int = 5,
+    orca_route_line: str = "! Opt r2scan-3c TightSCF",
+    orca_optts_route_line: str = "! OptTS Freq r2scan-3c TightSCF",
+    barrier_threshold_kcal: float = 0.5,
+    charge: int = 0,
+    multiplicity: int = 1,
+) -> dict[str, Any]:
+    return create_scan_ts_search_workflow_from_request(
+        ScanTsSearchWorkflowRequest(
+            input_xyz=input_xyz,
+            scan_coordinate=scan_coordinate,
+            workflow_root=workflow_root,
+            workflow_id=workflow_id,
+            priority=priority,
+            max_cores=max_cores,
+            max_memory_gb=max_memory_gb,
+            max_orca_stages=max_orca_stages,
+            orca_route_line=orca_route_line,
+            orca_optts_route_line=orca_optts_route_line,
+            barrier_threshold_kcal=barrier_threshold_kcal,
+            charge=charge,
+            multiplicity=multiplicity,
+        )
+    )
+
+
 def create_conformer_screening_workflow(
     *,
     input_xyz: str,
@@ -139,11 +190,14 @@ def create_conformer_screening_workflow(
 __all__ = [
     "ConformerScreeningWorkflowRequest",
     "ReactionTsSearchWorkflowRequest",
+    "ScanTsSearchWorkflowRequest",
     "advance_workflow",
     "cancel_materialized_workflow",
     "create_conformer_screening_workflow",
     "create_conformer_screening_workflow_from_request",
     "create_reaction_ts_search_workflow",
     "create_reaction_ts_search_workflow_from_request",
+    "create_scan_ts_search_workflow",
+    "create_scan_ts_search_workflow_from_request",
     "load_xyz_atom_sequence",
 ]

@@ -125,6 +125,46 @@ def scan_profile_interior_barrier_kcal(energies: Sequence[float]) -> float | Non
     return best * _KCAL_PER_HARTREE
 
 
+def _peak_prominence_kcal(energies: Sequence[float], peak: int) -> float:
+    """Topographic prominence of a local maximum: the smaller of the climbs
+    from the lowest valley separating it from higher ground (or the profile
+    edge) on each side."""
+    left_min = energies[peak]
+    idx = peak - 1
+    while idx >= 0 and energies[idx] <= energies[peak]:
+        left_min = min(left_min, energies[idx])
+        idx -= 1
+    right_min = energies[peak]
+    idx = peak + 1
+    while idx < len(energies) and energies[idx] <= energies[peak]:
+        right_min = min(right_min, energies[idx])
+        idx += 1
+    return min(energies[peak] - left_min, energies[peak] - right_min) * _KCAL_PER_HARTREE
+
+
+def scan_profile_interior_maxima(
+    energies: Sequence[float],
+    *,
+    threshold_kcal: float = SCANTS_BARRIER_NOISE_KCAL,
+) -> list[tuple[int, float]]:
+    """All interior local maxima with prominence above the noise threshold.
+
+    Returns ``(list index, prominence in kcal/mol)`` pairs sorted by
+    descending prominence — every barrier candidate a TS search should try,
+    not just the global maximum (which may be a profile endpoint). Plateaus
+    count once, at their first point.
+    """
+    candidates: list[tuple[int, float]] = []
+    for idx in range(1, len(energies) - 1):
+        if energies[idx] <= energies[idx - 1] or energies[idx] < energies[idx + 1]:
+            continue
+        prominence = _peak_prominence_kcal(energies, idx)
+        if prominence >= threshold_kcal:
+            candidates.append((idx, prominence))
+    candidates.sort(key=lambda item: (-item[1], item[0]))
+    return candidates
+
+
 def first_scan_coordinate_spec(inp_path: Path) -> ScanCoordinateSpec | None:
     """Kind, atom indices, and range of the first simple scan coordinate line."""
     try:

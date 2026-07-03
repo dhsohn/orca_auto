@@ -366,6 +366,7 @@ def _stage_materialization_defaults(
         append_crest_orca_stages_impl,
         append_reaction_orca_stages_impl,
         append_reaction_xtb_stages_impl,
+        append_scan_optts_stages_impl,
     )
 
     return _bind_many_with_deps(
@@ -374,6 +375,7 @@ def _stage_materialization_defaults(
             "_append_crest_orca_stages": append_crest_orca_stages_impl,
             "_append_reaction_orca_stages": append_reaction_orca_stages_impl,
             "_append_reaction_xtb_stages": append_reaction_xtb_stages_impl,
+            "_append_scan_optts_stages": append_scan_optts_stages_impl,
         },
     )
 

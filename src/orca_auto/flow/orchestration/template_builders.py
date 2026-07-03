@@ -3,14 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
+from orca_auto.flow._orca_stage_materialization import build_materialized_orca_stage
 from orca_auto.flow.contracts import (
     WorkflowArtifactRef,
+    WorkflowStageInput,
     WorkflowStagePayload,
     WorkflowTemplateRequest,
 )
 from orca_auto.flow.orchestration.requests import (
     ConformerScreeningWorkflowRequest,
     ReactionTsSearchWorkflowRequest,
+    ScanTsSearchWorkflowRequest,
     WorkflowCreationContext,
 )
 from orca_auto.flow.orchestration.workflow_builders import (
@@ -19,6 +22,19 @@ from orca_auto.flow.orchestration.workflow_builders import (
     _ReactionWorkflowInputs,
     _WorkflowWorkspace,
 )
+from orca_auto.flow.state import workflow_workspace_internal_engine_paths
+
+
+def scan_geom_block(scan_coordinate: str) -> str:
+    return "\n".join(
+        [
+            "%geom",
+            "  Scan",
+            f"    {scan_coordinate.strip()}",
+            "  end",
+            "end",
+        ]
+    )
 
 
 @dataclass(frozen=True)
@@ -224,10 +240,95 @@ def _conformer_template_build(
     )
 
 
+def _scan_ts_scan_stage(
+    request: ScanTsSearchWorkflowRequest,
+    workspace: _WorkflowWorkspace,
+    copied_input: _ConformerWorkflowInput,
+) -> WorkflowStagePayload:
+    orca_paths = workflow_workspace_internal_engine_paths(workspace.workspace_dir, engine="orca")
+    candidate = WorkflowStageInput(
+        source_job_id="",
+        source_job_type="raw_xyz",
+        reaction_key=copied_input.reaction_key,
+        selected_input_xyz=copied_input.input_xyz,
+        rank=1,
+        kind="scan_input",
+        artifact_path=copied_input.input_xyz,
+        selected=True,
+        score=0.0,
+        metadata={"input_role": "molecule"},
+    )
+    stage = build_materialized_orca_stage(
+        workflow_id=workspace.workflow_id,
+        template_name="scan_ts_search",
+        stage_id="orca_scan_01",
+        stage_key="01_scan",
+        stage_root_name="",
+        workspace_dir=orca_paths["allowed_root"],
+        input_artifact_kind="input_xyz",
+        candidate=candidate,
+        task_kind="relaxed_scan",
+        route_line=str(request.orca_route_line),
+        charge=int(request.charge),
+        multiplicity=int(request.multiplicity),
+        max_cores=int(request.max_cores),
+        max_memory_gb=int(request.max_memory_gb),
+        priority=int(request.priority),
+        xyz_filename="scan_input.xyz",
+        inp_filename="scan.inp",
+        geom_block=scan_geom_block(request.scan_coordinate),
+    )
+    return cast(WorkflowStagePayload, stage.to_dict())
+
+
+def _scan_ts_template_request(
+    request: ScanTsSearchWorkflowRequest,
+    workspace: _WorkflowWorkspace,
+    copied_input: _ConformerWorkflowInput,
+) -> WorkflowTemplateRequest:
+    return WorkflowTemplateRequest(
+        workflow_id=workspace.workflow_id,
+        template_name="scan_ts_search",
+        source_job_id="",
+        source_job_type="raw_xyz",
+        reaction_key=copied_input.reaction_key,
+        status="planned",
+        requested_at=workspace.requested_at,
+        parameters={
+            "priority": int(request.priority),
+            "max_cores": int(request.max_cores),
+            "max_memory_gb": int(request.max_memory_gb),
+            "max_orca_stages": int(request.max_orca_stages),
+            "orca_route_line": str(request.orca_route_line),
+            "orca_optts_route_line": str(request.orca_optts_route_line),
+            "scan_coordinate": str(request.scan_coordinate),
+            "barrier_threshold_kcal": float(request.barrier_threshold_kcal),
+            "charge": int(request.charge),
+            "multiplicity": int(request.multiplicity),
+        },
+        source_artifacts=(
+            WorkflowArtifactRef(kind="input_xyz", path=copied_input.input_xyz, selected=True),
+        ),
+    )
+
+
+def _scan_ts_template_build(
+    request: ScanTsSearchWorkflowRequest,
+    workspace: _WorkflowWorkspace,
+    copied_input: _ConformerWorkflowInput,
+) -> _WorkflowTemplateBuild:
+    return _WorkflowTemplateBuild(
+        request=_scan_ts_template_request(request, workspace, copied_input),
+        stages=[_scan_ts_scan_stage(request, workspace, copied_input)],
+    )
+
+
 __all__ = [
     "_WorkflowTemplateBuild",
     "_conformer_template_build",
     "_conformer_template_request",
     "_reaction_template_build",
     "_reaction_template_request",
+    "_scan_ts_template_build",
+    "scan_geom_block",
 ]

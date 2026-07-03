@@ -9,6 +9,7 @@ from orca_auto.core.utils.coercion import normalize_text
 from ..orchestration import (
     create_conformer_screening_workflow,
     create_reaction_ts_search_workflow,
+    create_scan_ts_search_workflow,
 )
 from ..restart import restart_failed_workflow
 from ..run_dir import manifest as _run_dir_manifest
@@ -67,9 +68,16 @@ def _safe_workflow_name(value: Any, *, fallback: str) -> str:
     return cleaned or fallback
 
 
+_RUN_DIR_WORKFLOW_ID_PREFIXES = {
+    "reaction_ts_search": "wf_reaction_ts",
+    "conformer_screening": "wf_conformer_screening",
+    "scan_ts_search": "wf_scan_ts",
+}
+
+
 def _preferred_run_dir_workflow_id(workflow_dir: Path, *, workflow_type: str) -> str:
     stem = _safe_workflow_name(workflow_dir.name, fallback="workflow")
-    prefix = "wf_reaction_ts" if workflow_type == "reaction_ts_search" else "wf_conformer_screening"
+    prefix = _RUN_DIR_WORKFLOW_ID_PREFIXES.get(workflow_type, "wf_conformer_screening")
     if stem.startswith(prefix):
         return stem
     return f"{prefix}_{stem}"
@@ -183,10 +191,47 @@ def _create_conformer_run_dir_workflow(
     return create_conformer_screening_workflow(**workflow_kwargs)
 
 
+_SCAN_TS_RUN_DIR_WORKFLOW_SPEC = _RunDirWorkflowCreationSpec(
+    workflow_type="scan_ts_search",
+    required_input_kwargs=(("input_xyz", "input_xyz"),),
+    missing_inputs_error="scan_ts_search requires input.xyz (or manifest/CLI override).",
+    default_orca_route_line="! Opt r2scan-3c TightSCF",
+    default_max_orca_stages=5,
+)
+
+_SCAN_TS_OPTIONAL_MANIFEST_KEYS = (
+    "orca_optts_route_line",
+    "barrier_threshold_kcal",
+)
+
+
+def _create_scan_ts_run_dir_workflow(
+    args: Any, config: _run_dir_options.RunDirWorkflowConfig
+) -> dict[str, Any]:
+    workflow_kwargs = _run_dir_workflow_kwargs(args, config, _SCAN_TS_RUN_DIR_WORKFLOW_SPEC)
+    # The reaction/conformer templates run CREST first; scan_ts_search starts
+    # directly with the ORCA relaxed scan, so crest-only kwargs do not apply.
+    workflow_kwargs.pop("crest_mode", None)
+    scan_coordinate = normalize_text(config.manifest.get("scan_coordinate"))
+    if not scan_coordinate:
+        raise ValueError(
+            "scan_ts_search requires scan_coordinate in flow.yaml, "
+            "e.g. scan_coordinate: 'B 20 61 = 1.80, 5.00, 32'"
+        )
+    workflow_kwargs["scan_coordinate"] = scan_coordinate
+    for key in _SCAN_TS_OPTIONAL_MANIFEST_KEYS:
+        value = config.manifest.get(key)
+        if value is not None and normalize_text(value):
+            workflow_kwargs[key] = value
+    return create_scan_ts_search_workflow(**workflow_kwargs)
+
+
 def _create_run_dir_workflow(args: Any, workflow_dir: Path) -> dict[str, Any]:
     config = _run_dir_manifest._load_run_dir_workflow_config(args, workflow_dir)
     if config.workflow_type == _REACTION_RUN_DIR_WORKFLOW_SPEC.workflow_type:
         return _create_reaction_run_dir_workflow(args, config)
+    if config.workflow_type == _SCAN_TS_RUN_DIR_WORKFLOW_SPEC.workflow_type:
+        return _create_scan_ts_run_dir_workflow(args, config)
     return _create_conformer_run_dir_workflow(args, config)
 
 
