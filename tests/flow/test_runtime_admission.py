@@ -56,7 +56,7 @@ def test_submission_admission_root_for_internal_engine_uses_scheduler_default(
 
     root = runtime_admission._submission_admission_root_from_config(config, engine="crest")
 
-    assert root == (tmp_path / "admission").resolve()
+    assert root == workflow_root.resolve() / ".admission"
 
 
 def test_submission_admission_root_for_orca_ignores_runtime_admission_setting(
@@ -79,7 +79,9 @@ def test_submission_admission_root_for_orca_ignores_runtime_admission_setting(
 
     root = runtime_admission._submission_admission_root_from_config(config, engine="orca")
 
-    assert root is None
+    # The runtime-level admission key is ignored; the default under the runs
+    # root applies instead.
+    assert root == Path("/tmp/runs/.admission")
 
 
 def test_submission_admission_root_for_orca_uses_scheduler_with_runtime_key_present(

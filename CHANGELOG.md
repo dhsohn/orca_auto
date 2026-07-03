@@ -8,6 +8,19 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Changed
+
+- Single runs root: workflow workspaces now default to living inside the ORCA
+  runs root (`workflow.root` falls back to `orca.runtime.allowed_root`), and
+  the shared admission directory defaults to a hidden `<runs root>/.admission`
+  instead of an `admission/` directory next to the config file. One disk
+  directory now holds standalone ORCA runs, workflow workspaces, and admission
+  state; explicit `workflow.root` / `scheduler.admission_root` overrides still
+  work. Standalone filesystem scans (job-location reindex, activity run
+  snapshots, `scan-notify` discovery) skip workflow workspaces under the runs
+  root so workflow-internal ORCA jobs are not double-reported. `orca_auto init`
+  now asks for one runs root instead of separate workflow/ORCA roots.
+
 ### Removed
 
 - The dead numbered retry-recipe system: `RETRY_RECIPES` and `retry_step_1..4`

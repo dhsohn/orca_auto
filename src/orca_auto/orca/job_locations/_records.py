@@ -14,6 +14,7 @@ from orca_auto.core.indexing import (
 )
 from orca_auto.core.indexing import engine_artifacts as _engine_artifacts
 from orca_auto.core.indexing import engines as _engine_locations
+from orca_auto.core.paths import path_is_inside_workflow_workspace
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
 from ..config import AppConfig
@@ -442,6 +443,10 @@ def _candidate_reindex_dirs(root: Path) -> set[Path]:
     candidate_dirs: set[Path] = set()
     for pattern in ("job_state.json", "job_report.json", "organized_ref.json"):
         for artifact in root.rglob(pattern):
+            # Workflow workspaces share the runs root; their internal jobs are
+            # indexed by their own stage roots, not the standalone index.
+            if path_is_inside_workflow_workspace(artifact.parent, root):
+                continue
             candidate_dirs.add(artifact.parent)
     return candidate_dirs
 

@@ -26,6 +26,24 @@ def test_workflow_root_from_mapping_accepts_only_canonical_root_key(tmp_path: Pa
     assert workflow_root_from_mapping({"workflow": {"root": 0}}) == ""
 
 
+def test_workflow_root_from_mapping_falls_back_to_orca_allowed_root(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    workflow_root = tmp_path / "workflow-root"
+
+    # No workflow.root -> the runs root (orca.runtime.allowed_root) is the root.
+    assert workflow_root_from_mapping(
+        {"orca": {"runtime": {"allowed_root": str(runs_root)}}}
+    ) == str(runs_root.resolve())
+    # An explicit workflow.root still wins.
+    assert workflow_root_from_mapping(
+        {
+            "workflow": {"root": str(workflow_root)},
+            "orca": {"runtime": {"allowed_root": str(runs_root)}},
+        }
+    ) == str(workflow_root.resolve())
+    assert workflow_root_from_mapping({}) == ""
+
+
 def test_engine_config_mapping_requires_engine_section() -> None:
     raw = {
         "runtime": {"allowed_root": "/tmp/runs"},
@@ -63,18 +81,19 @@ def test_required_yaml_mapping_uses_custom_missing_error(tmp_path: Path) -> None
 
 
 def test_configured_path_and_admission_root_helpers(tmp_path: Path) -> None:
-    config_path = tmp_path / "config" / "orca_auto.yaml"
+    runs_root = tmp_path / "runs"
     runtime_root = tmp_path / "runtime-admission"
     scheduler_root = tmp_path / "scheduler-admission"
 
     assert resolve_configured_path("  ") is None
     assert resolve_configured_path(runtime_root) == runtime_root.resolve()
-    assert scheduler_admission_root(config_path, {"admission_root": scheduler_root}) == (
+    assert scheduler_admission_root({"admission_root": scheduler_root}) == (
         scheduler_root.resolve()
     )
-    assert scheduler_admission_root(config_path, {}, default_when_missing=True) == (
-        config_path.resolve().parent / "admission"
+    assert scheduler_admission_root({}, default_runs_root=runs_root) == (
+        runs_root.resolve() / ".admission"
     )
+    assert scheduler_admission_root({}) is None
 
 
 def test_secure_config_file_permissions_sets_owner_only_mode(tmp_path: Path) -> None:

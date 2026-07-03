@@ -8,7 +8,7 @@ from typing import Any
 
 from orca_auto.core.activity_icons import activity_status_icon
 from orca_auto.core.indexing import JobLocationRecord
-from orca_auto.core.paths import resolve_artifact_path
+from orca_auto.core.paths import path_is_inside_workflow_workspace, resolve_artifact_path
 from orca_auto.core.utils import parse_iso_utc as _parse_iso_utc
 
 from .dft.discovery import _find_latest_out_in_dir
@@ -130,6 +130,8 @@ def _candidate_snapshot_dirs(allowed_root: Path) -> list[tuple[Path, Path | None
         reaction_dir = resolve_record_job_dir(record)
         if reaction_dir is None:
             continue
+        if path_is_inside_workflow_workspace(reaction_dir, allowed_root):
+            continue
         key = _dir_key(reaction_dir)
         if key in seen:
             continue
@@ -138,6 +140,10 @@ def _candidate_snapshot_dirs(allowed_root: Path) -> list[tuple[Path, Path | None
 
     for state_path in allowed_root.rglob(STATE_FILE_NAME):
         reaction_dir = state_path.parent
+        # Workflow-internal jobs surface through the workflow activity view;
+        # listing them here too would double-count them as standalone runs.
+        if path_is_inside_workflow_workspace(reaction_dir, allowed_root):
+            continue
         key = _dir_key(reaction_dir)
         if key in seen:
             continue

@@ -186,7 +186,7 @@ class TestCrashRecovery(unittest.TestCase):
 
             with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run", new=_fake_run):
                 token = reserve_slot(
-                    reaction.parent,
+                    reaction.parent / ".admission",
                     1,
                     work_dir=str(reaction),
                     source="queue_worker",

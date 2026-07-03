@@ -181,7 +181,7 @@ def test_load_config_no_longer_supports_top_level_runtime_and_paths_shape(tmp_pa
         """,
     )
 
-    with pytest.raises(ValueError, match=r"Config is missing workflow\.root"):
+    with pytest.raises(ValueError, match=r"Config is missing a runs root"):
         config_mod.load_crest_config(str(config_path))
 
 
@@ -207,7 +207,7 @@ def test_load_config_applies_defaults_for_missing_or_invalid_sections(tmp_path: 
     assert cfg.runtime.allowed_root == str(workflow_root.resolve())
     assert cfg.runtime.organized_root == str(workflow_root.resolve())
     assert cfg.runtime.max_concurrent == 1
-    assert cfg.runtime.admission_root == str(tmp_path / "admission")
+    assert cfg.runtime.admission_root == str(workflow_root.resolve() / ".admission")
     assert cfg.runtime.admission_limit == 1
     assert cfg.paths.crest_executable == ""
     assert not hasattr(cfg.behavior, "auto_organize_on_terminal")
@@ -271,7 +271,7 @@ def test_load_config_requires_workflow_root(tmp_path: Path) -> None:
         """,
     )
 
-    with pytest.raises(ValueError, match=r"Config is missing workflow\.root"):
+    with pytest.raises(ValueError, match=r"Config is missing a runs root"):
         config_mod.load_crest_config(str(config_path))
 
 

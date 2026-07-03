@@ -134,7 +134,7 @@ scheduler:
   admission_root: "/path/to/chem_admission"
 
 workflow:
-  root: "/path/to/workflow_root"
+  # root는 runs 루트(orca.runtime.allowed_root)가 기본값입니다
   paths:
     xtb_executable: "/path/to/xtb"
     crest_executable: "/path/to/crest"
@@ -162,16 +162,17 @@ orca:
   계산 종류별 재시도 정책 활성화
 - `scheduler.max_active_simulations`: ORCA, 내부 xTB 단계, 내부 CREST 단계 전반에 걸친
   공유 활성 실행 총 상한
-- `scheduler.admission_root`: 머신 전역 슬롯 조율을 위한 공유 admission 루트
-- `workflow.root`: 워크플로우 생성, 활동 조회, 통합 워크플로우 워커가 사용하는
-  워크플로우 루트
+- `scheduler.admission_root`: 머신 전역 슬롯 조율을 위한 공유 admission 루트.
+  기본값은 `<runs root>/.admission`
+- `workflow.root`: 워크플로우 워크스페이스 위치의 선택적 재정의.
+  기본값은 runs 루트(`orca.runtime.allowed_root`)
 - `workflow.paths.xtb_executable`: 워크플로우가 관리하는 내부 단계가 사용하는 xTB
   실행 경로
 - `workflow.paths.crest_executable`: 워크플로우가 관리하는 내부 단계가 사용하는 CREST
   실행 경로
 - 내부 xTB/CREST 런타임은 각 워크플로우 범위로 한정됩니다.
 - 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은 오직
-  `workflow.root/<workflow_id>/internal/<engine>/{runs,outputs}` 아래에만 저장됩니다.
+  `<runs root>/<workflow_id>/internal/<engine>/{runs,outputs}` 아래에만 저장됩니다.
 - `orca.paths.orca_executable`: ORCA 실행 경로
 
 참고:

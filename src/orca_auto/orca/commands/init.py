@@ -32,7 +32,6 @@ class _PromptedOrcaRuntime(_PromptedEngineRuntime):
 
 @dataclass(frozen=True)
 class _PromptedInitValues:
-    workflow_root: str
     orca_runtime: _PromptedOrcaRuntime
     xtb_runtime: dict[str, str]
     crest_runtime: dict[str, str]
@@ -183,37 +182,19 @@ def _prompt_telegram_config() -> dict[str, str]:
         )
 
 
-def _prompt_workflow_root() -> str:
-    workflow_root = _prompt_directory_path("workflow.root directory")
-    while not _ensure_directory(workflow_root, label="workflow.root"):
-        workflow_root = _prompt_directory_path("workflow.root directory")
-    return str(workflow_root)
-
-
-def _prompt_engine_runtime(
-    *,
-    engine_key: str,
-    engine_label: str,
-    executable_prompt: Any,
-) -> _PromptedEngineRuntime:
-    executable = str(executable_prompt())
-    allowed_root = _prompt_directory_path(f"{engine_label} allowed_root directory")
-    while not _ensure_directory(allowed_root, label=f"{engine_key}.allowed_root"):
-        allowed_root = _prompt_directory_path(f"{engine_label} allowed_root directory")
-    return {
-        "allowed_root": str(allowed_root),
-        "executable": executable,
-    }
+def _prompt_runs_root() -> str:
+    """Single runs root: ORCA jobs, workflow workspaces, and .admission live here."""
+    prompt_label = "runs root directory (ORCA jobs + workflows)"
+    runs_root = _prompt_directory_path(prompt_label)
+    while not _ensure_directory(runs_root, label="orca.runtime.allowed_root"):
+        runs_root = _prompt_directory_path(prompt_label)
+    return str(runs_root)
 
 
 def _prompt_orca_runtime() -> _PromptedOrcaRuntime:
-    payload = _prompt_engine_runtime(
-        engine_key="orca",
-        engine_label="ORCA",
-        executable_prompt=_prompt_orca_executable,
-    )
     return {
-        **payload,
+        "allowed_root": _prompt_runs_root(),
+        "executable": str(_prompt_orca_executable()),
         "default_max_retries": _prompt_default_max_retries(),
     }
 
@@ -269,7 +250,6 @@ def _confirm_existing_config_overwrite(config_path: Path) -> int | None:
 
 def _prompt_init_values() -> _PromptedInitValues:
     return _PromptedInitValues(
-        workflow_root=_prompt_workflow_root(),
         orca_runtime=_prompt_orca_runtime(),
         xtb_runtime=_prompt_xtb_runtime(),
         crest_runtime=_prompt_crest_runtime(),
@@ -279,6 +259,9 @@ def _prompt_init_values() -> _PromptedInitValues:
 
 
 def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
+    # workflow.root and scheduler.admission_root are intentionally omitted:
+    # workflows default to the runs root (orca.runtime.allowed_root) and the
+    # shared admission directory defaults to <runs root>/.admission.
     return {
         "resources": {
             "max_cores_per_task": 8,
@@ -288,7 +271,6 @@ def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
             "max_active_simulations": values.max_active_simulations,
         },
         "workflow": {
-            "root": values.workflow_root,
             "paths": {
                 "xtb_executable": str(values.xtb_runtime["executable"]),
                 "crest_executable": str(values.crest_runtime["executable"]),
@@ -310,9 +292,8 @@ def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
 def _print_init_summary(config_path: Path, values: _PromptedInitValues) -> None:
     print("Config created successfully.")
     print(f"  config: {config_path}")
-    print(f"  workflow.root: {values.workflow_root}")
+    print(f"  runs_root: {values.orca_runtime['allowed_root']}")
     print(f"  max_active_simulations: {values.max_active_simulations}")
-    print(f"  orca_allowed_root: {values.orca_runtime['allowed_root']}")
     print(f"  xtb_executable: {values.xtb_runtime['executable']}")
     print(f"  crest_executable: {values.crest_runtime['executable']}")
 

@@ -120,7 +120,7 @@ def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
     worker_content = unit_by_name["orca_auto-queue-worker@.service"].content
     assert (
         "ReadWritePaths="
-        f"{config_path.parent.resolve(strict=False) / 'admission'} "
+        f"{repo.resolve(strict=False) / 'workflow_runs' / '.admission'} "
         f"{repo.resolve(strict=False) / 'workflow_runs'} "
         f"{repo.resolve(strict=False) / 'orca_runs'}"
     ) in worker_content

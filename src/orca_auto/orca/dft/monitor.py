@@ -92,7 +92,6 @@ class DFTMonitor:
         self,
         *,
         max_file_size_mb: int = 64,
-        recent_completed_window_minutes: int = 60,
     ) -> ScanReport:
         """Detect new/changed ORCA files in kb_dirs and index them."""
         max_bytes = max_file_size_mb * 1024 * 1024
@@ -101,7 +100,6 @@ class DFTMonitor:
         for target_info in _iter_target_signatures(
             self._kb_dirs,
             max_bytes=max_bytes,
-            recent_completed_window_minutes=recent_completed_window_minutes,
         ):
             self._scan_target(target_info, scan_state)
 
@@ -201,7 +199,6 @@ def _iter_target_signatures(
     kb_dirs: list[str],
     *,
     max_bytes: int,
-    recent_completed_window_minutes: int,
 ) -> Iterator[TargetSignature]:
     for kb_dir in kb_dirs:
         kb_path = Path(kb_dir)
@@ -211,7 +208,6 @@ def _iter_target_signatures(
         for target in discover_orca_targets(
             kb_path,
             max_bytes=max_bytes,
-            recent_completed_window_minutes=recent_completed_window_minutes,
         ):
             spath = str(target.path)
             canonical = _canonical_path_key(spath)

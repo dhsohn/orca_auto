@@ -131,7 +131,7 @@ scheduler:
   admission_root: "/path/to/chem_admission"
 
 workflow:
-  root: "/path/to/workflow_root"
+  # root defaults to the runs root (orca.runtime.allowed_root)
   paths:
     xtb_executable: "/path/to/xtb"
     crest_executable: "/path/to/crest"
@@ -158,12 +158,14 @@ Field descriptions for the `orca` section:
 - `orca.runtime.default_max_retries`: `0` disables ORCA retries; positive values
   enable the calculation-type retry policy
 - `scheduler.max_active_simulations`: Shared total active-run cap across ORCA, internal xTB stages, and internal CREST stages
-- `scheduler.admission_root`: Shared admission root for machine-wide slot coordination
-- `workflow.root`: Workflow root for workflow creation, activity inspection, and the integrated workflow worker
+- `scheduler.admission_root`: Shared admission root for machine-wide slot
+  coordination; defaults to `<runs root>/.admission`
+- `workflow.root`: Optional override for where workflow workspaces live;
+  defaults to the runs root (`orca.runtime.allowed_root`)
 - `workflow.paths.xtb_executable`: xTB executable path used by workflow-managed internal stages
 - `workflow.paths.crest_executable`: CREST executable path used by workflow-managed internal stages
 - Internal xTB/CREST runtimes are scoped to each workflow
-- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under `workflow.root/<workflow_id>/internal/<engine>/{runs,outputs}`
+- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under `<runs root>/<workflow_id>/internal/<engine>/{runs,outputs}`
 - `orca.paths.orca_executable`: ORCA executable path
 
 Notes:

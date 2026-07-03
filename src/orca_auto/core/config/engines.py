@@ -189,19 +189,20 @@ def scheduler_runtime_settings(
 def _required_workflow_root(raw: dict[str, Any], path: Path) -> str:
     workflow_root = workflow_root_from_mapping(raw)
     if not workflow_root:
-        raise ValueError(f"Config is missing workflow.root: {path}")
+        raise ValueError(
+            f"Config is missing a runs root (workflow.root or orca.runtime.allowed_root): {path}"
+        )
     return workflow_root
 
 
 def _runtime_config_from_scheduler(
-    path: Path,
     scheduler_raw: dict[str, Any],
     workflow_root: str,
 ) -> CommonRuntimeConfig:
     scheduler = scheduler_runtime_settings(
         scheduler_raw,
         default_max_active=4,
-        default_admission_root=default_shared_admission_root(path),
+        default_admission_root=default_shared_admission_root(workflow_root),
         admission_limit_enabled=True,
     )
     return CommonRuntimeConfig(
@@ -267,7 +268,7 @@ def load_workflow_engine_config(
     )
 
     return app_config_cls(
-        runtime=_runtime_config_from_scheduler(path, scheduler_raw, workflow_root),
+        runtime=_runtime_config_from_scheduler(scheduler_raw, workflow_root),
         workflow_root=workflow_root,
         paths=paths_cls(
             **{executable_key: executable_value},

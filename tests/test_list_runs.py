@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from orca_auto.cli import main
+from orca_auto.core.admission import activate_reserved_slot, reserve_slot
 from orca_auto.orca.queue.adapter import dequeue_next, enqueue, mark_completed
 from orca_auto.orca.state import report_json_path, save_state, state_path
 from tests.engine_artifact_helpers import orca_artifact_payload
@@ -36,6 +37,20 @@ class _ListTestBase(unittest.TestCase):
             encoding="utf-8",
         )
         return config
+
+
+    def _activate_admission_slot(self, allowed_root: Path, reaction_dir: Path) -> None:
+        """Mirror a live run: an active slot in <runs root>/.admission."""
+        admission_root = allowed_root / ".admission"
+        token = reserve_slot(
+            admission_root,
+            4,
+            work_dir=str(reaction_dir),
+            source="queue_worker",
+            state="reserved",
+        )
+        assert token is not None
+        activate_reserved_slot(admission_root, token)
 
     def _make_run(
         self,
@@ -104,6 +119,7 @@ class TestListStandaloneRuns(_ListTestBase):
             self._make_run(
                 allowed / "rxn2", status="running", started_at="2026-03-02T00:00:00+00:00"
             )
+            self._activate_admission_slot(allowed, allowed / "rxn2")
             config = self._write_config(root, allowed)
 
             captured = io.StringIO()
@@ -128,6 +144,7 @@ class TestListStandaloneRuns(_ListTestBase):
             self._make_run(
                 allowed / "rxn2", status="running", started_at="2026-03-02T00:00:00+00:00"
             )
+            self._activate_admission_slot(allowed, allowed / "rxn2")
             config = self._write_config(root, allowed)
 
             captured = io.StringIO()

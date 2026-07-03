@@ -119,17 +119,14 @@ def _required_runtime_paths(
 
 
 def _scheduler_runtime_settings(
-    path: Path,
     scheduler_raw: dict[str, Any],
-    allowed_root: str,
+    runs_root: str,
 ) -> tuple[int, str, int | None]:
     scheduler_enabled = bool(scheduler_raw)
     settings = _config_engines.scheduler_runtime_settings(
         scheduler_raw,
         default_max_active=RuntimeConfig.max_concurrent,
-        default_admission_root=default_shared_admission_root(path)
-        if scheduler_enabled
-        else allowed_root,
+        default_admission_root=default_shared_admission_root(runs_root),
         admission_limit_enabled=scheduler_enabled,
         reject_nonpositive=True,
     )
@@ -162,9 +159,8 @@ def load_config(config_path: str) -> AppConfig:
         RuntimeConfig.default_max_retries,
     )
     max_concurrent, admission_root, admission_limit = _scheduler_runtime_settings(
-        path,
         scheduler_raw,
-        allowed_root,
+        workflow_root or allowed_root,
     )
     telegram_cfg = telegram_config_from_mapping(telegram_raw)
 

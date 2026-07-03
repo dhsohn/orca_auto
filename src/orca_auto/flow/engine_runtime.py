@@ -31,7 +31,9 @@ def _runtime_allowed_root_label(engine: str | None) -> str:
 def _internal_engine_runtime_paths(path: Path, raw: dict[str, Any]) -> dict[str, Path]:
     workflow_root = workflow_root_from_mapping(raw)
     if not workflow_root:
-        raise ValueError(f"Missing workflow.root in config: {path}")
+        raise ValueError(
+            f"Missing runs root (workflow.root or orca.runtime.allowed_root) in config: {path}"
+        )
     resolved_workflow_root = Path(workflow_root).expanduser().resolve()
     resolved = {
         "workflow_root": resolved_workflow_root,
@@ -39,9 +41,8 @@ def _internal_engine_runtime_paths(path: Path, raw: dict[str, Any]) -> dict[str,
         "organized_root": resolved_workflow_root,
     }
     admission_root = scheduler_admission_root(
-        path,
         mapping_section(raw, "scheduler"),
-        default_when_missing=True,
+        default_runs_root=resolved_workflow_root,
     )
     if admission_root is not None:
         resolved["admission_root"] = admission_root
@@ -66,9 +67,8 @@ def _configured_runtime_paths(
         raise ValueError(f"Missing {_runtime_allowed_root_label(engine)} in config: {path}")
 
     admission_root = scheduler_admission_root(
-        path,
         scheduler,
-        default_when_missing=bool(scheduler),
+        default_runs_root=resolved_runtime_paths["allowed_root"],
     )
     if admission_root is not None:
         resolved_runtime_paths["admission_root"] = admission_root

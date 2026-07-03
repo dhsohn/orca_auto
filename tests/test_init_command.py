@@ -197,7 +197,7 @@ def test_cmd_init_handles_interrupt(tmp_path: Path, capsys) -> None:
     with (
         patch("orca_auto.orca.commands.init.default_config_path", return_value=str(config_path)),
         patch(
-            "orca_auto.orca.commands.init._prompt_workflow_root",
+            "orca_auto.orca.commands.init._prompt_orca_runtime",
             side_effect=KeyboardInterrupt,
         ),
     ):
@@ -208,15 +208,10 @@ def test_cmd_init_handles_interrupt(tmp_path: Path, capsys) -> None:
 
 def test_cmd_init_handles_write_or_load_failure(tmp_path: Path, capsys) -> None:
     config_path = tmp_path / "orca_auto.yaml"
-    workflow_root = tmp_path / "workflow_root"
     orca_allowed_root = tmp_path / "orca_allowed"
 
     with (
         patch("orca_auto.orca.commands.init.default_config_path", return_value=str(config_path)),
-        patch(
-            "orca_auto.orca.commands.init._prompt_workflow_root",
-            return_value=str(workflow_root),
-        ),
         patch(
             "orca_auto.orca.commands.init._prompt_orca_runtime",
             return_value={
@@ -257,15 +252,10 @@ def test_cmd_init_handles_write_or_load_failure(tmp_path: Path, capsys) -> None:
 
 def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsys) -> None:
     config_path = tmp_path / "orca_auto.yaml"
-    workflow_root = tmp_path / "workflow_root"
     orca_allowed_root = tmp_path / "orca_allowed"
 
     with (
         patch("orca_auto.orca.commands.init.default_config_path", return_value=str(config_path)),
-        patch(
-            "orca_auto.orca.commands.init._prompt_workflow_root",
-            return_value=str(workflow_root),
-        ),
         patch(
             "orca_auto.orca.commands.init._prompt_orca_runtime",
             return_value={
@@ -303,8 +293,8 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
     validate_generated_config.assert_called_once_with(str(config_path.resolve()))
     output = capsys.readouterr().out
     assert "Config created successfully." in output
-    assert "workflow.root" in output
-    assert "orca_allowed_root" in output
+    assert "runs_root" in output
+    assert str(orca_allowed_root) in output
     assert "xtb_executable" in output
     assert "crest_executable" in output
     assert "max_active_simulations: 4" in output
@@ -317,7 +307,6 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
             "max_active_simulations": 4,
         },
         "workflow": {
-            "root": str(workflow_root),
             "paths": {
                 "xtb_executable": "/usr/bin/xtb",
                 "crest_executable": "/usr/bin/crest",

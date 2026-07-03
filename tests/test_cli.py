@@ -76,8 +76,10 @@ class TestCli(unittest.TestCase):
     def _run_internal_execute(
         self, config: Path, reaction_dir: Path, *, force: bool = False
     ) -> int:
+        # Shared admission slots live in the hidden .admission directory
+        # under the runs root (= allowed_root).
         token = reserve_slot(
-            reaction_dir.parent,
+            reaction_dir.parent / ".admission",
             1,
             work_dir=str(reaction_dir),
             source="queue_worker",

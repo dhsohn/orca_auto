@@ -77,7 +77,7 @@ def test_load_config_parses_defaults_and_normalizes_values(tmp_path: Path) -> No
     assert cfg.runtime.allowed_root == str(workflow_root.resolve())
     assert cfg.runtime.organized_root == str(workflow_root.resolve())
     assert cfg.runtime.max_concurrent == 6
-    assert cfg.runtime.admission_root == str(tmp_path / "admission")
+    assert cfg.runtime.admission_root == str(workflow_root.resolve() / ".admission")
     assert cfg.runtime.admission_limit == 6
     assert cfg.paths.xtb_executable == str(fake_xtb.resolve())
     assert not hasattr(cfg.behavior, "auto_organize_on_terminal")
@@ -103,7 +103,7 @@ def test_load_config_reports_missing_file_invalid_payload_and_requires_workflow_
     missing_workflow_root_path.write_text(
         yaml.safe_dump({"xtb": {"runtime": {}}}), encoding="utf-8"
     )
-    with pytest.raises(ValueError, match=r"Config is missing workflow\.root"):
+    with pytest.raises(ValueError, match=r"Config is missing a runs root"):
         load_config(str(missing_workflow_root_path))
 
 
@@ -163,7 +163,7 @@ def test_load_config_applies_defaults_for_missing_and_non_mapping_optional_secti
     assert cfg.runtime.allowed_root == str(workflow_root.resolve())
     assert cfg.runtime.organized_root == str(workflow_root.resolve())
     assert cfg.runtime.max_concurrent == 4
-    assert cfg.runtime.admission_root == str((tmp_path / "admission").resolve())
+    assert cfg.runtime.admission_root == str(workflow_root.resolve() / ".admission")
     assert cfg.runtime.admission_limit == 4
     assert cfg.paths.xtb_executable == ""
     assert not hasattr(cfg.behavior, "auto_organize_on_terminal")

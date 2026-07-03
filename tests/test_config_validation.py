@@ -244,7 +244,9 @@ class TestConfigValidation(unittest.TestCase):
             self.assertEqual(cfg.runtime.allowed_root, str(allowed))
             self.assertEqual(cfg.runtime.max_concurrent, 6)
             self.assertEqual(cfg.runtime.resolved_admission_limit, 6)
-            self.assertEqual(cfg.runtime.resolved_admission_root, str(root / "admission"))
+            self.assertEqual(
+                cfg.runtime.resolved_admission_root, str(allowed / ".admission")
+            )
 
     def test_orca_runtime_scheduler_keys_are_ignored_without_warning(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -271,7 +273,7 @@ class TestConfigValidation(unittest.TestCase):
                 cfg = load_config(str(cfg_path))
 
             self.assertEqual(cfg.runtime.max_concurrent, 4)
-            self.assertEqual(cfg.runtime.admission_root, str(allowed))
+            self.assertEqual(cfg.runtime.admission_root, str(allowed / ".admission"))
             self.assertIsNone(cfg.runtime.admission_limit)
 
     def test_scheduler_settings_ignore_orca_runtime_scheduler_keys(self) -> None:

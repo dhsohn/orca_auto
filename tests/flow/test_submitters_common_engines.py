@@ -130,6 +130,7 @@ def test_engine_runtime_paths_ignores_orca_runtime_admission_setting(tmp_path: P
 
     assert engine_runtime.engine_runtime_paths(str(config_path), engine="orca") == {
         "allowed_root": Path("/tmp/runs"),
+        "admission_root": Path("/tmp/runs/.admission"),
     }
 
 
@@ -177,7 +178,7 @@ def test_engine_runtime_paths_requires_workflow_root_for_xtb(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match=r"Missing workflow\.root in config"):
+    with pytest.raises(ValueError, match="Missing runs root"):
         engine_runtime.engine_runtime_paths(str(config_path), engine="xtb")
 
 

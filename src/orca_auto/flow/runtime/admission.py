@@ -64,33 +64,27 @@ def _submission_admission_root_from_config(
     engine: str | None = None,
 ) -> Path | None:
     try:
-        path, raw = load_yaml_mapping(config_path)
+        _, raw = load_yaml_mapping(config_path)
     except YAML_CONFIG_LOAD_EXCEPTIONS:
         return None
 
+    # The shared runs root anchors the default admission directory
+    # (<runs_root>/.admission) for every engine.
+    runs_root = workflow_root_from_mapping(raw)
+
     if engine in {"xtb", "crest"}:
-        workflow_root = workflow_root_from_mapping(raw)
-        if not workflow_root:
+        if not runs_root:
             return None
         return scheduler_admission_root(
-            path,
             mapping_section(raw, "scheduler"),
-            default_when_missing=True,
+            default_runs_root=runs_root,
         )
 
     if engine:
         raw = engine_config_mapping(raw, engine, inherit_keys=("scheduler", "workflow"))
-    if engine == "orca":
-        scheduler = mapping_section(raw, "scheduler")
-        return scheduler_admission_root(
-            path,
-            scheduler,
-            default_when_missing=bool(scheduler),
-        )
     return scheduler_admission_root(
-        path,
         mapping_section(raw, "scheduler"),
-        default_when_missing=bool(mapping_section(raw, "scheduler")),
+        default_runs_root=runs_root,
     )
 
 

@@ -64,7 +64,6 @@ scheduler:
   max_active_simulations: 4
 
 workflow:
-  root: /home/user/workflow_runs
   paths:
     xtb_executable: /home/user/bin/xtb-dist/bin/xtb
     crest_executable: /home/user/bin/crest/crest
@@ -78,7 +77,7 @@ telegram:
 
 orca:
   runtime:
-    allowed_root: /home/user/orca_runs
+    allowed_root: /home/user/runs
     default_max_retries: 2
   paths:
     orca_executable: /home/user/opt/orca/orca
@@ -95,9 +94,12 @@ orca:
   종류별 cap을 따르는 계산 종류별 재시도 정책을 활성화합니다.
 - `scheduler.max_active_simulations`는 ORCA, 내부 xTB 워크플로우 단계, 내부 CREST
   워크플로우 단계 전반에 걸친 공유 상한입니다.
-- `workflow.root`는 통합 CLI와 워크플로우 워커가 사용하는 워크플로우 루트입니다.
-- 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 정리된
-  출력은 오직 `workflow.root/<workflow_id>/internal/<engine>/{runs,outputs}` 아래에만
+- 모든 것이 단일 runs 루트(`orca.runtime.allowed_root`) 아래에 존재합니다.
+  단독 ORCA 작업과 워크플로우 워크스페이스가 그 안에 나란히 놓이고, 공유 admission
+  디렉터리는 `<runs root>/.admission`이 기본값입니다. 워크플로우를 다른 곳에 두고
+  싶을 때만 `workflow.root`를 설정하세요.
+- 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은
+  오직 `<runs root>/<workflow_id>/internal/<engine>/{runs,outputs}` 아래에만
   존재합니다.
 - 전체 템플릿은 [config/orca_auto.yaml.example](config/orca_auto.yaml.example)에 있습니다.
 
