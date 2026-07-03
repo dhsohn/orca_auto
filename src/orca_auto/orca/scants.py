@@ -18,6 +18,8 @@ from .input_blocks import (
 from .resource_directives import clamp_maxcore_to_budget
 
 SCANTS_ROUTE_RE = re.compile(r"\bSCANTS\b", re.IGNORECASE)
+_OPT_ROUTE_RE = re.compile(r"\bOPT\b", re.IGNORECASE)
+_FREQ_ROUTE_TOKENS = {"FREQ", "NUMFREQ", "ANFREQ"}
 # Interior scan-profile maxima below this prominence are endpoint/vdW noise, not
 # a barrier a reverse ScanTS could locate.
 SCANTS_BARRIER_NOISE_KCAL = 0.5
@@ -65,6 +67,20 @@ def input_uses_scants(inp_path: Path) -> bool:
     disagree about whether an input is a ScanTS job.
     """
     return bool(_first_scants_route_line(inp_path))
+
+
+def input_uses_relaxed_scan(inp_path: Path) -> bool:
+    """True for a plain relaxed scan: an ``Opt`` route with a ``%geom Scan`` block.
+
+    ScanTS inputs are excluded — they have their own recipe chain. Uses the
+    same whole-file route scan as ``input_uses_scants`` so the retry policy
+    and the chain preparers can never disagree about an input's kind.
+    """
+    if input_uses_scants(inp_path):
+        return False
+    if not any(_OPT_ROUTE_RE.search(line) for line in file_route_lines(inp_path)):
+        return False
+    return first_scan_coordinate_spec(inp_path) is not None
 
 
 def parse_scants_actual_surface(out_path: Path) -> list[ScanTSSurfacePoint]:
@@ -837,6 +853,76 @@ def prepare_scants_reverse_scan_retry_input(
     if not reverse_actions:
         return None, []
     actions.extend(reverse_actions)
+    return _write_prepared_input(
+        lines, target_inp=target_inp, actions=actions, max_memory_gb=max_memory_gb
+    )
+
+
+def _replace_opt_route_with_optts_freq(lines: list[str]) -> list[str]:
+    route_idx = None
+    for idx in route_line_indices(lines):
+        if _OPT_ROUTE_RE.search(lines[idx]):
+            route_idx = idx
+            break
+    if route_idx is None:
+        return []
+    all_route_tokens = {
+        token.upper()
+        for idx in route_line_indices(lines)
+        for token in lines[idx].strip()[1:].split()
+    }
+    has_freq = bool(all_route_tokens & _FREQ_ROUTE_TOKENS)
+
+    tokens = lines[route_idx].strip()[1:].split()
+    rewritten: list[str] = []
+    replaced = False
+    for token in tokens:
+        if token.upper() == "OPT":
+            if not replaced:
+                rewritten.append("OptTS")
+                replaced = True
+            continue
+        rewritten.append(token)
+    actions = ["relaxed_scan_route_to_optts"]
+    if not has_freq:
+        rewritten.append("Freq")
+        actions.append("relaxed_scan_freq_added")
+    lines[route_idx] = "! " + " ".join(rewritten)
+    return actions
+
+
+def prepare_relaxed_scan_optts_chain_input(
+    *,
+    source_inp: Path,
+    target_inp: Path,
+    out_path: Path,
+    max_memory_gb: int | None = None,
+) -> tuple[Path | None, list[str]]:
+    """Chain OptTS(+Freq) from the interior maximum of a completed relaxed scan.
+
+    Automates the standard manual TS workflow (relaxed scan, then OptTS from
+    the maximum, then frequency verification) without going through ORCA's
+    ScanTS wrapper: ``Opt`` -> ``OptTS`` on the route (``Freq`` added when
+    missing), scan block removed, geometry from the highest surface point.
+    """
+    if not input_uses_relaxed_scan(source_inp):
+        return None, []
+    guess_xyz = scants_guess_xyz_for_output(source_inp, out_path)
+    if guess_xyz is None:
+        return None, []
+
+    lines = source_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
+    actions = ["relaxed_scan_optts_chain"]
+    actions.extend(_remove_checkpoint_restart_directives(lines))
+    route_actions = _replace_opt_route_with_optts_freq(lines)
+    if not route_actions:
+        return None, []
+    actions.extend(route_actions)
+    if _remove_geom_scan_subblock(lines):
+        actions.append("scants_scan_block_removed")
+    if not replace_geometry_with_xyzfile(lines, guess_xyz, target_inp.parent):
+        return None, []
+    actions.append(f"relaxed_scan_guess_from_{guess_xyz.name}")
     return _write_prepared_input(
         lines, target_inp=target_inp, actions=actions, max_memory_gb=max_memory_gb
     )

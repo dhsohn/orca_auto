@@ -28,6 +28,7 @@ from .retry import (
     RetryAttemptRequest,
     prepare_resumed_checkpoint_input,
     prepare_retry_attempt,
+    relaxed_scan_optts_chain_pending,
     retry_recipe_step,
     state_pending_scants_reverse_after_endpoint_scan,
 )
@@ -356,9 +357,14 @@ def _finish_decision_or_prepare_retry(
     result: RecordedAttemptResult,
 ) -> int | None:
     analysis = result.analysis
-    if (
-        analysis.status == AnalyzerStatus.COMPLETED
-        and state_pending_scants_reverse_after_endpoint_scan(ctx.state)
+    if analysis.status == AnalyzerStatus.COMPLETED and (
+        state_pending_scants_reverse_after_endpoint_scan(ctx.state)
+        or relaxed_scan_optts_chain_pending(
+            ctx.state,
+            selected_inp=ctx.selected_inp,
+            source_inp=result.current_inp,
+            out_path=result.out_path,
+        )
     ):
         decision = None
     else:

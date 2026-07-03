@@ -16,12 +16,15 @@ from ..retry_policy import RetryRecipeName, retry_recipe_name_for_input
 from ..scants import (
     SCANTS_BARRIER_NOISE_KCAL,
     highest_scants_surface_point,
+    input_uses_relaxed_scan,
     input_uses_scants,
     parse_scants_actual_surface,
+    prepare_relaxed_scan_optts_chain_input,
     prepare_scants_endpoint_scan_input,
     prepare_scants_optts_fallback_input,
     prepare_scants_reverse_scan_retry_input,
     scan_profile_interior_barrier_kcal,
+    scants_guess_xyz_for_output,
 )
 from ..state import save_state
 from ..statuses import RunStatus
@@ -124,6 +127,64 @@ def _state_has_scants_optts_fallback(state: RunState) -> bool:
         action.startswith("scants_fallback_to_optts")
         for attempt in attempts
         for action in _attempt_patch_actions(attempt)
+    )
+
+
+def _state_has_relaxed_scan_optts_chain(state: RunState) -> bool:
+    attempts = state.get("attempts")
+    if not isinstance(attempts, list):
+        return False
+    return any(
+        action.startswith("relaxed_scan_optts_chain")
+        for attempt in attempts
+        for action in _attempt_patch_actions(attempt)
+    )
+
+
+def relaxed_scan_optts_chain_pending(
+    state: RunState,
+    *,
+    selected_inp: Path,
+    source_inp: Path,
+    out_path: Path,
+) -> bool:
+    """True when a completed relaxed scan must chain into an OptTS attempt.
+
+    Requires a plain relaxed-scan job, no chain attempt yet, an interior
+    maximum above the noise threshold in the completed scan's surface, and the
+    maximum's numbered xyz on disk. While pending, a COMPLETED attempt is only
+    the intermediate scan, so the run must not finish successfully — including
+    on crash-resume. A monotonic profile completes as an ordinary scan.
+    """
+    if _state_has_relaxed_scan_optts_chain(state):
+        return False
+    if not input_uses_relaxed_scan(selected_inp):
+        return False
+    energies = [point.energy for point in parse_scants_actual_surface(out_path)]
+    barrier_kcal = scan_profile_interior_barrier_kcal(energies)
+    if barrier_kcal is None or barrier_kcal < SCANTS_BARRIER_NOISE_KCAL:
+        return False
+    return scants_guess_xyz_for_output(source_inp, out_path) is not None
+
+
+def _prepare_relaxed_scan_optts_chain(
+    ctx: RetryAttemptRequest,
+    *,
+    next_inp: Path,
+) -> tuple[Path | None, list[str]]:
+    """Chain OptTS+Freq from the interior maximum of the completed scan."""
+    if not relaxed_scan_optts_chain_pending(
+        ctx.state,
+        selected_inp=ctx.selected_inp,
+        source_inp=ctx.current_inp,
+        out_path=ctx.out_path,
+    ):
+        return None, []
+    return prepare_relaxed_scan_optts_chain_input(
+        source_inp=ctx.current_inp,
+        target_inp=next_inp,
+        out_path=ctx.out_path,
+        max_memory_gb=ctx.max_memory_gb_per_task(),
     )
 
 
@@ -337,8 +398,17 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
                 chain_ctx,
                 next_inp=next_inp,
             )
+        if prepared_scants is None:
+            prepared_scants, patch_actions = _prepare_relaxed_scan_optts_chain(
+                ctx,
+                next_inp=next_inp,
+            )
         if prepared_scants is None and (scants_surface_maximum_seen or scants_endpoint_scan_seen):
             raise ScantsRetryStop("scants_recipes_exhausted")
+        if prepared_scants is None and input_uses_relaxed_scan(ctx.selected_inp):
+            # Relaxed scans have no generic hardening: the only recipe is the
+            # OptTS chain after a completed scan with an interior barrier.
+            raise ScantsRetryStop("relaxed_scan_recipes_exhausted")
         if prepared_scants is None:
             scants_retry_source = (
                 ctx.selected_inp if next_retry_number == 1 else chain_ctx.current_inp
@@ -426,6 +496,7 @@ __all__ = [
     "ScantsRetryStop",
     "prepare_resumed_checkpoint_input",
     "prepare_retry_attempt",
+    "relaxed_scan_optts_chain_pending",
     "resume_checkpoint_inp_path",
     "retry_recipe_step",
     "state_pending_scants_reverse_after_endpoint_scan",

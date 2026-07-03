@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,7 +11,10 @@ from ..retry_policy import RetryRecipeName
 from ..state_machine import decide_attempt_outcome, parse_analyzer_status
 from ..statuses import AnalyzerStatus
 from ..types import AttemptRecord, RunFinishedNotification, RunState
-from .retry import state_pending_scants_reverse_after_endpoint_scan
+from .retry import (
+    relaxed_scan_optts_chain_pending,
+    state_pending_scants_reverse_after_endpoint_scan,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +229,23 @@ def resume_terminal_decision(
     )
 
 
+def _relaxed_scan_chain_pending_for_attempt(
+    state: RunState,
+    selected_inp: Path,
+    last_attempt: Mapping[str, Any],
+) -> bool:
+    inp_raw = str(last_attempt.get("inp_path") or "").strip()
+    out_raw = str(last_attempt.get("out_path") or "").strip()
+    if not inp_raw or not out_raw:
+        return False
+    return relaxed_scan_optts_chain_pending(
+        state,
+        selected_inp=selected_inp,
+        source_inp=Path(inp_raw),
+        out_path=Path(out_raw),
+    )
+
+
 def _resume_terminal_decision(request: ResumeTerminalDecisionRequest) -> int | None:
     if not request.resumed:
         return None
@@ -244,13 +264,14 @@ def _resume_terminal_decision(request: ResumeTerminalDecisionRequest) -> int | N
     analyzer_reason = (
         _as_non_empty_text(last_attempt.get("analyzer_reason")) or "resume_last_attempt"
     )
-    # A COMPLETED attempt while the ScanTS reverse scan is still pending is only
-    # the intermediate relaxed endpoint scan; resume must continue the run
-    # instead of finishing it as an overall success.
-    if parse_analyzer_status(
-        analyzer_status
-    ) == AnalyzerStatus.COMPLETED and state_pending_scants_reverse_after_endpoint_scan(
-        request.state
+    # A COMPLETED attempt while the ScanTS reverse scan or the relaxed-scan
+    # OptTS chain is still pending is only the intermediate scan; resume must
+    # continue the run instead of finishing it as an overall success.
+    if parse_analyzer_status(analyzer_status) == AnalyzerStatus.COMPLETED and (
+        state_pending_scants_reverse_after_endpoint_scan(request.state)
+        or _relaxed_scan_chain_pending_for_attempt(
+            request.state, request.selected_inp, last_attempt
+        )
     ):
         return None
     decision = decide_attempt_outcome(
