@@ -12,7 +12,7 @@ from ..inp_rewriter import (
     rewrite_for_retry,
 )
 from ..out_analyzer import OutAnalysis
-from ..retry_policy import RetryRecipeName, retry_recipe_name_for_input
+from ..retry_policy import retry_recipe_name_for_input
 from ..scants import (
     highest_scants_surface_point,
     input_uses_scants,
@@ -55,17 +55,6 @@ class RetryAttemptRequest:
 
     def max_memory_gb_per_task(self) -> int | None:
         return self.state.get("max_memory_gb_per_task")
-
-
-def retry_recipe_step(retry_number: int) -> RetryRecipeName:
-    """Legacy helper retained for retry-input recovery call sites.
-
-    Normal retry preparation now selects recipes from the calculation-type policy.
-    Recovery without an input path falls back to a no-route-rewrite copy instead
-    of the old global TightSCF/geometry-hardening ladder.
-    """
-    del retry_number
-    return "no_route_rewrite"
 
 
 def resume_checkpoint_inp_path(current_inp: Path) -> Path:
@@ -177,7 +166,6 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
             patch_actions = rewrite_for_retry(
                 source_inp=ctx.current_inp,
                 target_inp=next_inp,
-                reaction_dir=ctx.reaction_dir,
                 step=patch_step,
                 max_memory_gb=ctx.max_memory_gb_per_task(),
             )
@@ -249,5 +237,4 @@ __all__ = [
     "prepare_resumed_checkpoint_input",
     "prepare_retry_attempt",
     "resume_checkpoint_inp_path",
-    "retry_recipe_step",
 ]

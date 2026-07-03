@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from ..inp_rewriter import rewrite_for_retry
-from ..retry_policy import RetryRecipeName
 from ..scants import highest_scants_surface_point, input_uses_scants
 from ..state_machine import decide_attempt_outcome
 from ..statuses import AnalyzerStatus, RunStatus
@@ -23,7 +22,6 @@ class MissingRetryInputRecoveryRequest:
     selected_inp: Path
     current_inp: Path
     retries_used: int
-    retry_recipe_step: Callable[[int], RetryRecipeName | int]
     to_resolved_local: Callable[[str], Path]
     save_state: Callable[[Path, RunState], Path]
 
@@ -36,7 +34,6 @@ class ExecutionInputRequest:
     execution_index: int
     retries_used: int
     retry_inp_path: Callable[[Path, int], Path]
-    retry_recipe_step: Callable[[int], RetryRecipeName | int]
     to_resolved_local: Callable[[str], Path]
     save_state: Callable[[Path, RunState], Path]
 
@@ -77,7 +74,6 @@ def recover_missing_retry_input(
     selected_inp: Path,
     current_inp: Path,
     retries_used: int,
-    retry_recipe_step: Callable[[int], RetryRecipeName | int],
     to_resolved_local: Callable[[str], Path],
     save_state: Callable[[Path, RunState], Path],
 ) -> tuple[bool, str]:
@@ -88,7 +84,6 @@ def recover_missing_retry_input(
             selected_inp=selected_inp,
             current_inp=current_inp,
             retries_used=retries_used,
-            retry_recipe_step=retry_recipe_step,
             to_resolved_local=to_resolved_local,
             save_state=save_state,
         )
@@ -119,8 +114,7 @@ def _recover_missing_retry_input(request: MissingRetryInputRecoveryRequest) -> t
     patch_actions = rewrite_for_retry(
         source_inp=source_inp,
         target_inp=request.current_inp,
-        reaction_dir=request.reaction_dir,
-        step=request.retry_recipe_step(request.retries_used),
+        step="no_route_rewrite",
         max_memory_gb=request.state.get("max_memory_gb_per_task"),
         allow_no_effective_change=True,
     )
@@ -139,7 +133,6 @@ def resolve_execution_input(
     execution_index: int,
     retries_used: int,
     retry_inp_path: Callable[[Path, int], Path],
-    retry_recipe_step: Callable[[int], RetryRecipeName | int],
     to_resolved_local: Callable[[str], Path],
     save_state: Callable[[Path, RunState], Path],
 ) -> tuple[Path | None, str | None]:
@@ -151,7 +144,6 @@ def resolve_execution_input(
             execution_index=execution_index,
             retries_used=retries_used,
             retry_inp_path=retry_inp_path,
-            retry_recipe_step=retry_recipe_step,
             to_resolved_local=to_resolved_local,
             save_state=save_state,
         )
@@ -178,7 +170,6 @@ def _resolve_execution_input(request: ExecutionInputRequest) -> tuple[Path | Non
             selected_inp=request.selected_inp,
             current_inp=current_inp,
             retries_used=request.retries_used,
-            retry_recipe_step=request.retry_recipe_step,
             to_resolved_local=request.to_resolved_local,
             save_state=request.save_state,
         )

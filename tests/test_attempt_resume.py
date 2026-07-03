@@ -42,7 +42,6 @@ class TestAttemptResume(unittest.TestCase):
                     selected_inp=selected_inp,
                     current_inp=current_inp,
                     retries_used=1,
-                    retry_recipe_step=lambda retry_number: retry_number,
                     to_resolved_local=lambda raw: Path(raw),
                     save_state=lambda _reaction_dir, _state: state_path(reaction_dir),
                 )
@@ -69,7 +68,6 @@ class TestAttemptResume(unittest.TestCase):
                 retry_inp_path=lambda inp, retry_number: inp.with_name(
                     f"{inp.stem}.retry{retry_number:02d}.inp"
                 ),
-                retry_recipe_step=lambda retry_number: retry_number,
                 to_resolved_local=lambda raw: Path(raw),
                 save_state=lambda _reaction_dir, _state: state_path(reaction_dir),
             )
@@ -97,7 +95,6 @@ class TestAttemptResume(unittest.TestCase):
                     retry_inp_path=lambda inp, retry_number: inp.with_name(
                         f"{inp.stem}.retry{retry_number:02d}.inp"
                     ),
-                    retry_recipe_step=lambda retry_number: retry_number,
                     to_resolved_local=lambda raw: Path(raw),
                     save_state=lambda _reaction_dir, _state: state_path(reaction_dir),
                 )

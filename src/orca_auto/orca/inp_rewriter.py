@@ -52,8 +52,7 @@ __all__ = [
 def rewrite_for_retry(
     source_inp: Path,
     target_inp: Path,
-    reaction_dir: Path,
-    step: RetryRecipeName | int,
+    step: RetryRecipeName,
     *,
     max_memory_gb: int | None = None,
     allow_no_effective_change: bool = False,
@@ -62,12 +61,6 @@ def rewrite_for_retry(
     actions: list[str] = []
 
     actions.extend(_apply_retry_recipe(lines, step))
-    if isinstance(step, int):
-        # Legacy numbered recipes kept the historical generic artifact restart
-        # behavior. New calculation-type recipes are route-specific and must not
-        # turn a failed non-ScanTS job into a generic .xyz/.gbw rerun.
-        _apply_checkpoint_restart(lines, actions, source_inp, target_inp)
-        _apply_geometry_restart(lines, actions, source_inp, target_inp, reaction_dir)
 
     if max_memory_gb is not None and clamp_maxcore_to_budget(lines, max_memory_gb=max_memory_gb):
         actions.append("maxcore_clamped_to_budget")

@@ -10,6 +10,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Removed
 
+- The dead numbered retry-recipe system: `RETRY_RECIPES` and `retry_step_1..4`
+  / `set_geom_retry_keys` (`retry_recipes.py`), the `isinstance(step, int)`
+  branch and `RetryRecipeName | int` unions in `inp_rewriter`/`resume`, and the
+  `retry_recipe_step` helper with its `resume`/`engine` DI seam. Retry policies
+  resolved to the two `RetryRecipeName` route no-ops (`scants_retry`,
+  `no_route_rewrite`) long ago, so the integer ladder was unreachable in
+  production; removing it is behaviour-preserving for real (string) inputs. The
+  live ScanTS retry, maxcore clamping, and checkpoint/geometry restart paths are
+  unchanged.
 - The `orca.runtime.organized_root` config key and the `orca_outputs` sibling
   directory: with organize gone, the organized root always collapses to
   `allowed_root`. A stale `organized_root` key is silently ignored (the loader
