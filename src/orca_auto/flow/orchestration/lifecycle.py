@@ -171,6 +171,13 @@ def _stage_engine(stage: dict[str, Any], *, normalize_text_fn: Callable[[Any], s
     return normalize_text_fn(task.get("engine")).lower()
 
 
+def _stage_is_workflow_fatal(stage: dict[str, Any]) -> bool:
+    """A prerequisite stage (e.g. the scan_ts_search relaxed scan) whose failure
+    must fail the whole workflow, unlike ordinary candidate ORCA stages."""
+    metadata = stage.get("metadata")
+    return bool(metadata.get("workflow_fatal")) if isinstance(metadata, dict) else False
+
+
 def _template_name(payload: dict[str, Any], *, normalize_text_fn: Callable[[Any], str]) -> str:
     return normalize_text_fn(payload.get("template_name")).lower()
 
@@ -267,8 +274,9 @@ def recompute_workflow_status_impl(
     if _workflow_error_is_failed(payload, normalize_text_fn=normalize_text_fn):
         return "failed"
     if any(
-        status in WORKFLOW_FAILED_STATUSES and engine in {"", "crest"}
-        for _, status, engine in stage_rows
+        status in WORKFLOW_FAILED_STATUSES
+        and (engine in {"", "crest"} or _stage_is_workflow_fatal(stage))
+        for stage, status, engine in stage_rows
     ):
         return "failed"
     if current_status not in {

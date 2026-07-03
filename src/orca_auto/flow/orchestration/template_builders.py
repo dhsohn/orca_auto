@@ -278,7 +278,14 @@ def _scan_ts_scan_stage(
         inp_filename="scan.inp",
         geom_block=scan_geom_block(request.scan_coordinate),
     )
-    return cast(WorkflowStagePayload, stage.to_dict())
+    stage_dict = stage.to_dict()
+    # The relaxed scan is a prerequisite, not a TS candidate: its failure must
+    # fail the whole workflow (the status reducer otherwise treats a failed
+    # ORCA stage as a terminal candidate outcome, not a workflow failure).
+    stage_metadata = stage_dict.setdefault("metadata", {})
+    if isinstance(stage_metadata, dict):
+        stage_metadata["workflow_fatal"] = True
+    return cast(WorkflowStagePayload, stage_dict)
 
 
 def _scan_ts_template_request(

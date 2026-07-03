@@ -6,9 +6,11 @@ from pathlib import Path
 import pytest
 
 from orca_auto.flow.orchestration import create_scan_ts_search_workflow
+from orca_auto.flow.orchestration.lifecycle import recompute_workflow_status_impl
 from orca_auto.flow.orchestration.scan_orca_materialization import (
     append_scan_optts_stages_impl,
 )
+from orca_auto.flow.workflow.report import collect_workflow_report_data
 from orca_auto.orca.scants import scan_profile_interior_maxima
 
 
@@ -137,6 +139,55 @@ def test_barrierless_scan_records_no_barrier_error(tmp_path: Path) -> None:
     error = payload["metadata"]["workflow_error"]
     assert error["scope"] == "scan_ts_search_no_barrier"
     assert error["reason"] == "scan_profile_no_barrier"
+
+
+def _recompute_status(payload: dict) -> str:
+    def normalize(value: object) -> str:
+        return str(value or "").strip()
+
+    def effective(stage: dict) -> str:
+        task = stage.get("task")
+        task_status = task.get("status") if isinstance(task, dict) else None
+        return normalize(task_status or stage.get("status")).lower()
+
+    return recompute_workflow_status_impl(
+        payload,
+        normalize_text_fn=normalize,
+        effective_stage_status_fn=effective,
+    )
+
+
+def test_failed_relaxed_scan_fails_the_workflow(tmp_path: Path) -> None:
+    payload = _create_workflow(tmp_path)
+    scan_stage = payload["stages"][0]
+    scan_stage["status"] = "failed"
+    scan_stage["task"]["status"] = "failed"
+
+    # A failed ORCA candidate stage normally does not fail the workflow, but the
+    # relaxed scan is a prerequisite marked workflow_fatal.
+    assert scan_stage["metadata"]["workflow_fatal"] is True
+    assert _recompute_status(payload) == "failed"
+
+
+def test_relaxed_scan_excluded_from_ts_candidate_ranking(tmp_path: Path) -> None:
+    payload = _create_workflow(tmp_path)
+    workspace = tmp_path / "root" / "wf_scan_ts_test"
+    scan_stage = payload["stages"][0]
+    scan_stage["status"] = "completed"
+    _write_scan_results(scan_stage, [-100.0, -99.5, -100.2, -99.85, -100.3, -99.3])
+    append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+    for stage in payload["stages"][1:]:
+        stage["status"] = "completed"
+
+    data = collect_workflow_report_data(workspace, payload)
+
+    # The scan stage stays in the stage chain but not the candidate ranking.
+    assert any(row.stage_id == "orca_scan_01" for row in data.stage_rows)
+    assert all(result.stage_id != "orca_scan_01" for result in data.orca_results)
+    assert {result.stage_id for result in data.orca_results} == {
+        "orca_optts_freq_01",
+        "orca_optts_freq_02",
+    }
 
 
 def test_incomplete_scan_does_not_fan_out(tmp_path: Path) -> None:
