@@ -6,8 +6,6 @@ import argparse
 import logging
 from typing import Any
 
-from orca_auto.core.queue.worker import resolve_worker_auto_organize
-
 from ..config import load_config
 from ..queue import worker as _queue_worker_runtime
 from ..queue.worker import QueueWorker, read_worker_pid
@@ -21,8 +19,6 @@ logger = logging.getLogger(__name__)
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m orca_auto.orca.commands.queue")
     parser.add_argument("--config", required=True)
-    parser.add_argument("--auto-organize", action="store_true")
-    parser.add_argument("--no-auto-organize", action="store_true")
     return parser
 
 
@@ -37,7 +33,6 @@ def cmd_queue_worker(args: Any) -> int:
         worker_factory=lambda cfg, config_path, **kwargs: QueueWorker(
             cfg,
             config_path,
-            auto_organize=resolve_worker_auto_organize(cfg, args),
             **kwargs,
         ),
     )

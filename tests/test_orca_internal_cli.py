@@ -19,7 +19,6 @@ def test_orca_queue_worker_entrypoint_parses_worker_args(monkeypatch) -> None:
             [
                 "--config",
                 "/tmp/orca_auto.yaml",
-                "--no-auto-organize",
             ]
         )
         == 41
@@ -27,5 +26,3 @@ def test_orca_queue_worker_entrypoint_parses_worker_args(monkeypatch) -> None:
 
     assert len(worker_calls) == 1
     assert worker_calls[0].config == "/tmp/orca_auto.yaml"
-    assert worker_calls[0].auto_organize is False
-    assert worker_calls[0].no_auto_organize is True

@@ -8,6 +8,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Removed
+
+- The `organize` feature: the `orca_auto organize orca` CLI command, the
+  `result_organizer` module and its JSONL organize index, the
+  `behavior.auto_organize_on_terminal` config key, and the worker's
+  auto-organize-on-terminal hook. Completed runs now stay where they ran,
+  keeping their user-chosen directory names; existing `organized_ref.json`
+  stubs and previously organized outputs are still readable by lookups.
+  `queue list` remains the way to see completed work in one place.
+
 ### Added
 
 - `scan_ts_search` scan extension and reverse rescue: the recovery strategies

@@ -81,7 +81,7 @@ class PathsConfig:
 
 @dataclass
 class BehaviorConfig:
-    auto_organize_on_terminal: bool = False
+    pass
 
 
 @dataclass
@@ -158,13 +158,10 @@ def load_config(config_path: str) -> AppConfig:
     path = Path(config_path).expanduser().resolve()
     raw = _load_raw_config(path)
     workflow_root = _config_engines.as_nonempty_str(workflow_root_from_mapping(raw), "")
-    raw = engine_config_mapping(
-        raw, "orca", inherit_keys=("behavior", "resources", "telegram", "scheduler")
-    )
+    raw = engine_config_mapping(raw, "orca", inherit_keys=("resources", "telegram", "scheduler"))
     scheduler_raw = _section_mapping(raw, "scheduler")
     runtime_raw = _section_mapping(raw, "runtime")
     paths_raw = _section_mapping(raw, "paths")
-    behavior_raw = _section_mapping(raw, "behavior")
     telegram_raw = _section_mapping(raw, "telegram")
     resources_raw = _section_mapping(raw, "resources")
 
@@ -197,12 +194,7 @@ def load_config(config_path: str) -> AppConfig:
         paths=PathsConfig(
             orca_executable=orca_executable,
         ),
-        behavior=BehaviorConfig(
-            auto_organize_on_terminal=_config_engines.as_bool(
-                behavior_raw.get("auto_organize_on_terminal"),
-                False,
-            ),
-        ),
+        behavior=BehaviorConfig(),
         resources=_config_engines.resource_config_from_mapping(resources_raw),
         telegram=telegram_cfg,
     )

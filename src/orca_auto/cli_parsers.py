@@ -8,7 +8,6 @@ from orca_auto.cli_argparse import OrcaAutoArgumentParser
 from orca_auto.cli_parser_commands import (
     add_init_parser,
     add_monitor_parser,
-    add_organize_parser,
     add_run_dir_parser,
     add_scaffold_parser,
 )
@@ -59,7 +58,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_run_dir_parser(subparsers)
     add_init_parser(subparsers)
     add_scaffold_parser(subparsers)
-    add_organize_parser(subparsers)
     add_monitor_parser(subparsers)
     add_systemd_parser(subparsers)
     add_service_parser(subparsers)

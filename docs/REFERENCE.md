@@ -38,9 +38,9 @@ Current intended semantics:
 - The ORCA worker starts queue children by queue identity
   (`--queue-root/--queue-id`), then the child resolves the current queue entry
   and runs through the shared `InternalEngineWorkerAdapter` lifecycle
-- ORCA state, retry, report, notification, and auto-organize behavior remain
-  ORCA-domain behavior; parent queue finalization still records the terminal
-  queue result after the child exits
+- ORCA state, retry, report, and notification behavior remain ORCA-domain
+  behavior; parent queue finalization still records the terminal queue result
+  after the child exits
 - On WSL, the recommended supervisor is `systemd`
 
 Operational consequences:
@@ -106,7 +106,6 @@ commands:
 - `run-dir <path>`
 - `init`
 - `scaffold <ts_search|conformer_search>`
-- `organize orca`
 - `scan-notify`
 Activate `.venv` first, or call `.venv/bin/orca_auto ...` directly.
 By default, config is resolved from `ORCA_AUTO_CONFIG`, then `<repo_root>/config/orca_auto.yaml`, then `~/orca_auto/config/orca_auto.yaml`.
@@ -126,10 +125,6 @@ Search order:
 resources:
   max_cores_per_task: 8
   max_memory_gb_per_task: 32
-
-behavior:
-  # ORCA-only; internal xTB/CREST stages do not organize.
-  auto_organize_on_terminal: false
 
 scheduler:
   max_active_simulations: 4
@@ -344,21 +339,7 @@ cancelled entries from the unified list.
   confirmation step; when more than eight activities are cancellable the message notes how
   many are shown, and executing a cancel or clear auto-refreshes the list.
 
-### 7.6 `organize`
-
-```bash
-orca_auto organize orca --root '/absolute/path/to/orca_runs'
-orca_auto organize orca --root '/absolute/path/to/orca_runs' --apply
-```
-
-Options:
-
-- `organize orca --reaction-dir <dir>`: Organize one ORCA job directory
-- `organize orca --root <dir>`: Scan from the configured ORCA root
-- `organize orca --rebuild-index`: Rebuild the ORCA JSONL index
-- `--apply`: Perform actual moves; otherwise the command is a dry run
-
-### 7.7 `scan-notify`
+### 7.6 `scan-notify`
 
 ```bash
 orca_auto scan-notify
@@ -369,7 +350,7 @@ Behavior:
 - `scan-notify` runs a one-shot scan of the configured ORCA root and sends
   Telegram discovery alerts, then exits. It is not a live monitor.
 
-### 7.8 Long-Running Services
+### 7.7 Long-Running Services
 
 Long-running worker and Telegram bot processes are managed through `systemd`
 only. Public CLI commands do not start those services directly.

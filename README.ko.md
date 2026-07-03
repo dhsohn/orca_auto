@@ -9,8 +9,8 @@
 orca_auto는 Linux 및 WSL 환경에서 ORCA 실행과 워크플로우 오케스트레이션을 위한
 **큐 우선(queue-first)** 인터페이스입니다. xTB와 CREST도 런타임의 일부이지만, 이제는
 독립 공개 명령이 아니라 워크플로우 단계 내부에서 사용됩니다. orca_auto는 작업을
-내구성 있게 제출하고, 감독되는 워커 아래에서 실행하며, 작업별 상태와 리포트를 기록하고,
-완료된 출력을 정리합니다.
+내구성 있게 제출하고, 감독되는 워커 아래에서 실행하며, 작업별 상태와 리포트를
+기록합니다.
 
 ## 문서
 
@@ -124,7 +124,6 @@ orca_auto queue list clear      # 완료/실패/취소 항목 정리
 orca_auto queue cancel <target>
 orca_auto service status
 orca_auto service restart
-orca_auto organize orca --root '/home/user/orca_runs' --apply
 orca_auto scan-notify
 ```
 

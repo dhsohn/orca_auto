@@ -260,38 +260,17 @@ class TestCli(unittest.TestCase):
 
             return _inner
 
-        with (
-            patch("orca_auto.orca.commands.init.cmd_init", side_effect=_record("init", 42)),
-            patch(
-                "orca_auto.orca.commands.organize.cmd_organize", side_effect=_record("organize", 43)
-            ),
-        ):
+        with patch("orca_auto.orca.commands.init.cmd_init", side_effect=_record("init", 42)):
             init_args = Namespace(
                 config="/tmp/orca_auto.yaml",
                 verbose=False,
                 log_file=None,
                 force=True,
             )
-            organize_args = Namespace(
-                config="/tmp/orca_auto.yaml",
-                verbose=False,
-                log_file=None,
-                reaction_dir="/tmp/rxn",
-                root=None,
-                apply=True,
-                rebuild_index=False,
-            )
             init_rc = cli_run_dir.cmd_init(init_args)
-            organize_rc = cli_run_dir.cmd_orca_organize(organize_args)
 
-        self.assertEqual((init_rc, organize_rc), (42, 43))
-        self.assertEqual(
-            seen,
-            [
-                ("init", init_args),
-                ("organize", organize_args),
-            ],
-        )
+        self.assertEqual(init_rc, 42)
+        self.assertEqual(seen, [("init", init_args)])
 
     @patch("orca_auto.orca.cli_logging.remove_managed_handlers")
     @patch("orca_auto.orca.cli_logging.logging.handlers.RotatingFileHandler")

@@ -122,7 +122,6 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
         load_config(str(config_path)),
         str(config_path),
         max_concurrent=1,
-        auto_organize=False,
     )
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0

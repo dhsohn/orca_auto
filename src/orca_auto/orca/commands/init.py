@@ -314,9 +314,6 @@ def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
             "max_cores_per_task": 8,
             "max_memory_gb_per_task": 32,
         },
-        "behavior": {
-            "auto_organize_on_terminal": False,
-        },
         "scheduler": {
             "max_active_simulations": values.max_active_simulations,
         },

@@ -15,12 +15,6 @@ resources:
   max_cores_per_task: 8
   max_memory_gb_per_task: 32
 
-behavior:
-  # ORCA-only: when true, ORCA queue workers auto-organize runs as soon as
-  # they reach a terminal state. This is an ORCA terminal lifecycle hook;
-  # internal xTB/CREST stages do not organize.
-  auto_organize_on_terminal: false
-
 scheduler:
   # Shared total active-run cap across ORCA, internal xTB workflow stages, and
   # internal CREST workflow stages. All engine workers use this shared

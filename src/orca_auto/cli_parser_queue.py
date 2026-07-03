@@ -97,17 +97,6 @@ def _add_queue_worker_options(parser: argparse.ArgumentParser) -> None:
             json_help="Print worker commands as JSON without starting them"
         ),
     )
-    auto_group = parser.add_mutually_exclusive_group()
-    auto_group.add_argument(
-        "--auto-organize",
-        action="store_true",
-        help="Enable ORCA auto-organization in the supervised worker",
-    )
-    auto_group.add_argument(
-        "--no-auto-organize",
-        action="store_true",
-        help="Disable ORCA auto-organization in the supervised worker",
-    )
 
 
 def _add_queue_worker_parser(

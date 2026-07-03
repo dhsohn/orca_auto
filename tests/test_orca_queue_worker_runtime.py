@@ -57,41 +57,13 @@ def test_install_worker_runtime_methods_binds_worker_instance() -> None:
 
     queue_worker_runtime.install_worker_runtime_methods(
         worker,
-        auto_organize_fn=lambda worker_obj, job_obj: calls.append(
-            ("auto", worker_obj is worker, job_obj is job)
-        ),
         cancel_running_job_fn=lambda worker_obj, queue_id, job_obj: calls.append(
             ("cancel", worker_obj is worker, queue_id, job_obj is job)
         ),
     )
 
-    worker._auto_organize_terminal_job(job)
     worker._cancel_running_job("queue-1", job)
 
     assert calls == [
-        ("auto", True, True),
         ("cancel", True, "queue-1", True),
-    ]
-
-
-def test_auto_organize_terminal_job_uses_injected_organizer(tmp_path: Path) -> None:
-    calls: list[dict[str, Any]] = []
-    worker = SimpleNamespace(cfg="cfg", auto_organize=True)
-    job = SimpleNamespace(reaction_dir=str(tmp_path / "rxn"))
-
-    def organize_reaction_dir(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        calls.append({"args": args, "kwargs": kwargs})
-        return {"action": "organized", "target_dir": str(tmp_path / "organized")}
-
-    queue_worker_runtime.auto_organize_terminal_job(
-        worker,
-        job,
-        organize_reaction_dir_fn=organize_reaction_dir,
-    )
-
-    assert calls == [
-        {
-            "args": ("cfg", tmp_path / "rxn"),
-            "kwargs": {"notify_summary": False},
-        }
     ]

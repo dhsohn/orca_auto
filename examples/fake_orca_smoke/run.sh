@@ -106,7 +106,7 @@ if len(matches) != 1:
 if matches[0].status != QueueStatus.PENDING:
     raise SystemExit(f"expected pending queue entry, got {matches[0].status}")
 
-worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1, auto_organize=False)
+worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
 worker.poll_interval_seconds = 0.01
 worker_rc = worker.run_once(idle_message=None, blocked_message=None)
 if worker_rc != 0:

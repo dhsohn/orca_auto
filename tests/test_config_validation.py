@@ -3,8 +3,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import yaml
-
 from orca_auto.orca.config import load_config
 
 
@@ -332,35 +330,6 @@ class TestConfigValidation(unittest.TestCase):
                     "scheduler.max_active_simulations must be an integer >= 1",
                     str(ctx.exception),
                 )
-
-    def test_behavior_auto_organize_is_loaded(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            allowed = root / "orca_runs"
-            allowed.mkdir()
-            fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
-
-            cfg_path = _write_orca_config(
-                root / "orca_auto.yaml",
-                {
-                    "runtime": {
-                        "allowed_root": str(allowed),
-                    },
-                    "paths": {"orca_executable": str(fake_orca)},
-                    "behavior": {
-                        "auto_organize_on_terminal": True,
-                    },
-                },
-            )
-            cfg = load_config(str(cfg_path))
-            self.assertTrue(cfg.behavior.auto_organize_on_terminal)
-
-    def test_config_example_sets_auto_organize_off_by_default(self) -> None:
-        example_path = Path(__file__).resolve().parents[1] / "config" / "orca_auto.yaml.example"
-        payload = yaml.safe_load(example_path.read_text(encoding="utf-8"))
-
-        self.assertFalse(payload["behavior"]["auto_organize_on_terminal"])
 
     def test_missing_config_file_raises_with_setup_hint(self) -> None:
         with tempfile.TemporaryDirectory() as td:

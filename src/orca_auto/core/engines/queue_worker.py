@@ -27,7 +27,6 @@ class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
         worker_pid_file_name: str,
         max_concurrent: int | None = None,
         admission_root: str | Path | None = None,
-        auto_organize: bool = False,
         after_init: WorkerCallback | None = None,
         before_run: WorkerCallback | None = None,
         after_run: WorkerCallback | None = None,
@@ -40,7 +39,6 @@ class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
         check_cancel_requests: WorkerCallback | None = None,
     ) -> None:
         self.engine = engine
-        self.auto_organize = bool(auto_organize)
         self.admission_limit: int | None = None
         self._after_init_callback = after_init
         self._before_run_callback = before_run
@@ -144,7 +142,6 @@ def build_engine_queue_worker(
     hooks: Any,
     worker_pid_file_name: str,
     admission_root: str | Path,
-    auto_organize: bool = False,
     after_init: WorkerCallback | None = None,
     before_run: WorkerCallback | None = None,
     after_run: WorkerCallback | None = None,
@@ -165,7 +162,6 @@ def build_engine_queue_worker(
         hooks=hooks,
         worker_pid_file_name=worker_pid_file_name,
         admission_root=admission_root,
-        auto_organize=auto_organize,
         after_init=after_init,
         before_run=before_run,
         after_run=after_run,
@@ -190,7 +186,6 @@ def build_runtime_engine_queue_worker(
     hooks: Any,
     worker_pid_file_name: str,
     admission_root: str | Path,
-    auto_organize: bool = False,
     after_init: WorkerCallback | None = None,
     before_run: WorkerCallback | None = None,
     after_run: WorkerCallback | None = None,
@@ -222,7 +217,6 @@ def build_runtime_engine_queue_worker(
         hooks=hooks,
         worker_pid_file_name=worker_pid_file_name,
         admission_root=admission_root,
-        auto_organize=auto_organize,
         after_init=after_init,
         before_run=before_run,
         after_run=after_run,

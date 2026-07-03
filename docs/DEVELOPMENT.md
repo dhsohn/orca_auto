@@ -48,7 +48,6 @@ User-facing docs should standardize on these command forms:
 - `orca_auto run-dir <path>`
 - `orca_auto init`
 - `orca_auto scaffold <ts_search|conformer_search> <path>`
-- `orca_auto organize orca ...`
 - `orca_auto scan-notify`
 
 Long-running services are not part of the public CLI surface. Users should run
@@ -139,8 +138,8 @@ packages should expose an `EngineDefinition`; parent workers use
 `EngineQueueWorker`, and children use
 `python -m orca_auto.core.engines.worker_child --engine <orca|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`.
 
-ORCA-specific state, retry, input selection, reports, auto-organize behavior,
-and the downstream `reaction_dir` contract stay in `orca_auto.orca`. The
+ORCA-specific state, retry, input selection, reports, and the downstream
+`reaction_dir` contract stay in `orca_auto.orca`. The
 direct ORCA worker-job `--reaction-dir` mode is not supported.
 
 ## Related Docs

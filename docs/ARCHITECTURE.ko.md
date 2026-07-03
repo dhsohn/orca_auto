@@ -24,7 +24,7 @@ execution)** 입니다:
   내구성 있는 큐 항목을 기록하고 곧바로 반환합니다.
 - 외부에서 감독되는 장기 실행 **워커**(`systemd` 하에서)가 큐에 쌓인 작업을
   집어 실행합니다.
-- 작업별 상태, 리포트, 정리된 출력은 계산 디렉터리 옆 디스크에 기록됩니다.
+- 작업별 상태와 리포트는 계산 디렉터리 옆 디스크에 기록됩니다.
 
 ORCA는 가장 풍부한 재시도/리포팅/모니터링 표면을 가진 공개 1급 엔진입니다.
 **xTB**와 **CREST**는 런타임에 남아 있지만, 독립 공개 명령이 아니라 **워크플로우
@@ -54,13 +54,13 @@ src/orca_auto/
 │   └── utils/           # 락, 영속화, 프로세스 추적, 형 변환
 │
 ├── orca/                # 정규 ORCA 구현 (단일 진실 공급원)
-│   ├── commands/        # init, run_inp, queue, organize, monitor
+│   ├── commands/        # init, run_inp, queue, monitor
 │   ├── runtime/         # 실행 락
 │   ├── engine.py        # ORCA EngineDefinition 배선
 │   ├── attempt/         # 시도 엔진, 재시도, 재개, 리포팅
 │   ├── parser/          # ORCA 출력 파싱
 │   ├── state*.py        # 작업별 상태 머신 + 영속화
-│   └── ...              # 재시도 레시피, 완료 규칙, 정리, 인덱싱
+│   └── ...              # 재시도 레시피, 완료 규칙, 인덱싱
 │
 └── flow/                # 워크플로우 오케스트레이션 패키지
     ├── orchestration/   # advance_workflow 루프, 페이즈, 스테이지 런타임
@@ -131,7 +131,7 @@ src/orca_auto/
                                         ┌──────────────────────────────┐
                                         │  엔진 실행 + 라이프사이클       │
                                         │  파싱 → 분류 → 재시도 →        │
-                                        │  리포트 → 알림 → 정리          │
+                                        │  리포트 → 알림                 │
                                         └────────────────────────────────┘
 ```
 
@@ -198,7 +198,7 @@ python -m orca_auto.core.engines.worker_child \
 
 부모 워커(`EngineQueueWorker`)는 어드미션 슬롯을 예약하고 이 자식을 생성하며,
 자식이 종료된 후 최종 큐 결과를 확정합니다. ORCA는 더 풍부한 도메인 동작(상태
-머신, 재시도, 리포트, 자동 정리)을 `orca_auto.orca` 내부에 유지하지만, 그 주위의
+머신, 재시도, 리포트)을 `orca_auto.orca` 내부에 유지하지만, 그 주위의
 *라이프사이클 골격*은 공유됩니다.
 
 ---
@@ -266,9 +266,9 @@ python -m orca_auto.core.engines.worker_child \
   생성합니다 — scan 에너지 프로파일(ScanTS 및 일반 relaxed scan) 또는 최적화
   수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동 요약을 담은 단일 파일 시각
   리포트입니다.
-- **정리 & 인덱스:** `result_organizer/`가 완료 출력을 정리 루트로 이동하고
-  원본 디렉터리에 `organized_ref.json` 스텁을 남깁니다. `dft_index*.py`와
-  `organize_index.py`가 탐색용 JSONL 인덱스를 유지합니다.
+- **인덱스:** `dft_index*.py`와 `core/indexing`이 탐색용 JSONL 작업 위치
+  인덱스를 유지합니다. 제거된 `organize` 명령이 남긴 레거시
+  `organized_ref.json` 스텁은 조회 시 계속 읽습니다.
 
 ORCA가 다운스트림에 노출하는 필드("계약 동결")는
 [REFERENCE.md](REFERENCE.md) §11.1에 문서화되어 있습니다 —
@@ -343,7 +343,7 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 | 어드미션 슬롯 파일          | core/admission   | 활성 동시성 슬롯 (머신 전역)            |
 | `job_state.json`            | orca (state)     | 작업별 시도 + 상태                       |
 | `job_report.json` / `.md`   | orca (reporting) | 사람/기계용 완료 리포트                  |
-| `organized_ref.json`        | orca (organize)  | 출력 정리 후 남는 스텁                    |
+| `organized_ref.json`        | orca (레거시)    | 제거된 organize 명령이 남긴 스텁          |
 | 작업 위치 인덱스 (JSONL)    | core/indexing    | 각 작업 출력의 현재 위치                 |
 | `workflow.json`             | flow             | 내구성 워크플로우 페이로드               |
 | `workflow_report.html`      | flow (report)    | 실시간 갱신 워크플로우 시각 요약         |
@@ -425,7 +425,6 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 - `run-dir <path>` — 내구성 제출 (ORCA 또는 워크플로우, 자동 라우팅)
 - `queue list` / `queue cancel` / `queue list clear` — 큐 점검/유지보수
 - `service status` / `service restart` — 런타임 상태 (systemd 경유)
-- `organize orca ...` — 완료된 ORCA 출력 정리
 - `scan-notify` — 일회성 탐색 스캔 + 텔레그램 알림
 - `systemd install` — 유닛 렌더링 및 활성화
 

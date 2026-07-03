@@ -17,8 +17,8 @@ from orca_auto.core.indexing import engines as _engine_locations
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
 from ..config import AppConfig
+from ..job_type import detect_job_type
 from ..molecule_key import resolve_molecule_key
-from ..result_organizer.planning import detect_job_type
 from ..state import load_organized_ref, load_report_json, state_path
 from ._utils import (
     TERMINAL_STATUSES,

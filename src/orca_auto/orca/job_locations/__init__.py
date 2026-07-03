@@ -17,8 +17,8 @@ from orca_auto.core.paths import (
 )
 
 from ..config import AppConfig
+from ..job_type import detect_job_type
 from ..molecule_key import resolve_molecule_key
-from ..result_organizer.planning import detect_job_type
 from ..state import (
     REPORT_JSON_NAME,
     REPORT_MD_NAME,

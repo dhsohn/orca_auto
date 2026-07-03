@@ -37,7 +37,7 @@ def test_worker_module_command_without_repo_root_uses_module_execution() -> None
         config_path="/tmp/config.yaml",
         repo_root=None,
         module_name="orca_auto.orca.commands.queue",
-        tail_argv=["--no-auto-organize"],
+        tail_argv=["--engine", "orca"],
     )
 
     assert argv == [
@@ -46,7 +46,8 @@ def test_worker_module_command_without_repo_root_uses_module_execution() -> None
         "orca_auto.orca.commands.queue",
         "--config",
         "/tmp/config.yaml",
-        "--no-auto-organize",
+        "--engine",
+        "orca",
     ]
     assert cwd is None
     assert env is None

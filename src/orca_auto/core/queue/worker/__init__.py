@@ -34,7 +34,6 @@ from .admission import (
     reserve_queue_worker_slot,
     resolve_admission_limit,
     resolve_admission_root,
-    resolve_worker_auto_organize,
 )
 from .loop import (
     QueueWorkerLoop,
@@ -90,7 +89,6 @@ __all__ = [
     "reserve_queue_worker_slot",
     "resolve_admission_limit",
     "resolve_admission_root",
-    "resolve_worker_auto_organize",
     "shutdown_child_process_with_grace",
     "signal",
     "start_background_process",

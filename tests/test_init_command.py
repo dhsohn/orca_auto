@@ -338,9 +338,6 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
             "max_cores_per_task": 8,
             "max_memory_gb_per_task": 32,
         },
-        "behavior": {
-            "auto_organize_on_terminal": False,
-        },
         "scheduler": {
             "max_active_simulations": 4,
         },

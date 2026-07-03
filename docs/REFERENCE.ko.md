@@ -41,8 +41,8 @@ CLI를 표준화하고, 더 깊은 ORCA 런타임 동작을 한곳에 문서화�
 - ORCA 워커는 큐 정체성(`--queue-root/--queue-id`)으로 큐 자식을 시작하고, 그 자식이
   현재 큐 항목을 해석한 뒤 공유 `InternalEngineWorkerAdapter` 라이프사이클을 통해
   실행합니다.
-- ORCA 상태, 재시도, 리포트, 알림, 자동 정리 동작은 ORCA 도메인 동작으로 남아
-  있습니다. 자식이 종료된 뒤에도 부모 큐 종료 처리가 최종 큐 결과를 기록합니다.
+- ORCA 상태, 재시도, 리포트, 알림 동작은 ORCA 도메인 동작으로 남아 있습니다.
+  자식이 종료된 뒤에도 부모 큐 종료 처리가 최종 큐 결과를 기록합니다.
 - WSL에서는 권장 감독자가 `systemd`입니다.
 
 운영상 결과:
@@ -107,7 +107,6 @@ bash scripts/bootstrap_wsl.sh
 - `run-dir <path>`
 - `init`
 - `scaffold <ts_search|conformer_search>`
-- `organize orca`
 - `scan-notify`
 
 먼저 `.venv`를 활성화하거나, `.venv/bin/orca_auto ...`를 직접 호출하세요.
@@ -129,10 +128,6 @@ bash scripts/bootstrap_wsl.sh
 resources:
   max_cores_per_task: 8
   max_memory_gb_per_task: 32
-
-behavior:
-  # ORCA 전용. 내부 xTB/CREST 단계는 정리하지 않습니다.
-  auto_organize_on_terminal: false
 
 scheduler:
   max_active_simulations: 4
@@ -357,21 +352,7 @@ ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 자식 작업은 잡음을 
   초과하면 메시지가 표시된 개수를 안내하며, 취소나 정리를 실행하면 목록이 자동으로
   새로고침됩니다.
 
-### 7.6 `organize`
-
-```bash
-orca_auto organize orca --root '/absolute/path/to/orca_runs'
-orca_auto organize orca --root '/absolute/path/to/orca_runs' --apply
-```
-
-옵션:
-
-- `organize orca --reaction-dir <dir>`: ORCA 작업 디렉터리 하나를 정리
-- `organize orca --root <dir>`: 설정된 ORCA 루트부터 스캔
-- `organize orca --rebuild-index`: ORCA JSONL 인덱스 재구축
-- `--apply`: 실제 이동 수행. 없으면 명령은 드라이런(dry run)
-
-### 7.7 `scan-notify`
+### 7.6 `scan-notify`
 
 ```bash
 orca_auto scan-notify
@@ -382,7 +363,7 @@ orca_auto scan-notify
 - `scan-notify`는 설정된 ORCA 루트를 일회성으로 스캔해 Telegram 발견 알림을 보낸 뒤
   종료합니다. 실시간 모니터가 아닙니다.
 
-### 7.8 장기 실행 서비스
+### 7.7 장기 실행 서비스
 
 장기 실행 워커와 Telegram 봇 프로세스는 오직 `systemd`로만 관리됩니다. 공개 CLI 명령은
 그 서비스들을 직접 시작하지 않습니다.

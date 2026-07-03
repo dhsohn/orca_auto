@@ -56,8 +56,6 @@ def _write_shared_config(
             resources:
               max_cores_per_task: 2
               max_memory_gb_per_task: 2
-            behavior:
-              auto_organize_on_terminal: false
             telegram:
               bot_token: ""
               chat_id: ""

@@ -353,7 +353,6 @@ def _process_reaction_orca_queue(case: ReactionWorkflowSmokeCase) -> None:
         cfg,
         str(case.config_path),
         max_concurrent=1,
-        auto_organize=False,
     )
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0

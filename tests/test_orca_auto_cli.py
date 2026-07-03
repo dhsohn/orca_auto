@@ -168,24 +168,13 @@ def test_run_dir_parser_rejects_internal_workflow_options(removed_option: str) -
         parser.parse_args(["run-dir", "/tmp/workflow-inputs", removed_option, "value"])
 
 
-def test_build_parser_parses_unified_init_scaffold_organize_and_scan_notify_commands() -> None:
+def test_build_parser_parses_unified_init_scaffold_and_scan_notify_commands() -> None:
     parser = unified_cli.build_parser()
 
     init_args = parser.parse_args(["init", "--orca_auto-config", "/tmp/orca_auto.yaml", "--force"])
     ts_scaffold_args = parser.parse_args(["scaffold", "ts_search", "/tmp/workflow-inputs"])
     shortcut_scaffold_args = parser.parse_args(
         ["scaffold", "conformer_search", "/tmp/conformer-inputs"]
-    )
-    organize_args = parser.parse_args(
-        [
-            "organize",
-            "orca",
-            "--orca_auto-config",
-            "/tmp/orca_auto.yaml",
-            "--reaction-dir",
-            "/tmp/rxn",
-            "--apply",
-        ]
     )
     monitor_args = parser.parse_args(["scan-notify", "--orca_auto-config", "/tmp/orca_auto.yaml"])
 
@@ -206,12 +195,6 @@ def test_build_parser_parses_unified_init_scaffold_organize_and_scan_notify_comm
     assert shortcut_scaffold_args.workflow_type == "conformer_screening"
     assert getattr(shortcut_scaffold_args, "crest_mode", None) is None
     assert shortcut_scaffold_args.func is cli_run_dir.cmd_workflow_scaffold
-
-    assert organize_args.command == "organize"
-    assert organize_args.organize_app == "orca"
-    assert organize_args.reaction_dir == "/tmp/rxn"
-    assert organize_args.apply is True
-    assert organize_args.func is cli_run_dir.cmd_orca_organize
 
     assert monitor_args.command == "scan-notify"
     assert monitor_args.config == "/tmp/orca_auto.yaml"
@@ -341,20 +324,6 @@ def test_classify_existing_orca_worker_distinguishes_orca_auto_and_unknown(
                 "workflow_type": "conformer_screening",
             },
             24,
-        ),
-        (
-            [
-                "organize",
-                "orca",
-                "--orca_auto-config",
-                "/tmp/orca_auto.yaml",
-                "--root",
-                "/tmp/jobs",
-                "--apply",
-            ],
-            "cmd_orca_organize",
-            {"command": "organize", "organize_app": "orca", "root": "/tmp/jobs", "apply": True},
-            25,
         ),
         (
             ["scan-notify", "--orca_auto-config", "/tmp/orca_auto.yaml"],
