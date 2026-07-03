@@ -19,6 +19,7 @@ from orca_auto.flow.orchestration.deps import (
 from orca_auto.flow.orchestration.workflow_cancellation import (
     cancel_materialized_workflow,
 )
+from orca_auto.flow.workflow.report import write_workflow_html_report
 
 
 def advance_workflow(
@@ -63,6 +64,7 @@ def advance_workflow(
         _finalize_advanced_workflow(payload, context, config)
         o.persistence.write_workflow_payload(workspace_dir, payload)
         o.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
+        write_workflow_html_report(workspace_dir, payload)
         return payload
 
 
