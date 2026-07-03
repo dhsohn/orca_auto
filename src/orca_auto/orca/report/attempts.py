@@ -39,8 +39,6 @@ def attempt_role(creating_actions: Sequence[str]) -> tuple[str, str]:
     """(label, direction) for the attempt created by ``creating_actions``."""
     if any(action.startswith("scants_fallback_to_optts") for action in creating_actions):
         return "OptTS fallback (scan maximum)", "forward"
-    if any(action.startswith("relaxed_scan_optts_chain") for action in creating_actions):
-        return "OptTS chain (scan maximum)", "forward"
     if any(action.startswith("scants_reverse_scan") for action in creating_actions):
         return "reverse ScanTS", "reverse"
     if any(action.startswith("scants_endpoint_scan") for action in creating_actions):

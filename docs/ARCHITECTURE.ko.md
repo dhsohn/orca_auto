@@ -251,10 +251,7 @@ python -m orca_auto.core.engines.worker_child \
   ScanTS 전용 continuation, endpoint-completion, reverse-scan 로직만 사용합니다.
   scan이 maximum을 포착한 뒤 ORCA의 TS-guess refinement가 지오메트리를
   망가뜨리면(zero distance), 일반 체인을 재개하기 전에 최고 에너지 surface
-  point에서 OptTS 재시도를 1회 수행합니다. 일반 relaxed scan(`Opt` +
-  `%geom Scan`)은 완료된 프로파일에 장벽이 있으면 내부 maximum에서
-  OptTS+Freq 시도를 1회 자동 체인합니다 — ScanTS 래퍼 없이 표준
-  scan-후-OptTS 워크플로우를 자동화한 것입니다.
+  point에서 OptTS 재시도를 1회 수행합니다.
   maximum이 계획된 scan endpoint 전에 나타나면 ORCA가 먼저 일반 relaxed scan으로
   endpoint를 완료합니다(`ScanTS` -> `Opt`, `Freq`/`IRC` 제거). 그 다음 실제
   endpoint xyz에서 역방향 `ScanTS`를 시작합니다. 중간 단계인 endpoint 완료는
