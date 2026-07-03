@@ -482,7 +482,11 @@ def render_workflow_report_html(data: WorkflowReportData) -> str:
 
     sections: list[tuple[str, str]] = [("Stage chain", _stage_table_html(data))]
     chart = _energy_chart_svg(data)
-    orca_heading = "TS candidates" if data.template_name == "reaction_ts_search" else "ORCA results"
+    orca_heading = (
+        "TS candidates"
+        if data.template_name in ("reaction_ts_search", "scan_ts_search")
+        else "ORCA results"
+    )
     sections.append((orca_heading, _orca_table_html(data)))
     if chart:
         sections.append(("Relative energies", chart))
