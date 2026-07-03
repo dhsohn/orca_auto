@@ -144,7 +144,7 @@ def test_write_workflow_html_report_renders_sections(tmp_path: Path) -> None:
         tmp_path,
         [
             _orca_stage("orca_optts_freq_01", stage_a, status="completed", label="ts_guess_a"),
-            _orca_stage("orca_optts_freq_02", stage_b, status="failed", label="ts_guess_b"),
+            _orca_stage("orca_optts_freq_02", stage_b, status="completed", label="ts_guess_b"),
         ],
     )
     payload["template_name"] = "reaction_ts_search"
@@ -160,6 +160,27 @@ def test_write_workflow_html_report_renders_sections(tmp_path: Path) -> None:
     assert 'href="orca_b' in text
     assert "<polyline" in text
     assert "total wall time" in text
+
+
+def test_failed_stage_energy_excluded_from_ranking_baseline(tmp_path: Path) -> None:
+    # The failed stage's .engrad holds a lower transient energy; it must not
+    # become the ΔE reference nor outrank the completed candidate.
+    stage_a = _orca_stage_dir(tmp_path, "orca_a", energy=-100.001, reason="normal_termination")
+    stage_b = _orca_stage_dir(tmp_path, "orca_b", energy=-100.005, reason="geometry_zero_distance")
+    payload = _payload(
+        tmp_path,
+        [
+            _orca_stage("orca_conformer_01", stage_a, status="completed", label="conf_ok"),
+            _orca_stage("orca_conformer_02", stage_b, status="failed", label="conf_failed"),
+        ],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert [entry.label for entry in data.orca_results] == ["conf_ok", "conf_failed"]
+    assert data.orca_results[0].rel_kcal == pytest.approx(0.0)
+    assert data.orca_results[1].rel_kcal is None
+    assert data.orca_results[1].energy == pytest.approx(-100.005)
 
 
 def test_write_workflow_html_report_handles_empty_payload(tmp_path: Path) -> None:

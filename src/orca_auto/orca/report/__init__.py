@@ -52,12 +52,20 @@ def _render_job_report(reaction_dir: Path, state: Mapping[str, Any]) -> str | No
 
 
 def write_job_html_report(reaction_dir: Path, state: Mapping[str, Any]) -> Path | None:
-    """Write ``job_report.html``; ``None`` when the job type has no HTML report."""
+    """Write ``job_report.html``; ``None`` when the job type has no HTML report.
+
+    When the current job type has no HTML report, any ``job_report.html`` left
+    over from a previous job in a reused reaction dir is removed so downstream
+    links (e.g. the workflow report) cannot surface an obsolete report. The
+    exception path deliberately does NOT remove it: a transient parse error
+    must not destroy the last valid report.
+    """
+    path = reaction_dir / RUN_REPORT_HTML_FILE
     try:
         rendered = _render_job_report(reaction_dir, state)
         if rendered is None:
+            path.unlink(missing_ok=True)
             return None
-        path = reaction_dir / RUN_REPORT_HTML_FILE
         atomic_write_text(path, rendered)
         return path
     except Exception:  # noqa: BLE001

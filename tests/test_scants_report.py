@@ -240,13 +240,19 @@ def test_write_report_files_includes_html_for_scants(tmp_path: Path) -> None:
     assert (tmp_path / "job_report.md").exists()
 
 
-def test_write_report_files_skips_html_for_single_point(tmp_path: Path) -> None:
+def test_write_report_files_skips_html_and_removes_stale_for_single_point(
+    tmp_path: Path,
+) -> None:
     inp = tmp_path / "rxn.inp"
     inp.write_text("! B3LYP def2-SVP TightSCF\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     out_path = tmp_path / "rxn.out"
     _write_ts_out(out_path)
+    # Leftover report from a previous Opt/ScanTS job in this reused reaction dir
+    # must not survive, or downstream links would surface an obsolete report.
+    stale = tmp_path / "job_report.html"
+    stale.write_text("<html>old opt report</html>", encoding="utf-8")
 
     reports = write_report_files(tmp_path, _state(tmp_path, out_path))
 
     assert "report_html" not in reports
-    assert not (tmp_path / "job_report.html").exists()
+    assert not stale.exists()

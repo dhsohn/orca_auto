@@ -15,7 +15,7 @@ import json
 import logging
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -265,27 +265,34 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
 
 
 def _with_relative_energies(results: list[OrcaStageResult]) -> tuple[OrcaStageResult, ...]:
-    energies = [entry.energy for entry in results if entry.energy is not None]
-    if not energies:
+    """Rank results by energy with completed stages first.
+
+    Only completed stages enter the ΔE baseline and carry a ``rel_kcal``: a
+    failed or cancelled stage's ``.engrad`` holds a transient (non-stationary)
+    energy, which must not become the reference point nor rank as if it were a
+    valid candidate. Their raw energy still shows in the table.
+    """
+    completed_energies = [
+        entry.energy
+        for entry in results
+        if entry.energy is not None and entry.status == "completed"
+    ]
+    if not completed_energies:
         return tuple(results)
-    best = min(energies)
+    best = min(completed_energies)
     ranked = [
         entry
-        if entry.energy is None
-        else OrcaStageResult(
-            stage_id=entry.stage_id,
-            label=entry.label,
-            status=entry.status,
-            reason=entry.reason,
-            energy=entry.energy,
-            rel_kcal=(entry.energy - best) * KCAL_PER_HARTREE,
-            imaginary_count=entry.imaginary_count,
-            attempt_count=entry.attempt_count,
-            report_href=entry.report_href,
-        )
+        if entry.energy is None or entry.status != "completed"
+        else replace(entry, rel_kcal=(entry.energy - best) * KCAL_PER_HARTREE)
         for entry in results
     ]
-    ranked.sort(key=lambda entry: (entry.energy is None, entry.energy or 0.0))
+    ranked.sort(
+        key=lambda entry: (
+            entry.status != "completed",
+            entry.energy is None,
+            entry.energy or 0.0,
+        )
+    )
     return tuple(ranked)
 
 
