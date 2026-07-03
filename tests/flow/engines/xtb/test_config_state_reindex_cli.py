@@ -191,18 +191,13 @@ def test_state_helpers_write_and_load_round_trip(
         selected_input="input.xyz",
     )
     report_lines_path = state_mod.write_report_md_lines(job_dir, ["# heading", "", "- done"])
-    organized_ref_path = state_mod.write_organized_ref(
-        job_dir, {"organized_output_dir": "/tmp/out"}
-    )
 
     assert state_path == job_dir / state_mod.STATE_FILE_NAME
     assert report_json_path == job_dir / state_mod.REPORT_JSON_FILE_NAME
     assert report_md_path == job_dir / state_mod.REPORT_MD_FILE_NAME
     assert report_lines_path == job_dir / state_mod.REPORT_MD_FILE_NAME
-    assert organized_ref_path == job_dir / state_mod.ORGANIZED_REF_FILE_NAME
     assert state_mod.load_state(job_dir) == {"status": "queued"}
     assert state_mod.load_report_json(job_dir) == {"status": "completed"}
-    assert state_mod.load_organized_ref(job_dir) == {"organized_output_dir": "/tmp/out"}
     assert (job_dir / state_mod.REPORT_MD_FILE_NAME).read_text(
         encoding="utf-8"
     ) == "# heading\n\n- done\n"

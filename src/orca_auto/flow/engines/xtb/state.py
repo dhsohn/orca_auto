@@ -39,7 +39,6 @@ _RECOVERY_RETAINED_FIELDS = _engine_state.RecoveryRetainedFieldsSpec(
 write_state = _STATE_EXPORTS.write_state
 write_report_json = _STATE_EXPORTS.write_report_json
 write_report_md_lines = _STATE_EXPORTS.write_report_md_lines
-write_organized_ref = _STATE_EXPORTS.write_organized_ref
 load_state = _STATE_EXPORTS.load_state
 load_report_json = _STATE_EXPORTS.load_report_json
 load_organized_ref = _STATE_EXPORTS.load_organized_ref

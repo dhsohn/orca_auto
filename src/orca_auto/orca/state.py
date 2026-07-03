@@ -275,9 +275,3 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
     if html_path is not None:
         reports["report_html"] = str(html_path)
     return reports
-
-
-def write_organized_ref(reaction_dir: Path, payload: dict[str, Any]) -> Path:
-    path = organized_ref_path(reaction_dir)
-    atomic_write_json(path, payload, ensure_ascii=True, indent=2)
-    return path

@@ -290,12 +290,6 @@ def test_load_config_requires_workflow_root(tmp_path: Path) -> None:
             state_mod.REPORT_JSON_FILE_NAME,
             id="report-json",
         ),
-        pytest.param(
-            state_mod.write_organized_ref,
-            state_mod.load_organized_ref,
-            state_mod.ORGANIZED_REF_FILE_NAME,
-            id="organized-ref",
-        ),
     ],
 )
 def test_json_state_helpers_round_trip(

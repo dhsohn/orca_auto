@@ -68,9 +68,6 @@ class EngineStateFiles:
     def write_report_md_lines(self, job_dir: Path, lines: list[str]) -> Path:
         return write_text_artifact(job_dir, self.report_md_file_name, lines)
 
-    def write_organized_ref(self, job_dir: Path, payload: dict[str, Any]) -> Path:
-        return write_json_artifact(job_dir, self.organized_ref_file_name, payload)
-
     def load_state(self, job_dir: Path) -> dict[str, Any] | None:
         return load_json_mapping_artifact(job_dir, self.state_file_name)
 
@@ -116,9 +113,6 @@ class EngineStateAccess:
 
     def write_report_md_lines(self, job_dir: Path, lines: list[str]) -> Path:
         return self.files.write_report_md_lines(job_dir, lines)
-
-    def write_organized_ref(self, job_dir: Path, payload: dict[str, Any]) -> Path:
-        return self.files.write_organized_ref(job_dir, payload)
 
     def load_state(self, job_dir: Path) -> dict[str, Any] | None:
         return self.files.load_state(job_dir)
@@ -449,7 +443,6 @@ class EngineStateModuleExports:
     write_state: Callable[[Path, dict[str, Any]], Path]
     write_report_json: Callable[[Path, dict[str, Any]], Path]
     write_report_md_lines: Callable[[Path, list[str]], Path]
-    write_organized_ref: Callable[[Path, dict[str, Any]], Path]
     load_state: Callable[[Path], dict[str, Any] | None]
     load_report_json: Callable[[Path], dict[str, Any] | None]
     load_organized_ref: Callable[[Path], dict[str, Any] | None]
@@ -475,7 +468,6 @@ def engine_state_module_exports(bindings: EngineStateBindings) -> EngineStateMod
         write_state=access.write_state,
         write_report_json=access.write_report_json,
         write_report_md_lines=access.write_report_md_lines,
-        write_organized_ref=access.write_organized_ref,
         load_state=access.load_state,
         load_report_json=access.load_report_json,
         load_organized_ref=access.load_organized_ref,
