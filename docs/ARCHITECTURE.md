@@ -256,7 +256,10 @@ logic. Notable pieces:
   endpoint-completion, and reverse-scan logic from scan artifacts. When ORCA's
   TS-guess refinement corrupts the geometry (zero distance) after the scan
   bracketed a maximum, one OptTS retry runs directly from the highest surface
-  point before the ordinary chain resumes. If a maximum
+  point before the ordinary chain resumes. Plain relaxed scans (`Opt` +
+  `%geom Scan`) chain one OptTS+Freq attempt from the interior maximum when
+  the completed profile carries a barrier, automating the standard
+  scan-then-OptTS workflow without the ScanTS wrapper. If a maximum
   appears before the planned scan endpoint, ORCA first completes that endpoint
   with an ordinary relaxed scan (`ScanTS` -> `Opt`, no `Freq`/`IRC`), then starts
   the reverse `ScanTS` from the real endpoint xyz. The intermediate endpoint

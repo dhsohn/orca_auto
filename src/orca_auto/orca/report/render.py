@@ -27,6 +27,10 @@ REASON_NOTES = {
         "Every ScanTS retry recipe (continuation, endpoint completion, reverse scan) "
         "was used without meeting the TS criteria."
     ),
+    "relaxed_scan_recipes_exhausted": (
+        "The relaxed scan has no further automatic recipes: either the scan attempt "
+        "failed, or the OptTS chain from the interior maximum did not verify a TS."
+    ),
     "geometry_zero_distance": (
         "ORCA aborted after constructing a geometry with two atoms at zero distance; "
         "this typically happens inside the post-scan TS refinement."

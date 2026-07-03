@@ -18,6 +18,8 @@ from .input_blocks import (
 from .resource_directives import clamp_maxcore_to_budget
 
 SCANTS_ROUTE_RE = re.compile(r"\bSCANTS\b", re.IGNORECASE)
+_OPT_ROUTE_RE = re.compile(r"\bOPT\b", re.IGNORECASE)
+_FREQ_ROUTE_TOKENS = {"FREQ", "NUMFREQ", "ANFREQ"}
 # Interior scan-profile maxima below this prominence are endpoint/vdW noise, not
 # a barrier a reverse ScanTS could locate.
 SCANTS_BARRIER_NOISE_KCAL = 0.5
@@ -67,6 +69,20 @@ def input_uses_scants(inp_path: Path) -> bool:
     return bool(_first_scants_route_line(inp_path))
 
 
+def input_uses_relaxed_scan(inp_path: Path) -> bool:
+    """True for a plain relaxed scan: an ``Opt`` route with a ``%geom Scan`` block.
+
+    ScanTS inputs are excluded — they have their own recipe chain. Uses the
+    same whole-file route scan as ``input_uses_scants`` so the retry policy
+    and the chain preparers can never disagree about an input's kind.
+    """
+    if input_uses_scants(inp_path):
+        return False
+    if not any(_OPT_ROUTE_RE.search(line) for line in file_route_lines(inp_path)):
+        return False
+    return first_scan_coordinate_spec(inp_path) is not None
+
+
 def parse_scants_actual_surface(out_path: Path) -> list[ScanTSSurfacePoint]:
     points: list[ScanTSSurfacePoint] = []
     in_actual_surface = False
@@ -103,26 +119,54 @@ def highest_scants_surface_point(out_path: Path) -> ScanTSSurfacePoint | None:
     return max(points, key=lambda point: (point.energy, -point.index))
 
 
-def scan_profile_interior_barrier_kcal(energies: Sequence[float]) -> float | None:
-    """Prominence in kcal/mol of the highest interior maximum along a scan profile.
+def _interior_barrier_prominence(energies: Sequence[float]) -> tuple[float, int] | None:
+    """(prominence in kcal/mol, list index) of the most prominent interior point.
 
     Prominence is the smaller of the climbs from the lowest energy on either
-    side of a point, so a profile that is monotonic up to noise scores ~0 while
-    a genuine barrier scores its height above the shallower flank. ``None``
-    when fewer than three points exist (no interior point to judge).
+    side of a point. ``None`` when fewer than three points exist.
     """
     if len(energies) < 3:
         return None
     suffix_min = list(energies)
     for idx in range(len(suffix_min) - 2, -1, -1):
         suffix_min[idx] = min(suffix_min[idx], suffix_min[idx + 1])
-    best = 0.0
+    best = float("-inf")
+    best_idx = 1
     prefix_min = energies[0]
     for idx in range(1, len(energies) - 1):
         prominence = min(energies[idx] - prefix_min, energies[idx] - suffix_min[idx + 1])
-        best = max(best, prominence)
+        if prominence > best:
+            best = prominence
+            best_idx = idx
         prefix_min = min(prefix_min, energies[idx])
-    return best * _KCAL_PER_HARTREE
+    return max(best, 0.0) * _KCAL_PER_HARTREE, best_idx
+
+
+def scan_profile_interior_barrier_kcal(energies: Sequence[float]) -> float | None:
+    """Prominence in kcal/mol of the highest interior maximum along a scan profile.
+
+    A profile that is monotonic up to noise scores ~0 while a genuine barrier
+    scores its height above the shallower flank. ``None`` when fewer than
+    three points exist (no interior point to judge).
+    """
+    result = _interior_barrier_prominence(energies)
+    return None if result is None else result[0]
+
+
+def relaxed_scan_interior_maximum_xyz(source_inp: Path, out_path: Path) -> Path | None:
+    """Numbered xyz of the scan's most prominent INTERIOR maximum.
+
+    Deliberately not the global surface maximum: in a profile like
+    low -> interior barrier -> well -> higher endpoint, the OptTS chain must
+    start from the interior barrier it detected, not the endpoint.
+    """
+    points = parse_scants_actual_surface(out_path)
+    result = _interior_barrier_prominence([point.energy for point in points])
+    if result is None:
+        return None
+    _, list_idx = result
+    candidate = source_inp.with_name(f"{source_inp.stem}.{points[list_idx].index:03d}.xyz")
+    return candidate if nonempty_file(candidate) else None
 
 
 def first_scan_coordinate_spec(inp_path: Path) -> ScanCoordinateSpec | None:
@@ -837,6 +881,76 @@ def prepare_scants_reverse_scan_retry_input(
     if not reverse_actions:
         return None, []
     actions.extend(reverse_actions)
+    return _write_prepared_input(
+        lines, target_inp=target_inp, actions=actions, max_memory_gb=max_memory_gb
+    )
+
+
+def _replace_opt_route_with_optts_freq(lines: list[str]) -> list[str]:
+    route_idx = None
+    for idx in route_line_indices(lines):
+        if _OPT_ROUTE_RE.search(lines[idx]):
+            route_idx = idx
+            break
+    if route_idx is None:
+        return []
+    all_route_tokens = {
+        token.upper()
+        for idx in route_line_indices(lines)
+        for token in lines[idx].strip()[1:].split()
+    }
+    has_freq = bool(all_route_tokens & _FREQ_ROUTE_TOKENS)
+
+    tokens = lines[route_idx].strip()[1:].split()
+    rewritten: list[str] = []
+    replaced = False
+    for token in tokens:
+        if token.upper() == "OPT":
+            if not replaced:
+                rewritten.append("OptTS")
+                replaced = True
+            continue
+        rewritten.append(token)
+    actions = ["relaxed_scan_route_to_optts"]
+    if not has_freq:
+        rewritten.append("Freq")
+        actions.append("relaxed_scan_freq_added")
+    lines[route_idx] = "! " + " ".join(rewritten)
+    return actions
+
+
+def prepare_relaxed_scan_optts_chain_input(
+    *,
+    source_inp: Path,
+    target_inp: Path,
+    out_path: Path,
+    max_memory_gb: int | None = None,
+) -> tuple[Path | None, list[str]]:
+    """Chain OptTS(+Freq) from the interior maximum of a completed relaxed scan.
+
+    Automates the standard manual TS workflow (relaxed scan, then OptTS from
+    the maximum, then frequency verification) without going through ORCA's
+    ScanTS wrapper: ``Opt`` -> ``OptTS`` on the route (``Freq`` added when
+    missing), scan block removed, geometry from the highest surface point.
+    """
+    if not input_uses_relaxed_scan(source_inp):
+        return None, []
+    guess_xyz = relaxed_scan_interior_maximum_xyz(source_inp, out_path)
+    if guess_xyz is None:
+        return None, []
+
+    lines = source_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
+    actions = ["relaxed_scan_optts_chain"]
+    actions.extend(_remove_checkpoint_restart_directives(lines))
+    route_actions = _replace_opt_route_with_optts_freq(lines)
+    if not route_actions:
+        return None, []
+    actions.extend(route_actions)
+    if _remove_geom_scan_subblock(lines):
+        actions.append("scants_scan_block_removed")
+    if not replace_geometry_with_xyzfile(lines, guess_xyz, target_inp.parent):
+        return None, []
+    actions.append(f"relaxed_scan_guess_from_{guess_xyz.name}")
     return _write_prepared_input(
         lines, target_inp=target_inp, actions=actions, max_memory_gb=max_memory_gb
     )
