@@ -82,7 +82,13 @@ def dequeue_next_across_roots(
     list_queue_fn: Callable[[Path], list[T]],
     dequeue_next_fn: Callable[[Path], T | None],
     dequeue_entry_fn: Callable[[Path, str], T | None] | None = None,
+    accept_entry_fn: Callable[[T], bool] | None = None,
 ) -> tuple[Path, T] | None:
+    # Single-root workers pop directly. With one runs root, an internal-engine
+    # worker only reaches this fast path when no workflow stage queues exist yet
+    # (otherwise it has several roots and takes the filtered selection path
+    # below). The app filter is applied there, where a shared runs root actually
+    # exposes another engine's entries.
     if len(roots) == 1:
         entry = dequeue_next_fn(roots[0])
         if entry is None:
@@ -98,6 +104,8 @@ def dequeue_next_across_roots(
             status_value = getattr(getattr(entry, "status", None), "value", None)
             status = str(status_value).strip().lower()
             if status != "pending" or getattr(entry, "cancel_requested", False):
+                continue
+            if accept_entry_fn is not None and not accept_entry_fn(entry):
                 continue
             key = (
                 int(getattr(entry, "priority", 10) or 10),

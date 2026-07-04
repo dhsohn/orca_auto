@@ -159,7 +159,7 @@ def make_entry(
     *,
     queue_id: str = "queue-1",
     job_id: str = "job-1",
-    app_name: str = "orca_auto",
+    app_name: str = "orca_auto_xtb",
     job_type: str = "path_search",
     reaction_key: str = "reaction-1",
     input_summary: dict[str, object] | None = None,

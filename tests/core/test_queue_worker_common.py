@@ -194,6 +194,44 @@ def test_dequeue_next_across_roots_selects_best_pending_entry(tmp_path: Path) ->
     assert result == (second, queues[second][0])
 
 
+def test_dequeue_next_across_roots_accept_entry_fn_skips_other_engine_entries(
+    tmp_path: Path,
+) -> None:
+    # After the single-runs-root collapse, an internal-engine worker's queue
+    # roots include the standalone ORCA queue alongside its workflow stage
+    # queues. Without an app filter the cross-root selection would claim the
+    # higher-priority ORCA job (first root) and mis-run it as CREST; the
+    # accept_entry_fn must skip it and pick this engine's own entry.
+    orca_root = tmp_path / "orca_runs"
+    crest_root = tmp_path / "orca_runs" / "wf_x" / "01_crest"
+    orca_entry = _entry("q_orca", priority=1)
+    orca_entry.app_name = "orca_auto_orca"
+    crest_entry = _entry("q_crest", priority=9)
+    crest_entry.app_name = "orca_auto_crest"
+    queues = {orca_root: [orca_entry], crest_root: [crest_entry]}
+
+    result = worker_common.dequeue_next_across_roots(
+        (orca_root, crest_root),
+        list_queue_fn=lambda root: queues[root],
+        dequeue_next_fn=lambda root: queues[root][0],
+        accept_entry_fn=lambda entry: getattr(entry, "app_name", "") == "orca_auto_crest",
+    )
+
+    assert result == (crest_root, crest_entry)
+
+    # Unlabeled entries stay claimable (malformed/legacy rows are not stranded).
+    unlabeled = _entry("q_bare", priority=1)
+    assert (
+        worker_common.dequeue_next_across_roots(
+            (orca_root, crest_root),
+            list_queue_fn=lambda root: {orca_root: [unlabeled], crest_root: []}.get(root, []),
+            dequeue_next_fn=lambda root: unlabeled,
+            accept_entry_fn=lambda entry: getattr(entry, "app_name", "") in ("", "orca_auto_crest"),
+        )
+        == (orca_root, unlabeled)
+    )
+
+
 def test_dequeue_next_across_roots_dequeues_selected_queue_id(tmp_path: Path) -> None:
     first = tmp_path / "first"
     second = tmp_path / "second"

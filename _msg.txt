@@ -1,0 +1,29 @@
+Stop internal-engine workers from claiming standalone ORCA jobs
+
+After the single-runs-root collapse, workflow.root == orca.runtime.allowed_root,
+so an internal-engine (crest/xtb) worker's queue roots now include the shared
+runs root (~/orca_runs) alongside its per-workflow stage queues. That runs-root
+queue.json is the standalone ORCA queue. Because cross-root dequeue had no
+engine filter, the CREST/xTB workers raced the ORCA worker for standalone ORCA
+entries and, when they won, ran an ORCA OptTS through start_crest_job with a
+job_dir resolved from absent metadata (-> repo-root CWD), crashing on the
+read-only sandbox with "[Errno 30] Read-only file system: .../crest.stdout.log".
+
+Fix: thread an optional accept_entry_fn predicate through the queue runtime into
+dequeue_next_across_roots. Internal-engine workers now only claim entries whose
+app_name is empty or matches their own engine (orca_auto_<engine>), so a CREST
+worker never claims an ORCA (orca_auto_orca) job. Unlabeled entries stay
+claimable so malformed/legacy rows are not stranded.
+
+Scope: the filter applies on the multi-root selection path, which is what a
+worker uses once any workflow stage queue exists on disk (the reproduced case).
+The single-root fast path (an internal-engine worker whose only root is the bare
+runs root, i.e. no workflow stage queues yet) still pops directly; closing that
+narrower window is left as a follow-up since it would require threading the
+filter into the atomic dequeue or excluding the runs root from the shared
+index/queue-root builder.
+
+Adds a regression test; also corrects the xtb test factory's default app_name
+to the realistic orca_auto_xtb. check.sh green (1746 pytest, 93.9% coverage).
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
