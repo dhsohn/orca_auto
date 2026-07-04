@@ -38,6 +38,7 @@ class EngineQueueRuntime:
     worker_pid_file_name: str
     dequeue_next_across_roots: Callable[..., tuple[Path, Any] | None] = dequeue_next_across_roots
     dequeue_entry_if_pending: Callable[[Path, str], Any | None] | None = None
+    accept_entry_fn: Callable[[Any], bool] | None = None
 
     def _queue_runtime(self) -> QueueRuntime:
         return QueueRuntime(
@@ -47,6 +48,7 @@ class EngineQueueRuntime:
             dequeue_next_fn=self.dequeue_next,
             dequeue_next_across_roots_fn=self.dequeue_next_across_roots,
             dequeue_entry_if_pending_fn=self.dequeue_entry_if_pending,
+            accept_entry_fn=self.accept_entry_fn,
         )
 
     def queue_roots(self, cfg: Any) -> tuple[Path, ...]:
