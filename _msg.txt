@@ -1,0 +1,22 @@
+Apply the engine app filter on the single-root queue path too
+
+Follow-up to #29, closing the Codex P1 it flagged. The app filter was only
+applied on the multi-root selection path, so an internal-engine (crest/xtb)
+worker started before any workflow stage queue exists — when
+runtime_roots_for_cfg returns only the shared runs root — still took the
+single-root fast path and could claim a standalone ORCA (orca_auto_orca) entry.
+
+Push the filter down to the atomic pop: core.queue.store.dequeue_next now takes
+an optional accept_entry_fn and only marks a matching pending entry running.
+The crest/xtb runtimes bake their own-engine predicate into the dequeue_next
+closure they hand the worker, so the fast path filters exactly like the
+selection path. Both sides now share own_engine_accept_entry(engine) (unlabeled
+entries stay claimable so malformed/legacy rows are not stranded).
+
+Verified: with an ORCA and an xTB entry in one shared runs-root queue, the xTB
+worker skips the ORCA entry and claims the xTB one, the CREST worker claims
+nothing, and an unfiltered (ORCA) worker still claims the ORCA entry. Adds a
+store-level regression test; the four internal-engine dequeue_next stubs now
+accept the forwarded kwarg. check.sh green (1747 pytest, 93.9% coverage).
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>

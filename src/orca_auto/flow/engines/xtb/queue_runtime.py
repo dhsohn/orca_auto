@@ -50,6 +50,7 @@ from orca_auto.core.queue.internal_engine import (
     InternalEngineQueueWorkerFacadeBindings,
     InternalEngineSpec,
     build_late_bound_internal_engine_queue_worker_deps,
+    own_engine_accept_entry,
 )
 from orca_auto.core.queue.worker import (
     BackgroundRunningJob,
@@ -192,7 +193,7 @@ _queue_module = InternalEngineQueueModule.create_from_definition(
     deps=_runtime_facade_deps(),
     runtime_roots_for_cfg=lambda cfg: runtime_roots_for_cfg(cfg),
     list_queue=lambda root: list_queue(root),
-    dequeue_next=lambda root: dequeue_next(root),
+    dequeue_next=lambda root: dequeue_next(root, accept_entry_fn=own_engine_accept_entry("xtb")),
 )
 _engine_runtime = _queue_module.runtime
 

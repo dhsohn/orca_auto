@@ -15,6 +15,19 @@ def _entry_app_name(entry: Any) -> str:
     return str(getattr(entry, "app_name", "") or "").strip()
 
 
+def own_engine_accept_entry(engine: str) -> Callable[[Any], bool]:
+    """Predicate: claim only this engine's entries (or unlabeled ones).
+
+    Internal-engine workers share the single runs root with standalone ORCA
+    jobs, so they must never claim another engine's entry (e.g. an ORCA
+    OptTS). Reject only entries whose app_name is set and does not match;
+    unlabeled entries stay claimable so malformed/legacy rows are not
+    stranded.
+    """
+    expected = f"orca_auto_{engine}"
+    return lambda entry: _entry_app_name(entry) in ("", expected)
+
+
 @dataclass(frozen=True)
 class InternalEngineQueueRuntime:
     spec: InternalEngineSpec
@@ -35,11 +48,7 @@ class InternalEngineQueueRuntime:
         pid_file_name = worker_pid_file_name or spec.worker_pid_file_name
         if not pid_file_name:
             raise ValueError("worker_pid_file_name is required for queue runtime support")
-        # Internal-engine workers share the single runs root with standalone ORCA
-        # jobs, so never claim another engine's entry (e.g. an ORCA OptTS). Reject
-        # only entries whose app_name is set and does not match; unlabeled entries
-        # stay claimable so malformed/legacy rows are not stranded.
-        expected_app_name = f"orca_auto_{spec.engine}"
+        accept_entry_fn = own_engine_accept_entry(spec.engine)
         return cls(
             spec=spec,
             runtime=EngineQueueRuntime(
@@ -49,7 +58,7 @@ class InternalEngineQueueRuntime:
                 dequeue_next=dequeue_next,
                 dequeue_entry_if_pending=dequeue_entry_if_pending,
                 worker_pid_file_name=pid_file_name,
-                accept_entry_fn=lambda entry: _entry_app_name(entry) in ("", expected_app_name),
+                accept_entry_fn=accept_entry_fn,
             ),
         )
 

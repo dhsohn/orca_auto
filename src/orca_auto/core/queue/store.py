@@ -361,12 +361,15 @@ def dequeue_next(
     *,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
+    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
 ) -> QueueEntry | None:
     def dequeue(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
         pending = [
             (entry.priority, entry.enqueued_at, index, entry)
             for index, entry in enumerate(entries)
-            if entry.status == QueueStatus.PENDING and not entry.cancel_requested
+            if entry.status == QueueStatus.PENDING
+            and not entry.cancel_requested
+            and (accept_entry_fn is None or accept_entry_fn(entry))
         ]
         if not pending:
             return None, False
