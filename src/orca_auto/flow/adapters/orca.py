@@ -43,7 +43,6 @@ def _contract_loader_deps() -> OrcaContractLoaderDeps:
         resolve_artifact_path_fn=_path_helpers.resolve_artifact_path_impl,
         derive_selected_input_xyz_fn=_path_helpers.derive_selected_input_xyz_impl,
         prefer_orca_optimized_xyz_fn=_path_helpers.prefer_orca_optimized_xyz_impl,
-        is_subpath_fn=_path_helpers.is_subpath_impl,
         coerce_resource_dict_fn=coerce_int_mapping,
         attempt_count_fn=partial(_contract_status.attempt_count_impl, safe_int_fn=safe_int),
         max_retries_fn=partial(_contract_status.max_retries_impl, safe_int_fn=safe_int),

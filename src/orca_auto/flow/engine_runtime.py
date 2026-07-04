@@ -64,9 +64,14 @@ def _configured_runtime_paths(
     if "allowed_root" not in resolved_runtime_paths:
         raise ValueError(f"Missing {_runtime_allowed_root_label(engine)} in config: {path}")
 
+    # Anchor the default admission dir on the shared runs root (workflow.root,
+    # else allowed_root) so it matches load_config's resolved_admission_root.
+    # Using allowed_root alone would diverge from the root the worker reserves
+    # slots under whenever workflow.root points somewhere else.
+    runs_root = workflow_root_from_mapping(raw) or resolved_runtime_paths["allowed_root"]
     admission_root = scheduler_admission_root(
         scheduler,
-        default_runs_root=resolved_runtime_paths["allowed_root"],
+        default_runs_root=runs_root,
     )
     if admission_root is not None:
         resolved_runtime_paths["admission_root"] = admission_root

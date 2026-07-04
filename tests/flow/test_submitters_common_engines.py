@@ -134,6 +134,36 @@ def test_engine_runtime_paths_ignores_orca_runtime_admission_setting(tmp_path: P
     }
 
 
+def test_engine_runtime_paths_orca_admission_follows_workflow_root_over_allowed_root(
+    tmp_path: Path,
+) -> None:
+    # When workflow.root differs from orca.runtime.allowed_root, the default
+    # admission dir must follow the shared runs root (workflow.root) so it
+    # matches the root the ORCA worker reserves slots under via load_config;
+    # anchoring on allowed_root alone would make the active-simulation counter
+    # read a different .admission dir than the worker writes to.
+    workflow_root = tmp_path / "wf"
+    allowed_root = tmp_path / "orca"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "workflow:",
+                f"  root: {workflow_root}",
+                "orca:",
+                "  runtime:",
+                f"    allowed_root: {allowed_root}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    paths = engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
+    assert paths["allowed_root"] == allowed_root.resolve()
+    assert paths["admission_root"] == workflow_root.resolve() / ".admission"
+
+
 def test_engine_runtime_paths_uses_scheduler_with_runtime_admission_setting_present(
     tmp_path: Path,
 ) -> None:

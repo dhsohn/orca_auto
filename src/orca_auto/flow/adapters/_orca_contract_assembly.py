@@ -50,7 +50,6 @@ class OrcaContractLoaderDeps:
     resolve_artifact_path_fn: Callable[[Any, Path | None], str]
     derive_selected_input_xyz_fn: Callable[[str], str]
     prefer_orca_optimized_xyz_fn: Callable[..., str]
-    is_subpath_fn: Callable[[Path, Path | None], bool]
     coerce_resource_dict_fn: Callable[[Any], dict[str, int]]
     attempt_count_fn: Callable[[ContractPayload, ContractPayload], int]
     max_retries_fn: Callable[[ContractPayload, ContractPayload], int]

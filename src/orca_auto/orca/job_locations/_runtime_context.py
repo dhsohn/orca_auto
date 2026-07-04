@@ -33,40 +33,10 @@ class _RuntimeInputs:
     queue_entry: dict[str, Any] | None
 
 
-@dataclass(frozen=True)
-class _RuntimeArtifactSnapshot:
-    artifact: Any
-    state: dict[str, Any]
-    report: dict[str, Any]
-    current_dir: Path | None
-    resolved_run_id: str
-
-
-def _dict_payload(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
-
-
-def _artifact_payloads(artifact: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-    return (
-        _dict_payload(artifact.state),
-        _dict_payload(artifact.report),
-    )
-
-
 def _queue_reaction_dir(queue_entry: dict[str, Any] | None, *, deps: Any) -> Path | None:
     return deps.resolve_existing_job_dir(
         deps.queue_entry_metadata_value(queue_entry, "reaction_dir")
     )
-
-
-def _current_runtime_dir(
-    *,
-    artifact: Any,
-    reaction_dir: str,
-    queue_reaction_dir: Path | None,
-    deps: Any,
-) -> Path | None:
-    return artifact.job_dir or deps.resolve_existing_job_dir(reaction_dir) or queue_reaction_dir
 
 
 def _initial_artifact_context(
@@ -94,22 +64,6 @@ def _hydrate_artifact_context(artifact: Any, *, deps: Any) -> Any:
         job_dir=artifact.job_dir,
         state=artifact.state,
         report=artifact.report,
-    )
-
-
-def _resolved_run_id(
-    *,
-    run_id: str,
-    state: dict[str, Any],
-    report: dict[str, Any],
-    queue_entry: dict[str, Any] | None,
-    deps: Any,
-) -> str:
-    return (
-        deps.normalize_text(run_id)
-        or deps.normalize_text(state.get("run_id"))
-        or deps.normalize_text(report.get("run_id"))
-        or deps.normalize_text(deps.queue_entry_metadata_value(queue_entry, "run_id"))
     )
 
 
@@ -150,36 +104,6 @@ def _load_initial_runtime_artifact(inputs: _RuntimeInputs, *, deps: Any) -> Any:
         deps=deps,
     )
     return _hydrate_artifact_context(artifact, deps=deps)
-
-
-def _runtime_artifact_snapshot(
-    *,
-    inputs: _RuntimeInputs,
-    artifact: Any,
-    deps: Any,
-) -> _RuntimeArtifactSnapshot:
-    state_payload, report_payload = _artifact_payloads(artifact)
-    queue_reaction_dir = _queue_reaction_dir(inputs.queue_entry, deps=deps)
-    current_dir = _current_runtime_dir(
-        artifact=artifact,
-        reaction_dir=inputs.reaction_dir,
-        queue_reaction_dir=queue_reaction_dir,
-        deps=deps,
-    )
-    resolved_run_id = _resolved_run_id(
-        run_id=inputs.run_id,
-        state=state_payload,
-        report=report_payload,
-        queue_entry=inputs.queue_entry,
-        deps=deps,
-    )
-    return _RuntimeArtifactSnapshot(
-        artifact=artifact,
-        state=state_payload,
-        report=report_payload,
-        current_dir=current_dir,
-        resolved_run_id=resolved_run_id,
-    )
 
 
 def load_job_runtime_context(

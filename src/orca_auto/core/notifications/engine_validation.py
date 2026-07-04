@@ -31,15 +31,6 @@ def _required_int(values: Mapping[str, object], field_name: str) -> int:
     return value
 
 
-def _optional_path(values: Mapping[str, object], field_name: str) -> Path | None:
-    value = values.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, Path):
-        raise TypeError(f"{field_name} must be pathlib.Path or None")
-    return value
-
-
 def _optional_int_dict(
     values: Mapping[str, object],
     field_name: str,
@@ -66,7 +57,6 @@ def _optional_lines(values: Mapping[str, object], field_name: str) -> list[str] 
 __all__ = [
     "_optional_int_dict",
     "_optional_lines",
-    "_optional_path",
     "_required_int",
     "_required_path",
     "_required_str",

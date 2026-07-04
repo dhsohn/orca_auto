@@ -108,7 +108,6 @@ def _engine_worker_spec(
     *,
     app: str,
     config_path: str,
-    args: argparse.Namespace,
 ) -> WorkerSpec:
     argv, cwd, env = worker_module_command(
         config_path=config_path,
@@ -230,9 +229,7 @@ def _build_worker_specs(args: Any) -> list[WorkerSpec]:
     engine_apps = _worker_engine_apps(apps, workflow_enabled=workflow_enabled)
     _validate_engine_worker_config(engine_apps, config_path)
 
-    specs = [
-        _engine_worker_spec(app=app, config_path=str(config_path), args=args) for app in engine_apps
-    ]
+    specs = [_engine_worker_spec(app=app, config_path=str(config_path)) for app in engine_apps]
     _add_workflow_worker_spec(
         specs,
         apps=apps,

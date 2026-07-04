@@ -30,7 +30,6 @@ from ._utils import (
     coerce_attempts,
     derive_selected_input_xyz,
     final_result_payload,
-    is_subpath,
     load_json_list,
     max_retries,
     normalize_bool,
@@ -61,7 +60,6 @@ class _JobLocationDeps:
     attempt_count: Any
     coerce_attempts: Any
     derive_selected_input_xyz: Any
-    is_subpath: Any
     max_retries: Any
     normalize_bool: Any
     normalize_text: Any
@@ -88,7 +86,6 @@ def _job_location_deps() -> _JobLocationDeps:
         attempt_count=attempt_count,
         coerce_attempts=coerce_attempts,
         derive_selected_input_xyz=derive_selected_input_xyz,
-        is_subpath=is_subpath,
         max_retries=max_retries,
         normalize_bool=normalize_bool,
         normalize_text=normalize_text,

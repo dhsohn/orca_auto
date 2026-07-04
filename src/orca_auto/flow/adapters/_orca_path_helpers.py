@@ -9,7 +9,6 @@ from orca_auto.core.paths import (
     iter_existing_dirs,
     recent_file_candidates,
     resolved_path_text,
-    safe_is_subpath,
 )
 from orca_auto.core.utils.coercion import normalize_text
 
@@ -102,10 +101,6 @@ def iter_existing_dirs_impl(*candidates: Path | None) -> list[Path]:
     return iter_existing_dirs(*candidates)
 
 
-def is_subpath_impl(candidate: Path, root: Path | None) -> bool:
-    return safe_is_subpath(candidate, root)
-
-
 def _resolved_path_text(path: Path) -> str:
     return resolved_path_text(path)
 
@@ -172,7 +167,6 @@ def prefer_orca_optimized_xyz_impl(
 __all__ = [
     "derive_selected_input_xyz_impl",
     "direct_dir_target_impl",
-    "is_subpath_impl",
     "iter_existing_dirs_impl",
     "prefer_orca_optimized_xyz_impl",
     "resolve_artifact_path_impl",
