@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +16,6 @@ from orca_auto.core.utils.persistence import load_json_mapping_file, load_json_m
 from ._orca_path_helpers import direct_dir_target_impl, resolve_candidate_path_impl
 
 QUEUE_FILE_NAME = "queue.json"
-INDEX_DIR_NAME = "index"
-RECORDS_FILE_NAME = "records.jsonl"
 
 JsonPayload = dict[str, Any]
 JsonPayloadList = list[JsonPayload]
@@ -30,27 +27,6 @@ def load_json_dict_impl(path: Path) -> JsonPayload:
 
 def load_json_list_impl(path: Path) -> JsonPayloadList:
     return load_json_mapping_list_file(path)
-
-
-def load_jsonl_records_impl(path: Path) -> JsonPayloadList:
-    if not path.exists():
-        return []
-    records: JsonPayloadList = []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return records
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            raw = json.loads(stripped)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(raw, dict):
-            records.append(raw)
-    return records
 
 
 def _record_candidate_dirs(record: JobLocationRecord) -> list[Path]:
@@ -154,7 +130,6 @@ __all__ = [
     "find_queue_entry_impl",
     "load_json_dict_impl",
     "load_json_list_impl",
-    "load_jsonl_records_impl",
     "queue_entry_metadata_impl",
     "queue_entry_metadata_value_impl",
     "resolve_job_dir_impl",
