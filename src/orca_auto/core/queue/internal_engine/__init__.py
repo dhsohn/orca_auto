@@ -6,7 +6,7 @@ from .child import (
 )
 from .policies import InternalEngineAdmission, InternalEngineLifecycle
 from .queue_module import InternalEngineQueueModule
-from .runtime import InternalEngineQueueRuntime
+from .runtime import InternalEngineQueueRuntime, own_engine_accept_entry
 from .spec import (
     InternalEngineSpec,
     InternalEngineWorkerChildModuleFacade,
@@ -38,6 +38,7 @@ __all__ = [
     "InternalEngineQueueWorkerCommandRunner",
     "InternalEngineQueueModule",
     "InternalEngineQueueRuntime",
+    "own_engine_accept_entry",
     "InternalEngineQueueWorkerFacade",
     "InternalEngineSpec",
     "InternalEngineWorkerChild",

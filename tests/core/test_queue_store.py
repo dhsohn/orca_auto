@@ -310,6 +310,40 @@ def test_dequeue_next_respects_priority_time_and_insertion_order(
     assert store.dequeue_next(tmp_path) is None
 
 
+def test_dequeue_next_accept_entry_fn_skips_other_engine_entries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Internal-engine workers share the single runs root with standalone ORCA
+    # jobs; the app filter must skip an ORCA entry at the atomic pop so a CREST
+    # or xTB worker never claims (and mis-runs) it, even on the single-root path.
+    _install_deterministic_helpers(monkeypatch)
+    _queue_file(tmp_path).write_text(
+        json.dumps(
+            [
+                _entry("q-orca", app_name="orca_auto_orca", priority=1),
+                _entry("q-xtb", app_name="orca_auto_xtb", priority=9),
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    def accept_xtb(entry: object) -> bool:
+        return getattr(entry, "app_name", "") in ("", "orca_auto_xtb")
+
+    # Skips the higher-priority ORCA entry, claims the xTB one.
+    claimed = store.dequeue_next(tmp_path, accept_entry_fn=accept_xtb)
+    assert claimed is not None and claimed.queue_id == "q-xtb"
+
+    # Only the ORCA entry remains; the xTB filter now claims nothing.
+    assert store.dequeue_next(tmp_path, accept_entry_fn=accept_xtb) is None
+
+    # An unfiltered (ORCA) worker still claims it.
+    unfiltered = store.dequeue_next(tmp_path)
+    assert unfiltered is not None and unfiltered.queue_id == "q-orca"
+
+
 def test_dequeue_entry_if_pending_only_runs_selected_pending_entry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

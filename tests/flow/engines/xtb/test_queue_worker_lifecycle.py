@@ -47,7 +47,7 @@ def test_process_one_returns_idle_and_releases_reserved_slot(
     released: list[tuple[object, object]] = []
 
     monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda _cfg: "slot-1")
-    monkeypatch.setattr(queue_cmd, "dequeue_next", lambda _root: None)
+    monkeypatch.setattr(queue_cmd, "dequeue_next", lambda _root, **_kw: None)
     monkeypatch.setattr(
         queue_cmd, "release_slot", lambda root, token: released.append((str(root), token))
     )
@@ -93,7 +93,7 @@ def test_queue_worker_starts_up_to_max_concurrent_children(
             return None
 
     monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda _cfg: next(slots))
-    monkeypatch.setattr(queue_cmd, "dequeue_next", lambda _root: next(dequeued))
+    monkeypatch.setattr(queue_cmd, "dequeue_next", lambda _root, **_kw: next(dequeued))
     monkeypatch.setattr(queue_cmd, "activate_reserved_slot", lambda *args, **kwargs: object())
 
     def fake_start_background_job_process(
@@ -280,7 +280,7 @@ def test_queue_worker_run_once_waits_for_child_completion_and_prints_summary(
     monkeypatch.setattr(queue_cmd, "reconcile_stale_slots", lambda _root: 0)
     monkeypatch.setattr(queue_cmd, "list_queue", lambda _root: [])
     monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda _cfg: "slot-1")
-    monkeypatch.setattr(queue_cmd, "dequeue_next", lambda _root: entry)
+    monkeypatch.setattr(queue_cmd, "dequeue_next", lambda _root, **_kw: entry)
     monkeypatch.setattr(queue_cmd, "activate_reserved_slot", lambda *args, **kwargs: object())
     monkeypatch.setattr(
         queue_cmd,
