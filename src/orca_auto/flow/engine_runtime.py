@@ -31,17 +31,17 @@ def _runtime_allowed_root_label(engine: str | None) -> str:
 def _internal_engine_runtime_paths(path: Path, raw: dict[str, Any]) -> dict[str, Path]:
     workflow_root = workflow_root_from_mapping(raw)
     if not workflow_root:
-        raise ValueError(f"Missing workflow.root in config: {path}")
+        raise ValueError(
+            f"Missing runs root (workflow.root or orca.runtime.allowed_root) in config: {path}"
+        )
     resolved_workflow_root = Path(workflow_root).expanduser().resolve()
     resolved = {
         "workflow_root": resolved_workflow_root,
         "allowed_root": resolved_workflow_root,
-        "organized_root": resolved_workflow_root,
     }
     admission_root = scheduler_admission_root(
-        path,
         mapping_section(raw, "scheduler"),
-        default_when_missing=True,
+        default_runs_root=resolved_workflow_root,
     )
     if admission_root is not None:
         resolved["admission_root"] = admission_root
@@ -57,18 +57,21 @@ def _configured_runtime_paths(
     scheduler = mapping_section(raw, "scheduler")
 
     resolved_runtime_paths: dict[str, Path] = {}
-    for key in ("allowed_root", "organized_root"):
-        resolved_path = resolve_configured_path(runtime.get(key))
-        if resolved_path is not None:
-            resolved_runtime_paths[key] = resolved_path
+    resolved_path = resolve_configured_path(runtime.get("allowed_root"))
+    if resolved_path is not None:
+        resolved_runtime_paths["allowed_root"] = resolved_path
 
     if "allowed_root" not in resolved_runtime_paths:
         raise ValueError(f"Missing {_runtime_allowed_root_label(engine)} in config: {path}")
 
+    # Anchor the default admission dir on the shared runs root (workflow.root,
+    # else allowed_root) so it matches load_config's resolved_admission_root.
+    # Using allowed_root alone would diverge from the root the worker reserves
+    # slots under whenever workflow.root points somewhere else.
+    runs_root = workflow_root_from_mapping(raw) or resolved_runtime_paths["allowed_root"]
     admission_root = scheduler_admission_root(
-        path,
         scheduler,
-        default_when_missing=bool(scheduler),
+        default_runs_root=runs_root,
     )
     if admission_root is not None:
         resolved_runtime_paths["admission_root"] = admission_root

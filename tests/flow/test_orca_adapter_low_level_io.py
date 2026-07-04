@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
 
 import pytest
 
@@ -41,45 +40,6 @@ def test_load_json_dict_and_list_handle_missing_invalid_and_type_filtered_payloa
     dict_payload.write_text(json.dumps({"status": "ok"}), encoding="utf-8")
     assert _orca_local_lookup.load_json_dict_impl(dict_payload) == {"status": "ok"}
     assert _orca_local_lookup.load_json_list_impl(dict_payload) == []
-
-
-def test_load_jsonl_records_skips_blank_invalid_and_non_dict_rows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    records_path = tmp_path / "records.jsonl"
-    records_path.write_text(
-        '\n{"queue_id":"q1"}\n42\nnot-json\n{"queue_id":"q2"}\n', encoding="utf-8"
-    )
-    assert _orca_local_lookup.load_jsonl_records_impl(records_path) == [
-        {"queue_id": "q1"},
-        {"queue_id": "q2"},
-    ]
-
-    class _BrokenPath:
-        def exists(self) -> bool:
-            return True
-
-        def read_text(self, encoding: str = "utf-8") -> str:
-            raise OSError("boom")
-
-    assert _orca_local_lookup.load_jsonl_records_impl(cast(Path, _BrokenPath())) == []
-
-    monkeypatch.setattr(
-        _orca_local_lookup,
-        "json",
-        type(
-            "_JSONStub",
-            (),
-            {
-                "loads": staticmethod(_orca_local_lookup.json.loads),
-                "JSONDecodeError": _orca_local_lookup.json.JSONDecodeError,
-            },
-        )(),
-    )
-    assert _orca_local_lookup.load_jsonl_records_impl(records_path) == [
-        {"queue_id": "q1"},
-        {"queue_id": "q2"},
-    ]
 
 
 def test_resolve_candidate_path_and_direct_dir_target_cover_existing_and_oserror_paths(

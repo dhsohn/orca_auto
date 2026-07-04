@@ -85,7 +85,6 @@ def _workflow_stage_summary(stage: dict[str, Any]) -> dict[str, Any]:
         "submission_status": _normalize_text(submission_result.get("status")),
         "run_id": _normalize_text(stage_metadata.get("run_id")),
         "latest_known_path": _normalize_text(stage_metadata.get("latest_known_path")),
-        "organized_output_dir": _normalize_text(stage_metadata.get("organized_output_dir")),
         "optimized_xyz_path": _normalize_text(
             stage_metadata.get("optimized_xyz_path") or task_payload.get("optimized_xyz_path")
         ),

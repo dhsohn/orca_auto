@@ -70,7 +70,7 @@ Common assumptions:
 - Python path is `/home/<user>/orca_auto/.venv/bin/python`
 - The unified service runs the ORCA worker by default; ORCA uses the same
   shared admission lifecycle as internal engines, while keeping its ORCA
-  retry/report/auto-organize behavior
+  retry/report behavior
 - If `workflow.root` is configured, the same service also starts workflow supervision and the internal CREST/xTB workers
 
 Install the unified engine worker:

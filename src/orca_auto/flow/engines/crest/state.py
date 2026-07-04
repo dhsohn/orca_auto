@@ -8,7 +8,6 @@ from orca_auto.core.artifacts import (
     JOB_REPORT_JSON_FILE,
     JOB_REPORT_MD_FILE,
     JOB_STATE_FILE,
-    ORGANIZED_REF_FILE,
 )
 from orca_auto.core.state import engine as _engine_state
 from orca_auto.core.utils import now_utc_iso
@@ -16,14 +15,12 @@ from orca_auto.core.utils import now_utc_iso
 STATE_FILE_NAME = JOB_STATE_FILE
 REPORT_JSON_FILE_NAME = JOB_REPORT_JSON_FILE
 REPORT_MD_FILE_NAME = JOB_REPORT_MD_FILE
-ORGANIZED_REF_FILE_NAME = ORGANIZED_REF_FILE
 RECOVERY_PENDING_REASONS = _engine_state.RECOVERY_PENDING_REASONS
 _STATE_EXPORTS = _engine_state.create_engine_state_module_exports(
     _engine_state.EngineStateModuleSpec(
         state_file_name=STATE_FILE_NAME,
         report_json_file_name=REPORT_JSON_FILE_NAME,
         report_md_file_name=REPORT_MD_FILE_NAME,
-        organized_ref_file_name=ORGANIZED_REF_FILE_NAME,
         manifest_file_name=CREST_JOB_MANIFEST_FILE,
         report_title="orca_auto CREST Report",
         selected_input_label="Selected XYZ",
@@ -38,10 +35,8 @@ _RECOVERY_RETAINED_FIELDS = _engine_state.RecoveryRetainedFieldsSpec(
 write_state = _STATE_EXPORTS.write_state
 write_report_json = _STATE_EXPORTS.write_report_json
 write_report_md_lines = _STATE_EXPORTS.write_report_md_lines
-write_organized_ref = _STATE_EXPORTS.write_organized_ref
 load_state = _STATE_EXPORTS.load_state
 load_report_json = _STATE_EXPORTS.load_report_json
-load_organized_ref = _STATE_EXPORTS.load_organized_ref
 
 
 def write_report_md(

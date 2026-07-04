@@ -9,8 +9,8 @@
 orca_auto는 Linux 및 WSL 환경에서 ORCA 실행과 워크플로우 오케스트레이션을 위한
 **큐 우선(queue-first)** 인터페이스입니다. xTB와 CREST도 런타임의 일부이지만, 이제는
 독립 공개 명령이 아니라 워크플로우 단계 내부에서 사용됩니다. orca_auto는 작업을
-내구성 있게 제출하고, 감독되는 워커 아래에서 실행하며, 작업별 상태와 리포트를 기록하고,
-완료된 출력을 정리합니다.
+내구성 있게 제출하고, 감독되는 워커 아래에서 실행하며, 작업별 상태와 리포트를
+기록합니다.
 
 ## 문서
 
@@ -64,7 +64,6 @@ scheduler:
   max_active_simulations: 4
 
 workflow:
-  root: /home/user/workflow_runs
   paths:
     xtb_executable: /home/user/bin/xtb-dist/bin/xtb
     crest_executable: /home/user/bin/crest/crest
@@ -78,8 +77,7 @@ telegram:
 
 orca:
   runtime:
-    allowed_root: /home/user/orca_runs
-    organized_root: /home/user/orca_outputs
+    allowed_root: /home/user/runs
     default_max_retries: 2
   paths:
     orca_executable: /home/user/opt/orca/orca
@@ -96,10 +94,13 @@ orca:
   종류별 cap을 따르는 계산 종류별 재시도 정책을 활성화합니다.
 - `scheduler.max_active_simulations`는 ORCA, 내부 xTB 워크플로우 단계, 내부 CREST
   워크플로우 단계 전반에 걸친 공유 상한입니다.
-- `workflow.root`는 통합 CLI와 워크플로우 워커가 사용하는 워크플로우 루트입니다.
-- 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 정리된
-  출력은 오직 `workflow.root/<workflow_id>/internal/<engine>/{runs,outputs}` 아래에만
-  존재합니다.
+- 모든 것이 단일 runs 루트(`orca.runtime.allowed_root`) 아래에 존재합니다.
+  단독 ORCA 작업과 워크플로우 워크스페이스가 그 안에 나란히 놓이고, 공유 admission
+  디렉터리는 `<runs root>/.admission`이 기본값입니다. 워크플로우를 다른 곳에 두고
+  싶을 때만 `workflow.root`를 설정하세요.
+- 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은
+  오직 `<runs root>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`, `03_orca`)
+  아래에만 존재합니다.
 - 전체 템플릿은 [config/orca_auto.yaml.example](config/orca_auto.yaml.example)에 있습니다.
 
 ## 사용자 명령어
@@ -124,7 +125,6 @@ orca_auto queue list clear      # 완료/실패/취소 항목 정리
 orca_auto queue cancel <target>
 orca_auto service status
 orca_auto service restart
-orca_auto organize orca --root '/home/user/orca_runs' --apply
 orca_auto scan-notify
 ```
 

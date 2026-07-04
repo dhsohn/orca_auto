@@ -23,7 +23,6 @@ def _run_main(argv: list[str]) -> int:
 def _write_config(
     root: Path,
     allowed_root: Path,
-    organized_root: Path,
     orca_executable: Path,
     *,
     max_concurrent: int = 4,
@@ -38,7 +37,6 @@ def _write_config(
                 "orca": {
                     "runtime": {
                         "allowed_root": str(allowed_root),
-                        "organized_root": str(organized_root),
                         "default_max_retries": 2,
                     },
                     "paths": {"orca_executable": str(orca_executable)},
@@ -74,15 +72,13 @@ class TestIntegrationCliFlow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
-            organized = root / "orca_outputs"
             reaction = allowed / "project_a" / "rxn_queue_demo"
             reaction.mkdir(parents=True)
-            organized.mkdir()
 
             counter = root / "fake_orca_counter.txt"
             fake_orca = root / "fake_orca.py"
             _write_fake_orca(fake_orca, counter)
-            config = _write_config(root, allowed, organized, fake_orca)
+            config = _write_config(root, allowed, fake_orca)
 
             inp = reaction / "rxn.inp"
             inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
@@ -115,15 +111,13 @@ class TestIntegrationCliFlow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
-            organized = root / "orca_outputs"
             reaction = allowed / "rxn_force_queue"
             reaction.mkdir(parents=True)
-            organized.mkdir()
 
             counter = root / "fake_orca_counter.txt"
             fake_orca = root / "fake_orca.py"
             _write_fake_orca(fake_orca, counter)
-            config = _write_config(root, allowed, organized, fake_orca)
+            config = _write_config(root, allowed, fake_orca)
 
             inp = reaction / "rxn.inp"
             inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
@@ -156,15 +150,13 @@ class TestIntegrationCliFlow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
-            organized = root / "orca_outputs"
             reaction = allowed / "rxn_completed_skip"
             reaction.mkdir(parents=True)
-            organized.mkdir()
 
             counter = root / "fake_orca_counter.txt"
             fake_orca = root / "fake_orca.py"
             _write_fake_orca(fake_orca, counter)
-            config = _write_config(root, allowed, organized, fake_orca)
+            config = _write_config(root, allowed, fake_orca)
 
             inp = reaction / "rxn.inp"
             inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")

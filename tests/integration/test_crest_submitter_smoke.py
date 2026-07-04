@@ -57,7 +57,6 @@ def test_crest_submitter_roundtrip_smoke(
     assert record.app_name == "orca_auto_crest"
     assert record.status == "completed"
     assert record.original_run_dir == str(crest_job.resolve())
-    assert record.organized_output_dir == ""
     assert record.latest_known_path == str(crest_job.resolve())
 
     artifact_dir = crest_job.resolve()
@@ -86,7 +85,6 @@ def test_crest_submitter_roundtrip_smoke(
     )
     assert contract.status == "completed"
     assert contract.mode == "standard"
-    assert contract.organized_output_dir == ""
     assert contract.retained_conformer_count == 2
     assert sorted(Path(path).name for path in contract.retained_conformer_paths) == [
         "crest_best.xyz",

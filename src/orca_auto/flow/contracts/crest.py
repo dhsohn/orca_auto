@@ -17,7 +17,6 @@ class CrestArtifactContract:
     reason: str
     job_dir: str
     latest_known_path: str
-    organized_output_dir: str = ""
     molecule_key: str = ""
     selected_input_xyz: str = ""
     retained_conformer_count: int = 0
@@ -33,7 +32,6 @@ class CrestArtifactContract:
             "reason": self.reason,
             "job_dir": self.job_dir,
             "latest_known_path": self.latest_known_path,
-            "organized_output_dir": self.organized_output_dir,
             "molecule_key": self.molecule_key,
             "selected_input_xyz": self.selected_input_xyz,
             "retained_conformer_count": self.retained_conformer_count,

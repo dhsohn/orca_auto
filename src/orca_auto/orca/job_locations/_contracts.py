@@ -8,7 +8,6 @@ from ..state import (
     REPORT_JSON_NAME,
     REPORT_MD_NAME,
     STATE_FILE_NAME,
-    load_organized_ref,
     load_report_json,
     load_state,
 )
@@ -31,7 +30,6 @@ from ._utils import (
     coerce_attempts,
     derive_selected_input_xyz,
     final_result_payload,
-    is_subpath,
     load_json_list,
     max_retries,
     normalize_bool,
@@ -50,14 +48,11 @@ class _JobLocationDeps:
     JobRuntimeContext: Any
     _runtime_paths: Any
     list_job_location_records: Any
-    load_organized_ref: Any
     load_report_json: Any
     load_state: Any
     resolve_record_job_dir: Any
     _first_artifact_context: Any
-    _hydrated_organized_ref: Any
     _job_artifact_context: Any
-    _record_organized_dir: Any
     final_result_payload: Any
     queue_entry_metadata_value: Any
     status_from_payloads: Any
@@ -65,7 +60,6 @@ class _JobLocationDeps:
     attempt_count: Any
     coerce_attempts: Any
     derive_selected_input_xyz: Any
-    is_subpath: Any
     max_retries: Any
     normalize_bool: Any
     normalize_text: Any
@@ -80,14 +74,11 @@ def _job_location_deps() -> _JobLocationDeps:
         JobRuntimeContext=JobRuntimeContext,
         _runtime_paths=_runtime_paths,
         list_job_location_records=list_job_location_records,
-        load_organized_ref=load_organized_ref,
         load_report_json=load_report_json,
         load_state=load_state,
         resolve_record_job_dir=resolve_record_job_dir,
         _first_artifact_context=_artifacts.first_artifact_context,
-        _hydrated_organized_ref=_artifacts.hydrated_organized_ref,
         _job_artifact_context=_artifacts.job_artifact_context,
-        _record_organized_dir=_artifacts.record_organized_dir,
         final_result_payload=final_result_payload,
         queue_entry_metadata_value=queue_entry_metadata_value,
         status_from_payloads=status_from_payloads,
@@ -95,7 +86,6 @@ def _job_location_deps() -> _JobLocationDeps:
         attempt_count=attempt_count,
         coerce_attempts=coerce_attempts,
         derive_selected_input_xyz=derive_selected_input_xyz,
-        is_subpath=is_subpath,
         max_retries=max_retries,
         normalize_bool=normalize_bool,
         normalize_text=normalize_text,
@@ -174,7 +164,6 @@ def load_job_runtime_context(
     index_root: str | Path,
     target: str,
     *,
-    organized_root: str | Path | None = None,
     queue_id: str = "",
     run_id: str = "",
     reaction_dir: str = "",
@@ -182,7 +171,6 @@ def load_job_runtime_context(
     return _load_job_runtime_context(
         index_root,
         target,
-        organized_root=organized_root,
         queue_id=queue_id,
         run_id=run_id,
         reaction_dir=reaction_dir,
@@ -194,7 +182,6 @@ def _load_job_runtime_context(
     index_root: str | Path,
     target: str,
     *,
-    organized_root: str | Path | None = None,
     queue_id: str = "",
     run_id: str = "",
     reaction_dir: str = "",
@@ -203,7 +190,6 @@ def _load_job_runtime_context(
     return _runtime_context.load_job_runtime_context(
         index_root,
         target,
-        organized_root=organized_root,
         queue_id=queue_id,
         run_id=run_id,
         reaction_dir=reaction_dir,
@@ -227,7 +213,6 @@ def _orca_contract_resolved_fields(
     current_dir: Path | None,
     target: str,
     run_id: str,
-    organized_root: str | Path | None,
     deps: _JobLocationDeps,
 ) -> _OrcaContractResolvedFields:
     return _contract_context.resolved_contract_fields(
@@ -236,7 +221,6 @@ def _orca_contract_resolved_fields(
         current_dir=current_dir,
         target=target,
         run_id=run_id,
-        organized_root=organized_root,
         deps=deps,
     )
 
@@ -245,7 +229,6 @@ def _orca_contract_payload_context(
     index_root: str | Path,
     target: str,
     *,
-    organized_root: str | Path | None = None,
     queue_id: str = "",
     run_id: str = "",
     reaction_dir: str = "",
@@ -254,7 +237,6 @@ def _orca_contract_payload_context(
     runtime = _load_job_runtime_context(
         index_root,
         target,
-        organized_root=organized_root,
         queue_id=queue_id,
         run_id=run_id,
         reaction_dir=reaction_dir,
@@ -265,7 +247,6 @@ def _orca_contract_payload_context(
         target=target,
         run_id=run_id,
         reaction_dir=reaction_dir,
-        organized_root=organized_root,
         deps=deps,
         resolved_fields_fn=_orca_contract_resolved_fields,
     )
@@ -275,7 +256,6 @@ def load_orca_contract_payload(
     index_root: str | Path,
     target: str,
     *,
-    organized_root: str | Path | None = None,
     queue_id: str = "",
     run_id: str = "",
     reaction_dir: str = "",
@@ -284,7 +264,6 @@ def load_orca_contract_payload(
     ctx = _orca_contract_payload_context(
         index_root,
         target,
-        organized_root=organized_root,
         queue_id=queue_id,
         run_id=run_id,
         reaction_dir=reaction_dir,

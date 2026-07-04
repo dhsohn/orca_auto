@@ -146,7 +146,6 @@ def test_load_config_reads_and_normalizes_all_sections(
     cfg = config_mod.load_crest_config()
 
     assert cfg.runtime.allowed_root == str(workflow_root.resolve())
-    assert cfg.runtime.organized_root == str(workflow_root.resolve())
     assert cfg.runtime.max_concurrent == 6
     assert cfg.runtime.admission_root == "/tmp/admission"
     assert cfg.runtime.admission_limit == 6
@@ -167,7 +166,6 @@ def test_load_config_no_longer_supports_top_level_runtime_and_paths_shape(tmp_pa
           admission_root: /tmp/admission
         runtime:
           allowed_root: /tmp/runs
-          organized_root: /tmp/organized
         paths:
           crest_executable: " /opt/crest "
         behavior:
@@ -181,7 +179,7 @@ def test_load_config_no_longer_supports_top_level_runtime_and_paths_shape(tmp_pa
         """,
     )
 
-    with pytest.raises(ValueError, match=r"Config is missing workflow\.root"):
+    with pytest.raises(ValueError, match=r"Config is missing a runs root"):
         config_mod.load_crest_config(str(config_path))
 
 
@@ -205,9 +203,8 @@ def test_load_config_applies_defaults_for_missing_or_invalid_sections(tmp_path: 
     cfg = config_mod.load_crest_config(str(config_path))
 
     assert cfg.runtime.allowed_root == str(workflow_root.resolve())
-    assert cfg.runtime.organized_root == str(workflow_root.resolve())
     assert cfg.runtime.max_concurrent == 1
-    assert cfg.runtime.admission_root == str(tmp_path / "admission")
+    assert cfg.runtime.admission_root == str(workflow_root.resolve() / ".admission")
     assert cfg.runtime.admission_limit == 1
     assert cfg.paths.crest_executable == ""
     assert not hasattr(cfg.behavior, "auto_organize_on_terminal")
@@ -271,7 +268,7 @@ def test_load_config_requires_workflow_root(tmp_path: Path) -> None:
         """,
     )
 
-    with pytest.raises(ValueError, match=r"Config is missing workflow\.root"):
+    with pytest.raises(ValueError, match=r"Config is missing a runs root"):
         config_mod.load_crest_config(str(config_path))
 
 
@@ -289,12 +286,6 @@ def test_load_config_requires_workflow_root(tmp_path: Path) -> None:
             state_mod.load_report_json,
             state_mod.REPORT_JSON_FILE_NAME,
             id="report-json",
-        ),
-        pytest.param(
-            state_mod.write_organized_ref,
-            state_mod.load_organized_ref,
-            state_mod.ORGANIZED_REF_FILE_NAME,
-            id="organized-ref",
         ),
     ],
 )
@@ -320,9 +311,6 @@ def test_json_state_helpers_round_trip(
     [
         pytest.param(state_mod.load_state, state_mod.STATE_FILE_NAME, id="state"),
         pytest.param(state_mod.load_report_json, state_mod.REPORT_JSON_FILE_NAME, id="report-json"),
-        pytest.param(
-            state_mod.load_organized_ref, state_mod.ORGANIZED_REF_FILE_NAME, id="organized-ref"
-        ),
     ],
 )
 def test_json_state_helpers_return_none_for_missing_invalid_and_non_object_payloads(

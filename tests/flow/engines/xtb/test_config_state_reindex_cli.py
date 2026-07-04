@@ -75,9 +75,8 @@ def test_load_config_parses_defaults_and_normalizes_values(tmp_path: Path) -> No
     cfg = load_config(str(config_path))
 
     assert cfg.runtime.allowed_root == str(workflow_root.resolve())
-    assert cfg.runtime.organized_root == str(workflow_root.resolve())
     assert cfg.runtime.max_concurrent == 6
-    assert cfg.runtime.admission_root == str(tmp_path / "admission")
+    assert cfg.runtime.admission_root == str(workflow_root.resolve() / ".admission")
     assert cfg.runtime.admission_limit == 6
     assert cfg.paths.xtb_executable == str(fake_xtb.resolve())
     assert not hasattr(cfg.behavior, "auto_organize_on_terminal")
@@ -103,7 +102,7 @@ def test_load_config_reports_missing_file_invalid_payload_and_requires_workflow_
     missing_workflow_root_path.write_text(
         yaml.safe_dump({"xtb": {"runtime": {}}}), encoding="utf-8"
     )
-    with pytest.raises(ValueError, match=r"Config is missing workflow\.root"):
+    with pytest.raises(ValueError, match=r"Config is missing a runs root"):
         load_config(str(missing_workflow_root_path))
 
 
@@ -161,9 +160,8 @@ def test_load_config_applies_defaults_for_missing_and_non_mapping_optional_secti
     cfg = load_config(str(config_path))
 
     assert cfg.runtime.allowed_root == str(workflow_root.resolve())
-    assert cfg.runtime.organized_root == str(workflow_root.resolve())
     assert cfg.runtime.max_concurrent == 4
-    assert cfg.runtime.admission_root == str((tmp_path / "admission").resolve())
+    assert cfg.runtime.admission_root == str(workflow_root.resolve() / ".admission")
     assert cfg.runtime.admission_limit == 4
     assert cfg.paths.xtb_executable == ""
     assert not hasattr(cfg.behavior, "auto_organize_on_terminal")
@@ -191,18 +189,13 @@ def test_state_helpers_write_and_load_round_trip(
         selected_input="input.xyz",
     )
     report_lines_path = state_mod.write_report_md_lines(job_dir, ["# heading", "", "- done"])
-    organized_ref_path = state_mod.write_organized_ref(
-        job_dir, {"organized_output_dir": "/tmp/out"}
-    )
 
     assert state_path == job_dir / state_mod.STATE_FILE_NAME
     assert report_json_path == job_dir / state_mod.REPORT_JSON_FILE_NAME
     assert report_md_path == job_dir / state_mod.REPORT_MD_FILE_NAME
     assert report_lines_path == job_dir / state_mod.REPORT_MD_FILE_NAME
-    assert organized_ref_path == job_dir / state_mod.ORGANIZED_REF_FILE_NAME
     assert state_mod.load_state(job_dir) == {"status": "queued"}
     assert state_mod.load_report_json(job_dir) == {"status": "completed"}
-    assert state_mod.load_organized_ref(job_dir) == {"organized_output_dir": "/tmp/out"}
     assert (job_dir / state_mod.REPORT_MD_FILE_NAME).read_text(
         encoding="utf-8"
     ) == "# heading\n\n- done\n"
@@ -216,12 +209,10 @@ def test_state_loaders_return_none_for_missing_invalid_and_non_mapping_payloads(
 
     assert state_mod.load_state(job_dir) is None
     assert state_mod.load_report_json(job_dir) is None
-    assert state_mod.load_organized_ref(job_dir) is None
 
     for filename, loader in (
         (state_mod.STATE_FILE_NAME, state_mod.load_state),
         (state_mod.REPORT_JSON_FILE_NAME, state_mod.load_report_json),
-        (state_mod.ORGANIZED_REF_FILE_NAME, state_mod.load_organized_ref),
     ):
         path = job_dir / filename
         path.write_text("{invalid-json", encoding="utf-8")

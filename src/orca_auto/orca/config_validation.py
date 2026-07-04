@@ -11,7 +11,6 @@ from typing import Any
 
 from orca_auto.core.paths import (
     is_rejected_windows_path,
-    is_subpath,
     validate_configured_executable_path,
 )
 
@@ -20,7 +19,6 @@ def _validate_config(cfg: Any) -> None:
     """Validate core path constraints on an AppConfig instance."""
     for label, path_val in [
         ("allowed_root", cfg.runtime.allowed_root),
-        ("organized_root", cfg.runtime.organized_root),
         (
             "admission_root",
             getattr(cfg.runtime, "resolved_admission_root", cfg.runtime.admission_root),
@@ -47,11 +45,3 @@ def _validate_config(cfg: Any) -> None:
         )
     if not allowed_root.is_dir():
         raise ValueError(f"allowed_root is not a directory: {cfg.runtime.allowed_root!r}")
-
-    ar = Path(cfg.runtime.allowed_root).resolve()
-    org = Path(cfg.runtime.organized_root).resolve()
-    if is_subpath(org, ar) or is_subpath(ar, org):
-        raise ValueError(
-            f"organized_root and allowed_root must not contain each other: "
-            f"allowed_root={ar}, organized_root={org}"
-        )

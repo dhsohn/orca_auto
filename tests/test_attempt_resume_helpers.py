@@ -39,7 +39,6 @@ def test_recover_missing_retry_input_covers_missing_attempt_shapes_and_sources(
         selected_inp=selected_inp,
         current_inp=current_inp,
         retries_used=1,
-        retry_recipe_step=lambda retry_number: retry_number,
         to_resolved_local=lambda raw: Path(raw),
         save_state=lambda _reaction_dir, _state: state_path(reaction_dir),
     ) == (False, "resume_attempts_missing")
@@ -49,7 +48,6 @@ def test_recover_missing_retry_input_covers_missing_attempt_shapes_and_sources(
         selected_inp=selected_inp,
         current_inp=current_inp,
         retries_used=1,
-        retry_recipe_step=lambda retry_number: retry_number,
         to_resolved_local=lambda raw: Path(raw),
         save_state=lambda _reaction_dir, _state: state_path(reaction_dir),
     ) == (False, "resume_last_attempt_invalid")
@@ -59,7 +57,6 @@ def test_recover_missing_retry_input_covers_missing_attempt_shapes_and_sources(
         selected_inp=selected_inp,
         current_inp=current_inp,
         retries_used=1,
-        retry_recipe_step=lambda retry_number: retry_number,
         to_resolved_local=lambda raw: Path(raw),
         save_state=lambda _reaction_dir, _state: state_path(reaction_dir),
     ) == (False, "resume_source_input_missing")
@@ -71,7 +68,6 @@ def test_recover_missing_retry_input_covers_missing_attempt_shapes_and_sources(
         selected_inp=missing_selected,
         current_inp=current_inp,
         retries_used=1,
-        retry_recipe_step=lambda retry_number: retry_number,
         to_resolved_local=lambda raw: Path(raw),
         save_state=lambda _reaction_dir, _state: state_path(reaction_dir),
     ) == (False, "resume_fallback_source_missing")
@@ -82,7 +78,6 @@ def test_recover_missing_retry_input_covers_missing_attempt_shapes_and_sources(
         selected_inp=selected_inp,
         current_inp=current_inp,
         retries_used=1,
-        retry_recipe_step=lambda retry_number: retry_number,
         to_resolved_local=lambda raw: Path(raw),
         save_state=lambda _reaction_dir, _state: state_path(reaction_dir),
     ) == (False, "resume_source_input_not_found")
@@ -115,7 +110,6 @@ def test_recover_missing_retry_input_success_creates_patch_actions_and_saves_sta
             selected_inp=selected_inp,
             current_inp=current_inp,
             retries_used=1,
-            retry_recipe_step=lambda retry_number: retry_number + 1,
             to_resolved_local=lambda raw: Path(raw).resolve(),
             save_state=_save_state,
         )
@@ -125,8 +119,7 @@ def test_recover_missing_retry_input_success_creates_patch_actions_and_saves_sta
     rewrite_mock.assert_called_once_with(
         source_inp=source_inp.resolve(),
         target_inp=current_inp,
-        reaction_dir=reaction_dir,
-        step=2,
+        step="no_route_rewrite",
         max_memory_gb=None,
         allow_no_effective_change=True,
     )
@@ -157,7 +150,6 @@ def test_resolve_execution_input_covers_existing_retry_recovery_exception_and_su
         retry_inp_path=lambda inp, retry_number: inp.with_name(
             f"{inp.stem}.retry{retry_number:02d}.inp"
         ),
-        retry_recipe_step=lambda retry_number: retry_number,
         to_resolved_local=lambda raw: Path(raw),
         save_state=lambda _reaction_dir, _state: state_path(reaction_dir),
     )
@@ -178,7 +170,6 @@ def test_resolve_execution_input_covers_existing_retry_recovery_exception_and_su
             retry_inp_path=lambda inp, retry_number: inp.with_name(
                 f"{inp.stem}.retry{retry_number:02d}.inp"
             ),
-            retry_recipe_step=lambda retry_number: retry_number,
             to_resolved_local=lambda raw: Path(raw),
             save_state=lambda _reaction_dir, _state: state_path(reaction_dir),
         )
@@ -201,7 +192,6 @@ def test_resolve_execution_input_covers_existing_retry_recovery_exception_and_su
             retry_inp_path=lambda inp, retry_number: inp.with_name(
                 f"{inp.stem}.retry{retry_number:02d}.inp"
             ),
-            retry_recipe_step=lambda retry_number: retry_number,
             to_resolved_local=lambda raw: Path(raw),
             save_state=lambda _reaction_dir, _state: state_path(reaction_dir),
         )

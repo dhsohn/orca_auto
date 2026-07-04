@@ -262,7 +262,6 @@ def build_terminal_state_payload(
             "manifest_path": result.manifest_path,
             "stdout_log": result.stdout_log,
             "stderr_log": result.stderr_log,
-            "organized_dir": "",
         },
         engine_payload=engine_payload,
     )

@@ -217,7 +217,6 @@ def test_load_xtb_artifact_contract_preserves_selected_candidate_paths_without_d
                 "original_run_dir": str(job_dir),
                 "molecule_key": "rxn-2",
                 "selected_input_xyz": str(selected_input_xyz),
-                "organized_output_dir": str(job_dir),
                 "latest_known_path": str(job_dir),
                 "resource_request": {"max_cores": "8"},
             }
@@ -454,7 +453,6 @@ def test_load_crest_artifact_contract_uses_index_target_without_organized_ref(
                 "original_run_dir": str(job_dir),
                 "molecule_key": "mol-index",
                 "selected_input_xyz": str(selected_input_xyz),
-                "organized_output_dir": str(job_dir),
                 "latest_known_path": str(job_dir),
             }
         ],
@@ -470,7 +468,6 @@ def test_load_crest_artifact_contract_uses_index_target_without_organized_ref(
     contract = load_crest_artifact_contract(crest_index_root=index_root, target="crest_index_job")
 
     assert contract.job_dir == str(job_dir.resolve())
-    assert contract.organized_output_dir == str(job_dir)
     assert contract.selected_input_xyz == str(selected_input_xyz.resolve())
     assert contract.retained_conformer_paths == (str(conformer.resolve()),)
 

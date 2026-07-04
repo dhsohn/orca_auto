@@ -28,7 +28,6 @@ def test_sync_orca_stage_applies_contract_state_metadata_and_artifacts() -> None
         state_status="completed",
         reaction_dir="/tmp/rxn_done",
         latest_known_path="/tmp/rxn_done",
-        organized_output_dir="/tmp/orca_outputs/opt/H2/run_123",
         optimized_xyz_path="/tmp/orca_outputs/opt/H2/run_123/rxn.xyz",
         queue_id="q_123",
         queue_status="completed",
@@ -98,7 +97,6 @@ def test_sync_orca_stage_applies_contract_state_metadata_and_artifacts() -> None
     assert metadata["run_id"] == "run_123"
     assert metadata["queue_status"] == "completed"
     assert metadata["latest_known_path"] == contract.latest_known_path
-    assert metadata["organized_output_dir"] == contract.organized_output_dir
     assert metadata["optimized_xyz_path"] == contract.optimized_xyz_path
     assert metadata["attempt_count"] == 2
     assert metadata["max_retries"] == 3
@@ -120,6 +118,5 @@ def test_sync_orca_stage_applies_contract_state_metadata_and_artifacts() -> None
         "orca_report_json",
         "orca_report_md",
         "orca_output_dir",
-        "orca_organized_output_dir",
     }
     mock_load.assert_called_once()

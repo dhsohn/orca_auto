@@ -90,7 +90,6 @@ def test_clear_terminal_run_states_clears_tracked_and_untracked_terminal_states(
                     "original_run_dir": str(allowed_root / "project" / "rxn_tracked"),
                     "molecule_key": "rxn_tracked",
                     "selected_input_xyz": str(organized_dir / "tracked.inp"),
-                    "organized_output_dir": str(organized_dir),
                     "latest_known_path": str(organized_dir),
                     "resource_request": {},
                     "resource_actual": {},

@@ -60,26 +60,6 @@ def load_config_root_impl(
         return None
 
 
-def load_config_organized_root_impl(
-    config_path: str | None,
-    *,
-    engine: str = "orca",
-    deps: OrchestrationDeps | None = None,
-) -> Path | None:
-    o = _orchestration_context(deps)
-    text = o.stages.support._normalize_text(config_path)
-    if not text:
-        return None
-    try:
-        runtime_paths = _runtime_paths_for_engine(text, engine=engine, deps=o)
-    except YAML_CONFIG_LOAD_EXCEPTIONS:
-        return None
-    organized_root = runtime_paths.get("organized_root")
-    if organized_root is not None:
-        return organized_root
-    return runtime_paths.get("allowed_root")
-
-
 def stage_metadata_impl(stage: dict[str, Any]) -> dict[str, Any]:
     return workflow_stage_metadata(stage)
 
@@ -211,7 +191,6 @@ def clear_reaction_xtb_handoff_error_if_recovering_impl(
 
 __all__ = [
     "clear_reaction_xtb_handoff_error_if_recovering_impl",
-    "load_config_organized_root_impl",
     "load_config_root_impl",
     "reaction_orca_allows_next_candidate_impl",
     "reaction_orca_source_candidate_path_impl",

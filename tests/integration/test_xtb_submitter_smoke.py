@@ -57,7 +57,6 @@ def test_xtb_submitter_roundtrip_smoke(
     assert record.app_name == "orca_auto_xtb"
     assert record.status == "completed"
     assert record.original_run_dir == str(xtb_opt_job.resolve())
-    assert record.organized_output_dir == ""
     assert record.latest_known_path == str(xtb_opt_job.resolve())
 
     artifact_dir = xtb_opt_job.resolve()
@@ -81,7 +80,6 @@ def test_xtb_submitter_roundtrip_smoke(
     )
     assert contract.status == "completed"
     assert contract.job_type == "opt"
-    assert contract.organized_output_dir == ""
     assert contract.selected_candidate_paths == (str((artifact_dir / "xtbopt.xyz").resolve()),)
     assert contract.analysis_summary["canonical_result_path"] == str(
         (artifact_dir / "xtbopt.xyz").resolve()

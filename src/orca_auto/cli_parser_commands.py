@@ -81,41 +81,6 @@ def add_scaffold_parser(subparsers: argparse._SubParsersAction[argparse.Argument
         )
 
 
-def add_organize_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    organize_parser = subparsers.add_parser(
-        "organize",
-        help="Plan or apply organization of terminal engine outputs.",
-    )
-    organize_subparsers = organize_parser.add_subparsers(dest="organize_app", required=True)
-
-    orca_organize_parser = organize_subparsers.add_parser(
-        "orca", help="Plan or apply organization into orca_outputs"
-    )
-    add_engine_config_argument(orca_organize_parser)
-    add_orca_logging_arguments(orca_organize_parser)
-    orca_organize_parser.add_argument(
-        "--reaction-dir", default=None, help="Single job directory to organize"
-    )
-    orca_organize_parser.add_argument(
-        "--root",
-        default=None,
-        help="Root directory to scan (mutually exclusive with --reaction-dir)",
-    )
-    orca_organize_parser.add_argument(
-        "--apply",
-        action="store_true",
-        default=False,
-        help="Actually move files (default is dry-run)",
-    )
-    orca_organize_parser.add_argument(
-        "--rebuild-index",
-        action="store_true",
-        default=False,
-        help="Rebuild JSONL index from organized directories",
-    )
-    orca_organize_parser.set_defaults(func=cli_handlers.cmd_orca_organize)
-
-
 def add_monitor_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     # ``scan-notify`` performs a single filesystem scan and sends Telegram
     # alerts, then exits.
@@ -134,7 +99,6 @@ def add_monitor_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
 __all__ = [
     "add_init_parser",
     "add_monitor_parser",
-    "add_organize_parser",
     "add_run_dir_parser",
     "add_scaffold_parser",
 ]

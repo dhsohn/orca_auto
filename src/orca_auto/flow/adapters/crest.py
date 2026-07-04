@@ -25,7 +25,6 @@ def load_crest_artifact_contract(
         load_json_dict_fn=_adapter_helpers.load_json_dict,
         report_filename="job_report.json",
         state_filename="job_state.json",
-        organized_ref_filename="organized_ref.json",
         missing_label="CREST",
         expected_app_name="orca_auto_crest",
         coerce_resource_dict_fn=coerce_int_mapping,
@@ -47,12 +46,7 @@ def load_crest_artifact_contract(
     mode = fields.payload_record_text("mode", "job_type", default="standard")
     molecule_key = fields.payload_record_text("molecule_key", "molecule_key")
     selected_input_xyz = fields.payload_record_text("selected_input_xyz", "selected_input_xyz")
-    organized_output_dir = fields.payload_ref_record_text(
-        "organized_output_dir",
-        "organized_output_dir",
-        "organized_output_dir",
-    )
-    artifact_roots = fields.artifact_roots(organized_output_dir)
+    artifact_roots = fields.artifact_roots()
     selected_input_xyz = fields.resolved_path(selected_input_xyz, roots=artifact_roots)
     retained_paths = fields.resolved_paths(retained_paths, roots=artifact_roots)
     latest_known_path = bundle.latest_known_path
@@ -64,7 +58,6 @@ def load_crest_artifact_contract(
         reason=reason,
         job_dir=str(fields.job_dir),
         latest_known_path=latest_known_path,
-        organized_output_dir=organized_output_dir,
         molecule_key=molecule_key,
         selected_input_xyz=selected_input_xyz,
         retained_conformer_count=retained_count,

@@ -32,13 +32,13 @@ def run_engine_worker_lifecycle(
         lifecycle.check_shutdown(context)
 
     result = lifecycle.run_job(cfg, context, active_queue_root)
-    organized_output_dir = lifecycle.finalize_entry(
+    sync_result = lifecycle.finalize_entry(
         cfg,
         context,
         result,
         active_queue_root,
     )
-    return lifecycle.build_outcome(context, result, organized_output_dir)
+    return lifecycle.build_outcome(context, result, sync_result)
 
 
 def run_engine_worker_entry(

@@ -25,5 +25,4 @@ def test_workflow_paths_from_path_accepts_conformer_orca_root(tmp_path: Path) ->
 
     assert paths == {
         "allowed_root": (workflow_root / "wf_conformer" / "02_orca").resolve(),
-        "organized_root": (workflow_root / "wf_conformer" / "02_orca").resolve(),
     }

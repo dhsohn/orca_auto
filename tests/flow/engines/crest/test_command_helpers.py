@@ -37,7 +37,6 @@ def _cfg(tmp_path: Path) -> AppConfig:
     return AppConfig(
         runtime=CommonRuntimeConfig(
             allowed_root=str(allowed_root),
-            organized_root=str(organized_root),
         )
     )
 

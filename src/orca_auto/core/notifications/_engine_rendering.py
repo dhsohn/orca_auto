@@ -15,13 +15,10 @@ def terminal_headline(status: str) -> str:
 
 def optional_terminal_lines(
     *,
-    organized_output_dir: Path | None = None,
     resource_request: dict[str, int] | None = None,
     resource_actual: dict[str, int] | None = None,
 ) -> list[str]:
     lines: list[str] = []
-    if organized_output_dir is not None:
-        lines.append(f"organized_output_dir: {organized_output_dir}")
     if resource_request is not None:
         lines.append(f"resource_request: {resource_request}")
     if resource_actual is not None:
@@ -73,18 +70,3 @@ def event_lines(
     if extra_lines:
         lines.extend(extra_lines)
     return lines
-
-
-def organize_summary_lines(
-    *,
-    label: str,
-    organized_count: int,
-    skipped_count: int,
-    root: Path,
-) -> list[str]:
-    return [
-        f"[{label}] Organize summary",
-        f"root: {root}",
-        f"organized: {organized_count}",
-        f"skipped: {skipped_count}",
-    ]

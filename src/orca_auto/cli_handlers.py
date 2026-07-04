@@ -29,14 +29,6 @@ def cmd_orca_run_dir(args: argparse.Namespace) -> int:
     return int(_cmd_orca_run_dir(args))
 
 
-def cmd_orca_organize(args: argparse.Namespace) -> int:
-    from orca_auto.orca.commands.organize import cmd_organize as _cmd_orca_organize
-
-    _configure_orca_logging(args)
-    args.config = _engine_config_for_command(args)
-    return int(_cmd_orca_organize(args))
-
-
 def cmd_workflow_scaffold(args: argparse.Namespace) -> int:
     from orca_auto.flow.scaffold import cmd_scaffold as _cmd_workflow_scaffold
 

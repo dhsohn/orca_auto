@@ -14,7 +14,6 @@ def _cfg(tmp_path: Path) -> AppConfig:
     return AppConfig(
         runtime=CommonRuntimeConfig(
             allowed_root=str(tmp_path / "allowed"),
-            organized_root=str(tmp_path / "organized"),
         ),
         telegram=TelegramConfig(bot_token="bot-token", chat_id="chat-id"),
     )
@@ -194,7 +193,6 @@ def test_notify_job_finished_includes_optional_extra_lines(
     _, messages = _patch_transport(monkeypatch, sent=True)
     job_dir = tmp_path / "runs" / "job-complete"
     selected_xyz = job_dir / "input.xyz"
-    organized_output_dir = tmp_path / "organized" / "job-complete"
     resource_request = {"max_cores": 6, "max_memory_gb": 14}
     resource_actual = {"assigned_cores": 4, "memory_limit_gb": 12}
 
@@ -208,7 +206,6 @@ def test_notify_job_finished_includes_optional_extra_lines(
         job_dir=job_dir,
         selected_xyz=selected_xyz,
         retained_conformer_count=7,
-        organized_output_dir=organized_output_dir,
         resource_request=resource_request,
         resource_actual=resource_actual,
     )
@@ -226,7 +223,6 @@ def test_notify_job_finished_includes_optional_extra_lines(
                 "job_dir: job-complete",
                 "selected_xyz: input.xyz",
                 "retained_conformer_count: 7",
-                f"organized_output_dir: {organized_output_dir}",
                 f"resource_request: {resource_request}",
                 f"resource_actual: {resource_actual}",
             ]

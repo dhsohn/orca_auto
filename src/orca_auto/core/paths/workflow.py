@@ -38,7 +38,6 @@ def workflow_workspace_internal_engine_paths(
     stage_base = workspace / stage_name
     return {
         "allowed_root": stage_base,
-        "organized_root": stage_base,
     }
 
 
@@ -86,6 +85,29 @@ def workflow_workspace_internal_engine_paths_from_path(
     return None
 
 
+def path_is_inside_workflow_workspace(path: str | Path, root: str | Path) -> bool:
+    """True when *path* sits inside a workflow workspace under *root*.
+
+    With workflow workspaces living under the same runs root as standalone
+    ORCA jobs, standalone filesystem scans (reindex, run snapshots, discovery
+    alerts) must skip anything owned by a workflow: a directory is inside a
+    workspace when any ancestor at or below *root* (excluding *root* itself)
+    carries a ``workflow.json``.
+    """
+    try:
+        resolved_root = Path(root).expanduser().resolve()
+        resolved = Path(path).expanduser().resolve()
+        relative = resolved.relative_to(resolved_root)
+    except (OSError, ValueError):
+        return False
+    current = resolved_root
+    for part in relative.parts:
+        current = current / part
+        if (current / WORKFLOW_FILE_NAME).is_file():
+            return True
+    return False
+
+
 def _workflow_payload_has_engine_stage(workspace_dir: Path, engine: str) -> bool:
     engine_text = normalize_text(engine).lower()
     if not engine_text:
@@ -130,10 +152,7 @@ def iter_workflow_runtime_workspaces(
                     engine=engine_text,
                     stage_dirname=stage_dirname,
                 )
-                if (
-                    runtime_paths["allowed_root"].exists()
-                    or runtime_paths["organized_root"].exists()
-                ):
+                if runtime_paths["allowed_root"].exists():
                     candidates.append(item)
                     break
             continue
@@ -152,6 +171,7 @@ __all__ = [
     "WORKFLOW_STAGE_DIRNAME_ALIASES",
     "WORKFLOW_STAGE_DIRNAMES",
     "iter_workflow_runtime_workspaces",
+    "path_is_inside_workflow_workspace",
     "workflow_root_dir",
     "workflow_stage_dirnames_for_engine",
     "workflow_workspace_internal_engine_paths",

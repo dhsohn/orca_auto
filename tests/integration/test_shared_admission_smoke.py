@@ -80,7 +80,6 @@ def _assert_job_record(root: Path, job_id: str, job_dir: Path) -> None:
     record = get_job_location(root, job_id)
     assert record is not None
     assert record.status == "completed"
-    assert record.organized_output_dir == ""
     assert record.latest_known_path == str(job_dir.resolve())
     assert Path(record.latest_known_path).exists()
 

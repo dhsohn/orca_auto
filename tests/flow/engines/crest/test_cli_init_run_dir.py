@@ -11,7 +11,7 @@ from orca_auto.core.queue import list_queue
 from orca_auto.flow.engines.crest import queue_runtime as queue_cmd
 from orca_auto.flow.engines.crest import submission as crest_submission
 from orca_auto.flow.engines.crest.runner import CrestRunResult
-from orca_auto.flow.engines.crest.state import load_organized_ref, load_report_json, load_state
+from orca_auto.flow.engines.crest.state import load_report_json, load_state
 from orca_auto.flow.submitters import crest as crest_submitter
 from tests.engine_artifact_helpers import (
     engine_payload as _engine_payload,
@@ -31,10 +31,9 @@ from tests.engine_artifact_helpers import (
 from tests.engine_process_helpers import process_one_crest_for_test
 
 
-def _write_config(tmp_path: Path) -> tuple[Path, Path, Path]:
+def _write_config(tmp_path: Path) -> tuple[Path, Path]:
     workflow_root = tmp_path / "workflow_root"
     allowed_root = workflow_root / "wf_001" / "01_crest"
-    organized_root = allowed_root
     allowed_root.mkdir(parents=True)
     config_path = tmp_path / "orca_auto.yaml"
     config_path.write_text(
@@ -50,7 +49,7 @@ def _write_config(tmp_path: Path) -> tuple[Path, Path, Path]:
         ),
         encoding="utf-8",
     )
-    return config_path, allowed_root, organized_root
+    return config_path, allowed_root
 
 
 def _write_xyz(path: Path, label: str = "sample") -> None:
@@ -134,7 +133,7 @@ def test_cmd_run_dir_queues_job_updates_state_and_index(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    config_path, allowed_root, _ = _write_config(tmp_path)
+    config_path, allowed_root = _write_config(tmp_path)
     job_dir = allowed_root / "job-queue"
     job_dir.mkdir(parents=True)
     _write_xyz(job_dir / "fallback.xyz", "fallback")
@@ -219,7 +218,7 @@ def test_cmd_run_dir_reports_duplicate_queue_entries(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    config_path, allowed_root, _ = _write_config(tmp_path)
+    config_path, allowed_root = _write_config(tmp_path)
     job_dir = allowed_root / "job-duplicate"
     job_dir.mkdir(parents=True)
     _write_xyz(job_dir / "input.xyz", "input")
@@ -269,7 +268,7 @@ def test_cli_end_to_end_smoke_path_submission_worker_and_index(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    config_path, allowed_root, _ = _write_config(tmp_path)
+    config_path, allowed_root = _write_config(tmp_path)
     job_dir = allowed_root / "job-e2e"
     monkeypatch.setattr(crest_submission, "new_job_id", lambda: "crest-e2e-001")
     queued_notifications, started_notifications, finished_notifications = (
@@ -305,9 +304,6 @@ def test_cli_end_to_end_smoke_path_submission_worker_and_index(
     assert queue_entries[0].task_id == "crest-e2e-001"
     assert queue_entries[0].status.value == "completed"
 
-    organized_ref = load_organized_ref(job_dir)
-    assert organized_ref is None
-
     state = load_state(job_dir)
     report = load_report_json(job_dir)
     assert state is not None
@@ -319,7 +315,6 @@ def test_cli_end_to_end_smoke_path_submission_worker_and_index(
     record = get_job_location(allowed_root, "crest-e2e-001")
     assert record is not None
     assert record.original_run_dir == str(job_dir.resolve())
-    assert record.organized_output_dir == ""
     assert record.latest_known_path == str(job_dir.resolve())
 
     assert len(queued_notifications) == 1
@@ -332,4 +327,3 @@ def test_cli_end_to_end_smoke_path_submission_worker_and_index(
     assert len(finished_notifications) == 1
     assert finished_notifications[0]["job_id"] == "crest-e2e-001"
     assert finished_notifications[0]["status"] == "completed"
-    assert finished_notifications[0]["organized_output_dir"] is None

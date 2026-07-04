@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +16,6 @@ from orca_auto.core.utils.persistence import load_json_mapping_file, load_json_m
 from ._orca_path_helpers import direct_dir_target_impl, resolve_candidate_path_impl
 
 QUEUE_FILE_NAME = "queue.json"
-ORGANIZED_REF_FILE_NAME = "organized_ref.json"
-INDEX_DIR_NAME = "index"
-RECORDS_FILE_NAME = "records.jsonl"
 
 JsonPayload = dict[str, Any]
 JsonPayloadList = list[JsonPayload]
@@ -33,30 +29,9 @@ def load_json_list_impl(path: Path) -> JsonPayloadList:
     return load_json_mapping_list_file(path)
 
 
-def load_jsonl_records_impl(path: Path) -> JsonPayloadList:
-    if not path.exists():
-        return []
-    records: JsonPayloadList = []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return records
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            raw = json.loads(stripped)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(raw, dict):
-            records.append(raw)
-    return records
-
-
 def _record_candidate_dirs(record: JobLocationRecord) -> list[Path]:
     rows: list[Path] = []
-    for value in (record.latest_known_path, record.organized_output_dir, record.original_run_dir):
+    for value in (record.latest_known_path, record.original_run_dir):
         raw = normalize_text(value)
         if not raw:
             continue
@@ -151,135 +126,11 @@ def find_queue_entry_impl(
     return None
 
 
-def _organized_record_dir(organized_root: Path, record: JsonPayload) -> Path | None:
-    reaction_dir_text = normalize_text(record.get("reaction_dir"))
-    if reaction_dir_text:
-        try:
-            return Path(reaction_dir_text).expanduser().resolve()
-        except OSError:
-            pass
-    organized_path = normalize_text(record.get("organized_path"))
-    if organized_path:
-        try:
-            return (organized_root / organized_path).expanduser().resolve()
-        except OSError:
-            return None
-    return None
-
-
-def _organized_record_matches(
-    record: JsonPayload,
-    *,
-    target: str,
-    run_id: str,
-    direct_target: Path | None,
-    resolved_reaction_dir: Path | None,
-    record_dir: Path | None,
-) -> bool:
-    record_run_id = normalize_text(record.get("run_id"))
-    return (
-        (bool(run_id) and record_run_id == run_id)
-        or (bool(target) and record_run_id == target)
-        or (direct_target is not None and record_dir == direct_target)
-        or (resolved_reaction_dir is not None and record_dir == resolved_reaction_dir)
-    )
-
-
-def find_organized_record_impl(
-    *,
-    organized_root: Path | None,
-    target: str,
-    run_id: str,
-    reaction_dir: str,
-) -> JsonPayload | None:
-    if organized_root is None:
-        return None
-    records = load_jsonl_records_impl(organized_root / INDEX_DIR_NAME / RECORDS_FILE_NAME)
-    if not records:
-        return None
-
-    direct_target = direct_dir_target_impl(target)
-    resolved_reaction_dir = resolve_candidate_path_impl(reaction_dir)
-
-    for record in reversed(records):
-        record_dir = _organized_record_dir(organized_root, record)
-        if _organized_record_matches(
-            record,
-            target=target,
-            run_id=run_id,
-            direct_target=direct_target,
-            resolved_reaction_dir=resolved_reaction_dir,
-            record_dir=record_dir,
-        ):
-            return record
-    return None
-
-
-def organized_dir_from_record_impl(
-    organized_root: Path | None, record: JsonPayload | None
-) -> Path | None:
-    if record is None:
-        return None
-    reaction_dir_text = normalize_text(record.get("reaction_dir"))
-    if reaction_dir_text:
-        try:
-            candidate = Path(reaction_dir_text).expanduser().resolve()
-        except OSError:
-            candidate = None
-        if candidate is not None:
-            return candidate
-    organized_path = normalize_text(record.get("organized_path"))
-    if organized_root is None or not organized_path:
-        return None
-    try:
-        return (organized_root / organized_path).expanduser().resolve()
-    except OSError:
-        return None
-
-
-def record_organized_dir_impl(record: JobLocationRecord | None) -> Path | None:
-    if record is None:
-        return None
-    for value in (record.latest_known_path, record.organized_output_dir):
-        raw = normalize_text(value)
-        if not raw:
-            continue
-        try:
-            candidate = Path(raw).expanduser().resolve()
-        except OSError:
-            continue
-        if candidate.exists() and candidate.is_dir():
-            return candidate
-    return None
-
-
-def load_tracked_organized_ref_impl(
-    record: JobLocationRecord | None, current_dir: Path | None
-) -> JsonPayload:
-    if record is None:
-        return {}
-    original_run_dir = normalize_text(record.original_run_dir)
-    if not original_run_dir:
-        return {}
-    try:
-        stub_dir = Path(original_run_dir).expanduser().resolve()
-    except OSError:
-        return {}
-    if current_dir is not None and stub_dir == current_dir.resolve():
-        return {}
-    return load_json_dict_impl(stub_dir / ORGANIZED_REF_FILE_NAME)
-
-
 __all__ = [
-    "find_organized_record_impl",
     "find_queue_entry_impl",
     "load_json_dict_impl",
     "load_json_list_impl",
-    "load_jsonl_records_impl",
-    "load_tracked_organized_ref_impl",
-    "organized_dir_from_record_impl",
     "queue_entry_metadata_impl",
     "queue_entry_metadata_value_impl",
-    "record_organized_dir_impl",
     "resolve_job_dir_impl",
 ]

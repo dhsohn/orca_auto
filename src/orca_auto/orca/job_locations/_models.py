@@ -13,14 +13,12 @@ class JobArtifactContext:
     job_dir: Path | None = None
     state: dict[str, Any] | None = None
     report: dict[str, Any] | None = None
-    organized_ref: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class JobRuntimeContext:
     artifact: JobArtifactContext = field(default_factory=JobArtifactContext)
     queue_entry: dict[str, Any] | None = None
-    organized_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -32,7 +30,6 @@ class OrcaContractPayloadContext:
     queue_entry: dict[str, Any]
     state: dict[str, Any]
     report: dict[str, Any]
-    organized_ref: dict[str, Any]
     current_dir: Path | None
     resolved_run_id: str
     latest_known_path: str
@@ -45,7 +42,6 @@ class OrcaContractPayloadContext:
     selected_input_xyz: str
     last_out_path: str
     optimized_xyz_path: str
-    organized_output_dir: str
     resource_request: dict[str, int]
     resource_actual: dict[str, int]
 
@@ -67,6 +63,5 @@ class OrcaContractResolvedFields:
     selected_input_xyz: str
     last_out_path: str
     optimized_xyz_path: str
-    organized_output_dir: str
     resource_request: dict[str, int]
     resource_actual: dict[str, int]

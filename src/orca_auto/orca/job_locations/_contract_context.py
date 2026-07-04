@@ -19,7 +19,6 @@ class _ResolvedPathFields:
     selected_input_xyz: str
     last_out_path: str
     optimized_xyz_path: str
-    organized_output_dir: str
 
 
 @dataclass(frozen=True)
@@ -43,12 +42,10 @@ def _resolved_path_fields(
     payloads: _contract_payload.RuntimePayloads,
     current_dir: Path | None,
     target: str,
-    organized_root: str | Path | None,
     deps: Any,
 ) -> _ResolvedPathFields:
     latest_known_path = _contract_payload.latest_known_path(
         record=payloads.record,
-        runtime=runtime,
         current_dir=current_dir,
         target=target,
         deps=deps,
@@ -58,20 +55,10 @@ def _resolved_path_fields(
             record=payloads.record,
             state=payloads.state,
             report=payloads.report,
-            organized_ref=payloads.organized_ref,
             current_dir=current_dir,
-            organized_dir=runtime.organized_dir,
             latest_known_path=latest_known_path,
             deps=deps,
         )
-    )
-    organized_output_dir = _contract_payload.organized_output_dir(
-        record=payloads.record,
-        organized_ref=payloads.organized_ref,
-        organized_dir=runtime.organized_dir,
-        current_dir=current_dir,
-        organized_root=organized_root,
-        deps=deps,
     )
     return _ResolvedPathFields(
         latest_known_path=latest_known_path,
@@ -79,7 +66,6 @@ def _resolved_path_fields(
         selected_input_xyz=selected_input_xyz,
         last_out_path=last_out_path,
         optimized_xyz_path=optimized_xyz_path,
-        organized_output_dir=organized_output_dir,
     )
 
 
@@ -127,7 +113,6 @@ def resolved_contract_fields(
     current_dir: Path | None,
     target: str,
     run_id: str,
-    organized_root: str | Path | None,
     deps: Any,
 ) -> OrcaContractResolvedFields:
     path_fields = _resolved_path_fields(
@@ -135,7 +120,6 @@ def resolved_contract_fields(
         payloads=payloads,
         current_dir=current_dir,
         target=target,
-        organized_root=organized_root,
         deps=deps,
     )
     status_fields = _resolved_status_fields(payloads=payloads, deps=deps)
@@ -145,7 +129,6 @@ def resolved_contract_fields(
             run_id=run_id,
             state=payloads.state,
             report=payloads.report,
-            organized_ref=payloads.organized_ref,
             queue_entry=payloads.queue_entry,
             deps=deps,
         ),
@@ -159,7 +142,6 @@ def resolved_contract_fields(
         selected_input_xyz=path_fields.selected_input_xyz,
         last_out_path=path_fields.last_out_path,
         optimized_xyz_path=path_fields.optimized_xyz_path,
-        organized_output_dir=path_fields.organized_output_dir,
         resource_request=resource_fields.resource_request,
         resource_actual=resource_fields.resource_actual,
     )
@@ -171,7 +153,6 @@ def payload_context_from_runtime(
     target: str,
     run_id: str,
     reaction_dir: str,
-    organized_root: str | Path | None,
     deps: Any,
     resolved_fields_fn: Any | None = None,
 ) -> OrcaContractPayloadContext:
@@ -189,7 +170,6 @@ def payload_context_from_runtime(
         current_dir=current_dir,
         target=target,
         run_id=run_id,
-        organized_root=organized_root,
         deps=deps,
     )
 
@@ -201,7 +181,6 @@ def payload_context_from_runtime(
         queue_entry=payloads.queue_entry,
         state=payloads.state,
         report=payloads.report,
-        organized_ref=payloads.organized_ref,
         current_dir=current_dir,
         **asdict(resolved),
     )

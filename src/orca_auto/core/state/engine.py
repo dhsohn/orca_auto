@@ -57,7 +57,6 @@ class EngineStateFiles:
     state_file_name: str
     report_json_file_name: str
     report_md_file_name: str
-    organized_ref_file_name: str
 
     def write_state(self, job_dir: Path, payload: dict[str, Any]) -> Path:
         return write_json_artifact(job_dir, self.state_file_name, payload)
@@ -68,17 +67,11 @@ class EngineStateFiles:
     def write_report_md_lines(self, job_dir: Path, lines: list[str]) -> Path:
         return write_text_artifact(job_dir, self.report_md_file_name, lines)
 
-    def write_organized_ref(self, job_dir: Path, payload: dict[str, Any]) -> Path:
-        return write_json_artifact(job_dir, self.organized_ref_file_name, payload)
-
     def load_state(self, job_dir: Path) -> dict[str, Any] | None:
         return load_json_mapping_artifact(job_dir, self.state_file_name)
 
     def load_report_json(self, job_dir: Path) -> dict[str, Any] | None:
         return load_json_mapping_artifact(job_dir, self.report_json_file_name)
-
-    def load_organized_ref(self, job_dir: Path) -> dict[str, Any] | None:
-        return load_json_mapping_artifact(job_dir, self.organized_ref_file_name)
 
 
 @dataclass(frozen=True)
@@ -117,17 +110,11 @@ class EngineStateAccess:
     def write_report_md_lines(self, job_dir: Path, lines: list[str]) -> Path:
         return self.files.write_report_md_lines(job_dir, lines)
 
-    def write_organized_ref(self, job_dir: Path, payload: dict[str, Any]) -> Path:
-        return self.files.write_organized_ref(job_dir, payload)
-
     def load_state(self, job_dir: Path) -> dict[str, Any] | None:
         return self.files.load_state(job_dir)
 
     def load_report_json(self, job_dir: Path) -> dict[str, Any] | None:
         return self.files.load_report_json(job_dir)
-
-    def load_organized_ref(self, job_dir: Path) -> dict[str, Any] | None:
-        return self.files.load_organized_ref(job_dir)
 
 
 def create_engine_state_access(
@@ -135,7 +122,6 @@ def create_engine_state_access(
     state_file_name: str,
     report_json_file_name: str,
     report_md_file_name: str,
-    organized_ref_file_name: str,
     report_title: str,
     selected_input_label: str,
     now_fn: Callable[[], str] = now_utc_iso,
@@ -145,7 +131,6 @@ def create_engine_state_access(
             state_file_name=state_file_name,
             report_json_file_name=report_json_file_name,
             report_md_file_name=report_md_file_name,
-            organized_ref_file_name=organized_ref_file_name,
         ),
         report_title=report_title,
         selected_input_label=selected_input_label,
@@ -164,7 +149,6 @@ def create_engine_state_bindings(
     state_file_name: str,
     report_json_file_name: str,
     report_md_file_name: str,
-    organized_ref_file_name: str,
     manifest_file_name: str,
     report_title: str,
     selected_input_label: str,
@@ -174,7 +158,6 @@ def create_engine_state_bindings(
         state_file_name=state_file_name,
         report_json_file_name=report_json_file_name,
         report_md_file_name=report_md_file_name,
-        organized_ref_file_name=organized_ref_file_name,
         report_title=report_title,
         selected_input_label=selected_input_label,
         now_fn=now_fn,
@@ -376,7 +359,6 @@ def recovery_pending_payload(
             ),
             "stdout_log": "",
             "stderr_log": "",
-            "organized_dir": "",
         },
         engine_payload=engine_payload,
     )
@@ -449,10 +431,8 @@ class EngineStateModuleExports:
     write_state: Callable[[Path, dict[str, Any]], Path]
     write_report_json: Callable[[Path, dict[str, Any]], Path]
     write_report_md_lines: Callable[[Path, list[str]], Path]
-    write_organized_ref: Callable[[Path, dict[str, Any]], Path]
     load_state: Callable[[Path], dict[str, Any] | None]
     load_report_json: Callable[[Path], dict[str, Any] | None]
-    load_organized_ref: Callable[[Path], dict[str, Any] | None]
     write_report_md: Callable[..., Path]
 
 
@@ -461,7 +441,6 @@ class EngineStateModuleSpec:
     state_file_name: str
     report_json_file_name: str
     report_md_file_name: str
-    organized_ref_file_name: str
     manifest_file_name: str
     report_title: str
     selected_input_label: str
@@ -475,10 +454,8 @@ def engine_state_module_exports(bindings: EngineStateBindings) -> EngineStateMod
         write_state=access.write_state,
         write_report_json=access.write_report_json,
         write_report_md_lines=access.write_report_md_lines,
-        write_organized_ref=access.write_organized_ref,
         load_state=access.load_state,
         load_report_json=access.load_report_json,
-        load_organized_ref=access.load_organized_ref,
         write_report_md=access.write_report_md,
     )
 
@@ -493,7 +470,6 @@ def create_engine_state_module_exports(
             state_file_name=spec.state_file_name,
             report_json_file_name=spec.report_json_file_name,
             report_md_file_name=spec.report_md_file_name,
-            organized_ref_file_name=spec.organized_ref_file_name,
             manifest_file_name=spec.manifest_file_name,
             report_title=spec.report_title,
             selected_input_label=spec.selected_input_label,

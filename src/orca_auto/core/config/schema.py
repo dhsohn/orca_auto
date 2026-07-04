@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, ClassVar, TypeVar
+from typing import Any, TypeVar
 
 from orca_auto.core.utils.coercion import normalize_bool, normalize_text, safe_float, safe_int
 
@@ -86,7 +85,6 @@ def resolved_admission_limit(admission_limit: Any, max_concurrent: Any) -> int:
 
 class RuntimeAdmissionMixin:
     allowed_root: str
-    organized_root: str
     max_concurrent: int
     admission_root: str | None
     admission_limit: int | None
@@ -100,17 +98,9 @@ class RuntimeAdmissionMixin:
         return resolved_admission_limit(self.admission_limit, self.max_concurrent)
 
 
-def default_sibling_organized_root(allowed_root: str, dirname: str) -> str:
-    allowed = Path(allowed_root).expanduser()
-    if not allowed.is_absolute():
-        return ""
-    return str(allowed.parent / dirname)
-
-
 @dataclass(frozen=True)
 class CommonRuntimeConfig(RuntimeAdmissionMixin):
     allowed_root: str
-    organized_root: str
     max_concurrent: int = 4
     admission_root: str | None = None
     admission_limit: int | None = None
@@ -119,13 +109,10 @@ class CommonRuntimeConfig(RuntimeAdmissionMixin):
 @dataclass
 class RetryRuntimeConfig(RuntimeAdmissionMixin):
     allowed_root: str = ""
-    organized_root: str = ""
     default_max_retries: int = 2
     max_concurrent: int = 4
     admission_root: str | None = ""
     admission_limit: int | None = None
-
-    default_organized_root_name: ClassVar[str] = ""
 
     def __post_init__(self) -> None:
         self.default_max_retries = normalize_default_max_retries(
@@ -136,11 +123,6 @@ class RetryRuntimeConfig(RuntimeAdmissionMixin):
             self.max_concurrent,
             4,
         )
-        if not self.organized_root and self.allowed_root and self.default_organized_root_name:
-            self.organized_root = default_sibling_organized_root(
-                self.allowed_root,
-                self.default_organized_root_name,
-            )
         if not self.admission_root and self.allowed_root:
             self.admission_root = self.allowed_root
         self.admission_limit = normalize_admission_limit(

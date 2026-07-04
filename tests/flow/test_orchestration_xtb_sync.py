@@ -31,7 +31,6 @@ def test_sync_xtb_stage_submits_initial_attempt_and_records_handoff_metadata(
         job_id="xtb_job_01",
         reason="ok",
         latest_known_path="/tmp/xtb_done",
-        organized_output_dir="/tmp/xtb_outputs/run_01",
         selected_input_xyz="/tmp/xtb_done/reactant.xyz",
         candidate_details=(
             SimpleNamespace(
@@ -127,7 +126,6 @@ def test_sync_xtb_stage_retries_failed_handoff_when_retry_budget_remains(
         job_id="xtb_job_02",
         reason="ts_missing",
         latest_known_path="/tmp/xtb_done",
-        organized_output_dir="/tmp/xtb_outputs/run_02",
         selected_input_xyz="/tmp/xtb_done/reactant.xyz",
         candidate_details=(),
         selected_candidate_paths=[],
@@ -207,7 +205,6 @@ def test_sync_xtb_stage_stops_retrying_after_limit_and_materializes_empty_candid
         job_id="xtb_job_03",
         reason="ts_missing",
         latest_known_path="/tmp/xtb_failed",
-        organized_output_dir="/tmp/xtb_outputs/run_03",
         selected_input_xyz="/tmp/xtb_failed/reactant.xyz",
         candidate_details=(),
         selected_candidate_paths=[],

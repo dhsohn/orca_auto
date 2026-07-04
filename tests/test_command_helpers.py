@@ -21,13 +21,10 @@ from orca_auto.orca.commands._helpers import (
 from orca_auto.orca.config import AppConfig, PathsConfig, RuntimeConfig
 
 
-def _cfg(
-    allowed_root: Path, organized_root: Path, *, workflow_root: Path | None = None
-) -> AppConfig:
+def _cfg(allowed_root: Path, *, workflow_root: Path | None = None) -> AppConfig:
     return AppConfig(
         runtime=RuntimeConfig(
             allowed_root=str(allowed_root),
-            organized_root=str(organized_root),
             default_max_retries=3,
         ),
         workflow_root=str(workflow_root.resolve()) if workflow_root is not None else "",
@@ -40,12 +37,10 @@ class TestCommandPathValidators(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "allowed"
-            organized = root / "organized"
             reaction = allowed / "r1"
             allowed.mkdir()
-            organized.mkdir()
             reaction.mkdir()
-            cfg = _cfg(allowed, organized)
+            cfg = _cfg(allowed)
 
             resolved = _validate_reaction_dir(cfg, str(reaction))
             self.assertEqual(resolved, reaction.resolve())
@@ -54,12 +49,10 @@ class TestCommandPathValidators(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "allowed"
-            organized = root / "organized"
             outside = root / "outside"
             allowed.mkdir()
-            organized.mkdir()
             outside.mkdir()
-            cfg = _cfg(allowed, organized)
+            cfg = _cfg(allowed)
 
             with self.assertRaises(ValueError):
                 _validate_reaction_dir(cfg, str(outside))
@@ -68,10 +61,8 @@ class TestCommandPathValidators(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "allowed"
-            organized = root / "organized"
             allowed.mkdir()
-            organized.mkdir()
-            cfg = _cfg(allowed, organized)
+            cfg = _cfg(allowed)
 
             with self.assertRaises(ValueError):
                 _validate_reaction_dir(cfg, str(allowed / "missing"))
@@ -81,12 +72,10 @@ class TestCommandPathValidators(unittest.TestCase):
             root = Path(td)
             workflow_root = root / "workflow_root"
             allowed = root / "allowed"
-            organized = root / "organized"
             reaction = workflow_root / "wf_example" / "03_orca" / "job_01"
             allowed.mkdir()
-            organized.mkdir()
             reaction.mkdir(parents=True)
-            cfg = _cfg(allowed, organized, workflow_root=workflow_root)
+            cfg = _cfg(allowed, workflow_root=workflow_root)
 
             resolved = _validate_reaction_dir(cfg, str(reaction))
             self.assertEqual(resolved, reaction.resolve())
@@ -95,10 +84,8 @@ class TestCommandPathValidators(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "allowed"
-            organized = root / "organized"
             allowed.mkdir()
-            organized.mkdir()
-            cfg = _cfg(allowed, organized)
+            cfg = _cfg(allowed)
 
             with self.subTest("allowed_root_exact"):
                 self.assertEqual(_validate_root_scan_dir(cfg, str(allowed)), allowed.resolve())
@@ -110,10 +97,8 @@ class TestCommandPathValidators(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "allowed"
-            organized = root / "organized"
             allowed.mkdir()
-            organized.mkdir()
-            cfg = _cfg(allowed, organized)
+            cfg = _cfg(allowed)
 
             with self.assertRaises(ValueError):
                 _validate_root_scan_dir(cfg, str(root / "missing"))

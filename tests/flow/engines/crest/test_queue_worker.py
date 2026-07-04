@@ -75,13 +75,10 @@ class FakeChildProcess(FakeProcess):
 @pytest.fixture
 def queue_env(tmp_path: Path) -> SimpleNamespace:
     allowed_root = tmp_path / "allowed_root"
-    organized_root = tmp_path / "organized_root"
     allowed_root.mkdir()
-    organized_root.mkdir()
     cfg = AppConfig(
         runtime=CommonRuntimeConfig(
             allowed_root=str(allowed_root),
-            organized_root=str(organized_root),
             max_concurrent=2,
             admission_root=str(tmp_path / "admission_root"),
             admission_limit=1,
@@ -91,7 +88,6 @@ def queue_env(tmp_path: Path) -> SimpleNamespace:
     return SimpleNamespace(
         cfg=cfg,
         allowed_root=allowed_root,
-        organized_root=organized_root,
         tmp_path=tmp_path,
     )
 
@@ -255,7 +251,6 @@ def test_process_one_completed_updates_queue_artifacts_index_without_organizing(
     assert record.status == "completed"
     assert record.job_type == "crest_nci_conformer_search"
     assert record.original_run_dir == str(job.job_dir.resolve())
-    assert record.organized_output_dir == ""
     assert record.latest_known_path == str(job.job_dir.resolve())
     assert record.molecule_key == "selected_input"
 
@@ -264,7 +259,6 @@ def test_process_one_completed_updates_queue_artifacts_index_without_organizing(
     assert calls["started"][0]["job_dir"] == job.job_dir.resolve()
     assert len(calls["finished"]) == 1
     assert calls["finished"][0]["status"] == "completed"
-    assert calls["finished"][0]["organized_output_dir"] is None
     assert calls["finished"][0]["retained_conformer_count"] == 2
     assert calls["released"] == [(queue_env.cfg.runtime.resolved_admission_root, "slot-1")]
 
@@ -319,7 +313,6 @@ def test_process_one_runner_failure_marks_failed_and_writes_failure_artifacts(
     assert record is not None
     assert record.status == "failed"
     assert record.original_run_dir == str(job.job_dir.resolve())
-    assert record.organized_output_dir == ""
     assert record.latest_known_path == str(job.job_dir.resolve())
     assert record.molecule_key == "fixed-key"
 
@@ -327,7 +320,6 @@ def test_process_one_runner_failure_marks_failed_and_writes_failure_artifacts(
     assert len(calls["finished"]) == 1
     assert calls["finished"][0]["status"] == "failed"
     assert calls["finished"][0]["reason"] == "runner_error:boom"
-    assert calls["finished"][0]["organized_output_dir"] is None
     assert calls["released"] == [(queue_env.cfg.runtime.resolved_admission_root, "slot-1")]
 
     stdout = capsys.readouterr().out
@@ -403,7 +395,6 @@ def test_process_one_cancel_requested_terminates_and_marks_cancelled(
     assert len(calls["started"]) == 1
     assert len(calls["finished"]) == 1
     assert calls["finished"][0]["status"] == "cancelled"
-    assert calls["finished"][0]["organized_output_dir"] is None
     assert calls["released"] == [(queue_env.cfg.runtime.resolved_admission_root, "slot-1")]
 
     stdout = capsys.readouterr().out
@@ -417,7 +408,6 @@ def test_queue_worker_fill_slots_starts_multiple_child_processes(
     cfg = AppConfig(
         runtime=CommonRuntimeConfig(
             allowed_root=str(queue_env.allowed_root),
-            organized_root=str(queue_env.organized_root),
             max_concurrent=2,
             admission_root=str(queue_env.tmp_path / "admission_root"),
             admission_limit=2,

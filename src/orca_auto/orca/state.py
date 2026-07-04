@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from orca_auto.core.artifacts import (
-    ORGANIZED_REF_FILE,
     RUN_REPORT_JSON_FILE,
     RUN_REPORT_MD_FILE,
     RUN_STATE_FILE,
@@ -42,7 +41,6 @@ logger = logging.getLogger(__name__)
 STATE_FILE_NAME = RUN_STATE_FILE
 REPORT_JSON_NAME = RUN_REPORT_JSON_FILE
 REPORT_MD_NAME = RUN_REPORT_MD_FILE
-ORGANIZED_REF_NAME = ORGANIZED_REF_FILE
 
 
 def now_utc_iso() -> str:
@@ -59,10 +57,6 @@ def report_json_path(reaction_dir: Path) -> Path:
 
 def report_md_path(reaction_dir: Path) -> Path:
     return reaction_dir / REPORT_MD_NAME
-
-
-def organized_ref_path(reaction_dir: Path) -> Path:
-    return reaction_dir / ORGANIZED_REF_NAME
 
 
 def _load_json_dict(path: Path) -> dict[str, Any] | None:
@@ -119,10 +113,6 @@ def load_report_json(reaction_dir: Path) -> dict[str, Any] | None:
     if _text(payload.get("engine")) != "orca":
         return None
     return payload
-
-
-def load_organized_ref(reaction_dir: Path) -> dict[str, Any] | None:
-    return _load_json_dict(organized_ref_path(reaction_dir))
 
 
 def new_state(reaction_dir: Path, selected_inp: Path, max_retries: int) -> RunState:
@@ -223,7 +213,6 @@ def _normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any])
             "manifest_path": "",
             "stdout_log": "",
             "stderr_log": "",
-            "organized_dir": "",
             "last_out_path": last_out_path,
         },
         engine_payload={
@@ -275,9 +264,3 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
     if html_path is not None:
         reports["report_html"] = str(html_path)
     return reports
-
-
-def write_organized_ref(reaction_dir: Path, payload: dict[str, Any]) -> Path:
-    path = organized_ref_path(reaction_dir)
-    atomic_write_json(path, payload, ensure_ascii=True, indent=2)
-    return path

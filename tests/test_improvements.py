@@ -11,7 +11,6 @@ from unittest.mock import patch
 from orca_auto.core.admission import reserve_slot
 from orca_auto.orca.commands.run_inp import _cmd_run_inp_execute
 from orca_auto.orca.completion_rules import CompletionMode
-from orca_auto.orca.inp_rewriter import rewrite_for_retry
 from orca_auto.orca.orca_runner import RunResult
 from orca_auto.orca.out_analyzer import analyze_output
 from orca_auto.orca.state import load_state, save_state
@@ -76,59 +75,6 @@ class TestGeomNotConvergedDetection(unittest.TestCase):
         # If ORCA terminated normally despite geom warning, treat as completed
         text = "OPTIMIZATION HAS NOT YET CONVERGED\n****ORCA TERMINATED NORMALLY****\n"
         self.assertEqual(self._analyze(text), AnalyzerStatus.COMPLETED)
-
-
-class TestNewRecipeSteps(unittest.TestCase):
-    BASE_INP = "! Opt B3LYP def2-SVP\n\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
-
-    def test_step3_increases_maxcore_and_adds_looseopt(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            src = root / "rxn.inp"
-            dst = root / "rxn.retry03.inp"
-            src.write_text(self.BASE_INP, encoding="utf-8")
-            actions = rewrite_for_retry(src, dst, root, step=3)
-            out = dst.read_text(encoding="utf-8")
-        self.assertIn("maxcore_increased", actions)
-        self.assertIn("route_add_looseopt", actions)
-        self.assertIn("%maxcore", out)
-        self.assertIn("LooseOpt", out)
-
-    def test_step3_increases_existing_maxcore(self) -> None:
-        inp_text = "%maxcore 2000\n" + self.BASE_INP
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            src = root / "rxn.inp"
-            dst = root / "rxn.retry03.inp"
-            src.write_text(inp_text, encoding="utf-8")
-            actions = rewrite_for_retry(src, dst, root, step=3)
-            out = dst.read_text(encoding="utf-8")
-        self.assertIn("maxcore_increased", actions)
-        self.assertIn("%maxcore 3000", out)
-
-    def test_step4_combines_hessian_maxcore_scf(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            src = root / "rxn.inp"
-            dst = root / "rxn.retry04.inp"
-            src.write_text(self.BASE_INP, encoding="utf-8")
-            actions = rewrite_for_retry(src, dst, root, step=4)
-            out = dst.read_text(encoding="utf-8")
-        self.assertIn("geom_hessian_and_maxiter_500", actions)
-        self.assertIn("maxcore_increased", actions)
-        self.assertIn("Calc_Hess", out)
-        self.assertIn("MaxIter 500", out)
-        self.assertIn("%maxcore", out)
-
-    def test_step5_no_recipe(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            src = root / "rxn.inp"
-            dst = root / "rxn.retry05.inp"
-            src.write_text(self.BASE_INP, encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "no_retry_rewrite_available"):
-                rewrite_for_retry(src, dst, root, step=5)
-        self.assertFalse(dst.exists())
 
 
 class TestDecideAttemptOutcomeExpanded(unittest.TestCase):
@@ -240,7 +186,7 @@ class TestCrashRecovery(unittest.TestCase):
 
             with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run", new=_fake_run):
                 token = reserve_slot(
-                    reaction.parent,
+                    reaction.parent / ".admission",
                     1,
                     work_dir=str(reaction),
                     source="queue_worker",

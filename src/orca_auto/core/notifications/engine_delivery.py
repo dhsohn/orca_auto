@@ -65,7 +65,6 @@ class EngineNotificationDelivery:
 
     def deliver_finished(self, cfg: Any, request: EngineJobFinishedRequest) -> bool:
         extra_lines = optional_terminal_lines(
-            organized_output_dir=request.organized_output_dir,
             resource_request=request.resource_request,
             resource_actual=request.resource_actual,
         )

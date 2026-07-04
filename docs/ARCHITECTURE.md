@@ -24,7 +24,7 @@ The core design principle is **durable submission, supervised execution**:
   the request and write a durable queue entry, then return.
 - Long-running, externally supervised **workers** (under `systemd`) pick up
   queued work and execute it.
-- Per-job state, reports, and organized outputs are recorded on disk next to the
+- Per-job state and reports are recorded on disk next to the
   calculation.
 
 ORCA is the public, first-class engine with the richest retry/reporting/monitor
@@ -55,13 +55,13 @@ src/orca_auto/
 │   └── utils/           # Locks, persistence, process tracking, coercion
 │
 ├── orca/                # Canonical ORCA implementation (source of truth)
-│   ├── commands/        # init, run_inp, queue, organize, monitor
+│   ├── commands/        # init, run_inp, queue, monitor
 │   ├── runtime/         # Run locks
 │   ├── engine.py        # ORCA EngineDefinition wiring
 │   ├── attempt/         # Attempt engine, retry, resume, reporting
 │   ├── parser/          # ORCA output parsing
 │   ├── state*.py        # Per-job state machine + persistence
-│   └── ...              # retry recipes, completion rules, organize, indexing
+│   └── ...              # retry recipes, completion rules, indexing
 │
 └── flow/                # Workflow orchestration package
     ├── orchestration/   # advance_workflow loop, phases, stage runtime
@@ -132,7 +132,7 @@ from execution by a durable, on-disk queue.
                                         ┌──────────────────────────────┐
                                         │  Engine execution + lifecycle  │
                                         │  parse → classify → retry →    │
-                                        │  report → notify → organize    │
+                                        │  report → notify               │
                                         └────────────────────────────────┘
 ```
 
@@ -199,7 +199,7 @@ python -m orca_auto.core.engines.worker_child \
 
 The parent worker (`EngineQueueWorker`) reserves an admission slot, spawns this
 child, and finalizes the terminal queue result after the child exits. ORCA keeps
-its richer domain behavior (state machine, retry, reports, auto-organize) inside
+its richer domain behavior (state machine, retry, reports) inside
 `orca_auto.orca`, but the *lifecycle scaffolding* around it is shared.
 
 ---
@@ -274,9 +274,8 @@ logic. Notable pieces:
   self-contained visual report — scan energy profile (ScanTS and plain relaxed
   scans) or optimization convergence trace (Opt/OptTS), retry-recipe chain,
   and vibrational summary.
-- **Organize & index:** `result_organizer/` moves completed outputs into the
-  organized root and leaves an `organized_ref.json` stub; `dft_index*.py` and
-  `organize_index.py` maintain a JSONL index for discovery.
+- **Index:** `dft_index*.py` and `core/indexing` maintain a JSONL
+  job-location index for discovery.
 
 The fields ORCA exposes downstream (the "contract freeze") are documented in
 [REFERENCE.md](REFERENCE.md) §11.1 — `reaction_dir` remains the ORCA
@@ -333,9 +332,9 @@ retained conformers to ORCA child jobs on the next workflow cycle.
 
 ### Internal-engine scoping
 
-Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and organized
-outputs live **only** under
-`workflow.root/<workflow_id>/internal/<engine>/{runs,outputs}`. They are not
+Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs
+live **only** under `<runs root>/<workflow_id>/<NN_engine>` (`01_crest`,
+`02_xtb`, `03_orca`). They are not
 part of the public CLI surface; users submit them through workflow `run-dir`.
 
 ---
@@ -351,13 +350,12 @@ orca_auto is disk-backed throughout. Concurrency safety comes from file locks
 | admission slot file         | core/admission   | Active concurrency slots (machine-wide)  |
 | `job_state.json`            | orca (state)     | Per-job attempts + status                |
 | `job_report.json` / `.md`   | orca (reporting) | Human/machine completion report          |
-| `organized_ref.json`        | orca (organize)  | Stub left after outputs are organized    |
 | job-location index (JSONL)  | core/indexing    | Where each job's outputs currently live  |
 | `workflow.json`             | flow             | Durable workflow payload                 |
 | `workflow_report.html`      | flow (report)    | Live visual workflow summary             |
 | workflow registry + journal | flow/registry    | Cross-workflow listing + event history   |
 
-The queue entry, tracked job-location record, and organize stub each expose a
+The queue entry and tracked job-location record each expose a
 frozen set of downstream fields (see REFERENCE.md §11.1) so that `flow` can
 consume ORCA results without coupling to ORCA internals.
 
@@ -433,7 +431,6 @@ status-aware colorized table rendering (`terminal_table.py`, `activity_*.py`,
 - `run-dir <path>` — durable submission (ORCA or workflow, auto-routed)
 - `queue list` / `queue cancel` / `queue list clear` — inspect/maintain the queue
 - `service status` / `service restart` — runtime status (via systemd)
-- `organize orca ...` — organize completed ORCA outputs
 - `scan-notify` — one-shot discovery scan + Telegram alerts
 - `systemd install` — render and enable units
 
@@ -467,7 +464,7 @@ transitions) over internal delegation tests.
 - **Shared admission cap** — a single machine-wide slot pool bounds total
   concurrency across every engine.
 - **Frozen downstream contracts** — `flow` consumes ORCA via a documented field
-  contract (`reaction_dir`, job-location records, organize stubs), not internals.
+  contract (`reaction_dir`, job-location records), not internals.
 - **Disk-backed, lock-guarded state** — every mutation goes through a file lock;
   crashed owners are reconciled rather than leaking slots.
 - **Linux/WSL-first, systemd-supervised** — strict Linux path validation and

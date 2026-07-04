@@ -38,9 +38,9 @@ Current intended semantics:
 - The ORCA worker starts queue children by queue identity
   (`--queue-root/--queue-id`), then the child resolves the current queue entry
   and runs through the shared `InternalEngineWorkerAdapter` lifecycle
-- ORCA state, retry, report, notification, and auto-organize behavior remain
-  ORCA-domain behavior; parent queue finalization still records the terminal
-  queue result after the child exits
+- ORCA state, retry, report, and notification behavior remain ORCA-domain
+  behavior; parent queue finalization still records the terminal queue result
+  after the child exits
 - On WSL, the recommended supervisor is `systemd`
 
 Operational consequences:
@@ -106,7 +106,6 @@ commands:
 - `run-dir <path>`
 - `init`
 - `scaffold <ts_search|conformer_search>`
-- `organize orca`
 - `scan-notify`
 Activate `.venv` first, or call `.venv/bin/orca_auto ...` directly.
 By default, config is resolved from `ORCA_AUTO_CONFIG`, then `<repo_root>/config/orca_auto.yaml`, then `~/orca_auto/config/orca_auto.yaml`.
@@ -127,16 +126,12 @@ resources:
   max_cores_per_task: 8
   max_memory_gb_per_task: 32
 
-behavior:
-  # ORCA-only; internal xTB/CREST stages do not organize.
-  auto_organize_on_terminal: false
-
 scheduler:
   max_active_simulations: 4
   admission_root: "/path/to/chem_admission"
 
 workflow:
-  root: "/path/to/workflow_root"
+  # root defaults to the runs root (orca.runtime.allowed_root)
   paths:
     xtb_executable: "/path/to/xtb"
     crest_executable: "/path/to/crest"
@@ -151,7 +146,6 @@ telegram:
 orca:
   runtime:
     allowed_root: "/path/to/orca_runs"
-    organized_root: "/path/to/orca_outputs"
     default_max_retries: 2
   paths:
     orca_executable: "/path/to/orca/orca"
@@ -159,17 +153,19 @@ orca:
 
 Field descriptions for the `orca` section:
 
-- `orca.runtime.allowed_root`: Root directory permitted for execution
-- `orca.runtime.organized_root`: Root for organized outputs
+- `orca.runtime.allowed_root`: Root directory permitted for execution;
+  completed runs stay here under their submitted directory names
 - `orca.runtime.default_max_retries`: `0` disables ORCA retries; positive values
   enable the calculation-type retry policy
 - `scheduler.max_active_simulations`: Shared total active-run cap across ORCA, internal xTB stages, and internal CREST stages
-- `scheduler.admission_root`: Shared admission root for machine-wide slot coordination
-- `workflow.root`: Workflow root for workflow creation, activity inspection, and the integrated workflow worker
+- `scheduler.admission_root`: Shared admission root for machine-wide slot
+  coordination; defaults to `<runs root>/.admission`
+- `workflow.root`: Optional override for where workflow workspaces live;
+  defaults to the runs root (`orca.runtime.allowed_root`)
 - `workflow.paths.xtb_executable`: xTB executable path used by workflow-managed internal stages
 - `workflow.paths.crest_executable`: CREST executable path used by workflow-managed internal stages
 - Internal xTB/CREST runtimes are scoped to each workflow
-- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under `workflow.root/<workflow_id>/internal/<engine>/{runs,outputs}`
+- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under `<runs root>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`)
 - `orca.paths.orca_executable`: ORCA executable path
 
 Notes:
@@ -184,7 +180,7 @@ Notes:
 
 ## 7) CLI Usage
 
-All public queue, submission, scaffold, and organization commands should be
+All public queue, submission, and scaffold commands should be
 documented through `orca_auto ...`.
 
 Public command surface:
@@ -344,21 +340,7 @@ cancelled entries from the unified list.
   confirmation step; when more than eight activities are cancellable the message notes how
   many are shown, and executing a cancel or clear auto-refreshes the list.
 
-### 7.6 `organize`
-
-```bash
-orca_auto organize orca --root '/absolute/path/to/orca_runs'
-orca_auto organize orca --root '/absolute/path/to/orca_runs' --apply
-```
-
-Options:
-
-- `organize orca --reaction-dir <dir>`: Organize one ORCA job directory
-- `organize orca --root <dir>`: Scan from the configured ORCA root
-- `organize orca --rebuild-index`: Rebuild the ORCA JSONL index
-- `--apply`: Perform actual moves; otherwise the command is a dry run
-
-### 7.7 `scan-notify`
+### 7.6 `scan-notify`
 
 ```bash
 orca_auto scan-notify
@@ -369,7 +351,7 @@ Behavior:
 - `scan-notify` runs a one-shot scan of the configured ORCA root and sends
   Telegram discovery alerts, then exits. It is not a live monitor.
 
-### 7.8 Long-Running Services
+### 7.7 Long-Running Services
 
 Long-running worker and Telegram bot processes are managed through `systemd`
 only. Public CLI commands do not start those services directly.
@@ -518,7 +500,6 @@ Generated in the job directory:
   convergence trace (Opt/OptTS), the retry-recipe chain, and a vibrational
   summary (imaginary modes, dominant atom displacements, and — for scans —
   alignment with the scanned coordinate)
-- `organized_ref.json` after organize leaves a stub in the original run directory
 
 Important `job_state.json` fields:
 
@@ -582,22 +563,7 @@ Tracked job-location fields currently consumed downstream from
 - `original_run_dir`
 - `molecule_key`
 - `selected_input_xyz`
-- `organized_output_dir`
 - `latest_known_path`
-- `resource_request`
-- `resource_actual`
-
-Organize stub fields currently consumed downstream from `organized_ref.json`:
-
-- `job_id`
-- `run_id`
-- `original_run_dir`
-- `organized_output_dir`
-- `selected_inp`
-- `selected_input_xyz`
-- `status`
-- `job_type`
-- `molecule_key`
 - `resource_request`
 - `resource_actual`
 
@@ -610,7 +576,6 @@ least these fields:
 - `state_status`
 - `reaction_dir`
 - `latest_known_path`
-- `organized_output_dir`
 - `optimized_xyz_path`
 - `queue_id`
 - `queue_status`

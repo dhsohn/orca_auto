@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ._engine_delivery import send_job_event, send_organize_summary
+from ._engine_delivery import send_job_event
 
 
 @dataclass(frozen=True)
@@ -32,23 +32,6 @@ class EngineNotifier:
             fields=fields,
             send_fn=self.send_fn,
             extra_lines=extra_lines,
-        )
-
-    def send_organize_summary(
-        self,
-        cfg: Any,
-        *,
-        organized_count: int,
-        skipped_count: int,
-        root: Path,
-    ) -> bool:
-        return send_organize_summary(
-            cfg,
-            label=self.label,
-            organized_count=organized_count,
-            skipped_count=skipped_count,
-            root=root,
-            send_fn=self.send_fn,
         )
 
 

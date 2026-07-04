@@ -7,6 +7,14 @@
 #
 # Use Linux paths only. Windows-style paths such as C:\... or /mnt/c/... are
 # not supported.
+#
+# Directory layout: everything lives under a single runs root
+# (orca.runtime.allowed_root). Standalone ORCA jobs and workflow workspaces
+# sit side by side in it, and the shared admission directory defaults to a
+# hidden ".admission" inside it:
+#   <runs root>/<your_job_dir>/          standalone ORCA runs (names are yours)
+#   <runs root>/<workflow_id>/           workflow workspaces
+#   <runs root>/.admission/              shared admission slots (automatic)
 
 resources:
   # Default per-task resource requests. ORCA uses these as defaults for missing
@@ -15,25 +23,19 @@ resources:
   max_cores_per_task: 8
   max_memory_gb_per_task: 32
 
-behavior:
-  # ORCA-only: when true, ORCA queue workers auto-organize runs as soon as
-  # they reach a terminal state. This is an ORCA terminal lifecycle hook;
-  # internal xTB/CREST stages do not organize.
-  auto_organize_on_terminal: false
-
 scheduler:
   # Shared total active-run cap across ORCA, internal xTB workflow stages, and
   # internal CREST workflow stages. All engine workers use this shared
   # admission lifecycle.
   max_active_simulations: 4
   # Shared admission directory for machine-wide slot coordination.
-  # If omitted, orca_auto defaults to "<directory containing this file>/admission".
-  admission_root: /home/user/orca_auto/admission
+  # If omitted, orca_auto defaults to "<runs root>/.admission".
+  # admission_root: /home/user/runs/.admission
 
 workflow:
-  # Base directory for workflow definitions, workflow journals, and unified
-  # activity inspection.
-  root: /home/user/orca_auto/workflow_root
+  # Base directory for workflow workspaces. If omitted, workflows live in the
+  # runs root (orca.runtime.allowed_root) next to standalone ORCA jobs.
+  # root: /home/user/runs
   paths:
     # Executables used by workflow-managed internal stages. If set, each value
     # must be an absolute Linux path to an existing executable file. Leave blank
@@ -42,11 +44,8 @@ workflow:
     crest_executable: /home/user/bin/crest/crest
   # Internal xTB/CREST runtime roots are derived automatically and are not set
   # directly in config. Each workflow keeps its own queue.json,
-  # job_locations.json, and outputs under the engine's runs/output roots:
-  #   xTB runs     -> <workflow.root>/<workflow_id>/internal/xtb/runs
-  #   xTB outputs  -> <workflow.root>/<workflow_id>/internal/xtb/outputs
-  #   CREST runs   -> <workflow.root>/<workflow_id>/internal/crest/runs
-  #   CREST outputs-> <workflow.root>/<workflow_id>/internal/crest/outputs
+  # job_locations.json, and job dirs under one directory per engine stage,
+  # e.g. <runs root>/<workflow_id>/01_crest, .../02_xtb, .../03_orca.
 
 telegram:
   # Leave blank to disable the unified Telegram bot and shared Telegram
@@ -62,12 +61,10 @@ telegram:
 
 orca:
   runtime:
-    # Root directory where ORCA jobs are allowed to execute.
-    allowed_root: /home/user/orca_runs
-    # Root directory where organized ORCA outputs are collected.
-    # If omitted, orca_auto defaults to a sibling directory named
-    # "orca_outputs".
-    organized_root: /home/user/orca_outputs
+    # The single runs root. ORCA jobs execute here and completed runs stay
+    # here (keeping their submitted directory names); workflow workspaces and
+    # the default .admission directory live here too.
+    allowed_root: /home/user/runs
     # Retry count after the initial attempt.
     # Example: 2 means "1 initial run + up to 2 retries" = 3 total attempts.
     default_max_retries: 2

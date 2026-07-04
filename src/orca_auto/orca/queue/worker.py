@@ -75,7 +75,7 @@ from ..job_locations import (
     resource_dict,
     upsert_job_record,
 )
-from ..state import finalize_state, load_organized_ref, load_report_json, load_state
+from ..state import finalize_state, load_report_json, load_state
 from ..statuses import AnalyzerStatus
 from ..telegram_notifier import notify_run_finished_event
 from . import worker_lifecycle as _lifecycle_helpers
@@ -248,7 +248,6 @@ def _tracking_callbacks() -> _tracking_helpers.OrcaQueueWorkerTrackingCallbacks:
         build_run_finished_notification=build_run_finished_notification,
         coerce_resource_request=coerce_resource_request,
         finished_notification_already_sent=finished_notification_already_sent,
-        load_organized_ref=load_organized_ref,
         load_report_json=load_report_json,
         load_state=load_state,
         mark_finished_notification_sent=mark_finished_notification_sent,
@@ -344,7 +343,7 @@ def _lifecycle_callbacks() -> _lifecycle_helpers.OrcaQueueWorkerLifecycleCallbac
         upsert_terminal_job_record=_upsert_terminal_job_record,
         notify_terminal_job_from_state=_notify_terminal_job_from_state,
         find_queue_entry=_queue_entry_by_id,
-        on_completed=lambda worker, job: worker._auto_organize_terminal_job(job),
+        on_completed=None,
         queue_roots=queue_roots,
         reconcile_stale_slots=reconcile_stale_slots,
         reconcile_orphaned_running_entries=reconcile_orphaned_running_entries,
@@ -486,10 +485,6 @@ def _make_orca_running_job(
     )
 
 
-def _auto_organize_terminal_job(worker: EngineQueueWorker, job: _RunningJob) -> None:
-    _runtime_helpers.auto_organize_terminal_job(worker, job)
-
-
 def _check_orca_cancel_requests(worker: EngineQueueWorker) -> None:
     _runtime_helpers.check_cancel_requests(
         worker,
@@ -584,7 +579,6 @@ def QueueWorker(
     config_path: str,
     *,
     max_concurrent: int = DEFAULT_MAX_CONCURRENT,
-    auto_organize: bool = False,
 ) -> EngineQueueWorker:
     configured_max = max(1, int(max_concurrent))
     worker_cfg = _worker_config_with_effective_concurrency(cfg, configured_max)
@@ -598,7 +592,6 @@ def QueueWorker(
         hooks=_queue_worker_hooks(),
         worker_pid_file_name=WORKER_PID_FILE,
         admission_root=_admission_root_for_cfg(worker_cfg),
-        auto_organize=auto_organize,
         after_init=_after_orca_worker_init,
         before_run=_before_orca_worker_run,
         after_run=_after_orca_worker_run,
@@ -613,7 +606,6 @@ def QueueWorker(
     )
     _runtime_helpers.install_worker_runtime_methods(
         worker,
-        auto_organize_fn=_auto_organize_terminal_job,
         cancel_running_job_fn=_cancel_orca_running_job,
     )
     return worker

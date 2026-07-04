@@ -56,8 +56,6 @@ def _write_shared_config(
             resources:
               max_cores_per_task: 2
               max_memory_gb_per_task: 2
-            behavior:
-              auto_organize_on_terminal: false
             telegram:
               bot_token: ""
               chat_id: ""
@@ -73,9 +71,7 @@ class SmokeWorkspace:
     repo_root: Path
     pythonpath: str
     xtb_allowed_root: Path
-    xtb_organized_root: Path
     crest_allowed_root: Path
-    crest_organized_root: Path
     admission_root: Path
     config_path: Path
     xtb_config_path: Path
@@ -95,18 +91,14 @@ def smoke_workspace(tmp_path: Path) -> SmokeWorkspace:
     root = tmp_path / "integration_smoke"
     workflow_root = root / "workflow_root"
     xtb_allowed_root = workflow_root / "wf_xtb_manual" / "02_xtb"
-    xtb_organized_root = xtb_allowed_root
     crest_allowed_root = workflow_root / "wf_crest_manual" / "01_crest"
-    crest_organized_root = crest_allowed_root
     admission_root = root / "admission"
     bin_dir = root / "bin"
 
     for path in (
         workflow_root,
         xtb_allowed_root,
-        xtb_organized_root,
         crest_allowed_root,
-        crest_organized_root,
         admission_root,
         bin_dir,
     ):
@@ -187,9 +179,7 @@ def smoke_workspace(tmp_path: Path) -> SmokeWorkspace:
         repo_root=REPO_ROOT,
         pythonpath=_pythonpath(),
         xtb_allowed_root=xtb_allowed_root,
-        xtb_organized_root=xtb_organized_root,
         crest_allowed_root=crest_allowed_root,
-        crest_organized_root=crest_organized_root,
         admission_root=admission_root,
         config_path=config_path,
         xtb_config_path=config_path,

@@ -80,7 +80,6 @@ def _artifact_paths(values: Mapping[str, Any] | None = None) -> dict[str, Any]:
         "manifest_path": "",
         "stdout_log": "",
         "stderr_log": "",
-        "organized_dir": "",
     }
     payload.update(_clean_dict(values))
     return payload

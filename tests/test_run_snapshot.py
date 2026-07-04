@@ -184,6 +184,45 @@ def test_collect_run_snapshots_skips_state_files_that_fail_to_load(
     assert collect_run_snapshots(allowed_root) == []
 
 
+def test_collect_run_snapshots_skips_workflow_workspace_jobs(tmp_path: Path) -> None:
+    allowed_root = tmp_path / "runs"
+    standalone = allowed_root / "rxn_standalone"
+    standalone.mkdir(parents=True)
+    save_state(
+        standalone,
+        {
+            "run_id": "run-standalone",
+            "status": "completed",
+            "started_at": "2026-01-10T10:00:00+00:00",
+            "updated_at": "2026-01-10T11:00:00+00:00",
+            "selected_inp": str(standalone / "calc.inp"),
+            "attempts": [],
+            "final_result": {"completed_at": "2026-01-10T11:00:00+00:00"},
+        },
+    )
+
+    workspace = allowed_root / "wf_20260704"
+    stage_job = workspace / "03_orca" / "candidate_01"
+    stage_job.mkdir(parents=True)
+    (workspace / "workflow.json").write_text("{}", encoding="utf-8")
+    save_state(
+        stage_job,
+        {
+            "run_id": "run-workflow-internal",
+            "status": "completed",
+            "started_at": "2026-01-10T10:00:00+00:00",
+            "updated_at": "2026-01-10T11:00:00+00:00",
+            "selected_inp": str(stage_job / "calc.inp"),
+            "attempts": [],
+            "final_result": {"completed_at": "2026-01-10T11:00:00+00:00"},
+        },
+    )
+
+    snapshots = collect_run_snapshots(allowed_root)
+
+    assert [snapshot.run_id for snapshot in snapshots] == ["run-standalone"]
+
+
 def test_collect_run_snapshots_builds_basic_snapshot_fields(
     tmp_path: Path,
     monkeypatch,
@@ -265,7 +304,6 @@ def test_collect_run_snapshots_uses_tracking_record_for_tracked_run(tmp_path: Pa
             "original_run_dir": str(original_run),
             "molecule_key": "rxn_tracked",
             "selected_input_xyz": str(tracked_run / "calc.inp"),
-            "organized_output_dir": str(tracked_run),
             "latest_known_path": str(tracked_run),
             "resource_request": {"max_cores": 8},
             "resource_actual": {"max_cores": 8},
@@ -333,7 +371,6 @@ def test_collect_run_snapshots_includes_untracked_state_when_index_is_incomplete
             "original_run_dir": str(allowed_root / "project" / "rxn_tracked"),
             "molecule_key": "rxn_tracked",
             "selected_input_xyz": str(tracked_run / "calc.inp"),
-            "organized_output_dir": str(tracked_run),
             "latest_known_path": str(tracked_run),
             "resource_request": {},
             "resource_actual": {},

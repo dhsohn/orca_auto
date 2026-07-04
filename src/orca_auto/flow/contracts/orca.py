@@ -12,7 +12,6 @@ class OrcaArtifactContract:
     state_status: str
     reaction_dir: str
     latest_known_path: str
-    organized_output_dir: str = ""
     optimized_xyz_path: str = ""
     queue_id: str = ""
     queue_status: str = ""
@@ -40,7 +39,6 @@ class OrcaArtifactContract:
             "state_status": self.state_status,
             "reaction_dir": self.reaction_dir,
             "latest_known_path": self.latest_known_path,
-            "organized_output_dir": self.organized_output_dir,
             "optimized_xyz_path": self.optimized_xyz_path,
             "queue_id": self.queue_id,
             "queue_status": self.queue_status,

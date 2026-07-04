@@ -23,7 +23,6 @@ from orca_auto.flow.orchestration.deps import (
 from orca_auto.flow.orchestration.stage_views import WorkflowStageView, WorkflowTaskView
 from orca_auto.flow.state import (
     workflow_stage_dirnames_for_engine,
-    workflow_workspace_internal_engine_paths,
 )
 
 _LOGGER = logging.getLogger("orca_auto.flow.orchestration.stage_runtime.shared")
@@ -226,23 +225,6 @@ def _workflow_internal_runs_root(path_text: str, *, engine: str) -> Path | None:
         if candidate.name in stage_dirnames:
             return candidate
     return None
-
-
-def _workflow_internal_organized_root(path_text: str, *, engine: str) -> Path | None:
-    runs_root = _workflow_internal_runs_root(path_text, engine=engine)
-    if runs_root is None:
-        return None
-    try:
-        if runs_root.name not in workflow_stage_dirnames_for_engine(engine):
-            return None
-        workspace_dir = runs_root.parent
-        return workflow_workspace_internal_engine_paths(
-            workspace_dir,
-            engine=engine,
-            stage_dirname=runs_root.name,
-        )["organized_root"]
-    except (IndexError, ValueError):
-        return None
 
 
 def _manifest_override_mapping(value: Any) -> dict[str, Any]:

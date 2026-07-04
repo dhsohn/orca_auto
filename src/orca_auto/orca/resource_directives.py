@@ -13,8 +13,6 @@ from .input_blocks import (
 
 MAXCORE_RE = re.compile(r"^\s*%maxcore\s+(\d+)", re.IGNORECASE)
 NPROCS_RE = re.compile(r"\bnprocs\s+(\d+)\b", re.IGNORECASE)
-DEFAULT_MAXCORE_MB = 4000
-MAXCORE_INCREASE_FACTOR = 1.5
 
 
 def read_maxcore(lines: list[str]) -> int | None:
@@ -151,22 +149,10 @@ def set_maxcore(lines: list[str], value_mb: int) -> bool:
     return True
 
 
-def increase_maxcore(lines: list[str]) -> bool:
-    current = read_maxcore(lines)
-    if current is None:
-        return set_maxcore(lines, DEFAULT_MAXCORE_MB)
-    new_value = int(current * MAXCORE_INCREASE_FACTOR)
-    if new_value <= current:
-        new_value = current + 1000
-    return set_maxcore(lines, new_value)
-
-
 def clamp_maxcore_to_budget(lines: list[str], *, max_memory_gb: int) -> bool:
     """Cap ``%maxcore`` so per-core memory stays within the per-task budget.
 
-    Retry recipes escalate ``%maxcore`` (see :func:`increase_maxcore`); without
-    a ceiling the value can grow past ``max_memory_gb_per_task`` across repeated
-    retries. The per-core ceiling is derived from the input's own ``nprocs`` so
+    The per-core ceiling is derived from the input's own ``nprocs`` so
     ``nprocs * maxcore`` does not exceed the configured budget. Returns ``True``
     when the input was changed.
     """

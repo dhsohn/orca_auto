@@ -39,7 +39,6 @@ class EngineJobFinishedRequest:
     selected_xyz: Path
     count_value: int
     detail_values: Mapping[str, object]
-    organized_output_dir: Path | None = None
     resource_request: dict[str, int] | None = None
     resource_actual: dict[str, int] | None = None
 

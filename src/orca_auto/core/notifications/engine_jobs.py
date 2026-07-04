@@ -17,7 +17,6 @@ from .engine_requests import (
 from .engine_validation import (
     _optional_int_dict,
     _optional_lines,
-    _optional_path,
     _required_int,
     _required_path,
     _required_str,
@@ -76,7 +75,6 @@ class EngineNotificationModule:
         selected_xyz: Path,
         count_value: int,
         detail_values: Mapping[str, object],
-        organized_output_dir: Path | None = None,
         resource_request: dict[str, int] | None = None,
         resource_actual: dict[str, int] | None = None,
     ) -> bool:
@@ -91,7 +89,6 @@ class EngineNotificationModule:
                 selected_xyz=selected_xyz,
                 count_value=count_value,
                 detail_values=detail_values,
-                organized_output_dir=organized_output_dir,
                 resource_request=resource_request,
                 resource_actual=resource_actual,
             ),
@@ -170,7 +167,6 @@ class EngineNotificationRequestFactory:
             selected_xyz=_required_path(values, "selected_xyz"),
             count_value=_required_int(values, self.terminal_count_param),
             detail_values=self.detail_values(values),
-            organized_output_dir=_optional_path(values, "organized_output_dir"),
             resource_request=_optional_int_dict(values, "resource_request"),
             resource_actual=_optional_int_dict(values, "resource_actual"),
         )

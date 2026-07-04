@@ -17,13 +17,12 @@ from orca_auto.core.paths import (
 )
 
 from ..config import AppConfig
+from ..job_type import detect_job_type
 from ..molecule_key import resolve_molecule_key
-from ..result_organizer.planning import detect_job_type
 from ..state import (
     REPORT_JSON_NAME,
     REPORT_MD_NAME,
     STATE_FILE_NAME,
-    load_organized_ref,
     load_report_json,
     load_state,
 )
@@ -79,7 +78,6 @@ __all__ = [
     "load_job_artifact_context",
     "load_job_artifacts",
     "load_job_runtime_context",
-    "load_organized_ref",
     "load_orca_contract_payload",
     "load_report_json",
     "load_state",

@@ -82,13 +82,9 @@ def test_lifecycle_callbacks_use_current_queue_worker_symbols() -> None:
     with patch("orca_auto.orca.queue.worker._terminate_process", new=terminate_process):
         callbacks = queue_worker_mod._lifecycle_callbacks()
 
-    worker = MagicMock()
-    job = object()
     assert callbacks.terminate_process is terminate_process
     assert callbacks.requeue_running_entry is queue_worker_mod.requeue_running_entry
-    assert callbacks.on_completed is not None
-    callbacks.on_completed(worker, job)
-    worker._auto_organize_terminal_job.assert_called_once_with(job)
+    assert callbacks.on_completed is None
 
 
 def test_record_cancelled_run_state_writes_terminal_cancelled(tmp_path: Path) -> None:
@@ -246,7 +242,6 @@ class TestQueueWorkerInit(unittest.TestCase):
             cfg = _make_cfg(tmp)
             worker = QueueWorker(cfg, str(Path(tmp) / "config.yaml"))
             self.assertEqual(worker.max_concurrent, DEFAULT_MAX_CONCURRENT)
-            self.assertFalse(worker.auto_organize)
             self.assertFalse(worker._shutdown_requested)
             self.assertEqual(len(worker._running), 0)
 
@@ -488,17 +483,11 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(len(self.worker._running), 0)
 
     @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
-    @patch(
-        "orca_auto.orca.commands.organize.organize_reaction_dir",
-        return_value={"action": "organized", "target_dir": "/tmp/out"},
-    )
-    def test_finalize_finished_job_auto_organizes_when_enabled(
+    def test_finalize_finished_job_marks_completed_and_releases_slot(
         self,
-        mock_organize: MagicMock,
         mock_upsert_terminal: MagicMock,
     ) -> None:
-        self.worker.auto_organize = True
-        rxn = self.root / "mol_auto_organize"
+        rxn = self.root / "mol_completed"
         rxn.mkdir()
         entry = enqueue(self.root, str(rxn))
         dequeue_next(self.root)
@@ -523,50 +512,10 @@ class TestQueueWorkerMethods(unittest.TestCase):
             rc=0,
         )
 
-        mock_organize.assert_called_once_with(
-            self.worker.cfg,
-            rxn,
-            notify_summary=False,
-        )
         queue_entries = list_queue(self.root)
         self.assertEqual(queue_entries[0].status.value, "completed")
         mock_upsert_terminal.assert_called_once()
         self.assertEqual(active_slot_count(self.root), 0)
-
-    @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
-    @patch("orca_auto.orca.commands.organize.organize_reaction_dir")
-    def test_finalize_finished_job_skips_auto_organize_when_disabled(
-        self,
-        mock_organize: MagicMock,
-        mock_upsert_terminal: MagicMock,
-    ) -> None:
-        rxn = self.root / "mol_no_auto_organize"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-
-        self.worker._finalize_finished_job(
-            entry.queue_id,
-            _RunningJob(
-                queue_id=entry.queue_id,
-                reaction_dir=str(rxn),
-                process=MagicMock(),
-                admission_token=token or "",
-            ),
-            rc=0,
-        )
-
-        mock_organize.assert_not_called()
-        mock_upsert_terminal.assert_called_once()
 
     @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
     @patch("orca_auto.orca.queue.worker.notify_run_finished_event", return_value=True)
@@ -637,14 +586,11 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_notify.assert_not_called()
 
     @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
-    @patch("orca_auto.orca.commands.organize.organize_reaction_dir")
-    def test_finalize_finished_job_does_not_auto_organize_failed_run(
+    def test_finalize_finished_job_marks_failed_run(
         self,
-        mock_organize: MagicMock,
         mock_upsert_terminal: MagicMock,
     ) -> None:
-        self.worker.auto_organize = True
-        rxn = self.root / "mol_failed_no_organize"
+        rxn = self.root / "mol_failed"
         rxn.mkdir()
         entry = enqueue(self.root, str(rxn))
         dequeue_next(self.root)
@@ -669,19 +615,15 @@ class TestQueueWorkerMethods(unittest.TestCase):
             rc=2,
         )
 
-        mock_organize.assert_not_called()
         queue_entries = list_queue(self.root)
         self.assertEqual(queue_entries[0].status.value, "failed")
         mock_upsert_terminal.assert_called_once()
 
     @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
-    @patch("orca_auto.orca.commands.organize.organize_reaction_dir")
     def test_finalize_finished_job_marks_cancelled_when_cancel_requested(
         self,
-        mock_organize: MagicMock,
         mock_upsert_terminal: MagicMock,
     ) -> None:
-        self.worker.auto_organize = True
         rxn = self.root / "mol_cancel_requested_before_exit"
         rxn.mkdir()
         entry = enqueue(self.root, str(rxn))
@@ -708,7 +650,6 @@ class TestQueueWorkerMethods(unittest.TestCase):
             rc=143,
         )
 
-        mock_organize.assert_not_called()
         queue_entries = list_queue(self.root)
         self.assertEqual(queue_entries[0].status.value, "cancelled")
         self.assertFalse(queue_entries[0].cancel_requested)

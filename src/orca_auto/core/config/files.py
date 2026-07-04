@@ -11,7 +11,7 @@ from orca_auto.core.utils.coercion import normalize_text
 
 ORCA_AUTO_CONFIG_ENV_VAR = "ORCA_AUTO_CONFIG"
 DEFAULT_CONFIG_FILENAME = "orca_auto.yaml"
-DEFAULT_SHARED_ADMISSION_DIRNAME = "admission"
+DEFAULT_SHARED_ADMISSION_DIRNAME = ".admission"
 SECURE_CONFIG_FILE_MODE = 0o600
 YAML_CONFIG_LOAD_EXCEPTIONS = (OSError, ValueError, yaml.YAMLError)
 
@@ -121,26 +121,33 @@ def engine_config_mapping(
     return resolved
 
 
-def default_shared_admission_root(config_path: Path) -> str:
-    return str(config_path.expanduser().resolve().parent / DEFAULT_SHARED_ADMISSION_DIRNAME)
+def default_shared_admission_root(runs_root: str | Path | None) -> str:
+    """Default shared admission directory: hidden under the single runs root."""
+    text = normalize_text(runs_root)
+    if not text:
+        return ""
+    return str(Path(text).expanduser().resolve() / DEFAULT_SHARED_ADMISSION_DIRNAME)
 
 
 def scheduler_admission_root(
-    config_path: str | Path,
     scheduler: dict[str, Any] | None,
     *,
-    default_when_missing: bool = False,
+    default_runs_root: str | Path | None = None,
 ) -> Path | None:
     scheduler_raw = scheduler if isinstance(scheduler, dict) else {}
     admission_root = resolve_configured_path(scheduler_raw.get("admission_root"))
-    if admission_root is None and default_when_missing:
-        admission_root = resolve_configured_path(default_shared_admission_root(Path(config_path)))
+    if admission_root is None:
+        admission_root = resolve_configured_path(default_shared_admission_root(default_runs_root))
     return admission_root
 
 
 def workflow_root_from_mapping(raw: dict[str, Any] | None) -> str:
+    """Resolve the shared runs root: workflow.root, else orca.runtime.allowed_root."""
     workflow_raw = mapping_section(raw, "workflow")
     root_text = normalize_text(workflow_raw.get("root") or "")
+    if not root_text:
+        orca_runtime_raw = mapping_section(mapping_section(raw, "orca"), "runtime")
+        root_text = normalize_text(orca_runtime_raw.get("allowed_root") or "")
     if not root_text:
         return ""
     return str(Path(root_text).expanduser().resolve())

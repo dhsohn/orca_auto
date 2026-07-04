@@ -190,15 +190,6 @@ def make_child_queue_worker_deps(
     )
 
 
-def resolve_worker_auto_organize(cfg: Any, args: Any) -> bool:
-    auto_organize = bool(cfg.behavior.auto_organize_on_terminal)
-    if bool(getattr(args, "auto_organize", False)):
-        auto_organize = True
-    elif bool(getattr(args, "no_auto_organize", False)):
-        auto_organize = False
-    return auto_organize
-
-
 def config_path_for_worker(args: Any, *, default_config_path_fn: Callable[[], str]) -> str:
     configured = str(getattr(args, "config", "") or "").strip()
     return configured or default_config_path_fn()
@@ -214,5 +205,4 @@ __all__ = [
     "reserve_queue_worker_slot",
     "resolve_admission_limit",
     "resolve_admission_root",
-    "resolve_worker_auto_organize",
 ]

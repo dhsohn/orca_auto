@@ -28,7 +28,6 @@ def _record(
     original_run_dir: str = "",
     molecule_key: str = "",
     selected_input_xyz: str = "",
-    organized_output_dir: str = "",
     latest_known_path: str = "",
 ) -> JobLocationRecord:
     return JobLocationRecord(
@@ -39,7 +38,6 @@ def _record(
         original_run_dir=original_run_dir,
         molecule_key=molecule_key,
         selected_input_xyz=selected_input_xyz,
-        organized_output_dir=organized_output_dir,
         latest_known_path=latest_known_path,
     )
 
@@ -210,7 +208,7 @@ def test_resolve_job_location_matches_canonicalized_path(tmp_path: Path) -> None
     record = _record(
         "job-456",
         app_name="path-match",
-        organized_output_dir=str(alias_dir),
+        latest_known_path=str(real_dir),
     )
 
     upsert_job_location(tmp_path, record)

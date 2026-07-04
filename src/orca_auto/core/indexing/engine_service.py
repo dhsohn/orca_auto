@@ -18,7 +18,6 @@ class EngineLocationService:
     spec: EngineLocationSpec
     load_state_fn: Callable[[Path], dict[str, Any] | None]
     load_report_json_fn: Callable[[Path], dict[str, Any] | None]
-    load_organized_ref_fn: Callable[[Path], dict[str, Any] | None]
     get_job_location_fn: Callable[[str | Path, str], JobLocationRecord | None] = get_job_location
     list_job_locations_fn: Callable[[str | Path], list[JobLocationRecord]] = list_job_locations
     resolve_job_location_fn: Callable[[str | Path, str], JobLocationRecord | None] = (
@@ -47,7 +46,6 @@ class EngineLocationService:
             spec=self.spec,
             load_state_fn=self.load_state_fn,
             load_report_json_fn=self.load_report_json_fn,
-            load_organized_ref_fn=self.load_organized_ref_fn,
         )
 
     def index_root_for_cfg(self, cfg: Any) -> Path:
@@ -88,7 +86,6 @@ class EngineLocationService:
         job_dir: Path,
         payload_kind: str,
         selected_input_xyz: str,
-        organized_output_dir: Path | None = None,
         molecule_key: str = "",
         resource_request: dict[str, int] | None = None,
         resource_actual: dict[str, int] | None = None,
@@ -101,7 +98,6 @@ class EngineLocationService:
             job_dir=job_dir,
             payload_kind=payload_kind,
             selected_input_xyz=selected_input_xyz,
-            organized_output_dir=organized_output_dir,
             molecule_key=molecule_key,
             resource_request=resource_request,
             resource_actual=resource_actual,
@@ -116,12 +112,11 @@ class EngineLocationService:
         job_dir: Path,
         payload_kind: str,
         selected_input_xyz: str,
-        organized_output_dir: Path | None = None,
         molecule_key: str = "",
         resource_request: dict[str, int] | None = None,
         resource_actual: dict[str, int] | None = None,
     ) -> JobLocationRecord:
-        root = self.index_root_for_path(cfg, job_dir, organized_output_dir)
+        root = self.index_root_for_path(cfg, job_dir)
         existing = self.store.existing(root, job_id)
         record = self.build_job_location_record(
             existing=existing,
@@ -130,7 +125,6 @@ class EngineLocationService:
             job_dir=job_dir,
             payload_kind=payload_kind,
             selected_input_xyz=selected_input_xyz,
-            organized_output_dir=organized_output_dir,
             molecule_key=molecule_key,
             resource_request=resource_request,
             resource_actual=resource_actual,
@@ -174,7 +168,6 @@ class EngineLocationService:
         job_dir: Path,
         state: dict[str, Any] | None,
         report: dict[str, Any] | None,
-        organized_ref: dict[str, Any] | None,
         existing: JobLocationRecord | None = None,
         default_payload_kind: str | None = None,
     ) -> JobLocationRecord | None:
@@ -183,7 +176,6 @@ class EngineLocationService:
             job_dir=job_dir,
             state=state,
             report=report,
-            organized_ref=organized_ref,
             existing=existing,
             default_payload_kind=default_payload_kind,
         )

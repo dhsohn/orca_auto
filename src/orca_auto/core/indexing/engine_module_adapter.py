@@ -40,7 +40,6 @@ class EngineLocationModule:
             job_dir=kwargs["job_dir"],
             payload_kind=kwargs[self.payload_kind_kwarg],
             selected_input_xyz=kwargs["selected_input_xyz"],
-            organized_output_dir=kwargs.get("organized_output_dir"),
             molecule_key=kwargs.get(self.molecule_key_kwarg, ""),
             resource_request=kwargs.get("resource_request"),
             resource_actual=kwargs.get("resource_actual"),
@@ -60,7 +59,6 @@ class EngineLocationModule:
             job_dir=request.job_dir,
             payload_kind=request.payload_kind,
             selected_input_xyz=request.selected_input_xyz,
-            organized_output_dir=request.organized_output_dir,
             molecule_key=request.molecule_key,
             resource_request=request.resource_request,
             resource_actual=request.resource_actual,
@@ -75,11 +73,7 @@ class EngineLocationModule:
         **kwargs: Any,
     ) -> JobLocationRecord:
         request = self.record_request(kwargs)
-        root = self.service.index_root_for_path(
-            cfg,
-            request.job_dir,
-            request.organized_output_dir,
-        )
+        root = self.service.index_root_for_path(cfg, request.job_dir)
         existing = get_job_location_fn(root, request.job_id)
         record = self.build_job_location_record_from_request(request.with_existing(existing))
         return upsert_job_location_fn(root, record)
@@ -173,7 +167,6 @@ class EngineLocationModule:
         job_dir: Path,
         state: dict[str, Any] | None,
         report: dict[str, Any] | None,
-        organized_ref: dict[str, Any] | None,
         existing: JobLocationRecord | None = None,
         **kwargs: Any,
     ) -> JobLocationRecord | None:
@@ -181,7 +174,6 @@ class EngineLocationModule:
             job_dir=job_dir,
             state=state,
             report=report,
-            organized_ref=organized_ref,
             existing=existing,
             default_payload_kind=kwargs.get(self.default_payload_kind_kwarg),
         )

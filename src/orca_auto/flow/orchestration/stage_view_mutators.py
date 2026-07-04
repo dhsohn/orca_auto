@@ -98,7 +98,6 @@ class WorkflowStageOrcaMutationMixin:
                 "queue_status": contract.queue_status,
                 "cancel_requested": bool(contract.cancel_requested),
                 "latest_known_path": contract.latest_known_path,
-                "organized_output_dir": contract.organized_output_dir,
                 "optimized_xyz_path": contract.optimized_xyz_path,
                 "analyzer_status": contract.analyzer_status,
                 "reason": contract.reason,
@@ -142,7 +141,6 @@ class WorkflowStageCrestMutationMixin:
             {
                 "child_job_id": contract.job_id,
                 "latest_known_path": contract.latest_known_path,
-                "organized_output_dir": contract.organized_output_dir,
             }
         )
 
@@ -166,7 +164,6 @@ class WorkflowStageXtbMutationMixin:
             {
                 "child_job_id": contract.job_id,
                 "latest_known_path": contract.latest_known_path,
-                "organized_output_dir": contract.organized_output_dir,
             }
         )
 

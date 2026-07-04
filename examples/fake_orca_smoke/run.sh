@@ -33,12 +33,11 @@ from orca_auto.orca.state import load_report_json, load_state
 repo_root = Path(sys.argv[1]).resolve()
 workdir = Path(sys.argv[2]).resolve()
 allowed_root = workdir / "orca_runs"
-organized_root = workdir / "orca_outputs"
 admission_root = workdir / "admission"
 bin_dir = workdir / "bin"
 reaction_dir = allowed_root / "demo_project" / "water_opt"
 
-for path in (allowed_root, organized_root, admission_root, bin_dir, reaction_dir):
+for path in (allowed_root, admission_root, bin_dir, reaction_dir):
     path.mkdir(parents=True, exist_ok=True)
 
 fake_orca = bin_dir / "fake_orca.py"
@@ -72,7 +71,6 @@ config_path.write_text(
             "orca": {
                 "runtime": {
                     "allowed_root": str(allowed_root),
-                    "organized_root": str(organized_root),
                     "default_max_retries": 0,
                 },
                 "paths": {"orca_executable": str(fake_orca)},
@@ -106,7 +104,7 @@ if len(matches) != 1:
 if matches[0].status != QueueStatus.PENDING:
     raise SystemExit(f"expected pending queue entry, got {matches[0].status}")
 
-worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1, auto_organize=False)
+worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
 worker.poll_interval_seconds = 0.01
 worker_rc = worker.run_once(idle_message=None, blocked_message=None)
 if worker_rc != 0:

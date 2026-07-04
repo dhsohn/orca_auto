@@ -605,14 +605,14 @@ def test_sync_job_tracking_never_organizes_for_crest(tmp_path: Path) -> None:
         upsert_job_record=lambda cfg, **kwargs: upsert_calls.append(kwargs),
     )
 
-    organized_output_dir = crest_terminal.sync_job_tracking(
+    sync_result = crest_terminal.sync_job_tracking(
         cfg,
         context,
         result,
         tracking_deps=deps.tracking,
     )
 
-    assert organized_output_dir is None
+    assert sync_result is None
     assert len(upsert_calls) == 1
     assert upsert_calls[0]["job_id"] == entry.task_id
     assert upsert_calls[0]["job_dir"] == job_dir.resolve()
@@ -763,7 +763,6 @@ def test_process_dequeued_entry_polls_sleeps_and_completes(
     assert outcome.job_dir == job_dir.resolve()
     assert outcome.selected_xyz == selected_xyz.resolve()
     assert outcome.molecule_key == "derived-key"
-    assert outcome.organized_output_dir is None
     assert spy.molecule_key_calls == [(entry, selected_xyz.resolve(), job_dir.resolve())]
     assert spy.cancel_checks == [(cfg.runtime.allowed_root, entry.queue_id)]
     assert spy.sleeps == [worker_execution.CANCEL_CHECK_INTERVAL_SECONDS]

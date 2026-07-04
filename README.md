@@ -4,13 +4,13 @@
 
 **English** | [한국어](README.ko.md)
 
-orca_auto is a queue-first interface for ORCA and workflow orchestration on Linux and WSL. xTB and CREST remain part of the runtime, but they are now used internally for workflow stages rather than as standalone public surfaces. It submits work durably, runs it under supervised workers, records per-job state and reports, and organizes completed outputs.
+orca_auto is a queue-first interface for ORCA and workflow orchestration on Linux and WSL. xTB and CREST remain part of the runtime, but they are now used internally for workflow stages rather than as standalone public surfaces. It submits work durably, runs it under supervised workers, and records per-job state and reports.
 
 ## Statement of need
 
 Computational chemistry projects often outgrow one-shot ORCA commands and ad hoc shell loops. Users need durable submission, supervised execution, restart-aware queue state, consistent job reports, and an explicit record of which calculation failed and what next action is safe. ORCA remains the electronic-structure engine; orca_auto adds the Linux/WSL runtime and observability layer around ORCA-centered workflows.
 
-The project is intended for researchers running repeated ORCA calculations, transition-state searches, and reaction or conformer workflows who want auditable state and recovery behavior without adopting a general workflow platform. It focuses on CLI, configuration, queue, report, retry, and organized-output contracts rather than replacing chemical judgment, site scheduler policy, or ORCA input design. See [docs/RELATED_WORK.md](docs/RELATED_WORK.md) for scope and ecosystem positioning.
+The project is intended for researchers running repeated ORCA calculations, transition-state searches, and reaction or conformer workflows who want auditable state and recovery behavior without adopting a general workflow platform. It focuses on CLI, configuration, queue, report, and retry contracts rather than replacing chemical judgment, site scheduler policy, or ORCA input design. See [docs/RELATED_WORK.md](docs/RELATED_WORK.md) for scope and ecosystem positioning.
 
 ## Docs
 
@@ -70,7 +70,6 @@ scheduler:
   max_active_simulations: 4
 
 workflow:
-  root: /home/user/workflow_runs
   paths:
     xtb_executable: /home/user/bin/xtb-dist/bin/xtb
     crest_executable: /home/user/bin/crest/crest
@@ -84,8 +83,7 @@ telegram:
 
 orca:
   runtime:
-    allowed_root: /home/user/orca_runs
-    organized_root: /home/user/orca_outputs
+    allowed_root: /home/user/runs
     default_max_retries: 2
   paths:
     orca_executable: /home/user/opt/orca/orca
@@ -98,8 +96,8 @@ Notes:
 - `default_max_retries: 0` disables ORCA retries; any positive value enables the
   calculation-type retry policy, capped by ORCA route type.
 - `scheduler.max_active_simulations` is the shared cap across ORCA, internal xTB workflow stages, and internal CREST workflow stages.
-- `workflow.root` is the workflow root used by the unified CLI and workflow worker.
-- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and organized outputs live only under `workflow.root/<workflow_id>/internal/<engine>/{runs,outputs}`.
+- Everything lives under a single runs root (`orca.runtime.allowed_root`): standalone ORCA jobs and workflow workspaces sit side by side in it, and the shared admission directory defaults to `<runs root>/.admission`. Set `workflow.root` only to move workflows elsewhere.
+- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs live only under `<runs root>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`).
 - The full template lives at [config/orca_auto.yaml.example](config/orca_auto.yaml.example).
 
 ## User Commands
@@ -124,7 +122,6 @@ orca_auto queue list clear      # prune completed/failed/cancelled
 orca_auto queue cancel <target>
 orca_auto service status
 orca_auto service restart
-orca_auto organize orca --root '/home/user/orca_runs' --apply
 orca_auto scan-notify
 ```
 

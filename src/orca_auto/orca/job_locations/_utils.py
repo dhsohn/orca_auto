@@ -8,7 +8,6 @@ from orca_auto.core.paths import (
     iter_existing_dirs,
     recent_file_candidates,
     resolved_path_text,
-    safe_is_subpath,
 )
 from orca_auto.core.queue.metadata import (
     mapping_metadata,
@@ -126,7 +125,6 @@ def prefer_orca_optimized_xyz(
     selected_inp: str,
     selected_input_xyz: str,
     current_dir: Path | None,
-    organized_dir: Path | None,
     latest_known_path: str,
     last_out_path: str,
 ) -> str:
@@ -139,7 +137,6 @@ def prefer_orca_optimized_xyz(
         if selected_inp_path is not None and not selected_inp_path.is_dir()
         else None,
         current_dir,
-        organized_dir,
         path_or_parent(latest_known_path),
         last_out.parent if last_out is not None and not last_out.is_dir() else None,
     )
@@ -160,10 +157,6 @@ def prefer_orca_optimized_xyz(
     if not xyz_candidates:
         return ""
     return resolved_path_text(xyz_candidates[0])
-
-
-def is_subpath(candidate: Path, root: Path | None) -> bool:
-    return safe_is_subpath(candidate, root)
 
 
 def attempt_count(state: dict[str, Any], report: dict[str, Any]) -> int:

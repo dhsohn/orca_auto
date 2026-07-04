@@ -55,7 +55,7 @@ def engine_queue_roots(
                 stage_dirname=stage_dirname,
             )
             runtime_root = runtime_paths["allowed_root"]
-            if not runtime_root.exists() and not runtime_paths["organized_root"].exists():
+            if not runtime_root.exists():
                 continue
             if runtime_root not in roots:
                 roots.append(runtime_root)

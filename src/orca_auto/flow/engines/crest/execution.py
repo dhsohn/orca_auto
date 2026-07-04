@@ -528,12 +528,11 @@ def _worker_execution_spec(
                 dependencies=dependencies,
             )
         ),
-        build_outcome=lambda context, result, organized_output_dir: WorkerExecutionOutcome(
+        build_outcome=lambda context, result, sync_result: WorkerExecutionOutcome(
             result=result,
             job_dir=context.job_dir,
             selected_xyz=context.selected_xyz,
             molecule_key=context.molecule_key,
-            organized_output_dir=organized_output_dir,
         ),
     )
 

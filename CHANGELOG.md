@@ -8,6 +8,58 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Changed
+
+- Single runs root: workflow workspaces now default to living inside the ORCA
+  runs root (`workflow.root` falls back to `orca.runtime.allowed_root`), and
+  the shared admission directory defaults to a hidden `<runs root>/.admission`
+  instead of an `admission/` directory next to the config file. One disk
+  directory now holds standalone ORCA runs, workflow workspaces, and admission
+  state; explicit `workflow.root` / `scheduler.admission_root` overrides still
+  work. Standalone filesystem scans (job-location reindex, activity run
+  snapshots, `scan-notify` discovery) skip workflow workspaces under the runs
+  root so workflow-internal ORCA jobs are not double-reported. `orca_auto init`
+  now asks for one runs root instead of separate workflow/ORCA roots.
+
+### Removed
+
+- The remaining `organized_*` read-side plumbing (completes the organize
+  removal): the `organized_output_dir` field on `JobLocationRecord` and on the
+  ORCA/xTB/CREST artifact contracts, the `organized_ref` / `load_organized_ref`
+  DI seam threaded through the generic engine indexing service, adapters, and
+  contract loaders, the `organized_dir` / `orca_organized_root` resolution in
+  the ORCA contract assembly and job-location runtime context, the unused
+  `organized_root` runtime config field, the dead `organize`-summary
+  notification helpers, and the hardcoded `"organized_dir": ""` artifact keys.
+  All of it was uniformly empty/None (nothing populated it once the organize
+  feature was gone) and the workflow stage handoff already uses
+  `latest_known_path`; removal is behaviour-preserving.
+- The unused `organized_ref.json` write machinery: `write_organized_ref` in
+  the ORCA state module, the shared engine-state write method/field, and the
+  xtb/crest re-exports. Nothing has written these stubs since the organize
+  feature was removed.
+- The dead numbered retry-recipe system: `RETRY_RECIPES` and `retry_step_1..4`
+  / `set_geom_retry_keys` (`retry_recipes.py`), the `isinstance(step, int)`
+  branch and `RetryRecipeName | int` unions in `inp_rewriter`/`resume`, and the
+  `retry_recipe_step` helper with its `resume`/`engine` DI seam. Retry policies
+  resolved to the two `RetryRecipeName` route no-ops (`scants_retry`,
+  `no_route_rewrite`) long ago, so the integer ladder was unreachable in
+  production; removing it is behaviour-preserving for real (string) inputs. The
+  live ScanTS retry, maxcore clamping, and checkpoint/geometry restart paths are
+  unchanged.
+- The `orca.runtime.organized_root` config key and the `orca_outputs` sibling
+  directory: with organize gone, the organized root always collapses to
+  `allowed_root`. A stale `organized_root` key is silently ignored (the loader
+  simply never reads it), `orca_auto init` no longer prompts for it, and
+  rendered systemd units no longer grant ReadWritePaths to an outputs directory.
+- The `organize` feature: the `orca_auto organize orca` CLI command, the
+  `result_organizer` module and its JSONL organize index, the
+  `behavior.auto_organize_on_terminal` config key, and the worker's
+  auto-organize-on-terminal hook. Completed runs now stay where they ran,
+  keeping their user-chosen directory names; existing `organized_ref.json`
+  stubs and previously organized outputs are still readable by lookups.
+  `queue list` remains the way to see completed work in one place.
+
 ### Added
 
 - `scan_ts_search` scan extension and reverse rescue: the recovery strategies

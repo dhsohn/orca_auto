@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 from orca_auto.orca.dft.discovery import discover_orca_targets
@@ -139,153 +138,20 @@ def test_orca_runs_ignores_report_only_directory(tmp_path: Path) -> None:
     assert targets == []
 
 
-def test_orca_outputs_tracks_latest_out_from_run_state_dir(tmp_path: Path) -> None:
-    kb_dir = tmp_path / "orca_outputs"
-    run_dir = kb_dir / "run_ok"
-    run_dir.mkdir(parents=True)
+def test_workflow_workspace_jobs_are_excluded(tmp_path: Path) -> None:
+    kb_dir = tmp_path / "runs"
+    standalone = kb_dir / "rxn_standalone"
+    standalone.mkdir(parents=True)
+    (standalone / "calc.out").write_text("standalone", encoding="utf-8")
+    _write_orca_state(standalone, status="completed", final_result={"status": "completed"})
 
-    final_out = run_dir / "final.out"
-    newer_retry = run_dir / "final.retry01.out"
-    final_out.write_text("final", encoding="utf-8")
-    newer_retry.write_text("retry", encoding="utf-8")
-    mtime = final_out.stat().st_mtime
-    os.utime(newer_retry, (mtime + 5.0, mtime + 5.0))
-
-    _write_orca_state(run_dir, status="completed", final_result={"status": "completed"})
+    workspace = kb_dir / "wf_20260704"
+    stage_job = workspace / "03_orca" / "candidate_01"
+    stage_job.mkdir(parents=True)
+    (workspace / "workflow.json").write_text("{}", encoding="utf-8")
+    (stage_job / "calc.out").write_text("workflow-internal", encoding="utf-8")
+    _write_orca_state(stage_job, status="completed", final_result={"status": "completed"})
 
     targets = discover_orca_targets(kb_dir, max_bytes=1024 * 1024)
-    assert [str(t.path) for t in targets] == [str(newer_retry)]
 
-
-def test_orca_outputs_prefers_run_state_status_when_report_also_exists(
-    tmp_path: Path,
-) -> None:
-    kb_dir = tmp_path / "orca_outputs"
-    run_dir = kb_dir / "run_status_priority"
-    run_dir.mkdir(parents=True)
-
-    (run_dir / "final.out").write_text("result", encoding="utf-8")
-    _write_orca_state(run_dir, status="running")
-    (run_dir / "job_report.json").write_text(
-        json.dumps(
-            {
-                "status": "completed",
-                "final_result": {
-                    "status": "completed",
-                    "completed_at": datetime.now(UTC).isoformat(),
-                    "last_out_path": "/home/someone/orca_outputs/run_status_priority/final.out",
-                },
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-
-    targets = discover_orca_targets(
-        kb_dir,
-        max_bytes=1024 * 1024,
-        recent_completed_window_minutes=60,
-    )
-    assert targets == []
-
-
-def test_orca_outputs_ignores_job_report_when_job_state_missing(tmp_path: Path) -> None:
-    kb_dir = tmp_path / "orca_outputs"
-    run_dir = kb_dir / "job_report_only"
-    run_dir.mkdir(parents=True)
-
-    (run_dir / "final.out").write_text("result", encoding="utf-8")
-    (run_dir / "job_report.json").write_text(
-        json.dumps(
-            {
-                "status": "completed",
-                "final_result": {
-                    "status": "completed",
-                    "completed_at": datetime.now(UTC).isoformat(),
-                    "last_out_path": "/home/someone/orca_outputs/job_report_only/final.out",
-                },
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-
-    targets = discover_orca_targets(
-        kb_dir,
-        max_bytes=1024 * 1024,
-        recent_completed_window_minutes=60,
-    )
-    assert targets == []
-
-
-def test_orca_outputs_includes_recent_completed_with_completed_at(tmp_path: Path) -> None:
-    kb_dir = tmp_path / "orca_outputs"
-    run_dir = kb_dir / "run_recent"
-    run_dir.mkdir(parents=True)
-
-    final_out = run_dir / "final.out"
-    final_out.write_text("final", encoding="utf-8")
-
-    completed_at = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
-    _write_orca_state(
-        run_dir,
-        status="completed",
-        final_result={
-            "status": "completed",
-            "completed_at": completed_at,
-        },
-    )
-
-    targets = discover_orca_targets(
-        kb_dir,
-        max_bytes=1024 * 1024,
-        recent_completed_window_minutes=60,
-    )
-    assert [str(t.path) for t in targets] == [str(final_out)]
-
-
-def test_orca_outputs_excludes_old_completed_with_completed_at(tmp_path: Path) -> None:
-    kb_dir = tmp_path / "orca_outputs"
-    run_dir = kb_dir / "run_old"
-    run_dir.mkdir(parents=True)
-
-    final_out = run_dir / "final.out"
-    final_out.write_text("final", encoding="utf-8")
-
-    completed_at = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
-    _write_orca_state(
-        run_dir,
-        status="completed",
-        final_result={
-            "status": "completed",
-            "completed_at": completed_at,
-        },
-    )
-
-    targets = discover_orca_targets(
-        kb_dir,
-        max_bytes=1024 * 1024,
-        recent_completed_window_minutes=60,
-    )
-    assert targets == []
-
-
-def test_orca_outputs_uses_mtime_when_completed_at_missing(tmp_path: Path) -> None:
-    kb_dir = tmp_path / "orca_outputs"
-    run_dir = kb_dir / "run_no_completed_at"
-    run_dir.mkdir(parents=True)
-
-    final_out = run_dir / "final.out"
-    final_out.write_text("final", encoding="utf-8")
-
-    old_mtime = (datetime.now(UTC) - timedelta(hours=2)).timestamp()
-    os.utime(final_out, (old_mtime, old_mtime))
-
-    _write_orca_state(run_dir, status="completed", final_result={"status": "completed"})
-
-    targets = discover_orca_targets(
-        kb_dir,
-        max_bytes=1024 * 1024,
-        recent_completed_window_minutes=60,
-    )
-    assert targets == []
+    assert [str(t.path) for t in targets] == [str(standalone / "calc.out")]

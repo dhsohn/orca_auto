@@ -77,39 +77,6 @@ class TestInpRewriter(unittest.TestCase):
 
         self.assertEqual(resource_request, {"max_cores": 6, "max_memory_gb": 18})
 
-    def test_step1_adds_scf_stability_and_uses_previous_xyz(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            src = root / "rxn.inp"
-            dst = root / "rxn.retry01.inp"
-            src.write_text(BASE_INP, encoding="utf-8")
-            (root / "rxn.xyz").write_text("2\n\nH 0 0 0\nH 0 0 0.75\n", encoding="utf-8")
-            actions = rewrite_for_retry(src, dst, root, step=1)
-            out = dst.read_text(encoding="utf-8")
-        self.assertIn("route_add_tightscf_slowconv", actions)
-        self.assertIn("TightSCF", out)
-        self.assertIn("SlowConv", out)
-        self.assertIn("%scf", out)
-        self.assertIn("MaxIter 300", out)
-        self.assertIn("geometry_restart_from_rxn.xyz", actions)
-        self.assertIn("* xyzfile 0 1 rxn.xyz", out)
-
-    def test_retry_uses_matching_gbw_checkpoint_when_available(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            src = root / "rxn.inp"
-            dst = root / "rxn.retry01.inp"
-            src.write_text(BASE_INP, encoding="utf-8")
-            (root / "rxn.gbw").write_bytes(b"checkpoint")
-            actions = rewrite_for_retry(src, dst, root, step=1)
-            out = dst.read_text(encoding="utf-8")
-
-        self.assertIn("checkpoint_restart_from_rxn.gbw", actions)
-        self.assertIn("route_add_moread", actions)
-        self.assertIn("moinp_set", actions)
-        self.assertIn("MORead", out)
-        self.assertIn('%moinp "rxn.gbw"', out)
-
     def test_prepare_checkpoint_restart_input_keeps_original_input_untouched(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -127,40 +94,44 @@ class TestInpRewriter(unittest.TestCase):
         self.assertEqual(prepared, dst)
         self.assertEqual(unchanged, original)
         self.assertIn("checkpoint_restart_from_rxn.gbw", actions)
+        self.assertIn("route_add_moread", actions)
+        self.assertIn("moinp_set", actions)
         self.assertIn("geometry_restart_from_rxn.xyz", actions)
         self.assertIn('%moinp "rxn.gbw"', out)
         self.assertIn("* xyzfile 0 1 rxn.xyz", out)
 
-    def test_step3_reserved_still_replaces_geometry_with_previous_attempt_xyz(self) -> None:
+    def test_prepare_checkpoint_restart_falls_back_to_latest_geometry(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            src = root / "rxn.retry02.inp"
-            dst = root / "rxn.retry03.inp"
+            src = root / "rxn.inp"
+            dst = root / "rxn.resume.inp"
             src.write_text(BASE_INP, encoding="utf-8")
-            (root / "rxn.retry02.xyz").write_text("2\n\nH 0 0 0\nH 0 0 0.8\n", encoding="utf-8")
-            # Even when trj exists, retry should use previous .xyz of source input.
-            (root / "rxn.retry02_trj.xyz").write_text("2\n\nH 0 0 0\nH 0 0 1.1\n", encoding="utf-8")
-            actions = rewrite_for_retry(src, dst, root, step=3)
+            (root / "rxn.gbw").write_bytes(b"checkpoint")
+            (root / "older.xyz").write_text("2\n\nH 0 0 0\nH 0 0 0.7\n", encoding="utf-8")
+            time.sleep(0.01)
+            (root / "latest_trj.xyz").write_text("2\n\nH 0 0 0\nH 0 0 1.0\n", encoding="utf-8")
+
+            prepared, actions = prepare_checkpoint_restart_input(src, dst, root)
             out = dst.read_text(encoding="utf-8")
-        self.assertIn("geometry_restart_from_rxn.retry02.xyz", actions)
-        self.assertIn("* xyzfile 0 1 rxn.retry02.xyz", out)
-        self.assertNotIn("nprocs_set_to_1", actions)
-        self.assertNotIn("nprocs_reduced_to_4", actions)
 
-    def test_step_above_supported_recipes_marks_no_recipe(self) -> None:
+        self.assertEqual(prepared, dst)
+        self.assertIn("no_previous_xyz_file_found", actions)
+        self.assertIn("geometry_restart_from_latest_trj.xyz", actions)
+        self.assertIn("* xyzfile 0 1 latest_trj.xyz", out)
+
+    def test_prepare_checkpoint_restart_marks_missing_geometry(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            src = root / "rxn.retry05.inp"
-            dst = root / "rxn.retry06.inp"
+            src = root / "rxn.inp"
+            dst = root / "rxn.resume.inp"
             src.write_text(BASE_INP, encoding="utf-8")
-            (root / "rxn.retry05.xyz").write_text("2\n\nH 0 0 0\nH 0 0 0.85\n", encoding="utf-8")
+            (root / "rxn.gbw").write_bytes(b"checkpoint")
 
-            actions = rewrite_for_retry(src, dst, root, step=5)
-            text = dst.read_text(encoding="utf-8")
+            prepared, actions = prepare_checkpoint_restart_input(src, dst, root)
 
-        self.assertIn("no_recipe_applied", actions)
-        self.assertIn("geometry_restart_from_rxn.retry05.xyz", actions)
-        self.assertIn("* xyzfile 0 1 rxn.retry05.xyz", text)
+        self.assertEqual(prepared, dst)
+        self.assertIn("no_previous_xyz_file_found", actions)
+        self.assertIn("no_geometry_file_found", actions)
 
     def test_rewrite_for_retry_clamps_maxcore_to_budget(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -172,7 +143,9 @@ class TestInpRewriter(unittest.TestCase):
                 "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
                 encoding="utf-8",
             )
-            actions = rewrite_for_retry(src, dst, root, step=1, max_memory_gb=32)
+            actions = rewrite_for_retry(
+                src, dst, step="no_route_rewrite", max_memory_gb=32, allow_no_effective_change=True
+            )
             text = dst.read_text(encoding="utf-8")
         # 32 GB across 8 cores -> 4096 MB per-core ceiling.
         self.assertIn("%maxcore 4096", text)
@@ -188,36 +161,22 @@ class TestInpRewriter(unittest.TestCase):
                 "! Opt\n%pal\n  nprocs 8\nend\n%maxcore 2000\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
                 encoding="utf-8",
             )
-            actions = rewrite_for_retry(src, dst, root, step=1, max_memory_gb=32)
+            actions = rewrite_for_retry(
+                src, dst, step="no_route_rewrite", max_memory_gb=32, allow_no_effective_change=True
+            )
             text = dst.read_text(encoding="utf-8")
         self.assertIn("%maxcore 2000", text)
         self.assertNotIn("maxcore_clamped_to_budget", actions)
 
-    def test_fallbacks_to_latest_geometry_when_previous_xyz_missing(self) -> None:
+    def test_rewrite_for_retry_raises_when_no_effective_change(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             src = root / "rxn.inp"
             dst = root / "rxn.retry01.inp"
             src.write_text(BASE_INP, encoding="utf-8")
-            (root / "older.xyz").write_text("2\n\nH 0 0 0\nH 0 0 0.7\n", encoding="utf-8")
-            time.sleep(0.01)
-            (root / "latest_trj.xyz").write_text("2\n\nH 0 0 0\nH 0 0 1.0\n", encoding="utf-8")
-            actions = rewrite_for_retry(src, dst, root, step=1)
-            out = dst.read_text(encoding="utf-8")
-
-        self.assertIn("no_previous_xyz_file_found", actions)
-        self.assertIn("geometry_restart_from_latest_trj.xyz", actions)
-        self.assertIn("* xyzfile 0 1 latest_trj.xyz", out)
-
-    def test_marks_missing_all_geometry_files(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            src = root / "rxn.inp"
-            dst = root / "rxn.retry01.inp"
-            src.write_text(BASE_INP, encoding="utf-8")
-            actions = rewrite_for_retry(src, dst, root, step=1)
-        self.assertIn("no_previous_xyz_file_found", actions)
-        self.assertIn("no_geometry_file_found", actions)
+            with self.assertRaisesRegex(RuntimeError, "no_retry_rewrite_available"):
+                rewrite_for_retry(src, dst, step="no_route_rewrite")
+        self.assertFalse(dst.exists())
 
     def test_find_block_range_does_not_mutate_lines(self) -> None:
         """find_block_range must not append 'end' to the shared lines list.

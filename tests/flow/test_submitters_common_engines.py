@@ -37,7 +37,7 @@ def test_worker_module_command_without_repo_root_uses_module_execution() -> None
         config_path="/tmp/config.yaml",
         repo_root=None,
         module_name="orca_auto.orca.commands.queue",
-        tail_argv=["--no-auto-organize"],
+        tail_argv=["--engine", "orca"],
     )
 
     assert argv == [
@@ -46,7 +46,8 @@ def test_worker_module_command_without_repo_root_uses_module_execution() -> None
         "orca_auto.orca.commands.queue",
         "--config",
         "/tmp/config.yaml",
-        "--no-auto-organize",
+        "--engine",
+        "orca",
     ]
     assert cwd is None
     assert env is None
@@ -129,7 +130,38 @@ def test_engine_runtime_paths_ignores_orca_runtime_admission_setting(tmp_path: P
 
     assert engine_runtime.engine_runtime_paths(str(config_path), engine="orca") == {
         "allowed_root": Path("/tmp/runs"),
+        "admission_root": Path("/tmp/runs/.admission"),
     }
+
+
+def test_engine_runtime_paths_orca_admission_follows_workflow_root_over_allowed_root(
+    tmp_path: Path,
+) -> None:
+    # When workflow.root differs from orca.runtime.allowed_root, the default
+    # admission dir must follow the shared runs root (workflow.root) so it
+    # matches the root the ORCA worker reserves slots under via load_config;
+    # anchoring on allowed_root alone would make the active-simulation counter
+    # read a different .admission dir than the worker writes to.
+    workflow_root = tmp_path / "wf"
+    allowed_root = tmp_path / "orca"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "workflow:",
+                f"  root: {workflow_root}",
+                "orca:",
+                "  runtime:",
+                f"    allowed_root: {allowed_root}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    paths = engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
+    assert paths["allowed_root"] == allowed_root.resolve()
+    assert paths["admission_root"] == workflow_root.resolve() / ".admission"
 
 
 def test_engine_runtime_paths_uses_scheduler_with_runtime_admission_setting_present(
@@ -176,13 +208,13 @@ def test_engine_runtime_paths_requires_workflow_root_for_xtb(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match=r"Missing workflow\.root in config"):
+    with pytest.raises(ValueError, match="Missing runs root"):
         engine_runtime.engine_runtime_paths(str(config_path), engine="xtb")
 
 
 def test_engine_runtime_paths_requires_runtime_allowed_root(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("runtime:\n  organized_root: /tmp/organized\n", encoding="utf-8")
+    config_path.write_text("runtime:\n  default_max_retries: 0\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="Missing runtime.allowed_root"):
         engine_runtime.engine_runtime_paths(str(config_path))
@@ -218,7 +250,6 @@ def test_engine_runtime_paths_derives_internal_engine_roots_from_workflow_root(
     assert engine_runtime.engine_runtime_paths(str(config_path), engine="xtb") == {
         "workflow_root": workflow_root.resolve(),
         "allowed_root": workflow_root.resolve(),
-        "organized_root": workflow_root.resolve(),
         "admission_root": admission_root.resolve(),
     }
     assert (

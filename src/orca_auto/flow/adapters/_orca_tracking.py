@@ -23,9 +23,9 @@ def tracked_artifact_context_impl(
     *,
     index_root: Path | None,
     targets: tuple[str, ...],
-) -> tuple[Path | None, JobLocationRecord | None, dict[str, Any], dict[str, Any], dict[str, Any]]:
+) -> tuple[Path | None, JobLocationRecord | None, dict[str, Any], dict[str, Any]]:
     if index_root is None:
-        return None, None, {}, {}, {}
+        return None, None, {}, {}
 
     for raw_target in targets:
         target = normalize_text(raw_target)
@@ -48,15 +48,13 @@ def tracked_artifact_context_impl(
             context.record,
             _dict_payload(context.state),
             _dict_payload(context.report),
-            _dict_payload(context.organized_ref),
         )
-    return None, None, {}, {}, {}
+    return None, None, {}, {}
 
 
 def tracked_runtime_context_impl(
     *,
     index_root: Path | None,
-    organized_root: Path | None,
     target: str,
     queue_id: str,
     run_id: str,
@@ -67,9 +65,7 @@ def tracked_runtime_context_impl(
         JobLocationRecord | None,
         dict[str, Any],
         dict[str, Any],
-        dict[str, Any],
         dict[str, Any] | None,
-        Path | None,
     ]
     | None
 ):
@@ -80,7 +76,6 @@ def tracked_runtime_context_impl(
         context = load_job_runtime_context(
             index_root,
             target,
-            organized_root=organized_root,
             queue_id=queue_id,
             run_id=run_id,
             reaction_dir=reaction_dir,
@@ -95,16 +90,13 @@ def tracked_runtime_context_impl(
         artifact.record,
         _dict_payload(artifact.state),
         _dict_payload(artifact.report),
-        _dict_payload(artifact.organized_ref),
         dict(queue_entry) if isinstance(queue_entry, dict) else None,
-        context.organized_dir,
     )
 
 
 def _contract_payload_from_loader(
     *,
     index_root: Path,
-    organized_root: Path | None,
     target: str,
     queue_id: str,
     run_id: str,
@@ -114,7 +106,6 @@ def _contract_payload_from_loader(
         payload = load_orca_contract_payload(
             index_root,
             target,
-            organized_root=organized_root,
             queue_id=queue_id,
             run_id=run_id,
             reaction_dir=reaction_dir,
@@ -134,7 +125,6 @@ def _contract_payload_from_loader(
 def load_orca_contract_payload_impl(
     *,
     index_root: Path | None,
-    organized_root: Path | None,
     target: str,
     queue_id: str,
     run_id: str,
@@ -144,7 +134,6 @@ def load_orca_contract_payload_impl(
         return None
     return _contract_payload_from_loader(
         index_root=index_root,
-        organized_root=organized_root,
         target=target,
         queue_id=queue_id,
         run_id=run_id,

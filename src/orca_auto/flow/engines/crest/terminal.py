@@ -18,7 +18,6 @@ class WorkerExecutionOutcome:
     job_dir: Path
     selected_xyz: Path
     molecule_key: str
-    organized_output_dir: Path | None
 
 
 def write_execution_artifacts(
@@ -143,7 +142,7 @@ def finalize_processed_entry(
     artifact_deps = dependencies.artifacts
     tracking_deps = dependencies.tracking
 
-    def notify_finished(organized_output_dir: Path | None) -> None:
+    def notify_finished(sync_result: Any) -> None:
         tracking_deps.notify_job_finished(
             cfg,
             job_id=context.entry.task_id,
@@ -154,7 +153,6 @@ def finalize_processed_entry(
             job_dir=context.job_dir,
             selected_xyz=context.selected_xyz,
             retained_conformer_count=result.retained_conformer_count,
-            organized_output_dir=organized_output_dir,
             resource_request=context.resource_request,
             resource_actual=result.resource_actual,
         )
@@ -178,7 +176,7 @@ def finalize_processed_entry(
                 tracking_deps=tracking_deps,
             ),
             notify_finished=notify_finished,
-            build_outcome=lambda organized_output_dir: organized_output_dir,
+            build_outcome=lambda sync_result: sync_result,
         ),
     )
 

@@ -23,9 +23,7 @@ class _FakeTransport:
 
 def _make_cfg(tmp_path: Path, *, enabled: bool = False) -> AppConfig:
     allowed_root = tmp_path / "allowed"
-    organized_root = tmp_path / "organized"
     allowed_root.mkdir()
-    organized_root.mkdir()
     telegram = TelegramConfig(
         bot_token="token" if enabled else "",
         chat_id="chat" if enabled else "",
@@ -33,7 +31,6 @@ def _make_cfg(tmp_path: Path, *, enabled: bool = False) -> AppConfig:
     return AppConfig(
         runtime=CommonRuntimeConfig(
             allowed_root=str(allowed_root),
-            organized_root=str(organized_root),
         ),
         telegram=telegram,
     )
@@ -148,7 +145,7 @@ def test_notify_job_terminal_includes_extra_lines(
         job_dir=tmp_path / "job-002",
         selected_xyz=tmp_path / "inputs" / "candidate.xyz",
         candidate_count=3,
-        extra_lines=["organized_output_dir: /tmp/out", "resource_actual: {'max_cores': 4}"],
+        extra_lines=["resource_actual: {'max_cores': 4}"],
     )
 
     assert transport.messages == [
@@ -164,7 +161,6 @@ def test_notify_job_terminal_includes_extra_lines(
                 "job_dir: job-002",
                 "selected_input_xyz: candidate.xyz",
                 "candidate_count: 3",
-                "organized_output_dir: /tmp/out",
                 "resource_actual: {'max_cores': 4}",
             ]
         )
@@ -189,11 +185,9 @@ def test_notify_job_finished_maps_headlines_and_optional_fields(
     cfg = _make_cfg(tmp_path, enabled=True)
     transport = _FakeTransport(TelegramSendResult(sent=True))
     monkeypatch.setattr(notifications, "build_telegram_transport", lambda _cfg: transport)
-    organized_output_dir: Path | None = None
     resource_request: dict[str, int] | None = None
     resource_actual: dict[str, int] | None = None
     if status == "completed":
-        organized_output_dir = tmp_path / "organized" / "job-003"
         resource_request = {"max_cores": 8, "max_memory_gb": 16}
         resource_actual = {"max_cores": 6, "max_memory_gb": 12}
 
@@ -208,7 +202,6 @@ def test_notify_job_finished_maps_headlines_and_optional_fields(
         job_dir=tmp_path / "job-003",
         selected_xyz=tmp_path / "inputs" / "optimized.xyz",
         candidate_count=1,
-        organized_output_dir=organized_output_dir,
         resource_request=cast(dict[str, int] | None, resource_request),
         resource_actual=cast(dict[str, int] | None, resource_actual),
     )
@@ -221,11 +214,9 @@ def test_notify_job_finished_maps_headlines_and_optional_fields(
     assert "selected_input_xyz: optimized.xyz" in message
     assert "candidate_count: 1" in message
     if status == "completed":
-        assert "organized_output_dir: " in message
         assert "resource_request: {'max_cores': 8, 'max_memory_gb': 16}" in message
         assert "resource_actual: {'max_cores': 6, 'max_memory_gb': 12}" in message
     else:
-        assert "organized_output_dir: " not in message
         assert "resource_request: " not in message
         assert "resource_actual: " not in message
 

@@ -13,7 +13,6 @@ class TrackedJobDirDeps:
     resolve_record_job_dir: Callable[[Any], Path | None]
     load_state: Callable[[Path], Any]
     load_report_json: Callable[[Path], Any]
-    load_organized_ref: Callable[[Path], Any]
     resolve_existing_job_dir: Callable[[Any], Path | None]
 
 
@@ -36,25 +35,15 @@ def matching_tracked_job_dirs(
 
         state = deps.load_state(job_dir)
         report = deps.load_report_json(job_dir)
-        organized_ref = deps.load_organized_ref(job_dir)
         state = state if isinstance(state, dict) else {}
         report = report if isinstance(report, dict) else {}
-        organized_ref = organized_ref if isinstance(organized_ref, dict) else {}
-
-        if not organized_ref:
-            original_dir = deps.resolve_existing_job_dir(record.original_run_dir)
-            if original_dir is not None and original_dir != job_dir:
-                original_ref = deps.load_organized_ref(original_dir)
-                organized_ref = original_ref if isinstance(original_ref, dict) else {}
 
         lookup_values = (
             record.job_id,
             report.get("job_id"),
             state.get("job_id"),
-            organized_ref.get("job_id"),
             report.get("run_id"),
             state.get("run_id"),
-            organized_ref.get("run_id"),
         )
         if any(deps.normalize_text(value) == target_text for value in lookup_values):
             seen.add(job_dir)

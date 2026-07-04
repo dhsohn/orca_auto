@@ -13,6 +13,7 @@ from orca_auto.core.config.files import (
     load_yaml_mapping,
     mapping_section,
     scheduler_admission_root,
+    workflow_root_from_mapping,
 )
 from orca_auto.core.utils.coercion import normalize_text
 
@@ -122,18 +123,6 @@ def _append_absolute_path(paths: list[Path], value: Any) -> None:
     paths.append(candidate.resolve(strict=False))
 
 
-def _append_default_orca_organized_root(paths: list[Path], runtime_raw: dict[str, Any]) -> None:
-    if normalize_text(runtime_raw.get("organized_root")):
-        return
-    allowed_text = normalize_text(runtime_raw.get("allowed_root"))
-    if not allowed_text:
-        return
-    allowed_root = Path(allowed_text).expanduser()
-    if not allowed_root.is_absolute():
-        return
-    paths.append((allowed_root.parent / "orca_outputs").resolve(strict=False))
-
-
 def _dedupe_paths(paths: Sequence[Path]) -> tuple[Path, ...]:
     deduped: list[Path] = []
     seen: set[str] = set()
@@ -156,23 +145,19 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
 
     paths: list[Path] = []
     scheduler_raw = mapping_section(raw, "scheduler")
-    workflow_raw = mapping_section(raw, "workflow")
-    workflow_root_configured = bool(normalize_text(workflow_raw.get("root")))
+    runs_root = workflow_root_from_mapping(raw)
     admission_root = scheduler_admission_root(
-        config_path,
         scheduler_raw,
-        default_when_missing=bool(scheduler_raw) or workflow_root_configured,
+        default_runs_root=runs_root or None,
     )
     if admission_root is not None:
         paths.append(admission_root)
 
-    _append_absolute_path(paths, workflow_raw.get("root"))
+    _append_absolute_path(paths, runs_root)
 
     orca_raw = mapping_section(raw, "orca") or raw
     orca_runtime_raw = mapping_section(orca_raw, "runtime")
     _append_absolute_path(paths, orca_runtime_raw.get("allowed_root"))
-    _append_absolute_path(paths, orca_runtime_raw.get("organized_root"))
-    _append_default_orca_organized_root(paths, orca_runtime_raw)
     _append_absolute_path(paths, orca_runtime_raw.get("admission_root"))
 
     return _dedupe_paths(paths)

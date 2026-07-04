@@ -5,7 +5,6 @@ from ._engine_delivery import (
 )
 from ._engine_delivery import (
     send_job_event,
-    send_organize_summary,
 )
 from ._engine_rendering import (
     EngineEventField,
@@ -15,9 +14,6 @@ from ._engine_rendering import (
 )
 from ._engine_rendering import (
     event_lines as event_lines,
-)
-from ._engine_rendering import (
-    organize_summary_lines as organize_summary_lines,
 )
 from ._engine_transport import send_lines as send_lines
 from ._engine_transport import telegram_line_sender
@@ -78,11 +74,9 @@ __all__ = [
     "notify_xtb_job_started",
     "notify_xtb_job_terminal",
     "optional_terminal_lines",
-    "organize_summary_lines",
     "send_job_event",
     "send_lifecycle_event",
     "send_lines",
-    "send_organize_summary",
     "send_terminal_event",
     "split_telegram_message",
     "telegram_line_sender",

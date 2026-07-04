@@ -77,15 +77,8 @@ def _selected_worker_apps(values: Sequence[str] | None) -> list[str]:
     return ordered
 
 
-def _engine_worker_tail_argv(*, app: str, args: argparse.Namespace) -> list[str]:
-    tail_argv: list[str] = ["--engine", app]
-    if app != "orca":
-        return tail_argv
-    if bool(getattr(args, "auto_organize", False)):
-        tail_argv.append("--auto-organize")
-    elif bool(getattr(args, "no_auto_organize", False)):
-        tail_argv.append("--no-auto-organize")
-    return tail_argv
+def _engine_worker_tail_argv(*, app: str) -> list[str]:
+    return ["--engine", app]
 
 
 def worker_module_command(
@@ -115,13 +108,12 @@ def _engine_worker_spec(
     *,
     app: str,
     config_path: str,
-    args: argparse.Namespace,
 ) -> WorkerSpec:
     argv, cwd, env = worker_module_command(
         config_path=config_path,
         repo_root=_repo_root_for_subprocess(),
         module_name=_ENGINE_WORKER_MODULES[app],
-        tail_argv=_engine_worker_tail_argv(app=app, args=args),
+        tail_argv=_engine_worker_tail_argv(app=app),
     )
     env_payload = dict(env) if isinstance(env, dict) else None
     return WorkerSpec(app=app, argv=tuple(argv), cwd=cwd, env=env_payload)
@@ -237,9 +229,7 @@ def _build_worker_specs(args: Any) -> list[WorkerSpec]:
     engine_apps = _worker_engine_apps(apps, workflow_enabled=workflow_enabled)
     _validate_engine_worker_config(engine_apps, config_path)
 
-    specs = [
-        _engine_worker_spec(app=app, config_path=str(config_path), args=args) for app in engine_apps
-    ]
+    specs = [_engine_worker_spec(app=app, config_path=str(config_path)) for app in engine_apps]
     _add_workflow_worker_spec(
         specs,
         apps=apps,

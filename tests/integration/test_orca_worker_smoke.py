@@ -50,7 +50,6 @@ def _write_orca_worker_config(
     path: Path,
     *,
     allowed_root: Path,
-    organized_root: Path,
     admission_root: Path,
     orca_executable: Path,
 ) -> None:
@@ -64,7 +63,6 @@ def _write_orca_worker_config(
                 "orca": {
                     "runtime": {
                         "allowed_root": str(allowed_root),
-                        "organized_root": str(organized_root),
                         "default_max_retries": 0,
                     },
                     "paths": {"orca_executable": str(orca_executable)},
@@ -91,11 +89,10 @@ def _queue_entry_for_reaction(root: Path, reaction_dir: Path):
 
 def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path: Path) -> None:
     allowed_root = tmp_path / "orca_runs"
-    organized_root = tmp_path / "orca_outputs"
     admission_root = tmp_path / "admission"
     bin_dir = tmp_path / "bin"
     reaction_dir = allowed_root / "project_a" / "rxn_worker_lifecycle"
-    for path in (allowed_root, organized_root, admission_root, bin_dir, reaction_dir):
+    for path in (allowed_root, admission_root, bin_dir, reaction_dir):
         path.mkdir(parents=True, exist_ok=True)
 
     counter_path = tmp_path / "fake_orca_counter.txt"
@@ -105,7 +102,6 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     _write_orca_worker_config(
         config_path,
         allowed_root=allowed_root,
-        organized_root=organized_root,
         admission_root=admission_root,
         orca_executable=fake_orca,
     )
@@ -122,7 +118,6 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
         load_config(str(config_path)),
         str(config_path),
         max_concurrent=1,
-        auto_organize=False,
     )
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0

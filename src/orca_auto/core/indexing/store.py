@@ -56,7 +56,6 @@ def _record_from_dict(raw: dict[str, Any]) -> JobLocationRecord:
         original_run_dir=_normalize_text(raw.get("original_run_dir", "")),
         molecule_key=_normalize_text(raw.get("molecule_key", "")),
         selected_input_xyz=_normalize_text(raw.get("selected_input_xyz", "")),
-        organized_output_dir=_normalize_text(raw.get("organized_output_dir", "")),
         latest_known_path=_normalize_text(raw.get("latest_known_path", "")),
         resource_request=_normalize_resource_payload(raw.get("resource_request")),
         resource_actual=_normalize_resource_payload(raw.get("resource_actual")),
@@ -106,7 +105,6 @@ def _record_paths(record: JobLocationRecord) -> list[Path]:
     for value in (
         record.original_run_dir,
         record.selected_input_xyz,
-        record.organized_output_dir,
         record.latest_known_path,
     ):
         candidate = _resolve_candidate_path(value)
@@ -145,7 +143,6 @@ def upsert_job_location(root: str | Path, record: JobLocationRecord) -> JobLocat
             original_run_dir=_normalize_text(record.original_run_dir),
             molecule_key=_normalize_text(record.molecule_key),
             selected_input_xyz=_normalize_text(record.selected_input_xyz),
-            organized_output_dir=_normalize_text(record.organized_output_dir),
             latest_known_path=_normalize_text(record.latest_known_path),
             resource_request=_normalize_resource_payload(record.resource_request),
             resource_actual=_normalize_resource_payload(record.resource_actual),

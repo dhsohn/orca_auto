@@ -41,8 +41,8 @@ CLI를 표준화하고, 더 깊은 ORCA 런타임 동작을 한곳에 문서화�
 - ORCA 워커는 큐 정체성(`--queue-root/--queue-id`)으로 큐 자식을 시작하고, 그 자식이
   현재 큐 항목을 해석한 뒤 공유 `InternalEngineWorkerAdapter` 라이프사이클을 통해
   실행합니다.
-- ORCA 상태, 재시도, 리포트, 알림, 자동 정리 동작은 ORCA 도메인 동작으로 남아
-  있습니다. 자식이 종료된 뒤에도 부모 큐 종료 처리가 최종 큐 결과를 기록합니다.
+- ORCA 상태, 재시도, 리포트, 알림 동작은 ORCA 도메인 동작으로 남아 있습니다.
+  자식이 종료된 뒤에도 부모 큐 종료 처리가 최종 큐 결과를 기록합니다.
 - WSL에서는 권장 감독자가 `systemd`입니다.
 
 운영상 결과:
@@ -107,7 +107,6 @@ bash scripts/bootstrap_wsl.sh
 - `run-dir <path>`
 - `init`
 - `scaffold <ts_search|conformer_search>`
-- `organize orca`
 - `scan-notify`
 
 먼저 `.venv`를 활성화하거나, `.venv/bin/orca_auto ...`를 직접 호출하세요.
@@ -130,16 +129,12 @@ resources:
   max_cores_per_task: 8
   max_memory_gb_per_task: 32
 
-behavior:
-  # ORCA 전용. 내부 xTB/CREST 단계는 정리하지 않습니다.
-  auto_organize_on_terminal: false
-
 scheduler:
   max_active_simulations: 4
   admission_root: "/path/to/chem_admission"
 
 workflow:
-  root: "/path/to/workflow_root"
+  # root는 runs 루트(orca.runtime.allowed_root)가 기본값입니다
   paths:
     xtb_executable: "/path/to/xtb"
     crest_executable: "/path/to/crest"
@@ -154,7 +149,6 @@ telegram:
 orca:
   runtime:
     allowed_root: "/path/to/orca_runs"
-    organized_root: "/path/to/orca_outputs"
     default_max_retries: 2
   paths:
     orca_executable: "/path/to/orca/orca"
@@ -162,22 +156,23 @@ orca:
 
 `orca` 섹션 필드 설명:
 
-- `orca.runtime.allowed_root`: 실행이 허용되는 루트 디렉터리
-- `orca.runtime.organized_root`: 정리된 출력의 루트
+- `orca.runtime.allowed_root`: 실행이 허용되는 루트 디렉터리.
+  완료된 실행은 제출 당시 디렉터리 이름 그대로 이곳에 남습니다
 - `orca.runtime.default_max_retries`: `0`이면 ORCA 재시도 비활성화, 양수면
   계산 종류별 재시도 정책 활성화
 - `scheduler.max_active_simulations`: ORCA, 내부 xTB 단계, 내부 CREST 단계 전반에 걸친
   공유 활성 실행 총 상한
-- `scheduler.admission_root`: 머신 전역 슬롯 조율을 위한 공유 admission 루트
-- `workflow.root`: 워크플로우 생성, 활동 조회, 통합 워크플로우 워커가 사용하는
-  워크플로우 루트
+- `scheduler.admission_root`: 머신 전역 슬롯 조율을 위한 공유 admission 루트.
+  기본값은 `<runs root>/.admission`
+- `workflow.root`: 워크플로우 워크스페이스 위치의 선택적 재정의.
+  기본값은 runs 루트(`orca.runtime.allowed_root`)
 - `workflow.paths.xtb_executable`: 워크플로우가 관리하는 내부 단계가 사용하는 xTB
   실행 경로
 - `workflow.paths.crest_executable`: 워크플로우가 관리하는 내부 단계가 사용하는 CREST
   실행 경로
 - 내부 xTB/CREST 런타임은 각 워크플로우 범위로 한정됩니다.
 - 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은 오직
-  `workflow.root/<workflow_id>/internal/<engine>/{runs,outputs}` 아래에만 저장됩니다.
+  `<runs root>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`, `03_orca`) 아래에만 저장됩니다.
 - `orca.paths.orca_executable`: ORCA 실행 경로
 
 참고:
@@ -357,21 +352,7 @@ ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 자식 작업은 잡음을 
   초과하면 메시지가 표시된 개수를 안내하며, 취소나 정리를 실행하면 목록이 자동으로
   새로고침됩니다.
 
-### 7.6 `organize`
-
-```bash
-orca_auto organize orca --root '/absolute/path/to/orca_runs'
-orca_auto organize orca --root '/absolute/path/to/orca_runs' --apply
-```
-
-옵션:
-
-- `organize orca --reaction-dir <dir>`: ORCA 작업 디렉터리 하나를 정리
-- `organize orca --root <dir>`: 설정된 ORCA 루트부터 스캔
-- `organize orca --rebuild-index`: ORCA JSONL 인덱스 재구축
-- `--apply`: 실제 이동 수행. 없으면 명령은 드라이런(dry run)
-
-### 7.7 `scan-notify`
+### 7.6 `scan-notify`
 
 ```bash
 orca_auto scan-notify
@@ -382,7 +363,7 @@ orca_auto scan-notify
 - `scan-notify`는 설정된 ORCA 루트를 일회성으로 스캔해 Telegram 발견 알림을 보낸 뒤
   종료합니다. 실시간 모니터가 아닙니다.
 
-### 7.8 장기 실행 서비스
+### 7.7 장기 실행 서비스
 
 장기 실행 워커와 Telegram 봇 프로세스는 오직 `systemd`로만 관리됩니다. 공개 CLI 명령은
 그 서비스들을 직접 시작하지 않습니다.
@@ -529,7 +510,6 @@ Opt 모드 완료:
   최적화 수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동 요약(허수 모드, 주요
   원자 변위, scan 작업의 경우 스캔 좌표와의 일치도)을 담은 단일 파일 시각
   리포트
-- organize가 원본 실행 디렉터리에 스텁을 남긴 뒤의 `organized_ref.json`
 
 주요 `job_state.json` 필드:
 
@@ -591,22 +571,7 @@ ORCA 핸드오프 계약은 `orca_auto.flow` 같은 다운스트림 도구에 �
 - `original_run_dir`
 - `molecule_key`
 - `selected_input_xyz`
-- `organized_output_dir`
 - `latest_known_path`
-- `resource_request`
-- `resource_actual`
-
-`organized_ref.json`에서 현재 다운스트림이 소비하는 organize 스텁 필드:
-
-- `job_id`
-- `run_id`
-- `original_run_dir`
-- `organized_output_dir`
-- `selected_inp`
-- `selected_input_xyz`
-- `status`
-- `job_type`
-- `molecule_key`
 - `resource_request`
 - `resource_actual`
 
@@ -618,7 +583,6 @@ ORCA 핸드오프 계약은 `orca_auto.flow` 같은 다운스트림 도구에 �
 - `state_status`
 - `reaction_dir`
 - `latest_known_path`
-- `organized_output_dir`
 - `optimized_xyz_path`
 - `queue_id`
 - `queue_status`

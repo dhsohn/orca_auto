@@ -15,7 +15,6 @@ class LoadedArtifactFiles:
     record: JobLocationRecord | None
     report: dict[str, Any]
     state: dict[str, Any]
-    organized_ref: dict[str, Any]
     payload: dict[str, Any]
 
 
@@ -23,7 +22,6 @@ class LoadedArtifactFiles:
 class ContractArtifactBundle:
     job_dir: Path
     record: JobLocationRecord | None
-    organized_ref: dict[str, Any]
     payload: dict[str, Any]
     latest_known_path: str
     resource_request: dict[str, int]
@@ -46,10 +44,6 @@ class ContractFieldReader:
     def payload(self) -> dict[str, Any]:
         return self.bundle.payload
 
-    @property
-    def organized_ref(self) -> dict[str, Any]:
-        return self.bundle.organized_ref
-
     def record_value(self, attr: str) -> Any:
         return getattr(self.record, attr) if self.record is not None else ""
 
@@ -65,21 +59,6 @@ class ContractFieldReader:
     ) -> str:
         return first_normalized_text(
             self.payload.get(payload_key),
-            self.record_value(record_attr),
-            default=default,
-        )
-
-    def payload_ref_record_text(
-        self,
-        payload_key: str,
-        organized_ref_key: str,
-        record_attr: str,
-        *,
-        default: str = "",
-    ) -> str:
-        return first_normalized_text(
-            self.payload.get(payload_key),
-            self.organized_ref.get(organized_ref_key),
             self.record_value(record_attr),
             default=default,
         )
@@ -186,7 +165,6 @@ def resolve_indexed_job_dir(
             resolved_dir_candidates(
                 (
                     record.latest_known_path,
-                    record.organized_output_dir,
                     record.original_run_dir,
                 ),
                 path_factory=path_factory,
@@ -209,19 +187,12 @@ def load_artifact_files(
     load_json_dict_fn: Callable[[Path], dict[str, Any]],
     report_filename: str,
     state_filename: str,
-    organized_ref_filename: str,
     missing_label: str,
-    select_payload_fn: Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], dict[str, Any]]
-    | None = None,
+    select_payload_fn: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None,
 ) -> LoadedArtifactFiles:
     report = load_json_dict_fn(job_dir / report_filename)
     state = load_json_dict_fn(job_dir / state_filename)
-    organized_ref = load_json_dict_fn(job_dir / organized_ref_filename)
-    payload = (
-        select_payload_fn(report, state, organized_ref)
-        if select_payload_fn is not None
-        else report or state or organized_ref
-    )
+    payload = select_payload_fn(report, state) if select_payload_fn is not None else report or state
     payload = flatten_engine_artifact_payload(payload)
     if not payload:
         raise FileNotFoundError(
@@ -232,7 +203,6 @@ def load_artifact_files(
         record=record,
         report=report,
         state=state,
-        organized_ref=organized_ref,
         payload=payload,
     )
 
@@ -240,7 +210,6 @@ def load_artifact_files(
 def select_active_artifact_payload(
     report: dict[str, Any],
     state: dict[str, Any],
-    organized_ref: dict[str, Any],
     *,
     active_statuses: set[str] | frozenset[str],
 ) -> dict[str, Any]:
@@ -255,7 +224,7 @@ def select_active_artifact_payload(
     if state and report_job_id and state_job_id and report_job_id != state_job_id:
         return state
 
-    return report or state or organized_ref
+    return report or state
 
 
 def flatten_engine_artifact_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -282,7 +251,6 @@ def flatten_engine_artifact_payload(payload: dict[str, Any]) -> dict[str, Any]:
     flattened.setdefault("manifest_path", normalize_text(artifacts.get("manifest_path")))
     flattened.setdefault("stdout_log", normalize_text(artifacts.get("stdout_log")))
     flattened.setdefault("stderr_log", normalize_text(artifacts.get("stderr_log")))
-    flattened.setdefault("organized_output_dir", normalize_text(artifacts.get("organized_dir")))
     flattened.setdefault(
         "resource_request", resources.get("request") if isinstance(resources, dict) else {}
     )
@@ -361,12 +329,10 @@ def load_contract_artifact_bundle(
     load_json_dict_fn: Callable[[Path], dict[str, Any]],
     report_filename: str,
     state_filename: str,
-    organized_ref_filename: str,
     missing_label: str,
     expected_app_name: str,
     coerce_resource_dict_fn: Callable[[Any], dict[str, int]],
-    select_payload_fn: Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], dict[str, Any]]
-    | None = None,
+    select_payload_fn: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None,
     path_factory: Callable[[str], Any] = Path,
 ) -> ContractArtifactBundle:
     resolved_index_root = Path(index_root).expanduser().resolve()
@@ -384,7 +350,6 @@ def load_contract_artifact_bundle(
         load_json_dict_fn=load_json_dict_fn,
         report_filename=report_filename,
         state_filename=state_filename,
-        organized_ref_filename=organized_ref_filename,
         missing_label=missing_label,
         select_payload_fn=select_payload_fn,
     )
@@ -400,7 +365,6 @@ def load_contract_artifact_bundle(
     return ContractArtifactBundle(
         job_dir=job_dir,
         record=record,
-        organized_ref=loaded.organized_ref,
         payload=loaded.payload,
         latest_known_path=latest_known_path(record, job_dir),
         resource_request=resource_request,

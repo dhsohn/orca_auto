@@ -108,28 +108,6 @@ def test_ensure_directory_covers_existing_decline_and_create(capsys, tmp_path: P
     assert missing.is_dir()
 
 
-def test_prompt_organized_root_retries_when_nested_under_allowed_root(
-    capsys, tmp_path: Path
-) -> None:
-    allowed_root = (tmp_path / "allowed").resolve()
-    allowed_root.mkdir()
-    nested = allowed_root / "organized"
-    valid = (tmp_path / "organized").resolve()
-
-    with (
-        patch(
-            "orca_auto.orca.commands.init._prompt_directory_path",
-            side_effect=[nested, valid],
-        ),
-        patch("orca_auto.orca.commands.init._ensure_directory", return_value=True),
-    ):
-        assert init._prompt_organized_root(
-            allowed_root, engine_key="orca", engine_label="ORCA"
-        ) == str(valid)
-
-    assert "must not contain each other" in capsys.readouterr().out
-
-
 def test_prompt_default_max_retries_and_max_active_simulations_validate(capsys) -> None:
     with patch("orca_auto.orca.commands.init._prompt_text", side_effect=["abc", "-1", "2"]):
         assert init._prompt_default_max_retries() == 2
@@ -219,7 +197,7 @@ def test_cmd_init_handles_interrupt(tmp_path: Path, capsys) -> None:
     with (
         patch("orca_auto.orca.commands.init.default_config_path", return_value=str(config_path)),
         patch(
-            "orca_auto.orca.commands.init._prompt_workflow_root",
+            "orca_auto.orca.commands.init._prompt_orca_runtime",
             side_effect=KeyboardInterrupt,
         ),
     ):
@@ -230,20 +208,14 @@ def test_cmd_init_handles_interrupt(tmp_path: Path, capsys) -> None:
 
 def test_cmd_init_handles_write_or_load_failure(tmp_path: Path, capsys) -> None:
     config_path = tmp_path / "orca_auto.yaml"
-    workflow_root = tmp_path / "workflow_root"
     orca_allowed_root = tmp_path / "orca_allowed"
 
     with (
         patch("orca_auto.orca.commands.init.default_config_path", return_value=str(config_path)),
         patch(
-            "orca_auto.orca.commands.init._prompt_workflow_root",
-            return_value=str(workflow_root),
-        ),
-        patch(
             "orca_auto.orca.commands.init._prompt_orca_runtime",
             return_value={
                 "allowed_root": str(orca_allowed_root),
-                "organized_root": str(tmp_path / "orca_organized"),
                 "default_max_retries": 2,
                 "executable": "/usr/bin/orca",
             },
@@ -280,21 +252,14 @@ def test_cmd_init_handles_write_or_load_failure(tmp_path: Path, capsys) -> None:
 
 def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsys) -> None:
     config_path = tmp_path / "orca_auto.yaml"
-    workflow_root = tmp_path / "workflow_root"
     orca_allowed_root = tmp_path / "orca_allowed"
-    orca_organized_root = tmp_path / "orca_organized"
 
     with (
         patch("orca_auto.orca.commands.init.default_config_path", return_value=str(config_path)),
         patch(
-            "orca_auto.orca.commands.init._prompt_workflow_root",
-            return_value=str(workflow_root),
-        ),
-        patch(
             "orca_auto.orca.commands.init._prompt_orca_runtime",
             return_value={
                 "allowed_root": str(orca_allowed_root),
-                "organized_root": str(orca_organized_root),
                 "default_max_retries": 2,
                 "executable": "/usr/bin/orca",
             },
@@ -328,8 +293,8 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
     validate_generated_config.assert_called_once_with(str(config_path.resolve()))
     output = capsys.readouterr().out
     assert "Config created successfully." in output
-    assert "workflow.root" in output
-    assert "orca_allowed_root" in output
+    assert "runs_root" in output
+    assert str(orca_allowed_root) in output
     assert "xtb_executable" in output
     assert "crest_executable" in output
     assert "max_active_simulations: 4" in output
@@ -338,14 +303,10 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
             "max_cores_per_task": 8,
             "max_memory_gb_per_task": 32,
         },
-        "behavior": {
-            "auto_organize_on_terminal": False,
-        },
         "scheduler": {
             "max_active_simulations": 4,
         },
         "workflow": {
-            "root": str(workflow_root),
             "paths": {
                 "xtb_executable": "/usr/bin/xtb",
                 "crest_executable": "/usr/bin/crest",
@@ -355,7 +316,6 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
         "orca": {
             "runtime": {
                 "allowed_root": str(orca_allowed_root),
-                "organized_root": str(orca_organized_root),
                 "default_max_retries": 2,
             },
             "paths": {"orca_executable": "/usr/bin/orca"},

@@ -98,7 +98,6 @@ def load_xtb_artifact_contract(*, xtb_index_root: str | Path, target: str) -> Xt
         load_json_dict_fn=_adapter_helpers.load_json_dict,
         report_filename="job_report.json",
         state_filename="job_state.json",
-        organized_ref_filename="organized_ref.json",
         missing_label="xTB",
         expected_app_name="orca_auto_xtb",
         coerce_resource_dict_fn=coerce_int_mapping,
@@ -121,11 +120,6 @@ def load_xtb_artifact_contract(*, xtb_index_root: str | Path, target: str) -> Xt
     job_id = fields.payload_record_text("job_id", "job_id")
     reaction_key = fields.payload_record_text("reaction_key", "molecule_key")
     selected_input_xyz = fields.payload_record_text("selected_input_xyz", "selected_input_xyz")
-    organized_output_dir = fields.payload_ref_record_text(
-        "organized_output_dir",
-        "organized_output_dir",
-        "organized_output_dir",
-    )
     latest_known_path = bundle.latest_known_path
 
     analysis_summary = payload.get("analysis_summary")
@@ -139,7 +133,6 @@ def load_xtb_artifact_contract(*, xtb_index_root: str | Path, target: str) -> Xt
         reason=reason,
         job_dir=str(fields.job_dir),
         latest_known_path=latest_known_path,
-        organized_output_dir=organized_output_dir,
         reaction_key=reaction_key,
         selected_input_xyz=selected_input_xyz,
         selected_candidate_paths=selected_candidate_paths,

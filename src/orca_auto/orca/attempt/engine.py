@@ -9,7 +9,7 @@ from typing import Any, Protocol
 from ..completion_rules import detect_completion_mode
 from ..orca_runner import WorkerShutdownInterrupt
 from ..out_analyzer import OutAnalysis, analyze_output
-from ..retry_policy import RetryRecipeName, effective_max_retries
+from ..retry_policy import effective_max_retries
 from ..state import now_utc_iso, save_state
 from ..state_machine import decide_attempt_outcome
 from ..statuses import AnalyzerStatus, RunStatus
@@ -28,7 +28,6 @@ from .retry import (
     RetryAttemptRequest,
     prepare_resumed_checkpoint_input,
     prepare_retry_attempt,
-    retry_recipe_step,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,10 +89,6 @@ class RecordedAttemptResult:
     current_inp: Path
     out_path: Path
     analysis: OutAnalysis
-
-
-def _retry_recipe_step(retry_number: int) -> RetryRecipeName:
-    return retry_recipe_step(retry_number)
 
 
 def _mark_attempt_started(
@@ -200,7 +195,6 @@ def _resolve_current_attempt_input(
         execution_index=loop.execution_index,
         retries_used=loop.retries_used,
         retry_inp_path=ctx.retry_inp_path,
-        retry_recipe_step=_retry_recipe_step,
         to_resolved_local=ctx.to_resolved_local,
         save_state=save_state,
     )

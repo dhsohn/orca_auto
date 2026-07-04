@@ -85,7 +85,6 @@ def _make_cfg(root: Path) -> AppConfig:
     return AppConfig(
         runtime=RuntimeConfig(
             allowed_root=str(root / "runs"),
-            organized_root=str(root / "outputs"),
         ),
         paths=PathsConfig(orca_executable=str(fake_orca)),
         resources=CommonResourceConfig(max_cores_per_task=8, max_memory_gb_per_task=16),
@@ -144,14 +143,12 @@ def test_upsert_job_record_writes_allowed_root_index_and_resolves_latest_dir() -
         assert loaded_report is not None and loaded_report["job"]["id"] == "job_live_1"
 
 
-def test_record_from_artifacts_uses_run_id_fallback_and_organized_ref() -> None:
+def test_record_from_artifacts_uses_run_id_fallback() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        original_dir = root / "runs" / "rxn_b"
-        original_dir.mkdir(parents=True)
-        organized_dir = root / "outputs" / "opt" / "H2" / "run_hist_1"
-        organized_dir.mkdir(parents=True)
-        selected_inp = organized_dir / "rxn.inp"
+        job_dir = root / "runs" / "rxn_b"
+        job_dir.mkdir(parents=True)
+        selected_inp = job_dir / "rxn.inp"
         selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
 
         state: dict[str, object] = {
@@ -161,30 +158,17 @@ def test_record_from_artifacts_uses_run_id_fallback_and_organized_ref() -> None:
             "attempts": [],
             "final_result": None,
         }
-        organized_ref = {
-            "run_id": "run_hist_1",
-            "original_run_dir": str(original_dir),
-            "organized_output_dir": str(organized_dir),
-            "status": "completed",
-            "job_type": "opt",
-            "selected_inp": str(selected_inp),
-            "molecule_key": "H2",
-            "resource_request": {"max_cores": 8, "max_memory_gb": 16},
-            "resource_actual": {"max_cores": 8, "max_memory_gb": 16},
-        }
 
         record = record_from_artifacts(
-            job_dir=original_dir,
+            job_dir=job_dir,
             state=state,
             report=None,
-            organized_ref=organized_ref,
         )
 
         assert record is not None
         assert record.job_id == "run_hist_1"
-        assert record.original_run_dir == str(original_dir.resolve())
-        assert record.organized_output_dir == str(organized_dir.resolve())
-        assert record.latest_known_path == str(organized_dir.resolve())
+        assert record.original_run_dir == str(job_dir.resolve())
+        assert record.latest_known_path == str(job_dir.resolve())
         assert record.job_type == "orca_opt"
         assert record.molecule_key == "H2"
 
@@ -193,36 +177,25 @@ def test_resolve_latest_job_dir_and_load_job_artifacts_cover_job_and_path_target
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         allowed_root = root / "runs"
-        organized_dir = root / "outputs" / "opt" / "H2" / "job_hist_1"
-        original_dir = allowed_root / "rxn_hist_1"
+        job_dir = allowed_root / "rxn_hist_1"
         allowed_root.mkdir()
-        original_dir.mkdir()
-        organized_dir.mkdir(parents=True)
+        job_dir.mkdir()
 
-        inp = organized_dir / "rxn.inp"
+        inp = job_dir / "rxn.inp"
         inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
-        organized_ref = {
-            "job_id": "job_hist_1",
-            "run_id": "run_hist_1",
-            "original_run_dir": str(original_dir),
-            "organized_output_dir": str(organized_dir),
-            "selected_inp": str(inp),
-            "selected_input_xyz": str(inp),
-        }
 
         _write_orca_state(
-            organized_dir,
+            job_dir,
             job_id="job_hist_1",
             run_id="run_hist_1",
             selected_inp=inp,
         )
         _write_orca_report(
-            organized_dir,
+            job_dir,
             job_id="job_hist_1",
             run_id="run_hist_1",
             selected_inp=inp,
         )
-        _write_json(original_dir / "organized_ref.json", organized_ref)
         _write_json(
             allowed_root / "job_locations.json",
             [
@@ -231,98 +204,77 @@ def test_resolve_latest_job_dir_and_load_job_artifacts_cover_job_and_path_target
                     "app_name": "orca_auto_orca",
                     "job_type": "orca_opt",
                     "status": "completed",
-                    "original_run_dir": str(original_dir),
+                    "original_run_dir": str(job_dir),
                     "molecule_key": "H2",
                     "selected_input_xyz": str(inp),
-                    "organized_output_dir": str(organized_dir),
-                    "latest_known_path": str(organized_dir),
+                    "latest_known_path": str(job_dir),
                     "resource_request": {"max_cores": 8, "max_memory_gb": 16},
                     "resource_actual": {"max_cores": 8, "max_memory_gb": 16},
                 }
             ],
         )
 
-        for target in ("job_hist_1", "run_hist_1", str(original_dir), str(organized_dir)):
-            assert resolve_latest_job_dir(allowed_root, target) == organized_dir.resolve()
+        for target in ("job_hist_1", "run_hist_1", str(job_dir)):
+            assert resolve_latest_job_dir(allowed_root, target) == job_dir.resolve()
             job_path, loaded_state, loaded_report = load_job_artifacts(allowed_root, target)
-            assert job_path == organized_dir.resolve()
+            assert job_path == job_dir.resolve()
             assert loaded_state is not None and loaded_state["run_id"] == "run_hist_1"
             assert loaded_report is not None and loaded_report["job"]["id"] == "job_hist_1"
 
 
-def test_load_job_artifacts_follows_organized_ref_when_index_lookup_is_missing() -> None:
+def test_load_job_artifacts_resolves_path_target_when_index_lookup_is_missing() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         allowed_root = root / "runs"
-        original_dir = allowed_root / "rxn_hist_2"
-        organized_dir = root / "outputs" / "opt" / "H2" / "job_hist_2"
+        job_dir = allowed_root / "rxn_hist_2"
         allowed_root.mkdir()
-        original_dir.mkdir()
-        organized_dir.mkdir(parents=True)
-
-        organized_ref = {
-            "job_id": "job_hist_2",
-            "run_id": "run_hist_2",
-            "original_run_dir": str(original_dir),
-            "organized_output_dir": str(organized_dir),
-        }
+        job_dir.mkdir()
 
         _write_orca_state(
-            organized_dir,
+            job_dir,
             job_id="job_hist_2",
             run_id="run_hist_2",
-            selected_inp=organized_dir / "rxn.inp",
+            selected_inp=job_dir / "rxn.inp",
         )
         _write_orca_report(
-            organized_dir,
+            job_dir,
             job_id="job_hist_2",
             run_id="run_hist_2",
-            selected_inp=organized_dir / "rxn.inp",
+            selected_inp=job_dir / "rxn.inp",
         )
-        _write_json(original_dir / "organized_ref.json", organized_ref)
 
-        assert resolve_latest_job_dir(allowed_root, str(original_dir)) == organized_dir.resolve()
-        job_path, loaded_state, loaded_report = load_job_artifacts(allowed_root, str(original_dir))
-        assert job_path == organized_dir.resolve()
+        assert resolve_latest_job_dir(allowed_root, str(job_dir)) == job_dir.resolve()
+        job_path, loaded_state, loaded_report = load_job_artifacts(allowed_root, str(job_dir))
+        assert job_path == job_dir.resolve()
         assert loaded_state is not None and loaded_state["job_id"] == "job_hist_2"
         assert (
             loaded_report is not None and loaded_report["engine_payload"]["run_id"] == "run_hist_2"
         )
 
 
-def test_load_job_artifact_context_includes_record_and_original_stub_for_run_id_target() -> None:
+def test_load_job_artifact_context_includes_record_for_run_id_target() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         allowed_root = root / "runs"
-        original_dir = allowed_root / "rxn_hist_3"
-        organized_dir = root / "outputs" / "opt" / "H2" / "job_hist_3"
+        job_dir = allowed_root / "rxn_hist_3"
         allowed_root.mkdir()
-        original_dir.mkdir()
-        organized_dir.mkdir(parents=True)
+        job_dir.mkdir()
 
-        inp = organized_dir / "rxn.inp"
+        inp = job_dir / "rxn.inp"
         inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
-        organized_ref = {
-            "job_id": "job_hist_3",
-            "run_id": "run_hist_3",
-            "original_run_dir": str(original_dir),
-            "organized_output_dir": str(organized_dir),
-            "selected_inp": str(inp),
-        }
 
         _write_orca_state(
-            organized_dir,
+            job_dir,
             job_id="job_hist_3",
             run_id="run_hist_3",
             selected_inp=inp,
         )
         _write_orca_report(
-            organized_dir,
+            job_dir,
             job_id="job_hist_3",
             run_id="run_hist_3",
             selected_inp=inp,
         )
-        _write_json(original_dir / "organized_ref.json", organized_ref)
         _write_json(
             allowed_root / "job_locations.json",
             [
@@ -331,11 +283,10 @@ def test_load_job_artifact_context_includes_record_and_original_stub_for_run_id_
                     "app_name": "orca_auto_orca",
                     "job_type": "orca_opt",
                     "status": "completed",
-                    "original_run_dir": str(original_dir),
+                    "original_run_dir": str(job_dir),
                     "molecule_key": "H2",
                     "selected_input_xyz": str(inp),
-                    "organized_output_dir": str(organized_dir),
-                    "latest_known_path": str(organized_dir),
+                    "latest_known_path": str(job_dir),
                     "resource_request": {"max_cores": 8, "max_memory_gb": 16},
                     "resource_actual": {"max_cores": 8, "max_memory_gb": 16},
                 }
@@ -346,47 +297,32 @@ def test_load_job_artifact_context_includes_record_and_original_stub_for_run_id_
 
         assert context.record is not None
         assert context.record.job_id == "job_hist_3"
-        assert context.job_dir == organized_dir.resolve()
+        assert context.job_dir == job_dir.resolve()
         assert context.state is not None and context.state["run_id"] == "run_hist_3"
         assert context.report is not None and context.report["job"]["id"] == "job_hist_3"
-        assert context.organized_ref is not None
-        assert context.organized_ref["original_run_dir"] == str(original_dir)
 
 
-def test_load_job_runtime_context_exposes_queue_entry_and_organized_refresh() -> None:
+def test_load_job_runtime_context_exposes_queue_entry() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         allowed_root = root / "runs"
-        organized_root = root / "outputs"
-        original_dir = allowed_root / "rxn_hist_4"
-        organized_dir = organized_root / "opt" / "H2" / "job_hist_4"
+        job_dir = allowed_root / "rxn_hist_4"
         allowed_root.mkdir()
-        original_dir.mkdir()
-        organized_dir.mkdir(parents=True)
+        job_dir.mkdir()
 
-        inp = organized_dir / "rxn.inp"
+        inp = job_dir / "rxn.inp"
         inp.write_text("! Opt\n* xyzfile 0 1 rxn.xyz\n", encoding="utf-8")
         _write_orca_state(
-            organized_dir,
+            job_dir,
             job_id="job_hist_4",
             run_id="run_hist_4",
             selected_inp=inp,
         )
         _write_orca_report(
-            organized_dir,
+            job_dir,
             job_id="job_hist_4",
             run_id="run_hist_4",
             selected_inp=inp,
-        )
-        _write_json(
-            original_dir / "organized_ref.json",
-            {
-                "job_id": "job_hist_4",
-                "run_id": "run_hist_4",
-                "original_run_dir": str(original_dir),
-                "organized_output_dir": str(organized_dir),
-                "selected_inp": str(inp),
-            },
         )
         _write_json(
             allowed_root / "queue.json",
@@ -398,7 +334,7 @@ def test_load_job_runtime_context_exposes_queue_entry_and_organized_refresh() ->
                     "cancel_requested": False,
                     "metadata": {
                         "run_id": "run_hist_4",
-                        "reaction_dir": str(original_dir),
+                        "reaction_dir": str(job_dir),
                     },
                 }
             ],
@@ -411,11 +347,10 @@ def test_load_job_runtime_context_exposes_queue_entry_and_organized_refresh() ->
                     "app_name": "orca_auto_orca",
                     "job_type": "orca_opt",
                     "status": "completed",
-                    "original_run_dir": str(original_dir),
+                    "original_run_dir": str(job_dir),
                     "molecule_key": "H2",
                     "selected_input_xyz": str(inp),
-                    "organized_output_dir": str(organized_dir),
-                    "latest_known_path": str(organized_dir),
+                    "latest_known_path": str(job_dir),
                     "resource_request": {"max_cores": 8, "max_memory_gb": 16},
                     "resource_actual": {"max_cores": 8, "max_memory_gb": 16},
                 }
@@ -425,13 +360,11 @@ def test_load_job_runtime_context_exposes_queue_entry_and_organized_refresh() ->
         context = load_job_runtime_context(
             allowed_root,
             "job_hist_4",
-            organized_root=organized_root,
         )
 
         assert context.queue_entry is not None
         assert context.queue_entry["queue_id"] == "q_hist_4"
-        assert context.organized_dir == organized_dir.resolve()
-        assert context.artifact.job_dir == organized_dir.resolve()
+        assert context.artifact.job_dir == job_dir.resolve()
         assert (
             context.artifact.state is not None and context.artifact.state["run_id"] == "run_hist_4"
         )
@@ -439,26 +372,21 @@ def test_load_job_runtime_context_exposes_queue_entry_and_organized_refresh() ->
             context.artifact.report is not None
             and context.artifact.report["job"]["id"] == "job_hist_4"
         )
-        assert context.artifact.organized_ref is not None
-        assert context.artifact.organized_ref["organized_output_dir"] == str(organized_dir)
 
 
 def test_load_orca_contract_payload_returns_normalized_runtime_fields() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         allowed_root = root / "runs"
-        organized_root = root / "outputs"
-        original_dir = allowed_root / "rxn_hist_5"
-        organized_dir = organized_root / "opt" / "H2" / "job_hist_5"
+        job_dir = allowed_root / "rxn_hist_5"
         allowed_root.mkdir()
-        original_dir.mkdir()
-        organized_dir.mkdir(parents=True)
+        job_dir.mkdir()
 
-        inp = organized_dir / "rxn.inp"
+        inp = job_dir / "rxn.inp"
         inp.write_text("! Opt\n* xyzfile 0 1 rxn.xyz\n", encoding="utf-8")
-        xyz = organized_dir / "rxn.xyz"
+        xyz = job_dir / "rxn.xyz"
         xyz.write_text("2\ncomment\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
-        out = organized_dir / "rxn.out"
+        out = job_dir / "rxn.out"
         out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
         attempts = [
             {
@@ -480,7 +408,7 @@ def test_load_orca_contract_payload_returns_normalized_runtime_fields() -> None:
             "last_out_path": str(out),
         }
         _write_orca_state(
-            organized_dir,
+            job_dir,
             job_id="job_hist_5",
             run_id="run_hist_5",
             selected_inp=inp,
@@ -490,7 +418,7 @@ def test_load_orca_contract_payload_returns_normalized_runtime_fields() -> None:
             max_retries=3,
         )
         _write_orca_report(
-            organized_dir,
+            job_dir,
             job_id="job_hist_5",
             run_id="run_hist_5",
             selected_inp=inp,
@@ -498,17 +426,6 @@ def test_load_orca_contract_payload_returns_normalized_runtime_fields() -> None:
             attempts=attempts,
             final_result=final_result,
             max_retries=3,
-        )
-        _write_json(
-            original_dir / "organized_ref.json",
-            {
-                "job_id": "job_hist_5",
-                "run_id": "run_hist_5",
-                "original_run_dir": str(original_dir),
-                "organized_output_dir": str(organized_dir),
-                "selected_inp": str(inp),
-                "selected_input_xyz": str(xyz),
-            },
         )
         _write_json(
             allowed_root / "queue.json",
@@ -520,7 +437,7 @@ def test_load_orca_contract_payload_returns_normalized_runtime_fields() -> None:
                     "cancel_requested": False,
                     "metadata": {
                         "run_id": "run_hist_5",
-                        "reaction_dir": str(original_dir),
+                        "reaction_dir": str(job_dir),
                         "resource_request": {"max_cores": 8, "max_memory_gb": 16},
                         "resource_actual": {"max_cores": 8, "max_memory_gb": 16},
                     },
@@ -535,11 +452,10 @@ def test_load_orca_contract_payload_returns_normalized_runtime_fields() -> None:
                     "app_name": "orca_auto_orca",
                     "job_type": "orca_opt",
                     "status": "completed",
-                    "original_run_dir": str(original_dir),
+                    "original_run_dir": str(job_dir),
                     "molecule_key": "H2",
                     "selected_input_xyz": str(inp),
-                    "organized_output_dir": str(organized_dir),
-                    "latest_known_path": str(organized_dir),
+                    "latest_known_path": str(job_dir),
                     "resource_request": {"max_cores": 8, "max_memory_gb": 16},
                     "resource_actual": {"max_cores": 8, "max_memory_gb": 16},
                 }
@@ -549,15 +465,13 @@ def test_load_orca_contract_payload_returns_normalized_runtime_fields() -> None:
         payload = load_orca_contract_payload(
             allowed_root,
             "job_hist_5",
-            organized_root=organized_root,
         )
 
         assert payload["run_id"] == "run_hist_5"
         assert payload["status"] == "completed"
         assert payload["reason"] == "normal_termination"
-        assert payload["reaction_dir"] == str(organized_dir.resolve())
-        assert payload["latest_known_path"] == str(organized_dir.resolve())
-        assert payload["organized_output_dir"] == str(organized_dir.resolve())
+        assert payload["reaction_dir"] == str(job_dir.resolve())
+        assert payload["latest_known_path"] == str(job_dir.resolve())
         assert payload["queue_id"] == "q_hist_5"
         assert payload["queue_status"] == "completed"
         assert payload["selected_inp"] == str(inp.resolve())
@@ -619,21 +533,19 @@ def test_job_locations_uses_core_indexing_backend() -> None:
 def test_collect_reindex_payload_reads_artifact_identity_and_paths() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        original_dir = root / "runs" / "rxn_reindex"
-        organized_dir = root / "outputs" / "sp" / "H2" / "job_reindex_1"
-        original_dir.mkdir(parents=True)
-        organized_dir.mkdir(parents=True)
-        inp = original_dir / "rxn.inp"
+        job_dir = root / "runs" / "rxn_reindex"
+        job_dir.mkdir(parents=True)
+        inp = job_dir / "rxn.inp"
         inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
 
         _write_orca_state(
-            original_dir,
+            job_dir,
             job_id="job_reindex_1",
             selected_inp=inp,
             resource_request={"max_cores": 4, "max_memory_gb": 8},
         )
         _write_orca_report(
-            original_dir,
+            job_dir,
             job_id="job_reindex_1",
             selected_inp=inp,
             resource_actual={"max_cores": 4, "max_memory_gb": 8},
@@ -642,27 +554,54 @@ def test_collect_reindex_payload_reads_artifact_identity_and_paths() -> None:
                 "molecule_key": "H2",
             },
         )
-        _write_json(
-            original_dir / "organized_ref.json",
-            {
-                "original_run_dir": str(original_dir),
-                "organized_output_dir": str(organized_dir),
-            },
-        )
 
-        payload = collect_reindex_payload(original_dir)
+        payload = collect_reindex_payload(job_dir)
 
         assert payload == {
             "job_id": "job_reindex_1",
             "status": "completed",
             "job_type": "orca_single_point",
-            "job_dir": str(original_dir.resolve()),
+            "job_dir": str(job_dir.resolve()),
             "selected_input_xyz": str(inp.resolve()),
             "molecule_key": "H2",
-            "organized_output_dir": str(organized_dir.resolve()),
             "resource_request": {"max_cores": 4, "max_memory_gb": 8},
             "resource_actual": {"max_cores": 4, "max_memory_gb": 8},
         }
+
+
+def test_reindex_job_locations_skips_workflow_workspace_jobs() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        cfg = _make_cfg(root)
+        allowed_root = Path(cfg.runtime.allowed_root)
+
+        standalone = allowed_root / "rxn_standalone"
+        standalone.mkdir(parents=True)
+        standalone_inp = standalone / "calc.inp"
+        standalone_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
+        _write_orca_state(
+            standalone,
+            job_id="job_standalone",
+            status="completed",
+            selected_inp=standalone_inp,
+        )
+
+        workspace = allowed_root / "wf_20260704"
+        stage_job = workspace / "03_orca" / "candidate_01"
+        stage_job.mkdir(parents=True)
+        (workspace / "workflow.json").write_text("{}", encoding="utf-8")
+        stage_inp = stage_job / "calc.inp"
+        stage_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
+        _write_orca_state(
+            stage_job,
+            job_id="job_workflow_internal",
+            status="completed",
+            selected_inp=stage_inp,
+        )
+
+        assert reindex_job_locations(cfg) == 1
+        loaded = _load_job_locations(index_root_for_cfg(cfg))
+        assert [record["job_id"] for record in loaded] == ["job_standalone"]
 
 
 def test_reindex_job_locations_handles_missing_root_and_skips_unidentifiable_artifacts() -> None:

@@ -18,7 +18,6 @@ class OrcaQueueWorkerTrackingCallbacks:
     build_run_finished_notification: Callable[..., Any]
     coerce_resource_request: Callable[[Any], dict[str, int] | None]
     finished_notification_already_sent: Callable[[Any], bool]
-    load_organized_ref: Callable[[Path], Any]
     load_report_json: Callable[[Path], Any]
     load_state: Callable[[Path], Any]
     mark_finished_notification_sent: Callable[..., Any]
@@ -129,16 +128,10 @@ def upsert_terminal_job_record(
         job_dir=job_dir,
         state=dict(state) if state is not None else None,
         report=callbacks.load_report_json(job_dir),
-        organized_ref=callbacks.load_organized_ref(job_dir),
         fallback_job_id=fallback_job_id or "",
     )
     if record is None:
         return
-    organized_output_dir = (
-        Path(record.organized_output_dir).expanduser().resolve()
-        if record.organized_output_dir
-        else None
-    )
     callbacks.upsert_job_record(
         cfg,
         job_id=record.job_id,
@@ -146,7 +139,6 @@ def upsert_terminal_job_record(
         job_dir=Path(record.original_run_dir).expanduser().resolve(),
         job_type=record.job_type,
         selected_input_xyz=record.selected_input_xyz,
-        organized_output_dir=organized_output_dir,
         molecule_key=record.molecule_key,
         resource_request=dict(record.resource_request),
         resource_actual=dict(record.resource_actual),

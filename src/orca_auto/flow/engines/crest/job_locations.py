@@ -7,7 +7,7 @@ from orca_auto.core.indexing.engine_job_locations import (
     build_store_backed_engine_job_location_exports,
 )
 
-from .state import load_organized_ref, load_report_json, load_state
+from .state import load_report_json, load_state
 
 
 def job_type_for_mode(mode: str) -> str:
@@ -43,7 +43,6 @@ _LOCATION_EXPORTS = build_store_backed_engine_job_location_exports(
     ),
     load_state_fn=load_state,
     load_report_json_fn=load_report_json,
-    load_organized_ref_fn=load_organized_ref,
     payload_kind_kwarg="mode",
     molecule_key_kwarg="molecule_key",
     default_payload_kind_kwarg="default_mode",

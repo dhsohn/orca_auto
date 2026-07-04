@@ -445,5 +445,5 @@ def test_execute_queue_entry_processes_ranking_job_without_auto_organizing(
     outcome = queue_cmd._execute_queue_entry(cfg, queue_root=queue_root, entry=entry)
 
     assert outcome.result.status == "completed"
-    assert outcome.organized_output_dir == ""
-    assert finished_calls and finished_calls[0]["organized_output_dir"] is None
+    assert finished_calls
+    assert "organized_output_dir" not in finished_calls[0]
