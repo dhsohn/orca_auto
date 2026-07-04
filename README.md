@@ -97,7 +97,7 @@ Notes:
   calculation-type retry policy, capped by ORCA route type.
 - `scheduler.max_active_simulations` is the shared cap across ORCA, internal xTB workflow stages, and internal CREST workflow stages.
 - Everything lives under a single runs root (`orca.runtime.allowed_root`): standalone ORCA jobs and workflow workspaces sit side by side in it, and the shared admission directory defaults to `<runs root>/.admission`. Set `workflow.root` only to move workflows elsewhere.
-- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs live only under `<runs root>/<workflow_id>/internal/<engine>/{runs,outputs}`.
+- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs live only under `<runs root>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`).
 - The full template lives at [config/orca_auto.yaml.example](config/orca_auto.yaml.example).
 
 ## User Commands

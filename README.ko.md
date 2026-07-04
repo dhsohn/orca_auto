@@ -99,8 +99,8 @@ orca:
   디렉터리는 `<runs root>/.admission`이 기본값입니다. 워크플로우를 다른 곳에 두고
   싶을 때만 `workflow.root`를 설정하세요.
 - 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은
-  오직 `<runs root>/<workflow_id>/internal/<engine>/{runs,outputs}` 아래에만
-  존재합니다.
+  오직 `<runs root>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`, `03_orca`)
+  아래에만 존재합니다.
 - 전체 템플릿은 [config/orca_auto.yaml.example](config/orca_auto.yaml.example)에 있습니다.
 
 ## 사용자 명령어

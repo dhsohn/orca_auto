@@ -275,8 +275,7 @@ logic. Notable pieces:
   scans) or optimization convergence trace (Opt/OptTS), retry-recipe chain,
   and vibrational summary.
 - **Index:** `dft_index*.py` and `core/indexing` maintain a JSONL
-  job-location index for discovery. Legacy `organized_ref.json` stubs from
-  the removed `organize` command are still read for lookups.
+  job-location index for discovery.
 
 The fields ORCA exposes downstream (the "contract freeze") are documented in
 [REFERENCE.md](REFERENCE.md) §11.1 — `reaction_dir` remains the ORCA
@@ -333,9 +332,9 @@ retained conformers to ORCA child jobs on the next workflow cycle.
 
 ### Internal-engine scoping
 
-Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and organized
-outputs live **only** under
-`workflow.root/<workflow_id>/internal/<engine>/{runs,outputs}`. They are not
+Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs
+live **only** under `<runs root>/<workflow_id>/<NN_engine>` (`01_crest`,
+`02_xtb`, `03_orca`). They are not
 part of the public CLI surface; users submit them through workflow `run-dir`.
 
 ---
@@ -351,13 +350,12 @@ orca_auto is disk-backed throughout. Concurrency safety comes from file locks
 | admission slot file         | core/admission   | Active concurrency slots (machine-wide)  |
 | `job_state.json`            | orca (state)     | Per-job attempts + status                |
 | `job_report.json` / `.md`   | orca (reporting) | Human/machine completion report          |
-| `organized_ref.json`        | orca (legacy)    | Stub from the removed organize command   |
 | job-location index (JSONL)  | core/indexing    | Where each job's outputs currently live  |
 | `workflow.json`             | flow             | Durable workflow payload                 |
 | `workflow_report.html`      | flow (report)    | Live visual workflow summary             |
 | workflow registry + journal | flow/registry    | Cross-workflow listing + event history   |
 
-The queue entry, tracked job-location record, and organize stub each expose a
+The queue entry and tracked job-location record each expose a
 frozen set of downstream fields (see REFERENCE.md §11.1) so that `flow` can
 consume ORCA results without coupling to ORCA internals.
 
@@ -466,7 +464,7 @@ transitions) over internal delegation tests.
 - **Shared admission cap** — a single machine-wide slot pool bounds total
   concurrency across every engine.
 - **Frozen downstream contracts** — `flow` consumes ORCA via a documented field
-  contract (`reaction_dir`, job-location records, organize stubs), not internals.
+  contract (`reaction_dir`, job-location records), not internals.
 - **Disk-backed, lock-guarded state** — every mutation goes through a file lock;
   crashed owners are reconciled rather than leaking slots.
 - **Linux/WSL-first, systemd-supervised** — strict Linux path validation and

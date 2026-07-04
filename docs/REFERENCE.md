@@ -165,7 +165,7 @@ Field descriptions for the `orca` section:
 - `workflow.paths.xtb_executable`: xTB executable path used by workflow-managed internal stages
 - `workflow.paths.crest_executable`: CREST executable path used by workflow-managed internal stages
 - Internal xTB/CREST runtimes are scoped to each workflow
-- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under `<runs root>/<workflow_id>/internal/<engine>/{runs,outputs}`
+- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under `<runs root>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`)
 - `orca.paths.orca_executable`: ORCA executable path
 
 Notes:
@@ -180,7 +180,7 @@ Notes:
 
 ## 7) CLI Usage
 
-All public queue, submission, scaffold, and organization commands should be
+All public queue, submission, and scaffold commands should be
 documented through `orca_auto ...`.
 
 Public command surface:
@@ -500,7 +500,6 @@ Generated in the job directory:
   convergence trace (Opt/OptTS), the retry-recipe chain, and a vibrational
   summary (imaginary modes, dominant atom displacements, and — for scans —
   alignment with the scanned coordinate)
-- `organized_ref.json` after organize leaves a stub in the original run directory
 
 Important `job_state.json` fields:
 
@@ -564,22 +563,7 @@ Tracked job-location fields currently consumed downstream from
 - `original_run_dir`
 - `molecule_key`
 - `selected_input_xyz`
-- `organized_output_dir`
 - `latest_known_path`
-- `resource_request`
-- `resource_actual`
-
-Organize stub fields currently consumed downstream from `organized_ref.json`:
-
-- `job_id`
-- `run_id`
-- `original_run_dir`
-- `organized_output_dir`
-- `selected_inp`
-- `selected_input_xyz`
-- `status`
-- `job_type`
-- `molecule_key`
 - `resource_request`
 - `resource_actual`
 
@@ -592,7 +576,6 @@ least these fields:
 - `state_status`
 - `reaction_dir`
 - `latest_known_path`
-- `organized_output_dir`
 - `optimized_xyz_path`
 - `queue_id`
 - `queue_status`

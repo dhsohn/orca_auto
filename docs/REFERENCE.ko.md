@@ -172,7 +172,7 @@ orca:
   실행 경로
 - 내부 xTB/CREST 런타임은 각 워크플로우 범위로 한정됩니다.
 - 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은 오직
-  `<runs root>/<workflow_id>/internal/<engine>/{runs,outputs}` 아래에만 저장됩니다.
+  `<runs root>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`, `03_orca`) 아래에만 저장됩니다.
 - `orca.paths.orca_executable`: ORCA 실행 경로
 
 참고:
@@ -510,7 +510,6 @@ Opt 모드 완료:
   최적화 수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동 요약(허수 모드, 주요
   원자 변위, scan 작업의 경우 스캔 좌표와의 일치도)을 담은 단일 파일 시각
   리포트
-- organize가 원본 실행 디렉터리에 스텁을 남긴 뒤의 `organized_ref.json`
 
 주요 `job_state.json` 필드:
 
@@ -572,22 +571,7 @@ ORCA 핸드오프 계약은 `orca_auto.flow` 같은 다운스트림 도구에 �
 - `original_run_dir`
 - `molecule_key`
 - `selected_input_xyz`
-- `organized_output_dir`
 - `latest_known_path`
-- `resource_request`
-- `resource_actual`
-
-`organized_ref.json`에서 현재 다운스트림이 소비하는 organize 스텁 필드:
-
-- `job_id`
-- `run_id`
-- `original_run_dir`
-- `organized_output_dir`
-- `selected_inp`
-- `selected_input_xyz`
-- `status`
-- `job_type`
-- `molecule_key`
 - `resource_request`
 - `resource_actual`
 
@@ -599,7 +583,6 @@ ORCA 핸드오프 계약은 `orca_auto.flow` 같은 다운스트림 도구에 �
 - `state_status`
 - `reaction_dir`
 - `latest_known_path`
-- `organized_output_dir`
 - `optimized_xyz_path`
 - `queue_id`
 - `queue_status`

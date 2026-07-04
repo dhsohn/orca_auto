@@ -267,8 +267,7 @@ python -m orca_auto.core.engines.worker_child \
   수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동 요약을 담은 단일 파일 시각
   리포트입니다.
 - **인덱스:** `dft_index*.py`와 `core/indexing`이 탐색용 JSONL 작업 위치
-  인덱스를 유지합니다. 제거된 `organize` 명령이 남긴 레거시
-  `organized_ref.json` 스텁은 조회 시 계속 읽습니다.
+  인덱스를 유지합니다.
 
 ORCA가 다운스트림에 노출하는 필드("계약 동결")는
 [REFERENCE.md](REFERENCE.md) §11.1에 문서화되어 있습니다 —
@@ -325,10 +324,10 @@ ORCA가 다운스트림에 노출하는 필드("계약 동결")는
 
 ### 내부 엔진 스코프
 
-워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 정리된
-출력은 **오직** `workflow.root/<workflow_id>/internal/<engine>/{runs,outputs}`
-아래에만 존재합니다. 이들은 공개 CLI 표면의 일부가 아니며, 사용자는 워크플로우
-`run-dir`을 통해 제출합니다.
+워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은
+**오직** `<runs root>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`,
+`03_orca`) 아래에만 존재합니다. 이들은 공개 CLI 표면의 일부가 아니며, 사용자는
+워크플로우 `run-dir`을 통해 제출합니다.
 
 ---
 
@@ -343,13 +342,12 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 | 어드미션 슬롯 파일          | core/admission   | 활성 동시성 슬롯 (머신 전역)            |
 | `job_state.json`            | orca (state)     | 작업별 시도 + 상태                       |
 | `job_report.json` / `.md`   | orca (reporting) | 사람/기계용 완료 리포트                  |
-| `organized_ref.json`        | orca (레거시)    | 제거된 organize 명령이 남긴 스텁          |
 | 작업 위치 인덱스 (JSONL)    | core/indexing    | 각 작업 출력의 현재 위치                 |
 | `workflow.json`             | flow             | 내구성 워크플로우 페이로드               |
 | `workflow_report.html`      | flow (report)    | 실시간 갱신 워크플로우 시각 요약         |
 | 워크플로우 레지스트리 + 저널| flow/registry    | 워크플로우 간 목록 + 이벤트 이력         |
 
-큐 항목, 추적된 작업 위치 레코드, 정리 스텁은 각각 동결된 다운스트림 필드 집합을
+큐 항목과 추적된 작업 위치 레코드는 각각 동결된 다운스트림 필드 집합을
 노출하므로(REFERENCE.md §11.1 참조), `flow`가 ORCA 내부에 결합하지 않고 결과를
 소비할 수 있습니다.
 
@@ -457,7 +455,7 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 - **공유 어드미션 상한** — 단일 머신 전역 슬롯 풀이 모든 엔진에 걸친 총 동시성을
   제한합니다.
 - **동결된 다운스트림 계약** — `flow`는 내부가 아니라 문서화된 필드 계약
-  (`reaction_dir`, 작업 위치 레코드, 정리 스텁)을 통해 ORCA를 소비합니다.
+  (`reaction_dir`, 작업 위치 레코드)를 통해 ORCA를 소비합니다.
 - **디스크 기반, 락으로 보호된 상태** — 모든 변경은 파일 락을 거치며, 크래시된
   소유자는 슬롯을 누수하지 않고 조정(reconcile)됩니다.
 - **Linux/WSL 우선, systemd 감독** — 엄격한 Linux 경로 검증과 무인 운영을 위한

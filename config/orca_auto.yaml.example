@@ -44,11 +44,8 @@ workflow:
     crest_executable: /home/user/bin/crest/crest
   # Internal xTB/CREST runtime roots are derived automatically and are not set
   # directly in config. Each workflow keeps its own queue.json,
-  # job_locations.json, and outputs under the engine's runs/output roots:
-  #   xTB runs     -> <runs root>/<workflow_id>/internal/xtb/runs
-  #   xTB outputs  -> <runs root>/<workflow_id>/internal/xtb/outputs
-  #   CREST runs   -> <runs root>/<workflow_id>/internal/crest/runs
-  #   CREST outputs-> <runs root>/<workflow_id>/internal/crest/outputs
+  # job_locations.json, and job dirs under one directory per engine stage,
+  # e.g. <runs root>/<workflow_id>/01_crest, .../02_xtb, .../03_orca.
 
 telegram:
   # Leave blank to disable the unified Telegram bot and shared Telegram
