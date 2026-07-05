@@ -112,9 +112,10 @@ git config core.hooksPath .githooks
   what passes is exactly what the commit records. Fully-staged Python files
   are auto-formatted and re-staged, so a missing `ruff format` cannot reach CI.
 - `pre-push` runs the full `scripts/check.sh` (adds the coverage-gated pytest
-  suite) against the existing `.venv`. It requires a clean worktree (no
-  tracked changes, no untracked `*.py`): Git pushes commits, not your
-  worktree, and the suite must test what actually lands on CI.
+  suite) against the existing `.venv`. It fails closed on anything it cannot
+  test through: tracked changes, any untracked non-ignored file, or pushing a
+  ref other than HEAD — Git pushes commits, not your worktree, and the suite
+  must test exactly what lands on CI.
 
 Both need `.venv` (run `scripts/check.sh` once first) and can be bypassed with
 `git commit --no-verify` / `git push --no-verify`.
