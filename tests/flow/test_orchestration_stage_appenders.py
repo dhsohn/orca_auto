@@ -1014,6 +1014,58 @@ def test_append_crest_orca_stages_materializes_orca_stages_from_completed_crest(
     assert payload["stages"][-1]["task"]["engine"] == "orca"
 
 
+def test_append_crest_orca_stages_fails_workflow_when_all_conformers_fail(
+    tmp_path: Path,
+) -> None:
+    # conformer_screening: the CREST stage completed and ORCA conformer opt stages
+    # were materialized, but every one failed to optimize. No optimized conformer
+    # was produced, so the workflow must be recorded as FAILED (a failed ORCA
+    # conformer stage is engine-role non-fatal, so recompute would otherwise report
+    # COMPLETED).
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_conf_all_failed",
+        "metadata": {
+            "request": {"parameters": {"max_orca_stages": 2}},
+            "workspace_dir": str((tmp_path / "wf_conf_all_failed").resolve()),
+        },
+        "stages": [
+            {"stage_id": "crest_stage_01", "status": "completed", "task": {"engine": "crest"}},
+            {
+                "stage_id": "orca_conformer_01",
+                "status": "failed",
+                "metadata": {"analyzer_status": "geom_not_converged"},
+                "task": {"engine": "orca"},
+            },
+            {
+                "stage_id": "orca_conformer_02",
+                "status": "failed",
+                "metadata": {"analyzer_status": "scf_not_converged"},
+                "task": {"engine": "orca"},
+            },
+        ],
+    }
+
+    created = append_crest_orca_stages_impl(
+        payload,
+        template_name="conformer_screening",
+        crest_config="/tmp/crest.yaml",
+        orca_config="/tmp/orca.yaml",
+        stage_id_prefix="orca_conformer",
+        xyz_filename="conformer_guess.xyz",
+        inp_filename="conformer_opt.inp",
+        deps=orchestration_deps(),
+    )
+
+    assert created is False
+    assert payload["metadata"]["workflow_error"] == {
+        "status": "failed",
+        "scope": "conformer_screening_orca_conformers_exhausted",
+        "stage_id": "orca_conformer_01",
+        "reason": "conformers_failed",
+        "message": "All conformer optimization stages failed; no optimized conformer was produced.",
+    }
+
+
 def test_append_crest_orca_stages_materializes_twenty_orca_children(
     tmp_path: Path,
 ) -> None:
