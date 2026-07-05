@@ -16,6 +16,10 @@ Current developer-facing package rule:
 - Shared infrastructure lives in `orca_auto.core`
 - Supported imports live under `orca_auto.*`
 
+For the narrower set of CLI, config, JSON artifact, workflow, and systemd
+surfaces that are treated as public contracts, see
+[PUBLIC_CONTRACTS.md](PUBLIC_CONTRACTS.md).
+
 ## 1) Project Purpose
 
 - Work only within the configured `allowed_root`

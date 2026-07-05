@@ -21,6 +21,7 @@ The project is intended for researchers running repeated ORCA calculations, tran
 - Architecture overview: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ([한국어](docs/ARCHITECTURE.ko.md))
 - Quickstart: [docs/QUICKSTART.md](docs/QUICKSTART.md) ([한국어](docs/QUICKSTART.ko.md))
 - Runtime and command reference: [docs/REFERENCE.md](docs/REFERENCE.md) ([한국어](docs/REFERENCE.ko.md))
+- Supported public contracts: [docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md) ([한국어](docs/PUBLIC_CONTRACTS.ko.md))
 - Roadmap: [ROADMAP.md](ROADMAP.md)
 - WSL and `systemd` runtime setup: [systemd/README.md](systemd/README.md) ([한국어](systemd/README.ko.md))
 - Package layout and development notes: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) ([한국어](docs/DEVELOPMENT.ko.md))

@@ -17,6 +17,9 @@ CLI를 표준화하고, 더 깊은 ORCA 런타임 동작을 한곳에 문서화�
 - 공용 인프라는 `orca_auto.core`에 있습니다.
 - 지원되는 임포트는 `orca_auto.*` 아래에 있습니다.
 
+CLI, 설정, JSON 산출물, 워크플로우, systemd 표면 중 공개 계약으로 취급하는 더 좁은
+목록은 [PUBLIC_CONTRACTS.ko.md](PUBLIC_CONTRACTS.ko.md)를 참고하세요.
+
 ## 1) 프로젝트 목적
 
 - 설정된 `allowed_root` 안에서만 작업합니다.

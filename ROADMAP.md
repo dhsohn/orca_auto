@@ -27,8 +27,9 @@ expectations belong in [docs/VALIDATION.md](docs/VALIDATION.md).
 
 ## Current Public Contracts
 
-These are the surfaces that should change cautiously and with tests, docs, and
-release notes:
+The canonical contract list lives in
+[docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md). These are the surfaces
+that should change cautiously and with tests, docs, and release notes:
 
 - CLI commands: `orca_auto init`, `orca_auto run-dir`, `orca_auto queue ...`,
   `orca_auto scaffold ...`, `orca_auto service ...`, and `orca_auto scan-notify`.
