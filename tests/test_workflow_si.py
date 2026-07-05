@@ -313,6 +313,48 @@ def test_composite_table_ranks_by_single_point_energy(tmp_path: Path) -> None:
     assert "E, ΔE, and the ranking are at the single-point level" in rendered
 
 
+def test_opt_only_refinements_use_sp_energies_without_composite(tmp_path: Path) -> None:
+    # Opt-only structures (no Freq → no G−E(el)) with SP refinements: E/ΔE and
+    # the ranking must still follow E(SP), and neither the table note nor the
+    # methods text may claim composite Gibbs energies (Codex #48 P2).
+    min_a = _stage_dir(
+        tmp_path, "min_a", route="r2SCAN-3c Opt TightSCF", energy=-100.0, coords=_COORDS_A
+    )
+    min_b = _stage_dir(
+        tmp_path,
+        "min_b",
+        route="r2SCAN-3c Opt TightSCF",
+        energy=-100.2,  # opt level prefers min_b ...
+        coords=_COORDS_B,
+    )
+    sp_a = _stage_dir(
+        tmp_path, "sp_a", route="wB97M-V def2-TZVPP", energy=-200.9, coords=_COORDS_A
+    )  # ... but the SP level prefers min_a
+    sp_b = _stage_dir(tmp_path, "sp_b", route="wB97M-V def2-TZVPP", energy=-200.5, coords=_COORDS_B)
+
+    payload = _payload(
+        [
+            _orca_stage("orca_min_a", min_a, label="min_a"),
+            _orca_stage("orca_min_b", min_b, label="min_b"),
+            _orca_stage("orca_sp_a", sp_a, label="sp_a"),
+            _orca_stage("orca_sp_b", sp_b, label="sp_b"),
+        ]
+    )
+
+    data = collect_workflow_si_data(payload)
+    assert all(entry.sp_energy is not None for entry in data.entries)
+    assert all(entry.composite_gibbs is None for entry in data.entries)
+
+    rendered = render_workflow_si_md(data)
+    assert "E(SP)/Eh" in rendered
+    table_rows = [line for line in rendered.splitlines() if line.lstrip().startswith(("1 ", "2 "))]
+    assert "min_a" in table_rows[0] and "-200.900000" in table_rows[0]
+    assert "min_b" in table_rows[1] and "+251.00" in table_rows[1]
+    assert "E, ΔE, and the ranking are at the single-point level" in rendered
+    assert "refined by single-point calculations" in rendered
+    assert "composite" not in rendered  # no G−E(el) anywhere → no composite claim
+
+
 def test_opt_only_workflow_does_not_claim_frequency_calculations(tmp_path: Path) -> None:
     # The default conformer-screening route is Opt-only (no Freq): the methods
     # paragraph must not assert harmonic frequency calculations that never ran

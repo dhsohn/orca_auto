@@ -327,11 +327,18 @@ def _composite_sentence(data: WorkflowSiData) -> str:
     if not sp_levels:
         return ""
     phrase = "; ".join(_level_phrase(*level) for level in sp_levels)
-    return (
+    sentence = (
         "Electronic energies were refined by single-point calculations on the optimized "
-        f"geometries {phrase}; composite Gibbs energies combine E(SP) with the G − E(el) "
-        "correction from the optimization level."
+        f"geometries {phrase}"
     )
+    # Claim composite Gibbs energies only when at least one exists: an Opt-only
+    # workflow with SP refinements has no G − E(el) correction to combine.
+    if any(entry.composite_gibbs is not None for entry in data.entries):
+        sentence += (
+            "; composite Gibbs energies combine E(SP) with the G − E(el) "
+            "correction from the optimization level"
+        )
+    return sentence + "."
 
 
 def _documented_blocks(data: WorkflowSiData) -> list[SiBlock]:
@@ -379,18 +386,23 @@ def _table_lines(data: WorkflowSiData) -> list[str]:
     if not candidates:
         return ["(no completed stationary structures yet)"]
 
+    # The SP-energy convention is gated on the refinements alone: an Opt-only
+    # workflow with SP refinements has E(SP) for every structure but no
+    # G − E(el) correction, and its E/ΔE must still be at the SP level — the
+    # composite-G convention is a separate, stricter gate on top of it.
+    all_refined = all(entry.sp_energy is not None for entry in candidates)
     all_composite = all(entry.composite_gibbs is not None for entry in candidates)
 
     def gibbs_of(entry: WorkflowSiEntry) -> float | None:
         return entry.composite_gibbs if all_composite else entry.block.result.gibbs_energy
 
-    # Under the composite convention every number in a row is at the SP level:
-    # the electronic-energy column, the ΔE baseline, and the ranking follow
+    # Under the refined convention every electronic number in a row is at the
+    # SP level: the energy column, the ΔE baseline, and the ranking follow
     # E(SP), not the optimization-level energy — the two orderings can differ,
-    # and mixing them would publish a wrong E/ΔE next to a composite G.
+    # and mixing them would publish wrong relative electronic energies.
     def energy_of(entry: WorkflowSiEntry) -> float:
-        if all_composite:
-            assert entry.sp_energy is not None  # composite implies a paired SP
+        if all_refined:
+            assert entry.sp_energy is not None  # guaranteed by the gate
             return entry.sp_energy
         energy = entry.block.result.energy_hartree
         assert energy is not None  # filtered above
@@ -404,7 +416,7 @@ def _table_lines(data: WorkflowSiData) -> list[str]:
     best_g = min(gibbs_values) if gibbs_values else None
 
     name_width = max(9, *(len(entry.block.name) for entry in entries))
-    e_label = "E(SP)/Eh" if all_composite else "E(el)/Eh"
+    e_label = "E(SP)/Eh" if all_refined else "E(el)/Eh"
     header = (
         f"{'#':>2}  {'structure':<{name_width}}  {e_label:>14}  "
         f"{'G/Eh':>14}  {'ΔE/kcal·mol⁻¹':>14}  {'ΔG/kcal·mol⁻¹':>14}  {'Nimag':>5}"
@@ -424,19 +436,32 @@ def _table_lines(data: WorkflowSiData) -> list[str]:
             f"{rank:>2}  {entry.block.name:<{name_width}}  {energy:>14.6f}  "
             f"{gibbs_cell:>14}  {rel_e:>+14.2f}  {rel_g_cell:>14}  {nimag:>5}"
         )
+    notes: list[str] = []
     if all_composite:
-        lines.append("")
-        lines.append(
+        notes.append(
             "E, ΔE, and the ranking are at the single-point level; "
             "G is the composite G = E(SP) + [G − E(el)](opt level); "
             "single points paired by identical geometry."
         )
-    elif any(entry.composite_gibbs is not None for entry in entries):
+    else:
+        if all_refined:
+            notes.append(
+                "E, ΔE, and the ranking are at the single-point level; "
+                "single points paired by identical geometry."
+            )
+        elif any(entry.sp_energy is not None for entry in entries):
+            notes.append(
+                "⚠ single-point refinements cover only part of the set; "
+                "E and ΔE use the optimization level for all entries to keep one baseline."
+            )
+        if any(entry.composite_gibbs is not None for entry in entries):
+            notes.append(
+                "⚠ composite G available for only part of the set; "
+                "ΔG uses the optimization-level G for all entries to keep one baseline."
+            )
+    if notes:
         lines.append("")
-        lines.append(
-            "⚠ composite G available for only part of the set; "
-            "ΔG uses the optimization-level G for all entries to keep one baseline."
-        )
+        lines.extend(notes)
     return lines
 
 
