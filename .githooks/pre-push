@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Full CI-parity gate before pushing: runs scripts/check.sh against the existing
+# .venv (ruff, mypy, import-linter, and the pytest suite with coverage) so a
+# broken push is caught locally instead of by GitHub Actions.
+#
+# Reuses the current venv without reinstalling deps, so this is the ~pytest
+# runtime (tens of seconds), not a fresh environment build. Bypass with
+# `git push --no-verify`.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+VENV_DIR="${ORCA_AUTO_VENV:-$ROOT/.venv}"
+if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+  echo "[pre-push] .venv not found at $VENV_DIR; run scripts/check.sh once first." >&2
+  exit 1
+fi
+
+echo "[pre-push] Running full check suite (scripts/check.sh)…"
+# Point check.sh at the venv interpreter: its system-python probe fails when no
+# python>=3.11 is on the hook's PATH, and SKIP_INSTALL keeps it from rebuilding
+# the already-usable venv.
+PYTHON_BIN="$VENV_DIR/bin/python" ORCA_AUTO_CHECK_SKIP_INSTALL=1 exec bash "$ROOT/scripts/check.sh"

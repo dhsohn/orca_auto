@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Fast CI-parity checks before each commit. Mirrors the fast half of
+# scripts/check.sh (ruff lint + format, mypy, import-linter); the slow pytest
+# suite runs in the pre-push hook instead, so committing stays quick.
+#
+# Fully-staged Python files are auto-formatted and re-staged so a missing
+# `ruff format` can never reach CI (the failure that motivated this hook). A
+# file with BOTH staged and unstaged changes is only checked, never rewritten,
+# so the hook cannot silently stage unstaged hunks.
+#
+# Bypass with `git commit --no-verify`. Enable with:
+#   git config core.hooksPath .githooks
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+VENV_DIR="${ORCA_AUTO_VENV:-$ROOT/.venv}"
+PY="$VENV_DIR/bin/python"
+if [[ ! -x "$PY" ]]; then
+  echo "[pre-commit] .venv not found at $VENV_DIR; run scripts/check.sh once to create it." >&2
+  exit 1
+fi
+
+mapfile -t py_files < <(git diff --cached --name-only --diff-filter=ACM -- '*.py')
+
+if ((${#py_files[@]})); then
+  fully_staged=()
+  for f in "${py_files[@]}"; do
+    # `git diff --quiet -- <f>` is 0 when the file has no unstaged changes.
+    if git diff --quiet -- "$f"; then
+      fully_staged+=("$f")
+    fi
+  done
+
+  if ((${#fully_staged[@]})); then
+    if ! "$PY" -m ruff format --check -- "${fully_staged[@]}" >/dev/null 2>&1; then
+      echo "[pre-commit] ruff format: reformatting and re-staging"
+      "$PY" -m ruff format -- "${fully_staged[@]}"
+      git add -- "${fully_staged[@]}"
+    fi
+  fi
+
+  echo "[pre-commit] ruff check"
+  "$PY" -m ruff check -- "${py_files[@]}"
+
+  echo "[pre-commit] ruff format --check"
+  if ! "$PY" -m ruff format --check -- "${py_files[@]}"; then
+    echo "[pre-commit] Unformatted staged file(s). Run: $PY -m ruff format ${py_files[*]}" >&2
+    exit 1
+  fi
+fi
+
+echo "[pre-commit] mypy"
+"$PY" -m mypy
+
+echo "[pre-commit] import-linter"
+"$VENV_DIR/bin/lint-imports"
+
+echo "[pre-commit] OK"
