@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -172,12 +172,23 @@ def enqueue(
     return entry
 
 
-def dequeue_next(allowed_root: Path) -> QueueEntry | None:
-    """Return the highest-priority pending entry and mark it running."""
+def dequeue_next(
+    allowed_root: Path,
+    *,
+    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
+) -> QueueEntry | None:
+    """Return the highest-priority pending entry and mark it running.
+
+    ``accept_entry_fn`` scopes which entries this worker may claim. The ORCA
+    worker shares the runs root with standalone xTB/CREST jobs, so it must pass
+    an app filter (like the internal engines do) to avoid claiming a foreign
+    engine's entry on the single-root dequeue fast path.
+    """
     entry = _queue_store.dequeue_next(
         allowed_root,
         load_entries_fn=_load_entries,
         save_entries_fn=_queue_store.save_entries,
+        accept_entry_fn=accept_entry_fn,
     )
     if entry is None:
         return None

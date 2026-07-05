@@ -2,10 +2,12 @@ import json
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.orca.engine import ENGINE_DEFINITION
 from orca_auto.orca.queue.adapter import (
     DuplicateEntryError,
     cancel,
@@ -280,6 +282,32 @@ class TestQueueStore(unittest.TestCase):
         self.assertEqual(found.status, QueueStatus.COMPLETED)
         self.assertEqual(queue_entry_run_id(found), "run_done_1")
         self.assertEqual(found.finished_at, "2026-03-10T04:59:59+00:00")
+
+    def test_orca_engine_dequeue_skips_foreign_engine_entries(self) -> None:
+        # The ORCA worker shares the runs root with standalone xTB/CREST jobs.
+        # Its configured dequeue must skip a foreign-engine entry even on the
+        # single-root fast path, mirroring the crest/xtb app filter (#29/#30);
+        # otherwise the ORCA worker claims and mis-runs a CREST/xTB job.
+        orca_entry = enqueue(self.root, str(self.root / "orca_job"))
+        foreign = replace(
+            orca_entry,
+            queue_id="q_crest_1",
+            app_name="orca_auto_crest",
+            engine="crest",
+            priority=1,  # higher priority than the ORCA entry -> claimed first if unfiltered
+            metadata={**orca_entry.metadata, "reaction_dir": str(self.root / "crest_job")},
+        )
+        queue_store.save_entries(self.root, [foreign, orca_entry])
+
+        queue_functions = ENGINE_DEFINITION.queue_functions
+        assert queue_functions is not None
+        dequeue = queue_functions.dequeue_next
+
+        claimed = dequeue(self.root)
+        assert claimed is not None
+        self.assertEqual(claimed.queue_id, orca_entry.queue_id)
+        # The foreign CREST entry is left unclaimed by the ORCA worker.
+        self.assertIsNone(dequeue(self.root))
 
     def test_reconcile_honors_cancel_requested_orphan(self) -> None:
         # A running job that was cancel-requested and then lost its worker (no
