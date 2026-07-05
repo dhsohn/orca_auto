@@ -100,9 +100,7 @@ def _geometry_matches(a: SiBlock, b: SiBlock) -> bool:
 
 
 def _stage_label(stage: Mapping[str, Any]) -> str:
-    return _text(_stage_metadata(stage).get("selected_input_label")) or _text(
-        stage.get("stage_id")
-    )
+    return _text(_stage_metadata(stage).get("selected_input_label")) or _text(stage.get("stage_id"))
 
 
 def _collect_stage_block(
@@ -187,7 +185,9 @@ def collect_workflow_si_data(payload: Mapping[str, Any]) -> WorkflowSiData:
         status = _text(stage.get("status"))
         if _task_kind(stage) == "relaxed_scan":
             excluded.append(
-                ExcludedStage(stage_id, label, "relaxed scan (prerequisite, not a stationary point)")
+                ExcludedStage(
+                    stage_id, label, "relaxed scan (prerequisite, not a stationary point)"
+                )
             )
             continue
         if status != "completed":
@@ -260,7 +260,9 @@ def _funnel_sentence(data: WorkflowSiData) -> str:
         return ""
     parts = []
     if data.crest_conformer_total is not None:
-        parts.append(f"Conformer ensembles were generated with CREST ({data.crest_conformer_total} conformers)")
+        parts.append(
+            f"Conformer ensembles were generated with CREST ({data.crest_conformer_total} conformers)"
+        )
     if data.xtb_candidate_total is not None:
         verb = "screened" if parts else "Candidates were screened"
         parts.append(f"{verb} at the xTB level ({data.xtb_candidate_total} candidates)")

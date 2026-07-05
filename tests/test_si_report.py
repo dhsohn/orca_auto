@@ -205,9 +205,7 @@ def test_scants_route_is_a_ts_block(tmp_path: Path) -> None:
 
 
 def test_incomplete_job_gets_no_block(tmp_path: Path) -> None:
-    reaction_dir, state = _job_dir(
-        tmp_path, "failed_job", inp_text=_TS_INP, out_text=_out_text()
-    )
+    reaction_dir, state = _job_dir(tmp_path, "failed_job", inp_text=_TS_INP, out_text=_out_text())
     state["status"] = "failed"
 
     assert collect_si_block(reaction_dir, state) is None

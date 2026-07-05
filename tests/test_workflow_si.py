@@ -121,7 +121,9 @@ def _stage_dir(
     return stage_dir
 
 
-def _orca_stage(stage_id: str, stage_dir: Path, *, status: str = "completed", label: str = "") -> dict[str, Any]:
+def _orca_stage(
+    stage_id: str, stage_dir: Path, *, status: str = "completed", label: str = ""
+) -> dict[str, Any]:
     return {
         "stage_id": stage_id,
         "stage_kind": "orca_stage",
@@ -153,12 +155,22 @@ def test_workflow_si_ranks_structures_and_reports_funnel(tmp_path: Path) -> None
     _write_multi_xyz(conformers, frames=5)
 
     dir_a = _stage_dir(
-        tmp_path, "conf_01", route="B3LYP def2-SVP Opt Freq",
-        energy=-100.001, coords=_COORDS_A, freqs=(30.0, 120.0), thermo=True,
+        tmp_path,
+        "conf_01",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.001,
+        coords=_COORDS_A,
+        freqs=(30.0, 120.0),
+        thermo=True,
     )
     dir_b = _stage_dir(
-        tmp_path, "conf_02", route="B3LYP def2-SVP Opt Freq",
-        energy=-100.005, coords=_COORDS_B, freqs=(35.0, 110.0), thermo=True,
+        tmp_path,
+        "conf_02",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.005,
+        coords=_COORDS_B,
+        freqs=(35.0, 110.0),
+        thermo=True,
     )
 
     payload = _payload(
@@ -198,14 +210,27 @@ def test_workflow_si_ranks_structures_and_reports_funnel(tmp_path: Path) -> None
 
 def test_single_point_pairs_by_identical_geometry(tmp_path: Path) -> None:
     opt_dir = _stage_dir(
-        tmp_path, "min_a", route="B3LYP def2-SVP Opt Freq",
-        energy=-100.0, coords=_COORDS_A, freqs=(30.0, 120.0), thermo=True,
+        tmp_path,
+        "min_a",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=(30.0, 120.0),
+        thermo=True,
     )
     sp_same = _stage_dir(
-        tmp_path, "sp_a", route="wB97M-V def2-TZVPP", energy=-100.5, coords=_COORDS_A,
+        tmp_path,
+        "sp_a",
+        route="wB97M-V def2-TZVPP",
+        energy=-100.5,
+        coords=_COORDS_A,
     )
     sp_other = _stage_dir(
-        tmp_path, "sp_b", route="wB97M-V def2-TZVPP", energy=-100.7, coords=_COORDS_B,
+        tmp_path,
+        "sp_b",
+        route="wB97M-V def2-TZVPP",
+        energy=-100.7,
+        coords=_COORDS_B,
     )
 
     payload = _payload(
@@ -233,12 +258,20 @@ def test_single_point_pairs_by_identical_geometry(tmp_path: Path) -> None:
 
 def test_failed_and_scan_stages_are_excluded_with_reasons(tmp_path: Path) -> None:
     ok_dir = _stage_dir(
-        tmp_path, "ok", route="B3LYP def2-SVP Opt Freq",
-        energy=-100.0, coords=_COORDS_A, freqs=(30.0, 120.0), thermo=True,
+        tmp_path,
+        "ok",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=(30.0, 120.0),
+        thermo=True,
     )
     failed_dir = _stage_dir(
-        tmp_path, "failed", route="B3LYP def2-SVP Opt Freq",
-        energy=-99.0, coords=_COORDS_B,
+        tmp_path,
+        "failed",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-99.0,
+        coords=_COORDS_B,
     )
     scan_stage = _orca_stage("orca_scan", ok_dir, label="scan")
     scan_stage["task"] = {"task_kind": "relaxed_scan"}
@@ -266,8 +299,13 @@ def test_write_workflow_si_writes_and_cleans_up(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     stage_dir = _stage_dir(
-        tmp_path, "only", route="B3LYP def2-SVP Opt Freq",
-        energy=-100.0, coords=_COORDS_A, freqs=(30.0, 120.0), thermo=True,
+        tmp_path,
+        "only",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=(30.0, 120.0),
+        thermo=True,
     )
 
     payload = _payload([_orca_stage("orca_only", stage_dir, label="only")])

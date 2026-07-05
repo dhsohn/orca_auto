@@ -164,9 +164,9 @@ def render_si_block_md(block: SiBlock) -> str:
     result = block.result
     lines = [f"== {block.name} =="]
 
-    route = result.input_line or " ".join(
-        (result.method, result.basis_set, result.calc_type)
-    ).strip()
+    route = (
+        result.input_line or " ".join((result.method, result.basis_set, result.calc_type)).strip()
+    )
     version_note = f"        (ORCA {result.orca_version})" if result.orca_version else ""
     lines.append(f"! {route}{version_note}")
     charge_line = f"Charge {result.charge}, Multiplicity {result.multiplicity}"
@@ -204,8 +204,7 @@ def render_si_block_md(block: SiBlock) -> str:
     lines.extend(f"⚠ {warning}" for warning in block.warnings)
 
     lines.extend(
-        f"{element:<2}  {x:12.6f} {y:12.6f} {z:12.6f}"
-        for element, x, y, z in result.coordinates
+        f"{element:<2}  {x:12.6f} {y:12.6f} {z:12.6f}" for element, x, y, z in result.coordinates
     )
     lines.append("")
     return "\n".join(lines)

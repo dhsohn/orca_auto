@@ -313,7 +313,7 @@ def test_parser_detects_smd_solvation(tmp_path: Path) -> None:
             [
                 "|  1> ! B3LYP def2-SVP CPCM",
                 "|  2> %cpcm",
-                '|  3>   smd true',
+                "|  3>   smd true",
                 '|  4>   SMDsolvent "water"',
                 "|  5> end",
                 "|  6> * xyz 0 1",
