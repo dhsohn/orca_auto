@@ -538,6 +538,45 @@ def test_hooked_pidfile_child_worker_runs_engine_hooks(tmp_path: Path) -> None:
     assert all(args[0] is worker for _name, args in calls)
 
 
+def test_shutdown_all_reaps_finished_job_before_requeuing(tmp_path: Path) -> None:
+    # A child that finished during the final poll interval must be reaped through
+    # the normal completion path at shutdown, not force-terminated and requeued
+    # (which would needlessly re-run a completed job on the next worker start).
+    cfg = _cfg(allowed_root=str(tmp_path), admission_root=str(tmp_path / "admission"))
+    calls: list[tuple[str, str]] = []
+    hooks = worker_common.PidFileChildProcessQueueWorkerHooks(
+        handle_worker_start_error=lambda *_args: None,
+        on_worker_process_started=lambda *_args: True,
+        finalize_completed_job=lambda _w, queue_id, _job, _rc: calls.append(("finalize", queue_id)),
+        shutdown_running_job=lambda _w, queue_id, _job: calls.append(("shutdown", queue_id)),
+        reconcile_worker_state=lambda _w: None,
+    )
+    worker = worker_common.HookedPidFileChildProcessQueueWorker(
+        cfg,
+        config_path="/tmp/config.yaml",
+        max_concurrent=2,
+        deps=SimpleNamespace(
+            poll_interval_seconds=1,
+            time=SimpleNamespace(sleep=lambda _seconds: None),
+            admission_root=lambda _cfg: str(tmp_path / "admission"),
+            release_slot=lambda _root, _token: None,
+        ),
+        hooks=hooks,
+    )
+    finished = SimpleNamespace(process=SimpleNamespace(poll=lambda: 0))
+    still_running = SimpleNamespace(process=SimpleNamespace(poll=lambda: None))
+    worker._running = {"done": finished, "busy": still_running}
+
+    worker._shutdown_all()
+
+    # The finished job is finalized (completed), never requeued via shutdown.
+    assert ("finalize", "done") in calls
+    assert ("shutdown", "done") not in calls
+    # The still-running job is shut down (terminated + requeued) as before.
+    assert ("shutdown", "busy") in calls
+    assert worker._running == {}
+
+
 def test_pidfile_child_worker_run_once_returns_error_when_singleton_lock_held(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

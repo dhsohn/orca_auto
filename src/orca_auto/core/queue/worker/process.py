@@ -223,6 +223,14 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
     def _shutdown_all(self) -> None:
         if not self._running:
             return
+        # Reap any child that already finished (e.g. it completed during the final
+        # poll interval, before the shutdown-triggered loop exit) through the normal
+        # completion path first. Otherwise such a job -- still tracked as running --
+        # would be force-terminated and requeued below, and needlessly re-executed
+        # from scratch on the next worker start.
+        self._check_completed_jobs()
+        if not self._running:
+            return
         self._before_shutdown_all(len(self._running))
         for queue_id, job in self._running_jobs():
             self._shutdown_running_job(queue_id, job)
