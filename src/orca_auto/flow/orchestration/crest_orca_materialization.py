@@ -8,6 +8,10 @@ from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.deps import (
     orchestration_context as _orchestration_context,
 )
+from orca_auto.flow.orchestration.scan_orca_materialization import (
+    _all_terminal_none_verified,
+    _record_workflow_error,
+)
 from orca_auto.flow.orchestration.stage_views import (
     _engine_stage_views,
     _engine_stages,
@@ -89,6 +93,32 @@ def _crest_orca_stage_plan(
     )
 
 
+def _maybe_record_conformer_orca_exhausted(o: Any, payload: dict[str, Any]) -> None:
+    """Fail the workflow when every conformer ORCA optimization stage failed.
+
+    conformer_screening materializes ORCA ``opt`` stages from the completed CREST
+    stage in a single pass. If every one reaches a non-verifying terminal state,
+    the run produced no optimized conformer; but a failed ORCA stage is engine-role
+    non-fatal (conformer stages never set ``workflow_fatal``), so recompute reports
+    the workflow COMPLETED. Record a failed workflow_error instead, mirroring the
+    reaction/scan candidate-exhaustion guards. The shared ``_all_terminal_none_verified``
+    returns False while any conformer is still running or on an in-progress
+    cancellation, and when at least one conformer completed (partial success stays
+    COMPLETED).
+    """
+    orca_stages = _engine_stages(o, payload, "orca")
+    if not _all_terminal_none_verified(orca_stages):
+        return
+    stage_id = str(orca_stages[0].get("stage_id") or "")
+    _record_workflow_error(
+        payload,
+        scope="conformer_screening_orca_conformers_exhausted",
+        stage_id=stage_id,
+        reason="conformers_failed",
+        message="All conformer optimization stages failed; no optimized conformer was produced.",
+    )
+
+
 def append_crest_orca_stages_impl(
     payload: dict[str, Any],
     *,
@@ -108,6 +138,7 @@ def append_crest_orca_stages_impl(
         orca_config=orca_config,
     )
     if plan is None:
+        _maybe_record_conformer_orca_exhausted(o, payload)
         return False
     created = 0
     for candidate in plan.candidates:
