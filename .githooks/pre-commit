@@ -52,26 +52,43 @@ have_patch=0
 untracked_store=""
 mapfile -d '' -t untracked_files < <(git ls-files -z --others --exclude-standard)
 
+# Fail closed: if the worktree could not be fully restored (e.g. an
+# intent-to-add file makes `git apply` refuse the new-file hunk), the commit
+# must NOT proceed — a green hook that leaves the user's file emptied on disk
+# would corrupt the tree they keep working in. The content is always preserved
+# (patch file / store directory under .git) and the abort makes it impossible
+# to miss.
 restore() {
+  local restore_failed=0
   if [[ -n "$untracked_store" && -d "$untracked_store" ]]; then
     local f
     for f in "${untracked_files[@]}"; do
       if [[ -e "$untracked_store/$f" ]]; then
         mkdir -p -- "$(dirname -- "$f")"
-        mv -- "$untracked_store/$f" "$f" || true
+        mv -- "$untracked_store/$f" "$f" || restore_failed=1
       fi
     done
     find "$untracked_store" -depth -type d -exec rmdir {} + 2>/dev/null || true
     if [[ -d "$untracked_store" ]]; then
-      echo "[pre-commit] WARNING: some untracked files were not restored; they remain under $untracked_store" >&2
+      echo "[pre-commit] ERROR: some untracked files were not restored; they remain under $untracked_store" >&2
+      restore_failed=1
     fi
   fi
   if ((have_patch)); then
-    if git apply --whitespace=nowarn "$patch" 2>/dev/null; then
+    # Let git apply's own error through: it names the conflicting path, which
+    # the recovery instructions below need.
+    if git apply --whitespace=nowarn "$patch"; then
       rm -f "$patch"
     else
-      echo "[pre-commit] WARNING: could not re-apply your unstaged changes; they are saved at $patch (recover with: git apply '$patch')." >&2
+      echo "[pre-commit] ERROR: could not re-apply your unstaged changes; they are saved at $patch" >&2
+      echo "[pre-commit]   The error above names the conflicting path (typically an intent-to-add placeholder);" >&2
+      echo "[pre-commit]   recover with: git reset -- <path> && rm -f <path> && git apply '$patch'" >&2
+      restore_failed=1
     fi
+  fi
+  if ((restore_failed)); then
+    echo "[pre-commit] Aborting the commit: the worktree was NOT fully restored (see above)." >&2
+    exit 1
   fi
 }
 trap restore EXIT
