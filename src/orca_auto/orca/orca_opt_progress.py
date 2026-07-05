@@ -59,7 +59,7 @@ def parse_opt_progress(file_path: str) -> OptProgress:
     text = read_orca_text(file_path)
 
     calc_type, method, basis_set, _ = parse_input_line(text)
-    elements, _ = parse_coordinates(text)
+    elements = [atom[0] for atom in parse_coordinates(text)]
     formula = build_formula(elements)
 
     progress = OptProgress(

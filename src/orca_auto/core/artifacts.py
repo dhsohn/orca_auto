@@ -9,6 +9,9 @@ JOB_REPORT_JSON_FILE = "job_report.json"
 JOB_REPORT_MD_FILE = "job_report.md"
 JOB_REPORT_HTML_FILE = "job_report.html"
 WORKFLOW_REPORT_HTML_FILE = "workflow_report.html"
+SI_BLOCK_MD_FILE = "si_block.md"
+WORKFLOW_SI_MD_FILE = "workflow_si.md"
+WORKFLOW_SI_CSV_FILE = "si_data.csv"
 QUEUE_FILE = "queue.json"
 RECORDS_JSONL_FILE = "records.jsonl"
 WORKFLOW_FILE = "workflow.json"
@@ -29,7 +32,10 @@ __all__ = [
     "RUN_REPORT_JSON_FILE",
     "RUN_REPORT_MD_FILE",
     "RUN_STATE_FILE",
+    "SI_BLOCK_MD_FILE",
     "WORKFLOW_FILE",
     "WORKFLOW_REPORT_HTML_FILE",
+    "WORKFLOW_SI_CSV_FILE",
+    "WORKFLOW_SI_MD_FILE",
     "XTB_JOB_MANIFEST_FILE",
 ]

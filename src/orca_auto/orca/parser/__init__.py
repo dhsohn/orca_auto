@@ -14,6 +14,9 @@ from ..orca_chemistry import build_formula as _build_formula
 from ..orca_opt_progress import OptProgress, OptStep, parse_opt_progress
 from ..output_status import coarse_orca_status
 from .extractors import (
+    AtomRow,
+)
+from .extractors import (
     parse_coordinates as _parse_coordinates,
 )
 from .extractors import (
@@ -23,6 +26,12 @@ from .extractors import (
     parse_input_line as _parse_input_line,
 )
 from .extractors import (
+    parse_program_version as _parse_program_version,
+)
+from .extractors import (
+    parse_solvation as _parse_solvation,
+)
+from .extractors import (
     parse_wall_time as _parse_wall_time,
 )
 from .io import read_orca_text as _read_orca_text
@@ -30,9 +39,12 @@ from .patterns import (
     _CHARGE_MULT_RE,
     _ENERGY_RE,
     _ENTHALPY_RE,
+    _GIBBS_CORRECTION_RE,
     _GIBBS_RE,
     _OPT_CONVERGED_RE,
     _OPT_NOT_CONVERGED_RE,
+    _THERMO_TEMPERATURE_RE,
+    _ZPE_RE,
 )
 
 # ---------------------------------------------------------------------------
@@ -45,6 +57,7 @@ HARTREE_TO_KCALMOL = 627.5094740631
 __all__ = [
     "HARTREE_TO_EV",
     "HARTREE_TO_KCALMOL",
+    "AtomRow",
     "OptProgress",
     "OptStep",
     "OrcaResult",
@@ -78,12 +91,18 @@ class OrcaResult:
     lowest_freq_cm1: float | None = None
     enthalpy: float | None = None
     gibbs_energy: float | None = None
+    zpe_correction: float | None = None
+    gibbs_correction: float | None = None
+    thermo_temperature_k: float | None = None
     wall_time_seconds: int | None = None
     status: str = "completed"
     file_hash: str = ""
     mtime: float = 0.0
     input_line: str = ""
+    orca_version: str = ""
+    solvation: str = ""
     elements: list[str] = field(default_factory=list)
+    coordinates: list[AtomRow] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +156,8 @@ def _populate_input_metadata(result: OrcaResult, text: str) -> None:
     result.method = method
     result.basis_set = basis_set
     result.input_line = " ".join(input_tokens)
+    result.orca_version = _parse_program_version(text)
+    result.solvation = _parse_solvation(text, input_tokens)
     cm_match = _CHARGE_MULT_RE.search(text)
     if cm_match:
         result.charge = int(cm_match.group(1))
@@ -144,10 +165,11 @@ def _populate_input_metadata(result: OrcaResult, text: str) -> None:
 
 
 def _populate_coordinates(result: OrcaResult, text: str) -> None:
-    elements, n_atoms = _parse_coordinates(text)
-    result.elements = elements
-    result.n_atoms = n_atoms
-    result.formula = _build_formula(elements)
+    atoms = _parse_coordinates(text)
+    result.coordinates = atoms
+    result.elements = [atom[0] for atom in atoms]
+    result.n_atoms = len(atoms)
+    result.formula = _build_formula(result.elements)
 
 
 def _populate_energy(result: OrcaResult, text: str) -> None:
@@ -180,6 +202,15 @@ def _populate_thermodynamics(result: OrcaResult, text: str) -> None:
     gibbs_match = _GIBBS_RE.search(text)
     if gibbs_match:
         result.gibbs_energy = float(gibbs_match.group(1))
+    zpe_match = _ZPE_RE.search(text)
+    if zpe_match:
+        result.zpe_correction = float(zpe_match.group(1))
+    correction_match = _GIBBS_CORRECTION_RE.search(text)
+    if correction_match:
+        result.gibbs_correction = float(correction_match.group(1))
+    temperature_match = _THERMO_TEMPERATURE_RE.search(text)
+    if temperature_match:
+        result.thermo_temperature_k = float(temperature_match.group(1))
 
 
 def _parse_status(text: str, result: OrcaResult) -> str:

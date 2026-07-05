@@ -24,7 +24,6 @@ _COORD_SECTION_RE = re.compile(
     r"-+\s*\n"
     r"((?:\s*[A-Z][a-z]?\s+[-\d.]+\s+[-\d.]+\s+[-\d.]+\s*\n)+)",
 )
-_COORD_LINE_RE = re.compile(r"^\s*([A-Z][a-z]?)\s+[-\d.]+\s+[-\d.]+\s+[-\d.]+", re.MULTILINE)
 
 # Vibrational frequencies.
 #
@@ -46,6 +45,23 @@ _FREQ_VALUE_RE = re.compile(r"^\s*\d+:\s+([-\d.]+)\s+cm\*\*-1", re.MULTILINE)
 # Thermodynamics
 _ENTHALPY_RE = re.compile(r"Total (?:E|e)nthalpy\s*\.{3,}\s*([-\d.]+)\s*Eh")
 _GIBBS_RE = re.compile(r"Final Gibbs free energy\s*\.{3,}\s*([-\d.]+)\s*Eh")
+_ZPE_RE = re.compile(r"Zero point energy\s*\.{3,}\s*([-\d.]+)\s*Eh")
+_GIBBS_CORRECTION_RE = re.compile(r"G-E\(el\)\s*\.{3,}\s*([-\d.]+)\s*Eh")
+_THERMO_TEMPERATURE_RE = re.compile(r"THERMOCHEMISTRY AT\s+([\d.]+)\s*K")
+
+# Program header: "Program Version 5.0.4 -  RELEASE  -"
+_PROGRAM_VERSION_RE = re.compile(r"Program Version\s+([\w.]+)")
+
+# Coordinate line including the xyz values (Å)
+_COORD_XYZ_LINE_RE = re.compile(
+    r"^\s*([A-Z][a-z]?)\s+(-?\d+\.?\d*)\s+(-?\d+\.?\d*)\s+(-?\d+\.?\d*)",
+    re.MULTILINE,
+)
+
+# Implicit solvation: CPCM(...) route token, SMD flags in the echoed %cpcm block
+_CPCM_TOKEN_RE = re.compile(r"^CPCM(?:\(([^)]*)\))?$", re.IGNORECASE)
+_SMD_TRUE_RE = re.compile(r"\bsmd\s+true\b", re.IGNORECASE)
+_SMD_SOLVENT_RE = re.compile(r'\bsmdsolvent\s+"([^"]+)"', re.IGNORECASE)
 
 # Runtime
 _RUNTIME_RE = re.compile(

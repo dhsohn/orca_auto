@@ -254,3 +254,78 @@ def test_parse_opt_progress_sp_returns_empty_steps(tmp_path: Path) -> None:
     progress = parse_opt_progress(str(out_file))
     assert progress.steps == []
     assert progress.is_running is False
+
+
+# ---------------------------------------------------------------------------
+# SI-oriented field tests
+# ---------------------------------------------------------------------------
+
+
+def test_parser_extracts_si_fields(tmp_path: Path) -> None:
+    out_file = tmp_path / "si_fields.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "                                 Program Version 6.0.1 -  RELEASE  -",
+                "|  1> ! wB97X-D3 def2-TZVP CPCM(toluene) OptTS Freq",
+                "|  2> * xyz 0 1",
+                "|  3> C 0.0 0.0 0.0",
+                "|  4> *",
+                "",
+                "CARTESIAN COORDINATES (ANGSTROEM)",
+                "---------------------------------",
+                "  C      0.000000    1.234567   -0.987654",
+                "  H      0.123456   -0.654321    2.000000",
+                "",
+                "FINAL SINGLE POINT ENERGY     -1234.567890123456",
+                "--------------------------",
+                "THERMOCHEMISTRY AT 298.15K",
+                "--------------------------",
+                "Zero point energy                ...      0.08843782 Eh      55.50 kcal/mol",
+                "Total enthalpy                   ...  -1234.40000000 Eh",
+                "Final Gibbs free energy          ...  -1234.45000000 Eh",
+                "G-E(el)                          ...      0.11789012 Eh      73.98 kcal/mol",
+                "",
+                "                             ****ORCA TERMINATED NORMALLY****",
+                "TOTAL RUN TIME: 0 days 0 hours 1 minutes 2 seconds 3 msec",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output(str(out_file))
+
+    assert result.orca_version == "6.0.1"
+    assert result.solvation == "CPCM(toluene)"
+    assert result.zpe_correction == pytest.approx(0.08843782)
+    assert result.gibbs_correction == pytest.approx(0.11789012)
+    assert result.thermo_temperature_k == pytest.approx(298.15)
+    assert result.coordinates == [
+        ("C", 0.0, 1.234567, -0.987654),
+        ("H", 0.123456, -0.654321, 2.0),
+    ]
+
+
+def test_parser_detects_smd_solvation(tmp_path: Path) -> None:
+    out_file = tmp_path / "smd.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "|  1> ! B3LYP def2-SVP CPCM",
+                "|  2> %cpcm",
+                '|  3>   smd true',
+                '|  4>   SMDsolvent "water"',
+                "|  5> end",
+                "|  6> * xyz 0 1",
+                "|  7> C 0.0 0.0 0.0",
+                "|  8> *",
+                "FINAL SINGLE POINT ENERGY      -100.000000",
+                "                             ****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output(str(out_file))
+
+    assert result.solvation == "SMD(water)"

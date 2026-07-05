@@ -272,6 +272,14 @@ Workflow notes:
   workspace: a self-contained visual summary with the stage chain, the
   CREST → (xTB) → ORCA funnel, and a ranked ORCA results table (relative
   energies, imaginary-frequency counts, links to per-job `job_report.html`).
+- Workflows with ORCA stages also rewrite `workflow_si.md` and `si_data.csv`
+  on every advance: a paper-ready Supporting Information assembly with a
+  computational-details paragraph generated from the routes and ORCA versions
+  that actually ran, the CREST → xTB → ORCA funnel provenance, a relative
+  energy table (ΔE/ΔG), and each completed structure's SI block. When an
+  opt+freq structure has a single-point stage on the identical geometry, the
+  table adds the composite G = E(SP) + [G − E(el)](opt level). `si_data.csv`
+  carries the same numbers for data-availability requirements.
 - Set `workflow.root` in `orca_auto.yaml` or `workflow_root`/`workflow.root` in
   `flow.yaml` before submitting workflow directories.
 - Public workflow `run-dir` reads workflow type and XYZ inputs from `flow.yaml`
@@ -504,6 +512,12 @@ Generated in the job directory:
   convergence trace (Opt/OptTS), the retry-recipe chain, and a vibrational
   summary (imaginary modes, dominant atom displacements, and — for scans —
   alignment with the scanned coordinate)
+- `si_block.md` (completed jobs ending on a stationary point; single points
+  included, relaxed scans and IRC excluded): a copy-paste Supporting
+  Information block with the route line and ORCA version, E(el)/ZPE/H/G and
+  the G−E(el) correction, Nimag with an imaginary-mode summary, the final
+  coordinates, and `⚠` lint lines for reviewer-visible problems (minimum with
+  imaginary modes, TS without exactly one, uncharacterized stationary point)
 
 Important `job_state.json` fields:
 

@@ -282,6 +282,12 @@ ORCA 고유 노트:
   씁니다: 스테이지 체인, CREST → (xTB) → ORCA 깔때기 요약, ORCA 결과 순위표
   (상대 에너지, 허수 진동수, 개별 작업 `job_report.html` 링크)를 담은 단일 파일
   시각 요약입니다.
+- ORCA stage가 있는 워크플로우는 advance마다 `workflow_si.md`와 `si_data.csv`도
+  다시 씁니다: 실제 실행된 route와 ORCA 버전에서 생성한 계산 세부사항 문단,
+  CREST → xTB → ORCA 깔때기 provenance, 상대 에너지 테이블(ΔE/ΔG), 완료된
+  구조별 SI 블록을 담은 논문 SI용 조립본입니다. opt+freq 구조와 동일 지오메트리의
+  single point 스테이지가 있으면 합성 G = E(SP) + [G − E(el)](opt level)을
+  테이블에 추가합니다. `si_data.csv`는 같은 수치의 기계가독 버전입니다.
 - 워크플로우 디렉터리를 제출하기 전에 `orca_auto.yaml`에 `workflow.root`를 설정하거나
   `flow.yaml`에 `workflow_root`/`workflow.root`를 설정하세요.
 - 공개 워크플로우 `run-dir`는 `flow.yaml` 또는 `scaffold`가 작성한 표준 파일명에서
@@ -513,6 +519,11 @@ Opt 모드 완료:
   최적화 수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동 요약(허수 모드, 주요
   원자 변위, scan 작업의 경우 스캔 좌표와의 일치도)을 담은 단일 파일 시각
   리포트
+- `si_block.md` (정류점으로 끝나는 완료 작업; single point 포함, relaxed scan과
+  IRC 제외): route line과 ORCA 버전, E(el)/ZPE/H/G와 G−E(el) 보정, Nimag와
+  허수 모드 요약, 최종 좌표, 그리고 리뷰어가 잡을 문제(허수 모드가 있는
+  minimum, 허수 모드가 정확히 1개가 아닌 TS, 미특성화 정류점)를 표시하는 `⚠`
+  lint 라인을 담은 복사-붙여넣기용 Supporting Information 블록
 
 주요 `job_state.json` 필드:
 

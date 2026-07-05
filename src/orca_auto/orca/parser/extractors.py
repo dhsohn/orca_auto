@@ -5,14 +5,20 @@ from __future__ import annotations
 from .patterns import (
     _BASIS_KEYWORDS,
     _CALC_TYPE_KEYWORDS,
-    _COORD_LINE_RE,
     _COORD_SECTION_RE,
+    _COORD_XYZ_LINE_RE,
+    _CPCM_TOKEN_RE,
     _FREQ_SECTION_RE,
     _FREQ_VALUE_RE,
     _INPUT_LINE_RE,
     _METHOD_KEYWORDS,
+    _PROGRAM_VERSION_RE,
     _RUNTIME_RE,
+    _SMD_SOLVENT_RE,
+    _SMD_TRUE_RE,
 )
+
+AtomRow = tuple[str, float, float, float]
 
 
 def parse_input_line(text: str) -> tuple[str, str, str, list[str]]:
@@ -61,20 +67,51 @@ def first_known_token(tokens: list[str], known_tokens: list[str]) -> str:
     return ""
 
 
-def parse_coordinates(text: str) -> tuple[list[str], int]:
-    """Extract element symbols from the coordinate section.
+def parse_coordinates(text: str) -> list[AtomRow]:
+    """Atom rows (element, x, y, z in Å) from the LAST coordinate section.
 
-    Returns:
-        (elements, n_atoms)
+    The last section holds the final geometry after an optimization; for a
+    single point it is the input geometry echoed back.
     """
-    # Use the last coordinate section (final coordinates after optimization).
     sections = list(_COORD_SECTION_RE.finditer(text))
     if not sections:
-        return ([], 0)
+        return []
 
     last_section = sections[-1].group(1)
-    elements = _COORD_LINE_RE.findall(last_section)
-    return (elements, len(elements))
+    return [
+        (match.group(1), float(match.group(2)), float(match.group(3)), float(match.group(4)))
+        for match in _COORD_XYZ_LINE_RE.finditer(last_section)
+    ]
+
+
+def parse_program_version(text: str) -> str:
+    """ORCA release from the program header, e.g. ``5.0.4``; empty when absent."""
+    match = _PROGRAM_VERSION_RE.search(text)
+    return match.group(1) if match else ""
+
+
+def parse_solvation(text: str, tokens: list[str]) -> str:
+    """Implicit solvation model, e.g. ``CPCM(toluene)`` or ``SMD(water)``.
+
+    CPCM comes from the route line token; SMD from the echoed ``%cpcm`` block
+    (``smd true`` + ``smdsolvent "..."``). Empty string means gas phase (or an
+    unrecognized model).
+    """
+    cpcm_seen = False
+    cpcm_solvent = ""
+    for token in tokens:
+        match = _CPCM_TOKEN_RE.match(token)
+        if match:
+            cpcm_seen = True
+            cpcm_solvent = (match.group(1) or "").strip()
+            break
+    if _SMD_TRUE_RE.search(text):
+        smd_match = _SMD_SOLVENT_RE.search(text)
+        solvent = smd_match.group(1).strip() if smd_match else cpcm_solvent
+        return f"SMD({solvent})" if solvent else "SMD"
+    if cpcm_seen:
+        return f"CPCM({cpcm_solvent})" if cpcm_solvent else "CPCM"
+    return ""
 
 
 def parse_frequencies(text: str) -> tuple[bool | None, float | None]:
