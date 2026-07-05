@@ -354,3 +354,33 @@ def test_parser_reads_charge_multiplicity_from_xyzfile(tmp_path: Path) -> None:
 
     assert result.charge == -1
     assert result.multiplicity == 2
+
+
+def test_parser_derives_gibbs_correction_when_line_absent(tmp_path: Path) -> None:
+    # Some outputs print the final energy and Gibbs energy without a literal
+    # "G-E(el)" line; both refer to the final geometry, so the correction is
+    # exactly their difference — without it SP//opt composites silently vanish.
+    out_file = tmp_path / "no_correction_line.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "! B3LYP def2-SVP Opt Freq",
+                "* xyz 0 1",
+                "C 0.0 0.0 0.0",
+                "*",
+                "FINAL SINGLE POINT ENERGY      -100.500000000000",
+                "--------------------------",
+                "THERMOCHEMISTRY AT 298.15K",
+                "--------------------------",
+                "Total enthalpy                   ...  -100.40000000 Eh",
+                "Final Gibbs free energy          ...  -100.38210988 Eh",
+                "",
+                "                             ****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output(str(out_file))
+
+    assert result.gibbs_correction == pytest.approx(-100.38210988 - (-100.5))

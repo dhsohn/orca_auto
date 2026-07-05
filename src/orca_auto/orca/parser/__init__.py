@@ -208,6 +208,12 @@ def _populate_thermodynamics(result: OrcaResult, text: str) -> None:
     correction_match = _GIBBS_CORRECTION_RE.search(text)
     if correction_match:
         result.gibbs_correction = float(correction_match.group(1))
+    elif result.gibbs_energy is not None and result.energy_hartree is not None:
+        # Outputs without a literal "G-E(el)" line still define the correction
+        # exactly: both values refer to the final geometry, so their difference
+        # IS G - E(el). Without this fallback an SP//opt workflow would
+        # silently omit its composite G.
+        result.gibbs_correction = result.gibbs_energy - result.energy_hartree
     temperature_match = _THERMO_TEMPERATURE_RE.search(text)
     if temperature_match:
         result.thermo_temperature_k = float(temperature_match.group(1))
