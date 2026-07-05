@@ -26,11 +26,20 @@ _COORD_SECTION_RE = re.compile(
 )
 _COORD_LINE_RE = re.compile(r"^\s*([A-Z][a-z]?)\s+[-\d.]+\s+[-\d.]+\s+[-\d.]+", re.MULTILINE)
 
-# Vibrational frequencies
+# Vibrational frequencies.
+#
+# The section body must NOT terminate on a bare blank line: real ORCA output
+# puts a "Scaling factor for frequencies ..." line and blank lines between the
+# header rule and the numbered frequency list, so a blank-line terminator would
+# capture only the scaling-factor line and drop every frequency. Terminate on the
+# section's trailing dashed rule / "NORMAL MODES" header instead (or end-of-text
+# for a truncated file). Frequency values never start a line with 5+ dashes, so
+# the `-{5,}` terminator cannot fire inside the list.
 _FREQ_SECTION_RE = re.compile(
     r"VIBRATIONAL FREQUENCIES\s*\n"
     r"-+\s*\n"
-    r"([\s\S]*?)(?:\n\s*\n|\n-{20,})",
+    r"([\s\S]*?)"
+    r"(?:\n[ \t]*-{5,}|\n[ \t]*NORMAL MODES|\Z)",
 )
 _FREQ_VALUE_RE = re.compile(r"^\s*\d+:\s+([-\d.]+)\s+cm\*\*-1", re.MULTILINE)
 
