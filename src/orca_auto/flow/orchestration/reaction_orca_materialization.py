@@ -9,6 +9,10 @@ from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.deps import (
     orchestration_context as _orchestration_context,
 )
+from orca_auto.flow.orchestration.scan_orca_materialization import (
+    _all_terminal_none_verified,
+    _record_workflow_error,
+)
 from orca_auto.flow.orchestration.stage_views import (
     WorkflowStageView,
     _clear_workflow_error_scope,
@@ -256,6 +260,33 @@ def _maybe_record_reaction_xtb_phase_failure(o: Any, payload: dict[str, Any]) ->
     payload_metadata["workflow_error"] = workflow_error
 
 
+def _maybe_record_reaction_orca_candidates_exhausted(
+    payload: dict[str, Any], plan: _ReactionOrcaStagePlan
+) -> None:
+    """Fail the workflow when every reaction ORCA candidate failed verification.
+
+    The xTB handoff succeeded, so ORCA OptTS+Freq candidate stages were
+    materialized, but every one reached a non-verifying terminal state and no
+    candidate remains to try. A failed reaction ORCA stage is engine-role
+    non-fatal, so nothing else fails the workflow -- without this the reaction TS
+    search is reported COMPLETED despite producing no transition state. Mirror the
+    scan_ts_search exhaustion guard; the shared ``_all_terminal_none_verified`` also
+    excludes an in-progress cancellation (cancelled candidates are not "failed").
+    """
+    if plan.has_pending_xtb:
+        return
+    if not _all_terminal_none_verified(plan.existing_stages):
+        return
+    stage_id = str(plan.existing_stages[0].get("stage_id") or "")
+    _record_workflow_error(
+        payload,
+        scope="reaction_ts_search_orca_candidate_exhausted",
+        stage_id=stage_id,
+        reason="ts_candidates_exhausted",
+        message="All reaction TS candidates were attempted; none verified a transition state.",
+    )
+
+
 def _reaction_orca_stage_plan(
     o: Any,
     payload: dict[str, Any],
@@ -427,6 +458,7 @@ def append_reaction_orca_stages_impl(
             has_pending_xtb=plan.has_pending_xtb,
             handoff_errors=plan.handoff_errors,
         )
+        _maybe_record_reaction_orca_candidates_exhausted(payload, plan)
         return False
 
     _clear_reaction_orca_handoff_errors(o, plan.payload_metadata)
