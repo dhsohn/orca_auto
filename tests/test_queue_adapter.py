@@ -281,6 +281,31 @@ class TestQueueStore(unittest.TestCase):
         self.assertEqual(queue_entry_run_id(found), "run_done_1")
         self.assertEqual(found.finished_at, "2026-03-10T04:59:59+00:00")
 
+    def test_reconcile_honors_cancel_requested_orphan(self) -> None:
+        # A running job that was cancel-requested and then lost its worker (no
+        # run.lock, no terminal state, no job_report) must be reconciled to a
+        # terminal CANCELLED state, not re-queued to PENDING where dequeue would
+        # skip it forever (cancel_requested entries are never dequeued).
+        reaction_dir = self.root / "mol_cancel"
+        reaction_dir.mkdir()
+        entry = enqueue(self.root, str(reaction_dir))
+        dequeue_next(self.root)  # -> RUNNING
+        cancel(self.root, entry.queue_id)  # cancel_requested=True, stays RUNNING
+
+        running = self._find_entry(entry.queue_id)
+        assert running is not None
+        self.assertEqual(running.status, QueueStatus.RUNNING)
+        self.assertTrue(running.cancel_requested)
+
+        changed = reconcile_orphaned_running_entries(self.root)
+        self.assertEqual(changed, 1)
+
+        found = self._find_entry(entry.queue_id)
+        assert found is not None
+        self.assertEqual(found.status, QueueStatus.CANCELLED)
+        self.assertFalse(found.cancel_requested)
+        self.assertTrue(found.finished_at)
+
     def test_reconcile_skips_when_worker_pid_is_alive(self) -> None:
         reaction_dir = self.root / "mol_done"
         reaction_dir.mkdir()
