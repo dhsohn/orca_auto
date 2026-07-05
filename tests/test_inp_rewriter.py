@@ -64,6 +64,26 @@ class TestInpRewriter(unittest.TestCase):
         self.assertIn("nprocs 12", text)
         self.assertIn("%maxcore 2730", text)
 
+    def test_ensure_submission_resource_request_honors_pal_route_shorthand(self) -> None:
+        # "! Opt PAL4" already requests 4 processes via ORCA's route shorthand, so
+        # no conflicting %pal nprocs block should be injected and the resource
+        # request must reflect 4 cores (not the default_max_cores).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            inp = root / "rxn.inp"
+            inp.write_text("! Opt PAL4\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
+
+            resource_request, actions = ensure_submission_resource_request(
+                inp,
+                default_max_cores=8,
+                default_max_memory_gb=32,
+            )
+            text = inp.read_text(encoding="utf-8")
+
+        self.assertEqual(resource_request["max_cores"], 4)
+        self.assertNotIn("pal_nprocs_injected", actions)
+        self.assertNotIn("%pal", text)
+
     def test_read_resource_request_from_input_uses_inp_values(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
