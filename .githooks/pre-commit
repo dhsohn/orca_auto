@@ -48,6 +48,16 @@ done
 
 # --- Isolate the staged snapshot for the checks; restore on any exit. ---
 patch="$GIT_DIR/pre-commit-unstaged.patch"
+
+# After a failed restore this file can be the ONLY copy of the user's unstaged
+# content; a second commit attempt must never truncate it with the now-empty
+# diff, or the recovery instructions stop recovering anything.
+if [[ -e "$patch" ]]; then
+  echo "[pre-commit] A saved unstaged patch from a previous failed restore exists: $patch" >&2
+  echo "[pre-commit] Recover it first (see the previous run's instructions), then remove the file and retry." >&2
+  exit 1
+fi
+
 have_patch=0
 untracked_store=""
 mapfile -d '' -t untracked_files < <(git ls-files -z --others --exclude-standard)

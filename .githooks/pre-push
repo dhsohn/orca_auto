@@ -23,17 +23,16 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-VENV_DIR="${ORCA_AUTO_VENV:-$ROOT/.venv}"
-if [[ ! -x "$VENV_DIR/bin/python" ]]; then
-  echo "[pre-push] .venv not found at $VENV_DIR; run scripts/check.sh once first." >&2
-  exit 1
-fi
-
-# stdin: "<local_ref> <local_sha> <remote_ref> <remote_sha>" per pushed ref.
+# stdin FIRST: "<local_ref> <local_sha> <remote_ref> <remote_sha>" per pushed
+# ref. A deletion-only push (`git push --delete old-branch`, all-zero local
+# oid) uploads no commits, so nothing below applies — exit before the venv,
+# parity, and suite gates can block it on unrelated local state.
 # Dereference tags to their commit (^{commit}) so pushing a tag of HEAD passes.
 head_sha="$(git rev-parse HEAD)"
+any_nondelete=0
 while read -r local_ref local_sha _remote_ref _remote_sha; do
   [[ -z "$local_sha" || "$local_sha" =~ ^0+$ ]] && continue  # ref deletion
+  any_nondelete=1
   pushed_commit="$(git rev-parse --verify --quiet "${local_sha}^{commit}" || printf '%s' "$local_sha")"
   if [[ "$pushed_commit" != "$head_sha" ]]; then
     echo "[pre-push] $local_ref@${local_sha:0:9} is not HEAD (${head_sha:0:9}); the suite can only validate HEAD." >&2
@@ -41,6 +40,16 @@ while read -r local_ref local_sha _remote_ref _remote_sha; do
     exit 1
   fi
 done
+if ((!any_nondelete)); then
+  echo "[pre-push] Deletion-only push: no commits to test."
+  exit 0
+fi
+
+VENV_DIR="${ORCA_AUTO_VENV:-$ROOT/.venv}"
+if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+  echo "[pre-push] .venv not found at $VENV_DIR; run scripts/check.sh once first." >&2
+  exit 1
+fi
 
 if ! git diff --quiet || ! git diff --cached --quiet; then
   echo "[pre-push] Tracked changes present: the suite would test your worktree, not the pushed commit." >&2
