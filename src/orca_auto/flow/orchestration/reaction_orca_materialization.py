@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from orca_auto.core.statuses import is_queue_active_status
+from orca_auto.core.statuses import is_failed_status, is_queue_active_status
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.deps import (
     orchestration_context as _orchestration_context,
@@ -223,6 +223,39 @@ def _record_reaction_handoff_failure(
         }
 
 
+def _maybe_record_reaction_xtb_phase_failure(o: Any, payload: dict[str, Any]) -> None:
+    """Fail the workflow when the finished xTB phase yielded no usable stage.
+
+    ``append_reaction_orca_stages_impl`` only runs once the xTB phase is finished.
+    If no xTB stage is completed or recoverable -- so no ORCA candidate stage is
+    ever materialized and no per-stage handoff error is collected -- but at least
+    one xTB stage failed outright, the reaction TS search produced no TS guess and
+    must be recorded as a workflow failure. Without this, every-stage-terminal is
+    reported COMPLETED by recompute_workflow_status.
+    """
+    if _completed_or_recoverable_xtb_stages(o, payload):
+        return
+    views = _engine_stage_views(o, payload, "xtb")
+    failed = next((view for view in views if is_failed_status(view.status(o))), None)
+    if failed is None:
+        return
+    payload_metadata = payload.setdefault("metadata", {})
+    if not isinstance(payload_metadata, dict) or isinstance(
+        payload_metadata.get("workflow_error"), dict
+    ):
+        return
+    workflow_error: dict[str, str] = {
+        "status": "failed",
+        "scope": "reaction_ts_search_xtb_handoff",
+        "reason": "reaction_ts_search_xtb_phase_failed",
+        "message": "All xTB path search stages failed; no TS guess was produced.",
+    }
+    stage_id = o.stages.support._normalize_text(failed.raw.get("stage_id"))
+    if stage_id:
+        workflow_error["stage_id"] = stage_id
+    payload_metadata["workflow_error"] = workflow_error
+
+
 def _reaction_orca_stage_plan(
     o: Any,
     payload: dict[str, Any],
@@ -384,6 +417,7 @@ def append_reaction_orca_stages_impl(
         orca_config=orca_config,
     )
     if plan is None:
+        _maybe_record_reaction_xtb_phase_failure(o, payload)
         return False
 
     if not plan.remaining_candidates:

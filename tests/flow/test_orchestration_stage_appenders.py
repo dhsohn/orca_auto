@@ -525,6 +525,51 @@ def test_append_reaction_orca_stages_sets_xtb_handoff_workflow_error_when_no_can
     }
 
 
+def test_append_reaction_orca_stages_fails_workflow_when_all_xtb_stages_failed(
+    tmp_path: Path,
+) -> None:
+    # Every xTB path search stage ended terminal-failed (crash or submission
+    # failure), so no ORCA candidate stage is ever materialized. The reaction TS
+    # search produced no TS guess and must be recorded as a workflow FAILURE, not
+    # left without a workflow_error (which recompute_workflow_status reports as
+    # COMPLETED once every stage is terminal).
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_reaction_all_xtb_failed",
+        "metadata": {"request": {"parameters": {"max_orca_stages": 2}}},
+        "stages": [
+            {
+                "stage_id": "xtb_path_search_01",
+                "status": "failed",
+                "metadata": {},
+                "task": {"engine": "xtb", "payload": {"job_dir": "/tmp/xtb_job_01"}},
+            },
+            {
+                "stage_id": "xtb_path_search_02",
+                "status": "submission_failed",
+                "metadata": {},
+                "task": {"engine": "xtb", "payload": {"job_dir": "/tmp/xtb_job_02"}},
+            },
+        ],
+    }
+
+    created = append_reaction_orca_stages_impl(
+        payload,
+        workspace_dir=tmp_path,
+        xtb_config="/tmp/xtb.yaml",
+        orca_config="/tmp/orca.yaml",
+        deps=orchestration_deps(),
+    )
+
+    assert created is False
+    assert payload["metadata"]["workflow_error"] == {
+        "status": "failed",
+        "scope": "reaction_ts_search_xtb_handoff",
+        "reason": "reaction_ts_search_xtb_phase_failed",
+        "message": "All xTB path search stages failed; no TS guess was produced.",
+        "stage_id": "xtb_path_search_01",
+    }
+
+
 def test_append_reaction_orca_stages_waits_when_xtb_contract_is_missing(
     tmp_path: Path,
 ) -> None:
