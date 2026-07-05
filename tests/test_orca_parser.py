@@ -329,3 +329,28 @@ def test_parser_detects_smd_solvation(tmp_path: Path) -> None:
     result = parse_orca_output(str(out_file))
 
     assert result.solvation == "SMD(water)"
+
+
+def test_parser_reads_charge_multiplicity_from_xyzfile(tmp_path: Path) -> None:
+    # Workflow-generated inputs use "* xyzfile <charge> <mult> <path>"; the
+    # parser must read the real values, not fall back to Charge 0 / Mult 1.
+    out_file = tmp_path / "xyzfile.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "|  1> ! B3LYP def2-SVP Opt",
+                "|  2> * xyzfile -1 2 conformer.xyz",
+                "CARTESIAN COORDINATES (ANGSTROEM)",
+                "---------------------------------",
+                "  C      0.000000    0.000000    0.000000",
+                "FINAL SINGLE POINT ENERGY      -100.000000",
+                "                             ****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output(str(out_file))
+
+    assert result.charge == -1
+    assert result.multiplicity == 2
