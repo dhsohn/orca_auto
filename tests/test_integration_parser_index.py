@@ -192,6 +192,45 @@ Final Gibbs free energy           ... -500.112345 Eh
 TOTAL RUN TIME: 0 days 8 hours 30 minutes 45 seconds 0 msec
 """
 
+# Real ORCA 5.x/6.x emits a "Scaling factor for frequencies" line and blank
+# lines between the header rule and the numbered frequency list, then closes the
+# block with a dashed "NORMAL MODES" header. This is the on-disk shape the parser
+# must handle (the other fixtures use a simplified, blank-line-free layout).
+_TS_REAL_VIB_FORMAT = """\
+! B3LYP def2-TZVP OptTS Freq
+* xyz 0 1
+  C    0.000000    0.000000    0.000000
+  H    1.089000    0.000000    0.000000
+  Cl   3.000000    0.000000    0.000000
+*
+
+THE OPTIMIZATION HAS CONVERGED
+
+-----------------------
+VIBRATIONAL FREQUENCIES
+-----------------------
+
+Scaling factor for frequencies =  1.000000000  (already applied!)
+
+   0:         0.00 cm**-1
+   1:         0.00 cm**-1
+   2:         0.00 cm**-1
+   3:         0.00 cm**-1
+   4:         0.00 cm**-1
+   5:         0.00 cm**-1
+   6:      -432.15 cm**-1
+   7:       523.40 cm**-1
+   8:      1450.78 cm**-1
+
+
+------------
+NORMAL MODES
+------------
+
+                             ****ORCA TERMINATED NORMALLY****
+TOTAL RUN TIME: 0 days 0 hours 5 minutes 0 seconds 0 msec
+"""
+
 _SCF_FAILED = """\
 ! wB97X-D3 def2-TZVP Opt
 * xyz -1 2
@@ -369,6 +408,20 @@ class TestParserRealisticOutputs:
         assert r.lowest_freq_cm1 == pytest.approx(-432.15)
         assert r.enthalpy == pytest.approx(-500.089123)
         assert r.gibbs_energy == pytest.approx(-500.112345)
+
+    def test_real_orca_vibrational_section_with_scaling_factor(self, tmp_path: Path) -> None:
+        """Real ORCA freq output separates the header rule from the numbered
+        list with a 'Scaling factor' line and blank lines; the parser must still
+        capture the frequencies. Regression: the section body previously
+        terminated at the first blank line and dropped every frequency, so
+        has_imaginary_freq/lowest_freq_cm1 came back None on real output."""
+        out = tmp_path / "ts_real.out"
+        out.write_text(_TS_REAL_VIB_FORMAT, encoding="utf-8")
+
+        r = parse_orca_output(str(out))
+
+        assert r.has_imaginary_freq is True
+        assert r.lowest_freq_cm1 == pytest.approx(-432.15)
 
     def test_scf_failure(self, tmp_path: Path) -> None:
         """SCF not converged → error termination → status=failed."""
