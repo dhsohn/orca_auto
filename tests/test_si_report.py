@@ -178,12 +178,34 @@ def test_sp_block_has_no_nimag_and_no_warnings(tmp_path: Path) -> None:
 
 
 def test_non_stationary_jobs_get_no_block(tmp_path: Path) -> None:
-    for name, inp_text in (("scan_job", _SCAN_INP), ("irc_job", _IRC_INP)):
+    # Path/dynamics endpoints are not stationary points and must not fall
+    # through to the "sp" classification (Codex #48 P2).
+    cases = (
+        ("scan_job", _SCAN_INP),
+        ("irc_job", _IRC_INP),
+        ("neb_job", "! NEB B3LYP def2-SVP\n* xyz 0 1\nC 0 0 0\n*\n"),
+        ("neb_ci_job", "! ZOOM-NEB-CI B3LYP def2-SVP\n* xyz 0 1\nC 0 0 0\n*\n"),
+        ("md_job", "! MD B3LYP def2-SVP\n* xyz 0 1\nC 0 0 0\n*\n"),
+    )
+    for name, inp_text in cases:
         reaction_dir, state = _job_dir(
             tmp_path, name, inp_text=inp_text, out_text=_out_text(route="B3LYP def2-SVP Opt")
         )
-        assert structure_kind(Path(state["selected_inp"])) is None
-        assert collect_si_block(reaction_dir, state) is None
+        assert structure_kind(Path(state["selected_inp"])) is None, name
+        assert collect_si_block(reaction_dir, state) is None, name
+
+
+def test_neb_ts_route_is_still_a_ts_block(tmp_path: Path) -> None:
+    reaction_dir, state = _job_dir(
+        tmp_path,
+        "neb_ts_job",
+        inp_text="! NEB-TS B3LYP def2-SVP Freq\n* xyz 0 1\nC 0 0 0\n*\n",
+        out_text=_out_text(route="NEB-TS B3LYP def2-SVP Freq", freqs=(-512.3, 120.0), thermo=True),
+    )
+
+    block = collect_si_block(reaction_dir, state)
+    assert block is not None
+    assert block.kind == "ts"
 
 
 def test_scants_route_is_a_ts_block(tmp_path: Path) -> None:

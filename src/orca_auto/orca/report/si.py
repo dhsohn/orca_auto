@@ -39,6 +39,14 @@ logger = logging.getLogger(__name__)
 
 _OPT_ROUTE_RE = re.compile(r"\bOPT\b", re.IGNORECASE)
 
+# Route families whose final geometry is not a stationary point: path methods
+# (plain NEB / NEB-CI — NEB-TS is claimed by the TS check first) and dynamics.
+# Their endpoints must never be published as structures in an SI.
+_NON_STATIONARY_ROUTE_RE = re.compile(
+    r"\b(?:ZOOM-)?NEB(?:-CI)?\b|\bMD\b|\bSCAN\b",
+    re.IGNORECASE,
+)
+
 # SI convention: energies in Eh to 6 decimals, coordinates in Å to 6 decimals.
 _ENERGY_FMT = "{:16.6f}"
 _MODE_TOP_ATOMS = 3
@@ -51,10 +59,11 @@ class SiBlockError(Exception):
 def structure_kind(selected_inp: Path) -> str | None:
     """``"ts"`` / ``"min"`` / ``"sp"``; ``None`` for non-stationary jobs.
 
-    A plain relaxed scan (Opt route + scan coordinate) and IRC end on
-    non-stationary geometries that must never enter an SI; TS routes
-    (OptTS/ScanTS/NEB-TS) and plain Opt end on stationary points. Everything
-    else (single points, bare Freq) is reported without a minimum/TS claim.
+    A plain relaxed scan (Opt route + scan coordinate), IRC, plain NEB paths,
+    and MD end on non-stationary geometries that must never enter an SI; TS
+    routes (OptTS/ScanTS/NEB-TS) and plain Opt end on stationary points.
+    Everything else (single points, bare Freq) is reported without a
+    minimum/TS claim.
     """
     routes = " ".join(file_route_lines(selected_inp))
     if not routes:
@@ -63,6 +72,8 @@ def structure_kind(selected_inp: Path) -> str | None:
         return None
     if TS_ROUTE_RE.search(routes):
         return "ts"
+    if _NON_STATIONARY_ROUTE_RE.search(routes):
+        return None
     if _OPT_ROUTE_RE.search(routes):
         if first_scan_coordinate_spec(selected_inp) is not None:
             return None
