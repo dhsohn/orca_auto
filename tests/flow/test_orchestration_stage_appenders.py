@@ -799,6 +799,100 @@ def test_append_reaction_orca_stages_appends_unattempted_candidate_without_mutat
     assert appended["metadata"]["reaction_remaining_candidates_after_this"] == 0
 
 
+def test_append_reaction_orca_stages_fails_workflow_when_all_orca_candidates_fail(
+    tmp_path: Path,
+) -> None:
+    # The xTB handoff succeeded and ORCA OptTS candidate stages were materialized,
+    # but every candidate failed to verify a TS and none remain to try. The reaction
+    # TS search produced no transition state and must be recorded as FAILED (mirrors
+    # the scan_ts_search candidate-exhaustion guard); a failed reaction ORCA stage is
+    # engine-role non-fatal, so recompute_workflow_status would otherwise report
+    # COMPLETED.
+    first_candidate = _candidate(
+        "/tmp/candidate_01.xyz",
+        source_job_id="xtb_job_02",
+        source_job_type="path_search",
+        reaction_key="rxn_02",
+        rank=1,
+        kind="ts_guess",
+        score=-10.0,
+    )
+    second_candidate = _candidate(
+        "/tmp/candidate_02.xyz",
+        source_job_id="xtb_job_02",
+        source_job_type="path_search",
+        reaction_key="rxn_02",
+        rank=2,
+        kind="ts_guess",
+        score=-9.0,
+    )
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_reaction_all_orca_failed",
+        "metadata": {"request": {"parameters": {"max_orca_stages": 3}}},
+        "stages": [
+            {
+                "stage_id": "xtb_path_search_01",
+                "status": "completed",
+                "metadata": {},
+                "task": {"engine": "xtb", "payload": {"job_dir": "/tmp/xtb_job_02"}},
+            },
+            {
+                "stage_id": "orca_optts_freq_01",
+                "status": "failed",
+                "metadata": {"analyzer_status": "ts_not_found"},
+                "task": {
+                    "engine": "orca",
+                    "metadata": {"source_candidate_path": first_candidate.artifact_path},
+                },
+            },
+            {
+                "stage_id": "orca_optts_freq_02",
+                "status": "failed",
+                "metadata": {"analyzer_status": "geom_not_converged"},
+                "task": {
+                    "engine": "orca",
+                    "metadata": {"source_candidate_path": second_candidate.artifact_path},
+                },
+            },
+        ],
+    }
+    contract = SimpleNamespace(
+        job_id="xtb_job_02",
+        job_type="path_search",
+        candidate_details=(),
+        selected_candidate_paths=(),
+    )
+    deps = orchestration_deps(
+        overrides={
+            "_load_config_root": lambda path, **kwargs: (
+                tmp_path / ("xtb" if "xtb" in str(path) else "orca")
+            ),
+            "load_xtb_artifact_contract": lambda **kwargs: contract,
+            "select_xtb_downstream_inputs": lambda *args, **kwargs: (
+                first_candidate,
+                second_candidate,
+            ),
+        }
+    )
+
+    created = append_reaction_orca_stages_impl(
+        payload,
+        workspace_dir=tmp_path,
+        xtb_config="/tmp/xtb.yaml",
+        orca_config="/tmp/orca.yaml",
+        deps=deps,
+    )
+
+    assert created is False
+    assert payload["metadata"]["workflow_error"] == {
+        "status": "failed",
+        "scope": "reaction_ts_search_orca_candidate_exhausted",
+        "stage_id": "orca_optts_freq_01",
+        "reason": "ts_candidates_exhausted",
+        "message": "All reaction TS candidates were attempted; none verified a transition state.",
+    }
+
+
 def test_append_reaction_orca_stages_materializes_under_workflow_orca_stage_root(
     tmp_path: Path,
 ) -> None:
