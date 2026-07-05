@@ -17,6 +17,7 @@ orca_auto는 Linux 및 WSL 환경에서 ORCA 실행과 워크플로우 오케스
 - 아키텍처 개요: [docs/ARCHITECTURE.ko.md](docs/ARCHITECTURE.ko.md) ([English](docs/ARCHITECTURE.md))
 - 빠른 시작: [docs/QUICKSTART.ko.md](docs/QUICKSTART.ko.md) ([English](docs/QUICKSTART.md))
 - 런타임 및 명령어 레퍼런스: [docs/REFERENCE.ko.md](docs/REFERENCE.ko.md) ([English](docs/REFERENCE.md))
+- 로드맵: [ROADMAP.md](ROADMAP.md)
 - WSL 및 `systemd` 런타임 설정: [systemd/README.ko.md](systemd/README.ko.md) ([English](systemd/README.md))
 - 패키지 레이아웃 및 개발 노트: [docs/DEVELOPMENT.ko.md](docs/DEVELOPMENT.ko.md) ([English](docs/DEVELOPMENT.md))
 
