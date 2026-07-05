@@ -247,6 +247,9 @@ def test_single_point_pairs_by_identical_geometry(tmp_path: Path) -> None:
     assert entry.sp_energy == pytest.approx(-100.5)
     assert entry.sp_label == "sp_a"
     assert entry.composite_gibbs == pytest.approx(-100.5 + 0.11789012)
+    # The paired SP's block is kept so its level stays documented.
+    assert entry.sp_block is not None
+    assert entry.sp_block.result.method == "wB97M-V"
     # The mismatched-geometry SP must not pair: it stays a standalone block.
     assert [extra.block.name for extra in data.extra_blocks] == ["sp_b"]
 
@@ -254,6 +257,14 @@ def test_single_point_pairs_by_identical_geometry(tmp_path: Path) -> None:
     assert "G(composite)" in rendered
     assert "composite Gibbs energies combine E(SP)" in rendered
     assert "G is the composite" in rendered
+    # The composite energy must carry the SP level that produced it, or the SI
+    # documents an unreproducible number (Codex #48 P2).
+    assert "wB97M-V/def2-TZVPP" in rendered
+    assert "! wB97M-V def2-TZVPP" in rendered
+
+    csv_text = render_workflow_si_csv(data)
+    # The stationary row carries the paired SP's method/basis/version/route.
+    assert "wB97M-V,def2-TZVPP,,6.0.1,wB97M-V def2-TZVPP" in csv_text
 
 
 def test_failed_and_scan_stages_are_excluded_with_reasons(tmp_path: Path) -> None:

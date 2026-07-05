@@ -59,6 +59,10 @@ _GEOMETRY_TOL_ANGSTROM = 1e-4
 class WorkflowSiEntry:
     stage_id: str
     block: SiBlock
+    # The matched single-point block, kept so its level (method/basis/solvation/
+    # version/route) can be documented: a composite energy is unreproducible
+    # without the level that produced E(SP).
+    sp_block: SiBlock | None = None
     sp_energy: float | None = None
     sp_label: str = ""
     composite_gibbs: float | None = None
@@ -150,6 +154,7 @@ def _pair_single_points(
         paired.append(
             replace(
                 entry,
+                sp_block=match.block,
                 sp_energy=sp_energy,
                 sp_label=match.block.name,
                 composite_gibbs=composite,
@@ -291,13 +296,32 @@ def _characterization_sentence(data: WorkflowSiData) -> str:
 
 
 def _composite_sentence(data: WorkflowSiData) -> str:
-    if all(entry.sp_energy is None for entry in data.entries):
+    sp_levels: list[tuple[str, str, str, str]] = []
+    for entry in data.entries:
+        if entry.sp_block is None:
+            continue
+        key = _level_key(entry.sp_block)
+        if key not in sp_levels:
+            sp_levels.append(key)
+    if not sp_levels:
         return ""
+    phrase = "; ".join(_level_phrase(*level) for level in sp_levels)
     return (
         "Electronic energies were refined by single-point calculations on the optimized "
-        "geometries; composite Gibbs energies combine E(SP) with the G − E(el) correction "
-        "from the optimization level."
+        f"geometries {phrase}; composite Gibbs energies combine E(SP) with the G − E(el) "
+        "correction from the optimization level."
     )
+
+
+def _documented_blocks(data: WorkflowSiData) -> list[SiBlock]:
+    """Every block whose level the SI must document, including matched SPs."""
+    blocks: list[SiBlock] = []
+    for entry in data.entries:
+        blocks.append(entry.block)
+        if entry.sp_block is not None:
+            blocks.append(entry.sp_block)
+    blocks.extend(entry.block for entry in data.extra_blocks)
+    return blocks
 
 
 def _methods_lines(data: WorkflowSiData) -> list[str]:
@@ -317,8 +341,8 @@ def _methods_lines(data: WorkflowSiData) -> list[str]:
     if composite:
         lines.append(composite)
     routes: list[str] = []
-    for entry in (*data.entries, *data.extra_blocks):
-        route = entry.block.result.input_line
+    for block in _documented_blocks(data):
+        route = block.result.input_line
         if route and route not in routes:
             routes.append(route)
     if routes:
@@ -418,14 +442,12 @@ def render_workflow_si_md(data: WorkflowSiData) -> str:
     for entry in data.entries:
         lines.append(render_si_block_md(entry.block))
         if entry.sp_energy is not None:
-            lines.append(
-                f"E(SP) = {entry.sp_energy:16.6f} Eh  ({entry.sp_label})"
-                + (
-                    f"\nG(composite) = {entry.composite_gibbs:16.6f} Eh"
-                    if entry.composite_gibbs is not None
-                    else ""
-                )
-            )
+            note = f"E(SP) = {entry.sp_energy:16.6f} Eh  ({entry.sp_label})"
+            if entry.sp_block is not None and entry.sp_block.result.input_line:
+                note += f"\n  ! {entry.sp_block.result.input_line}"
+            if entry.composite_gibbs is not None:
+                note += f"\nG(composite) = {entry.composite_gibbs:16.6f} Eh"
+            lines.append(note)
             lines.append("")
     for entry in data.extra_blocks:
         lines.append(render_si_block_md(entry.block))
@@ -460,6 +482,11 @@ _CSV_COLUMNS = [
     "H_Eh",
     "G_Eh",
     "G_minus_Eel_Eh",
+    "sp_method",
+    "sp_basis_set",
+    "sp_solvation",
+    "sp_orca_version",
+    "sp_route",
     "E_SP_Eh",
     "G_composite_Eh",
     "Nimag",
@@ -475,6 +502,7 @@ def render_workflow_si_csv(data: WorkflowSiData) -> str:
     writer.writerow(_CSV_COLUMNS)
     for entry in (*data.entries, *data.extra_blocks):
         result = entry.block.result
+        sp = entry.sp_block.result if entry.sp_block is not None else None
         writer.writerow(
             [
                 entry.block.name,
@@ -493,6 +521,11 @@ def render_workflow_si_csv(data: WorkflowSiData) -> str:
                 result.enthalpy,
                 result.gibbs_energy,
                 result.gibbs_correction,
+                sp.method if sp is not None else "",
+                sp.basis_set if sp is not None else "",
+                sp.solvation if sp is not None else "",
+                sp.orca_version if sp is not None else "",
+                sp.input_line if sp is not None else "",
                 entry.sp_energy,
                 entry.composite_gibbs,
                 entry.block.imaginary_count,
