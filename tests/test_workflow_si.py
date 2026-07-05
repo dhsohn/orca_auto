@@ -195,6 +195,7 @@ def test_workflow_si_ranks_structures_and_reports_funnel(tmp_path: Path) -> None
     assert "## Computational details" in rendered
     assert "CREST (5 conformers)" in rendered
     assert "2 structures were refined with ORCA" in rendered
+    assert "harmonic frequency calculations" in rendered
     assert "B3LYP/def2-SVP" in rendered
     assert "298.15 K" in rendered
     assert "== conf_02 ==" in rendered
@@ -265,6 +266,25 @@ def test_single_point_pairs_by_identical_geometry(tmp_path: Path) -> None:
     csv_text = render_workflow_si_csv(data)
     # The stationary row carries the paired SP's method/basis/version/route.
     assert "wB97M-V,def2-TZVPP,,6.0.1,wB97M-V def2-TZVPP" in csv_text
+
+
+def test_opt_only_workflow_does_not_claim_frequency_calculations(tmp_path: Path) -> None:
+    # The default conformer-screening route is Opt-only (no Freq): the methods
+    # paragraph must not assert harmonic frequency calculations that never ran
+    # (Codex #48 P2).
+    stage_dir = _stage_dir(
+        tmp_path,
+        "opt_only",
+        route="r2SCAN-3c Opt TightSCF",
+        energy=-100.0,
+        coords=_COORDS_A,
+    )
+
+    data = collect_workflow_si_data(_payload([_orca_stage("orca_opt_only", stage_dir)]))
+    rendered = render_workflow_si_md(data)
+
+    assert "Geometry optimizations were performed" in rendered
+    assert "harmonic frequency" not in rendered
 
 
 def test_failed_and_scan_stages_are_excluded_with_reasons(tmp_path: Path) -> None:

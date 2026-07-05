@@ -251,13 +251,34 @@ def _level_phrase(method: str, basis: str, solvation: str, version: str) -> str:
     return phrase
 
 
-def _distinct_levels(entries: tuple[WorkflowSiEntry, ...]) -> list[tuple[str, str, str, str]]:
-    seen: list[tuple[str, str, str, str]] = []
+def _optimization_sentences(entries: tuple[WorkflowSiEntry, ...]) -> list[str]:
+    """One sentence per distinct level, claiming only what actually ran.
+
+    A level mentions harmonic frequency calculations only when at least one of
+    its structures carries frequency data: the default conformer-screening
+    route is Opt-only, and an SI must not assert frequency analyses that never
+    happened (the per-structure ``⚠ uncharacterized`` lint covers stragglers
+    when a level mixes Freq and non-Freq jobs).
+    """
+    levels: list[tuple[tuple[str, str, str, str], bool]] = []
     for entry in entries:
         key = _level_key(entry.block)
-        if key not in seen:
-            seen.append(key)
-    return seen
+        has_freq = entry.block.imaginary_count is not None
+        for position, (seen, seen_freq) in enumerate(levels):
+            if seen == key:
+                levels[position] = (seen, seen_freq or has_freq)
+                break
+        else:
+            levels.append((key, has_freq))
+    return [
+        (
+            "Geometry optimizations and harmonic frequency calculations were performed "
+            if has_freq
+            else "Geometry optimizations were performed "
+        )
+        + f"{_level_phrase(*key)}."
+        for key, has_freq in levels
+    ]
 
 
 def _funnel_sentence(data: WorkflowSiData) -> str:
@@ -329,11 +350,7 @@ def _methods_lines(data: WorkflowSiData) -> list[str]:
     funnel = _funnel_sentence(data)
     if funnel:
         lines.append(funnel)
-    for method, basis, solvation, version in _distinct_levels(data.entries):
-        lines.append(
-            "Geometry optimizations and harmonic frequency calculations were performed "
-            f"{_level_phrase(method, basis, solvation, version)}."
-        )
+    lines.extend(_optimization_sentences(data.entries))
     characterization = _characterization_sentence(data)
     if characterization:
         lines.append(characterization)
