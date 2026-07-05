@@ -3,15 +3,49 @@
 # .venv (ruff, mypy, import-linter, and the pytest suite with coverage) so a
 # broken push is caught locally instead of by GitHub Actions.
 #
+# Git pushes committed objects while this suite checks the working tree, so the
+# two must match: with local modifications, a broken pushed commit could pass
+# behind a fixed-but-uncommitted worktree (and vice versa). The hook therefore
+# requires parity — no staged/unstaged tracked changes and no untracked Python
+# files — rather than testing a temporary checkout of the pushed refs: the
+# venv's editable install resolves `orca_auto` to THIS checkout's src/, so a
+# temp checkout would silently import the wrong code anyway.
+#
 # Reuses the current venv without reinstalling deps, so this is the ~pytest
 # runtime (tens of seconds), not a fresh environment build. Bypass with
 # `git push --no-verify`.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
 VENV_DIR="${ORCA_AUTO_VENV:-$ROOT/.venv}"
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   echo "[pre-push] .venv not found at $VENV_DIR; run scripts/check.sh once first." >&2
+  exit 1
+fi
+
+# stdin: "<local_ref> <local_sha> <remote_ref> <remote_sha>" per pushed ref.
+# The suite always validates HEAD's tree; call out pushes of anything else.
+head_sha="$(git rev-parse HEAD)"
+while read -r local_ref local_sha _remote_ref _remote_sha; do
+  [[ -z "$local_sha" || "$local_sha" =~ ^0+$ ]] && continue  # ref deletion
+  if [[ "$local_sha" != "$head_sha" ]]; then
+    echo "[pre-push] NOTE: pushing $local_ref@${local_sha:0:9}, but the suite validates HEAD (${head_sha:0:9})." >&2
+  fi
+done
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "[pre-push] Tracked changes present: the suite would test your worktree, not the pushed commit." >&2
+  echo "[pre-push] Commit or stash them first, or bypass with 'git push --no-verify'." >&2
+  exit 1
+fi
+
+untracked_py="$(git ls-files --others --exclude-standard -- '*.py')"
+if [[ -n "$untracked_py" ]]; then
+  echo "[pre-push] Untracked Python files would leak into the checks but are absent from the pushed commit:" >&2
+  printf '%s\n' "$untracked_py" | sed 's/^/[pre-push]   /' >&2
+  echo "[pre-push] Commit or remove them, or bypass with 'git push --no-verify'." >&2
   exit 1
 fi
 
