@@ -227,19 +227,24 @@ def _scants_surface_exhausted_on_resume(state: RunState, last_attempt: Mapping[s
     already-finished scan. Excludes the fresh zero-distance case, which still
     gets its one OptTS refinement fallback.
     """
+    # Both the live-retry fallback (``scants_fallback_to_optts``) and the resume-path
+    # conversion (``scants_resume_to_optts``, recorded as ``resume_scants_resume_to_optts``
+    # once the resume-checkpoint prefix is applied) convert a finished ScanTS scan
+    # into a one-shot OptTS attempt. Match either (substring, to tolerate the
+    # ``resume_`` prefix).
     fallback_used = any(
-        str(action).startswith("scants_fallback_to_optts")
+        "scants_fallback_to_optts" in str(action) or "scants_resume_to_optts" in str(action)
         for attempt in state.get("attempts", [])
         if isinstance(attempt, dict)
         for action in (attempt.get("patch_actions") or [])
     )
-    # Once the one-shot OptTS fallback has been prepared, the scan already finished
-    # and bracketed a maximum, so the ScanTS recipe chain is spent. Mirror the live
-    # retry path (which raises scants_recipes_exhausted after the fallback fails):
-    # recognize exhaustion even when the last recorded attempt is the failed OptTS
-    # fallback itself -- its input is no longer ScanTS and its output has no surface
-    # table, so the checks below would otherwise return False and the resume path
-    # would re-run the OptTS input as further retries.
+    # Once the OptTS conversion has been prepared, the scan already finished and
+    # bracketed a maximum, so the ScanTS recipe chain is spent. Mirror the live retry
+    # path (which raises scants_recipes_exhausted after the fallback fails): recognize
+    # exhaustion even when the last recorded attempt is the failed OptTS attempt
+    # itself -- its input is no longer ScanTS and its output has no surface table, so
+    # the checks below would otherwise return False and the resume path would re-run
+    # the OptTS input as further retries.
     if fallback_used:
         return True
 
