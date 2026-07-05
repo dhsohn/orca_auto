@@ -5,8 +5,11 @@
 #
 # Fully-staged Python files are auto-formatted and re-staged so a missing
 # `ruff format` can never reach CI (the failure that motivated this hook). A
-# file with BOTH staged and unstaged changes is only checked, never rewritten,
-# so the hook cannot silently stage unstaged hunks.
+# file with both staged and unstaged changes is never rewritten, so the hook
+# can't silently stage unstaged hunks; its STAGED snapshot is still checked.
+# Ruff runs against the staged snapshot (`git show :file`), not the worktree,
+# because that snapshot — not the worktree — is what the commit records; a
+# partially staged file can differ, and only the staged bytes reach CI.
 #
 # Bypass with `git commit --no-verify`. Enable with:
 #   git config core.hooksPath .githooks
@@ -25,28 +28,32 @@ fi
 mapfile -t py_files < <(git diff --cached --name-only --diff-filter=ACM -- '*.py')
 
 if ((${#py_files[@]})); then
-  fully_staged=()
+  # Auto-format only fully-staged files: their worktree matches the index, so
+  # re-staging cannot pull in unrelated unstaged hunks. `git diff --quiet -- f`
+  # is 0 exactly when f has no unstaged changes.
   for f in "${py_files[@]}"; do
-    # `git diff --quiet -- <f>` is 0 when the file has no unstaged changes.
-    if git diff --quiet -- "$f"; then
-      fully_staged+=("$f")
+    if git diff --quiet -- "$f" && ! "$PY" -m ruff format --check -- "$f" >/dev/null 2>&1; then
+      echo "[pre-commit] ruff format: reformatting and re-staging $f"
+      "$PY" -m ruff format -- "$f"
+      git add -- "$f"
     fi
   done
 
-  if ((${#fully_staged[@]})); then
-    if ! "$PY" -m ruff format --check -- "${fully_staged[@]}" >/dev/null 2>&1; then
-      echo "[pre-commit] ruff format: reformatting and re-staging"
-      "$PY" -m ruff format -- "${fully_staged[@]}"
-      git add -- "${fully_staged[@]}"
+  # Check each file's STAGED snapshot via stdin. For a partially staged file the
+  # worktree differs from the index; checking the worktree would let unformatted
+  # staged content pass here and then fail CI's `ruff format --check`.
+  echo "[pre-commit] ruff check + format --check (staged content)"
+  staged_status=0
+  for f in "${py_files[@]}"; do
+    if ! git show ":$f" | "$PY" -m ruff check --stdin-filename "$f" -; then
+      staged_status=1
     fi
-  fi
-
-  echo "[pre-commit] ruff check"
-  "$PY" -m ruff check -- "${py_files[@]}"
-
-  echo "[pre-commit] ruff format --check"
-  if ! "$PY" -m ruff format --check -- "${py_files[@]}"; then
-    echo "[pre-commit] Unformatted staged file(s). Run: $PY -m ruff format ${py_files[*]}" >&2
+    if ! git show ":$f" | "$PY" -m ruff format --check --stdin-filename "$f" - >/dev/null 2>&1; then
+      echo "[pre-commit] staged $f is not formatted. Run: ruff format '$f' && git add '$f'" >&2
+      staged_status=1
+    fi
+  done
+  if ((staged_status)); then
     exit 1
   fi
 fi
