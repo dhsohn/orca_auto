@@ -77,6 +77,34 @@ def test_scants_route_is_classified_as_ts_freq(tmp_path: Path) -> None:
     assert result.status == "failed"
 
 
+def test_parse_frequencies_uses_final_vibrational_frequency_block(tmp_path: Path) -> None:
+    out_file = tmp_path / "multi_freq.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "! B3LYP def2-SVP Freq",
+                "VIBRATIONAL FREQUENCIES",
+                "-----------------------",
+                "  0:      -500.00 cm**-1",
+                "  1:       120.00 cm**-1",
+                "-----------------------",
+                "VIBRATIONAL FREQUENCIES",
+                "-----------------------",
+                "  0:        -5.00 cm**-1",
+                "  1:       130.00 cm**-1",
+                "-----------------------",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output(str(out_file))
+
+    assert result.has_imaginary_freq is False
+    assert result.lowest_freq_cm1 == pytest.approx(130.0)
+
+
 # ---------------------------------------------------------------------------
 # parse_opt_progress tests
 # ---------------------------------------------------------------------------

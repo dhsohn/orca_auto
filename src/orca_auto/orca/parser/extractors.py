@@ -83,11 +83,11 @@ def parse_frequencies(text: str) -> tuple[bool | None, float | None]:
     Returns:
         (has_imaginary_freq, lowest_freq_cm1)
     """
-    section_match = _FREQ_SECTION_RE.search(text)
-    if section_match is None:
+    section_matches = list(_FREQ_SECTION_RE.finditer(text))
+    if not section_matches:
         return (None, None)
 
-    section = section_match.group(1)
+    section = section_matches[-1].group(1)
     freq_values = [float(v) for v in _FREQ_VALUE_RE.findall(section)]
 
     if not freq_values:

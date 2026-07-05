@@ -228,11 +228,17 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
         # completion path first. Otherwise such a job -- still tracked as running --
         # would be force-terminated and requeued below, and needlessly re-executed
         # from scratch on the next worker start.
-        self._check_completed_jobs()
-        if not self._running:
+        retained_completed_ids: set[str] = set()
+        self._check_completed_jobs(retained_completed_ids=retained_completed_ids)
+        jobs_to_shutdown = [
+            (queue_id, job)
+            for queue_id, job in self._running_jobs()
+            if queue_id not in retained_completed_ids
+        ]
+        if not jobs_to_shutdown:
             return
-        self._before_shutdown_all(len(self._running))
-        for queue_id, job in self._running_jobs():
+        self._before_shutdown_all(len(jobs_to_shutdown))
+        for queue_id, job in jobs_to_shutdown:
             self._shutdown_running_job(queue_id, job)
             self._discard_running_job(queue_id)
 

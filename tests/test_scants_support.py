@@ -560,6 +560,35 @@ def test_failed_scants_retry_extends_scan_endpoint_in_reaction_direction(
         assert original not in lines
 
 
+def test_failed_scants_retry_removes_moread_from_all_route_lines(tmp_path: Path) -> None:
+    source_inp = tmp_path / "rxn.inp"
+    target_inp = tmp_path / "rxn.retry01.inp"
+    _write_scan_xyz_series(tmp_path, "rxn", count=32)
+    lines = [
+        "! ScanTS B3LYP",
+        "! MORead",
+        '%moinp "stale.gbw"',
+        "%geom",
+        "  Scan",
+        "    B 4 20 = 1.86, 3.40, 32",
+        "  end",
+        "end",
+        "* xyzfile 0 1 input.xyz",
+    ]
+
+    actions = apply_scants_failed_scan_retry_rewrite(
+        lines,
+        retry_number=1,
+        source_inp=source_inp,
+        target_inp=target_inp,
+    )
+
+    assert "route_remove_moread" in actions
+    assert "moinp_removed" in actions
+    assert all("MORead" not in line for line in lines if line.strip().startswith("!"))
+    assert not any(line.strip().lower().startswith("%moinp") for line in lines)
+
+
 def test_resumed_scants_retry_sources_scan_from_executed_resume_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

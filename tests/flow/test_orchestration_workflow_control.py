@@ -543,6 +543,88 @@ def test_advance_workflow_reaction_ts_search_waits_for_all_xtb_children_before_q
     ]
 
 
+def test_advance_workflow_records_reaction_orca_exhaustion_after_sync_failure(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_reaction_orca_exhausts_during_sync",
+        "template_name": "reaction_ts_search",
+        "status": "running",
+        "stages": [
+            {
+                "stage_id": "xtb_path_search_01",
+                "status": "completed",
+                "task": {"engine": "xtb", "status": "completed"},
+                "metadata": {},
+            },
+            {
+                "stage_id": "orca_candidate_01",
+                "status": "running",
+                "task": {"engine": "orca", "status": "running"},
+                "metadata": {},
+            },
+        ],
+        "metadata": {},
+    }
+    append_calls = 0
+
+    def fake_append_reaction_orca_stages(
+        current_payload: dict[str, Any], **_kwargs: object
+    ) -> bool:
+        nonlocal append_calls
+        append_calls += 1
+        orca_stages = [
+            stage
+            for stage in current_payload.get("stages", [])
+            if isinstance(stage, dict)
+            and isinstance(stage.get("task"), dict)
+            and cast(dict[str, Any], stage["task"]).get("engine") == "orca"
+        ]
+        if orca_stages and all(str(stage.get("status")) == "failed" for stage in orca_stages):
+            current_payload.setdefault("metadata", {})["workflow_error"] = {
+                "status": "failed",
+                "scope": "reaction_ts_search_orca_candidate_exhausted",
+                "reason": "ts_candidates_exhausted",
+            }
+        return False
+
+    def fake_sync_orca_stage(stage: dict[str, Any], **_kwargs: object) -> None:
+        task = stage.get("task")
+        if isinstance(task, dict) and task.get("engine") == "orca":
+            stage["status"] = "failed"
+            task["status"] = "failed"
+
+    deps = orchestration_deps(
+        overrides={
+            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
+            "load_workflow_payload": lambda workspace_dir: payload,
+            "now_utc_iso": lambda: "2026-04-22T10:00:00+00:00",
+            "_sync_crest_stage": lambda stage, **kwargs: None,
+            "_append_reaction_xtb_stages": lambda current_payload, **kwargs: False,
+            "_sync_xtb_stage": lambda stage, **kwargs: None,
+            "_clear_reaction_xtb_handoff_error_if_recovering": lambda current_payload: None,
+            "_append_reaction_orca_stages": fake_append_reaction_orca_stages,
+            "_sync_orca_stage": fake_sync_orca_stage,
+            "write_workflow_payload": lambda workspace_dir, current_payload: None,
+            "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
+        }
+    )
+
+    result = orchestration.advance_workflow(
+        target="wf_reaction_orca_exhausts_during_sync",
+        workflow_root=tmp_path,
+        submit_ready=True,
+        deps=deps,
+    )
+
+    assert append_calls == 2
+    assert result["status"] == "failed"
+    assert result["metadata"]["workflow_error"]["scope"] == (
+        "reaction_ts_search_orca_candidate_exhausted"
+    )
+
+
 def test_advance_workflow_conformer_screening_queues_twenty_orca_children_after_crest_completion(
     tmp_path: Path,
 ) -> None:
@@ -607,6 +689,85 @@ def test_advance_workflow_conformer_screening_queues_twenty_orca_children_after_
     assert len(synced_orca_stage_ids) == 20
     assert synced_orca_stage_ids[0] == "orca_conformer_01"
     assert synced_orca_stage_ids[-1] == "orca_conformer_20"
+
+
+def test_advance_workflow_records_conformer_orca_exhaustion_after_sync_failure(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_conformer_orca_exhausts_during_sync",
+        "template_name": "conformer_screening",
+        "status": "running",
+        "stages": [
+            {
+                "stage_id": "crest_conformer_01",
+                "status": "completed",
+                "task": {"engine": "crest", "status": "completed"},
+                "metadata": {},
+            },
+            {
+                "stage_id": "orca_conformer_01",
+                "status": "running",
+                "task": {"engine": "orca", "status": "running"},
+                "metadata": {},
+            },
+        ],
+        "metadata": {},
+    }
+    append_calls = 0
+
+    def fake_append_crest_orca_stages(current_payload: dict[str, Any], **_kwargs: object) -> bool:
+        nonlocal append_calls
+        append_calls += 1
+        orca_stages = [
+            stage
+            for stage in current_payload.get("stages", [])
+            if isinstance(stage, dict)
+            and isinstance(stage.get("task"), dict)
+            and cast(dict[str, Any], stage["task"]).get("engine") == "orca"
+        ]
+        if orca_stages and all(str(stage.get("status")) == "failed" for stage in orca_stages):
+            current_payload.setdefault("metadata", {})["workflow_error"] = {
+                "status": "failed",
+                "scope": "conformer_screening_orca_conformers_exhausted",
+                "reason": "conformers_failed",
+            }
+        return False
+
+    def fake_sync_orca_stage(stage: dict[str, Any], **_kwargs: object) -> None:
+        task = stage.get("task")
+        if isinstance(task, dict) and task.get("engine") == "orca":
+            stage["status"] = "failed"
+            task["status"] = "failed"
+
+    deps = orchestration_deps(
+        overrides={
+            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
+            "load_workflow_payload": lambda workspace_dir: payload,
+            "now_utc_iso": lambda: "2026-04-22T10:30:00+00:00",
+            "_sync_crest_stage": lambda stage, **kwargs: None,
+            "_sync_xtb_stage": lambda stage, **kwargs: None,
+            "_clear_reaction_xtb_handoff_error_if_recovering": lambda current_payload: None,
+            "_append_crest_orca_stages": fake_append_crest_orca_stages,
+            "_sync_orca_stage": fake_sync_orca_stage,
+            "write_workflow_payload": lambda workspace_dir, current_payload: None,
+            "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
+        }
+    )
+
+    result = orchestration.advance_workflow(
+        target="wf_conformer_orca_exhausts_during_sync",
+        workflow_root=tmp_path,
+        submit_ready=True,
+        deps=deps,
+    )
+
+    assert append_calls == 2
+    assert result["status"] == "failed"
+    assert result["metadata"]["workflow_error"]["scope"] == (
+        "conformer_screening_orca_conformers_exhausted"
+    )
 
 
 def test_advance_workflow_reopens_completed_conformer_pending_orca_handoff(
@@ -748,3 +909,71 @@ def test_advance_workflow_auto_cancels_active_siblings_after_failure(
     assert result["stages"][2]["task"]["status"] == "cancelled"
     assert result["metadata"]["final_child_sync_pending"] is True
     assert result["metadata"]["final_child_sync_completed_at"] == ""
+
+
+def test_advance_workflow_auto_cancels_active_children_for_submission_failed_status(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_submission_failed_cancel",
+        "template_name": "reaction_ts_search",
+        "status": "submission_failed",
+        "stages": [
+            {
+                "stage_id": "crest_reactant",
+                "status": "running",
+                "task": {"engine": "crest", "status": "running"},
+                "metadata": {"queue_id": "q_reactant"},
+            },
+            {
+                "stage_id": "xtb_pending",
+                "status": "planned",
+                "task": {"engine": "xtb", "status": "planned"},
+                "metadata": {},
+            },
+        ],
+        "metadata": {},
+    }
+    crest_cancel_calls: list[dict[str, Any]] = []
+
+    def fake_crest_cancel_target(**kwargs: Any) -> dict[str, Any]:
+        crest_cancel_calls.append(dict(kwargs))
+        return {"status": "cancel_requested", "queue_id": kwargs["target"]}
+
+    deps = orchestration_deps(
+        overrides={
+            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
+            "load_workflow_payload": lambda workspace_dir: payload,
+            "now_utc_iso": lambda: "2026-04-24T01:00:00+00:00",
+            "_sync_crest_stage": lambda stage, **kwargs: None,
+            "_sync_xtb_stage": lambda stage, **kwargs: None,
+            "_clear_reaction_xtb_handoff_error_if_recovering": lambda current_payload: None,
+            "_sync_orca_stage": lambda stage, **kwargs: None,
+            "crest_cancel_target": fake_crest_cancel_target,
+            "write_workflow_payload": lambda workspace_dir, current_payload: None,
+            "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
+        }
+    )
+
+    result = orchestration.advance_workflow(
+        target="wf_submission_failed_cancel",
+        workflow_root=tmp_path,
+        crest_config="crest.yaml",
+        submit_ready=True,
+        deps=deps,
+    )
+
+    assert result["status"] == "submission_failed"
+    assert crest_cancel_calls == [
+        {
+            "target": "q_reactant",
+            "config_path": "crest.yaml",
+        }
+    ]
+    assert result["stages"][0]["status"] == "cancel_requested"
+    assert result["stages"][0]["task"]["status"] == "cancel_requested"
+    assert result["stages"][1]["status"] == "cancelled"
+    assert result["stages"][1]["task"]["status"] == "cancelled"
+    assert result["metadata"]["sync_only"] is True
+    assert result["metadata"]["final_child_sync_pending"] is True

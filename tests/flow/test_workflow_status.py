@@ -20,6 +20,13 @@ def test_workflow_status_helpers_cover_terminal_attention_and_current_stage_sele
         )
         is False
     )
+    assert workflow_status.workflow_stage_is_terminal({"status": "completed"}) is True
+    assert (
+        workflow_status.workflow_stage_is_terminal(
+            {"status": "completed", "task_status": "unknown"}
+        )
+        is True
+    )
     assert workflow_status.select_current_stage([]) == {}
     assert workflow_status.select_current_stage(
         [
@@ -32,6 +39,12 @@ def test_workflow_status_helpers_cover_terminal_attention_and_current_stage_sele
             {"stage_id": "xtb", "status": "running", "task_status": "running"},
         ]
     ) == {"stage_id": "xtb", "status": "running", "task_status": "running"}
+    assert workflow_status.select_current_stage(
+        [
+            {"stage_id": "taskless", "status": "completed", "task_status": "unknown"},
+            {"stage_id": "orca", "status": "running", "task_status": "running"},
+        ]
+    ) == {"stage_id": "orca", "status": "running", "task_status": "running"}
     assert workflow_status.select_current_stage(
         [{"stage_id": "done", "status": "completed", "task_status": "completed"}]
     ) == {"stage_id": "done", "status": "completed", "task_status": "completed"}

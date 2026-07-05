@@ -127,6 +127,8 @@ def _recompute_workflow_status(payload: dict[str, Any]) -> str:
 
 def test_workflow_sync_only_and_active_children_cover_stage_task_and_downstream() -> None:
     assert _workflow_sync_only({"status": "completed"}) is True
+    assert _workflow_sync_only({"status": "failed"}) is True
+    assert _workflow_sync_only({"status": "submission_failed"}) is True
     assert _workflow_sync_only({"status": "planned"}) is False
     assert (
         _workflow_sync_only(
@@ -518,6 +520,11 @@ def test_completed_crest_roles_ignore_stale_completed_stage_when_newer_stage_is_
     ("payload", "expected"),
     [
         ({"metadata": {"workflow_error": {"status": "failed"}}, "stages": []}, "failed"),
+        ({"status": "failed", "stages": [{"status": "completed"}]}, "failed"),
+        (
+            {"status": "submission_failed", "stages": [{"status": "planned"}]},
+            "submission_failed",
+        ),
         ({"stages": [{"status": "submission_failed"}]}, "failed"),
         ({"status": "cancel_requested", "stages": [{"status": "running"}]}, "cancel_requested"),
         ({"status": "cancel_requested", "stages": [{"status": "completed"}]}, "cancelled"),

@@ -14,7 +14,8 @@ from .statuses import AnalyzerStatus
 logger = logging.getLogger(__name__)
 
 
-NEG_FREQ_RE = re.compile(r"(^|\s)(-\d+\.\d+)\s*cm\*\*-1", re.IGNORECASE)
+NEG_FREQ_RE = re.compile(r"(^|\s)(-\d+(?:\.\d+)?)\s*cm\*\*-1", re.IGNORECASE)
+IMAGINARY_FREQ_THRESHOLD_CM1 = 10.0
 VIB_FREQ_HEADER = "VIBRATIONAL FREQUENCIES"
 
 _DEFAULT_TAIL_BYTES = 64 * 1024
@@ -53,14 +54,21 @@ class OutMarkers(TypedDict):
     memory_error: bool
     geometry_zero_distance: bool
     geom_not_converged: bool
+    last_opt_converged: bool | None
     total_run_time_seen: bool
 
+
+_OPT_CONVERGED_NEEDLES = ("THE OPTIMIZATION HAS CONVERGED", "OPTIMIZATION RUN DONE")
+_OPT_NOT_CONVERGED_NEEDLES = (
+    "THE OPTIMIZATION DID NOT CONVERGE",
+    "OPTIMIZATION HAS NOT YET CONVERGED",
+)
 
 _MARKER_RULES: tuple[tuple[BooleanMarkerName, tuple[str, ...]], ...] = (
     ("terminated_normally", NORMAL_TERMINATION_NEEDLES),
     ("total_run_time_seen", ("TOTAL RUN TIME",)),
     ("irc_marker_found", ("IRC PATH SUMMARY", "IRC-DRV")),
-    ("opt_converged", ("THE OPTIMIZATION HAS CONVERGED", "OPTIMIZATION RUN DONE")),
+    ("opt_converged", _OPT_CONVERGED_NEEDLES),
     ("scf_error", ("SCF NOT CONVERGED", "SCF CONVERGENCE FAILED")),
     ("scfgrad_abort", ("ORCA FINISHED BY ERROR TERMINATION IN SCF GRADIENT",)),
     ("disk_io_error", ("COULD NOT WRITE TO DISK", "NO SPACE LEFT ON DEVICE")),
@@ -73,7 +81,7 @@ _MARKER_RULES: tuple[tuple[BooleanMarkerName, tuple[str, ...]], ...] = (
     ),
     (
         "geom_not_converged",
-        ("THE OPTIMIZATION DID NOT CONVERGE", "OPTIMIZATION HAS NOT YET CONVERGED"),
+        _OPT_NOT_CONVERGED_NEEDLES,
     ),
 )
 
@@ -101,6 +109,7 @@ def _default_markers(out_path: Path) -> OutMarkers:
         "memory_error": False,
         "geometry_zero_distance": False,
         "geom_not_converged": False,
+        "last_opt_converged": None,
         "total_run_time_seen": False,
     }
 
@@ -121,6 +130,10 @@ def _scan_line_for_markers(line: str, markers: OutMarkers) -> None:
     upper = line.upper()
     if "MULTIPLICITY" in upper and "IMPOSSIBLE" in upper:
         markers["multiplicity_impossible"] = True
+    if any(needle in upper for needle in _OPT_CONVERGED_NEEDLES):
+        markers["last_opt_converged"] = True
+    if any(needle in upper for needle in _OPT_NOT_CONVERGED_NEEDLES):
+        markers["last_opt_converged"] = False
     for marker_name, needles in _MARKER_RULES:
         if any(needle in upper for needle in needles):
             _set_marker(markers, marker_name)
@@ -176,7 +189,7 @@ def _marker_error_analysis(markers: OutMarkers) -> OutAnalysis | None:
     for marker_name, status, reason in checks:
         if _marker_is_set(markers, marker_name):
             return OutAnalysis(status=status, reason=reason, markers=markers)
-    if markers["geom_not_converged"] and not markers["terminated_normally"]:
+    if markers["last_opt_converged"] is False:
         return OutAnalysis(
             status=AnalyzerStatus.GEOM_NOT_CONVERGED,
             reason="geometry_not_converged",
@@ -228,7 +241,11 @@ def _scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool]:
             last_vib_section_negative_count = 0
             continue
 
-        neg_count = sum(1 for _ in NEG_FREQ_RE.finditer(line))
+        neg_count = sum(
+            1
+            for match in NEG_FREQ_RE.finditer(line)
+            if abs(float(match.group(2))) > IMAGINARY_FREQ_THRESHOLD_CM1
+        )
         total_negative_count += neg_count
         if saw_vib_section:
             last_vib_section_negative_count += neg_count

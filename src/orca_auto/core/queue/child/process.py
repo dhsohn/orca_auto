@@ -9,6 +9,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.statuses import STATUS_CANCELLED, normalize_status
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -107,6 +109,70 @@ def live_queue_ids_for_slots(
     }
 
 
+def live_queue_slot_keys_for_slots(
+    admission_root: str | Path,
+    *,
+    list_slots_fn: Callable[[str | Path], list[Any]],
+) -> tuple[set[tuple[str, str]], set[str]]:
+    scoped_keys: set[tuple[str, str]] = set()
+    unscoped_ids: set[str] = set()
+    for slot in list_slots_fn(admission_root):
+        queue_id = str(getattr(slot, "queue_id", "")).strip()
+        if not queue_id:
+            continue
+        work_dir = _normalized_work_dir(getattr(slot, "work_dir", ""))
+        if work_dir:
+            scoped_keys.add((queue_id, work_dir))
+        else:
+            unscoped_ids.add(queue_id)
+    return scoped_keys, unscoped_ids
+
+
+def _normalized_work_dir(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return str(Path(text).expanduser().resolve())
+
+
+def _queue_entry_work_dir(entry: Any) -> str:
+    metadata = getattr(entry, "metadata", {})
+    if isinstance(metadata, dict):
+        for key in ("job_dir", "reaction_dir", "work_dir"):
+            work_dir = _normalized_work_dir(metadata.get(key))
+            if work_dir:
+                return work_dir
+    for attr in ("work_dir", "reaction_dir", "job_dir"):
+        work_dir = _normalized_work_dir(getattr(entry, attr, ""))
+        if work_dir:
+            return work_dir
+    return ""
+
+
+def _entry_has_live_slot(
+    entry: Any,
+    *,
+    queue_id: str,
+    scoped_live_slots: set[tuple[str, str]],
+    unscoped_live_queue_ids: set[str],
+) -> bool:
+    work_dir = _queue_entry_work_dir(entry)
+    if not work_dir:
+        return any(live_queue_id == queue_id for live_queue_id, _ in scoped_live_slots) or (
+            queue_id in unscoped_live_queue_ids
+        )
+    if (queue_id, work_dir) in scoped_live_slots:
+        return True
+    scoped_ids = {live_queue_id for live_queue_id, _ in scoped_live_slots}
+    return queue_id in unscoped_live_queue_ids and queue_id not in scoped_ids
+
+
+def _requeue_result_is_cancelled(result: Any) -> bool:
+    status = getattr(result, "status", None)
+    status = getattr(status, "value", status)
+    return normalize_status(status) == STATUS_CANCELLED
+
+
 def status_matches(value: Any, expected: Any) -> bool:
     actual_value = getattr(value, "value", value)
     expected_value = getattr(expected, "value", expected)
@@ -127,19 +193,29 @@ def reconcile_orphaned_child_queue_entries(
     mark_recovery_pending_fn: Callable[[Any, Any], object],
 ) -> None:
     reconcile_stale_slots_fn(admission_root)
-    live_queue_ids = live_queue_ids_for_slots(admission_root, list_slots_fn=list_slots_fn)
+    scoped_live_slots, unscoped_live_queue_ids = live_queue_slot_keys_for_slots(
+        admission_root,
+        list_slots_fn=list_slots_fn,
+    )
 
     for queue_root in queue_roots_fn(cfg):
         for entry in list_queue_fn(queue_root):
             if not status_matches(getattr(entry, "status", None), running_status):
                 continue
             queue_id = str(getattr(entry, "queue_id", ""))
-            if queue_id in live_queue_ids:
+            if _entry_has_live_slot(
+                entry,
+                queue_id=queue_id,
+                scoped_live_slots=scoped_live_slots,
+                unscoped_live_queue_ids=unscoped_live_queue_ids,
+            ):
                 continue
             if getattr(entry, "cancel_requested", False):
                 mark_cancelled_fn(queue_root, queue_id, error="cancel_requested")
             else:
-                requeue_running_entry_fn(queue_root, queue_id)
+                updated = requeue_running_entry_fn(queue_root, queue_id)
+                if _requeue_result_is_cancelled(updated):
+                    continue
                 mark_recovery_pending_fn(cfg, entry)
 
 
@@ -211,6 +287,7 @@ def _send_process_cancellation_signal(proc: Any, cancel_signal: int) -> None:
 __all__ = [
     "build_background_worker_command",
     "live_queue_ids_for_slots",
+    "live_queue_slot_keys_for_slots",
     "reconcile_orphaned_child_queue_entries",
     "request_job_cancellation",
     "shutdown_child_process_with_grace",

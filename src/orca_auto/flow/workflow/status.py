@@ -32,9 +32,11 @@ def workflow_status_is_terminal(value: Any) -> bool:
 
 
 def workflow_stage_is_terminal(stage_summary: dict[str, Any]) -> bool:
-    return all(
-        workflow_status_is_terminal(stage_summary.get(key)) for key in ("status", "task_status")
-    )
+    stage_status = stage_summary.get("status")
+    task_status = normalize_workflow_status(stage_summary.get("task_status"))
+    if task_status in {"", "unknown"}:
+        return workflow_status_is_terminal(stage_status)
+    return workflow_status_is_terminal(stage_status) and workflow_status_is_terminal(task_status)
 
 
 def select_current_stage(stage_summaries: Iterable[Any]) -> dict[str, Any]:

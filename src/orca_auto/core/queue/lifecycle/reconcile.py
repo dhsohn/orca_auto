@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -45,7 +46,12 @@ def live_worker_pid_slots(
         except (TypeError, ValueError):
             continue
         if worker_job_pid and pid_is_alive_fn(worker_job_pid):
-            slots.append(SimpleNamespace(queue_id=entry.queue_id))
+            slots.append(
+                SimpleNamespace(
+                    queue_id=entry.queue_id,
+                    work_dir=str(Path(job_dir_fn(entry)).expanduser().resolve()),
+                )
+            )
     return slots
 
 

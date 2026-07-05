@@ -64,6 +64,8 @@ def existing_completed_out(selected_inp: Path) -> dict[str, Any] | None:
         mode_inp = out_path.with_suffix(".inp")
         if not mode_inp.exists():
             mode_inp = selected_inp
+        if _out_is_older_than_inputs(out_path, selected_inp=selected_inp, mode_inp=mode_inp):
+            continue
         mode = detect_completion_mode(mode_inp)
         analysis = analyze_output(out_path, mode)
         if analysis.status != AnalyzerStatus.COMPLETED:
@@ -73,6 +75,11 @@ def existing_completed_out(selected_inp: Path) -> dict[str, Any] | None:
             "analysis": analysis,
         }
     return None
+
+
+def _out_is_older_than_inputs(out_path: Path, *, selected_inp: Path, mode_inp: Path) -> bool:
+    newest_input_mtime_ns = max(selected_inp.stat().st_mtime_ns, mode_inp.stat().st_mtime_ns)
+    return out_path.stat().st_mtime_ns < newest_input_mtime_ns
 
 
 def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool:

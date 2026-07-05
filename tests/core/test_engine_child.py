@@ -235,6 +235,51 @@ def test_run_engine_worker_child_job_requeues_and_marks_recovery_on_shutdown(
     assert released == [(cfg.admission_root, "slot-1")]
 
 
+def test_run_engine_worker_child_job_skips_recovery_when_requeue_cancels(
+    tmp_path: Path,
+) -> None:
+    cfg = SimpleNamespace(admission_root=tmp_path / "admission")
+    entry = SimpleNamespace(queue_id="queue-1", status="running")
+    context = SimpleNamespace(job_dir=tmp_path / "job")
+    requeued: list[tuple[Path, str]] = []
+    recovery: list[tuple[Any, Any, str]] = []
+    released: list[tuple[Path, str]] = []
+
+    def raise_shutdown(*_args: Any, **_kwargs: Any) -> None:
+        raise _WorkerShutdownRequested(context)
+
+    def requeue(root: Path, queue_id: str) -> SimpleNamespace:
+        requeued.append((root, queue_id))
+        return SimpleNamespace(status=SimpleNamespace(value="cancelled"))
+
+    rc = engine_child.run_engine_worker_child_job(
+        spec=engine_child.WorkerChildRunSpec(
+            shutdown_exception_type=_WorkerShutdownRequested,
+            entry_ready_fn=lambda loaded_entry: loaded_entry.status == "running",
+        ),
+        config_path="/tmp/orca_auto.yaml",
+        queue_root=tmp_path / "queue",
+        queue_id="queue-1",
+        admission_token="slot-1",
+        load_config_fn=lambda _path: cfg,
+        find_queue_entry_fn=lambda _root, _queue_id: entry,
+        admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
+        release_slot_fn=lambda root, token: released.append((Path(root), token)),
+        install_signal_handlers_fn=lambda _controller: None,
+        process_dequeued_entry_fn=raise_shutdown,
+        dependencies_fn=lambda: object(),
+        requeue_running_entry_fn=requeue,
+        mark_recovery_pending_context_fn=lambda cfg_obj, context_obj, *, reason: recovery.append(
+            (cfg_obj, context_obj, reason)
+        ),
+    )
+
+    assert rc == 0
+    assert requeued == [((tmp_path / "queue").resolve(), "queue-1")]
+    assert recovery == []
+    assert released == [(cfg.admission_root, "slot-1")]
+
+
 def test_outcome_exit_code_maps_terminal_statuses() -> None:
     assert (
         engine_child.outcome_exit_code(SimpleNamespace(result=SimpleNamespace(status="completed")))

@@ -10,7 +10,6 @@ from .input_blocks import (
     MOINP_RE,
     file_route_lines,
     find_block_range,
-    find_route_idx,
     nonempty_file,
     replace_geometry_with_xyzfile,
     route_line_indices,
@@ -418,19 +417,19 @@ def _remove_checkpoint_restart_directives(lines: list[str]) -> list[str]:
 
 
 def _remove_route_keywords(lines: list[str], keywords: set[str]) -> bool:
-    route_idx = find_route_idx(lines)
-    if route_idx is None:
-        return False
-    stripped = lines[route_idx].strip()
-    if not stripped.startswith("!"):
-        return False
+    changed = False
+    for route_idx in route_line_indices(lines):
+        stripped = lines[route_idx].strip()
+        if not stripped.startswith("!"):
+            continue
 
-    tokens = stripped[1:].split()
-    kept = [token for token in tokens if token.upper() not in keywords]
-    if len(kept) == len(tokens):
-        return False
-    lines[route_idx] = "! " + " ".join(kept)
-    return True
+        tokens = stripped[1:].split()
+        kept = [token for token in tokens if token.upper() not in keywords]
+        if len(kept) == len(tokens):
+            continue
+        lines[route_idx] = "! " + " ".join(kept)
+        changed = True
+    return changed
 
 
 def _numbered_xyz_index_from_name(name: str) -> int | None:

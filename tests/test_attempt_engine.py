@@ -545,6 +545,8 @@ class TestRetryPolicy(unittest.TestCase):
             opt.write_text("! Opt B3LYP def2-SVP\n", encoding="utf-8")
             optts = root / "optts.inp"
             optts.write_text("! OptTS B3LYP def2-SVP Freq\n", encoding="utf-8")
+            bare_ts = root / "bare_ts.inp"
+            bare_ts.write_text("! TS B3LYP def2-SVP Freq\n", encoding="utf-8")
             scants = root / "scants.inp"
             scants.write_text("! ScanTS B3LYP def2-SVP Freq\n", encoding="utf-8")
             freq = root / "freq.inp"
@@ -554,6 +556,8 @@ class TestRetryPolicy(unittest.TestCase):
             self.assertEqual(effective_max_retries(opt, configured_max_retries=8), 0)
             self.assertEqual(retry_policy_for_input(optts).name, "standalone_ts")
             self.assertEqual(effective_max_retries(optts, configured_max_retries=8), 0)
+            self.assertEqual(retry_policy_for_input(bare_ts).name, "standalone_ts")
+            self.assertEqual(effective_max_retries(bare_ts, configured_max_retries=8), 0)
             self.assertEqual(retry_policy_for_input(scants).name, "scants")
             self.assertEqual(effective_max_retries(scants, configured_max_retries=8), 3)
             self.assertEqual(retry_policy_for_input(freq).name, "freq")

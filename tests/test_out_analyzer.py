@@ -97,6 +97,25 @@ class TestOutAnalyzer(unittest.TestCase):
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.markers["imaginary_frequency_count"], 1)
 
+    def test_ts_ignores_tiny_negative_modes(self) -> None:
+        payload = "\n".join(
+            [
+                "VIBRATIONAL FREQUENCIES",
+                "  1     -5.00 cm**-1",
+                "  2   -450.00 cm**-1",
+                "  3    120.00 cm**-1",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "a.out"
+            out.write_text(payload, encoding="utf-8")
+            result = analyze_output(
+                out, CompletionMode(kind="ts", require_irc=False, route_line="! OptTS")
+            )
+        self.assertEqual(result.status, AnalyzerStatus.COMPLETED)
+        self.assertEqual(result.markers["imaginary_frequency_count"], 1)
+
     def test_ts_not_found(self) -> None:
         payload = "\n".join(
             [
@@ -216,3 +235,53 @@ class TestOutAnalyzer(unittest.TestCase):
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.reason, "normal_termination")
         self.assertTrue(result.markers["total_run_time_seen"])
+
+    def test_normal_terminated_unconverged_opt_is_not_completed(self) -> None:
+        payload = "\n".join(
+            [
+                "THE OPTIMIZATION DID NOT CONVERGE",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "a.out"
+            out.write_text(payload, encoding="utf-8")
+            result = analyze_output(
+                out, CompletionMode(kind="opt", require_irc=False, route_line="! Opt")
+            )
+        self.assertEqual(result.status, AnalyzerStatus.GEOM_NOT_CONVERGED)
+        self.assertEqual(result.reason, "geometry_not_converged")
+
+    def test_normal_terminated_later_converged_opt_overrides_earlier_warning(self) -> None:
+        payload = "\n".join(
+            [
+                "OPTIMIZATION HAS NOT YET CONVERGED",
+                "THE OPTIMIZATION HAS CONVERGED",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "a.out"
+            out.write_text(payload, encoding="utf-8")
+            result = analyze_output(
+                out, CompletionMode(kind="opt", require_irc=False, route_line="! Opt")
+            )
+        self.assertEqual(result.status, AnalyzerStatus.COMPLETED)
+        self.assertEqual(result.reason, "normal_termination")
+
+    def test_normal_terminated_later_unconverged_opt_overrides_earlier_convergence(self) -> None:
+        payload = "\n".join(
+            [
+                "THE OPTIMIZATION HAS CONVERGED",
+                "THE OPTIMIZATION DID NOT CONVERGE",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "a.out"
+            out.write_text(payload, encoding="utf-8")
+            result = analyze_output(
+                out, CompletionMode(kind="opt", require_irc=False, route_line="! Opt")
+            )
+        self.assertEqual(result.status, AnalyzerStatus.GEOM_NOT_CONVERGED)
+        self.assertEqual(result.reason, "geometry_not_converged")
