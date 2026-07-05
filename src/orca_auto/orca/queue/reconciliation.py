@@ -175,6 +175,26 @@ def _reconcile_entry(
         logger.info("Reconciled orphaned entry %s -> %s (from job_report)", queue_id, status)
         return updated
 
+    if entry.cancel_requested:
+        # A cancel was requested while this entry was running, then the worker
+        # process was lost before it could honor it. Re-queueing to PENDING would
+        # strand the entry forever: dequeue skips cancel_requested entries, so it
+        # would never be re-run, and no path transitions a PENDING+cancel_requested
+        # entry to a terminal state. Honor the cancellation instead, mirroring
+        # store.requeue_running_entry's cancel chokepoint, and clear the flag so the
+        # terminal entry stops advertising a pending cancellation.
+        updated = replace(
+            deps.apply_terminal_reconciliation(
+                entry,
+                status=QueueStatus.CANCELLED.value,
+                run_id=None,
+                finished_at=None,
+            ),
+            cancel_requested=False,
+        )
+        logger.info("Reconciled orphaned entry %s -> cancelled (cancel_requested)", queue_id)
+        return updated
+
     updated = replace(entry, status=QueueStatus.PENDING, started_at="")
     logger.info("Reconciled orphaned entry %s -> pending (re-queue)", queue_id)
     return updated
