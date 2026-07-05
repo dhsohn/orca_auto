@@ -13,6 +13,8 @@ from .input_blocks import (
 
 MAXCORE_RE = re.compile(r"^\s*%maxcore\s+(\d+)", re.IGNORECASE)
 NPROCS_RE = re.compile(r"\bnprocs\s+(\d+)\b", re.IGNORECASE)
+# ORCA route-line shorthand "! PALn" (PAL2..PAL8) requests n parallel processes.
+PAL_ROUTE_RE = re.compile(r"\bPAL(\d+)\b", re.IGNORECASE)
 
 
 def read_maxcore(lines: list[str]) -> int | None:
@@ -27,6 +29,34 @@ def read_maxcore(lines: list[str]) -> int | None:
 
 
 def read_nprocs(lines: list[str]) -> int | None:
+    # An explicit %pal block wins over the route-line shorthand; fall back to
+    # "! PALn" so a PAL-only input is not treated as having no nprocs (which would
+    # inject a conflicting %pal block and compute the wrong resource_request).
+    block_value = _read_nprocs_from_pal_block(lines)
+    if block_value is not None:
+        return block_value
+    return _read_nprocs_from_pal_shorthand(lines)
+
+
+def _read_nprocs_from_pal_shorthand(lines: list[str]) -> int | None:
+    for line in lines:
+        stripped = line.lstrip()
+        if not stripped.startswith("!"):
+            continue
+        route = stripped.split("#", 1)[0]
+        match = PAL_ROUTE_RE.search(route)
+        if not match:
+            continue
+        try:
+            value = int(match.group(1))
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    return None
+
+
+def _read_nprocs_from_pal_block(lines: list[str]) -> int | None:
     in_pal_block = False
     for line in lines:
         block_match = BLOCK_START_RE.match(line)
