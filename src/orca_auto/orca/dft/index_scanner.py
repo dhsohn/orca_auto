@@ -54,11 +54,27 @@ class DFTIndexScanner:
         to_index = {
             path: payload
             for path, payload in discovered.items()
-            if existing.get(path)
-            != (
-                payload[0],
-                payload[1] or "",
-            )
+            if self._needs_reindex(existing.get(path), payload)
         }
         to_remove = set(existing) - set(discovered)
         return to_index, to_remove
+
+    @staticmethod
+    def _needs_reindex(
+        existing_sig: tuple[str, str] | None,
+        payload: tuple[str, str | None],
+    ) -> bool:
+        if existing_sig is None:
+            return True
+        stored_hash, stored_status = existing_sig
+        new_hash, status_override = payload
+        if stored_hash != new_hash:
+            return True
+        # With no run-state override, the stored status is derived purely from the
+        # (unchanged) output content, so a matching hash means nothing changed. The
+        # previous ``status_override or ""`` key compared "" against the non-empty
+        # stored status and thus re-parsed/re-upserted such files on every scan.
+        # Only re-index when an override is present and differs from what is stored.
+        if status_override is None:
+            return False
+        return stored_status != status_override

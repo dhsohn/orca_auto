@@ -7,6 +7,7 @@ import threading
 from pathlib import Path
 
 from orca_auto.orca.dft.index import DFTIndex
+from orca_auto.orca.dft.index_scanner import DFTIndexScanner
 from tests.engine_artifact_helpers import orca_artifact_payload
 
 _COMPLETED_OUT = "\n".join(
@@ -132,6 +133,57 @@ def test_index_calculations_reindexes_when_run_state_status_changes(tmp_path: Pa
     second = index.index_calculations([str(kb_dir)])
     assert second["indexed"] == 1
     assert index.query({})[0]["status"] == "failed"
+
+    index.close()
+
+
+def test_changed_targets_skips_unchanged_file_without_status_override() -> None:
+    scanner = DFTIndexScanner()
+    # Stored: previously indexed with the parsed status; discovered: same hash,
+    # no run-state override. Nothing changed, so it must be skipped (previously it
+    # was re-indexed on every scan because "" != the non-empty stored status).
+    to_index, to_remove = scanner.changed_targets(
+        {"/kb/a.out": ("hash1", "completed")},
+        {"/kb/a.out": ("hash1", None)},
+    )
+    assert to_index == {}
+    assert to_remove == set()
+
+    # A changed override still triggers a re-index (status can change independently
+    # of the output content).
+    changed_status, _ = scanner.changed_targets(
+        {"/kb/a.out": ("hash1", "completed")},
+        {"/kb/a.out": ("hash1", "failed")},
+    )
+    assert set(changed_status) == {"/kb/a.out"}
+
+    # A changed file hash still triggers a re-index.
+    changed_hash, _ = scanner.changed_targets(
+        {"/kb/a.out": ("hash1", "completed")},
+        {"/kb/a.out": ("hash2", None)},
+    )
+    assert set(changed_hash) == {"/kb/a.out"}
+
+
+def test_index_calculations_skips_unchanged_file_with_unrecognized_run_state(
+    tmp_path: Path,
+) -> None:
+    kb_dir = tmp_path / "orca_runs" / "job1"
+    kb_dir.mkdir(parents=True)
+    (kb_dir / "calc.out").write_text(_COMPLETED_OUT, encoding="utf-8")
+    _write_orca_state(kb_dir, status="archived")  # unrecognized -> no status override
+
+    db_path = str(tmp_path / "dft.db")
+    index = DFTIndex()
+    index.initialize(db_path)
+
+    first = index.index_calculations([str(kb_dir.parent)])
+    assert first["indexed"] == 1
+
+    # Unchanged output + no status override: the second scan must skip it.
+    second = index.index_calculations([str(kb_dir.parent)])
+    assert second["indexed"] == 0
+    assert second["skipped"] == 1
 
     index.close()
 
