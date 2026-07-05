@@ -268,6 +268,51 @@ def test_single_point_pairs_by_identical_geometry(tmp_path: Path) -> None:
     assert "wB97M-V,def2-TZVPP,,6.0.1,wB97M-V def2-TZVPP" in csv_text
 
 
+def test_composite_table_ranks_by_single_point_energy(tmp_path: Path) -> None:
+    # SP and opt-level orderings can disagree; with the composite convention
+    # active, E, ΔE, and the ranking must follow E(SP) — otherwise the table
+    # publishes opt-level numbers next to SP-derived G values (Codex #48 P2).
+    min_a = _stage_dir(
+        tmp_path,
+        "min_a",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=(30.0, 120.0),
+        thermo=True,
+    )
+    min_b = _stage_dir(
+        tmp_path,
+        "min_b",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.2,  # opt level prefers min_b ...
+        coords=_COORDS_B,
+        freqs=(35.0, 110.0),
+        thermo=True,
+    )
+    sp_a = _stage_dir(
+        tmp_path, "sp_a", route="wB97M-V def2-TZVPP", energy=-200.9, coords=_COORDS_A
+    )  # ... but the SP level prefers min_a
+    sp_b = _stage_dir(tmp_path, "sp_b", route="wB97M-V def2-TZVPP", energy=-200.5, coords=_COORDS_B)
+
+    payload = _payload(
+        [
+            _orca_stage("orca_min_a", min_a, label="min_a"),
+            _orca_stage("orca_min_b", min_b, label="min_b"),
+            _orca_stage("orca_sp_a", sp_a, label="sp_a"),
+            _orca_stage("orca_sp_b", sp_b, label="sp_b"),
+        ]
+    )
+
+    rendered = render_workflow_si_md(collect_workflow_si_data(payload))
+
+    assert "E(SP)/Eh" in rendered
+    table_rows = [line for line in rendered.splitlines() if line.lstrip().startswith(("1 ", "2 "))]
+    assert "min_a" in table_rows[0] and "-200.900000" in table_rows[0]
+    assert "min_b" in table_rows[1] and "+251.00" in table_rows[1]  # 0.4 Eh at the SP level
+    assert "E, ΔE, and the ranking are at the single-point level" in rendered
+
+
 def test_opt_only_workflow_does_not_claim_frequency_calculations(tmp_path: Path) -> None:
     # The default conformer-screening route is Opt-only (no Freq): the methods
     # paragraph must not assert harmonic frequency calculations that never ran

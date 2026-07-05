@@ -375,28 +375,38 @@ def _methods_lines(data: WorkflowSiData) -> list[str]:
 
 
 def _table_lines(data: WorkflowSiData) -> list[str]:
-    rows = [
-        (entry, energy)
-        for entry in data.entries
-        for energy in (entry.block.result.energy_hartree,)
-        if energy is not None
-    ]
-    if not rows:
+    candidates = [entry for entry in data.entries if entry.block.result.energy_hartree is not None]
+    if not candidates:
         return ["(no completed stationary structures yet)"]
 
-    entries = [entry for entry, _ in rows]
-    all_composite = all(entry.composite_gibbs is not None for entry in entries)
+    all_composite = all(entry.composite_gibbs is not None for entry in candidates)
 
     def gibbs_of(entry: WorkflowSiEntry) -> float | None:
         return entry.composite_gibbs if all_composite else entry.block.result.gibbs_energy
 
-    best_e = min(energy for _, energy in rows)
+    # Under the composite convention every number in a row is at the SP level:
+    # the electronic-energy column, the ΔE baseline, and the ranking follow
+    # E(SP), not the optimization-level energy — the two orderings can differ,
+    # and mixing them would publish a wrong E/ΔE next to a composite G.
+    def energy_of(entry: WorkflowSiEntry) -> float:
+        if all_composite:
+            assert entry.sp_energy is not None  # composite implies a paired SP
+            return entry.sp_energy
+        energy = entry.block.result.energy_hartree
+        assert energy is not None  # filtered above
+        return energy
+
+    rows = sorted(((entry, energy_of(entry)) for entry in candidates), key=lambda pair: pair[1])
+    entries = [entry for entry, _ in rows]
+
+    best_e = rows[0][1]
     gibbs_values = [g for g in (gibbs_of(entry) for entry in entries) if g is not None]
     best_g = min(gibbs_values) if gibbs_values else None
 
     name_width = max(9, *(len(entry.block.name) for entry in entries))
+    e_label = "E(SP)/Eh" if all_composite else "E(el)/Eh"
     header = (
-        f"{'#':>2}  {'structure':<{name_width}}  {'E(el)/Eh':>14}  "
+        f"{'#':>2}  {'structure':<{name_width}}  {e_label:>14}  "
         f"{'G/Eh':>14}  {'ΔE/kcal·mol⁻¹':>14}  {'ΔG/kcal·mol⁻¹':>14}  {'Nimag':>5}"
     )
     lines = [header, "-" * len(header)]
@@ -417,6 +427,7 @@ def _table_lines(data: WorkflowSiData) -> list[str]:
     if all_composite:
         lines.append("")
         lines.append(
+            "E, ΔE, and the ranking are at the single-point level; "
             "G is the composite G = E(SP) + [G − E(el)](opt level); "
             "single points paired by identical geometry."
         )
