@@ -238,21 +238,25 @@ def _scants_surface_exhausted_on_resume(state: RunState, last_attempt: Mapping[s
         if isinstance(attempt, dict)
         for action in (attempt.get("patch_actions") or [])
     )
-    # Once the OptTS conversion has been prepared, the scan already finished and
-    # bracketed a maximum, so the ScanTS recipe chain is spent. Mirror the live retry
-    # path (which raises scants_recipes_exhausted after the fallback fails): recognize
-    # exhaustion even when the last recorded attempt is the failed OptTS attempt
-    # itself -- its input is no longer ScanTS and its output has no surface table, so
-    # the checks below would otherwise return False and the resume path would re-run
-    # the OptTS input as further retries.
-    if fallback_used:
-        return True
-
     inp_raw = _as_non_empty_text(last_attempt.get("inp_path"))
     out_raw = _as_non_empty_text(last_attempt.get("out_path"))
+    last_uses_scants = inp_raw is not None and input_uses_scants(Path(inp_raw))
+
+    # The OptTS conversion is only *spent* once its attempt has actually run and been
+    # recorded -- i.e. the last recorded attempt runs the converted OptTS input, no
+    # longer ScanTS. Recognize exhaustion then, mirroring the live retry path (which
+    # raises scants_recipes_exhausted after the OptTS fails): that attempt's input is
+    # non-ScanTS and its output has no surface table, so the checks below would
+    # otherwise return False and resume would re-run it. But if the last recorded
+    # attempt is still the ScanTS scan, the prepared one-shot OptTS was interrupted
+    # before completing -- fall through so the loop re-runs it exactly once, as the
+    # live path does, instead of exhausting a fallback that never actually ran.
+    if fallback_used and inp_raw is not None and not last_uses_scants:
+        return True
+
     if inp_raw is None or out_raw is None:
         return False
-    if not input_uses_scants(Path(inp_raw)):
+    if not last_uses_scants:
         return False
     if highest_scants_surface_point(Path(out_raw)) is None:
         return False
