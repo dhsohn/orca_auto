@@ -227,6 +227,22 @@ def _scants_surface_exhausted_on_resume(state: RunState, last_attempt: Mapping[s
     already-finished scan. Excludes the fresh zero-distance case, which still
     gets its one OptTS refinement fallback.
     """
+    fallback_used = any(
+        str(action).startswith("scants_fallback_to_optts")
+        for attempt in state.get("attempts", [])
+        if isinstance(attempt, dict)
+        for action in (attempt.get("patch_actions") or [])
+    )
+    # Once the one-shot OptTS fallback has been prepared, the scan already finished
+    # and bracketed a maximum, so the ScanTS recipe chain is spent. Mirror the live
+    # retry path (which raises scants_recipes_exhausted after the fallback fails):
+    # recognize exhaustion even when the last recorded attempt is the failed OptTS
+    # fallback itself -- its input is no longer ScanTS and its output has no surface
+    # table, so the checks below would otherwise return False and the resume path
+    # would re-run the OptTS input as further retries.
+    if fallback_used:
+        return True
+
     inp_raw = _as_non_empty_text(last_attempt.get("inp_path"))
     out_raw = _as_non_empty_text(last_attempt.get("out_path"))
     if inp_raw is None or out_raw is None:
@@ -239,14 +255,9 @@ def _scants_surface_exhausted_on_resume(state: RunState, last_attempt: Mapping[s
     zero_distance = (
         bool(markers.get("geometry_zero_distance")) if isinstance(markers, dict) else (False)
     )
-    fallback_used = any(
-        str(action).startswith("scants_fallback_to_optts")
-        for attempt in state.get("attempts", [])
-        if isinstance(attempt, dict)
-        for action in (attempt.get("patch_actions") or [])
-    )
-    # A fresh zero-distance abort still deserves the one-shot OptTS fallback.
-    return not (zero_distance and not fallback_used)
+    # A fresh zero-distance abort (no fallback used yet) still deserves the one-shot
+    # OptTS fallback, so it is not yet exhausted.
+    return not zero_distance
 
 
 def _resume_terminal_decision(request: ResumeTerminalDecisionRequest) -> int | None:
