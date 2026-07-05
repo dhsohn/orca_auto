@@ -770,6 +770,79 @@ def test_resume_finalizes_finished_scants_scan_as_exhausted(tmp_path: Path) -> N
     assert final_result.get("reason") == "scants_recipes_exhausted"
 
 
+def test_resume_finalizes_failed_optts_fallback_as_exhausted(tmp_path: Path) -> None:
+    # A ScanTS scan finished, its one-shot OptTS fallback ran and failed, then the
+    # worker crashed before the exhaustion decision was recorded. On resume the last
+    # recorded attempt is the failed OptTS fallback (input no longer ScanTS, output
+    # has no surface table), but the ScanTS recipe chain is spent, so the run must be
+    # finalized as scants_recipes_exhausted -- not re-run as further retries.
+    selected_inp = tmp_path / "tsopt.inp"
+    _write_scants_input(selected_inp)
+    scan_out = selected_inp.with_suffix(".out")
+    _write_surface_scan_done_out(scan_out)
+
+    optts_inp = tmp_path / "tsopt.retry01.inp"
+    optts_inp.write_text(
+        "! OptTS B3LYP def2-SVP Freq\n* xyzfile 0 1 tsopt.002.xyz\n", encoding="utf-8"
+    )
+    optts_out = optts_inp.with_suffix(".out")
+    _write_ts_not_found_out(optts_out)
+
+    state = new_state(tmp_path, selected_inp, max_retries=3)
+    state["status"] = "retrying"
+    state["attempts"].append(
+        {
+            "index": 1,
+            "inp_path": str(selected_inp),
+            "out_path": str(scan_out),
+            "return_code": 0,
+            "analyzer_status": "ts_not_found",
+            "analyzer_reason": "geometry_zero_distance",
+            "markers": {"geometry_zero_distance": True},
+            "patch_actions": ["scants_fallback_to_optts", "scants_guess_from_tsopt.002.xyz"],
+            "started_at": "2026-07-03T01:00:00+00:00",
+            "ended_at": "2026-07-03T02:00:00+00:00",
+        }
+    )
+    state["attempts"].append(
+        {
+            "index": 2,
+            "inp_path": str(optts_inp),
+            "out_path": str(optts_out),
+            "return_code": 1,
+            "analyzer_status": "ts_not_found",
+            "analyzer_reason": "ts_criteria_failed",
+            "markers": {"geometry_zero_distance": False},
+            "patch_actions": [],
+            "started_at": "2026-07-03T03:00:00+00:00",
+            "ended_at": "2026-07-03T04:00:00+00:00",
+        }
+    )
+    save_state(tmp_path, state)
+
+    runner = _CaptureSuccessRunner()
+    rc = run_attempts(
+        tmp_path,
+        selected_inp,
+        state,
+        resumed=True,
+        runner=runner,
+        max_retries=3,
+        retry_inp_path=_retry_inp_path,
+        to_resolved_local=lambda raw: Path(raw),
+        emit=lambda _payload: None,
+    )
+    saved = load_state(tmp_path)
+    assert saved is not None
+
+    assert rc == 1
+    assert runner.seen == []  # must not re-run the OptTS input
+    assert not (tmp_path / "tsopt.retry02.inp").exists()
+    final_result = saved.get("final_result")
+    assert isinstance(final_result, dict)
+    assert final_result.get("reason") == "scants_recipes_exhausted"
+
+
 def test_scants_optts_fallback_builder_still_uses_highest_surface_xyz(
     tmp_path: Path,
 ) -> None:
