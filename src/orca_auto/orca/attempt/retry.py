@@ -153,9 +153,15 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
             # workflow now.
             raise ScantsRetryStop("scants_recipes_exhausted")
         if prepared_scants is None:
-            scants_retry_source = ctx.selected_inp if next_retry_number == 1 else ctx.current_inp
+            # Continue the scan from the numbered ``*.NNN.xyz`` written by the input
+            # that actually ran (``current_inp``), not ``selected_inp``. For a fresh
+            # first retry these are the same file; for a *resumed* first retry
+            # ``current_inp`` is ``<name>.resume.inp`` whose stem owns the on-disk
+            # scan points, while ``selected_inp`` (``<name>.inp``) owns only the
+            # stale pre-crash points -- sourcing from it would continue from a stale
+            # point or dead-end the run despite valid resume artifacts.
             prepared_scants, patch_actions = prepare_scants_scan_retry_input(
-                source_inp=scants_retry_source,
+                source_inp=ctx.current_inp,
                 target_inp=next_inp,
                 retry_number=next_retry_number,
                 max_memory_gb=ctx.max_memory_gb_per_task(),

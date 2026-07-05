@@ -560,6 +560,64 @@ def test_failed_scants_retry_extends_scan_endpoint_in_reaction_direction(
         assert original not in lines
 
 
+def test_resumed_scants_retry_sources_scan_from_executed_resume_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # On a resumed first retry, the scan-continuation source must be the input
+    # that actually ran (tsopt.resume.inp, whose *.NNN.xyz are on disk), not
+    # selected_inp (tsopt.inp). Sourcing from selected_inp reads stale/absent
+    # numbered files and would dead-end the run despite valid resume artifacts.
+    from orca_auto.orca.attempt.retry import RetryAttemptRequest, prepare_retry_attempt
+    from orca_auto.orca.out_analyzer import OutAnalysis, _default_markers
+    from orca_auto.orca.statuses import AnalyzerStatus
+
+    selected_inp = tmp_path / "tsopt.inp"
+    _write_scants_input(selected_inp)
+    resume_inp = tmp_path / "tsopt.resume.inp"
+    _write_scants_input(resume_inp)
+    out_path = tmp_path / "tsopt.resume.out"
+    out_path.write_text("mid-scan failure with no surface table\n", encoding="utf-8")
+
+    captured: dict[str, Path] = {}
+
+    def _spy(
+        *, source_inp: Path, target_inp: Path, retry_number: int, max_memory_gb: int | None
+    ) -> tuple[Path, list[str]]:
+        captured["source_inp"] = source_inp
+        return target_inp, ["scants_scan_continued"]
+
+    monkeypatch.setattr("orca_auto.orca.attempt.retry.prepare_scants_scan_retry_input", _spy)
+
+    state = new_state(tmp_path, selected_inp, max_retries=1)
+    state["attempts"].append({"inp_path": str(resume_inp), "out_path": str(out_path)})
+    ctx = RetryAttemptRequest(
+        reaction_dir=tmp_path,
+        selected_inp=selected_inp,
+        state=state,
+        resumed=True,
+        current_inp=resume_inp,
+        out_path=out_path,
+        execution_index=1,
+        retries_used=0,
+        max_retries=1,
+        analysis=OutAnalysis(
+            status=AnalyzerStatus.TS_NOT_FOUND,
+            reason="ts_not_found",
+            markers=_default_markers(out_path),
+        ),
+        retry_inp_path=_retry_inp_path,
+        emit=lambda _payload: None,
+        notify_finished=None,
+        notify_retry=None,
+    )
+
+    result = prepare_retry_attempt(ctx)
+
+    assert result is None  # a retry was prepared, not a terminal exit
+    assert captured["source_inp"] == resume_inp
+
+
 def test_resumed_scants_uses_refined_tsopt_geometry_as_optts_when_marker_present(
     tmp_path: Path,
 ) -> None:
