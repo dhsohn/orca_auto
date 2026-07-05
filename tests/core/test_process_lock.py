@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from orca_auto.core.utils.process_lock import (
+    _write_lock_payload,
     acquire_file_lock,
     current_process_start_ticks,
     is_process_alive,
@@ -102,6 +103,39 @@ class TestParseLockInfo(unittest.TestCase):
 
         self.assertIsNone(info["pid"])
         self.assertIsNone(info["process_start_ticks"])
+
+
+class TestWriteLockPayload(unittest.TestCase):
+    def test_write_lock_payload_publishes_full_payload_atomically(self) -> None:
+        # Regression: the lock must never be observable empty by a racing reader.
+        # It is published via a hard link, so at the instant lock_path can appear
+        # the payload is already fully written to the linked source.
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = Path(td) / "run.lock"
+            observed: list[str] = []
+            real_link = os.link
+
+            def spy_link(src: str, dst: str) -> None:
+                observed.append(Path(src).read_text(encoding="utf-8"))
+                real_link(src, dst)
+
+            with patch("orca_auto.core.utils.process_lock.os.link", side_effect=spy_link):
+                self.assertTrue(_write_lock_payload(lock_path, json.dumps({"pid": 111})))
+
+            self.assertTrue(observed, "lock was not published via a hard link")
+            self.assertTrue(observed[0].strip(), "lock was published while empty")
+            self.assertEqual(parse_lock_info(lock_path)["pid"], 111)
+
+    def test_write_lock_payload_loser_does_not_clobber_or_litter(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = Path(td) / "run.lock"
+            self.assertTrue(_write_lock_payload(lock_path, json.dumps({"pid": 111})))
+            # A contender that loses the create race returns False without clobbering.
+            self.assertFalse(_write_lock_payload(lock_path, json.dumps({"pid": 222})))
+            self.assertEqual(parse_lock_info(lock_path)["pid"], 111)
+            # No temp file is left behind by either the winner or the loser.
+            leftovers = sorted(p.name for p in Path(td).iterdir() if p.name != "run.lock")
+            self.assertEqual(leftovers, [])
 
 
 class TestIsProcessAlive(unittest.TestCase):

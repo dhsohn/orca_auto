@@ -61,15 +61,28 @@ def _nonempty_string(value: Any) -> str | None:
 
 
 def _write_lock_payload(lock_path: Path, lock_payload: str) -> bool:
+    # Publish the lock atomically WITH its payload already present. A plain
+    # ``O_CREAT | O_EXCL`` create makes the lock file visible while still empty,
+    # and a contender that reads it in that window sees empty content, which
+    # ``parse_lock_info`` reports as an unreadable owner -- a spurious hard failure
+    # against a valid, freshly created lock. Instead write the payload to a private
+    # temp file first, then hard-link it into place: ``os.link`` raises
+    # ``FileExistsError`` if the target already exists (preserving exclusive
+    # creation), and the linked file is never observed empty.
+    tmp_path = lock_path.with_name(f".{lock_path.name}.{os.getpid()}.tmp")
     try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        return False
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(lock_payload + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    return True
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            handle.write(lock_payload + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(tmp_path, lock_path)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        with suppress(OSError):
+            os.unlink(tmp_path)
 
 
 def _unlink_lock(lock_path: Path) -> bool:
