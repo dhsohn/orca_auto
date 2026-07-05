@@ -3,13 +3,18 @@
 # scripts/check.sh (ruff lint + format, mypy, import-linter); the slow pytest
 # suite runs in the pre-push hook instead, so committing stays quick.
 #
-# Fully-staged Python files are auto-formatted and re-staged so a missing
-# `ruff format` can never reach CI (the failure that motivated this hook). A
-# file with both staged and unstaged changes is never rewritten, so the hook
-# can't silently stage unstaged hunks; its STAGED snapshot is still checked.
-# Ruff runs against the staged snapshot (`git show :file`), not the worktree,
-# because that snapshot — not the worktree — is what the commit records; a
-# partially staged file can differ, and only the staged bytes reach CI.
+# Every analyzer runs against the COMMIT's content, not the worktree. Fully
+# staged Python files are auto-formatted and re-staged first; then unstaged
+# tracked changes are set aside (saved as a patch, worktree reset to the index)
+# so Ruff, mypy, and import-linter see exactly the staged snapshot. Without this
+# a partially staged file could pass here on its fixed worktree while the broken
+# staged content is the one committed and later fails CI.
+#
+# The patch is re-applied on any exit. A patch applies onto the same base it was
+# diffed from (checks are read-only, so the base is unchanged) — unlike
+# `git stash pop`, whose 3-way merge spuriously conflicts on newly added files.
+# If a re-apply ever fails, the changes are preserved in the patch file
+# (recoverable), never lost.
 #
 # Bypass with `git commit --no-verify`. Enable with:
 #   git config core.hooksPath .githooks
@@ -27,35 +32,43 @@ fi
 
 mapfile -t py_files < <(git diff --cached --name-only --diff-filter=ACM -- '*.py')
 
-if ((${#py_files[@]})); then
-  # Auto-format only fully-staged files: their worktree matches the index, so
-  # re-staging cannot pull in unrelated unstaged hunks. `git diff --quiet -- f`
-  # is 0 exactly when f has no unstaged changes.
-  for f in "${py_files[@]}"; do
-    if git diff --quiet -- "$f" && ! "$PY" -m ruff format --check -- "$f" >/dev/null 2>&1; then
-      echo "[pre-commit] ruff format: reformatting and re-staging $f"
-      "$PY" -m ruff format -- "$f"
-      git add -- "$f"
-    fi
-  done
-
-  # Check each file's STAGED snapshot via stdin. For a partially staged file the
-  # worktree differs from the index; checking the worktree would let unformatted
-  # staged content pass here and then fail CI's `ruff format --check`.
-  echo "[pre-commit] ruff check + format --check (staged content)"
-  staged_status=0
-  for f in "${py_files[@]}"; do
-    if ! git show ":$f" | "$PY" -m ruff check --stdin-filename "$f" -; then
-      staged_status=1
-    fi
-    if ! git show ":$f" | "$PY" -m ruff format --check --stdin-filename "$f" - >/dev/null 2>&1; then
-      echo "[pre-commit] staged $f is not formatted. Run: ruff format '$f' && git add '$f'" >&2
-      staged_status=1
-    fi
-  done
-  if ((staged_status)); then
-    exit 1
+# Auto-format only fully-staged Python files: their worktree matches the index,
+# so re-staging cannot pull in unrelated unstaged hunks. Do this BEFORE setting
+# the worktree aside. `git diff --quiet -- f` is 0 iff f has no unstaged changes.
+for f in "${py_files[@]:-}"; do
+  [[ -n "$f" ]] || continue
+  if git diff --quiet -- "$f" && ! "$PY" -m ruff format --check -- "$f" >/dev/null 2>&1; then
+    echo "[pre-commit] ruff format: reformatting and re-staging $f"
+    "$PY" -m ruff format -- "$f"
+    git add -- "$f"
   fi
+done
+
+# Set unstaged tracked changes aside so the analyzers see the staged snapshot.
+patch="$(git rev-parse --git-dir)/pre-commit-unstaged.patch"
+have_patch=0
+restore() {
+  if ((have_patch)); then
+    if git apply --whitespace=nowarn "$patch" 2>/dev/null; then
+      rm -f "$patch"
+    else
+      echo "[pre-commit] WARNING: could not re-apply your unstaged changes; they are saved at $patch (recover with: git apply '$patch')." >&2
+    fi
+  fi
+}
+trap restore EXIT
+
+if ! git diff --quiet; then
+  git diff --binary --no-color >"$patch"
+  have_patch=1
+  git checkout --quiet -- .
+fi
+
+if ((${#py_files[@]})); then
+  echo "[pre-commit] ruff check"
+  "$PY" -m ruff check -- "${py_files[@]}"
+  echo "[pre-commit] ruff format --check"
+  "$PY" -m ruff format --check -- "${py_files[@]}"
 fi
 
 echo "[pre-commit] mypy"
