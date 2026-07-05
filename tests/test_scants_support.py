@@ -843,6 +843,38 @@ def test_resume_finalizes_failed_optts_fallback_as_exhausted(tmp_path: Path) -> 
     assert final_result.get("reason") == "scants_recipes_exhausted"
 
 
+def test_resume_shield_reruns_prepared_optts_fallback_that_never_ran(tmp_path: Path) -> None:
+    # The one-shot OptTS fallback was PREPARED (its patch action was recorded on the
+    # ScanTS scan attempt and the retry input written), but the OptTS attempt was
+    # interrupted before it ran/recorded, so the last recorded attempt is still the
+    # ScanTS scan. The shield must NOT declare exhaustion -- the prepared OptTS must
+    # still get its one run, matching the live retry path.
+    from orca_auto.orca.attempt.resume import _scants_surface_exhausted_on_resume
+
+    selected_inp = tmp_path / "tsopt.inp"
+    _write_scants_input(selected_inp)
+    scan_out = selected_inp.with_suffix(".out")
+    _write_surface_scan_done_out(scan_out)
+    state = new_state(tmp_path, selected_inp, max_retries=3)
+    state["status"] = "retrying"
+    state["attempts"].append(
+        {
+            "index": 1,
+            "inp_path": str(selected_inp),
+            "out_path": str(scan_out),
+            "return_code": 0,
+            "analyzer_status": "ts_not_found",
+            "analyzer_reason": "geometry_zero_distance",
+            "markers": {"geometry_zero_distance": True},
+            "patch_actions": ["scants_fallback_to_optts", "scants_guess_from_tsopt.002.xyz"],
+            "started_at": "2026-07-03T01:00:00+00:00",
+            "ended_at": "2026-07-03T02:00:00+00:00",
+        }
+    )
+
+    assert _scants_surface_exhausted_on_resume(state, state["attempts"][-1]) is False
+
+
 def test_resume_finalizes_failed_resume_converted_optts_as_exhausted(tmp_path: Path) -> None:
     # Sibling of the failed-live-fallback case: the resume-path ScanTS->OptTS
     # conversion records "resume_scants_resume_to_optts" (not "scants_fallback_to_optts").
