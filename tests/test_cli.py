@@ -22,6 +22,7 @@ from orca_auto.orca.cli_logging import (
 from orca_auto.orca.commands._helpers import CONFIG_ENV_VAR, _emit, default_config_path
 from orca_auto.orca.commands.run_inp import (
     _cmd_run_inp_execute,
+    _existing_completed_out,
     _retry_inp_path,
     _select_latest_inp,
 )
@@ -143,6 +144,20 @@ class TestCli(unittest.TestCase):
         retry_base = Path("/tmp/rxn.retry03.inp")
         retry_next = _retry_inp_path(retry_base, 1)
         self.assertEqual(retry_next.name, "rxn.retry01.inp")
+
+    def test_existing_completed_out_ignores_stale_output_older_than_selected_input(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            inp = reaction / "rxn.inp"
+            out = reaction / "rxn.out"
+            inp.write_text("! Opt\n", encoding="utf-8")
+            out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
+            os.utime(out, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(inp, ns=(2_000_000_000, 2_000_000_000))
+
+            done = _existing_completed_out(inp)
+
+        self.assertIsNone(done)
 
     def test_default_config_path_prefers_env_var(self) -> None:
         with patch.dict(os.environ, {CONFIG_ENV_VAR: "/tmp/custom_orca_auto.yaml"}, clear=False):

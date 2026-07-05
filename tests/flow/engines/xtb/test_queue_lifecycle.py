@@ -58,6 +58,42 @@ def test_finalize_child_exit_requeues_running_job_and_marks_recovery(tmp_path: P
     assert released == ["slot-1"]
 
 
+def test_finalize_child_exit_skips_recovery_when_requeue_cancels(tmp_path: Path) -> None:
+    cfg = object()
+    entry = _entry()
+    job = SimpleNamespace(
+        queue_root=tmp_path / "queue",
+        entry=entry,
+        admission_token="slot-1",
+    )
+    requeued: list[tuple[Path, str]] = []
+    recovery: list[tuple[object, object, str]] = []
+    released: list[str] = []
+
+    def requeue(root: Path, queue_id: str) -> SimpleNamespace:
+        requeued.append((root, queue_id))
+        return SimpleNamespace(status=SimpleNamespace(value="cancelled"))
+
+    queue_lifecycle.finalize_child_exit(
+        cfg,
+        job,
+        rc=0,
+        shutdown_requested=True,
+        find_queue_entry_fn=lambda _root, _queue_id: entry,
+        mark_cancelled_fn=lambda *args, **kwargs: None,
+        requeue_running_entry_fn=requeue,
+        mark_failed_fn=lambda *args, **kwargs: None,
+        mark_recovery_pending_fn=lambda cfg_obj, entry_obj, *, reason: recovery.append(
+            (cfg_obj, entry_obj, reason)
+        ),
+        release_admission_slot_fn=lambda token: released.append(token),
+    )
+
+    assert requeued == [(tmp_path / "queue", "queue-1")]
+    assert recovery == []
+    assert released == ["slot-1"]
+
+
 def test_finalize_child_exit_marks_cancelled_when_cancel_requested(tmp_path: Path) -> None:
     entry = _entry(cancel_requested=True)
     job = SimpleNamespace(

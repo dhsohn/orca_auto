@@ -234,6 +234,8 @@ def _workflow_status_from_stage_statuses(
     statuses: list[str],
     current_status: str,
 ) -> str:
+    if current_status in WORKFLOW_FAILED_STATUSES:
+        return current_status
     if current_status == STATUS_CANCELLED:
         return STATUS_CANCELLED
     if current_status == STATUS_CANCEL_REQUESTED:

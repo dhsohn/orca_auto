@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED
+from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, normalize_status
 
 from ..child import entrypoint as _child_entrypoint
 from ..child.entrypoint import ChildWorkerEntrypointJob
@@ -66,13 +66,20 @@ class _EngineChildJobRunner:
         return int(self.spec.outcome_exit_code_fn(outcome))
 
     def _handle_shutdown(self, job: ChildWorkerEntrypointJob, exc: BaseException) -> int:
-        self.requeue_running_entry_fn(job.queue_root, self.queue_id)
-        self.mark_recovery_pending_context_fn(
-            job.cfg,
-            self.spec.shutdown_context_fn(exc),
-            reason="worker_shutdown",
-        )
+        updated = self.requeue_running_entry_fn(job.queue_root, self.queue_id)
+        if not _is_cancel_terminal_requeue_result(updated):
+            self.mark_recovery_pending_context_fn(
+                job.cfg,
+                self.spec.shutdown_context_fn(exc),
+                reason="worker_shutdown",
+            )
         return 0
+
+
+def _is_cancel_terminal_requeue_result(result: Any) -> bool:
+    status = getattr(result, "status", None)
+    status = getattr(status, "value", status)
+    return normalize_status(status) == STATUS_CANCELLED
 
 
 def build_engine_worker_child_command(

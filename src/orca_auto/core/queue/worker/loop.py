@@ -43,6 +43,7 @@ def pop_completed_worker_jobs(
     poll_job: Callable[[T], int | None],
     finalize_finished: Callable[[str, T, int], None],
     on_finalize_error: Callable[[str, T, int, Exception], bool | None] | None = None,
+    retained_completed_ids: set[str] | None = None,
 ) -> int:
     completed: list[tuple[str, T, int]] = []
     for queue_id, job in list(running.items()):
@@ -70,6 +71,8 @@ def pop_completed_worker_jobs(
 
         if remove_running_job:
             running.pop(queue_id, None)
+        elif retained_completed_ids is not None:
+            retained_completed_ids.add(queue_id)
     return len(completed)
 
 
@@ -162,12 +165,13 @@ class QueueWorkerLoop:
         )
         return result.status
 
-    def _check_completed_jobs(self) -> None:
+    def _check_completed_jobs(self, *, retained_completed_ids: set[str] | None = None) -> None:
         pop_completed_worker_jobs(
             self._running,
             poll_job=self._poll_job,
             finalize_finished=self._finalize_completed_job,
             on_finalize_error=self._on_finalize_error,
+            retained_completed_ids=retained_completed_ids,
         )
 
     def _on_finalize_error(self, queue_id: str, job: Any, rc: int, exc: Exception) -> bool:

@@ -9,7 +9,7 @@ from typing import Any
 from orca_auto.core.statuses import (
     STATUS_CANCEL_FAILED,
     STATUS_CANCEL_REQUESTED,
-    STATUS_FAILED,
+    WORKFLOW_FAILED_STATUSES,
     is_stage_terminal_status,
 )
 from orca_auto.flow.contracts.workflow import workflow_stage_dicts
@@ -153,6 +153,17 @@ def _orca_stage_count(payload: dict[str, Any], *, deps: OrchestrationDeps | None
     )
 
 
+def _all_orca_stages_terminal(payload: dict[str, Any], context: AdvanceContext) -> bool:
+    stage_views = [
+        stage_view
+        for stage_view in WorkflowPayloadView(payload).stage_views
+        if stage_view.task_engine(context.deps) == "orca"
+    ]
+    return bool(stage_views) and all(
+        is_stage_terminal_status(stage_view.status(context.deps)) for stage_view in stage_views
+    )
+
+
 def _notify_xtb_phase(
     payload: dict[str, Any], context: AdvanceContext, config: WorkflowEngineOptions
 ) -> None:
@@ -195,6 +206,30 @@ def _sync_orca_phase(
         )
 
 
+def _record_orca_exhaustion_after_sync_phase(
+    payload: dict[str, Any], context: AdvanceContext, config: WorkflowEngineOptions
+) -> None:
+    if context.sync_only or not _all_orca_stages_terminal(payload, context):
+        return
+    if context.template_name == "reaction_ts_search" and _reaction_orca_ready(payload, context):
+        context.deps.stages.materialization._append_reaction_orca_stages(
+            payload,
+            workspace_dir=context.workspace_dir,
+            xtb_config=config.xtb_config,
+            orca_config=config.orca_config,
+        )
+    elif context.template_name == "conformer_screening":
+        context.deps.stages.materialization._append_crest_orca_stages(
+            payload,
+            template_name="conformer_screening",
+            crest_config=config.crest_config,
+            orca_config=config.orca_config,
+            stage_id_prefix="orca_conformer",
+            xyz_filename="conformer_guess.xyz",
+            inp_filename="conformer_opt.inp",
+        )
+
+
 def _append_scan_optts_phase(
     payload: dict[str, Any], context: AdvanceContext, _config: WorkflowEngineOptions
 ) -> None:
@@ -225,6 +260,7 @@ def _advance_phases(config: WorkflowEngineOptions) -> tuple[AdvancePhase, ...]:
         bind(_notify_xtb_phase),
         bind(_append_conformer_orca_phase),
         bind(_sync_orca_phase),
+        bind(_record_orca_exhaustion_after_sync_phase),
         bind(_append_scan_optts_phase),
     )
 
@@ -235,7 +271,7 @@ def _finalize_advanced_workflow(
     o = context.deps
     payload_view = WorkflowPayloadView(payload)
     payload_view.set_status(o.stages.workflow._recompute_workflow_status(payload))
-    if payload_view.status(o.stages.support._normalize_text) == STATUS_FAILED:
+    if payload_view.status(o.stages.support._normalize_text) in WORKFLOW_FAILED_STATUSES:
         o.advance._cancel_active_workflow_stages(payload, config=config)
         payload_view.set_status(o.stages.workflow._recompute_workflow_status(payload))
 
@@ -271,6 +307,7 @@ __all__ = [
     "_notify_crest_phase",
     "_notify_xtb_phase",
     "_orca_stage_count",
+    "_record_orca_exhaustion_after_sync_phase",
     "_reaction_orca_ready",
     "_run_advance_phase",
     "_sync_crest_phase",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,10 @@ from tests.flow.engines.xtb.factories import (
 from tests.flow.engines.xtb.factories import (
     make_entry as _make_entry,
 )
+
+
+def _dequeued_running_entry(entry: SimpleNamespace) -> SimpleNamespace:
+    return SimpleNamespace(**{**vars(entry), "status": SimpleNamespace(value="running")})
 
 
 def test_queue_worker_parser_has_no_organize_flags() -> None:
@@ -69,7 +74,13 @@ def test_queue_worker_starts_up_to_max_concurrent_children(
         selected_xyz = job_dir / f"input-{index}.xyz"
         selected_xyz.write_text("3\ncandidate\nH 0 0 0\n", encoding="utf-8")
         entries.append(
-            _make_entry(job_dir, selected_xyz, queue_id=f"queue-{index}", job_id=f"job-{index}")
+            _make_entry(
+                job_dir,
+                selected_xyz,
+                queue_id=f"queue-{index}",
+                job_id=f"job-{index}",
+                status="pending",
+            )
         )
 
     slots = iter(["slot-1", "slot-2"])
@@ -93,8 +104,18 @@ def test_queue_worker_starts_up_to_max_concurrent_children(
             return None
 
     monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda _cfg: next(slots))
+    monkeypatch.setattr(queue_cmd, "list_queue", lambda _root: entries)
     monkeypatch.setattr(queue_cmd, "dequeue_next", lambda _root, **_kw: next(dequeued))
     monkeypatch.setattr(queue_cmd, "activate_reserved_slot", lambda *args, **kwargs: object())
+    real_deps = queue_cmd._queue_worker_deps()
+    monkeypatch.setattr(
+        queue_cmd,
+        "_queue_worker_deps",
+        lambda: replace(
+            real_deps,
+            dequeue_next_entry=lambda _cfg: (queue_root, _dequeued_running_entry(next(dequeued))),
+        ),
+    )
 
     def fake_start_background_job_process(
         *,
@@ -136,7 +157,7 @@ def test_queue_worker_check_cancel_requests_is_child_side_noop(
     job_dir.mkdir()
     selected_xyz = job_dir / "input.xyz"
     selected_xyz.write_text("3\ncandidate\nH 0 0 0\n", encoding="utf-8")
-    entry = _make_entry(job_dir, selected_xyz)
+    entry = _make_entry(job_dir, selected_xyz, status="pending")
 
     signals: list[int] = []
 
@@ -278,10 +299,19 @@ def test_queue_worker_run_once_waits_for_child_completion_and_prints_summary(
             return None
 
     monkeypatch.setattr(queue_cmd, "reconcile_stale_slots", lambda _root: 0)
-    monkeypatch.setattr(queue_cmd, "list_queue", lambda _root: [])
+    monkeypatch.setattr(queue_cmd, "list_queue", lambda _root: [entry])
     monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda _cfg: "slot-1")
     monkeypatch.setattr(queue_cmd, "dequeue_next", lambda _root, **_kw: entry)
     monkeypatch.setattr(queue_cmd, "activate_reserved_slot", lambda *args, **kwargs: object())
+    real_deps = queue_cmd._queue_worker_deps()
+    monkeypatch.setattr(
+        queue_cmd,
+        "_queue_worker_deps",
+        lambda: replace(
+            real_deps,
+            dequeue_next_entry=lambda _cfg: (queue_root, _dequeued_running_entry(entry)),
+        ),
+    )
     monkeypatch.setattr(
         queue_cmd,
         "_start_background_job_process",

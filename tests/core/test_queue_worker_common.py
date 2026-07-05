@@ -173,6 +173,62 @@ def test_dequeue_next_across_roots_handles_single_root_idle_and_selected_entry(
     ) == (root, entry)
 
 
+def test_dequeue_next_across_roots_filters_single_root_and_dequeues_accepted_entry(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "queue"
+    rejected = _entry("q-rejected", priority=1)
+    rejected.app_name = "orca_auto_orca"
+    accepted = _entry("q-accepted", priority=9)
+    accepted.app_name = "orca_auto_crest"
+    entries = [rejected, accepted]
+    dequeued_ids: list[str] = []
+
+    def dequeue_entry(_root: Path, queue_id: str) -> SimpleNamespace | None:
+        dequeued_ids.append(queue_id)
+        for entry in entries:
+            if entry.queue_id == queue_id:
+                return entry
+        return None
+
+    result = worker_common.dequeue_next_across_roots(
+        (root,),
+        list_queue_fn=lambda _root: entries,
+        dequeue_next_fn=lambda _root: pytest.fail("filtered dequeue should use selected id"),
+        dequeue_entry_fn=dequeue_entry,
+        accept_entry_fn=lambda entry: getattr(entry, "app_name", "") == "orca_auto_crest",
+    )
+
+    assert result == (root, accepted)
+    assert dequeued_ids == ["q-accepted"]
+
+
+def test_dequeue_next_across_roots_single_root_filter_without_id_dequeuer_does_not_claim(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "queue"
+    rejected = _entry("q-rejected", priority=1)
+    rejected.app_name = "orca_auto_orca"
+    accepted = _entry("q-accepted", priority=9)
+    accepted.app_name = "orca_auto_crest"
+    dequeue_next_calls = 0
+
+    def dequeue_next(_root: Path) -> SimpleNamespace | None:
+        nonlocal dequeue_next_calls
+        dequeue_next_calls += 1
+        return rejected
+
+    result = worker_common.dequeue_next_across_roots(
+        (root,),
+        list_queue_fn=lambda _root: [rejected, accepted],
+        dequeue_next_fn=dequeue_next,
+        accept_entry_fn=lambda entry: getattr(entry, "app_name", "") == "orca_auto_crest",
+    )
+
+    assert result is None
+    assert dequeue_next_calls == 0
+
+
 def test_dequeue_next_across_roots_selects_best_pending_entry(tmp_path: Path) -> None:
     first = tmp_path / "first"
     second = tmp_path / "second"
@@ -575,6 +631,47 @@ def test_shutdown_all_reaps_finished_job_before_requeuing(tmp_path: Path) -> Non
     # The still-running job is shut down (terminated + requeued) as before.
     assert ("shutdown", "busy") in calls
     assert worker._running == {}
+
+
+def test_shutdown_all_does_not_requeue_exited_job_after_finalize_failure(
+    tmp_path: Path,
+) -> None:
+    cfg = _cfg(allowed_root=str(tmp_path), admission_root=str(tmp_path / "admission"))
+    calls: list[tuple[str, str]] = []
+
+    def finalize(_worker: object, queue_id: str, _job: object, _rc: int) -> None:
+        calls.append(("finalize", queue_id))
+        raise RuntimeError("finalize failed once")
+
+    hooks = worker_common.PidFileChildProcessQueueWorkerHooks(
+        handle_worker_start_error=lambda *_args: None,
+        on_worker_process_started=lambda *_args: True,
+        finalize_completed_job=finalize,
+        shutdown_running_job=lambda _w, queue_id, _job: calls.append(("shutdown", queue_id)),
+        reconcile_worker_state=lambda _w: None,
+    )
+    worker = worker_common.HookedPidFileChildProcessQueueWorker(
+        cfg,
+        config_path="/tmp/config.yaml",
+        max_concurrent=2,
+        deps=SimpleNamespace(
+            poll_interval_seconds=1,
+            time=SimpleNamespace(sleep=lambda _seconds: None),
+            admission_root=lambda _cfg: str(tmp_path / "admission"),
+            release_slot=lambda _root, _token: None,
+        ),
+        hooks=hooks,
+    )
+    finished = SimpleNamespace(process=SimpleNamespace(poll=lambda: 0))
+    still_running = SimpleNamespace(process=SimpleNamespace(poll=lambda: None))
+    worker._running = {"done": finished, "busy": still_running}
+
+    worker._shutdown_all()
+
+    assert ("finalize", "done") in calls
+    assert ("shutdown", "done") not in calls
+    assert ("shutdown", "busy") in calls
+    assert worker._running == {"done": finished}
 
 
 def test_pidfile_child_worker_run_once_returns_error_when_singleton_lock_held(

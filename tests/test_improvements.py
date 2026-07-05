@@ -71,10 +71,9 @@ class TestGeomNotConvergedDetection(unittest.TestCase):
             AnalyzerStatus.GEOM_NOT_CONVERGED,
         )
 
-    def test_geom_not_converged_if_terminated_normally_still_completed(self) -> None:
-        # If ORCA terminated normally despite geom warning, treat as completed
+    def test_geom_not_converged_if_terminated_normally_still_failed(self) -> None:
         text = "OPTIMIZATION HAS NOT YET CONVERGED\n****ORCA TERMINATED NORMALLY****\n"
-        self.assertEqual(self._analyze(text), AnalyzerStatus.COMPLETED)
+        self.assertEqual(self._analyze(text), AnalyzerStatus.GEOM_NOT_CONVERGED)
 
 
 class TestDecideAttemptOutcomeExpanded(unittest.TestCase):
