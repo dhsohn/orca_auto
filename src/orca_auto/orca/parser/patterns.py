@@ -93,11 +93,13 @@ _ERROR_TERMINATION_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Known calculation type keywords (searched in input line)
+# Known calculation type keywords (searched in input line). No bare "TS" or
+# "SCAN" entries: ORCA has no `! TS` keyword, and a route-level `SCAN` token is
+# the SCAN density functional — relaxed scans are requested via `%geom Scan`,
+# never the route line.
 _CALC_TYPE_KEYWORDS: dict[str, str] = {
     "OPTTS": "ts",
     "SCANTS": "ts",
-    "TS": "ts",
     "OPT": "opt",
     "FREQ": "freq",
     "MD": "md",
@@ -108,7 +110,6 @@ _CALC_TYPE_KEYWORDS: dict[str, str] = {
     "ZOOM-NEB": "neb",
     "ZOOM-NEB-TS": "neb",
     "ZOOM-NEB-CI": "neb",
-    "SCAN": "scan",
     "IRC": "irc",
 }
 

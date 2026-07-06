@@ -189,3 +189,44 @@ def test_write_report_files_emits_html_and_si_for_sp(tmp_path: Path) -> None:
     assert reports["si_block"] == str(tmp_path / "si_block.md")
     assert (tmp_path / "job_report.html").exists()
     assert (tmp_path / "si_block.md").exists()
+
+
+def test_vibrational_summary_prefers_the_final_output(tmp_path: Path) -> None:
+    # The metric cards must agree with the embedded SI block, which is built
+    # from the final output only; the attempt chain is just the fallback.
+    state = _job_dir(
+        tmp_path,
+        inp_text=_FREQ_INP,
+        out_text=_out_text(route="B3LYP def2-SVP Freq", freq_block=True, thermo=True),
+    )
+    stale = tmp_path / "rxn_stale.out"
+    stale.write_text(
+        _out_text(route="B3LYP def2-SVP Freq", freq_block=True).replace("-80.50", "-333.00"),
+        encoding="utf-8",
+    )
+    # Last attempt points at a stale output; final_result still names rxn.out.
+    state["attempts"][-1]["out_path"] = str(stale)
+
+    data = collect_sp_report_data(tmp_path, state)
+
+    assert data is not None
+    assert data.imaginary_count == 1
+    assert any(abs(summary.frequency_cm + 80.5) < 0.01 for summary in data.mode_summaries)
+
+
+def test_vibrational_summary_falls_back_to_attempt_outputs(tmp_path: Path) -> None:
+    # Final output without a frequency section (e.g. the freq step never ran):
+    # an earlier attempt's analysis still fills the vibrational summary.
+    state = _job_dir(
+        tmp_path,
+        inp_text=_FREQ_INP,
+        out_text=_out_text(route="B3LYP def2-SVP Freq"),
+    )
+    earlier = tmp_path / "rxn_attempt1.out"
+    earlier.write_text(_out_text(route="B3LYP def2-SVP Freq", freq_block=True), encoding="utf-8")
+    state["attempts"].insert(0, dict(state["attempts"][0], index=1, out_path=str(earlier)))
+
+    data = collect_sp_report_data(tmp_path, state)
+
+    assert data is not None
+    assert data.imaginary_count == 1

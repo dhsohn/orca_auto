@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ..input_blocks import file_route_lines
-from ..parser import OrcaResult, parse_orca_output
+from ..parser import OrcaResult
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,
@@ -24,9 +24,21 @@ from .attempts import (
     duration_text,
     terminal_actions_html,
 )
-from .frequencies import ModeSummary, find_frequency_analysis, mode_section_html, mode_summaries
+from .frequencies import (
+    FrequencyAnalysis,
+    ModeSummary,
+    find_frequency_analysis,
+    mode_section_html,
+    mode_summaries,
+)
 from .render import ReportPage, metric_card, render_page, status_badge_kind, verdict_note
-from .si import SiBlockError, collect_si_block, final_out_path, render_si_block_md
+from .si import (
+    SiBlockError,
+    collect_si_block,
+    final_out_path,
+    parsed_final_output,
+    render_si_block_md,
+)
 
 
 @dataclass(frozen=True)
@@ -57,13 +69,19 @@ def collect_sp_report_data(reaction_dir: Path, state: Mapping[str, Any]) -> SpRe
 
     out_path = final_out_path(state)
     result: OrcaResult | None = None
+    analysis: FrequencyAnalysis | None = None
     if out_path is not None:
         try:
-            result = parse_orca_output(str(out_path))
+            result, analysis = parsed_final_output(out_path)
         except OSError:
-            result = None
+            result, analysis = None, None
 
-    analysis, _attempt_index = find_frequency_analysis(attempts)
+    # Characterize from the final output first so the metric cards agree with
+    # the embedded SI block; fall back to the attempt chain only when the final
+    # output has no frequency section (e.g. a failed run whose earlier attempt
+    # still carries one).
+    if analysis is None:
+        analysis, _attempt_index = find_frequency_analysis(attempts)
 
     # The SI block only exists for completed jobs with a parsed energy and
     # geometry; the report is still useful without it (failed runs keep the
@@ -107,12 +125,14 @@ def _energy_rows(result: OrcaResult) -> list[tuple[str, str, str]]:
         if result.energy_ev is not None and result.energy_kcalmol is not None:
             sub = f"{result.energy_ev:.4f} eV · {result.energy_kcalmol:.2f} kcal·mol⁻¹"
         rows.append(("E(el)", f"{result.energy_hartree:.6f} Eh", sub))
+    # Same rule as the SI block: no temperature label unless the output
+    # actually stated one.
     temp = result.thermo_temperature_k
-    temp_label = f"({temp:.2f} K)" if temp is not None else "(298.15 K)"
+    temp_label = f" ({temp:.2f} K)" if temp is not None else ""
     for label, value in (
         ("ZPE correction", result.zpe_correction),
-        (f"H {temp_label}", result.enthalpy),
-        (f"G {temp_label}", result.gibbs_energy),
+        (f"H{temp_label}", result.enthalpy),
+        (f"G{temp_label}", result.gibbs_energy),
         ("G-E(el)", result.gibbs_correction),
     ):
         if value is not None:

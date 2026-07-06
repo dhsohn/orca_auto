@@ -18,13 +18,14 @@ import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.artifacts import SI_BLOCK_MD_FILE
 from orca_auto.core.utils.persistence import atomic_write_text
 
-from ..completion_rules import IRC_ROUTE_RE, TS_ROUTE_RE
+from ..completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from ..input_blocks import file_route_lines
 from ..parser import OrcaResult, parse_orca_output
 from ..scants import first_scan_coordinate_spec
@@ -36,8 +37,6 @@ from .frequencies import (
 )
 
 logger = logging.getLogger(__name__)
-
-_OPT_ROUTE_RE = re.compile(r"\bOPT\b", re.IGNORECASE)
 
 # Route families whose final geometry is not a stationary point: path methods
 # (plain NEB / NEB-CI — NEB-TS is claimed by the TS check first) and dynamics.
@@ -77,11 +76,33 @@ def structure_kind(selected_inp: Path) -> str | None:
         return "ts"
     if _NON_STATIONARY_ROUTE_RE.search(routes):
         return None
-    if _OPT_ROUTE_RE.search(routes):
+    if OPT_ROUTE_RE.search(routes):
         if first_scan_coordinate_spec(selected_inp) is not None:
             return None
         return "min"
     return "sp"
+
+
+@lru_cache(maxsize=32)
+def _parsed_output_cached(
+    out_path_text: str, mtime_ns: int, size: int
+) -> tuple[OrcaResult, FrequencyAnalysis | None]:
+    return (
+        parse_orca_output(out_path_text),
+        parse_frequency_analysis(Path(out_path_text)),
+    )
+
+
+def parsed_final_output(out_path: Path) -> tuple[OrcaResult, FrequencyAnalysis | None]:
+    """Parsed (result, frequency analysis), cached per (path, mtime, size).
+
+    Workflow SI regeneration re-reads every completed stage on every advance;
+    a finished job's output never changes, so parsing it once per process is
+    enough. Callers must treat both returned objects as read-only — they are
+    shared across cache hits.
+    """
+    stat = out_path.stat()
+    return _parsed_output_cached(str(out_path), stat.st_mtime_ns, stat.st_size)
 
 
 def final_out_path(state: Mapping[str, Any]) -> Path | None:
@@ -151,18 +172,23 @@ def collect_si_block(reaction_dir: Path, state: Mapping[str, Any]) -> SiBlock | 
     selected_raw = str(state.get("selected_inp") or "").strip()
     if not selected_raw:
         return None
-    kind = structure_kind(Path(selected_raw))
+    selected_inp = Path(selected_raw)
+    # An unreadable input is an error, not "this job type has no SI block":
+    # every valid ORCA input has at least one route line, so an empty read
+    # means the file is gone (archived / moved stage dir).
+    if not file_route_lines(selected_inp):
+        raise SiBlockError(f"cannot read route lines from input {selected_inp}")
+    kind = structure_kind(selected_inp)
     if kind is None:
         return None
 
     out_path = final_out_path(state)
     if out_path is None:
         raise SiBlockError(f"no output file found for {reaction_dir}")
-    result = parse_orca_output(str(out_path))
+    result, analysis = parsed_final_output(out_path)
     if result.energy_hartree is None or not result.coordinates:
         raise SiBlockError(f"output {out_path} lacks a final energy or geometry")
 
-    analysis = parse_frequency_analysis(out_path)
     imaginary_count = analysis.imaginary_count() if analysis is not None else None
     return SiBlock(
         name=reaction_dir.name,
@@ -189,13 +215,16 @@ def render_si_block_md(block: SiBlock) -> str:
         charge_line += f"  ({result.formula})"
     lines.append(charge_line)
 
+    # Label H/G with the temperature only when the output stated one; an SI
+    # must not assert 298.15 K for a run whose thermochemistry line was not
+    # parsed — the job may have used %freq Temp.
     temp = result.thermo_temperature_k
-    temp_label = f"({temp:.2f} K)" if temp is not None else "(298.15 K)"
+    temp_label = f" ({temp:.2f} K)" if temp is not None else ""
     rows: list[tuple[str, float | None]] = [
         ("E(el)", result.energy_hartree),
         ("ZPE correction", result.zpe_correction),
-        (f"H {temp_label}", result.enthalpy),
-        (f"G {temp_label}", result.gibbs_energy),
+        (f"H{temp_label}", result.enthalpy),
+        (f"G{temp_label}", result.gibbs_energy),
         ("G-E(el)", result.gibbs_correction),
     ]
     width = max(len(label) for label, _ in rows)
@@ -254,6 +283,7 @@ __all__ = [
     "SiBlockError",
     "collect_si_block",
     "final_out_path",
+    "parsed_final_output",
     "render_si_block_md",
     "si_block_path",
     "structure_kind",

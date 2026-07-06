@@ -37,13 +37,15 @@ def file_route_lines(inp_path: Path) -> list[str]:
 
     ORCA accepts multiple route lines and allows ``%`` blocks before them, so
     callers deciding "does this input request X" must scan every route line,
-    not just the first one.
+    not just the first one. ``#`` comments are cut before returning: keyword
+    regexes (TS/IRC/OPT/...) run on these lines, and a comment like
+    ``# TS guess`` must never reclassify the job.
     """
     try:
         lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
     except OSError:
         return []
-    return [lines[idx].strip() for idx in route_line_indices(lines)]
+    return [lines[idx].split("#", 1)[0].strip() for idx in route_line_indices(lines)]
 
 
 def ensure_route_keywords(lines: list[str], keywords: list[str]) -> bool:

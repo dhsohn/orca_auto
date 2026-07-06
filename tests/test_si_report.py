@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from orca_auto.orca.report.si import (
+    SiBlockError,
     collect_si_block,
+    parsed_final_output,
     render_si_block_md,
     si_block_path,
     structure_kind,
@@ -283,3 +288,96 @@ def test_ts_block_parses_frequencies_from_utf16_output(tmp_path: Path) -> None:
     assert block is not None
     assert block.imaginary_count == 1
     assert "Nimag = 1" in render_si_block_md(block)
+
+
+def test_tightopt_route_is_a_min_block(tmp_path: Path) -> None:
+    # TightOpt/COpt spellings are geometry optimizations; classifying them as
+    # "sp" would silently drop the structure from the workflow SI energy table.
+    reaction_dir, state = _job_dir(
+        tmp_path,
+        "tightopt_job",
+        inp_text="! B3LYP def2-SVP TightOpt Freq\n* xyz 0 1\nC 0 0 0\n*\n",
+        out_text=_out_text(route="B3LYP def2-SVP TightOpt Freq", freqs=(30.0, 120.0), thermo=True),
+    )
+
+    block = collect_si_block(reaction_dir, state)
+    assert block is not None
+    assert block.kind == "min"
+    assert block.warnings == ()
+
+
+def test_route_comment_does_not_change_structure_kind(tmp_path: Path) -> None:
+    # A "# TS guess" note on the route line must not turn a minimum into a TS
+    # block (the bare-TS / SCAN-functional collision class).
+    inp = tmp_path / "job.inp"
+    inp.write_text(
+        "! B3LYP def2-SVP Opt Freq  # TS guess from scan\n* xyz 0 1\nC 0 0 0\n*\n",
+        encoding="utf-8",
+    )
+    assert structure_kind(inp) == "min"
+
+
+def test_unreadable_input_is_an_error_not_a_blockless_job(tmp_path: Path) -> None:
+    # A vanished input (archived stage dir) must surface as an exclusion
+    # reason, not masquerade as "job type has no SI block".
+    reaction_dir, state = _job_dir(
+        tmp_path,
+        "archived_job",
+        inp_text=_TS_INP,
+        out_text=_out_text(freqs=(-512.3, 120.0), thermo=True),
+    )
+    Path(state["selected_inp"]).unlink()
+
+    with pytest.raises(SiBlockError, match="route lines"):
+        collect_si_block(reaction_dir, state)
+
+
+def test_small_negative_modes_are_noise_not_imaginary(tmp_path: Path) -> None:
+    # Same 10 cm^-1 cutoff as the completion analyzer: a -6 cm^-1 numerical
+    # wobble on a verified TS must not publish Nimag = 2 against the
+    # analyzer's own COMPLETED verdict.
+    reaction_dir, state = _job_dir(
+        tmp_path,
+        "soft_mode_ts",
+        inp_text=_TS_INP,
+        out_text=_out_text(freqs=(-512.3, -6.2, 120.0), thermo=True),
+    )
+
+    block = collect_si_block(reaction_dir, state)
+    assert block is not None
+    assert block.imaginary_count == 1
+    assert block.warnings == ()
+    assert "Nimag = 1" in render_si_block_md(block)
+
+
+def test_thermo_rows_omit_temperature_the_output_never_stated(tmp_path: Path) -> None:
+    # No THERMOCHEMISTRY AT line parsed -> no fabricated "(298.15 K)" label;
+    # the job may have run at a different %freq Temp.
+    out_text = _out_text(freqs=(-512.3, 120.0), thermo=True).replace(
+        "THERMOCHEMISTRY AT 298.15K", ""
+    )
+    reaction_dir, state = _job_dir(
+        tmp_path, "unknown_temp_job", inp_text=_TS_INP, out_text=out_text
+    )
+
+    block = collect_si_block(reaction_dir, state)
+    assert block is not None
+    rendered = render_si_block_md(block)
+    assert "298.15" not in rendered
+    assert any(line.startswith("G ") for line in rendered.splitlines())
+
+
+def test_parsed_final_output_caches_by_mtime(tmp_path: Path) -> None:
+    out = tmp_path / "job.out"
+    out.write_text(_out_text(energy=-1.0), encoding="utf-8")
+    os.utime(out, ns=(1_000_000_000, 1_000_000_000))
+
+    first, _ = parsed_final_output(out)
+    again, _ = parsed_final_output(out)
+    assert again is first  # unchanged file -> cache hit, no re-parse
+
+    out.write_text(_out_text(energy=-2.0), encoding="utf-8")
+    os.utime(out, ns=(2_000_000_000, 2_000_000_000))
+    second, _ = parsed_final_output(out)
+    assert first.energy_hartree == pytest.approx(-1.0)
+    assert second.energy_hartree == pytest.approx(-2.0)
