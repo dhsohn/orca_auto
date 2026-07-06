@@ -98,3 +98,40 @@ def test_process_group_is_alive_probes_the_group() -> None:
         raise ProcessLookupError
 
     assert process_group_is_alive(4321, killpg_fn=dead_killpg) is False
+
+
+def test_recover_reaps_live_orphan_whose_record_lacks_start_ticks(tmp_path: Path) -> None:
+    # A record written without process_start_ticks (unreadable /proc at write
+    # time) whose ORCA leader is still alive must be REAPED, not discarded as
+    # PID reuse -- otherwise the orphan runs on beside the next retry.
+    reaction_dir = tmp_path / "rxn"
+    reaction_dir.mkdir(parents=True, exist_ok=True)
+    (reaction_dir / ORCA_PROCESS_RECORD_FILE_NAME).write_text(
+        json.dumps({"schema_version": 1, "engine": "orca", "pid": 1234, "pgid": 1234}),
+        encoding="utf-8",
+    )
+    group_alive = True
+    signals: list[tuple[int, int]] = []
+
+    def fake_killpg(pgid: int, signum: int) -> None:
+        nonlocal group_alive
+        if signum == 0:
+            if not group_alive:
+                raise ProcessLookupError
+            return
+        signals.append((pgid, signum))
+        if signum == signal.SIGTERM:
+            group_alive = False
+
+    recovered = recover_orphaned_orca_process(
+        reaction_dir,
+        logger=logging.getLogger("test_recover_no_ticks"),
+        killpg_fn=fake_killpg,
+        is_process_alive_fn=lambda _pid: True,
+        process_start_ticks_fn=lambda _pid: None,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert recovered is True
+    assert signals == [(1234, signal.SIGTERM)]
+    assert not (reaction_dir / ORCA_PROCESS_RECORD_FILE_NAME).exists()

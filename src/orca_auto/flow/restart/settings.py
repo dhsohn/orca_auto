@@ -139,14 +139,20 @@ def _apply_priority(task: dict[str, Any], priority: int | None) -> None:
         enqueue_payload["command"] = " ".join(str(part) for part in argv)
 
 
-def _request_parameters(payload: dict[str, Any]) -> dict[str, Any] | None:
+def _request_parameters(payload: dict[str, Any]) -> dict[str, Any]:
+    # Create the request/parameters structure when absent (as with metadata):
+    # an older or hand-edited workflow.json may have no request block, and a
+    # flow.yaml restart must still be able to establish charge/multiplicity
+    # (and other parameters) so the electronic state reaches rematerialized and
+    # later-appended engine stages instead of defaulting to neutral singlet.
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
         payload["metadata"] = metadata
     request = metadata.get("request")
     if not isinstance(request, dict):
-        return None
+        request = {}
+        metadata["request"] = request
     params = request.get("parameters")
     if not isinstance(params, dict):
         params = {}
@@ -235,8 +241,6 @@ def _update_request_parameters(
     endpoint_pairing: dict[str, Any],
 ) -> None:
     params = _request_parameters(payload)
-    if params is None:
-        return
 
     _apply_restart_request_basics(
         params,
@@ -300,10 +304,16 @@ def _flow_restart_settings_from_manifest(
     # surface. Only the stage-facing overrides are enriched: the request's
     # crest/xtb manifests keep user-manifest semantics (the stage builders
     # inject on append).
-    params = _request_parameters(payload) or {}
-    charge = params.get("charge", 0)
-    multiplicity = params.get("multiplicity", 1)
+    # _update_request_parameters ran just above and, when the manifest states
+    # charge/multiplicity, wrote them into the (now always-present) params. Fall
+    # back to the manifest values directly too, so an older workflow.json whose
+    # params never carried an electronic state still restarts on the right one.
+    params = _request_parameters(payload)
     manifest_charge, manifest_multiplicity = _manifest_electronic_state(manifest)
+    charge = params.get("charge", manifest_charge if manifest_charge is not None else 0)
+    multiplicity = params.get(
+        "multiplicity", manifest_multiplicity if manifest_multiplicity is not None else 1
+    )
     return {
         "applied": True,
         "resources": resources,

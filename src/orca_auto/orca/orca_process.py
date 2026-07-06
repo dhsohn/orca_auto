@@ -115,7 +115,13 @@ def _recorded_process_is_reused(
     if not is_process_alive_fn(pid):
         return False
     if expected_ticks is None:
-        return True
+        # No recorded start-ticks (the writer omits them when /proc was
+        # momentarily unreadable): reuse cannot be PROVEN, so we must not
+        # assume it. Assuming reuse here would discard a genuinely live
+        # orphan's record without reaping it, letting the next retry run
+        # beside it over the same output. Treat as not-reused and let the
+        # group-existence check decide whether to reap.
+        return False
     observed_ticks = process_start_ticks_fn(pid)
     return observed_ticks is None or observed_ticks != expected_ticks
 
