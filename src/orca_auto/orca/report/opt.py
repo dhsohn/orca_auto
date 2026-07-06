@@ -12,9 +12,8 @@ from ..input_blocks import file_route_lines
 from ..parser import parse_opt_progress
 from .attempts import (
     AttemptReportRow,
-    attempt_actions,
     attempt_dicts,
-    attempt_role,
+    attempt_report_rows,
     attempts_table_html,
     duration_text,
     terminal_actions_html,
@@ -72,24 +71,7 @@ def collect_opt_report_data(
     route_lines = file_route_lines(selected_inp)
     attempts = attempt_dicts(state)
 
-    rows: list[AttemptReportRow] = []
-    for position, attempt in enumerate(attempts):
-        if position == 0:
-            label = f"initial {'OptTS' if kind == 'ts' else 'Opt'}"
-        else:
-            label, _direction = attempt_role(attempt_actions(attempts[position - 1]))
-        rows.append(
-            AttemptReportRow(
-                index=int(attempt.get("index", position + 1) or (position + 1)),
-                label=label,
-                direction="forward",
-                analyzer_status=str(attempt.get("analyzer_status") or ""),
-                analyzer_reason=str(attempt.get("analyzer_reason") or ""),
-                duration_text=duration_text(attempt.get("started_at"), attempt.get("ended_at")),
-                detail="",
-                terminal_actions=attempt_actions(attempt) if position == len(attempts) - 1 else (),
-            )
-        )
+    rows = attempt_report_rows(attempts, f"initial {'OptTS' if kind == 'ts' else 'Opt'}")
 
     formula = method = basis_set = ""
     steps: tuple[tuple[int, float], ...] = ()
@@ -133,7 +115,7 @@ def collect_opt_report_data(
         total_duration_text=duration_text(
             state.get("started_at"), final_payload.get("completed_at")
         ),
-        attempts=tuple(rows),
+        attempts=rows,
         steps=steps,
         opt_converged=opt_converged,
         final_energy=final_energy,

@@ -53,6 +53,31 @@ def attempt_role(creating_actions: Sequence[str]) -> tuple[str, str]:
     return "retry", "forward"
 
 
+def attempt_report_rows(
+    attempts: Sequence[Mapping[str, Any]], initial_label: str
+) -> tuple[AttemptReportRow, ...]:
+    """Rows for job types without a per-attempt detail column (Opt, SP)."""
+    rows: list[AttemptReportRow] = []
+    for position, attempt in enumerate(attempts):
+        if position == 0:
+            label = initial_label
+        else:
+            label, _direction = attempt_role(attempt_actions(attempts[position - 1]))
+        rows.append(
+            AttemptReportRow(
+                index=int(attempt.get("index", position + 1) or (position + 1)),
+                label=label,
+                direction="forward",
+                analyzer_status=str(attempt.get("analyzer_status") or ""),
+                analyzer_reason=str(attempt.get("analyzer_reason") or ""),
+                duration_text=duration_text(attempt.get("started_at"), attempt.get("ended_at")),
+                detail="",
+                terminal_actions=attempt_actions(attempt) if position == len(attempts) - 1 else (),
+            )
+        )
+    return tuple(rows)
+
+
 def parse_iso(value: Any) -> datetime | None:
     text = str(value or "").strip()
     if not text:

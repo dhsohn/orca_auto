@@ -84,7 +84,8 @@ def structure_kind(selected_inp: Path) -> str | None:
     return "sp"
 
 
-def _final_out_path(state: Mapping[str, Any]) -> Path | None:
+def final_out_path(state: Mapping[str, Any]) -> Path | None:
+    """Last existing output file of the run, preferring the final result."""
     final_result = state.get("final_result")
     if isinstance(final_result, Mapping):
         last_out = str(final_result.get("last_out_path") or "").strip()
@@ -154,7 +155,7 @@ def collect_si_block(reaction_dir: Path, state: Mapping[str, Any]) -> SiBlock | 
     if kind is None:
         return None
 
-    out_path = _final_out_path(state)
+    out_path = final_out_path(state)
     if out_path is None:
         raise SiBlockError(f"no output file found for {reaction_dir}")
     result = parse_orca_output(str(out_path))
@@ -252,6 +253,7 @@ __all__ = [
     "SiBlock",
     "SiBlockError",
     "collect_si_block",
+    "final_out_path",
     "render_si_block_md",
     "si_block_path",
     "structure_kind",
