@@ -41,9 +41,12 @@ _OPT_ROUTE_RE = re.compile(r"\bOPT\b", re.IGNORECASE)
 
 # Route families whose final geometry is not a stationary point: path methods
 # (plain NEB / NEB-CI — NEB-TS is claimed by the TS check first) and dynamics.
-# Their endpoints must never be published as structures in an SI.
+# Their endpoints must never be published as structures in an SI. No SCAN
+# token here: `SCAN` in a route line is the density functional
+# (`! SCAN def2-SVP Opt Freq`), not a scan job — relaxed scans are identified
+# from the `%geom Scan` block and ScanTS by the TS check.
 _NON_STATIONARY_ROUTE_RE = re.compile(
-    r"\b(?:ZOOM-)?NEB(?:-CI)?\b|\bMD\b|\bSCAN\b",
+    r"\b(?:ZOOM-)?NEB(?:-CI)?\b|\bMD\b",
     re.IGNORECASE,
 )
 

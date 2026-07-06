@@ -195,6 +195,22 @@ def test_non_stationary_jobs_get_no_block(tmp_path: Path) -> None:
         assert collect_si_block(reaction_dir, state) is None, name
 
 
+def test_scan_functional_optimization_is_a_min_block(tmp_path: Path) -> None:
+    # "SCAN" in a route line is the meta-GGA density functional, not a scan
+    # job: an optimization with it must keep its SI block (Codex #48 P2).
+    reaction_dir, state = _job_dir(
+        tmp_path,
+        "scan_functional_job",
+        inp_text="! SCAN def2-SVP Opt Freq\n* xyz 0 1\nC 0 0 0\n*\n",
+        out_text=_out_text(route="SCAN def2-SVP Opt Freq", freqs=(30.0, 120.0), thermo=True),
+    )
+
+    block = collect_si_block(reaction_dir, state)
+    assert block is not None
+    assert block.kind == "min"
+    assert block.warnings == ()
+
+
 def test_neb_ts_route_is_still_a_ts_block(tmp_path: Path) -> None:
     reaction_dir, state = _job_dir(
         tmp_path,
