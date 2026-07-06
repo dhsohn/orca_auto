@@ -244,3 +244,26 @@ def test_write_si_block_removes_stale_file_for_blockless_job(tmp_path: Path) -> 
     (reaction_dir / "job.inp").write_text(_SCAN_INP, encoding="utf-8")
     assert write_si_block(reaction_dir, state) is None
     assert not si_block_path(reaction_dir).exists()
+
+
+def test_ts_block_parses_frequencies_from_utf16_output(tmp_path: Path) -> None:
+    # ORCA can emit UTF-16 output; the frequency parser must decode it like the
+    # main parser, or an opt+freq TS block loses Nimag and is misclassified
+    # (Codex #48 P2).
+    reaction_dir = tmp_path / "utf16_ts"
+    reaction_dir.mkdir()
+    inp = reaction_dir / "job.inp"
+    inp.write_text(_TS_INP, encoding="utf-8")
+    out = reaction_dir / "job.out"
+    out.write_text(_out_text(freqs=(-512.3, 120.0), thermo=True), encoding="utf-16")
+    state: dict[str, Any] = {
+        "status": "completed",
+        "selected_inp": str(inp),
+        "attempts": [{"index": 1, "out_path": str(out)}],
+        "final_result": {"last_out_path": str(out)},
+    }
+
+    block = collect_si_block(reaction_dir, state)
+    assert block is not None
+    assert block.imaginary_count == 1
+    assert "Nimag = 1" in render_si_block_md(block)

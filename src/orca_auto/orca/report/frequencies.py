@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..parser.io import read_orca_text
+
 logger = logging.getLogger(__name__)
 
 FREQ_EPS_CM = 1.0
@@ -85,54 +87,58 @@ def parse_frequency_analysis(out_path: Path) -> FrequencyAnalysis | None:
         started = False
 
     try:
-        with out_path.open("r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                stripped = line.strip()
-                upper = stripped.upper()
-                if upper == _FREQ_HEADER:
-                    close_section()
-                    section, current_freqs = "freq", []
-                    continue
-                if upper == _MODES_HEADER:
-                    close_section()
-                    section, current_modes, current_cols = "modes", {}, []
-                    continue
-                if upper.startswith(_COORDS_HEADER):
-                    close_section()
-                    section, current_coords = "coords", []
-                    continue
-                if section == "freq":
-                    match = _FREQ_LINE_RE.match(line)
-                    if match is not None:
-                        current_freqs.append(float(match.group(2)))
-                        started = True
-                    elif stripped and started:
-                        close_section()
-                elif section == "coords":
-                    match = _COORD_LINE_RE.match(line)
-                    if match is not None:
-                        current_coords.append(
-                            (
-                                match.group(1),
-                                float(match.group(2)),
-                                float(match.group(3)),
-                                float(match.group(4)),
-                            )
-                        )
-                        started = True
-                    elif started:
-                        close_section()
-                elif section == "modes":
-                    if not stripped:
-                        continue
-                    if not _consume_modes_line(stripped, current_modes, current_cols):
-                        if started:
-                            close_section()
-                    else:
-                        started = True
-            close_section()
+        # Decode via the ORCA-aware reader so UTF-16 outputs (which
+        # ``parse_orca_output`` already handles) yield frequencies too; a plain
+        # UTF-8 open would drop every mode and mislabel the structure.
+        text = read_orca_text(str(out_path))
     except OSError:
         return None
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        upper = stripped.upper()
+        if upper == _FREQ_HEADER:
+            close_section()
+            section, current_freqs = "freq", []
+            continue
+        if upper == _MODES_HEADER:
+            close_section()
+            section, current_modes, current_cols = "modes", {}, []
+            continue
+        if upper.startswith(_COORDS_HEADER):
+            close_section()
+            section, current_coords = "coords", []
+            continue
+        if section == "freq":
+            match = _FREQ_LINE_RE.match(line)
+            if match is not None:
+                current_freqs.append(float(match.group(2)))
+                started = True
+            elif stripped and started:
+                close_section()
+        elif section == "coords":
+            match = _COORD_LINE_RE.match(line)
+            if match is not None:
+                current_coords.append(
+                    (
+                        match.group(1),
+                        float(match.group(2)),
+                        float(match.group(3)),
+                        float(match.group(4)),
+                    )
+                )
+                started = True
+            elif started:
+                close_section()
+        elif section == "modes":
+            if not stripped:
+                continue
+            if not _consume_modes_line(stripped, current_modes, current_cols):
+                if started:
+                    close_section()
+            else:
+                started = True
+    close_section()
 
     if freqs is None:
         return None
