@@ -531,7 +531,21 @@ def test_completed_crest_roles_ignore_stale_completed_stage_when_newer_stage_is_
         ({"stages": [{"status": "queued"}]}, "running"),
         ({"stages": [{"status": "completed"}, {"status": "completed"}]}, "completed"),
         ({"stages": [{"status": "completed"}, {"status": "planned"}]}, "running"),
-        ({"stages": [{"status": "cancelled"}]}, "completed"),
+        # A stage-level cancel is not success: all-terminal with any
+        # cancelled stage resolves to cancelled, not completed.
+        ({"stages": [{"status": "cancelled"}]}, "cancelled"),
+        ({"stages": [{"status": "cancelled"}, {"status": "completed"}]}, "cancelled"),
+        # ... including alongside failed ORCA candidates (whose failure alone
+        # would not fail the workflow).
+        (
+            {
+                "stages": [
+                    {"status": "cancelled"},
+                    {"status": "failed", "task": {"engine": "orca"}},
+                ]
+            },
+            "cancelled",
+        ),
         ({"stages": []}, "planned"),
     ],
 )
@@ -594,6 +608,9 @@ def test_recompute_workflow_status_treats_child_failures_by_engine_role() -> Non
         == "running"
     )
 
+    # Cancelling part of the plan means the workflow did not run to
+    # completion: the honest terminal status is cancelled, never a silent
+    # "completed" that reads as success.
     assert (
         _recompute_workflow_status(
             {
@@ -604,7 +621,7 @@ def test_recompute_workflow_status_treats_child_failures_by_engine_role() -> Non
                 ],
             }
         )
-        == "completed"
+        == "cancelled"
     )
 
     assert (

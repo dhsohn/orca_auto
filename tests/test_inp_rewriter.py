@@ -266,3 +266,40 @@ class TestInpRewriter(unittest.TestCase):
                 "* xyzfile 0 1 input.xyz",
             ],
         )
+
+
+SCANTS_NO_GEOMETRY_INP = """! ScanTS B3LYP def2-SVP
+
+%geom
+  Scan
+    B 0 1 = 1.0, 2.0, 5
+  end
+end
+"""
+
+
+class TestScantsResumeAllOrNothing(unittest.TestCase):
+    def test_scants_resume_never_leaks_a_partial_optts_conversion(self) -> None:
+        # The resume path finds a TS guess (refinement marker + same-stem xyz)
+        # but the malformed input has no geometry block to replace. The OptTS
+        # conversion cannot be completed, so none of it may leak into the
+        # written input: previously the route was already flipped to OPTTS and
+        # the scan block removed before the geometry check bailed.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "rxn.inp"
+            dst = root / "rxn.resume.inp"
+            src.write_text(SCANTS_NO_GEOMETRY_INP, encoding="utf-8")
+            (root / "rxn.gbw").write_bytes(b"checkpoint")
+            (root / "rxn.out").write_text("REFINING THE TS GUESS STRUCTURE\n", encoding="utf-8")
+            (root / "rxn.xyz").write_text("2\n\nH 0 0 0\nH 0 0 0.75\n", encoding="utf-8")
+
+            prepared, actions = prepare_checkpoint_restart_input(src, dst, root)
+            out = dst.read_text(encoding="utf-8")
+
+        self.assertEqual(prepared, dst)
+        self.assertNotIn("scants_resume_to_optts", actions)
+        self.assertNotIn("scants_scan_block_removed", actions)
+        self.assertNotIn("OPTTS", out)
+        self.assertIn("ScanTS", out)
+        self.assertIn("B 0 1 = 1.0, 2.0, 5", out)

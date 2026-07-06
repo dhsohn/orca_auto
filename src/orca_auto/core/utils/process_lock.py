@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from orca_auto.core.utils import process as process_utils
+from orca_auto.core.utils.lock import file_lock
 
 
 def parse_lock_info(lock_path: Path) -> dict[str, Any]:
@@ -85,12 +86,55 @@ def _write_lock_payload(lock_path: Path, lock_payload: str) -> bool:
             os.unlink(tmp_path)
 
 
-def _unlink_lock(lock_path: Path) -> bool:
+_STALE_RECOVERY_FLOCK_TIMEOUT_SECONDS = 10.0
+
+
+def _claim_stale_lock(
+    lock_path: Path,
+    *,
+    parse_lock_info_fn: Callable[[Path], dict[str, Any]],
+    is_process_alive_fn: Callable[[int], bool],
+    process_start_ticks_fn: Callable[[int], int | None],
+    logger: logging.Logger,
+    stale_pid_reuse_log_template: str,
+) -> bool:
+    """Verify-and-remove a lock judged stale; True when it was removed.
+
+    A bare unlink-then-recreate races: two contenders can both judge the same
+    lock stale, and the slower one unlinks the winner's FRESH lock — leaving
+    two owners. Recovery is therefore serialized through a sibling flock:
+    while holding it, the lock content is re-verified and only a still-dead
+    owner's file is unlinked. A live lock is never moved or removed, and the
+    lock path is only ever missing after a verified-stale unlink — a window
+    where any contender may legitimately create.
+    """
+    recovery_lock = lock_path.with_name(f".{lock_path.name}.recovery")
     try:
-        lock_path.unlink()
-    except FileNotFoundError:
-        return True
-    return True
+        with file_lock(
+            recovery_lock,
+            timeout_seconds=_STALE_RECOVERY_FLOCK_TIMEOUT_SECONDS,
+        ):
+            current = parse_lock_info_fn(lock_path)
+            current_pid = current.get("pid")
+            if isinstance(current_pid, int) and _lock_owner_alive(
+                lock_pid=current_pid,
+                lock_start_ticks=current.get("process_start_ticks"),
+                is_process_alive_fn=is_process_alive_fn,
+                process_start_ticks_fn=process_start_ticks_fn,
+                logger=logger,
+                stale_pid_reuse_log_template=stale_pid_reuse_log_template,
+                lock_path=lock_path,
+            ):
+                # A fresh live lock replaced the stale one while we waited:
+                # it is not ours to touch.
+                return False
+            with suppress(FileNotFoundError):
+                lock_path.unlink()
+            return True
+    except TimeoutError:
+        # Recovery is contended beyond reason; treat the lock as active and
+        # let the caller's wait/raise policy decide.
+        return False
 
 
 def _lock_owner_alive(
@@ -141,6 +185,7 @@ def _handle_existing_lock(
     stale_pid_reuse_log_template: str,
     stale_lock_log_template: str,
     deadline: float | None,
+    claim_stale_lock_fn: Callable[[], bool],
     active_lock_error_builder: Callable[[int, dict[str, Any], Path], RuntimeError] | None,
     unreadable_lock_error_builder: Callable[[Path], RuntimeError] | None,
     stale_remove_error_builder: Callable[[int, Path, OSError], RuntimeError] | None,
@@ -151,6 +196,7 @@ def _handle_existing_lock(
             lock_path=lock_path,
             logger=logger,
             deadline=deadline,
+            claim_stale_lock_fn=claim_stale_lock_fn,
             unreadable_lock_error_builder=unreadable_lock_error_builder,
         )
 
@@ -166,12 +212,20 @@ def _handle_existing_lock(
     if not alive:
         logger.info(stale_lock_log_template, lock_pid, lock_path)
         try:
-            _unlink_lock(lock_path)
+            claimed = claim_stale_lock_fn()
         except OSError as exc:
             if stale_remove_error_builder is not None:
                 raise stale_remove_error_builder(lock_pid, lock_path, exc) from exc
             raise
-        return True
+        if claimed:
+            return True
+        # The file we claimed belonged to a live owner (a fresh lock raced our
+        # staleness check): treat it as an actively held lock.
+        if deadline is None:
+            if active_lock_error_builder is not None:
+                raise active_lock_error_builder(lock_pid, lock_info, lock_path)
+            raise RuntimeError(f"Lock is held by active pid={lock_pid}. Lock file: {lock_path}")
+        return False
 
     if deadline is None:
         if active_lock_error_builder is not None:
@@ -185,6 +239,7 @@ def _handle_unreadable_lock(
     lock_path: Path,
     logger: logging.Logger,
     deadline: float | None,
+    claim_stale_lock_fn: Callable[[], bool],
     unreadable_lock_error_builder: Callable[[Path], RuntimeError] | None,
 ) -> bool:
     if deadline is None:
@@ -193,10 +248,9 @@ def _handle_unreadable_lock(
         raise RuntimeError(f"Lock file owner is unreadable. Lock file: {lock_path}")
     logger.warning("Lock file has unreadable owner, treating as stale: %s", lock_path)
     try:
-        _unlink_lock(lock_path)
+        return claim_stale_lock_fn()
     except OSError:
         return False
-    return True
 
 
 def is_process_alive(pid: int) -> bool:
@@ -269,6 +323,16 @@ def acquire_file_lock_from_options(
     lock_payload = json.dumps(options.lock_payload_obj, ensure_ascii=True)
     deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
 
+    def claim_stale_lock() -> bool:
+        return _claim_stale_lock(
+            lock_path,
+            parse_lock_info_fn=deps.parse_lock_info,
+            is_process_alive_fn=deps.is_process_alive,
+            process_start_ticks_fn=deps.process_start_ticks,
+            logger=deps.logger,
+            stale_pid_reuse_log_template=messages.stale_pid_reuse_log_template,
+        )
+
     while True:
         if _write_lock_payload(lock_path, lock_payload):
             deps.logger.debug(messages.acquired_log_template, lock_path)
@@ -284,6 +348,7 @@ def acquire_file_lock_from_options(
             stale_pid_reuse_log_template=messages.stale_pid_reuse_log_template,
             stale_lock_log_template=messages.stale_lock_log_template,
             deadline=deadline,
+            claim_stale_lock_fn=claim_stale_lock,
             active_lock_error_builder=active_errors.active_lock_error_builder,
             unreadable_lock_error_builder=active_errors.unreadable_lock_error_builder,
             stale_remove_error_builder=active_errors.stale_remove_error_builder,
@@ -307,9 +372,42 @@ def acquire_file_lock_from_options(
     try:
         yield
     finally:
-        with suppress(OSError):
-            lock_path.unlink()
-            deps.logger.debug(messages.released_log_template, lock_path)
+        _release_owned_lock(
+            lock_path,
+            payload_obj=options.lock_payload_obj,
+            parse_lock_info_fn=deps.parse_lock_info,
+            logger=deps.logger,
+            released_log_template=messages.released_log_template,
+        )
+
+
+def _release_owned_lock(
+    lock_path: Path,
+    *,
+    payload_obj: dict[str, Any],
+    parse_lock_info_fn: Callable[[Path], dict[str, Any]],
+    logger: logging.Logger,
+    released_log_template: str,
+) -> None:
+    """Unlink the lock only while it still carries our payload.
+
+    If our lock was stolen (crash-recovery race) and someone else re-created
+    the file, an unconditional unlink would delete the new owner's lock too.
+    """
+    with suppress(OSError):
+        our_pid = payload_obj.get("pid")
+        if isinstance(our_pid, int):
+            current = parse_lock_info_fn(lock_path)
+            if current.get("pid") not in (None, our_pid):
+                logger.warning(
+                    "Not releasing lock owned by pid=%s (expected our pid=%d): %s",
+                    current.get("pid"),
+                    our_pid,
+                    lock_path,
+                )
+                return
+        lock_path.unlink()
+        logger.debug(released_log_template, lock_path)
 
 
 @contextmanager

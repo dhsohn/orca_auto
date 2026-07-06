@@ -249,6 +249,13 @@ def _workflow_status_from_stage_statuses(
     if any(status == STATUS_PLANNED for status in statuses):
         return STATUS_RUNNING
     if stages and all(is_stage_terminal_status(status) for status in statuses):
+        # A stage-level cancellation must never read as success: cancelled
+        # candidates carry no TS/conformer verdict, and the exhaustion
+        # recorders deliberately stand down when cancels are present — so
+        # without this, cancelling every candidate ends the workflow
+        # COMPLETED. The workflow did not run to its plan; say CANCELLED.
+        if any(status == STATUS_CANCELLED for status in statuses):
+            return STATUS_CANCELLED
         return STATUS_COMPLETED
     if any(status == STATUS_COMPLETED for status in statuses):
         return STATUS_RUNNING

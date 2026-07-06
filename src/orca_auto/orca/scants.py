@@ -638,15 +638,20 @@ def apply_scants_optts_resume_rewrite(
     if guess_xyz is None:
         return []
 
+    # All-or-nothing: mutate a working copy and publish only a complete
+    # rewrite. Bailing after the route/scan-block edits would hand the caller
+    # a half-converted input (OptTS without the geometry restart) that it then
+    # writes under a plain checkpoint-restart action log.
+    rewritten = list(lines)
     actions: list[str] = []
-    if _replace_scants_route_with_optts(lines):
+    if _replace_scants_route_with_optts(rewritten):
         actions.append("scants_resume_to_optts")
-    if _remove_geom_scan_subblock(lines):
+    if _remove_geom_scan_subblock(rewritten):
         actions.append("scants_scan_block_removed")
-    if replace_geometry_with_xyzfile(lines, guess_xyz, target_inp.parent):
-        actions.append(f"geometry_restart_from_{guess_xyz.name}")
-    else:
+    if not replace_geometry_with_xyzfile(rewritten, guess_xyz, target_inp.parent):
         return []
+    actions.append(f"geometry_restart_from_{guess_xyz.name}")
+    lines[:] = rewritten
     return actions
 
 

@@ -425,6 +425,15 @@ def submit_reaction_dir_to_queue(
             stderr=str(exc),
             context=context,
         )
+    except ValueError as exc:
+        # e.g. a reaction dir without any .inp: fail cleanly instead of
+        # leaking a traceback through the CLI.
+        return DirectQueueSubmission(
+            status="failed",
+            reason="invalid_submission_input",
+            stderr=str(exc),
+            context=context,
+        )
     return DirectQueueSubmission(status="submitted", context=context, queued_result=queued)
 
 
