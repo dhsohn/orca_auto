@@ -22,6 +22,7 @@ _STATE_EXPORTS = _engine_state.create_engine_state_module_exports(
         report_json_file_name=REPORT_JSON_FILE_NAME,
         report_md_file_name=REPORT_MD_FILE_NAME,
         manifest_file_name=XTB_JOB_MANIFEST_FILE,
+        engine="xtb",
         report_title="orca_auto xTB Report",
         selected_input_label="Selected Input",
     ),

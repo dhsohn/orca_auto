@@ -589,3 +589,40 @@ def test_mark_helpers_merge_metadata_updates(
     if helper_name != "mark_completed":
         assert updated.error == str(helper_kwargs["error"]).strip()
     assert helper(tmp_path, "missing-queue-id", **helper_kwargs) is None
+
+
+def _write_single_running_entry(root: Path) -> None:
+    _queue_file(root).write_text(
+        json.dumps([_entry("q-1", status=QueueStatus.RUNNING)], indent=2),
+        encoding="utf-8",
+    )
+
+
+def test_mark_status_never_flips_a_terminal_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A cancel landing just after a natural completion (or the reverse) must
+    # not rewrite the recorded result; only update_terminal reconciles.
+    _install_deterministic_helpers(monkeypatch)
+    _write_single_running_entry(tmp_path)
+
+    completed = store.mark_completed(tmp_path, "q-1")
+    assert completed is not None and completed.status == QueueStatus.COMPLETED
+
+    refused = store.mark_cancelled(tmp_path, "q-1")
+    assert refused is not None and refused.status == QueueStatus.COMPLETED
+    assert store.list_queue(tmp_path)[0].status == QueueStatus.COMPLETED
+
+
+def test_mark_status_does_not_resurrect_a_cancelled_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    _write_single_running_entry(tmp_path)
+
+    cancelled = store.mark_cancelled(tmp_path, "q-1")
+    assert cancelled is not None and cancelled.status == QueueStatus.CANCELLED
+
+    refused = store.mark_completed(tmp_path, "q-1")
+    assert refused is not None and refused.status == QueueStatus.CANCELLED
+    assert store.list_queue(tmp_path)[0].status == QueueStatus.CANCELLED

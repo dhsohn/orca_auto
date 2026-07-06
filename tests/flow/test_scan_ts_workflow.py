@@ -308,6 +308,14 @@ def test_cancelled_forward_candidates_do_not_trigger_reverse_scan(tmp_path: Path
     assert not any(s["stage_id"] == "orca_scan_reverse_01" for s in payload["stages"])
     assert "workflow_error" not in payload.get("metadata", {})
 
+    # And the workflow must not end COMPLETED off the back of it: with the
+    # exhaustion recorder standing down, the status reducer is the only thing
+    # standing between "every candidate cancelled" and a false success.
+    scan_stage["task"]["status"] = "completed"
+    for stage in forward_optts:
+        stage["task"]["status"] = "cancelled"
+    assert _recompute_status(payload) == "cancelled"
+
 
 def test_incomplete_scan_does_not_fan_out(tmp_path: Path) -> None:
     payload = _create_workflow(tmp_path)

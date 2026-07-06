@@ -505,6 +505,12 @@ def _mark_status(
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
 ) -> QueueEntry | None:
     def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
+        if entry.status in _TERMINAL_STATUSES:
+            # A terminal outcome is final at this layer: a cancel landing just
+            # after a natural completion (or vice versa) must not flip the
+            # recorded result. Deliberate reconciliation goes through the
+            # adapter's update_terminal, which replaces the entry directly.
+            return entry, None
         merged = dict(entry.metadata)
         if metadata_update:
             merged.update(metadata_update)

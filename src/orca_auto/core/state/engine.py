@@ -16,6 +16,7 @@ from orca_auto.core.engines.artifacts import (
 )
 from orca_auto.core.utils import (
     atomic_write_json,
+    atomic_write_text,
     load_json_mapping_file,
     mapping_or_empty,
     normalize_text,
@@ -44,7 +45,7 @@ def write_json_artifact(job_dir: Path, filename: str, payload: dict[str, Any]) -
 
 def write_text_artifact(job_dir: Path, filename: str, lines: list[str]) -> Path:
     path = job_dir / filename
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_text(path, "\n".join(lines) + "\n")
     return path
 
 
@@ -152,6 +153,7 @@ def create_engine_state_bindings(
     manifest_file_name: str,
     report_title: str,
     selected_input_label: str,
+    engine: str = "",
     now_fn: Callable[[], str] = now_utc_iso,
 ) -> EngineStateBindings:
     access = create_engine_state_access(
@@ -167,6 +169,7 @@ def create_engine_state_bindings(
         recovery_pending=EngineRecoveryPendingWriter(
             access=access,
             manifest_filename=manifest_file_name,
+            engine=engine,
             now_fn=now_fn,
         ),
     )
@@ -310,14 +313,13 @@ def recovery_pending_payload(
     retained_fields: dict[str, Any],
     resource_request: dict[str, Any] | None,
     resource_actual: dict[str, Any] | None,
+    engine: str = "",
 ) -> dict[str, Any]:
     existing_job = coerce_dict(existing.get("job"))
     existing_timestamps = coerce_dict(existing.get("timestamps"))
     existing_recovery = coerce_dict(existing.get("recovery"))
     existing_resources = coerce_dict(existing.get("resources"))
-    engine = normalize_text(existing.get("engine"))
-    if not engine:
-        engine = "xtb" if "job_type" in identity_fields else "crest"
+    engine = normalize_text(existing.get("engine")) or normalize_text(engine)
     engine_payload = {
         **{str(key): value for key, value in identity_fields.items()},
         **{str(key): value for key, value in retained_fields.items()},
@@ -368,6 +370,9 @@ def recovery_pending_payload(
 class EngineRecoveryPendingWriter:
     access: EngineStateAccess
     manifest_filename: str
+    # The engine this writer serves; recorded in recovery payloads whenever the
+    # existing state does not already name one.
+    engine: str = ""
     now_fn: Callable[[], str] = now_utc_iso
 
     def write(
@@ -395,6 +400,7 @@ class EngineRecoveryPendingWriter:
             retained_fields=_resolve_recovery_fields(retained_fields, existing),
             resource_request=resource_request,
             resource_actual=resource_actual,
+            engine=self.engine,
         )
         self.access.write_state(job_dir, payload)
         return payload
@@ -444,6 +450,7 @@ class EngineStateModuleSpec:
     manifest_file_name: str
     report_title: str
     selected_input_label: str
+    engine: str = ""
 
 
 def engine_state_module_exports(bindings: EngineStateBindings) -> EngineStateModuleExports:
@@ -473,6 +480,7 @@ def create_engine_state_module_exports(
             manifest_file_name=spec.manifest_file_name,
             report_title=spec.report_title,
             selected_input_label=spec.selected_input_label,
+            engine=spec.engine,
             now_fn=now_fn,
         )
     )

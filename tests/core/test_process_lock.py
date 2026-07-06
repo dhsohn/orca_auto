@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from orca_auto.core.utils.process_lock import (
+    _claim_stale_lock,
     _write_lock_payload,
     acquire_file_lock,
     current_process_start_ticks,
@@ -374,3 +375,69 @@ class TestAcquireFileLock(unittest.TestCase):
                         timeout_seconds=1,
                     ):
                         pass
+
+
+class TestStaleLockClaimAndOwnedRelease(unittest.TestCase):
+    def test_stale_claim_restores_a_fresh_live_lock(self) -> None:
+        # The unlink-then-recreate race: a contender judged the lock stale, but
+        # by the time it acts another process has already replaced it with a
+        # fresh, live lock. The claim must put that lock back, not delete it.
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = Path(td) / "run.lock"
+            lock_path.write_text(json.dumps({"pid": 4321}), encoding="utf-8")
+
+            claimed = _claim_stale_lock(
+                lock_path,
+                parse_lock_info_fn=parse_lock_info,
+                is_process_alive_fn=lambda _pid: True,
+                process_start_ticks_fn=lambda _pid: None,
+                logger=logging.getLogger("test.process_lock.claim"),
+                stale_pid_reuse_log_template="reuse %d %d %s %s",
+            )
+
+            self.assertFalse(claimed)
+            self.assertTrue(lock_path.exists())
+            self.assertEqual(json.loads(lock_path.read_text(encoding="utf-8"))["pid"], 4321)
+
+    def test_stale_claim_discards_a_dead_owner_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = Path(td) / "run.lock"
+            lock_path.write_text(json.dumps({"pid": 4321}), encoding="utf-8")
+
+            claimed = _claim_stale_lock(
+                lock_path,
+                parse_lock_info_fn=parse_lock_info,
+                is_process_alive_fn=lambda _pid: False,
+                process_start_ticks_fn=lambda _pid: None,
+                logger=logging.getLogger("test.process_lock.claim"),
+                stale_pid_reuse_log_template="reuse %d %d %s %s",
+            )
+
+            self.assertTrue(claimed)
+            self.assertFalse(lock_path.exists())
+
+    def test_release_leaves_a_foreign_lock_alone(self) -> None:
+        # If our lock was stolen and re-created by another owner, exiting the
+        # context must not delete the new owner's lock.
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = Path(td) / "run.lock"
+
+            with acquire_file_lock(
+                lock_path=lock_path,
+                lock_payload_obj={"pid": 123},
+                parse_lock_info_fn=parse_lock_info,
+                is_process_alive_fn=lambda _pid: False,
+                process_start_ticks_fn=lambda _pid: None,
+                logger=logging.getLogger("test.process_lock.release"),
+                acquired_log_template="acquired %s",
+                released_log_template="released %s",
+                stale_pid_reuse_log_template="reuse %d %d %s %s",
+                stale_lock_log_template="stale %d %s",
+                active_lock_error_builder=_active_lock_error,
+                unreadable_lock_error_builder=_unreadable_lock_error,
+                timeout_error_builder=_timeout_error,
+            ):
+                lock_path.write_text(json.dumps({"pid": 777}), encoding="utf-8")
+
+            self.assertTrue(lock_path.exists())
+            self.assertEqual(json.loads(lock_path.read_text(encoding="utf-8"))["pid"], 777)
