@@ -123,7 +123,11 @@ def _recorded_process_is_reused(
         # group-existence check decide whether to reap.
         return False
     observed_ticks = process_start_ticks_fn(pid)
-    return observed_ticks is None or observed_ticks != expected_ticks
+    # Only a readable start-tick that MISMATCHES proves reuse. A missing
+    # observed tick (the leader exited between the alive check and this read,
+    # while PAL/child processes keep the group alive) is not proof — assuming
+    # reuse would clear the record without reaping the surviving group.
+    return observed_ticks is not None and observed_ticks != expected_ticks
 
 
 def _orphan_group_still_matches(

@@ -135,3 +135,37 @@ def test_recover_reaps_live_orphan_whose_record_lacks_start_ticks(tmp_path: Path
     assert recovered is True
     assert signals == [(1234, signal.SIGTERM)]
     assert not (reaction_dir / ORCA_PROCESS_RECORD_FILE_NAME).exists()
+
+
+def test_recover_reaps_group_when_leader_ticks_vanish_mid_check(tmp_path: Path) -> None:
+    # The leader exits between the alive check and the start-ticks read while
+    # PAL/child processes keep the group alive: observed_ticks is None. That is
+    # not proof of PID reuse, so the surviving group must still be reaped
+    # rather than the record silently cleared (Codex P2 on #55).
+    reaction_dir = tmp_path / "rxn"
+    _write_process_record(reaction_dir, pid=1234, ticks=5678)
+    group_alive = True
+    signals: list[tuple[int, int]] = []
+
+    def fake_killpg(pgid: int, signum: int) -> None:
+        nonlocal group_alive
+        if signum == 0:
+            if not group_alive:
+                raise ProcessLookupError
+            return
+        signals.append((pgid, signum))
+        if signum == signal.SIGTERM:
+            group_alive = False
+
+    recovered = recover_orphaned_orca_process(
+        reaction_dir,
+        logger=logging.getLogger("test_recover_ticks_vanish"),
+        killpg_fn=fake_killpg,
+        is_process_alive_fn=lambda _pid: True,
+        process_start_ticks_fn=lambda _pid: None,  # ticks disappeared post-check
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert recovered is True
+    assert signals == [(1234, signal.SIGTERM)]
+    assert not (reaction_dir / ORCA_PROCESS_RECORD_FILE_NAME).exists()
