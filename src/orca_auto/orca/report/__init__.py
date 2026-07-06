@@ -12,7 +12,6 @@ must never break run finalization, so every error is logged and swallowed.
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -20,7 +19,7 @@ from typing import Any
 from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE
 from orca_auto.core.utils.persistence import atomic_write_text
 
-from ..completion_rules import TS_ROUTE_RE
+from ..completion_rules import OPT_ROUTE_RE, TS_ROUTE_RE
 from ..input_blocks import file_route_lines
 from ..scants import first_scan_coordinate_spec, input_uses_scants
 from .frequencies import FrequencyAnalysis, parse_frequency_analysis
@@ -30,8 +29,6 @@ from .si import structure_kind
 from .sp import SpReportData, collect_sp_report_data, render_sp_report_html
 
 logger = logging.getLogger(__name__)
-
-_OPT_ROUTE_RE = re.compile(r"\bOPT\b", re.IGNORECASE)
 
 
 def _render_job_report(reaction_dir: Path, state: Mapping[str, Any]) -> str | None:
@@ -47,7 +44,7 @@ def _render_job_report(reaction_dir: Path, state: Mapping[str, Any]) -> str | No
     routes = " ".join(file_route_lines(selected_inp))
     if TS_ROUTE_RE.search(routes):
         kind = "ts"
-    elif _OPT_ROUTE_RE.search(routes):
+    elif OPT_ROUTE_RE.search(routes):
         # A plain relaxed scan (Opt route + %geom Scan block) is about the
         # energy profile, not the convergence trace: use the scan report.
         if first_scan_coordinate_spec(selected_inp) is not None:

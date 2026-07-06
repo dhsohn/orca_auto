@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TypedDict, cast
 
-from .completion_rules import CompletionMode
+from .completion_rules import IMAGINARY_FREQ_THRESHOLD_CM1, CompletionMode
 from .output_status import ERROR_TERMINATION_NEEDLES, NORMAL_TERMINATION_NEEDLES
 from .statuses import AnalyzerStatus
 
@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 NEG_FREQ_RE = re.compile(r"(^|\s)(-\d+(?:\.\d+)?)\s*cm\*\*-1", re.IGNORECASE)
-IMAGINARY_FREQ_THRESHOLD_CM1 = 10.0
 VIB_FREQ_HEADER = "VIBRATIONAL FREQUENCIES"
 
 _DEFAULT_TAIL_BYTES = 64 * 1024

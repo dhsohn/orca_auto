@@ -167,7 +167,13 @@ def _entry_has_live_slot(
     return queue_id in unscoped_live_queue_ids and queue_id not in scoped_ids
 
 
-def _requeue_result_is_cancelled(result: Any) -> bool:
+def requeue_result_is_cancelled(result: Any) -> bool:
+    """True when a requeue attempt reports the entry as already cancelled.
+
+    Shared by every requeue-on-recovery path (orphan reconcile, worker
+    shutdown, child exit): a cancelled entry must not be marked
+    recovery-pending, or it would be resurrected on the next worker start.
+    """
     status = getattr(result, "status", None)
     status = getattr(status, "value", status)
     return normalize_status(status) == STATUS_CANCELLED
@@ -214,7 +220,7 @@ def reconcile_orphaned_child_queue_entries(
                 mark_cancelled_fn(queue_root, queue_id, error="cancel_requested")
             else:
                 updated = requeue_running_entry_fn(queue_root, queue_id)
-                if _requeue_result_is_cancelled(updated):
+                if requeue_result_is_cancelled(updated):
                     continue
                 mark_recovery_pending_fn(cfg, entry)
 
@@ -290,6 +296,7 @@ __all__ = [
     "live_queue_slot_keys_for_slots",
     "reconcile_orphaned_child_queue_entries",
     "request_job_cancellation",
+    "requeue_result_is_cancelled",
     "shutdown_child_process_with_grace",
     "start_background_process",
     "start_background_job_process",

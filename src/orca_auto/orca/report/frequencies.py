@@ -18,11 +18,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..completion_rules import IMAGINARY_FREQ_THRESHOLD_CM1
 from ..parser.io import read_orca_text
 
 logger = logging.getLogger(__name__)
 
-FREQ_EPS_CM = 1.0
+# Same noise cutoff the completion analyzer applies: the SI and reports must
+# count a verified TS's modes exactly as the verifier did, or the pipeline
+# publishes a Nimag that contradicts its own COMPLETED verdict.
+FREQ_EPS_CM = IMAGINARY_FREQ_THRESHOLD_CM1
 _TOP_ATOM_COUNT = 5
 
 _FREQ_HEADER = "VIBRATIONAL FREQUENCIES"

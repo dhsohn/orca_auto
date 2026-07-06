@@ -28,13 +28,31 @@ class TestCompletionRules(unittest.TestCase):
         self.assertFalse(mode.require_irc)
         self.assertEqual(mode.route_line, "! ScanTS B3LYP def2-SVP Freq")
 
-    def test_detect_bare_ts_as_ts(self) -> None:
+    def test_bare_ts_token_is_not_a_ts_route(self) -> None:
+        # ORCA has no `! TS` keyword; treating one as a TS search would demand
+        # Nimag == 1 from jobs that never ran a TS optimization.
         with tempfile.TemporaryDirectory() as td:
             inp = Path(td) / "rxn.inp"
             inp.write_text("! TS Freq B3LYP def2-SVP\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
             mode = detect_completion_mode(inp)
-        self.assertEqual(mode.kind, "ts")
+        self.assertEqual(mode.kind, "opt")
         self.assertFalse(mode.require_irc)
+
+    def test_route_comment_never_reclassifies_the_job(self) -> None:
+        # `#` comments are cut before keyword matching: a plain Opt+Freq
+        # minimum with a "TS candidate" note must stay in opt mode, or its
+        # Nimag = 0 result would be failed as TS_NOT_FOUND.
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "rxn.inp"
+            inp.write_text(
+                "! B3LYP def2-SVP Opt Freq  # TS candidate from scan, IRC later\n"
+                "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                encoding="utf-8",
+            )
+            mode = detect_completion_mode(inp)
+        self.assertEqual(mode.kind, "opt")
+        self.assertFalse(mode.require_irc)
+        self.assertEqual(mode.route_line, "! B3LYP def2-SVP Opt Freq")
 
     def test_detect_opt_without_irc(self) -> None:
         with tempfile.TemporaryDirectory() as td:

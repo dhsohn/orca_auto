@@ -6,8 +6,20 @@ from pathlib import Path
 
 from .input_blocks import file_route_lines
 
-TS_ROUTE_RE = re.compile(r"\b(OPTTS|SCANTS|NEB-TS|TS)\b", re.IGNORECASE)
+# Only real ORCA TS keywords. No bare `TS` token: ORCA has no `! TS`, so it
+# can only ever match stray text (the SCAN-functional collision class), never
+# a job ORCA would actually run as a TS search.
+TS_ROUTE_RE = re.compile(r"\b(OPTTS|SCANTS|NEB-TS)\b", re.IGNORECASE)
 IRC_ROUTE_RE = re.compile(r"\bIRC\b", re.IGNORECASE)
+# Every simple-input spelling of a geometry optimization: convergence-prefixed
+# (TightOpt, ...) and coordinate-system (COpt/ZOpt) variants included, so a
+# TightOpt job cannot slip through as a single point.
+OPT_ROUTE_RE = re.compile(r"\b(?:VERYTIGHT|TIGHT|NORMAL|LOOSE)?[CZ]?OPT\b", re.IGNORECASE)
+
+# Negative modes at or below this magnitude are numerical noise, not a reaction
+# coordinate. Shared by the completion analyzer and the SI/report renderers so
+# a verified TS can never be re-counted differently in the published SI.
+IMAGINARY_FREQ_THRESHOLD_CM1 = 10.0
 
 
 @dataclass

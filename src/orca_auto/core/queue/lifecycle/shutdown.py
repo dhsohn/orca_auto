@@ -6,9 +6,9 @@ from collections.abc import Callable, Iterable
 from contextlib import suppress
 from typing import Any
 
-from orca_auto.core.statuses import STATUS_CANCEL_REQUESTED, STATUS_CANCELLED, normalize_status
+from orca_auto.core.statuses import STATUS_CANCEL_REQUESTED
 
-from ..child.process import shutdown_child_process_with_grace
+from ..child.process import requeue_result_is_cancelled, shutdown_child_process_with_grace
 from .hooks import (
     ChildExitPolicy,
     EngineQueueProcessLifecycleHooks,
@@ -17,12 +17,6 @@ from .hooks import (
 from .terminal import entry_status_is_running, job_queue_root
 
 LOGGER = logging.getLogger("orca_auto.core.queue.lifecycle")
-
-
-def _requeue_result_is_cancelled(result: Any) -> bool:
-    status = getattr(result, "status", None)
-    status = getattr(status, "value", status)
-    return normalize_status(status) == STATUS_CANCELLED
 
 
 def cancel_running_process_job(
@@ -115,7 +109,7 @@ def finalize_child_worker_exit(
                 mark_cancelled_fn(root, queue_id, error=STATUS_CANCEL_REQUESTED)
             elif shutdown_requested:
                 updated = requeue_running_entry_fn(root, queue_id)
-                if _requeue_result_is_cancelled(updated):
+                if requeue_result_is_cancelled(updated):
                     return
                 recovery_entry = (
                     recovery_entry_fn(current, job) if recovery_entry_fn is not None else current
