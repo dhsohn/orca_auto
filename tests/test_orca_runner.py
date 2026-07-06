@@ -95,8 +95,11 @@ class TestOrcaRunnerTermination(unittest.TestCase):
 
 
 class TestOrcaRunnerProcessRecordLifecycle(unittest.TestCase):
+    @patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False)
     @patch("orca_auto.orca.orca_runner.subprocess.Popen")
-    def test_normal_exit_clears_process_record(self, mock_popen: MagicMock) -> None:
+    def test_normal_exit_clears_process_record(
+        self, mock_popen: MagicMock, _group_alive: MagicMock
+    ) -> None:
         mock_proc = MagicMock()
         mock_proc.wait.return_value = 0
         mock_proc.poll.return_value = 0
@@ -110,17 +113,19 @@ class TestOrcaRunnerProcessRecordLifecycle(unittest.TestCase):
             runner.run(inp)
             self.assertFalse((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
 
+    @patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=True)
     @patch("orca_auto.orca.orca_runner.signal.signal")
     @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
     @patch("orca_auto.orca.orca_runner.subprocess.Popen")
-    def test_interrupt_keeps_record_when_termination_fails(
+    def test_interrupt_keeps_record_while_group_survives(
         self,
         mock_popen: MagicMock,
         _mock_getsignal: MagicMock,
         mock_signal: MagicMock,
+        _group_alive: MagicMock,
     ) -> None:
-        # A shutdown whose termination times out must LEAVE orca.process.json
-        # so the next run's crash recovery can reap the orphaned ORCA group.
+        # Leader reaped but a PAL/child process in the group is still running:
+        # the record must survive so the next run's crash recovery reaps it.
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         mock_proc.pid = 99999
@@ -137,19 +142,21 @@ class TestOrcaRunnerProcessRecordLifecycle(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             inp = Path(td) / "test.inp"
             inp.write_text("! Opt\n", encoding="utf-8")
-            with patch.object(runner, "_terminate_subprocess_tree", return_value=False):
+            with patch.object(runner, "_terminate_subprocess_tree", return_value=True):
                 with self.assertRaises(WorkerShutdownInterrupt):
                     runner.run(inp)
             self.assertTrue((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
 
+    @patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False)
     @patch("orca_auto.orca.orca_runner.signal.signal")
     @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
     @patch("orca_auto.orca.orca_runner.subprocess.Popen")
-    def test_interrupt_clears_record_when_termination_confirmed(
+    def test_interrupt_clears_record_when_group_gone(
         self,
         mock_popen: MagicMock,
         _mock_getsignal: MagicMock,
         mock_signal: MagicMock,
+        _group_alive: MagicMock,
     ) -> None:
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None

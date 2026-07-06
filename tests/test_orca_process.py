@@ -81,3 +81,20 @@ def test_recover_orphaned_orca_process_ignores_reused_pid(tmp_path: Path) -> Non
 
     assert recovered is False
     assert not (reaction_dir / ORCA_PROCESS_RECORD_FILE_NAME).exists()
+
+
+def test_process_group_is_alive_probes_the_group() -> None:
+    from orca_auto.orca.orca_process import process_group_is_alive
+
+    seen: list[tuple[int, int]] = []
+
+    def alive_killpg(pgid: int, signum: int) -> None:
+        seen.append((pgid, signum))
+
+    assert process_group_is_alive(4321, killpg_fn=alive_killpg) is True
+    assert seen == [(4321, 0)]
+
+    def dead_killpg(_pgid: int, _signum: int) -> None:
+        raise ProcessLookupError
+
+    assert process_group_is_alive(4321, killpg_fn=dead_killpg) is False

@@ -96,6 +96,15 @@ def _process_group_exists(
     return True
 
 
+def process_group_is_alive(pgid: int, *, killpg_fn: Any = os.killpg) -> bool:
+    """True while any process in ``pgid`` survives (probe via ``killpg(pgid, 0)``).
+
+    The record must outlive the group, not just its leader: the runner clears
+    it only once this is False, and crash recovery reaps whatever it finds.
+    """
+    return _process_group_exists(pgid, killpg_fn=killpg_fn)
+
+
 def _recorded_process_is_reused(
     *,
     pid: int,
@@ -256,6 +265,7 @@ __all__ = [
     "ORCA_PROCESS_RECORD_FILE_NAME",
     "clear_orca_process_record",
     "orca_process_record_path",
+    "process_group_is_alive",
     "recover_orphaned_orca_process",
     "write_orca_process_record",
 ]
