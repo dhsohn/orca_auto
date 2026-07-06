@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Full CI-parity gate before pushing: runs scripts/check.sh against the existing
+# .venv (ruff, mypy, import-linter, and the pytest suite with coverage) so a
+# broken push is caught locally instead of by GitHub Actions.
+#
+# Git pushes committed objects while this suite checks the working tree, so the
+# two must match exactly. The hook fails closed on every divergence it cannot
+# test through: tracked changes (staged or unstaged), ANY untracked non-ignored
+# file (tool configs like ruff.toml/mypy.ini/.coveragerc and pytest fixtures
+# change check behavior just as much as *.py does), and pushes of refs that are
+# not HEAD (the suite can only validate HEAD's tree — a warning would let a
+# broken other-branch commit ride through on an unrelated clean HEAD).
+#
+# A temporary checkout of the pushed refs was rejected deliberately: the venv's
+# editable install resolves `orca_auto` to THIS checkout's src/, so a temp
+# checkout would silently import the wrong code.
+#
+# Reuses the current venv without reinstalling deps, so this is the ~pytest
+# runtime (tens of seconds), not a fresh environment build. Bypass with
+# `git push --no-verify`.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# The pushed range decides whether dependency metadata changed: CI installs a
+# fresh environment from these files, so a push that edits them must not be
+# validated against the stale local venv (a removed-but-still-imported package
+# would pass locally and fail CI). Base = the remote's old tip when known,
+# else the merge base with origin/main (new branches), else assume changed.
+dep_files_changed() { # $1 = local sha, $2 = remote sha (may be all zeros)
+  local base="$2"
+  if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null; then
+    base="$(git merge-base "$1" origin/main 2>/dev/null || true)"
+    [[ -n "$base" ]] || return 0
+  fi
+  [[ -n "$(git diff --name-only "$base" "$1" -- pyproject.toml constraints-dev.txt)" ]]
+}
+
+# stdin FIRST: "<local_ref> <local_sha> <remote_ref> <remote_sha>" per pushed
+# ref. A deletion-only push (`git push --delete old-branch`, all-zero local
+# oid) uploads no commits, so nothing below applies — exit before the venv,
+# parity, and suite gates can block it on unrelated local state.
+# Dereference tags to their commit (^{commit}) so pushing a tag of HEAD passes.
+head_sha="$(git rev-parse HEAD)"
+any_nondelete=0
+skip_install=1
+while read -r local_ref local_sha _remote_ref remote_sha; do
+  [[ -z "$local_sha" || "$local_sha" =~ ^0+$ ]] && continue  # ref deletion
+  any_nondelete=1
+  pushed_commit="$(git rev-parse --verify --quiet "${local_sha}^{commit}" || printf '%s' "$local_sha")"
+  if [[ "$pushed_commit" != "$head_sha" ]]; then
+    echo "[pre-push] $local_ref@${local_sha:0:9} is not HEAD (${head_sha:0:9}); the suite can only validate HEAD." >&2
+    echo "[pre-push] Check out that ref and push from it, or bypass with 'git push --no-verify'." >&2
+    exit 1
+  fi
+  if ((skip_install)) && dep_files_changed "$pushed_commit" "$remote_sha"; then
+    echo "[pre-push] Dependency metadata changed in this push; running check.sh with the install step."
+    skip_install=0
+  fi
+done
+if ((!any_nondelete)); then
+  echo "[pre-push] Deletion-only push: no commits to test."
+  exit 0
+fi
+
+VENV_DIR="${ORCA_AUTO_VENV:-$ROOT/.venv}"
+if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+  echo "[pre-push] .venv not found at $VENV_DIR; run scripts/check.sh once first." >&2
+  exit 1
+fi
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "[pre-push] Tracked changes present: the suite would test your worktree, not the pushed commit." >&2
+  echo "[pre-push] Commit or stash them first, or bypass with 'git push --no-verify'." >&2
+  exit 1
+fi
+
+untracked="$(git ls-files --others --exclude-standard)"
+if [[ -n "$untracked" ]]; then
+  echo "[pre-push] Untracked files would leak into the checks but are absent from the pushed commit:" >&2
+  printf '%s\n' "$untracked" | sed 's/^/[pre-push]   /' >&2
+  echo "[pre-push] Commit, gitignore, or remove them, or bypass with 'git push --no-verify'." >&2
+  exit 1
+fi
+
+echo "[pre-push] Running full check suite (scripts/check.sh)…"
+# Point check.sh at the venv interpreter: its system-python probe fails when no
+# python>=3.11 is on the hook's PATH. SKIP_INSTALL keeps it from rebuilding the
+# already-usable venv — except when this push changes dependency metadata (see
+# dep_files_changed above), where CI-parity requires the install step.
+PYTHON_BIN="$VENV_DIR/bin/python" ORCA_AUTO_CHECK_SKIP_INSTALL=$skip_install exec bash "$ROOT/scripts/check.sh"

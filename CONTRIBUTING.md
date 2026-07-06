@@ -98,6 +98,28 @@ binary:
 bash examples/fake_orca_smoke/run.sh
 ```
 
+## Git hooks (optional)
+
+Versioned hooks live in `.githooks/`. Enable them once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+- `pre-commit` runs the fast half of `scripts/check.sh` (Ruff lint + format,
+  mypy, import-linter) against the STAGED snapshot — unstaged changes and
+  untracked files are set aside during the checks and restored afterwards, so
+  what passes is exactly what the commit records. Fully-staged Python files
+  are auto-formatted and re-staged, so a missing `ruff format` cannot reach CI.
+- `pre-push` runs the full `scripts/check.sh` (adds the coverage-gated pytest
+  suite) against the existing `.venv`. It fails closed on anything it cannot
+  test through: tracked changes, any untracked non-ignored file, or pushing a
+  ref other than HEAD — Git pushes commits, not your worktree, and the suite
+  must test exactly what lands on CI.
+
+Both need `.venv` (run `scripts/check.sh` once first) and can be bypassed with
+`git commit --no-verify` / `git push --no-verify`.
+
 ## ORCA, xTB, CREST, and path policy
 
 - Use absolute Linux paths for configured executables and runtime roots.

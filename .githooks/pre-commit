@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# Fast CI-parity checks before each commit. Mirrors the fast half of
+# scripts/check.sh (ruff lint + format, mypy, import-linter); the slow pytest
+# suite runs in the pre-push hook instead, so committing stays quick.
+#
+# Every analyzer runs against the COMMIT's content, not the worktree. Fully
+# staged Python files are auto-formatted and re-staged first; then the staged
+# snapshot is isolated: unstaged tracked changes are saved as a patch and the
+# worktree reset to the index, and untracked (non-ignored) files are moved
+# aside — they are absent from the commit CI checks out, so e.g. a staged
+# import of a still-untracked module must fail here, not on CI. Both are
+# restored on any exit. A patch re-applies onto the same base it was diffed
+# from (the checks are read-only) — unlike `git stash pop`, whose 3-way merge
+# spuriously conflicts on newly added files. If a restore ever fails, the
+# content is preserved (patch file / store directory under .git), never lost.
+#
+# Bypass with `git commit --no-verify`. Enable with:
+#   git config core.hooksPath .githooks
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+VENV_DIR="${ORCA_AUTO_VENV:-$ROOT/.venv}"
+PY="$VENV_DIR/bin/python"
+if [[ ! -x "$PY" ]]; then
+  echo "[pre-commit] .venv not found at $VENV_DIR; run scripts/check.sh once to create it." >&2
+  exit 1
+fi
+
+GIT_DIR="$(git rev-parse --git-dir)"
+
+# R included: a `git mv`ed Python file must be formatted/checked at its new
+# path, or an edited rename skips Ruff here and fails CI's project-wide run.
+mapfile -t py_files < <(git diff --cached --name-only --diff-filter=ACMR -- '*.py')
+
+# Auto-format only fully-staged Python files: their worktree matches the index,
+# so re-staging cannot pull in unrelated unstaged hunks. Do this BEFORE the
+# snapshot isolation. `git diff --quiet -- f` is 0 iff f has no unstaged changes.
+for f in "${py_files[@]:-}"; do
+  [[ -n "$f" ]] || continue
+  if git diff --quiet -- "$f" && ! "$PY" -m ruff format --check -- "$f" >/dev/null 2>&1; then
+    echo "[pre-commit] ruff format: reformatting and re-staging $f"
+    "$PY" -m ruff format -- "$f"
+    git add -- "$f"
+  fi
+done
+
+# --- Isolate the staged snapshot for the checks; restore on any exit. ---
+patch="$GIT_DIR/pre-commit-unstaged.patch"
+
+# After a failed restore this file can be the ONLY copy of the user's unstaged
+# content; a second commit attempt must never truncate it with the now-empty
+# diff, or the recovery instructions stop recovering anything.
+if [[ -e "$patch" ]]; then
+  echo "[pre-commit] A saved unstaged patch from a previous failed restore exists: $patch" >&2
+  echo "[pre-commit] Recover it first (see the previous run's instructions), then remove the file and retry." >&2
+  exit 1
+fi
+
+have_patch=0
+untracked_store=""
+mapfile -d '' -t untracked_files < <(git ls-files -z --others --exclude-standard)
+
+# Fail closed: if the worktree could not be fully restored (e.g. an
+# intent-to-add file makes `git apply` refuse the new-file hunk), the commit
+# must NOT proceed — a green hook that leaves the user's file emptied on disk
+# would corrupt the tree they keep working in. The content is always preserved
+# (patch file / store directory under .git) and the abort makes it impossible
+# to miss.
+restore() {
+  local restore_failed=0
+  if [[ -n "$untracked_store" && -d "$untracked_store" ]]; then
+    local f
+    for f in "${untracked_files[@]}"; do
+      if [[ -e "$untracked_store/$f" ]]; then
+        mkdir -p -- "$(dirname -- "$f")"
+        mv -- "$untracked_store/$f" "$f" || restore_failed=1
+      fi
+    done
+    find "$untracked_store" -depth -type d -exec rmdir {} + 2>/dev/null || true
+    if [[ -d "$untracked_store" ]]; then
+      echo "[pre-commit] ERROR: some untracked files were not restored; they remain under $untracked_store" >&2
+      restore_failed=1
+    fi
+  fi
+  if ((have_patch)); then
+    # Let git apply's own error through: it names the conflicting path, which
+    # the recovery instructions below need.
+    if git apply --whitespace=nowarn "$patch"; then
+      rm -f "$patch"
+    else
+      echo "[pre-commit] ERROR: could not re-apply your unstaged changes; they are saved at $patch" >&2
+      echo "[pre-commit]   The error above names the conflicting path (typically an intent-to-add placeholder);" >&2
+      echo "[pre-commit]   recover with: git reset -- <path> && rm -f <path> && git apply '$patch'" >&2
+      restore_failed=1
+    fi
+  fi
+  if ((restore_failed)); then
+    echo "[pre-commit] Aborting the commit: the worktree was NOT fully restored (see above)." >&2
+    exit 1
+  fi
+}
+trap restore EXIT
+
+if ((${#untracked_files[@]})); then
+  untracked_store="$(mktemp -d "$GIT_DIR/pre-commit-untracked.XXXXXX")"
+  for f in "${untracked_files[@]}"; do
+    mkdir -p -- "$untracked_store/$(dirname -- "$f")"
+    mv -- "$f" "$untracked_store/$f"
+  done
+fi
+
+if ! git diff --quiet; then
+  git diff --binary --no-color >"$patch"
+  have_patch=1
+  git checkout --quiet -- .
+fi
+
+if ((${#py_files[@]})); then
+  echo "[pre-commit] ruff check"
+  "$PY" -m ruff check -- "${py_files[@]}"
+  echo "[pre-commit] ruff format --check"
+  "$PY" -m ruff format --check -- "${py_files[@]}"
+fi
+
+echo "[pre-commit] mypy"
+"$PY" -m mypy
+
+echo "[pre-commit] import-linter"
+"$VENV_DIR/bin/lint-imports"
+
+echo "[pre-commit] OK"
