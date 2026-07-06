@@ -378,10 +378,11 @@ class TestAcquireFileLock(unittest.TestCase):
 
 
 class TestStaleLockClaimAndOwnedRelease(unittest.TestCase):
-    def test_stale_claim_restores_a_fresh_live_lock(self) -> None:
+    def test_stale_claim_leaves_a_fresh_live_lock_untouched(self) -> None:
         # The unlink-then-recreate race: a contender judged the lock stale, but
         # by the time it acts another process has already replaced it with a
-        # fresh, live lock. The claim must put that lock back, not delete it.
+        # fresh, live lock. Recovery re-verifies under the flock and must not
+        # move or remove the live lock at any point.
         with tempfile.TemporaryDirectory() as td:
             lock_path = Path(td) / "run.lock"
             lock_path.write_text(json.dumps({"pid": 4321}), encoding="utf-8")

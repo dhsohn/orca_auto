@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from orca_auto.core.utils import process as process_utils
+from orca_auto.core.utils.lock import file_lock
 
 
 def parse_lock_info(lock_path: Path) -> dict[str, Any]:
@@ -85,6 +86,9 @@ def _write_lock_payload(lock_path: Path, lock_payload: str) -> bool:
             os.unlink(tmp_path)
 
 
+_STALE_RECOVERY_FLOCK_TIMEOUT_SECONDS = 10.0
+
+
 def _claim_stale_lock(
     lock_path: Path,
     *,
@@ -94,47 +98,43 @@ def _claim_stale_lock(
     logger: logging.Logger,
     stale_pid_reuse_log_template: str,
 ) -> bool:
-    """Atomically claim and discard a lock judged stale; True when removed.
+    """Verify-and-remove a lock judged stale; True when it was removed.
 
     A bare unlink-then-recreate races: two contenders can both judge the same
     lock stale, and the slower one unlinks the winner's FRESH lock — leaving
-    two owners. Renaming first means exactly one contender claims the file;
-    re-verifying the claimed content catches the case where a fresh lock was
-    claimed by mistake, and hard-linking it back restores the rightful owner.
+    two owners. Recovery is therefore serialized through a sibling flock:
+    while holding it, the lock content is re-verified and only a still-dead
+    owner's file is unlinked. A live lock is never moved or removed, and the
+    lock path is only ever missing after a verified-stale unlink — a window
+    where any contender may legitimately create.
     """
-    tombstone = lock_path.with_name(f".{lock_path.name}.stale.{os.getpid()}")
+    recovery_lock = lock_path.with_name(f".{lock_path.name}.recovery")
     try:
-        os.rename(lock_path, tombstone)
-    except FileNotFoundError:
-        # Another contender already claimed it; retry creating normally.
-        return True
-    try:
-        claimed = parse_lock_info_fn(tombstone)
-        claimed_pid = claimed.get("pid")
-        if isinstance(claimed_pid, int) and _lock_owner_alive(
-            lock_pid=claimed_pid,
-            lock_start_ticks=claimed.get("process_start_ticks"),
-            is_process_alive_fn=is_process_alive_fn,
-            process_start_ticks_fn=process_start_ticks_fn,
-            logger=logger,
-            stale_pid_reuse_log_template=stale_pid_reuse_log_template,
-            lock_path=lock_path,
+        with file_lock(
+            recovery_lock,
+            timeout_seconds=_STALE_RECOVERY_FLOCK_TIMEOUT_SECONDS,
         ):
-            # We claimed a fresh lock created between our staleness check and
-            # the rename: give it back to its live owner.
-            try:
-                os.link(tombstone, lock_path)
-            except FileExistsError:
-                logger.warning(
-                    "Could not restore a mistakenly claimed live lock "
-                    "(a newer lock already exists): %s",
-                    lock_path,
-                )
-            return False
-        return True
-    finally:
-        with suppress(OSError):
-            os.unlink(tombstone)
+            current = parse_lock_info_fn(lock_path)
+            current_pid = current.get("pid")
+            if isinstance(current_pid, int) and _lock_owner_alive(
+                lock_pid=current_pid,
+                lock_start_ticks=current.get("process_start_ticks"),
+                is_process_alive_fn=is_process_alive_fn,
+                process_start_ticks_fn=process_start_ticks_fn,
+                logger=logger,
+                stale_pid_reuse_log_template=stale_pid_reuse_log_template,
+                lock_path=lock_path,
+            ):
+                # A fresh live lock replaced the stale one while we waited:
+                # it is not ours to touch.
+                return False
+            with suppress(FileNotFoundError):
+                lock_path.unlink()
+            return True
+    except TimeoutError:
+        # Recovery is contended beyond reason; treat the lock as active and
+        # let the caller's wait/raise policy decide.
+        return False
 
 
 def _lock_owner_alive(
