@@ -214,7 +214,7 @@ def _resolve_required_workflow_root(args: Any, manifest: dict[str, Any]) -> str:
     if not resolved_workflow_root:
         raise ValueError(
             "workflow_root is not configured. Set workflow_root in flow.yaml "
-            "or workflow.root in orca_auto.yaml."
+            "or runs_root in orca_auto.yaml."
         )
     return resolved_workflow_root
 

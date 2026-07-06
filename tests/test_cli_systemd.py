@@ -23,13 +23,9 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
     config_path.write_text(
         "\n".join(
             [
+                f"runs_root: {repo / 'orca_runs'}",
                 "scheduler:",
                 f"  admission_root: {repo / 'admission'}",
-                "workflow:",
-                f"  root: {repo / 'workflow_runs'}",
-                "orca:",
-                "  runtime:",
-                f"    allowed_root: {repo / 'orca_runs'}",
                 "telegram:",
                 "  bot_token: token",
                 "  chat_id: chat",
@@ -76,7 +72,6 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
     assert (
         "ReadWritePaths="
         f"{repo.resolve(strict=False) / 'admission'} "
-        f"{repo.resolve(strict=False) / 'workflow_runs'} "
         f"{repo.resolve(strict=False) / 'orca_runs'}"
     ) in worker_content
     bot_content = unit_by_name["orca_auto-bot@.service"].content
@@ -94,11 +89,7 @@ def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
     config_path.write_text(
         "\n".join(
             [
-                "workflow:",
-                f"  root: {repo / 'workflow_runs'}",
-                "orca:",
-                "  runtime:",
-                f"    allowed_root: {repo / 'orca_runs'}",
+                f"runs_root: {repo / 'workflow_runs'}",
                 "telegram:",
                 "  bot_token: token",
                 "  chat_id: chat",
@@ -121,8 +112,7 @@ def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
     assert (
         "ReadWritePaths="
         f"{repo.resolve(strict=False) / 'workflow_runs' / '.admission'} "
-        f"{repo.resolve(strict=False) / 'workflow_runs'} "
-        f"{repo.resolve(strict=False) / 'orca_runs'}"
+        f"{repo.resolve(strict=False) / 'workflow_runs'}"
     ) in worker_content
 
 
@@ -186,10 +176,9 @@ def test_systemd_read_write_paths_reject_whitespace_from_config(tmp_path: Path) 
     config_path.write_text(
         "\n".join(
             [
+                f"runs_root: {repo / 'workflow runs'}",
                 "scheduler:",
                 f"  admission_root: {repo / 'admission'}",
-                "workflow:",
-                f"  root: {repo / 'workflow runs'}",
                 "telegram:",
                 "  bot_token: token",
                 "  chat_id: chat",

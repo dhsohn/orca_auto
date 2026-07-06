@@ -18,7 +18,7 @@ from orca_auto.core.paths import (
 def _validate_config(cfg: Any) -> None:
     """Validate core path constraints on an AppConfig instance."""
     for label, path_val in [
-        ("allowed_root", cfg.runtime.allowed_root),
+        ("runs_root", cfg.runtime.allowed_root),
         (
             "admission_root",
             getattr(cfg.runtime, "resolved_admission_root", cfg.runtime.admission_root),
@@ -40,8 +40,8 @@ def _validate_config(cfg: Any) -> None:
     allowed_root = Path(cfg.runtime.allowed_root)
     if not allowed_root.exists():
         raise ValueError(
-            f"allowed_root directory not found: {cfg.runtime.allowed_root!r}. "
+            f"runs_root directory not found: {cfg.runtime.allowed_root!r}. "
             "Create the directory or update the config."
         )
     if not allowed_root.is_dir():
-        raise ValueError(f"allowed_root is not a directory: {cfg.runtime.allowed_root!r}")
+        raise ValueError(f"runs_root is not a directory: {cfg.runtime.allowed_root!r}")

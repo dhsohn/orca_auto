@@ -13,7 +13,7 @@ from .files import (
     default_shared_admission_root,
     load_required_yaml_mapping,
     mapping_section,
-    workflow_root_from_mapping,
+    runs_root_from_mapping,
 )
 from .schema import (
     CommonResourceConfig,
@@ -187,12 +187,10 @@ def scheduler_runtime_settings(
 
 
 def _required_workflow_root(raw: dict[str, Any], path: Path) -> str:
-    workflow_root = workflow_root_from_mapping(raw)
+    workflow_root = runs_root_from_mapping(raw)
     if not workflow_root:
-        raise ValueError(
-            f"Config is missing a runs root (workflow.root or orca.runtime.allowed_root): {path}"
-        )
-    return workflow_root
+        raise ValueError(f"Config is missing runs_root: {path}")
+    return str(Path(workflow_root).expanduser().resolve())
 
 
 def _runtime_config_from_scheduler(

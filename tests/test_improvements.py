@@ -108,9 +108,9 @@ class TestCrashRecovery(unittest.TestCase):
         config.write_text(
             json.dumps(
                 {
+                    "runs_root": str(allowed_root),
                     "orca": {
                         "runtime": {
-                            "allowed_root": str(allowed_root),
                             "default_max_retries": 4,
                         },
                         "paths": {"orca_executable": str(fake_orca)},

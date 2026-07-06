@@ -25,9 +25,9 @@ class _ListTestBase(unittest.TestCase):
         config.write_text(
             json.dumps(
                 {
+                    "runs_root": str(allowed_root),
                     "orca": {
                         "runtime": {
-                            "allowed_root": str(allowed_root),
                             "default_max_retries": 2,
                         },
                         "paths": {"orca_executable": str(fake_orca)},

@@ -141,16 +141,13 @@ def scheduler_admission_root(
     return admission_root
 
 
-def workflow_root_from_mapping(raw: dict[str, Any] | None) -> str:
-    """Resolve the shared runs root: workflow.root, else orca.runtime.allowed_root."""
-    workflow_raw = mapping_section(raw, "workflow")
-    root_text = normalize_text(workflow_raw.get("root") or "")
-    if not root_text:
-        orca_runtime_raw = mapping_section(mapping_section(raw, "orca"), "runtime")
-        root_text = normalize_text(orca_runtime_raw.get("allowed_root") or "")
-    if not root_text:
-        return ""
-    return str(Path(root_text).expanduser().resolve())
+def runs_root_from_mapping(raw: dict[str, Any] | None) -> str:
+    """Read the shared runs root from the top-level runs_root key.
+
+    Returns the configured text as-is (no resolution) so callers can validate
+    the raw value before resolving it.
+    """
+    return normalize_text((raw.get("runs_root") or "") if isinstance(raw, dict) else "")
 
 
 def shared_workflow_root_from_config(config_path: str | Path | None) -> str | None:
@@ -169,7 +166,7 @@ def shared_workflow_root_from_config(config_path: str | Path | None) -> str | No
     except YAML_CONFIG_LOAD_EXCEPTIONS:
         return None
 
-    root_text = workflow_root_from_mapping(parsed)
+    root_text = runs_root_from_mapping(parsed)
     if not root_text:
         return None
-    return root_text
+    return str(Path(root_text).expanduser().resolve())

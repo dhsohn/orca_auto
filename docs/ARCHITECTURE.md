@@ -212,8 +212,8 @@ all internal workflow stages compete for a single shared pool of slots.
 - The cap is `scheduler.max_active_simulations`. It is **shared across ORCA,
   internal xTB stages, and internal CREST stages.**
 - Slots are persisted as records in an admission file under a shared
-  `admission_root` (defaults to `allowed_root`), guarded by a file lock
-  (`admission_lock`).
+  `admission_root` (defaults to `<runs_root>/.admission`), guarded by a file
+  lock (`admission_lock`).
 - `AdmissionStore` (in `store.py`) is the persistence facade for one admission
   root. Module-level functions (`reserve_slot`, `activate_reserved_slot`,
   `release_slot`, `update_slot_metadata`, `reconcile_stale_slots`) remain the
@@ -399,7 +399,8 @@ constructors. Notable rules:
   executables must be absolute Linux paths to existing executable files.
 - `scheduler.max_active_simulations` is the shared admission cap.
 - `scheduler.admission_root` is the shared slot-coordination root.
-- `workflow.root` enables workflow supervision and scopes internal-engine runs.
+- `runs_root` is the single runs root for standalone ORCA jobs, workflow
+  workspaces, and internal-engine runs.
 - `default_max_retries: 0` disables ORCA retries; any positive value enables the
   calculation-type retry policy, whose per-route caps are recorded in
   `job_state.json`/queue metadata.
@@ -413,7 +414,7 @@ the public CLI. Units live under `systemd/`:
 
 | Unit                                  | Role                                            |
 |---------------------------------------|-------------------------------------------------|
-| `orca_auto-queue-worker@.service`     | Supervises ORCA; also workflow + internal xTB/CREST workers when `workflow.root` is set |
+| `orca_auto-queue-worker@.service`     | Supervises ORCA plus workflow + internal xTB/CREST workers |
 | `orca_auto-bot@.service`              | Unified Telegram bot                            |
 | `orca_auto-runtime@.target`           | Starts both together                            |
 

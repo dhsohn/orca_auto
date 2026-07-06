@@ -50,7 +50,7 @@ def test_submission_admission_root_for_internal_engine_uses_scheduler_default(
     workflow_root = tmp_path / "workflows"
     config = tmp_path / "orca_auto.yaml"
     config.write_text(
-        f"workflow:\n  root: {workflow_root}\nscheduler:\n  max_active_simulations: 2\n",
+        f"runs_root: {workflow_root}\nscheduler:\n  max_active_simulations: 2\n",
         encoding="utf-8",
     )
 
@@ -67,9 +67,9 @@ def test_submission_admission_root_for_orca_ignores_runtime_admission_setting(
     config.write_text(
         "\n".join(
             [
+                "runs_root: /tmp/runs",
                 "orca:",
                 "  runtime:",
-                "    allowed_root: /tmp/runs",
                 f"    admission_root: {runtime_root}",
                 "",
             ]
@@ -92,11 +92,11 @@ def test_submission_admission_root_for_orca_uses_scheduler_with_runtime_key_pres
     config.write_text(
         "\n".join(
             [
+                "runs_root: /tmp/runs",
                 "scheduler:",
                 f"  admission_root: {scheduler_root}",
                 "orca:",
                 "  runtime:",
-                "    allowed_root: /tmp/runs",
                 "    admission_root: /tmp/runtime-admission",
                 "",
             ]

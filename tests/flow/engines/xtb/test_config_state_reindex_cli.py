@@ -46,11 +46,11 @@ def test_load_config_parses_defaults_and_normalizes_values(tmp_path: Path) -> No
     config_path.write_text(
         yaml.safe_dump(
             {
+                "runs_root": str(workflow_root),
                 "scheduler": {
                     "max_active_simulations": "6",
                 },
                 "workflow": {
-                    "root": str(workflow_root),
                     "paths": {
                         "xtb_executable": f" {fake_xtb} ",
                     },
@@ -102,7 +102,7 @@ def test_load_config_reports_missing_file_invalid_payload_and_requires_workflow_
     missing_workflow_root_path.write_text(
         yaml.safe_dump({"xtb": {"runtime": {}}}), encoding="utf-8"
     )
-    with pytest.raises(ValueError, match=r"Config is missing a runs root"):
+    with pytest.raises(ValueError, match=r"Config is missing runs_root"):
         load_config(str(missing_workflow_root_path))
 
 
@@ -144,8 +144,8 @@ def test_load_config_applies_defaults_for_missing_and_non_mapping_optional_secti
     config_path.write_text(
         yaml.safe_dump(
             {
+                "runs_root": str(workflow_root),
                 "workflow": {
-                    "root": str(workflow_root),
                     "paths": [],
                 },
                 "behavior": [],

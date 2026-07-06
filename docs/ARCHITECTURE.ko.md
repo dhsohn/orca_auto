@@ -210,8 +210,8 @@ python -m orca_auto.core.engines.worker_child \
 
 - 상한은 `scheduler.max_active_simulations`입니다. 이는 **ORCA, 내부 xTB
   스테이지, 내부 CREST 스테이지에 걸쳐 공유됩니다.**
-- 슬롯은 공유 `admission_root`(기본값은 `allowed_root`) 아래 어드미션 파일에
-  레코드로 영속화되며, 파일 락(`admission_lock`)으로 보호됩니다.
+- 슬롯은 공유 `admission_root`(기본값은 `<runs_root>/.admission`) 아래 어드미션
+  파일에 레코드로 영속화되며, 파일 락(`admission_lock`)으로 보호됩니다.
 - `AdmissionStore`(`store.py`)는 하나의 어드미션 루트에 대한 영속화 파사드입니다.
   모듈 수준 함수(`reserve_slot`, `activate_reserved_slot`, `release_slot`,
   `update_slot_metadata`, `reconcile_stale_slots`)가 공개 API로 남아 있습니다.
@@ -391,7 +391,8 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
   존재하는 실행 가능한 절대 Linux 경로여야 합니다.
 - `scheduler.max_active_simulations`는 공유 어드미션 상한입니다.
 - `scheduler.admission_root`는 공유 슬롯 조정 루트입니다.
-- `workflow.root`는 워크플로우 감독을 활성화하고 내부 엔진 실행을 스코프합니다.
+- `runs_root`는 단독 ORCA 작업, 워크플로우 워크스페이스, 내부 엔진 실행이 모두
+  사용하는 단일 runs 루트입니다.
 - `default_max_retries: 0`은 ORCA 재시도를 비활성화합니다. 양수 값은 계산
   종류별 재시도 정책을 활성화하며, 실제 route별 cap은 `job_state.json`/큐 metadata에
   기록됩니다.
@@ -405,7 +406,7 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 
 | 유닛                                  | 역할                                            |
 |---------------------------------------|-------------------------------------------------|
-| `orca_auto-queue-worker@.service`     | ORCA 감독; `workflow.root` 설정 시 워크플로우 + 내부 xTB/CREST 워커도 시작 |
+| `orca_auto-queue-worker@.service`     | ORCA 감독 + 워크플로우/내부 xTB/CREST 워커 시작 |
 | `orca_auto-bot@.service`              | 통합 텔레그램 봇                                |
 | `orca_auto-runtime@.target`           | 둘을 함께 시작                                  |
 

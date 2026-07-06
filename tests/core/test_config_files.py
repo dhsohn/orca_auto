@@ -11,37 +11,34 @@ from orca_auto.core.config.files import (
     load_yaml_mapping,
     mapping_section,
     resolve_configured_path,
+    runs_root_from_mapping,
     scheduler_admission_root,
     secure_config_file_permissions,
-    workflow_root_from_mapping,
 )
 
 
-def test_workflow_root_from_mapping_accepts_only_canonical_root_key(tmp_path: Path) -> None:
-    workflow_root = tmp_path / "workflow-root"
-
-    assert workflow_root_from_mapping({"workflow": {"root": str(workflow_root)}}) == str(
-        workflow_root.resolve()
-    )
-    assert workflow_root_from_mapping({"workflow": {"root": 0}}) == ""
-
-
-def test_workflow_root_from_mapping_falls_back_to_orca_allowed_root(tmp_path: Path) -> None:
+def test_runs_root_from_mapping_accepts_only_top_level_key(tmp_path: Path) -> None:
     runs_root = tmp_path / "runs"
-    workflow_root = tmp_path / "workflow-root"
 
-    # No workflow.root -> the runs root (orca.runtime.allowed_root) is the root.
-    assert workflow_root_from_mapping(
-        {"orca": {"runtime": {"allowed_root": str(runs_root)}}}
-    ) == str(runs_root.resolve())
-    # An explicit workflow.root still wins.
-    assert workflow_root_from_mapping(
-        {
-            "workflow": {"root": str(workflow_root)},
-            "orca": {"runtime": {"allowed_root": str(runs_root)}},
-        }
-    ) == str(workflow_root.resolve())
-    assert workflow_root_from_mapping({}) == ""
+    # Returns the configured text as-is; callers validate before resolving.
+    assert runs_root_from_mapping({"runs_root": str(runs_root)}) == str(runs_root)
+    assert runs_root_from_mapping({"runs_root": 0}) == ""
+    assert runs_root_from_mapping({}) == ""
+
+
+def test_runs_root_from_mapping_ignores_removed_legacy_keys(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+
+    # The old workflow.root / orca.runtime.allowed_root locations are gone.
+    assert (
+        runs_root_from_mapping(
+            {
+                "workflow": {"root": str(runs_root)},
+                "orca": {"runtime": {"allowed_root": str(runs_root)}},
+            }
+        )
+        == ""
+    )
 
 
 def test_engine_config_mapping_requires_engine_section() -> None:

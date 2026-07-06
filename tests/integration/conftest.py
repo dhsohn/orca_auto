@@ -45,11 +45,11 @@ def _write_shared_config(
     path.write_text(
         textwrap.dedent(
             f"""
+            runs_root: {workflow_root}
             scheduler:
               max_active_simulations: 1
               admission_root: {admission_root}
             workflow:
-              root: {workflow_root}
               paths:
                 xtb_executable: {xtb_executable}
                 crest_executable: {crest_executable}

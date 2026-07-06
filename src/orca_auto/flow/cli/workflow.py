@@ -58,7 +58,7 @@ def _workflow_worker_options(args: Any) -> _WorkflowWorkerOptions:
     workflow_root = _workflow_root_for_args(args, config_path=shared_config)
     if not workflow_root:
         raise ValueError(
-            "workflow_root is not configured. Pass --workflow-root or set workflow.root in "
+            "workflow_root is not configured. Pass --workflow-root or set runs_root in "
             "orca_auto.yaml."
         )
 

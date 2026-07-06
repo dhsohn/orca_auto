@@ -98,7 +98,7 @@ def test_cmd_run_dir_reads_manifest_for_conformer_workflow(
     workflow_root = tmp_path / "workflow_root"
     workflow_root.mkdir()
     config_path = tmp_path / "orca_auto.yaml"
-    config_path.write_text(f"workflow:\n  root: {workflow_root}\n", encoding="utf-8")
+    config_path.write_text(f"runs_root: {workflow_root}\n", encoding="utf-8")
     (workflow_dir / "input.xyz").write_text("2\nmol\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
     (workflow_dir / "flow.yaml").write_text(
         "\n".join(

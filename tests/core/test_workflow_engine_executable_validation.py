@@ -24,10 +24,10 @@ def _write_config(
     config_path.write_text(
         json.dumps(
             {
+                "runs_root": str(workflow_root),
                 "workflow": {
-                    "root": str(workflow_root),
                     "paths": {path_key: executable_value},
-                }
+                },
             }
         ),
         encoding="utf-8",

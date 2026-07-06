@@ -860,8 +860,7 @@ def test_settings_from_config_uses_shared_telegram_section(tmp_path: Path) -> No
     config_path.write_text(
         "\n".join(
             [
-                "workflow:",
-                "  root: /tmp/workflows",
+                "runs_root: /tmp/workflows",
                 "telegram:",
                 '  bot_token: "bot-token"',
                 '  chat_id: "chat-id"',

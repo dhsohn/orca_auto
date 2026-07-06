@@ -11,8 +11,8 @@ from orca_auto.core.config.files import (
     engine_config_mapping,
     load_yaml_mapping,
     mapping_section,
+    runs_root_from_mapping,
     scheduler_admission_root,
-    workflow_root_from_mapping,
 )
 
 from . import _common as _runtime_common
@@ -70,7 +70,7 @@ def _submission_admission_root_from_config(
 
     # The shared runs root anchors the default admission directory
     # (<runs_root>/.admission) for every engine.
-    runs_root = workflow_root_from_mapping(raw)
+    runs_root = runs_root_from_mapping(raw)
 
     if engine in {"xtb", "crest"}:
         if not runs_root:

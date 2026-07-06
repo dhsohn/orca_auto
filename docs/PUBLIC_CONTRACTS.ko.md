@@ -89,11 +89,11 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 
 지원되는 최상위 섹션과 키:
 
+- `runs_root`
 - `resources.max_cores_per_task`
 - `resources.max_memory_gb_per_task`
 - `scheduler.max_active_simulations`
 - `scheduler.admission_root`
-- `workflow.root`
 - `workflow.paths.xtb_executable`
 - `workflow.paths.crest_executable`
 - `telegram.bot_token`
@@ -101,17 +101,15 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `telegram.timeout_seconds`
 - `telegram.max_attempts`
 - `telegram.retry_backoff_seconds`
-- `orca.runtime.allowed_root`
 - `orca.runtime.default_max_retries`
 - `orca.paths.orca_executable`
 
 안정 동작:
 
-- `orca.runtime.allowed_root`는 기본 단일 runs 루트입니다.
-- `workflow.root`를 따로 설정하지 않으면 워크플로우 워크스페이스도 runs 루트 아래에
-  생성됩니다.
+- `runs_root`는 단일 runs 루트입니다. 단독 ORCA 작업과 워크플로우 워크스페이스가
+  모두 그 아래에 존재합니다.
 - `scheduler.admission_root`를 따로 설정하지 않으면 admission 디렉터리는
-  `<runs root>/.admission`입니다.
+  `<runs_root>/.admission`입니다.
 - `scheduler.max_active_simulations`는 ORCA, 내부 xTB, 내부 CREST 작업의 공통 active 상한입니다.
 - `orca.runtime.default_max_retries: 0`은 ORCA 재시도를 비활성화합니다.
 - 양수 `default_max_retries`는 ORCA route 종류별 cap을 따르는 계산 종류별 재시도 정책을
