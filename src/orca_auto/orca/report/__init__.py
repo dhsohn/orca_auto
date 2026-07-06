@@ -3,9 +3,10 @@
 ``write_job_html_report`` picks the report flavor from the selected input:
 ScanTS jobs and plain relaxed scans (Opt route + ``%geom Scan`` block) get the
 scan-profile report, other TS routes (OptTS/NEB-TS) and plain Opt jobs get the
-optimization report. Jobs without an optimization (single points, bare Freq)
-get no HTML report. Report generation must never break run finalization, so
-every error is logged and swallowed.
+optimization report, and single points / bare Freq jobs — the same set that
+gets an ``"sp"`` SI block — get the single-point report. Non-stationary
+path/dynamics jobs (IRC, plain NEB, MD) get no HTML report. Report generation
+must never break run finalization, so every error is logged and swallowed.
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ from ..scants import first_scan_coordinate_spec, input_uses_scants
 from .frequencies import FrequencyAnalysis, parse_frequency_analysis
 from .opt import OptReportData, collect_opt_report_data, render_opt_report_html
 from .scants import ScantsReportData, collect_scants_report_data, render_scants_report_html
+from .si import structure_kind
+from .sp import SpReportData, collect_sp_report_data, render_sp_report_html
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +55,12 @@ def _render_job_report(reaction_dir: Path, state: Mapping[str, Any]) -> str | No
             return None if scan_data is None else render_scants_report_html(scan_data)
         kind = "opt"
     else:
-        return None
+        # No optimization in the route: single points and bare Freq jobs get
+        # the SP report; non-stationary jobs (IRC, plain NEB, MD) get none.
+        if structure_kind(selected_inp) != "sp":
+            return None
+        sp_data = collect_sp_report_data(reaction_dir, state)
+        return None if sp_data is None else render_sp_report_html(sp_data)
     opt_data = collect_opt_report_data(reaction_dir, state, kind=kind)
     return None if opt_data is None else render_opt_report_html(opt_data)
 
@@ -83,10 +91,13 @@ __all__ = [
     "FrequencyAnalysis",
     "OptReportData",
     "ScantsReportData",
+    "SpReportData",
     "collect_opt_report_data",
     "collect_scants_report_data",
+    "collect_sp_report_data",
     "parse_frequency_analysis",
     "render_opt_report_html",
     "render_scants_report_html",
+    "render_sp_report_html",
     "write_job_html_report",
 ]

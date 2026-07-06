@@ -68,6 +68,8 @@ td.ok{color:#1e6b34}td.warn{color:#8a5a10}td.bad{color:#9d2626}
 .muted{color:#69707c;font-size:14px}
 footer{margin-top:30px;font-size:12px;color:#8a919c}
 code{background:#f2f3f6;padding:1px 6px;border-radius:4px;font-size:13px}
+pre{background:#f6f7f9;border-radius:8px;padding:12px 14px;font-size:12.5px;line-height:1.5;
+ overflow-x:auto}
 """
 
 

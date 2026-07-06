@@ -280,11 +280,13 @@ def test_write_report_files_includes_html_for_scants(tmp_path: Path) -> None:
     assert (tmp_path / "job_report.md").exists()
 
 
-def test_write_report_files_skips_html_and_removes_stale_for_single_point(
+def test_write_report_files_skips_html_and_removes_stale_for_irc(
     tmp_path: Path,
 ) -> None:
+    # IRC is a non-stationary job type with no HTML report (single points now
+    # have their own report flavor, so they no longer cover this path).
     inp = tmp_path / "rxn.inp"
-    inp.write_text("! B3LYP def2-SVP TightSCF\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
+    inp.write_text("! B3LYP def2-SVP IRC\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     out_path = tmp_path / "rxn.out"
     _write_ts_out(out_path)
     # Leftover report from a previous Opt/ScanTS job in this reused reaction dir
