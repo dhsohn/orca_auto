@@ -183,6 +183,9 @@ job directory:
 - `job_report.json`
 - `job_report.md`
 - `job_report.html` when a report renderer applies
+- `si_block.md` for completed jobs ending on a stationary point (a copy-paste
+  Supporting Information block: route, energies, thermochemistry, Nimag,
+  coordinates)
 
 `job_state.json` and `job_report.json` use the normalized engine artifact shape:
 
@@ -288,6 +291,10 @@ Workflow runtime artifacts:
 - `workflow.json` is the durable workflow payload.
 - `workflow_report.html` is rewritten on workflow advances as a human-facing
   summary.
+- `workflow_si.md` and `si_data.csv` are rewritten on workflow advances when
+  the workflow has ORCA stages: a paper-ready Supporting Information assembly
+  (computational details, relative energies, per-structure blocks) and its
+  machine-readable companion.
 - `workflow_registry.json` and `workflow_registry.journal.jsonl` support
   cross-workflow listing and event history.
 - Internal engine queues and outputs live under workflow stage directories such

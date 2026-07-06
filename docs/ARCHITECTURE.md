@@ -273,7 +273,9 @@ logic. Notable pieces:
   ScanTS, and relaxed-scan jobs also get `job_report.html` (`report/`), a
   self-contained visual report — scan energy profile (ScanTS and plain relaxed
   scans) or optimization convergence trace (Opt/OptTS), retry-recipe chain,
-  and vibrational summary.
+  and vibrational summary. Completed jobs ending on a stationary point also
+  get `si_block.md` (`report/si.py`), a copy-paste Supporting Information
+  block with energies, thermochemistry, Nimag, and coordinates.
 - **Index:** `dft_index*.py` and `core/indexing` maintain a JSONL
   job-location index for discovery.
 
@@ -353,6 +355,8 @@ orca_auto is disk-backed throughout. Concurrency safety comes from file locks
 | job-location index (JSONL)  | core/indexing    | Where each job's outputs currently live  |
 | `workflow.json`             | flow             | Durable workflow payload                 |
 | `workflow_report.html`      | flow (report)    | Live visual workflow summary             |
+| `si_block.md`               | orca (report/si) | Per-structure SI block (paper-ready)     |
+| `workflow_si.md` / `si_data.csv` | flow (si)   | Assembled workflow SI + machine-readable data |
 | workflow registry + journal | flow/registry    | Cross-workflow listing + event history   |
 
 The queue entry and tracked job-location record each expose a

@@ -33,6 +33,7 @@ from orca_auto.core.utils.persistence import (
 )
 
 from .report import write_job_html_report
+from .report.si import write_si_block
 from .types import RunFinalResult, RunState
 
 logger = logging.getLogger(__name__)
@@ -263,4 +264,7 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
     html_path = write_job_html_report(reaction_dir, state)
     if html_path is not None:
         reports["report_html"] = str(html_path)
+    si_path = write_si_block(reaction_dir, state)
+    if si_path is not None:
+        reports["si_block"] = str(si_path)
     return reports

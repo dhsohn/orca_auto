@@ -265,7 +265,9 @@ python -m orca_auto.core.engines.worker_child \
   OptTS/NEB-TS, ScanTS, relaxed scan 작업은 추가로 `job_report.html`(`report/`)을
   생성합니다 — scan 에너지 프로파일(ScanTS 및 일반 relaxed scan) 또는 최적화
   수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동 요약을 담은 단일 파일 시각
-  리포트입니다.
+  리포트입니다. 정류점으로 끝나는 완료 작업은 `si_block.md`(`report/si.py`)도
+  생성합니다 — 에너지, 열화학, Nimag, 좌표를 담은 복사-붙여넣기용 Supporting
+  Information 블록입니다.
 - **인덱스:** `dft_index*.py`와 `core/indexing`이 탐색용 JSONL 작업 위치
   인덱스를 유지합니다.
 
@@ -345,6 +347,8 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 | 작업 위치 인덱스 (JSONL)    | core/indexing    | 각 작업 출력의 현재 위치                 |
 | `workflow.json`             | flow             | 내구성 워크플로우 페이로드               |
 | `workflow_report.html`      | flow (report)    | 실시간 갱신 워크플로우 시각 요약         |
+| `si_block.md`               | orca (report/si) | 구조별 SI 블록 (논문용)                  |
+| `workflow_si.md` / `si_data.csv` | flow (si)   | 워크플로우 SI 조립본 + 기계가독 데이터   |
 | 워크플로우 레지스트리 + 저널| flow/registry    | 워크플로우 간 목록 + 이벤트 이력         |
 
 큐 항목과 추적된 작업 위치 레코드는 각각 동결된 다운스트림 필드 집합을

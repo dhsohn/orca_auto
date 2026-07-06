@@ -182,6 +182,8 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `job_report.json`
 - `job_report.md`
 - 적용 가능한 리포트 렌더러가 있을 때 `job_report.html`
+- 정류점으로 끝나는 완료 작업에는 `si_block.md` (route, 에너지, 열화학, Nimag,
+  좌표를 담은 복사-붙여넣기용 Supporting Information 블록)
 
 `job_state.json`과 `job_report.json`은 정규화된 엔진 산출물 형태를 사용합니다:
 
@@ -284,6 +286,9 @@ ORCA analyzer 상태:
 
 - `workflow.json`은 내구성 워크플로우 payload입니다.
 - `workflow_report.html`은 워크플로우 advance 때 다시 쓰이는 사람용 요약입니다.
+- `workflow_si.md`와 `si_data.csv`는 ORCA stage가 있는 워크플로우에서 advance 때
+  다시 쓰입니다: 논문 SI용 조립본(계산 세부사항, 상대 에너지, 구조별 블록)과
+  기계가독 companion입니다.
 - `workflow_registry.json`과 `workflow_registry.journal.jsonl`은 워크플로우 목록과 이벤트
   히스토리를 지원합니다.
 - 내부 엔진 큐와 출력은 `<runs root>/<workflow_id>/01_crest`, `02_xtb`, `03_orca` 같은
