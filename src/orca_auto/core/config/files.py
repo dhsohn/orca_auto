@@ -166,6 +166,22 @@ def validated_runs_root_text(root_text: str) -> str:
     return root_text
 
 
+def usable_runs_root_from_mapping(raw: dict[str, Any] | None) -> str:
+    """runs_root text when present and valid, else "".
+
+    For soft consumers (discovery, capacity preflight, systemd rendering) that
+    must ignore an invalid root rather than raise: an unvalidated resolve would
+    silently anchor the value on the caller cwd.
+    """
+    root_text = runs_root_from_mapping(raw)
+    if not root_text:
+        return ""
+    try:
+        return validated_runs_root_text(root_text)
+    except ValueError:
+        return ""
+
+
 def shared_workflow_root_from_config(config_path: str | Path | None) -> str | None:
     if config_path is None:
         return None
@@ -182,11 +198,7 @@ def shared_workflow_root_from_config(config_path: str | Path | None) -> str | No
     except YAML_CONFIG_LOAD_EXCEPTIONS:
         return None
 
-    root_text = runs_root_from_mapping(parsed)
+    root_text = usable_runs_root_from_mapping(parsed)
     if not root_text:
-        return None
-    try:
-        validated_runs_root_text(root_text)
-    except ValueError:
         return None
     return str(Path(root_text).expanduser().resolve())

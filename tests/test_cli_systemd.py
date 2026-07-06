@@ -156,6 +156,36 @@ def test_systemd_read_write_paths_include_orca_scoped_admission_override(
     ) in worker_content
 
 
+def test_systemd_read_write_paths_omit_invalid_runs_root(tmp_path: Path) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    config_path.write_text(
+        "\n".join(
+            [
+                "runs_root: './runs'",
+                "telegram:",
+                "  bot_token: token",
+                "  chat_id: chat",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=repo,
+        config=config_path,
+        unit_dir=tmp_path / "units",
+        is_root=lambda: True,
+    )
+
+    unit_by_name = {unit.name: unit for unit in plan.units}
+    worker_content = unit_by_name["orca_auto-queue-worker@.service"].content
+    # A cwd-derived path must not be granted; the placeholder comment stays.
+    assert "ReadWritePaths=" not in worker_content
+    assert "# ReadWritePaths omitted" in worker_content
+
+
 def test_rendered_systemd_units_pass_systemd_analyze_verify(tmp_path: Path) -> None:
     if shutil.which("systemd-analyze") is None:
         pytest.skip("systemd-analyze is not installed")

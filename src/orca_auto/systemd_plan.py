@@ -13,8 +13,8 @@ from orca_auto.core.config.files import (
     engine_config_mapping,
     load_yaml_mapping,
     mapping_section,
-    runs_root_from_mapping,
     scheduler_admission_root,
+    usable_runs_root_from_mapping,
 )
 from orca_auto.core.utils.coercion import normalize_text
 
@@ -146,7 +146,7 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
 
     paths: list[Path] = []
     scheduler_raw = mapping_section(raw, "scheduler")
-    runs_root = runs_root_from_mapping(raw)
+    runs_root = usable_runs_root_from_mapping(raw)
     admission_root = scheduler_admission_root(
         scheduler_raw,
         default_runs_root=runs_root or None,

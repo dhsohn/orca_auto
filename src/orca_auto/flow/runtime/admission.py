@@ -11,8 +11,8 @@ from orca_auto.core.config.files import (
     engine_config_mapping,
     load_yaml_mapping,
     mapping_section,
-    runs_root_from_mapping,
     scheduler_admission_root,
+    usable_runs_root_from_mapping,
 )
 
 from . import _common as _runtime_common
@@ -69,8 +69,10 @@ def _submission_admission_root_from_config(
         return None
 
     # The shared runs root anchors the default admission directory
-    # (<runs_root>/.admission) for every engine.
-    runs_root = runs_root_from_mapping(raw)
+    # (<runs_root>/.admission) for every engine. An invalid root is ignored
+    # rather than resolved against the caller cwd, so the capacity gate never
+    # counts slots in a store the workers themselves would reject.
+    runs_root = usable_runs_root_from_mapping(raw)
 
     if engine in {"xtb", "crest"}:
         if not runs_root:
