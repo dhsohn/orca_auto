@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.deps import (
     orchestration_context as _orchestration_context,
@@ -24,6 +25,14 @@ class _ReactionXtbStagePlan:
     params: dict[str, Any]
     endpoint_pairs: tuple[Any, ...]
     pairing_enabled: bool
+
+
+def _xtb_manifest_with_charge_spin(o: Any, params: dict[str, Any]) -> dict[str, Any] | None:
+    return manifest_with_charge_spin(
+        charge=params.get("charge"),
+        multiplicity=params.get("multiplicity"),
+        manifest_overrides=o.stages.support._coerce_mapping(params.get("xtb_job_manifest")),
+    )
 
 
 def _record_endpoint_pairing_summary(
@@ -161,9 +170,7 @@ def append_reaction_xtb_stages_impl(
             max_cores=int(plan.params.get("max_cores", 8) or 8),
             max_memory_gb=int(plan.params.get("max_memory_gb", 32) or 32),
             max_handoff_retries=int(plan.params.get("max_xtb_handoff_retries", 2) or 2),
-            manifest_overrides=o.stages.support._coerce_mapping(
-                plan.params.get("xtb_job_manifest")
-            ),
+            manifest_overrides=_xtb_manifest_with_charge_spin(o, plan.params),
         )
         if plan.pairing_enabled:
             pairing_metadata = dict(endpoint_pair.metadata)

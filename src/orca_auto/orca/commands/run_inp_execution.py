@@ -8,6 +8,7 @@ from orca_auto.core.utils.process_lock import parse_lock_info
 from orca_auto.core.utils.process_tracking import active_run_lock_pid
 
 from ..completion_rules import detect_completion_mode
+from ..orca_process import recover_orphaned_orca_process
 from ..out_analyzer import analyze_output
 from ..runtime.run_lock import LOCK_FILE_NAME
 from ..state import load_state
@@ -83,7 +84,24 @@ def _out_is_older_than_inputs(out_path: Path, *, selected_inp: Path, mode_inp: P
 
 
 def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool:
-    """Detect and recover from a crashed run (status=running/retrying but no active lock)."""
+    """Reap an orphaned ORCA group and recover a crashed run state.
+
+    MUST be called while holding the reaction dir's run lock. Holding it makes
+    us the exclusive owner, so any recorded ORCA group is an orphan of a
+    crashed or interrupted run — a legitimate concurrent run could not have
+    been granted the lock. Reaping here (rather than before acquiring the lock)
+    closes the window where another invocation grabs the lock and writes a
+    fresh ``orca.process.json`` we would otherwise mistake for an orphan and
+    kill.
+    """
+    # Reap first, unconditionally: a local Ctrl-C ends the run
+    # failed/interrupted_by_user (not running/retrying), yet load_or_create_state
+    # still resumes that state, so gating the reap on the running/retrying
+    # status would let the resumed rerun start a second calculation over the
+    # same output while the interrupted run's PAL children are still alive. The
+    # reaper is a no-op when the record is absent or the group is already gone.
+    recover_orphaned_orca_process(reaction_dir, logger=logger)
+
     state = load_state(reaction_dir)
     if not state:
         return False
@@ -92,16 +110,8 @@ def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool
     if status not in RESUMABLE_RUN_STATUSES:
         return False
 
-    lock_path = reaction_dir / LOCK_FILE_NAME
-    if lock_path.exists() and active_run_lock_pid(
-        reaction_dir,
-        logger=logger,
-        lock_file_name=LOCK_FILE_NAME,
-    ):
-        return False
-
     logger.warning(
-        "Detected crashed run in %s (status=%s, no active lock). Recovering state.",
+        "Detected crashed run in %s (status=%s). Recovering state.",
         reaction_dir,
         status,
     )
@@ -231,6 +241,11 @@ def execute_locked_run(
 ) -> int:
     execution = deps.execution
     with execution.acquire_run_lock(context.reaction_dir):
+        # Under the lock we are the exclusive owner, so this is where crashed
+        # state and orphaned ORCA groups are reconciled: reaping here (not
+        # before the lock) cannot mistake another invocation's freshly started
+        # run for an orphan.
+        execution._recover_crashed_state(context.reaction_dir)
         with execution._admission_context(
             admission_root=context.admission_root,
             reaction_dir=context.reaction_dir,
@@ -297,9 +312,10 @@ def cmd_run_inp_execute(
         return 1
 
     logger.info("Selected input: %s", context.selected_inp)
-    execution._recover_crashed_state(context.reaction_dir)
 
     try:
+        # Crash/orphan recovery runs inside the run lock (see execute_locked_run),
+        # so it cannot race another invocation acquiring the lock.
         return execution._execute_locked_run(args, context, runner_cls=runner_cls)
     except statuses.AdmissionLimitReachedError as exc:
         execution._release_reservation_if_needed(context.admission_root, context.reservation_token)

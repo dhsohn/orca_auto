@@ -104,6 +104,9 @@ def test_append_reaction_xtb_stages_creates_full_cartesian_product(tmp_path: Pat
                     "max_crest_candidates": 2,
                     "max_xtb_stages": 3,
                     "max_xtb_handoff_retries": 4,
+                    "charge": -1,
+                    "multiplicity": 2,
+                    "xtb_job_manifest": {"gfn": 1},
                 }
             }
         },
@@ -176,6 +179,15 @@ def test_append_reaction_xtb_stages_creates_full_cartesian_product(tmp_path: Pat
         "xtb_path_search_04",
     ]
     assert all(stage["task"]["payload"]["max_handoff_retries"] == 4 for stage in xtb_stages)
+    assert all(
+        stage["task"]["payload"]["job_manifest_overrides"]
+        == {
+            "charge": -1,
+            "uhf": 1,
+            "gfn": 1,
+        }
+        for stage in xtb_stages
+    )
 
 
 def test_append_reaction_xtb_stages_filters_endpoint_pairs(

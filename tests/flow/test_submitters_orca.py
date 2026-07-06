@@ -190,8 +190,9 @@ def test_submit_reaction_dir_reports_resolution_conflict_and_submission_failures
         config_path="/tmp/orca.yaml",
     )
 
-    assert result["status"] == "failed"
+    assert result["status"] == "waiting_for_slot"
     assert result["reason"] == "submission_conflict"
+    assert result["returncode"] == 0
     assert result["stderr"] == "already running\n"
 
     def raise_submission_error(*_args: Any, **_kwargs: Any) -> None:
@@ -363,6 +364,18 @@ def test_submit_reaction_ts_search_workflow_updates_skip_failure_and_submit_bran
                 },
             },
             {
+                "stage_id": "conflict_stage",
+                "status": "planned",
+                "task": {
+                    "status": "planned",
+                    "enqueue_payload": {
+                        "reaction_dir": "/tmp/rxn_conflict",
+                        "priority": "6",
+                        "submitter": "orca_auto_orca",
+                    },
+                },
+            },
+            {
                 "stage_id": "submit_stage",
                 "status": "planned",
                 "task": {
@@ -387,10 +400,22 @@ def test_submit_reaction_ts_search_workflow_updates_skip_failure_and_submit_bran
         "2026-04-19T00:00:00+00:00",
         "2026-04-19T00:01:00+00:00",
         "2026-04-19T00:02:00+00:00",
+        "2026-04-19T00:03:00+00:00",
     )
 
     def fake_submit_reaction_dir(**kwargs: Any) -> dict[str, Any]:
         submit_calls.append(kwargs)
+        if kwargs["reaction_dir"] == "/tmp/rxn_conflict":
+            return {
+                "status": "waiting_for_slot",
+                "reason": "submission_conflict",
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "already queued\n",
+                "parsed_stdout": {},
+                "reaction_dir": "/tmp/rxn_conflict",
+                "priority": 6,
+            }
         return {
             "status": "submitted",
             "returncode": 0,
@@ -417,11 +442,17 @@ def test_submit_reaction_ts_search_workflow_updates_skip_failure_and_submit_bran
 
     assert submit_calls == [
         {
+            "reaction_dir": "/tmp/rxn_conflict",
+            "priority": 6,
+            "config_path": "/tmp/orca.yaml",
+            "repo_root": "/tmp/orca_repo",
+        },
+        {
             "reaction_dir": "/tmp/rxn_submit",
             "priority": 8,
             "config_path": "/tmp/orca.yaml",
             "repo_root": "/tmp/orca_repo",
-        }
+        },
     ]
     assert result == {
         "workflow_id": "wf_submit",
@@ -434,7 +465,10 @@ def test_submit_reaction_ts_search_workflow_updates_skip_failure_and_submit_bran
                 "reaction_dir": "/tmp/rxn_stdout",
             }
         ],
-        "skipped": [{"stage_id": "skip_stage", "reason": "already_submitted"}],
+        "skipped": [
+            {"stage_id": "skip_stage", "reason": "already_submitted"},
+            {"stage_id": "conflict_stage", "reason": "submission_conflict"},
+        ],
         "failed": [{"stage_id": "missing_stage", "reason": "missing_reaction_dir"}],
     }
     assert len(saved_payloads) == 1
@@ -443,7 +477,7 @@ def test_submit_reaction_ts_search_workflow_updates_skip_failure_and_submit_bran
     assert sync_calls[0]["workspace_dir"] == workspace_dir
 
     saved_payload = saved_payloads[0]["payload"]
-    skip_stage, missing_stage, submit_stage = saved_payload["stages"]
+    skip_stage, missing_stage, conflict_stage, submit_stage = saved_payload["stages"]
 
     assert missing_stage["status"] == "submission_failed"
     assert missing_stage["metadata"] == {
@@ -457,15 +491,27 @@ def test_submit_reaction_ts_search_workflow_updates_skip_failure_and_submit_bran
         "submitted_at": "2026-04-19T00:00:00+00:00",
     }
 
+    assert conflict_stage["status"] == "planned"
+    assert conflict_stage["metadata"] == {
+        "submission_status": "waiting_for_slot",
+        "submission_deferred_reason": "submission_conflict",
+        "last_submission_attempt_at": "2026-04-19T00:01:00+00:00",
+    }
+    assert conflict_stage["task"]["status"] == "planned"
+    assert conflict_stage["task"]["submission_result"]["status"] == "waiting_for_slot"
+    assert (
+        conflict_stage["task"]["submission_result"]["submitted_at"] == "2026-04-19T00:01:00+00:00"
+    )
+
     assert submit_stage["status"] == "queued"
     assert submit_stage["metadata"] == {
         "queue_id": "q_submit",
         "submission_status": "submitted",
-        "submitted_at": "2026-04-19T00:01:00+00:00",
+        "submitted_at": "2026-04-19T00:02:00+00:00",
     }
     assert submit_stage["task"]["status"] == "submitted"
     assert submit_stage["task"]["submission_result"]["status"] == "submitted"
-    assert submit_stage["task"]["submission_result"]["submitted_at"] == "2026-04-19T00:01:00+00:00"
+    assert submit_stage["task"]["submission_result"]["submitted_at"] == "2026-04-19T00:02:00+00:00"
 
     assert skip_stage["task"]["submission_result"] == {"status": "submitted"}
 
@@ -473,7 +519,7 @@ def test_submit_reaction_ts_search_workflow_updates_skip_failure_and_submit_bran
     assert saved_payload["metadata"]["submission_summary"] == {
         "status": "partially_submitted",
         "submitted_count": 1,
-        "skipped_count": 1,
+        "skipped_count": 2,
         "failed_count": 1,
         "stage_results": [
             {
@@ -487,13 +533,19 @@ def test_submit_reaction_ts_search_workflow_updates_skip_failure_and_submit_bran
                 "reason": "missing_reaction_dir",
             },
             {
+                "stage_id": "conflict_stage",
+                "status": "waiting_for_slot",
+                "reason": "submission_conflict",
+                "returncode": 0,
+            },
+            {
                 "stage_id": "submit_stage",
                 "status": "submitted",
                 "queue_id": "q_submit",
                 "returncode": 0,
             },
         ],
-        "updated_at": "2026-04-19T00:02:00+00:00",
+        "updated_at": "2026-04-19T00:03:00+00:00",
     }
 
 

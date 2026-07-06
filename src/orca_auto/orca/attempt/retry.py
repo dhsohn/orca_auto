@@ -89,6 +89,19 @@ def _attempt_patch_actions(attempt: Any) -> list[str]:
     return [str(action) for action in actions]
 
 
+def _extend_current_patch_actions(state: RunState, patch_actions: list[str]) -> list[str]:
+    attempts = state.get("attempts")
+    if not isinstance(attempts, list) or not attempts or not isinstance(attempts[-1], dict):
+        return list(patch_actions)
+    current_attempt = attempts[-1]
+    existing = current_attempt.get("patch_actions")
+    if not isinstance(existing, list):
+        current_attempt["patch_actions"] = []
+        existing = current_attempt["patch_actions"]
+    existing.extend(patch_actions)
+    return [str(action) for action in existing]
+
+
 def _state_has_scants_optts_fallback(state: RunState) -> bool:
     attempts = state.get("attempts")
     if not isinstance(attempts, list):
@@ -177,7 +190,7 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
             )
     except ScantsRetryStop as stop:
         reason = str(stop)
-        ctx.state["attempts"][-1]["patch_actions"] = [f"scants_retry_stopped:{reason}"]
+        _extend_current_patch_actions(ctx.state, [f"scants_retry_stopped:{reason}"])
         return exit_with_result(
             ctx.reaction_dir,
             ctx.state,
@@ -192,7 +205,7 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
             notify_finished=ctx.notify_finished,
         )
     except Exception as exc:  # noqa: BLE001
-        ctx.state["attempts"][-1]["patch_actions"] = [f"rewrite_failed:{exc}"]
+        _extend_current_patch_actions(ctx.state, [f"rewrite_failed:{exc}"])
         return exit_with_result(
             ctx.reaction_dir,
             ctx.state,
@@ -207,7 +220,7 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
             notify_finished=ctx.notify_finished,
         )
 
-    ctx.state["attempts"][-1]["patch_actions"] = patch_actions
+    _extend_current_patch_actions(ctx.state, patch_actions)
     save_state(ctx.reaction_dir, ctx.state)
     if ctx.notify_retry is None:
         return None

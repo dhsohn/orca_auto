@@ -452,6 +452,10 @@ def test_restart_failed_workflow_reloads_xtb_orca_and_endpoint_manifest_settings
     params = saved["metadata"]["request"]["parameters"]
     xcontrol_path = str((workspace / "controls" / "path.inp").resolve())
     xtb_overrides = {"gfn": 2, "xcontrol_file": xcontrol_path}
+    # Rematerialized stages must carry the electronic state: a restart that
+    # replaced the stage overrides with the raw flow.yaml xtb section would
+    # rerun the charged doublet as a neutral singlet (Codex P2 on #55).
+    xtb_stage_overrides = {"charge": -1, "uhf": 1, **xtb_overrides}
 
     assert result["restarted_count"] == 2
     assert saved["metadata"]["restart_summary"]["flow_manifest_applied"] is True
@@ -471,9 +475,9 @@ def test_restart_failed_workflow_reloads_xtb_orca_and_endpoint_manifest_settings
     assert xtb_task["payload"]["job_dir"] == ""
     assert xtb_task["payload"]["selected_input_xyz"] == ""
     assert xtb_task["payload"]["secondary_input_xyz"] == ""
-    assert xtb_task["payload"]["job_manifest_overrides"] == xtb_overrides
-    assert xtb_task["metadata"]["job_manifest_overrides"] == xtb_overrides
-    assert xtb_stage["metadata"]["job_manifest_overrides"] == xtb_overrides
+    assert xtb_task["payload"]["job_manifest_overrides"] == xtb_stage_overrides
+    assert xtb_task["metadata"]["job_manifest_overrides"] == xtb_stage_overrides
+    assert xtb_stage["metadata"]["job_manifest_overrides"] == xtb_stage_overrides
     assert orca_task["resource_request"] == {"max_cores": 7, "max_memory_gb": 21}
     assert orca_task["enqueue_payload"]["priority"] == 5
     assert orca_task["enqueue_payload"]["command_argv"] == ["orca", "--priority", "5", "--run"]
@@ -582,3 +586,171 @@ def test_unified_run_dir_detects_existing_workflow_json_without_flow_yaml(tmp_pa
     _write_workflow(workspace, {"workflow_id": "wf_existing", "status": "failed", "stages": []})
 
     assert cli_run_dir._detect_run_dir_app(Namespace(path=str(workspace))) == "workflow"
+
+
+def test_restart_applies_electronic_state_change_without_engine_sections(tmp_path: Path) -> None:
+    # A flow.yaml that changes ONLY the electronic state (the scaffolded
+    # layout needs no crest:/xtb: section) must still reach the engine
+    # stages: without the electronic_state gate the presence flags stay
+    # False, the old overrides survive, the job dir is not rebuilt, and the
+    # restarted stages rerun the previous neutral/singlet manifest (Codex P2
+    # follow-up on #55).
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_charge_only_restart"
+    (workspace / "old_crest").mkdir(parents=True)
+    (workspace / "flow.yaml").write_text(
+        "\n".join(
+            [
+                "workflow_type: reaction_ts_search",
+                "charge: -1",
+                "orca:",
+                "  multiplicity: 2",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_workflow(
+        workspace,
+        {
+            "workflow_id": "wf_charge_only_restart",
+            "template_name": "reaction_ts_search",
+            "status": "failed",
+            "requested_at": "2026-04-27T00:00:00+00:00",
+            "stages": [
+                {
+                    "stage_id": "crest_reactant_01",
+                    "stage_kind": "crest_stage",
+                    "status": "failed",
+                    "task": {
+                        "engine": "crest",
+                        "status": "failed",
+                        "payload": {
+                            "job_dir": str(workspace / "old_crest"),
+                            "selected_input_xyz": str(workspace / "old_crest" / "input.xyz"),
+                            "mode": "standard",
+                            "job_manifest_overrides": {"rthr": 0.3, "ewin": 8},
+                        },
+                        "metadata": {
+                            "mode": "standard",
+                            "job_manifest_overrides": {"rthr": 0.3, "ewin": 8},
+                        },
+                        "enqueue_payload": {"job_dir": str(workspace / "old_crest")},
+                    },
+                    "metadata": {
+                        "mode": "standard",
+                        "job_manifest_overrides": {"rthr": 0.3, "ewin": 8},
+                    },
+                },
+                {
+                    "stage_id": "xtb_path_01",
+                    "status": "failed",
+                    "task": {
+                        "engine": "xtb",
+                        "status": "failed",
+                        "payload": {
+                            "job_dir": str(workspace / "old_xtb"),
+                            "job_manifest_overrides": {"gfn": 1},
+                        },
+                        "metadata": {"job_manifest_overrides": {"gfn": 1}},
+                        "enqueue_payload": {"job_dir": str(workspace / "old_xtb")},
+                    },
+                    "metadata": {"job_manifest_overrides": {"gfn": 1}},
+                },
+            ],
+            "metadata": {"request": {"parameters": {}}},
+        },
+    )
+
+    result = restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    crest_stage, xtb_stage = saved["stages"]
+    crest_task = crest_stage["task"]
+    xtb_task = xtb_stage["task"]
+    params = saved["metadata"]["request"]["parameters"]
+
+    assert result["restarted_count"] == 2
+    assert params["charge"] == -1
+    assert params["multiplicity"] == 2
+
+    # Existing overrides keep their keys; only the electronic state is added.
+    crest_overrides = {"charge": -1, "uhf": 1, "rthr": 0.3, "ewin": 8}
+    assert crest_task["payload"]["job_manifest_overrides"] == crest_overrides
+    assert crest_task["metadata"]["job_manifest_overrides"] == crest_overrides
+    assert crest_stage["metadata"]["job_manifest_overrides"] == crest_overrides
+
+    xtb_overrides = {"charge": -1, "uhf": 1, "gfn": 1}
+    assert xtb_task["payload"]["job_manifest_overrides"] == xtb_overrides
+    assert xtb_task["metadata"]["job_manifest_overrides"] == xtb_overrides
+    assert xtb_stage["metadata"]["job_manifest_overrides"] == xtb_overrides
+
+    # The manifest changed, so both stages rebuild their job dirs.
+    assert crest_task["payload"]["job_dir"] == ""
+    assert xtb_task["payload"]["job_dir"] == ""
+
+
+def test_restart_electronic_state_when_workflow_json_has_no_request_block(
+    tmp_path: Path,
+) -> None:
+    # An older/hand-edited workflow.json may lack metadata.request.parameters.
+    # A charge-only flow.yaml must still create the params and inject the
+    # electronic state into rematerialized stages (Codex P2 on #55): otherwise
+    # the missing params default to charge 0 / uhf 0 and strip it.
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_no_request_block"
+    (workspace / "old_xtb").mkdir(parents=True)
+    (workspace / "flow.yaml").write_text(
+        "\n".join(
+            [
+                "workflow_type: reaction_ts_search",
+                "charge: -1",
+                "orca:",
+                "  multiplicity: 2",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_workflow(
+        workspace,
+        {
+            "workflow_id": "wf_no_request_block",
+            "template_name": "reaction_ts_search",
+            "status": "failed",
+            "requested_at": "2026-04-27T00:00:00+00:00",
+            "stages": [
+                {
+                    "stage_id": "xtb_path_01",
+                    "status": "failed",
+                    "task": {
+                        "engine": "xtb",
+                        "status": "failed",
+                        "payload": {
+                            "job_dir": str(workspace / "old_xtb"),
+                            "job_manifest_overrides": {"gfn": 1},
+                        },
+                        "metadata": {"job_manifest_overrides": {"gfn": 1}},
+                        "enqueue_payload": {"job_dir": str(workspace / "old_xtb")},
+                    },
+                    "metadata": {"job_manifest_overrides": {"gfn": 1}},
+                },
+            ],
+            "metadata": {},
+        },
+    )
+
+    result = restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    xtb_task = saved["stages"][0]["task"]
+    params = saved["metadata"]["request"]["parameters"]
+
+    assert result["restarted_count"] == 1
+    # The params structure is created and carries the electronic state, so
+    # later appends see it too.
+    assert params["charge"] == -1
+    assert params["multiplicity"] == 2
+    # And the rematerialized xTB stage keeps its manifest key plus the state.
+    assert xtb_task["payload"]["job_manifest_overrides"] == {"charge": -1, "uhf": 1, "gfn": 1}
+    assert xtb_task["payload"]["job_dir"] == ""

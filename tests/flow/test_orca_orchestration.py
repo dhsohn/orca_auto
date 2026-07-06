@@ -120,3 +120,57 @@ def test_sync_orca_stage_applies_contract_state_metadata_and_artifacts() -> None
         "orca_output_dir",
     }
     mock_load.assert_called_once()
+
+
+def test_sync_orca_stage_leaves_submission_conflict_planned() -> None:
+    stage: dict[str, object] = {
+        "stage_id": "orca_opt_conflict",
+        "stage_kind": "orca_stage",
+        "status": "planned",
+        "metadata": {},
+        "task": {
+            "engine": "orca",
+            "task_kind": "geometry_opt",
+            "status": "planned",
+            "payload": {"reaction_dir": "/tmp/rxn_conflict", "selected_inp": ""},
+            "enqueue_payload": {"reaction_dir": "/tmp/rxn_conflict", "priority": 10},
+        },
+    }
+
+    def fake_submit_reaction_dir(**_kwargs: object) -> dict[str, object]:
+        return {
+            "status": "waiting_for_slot",
+            "reason": "submission_conflict",
+            "returncode": 0,
+            "stderr": "already queued\n",
+            "parsed_stdout": {},
+        }
+
+    deps = orchestration_deps(
+        overrides={
+            "submit_reaction_dir": fake_submit_reaction_dir,
+            "load_orca_artifact_contract": Mock(return_value=None),
+            "now_utc_iso": lambda: "2026-04-19T00:00:00+00:00",
+        }
+    )
+    sync_orca_stage_impl(
+        stage,
+        orca_config="/tmp/orca.yaml",
+        orca_repo_root=None,
+        submit_ready=True,
+        deps=deps,
+    )
+
+    assert isinstance(stage["task"], dict)
+    assert isinstance(stage["metadata"], dict)
+    task = stage["task"]
+    metadata = stage["metadata"]
+    assert stage["status"] == "planned"
+    assert task["status"] == "planned"
+    assert metadata == {
+        "submission_status": "waiting_for_slot",
+        "submission_deferred_reason": "submission_conflict",
+        "last_submission_attempt_at": "2026-04-19T00:00:00+00:00",
+    }
+    assert task["submission_result"]["status"] == "waiting_for_slot"
+    assert task["submission_result"]["submitted_at"] == "2026-04-19T00:00:00+00:00"

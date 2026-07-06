@@ -242,6 +242,8 @@ def test_job_dir_writers_apply_manifest_overrides(tmp_path: Path) -> None:
                 "product_source": {"artifact_path": str(product_xyz)},
                 "job_manifest_overrides": {
                     "gfn": 1,
+                    "charge": -1,
+                    "uhf": 1,
                     "solvent_model": "alpb",
                     "solvent": "water",
                     "namespace": "baseline_ns",
@@ -262,8 +264,8 @@ def test_job_dir_writers_apply_manifest_overrides(tmp_path: Path) -> None:
     assert xtb_manifest == {
         "job_type": "path_search",
         "gfn": 1,
-        "charge": 0,
-        "uhf": 0,
+        "charge": -1,
+        "uhf": 1,
         "solvent_model": "alpb",
         "solvent": "water",
         "resources": {"max_cores": 9, "max_memory_gb": 30},

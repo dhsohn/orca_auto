@@ -10,6 +10,9 @@ from orca_auto.flow.contracts import (
     WorkflowStagePayload,
     WorkflowTemplateRequest,
 )
+from orca_auto.flow.orchestration.charge_spin import (
+    manifest_with_charge_spin as _manifest_with_charge_spin,
+)
 from orca_auto.flow.orchestration.requests import (
     ConformerScreeningWorkflowRequest,
     ReactionTsSearchWorkflowRequest,
@@ -94,7 +97,11 @@ def _reaction_crest_stages(
             priority=request.priority,
             max_cores=request.max_cores,
             max_memory_gb=request.max_memory_gb,
-            manifest_overrides=manifest_overrides,
+            manifest_overrides=_manifest_with_charge_spin(
+                charge=request.charge,
+                multiplicity=request.multiplicity,
+                manifest_overrides=manifest_overrides,
+            ),
         ),
         _crest_stage_payload(
             context,
@@ -107,7 +114,11 @@ def _reaction_crest_stages(
             priority=request.priority,
             max_cores=request.max_cores,
             max_memory_gb=request.max_memory_gb,
-            manifest_overrides=manifest_overrides,
+            manifest_overrides=_manifest_with_charge_spin(
+                charge=request.charge,
+                multiplicity=request.multiplicity,
+                manifest_overrides=manifest_overrides,
+            ),
         ),
     ]
 
@@ -130,7 +141,11 @@ def _conformer_crest_stages(
             priority=request.priority,
             max_cores=request.max_cores,
             max_memory_gb=request.max_memory_gb,
-            manifest_overrides=request.crest_job_manifest,
+            manifest_overrides=_manifest_with_charge_spin(
+                charge=request.charge,
+                multiplicity=request.multiplicity,
+                manifest_overrides=request.crest_job_manifest,
+            ),
         ),
     ]
 

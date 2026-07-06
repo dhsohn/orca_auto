@@ -10,6 +10,12 @@ from types import FrameType
 
 from orca_auto.core.queue.processes import ProcessGroupTerminationDeps, terminate_process_group
 
+from .orca_process import (
+    clear_orca_process_record,
+    process_group_is_alive,
+    write_orca_process_record,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,11 +33,12 @@ class OrcaRunner:
     def __init__(self, orca_executable: str) -> None:
         self.orca_executable = orca_executable
 
-    def _terminate_subprocess_tree(self, proc: subprocess.Popen) -> None:
+    def _terminate_subprocess_tree(self, proc: subprocess.Popen) -> bool:
+        """Terminate the ORCA process group; True only when it is confirmed gone."""
         if proc.poll() is not None:
-            return
+            return True
         logger.warning("Terminating ORCA process tree (pid=%d)", proc.pid)
-        terminate_process_group(
+        return terminate_process_group(
             proc,
             graceful_timeout=3,
             kill_timeout=5,
@@ -68,6 +75,11 @@ class OrcaRunner:
                 text=True,
                 start_new_session=True,
             )
+            try:
+                process_record = write_orca_process_record(inp_path=inp, out_path=out, pid=proc.pid)
+            except Exception:
+                self._terminate_subprocess_tree(proc)
+                raise
             prev_sigterm_handler = None
             sigterm_handler_installed = False
 
@@ -101,4 +113,32 @@ class OrcaRunner:
                         signal.signal(signal.SIGTERM, prev_sigterm_handler)
                     except ValueError:
                         logger.debug("failed to restore SIGTERM handler outside main thread")
+                self._clear_process_record_if_group_gone(inp.parent, proc, process_record)
         return RunResult(out_path=str(out), return_code=return_code)
+
+    @staticmethod
+    def _clear_process_record_if_group_gone(
+        reaction_dir: Path,
+        proc: subprocess.Popen,
+        process_record: dict[str, object],
+    ) -> None:
+        """Clear the process record only when the whole ORCA group has exited.
+
+        ``terminate_process_group`` waits on the group LEADER, so its success
+        does not prove PAL/child processes in the same group are gone. Probe
+        the recorded process group directly: while any member survives — a
+        shutdown/interrupt whose children outlived the leader, or a launcher
+        that exited leaving compute children running — keep the record so the
+        next run's crash recovery reaps the orphan before starting a new
+        calculation over the same output.
+        """
+        recorded_pgid = process_record.get("pgid")
+        pgid = recorded_pgid if isinstance(recorded_pgid, int) else proc.pid
+        if process_group_is_alive(pgid):
+            return
+        recorded_ticks = process_record.get("process_start_ticks")
+        clear_orca_process_record(
+            reaction_dir,
+            pid=proc.pid,
+            process_start_ticks=recorded_ticks if isinstance(recorded_ticks, int) else None,
+        )

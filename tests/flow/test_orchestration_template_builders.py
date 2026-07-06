@@ -118,7 +118,9 @@ def test_reaction_template_build_creates_request_and_role_stages(tmp_path: Path)
         "crest_product_01",
     ]
     assert [call["input_role"] for call in stage_calls] == ["reactant", "product"]
-    assert all(call["manifest_overrides"] == {"rthr": 0.5} for call in stage_calls)
+    assert all(
+        call["manifest_overrides"] == {"charge": -1, "uhf": 1, "rthr": 0.5} for call in stage_calls
+    )
 
 
 def test_conformer_template_build_creates_single_molecule_stage(tmp_path: Path) -> None:
@@ -168,6 +170,6 @@ def test_conformer_template_build_creates_single_molecule_stage(tmp_path: Path) 
             "priority": 8,
             "max_cores": 6,
             "max_memory_gb": 24,
-            "manifest_overrides": {"ewin": 8},
+            "manifest_overrides": {"charge": 1, "uhf": 2, "ewin": 8},
         }
     ]
