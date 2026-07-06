@@ -452,6 +452,10 @@ def test_restart_failed_workflow_reloads_xtb_orca_and_endpoint_manifest_settings
     params = saved["metadata"]["request"]["parameters"]
     xcontrol_path = str((workspace / "controls" / "path.inp").resolve())
     xtb_overrides = {"gfn": 2, "xcontrol_file": xcontrol_path}
+    # Rematerialized stages must carry the electronic state: a restart that
+    # replaced the stage overrides with the raw flow.yaml xtb section would
+    # rerun the charged doublet as a neutral singlet (Codex P2 on #55).
+    xtb_stage_overrides = {"charge": -1, "uhf": 1, **xtb_overrides}
 
     assert result["restarted_count"] == 2
     assert saved["metadata"]["restart_summary"]["flow_manifest_applied"] is True
@@ -471,9 +475,9 @@ def test_restart_failed_workflow_reloads_xtb_orca_and_endpoint_manifest_settings
     assert xtb_task["payload"]["job_dir"] == ""
     assert xtb_task["payload"]["selected_input_xyz"] == ""
     assert xtb_task["payload"]["secondary_input_xyz"] == ""
-    assert xtb_task["payload"]["job_manifest_overrides"] == xtb_overrides
-    assert xtb_task["metadata"]["job_manifest_overrides"] == xtb_overrides
-    assert xtb_stage["metadata"]["job_manifest_overrides"] == xtb_overrides
+    assert xtb_task["payload"]["job_manifest_overrides"] == xtb_stage_overrides
+    assert xtb_task["metadata"]["job_manifest_overrides"] == xtb_stage_overrides
+    assert xtb_stage["metadata"]["job_manifest_overrides"] == xtb_stage_overrides
     assert orca_task["resource_request"] == {"max_cores": 7, "max_memory_gb": 21}
     assert orca_task["enqueue_payload"]["priority"] == 5
     assert orca_task["enqueue_payload"]["command_argv"] == ["orca", "--priority", "5", "--run"]

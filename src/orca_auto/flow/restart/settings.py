@@ -9,6 +9,7 @@ from orca_auto.core.utils import (
 from orca_auto.core.utils import (
     normalize_text as _normalize_text,
 )
+from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin
 from orca_auto.flow.orchestration.stage_views import WorkflowStageView, WorkflowTaskView
 from orca_auto.flow.orchestration.workflow_builders import (
     _REACTION_TS_SEARCH_CREST_MANIFEST_DEFAULTS,
@@ -284,15 +285,37 @@ def _flow_restart_settings_from_manifest(
         xtb_overrides=xtb_manifest,
         endpoint_pairing=endpoint_pairing,
     )
+    # The request parameters now hold the effective charge/multiplicity
+    # (manifest-updated or pre-existing). The stage overrides written back by
+    # _apply_flow_restart_settings REPLACE whatever a stage carried, so they
+    # must re-inject charge/uhf themselves — otherwise restarting a charged
+    # or open-shell workflow strips the electronic state from every
+    # rematerialized CREST/xTB stage and screens on the neutral-singlet
+    # surface. Only the stage-facing overrides are enriched: the request's
+    # crest/xtb manifests keep user-manifest semantics (the stage builders
+    # inject on append).
+    params = _request_parameters(payload) or {}
+    charge = params.get("charge", 0)
+    multiplicity = params.get("multiplicity", 1)
     return {
         "applied": True,
         "resources": resources,
         "priority": priority,
         "crest_present": crest_present,
         "crest_mode": crest_mode,
-        "crest_overrides": crest_overrides,
+        "crest_overrides": manifest_with_charge_spin(
+            charge=charge,
+            multiplicity=multiplicity,
+            manifest_overrides=crest_overrides,
+        )
+        or {},
         "xtb_present": xtb_present,
-        "xtb_overrides": xtb_manifest,
+        "xtb_overrides": manifest_with_charge_spin(
+            charge=charge,
+            multiplicity=multiplicity,
+            manifest_overrides=xtb_manifest,
+        )
+        or {},
         "endpoint_pairing": endpoint_pairing,
     }
 

@@ -10,6 +10,9 @@ from orca_auto.flow.contracts import (
     WorkflowStagePayload,
     WorkflowTemplateRequest,
 )
+from orca_auto.flow.orchestration.charge_spin import (
+    manifest_with_charge_spin as _manifest_with_charge_spin,
+)
 from orca_auto.flow.orchestration.requests import (
     ConformerScreeningWorkflowRequest,
     ReactionTsSearchWorkflowRequest,
@@ -41,27 +44,6 @@ def scan_geom_block(scan_coordinate: str) -> str:
 class _WorkflowTemplateBuild:
     request: WorkflowTemplateRequest
     stages: list[WorkflowStagePayload]
-
-
-def _uhf_from_multiplicity(multiplicity: int) -> int:
-    return max(0, int(multiplicity) - 1)
-
-
-def _manifest_with_charge_spin(
-    *,
-    charge: int,
-    multiplicity: int,
-    manifest_overrides: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    resolved: dict[str, Any] = {}
-    charge_value = int(charge)
-    uhf_value = _uhf_from_multiplicity(multiplicity)
-    if charge_value != 0:
-        resolved["charge"] = charge_value
-    if uhf_value != 0:
-        resolved["uhf"] = uhf_value
-    resolved.update(dict(manifest_overrides or {}))
-    return resolved or None
 
 
 def _crest_stage_payload(
