@@ -10,6 +10,7 @@ from typing import Any
 from orca_auto.cli_common import _repo_root
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
+    engine_config_mapping,
     load_yaml_mapping,
     mapping_section,
     runs_root_from_mapping,
@@ -152,6 +153,20 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
     )
     if admission_root is not None:
         paths.append(admission_root)
+
+    # The ORCA worker resolves its admission store through the engine-scoped
+    # scheduler section when present (orca.scheduler.admission_root), so the
+    # sandbox must grant that root too.
+    orca_scheduler_raw = mapping_section(
+        engine_config_mapping(raw, "orca", inherit_keys=("scheduler",)),
+        "scheduler",
+    )
+    orca_admission_root = scheduler_admission_root(
+        orca_scheduler_raw,
+        default_runs_root=runs_root or None,
+    )
+    if orca_admission_root is not None:
+        paths.append(orca_admission_root)
 
     _append_absolute_path(paths, runs_root)
 
