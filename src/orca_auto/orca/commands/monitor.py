@@ -25,7 +25,7 @@ def _run_monitor(cfg: AppConfig) -> int:
 
     allowed_root = _to_resolved_local(cfg.runtime.allowed_root)
     if not allowed_root.is_dir():
-        logger.error("allowed_root not found: %s", allowed_root)
+        logger.error("runs_root not found: %s", allowed_root)
         return 1
 
     state_file = str(allowed_root / _STATE_FILE)

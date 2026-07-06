@@ -7,6 +7,7 @@ from typing import Any
 
 import yaml
 
+from orca_auto.core.paths import is_rejected_windows_path
 from orca_auto.core.utils.coercion import normalize_text
 
 ORCA_AUTO_CONFIG_ENV_VAR = "ORCA_AUTO_CONFIG"
@@ -141,16 +142,44 @@ def scheduler_admission_root(
     return admission_root
 
 
-def workflow_root_from_mapping(raw: dict[str, Any] | None) -> str:
-    """Resolve the shared runs root: workflow.root, else orca.runtime.allowed_root."""
-    workflow_raw = mapping_section(raw, "workflow")
-    root_text = normalize_text(workflow_raw.get("root") or "")
-    if not root_text:
-        orca_runtime_raw = mapping_section(mapping_section(raw, "orca"), "runtime")
-        root_text = normalize_text(orca_runtime_raw.get("allowed_root") or "")
+def runs_root_from_mapping(raw: dict[str, Any] | None) -> str:
+    """Read the shared runs root from the top-level runs_root key.
+
+    Returns the configured text as-is (no resolution) so callers can validate
+    the raw value before resolving it.
+    """
+    return normalize_text((raw.get("runs_root") or "") if isinstance(raw, dict) else "")
+
+
+def validated_runs_root_text(root_text: str) -> str:
+    """Reject Windows-style and non-absolute runs_root values before resolution.
+
+    Resolving first would silently anchor a bad value on the worker cwd, so
+    every runs_root consumer must validate the raw text through this helper.
+    """
+    if is_rejected_windows_path(root_text):
+        raise ValueError(
+            f"runs_root must be a Linux path (Windows paths are not supported): {root_text!r}"
+        )
+    if not Path(root_text).is_absolute():
+        raise ValueError(f"runs_root must be an absolute Linux path: {root_text!r}")
+    return root_text
+
+
+def usable_runs_root_from_mapping(raw: dict[str, Any] | None) -> str:
+    """runs_root text when present and valid, else "".
+
+    For soft consumers (discovery, capacity preflight, systemd rendering) that
+    must ignore an invalid root rather than raise: an unvalidated resolve would
+    silently anchor the value on the caller cwd.
+    """
+    root_text = runs_root_from_mapping(raw)
     if not root_text:
         return ""
-    return str(Path(root_text).expanduser().resolve())
+    try:
+        return validated_runs_root_text(root_text)
+    except ValueError:
+        return ""
 
 
 def shared_workflow_root_from_config(config_path: str | Path | None) -> str | None:
@@ -169,7 +198,7 @@ def shared_workflow_root_from_config(config_path: str | Path | None) -> str | No
     except YAML_CONFIG_LOAD_EXCEPTIONS:
         return None
 
-    root_text = workflow_root_from_mapping(parsed)
+    root_text = usable_runs_root_from_mapping(parsed)
     if not root_text:
         return None
-    return root_text
+    return str(Path(root_text).expanduser().resolve())

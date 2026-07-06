@@ -39,8 +39,7 @@ def _write_config(tmp_path: Path) -> tuple[Path, Path]:
     config_path.write_text(
         "\n".join(
             [
-                "workflow:",
-                f"  root: {json.dumps(str(workflow_root))}",
+                f"runs_root: {json.dumps(str(workflow_root))}",
                 "resources:",
                 "  max_cores_per_task: 6",
                 "  max_memory_gb_per_task: 14",

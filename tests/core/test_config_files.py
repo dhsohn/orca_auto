@@ -11,37 +11,61 @@ from orca_auto.core.config.files import (
     load_yaml_mapping,
     mapping_section,
     resolve_configured_path,
+    runs_root_from_mapping,
     scheduler_admission_root,
     secure_config_file_permissions,
-    workflow_root_from_mapping,
+    shared_workflow_root_from_config,
+    validated_runs_root_text,
 )
 
 
-def test_workflow_root_from_mapping_accepts_only_canonical_root_key(tmp_path: Path) -> None:
-    workflow_root = tmp_path / "workflow-root"
-
-    assert workflow_root_from_mapping({"workflow": {"root": str(workflow_root)}}) == str(
-        workflow_root.resolve()
-    )
-    assert workflow_root_from_mapping({"workflow": {"root": 0}}) == ""
-
-
-def test_workflow_root_from_mapping_falls_back_to_orca_allowed_root(tmp_path: Path) -> None:
+def test_runs_root_from_mapping_accepts_only_top_level_key(tmp_path: Path) -> None:
     runs_root = tmp_path / "runs"
-    workflow_root = tmp_path / "workflow-root"
 
-    # No workflow.root -> the runs root (orca.runtime.allowed_root) is the root.
-    assert workflow_root_from_mapping(
-        {"orca": {"runtime": {"allowed_root": str(runs_root)}}}
-    ) == str(runs_root.resolve())
-    # An explicit workflow.root still wins.
-    assert workflow_root_from_mapping(
-        {
-            "workflow": {"root": str(workflow_root)},
-            "orca": {"runtime": {"allowed_root": str(runs_root)}},
-        }
-    ) == str(workflow_root.resolve())
-    assert workflow_root_from_mapping({}) == ""
+    # Returns the configured text as-is; callers validate before resolving.
+    assert runs_root_from_mapping({"runs_root": str(runs_root)}) == str(runs_root)
+    assert runs_root_from_mapping({"runs_root": 0}) == ""
+    assert runs_root_from_mapping({}) == ""
+
+
+def test_runs_root_from_mapping_ignores_removed_legacy_keys(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+
+    # The old workflow.root / orca.runtime.allowed_root locations are gone.
+    assert (
+        runs_root_from_mapping(
+            {
+                "workflow": {"root": str(runs_root)},
+                "orca": {"runtime": {"allowed_root": str(runs_root)}},
+            }
+        )
+        == ""
+    )
+
+
+def test_validated_runs_root_text_rejects_windows_and_relative_values(tmp_path: Path) -> None:
+    assert validated_runs_root_text(str(tmp_path / "runs")) == str(tmp_path / "runs")
+
+    with pytest.raises(ValueError, match="Linux path"):
+        validated_runs_root_text("C:\\runs")
+    with pytest.raises(ValueError, match="Linux path"):
+        validated_runs_root_text("/mnt/c/runs")
+    with pytest.raises(ValueError, match="absolute Linux path"):
+        validated_runs_root_text("./runs")
+
+
+def test_shared_workflow_root_from_config_returns_none_for_invalid_runs_root(
+    tmp_path: Path,
+) -> None:
+    runs_root = tmp_path / "runs"
+    config_path = tmp_path / "orca_auto.yaml"
+
+    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
+    assert shared_workflow_root_from_config(config_path) == str(runs_root.resolve())
+
+    for value in ("'C:\\runs'", "/mnt/c/runs", "./runs"):
+        config_path.write_text(f"runs_root: {value}\n", encoding="utf-8")
+        assert shared_workflow_root_from_config(config_path) is None
 
 
 def test_engine_config_mapping_requires_engine_section() -> None:

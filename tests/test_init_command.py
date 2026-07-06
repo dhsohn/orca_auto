@@ -215,7 +215,7 @@ def test_cmd_init_handles_write_or_load_failure(tmp_path: Path, capsys) -> None:
         patch(
             "orca_auto.orca.commands.init._prompt_orca_runtime",
             return_value={
-                "allowed_root": str(orca_allowed_root),
+                "runs_root": str(orca_allowed_root),
                 "default_max_retries": 2,
                 "executable": "/usr/bin/orca",
             },
@@ -259,7 +259,7 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
         patch(
             "orca_auto.orca.commands.init._prompt_orca_runtime",
             return_value={
-                "allowed_root": str(orca_allowed_root),
+                "runs_root": str(orca_allowed_root),
                 "default_max_retries": 2,
                 "executable": "/usr/bin/orca",
             },
@@ -299,6 +299,7 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
     assert "crest_executable" in output
     assert "max_active_simulations: 4" in output
     assert yaml.safe_load(config_path.read_text(encoding="utf-8").split("\n", 1)[1]) == {
+        "runs_root": str(orca_allowed_root),
         "resources": {
             "max_cores_per_task": 8,
             "max_memory_gb_per_task": 32,
@@ -315,7 +316,6 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
         "telegram": {"bot_token": "token", "chat_id": "123"},
         "orca": {
             "runtime": {
-                "allowed_root": str(orca_allowed_root),
                 "default_max_retries": 2,
             },
             "paths": {"orca_executable": "/usr/bin/orca"},

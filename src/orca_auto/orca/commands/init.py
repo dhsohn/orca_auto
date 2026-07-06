@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class _PromptedEngineRuntime(TypedDict):
-    allowed_root: str
+    runs_root: str
     executable: str
 
 
@@ -186,14 +186,14 @@ def _prompt_runs_root() -> str:
     """Single runs root: ORCA jobs, workflow workspaces, and .admission live here."""
     prompt_label = "runs root directory (ORCA jobs + workflows)"
     runs_root = _prompt_directory_path(prompt_label)
-    while not _ensure_directory(runs_root, label="orca.runtime.allowed_root"):
+    while not _ensure_directory(runs_root, label="runs_root"):
         runs_root = _prompt_directory_path(prompt_label)
     return str(runs_root)
 
 
 def _prompt_orca_runtime() -> _PromptedOrcaRuntime:
     return {
-        "allowed_root": _prompt_runs_root(),
+        "runs_root": _prompt_runs_root(),
         "executable": str(_prompt_orca_executable()),
         "default_max_retries": _prompt_default_max_retries(),
     }
@@ -259,10 +259,10 @@ def _prompt_init_values() -> _PromptedInitValues:
 
 
 def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
-    # workflow.root and scheduler.admission_root are intentionally omitted:
-    # workflows default to the runs root (orca.runtime.allowed_root) and the
-    # shared admission directory defaults to <runs root>/.admission.
+    # scheduler.admission_root is intentionally omitted: the shared admission
+    # directory defaults to <runs_root>/.admission.
     return {
+        "runs_root": str(values.orca_runtime["runs_root"]),
         "resources": {
             "max_cores_per_task": 8,
             "max_memory_gb_per_task": 32,
@@ -279,7 +279,6 @@ def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
         "telegram": values.telegram,
         "orca": {
             "runtime": {
-                "allowed_root": str(values.orca_runtime["allowed_root"]),
                 "default_max_retries": values.orca_runtime["default_max_retries"],
             },
             "paths": {
@@ -292,7 +291,7 @@ def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
 def _print_init_summary(config_path: Path, values: _PromptedInitValues) -> None:
     print("Config created successfully.")
     print(f"  config: {config_path}")
-    print(f"  runs_root: {values.orca_runtime['allowed_root']}")
+    print(f"  runs_root: {values.orca_runtime['runs_root']}")
     print(f"  max_active_simulations: {values.max_active_simulations}")
     print(f"  xtb_executable: {values.xtb_runtime['executable']}")
     print(f"  crest_executable: {values.crest_runtime['executable']}")

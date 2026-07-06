@@ -54,9 +54,9 @@ class TestCli(unittest.TestCase):
         fake_orca.touch()
         fake_orca.chmod(0o755)
         payload = {
+            "runs_root": str(allowed_root),
             "orca": {
                 "runtime": {
-                    "allowed_root": str(allowed_root),
                     "default_max_retries": 2,
                 },
                 "paths": {"orca_executable": str(fake_orca)},
@@ -574,9 +574,9 @@ class TestCli(unittest.TestCase):
             config.write_text(
                 json.dumps(
                     {
+                        "runs_root": str(root / "orca_runs"),
                         "orca": {
                             "runtime": {
-                                "allowed_root": str(root / "orca_runs"),
                                 "default_max_retries": 6,
                             },
                             "paths": {"orca_executable": str(fake_orca)},
@@ -619,9 +619,9 @@ class TestCli(unittest.TestCase):
             config.write_text(
                 json.dumps(
                     {
+                        "runs_root": str(root / "orca_runs"),
                         "orca": {
                             "runtime": {
-                                "allowed_root": str(root / "orca_runs"),
                                 "default_max_retries": 0,
                             },
                             "paths": {"orca_executable": str(fake_orca)},

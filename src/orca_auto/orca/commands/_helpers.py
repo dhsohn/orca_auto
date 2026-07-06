@@ -71,7 +71,7 @@ def _validate_root_scan_dir(cfg: AppConfig, root_raw: str) -> Path:
 
     allowed_root = _to_resolved_local(cfg.runtime.allowed_root)
     if root != allowed_root:
-        raise ValueError(f"--root must exactly match allowed_root: {allowed_root}. got={root}")
+        raise ValueError(f"--root must exactly match runs_root: {allowed_root}. got={root}")
     return root
 
 

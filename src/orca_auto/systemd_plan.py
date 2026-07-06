@@ -10,10 +10,11 @@ from typing import Any
 from orca_auto.cli_common import _repo_root
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
+    engine_config_mapping,
     load_yaml_mapping,
     mapping_section,
     scheduler_admission_root,
-    workflow_root_from_mapping,
+    usable_runs_root_from_mapping,
 )
 from orca_auto.core.utils.coercion import normalize_text
 
@@ -145,7 +146,7 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
 
     paths: list[Path] = []
     scheduler_raw = mapping_section(raw, "scheduler")
-    runs_root = workflow_root_from_mapping(raw)
+    runs_root = usable_runs_root_from_mapping(raw)
     admission_root = scheduler_admission_root(
         scheduler_raw,
         default_runs_root=runs_root or None,
@@ -153,12 +154,21 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
     if admission_root is not None:
         paths.append(admission_root)
 
-    _append_absolute_path(paths, runs_root)
+    # The ORCA worker resolves its admission store through the engine-scoped
+    # scheduler section when present (orca.scheduler.admission_root), so the
+    # sandbox must grant that root too.
+    orca_scheduler_raw = mapping_section(
+        engine_config_mapping(raw, "orca", inherit_keys=("scheduler",)),
+        "scheduler",
+    )
+    orca_admission_root = scheduler_admission_root(
+        orca_scheduler_raw,
+        default_runs_root=runs_root or None,
+    )
+    if orca_admission_root is not None:
+        paths.append(orca_admission_root)
 
-    orca_raw = mapping_section(raw, "orca") or raw
-    orca_runtime_raw = mapping_section(orca_raw, "runtime")
-    _append_absolute_path(paths, orca_runtime_raw.get("allowed_root"))
-    _append_absolute_path(paths, orca_runtime_raw.get("admission_root"))
+    _append_absolute_path(paths, runs_root)
 
     return _dedupe_paths(paths)
 

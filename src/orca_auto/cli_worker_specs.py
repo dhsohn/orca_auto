@@ -205,7 +205,7 @@ def _add_workflow_worker_spec(
     args: argparse.Namespace,
 ) -> None:
     if "workflow" in apps and not workflow_root:
-        raise ValueError("workflow worker requires workflow.root in orca_auto.yaml")
+        raise ValueError("workflow worker requires runs_root in orca_auto.yaml")
 
     should_add_workflow = "workflow" in apps or (not explicit_app_selection and bool(workflow_root))
     if should_add_workflow and workflow_root:

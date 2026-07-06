@@ -7,9 +7,9 @@ from orca_auto.core.config.files import (
     engine_config_mapping,
     load_yaml_mapping,
     mapping_section,
-    resolve_configured_path,
+    runs_root_from_mapping,
     scheduler_admission_root,
-    workflow_root_from_mapping,
+    validated_runs_root_text,
 )
 
 
@@ -20,72 +20,34 @@ def _load_engine_config(config_path: str) -> tuple[Path, dict[str, Any]]:
     )
 
 
-def _runtime_section_label(engine: str | None) -> str:
-    return f"{engine}.runtime" if engine else "runtime"
+def engine_runtime_paths(config_path: str, *, engine: str | None = None) -> dict[str, Path]:
+    """Resolve the shared runtime roots every engine anchors on.
 
+    All engines share the single runs root (top-level runs_root), so the
+    resolved allowed_root/workflow_root are identical; only the scheduler
+    section may be overridden per engine.
+    """
+    path, raw = _load_engine_config(config_path)
+    runs_root = runs_root_from_mapping(raw)
+    if not runs_root:
+        raise ValueError(f"Missing runs_root in config: {path}")
 
-def _runtime_allowed_root_label(engine: str | None) -> str:
-    return f"{_runtime_section_label(engine)}.allowed_root"
-
-
-def _internal_engine_runtime_paths(path: Path, raw: dict[str, Any]) -> dict[str, Path]:
-    workflow_root = workflow_root_from_mapping(raw)
-    if not workflow_root:
-        raise ValueError(
-            f"Missing runs root (workflow.root or orca.runtime.allowed_root) in config: {path}"
-        )
-    resolved_workflow_root = Path(workflow_root).expanduser().resolve()
-    resolved = {
-        "workflow_root": resolved_workflow_root,
-        "allowed_root": resolved_workflow_root,
+    resolved_root = Path(validated_runs_root_text(runs_root)).expanduser().resolve()
+    resolved: dict[str, Path] = {
+        "workflow_root": resolved_root,
+        "allowed_root": resolved_root,
     }
+    scheduler_raw = mapping_section(raw, "scheduler")
+    if engine and engine not in {"xtb", "crest"}:
+        engine_raw = engine_config_mapping(raw, engine, inherit_keys=("scheduler",))
+        scheduler_raw = mapping_section(engine_raw, "scheduler") or scheduler_raw
     admission_root = scheduler_admission_root(
-        mapping_section(raw, "scheduler"),
-        default_runs_root=resolved_workflow_root,
+        scheduler_raw,
+        default_runs_root=resolved_root,
     )
     if admission_root is not None:
         resolved["admission_root"] = admission_root
     return resolved
-
-
-def _configured_runtime_paths(
-    path: Path, raw: dict[str, Any], *, engine: str | None = None
-) -> dict[str, Path]:
-    runtime = raw.get("runtime")
-    if not isinstance(runtime, dict):
-        raise ValueError(f"Missing {_runtime_section_label(engine)} section in config: {path}")
-    scheduler = mapping_section(raw, "scheduler")
-
-    resolved_runtime_paths: dict[str, Path] = {}
-    resolved_path = resolve_configured_path(runtime.get("allowed_root"))
-    if resolved_path is not None:
-        resolved_runtime_paths["allowed_root"] = resolved_path
-
-    if "allowed_root" not in resolved_runtime_paths:
-        raise ValueError(f"Missing {_runtime_allowed_root_label(engine)} in config: {path}")
-
-    # Anchor the default admission dir on the shared runs root (workflow.root,
-    # else allowed_root) so it matches load_config's resolved_admission_root.
-    # Using allowed_root alone would diverge from the root the worker reserves
-    # slots under whenever workflow.root points somewhere else.
-    runs_root = workflow_root_from_mapping(raw) or resolved_runtime_paths["allowed_root"]
-    admission_root = scheduler_admission_root(
-        scheduler,
-        default_runs_root=runs_root,
-    )
-    if admission_root is not None:
-        resolved_runtime_paths["admission_root"] = admission_root
-    return resolved_runtime_paths
-
-
-def engine_runtime_paths(config_path: str, *, engine: str | None = None) -> dict[str, Path]:
-    path, raw = _load_engine_config(config_path)
-    if engine in {"xtb", "crest"}:
-        return _internal_engine_runtime_paths(path, raw)
-
-    if engine:
-        raw = engine_config_mapping(raw, engine, inherit_keys=("scheduler", "workflow"))
-    return _configured_runtime_paths(path, raw, engine=engine)
 
 
 __all__ = [

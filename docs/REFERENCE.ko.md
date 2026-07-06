@@ -22,7 +22,7 @@ CLI, 설정, JSON 산출물, 워크플로우, systemd 표면 중 공개 계약�
 
 ## 1) 프로젝트 목적
 
-- 설정된 `allowed_root` 안에서만 작업합니다.
+- 설정된 `runs_root` 안에서만 작업합니다.
 - 대상 디렉터리에서 가장 최근에 수정된 `*.inp`를 선택합니다.
 - 큐를 통해 작업을 내구성 있게 제출합니다.
 - 감독되는 워커가 큐에 쌓인 작업을 실행하도록 합니다.
@@ -128,6 +128,8 @@ bash scripts/bootstrap_wsl.sh
 3. `~/orca_auto/config/orca_auto.yaml`
 
 ```yaml
+runs_root: "/path/to/orca_runs"
+
 resources:
   max_cores_per_task: 8
   max_memory_gb_per_task: 32
@@ -137,7 +139,6 @@ scheduler:
   admission_root: "/path/to/chem_admission"
 
 workflow:
-  # root는 runs 루트(orca.runtime.allowed_root)가 기본값입니다
   paths:
     xtb_executable: "/path/to/xtb"
     crest_executable: "/path/to/crest"
@@ -151,31 +152,28 @@ telegram:
 
 orca:
   runtime:
-    allowed_root: "/path/to/orca_runs"
     default_max_retries: 2
   paths:
     orca_executable: "/path/to/orca/orca"
 ```
 
-`orca` 섹션 필드 설명:
+필드 설명:
 
-- `orca.runtime.allowed_root`: 실행이 허용되는 루트 디렉터리.
+- `runs_root`: 단독 ORCA 작업과 워크플로우 워크스페이스가 공유하는 단일 runs 루트.
   완료된 실행은 제출 당시 디렉터리 이름 그대로 이곳에 남습니다
 - `orca.runtime.default_max_retries`: `0`이면 ORCA 재시도 비활성화, 양수면
   계산 종류별 재시도 정책 활성화
 - `scheduler.max_active_simulations`: ORCA, 내부 xTB 단계, 내부 CREST 단계 전반에 걸친
   공유 활성 실행 총 상한
 - `scheduler.admission_root`: 머신 전역 슬롯 조율을 위한 공유 admission 루트.
-  기본값은 `<runs root>/.admission`
-- `workflow.root`: 워크플로우 워크스페이스 위치의 선택적 재정의.
-  기본값은 runs 루트(`orca.runtime.allowed_root`)
+  기본값은 `<runs_root>/.admission`
 - `workflow.paths.xtb_executable`: 워크플로우가 관리하는 내부 단계가 사용하는 xTB
   실행 경로
 - `workflow.paths.crest_executable`: 워크플로우가 관리하는 내부 단계가 사용하는 CREST
   실행 경로
 - 내부 xTB/CREST 런타임은 각 워크플로우 범위로 한정됩니다.
 - 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은 오직
-  `<runs root>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`, `03_orca`) 아래에만 저장됩니다.
+  `<runs_root>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`, `03_orca`) 아래에만 저장됩니다.
 - `orca.paths.orca_executable`: ORCA 실행 경로
 
 참고:
@@ -288,8 +286,8 @@ ORCA 고유 노트:
   구조별 SI 블록을 담은 논문 SI용 조립본입니다. opt+freq 구조와 동일 지오메트리의
   single point 스테이지가 있으면 합성 G = E(SP) + [G − E(el)](opt level)을
   테이블에 추가합니다. `si_data.csv`는 같은 수치의 기계가독 버전입니다.
-- 워크플로우 디렉터리를 제출하기 전에 `orca_auto.yaml`에 `workflow.root`를 설정하거나
-  `flow.yaml`에 `workflow_root`/`workflow.root`를 설정하세요.
+- 워크플로우 디렉터리를 제출하기 전에 `orca_auto.yaml`에 `runs_root`를 설정하세요
+  (또는 `flow.yaml`에 `workflow_root`/`workflow.root`를 설정).
 - 공개 워크플로우 `run-dir`는 `flow.yaml` 또는 `scaffold`가 작성한 표준 파일명에서
   워크플로우 유형과 XYZ 입력을 읽습니다. 워크플로우 자원 재정의로는 `--max-cores`와
   `--max-memory-gb`만 받습니다.
@@ -380,8 +378,8 @@ orca_auto scan-notify
 동작:
 
 - `orca_auto-queue-worker@.service`는 기본적으로 ORCA를 감독합니다.
-- `workflow.root`가 설정되어 있으면, 같은 워커 서비스가 워크플로우 감독과 내부
-  CREST·xTB 워커도 시작합니다.
+- 같은 워커 서비스가 공유 `runs_root` 아래에서 워크플로우 감독과 내부 CREST·xTB
+  워커도 시작합니다.
 - ORCA, xTB, CREST는 동일한 admission 상한을 공유합니다. ORCA는 부모 워커에서 슬롯을
   예약하고, 자식이 시작된 뒤 큐 정체성 메타데이터를 붙이며, ORCA 자식이 실행 중에 그
   예약을 활성화/해제하도록 합니다.
@@ -425,7 +423,6 @@ journalctl -u "orca_auto-bot@$(whoami)" -f
 결합 런타임 타깃을 활성화하기 전에:
 
 - `orca_auto.yaml`에 `telegram.bot_token`과 `telegram.chat_id`를 설정하세요.
-- 워크플로우 감독도 원한다면 `orca_auto.yaml`에 `workflow.root`를 설정하세요.
 
 통합 런타임 템플릿의 가정:
 
@@ -434,10 +431,9 @@ journalctl -u "orca_auto-bot@$(whoami)" -f
 
 경로가 다르면, 활성화하기 전에 복사된 유닛을 편집하세요.
 
-통합 큐 워커 서비스는 기본적으로 ORCA를 감독합니다. `workflow.root`가 설정되어 있으면
-워크플로우 감독과 내부 CREST·xTB 워커도 시작합니다. 공유 `scheduler.max_active_simulations`
-설정은 여전히 ORCA와 워크플로우가 관리하는 내부 엔진 단계 전반의 활성 시뮬레이션 결합
-수를 제한합니다.
+통합 큐 워커 서비스는 ORCA를 감독하면서 워크플로우 감독과 내부 CREST·xTB 워커도
+시작합니다. 공유 `scheduler.max_active_simulations` 설정은 여전히 ORCA와 워크플로우가
+관리하는 내부 엔진 단계 전반의 활성 시뮬레이션 결합 수를 제한합니다.
 
 Telegram이 아직 설정되지 않았다면, `orca_auto systemd install`은
 `orca_auto-queue-worker@$(whoami)`를 직접 활성화합니다. `telegram.bot_token`과
@@ -638,8 +634,8 @@ ORCA 핸드오프 계약은 `orca_auto.flow` 같은 다운스트림 도구에 �
 ## 13) 자주 마주치는 문제
 
 1. `Job directory must be under allowed root`
-- 원인: 작업 디렉터리 경로가 `allowed_root` 바깥
-- 조치: `config/orca_auto.yaml`의 `allowed_root` 확인
+- 원인: 작업 디렉터리 경로가 `runs_root` 바깥
+- 조치: `config/orca_auto.yaml`의 `runs_root` 확인
 
 2. `Job directory not found`
 - 원인: 경로 문자열 또는 따옴표 문제

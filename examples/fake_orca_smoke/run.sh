@@ -64,13 +64,13 @@ config_path = workdir / "orca_auto.yaml"
 config_path.write_text(
     json.dumps(
         {
+            "runs_root": str(allowed_root),
             "scheduler": {
                 "max_active_simulations": 1,
                 "admission_root": str(admission_root),
             },
             "orca": {
                 "runtime": {
-                    "allowed_root": str(allowed_root),
                     "default_max_retries": 0,
                 },
                 "paths": {"orca_executable": str(fake_orca)},

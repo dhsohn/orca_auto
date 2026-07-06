@@ -10,6 +10,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Config schema: the single runs root moved to a top-level `runs_root` key.
+  `orca.runtime.allowed_root` and the `workflow.root` override are gone — with
+  standalone ORCA jobs and workflow workspaces sharing one directory, one key
+  defines the root for everything (ORCA execution, workflow workspaces, and the
+  default `<runs_root>/.admission` directory). `orca.runtime` now only holds
+  `default_max_retries`. Existing configs must rename the key; there is no
+  fallback to the old locations.
 - Single runs root: workflow workspaces now default to living inside the ORCA
   runs root (`workflow.root` falls back to `orca.runtime.allowed_root`), and
   the shared admission directory defaults to a hidden `<runs root>/.admission`

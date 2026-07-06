@@ -50,13 +50,40 @@ def test_submission_admission_root_for_internal_engine_uses_scheduler_default(
     workflow_root = tmp_path / "workflows"
     config = tmp_path / "orca_auto.yaml"
     config.write_text(
-        f"workflow:\n  root: {workflow_root}\nscheduler:\n  max_active_simulations: 2\n",
+        f"runs_root: {workflow_root}\nscheduler:\n  max_active_simulations: 2\n",
         encoding="utf-8",
     )
 
     root = runtime_admission._submission_admission_root_from_config(config, engine="crest")
 
     assert root == workflow_root.resolve() / ".admission"
+
+
+def test_submission_admission_root_ignores_invalid_runs_root(tmp_path: Path) -> None:
+    scheduler_root = tmp_path / "scheduler-admission"
+    config = tmp_path / "orca_auto.yaml"
+
+    # An invalid default root must not be resolved against the caller cwd.
+    for value in ("'./runs'", "/mnt/c/runs"):
+        config.write_text(
+            f"runs_root: {value}\nscheduler:\n  max_active_simulations: 2\n",
+            encoding="utf-8",
+        )
+        for engine in ("crest", "orca"):
+            assert (
+                runtime_admission._submission_admission_root_from_config(config, engine=engine)
+                is None
+            )
+
+    # An explicit scheduler.admission_root stays usable regardless.
+    config.write_text(
+        f"runs_root: './runs'\nscheduler:\n  admission_root: {scheduler_root}\n",
+        encoding="utf-8",
+    )
+    assert (
+        runtime_admission._submission_admission_root_from_config(config, engine=None)
+        == scheduler_root.resolve()
+    )
 
 
 def test_submission_admission_root_for_orca_ignores_runtime_admission_setting(
@@ -67,9 +94,9 @@ def test_submission_admission_root_for_orca_ignores_runtime_admission_setting(
     config.write_text(
         "\n".join(
             [
+                "runs_root: /tmp/runs",
                 "orca:",
                 "  runtime:",
-                "    allowed_root: /tmp/runs",
                 f"    admission_root: {runtime_root}",
                 "",
             ]
@@ -92,11 +119,11 @@ def test_submission_admission_root_for_orca_uses_scheduler_with_runtime_key_pres
     config.write_text(
         "\n".join(
             [
+                "runs_root: /tmp/runs",
                 "scheduler:",
                 f"  admission_root: {scheduler_root}",
                 "orca:",
                 "  runtime:",
-                "    allowed_root: /tmp/runs",
                 "    admission_root: /tmp/runtime-admission",
                 "",
             ]

@@ -28,7 +28,6 @@
 결합 런타임 타깃을 활성화하기 전에:
 
 - `orca_auto.yaml`에 `telegram.bot_token`과 `telegram.chat_id`를 설정하세요.
-- 워크플로우 감독도 원한다면 `orca_auto.yaml`에 `workflow.root`를 설정하세요.
 - `chmod 600 config/orca_auto.yaml`로 로컬 설정 권한을 제한하세요.
 
 결합 런타임 타깃 설치:
@@ -74,8 +73,8 @@ sudo systemctl stop "orca_auto-runtime@$(whoami).target"
 - 통합 서비스는 기본적으로 ORCA 워커를 실행합니다. ORCA는 내부 엔진과 동일한 공유
   admission 라이프사이클을 사용하면서도, 자신의 ORCA 재시도/리포트/자동 정리 동작은
   유지합니다.
-- `workflow.root`가 설정되어 있으면, 같은 서비스가 워크플로우 감독과 내부 CREST/xTB
-  워커도 함께 시작합니다.
+- 같은 서비스가 공유 `runs_root` 아래에서 워크플로우 감독과 내부 CREST/xTB 워커도
+  함께 시작합니다.
 
 통합 엔진 워커 설치:
 

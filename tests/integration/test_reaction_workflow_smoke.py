@@ -70,7 +70,6 @@ def _write_fake_orca(binary_path: Path, counter_path: Path) -> None:
 def _write_orca_config(
     path: Path,
     *,
-    allowed_root: Path,
     orca_executable: Path,
 ) -> None:
     payload: dict[str, Any] = {}
@@ -80,7 +79,6 @@ def _write_orca_config(
             payload = dict(loaded)
     payload["orca"] = {
         "runtime": {
-            "allowed_root": str(allowed_root.resolve()),
             "default_max_retries": 0,
         },
         "paths": {
@@ -121,20 +119,18 @@ class ReactionWorkflowSmokeCase:
 
 
 def _create_reaction_workflow_smoke_case(smoke_workspace: Any) -> ReactionWorkflowSmokeCase:
-    # Use the workflow root from the shared config so direct engine enqueue
-    # validation sees workflow-local paths as <workflow.root>/<workflow_id>/...
+    # Use the runs root from the shared config so direct engine enqueue
+    # validation sees workflow-local paths as <runs_root>/<workflow_id>/...
+    # The ORCA queue shares the same single runs root.
     workflow_root = smoke_workspace.root / "workflow_root"
     workflow_root.mkdir(parents=True, exist_ok=True)
 
-    orca_allowed_root = smoke_workspace.root / "reaction_orca_runs"
     fake_orca_counter = smoke_workspace.root / "fake_orca_counter.txt"
     fake_orca = smoke_workspace.root / "bin" / "fake_orca"
-    orca_allowed_root.mkdir(parents=True, exist_ok=True)
     _write_fake_orca(fake_orca, fake_orca_counter)
     config_path = smoke_workspace.config_path
     _write_orca_config(
         config_path,
-        allowed_root=orca_allowed_root,
         orca_executable=fake_orca,
     )
 
@@ -164,7 +160,7 @@ def _create_reaction_workflow_smoke_case(smoke_workspace: Any) -> ReactionWorkfl
         crest_root=workspace_dir / "01_crest",
         xtb_root=workspace_dir / "02_xtb",
         orca_root=workspace_dir / "03_orca",
-        orca_queue_root=orca_allowed_root,
+        orca_queue_root=workflow_root,
         fake_orca_counter=fake_orca_counter,
         config_path=config_path,
     )

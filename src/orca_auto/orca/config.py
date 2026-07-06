@@ -11,7 +11,7 @@ from orca_auto.core.config.files import (
     default_shared_admission_root,
     engine_config_mapping,
     load_required_yaml_mapping,
-    workflow_root_from_mapping,
+    runs_root_from_mapping,
 )
 from orca_auto.core.config.schema import (
     RetryRuntimeConfig,
@@ -37,7 +37,7 @@ def _missing_config_error(path: Path) -> ValueError:
     return ValueError(
         "Config file not found: "
         f"{path}. Copy {template_path} to {path} and set explicit Linux paths for "
-        "orca.runtime.allowed_root and orca.paths.orca_executable."
+        "runs_root and orca.paths.orca_executable."
     )
 
 
@@ -101,21 +101,20 @@ def _section_mapping(raw: dict[str, Any], key: str) -> dict[str, Any]:
     return section if isinstance(section, dict) else {}
 
 
-def _required_runtime_paths(
+def _required_config_paths(
     path: Path,
-    runtime_raw: dict[str, Any],
+    runs_root: str,
     paths_raw: dict[str, Any],
-) -> tuple[str, str]:
-    allowed_root = _config_engines.as_nonempty_str(runtime_raw.get("allowed_root"), "")
+) -> str:
     orca_executable = _config_engines.as_nonempty_str(paths_raw.get("orca_executable"), "")
     missing_keys: list[str] = []
-    if not allowed_root:
-        missing_keys.append("orca.runtime.allowed_root")
+    if not runs_root:
+        missing_keys.append("runs_root")
     if not orca_executable:
         missing_keys.append("orca.paths.orca_executable")
     if missing_keys:
         raise _missing_required_settings_error(path, missing_keys)
-    return allowed_root, orca_executable
+    return orca_executable
 
 
 def _scheduler_runtime_settings(
@@ -136,7 +135,7 @@ def _scheduler_runtime_settings(
 def _placeholder_keys(cfg: AppConfig) -> list[str]:
     placeholder_keys: list[str] = []
     if cfg.runtime.allowed_root == _TEMPLATE_ALLOWED_ROOT:
-        placeholder_keys.append("orca.runtime.allowed_root")
+        placeholder_keys.append("runs_root")
     if cfg.paths.orca_executable == _TEMPLATE_ORCA_EXECUTABLE:
         placeholder_keys.append("orca.paths.orca_executable")
     return placeholder_keys
@@ -145,7 +144,7 @@ def _placeholder_keys(cfg: AppConfig) -> list[str]:
 def load_config(config_path: str) -> AppConfig:
     path = Path(config_path).expanduser().resolve()
     raw = _load_raw_config(path)
-    workflow_root = _config_engines.as_nonempty_str(workflow_root_from_mapping(raw), "")
+    runs_root = _config_engines.as_nonempty_str(runs_root_from_mapping(raw), "")
     raw = engine_config_mapping(raw, "orca", inherit_keys=("resources", "telegram", "scheduler"))
     scheduler_raw = _section_mapping(raw, "scheduler")
     runtime_raw = _section_mapping(raw, "runtime")
@@ -153,26 +152,26 @@ def load_config(config_path: str) -> AppConfig:
     telegram_raw = _section_mapping(raw, "telegram")
     resources_raw = _section_mapping(raw, "resources")
 
-    allowed_root, orca_executable = _required_runtime_paths(path, runtime_raw, paths_raw)
+    orca_executable = _required_config_paths(path, runs_root, paths_raw)
     default_max_retries = _config_engines.as_int(
         runtime_raw.get("default_max_retries"),
         RuntimeConfig.default_max_retries,
     )
     max_concurrent, admission_root, admission_limit = _scheduler_runtime_settings(
         scheduler_raw,
-        workflow_root or allowed_root,
+        runs_root,
     )
     telegram_cfg = telegram_config_from_mapping(telegram_raw)
 
     cfg = AppConfig(
         runtime=CommonRuntimeConfig(
-            allowed_root=allowed_root,
+            allowed_root=runs_root,
             default_max_retries=max(0, default_max_retries),
             max_concurrent=max_concurrent,
             admission_root=admission_root,
             admission_limit=admission_limit,
         ),
-        workflow_root=workflow_root,
+        workflow_root=runs_root,
         paths=PathsConfig(
             orca_executable=orca_executable,
         ),

@@ -23,13 +23,9 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
     config_path.write_text(
         "\n".join(
             [
+                f"runs_root: {repo / 'orca_runs'}",
                 "scheduler:",
                 f"  admission_root: {repo / 'admission'}",
-                "workflow:",
-                f"  root: {repo / 'workflow_runs'}",
-                "orca:",
-                "  runtime:",
-                f"    allowed_root: {repo / 'orca_runs'}",
                 "telegram:",
                 "  bot_token: token",
                 "  chat_id: chat",
@@ -76,7 +72,6 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
     assert (
         "ReadWritePaths="
         f"{repo.resolve(strict=False) / 'admission'} "
-        f"{repo.resolve(strict=False) / 'workflow_runs'} "
         f"{repo.resolve(strict=False) / 'orca_runs'}"
     ) in worker_content
     bot_content = unit_by_name["orca_auto-bot@.service"].content
@@ -94,11 +89,7 @@ def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
     config_path.write_text(
         "\n".join(
             [
-                "workflow:",
-                f"  root: {repo / 'workflow_runs'}",
-                "orca:",
-                "  runtime:",
-                f"    allowed_root: {repo / 'orca_runs'}",
+                f"runs_root: {repo / 'workflow_runs'}",
                 "telegram:",
                 "  bot_token: token",
                 "  chat_id: chat",
@@ -121,9 +112,78 @@ def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
     assert (
         "ReadWritePaths="
         f"{repo.resolve(strict=False) / 'workflow_runs' / '.admission'} "
-        f"{repo.resolve(strict=False) / 'workflow_runs'} "
+        f"{repo.resolve(strict=False) / 'workflow_runs'}"
+    ) in worker_content
+
+
+def test_systemd_read_write_paths_include_orca_scoped_admission_override(
+    tmp_path: Path,
+) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    config_path.write_text(
+        "\n".join(
+            [
+                f"runs_root: {repo / 'orca_runs'}",
+                "scheduler:",
+                f"  admission_root: {repo / 'admission'}",
+                "orca:",
+                "  scheduler:",
+                f"    admission_root: {repo / 'orca_admission'}",
+                "telegram:",
+                "  bot_token: token",
+                "  chat_id: chat",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=repo,
+        config=config_path,
+        unit_dir=tmp_path / "units",
+        is_root=lambda: True,
+    )
+
+    unit_by_name = {unit.name: unit for unit in plan.units}
+    worker_content = unit_by_name["orca_auto-queue-worker@.service"].content
+    assert (
+        "ReadWritePaths="
+        f"{repo.resolve(strict=False) / 'admission'} "
+        f"{repo.resolve(strict=False) / 'orca_admission'} "
         f"{repo.resolve(strict=False) / 'orca_runs'}"
     ) in worker_content
+
+
+def test_systemd_read_write_paths_omit_invalid_runs_root(tmp_path: Path) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    config_path.write_text(
+        "\n".join(
+            [
+                "runs_root: './runs'",
+                "telegram:",
+                "  bot_token: token",
+                "  chat_id: chat",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=repo,
+        config=config_path,
+        unit_dir=tmp_path / "units",
+        is_root=lambda: True,
+    )
+
+    unit_by_name = {unit.name: unit for unit in plan.units}
+    worker_content = unit_by_name["orca_auto-queue-worker@.service"].content
+    # A cwd-derived path must not be granted; the placeholder comment stays.
+    assert "ReadWritePaths=" not in worker_content
+    assert "# ReadWritePaths omitted" in worker_content
 
 
 def test_rendered_systemd_units_pass_systemd_analyze_verify(tmp_path: Path) -> None:
@@ -186,10 +246,9 @@ def test_systemd_read_write_paths_reject_whitespace_from_config(tmp_path: Path) 
     config_path.write_text(
         "\n".join(
             [
+                f"runs_root: {repo / 'workflow runs'}",
                 "scheduler:",
                 f"  admission_root: {repo / 'admission'}",
-                "workflow:",
-                f"  root: {repo / 'workflow runs'}",
                 "telegram:",
                 "  bot_token: token",
                 "  chat_id: chat",

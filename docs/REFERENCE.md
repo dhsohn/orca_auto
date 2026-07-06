@@ -22,7 +22,7 @@ surfaces that are treated as public contracts, see
 
 ## 1) Project Purpose
 
-- Work only within the configured `allowed_root`
+- Work only within the configured `runs_root`
 - Select the most recently modified `*.inp` in the target directory
 - Submit work durably through the queue
 - Let a supervised worker execute queued jobs
@@ -126,6 +126,8 @@ Search order:
 3. `~/orca_auto/config/orca_auto.yaml`
 
 ```yaml
+runs_root: "/path/to/orca_runs"
+
 resources:
   max_cores_per_task: 8
   max_memory_gb_per_task: 32
@@ -135,7 +137,6 @@ scheduler:
   admission_root: "/path/to/chem_admission"
 
 workflow:
-  # root defaults to the runs root (orca.runtime.allowed_root)
   paths:
     xtb_executable: "/path/to/xtb"
     crest_executable: "/path/to/crest"
@@ -149,27 +150,24 @@ telegram:
 
 orca:
   runtime:
-    allowed_root: "/path/to/orca_runs"
     default_max_retries: 2
   paths:
     orca_executable: "/path/to/orca/orca"
 ```
 
-Field descriptions for the `orca` section:
+Field descriptions:
 
-- `orca.runtime.allowed_root`: Root directory permitted for execution;
-  completed runs stay here under their submitted directory names
+- `runs_root`: The single runs root shared by standalone ORCA jobs and workflow
+  workspaces; completed runs stay here under their submitted directory names
 - `orca.runtime.default_max_retries`: `0` disables ORCA retries; positive values
   enable the calculation-type retry policy
 - `scheduler.max_active_simulations`: Shared total active-run cap across ORCA, internal xTB stages, and internal CREST stages
 - `scheduler.admission_root`: Shared admission root for machine-wide slot
-  coordination; defaults to `<runs root>/.admission`
-- `workflow.root`: Optional override for where workflow workspaces live;
-  defaults to the runs root (`orca.runtime.allowed_root`)
+  coordination; defaults to `<runs_root>/.admission`
 - `workflow.paths.xtb_executable`: xTB executable path used by workflow-managed internal stages
 - `workflow.paths.crest_executable`: CREST executable path used by workflow-managed internal stages
 - Internal xTB/CREST runtimes are scoped to each workflow
-- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under `<runs root>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`)
+- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under `<runs_root>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`)
 - `orca.paths.orca_executable`: ORCA executable path
 
 Notes:
@@ -280,8 +278,8 @@ Workflow notes:
   opt+freq structure has a single-point stage on the identical geometry, the
   table adds the composite G = E(SP) + [G − E(el)](opt level). `si_data.csv`
   carries the same numbers for data-availability requirements.
-- Set `workflow.root` in `orca_auto.yaml` or `workflow_root`/`workflow.root` in
-  `flow.yaml` before submitting workflow directories.
+- Set `runs_root` in `orca_auto.yaml` (or `workflow_root`/`workflow.root` in
+  `flow.yaml`) before submitting workflow directories.
 - Public workflow `run-dir` reads workflow type and XYZ inputs from `flow.yaml`
   or the standard filenames written by `scaffold`; it accepts only
   `--max-cores` and `--max-memory-gb` as workflow resource overrides.
@@ -371,7 +369,7 @@ only. Public CLI commands do not start those services directly.
 Behavior:
 
 - `orca_auto-queue-worker@.service` supervises ORCA by default
-- If `workflow.root` is set, the same worker service also starts workflow supervision plus the internal CREST and xTB workers
+- The same worker service also starts workflow supervision plus the internal CREST and xTB workers under the shared `runs_root`
 - ORCA, xTB, and CREST share the same admission cap. ORCA reserves a slot in
   the parent worker, attaches queue identity metadata after the child starts,
   and lets the ORCA child activate/release that reservation during execution.
@@ -413,7 +411,6 @@ journalctl -u "orca_auto-bot@$(whoami)" -f
 Before enabling the combined runtime target:
 
 - Set `telegram.bot_token` and `telegram.chat_id` in `orca_auto.yaml`
-- Set `workflow.root` in `orca_auto.yaml` if you also want workflow supervision
 
 Assumptions of the unified runtime templates:
 
@@ -422,11 +419,10 @@ Assumptions of the unified runtime templates:
 
 If your paths differ, edit the copied unit before enabling it.
 
-The unified queue-worker service supervises ORCA by default. When `workflow.root` is
-configured, it also starts workflow supervision plus the internal CREST and
-xTB workers. The shared `scheduler.max_active_simulations` setting still limits
-the combined number of active simulations across ORCA and workflow-managed
-internal engine stages.
+The unified queue-worker service supervises ORCA and also starts workflow
+supervision plus the internal CREST and xTB workers. The shared
+`scheduler.max_active_simulations` setting still limits the combined number of
+active simulations across ORCA and workflow-managed internal engine stages.
 
 If Telegram is not configured yet, `orca_auto systemd install` enables
 `orca_auto-queue-worker@$(whoami)` directly. Run the same command again after
@@ -635,8 +631,8 @@ Compatibility note:
 ## 13) Frequently Encountered Issues
 
 1. `Job directory must be under allowed root`
-- Cause: the job directory path is outside `allowed_root`
-- Action: Check `allowed_root` in `config/orca_auto.yaml`
+- Cause: the job directory path is outside `runs_root`
+- Action: Check `runs_root` in `config/orca_auto.yaml`
 
 2. `Job directory not found`
 - Cause: Path string or quoting problem

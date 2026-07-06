@@ -83,179 +83,125 @@ def test_worker_module_command_with_repo_root_uses_module_execution_and_prepends
     assert env["PYTHONPATH"] == f"{repo_root.resolve()}:/existing/site-packages"
 
 
-def test_engine_runtime_paths_reads_runtime_allowed_root(tmp_path: Path) -> None:
-    allowed_root = tmp_path / "allowed"
+def test_engine_runtime_paths_reads_top_level_runs_root(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
     config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        f"runtime:\n  allowed_root: {allowed_root}\n",
-        encoding="utf-8",
-    )
+    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
 
-    assert (
-        engine_runtime.engine_runtime_paths(str(config_path))["allowed_root"]
-        == allowed_root.resolve()
-    )
+    assert engine_runtime.engine_runtime_paths(str(config_path)) == {
+        "workflow_root": runs_root.resolve(),
+        "allowed_root": runs_root.resolve(),
+        "admission_root": runs_root.resolve() / ".admission",
+    }
 
 
-def test_engine_runtime_paths_requires_runtime_allowed_root_alias_case(tmp_path: Path) -> None:
+def test_engine_runtime_paths_requires_runs_root(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("runtime: {}\n", encoding="utf-8")
+    config_path.write_text("scheduler:\n  max_active_simulations: 4\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Missing runtime.allowed_root"):
-        engine_runtime.engine_runtime_paths(str(config_path))
+    for engine in (None, "orca", "xtb", "crest"):
+        with pytest.raises(ValueError, match="Missing runs_root"):
+            engine_runtime.engine_runtime_paths(str(config_path), engine=engine)
 
 
-def test_engine_runtime_paths_reports_engine_scoped_runtime_keys(tmp_path: Path) -> None:
+def test_engine_runtime_paths_rejects_invalid_runs_root_before_resolving(
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text("orca:\n  runtime: {}\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"Missing orca\.runtime\.allowed_root"):
+    config_path.write_text("runs_root: './runs'\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="absolute Linux path"):
         engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
 
-
-def test_engine_runtime_paths_ignores_orca_runtime_admission_setting(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "orca:",
-                "  runtime:",
-                "    allowed_root: /tmp/runs",
-                "    admission_root: /tmp/runtime-admission",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    assert engine_runtime.engine_runtime_paths(str(config_path), engine="orca") == {
-        "allowed_root": Path("/tmp/runs"),
-        "admission_root": Path("/tmp/runs/.admission"),
-    }
-
-
-def test_engine_runtime_paths_orca_admission_follows_workflow_root_over_allowed_root(
-    tmp_path: Path,
-) -> None:
-    # When workflow.root differs from orca.runtime.allowed_root, the default
-    # admission dir must follow the shared runs root (workflow.root) so it
-    # matches the root the ORCA worker reserves slots under via load_config;
-    # anchoring on allowed_root alone would make the active-simulation counter
-    # read a different .admission dir than the worker writes to.
-    workflow_root = tmp_path / "wf"
-    allowed_root = tmp_path / "orca"
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "workflow:",
-                f"  root: {workflow_root}",
-                "orca:",
-                "  runtime:",
-                f"    allowed_root: {allowed_root}",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    paths = engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
-    assert paths["allowed_root"] == allowed_root.resolve()
-    assert paths["admission_root"] == workflow_root.resolve() / ".admission"
-
-
-def test_engine_runtime_paths_uses_scheduler_with_runtime_admission_setting_present(
-    tmp_path: Path,
-) -> None:
-    admission_root = tmp_path / "admission"
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "scheduler:",
-                "  max_active_simulations: 4",
-                f"  admission_root: {admission_root}",
-                "orca:",
-                "  runtime:",
-                "    allowed_root: /tmp/runs",
-                "    admission_root: /tmp/runtime-admission",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    assert engine_runtime.engine_runtime_paths(str(config_path), engine="orca") == {
-        "allowed_root": Path("/tmp/runs"),
-        "admission_root": admission_root.resolve(),
-    }
-
-
-def test_engine_runtime_paths_requires_workflow_root_for_xtb(tmp_path: Path) -> None:
-    admission_root = tmp_path / "admission"
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "scheduler:",
-                f"  admission_root: {admission_root}",
-                "xtb:",
-                "  runtime:",
-                "    allowed_root: /tmp/runs",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="Missing runs root"):
+    config_path.write_text("runs_root: '/mnt/c/runs'\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Linux path"):
         engine_runtime.engine_runtime_paths(str(config_path), engine="xtb")
 
 
-def test_engine_runtime_paths_requires_runtime_allowed_root(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("runtime:\n  default_max_retries: 0\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="Missing runtime.allowed_root"):
-        engine_runtime.engine_runtime_paths(str(config_path))
-
-
-def test_engine_runtime_paths_reports_engine_scoped_runtime_section(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("orca:\n  paths: {}\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match=r"Missing orca\.runtime section"):
-        engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
-
-
-def test_engine_runtime_paths_derives_internal_engine_roots_from_workflow_root(
-    tmp_path: Path,
-) -> None:
-    workflow_root = tmp_path / "workflow_root"
-    admission_root = tmp_path / "admission"
+def test_engine_runtime_paths_ignores_legacy_root_keys(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "\n".join(
             [
-                "scheduler:",
-                f"  admission_root: {admission_root}",
                 "workflow:",
-                f"  root: {workflow_root}",
+                "  root: /tmp/wf",
+                "orca:",
+                "  runtime:",
+                "    allowed_root: /tmp/runs",
                 "",
             ]
         ),
         encoding="utf-8",
     )
 
-    assert engine_runtime.engine_runtime_paths(str(config_path), engine="xtb") == {
-        "workflow_root": workflow_root.resolve(),
-        "allowed_root": workflow_root.resolve(),
-        "admission_root": admission_root.resolve(),
+    with pytest.raises(ValueError, match="Missing runs_root"):
+        engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
+
+
+def test_engine_runtime_paths_all_engines_share_the_runs_root(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
+
+    expected = {
+        "workflow_root": runs_root.resolve(),
+        "allowed_root": runs_root.resolve(),
+        "admission_root": runs_root.resolve() / ".admission",
     }
-    assert (
-        engine_runtime.engine_runtime_paths(str(config_path), engine="crest")["allowed_root"]
-        == workflow_root.resolve()
+    for engine in ("orca", "xtb", "crest"):
+        assert engine_runtime.engine_runtime_paths(str(config_path), engine=engine) == expected
+
+
+def test_engine_runtime_paths_uses_scheduler_admission_root(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    admission_root = tmp_path / "admission"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                f"runs_root: {runs_root}",
+                "scheduler:",
+                "  max_active_simulations: 4",
+                f"  admission_root: {admission_root}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
     )
+
+    for engine in (None, "orca", "xtb", "crest"):
+        paths = engine_runtime.engine_runtime_paths(str(config_path), engine=engine)
+        assert paths["allowed_root"] == runs_root.resolve()
+        assert paths["admission_root"] == admission_root.resolve()
+
+
+def test_engine_runtime_paths_engine_scoped_scheduler_overrides_top_level(
+    tmp_path: Path,
+) -> None:
+    runs_root = tmp_path / "runs"
+    shared_admission = tmp_path / "shared-admission"
+    orca_admission = tmp_path / "orca-admission"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                f"runs_root: {runs_root}",
+                "scheduler:",
+                f"  admission_root: {shared_admission}",
+                "orca:",
+                "  scheduler:",
+                f"    admission_root: {orca_admission}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    orca_paths = engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
+    assert orca_paths["admission_root"] == orca_admission.resolve()
+    # Internal engines keep using the top-level scheduler section.
+    xtb_paths = engine_runtime.engine_runtime_paths(str(config_path), engine="xtb")
+    assert xtb_paths["admission_root"] == shared_admission.resolve()
 
 
 @pytest.mark.parametrize(

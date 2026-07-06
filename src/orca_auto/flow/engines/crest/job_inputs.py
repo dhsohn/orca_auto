@@ -67,7 +67,7 @@ def resolve_job_dir(cfg: AppConfig, raw_job_dir: str) -> Path:
         engine="crest",
         workflow_error_message=(
             "Job directory must be under a workflow-local CREST root: "
-            "<workflow.root>/<workflow_id>/01_crest/..."
+            "<runs_root>/<workflow_id>/01_crest/..."
         ),
         validate_job_dir_fn=validate_job_dir,
         workflow_paths_from_path_fn=workflow_workspace_internal_engine_paths_from_path,

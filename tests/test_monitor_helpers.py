@@ -45,7 +45,7 @@ def test_validate_root_scan_dir_rejects_non_directory_and_mismatch(tmp_path: Pat
     try:
         command_helpers._validate_root_scan_dir(cfg, str(nested))
     except ValueError as exc:
-        assert "--root must exactly match allowed_root" in str(exc)
+        assert "--root must exactly match runs_root" in str(exc)
     else:
         raise AssertionError("Expected ValueError for mismatched root")
 

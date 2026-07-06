@@ -160,9 +160,7 @@ def test_build_worker_specs_requires_workflow_root(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(
         worker_specs, "_discover_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
     )
-    with pytest.raises(
-        ValueError, match="workflow worker requires workflow.root in orca_auto.yaml"
-    ):
+    with pytest.raises(ValueError, match="workflow worker requires runs_root in orca_auto.yaml"):
         worker_specs._build_worker_specs(
             SimpleNamespace(app=["workflow"], workflow_root=None, orca_auto_config=None)
         )

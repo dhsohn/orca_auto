@@ -89,11 +89,11 @@ Config discovery order:
 
 Supported top-level sections and keys:
 
+- `runs_root`
 - `resources.max_cores_per_task`
 - `resources.max_memory_gb_per_task`
 - `scheduler.max_active_simulations`
 - `scheduler.admission_root`
-- `workflow.root`
 - `workflow.paths.xtb_executable`
 - `workflow.paths.crest_executable`
 - `telegram.bot_token`
@@ -101,15 +101,14 @@ Supported top-level sections and keys:
 - `telegram.timeout_seconds`
 - `telegram.max_attempts`
 - `telegram.retry_backoff_seconds`
-- `orca.runtime.allowed_root`
 - `orca.runtime.default_max_retries`
 - `orca.paths.orca_executable`
 
 Stable behavior:
 
-- `orca.runtime.allowed_root` is the single runs root by default.
-- Workflow workspaces live under the runs root unless `workflow.root` is set.
-- The shared admission directory defaults to `<runs root>/.admission` unless
+- `runs_root` is the single runs root: standalone ORCA jobs and workflow
+  workspaces both live under it.
+- The shared admission directory defaults to `<runs_root>/.admission` unless
   `scheduler.admission_root` is set.
 - `scheduler.max_active_simulations` caps active ORCA, internal xTB, and
   internal CREST jobs together.

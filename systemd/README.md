@@ -26,7 +26,6 @@ It pulls in:
 Before enabling the combined runtime target:
 
 - Set `telegram.bot_token` and `telegram.chat_id` in `orca_auto.yaml`
-- Set `workflow.root` in `orca_auto.yaml` if you want workflow supervision too
 - Restrict local config permissions with `chmod 600 config/orca_auto.yaml`
 
 Install the combined runtime target:
@@ -71,7 +70,7 @@ Common assumptions:
 - The unified service runs the ORCA worker by default; ORCA uses the same
   shared admission lifecycle as internal engines, while keeping its ORCA
   retry/report behavior
-- If `workflow.root` is configured, the same service also starts workflow supervision and the internal CREST/xTB workers
+- The same service also starts workflow supervision and the internal CREST/xTB workers under the shared `runs_root`
 
 Install the unified engine worker:
 
