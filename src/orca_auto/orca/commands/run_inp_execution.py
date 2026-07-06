@@ -89,10 +89,6 @@ def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool
     if not state:
         return False
 
-    status = str(state.get("status", "")).strip()
-    if status not in RESUMABLE_RUN_STATUSES:
-        return False
-
     lock_path = reaction_dir / LOCK_FILE_NAME
     if lock_path.exists() and active_run_lock_pid(
         reaction_dir,
@@ -101,7 +97,18 @@ def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool
     ):
         return False
 
+    # Reap any orphaned ORCA group recorded here BEFORE the status gate: a
+    # local Ctrl-C ends the run failed/interrupted_by_user (not
+    # running/retrying), yet load_or_create_state still resumes that state, so
+    # gating the reap on running/retrying would let the resumed rerun start a
+    # second calculation over the same output while the interrupted run's PAL
+    # children are still alive. With no active lock owner, any recorded group
+    # is an orphan; the reaper is a no-op when the record is absent or gone.
     recover_orphaned_orca_process(reaction_dir, logger=logger)
+
+    status = str(state.get("status", "")).strip()
+    if status not in RESUMABLE_RUN_STATUSES:
+        return False
 
     logger.warning(
         "Detected crashed run in %s (status=%s, no active lock). Recovering state.",
