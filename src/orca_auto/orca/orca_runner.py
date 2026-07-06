@@ -29,11 +29,12 @@ class OrcaRunner:
     def __init__(self, orca_executable: str) -> None:
         self.orca_executable = orca_executable
 
-    def _terminate_subprocess_tree(self, proc: subprocess.Popen) -> None:
+    def _terminate_subprocess_tree(self, proc: subprocess.Popen) -> bool:
+        """Terminate the ORCA process group; True only when it is confirmed gone."""
         if proc.poll() is not None:
-            return
+            return True
         logger.warning("Terminating ORCA process tree (pid=%d)", proc.pid)
-        terminate_process_group(
+        return terminate_process_group(
             proc,
             graceful_timeout=3,
             kill_timeout=5,
@@ -77,6 +78,7 @@ class OrcaRunner:
                 raise
             prev_sigterm_handler = None
             sigterm_handler_installed = False
+            process_terminated = False
 
             def _sigterm_to_worker_shutdown(_signum: int, _frame: FrameType | None) -> None:
                 raise WorkerShutdownInterrupt
@@ -90,17 +92,18 @@ class OrcaRunner:
                 sigterm_handler_installed = False
             try:
                 return_code = proc.wait()
+                process_terminated = True
             except WorkerShutdownInterrupt:
                 handle.write(
                     "\n[orca_auto] interrupted by worker shutdown; terminating ORCA process tree\n"
                 )
                 handle.flush()
-                self._terminate_subprocess_tree(proc)
+                process_terminated = self._terminate_subprocess_tree(proc)
                 raise
             except KeyboardInterrupt:
                 handle.write("\n[orca_auto] interrupted by user; terminating ORCA process tree\n")
                 handle.flush()
-                self._terminate_subprocess_tree(proc)
+                process_terminated = self._terminate_subprocess_tree(proc)
                 raise
             finally:
                 if sigterm_handler_installed:
@@ -108,9 +111,16 @@ class OrcaRunner:
                         signal.signal(signal.SIGTERM, prev_sigterm_handler)
                     except ValueError:
                         logger.debug("failed to restore SIGTERM handler outside main thread")
-                clear_orca_process_record(
-                    inp.parent,
-                    pid=proc.pid,
-                    process_start_ticks=process_record.get("process_start_ticks"),
-                )
+                # Keep the process record when the ORCA group may still be
+                # alive (a shutdown/interrupt whose termination timed out): the
+                # next run's crash recovery needs it to reap the orphan before
+                # starting a new calculation over the same output. Clearing it
+                # here would strand the orphan and reintroduce the double-run
+                # this record exists to prevent.
+                if process_terminated:
+                    clear_orca_process_record(
+                        inp.parent,
+                        pid=proc.pid,
+                        process_start_ticks=process_record.get("process_start_ticks"),
+                    )
         return RunResult(out_path=str(out), return_code=return_code)
