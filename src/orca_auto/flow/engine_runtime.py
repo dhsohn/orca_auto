@@ -9,6 +9,7 @@ from orca_auto.core.config.files import (
     mapping_section,
     runs_root_from_mapping,
     scheduler_admission_root,
+    validated_runs_root_text,
 )
 
 
@@ -31,7 +32,7 @@ def engine_runtime_paths(config_path: str, *, engine: str | None = None) -> dict
     if not runs_root:
         raise ValueError(f"Missing runs_root in config: {path}")
 
-    resolved_root = Path(runs_root).expanduser().resolve()
+    resolved_root = Path(validated_runs_root_text(runs_root)).expanduser().resolve()
     resolved: dict[str, Path] = {
         "workflow_root": resolved_root,
         "allowed_root": resolved_root,

@@ -7,6 +7,7 @@ from typing import Any
 
 import yaml
 
+from orca_auto.core.paths import is_rejected_windows_path
 from orca_auto.core.utils.coercion import normalize_text
 
 ORCA_AUTO_CONFIG_ENV_VAR = "ORCA_AUTO_CONFIG"
@@ -150,6 +151,21 @@ def runs_root_from_mapping(raw: dict[str, Any] | None) -> str:
     return normalize_text((raw.get("runs_root") or "") if isinstance(raw, dict) else "")
 
 
+def validated_runs_root_text(root_text: str) -> str:
+    """Reject Windows-style and non-absolute runs_root values before resolution.
+
+    Resolving first would silently anchor a bad value on the worker cwd, so
+    every runs_root consumer must validate the raw text through this helper.
+    """
+    if is_rejected_windows_path(root_text):
+        raise ValueError(
+            f"runs_root must be a Linux path (Windows paths are not supported): {root_text!r}"
+        )
+    if not Path(root_text).is_absolute():
+        raise ValueError(f"runs_root must be an absolute Linux path: {root_text!r}")
+    return root_text
+
+
 def shared_workflow_root_from_config(config_path: str | Path | None) -> str | None:
     if config_path is None:
         return None
@@ -168,5 +184,9 @@ def shared_workflow_root_from_config(config_path: str | Path | None) -> str | No
 
     root_text = runs_root_from_mapping(parsed)
     if not root_text:
+        return None
+    try:
+        validated_runs_root_text(root_text)
+    except ValueError:
         return None
     return str(Path(root_text).expanduser().resolve())

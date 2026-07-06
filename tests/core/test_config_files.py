@@ -14,6 +14,8 @@ from orca_auto.core.config.files import (
     runs_root_from_mapping,
     scheduler_admission_root,
     secure_config_file_permissions,
+    shared_workflow_root_from_config,
+    validated_runs_root_text,
 )
 
 
@@ -39,6 +41,31 @@ def test_runs_root_from_mapping_ignores_removed_legacy_keys(tmp_path: Path) -> N
         )
         == ""
     )
+
+
+def test_validated_runs_root_text_rejects_windows_and_relative_values(tmp_path: Path) -> None:
+    assert validated_runs_root_text(str(tmp_path / "runs")) == str(tmp_path / "runs")
+
+    with pytest.raises(ValueError, match="Linux path"):
+        validated_runs_root_text("C:\\runs")
+    with pytest.raises(ValueError, match="Linux path"):
+        validated_runs_root_text("/mnt/c/runs")
+    with pytest.raises(ValueError, match="absolute Linux path"):
+        validated_runs_root_text("./runs")
+
+
+def test_shared_workflow_root_from_config_returns_none_for_invalid_runs_root(
+    tmp_path: Path,
+) -> None:
+    runs_root = tmp_path / "runs"
+    config_path = tmp_path / "orca_auto.yaml"
+
+    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
+    assert shared_workflow_root_from_config(config_path) == str(runs_root.resolve())
+
+    for value in ("'C:\\runs'", "/mnt/c/runs", "./runs"):
+        config_path.write_text(f"runs_root: {value}\n", encoding="utf-8")
+        assert shared_workflow_root_from_config(config_path) is None
 
 
 def test_engine_config_mapping_requires_engine_section() -> None:

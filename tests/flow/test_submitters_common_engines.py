@@ -104,6 +104,20 @@ def test_engine_runtime_paths_requires_runs_root(tmp_path: Path) -> None:
             engine_runtime.engine_runtime_paths(str(config_path), engine=engine)
 
 
+def test_engine_runtime_paths_rejects_invalid_runs_root_before_resolving(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+
+    config_path.write_text("runs_root: './runs'\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="absolute Linux path"):
+        engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
+
+    config_path.write_text("runs_root: '/mnt/c/runs'\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Linux path"):
+        engine_runtime.engine_runtime_paths(str(config_path), engine="xtb")
+
+
 def test_engine_runtime_paths_ignores_legacy_root_keys(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(

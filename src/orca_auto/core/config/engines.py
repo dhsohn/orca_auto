@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
-from orca_auto.core.paths import is_rejected_windows_path, validate_configured_executable_path
+from orca_auto.core.paths import validate_configured_executable_path
 
 from .files import (
     ORCA_AUTO_CONFIG_ENV_VAR,
@@ -14,6 +14,7 @@ from .files import (
     load_required_yaml_mapping,
     mapping_section,
     runs_root_from_mapping,
+    validated_runs_root_text,
 )
 from .schema import (
     CommonResourceConfig,
@@ -190,13 +191,7 @@ def _required_workflow_root(raw: dict[str, Any], path: Path) -> str:
     workflow_root = runs_root_from_mapping(raw)
     if not workflow_root:
         raise ValueError(f"Config is missing runs_root: {path}")
-    if is_rejected_windows_path(workflow_root):
-        raise ValueError(
-            f"runs_root must be a Linux path (Windows paths are not supported): {workflow_root!r}"
-        )
-    if not Path(workflow_root).is_absolute():
-        raise ValueError(f"runs_root must be an absolute Linux path: {workflow_root!r}")
-    return str(Path(workflow_root).expanduser().resolve())
+    return str(Path(validated_runs_root_text(workflow_root)).expanduser().resolve())
 
 
 def _runtime_config_from_scheduler(
