@@ -43,6 +43,27 @@ class _WorkflowTemplateBuild:
     stages: list[WorkflowStagePayload]
 
 
+def _uhf_from_multiplicity(multiplicity: int) -> int:
+    return max(0, int(multiplicity) - 1)
+
+
+def _manifest_with_charge_spin(
+    *,
+    charge: int,
+    multiplicity: int,
+    manifest_overrides: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    resolved: dict[str, Any] = {}
+    charge_value = int(charge)
+    uhf_value = _uhf_from_multiplicity(multiplicity)
+    if charge_value != 0:
+        resolved["charge"] = charge_value
+    if uhf_value != 0:
+        resolved["uhf"] = uhf_value
+    resolved.update(dict(manifest_overrides or {}))
+    return resolved or None
+
+
 def _crest_stage_payload(
     context: WorkflowCreationContext,
     *,
@@ -94,7 +115,11 @@ def _reaction_crest_stages(
             priority=request.priority,
             max_cores=request.max_cores,
             max_memory_gb=request.max_memory_gb,
-            manifest_overrides=manifest_overrides,
+            manifest_overrides=_manifest_with_charge_spin(
+                charge=request.charge,
+                multiplicity=request.multiplicity,
+                manifest_overrides=manifest_overrides,
+            ),
         ),
         _crest_stage_payload(
             context,
@@ -107,7 +132,11 @@ def _reaction_crest_stages(
             priority=request.priority,
             max_cores=request.max_cores,
             max_memory_gb=request.max_memory_gb,
-            manifest_overrides=manifest_overrides,
+            manifest_overrides=_manifest_with_charge_spin(
+                charge=request.charge,
+                multiplicity=request.multiplicity,
+                manifest_overrides=manifest_overrides,
+            ),
         ),
     ]
 
@@ -130,7 +159,11 @@ def _conformer_crest_stages(
             priority=request.priority,
             max_cores=request.max_cores,
             max_memory_gb=request.max_memory_gb,
-            manifest_overrides=request.crest_job_manifest,
+            manifest_overrides=_manifest_with_charge_spin(
+                charge=request.charge,
+                multiplicity=request.multiplicity,
+                manifest_overrides=request.crest_job_manifest,
+            ),
         ),
     ]
 

@@ -8,6 +8,7 @@ from orca_auto.core.utils.process_lock import parse_lock_info
 from orca_auto.core.utils.process_tracking import active_run_lock_pid
 
 from ..completion_rules import detect_completion_mode
+from ..orca_process import recover_orphaned_orca_process
 from ..out_analyzer import analyze_output
 from ..runtime.run_lock import LOCK_FILE_NAME
 from ..state import load_state
@@ -99,6 +100,8 @@ def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool
         lock_file_name=LOCK_FILE_NAME,
     ):
         return False
+
+    recover_orphaned_orca_process(reaction_dir, logger=logger)
 
     logger.warning(
         "Detected crashed run in %s (status=%s, no active lock). Recovering state.",
@@ -297,9 +300,9 @@ def cmd_run_inp_execute(
         return 1
 
     logger.info("Selected input: %s", context.selected_inp)
-    execution._recover_crashed_state(context.reaction_dir)
 
     try:
+        execution._recover_crashed_state(context.reaction_dir)
         return execution._execute_locked_run(args, context, runner_cls=runner_cls)
     except statuses.AdmissionLimitReachedError as exc:
         execution._release_reservation_if_needed(context.admission_root, context.reservation_token)

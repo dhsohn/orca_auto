@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.commands.queue import display_status
+from orca_auto.core.statuses import STATUS_WAITING_FOR_SLOT
 from orca_auto.core.utils import normalize_text as _normalize_text
 from orca_auto.core.utils import now_utc_iso
 
@@ -60,6 +61,29 @@ def _failure_payload(
         status="failed",
         reason=reason,
         returncode=1,
+        command_argv=command_argv,
+        stderr=stderr,
+        extra_fields={
+            "reaction_dir": reaction_dir,
+            "priority": 0,
+            "force": False,
+        },
+    ).to_payload()
+
+
+def _deferred_payload(
+    *,
+    command_argv: list[str],
+    stderr: str,
+    reaction_dir: str,
+    reason: str,
+) -> dict[str, Any]:
+    if stderr and not stderr.endswith("\n"):
+        stderr += "\n"
+    return _engine_models.InternalEngineCommandResult(
+        status=STATUS_WAITING_FOR_SLOT,
+        reason=reason,
+        returncode=0,
         command_argv=command_argv,
         stderr=stderr,
         extra_fields={
@@ -237,7 +261,7 @@ def _failure_payload_for_submission(
             reason="invalid_submission_target",
         )
     if submission.reason == "submission_conflict":
-        return _failure_payload(
+        return _deferred_payload(
             command_argv=request.command_argv,
             reaction_dir=_submission_reaction_dir(submission, request.reaction_dir),
             stderr=submission.stderr,

@@ -647,6 +647,67 @@ def test_resumed_scants_retry_sources_scan_from_executed_resume_input(
     assert captured["source_inp"] == resume_inp
 
 
+def test_prepare_retry_attempt_appends_retry_patch_actions_to_existing_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.orca.attempt.retry import RetryAttemptRequest, prepare_retry_attempt
+    from orca_auto.orca.out_analyzer import OutAnalysis, _default_markers
+    from orca_auto.orca.statuses import AnalyzerStatus
+
+    selected_inp = tmp_path / "calc.inp"
+    selected_inp.write_text("! Opt B3LYP def2-SVP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    out_path = tmp_path / "calc.out"
+    out_path.write_text("failed opt\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "orca_auto.orca.attempt.retry.prepare_scants_scan_retry_input",
+        lambda **_kwargs: (None, []),
+    )
+    monkeypatch.setattr(
+        "orca_auto.orca.attempt.retry.rewrite_for_retry",
+        lambda **_kwargs: ["retry_tightscf_added", "retry_slowconv_added"],
+    )
+
+    state = new_state(tmp_path, selected_inp, max_retries=1)
+    state["attempts"].append(
+        {
+            "inp_path": str(selected_inp),
+            "out_path": str(out_path),
+            "patch_actions": ["resume_recreated_missing_input:calc.inp"],
+        }
+    )
+    ctx = RetryAttemptRequest(
+        reaction_dir=tmp_path,
+        selected_inp=selected_inp,
+        state=state,
+        resumed=True,
+        current_inp=selected_inp,
+        out_path=out_path,
+        execution_index=1,
+        retries_used=0,
+        max_retries=1,
+        analysis=OutAnalysis(
+            status=AnalyzerStatus.GEOM_NOT_CONVERGED,
+            reason="geom_not_converged",
+            markers=_default_markers(out_path),
+        ),
+        retry_inp_path=_retry_inp_path,
+        emit=lambda _payload: None,
+        notify_finished=None,
+        notify_retry=None,
+    )
+
+    result = prepare_retry_attempt(ctx)
+
+    assert result is None
+    assert state["attempts"][-1]["patch_actions"] == [
+        "resume_recreated_missing_input:calc.inp",
+        "retry_tightscf_added",
+        "retry_slowconv_added",
+    ]
+
+
 def test_resumed_scants_uses_refined_tsopt_geometry_as_optts_when_marker_present(
     tmp_path: Path,
 ) -> None:

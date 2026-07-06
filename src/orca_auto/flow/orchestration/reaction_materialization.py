@@ -26,6 +26,26 @@ class _ReactionXtbStagePlan:
     pairing_enabled: bool
 
 
+def _uhf_from_multiplicity(value: Any) -> int:
+    try:
+        multiplicity = int(value)
+    except (TypeError, ValueError):
+        multiplicity = 1
+    return max(0, multiplicity - 1)
+
+
+def _xtb_manifest_with_charge_spin(o: Any, params: dict[str, Any]) -> dict[str, Any] | None:
+    resolved: dict[str, Any] = {}
+    charge = o.stages.support._safe_int(params.get("charge"), default=0)
+    uhf = _uhf_from_multiplicity(params.get("multiplicity"))
+    if charge != 0:
+        resolved["charge"] = charge
+    if uhf != 0:
+        resolved["uhf"] = uhf
+    resolved.update(o.stages.support._coerce_mapping(params.get("xtb_job_manifest")))
+    return resolved or None
+
+
 def _record_endpoint_pairing_summary(
     o: Any,
     payload: dict[str, Any],
@@ -161,9 +181,7 @@ def append_reaction_xtb_stages_impl(
             max_cores=int(plan.params.get("max_cores", 8) or 8),
             max_memory_gb=int(plan.params.get("max_memory_gb", 32) or 32),
             max_handoff_retries=int(plan.params.get("max_xtb_handoff_retries", 2) or 2),
-            manifest_overrides=o.stages.support._coerce_mapping(
-                plan.params.get("xtb_job_manifest")
-            ),
+            manifest_overrides=_xtb_manifest_with_charge_spin(o, plan.params),
         )
         if plan.pairing_enabled:
             pairing_metadata = dict(endpoint_pair.metadata)

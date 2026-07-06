@@ -10,6 +10,8 @@ from types import FrameType
 
 from orca_auto.core.queue.processes import ProcessGroupTerminationDeps, terminate_process_group
 
+from .orca_process import clear_orca_process_record, write_orca_process_record
+
 logger = logging.getLogger(__name__)
 
 
@@ -68,6 +70,11 @@ class OrcaRunner:
                 text=True,
                 start_new_session=True,
             )
+            try:
+                process_record = write_orca_process_record(inp_path=inp, out_path=out, pid=proc.pid)
+            except Exception:
+                self._terminate_subprocess_tree(proc)
+                raise
             prev_sigterm_handler = None
             sigterm_handler_installed = False
 
@@ -101,4 +108,9 @@ class OrcaRunner:
                         signal.signal(signal.SIGTERM, prev_sigterm_handler)
                     except ValueError:
                         logger.debug("failed to restore SIGTERM handler outside main thread")
+                clear_orca_process_record(
+                    inp.parent,
+                    pid=proc.pid,
+                    process_start_ticks=process_record.get("process_start_ticks"),
+                )
         return RunResult(out_path=str(out), return_code=return_code)
