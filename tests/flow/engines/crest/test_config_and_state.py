@@ -272,6 +272,32 @@ def test_load_config_requires_workflow_root(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        pytest.param("C:\\runs", "Linux path", id="windows-drive"),
+        pytest.param("/mnt/c/runs", "Linux path", id="windows-mount"),
+        pytest.param("./runs", "absolute Linux path", id="relative"),
+    ],
+)
+def test_load_config_rejects_invalid_runs_root_before_resolving(
+    tmp_path: Path,
+    value: str,
+    message: str,
+) -> None:
+    config_path = _write_config(
+        tmp_path / "orca_auto.yaml",
+        f"""
+        runs_root: '{value}'
+        """,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        config_mod.load_crest_config(str(config_path))
+    with pytest.raises(ValueError, match=message):
+        config_mod.load_xtb_config(str(config_path))
+
+
+@pytest.mark.parametrize(
     ("writer", "loader", "filename"),
     [
         pytest.param(
