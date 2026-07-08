@@ -26,13 +26,27 @@ def load_flow_manifest(
         candidate = directory / name
         if not candidate.is_file():
             continue
-        parsed = yaml.safe_load(candidate.read_text(encoding="utf-8"))
+        try:
+            parsed = yaml.safe_load(candidate.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            raise ValueError(_invalid_manifest_yaml_message(candidate, description, exc)) from exc
         if parsed is None:
             return {}
         if not isinstance(parsed, dict):
             raise ValueError(f"{description} must contain a mapping: {candidate}")
         return dict(parsed)
     return {}
+
+
+def _invalid_manifest_yaml_message(path: Path, description: str, exc: yaml.YAMLError) -> str:
+    message = f"Invalid {description}: {path}"
+    mark = getattr(exc, "problem_mark", None)
+    if mark is not None:
+        message = f"{message} (line {mark.line + 1}, column {mark.column + 1})"
+    problem = normalize_text(getattr(exc, "problem", None))
+    if problem:
+        message = f"{message}: {problem}"
+    return message
 
 
 def _reject_windows_manifest_path_syntax(text: str, *, field_name: str) -> None:
