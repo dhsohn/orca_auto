@@ -1,12 +1,11 @@
 """Self-contained HTML job reports written next to ``job_report.md``.
 
-``write_job_html_report`` picks the report flavor from the selected input:
-ScanTS jobs and plain relaxed scans (Opt route + ``%geom Scan`` block) get the
-scan-profile report, other TS routes (OptTS/NEB-TS) and plain Opt jobs get the
-optimization report, and single points / bare Freq jobs — the same set that
-gets an ``"sp"`` SI block — get the single-point report. Non-stationary
-path/dynamics jobs (IRC, plain NEB, MD) get no HTML report. Report generation
-must never break run finalization, so every error is logged and swallowed.
+``write_job_html_report`` builds a shared report context from the selected
+input and then composes the applicable sections: optimization convergence,
+frequency validation, scan profiles, NEB paths, IRC paths, SP energy/SI blocks,
+and a single attempt chain. Other non-stationary path/dynamics jobs (plain NEB,
+MD) get no HTML report. Report generation must never break run finalization, so
+every error is logged and swallowed.
 """
 
 from __future__ import annotations
@@ -19,47 +18,24 @@ from typing import Any
 from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE
 from orca_auto.core.utils.persistence import atomic_write_text
 
-from ..completion_rules import OPT_ROUTE_RE, TS_ROUTE_RE
-from ..input_blocks import file_route_lines
-from ..scants import first_scan_coordinate_spec, input_uses_scants
+from .composer import collect_html_report_parts, compose_job_report_html
 from .frequencies import FrequencyAnalysis, parse_frequency_analysis
+from .irc import (
+    IrcReportData,
+    collect_irc_report_data,
+    input_uses_irc,
+    render_irc_report_html,
+)
+from .neb import NebReportData, collect_neb_report_data, render_neb_report_html
 from .opt import OptReportData, collect_opt_report_data, render_opt_report_html
 from .scants import ScantsReportData, collect_scants_report_data, render_scants_report_html
-from .si import structure_kind
 from .sp import SpReportData, collect_sp_report_data, render_sp_report_html
 
 logger = logging.getLogger(__name__)
 
 
 def _render_job_report(reaction_dir: Path, state: Mapping[str, Any]) -> str | None:
-    selected_raw = str(state.get("selected_inp") or "").strip()
-    if not selected_raw:
-        return None
-    selected_inp = Path(selected_raw)
-
-    if input_uses_scants(selected_inp):
-        scants_data = collect_scants_report_data(reaction_dir, state)
-        return None if scants_data is None else render_scants_report_html(scants_data)
-
-    routes = " ".join(file_route_lines(selected_inp))
-    if TS_ROUTE_RE.search(routes):
-        kind = "ts"
-    elif OPT_ROUTE_RE.search(routes):
-        # A plain relaxed scan (Opt route + %geom Scan block) is about the
-        # energy profile, not the convergence trace: use the scan report.
-        if first_scan_coordinate_spec(selected_inp) is not None:
-            scan_data = collect_scants_report_data(reaction_dir, state, kind="scan")
-            return None if scan_data is None else render_scants_report_html(scan_data)
-        kind = "opt"
-    else:
-        # No optimization in the route: single points and bare Freq jobs get
-        # the SP report; non-stationary jobs (IRC, plain NEB, MD) get none.
-        if structure_kind(selected_inp) != "sp":
-            return None
-        sp_data = collect_sp_report_data(reaction_dir, state)
-        return None if sp_data is None else render_sp_report_html(sp_data)
-    opt_data = collect_opt_report_data(reaction_dir, state, kind=kind)
-    return None if opt_data is None else render_opt_report_html(opt_data)
+    return compose_job_report_html(reaction_dir, state)
 
 
 def write_job_html_report(reaction_dir: Path, state: Mapping[str, Any]) -> Path | None:
@@ -86,13 +62,22 @@ def write_job_html_report(reaction_dir: Path, state: Mapping[str, Any]) -> Path 
 
 __all__ = [
     "FrequencyAnalysis",
+    "IrcReportData",
+    "NebReportData",
     "OptReportData",
     "ScantsReportData",
     "SpReportData",
+    "collect_html_report_parts",
+    "collect_irc_report_data",
+    "collect_neb_report_data",
     "collect_opt_report_data",
     "collect_scants_report_data",
     "collect_sp_report_data",
+    "compose_job_report_html",
+    "input_uses_irc",
     "parse_frequency_analysis",
+    "render_irc_report_html",
+    "render_neb_report_html",
     "render_opt_report_html",
     "render_scants_report_html",
     "render_sp_report_html",

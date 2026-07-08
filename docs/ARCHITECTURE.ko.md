@@ -262,12 +262,16 @@ python -m orca_auto.core.engines.worker_child \
   `*.resume.inp`로 기록되어 사용자 입력이 변경되지 않습니다.
 - **상태 & 리포트:** `state.py`/`state_machine.py`가 `job_state.json`을
   영속화하고, 완료 시 `job_report.json`과 `job_report.md`를 작성합니다. Opt,
-  OptTS/NEB-TS, ScanTS, relaxed scan 작업은 추가로 `job_report.html`(`report/`)을
-  생성합니다 — scan 에너지 프로파일(ScanTS 및 일반 relaxed scan) 또는 최적화
-  수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동 요약을 담은 단일 파일 시각
-  리포트입니다. 정류점으로 끝나는 완료 작업은 `si_block.md`(`report/si.py`)도
-  생성합니다 — 에너지, 열화학, Nimag, 좌표를 담은 복사-붙여넣기용 Supporting
-  Information 블록입니다.
+  OptTS, NEB-TS, ScanTS, IRC, relaxed scan 작업은 추가로
+  `job_report.html`(`report/`)을 생성합니다 — `report/composer.py`가 공통
+  페이지 틀과 계산 component를 조합해 만드는 단일 파일 시각 리포트입니다. 여기에는
+  scan 에너지 프로파일(ScanTS 및 일반 relaxed scan), CI-NEB 경로 프로파일과
+  TS refinement 궤적(NEB-TS), route에 포함된 OptTS/Freq 섹션과 조합된 IRC
+  경로 프로파일, 또는 최적화 수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동
+  요약이 들어갑니다. 정류점으로 끝나는 완료 작업은
+  `si_block.md`(`report/si.py`)도 생성합니다 — 에너지, 열화학, Nimag, 좌표를
+  담은 복사-붙여넣기용 Supporting Information 블록입니다. IRC route는 좌표
+  없는 요약 전용 validation 블록을 생성합니다.
 - **인덱스:** `dft_index*.py`와 `core/indexing`이 탐색용 JSONL 작업 위치
   인덱스를 유지합니다.
 

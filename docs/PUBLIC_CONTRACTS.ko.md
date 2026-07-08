@@ -181,7 +181,8 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `job_report.md`
 - 적용 가능한 리포트 렌더러가 있을 때 `job_report.html`
 - 정류점으로 끝나는 완료 작업에는 `si_block.md` (route, 에너지, 열화학, Nimag,
-  좌표를 담은 복사-붙여넣기용 Supporting Information 블록)
+  좌표를 담은 복사-붙여넣기용 Supporting Information 블록), IRC route에는 좌표
+  없는 요약 전용 validation 블록
 
 `job_state.json`과 `job_report.json`은 정규화된 엔진 산출물 형태를 사용합니다:
 

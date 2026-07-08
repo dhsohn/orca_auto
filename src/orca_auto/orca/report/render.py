@@ -8,6 +8,7 @@ cards, and a dependency-free SVG line chart. Type-specific report modules
 from __future__ import annotations
 
 import html
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 KCAL_PER_HARTREE = 627.5094740631
@@ -92,6 +93,12 @@ class ReportPage:
     footer_html: str
 
 
+@dataclass(frozen=True)
+class ReportComponent:
+    metrics_html: str = ""
+    sections: tuple[tuple[str, str], ...] = ()
+
+
 def badge(text: str, kind: str) -> str:
     return f'<span class="badge badge-{kind}">{html.escape(text)}</span>'
 
@@ -131,6 +138,7 @@ def line_chart_svg(
     y_label: str,
     x_tick_fmt: str = ".2f",
     y_tick_fmt: str = ".1f",
+    x_ticks: Sequence[float] | None = None,
 ) -> str:
     """Dependency-free SVG line chart; empty string when under two points."""
     all_points = [point for entry in series for point in entry.points]
@@ -163,7 +171,8 @@ def line_chart_svg(
         f'<line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_h}" '
         'stroke="#c8ccd4" stroke-width="1"/>',
     ]
-    for tick in _chart_ticks(x_low, x_high, 6):
+    x_tick_values = tuple(x_ticks) if x_ticks is not None else tuple(_chart_ticks(x_low, x_high, 6))
+    for tick in x_tick_values:
         parts.append(
             f'<text x="{sx(tick):.1f}" y="{top + plot_h + 18}" text-anchor="middle" '
             f'font-size="11" fill="#69707c">{tick:{x_tick_fmt}}</text>'
@@ -185,13 +194,15 @@ def line_chart_svg(
 
     for entry in series:
         dash_attr = f' stroke-dasharray="{entry.dash}"' if entry.dash else ""
-        polyline = " ".join(f"{sx(x):.1f},{sy(y):.1f}" for x, y in entry.points)
-        parts.append(
-            f'<polyline points="{polyline}" fill="none" stroke="{entry.color}" '
-            f'stroke-width="2"{dash_attr}/>'
-        )
+        if len(entry.points) >= 2:
+            polyline = " ".join(f"{sx(x):.1f},{sy(y):.1f}" for x, y in entry.points)
+            parts.append(
+                f'<polyline points="{polyline}" fill="none" stroke="{entry.color}" '
+                f'stroke-width="2"{dash_attr}/>'
+            )
+        radius = 3.2 if len(entry.points) == 1 else 2.4
         parts.extend(
-            f'<circle cx="{sx(x):.1f}" cy="{sy(y):.1f}" r="2.4" fill="{entry.color}"/>'
+            f'<circle cx="{sx(x):.1f}" cy="{sy(y):.1f}" r="{radius}" fill="{entry.color}"/>'
             for x, y in entry.points
         )
 
@@ -199,11 +210,14 @@ def line_chart_svg(
     for entry in series:
         if not entry.label:
             continue
-        dash_attr = f' stroke-dasharray="{entry.dash}"' if entry.dash else ""
-        parts.append(
-            f'<line x1="{left + 14}" y1="{legend_y}" x2="{left + 42}" y2="{legend_y}" '
-            f'stroke="{entry.color}" stroke-width="2"{dash_attr}/>'
-        )
+        if len(entry.points) == 1:
+            parts.append(f'<circle cx="{left + 28}" cy="{legend_y}" r="3.5" fill="{entry.color}"/>')
+        else:
+            dash_attr = f' stroke-dasharray="{entry.dash}"' if entry.dash else ""
+            parts.append(
+                f'<line x1="{left + 14}" y1="{legend_y}" x2="{left + 42}" y2="{legend_y}" '
+                f'stroke="{entry.color}" stroke-width="2"{dash_attr}/>'
+            )
         parts.append(
             f'<text x="{left + 48}" y="{legend_y + 4}" font-size="11" fill="#3d4451">'
             f"{html.escape(entry.label)}</text>"

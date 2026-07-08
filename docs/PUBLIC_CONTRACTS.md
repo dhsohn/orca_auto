@@ -184,7 +184,7 @@ job directory:
 - `job_report.html` when a report renderer applies
 - `si_block.md` for completed jobs ending on a stationary point (a copy-paste
   Supporting Information block: route, energies, thermochemistry, Nimag,
-  coordinates)
+  coordinates) or for IRC routes (summary-only validation block, no coordinates)
 
 `job_state.json` and `job_report.json` use the normalized engine artifact shape:
 

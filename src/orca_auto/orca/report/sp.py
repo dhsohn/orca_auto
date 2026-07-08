@@ -31,7 +31,14 @@ from .frequencies import (
     mode_section_html,
     mode_summaries,
 )
-from .render import ReportPage, metric_card, render_page, status_badge_kind, verdict_note
+from .render import (
+    ReportComponent,
+    ReportPage,
+    metric_card,
+    render_page,
+    status_badge_kind,
+    verdict_note,
+)
 from .si import (
     SiBlockError,
     collect_si_block,
@@ -158,7 +165,28 @@ def _energy_section_html(data: SpReportData) -> str:
     )
 
 
-def _metric_cards(data: SpReportData) -> str:
+def sp_report_badges(data: SpReportData) -> tuple[tuple[str, str], ...]:
+    status_kind = status_badge_kind(data.status)
+    badges: list[tuple[str, str]] = [(data.status or "unknown", status_kind)]
+    if data.reason:
+        badges.append((data.reason, "warn" if status_kind == "bad" else "muted"))
+    return tuple(badges)
+
+
+def sp_report_meta_html(data: SpReportData) -> str:
+    formula = data.result.formula if data.result is not None else ""
+    formula_text = f" &#183; {html.escape(formula)}" if formula else ""
+    version = data.result.orca_version if data.result is not None else ""
+    version_text = f" &#183; ORCA {html.escape(version)}" if version else ""
+    return (
+        f"<code>{html.escape(data.route_line)}</code>{formula_text}{version_text}<br>"
+        f"job <code>{html.escape(data.job_id)}</code>"
+        f" &#183; started {html.escape(data.started_at)}"
+        f" &#183; finished {html.escape(data.finished_at)}"
+    )
+
+
+def _metric_cards(data: SpReportData, *, include_attempts: bool = True) -> str:
     cards: list[str] = []
     result = data.result
     if result is not None and result.energy_hartree is not None:
@@ -175,43 +203,36 @@ def _metric_cards(data: SpReportData) -> str:
         )
     if data.imaginary_count is not None:
         cards.append(metric_card("Imaginary frequencies", str(data.imaginary_count), ""))
-    cards.append(
-        metric_card(
-            "Attempts",
-            str(len(data.attempts)),
-            data.total_duration_text and f"total wall time {data.total_duration_text}",
+    if include_attempts:
+        cards.append(
+            metric_card(
+                "Attempts",
+                str(len(data.attempts)),
+                data.total_duration_text and f"total wall time {data.total_duration_text}",
+            )
         )
-    )
     return "".join(cards)
 
 
-def render_sp_report_html(data: SpReportData) -> str:
-    status_kind = status_badge_kind(data.status)
-    badges = [(data.status or "unknown", status_kind)]
-    if data.reason:
-        badges.append((data.reason, "warn" if status_kind == "bad" else "muted"))
-
-    formula = data.result.formula if data.result is not None else ""
-    formula_text = f" &#183; {html.escape(formula)}" if formula else ""
-    version = data.result.orca_version if data.result is not None else ""
-    version_text = f" &#183; ORCA {html.escape(version)}" if version else ""
-    meta_html = (
-        f"<code>{html.escape(data.route_line)}</code>{formula_text}{version_text}<br>"
-        f"job <code>{html.escape(data.job_id)}</code>"
-        f" &#183; started {html.escape(data.started_at)}"
-        f" &#183; finished {html.escape(data.finished_at)}"
-    )
-
+def sp_report_component(
+    data: SpReportData,
+    *,
+    include_attempt_metric: bool = True,
+    include_attempt_chain: bool = True,
+    include_vibrational: bool = True,
+    include_si_block: bool = True,
+) -> ReportComponent:
     sections: list[tuple[str, str]] = [("Energy summary", _energy_section_html(data))]
-    if data.mode_summaries:
+    if include_vibrational and data.mode_summaries:
         sections.append(("Vibrational summary", mode_section_html(data.mode_summaries, None)))
-    sections.append(
-        (
-            "Attempt chain",
-            attempts_table_html(data.attempts, "Detail") + terminal_actions_html(data.attempts),
+    if include_attempt_chain:
+        sections.append(
+            (
+                "Attempt chain",
+                attempts_table_html(data.attempts, "Detail") + terminal_actions_html(data.attempts),
+            )
         )
-    )
-    if data.si_block_text:
+    if include_si_block and data.si_block_text:
         sections.append(
             (
                 "SI block",
@@ -220,15 +241,23 @@ def render_sp_report_html(data: SpReportData) -> str:
                 "next to this report.</p>",
             )
         )
+    return ReportComponent(
+        metrics_html=_metric_cards(data, include_attempts=include_attempt_metric),
+        sections=tuple(sections),
+    )
+
+
+def render_sp_report_html(data: SpReportData) -> str:
     fallback_reason = data.attempts[-1].analyzer_reason if data.attempts else ""
+    component = sp_report_component(data)
 
     page = ReportPage(
         title=f"{data.title} · SP report",
-        badges=tuple(badges),
-        meta_html=meta_html,
+        badges=sp_report_badges(data),
+        meta_html=sp_report_meta_html(data),
         verdict_html=verdict_note(data.reason, fallback_reason),
-        metrics_html=_metric_cards(data),
-        sections=tuple(sections),
+        metrics_html=component.metrics_html,
+        sections=component.sections,
         footer_html=(
             "Generated by orca_auto &#183; last output: "
             f"<code>{html.escape(data.last_out_name)}</code>"
@@ -237,4 +266,11 @@ def render_sp_report_html(data: SpReportData) -> str:
     return render_page(page)
 
 
-__all__ = ["SpReportData", "collect_sp_report_data", "render_sp_report_html"]
+__all__ = [
+    "SpReportData",
+    "collect_sp_report_data",
+    "render_sp_report_html",
+    "sp_report_badges",
+    "sp_report_component",
+    "sp_report_meta_html",
+]

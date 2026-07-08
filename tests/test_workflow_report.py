@@ -158,7 +158,9 @@ def test_write_workflow_html_report_renders_sections(tmp_path: Path) -> None:
     assert "Stage chain" in text
     assert "ts_guess_a" in text
     assert 'href="orca_b' in text
-    assert "<polyline" in text
+    assert "<circle" in text
+    assert "<polyline" not in text
+    assert "kcal mol⁻¹" in text
     assert "total wall time" in text
 
 

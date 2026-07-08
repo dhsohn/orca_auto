@@ -22,6 +22,7 @@ from .frequencies import ModeSummary, find_frequency_analysis, mode_section_html
 from .render import (
     KCAL_PER_HARTREE,
     ChartSeries,
+    ReportComponent,
     ReportPage,
     line_chart_svg,
     metric_card,
@@ -152,9 +153,33 @@ def _imaginary_note(data: OptReportData) -> str:
     return f"expected {expected} for a {kind_text}"
 
 
-def _metric_cards(data: OptReportData) -> str:
+def opt_report_badges(data: OptReportData) -> tuple[tuple[str, str], ...]:
+    status_kind = status_badge_kind(data.status)
+    badges: list[tuple[str, str]] = [(data.status or "unknown", status_kind)]
+    if data.reason:
+        badges.append((data.reason, "warn" if status_kind == "bad" else "muted"))
+    return tuple(badges)
+
+
+def opt_report_meta_html(data: OptReportData) -> str:
+    formula_text = f" &#183; {html.escape(data.formula)}" if data.formula else ""
+    return (
+        f"<code>{html.escape(data.route_line)}</code>{formula_text}<br>"
+        f"job <code>{html.escape(data.job_id)}</code>"
+        f" &#183; started {html.escape(data.started_at)}"
+        f" &#183; finished {html.escape(data.finished_at)}"
+    )
+
+
+def _metric_cards(
+    data: OptReportData,
+    *,
+    include_attempts: bool = True,
+    include_energy: bool = True,
+    include_frequency: bool = True,
+) -> str:
     cards = []
-    if data.final_energy is not None:
+    if include_energy and data.final_energy is not None:
         cards.append(
             metric_card(
                 "Final energy",
@@ -165,12 +190,12 @@ def _metric_cards(data: OptReportData) -> str:
     if data.steps:
         cards.append(
             metric_card(
-                "Opt cycles",
+                "TS opt cycles" if data.kind == "ts" else "Opt cycles",
                 str(data.steps[-1][0]),
                 "converged" if data.opt_converged else "not converged",
             )
         )
-    if data.imaginary_count is not None:
+    if include_frequency and data.imaginary_count is not None:
         cards.append(
             metric_card(
                 "Imaginary frequencies",
@@ -178,48 +203,62 @@ def _metric_cards(data: OptReportData) -> str:
                 _imaginary_note(data),
             )
         )
-    cards.append(
-        metric_card(
-            "Attempts",
-            str(len(data.attempts)),
-            data.total_duration_text and f"total wall time {data.total_duration_text}",
+    if include_attempts:
+        cards.append(
+            metric_card(
+                "Attempts",
+                str(len(data.attempts)),
+                data.total_duration_text and f"total wall time {data.total_duration_text}",
+            )
         )
-    )
     return "".join(cards)
 
 
-def render_opt_report_html(data: OptReportData) -> str:
-    status_kind = status_badge_kind(data.status)
-    badges = [(data.status or "unknown", status_kind)]
-    if data.reason:
-        badges.append((data.reason, "warn" if status_kind == "bad" else "muted"))
-
-    formula_text = f" &#183; {html.escape(data.formula)}" if data.formula else ""
-    meta_html = (
-        f"<code>{html.escape(data.route_line)}</code>{formula_text}<br>"
-        f"job <code>{html.escape(data.job_id)}</code>"
-        f" &#183; started {html.escape(data.started_at)}"
-        f" &#183; finished {html.escape(data.finished_at)}"
-    )
+def opt_report_component(
+    data: OptReportData,
+    *,
+    include_attempt_metric: bool = True,
+    include_attempt_chain: bool = True,
+    include_energy_metric: bool = True,
+    include_frequency_metric: bool = True,
+    include_vibrational: bool = True,
+) -> ReportComponent:
     chart = _convergence_chart_svg(data) or (
         '<p class="muted">No optimization cycles were parsed from the attempt outputs.</p>'
     )
-    attempts_html = attempts_table_html(data.attempts, "Detail") + terminal_actions_html(
-        data.attempts
+    section_title = (
+        "TS optimization convergence" if data.kind == "ts" else "Optimization convergence"
     )
+    sections: list[tuple[str, str]] = [(section_title, chart)]
+    if include_attempt_chain:
+        attempts_html = attempts_table_html(data.attempts, "Detail") + terminal_actions_html(
+            data.attempts
+        )
+        sections.append(("Attempt chain", attempts_html))
+    if include_vibrational:
+        sections.append(("Vibrational summary", mode_section_html(data.mode_summaries, None)))
+    return ReportComponent(
+        metrics_html=_metric_cards(
+            data,
+            include_attempts=include_attempt_metric,
+            include_energy=include_energy_metric,
+            include_frequency=include_frequency_metric,
+        ),
+        sections=tuple(sections),
+    )
+
+
+def render_opt_report_html(data: OptReportData) -> str:
     fallback_reason = data.attempts[-1].analyzer_reason if data.attempts else ""
+    component = opt_report_component(data)
 
     page = ReportPage(
         title=f"{data.title} · {data.kind_label()} report",
-        badges=tuple(badges),
-        meta_html=meta_html,
+        badges=opt_report_badges(data),
+        meta_html=opt_report_meta_html(data),
         verdict_html=verdict_note(data.reason, fallback_reason),
-        metrics_html=_metric_cards(data),
-        sections=(
-            ("Optimization convergence", chart),
-            ("Attempt chain", attempts_html),
-            ("Vibrational summary", mode_section_html(data.mode_summaries, None)),
-        ),
+        metrics_html=component.metrics_html,
+        sections=component.sections,
         footer_html=(
             "Generated by orca_auto &#183; last output: "
             f"<code>{html.escape(data.last_out_name)}</code>"
