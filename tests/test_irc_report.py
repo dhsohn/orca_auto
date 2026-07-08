@@ -255,6 +255,34 @@ def test_irc_report_with_missing_path_summary_has_fallback(tmp_path: Path) -> No
     assert "IRC setup" in text
 
 
+def test_multiline_route_classifies_ts_correctly(tmp_path: Path) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! B3LYP def2-SVP\n! OptTS Freq IRC")
+    out_path = tmp_path / "rxn.out"
+    _write_out(out_path, route="! OptTS Freq IRC B3LYP def2-SVP", freq=True, opt=True)
+
+    data = collect_irc_report_data(tmp_path, _state(tmp_path, out_path))
+
+    assert data is not None
+    assert "OptTS" in data.route_line
+    path = write_job_html_report(tmp_path, _state(tmp_path, out_path))
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "TS optimization convergence" in text
+    assert "TS opt cycles" in text
+    assert "expected 1" in text
+
+
+def test_neb_trajectory_not_captured_as_irc_setting(tmp_path: Path) -> None:
+    neb_plus_irc_block = ("Writing initial trajectory to file  .... neb_init.xyz\n\n") + _IRC_BLOCK
+    out_path = tmp_path / "rxn.out"
+    _write_out(out_path, route="! NEB-TS IRC B3LYP def2-SVP", irc_block=neb_plus_irc_block)
+
+    parsed = parse_irc_output(out_path)
+
+    assert not any("neb_init" in s.value for s in parsed.settings)
+    assert any("job_IRC_Full.xyz" in s.value for s in parsed.settings)
+
+
 def test_write_report_files_emits_irc_html_and_summary_si(tmp_path: Path) -> None:
     _write_inp(tmp_path / "rxn.inp", "! B3LYP def2-SVP IRC")
     out_path = tmp_path / "rxn.out"

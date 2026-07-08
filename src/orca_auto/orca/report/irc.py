@@ -192,7 +192,7 @@ def collect_irc_report_data(
         job_id=str(state.get("job_id") or ""),
         status=str(state.get("status") or ""),
         reason=str(final_payload.get("reason") or ""),
-        route_line=route_lines[0] if route_lines else "",
+        route_line=" ".join(route_lines),
         formula=result.formula if result is not None else "",
         method=result.method if result is not None else "",
         basis_set=result.basis_set if result is not None else "",
@@ -239,7 +239,7 @@ def collect_irc_si_block(reaction_dir: Path, state: Mapping[str, Any]) -> IrcSiB
         result = None
     return IrcSiBlock(
         name=reaction_dir.name,
-        route_line=route_lines[0],
+        route_line=" ".join(route_lines),
         orca_version=result.orca_version if result is not None else "",
         settings=parsed.settings,
         path_points=parsed.path_points,
@@ -381,15 +381,13 @@ def _parse_irc_settings(text: str) -> tuple[IrcSetting, ...]:
     settings: list[IrcSetting] = []
     in_settings = False
     for line in text.splitlines():
-        stripped = line.strip()
         if _IRC_SETTINGS_HEADER_RE.match(line):
             in_settings = True
             continue
         if in_settings and _SECTION_HEADER_RE.search(line):
             break
         if not in_settings:
-            if "trajectory" not in stripped.lower() or "file" not in stripped.lower():
-                continue
+            continue
         match = _DOTTED_SETTING_RE.match(line)
         if match is None:
             continue
