@@ -6,10 +6,11 @@ G-E(el) correction), the imaginary-mode summary, and the final Cartesian
 coordinates — as plain fixed-width text that pastes cleanly into Word or a
 LaTeX source. Lint warnings (``⚠`` lines) flag what a reviewer would: a
 minimum with imaginary modes, a TS without exactly one, missing
-thermochemistry. Non-stationary jobs (relaxed scans, IRC) get no block;
-ScanTS does, because ORCA finishes it with an internal OptTS so the final
-geometry is a genuine TS. Like the HTML report, generation must never break
-run finalization: every error is logged and swallowed.
+thermochemistry. Non-stationary relaxed scans still get no block; IRC gets a
+summary-only validation block with no coordinates. ScanTS does get a structure
+block, because ORCA finishes it with an internal OptTS so the final geometry is
+a genuine TS. Like the HTML report, generation must never break run
+finalization: every error is logged and swallowed.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from .frequencies import (
     mode_summaries,
     parse_frequency_analysis,
 )
+from .irc import collect_irc_si_block, input_uses_irc, render_irc_si_block_md
 
 logger = logging.getLogger(__name__)
 
@@ -62,10 +64,11 @@ def structure_kind(selected_inp: Path) -> str | None:
     """``"ts"`` / ``"min"`` / ``"sp"``; ``None`` for non-stationary jobs.
 
     A plain relaxed scan (Opt route + scan coordinate), IRC, plain NEB paths,
-    and MD end on non-stationary geometries that must never enter an SI; TS
+    and MD end on non-stationary geometries that must never enter the
+    stationary-structure SI path; IRC has a separate summary-only writer. TS
     routes (OptTS/ScanTS/NEB-TS) and plain Opt end on stationary points.
-    Everything else (single points, bare Freq) is reported without a
-    minimum/TS claim.
+    Everything else (single points, bare Freq) is reported without a minimum/TS
+    claim.
     """
     routes = " ".join(file_route_lines(selected_inp))
     if not routes:
@@ -267,6 +270,15 @@ def write_si_block(reaction_dir: Path, state: Mapping[str, Any]) -> Path | None:
     """
     path = si_block_path(reaction_dir)
     try:
+        selected_raw = str(state.get("selected_inp") or "").strip()
+        if selected_raw and input_uses_irc(Path(selected_raw)):
+            irc_block = collect_irc_si_block(reaction_dir, state)
+            if irc_block is None:
+                path.unlink(missing_ok=True)
+                return None
+            atomic_write_text(path, render_irc_si_block_md(irc_block))
+            return path
+
         block = collect_si_block(reaction_dir, state)
         if block is None:
             path.unlink(missing_ok=True)

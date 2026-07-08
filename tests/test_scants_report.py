@@ -85,6 +85,37 @@ The Calculated Surface using the SCF energy
    1.86000000 -101.00000000
 """
 
+_OPT_CYCLES_BLOCK = """
+                *** Geometry Optimization Cycle   1 ***
+
+FINAL SINGLE POINT ENERGY      -100.01000000
+
+                *** Geometry Optimization Cycle   2 ***
+
+FINAL SINGLE POINT ENERGY      -100.02000000
+
+                    ***********************HURRAY********************
+                    ***        THE OPTIMIZATION HAS CONVERGED     ***
+                    *************************************************
+"""
+
+_IRC_BLOCK = """
+----------------------
+IRC settings
+----------------------
+Direction                               .... both
+Writing full trajectory file            .... scants_IRC_Full.xyz
+
+----------------------
+IRC PATH SUMMARY
+----------------------
+Step     E(Eh)        dE(kcal/mol)  max(|G|)  RMS(G)
+ -1    -100.050000    -18.83       0.00160   0.00080
+  0    -100.020000      0.00       0.00200   0.00090 <= TS
+  1    -100.060000    -25.10       0.00150   0.00070
+
+"""
+
 
 def _write_ts_out(path: Path) -> None:
     path.write_text(
@@ -92,6 +123,19 @@ def _write_ts_out(path: Path) -> None:
         + _SURFACE_BLOCK
         + _FREQ_BLOCK
         + _MODES_BLOCK
+        + "\n****ORCA TERMINATED NORMALLY****\n",
+        encoding="utf-8",
+    )
+
+
+def _write_scants_irc_out(path: Path) -> None:
+    path.write_text(
+        _COORDS_BLOCK
+        + _SURFACE_BLOCK
+        + _OPT_CYCLES_BLOCK
+        + _FREQ_BLOCK
+        + _MODES_BLOCK
+        + _IRC_BLOCK
         + "\n****ORCA TERMINATED NORMALLY****\n",
         encoding="utf-8",
     )
@@ -268,6 +312,30 @@ def test_relaxed_scan_gets_profile_report_not_opt_report(tmp_path: Path) -> None
     assert "85%" in text
 
 
+def test_scants_irc_report_does_not_treat_scan_cycles_as_ts_refinement(
+    tmp_path: Path,
+) -> None:
+    _write_scants_inp(tmp_path / "rxn.inp")
+    (tmp_path / "rxn.inp").write_text(
+        (tmp_path / "rxn.inp").read_text(encoding="utf-8").replace("Freq", "Freq IRC"),
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "rxn.out"
+    _write_scants_irc_out(out_path)
+
+    path = write_job_html_report(tmp_path, _state(tmp_path, out_path))
+
+    assert path == tmp_path / "job_report.html"
+    text = path.read_text(encoding="utf-8")
+    assert "ScanTS report" in text
+    assert "Scan energy profile" in text
+    assert "IRC path profile" in text
+    assert "scants_IRC_Full.xyz" in text
+    assert "TS optimization convergence" not in text
+    assert text.count('<div class="metric-label">Imaginary frequencies</div>') == 1
+    assert "initial ScanTS" in text
+
+
 def test_write_report_files_includes_html_for_scants(tmp_path: Path) -> None:
     _write_scants_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
@@ -280,13 +348,13 @@ def test_write_report_files_includes_html_for_scants(tmp_path: Path) -> None:
     assert (tmp_path / "job_report.md").exists()
 
 
-def test_write_report_files_skips_html_and_removes_stale_for_irc(
+def test_write_report_files_skips_html_and_removes_stale_for_md(
     tmp_path: Path,
 ) -> None:
-    # IRC is a non-stationary job type with no HTML report (single points now
-    # have their own report flavor, so they no longer cover this path).
+    # MD is a non-stationary job type with no HTML report (single points and IRC
+    # now have their own report flavors, so they no longer cover this path).
     inp = tmp_path / "rxn.inp"
-    inp.write_text("! B3LYP def2-SVP IRC\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
+    inp.write_text("! B3LYP def2-SVP MD\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     out_path = tmp_path / "rxn.out"
     _write_ts_out(out_path)
     # Leftover report from a previous Opt/ScanTS job in this reused reaction dir

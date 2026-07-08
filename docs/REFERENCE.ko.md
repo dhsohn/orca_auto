@@ -510,16 +510,18 @@ Opt 모드 완료:
 - `job_state.json`
 - `job_report.json`
 - `job_report.md`
-- `job_report.html` (Opt, OptTS/NEB-TS, ScanTS, relaxed scan 작업): scan 에너지
-  프로파일(ScanTS 및 일반 relaxed scan — `Opt` route + `%geom Scan` 블록) 또는
-  최적화 수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동 요약(허수 모드, 주요
-  원자 변위, scan 작업의 경우 스캔 좌표와의 일치도)을 담은 단일 파일 시각
-  리포트
-- `si_block.md` (정류점으로 끝나는 완료 작업; single point 포함, relaxed scan과
-  IRC 제외): route line과 ORCA 버전, E(el)/ZPE/H/G와 G−E(el) 보정, Nimag와
-  허수 모드 요약, 최종 좌표, 그리고 리뷰어가 잡을 문제(허수 모드가 있는
-  minimum, 허수 모드가 정확히 1개가 아닌 TS, 미특성화 정류점)를 표시하는 `⚠`
-  lint 라인을 담은 복사-붙여넣기용 Supporting Information 블록
+- `job_report.html` (Opt, OptTS, NEB-TS, ScanTS, IRC, relaxed scan 작업): 공통
+  페이지 틀과 계산 component를 조합한 단일 파일 시각 리포트입니다. 파싱된
+  route/output에 따라 scan 에너지 프로파일(ScanTS 및 일반 relaxed scan —
+  `Opt` route + `%geom Scan` 블록), CI-NEB 경로 프로파일과 TS refinement
+  궤적(NEB-TS), 존재하는 OptTS/Freq 섹션과 조합된 IRC 경로 프로파일, 또는
+  최적화 수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동 요약(허수 모드,
+  주요 원자 변위, scan 작업의 경우 스캔 좌표와의 일치도)을 담습니다.
+- `si_block.md`: 정류점으로 끝나는 완료 작업(single point 포함, relaxed scan
+  제외)은 route line과 ORCA 버전, E(el)/ZPE/H/G와 G−E(el) 보정, Nimag와
+  허수 모드 요약, 최종 좌표, 그리고 리뷰어가 잡을 문제를 표시하는 `⚠` lint
+  라인을 담은 복사-붙여넣기용 Supporting Information 블록을 생성합니다. IRC
+  route는 좌표 없는 요약 전용 validation 블록을 생성합니다.
 
 주요 `job_state.json` 필드:
 

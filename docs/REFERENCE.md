@@ -502,18 +502,21 @@ Generated in the job directory:
 - `job_state.json`
 - `job_report.json`
 - `job_report.md`
-- `job_report.html` (Opt, OptTS/NEB-TS, ScanTS, and relaxed-scan jobs):
-  self-contained visual report with the scan energy profile (ScanTS and plain
-  relaxed scans, i.e. `Opt` routes with a `%geom Scan` block) or optimization
-  convergence trace (Opt/OptTS), the retry-recipe chain, and a vibrational
-  summary (imaginary modes, dominant atom displacements, and — for scans —
-  alignment with the scanned coordinate)
-- `si_block.md` (completed jobs ending on a stationary point; single points
-  included, relaxed scans and IRC excluded): a copy-paste Supporting
-  Information block with the route line and ORCA version, E(el)/ZPE/H/G and
-  the G−E(el) correction, Nimag with an imaginary-mode summary, the final
-  coordinates, and `⚠` lint lines for reviewer-visible problems (minimum with
-  imaginary modes, TS without exactly one, uncharacterized stationary point)
+- `job_report.html` (Opt, OptTS, NEB-TS, ScanTS, IRC, and relaxed-scan jobs):
+  self-contained visual report assembled from common page chrome plus
+  calculation components. Depending on the parsed route/output it may include
+  the scan energy profile (ScanTS and plain relaxed scans, i.e. `Opt` routes
+  with a `%geom Scan` block), CI-NEB path profile plus TS refinement trace
+  (NEB-TS), IRC path profile with combined OptTS/Freq sections when present, or
+  optimization convergence trace (Opt/OptTS), the retry-recipe chain, and a
+  vibrational summary (imaginary modes, dominant atom displacements, and — for
+  scans — alignment with the scanned coordinate)
+- `si_block.md`: for completed jobs ending on a stationary point (single points
+  included, relaxed scans excluded), a copy-paste Supporting Information block
+  with the route line and ORCA version, E(el)/ZPE/H/G and the G−E(el)
+  correction, Nimag with an imaginary-mode summary, the final coordinates, and
+  `⚠` lint lines for reviewer-visible problems; for IRC routes, a
+  summary-only validation block without coordinates
 
 Important `job_state.json` fields:
 

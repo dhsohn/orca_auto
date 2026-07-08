@@ -31,6 +31,7 @@ from .frequencies import ModeSummary, find_frequency_analysis, mode_section_html
 from .render import (
     KCAL_PER_HARTREE,
     ChartSeries,
+    ReportComponent,
     ReportPage,
     line_chart_svg,
     metric_card,
@@ -208,7 +209,36 @@ def _profile_chart_svg(data: ScantsReportData) -> str:
     )
 
 
-def _metric_cards(data: ScantsReportData) -> str:
+def scants_report_badges(data: ScantsReportData) -> tuple[tuple[str, str], ...]:
+    status_kind = status_badge_kind(data.status)
+    badges: list[tuple[str, str]] = [(data.status or "unknown", status_kind)]
+    if data.reason:
+        badges.append((data.reason, "warn" if status_kind == "bad" else "muted"))
+    return tuple(badges)
+
+
+def scants_report_meta_html(data: ScantsReportData) -> str:
+    scan_text = ""
+    if data.scan_spec is not None:
+        scan_text = (
+            f" &#183; {html.escape(data.scan_spec.label())} = "
+            f"{data.scan_spec.start:g} &#8594; {data.scan_spec.end:g} &#8491;, "
+            f"{data.scan_spec.points} pt"
+        )
+    return (
+        f"<code>{html.escape(data.route_line)}</code>{scan_text}<br>"
+        f"job <code>{html.escape(data.job_id)}</code>"
+        f" &#183; started {html.escape(data.started_at)}"
+        f" &#183; finished {html.escape(data.finished_at)}"
+    )
+
+
+def _metric_cards(
+    data: ScantsReportData,
+    *,
+    include_attempts: bool = True,
+    include_frequency: bool = True,
+) -> str:
     scants = data.kind == "scants"
     cards = []
     if data.forward_barrier_kcal is not None:
@@ -236,7 +266,7 @@ def _metric_cards(data: ScantsReportData) -> str:
                 "endpoint relative to scan start",
             )
         )
-    if data.imaginary_count is not None:
+    if include_frequency and data.imaginary_count is not None:
         cards.append(
             metric_card(
                 "Imaginary frequencies",
@@ -246,55 +276,60 @@ def _metric_cards(data: ScantsReportData) -> str:
                 else "",
             )
         )
-    cards.append(
-        metric_card(
-            "Attempts",
-            str(len(data.attempts)),
-            data.total_duration_text and f"total wall time {data.total_duration_text}",
+    if include_attempts:
+        cards.append(
+            metric_card(
+                "Attempts",
+                str(len(data.attempts)),
+                data.total_duration_text and f"total wall time {data.total_duration_text}",
+            )
         )
-    )
     return "".join(cards)
 
 
-def render_scants_report_html(data: ScantsReportData) -> str:
-    status_kind = status_badge_kind(data.status)
-    badges = [(data.status or "unknown", status_kind)]
-    if data.reason:
-        badges.append((data.reason, "warn" if status_kind == "bad" else "muted"))
-
-    scan_text = ""
-    if data.scan_spec is not None:
-        scan_text = (
-            f" &#183; {html.escape(data.scan_spec.label())} = "
-            f"{data.scan_spec.start:g} &#8594; {data.scan_spec.end:g} &#8491;, "
-            f"{data.scan_spec.points} pt"
-        )
-    meta_html = (
-        f"<code>{html.escape(data.route_line)}</code>{scan_text}<br>"
-        f"job <code>{html.escape(data.job_id)}</code>"
-        f" &#183; started {html.escape(data.started_at)}"
-        f" &#183; finished {html.escape(data.finished_at)}"
-    )
+def scants_report_component(
+    data: ScantsReportData,
+    *,
+    include_attempt_metric: bool = True,
+    include_attempt_chain: bool = True,
+    include_frequency_metric: bool = True,
+    include_vibrational: bool = True,
+) -> ReportComponent:
     chart = _profile_chart_svg(data) or (
         '<p class="muted">No relaxed-surface points were parsed from the attempt outputs.</p>'
     )
-    attempts_html = attempts_table_html(data.attempts, "Scan points") + terminal_actions_html(
-        data.attempts
-    )
-    fallback_reason = data.attempts[-1].analyzer_reason if data.attempts else ""
     alignment_label = data.scan_spec.label() if data.scan_spec is not None else None
+    sections: list[tuple[str, str]] = [("Scan energy profile", chart)]
+    if include_attempt_chain:
+        attempts_html = attempts_table_html(data.attempts, "Scan points") + terminal_actions_html(
+            data.attempts
+        )
+        sections.append(("Attempt chain", attempts_html))
+    if include_vibrational:
+        sections.append(
+            ("Vibrational summary", mode_section_html(data.mode_summaries, alignment_label))
+        )
+    return ReportComponent(
+        metrics_html=_metric_cards(
+            data,
+            include_attempts=include_attempt_metric,
+            include_frequency=include_frequency_metric,
+        ),
+        sections=tuple(sections),
+    )
+
+
+def render_scants_report_html(data: ScantsReportData) -> str:
+    fallback_reason = data.attempts[-1].analyzer_reason if data.attempts else ""
+    component = scants_report_component(data)
 
     page = ReportPage(
         title=f"{data.title} · {data.kind_label()} report",
-        badges=tuple(badges),
-        meta_html=meta_html,
+        badges=scants_report_badges(data),
+        meta_html=scants_report_meta_html(data),
         verdict_html=verdict_note(data.reason, fallback_reason),
-        metrics_html=_metric_cards(data),
-        sections=(
-            ("Scan energy profile", chart),
-            ("Attempt chain", attempts_html),
-            ("Vibrational summary", mode_section_html(data.mode_summaries, alignment_label)),
-        ),
+        metrics_html=component.metrics_html,
+        sections=component.sections,
         footer_html=(
             "Generated by orca_auto &#183; last output: "
             f"<code>{html.escape(data.last_out_name)}</code>"

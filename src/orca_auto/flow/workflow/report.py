@@ -13,6 +13,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -24,9 +25,7 @@ from orca_auto.core.utils.persistence import atomic_write_text
 from orca_auto.orca.report.attempts import duration_text
 from orca_auto.orca.report.render import (
     KCAL_PER_HARTREE,
-    ChartSeries,
     ReportPage,
-    line_chart_svg,
     metric_card,
     render_page,
     status_badge_kind,
@@ -463,21 +462,107 @@ def _orca_table_html(data: WorkflowReportData) -> str:
     )
 
 
-def _energy_chart_svg(data: WorkflowReportData) -> str:
-    points = tuple(
-        (float(rank), entry.rel_kcal)
+def _energy_axis_ticks(max_value: float) -> tuple[float, ...]:
+    target = max(max_value, 1.0)
+    raw_step = target / 4
+    magnitude = 10 ** math.floor(math.log10(raw_step))
+    normalized = raw_step / magnitude
+    for factor in (1.0, 2.0, 2.5, 5.0, 10.0):
+        if normalized <= factor:
+            step = factor * magnitude
+            break
+    tick_high = math.ceil(target / step) * step
+    count = int(round(tick_high / step))
+    return tuple(index * step for index in range(count + 1))
+
+
+def _tick_label(value: float) -> str:
+    if math.isclose(value, round(value), abs_tol=1e-9):
+        return str(int(round(value)))
+    return f"{value:.1f}"
+
+
+def _short_candidate_label(rank: int, label: str, *, limit: int = 24) -> str:
+    prefix = f"#{rank} "
+    available = max(4, limit - len(prefix))
+    shortened = label if len(label) <= available else label[: available - 3] + "..."
+    return prefix + shortened
+
+
+def _energy_lollipop_svg(data: WorkflowReportData) -> str:
+    entries = tuple(
+        (rank, entry)
         for rank, entry in enumerate(data.orca_results, start=1)
         if entry.rel_kcal is not None
     )
-    if len(points) < 2:
+    if len(entries) < 2:
         return ""
-    series = (ChartSeries(label="", color="#2f6fb2", dash="", points=points),)
-    return line_chart_svg(
-        series,
-        x_label="rank",
-        y_label="ΔE / kcal mol⁻¹",
-        x_tick_fmt=".0f",
+
+    width = 760
+    left, right, top, row_h = 150, 30, 30, 28
+    axis_y = max(top + (len(entries) - 1) * row_h + 24, 136)
+    height = axis_y + 38
+    plot_w = width - left - right
+    max_rel = max(entry.rel_kcal or 0.0 for _rank, entry in entries)
+    ticks = _energy_axis_ticks(max_rel)
+    x_high = ticks[-1]
+
+    def sx(value: float) -> float:
+        return left + value / x_high * plot_w
+
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" role="img" '
+        'style="width:100%;max-width:820px;display:block">',
+    ]
+    plot_top = top - 16
+    for tick in ticks:
+        x = sx(tick)
+        parts.append(
+            f'<line x1="{x:.1f}" y1="{plot_top}" x2="{x:.1f}" y2="{axis_y}" '
+            'stroke="#e4e7ec" stroke-width="1"/>'
+        )
+        parts.append(
+            f'<text x="{x:.1f}" y="{axis_y + 18}" text-anchor="middle" '
+            f'font-size="11" fill="#69707c">{html.escape(_tick_label(tick))}</text>'
+        )
+    parts.append(
+        f'<line x1="{left}" y1="{axis_y}" x2="{left + plot_w}" y2="{axis_y}" '
+        'stroke="#c8ccd4" stroke-width="1"/>'
     )
+
+    for offset, (rank, entry) in enumerate(entries):
+        rel = entry.rel_kcal or 0.0
+        y = top + offset * row_h
+        x = sx(rel)
+        color = "#158a72" if offset == 0 else "#2f6fb2"
+        label = _short_candidate_label(rank, entry.label)
+        value_x = x + 8
+        value_anchor = "start"
+        if value_x > width - right - 42:
+            value_x = x - 8
+            value_anchor = "end"
+        parts.append("<g>")
+        parts.append(f"<title>{html.escape(entry.label)}: {rel:+.2f} kcal mol⁻¹</title>")
+        parts.append(
+            f'<text x="{left - 10}" y="{y + 4:.1f}" text-anchor="end" '
+            f'font-size="11" fill="#3d4451">{html.escape(label)}</text>'
+        )
+        parts.append(
+            f'<line x1="{left}" y1="{y:.1f}" x2="{x:.1f}" y2="{y:.1f}" '
+            'stroke="#b7bec9" stroke-width="1.5"/>'
+        )
+        parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{color}"/>')
+        parts.append(
+            f'<text x="{value_x:.1f}" y="{y + 4:.1f}" text-anchor="{value_anchor}" '
+            f'font-size="11" fill="#3d4451">{rel:+.2f}</text>'
+        )
+        parts.append("</g>")
+    parts.append(
+        f'<text x="{left + plot_w / 2:.1f}" y="{height - 6}" text-anchor="middle" '
+        f'font-size="12" fill="#3d4451">ΔE / kcal mol⁻¹</text>'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
 
 
 def render_workflow_report_html(data: WorkflowReportData) -> str:
@@ -492,7 +577,7 @@ def render_workflow_report_html(data: WorkflowReportData) -> str:
     )
 
     sections: list[tuple[str, str]] = [("Stage chain", _stage_table_html(data))]
-    chart = _energy_chart_svg(data)
+    chart = _energy_lollipop_svg(data)
     orca_heading = (
         "TS candidates"
         if data.template_name in ("reaction_ts_search", "scan_ts_search")

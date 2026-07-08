@@ -107,15 +107,20 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `%geom Scan` block) now get the scan-profile flavor of `job_report.html`
   (energy profile, interior-barrier prominence, scan-coordinate alignment)
   instead of the optimization-convergence flavor.
-- HTML job reports: Opt, OptTS/NEB-TS, and ScanTS jobs now write a
+- HTML job reports: Opt, OptTS, NEB-TS, ScanTS, and IRC jobs now write a
   self-contained `job_report.html` next to `job_report.md` for successful and
-  failed runs alike (shared renderer in `orca/report/`). ScanTS reports show
-  the scan energy profile across all attempts (inline SVG); Opt/OptTS reports
-  show the optimization convergence trace with an imaginary-frequency
-  expectation check (0 for minima, 1 for TS). All flavors include the
-  retry-recipe chain and a vibrational summary of the final frequency
-  calculation — imaginary modes, dominant atom displacements, and (for ScanTS)
-  their alignment with the scanned coordinate.
+  failed runs alike (shared renderer plus composable report components in
+  `orca/report/`). ScanTS reports show
+  the scan energy profile across all attempts (inline SVG); NEB-TS reports show
+  the CI-NEB path profile, CI optimization history, and final TS refinement
+  trace; IRC reports show the IRC path profile and endpoint summary, and for
+  combined routes such as `OptTS Freq IRC` or `NEB-TS Freq IRC` also compose in
+  the relevant TS optimization, NEB, IRC, and frequency sections; Opt/OptTS reports show the optimization
+  convergence trace with an imaginary-frequency expectation check (0 for
+  minima, 1 for TS). All flavors include the retry-recipe chain and a
+  vibrational summary of the final frequency calculation — imaginary modes,
+  dominant atom displacements, and (for ScanTS) their alignment with the scanned
+  coordinate.
 - ScanTS barrierless-profile detection: after the endpoint-completion scan, the
   assembled forward profile is checked for an interior maximum above
   0.5 kcal/mol; without one the run fails immediately with reason

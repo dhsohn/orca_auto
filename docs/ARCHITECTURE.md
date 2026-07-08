@@ -269,13 +269,17 @@ logic. Notable pieces:
   `MORead` + `%moinp` when a matching non-empty `.gbw` checkpoint exists; resumed
   inputs are written as `*.resume.inp` so user input is never mutated.
 - **State & reports:** `state.py`/`state_machine.py` persist `job_state.json`;
-  completion writes `job_report.json` and `job_report.md`; Opt, OptTS/NEB-TS,
-  ScanTS, and relaxed-scan jobs also get `job_report.html` (`report/`), a
-  self-contained visual report — scan energy profile (ScanTS and plain relaxed
-  scans) or optimization convergence trace (Opt/OptTS), retry-recipe chain,
-  and vibrational summary. Completed jobs ending on a stationary point also
-  get `si_block.md` (`report/si.py`), a copy-paste Supporting Information
-  block with energies, thermochemistry, Nimag, and coordinates.
+  completion writes `job_report.json` and `job_report.md`; Opt, OptTS, NEB-TS,
+  ScanTS, IRC, and relaxed-scan jobs also get `job_report.html` (`report/`), a
+  self-contained visual report assembled by `report/composer.py` from common
+  page chrome plus calculation components — scan energy profile (ScanTS and
+  plain relaxed scans), CI-NEB path profile plus TS refinement trace (NEB-TS),
+  IRC path profile with combined OptTS/Freq sections when the route includes
+  them, or optimization convergence trace (Opt/OptTS), retry-recipe chain, and
+  vibrational summary. Completed jobs ending on a stationary point also get
+  `si_block.md` (`report/si.py`), a copy-paste Supporting Information block
+  with energies, thermochemistry, Nimag, and coordinates; IRC routes get a
+  summary-only validation block without coordinates.
 - **Index:** `dft_index*.py` and `core/indexing` maintain a JSONL
   job-location index for discovery.
 

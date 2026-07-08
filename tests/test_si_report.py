@@ -187,7 +187,6 @@ def test_non_stationary_jobs_get_no_block(tmp_path: Path) -> None:
     # through to the "sp" classification (Codex #48 P2).
     cases = (
         ("scan_job", _SCAN_INP),
-        ("irc_job", _IRC_INP),
         ("neb_job", "! NEB B3LYP def2-SVP\n* xyz 0 1\nC 0 0 0\n*\n"),
         ("neb_ci_job", "! ZOOM-NEB-CI B3LYP def2-SVP\n* xyz 0 1\nC 0 0 0\n*\n"),
         ("md_job", "! MD B3LYP def2-SVP\n* xyz 0 1\nC 0 0 0\n*\n"),
@@ -198,6 +197,37 @@ def test_non_stationary_jobs_get_no_block(tmp_path: Path) -> None:
         )
         assert structure_kind(Path(state["selected_inp"])) is None, name
         assert collect_si_block(reaction_dir, state) is None, name
+
+
+def test_write_si_block_writes_irc_summary_without_coordinates(tmp_path: Path) -> None:
+    irc_summary = """
+----------------------
+IRC PATH SUMMARY
+----------------------
+Step     E(Eh)        dE(kcal/mol)  max(|G|)  RMS(G)
+ -1    -1234.590000   -13.88       0.00120   0.00050
+  0    -1234.567890     0.00       0.00200   0.00090 <= TS
+  1    -1234.585000   -10.74       0.00110   0.00045
+
+"""
+    reaction_dir, state = _job_dir(
+        tmp_path,
+        "irc_job",
+        inp_text=_IRC_INP,
+        out_text=_out_text(route="B3LYP def2-SVP IRC") + irc_summary,
+    )
+
+    assert structure_kind(Path(state["selected_inp"])) is None
+    assert collect_si_block(reaction_dir, state) is None
+    path = write_si_block(reaction_dir, state)
+
+    assert path == reaction_dir / "si_block.md"
+    rendered = path.read_text(encoding="utf-8")
+    assert "IRC validation summary" in rendered
+    assert "path endpoint 1" in rendered
+    assert "TS step = 0" in rendered
+    assert "optimize endpoints before publishing endpoint coordinates" in rendered
+    assert "C       0.000000" not in rendered
 
 
 def test_scan_functional_optimization_is_a_min_block(tmp_path: Path) -> None:
