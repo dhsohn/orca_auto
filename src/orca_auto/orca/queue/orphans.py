@@ -16,10 +16,12 @@ from ..state import load_state, report_json_path
 from . import reconciliation as _queue_reconciliation
 from .entries import (
     WORKER_PID_FILE_NAME,
-    entry_from_json_payload,
     queue_entry_id,
     queue_entry_reaction_dir,
     queue_entry_status,
+)
+from .entries import (
+    load_entries as _load_entries,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,14 +29,6 @@ logger = logging.getLogger(__name__)
 
 def _now_iso() -> str:
     return now_utc_iso()
-
-
-def _load_entries(allowed_root: Path) -> list[QueueEntry]:
-    return _queue_store.load_entries(
-        allowed_root,
-        entry_from_dict_fn=entry_from_json_payload,
-        corrupt_error=_queue_store.QueueStoreCorruptError,
-    )
 
 
 def active_lock_pid(reaction_dir: Path) -> int | None:
