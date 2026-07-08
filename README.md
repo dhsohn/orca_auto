@@ -8,7 +8,7 @@
 
 **English** | [한국어](README.ko.md)
 
-orca_auto is a queue-first interface for ORCA and workflow orchestration on Linux and WSL. xTB and CREST remain part of the runtime, but they are now used internally for workflow stages rather than as standalone public surfaces. It submits work durably, runs it under supervised workers, and records per-job state and reports.
+orca_auto is a queue-first interface for ORCA and workflow orchestration on Linux and WSL. It submits work durably, runs it under supervised workers, and records per-job state and reports.
 
 ## Statement of need
 
