@@ -33,10 +33,11 @@ from .render import (
     ChartSeries,
     ReportComponent,
     ReportPage,
+    job_meta_html,
     line_chart_svg,
     metric_card,
     render_page,
-    status_badge_kind,
+    status_badges,
     verdict_note,
 )
 
@@ -210,11 +211,7 @@ def _profile_chart_svg(data: ScantsReportData) -> str:
 
 
 def scants_report_badges(data: ScantsReportData) -> tuple[tuple[str, str], ...]:
-    status_kind = status_badge_kind(data.status)
-    badges: list[tuple[str, str]] = [(data.status or "unknown", status_kind)]
-    if data.reason:
-        badges.append((data.reason, "warn" if status_kind == "bad" else "muted"))
-    return tuple(badges)
+    return tuple(status_badges(data.status, data.reason))
 
 
 def scants_report_meta_html(data: ScantsReportData) -> str:
@@ -225,11 +222,12 @@ def scants_report_meta_html(data: ScantsReportData) -> str:
             f"{data.scan_spec.start:g} &#8594; {data.scan_spec.end:g} &#8491;, "
             f"{data.scan_spec.points} pt"
         )
-    return (
-        f"<code>{html.escape(data.route_line)}</code>{scan_text}<br>"
-        f"job <code>{html.escape(data.job_id)}</code>"
-        f" &#183; started {html.escape(data.started_at)}"
-        f" &#183; finished {html.escape(data.finished_at)}"
+    return job_meta_html(
+        route_line=data.route_line,
+        job_id=data.job_id,
+        started_at=data.started_at,
+        finished_at=data.finished_at,
+        extra_html=scan_text,
     )
 
 

@@ -476,10 +476,13 @@ def _energy_axis_ticks(max_value: float) -> tuple[float, ...]:
     return tuple(index * step for index in range(count + 1))
 
 
-def _tick_label(value: float) -> str:
+def _tick_label(value: float, step: float) -> str:
     if math.isclose(value, round(value), abs_tol=1e-9):
         return str(int(round(value)))
-    return f"{value:.1f}"
+    # Sub-0.5 steps (e.g. 0.25 when every candidate sits within 1 kcal/mol)
+    # need two decimals; one decimal would label the 0.25 tick as "0.2".
+    decimals = 1 if step >= 0.5 else 2
+    return f"{value:.{decimals}f}"
 
 
 def _short_candidate_label(rank: int, label: str, *, limit: int = 24) -> str:
@@ -506,6 +509,7 @@ def _energy_lollipop_svg(data: WorkflowReportData) -> str:
     max_rel = max(entry.rel_kcal or 0.0 for _rank, entry in entries)
     ticks = _energy_axis_ticks(max_rel)
     x_high = ticks[-1]
+    tick_step = ticks[1] - ticks[0] if len(ticks) > 1 else 1.0
 
     def sx(value: float) -> float:
         return left + value / x_high * plot_w
@@ -523,7 +527,7 @@ def _energy_lollipop_svg(data: WorkflowReportData) -> str:
         )
         parts.append(
             f'<text x="{x:.1f}" y="{axis_y + 18}" text-anchor="middle" '
-            f'font-size="11" fill="#69707c">{html.escape(_tick_label(tick))}</text>'
+            f'font-size="11" fill="#69707c">{html.escape(_tick_label(tick, tick_step))}</text>'
         )
     parts.append(
         f'<line x1="{left}" y1="{axis_y}" x2="{left + plot_w}" y2="{axis_y}" '

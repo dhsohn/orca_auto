@@ -30,6 +30,7 @@ from ..completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from ..input_blocks import file_route_lines
 from ..parser import OrcaResult, parse_orca_output
 from ..scants import first_scan_coordinate_spec
+from .attempts import final_out_path
 from .frequencies import (
     FrequencyAnalysis,
     ModeSummary,
@@ -106,24 +107,6 @@ def parsed_final_output(out_path: Path) -> tuple[OrcaResult, FrequencyAnalysis |
     """
     stat = out_path.stat()
     return _parsed_output_cached(str(out_path), stat.st_mtime_ns, stat.st_size)
-
-
-def final_out_path(state: Mapping[str, Any]) -> Path | None:
-    """Last existing output file of the run, preferring the final result."""
-    final_result = state.get("final_result")
-    if isinstance(final_result, Mapping):
-        last_out = str(final_result.get("last_out_path") or "").strip()
-        if last_out and Path(last_out).exists():
-            return Path(last_out)
-    attempts = state.get("attempts")
-    attempts = attempts if isinstance(attempts, list) else []
-    for attempt in reversed(attempts):
-        if not isinstance(attempt, Mapping):
-            continue
-        out_raw = str(attempt.get("out_path") or "").strip()
-        if out_raw and Path(out_raw).exists():
-            return Path(out_raw)
-    return None
 
 
 def _mode_note(summary: ModeSummary) -> str:
@@ -294,7 +277,6 @@ __all__ = [
     "SiBlock",
     "SiBlockError",
     "collect_si_block",
-    "final_out_path",
     "parsed_final_output",
     "render_si_block_md",
     "si_block_path",

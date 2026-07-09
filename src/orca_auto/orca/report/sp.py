@@ -22,6 +22,7 @@ from .attempts import (
     attempt_report_rows,
     attempts_table_html,
     duration_text,
+    final_out_path,
     terminal_actions_html,
 )
 from .frequencies import (
@@ -34,15 +35,15 @@ from .frequencies import (
 from .render import (
     ReportComponent,
     ReportPage,
+    job_meta_html,
     metric_card,
     render_page,
-    status_badge_kind,
+    status_badges,
     verdict_note,
 )
 from .si import (
     SiBlockError,
     collect_si_block,
-    final_out_path,
     parsed_final_output,
     render_si_block_md,
 )
@@ -166,11 +167,7 @@ def _energy_section_html(data: SpReportData) -> str:
 
 
 def sp_report_badges(data: SpReportData) -> tuple[tuple[str, str], ...]:
-    status_kind = status_badge_kind(data.status)
-    badges: list[tuple[str, str]] = [(data.status or "unknown", status_kind)]
-    if data.reason:
-        badges.append((data.reason, "warn" if status_kind == "bad" else "muted"))
-    return tuple(badges)
+    return tuple(status_badges(data.status, data.reason))
 
 
 def sp_report_meta_html(data: SpReportData) -> str:
@@ -178,11 +175,12 @@ def sp_report_meta_html(data: SpReportData) -> str:
     formula_text = f" &#183; {html.escape(formula)}" if formula else ""
     version = data.result.orca_version if data.result is not None else ""
     version_text = f" &#183; ORCA {html.escape(version)}" if version else ""
-    return (
-        f"<code>{html.escape(data.route_line)}</code>{formula_text}{version_text}<br>"
-        f"job <code>{html.escape(data.job_id)}</code>"
-        f" &#183; started {html.escape(data.started_at)}"
-        f" &#183; finished {html.escape(data.finished_at)}"
+    return job_meta_html(
+        route_line=data.route_line,
+        job_id=data.job_id,
+        started_at=data.started_at,
+        finished_at=data.finished_at,
+        extra_html=formula_text + version_text,
     )
 
 

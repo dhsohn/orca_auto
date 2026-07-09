@@ -107,6 +107,32 @@ def status_badge_kind(status: str) -> str:
     return {"completed": "ok", "failed": "bad"}.get(status, "muted")
 
 
+def status_badges(status: str, reason: str) -> list[tuple[str, str]]:
+    """Standard status/reason badge pair every job report starts with."""
+    kind = status_badge_kind(status)
+    badges: list[tuple[str, str]] = [(status or "unknown", kind)]
+    if reason:
+        badges.append((reason, "warn" if kind == "bad" else "muted"))
+    return badges
+
+
+def job_meta_html(
+    *,
+    route_line: str,
+    job_id: str,
+    started_at: str,
+    finished_at: str,
+    extra_html: str = "",
+) -> str:
+    """Standard meta line: route (plus pre-escaped extras), job id, timestamps."""
+    return (
+        f"<code>{html.escape(route_line)}</code>{extra_html}<br>"
+        f"job <code>{html.escape(job_id)}</code>"
+        f" &#183; started {html.escape(started_at)}"
+        f" &#183; finished {html.escape(finished_at)}"
+    )
+
+
 def metric_card(label: str, value_html: str, note: str) -> str:
     note_html = f'<div class="metric-note">{html.escape(note)}</div>' if note else ""
     return (

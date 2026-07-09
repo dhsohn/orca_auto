@@ -146,6 +146,36 @@ def test_collect_opt_report_parses_cycles_and_convergence(tmp_path: Path) -> Non
     assert data.mode_summaries == ()
 
 
+def test_collect_opt_report_skips_contentless_final_attempt(tmp_path: Path) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
+    out_path = tmp_path / "rxn.out"
+    _write_opt_out(out_path)
+    dead_out = tmp_path / "rxn_retry.out"
+    dead_out.write_text("ORCA crashed before the first cycle\n", encoding="utf-8")
+
+    state = _state(tmp_path, out_path, reason="normal_termination")
+    state["attempts"].append(
+        {
+            "index": 2,
+            "inp_path": str(tmp_path / "rxn.inp"),
+            "out_path": str(dead_out),
+            "return_code": 1,
+            "analyzer_status": "failed",
+            "analyzer_reason": "abnormal_termination",
+            "markers": {},
+            "patch_actions": [],
+            "started_at": "2026-07-03T02:16:00+00:00",
+            "ended_at": "2026-07-03T02:16:30+00:00",
+        }
+    )
+    data = collect_opt_report_data(tmp_path, state, kind="opt")
+
+    assert data is not None
+    assert [cycle for cycle, _ in data.steps] == [1, 2, 3]
+    assert data.final_energy == pytest.approx(-100.0052)
+    assert data.opt_converged
+
+
 def test_opt_report_html_renders_convergence_chart(tmp_path: Path) -> None:
     _write_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
     out_path = tmp_path / "rxn.out"

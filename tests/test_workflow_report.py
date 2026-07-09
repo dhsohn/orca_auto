@@ -7,6 +7,8 @@ from typing import Any
 import pytest
 
 from orca_auto.flow.workflow.report import (
+    _energy_axis_ticks,
+    _tick_label,
     collect_workflow_report_data,
     count_xyz_frames,
     latest_engrad_energy,
@@ -190,3 +192,14 @@ def test_write_workflow_html_report_handles_empty_payload(tmp_path: Path) -> Non
 
     assert path == tmp_path / "workflow_report.html"
     assert "wf_empty" in path.read_text(encoding="utf-8")
+
+
+def test_energy_axis_tick_labels_stay_exact_for_quarter_steps() -> None:
+    # All candidates within 1 kcal/mol → 0.25-wide ticks; one-decimal labels
+    # would render the 0.25 tick as "0.2".
+    ticks = _energy_axis_ticks(1.0)
+
+    assert ticks == (0.0, 0.25, 0.5, 0.75, 1.0)
+    step = ticks[1] - ticks[0]
+    assert [_tick_label(tick, step) for tick in ticks] == ["0", "0.25", "0.50", "0.75", "1"]
+    assert _tick_label(2.5, 2.5) == "2.5"
