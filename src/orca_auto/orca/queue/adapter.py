@@ -19,7 +19,6 @@ from .entries import (
     QUEUE_FILE_NAME,
     QUEUE_TASK_KIND,
     TERMINAL_STATUSES,
-    entry_from_json_payload,
     entry_metadata,
     find_active_entry,
     normalize_text,
@@ -33,6 +32,9 @@ from .entries import (
     queue_entry_run_id,
     queue_entry_status,
     queue_entry_task_id,
+)
+from .entries import (
+    load_entries as _load_entries,
 )
 from .orphans import reconcile_orphaned_running_entries
 
@@ -86,14 +88,6 @@ def _now_iso() -> str:
 
 def worker_log_path(allowed_root: Path, queue_id: str) -> Path:
     return Path(allowed_root).expanduser().resolve() / "logs" / f"{queue_id}.log"
-
-
-def _load_entries(allowed_root: Path) -> list[QueueEntry]:
-    return _queue_store.load_entries(
-        allowed_root,
-        entry_from_dict_fn=entry_from_json_payload,
-        corrupt_error=_queue_store.QueueStoreCorruptError,
-    )
 
 
 class DuplicateEntryError(ValueError):

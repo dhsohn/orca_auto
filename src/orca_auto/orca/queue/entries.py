@@ -110,6 +110,14 @@ def entry_from_json_payload(raw: dict[str, Any]) -> QueueEntry:
     return _core_queue.entry_from_dict(normalized_raw(raw))
 
 
+def load_entries(allowed_root: Path) -> list[QueueEntry]:
+    return _core_queue.load_entries(
+        allowed_root,
+        entry_from_dict_fn=entry_from_json_payload,
+        corrupt_error=_core_queue.QueueStoreCorruptError,
+    )
+
+
 def entry_metadata(
     *,
     reaction_dir: str,
