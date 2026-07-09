@@ -8,6 +8,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-09
+
+First tagged release. This entry consolidates the initial public development
+series: everything below shipped in the `v0.1.0` tag.
+
 ### Fixed
 
 - IRC report parsers now match real ORCA 6 output. The settings parser keys on
@@ -43,7 +48,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   (the IRC module had a private reimplementation). The report composer's
   primary facet is a typed `JobReportData` union instead of `object` +
   `getattr` duck-typing.
-
 - Config schema: the single runs root moved to a top-level `runs_root` key.
   `orca.runtime.allowed_root` and the `workflow.root` override are gone — with
   standalone ORCA jobs and workflow workspaces sharing one directory, one key
@@ -61,6 +65,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   snapshots, `scan-notify` discovery) skip workflow workspaces under the runs
   root so workflow-internal ORCA jobs are not double-reported. `orca_auto init`
   now asks for one runs root instead of separate workflow/ORCA roots.
+- An exhausted ScanTS retry-recipe chain now reports the actionable reason
+  `scants_recipes_exhausted` (previously the generic `rewrite_failed`, which
+  read like a rewriter bug). `rewrite_failed` is reserved for genuine rewrite
+  crashes.
 
 ### Removed
 
@@ -100,6 +108,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   keeping their user-chosen directory names; existing `organized_ref.json`
   stubs and previously organized outputs are still readable by lookups.
   `queue list` remains the way to see completed work in one place.
+- ScanTS completion-triggered retry recipes (endpoint-completion scan, reverse
+  scan, and the barrierless-profile stop between them): these fired after
+  non-failure outcomes such as `ts_not_found`, violating the
+  retry-only-on-calculation-failure rule. The strategies live on as proper
+  `scan_ts_search` workflow stages (scan extension and reverse rescue). ScanTS
+  keeps its failure-triggered recipes only — mid-scan crash continuation and
+  the zero-distance OptTS refinement fallback; any failure after a finished
+  scan now ends with `scants_recipes_exhausted`. Surface/coordinate parsing,
+  prominence analysis, and the ScanTS HTML report are unchanged, so historical
+  ScanTS runs stay readable.
 
 ### Added
 
@@ -160,31 +178,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   0.5 kcal/mol; without one the run fails immediately with reason
   `scan_profile_no_barrier` instead of spending hours on a reverse scan that
   can only mirror the same monotonic profile.
-
-### Removed
-
-- ScanTS completion-triggered retry recipes (endpoint-completion scan, reverse
-  scan, and the barrierless-profile stop between them): these fired after
-  non-failure outcomes such as `ts_not_found`, violating the
-  retry-only-on-calculation-failure rule. The strategies live on as proper
-  `scan_ts_search` workflow stages (scan extension and reverse rescue). ScanTS
-  keeps its failure-triggered recipes only — mid-scan crash continuation and
-  the zero-distance OptTS refinement fallback; any failure after a finished
-  scan now ends with `scants_recipes_exhausted`. Surface/coordinate parsing,
-  prominence analysis, and the ScanTS HTML report are unchanged, so historical
-  ScanTS runs stay readable.
-
-### Changed
-
-- An exhausted ScanTS retry-recipe chain now reports the actionable reason
-  `scants_recipes_exhausted` (previously the generic `rewrite_failed`, which
-  read like a rewriter bug). `rewrite_failed` is reserved for genuine rewrite
-  crashes.
-
-## [0.1.0] - Initial public development series
-
-### Added
-
 - Queue-first ORCA runtime with durable queue state, worker execution, retry
   state/report files, and organized output support.
 - Internal workflow support for xTB and CREST stages.
