@@ -79,7 +79,7 @@ def _submit_crest_stage(
     crest_runtime_paths: dict[str, Path],
     crest_config: str | None,
     workflow_id: str,
-) -> None:
+) -> bool:
     task_view = WorkflowTaskView(task)
     job_dir = o.stages.runtime._ensure_crest_job_dir(
         stage,
@@ -95,7 +95,7 @@ def _submit_crest_stage(
     submission["submitted_at"] = o.persistence.now_utc_iso()
     task_view.set_submission_result(submission)
     stage_metadata = WorkflowStageView(stage).metadata(None)
-    _apply_submission_result(
+    return _apply_submission_result(
         stage=stage,
         task=task,
         stage_metadata=stage_metadata,
@@ -161,7 +161,7 @@ def sync_crest_stage_impl(
     task = context.task
     crest_runtime_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="crest")
     if context.should_submit(submit_ready=submit_ready, config_path=crest_config):
-        _submit_crest_stage(
+        submission_applied = _submit_crest_stage(
             o,
             stage,
             task,
@@ -169,6 +169,12 @@ def sync_crest_stage_impl(
             crest_config=crest_config,
             workflow_id=workflow_id,
         )
+        if not submission_applied:
+            # The job directory still belongs to an active cancellation.  Its
+            # old contract must not overwrite PLANNED in this same tick; the
+            # next sync retries submission and publishes a new identity once
+            # cancellation becomes terminal.
+            return
     contract = _load_crest_contract(
         o,
         stage,

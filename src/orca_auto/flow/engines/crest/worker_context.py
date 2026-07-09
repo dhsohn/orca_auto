@@ -8,7 +8,7 @@ from typing import Any
 from orca_auto.core.queue.engine import execution as _engine_execution
 from orca_auto.flow.engines.crest import artifacts as _queue_artifacts
 
-from .job_locations import molecule_key_from_selected_xyz
+from .job_locations import molecule_key_from_selected_xyz, runtime_roots_for_cfg
 
 
 @dataclass(frozen=True)
@@ -42,8 +42,16 @@ def build_execution_context(
     *,
     molecule_key_resolver: Callable[[Any, Path, Path], str],
 ) -> ExecutionContext:
-    job_dir = _engine_execution.entry_metadata_resolved_path(entry, "job_dir")
-    selected_xyz = _engine_execution.entry_metadata_resolved_path(entry, "selected_input_xyz")
+    job_dir = _engine_execution.require_path_within_roots(
+        _engine_execution.entry_metadata_resolved_path(entry, "job_dir"),
+        runtime_roots_for_cfg(cfg),
+        label="Queue metadata 'job_dir'",
+    )
+    selected_xyz = _engine_execution.require_path_within_root(
+        _engine_execution.entry_metadata_resolved_path(entry, "selected_input_xyz"),
+        job_dir,
+        label="Queue metadata 'selected_input_xyz'",
+    )
     return ExecutionContext(
         entry=entry,
         job_dir=job_dir,

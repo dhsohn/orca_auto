@@ -7,7 +7,15 @@ from typing import Any
 import pytest
 
 from orca_auto.core.indexing import get_job_location
-from orca_auto.core.queue import list_queue
+from orca_auto.core.queue import (
+    QUEUE_RECORD_SYNC_COMPLETE,
+    QUEUE_RECORD_SYNC_KEY,
+    QUEUE_RECORD_SYNC_OWNER_PID_KEY,
+    QUEUE_RECORD_SYNC_TOKEN_KEY,
+    QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
+    list_queue,
+    mark_completed,
+)
 from orca_auto.flow.engines.crest import queue_runtime as queue_cmd
 from orca_auto.flow.engines.crest import submission as crest_submission
 from orca_auto.flow.engines.crest.runner import CrestRunResult
@@ -171,7 +179,7 @@ def test_cmd_run_dir_queues_job_updates_state_and_index(
     entry = queue_entries[0]
     assert entry.task_id == "crest-fixed-id"
     assert entry.priority == 4
-    assert entry.metadata == {
+    expected_metadata = {
         "job_dir": str(job_dir.resolve()),
         "selected_input_xyz": str((job_dir / "preferred.xyz").resolve()),
         "mode": "nci",
@@ -179,7 +187,12 @@ def test_cmd_run_dir_queues_job_updates_state_and_index(
         "manifest_present": "true",
         "resource_request": {"max_cores": 9, "max_memory_gb": 21},
         "resource_actual": {"max_cores": 9, "max_memory_gb": 21},
+        QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_COMPLETE,
     }
+    assert {key: entry.metadata[key] for key in expected_metadata} == expected_metadata
+    assert entry.metadata[QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
+    assert entry.metadata[QUEUE_RECORD_SYNC_TOKEN_KEY]
+    assert entry.metadata[QUEUE_RECORD_SYNC_UPDATED_AT_KEY]
 
     assert state is not None
     assert _job(state)["id"] == "crest-fixed-id"
@@ -212,7 +225,7 @@ def test_cmd_run_dir_queues_job_updates_state_and_index(
     ]
 
 
-def test_cmd_run_dir_reports_duplicate_queue_entries(
+def test_cmd_run_dir_replays_active_job_dir_and_allows_terminal_rerun(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -223,7 +236,8 @@ def test_cmd_run_dir_reports_duplicate_queue_entries(
     _write_xyz(job_dir / "input.xyz", "input")
 
     notifications: list[dict[str, Any]] = []
-    monkeypatch.setattr(crest_submission, "new_job_id", lambda: "crest-duplicate-id")
+    job_ids = iter(("crest-first-id", "crest-second-id", "crest-third-id"))
+    monkeypatch.setattr(crest_submission, "new_job_id", lambda: next(job_ids))
 
     def fake_notify_job_queued(cfg: Any, **kwargs: Any) -> bool:
         notifications.append(kwargs)
@@ -249,17 +263,34 @@ def test_cmd_run_dir_reports_duplicate_queue_entries(
     state = load_state(job_dir)
 
     assert first_submission["status"] == "submitted"
-    assert second_submission["status"] == "failed"
-    assert (
-        "Active queue entry already exists for app=orca_auto_crest task_id=crest-duplicate-id"
-        in second_submission["stderr"]
-    )
+    assert second_submission["status"] == "submitted"
+    assert second_submission["queue_id"] == first_submission["queue_id"]
+    assert second_submission["job_id"] == "crest-first-id"
+    assert "reused existing queue entry" in second_submission["parsed_stdout"]["warning"]
+    assert "task_id=crest-first-id" in second_submission["stderr"]
 
     assert len(queue_entries) == 1
-    assert queue_entries[0].task_id == "crest-duplicate-id"
+    assert queue_entries[0].task_id == "crest-first-id"
     assert state is not None
-    assert _job(state)["id"] == "crest-duplicate-id"
+    assert _job(state)["id"] == "crest-first-id"
     assert len(notifications) == 1
+
+    completed = mark_completed(allowed_root, queue_entries[0].queue_id)
+    assert completed is not None
+    third_submission = crest_submitter.submit_job_dir(
+        job_dir=str(job_dir),
+        priority=10,
+        config_path=str(config_path),
+    )
+    capsys.readouterr()
+
+    assert third_submission["status"] == "submitted"
+    assert third_submission["job_id"] == "crest-third-id"
+    assert [entry.task_id for entry in list_queue(allowed_root)] == [
+        "crest-first-id",
+        "crest-third-id",
+    ]
+    assert len(notifications) == 2
 
 
 def test_cli_end_to_end_smoke_path_submission_worker_and_index(

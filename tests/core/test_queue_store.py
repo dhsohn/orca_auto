@@ -1,14 +1,30 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 from collections.abc import Sequence
 from contextlib import nullcontext
+from datetime import UTC, datetime
 from itertools import count
+from multiprocessing import get_context
+from multiprocessing.connection import Connection
 from pathlib import Path
 
 import pytest
 
-from orca_auto.core.queue import store
+from orca_auto.core.queue import publication, store
+from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_ABORTED,
+    QUEUE_RECORD_SYNC_KEY,
+    QUEUE_RECORD_SYNC_OWNER_PID_KEY,
+    QUEUE_RECORD_SYNC_OWNER_START_KEY,
+    QUEUE_RECORD_SYNC_PREPARING,
+    QUEUE_RECORD_SYNC_REPAIRING,
+    QUEUE_RECORD_SYNC_TOKEN_KEY,
+    QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
+    current_process_start_token,
+)
 from orca_auto.core.queue.types import QueueStatus
 
 
@@ -29,6 +45,30 @@ def _install_deterministic_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _queue_file(root: Path) -> Path:
     return root / "queue.json"
+
+
+def _enqueue_transient_publisher_then_crash(
+    queue_root: str,
+    ready_connection: Connection,
+) -> None:
+    entry = store.enqueue(
+        queue_root,
+        app_name="app",
+        task_id="crashed-publisher",
+        task_kind="kind",
+        engine="engine",
+        metadata={
+            QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING,
+            QUEUE_RECORD_SYNC_OWNER_PID_KEY: os.getpid(),
+            QUEUE_RECORD_SYNC_OWNER_START_KEY: current_process_start_token(),
+            QUEUE_RECORD_SYNC_UPDATED_AT_KEY: datetime.now(UTC).isoformat(),
+        },
+    )
+    # Die while owning the same process-scoped lock used around publication.
+    # The kernel must release it so cancellation/repair can recover the entry.
+    with publication.queue_record_publication_lock(queue_root, entry.queue_id):
+        ready_connection.send(entry.queue_id)
+        os.kill(os.getpid(), signal.SIGKILL)
 
 
 def _entry(
@@ -438,6 +478,161 @@ def test_request_cancel_handles_pending_running_and_terminal_entries(
     )
     assert store.mark_completed(tmp_path, terminal.queue_id) is not None
     assert store.request_cancel(tmp_path, terminal.queue_id) is None
+
+
+def test_request_cancel_revokes_transient_publication_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    entry = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="publishing",
+        task_kind="kind",
+        engine="engine",
+        metadata={
+            QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING,
+            QUEUE_RECORD_SYNC_OWNER_PID_KEY: os.getpid(),
+            QUEUE_RECORD_SYNC_OWNER_START_KEY: current_process_start_token(),
+            QUEUE_RECORD_SYNC_TOKEN_KEY: "publisher-token",
+            QUEUE_RECORD_SYNC_UPDATED_AT_KEY: datetime.now(UTC).isoformat(),
+        },
+    )
+
+    cancelled = store.request_cancel(tmp_path, entry.queue_id)
+
+    assert cancelled is not None
+    assert cancelled.status == QueueStatus.CANCELLED
+    assert cancelled.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_ABORTED
+    assert cancelled.metadata[QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
+    assert cancelled.metadata[QUEUE_RECORD_SYNC_OWNER_START_KEY] == ""
+    assert cancelled.metadata[QUEUE_RECORD_SYNC_TOKEN_KEY] == ""
+
+
+@pytest.mark.parametrize(
+    "sync_state",
+    [QUEUE_RECORD_SYNC_PREPARING, QUEUE_RECORD_SYNC_REPAIRING],
+)
+def test_dequeue_skips_live_queue_record_publishers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    sync_state: str,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    blocked = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="blocked",
+        task_kind="kind",
+        engine="engine",
+        priority=1,
+        metadata={
+            QUEUE_RECORD_SYNC_KEY: sync_state,
+            QUEUE_RECORD_SYNC_OWNER_PID_KEY: os.getpid(),
+            QUEUE_RECORD_SYNC_OWNER_START_KEY: current_process_start_token(),
+            # Even a wildly old lease cannot fence a matching live process.
+            QUEUE_RECORD_SYNC_UPDATED_AT_KEY: "2000-01-01T00:00:00+00:00",
+        },
+    )
+    ready = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="ready",
+        task_kind="kind",
+        engine="engine",
+        priority=9,
+    )
+
+    assert store.dequeue_entry_if_pending(tmp_path, blocked.queue_id) is None
+    claimed = store.dequeue_next(tmp_path)
+
+    assert claimed is not None
+    assert claimed.queue_id == ready.queue_id
+
+
+def test_dequeue_recovers_preparing_entry_after_publisher_is_sigkilled(
+    tmp_path: Path,
+) -> None:
+    ctx = get_context("fork")
+    read_connection, write_connection = ctx.Pipe(duplex=False)
+    process = ctx.Process(
+        target=_enqueue_transient_publisher_then_crash,
+        args=(str(tmp_path), write_connection),
+    )
+    process.start()
+    write_connection.close()
+    assert read_connection.poll(10)
+    queue_id = read_connection.recv()
+    read_connection.close()
+    process.join(timeout=10)
+    assert process.exitcode == -signal.SIGKILL
+
+    with publication.queue_record_publication_lock(
+        tmp_path,
+        queue_id,
+        timeout_seconds=1,
+    ):
+        pass
+
+    claimed = store.dequeue_next(tmp_path)
+
+    assert claimed is not None
+    assert claimed.queue_id == queue_id
+
+
+def test_dequeue_recovers_when_publisher_pid_was_reused(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    monkeypatch.setattr(publication, "_owner_process_alive", lambda _pid: True)
+    monkeypatch.setattr(publication, "process_start_token", lambda _pid: "new-process")
+    entry = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="pid-reused",
+        task_kind="kind",
+        engine="engine",
+        metadata={
+            QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING,
+            QUEUE_RECORD_SYNC_OWNER_PID_KEY: 1234,
+            QUEUE_RECORD_SYNC_OWNER_START_KEY: "original-publisher",
+            QUEUE_RECORD_SYNC_UPDATED_AT_KEY: datetime.now(UTC).isoformat(),
+        },
+    )
+
+    claimed = store.dequeue_next(tmp_path)
+
+    assert claimed is not None
+    assert claimed.queue_id == entry.queue_id
+
+
+def test_update_metadata_merges_without_changing_lifecycle_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    entry = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="task",
+        task_kind="kind",
+        engine="engine",
+        metadata={"keep": "yes", "sync": "pending"},
+    )
+
+    updated = store.update_metadata(
+        tmp_path,
+        entry.queue_id,
+        {"sync": "complete", "added": 1},
+    )
+
+    assert updated is not None
+    assert updated.status == entry.status
+    assert updated.enqueued_at == entry.enqueued_at
+    assert updated.metadata == {"keep": "yes", "sync": "complete", "added": 1}
+    assert store.update_metadata(tmp_path, "missing", {"sync": "complete"}) is None
 
 
 def test_requeue_running_entry_returns_running_entry_to_pending(

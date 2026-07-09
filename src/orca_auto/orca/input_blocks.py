@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 GEOM_HEADER_RE = re.compile(
@@ -10,6 +11,68 @@ GEOM_HEADER_RE = re.compile(
 BLOCK_START_RE = re.compile(r"^\s*%([A-Za-z0-9_\-]+)")
 MOINP_RE = re.compile(r"^\s*%moinp\b", re.IGNORECASE)
 NESTED_BLOCK_NAMES = {"scan", "constraints"}
+
+
+@dataclass(frozen=True)
+class OrcaLineToken:
+    value: str
+    start: int
+    end: int
+    quoted: bool = False
+
+
+def orca_line_tokens(line: str, *, start: int = 0) -> list[OrcaLineToken]:
+    """Return non-comment ORCA tokens with source spans.
+
+    ORCA permits both end-of-line ``#`` comments and ``# ... #`` inline
+    comments.  Keeping spans lets callers replace path/value tokens without
+    rebuilding the rest of the input line.
+    """
+
+    tokens: list[OrcaLineToken] = []
+    index = max(0, int(start))
+    while index < len(line):
+        character = line[index]
+        if character.isspace():
+            index += 1
+            continue
+        if character == "#":
+            closing = line.find("#", index + 1)
+            if closing < 0:
+                break
+            index = closing + 1
+            continue
+        if character == "=":
+            tokens.append(OrcaLineToken("=", index, index + 1))
+            index += 1
+            continue
+
+        token_start = index
+        if character in {'"', "'"}:
+            quote = character
+            index += 1
+            value_chars: list[str] = []
+            while index < len(line):
+                character = line[index]
+                if character == "\\" and index + 1 < len(line):
+                    value_chars.append(line[index + 1])
+                    index += 2
+                    continue
+                if character == quote:
+                    index += 1
+                    break
+                value_chars.append(character)
+                index += 1
+            tokens.append(OrcaLineToken("".join(value_chars), token_start, index, quoted=True))
+            continue
+
+        while index < len(line):
+            character = line[index]
+            if character.isspace() or character in {"#", "="}:
+                break
+            index += 1
+        tokens.append(OrcaLineToken(line[token_start:index], token_start, index))
+    return tokens
 
 
 def nonempty_file(path: Path) -> bool:
@@ -94,6 +157,10 @@ def find_block_range(lines: list[str], block_name: str) -> tuple[int, int, bool]
 
 
 def set_block_key_value(lines: list[str], block_name: str, key: str, value: str) -> bool:
+    inline_result = _set_inline_block_key_value(lines, block_name, key, value)
+    if inline_result is not None:
+        return inline_result
+
     rng = find_block_range(lines, block_name)
     key_lower = key.lower()
 
@@ -126,6 +193,55 @@ def set_block_key_value(lines: list[str], block_name: str, key: str, value: str)
         lines.insert(end, f"  {key} {value}")
         changed = True
     return changed
+
+
+def _set_inline_block_key_value(
+    lines: list[str], block_name: str, key: str, value: str
+) -> bool | None:
+    """Update a value carried on the ``%block`` start line when present."""
+
+    for index, line in enumerate(lines):
+        block_match = BLOCK_START_RE.match(line)
+        if block_match is None or block_match.group(1).lower() != block_name.lower():
+            continue
+        remainder_start = block_match.end()
+        tokens = orca_line_tokens(line, start=remainder_start)
+        end_token = next(
+            (token for token in tokens if not token.quoted and token.value.lower() == "end"),
+            None,
+        )
+        body_tokens = [
+            token for token in tokens if end_token is None or token.start < end_token.start
+        ]
+        key_index = next(
+            (
+                token_index
+                for token_index, token in enumerate(body_tokens)
+                if not token.quoted and token.value.lower() == key.lower()
+            ),
+            None,
+        )
+        if key_index is not None:
+            value_index = key_index + 1
+            if value_index < len(body_tokens) and body_tokens[value_index].value == "=":
+                value_index += 1
+            if value_index >= len(body_tokens):
+                return None
+            key_token = body_tokens[key_index]
+            value_token = body_tokens[value_index]
+            updated = line[: key_token.start] + f"{key} {value}" + line[value_token.end :]
+        elif end_token is not None:
+            body = line[remainder_start : end_token.start]
+            separator = "" if not body or body[-1].isspace() else " "
+            updated_body = f"{body}{separator}{key} {value} "
+            updated = line[:remainder_start] + updated_body + line[end_token.start :]
+        else:
+            return None
+        if updated == line:
+            return False
+        lines[index] = updated
+        return True
+    return None
 
 
 def format_relative_or_absolute(path: Path, base_dir: Path) -> str:

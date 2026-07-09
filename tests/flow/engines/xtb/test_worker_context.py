@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from orca_auto.flow.engines.xtb import worker_context
 
 
@@ -31,7 +33,10 @@ def test_build_execution_context_uses_injected_context_dependencies(tmp_path: Pa
     selected_xyz = job_dir / "candidate.xyz"
     previous_state = {"status": "running"}
     entry = SimpleNamespace(metadata={})
-    cfg = SimpleNamespace(resources={})
+    cfg = SimpleNamespace(
+        runtime=SimpleNamespace(allowed_root=str(tmp_path)),
+        resources={},
+    )
 
     context_deps = SimpleNamespace(
         job_dir=lambda _entry: job_dir,
@@ -61,3 +66,34 @@ def test_build_execution_context_uses_injected_context_dependencies(tmp_path: Pa
         previous_state=previous_state,
         resumed=True,
     )
+
+
+def test_build_execution_context_rejects_selected_input_outside_job_dir(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "allowed"
+    job_dir = allowed_root / "job"
+    outside_input = allowed_root / "other" / "input.xyz"
+    allowed_root.mkdir()
+    entry = SimpleNamespace(metadata={})
+    cfg = SimpleNamespace(
+        runtime=SimpleNamespace(allowed_root=str(allowed_root)),
+        resources={},
+    )
+    context_deps = SimpleNamespace(
+        job_dir=lambda _entry: job_dir,
+        selected_xyz=lambda _entry: outside_input,
+        job_type=lambda _entry: "path_search",
+        reaction_key=lambda _entry, _job_dir: "rxn-1",
+        input_summary=lambda _entry: {},
+        entry_resource_request=lambda _cfg, _entry: {},
+        matching_state=lambda *args, **kwargs: {},
+        is_recovery_pending=lambda _state: False,
+    )
+
+    with pytest.raises(ValueError, match="selected_input_xyz.*allowed root"):
+        worker_context.build_execution_context(
+            cfg,
+            entry,
+            context_deps=context_deps,
+        )

@@ -34,7 +34,29 @@ def load_slots(
         corrupt_error=corrupt_error,
         description="Admission slot file",
     )
-    return [slot_from_dict_fn(item) for item in raw if isinstance(item, dict)]
+    slots: list[AdmissionSlot] = []
+    seen_tokens: set[str] = set()
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise corrupt_error(
+                f"Admission slot file item {index} must contain a JSON object: "
+                f"{admission_path(resolved_root)}"
+            )
+        raw_token = item.get("token")
+        if not isinstance(raw_token, str) or not raw_token.strip():
+            raise corrupt_error(
+                "Admission slot file contains a blank or non-string token: "
+                f"{admission_path(resolved_root)}"
+            )
+        slot = slot_from_dict_fn(item)
+        if slot.token in seen_tokens:
+            raise corrupt_error(
+                f"Admission slot file contains duplicate token {slot.token!r}: "
+                f"{admission_path(resolved_root)}"
+            )
+        seen_tokens.add(slot.token)
+        slots.append(slot)
+    return slots
 
 
 def save_slots(

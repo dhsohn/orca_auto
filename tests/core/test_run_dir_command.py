@@ -197,10 +197,11 @@ def test_record_queued_common_applies_shared_fields(tmp_path: Path) -> None:
     def upsert_job_record(cfg_arg: Any, **kwargs: Any) -> None:
         calls["index"] = (cfg_arg, kwargs)
 
-    def notify_job_queued(cfg_arg: Any, **kwargs: Any) -> None:
+    def notify_job_queued(cfg_arg: Any, **kwargs: Any) -> bool:
         calls["notify"] = (cfg_arg, kwargs)
+        return True
 
-    run_dir.record_queued_common(
+    notification_delivered = run_dir.record_queued_common(
         cfg,
         submission,
         entry,
@@ -230,6 +231,69 @@ def test_record_queued_common_applies_shared_fields(tmp_path: Path) -> None:
             "selected_xyz": "input.xyz",
         },
     )
+    assert notification_delivered is True
+
+
+def test_record_queued_common_can_repair_state_and_index_without_notification(
+    tmp_path: Path,
+) -> None:
+    cfg = SimpleNamespace(name="config")
+    job_dir = tmp_path / "job-1"
+    submission = run_dir.EngineRunDirSubmission(
+        queue_root=tmp_path,
+        app_name="app",
+        task_id="job-1",
+        task_kind="run_dir",
+        engine="crest",
+        priority=5,
+        metadata={"job_dir": str(job_dir)},
+        context={"job_dir": job_dir, "suppress_queued_notification": True},
+    )
+    entry = SimpleNamespace(queue_id="q-1")
+    calls: list[str] = []
+
+    notification_delivered = run_dir.record_queued_common(
+        cfg,
+        submission,
+        entry,
+        build_record_fn=lambda *_args: run_dir.EngineQueuedRecord(
+            state_payload={"status": "queued"},
+            index_fields={"mode": "nci"},
+            notification_fields={"mode": "nci"},
+        ),
+        write_state_fn=lambda *_args: calls.append("state"),
+        upsert_job_record_fn=lambda *_args, **_kwargs: calls.append("index"),
+        notify_job_queued_fn=lambda *_args, **_kwargs: calls.append("notify"),
+    )
+
+    assert calls == ["state", "index"]
+    assert notification_delivered is True
+
+
+def test_record_queued_common_reports_known_notification_failure(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job-1"
+    submission = run_dir.EngineRunDirSubmission(
+        queue_root=tmp_path,
+        app_name="app",
+        task_id="job-1",
+        task_kind="run_dir",
+        engine="crest",
+        priority=5,
+        metadata={"job_dir": str(job_dir)},
+        context={"job_dir": job_dir},
+    )
+
+    notification_delivered = run_dir.record_queued_common(
+        object(),
+        submission,
+        SimpleNamespace(queue_id="q-1"),
+        build_record_fn=lambda *_args: run_dir.EngineQueuedRecord({}, {}, {}),
+        write_state_fn=lambda *_args: None,
+        upsert_job_record_fn=lambda *_args, **_kwargs: None,
+        notify_job_queued_fn=lambda *_args, **_kwargs: False,
+    )
+
+    assert notification_delivered is False
 
 
 def test_engine_run_dir_queued_recorder_from_callbacks_applies_shared_fields(

@@ -8,7 +8,7 @@ from typing import Any
 from orca_auto.core.queue import execution as _queue_execution
 from orca_auto.core.queue.engine import execution as _engine_execution
 
-from .job_locations import reaction_key_from_job_dir
+from .job_locations import reaction_key_from_job_dir, runtime_roots_for_cfg
 from .state import load_state, state_matches_job
 
 
@@ -94,8 +94,16 @@ def build_execution_context(
     *,
     context_deps: Any,
 ) -> XtbExecutionContext:
-    resolved_job_dir = context_deps.job_dir(entry)
-    resolved_selected_xyz = context_deps.selected_xyz(entry)
+    resolved_job_dir = _engine_execution.require_path_within_roots(
+        context_deps.job_dir(entry),
+        runtime_roots_for_cfg(cfg),
+        label="Queue metadata 'job_dir'",
+    )
+    resolved_selected_xyz = _engine_execution.require_path_within_root(
+        context_deps.selected_xyz(entry),
+        resolved_job_dir,
+        label="Queue metadata 'selected_input_xyz'",
+    )
     resolved_job_type = context_deps.job_type(entry)
     resolved_reaction_key = context_deps.reaction_key(entry, resolved_job_dir)
     resolved_input_summary = context_deps.input_summary(entry)

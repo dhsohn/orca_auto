@@ -95,6 +95,8 @@ def test_load_orca_artifact_contract_matches_queue_task_id(tmp_path: Path) -> No
     reaction_dir.mkdir(parents=True)
     inp = reaction_dir / "rxn.inp"
     inp.write_text("! Opt\n* xyzfile 0 1 rxn.xyz\n", encoding="utf-8")
+    xyz = reaction_dir / "rxn.xyz"
+    xyz.write_text("2\nsource\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
 
     _write_json(
         allowed_root / "queue.json",
@@ -104,7 +106,11 @@ def test_load_orca_artifact_contract_matches_queue_task_id(tmp_path: Path) -> No
                 "task_id": "job_q_123",
                 "status": "pending",
                 "cancel_requested": False,
-                "metadata": {"reaction_dir": str(reaction_dir)},
+                "metadata": {
+                    "reaction_dir": str(reaction_dir),
+                    "selected_inp": str(inp),
+                    "selected_input_xyz": str(xyz),
+                },
             }
         ],
     )
@@ -118,7 +124,9 @@ def test_load_orca_artifact_contract_matches_queue_task_id(tmp_path: Path) -> No
                 "status": "queued",
                 "original_run_dir": str(reaction_dir),
                 "molecule_key": "unknown",
-                "selected_input_xyz": str(inp),
+                # Production tracking records prefer the xyzfile input here;
+                # the queue's generation-specific selected_inp must still win.
+                "selected_input_xyz": str(xyz),
                 "latest_known_path": str(reaction_dir),
                 "resource_request": {"max_cores": 8},
                 "resource_actual": {"max_cores": 8},
@@ -137,6 +145,128 @@ def test_load_orca_artifact_contract_matches_queue_task_id(tmp_path: Path) -> No
     assert contract.reaction_dir == str(reaction_dir.resolve())
     assert contract.latest_known_path == str(reaction_dir.resolve())
     assert contract.selected_inp == str(inp.resolve())
+    assert contract.selected_input_xyz == str(xyz.resolve())
+
+
+def test_load_orca_artifact_contract_prefers_queue_xyz_over_previous_generation_record(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "rxn_queue_generation"
+    reaction_dir.mkdir(parents=True)
+    inp = reaction_dir / "new.inp"
+    inp.write_text("! Opt\n* xyzfile 0 1 new.xyz\n", encoding="utf-8")
+    new_xyz = reaction_dir / "new.xyz"
+    new_xyz.write_text("1\nnew\nH 0 0 0\n", encoding="utf-8")
+    old_xyz = reaction_dir / "old.xyz"
+    old_xyz.write_text("1\nold\nH 1 1 1\n", encoding="utf-8")
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_new",
+                "task_id": "job_new",
+                "status": "pending",
+                "metadata": {
+                    "reaction_dir": str(reaction_dir),
+                    "selected_inp": str(inp),
+                    "selected_input_xyz": str(new_xyz),
+                },
+            }
+        ],
+    )
+    _write_json(
+        allowed_root / "job_locations.json",
+        [
+            {
+                "job_id": "job_old",
+                "app_name": "orca_auto_orca",
+                "job_type": "orca_opt",
+                "status": "failed",
+                "original_run_dir": str(reaction_dir),
+                "latest_known_path": str(reaction_dir),
+                "selected_input_xyz": str(old_xyz),
+            }
+        ],
+    )
+
+    canonical_contract = load_orca_artifact_contract(
+        target="q_new",
+        orca_allowed_root=allowed_root,
+        queue_id="q_new",
+        reaction_dir=str(reaction_dir),
+    )
+    with patch(
+        "orca_auto.flow.adapters.orca._orca_tracking.load_orca_contract_payload_impl",
+        return_value=None,
+    ):
+        fallback_contract = load_orca_artifact_contract(
+            target="q_new",
+            orca_allowed_root=allowed_root,
+            queue_id="q_new",
+            reaction_dir=str(reaction_dir),
+        )
+
+    assert canonical_contract.selected_input_xyz == str(new_xyz.resolve())
+    assert fallback_contract.selected_input_xyz == str(new_xyz.resolve())
+
+
+def test_load_orca_artifact_contract_ignores_previous_force_restart_artifacts(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "rxn_force_restart"
+    reaction_dir.mkdir(parents=True)
+    inp = reaction_dir / "rxn.inp"
+    xyz = reaction_dir / "rxn.xyz"
+    out = reaction_dir / "rxn.out"
+    inp.write_text("! Opt\n* xyzfile 0 1 rxn.xyz\n", encoding="utf-8")
+    xyz.write_text("2\nold\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+    out.write_text("old failure", encoding="utf-8")
+    old_final = {
+        "status": "failed",
+        "analyzer_status": "incomplete",
+        "reason": "old_failure",
+        "completed_at": "2026-04-19T00:00:00+00:00",
+        "last_out_path": str(out),
+    }
+    old_payload = orca_artifact_payload(
+        job_id="job_old",
+        run_id="run_old",
+        reaction_dir=str(reaction_dir),
+        selected_inp=str(inp),
+        final_result=old_final,
+    )
+    _write_json(reaction_dir / "job_state.json", old_payload)
+    _write_json(reaction_dir / "job_report.json", old_payload)
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_new",
+                "task_id": "job_new",
+                "status": "pending",
+                "cancel_requested": False,
+                "metadata": {"reaction_dir": str(reaction_dir), "force": True},
+            }
+        ],
+    )
+
+    contract = load_orca_artifact_contract(
+        target="q_new",
+        queue_id="q_new",
+        reaction_dir=str(reaction_dir),
+        orca_allowed_root=allowed_root,
+    )
+
+    assert contract.status == "queued"
+    assert contract.queue_id == "q_new"
+    assert contract.run_id == ""
+    assert contract.state_status == ""
+    assert contract.reason == ""
+    assert contract.attempt_count == 0
+    assert contract.attempts == ()
+    assert contract.final_result == {}
 
 
 def test_load_orca_artifact_contract_resolves_run_id_via_orca_tracking_without_records_jsonl(

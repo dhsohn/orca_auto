@@ -4,7 +4,10 @@ import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
+
+from orca_auto.core.queue.cancellable import retain_process_ownership_until_exit
+from orca_auto.core.queue.processes import terminate_process_group
 
 
 @dataclass(frozen=True)
@@ -71,8 +74,28 @@ def start_logged_process(
     )
 
 
+def cleanup_failed_logged_process_start(
+    launched: LoggedEngineProcess,
+    *,
+    terminate_process_fn: Callable[[Any], bool] = terminate_process_group,
+) -> None:
+    """Clean a process that launched before its running-job object could be built."""
+    try:
+        terminated = terminate_process_fn(launched.process)
+    except Exception:  # noqa: BLE001
+        terminated = False
+    if terminated is not True:
+        retain_process_ownership_until_exit(
+            launched.process,
+            terminate_process=terminate_process_fn,
+        )
+    launched.stdout_handle.close()
+    launched.stderr_handle.close()
+
+
 __all__ = [
     "LoggedEngineProcess",
+    "cleanup_failed_logged_process_start",
     "start_logged_process",
     "thread_limited_env",
 ]

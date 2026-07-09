@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.statuses import STATUS_RUNNING
+from orca_auto.core.statuses import STATUS_RUNNING, TERMINAL_STATUSES, normalize_status
 
 from ..config import AppConfig
 
@@ -121,7 +121,7 @@ def upsert_terminal_job_record(
     *,
     fallback_job_id: str | None = None,
     callbacks: OrcaQueueWorkerTrackingCallbacks,
-) -> None:
+) -> bool:
     job_dir = Path(reaction_dir).expanduser().resolve()
     state = callbacks.load_state(job_dir)
     record = callbacks.record_from_artifacts(
@@ -130,8 +130,8 @@ def upsert_terminal_job_record(
         report=callbacks.load_report_json(job_dir),
         fallback_job_id=fallback_job_id or "",
     )
-    if record is None:
-        return
+    if record is None or normalize_status(record.status) not in TERMINAL_STATUSES:
+        return False
     callbacks.upsert_job_record(
         cfg,
         job_id=record.job_id,
@@ -143,6 +143,7 @@ def upsert_terminal_job_record(
         resource_request=dict(record.resource_request),
         resource_actual=dict(record.resource_actual),
     )
+    return True
 
 
 def notify_terminal_job_from_state(

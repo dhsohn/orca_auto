@@ -34,7 +34,7 @@ class InternalEngineSpec:
         )
 
     def lifecycle(self) -> InternalEngineLifecycle:
-        return InternalEngineLifecycle()
+        return InternalEngineLifecycle(engine=self.engine)
 
     def worker_child(
         self,

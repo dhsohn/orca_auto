@@ -55,6 +55,9 @@ class FakeProcess:
             return self._poll_values.pop(0)
         return self._poll_values[0]
 
+    def exit(self, return_code: int = -15) -> None:
+        self._poll_values = [return_code]
+
 
 class FakeChildProcess(FakeProcess):
     def __init__(self, pid: int, *poll_values: int | None) -> None:
@@ -99,7 +102,7 @@ def _enqueue_job(
     mode: str = "standard",
     molecule_key: str | None = None,
 ) -> SimpleNamespace:
-    job_dir = env.tmp_path / "jobs" / task_id
+    job_dir = env.allowed_root / "jobs" / task_id
     job_dir.mkdir(parents=True)
     selected_xyz = job_dir / "selected_input.xyz"
     selected_xyz.write_text("1\nselected\nH 0.0 0.0 0.0\n", encoding="utf-8")
@@ -363,7 +366,13 @@ def test_process_one_cancel_requested_terminates_and_marks_cancelled(
         return cancelled_result
 
     monkeypatch.setattr(queue_cmd, "get_cancel_requested", fake_get_cancel_requested)
-    monkeypatch.setattr(queue_cmd, "_terminate_process", lambda proc: terminate_calls.append(proc))
+
+    def terminate(proc: FakeProcess) -> bool:
+        terminate_calls.append(proc)
+        proc.exit()
+        return True
+
+    monkeypatch.setattr(queue_cmd, "_terminate_process", terminate)
     monkeypatch.setattr(queue_cmd, "finalize_crest_job", fake_finalize)
 
     outcome = process_one_crest_for_test(queue_cmd, queue_env.cfg)

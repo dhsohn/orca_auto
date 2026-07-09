@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import os
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.admission import (
+    build_slot_engine_process_preparer,
+    build_slot_engine_process_registrar,
+    get_slot,
+)
 from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED
 
 from ..child import entrypoint as _child_entrypoint
@@ -12,6 +19,27 @@ from ..child.entrypoint import ChildWorkerEntrypointJob
 from ..child.execution import ChildWorkerShutdownController
 from ..child.process import requeue_result_is_cancelled
 from ..worker import build_background_worker_command
+
+
+def await_parent_admission_handoff(
+    job: ChildWorkerEntrypointJob,
+    admission_token: str,
+    *,
+    timeout_seconds: float = 10.0,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Wait until the parent atomically attaches this child PID to the slot."""
+    deadline = monotonic_fn() + max(0.0, float(timeout_seconds))
+    while True:
+        slot = get_slot(job.admission_root(), admission_token)
+        if slot is None:
+            return False
+        if slot.owner_pid == os.getpid():
+            return True
+        if monotonic_fn() >= deadline:
+            return False
+        sleep_fn(0.01)
 
 
 @dataclass(frozen=True)
@@ -43,6 +71,7 @@ class _EngineChildJobRunner:
     requeue_running_entry_fn: Callable[[Path, str], Any]
     mark_recovery_pending_context_fn: Callable[..., Any]
     process_kwargs: Mapping[str, Any]
+    admission_token: str | None
 
     def run(self, job: ChildWorkerEntrypointJob) -> int:
         try:
@@ -52,11 +81,36 @@ class _EngineChildJobRunner:
         return self._exit_code(outcome)
 
     def _process(self, job: ChildWorkerEntrypointJob) -> Any:
+        process_kwargs = dict(self.process_kwargs)
+        if self.admission_token:
+            durable_preparer = build_slot_engine_process_preparer(
+                job.admission_root(),
+                self.admission_token,
+            )
+            durable_registrar = build_slot_engine_process_registrar(
+                job.admission_root(),
+                self.admission_token,
+            )
+            extra_registrar = process_kwargs.get("register_running_job")
+            extra_preparer = process_kwargs.get("prepare_running_job")
+
+            def prepare_running_job() -> None:
+                durable_preparer()
+                if callable(extra_preparer):
+                    extra_preparer()
+
+            def register_running_job(running: Any | None) -> None:
+                durable_registrar(running)
+                if callable(extra_registrar):
+                    extra_registrar(running)
+
+            process_kwargs["register_running_job"] = register_running_job
+            process_kwargs["prepare_running_job"] = prepare_running_job
         return self.process_dequeued_entry_fn(
             job.cfg,
             job.entry,
             queue_root=job.queue_root,
-            **self.process_kwargs,
+            **process_kwargs,
             dependencies=self.dependencies_fn(),
             shutdown_requested=self.controller.is_requested,
         )
@@ -212,6 +266,9 @@ def run_engine_worker_child_job(
     mark_recovery_pending_context_fn: Callable[..., Any],
     admission_token: str | None = None,
     process_dequeued_entry_kwargs: Mapping[str, Any] | None = None,
+    await_parent_admission_handoff_fn: Callable[[ChildWorkerEntrypointJob, str], bool] = (
+        await_parent_admission_handoff
+    ),
 ) -> int:
     controller = ChildWorkerShutdownController()
     runner = _EngineChildJobRunner(
@@ -223,9 +280,12 @@ def run_engine_worker_child_job(
         requeue_running_entry_fn=requeue_running_entry_fn,
         mark_recovery_pending_context_fn=mark_recovery_pending_context_fn,
         process_kwargs=dict(process_dequeued_entry_kwargs or {}),
+        admission_token=admission_token,
     )
 
     def prepare_loaded_job(_job: ChildWorkerEntrypointJob) -> bool:
+        if admission_token and not await_parent_admission_handoff_fn(_job, admission_token):
+            return False
         install_signal_handlers_fn(controller)
         return True
 
@@ -257,6 +317,7 @@ __all__ = [
     "WorkerChildCommandSpec",
     "WorkerChildRunSpec",
     "activate_child_worker_admission",
+    "await_parent_admission_handoff",
     "build_engine_worker_child_command",
     "load_engine_child_job",
     "outcome_exit_code",

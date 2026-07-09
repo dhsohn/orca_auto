@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.orca.job_locations._generation import current_generation_payloads
+
 
 @dataclass(frozen=True)
 class LoadRequest:
@@ -120,6 +122,11 @@ def load_context_payloads(context: LoaderContext, deps: Any) -> None:
         context.report = deps.load_json_dict_fn(context.current_dir / "job_report.json")
     context.state = _flatten_orca_engine_payload(context.state)
     context.report = _flatten_orca_engine_payload(context.report)
+    context.state, context.report = current_generation_payloads(
+        context.queue_entry,
+        context.state,
+        context.report,
+    )
 
 
 def resolve_run_id(request: LoadRequest, context: LoaderContext, deps: Any) -> str:
@@ -149,6 +156,10 @@ def _flatten_orca_engine_payload(payload: dict[str, Any]) -> dict[str, Any]:
     flattened.setdefault("job_id", str(job.get("id", "")).strip())
     flattened.setdefault("reaction_dir", str(job.get("dir", "")).strip())
     flattened.setdefault("selected_inp", str(input_payload.get("primary_path", "")).strip())
+    flattened.setdefault(
+        "selected_input_xyz",
+        str(input_payload.get("selected_xyz_path", "")).strip(),
+    )
     flattened.setdefault("status", str(status.get("state", "")).strip())
     flattened.setdefault("started_at", str(timestamps.get("started_at", "")).strip())
     flattened.setdefault("updated_at", str(timestamps.get("updated_at", "")).strip())

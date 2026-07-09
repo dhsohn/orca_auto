@@ -117,8 +117,31 @@ def engine_config_mapping(
     resolved = dict(section)
     for key in inherit_keys:
         inherited = raw.get(key)
-        if key not in resolved and isinstance(inherited, dict):
+        override = resolved.get(key)
+        if key == "scheduler" and key in resolved and not isinstance(override, dict):
+            raise ValueError(f"{engine}.scheduler must be a mapping when configured.")
+        if key == "scheduler" and isinstance(override, dict):
+            mismatched = sorted(
+                override_key
+                for override_key, override_value in override.items()
+                if not isinstance(inherited, dict)
+                or override_key not in inherited
+                or inherited[override_key] != override_value
+            )
+            if mismatched:
+                joined = ", ".join(mismatched)
+                raise ValueError(
+                    f"{engine}.scheduler cannot override the shared top-level scheduler "
+                    f"({joined}); configure machine-wide admission under scheduler instead."
+                )
+        if not isinstance(inherited, dict):
+            continue
+        if key not in resolved:
             resolved[key] = dict(inherited)
+        elif key == "scheduler" and isinstance(override, dict):
+            # Preserve the shared limit when an engine redundantly repeats only
+            # one scheduler key. Divergent values were rejected above.
+            resolved[key] = {**inherited, **override}
     return resolved
 
 

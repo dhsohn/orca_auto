@@ -58,7 +58,7 @@ def _submit_xtb_stage(
     xtb_runtime_paths: dict[str, Path],
     xtb_config: str | None,
     workflow_id: str,
-) -> None:
+) -> bool:
     job_dir = o.stages.runtime._ensure_xtb_job_dir(
         stage,
         xtb_allowed_root=xtb_runtime_paths["allowed_root"],
@@ -73,6 +73,7 @@ def _submit_xtb_stage(
     WorkflowTaskView(task).set_submission_result(submission)
     current_attempt = o.stages.runtime._xtb_current_attempt_number(stage)
     _record_xtb_submission_attempt(o, stage, submission, attempt_number=current_attempt)
+    deferred = _submission_is_deferred(submission)
     _apply_xtb_submission_result(
         stage,
         task,
@@ -81,5 +82,6 @@ def _submit_xtb_stage(
         deferred_handoff_status="waiting_for_slot",
         active_handoff_status="submitted",
     )
-    if not _submission_is_deferred(submission):
+    if not deferred:
         stage_metadata["child_job_id"] = submission.get("job_id", "")
+    return not deferred

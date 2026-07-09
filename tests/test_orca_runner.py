@@ -1,3 +1,4 @@
+import errno
 import signal
 import subprocess
 import tempfile
@@ -5,11 +6,27 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
-from orca_auto.orca.orca_process import ORCA_PROCESS_RECORD_FILE_NAME
+from orca_auto.core.queue.cancellable import ProcessCleanupError
+from orca_auto.orca.orca_process import (
+    ORCA_PROCESS_RECORD_FILE_NAME,
+    OrcaProcessRecordCorruptError,
+    OrcaProcessRecoveryError,
+)
 from orca_auto.orca.orca_runner import OrcaRunner, WorkerShutdownInterrupt
 
 
-class TestOrcaRunnerCommandConstruction(unittest.TestCase):
+class OrcaRunnerTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        ticks_patcher = patch(
+            "orca_auto.orca.orca_process.process_lock.process_start_ticks",
+            return_value=12345,
+        )
+        ticks_patcher.start()
+        self.addCleanup(ticks_patcher.stop)
+
+
+class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
     @patch("orca_auto.orca.orca_runner.subprocess.Popen")
     def test_command_uses_linux_binary(self, mock_popen: MagicMock) -> None:
         mock_proc = MagicMock()
@@ -30,13 +47,19 @@ class TestOrcaRunnerCommandConstruction(unittest.TestCase):
         self.assertTrue(kwargs["start_new_session"])
 
 
-class TestOrcaRunnerTermination(unittest.TestCase):
+class TestOrcaRunnerTermination(OrcaRunnerTestCase):
     def test_terminate_noop_when_process_already_exited(self) -> None:
         runner = OrcaRunner("/opt/orca/orca")
         mock_proc = MagicMock()
         mock_proc.poll.return_value = 0
-        with patch("orca_auto.orca.orca_runner.os.killpg") as killpg:
-            runner._terminate_subprocess_tree(mock_proc)
+        with (
+            patch("orca_auto.orca.orca_runner.os.killpg") as killpg,
+            patch(
+                "orca_auto.orca.orca_runner.process_group_is_alive",
+                return_value=False,
+            ),
+        ):
+            assert runner._terminate_subprocess_tree(mock_proc)
         killpg.assert_not_called()
 
     @patch("orca_auto.orca.orca_runner.os.killpg")
@@ -94,7 +117,7 @@ class TestOrcaRunnerTermination(unittest.TestCase):
         self.assertEqual(mock_signal.call_args_list[-1], call(signal.SIGTERM, signal.SIG_DFL))
 
 
-class TestOrcaRunnerProcessRecordLifecycle(unittest.TestCase):
+class TestOrcaRunnerProcessRecordLifecycle(OrcaRunnerTestCase):
     @patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False)
     @patch("orca_auto.orca.orca_runner.subprocess.Popen")
     def test_normal_exit_clears_process_record(
@@ -112,6 +135,117 @@ class TestOrcaRunnerProcessRecordLifecycle(unittest.TestCase):
             inp.write_text("! Opt\n", encoding="utf-8")
             runner.run(inp)
             self.assertFalse((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
+
+    @patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=True)
+    @patch("orca_auto.orca.orca_runner.os.kill", return_value=None)
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_normal_exit_does_not_signal_reused_pid_group(
+        self,
+        mock_popen: MagicMock,
+        _pid_exists: MagicMock,
+        group_alive: MagicMock,
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.wait.return_value = 0
+        mock_proc.poll.return_value = 0
+        mock_proc.pid = 99999
+        mock_popen.return_value = mock_proc
+
+        runner = OrcaRunner("/opt/orca/orca")
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "test.inp"
+            inp.write_text("! SP\n", encoding="utf-8")
+            runner.run(inp)
+            self.assertFalse((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
+
+        group_alive.assert_not_called()
+
+    @patch("orca_auto.orca.orca_runner.process_group_is_alive")
+    @patch(
+        "orca_auto.orca.orca_runner.os.kill",
+        side_effect=OSError(errno.EIO, "probe failed"),
+    )
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_normal_exit_retains_record_when_pid_reuse_probe_is_unknown(
+        self,
+        mock_popen: MagicMock,
+        _pid_probe: MagicMock,
+        group_alive: MagicMock,
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.wait.return_value = 0
+        mock_proc.poll.return_value = 0
+        mock_proc.pid = 99999
+        mock_popen.return_value = mock_proc
+
+        runner = OrcaRunner("/opt/orca/orca")
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "test.inp"
+            inp.write_text("! SP\n", encoding="utf-8")
+            with self.assertRaises(OrcaProcessRecoveryError):
+                runner.run(inp)
+            self.assertTrue((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
+
+        group_alive.assert_not_called()
+
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_missing_start_ticks_aborts_launch_after_confirmed_cleanup(
+        self,
+        mock_popen: MagicMock,
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        mock_proc.poll.return_value = 0
+        mock_popen.return_value = mock_proc
+        runner = OrcaRunner("/opt/orca/orca")
+
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "test.inp"
+            inp.write_text("! Opt\n", encoding="utf-8")
+            with patch(
+                "orca_auto.orca.orca_process.process_lock.process_start_ticks",
+                return_value=None,
+            ):
+                with patch.object(
+                    runner, "_terminate_subprocess_tree", return_value=True
+                ) as terminate:
+                    with self.assertRaises(OrcaProcessRecordCorruptError):
+                        runner.run(inp)
+
+            terminate.assert_called_once_with(mock_proc)
+            self.assertFalse((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
+
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_record_init_cleanup_failure_keeps_marker_until_process_exit(
+        self,
+        mock_popen: MagicMock,
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        mock_popen.return_value = mock_proc
+        runner = OrcaRunner("/opt/orca/orca")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            inp = root / "test.inp"
+            marker = root / ORCA_PROCESS_RECORD_FILE_NAME
+            inp.write_text("! Opt\n", encoding="utf-8")
+            poll_results = iter([None, 0])
+
+            def poll() -> int | None:
+                self.assertTrue(marker.exists())
+                return next(poll_results)
+
+            mock_proc.poll.side_effect = poll
+            with patch(
+                "orca_auto.orca.orca_process.process_lock.process_start_ticks",
+                return_value=None,
+            ):
+                with patch.object(runner, "_terminate_subprocess_tree", return_value=False):
+                    with self.assertRaises(ProcessCleanupError):
+                        runner.run(inp)
+
+            self.assertFalse(marker.exists())
 
     @patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=True)
     @patch("orca_auto.orca.orca_runner.signal.signal")

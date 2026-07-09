@@ -403,6 +403,8 @@ constructors. Notable rules:
   executables must be absolute Linux paths to existing executable files.
 - `scheduler.max_active_simulations` is the shared admission cap.
 - `scheduler.admission_root` is the shared slot-coordination root.
+- Divergent engine-scoped scheduler values are rejected so every worker
+  observes the same admission root and limit.
 - `runs_root` is the single runs root for standalone ORCA jobs, workflow
   workspaces, and internal-engine runs.
 - `default_max_retries: 0` disables ORCA retries; any positive value enables the

@@ -8,6 +8,7 @@ from orca_auto.core.utils import now_utc_iso
 from ..registry import append_workflow_journal_event
 from ..state import acquire_workflow_lock, load_workflow_payload
 from .mutation import (
+    RestartDirectoryTransaction,
     WorkflowRestartMutation,
     _apply_restart_summary,
     _build_restart_mutation,
@@ -25,39 +26,51 @@ def restart_failed_workflow(
     force: bool = False,
 ) -> dict[str, Any]:
     workspace, root = _restart_paths(workspace_dir=workspace_dir, workflow_root=workflow_root)
+    directory_transaction = RestartDirectoryTransaction()
 
-    with acquire_workflow_lock(workspace):
-        payload = load_workflow_payload(workspace)
-        previous_status, workflow_id = _validate_restart_request(
-            payload,
-            workspace=workspace,
-            force=bool(force),
-        )
-        flow_settings = _flow_restart_settings(workspace, payload)
-        restarted_stages = _reset_restartable_stages(payload, flow_settings=flow_settings)
-
-        if not restarted_stages:
-            raise ValueError(
-                f"workflow has no failed or cancelled stages to restart: {workflow_id}"
+    try:
+        with acquire_workflow_lock(workspace):
+            payload = load_workflow_payload(workspace)
+            directory_transaction.capture_original_payload(payload)
+            previous_status, workflow_id = _validate_restart_request(
+                payload,
+                workspace=workspace,
+                force=bool(force),
+            )
+            flow_settings = _flow_restart_settings(workspace, payload)
+            restarted_stages = _reset_restartable_stages(
+                payload,
+                flow_settings=flow_settings,
+                restart_allowed_root=workspace,
+                directory_transaction=directory_transaction,
             )
 
-        restarted_at = now_utc_iso()
-        _apply_restart_summary(
-            payload,
-            previous_status=previous_status,
-            restarted_at=restarted_at,
-            restarted_stages=restarted_stages,
-            flow_settings=flow_settings,
-        )
-        mutation = _build_restart_mutation(
-            root=root,
-            workspace=workspace,
-            payload=payload,
-            previous_status=previous_status,
-            restarted_at=restarted_at,
-            restarted_stages=restarted_stages,
-            flow_settings=flow_settings,
-        )
+            if not restarted_stages:
+                raise ValueError(
+                    f"workflow has no failed or cancelled stages to restart: {workflow_id}"
+                )
+
+            restarted_at = now_utc_iso()
+            _apply_restart_summary(
+                payload,
+                previous_status=previous_status,
+                restarted_at=restarted_at,
+                restarted_stages=restarted_stages,
+                flow_settings=flow_settings,
+            )
+            mutation = _build_restart_mutation(
+                root=root,
+                workspace=workspace,
+                payload=payload,
+                previous_status=previous_status,
+                restarted_at=restarted_at,
+                restarted_stages=restarted_stages,
+                flow_settings=flow_settings,
+                directory_transaction=directory_transaction,
+            )
+    except Exception:
+        directory_transaction.cleanup_uncommitted()
+        raise
 
     append_workflow_journal_event(
         mutation.root,

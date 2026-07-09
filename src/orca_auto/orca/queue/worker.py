@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import logging
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,8 @@ from orca_auto.core.admission import (
     activate_reserved_slot,
     list_slots,
     reconcile_stale_slots,
+    recover_orphaned_engine_slots,
+    recover_slot_engine_process,
     release_slot,
     reserve_slot,
     update_slot_metadata,
@@ -48,6 +51,7 @@ from orca_auto.core.queue.worker import (
     ManagedProcess as _ManagedProcess,
 )
 from orca_auto.core.queue.worker import (
+    live_queue_slot_keys_for_slots,
     start_background_process,
     terminate_process_group,
 )
@@ -75,7 +79,7 @@ from ..job_locations import (
     resource_dict,
     upsert_job_record,
 )
-from ..state import finalize_state, load_report_json, load_state
+from ..state import finalize_state, load_report_json, load_state, new_state
 from ..statuses import AnalyzerStatus
 from ..telegram_notifier import notify_run_finished_event
 from . import worker_lifecycle as _lifecycle_helpers
@@ -284,8 +288,8 @@ def _upsert_terminal_job_record(
     reaction_dir: str,
     *,
     fallback_job_id: str | None = None,
-) -> None:
-    _tracking_helpers.upsert_terminal_job_record(
+) -> bool:
+    return _tracking_helpers.upsert_terminal_job_record(
         cfg,
         reaction_dir,
         fallback_job_id=fallback_job_id or "",
@@ -409,14 +413,101 @@ def _finalize_completed_job(worker: Any, queue_id: str, job: Any, rc: int) -> No
 
 
 def _finalize_child_exit(worker: Any, job: _RunningJob, *, rc: int) -> None:
+    recover_slot_engine_process(worker.admission_root, job.admission_token)
     _finalize_finished_job(worker, job.queue_id, job, rc=rc)
 
 
 def _reconcile_orphaned_running(worker: Any) -> None:
+    recover_orphaned_engine_slots(worker.admission_root, strict=False)
+    before_entries = queue_entries_with_roots(worker.cfg)
+    before_by_key = {
+        (str(Path(root).expanduser().resolve()), queue_entry_id(entry)): entry
+        for root, entry in before_entries
+    }
+    previous_statuses = getattr(worker, "_orca_reconcile_statuses", None)
+    if not isinstance(previous_statuses, dict):
+        previous_statuses = {key: "running" for key in before_by_key}
+    protected_queue_keys, protected_queue_ids = live_queue_slot_keys_for_slots(
+        worker.admission_root,
+        list_slots_fn=list_slots,
+    )
     _lifecycle_helpers.reconcile_orphaned_running(
         worker,
         callbacks=_lifecycle_callbacks(),
+        protected_queue_keys=protected_queue_keys,
+        protected_queue_ids=protected_queue_ids,
     )
+    # Reconciliation can terminalize a job whose original parent died, and an
+    # old child can also honor cancellation directly. Replay the normal
+    # terminal side effects idempotently so job-location records and one-shot
+    # notifications are not lost with the parent process.
+    after_entries = queue_entries_with_roots(worker.cfg)
+    after_statuses: dict[tuple[str, str], str] = {}
+    for queue_root, entry in after_entries:
+        queue_id = queue_entry_id(entry)
+        key = (str(Path(queue_root).expanduser().resolve()), queue_id)
+        raw_status = getattr(entry, "status", None)
+        status = str(getattr(raw_status, "value", raw_status) or "").lower()
+        after_statuses[key] = status
+        if status not in {STATUS_COMPLETED, STATUS_CANCELLED, STATUS_FAILED}:
+            continue
+        before_entry = before_by_key.get(key)
+        before_raw_status = getattr(before_entry, "status", None)
+        before_status = str(getattr(before_raw_status, "value", before_raw_status) or "").lower()
+        if previous_statuses.get(key) != "running" and before_status != "running":
+            continue
+        reaction_dir = queue_entry_reaction_dir(entry)
+        if not reaction_dir:
+            continue
+        try:
+            if status == STATUS_CANCELLED:
+                metadata = queue_entry_metadata(entry)
+                selected_inp = str(
+                    metadata.get("selected_inp") or metadata.get("selected_input_path") or ""
+                ).strip()
+                run_id, terminal_status = _record_cancelled_run_state(
+                    Path(reaction_dir).expanduser().resolve(),
+                    fallback_job_id=queue_entry_task_id(entry),
+                    selected_inp=selected_inp,
+                )
+                if terminal_status:
+                    queue_status = (
+                        terminal_status
+                        if terminal_status in (STATUS_COMPLETED, STATUS_CANCELLED)
+                        else STATUS_FAILED
+                    )
+                    recorded_run_id = str(metadata.get("run_id") or "").strip()
+                    if queue_status != status or (run_id and recorded_run_id != run_id):
+                        if not update_terminal(
+                            Path(queue_root).expanduser().resolve(),
+                            queue_id,
+                            queue_status,
+                            run_id=run_id,
+                        ):
+                            raise RuntimeError("cancelled queue entry disappeared during replay")
+                    status = queue_status
+                    after_statuses[key] = queue_status
+            record_upserted = _upsert_terminal_job_record(
+                worker.cfg,
+                reaction_dir,
+                fallback_job_id=queue_entry_task_id(entry),
+            )
+            if not record_upserted:
+                raise RuntimeError("terminal job record artifacts are not ready")
+            _notify_terminal_job_from_state(worker.cfg, reaction_dir)
+            if worker.cfg.telegram.enabled:
+                replayed_state = load_state(Path(reaction_dir).expanduser().resolve())
+                if not replayed_state or not finished_notification_already_sent(replayed_state):
+                    raise RuntimeError("terminal notification was not durably recorded")
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to replay terminal side effects for reconciled ORCA job %s",
+                queue_id,
+            )
+            # Keep this transition pending so the next periodic reconcile
+            # retries the idempotent terminal side effects.
+            after_statuses[key] = "running"
+    worker._orca_reconcile_statuses = after_statuses
 
 
 def _reconcile_worker_state(worker: Any) -> None:
@@ -433,11 +524,19 @@ def _shutdown_running_job(worker: Any, queue_id: str, job: Any) -> None:
         # stale "running" run state lingers.
         _cancel_orca_running_job(worker, queue_id, job)
         return
+    callbacks = _lifecycle_callbacks()
+
+    def terminate_child_and_recover(process: Any) -> bool:
+        terminated = callbacks.terminate_process(process)
+        if terminated is True and process.poll() is not None:
+            recover_slot_engine_process(worker.admission_root, job.admission_token)
+        return terminated
+
     _lifecycle_helpers.shutdown_running_job(
         worker,
         queue_id,
         job,
-        callbacks=_lifecycle_callbacks(),
+        callbacks=replace(callbacks, terminate_process=terminate_child_and_recover),
     )
 
 
@@ -494,7 +593,12 @@ def _check_orca_cancel_requests(worker: EngineQueueWorker) -> None:
     )
 
 
-def _record_cancelled_run_state(job_dir: Path) -> tuple[str | None, str | None]:
+def _record_cancelled_run_state(
+    job_dir: Path,
+    *,
+    fallback_job_id: str | None = None,
+    selected_inp: str | None = None,
+) -> tuple[str | None, str | None]:
     """Write a terminal "cancelled" run state for an interrupted run.
 
     A cancelled run is stopped by a signal and never writes its own terminal
@@ -505,11 +609,20 @@ def _record_cancelled_run_state(job_dir: Path) -> tuple[str | None, str | None]:
     Returns ``(run_id, terminal_status)``: the run_id when known (so the queue
     entry can be matched to this snapshot) and the terminal status now recorded
     in the run state -- "cancelled" when we wrote it, or a pre-existing terminal
-    status we refused to clobber. Both are ``None`` when there is no run state.
+    status we refused to clobber. When no state exists yet, a minimal cancelled
+    state is created from the queue identity so indexing cannot fall back to
+    ``unknown``.
     """
     state = load_state(job_dir)
     if state is None:
-        return None, None
+        selected_text = str(selected_inp or "").strip()
+        selected_path = Path(selected_text).expanduser() if selected_text else job_dir / "-"
+        if not selected_path.is_absolute():
+            selected_path = job_dir / selected_path
+        state = new_state(job_dir, selected_path, max_retries=0)
+        fallback_text = str(fallback_job_id or "").strip()
+        if fallback_text:
+            state["job_id"] = fallback_text
     run_id = str(state.get("run_id") or "").strip() or None
     final_result = state.get("final_result")
     if isinstance(final_result, dict):
@@ -564,14 +677,25 @@ def _finalize_cancelled_run(worker: EngineQueueWorker, job: _RunningJob) -> None
         logger.warning("Failed to finalize cancelled run for %s: %s", reaction_dir, exc)
 
 
-def _cancel_orca_running_job(worker: EngineQueueWorker, queue_id: str, job: _RunningJob) -> None:
-    cancel_running_process_job(
+def _cancel_orca_running_job(worker: EngineQueueWorker, queue_id: str, job: _RunningJob) -> bool:
+    hooks = _orca_worker_lifecycle_hooks()
+
+    def terminate_child_and_recover(process: Any) -> bool:
+        terminated = hooks.terminate_process_fn(process)
+        if terminated is True and process.poll() is not None:
+            recover_slot_engine_process(worker.admission_root, job.admission_token)
+        return terminated
+
+    cancelled = cancel_running_process_job(
         worker,
         queue_id,
         job,
-        hooks=_orca_worker_lifecycle_hooks(),
+        hooks=replace(hooks, terminate_process_fn=terminate_child_and_recover),
     )
+    if not cancelled:
+        return False
     _finalize_cancelled_run(worker, job)
+    return True
 
 
 def QueueWorker(

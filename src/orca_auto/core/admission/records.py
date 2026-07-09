@@ -4,8 +4,6 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from ..utils.persistence import coerce_int, coerce_optional_int
-
 
 @dataclass(frozen=True)
 class AdmissionSlot:
@@ -20,6 +18,10 @@ class AdmissionSlot:
     state: str = "active"
     work_dir: str = ""
     queue_id: str = ""
+    engine_process_state: str = ""
+    engine_pid: int | None = None
+    engine_pgid: int | None = None
+    engine_process_start_ticks: int | None = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,7 @@ class AdmissionReservationRequest:
     work_dir: str | Path = ""
     queue_id: str = ""
     owner_pid: int | None = None
+    engine_process_state: str = ""
     exclude_work_dirs: set[str] | None = None
     extra_active_count_fn: Callable[[Path, set[str], set[str]], int] | None = None
 
@@ -47,6 +50,7 @@ class AdmissionSlotActivation:
     app_name: str | None = None
     task_id: str | None = None
     workflow_id: str | None = None
+    engine_process_state: str | None = None
 
 
 @dataclass(frozen=True)
@@ -58,17 +62,69 @@ class AdmissionSlotMetadataUpdate:
     workflow_id: str | None = None
     work_dir: str | Path | None = None
     owner_pid: int | None = None
+    engine_process_state: str | None = None
 
 
 def slot_to_dict(slot: AdmissionSlot) -> dict[str, object]:
-    return asdict(slot)
+    payload = asdict(slot)
+    if not slot.engine_process_state:
+        payload.pop("engine_process_state", None)
+        payload.pop("engine_pid", None)
+        payload.pop("engine_pgid", None)
+        payload.pop("engine_process_start_ticks", None)
+    return payload
+
+
+def _positive_optional_int(raw: dict[str, object], key: str) -> int | None:
+    value = raw.get(key)
+    if value is None:
+        return None
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"Invalid positive integer admission field {key!r}")
+    return value
+
+
+def _engine_process_fields(
+    raw: dict[str, object],
+) -> tuple[str, int | None, int | None, int | None]:
+    state = str(raw.get("engine_process_state", "") or "").strip().lower()
+    engine_keys_present = any(
+        key in raw
+        for key in (
+            "engine_process_state",
+            "engine_pid",
+            "engine_pgid",
+            "engine_process_start_ticks",
+        )
+    )
+    if not engine_keys_present:
+        return "", None, None, None
+    if state not in {"pending", "active", "idle"}:
+        raise ValueError(f"Invalid admission engine process state: {state!r}")
+
+    pid = _positive_optional_int(raw, "engine_pid")
+    pgid = _positive_optional_int(raw, "engine_pgid")
+    start_ticks = _positive_optional_int(raw, "engine_process_start_ticks")
+    if state == "active":
+        if pid is None or pgid is None or start_ticks is None or pgid != pid:
+            raise ValueError("Invalid active admission engine process identity")
+    elif any(value is not None for value in (pid, pgid, start_ticks)):
+        raise ValueError("Inactive admission engine process record contains an identity")
+    return state, pid, pgid, start_ticks
 
 
 def slot_from_dict(raw: dict[str, object]) -> AdmissionSlot:
+    engine_state, engine_pid, engine_pgid, engine_start_ticks = _engine_process_fields(raw)
+    owner_pid_raw = raw.get("owner_pid", 0)
+    if type(owner_pid_raw) is not int or owner_pid_raw < 0:
+        raise ValueError("Invalid admission owner PID")
+    owner_start_ticks = _positive_optional_int(raw, "process_start_ticks")
+    if engine_state and (owner_pid_raw <= 0 or owner_start_ticks is None):
+        raise ValueError("Managed admission slot owner identity is incomplete")
     return AdmissionSlot(
         token=str(raw.get("token", "")).strip(),
-        owner_pid=coerce_int(raw.get("owner_pid", 0), default=0),
-        process_start_ticks=coerce_optional_int(raw.get("process_start_ticks")),
+        owner_pid=owner_pid_raw,
+        process_start_ticks=owner_start_ticks,
         source=str(raw.get("source", "")).strip(),
         acquired_at=str(raw.get("acquired_at", "")).strip(),
         app_name=str(raw.get("app_name", "")).strip(),
@@ -77,4 +133,8 @@ def slot_from_dict(raw: dict[str, object]) -> AdmissionSlot:
         state=str(raw.get("state", "active")).strip() or "active",
         work_dir=str(raw.get("work_dir", "")).strip(),
         queue_id=str(raw.get("queue_id", "")).strip(),
+        engine_process_state=engine_state,
+        engine_pid=engine_pid,
+        engine_pgid=engine_pgid,
+        engine_process_start_ticks=engine_start_ticks,
     )

@@ -13,6 +13,18 @@ from ..utils.persistence import (
     timestamped_token,
 )
 from . import persistence as _queue_persistence
+from .publication import (
+    QUEUE_RECORD_SYNC_ABORTED,
+    QUEUE_RECORD_SYNC_KEY,
+    QUEUE_RECORD_SYNC_OWNER_PID_KEY,
+    QUEUE_RECORD_SYNC_OWNER_START_KEY,
+    QUEUE_RECORD_SYNC_PREPARING,
+    QUEUE_RECORD_SYNC_REPAIRING,
+    QUEUE_RECORD_SYNC_TOKEN_KEY,
+    QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
+    queue_entry_is_claimable,
+    queue_record_publication_lock,
+)
 from .types import QueueEntry, QueueStatus
 
 QUEUE_FILE_NAME = _queue_persistence.QUEUE_FILE_NAME
@@ -341,6 +353,7 @@ def enqueue(
     engine: str,
     priority: int = 10,
     metadata: dict[str, Any] | None = None,
+    duplicate_policy: QueueDuplicatePolicy | None = None,
 ) -> QueueEntry:
     resolved_root = resolve_root_path(root)
     entry = QueueEntry(
@@ -353,7 +366,7 @@ def enqueue(
         enqueued_at=now_utc_iso(),
         metadata=dict(metadata or {}),
     )
-    return enqueue_entry(resolved_root, entry)
+    return enqueue_entry(resolved_root, entry, duplicate_policy=duplicate_policy)
 
 
 def dequeue_next(
@@ -369,6 +382,7 @@ def dequeue_next(
             for index, entry in enumerate(entries)
             if entry.status == QueueStatus.PENDING
             and not entry.cancel_requested
+            and queue_entry_is_claimable(entry)
             and (accept_entry_fn is None or accept_entry_fn(entry))
         ]
         if not pending:
@@ -395,7 +409,11 @@ def dequeue_entry_if_pending(
     """Mark one selected pending entry running if it is still eligible."""
 
     def dequeue(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
-        if entry.status != QueueStatus.PENDING or entry.cancel_requested:
+        if (
+            entry.status != QueueStatus.PENDING
+            or entry.cancel_requested
+            or not queue_entry_is_claimable(entry)
+        ):
             return None, None
         updated = replace(entry, status=QueueStatus.RUNNING, started_at=now_utc_iso())
         return updated, updated
@@ -416,11 +434,33 @@ def request_cancel(
 ) -> QueueEntry | None:
     def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
         if entry.status == QueueStatus.PENDING:
+            finished_at = now_utc_iso()
+            metadata = dict(entry.metadata)
+            sync_state = str(metadata.get(QUEUE_RECORD_SYNC_KEY, "")).strip().lower()
+            if sync_state in {QUEUE_RECORD_SYNC_PREPARING, QUEUE_RECORD_SYNC_REPAIRING}:
+                # Cancellation owns the per-entry publication lock here. Revoke
+                # the publisher's fencing token before releasing it so a
+                # publisher that had not started its side effects cannot resume.
+                # ABORTED is a forward fence, not a cross-store rollback: a
+                # process killed between state, index, and notification writes
+                # may have left an outcome-unknown partial record. Terminal
+                # reconciliation owns that artifact; cancellation guarantees
+                # only that no publisher can add a late write after this point.
+                metadata.update(
+                    {
+                        QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_ABORTED,
+                        QUEUE_RECORD_SYNC_UPDATED_AT_KEY: finished_at,
+                        QUEUE_RECORD_SYNC_OWNER_PID_KEY: 0,
+                        QUEUE_RECORD_SYNC_OWNER_START_KEY: "",
+                        QUEUE_RECORD_SYNC_TOKEN_KEY: "",
+                    }
+                )
             updated = replace(
                 entry,
                 status=QueueStatus.CANCELLED,
                 cancel_requested=True,
-                finished_at=now_utc_iso(),
+                finished_at=finished_at,
+                metadata=metadata,
             )
         elif entry.status == QueueStatus.RUNNING:
             updated = replace(entry, cancel_requested=True)
@@ -428,11 +468,17 @@ def request_cancel(
             return None, None
         return updated, updated
 
-    return QueueStore.for_root(
+    queue_store = QueueStore.for_root(
         root,
         load_entries_fn=load_entries_fn,
         save_entries_fn=save_entries_fn,
-    ).mutate_entry_by_id(queue_id, update, missing_result=None)
+    )
+    # Publication holds this same entry-scoped lock across its ownership check,
+    # external side effects, and COMPLETE transition. Therefore cancellation
+    # either revokes ownership before any side effect or terminalizes only after
+    # publication has fully completed.
+    with queue_record_publication_lock(queue_store.root, queue_id):
+        return queue_store.mutate_entry_by_id(queue_id, update, missing_result=None)
 
 
 def get_cancel_requested(
@@ -446,6 +492,31 @@ def get_cancel_requested(
         if entry.queue_id == queue_id:
             return bool(entry.cancel_requested)
     return False
+
+
+def update_metadata(
+    root: str | Path,
+    queue_id: str,
+    metadata_update: dict[str, Any],
+    *,
+    load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
+    save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
+) -> QueueEntry | None:
+    """Merge metadata into one queue entry without changing its lifecycle state."""
+
+    def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
+        merged = dict(entry.metadata)
+        merged.update(metadata_update)
+        if merged == entry.metadata:
+            return entry, None
+        updated = replace(entry, metadata=merged)
+        return updated, updated
+
+    return QueueStore.for_root(
+        root,
+        load_entries_fn=load_entries_fn,
+        save_entries_fn=save_entries_fn,
+    ).mutate_entry_by_id(queue_id, update, missing_result=None)
 
 
 def requeue_running_entry(

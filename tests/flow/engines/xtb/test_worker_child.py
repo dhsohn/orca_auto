@@ -34,11 +34,12 @@ def test_run_worker_child_job_processes_loaded_entry_and_releases_slot(
         dependencies_fn=lambda: dependencies,
         requeue_running_entry_fn=lambda *_args: None,
         mark_recovery_pending_context_fn=lambda *_args, **_kwargs: None,
+        await_parent_admission_handoff_fn=lambda *_args: True,
     )
 
     assert rc == 0
     assert len(installed) == 1
-    assert released == [("/tmp/admission", "slot-1")]
+    assert released == []
     assert processed[0]["args"] == (cfg, entry)
     assert processed[0]["kwargs"]["queue_root"] == (tmp_path / "queue").resolve()
     assert "molecule_key_resolver" not in processed[0]["kwargs"]
@@ -75,12 +76,13 @@ def test_run_worker_child_job_requeues_and_marks_recovery_on_shutdown(
         mark_recovery_pending_context_fn=lambda cfg_obj, context_obj, *, reason: recovery.append(
             (cfg_obj, context_obj, reason)
         ),
+        await_parent_admission_handoff_fn=lambda *_args: True,
     )
 
     assert rc == 0
     assert requeued == [((tmp_path / "queue").resolve(), "queue-1")]
     assert recovery == [(cfg, context, "worker_shutdown")]
-    assert released == [("/tmp/admission", "slot-1")]
+    assert released == []
 
 
 def test_run_worker_child_job_returns_failure_when_entry_is_not_running(
@@ -104,7 +106,8 @@ def test_run_worker_child_job_returns_failure_when_entry_is_not_running(
         dependencies_fn=lambda: object(),
         requeue_running_entry_fn=lambda *_args: None,
         mark_recovery_pending_context_fn=lambda *_args, **_kwargs: None,
+        await_parent_admission_handoff_fn=lambda *_args: True,
     )
 
     assert rc == 1
-    assert released == [("/tmp/admission", "slot-1")]
+    assert released == []

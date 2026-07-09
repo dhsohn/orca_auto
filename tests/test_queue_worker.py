@@ -17,7 +17,8 @@ from orca_auto.core.admission import (
     release_slot,
     reserve_slot,
 )
-from orca_auto.core.queue.types import QueueEntry
+from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED
 from orca_auto.orca.config import AppConfig, RuntimeConfig, TelegramConfig
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue.adapter import (
@@ -76,8 +77,9 @@ def test_tracking_callbacks_use_current_queue_worker_symbols() -> None:
 
 
 def test_lifecycle_callbacks_use_current_queue_worker_symbols() -> None:
-    def terminate_process(proc: object) -> None:
+    def terminate_process(proc: object) -> bool:
         del proc
+        return True
 
     with patch("orca_auto.orca.queue.worker._terminate_process", new=terminate_process):
         callbacks = queue_worker_mod._lifecycle_callbacks()
@@ -85,6 +87,167 @@ def test_lifecycle_callbacks_use_current_queue_worker_symbols() -> None:
     assert callbacks.terminate_process is terminate_process
     assert callbacks.requeue_running_entry is queue_worker_mod.requeue_running_entry
     assert callbacks.on_completed is None
+
+
+def _terminal_replay_entry(tmp_path: Path, status: QueueStatus) -> QueueEntry:
+    return QueueEntry(
+        queue_id="queue-replay",
+        app_name="orca_auto_orca",
+        task_id="task-replay",
+        task_kind="orca_run_inp",
+        engine="orca",
+        status=status,
+        metadata={"reaction_dir": str(tmp_path / "rxn")},
+    )
+
+
+def _run_terminal_replay(worker: object, tmp_path: Path, entry: QueueEntry) -> None:
+    with (
+        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(
+            queue_worker_mod,
+            "queue_entries_with_roots",
+            return_value=[(tmp_path, entry)],
+        ),
+        patch.object(
+            queue_worker_mod,
+            "live_queue_slot_keys_for_slots",
+            return_value=(set(), set()),
+        ),
+        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
+    ):
+        queue_worker_mod._reconcile_orphaned_running(worker)
+
+
+def test_terminal_replay_retries_failed_notification_until_marker_is_durable(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "rxn").mkdir()
+    entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
+    cfg = AppConfig(
+        runtime=RuntimeConfig(allowed_root=str(tmp_path)),
+        telegram=TelegramConfig(bot_token="token", chat_id="chat"),
+    )
+    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    state = {"final_result": {"status": "completed"}}
+
+    with (
+        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
+        patch.object(
+            queue_worker_mod, "_notify_terminal_job_from_state", return_value=False
+        ) as notify,
+        patch.object(queue_worker_mod, "load_state", return_value=state),
+    ):
+        _run_terminal_replay(worker, tmp_path, entry)
+        _run_terminal_replay(worker, tmp_path, entry)
+
+    assert notify.call_count == 2
+    key = (str(tmp_path.resolve()), entry.queue_id)
+    assert worker._orca_reconcile_statuses[key] == "running"
+
+
+def test_terminal_replay_retries_when_job_record_artifacts_are_not_ready(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "rxn").mkdir()
+    entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
+    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+
+    with (
+        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=False),
+        patch.object(queue_worker_mod, "_notify_terminal_job_from_state") as notify,
+    ):
+        _run_terminal_replay(worker, tmp_path, entry)
+
+    notify.assert_not_called()
+    key = (str(tmp_path.resolve()), entry.queue_id)
+    assert worker._orca_reconcile_statuses[key] == "running"
+
+
+def test_terminal_replay_finalizes_cancelled_state_before_side_effects(tmp_path: Path) -> None:
+    reaction_dir = tmp_path / "rxn"
+    reaction_dir.mkdir()
+    entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
+    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+
+    with (
+        patch.object(
+            queue_worker_mod,
+            "_record_cancelled_run_state",
+            return_value=("run-cancelled", STATUS_CANCELLED),
+        ) as record_cancelled,
+        patch.object(queue_worker_mod, "update_terminal", return_value=True) as update_terminal,
+        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
+        patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
+    ):
+        _run_terminal_replay(worker, tmp_path, entry)
+
+    record_cancelled.assert_called_once_with(
+        reaction_dir.resolve(),
+        fallback_job_id=entry.task_id,
+        selected_inp="",
+    )
+    update_terminal.assert_called_once_with(
+        tmp_path.resolve(),
+        entry.queue_id,
+        STATUS_CANCELLED,
+        run_id="run-cancelled",
+    )
+    key = (str(tmp_path.resolve()), entry.queue_id)
+    assert worker._orca_reconcile_statuses[key] == QueueStatus.CANCELLED.value
+
+
+def test_terminal_replay_corrects_cancelled_queue_to_existing_completed_state(
+    tmp_path: Path,
+) -> None:
+    reaction_dir = tmp_path / "rxn"
+    reaction_dir.mkdir()
+    entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
+    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+
+    with (
+        patch.object(
+            queue_worker_mod,
+            "_record_cancelled_run_state",
+            return_value=("run-completed", STATUS_COMPLETED),
+        ),
+        patch.object(queue_worker_mod, "update_terminal", return_value=True) as update_terminal,
+        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
+        patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
+    ):
+        _run_terminal_replay(worker, tmp_path, entry)
+
+    update_terminal.assert_called_once_with(
+        tmp_path.resolve(),
+        entry.queue_id,
+        STATUS_COMPLETED,
+        run_id="run-completed",
+    )
+    key = (str(tmp_path.resolve()), entry.queue_id)
+    assert worker._orca_reconcile_statuses[key] == STATUS_COMPLETED
+
+
+def test_record_cancelled_run_state_synthesizes_missing_terminal_state(tmp_path: Path) -> None:
+    selected_inp = tmp_path / "job.inp"
+
+    run_id, terminal_status = _record_cancelled_run_state(
+        tmp_path,
+        fallback_job_id="task-cancelled",
+        selected_inp=str(selected_inp),
+    )
+
+    assert run_id
+    assert terminal_status == STATUS_CANCELLED
+    written = load_state(tmp_path)
+    assert written is not None
+    assert written["job_id"] == "task-cancelled"
+    assert written["selected_inp"] == str(selected_inp)
+    assert written["status"] == STATUS_CANCELLED
+    assert written["final_result"] is not None
+    assert written["final_result"]["status"] == STATUS_CANCELLED
 
 
 def test_record_cancelled_run_state_writes_terminal_cancelled(tmp_path: Path) -> None:
@@ -173,7 +336,7 @@ class TestTerminateProcess(unittest.TestCase):
         proc = MagicMock()
         proc.poll.return_value = None
         proc.pid = 1234
-        proc.poll.side_effect = [None, None, None, None]
+        proc.poll.side_effect = [None] * 8
         proc.wait.side_effect = [
             subprocess.TimeoutExpired(cmd="worker", timeout=10),
             subprocess.TimeoutExpired(cmd="worker", timeout=5),
@@ -682,10 +845,40 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process=mock_proc,
             admission_token="slot_cancel",
         )
-        with patch("orca_auto.orca.queue.worker._terminate_process"):
+
+        def terminate(process: MagicMock) -> bool:
+            process.poll.return_value = 0
+            return True
+
+        with patch("orca_auto.orca.queue.worker._terminate_process", side_effect=terminate):
             self.worker._check_cancel_requests()
         self.assertNotIn(entry.queue_id, self.worker._running)
         mock_mark_cancelled.assert_called_once_with(self.root, entry.queue_id)
+
+    @patch("orca_auto.orca.queue.worker.mark_cancelled", return_value=True)
+    def test_check_cancel_requests_retains_live_job_when_termination_fails(
+        self,
+        mock_mark_cancelled: MagicMock,
+    ) -> None:
+        rxn = self.root / "mol_cancel_live"
+        rxn.mkdir()
+        entry = enqueue(self.root, str(rxn))
+        dequeue_next(self.root)
+        cancel(self.root, entry.queue_id)
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        self.worker._running[entry.queue_id] = _RunningJob(
+            queue_id=entry.queue_id,
+            reaction_dir=str(rxn),
+            process=mock_proc,
+            admission_token="slot_cancel_live",
+        )
+
+        with patch("orca_auto.orca.queue.worker._terminate_process", return_value=False):
+            self.worker._check_cancel_requests()
+
+        self.assertIn(entry.queue_id, self.worker._running)
+        mock_mark_cancelled.assert_not_called()
 
     def test_shutdown_all_empty(self) -> None:
         self.worker._shutdown_all()
@@ -706,7 +899,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process=mock_proc,
             admission_token="slot_shutdown",
         )
-        with patch("orca_auto.orca.queue.worker._terminate_process"):
+        with patch("orca_auto.orca.queue.worker._terminate_process", return_value=True):
             self.worker._shutdown_all()
         self.assertEqual(len(self.worker._running), 0)
         mock_requeue.assert_called_once_with(self.root, entry.queue_id)
@@ -733,8 +926,16 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process=mock_proc,
             admission_token="slot_shut_cancel",
         )
+
+        def terminate_process(process: MagicMock) -> bool:
+            process.poll.return_value = 0
+            return True
+
         with (
-            patch("orca_auto.orca.queue.worker._terminate_process"),
+            patch(
+                "orca_auto.orca.queue.worker._terminate_process",
+                side_effect=terminate_process,
+            ),
             patch("orca_auto.orca.queue.worker.requeue_running_entry") as mock_requeue,
         ):
             self.worker._shutdown_all()
@@ -848,6 +1049,16 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
 
 class TestFillSlots(unittest.TestCase):
+    def setUp(self) -> None:
+        self._ticks_patcher = patch(
+            "orca_auto.core.admission.store._process_start_ticks",
+            side_effect=lambda pid: max(1, int(pid)),
+        )
+        self._ticks_patcher.start()
+
+    def tearDown(self) -> None:
+        self._ticks_patcher.stop()
+
     def test_queue_worker_does_not_mutate_config_max_concurrent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

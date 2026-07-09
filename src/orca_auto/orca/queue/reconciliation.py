@@ -98,6 +98,8 @@ def reconcile_orphaned_running_entries(
     allowed_root: Path,
     *,
     ignore_worker_pid: bool = False,
+    protected_queue_keys: set[tuple[str, str]] | None = None,
+    protected_queue_ids: set[str] | None = None,
     deps: Any,
     logger: logging.Logger,
 ) -> int:
@@ -110,6 +112,14 @@ def reconcile_orphaned_running_entries(
         entries = deps.load_entries(allowed_root)
         for index, entry in enumerate(entries):
             if deps.queue_entry_status(entry) != QueueStatus.RUNNING.value:
+                continue
+            queue_id = str(deps.queue_entry_id(entry) or "").strip()
+            reaction_dir = str(deps.queue_entry_reaction_dir(entry) or "").strip()
+            normalized_dir = str(Path(reaction_dir).expanduser().resolve()) if reaction_dir else ""
+            if queue_id in (protected_queue_ids or set()) or (
+                queue_id,
+                normalized_dir,
+            ) in (protected_queue_keys or set()):
                 continue
             updated = _reconcile_entry(entry, deps=deps, logger=logger)
             if updated is None:

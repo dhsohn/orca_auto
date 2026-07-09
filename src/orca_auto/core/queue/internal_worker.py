@@ -16,7 +16,7 @@ DependencyBuilder = Callable[..., DependencyT]
 DependencyFactory = Callable[[], Any]
 FailureResultBuilder = Callable[[Exception], Any]
 NowUtcIso = Callable[[], str]
-ProcessTerminator = Callable[[Any], object]
+ProcessTerminator = Callable[[Any], bool]
 QueueStatusMarker = Callable[..., Any]
 SleepFn = Callable[[float], None]
 StartJob = Callable[[], Any]
@@ -164,6 +164,7 @@ def build_internal_worker_process_dependencies(
 class InternalWorkerOptions:
     should_cancel: Callable[[], bool] | None = None
     shutdown_requested: Callable[[], bool] | None = None
+    prepare_running_job: Callable[[], None] | None = None
     register_running_job: Callable[[Any | None], None] | None = None
     worker_job_pid: int | None = None
     emit_output: bool = False
@@ -406,6 +407,7 @@ def run_internal_engine_worker_entry_with_spec_options(
     spec: InternalEngineWorkerExecutionSpec,
     should_cancel: Callable[[], bool] | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None = None,
     register_running_job: Callable[[Any | None], None] | None = None,
     worker_job_pid: int | None = None,
     emit_output: bool = False,
@@ -418,6 +420,7 @@ def run_internal_engine_worker_entry_with_spec_options(
         options=InternalWorkerOptions(
             should_cancel=should_cancel,
             shutdown_requested=shutdown_requested,
+            prepare_running_job=prepare_running_job,
             register_running_job=register_running_job,
             worker_job_pid=worker_job_pid,
             emit_output=emit_output,
@@ -433,6 +436,7 @@ def run_internal_engine_worker_entry_with_spec_factory_options(
     spec_factory: EngineWorkerExecutionSpecFactory,
     should_cancel: Callable[[], bool] | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None = None,
     register_running_job: Callable[[Any | None], None] | None = None,
     worker_job_pid: int | None = None,
     emit_output: bool = False,
@@ -444,6 +448,7 @@ def run_internal_engine_worker_entry_with_spec_factory_options(
         spec=spec_factory(),
         should_cancel=should_cancel,
         shutdown_requested=shutdown_requested,
+        prepare_running_job=prepare_running_job,
         register_running_job=register_running_job,
         worker_job_pid=worker_job_pid,
         emit_output=emit_output,
@@ -469,6 +474,7 @@ def run_internal_cancellable_engine_process(
         raise shutdown_exception_type(context)
 
     return run_cancellable_engine_process(
+        prepare_running_job=options.prepare_running_job,
         start_job=start_job,
         finalize_job=finalize_job,
         terminate_process=terminate_process,

@@ -18,6 +18,7 @@ from orca_auto.core.utils import normalize_bool, normalize_text, safe_int
 from orca_auto.core.utils.persistence import load_json_mapping_list_file
 
 from ..input_artifacts import derive_selected_input_xyz as _derive_selected_input_xyz
+from ._generation import current_generation_payloads
 
 QUEUE_FILE_NAME = "queue.json"
 INDEX_DIR_NAME = "index"
@@ -198,7 +199,7 @@ def coerce_attempts(state: dict[str, Any], report: dict[str, Any]) -> tuple[dict
                 "return_code": safe_int(raw.get("return_code"), default=0),
                 "analyzer_status": normalize_text(raw.get("analyzer_status")),
                 "analyzer_reason": normalize_text(raw.get("analyzer_reason")),
-                "markers": list(raw["markers"]) if isinstance(raw.get("markers"), list) else [],
+                "markers": _coerce_markers(raw.get("markers")),
                 "patch_actions": list(raw["patch_actions"])
                 if isinstance(raw.get("patch_actions"), list)
                 else [],
@@ -207,6 +208,14 @@ def coerce_attempts(state: dict[str, Any], report: dict[str, Any]) -> tuple[dict
             }
         )
     return tuple(attempts)
+
+
+def _coerce_markers(value: Any) -> dict[str, Any] | list[Any]:
+    if isinstance(value, dict):
+        return {str(key): item for key, item in value.items()}
+    if isinstance(value, list):
+        return list(value)
+    return []
 
 
 def final_result_payload(state: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
@@ -224,6 +233,7 @@ def status_from_payloads(
     state: dict[str, Any],
     report: dict[str, Any],
 ) -> tuple[str, str, str, str]:
+    state, report = current_generation_payloads(queue_entry, state, report)
     queue_status = normalize_text((queue_entry or {}).get("status")).lower()
     cancel_requested = normalize_bool((queue_entry or {}).get("cancel_requested"))
 
@@ -241,7 +251,12 @@ def status_from_payloads(
         return "cancelled", analyzer_status, reason or "cancelled", completed_at
     if queue_status == "running" and cancel_requested:
         return "cancel_requested", analyzer_status, reason, completed_at
-    queue_aliases = {"pending": "queued", "running": "running"}
+    queue_aliases = {
+        "pending": "queued",
+        "running": "running",
+        "completed": "completed",
+        "failed": "failed",
+    }
     if queue_status in queue_aliases:
         return queue_aliases[queue_status], analyzer_status, reason, completed_at
     if state_status in {"completed", "failed"}:

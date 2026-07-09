@@ -147,9 +147,9 @@ class TestIsProcessAlive(unittest.TestCase):
         with patch("orca_auto.core.utils.process_lock.os.kill", side_effect=PermissionError):
             self.assertTrue(is_process_alive(1234))
 
-    def test_is_process_alive_returns_false_on_generic_oserror(self) -> None:
+    def test_is_process_alive_returns_true_on_unknown_oserror(self) -> None:
         with patch("orca_auto.core.utils.process_lock.os.kill", side_effect=OSError):
-            self.assertFalse(is_process_alive(1234))
+            self.assertTrue(is_process_alive(1234))
 
 
 class TestProcessStartTicks(unittest.TestCase):

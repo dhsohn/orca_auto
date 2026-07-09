@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from orca_auto.core.commands.run_dir import (
@@ -81,11 +82,17 @@ def _build_submission(
 
 
 def _queued_record(submission: EngineRunDirSubmission, _entry: Any) -> EngineQueuedRecord:
-    job_dir = submission.context["job_dir"]
-    selected_xyz = submission.context["selected_xyz"]
-    mode = submission.context["mode"]
-    molecule_key = submission.context["molecule_key"]
-    resource_request = submission.context["resource_request"]
+    metadata = submission.metadata
+    context = submission.context
+    job_dir = Path(metadata.get("job_dir") or context["job_dir"]).expanduser().resolve()
+    selected_xyz = (
+        Path(metadata.get("selected_input_xyz") or context["selected_xyz"]).expanduser().resolve()
+    )
+    mode = str(metadata.get("mode") or context["mode"])
+    molecule_key = str(metadata.get("molecule_key") or context["molecule_key"])
+    resource_request = metadata.get("resource_request")
+    if not isinstance(resource_request, dict):
+        resource_request = context["resource_request"]
     return build_engine_queued_record(
         submission=submission,
         state_payload=queued_state_payload(

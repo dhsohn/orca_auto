@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -262,8 +263,11 @@ def is_process_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    except OSError:
-        return False
+    except OSError as exc:
+        # Only ProcessLookupError/ESRCH proves absence. Unknown probe errors
+        # are fail-closed so callers never reap or replace a possibly live
+        # owner without a verified identity.
+        return exc.errno != errno.ESRCH
     return True
 
 

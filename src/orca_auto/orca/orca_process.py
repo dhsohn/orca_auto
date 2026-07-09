@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import errno
+import json
 import logging
 import os
 import signal
@@ -7,7 +9,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.utils import process as process_utils
 from orca_auto.core.utils import process_lock
 from orca_auto.core.utils.persistence import (
     atomic_write_json,
@@ -18,12 +19,40 @@ from orca_auto.core.utils.persistence import (
 ORCA_PROCESS_RECORD_FILE_NAME = "orca.process.json"
 
 
+class OrcaProcessRecoveryError(RuntimeError):
+    """Raised when legacy ORCA recovery cannot prove cleanup is safe."""
+
+
+class OrcaProcessRecordCorruptError(OrcaProcessRecoveryError):
+    """Raised when an existing ORCA process record cannot be trusted."""
+
+
 def _positive_int(value: Any) -> int | None:
-    return process_utils.positive_int(value)
+    return value if type(value) is int and value > 0 else None
 
 
 def orca_process_record_path(reaction_dir: Path) -> Path:
     return reaction_dir / ORCA_PROCESS_RECORD_FILE_NAME
+
+
+def _load_orca_process_record(path: Path) -> dict[str, Any] | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise OrcaProcessRecordCorruptError(f"ORCA process record cannot be read: {path}") from exc
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise OrcaProcessRecordCorruptError(
+            f"ORCA process record is not valid JSON: {path}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise OrcaProcessRecordCorruptError(
+            f"ORCA process record must contain a JSON object: {path}"
+        )
+    return payload
 
 
 def write_orca_process_record(
@@ -45,11 +74,22 @@ def write_orca_process_record(
         "started_at": now_utc_iso(),
     }
     process_ticks = process_lock.process_start_ticks(pid_value)
-    if process_ticks is not None:
-        payload["process_start_ticks"] = process_ticks
     owner_ticks = process_lock.current_process_start_ticks()
     if owner_ticks is not None:
         payload["owner_process_start_ticks"] = owner_ticks
+    if process_ticks is None:
+        # Persist a fail-closed marker before aborting.  The runner removes it
+        # only after the just-launched process is confirmed gone; otherwise a
+        # later recovery attempt refuses to guess whether this PID is safe to
+        # signal.
+        atomic_write_json(
+            orca_process_record_path(reaction_dir), payload, ensure_ascii=True, indent=2
+        )
+        raise OrcaProcessRecordCorruptError(
+            f"Cannot identify launched ORCA process pid={pid_value}: "
+            "process start ticks are unavailable"
+        )
+    payload["process_start_ticks"] = process_ticks
     atomic_write_json(orca_process_record_path(reaction_dir), payload, ensure_ascii=True, indent=2)
     return payload
 
@@ -91,8 +131,10 @@ def _process_group_exists(
         return False
     except PermissionError:
         return True
-    except OSError:
-        return False
+    except OSError as exc:
+        # Only ESRCH/ProcessLookup proves absence. Unknown probe failures must
+        # preserve the record and block a concurrent replacement run.
+        return exc.errno != errno.ESRCH
     return True
 
 
@@ -123,11 +165,14 @@ def _recorded_process_is_reused(
         # group-existence check decide whether to reap.
         return False
     observed_ticks = process_start_ticks_fn(pid)
-    # Only a readable start-tick that MISMATCHES proves reuse. A missing
-    # observed tick (the leader exited between the alive check and this read,
-    # while PAL/child processes keep the group alive) is not proof — assuming
-    # reuse would clear the record without reaping the surviving group.
-    return observed_ticks is not None and observed_ticks != expected_ticks
+    if observed_ticks is None:
+        # The PID still exists, so signalling its group is safe only after a
+        # positive start-ticks match. Missing /proc identity is neither proof
+        # of reuse nor proof that this is the recorded ORCA leader.
+        raise OrcaProcessRecordCorruptError(
+            f"Cannot verify recorded ORCA process identity for pid={pid}"
+        )
+    return observed_ticks != expected_ticks
 
 
 def _orphan_group_still_matches(
@@ -189,12 +234,13 @@ def _signal_orphan_group(
     except ProcessLookupError:
         return False
     except PermissionError as exc:
-        raise RuntimeError(
+        raise OrcaProcessRecoveryError(
             f"Cannot terminate orphaned ORCA process group pgid={pgid}: permission denied"
         ) from exc
     except OSError as exc:
-        logger.warning("Failed to signal orphaned ORCA process group pgid=%d: %s", pgid, exc)
-        return False
+        raise OrcaProcessRecoveryError(
+            f"Cannot signal orphaned ORCA process group pgid={pgid}"
+        ) from exc
     return True
 
 
@@ -211,15 +257,24 @@ def recover_orphaned_orca_process(
     sleep_fn: Any = time.sleep,
 ) -> bool:
     path = orca_process_record_path(reaction_dir)
-    payload = load_json_mapping_file(path)
+    payload = _load_orca_process_record(path)
     if payload is None:
         return False
 
     pid = _positive_int(payload.get("pid"))
     pgid = _positive_int(payload.get("pgid"))
     expected_ticks = _positive_int(payload.get("process_start_ticks"))
-    if pid is None or pgid is None or pgid != pid:
-        logger.warning("Ignoring invalid ORCA process record: %s", path)
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("engine") != "orca"
+        or pid is None
+        or pgid is None
+        or pgid != pid
+        or expected_ticks is None
+    ):
+        raise OrcaProcessRecordCorruptError(f"Invalid ORCA process record: {path}")
+
+    if not _process_group_exists(pgid, killpg_fn=killpg_fn):
         clear_orca_process_record(reaction_dir)
         return False
 
@@ -230,10 +285,6 @@ def recover_orphaned_orca_process(
         process_start_ticks_fn=process_start_ticks_fn,
     ):
         logger.info("Ignoring stale ORCA process record due to PID reuse: %s", path)
-        clear_orca_process_record(reaction_dir)
-        return False
-
-    if not _process_group_exists(pgid, killpg_fn=killpg_fn):
         clear_orca_process_record(reaction_dir)
         return False
 
@@ -268,11 +319,13 @@ def recover_orphaned_orca_process(
         clear_orca_process_record(reaction_dir, pid=pid, process_start_ticks=expected_ticks)
         return True
 
-    raise RuntimeError(f"Orphaned ORCA process group is still active: pgid={pgid}")
+    raise OrcaProcessRecoveryError(f"Orphaned ORCA process group is still active: pgid={pgid}")
 
 
 __all__ = [
     "ORCA_PROCESS_RECORD_FILE_NAME",
+    "OrcaProcessRecoveryError",
+    "OrcaProcessRecordCorruptError",
     "clear_orca_process_record",
     "orca_process_record_path",
     "process_group_is_alive",

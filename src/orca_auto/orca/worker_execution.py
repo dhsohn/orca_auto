@@ -23,10 +23,12 @@ from orca_auto.core.queue.worker import (
 )
 from orca_auto.core.queue.worker.execution_dependencies import run_worker_child_entrypoint
 
+from .attempt.reporting import build_final_result
 from .commands.run_inp import _cmd_run_inp_execute
 from .config import load_config
 from .orca_runner import OrcaRunner, WorkerShutdownInterrupt
 from .queue.adapter import (
+    get_cancel_requested,
     list_queue,
     queue_entry_app_name,
     queue_entry_force,
@@ -34,6 +36,8 @@ from .queue.adapter import (
     queue_entry_task_id,
     requeue_running_entry,
 )
+from .state import finalize_state, load_state
+from .statuses import AnalyzerStatus
 
 BackgroundRunJobProcess = subprocess.Popen
 WORKER_JOB_MODULE = WORKER_CHILD_MODULE
@@ -124,6 +128,19 @@ def _run_orca_job_for_entry(
     _queue_root: Path,
     _options: _engine_execution.InternalWorkerOptions,
 ) -> int:
+    def cancel_requested() -> bool:
+        return _options.should_cancel is not None and _options.should_cancel()
+
+    def stop_requested() -> bool:
+        return cancel_requested() or (
+            _options.shutdown_requested is not None and _options.shutdown_requested()
+        )
+
+    class ShutdownAwareOrcaRunner(OrcaRunner):
+        def __init__(self, orca_executable: str) -> None:
+            super().__init__(orca_executable)
+            self.set_shutdown_requested(stop_requested)
+
     try:
         return execute_run_job(
             context.config_path,
@@ -132,8 +149,24 @@ def _run_orca_job_for_entry(
             reservation_token=context.admission_token,
             admission_app_name=context.admission_app_name,
             admission_task_id=context.admission_task_id,
+            runner_cls=ShutdownAwareOrcaRunner,
         )
     except WorkerShutdownInterrupt as exc:
+        if cancel_requested():
+            state = load_state(Path(context.reaction_dir))
+            if state is not None and not isinstance(state.get("final_result"), dict):
+                cancelled_result = build_final_result(
+                    status="cancelled",
+                    analyzer_status=AnalyzerStatus.INCOMPLETE,
+                    reason="cancel_requested",
+                    last_out_path=None,
+                )
+                finalize_state(
+                    Path(context.reaction_dir),
+                    state,
+                    status="cancelled",
+                    final_result=cancelled_result,
+                )
         raise WorkerShutdownRequested(context) from exc
 
 
@@ -170,8 +203,14 @@ def process_dequeued_entry(
     admission_token: str | None = None,
     dependencies: Any | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None = None,
+    register_running_job: Callable[[Any | None], None] | None = None,
 ) -> OrcaWorkerExecutionOutcome:
-    del dependencies
+    # execute_locked_run rebuilds the same durable registrar from the resolved
+    # admission root/token so every retry attempt is fenced inside OrcaRunner.
+    del dependencies, prepare_running_job, register_running_job
+    if queue_root is None:
+        raise ValueError("queue_root is required for ORCA worker execution")
     return _engine_execution.run_internal_engine_worker_entry_with_spec_factory_options(
         cfg,
         entry,
@@ -181,6 +220,7 @@ def process_dequeued_entry(
             admission_token=admission_token,
         ),
         shutdown_requested=shutdown_requested,
+        should_cancel=lambda: get_cancel_requested(queue_root, str(entry.queue_id)),
     )
 
 
@@ -194,6 +234,7 @@ def run_worker_child_job(
     queue_root: str | Path,
     queue_id: str,
     admission_token: str | None = None,
+    await_parent_admission_handoff_fn: Callable[[Any, str], bool] | None = None,
 ) -> int:
     return run_worker_child_entrypoint(
         _worker_child,
@@ -214,6 +255,7 @@ def run_worker_child_job(
             "worker_config_path": config_path,
             "admission_token": admission_token,
         },
+        await_parent_admission_handoff_fn=await_parent_admission_handoff_fn,
     )
 
 

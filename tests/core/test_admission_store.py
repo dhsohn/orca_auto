@@ -25,7 +25,7 @@ def _patch_deterministic_liveness(
 
     def fake_kill(pid: int, sig: int) -> None:
         if pid not in live:
-            raise OSError("process is not alive")
+            raise ProcessLookupError("process is not alive")
 
     monkeypatch.setattr(store.os, "kill", fake_kill)
     monkeypatch.setattr(store, "_process_start_ticks", lambda pid: tick_map.get(pid))
@@ -144,7 +144,7 @@ def test_slot_owner_alive_handles_dead_pid_and_missing_start_ticks(
                 acquired_at="2026-04-19T00:00:00+00:00",
             )
         )
-        is False
+        is True
     )
 
 
@@ -358,7 +358,8 @@ def test_reserve_slot_honors_capacity_limit_and_raise_variant(
     assert first == "slot_fixed"
     assert second is None
     assert store.active_slot_count(tmp_path) == 1
-    assert store.reserve_slot_or_raise(tmp_path, 2, source="queue-4") == "slot_fixed"
+    monkeypatch.setattr(store, "timestamped_token", lambda prefix: f"{prefix}_second")
+    assert store.reserve_slot_or_raise(tmp_path, 2, source="queue-4") == "slot_second"
     with pytest.raises(store.AdmissionLimitReachedError):
         store.reserve_slot_or_raise(tmp_path, 1, source="queue-3")
 

@@ -6,6 +6,8 @@ from typing import Any
 
 from orca_auto.core.queue.metadata import mapping_metadata_value as queue_entry_metadata_value
 
+from ._generation import current_generation_payloads
+
 
 @dataclass(frozen=True)
 class RuntimePayloads:
@@ -37,11 +39,15 @@ def runtime_paths(
 
 def runtime_payloads(runtime: Any) -> RuntimePayloads:
     artifact = runtime.artifact
+    queue_entry = dict(runtime.queue_entry) if isinstance(runtime.queue_entry, dict) else {}
+    state = dict(artifact.state) if isinstance(artifact.state, dict) else {}
+    report = dict(artifact.report) if isinstance(artifact.report, dict) else {}
+    state, report = current_generation_payloads(queue_entry, state, report)
     return RuntimePayloads(
         record=artifact.record,
-        queue_entry=dict(runtime.queue_entry) if isinstance(runtime.queue_entry, dict) else {},
-        state=dict(artifact.state) if isinstance(artifact.state, dict) else {},
-        report=dict(artifact.report) if isinstance(artifact.report, dict) else {},
+        queue_entry=queue_entry,
+        state=state,
+        report=report,
     )
 
 
@@ -92,18 +98,25 @@ def latest_known_path(
 def selected_artifact_paths(
     *,
     record: Any,
+    queue_entry: dict[str, Any],
     state: dict[str, Any],
     report: dict[str, Any],
     current_dir: Path | None,
     latest_known_path: str,
     deps: Any,
 ) -> tuple[str, str, str, str]:
+    record_selected_inp = record.selected_input_xyz if record is not None else ""
+    if Path(deps.normalize_text(record_selected_inp)).suffix.lower() != ".inp":
+        record_selected_inp = ""
     selected_inp = deps.resolve_artifact_path(
-        state.get("selected_inp")
+        queue_entry_metadata_value(queue_entry, "selected_inp")
+        or state.get("selected_inp")
         or report.get("selected_inp")
-        or (record.selected_input_xyz if record is not None else ""),
+        or record_selected_inp,
         current_dir,
     )
+    if Path(deps.normalize_text(selected_inp)).suffix.lower() != ".inp":
+        selected_inp = ""
     state_final_result = state.get("final_result")
     state_final = state_final_result if isinstance(state_final_result, dict) else {}
     report_final_result = report.get("final_result")
@@ -113,7 +126,13 @@ def selected_artifact_paths(
         current_dir,
     )
     selected_input_xyz = deps.resolve_artifact_path(
-        (record.selected_input_xyz if record is not None else ""),
+        _selected_xyz_source(
+            record=record,
+            queue_entry=queue_entry,
+            state=state,
+            report=report,
+            deps=deps,
+        ),
         current_dir,
     )
     if not selected_input_xyz.lower().endswith(".xyz"):
@@ -127,6 +146,32 @@ def selected_artifact_paths(
         last_out_path=last_out_path,
     )
     return selected_inp, selected_input_xyz, last_out_path, optimized_xyz_path
+
+
+def _payload_selected_xyz(payload: dict[str, Any]) -> Any:
+    input_payload = payload.get("input")
+    normalized_input = input_payload if isinstance(input_payload, dict) else {}
+    return payload.get("selected_input_xyz") or normalized_input.get("selected_xyz_path")
+
+
+def _selected_xyz_source(
+    *,
+    record: Any,
+    queue_entry: dict[str, Any],
+    state: dict[str, Any],
+    report: dict[str, Any],
+    deps: Any,
+) -> Any:
+    candidates = (
+        queue_entry_metadata_value(queue_entry, "selected_input_xyz"),
+        _payload_selected_xyz(state),
+        _payload_selected_xyz(report),
+        record.selected_input_xyz if record is not None else "",
+    )
+    for candidate in candidates:
+        if Path(deps.normalize_text(candidate)).suffix.lower() == ".xyz":
+            return candidate
+    return ""
 
 
 def runtime_resources(

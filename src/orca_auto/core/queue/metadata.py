@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -26,8 +26,61 @@ def entry_metadata_text(entry: Any, key: str, default: Any = "") -> str:
     return str(entry_metadata_value(entry, key, default)).strip()
 
 
+def _resolved_absolute_path(value: Any, *, label: str) -> Path:
+    if not isinstance(value, (str, Path)):
+        raise ValueError(f"{label} must be an absolute path string.")
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{label} is required.")
+    candidate = Path(text).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError(f"{label} must be an absolute path: {text!r}")
+    try:
+        return candidate.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"{label} cannot be resolved: {text!r}") from exc
+
+
 def entry_metadata_resolved_path(entry: Any, key: str, default: Any = "") -> Path:
-    return Path(str(entry_metadata_value(entry, key, default))).expanduser().resolve()
+    return _resolved_absolute_path(
+        entry_metadata_value(entry, key, default),
+        label=f"Queue metadata {key!r}",
+    )
+
+
+def require_path_within_root(
+    path: str | Path,
+    root: str | Path,
+    *,
+    label: str = "Path",
+) -> Path:
+    resolved_path = _resolved_absolute_path(path, label=label)
+    resolved_root = _resolved_absolute_path(root, label="Allowed root")
+    try:
+        resolved_path.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError(
+            f"{label} must be under allowed root: {resolved_root}. got={resolved_path}"
+        ) from exc
+    return resolved_path
+
+
+def require_path_within_roots(
+    path: str | Path,
+    roots: Iterable[str | Path],
+    *,
+    label: str = "Path",
+) -> Path:
+    resolved_path = _resolved_absolute_path(path, label=label)
+    resolved_roots = tuple(_resolved_absolute_path(root, label="Allowed root") for root in roots)
+    for resolved_root in resolved_roots:
+        try:
+            resolved_path.relative_to(resolved_root)
+        except ValueError:
+            continue
+        return resolved_path
+    roots_text = ", ".join(str(root) for root in resolved_roots) or "<none>"
+    raise ValueError(f"{label} must be under an allowed root: {roots_text}. got={resolved_path}")
 
 
 def entry_metadata_dict(entry: Any, key: str) -> dict[str, Any]:
@@ -47,4 +100,6 @@ __all__ = [
     "mapping_metadata",
     "mapping_metadata_value",
     "object_attribute_fields",
+    "require_path_within_root",
+    "require_path_within_roots",
 ]

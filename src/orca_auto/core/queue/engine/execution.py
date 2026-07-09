@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from ..cancellable import (
     CancellableProcessExecution,
+    ProcessCleanupError,
+    retain_process_ownership_until_exit,
     run_cancellable_engine_process,
     run_cancellable_process_execution,
 )
@@ -41,6 +43,8 @@ from ..metadata import (
     entry_metadata_text,
     entry_metadata_value,
     object_attribute_fields,
+    require_path_within_root,
+    require_path_within_roots,
 )
 from ..resource_requests import (
     coerce_resource_request,
@@ -81,6 +85,8 @@ from .lifecycle import (
 
 __all__ = [
     "CancellableProcessExecution",
+    "ProcessCleanupError",
+    "retain_process_ownership_until_exit",
     "EngineArtifactFields",
     "EngineWorkerLifecycle",
     "InternalEngineWorkerAdapter",
@@ -109,6 +115,8 @@ __all__ = [
     "entry_metadata_text",
     "entry_metadata_value",
     "object_attribute_fields",
+    "require_path_within_root",
+    "require_path_within_roots",
     "entry_resource_request",
     "is_resumed_state",
     "mark_engine_job_running",

@@ -304,6 +304,58 @@ class TestConfigValidation(unittest.TestCase):
             self.assertEqual(cfg.runtime.admission_root, str(scheduler_admission))
             self.assertEqual(cfg.runtime.admission_limit, 7)
 
+    def test_partial_orca_scheduler_override_inherits_shared_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            allowed = root / "orca_runs"
+            allowed.mkdir()
+            fake_orca = root / "orca"
+            _write_fake_executable(fake_orca)
+            shared_admission = root / "shared-admission"
+
+            cfg_path = _write_orca_config(
+                root / "orca_auto.yaml",
+                {
+                    "runs_root": str(allowed),
+                    "scheduler": {
+                        "max_active_simulations": 1,
+                        "admission_root": str(shared_admission),
+                    },
+                    "orca": {
+                        "scheduler": {"admission_root": str(shared_admission)},
+                    },
+                    "paths": {"orca_executable": str(fake_orca)},
+                },
+            )
+
+            cfg = load_config(str(cfg_path))
+
+            self.assertEqual(cfg.runtime.max_concurrent, 1)
+            self.assertEqual(cfg.runtime.resolved_admission_limit, 1)
+            self.assertEqual(cfg.runtime.resolved_admission_root, str(shared_admission))
+
+    def test_non_mapping_orca_scheduler_is_rejected(self) -> None:
+        invalid_values: tuple[object, ...] = (None, "disabled", [])
+        for invalid in invalid_values:
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                allowed = root / "orca_runs"
+                allowed.mkdir()
+                fake_orca = root / "orca"
+                _write_fake_executable(fake_orca)
+                cfg_path = _write_orca_config(
+                    root / "orca_auto.yaml",
+                    {
+                        "runs_root": str(allowed),
+                        "scheduler": {"max_active_simulations": 1},
+                        "orca": {"scheduler": invalid},
+                        "paths": {"orca_executable": str(fake_orca)},
+                    },
+                )
+
+                with self.assertRaisesRegex(ValueError, "orca.scheduler must be a mapping"):
+                    load_config(str(cfg_path))
+
     def test_scheduler_max_active_simulations_rejects_invalid_explicit_values(self) -> None:
         for value in ("bad", 0, -1, True):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as td:

@@ -110,12 +110,16 @@ class InternalEngineWorkerChild:
         requeue_running_entry_fn: Callable[[Path, str], Any],
         mark_recovery_pending_context_fn: Callable[..., Any],
         process_dequeued_entry_kwargs: Mapping[str, Any] | None = None,
+        await_parent_admission_handoff_fn: Callable[[Any, str], bool] | None = None,
         **extra_process_dequeued_entry_kwargs: Any,
     ) -> int:
         active_process_kwargs = self.process_dequeued_entry_kwargs(
             process_dequeued_entry_kwargs,
             extra_process_dequeued_entry_kwargs,
         )
+        child_kwargs: dict[str, Any] = {}
+        if await_parent_admission_handoff_fn is not None:
+            child_kwargs["await_parent_admission_handoff_fn"] = await_parent_admission_handoff_fn
         return _engine_child.run_engine_worker_child_job(
             spec=self.run_spec,
             config_path=config_path,
@@ -132,6 +136,7 @@ class InternalEngineWorkerChild:
             requeue_running_entry_fn=requeue_running_entry_fn,
             mark_recovery_pending_context_fn=mark_recovery_pending_context_fn,
             process_dequeued_entry_kwargs=active_process_kwargs,
+            **child_kwargs,
         )
 
     def build_parser(self) -> argparse.ArgumentParser:

@@ -251,8 +251,8 @@ def _mark_recovery_pending_state(cfg: Any, entry: Any, *, reason: str) -> None:
     _worker_execution._mark_recovery_pending_entry(cfg, entry, reason=reason)
 
 
-def _terminate_process(proc: _ManagedProcess) -> None:
-    terminate_process_group(proc)
+def _terminate_process(proc: _ManagedProcess) -> bool:
+    return terminate_process_group(proc)
 
 
 def _try_reserve_admission_slot(cfg: Any) -> str | None:

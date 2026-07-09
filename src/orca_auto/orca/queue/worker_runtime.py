@@ -56,18 +56,23 @@ def check_cancel_requests(
     *,
     get_cancel_requested_fn: Callable[[Path, str], bool],
     job_queue_root_fn: Callable[[Any, Any], Path],
-    cancel_running_job_fn: Callable[[Any, str, Any], Any],
+    cancel_running_job_fn: Callable[[Any, str, Any], bool],
 ) -> None:
     for queue_id, job in worker._running_jobs():
+        # A completed child retained after finalization failure is no longer a
+        # cancellable process. Let completion retry own it; signalling its
+        # reaped numeric PID could terminate an unrelated reused session.
+        if job.process.poll() is not None:
+            continue
         if get_cancel_requested_fn(job_queue_root_fn(worker, job), queue_id):
-            cancel_running_job_fn(worker, queue_id, job)
-            worker._discard_running_job(queue_id)
+            if cancel_running_job_fn(worker, queue_id, job) is True:
+                worker._discard_running_job(queue_id)
 
 
 def install_worker_runtime_methods(
     worker: Any,
     *,
-    cancel_running_job_fn: Callable[[Any, str, Any], Any],
+    cancel_running_job_fn: Callable[[Any, str, Any], bool],
 ) -> None:
     worker.__dict__["_cancel_running_job"] = lambda queue_id, job: cancel_running_job_fn(
         worker, queue_id, job

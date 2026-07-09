@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
+import pytest
+
 from orca_auto.orca.orca_runner import OrcaRunner
 from tests.process_helpers import patch_missing_process_group
 
@@ -36,8 +38,11 @@ def test_terminate_subprocess_tree_falls_back_to_terminate_when_sigterm_group_ki
     proc.pid = 4242
     proc.wait.return_value = 0
 
-    with patch_missing_process_group("orca_auto.orca.orca_runner.os.killpg"):
-        runner._terminate_subprocess_tree(proc)
+    with (
+        patch_missing_process_group("orca_auto.orca.orca_runner.os.killpg"),
+        patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False),
+    ):
+        assert runner._terminate_subprocess_tree(proc)
 
     proc.terminate.assert_called_once()
 
@@ -52,11 +57,14 @@ def test_terminate_subprocess_tree_falls_back_to_proc_kill_when_sigkill_group_ki
         0,
     ]
 
-    with patch(
-        "orca_auto.orca.orca_runner.os.killpg",
-        side_effect=[None, ProcessLookupError("no pg kill")],
+    with (
+        patch(
+            "orca_auto.orca.orca_runner.os.killpg",
+            side_effect=[None, ProcessLookupError("no pg kill")],
+        ),
+        patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False),
     ):
-        runner._terminate_subprocess_tree(proc)
+        assert runner._terminate_subprocess_tree(proc)
 
     proc.kill.assert_called_once()
 
@@ -71,14 +79,19 @@ def test_terminate_subprocess_tree_waits_after_sigkill() -> None:
         0,
     ]
 
-    with patch("orca_auto.orca.orca_runner.os.killpg") as killpg:
-        runner._terminate_subprocess_tree(proc)
+    with (
+        patch("orca_auto.orca.orca_runner.os.killpg") as killpg,
+        patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False),
+    ):
+        assert runner._terminate_subprocess_tree(proc)
 
     assert killpg.mock_calls == [
         call(4646, signal.SIGTERM),
         call(4646, signal.SIGKILL),
     ]
-    assert proc.wait.mock_calls == [call(timeout=3), call(timeout=5)]
+    assert [item.kwargs["timeout"] for item in proc.wait.mock_calls] == pytest.approx(
+        [3, 5], rel=1e-4
+    )
 
 
 def test_terminate_subprocess_tree_ignores_terminate_failure_when_sigterm_group_kill_fails() -> (
@@ -91,8 +104,11 @@ def test_terminate_subprocess_tree_ignores_terminate_failure_when_sigterm_group_
     proc.terminate.side_effect = Exception("terminate failed")
     proc.wait.return_value = 0
 
-    with patch_missing_process_group("orca_auto.orca.orca_runner.os.killpg"):
-        runner._terminate_subprocess_tree(proc)
+    with (
+        patch_missing_process_group("orca_auto.orca.orca_runner.os.killpg"),
+        patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False),
+    ):
+        assert runner._terminate_subprocess_tree(proc)
 
     proc.terminate.assert_called_once()
 
@@ -110,11 +126,14 @@ def test_terminate_subprocess_tree_ignores_proc_kill_failure_when_sigkill_group_
     ]
     proc.kill.side_effect = Exception("kill failed")
 
-    with patch(
-        "orca_auto.orca.orca_runner.os.killpg",
-        side_effect=[None, ProcessLookupError("no pg kill")],
+    with (
+        patch(
+            "orca_auto.orca.orca_runner.os.killpg",
+            side_effect=[None, ProcessLookupError("no pg kill")],
+        ),
+        patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=True),
     ):
-        runner._terminate_subprocess_tree(proc)
+        assert not runner._terminate_subprocess_tree(proc)
 
     proc.kill.assert_called_once()
 

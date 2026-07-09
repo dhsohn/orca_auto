@@ -28,6 +28,7 @@ from ..manifest import (
 from ..manifest import (
     resolve_engine_manifest_with_presence as _resolve_engine_manifest,
 )
+from .orca_input import rematerialize_orca_restart_input
 from .stage_ops import (
     _REMATERIALIZED_ENGINES,
     _stage_metadata,
@@ -227,6 +228,11 @@ def _apply_orca_request_parameters(params: dict[str, Any], manifest: dict[str, A
         params["multiplicity"] = multiplicity
 
 
+def _manifest_orca_route_line(manifest: dict[str, Any]) -> str:
+    orca_manifest = _manifest_mapping(manifest.get("orca"))
+    return _normalize_text(manifest.get("orca_route_line") or orca_manifest.get("route_line"))
+
+
 def _update_request_parameters(
     payload: dict[str, Any],
     *,
@@ -314,6 +320,7 @@ def _flow_restart_settings_from_manifest(
     multiplicity = params.get(
         "multiplicity", manifest_multiplicity if manifest_multiplicity is not None else 1
     )
+    route_line = _manifest_orca_route_line(manifest)
     return {
         "applied": True,
         "resources": resources,
@@ -328,6 +335,13 @@ def _flow_restart_settings_from_manifest(
         ),
         "charge": charge,
         "multiplicity": multiplicity,
+        "orca_charge": manifest_charge,
+        "orca_multiplicity": manifest_multiplicity,
+        "orca_route_line_present": bool(route_line),
+        "orca_route_line": route_line or _normalize_text(params.get("orca_route_line")),
+        "orca_input_updates": bool(route_line)
+        or bool(manifest_charge is not None or manifest_multiplicity is not None)
+        or bool(resources),
         "crest_present": crest_present,
         "crest_mode": crest_mode,
         "crest_overrides": manifest_with_charge_spin(
@@ -367,7 +381,13 @@ def _merge_stage_charge_spin(stage: dict[str, Any], settings: dict[str, Any]) ->
     _set_stage_manifest_overrides(stage, merged or {})
 
 
-def _apply_flow_restart_settings(stage: dict[str, Any], settings: dict[str, Any]) -> None:
+def _apply_flow_restart_settings(
+    stage: dict[str, Any],
+    settings: dict[str, Any],
+    *,
+    restart_allowed_root: Path,
+    created_restart_dirs: list[Path] | None = None,
+) -> None:
     if not settings.get("applied"):
         return
     task = _stage_task(stage)
@@ -396,6 +416,20 @@ def _apply_flow_restart_settings(stage: dict[str, Any], settings: dict[str, Any]
             _set_stage_manifest_overrides(stage, _coerce_mapping(settings.get("xtb_overrides")))
         elif electronic_state_present:
             _merge_stage_charge_spin(stage, settings)
+    elif engine == "orca":
+        resources = _coerce_mapping(settings.get("resources"))
+        task_view.update_enqueue_payload(
+            {key: int(resources[key]) for key in ("max_cores", "max_memory_gb") if key in resources}
+        )
+        orca_settings = dict(settings)
+        if resources:
+            orca_settings["resources"] = dict(task_view.resource_request())
+        rematerialize_orca_restart_input(
+            stage,
+            orca_settings,
+            allowed_root=restart_allowed_root,
+            created_restart_dirs=created_restart_dirs,
+        )
 
 
 def _stage_should_rematerialize(stage: dict[str, Any], settings: dict[str, Any]) -> bool:

@@ -32,7 +32,7 @@ class WorkerAdmissionDependencies:
 
 @dataclass(frozen=True)
 class WorkerProcessDependencyCallbacks:
-    terminate_process: Callable[..., Any]
+    terminate_process: Callable[..., bool]
     wait_for_cancellable_process: Callable[..., Any]
     sleep: Callable[..., Any]
     now_utc_iso: Callable[..., Any]
@@ -45,7 +45,7 @@ class WorkerProcessDependencyCallbacks:
 
 def build_worker_process_dependency_callbacks(
     *,
-    terminate_process: Callable[..., Any],
+    terminate_process: Callable[..., bool],
     wait_for_cancellable_process: Callable[..., Any],
     sleep: Callable[..., Any],
     now_utc_iso: Callable[..., Any],
@@ -182,7 +182,7 @@ def build_worker_process_default_factories(
     timing_dependencies_type: Callable[..., Any],
     queue_dependencies_type: Callable[..., Any],
     runner_dependencies_type: Callable[..., Any],
-    terminate_process: Callable[..., Any],
+    terminate_process: Callable[..., bool],
     wait_for_cancellable_process: Callable[..., Any],
     sleep: Callable[..., Any],
     cancel_check_interval_seconds: float,
@@ -306,6 +306,7 @@ def run_worker_child_entrypoint(
     requeue_running_entry_fn: Callable[..., Any],
     mark_recovery_pending_context_fn: Callable[..., Any],
     process_dequeued_entry_kwargs: Mapping[str, Any] | None = None,
+    await_parent_admission_handoff_fn: Callable[[Any, str], bool] | None = None,
 ) -> int:
     kwargs: dict[str, Any] = {
         "config_path": config_path,
@@ -326,6 +327,8 @@ def run_worker_child_entrypoint(
     }
     if process_dequeued_entry_kwargs is not None:
         kwargs["process_dequeued_entry_kwargs"] = process_dequeued_entry_kwargs
+    if await_parent_admission_handoff_fn is not None:
+        kwargs["await_parent_admission_handoff_fn"] = await_parent_admission_handoff_fn
     return int(worker_child.run_worker_child_job(**kwargs))
 
 
@@ -343,6 +346,7 @@ def run_worker_child_entrypoint_with_dependencies(
     mark_recovery_pending_context_fn: Callable[..., Any],
     admission_token: str | None = None,
     process_dequeued_entry_kwargs: Mapping[str, Any] | None = None,
+    await_parent_admission_handoff_fn: Callable[[Any, str], bool] | None = None,
 ) -> int:
     return run_worker_child_entrypoint(
         worker_child,
@@ -360,6 +364,7 @@ def run_worker_child_entrypoint_with_dependencies(
         requeue_running_entry_fn=requeue_running_entry_fn,
         mark_recovery_pending_context_fn=mark_recovery_pending_context_fn,
         process_dequeued_entry_kwargs=process_dequeued_entry_kwargs,
+        await_parent_admission_handoff_fn=await_parent_admission_handoff_fn,
     )
 
 

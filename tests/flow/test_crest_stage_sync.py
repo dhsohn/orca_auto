@@ -206,6 +206,93 @@ def test_sync_crest_stage_submits_and_materializes_retained_conformers(
     ]
 
 
+def test_sync_crest_stage_retries_after_cancel_deferred_without_applying_old_contract(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "crest_allowed" / "job"
+    submissions = iter(
+        (
+            {
+                "status": "blocked",
+                "reason": "cancel_requested",
+                "queue_id": "q_old",
+                "job_id": "crest_old",
+            },
+            {
+                "status": "submitted",
+                "queue_id": "q_new",
+                "job_id": "crest_new",
+            },
+        )
+    )
+    contract_calls = 0
+
+    def load_contract(**_kwargs: Any) -> Any:
+        nonlocal contract_calls
+        contract_calls += 1
+        return SimpleNamespace(
+            status="queued",
+            job_id="crest_new",
+            latest_known_path=str(job_dir),
+            selected_input_xyz=str(job_dir / "input.xyz"),
+            retained_conformer_paths=(),
+            mode="standard",
+        )
+
+    stage: dict[str, Any] = {
+        "stage_id": "crest_restart",
+        "status": "planned",
+        "metadata": {"queue_id": "q_old"},
+        "task": {
+            "engine": "crest",
+            "status": "planned",
+            "payload": {
+                "job_dir": str(job_dir),
+                "selected_input_xyz": str(job_dir / "input.xyz"),
+            },
+            "enqueue_payload": {"priority": 8},
+        },
+    }
+    deps = orchestration_deps(
+        overrides={
+            "_ensure_crest_job_dir": lambda *_args, **_kwargs: str(job_dir),
+            "submit_crest_job_dir": lambda **_kwargs: next(submissions),
+            "load_crest_artifact_contract": load_contract,
+            "now_utc_iso": lambda: "2026-07-10T00:00:00+00:00",
+        }
+    )
+
+    sync_crest_stage_impl(
+        stage,
+        crest_config="/tmp/crest.yaml",
+        submit_ready=True,
+        workflow_id="wf_restart",
+        workspace_dir=tmp_path / "workspace",
+        deps=deps,
+    )
+
+    assert stage["status"] == "planned"
+    assert stage["task"]["status"] == "planned"
+    assert stage["metadata"]["submission_deferred_reason"] == "cancel_requested"
+    assert contract_calls == 0
+
+    sync_crest_stage_impl(
+        stage,
+        crest_config="/tmp/crest.yaml",
+        submit_ready=True,
+        workflow_id="wf_restart",
+        workspace_dir=tmp_path / "workspace",
+        deps=deps,
+    )
+
+    assert contract_calls == 1
+    assert stage["status"] == "queued"
+    assert stage["task"]["status"] == "queued"
+    assert stage["metadata"]["queue_id"] == "q_new"
+    assert stage["metadata"]["child_job_id"] == "crest_new"
+    assert "submission_deferred_reason" not in stage["metadata"]
+
+
 def test_sync_crest_stage_returns_without_target_when_not_submitted_and_no_queue_id(
     tmp_path: Path,
 ) -> None:

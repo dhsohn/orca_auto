@@ -17,6 +17,30 @@ def _write_workflow(workspace: Path, payload: dict[str, object]) -> None:
     (workspace / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _failed_orca_restart_stage(stage_id: str, reaction_dir: Path) -> dict[str, object]:
+    selected_inp = reaction_dir / "input.inp"
+    selected_xyz = reaction_dir / "input.xyz"
+    return {
+        "stage_id": stage_id,
+        "status": "failed",
+        "task": {
+            "engine": "orca",
+            "status": "failed",
+            "payload": {
+                "reaction_dir": str(reaction_dir),
+                "selected_inp": str(selected_inp),
+                "selected_input_xyz": str(selected_xyz),
+            },
+            "enqueue_payload": {
+                "submitter": "orca_auto_orca",
+                "reaction_dir": str(reaction_dir),
+                "selected_inp": str(selected_inp),
+            },
+        },
+        "metadata": {},
+    }
+
+
 def test_restart_failed_workflow_resets_failed_and_cancelled_stages(tmp_path: Path) -> None:
     root = tmp_path / "workflow_runs"
     workspace = root / "wf_failed"
@@ -352,6 +376,30 @@ def test_restart_failed_workflow_reloads_xtb_orca_and_endpoint_manifest_settings
     workspace = root / "wf_flow_yaml_xtb_orca"
     (workspace / "controls").mkdir(parents=True)
     (workspace / "controls" / "path.inp").write_text("$path\n$end\n", encoding="utf-8")
+    old_orca = workspace / "old_orca"
+    old_orca.mkdir(parents=True)
+    old_orca_xyz = old_orca / "input.xyz"
+    old_orca_inp = old_orca / "input.inp"
+    old_orca_xyz.write_text("2\nold\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+    old_orca_inp.write_text(
+        "\n".join(
+            [
+                "! OLD-METHOD Opt",
+                "%pal",
+                "  nprocs 1",
+                "end",
+                "%maxcore 1024",
+                "%geom",
+                "  MaxIter 99",
+                "end",
+                "* xyzfile 0 1 input.xyz",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (old_orca / "input.out").write_text("old output", encoding="utf-8")
+    (old_orca / "job_state.json").write_text('{"old": true}', encoding="utf-8")
     (workspace / "flow.yaml").write_text(
         "\n".join(
             [
@@ -427,15 +475,34 @@ def test_restart_failed_workflow_reloads_xtb_orca_and_endpoint_manifest_settings
                     "task": {
                         "engine": "orca",
                         "status": "failed",
-                        "payload": {"reaction_dir": "/tmp/rxn"},
+                        "resource_request": {"max_cores": 1, "max_memory_gb": 1},
+                        "payload": {
+                            "reaction_dir": str(old_orca),
+                            "selected_inp": str(old_orca_inp),
+                            "selected_input_xyz": str(old_orca_xyz),
+                        },
                         "enqueue_payload": {
                             "submitter": "orca_auto_orca",
-                            "reaction_dir": "/tmp/rxn",
+                            "reaction_dir": str(old_orca),
+                            "selected_inp": str(old_orca_inp),
                             "priority": 10,
-                            "command_argv": ["orca", "--priority", "10", "--run"],
+                            "command": f"orca_auto run-dir '{old_orca}' --priority 10",
+                            "command_argv": [
+                                "python",
+                                "-m",
+                                "orca_auto",
+                                "run-dir",
+                                str(old_orca),
+                                "--priority",
+                                "10",
+                            ],
+                        },
+                        "metadata": {
+                            "reaction_dir": str(old_orca),
+                            "selected_inp": str(old_orca_inp),
                         },
                     },
-                    "metadata": {"queue_id": "q_orca"},
+                    "metadata": {"queue_id": "q_orca", "reaction_dir": str(old_orca)},
                     "output_artifacts": [{"kind": "orca_out", "path": "/tmp/old.out"}],
                 },
             ],
@@ -480,8 +547,43 @@ def test_restart_failed_workflow_reloads_xtb_orca_and_endpoint_manifest_settings
     assert xtb_stage["metadata"]["job_manifest_overrides"] == xtb_stage_overrides
     assert orca_task["resource_request"] == {"max_cores": 7, "max_memory_gb": 21}
     assert orca_task["enqueue_payload"]["priority"] == 5
-    assert orca_task["enqueue_payload"]["command_argv"] == ["orca", "--priority", "5", "--run"]
+    restarted_orca = workspace / "old_orca.restart-001"
+    restarted_inp = restarted_orca / "input.inp"
+    restarted_xyz = restarted_orca / "input.xyz"
+    assert orca_task["enqueue_payload"]["reaction_dir"] == str(restarted_orca)
+    assert orca_task["enqueue_payload"]["selected_inp"] == str(restarted_inp)
+    assert orca_task["enqueue_payload"]["max_cores"] == 7
+    assert orca_task["enqueue_payload"]["max_memory_gb"] == 21
+    assert orca_task["enqueue_payload"]["command_argv"] == [
+        "python",
+        "-m",
+        "orca_auto",
+        "run-dir",
+        str(restarted_orca),
+        "--priority",
+        "5",
+    ]
     assert orca_task["enqueue_payload"]["force"] is True
+    assert orca_task["payload"]["reaction_dir"] == str(restarted_orca)
+    assert orca_task["payload"]["selected_inp"] == str(restarted_inp)
+    assert orca_task["payload"]["selected_input_xyz"] == str(restarted_xyz)
+    restarted_text = restarted_inp.read_text(encoding="utf-8")
+    assert "! PBE0 def2-SVP" in restarted_text
+    assert "nprocs 7" in restarted_text
+    assert "%maxcore 3072" in restarted_text
+    assert "%geom\n  MaxIter 99\nend" in restarted_text
+    assert "* xyzfile -1 2 input.xyz" in restarted_text
+    assert restarted_xyz.read_text(encoding="utf-8") == old_orca_xyz.read_text(encoding="utf-8")
+    assert not (restarted_orca / "input.out").exists()
+    assert not (restarted_orca / "job_state.json").exists()
+    assert "! OLD-METHOD Opt" in old_orca_inp.read_text(encoding="utf-8")
+    provenance = json.loads((restarted_orca / "source_candidate.json").read_text())[
+        "restart_provenance"
+    ]
+    assert provenance["previous_reaction_dir"] == str(old_orca)
+    persisted_enqueue = json.loads((restarted_orca / "enqueue_payload.json").read_text())
+    assert persisted_enqueue["force"] is True
+    assert persisted_enqueue["reaction_dir"] == str(restarted_orca)
 
     assert params["priority"] == 5
     assert params["max_cores"] == 7
@@ -500,6 +602,163 @@ def test_restart_failed_workflow_reloads_xtb_orca_and_endpoint_manifest_settings
     assert params["orca_route_line"] == "! PBE0 def2-SVP"
     assert params["charge"] == -1
     assert params["multiplicity"] == 2
+
+
+def test_restart_cleans_created_orca_dir_when_workflow_commit_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_commit_failure"
+    reaction_dir = workspace / "orca_stage"
+    reaction_dir.mkdir(parents=True)
+    (reaction_dir / "input.xyz").write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
+    (reaction_dir / "input.inp").write_text("! OLD\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
+    (workspace / "flow.yaml").write_text(
+        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW'\n",
+        encoding="utf-8",
+    )
+    original: dict[str, object] = {
+        "workflow_id": "wf_commit_failure",
+        "template_name": "reaction_ts_search",
+        "status": "failed",
+        "stages": [_failed_orca_restart_stage("orca_failed", reaction_dir)],
+        "metadata": {},
+    }
+    _write_workflow(workspace, original)
+
+    def fail_commit(_workspace: Path, _payload: dict[str, object]) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("orca_auto.flow.restart.mutation.write_workflow_payload", fail_commit)
+
+    with pytest.raises(OSError, match="disk full"):
+        restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    assert not (workspace / "orca_stage.restart-001").exists()
+    assert json.loads((workspace / "workflow.json").read_text(encoding="utf-8")) == original
+
+
+def test_restart_rejects_orca_reaction_dir_outside_workflow_workspace(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_external_orca"
+    outside = tmp_path / "external_orca"
+    outside.mkdir()
+    (outside / "input.xyz").write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
+    (outside / "input.inp").write_text(
+        "! OLD\n* xyzfile 0 1 input.xyz\n",
+        encoding="utf-8",
+    )
+    workspace.mkdir(parents=True)
+    (workspace / "flow.yaml").write_text(
+        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW'\n",
+        encoding="utf-8",
+    )
+    original: dict[str, object] = {
+        "workflow_id": "wf_external_orca",
+        "template_name": "reaction_ts_search",
+        "status": "failed",
+        "stages": [_failed_orca_restart_stage("orca_failed", outside)],
+        "metadata": {},
+    }
+    _write_workflow(workspace, original)
+
+    with pytest.raises(ValueError, match="reaction directory escapes"):
+        restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    assert not (tmp_path / "external_orca.restart-001").exists()
+    assert json.loads((workspace / "workflow.json").read_text(encoding="utf-8")) == original
+
+
+def test_restart_preserves_orca_dir_when_workflow_commit_visibility_is_unknown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.flow.state import write_workflow_payload as real_write_workflow_payload
+
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_ambiguous_commit"
+    reaction_dir = workspace / "orca_stage"
+    reaction_dir.mkdir(parents=True)
+    (reaction_dir / "input.xyz").write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
+    (reaction_dir / "input.inp").write_text(
+        "! OLD\n* xyzfile 0 1 input.xyz\n",
+        encoding="utf-8",
+    )
+    (workspace / "flow.yaml").write_text(
+        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW'\n",
+        encoding="utf-8",
+    )
+    _write_workflow(
+        workspace,
+        {
+            "workflow_id": "wf_ambiguous_commit",
+            "template_name": "reaction_ts_search",
+            "status": "failed",
+            "stages": [_failed_orca_restart_stage("orca_failed", reaction_dir)],
+            "metadata": {},
+        },
+    )
+
+    def visible_then_fail(commit_workspace: Path, payload: dict[str, object]) -> None:
+        real_write_workflow_payload(commit_workspace, payload)
+        raise OSError("parent fsync failed after replace")
+
+    def fail_visibility_check(_workspace: Path) -> dict[str, object]:
+        raise OSError("transient read failure")
+
+    monkeypatch.setattr(
+        "orca_auto.flow.restart.mutation.write_workflow_payload",
+        visible_then_fail,
+    )
+    monkeypatch.setattr(
+        "orca_auto.flow.restart.mutation.load_workflow_payload",
+        fail_visibility_check,
+    )
+
+    with pytest.raises(OSError, match="parent fsync failed after replace"):
+        restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    restarted = workspace / "orca_stage.restart-001"
+    saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    assert saved["stages"][0]["task"]["payload"]["reaction_dir"] == str(restarted)
+    assert restarted.is_dir()
+    assert (restarted / "input.inp").is_file()
+
+
+def test_restart_cleans_prior_orca_dirs_when_later_rematerialization_fails(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_later_failure"
+    valid_dir = workspace / "orca_valid"
+    valid_dir.mkdir(parents=True)
+    (valid_dir / "input.xyz").write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
+    (valid_dir / "input.inp").write_text("! OLD\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
+    missing_dir = workspace / "orca_missing"
+    (workspace / "flow.yaml").write_text(
+        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW'\n",
+        encoding="utf-8",
+    )
+    original: dict[str, object] = {
+        "workflow_id": "wf_later_failure",
+        "template_name": "reaction_ts_search",
+        "status": "failed",
+        "stages": [
+            _failed_orca_restart_stage("orca_valid", valid_dir),
+            _failed_orca_restart_stage("orca_missing", missing_dir),
+        ],
+        "metadata": {},
+    }
+    _write_workflow(workspace, original)
+
+    with pytest.raises(FileNotFoundError, match="reaction_dir not found"):
+        restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    assert not (workspace / "orca_valid.restart-001").exists()
+    assert json.loads((workspace / "workflow.json").read_text(encoding="utf-8")) == original
 
 
 def test_restart_failed_workflow_rejects_non_mapping_flow_yaml(tmp_path: Path) -> None:

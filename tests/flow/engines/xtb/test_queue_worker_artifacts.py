@@ -219,7 +219,7 @@ def test_try_reserve_admission_slot_uses_resolved_values(
     monkeypatch.setattr(
         queue_cmd,
         "reserve_slot",
-        lambda root, limit, *, source, app_name: _fake_reserve_slot(
+        lambda root, limit, *, source, app_name, **_kwargs: _fake_reserve_slot(
             calls, root, limit, source, app_name
         ),
     )
@@ -273,12 +273,13 @@ def test_run_worker_job_processes_loaded_entry_and_releases_slot(
         queue_root=queue_root,
         queue_id=entry.queue_id,
         admission_token="slot-1",
+        await_parent_admission_handoff_fn=lambda *_args: True,
     )
 
     assert exit_code == 0
     assert processed[0]["args"] == (cfg, entry)
     assert processed[0]["kwargs"]["queue_root"] == queue_root.resolve()
-    assert released == [(cfg.runtime.admission_root, "slot-1")]
+    assert released == []
 
 
 def test_run_worker_job_uses_dependency_config_and_admission_groups(

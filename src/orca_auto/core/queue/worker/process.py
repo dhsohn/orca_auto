@@ -70,6 +70,20 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
     def _before_run(self) -> None:
         self._reconcile_worker_state()
 
+    def _sleep(self) -> None:
+        # A replacement parent may initially observe a live child from the
+        # previous parent and correctly skip it. Reconcile every poll cycle so
+        # that, once that child exits (or is killed), its queue entry/engine
+        # record is recovered without waiting for another daemon restart.
+        # Do not race a completed in-memory job whose finalization is being
+        # retained for retry after an error.
+        completed_retry_pending = any(
+            self._poll_job(job) is not None for _queue_id, job in self._running_jobs()
+        )
+        if not completed_retry_pending:
+            self._reconcile_worker_state()
+        super()._sleep()
+
     def run_once(
         self,
         *,

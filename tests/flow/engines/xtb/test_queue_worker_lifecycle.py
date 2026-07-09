@@ -287,7 +287,7 @@ def test_queue_worker_run_once_waits_for_child_completion_and_prints_summary(
             self._poll_values = iter([None, 0])
 
         def poll(self) -> int | None:
-            return next(self._poll_values)
+            return next(self._poll_values, 0)
 
         def wait(self, timeout: float | None = None) -> int:
             return 0

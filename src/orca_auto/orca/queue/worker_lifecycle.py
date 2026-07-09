@@ -67,6 +67,8 @@ def reconcile_orphaned_running(
     worker: Any,
     *,
     callbacks: OrcaQueueWorkerLifecycleCallbacks,
+    protected_queue_keys: set[tuple[str, str]] | None = None,
+    protected_queue_ids: set[str] | None = None,
 ) -> None:
     """Fix queue entries stuck as running from a previous worker crash."""
     reconcile_orphaned_process_entries(
@@ -75,7 +77,11 @@ def reconcile_orphaned_running(
             queue_roots_fn=callbacks.queue_roots,
             reconcile_stale_slots_fn=callbacks.reconcile_stale_slots,
             reconcile_orphaned_running_entries_fn=callbacks.reconcile_orphaned_running_entries,
-            reconcile_orphaned_running_entries_kwargs={"ignore_worker_pid": True},
+            reconcile_orphaned_running_entries_kwargs={
+                "ignore_worker_pid": True,
+                "protected_queue_keys": protected_queue_keys or set(),
+                "protected_queue_ids": protected_queue_ids or set(),
+            },
         ),
     )
 

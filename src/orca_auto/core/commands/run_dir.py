@@ -10,6 +10,8 @@ import yaml
 from orca_auto.core.paths import validate_job_dir
 from orca_auto.core.paths.workflow import workflow_workspace_internal_engine_paths_from_path
 
+SUPPRESS_QUEUED_NOTIFICATION_CONTEXT_KEY = "suppress_queued_notification"
+
 
 @dataclass(frozen=True)
 class EngineRunDirSubmission:
@@ -116,7 +118,9 @@ def build_engine_queued_record(
     index_fields: dict[str, Any],
     notification_fields: dict[str, Any],
 ) -> EngineQueuedRecord:
-    resource_request = submission.context["resource_request"]
+    resource_request = submission.metadata.get("resource_request")
+    if not isinstance(resource_request, dict):
+        resource_request = submission.context["resource_request"]
     index_payload = dict(index_fields)
     index_payload["resource_request"] = resource_request
     index_payload["resource_actual"] = resource_request
@@ -133,8 +137,8 @@ def record_engine_run_dir_queued_with_callbacks(
     entry: Any,
     *,
     callbacks: EngineQueuedRecordCallbacks,
-) -> None:
-    record_queued_common(
+) -> bool:
+    return record_queued_common(
         cfg,
         submission,
         entry,
@@ -150,9 +154,9 @@ def engine_run_dir_queued_recorder_from_callbacks(
     *,
     recorder_name: str = "_record_queued",
     module_name: str = __name__,
-) -> Callable[[Any, EngineRunDirSubmission, Any], None]:
-    def record_queued(cfg: Any, submission: EngineRunDirSubmission, entry: Any) -> None:
-        record_engine_run_dir_queued_with_callbacks(
+) -> Callable[[Any, EngineRunDirSubmission, Any], bool]:
+    def record_queued(cfg: Any, submission: EngineRunDirSubmission, entry: Any) -> bool:
+        return record_engine_run_dir_queued_with_callbacks(
             cfg,
             submission,
             entry,
@@ -221,8 +225,16 @@ def record_queued_common(
     write_state_fn: Callable[[Path, dict[str, Any]], Any],
     upsert_job_record_fn: Callable[..., Any],
     notify_job_queued_fn: Callable[..., Any],
-) -> None:
-    job_dir = submission.context["job_dir"]
+) -> bool:
+    """Write the durable queued view and attempt its notification at most once.
+
+    A replay deliberately suppresses the notification because a raised transport
+    error cannot distinguish pre-delivery failure from post-delivery failure.
+    Exactly-once delivery therefore requires a separate durable outbox with a
+    transport idempotency key; it is not part of this queue publication protocol.
+    """
+    raw_job_dir = submission.metadata.get("job_dir") or submission.context["job_dir"]
+    job_dir = Path(raw_job_dir).expanduser().resolve()
     record = build_record_fn(submission, entry)
     write_state_fn(job_dir, record.state_payload)
     upsert_job_record_fn(
@@ -232,10 +244,14 @@ def record_queued_common(
         job_dir=job_dir,
         **record.index_fields,
     )
-    notify_job_queued_fn(
-        cfg,
-        job_id=submission.task_id,
-        queue_id=entry.queue_id,
-        job_dir=job_dir,
-        **record.notification_fields,
+    if bool(submission.context.get(SUPPRESS_QUEUED_NOTIFICATION_CONTEXT_KEY, False)):
+        return True
+    return bool(
+        notify_job_queued_fn(
+            cfg,
+            job_id=submission.task_id,
+            queue_id=entry.queue_id,
+            job_dir=job_dir,
+            **record.notification_fields,
+        )
     )

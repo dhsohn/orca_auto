@@ -11,7 +11,7 @@ from .runtime import InternalEngineQueueRuntime
 SlotReleaser = Callable[[str | Path, str], object]
 BackgroundProcessStarter = Callable[[list[str]], Any]
 DefaultConfigPath = Callable[[], str]
-ProcessTerminator = Callable[[Any], object]
+ProcessTerminator = Callable[[Any], bool]
 WorkerStartErrorHandler = Callable[[Any, Path, Any, str, OSError], None]
 CompletedJobFinalizer = Callable[[Any, str, Any, int], None]
 WorkerStateReconciler = Callable[[Any], None]

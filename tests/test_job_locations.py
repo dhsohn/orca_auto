@@ -396,7 +396,7 @@ def test_load_orca_contract_payload_returns_normalized_runtime_fields() -> None:
                 "return_code": 0,
                 "analyzer_status": "completed",
                 "analyzer_reason": "normal_termination",
-                "markers": [],
+                "markers": {"terminated_normally": True, "imaginary_frequency_count": 0},
                 "patch_actions": [],
             }
         ]
@@ -479,6 +479,10 @@ def test_load_orca_contract_payload_returns_normalized_runtime_fields() -> None:
         assert payload["optimized_xyz_path"] == str(xyz.resolve())
         assert payload["last_out_path"] == str(out.resolve())
         assert payload["attempt_count"] == 1
+        assert payload["attempts"][0]["markers"] == {
+            "terminated_normally": True,
+            "imaginary_frequency_count": 0,
+        }
         assert payload["max_retries"] == 3
         assert payload["resource_request"] == {"max_cores": 8, "max_memory_gb": 16}
 

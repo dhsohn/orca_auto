@@ -20,7 +20,12 @@ from orca_auto.core.config.engines import (
 from orca_auto.core.config.engines import (
     resource_request_from_manifest,
 )
-from orca_auto.core.engine_process import start_logged_process
+from orca_auto.core.engine_process import (
+    cleanup_failed_logged_process_start,
+    start_logged_process,
+)
+from orca_auto.core.queue.engine import execution as _engine_execution
+from orca_auto.core.queue.processes import terminate_process_group
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.core.utils import process as process_utils
 
@@ -174,8 +179,9 @@ def _run_candidate_sp_job(
     candidate_run_dir: Path,
     manifest: dict[str, Any],
     should_cancel: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None = None,
     on_running_job: Callable[[XtbRunningJob | None], None] | None = None,
-    terminate_process: Callable[[subprocess.Popen[str]], None] | None = None,
+    terminate_process: Callable[[subprocess.Popen[str]], bool] | None = None,
 ) -> XtbRunResult:
     candidate_run_dir.mkdir(parents=True, exist_ok=True)
     candidate_input = candidate_run_dir / "input.xyz"
@@ -187,62 +193,66 @@ def _run_candidate_sp_job(
     candidate_manifest_path.write_text(
         yaml.safe_dump(candidate_manifest, sort_keys=False), encoding="utf-8"
     )
-    running = start_xtb_job(
-        cfg,
-        job_dir=candidate_run_dir,
-        selected_input_xyz=candidate_input,
-    )
-    if on_running_job is not None:
-        on_running_job(running)
-    try:
-        return _wait_for_candidate_sp_result(
-            running,
-            should_cancel=should_cancel,
-            on_cancel=terminate_process,
+
+    def start_candidate() -> XtbRunningJob:
+        launch_kwargs: dict[str, Any] = {}
+        if prepare_running_job is not None:
+            launch_kwargs["before_popen"] = prepare_running_job
+            if on_running_job is not None:
+                launch_kwargs["on_launch_aborted"] = lambda: on_running_job(None)
+        return start_xtb_job(
+            cfg,
+            job_dir=candidate_run_dir,
+            selected_input_xyz=candidate_input,
+            **launch_kwargs,
         )
-    finally:
-        if on_running_job is not None:
-            on_running_job(None)
+
+    return _engine_execution.run_cancellable_engine_process(
+        start_job=start_candidate,
+        finalize_job=finalize_xtb_job,
+        terminate_process=terminate_process or terminate_process_group,
+        build_failure_result=lambda exc: exc,
+        should_cancel=should_cancel,
+        check_cancel_before_poll=True,
+        register_running_job=on_running_job,
+        should_reraise_exception=lambda _exc: True,
+    )
 
 
 def _wait_for_candidate_sp_result(
     running: Any,
     *,
     should_cancel: Callable[[], bool] | None,
-    on_cancel: Callable[[subprocess.Popen[str]], None] | None,
+    on_cancel: Callable[[subprocess.Popen[str]], bool] | None,
     sleep_fn: Callable[[float], None] = time.sleep,
     poll_interval_seconds: float = 1.0,
 ) -> XtbRunResult:
     process = getattr(running, "process", None)
     if process is None:
         return finalize_xtb_job(running)
-    while True:
-        if should_cancel is not None and should_cancel():
-            _request_candidate_process_stop(process, on_cancel=on_cancel)
-            return finalize_xtb_job(
-                running,
-                forced_status="cancelled",
-                forced_reason="cancel_requested",
-            )
-        if process.poll() is not None:
-            return finalize_xtb_job(running)
-        sleep_fn(poll_interval_seconds)
+    return _engine_execution.run_cancellable_engine_process(
+        start_job=lambda: running,
+        finalize_job=finalize_xtb_job,
+        terminate_process=on_cancel or terminate_process_group,
+        build_failure_result=lambda exc: exc,
+        should_cancel=should_cancel,
+        sleep=sleep_fn,
+        poll_interval_seconds=poll_interval_seconds,
+        check_cancel_before_poll=True,
+        should_reraise_exception=lambda _exc: True,
+    )
 
 
 def _request_candidate_process_stop(
     process: subprocess.Popen[str],
     *,
-    on_cancel: Callable[[subprocess.Popen[str]], None] | None,
-) -> None:
+    on_cancel: Callable[[subprocess.Popen[str]], bool] | None,
+) -> bool:
     if process.poll() is not None:
-        return
+        return True
     if on_cancel is not None:
-        on_cancel(process)
-        return
-    try:
-        process.terminate()
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.debug("xtb_process_terminate_failed: error=%s", exc)
+        return on_cancel(process)
+    return terminate_process_group(process)
 
 
 def _ranking_deps() -> _runner_ranking.RankingDeps:
@@ -261,8 +271,9 @@ def run_xtb_ranking_job(
     *,
     job_dir: Path,
     should_cancel: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None = None,
     on_running_job: Callable[[XtbRunningJob | None], None] | None = None,
-    terminate_process: Callable[[subprocess.Popen[str]], None] | None = None,
+    terminate_process: Callable[[subprocess.Popen[str]], bool] | None = None,
 ) -> XtbRunResult:
     manifest = load_job_manifest(job_dir)
     inputs = resolve_job_inputs(job_dir, manifest)
@@ -272,13 +283,21 @@ def run_xtb_ranking_job(
         manifest=manifest,
         inputs=inputs,
         should_cancel=should_cancel,
+        prepare_running_job=prepare_running_job,
         on_running_job=on_running_job,
         terminate_process=terminate_process,
         deps=_ranking_deps(),
     )
 
 
-def start_xtb_job(cfg: AppConfig, *, job_dir: Path, selected_input_xyz: Path) -> XtbRunningJob:
+def start_xtb_job(
+    cfg: AppConfig,
+    *,
+    job_dir: Path,
+    selected_input_xyz: Path,
+    before_popen: Callable[[], None] | None = None,
+    on_launch_aborted: Callable[[], None] | None = None,
+) -> XtbRunningJob:
     manifest = load_job_manifest(job_dir)
     resource_request = resource_request_from_manifest(cfg, manifest)
     resource_actual = _engine_runner.resource_actual_dict(resource_request)
@@ -297,39 +316,60 @@ def start_xtb_job(cfg: AppConfig, *, job_dir: Path, selected_input_xyz: Path) ->
 
     stdout_log = job_dir / "xtb.stdout.log"
     stderr_log = job_dir / "xtb.stderr.log"
-    launched = start_logged_process(
-        command,
-        cwd=job_dir,
-        stdout_log=stdout_log,
-        stderr_log=stderr_log,
-        max_cores=resource_request["max_cores"],
-        base_env=os.environ,
-        now_utc_iso_fn=now_utc_iso,
-        popen_fn=subprocess.Popen,
-        stdin_value=subprocess.DEVNULL,
-        preexec_fn=process_utils.memory_limit_preexec(
-            resource_request["max_memory_gb"],
-            setrlimit_fn=resource.setrlimit,
-            limit_resource=resource.RLIMIT_AS,
-        ),
-    )
-    return XtbRunningJob(
-        process=launched.process,
-        command=tuple(command),
-        started_at=launched.started_at,
-        stdout_log=str(launched.stdout_log.resolve()),
-        stderr_log=str(launched.stderr_log.resolve()),
-        stdout_handle=launched.stdout_handle,
-        stderr_handle=launched.stderr_handle,
-        selected_input_xyz=str(selected_input_xyz.resolve()),
-        job_type=str(inputs["job_type"]),
-        reaction_key=str(inputs["reaction_key"]),
-        input_summary=dict(inputs["input_summary"]),
-        manifest_path=str((job_dir / MANIFEST_FILE_NAME).resolve()),
-        job_dir=str(job_dir.resolve()),
-        resource_request=resource_request,
-        resource_actual=resource_actual,
-    )
+    resolved_stdout_log = str(stdout_log.resolve())
+    resolved_stderr_log = str(stderr_log.resolve())
+    resolved_selected_input = str(selected_input_xyz.resolve())
+    resolved_manifest_path = str((job_dir / MANIFEST_FILE_NAME).resolve())
+    resolved_job_dir = str(job_dir.resolve())
+    resolved_job_type = str(inputs["job_type"])
+    resolved_reaction_key = str(inputs["reaction_key"])
+    resolved_input_summary = dict(inputs["input_summary"])
+    if before_popen is not None:
+        before_popen()
+    try:
+        launched = start_logged_process(
+            command,
+            cwd=job_dir,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
+            max_cores=resource_request["max_cores"],
+            base_env=os.environ,
+            now_utc_iso_fn=now_utc_iso,
+            popen_fn=subprocess.Popen,
+            stdin_value=subprocess.DEVNULL,
+            preexec_fn=process_utils.memory_limit_preexec(
+                resource_request["max_memory_gb"],
+                setrlimit_fn=resource.setrlimit,
+                limit_resource=resource.RLIMIT_AS,
+            ),
+        )
+    except Exception:
+        if on_launch_aborted is not None:
+            on_launch_aborted()
+        raise
+    try:
+        return XtbRunningJob(
+            process=launched.process,
+            command=tuple(command),
+            started_at=launched.started_at,
+            stdout_log=resolved_stdout_log,
+            stderr_log=resolved_stderr_log,
+            stdout_handle=launched.stdout_handle,
+            stderr_handle=launched.stderr_handle,
+            selected_input_xyz=resolved_selected_input,
+            job_type=resolved_job_type,
+            reaction_key=resolved_reaction_key,
+            input_summary=resolved_input_summary,
+            manifest_path=resolved_manifest_path,
+            job_dir=resolved_job_dir,
+            resource_request=resource_request,
+            resource_actual=resource_actual,
+        )
+    except BaseException:
+        cleanup_failed_logged_process_start(launched)
+        if on_launch_aborted is not None:
+            on_launch_aborted()
+        raise
 
 
 def finalize_xtb_job(

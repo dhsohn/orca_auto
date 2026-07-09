@@ -55,8 +55,9 @@ def run_ranking_job(
     manifest: dict[str, Any],
     inputs: dict[str, Any],
     should_cancel: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None = None,
     on_running_job: Callable[[Any | None], None] | None = None,
-    terminate_process: Callable[[subprocess.Popen[str]], None] | None = None,
+    terminate_process: Callable[[subprocess.Popen[str]], bool] | None = None,
     deps: RankingDeps,
 ) -> Any:
     candidate_paths = ranking_candidate_paths(inputs)
@@ -81,6 +82,7 @@ def run_ranking_job(
             manifest=manifest,
             candidate_paths=candidate_paths,
             should_cancel=should_cancel,
+            prepare_running_job=prepare_running_job,
             on_running_job=on_running_job,
             terminate_process=terminate_process,
             deps=deps,

@@ -38,11 +38,12 @@ def test_run_worker_child_job_processes_loaded_entry_and_releases_slot(
         molecule_key_resolver=molecule_key_resolver,
         requeue_running_entry_fn=lambda *_args: None,
         mark_recovery_pending_context_fn=lambda *_args, **_kwargs: None,
+        await_parent_admission_handoff_fn=lambda *_args: True,
     )
 
     assert rc == 0
     assert len(installed) == 1
-    assert released == [("/tmp/admission", "slot-1")]
+    assert released == []
     assert processed[0]["args"] == (cfg, entry)
     assert processed[0]["kwargs"]["queue_root"] == (tmp_path / "queue").resolve()
     assert processed[0]["kwargs"]["molecule_key_resolver"] is molecule_key_resolver
@@ -73,6 +74,7 @@ def test_run_worker_child_job_injects_default_molecule_key_resolver(
         dependencies_fn=lambda: object(),
         requeue_running_entry_fn=lambda *_args: None,
         mark_recovery_pending_context_fn=lambda *_args, **_kwargs: None,
+        await_parent_admission_handoff_fn=lambda *_args: True,
     )
 
     assert rc == 0
@@ -109,12 +111,13 @@ def test_run_worker_child_job_requeues_and_marks_recovery_on_shutdown(
         mark_recovery_pending_context_fn=lambda cfg_obj, context_obj, *, reason: recovery.append(
             (cfg_obj, context_obj, reason)
         ),
+        await_parent_admission_handoff_fn=lambda *_args: True,
     )
 
     assert rc == 0
     assert requeued == [((tmp_path / "queue").resolve(), "queue-1")]
     assert recovery == [(cfg, context, "worker_shutdown")]
-    assert released == [("/tmp/admission", "slot-1")]
+    assert released == []
 
 
 def test_run_worker_child_job_returns_failure_when_entry_is_not_running(
@@ -139,7 +142,8 @@ def test_run_worker_child_job_returns_failure_when_entry_is_not_running(
         molecule_key_resolver=lambda *_args: "mol-1",
         requeue_running_entry_fn=lambda *_args: None,
         mark_recovery_pending_context_fn=lambda *_args, **_kwargs: None,
+        await_parent_admission_handoff_fn=lambda *_args: True,
     )
 
     assert rc == 1
-    assert released == [("/tmp/admission", "slot-1")]
+    assert released == []

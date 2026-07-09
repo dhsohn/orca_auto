@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,6 +20,12 @@ from orca_auto.core.queue.dependencies import (
     build_dependency_container,
     dependency_group,
     resolve_dependency_groups,
+)
+from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_KEY,
+    QUEUE_RECORD_SYNC_OWNER_PID_KEY,
+    QUEUE_RECORD_SYNC_PREPARING,
+    QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
 )
 from orca_auto.core.queue.worker import process as worker_process_helpers
 from tests.process_helpers import FakeManagedProcess, recording_killpg
@@ -41,6 +49,7 @@ def _entry(
     priority: int = 10,
     enqueued_at: str = "2026-01-01T00:00:00Z",
     cancel_requested: bool = False,
+    metadata: dict[str, object] | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         status=SimpleNamespace(value=status),
@@ -48,6 +57,7 @@ def _entry(
         enqueued_at=enqueued_at,
         queue_id=queue_id,
         cancel_requested=cancel_requested,
+        metadata=dict(metadata or {}),
     )
 
 
@@ -248,6 +258,30 @@ def test_dequeue_next_across_roots_selects_best_pending_entry(tmp_path: Path) ->
     )
 
     assert result == (second, queues[second][0])
+
+
+def test_dequeue_next_across_roots_skips_entry_with_live_publisher(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    publishing = _entry(
+        "publishing",
+        priority=1,
+        metadata={
+            QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING,
+            QUEUE_RECORD_SYNC_OWNER_PID_KEY: os.getpid(),
+            QUEUE_RECORD_SYNC_UPDATED_AT_KEY: datetime.now(UTC).isoformat(),
+        },
+    )
+    ready = _entry("ready", priority=9)
+    queues = {first: [publishing], second: [ready]}
+
+    result = worker_common.dequeue_next_across_roots(
+        (first, second),
+        list_queue_fn=lambda root: queues[root],
+        dequeue_next_fn=lambda root: queues[root][0],
+    )
+
+    assert result == (second, ready)
 
 
 def test_dequeue_next_across_roots_accept_entry_fn_skips_other_engine_entries(
@@ -963,6 +997,45 @@ def test_terminate_process_group_handles_finished_process() -> None:
     assert worker_common.terminate_process_group(SimpleNamespace(poll=lambda: 0))
 
 
+def test_terminate_process_group_does_not_signal_reused_reaped_pid() -> None:
+    proc = FakeManagedProcess(pid=321, poll_result=0)
+    killpg, killpg_calls = recording_killpg()
+
+    assert worker_common.terminate_process_group(
+        proc,
+        killpg_fn=killpg,
+        deps=process_helpers.ProcessGroupTerminationDeps(
+            process_group_exists=lambda _pgid: True,
+            pid_exists=lambda _pid: True,
+        ),
+    )
+
+    assert killpg_calls == []
+    assert proc.terminate_calls == 0
+    assert proc.kill_calls == 0
+
+
+def test_terminate_process_group_refuses_unknown_reaped_pid_identity() -> None:
+    proc = FakeManagedProcess(pid=322, poll_result=0)
+    killpg, killpg_calls = recording_killpg()
+
+    def unknown(_pid: int) -> bool:
+        raise OSError("unknown pid probe failure")
+
+    assert not worker_common.terminate_process_group(
+        proc,
+        killpg_fn=killpg,
+        deps=process_helpers.ProcessGroupTerminationDeps(
+            process_group_exists=lambda _pgid: True,
+            pid_exists=unknown,
+        ),
+    )
+
+    assert killpg_calls == []
+    assert proc.terminate_calls == 0
+    assert proc.kill_calls == 0
+
+
 def test_terminate_process_group_falls_back_to_proc_methods() -> None:
     proc = FakeManagedProcess(
         pid=123,
@@ -985,12 +1058,15 @@ def test_terminate_process_group_falls_back_to_proc_methods() -> None:
         killpg_fn=killpg,
         sigterm=15,
         sigkill=9,
+        deps=process_helpers.ProcessGroupTerminationDeps(
+            process_group_exists=lambda _pgid: True,
+        ),
     )
 
     assert killpg_calls == [(123, 15), (123, 9)]
     assert proc.terminate_calls == 1
     assert proc.kill_calls == 1
-    assert proc.wait_calls == [1, 2]
+    assert proc.wait_calls == pytest.approx([1, 2], rel=1e-4)
 
 
 def test_terminate_process_group_returns_true_after_forced_exit() -> None:
@@ -1010,10 +1086,13 @@ def test_terminate_process_group_returns_true_after_forced_exit() -> None:
         killpg_fn=killpg,
         sigterm=15,
         sigkill=9,
+        deps=process_helpers.ProcessGroupTerminationDeps(
+            process_group_exists=lambda _pgid: False,
+        ),
     )
 
     assert killpg_calls == [(124, 15), (124, 9)]
-    assert proc.wait_calls == [1, 2]
+    assert proc.wait_calls == pytest.approx([1, 2], rel=1e-4)
 
 
 def test_shutdown_running_process_job_keeps_running_state_when_process_survives(
@@ -1426,7 +1505,7 @@ def test_run_terminal_process_side_effects_uses_standard_hooks() -> None:
     ]
 
 
-def test_shutdown_child_process_with_grace_forces_after_deadline(
+def test_shutdown_child_process_with_grace_retains_live_child_after_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -1451,7 +1530,7 @@ def test_shutdown_child_process_with_grace_forces_after_deadline(
         calls.append("force")
         proc.rc = 9
 
-    child_process_helpers.shutdown_child_process_with_grace(
+    result = child_process_helpers.shutdown_child_process_with_grace(
         job,
         terminate_process_fn=force_terminate,
         finalize_child_exit_fn=lambda job_arg, rc: finalized.append((job_arg, rc)),
@@ -1459,8 +1538,9 @@ def test_shutdown_child_process_with_grace_forces_after_deadline(
         sleep_fn=lambda seconds: calls.append(f"sleep:{seconds}"),
     )
 
-    assert calls == ["terminate", "sleep:0.1", "force"]
-    assert finalized == [(job, 9)]
+    assert result is False
+    assert calls == ["terminate", "sleep:0.1"]
+    assert finalized == []
 
 
 def test_shutdown_child_process_with_grace_skips_finalize_when_force_fails(
@@ -1485,7 +1565,7 @@ def test_shutdown_child_process_with_grace_skips_finalize_when_force_fails(
         calls.append("force")
         return False
 
-    child_process_helpers.shutdown_child_process_with_grace(
+    result = child_process_helpers.shutdown_child_process_with_grace(
         job,
         terminate_process_fn=force_terminate,
         finalize_child_exit_fn=lambda _job, rc: finalized.append(rc),
@@ -1493,11 +1573,12 @@ def test_shutdown_child_process_with_grace_skips_finalize_when_force_fails(
         sleep_fn=lambda seconds: calls.append(f"sleep:{seconds}"),
     )
 
-    assert calls == ["terminate", "force"]
+    assert result is False
+    assert calls == ["terminate"]
     assert finalized == []
 
 
-def test_shutdown_child_process_with_grace_continues_when_terminate_raises(
+def test_shutdown_child_process_with_grace_retains_when_signal_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Process:
@@ -1515,7 +1596,7 @@ def test_shutdown_child_process_with_grace_continues_when_terminate_raises(
 
     monkeypatch.setattr(child_process_helpers.time, "monotonic", lambda: 0.0)
 
-    child_process_helpers.shutdown_child_process_with_grace(
+    result = child_process_helpers.shutdown_child_process_with_grace(
         job,
         terminate_process_fn=lambda proc: setattr(proc, "rc", 9),
         finalize_child_exit_fn=lambda _job, rc: finalized.append(rc),
@@ -1523,7 +1604,8 @@ def test_shutdown_child_process_with_grace_continues_when_terminate_raises(
         sleep_fn=lambda _seconds: pytest.fail("sleep should not run after deadline"),
     )
 
-    assert finalized == [9]
+    assert result is False
+    assert finalized == []
 
 
 def test_request_job_cancellation_uses_signal_then_kill_fallback(

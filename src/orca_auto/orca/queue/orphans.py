@@ -118,10 +118,14 @@ def reconcile_orphaned_running_entries(
     allowed_root: Path,
     *,
     ignore_worker_pid: bool = False,
+    protected_queue_keys: set[tuple[str, str]] | None = None,
+    protected_queue_ids: set[str] | None = None,
 ) -> int:
     return _queue_reconciliation.reconcile_orphaned_running_entries(
         allowed_root,
         ignore_worker_pid=ignore_worker_pid,
+        protected_queue_keys=protected_queue_keys,
+        protected_queue_ids=protected_queue_ids,
         deps=queue_reconciliation_deps(),
         logger=logger,
     )

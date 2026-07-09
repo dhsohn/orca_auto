@@ -9,6 +9,7 @@ from orca_auto.core.config.schema import resolved_admission_limit
 
 from ..child.execution import find_queue_entry_by_id
 from ..dependencies import ChildQueueWorkerDeps
+from ..publication import queue_entry_is_claimable
 from .models import ReservedQueueEntry
 
 T = TypeVar("T")
@@ -68,11 +69,18 @@ def reserve_engine_queue_worker_slot(
     reserve_slot_fn: Callable[..., str | None] = reserve_slot,
 ) -> str | None:
     engine_slug = str(engine).strip().replace("-", "_")
-    return reserve_queue_worker_slot(
-        cfg,
-        source=engine_queue_worker_source(engine_slug),
-        app_name=f"orca_auto_{engine_slug}",
-        reserve_slot_fn=reserve_slot_fn,
+    reservation_kwargs: dict[str, Any] = {
+        "source": engine_queue_worker_source(engine_slug),
+        "app_name": f"orca_auto_{engine_slug}",
+    }
+    if engine_slug in {"crest", "orca", "xtb"}:
+        # Internal-engine child entrypoints publish engine identities through
+        # register_running_job (ORCA once per retry attempt).
+        reservation_kwargs["engine_process_state"] = "idle"
+    return reserve_slot_fn(
+        resolve_admission_root(cfg),
+        resolve_admission_limit(cfg),
+        **reservation_kwargs,
     )
 
 
@@ -99,6 +107,8 @@ def dequeue_next_across_roots(
             status_value = getattr(getattr(entry, "status", None), "value", None)
             status = str(status_value).strip().lower()
             if status != "pending" or getattr(entry, "cancel_requested", False):
+                continue
+            if not queue_entry_is_claimable(entry):
                 continue
             if accept_entry_fn is not None and not accept_entry_fn(entry):
                 if dequeue_entry_fn is None:
