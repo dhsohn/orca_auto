@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..input_blocks import file_route_lines
-from ..parser import parse_opt_progress
+from ..parser import OptProgress, parse_opt_progress
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,
@@ -24,10 +24,11 @@ from .render import (
     ChartSeries,
     ReportComponent,
     ReportPage,
+    job_meta_html,
     line_chart_svg,
     metric_card,
     render_page,
-    status_badge_kind,
+    status_badges,
     verdict_note,
 )
 
@@ -78,6 +79,11 @@ def collect_opt_report_data(
     steps: tuple[tuple[int, float], ...] = ()
     opt_converged = False
     final_energy: float | None = None
+    # Prefer the latest attempt output that actually contains optimization
+    # cycles; a retry that died before the first cycle parses to an empty
+    # trace and must not mask an earlier attempt's convergence data.
+    chosen: OptProgress | None = None
+    fallback: OptProgress | None = None
     for position in range(len(attempts) - 1, -1, -1):
         out_raw = str(attempts[position].get("out_path") or "").strip()
         if not out_raw or not Path(out_raw).exists():
@@ -86,12 +92,18 @@ def collect_opt_report_data(
             progress = parse_opt_progress(out_raw)
         except (OSError, FileNotFoundError):
             continue
-        formula, method, basis_set = progress.formula, progress.method, progress.basis_set
-        steps = tuple((step.cycle, step.energy_hartree) for step in progress.steps)
-        opt_converged = progress.is_converged
+        if fallback is None:
+            fallback = progress
+        if progress.steps:
+            chosen = progress
+            break
+    selected = chosen if chosen is not None else fallback
+    if selected is not None:
+        formula, method, basis_set = selected.formula, selected.method, selected.basis_set
+        steps = tuple((step.cycle, step.energy_hartree) for step in selected.steps)
+        opt_converged = selected.is_converged
         if steps:
             final_energy = steps[-1][1]
-        break
 
     analysis, frequency_attempt_index = find_frequency_analysis(attempts)
 
@@ -154,20 +166,17 @@ def _imaginary_note(data: OptReportData) -> str:
 
 
 def opt_report_badges(data: OptReportData) -> tuple[tuple[str, str], ...]:
-    status_kind = status_badge_kind(data.status)
-    badges: list[tuple[str, str]] = [(data.status or "unknown", status_kind)]
-    if data.reason:
-        badges.append((data.reason, "warn" if status_kind == "bad" else "muted"))
-    return tuple(badges)
+    return tuple(status_badges(data.status, data.reason))
 
 
 def opt_report_meta_html(data: OptReportData) -> str:
     formula_text = f" &#183; {html.escape(data.formula)}" if data.formula else ""
-    return (
-        f"<code>{html.escape(data.route_line)}</code>{formula_text}<br>"
-        f"job <code>{html.escape(data.job_id)}</code>"
-        f" &#183; started {html.escape(data.started_at)}"
-        f" &#183; finished {html.escape(data.finished_at)}"
+    return job_meta_html(
+        route_line=data.route_line,
+        job_id=data.job_id,
+        started_at=data.started_at,
+        finished_at=data.finished_at,
+        extra_html=formula_text,
     )
 
 

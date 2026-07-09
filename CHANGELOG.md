@@ -8,7 +8,41 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- IRC report parsers now match real ORCA 6 output. The settings parser keys on
+  the `Intrinsic Reaction Coordinate Calculation` banner (there is no
+  "IRC settings" header in real output) and accepts dotted rows whose labels
+  contain periods or whose leader dots butt against the label, so the
+  "IRC setup" section and the SI block's trajectory-file lines actually render;
+  the iteration parser handles the asterisk-boxed `FORWARD IRC` / `BACKWARD
+  IRC` banners and the real five-column table (`Iteration E dE max(|G|)
+  RMS(G)` — there is no separate step column), so the "IRC iterations" section
+  renders too. `IrcIterationPoint` lost its fictional `step` field and gained
+  `delta_e_kcal`. Previously both parsers returned empty on every real output
+  while passing tests against invented fixtures.
+- NEB settings are no longer truncated at the `Generation of initial path ....
+  idpp` row: dotted setting rows are matched before the section terminators, so
+  the full table (RMSD handling, convergence tolerances, L-BFGS parameters —
+  31 rows instead of 9 on a real output) reaches the "NEB setup" section.
+- Job reports no longer let a content-free final attempt (a retry that died
+  before the driver started, or a trailing Freq-only run) mask an earlier
+  attempt's parsed data: the NEB, IRC, and Opt collectors now prefer the latest
+  attempt output that actually contains path points / iterations / cycles,
+  falling back to the latest parseable output for formula metadata.
+- Workflow-report energy-axis tick labels use two decimals when the tick step
+  is below 0.5 kcal/mol, so a 0.25-wide grid no longer labels its ticks
+  "0.2"/"0.8".
+
 ### Changed
+
+- Report-module cleanup: the status/reason badge pair, the meta line, and the
+  dotted-settings table (`ReportSetting` in `orca.report.settings`) are shared
+  helpers instead of five near-identical copies; `IrcSetting`/`NebSetting` are
+  gone. `final_out_path` moved from `orca.report.si` to `orca.report.attempts`
+  (the IRC module had a private reimplementation). The report composer's
+  primary facet is a typed `JobReportData` union instead of `object` +
+  `getattr` duck-typing.
 
 - Config schema: the single runs root moved to a top-level `runs_root` key.
   `orca.runtime.allowed_root` and the `workflow.root` override are gone — with

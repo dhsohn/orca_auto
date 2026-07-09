@@ -37,7 +37,12 @@ NEB settings
 Method type                             ....  climbing image
 Tangent type                            ....  improved
 Number of intermediate images           ....  8
+Generation of initial path              ....  image dependent pair potential
 Initial path via TS guess               ....  off
+
+Optimization method:
+Method                                  ....  L-BFGS
+Max. iterations                         ....  500
 
 Generation of  the initial path:
 Writing initial trajectory to file      ....  nebts_initial_path_trj.xyz
@@ -123,19 +128,23 @@ IR SPECTRUM
 """
 
 _IRC_BLOCK = """
-----------------------
-IRC settings
-----------------------
-Direction                               .... both
-Writing full trajectory file            .... neb_IRC_Full.xyz
+--------------------------------------------------------------------------------
+                   Intrinsic Reaction Coordinate Calculation
+--------------------------------------------------------------------------------
+
+Settings:
+Direction                           .... both
+Storing full IRC trajectory in      .... neb_IRC_Full.xyz
 
 ----------------------
 IRC PATH SUMMARY
 ----------------------
+All gradients are in Eh/Bohr.
+
 Step     E(Eh)        dE(kcal/mol)  max(|G|)  RMS(G)
- -1    -344.015000    -11.12       0.00160   0.00080
-  0    -343.998640      0.00       0.00200   0.00090 <= TS
-  1    -344.020000    -14.26       0.00150   0.00070
+  1    -344.015000    -11.12       0.00160   0.00080
+  2    -343.998640      0.00       0.00200   0.00090 <= TS
+  3    -344.020000    -14.26       0.00150   0.00070
 
 """
 
@@ -239,6 +248,43 @@ def test_collect_neb_report_data_parses_path_and_iterations(tmp_path: Path) -> N
     assert data.ts_steps == ((1, -343.999), (2, -343.99864))
     assert data.imaginary_count == 1
     assert data.settings[0].label == "Method type"
+    # "Generation of initial path ...." is a setting row, not the section
+    # terminator, and dotted labels may contain periods ("Max. iterations");
+    # the table must run up to the "Generation of  the initial path:" line.
+    labels = [setting.label for setting in data.settings]
+    assert "Generation of initial path" in labels
+    assert "Max. iterations" in labels
+    assert not any("nebts_initial_path_trj" in setting.value for setting in data.settings)
+
+
+def test_collect_neb_report_data_skips_contentless_final_attempt(tmp_path: Path) -> None:
+    _write_neb_inp(tmp_path / "rxn.inp")
+    out_path = tmp_path / "rxn.out"
+    _write_neb_out(out_path)
+    dead_out = tmp_path / "rxn_retry.out"
+    dead_out.write_text("ORCA crashed before the NEB driver started\n", encoding="utf-8")
+
+    state = _state(tmp_path, out_path)
+    state["attempts"].append(
+        {
+            "index": 2,
+            "inp_path": str(tmp_path / "rxn.inp"),
+            "out_path": str(dead_out),
+            "return_code": 1,
+            "analyzer_status": "failed",
+            "analyzer_reason": "abnormal_termination",
+            "markers": {},
+            "patch_actions": [],
+            "started_at": "2026-07-03T04:01:00+00:00",
+            "ended_at": "2026-07-03T04:01:30+00:00",
+        }
+    )
+    data = collect_neb_report_data(tmp_path, state)
+
+    assert data is not None
+    assert len(data.path_points) == 11
+    assert data.neb_converged
+    assert data.ts_steps == ((1, -343.999), (2, -343.99864))
 
 
 def test_neb_path_plot_x_places_ts_between_neighboring_images() -> None:

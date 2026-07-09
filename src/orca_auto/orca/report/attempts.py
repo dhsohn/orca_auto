@@ -6,6 +6,7 @@ import html
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 
@@ -76,6 +77,24 @@ def attempt_report_rows(
             )
         )
     return tuple(rows)
+
+
+def final_out_path(state: Mapping[str, Any]) -> Path | None:
+    """Last existing output file of the run, preferring the final result."""
+    final_result = state.get("final_result")
+    if isinstance(final_result, Mapping):
+        last_out = str(final_result.get("last_out_path") or "").strip()
+        if last_out and Path(last_out).exists():
+            return Path(last_out)
+    attempts = state.get("attempts")
+    attempts = attempts if isinstance(attempts, list) else []
+    for attempt in reversed(attempts):
+        if not isinstance(attempt, Mapping):
+            continue
+        out_raw = str(attempt.get("out_path") or "").strip()
+        if out_raw and Path(out_raw).exists():
+            return Path(out_raw)
+    return None
 
 
 def parse_iso(value: Any) -> datetime | None:

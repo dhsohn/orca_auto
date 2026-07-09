@@ -27,16 +27,17 @@ from .render import (
     ChartSeries,
     ReportComponent,
     ReportPage,
+    job_meta_html,
     line_chart_svg,
     metric_card,
     render_page,
-    status_badge_kind,
+    status_badges,
     verdict_note,
 )
+from .settings import ReportSetting, match_dotted_setting, settings_table_html
 
 _NEB_TS_ROUTE_RE = re.compile(r"\b(?:ZOOM-)?NEB-TS\b", re.IGNORECASE)
 _NEB_SETTINGS_HEADER_RE = re.compile(r"^\s*NEB settings\s*$", re.IGNORECASE)
-_DOTTED_SETTING_RE = re.compile(r"^\s*([^.\n][^.\n]*?)\s+\.{3,}\s+(.+?)\s*$")
 _HEI_HEADER_RE = re.compile(r"\bE\(HEI\)-E\(0\)", re.IGNORECASE)
 _CI_HEADER_RE = re.compile(r"\bE\(CI\)-E\(0\)", re.IGNORECASE)
 _NEB_ITERATION_RE = re.compile(
@@ -70,12 +71,6 @@ _FINAL_ENERGY_RE = re.compile(r"FINAL SINGLE POINT ENERGY\s+([-\d.]+)")
 
 
 @dataclass(frozen=True)
-class NebSetting:
-    label: str
-    value: str
-
-
-@dataclass(frozen=True)
 class NebIterationPoint:
     phase: str
     optimizer: str
@@ -103,7 +98,7 @@ class NebPathPoint:
 
 @dataclass(frozen=True)
 class NebParsedOutput:
-    settings: tuple[NebSetting, ...]
+    settings: tuple[ReportSetting, ...]
     iterations: tuple[NebIterationPoint, ...]
     path_points: tuple[NebPathPoint, ...]
     possible_intermediates: tuple[str, ...]
@@ -125,7 +120,7 @@ class NebReportData:
     finished_at: str
     total_duration_text: str
     attempts: tuple[AttemptReportRow, ...]
-    settings: tuple[NebSetting, ...]
+    settings: tuple[ReportSetting, ...]
     iterations: tuple[NebIterationPoint, ...]
     path_points: tuple[NebPathPoint, ...]
     possible_intermediates: tuple[str, ...]
@@ -171,9 +166,9 @@ def collect_neb_report_data(
     route_lines = file_route_lines(selected_inp)
     attempts = attempt_dicts(state)
     rows: list[AttemptReportRow] = []
-    parsed_by_attempt: list[tuple[int, NebParsedOutput]] = []
-    progress_by_attempt: list[tuple[int, OptProgress]] = []
-    ts_steps_by_attempt: list[tuple[int, tuple[tuple[int, float], ...]]] = []
+    parsed_attempts: list[NebParsedOutput] = []
+    progress_attempts: list[OptProgress] = []
+    ts_steps_attempts: list[tuple[tuple[int, float], ...]] = []
 
     for position, attempt in enumerate(attempts):
         if position == 0:
@@ -185,11 +180,11 @@ def collect_neb_report_data(
         progress = _parse_attempt_opt_progress(attempt)
         ts_steps = _parse_attempt_ts_steps(attempt)
         if parsed is not None:
-            parsed_by_attempt.append((index, parsed))
+            parsed_attempts.append(parsed)
         if progress is not None:
-            progress_by_attempt.append((index, progress))
+            progress_attempts.append(progress)
         if ts_steps:
-            ts_steps_by_attempt.append((index, ts_steps))
+            ts_steps_attempts.append(ts_steps)
         rows.append(
             AttemptReportRow(
                 index=index,
@@ -203,10 +198,18 @@ def collect_neb_report_data(
             )
         )
 
-    parsed = parsed_by_attempt[-1][1] if parsed_by_attempt else _empty_neb_parsed_output()
-    progress = progress_by_attempt[-1][1] if progress_by_attempt else None
-
-    ts_steps = ts_steps_by_attempt[-1][1] if ts_steps_by_attempt else ()
+    # Prefer the latest attempt whose output actually contains NEB data (or
+    # optimization cycles); a retry that died before the driver started parses
+    # to an empty shell and must not mask an earlier attempt's results.
+    parsed = next(
+        (entry for entry in reversed(parsed_attempts) if _neb_parse_has_content(entry)),
+        parsed_attempts[-1] if parsed_attempts else _empty_neb_parsed_output(),
+    )
+    progress = next(
+        (entry for entry in reversed(progress_attempts) if entry.steps),
+        progress_attempts[-1] if progress_attempts else None,
+    )
+    ts_steps = ts_steps_attempts[-1] if ts_steps_attempts else ()
     formula = method = basis_set = ""
     final_energy = _ts_path_energy(parsed.path_points)
     opt_converged = False
@@ -293,6 +296,10 @@ def _parse_attempt_ts_steps(attempt: Mapping[str, Any]) -> tuple[tuple[int, floa
         return ()
 
 
+def _neb_parse_has_content(parsed: NebParsedOutput) -> bool:
+    return bool(parsed.path_points or parsed.iterations or parsed.settings)
+
+
 def _empty_neb_parsed_output() -> NebParsedOutput:
     return NebParsedOutput(
         settings=(),
@@ -345,27 +352,24 @@ def _parse_ts_refinement_steps(out_path: Path) -> tuple[tuple[int, float], ...]:
     return tuple(steps)
 
 
-def _parse_neb_settings(text: str) -> tuple[NebSetting, ...]:
-    settings: list[NebSetting] = []
+def _parse_neb_settings(text: str) -> tuple[ReportSetting, ...]:
+    settings: list[ReportSetting] = []
     in_settings = False
     for line in text.splitlines():
-        stripped = line.strip()
         if _NEB_SETTINGS_HEADER_RE.match(line):
             in_settings = True
             continue
         if not in_settings:
             continue
-        if stripped.lower().startswith(("generation of", "starting iterations")):
-            break
-        match = _DOTTED_SETTING_RE.match(line)
-        if match is None:
+        # Match dotted rows before checking terminators: "Generation of
+        # initial path ....  idpp" is itself a setting, while the section ends
+        # at the non-dotted "Generation of  the initial path:" narration.
+        setting = match_dotted_setting(line)
+        if setting is not None:
+            settings.append(setting)
             continue
-        settings.append(
-            NebSetting(
-                label=" ".join(match.group(1).split()),
-                value=" ".join(match.group(2).split()),
-            )
-        )
+        if line.strip().lower().startswith(("generation of", "starting iterations")):
+            break
     return tuple(settings)
 
 
@@ -603,10 +607,7 @@ def _neb_history_chart_svg(data: NebReportData) -> str:
 
 
 def neb_report_badges(data: NebReportData) -> tuple[tuple[str, str], ...]:
-    status_kind = status_badge_kind(data.status)
-    badges: list[tuple[str, str]] = [(data.status or "unknown", status_kind)]
-    if data.reason:
-        badges.append((data.reason, "warn" if status_kind == "bad" else "muted"))
+    badges = status_badges(data.status, data.reason)
     if data.neb_converged:
         badges.append(("CI-NEB converged", "ok"))
     if data.ts_converged:
@@ -616,11 +617,12 @@ def neb_report_badges(data: NebReportData) -> tuple[tuple[str, str], ...]:
 
 def neb_report_meta_html(data: NebReportData) -> str:
     formula_text = f" &#183; {html.escape(data.formula)}" if data.formula else ""
-    return (
-        f"<code>{html.escape(data.route_line)}</code>{formula_text}<br>"
-        f"job <code>{html.escape(data.job_id)}</code>"
-        f" &#183; started {html.escape(data.started_at)}"
-        f" &#183; finished {html.escape(data.finished_at)}"
+    return job_meta_html(
+        route_line=data.route_line,
+        job_id=data.job_id,
+        started_at=data.started_at,
+        finished_at=data.finished_at,
+        extra_html=formula_text,
     )
 
 
@@ -755,19 +757,6 @@ def _neb_history_html(data: NebReportData) -> str:
     )
 
 
-def _settings_table_html(settings: Sequence[NebSetting]) -> str:
-    if not settings:
-        return ""
-    rows = [
-        f"<tr><td>{html.escape(setting.label)}</td><td>{html.escape(setting.value)}</td></tr>"
-        for setting in settings
-    ]
-    return (
-        "<table><thead><tr><th>Setting</th><th>Value</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table>"
-    )
-
-
 def neb_report_component(
     data: NebReportData,
     *,
@@ -785,7 +774,7 @@ def neb_report_component(
         ("NEB-CI optimization", _neb_history_html(data)),
         ("TS optimization convergence", ts_chart),
     ]
-    settings_html = _settings_table_html(data.settings)
+    settings_html = settings_table_html(data.settings)
     if settings_html:
         sections.append(("NEB setup", settings_html))
     if include_attempt_chain:
@@ -831,7 +820,6 @@ __all__ = [
     "NebParsedOutput",
     "NebPathPoint",
     "NebReportData",
-    "NebSetting",
     "collect_neb_report_data",
     "input_uses_neb_ts",
     "neb_report_badges",

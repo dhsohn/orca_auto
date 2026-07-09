@@ -58,39 +58,67 @@ FINAL SINGLE POINT ENERGY     -343.997280000000
 THE OPTIMIZATION HAS CONVERGED
 """
 
+# Mirrors the real ORCA 6 IRC driver output: a banner (no "IRC settings"
+# header), dotted settings with periods inside labels and leaders butting the
+# label, asterisk-boxed direction banners, and iteration rows without a
+# separate step column.
 _IRC_BLOCK = """
-----------------------
-IRC settings
-----------------------
-Direction                               .... both
-Maximum number of IRC steps             .... 30
-Initial Hessian                         .... Calc_Hess
-Gradient tolerance                      .... 0.000300
-Writing forward trajectory file         .... job_IRC_F.xyz
-Writing backward trajectory file        .... job_IRC_B.xyz
-Writing full trajectory file            .... job_IRC_Full.xyz
+--------------------------------------------------------------------------------
+                   Intrinsic Reaction Coordinate Calculation
+--------------------------------------------------------------------------------
 
-FORWARD IRC
-Iter Step E(Eh) max(|G|) RMS(G)
-  0   0  -343.997280  0.00200  0.00090
-  1   1  -344.020000  0.00150  0.00070
-  2   2  -344.050000  0.00100  0.00050
+System:
+Nr. of atoms                        .... 2
+Algorithm: SD (steepest descent step) plus correction
+Settings:
+Max. no of cycles        MaxIter    .... 30
+Direction                           .... Forward and backward
+Initial displacement type           .... Energy
+  Initial displacement energy change.... 2.000 mEh
+Convergence Tolerances:
+  Max. Gradient            TolMAXG  ....  2.0000e-03 Eh/bohr
+Storing full IRC trajectory in      .... job_IRC_Full_trj.xyz
+Storing forward trajectory in       .... job_IRC_F_trj.xyz
+Storing backward trajectory in      .... job_IRC_B_trj.xyz
 
-BACKWARD IRC
-Iter Step E(Eh) max(|G|) RMS(G)
-  0   0  -343.997280  0.00200  0.00090
-  1  -1  -344.015000  0.00160  0.00080
-  2  -2  -344.045000  0.00110  0.00055
+         *************************************************************
+         *                          FORWARD IRC                      *
+         *************************************************************
 
-----------------------
-IRC PATH SUMMARY
-----------------------
-Step     E(Eh)        dE(kcal/mol)  max(|G|)  RMS(G)
- -2    -344.045000    -29.95       0.00110   0.00055
- -1    -344.015000    -11.12       0.00160   0.00080
-  0    -343.997280      0.00       0.00200   0.00090 <= TS
-  1    -344.020000    -14.26       0.00150   0.00070
-  2    -344.050000    -33.08       0.00100   0.00050
+Iteration    E(Eh)      dE(kcal/mol)  max(|G|)   RMS(G)
+Convergence thresholds                0.002000  0.000500
+    0     -343.997280    0.000000    0.002000  0.000900
+    1     -344.020000  -14.257000    0.001500  0.000700
+    2     -344.050000  -33.081000    0.001000  0.000500
+
+                      ***********************HURRAY********************
+                      ***            THE IRC HAS CONVERGED          ***
+                      *************************************************
+
+         *************************************************************
+         *                          BACKWARD IRC                     *
+         *************************************************************
+
+Iteration    E(Eh)      dE(kcal/mol)  max(|G|)   RMS(G)
+Convergence thresholds                0.002000  0.000500
+    0     -344.015000  -11.123000    0.001600  0.000800
+    1     -344.045000  -29.947000    0.001100  0.000550
+
+                      ***********************HURRAY********************
+                      ***            THE IRC HAS CONVERGED          ***
+                      *************************************************
+
+---------------------------------------------------------------
+                       IRC PATH SUMMARY
+---------------------------------------------------------------
+All gradients are in Eh/Bohr.
+
+Step        E(Eh)      dE(kcal/mol)  max(|G|)   RMS(G)
+   1     -344.045000   -29.947000    0.001100  0.000550
+   2     -344.015000   -11.123000    0.001600  0.000800
+   3     -343.997280     0.000000    0.000200  0.000033 <= TS
+   4     -344.020000   -14.257000    0.001500  0.000700
+   5     -344.050000   -33.081000    0.001000  0.000500
 
 """
 
@@ -128,7 +156,27 @@ def _write_out(
     )
 
 
-def _state(reaction_dir: Path, out_path: Path) -> dict[str, Any]:
+def _state(
+    reaction_dir: Path,
+    out_path: Path,
+    *,
+    extra_attempts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    attempts: list[dict[str, Any]] = [
+        {
+            "index": 1,
+            "inp_path": str(reaction_dir / "rxn.inp"),
+            "out_path": str(out_path),
+            "return_code": 0,
+            "analyzer_status": "completed",
+            "analyzer_reason": "normal_termination",
+            "markers": {"irc_marker_found": True},
+            "patch_actions": [],
+            "started_at": "2026-07-07T01:00:00+00:00",
+            "ended_at": "2026-07-07T01:12:00+00:00",
+        }
+    ]
+    attempts.extend(extra_attempts or [])
     return {
         "job_id": "job_irc",
         "run_id": "run_irc",
@@ -138,20 +186,7 @@ def _state(reaction_dir: Path, out_path: Path) -> dict[str, Any]:
         "status": "completed",
         "started_at": "2026-07-07T01:00:00+00:00",
         "updated_at": "2026-07-07T01:12:00+00:00",
-        "attempts": [
-            {
-                "index": 1,
-                "inp_path": str(reaction_dir / "rxn.inp"),
-                "out_path": str(out_path),
-                "return_code": 0,
-                "analyzer_status": "completed",
-                "analyzer_reason": "normal_termination",
-                "markers": {"irc_marker_found": True},
-                "patch_actions": [],
-                "started_at": "2026-07-07T01:00:00+00:00",
-                "ended_at": "2026-07-07T01:12:00+00:00",
-            }
-        ],
+        "attempts": attempts,
         "final_result": {
             "status": "completed",
             "analyzer_status": "completed",
@@ -169,19 +204,21 @@ def test_parse_irc_output_reads_settings_iterations_and_path_summary(tmp_path: P
     parsed = parse_irc_output(out_path)
 
     assert parsed.irc_marker_found
-    assert parsed.settings[0].label == "Direction"
-    assert any(setting.value == "job_IRC_Full.xyz" for setting in parsed.settings)
+    assert parsed.settings[0].label == "Nr. of atoms"
+    assert any(setting.label == "Max. no of cycles MaxIter" for setting in parsed.settings)
+    assert any(setting.value == "2.000 mEh" for setting in parsed.settings)
+    assert any(setting.value == "job_IRC_Full_trj.xyz" for setting in parsed.settings)
     assert [point.direction for point in parsed.iterations] == [
         "FORWARD",
         "FORWARD",
         "FORWARD",
         "BACKWARD",
         "BACKWARD",
-        "BACKWARD",
     ]
+    assert parsed.iterations[2].delta_e_kcal == pytest.approx(-33.081)
     assert len(parsed.path_points) == 5
     ts = next(point for point in parsed.path_points if point.marker == "TS")
-    assert ts.step == 0
+    assert ts.step == 3
     assert ts.energy_hartree == pytest.approx(-343.99728)
 
 
@@ -194,9 +231,41 @@ def test_collect_irc_report_data_summarizes_path(tmp_path: Path) -> None:
 
     assert data is not None
     assert data.orca_version == "6.0.1"
-    assert data.path_points[-1].relative_kcal == pytest.approx(-33.08)
-    assert data.attempts[0].detail == "5 path pts, 6 IRC iter"
+    assert data.path_points[-1].relative_kcal == pytest.approx(-33.081)
+    assert data.attempts[0].detail == "5 path pts, 5 IRC iter"
     assert data.optimization_steps == ()
+
+
+def test_collect_irc_report_data_skips_contentless_final_attempt(tmp_path: Path) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! B3LYP def2-SVP IRC")
+    out_path = tmp_path / "rxn.out"
+    _write_out(out_path, route="! B3LYP def2-SVP IRC")
+    dead_out = tmp_path / "rxn_retry.out"
+    dead_out.write_text("ORCA crashed before the IRC driver started\n", encoding="utf-8")
+
+    state = _state(
+        tmp_path,
+        out_path,
+        extra_attempts=[
+            {
+                "index": 2,
+                "inp_path": str(tmp_path / "rxn.inp"),
+                "out_path": str(dead_out),
+                "return_code": 1,
+                "analyzer_status": "failed",
+                "analyzer_reason": "abnormal_termination",
+                "markers": {},
+                "patch_actions": [],
+                "started_at": "2026-07-07T01:13:00+00:00",
+                "ended_at": "2026-07-07T01:13:30+00:00",
+            }
+        ],
+    )
+    data = collect_irc_report_data(tmp_path, state)
+
+    assert data is not None
+    assert len(data.path_points) == 5
+    assert data.irc_marker_found
 
 
 def test_irc_report_html_renders_path_profile(tmp_path: Path) -> None:
@@ -212,7 +281,7 @@ def test_irc_report_html_renders_path_profile(tmp_path: Path) -> None:
     assert "IRC path profile" in text
     assert "TS marker" in text
     assert "path endpoint 1" in text
-    assert "job_IRC_Full.xyz" in text
+    assert "job_IRC_Full_trj.xyz" in text
     assert "kcal mol⁻¹" in text
     assert "<polyline" in text
     assert "TS optimization convergence" not in text
@@ -280,7 +349,7 @@ def test_neb_trajectory_not_captured_as_irc_setting(tmp_path: Path) -> None:
     parsed = parse_irc_output(out_path)
 
     assert not any("neb_init" in s.value for s in parsed.settings)
-    assert any("job_IRC_Full.xyz" in s.value for s in parsed.settings)
+    assert any("job_IRC_Full_trj.xyz" in s.value for s in parsed.settings)
 
 
 def test_write_report_files_emits_irc_html_and_summary_si(tmp_path: Path) -> None:
@@ -294,4 +363,5 @@ def test_write_report_files_emits_irc_html_and_summary_si(tmp_path: Path) -> Non
     assert reports["si_block"] == str(tmp_path / "si_block.md")
     si_text = (tmp_path / "si_block.md").read_text(encoding="utf-8")
     assert "IRC validation summary" in si_text
+    assert "Storing full IRC trajectory in: job_IRC_Full_trj.xyz" in si_text
     assert "C      0.000000" not in si_text

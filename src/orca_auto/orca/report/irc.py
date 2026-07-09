@@ -19,6 +19,7 @@ from .attempts import (
     attempt_report_rows,
     attempts_table_html,
     duration_text,
+    final_out_path,
     terminal_actions_html,
 )
 from .frequencies import ModeSummary, find_frequency_analysis, mode_section_html, mode_summaries
@@ -27,20 +28,24 @@ from .render import (
     ChartSeries,
     ReportComponent,
     ReportPage,
+    job_meta_html,
     line_chart_svg,
     metric_card,
     render_page,
-    status_badge_kind,
+    status_badges,
     verdict_note,
 )
+from .settings import ReportSetting, match_dotted_setting, settings_table_html
 
-_IRC_SETTINGS_HEADER_RE = re.compile(r"^\s*IRC settings\s*$", re.IGNORECASE)
-_DOTTED_SETTING_RE = re.compile(r"^\s*([^.\n][^.\n]*?)\s+\.{3,}\s+(.+?)\s*$")
-_IRC_DIRECTION_RE = re.compile(r"^\s*(FORWARD|BACKWARD)\s+IRC\b", re.IGNORECASE)
+# The IRC driver announces itself with a banner and prints its settings as
+# dotted rows up to the first blank line; there is no "IRC settings" header.
+_IRC_SETTINGS_HEADER_RE = re.compile(r"Intrinsic Reaction Coordinate Calculation", re.IGNORECASE)
+# Direction banners are boxed in asterisks, so the token sits mid-line.
+_IRC_DIRECTION_RE = re.compile(r"\b(FORWARD|BACKWARD)\s+IRC\b")
+# Iteration rows: iteration, E(Eh), dE(kcal/mol), max(|G|), RMS(G).
 _IRC_ITERATION_RE = re.compile(
-    r"^\s*(?:[A-Za-z][\w-]*\s+)?"
-    r"(\d+)\s+"
-    r"([-+]?\d+)\s+"
+    r"^\s*(\d+)\s+"
+    r"([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)\s+"
     r"([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)\s+"
     r"([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)\s+"
     r"([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)\s*$"
@@ -63,17 +68,11 @@ _SECTION_HEADER_RE = re.compile(
 
 
 @dataclass(frozen=True)
-class IrcSetting:
-    label: str
-    value: str
-
-
-@dataclass(frozen=True)
 class IrcIterationPoint:
     direction: str
     iteration: int
-    step: int
     energy_hartree: float
+    delta_e_kcal: float
     max_gradient: float
     rms_gradient: float
 
@@ -92,7 +91,7 @@ class IrcPathPoint:
 
 @dataclass(frozen=True)
 class IrcParsedOutput:
-    settings: tuple[IrcSetting, ...]
+    settings: tuple[ReportSetting, ...]
     iterations: tuple[IrcIterationPoint, ...]
     path_points: tuple[IrcPathPoint, ...]
     irc_marker_found: bool
@@ -113,7 +112,7 @@ class IrcReportData:
     finished_at: str
     total_duration_text: str
     attempts: tuple[AttemptReportRow, ...]
-    settings: tuple[IrcSetting, ...]
+    settings: tuple[ReportSetting, ...]
     iterations: tuple[IrcIterationPoint, ...]
     path_points: tuple[IrcPathPoint, ...]
     irc_marker_found: bool
@@ -130,7 +129,7 @@ class IrcSiBlock:
     name: str
     route_line: str
     orca_version: str
-    settings: tuple[IrcSetting, ...]
+    settings: tuple[ReportSetting, ...]
     path_points: tuple[IrcPathPoint, ...]
     last_out_name: str
 
@@ -172,7 +171,7 @@ def collect_irc_report_data(
     parsed = _latest_parsed_irc_output(attempts)
     optimization_steps, optimization_converged = _latest_opt_progress(attempts)
 
-    out_path = _final_out_path(state)
+    out_path = final_out_path(state)
     result: OrcaResult | None = None
     if out_path is not None:
         try:
@@ -229,7 +228,7 @@ def collect_irc_si_block(reaction_dir: Path, state: Mapping[str, Any]) -> IrcSiB
     if not IRC_ROUTE_RE.search(" ".join(route_lines)):
         return None
 
-    out_path = _final_out_path(state)
+    out_path = final_out_path(state)
     if out_path is None:
         raise IrcReportError(f"no output file found for {reaction_dir}")
     parsed = parse_irc_output(out_path)
@@ -290,10 +289,7 @@ def render_irc_si_block_md(block: IrcSiBlock) -> str:
 
 
 def irc_report_badges(data: IrcReportData) -> tuple[tuple[str, str], ...]:
-    status_kind = status_badge_kind(data.status)
-    badges: list[tuple[str, str]] = [(data.status or "unknown", status_kind)]
-    if data.reason:
-        badges.append((data.reason, "warn" if status_kind == "bad" else "muted"))
+    badges = status_badges(data.status, data.reason)
     if data.irc_marker_found:
         badges.append(("IRC path found", "ok"))
     return tuple(badges)
@@ -302,11 +298,12 @@ def irc_report_badges(data: IrcReportData) -> tuple[tuple[str, str], ...]:
 def irc_report_meta_html(data: IrcReportData) -> str:
     formula_text = f" &#183; {html.escape(data.formula)}" if data.formula else ""
     version_text = f" &#183; ORCA {html.escape(data.orca_version)}" if data.orca_version else ""
-    return (
-        f"<code>{html.escape(data.route_line)}</code>{formula_text}{version_text}<br>"
-        f"job <code>{html.escape(data.job_id)}</code>"
-        f" &#183; started {html.escape(data.started_at)}"
-        f" &#183; finished {html.escape(data.finished_at)}"
+    return job_meta_html(
+        route_line=data.route_line,
+        job_id=data.job_id,
+        started_at=data.started_at,
+        finished_at=data.finished_at,
+        extra_html=formula_text + version_text,
     )
 
 
@@ -335,7 +332,7 @@ def irc_report_component(
         '<p class="muted">No IRC path-summary points were parsed from the attempt outputs.</p>'
     )
     sections.append(("IRC path profile", chart + _path_table_html(data.path_points)))
-    settings_html = _settings_table_html(data.settings)
+    settings_html = settings_table_html(data.settings)
     if settings_html:
         sections.append(("IRC setup", settings_html))
     iteration_html = _iterations_table_html(data.iterations)
@@ -377,24 +374,24 @@ def render_irc_report_html(data: IrcReportData) -> str:
     return render_page(page)
 
 
-def _parse_irc_settings(text: str) -> tuple[IrcSetting, ...]:
-    settings: list[IrcSetting] = []
+def _parse_irc_settings(text: str) -> tuple[ReportSetting, ...]:
+    settings: list[ReportSetting] = []
     in_settings = False
     for line in text.splitlines():
-        if _IRC_SETTINGS_HEADER_RE.match(line):
-            in_settings = True
-            continue
-        if in_settings and _SECTION_HEADER_RE.search(line):
-            break
         if not in_settings:
+            if _IRC_SETTINGS_HEADER_RE.search(line):
+                in_settings = True
             continue
-        match = _DOTTED_SETTING_RE.match(line)
-        if match is None:
+        if _SECTION_HEADER_RE.search(line):
+            break
+        if not line.strip():
+            # The settings block (System/Settings/Tolerances/trajectory rows)
+            # runs without blank lines; the first blank after content ends it.
+            if settings:
+                break
             continue
-        label = " ".join(match.group(1).split())
-        value = " ".join(match.group(2).split())
-        setting = IrcSetting(label=label, value=value)
-        if setting not in settings:
+        setting = match_dotted_setting(line)
+        if setting is not None and setting not in settings:
             settings.append(setting)
     return tuple(settings)
 
@@ -404,9 +401,9 @@ def _parse_irc_iterations(text: str) -> tuple[IrcIterationPoint, ...]:
     table_started = False
     points: list[IrcIterationPoint] = []
     for line in text.splitlines():
-        direction_match = _IRC_DIRECTION_RE.match(line)
+        direction_match = _IRC_DIRECTION_RE.search(line)
         if direction_match is not None:
-            direction = direction_match.group(1).upper()
+            direction = direction_match.group(1)
             table_started = False
             continue
         if not direction:
@@ -427,8 +424,8 @@ def _parse_irc_iterations(text: str) -> tuple[IrcIterationPoint, ...]:
             IrcIterationPoint(
                 direction=direction,
                 iteration=int(match.group(1)),
-                step=int(match.group(2)),
-                energy_hartree=float(match.group(3)),
+                energy_hartree=float(match.group(2)),
+                delta_e_kcal=float(match.group(3)),
                 max_gradient=float(match.group(4)),
                 rms_gradient=float(match.group(5)),
             )
@@ -511,10 +508,24 @@ def _parse_attempt_irc_output(attempt: Mapping[str, Any]) -> IrcParsedOutput | N
 
 
 def _latest_parsed_irc_output(attempts: Sequence[Mapping[str, Any]]) -> IrcParsedOutput:
+    """Latest attempt output that actually contains IRC data.
+
+    A retry that died before the IRC driver started (or a trailing Freq-only
+    attempt) parses to an empty result; skipping such shells keeps the report
+    consistent with the per-attempt detail column instead of masking an
+    earlier attempt's parsed path.
+    """
+    fallback: IrcParsedOutput | None = None
     for attempt in reversed(attempts):
         parsed = _parse_attempt_irc_output(attempt)
-        if parsed is not None:
+        if parsed is None:
+            continue
+        if parsed.path_points or parsed.iterations or parsed.settings:
             return parsed
+        if fallback is None:
+            fallback = parsed
+    if fallback is not None:
+        return fallback
     return IrcParsedOutput(settings=(), iterations=(), path_points=(), irc_marker_found=False)
 
 
@@ -533,23 +544,6 @@ def _latest_opt_progress(
         if steps:
             return steps, progress.is_converged
     return (), False
-
-
-def _final_out_path(state: Mapping[str, Any]) -> Path | None:
-    final_result = state.get("final_result")
-    if isinstance(final_result, Mapping):
-        last_out = str(final_result.get("last_out_path") or "").strip()
-        if last_out and Path(last_out).exists():
-            return Path(last_out)
-    attempts = state.get("attempts")
-    attempts = attempts if isinstance(attempts, list) else []
-    for attempt in reversed(attempts):
-        if not isinstance(attempt, Mapping):
-            continue
-        out_raw = str(attempt.get("out_path") or "").strip()
-        if out_raw and Path(out_raw).exists():
-            return Path(out_raw)
-    return None
 
 
 def _path_x(point: IrcPathPoint) -> float:
@@ -778,19 +772,6 @@ def _path_table_html(points: Sequence[IrcPathPoint]) -> str:
     )
 
 
-def _settings_table_html(settings: Sequence[IrcSetting]) -> str:
-    if not settings:
-        return ""
-    rows = [
-        f"<tr><td>{html.escape(setting.label)}</td><td>{html.escape(setting.value)}</td></tr>"
-        for setting in settings
-    ]
-    return (
-        "<table><thead><tr><th>Setting</th><th>Value</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table>"
-    )
-
-
 def _iterations_table_html(points: Sequence[IrcIterationPoint]) -> str:
     if not points:
         return ""
@@ -798,16 +779,16 @@ def _iterations_table_html(points: Sequence[IrcIterationPoint]) -> str:
         "<tr>"
         f"<td>{html.escape(point.direction)}</td>"
         f"<td>{point.iteration}</td>"
-        f"<td>{point.step}</td>"
         f"<td>{point.energy_hartree:.6f}</td>"
+        f"<td>{point.delta_e_kcal:+.2f}</td>"
         f"<td>{point.max_gradient:.5f}</td>"
         f"<td>{point.rms_gradient:.5f}</td>"
         "</tr>"
         for point in points
     ]
     return (
-        "<table><thead><tr><th>Direction</th><th>Iteration</th><th>Step</th>"
-        "<th>E / Eh</th><th>max(|G|)</th><th>RMS(G)</th></tr></thead>"
+        "<table><thead><tr><th>Direction</th><th>Iteration</th>"
+        "<th>E / Eh</th><th>ΔE / kcal·mol⁻¹</th><th>max(|G|)</th><th>RMS(G)</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
     )
 
@@ -818,7 +799,6 @@ __all__ = [
     "IrcPathPoint",
     "IrcReportData",
     "IrcReportError",
-    "IrcSetting",
     "IrcSiBlock",
     "collect_irc_report_data",
     "collect_irc_si_block",

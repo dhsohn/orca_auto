@@ -100,19 +100,23 @@ FINAL SINGLE POINT ENERGY      -100.02000000
 """
 
 _IRC_BLOCK = """
-----------------------
-IRC settings
-----------------------
-Direction                               .... both
-Writing full trajectory file            .... scants_IRC_Full.xyz
+--------------------------------------------------------------------------------
+                   Intrinsic Reaction Coordinate Calculation
+--------------------------------------------------------------------------------
+
+Settings:
+Direction                           .... both
+Storing full IRC trajectory in      .... scants_IRC_Full.xyz
 
 ----------------------
 IRC PATH SUMMARY
 ----------------------
+All gradients are in Eh/Bohr.
+
 Step     E(Eh)        dE(kcal/mol)  max(|G|)  RMS(G)
- -1    -100.050000    -18.83       0.00160   0.00080
-  0    -100.020000      0.00       0.00200   0.00090 <= TS
-  1    -100.060000    -25.10       0.00150   0.00070
+  1    -100.050000    -18.83       0.00160   0.00080
+  2    -100.020000      0.00       0.00200   0.00090 <= TS
+  3    -100.060000    -25.10       0.00150   0.00070
 
 """
 
