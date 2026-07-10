@@ -275,7 +275,28 @@ def execute_locked_run(
                     context.reservation_token,
                 )()
                 legacy_recovery_prepared = True
-        execution._recover_crashed_state(context.reaction_dir)
+        try:
+            execution._recover_crashed_state(context.reaction_dir)
+        except OrcaProcessRecoveryError:
+            # An ambiguous process-recovery failure may leave an ORCA group
+            # alive. Keep the pending fence until an operator or a later
+            # recovery can establish that no engine process remains.
+            raise
+        except BaseException:
+            # Recovery itself never launches an engine. Do not leave a
+            # pre-recovery launch fence pending when state loading or another
+            # non-process-recovery step fails: the parent can then finalize
+            # the child and release this managed slot normally.
+            if legacy_recovery_prepared:
+                completed = complete_slot_engine_process(
+                    context.admission_root,
+                    context.reservation_token,
+                )
+                if completed is None:
+                    raise RuntimeError(
+                        f"Admission slot disappeared: {context.reservation_token}"
+                    ) from None
+            raise
         if legacy_recovery_prepared:
             completed = complete_slot_engine_process(
                 context.admission_root,

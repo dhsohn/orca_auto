@@ -176,3 +176,137 @@ def test_execute_locked_run_recovers_inside_the_run_lock(
         "admission_exit",
         "lock_exit",
     ]
+
+
+def test_execute_locked_run_completes_recovery_prepare_after_safe_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-process recovery failure must not strand a managed slot pending."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    events: list[str] = []
+
+    @contextmanager
+    def fake_run_lock(_reaction_dir: Path):
+        events.append("lock_enter")
+        try:
+            yield
+        finally:
+            events.append("lock_exit")
+
+    def fail_recovery(_reaction_dir: Path) -> None:
+        events.append("recover")
+        raise ValueError("corrupt job state")
+
+    def complete(*_args: object) -> SimpleNamespace:
+        events.append("complete")
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        run_inp_execution,
+        "get_slot",
+        lambda *_args: SimpleNamespace(engine_process_state="idle"),
+    )
+    monkeypatch.setattr(
+        run_inp_execution,
+        "build_slot_engine_process_preparer",
+        lambda *_args: lambda: events.append("prepare"),
+    )
+    monkeypatch.setattr(
+        run_inp_execution,
+        "complete_slot_engine_process",
+        complete,
+    )
+    execution = SimpleNamespace(
+        acquire_run_lock=fake_run_lock,
+        _recover_crashed_state=fail_recovery,
+    )
+    context = SimpleNamespace(
+        reaction_dir=tmp_path / "rxn",
+        selected_inp=tmp_path / "rxn.inp",
+        admission_root=tmp_path,
+        reservation_token="slot",
+        admission_app_name=None,
+        admission_task_id="",
+        max_retries=2,
+        cfg=None,
+    )
+
+    with pytest.raises(ValueError, match="corrupt job state"):
+        run_inp_execution.execute_locked_run(
+            SimpleNamespace(force=True),
+            context,
+            runner_cls=object,
+            deps=SimpleNamespace(execution=execution),
+        )
+
+    assert events == ["lock_enter", "prepare", "recover", "complete", "lock_exit"]
+
+
+def test_execute_locked_run_keeps_recovery_prepare_for_process_recovery_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ambiguous process recovery retains the pending fence."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    events: list[str] = []
+
+    @contextmanager
+    def fake_run_lock(_reaction_dir: Path):
+        events.append("lock_enter")
+        try:
+            yield
+        finally:
+            events.append("lock_exit")
+
+    def fail_recovery(_reaction_dir: Path) -> None:
+        events.append("recover")
+        raise run_inp_execution.OrcaProcessRecoveryError("ambiguous process")
+
+    def complete(*_args: object) -> SimpleNamespace:
+        events.append("complete")
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        run_inp_execution,
+        "get_slot",
+        lambda *_args: SimpleNamespace(engine_process_state="idle"),
+    )
+    monkeypatch.setattr(
+        run_inp_execution,
+        "build_slot_engine_process_preparer",
+        lambda *_args: lambda: events.append("prepare"),
+    )
+    monkeypatch.setattr(
+        run_inp_execution,
+        "complete_slot_engine_process",
+        complete,
+    )
+    execution = SimpleNamespace(
+        acquire_run_lock=fake_run_lock,
+        _recover_crashed_state=fail_recovery,
+    )
+    context = SimpleNamespace(
+        reaction_dir=tmp_path / "rxn",
+        selected_inp=tmp_path / "rxn.inp",
+        admission_root=tmp_path,
+        reservation_token="slot",
+        admission_app_name=None,
+        admission_task_id="",
+        max_retries=2,
+        cfg=None,
+    )
+
+    with pytest.raises(run_inp_execution.OrcaProcessRecoveryError, match="ambiguous process"):
+        run_inp_execution.execute_locked_run(
+            SimpleNamespace(force=True),
+            context,
+            runner_cls=object,
+            deps=SimpleNamespace(execution=execution),
+        )
+
+    assert events == ["lock_enter", "prepare", "recover", "lock_exit"]
