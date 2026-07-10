@@ -149,6 +149,18 @@ def test_derive_selected_input_xyz_reads_xyzfile_reference(tmp_path: Path) -> No
     assert _orca_path_helpers.derive_selected_input_xyz_impl(str(inp)) == str(xyz.resolve())
 
 
+def test_derive_selected_input_xyz_ignores_xyzfile_end_of_line_comment(tmp_path: Path) -> None:
+    inp = tmp_path / "rxn.inp"
+    xyz = tmp_path / "rxn.xyz"
+    xyz.write_text("2\ncomment\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+    inp.write_text(
+        "! Opt\n* xyzfile 0 1 rxn.xyz # reactant geometry\n",
+        encoding="utf-8",
+    )
+
+    assert _orca_path_helpers.derive_selected_input_xyz_impl(str(inp)) == str(xyz.resolve())
+
+
 def test_prefer_orca_optimized_xyz_prefers_matching_input_stem(tmp_path: Path) -> None:
     current_dir = tmp_path / "run_dir"
     current_dir.mkdir()

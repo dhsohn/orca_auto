@@ -570,6 +570,77 @@ def test_rematerialize_orca_restart_input_rejects_reserved_geometry_collision(
     assert not (tmp_path / "orca_stage.restart-001").exists()
 
 
+@pytest.mark.parametrize(
+    "auxiliary_relative_path",
+    [
+        Path(".orca_auto_inputs/geometry.xyz/charges.pc"),
+        Path(".orca_auto_inputs"),
+    ],
+)
+def test_rematerialize_orca_restart_input_rejects_reserved_geometry_path_tree_collision(
+    tmp_path: Path,
+    auxiliary_relative_path: Path,
+) -> None:
+    original = tmp_path / "orca_stage"
+    original.mkdir()
+    geometry = original / "coords with space.xyz"
+    geometry.write_text("1\ngeometry\nH 0 0 0\n", encoding="utf-8")
+    auxiliary = original / auxiliary_relative_path
+    auxiliary.parent.mkdir(parents=True, exist_ok=True)
+    auxiliary.write_text("POINT-CHARGE-DATA\n", encoding="utf-8")
+    (original / "input.inp").write_text(
+        f'%pointcharges "{auxiliary_relative_path.as_posix()}"\n'
+        '* xyzfile 0 1 "coords with space.xyz"\n',
+        encoding="utf-8",
+    )
+    stage = _restart_stage(original)
+    task = stage["task"]
+    assert isinstance(task, dict)
+    payload = task["payload"]
+    assert isinstance(payload, dict)
+    payload["selected_input_xyz"] = str(geometry)
+
+    with pytest.raises(ValueError, match="copy target collision"):
+        rematerialize_orca_restart_input(
+            stage,
+            {"orca_input_updates": True},
+            allowed_root=tmp_path,
+        )
+
+    assert not (tmp_path / "orca_stage.restart-001").exists()
+
+
+def test_rematerialize_orca_restart_input_parses_commented_xyzfile_fallback(
+    tmp_path: Path,
+) -> None:
+    original = tmp_path / "orca_stage"
+    original.mkdir()
+    geometry = original / "input.xyz"
+    geometry.write_text("1\ngeometry\nH 0 0 0\n", encoding="utf-8")
+    (original / "input.inp").write_text(
+        "! OLD\n* xyzfile 0 1 input.xyz # reactant geometry\n",
+        encoding="utf-8",
+    )
+    stage = _restart_stage(original)
+    task = stage["task"]
+    assert isinstance(task, dict)
+    payload = task["payload"]
+    assert isinstance(payload, dict)
+    payload["selected_input_xyz"] = ""
+
+    assert rematerialize_orca_restart_input(
+        stage,
+        {"orca_input_updates": True},
+        allowed_root=tmp_path,
+    )
+
+    restart_dir = tmp_path / "orca_stage.restart-001"
+    assert (restart_dir / "input.xyz").read_text(encoding="utf-8") == geometry.read_text(
+        encoding="utf-8"
+    )
+    assert "* xyzfile 0 1 input.xyz" in (restart_dir / "input.inp").read_text(encoding="utf-8")
+
+
 def test_set_block_key_value_updates_hybrid_pal_start_line_without_duplicate() -> None:
     lines = [
         "! OLD",

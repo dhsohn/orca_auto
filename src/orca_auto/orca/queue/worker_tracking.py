@@ -33,14 +33,28 @@ class OrcaQueueWorkerTrackingCallbacks:
     upsert_job_record: Callable[..., Any]
 
 
+def payload_job_id(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    job = payload.get("job")
+    job = job if isinstance(job, dict) else {}
+    return str(payload.get("job_id") or job.get("id") or "").strip()
+
+
+def payload_matches_expected_job_id(payload: Any, expected_job_id: str | None) -> bool:
+    expected = str(expected_job_id or "").strip()
+    return not expected or payload_job_id(payload) == expected
+
+
 def get_run_id_from_state(
     reaction_dir: str,
     *,
+    expected_job_id: str | None = None,
     callbacks: OrcaQueueWorkerTrackingCallbacks,
 ) -> str | None:
     """Try to read run_id from the reaction_dir's job_state.json."""
     state = callbacks.load_state(Path(reaction_dir))
-    if state:
+    if state and payload_matches_expected_job_id(state, expected_job_id):
         return state.get("run_id")
     return None
 
@@ -150,6 +164,7 @@ def notify_terminal_job_from_state(
     cfg: AppConfig,
     reaction_dir: str,
     *,
+    expected_job_id: str | None = None,
     callbacks: OrcaQueueWorkerTrackingCallbacks,
 ) -> bool:
     if not cfg.telegram.enabled:
@@ -159,6 +174,15 @@ def notify_terminal_job_from_state(
     state = callbacks.load_state(job_dir)
     if not state:
         logger.warning("Skipping terminal Telegram notification; state missing for %s", job_dir)
+        return False
+    if not payload_matches_expected_job_id(state, expected_job_id):
+        logger.warning(
+            "Skipping terminal Telegram notification; state generation mismatch for %s "
+            "(expected_job_id=%s state_job_id=%s)",
+            job_dir,
+            str(expected_job_id or "").strip(),
+            payload_job_id(state),
+        )
         return False
     if callbacks.finished_notification_already_sent(state):
         return False
@@ -195,6 +219,8 @@ __all__ = [
     "OrcaQueueWorkerTrackingCallbacks",
     "get_run_id_from_state",
     "notify_terminal_job_from_state",
+    "payload_job_id",
+    "payload_matches_expected_job_id",
     "tracking_metadata_from_queue_entry",
     "upsert_running_job_record",
     "upsert_terminal_job_record",

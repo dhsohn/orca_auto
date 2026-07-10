@@ -239,6 +239,7 @@ def test_load_orca_artifact_contract_ignores_previous_force_restart_artifacts(
     )
     _write_json(reaction_dir / "job_state.json", old_payload)
     _write_json(reaction_dir / "job_report.json", old_payload)
+    (reaction_dir / "job_report.md").write_text("# Old generation\n", encoding="utf-8")
     _write_json(
         allowed_root / "queue.json",
         [
@@ -252,21 +253,98 @@ def test_load_orca_artifact_contract_ignores_previous_force_restart_artifacts(
         ],
     )
 
-    contract = load_orca_artifact_contract(
+    canonical_contract = load_orca_artifact_contract(
         target="q_new",
         queue_id="q_new",
         reaction_dir=str(reaction_dir),
         orca_allowed_root=allowed_root,
     )
+    with patch(
+        "orca_auto.flow.adapters.orca._orca_tracking.load_orca_contract_payload_impl",
+        return_value=None,
+    ):
+        fallback_contract = load_orca_artifact_contract(
+            target="q_new",
+            queue_id="q_new",
+            reaction_dir=str(reaction_dir),
+            orca_allowed_root=allowed_root,
+        )
 
-    assert contract.status == "queued"
-    assert contract.queue_id == "q_new"
-    assert contract.run_id == ""
-    assert contract.state_status == ""
-    assert contract.reason == ""
-    assert contract.attempt_count == 0
-    assert contract.attempts == ()
-    assert contract.final_result == {}
+    for contract in (canonical_contract, fallback_contract):
+        assert contract.status == "queued"
+        assert contract.queue_id == "q_new"
+        assert contract.run_id == ""
+        assert contract.state_status == ""
+        assert contract.reason == ""
+        assert contract.attempt_count == 0
+        assert contract.attempts == ()
+        assert contract.final_result == {}
+        assert contract.run_state_path == ""
+        assert contract.report_json_path == ""
+        assert contract.report_md_path == ""
+
+
+def test_load_orca_artifact_contract_publishes_matching_generation_paths_in_both_loaders(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "rxn_current_generation"
+    reaction_dir.mkdir(parents=True)
+    inp = reaction_dir / "rxn.inp"
+    inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    current_payload = orca_artifact_payload(
+        job_id="job_new",
+        run_id="run_new",
+        reaction_dir=str(reaction_dir),
+        selected_inp=str(inp),
+        status="completed",
+    )
+    state_file = reaction_dir / "job_state.json"
+    report_json = reaction_dir / "job_report.json"
+    report_md = reaction_dir / "job_report.md"
+    _write_json(state_file, current_payload)
+    _write_json(report_json, current_payload)
+    report_md.write_text(
+        "# Report\n- Job ID: `job_new`\n- run_id: `run_new`\n",
+        encoding="utf-8",
+    )
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_new",
+                "task_id": "job_new",
+                "status": "completed",
+                "metadata": {
+                    "run_id": "run_new",
+                    "reaction_dir": str(reaction_dir),
+                    "selected_inp": str(inp),
+                },
+            }
+        ],
+    )
+
+    canonical_contract = load_orca_artifact_contract(
+        target="q_new",
+        queue_id="q_new",
+        reaction_dir=str(reaction_dir),
+        orca_allowed_root=allowed_root,
+    )
+    with patch(
+        "orca_auto.flow.adapters.orca._orca_tracking.load_orca_contract_payload_impl",
+        return_value=None,
+    ):
+        fallback_contract = load_orca_artifact_contract(
+            target="q_new",
+            queue_id="q_new",
+            reaction_dir=str(reaction_dir),
+            orca_allowed_root=allowed_root,
+        )
+
+    for contract in (canonical_contract, fallback_contract):
+        assert contract.run_state_path == str(state_file.resolve())
+        assert contract.report_json_path == str(report_json.resolve())
+        assert contract.report_md_path == str(report_md.resolve())
 
 
 def test_load_orca_artifact_contract_resolves_run_id_via_orca_tracking_without_records_jsonl(

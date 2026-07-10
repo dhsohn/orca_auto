@@ -12,7 +12,7 @@ from orca_auto.core.utils.lock import file_lock
 def _hold_lock_until_released(lock_path: str, ready, release) -> None:
     with file_lock(Path(lock_path), timeout_seconds=1.0):
         ready.set()
-        release.wait(5)
+        release.wait()
 
 
 def test_file_lock_writes_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -41,14 +41,22 @@ def test_file_lock_times_out_when_lock_is_held(tmp_path: Path) -> None:
     process.start()
 
     try:
-        assert ready.wait(5), "child process never acquired the lock"
+        acquired = False
+        for _ in range(100):
+            acquired = ready.wait(0.1)
+            if acquired or process.exitcode is not None:
+                break
+        assert acquired, "child process never acquired the lock"
 
         with pytest.raises(TimeoutError, match=r"Timed out acquiring lock: .*held\.lock"):
             with file_lock(lock_path, timeout_seconds=0.05):
                 pass
     finally:
         release.set()
-        process.join(timeout=5)
+        for _ in range(100):
+            process.join(timeout=0.1)
+            if not process.is_alive():
+                break
         if process.is_alive():
             process.terminate()
             process.join(timeout=5)

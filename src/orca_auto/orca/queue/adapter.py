@@ -41,6 +41,7 @@ from .orphans import reconcile_orphaned_running_entries
 logger = logging.getLogger(__name__)
 
 _UNSET = object()
+TERMINAL_REPLAY_METADATA_KEY = "orca_terminal_replay"
 
 __all__ = [
     "ACTIVE_STATUSES",
@@ -50,6 +51,7 @@ __all__ = [
     "QUEUE_FILE_NAME",
     "QUEUE_TASK_KIND",
     "TERMINAL_STATUSES",
+    "TERMINAL_REPLAY_METADATA_KEY",
     "cancel",
     "cancel_pending_entry",
     "clear_terminal",
@@ -90,6 +92,13 @@ def worker_log_path(allowed_root: Path, queue_id: str) -> Path:
     return Path(allowed_root).expanduser().resolve() / "logs" / f"{queue_id}.log"
 
 
+def _has_pending_terminal_replay(entry: QueueEntry) -> bool:
+    return isinstance(
+        queue_entry_metadata(entry).get(TERMINAL_REPLAY_METADATA_KEY),
+        dict,
+    )
+
+
 class DuplicateEntryError(ValueError):
     """Raised when enqueueing a reaction_dir that already has an active entry."""
 
@@ -112,9 +121,21 @@ def _reject_duplicate_reaction_dir(
     entries: Sequence[QueueEntry],
     entry: QueueEntry,
 ) -> None:
+    entry_key = queue_entry_reaction_dir(entry)
+    for existing in entries:
+        if (
+            queue_entry_reaction_dir(existing) == entry_key
+            and queue_entry_status(existing) in TERMINAL_STATUSES
+            and _has_pending_terminal_replay(existing)
+        ):
+            # A terminal queue mark is only the first half of publication.  Until
+            # its durable replay marker is cleared, the parent still owns this
+            # reaction-dir generation and a forced successor would make its
+            # state/index/notification side effects impossible to replay safely.
+            raise DuplicateEntryError(entry_key, existing)
     _queue_store.reject_duplicate_entry_key(
         entries,
-        key=queue_entry_reaction_dir(entry),
+        key=entry_key,
         key_fn=queue_entry_reaction_dir,
         force=queue_entry_force(entry),
         active_statuses=ACTIVE_STATUSES,
@@ -221,14 +242,22 @@ def find_entry_by_target(entries: Sequence[QueueEntry], target: str) -> QueueEnt
     return None
 
 
-def mark_completed(allowed_root: Path, queue_id: str, *, run_id: str | None = None) -> bool:
+def mark_completed(
+    allowed_root: Path,
+    queue_id: str,
+    *,
+    run_id: str | None = None,
+    metadata_update: dict[str, Any] | None = None,
+) -> bool:
     """Mark a queue entry as completed."""
-    metadata_update = {"run_id": run_id} if run_id is not None else None
+    merged_metadata = dict(metadata_update or {})
+    if run_id is not None:
+        merged_metadata["run_id"] = run_id
     return (
         _queue_store.mark_completed(
             allowed_root,
             queue_id,
-            metadata_update=metadata_update,
+            metadata_update=merged_metadata or None,
             load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
         )
@@ -242,15 +271,18 @@ def mark_failed(
     *,
     error: str | None = None,
     run_id: str | None = None,
+    metadata_update: dict[str, Any] | None = None,
 ) -> bool:
     """Mark a queue entry as failed."""
-    metadata_update = {"run_id": run_id} if run_id is not None else None
+    merged_metadata = dict(metadata_update or {})
+    if run_id is not None:
+        merged_metadata["run_id"] = run_id
     return (
         _queue_store.mark_failed(
             allowed_root,
             queue_id,
             error=error or "",
-            metadata_update=metadata_update,
+            metadata_update=merged_metadata or None,
             load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
         )
@@ -258,7 +290,12 @@ def mark_failed(
     )
 
 
-def mark_cancelled(allowed_root: Path, queue_id: str) -> bool:
+def mark_cancelled(
+    allowed_root: Path,
+    queue_id: str,
+    *,
+    metadata_update: dict[str, Any] | None = None,
+) -> bool:
     """Mark a running queue entry as cancelled after the worker stops it."""
     return update_running_entry_state(
         allowed_root,
@@ -266,6 +303,7 @@ def mark_cancelled(allowed_root: Path, queue_id: str) -> bool:
         status=QueueStatus.CANCELLED.value,
         finished_at=_now_iso(),
         cancel_requested=False,
+        metadata_update=metadata_update,
     )
 
 
@@ -357,11 +395,29 @@ def clear_terminal(allowed_root: Path, *, keep_last: int = 0) -> int:
     removed_count = _queue_store.clear_terminal(
         allowed_root,
         keep_last=keep_last,
+        retain_entry_fn=_has_pending_terminal_replay,
         load_entries_fn=_load_entries,
         save_entries_fn=_queue_store.save_entries,
     )
     logger.info("Cleared %d terminal entries", removed_count)
     return removed_count
+
+
+def update_metadata(
+    allowed_root: Path,
+    queue_id: str,
+    metadata_update: dict[str, Any],
+) -> bool:
+    return (
+        _queue_store.update_metadata(
+            allowed_root,
+            queue_id,
+            metadata_update,
+            load_entries_fn=_load_entries,
+            save_entries_fn=_queue_store.save_entries,
+        )
+        is not None
+    )
 
 
 def update_terminal(
@@ -410,6 +466,7 @@ def update_running_entry_state(
     started_at: object = _UNSET,
     finished_at: object = _UNSET,
     cancel_requested: bool | None = None,
+    metadata_update: dict[str, Any] | None = None,
 ) -> bool:
     def update(current: QueueEntry) -> tuple[bool, QueueEntry | None]:
         if current.status != QueueStatus.RUNNING:
@@ -421,6 +478,10 @@ def update_running_entry_state(
             updates["finished_at"] = cast(str | None, finished_at) or ""
         if cancel_requested is not None:
             updates["cancel_requested"] = cancel_requested
+        if metadata_update:
+            merged_metadata = dict(current.metadata)
+            merged_metadata.update(metadata_update)
+            updates["metadata"] = merged_metadata
         entry = replace(current, **updates)
         logger.info("Entry %s -> %s", queue_id, status)
         return True, entry

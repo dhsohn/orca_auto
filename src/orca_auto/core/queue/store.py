@@ -283,6 +283,7 @@ def clear_terminal(
     root: str | Path,
     *,
     keep_last: int = 0,
+    retain_entry_fn: Callable[[QueueEntry], bool] | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
 ) -> int:
@@ -296,13 +297,17 @@ def clear_terminal(
             return 0, False
 
         kept_terminal_ids: set[str] = set()
+        if retain_entry_fn is not None:
+            kept_terminal_ids.update(
+                entry.queue_id for entry in terminal_entries if retain_entry_fn(entry)
+            )
         if keep_last > 0:
             terminal_entries = sorted(
                 terminal_entries,
                 key=lambda entry: (_entry_timestamp(entry), entry.queue_id),
                 reverse=True,
             )
-            kept_terminal_ids = {entry.queue_id for entry in terminal_entries[:keep_last]}
+            kept_terminal_ids.update(entry.queue_id for entry in terminal_entries[:keep_last])
 
         kept_entries = [
             entry

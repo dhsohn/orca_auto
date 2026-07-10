@@ -35,13 +35,14 @@ def parse_lock_info(lock_path: Path) -> dict[str, Any]:
             "pid": _positive_int(parsed.get("pid")),
             "started_at": _nonempty_string(parsed.get("started_at")),
             "process_start_ticks": _positive_int(parsed.get("process_start_ticks")),
+            "boot_id": _nonempty_string(parsed.get("boot_id")),
         }
 
     return _empty_lock_info()
 
 
 def _empty_lock_info() -> dict[str, Any]:
-    return {"pid": None, "started_at": None, "process_start_ticks": None}
+    return {"pid": None, "started_at": None, "process_start_ticks": None, "boot_id": None}
 
 
 def _positive_int(value: Any) -> int | None:
@@ -96,6 +97,7 @@ def _claim_stale_lock(
     parse_lock_info_fn: Callable[[Path], dict[str, Any]],
     is_process_alive_fn: Callable[[int], bool],
     process_start_ticks_fn: Callable[[int], int | None],
+    boot_id_fn: Callable[[], str | None] = process_utils.linux_boot_id,
     logger: logging.Logger,
     stale_pid_reuse_log_template: str,
 ) -> bool:
@@ -120,8 +122,10 @@ def _claim_stale_lock(
             if isinstance(current_pid, int) and _lock_owner_alive(
                 lock_pid=current_pid,
                 lock_start_ticks=current.get("process_start_ticks"),
+                lock_boot_id=current.get("boot_id"),
                 is_process_alive_fn=is_process_alive_fn,
                 process_start_ticks_fn=process_start_ticks_fn,
+                boot_id_fn=boot_id_fn,
                 logger=logger,
                 stale_pid_reuse_log_template=stale_pid_reuse_log_template,
                 lock_path=lock_path,
@@ -142,12 +146,22 @@ def _lock_owner_alive(
     *,
     lock_pid: int,
     lock_start_ticks: Any,
+    lock_boot_id: Any,
     is_process_alive_fn: Callable[[int], bool],
     process_start_ticks_fn: Callable[[int], int | None],
+    boot_id_fn: Callable[[], str | None],
     logger: logging.Logger,
     stale_pid_reuse_log_template: str,
     lock_path: Path,
 ) -> bool:
+    if isinstance(lock_boot_id, str) and lock_boot_id.strip():
+        observed_boot_id = boot_id_fn()
+        if (
+            isinstance(observed_boot_id, str)
+            and observed_boot_id.strip()
+            and observed_boot_id.strip() != lock_boot_id.strip()
+        ):
+            return False
     alive = is_process_alive_fn(lock_pid)
     if not alive or not isinstance(lock_start_ticks, int):
         return alive
@@ -182,6 +196,7 @@ def _handle_existing_lock(
     lock_info: dict[str, Any],
     is_process_alive_fn: Callable[[int], bool],
     process_start_ticks_fn: Callable[[int], int | None],
+    boot_id_fn: Callable[[], str | None],
     logger: logging.Logger,
     stale_pid_reuse_log_template: str,
     stale_lock_log_template: str,
@@ -204,8 +219,10 @@ def _handle_existing_lock(
     alive = _lock_owner_alive(
         lock_pid=lock_pid,
         lock_start_ticks=lock_info.get("process_start_ticks"),
+        lock_boot_id=lock_info.get("boot_id"),
         is_process_alive_fn=is_process_alive_fn,
         process_start_ticks_fn=process_start_ticks_fn,
+        boot_id_fn=boot_id_fn,
         logger=logger,
         stale_pid_reuse_log_template=stale_pid_reuse_log_template,
         lock_path=lock_path,
@@ -279,6 +296,10 @@ def current_process_start_ticks() -> int | None:
     return process_start_ticks(os.getpid())
 
 
+def current_boot_id() -> str | None:
+    return process_utils.linux_boot_id(proc_root=Path("/proc"))
+
+
 @dataclass(frozen=True)
 class FileLockOptions:
     lock_path: Path
@@ -292,6 +313,7 @@ class FileLockDeps:
     parse_lock_info: Callable[[Path], dict[str, Any]]
     is_process_alive: Callable[[int], bool]
     process_start_ticks: Callable[[int], int | None]
+    boot_id: Callable[[], str | None]
     logger: logging.Logger
 
 
@@ -333,6 +355,7 @@ def acquire_file_lock_from_options(
             parse_lock_info_fn=deps.parse_lock_info,
             is_process_alive_fn=deps.is_process_alive,
             process_start_ticks_fn=deps.process_start_ticks,
+            boot_id_fn=deps.boot_id,
             logger=deps.logger,
             stale_pid_reuse_log_template=messages.stale_pid_reuse_log_template,
         )
@@ -348,6 +371,7 @@ def acquire_file_lock_from_options(
             lock_info=lock_info,
             is_process_alive_fn=deps.is_process_alive,
             process_start_ticks_fn=deps.process_start_ticks,
+            boot_id_fn=deps.boot_id,
             logger=deps.logger,
             stale_pid_reuse_log_template=messages.stale_pid_reuse_log_template,
             stale_lock_log_template=messages.stale_lock_log_template,
@@ -422,6 +446,7 @@ def acquire_file_lock(
     parse_lock_info_fn: Callable[[Path], dict[str, Any]],
     is_process_alive_fn: Callable[[int], bool],
     process_start_ticks_fn: Callable[[int], int | None],
+    boot_id_fn: Callable[[], str | None] = current_boot_id,
     logger: logging.Logger,
     acquired_log_template: str,
     released_log_template: str,
@@ -451,6 +476,7 @@ def acquire_file_lock(
             parse_lock_info=parse_lock_info_fn,
             is_process_alive=is_process_alive_fn,
             process_start_ticks=process_start_ticks_fn,
+            boot_id=boot_id_fn,
             logger=logger,
         ),
         messages=FileLockMessages(

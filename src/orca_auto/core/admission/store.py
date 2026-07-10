@@ -29,6 +29,13 @@ ADMISSION_LOCK_NAME = _admission_persistence.ADMISSION_LOCK_NAME
 _MutationResultT = TypeVar("_MutationResultT")
 
 
+class _ExpectationUnset:
+    pass
+
+
+_EXPECTATION_UNSET = _ExpectationUnset()
+
+
 class AdmissionLimitReachedError(RuntimeError):
     """Raised when no additional admission slots are available."""
 
@@ -47,6 +54,10 @@ def _lock_path(root: Path) -> Path:
 
 def _process_start_ticks(pid: int) -> int | None:
     return process_utils.process_start_ticks(pid, proc_root=Path("/proc"))
+
+
+def _linux_boot_id() -> str | None:
+    return process_utils.linux_boot_id(proc_root=Path("/proc"))
 
 
 def _normalize_work_dir(value: str | Path | None) -> str:
@@ -86,9 +97,21 @@ def _save_slots(root: Path, slots: list[AdmissionSlot]) -> None:
     _admission_persistence.save_slots(root, slots, slot_to_dict_fn=_slot_to_dict)
 
 
-def _process_identity_alive(pid: int, expected_ticks: int | None) -> bool:
+def _process_identity_alive(
+    pid: int,
+    expected_ticks: int | None,
+    expected_boot_id: str | None = None,
+) -> bool:
     if pid <= 0:
         return False
+    if expected_boot_id is not None:
+        observed_boot_id = _linux_boot_id()
+        if observed_boot_id is None:
+            # An unreadable boot identity is ambiguous. Keep the slot rather
+            # than declaring its owner dead and initiating engine recovery.
+            return True
+        if observed_boot_id != expected_boot_id:
+            return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -131,7 +154,11 @@ def _updated_inactive_engine_process_state(
 def _slot_owner_process_alive(slot: AdmissionSlot) -> bool:
     if slot.owner_pid <= 0:
         return False
-    return _process_identity_alive(slot.owner_pid, slot.process_start_ticks)
+    return _process_identity_alive(
+        slot.owner_pid,
+        slot.process_start_ticks,
+        slot.owner_boot_id,
+    )
 
 
 def _slot_owner_alive(slot: AdmissionSlot) -> bool:
@@ -195,7 +222,14 @@ def _slot_from_reservation_request(request: AdmissionReservationRequest) -> Admi
         raise ValueError("Admission slot owner PID must be a positive integer")
     engine_process_state = _inactive_engine_process_state(request.engine_process_state)
     owner_start_ticks = _process_start_ticks(resolved_owner_pid)
-    if engine_process_state and owner_start_ticks is None:
+    # Start ticks are scoped to one Linux boot even for generic admission
+    # owners. Persist the boot ID whenever it is available so a stale slot
+    # cannot be mistaken for a coincidentally matching PID/tick pair after a
+    # reboot. Managed slots require the full identity because it also fences
+    # process-group recovery; generic slots retain legacy behavior when procfs
+    # does not expose a boot ID.
+    owner_boot_id = _linux_boot_id()
+    if engine_process_state and (owner_start_ticks is None or owner_boot_id is None):
         raise ValueError("Cannot verify managed admission slot owner process identity")
     return AdmissionSlot(
         token=timestamped_token("slot"),
@@ -203,6 +237,7 @@ def _slot_from_reservation_request(request: AdmissionReservationRequest) -> Admi
         process_start_ticks=owner_start_ticks,
         source=request.source.strip(),
         acquired_at=now_utc_iso(),
+        owner_boot_id=owner_boot_id,
         app_name=request.app_name.strip(),
         task_id=request.task_id.strip(),
         workflow_id=request.workflow_id.strip(),
@@ -224,7 +259,21 @@ def _activated_slot(slot: AdmissionSlot, update: AdmissionSlotActivation) -> Adm
         if resolved_owner_pid == slot.owner_pid
         else _process_start_ticks(resolved_owner_pid)
     )
-    if slot.engine_process_state and owner_start_ticks is None:
+    engine_process_state = _updated_inactive_engine_process_state(
+        slot,
+        update.engine_process_state,
+    )
+    if engine_process_state and not slot.engine_process_state:
+        # This update opts an existing generic slot into managed engine
+        # signalling. Establish a fresh boot-scoped owner identity now rather
+        # than inheriting a legacy, boot-ambiguous start tick.
+        owner_start_ticks = _process_start_ticks(resolved_owner_pid)
+        owner_boot_id = _linux_boot_id()
+    elif resolved_owner_pid == slot.owner_pid:
+        owner_boot_id = slot.owner_boot_id
+    else:
+        owner_boot_id = _linux_boot_id()
+    if engine_process_state and (owner_start_ticks is None or owner_boot_id is None):
         raise ValueError("Cannot verify managed admission slot owner process identity")
     return replace(
         slot,
@@ -233,14 +282,12 @@ def _activated_slot(slot: AdmissionSlot, update: AdmissionSlotActivation) -> Adm
         queue_id=slot.queue_id if update.queue_id is None else update.queue_id.strip(),
         owner_pid=resolved_owner_pid,
         process_start_ticks=owner_start_ticks,
+        owner_boot_id=owner_boot_id,
         source=slot.source if update.source is None else update.source.strip(),
         app_name=slot.app_name if update.app_name is None else update.app_name.strip(),
         task_id=slot.task_id if update.task_id is None else update.task_id.strip(),
         workflow_id=slot.workflow_id if update.workflow_id is None else update.workflow_id.strip(),
-        engine_process_state=_updated_inactive_engine_process_state(
-            slot,
-            update.engine_process_state,
-        ),
+        engine_process_state=engine_process_state,
     )
 
 
@@ -258,7 +305,18 @@ def _metadata_updated_slot(
         if resolved_owner_pid == slot.owner_pid
         else _process_start_ticks(resolved_owner_pid)
     )
-    if slot.engine_process_state and owner_start_ticks is None:
+    engine_process_state = _updated_inactive_engine_process_state(
+        slot,
+        update.engine_process_state,
+    )
+    if engine_process_state and not slot.engine_process_state:
+        owner_start_ticks = _process_start_ticks(resolved_owner_pid)
+        owner_boot_id = _linux_boot_id()
+    elif resolved_owner_pid == slot.owner_pid:
+        owner_boot_id = slot.owner_boot_id
+    else:
+        owner_boot_id = _linux_boot_id()
+    if engine_process_state and (owner_start_ticks is None or owner_boot_id is None):
         raise ValueError("Cannot verify managed admission slot owner process identity")
     return replace(
         slot,
@@ -270,10 +328,8 @@ def _metadata_updated_slot(
         work_dir=slot.work_dir if update.work_dir is None else _normalize_work_dir(update.work_dir),
         owner_pid=resolved_owner_pid,
         process_start_ticks=owner_start_ticks,
-        engine_process_state=_updated_inactive_engine_process_state(
-            slot,
-            update.engine_process_state,
-        ),
+        owner_boot_id=owner_boot_id,
+        engine_process_state=engine_process_state,
     )
 
 
@@ -562,13 +618,17 @@ def set_slot_engine_process(
     pid: int,
     pgid: int,
     process_start_ticks: int,
+    process_boot_id: str | None = None,
 ) -> AdmissionSlot | None:
     if any(type(value) is not int for value in (pid, pgid, process_start_ticks)):
         raise ValueError("Invalid engine process identity")
     pid_value = pid
     pgid_value = pgid
     ticks_value = process_start_ticks
-    if pid_value <= 0 or pgid_value != pid_value or ticks_value <= 0:
+    boot_id_value = (
+        process_boot_id.strip() if isinstance(process_boot_id, str) else _linux_boot_id() or ""
+    )
+    if pid_value <= 0 or pgid_value != pid_value or ticks_value <= 0 or not boot_id_value:
         raise ValueError("Invalid engine process identity")
 
     def update(slots: list[AdmissionSlot]) -> tuple[AdmissionSlot | None, bool]:
@@ -579,18 +639,24 @@ def set_slot_engine_process(
                 slot.engine_pid,
                 slot.engine_pgid,
                 slot.engine_process_start_ticks,
+                slot.engine_process_boot_id,
             )
-            requested_identity = (pid_value, pgid_value, ticks_value)
+            requested_identity = (pid_value, pgid_value, ticks_value, boot_id_value)
             if slot.engine_process_state == "active" and existing_identity != requested_identity:
                 raise ValueError(f"Admission slot {token} already owns another engine process")
             if slot.engine_process_state not in {"pending", "active"}:
                 raise ValueError(f"Admission slot {token} was not prepared before engine launch")
+            if slot.owner_boot_id != boot_id_value:
+                raise ValueError(
+                    f"Admission slot {token} owner and engine boot identities do not match"
+                )
             updated = replace(
                 slot,
                 engine_process_state="active",
                 engine_pid=pid_value,
                 engine_pgid=pgid_value,
                 engine_process_start_ticks=ticks_value,
+                engine_process_boot_id=boot_id_value,
             )
             slots[index] = updated
             return updated, True
@@ -601,29 +667,98 @@ def set_slot_engine_process(
 
 def prepare_slot_engine_process(root: str | Path, token: str) -> AdmissionSlot | None:
     """Fence the interval immediately before one engine Popen."""
+    admission_store = AdmissionStore.for_root(root)
+    current_boot_id = _linux_boot_id()
+    if current_boot_id is None:
+        raise ValueError("Cannot verify the current boot identity before engine launch")
 
-    def update(slots: list[AdmissionSlot]) -> tuple[AdmissionSlot | None, bool]:
+    with admission_lock(admission_store.root):
+        slots = admission_store.load_slots_fn(admission_store.root)
         for index, slot in enumerate(slots):
             if slot.token != token:
                 continue
             if slot.engine_process_state != "idle":
                 raise ValueError(f"Admission slot {token} is not a managed idle engine slot")
+            if slot.owner_boot_id is None or slot.owner_boot_id != current_boot_id:
+                raise ValueError(
+                    f"Admission slot {token} has an ambiguous or stale owner boot identity"
+                )
             updated = replace(
                 slot,
                 engine_process_state="pending",
                 engine_pid=None,
                 engine_pgid=None,
                 engine_process_start_ticks=None,
+                engine_process_boot_id=None,
             )
             slots[index] = updated
-            return updated, updated != slot
-        return None, False
+            try:
+                admission_store.save_slots_fn(admission_store.root, slots)
+            except BaseException:
+                # atomic_write_json may have replaced the file before a
+                # parent-directory fsync fails. Popen has not happened yet,
+                # so restore only the exact pending marker created above.
+                # Never erase an active identity observed during recovery.
+                try:
+                    visible_slots = admission_store.load_slots_fn(admission_store.root)
+                    for visible_index, visible in enumerate(visible_slots):
+                        if visible.token != token:
+                            continue
+                        same_owner = (
+                            visible.owner_pid,
+                            visible.process_start_ticks,
+                            visible.owner_boot_id,
+                        ) == (
+                            slot.owner_pid,
+                            slot.process_start_ticks,
+                            slot.owner_boot_id,
+                        )
+                        if (
+                            same_owner
+                            and visible.engine_process_state == "pending"
+                            and visible.engine_pid is None
+                            and visible.engine_pgid is None
+                            and visible.engine_process_start_ticks is None
+                            and visible.engine_process_boot_id is None
+                        ):
+                            visible_slots[visible_index] = replace(
+                                visible,
+                                engine_process_state="idle",
+                            )
+                            admission_store.save_slots_fn(
+                                admission_store.root,
+                                visible_slots,
+                            )
+                        break
+                except BaseException:  # noqa: BLE001 - preserve the original save failure
+                    pass
+                raise
+            return updated
+        return None
 
-    return AdmissionStore.for_root(root).mutate_all_slots(update)
 
-
-def complete_slot_engine_process(root: str | Path, token: str) -> AdmissionSlot | None:
+def complete_slot_engine_process(
+    root: str | Path,
+    token: str,
+    *,
+    expected_owner_pid: int | _ExpectationUnset = _EXPECTATION_UNSET,
+    expected_owner_process_start_ticks: int | None | _ExpectationUnset = _EXPECTATION_UNSET,
+    expected_owner_boot_id: str | None | _ExpectationUnset = _EXPECTATION_UNSET,
+    require_pending_without_engine_identity: bool = False,
+) -> AdmissionSlot | None:
     """Mark a normally completed child with no engine launch in flight."""
+
+    has_expectations = (
+        any(
+            value is not _EXPECTATION_UNSET
+            for value in (
+                expected_owner_pid,
+                expected_owner_process_start_ticks,
+                expected_owner_boot_id,
+            )
+        )
+        or require_pending_without_engine_identity
+    )
 
     def update(slots: list[AdmissionSlot]) -> tuple[AdmissionSlot | None, bool]:
         for index, slot in enumerate(slots):
@@ -632,7 +767,32 @@ def complete_slot_engine_process(root: str | Path, token: str) -> AdmissionSlot 
             if slot.engine_process_state == "active":
                 raise ValueError(f"Admission slot {token} still owns an active engine process")
             if slot.engine_process_state != "pending":
-                return slot, False
+                return (None if has_expectations else slot), False
+            if (
+                expected_owner_pid is not _EXPECTATION_UNSET
+                and slot.owner_pid != expected_owner_pid
+            ):
+                return None, False
+            if (
+                expected_owner_process_start_ticks is not _EXPECTATION_UNSET
+                and slot.process_start_ticks != expected_owner_process_start_ticks
+            ):
+                return None, False
+            if (
+                expected_owner_boot_id is not _EXPECTATION_UNSET
+                and slot.owner_boot_id != expected_owner_boot_id
+            ):
+                return None, False
+            if require_pending_without_engine_identity and any(
+                value is not None
+                for value in (
+                    slot.engine_pid,
+                    slot.engine_pgid,
+                    slot.engine_process_start_ticks,
+                    slot.engine_process_boot_id,
+                )
+            ):
+                return None, False
             updated = replace(slot, engine_process_state="idle")
             slots[index] = updated
             return updated, True
@@ -647,6 +807,7 @@ def clear_slot_engine_process(
     *,
     expected_pid: int | None = None,
     expected_process_start_ticks: int | None = None,
+    expected_process_boot_id: str | None | _ExpectationUnset = _EXPECTATION_UNSET,
     next_state: str = "idle",
 ) -> AdmissionSlot | None:
     resolved_next_state = _inactive_engine_process_state(next_state)
@@ -663,12 +824,18 @@ def clear_slot_engine_process(
                 expected_process_start_ticks
             ):
                 return None, False
+            if (
+                expected_process_boot_id is not _EXPECTATION_UNSET
+                and slot.engine_process_boot_id != expected_process_boot_id
+            ):
+                return None, False
             updated = replace(
                 slot,
                 engine_process_state=resolved_next_state,
                 engine_pid=None,
                 engine_pgid=None,
                 engine_process_start_ticks=None,
+                engine_process_boot_id=None,
             )
             slots[index] = updated
             return updated, True

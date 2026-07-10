@@ -14,6 +14,12 @@ def _queue_generation(queue_entry: dict[str, Any] | None) -> tuple[str, str]:
     )
 
 
+def queue_has_generation_identity(queue_entry: dict[str, Any] | None) -> bool:
+    """Return whether a queue entry can identify one execution generation."""
+
+    return any(_queue_generation(queue_entry))
+
+
 def payload_matches_queue_generation(
     queue_entry: dict[str, Any] | None,
     payload: dict[str, Any],
@@ -34,21 +40,24 @@ def payload_matches_queue_generation(
     queue_task_id, queue_run_id = _queue_generation(queue_entry)
     if not queue_task_id and not queue_run_id:
         return True
-    if not payload:
-        return True
 
     job = payload.get("job")
     job = job if isinstance(job, dict) else {}
     engine_payload = payload.get("engine_payload")
     engine_payload = engine_payload if isinstance(engine_payload, dict) else {}
-    payload_job_id = normalize_text(payload.get("job_id") or job.get("id"))
-    payload_run_id = normalize_text(payload.get("run_id") or engine_payload.get("run_id"))
-    comparisons: list[bool] = []
-    if queue_task_id and payload_job_id:
-        comparisons.append(queue_task_id == payload_job_id)
-    if queue_run_id and payload_run_id:
-        comparisons.append(queue_run_id == payload_run_id)
-    return bool(comparisons) and all(comparisons)
+    payload_job_ids = {
+        value for raw in (payload.get("job_id"), job.get("id")) if (value := normalize_text(raw))
+    }
+    payload_run_ids = {
+        value
+        for raw in (payload.get("run_id"), engine_payload.get("run_id"))
+        if (value := normalize_text(raw))
+    }
+    if queue_task_id and payload_job_ids != {queue_task_id}:
+        return False
+    if queue_run_id and payload_run_ids != {queue_run_id}:
+        return False
+    return True
 
 
 def current_generation_payloads(
@@ -61,4 +70,8 @@ def current_generation_payloads(
     return current_state, current_report
 
 
-__all__ = ["current_generation_payloads", "payload_matches_queue_generation"]
+__all__ = [
+    "current_generation_payloads",
+    "payload_matches_queue_generation",
+    "queue_has_generation_identity",
+]

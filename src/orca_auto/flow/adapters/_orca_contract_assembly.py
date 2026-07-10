@@ -98,12 +98,22 @@ class _ContractPayloadDeps:
     def normalize_bool(self, value: Any) -> bool:
         return self._deps.normalize_bool_fn(value)
 
-    def _runtime_paths(self, current_dir: Path | None) -> dict[str, str]:
+    def _runtime_paths(
+        self,
+        current_dir: Path | None,
+        *,
+        include_state: bool = True,
+        include_report: bool = True,
+        queue_entry: ContractPayload | None = None,
+    ) -> dict[str, str]:
         return _canonical_payload.runtime_paths(
             current_dir,
             state_file_name="job_state.json",
             report_json_name="job_report.json",
             report_md_name="job_report.md",
+            include_state=include_state,
+            include_report=include_report,
+            queue_entry=queue_entry,
         )
 
     def attempt_count(self, state: ContractPayload, report: ContractPayload) -> int:

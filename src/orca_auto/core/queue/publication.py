@@ -57,7 +57,20 @@ def _owner_process_alive(owner_pid: int) -> bool:
         return True
     except (OSError, OverflowError):
         return False
-    return True
+    try:
+        stat_text = Path(f"/proc/{owner_pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        # Non-Linux platforms (or an unreadable procfs) retain the safe-biased
+        # signal probe result.
+        return True
+    _prefix, separator, fields_text = stat_text.rpartition(")")
+    if not separator:
+        return True
+    fields = fields_text.strip().split()
+    # A zombie still answers ``kill(pid, 0)`` but cannot resume publication.
+    # Treat it as dead so its PREPARING/REPAIRING lease cannot strand the job
+    # until its parent eventually reaps it.
+    return not fields or fields[0] != "Z"
 
 
 def _linux_boot_id() -> str:

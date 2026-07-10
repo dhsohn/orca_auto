@@ -608,6 +608,45 @@ def test_dequeue_recovers_when_publisher_pid_was_reused(
     assert claimed.queue_id == entry.queue_id
 
 
+def test_dequeue_recovers_publication_owned_by_zombie_process(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    owner_pid = 1234
+    monkeypatch.setattr(publication.os, "kill", lambda _pid, _signal: None)
+    original_read_text = Path.read_text
+
+    def read_proc_stat(
+        path: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        if path == Path(f"/proc/{owner_pid}/stat"):
+            return f"{owner_pid} (publisher) Z 1 1 1"
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", read_proc_stat)
+    entry = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="zombie-publisher",
+        task_kind="kind",
+        engine="engine",
+        metadata={
+            QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING,
+            QUEUE_RECORD_SYNC_OWNER_PID_KEY: owner_pid,
+            QUEUE_RECORD_SYNC_OWNER_START_KEY: "same-process",
+            QUEUE_RECORD_SYNC_UPDATED_AT_KEY: datetime.now(UTC).isoformat(),
+        },
+    )
+
+    claimed = store.dequeue_next(tmp_path)
+
+    assert claimed is not None
+    assert claimed.queue_id == entry.queue_id
+
+
 def test_update_metadata_merges_without_changing_lifecycle_fields(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -36,6 +36,22 @@ from orca_auto.flow.submitters import (
 )
 
 
+def _wait_for_thread_event(event: Event, thread: Thread) -> bool:
+    for _ in range(100):
+        if event.wait(timeout=0.1):
+            return True
+        if not thread.is_alive():
+            return event.is_set()
+    return event.is_set()
+
+
+def _join_thread(thread: Thread) -> None:
+    for _ in range(100):
+        thread.join(timeout=0.1)
+        if not thread.is_alive():
+            return
+
+
 def _concurrent_internal_enqueue(
     queue_root: str,
     job_dir: str,
@@ -458,6 +474,285 @@ def test_submit_job_dir_preserves_durable_success_when_queued_record_update_fail
     assert "OSError: disk full after enqueue" in result["stderr"]
 
 
+def _post_commit_enqueue_submission(tmp_path: Path) -> tuple[Path, Path, SimpleNamespace]:
+    queue_root = tmp_path / "queue"
+    job_dir = (tmp_path / "job").resolve()
+    submission = SimpleNamespace(
+        queue_root=queue_root,
+        app_name="orca_auto_crest",
+        task_id="crest-post-commit",
+        task_kind="crest_conformer_search",
+        engine="crest",
+        priority=6,
+        metadata={"job_dir": str(job_dir)},
+        context={},
+    )
+    return queue_root, job_dir, submission
+
+
+def _submit_with_enqueue(
+    *,
+    job_dir: Path,
+    submission: SimpleNamespace,
+    enqueue_fn: Any,
+    record_queued_fn: Any,
+) -> dict[str, Any]:
+    return internal_engine_submission.submit_internal_engine_job_dir(
+        load_config_fn=lambda _path: object(),
+        resolve_job_dir_fn=lambda _cfg, _job_dir: job_dir,
+        load_manifest_fn=lambda _job_dir: {},
+        build_submission_fn=lambda *_args: submission,
+        record_queued_fn=record_queued_fn,
+        enqueue_fn=enqueue_fn,
+        api_name="crest.run_dir",
+        job_dir=str(job_dir),
+        priority=submission.priority,
+        config_path="",
+    )
+
+
+def test_enqueue_post_commit_error_recovers_and_publishes_durable_entry(tmp_path: Path) -> None:
+    queue_root, job_dir, submission = _post_commit_enqueue_submission(tmp_path)
+    publications: list[tuple[Any, Any]] = []
+
+    def persist_then_raise(root: Path, **kwargs: Any) -> None:
+        enqueue(root, **kwargs)
+        raise OSError("enqueue durability barrier failed")
+
+    def record_queued(_cfg: Any, replay_submission: Any, entry: Any) -> bool:
+        publications.append((replay_submission, entry))
+        return True
+
+    result = _submit_with_enqueue(
+        job_dir=job_dir,
+        submission=submission,
+        enqueue_fn=persist_then_raise,
+        record_queued_fn=record_queued,
+    )
+
+    persisted = list_queue(queue_root)[0]
+    assert result["status"] == "submitted"
+    assert result["queue_id"] == persisted.queue_id
+    assert persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
+    assert "OSError: enqueue durability barrier failed" in result["stderr"]
+    assert len(publications) == 1
+    assert not publications[0][0].context.get(
+        internal_engine_submission.SUPPRESS_QUEUED_NOTIFICATION_CONTEXT_KEY,
+        False,
+    )
+
+
+def test_enqueue_post_commit_control_flow_is_fenced_then_propagated(tmp_path: Path) -> None:
+    queue_root, job_dir, submission = _post_commit_enqueue_submission(tmp_path)
+
+    def persist_then_interrupt(root: Path, **kwargs: Any) -> None:
+        enqueue(root, **kwargs)
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        _submit_with_enqueue(
+            job_dir=job_dir,
+            submission=submission,
+            enqueue_fn=persist_then_interrupt,
+            record_queued_fn=lambda *_args: True,
+        )
+
+    persisted = list_queue(queue_root)[0]
+    assert (
+        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
+    )
+    assert persisted.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
+
+
+def test_enqueue_post_commit_recovery_accepts_visible_transition_after_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    queue_root, job_dir, submission = _post_commit_enqueue_submission(tmp_path)
+    real_mutate_entries = internal_engine_submission.mutate_entries
+    mutation_calls = 0
+
+    def persist_recovery_then_raise(*args: Any, **kwargs: Any) -> Any:
+        nonlocal mutation_calls
+        mutation_calls += 1
+        result = real_mutate_entries(*args, **kwargs)
+        if mutation_calls == 1:
+            raise OSError("repair_pending durability barrier failed")
+        return result
+
+    monkeypatch.setattr(
+        internal_engine_submission,
+        "mutate_entries",
+        persist_recovery_then_raise,
+    )
+
+    def enqueue_then_raise(root: Path, **kwargs: Any) -> None:
+        enqueue(root, **kwargs)
+        raise OSError("enqueue durability barrier failed")
+
+    result = _submit_with_enqueue(
+        job_dir=job_dir,
+        submission=submission,
+        enqueue_fn=enqueue_then_raise,
+        record_queued_fn=lambda *_args: True,
+    )
+
+    assert result["status"] == "submitted"
+    assert (
+        list_queue(queue_root)[0].metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY]
+        == "complete"
+    )
+
+
+def test_enqueue_post_commit_recovery_propagates_new_control_flow_after_visible_fence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    queue_root, job_dir, submission = _post_commit_enqueue_submission(tmp_path)
+    real_mutate_entries = internal_engine_submission.mutate_entries
+    mutation_calls = 0
+
+    def persist_recovery_then_interrupt(*args: Any, **kwargs: Any) -> Any:
+        nonlocal mutation_calls
+        mutation_calls += 1
+        result = real_mutate_entries(*args, **kwargs)
+        if mutation_calls == 1:
+            raise KeyboardInterrupt
+        return result
+
+    monkeypatch.setattr(
+        internal_engine_submission,
+        "mutate_entries",
+        persist_recovery_then_interrupt,
+    )
+
+    def enqueue_then_raise(root: Path, **kwargs: Any) -> None:
+        enqueue(root, **kwargs)
+        raise OSError("enqueue durability barrier failed")
+
+    with pytest.raises(KeyboardInterrupt):
+        _submit_with_enqueue(
+            job_dir=job_dir,
+            submission=submission,
+            enqueue_fn=enqueue_then_raise,
+            record_queued_fn=lambda *_args: True,
+        )
+
+    persisted = list_queue(queue_root)[0]
+    assert (
+        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
+    )
+    assert persisted.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
+
+
+def test_enqueue_post_commit_recovery_never_mutates_a_different_submission(tmp_path: Path) -> None:
+    queue_root, job_dir, submission = _post_commit_enqueue_submission(tmp_path)
+
+    def persist_foreign_then_raise(root: Path, **kwargs: Any) -> None:
+        enqueue(root, **{**kwargs, "task_id": "different-task"})
+        raise OSError("enqueue result lost")
+
+    result = _submit_with_enqueue(
+        job_dir=job_dir,
+        submission=submission,
+        enqueue_fn=persist_foreign_then_raise,
+        record_queued_fn=lambda *_args: True,
+    )
+
+    foreign = list_queue(queue_root)[0]
+    assert result["status"] == "failed"
+    assert foreign.task_id == "different-task"
+    assert foreign.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "preparing"
+    assert foreign.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] > 0
+
+
+def test_fresh_publication_keyboard_interrupt_is_retryable_and_propagates(
+    tmp_path: Path,
+) -> None:
+    queue_root = tmp_path / "queue"
+    job_dir = tmp_path / "job"
+    token = "fresh-publication-token"
+    submission = SimpleNamespace(
+        queue_root=queue_root,
+        metadata={"job_dir": str(job_dir)},
+    )
+    entry = enqueue(
+        queue_root,
+        app_name="orca_auto_crest",
+        task_id="crest-interrupted",
+        task_kind="crest_conformer_search",
+        engine="crest",
+        metadata={
+            "job_dir": str(job_dir),
+            internal_engine_submission._QUEUED_RECORD_SYNC_KEY: "preparing",
+            internal_engine_submission.QUEUE_RECORD_SYNC_TOKEN_KEY: token,
+        },
+    )
+    state = internal_engine_submission._InternalEngineSubmissionState(
+        resolved_job_dir=job_dir,
+        submission=submission,
+        entry=entry,
+        publication_token=token,
+    )
+
+    def interrupt(*_args: Any) -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        internal_engine_submission._record_queued_with_warning(
+            cfg=object(),
+            state=state,
+            record_queued_fn=interrupt,
+        )
+
+    persisted = list_queue(queue_root)[0]
+    assert (
+        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
+    )
+    assert persisted.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
+
+
+def test_repair_publication_system_exit_is_retryable_and_propagates(tmp_path: Path) -> None:
+    queue_root = tmp_path / "queue"
+    job_dir = tmp_path / "job"
+    submission = SimpleNamespace(
+        queue_root=queue_root,
+        metadata={"job_dir": str(job_dir)},
+    )
+    entry = enqueue(
+        queue_root,
+        app_name="orca_auto_crest",
+        task_id="crest-repair-interrupted",
+        task_kind="crest_conformer_search",
+        engine="crest",
+        metadata={
+            "job_dir": str(job_dir),
+            internal_engine_submission._QUEUED_RECORD_SYNC_KEY: "repair_pending",
+        },
+    )
+    state = internal_engine_submission._InternalEngineSubmissionState(
+        resolved_job_dir=job_dir,
+        submission=submission,
+        entry=entry,
+    )
+
+    def exit_during_repair(*_args: Any) -> None:
+        raise SystemExit(17)
+
+    with pytest.raises(SystemExit, match="17"):
+        internal_engine_submission._repair_queued_record(
+            cfg=object(),
+            state=state,
+            record_queued_fn=exit_during_repair,
+        )
+
+    persisted = list_queue(queue_root)[0]
+    assert (
+        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
+    )
+    assert persisted.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
+
+
 def test_xtb_active_replay_uses_existing_entry_identity_and_metadata(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -705,7 +1000,7 @@ def test_worker_cannot_claim_entry_while_fresh_queued_record_is_being_published(
 
     def record_queued(_cfg: Any, _submission: Any, _entry: Any) -> None:
         publish_started.set()
-        assert allow_publish.wait(timeout=5)
+        allow_publish.wait()
 
     monkeypatch.setattr(crest_submitter, "record_queued", record_queued)
 
@@ -720,7 +1015,7 @@ def test_worker_cannot_claim_entry_while_fresh_queued_record_is_being_published(
     )
     thread.start()
     try:
-        assert publish_started.wait(timeout=5)
+        assert _wait_for_thread_event(publish_started, thread)
         publishing = list_queue(queue_root)[0]
         assert (
             publishing.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "preparing"
@@ -739,7 +1034,7 @@ def test_worker_cannot_claim_entry_while_fresh_queued_record_is_being_published(
         assert dequeue_next(queue_root) is None
     finally:
         allow_publish.set()
-        thread.join(timeout=5)
+        _join_thread(thread)
 
     assert not thread.is_alive()
     assert results[0]["status"] == "submitted"
@@ -783,7 +1078,7 @@ def test_cancel_during_fresh_publication_terminalizes_only_after_side_effects(
     def record_queued(_cfg: Any, _submission: Any, _entry: Any) -> None:
         events.append("record_started")
         publish_started.set()
-        assert allow_publish.wait(timeout=5)
+        allow_publish.wait()
         events.append("record_finished")
 
     monkeypatch.setattr(crest_submitter, "record_queued", record_queued)
@@ -800,7 +1095,7 @@ def test_cancel_during_fresh_publication_terminalizes_only_after_side_effects(
     submit_thread.start()
     cancel_thread: Thread | None = None
     try:
-        assert publish_started.wait(timeout=5)
+        assert _wait_for_thread_event(publish_started, submit_thread)
         queue_id = list_queue(queue_root)[0].queue_id
 
         def cancel() -> None:
@@ -811,7 +1106,7 @@ def test_cancel_during_fresh_publication_terminalizes_only_after_side_effects(
 
         cancel_thread = Thread(target=cancel)
         cancel_thread.start()
-        assert cancel_started.wait(timeout=5)
+        assert _wait_for_thread_event(cancel_started, cancel_thread)
         assert not cancel_finished.wait(timeout=0.25)
         publishing = list_queue(queue_root)[0]
         assert publishing.status.value == "pending"
@@ -820,9 +1115,9 @@ def test_cancel_during_fresh_publication_terminalizes_only_after_side_effects(
         )
     finally:
         allow_publish.set()
-        submit_thread.join(timeout=5)
+        _join_thread(submit_thread)
         if cancel_thread is not None:
-            cancel_thread.join(timeout=5)
+            _join_thread(cancel_thread)
 
     assert not submit_thread.is_alive()
     assert cancel_thread is not None and not cancel_thread.is_alive()
@@ -942,7 +1237,7 @@ def test_cancel_during_repair_publication_waits_for_complete_fenced_write(
     def record_queued(_cfg: Any, _submission: Any, _entry: Any) -> None:
         events.append("repair_started")
         repair_started.set()
-        assert allow_repair.wait(timeout=5)
+        allow_repair.wait()
         events.append("repair_finished")
 
     monkeypatch.setattr(crest_submitter, "record_queued", record_queued)
@@ -958,7 +1253,7 @@ def test_cancel_during_repair_publication_waits_for_complete_fenced_write(
     replay_thread.start()
     cancel_thread: Thread | None = None
     try:
-        assert repair_started.wait(timeout=5)
+        assert _wait_for_thread_event(repair_started, replay_thread)
         repairing = list_queue(queue_root)[0]
         assert repairing.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repairing"
 
@@ -970,14 +1265,14 @@ def test_cancel_during_repair_publication_waits_for_complete_fenced_write(
 
         cancel_thread = Thread(target=cancel)
         cancel_thread.start()
-        assert cancel_started.wait(timeout=5)
+        assert _wait_for_thread_event(cancel_started, cancel_thread)
         assert not cancel_finished.wait(timeout=0.25)
         assert list_queue(queue_root)[0].status.value == "pending"
     finally:
         allow_repair.set()
-        replay_thread.join(timeout=5)
+        _join_thread(replay_thread)
         if cancel_thread is not None:
-            cancel_thread.join(timeout=5)
+            _join_thread(cancel_thread)
 
     assert not replay_thread.is_alive()
     assert cancel_thread is not None and not cancel_thread.is_alive()
@@ -1041,7 +1336,7 @@ def test_cancel_after_repair_claim_revokes_fence_before_any_side_effect(
     @contextmanager
     def delayed_publication_lock(root: Path, queue_id: str) -> Any:
         waiting_before_lock.set()
-        assert allow_publication_lock.wait(timeout=5)
+        allow_publication_lock.wait()
         with original_publication_lock(root, queue_id):
             yield
 
@@ -1062,7 +1357,7 @@ def test_cancel_after_repair_claim_revokes_fence_before_any_side_effect(
     )
     replay_thread.start()
     try:
-        assert waiting_before_lock.wait(timeout=5)
+        assert _wait_for_thread_event(waiting_before_lock, replay_thread)
         repairing = list_queue(queue_root)[0]
         assert repairing.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repairing"
 
@@ -1075,7 +1370,7 @@ def test_cancel_after_repair_claim_revokes_fence_before_any_side_effect(
         )
     finally:
         allow_publication_lock.set()
-        replay_thread.join(timeout=5)
+        _join_thread(replay_thread)
 
     assert not replay_thread.is_alive()
     assert replays[0]["status"] == "blocked"

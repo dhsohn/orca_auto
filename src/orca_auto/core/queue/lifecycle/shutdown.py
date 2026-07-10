@@ -23,8 +23,16 @@ def cancel_running_process_job(
     job: Any,
     *,
     hooks: EngineQueueProcessLifecycleHooks,
+    release_admission_slot: bool = True,
     logger: logging.Logger = LOGGER,
 ) -> bool:
+    """Stop and mark a running job, optionally deferring admission release.
+
+    Callers that must durably finalize engine-specific state before making the
+    capacity reusable can pass ``release_admission_slot=False`` and release the
+    job's token in their own outer ``finally`` block.
+    """
+
     logger.info("Cancelling running job: %s", queue_id)
     try:
         terminated = hooks.terminate_process_fn(job.process)
@@ -45,6 +53,9 @@ def cancel_running_process_job(
             getattr(job, "admission_token", ""),
         )
         return False
+    if not release_admission_slot:
+        mark_outcome = hooks.mark_cancelled_fn(job_queue_root(worker, job), queue_id)
+        return mark_outcome is not False
     try:
         hooks.mark_cancelled_fn(job_queue_root(worker, job), queue_id)
     finally:

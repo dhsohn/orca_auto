@@ -40,7 +40,7 @@ class TestParseLockInfo(unittest.TestCase):
 
         self.assertEqual(
             info,
-            {"pid": None, "started_at": None, "process_start_ticks": None},
+            {"pid": None, "started_at": None, "process_start_ticks": None, "boot_id": None},
         )
 
     def test_parse_lock_info_returns_empty_shape_for_empty_payload(self) -> None:
@@ -52,7 +52,7 @@ class TestParseLockInfo(unittest.TestCase):
 
         self.assertEqual(
             info,
-            {"pid": None, "started_at": None, "process_start_ticks": None},
+            {"pid": None, "started_at": None, "process_start_ticks": None, "boot_id": None},
         )
 
     def test_parse_lock_info_accepts_numeric_strings(self) -> None:
@@ -64,6 +64,7 @@ class TestParseLockInfo(unittest.TestCase):
                         "pid": "4321",
                         "started_at": "2026-03-22T00:00:00+00:00",
                         "process_start_ticks": "987",
+                        "boot_id": "boot-a",
                     }
                 ),
                 encoding="utf-8",
@@ -74,6 +75,7 @@ class TestParseLockInfo(unittest.TestCase):
         self.assertEqual(info["pid"], 4321)
         self.assertEqual(info["started_at"], "2026-03-22T00:00:00+00:00")
         self.assertEqual(info["process_start_ticks"], 987)
+        self.assertEqual(info["boot_id"], "boot-a")
 
     def test_parse_lock_info_returns_empty_shape_for_malformed_payload(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -84,7 +86,7 @@ class TestParseLockInfo(unittest.TestCase):
 
         self.assertEqual(
             info,
-            {"pid": None, "started_at": None, "process_start_ticks": None},
+            {"pid": None, "started_at": None, "process_start_ticks": None, "boot_id": None},
         )
 
     def test_parse_lock_info_ignores_invalid_pid_and_tick_strings(self) -> None:
@@ -323,6 +325,47 @@ class TestAcquireFileLock(unittest.TestCase):
             ):
                 payload = json.loads(lock_path.read_text(encoding="utf-8"))
                 self.assertEqual(payload["pid"], 999)
+
+    def test_acquire_file_lock_treats_cross_boot_owner_as_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            lock_path = Path(td) / "run.lock"
+            lock_path.write_text(
+                json.dumps(
+                    {
+                        "pid": 4321,
+                        "process_start_ticks": 111,
+                        "boot_id": "boot-a",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            alive_calls: list[int] = []
+
+            def record_alive_probe(pid: int) -> bool:
+                alive_calls.append(pid)
+                return True
+
+            with acquire_file_lock(
+                lock_path=lock_path,
+                lock_payload_obj={"pid": 999, "boot_id": "boot-b"},
+                parse_lock_info_fn=parse_lock_info,
+                is_process_alive_fn=record_alive_probe,
+                process_start_ticks_fn=lambda _pid: 111,
+                boot_id_fn=lambda: "boot-b",
+                logger=logging.getLogger("test.process_lock.cross_boot"),
+                acquired_log_template="acquired %s",
+                released_log_template="released %s",
+                stale_pid_reuse_log_template="reuse %d %d %s %s",
+                stale_lock_log_template="stale %d %s",
+                active_lock_error_builder=_active_lock_error,
+                unreadable_lock_error_builder=_unreadable_lock_error,
+                timeout_error_builder=_timeout_error,
+            ):
+                payload = json.loads(lock_path.read_text(encoding="utf-8"))
+                self.assertEqual(payload["pid"], 999)
+                self.assertEqual(payload["boot_id"], "boot-b")
+
+            self.assertEqual(alive_calls, [])
 
     def test_acquire_file_lock_treats_unreadable_owner_as_stale_with_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as td:

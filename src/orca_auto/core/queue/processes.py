@@ -313,6 +313,7 @@ def current_worker_pid_payload() -> dict[str, int | str]:
         now_fn=now_utc_iso,
         process_start_ticks_fn=_process_start_ticks,
         pid_fn=os.getpid,
+        boot_id_fn=lambda: process_utils.linux_boot_id(proc_root=Path("/proc")),
     )
 
 
@@ -343,6 +344,7 @@ def read_live_pid_file(pid_path: Path) -> int | None:
         pid_path,
         is_process_alive_fn=pid_is_alive,
         process_start_ticks_fn=_process_start_ticks,
+        boot_id_fn=lambda: process_utils.linux_boot_id(proc_root=Path("/proc")),
         remove_file_fn=process_utils.remove_file_silent,
     )
 

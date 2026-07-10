@@ -4,6 +4,7 @@ import json
 import logging
 import multiprocessing
 import signal
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -70,6 +71,14 @@ def _recover_absent_group(
         results.put(("ok", recovered))
 
 
+def test_boot_identity_fields_preserve_legacy_admission_slot_positionals() -> None:
+    slot = store.AdmissionSlot("slot", 1, 2, "source", "acquired", "legacy-app")
+
+    assert slot.app_name == "legacy-app"
+    assert slot.owner_boot_id is None
+    assert slot.engine_process_boot_id is None
+
+
 def test_engine_slot_state_machine_and_release_guards(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -97,6 +106,11 @@ def test_engine_slot_state_machine_and_release_guards(
         active.engine_pgid,
         active.engine_process_start_ticks,
     ) == ("active", 202, 202, 2002)
+    assert active.owner_boot_id
+    assert active.engine_process_boot_id == active.owner_boot_id
+    persisted = json.loads((tmp_path / store.ADMISSION_FILE_NAME).read_text(encoding="utf-8"))[0]
+    assert persisted["owner_boot_id"] == active.owner_boot_id
+    assert persisted["engine_process_boot_id"] == active.owner_boot_id
     with pytest.raises(RuntimeError, match="launch may be active"):
         admission.release_slot(tmp_path, token)
 
@@ -130,6 +144,26 @@ def test_engine_slot_state_machine_and_release_guards(
             "process_start_ticks": 1,
             "engine_process_state": "idle",
         },
+        {
+            "token": "slot",
+            "owner_pid": 1,
+            "process_start_ticks": 1,
+            "owner_boot_id": "boot-a",
+            "engine_process_state": "active",
+            "engine_pid": 2,
+            "engine_pgid": 2,
+            "engine_process_start_ticks": 2,
+        },
+        {
+            "token": "slot",
+            "owner_pid": 1,
+            "process_start_ticks": 1,
+            "engine_process_state": "active",
+            "engine_pid": 2,
+            "engine_pgid": 2,
+            "engine_process_start_ticks": 2,
+            "engine_process_boot_id": "boot-a",
+        },
     ],
 )
 def test_admission_schema_rejects_unsafe_identity_coercions(
@@ -162,13 +196,16 @@ def test_active_recovery_terminates_group_and_clears_identity(
     signals: list[int] = []
 
     def killpg(_pgid: int, signum: int) -> None:
+        assert signum == 0
+        if not group_alive:
+            raise ProcessLookupError
+
+    def secure_signal(pid: int, pgid: int, ticks: int, signum: int) -> bool:
         nonlocal group_alive
-        if signum == 0:
-            if not group_alive:
-                raise ProcessLookupError
-            return
+        assert (pid, pgid, ticks) == (202, 202, 2002)
         signals.append(signum)
         group_alive = False
+        return True
 
     recovered = engine_process.recover_slot_engine_process(
         tmp_path,
@@ -176,6 +213,7 @@ def test_active_recovery_terminates_group_and_clears_identity(
         deps=engine_process.EngineProcessRecoveryDeps(
             killpg=killpg,
             kill=lambda _pid, _sig: None,
+            secure_signal=secure_signal,
             process_start_ticks=lambda _pid: 2002,
             sleep=lambda _seconds: None,
         ),
@@ -256,6 +294,229 @@ def test_active_recovery_retains_unknown_live_pid_without_signalling(
     assert admission.get_slot(tmp_path, token).engine_process_state == "active"  # type: ignore[union-attr]
 
 
+def test_active_recovery_retains_leaderless_group_without_signalling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch)
+    admission.prepare_slot_engine_process(tmp_path, token)
+    admission.set_slot_engine_process(
+        tmp_path,
+        token,
+        pid=202,
+        pgid=202,
+        process_start_ticks=2002,
+    )
+    signals: list[int] = []
+
+    def killpg(_pgid: int, signum: int) -> None:
+        if signum != 0:
+            signals.append(signum)
+
+    def missing_leader(_pid: int, _signum: int) -> None:
+        raise ProcessLookupError
+
+    with pytest.raises(engine_process.EngineProcessRecordError, match="leader pid=202 is gone"):
+        engine_process.recover_slot_engine_process(
+            tmp_path,
+            token,
+            deps=engine_process.EngineProcessRecoveryDeps(
+                killpg=killpg,
+                kill=missing_leader,
+                process_start_ticks=lambda _pid: pytest.fail("dead leader has no ticks"),
+            ),
+        )
+
+    assert signals == []
+    slot = admission.get_slot(tmp_path, token)
+    assert slot is not None and slot.engine_process_state == "active"
+
+
+def test_active_recovery_clears_cross_boot_identity_without_signalling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch)
+    admission.prepare_slot_engine_process(tmp_path, token)
+    admission.set_slot_engine_process(
+        tmp_path,
+        token,
+        pid=202,
+        pgid=202,
+        process_start_ticks=2002,
+    )
+    signals: list[int] = []
+
+    def killpg(_pgid: int, signum: int) -> None:
+        if signum != 0:
+            signals.append(signum)
+
+    recovered = engine_process.recover_slot_engine_process(
+        tmp_path,
+        token,
+        deps=engine_process.EngineProcessRecoveryDeps(
+            killpg=killpg,
+            kill=lambda *_args: pytest.fail("cross-boot PID must not be probed"),
+            process_start_ticks=lambda _pid: pytest.fail("cross-boot ticks must not be read"),
+            boot_id=lambda: "a-later-boot",
+        ),
+    )
+
+    assert recovered is False
+    assert signals == []
+    slot = admission.get_slot(tmp_path, token)
+    assert slot is not None and slot.engine_process_state == "idle"
+
+
+def test_global_recovery_clears_cross_boot_pending_fence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch)
+    admission.prepare_slot_engine_process(tmp_path, token)
+    path = tmp_path / store.ADMISSION_FILE_NAME
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload[0]["owner_boot_id"] = "earlier-boot"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    recovered = engine_process.recover_orphaned_engine_slots(
+        tmp_path,
+        source="test-engine",
+        deps=engine_process.EngineProcessRecoveryDeps(
+            kill=lambda *_args: pytest.fail("cross-boot owner PID must not be probed"),
+            killpg=lambda *_args: pytest.fail("pending slots have no group to probe"),
+            boot_id=lambda: "current-boot",
+        ),
+    )
+
+    assert recovered == 1
+    slot = admission.get_slot(tmp_path, token)
+    assert slot is not None and slot.engine_process_state == "idle"
+
+
+def test_cross_boot_pending_cas_retains_concurrent_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch)
+    admission.prepare_slot_engine_process(tmp_path, token)
+    path = tmp_path / store.ADMISSION_FILE_NAME
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload[0]["owner_boot_id"] = "earlier-boot"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    real_complete = store.complete_slot_engine_process
+
+    def replace_then_complete(root: Path, slot_token: str, **kwargs: Any) -> Any:
+        replacement = json.loads(path.read_text(encoding="utf-8"))
+        replacement[0]["owner_pid"] = 303
+        replacement[0]["process_start_ticks"] = 3003
+        replacement[0]["owner_boot_id"] = "current-boot"
+        path.write_text(json.dumps(replacement), encoding="utf-8")
+        return real_complete(root, slot_token, **kwargs)
+
+    monkeypatch.setattr(engine_process, "complete_slot_engine_process", replace_then_complete)
+
+    recovered = engine_process.recover_orphaned_engine_slots(
+        tmp_path,
+        source="test-engine",
+        deps=engine_process.EngineProcessRecoveryDeps(
+            kill=lambda *_args: pytest.fail("cross-boot owner PID must not be probed"),
+            killpg=lambda *_args: pytest.fail("pending slots have no group to probe"),
+            boot_id=lambda: "current-boot",
+        ),
+        strict=False,
+    )
+
+    assert recovered == 0
+    slot = admission.get_slot(tmp_path, token)
+    assert slot is not None
+    assert (slot.owner_pid, slot.process_start_ticks, slot.owner_boot_id) == (
+        303,
+        3003,
+        "current-boot",
+    )
+    assert slot.engine_process_state == "pending"
+
+
+def test_active_recovery_rejects_bootless_legacy_identity_without_signalling(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "token": "legacy-slot",
+        "owner_pid": 101,
+        "process_start_ticks": 1001,
+        "source": "test-engine",
+        "acquired_at": "2026-07-10T00:00:00+00:00",
+        "engine_process_state": "active",
+        "engine_pid": 202,
+        "engine_pgid": 202,
+        "engine_process_start_ticks": 2002,
+    }
+    (tmp_path / store.ADMISSION_FILE_NAME).write_text(
+        json.dumps([payload]),
+        encoding="utf-8",
+    )
+    signals: list[int] = []
+
+    def killpg(_pgid: int, signum: int) -> None:
+        if signum != 0:
+            signals.append(signum)
+
+    with pytest.raises(engine_process.EngineProcessRecordError, match="boot-scoped"):
+        engine_process.recover_slot_engine_process(
+            tmp_path,
+            "legacy-slot",
+            deps=engine_process.EngineProcessRecoveryDeps(
+                killpg=killpg,
+                kill=lambda *_args: pytest.fail("legacy PID must not be probed"),
+                process_start_ticks=lambda _pid: pytest.fail("legacy ticks must not be read"),
+            ),
+        )
+
+    assert signals == []
+    assert admission.get_slot(tmp_path, "legacy-slot") is not None
+
+
+def test_legacy_absent_group_clear_does_not_delete_boot_scoped_replacement(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "token": "legacy-slot",
+        "owner_pid": 101,
+        "process_start_ticks": 1001,
+        "source": "test-engine",
+        "acquired_at": "2026-07-10T00:00:00+00:00",
+        "engine_process_state": "active",
+        "engine_pid": 202,
+        "engine_pgid": 202,
+        "engine_process_start_ticks": 2002,
+    }
+    path = tmp_path / store.ADMISSION_FILE_NAME
+    path.write_text(json.dumps([payload]), encoding="utf-8")
+
+    def replace_then_report_absent(_pgid: int, signum: int) -> None:
+        assert signum == 0
+        replacement = dict(payload)
+        replacement["owner_boot_id"] = "current-boot"
+        replacement["engine_process_boot_id"] = "current-boot"
+        path.write_text(json.dumps([replacement]), encoding="utf-8")
+        raise ProcessLookupError
+
+    with pytest.raises(engine_process.EngineProcessRecordError, match="changed while clearing"):
+        engine_process.recover_slot_engine_process(
+            tmp_path,
+            "legacy-slot",
+            deps=engine_process.EngineProcessRecoveryDeps(
+                killpg=replace_then_report_absent,
+                secure_signal=lambda *_args: pytest.fail("absent group must not be signalled"),
+            ),
+        )
+
+    slot = admission.get_slot(tmp_path, "legacy-slot")
+    assert slot is not None
+    assert slot.engine_process_boot_id == "current-boot"
+
+
 def test_global_recovery_handles_active_before_retaining_dead_pending(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -289,21 +550,25 @@ def test_global_recovery_handles_active_before_retaining_dead_pending(
     group_alive = True
 
     def kill(pid: int, _sig: int) -> None:
-        if pid in {101, 102, 202}:
+        if pid in {101, 102}:
             raise ProcessLookupError
+        assert pid == 202
 
     def killpg(_pgid: int, signum: int) -> None:
+        assert signum == 0
+        if not group_alive:
+            raise ProcessLookupError
+
+    def secure_signal(_pid: int, _pgid: int, _ticks: int, _signum: int) -> bool:
         nonlocal group_alive
-        if signum == 0:
-            if not group_alive:
-                raise ProcessLookupError
-            return
         group_alive = False
+        return True
 
     deps = engine_process.EngineProcessRecoveryDeps(
         killpg=killpg,
         kill=kill,
-        process_start_ticks=lambda _pid: None,
+        secure_signal=secure_signal,
+        process_start_ticks=lambda pid: 2020 if pid == 202 else None,
         sleep=lambda _seconds: None,
     )
     assert (
@@ -401,6 +666,92 @@ def test_registrar_publication_failure_cleans_process_and_pending_marker(
     assert result == "EngineProcessRecordError"
     assert process.exited is True
     assert admission.get_slot(tmp_path, token).engine_process_state == "idle"  # type: ignore[union-attr]
+
+
+def test_prepare_compensates_pending_record_after_post_replace_save_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch)
+    original_save = store._save_slots
+    save_calls = 0
+
+    def save_then_fail_once(root: Path, slots: list[store.AdmissionSlot]) -> None:
+        nonlocal save_calls
+        save_calls += 1
+        original_save(root, slots)
+        if save_calls == 1:
+            raise OSError("directory fsync failed after replace")
+
+    monkeypatch.setattr(store, "_save_slots", save_then_fail_once)
+
+    with pytest.raises(engine_process.EngineProcessRecordError, match="Cannot prepare"):
+        admission.build_slot_engine_process_preparer(tmp_path, token)()
+
+    slot = admission.get_slot(tmp_path, token)
+    assert slot is not None and slot.engine_process_state == "idle"
+    assert save_calls == 2
+
+
+def test_prepare_compensation_never_discards_visible_active_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch)
+    original_save = store._save_slots
+
+    def publish_active_then_fail(root: Path, slots: list[store.AdmissionSlot]) -> None:
+        pending = next(slot for slot in slots if slot.token == token)
+        active = replace(
+            pending,
+            engine_process_state="active",
+            engine_pid=202,
+            engine_pgid=202,
+            engine_process_start_ticks=2002,
+            engine_process_boot_id=pending.owner_boot_id,
+        )
+        original_save(
+            root,
+            [active if slot.token == token else slot for slot in slots],
+        )
+        raise OSError("save outcome was ambiguous")
+
+    monkeypatch.setattr(store, "_save_slots", publish_active_then_fail)
+
+    with pytest.raises(engine_process.EngineProcessRecordError, match="Cannot prepare"):
+        admission.build_slot_engine_process_preparer(tmp_path, token)()
+
+    slot = admission.get_slot(tmp_path, token)
+    assert slot is not None
+    assert (
+        slot.engine_process_state,
+        slot.engine_pid,
+        slot.engine_pgid,
+        slot.engine_process_start_ticks,
+        slot.engine_process_boot_id,
+    ) == ("active", 202, 202, 2002, slot.owner_boot_id)
+
+
+def test_existing_slot_can_opt_into_managed_engine_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(store, "_process_start_ticks", lambda _pid: 1001)
+    monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot")
+    monkeypatch.setattr(store.os, "kill", lambda _pid, _sig: None)
+    token = admission.reserve_slot(tmp_path, 1, source="generic", owner_pid=101)
+    assert token is not None
+
+    updated = admission.update_slot_metadata(
+        tmp_path,
+        token,
+        engine_process_state="idle",
+    )
+
+    assert updated is not None
+    assert updated.process_start_ticks == 1001
+    assert updated.owner_boot_id == "test-boot"
+    assert updated.engine_process_state == "idle"
 
 
 @pytest.mark.parametrize(
@@ -518,15 +869,18 @@ def test_global_dead_owner_recovery_escalates_term_to_kill(
         assert pid == 202
 
     def killpg(pgid: int, signum: int) -> None:
-        nonlocal group_alive
         assert pgid == 202
-        if signum == 0:
-            if not group_alive:
-                raise ProcessLookupError
-            return
+        assert signum == 0
+        if not group_alive:
+            raise ProcessLookupError
+
+    def secure_signal(pid: int, pgid: int, ticks: int, signum: int) -> bool:
+        nonlocal group_alive
+        assert (pid, pgid, ticks) == (202, 202, 2002)
         signals.append(signum)
         if signum == signal.SIGKILL:
             group_alive = False
+        return True
 
     recovered = engine_process.recover_orphaned_engine_slots(
         tmp_path,
@@ -534,6 +888,7 @@ def test_global_dead_owner_recovery_escalates_term_to_kill(
         deps=engine_process.EngineProcessRecoveryDeps(
             killpg=killpg,
             kill=kill,
+            secure_signal=secure_signal,
             process_start_ticks=lambda pid: 2002 if pid == 202 else None,
             monotonic=lambda: next(clock),
             sleep=lambda _seconds: None,

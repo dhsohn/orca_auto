@@ -197,12 +197,21 @@ def _load_job_runtime_context(
     )
 
 
-def _runtime_paths(current_dir: Path | None) -> dict[str, str]:
+def _runtime_paths(
+    current_dir: Path | None,
+    *,
+    include_state: bool = True,
+    include_report: bool = True,
+    queue_entry: dict[str, Any] | None = None,
+) -> dict[str, str]:
     return _contract_payload.runtime_paths(
         current_dir,
         state_file_name=STATE_FILE_NAME,
         report_json_name=REPORT_JSON_NAME,
         report_md_name=REPORT_MD_NAME,
+        include_state=include_state,
+        include_report=include_report,
+        queue_entry=queue_entry,
     )
 
 

@@ -58,10 +58,13 @@ def load_report_payload(reaction_dir: Path) -> dict | None:
 
 def terminal_report_data(
     reaction_dir: Path,
+    *,
+    queue_entry: QueueEntry | None = None,
 ) -> tuple[str, str | None, str | None, str | None] | None:
     return _queue_reconciliation.terminal_report_data(
         reaction_dir,
         load_report_payload_fn=load_report_payload,
+        queue_entry=queue_entry,
     )
 
 

@@ -20,6 +20,8 @@ from orca_auto.core.queue.processes import ProcessGroupTerminationDeps, terminat
 from .orca_process import (
     OrcaProcessRecoveryError,
     clear_orca_process_record,
+    clear_orca_process_record_snapshot,
+    orca_process_record_snapshot_from_exception,
     process_group_is_alive,
     write_orca_process_record,
 )
@@ -165,7 +167,13 @@ class OrcaRunner:
                         proc,
                         terminate_process=self._terminate_subprocess_tree,
                     )
-                clear_orca_process_record(inp.parent, pid=proc.pid)
+                failed_record = orca_process_record_snapshot_from_exception(exc)
+                if failed_record is not None:
+                    clear_orca_process_record_snapshot(
+                        inp.parent,
+                        failed_record,
+                        pid=proc.pid,
+                    )
                 if self._register_running_job is not None:
                     try:
                         self._register_running_job(None)
@@ -260,8 +268,12 @@ class OrcaRunner:
         if not reused and process_group_is_alive(pgid):
             return
         recorded_ticks = process_record.get("process_start_ticks")
+        recorded_boot_id = process_record.get("process_boot_id")
+        recorded_id = process_record.get("record_id")
         clear_orca_process_record(
             reaction_dir,
             pid=proc.pid,
             process_start_ticks=recorded_ticks if isinstance(recorded_ticks, int) else None,
+            process_boot_id=(recorded_boot_id if isinstance(recorded_boot_id, str) else None),
+            record_id=recorded_id if isinstance(recorded_id, str) else None,
         )

@@ -23,12 +23,12 @@ class OrcaQueueWorkerLifecycleCallbacks:
     terminate_process: Callable[[Any], Any]
     mark_failed: Callable[..., Any]
     upsert_running_job_record: Callable[[Any, Any], Any]
-    get_run_id_from_state: Callable[[str], str | None]
+    get_run_id_from_state: Callable[..., str | None]
     get_cancel_requested: Callable[..., bool]
     mark_cancelled: Callable[..., Any]
     mark_completed: Callable[..., Any]
     upsert_terminal_job_record: Callable[..., Any]
-    notify_terminal_job_from_state: Callable[[Any, str], bool]
+    notify_terminal_job_from_state: Callable[..., bool]
     find_queue_entry: Callable[[Any, str], Any | None] | None
     on_completed: Callable[[Any, Any], Any] | None
     queue_roots: Callable[[Any], tuple[Any, ...]]

@@ -190,9 +190,13 @@ def _auxiliary_copy_plan(
     source_base = source_dir.resolve()
     resolved_source_root = source_root.resolve()
     target_root = target_dir.resolve()
-    target_sources = {
-        target.resolve(): source.resolve() for target, source in (reserved_copies or {}).items()
-    }
+    target_sources: dict[Path, Path] = {}
+    for target, source in (reserved_copies or {}).items():
+        _register_copy_target(
+            target_sources,
+            target_path=target.resolve(),
+            source_path=source.resolve(),
+        )
     copies: list[_AuxiliaryCopy] = []
     for reference in _auxiliary_references(lines):
         raw_path = Path(reference.path_text).expanduser()
@@ -207,13 +211,11 @@ def _auxiliary_copy_plan(
             raise FileNotFoundError(f"ORCA auxiliary input not found: {source_path}")
 
         target_path = (target_root / relative_path).resolve()
-        existing_source = target_sources.get(target_path)
-        if existing_source is not None and existing_source != source_path:
-            raise ValueError(
-                "ORCA restart copy target collision: "
-                f"{target_path} maps to both {existing_source} and {source_path}"
-            )
-        target_sources[target_path] = source_path
+        _register_copy_target(
+            target_sources,
+            target_path=target_path,
+            source_path=source_path,
+        )
         copies.append(
             _AuxiliaryCopy(
                 reference=reference,
@@ -223,6 +225,28 @@ def _auxiliary_copy_plan(
             )
         )
     return copies
+
+
+def _register_copy_target(
+    target_sources: dict[Path, Path],
+    *,
+    target_path: Path,
+    source_path: Path,
+) -> None:
+    for existing_target, existing_source in target_sources.items():
+        if target_path == existing_target:
+            if source_path == existing_source:
+                return
+            raise ValueError(
+                "ORCA restart copy target collision: "
+                f"{target_path} maps to both {existing_source} and {source_path}"
+            )
+        if target_path in existing_target.parents or existing_target in target_path.parents:
+            raise ValueError(
+                "ORCA restart copy target collision: "
+                f"{target_path} and {existing_target} cannot both be files"
+            )
+    target_sources[target_path] = source_path
 
 
 def _copy_auxiliary_input_files(
