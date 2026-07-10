@@ -16,6 +16,53 @@ WORKFLOW_STAGE_DIRNAME_ALIASES = {
 }
 
 
+def _parenthesis_free_workflow_id(workflow_id: str) -> str:
+    suggestion = workflow_id.replace("(", "_").replace(")", "")
+    suggestion = suggestion.strip()
+    if not suggestion.strip("._-"):
+        return "workflow"
+    return suggestion
+
+
+def validate_workflow_id_path_segment(value: object) -> str:
+    workflow_id = normalize_text(value)
+    if not workflow_id:
+        raise ValueError("workflow_id is required")
+    if "(" in workflow_id or ")" in workflow_id:
+        suggestion = _parenthesis_free_workflow_id(workflow_id)
+        raise ValueError(
+            "workflow_id cannot contain parentheses '(' or ')': "
+            f"{workflow_id!r}. Use a name such as {suggestion!r}."
+        )
+    if (
+        workflow_id in {".", ".."}
+        or "/" in workflow_id
+        or "\\" in workflow_id
+        or Path(workflow_id).is_absolute()
+    ):
+        raise ValueError(
+            f"workflow_id must be a single path segment under workflow_root: {workflow_id!r}"
+        )
+    return workflow_id
+
+
+def validate_workflow_workspace_identity(
+    workspace_dir: str | Path,
+    workflow_id: object,
+) -> str:
+    workspace = Path(workspace_dir).expanduser().resolve()
+    workspace_name = normalize_text(workspace.name)
+    persisted_id = normalize_text(workflow_id) or workspace_name
+    if persisted_id != workspace_name:
+        raise ValueError(
+            f"workflow directory name {workspace_name!r} does not match persisted "
+            f"workflow_id {persisted_id!r}. Renaming an existing workflow directory is not "
+            "supported; restore its original name or create a new workflow."
+        )
+    validate_workflow_id_path_segment(workspace_name)
+    return validate_workflow_id_path_segment(persisted_id)
+
+
 def workflow_root_dir(workflow_root: str | Path) -> Path:
     return Path(workflow_root).expanduser().resolve()
 
@@ -172,6 +219,8 @@ __all__ = [
     "WORKFLOW_STAGE_DIRNAMES",
     "iter_workflow_runtime_workspaces",
     "path_is_inside_workflow_workspace",
+    "validate_workflow_id_path_segment",
+    "validate_workflow_workspace_identity",
     "workflow_root_dir",
     "workflow_stage_dirnames_for_engine",
     "workflow_workspace_internal_engine_paths",

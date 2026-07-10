@@ -351,7 +351,9 @@ def test_advance_workflow_reaction_ts_search_runs_append_sequence_and_sets_child
 
     deps = orchestration_deps(
         overrides={
-            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / str(payload["workflow_id"])
+            ),
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-19T12:00:00+00:00",
@@ -382,11 +384,11 @@ def test_advance_workflow_reaction_ts_search_runs_append_sequence_and_sets_child
     assert result["metadata"]["final_child_sync_completed_at"] == ""
     assert [entry[:2] for entry in calls] == [
         ("crest", "crest_stage_01"),
-        ("append_xtb", str(tmp_path / "workspace")),
+        ("append_xtb", str(tmp_path / "wf_reaction_01")),
         ("xtb", "crest_stage_01"),
         ("xtb", "xtb_stage_01"),
         ("clear_xtb_error", "wf_reaction_01"),
-        ("append_orca", str(tmp_path / "workspace")),
+        ("append_orca", str(tmp_path / "wf_reaction_01")),
         ("orca", "crest_stage_01"),
         ("orca", "xtb_stage_01"),
         ("orca", "orca_stage_01"),
@@ -394,6 +396,69 @@ def test_advance_workflow_reaction_ts_search_runs_append_sequence_and_sets_child
     assert {entry[2] for entry in calls if entry[0] in {"crest", "xtb", "orca"}} == {True}
     assert written and written[-1]["metadata"]["final_child_sync_pending"] is True
     assert synced and synced[-1]["metadata"]["sync_only"] is False
+
+
+def test_advance_workflow_quarantines_renamed_legacy_workflow_before_submission(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "TS8_wf"
+    payload: dict[str, Any] = {
+        "workflow_id": "TS8(wf)",
+        "template_name": "reaction_ts_search",
+        "status": "planned",
+        "stages": [
+            {
+                "stage_id": "crest_reactant_01",
+                "status": "planned",
+                "task": {"engine": "crest", "status": "planned"},
+                "metadata": {},
+            }
+        ],
+        "metadata": {},
+    }
+    written: list[dict[str, Any]] = []
+    synced: list[dict[str, Any]] = []
+
+    def unexpected_submit(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("renamed workflows must be quarantined before engine submission")
+
+    deps = orchestration_deps(
+        overrides={
+            "resolve_workflow_workspace": lambda target, workflow_root: workspace,
+            "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
+            "load_workflow_payload": lambda workspace_dir: payload,
+            "now_utc_iso": lambda: "2026-07-10T06:00:00+00:00",
+            "_sync_crest_stage": unexpected_submit,
+            "write_workflow_payload": lambda workspace_dir, current: written.append(
+                deepcopy(current)
+            ),
+            "sync_workflow_registry": lambda root, workspace_dir, current: synced.append(
+                deepcopy(current)
+            ),
+        }
+    )
+
+    with pytest.raises(ValueError, match="does not match persisted workflow_id"):
+        orchestration.advance_workflow(
+            target=str(workspace),
+            workflow_root=tmp_path,
+            submit_ready=True,
+            deps=deps,
+        )
+
+    assert payload["status"] == "failed"
+    assert payload["metadata"]["workflow_error"] == {
+        "status": "failed",
+        "scope": "workflow_identity_validation",
+        "reason": (
+            "workflow directory name 'TS8_wf' does not match persisted workflow_id "
+            "'TS8(wf)'. Renaming an existing workflow directory is not supported; "
+            "restore its original name or create a new workflow."
+        ),
+        "detected_at": "2026-07-10T06:00:00+00:00",
+    }
+    assert written == [payload]
+    assert synced == [payload]
 
 
 def test_advance_workflow_checkpoints_completed_crest_before_xtb_materialization(
@@ -438,7 +503,9 @@ def test_advance_workflow_checkpoints_completed_crest_before_xtb_materialization
 
     deps = orchestration_deps(
         overrides={
-            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / str(payload["workflow_id"])
+            ),
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-24T06:00:00+00:00",
@@ -512,7 +579,9 @@ def test_advance_workflow_reaction_ts_search_waits_for_all_xtb_children_before_q
 
     deps = orchestration_deps(
         overrides={
-            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / str(payload["workflow_id"])
+            ),
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-22T09:00:00+00:00",
@@ -598,7 +667,9 @@ def test_advance_workflow_records_reaction_orca_exhaustion_after_sync_failure(
 
     deps = orchestration_deps(
         overrides={
-            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / str(payload["workflow_id"])
+            ),
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-22T10:00:00+00:00",
@@ -664,7 +735,9 @@ def test_advance_workflow_conformer_screening_queues_twenty_orca_children_after_
 
     deps = orchestration_deps(
         overrides={
-            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / str(payload["workflow_id"])
+            ),
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-22T11:00:00+00:00",
@@ -744,7 +817,9 @@ def test_advance_workflow_records_conformer_orca_exhaustion_after_sync_failure(
 
     deps = orchestration_deps(
         overrides={
-            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / str(payload["workflow_id"])
+            ),
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-22T10:30:00+00:00",
@@ -806,7 +881,9 @@ def test_advance_workflow_reopens_completed_conformer_pending_orca_handoff(
 
     deps = orchestration_deps(
         overrides={
-            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / str(payload["workflow_id"])
+            ),
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-22T12:00:00+00:00",
@@ -873,7 +950,9 @@ def test_advance_workflow_auto_cancels_active_siblings_after_failure(
 
     deps = orchestration_deps(
         overrides={
-            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / str(payload["workflow_id"])
+            ),
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-24T01:00:00+00:00",
@@ -944,7 +1023,9 @@ def test_advance_workflow_auto_cancels_active_children_for_submission_failed_sta
 
     deps = orchestration_deps(
         overrides={
-            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / str(payload["workflow_id"])
+            ),
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-24T01:00:00+00:00",

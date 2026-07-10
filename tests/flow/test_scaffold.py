@@ -111,3 +111,24 @@ def test_cmd_scaffold_rejects_invalid_crest_mode(
     output = capsys.readouterr().err
     assert rc == 1
     assert "error: unsupported crest_mode: fast" in output
+
+
+def test_cmd_scaffold_rejects_parenthesized_workflow_name_before_writing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workflow_dir = tmp_path / "TS8(wf)"
+
+    rc = scaffold.cmd_scaffold(
+        Namespace(
+            root=str(workflow_dir),
+            workflow_type="reaction_ts_search",
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "workflow_id cannot contain parentheses" in captured.err
+    assert "TS8_wf" in captured.err
+    assert not workflow_dir.exists()

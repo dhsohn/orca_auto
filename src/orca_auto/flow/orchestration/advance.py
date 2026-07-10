@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 from orca_auto.flow.engine_options import WorkflowEngineOptions
 from orca_auto.flow.orchestration.advance_phases import (
     AdvanceContext as _AdvanceContext,
@@ -21,6 +22,41 @@ from orca_auto.flow.orchestration.workflow_cancellation import (
 )
 from orca_auto.flow.workflow.report import write_workflow_html_report
 from orca_auto.flow.workflow.si import write_workflow_si
+
+
+def _workflow_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        return metadata
+    metadata = {}
+    payload["metadata"] = metadata
+    return metadata
+
+
+def _validate_or_quarantine_workflow_identity(
+    payload: dict[str, Any],
+    *,
+    workspace_dir: Path,
+    workflow_root_path: Path,
+    deps: OrchestrationDeps,
+) -> str:
+    try:
+        return validate_workflow_workspace_identity(
+            workspace_dir,
+            payload.get("workflow_id"),
+        )
+    except ValueError as exc:
+        reason = str(exc)
+        payload["status"] = "failed"
+        _workflow_metadata(payload)["workflow_error"] = {
+            "status": "failed",
+            "scope": "workflow_identity_validation",
+            "reason": reason,
+            "detected_at": deps.persistence.now_utc_iso(),
+        }
+        deps.persistence.write_workflow_payload(workspace_dir, payload)
+        deps.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
+        raise ValueError(reason) from exc
 
 
 def advance_workflow(
@@ -43,6 +79,12 @@ def advance_workflow(
     )
     with o.persistence.acquire_workflow_lock(workspace_dir):
         payload = o.persistence.load_workflow_payload(workspace_dir)
+        workflow_id = _validate_or_quarantine_workflow_identity(
+            payload,
+            workspace_dir=workspace_dir,
+            workflow_root_path=workflow_root_path,
+            deps=o,
+        )
         sync_only = o.stages.workflow._workflow_sync_only(payload)
         config = engine_options or WorkflowEngineOptions.from_values(
             crest_config=crest_config,
@@ -54,7 +96,7 @@ def advance_workflow(
             deps=o,
             workflow_root_path=workflow_root_path,
             workspace_dir=workspace_dir,
-            workflow_id=o.stages.support._normalize_text(payload.get("workflow_id")),
+            workflow_id=workflow_id,
             template_name=o.stages.support._normalize_text(payload.get("template_name")),
             sync_only=sync_only,
             submit_ready=bool(submit_ready) and not sync_only,

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.paths.workflow import validate_workflow_id_path_segment
 from orca_auto.core.utils.coercion import normalize_text
 
 from ..orchestration import (
@@ -251,6 +252,7 @@ def cmd_run_dir(args: Any) -> int:
         workflow_dir = Path(args.workflow_dir).expanduser().resolve()
         if not workflow_dir.is_dir():
             raise ValueError(f"workflow_dir does not exist or is not a directory: {workflow_dir}")
+        validate_workflow_id_path_segment(workflow_dir.name)
 
         if (workflow_dir / "workflow.json").is_file():
             payload = _restart_existing_run_dir_workflow(args, workflow_dir)

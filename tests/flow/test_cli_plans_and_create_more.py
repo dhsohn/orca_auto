@@ -216,6 +216,41 @@ def test_cmd_run_dir_reuses_direct_child_workflow_directory_when_already_under_w
     assert captured["workflow_id"] == "rxn_case"
 
 
+def test_cmd_run_dir_rejects_parenthesized_workflow_name_before_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workflow_dir = tmp_path / "TS8(wf)"
+    workflow_dir.mkdir()
+    (workflow_dir / "flow.yaml").write_text(
+        "workflow_type: reaction_ts_search\n",
+        encoding="utf-8",
+    )
+    (workflow_dir / "reactant.xyz").write_text("1\nreactant\nH 0 0 0\n", encoding="utf-8")
+    (workflow_dir / "product.xyz").write_text("1\nproduct\nH 0 0 0\n", encoding="utf-8")
+
+    def unexpected_create(**_kwargs: Any) -> dict[str, Any]:
+        pytest.fail("parenthesized workflow names must be rejected before creation")
+
+    monkeypatch.setattr(cli_run_dir, "create_reaction_ts_search_workflow", unexpected_create)
+
+    rc = cli_run_dir.cmd_run_dir(
+        SimpleNamespace(
+            workflow_dir=str(workflow_dir),
+            json=False,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "workflow_id cannot contain parentheses" in captured.err
+    assert "TS8_wf" in captured.err
+    assert not (workflow_dir / "workflow.json").exists()
+    assert not (workflow_dir / "01_crest").exists()
+
+
 def test_cmd_run_dir_reports_ambiguous_layout(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

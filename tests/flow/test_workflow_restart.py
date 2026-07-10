@@ -201,6 +201,84 @@ def test_restart_failed_workflow_rejects_active_sibling_before_cancellation_fini
     assert not (root / "workflow_registry.journal.jsonl").exists()
 
 
+@pytest.mark.parametrize(
+    ("directory_name", "workflow_id", "error_text"),
+    [
+        ("TS8(wf)", "TS8(wf)", "cannot contain parentheses"),
+        ("TS8_wf", "TS8(wf)", "does not match persisted workflow_id"),
+    ],
+)
+def test_restart_rejects_parenthesized_or_renamed_workflow_without_mutation(
+    tmp_path: Path,
+    directory_name: str,
+    workflow_id: str,
+    error_text: str,
+) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / directory_name
+    original_payload: dict[str, object] = {
+        "workflow_id": workflow_id,
+        "template_name": "reaction_ts_search",
+        "status": "failed",
+        "stages": [],
+        "metadata": {},
+    }
+    _write_workflow(workspace, original_payload)
+    queue_path = workspace / "01_crest" / "queue.json"
+    queue_path.parent.mkdir()
+    queue_path.write_text('[{"queue_id":"q_existing","status":"failed"}]', encoding="utf-8")
+    workflow_before = (workspace / "workflow.json").read_bytes()
+    queue_before = queue_path.read_bytes()
+
+    with pytest.raises(ValueError, match=error_text):
+        restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    assert (workspace / "workflow.json").read_bytes() == workflow_before
+    assert queue_path.read_bytes() == queue_before
+    assert json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))["status"] == (
+        "failed"
+    )
+    assert not (root / "workflow_registry.json").exists()
+    assert not (root / "workflow_registry.journal.jsonl").exists()
+
+
+def test_flow_run_dir_reports_renamed_existing_workflow_without_restarting(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / "TS8_wf"
+    _write_workflow(
+        workspace,
+        {
+            "workflow_id": "TS8(wf)",
+            "template_name": "reaction_ts_search",
+            "status": "failed",
+            "stages": [],
+            "metadata": {},
+        },
+    )
+    workflow_before = (workspace / "workflow.json").read_bytes()
+
+    rc = flow_cli.cmd_run_dir(
+        SimpleNamespace(
+            workflow_dir=str(workspace),
+            workflow_root=str(root),
+            force=False,
+            json=False,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert captured.out == ""
+    assert "does not match persisted workflow_id 'TS8(wf)'" in captured.err
+    assert "Renaming an existing workflow directory is not supported" in captured.err
+    assert (workspace / "workflow.json").read_bytes() == workflow_before
+    assert not (root / "workflow_registry.json").exists()
+    assert not (root / "workflow_registry.journal.jsonl").exists()
+
+
 def test_restart_cancelled_workflow_resets_cancelled_stages(tmp_path: Path) -> None:
     root = tmp_path / "workflow_runs"
     workspace = root / "wf_cancelled"

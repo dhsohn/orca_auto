@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from orca_auto.core.paths.workflow import WORKFLOW_FILE_NAME
+from orca_auto.core.paths.workflow import (
+    WORKFLOW_FILE_NAME,
+    validate_workflow_id_path_segment,
+)
 from orca_auto.flow.contracts import (
     WorkflowPlan,
     WorkflowPlanPayload,
@@ -67,19 +70,7 @@ def _optional_mapping_parameter(name: str, value: dict[str, Any] | None) -> dict
 
 
 def _validate_workflow_id_path_segment(value: Any) -> str:
-    workflow_id = str(value or "").strip()
-    if not workflow_id:
-        raise ValueError("workflow_id is required")
-    if (
-        workflow_id in {".", ".."}
-        or "/" in workflow_id
-        or "\\" in workflow_id
-        or Path(workflow_id).is_absolute()
-    ):
-        raise ValueError(
-            f"workflow_id must be a single path segment under workflow_root: {workflow_id!r}"
-        )
-    return workflow_id
+    return validate_workflow_id_path_segment(value)
 
 
 def _ensure_new_workflow_workspace(workspace_dir: Path) -> None:
