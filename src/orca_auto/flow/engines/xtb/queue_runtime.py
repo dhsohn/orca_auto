@@ -82,7 +82,13 @@ from .queue_runtime_execution import (
     XtbQueueRuntimeWorkerExecutionCallbacks,
     build_queue_runtime_worker_execution_dependencies,
 )
-from .runner import XtbRunResult, finalize_xtb_job, run_xtb_ranking_job, start_xtb_job
+from .runner import (
+    XtbRunResult,
+    finalize_xtb_job,
+    run_path_search_ts_hessian_followup,
+    run_xtb_ranking_job,
+    start_xtb_job,
+)
 from .state import (
     load_report_json,
     load_state,
@@ -129,6 +135,7 @@ def _worker_execution_callbacks() -> XtbQueueRuntimeWorkerExecutionCallbacks:
         run_xtb_ranking_job=run_xtb_ranking_job,
         start_xtb_job=start_xtb_job,
         finalize_xtb_job=finalize_xtb_job,
+        run_path_search_ts_hessian_followup=run_path_search_ts_hessian_followup,
         terminate_process=_terminate_process,
         wait_for_cancellable_process=_queue_execution.wait_for_cancellable_process,
         sleep=time.sleep,

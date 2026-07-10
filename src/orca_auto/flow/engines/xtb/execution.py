@@ -39,7 +39,12 @@ from orca_auto.core.queue.worker import (
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.flow.engines.xtb import artifacts as _queue_artifacts
 from orca_auto.flow.engines.xtb.job_locations import upsert_job_record
-from orca_auto.flow.engines.xtb.runner import finalize_xtb_job, run_xtb_ranking_job, start_xtb_job
+from orca_auto.flow.engines.xtb.runner import (
+    finalize_xtb_job,
+    run_path_search_ts_hessian_followup,
+    run_xtb_ranking_job,
+    start_xtb_job,
+)
 from orca_auto.flow.engines.xtb.state import (
     is_recovery_pending,
     mark_recovery_pending,
@@ -139,6 +144,7 @@ class WorkerRunnerDependencies(_engine_execution.InternalWorkerProcessDependenci
     run_xtb_ranking_job: Callable[..., Any]
     start_xtb_job: Callable[..., Any]
     finalize_xtb_job: Callable[..., Any]
+    run_path_search_ts_hessian_followup: Callable[..., Any]
 
 
 @dataclass(frozen=True)
@@ -196,6 +202,7 @@ def _worker_process_factory_callbacks() -> _worker_dependencies.WorkerProcessDep
             "run_xtb_ranking_job": run_xtb_ranking_job,
             "start_xtb_job": start_xtb_job,
             "finalize_xtb_job": finalize_xtb_job,
+            "run_path_search_ts_hessian_followup": run_path_search_ts_hessian_followup,
         },
     )
 
@@ -484,7 +491,7 @@ def _run_xtb_job_for_entry(
                 **launch_kwargs,
             )
 
-        return _engine_execution.run_internal_worker_process_job(
+        result = _engine_execution.run_internal_worker_process_job(
             context,
             options=options,
             process_deps=runner_deps,
@@ -498,6 +505,17 @@ def _run_xtb_job_for_entry(
             ),
             check_cancel_before_poll=True,
         )
+        if context.job_type == "path_search":
+            result = runner_deps.run_path_search_ts_hessian_followup(
+                cfg,
+                result,
+                job_dir=context.job_dir,
+                should_cancel=should_stop_ranking,
+                prepare_running_job=prepare_running_job,
+                on_running_job=register_running_job,
+                terminate_process=runner_deps.terminate_process,
+            )
+        return result
     except Exception as exc:  # noqa: BLE001
         if isinstance(exc, (WorkerShutdownRequested, _engine_execution.ProcessCleanupError)):
             raise

@@ -39,6 +39,7 @@ def _callbacks(calls: list[str]) -> XtbQueueRuntimeWorkerExecutionCallbacks:
         run_xtb_ranking_job=_callable("run_xtb_ranking_job", calls),
         start_xtb_job=_callable("start_xtb_job", calls),
         finalize_xtb_job=_callable("finalize_xtb_job", calls),
+        run_path_search_ts_hessian_followup=_callable("run_path_search_ts_hessian_followup", calls),
         terminate_process=_callable("terminate_process", calls),
         wait_for_cancellable_process=_callable("wait", calls),
         sleep=_callable("sleep", calls),
