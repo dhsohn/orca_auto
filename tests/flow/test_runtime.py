@@ -712,6 +712,59 @@ def test_registry_worker_falls_back_to_workflow_id_when_workspace_path_is_stale(
     assert summary_paths == [str(current_workspace.resolve())] * 2
 
 
+def test_registry_worker_ignores_stale_workspace_copy_with_matching_workflow_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workflow_root = tmp_path / "workflow_root"
+    current_workspace = workflow_root / "wf_copied"
+    _write_workflow_payload(current_workspace, "wf_copied")
+    stale_workspace = workflow_root / "stale_workspace_copy"
+    _write_workflow_payload(stale_workspace, "wf_copied")
+    record = _registry_record(
+        workflow_id="wf_copied",
+        status="running",
+        workspace_dir=str(stale_workspace),
+    )
+    _capture_worker_side_effects(monkeypatch, records=[record])
+    advance_calls: list[dict[str, Any]] = []
+    summary_paths: list[str] = []
+
+    monkeypatch.setattr(
+        runtime,
+        "_workflow_needs_terminal_sync",
+        lambda workspace_dir: pytest.fail(
+            "terminal sync checks should not run for active workflows"
+        ),
+    )
+
+    def fake_summary(workspace_dir: str | Path, **kwargs: Any) -> dict[str, Any]:
+        summary_paths.append(str(workspace_dir))
+        return {}
+
+    def fake_advance_workflow(**kwargs: Any) -> dict[str, Any]:
+        advance_calls.append(kwargs)
+        return {
+            "workflow_id": "wf_copied",
+            "template_name": "reaction_ts_search",
+            "status": "running",
+            "stages": [],
+        }
+
+    monkeypatch.setattr(runtime, "_safe_workflow_summary", fake_summary)
+    monkeypatch.setattr(runtime, "advance_workflow", fake_advance_workflow)
+
+    result = runtime.advance_workflow_registry_once(
+        workflow_root=workflow_root,
+        worker_session_id="session-copied",
+        lease_seconds=0,
+    )
+
+    assert result["advanced_count"] == 1
+    assert advance_calls[0]["target"] == "wf_copied"
+    assert summary_paths == [str(current_workspace.resolve())] * 2
+
+
 def test_stale_registry_path_uses_current_workspace_for_terminal_child_sync(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

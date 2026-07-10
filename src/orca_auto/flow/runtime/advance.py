@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 
 from ..engine_options import WorkflowEngineOptions
 from . import models as runtime_models
@@ -53,9 +56,15 @@ def _workspace_matches_registry_record(
         payload = deps.load_workflow_payload_fn(workspace_dir)
     except (FileNotFoundError, ValueError, OSError, TypeError):
         return False
-    return deps.normalize_text_fn(payload.get("workflow_id")) == deps.normalize_text_fn(
-        record.workflow_id
-    )
+    persisted_id = deps.normalize_text_fn(payload.get("workflow_id"))
+    record_id = deps.normalize_text_fn(record.workflow_id)
+    if persisted_id != record_id:
+        return False
+    try:
+        validate_workflow_workspace_identity(Path(workspace_dir), persisted_id)
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
 
 
 def _workflow_record_location(
