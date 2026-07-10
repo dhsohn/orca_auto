@@ -49,18 +49,55 @@ def test_validate_accepts_reactant_like_ts(tmp_path: Path) -> None:
     assert verdict.metrics["reaction_bond_count"] == 2
 
 
+def _shift_endpoints(tmp_path: Path) -> tuple[Path, Path]:
+    """Intramolecular 1,2-H shift: Hm migrates from C0 to O2. Endpoints are one fragment."""
+    reactant = _write(
+        tmp_path / "shift_r.xyz",
+        ["C 0.0 0.0 0.0", "H -1.05 0.0 0.0", "O 1.43 0.0 0.0", "H 2.38 0.0 0.0"],
+    )
+    product = _write(
+        tmp_path / "shift_p.xyz",
+        ["C 0.0 0.0 0.0", "H 1.43 0.95 0.0", "O 1.43 0.0 0.0", "H 2.38 0.0 0.0"],
+    )
+    return reactant, product
+
+
 def test_validate_accepts_mid_transfer_atom_bonded_to_neither(tmp_path: Path) -> None:
-    # The migrating H sits beyond the bond cutoff of both partners; the
-    # reaction-bond union must keep it from counting as an extra fragment.
-    reactant, product = _endpoints(tmp_path)
+    # The migrating H sits beyond the plain bond cutoff of both partners but is
+    # still within reach of the carbon, so its reacting bond keeps it attached.
+    reactant, product = _shift_endpoints(tmp_path)
     ts = _write(
         tmp_path / "ts.xyz",
-        ["C 0.0 0.0 0.0", "H 2.0 0.0 0.0", "O 4.0 0.0 0.0", "H 4.95 0.0 0.0"],
+        ["C 0.0 0.0 0.0", "H 0.4 1.35 0.0", "O 1.43 0.0 0.0", "H 2.38 0.0 0.0"],
     )
     verdict = validate_ts_guess_geometry(
         ts_guess_xyz=ts, reactant_xyz=reactant, product_xyz=product
     )
     assert verdict.valid
+    assert verdict.metrics["ts_fragments"] == 1
+    assert verdict.metrics["intact_reacting_bond_count"] == 1
+
+
+def test_validate_rejects_dissociation_along_a_reacting_bond(tmp_path: Path) -> None:
+    """A guess whose only missing bond is a reacting one must still read as fragmented.
+
+    Every bond change here lies inside the reaction's bond set, so the spurious
+    rearrangement rule cannot see it. Counting a severed reacting bond as a
+    connection would let this dissociated guess through to ORCA.
+    """
+    reactant, product = _shift_endpoints(tmp_path)
+    ts = _write(
+        tmp_path / "ts.xyz",
+        ["C 0.0 0.0 0.0", "H 0.0 8.0 0.0", "O 1.43 0.0 0.0", "H 2.38 0.0 0.0"],
+    )
+    verdict = validate_ts_guess_geometry(
+        ts_guess_xyz=ts, reactant_xyz=reactant, product_xyz=product
+    )
+    assert not verdict.valid
+    assert any("fragmented" in reason for reason in verdict.reasons)
+    assert not any("rearranged" in reason for reason in verdict.reasons)
+    assert verdict.metrics["spurious_bond_changes_vs_reactant"] == 0
+    assert verdict.metrics["intact_reacting_bond_count"] == 0
 
 
 def test_validate_rejects_scrambled_spectator(tmp_path: Path) -> None:
@@ -127,6 +164,13 @@ def test_ts_guess_validation_fields_annotations(tmp_path: Path) -> None:
     )
     # endpoints unknown
     assert _ts_guess_validation_fields(str(ts), {}, {}) is None
+
+    # stretch scale is manifest-tunable and reaches the validator
+    tuned = _ts_guess_validation_fields(
+        str(ts), input_summary, {"ts_guess_validation": {"reacting_bond_stretch_scale": 2.5}}
+    )
+    assert tuned is not None
+    assert tuned["geometry_validation"]["reacting_bond_stretch_scale"] == 2.5
     # unreadable comparison -> error recorded, no verdict
     bad = _write(tmp_path / "bad.xyz", ["C 0.0 0.0 0.0"])
     fields = _ts_guess_validation_fields(str(bad), input_summary, {})

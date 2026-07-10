@@ -10,7 +10,10 @@ the two viable guesses from all seven mangled ones exactly:
 
 1. Fragmentation: the TS guess must not have more connected fragments than
    either endpoint. A bimolecular path that falls apart into isolated molecules
-   has no reacting contact and cannot relax to a saddle point.
+   has no reacting contact and cannot relax to a saddle point. A forming or
+   breaking bond still counts as a connection while it is merely elongated
+   (within ``reacting_bond_stretch_scale``), so an atom mid-transfer between two
+   partners is not mistaken for a loose fragment.
 2. Spurious rearrangement: bonds that differ between the TS guess and an
    endpoint must belong to the reaction's own bond set (bonds that differ
    between reactant and product). Bond changes outside that set mean the path
@@ -104,6 +107,10 @@ _COVALENT_RADII: dict[str, float] = {
 _FALLBACK_RADIUS = 1.5
 DEFAULT_BOND_SCALE = 1.25
 DEFAULT_MAX_SPURIOUS_BOND_CHANGES = 0
+# A forming/breaking bond is elongated at a saddle point but not severed. In the
+# TS8_wf path searches the viable guesses stretched a reacting bond to at most
+# 1.49x the covalent-radius sum, while the dissociated ones sat at 2.2-4.5x.
+DEFAULT_REACTING_BOND_STRETCH_SCALE = 1.75
 
 
 class GeometryValidationError(ValueError):
@@ -157,6 +164,26 @@ def _bond_set(
     return frozenset(bonds)
 
 
+def _stretched_reacting_bonds(
+    atoms: list[tuple[str, float, float, float]],
+    reaction_bonds: frozenset[tuple[int, int]],
+    *,
+    stretch_scale: float,
+) -> frozenset[tuple[int, int]]:
+    """Reacting bonds that are merely elongated in this geometry, not severed."""
+    stretched: set[tuple[int, int]] = set()
+    for i, j in reaction_bonds:
+        symbol_i, xi, yi, zi = atoms[i]
+        symbol_j, xj, yj, zj = atoms[j]
+        cutoff = stretch_scale * (
+            _COVALENT_RADII.get(symbol_i, _FALLBACK_RADIUS)
+            + _COVALENT_RADII.get(symbol_j, _FALLBACK_RADIUS)
+        )
+        if math.dist((xi, yi, zi), (xj, yj, zj)) < cutoff:
+            stretched.add((i, j))
+    return frozenset(stretched)
+
+
 def _fragment_count(atom_count: int, bonds: frozenset[tuple[int, int]]) -> int:
     adjacency: dict[int, set[int]] = {index: set() for index in range(atom_count)}
     for i, j in bonds:
@@ -185,6 +212,7 @@ def validate_ts_guess_geometry(
     product_xyz: str | Path,
     bond_scale: float = DEFAULT_BOND_SCALE,
     max_spurious_bond_changes: int = DEFAULT_MAX_SPURIOUS_BOND_CHANGES,
+    reacting_bond_stretch_scale: float = DEFAULT_REACTING_BOND_STRETCH_SCALE,
 ) -> TsGuessVerdict:
     """Judge whether a path-search TS guess is structurally plausible.
 
@@ -212,9 +240,16 @@ def validate_ts_guess_geometry(
     spurious_vs_product = len((ts_bonds ^ product_bonds) - reaction_bonds)
     spurious = min(spurious_vs_reactant, spurious_vs_product)
 
-    # Union with the reacting bonds so a mid-transfer atom that sits beyond the
-    # bond cutoff of both partners does not read as an extra fragment.
-    ts_fragments = _fragment_count(len(ts_atoms), ts_bonds | reaction_bonds)
+    # A mid-transfer atom can sit past the bond cutoff of both partners without
+    # the molecule having come apart, so reacting bonds count as connections --
+    # but only while still within reach. Adding every reacting bond regardless of
+    # distance would reconnect a genuinely dissociated guess and hide it.
+    stretched_bonds = _stretched_reacting_bonds(
+        ts_atoms,
+        reaction_bonds,
+        stretch_scale=max(bond_scale, reacting_bond_stretch_scale),
+    )
+    ts_fragments = _fragment_count(len(ts_atoms), ts_bonds | stretched_bonds)
     endpoint_max_fragments = max(
         _fragment_count(len(reactant_atoms), reactant_bonds),
         _fragment_count(len(product_atoms), product_bonds),
@@ -238,7 +273,9 @@ def validate_ts_guess_geometry(
         metrics={
             "bond_scale": bond_scale,
             "max_spurious_bond_changes": max_spurious_bond_changes,
+            "reacting_bond_stretch_scale": reacting_bond_stretch_scale,
             "reaction_bond_count": len(reaction_bonds),
+            "intact_reacting_bond_count": len(stretched_bonds),
             "spurious_bond_changes_vs_reactant": spurious_vs_reactant,
             "spurious_bond_changes_vs_product": spurious_vs_product,
             "ts_fragments": ts_fragments,
@@ -250,6 +287,7 @@ def validate_ts_guess_geometry(
 __all__ = [
     "DEFAULT_BOND_SCALE",
     "DEFAULT_MAX_SPURIOUS_BOND_CHANGES",
+    "DEFAULT_REACTING_BOND_STRETCH_SCALE",
     "GeometryValidationError",
     "TsGuessVerdict",
     "validate_ts_guess_geometry",

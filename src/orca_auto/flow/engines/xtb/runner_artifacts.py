@@ -8,6 +8,7 @@ from orca_auto.core.utils.persistence import load_json_mapping_file
 from orca_auto.flow.geometry_validation import (
     DEFAULT_BOND_SCALE,
     DEFAULT_MAX_SPURIOUS_BOND_CHANGES,
+    DEFAULT_REACTING_BOND_STRETCH_SCALE,
     GeometryValidationError,
     validate_ts_guess_geometry,
 )
@@ -159,6 +160,9 @@ def _ts_guess_validation_fields(
             bond_scale=float(options.get("bond_scale", DEFAULT_BOND_SCALE)),
             max_spurious_bond_changes=int(
                 options.get("max_spurious_bond_changes", DEFAULT_MAX_SPURIOUS_BOND_CHANGES)
+            ),
+            reacting_bond_stretch_scale=float(
+                options.get("reacting_bond_stretch_scale", DEFAULT_REACTING_BOND_STRETCH_SCALE)
             ),
         )
     except (GeometryValidationError, OSError, TypeError, ValueError) as exc:
