@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import resource
@@ -36,6 +37,7 @@ from .job_inputs import (
     resolve_job_inputs,
 )
 from .runner_artifacts import (
+    _collect_hessian_candidates,
     _collect_opt_candidates,
     _collect_path_search_candidates,
     _collect_sp_candidates,
@@ -136,6 +138,9 @@ def _append_xtb_job_type_options(
     if job_type == "sp":
         command.append("--sp")
         return
+    if job_type == "hess":
+        command.append("--hess")
+        return
     raise ValueError(f"Unsupported xtb job_type: {job_type}")
 
 
@@ -178,6 +183,7 @@ def _run_candidate_sp_job(
     candidate_xyz: Path,
     candidate_run_dir: Path,
     manifest: dict[str, Any],
+    job_type: str = "sp",
     should_cancel: Callable[[], bool] | None = None,
     prepare_running_job: Callable[[], None] | None = None,
     on_running_job: Callable[[XtbRunningJob | None], None] | None = None,
@@ -187,7 +193,7 @@ def _run_candidate_sp_job(
     candidate_input = candidate_run_dir / "input.xyz"
     shutil.copy2(candidate_xyz, candidate_input)
     candidate_manifest = dict(manifest)
-    candidate_manifest["job_type"] = "sp"
+    candidate_manifest["job_type"] = job_type
     candidate_manifest["input_xyz"] = "input.xyz"
     candidate_manifest_path = candidate_run_dir / MANIFEST_FILE_NAME
     candidate_manifest_path.write_text(
@@ -253,6 +259,76 @@ def _request_candidate_process_stop(
     if on_cancel is not None:
         return on_cancel(process)
     return terminate_process_group(process)
+
+
+TS_HESSIAN_DIR_NAME = "ts_hess"
+
+
+def run_path_search_ts_hessian_followup(
+    cfg: AppConfig,
+    result: XtbRunResult,
+    *,
+    job_dir: Path,
+    should_cancel: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None = None,
+    on_running_job: Callable[[XtbRunningJob | None], None] | None = None,
+    terminate_process: Callable[[subprocess.Popen[str]], bool] | None = None,
+) -> XtbRunResult:
+    """Compute a GFN Hessian for the path-search TS guess and record its path.
+
+    The Hessian seeds the downstream ORCA OptTS stage (``InHess Read``). It is
+    best-effort: any failure or cancellation leaves the completed path-search
+    result untouched, and the ORCA stage simply starts without an initial
+    Hessian.
+    """
+    if result.status != "completed" or result.job_type != "path_search":
+        return result
+    ts_detail = next(
+        (item for item in result.candidate_details if item.get("kind") == "ts_guess"),
+        None,
+    )
+    if ts_detail is None:
+        return result
+    ts_guess_xyz = Path(str(ts_detail.get("path") or ""))
+    if not ts_guess_xyz.is_file():
+        return result
+    hessian_run_dir = job_dir / TS_HESSIAN_DIR_NAME
+    try:
+        manifest = load_job_manifest(job_dir)
+        hessian_result = _run_candidate_sp_job(
+            cfg,
+            candidate_xyz=ts_guess_xyz,
+            candidate_run_dir=hessian_run_dir,
+            manifest=manifest,
+            job_type="hess",
+            should_cancel=should_cancel,
+            prepare_running_job=prepare_running_job,
+            on_running_job=on_running_job,
+            terminate_process=terminate_process,
+        )
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("TS guess Hessian follow-up crashed; continuing without a Hessian")
+        return result
+    hessian_path = hessian_run_dir / "hessian"
+    if hessian_result.status != "completed" or not hessian_path.is_file():
+        LOGGER.warning(
+            "TS guess Hessian follow-up did not produce a hessian file "
+            "(status=%s, expected=%s); continuing without a Hessian",
+            hessian_result.status,
+            hessian_path,
+        )
+        return result
+    resolved_hessian = str(hessian_path.resolve())
+    candidate_details = tuple(
+        {**item, "hessian_path": resolved_hessian} if item is ts_detail else item
+        for item in result.candidate_details
+    )
+    analysis_summary = {**result.analysis_summary, "ts_hessian_path": resolved_hessian}
+    return dataclasses.replace(
+        result,
+        candidate_details=candidate_details,
+        analysis_summary=analysis_summary,
+    )
 
 
 def _ranking_deps() -> _runner_ranking.RankingDeps:
@@ -439,4 +515,6 @@ def _collect_candidates(
         return _collect_opt_candidates(Path(running.job_dir))
     if running.job_type == "sp":
         return _collect_sp_candidates(Path(running.job_dir))
+    if running.job_type == "hess":
+        return _collect_hessian_candidates(Path(running.job_dir))
     return 0, (), (), {}

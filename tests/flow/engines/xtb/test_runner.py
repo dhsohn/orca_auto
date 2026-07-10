@@ -1136,3 +1136,119 @@ def test_finalize_xtb_job_uses_single_point_candidate_collection(
     assert result.candidate_count == 1
     assert result.selected_candidate_paths == ("xtbout.json",)
     assert result.analysis_summary == {"total_energy": -4.2}
+
+
+def _make_path_search_result(
+    job_dir: Path,
+    ts_guess_xyz: Path,
+    *,
+    status: str = "completed",
+) -> runner_mod.XtbRunResult:
+    import dataclasses
+
+    base = make_ranking_result(ts_guess_xyz, status=status)
+    ts_detail = {
+        "rank": 1,
+        "kind": "ts_guess",
+        "path": str(ts_guess_xyz.resolve()),
+        "score": 1000.0,
+        "selected": True,
+    }
+    return dataclasses.replace(
+        base,
+        job_type="path_search",
+        candidate_details=(ts_detail,),
+        manifest_path=str((job_dir / "xtb_job.yaml").resolve()),
+    )
+
+
+def test_ts_hessian_followup_records_hessian_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _cfg(tmp_path)
+    job_dir = tmp_path / "path-search-job"
+    ts_guess_xyz = _write_xyz(job_dir / "xtbpath_ts.xyz")
+    (job_dir / "xtb_job.yaml").write_text(
+        "job_type: path_search\ngfn: 2\ncharge: 0\n", encoding="utf-8"
+    )
+    result = _make_path_search_result(job_dir, ts_guess_xyz)
+    hessian_run_dir = job_dir / runner_mod.TS_HESSIAN_DIR_NAME
+    hessian_result = make_ranking_result(ts_guess_xyz)
+
+    def fake_sp_job(cfg_obj: AppConfig, **kwargs: Any) -> runner_mod.XtbRunResult:
+        assert kwargs["job_type"] == "hess"
+        assert kwargs["candidate_run_dir"] == hessian_run_dir
+        hessian_run_dir.mkdir(parents=True, exist_ok=True)
+        (hessian_run_dir / "hessian").write_text("$hessian\n0.1\n", encoding="utf-8")
+        return hessian_result
+
+    monkeypatch.setattr(runner_mod, "_run_candidate_sp_job", fake_sp_job)
+
+    updated = runner_mod.run_path_search_ts_hessian_followup(cfg, result, job_dir=job_dir)
+
+    expected_hessian = str((hessian_run_dir / "hessian").resolve())
+    assert updated.candidate_details[0]["hessian_path"] == expected_hessian
+    assert updated.analysis_summary["ts_hessian_path"] == expected_hessian
+
+
+def test_ts_hessian_followup_skips_non_path_search_and_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _cfg(tmp_path)
+    job_dir = tmp_path / "path-search-job"
+    ts_guess_xyz = _write_xyz(job_dir / "xtbpath_ts.xyz")
+    (job_dir / "xtb_job.yaml").write_text(
+        "job_type: path_search\ngfn: 2\ncharge: 0\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(
+        runner_mod,
+        "_run_candidate_sp_job",
+        lambda *args, **kwargs: pytest.fail("hessian job should not run"),
+    )
+    sp_result = make_ranking_result(ts_guess_xyz)
+    assert (
+        runner_mod.run_path_search_ts_hessian_followup(cfg, sp_result, job_dir=job_dir) is sp_result
+    )
+
+    failed = _make_path_search_result(job_dir, ts_guess_xyz, status="failed")
+    assert runner_mod.run_path_search_ts_hessian_followup(cfg, failed, job_dir=job_dir) is failed
+
+
+def test_ts_hessian_followup_falls_back_when_hessian_job_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _cfg(tmp_path)
+    job_dir = tmp_path / "path-search-job"
+    ts_guess_xyz = _write_xyz(job_dir / "xtbpath_ts.xyz")
+    (job_dir / "xtb_job.yaml").write_text(
+        "job_type: path_search\ngfn: 2\ncharge: 0\n", encoding="utf-8"
+    )
+    result = _make_path_search_result(job_dir, ts_guess_xyz)
+
+    monkeypatch.setattr(
+        runner_mod,
+        "_run_candidate_sp_job",
+        lambda *args, **kwargs: make_ranking_result(ts_guess_xyz, status="failed"),
+    )
+    assert runner_mod.run_path_search_ts_hessian_followup(cfg, result, job_dir=job_dir) is result
+
+    def raising_sp_job(*args: Any, **kwargs: Any) -> runner_mod.XtbRunResult:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(runner_mod, "_run_candidate_sp_job", raising_sp_job)
+    assert runner_mod.run_path_search_ts_hessian_followup(cfg, result, job_dir=job_dir) is result
+
+
+def test_collect_hessian_candidates(tmp_path: Path) -> None:
+    job_dir = tmp_path / "hess-job"
+    job_dir.mkdir()
+    count, paths, details, summary = runner_artifacts._collect_hessian_candidates(job_dir)
+    assert count == 0 and paths == () and details == ()
+    assert summary["canonical_result_path"] == ""
+
+    (job_dir / "hessian").write_text("$hessian\n0.1\n", encoding="utf-8")
+    count, paths, details, summary = runner_artifacts._collect_hessian_candidates(job_dir)
+    assert count == 1
+    assert details[0]["kind"] == "hessian"
+    assert summary["canonical_result_path"] == str((job_dir / "hessian").resolve())

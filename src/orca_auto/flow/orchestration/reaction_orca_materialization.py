@@ -363,6 +363,7 @@ def _build_reaction_orca_stage(
         priority=int(plan.params.get("priority", 10) or 10),
         xyz_filename="ts_guess.xyz",
         inp_filename="ts_guess.inp",
+        inhess_source_path=str(candidate.metadata.get("hessian_path") or ""),
     ).to_dict()
 
 

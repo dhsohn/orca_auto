@@ -220,3 +220,23 @@ def _collect_sp_candidates(
         detail["total_energy"] = summary["total_energy"]
         detail["score"] = round(-float(summary["total_energy"]), 6)
     return 1, (result_json,), (detail,), summary
+
+
+def _collect_hessian_candidates(
+    job_dir: Path,
+) -> tuple[int, tuple[str, ...], tuple[dict[str, Any], ...], dict[str, Any]]:
+    hessian_path = _resolve_existing_path(job_dir, "hessian")
+    summary = {
+        "canonical_result_path": hessian_path,
+        "vibspectrum_path": _resolve_existing_path(job_dir, "vibspectrum"),
+    }
+    if not hessian_path:
+        return 0, (), (), summary
+    detail = {
+        "rank": 1,
+        "kind": "hessian",
+        "path": hessian_path,
+        "score": 1000.0,
+        "selected": True,
+    }
+    return 1, (hessian_path,), (detail,), summary

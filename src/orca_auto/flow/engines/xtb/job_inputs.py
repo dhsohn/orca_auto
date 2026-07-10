@@ -21,7 +21,7 @@ from orca_auto.core.utils import now_utc_iso, timestamped_token
 from orca_auto.core.utils import safe_int as _safe_int
 
 MANIFEST_FILE_NAME = "xtb_job.yaml"
-SUPPORTED_JOB_TYPES = {"path_search", "opt", "sp", "ranking"}
+SUPPORTED_JOB_TYPES = {"path_search", "opt", "sp", "hess", "ranking"}
 _EXCLUDE_RE = re.compile(r"(?:^xtb_|^struc|^coord)", re.IGNORECASE)
 
 

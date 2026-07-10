@@ -64,6 +64,7 @@ class MaterializedOrcaStageBuilder(Protocol):
         xyz_filename: str,
         inp_filename: str,
         input_label: str | None = None,
+        inhess_source_path: str = "",
     ) -> Any: ...
 
 
