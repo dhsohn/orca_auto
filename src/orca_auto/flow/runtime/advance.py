@@ -138,7 +138,7 @@ def advance_workflow_record_outcome(
     previous_summary = deps.safe_workflow_summary_fn(record.workspace_dir)
     try:
         payload = deps.advance_workflow_fn(
-            target=record.workflow_id,
+            target=record.workspace_dir,
             workflow_root=cycle.root,
             engine_options=options,
             submit_ready=False if terminal_sync else cycle.cycle_submit_ready,

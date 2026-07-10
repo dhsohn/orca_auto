@@ -259,6 +259,11 @@ documented or tested. Important current examples include `normal_termination`,
 
 Workflow input manifests are named `flow.yaml`.
 
+Workflow names and IDs must be single path segments and cannot contain `(` or
+`)`. An existing workflow directory must not be renamed because its persisted
+ID and artifact paths are tied to that directory; create a new workflow under
+the new name instead.
+
 Supported workflow templates:
 
 - `reaction_ts_search`, scaffolded by `orca_auto scaffold ts_search`

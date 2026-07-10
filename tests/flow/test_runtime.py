@@ -556,7 +556,7 @@ def test_advance_workflow_registry_once_runs_terminal_child_sync_when_needed(
     assert result["skipped_count"] == 0
     assert result["failed_count"] == 0
     assert registry_calls == {"list": 1, "reindex": 0}
-    assert advance_calls[0]["target"] == "wf_terminal_sync"
+    assert advance_calls[0]["target"] == "/tmp/wf_terminal_sync"
     assert advance_calls[0]["submit_ready"] is False
     assert result["workflow_results"] == [
         {

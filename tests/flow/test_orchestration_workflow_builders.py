@@ -106,6 +106,23 @@ def test_workflow_workspace_rejects_unsafe_generated_workflow_id(tmp_path: Path)
         )
 
 
+@pytest.mark.parametrize("workflow_id", ["TS8(wf)", "TS8(wf", "TS8wf)"])
+def test_workflow_workspace_rejects_parenthesized_workflow_id(
+    tmp_path: Path,
+    workflow_id: str,
+) -> None:
+    with pytest.raises(ValueError, match="cannot contain parentheses") as error:
+        _workflow_workspace(
+            workflow_id=workflow_id,
+            workflow_root=tmp_path / "workflows",
+            default_id_prefix="wf_demo",
+            context=_workflow_context(),
+        )
+
+    assert workflow_id in str(error.value)
+    assert not (tmp_path / "workflows" / workflow_id).exists()
+
+
 def test_workflow_workspace_rejects_existing_workflow_payload(tmp_path: Path) -> None:
     workspace_dir = tmp_path / "workflows" / "wf_existing"
     workspace_dir.mkdir(parents=True)

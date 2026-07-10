@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 from orca_auto.core.statuses import STATUS_CANCELLED
 from orca_auto.core.utils import normalize_text as _normalize_text
 
@@ -111,7 +112,10 @@ def _validate_restart_request(
     force: bool,
 ) -> tuple[str, str]:
     previous_status = _normalize_text(payload.get("status")).lower()
-    workflow_id = _normalize_text(payload.get("workflow_id")) or workspace.name
+    workflow_id = validate_workflow_workspace_identity(
+        workspace,
+        payload.get("workflow_id"),
+    )
     if previous_status not in _RESTARTABLE_WORKFLOW_STATUSES and not force:
         raise ValueError(
             f"workflow is not failed or cancelled: {payload.get('workflow_id', workspace.name)} "

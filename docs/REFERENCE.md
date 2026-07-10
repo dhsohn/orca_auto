@@ -247,6 +247,9 @@ ORCA-specific notes:
 
 Workflow notes:
 
+- Workflow directory names/IDs cannot contain `(` or `)`. Do not rename an
+  existing workflow directory; create a new workflow under the new name so the
+  persisted ID and artifact paths stay consistent.
 - `run-dir` materializes a workflow only when `flow.yaml` is present in the target directory
 - If the target already contains `workflow.json` and the workflow failed, `run-dir` restarts failed/cancelled stages in that existing workspace instead of creating a new workflow
 - If a directory mixes raw ORCA `*.inp` files with scaffold-style filenames but does not include `flow.yaml`, `run-dir` prefers ORCA direct submission

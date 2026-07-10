@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.cli_errors import emit_error
+from orca_auto.core.paths.workflow import validate_workflow_id_path_segment
 from orca_auto.flow.templates import (
     CONFORMER_SCREENING_SHORTCUT,
     CONFORMER_SCREENING_TEMPLATE_ID,
@@ -291,6 +292,11 @@ def cmd_scaffold(args: Any) -> int:
         return 1
 
     root = Path(raw_root).expanduser().resolve()
+    try:
+        validate_workflow_id_path_segment(root.name)
+    except ValueError as exc:
+        emit_error(exc)
+        return 1
     if root.exists() and not root.is_dir():
         emit_error(f"scaffold root is not a directory: {root}")
         return 1
