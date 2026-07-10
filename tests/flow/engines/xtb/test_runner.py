@@ -959,7 +959,7 @@ def test_finalize_xtb_job_defaults_for_completed_path_search_and_unknown_job_typ
     monkeypatch.setattr(
         runner_mod,
         "_collect_path_search_candidates",
-        lambda job_dir, stdout_log: (
+        lambda job_dir, stdout_log, input_summary=None, manifest=None: (
             2,
             ("a.xyz", "b.xyz"),
             ({"kind": "ts_guess"}, {"kind": "selected_path"}),
@@ -1252,3 +1252,26 @@ def test_collect_hessian_candidates(tmp_path: Path) -> None:
     assert count == 1
     assert details[0]["kind"] == "hessian"
     assert summary["canonical_result_path"] == str((job_dir / "hessian").resolve())
+
+
+def test_ts_hessian_followup_skips_geometry_invalid_guess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dataclasses
+
+    cfg = _cfg(tmp_path)
+    job_dir = tmp_path / "path-search-job"
+    ts_guess_xyz = _write_xyz(job_dir / "xtbpath_ts.xyz")
+    (job_dir / "xtb_job.yaml").write_text(
+        "job_type: path_search\ngfn: 2\ncharge: 0\n", encoding="utf-8"
+    )
+    result = _make_path_search_result(job_dir, ts_guess_xyz)
+    invalid_detail = {**result.candidate_details[0], "geometry_valid": False}
+    result = dataclasses.replace(result, candidate_details=(invalid_detail,))
+
+    monkeypatch.setattr(
+        runner_mod,
+        "_run_candidate_sp_job",
+        lambda *args, **kwargs: pytest.fail("hessian job should not run for invalid guess"),
+    )
+    assert runner_mod.run_path_search_ts_hessian_followup(cfg, result, job_dir=job_dir) is result

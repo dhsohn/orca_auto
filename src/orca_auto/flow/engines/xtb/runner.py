@@ -289,6 +289,9 @@ def run_path_search_ts_hessian_followup(
     )
     if ts_detail is None:
         return result
+    if ts_detail.get("geometry_valid") is False:
+        LOGGER.info("TS guess failed geometry validation; skipping Hessian follow-up")
+        return result
     ts_guess_xyz = Path(str(ts_detail.get("path") or ""))
     if not ts_guess_xyz.is_file():
         return result
@@ -507,9 +510,16 @@ def _collect_candidates(
     running: XtbRunningJob,
 ) -> tuple[int, tuple[str, ...], tuple[dict[str, Any], ...], dict[str, Any]]:
     if running.job_type == "path_search":
+        job_dir = Path(running.job_dir)
+        try:
+            manifest = load_job_manifest(job_dir)
+        except Exception:  # noqa: BLE001
+            manifest = {}
         return _collect_path_search_candidates(
-            Path(running.job_dir),
+            job_dir,
             running.stdout_log,
+            input_summary=dict(running.input_summary),
+            manifest=manifest,
         )
     if running.job_type == "opt":
         return _collect_opt_candidates(Path(running.job_dir))

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -265,6 +264,17 @@ def test_submission_target_and_config_roots_follow_precedence() -> None:
     assert _load_config_root(None) is None
 
 
+def _empty_xtb_contract() -> XtbArtifactContract:
+    return XtbArtifactContract(
+        job_id="",
+        job_type="",
+        status="",
+        reason="",
+        job_dir="",
+        latest_known_path="",
+    )
+
+
 def test_xtb_handoff_status_and_ts_guess_error_cover_ready_and_failure() -> None:
     ready_input = WorkflowStageInput(
         source_job_id="xtb_job",
@@ -276,7 +286,7 @@ def test_xtb_handoff_status_and_ts_guess_error_cover_ready_and_failure() -> None
         artifact_path="/tmp/ts.xyz",
         selected=True,
     )
-    contract = SimpleNamespace(candidate_details=())
+    contract = _empty_xtb_contract()
 
     deps = orchestration_deps(
         overrides={
@@ -293,7 +303,7 @@ def test_xtb_handoff_status_and_ts_guess_error_cover_ready_and_failure() -> None
         "artifact_path": "/tmp/ts.xyz",
     }
 
-    missing_contract = SimpleNamespace(candidate_details=())
+    missing_contract = _empty_xtb_contract()
     deps = orchestration_deps(
         overrides={"select_xtb_downstream_inputs": lambda contract, policy, require_geometry: ()}
     )

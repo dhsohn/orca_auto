@@ -68,6 +68,31 @@ def task_payload_dict_impl(task: dict[str, Any]) -> dict[str, Any]:
     return workflow_task_payload_dict(task)
 
 
+def select_valid_ts_guess_inputs(o: Any, contract: XtbArtifactContract) -> list[Any]:
+    """Return the ts_guess candidates whose geometry validation did not reject them.
+
+    Every ts_guess is requested before filtering: capping the request first would
+    discard a whole contract whose top-ranked guess is geometry-invalid even when
+    a lower-ranked one is usable.
+    """
+    max_candidate_count = max(
+        1,
+        len(contract.candidate_details),
+        len(contract.selected_candidate_paths),
+    )
+    inputs = o.engines.select_xtb_downstream_inputs(
+        contract,
+        policy=o.contracts.XtbDownstreamPolicy.build(
+            preferred_kinds=("ts_guess",),
+            allowed_kinds=("ts_guess",),
+            max_candidates=max_candidate_count,
+            selected_only=False,
+        ),
+        require_geometry=True,
+    )
+    return [candidate for candidate in inputs if not candidate.geometry_invalid]
+
+
 def reaction_ts_guess_error_impl(
     contract: XtbArtifactContract, *, deps: OrchestrationDeps | None = None
 ) -> dict[str, str]:
@@ -87,6 +112,20 @@ def reaction_ts_guess_error_impl(
             "message": "xTB path_search did not produce a ts_guess candidate (xtbpath_ts.xyz); refusing ORCA handoff.",
         }
     candidate = details[0]
+    if candidate.metadata.get("geometry_valid") is False:
+        validation = candidate.metadata.get("geometry_validation")
+        reasons = "; ".join(
+            str(reason)
+            for reason in (validation.get("reasons", []) if isinstance(validation, dict) else [])
+        )
+        detail_text = f" ({reasons})" if reasons else ""
+        return {
+            "reason": "xtb_ts_guess_geometry_invalid",
+            "message": (
+                "xTB produced xtbpath_ts.xyz but its geometry failed validation against "
+                f"the reactant/product endpoints{detail_text}; refusing ORCA handoff."
+            ),
+        }
     _, metadata = o.engines.choose_orca_geometry_frame(candidate.path, candidate_kind="ts_guess")
     selection_reason = (
         o.stages.support._normalize_text(metadata.get("selection_reason")) or "invalid_or_empty_xyz"

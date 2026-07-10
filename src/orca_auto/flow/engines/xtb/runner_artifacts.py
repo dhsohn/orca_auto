@@ -5,6 +5,13 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.utils.persistence import load_json_mapping_file
+from orca_auto.flow.geometry_validation import (
+    DEFAULT_BOND_SCALE,
+    DEFAULT_MAX_SPURIOUS_BOND_CHANGES,
+    DEFAULT_REACTING_BOND_STRETCH_SCALE,
+    GeometryValidationError,
+    validate_ts_guess_geometry,
+)
 
 _TRIAL_RE = re.compile(
     r"run\s+(\d+)\s+barrier:\s*([-+]?\d+(?:\.\d+)?)\s+dE:\s*([-+]?\d+(?:\.\d+)?)\s+product-end path RMSD:\s*([-+]?\d+(?:\.\d+)?)"
@@ -131,23 +138,66 @@ def _parse_path_search_stdout(job_dir: Path, stdout_log: str) -> dict[str, Any]:
     return summary
 
 
+def _ts_guess_validation_fields(
+    ts_guess_path: str,
+    input_summary: dict[str, Any],
+    manifest: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Judge the TS guess against its endpoints; None when validation cannot run."""
+    reactant_xyz = str(input_summary.get("reactant_xyz", "")).strip()
+    product_xyz = str(input_summary.get("product_xyz", "")).strip()
+    if not reactant_xyz or not product_xyz:
+        return None
+    options_raw = manifest.get("ts_guess_validation")
+    options = options_raw if isinstance(options_raw, dict) else {}
+    if options.get("enabled") is False:
+        return None
+    try:
+        verdict = validate_ts_guess_geometry(
+            ts_guess_xyz=ts_guess_path,
+            reactant_xyz=reactant_xyz,
+            product_xyz=product_xyz,
+            bond_scale=float(options.get("bond_scale", DEFAULT_BOND_SCALE)),
+            max_spurious_bond_changes=int(
+                options.get("max_spurious_bond_changes", DEFAULT_MAX_SPURIOUS_BOND_CHANGES)
+            ),
+            reacting_bond_stretch_scale=float(
+                options.get("reacting_bond_stretch_scale", DEFAULT_REACTING_BOND_STRETCH_SCALE)
+            ),
+        )
+    except (GeometryValidationError, OSError, TypeError, ValueError) as exc:
+        # Unknown, not invalid: keep the candidate but record why we could not judge it.
+        return {"geometry_validation": {"error": str(exc)}}
+    return {"geometry_valid": verdict.valid, "geometry_validation": verdict.to_metadata()}
+
+
 def _collect_path_search_candidates(
-    job_dir: Path, stdout_log: str
+    job_dir: Path,
+    stdout_log: str,
+    *,
+    input_summary: dict[str, Any] | None = None,
+    manifest: dict[str, Any] | None = None,
 ) -> tuple[int, tuple[str, ...], tuple[dict[str, Any], ...], dict[str, Any]]:
     summary = _parse_path_search_stdout(job_dir, stdout_log)
     details: list[dict[str, Any]] = []
 
     ts_guess = summary.get("ts_guess_path")
     if ts_guess:
-        details.append(
-            {
-                "rank": 1,
-                "kind": "ts_guess",
-                "path": ts_guess,
-                "score": 1000.0,
-                "selected": True,
-            }
+        detail: dict[str, Any] = {
+            "rank": 1,
+            "kind": "ts_guess",
+            "path": ts_guess,
+            "score": 1000.0,
+            "selected": True,
+        }
+        validation_fields = _ts_guess_validation_fields(
+            str(ts_guess), dict(input_summary or {}), dict(manifest or {})
         )
+        if validation_fields is not None:
+            detail.update(validation_fields)
+            if "geometry_valid" in validation_fields:
+                summary["ts_guess_geometry_valid"] = validation_fields["geometry_valid"]
+        details.append(detail)
 
     selected_path_file = summary.get("selected_path_file")
     if selected_path_file:
