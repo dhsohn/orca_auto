@@ -276,8 +276,11 @@ def test_sync_xtb_stage_retries_failed_handoff_when_retry_budget_remains(
     assert submissions and submissions[0]["job_dir"].endswith("retry_attempt_01")
     assert stage["status"] == "queued"
     assert stage["task"]["status"] == "submitted"
+    assert stage["task"]["payload"]["job_dir"].endswith("retry_attempt_01")
     assert stage["task"]["submission_result"]["queue_id"] == "q_retry_01"
+    assert metadata["child_job_id"] == "xtb_job_retry"
     assert metadata["queue_id"] == "q_retry_01"
+    assert metadata["latest_known_path"].endswith("retry_attempt_01")
     assert metadata["xtb_handoff_status"] == "retrying"
     assert metadata["reaction_handoff_status"] == "retrying"
     assert metadata["xtb_handoff_retries_used"] == 1

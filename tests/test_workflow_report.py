@@ -409,6 +409,58 @@ def test_xtb_retry_prefers_current_task_job_dir_over_stale_metadata(tmp_path: Pa
     assert data.failure_rows[0].details_href == "02_xtb/xtb_retry_attempt/job_report.json"
 
 
+def test_stage_report_falls_back_to_latest_path_when_task_job_dir_is_stale(
+    tmp_path: Path,
+) -> None:
+    stale_job_dir = tmp_path / "01_crest" / "crest_stale"
+    stale_job_dir.mkdir(parents=True)
+    (stale_job_dir / "job_report.json").write_text(
+        json.dumps(
+            {
+                "job": {"id": "crest-stale"},
+                "status": {"state": "failed", "reason": "stale_crest_failure"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    current_job_dir = tmp_path / "01_crest" / "crest_current"
+    current_job_dir.mkdir(parents=True)
+    (current_job_dir / "job_report.json").write_text(
+        json.dumps(
+            {
+                "job": {"id": "crest-current"},
+                "status": {"state": "failed", "reason": "current_crest_failure"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "crest_repaired",
+                "stage_kind": "crest_stage",
+                "status": "failed",
+                "task": {
+                    "engine": "crest",
+                    "status": "failed",
+                    "payload": {"job_dir": str(stale_job_dir)},
+                },
+                "metadata": {
+                    "child_job_id": "crest-current",
+                    "latest_known_path": str(current_job_dir),
+                },
+            }
+        ],
+    )
+    payload["status"] = "failed"
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.failure_rows[0].reason == "current_crest_failure"
+    assert data.failure_rows[0].details_href == "01_crest/crest_current/job_report.json"
+
+
 def test_orca_run_identity_allows_current_report_diagnostic(tmp_path: Path) -> None:
     job_dir = tmp_path / "03_orca" / "orca_current"
     job_dir.mkdir(parents=True)
