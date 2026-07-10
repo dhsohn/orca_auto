@@ -234,6 +234,71 @@ class TestState(unittest.TestCase):
             self.assertIn("final_result", md)
             self.assertIn("normal_termination", md)
 
+    def test_write_report_files_does_not_publish_json_when_markdown_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            inp = reaction / "rxn.inp"
+            inp.write_text("! Opt\n", encoding="utf-8")
+            state = new_state(reaction, inp, max_retries=0)
+            report_json = state_module.report_json_path(reaction)
+            report_json.write_text('{"generation": "old"}\n', encoding="utf-8")
+
+            with (
+                patch.object(
+                    state_module,
+                    "write_report_md",
+                    side_effect=OSError("markdown write failed"),
+                ),
+                patch.object(
+                    state_module,
+                    "write_report_json",
+                    wraps=state_module.write_report_json,
+                ) as json_write,
+            ):
+                with self.assertRaisesRegex(OSError, "markdown write failed"):
+                    write_report_files(reaction, state)
+
+            json_write.assert_not_called()
+            self.assertEqual(
+                report_json.read_text(encoding="utf-8"),
+                '{"generation": "old"}\n',
+            )
+
+    def test_write_report_files_publishes_json_after_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            inp = reaction / "rxn.inp"
+            inp.write_text("! Opt\n", encoding="utf-8")
+            state = new_state(reaction, inp, max_retries=0)
+            report_json = state_module.report_json_path(reaction)
+            report_md = state_module.report_md_path(reaction)
+            report_json.write_text('{"generation": "old"}\n', encoding="utf-8")
+            report_md.write_text("# Old report\n", encoding="utf-8")
+            events: list[str] = []
+            original_write_report_md = state_module.write_report_md
+
+            def write_markdown(target_dir: Path, markdown: str) -> Path:
+                events.append("markdown")
+                return original_write_report_md(target_dir, markdown)
+
+            def fail_json(*_args: object, **_kwargs: object) -> Path:
+                events.append("json")
+                raise OSError("json write failed")
+
+            with (
+                patch.object(state_module, "write_report_md", side_effect=write_markdown),
+                patch.object(state_module, "write_report_json", side_effect=fail_json),
+            ):
+                with self.assertRaisesRegex(OSError, "json write failed"):
+                    write_report_files(reaction, state)
+
+            self.assertEqual(events, ["markdown", "json"])
+            self.assertIn("# orca_auto ORCA Job Report", report_md.read_text(encoding="utf-8"))
+            self.assertEqual(
+                report_json.read_text(encoding="utf-8"),
+                '{"generation": "old"}\n',
+            )
+
     def test_load_report_json_returns_none_for_missing_invalid_and_non_dict(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)

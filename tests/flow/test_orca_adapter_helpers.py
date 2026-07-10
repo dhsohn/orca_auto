@@ -87,11 +87,76 @@ def test_status_from_payloads_covers_priority_order(
     )
 
 
+def test_status_ignores_terminal_payload_from_previous_queue_generation() -> None:
+    old_final = {
+        "status": "failed",
+        "analyzer_status": "incomplete",
+        "reason": "old_failure",
+        "completed_at": "2026-04-19T00:10:00+00:00",
+    }
+
+    status = _orca_contract_status.status_from_payloads_impl(
+        queue_entry={"queue_id": "q_new", "task_id": "job_new", "status": "pending"},
+        state={"job_id": "job_old", "run_id": "run_old", "status": "failed"},
+        report={
+            "job_id": "job_old",
+            "run_id": "run_old",
+            "status": "failed",
+            "final_result": old_final,
+        },
+        normalize_text_fn=normalize_text,
+        normalize_bool_fn=normalize_bool,
+    )
+
+    assert status == ("queued", "", "", "")
+
+
+def test_status_accepts_matching_terminal_payload_before_queue_finalization() -> None:
+    final = {
+        "status": "completed",
+        "analyzer_status": "completed",
+        "reason": "normal_termination",
+        "completed_at": "2026-04-19T00:10:00+00:00",
+    }
+
+    status = _orca_contract_status.status_from_payloads_impl(
+        queue_entry={"queue_id": "q_new", "task_id": "job_new", "status": "running"},
+        state={
+            "job_id": "job_new",
+            "run_id": "run_new",
+            "status": "completed",
+            "final_result": final,
+        },
+        report={},
+        normalize_text_fn=normalize_text,
+        normalize_bool_fn=normalize_bool,
+    )
+
+    assert status == (
+        "completed",
+        "completed",
+        "normal_termination",
+        "2026-04-19T00:10:00+00:00",
+    )
+
+
 def test_derive_selected_input_xyz_reads_xyzfile_reference(tmp_path: Path) -> None:
     inp = tmp_path / "rxn.inp"
     xyz = tmp_path / "rxn.xyz"
     xyz.write_text("2\ncomment\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
     inp.write_text("! Opt\n* xyzfile 0 1 rxn.xyz\n", encoding="utf-8")
+
+    assert _orca_path_helpers.derive_selected_input_xyz_impl(str(inp)) == str(xyz.resolve())
+
+
+def test_derive_selected_input_xyz_ignores_xyzfile_end_of_line_comment(tmp_path: Path) -> None:
+    inp = tmp_path / "rxn.inp"
+    xyz = tmp_path / "rxn.xyz"
+    xyz.write_text("2\ncomment\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+    inp.write_text(
+        "! Opt\n* xyzfile 0 1 rxn.xyz # reactant geometry\n",
+        encoding="utf-8",
+    )
 
     assert _orca_path_helpers.derive_selected_input_xyz_impl(str(inp)) == str(xyz.resolve())
 
@@ -188,6 +253,22 @@ def test_attempt_helpers_prefer_report_values_and_coerce_attempt_rows() -> None:
             "ended_at": "2026-04-19T00:01:00+00:00",
         },
     )
+
+
+def test_attempt_helpers_preserve_mapping_markers() -> None:
+    markers = {
+        "terminated_normally": True,
+        "imaginary_frequency_count": 1,
+    }
+
+    attempts = _orca_contract_status.coerce_attempts_impl(
+        {"attempts": [{"index": 1, "markers": markers}]},
+        {},
+        normalize_text_fn=normalize_text,
+        safe_int_fn=safe_int,
+    )
+
+    assert attempts[0]["markers"] == markers
 
 
 @pytest.mark.parametrize(

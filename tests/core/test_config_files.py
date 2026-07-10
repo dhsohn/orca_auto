@@ -78,6 +78,51 @@ def test_engine_config_mapping_requires_engine_section() -> None:
     assert engine_config_mapping(raw, "orca", inherit_keys=("scheduler",)) == {}
 
 
+def test_engine_config_mapping_merges_matching_partial_scheduler_section() -> None:
+    raw = {
+        "scheduler": {
+            "max_active_simulations": 1,
+            "admission_root": "/tmp/shared",
+        },
+        "orca": {
+            "scheduler": {"admission_root": "/tmp/shared"},
+        },
+    }
+
+    assert engine_config_mapping(raw, "orca", inherit_keys=("scheduler",)) == {
+        "scheduler": {
+            "max_active_simulations": 1,
+            "admission_root": "/tmp/shared",
+        }
+    }
+
+
+def test_engine_config_mapping_rejects_scheduler_split_brain() -> None:
+    raw = {
+        "scheduler": {
+            "max_active_simulations": 1,
+            "admission_root": "/tmp/shared",
+        },
+        "orca": {
+            "scheduler": {"admission_root": "/tmp/orca"},
+        },
+    }
+
+    with pytest.raises(ValueError, match="cannot override the shared top-level scheduler"):
+        engine_config_mapping(raw, "orca", inherit_keys=("scheduler",))
+
+
+@pytest.mark.parametrize("invalid", [None, "disabled", []])
+def test_engine_config_mapping_rejects_non_mapping_engine_scheduler(invalid: object) -> None:
+    raw = {
+        "scheduler": {"max_active_simulations": 1},
+        "orca": {"scheduler": invalid},
+    }
+
+    with pytest.raises(ValueError, match="orca.scheduler must be a mapping"):
+        engine_config_mapping(raw, "orca", inherit_keys=("scheduler",))
+
+
 def test_yaml_mapping_and_section_helpers(tmp_path: Path) -> None:
     config_path = tmp_path / "orca_auto.yaml"
     config_path.write_text("scheduler:\n  max_active_simulations: 4\n", encoding="utf-8")

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from .input_blocks import orca_line_tokens
 
 
 @dataclass(frozen=True)
@@ -72,15 +73,9 @@ def _resolve_artifact_path(path_value: str, base_dir: Path | None) -> str:
 
 
 def _xyzfile_reference(line: str) -> str:
-    stripped = line.strip()
-    if not stripped or not stripped.startswith("*"):
+    tokens = orca_line_tokens(line)
+    if len(tokens) < 5:
         return ""
-    try:
-        parts = shlex.split(stripped)
-    except ValueError:
-        parts = stripped.split()
-    if len(parts) < 5:
+    if tokens[0].value != "*" or tokens[1].value.lower() != "xyzfile":
         return ""
-    if parts[0] != "*" or parts[1].lower() != "xyzfile":
-        return ""
-    return parts[-1]
+    return tokens[4].value

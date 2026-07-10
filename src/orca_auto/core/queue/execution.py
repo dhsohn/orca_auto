@@ -7,6 +7,8 @@ from typing import Any
 
 from orca_auto.core.utils import mapping_or_empty
 
+from .processes import managed_process_group_has_exited
+
 
 def coerce_mapping(value: Any) -> dict[str, Any]:
     return dict(mapping_or_empty(value))
@@ -126,6 +128,8 @@ def wait_for_cancellable_process(
             return finish_cancelled()
 
         if process.poll() is not None:
+            if not managed_process_group_has_exited(process):
+                terminate_process_fn(process)
             return finalize_fn(running)
 
         if not check_cancel_before_poll and should_cancel is not None and should_cancel():

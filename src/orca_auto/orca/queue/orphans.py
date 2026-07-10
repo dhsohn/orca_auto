@@ -58,10 +58,13 @@ def load_report_payload(reaction_dir: Path) -> dict | None:
 
 def terminal_report_data(
     reaction_dir: Path,
+    *,
+    queue_entry: QueueEntry | None = None,
 ) -> tuple[str, str | None, str | None, str | None] | None:
     return _queue_reconciliation.terminal_report_data(
         reaction_dir,
         load_report_payload_fn=load_report_payload,
+        queue_entry=queue_entry,
     )
 
 
@@ -118,10 +121,14 @@ def reconcile_orphaned_running_entries(
     allowed_root: Path,
     *,
     ignore_worker_pid: bool = False,
+    protected_queue_keys: set[tuple[str, str]] | None = None,
+    protected_queue_ids: set[str] | None = None,
 ) -> int:
     return _queue_reconciliation.reconcile_orphaned_running_entries(
         allowed_root,
         ignore_worker_pid=ignore_worker_pid,
+        protected_queue_keys=protected_queue_keys,
+        protected_queue_ids=protected_queue_ids,
         deps=queue_reconciliation_deps(),
         logger=logger,
     )

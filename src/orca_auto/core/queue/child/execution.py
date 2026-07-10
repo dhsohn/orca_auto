@@ -69,12 +69,9 @@ def load_child_queue_job(
     entry = find_queue_entry_fn(resolved_queue_root, queue_id)
     ready = entry is not None and (entry_ready_fn is None or entry_ready_fn(entry))
     if not ready:
-        if admission_token and admission_root_fn is not None and release_slot_fn is not None:
-            release_child_admission_token(
-                admission_root_fn(cfg),
-                admission_token,
-                release_slot_fn=release_slot_fn,
-            )
+        # The parent owns final release. Keeping the slot lets a parent that
+        # already spawned this child observe its exit and finalize atomically;
+        # after a parent crash, normal stale-owner reconciliation removes it.
         return None
     return ChildQueueJob(cfg=cfg, queue_root=resolved_queue_root, entry=entry)
 
@@ -85,18 +82,18 @@ def activate_child_admission_token(
     *,
     work_dir: str | Path,
     queue_id: str,
-    source: str,
+    source: str | None,
     activate_reserved_slot_fn: Callable[..., Any],
 ) -> bool:
     if not admission_token:
         return True
-    activated = activate_reserved_slot_fn(
-        admission_root,
-        admission_token,
-        work_dir=work_dir,
-        queue_id=queue_id,
-        source=source,
-    )
+    metadata: dict[str, Any] = {
+        "work_dir": work_dir,
+        "queue_id": queue_id,
+    }
+    if source is not None:
+        metadata["source"] = source
+    activated = activate_reserved_slot_fn(admission_root, admission_token, **metadata)
     return activated is not None
 
 

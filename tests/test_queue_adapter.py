@@ -25,7 +25,7 @@ from orca_auto.orca.queue.adapter import (
     queue_entry_run_id,
     reconcile_orphaned_running_entries,
 )
-from orca_auto.orca.state import report_json_path
+from orca_auto.orca.state import finalize_state, load_state, new_state, report_json_path
 from tests.engine_artifact_helpers import orca_artifact_payload
 
 
@@ -207,6 +207,37 @@ class TestQueueStore(unittest.TestCase):
         self.assertEqual(len(remaining), 1)
         self.assertEqual(remaining[0].status, QueueStatus.PENDING)
 
+    def test_clear_terminal_retains_durable_replay_marker_outside_keep_last(self) -> None:
+        protected = enqueue(self.root, str(self.root / "protected"))
+        ordinary = enqueue(self.root, str(self.root / "ordinary"))
+        newest = enqueue(self.root, str(self.root / "newest"))
+        marker = {
+            "version": 1,
+            "task_id": protected.task_id,
+            "observed_state": {"present": False, "readable": True},
+        }
+        mark_completed(
+            self.root,
+            protected.queue_id,
+            metadata_update={"orca_terminal_replay": marker},
+        )
+        mark_failed(self.root, ordinary.queue_id)
+        mark_completed(self.root, newest.queue_id)
+
+        removed = clear_terminal(self.root, keep_last=1)
+
+        self.assertEqual(removed, 1)
+        remaining_ids = {entry.queue_id for entry in list_queue(self.root)}
+        self.assertEqual(remaining_ids, {protected.queue_id, newest.queue_id})
+
+        self.assertEqual(clear_terminal(self.root), 1)
+        [still_protected] = list_queue(self.root)
+        self.assertEqual(still_protected.queue_id, protected.queue_id)
+        self.assertEqual(
+            still_protected.metadata.get("orca_terminal_replay"),
+            marker,
+        )
+
     def test_list_queue_can_count_running(self) -> None:
         enqueue(self.root, str(self.root / "a"))
         enqueue(self.root, str(self.root / "b"))
@@ -260,7 +291,7 @@ class TestQueueStore(unittest.TestCase):
         report_json_path(reaction_dir).write_text(
             json.dumps(
                 orca_artifact_payload(
-                    job_id="run_done_1",
+                    job_id=entry.task_id,
                     run_id="run_done_1",
                     reaction_dir=str(reaction_dir),
                     status="completed",
@@ -282,6 +313,210 @@ class TestQueueStore(unittest.TestCase):
         self.assertEqual(found.status, QueueStatus.COMPLETED)
         self.assertEqual(queue_entry_run_id(found), "run_done_1")
         self.assertEqual(found.finished_at, "2026-03-10T04:59:59+00:00")
+
+    def test_reconcile_orphaned_force_entry_ignores_previous_generation_state(self) -> None:
+        reaction_dir = self.root / "mol_force_state"
+        reaction_dir.mkdir()
+        previous = new_state(reaction_dir, reaction_dir / "job.inp", max_retries=0)
+        previous["job_id"] = "task-a"
+        finalize_state(
+            reaction_dir,
+            previous,
+            status="completed",
+            final_result={
+                "status": "completed",
+                "reason": "normal_termination",
+                "completed_at": "2026-03-10T04:59:59+00:00",
+            },
+        )
+        current = enqueue(
+            self.root,
+            str(reaction_dir),
+            force=True,
+            task_id="task-b",
+        )
+        dequeue_next(self.root)
+
+        changed = reconcile_orphaned_running_entries(self.root)
+
+        self.assertEqual(changed, 1)
+        found = self._find_entry(current.queue_id)
+        assert found is not None
+        self.assertEqual(found.status, QueueStatus.PENDING)
+        self.assertIsNone(queue_entry_run_id(found))
+
+    def test_reconcile_orphaned_force_same_task_requires_run_identity(self) -> None:
+        reaction_dir = self.root / "mol_force_same_task"
+        reaction_dir.mkdir()
+        previous = new_state(reaction_dir, reaction_dir / "old.inp", max_retries=0)
+        previous["job_id"] = "task-same"
+        previous_run_id = previous["run_id"]
+        finalize_state(
+            reaction_dir,
+            previous,
+            status="completed",
+            final_result={
+                "status": "completed",
+                "reason": "previous_generation",
+                "completed_at": "2026-03-10T04:59:59+00:00",
+            },
+        )
+        previous_entry = enqueue(
+            self.root,
+            str(reaction_dir),
+            task_id="task-same",
+        )
+        dequeue_next(self.root)
+        mark_completed(self.root, previous_entry.queue_id, run_id=previous_run_id)
+        current = enqueue(
+            self.root,
+            str(reaction_dir),
+            force=True,
+            task_id="task-same",
+        )
+        dequeue_next(self.root)
+
+        changed = reconcile_orphaned_running_entries(self.root)
+
+        self.assertEqual(changed, 1)
+        found = self._find_entry(current.queue_id)
+        assert found is not None
+        self.assertEqual(found.status, QueueStatus.PENDING)
+        self.assertIsNone(queue_entry_run_id(found))
+        persisted = load_state(reaction_dir)
+        assert persisted is not None
+        self.assertEqual(persisted["run_id"], previous_run_id)
+        self.assertEqual(persisted["status"], "completed")
+
+    def test_reconcile_orphaned_force_same_task_accepts_new_run_identity(self) -> None:
+        reaction_dir = self.root / "mol_force_same_task_current"
+        reaction_dir.mkdir()
+        previous = new_state(reaction_dir, reaction_dir / "old.inp", max_retries=0)
+        previous["job_id"] = "task-same"
+        finalize_state(
+            reaction_dir,
+            previous,
+            status="completed",
+            final_result={
+                "status": "completed",
+                "reason": "previous_generation",
+                "completed_at": "2026-03-10T04:59:59+00:00",
+            },
+        )
+        previous_entry = enqueue(
+            self.root,
+            str(reaction_dir),
+            task_id="task-same",
+        )
+        dequeue_next(self.root)
+        mark_completed(self.root, previous_entry.queue_id, run_id=previous["run_id"])
+        current = enqueue(
+            self.root,
+            str(reaction_dir),
+            force=True,
+            task_id="task-same",
+        )
+        dequeue_next(self.root)
+        current_state = new_state(
+            reaction_dir,
+            reaction_dir / "current.inp",
+            max_retries=0,
+        )
+        current_state["job_id"] = "task-same"
+        finalize_state(
+            reaction_dir,
+            current_state,
+            status="completed",
+            final_result={
+                "status": "completed",
+                "reason": "current_generation",
+                "completed_at": "2026-03-11T04:59:59+00:00",
+            },
+        )
+
+        changed = reconcile_orphaned_running_entries(self.root)
+
+        self.assertEqual(changed, 1)
+        found = self._find_entry(current.queue_id)
+        assert found is not None
+        self.assertEqual(found.status, QueueStatus.COMPLETED)
+        self.assertEqual(queue_entry_run_id(found), current_state["run_id"])
+
+    def test_reconcile_orphaned_force_same_task_rejects_prior_report_run(self) -> None:
+        reaction_dir = self.root / "mol_force_same_task_report"
+        reaction_dir.mkdir()
+        previous_run_id = "run-previous"
+        previous_entry = enqueue(
+            self.root,
+            str(reaction_dir),
+            task_id="task-same",
+        )
+        dequeue_next(self.root)
+        mark_completed(self.root, previous_entry.queue_id, run_id=previous_run_id)
+        report_json_path(reaction_dir).write_text(
+            json.dumps(
+                orca_artifact_payload(
+                    job_id="task-same",
+                    run_id=previous_run_id,
+                    reaction_dir=str(reaction_dir),
+                    status="completed",
+                    final_result={
+                        "status": "completed",
+                        "completed_at": "2026-03-10T04:59:59+00:00",
+                    },
+                )
+            ),
+            encoding="utf-8",
+        )
+        current = enqueue(
+            self.root,
+            str(reaction_dir),
+            force=True,
+            task_id="task-same",
+        )
+        dequeue_next(self.root)
+
+        changed = reconcile_orphaned_running_entries(self.root)
+
+        self.assertEqual(changed, 1)
+        found = self._find_entry(current.queue_id)
+        assert found is not None
+        self.assertEqual(found.status, QueueStatus.PENDING)
+        self.assertIsNone(queue_entry_run_id(found))
+
+    def test_reconcile_orphaned_force_entry_ignores_previous_generation_report(self) -> None:
+        reaction_dir = self.root / "mol_force_report"
+        reaction_dir.mkdir()
+        report_json_path(reaction_dir).write_text(
+            json.dumps(
+                orca_artifact_payload(
+                    job_id="task-a",
+                    run_id="run-a",
+                    reaction_dir=str(reaction_dir),
+                    status="completed",
+                    final_result={
+                        "status": "completed",
+                        "completed_at": "2026-03-10T04:59:59+00:00",
+                    },
+                )
+            ),
+            encoding="utf-8",
+        )
+        current = enqueue(
+            self.root,
+            str(reaction_dir),
+            force=True,
+            task_id="task-b",
+        )
+        dequeue_next(self.root)
+
+        changed = reconcile_orphaned_running_entries(self.root)
+
+        self.assertEqual(changed, 1)
+        found = self._find_entry(current.queue_id)
+        assert found is not None
+        self.assertEqual(found.status, QueueStatus.PENDING)
+        self.assertIsNone(queue_entry_run_id(found))
 
     def test_orca_engine_dequeue_skips_foreign_engine_entries(self) -> None:
         # The ORCA worker shares the runs root with standalone xTB/CREST jobs.

@@ -507,6 +507,7 @@ def test_engine_queue_runtime_reserves_admission_slot(tmp_path: Path) -> None:
             "kwargs": {
                 "source": "orca_auto.flow.engines.xtb.queue_worker",
                 "app_name": "orca_auto_xtb",
+                "engine_process_state": "idle",
             },
         }
     ]
@@ -964,7 +965,7 @@ def test_internal_engine_queue_module_create_from_definition_uses_queue_contract
         ),
         default_config_path=lambda: "/tmp/default.yaml",
         activate_reserved_slot=lambda *_args, **_kwargs: object(),
-        terminate_process=lambda _process: None,
+        terminate_process=lambda _process: True,
         mark_failed=lambda *_args, **_kwargs: None,
         handle_worker_start_error=lambda *_args, **_kwargs: None,
         finalize_completed_job=lambda *_args, **_kwargs: None,
@@ -1051,7 +1052,7 @@ def test_internal_engine_queue_module_create_from_definition_accepts_queue_overr
         ),
         default_config_path=lambda: "/tmp/default.yaml",
         activate_reserved_slot=lambda *_args, **_kwargs: object(),
-        terminate_process=lambda _process: None,
+        terminate_process=lambda _process: True,
         mark_failed=lambda *_args, **_kwargs: None,
         handle_worker_start_error=lambda *_args, **_kwargs: None,
         finalize_completed_job=lambda *_args, **_kwargs: None,

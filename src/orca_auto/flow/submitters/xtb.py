@@ -23,8 +23,14 @@ record_queued = _submission._record_queued
 resolve_job_dir = _submission.resolve_job_dir
 
 
-def _extra_fields(submission: Any | None, _entry: Any | None) -> dict[str, Any]:
-    metadata = getattr(submission, "metadata", {}) if submission is not None else {}
+def _extra_fields(submission: Any | None, entry: Any | None) -> dict[str, Any]:
+    entry_metadata = getattr(entry, "metadata", {}) if entry is not None else {}
+    submission_metadata = getattr(submission, "metadata", {}) if submission is not None else {}
+    metadata = (
+        entry_metadata
+        if isinstance(entry_metadata, dict) and entry_metadata
+        else submission_metadata
+    )
     return {
         "job_type": normalize_text(metadata.get("job_type")),
         "reaction_key": normalize_text(metadata.get("reaction_key")),

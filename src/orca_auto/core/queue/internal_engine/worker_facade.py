@@ -56,6 +56,7 @@ class InternalEngineQueueWorkerLifecycleFacade:
             job,
             rc=rc,
             shutdown_requested=worker._shutdown_requested,
+            admission_root=getattr(worker, "admission_root", None),
             find_queue_entry_fn=self.resolver.find_queue_entry,
             mark_cancelled_fn=deps.mark_cancelled,
             requeue_running_entry_fn=deps.requeue_running_entry,

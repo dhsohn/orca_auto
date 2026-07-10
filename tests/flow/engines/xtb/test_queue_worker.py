@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from orca_auto.core.commands import queue as shared_queue_cmd
+from orca_auto.core.queue.cancellable import ProcessCleanupError
 from orca_auto.flow.engines.xtb import execution as worker_execution_mod
 from orca_auto.flow.engines.xtb import queue_runtime as queue_cmd
 from orca_auto.flow.engines.xtb import state as state_mod
@@ -188,9 +189,10 @@ def test_execute_queue_entry_cancels_running_job(
 
     class _Process:
         pid = 12345
+        exited = False
 
-        def poll(self) -> None:
-            return None
+        def poll(self) -> int | None:
+            return -15 if self.exited else None
 
     terminated: list[_Process] = []
 
@@ -199,7 +201,13 @@ def test_execute_queue_entry_cancels_running_job(
         "start_xtb_job",
         lambda _cfg, *, job_dir, selected_input_xyz: SimpleNamespace(process=_Process()),
     )
-    monkeypatch.setattr(queue_cmd, "_terminate_process", lambda process: terminated.append(process))
+
+    def terminate(process: _Process) -> bool:
+        terminated.append(process)
+        process.exited = True
+        return True
+
+    monkeypatch.setattr(queue_cmd, "_terminate_process", terminate)
 
     def fake_finalize_xtb_job(
         running: object, forced_status: object = None, forced_reason: object = None
@@ -447,3 +455,33 @@ def test_execute_queue_entry_processes_ranking_job_without_auto_organizing(
     assert outcome.result.status == "completed"
     assert finished_calls
     assert "organized_output_dir" not in finished_calls[0]
+
+
+def test_ranking_cleanup_failure_is_not_converted_to_terminal_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "ranking-job"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "candidate.xyz"
+    selected_xyz.write_text("3\ncandidate\nH 0 0 0\n", encoding="utf-8")
+    entry = _make_entry(job_dir, selected_xyz, job_type="ranking", reaction_key="")
+
+    monkeypatch.setattr(
+        queue_cmd,
+        "run_xtb_ranking_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ProcessCleanupError("ranking process cleanup failed")
+        ),
+    )
+    monkeypatch.setattr(queue_cmd, "notify_job_started", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        queue_cmd,
+        "mark_failed",
+        lambda *args, **kwargs: pytest.fail("cleanup failure must not be terminalized here"),
+    )
+
+    with pytest.raises(ProcessCleanupError, match="ranking process cleanup failed"):
+        queue_cmd._execute_queue_entry(cfg, queue_root=queue_root, entry=entry)

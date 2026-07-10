@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import shutil
+from copy import deepcopy
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +10,7 @@ from orca_auto.core.statuses import STATUS_CANCELLED
 from orca_auto.core.utils import normalize_text as _normalize_text
 
 from ..registry import sync_workflow_registry
-from ..state import workflow_summary, write_workflow_payload
+from ..state import load_workflow_payload, workflow_summary, write_workflow_payload
 from ..workflow.status import WORKFLOW_FAILED_STATUSES
 from .settings import _apply_flow_restart_settings, _stage_should_rematerialize
 from .stage_ops import (
@@ -20,6 +22,30 @@ from .stage_ops import (
 )
 
 _RESTARTABLE_WORKFLOW_STATUSES = frozenset({*WORKFLOW_FAILED_STATUSES, STATUS_CANCELLED})
+
+
+@dataclass
+class RestartDirectoryTransaction:
+    created_dirs: list[Path] = field(default_factory=list)
+    payload_committed: bool = False
+    preserve_created_dirs: bool = False
+    original_payload: dict[str, Any] | None = None
+
+    def capture_original_payload(self, payload: dict[str, Any]) -> None:
+        self.original_payload = deepcopy(payload)
+
+    def mark_payload_committed(self) -> None:
+        self.payload_committed = True
+
+    def mark_payload_outcome_ambiguous(self) -> None:
+        self.preserve_created_dirs = True
+
+    def cleanup_uncommitted(self) -> None:
+        if self.payload_committed or self.preserve_created_dirs:
+            return
+        for path in reversed(self.created_dirs):
+            shutil.rmtree(path, ignore_errors=True)
+        self.created_dirs.clear()
 
 
 @dataclass(frozen=True)
@@ -102,12 +128,21 @@ def _reset_restartable_stages(
     payload: dict[str, Any],
     *,
     flow_settings: dict[str, Any],
+    restart_allowed_root: Path,
+    directory_transaction: RestartDirectoryTransaction | None = None,
 ) -> list[dict[str, str]]:
     restarted_stages: list[dict[str, str]] = []
     for raw_stage in payload.get("stages", []):
         if not isinstance(raw_stage, dict) or not _stage_needs_restart(raw_stage):
             continue
-        _apply_flow_restart_settings(raw_stage, flow_settings)
+        _apply_flow_restart_settings(
+            raw_stage,
+            flow_settings,
+            restart_allowed_root=restart_allowed_root,
+            created_restart_dirs=(
+                directory_transaction.created_dirs if directory_transaction is not None else None
+            ),
+        )
         restarted_stages.append(
             _reset_stage_for_restart(
                 raw_stage,
@@ -160,8 +195,33 @@ def _build_restart_mutation(
     restarted_at: str,
     restarted_stages: list[dict[str, str]],
     flow_settings: dict[str, Any],
+    directory_transaction: RestartDirectoryTransaction | None = None,
 ) -> WorkflowRestartMutation:
-    write_workflow_payload(workspace, payload)
+    try:
+        write_workflow_payload(workspace, payload)
+    except Exception:
+        # atomic_write_text can report a parent-directory fsync failure after
+        # os.replace already made the new workflow visible.  In that case the
+        # restart directories are committed references and must not be removed.
+        try:
+            visible_payload = load_workflow_payload(workspace)
+        except Exception:  # noqa: BLE001
+            if directory_transaction is not None:
+                directory_transaction.mark_payload_outcome_ambiguous()
+        else:
+            payload_is_visible = visible_payload == payload
+            original_is_visible = (
+                directory_transaction is not None
+                and directory_transaction.original_payload is not None
+                and visible_payload == directory_transaction.original_payload
+            )
+            if payload_is_visible and directory_transaction is not None:
+                directory_transaction.mark_payload_committed()
+            elif not original_is_visible and directory_transaction is not None:
+                directory_transaction.mark_payload_outcome_ambiguous()
+        raise
+    if directory_transaction is not None:
+        directory_transaction.mark_payload_committed()
     sync_workflow_registry(root, workspace, payload)
     return WorkflowRestartMutation(
         root=root,

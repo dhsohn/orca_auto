@@ -18,15 +18,28 @@ def _cfg() -> SimpleNamespace:
 
 
 def test_reserve_admission_slot_uses_crest_worker_identity() -> None:
-    calls: list[tuple[str, int, str, str]] = []
+    calls: list[tuple[str, int, str, str, str]] = []
 
-    def reserve_slot(root: str, limit: int, *, source: str, app_name: str) -> str:
-        calls.append((root, limit, source, app_name))
+    def reserve_slot(
+        root: str,
+        limit: int,
+        *,
+        source: str,
+        app_name: str,
+        engine_process_state: str,
+    ) -> str:
+        calls.append((root, limit, source, app_name, engine_process_state))
         return "slot-1"
 
     assert queue_admission.reserve_admission_slot(_cfg(), reserve_slot_fn=reserve_slot) == "slot-1"
     assert calls == [
-        ("/tmp/admission", 3, "orca_auto.flow.engines.crest.queue_worker", "orca_auto_crest")
+        (
+            "/tmp/admission",
+            3,
+            "orca_auto.flow.engines.crest.queue_worker",
+            "orca_auto_crest",
+            "idle",
+        )
     ]
 
 

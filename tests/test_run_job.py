@@ -10,7 +10,7 @@ import pytest
 
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca import worker_execution as worker_job
-from orca_auto.orca.orca_runner import WorkerShutdownInterrupt
+from orca_auto.orca.orca_runner import OrcaRunner, WorkerShutdownInterrupt
 from orca_auto.orca.queue.adapter import dequeue_next, enqueue, list_queue
 from orca_auto.orca.worker_execution import execute_run_job
 
@@ -100,17 +100,20 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
         queue_root=tmp_path / "queue",
         queue_id="queue-1",
         admission_token="slot-1",
+        await_parent_admission_handoff_fn=lambda *_args: True,
     )
 
     assert rc == 5
     assert calls["args"] == ("/tmp/config.yaml", str(tmp_path / "rxn"))
+    runner_cls = calls["kwargs"].pop("runner_cls")
+    assert issubclass(runner_cls, OrcaRunner)
     assert calls["kwargs"] == {
         "force": True,
         "reservation_token": "slot-1",
         "admission_app_name": "orca_auto_orca",
         "admission_task_id": "task-1",
     }
-    assert released == [(str(tmp_path / "admission"), "slot-1")]
+    assert released == []
 
 
 def test_process_dequeued_entry_returns_orca_worker_outcome(
@@ -149,6 +152,8 @@ def test_process_dequeued_entry_returns_orca_worker_outcome(
     assert outcome.reaction_dir == str(tmp_path / "rxn")
     assert outcome.entry is entry
     assert calls["args"] == ("/tmp/config.yaml", str(tmp_path / "rxn"))
+    runner_cls = calls["kwargs"].pop("runner_cls")
+    assert issubclass(runner_cls, OrcaRunner)
     assert calls["kwargs"] == {
         "force": True,
         "reservation_token": "slot-1",
@@ -199,6 +204,7 @@ def test_run_worker_child_job_finds_real_queue_entry_and_releases_slot(
         queue_root=queue_root,
         queue_id=entry.queue_id,
         admission_token="slot-real",
+        await_parent_admission_handoff_fn=lambda *_args: True,
     )
 
     assert rc == 8
@@ -207,7 +213,7 @@ def test_run_worker_child_job_finds_real_queue_entry_and_releases_slot(
     assert calls["kwargs"]["reservation_token"] == "slot-real"
     assert calls["kwargs"]["admission_app_name"] == "orca_auto_orca"
     assert calls["kwargs"]["admission_task_id"] == "task-real"
-    assert released == [(str(admission_root), "slot-real")]
+    assert released == []
 
 
 def test_run_worker_child_job_requeues_on_worker_shutdown(
@@ -249,10 +255,11 @@ def test_run_worker_child_job_requeues_on_worker_shutdown(
         queue_root=queue_root,
         queue_id=entry.queue_id,
         admission_token="slot-shutdown",
+        await_parent_admission_handoff_fn=lambda *_args: True,
     )
 
     assert rc == 0
-    assert released == [(str(admission_root), "slot-shutdown")]
+    assert released == []
     [updated] = list_queue(queue_root)
     assert updated.queue_id == entry.queue_id
     assert updated.status == QueueStatus.PENDING
@@ -305,10 +312,11 @@ def test_run_worker_child_job_releases_slot_when_entry_not_running(
         queue_root=queue_root,
         queue_id="queue-1",
         admission_token="slot-1",
+        await_parent_admission_handoff_fn=lambda *_args: True,
     )
 
     assert rc == 1
-    assert released == [(str(admission_root), "slot-1")]
+    assert released == []
 
 
 @patch("orca_auto.orca.worker_execution.run_worker_child_job", return_value=6)

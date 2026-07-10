@@ -8,6 +8,8 @@ from typing import Any
 
 from orca_auto.core.admission import (
     AdmissionLimitReachedError,
+    complete_slot_engine_process,
+    get_slot,
     release_slot,
 )
 from orca_auto.core.admission import (
@@ -224,8 +226,16 @@ def _admission_context(
 
 
 def _release_reservation_if_needed(admission_root: Path, reservation_token: str | None) -> None:
-    if reservation_token is not None:
-        release_slot(admission_root, reservation_token)
+    if reservation_token is None:
+        return
+    slot = get_slot(admission_root, reservation_token)
+    if slot is None:
+        return
+    if slot.engine_process_state:
+        # Engine queue reservations are parent-owned. The child only moves the
+        # process state back to idle; parent poll/finalization owns release.
+        return
+    release_slot(admission_root, reservation_token)
 
 
 @contextmanager
@@ -252,11 +262,21 @@ def _activated_reserved_slot_context(
         raise AdmissionLimitReachedError(
             f"Failed to activate reserved admission slot for {reaction_dir}."
         )
+    managed_slot = bool(getattr(activated, "engine_process_state", ""))
 
     try:
         yield reservation_token
-    finally:
-        release_slot(admission_root, reservation_token)
+    except BaseException:
+        if not managed_slot:
+            release_slot(admission_root, reservation_token)
+        raise
+    else:
+        if managed_slot:
+            completed = complete_slot_engine_process(admission_root, reservation_token)
+            if completed is None:
+                raise RuntimeError(f"Admission slot disappeared: {reservation_token}")
+        else:
+            release_slot(admission_root, reservation_token)
 
 
 def _notification_callbacks(
@@ -278,6 +298,8 @@ def _run_with_state(
     max_retries: int,
     resumed: bool,
     state: Any,
+    admission_root: Path | None = None,
+    reservation_token: str | None = None,
 ) -> int:
     return _run_inp_execution.run_with_state(
         cfg=cfg,
@@ -287,6 +309,8 @@ def _run_with_state(
         max_retries=max_retries,
         resumed=resumed,
         state=state,
+        admission_root=admission_root,
+        reservation_token=reservation_token,
         deps=_run_inp_deps(),
     )
 

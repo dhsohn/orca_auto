@@ -25,10 +25,11 @@ def _patch_deterministic_liveness(
 
     def fake_kill(pid: int, sig: int) -> None:
         if pid not in live:
-            raise OSError("process is not alive")
+            raise ProcessLookupError("process is not alive")
 
     monkeypatch.setattr(store.os, "kill", fake_kill)
     monkeypatch.setattr(store, "_process_start_ticks", lambda pid: tick_map.get(pid))
+    monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
     monkeypatch.setattr(store, "timestamped_token", lambda prefix: f"{prefix}_fixed")
     monkeypatch.setattr(store, "now_utc_iso", lambda: "2026-04-19T00:00:00+00:00")
 
@@ -144,7 +145,7 @@ def test_slot_owner_alive_handles_dead_pid_and_missing_start_ticks(
                 acquired_at="2026-04-19T00:00:00+00:00",
             )
         )
-        is False
+        is True
     )
 
 
@@ -192,6 +193,26 @@ def test_slot_owner_alive_still_rejects_permission_denied_pid_reuse(
         )
         is False
     )
+
+
+def test_generic_slot_owner_identity_is_scoped_to_the_current_boot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_deterministic_liveness(monkeypatch)
+    token = store.reserve_slot(tmp_path, 1, source="generic")
+    assert token is not None
+    slot = store.get_slot(tmp_path, token)
+    assert slot is not None and slot.owner_boot_id == "test-boot-id"
+
+    monkeypatch.setattr(store, "_linux_boot_id", lambda: "later-boot-id")
+    monkeypatch.setattr(
+        store.os,
+        "kill",
+        lambda *_args: pytest.fail("cross-boot owner PID must not be probed"),
+    )
+
+    assert store._slot_owner_alive(slot) is False
 
 
 @pytest.mark.parametrize(
@@ -358,7 +379,8 @@ def test_reserve_slot_honors_capacity_limit_and_raise_variant(
     assert first == "slot_fixed"
     assert second is None
     assert store.active_slot_count(tmp_path) == 1
-    assert store.reserve_slot_or_raise(tmp_path, 2, source="queue-4") == "slot_fixed"
+    monkeypatch.setattr(store, "timestamped_token", lambda prefix: f"{prefix}_second")
+    assert store.reserve_slot_or_raise(tmp_path, 2, source="queue-4") == "slot_second"
     with pytest.raises(store.AdmissionLimitReachedError):
         store.reserve_slot_or_raise(tmp_path, 1, source="queue-3")
 
@@ -406,6 +428,7 @@ def test_reserve_activate_and_release_slot_lifecycle(
         state="active",
         work_dir=str(Path(".").resolve()),
         queue_id="queue-b",
+        owner_boot_id="test-boot-id",
     )
 
     assert store.release_slot(tmp_path, token) is True

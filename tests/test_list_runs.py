@@ -354,7 +354,7 @@ class TestListQueueEntries(_ListTestBase):
             report_json_path(rxn_dir).write_text(
                 json.dumps(
                     orca_artifact_payload(
-                        job_id="run_done_1",
+                        job_id=entry.task_id,
                         run_id="run_done_1",
                         reaction_dir=str(rxn_dir),
                         status="completed",

@@ -154,9 +154,9 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
     if admission_root is not None:
         paths.append(admission_root)
 
-    # The ORCA worker resolves its admission store through the engine-scoped
-    # scheduler section when present (orca.scheduler.admission_root), so the
-    # sandbox must grant that root too.
+    # Resolve the ORCA view as well so a split-brain engine-scoped scheduler is
+    # rejected during installation instead of producing a service that starts
+    # against a different admission pool.
     orca_scheduler_raw = mapping_section(
         engine_config_mapping(raw, "orca", inherit_keys=("scheduler",)),
         "scheduler",

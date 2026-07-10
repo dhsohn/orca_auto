@@ -376,6 +376,7 @@ def test_reconcile_orphaned_running_entries_covers_state_terminal_paths_and_pend
     def _load_state(reaction_dir: Path):
         if reaction_dir == completed_dir:
             return {
+                "job_id": "q_done",
                 "run_id": "run_done",
                 "status": RunStatus.COMPLETED.value,
                 "updated_at": "2026-03-10T02:00:00+00:00",
@@ -383,6 +384,7 @@ def test_reconcile_orphaned_running_entries_covers_state_terminal_paths_and_pend
             }
         if reaction_dir == failed_dir:
             return {
+                "job_id": "q_fail",
                 "run_id": "run_fail",
                 "status": RunStatus.FAILED.value,
                 "updated_at": "2026-03-10T03:00:00+00:00",

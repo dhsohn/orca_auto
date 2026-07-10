@@ -4,11 +4,17 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.admission import (
+    build_slot_engine_process_preparer,
+    build_slot_engine_process_registrar,
+    complete_slot_engine_process,
+    get_slot,
+)
 from orca_auto.core.utils.process_lock import parse_lock_info
 from orca_auto.core.utils.process_tracking import active_run_lock_pid
 
 from ..completion_rules import detect_completion_mode
-from ..orca_process import recover_orphaned_orca_process
+from ..orca_process import OrcaProcessRecoveryError, recover_orphaned_orca_process
 from ..out_analyzer import analyze_output
 from ..runtime.run_lock import LOCK_FILE_NAME
 from ..state import load_state
@@ -172,10 +178,25 @@ def run_with_state(
     resumed: bool,
     state: Any,
     deps: Any,
+    admission_root: Path | None = None,
+    reservation_token: str | None = None,
 ) -> int:
     execution = deps.execution
     notify_started, notify_finished, notify_retry = execution._notification_callbacks(cfg)
     runner = runner_cls(cfg.paths.orca_executable)
+    if admission_root is not None and reservation_token:
+        set_registrar = getattr(runner, "set_running_job_registrar", None)
+        if callable(set_registrar):
+            set_registrar(
+                build_slot_engine_process_registrar(
+                    admission_root,
+                    reservation_token,
+                ),
+                prepare=build_slot_engine_process_preparer(
+                    admission_root,
+                    reservation_token,
+                ),
+            )
     # Carry the per-task memory budget into the run so retry rewrites can cap
     # escalated %maxcore (see inp_rewriter.rewrite_for_retry).
     state["max_memory_gb_per_task"] = int(cfg.resources.max_memory_gb_per_task)
@@ -245,7 +266,44 @@ def execute_locked_run(
         # state and orphaned ORCA groups are reconciled: reaping here (not
         # before the lock) cannot mistake another invocation's freshly started
         # run for an orphan.
-        execution._recover_crashed_state(context.reaction_dir)
+        legacy_recovery_prepared = False
+        if context.reservation_token:
+            slot = get_slot(context.admission_root, context.reservation_token)
+            if slot is not None and slot.engine_process_state:
+                build_slot_engine_process_preparer(
+                    context.admission_root,
+                    context.reservation_token,
+                )()
+                legacy_recovery_prepared = True
+        try:
+            execution._recover_crashed_state(context.reaction_dir)
+        except OrcaProcessRecoveryError:
+            # An ambiguous process-recovery failure may leave an ORCA group
+            # alive. Keep the pending fence until an operator or a later
+            # recovery can establish that no engine process remains.
+            raise
+        except BaseException:
+            # Recovery itself never launches an engine. Do not leave a
+            # pre-recovery launch fence pending when state loading or another
+            # non-process-recovery step fails: the parent can then finalize
+            # the child and release this managed slot normally.
+            if legacy_recovery_prepared:
+                completed = complete_slot_engine_process(
+                    context.admission_root,
+                    context.reservation_token,
+                )
+                if completed is None:
+                    raise RuntimeError(
+                        f"Admission slot disappeared: {context.reservation_token}"
+                    ) from None
+            raise
+        if legacy_recovery_prepared:
+            completed = complete_slot_engine_process(
+                context.admission_root,
+                context.reservation_token,
+            )
+            if completed is None:
+                raise RuntimeError(f"Admission slot disappeared: {context.reservation_token}")
         with execution._admission_context(
             admission_root=context.admission_root,
             reaction_dir=context.reaction_dir,
@@ -281,6 +339,8 @@ def execute_locked_run(
                 max_retries=context.max_retries,
                 resumed=resumed,
                 state=state,
+                admission_root=context.admission_root,
+                reservation_token=context.reservation_token,
             )
 
 
@@ -317,6 +377,11 @@ def cmd_run_inp_execute(
         # Crash/orphan recovery runs inside the run lock (see execute_locked_run),
         # so it cannot race another invocation acquiring the lock.
         return execution._execute_locked_run(args, context, runner_cls=runner_cls)
+    except OrcaProcessRecoveryError:
+        # Keep the managed admission marker pending. Converting an ambiguous
+        # recovery failure to rc=1 would make the outer child scope complete
+        # and release capacity while an engine group may still be alive.
+        raise
     except statuses.AdmissionLimitReachedError as exc:
         execution._release_reservation_if_needed(context.admission_root, context.reservation_token)
         logger.error("%s", exc)

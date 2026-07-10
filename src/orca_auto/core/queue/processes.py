@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
 import signal
 import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +30,11 @@ class ManagedProcess(Protocol):
 @dataclass(frozen=True)
 class ProcessGroupTerminationDeps:
     killpg: Callable[[int, int], None] | None = None
+    process_group_exists: Callable[[int], bool] | None = None
+    pid_exists: Callable[[int], bool] | None = None
+    monotonic: Callable[[], float] = time.monotonic
+    sleep: Callable[[float], None] = time.sleep
+    group_poll_interval_seconds: float = 0.1
     sigterm: int = signal.SIGTERM
     sigkill: int = signal.SIGKILL
     logger: logging.Logger = LOGGER
@@ -41,6 +48,137 @@ class ShutdownSignalDeps:
     logger: logging.Logger = LOGGER
 
 
+def process_group_exists(
+    pgid: int,
+    *,
+    killpg_fn: Callable[[int, int], None] | None = None,
+) -> bool:
+    """Return whether a POSIX process group exists, failing closed on probe errors."""
+    active_killpg = killpg_fn or getattr(os, "killpg", None)
+    if active_killpg is None:
+        # There is no POSIX process-group concept to verify on this platform.
+        return False
+    try:
+        active_killpg(int(pgid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError as exc:
+        return exc.errno != errno.ESRCH
+    return True
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError as exc:
+        if exc.errno == errno.ESRCH:
+            return False
+        raise
+    return True
+
+
+def _group_signal_is_safe(
+    proc: ManagedProcess,
+    *,
+    pid_exists_fn: Callable[[int], bool],
+) -> bool | None:
+    """Return True when owned/leaderless, False on proven reuse, None if unknown."""
+    try:
+        if proc.poll() is None:
+            return True
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        return not pid_exists_fn(proc.pid)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def managed_process_group_has_exited(
+    proc: ManagedProcess,
+    *,
+    process_group_exists_fn: Callable[[int], bool] | None = None,
+    killpg_fn: Callable[[int, int], None] | None = None,
+    pid_exists_fn: Callable[[int], bool] = _pid_exists,
+) -> bool:
+    """True only after the leader and every member of its process group are gone."""
+    try:
+        if proc.poll() is None:
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    pid = getattr(proc, "pid", None)
+    if not isinstance(pid, int) or pid <= 0:
+        return True
+    # Popen.poll() reaps its child. Linux cannot reuse that numeric PID while
+    # the original PGID still exists; therefore a currently live process with
+    # the same PID proves the observed group belongs to a later session.
+    try:
+        if pid_exists_fn(pid):
+            return True
+    except Exception:  # noqa: BLE001
+        return False
+    group_exists = process_group_exists_fn or (
+        lambda pgid: process_group_exists(pgid, killpg_fn=killpg_fn)
+    )
+    try:
+        return not group_exists(pid)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _wait_for_managed_process_group_exit(
+    proc: ManagedProcess,
+    *,
+    timeout_seconds: float,
+    process_group_exists_fn: Callable[[int], bool],
+    deps: ProcessGroupTerminationDeps,
+) -> bool:
+    deadline = deps.monotonic() + max(0.0, float(timeout_seconds))
+    interval = max(0.01, float(deps.group_poll_interval_seconds))
+    leader_exited = False
+    while True:
+        if leader_exited:
+            pid_exists_fn = deps.pid_exists or _pid_exists
+            try:
+                if pid_exists_fn(proc.pid):
+                    return True
+                if not process_group_exists_fn(proc.pid):
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            try:
+                leader_exited = proc.poll() is not None
+            except Exception:  # noqa: BLE001
+                leader_exited = False
+            if leader_exited:
+                continue
+        remaining = deadline - deps.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            if not leader_exited:
+                proc.wait(timeout=remaining)
+                leader_exited = True
+                continue
+        except subprocess.TimeoutExpired:
+            return managed_process_group_has_exited(
+                proc,
+                process_group_exists_fn=process_group_exists_fn,
+                pid_exists_fn=deps.pid_exists or _pid_exists,
+            )
+        except Exception:  # noqa: BLE001
+            deps.logger.debug("failed while waiting for process leader", exc_info=True)
+        deps.sleep(min(interval, remaining))
+
+
 def terminate_process_group(
     proc: ManagedProcess,
     *,
@@ -51,47 +189,90 @@ def terminate_process_group(
     sigkill: int | None = None,
     deps: ProcessGroupTerminationDeps | None = None,
 ) -> bool:
-    if proc.poll() is not None:
-        return True
     active_deps = deps or ProcessGroupTerminationDeps()
     active_killpg = killpg_fn
     if active_killpg is None:
         active_killpg = active_deps.killpg
     if active_killpg is None:
-        active_killpg = os.killpg
+        active_killpg = getattr(os, "killpg", None)
     active_sigterm = active_deps.sigterm if sigterm is None else sigterm
     active_sigkill = active_deps.sigkill if sigkill is None else sigkill
     logger = active_deps.logger
+    group_exists = active_deps.process_group_exists
+    if group_exists is None:
+
+        def group_exists(pgid: int) -> bool:
+            return process_group_exists(pgid, killpg_fn=active_killpg)
+
+    if managed_process_group_has_exited(
+        proc,
+        process_group_exists_fn=group_exists,
+        pid_exists_fn=active_deps.pid_exists or _pid_exists,
+    ):
+        return True
+
+    signal_safety = _group_signal_is_safe(
+        proc,
+        pid_exists_fn=active_deps.pid_exists or _pid_exists,
+    )
+    if signal_safety is False:
+        return True
+    if signal_safety is None:
+        logger.warning(
+            "Cannot verify reaped process-group identity; refusing to signal pgid=%s",
+            getattr(proc, "pid", None),
+        )
+        return False
 
     try:
+        if active_killpg is None:
+            raise ProcessLookupError
         active_killpg(proc.pid, active_sigterm)
-    except (ProcessLookupError, PermissionError):
+    except (ProcessLookupError, PermissionError, OSError):
         try:
             proc.terminate()
         except Exception:  # noqa: BLE001
             logger.debug("failed to terminate process after group signal failed", exc_info=True)
 
-    try:
-        proc.wait(timeout=graceful_timeout)
+    if _wait_for_managed_process_group_exit(
+        proc,
+        timeout_seconds=graceful_timeout,
+        process_group_exists_fn=group_exists,
+        deps=active_deps,
+    ):
         return True
-    except subprocess.TimeoutExpired:
-        if proc.poll() is not None:
-            return True
+
+    signal_safety = _group_signal_is_safe(
+        proc,
+        pid_exists_fn=active_deps.pid_exists or _pid_exists,
+    )
+    if signal_safety is False:
+        return True
+    if signal_safety is None:
+        logger.warning(
+            "Cannot verify reaped process-group identity before SIGKILL; pgid=%s",
+            getattr(proc, "pid", None),
+        )
+        return False
+
+    try:
+        if active_killpg is None:
+            raise ProcessLookupError
+        active_killpg(proc.pid, active_sigkill)
+    except (ProcessLookupError, PermissionError, OSError):
         try:
-            active_killpg(proc.pid, active_sigkill)
-        except (ProcessLookupError, PermissionError):
-            try:
-                proc.kill()
-            except Exception:  # noqa: BLE001
-                logger.debug("failed to kill process after group kill failed", exc_info=True)
-        try:
-            proc.wait(timeout=kill_timeout)
-            return True
-        except subprocess.TimeoutExpired:
-            if proc.poll() is not None:
-                return True
-            logger.debug("process did not exit after kill timeout: pid=%s", proc.pid)
-            return False
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            logger.debug("failed to kill process after group kill failed", exc_info=True)
+    terminated = _wait_for_managed_process_group_exit(
+        proc,
+        timeout_seconds=kill_timeout,
+        process_group_exists_fn=group_exists,
+        deps=active_deps,
+    )
+    if not terminated:
+        logger.debug("process group did not exit after kill timeout: pgid=%s", proc.pid)
+    return terminated
 
 
 def install_shutdown_signal_handlers(
@@ -132,6 +313,7 @@ def current_worker_pid_payload() -> dict[str, int | str]:
         now_fn=now_utc_iso,
         process_start_ticks_fn=_process_start_ticks,
         pid_fn=os.getpid,
+        boot_id_fn=lambda: process_utils.linux_boot_id(proc_root=Path("/proc")),
     )
 
 
@@ -162,6 +344,7 @@ def read_live_pid_file(pid_path: Path) -> int | None:
         pid_path,
         is_process_alive_fn=pid_is_alive,
         process_start_ticks_fn=_process_start_ticks,
+        boot_id_fn=lambda: process_utils.linux_boot_id(proc_root=Path("/proc")),
         remove_file_fn=process_utils.remove_file_silent,
     )
 
@@ -172,7 +355,9 @@ __all__ = [
     "ShutdownSignalDeps",
     "current_worker_pid_payload",
     "install_shutdown_signal_handlers",
+    "managed_process_group_has_exited",
     "pid_is_alive",
+    "process_group_exists",
     "read_live_pid_file",
     "read_worker_pid_file",
     "remove_worker_pid_file",

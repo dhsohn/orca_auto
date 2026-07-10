@@ -292,10 +292,10 @@ def _submit_xtb_stage_if_needed(
     xtb_config: str | None,
     submit_ready: bool,
     workflow_id: str,
-) -> None:
+) -> bool:
     if not context.should_submit(submit_ready=submit_ready, config_path=xtb_config):
-        return
-    _submit_xtb_stage(
+        return True
+    return _submit_xtb_stage(
         context.o,
         context.stage,
         context.task,
@@ -360,13 +360,17 @@ def sync_xtb_stage_impl(
         return
     o = context.o
     xtb_runtime_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="xtb")
-    _submit_xtb_stage_if_needed(
+    submission_applied = _submit_xtb_stage_if_needed(
         context,
         xtb_runtime_paths=xtb_runtime_paths,
         xtb_config=xtb_config,
         submit_ready=submit_ready,
         workflow_id=workflow_id,
     )
+    if not submission_applied:
+        # As with CREST, applying the old active contract here would replace the
+        # deferred PLANNED state and prevent the next-tick retry.
+        return
     contract_result = _load_and_apply_xtb_contract(
         context,
         xtb_runtime_paths=xtb_runtime_paths,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from orca_auto.core.commands.run_dir import (
@@ -81,10 +82,38 @@ def _build_submission(
 
 
 def _queued_record(submission: EngineRunDirSubmission, _entry: Any) -> EngineQueuedRecord:
-    job = submission.context["job"]
-    job_dir = submission.context["job_dir"]
-    input_summary = submission.context["input_summary"]
-    resource_request = submission.context["resource_request"]
+    metadata = submission.metadata
+    context = submission.context
+    context_job = context.get("job")
+    if not isinstance(context_job, dict):
+        context_job = {}
+    job_dir = Path(metadata.get("job_dir") or context["job_dir"]).expanduser().resolve()
+    input_summary = metadata.get("input_summary")
+    if not isinstance(input_summary, dict):
+        input_summary = context.get("input_summary")
+    if not isinstance(input_summary, dict):
+        input_summary = {}
+    selected_input_xyz = metadata.get("selected_input_xyz") or context_job.get("selected_input_xyz")
+    if not isinstance(selected_input_xyz, (str, Path)):
+        raise ValueError("xTB queued record is missing selected_input_xyz metadata")
+    secondary_input_xyz = metadata.get("secondary_input_xyz") or context_job.get(
+        "secondary_input_xyz"
+    )
+    selected_input_path = Path(selected_input_xyz).expanduser().resolve()
+    secondary_input_path = (
+        Path(secondary_input_xyz).expanduser().resolve()
+        if isinstance(secondary_input_xyz, (str, Path)) and str(secondary_input_xyz).strip()
+        else None
+    )
+    job: dict[str, Any] = {
+        "job_type": str(metadata.get("job_type") or context_job.get("job_type") or ""),
+        "reaction_key": str(metadata.get("reaction_key") or context_job.get("reaction_key") or ""),
+        "selected_input_xyz": selected_input_path,
+        "secondary_input_xyz": secondary_input_path,
+    }
+    resource_request = metadata.get("resource_request")
+    if not isinstance(resource_request, dict):
+        resource_request = context["resource_request"]
     return build_engine_queued_record(
         submission=submission,
         state_payload=queued_state_payload(

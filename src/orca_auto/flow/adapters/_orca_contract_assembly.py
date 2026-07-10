@@ -98,12 +98,22 @@ class _ContractPayloadDeps:
     def normalize_bool(self, value: Any) -> bool:
         return self._deps.normalize_bool_fn(value)
 
-    def _runtime_paths(self, current_dir: Path | None) -> dict[str, str]:
+    def _runtime_paths(
+        self,
+        current_dir: Path | None,
+        *,
+        include_state: bool = True,
+        include_report: bool = True,
+        queue_entry: ContractPayload | None = None,
+    ) -> dict[str, str]:
         return _canonical_payload.runtime_paths(
             current_dir,
             state_file_name="job_state.json",
             report_json_name="job_report.json",
             report_md_name="job_report.md",
+            include_state=include_state,
+            include_report=include_report,
+            queue_entry=queue_entry,
         )
 
     def attempt_count(self, state: ContractPayload, report: ContractPayload) -> int:
@@ -302,11 +312,13 @@ def _artifact_paths(
     deps: OrcaContractLoaderDeps,
 ) -> _ArtifactPaths:
     selected_inp = deps.resolve_artifact_path_fn(
-        _selected_input_source(context), context.current_dir
+        _selected_input_source(context, deps), context.current_dir
     )
+    if Path(deps.normalize_text_fn(selected_inp)).suffix.lower() != ".inp":
+        selected_inp = ""
     last_out_path = deps.resolve_artifact_path_fn(_last_out_source(context), context.current_dir)
     selected_input_xyz = deps.resolve_artifact_path_fn(
-        _selected_xyz_source(context), context.current_dir
+        _selected_xyz_source(context, deps), context.current_dir
     )
     if not selected_input_xyz.lower().endswith(".xyz"):
         selected_input_xyz = ""
@@ -321,16 +333,37 @@ def _artifact_paths(
     return _ArtifactPaths(selected_inp, selected_input_xyz, optimized_xyz_path, last_out_path)
 
 
-def _selected_input_source(context: _contract_context.LoaderContext) -> Any:
+def _selected_input_source(
+    context: _contract_context.LoaderContext,
+    deps: OrcaContractLoaderDeps,
+) -> Any:
+    record_selected_inp = (
+        context.tracked_record.selected_input_xyz if context.tracked_record is not None else ""
+    )
+    if Path(deps.normalize_text_fn(record_selected_inp)).suffix.lower() != ".inp":
+        record_selected_inp = ""
     return (
-        context.state.get("selected_inp")
+        deps.queue_entry_metadata_value_fn(context.queue_entry, "selected_inp")
+        or context.state.get("selected_inp")
         or context.report.get("selected_inp")
-        or (context.tracked_record.selected_input_xyz if context.tracked_record is not None else "")
+        or record_selected_inp
     )
 
 
-def _selected_xyz_source(context: _contract_context.LoaderContext) -> Any:
-    return context.tracked_record.selected_input_xyz if context.tracked_record is not None else ""
+def _selected_xyz_source(
+    context: _contract_context.LoaderContext,
+    deps: OrcaContractLoaderDeps,
+) -> Any:
+    candidates = (
+        deps.queue_entry_metadata_value_fn(context.queue_entry, "selected_input_xyz"),
+        context.state.get("selected_input_xyz"),
+        context.report.get("selected_input_xyz"),
+        context.tracked_record.selected_input_xyz if context.tracked_record is not None else "",
+    )
+    for candidate in candidates:
+        if Path(deps.normalize_text_fn(candidate)).suffix.lower() == ".xyz":
+            return candidate
+    return ""
 
 
 def _last_out_source(context: _contract_context.LoaderContext) -> Any:

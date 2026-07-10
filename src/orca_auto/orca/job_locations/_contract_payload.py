@@ -4,7 +4,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engines.artifacts import load_engine_artifact_payload
 from orca_auto.core.queue.metadata import mapping_metadata_value as queue_entry_metadata_value
+
+from ._generation import (
+    current_generation_payloads,
+    payload_matches_queue_generation,
+    queue_has_generation_identity,
+)
+
+_REPORT_MARKDOWN_IDENTITY_PREFIXES = {
+    "- Job ID: `": "job_id",
+    "- run_id: `": "run_id",
+}
 
 
 @dataclass(frozen=True)
@@ -21,27 +33,112 @@ def runtime_paths(
     state_file_name: str,
     report_json_name: str,
     report_md_name: str,
+    include_state: bool = True,
+    include_report: bool = True,
+    queue_entry: dict[str, Any] | None = None,
 ) -> dict[str, str]:
+    state_path = current_dir / state_file_name if current_dir is not None else None
+    report_json_path = current_dir / report_json_name if current_dir is not None else None
+    report_md_path = current_dir / report_md_name if current_dir is not None else None
+    visible_state_path = (
+        _runtime_payload_path_for_generation(state_path, current_dir, queue_entry)
+        if include_state
+        else None
+    )
+    visible_report_json_path = (
+        _runtime_payload_path_for_generation(report_json_path, current_dir, queue_entry)
+        if include_report
+        else None
+    )
+    visible_report_md_path = (
+        _report_markdown_path_for_generation(report_md_path, current_dir, queue_entry)
+        if visible_report_json_path is not None
+        else None
+    )
     return {
-        "run_state_path": str((current_dir / state_file_name).resolve())
-        if current_dir is not None and (current_dir / state_file_name).exists()
-        else "",
-        "report_json_path": str((current_dir / report_json_name).resolve())
-        if current_dir is not None and (current_dir / report_json_name).exists()
-        else "",
-        "report_md_path": str((current_dir / report_md_name).resolve())
-        if current_dir is not None and (current_dir / report_md_name).exists()
-        else "",
+        "run_state_path": str(visible_state_path) if visible_state_path is not None else "",
+        "report_json_path": (
+            str(visible_report_json_path) if visible_report_json_path is not None else ""
+        ),
+        "report_md_path": (
+            str(visible_report_md_path) if visible_report_md_path is not None else ""
+        ),
     }
+
+
+def _direct_runtime_file(path: Path | None, current_dir: Path | None) -> Path | None:
+    if path is None or current_dir is None:
+        return None
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        resolved_path = path.resolve()
+        if resolved_path.parent != current_dir.resolve():
+            return None
+    except (OSError, RuntimeError):
+        return None
+    return resolved_path
+
+
+def _runtime_payload_path_for_generation(
+    path: Path | None,
+    current_dir: Path | None,
+    queue_entry: dict[str, Any] | None,
+) -> Path | None:
+    direct_path = _direct_runtime_file(path, current_dir)
+    if direct_path is None:
+        return None
+    if not queue_has_generation_identity(queue_entry):
+        return direct_path
+    payload = load_engine_artifact_payload(direct_path)
+    if payload is None or str(payload.get("engine") or "").strip() != "orca":
+        return None
+    if not payload_matches_queue_generation(queue_entry, payload):
+        return None
+    return direct_path if _direct_runtime_file(path, current_dir) == direct_path else None
+
+
+def _report_markdown_path_for_generation(
+    path: Path | None,
+    current_dir: Path | None,
+    queue_entry: dict[str, Any] | None,
+) -> Path | None:
+    direct_path = _direct_runtime_file(path, current_dir)
+    if direct_path is None:
+        return None
+    if not queue_has_generation_identity(queue_entry):
+        return direct_path
+    try:
+        lines = direct_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return None
+    identity: dict[str, str] = {}
+    for line in lines:
+        stripped = line.strip()
+        for prefix, key in _REPORT_MARKDOWN_IDENTITY_PREFIXES.items():
+            if not stripped.startswith(prefix) or not stripped.endswith("`"):
+                continue
+            value = stripped[len(prefix) : -1].strip()
+            existing = identity.get(key)
+            if existing is not None and existing != value:
+                return None
+            identity[key] = value
+    if not identity or not payload_matches_queue_generation(queue_entry, identity):
+        return None
+    return direct_path if _direct_runtime_file(path, current_dir) == direct_path else None
 
 
 def runtime_payloads(runtime: Any) -> RuntimePayloads:
     artifact = runtime.artifact
+    queue_entry = dict(runtime.queue_entry) if isinstance(runtime.queue_entry, dict) else {}
+    state = dict(artifact.state) if isinstance(artifact.state, dict) else {}
+    report = dict(artifact.report) if isinstance(artifact.report, dict) else {}
+    state, report = current_generation_payloads(queue_entry, state, report)
     return RuntimePayloads(
         record=artifact.record,
-        queue_entry=dict(runtime.queue_entry) if isinstance(runtime.queue_entry, dict) else {},
-        state=dict(artifact.state) if isinstance(artifact.state, dict) else {},
-        report=dict(artifact.report) if isinstance(artifact.report, dict) else {},
+        queue_entry=queue_entry,
+        state=state,
+        report=report,
     )
 
 
@@ -92,18 +189,25 @@ def latest_known_path(
 def selected_artifact_paths(
     *,
     record: Any,
+    queue_entry: dict[str, Any],
     state: dict[str, Any],
     report: dict[str, Any],
     current_dir: Path | None,
     latest_known_path: str,
     deps: Any,
 ) -> tuple[str, str, str, str]:
+    record_selected_inp = record.selected_input_xyz if record is not None else ""
+    if Path(deps.normalize_text(record_selected_inp)).suffix.lower() != ".inp":
+        record_selected_inp = ""
     selected_inp = deps.resolve_artifact_path(
-        state.get("selected_inp")
+        queue_entry_metadata_value(queue_entry, "selected_inp")
+        or state.get("selected_inp")
         or report.get("selected_inp")
-        or (record.selected_input_xyz if record is not None else ""),
+        or record_selected_inp,
         current_dir,
     )
+    if Path(deps.normalize_text(selected_inp)).suffix.lower() != ".inp":
+        selected_inp = ""
     state_final_result = state.get("final_result")
     state_final = state_final_result if isinstance(state_final_result, dict) else {}
     report_final_result = report.get("final_result")
@@ -113,7 +217,13 @@ def selected_artifact_paths(
         current_dir,
     )
     selected_input_xyz = deps.resolve_artifact_path(
-        (record.selected_input_xyz if record is not None else ""),
+        _selected_xyz_source(
+            record=record,
+            queue_entry=queue_entry,
+            state=state,
+            report=report,
+            deps=deps,
+        ),
         current_dir,
     )
     if not selected_input_xyz.lower().endswith(".xyz"):
@@ -127,6 +237,32 @@ def selected_artifact_paths(
         last_out_path=last_out_path,
     )
     return selected_inp, selected_input_xyz, last_out_path, optimized_xyz_path
+
+
+def _payload_selected_xyz(payload: dict[str, Any]) -> Any:
+    input_payload = payload.get("input")
+    normalized_input = input_payload if isinstance(input_payload, dict) else {}
+    return payload.get("selected_input_xyz") or normalized_input.get("selected_xyz_path")
+
+
+def _selected_xyz_source(
+    *,
+    record: Any,
+    queue_entry: dict[str, Any],
+    state: dict[str, Any],
+    report: dict[str, Any],
+    deps: Any,
+) -> Any:
+    candidates = (
+        queue_entry_metadata_value(queue_entry, "selected_input_xyz"),
+        _payload_selected_xyz(state),
+        _payload_selected_xyz(report),
+        record.selected_input_xyz if record is not None else "",
+    )
+    for candidate in candidates:
+        if Path(deps.normalize_text(candidate)).suffix.lower() == ".xyz":
+            return candidate
+    return ""
 
 
 def runtime_resources(
@@ -184,7 +320,10 @@ def orca_contract_payload(ctx: Any, *, deps: Any) -> dict[str, Any]:
         "analyzer_status": ctx.analyzer_status,
         "completed_at": ctx.completed_at,
         "last_out_path": ctx.last_out_path,
-        **deps._runtime_paths(ctx.current_dir),
+        **deps._runtime_paths(
+            ctx.current_dir,
+            queue_entry=ctx.queue_entry,
+        ),
         "attempt_count": deps.attempt_count(ctx.state, ctx.report),
         "max_retries": deps.max_retries(ctx.state, ctx.report),
         "attempts": deps.coerce_attempts(ctx.state, ctx.report),

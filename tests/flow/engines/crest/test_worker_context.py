@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from orca_auto.flow.engines.crest import worker_context
 
 
@@ -38,7 +40,10 @@ def test_build_execution_context_resolves_entry_metadata(tmp_path: Path) -> None
             "mode": "nci",
         }
     )
-    cfg = SimpleNamespace(resources=SimpleNamespace(max_cores_per_task=4, max_memory_gb_per_task=8))
+    cfg = SimpleNamespace(
+        runtime=SimpleNamespace(allowed_root=str(tmp_path)),
+        resources=SimpleNamespace(max_cores_per_task=4, max_memory_gb_per_task=8),
+    )
 
     context = worker_context.build_execution_context(
         cfg,
@@ -57,3 +62,26 @@ def test_build_execution_context_resolves_entry_metadata(tmp_path: Path) -> None
         mode="nci",
         resource_request={"max_cores": 4, "max_memory_gb": 8},
     )
+
+
+def test_build_execution_context_rejects_job_outside_runtime_roots(tmp_path: Path) -> None:
+    allowed_root = tmp_path / "allowed"
+    allowed_root.mkdir()
+    job_dir = tmp_path / "outside" / "job"
+    entry = SimpleNamespace(
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(job_dir / "input.xyz"),
+        }
+    )
+    cfg = SimpleNamespace(
+        runtime=SimpleNamespace(allowed_root=str(allowed_root)),
+        resources=SimpleNamespace(max_cores_per_task=4, max_memory_gb_per_task=8),
+    )
+
+    with pytest.raises(ValueError, match="Queue metadata 'job_dir'.*allowed root"):
+        worker_context.build_execution_context(
+            cfg,
+            entry,
+            molecule_key_resolver=lambda *_args: "unused",
+        )

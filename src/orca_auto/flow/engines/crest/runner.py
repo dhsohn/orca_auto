@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import resource
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
@@ -14,7 +15,10 @@ from orca_auto.core.config.engines import (
 from orca_auto.core.config.engines import (
     resource_request_from_manifest,
 )
-from orca_auto.core.engine_process import start_logged_process
+from orca_auto.core.engine_process import (
+    cleanup_failed_logged_process_start,
+    start_logged_process,
+)
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.core.utils import process as process_utils
 
@@ -148,9 +152,15 @@ def _build_command(
     manifest: dict[str, Any],
 ) -> list[str]:
     resource_request = resource_request_from_manifest(cfg, manifest)
+    try:
+        selected_xyz_arg = str(selected_xyz.resolve().relative_to(job_dir.resolve()))
+    except ValueError as exc:
+        raise ValueError(f"CREST input must be inside the job directory: {selected_xyz}") from exc
+    if selected_xyz_arg.startswith("-"):
+        selected_xyz_arg = f"./{selected_xyz_arg}"
     command = [
         _resolve_crest_executable(cfg),
-        selected_xyz.name,
+        selected_xyz_arg,
         "--T",
         str(resource_request["max_cores"]),
     ]
@@ -209,7 +219,14 @@ def _retained_outputs(job_dir: Path) -> tuple[int, tuple[str, ...]]:
     return count, tuple(found)
 
 
-def start_crest_job(cfg: AppConfig, *, job_dir: Path, selected_xyz: Path) -> CrestRunningJob:
+def start_crest_job(
+    cfg: AppConfig,
+    *,
+    job_dir: Path,
+    selected_xyz: Path,
+    before_popen: Callable[[], None] | None = None,
+    on_launch_aborted: Callable[[], None] | None = None,
+) -> CrestRunningJob:
     manifest = load_job_manifest(job_dir)
     resource_request = resource_request_from_manifest(cfg, manifest)
     resource_actual = _engine_runner.resource_actual_dict(resource_request)
@@ -217,39 +234,57 @@ def start_crest_job(cfg: AppConfig, *, job_dir: Path, selected_xyz: Path) -> Cre
 
     stdout_log = job_dir / "crest.stdout.log"
     stderr_log = job_dir / "crest.stderr.log"
-    launched = start_logged_process(
-        command,
-        cwd=job_dir,
-        stdout_log=stdout_log,
-        stderr_log=stderr_log,
-        max_cores=resource_request["max_cores"],
-        base_env=os.environ,
-        now_utc_iso_fn=now_utc_iso,
-        popen_fn=subprocess.Popen,
-        stdin_value=subprocess.DEVNULL,
-        preexec_fn=process_utils.memory_limit_preexec(
-            resource_request["max_memory_gb"],
-            setrlimit_fn=resource.setrlimit,
-            limit_resource=resource.RLIMIT_AS,
-        ),
-    )
-    return CrestRunningJob(
-        process=launched.process,
-        command=tuple(command),
-        started_at=launched.started_at,
-        stdout_log=str(launched.stdout_log.resolve()),
-        stderr_log=str(launched.stderr_log.resolve()),
-        stdout_handle=launched.stdout_handle,
-        stderr_handle=launched.stderr_handle,
-        selected_input_xyz=str(selected_xyz.resolve()),
-        mode=job_mode(manifest),
-        manifest_path=str((job_dir / MANIFEST_FILE_NAME).resolve())
-        if (job_dir / MANIFEST_FILE_NAME).exists()
-        else "",
-        job_dir=str(job_dir.resolve()),
-        resource_request=resource_request,
-        resource_actual=resource_actual,
-    )
+    resolved_stdout_log = str(stdout_log.resolve())
+    resolved_stderr_log = str(stderr_log.resolve())
+    resolved_selected_xyz = str(selected_xyz.resolve())
+    resolved_job_dir = str(job_dir.resolve())
+    resolved_mode = job_mode(manifest)
+    manifest_file = job_dir / MANIFEST_FILE_NAME
+    resolved_manifest_path = str(manifest_file.resolve()) if manifest_file.exists() else ""
+    if before_popen is not None:
+        before_popen()
+    try:
+        launched = start_logged_process(
+            command,
+            cwd=job_dir,
+            stdout_log=stdout_log,
+            stderr_log=stderr_log,
+            max_cores=resource_request["max_cores"],
+            base_env=os.environ,
+            now_utc_iso_fn=now_utc_iso,
+            popen_fn=subprocess.Popen,
+            stdin_value=subprocess.DEVNULL,
+            preexec_fn=process_utils.memory_limit_preexec(
+                resource_request["max_memory_gb"],
+                setrlimit_fn=resource.setrlimit,
+                limit_resource=resource.RLIMIT_AS,
+            ),
+        )
+    except Exception:
+        if on_launch_aborted is not None:
+            on_launch_aborted()
+        raise
+    try:
+        return CrestRunningJob(
+            process=launched.process,
+            command=tuple(command),
+            started_at=launched.started_at,
+            stdout_log=resolved_stdout_log,
+            stderr_log=resolved_stderr_log,
+            stdout_handle=launched.stdout_handle,
+            stderr_handle=launched.stderr_handle,
+            selected_input_xyz=resolved_selected_xyz,
+            mode=resolved_mode,
+            manifest_path=resolved_manifest_path,
+            job_dir=resolved_job_dir,
+            resource_request=resource_request,
+            resource_actual=resource_actual,
+        )
+    except BaseException:
+        cleanup_failed_logged_process_start(launched)
+        if on_launch_aborted is not None:
+            on_launch_aborted()
+        raise
 
 
 def finalize_crest_job(

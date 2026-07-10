@@ -43,8 +43,8 @@ def shutdown_child_job(
     finalize_child_exit_fn: Callable[..., Any],
     grace_seconds: float,
     sleep_fn: Callable[[float], None],
-) -> None:
-    _queue_lifecycle.shutdown_running_job(
+) -> bool:
+    return _queue_lifecycle.shutdown_running_job(
         job,
         terminate_process_fn=terminate_process_fn,
         finalize_child_exit_fn=lambda current_job, rc: finalize_child_exit_fn(
@@ -86,8 +86,12 @@ def build_child_worker_hooks(
             mark_failed_fn=mark_failed_fn,
         )
     )
-    shutdown_running_job = shutdown_running_job_fn or (
-        lambda worker, _queue_id, job: shutdown_child_job(
+
+    def shutdown_running_job(worker: Any, queue_id: str, job: Any) -> None:
+        if shutdown_running_job_fn is not None:
+            shutdown_running_job_fn(worker, queue_id, job)
+            return
+        shutdown_child_job(
             worker,
             job,
             terminate_process_fn=terminate_process_fn,
@@ -95,7 +99,7 @@ def build_child_worker_hooks(
             grace_seconds=shutdown_grace_seconds,
             sleep_fn=sleep_fn,
         )
-    )
+
     return PidFileChildProcessQueueWorkerHooks(
         handle_worker_start_error=handle_worker_start_error_fn,
         on_worker_process_started=on_worker_process_started,

@@ -21,7 +21,7 @@ class OrphanedRunningPolicy:
 @dataclass(frozen=True)
 class EngineQueueTerminalSideEffectHooks:
     upsert_terminal_job_record_fn: Callable[..., Any]
-    notify_terminal_job_from_state_fn: Callable[[Any, str], bool]
+    notify_terminal_job_from_state_fn: Callable[..., bool]
 
 
 @dataclass(frozen=True)
@@ -33,12 +33,12 @@ class EngineQueueProcessLifecycleHooks:
     terminate_process_fn: Callable[[Any], Any]
     mark_failed_fn: Callable[..., Any]
     upsert_running_job_record_fn: Callable[[Any, Any], Any]
-    get_run_id_from_state_fn: Callable[[str], str | None]
+    get_run_id_from_state_fn: Callable[..., str | None]
     get_cancel_requested_fn: Callable[..., bool]
     mark_cancelled_fn: Callable[..., Any]
     mark_completed_fn: Callable[..., Any]
     upsert_terminal_job_record_fn: Callable[..., Any]
-    notify_terminal_job_from_state_fn: Callable[[Any, str], bool]
+    notify_terminal_job_from_state_fn: Callable[..., bool]
     find_queue_entry_fn: Callable[[Any, str], Any | None] | None = None
     on_completed_fn: Callable[[Any, Any], Any] | None = None
     terminal_side_effect_hooks: EngineQueueTerminalSideEffectHooks | None = None

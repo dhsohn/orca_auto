@@ -116,7 +116,7 @@ def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
     ) in worker_content
 
 
-def test_systemd_read_write_paths_include_orca_scoped_admission_override(
+def test_systemd_rejects_orca_scoped_admission_override(
     tmp_path: Path,
 ) -> None:
     repo, config_path = _make_repo(tmp_path)
@@ -138,22 +138,43 @@ def test_systemd_read_write_paths_include_orca_scoped_admission_override(
         encoding="utf-8",
     )
 
-    plan = systemd_plan.build_systemd_install_plan(
-        target_user="alice",
-        repo=repo,
-        config=config_path,
-        unit_dir=tmp_path / "units",
-        is_root=lambda: True,
+    with pytest.raises(ValueError, match="cannot override the shared top-level scheduler"):
+        systemd_plan.build_systemd_install_plan(
+            target_user="alice",
+            repo=repo,
+            config=config_path,
+            unit_dir=tmp_path / "units",
+            is_root=lambda: True,
+        )
+
+
+def test_systemd_rejects_non_mapping_orca_scheduler(tmp_path: Path) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    config_path.write_text(
+        "\n".join(
+            [
+                f"runs_root: {repo / 'orca_runs'}",
+                "scheduler:",
+                "  max_active_simulations: 1",
+                "orca:",
+                "  scheduler: disabled",
+                "telegram:",
+                "  bot_token: token",
+                "  chat_id: chat",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
     )
 
-    unit_by_name = {unit.name: unit for unit in plan.units}
-    worker_content = unit_by_name["orca_auto-queue-worker@.service"].content
-    assert (
-        "ReadWritePaths="
-        f"{repo.resolve(strict=False) / 'admission'} "
-        f"{repo.resolve(strict=False) / 'orca_admission'} "
-        f"{repo.resolve(strict=False) / 'orca_runs'}"
-    ) in worker_content
+    with pytest.raises(ValueError, match="orca.scheduler must be a mapping"):
+        systemd_plan.build_systemd_install_plan(
+            target_user="alice",
+            repo=repo,
+            config=config_path,
+            unit_dir=tmp_path / "units",
+            is_root=lambda: True,
+        )
 
 
 def test_systemd_read_write_paths_omit_invalid_runs_root(tmp_path: Path) -> None:

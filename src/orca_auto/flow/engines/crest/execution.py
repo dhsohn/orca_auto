@@ -46,7 +46,7 @@ from orca_auto.core.queue.worker import (
 )
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.flow.engines.crest import artifacts as _queue_artifacts
-from orca_auto.flow.engines.crest.job_locations import upsert_job_record
+from orca_auto.flow.engines.crest.job_locations import runtime_roots_for_cfg, upsert_job_record
 from orca_auto.flow.engines.crest.runner import CrestRunResult, finalize_crest_job, start_crest_job
 from orca_auto.flow.engines.crest.state import mark_recovery_pending
 from orca_auto.flow.engines.crest.terminal import (
@@ -324,8 +324,8 @@ def _write_running_state(cfg: Any, entry: Any) -> None:
     )
 
 
-def _terminate_process(proc: subprocess.Popen[str]) -> None:
-    terminate_process_group(
+def _terminate_process(proc: subprocess.Popen[str]) -> bool:
+    return terminate_process_group(
         proc,
         killpg_fn=os.killpg,
         sigterm=signal.SIGTERM,
@@ -341,8 +341,16 @@ def _build_execution_context(
     molecule_key_resolver: Callable[[Any, Path, Path], str] | None = None,
 ) -> ExecutionContext:
     context_deps = dependencies.context
-    job_dir = context_deps.job_dir(entry)
-    selected_xyz = context_deps.selected_xyz(entry)
+    job_dir = _engine_execution.require_path_within_roots(
+        context_deps.job_dir(entry),
+        runtime_roots_for_cfg(cfg),
+        label="Queue metadata 'job_dir'",
+    )
+    selected_xyz = _engine_execution.require_path_within_root(
+        context_deps.selected_xyz(entry),
+        job_dir,
+        label="Queue metadata 'selected_input_xyz'",
+    )
     resolve_molecule_key = molecule_key_resolver or context_deps.molecule_key
     return ExecutionContext(
         entry=entry,
@@ -447,9 +455,24 @@ def _run_crest_job_for_entry(
     queue_root: Path,
     dependencies: WorkerExecutionDependencies,
     shutdown_requested: Callable[[], bool] | None,
+    prepare_running_job: Callable[[], None] | None,
+    register_running_job: Callable[[Any | None], None] | None,
 ) -> CrestRunResult:
     queue_deps = dependencies.queue
     runner_deps = dependencies.runner
+
+    def start_job() -> Any:
+        launch_kwargs: dict[str, Any] = {}
+        if prepare_running_job is not None:
+            launch_kwargs["before_popen"] = prepare_running_job
+        if register_running_job is not None:
+            launch_kwargs["on_launch_aborted"] = lambda: register_running_job(None)
+        return runner_deps.start_crest_job(
+            cfg,
+            job_dir=context.job_dir,
+            selected_xyz=context.selected_xyz,
+            **launch_kwargs,
+        )
 
     return _engine_execution.run_internal_worker_process_job(
         context,
@@ -460,14 +483,11 @@ def _run_crest_job_for_entry(
                 context.entry,
             ),
             shutdown_requested=shutdown_requested,
+            register_running_job=register_running_job,
         ),
         process_deps=runner_deps,
         shutdown_exception_type=WorkerShutdownRequested,
-        start_job=lambda: runner_deps.start_crest_job(
-            cfg,
-            job_dir=context.job_dir,
-            selected_xyz=context.selected_xyz,
-        ),
+        start_job=start_job,
         finalize_job=runner_deps.finalize_crest_job,
         build_failure_result=lambda exc: _failed_result_from_exception(
             context,
@@ -518,6 +538,8 @@ def _worker_execution_spec(
             queue_root=active_queue_root,
             dependencies=dependencies,
             shutdown_requested=options.shutdown_requested,
+            prepare_running_job=options.prepare_running_job,
+            register_running_job=options.register_running_job,
         ),
         finalize_entry=lambda cfg_obj, context, result, active_queue_root, _options: (
             _finalize_processed_entry(
@@ -558,6 +580,8 @@ def _run_worker_entry_lifecycle(
     molecule_key_resolver: Callable[[Any, Path, Path], str],
     dependencies: WorkerExecutionDependencies,
     shutdown_requested: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None = None,
+    register_running_job: Callable[[Any | None], None] | None = None,
     worker_job_pid: int | None = None,
     emit_output: bool = False,
 ) -> WorkerExecutionOutcome:
@@ -570,6 +594,8 @@ def _run_worker_entry_lifecycle(
             dependencies=dependencies,
         ),
         shutdown_requested=shutdown_requested,
+        prepare_running_job=prepare_running_job,
+        register_running_job=register_running_job,
         worker_job_pid=worker_job_pid,
         emit_output=emit_output,
     )
@@ -583,6 +609,8 @@ def execute_queue_entry(
     molecule_key_resolver: Callable[[Any, Path, Path], str] = _molecule_key,
     dependencies: WorkerExecutionDependencies | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None = None,
+    register_running_job: Callable[[Any | None], None] | None = None,
     worker_job_pid: int | None = None,
     emit_output: bool = False,
 ) -> WorkerExecutionOutcome:
@@ -593,6 +621,8 @@ def execute_queue_entry(
         molecule_key_resolver=molecule_key_resolver,
         dependencies=dependencies or default_worker_execution_dependencies(),
         shutdown_requested=shutdown_requested,
+        prepare_running_job=prepare_running_job,
+        register_running_job=register_running_job,
         worker_job_pid=worker_job_pid,
         emit_output=emit_output,
     )
@@ -606,6 +636,8 @@ def process_dequeued_entry(
     molecule_key_resolver: Callable[[Any, Path, Path], str] | None = None,
     dependencies: WorkerExecutionDependencies | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None = None,
+    register_running_job: Callable[[Any | None], None] | None = None,
 ) -> WorkerExecutionOutcome:
     deps = dependencies or default_worker_execution_dependencies()
     return _run_worker_entry_lifecycle(
@@ -615,6 +647,8 @@ def process_dequeued_entry(
         molecule_key_resolver=molecule_key_resolver or deps.context.molecule_key,
         dependencies=deps,
         shutdown_requested=shutdown_requested,
+        prepare_running_job=prepare_running_job,
+        register_running_job=register_running_job,
     )
 
 

@@ -53,6 +53,7 @@ def _resolved_path_fields(
     selected_inp, selected_input_xyz, last_out_path, optimized_xyz_path = (
         _contract_payload.selected_artifact_paths(
             record=payloads.record,
+            queue_entry=payloads.queue_entry,
             state=payloads.state,
             report=payloads.report,
             current_dir=current_dir,

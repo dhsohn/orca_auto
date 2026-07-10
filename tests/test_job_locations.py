@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RuntimeConfig
 from orca_auto.orca.job_locations import _contracts as _job_location_contracts
 from orca_auto.orca.job_locations import (
@@ -396,7 +398,7 @@ def test_load_orca_contract_payload_returns_normalized_runtime_fields() -> None:
                 "return_code": 0,
                 "analyzer_status": "completed",
                 "analyzer_reason": "normal_termination",
-                "markers": [],
+                "markers": {"terminated_normally": True, "imaginary_frequency_count": 0},
                 "patch_actions": [],
             }
         ]
@@ -479,8 +481,376 @@ def test_load_orca_contract_payload_returns_normalized_runtime_fields() -> None:
         assert payload["optimized_xyz_path"] == str(xyz.resolve())
         assert payload["last_out_path"] == str(out.resolve())
         assert payload["attempt_count"] == 1
+        assert payload["attempts"][0]["markers"] == {
+            "terminated_normally": True,
+            "imaginary_frequency_count": 0,
+        }
         assert payload["max_retries"] == 3
         assert payload["resource_request"] == {"max_cores": 8, "max_memory_gb": 16}
+
+
+@pytest.mark.parametrize(
+    ("state_job_id", "report_job_id", "expected_state_path", "expected_report_paths"),
+    [
+        ("job_old", "job_new", False, True),
+        ("job_new", "job_old", True, False),
+    ],
+)
+def test_load_orca_contract_payload_gates_runtime_paths_per_queue_generation(
+    tmp_path: Path,
+    state_job_id: str,
+    report_job_id: str,
+    expected_state_path: bool,
+    expected_report_paths: bool,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "rxn_generation"
+    job_dir.mkdir(parents=True)
+    selected_inp = job_dir / "rxn.inp"
+    selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    _write_orca_state(
+        job_dir,
+        job_id=state_job_id,
+        run_id="run_new" if state_job_id == "job_new" else "run_old",
+        selected_inp=selected_inp,
+        status="running",
+    )
+    _write_orca_report(
+        job_dir,
+        job_id=report_job_id,
+        run_id="run_new" if report_job_id == "job_new" else "run_old",
+        selected_inp=selected_inp,
+        status="running",
+    )
+    report_md = job_dir / "job_report.md"
+    report_md.write_text(
+        "# Report\n"
+        f"- Job ID: `{report_job_id}`\n"
+        f"- run_id: `{'run_new' if report_job_id == 'job_new' else 'run_old'}`\n",
+        encoding="utf-8",
+    )
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_new",
+                "task_id": "job_new",
+                "status": "running",
+                "metadata": {
+                    "run_id": "run_new",
+                    "reaction_dir": str(job_dir),
+                    "selected_inp": str(selected_inp),
+                },
+            }
+        ],
+    )
+
+    payload = load_orca_contract_payload(
+        allowed_root,
+        str(job_dir),
+        queue_id="q_new",
+    )
+
+    assert bool(payload["run_state_path"]) is expected_state_path
+    assert bool(payload["report_json_path"]) is expected_report_paths
+    assert bool(payload["report_md_path"]) is expected_report_paths
+    if expected_state_path:
+        assert payload["run_state_path"] == str(state_path(job_dir).resolve())
+    if expected_report_paths:
+        assert payload["report_json_path"] == str(report_json_path(job_dir).resolve())
+        assert payload["report_md_path"] == str(report_md.resolve())
+
+
+def test_load_orca_contract_payload_requires_every_queue_generation_identity(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "rxn_incomplete_generation"
+    job_dir.mkdir(parents=True)
+    selected_inp = job_dir / "rxn.inp"
+    selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    incomplete_payload = orca_artifact_payload(
+        job_id="job_new",
+        run_id="",
+        reaction_dir=str(job_dir),
+        selected_inp=str(selected_inp),
+        status="completed",
+    )
+    _write_json(state_path(job_dir), incomplete_payload)
+    _write_json(report_json_path(job_dir), incomplete_payload)
+    (job_dir / "job_report.md").write_text(
+        "# Report\n- Job ID: `job_new`\n",
+        encoding="utf-8",
+    )
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_new",
+                "task_id": "job_new",
+                "status": "completed",
+                "metadata": {
+                    "run_id": "run_new",
+                    "reaction_dir": str(job_dir),
+                    "selected_inp": str(selected_inp),
+                },
+            }
+        ],
+    )
+
+    payload = load_orca_contract_payload(allowed_root, str(job_dir), queue_id="q_new")
+
+    assert payload["run_state_path"] == ""
+    assert payload["report_json_path"] == ""
+    assert payload["report_md_path"] == ""
+
+
+def test_load_orca_contract_payload_requires_markdown_run_identity(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "rxn_incomplete_markdown_generation"
+    job_dir.mkdir(parents=True)
+    selected_inp = job_dir / "rxn.inp"
+    selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    _write_orca_state(
+        job_dir,
+        job_id="job_new",
+        run_id="run_new",
+        selected_inp=selected_inp,
+        status="completed",
+    )
+    _write_orca_report(
+        job_dir,
+        job_id="job_new",
+        run_id="run_new",
+        selected_inp=selected_inp,
+        status="completed",
+    )
+    (job_dir / "job_report.md").write_text(
+        "# Report\n- Job ID: `job_new`\n",
+        encoding="utf-8",
+    )
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_new",
+                "task_id": "job_new",
+                "status": "completed",
+                "metadata": {
+                    "run_id": "run_new",
+                    "reaction_dir": str(job_dir),
+                    "selected_inp": str(selected_inp),
+                },
+            }
+        ],
+    )
+
+    payload = load_orca_contract_payload(allowed_root, str(job_dir), queue_id="q_new")
+
+    assert payload["run_state_path"] == str(state_path(job_dir).resolve())
+    assert payload["report_json_path"] == str(report_json_path(job_dir).resolve())
+    assert payload["report_md_path"] == ""
+
+
+def test_load_orca_contract_payload_hides_stale_markdown_after_matching_report_json(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "rxn_generation"
+    job_dir.mkdir(parents=True)
+    selected_inp = job_dir / "rxn.inp"
+    selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    _write_orca_state(
+        job_dir,
+        job_id="job_new",
+        run_id="run_new",
+        selected_inp=selected_inp,
+        status="completed",
+    )
+    _write_orca_report(
+        job_dir,
+        job_id="job_new",
+        run_id="run_new",
+        selected_inp=selected_inp,
+        status="completed",
+    )
+    (job_dir / "job_report.md").write_text(
+        "# Old report\n- Job ID: `job_old`\n- run_id: `run_old`\n",
+        encoding="utf-8",
+    )
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_new",
+                "task_id": "job_new",
+                "status": "completed",
+                "metadata": {
+                    "run_id": "run_new",
+                    "reaction_dir": str(job_dir),
+                    "selected_inp": str(selected_inp),
+                },
+            }
+        ],
+    )
+
+    payload = load_orca_contract_payload(allowed_root, str(job_dir), queue_id="q_new")
+
+    assert payload["report_json_path"] == str(report_json_path(job_dir).resolve())
+    assert payload["report_md_path"] == ""
+
+
+def test_load_orca_contract_payload_rejects_runtime_artifact_symlink_escape(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "rxn_symlink_escape"
+    outside_dir = tmp_path / "outside"
+    job_dir.mkdir(parents=True)
+    outside_dir.mkdir()
+    selected_inp = job_dir / "rxn.inp"
+    selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    matching_payload = orca_artifact_payload(
+        job_id="job_new",
+        run_id="run_new",
+        reaction_dir=str(job_dir),
+        selected_inp=str(selected_inp),
+        status="completed",
+    )
+    outside_state = outside_dir / "job_state.json"
+    outside_report = outside_dir / "job_report.json"
+    outside_markdown = outside_dir / "job_report.md"
+    _write_json(outside_state, matching_payload)
+    _write_json(outside_report, matching_payload)
+    outside_markdown.write_text(
+        "# Report\n- Job ID: `job_new`\n- run_id: `run_new`\n",
+        encoding="utf-8",
+    )
+    state_path(job_dir).symlink_to(outside_state)
+    report_json_path(job_dir).symlink_to(outside_report)
+    (job_dir / "job_report.md").symlink_to(outside_markdown)
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_new",
+                "task_id": "job_new",
+                "status": "completed",
+                "metadata": {
+                    "run_id": "run_new",
+                    "reaction_dir": str(job_dir),
+                    "selected_inp": str(selected_inp),
+                },
+            }
+        ],
+    )
+
+    payload = load_orca_contract_payload(allowed_root, str(job_dir), queue_id="q_new")
+
+    assert payload["run_state_path"] == ""
+    assert payload["report_json_path"] == ""
+    assert payload["report_md_path"] == ""
+
+
+def test_load_orca_contract_payload_binds_runtime_paths_to_payload_directory(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    latest_dir = allowed_root / "latest"
+    original_dir = allowed_root / "original"
+    latest_dir.mkdir(parents=True)
+    original_dir.mkdir()
+    selected_inp = original_dir / "rxn.inp"
+    selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+
+    _write_json(
+        state_path(latest_dir),
+        {"job_id": "job_new", "run_id": "run_new", "status": "running"},
+    )
+    _write_json(
+        report_json_path(latest_dir),
+        {"job_id": "job_new", "run_id": "run_new", "status": "running"},
+    )
+    (latest_dir / "job_report.md").write_text(
+        "# Legacy report\n- Job ID: `job_new`\n- run_id: `run_new`\n",
+        encoding="utf-8",
+    )
+    _write_orca_state(
+        original_dir,
+        job_id="job_new",
+        run_id="run_new",
+        selected_inp=selected_inp,
+        status="running",
+    )
+    _write_orca_report(
+        original_dir,
+        job_id="job_new",
+        run_id="run_new",
+        selected_inp=selected_inp,
+        status="running",
+    )
+    _write_json(
+        allowed_root / "job_locations.json",
+        [
+            {
+                "job_id": "job_new",
+                "app_name": "orca_auto_orca",
+                "job_type": "orca_opt",
+                "status": "running",
+                "original_run_dir": str(original_dir),
+                "molecule_key": "H",
+                "selected_input_xyz": str(selected_inp),
+                "latest_known_path": str(latest_dir),
+                "resource_request": {},
+                "resource_actual": {},
+            }
+        ],
+    )
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_new",
+                "task_id": "job_new",
+                "status": "running",
+                "metadata": {
+                    "run_id": "run_new",
+                    "reaction_dir": str(original_dir),
+                    "selected_inp": str(selected_inp),
+                },
+            }
+        ],
+    )
+
+    payload = load_orca_contract_payload(allowed_root, "job_new", queue_id="q_new")
+
+    assert payload["state_status"] == "running"
+    assert payload["run_id"] == "run_new"
+    assert payload["reaction_dir"] == str(latest_dir.resolve())
+    assert payload["run_state_path"] == ""
+    assert payload["report_json_path"] == ""
+    assert payload["report_md_path"] == ""
+
+
+def test_load_orca_contract_payload_preserves_physical_paths_without_generation_identity(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "legacy_run"
+    job_dir.mkdir()
+    state_file = state_path(job_dir)
+    report_json = report_json_path(job_dir)
+    report_md = job_dir / "job_report.md"
+    state_file.write_text("legacy state\n", encoding="utf-8")
+    report_json.write_text("legacy report\n", encoding="utf-8")
+    report_md.write_text("# Legacy report\n", encoding="utf-8")
+
+    payload = load_orca_contract_payload(tmp_path, str(job_dir))
+
+    assert payload["run_state_path"] == str(state_file.resolve())
+    assert payload["report_json_path"] == str(report_json.resolve())
+    assert payload["report_md_path"] == str(report_md.resolve())
 
 
 def test_load_orca_contract_payload_uses_single_dependency_resolver() -> None:

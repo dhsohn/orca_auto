@@ -84,7 +84,7 @@ def activate_child_worker_admission(
     *,
     work_dir: str | Path,
     queue_id: str,
-    source: str,
+    source: str | None,
     activate_reserved_slot_fn: Callable[..., Any],
 ) -> bool:
     return _child_execution.activate_child_admission_token(
@@ -121,12 +121,13 @@ def child_worker_admission_scope(
 ) -> Iterator[None]:
     try:
         yield
-    finally:
-        release_child_worker_admission(
-            job,
-            admission_token,
-            release_slot_fn=release_slot_fn,
-        )
+    except BaseException:
+        # An asynchronous BaseException can land after Popen but before the
+        # active identity is published. Keep pending/active ownership for the
+        # parent recovery path instead of releasing the only capacity fence.
+        raise
+    else:
+        return
 
 
 __all__ = [

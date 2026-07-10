@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.admission import (
+    get_slot,
+    recover_orphaned_engine_slots,
+    recover_slot_engine_process,
+)
+
 from .. import lifecycle as _queue_lifecycle
 from ..engine import admission as _engine_admission
 from ..worker.admission import engine_queue_worker_source
@@ -122,7 +128,10 @@ class InternalEngineAdmission:
         _engine_admission.finalize_start_error_as_terminal_result(cfg, **kwargs)
 
 
+@dataclass(frozen=True)
 class InternalEngineLifecycle:
+    engine: str
+
     @property
     def child_exit_policy(self) -> _queue_lifecycle.ChildExitPolicy:
         return _queue_lifecycle.ChildExitPolicy(
@@ -142,6 +151,7 @@ class InternalEngineLifecycle:
         *,
         rc: int,
         shutdown_requested: bool,
+        admission_root: str | Path | None = None,
         find_queue_entry_fn: Callable[[Any, str], Any | None],
         mark_cancelled_fn: Callable[..., Any],
         requeue_running_entry_fn: Callable[..., Any],
@@ -149,6 +159,16 @@ class InternalEngineLifecycle:
         mark_recovery_pending_fn: Callable[..., Any],
         release_admission_slot_fn: Callable[[str], Any],
     ) -> None:
+        # A child can be SIGKILLed while its engine runs in a separate
+        # session. Reap and verify that durable slot record before any queue
+        # terminalization or admission release.
+        if admission_root is not None:
+            slot = get_slot(admission_root, job.admission_token)
+            if slot is not None:
+                recover_slot_engine_process(
+                    admission_root,
+                    job.admission_token,
+                )
         _queue_lifecycle.finalize_child_exit_with_policy(
             cfg,
             job,
@@ -181,6 +201,9 @@ class InternalEngineLifecycle:
         requeue_running_entry_fn: Callable[..., Any],
         mark_recovery_pending_fn: Callable[..., Any],
     ) -> None:
+        # Admission capacity is global across engines. Any worker starting on
+        # this root must recover every trustworthy dead-owner engine record.
+        recover_orphaned_engine_slots(admission_root, strict=False)
         _queue_lifecycle.reconcile_orphaned_running_with_policy(
             cfg,
             policy=self.orphaned_running_policy,

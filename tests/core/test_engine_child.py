@@ -4,9 +4,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from orca_auto.core.queue.child import execution as child_execution
 from orca_auto.core.queue.child.entrypoint import ChildWorkerEntrypointJob
 from orca_auto.core.queue.engine import child as engine_child
+from orca_auto.core.queue.engine import execution as engine_execution
 from orca_auto.core.queue.internal_engine import InternalEngineSpec
 
 
@@ -67,7 +70,7 @@ def test_run_child_job_with_admission_scope_releases_and_returns_status(
     )
 
     assert result == 7
-    assert released == [(cfg.admission_root, "slot-1")]
+    assert released == []
 
 
 def test_run_engine_worker_child_job_processes_entry_with_extra_kwargs(
@@ -90,6 +93,7 @@ def test_run_engine_worker_child_job_processes_entry_with_extra_kwargs(
         queue_root=tmp_path / "queue",
         queue_id="queue-1",
         admission_token="slot-1",
+        await_parent_admission_handoff_fn=lambda *_args: True,
         load_config_fn=lambda _path: cfg,
         find_queue_entry_fn=lambda _root, _queue_id: entry,
         admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
@@ -106,7 +110,7 @@ def test_run_engine_worker_child_job_processes_entry_with_extra_kwargs(
 
     assert rc == 0
     assert len(installed) == 1
-    assert released == [(cfg.admission_root, "slot-1")]
+    assert released == []
     assert processed[0]["args"] == (cfg, entry)
     assert processed[0]["kwargs"]["queue_root"] == (tmp_path / "queue").resolve()
     assert processed[0]["kwargs"]["molecule_key_resolver"] is resolver
@@ -129,6 +133,7 @@ def test_run_engine_worker_child_job_can_map_outcome_to_exit_code(tmp_path: Path
         queue_root=tmp_path / "queue",
         queue_id="queue-1",
         admission_token="slot-1",
+        await_parent_admission_handoff_fn=lambda *_args: True,
         load_config_fn=lambda _path: cfg,
         find_queue_entry_fn=lambda _root, _queue_id: entry,
         admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
@@ -141,7 +146,94 @@ def test_run_engine_worker_child_job_can_map_outcome_to_exit_code(tmp_path: Path
     )
 
     assert rc == 7
-    assert released == [(cfg.admission_root, "slot-1")]
+    assert released == []
+
+
+def test_cleanup_failure_keeps_child_and_parent_admission_until_engine_exit(
+    tmp_path: Path,
+) -> None:
+    cfg = SimpleNamespace(admission_root=tmp_path / "admission")
+    entry = SimpleNamespace(
+        queue_id="queue-1",
+        status=SimpleNamespace(value="running"),
+        cancel_requested=False,
+    )
+    events: list[str] = []
+
+    class EngineProcess:
+        exited = False
+
+        def poll(self) -> int | None:
+            return 9 if self.exited else None
+
+    process = EngineProcess()
+
+    def sleep(_seconds: float) -> None:
+        events.append("cleanup_wait")
+        if events.count("cleanup_wait") == 3:
+            process.exited = True
+            events.append("engine_exit")
+
+    def process_entry(*_args: Any, **_kwargs: Any) -> Any:
+        return engine_execution.run_cancellable_engine_process(
+            start_job=lambda: SimpleNamespace(process=process),
+            finalize_job=lambda *_args, **_kwargs: events.append("terminal_result"),
+            terminate_process=lambda _process: False,
+            build_failure_result=lambda _exc: events.append("failure_result"),
+            should_cancel=lambda: True,
+            sleep=sleep,
+            check_cancel_before_poll=True,
+            cleanup_retry_attempts=2,
+            cleanup_poll_interval_seconds=0,
+        )
+
+    with pytest.raises(engine_execution.ProcessCleanupError):
+        engine_child.run_engine_worker_child_job(
+            spec=engine_child.WorkerChildRunSpec(
+                shutdown_exception_type=_WorkerShutdownRequested,
+                entry_ready_fn=lambda loaded_entry: loaded_entry.status.value == "running",
+            ),
+            config_path="/tmp/orca_auto.yaml",
+            queue_root=tmp_path / "queue",
+            queue_id="queue-1",
+            admission_token="slot-1",
+            await_parent_admission_handoff_fn=lambda *_args: True,
+            load_config_fn=lambda _path: cfg,
+            find_queue_entry_fn=lambda _root, _queue_id: entry,
+            admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
+            release_slot_fn=lambda _root, _token: events.append("child_release"),
+            install_signal_handlers_fn=lambda _controller: None,
+            process_dequeued_entry_fn=process_entry,
+            dependencies_fn=lambda: object(),
+            requeue_running_entry_fn=lambda *_args: None,
+            mark_recovery_pending_context_fn=lambda *_args, **_kwargs: None,
+        )
+
+    assert "terminal_result" not in events
+    assert "failure_result" not in events
+    assert "child_release" not in events
+
+    parent_job = SimpleNamespace(
+        queue_root=tmp_path / "queue",
+        entry=entry,
+        admission_token="slot-1",
+        await_parent_admission_handoff_fn=lambda *_args: True,
+    )
+    InternalEngineSpec(engine="xtb").lifecycle().finalize_child_exit(
+        cfg,
+        parent_job,
+        rc=1,
+        shutdown_requested=False,
+        find_queue_entry_fn=lambda _root, _queue_id: entry,
+        mark_cancelled_fn=lambda *_args, **_kwargs: events.append("parent_cancelled"),
+        requeue_running_entry_fn=lambda *_args, **_kwargs: events.append("parent_requeued"),
+        mark_failed_fn=lambda *_args, **_kwargs: events.append("parent_failed"),
+        mark_recovery_pending_fn=lambda *_args, **_kwargs: events.append("parent_recovery"),
+        release_admission_slot_fn=lambda _token: events.append("parent_release"),
+    )
+
+    assert events.index("engine_exit") < events.index("parent_failed")
+    assert events.index("engine_exit") < events.index("parent_release")
 
 
 def test_internal_engine_worker_child_builds_shutdown_signal_installer() -> None:
@@ -216,6 +308,7 @@ def test_run_engine_worker_child_job_requeues_and_marks_recovery_on_shutdown(
         queue_root=tmp_path / "queue",
         queue_id="queue-1",
         admission_token="slot-1",
+        await_parent_admission_handoff_fn=lambda *_args: True,
         load_config_fn=lambda _path: cfg,
         find_queue_entry_fn=lambda _root, _queue_id: entry,
         admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
@@ -232,7 +325,7 @@ def test_run_engine_worker_child_job_requeues_and_marks_recovery_on_shutdown(
     assert rc == 0
     assert requeued == [((tmp_path / "queue").resolve(), "queue-1")]
     assert recovery == [(cfg, context, "worker_shutdown")]
-    assert released == [(cfg.admission_root, "slot-1")]
+    assert released == []
 
 
 def test_run_engine_worker_child_job_skips_recovery_when_requeue_cancels(
@@ -261,6 +354,7 @@ def test_run_engine_worker_child_job_skips_recovery_when_requeue_cancels(
         queue_root=tmp_path / "queue",
         queue_id="queue-1",
         admission_token="slot-1",
+        await_parent_admission_handoff_fn=lambda *_args: True,
         load_config_fn=lambda _path: cfg,
         find_queue_entry_fn=lambda _root, _queue_id: entry,
         admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
@@ -277,7 +371,7 @@ def test_run_engine_worker_child_job_skips_recovery_when_requeue_cancels(
     assert rc == 0
     assert requeued == [((tmp_path / "queue").resolve(), "queue-1")]
     assert recovery == []
-    assert released == [(cfg.admission_root, "slot-1")]
+    assert released == []
 
 
 def test_outcome_exit_code_maps_terminal_statuses() -> None:

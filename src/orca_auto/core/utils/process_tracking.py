@@ -17,6 +17,7 @@ def current_process_lock_payload() -> dict[str, int | str]:
         now_fn=now_utc_iso,
         process_start_ticks_fn=lambda _pid: process_lock.current_process_start_ticks(),
         pid_fn=os.getpid,
+        boot_id_fn=process_lock.current_boot_id,
     )
 
 
@@ -31,6 +32,22 @@ def active_run_lock_pid(
     pid = lock_info.get("pid")
     if not isinstance(pid, int) or pid <= 0:
         return None
+    expected_boot_id = lock_info.get("boot_id")
+    if isinstance(expected_boot_id, str) and expected_boot_id.strip():
+        observed_boot_id = process_lock.current_boot_id()
+        if (
+            isinstance(observed_boot_id, str)
+            and observed_boot_id.strip()
+            and observed_boot_id.strip() != expected_boot_id.strip()
+        ):
+            if logger is not None:
+                logger.info(
+                    "Ignoring stale %s from another boot: reaction_dir=%s pid=%d",
+                    lock_file_name,
+                    reaction_dir,
+                    pid,
+                )
+            return None
     if not process_lock.is_process_alive(pid):
         return None
 
@@ -58,5 +75,6 @@ def read_pid_file(pid_path: Path) -> int | None:
         pid_path,
         is_process_alive_fn=process_lock.is_process_alive,
         process_start_ticks_fn=process_lock.process_start_ticks,
+        boot_id_fn=process_lock.current_boot_id,
         remove_file_fn=process_utils.remove_file_silent,
     )

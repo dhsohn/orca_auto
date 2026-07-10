@@ -118,6 +118,96 @@ def test_sync_xtb_stage_submits_initial_attempt_and_records_handoff_metadata(
     ]
 
 
+def test_sync_xtb_stage_retries_after_cancel_deferred_without_applying_old_contract(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "xtb_allowed" / "job"
+    submissions = iter(
+        (
+            {
+                "status": "blocked",
+                "reason": "cancel_requested",
+                "queue_id": "q_old",
+                "job_id": "xtb_old",
+            },
+            {
+                "status": "submitted",
+                "queue_id": "q_new",
+                "job_id": "xtb_new",
+            },
+        )
+    )
+    contract_calls = 0
+
+    def load_contract(**_kwargs: Any) -> Any:
+        nonlocal contract_calls
+        contract_calls += 1
+        return SimpleNamespace(
+            status="queued",
+            job_id="xtb_new",
+            reason="",
+            latest_known_path=str(job_dir),
+            selected_input_xyz=str(job_dir / "input.xyz"),
+            candidate_details=(),
+            selected_candidate_paths=(),
+            analysis_summary={},
+        )
+
+    stage: dict[str, Any] = {
+        "stage_id": "xtb_restart",
+        "status": "planned",
+        "metadata": {"queue_id": "q_old"},
+        "task": {
+            "engine": "xtb",
+            "task_kind": "opt",
+            "status": "planned",
+            "payload": {
+                "job_dir": str(job_dir),
+                "selected_input_xyz": str(job_dir / "input.xyz"),
+            },
+            "enqueue_payload": {"priority": 8},
+        },
+    }
+    deps = orchestration_deps(
+        overrides={
+            "_ensure_xtb_job_dir": lambda *_args, **_kwargs: str(job_dir),
+            "submit_xtb_job_dir": lambda **_kwargs: next(submissions),
+            "load_xtb_artifact_contract": load_contract,
+            "now_utc_iso": lambda: "2026-07-10T00:00:00+00:00",
+        }
+    )
+
+    sync_xtb_stage_impl(
+        stage,
+        xtb_config="/tmp/xtb.yaml",
+        submit_ready=True,
+        workflow_id="wf_restart",
+        workspace_dir=tmp_path / "workspace",
+        deps=deps,
+    )
+
+    assert stage["status"] == "planned"
+    assert stage["task"]["status"] == "planned"
+    assert stage["metadata"]["submission_deferred_reason"] == "cancel_requested"
+    assert contract_calls == 0
+
+    sync_xtb_stage_impl(
+        stage,
+        xtb_config="/tmp/xtb.yaml",
+        submit_ready=True,
+        workflow_id="wf_restart",
+        workspace_dir=tmp_path / "workspace",
+        deps=deps,
+    )
+
+    assert contract_calls == 1
+    assert stage["status"] == "queued"
+    assert stage["task"]["status"] == "queued"
+    assert stage["metadata"]["queue_id"] == "q_new"
+    assert stage["metadata"]["child_job_id"] == "xtb_new"
+    assert "submission_deferred_reason" not in stage["metadata"]
+
+
 def test_sync_xtb_stage_retries_failed_handoff_when_retry_budget_remains(
     tmp_path: Path,
 ) -> None:

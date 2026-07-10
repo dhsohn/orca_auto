@@ -100,7 +100,7 @@ def test_load_child_queue_job_releases_admission_when_entry_is_missing(tmp_path:
     )
 
     assert job is None
-    assert released == [(cfg.admission_root, "slot-1")]
+    assert released == []
 
 
 def test_child_admission_token_activation_and_release_are_conditional(tmp_path: Path) -> None:
@@ -174,7 +174,7 @@ def test_child_worker_admission_scope_releases_on_exit(tmp_path: Path) -> None:
     ):
         assert released == []
 
-    assert released == [(cfg.admission_root, "slot-1")]
+    assert released == []
 
 
 def test_install_shutdown_request_handlers_wires_controller() -> None:

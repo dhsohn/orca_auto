@@ -254,12 +254,14 @@ def write_report_md(reaction_dir: Path, markdown: str) -> Path:
 
 
 def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str, str]:
+    """Write the Markdown body before publishing JSON as the report commit marker."""
+
     report_payload = _normalized_payload_from_state(reaction_dir, state)
-    json_path = write_report_json(reaction_dir, report_payload)
     md_path = write_report_md(
         reaction_dir,
         "\n".join(build_engine_report_markdown(report_payload)),
     )
+    json_path = write_report_json(reaction_dir, report_payload)
     reports = {"report_json": str(json_path), "report_md": str(md_path)}
     html_path = write_job_html_report(reaction_dir, state)
     if html_path is not None:

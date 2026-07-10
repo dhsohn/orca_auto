@@ -4,6 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from orca_auto.orca.job_locations._generation import current_generation_payloads
+
 
 class SafeIntFn(Protocol):
     def __call__(self, value: Any, *, default: int = 0) -> int: ...
@@ -72,7 +74,7 @@ def coerce_attempts_impl(
                 "return_code": safe_int_fn(raw.get("return_code"), default=0),
                 "analyzer_status": normalize_text_fn(raw.get("analyzer_status")),
                 "analyzer_reason": normalize_text_fn(raw.get("analyzer_reason")),
-                "markers": list(raw["markers"]) if isinstance(raw.get("markers"), list) else [],
+                "markers": _coerce_markers(raw.get("markers")),
                 "patch_actions": list(raw["patch_actions"])
                 if isinstance(raw.get("patch_actions"), list)
                 else [],
@@ -81,6 +83,14 @@ def coerce_attempts_impl(
             }
         )
     return tuple(attempts)
+
+
+def _coerce_markers(value: Any) -> dict[str, Any] | list[Any]:
+    if isinstance(value, dict):
+        return {str(key): item for key, item in value.items()}
+    if isinstance(value, list):
+        return list(value)
+    return []
 
 
 def final_result_payload_impl(state: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
@@ -118,6 +128,7 @@ def status_payload(
     normalize_text_fn: Callable[[Any], str],
     normalize_bool_fn: Callable[[Any], bool],
 ) -> StatusPayload:
+    state, report = current_generation_payloads(queue_entry, state, report)
     queue = queue_entry or {}
     queue_status = normalize_text_fn(queue.get("status")).lower()
     cancel_requested = normalize_bool_fn(queue.get("cancel_requested"))
@@ -151,7 +162,13 @@ def resolve_status(
 ) -> str:
     if final_status in {"completed", "failed"}:
         return final_status
-    queue_status_map = {"cancelled": "cancelled", "pending": "queued", "running": "running"}
+    queue_status_map = {
+        "cancelled": "cancelled",
+        "pending": "queued",
+        "running": "running",
+        "completed": "completed",
+        "failed": "failed",
+    }
     if queue_status == "running" and cancel_requested:
         return "cancel_requested"
     if queue_status in queue_status_map:

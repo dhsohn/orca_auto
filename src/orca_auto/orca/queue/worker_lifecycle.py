@@ -23,12 +23,12 @@ class OrcaQueueWorkerLifecycleCallbacks:
     terminate_process: Callable[[Any], Any]
     mark_failed: Callable[..., Any]
     upsert_running_job_record: Callable[[Any, Any], Any]
-    get_run_id_from_state: Callable[[str], str | None]
+    get_run_id_from_state: Callable[..., str | None]
     get_cancel_requested: Callable[..., bool]
     mark_cancelled: Callable[..., Any]
     mark_completed: Callable[..., Any]
     upsert_terminal_job_record: Callable[..., Any]
-    notify_terminal_job_from_state: Callable[[Any, str], bool]
+    notify_terminal_job_from_state: Callable[..., bool]
     find_queue_entry: Callable[[Any, str], Any | None] | None
     on_completed: Callable[[Any, Any], Any] | None
     queue_roots: Callable[[Any], tuple[Any, ...]]
@@ -67,6 +67,8 @@ def reconcile_orphaned_running(
     worker: Any,
     *,
     callbacks: OrcaQueueWorkerLifecycleCallbacks,
+    protected_queue_keys: set[tuple[str, str]] | None = None,
+    protected_queue_ids: set[str] | None = None,
 ) -> None:
     """Fix queue entries stuck as running from a previous worker crash."""
     reconcile_orphaned_process_entries(
@@ -75,7 +77,11 @@ def reconcile_orphaned_running(
             queue_roots_fn=callbacks.queue_roots,
             reconcile_stale_slots_fn=callbacks.reconcile_stale_slots,
             reconcile_orphaned_running_entries_fn=callbacks.reconcile_orphaned_running_entries,
-            reconcile_orphaned_running_entries_kwargs={"ignore_worker_pid": True},
+            reconcile_orphaned_running_entries_kwargs={
+                "ignore_worker_pid": True,
+                "protected_queue_keys": protected_queue_keys or set(),
+                "protected_queue_ids": protected_queue_ids or set(),
+            },
         ),
     )
 

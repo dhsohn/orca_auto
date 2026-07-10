@@ -440,6 +440,7 @@ def _run_xtb_job_for_entry(
     dependencies: WorkerExecutionDependencies,
     should_cancel: Callable[[], bool] | None,
     shutdown_requested: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None,
     register_running_job: Callable[[Any | None], None] | None,
 ) -> Any:
     runner_deps = dependencies.runner
@@ -463,22 +464,32 @@ def _run_xtb_job_for_entry(
                 cfg,
                 job_dir=context.job_dir,
                 should_cancel=should_stop_ranking,
+                prepare_running_job=prepare_running_job,
                 on_running_job=register_running_job,
                 terminate_process=runner_deps.terminate_process,
             )
             _raise_if_shutdown_requested(context, shutdown_requested)
             return result
 
+        def start_job() -> Any:
+            launch_kwargs: dict[str, Any] = {}
+            if prepare_running_job is not None:
+                launch_kwargs["before_popen"] = prepare_running_job
+            if register_running_job is not None:
+                launch_kwargs["on_launch_aborted"] = lambda: register_running_job(None)
+            return runner_deps.start_xtb_job(
+                cfg,
+                job_dir=context.job_dir,
+                selected_input_xyz=context.selected_xyz,
+                **launch_kwargs,
+            )
+
         return _engine_execution.run_internal_worker_process_job(
             context,
             options=options,
             process_deps=runner_deps,
             shutdown_exception_type=WorkerShutdownRequested,
-            start_job=lambda: runner_deps.start_xtb_job(
-                cfg,
-                job_dir=context.job_dir,
-                selected_input_xyz=context.selected_xyz,
-            ),
+            start_job=start_job,
             finalize_job=runner_deps.finalize_xtb_job,
             build_failure_result=lambda exc: _failed_result_from_exception(
                 context,
@@ -488,7 +499,7 @@ def _run_xtb_job_for_entry(
             check_cancel_before_poll=True,
         )
     except Exception as exc:  # noqa: BLE001
-        if isinstance(exc, WorkerShutdownRequested):
+        if isinstance(exc, (WorkerShutdownRequested, _engine_execution.ProcessCleanupError)):
             raise
         return _failed_result_from_exception(context, exc, dependencies=dependencies)
 
@@ -541,6 +552,7 @@ def _worker_execution_spec(
             dependencies=dependencies,
             should_cancel=should_cancel_factory(active_queue_root, context),
             shutdown_requested=options.shutdown_requested,
+            prepare_running_job=options.prepare_running_job,
             register_running_job=options.register_running_job,
         ),
         finalize_entry=lambda cfg_obj, context, result, active_queue_root, options: (
@@ -583,6 +595,7 @@ def _run_worker_entry_lifecycle(
         Callable[[], bool] | None,
     ],
     shutdown_requested: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None = None,
     register_running_job: Callable[[Any | None], None] | None = None,
     worker_job_pid: int | None = None,
     emit_output: bool = False,
@@ -596,6 +609,7 @@ def _run_worker_entry_lifecycle(
             should_cancel_factory=should_cancel_factory,
         ),
         shutdown_requested=shutdown_requested,
+        prepare_running_job=prepare_running_job,
         register_running_job=register_running_job,
         worker_job_pid=worker_job_pid,
         emit_output=emit_output,
@@ -609,6 +623,7 @@ def execute_queue_entry(
     entry: Any,
     should_cancel: Callable[[], bool] | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None = None,
     register_running_job: Callable[[Any | None], None] | None = None,
     worker_job_pid: int | None = None,
     emit_output: bool = False,
@@ -622,6 +637,7 @@ def execute_queue_entry(
         dependencies=deps,
         should_cancel_factory=lambda _active_queue_root, _context: should_cancel,
         shutdown_requested=shutdown_requested,
+        prepare_running_job=prepare_running_job,
         register_running_job=register_running_job,
         worker_job_pid=worker_job_pid,
         emit_output=emit_output,
@@ -635,6 +651,8 @@ def process_dequeued_entry(
     queue_root: Path | None = None,
     dependencies: WorkerExecutionDependencies | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
+    prepare_running_job: Callable[[], None] | None = None,
+    register_running_job: Callable[[Any | None], None] | None = None,
 ) -> WorkerExecutionOutcome:
     deps = dependencies or default_worker_execution_dependencies()
     return _run_worker_entry_lifecycle(
@@ -650,6 +668,8 @@ def process_dequeued_entry(
             )
         ),
         shutdown_requested=shutdown_requested,
+        prepare_running_job=prepare_running_job,
+        register_running_job=register_running_job,
     )
 
 
@@ -660,6 +680,7 @@ def run_worker_job(
     queue_id: str,
     admission_token: str | None = None,
     dependencies: WorkerExecutionDependencies | None = None,
+    await_parent_admission_handoff_fn: Callable[[Any, str], bool] | None = None,
 ) -> int:
     deps = dependencies or default_worker_execution_dependencies()
     return _worker_dependencies.run_worker_child_entrypoint_with_dependencies(
@@ -674,6 +695,7 @@ def run_worker_job(
         dependencies=deps,
         requeue_running_entry_fn=requeue_running_entry,
         mark_recovery_pending_context_fn=_mark_recovery_pending_context,
+        await_parent_admission_handoff_fn=await_parent_admission_handoff_fn,
     )
 
 

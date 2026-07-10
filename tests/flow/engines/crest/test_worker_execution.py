@@ -41,10 +41,8 @@ from tests.engine_artifact_helpers import (
 
 
 def _cfg(tmp_path: Path) -> SimpleNamespace:
-    allowed_root = tmp_path / "allowed_root"
-    allowed_root.mkdir()
     return SimpleNamespace(
-        runtime=SimpleNamespace(allowed_root=str(allowed_root)),
+        runtime=SimpleNamespace(allowed_root=str(tmp_path)),
         resources=SimpleNamespace(max_cores_per_task=4, max_memory_gb_per_task=16),
     )
 
@@ -199,6 +197,9 @@ class FakeProcess:
         if len(self._poll_values) > 1:
             return self._poll_values.pop(0)
         return self._poll_values[0]
+
+    def exit(self, return_code: int = -15) -> None:
+        self._poll_values = [return_code]
 
 
 @dataclass
@@ -477,7 +478,7 @@ def test_terminate_process_returns_immediately_when_process_has_exited(
         def __init__(self) -> None:
             self.terminate_calls = 0
             self.kill_calls = 0
-            self.wait_calls: list[int] = []
+            self.wait_calls: list[float] = []
 
         def poll(self) -> int | None:
             return 0
@@ -488,14 +489,18 @@ def test_terminate_process_returns_immediately_when_process_has_exited(
         def kill(self) -> None:
             self.kill_calls += 1
 
-        def wait(self, timeout: int) -> None:
+        def wait(self, timeout: float) -> None:
             self.wait_calls.append(timeout)
 
     proc = ExitedProcess()
     monkeypatch.setattr(
         worker_execution.os,
         "killpg",
-        lambda *args, **kwargs: pytest.fail("killpg should not run for an exited process"),
+        lambda _pid, signum: (
+            (_ for _ in ()).throw(ProcessLookupError())
+            if signum == 0
+            else pytest.fail("only the process-group existence probe should run")
+        ),
     )
 
     worker_execution._terminate_process(cast(Any, proc))
@@ -514,7 +519,7 @@ def test_terminate_process_falls_back_to_proc_methods_and_escalates_after_timeou
         def __init__(self) -> None:
             self.terminate_calls = 0
             self.kill_calls = 0
-            self.wait_calls: list[int] = []
+            self.wait_calls: list[float] = []
 
         def poll(self) -> int | None:
             return None
@@ -525,7 +530,7 @@ def test_terminate_process_falls_back_to_proc_methods_and_escalates_after_timeou
         def kill(self) -> None:
             self.kill_calls += 1
 
-        def wait(self, timeout: int) -> None:
+        def wait(self, timeout: float) -> None:
             self.wait_calls.append(timeout)
             raise subprocess.TimeoutExpired(cmd="crest", timeout=timeout)
 
@@ -546,7 +551,7 @@ def test_terminate_process_falls_back_to_proc_methods_and_escalates_after_timeou
     ]
     assert proc.terminate_calls == 1
     assert proc.kill_calls == 1
-    assert proc.wait_calls == [10, 5]
+    assert proc.wait_calls == pytest.approx([10, 5], rel=1e-4)
 
 
 def test_terminate_process_swallows_proc_method_errors_after_killpg_fallback(
@@ -558,7 +563,7 @@ def test_terminate_process_swallows_proc_method_errors_after_killpg_fallback(
         def __init__(self) -> None:
             self.terminate_calls = 0
             self.kill_calls = 0
-            self.wait_calls: list[int] = []
+            self.wait_calls: list[float] = []
 
         def poll(self) -> int | None:
             return None
@@ -571,9 +576,9 @@ def test_terminate_process_swallows_proc_method_errors_after_killpg_fallback(
             self.kill_calls += 1
             raise RuntimeError("kill failed")
 
-        def wait(self, timeout: int) -> None:
+        def wait(self, timeout: float) -> None:
             self.wait_calls.append(timeout)
-            if timeout == 10:
+            if len(self.wait_calls) == 1:
                 raise subprocess.TimeoutExpired(cmd="crest", timeout=timeout)
 
     proc = FlakyProcess()
@@ -587,7 +592,7 @@ def test_terminate_process_swallows_proc_method_errors_after_killpg_fallback(
 
     assert proc.terminate_calls == 1
     assert proc.kill_calls == 1
-    assert proc.wait_calls == [10, 5]
+    assert proc.wait_calls == pytest.approx([10, 5], rel=1e-4)
 
 
 def test_sync_job_tracking_never_organizes_for_crest(tmp_path: Path) -> None:
@@ -660,7 +665,7 @@ def test_process_dequeued_entry_uses_context_dependency_group(tmp_path: Path) ->
         runner=worker_execution.WorkerRunnerDependencies(
             start_crest_job=lambda _cfg, *, job_dir, selected_xyz: running,
             finalize_crest_job=lambda actual_running, **kwargs: result,
-            terminate_process=_noop,
+            terminate_process=lambda _process: True,
             wait_for_cancellable_process=(
                 worker_execution._queue_execution.wait_for_cancellable_process
             ),
@@ -820,11 +825,16 @@ def test_process_dequeued_entry_terminates_and_forces_cancelled_result(
         finished_notifications.append(kwargs)
         return True
 
+    def terminate(actual_proc: FakeProcess) -> bool:
+        terminate_calls.append(actual_proc)
+        actual_proc.exit()
+        return True
+
     deps = _dependencies(
         get_cancel_requested=lambda *args, **kwargs: True,
         start_crest_job=lambda cfg, *, job_dir, selected_xyz: running,
         finalize_crest_job=fake_finalize,
-        terminate_process=lambda actual_proc: terminate_calls.append(actual_proc),
+        terminate_process=terminate,
         mark_cancelled=lambda *args, **kwargs: mark_cancelled_calls.append((args, kwargs)),
         notify_job_finished=fake_notify_finished,
     )
@@ -973,10 +983,15 @@ def test_process_dequeued_entry_raises_worker_shutdown_requested_after_start(
 
     monkeypatch.setattr(worker_execution.time, "sleep", lambda seconds: sleeps.append(seconds))
 
+    def terminate(actual_proc: FakeProcess) -> bool:
+        terminate_calls.append(actual_proc)
+        actual_proc.exit()
+        return True
+
     deps = _dependencies(
         get_cancel_requested=lambda *args, **kwargs: False,
         start_crest_job=lambda cfg, *, job_dir, selected_xyz: running,
-        terminate_process=lambda actual_proc: terminate_calls.append(actual_proc),
+        terminate_process=terminate,
         finalize_crest_job=lambda *args, **kwargs: pytest.fail("finalize should not run"),
         write_execution_artifacts=lambda *args, **kwargs: pytest.fail(
             "artifacts should not be written"

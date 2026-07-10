@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import logging
-import subprocess
 from collections.abc import Callable, Iterable
-from contextlib import suppress
 from typing import Any
 
 from orca_auto.core.statuses import STATUS_CANCEL_REQUESTED
@@ -25,16 +23,44 @@ def cancel_running_process_job(
     job: Any,
     *,
     hooks: EngineQueueProcessLifecycleHooks,
+    release_admission_slot: bool = True,
     logger: logging.Logger = LOGGER,
-) -> None:
+) -> bool:
+    """Stop and mark a running job, optionally deferring admission release.
+
+    Callers that must durably finalize engine-specific state before making the
+    capacity reusable can pass ``release_admission_slot=False`` and release the
+    job's token in their own outer ``finally`` block.
+    """
+
     logger.info("Cancelling running job: %s", queue_id)
     try:
-        hooks.terminate_process_fn(job.process)
-        with suppress(subprocess.TimeoutExpired):
-            job.process.wait(timeout=5)
+        terminated = hooks.terminate_process_fn(job.process)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "Failed to terminate running job %s; retaining queue and admission ownership",
+            queue_id,
+        )
+        return False
+    try:
+        process_exited = job.process.poll() is not None
+    except Exception:  # noqa: BLE001
+        process_exited = False
+    if terminated is not True or not process_exited:
+        logger.error(
+            "Running job %s did not fully stop; retaining queue entry and admission slot %s",
+            queue_id,
+            getattr(job, "admission_token", ""),
+        )
+        return False
+    if not release_admission_slot:
+        mark_outcome = hooks.mark_cancelled_fn(job_queue_root(worker, job), queue_id)
+        return mark_outcome is not False
+    try:
         hooks.mark_cancelled_fn(job_queue_root(worker, job), queue_id)
     finally:
         worker._release_admission_slot(job.admission_token)
+    return True
 
 
 def shutdown_running_process_job(
@@ -46,7 +72,7 @@ def shutdown_running_process_job(
     logger: logging.Logger = LOGGER,
 ) -> None:
     terminated = hooks.terminate_process_fn(job.process)
-    if terminated is False:
+    if terminated is not True:
         logger.error(
             "Process for running job %s did not stop; leaving queue entry running "
             "and retaining admission slot %s",
@@ -68,16 +94,18 @@ def shutdown_running_job(
     grace_seconds: float,
     sleep_fn: Callable[[float], None],
     shutdown_child_process_with_grace_fn: Callable[..., Any] = shutdown_child_process_with_grace,
-) -> None:
-    shutdown_child_process_with_grace_fn(
-        job,
-        terminate_process_fn=terminate_process_fn,
-        finalize_child_exit_fn=lambda current_job, rc: finalize_child_exit_fn(
-            current_job,
-            rc,
-        ),
-        grace_seconds=grace_seconds,
-        sleep_fn=sleep_fn,
+) -> bool:
+    return bool(
+        shutdown_child_process_with_grace_fn(
+            job,
+            terminate_process_fn=terminate_process_fn,
+            finalize_child_exit_fn=lambda current_job, rc: finalize_child_exit_fn(
+                current_job,
+                rc,
+            ),
+            grace_seconds=grace_seconds,
+            sleep_fn=sleep_fn,
+        )
     )
 
 

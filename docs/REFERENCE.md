@@ -163,7 +163,9 @@ Field descriptions:
   enable the calculation-type retry policy
 - `scheduler.max_active_simulations`: Shared total active-run cap across ORCA, internal xTB stages, and internal CREST stages
 - `scheduler.admission_root`: Shared admission root for machine-wide slot
-  coordination; defaults to `<runs_root>/.admission`
+  coordination; defaults to `<runs_root>/.admission`. Scheduler controls belong
+  at the top level; engine-scoped values may not diverge because that would
+  split the shared admission pool.
 - `workflow.paths.xtb_executable`: xTB executable path used by workflow-managed internal stages
 - `workflow.paths.crest_executable`: CREST executable path used by workflow-managed internal stages
 - Internal xTB/CREST runtimes are scoped to each workflow

@@ -18,25 +18,36 @@ def _run_ranking_candidate(
     candidate_run_dir: Path,
     manifest: dict[str, Any],
     should_cancel: Callable[[], bool] | None,
+    prepare_running_job: Callable[[], None] | None,
     on_running_job: Callable[[Any | None], None] | None,
-    terminate_process: Callable[[subprocess.Popen[str]], None] | None,
+    terminate_process: Callable[[subprocess.Popen[str]], bool] | None,
     deps: RankingDeps,
 ) -> Any:
-    if should_cancel is None and on_running_job is None and terminate_process is None:
+    if (
+        should_cancel is None
+        and prepare_running_job is None
+        and on_running_job is None
+        and terminate_process is None
+    ):
         return deps.run_candidate_sp_job(
             cfg,
             candidate_xyz=candidate_path,
             candidate_run_dir=candidate_run_dir,
             manifest=manifest,
         )
+    run_kwargs: dict[str, Any] = {
+        "should_cancel": should_cancel,
+        "on_running_job": on_running_job,
+        "terminate_process": terminate_process,
+    }
+    if prepare_running_job is not None:
+        run_kwargs["prepare_running_job"] = prepare_running_job
     return deps.run_candidate_sp_job(
         cfg,
         candidate_xyz=candidate_path,
         candidate_run_dir=candidate_run_dir,
         manifest=manifest,
-        should_cancel=should_cancel,
-        on_running_job=on_running_job,
-        terminate_process=terminate_process,
+        **run_kwargs,
     )
 
 
@@ -69,8 +80,9 @@ def collect_ranking_candidate_results(
     manifest: dict[str, Any],
     candidate_paths: list[Path],
     should_cancel: Callable[[], bool] | None,
+    prepare_running_job: Callable[[], None] | None,
     on_running_job: Callable[[Any | None], None] | None,
-    terminate_process: Callable[[subprocess.Popen[str]], None] | None,
+    terminate_process: Callable[[subprocess.Popen[str]], bool] | None,
     deps: RankingDeps,
 ) -> tuple[list[dict[str, Any]], list[list[str]]]:
     candidate_results: list[dict[str, Any]] = []
@@ -85,6 +97,7 @@ def collect_ranking_candidate_results(
             candidate_run_dir=candidate_run_dir,
             manifest=manifest,
             should_cancel=should_cancel,
+            prepare_running_job=prepare_running_job,
             on_running_job=on_running_job,
             terminate_process=terminate_process,
             deps=deps,

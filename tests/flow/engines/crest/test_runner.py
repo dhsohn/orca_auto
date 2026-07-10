@@ -126,6 +126,74 @@ def test_build_command_includes_manifest_flags(
     ]
 
 
+def test_build_command_preserves_nested_input_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _cfg(tmp_path)
+    job_dir = tmp_path / "job"
+    selected_xyz = job_dir / "nested" / "input.xyz"
+    selected_xyz.parent.mkdir(parents=True)
+    _write_xyz(selected_xyz, ("conf_a",))
+    monkeypatch.setattr(
+        "orca_auto.flow.engines.crest.runner._resolve_crest_executable",
+        lambda _cfg: "/usr/bin/crest",
+    )
+
+    command = _build_command(
+        cfg,
+        job_dir=job_dir,
+        selected_xyz=selected_xyz,
+        manifest={},
+    )
+
+    assert command[1] == "nested/input.xyz"
+
+
+def test_build_command_rejects_input_outside_job_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _cfg(tmp_path)
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected_xyz = tmp_path / "outside.xyz"
+    _write_xyz(selected_xyz, ("conf_a",))
+    monkeypatch.setattr(
+        "orca_auto.flow.engines.crest.runner._resolve_crest_executable",
+        lambda _cfg: "/usr/bin/crest",
+    )
+
+    with pytest.raises(ValueError, match="inside the job directory"):
+        _build_command(
+            cfg,
+            job_dir=job_dir,
+            selected_xyz=selected_xyz,
+            manifest={},
+        )
+
+
+def test_build_command_protects_dash_prefixed_input_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = _cfg(tmp_path)
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "-input.xyz"
+    _write_xyz(selected_xyz, ("conf_a",))
+    monkeypatch.setattr(
+        "orca_auto.flow.engines.crest.runner._resolve_crest_executable",
+        lambda _cfg: "/usr/bin/crest",
+    )
+
+    command = _build_command(
+        cfg,
+        job_dir=job_dir,
+        selected_xyz=selected_xyz,
+        manifest={},
+    )
+
+    assert command[1] == "./-input.xyz"
+
+
 def test_build_command_accepts_topology_aliases_without_duplicate_flags(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

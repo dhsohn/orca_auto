@@ -11,6 +11,7 @@ from orca_auto.core.paths import (
     resolved_path_text,
 )
 from orca_auto.core.utils.coercion import normalize_text
+from orca_auto.orca.input_artifacts import derive_selected_input_xyz
 
 
 def resolve_candidate_path_impl(
@@ -78,23 +79,7 @@ def resolve_artifact_path_impl(
 
 
 def derive_selected_input_xyz_impl(selected_inp: str) -> str:
-    inp_path = resolve_candidate_path_impl(selected_inp)
-    if inp_path is None:
-        return ""
-    try:
-        text = inp_path.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return ""
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or not stripped.startswith("*"):
-            continue
-        if "xyzfile" not in stripped.lower():
-            continue
-        parts = stripped.split()
-        if len(parts) >= 5:
-            return resolve_artifact_path_impl(parts[-1], inp_path.parent)
-    return ""
+    return derive_selected_input_xyz(selected_inp)
 
 
 def iter_existing_dirs_impl(*candidates: Path | None) -> list[Path]:

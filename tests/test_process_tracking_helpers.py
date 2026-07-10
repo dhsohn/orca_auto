@@ -19,6 +19,10 @@ def test_current_process_lock_payload_omits_ticks_when_unavailable() -> None:
             "orca_auto.core.utils.process_tracking.process_lock.current_process_start_ticks",
             return_value=None,
         ),
+        patch(
+            "orca_auto.core.utils.process_tracking.process_lock.current_boot_id",
+            return_value=None,
+        ),
     ):
         payload = process_tracking.current_process_lock_payload()
 
@@ -26,6 +30,54 @@ def test_current_process_lock_payload_omits_ticks_when_unavailable() -> None:
         "pid": 4321,
         "started_at": "2026-03-22T00:00:00+00:00",
     }
+
+
+def test_current_process_lock_payload_includes_boot_scope() -> None:
+    with (
+        patch("orca_auto.core.utils.process_tracking.os.getpid", return_value=4321),
+        patch(
+            "orca_auto.core.utils.process_tracking.now_utc_iso",
+            return_value="2026-03-22T00:00:00+00:00",
+        ),
+        patch(
+            "orca_auto.core.utils.process_tracking.process_lock.current_process_start_ticks",
+            return_value=111,
+        ),
+        patch(
+            "orca_auto.core.utils.process_tracking.process_lock.current_boot_id",
+            return_value="boot-a",
+        ),
+    ):
+        payload = process_tracking.current_process_lock_payload()
+
+    assert payload == {
+        "pid": 4321,
+        "started_at": "2026-03-22T00:00:00+00:00",
+        "process_start_ticks": 111,
+        "boot_id": "boot-a",
+    }
+
+
+def test_active_run_lock_rejects_cross_boot_pid_before_numeric_probe(tmp_path: Path) -> None:
+    reaction_dir = tmp_path / "rxn"
+    reaction_dir.mkdir()
+    with (
+        patch(
+            "orca_auto.core.utils.process_tracking.process_lock.parse_lock_info",
+            return_value={
+                "pid": 123,
+                "process_start_ticks": 111,
+                "boot_id": "boot-a",
+            },
+        ),
+        patch(
+            "orca_auto.core.utils.process_tracking.process_lock.current_boot_id",
+            return_value="boot-b",
+        ),
+        patch("orca_auto.core.utils.process_tracking.process_lock.is_process_alive") as alive,
+    ):
+        assert process_tracking.active_run_lock_pid(reaction_dir) is None
+    alive.assert_not_called()
 
 
 def test_active_run_lock_pid_covers_invalid_dead_reuse_and_logger_paths(tmp_path: Path) -> None:

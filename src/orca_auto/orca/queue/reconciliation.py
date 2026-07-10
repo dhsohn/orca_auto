@@ -2,14 +2,96 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
+from ..job_locations._generation import payload_matches_queue_generation
 from ..statuses import RunStatus
+
+
+@dataclass(frozen=True)
+class _PriorTerminalGenerationEvidence:
+    run_ids: frozenset[str]
+    has_unidentified_run: bool = False
+
+
+def _queue_generation_payload(entry: QueueEntry) -> dict[str, Any]:
+    return {
+        "task_id": str(entry.task_id or "").strip(),
+        "metadata": dict(entry.metadata) if isinstance(entry.metadata, dict) else {},
+    }
+
+
+def payload_matches_entry_generation(entry: QueueEntry, payload: dict[str, Any]) -> bool:
+    return payload_matches_queue_generation(_queue_generation_payload(entry), payload)
+
+
+def _payload_run_id(payload: dict[str, Any]) -> str:
+    engine_payload = payload.get("engine_payload")
+    engine = engine_payload if isinstance(engine_payload, dict) else {}
+    return str(payload.get("run_id") or engine.get("run_id") or "").strip()
+
+
+def _entry_generation_key(entry: QueueEntry) -> tuple[str, str] | None:
+    reaction_dir = str(entry.metadata.get("reaction_dir") or "").strip()
+    task_id = str(entry.task_id or "").strip()
+    if not reaction_dir or not task_id:
+        return None
+    return (str(Path(reaction_dir).expanduser().resolve()), task_id)
+
+
+def _prior_terminal_generation_evidence(
+    entries: list[QueueEntry],
+) -> dict[tuple[str, str], _PriorTerminalGenerationEvidence]:
+    run_ids_by_key: dict[tuple[str, str], set[str]] = {}
+    unidentified_keys: set[tuple[str, str]] = set()
+    terminal_statuses = {
+        QueueStatus.COMPLETED,
+        QueueStatus.FAILED,
+        QueueStatus.CANCELLED,
+    }
+    for entry in entries:
+        if entry.status not in terminal_statuses:
+            continue
+        key = _entry_generation_key(entry)
+        if key is None:
+            continue
+        run_id = str(entry.metadata.get("run_id") or "").strip()
+        if run_id:
+            run_ids_by_key.setdefault(key, set()).add(run_id)
+        else:
+            unidentified_keys.add(key)
+    return {
+        key: _PriorTerminalGenerationEvidence(
+            run_ids=frozenset(run_ids_by_key.get(key, set())),
+            has_unidentified_run=key in unidentified_keys,
+        )
+        for key in run_ids_by_key.keys() | unidentified_keys
+    }
+
+
+def _artifact_is_known_prior_generation(
+    payload: dict[str, Any],
+    evidence: _PriorTerminalGenerationEvidence | None,
+) -> bool:
+    if evidence is None:
+        return False
+    run_id = _payload_run_id(payload)
+    return evidence.has_unidentified_run or not run_id or run_id in evidence.run_ids
+
+
+def _run_id_is_known_prior_generation(
+    run_id: str | None,
+    evidence: _PriorTerminalGenerationEvidence | None,
+) -> bool:
+    if evidence is None:
+        return False
+    normalized = str(run_id or "").strip()
+    return evidence.has_unidentified_run or not normalized or normalized in evidence.run_ids
 
 
 def load_report_payload(
@@ -30,9 +112,12 @@ def terminal_report_data(
     reaction_dir: Path,
     *,
     load_report_payload_fn: Callable[[Path], dict | None],
+    queue_entry: QueueEntry | None = None,
 ) -> tuple[str, str | None, str | None, str | None] | None:
     report = load_report_payload_fn(reaction_dir)
     if report is None:
+        return None
+    if queue_entry is not None and not payload_matches_entry_generation(queue_entry, report):
         return None
     if int(report.get("schema_version", 0) or 0) != 1:
         return None
@@ -98,6 +183,8 @@ def reconcile_orphaned_running_entries(
     allowed_root: Path,
     *,
     ignore_worker_pid: bool = False,
+    protected_queue_keys: set[tuple[str, str]] | None = None,
+    protected_queue_ids: set[str] | None = None,
     deps: Any,
     logger: logging.Logger,
 ) -> int:
@@ -108,10 +195,31 @@ def reconcile_orphaned_running_entries(
     changed = 0
     with deps.queue_lock(allowed_root):
         entries = deps.load_entries(allowed_root)
+        prior_evidence_by_key = _prior_terminal_generation_evidence(entries)
         for index, entry in enumerate(entries):
             if deps.queue_entry_status(entry) != QueueStatus.RUNNING.value:
                 continue
-            updated = _reconcile_entry(entry, deps=deps, logger=logger)
+            queue_id = str(deps.queue_entry_id(entry) or "").strip()
+            reaction_dir = str(deps.queue_entry_reaction_dir(entry) or "").strip()
+            normalized_dir = str(Path(reaction_dir).expanduser().resolve()) if reaction_dir else ""
+            if queue_id in (protected_queue_ids or set()) or (
+                queue_id,
+                normalized_dir,
+            ) in (protected_queue_keys or set()):
+                continue
+            metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+            entry_key = _entry_generation_key(entry)
+            prior_terminal_evidence = (
+                prior_evidence_by_key.get(entry_key)
+                if bool(metadata.get("force")) and entry_key is not None
+                else None
+            )
+            updated = _reconcile_entry(
+                entry,
+                deps=deps,
+                logger=logger,
+                prior_terminal_evidence=prior_terminal_evidence,
+            )
             if updated is None:
                 continue
             entries[index] = updated
@@ -127,6 +235,7 @@ def _reconcile_entry(
     *,
     deps: Any,
     logger: logging.Logger,
+    prior_terminal_evidence: _PriorTerminalGenerationEvidence | None = None,
 ) -> QueueEntry | None:
     rdir = deps.queue_entry_reaction_dir(entry)
     if not rdir:
@@ -138,6 +247,11 @@ def _reconcile_entry(
 
     queue_id = deps.queue_entry_id(entry) or "?"
     state = deps.load_state(reaction_dir)
+    if state is not None and (
+        not payload_matches_entry_generation(entry, state)
+        or _artifact_is_known_prior_generation(state, prior_terminal_evidence)
+    ):
+        state = None
     run_status = str(state.get("status", "")).strip().lower() if state else ""
 
     if state is not None and run_status == RunStatus.COMPLETED.value:
@@ -162,7 +276,12 @@ def _reconcile_entry(
         logger.info("Reconciled orphaned entry %s -> failed", queue_id)
         return updated
 
-    report_data = deps.terminal_report_data(reaction_dir)
+    report_data = deps.terminal_report_data(reaction_dir, queue_entry=entry)
+    if report_data is not None and _run_id_is_known_prior_generation(
+        report_data[1],
+        prior_terminal_evidence,
+    ):
+        report_data = None
     if report_data is not None:
         status, run_id, finished_at, error = report_data
         updated = deps.apply_terminal_reconciliation(
