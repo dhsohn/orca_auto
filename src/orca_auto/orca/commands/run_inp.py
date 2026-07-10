@@ -153,6 +153,7 @@ def _existing_completed_exit(
     admission_root: Path,
     reservation_token: str | None,
     max_retries: int,
+    admission_task_id: str | None,
 ) -> int | None:
     return _run_inp_execution.existing_completed_exit(
         reaction_dir=reaction_dir,
@@ -160,6 +161,7 @@ def _existing_completed_exit(
         admission_root=admission_root,
         reservation_token=reservation_token,
         max_retries=max_retries,
+        admission_task_id=admission_task_id,
         deps=_run_inp_deps(),
     )
 

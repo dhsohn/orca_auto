@@ -178,6 +178,96 @@ def test_execute_locked_run_recovers_inside_the_run_lock(
     ]
 
 
+def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Existing-output replay must retain the queue generation's task ID."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    reaction_dir = tmp_path / "rxn"
+    selected_inp = reaction_dir / "rxn.inp"
+    state = {"job_id": "generated-job-id"}
+    saved_states: list[dict[str, object]] = []
+    finalized_states: list[dict[str, object]] = []
+
+    @contextmanager
+    def fake_run_lock(_reaction_dir: Path):
+        yield
+
+    @contextmanager
+    def fake_admission(**_kwargs: object):
+        yield
+
+    def existing_completed_exit(
+        *,
+        reaction_dir: Path,
+        selected_inp: Path,
+        admission_root: Path,
+        reservation_token: str | None,
+        max_retries: int,
+        admission_task_id: str | None,
+    ) -> int | None:
+        return run_inp_execution.existing_completed_exit(
+            reaction_dir=reaction_dir,
+            selected_inp=selected_inp,
+            admission_root=admission_root,
+            reservation_token=reservation_token,
+            max_retries=max_retries,
+            admission_task_id=admission_task_id,
+            deps=SimpleNamespace(
+                execution=execution,
+                statuses=SimpleNamespace(
+                    RunStatus=SimpleNamespace(COMPLETED="completed"),
+                    AnalyzerStatus=SimpleNamespace(COMPLETED="completed"),
+                ),
+            ),
+        )
+
+    def exit_with_result(
+        _reaction_dir: Path,
+        current_state: dict[str, object],
+        _selected_inp: Path,
+        **_kwargs: object,
+    ) -> int:
+        finalized_states.append(dict(current_state))
+        return 0
+
+    execution = SimpleNamespace(
+        acquire_run_lock=fake_run_lock,
+        _recover_crashed_state=lambda _reaction_dir: False,
+        _admission_context=fake_admission,
+        _existing_completed_exit=existing_completed_exit,
+        _existing_completed_out=lambda _selected_inp: {"out_path": reaction_dir / "rxn.out"},
+        load_or_create_state=lambda *_args, **_kwargs: (state, False),
+        save_state=lambda _reaction_dir, current_state: saved_states.append(dict(current_state)),
+        _exit_with_result=exit_with_result,
+        _emit=lambda *_args, **_kwargs: None,
+        _to_resolved_local=lambda value: value,
+    )
+    context = SimpleNamespace(
+        reaction_dir=reaction_dir,
+        selected_inp=selected_inp,
+        admission_root=tmp_path,
+        reservation_token=None,
+        admission_app_name=None,
+        admission_task_id="queue-task-id",
+        max_retries=2,
+        cfg=None,
+    )
+
+    exit_code = run_inp_execution.execute_locked_run(
+        SimpleNamespace(force=False),
+        context,
+        runner_cls=object,
+        deps=SimpleNamespace(execution=execution),
+    )
+
+    assert exit_code == 0
+    assert saved_states == [{"job_id": "queue-task-id"}]
+    assert finalized_states == [{"job_id": "queue-task-id"}]
+
+
 def test_execute_locked_run_completes_recovery_prepare_after_safe_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

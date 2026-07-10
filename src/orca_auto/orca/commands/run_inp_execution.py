@@ -223,6 +223,7 @@ def existing_completed_exit(
     admission_root: Path,
     reservation_token: str | None,
     max_retries: int,
+    admission_task_id: str | None,
     deps: Any,
 ) -> int | None:
     del admission_root, reservation_token
@@ -238,6 +239,14 @@ def existing_completed_exit(
         max_retries=max_retries,
         to_resolved_local=execution._to_resolved_local,
     )
+    task_id = str(admission_task_id or "").strip()
+    if task_id and state.get("job_id") != task_id:
+        # A queued child may discover an already-completed output before the
+        # ordinary state-loading path below runs. Stamp the queue task ID
+        # first so the terminal replay can bind the resulting artifacts to
+        # this queue generation.
+        state["job_id"] = task_id
+        execution.save_state(reaction_dir, state)
     return execution._exit_with_result(
         reaction_dir,
         state,
@@ -318,6 +327,7 @@ def execute_locked_run(
                     admission_root=context.admission_root,
                     reservation_token=context.reservation_token,
                     max_retries=context.max_retries,
+                    admission_task_id=context.admission_task_id,
                 )
                 if existing_exit is not None:
                     return existing_exit
