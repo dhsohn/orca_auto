@@ -1361,9 +1361,15 @@ class TestTerminateProcess(unittest.TestCase):
         self._killpg_patcher = patch_missing_process_group(
             "orca_auto.core.queue.processes.os.killpg"
         )
+        self._pid_exists_patcher = patch(
+            "orca_auto.core.queue.processes._pid_exists",
+            return_value=False,
+        )
         self._killpg_patcher.start()
+        self._pid_exists_patcher.start()
 
     def tearDown(self) -> None:
+        self._pid_exists_patcher.stop()
         self._killpg_patcher.stop()
 
     def test_already_terminated(self) -> None:
@@ -1389,6 +1395,20 @@ class TestTerminateProcess(unittest.TestCase):
         proc.poll.side_effect = [None, 0, 0]
         _terminate_process(proc)
         proc.terminate.assert_called_once()
+
+    def test_terminate_does_not_signal_reused_pid(self) -> None:
+        proc = MagicMock()
+        proc.pid = 1234
+        proc.poll.side_effect = [None, 0]
+
+        with patch(
+            "orca_auto.core.queue.processes._pid_exists",
+            return_value=True,
+        ):
+            assert _terminate_process(proc)
+
+        proc.terminate.assert_not_called()
+        proc.kill.assert_not_called()
 
     def test_escalate_to_kill(self) -> None:
         proc = MagicMock()
