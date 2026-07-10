@@ -162,12 +162,15 @@ def _collect_reaction_orca_candidates(
         if contract is None:
             continue
         inputs = _xtb_ts_guess_inputs(o, contract)
-        if not inputs:
+        valid_inputs = [candidate for candidate in inputs if not candidate.geometry_invalid]
+        if not valid_inputs:
             handoff_errors.append(_record_xtb_handoff_error(o, xtb_stage, contract))
             continue
         _mark_xtb_handoff_ready(o, xtb_stage)
         candidate_pool.extend(
-            _reaction_orca_candidate_pool_rows(o, xtb_stage, contract, inputs, xtb_stage_index)
+            _reaction_orca_candidate_pool_rows(
+                o, xtb_stage, contract, valid_inputs, xtb_stage_index
+            )
         )
     return candidate_pool, handoff_errors
 

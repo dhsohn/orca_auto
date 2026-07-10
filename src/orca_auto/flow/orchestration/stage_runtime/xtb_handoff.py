@@ -20,6 +20,7 @@ def xtb_handoff_status_impl(
         ),
         require_geometry=True,
     )
+    inputs = tuple(item for item in inputs if not item.geometry_invalid)
     if inputs:
         return {
             "status": "ready",

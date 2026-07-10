@@ -129,6 +129,11 @@ class WorkflowStageInput:
     score: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def geometry_invalid(self) -> bool:
+        """True when upstream geometry validation explicitly rejected this candidate."""
+        return self.metadata.get("geometry_valid") is False
+
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         if self.score is None:

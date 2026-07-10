@@ -87,6 +87,20 @@ def reaction_ts_guess_error_impl(
             "message": "xTB path_search did not produce a ts_guess candidate (xtbpath_ts.xyz); refusing ORCA handoff.",
         }
     candidate = details[0]
+    if candidate.metadata.get("geometry_valid") is False:
+        validation = candidate.metadata.get("geometry_validation")
+        reasons = "; ".join(
+            str(reason)
+            for reason in (validation.get("reasons", []) if isinstance(validation, dict) else [])
+        )
+        detail_text = f" ({reasons})" if reasons else ""
+        return {
+            "reason": "xtb_ts_guess_geometry_invalid",
+            "message": (
+                "xTB produced xtbpath_ts.xyz but its geometry failed validation against "
+                f"the reactant/product endpoints{detail_text}; refusing ORCA handoff."
+            ),
+        }
     _, metadata = o.engines.choose_orca_geometry_frame(candidate.path, candidate_kind="ts_guess")
     selection_reason = (
         o.stages.support._normalize_text(metadata.get("selection_reason")) or "invalid_or_empty_xyz"
