@@ -16,6 +16,7 @@ _WorkflowCycleProgress = runtime_models._WorkflowCycleProgress
 class WorkflowAdvanceDeps:
     advance_workflow_fn: Callable[..., dict[str, Any]]
     resolve_workflow_workspace_fn: Callable[..., Any]
+    load_workflow_payload_fn: Callable[..., dict[str, Any]]
     safe_workflow_summary_fn: Callable[..., dict[str, Any]]
     workflow_is_terminal_status_fn: Callable[[Any], bool]
     workflow_needs_terminal_child_sync_fn: Callable[..., bool]
@@ -42,6 +43,21 @@ class _WorkflowRecordLocation:
     workspace_dir: str
 
 
+def _workspace_matches_registry_record(
+    workspace_dir: Any,
+    record: Any,
+    *,
+    deps: WorkflowAdvanceDeps,
+) -> bool:
+    try:
+        payload = deps.load_workflow_payload_fn(workspace_dir)
+    except (FileNotFoundError, ValueError, OSError, TypeError):
+        return False
+    return deps.normalize_text_fn(payload.get("workflow_id")) == deps.normalize_text_fn(
+        record.workflow_id
+    )
+
+
 def _workflow_record_location(
     cycle: _WorkflowCycle,
     record: Any,
@@ -54,10 +70,11 @@ def _workflow_record_location(
             target=registry_target,
             workflow_root=cycle.root,
         )
-        return _WorkflowRecordLocation(
-            advance_target=registry_target,
-            workspace_dir=str(registry_workspace),
-        )
+        if _workspace_matches_registry_record(registry_workspace, record, deps=deps):
+            return _WorkflowRecordLocation(
+                advance_target=registry_target,
+                workspace_dir=str(registry_workspace),
+            )
     except (FileNotFoundError, ValueError, OSError):
         pass
 
@@ -67,10 +84,11 @@ def _workflow_record_location(
             target=workflow_id,
             workflow_root=cycle.root,
         )
-        return _WorkflowRecordLocation(
-            advance_target=workflow_id,
-            workspace_dir=str(fallback),
-        )
+        if _workspace_matches_registry_record(fallback, record, deps=deps):
+            return _WorkflowRecordLocation(
+                advance_target=workflow_id,
+                workspace_dir=str(fallback),
+            )
     except (FileNotFoundError, ValueError, OSError):
         pass
     return _WorkflowRecordLocation(

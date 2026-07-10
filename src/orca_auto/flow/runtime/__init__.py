@@ -250,6 +250,7 @@ def _workflow_advance_deps() -> WorkflowAdvanceDeps:
     return WorkflowAdvanceDeps(
         advance_workflow_fn=advance_workflow,
         resolve_workflow_workspace_fn=resolve_workflow_workspace,
+        load_workflow_payload_fn=load_workflow_payload,
         safe_workflow_summary_fn=_safe_workflow_summary,
         workflow_is_terminal_status_fn=_workflow_is_terminal_status,
         workflow_needs_terminal_child_sync_fn=_workflow_needs_terminal_child_sync,

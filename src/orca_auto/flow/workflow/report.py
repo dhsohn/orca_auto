@@ -115,6 +115,13 @@ def _stage_task_payload(stage: Mapping[str, Any]) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _stage_has_diagnostic_status(stage: Mapping[str, Any]) -> bool:
+    return (
+        _text(stage.get("status")).lower() in _DIAGNOSTIC_STAGE_STATUSES
+        or _text(_stage_task(stage).get("status")).lower() in _DIAGNOSTIC_STAGE_STATUSES
+    )
+
+
 def _task_kind(stage: Mapping[str, Any]) -> str:
     task = stage.get("task")
     if not isinstance(task, dict):
@@ -251,15 +258,50 @@ def _stage_job_report(stage: Mapping[str, Any]) -> tuple[Path | None, dict[str, 
         return None, None
     report_path = job_dir / "job_report.json"
     report = _load_json(report_path)
-    expected_job_id = _text(_stage_metadata(stage).get("child_job_id"))
-    report_job_id = _text(_mapping(report.get("job")).get("id")) if report else ""
-    if expected_job_id and report_job_id != expected_job_id:
+    if report is None or not _stage_report_identity_matches(stage, report):
         return None, None
     return report_path, report
 
 
 def _mapping(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _identity_values(*values: Any) -> frozenset[str]:
+    return frozenset(text for value in values if (text := _text(value)))
+
+
+def _stage_report_identity_matches(stage: Mapping[str, Any], report: Mapping[str, Any]) -> bool:
+    metadata = _stage_metadata(stage)
+    task = _stage_task(stage)
+    task_payload = _stage_task_payload(stage)
+    submission = _mapping(task.get("submission_result"))
+    job = _mapping(report.get("job"))
+    engine_payload = _mapping(report.get("engine_payload"))
+
+    stage_job_ids = _identity_values(
+        metadata.get("child_job_id"),
+        submission.get("job_id"),
+    )
+    report_job_ids = _identity_values(
+        job.get("id"),
+        job.get("task_id"),
+        report.get("job_id"),
+        engine_payload.get("job_id"),
+    )
+    stage_run_ids = _identity_values(metadata.get("run_id"), task_payload.get("run_id"))
+    report_run_ids = _identity_values(report.get("run_id"), engine_payload.get("run_id"))
+    stage_queue_ids = _identity_values(metadata.get("queue_id"), submission.get("queue_id"))
+    report_queue_ids = _identity_values(
+        job.get("queue_id"),
+        report.get("queue_id"),
+        engine_payload.get("queue_id"),
+    )
+    return bool(
+        stage_job_ids & report_job_ids
+        or stage_run_ids & report_run_ids
+        or stage_queue_ids & report_queue_ids
+    )
 
 
 def _stage_status_reason(stage: Mapping[str, Any], report: Mapping[str, Any] | None) -> str:
@@ -379,6 +421,8 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
     imaginary_count: int | None = None
     report_json_path = _stage_artifact_path(stage, "orca_report_json")
     report_payload = _load_json(report_json_path) if report_json_path is not None else None
+    if _stage_has_diagnostic_status(stage):
+        report_json_path, report_payload = _stage_job_report(stage)
     if report_payload is not None:
         engine_payload = report_payload.get("engine_payload")
         engine_payload = engine_payload if isinstance(engine_payload, dict) else {}
@@ -400,7 +444,7 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
     energy = latest_engrad_energy(output_dir) if output_dir is not None else None
 
     report_href: str | None = None
-    if output_dir is not None:
+    if output_dir is not None and report_json_path is not None:
         job_report_html = output_dir / RUN_REPORT_HTML_FILE
         if job_report_html.exists():
             try:
@@ -473,9 +517,7 @@ def collect_workflow_report_data(
         task = _stage_task(stage)
         task_status = _text(task.get("status")).lower()
         engine = _text(task.get("engine")).lower() or stage_kind.removesuffix("_stage")
-        include_job_artifacts = (
-            stage_status in _DIAGNOSTIC_STAGE_STATUSES or task_status in _DIAGNOSTIC_STAGE_STATUSES
-        )
+        include_job_artifacts = _stage_has_diagnostic_status(stage)
         reason, explanation, details_href = _stage_diagnostic(
             stage,
             workspace_dir,

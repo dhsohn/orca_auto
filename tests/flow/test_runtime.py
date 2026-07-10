@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -30,6 +31,14 @@ def _registry_record(
 
 def _summary_with_stages(*stages: dict[str, Any]) -> dict[str, Any]:
     return {"stage_summaries": [dict(stage) for stage in stages]}
+
+
+def _write_workflow_payload(workspace_dir: Path, workflow_id: str) -> None:
+    workspace_dir.mkdir(parents=True)
+    (workspace_dir / "workflow.json").write_text(
+        json.dumps({"workflow_id": workflow_id, "stages": []}),
+        encoding="utf-8",
+    )
 
 
 def _capture_worker_side_effects(
@@ -656,11 +665,13 @@ def test_registry_worker_falls_back_to_workflow_id_when_workspace_path_is_stale(
 ) -> None:
     workflow_root = tmp_path / "workflow_root"
     current_workspace = workflow_root / "wf_moved"
-    current_workspace.mkdir(parents=True)
+    _write_workflow_payload(current_workspace, "wf_moved")
+    stale_workspace = workflow_root / "stale_workspace"
+    stale_workspace.mkdir()
     record = _registry_record(
         workflow_id="wf_moved",
         status="running",
-        workspace_dir=str(tmp_path / "old_root" / "wf_moved"),
+        workspace_dir=str(stale_workspace),
     )
     _capture_worker_side_effects(monkeypatch, records=[record])
     advance_calls: list[dict[str, Any]] = []
@@ -707,11 +718,13 @@ def test_stale_registry_path_uses_current_workspace_for_terminal_child_sync(
 ) -> None:
     workflow_root = tmp_path / "workflow_root"
     current_workspace = workflow_root / "wf_terminal_moved"
-    current_workspace.mkdir(parents=True)
+    _write_workflow_payload(current_workspace, "wf_terminal_moved")
+    stale_workspace = workflow_root / "stale_terminal_workspace"
+    stale_workspace.mkdir()
     record = _registry_record(
         workflow_id="wf_terminal_moved",
         status="failed",
-        workspace_dir=str(tmp_path / "old_root" / "wf_terminal_moved"),
+        workspace_dir=str(stale_workspace),
     )
     _capture_worker_side_effects(monkeypatch, records=[record])
     sync_checks: list[str] = []

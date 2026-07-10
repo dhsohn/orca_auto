@@ -319,6 +319,80 @@ def test_restarted_stage_does_not_show_stale_failure_report(tmp_path: Path) -> N
     assert "changed molecular topology" not in text
 
 
+def test_failed_stage_without_current_identity_does_not_use_old_report(tmp_path: Path) -> None:
+    job_dir = tmp_path / "03_orca" / "orca_submission_failed"
+    job_dir.mkdir(parents=True)
+    (job_dir / "job_report.json").write_text(
+        json.dumps(
+            {
+                "job": {"id": "orca-old"},
+                "status": {"state": "failed", "reason": "old_runner_error"},
+                "engine_payload": {"run_id": "run-old"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "orca_submission_failed",
+                "stage_kind": "orca_stage",
+                "status": "submission_failed",
+                "task": {"engine": "orca", "status": "submission_failed", "payload": {}},
+                "metadata": {"latest_known_path": str(job_dir)},
+            }
+        ],
+    )
+    payload["status"] = "failed"
+
+    data = collect_workflow_report_data(tmp_path, payload)
+    path = write_workflow_html_report(tmp_path, payload)
+
+    assert data.failure_rows[0].reason == ""
+    assert data.failure_rows[0].details_href is None
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "old_runner_error" not in text
+    assert "job_report.json" not in text
+
+
+def test_orca_run_identity_allows_current_report_diagnostic(tmp_path: Path) -> None:
+    job_dir = tmp_path / "03_orca" / "orca_current"
+    job_dir.mkdir(parents=True)
+    (job_dir / "job_report.json").write_text(
+        json.dumps(
+            {
+                "job": {"id": "orca-child"},
+                "status": {"state": "failed", "reason": "runner_exception"},
+                "engine_payload": {"run_id": "run-current"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "orca_current",
+                "stage_kind": "orca_stage",
+                "status": "failed",
+                "task": {"engine": "orca", "status": "failed", "payload": {}},
+                "metadata": {
+                    "run_id": "run-current",
+                    "latest_known_path": str(job_dir),
+                },
+            }
+        ],
+    )
+    payload["status"] = "failed"
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.failure_rows[0].reason == "runner_exception"
+    assert data.failure_rows[0].details_href == "03_orca/orca_current/job_report.json"
+
+
 def test_workflow_error_message_is_primary_and_escaped(tmp_path: Path) -> None:
     payload = _payload(tmp_path, [])
     payload["status"] = "failed"
