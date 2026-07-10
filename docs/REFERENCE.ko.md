@@ -282,7 +282,9 @@ ORCA 고유 노트:
 - 워크플로우가 advance될 때마다 워크스페이스에 `workflow_report.html`을 다시
   씁니다: 스테이지 체인, CREST → (xTB) → ORCA 깔때기 요약, ORCA 결과 순위표
   (상대 에너지, 허수 진동수, 개별 작업 `job_report.html` 링크)를 담은 단일 파일
-  시각 요약입니다.
+  시각 요약입니다. 실패한 워크플로우에는 `workflow_error`, 엔진 작업 리포트, 식별
+  가능한 CREST 안전 종료 진단에서 가져온 최상위 실패 설명과 실패 스테이지 표도
+  표시합니다.
 - ORCA stage가 있는 워크플로우는 advance마다 `workflow_si.md`와 `si_data.csv`도
   다시 씁니다: 실제 실행된 route와 ORCA 버전에서 생성한 계산 세부사항 문단,
   CREST → xTB → ORCA 깔때기 provenance, 상대 에너지 테이블(ΔE/ΔG), 완료된

@@ -15,6 +15,7 @@ _WorkflowCycleProgress = runtime_models._WorkflowCycleProgress
 @dataclass(frozen=True)
 class WorkflowAdvanceDeps:
     advance_workflow_fn: Callable[..., dict[str, Any]]
+    resolve_workflow_workspace_fn: Callable[..., Any]
     safe_workflow_summary_fn: Callable[..., dict[str, Any]]
     workflow_is_terminal_status_fn: Callable[[Any], bool]
     workflow_needs_terminal_child_sync_fn: Callable[..., bool]
@@ -33,6 +34,49 @@ class WorkflowAdvanceDeps:
 class WorkflowAdvanceOutcome:
     outcome: str
     result: WorkflowAdvanceResult
+
+
+@dataclass(frozen=True)
+class _WorkflowRecordLocation:
+    advance_target: str
+    workspace_dir: str
+
+
+def _workflow_record_location(
+    cycle: _WorkflowCycle,
+    record: Any,
+    *,
+    deps: WorkflowAdvanceDeps,
+) -> _WorkflowRecordLocation:
+    registry_target = str(record.workspace_dir)
+    try:
+        registry_workspace = deps.resolve_workflow_workspace_fn(
+            target=registry_target,
+            workflow_root=cycle.root,
+        )
+        return _WorkflowRecordLocation(
+            advance_target=registry_target,
+            workspace_dir=str(registry_workspace),
+        )
+    except (FileNotFoundError, ValueError, OSError):
+        pass
+
+    workflow_id = str(record.workflow_id)
+    try:
+        fallback = deps.resolve_workflow_workspace_fn(
+            target=workflow_id,
+            workflow_root=cycle.root,
+        )
+        return _WorkflowRecordLocation(
+            advance_target=workflow_id,
+            workspace_dir=str(fallback),
+        )
+    except (FileNotFoundError, ValueError, OSError):
+        pass
+    return _WorkflowRecordLocation(
+        advance_target=registry_target,
+        workspace_dir=registry_target,
+    )
 
 
 def skipped_terminal_workflow_outcome(
@@ -83,11 +127,12 @@ def advanced_workflow_outcome(
     payload: dict[str, Any],
     previous_status: str,
     previous_summary: dict[str, Any],
+    workspace_dir: str,
     terminal_sync: bool,
     deps: WorkflowAdvanceDeps,
 ) -> WorkflowAdvanceOutcome:
     status = deps.normalize_text_fn(payload.get("status")).lower()
-    current_summary = deps.safe_workflow_summary_fn(record.workspace_dir, payload=payload)
+    current_summary = deps.safe_workflow_summary_fn(workspace_dir, payload=payload)
     reason = "terminal_child_sync" if terminal_sync else ""
     deps.append_workflow_advanced_events_fn(
         cycle.root,
@@ -124,9 +169,11 @@ def advance_workflow_record_outcome(
     deps: WorkflowAdvanceDeps,
 ) -> WorkflowAdvanceOutcome:
     previous_status = deps.normalize_text_fn(record.status).lower()
+    location = _workflow_record_location(cycle, record, deps=deps)
     terminal_sync = deps.workflow_needs_terminal_child_sync_fn(
         record,
         previous_status=previous_status,
+        workspace_dir=location.workspace_dir,
     )
     if deps.workflow_is_terminal_status_fn(previous_status) and not terminal_sync:
         return skipped_terminal_workflow_outcome(
@@ -135,10 +182,10 @@ def advance_workflow_record_outcome(
             deps=deps,
         )
 
-    previous_summary = deps.safe_workflow_summary_fn(record.workspace_dir)
+    previous_summary = deps.safe_workflow_summary_fn(location.workspace_dir)
     try:
         payload = deps.advance_workflow_fn(
-            target=record.workspace_dir,
+            target=location.advance_target,
             workflow_root=cycle.root,
             engine_options=options,
             submit_ready=False if terminal_sync else cycle.cycle_submit_ready,
@@ -159,6 +206,7 @@ def advance_workflow_record_outcome(
         payload=payload,
         previous_status=previous_status,
         previous_summary=previous_summary,
+        workspace_dir=location.workspace_dir,
         terminal_sync=terminal_sync,
         deps=deps,
     )

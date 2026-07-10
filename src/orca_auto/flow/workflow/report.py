@@ -34,6 +34,8 @@ from orca_auto.orca.report.render import (
 logger = logging.getLogger(__name__)
 
 _ENGRAD_ENERGY_MARKER = "current total energy"
+_FAILED_STAGE_STATUSES = frozenset({"failed", "cancel_failed", "submission_failed"})
+_DIAGNOSTIC_STAGE_STATUSES = frozenset({*_FAILED_STAGE_STATUSES, "cancelled"})
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,16 @@ class WorkflowStageRow:
     stage_kind: str
     status: str
     detail: str
+
+
+@dataclass(frozen=True)
+class WorkflowFailureRow:
+    stage_id: str
+    engine: str
+    status: str
+    reason: str
+    explanation: str
+    details_href: str | None
 
 
 @dataclass(frozen=True)
@@ -67,6 +79,11 @@ class WorkflowReportData:
     last_advanced_at: str
     total_duration_text: str
     stage_rows: tuple[WorkflowStageRow, ...]
+    failure_rows: tuple[WorkflowFailureRow, ...]
+    workflow_error_reason: str
+    workflow_error_message: str
+    workflow_error_scope: str
+    workflow_error_stage_id: str
     orca_results: tuple[OrcaStageResult, ...]
     crest_conformer_total: int | None
     xtb_candidate_total: int | None
@@ -86,6 +103,16 @@ def _stage_dicts(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
 def _stage_metadata(stage: Mapping[str, Any]) -> dict[str, Any]:
     metadata = stage.get("metadata")
     return metadata if isinstance(metadata, dict) else {}
+
+
+def _stage_task(stage: Mapping[str, Any]) -> dict[str, Any]:
+    task = stage.get("task")
+    return task if isinstance(task, dict) else {}
+
+
+def _stage_task_payload(stage: Mapping[str, Any]) -> dict[str, Any]:
+    payload = _stage_task(stage).get("payload")
+    return payload if isinstance(payload, dict) else {}
 
 
 def _task_kind(stage: Mapping[str, Any]) -> str:
@@ -204,6 +231,130 @@ def _load_json(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _stage_job_dir(stage: Mapping[str, Any]) -> Path | None:
+    metadata = _stage_metadata(stage)
+    task_payload = _stage_task_payload(stage)
+    for value in (
+        metadata.get("latest_known_path"),
+        task_payload.get("job_dir"),
+        task_payload.get("reaction_dir"),
+    ):
+        path_text = _text(value)
+        if path_text:
+            return Path(path_text)
+    return None
+
+
+def _stage_job_report(stage: Mapping[str, Any]) -> tuple[Path | None, dict[str, Any] | None]:
+    job_dir = _stage_job_dir(stage)
+    if job_dir is None:
+        return None, None
+    report_path = job_dir / "job_report.json"
+    report = _load_json(report_path)
+    expected_job_id = _text(_stage_metadata(stage).get("child_job_id"))
+    report_job_id = _text(_mapping(report.get("job")).get("id")) if report else ""
+    if expected_job_id and report_job_id != expected_job_id:
+        return None, None
+    return report_path, report
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _stage_status_reason(stage: Mapping[str, Any], report: Mapping[str, Any] | None) -> str:
+    metadata = _stage_metadata(stage)
+    task = _stage_task(stage)
+    report_status = _mapping(report.get("status")) if report is not None else {}
+    for value in (
+        metadata.get("reaction_handoff_reason"),
+        metadata.get("reason"),
+        report_status.get("reason"),
+        _mapping(task.get("cancel_result")).get("reason"),
+        _mapping(task.get("submission_result")).get("reason"),
+        metadata.get("submission_deferred_reason"),
+    ):
+        reason = _text(value)
+        if reason:
+            return reason
+    return ""
+
+
+def _read_log_tail(path: Path, *, limit_bytes: int = 256 * 1024) -> str:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - limit_bytes))
+            return handle.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return ""
+
+
+def _crest_topology_change_explanation(stdout_text: str) -> str:
+    lowered = stdout_text.lower()
+    if (
+        "change in topology detected" not in lowered
+        and "a topology change was seen in the initial geometry optimization" not in lowered
+    ):
+        return ""
+    affected_atoms = ""
+    lines = stdout_text.splitlines()
+    for index, line in enumerate(lines):
+        if "topology change compared to the input affects atoms:" not in line.lower():
+            continue
+        for candidate in lines[index + 1 :]:
+            candidate = candidate.strip()
+            if candidate:
+                affected_atoms = candidate
+                break
+        break
+    explanation = (
+        "CREST stopped because the initial geometry optimization changed molecular topology."
+    )
+    if affected_atoms:
+        explanation += f" Affected atoms: {affected_atoms}."
+    return (
+        f"{explanation} Check the input geometry; if the change is intentional, "
+        "set crest.noreftopo: true before restarting, noting that this can retain artifacts."
+    )
+
+
+def _relative_href(path: Path, workspace_dir: Path) -> str:
+    try:
+        return os.path.relpath(path, workspace_dir)
+    except ValueError:
+        return str(path)
+
+
+def _stage_diagnostic(
+    stage: Mapping[str, Any], workspace_dir: Path, *, include_job_artifacts: bool
+) -> tuple[str, str, str | None]:
+    report_path, report = _stage_job_report(stage) if include_job_artifacts else (None, None)
+    reason = _stage_status_reason(stage, report)
+    if reason == "completed":
+        reason = ""
+    explanation = _text(_stage_metadata(stage).get("reaction_handoff_message"))
+    if not include_job_artifacts:
+        return reason, explanation, None
+    job_dir = report_path.parent if report_path is not None else None
+    details_path: Path | None = None
+    engine = _text(_stage_task(stage).get("engine")).lower()
+    if engine == "crest" and job_dir is not None:
+        stdout_path = job_dir / "crest.stdout.log"
+        explanation = _crest_topology_change_explanation(_read_log_tail(stdout_path))
+        if explanation:
+            details_path = stdout_path
+    if details_path is None and job_dir is not None:
+        for name in ("job_report.html", "job_report.md", "job_report.json"):
+            candidate = job_dir / name
+            if candidate.exists():
+                details_path = candidate
+                break
+    details_href = _relative_href(details_path, workspace_dir) if details_path is not None else None
+    return reason, explanation, details_href
+
+
 def _orca_stage_output_dir(stage: Mapping[str, Any]) -> Path | None:
     for kind in ("orca_output_dir",):
         path = _stage_artifact_path(stage, kind)
@@ -312,11 +463,24 @@ def collect_workflow_report_data(
     last_advanced_at = _text(metadata.get("last_advanced_at"))
 
     stage_rows: list[WorkflowStageRow] = []
+    failure_rows: list[WorkflowFailureRow] = []
     orca_results: list[OrcaStageResult] = []
     crest_total: int | None = None
     xtb_total: int | None = None
     for stage in _stage_dicts(payload):
         stage_kind = _text(stage.get("stage_kind"))
+        stage_status = _text(stage.get("status")).lower()
+        task = _stage_task(stage)
+        task_status = _text(task.get("status")).lower()
+        engine = _text(task.get("engine")).lower() or stage_kind.removesuffix("_stage")
+        include_job_artifacts = (
+            stage_status in _DIAGNOSTIC_STAGE_STATUSES or task_status in _DIAGNOSTIC_STAGE_STATUSES
+        )
+        reason, explanation, details_href = _stage_diagnostic(
+            stage,
+            workspace_dir,
+            include_job_artifacts=include_job_artifacts,
+        )
         detail = ""
         if stage_kind == "crest_stage":
             detail, frames = _crest_stage_detail(stage)
@@ -334,14 +498,32 @@ def collect_workflow_report_data(
                 orca_results.append(result)
             detail_parts = [part for part in (result.label, result.reason) if part]
             detail = " · ".join(detail_parts)
+        diagnostic_detail = explanation or reason
+        if diagnostic_detail and diagnostic_detail not in detail:
+            detail = " · ".join(part for part in (detail, diagnostic_detail) if part)
+        if stage_status in _FAILED_STAGE_STATUSES or task_status in _FAILED_STAGE_STATUSES:
+            failure_rows.append(
+                WorkflowFailureRow(
+                    stage_id=_text(stage.get("stage_id")),
+                    engine=engine,
+                    status=(
+                        stage_status if stage_status in _FAILED_STAGE_STATUSES else task_status
+                    ),
+                    reason=reason,
+                    explanation=explanation,
+                    details_href=details_href,
+                )
+            )
         stage_rows.append(
             WorkflowStageRow(
                 stage_id=_text(stage.get("stage_id")),
                 stage_kind=stage_kind,
-                status=_text(stage.get("status")),
+                status=stage_status,
                 detail=detail,
             )
         )
+
+    workflow_error = _mapping(metadata.get("workflow_error"))
 
     return WorkflowReportData(
         workflow_id=_text(payload.get("workflow_id")),
@@ -352,6 +534,11 @@ def collect_workflow_report_data(
         last_advanced_at=last_advanced_at,
         total_duration_text=duration_text(requested_at, last_advanced_at),
         stage_rows=tuple(stage_rows),
+        failure_rows=tuple(failure_rows),
+        workflow_error_reason=_text(workflow_error.get("reason")),
+        workflow_error_message=_text(workflow_error.get("message")),
+        workflow_error_scope=_text(workflow_error.get("scope")),
+        workflow_error_stage_id=_text(workflow_error.get("stage_id")),
         orca_results=_with_relative_energies(orca_results),
         crest_conformer_total=crest_total,
         xtb_candidate_total=xtb_total,
@@ -425,6 +612,82 @@ def _stage_table_html(data: WorkflowReportData) -> str:
         "<table><thead><tr><th>#</th><th>Stage</th><th>Engine</th><th>Status</th>"
         "<th>Detail</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
+    )
+
+
+def _failure_table_html(data: WorkflowReportData) -> str:
+    rows = []
+    for failure in data.failure_rows:
+        diagnostic = failure.explanation or failure.reason or "No engine reason was published."
+        if failure.details_href:
+            details = f'<a href="{html.escape(failure.details_href, quote=True)}">details</a>'
+        else:
+            details = "&#8211;"
+        raw_reason = (
+            f'<div class="sub">{html.escape(failure.reason)}</div>'
+            if failure.reason and failure.reason != diagnostic
+            else ""
+        )
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(failure.stage_id)}</td>"
+            f"<td>{html.escape(failure.engine)}</td>"
+            f'<td class="{_status_cell_class(failure.status)}">'
+            f"{html.escape(failure.status)}</td>"
+            f"<td>{html.escape(diagnostic)}{raw_reason}</td>"
+            f"<td>{details}</td>"
+            "</tr>"
+        )
+    return (
+        "<table><thead><tr><th>Stage</th><th>Engine</th><th>Status</th>"
+        "<th>Reason</th><th>Logs</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+    )
+
+
+def _failure_verdict_html(data: WorkflowReportData) -> str:
+    if data.status not in {"failed", "cancel_failed", "submission_failed"}:
+        return ""
+    if data.workflow_error_reason or data.workflow_error_message:
+        reason = data.workflow_error_message or data.workflow_error_reason
+        context_parts = []
+        if data.workflow_error_stage_id:
+            context_parts.append(f"stage: {data.workflow_error_stage_id}")
+        if data.workflow_error_scope:
+            context_parts.append(f"scope: {data.workflow_error_scope}")
+        if (
+            data.workflow_error_message
+            and data.workflow_error_reason
+            and data.workflow_error_message != data.workflow_error_reason
+        ):
+            context_parts.append(f"code: {data.workflow_error_reason}")
+        context = (
+            f' <span class="sub">{html.escape(" · ".join(context_parts))}</span>'
+            if context_parts
+            else ""
+        )
+        return (
+            f'<p class="verdict"><strong>Why it failed:</strong> {html.escape(reason)}{context}</p>'
+        )
+    if data.failure_rows:
+        primary = data.failure_rows[0]
+        reason = primary.explanation or primary.reason or "No engine reason was published."
+        details = ""
+        if primary.details_href:
+            details = (
+                f' <a href="{html.escape(primary.details_href, quote=True)}">View details</a>.'
+            )
+        additional = len(data.failure_rows) - 1
+        extra = f" {additional} additional failed stage(s)." if additional else ""
+        return (
+            '<p class="verdict"><strong>Why it failed:</strong> '
+            f"{html.escape(primary.stage_id)} ({html.escape(primary.engine)}): "
+            f"{html.escape(reason)}{details}{extra}</p>"
+        )
+    return (
+        '<p class="verdict"><strong>Why it failed:</strong> '
+        "The workflow ended in a failed state, but no detailed engine reason was published."
+        "</p>"
     )
 
 
@@ -580,7 +843,10 @@ def render_workflow_report_html(data: WorkflowReportData) -> str:
         + f" &#183; last advanced {html.escape(data.last_advanced_at)}"
     )
 
-    sections: list[tuple[str, str]] = [("Stage chain", _stage_table_html(data))]
+    sections: list[tuple[str, str]] = []
+    if data.failure_rows:
+        sections.append(("Stage failures", _failure_table_html(data)))
+    sections.append(("Stage chain", _stage_table_html(data)))
     chart = _energy_lollipop_svg(data)
     orca_heading = (
         "TS candidates"
@@ -595,7 +861,7 @@ def render_workflow_report_html(data: WorkflowReportData) -> str:
         title=f"{data.workflow_id} · workflow report",
         badges=tuple(badges),
         meta_html=meta_html,
-        verdict_html="",
+        verdict_html=_failure_verdict_html(data),
         metrics_html=_metric_cards(data),
         sections=tuple(sections),
         footer_html="Generated by orca_auto &#183; refreshed on every workflow advance",
@@ -623,6 +889,7 @@ def write_workflow_html_report(
 __all__ = [
     "OrcaStageResult",
     "WorkflowReportData",
+    "WorkflowFailureRow",
     "WorkflowStageRow",
     "collect_workflow_report_data",
     "count_xyz_frames",

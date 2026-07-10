@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 from orca_auto.flow.orchestration.stage_views import (
@@ -27,6 +28,29 @@ def test_task_view_mapping_fields_create_mutable_dicts() -> None:
     assert task["metadata"] == {"input_role": "reactant"}
     assert task["enqueue_payload"] == {"priority": 7}
     assert task["submission_result"] == {"status": "submitted", "queue_id": "q1"}
+
+
+def test_engine_contract_reason_is_persisted_in_stage_metadata() -> None:
+    crest_stage: dict[str, Any] = {}
+    xtb_stage: dict[str, Any] = {}
+
+    WorkflowStageView(crest_stage).update_crest_contract_metadata(
+        SimpleNamespace(
+            job_id="crest-1",
+            latest_known_path="/tmp/crest-1",
+            reason="crest_exit_code_156",
+        )
+    )
+    WorkflowStageView(xtb_stage).update_xtb_contract_metadata(
+        SimpleNamespace(
+            job_id="xtb-1",
+            latest_known_path="/tmp/xtb-1",
+            reason="xtb_ts_guess_missing",
+        )
+    )
+
+    assert crest_stage["metadata"]["reason"] == "crest_exit_code_156"
+    assert xtb_stage["metadata"]["reason"] == "xtb_ts_guess_missing"
 
 
 def test_task_view_field_helpers_update_and_clear_nested_fields() -> None:

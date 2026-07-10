@@ -275,6 +275,9 @@ Workflow notes:
   workspace: a self-contained visual summary with the stage chain, the
   CREST → (xTB) → ORCA funnel, and a ranked ORCA results table (relative
   energies, imaginary-frequency counts, links to per-job `job_report.html`).
+  Failed workflows also show a top-level explanation and a failed-stage table
+  sourced from `workflow_error`, engine job reports, and recognized CREST
+  safety-termination diagnostics.
 - Workflows with ORCA stages also rewrite `workflow_si.md` and `si_data.csv`
   on every advance: a paper-ready Supporting Information assembly with a
   computational-details paragraph generated from the routes and ORCA versions
