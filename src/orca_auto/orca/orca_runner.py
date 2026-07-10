@@ -50,6 +50,65 @@ class WorkerShutdownInterrupt(KeyboardInterrupt):
     """Raised when a supervisor SIGTERM stops the current ORCA run."""
 
 
+class ShutdownSignalGuard:
+    """Turn the first supervisor SIGTERM into ``WorkerShutdownInterrupt``, once.
+
+    Terminating the ORCA process tree is itself interruptible: it sleeps while
+    waiting for the group to die. Leaving the handler armed there let a second
+    SIGTERM -- a cancel racing a worker shutdown, or systemd escalating -- unwind
+    the cleanup it was running inside, leaving the ORCA leader reaped while its
+    process group survived. The run then failed with a runner exception instead
+    of being recorded as cancelled, and its admission slot refused to release.
+
+    So the guard is armed only while waiting on ORCA. Callers disarm it before
+    they start cleaning up; later signals are recorded in ``signalled`` and
+    otherwise ignored.
+    """
+
+    def __init__(self) -> None:
+        self._armed = False
+        self._installed = False
+        self._previous_handler: Any = None
+        self.signalled = False
+
+    def __enter__(self) -> ShutdownSignalGuard:
+        try:
+            self._previous_handler = signal.getsignal(signal.SIGTERM)
+            signal.signal(signal.SIGTERM, self._handle_sigterm)
+        except ValueError:
+            # signal handlers can only be installed in the main thread
+            return self
+        self._installed = True
+        self._armed = True
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self._armed = False
+        if not self._installed:
+            return
+        try:
+            signal.signal(signal.SIGTERM, self._previous_handler)
+        except ValueError:
+            logger.debug("failed to restore SIGTERM handler outside main thread")
+
+    def _handle_sigterm(self, _signum: int, _frame: FrameType | None) -> None:
+        self.signalled = True
+        if not self._armed:
+            logger.warning("Ignoring SIGTERM received while cleaning up the ORCA process tree")
+            return
+        # Disarm before raising: the signal that interrupts the wait must not be
+        # able to interrupt the unwinding it starts.
+        self._armed = False
+        raise WorkerShutdownInterrupt
+
+    def disarm(self) -> None:
+        self._armed = False
+
+    @property
+    def installed(self) -> bool:
+        return self._installed
+
+
 @dataclass
 class RunResult:
     out_path: str
@@ -186,61 +245,54 @@ class OrcaRunner:
                     raise cleanup_error from exc
                 raise
             assert proc is not None
-            prev_sigterm_handler = None
-            sigterm_handler_installed = False
-
-            def _sigterm_to_worker_shutdown(_signum: int, _frame: FrameType | None) -> None:
-                raise WorkerShutdownInterrupt
-
-            try:
-                prev_sigterm_handler = signal.getsignal(signal.SIGTERM)
-                signal.signal(signal.SIGTERM, _sigterm_to_worker_shutdown)
-                sigterm_handler_installed = True
-            except ValueError:
-                # signal handlers can only be installed in the main thread
-                sigterm_handler_installed = False
-            try:
-                if self._shutdown_requested is None:
-                    return_code = proc.wait()
-                else:
-                    while True:
-                        if self._shutdown_requested():
-                            raise WorkerShutdownInterrupt
-                        try:
-                            return_code = proc.wait(timeout=0.2)
-                            break
-                        except subprocess.TimeoutExpired:
-                            continue
-                if not _reaped_pid_was_reused(proc.pid) and process_group_is_alive(
-                    proc.pid,
-                    killpg_fn=os.killpg,
-                ):
-                    logger.warning(
-                        "ORCA launcher exited while its process group remained active; "
-                        "retaining ownership until the group is gone"
+            with ShutdownSignalGuard() as shutdown_guard:
+                try:
+                    if self._shutdown_requested is None:
+                        return_code = proc.wait()
+                    else:
+                        while True:
+                            if self._shutdown_requested():
+                                raise WorkerShutdownInterrupt
+                            try:
+                                return_code = proc.wait(timeout=0.2)
+                                break
+                            except subprocess.TimeoutExpired:
+                                continue
+                    if not _reaped_pid_was_reused(proc.pid) and process_group_is_alive(
+                        proc.pid,
+                        killpg_fn=os.killpg,
+                    ):
+                        shutdown_guard.disarm()
+                        logger.warning(
+                            "ORCA launcher exited while its process group remained active; "
+                            "retaining ownership until the group is gone"
+                        )
+                        self._retain_until_subprocess_tree_exits(proc)
+                except WorkerShutdownInterrupt:
+                    shutdown_guard.disarm()
+                    handle.write(
+                        "\n[orca_auto] interrupted by worker shutdown; "
+                        "terminating ORCA process tree\n"
                     )
+                    handle.flush()
                     self._retain_until_subprocess_tree_exits(proc)
-            except WorkerShutdownInterrupt:
-                handle.write(
-                    "\n[orca_auto] interrupted by worker shutdown; terminating ORCA process tree\n"
-                )
-                handle.flush()
-                self._retain_until_subprocess_tree_exits(proc)
-                raise
-            except KeyboardInterrupt:
-                handle.write("\n[orca_auto] interrupted by user; terminating ORCA process tree\n")
-                handle.flush()
-                self._retain_until_subprocess_tree_exits(proc)
-                raise
-            finally:
-                if sigterm_handler_installed:
-                    try:
-                        signal.signal(signal.SIGTERM, prev_sigterm_handler)
-                    except ValueError:
-                        logger.debug("failed to restore SIGTERM handler outside main thread")
-                self._clear_process_record_if_group_gone(inp.parent, proc, process_record)
-                if admission_registered and self._register_running_job is not None:
-                    self._register_running_job(None)
+                    raise
+                except KeyboardInterrupt:
+                    shutdown_guard.disarm()
+                    handle.write(
+                        "\n[orca_auto] interrupted by user; terminating ORCA process tree\n"
+                    )
+                    handle.flush()
+                    self._retain_until_subprocess_tree_exits(proc)
+                    raise
+                finally:
+                    # Releasing the process record and the admission slot must not
+                    # be interruptible either: a SIGTERM landing here would strand
+                    # the slot while its engine process is already gone.
+                    shutdown_guard.disarm()
+                    self._clear_process_record_if_group_gone(inp.parent, proc, process_record)
+                    if admission_registered and self._register_running_job is not None:
+                        self._register_running_job(None)
         return RunResult(out_path=str(out), return_code=return_code)
 
     @staticmethod

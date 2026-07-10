@@ -3,6 +3,7 @@ import signal
 import subprocess
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
@@ -12,7 +13,11 @@ from orca_auto.orca.orca_process import (
     OrcaProcessRecordCorruptError,
     OrcaProcessRecoveryError,
 )
-from orca_auto.orca.orca_runner import OrcaRunner, WorkerShutdownInterrupt
+from orca_auto.orca.orca_runner import (
+    OrcaRunner,
+    ShutdownSignalGuard,
+    WorkerShutdownInterrupt,
+)
 
 
 class OrcaRunnerTestCase(unittest.TestCase):
@@ -312,3 +317,91 @@ class TestOrcaRunnerProcessRecordLifecycle(OrcaRunnerTestCase):
                 with self.assertRaises(WorkerShutdownInterrupt):
                     runner.run(inp)
             self.assertFalse((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
+
+
+class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
+    """A second SIGTERM must not unwind the cleanup the first one started."""
+
+    def test_guard_raises_once_then_ignores_further_signals(self) -> None:
+        with (
+            patch("orca_auto.orca.orca_runner.signal.signal"),
+            patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL),
+        ):
+            with ShutdownSignalGuard() as guard:
+                self.assertTrue(guard.installed)
+                with self.assertRaises(WorkerShutdownInterrupt):
+                    guard._handle_sigterm(signal.SIGTERM, None)
+                # the signal that interrupts the wait must not interrupt the unwind
+                guard._handle_sigterm(signal.SIGTERM, None)
+                self.assertTrue(guard.signalled)
+
+    def test_guard_ignores_signals_after_disarm(self) -> None:
+        with (
+            patch("orca_auto.orca.orca_runner.signal.signal"),
+            patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL),
+        ):
+            with ShutdownSignalGuard() as guard:
+                guard.disarm()
+                guard._handle_sigterm(signal.SIGTERM, None)
+                self.assertTrue(guard.signalled)
+
+    def test_guard_survives_non_main_thread_install_failure(self) -> None:
+        with (
+            patch(
+                "orca_auto.orca.orca_runner.signal.signal",
+                side_effect=ValueError("not main thread"),
+            ),
+            patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL),
+        ):
+            with ShutdownSignalGuard() as guard:
+                self.assertFalse(guard.installed)
+                # never armed, so a delivered signal cannot raise
+                guard._handle_sigterm(signal.SIGTERM, None)
+
+    @patch("orca_auto.orca.orca_runner.signal.signal")
+    @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_sigterm_during_cleanup_does_not_abort_process_tree_termination(
+        self,
+        mock_popen: MagicMock,
+        _mock_getsignal: MagicMock,
+        mock_signal: MagicMock,
+    ) -> None:
+        """Reproduces TS8_wf/03_ts_guess: cancel SIGTERM lands while cleanup runs.
+
+        Before the guard, the second signal escaped _retain_until_subprocess_tree_exits
+        mid-way, leaving the reaped ORCA leader with a live process group -- reported as
+        runner_exception rather than a cancellation.
+        """
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 99999
+
+        def _installed_handler() -> Callable[[int, object], None]:
+            handler: Callable[[int, object], None] = mock_signal.call_args_list[0].args[1]
+            return handler
+
+        def _wait() -> int:
+            _installed_handler()(signal.SIGTERM, None)  # first SIGTERM: interrupts the wait
+            return 0
+
+        mock_proc.wait.side_effect = _wait
+        mock_popen.return_value = mock_proc
+
+        cleanup_completed: list[bool] = []
+
+        def _cleanup(proc: object) -> None:
+            # a supervisor SIGTERM lands in the middle of terminating the tree
+            _installed_handler()(signal.SIGTERM, None)
+            cleanup_completed.append(True)
+
+        runner = OrcaRunner("/opt/orca/orca")
+        with patch.object(runner, "_retain_until_subprocess_tree_exits", side_effect=_cleanup):
+            with tempfile.TemporaryDirectory() as td:
+                inp = Path(td) / "test.inp"
+                inp.write_text("! Opt\n", encoding="utf-8")
+                with self.assertRaises(WorkerShutdownInterrupt):
+                    runner.run(inp)
+
+        self.assertEqual(cleanup_completed, [True])
+        self.assertEqual(mock_signal.call_args_list[-1], call(signal.SIGTERM, signal.SIG_DFL))
