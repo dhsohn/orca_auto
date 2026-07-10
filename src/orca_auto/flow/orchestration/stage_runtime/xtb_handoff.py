@@ -4,23 +4,14 @@ from typing import Any
 
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.stage_runtime.shared import _orchestration_context
+from orca_auto.flow.orchestration.support import select_valid_ts_guess_inputs
 
 
 def xtb_handoff_status_impl(
     contract: Any, *, deps: OrchestrationDeps | None = None
 ) -> dict[str, str]:
     o = _orchestration_context(deps)
-    inputs = o.engines.select_xtb_downstream_inputs(
-        contract,
-        policy=o.contracts.XtbDownstreamPolicy.build(
-            preferred_kinds=("ts_guess",),
-            allowed_kinds=("ts_guess",),
-            max_candidates=1,
-            selected_only=False,
-        ),
-        require_geometry=True,
-    )
-    inputs = tuple(item for item in inputs if not item.geometry_invalid)
+    inputs = select_valid_ts_guess_inputs(o, contract)
     if inputs:
         return {
             "status": "ready",

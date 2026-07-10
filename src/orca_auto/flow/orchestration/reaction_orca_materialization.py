@@ -21,6 +21,7 @@ from orca_auto.flow.orchestration.stage_views import (
     _request_params,
     _stage_views,
 )
+from orca_auto.flow.orchestration.support import select_valid_ts_guess_inputs
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 from orca_auto.flow.workflow._phases import phase_finished
 
@@ -65,24 +66,6 @@ def _load_xtb_contract_for_stage(
         return o.engines.load_xtb_artifact_contract(xtb_index_root=xtb_allowed_root, target=target)
     except FileNotFoundError:
         return None
-
-
-def _xtb_ts_guess_inputs(o: Any, contract: XtbArtifactContract) -> list[Any]:
-    max_candidate_count = max(
-        1,
-        len(contract.candidate_details),
-        len(contract.selected_candidate_paths),
-    )
-    return o.engines.select_xtb_downstream_inputs(
-        contract,
-        policy=o.contracts.XtbDownstreamPolicy.build(
-            preferred_kinds=("ts_guess",),
-            allowed_kinds=("ts_guess",),
-            max_candidates=max_candidate_count,
-            selected_only=False,
-        ),
-        require_geometry=True,
-    )
 
 
 def _record_xtb_handoff_error(
@@ -161,8 +144,7 @@ def _collect_reaction_orca_candidates(
         contract = _load_xtb_contract_for_stage(o, xtb_stage, xtb_allowed_root=xtb_allowed_root)
         if contract is None:
             continue
-        inputs = _xtb_ts_guess_inputs(o, contract)
-        valid_inputs = [candidate for candidate in inputs if not candidate.geometry_invalid]
+        valid_inputs = select_valid_ts_guess_inputs(o, contract)
         if not valid_inputs:
             handoff_errors.append(_record_xtb_handoff_error(o, xtb_stage, contract))
             continue

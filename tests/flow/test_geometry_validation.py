@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -171,3 +172,28 @@ def test_xtb_handoff_status_rejects_geometry_invalid_candidate(tmp_path: Path) -
     status = xtb_handoff_status_impl(_invalid_ts_contract(tmp_path))
     assert status["status"] == "failed"
     assert status["reason"] == "xtb_ts_guess_geometry_invalid"
+
+
+def test_xtb_handoff_status_keeps_valid_lower_ranked_guess(tmp_path: Path) -> None:
+    """A geometry-invalid top-ranked guess must not hide a valid runner-up."""
+    invalid = _invalid_ts_contract(tmp_path)
+    runner_up_path = _write(
+        tmp_path / "xtbpath_ts_2.xyz",
+        ["C 0.0 0.0 0.0", "H 1.25 0.0 0.0", "O 4.0 0.0 0.0", "H 4.95 0.0 0.0"],
+    )
+    runner_up = XtbCandidateArtifact(
+        rank=2,
+        kind="ts_guess",
+        path=str(runner_up_path),
+        selected=True,
+        metadata={"geometry_valid": True},
+    )
+    contract = replace(
+        invalid,
+        candidate_details=(*invalid.candidate_details, runner_up),
+        selected_candidate_paths=(*invalid.selected_candidate_paths, str(runner_up_path)),
+    )
+
+    status = xtb_handoff_status_impl(contract)
+    assert status["status"] == "ready"
+    assert status["artifact_path"] == str(runner_up_path)
