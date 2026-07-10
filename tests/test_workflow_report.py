@@ -357,6 +357,58 @@ def test_failed_stage_without_current_identity_does_not_use_old_report(tmp_path:
     assert "job_report.json" not in text
 
 
+def test_xtb_retry_prefers_current_task_job_dir_over_stale_metadata(tmp_path: Path) -> None:
+    old_job_dir = tmp_path / "02_xtb" / "xtb_old_attempt"
+    old_job_dir.mkdir(parents=True)
+    (old_job_dir / "job_report.json").write_text(
+        json.dumps(
+            {
+                "job": {"id": "xtb-old"},
+                "status": {"state": "failed", "reason": "old_xtb_failure"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    current_job_dir = tmp_path / "02_xtb" / "xtb_retry_attempt"
+    current_job_dir.mkdir(parents=True)
+    (current_job_dir / "job_report.json").write_text(
+        json.dumps(
+            {
+                "job": {"id": "xtb-current", "queue_id": "xtb-q-current"},
+                "status": {"state": "failed", "reason": "current_xtb_failure"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "xtb_path_retry",
+                "stage_kind": "xtb_stage",
+                "status": "submission_failed",
+                "task": {
+                    "engine": "xtb",
+                    "status": "submission_failed",
+                    "payload": {"job_dir": str(current_job_dir)},
+                    "submission_result": {"queue_id": "xtb-q-current"},
+                },
+                "metadata": {
+                    "child_job_id": "xtb-old",
+                    "latest_known_path": str(old_job_dir),
+                    "queue_id": "xtb-q-current",
+                },
+            }
+        ],
+    )
+    payload["status"] = "failed"
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.failure_rows[0].reason == "current_xtb_failure"
+    assert data.failure_rows[0].details_href == "02_xtb/xtb_retry_attempt/job_report.json"
+
+
 def test_orca_run_identity_allows_current_report_diagnostic(tmp_path: Path) -> None:
     job_dir = tmp_path / "03_orca" / "orca_current"
     job_dir.mkdir(parents=True)

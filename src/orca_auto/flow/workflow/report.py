@@ -242,8 +242,8 @@ def _stage_job_dir(stage: Mapping[str, Any]) -> Path | None:
     metadata = _stage_metadata(stage)
     task_payload = _stage_task_payload(stage)
     for value in (
-        metadata.get("latest_known_path"),
         task_payload.get("job_dir"),
+        metadata.get("latest_known_path"),
         task_payload.get("reaction_dir"),
     ):
         path_text = _text(value)
