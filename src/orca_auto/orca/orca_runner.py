@@ -8,7 +8,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from types import FrameType, SimpleNamespace
+from types import FrameType, SimpleNamespace, TracebackType
 from typing import Any
 
 from orca_auto.core.queue.cancellable import (
@@ -47,7 +47,87 @@ def _reaped_pid_was_reused(pid: int) -> bool:
 
 
 class WorkerShutdownInterrupt(KeyboardInterrupt):
-    """Raised when a supervisor SIGTERM stops the current ORCA run."""
+    """Raised when a worker shutdown signal or request stops the current ORCA run."""
+
+
+class ShutdownSignalGuard:
+    """Record shutdown signals without raising asynchronously from their handler.
+
+    A Python signal handler can run between any two bytecodes. Raising directly
+    from it therefore leaves unavoidable gaps around handler installation,
+    ``except`` entry, and ``finally`` entry where process-tree or admission cleanup
+    can be skipped. The handler records only the first SIGTERM/SIGINT instead.
+    ``OrcaRunner`` polls this state while waiting and keeps the handlers installed
+    until all process and bookkeeping cleanup has finished.
+
+    Capturing SIGINT too prevents a second Ctrl-C from unwinding the cleanup that
+    the first one started. The runner preserves standalone Ctrl-C as
+    ``KeyboardInterrupt`` while worker-managed signals become
+    ``WorkerShutdownInterrupt``.
+    """
+
+    _MANAGED_SIGNALS = (signal.SIGTERM, signal.SIGINT)
+
+    def __init__(self) -> None:
+        self._previous_handlers: dict[int, Any] = {}
+        self._installed_signals: list[int] = []
+        self.received_signal: int | None = None
+
+    def __enter__(self) -> ShutdownSignalGuard:
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, self._MANAGED_SIGNALS)
+        try:
+            try:
+                for signum in self._MANAGED_SIGNALS:
+                    self._previous_handlers[signum] = signal.getsignal(signum)
+                    # Record ownership before installation: a different signal can
+                    # dispatch immediately after signal.signal() returns.
+                    self._installed_signals.append(signum)
+                    signal.signal(signum, self._handle_signal)
+            except ValueError:
+                # signal handlers can only be installed in the main thread
+                self._restore_handlers()
+            except BaseException:
+                self._restore_handlers()
+                raise
+        finally:
+            # A signal queued while only one handler was installed is delivered
+            # only after both state-only handlers (or all previous handlers) are set.
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        return self
+
+    def __exit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> None:
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, self._MANAGED_SIGNALS)
+        try:
+            self._restore_handlers()
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+    def _restore_handlers(self) -> None:
+        # Restore SIGTERM first. Until SIGINT is restored last, Ctrl-C remains a
+        # state-only event and cannot interrupt the restoration sequence.
+        for signum in tuple(self._installed_signals):
+            try:
+                signal.signal(signum, self._previous_handlers[signum])
+            except ValueError:
+                logger.debug("failed to restore signal handler outside main thread")
+        self._installed_signals.clear()
+
+    def _handle_signal(self, signum: int, _frame: FrameType | None) -> None:
+        if self.received_signal is None:
+            self.received_signal = signum
+
+    @property
+    def signalled(self) -> bool:
+        return self.received_signal is not None
+
+    @property
+    def installed(self) -> bool:
+        return len(self._installed_signals) == len(self._MANAGED_SIGNALS)
 
 
 @dataclass
@@ -108,6 +188,15 @@ class OrcaRunner:
         )
 
     @staticmethod
+    def _write_interrupt_notice(handle: Any, message: str) -> None:
+        """Append a diagnostic without allowing output I/O to block process cleanup."""
+        try:
+            handle.write(message)
+            handle.flush()
+        except (OSError, ValueError):
+            logger.warning("Could not append the ORCA interruption notice", exc_info=True)
+
+    @staticmethod
     def _ensure_trailing_newline(path: Path) -> None:
         """Ensure a trailing newline so ORCA's Fortran parser reads the last line correctly."""
         data = path.read_bytes()
@@ -126,121 +215,145 @@ class OrcaRunner:
 
         return_code = 1
         with out.open("w", encoding="utf-8") as handle:
-            if self._prepare_running_job is not None:
-                self._prepare_running_job()
-            proc: subprocess.Popen | None = None
-            admission_registered = False
-            try:
-                proc = subprocess.Popen(
-                    command,
-                    cwd=cwd,
-                    stdout=handle,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    start_new_session=True,
-                )
-                if self._register_running_job is not None:
-                    self._register_running_job(SimpleNamespace(process=proc))
-                    admission_registered = True
-                process_record = write_orca_process_record(inp_path=inp, out_path=out, pid=proc.pid)
-            except BaseException as exc:
-                if proc is None:
-                    if isinstance(exc, Exception) and self._register_running_job is not None:
-                        self._register_running_job(None)
-                    raise
-                cleanup_error: ProcessCleanupError | None = None
+            with ShutdownSignalGuard() as shutdown_guard:
+
+                def _raise_if_shutdown_requested() -> None:
+                    received_signal = shutdown_guard.received_signal
+                    if received_signal == signal.SIGINT and self._shutdown_requested is None:
+                        raise KeyboardInterrupt
+                    if received_signal is not None:
+                        raise WorkerShutdownInterrupt
+                    if self._shutdown_requested is not None and self._shutdown_requested():
+                        raise WorkerShutdownInterrupt
+
+                proc: subprocess.Popen | None = None
+                admission_registered = False
+                process_start_attempted = False
                 try:
-                    terminated = self._terminate_subprocess_tree(proc)
-                    process_exited = proc.poll() is not None
-                except Exception as cleanup_exc:  # noqa: BLE001
-                    cleanup_error = ProcessCleanupError(
-                        "Failed to clean up ORCA after process-record initialization failed: "
-                        f"{cleanup_exc}"
+                    if self._prepare_running_job is not None:
+                        self._prepare_running_job()
+                    _raise_if_shutdown_requested()
+                    process_start_attempted = True
+                    proc = subprocess.Popen(
+                        command,
+                        cwd=cwd,
+                        stdout=handle,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        start_new_session=True,
                     )
-                    terminated = False
-                    process_exited = False
-                if not terminated or not process_exited:
-                    cleanup_error = cleanup_error or ProcessCleanupError(
-                        "Failed to clean up ORCA after process-record initialization failed"
-                    )
-                    retain_process_ownership_until_exit(
-                        proc,
-                        terminate_process=self._terminate_subprocess_tree,
-                    )
-                failed_record = orca_process_record_snapshot_from_exception(exc)
-                if failed_record is not None:
-                    clear_orca_process_record_snapshot(
-                        inp.parent,
-                        failed_record,
+                    if self._register_running_job is not None:
+                        self._register_running_job(SimpleNamespace(process=proc))
+                        admission_registered = True
+                    process_record = write_orca_process_record(
+                        inp_path=inp,
+                        out_path=out,
                         pid=proc.pid,
                     )
-                if self._register_running_job is not None:
+                except BaseException as exc:
+                    if proc is None:
+                        if (
+                            not process_start_attempted or isinstance(exc, Exception)
+                        ) and self._register_running_job is not None:
+                            self._register_running_job(None)
+                        raise
+                    cleanup_error: ProcessCleanupError | None = None
                     try:
-                        self._register_running_job(None)
-                    except Exception as admission_exc:  # noqa: BLE001
-                        cleanup_error = cleanup_error or ProcessCleanupError(
-                            "Failed to clear ORCA admission process record after cleanup"
+                        terminated = self._terminate_subprocess_tree(proc)
+                        process_exited = proc.poll() is not None
+                    except Exception as cleanup_exc:  # noqa: BLE001
+                        cleanup_error = ProcessCleanupError(
+                            "Failed to clean up ORCA after process-record initialization failed: "
+                            f"{cleanup_exc}"
                         )
-                        cleanup_error.__cause__ = admission_exc
-                if cleanup_error is not None:
-                    raise cleanup_error from exc
-                raise
-            assert proc is not None
-            prev_sigterm_handler = None
-            sigterm_handler_installed = False
+                        terminated = False
+                        process_exited = False
+                    if not terminated or not process_exited:
+                        cleanup_error = cleanup_error or ProcessCleanupError(
+                            "Failed to clean up ORCA after process-record initialization failed"
+                        )
+                        retain_process_ownership_until_exit(
+                            proc,
+                            terminate_process=self._terminate_subprocess_tree,
+                        )
+                    failed_record = orca_process_record_snapshot_from_exception(exc)
+                    if failed_record is not None:
+                        clear_orca_process_record_snapshot(
+                            inp.parent,
+                            failed_record,
+                            pid=proc.pid,
+                        )
+                    if self._register_running_job is not None:
+                        try:
+                            self._register_running_job(None)
+                        except Exception as admission_exc:  # noqa: BLE001
+                            cleanup_error = cleanup_error or ProcessCleanupError(
+                                "Failed to clear ORCA admission process record after cleanup"
+                            )
+                            cleanup_error.__cause__ = admission_exc
+                    if cleanup_error is not None:
+                        raise cleanup_error from exc
+                    raise
+                assert proc is not None
 
-            def _sigterm_to_worker_shutdown(_signum: int, _frame: FrameType | None) -> None:
-                raise WorkerShutdownInterrupt
+                def _owned_process_group_is_alive() -> bool:
+                    if proc.poll() is None:
+                        return True
+                    return not _reaped_pid_was_reused(proc.pid) and process_group_is_alive(
+                        proc.pid,
+                        killpg_fn=os.killpg,
+                    )
 
-            try:
-                prev_sigterm_handler = signal.getsignal(signal.SIGTERM)
-                signal.signal(signal.SIGTERM, _sigterm_to_worker_shutdown)
-                sigterm_handler_installed = True
-            except ValueError:
-                # signal handlers can only be installed in the main thread
-                sigterm_handler_installed = False
-            try:
-                if self._shutdown_requested is None:
-                    return_code = proc.wait()
-                else:
+                try:
                     while True:
-                        if self._shutdown_requested():
-                            raise WorkerShutdownInterrupt
+                        _raise_if_shutdown_requested()
                         try:
                             return_code = proc.wait(timeout=0.2)
-                            break
                         except subprocess.TimeoutExpired:
                             continue
-                if not _reaped_pid_was_reused(proc.pid) and process_group_is_alive(
-                    proc.pid,
-                    killpg_fn=os.killpg,
-                ):
-                    logger.warning(
-                        "ORCA launcher exited while its process group remained active; "
-                        "retaining ownership until the group is gone"
-                    )
+                        break
+                except WorkerShutdownInterrupt:
                     self._retain_until_subprocess_tree_exits(proc)
-            except WorkerShutdownInterrupt:
-                handle.write(
-                    "\n[orca_auto] interrupted by worker shutdown; terminating ORCA process tree\n"
-                )
-                handle.flush()
-                self._retain_until_subprocess_tree_exits(proc)
-                raise
-            except KeyboardInterrupt:
-                handle.write("\n[orca_auto] interrupted by user; terminating ORCA process tree\n")
-                handle.flush()
-                self._retain_until_subprocess_tree_exits(proc)
-                raise
-            finally:
-                if sigterm_handler_installed:
-                    try:
-                        signal.signal(signal.SIGTERM, prev_sigterm_handler)
-                    except ValueError:
-                        logger.debug("failed to restore SIGTERM handler outside main thread")
-                self._clear_process_record_if_group_gone(inp.parent, proc, process_record)
-                if admission_registered and self._register_running_job is not None:
-                    self._register_running_job(None)
+                    self._write_interrupt_notice(
+                        handle,
+                        "\n[orca_auto] interrupted by worker shutdown; "
+                        "terminated ORCA process tree\n",
+                    )
+                    raise
+                except KeyboardInterrupt:
+                    self._retain_until_subprocess_tree_exits(proc)
+                    self._write_interrupt_notice(
+                        handle,
+                        "\n[orca_auto] interrupted by user; terminated ORCA process tree\n",
+                    )
+                    raise
+                except BaseException:
+                    # A failed wait/callback can race the leader's exit. Only
+                    # terminate a reaped group after ruling out PID reuse.
+                    if _owned_process_group_is_alive():
+                        self._retain_until_subprocess_tree_exits(proc)
+                    raise
+                else:
+                    if _owned_process_group_is_alive():
+                        logger.warning(
+                            "ORCA launcher exited while its process group remained active; "
+                            "retaining ownership until the group is gone"
+                        )
+                        self._retain_until_subprocess_tree_exits(proc)
+                    # The launcher and any lingering children are already gone,
+                    # so a signal received during their cleanup can propagate
+                    # without entering the termination path a second time.
+                    _raise_if_shutdown_requested()
+                finally:
+                    # The state-only handlers remain installed through bookkeeping,
+                    # so neither repeated SIGTERM nor Ctrl-C can strand ownership.
+                    self._clear_process_record_if_group_gone(inp.parent, proc, process_record)
+                    if admission_registered and self._register_running_job is not None:
+                        self._register_running_job(None)
+            # A signal received during normal process-tree/bookkeeping cleanup is
+            # delivered only after ownership has been released. A worker's restored
+            # handler may also have set the polling callback during handler restore.
+            _raise_if_shutdown_requested()
         return RunResult(out_path=str(out), return_code=return_code)
 
     @staticmethod

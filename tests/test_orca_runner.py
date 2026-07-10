@@ -2,8 +2,11 @@ import errno
 import signal
 import subprocess
 import tempfile
+import threading
 import unittest
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, call, patch
 
 from orca_auto.core.queue.cancellable import ProcessCleanupError
@@ -12,7 +15,22 @@ from orca_auto.orca.orca_process import (
     OrcaProcessRecordCorruptError,
     OrcaProcessRecoveryError,
 )
-from orca_auto.orca.orca_runner import OrcaRunner, WorkerShutdownInterrupt
+from orca_auto.orca.orca_runner import (
+    OrcaRunner,
+    ShutdownSignalGuard,
+    WorkerShutdownInterrupt,
+)
+
+
+def _installed_signal_handler(
+    mock_signal: MagicMock,
+    signum: int = signal.SIGTERM,
+) -> Callable[[int, object], None]:
+    for signal_call in mock_signal.call_args_list:
+        handler = signal_call.args[1]
+        if signal_call.args[0] == signum and callable(handler):
+            return handler
+    raise AssertionError(f"no installed handler found for signal {signum}")
 
 
 class OrcaRunnerTestCase(unittest.TestCase):
@@ -96,10 +114,9 @@ class TestOrcaRunnerTermination(OrcaRunnerTestCase):
         mock_proc.poll.return_value = None
         mock_proc.pid = 99999
 
-        def _wait() -> int:
-            installed_handler = mock_signal.call_args_list[0].args[1]
-            installed_handler(signal.SIGTERM, None)
-            return 0
+        def _wait(*_args: object, **_kwargs: object) -> int:
+            _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
+            raise subprocess.TimeoutExpired(cmd="orca", timeout=0.2)
 
         mock_proc.wait.side_effect = _wait
         mock_popen.return_value = mock_proc
@@ -114,7 +131,8 @@ class TestOrcaRunnerTermination(OrcaRunnerTestCase):
 
         terminate.assert_called_once_with(mock_proc)
         self.assertEqual(mock_signal.call_args_list[0].args[0], signal.SIGTERM)
-        self.assertEqual(mock_signal.call_args_list[-1], call(signal.SIGTERM, signal.SIG_DFL))
+        self.assertIn(call(signal.SIGTERM, signal.SIG_DFL), mock_signal.call_args_list)
+        self.assertIn(call(signal.SIGINT, signal.SIG_DFL), mock_signal.call_args_list)
 
 
 class TestOrcaRunnerProcessRecordLifecycle(OrcaRunnerTestCase):
@@ -264,9 +282,8 @@ class TestOrcaRunnerProcessRecordLifecycle(OrcaRunnerTestCase):
         mock_proc.poll.return_value = None
         mock_proc.pid = 99999
 
-        def _wait() -> int:
-            installed_handler = mock_signal.call_args_list[0].args[1]
-            installed_handler(signal.SIGTERM, None)
+        def _wait(*_args: object, **_kwargs: object) -> int:
+            _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
             return 0
 
         mock_proc.wait.side_effect = _wait
@@ -296,9 +313,8 @@ class TestOrcaRunnerProcessRecordLifecycle(OrcaRunnerTestCase):
         mock_proc.poll.return_value = None
         mock_proc.pid = 99999
 
-        def _wait() -> int:
-            installed_handler = mock_signal.call_args_list[0].args[1]
-            installed_handler(signal.SIGTERM, None)
+        def _wait(*_args: object, **_kwargs: object) -> int:
+            _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
             return 0
 
         mock_proc.wait.side_effect = _wait
@@ -312,3 +328,553 @@ class TestOrcaRunnerProcessRecordLifecycle(OrcaRunnerTestCase):
                 with self.assertRaises(WorkerShutdownInterrupt):
                     runner.run(inp)
             self.assertFalse((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
+
+
+class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
+    """Shutdown signals are state-only until the runner reaches a safe boundary."""
+
+    def test_guard_records_only_the_first_signal_without_raising(self) -> None:
+        protected_work_completed: list[bool] = []
+        with (
+            patch("orca_auto.orca.orca_runner.signal.signal"),
+            patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL),
+        ):
+            with ShutdownSignalGuard() as guard:
+                self.assertTrue(guard.installed)
+                guard._handle_signal(signal.SIGTERM, None)
+                guard._handle_signal(signal.SIGINT, None)
+                protected_work_completed.append(True)
+                self.assertTrue(guard.signalled)
+                self.assertEqual(guard.received_signal, signal.SIGTERM)
+
+        self.assertEqual(protected_work_completed, [True])
+
+    def test_guard_does_not_mask_cleanup_failure_after_signal(self) -> None:
+        with (
+            patch("orca_auto.orca.orca_runner.signal.signal"),
+            patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
+                with ShutdownSignalGuard() as guard:
+                    guard._handle_signal(signal.SIGTERM, None)
+                    raise RuntimeError("cleanup failed")
+
+    def test_guard_survives_non_main_thread_install_failure(self) -> None:
+        with (
+            patch(
+                "orca_auto.orca.orca_runner.signal.signal",
+                side_effect=ValueError("not main thread"),
+            ),
+            patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL),
+        ):
+            with ShutdownSignalGuard() as guard:
+                self.assertFalse(guard.installed)
+                guard._handle_signal(signal.SIGTERM, None)
+
+    @patch("orca_auto.orca.orca_runner.signal.signal")
+    @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_sigterm_during_cleanup_does_not_abort_process_tree_termination(
+        self,
+        mock_popen: MagicMock,
+        _mock_getsignal: MagicMock,
+        mock_signal: MagicMock,
+    ) -> None:
+        """Reproduces TS8_wf/03_ts_guess: cancel SIGTERM lands while cleanup runs.
+
+        Before the guard, the second signal escaped _retain_until_subprocess_tree_exits
+        mid-way, leaving the reaped ORCA leader with a live process group -- reported as
+        runner_exception rather than a cancellation.
+        """
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 99999
+
+        def _installed_handler() -> Callable[[int, object], None]:
+            return _installed_signal_handler(mock_signal)
+
+        def _wait(*_args: object, **_kwargs: object) -> int:
+            _installed_handler()(signal.SIGTERM, None)  # first SIGTERM: marks the wait
+            raise subprocess.TimeoutExpired(cmd="orca", timeout=0.2)
+
+        mock_proc.wait.side_effect = _wait
+        mock_popen.return_value = mock_proc
+
+        cleanup_completed: list[bool] = []
+
+        def _cleanup(proc: object) -> None:
+            # a supervisor SIGTERM lands in the middle of terminating the tree
+            _installed_handler()(signal.SIGTERM, None)
+            cleanup_completed.append(True)
+
+        runner = OrcaRunner("/opt/orca/orca")
+        with patch.object(runner, "_retain_until_subprocess_tree_exits", side_effect=_cleanup):
+            with tempfile.TemporaryDirectory() as td:
+                inp = Path(td) / "test.inp"
+                inp.write_text("! Opt\n", encoding="utf-8")
+                with self.assertRaises(WorkerShutdownInterrupt):
+                    runner.run(inp)
+
+        self.assertEqual(cleanup_completed, [True])
+        self.assertIn(call(signal.SIGTERM, signal.SIG_DFL), mock_signal.call_args_list)
+        self.assertIn(call(signal.SIGINT, signal.SIG_DFL), mock_signal.call_args_list)
+
+    @patch("orca_auto.orca.orca_runner.signal.signal")
+    @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_sigterm_during_post_exit_retention_is_raised_after_bookkeeping(
+        self,
+        mock_popen: MagicMock,
+        _mock_getsignal: MagicMock,
+        mock_signal: MagicMock,
+    ) -> None:
+        """A first SIGTERM during lingering-child cleanup must remain a cancellation."""
+        mock_proc = MagicMock()
+        mock_proc.wait.return_value = 0
+        mock_proc.poll.return_value = 0
+        mock_proc.pid = 99999
+        mock_popen.return_value = mock_proc
+
+        events: list[str] = []
+
+        def _registrar(running: object | None) -> None:
+            events.append("admission_registered" if running is not None else "admission_cleared")
+
+        def _retain(_proc: object) -> None:
+            _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
+            events.append("process_tree_reaped")
+
+        def _clear_record(*_args: object) -> None:
+            events.append("process_record_cleared")
+
+        runner = OrcaRunner("/opt/orca/orca")
+        runner.set_running_job_registrar(_registrar)
+        with (
+            patch("orca_auto.orca.orca_runner._reaped_pid_was_reused", return_value=False),
+            patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=True),
+            patch.object(runner, "_retain_until_subprocess_tree_exits", side_effect=_retain),
+            patch.object(runner, "_clear_process_record_if_group_gone", side_effect=_clear_record),
+        ):
+            with tempfile.TemporaryDirectory() as td:
+                inp = Path(td) / "test.inp"
+                inp.write_text("! Opt\n", encoding="utf-8")
+                with self.assertRaises(WorkerShutdownInterrupt):
+                    runner.run(inp)
+
+        self.assertEqual(
+            events,
+            [
+                "admission_registered",
+                "process_tree_reaped",
+                "process_record_cleared",
+                "admission_cleared",
+            ],
+        )
+
+    @patch("orca_auto.orca.orca_runner.signal.signal")
+    @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_polled_shutdown_keeps_signals_state_only_during_cleanup(
+        self,
+        mock_popen: MagicMock,
+        _mock_getsignal: MagicMock,
+        mock_signal: MagicMock,
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 99999
+        mock_popen.return_value = mock_proc
+
+        cleanup_completed: list[bool] = []
+
+        def _cleanup(_proc: object) -> None:
+            _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
+            cleanup_completed.append(True)
+
+        runner = OrcaRunner("/opt/orca/orca")
+        runner.set_shutdown_requested(MagicMock(side_effect=[False, True]))
+        with patch.object(runner, "_retain_until_subprocess_tree_exits", side_effect=_cleanup):
+            with tempfile.TemporaryDirectory() as td:
+                inp = Path(td) / "test.inp"
+                inp.write_text("! Opt\n", encoding="utf-8")
+                with self.assertRaises(WorkerShutdownInterrupt):
+                    runner.run(inp)
+
+        self.assertEqual(cleanup_completed, [True])
+
+    @patch("orca_auto.orca.orca_runner.signal.signal")
+    @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_repeated_sigint_during_cleanup_preserves_keyboard_interrupt(
+        self,
+        mock_popen: MagicMock,
+        _mock_getsignal: MagicMock,
+        mock_signal: MagicMock,
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 99999
+
+        def _wait(*_args: object, **_kwargs: object) -> int:
+            _installed_signal_handler(mock_signal, signal.SIGINT)(signal.SIGINT, None)
+            raise subprocess.TimeoutExpired(cmd="orca", timeout=0.2)
+
+        mock_proc.wait.side_effect = _wait
+        mock_popen.return_value = mock_proc
+        cleanup_completed: list[bool] = []
+
+        def _cleanup(_proc: object) -> None:
+            _installed_signal_handler(mock_signal, signal.SIGINT)(signal.SIGINT, None)
+            cleanup_completed.append(True)
+
+        runner = OrcaRunner("/opt/orca/orca")
+        with patch.object(runner, "_retain_until_subprocess_tree_exits", side_effect=_cleanup):
+            with tempfile.TemporaryDirectory() as td:
+                inp = Path(td) / "test.inp"
+                inp.write_text("! Opt\n", encoding="utf-8")
+                with self.assertRaises(KeyboardInterrupt) as caught:
+                    runner.run(inp)
+
+        self.assertIs(type(caught.exception), KeyboardInterrupt)
+        self.assertEqual(cleanup_completed, [True])
+
+    @patch("orca_auto.orca.orca_runner.signal.signal")
+    @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_signal_delivered_during_handler_install_prevents_process_start(
+        self,
+        mock_popen: MagicMock,
+        _mock_getsignal: MagicMock,
+        mock_signal: MagicMock,
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 99999
+        mock_popen.return_value = mock_proc
+        delivered = False
+
+        def _install(signum: int, handler: object) -> None:
+            nonlocal delivered
+            if signum == signal.SIGTERM and callable(handler) and not delivered:
+                delivered = True
+                handler(signal.SIGTERM, None)
+
+        mock_signal.side_effect = _install
+        events: list[str] = []
+
+        def _registrar(running: object | None) -> None:
+            events.append("admission_registered" if running is not None else "admission_cleared")
+
+        runner = OrcaRunner("/opt/orca/orca")
+        runner.set_running_job_registrar(_registrar)
+        with (
+            patch("orca_auto.orca.orca_runner._reaped_pid_was_reused", return_value=False),
+            patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=True),
+            patch.object(
+                runner,
+                "_retain_until_subprocess_tree_exits",
+                side_effect=lambda _proc: events.append("process_tree_reaped"),
+            ),
+            patch.object(
+                runner,
+                "_clear_process_record_if_group_gone",
+                side_effect=lambda *_args: events.append("process_record_cleared"),
+            ),
+        ):
+            with tempfile.TemporaryDirectory() as td:
+                inp = Path(td) / "test.inp"
+                inp.write_text("! Opt\n", encoding="utf-8")
+                with self.assertRaises(WorkerShutdownInterrupt):
+                    runner.run(inp)
+
+        mock_popen.assert_not_called()
+        self.assertEqual(events, ["admission_cleared"])
+
+    @patch("orca_auto.orca.orca_runner.signal.signal")
+    @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_sigterm_during_bookkeeping_is_raised_after_admission_release(
+        self,
+        mock_popen: MagicMock,
+        _mock_getsignal: MagicMock,
+        mock_signal: MagicMock,
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.wait.return_value = 0
+        mock_proc.poll.return_value = 0
+        mock_proc.pid = 99999
+        mock_popen.return_value = mock_proc
+        events: list[str] = []
+
+        def _registrar(running: object | None) -> None:
+            events.append("admission_registered" if running is not None else "admission_cleared")
+
+        def _clear_record(*_args: object) -> None:
+            _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
+            events.append("process_record_cleared")
+
+        runner = OrcaRunner("/opt/orca/orca")
+        runner.set_running_job_registrar(_registrar)
+        with (
+            patch("orca_auto.orca.orca_runner._reaped_pid_was_reused", return_value=False),
+            patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False),
+            patch.object(runner, "_clear_process_record_if_group_gone", side_effect=_clear_record),
+        ):
+            with tempfile.TemporaryDirectory() as td:
+                inp = Path(td) / "test.inp"
+                inp.write_text("! Opt\n", encoding="utf-8")
+                with self.assertRaises(WorkerShutdownInterrupt):
+                    runner.run(inp)
+
+        self.assertEqual(
+            events,
+            ["admission_registered", "process_record_cleared", "admission_cleared"],
+        )
+
+    @patch("orca_auto.orca.orca_runner.signal.signal")
+    @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_interrupt_notice_failure_cannot_preempt_process_cleanup(
+        self,
+        mock_popen: MagicMock,
+        _mock_getsignal: MagicMock,
+        _mock_signal: MagicMock,
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 99999
+        mock_popen.return_value = mock_proc
+        events: list[str] = []
+
+        def _failing_notice(_handle: object, message: str) -> None:
+            failing_handle = MagicMock()
+            failing_handle.write.side_effect = OSError(errno.ENOSPC, "disk full")
+            OrcaRunner._write_interrupt_notice(failing_handle, message)
+            events.append("notice_attempted")
+
+        runner = OrcaRunner("/opt/orca/orca")
+        runner.set_shutdown_requested(MagicMock(side_effect=[False, True]))
+        with (
+            patch.object(
+                runner,
+                "_retain_until_subprocess_tree_exits",
+                side_effect=lambda _proc: events.append("process_tree_reaped"),
+            ),
+            patch.object(runner, "_write_interrupt_notice", side_effect=_failing_notice),
+            patch.object(
+                runner,
+                "_clear_process_record_if_group_gone",
+                side_effect=lambda *_args: events.append("process_record_cleared"),
+            ),
+        ):
+            with tempfile.TemporaryDirectory() as td:
+                inp = Path(td) / "test.inp"
+                inp.write_text("! Opt\n", encoding="utf-8")
+                with self.assertRaises(WorkerShutdownInterrupt):
+                    runner.run(inp)
+
+        self.assertEqual(
+            events,
+            ["process_tree_reaped", "notice_attempted", "process_record_cleared"],
+        )
+
+    def test_guard_blocks_cross_signal_until_both_handlers_are_installed(self) -> None:
+        original_signal = signal.signal
+        previous_handlers = {
+            signal.SIGTERM: signal.getsignal(signal.SIGTERM),
+            signal.SIGINT: signal.getsignal(signal.SIGINT),
+        }
+        original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+        delivered = False
+
+        def _install_with_pending_sigint(signum: int, handler: Any) -> Any:
+            nonlocal delivered
+            previous = original_signal(signum, handler)
+            if signum == signal.SIGTERM and callable(handler) and not delivered:
+                delivered = True
+                signal.pthread_kill(threading.get_ident(), signal.SIGINT)
+            return previous
+
+        try:
+            with patch(
+                "orca_auto.orca.orca_runner.signal.signal",
+                side_effect=_install_with_pending_sigint,
+            ):
+                with ShutdownSignalGuard() as guard:
+                    self.assertEqual(guard.received_signal, signal.SIGINT)
+        finally:
+            signal.pthread_sigmask(
+                signal.SIG_BLOCK,
+                {signal.SIGTERM, signal.SIGINT},
+            )
+            try:
+                for signum, handler in previous_handlers.items():
+                    original_signal(signum, handler)
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, original_mask)
+
+    @patch("orca_auto.orca.orca_runner.signal.signal")
+    @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_callback_failure_terminates_live_process_before_bookkeeping(
+        self,
+        mock_popen: MagicMock,
+        _mock_getsignal: MagicMock,
+        _mock_signal: MagicMock,
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_proc.pid = 99999
+        mock_popen.return_value = mock_proc
+        events: list[str] = []
+
+        def _registrar(running: object | None) -> None:
+            events.append("admission_registered" if running is not None else "admission_cleared")
+
+        runner = OrcaRunner("/opt/orca/orca")
+        runner.set_running_job_registrar(_registrar)
+        runner.set_shutdown_requested(MagicMock(side_effect=[False, RuntimeError("poll failed")]))
+        with (
+            patch("orca_auto.orca.orca_runner._reaped_pid_was_reused", return_value=False),
+            patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=True),
+            patch.object(
+                runner,
+                "_retain_until_subprocess_tree_exits",
+                side_effect=lambda _proc: events.append("process_tree_reaped"),
+            ),
+            patch.object(
+                runner,
+                "_clear_process_record_if_group_gone",
+                side_effect=lambda *_args: events.append("process_record_cleared"),
+            ),
+        ):
+            with tempfile.TemporaryDirectory() as td:
+                inp = Path(td) / "test.inp"
+                inp.write_text("! Opt\n", encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "poll failed"):
+                    runner.run(inp)
+
+        self.assertEqual(
+            events,
+            [
+                "admission_registered",
+                "process_tree_reaped",
+                "process_record_cleared",
+                "admission_cleared",
+            ],
+        )
+
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_signal_handlers_remain_active_through_cleanup_and_bookkeeping(
+        self,
+        mock_popen: MagicMock,
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.pid = 99999
+        mock_popen.return_value = mock_proc
+        events: list[str] = []
+
+        def _previous_sigint(_signum: int, _frame: object) -> None:
+            raise KeyboardInterrupt
+
+        active_handlers: dict[int, Any] = {
+            signal.SIGTERM: signal.SIG_DFL,
+            signal.SIGINT: _previous_sigint,
+        }
+
+        def _getsignal(signum: int) -> Any:
+            return active_handlers[signum]
+
+        def _signal(signum: int, handler: Any) -> Any:
+            previous = active_handlers[signum]
+            active_handlers[signum] = handler
+            return previous
+
+        def _dispatch_sigint() -> None:
+            handler = active_handlers[signal.SIGINT]
+            if not callable(handler):
+                raise AssertionError("SIGINT state handler was restored before cleanup")
+            handler(signal.SIGINT, None)
+
+        def _registrar(running: object | None) -> None:
+            events.append("admission_registered" if running is not None else "admission_cleared")
+
+        def _cleanup(_proc: object) -> None:
+            _dispatch_sigint()
+            events.append("process_tree_reaped")
+
+        def _clear_record(*_args: object) -> None:
+            _dispatch_sigint()
+            events.append("process_record_cleared")
+
+        runner = OrcaRunner("/opt/orca/orca")
+        runner.set_running_job_registrar(_registrar)
+        runner.set_shutdown_requested(MagicMock(side_effect=[False, True]))
+        with (
+            patch("orca_auto.orca.orca_runner.signal.getsignal", side_effect=_getsignal),
+            patch("orca_auto.orca.orca_runner.signal.signal", side_effect=_signal),
+            patch.object(runner, "_retain_until_subprocess_tree_exits", side_effect=_cleanup),
+            patch.object(runner, "_clear_process_record_if_group_gone", side_effect=_clear_record),
+        ):
+            with tempfile.TemporaryDirectory() as td:
+                inp = Path(td) / "test.inp"
+                inp.write_text("! Opt\n", encoding="utf-8")
+                with self.assertRaises(WorkerShutdownInterrupt) as caught:
+                    runner.run(inp)
+
+        self.assertIs(type(caught.exception), WorkerShutdownInterrupt)
+        self.assertEqual(
+            events,
+            [
+                "admission_registered",
+                "process_tree_reaped",
+                "process_record_cleared",
+                "admission_cleared",
+            ],
+        )
+
+    @patch("orca_auto.orca.orca_runner.signal.signal")
+    @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_sigint_cannot_reenter_process_record_initialization_cleanup(
+        self,
+        mock_popen: MagicMock,
+        _mock_getsignal: MagicMock,
+        mock_signal: MagicMock,
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_proc.pid = 99999
+        mock_popen.return_value = mock_proc
+        events: list[str] = []
+
+        def _registrar(running: object | None) -> None:
+            events.append("admission_registered" if running is not None else "admission_cleared")
+
+        def _terminate(_proc: object) -> bool:
+            handler = _installed_signal_handler(mock_signal, signal.SIGINT)
+            handler(signal.SIGINT, None)
+            handler(signal.SIGINT, None)
+            events.append("process_tree_reaped")
+            return True
+
+        runner = OrcaRunner("/opt/orca/orca")
+        runner.set_running_job_registrar(_registrar)
+        with (
+            patch(
+                "orca_auto.orca.orca_runner.write_orca_process_record",
+                side_effect=RuntimeError("record failed"),
+            ),
+            patch.object(runner, "_terminate_subprocess_tree", side_effect=_terminate),
+        ):
+            with tempfile.TemporaryDirectory() as td:
+                inp = Path(td) / "test.inp"
+                inp.write_text("! Opt\n", encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "record failed"):
+                    runner.run(inp)
+
+        self.assertEqual(
+            events,
+            ["admission_registered", "process_tree_reaped", "admission_cleared"],
+        )

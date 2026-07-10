@@ -174,7 +174,7 @@ def test_run_ignores_restore_signal_value_error(
 
     def _signal(_sig: int, handler):
         restore_calls.append(handler)
-        if len(restore_calls) == 2:
+        if len(restore_calls) == 3:
             raise ValueError("restore failed")
         return None
 
@@ -186,4 +186,5 @@ def test_run_ignores_restore_signal_value_error(
             result = runner.run(inp)
 
     assert result.return_code == 0
-    assert len(restore_calls) == 2
+    assert len(restore_calls) == 4
+    assert restore_calls[2:] == [signal.SIG_DFL, signal.SIG_DFL]
