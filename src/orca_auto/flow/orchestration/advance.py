@@ -40,6 +40,17 @@ def _validate_or_quarantine_workflow_identity(
     workflow_root_path: Path,
     deps: OrchestrationDeps,
 ) -> str:
+    metadata = _workflow_metadata(payload)
+    workflow_error = metadata.get("workflow_error")
+    if (
+        payload.get("status") == "failed"
+        and isinstance(workflow_error, dict)
+        and workflow_error.get("scope") == "workflow_identity_validation"
+    ):
+        # The quarantine marker keeps this workflow in sync-only mode. Let
+        # terminal-sync passes cancel and drain active children without
+        # re-raising the same identity error forever.
+        return str(payload.get("workflow_id") or "").strip()
     try:
         return validate_workflow_workspace_identity(
             workspace_dir,
@@ -48,15 +59,20 @@ def _validate_or_quarantine_workflow_identity(
     except ValueError as exc:
         reason = str(exc)
         payload["status"] = "failed"
-        _workflow_metadata(payload)["workflow_error"] = {
+        metadata["workflow_error"] = {
             "status": "failed",
             "scope": "workflow_identity_validation",
             "reason": reason,
+            "message": reason,
             "detected_at": deps.persistence.now_utc_iso(),
         }
         deps.persistence.write_workflow_payload(workspace_dir, payload)
         deps.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
-        raise ValueError(reason) from exc
+        write_workflow_html_report(workspace_dir, payload)
+        # Persist the quarantine before any child sync, then continue in
+        # sync-only mode. This blocks new submissions while allowing the
+        # normal finalization path to cancel and drain active children.
+        return str(payload.get("workflow_id") or "").strip()
 
 
 def advance_workflow(
@@ -73,6 +89,12 @@ def advance_workflow(
 ) -> dict[str, Any]:
     o = _orchestration_context(deps)
     workflow_root_path = Path(workflow_root).expanduser().resolve()
+    config = engine_options or WorkflowEngineOptions.from_values(
+        crest_config=crest_config,
+        xtb_config=xtb_config,
+        orca_config=orca_config,
+        orca_repo_root=orca_repo_root,
+    )
     workspace_dir = o.persistence.resolve_workflow_workspace(
         target=target,
         workflow_root=workflow_root_path,
@@ -86,12 +108,6 @@ def advance_workflow(
             deps=o,
         )
         sync_only = o.stages.workflow._workflow_sync_only(payload)
-        config = engine_options or WorkflowEngineOptions.from_values(
-            crest_config=crest_config,
-            xtb_config=xtb_config,
-            orca_config=orca_config,
-            orca_repo_root=orca_repo_root,
-        )
         context = _AdvanceContext(
             deps=o,
             workflow_root_path=workflow_root_path,

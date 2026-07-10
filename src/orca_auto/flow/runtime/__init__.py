@@ -22,7 +22,12 @@ from ..stage_transition_events import (
     append_workflow_advanced_events,
     stage_transition_event_payloads,
 )
-from ..state import load_workflow_payload, workflow_has_active_downstream, workflow_summary
+from ..state import (
+    load_workflow_payload,
+    resolve_workflow_workspace,
+    workflow_has_active_downstream,
+    workflow_summary,
+)
 from ..workflow._phases import phase_transition_event_payloads
 from . import _common as _runtime_common
 from . import admission as runtime_admission
@@ -173,9 +178,14 @@ def _workflow_needs_terminal_sync(workspace_dir: str | Path) -> bool:
     )
 
 
-def _workflow_needs_terminal_child_sync(record: Any, *, previous_status: str) -> bool:
+def _workflow_needs_terminal_child_sync(
+    record: Any,
+    *,
+    previous_status: str,
+    workspace_dir: str | Path | None = None,
+) -> bool:
     return _workflow_is_terminal_status(previous_status) and _workflow_needs_terminal_sync(
-        record.workspace_dir
+        workspace_dir or record.workspace_dir
     )
 
 
@@ -239,6 +249,8 @@ def _workflow_advance_deps() -> WorkflowAdvanceDeps:
 
     return WorkflowAdvanceDeps(
         advance_workflow_fn=advance_workflow,
+        resolve_workflow_workspace_fn=resolve_workflow_workspace,
+        load_workflow_payload_fn=load_workflow_payload,
         safe_workflow_summary_fn=_safe_workflow_summary,
         workflow_is_terminal_status_fn=_workflow_is_terminal_status,
         workflow_needs_terminal_child_sync_fn=_workflow_needs_terminal_child_sync,

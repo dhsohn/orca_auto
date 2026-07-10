@@ -419,8 +419,11 @@ def test_advance_workflow_quarantines_renamed_legacy_workflow_before_submission(
     written: list[dict[str, Any]] = []
     synced: list[dict[str, Any]] = []
 
-    def unexpected_submit(*_args: object, **_kwargs: object) -> None:
-        pytest.fail("renamed workflows must be quarantined before engine submission")
+    sync_calls: list[dict[str, object]] = []
+
+    def sync_without_submission(_stage: dict[str, Any], **kwargs: object) -> None:
+        sync_calls.append(kwargs)
+        assert kwargs["submit_ready"] is False
 
     deps = orchestration_deps(
         overrides={
@@ -428,7 +431,7 @@ def test_advance_workflow_quarantines_renamed_legacy_workflow_before_submission(
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-07-10T06:00:00+00:00",
-            "_sync_crest_stage": unexpected_submit,
+            "_sync_crest_stage": sync_without_submission,
             "write_workflow_payload": lambda workspace_dir, current: written.append(
                 deepcopy(current)
             ),
@@ -438,15 +441,17 @@ def test_advance_workflow_quarantines_renamed_legacy_workflow_before_submission(
         }
     )
 
-    with pytest.raises(ValueError, match="does not match persisted workflow_id"):
-        orchestration.advance_workflow(
-            target=str(workspace),
-            workflow_root=tmp_path,
-            submit_ready=True,
-            deps=deps,
-        )
+    result = orchestration.advance_workflow(
+        target=str(workspace),
+        workflow_root=tmp_path,
+        submit_ready=True,
+        deps=deps,
+    )
 
+    assert result is payload
     assert payload["status"] == "failed"
+    assert payload["stages"][0]["status"] == "cancelled"
+    assert payload["stages"][0]["task"]["status"] == "cancelled"
     assert payload["metadata"]["workflow_error"] == {
         "status": "failed",
         "scope": "workflow_identity_validation",
@@ -455,10 +460,100 @@ def test_advance_workflow_quarantines_renamed_legacy_workflow_before_submission(
             "'TS8(wf)'. Renaming an existing workflow directory is not supported; "
             "restore its original name or create a new workflow."
         ),
+        "message": (
+            "workflow directory name 'TS8_wf' does not match persisted workflow_id "
+            "'TS8(wf)'. Renaming an existing workflow directory is not supported; "
+            "restore its original name or create a new workflow."
+        ),
         "detected_at": "2026-07-10T06:00:00+00:00",
     }
-    assert written == [payload]
-    assert synced == [payload]
+    assert payload["metadata"]["sync_only"] is True
+    assert payload["metadata"]["final_child_sync_pending"] is False
+    assert len(sync_calls) == 1
+    assert written[-1] == payload
+    assert synced[-1] == payload
+
+
+def test_identity_quarantine_allows_active_child_to_drain_across_sync_cycles(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "TS8_wf"
+    stage: dict[str, Any] = {
+        "stage_id": "crest_reactant_01",
+        "stage_kind": "crest_stage",
+        "status": "queued",
+        "task": {"engine": "crest", "status": "submitted", "payload": {}},
+        "metadata": {"child_job_id": "crest-active"},
+    }
+    payload: dict[str, Any] = {
+        "workflow_id": "TS8(wf)",
+        "template_name": "reaction_ts_search",
+        "status": "running",
+        "stages": [stage],
+        "metadata": {},
+    }
+    sync_count = 0
+    cancel_count = 0
+
+    def sync_crest_stage(_stage: dict[str, Any], **kwargs: object) -> None:
+        nonlocal sync_count
+        sync_count += 1
+        assert kwargs["submit_ready"] is False
+        if sync_count == 2:
+            _stage["status"] = "cancelled"
+            cast(dict[str, Any], _stage["task"])["status"] = "cancelled"
+
+    def cancel_active_stages(
+        current_payload: dict[str, Any], **_kwargs: object
+    ) -> dict[str, list[dict[str, Any]]]:
+        nonlocal cancel_count
+        cancel_count += 1
+        current_stage = cast(list[dict[str, Any]], current_payload["stages"])[0]
+        if current_stage["status"] in {"queued", "running", "submitted"}:
+            current_stage["status"] = "cancel_requested"
+            cast(dict[str, Any], current_stage["task"])["status"] = "cancel_requested"
+            return {
+                "cancelled": [{"stage_id": "crest_reactant_01", "status": "cancel_requested"}],
+                "failed": [],
+            }
+        return {"cancelled": [], "failed": []}
+
+    deps = orchestration_deps(
+        overrides={
+            "resolve_workflow_workspace": lambda target, workflow_root: workspace,
+            "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
+            "load_workflow_payload": lambda workspace_dir: payload,
+            "now_utc_iso": lambda: "2026-07-10T06:00:00+00:00",
+            "_sync_crest_stage": sync_crest_stage,
+            "_cancel_active_workflow_stages": cancel_active_stages,
+            "write_workflow_payload": lambda workspace_dir, current: None,
+            "sync_workflow_registry": lambda root, workspace_dir, current: None,
+        }
+    )
+
+    first = orchestration.advance_workflow(
+        target=str(workspace),
+        workflow_root=tmp_path,
+        submit_ready=True,
+        deps=deps,
+    )
+    first_snapshot = deepcopy(first)
+    second = orchestration.advance_workflow(
+        target=str(workspace),
+        workflow_root=tmp_path,
+        submit_ready=True,
+        deps=deps,
+    )
+
+    assert first_snapshot["status"] == "failed"
+    assert first_snapshot["stages"][0]["status"] == "cancel_requested"
+    assert first_snapshot["metadata"]["final_child_sync_pending"] is True
+    assert second["status"] == "failed"
+    assert second["stages"][0]["status"] == "cancelled"
+    assert second["metadata"]["final_child_sync_pending"] is False
+    assert second["metadata"]["workflow_error"]["detected_at"] == ("2026-07-10T06:00:00+00:00")
+    assert sync_count == 2
+    assert cancel_count == 2
 
 
 def test_advance_workflow_checkpoints_completed_crest_before_xtb_materialization(

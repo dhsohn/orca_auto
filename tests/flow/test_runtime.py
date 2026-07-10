@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -30,6 +31,14 @@ def _registry_record(
 
 def _summary_with_stages(*stages: dict[str, Any]) -> dict[str, Any]:
     return {"stage_summaries": [dict(stage) for stage in stages]}
+
+
+def _write_workflow_payload(workspace_dir: Path, workflow_id: str) -> None:
+    workspace_dir.mkdir(parents=True)
+    (workspace_dir / "workflow.json").write_text(
+        json.dumps({"workflow_id": workflow_id, "stages": []}),
+        encoding="utf-8",
+    )
 
 
 def _capture_worker_side_effects(
@@ -648,6 +657,160 @@ def test_advance_workflow_registry_once_advances_non_terminal_workflow(
         "workflow_status_changed",
         "worker_cycle_finished",
     ]
+
+
+def test_registry_worker_falls_back_to_workflow_id_when_workspace_path_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workflow_root = tmp_path / "workflow_root"
+    current_workspace = workflow_root / "wf_moved"
+    _write_workflow_payload(current_workspace, "wf_moved")
+    stale_workspace = workflow_root / "stale_workspace"
+    stale_workspace.mkdir()
+    record = _registry_record(
+        workflow_id="wf_moved",
+        status="running",
+        workspace_dir=str(stale_workspace),
+    )
+    _capture_worker_side_effects(monkeypatch, records=[record])
+    advance_calls: list[dict[str, Any]] = []
+    summary_paths: list[str] = []
+
+    monkeypatch.setattr(
+        runtime,
+        "_workflow_needs_terminal_sync",
+        lambda workspace_dir: pytest.fail(
+            "terminal sync checks should not run for active workflows"
+        ),
+    )
+
+    def fake_summary(workspace_dir: str | Path, **kwargs: Any) -> dict[str, Any]:
+        summary_paths.append(str(workspace_dir))
+        return {}
+
+    def fake_advance_workflow(**kwargs: Any) -> dict[str, Any]:
+        advance_calls.append(kwargs)
+        return {
+            "workflow_id": "wf_moved",
+            "template_name": "reaction_ts_search",
+            "status": "running",
+            "stages": [],
+        }
+
+    monkeypatch.setattr(runtime, "_safe_workflow_summary", fake_summary)
+    monkeypatch.setattr(runtime, "advance_workflow", fake_advance_workflow)
+
+    result = runtime.advance_workflow_registry_once(
+        workflow_root=workflow_root,
+        worker_session_id="session-moved",
+        lease_seconds=0,
+    )
+
+    assert result["advanced_count"] == 1
+    assert advance_calls[0]["target"] == "wf_moved"
+    assert summary_paths == [str(current_workspace.resolve())] * 2
+
+
+def test_registry_worker_ignores_stale_workspace_copy_with_matching_workflow_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workflow_root = tmp_path / "workflow_root"
+    current_workspace = workflow_root / "wf_copied"
+    _write_workflow_payload(current_workspace, "wf_copied")
+    stale_workspace = workflow_root / "stale_workspace_copy"
+    _write_workflow_payload(stale_workspace, "wf_copied")
+    record = _registry_record(
+        workflow_id="wf_copied",
+        status="running",
+        workspace_dir=str(stale_workspace),
+    )
+    _capture_worker_side_effects(monkeypatch, records=[record])
+    advance_calls: list[dict[str, Any]] = []
+    summary_paths: list[str] = []
+
+    monkeypatch.setattr(
+        runtime,
+        "_workflow_needs_terminal_sync",
+        lambda workspace_dir: pytest.fail(
+            "terminal sync checks should not run for active workflows"
+        ),
+    )
+
+    def fake_summary(workspace_dir: str | Path, **kwargs: Any) -> dict[str, Any]:
+        summary_paths.append(str(workspace_dir))
+        return {}
+
+    def fake_advance_workflow(**kwargs: Any) -> dict[str, Any]:
+        advance_calls.append(kwargs)
+        return {
+            "workflow_id": "wf_copied",
+            "template_name": "reaction_ts_search",
+            "status": "running",
+            "stages": [],
+        }
+
+    monkeypatch.setattr(runtime, "_safe_workflow_summary", fake_summary)
+    monkeypatch.setattr(runtime, "advance_workflow", fake_advance_workflow)
+
+    result = runtime.advance_workflow_registry_once(
+        workflow_root=workflow_root,
+        worker_session_id="session-copied",
+        lease_seconds=0,
+    )
+
+    assert result["advanced_count"] == 1
+    assert advance_calls[0]["target"] == "wf_copied"
+    assert summary_paths == [str(current_workspace.resolve())] * 2
+
+
+def test_stale_registry_path_uses_current_workspace_for_terminal_child_sync(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workflow_root = tmp_path / "workflow_root"
+    current_workspace = workflow_root / "wf_terminal_moved"
+    _write_workflow_payload(current_workspace, "wf_terminal_moved")
+    stale_workspace = workflow_root / "stale_terminal_workspace"
+    stale_workspace.mkdir()
+    record = _registry_record(
+        workflow_id="wf_terminal_moved",
+        status="failed",
+        workspace_dir=str(stale_workspace),
+    )
+    _capture_worker_side_effects(monkeypatch, records=[record])
+    sync_checks: list[str] = []
+    advance_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        runtime,
+        "_workflow_needs_terminal_sync",
+        lambda workspace_dir: _always_false_after_append(sync_checks, workspace_dir) or True,
+    )
+
+    def fake_advance_workflow(**kwargs: Any) -> dict[str, Any]:
+        advance_calls.append(kwargs)
+        return {
+            "workflow_id": "wf_terminal_moved",
+            "template_name": "reaction_ts_search",
+            "status": "failed",
+            "stages": [],
+        }
+
+    monkeypatch.setattr(runtime, "advance_workflow", fake_advance_workflow)
+
+    result = runtime.advance_workflow_registry_once(
+        workflow_root=workflow_root,
+        submit_ready=True,
+        worker_session_id="session-terminal-moved",
+        lease_seconds=0,
+    )
+
+    assert sync_checks == [str(current_workspace.resolve())]
+    assert advance_calls[0]["target"] == "wf_terminal_moved"
+    assert advance_calls[0]["submit_ready"] is False
+    assert result["workflow_results"][0]["reason"] == "terminal_child_sync"
 
 
 def test_advance_workflow_registry_once_defers_submission_when_admission_full(

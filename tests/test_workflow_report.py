@@ -194,6 +194,251 @@ def test_write_workflow_html_report_handles_empty_payload(tmp_path: Path) -> Non
     assert "wf_empty" in path.read_text(encoding="utf-8")
 
 
+def test_failed_crest_topology_change_is_explained_in_workflow_report(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "01_crest" / "crest_reactant_01"
+    job_dir.mkdir(parents=True)
+    (job_dir / "job_report.json").write_text(
+        json.dumps(
+            {
+                "job": {"id": "crest-current"},
+                "status": {
+                    "state": "failed",
+                    "reason": "crest_exit_code_156",
+                    "exit_code": 156,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (job_dir / "crest.stdout.log").write_text(
+        "\n".join(
+            [
+                "*WARNING* Change in topology detected!",
+                "Topology change compared to the input affects atoms:",
+                "21(P) 35(O) 42(C)",
+                "A topology change was seen in the initial geometry optimization.",
+                "Safety termination of CREST.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "crest_reactant_01",
+                "stage_kind": "crest_stage",
+                "status": "failed",
+                "task": {"engine": "crest", "status": "failed", "payload": {}},
+                "metadata": {
+                    "input_role": "reactant",
+                    "child_job_id": "crest-current",
+                    "latest_known_path": str(job_dir),
+                },
+            },
+            {
+                "stage_id": "crest_product_01",
+                "stage_kind": "crest_stage",
+                "status": "cancelled",
+                "task": {
+                    "engine": "crest",
+                    "status": "cancelled",
+                    "payload": {},
+                    "cancel_result": {"reason": "cancel_requested"},
+                },
+                "metadata": {"input_role": "product"},
+            },
+        ],
+    )
+    payload["status"] = "failed"
+
+    data = collect_workflow_report_data(tmp_path, payload)
+    path = write_workflow_html_report(tmp_path, payload)
+
+    assert len(data.failure_rows) == 1
+    assert data.failure_rows[0].reason == "crest_exit_code_156"
+    assert "21(P) 35(O) 42(C)" in data.failure_rows[0].explanation
+    assert data.failure_rows[0].details_href == ("01_crest/crest_reactant_01/crest.stdout.log")
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "Why it failed" in text
+    assert "changed molecular topology" in text
+    assert "crest_exit_code_156" in text
+    assert "crest.noreftopo: true" in text
+    assert "can retain artifacts" in text
+    assert 'href="01_crest/crest_reactant_01/crest.stdout.log"' in text
+    assert "crest_product_01" in text
+    assert "cancel_requested" in text
+
+
+def test_restarted_stage_does_not_show_stale_failure_report(tmp_path: Path) -> None:
+    job_dir = tmp_path / "01_crest" / "crest_reactant_01"
+    job_dir.mkdir(parents=True)
+    (job_dir / "job_report.json").write_text(
+        json.dumps(
+            {
+                "job": {"id": "crest-old"},
+                "status": {"state": "failed", "reason": "crest_exit_code_156"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (job_dir / "crest.stdout.log").write_text(
+        "Change in topology detected!\n"
+        "A topology change was seen in the initial geometry optimization.\n",
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "crest_reactant_01",
+                "stage_kind": "crest_stage",
+                "status": "queued",
+                "task": {"engine": "crest", "status": "submitted", "payload": {}},
+                "metadata": {
+                    "child_job_id": "crest-new",
+                    "latest_known_path": str(job_dir),
+                },
+            }
+        ],
+    )
+    payload["status"] = "running"
+
+    data = collect_workflow_report_data(tmp_path, payload)
+    path = write_workflow_html_report(tmp_path, payload)
+
+    assert data.failure_rows == ()
+    assert data.stage_rows[0].detail == ""
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "Why it failed" not in text
+    assert "crest_exit_code_156" not in text
+    assert "changed molecular topology" not in text
+
+
+def test_failed_stage_without_current_identity_does_not_use_old_report(tmp_path: Path) -> None:
+    job_dir = tmp_path / "03_orca" / "orca_submission_failed"
+    job_dir.mkdir(parents=True)
+    (job_dir / "job_report.json").write_text(
+        json.dumps(
+            {
+                "job": {"id": "orca-old"},
+                "status": {"state": "failed", "reason": "old_runner_error"},
+                "engine_payload": {"run_id": "run-old"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "orca_submission_failed",
+                "stage_kind": "orca_stage",
+                "status": "submission_failed",
+                "task": {"engine": "orca", "status": "submission_failed", "payload": {}},
+                "metadata": {"latest_known_path": str(job_dir)},
+            }
+        ],
+    )
+    payload["status"] = "failed"
+
+    data = collect_workflow_report_data(tmp_path, payload)
+    path = write_workflow_html_report(tmp_path, payload)
+
+    assert data.failure_rows[0].reason == ""
+    assert data.failure_rows[0].details_href is None
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "old_runner_error" not in text
+    assert "job_report.json" not in text
+
+
+def test_orca_run_identity_allows_current_report_diagnostic(tmp_path: Path) -> None:
+    job_dir = tmp_path / "03_orca" / "orca_current"
+    job_dir.mkdir(parents=True)
+    (job_dir / "job_report.json").write_text(
+        json.dumps(
+            {
+                "job": {"id": "orca-child"},
+                "status": {"state": "failed", "reason": "runner_exception"},
+                "engine_payload": {"run_id": "run-current"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "orca_current",
+                "stage_kind": "orca_stage",
+                "status": "failed",
+                "task": {"engine": "orca", "status": "failed", "payload": {}},
+                "metadata": {
+                    "run_id": "run-current",
+                    "latest_known_path": str(job_dir),
+                },
+            }
+        ],
+    )
+    payload["status"] = "failed"
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.failure_rows[0].reason == "runner_exception"
+    assert data.failure_rows[0].details_href == "03_orca/orca_current/job_report.json"
+
+
+def test_workflow_error_message_is_primary_and_escaped(tmp_path: Path) -> None:
+    payload = _payload(tmp_path, [])
+    payload["status"] = "failed"
+    payload["metadata"]["workflow_error"] = {
+        "status": "failed",
+        "reason": "no_endpoint_pairs",
+        "message": "No pair passed <endpoint> filters.",
+        "scope": "reaction_ts_search_endpoint_pairing",
+        "stage_id": "crest_pair_01",
+    }
+
+    path = write_workflow_html_report(tmp_path, payload)
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "No pair passed &lt;endpoint&gt; filters." in text
+    assert "code: no_endpoint_pairs" in text
+    assert "stage: crest_pair_01" in text
+    assert "scope: reaction_ts_search_endpoint_pairing" in text
+    assert "No pair passed <endpoint> filters." not in text
+
+
+def test_nonfatal_stage_failure_has_no_workflow_failure_verdict(tmp_path: Path) -> None:
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "orca_candidate_bad",
+                "stage_kind": "orca_stage",
+                "status": "completed",
+                "task": {"engine": "orca", "status": "failed", "payload": {}},
+                "metadata": {"reason": "ts_criteria_failed"},
+            }
+        ],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+    path = write_workflow_html_report(tmp_path, payload)
+
+    assert data.failure_rows[0].status == "failed"
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "Stage failures" in text
+    assert "Why it failed" not in text
+
+
 def test_energy_axis_tick_labels_stay_exact_for_quarter_steps() -> None:
     # All candidates within 1 kcal/mol → 0.25-wide ticks; one-decimal labels
     # would render the 0.25 tick as "0.2".

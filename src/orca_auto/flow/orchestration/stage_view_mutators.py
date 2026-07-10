@@ -100,7 +100,7 @@ class WorkflowStageOrcaMutationMixin:
                 "latest_known_path": contract.latest_known_path,
                 "optimized_xyz_path": contract.optimized_xyz_path,
                 "analyzer_status": contract.analyzer_status,
-                "reason": contract.reason,
+                "reason": getattr(contract, "reason", ""),
                 "completed_at": contract.completed_at,
                 "state_status": contract.state_status,
                 "attempt_count": contract.attempt_count,
@@ -141,6 +141,7 @@ class WorkflowStageCrestMutationMixin:
             {
                 "child_job_id": contract.job_id,
                 "latest_known_path": contract.latest_known_path,
+                "reason": getattr(contract, "reason", ""),
             }
         )
 
@@ -164,6 +165,7 @@ class WorkflowStageXtbMutationMixin:
             {
                 "child_job_id": contract.job_id,
                 "latest_known_path": contract.latest_known_path,
+                "reason": contract.reason,
             }
         )
 
