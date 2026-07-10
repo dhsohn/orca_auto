@@ -238,29 +238,30 @@ def _load_json(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _stage_job_dir(stage: Mapping[str, Any]) -> Path | None:
+def _stage_job_dirs(stage: Mapping[str, Any]) -> tuple[Path, ...]:
     metadata = _stage_metadata(stage)
     task_payload = _stage_task_payload(stage)
+    paths: list[Path] = []
+    seen: set[str] = set()
     for value in (
         metadata.get("latest_known_path"),
         task_payload.get("job_dir"),
         task_payload.get("reaction_dir"),
     ):
         path_text = _text(value)
-        if path_text:
-            return Path(path_text)
-    return None
+        if path_text and path_text not in seen:
+            paths.append(Path(path_text))
+            seen.add(path_text)
+    return tuple(paths)
 
 
 def _stage_job_report(stage: Mapping[str, Any]) -> tuple[Path | None, dict[str, Any] | None]:
-    job_dir = _stage_job_dir(stage)
-    if job_dir is None:
-        return None, None
-    report_path = job_dir / "job_report.json"
-    report = _load_json(report_path)
-    if report is None or not _stage_report_identity_matches(stage, report):
-        return None, None
-    return report_path, report
+    for job_dir in _stage_job_dirs(stage):
+        report_path = job_dir / "job_report.json"
+        report = _load_json(report_path)
+        if report is not None and _stage_report_identity_matches(stage, report):
+            return report_path, report
+    return None, None
 
 
 def _mapping(value: Any) -> dict[str, Any]:

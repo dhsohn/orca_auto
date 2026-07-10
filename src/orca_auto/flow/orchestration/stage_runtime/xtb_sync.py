@@ -183,6 +183,8 @@ def _submit_xtb_handoff_retry(
         workflow_id=workflow_id,
         attempt_number=attempt_number,
     )
+    task_view.update_payload({"job_dir": retry_job_dir})
+    task_view.update_enqueue_payload({"job_dir": retry_job_dir})
     submission = o.engines.submit_xtb_job_dir(
         job_dir=retry_job_dir,
         priority=int(task["enqueue_payload"].get("priority", 10) or 10),
@@ -216,6 +218,14 @@ def _apply_xtb_handoff_retry_submission(
         deferred_handoff_status="waiting_for_slot",
         active_handoff_status="retrying",
     )
+    job_dir = str(task_view.payload(None).get("job_dir") or "").strip()
+    if job_dir:
+        stage_metadata["latest_known_path"] = job_dir
+    job_id = str(submission.get("job_id") or "").strip()
+    if job_id:
+        stage_metadata["child_job_id"] = job_id
+    else:
+        stage_metadata.pop("child_job_id", None)
     if not _submission_is_deferred(submission):
         stage_view.set_xtb_handoff_retrying(
             retry_limit=decision.retry_limit,
