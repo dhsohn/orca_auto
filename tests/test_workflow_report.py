@@ -357,13 +357,15 @@ def test_failed_stage_without_current_identity_does_not_use_old_report(tmp_path:
     assert "job_report.json" not in text
 
 
-def test_xtb_retry_prefers_current_task_job_dir_over_stale_metadata(tmp_path: Path) -> None:
+def test_xtb_retry_prefers_refreshed_latest_path_over_original_task_job_dir(
+    tmp_path: Path,
+) -> None:
     old_job_dir = tmp_path / "02_xtb" / "xtb_old_attempt"
     old_job_dir.mkdir(parents=True)
     (old_job_dir / "job_report.json").write_text(
         json.dumps(
             {
-                "job": {"id": "xtb-old"},
+                "job": {"id": "xtb-current"},
                 "status": {"state": "failed", "reason": "old_xtb_failure"},
             }
         ),
@@ -390,12 +392,12 @@ def test_xtb_retry_prefers_current_task_job_dir_over_stale_metadata(tmp_path: Pa
                 "task": {
                     "engine": "xtb",
                     "status": "submission_failed",
-                    "payload": {"job_dir": str(current_job_dir)},
+                    "payload": {"job_dir": str(old_job_dir)},
                     "submission_result": {"queue_id": "xtb-q-current"},
                 },
                 "metadata": {
-                    "child_job_id": "xtb-old",
-                    "latest_known_path": str(old_job_dir),
+                    "child_job_id": "xtb-current",
+                    "latest_known_path": str(current_job_dir),
                     "queue_id": "xtb-q-current",
                 },
             }
@@ -409,7 +411,7 @@ def test_xtb_retry_prefers_current_task_job_dir_over_stale_metadata(tmp_path: Pa
     assert data.failure_rows[0].details_href == "02_xtb/xtb_retry_attempt/job_report.json"
 
 
-def test_stage_report_falls_back_to_latest_path_when_task_job_dir_is_stale(
+def test_stage_report_prefers_latest_path_over_original_task_job_dir(
     tmp_path: Path,
 ) -> None:
     stale_job_dir = tmp_path / "01_crest" / "crest_stale"
@@ -417,7 +419,7 @@ def test_stage_report_falls_back_to_latest_path_when_task_job_dir_is_stale(
     (stale_job_dir / "job_report.json").write_text(
         json.dumps(
             {
-                "job": {"id": "crest-stale"},
+                "job": {"id": "crest-current"},
                 "status": {"state": "failed", "reason": "stale_crest_failure"},
             }
         ),

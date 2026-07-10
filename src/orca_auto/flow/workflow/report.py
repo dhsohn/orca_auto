@@ -244,8 +244,8 @@ def _stage_job_dirs(stage: Mapping[str, Any]) -> tuple[Path, ...]:
     paths: list[Path] = []
     seen: set[str] = set()
     for value in (
-        task_payload.get("job_dir"),
         metadata.get("latest_known_path"),
+        task_payload.get("job_dir"),
         task_payload.get("reaction_dir"),
     ):
         path_text = _text(value)
