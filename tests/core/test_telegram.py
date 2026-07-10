@@ -379,12 +379,13 @@ def test_escape_helpers_and_config_loader(tmp_path: Path) -> None:
     config_path.write_text(
         "\n".join(
             [
-                "telegram:",
-                "  bot_token: bot-token",
-                "  chat_id: chat-id",
-                "  timeout_seconds: 7.5",
-                "  max_attempts: 3",
-                "  retry_backoff_seconds: 0.25",
+                "messenger:",
+                "  telegram:",
+                "    bot_token: bot-token",
+                "    chat_id: chat-id",
+                "    timeout_seconds: 7.5",
+                "    max_attempts: 3",
+                "    retry_backoff_seconds: 0.25",
             ]
         )
         + "\n",

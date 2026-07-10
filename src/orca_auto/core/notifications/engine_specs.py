@@ -1,16 +1,9 @@
 from __future__ import annotations
 
-from ._engine_transport import telegram_line_sender
+from ._engine_transport import channel_line_sender
 from .engine_jobs import build_engine_job_notifications
 
-
-def _telegram_transport_factory():
-    from . import engines as engine_facade
-
-    return engine_facade.build_telegram_transport
-
-
-_ENGINE_LINE_SENDER = telegram_line_sender(_telegram_transport_factory)
+_ENGINE_LINE_SENDER = channel_line_sender()
 
 _XTB_JOB_NOTIFICATIONS = build_engine_job_notifications(
     label="orca_auto_xtb",
@@ -45,7 +38,6 @@ __all__ = [
     "_CREST_JOB_NOTIFICATIONS",
     "_ENGINE_LINE_SENDER",
     "_XTB_JOB_NOTIFICATIONS",
-    "_telegram_transport_factory",
     "notify_crest_job_finished",
     "notify_crest_job_queued",
     "notify_crest_job_started",

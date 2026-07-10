@@ -53,7 +53,9 @@ def load_telegram_config_from_file(config_path: str | Path | None) -> TelegramCo
         LOGGER.debug("failed to load telegram config file: %s", path, exc_info=True)
         return TelegramConfig()
 
-    return telegram_config_from_mapping(raw.get("telegram"))
+    messenger = raw.get("messenger")
+    messenger_mapping = messenger if isinstance(messenger, dict) else {}
+    return telegram_config_from_mapping(messenger_mapping.get("telegram"))
 
 
 __all__ = [

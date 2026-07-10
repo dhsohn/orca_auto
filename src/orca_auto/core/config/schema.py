@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 from orca_auto.core.utils.coercion import normalize_bool, normalize_text, safe_float, safe_int
@@ -172,4 +172,60 @@ def telegram_config_from_mapping(raw: object) -> TelegramConfig:
                 TelegramConfig.retry_backoff_seconds,
             ),
         ),
+    )
+
+
+@dataclass(frozen=True)
+class DiscordConfig:
+    webhook_url: str = ""
+    timeout_seconds: float = 5.0
+    max_attempts: int = 2
+    retry_backoff_seconds: float = 0.5
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.webhook_url.strip())
+
+
+def discord_config_from_mapping(raw: object) -> DiscordConfig:
+    discord_raw = raw if isinstance(raw, Mapping) else {}
+    return DiscordConfig(
+        webhook_url=as_str(discord_raw.get("webhook_url")),
+        timeout_seconds=max(
+            0.1,
+            as_float(discord_raw.get("timeout_seconds"), DiscordConfig.timeout_seconds),
+        ),
+        max_attempts=max(1, as_int(discord_raw.get("max_attempts"), DiscordConfig.max_attempts)),
+        retry_backoff_seconds=max(
+            0.0,
+            as_float(
+                discord_raw.get("retry_backoff_seconds"),
+                DiscordConfig.retry_backoff_seconds,
+            ),
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class MessengerConfig:
+    """Selects the active outbound messenger and holds provider-specific config.
+
+    ``telegram`` credentials still live in the top-level ``TelegramConfig`` for now;
+    this block only carries the provider switch and Discord settings. Phase 1d folds
+    the Telegram credentials in here and drops the top-level ``telegram:`` key.
+    """
+
+    provider: str = "telegram"
+    discord: DiscordConfig = field(default_factory=DiscordConfig)
+
+    @property
+    def normalized_provider(self) -> str:
+        return self.provider.strip().lower() or "telegram"
+
+
+def messenger_config_from_mapping(raw: object) -> MessengerConfig:
+    messenger_raw = raw if isinstance(raw, Mapping) else {}
+    return MessengerConfig(
+        provider=as_str(messenger_raw.get("provider"), "telegram") or "telegram",
+        discord=discord_config_from_mapping(messenger_raw.get("discord")),
     )

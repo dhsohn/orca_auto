@@ -276,7 +276,10 @@ def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
                 "crest_executable": str(values.crest_runtime["executable"]),
             },
         },
-        "telegram": values.telegram,
+        "messenger": {
+            "provider": "telegram",
+            "telegram": values.telegram,
+        },
         "orca": {
             "runtime": {
                 "default_max_retries": values.orca_runtime["default_max_retries"],

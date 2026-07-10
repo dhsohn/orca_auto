@@ -108,7 +108,7 @@ def engine_config_mapping(
     raw: dict[str, Any],
     engine: str,
     *,
-    inherit_keys: Iterable[str] = ("behavior", "resources", "telegram"),
+    inherit_keys: Iterable[str] = ("behavior", "resources", "messenger"),
 ) -> dict[str, Any]:
     section = raw.get(engine)
     if not isinstance(section, dict):

@@ -7,17 +7,24 @@ import pytest
 
 from orca_auto.core.config import CommonRuntimeConfig, TelegramConfig
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
-from orca_auto.core.notifications import TelegramSendResult
+from orca_auto.core.messaging import Message, render_telegram
+from orca_auto.core.notifications import TelegramSendResult, _engine_transport
 from orca_auto.core.notifications import engines as notifications
 
 
 class _FakeTransport:
+    """Records the rendered body of each Doc-model message sent to the channel."""
+
     def __init__(self, result: TelegramSendResult) -> None:
         self.result = result
         self.messages: list[str] = []
 
-    def send_text(self, text: str) -> TelegramSendResult:
-        self.messages.append(text)
+    @property
+    def enabled(self) -> bool:
+        return True
+
+    def send(self, message: Message, *, silent: bool = False) -> TelegramSendResult:
+        self.messages.append(render_telegram(message))
         return self.result
 
 
@@ -58,13 +65,9 @@ def test_send_joins_lines_and_maps_transport_result(
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
     transport = _FakeTransport(result)
-    monkeypatch.setattr(notifications, "build_telegram_transport", lambda _cfg: transport)
+    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger, _telegram: transport)
 
-    sent = notifications.send_lines(
-        cfg,
-        ["line 1", "line 2"],
-        build_transport=notifications.build_telegram_transport,
-    )
+    sent = notifications.send_lines(cfg, ["line 1", "line 2"])
 
     assert sent is expected
     assert transport.messages == ["line 1\nline 2"]
@@ -76,7 +79,7 @@ def test_notify_job_queued_and_started_render_expected_fields(
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
     transport = _FakeTransport(TelegramSendResult(sent=True))
-    monkeypatch.setattr(notifications, "build_telegram_transport", lambda _cfg: transport)
+    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger, _telegram: transport)
     job_dir = tmp_path / "job-001"
     selected_xyz = tmp_path / "inputs" / "reactant.xyz"
 
@@ -131,7 +134,7 @@ def test_notify_job_terminal_includes_extra_lines(
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
     transport = _FakeTransport(TelegramSendResult(sent=True))
-    monkeypatch.setattr(notifications, "build_telegram_transport", lambda _cfg: transport)
+    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger, _telegram: transport)
 
     assert notifications.notify_xtb_job_terminal(
         cfg,
@@ -184,7 +187,7 @@ def test_notify_job_finished_maps_headlines_and_optional_fields(
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
     transport = _FakeTransport(TelegramSendResult(sent=True))
-    monkeypatch.setattr(notifications, "build_telegram_transport", lambda _cfg: transport)
+    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger, _telegram: transport)
     resource_request: dict[str, int] | None = None
     resource_actual: dict[str, int] | None = None
     if status == "completed":
@@ -227,7 +230,7 @@ def test_workflow_child_notifications_are_suppressed(
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
     transport = _FakeTransport(TelegramSendResult(sent=True))
-    monkeypatch.setattr(notifications, "build_telegram_transport", lambda _cfg: transport)
+    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger, _telegram: transport)
     workflow_job_dirs = [
         tmp_path / "wf-1" / "02_xtb" / "job-004",
         tmp_path / "wf-1" / "02_xtb" / "xtb_path_search_01",

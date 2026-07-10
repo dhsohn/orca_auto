@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.config import CommonResourceConfig, TelegramConfig
+from orca_auto.core.config import CommonResourceConfig, MessengerConfig, TelegramConfig
 from orca_auto.core.config import engines as _config_engines
 from orca_auto.core.config.files import (
     default_shared_admission_root,
@@ -15,6 +15,7 @@ from orca_auto.core.config.files import (
 )
 from orca_auto.core.config.schema import (
     RetryRuntimeConfig,
+    messenger_config_from_mapping,
     telegram_config_from_mapping,
 )
 
@@ -85,6 +86,7 @@ class AppConfig:
     behavior: BehaviorConfig = field(default_factory=BehaviorConfig)
     resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    messenger: MessengerConfig = field(default_factory=MessengerConfig)
 
 
 def _load_raw_config(path: Path) -> dict[str, Any]:
@@ -145,11 +147,11 @@ def load_config(config_path: str) -> AppConfig:
     path = Path(config_path).expanduser().resolve()
     raw = _load_raw_config(path)
     runs_root = _config_engines.as_nonempty_str(runs_root_from_mapping(raw), "")
-    raw = engine_config_mapping(raw, "orca", inherit_keys=("resources", "telegram", "scheduler"))
+    raw = engine_config_mapping(raw, "orca", inherit_keys=("resources", "messenger", "scheduler"))
     scheduler_raw = _section_mapping(raw, "scheduler")
     runtime_raw = _section_mapping(raw, "runtime")
     paths_raw = _section_mapping(raw, "paths")
-    telegram_raw = _section_mapping(raw, "telegram")
+    messenger_raw = _section_mapping(raw, "messenger")
     resources_raw = _section_mapping(raw, "resources")
 
     orca_executable = _required_config_paths(path, runs_root, paths_raw)
@@ -161,7 +163,8 @@ def load_config(config_path: str) -> AppConfig:
         scheduler_raw,
         runs_root,
     )
-    telegram_cfg = telegram_config_from_mapping(telegram_raw)
+    telegram_cfg = telegram_config_from_mapping(messenger_raw.get("telegram"))
+    messenger_cfg = messenger_config_from_mapping(messenger_raw)
 
     cfg = AppConfig(
         runtime=CommonRuntimeConfig(
@@ -178,6 +181,7 @@ def load_config(config_path: str) -> AppConfig:
         behavior=BehaviorConfig(),
         resources=_config_engines.resource_config_from_mapping(resources_raw),
         telegram=telegram_cfg,
+        messenger=messenger_cfg,
     )
     placeholder_keys = _placeholder_keys(cfg)
     if placeholder_keys:

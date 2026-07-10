@@ -84,6 +84,7 @@ from ..job_locations import (
     resource_dict,
     upsert_job_record,
 )
+from ..notifications import notify_run_finished_event
 from ..runtime.run_lock import acquire_run_lock
 from ..state import (
     finalize_state,
@@ -94,7 +95,6 @@ from ..state import (
     state_path,
 )
 from ..statuses import AnalyzerStatus
-from ..telegram_notifier import notify_run_finished_event
 from ..types import RunState
 from . import worker_lifecycle as _lifecycle_helpers
 from . import worker_runtime as _runtime_helpers

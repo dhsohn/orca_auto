@@ -136,9 +136,10 @@ def test_load_config_reads_and_normalizes_all_sections(
         resources:
           max_cores_per_task: "12"
           max_memory_gb_per_task: "48"
-        telegram:
-          bot_token: " token-123 "
-          chat_id: " 4567 "
+        messenger:
+          telegram:
+            bot_token: " token-123 "
+            chat_id: " 4567 "
         """,
     )
     monkeypatch.setattr(config_mod, "default_shared_config_path", lambda: str(config_path))
@@ -173,9 +174,10 @@ def test_load_config_no_longer_supports_top_level_runtime_and_paths_shape(tmp_pa
         resources:
           max_cores_per_task: "12"
           max_memory_gb_per_task: "48"
-        telegram:
-          bot_token: " token-123 "
-          chat_id: " 4567 "
+        messenger:
+          telegram:
+            bot_token: " token-123 "
+            chat_id: " 4567 "
         """,
     )
 

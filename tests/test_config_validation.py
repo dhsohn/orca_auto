@@ -127,12 +127,14 @@ class TestConfigValidation(unittest.TestCase):
                 {
                     "runs_root": str(allowed),
                     "paths": {"orca_executable": str(fake_orca)},
-                    "telegram": {
-                        "bot_token": "token",
-                        "chat_id": "chat",
-                        "timeout_seconds": 3.5,
-                        "max_attempts": 4,
-                        "retry_backoff_seconds": 0.25,
+                    "messenger": {
+                        "telegram": {
+                            "bot_token": "token",
+                            "chat_id": "chat",
+                            "timeout_seconds": 3.5,
+                            "max_attempts": 4,
+                            "retry_backoff_seconds": 0.25,
+                        },
                     },
                 },
             )

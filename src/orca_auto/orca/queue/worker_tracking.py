@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.messaging import build_channel
 from orca_auto.core.statuses import STATUS_RUNNING, TERMINAL_STATUSES, normalize_status
 
 from ..config import AppConfig
@@ -167,7 +168,8 @@ def notify_terminal_job_from_state(
     expected_job_id: str | None = None,
     callbacks: OrcaQueueWorkerTrackingCallbacks,
 ) -> bool:
-    if not cfg.telegram.enabled:
+    channel = build_channel(cfg.messenger, cfg.telegram, logger=logger)
+    if not channel.enabled:
         return False
 
     job_dir = Path(reaction_dir).expanduser().resolve()
@@ -205,7 +207,7 @@ def notify_terminal_job_from_state(
         status=status,
         final_result=final_result,
     )
-    sent = callbacks.notify_run_finished_event(cfg.telegram, notification)
+    sent = callbacks.notify_run_finished_event(channel, notification)
     if sent:
         callbacks.mark_finished_notification_sent(job_dir, state)
         logger.info("Terminal Telegram notification sent by queue worker: %s", job_dir)

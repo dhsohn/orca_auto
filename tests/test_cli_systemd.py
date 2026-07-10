@@ -26,9 +26,10 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
                 f"runs_root: {repo / 'orca_runs'}",
                 "scheduler:",
                 f"  admission_root: {repo / 'admission'}",
-                "telegram:",
-                "  bot_token: token",
-                "  chat_id: chat",
+                "messenger:",
+                "  telegram:",
+                "    bot_token: token",
+                "    chat_id: chat",
             ]
         )
         + "\n",
@@ -90,9 +91,10 @@ def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
         "\n".join(
             [
                 f"runs_root: {repo / 'workflow_runs'}",
-                "telegram:",
-                "  bot_token: token",
-                "  chat_id: chat",
+                "messenger:",
+                "  telegram:",
+                "    bot_token: token",
+                "    chat_id: chat",
             ]
         )
         + "\n",
@@ -129,9 +131,10 @@ def test_systemd_rejects_orca_scoped_admission_override(
                 "orca:",
                 "  scheduler:",
                 f"    admission_root: {repo / 'orca_admission'}",
-                "telegram:",
-                "  bot_token: token",
-                "  chat_id: chat",
+                "messenger:",
+                "  telegram:",
+                "    bot_token: token",
+                "    chat_id: chat",
             ]
         )
         + "\n",
@@ -158,9 +161,10 @@ def test_systemd_rejects_non_mapping_orca_scheduler(tmp_path: Path) -> None:
                 "  max_active_simulations: 1",
                 "orca:",
                 "  scheduler: disabled",
-                "telegram:",
-                "  bot_token: token",
-                "  chat_id: chat",
+                "messenger:",
+                "  telegram:",
+                "    bot_token: token",
+                "    chat_id: chat",
             ]
         )
         + "\n",
@@ -183,9 +187,10 @@ def test_systemd_read_write_paths_omit_invalid_runs_root(tmp_path: Path) -> None
         "\n".join(
             [
                 "runs_root: './runs'",
-                "telegram:",
-                "  bot_token: token",
-                "  chat_id: chat",
+                "messenger:",
+                "  telegram:",
+                "    bot_token: token",
+                "    chat_id: chat",
             ]
         )
         + "\n",
@@ -270,9 +275,10 @@ def test_systemd_read_write_paths_reject_whitespace_from_config(tmp_path: Path) 
                 f"runs_root: {repo / 'workflow runs'}",
                 "scheduler:",
                 f"  admission_root: {repo / 'admission'}",
-                "telegram:",
-                "  bot_token: token",
-                "  chat_id: chat",
+                "messenger:",
+                "  telegram:",
+                "    bot_token: token",
+                "    chat_id: chat",
             ]
         )
         + "\n",
@@ -385,7 +391,9 @@ def test_cmd_systemd_install_dry_run_does_not_write_units(
 
 def test_full_runtime_warns_when_telegram_is_not_configured(tmp_path: Path) -> None:
     repo, config_path = _make_repo(tmp_path)
-    config_path.write_text("telegram:\n  bot_token: ''\n  chat_id: ''\n", encoding="utf-8")
+    config_path.write_text(
+        "messenger:\n  telegram:\n    bot_token: ''\n    chat_id: ''\n", encoding="utf-8"
+    )
 
     plan = systemd_plan.build_systemd_install_plan(
         target_user="alice",

@@ -20,6 +20,7 @@ from .schema import (
     CommonResourceConfig,
     CommonRuntimeConfig,
     EmptyBehaviorConfig,
+    MessengerConfig,
     TelegramConfig,
 )
 from .schema import (
@@ -39,6 +40,9 @@ from .schema import (
 )
 from .schema import (
     explicit_positive_int as explicit_positive_int,
+)
+from .schema import (
+    messenger_config_from_mapping as messenger_config_from_mapping,
 )
 from .schema import (
     normalize_admission_limit as normalize_admission_limit,
@@ -80,6 +84,7 @@ class WorkflowEngineAppConfig:
     behavior: WorkflowEngineBehaviorConfig = field(default_factory=WorkflowEngineBehaviorConfig)
     resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    messenger: MessengerConfig = field(default_factory=MessengerConfig)
 
 
 @dataclass(frozen=True)
@@ -257,7 +262,7 @@ def load_workflow_engine_config(
     workflow_raw = mapping_section(raw, "workflow")
     workflow_paths_raw = mapping_section(workflow_raw, "paths")
     resources_raw = mapping_section(raw, "resources")
-    telegram_raw = mapping_section(raw, "telegram")
+    messenger_raw = mapping_section(raw, "messenger")
     workflow_root = _required_workflow_root(raw, path)
     executable_value = _validate_workflow_engine_executable(
         as_str(workflow_paths_raw.get(executable_key)),
@@ -273,7 +278,8 @@ def load_workflow_engine_config(
         ),
         behavior=behavior_cls(),
         resources=_resource_config(resources_raw),
-        telegram=telegram_config_from_mapping(telegram_raw),
+        telegram=telegram_config_from_mapping(messenger_raw.get("telegram")),
+        messenger=messenger_config_from_mapping(messenger_raw),
     )
 
 

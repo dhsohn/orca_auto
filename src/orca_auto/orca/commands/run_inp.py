@@ -19,18 +19,18 @@ from orca_auto.core.admission import (
 from ..attempt.engine import _exit_with_result, run_attempts
 from ..config import load_config
 from ..inp_rewriter import ensure_submission_resource_request, read_resource_request_from_input
+from ..notifications import (
+    notify_queue_enqueued_event,
+    notify_retry_event,
+    notify_run_finished_event,
+    notify_run_started_event,
+)
 from ..orca_runner import OrcaRunner
 from ..queue import adapter as _queue_adapter
 from ..runtime.run_lock import acquire_run_lock
 from ..state import save_state
 from ..state_machine import load_or_create_state
 from ..statuses import AnalyzerStatus, RunStatus
-from ..telegram_notifier import (
-    notify_queue_enqueued_event,
-    notify_retry_event,
-    notify_run_finished_event,
-    notify_run_started_event,
-)
 from ..types import (
     RetryNotification,
     RunFinishedNotification,

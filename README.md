@@ -82,12 +82,16 @@ workflow:
     xtb_executable: /home/user/bin/xtb-dist/bin/xtb
     crest_executable: /home/user/bin/crest/crest
 
-telegram:
-  bot_token: ""
-  chat_id: ""
-  timeout_seconds: 5.0
-  max_attempts: 2
-  retry_backoff_seconds: 0.5
+messenger:
+  provider: telegram  # telegram | discord
+  telegram:
+    bot_token: ""
+    chat_id: ""
+    timeout_seconds: 5.0
+    max_attempts: 2
+    retry_backoff_seconds: 0.5
+  discord:
+    webhook_url: ""
 
 orca:
   runtime:

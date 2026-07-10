@@ -861,9 +861,10 @@ def test_settings_from_config_uses_shared_telegram_section(tmp_path: Path) -> No
         "\n".join(
             [
                 "runs_root: /tmp/workflows",
-                "telegram:",
-                '  bot_token: "bot-token"',
-                '  chat_id: "chat-id"',
+                "messenger:",
+                "  telegram:",
+                '    bot_token: "bot-token"',
+                '    chat_id: "chat-id"',
             ]
         )
         + "\n",

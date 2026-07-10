@@ -226,10 +226,16 @@ def _telegram_mapping(config: Path) -> dict[str, Any]:
             "could not read Telegram settings from {path}: top-level YAML is not a mapping"
         ),
     )
-    telegram = parsed.get("telegram") or {}
+    messenger = parsed.get("messenger") or {}
+    if not isinstance(messenger, dict):
+        raise ValueError(
+            f"could not read Telegram settings from {config}: messenger section is not a mapping"
+        )
+    telegram = messenger.get("telegram") or {}
     if not isinstance(telegram, dict):
         raise ValueError(
-            f"could not read Telegram settings from {config}: telegram section is not a mapping"
+            f"could not read Telegram settings from {config}: "
+            "messenger.telegram section is not a mapping"
         )
     return telegram
 
@@ -251,8 +257,8 @@ def _telegram_runtime_warning(config: Path, *, worker_only: bool) -> str | None:
         return f"could not read Telegram settings from {config}: {exc}"
     if not _telegram_credentials_configured(telegram):
         return (
-            "full runtime target includes the Telegram bot, but telegram.bot_token or "
-            "telegram.chat_id is empty; use --worker-only if Telegram is not ready"
+            "full runtime target includes the Telegram bot, but messenger.telegram.bot_token "
+            "or messenger.telegram.chat_id is empty; use --worker-only if Telegram is not ready"
         )
     return None
 
@@ -297,8 +303,8 @@ def _collect_warnings(
     if auto_selected_worker_only and not worker_only:
         warnings.append(
             "Telegram is not fully configured, so the installer will enable only the "
-            "queue worker; rerun the same command after setting telegram.bot_token and "
-            "telegram.chat_id to enable the full runtime target"
+            "queue worker; rerun the same command after setting messenger.telegram.bot_token "
+            "and messenger.telegram.chat_id to enable the full runtime target"
         )
     return tuple(warnings)
 

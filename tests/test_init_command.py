@@ -313,7 +313,10 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
                 "crest_executable": "/usr/bin/crest",
             },
         },
-        "telegram": {"bot_token": "token", "chat_id": "123"},
+        "messenger": {
+            "provider": "telegram",
+            "telegram": {"bot_token": "token", "chat_id": "123"},
+        },
         "orca": {
             "runtime": {
                 "default_max_retries": 2,
