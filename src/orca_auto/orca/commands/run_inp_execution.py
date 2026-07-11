@@ -153,7 +153,7 @@ def active_direct_run_error(reaction_dir: Path, *, logger: logging.Logger) -> st
 
 
 def notification_callbacks(cfg: Any, *, deps: Any) -> tuple[Any, Any, Any]:
-    channel = build_channel(cfg.messenger, cfg.telegram, logger=logging.getLogger(__name__))
+    channel = build_channel(cfg.messenger, logger=logging.getLogger(__name__))
     if not channel.enabled:
         return None, None, None
     notifications = deps.notifications

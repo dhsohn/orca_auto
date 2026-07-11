@@ -4,7 +4,11 @@ import logging
 from pathlib import Path
 from typing import Protocol
 
-from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS, load_yaml_mapping
+from orca_auto.core.config.files import (
+    YAML_CONFIG_LOAD_EXCEPTIONS,
+    load_yaml_mapping,
+    messenger_mapping_from_root,
+)
 from orca_auto.core.config.schema import TelegramConfig, telegram_config_from_mapping
 from orca_auto.core.utils.coercion import normalize_text as _normalize_text
 
@@ -53,9 +57,7 @@ def load_telegram_config_from_file(config_path: str | Path | None) -> TelegramCo
         LOGGER.debug("failed to load telegram config file: %s", path, exc_info=True)
         return TelegramConfig()
 
-    messenger = raw.get("messenger")
-    messenger_mapping = messenger if isinstance(messenger, dict) else {}
-    return telegram_config_from_mapping(messenger_mapping.get("telegram"))
+    return telegram_config_from_mapping(messenger_mapping_from_root(raw).get("telegram"))
 
 
 __all__ = [

@@ -20,7 +20,7 @@ _DFT_DB = "dft.db"
 
 
 def _run_monitor(cfg: AppConfig) -> int:
-    channel = build_channel(cfg.messenger, cfg.telegram, logger=logger)
+    channel = build_channel(cfg.messenger, logger=logger)
     if not channel.enabled:
         logger.error("Messenger is not configured.")
         return 1

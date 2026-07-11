@@ -30,7 +30,10 @@ def _patch_send_transport(monkeypatch: pytest.MonkeyPatch, sender) -> None:
             parse_mode: str | None = None,
             **kwargs: Any,
         ) -> SimpleNamespace:
-            return SimpleNamespace(sent=bool(sender(text, parse_mode)))
+            result = sender(text, parse_mode)
+            if hasattr(result, "sent"):
+                return result
+            return SimpleNamespace(sent=bool(result))
 
     monkeypatch.setattr(bot, "build_telegram_transport", lambda _config: FakeTransport())
 
@@ -335,9 +338,18 @@ def test_send_preformatted_response_falls_back_to_plain_text_and_reports_failure
 ) -> None:
     sent_modes: list[str | None] = []
 
-    def fake_send(text: str, parse_mode: str | None) -> bool:
+    def fake_send(text: str, parse_mode: str | None) -> SimpleNamespace:
         sent_modes.append(parse_mode)
-        return parse_mode is None
+        return SimpleNamespace(
+            sent=parse_mode is None,
+            status_code=400 if parse_mode else 200,
+            response_text=(
+                '{"ok":false,"description":"Bad Request: can\'t parse entities"}'
+                if parse_mode
+                else '{"ok":true}'
+            ),
+            error="telegram_http_400" if parse_mode else "",
+        )
 
     _patch_send_transport(monkeypatch, fake_send)
 
@@ -712,14 +724,41 @@ def test_send_response_splits_long_messages(monkeypatch) -> None:
 def test_send_response_falls_back_to_plain_text_when_html_send_fails(monkeypatch) -> None:
     sent_modes: list[str | None] = []
 
-    def fake_send(text: str, parse_mode: str | None) -> bool:
+    def fake_send(text: str, parse_mode: str | None) -> SimpleNamespace:
         sent_modes.append(parse_mode)
-        return parse_mode is None
+        return SimpleNamespace(
+            sent=parse_mode is None,
+            status_code=400 if parse_mode else 200,
+            response_text=(
+                '{"ok":false,"description":"Bad Request: can\'t parse entities"}'
+                if parse_mode
+                else '{"ok":true}'
+            ),
+            error="telegram_http_400" if parse_mode else "",
+        )
 
     _patch_send_transport(monkeypatch, fake_send)
 
     assert bot._send_response(_settings().telegram, "<b>hello</b>", parse_mode="HTML")
     assert sent_modes == ["HTML", None]
+
+
+def test_send_response_does_not_plain_retry_ambiguous_transport_failure(monkeypatch) -> None:
+    sent_modes: list[str | None] = []
+
+    def fake_send(_text: str, parse_mode: str | None) -> SimpleNamespace:
+        sent_modes.append(parse_mode)
+        return SimpleNamespace(
+            sent=False,
+            status_code=None,
+            response_text="",
+            error="telegram_url_error:timed out",
+        )
+
+    _patch_send_transport(monkeypatch, fake_send)
+
+    assert not bot._send_response(_settings().telegram, "<b>hello</b>", parse_mode="HTML")
+    assert sent_modes == ["HTML"]
 
 
 def test_send_response_splits_text_and_omits_parse_mode_when_none(monkeypatch) -> None:

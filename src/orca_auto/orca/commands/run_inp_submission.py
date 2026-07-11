@@ -379,7 +379,7 @@ def notify_queued_submission(
     deps: Any,
 ) -> None:
     notification = build_queue_enqueued_notification(result.entry, deps=deps)
-    channel = build_channel(cfg.messenger, cfg.telegram)
+    channel = build_channel(cfg.messenger)
     deps.notifications.notify_queue_enqueued_event(channel, notification)
 
 

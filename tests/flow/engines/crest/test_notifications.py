@@ -26,8 +26,8 @@ def _patch_transport(
     *,
     sent: bool,
     skipped: bool = False,
-) -> tuple[list[tuple[Any, Any]], list[str]]:
-    build_calls: list[tuple[Any, Any]] = []
+) -> tuple[list[Any], list[str]]:
+    build_calls: list[Any] = []
     messages: list[str] = []
 
     class FakeChannel:
@@ -39,8 +39,8 @@ def _patch_transport(
             messages.append(render_telegram(message))
             return SendResult(sent=sent, skipped=skipped)
 
-    def fake_build(messenger: Any, telegram: Any) -> FakeChannel:
-        build_calls.append((messenger, telegram))
+    def fake_build(messenger: Any) -> FakeChannel:
+        build_calls.append(messenger)
         return FakeChannel()
 
     monkeypatch.setattr(_engine_transport, "build_channel", fake_build)
@@ -68,7 +68,7 @@ def test_send_joins_lines_and_maps_transport_result(
     result = notifications.send_lines(cfg, ["first line", "second line"])
 
     assert result is expected
-    assert build_calls == [(cfg.messenger, cfg.telegram)]
+    assert build_calls == [cfg.messenger]
     assert messages == ["first line\nsecond line"]
 
 

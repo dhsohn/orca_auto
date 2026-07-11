@@ -158,8 +158,9 @@ orca_auto service restart
 ```
 
 Telegram이 아직 설정되지 않았다면 설치 프로그램은 큐 워커만 활성화합니다.
-`telegram.bot_token`과 `telegram.chat_id`를 설정한 뒤 같은 명령을 다시 실행하면 전체
-런타임 타깃이 활성화됩니다. `systemd/` 아래 파일을 수정했다면, 재시작 전에
+`messenger.telegram.bot_token`과 `messenger.telegram.chat_id`를 설정한 뒤 같은 명령을
+다시 실행하면 전체 런타임 타깃이 활성화됩니다. `systemd/` 아래 파일을 수정했다면,
+재시작 전에
 `sudo systemctl daemon-reload`를 실행하세요. 전체 런타임 설정은
 [systemd/README.ko.md](systemd/README.ko.md)를 참고하세요.
 

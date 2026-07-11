@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import stat
+import warnings
 from pathlib import Path
 
 import pytest
 
 from orca_auto.core.config.files import (
+    config_with_canonical_messenger,
     engine_config_mapping,
     load_required_yaml_mapping,
     load_yaml_mapping,
     mapping_section,
+    messenger_mapping_from_root,
     resolve_configured_path,
     runs_root_from_mapping,
     scheduler_admission_root,
@@ -17,6 +20,57 @@ from orca_auto.core.config.files import (
     shared_workflow_root_from_config,
     validated_runs_root_text,
 )
+
+
+def test_messenger_mapping_dual_reads_legacy_without_merging_conflicts() -> None:
+    legacy = {
+        "telegram": {"bot_token": "legacy-token", "chat_id": "legacy-chat"},
+    }
+    with pytest.warns(FutureWarning, match="messenger.telegram"):
+        assert messenger_mapping_from_root(legacy) == {
+            "telegram": {"bot_token": "legacy-token", "chat_id": "legacy-chat"},
+        }
+
+    conflicting = {
+        **legacy,
+        "messenger": {
+            "provider": "telegram",
+            "telegram": {"chat_id": "nested-chat"},
+        },
+    }
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert messenger_mapping_from_root(conflicting) == {
+            "provider": "telegram",
+            "telegram": {"chat_id": "nested-chat"},
+        }
+    assert config_with_canonical_messenger(conflicting)["messenger"] == (
+        messenger_mapping_from_root(conflicting)
+    )
+
+    with pytest.warns(FutureWarning, match="deprecated"):
+        assert messenger_mapping_from_root({"telegram": []}) == {}
+    assert caught == []
+
+
+def test_messenger_mapping_rejects_non_mapping_new_section() -> None:
+    with pytest.raises(ValueError, match="messenger section must be a mapping"):
+        messenger_mapping_from_root({"messenger": "telegram"})
+
+
+def test_yaml_parse_error_does_not_expose_secret_source_line(tmp_path: Path) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    secret = "123456:super-secret-token"
+    config_path.write_text(
+        f'messenger:\n  telegram:\n    bot_token: "{secret}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as raised:
+        load_yaml_mapping(config_path)
+
+    assert secret not in str(raised.value)
+    assert str(config_path) in str(raised.value)
 
 
 def test_runs_root_from_mapping_accepts_only_top_level_key(tmp_path: Path) -> None:

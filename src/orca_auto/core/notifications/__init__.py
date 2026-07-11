@@ -13,11 +13,13 @@ from .telegram_format import (
     split_telegram_message,
 )
 from .telegram_transport import (
+    TelegramDeliveryResult,
     TelegramSendResult,
     TelegramTransport,
     build_telegram_transport,
     log_telegram_send_failure,
     send_preformatted_telegram_message,
+    send_rendered_telegram_chunks,
     send_telegram_message,
     telegram_send_result_ok,
 )
@@ -27,6 +29,7 @@ __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
     "MAX_TELEGRAM_MESSAGE_LENGTH",
     "TelegramApiClient",
+    "TelegramDeliveryResult",
     "TelegramSendResult",
     "TelegramTransport",
     "build_telegram_transport",
@@ -35,6 +38,7 @@ __all__ = [
     "load_telegram_config_from_file",
     "log_telegram_send_failure",
     "send_preformatted_telegram_message",
+    "send_rendered_telegram_chunks",
     "send_telegram_message",
     "split_telegram_message",
     "telegram_send_result_ok",

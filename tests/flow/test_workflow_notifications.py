@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from orca_auto.core.messaging import Message, SendResult, render_telegram
 from orca_auto.flow.workflow import notifications as workflow_notifications
 
@@ -201,3 +203,56 @@ def test_maybe_notify_workflow_phase_summary_includes_all_notes(monkeypatch: Any
     # All 120 notes are present; the Telegram channel is responsible for chunking.
     assert "<b>note_0</b>:" in rendered
     assert "<b>note_119</b>:" in rendered
+
+
+@pytest.mark.parametrize("failure_site", ["factory", "send"])
+def test_phase_notification_failure_does_not_fail_workflow_advance(
+    monkeypatch: Any,
+    caplog: pytest.LogCaptureFixture,
+    failure_site: str,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_safe",
+        "template_name": "reaction_ts_search",
+        "metadata": {},
+        "stages": [
+            {
+                "stage_id": "crest_reactant",
+                "status": "completed",
+                "task": {
+                    "engine": "crest",
+                    "status": "completed",
+                    "payload": {"input_role": "reactant"},
+                },
+                "metadata": {},
+                "output_artifacts": [{"path": "a.xyz"}],
+            }
+        ],
+    }
+
+    if failure_site == "factory":
+        monkeypatch.setattr(
+            workflow_notifications,
+            "build_channel_from_config_path",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad provider")),
+        )
+    else:
+        channel = _RecordingChannel()
+        monkeypatch.setattr(
+            channel,
+            "send",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("wire failure")),
+        )
+        _patch_channel(monkeypatch, channel)
+
+    with caplog.at_level("WARNING"):
+        assert not workflow_notifications.maybe_notify_workflow_phase_summary(
+            payload=payload,
+            config_path="cfg",
+            phase_engine="crest",
+        )
+
+    assert "workflow_phase_notification_failed" in caplog.text
+    assert "phase_notifications" not in payload["metadata"] or not payload["metadata"][
+        "phase_notifications"
+    ].get("crest_summary")

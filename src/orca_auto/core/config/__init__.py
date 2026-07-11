@@ -8,6 +8,7 @@ from .schema import (
     TelegramConfig,
     discord_config_from_mapping,
     messenger_config_from_mapping,
+    reconcile_legacy_telegram_alias,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "TelegramConfig",
     "discord_config_from_mapping",
     "messenger_config_from_mapping",
+    "reconcile_legacy_telegram_alias",
 ]

@@ -65,7 +65,7 @@ def test_send_joins_lines_and_maps_transport_result(
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
     transport = _FakeTransport(result)
-    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger, _telegram: transport)
+    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger: transport)
 
     sent = notifications.send_lines(cfg, ["line 1", "line 2"])
 
@@ -79,7 +79,7 @@ def test_notify_job_queued_and_started_render_expected_fields(
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
     transport = _FakeTransport(TelegramSendResult(sent=True))
-    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger, _telegram: transport)
+    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger: transport)
     job_dir = tmp_path / "job-001"
     selected_xyz = tmp_path / "inputs" / "reactant.xyz"
 
@@ -134,7 +134,7 @@ def test_notify_job_terminal_includes_extra_lines(
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
     transport = _FakeTransport(TelegramSendResult(sent=True))
-    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger, _telegram: transport)
+    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger: transport)
 
     assert notifications.notify_xtb_job_terminal(
         cfg,
@@ -187,7 +187,7 @@ def test_notify_job_finished_maps_headlines_and_optional_fields(
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
     transport = _FakeTransport(TelegramSendResult(sent=True))
-    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger, _telegram: transport)
+    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger: transport)
     resource_request: dict[str, int] | None = None
     resource_actual: dict[str, int] | None = None
     if status == "completed":
@@ -230,7 +230,7 @@ def test_workflow_child_notifications_are_suppressed(
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
     transport = _FakeTransport(TelegramSendResult(sent=True))
-    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger, _telegram: transport)
+    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger: transport)
     workflow_job_dirs = [
         tmp_path / "wf-1" / "02_xtb" / "job-004",
         tmp_path / "wf-1" / "02_xtb" / "xtb_path_search_01",

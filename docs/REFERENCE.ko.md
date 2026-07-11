@@ -376,8 +376,8 @@ orca_auto scan-notify
 
 동작:
 
-- `scan-notify`는 설정된 ORCA 루트를 일회성으로 스캔해 Telegram 발견 알림을 보낸 뒤
-  종료합니다. 실시간 모니터가 아닙니다.
+- `scan-notify`는 설정된 ORCA 루트를 일회성으로 스캔해 활성 메신저 provider로 발견
+  알림을 보낸 뒤 종료합니다. 실시간 모니터가 아닙니다.
 
 ### 7.7 장기 실행 서비스
 
@@ -392,9 +392,9 @@ orca_auto scan-notify
 - ORCA, xTB, CREST는 동일한 admission 상한을 공유합니다. ORCA는 부모 워커에서 슬롯을
   예약하고, 자식이 시작된 뒤 큐 정체성 메타데이터를 붙이며, ORCA 자식이 실행 중에 그
   예약을 활성화/해제하도록 합니다.
-- `orca_auto-bot@.service`는 `orca_auto.yaml`의 `telegram.bot_token`과 `telegram.chat_id`로
-  통합 Telegram 봇을 시작합니다.
-- 워크플로우 Telegram 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST와 반응 경로 xTB
+- `orca_auto-bot@.service`는 `orca_auto.yaml`의 `messenger.telegram.bot_token`과
+  `messenger.telegram.chat_id`로 통합 Telegram 봇을 시작합니다.
+- 워크플로우 메신저 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST와 반응 경로 xTB
   자식 단계는 해당 단계가 끝난 뒤 각각 한 메시지로 요약합니다.
 - `orca_auto-runtime@.target`은 두 서비스를 함께 시작합니다.
 
@@ -431,7 +431,8 @@ journalctl -u "orca_auto-bot@$(whoami)" -f
 
 결합 런타임 타깃을 활성화하기 전에:
 
-- `orca_auto.yaml`에 `telegram.bot_token`과 `telegram.chat_id`를 설정하세요.
+- `orca_auto.yaml`에 `messenger.telegram.bot_token`과
+  `messenger.telegram.chat_id`를 설정하세요.
 
 통합 런타임 템플릿의 가정:
 
@@ -445,9 +446,9 @@ journalctl -u "orca_auto-bot@$(whoami)" -f
 관리하는 내부 엔진 단계 전반의 활성 시뮬레이션 결합 수를 제한합니다.
 
 Telegram이 아직 설정되지 않았다면, `orca_auto systemd install`은
-`orca_auto-queue-worker@$(whoami)`를 직접 활성화합니다. `telegram.bot_token`과
-`telegram.chat_id`를 설정한 뒤 같은 명령을 다시 실행하면 전체 런타임 타깃이
-활성화됩니다.
+`orca_auto-queue-worker@$(whoami)`를 직접 활성화합니다.
+`messenger.telegram.bot_token`과 `messenger.telegram.chat_id`를 설정한 뒤 같은 명령을
+다시 실행하면 전체 런타임 타깃이 활성화됩니다.
 
 워크플로우 감독은 `orca_auto-queue-worker@.service`에 속합니다.
 

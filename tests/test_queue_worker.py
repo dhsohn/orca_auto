@@ -25,6 +25,7 @@ from orca_auto.core.admission import (
     reserve_slot,
     set_slot_engine_process,
 )
+from orca_auto.core.config import DiscordConfig, MessengerConfig
 from orca_auto.core.queue.lifecycle import TerminalProcessQueueMarkResult
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.statuses import (
@@ -210,6 +211,39 @@ def test_terminal_replay_retries_failed_notification_until_marker_is_durable(
     cfg = AppConfig(
         runtime=RuntimeConfig(allowed_root=str(tmp_path)),
         telegram=TelegramConfig(bot_token="token", chat_id="chat"),
+    )
+    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    state = {
+        "job_id": entry.task_id,
+        "final_result": {"status": "completed"},
+    }
+
+    with (
+        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
+        patch.object(
+            queue_worker_mod, "_notify_terminal_job_from_state", return_value=False
+        ) as notify,
+        patch.object(queue_worker_mod, "load_state", return_value=state),
+    ):
+        _run_terminal_replay(worker, tmp_path, entry)
+        _run_terminal_replay(worker, tmp_path, entry)
+
+    assert notify.call_count == 2
+    key = (str(tmp_path.resolve()), entry.queue_id)
+    assert worker._orca_reconcile_statuses[key] == "running"
+
+
+def test_terminal_replay_uses_selected_discord_provider_for_durability(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "rxn").mkdir()
+    entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
+    cfg = AppConfig(
+        runtime=RuntimeConfig(allowed_root=str(tmp_path)),
+        messenger=MessengerConfig(
+            provider="discord",
+            discord=DiscordConfig(webhook_url="https://discord.com/api/webhooks/123/secret"),
+        ),
     )
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     state = {
@@ -2241,7 +2275,11 @@ class TestQueueWorkerMethods(unittest.TestCase):
         assert saved is not None
         final_result = saved["final_result"]
         assert final_result is not None
-        self.assertIn("telegram_finished_notification_sent_at", final_result)
+        self.assertIn("finished_notification_sent_at", final_result)
+        self.assertEqual(
+            final_result["telegram_finished_notification_sent_at"],
+            final_result["finished_notification_sent_at"],
+        )
 
     @patch("orca_auto.orca.queue.worker.notify_run_finished_event", return_value=True)
     def test_terminal_notification_skips_when_state_already_marked(

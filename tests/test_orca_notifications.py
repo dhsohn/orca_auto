@@ -295,20 +295,20 @@ def test_discord_provider_end_to_end_posts_embed(monkeypatch) -> None:  # type: 
     """provider=discord config -> build_channel -> notify_* -> webhook embed POST."""
     import json
 
-    from orca_auto.core.config import DiscordConfig, MessengerConfig, TelegramConfig
+    from orca_auto.core.config import DiscordConfig, MessengerConfig
     from orca_auto.core.messaging import build_channel
     from orca_auto.core.messaging import discord_webhook as discord_mod
 
     posted: dict[str, bytes] = {}
 
     class _Resp:
-        status = 204
+        status = 200
 
         def getcode(self) -> int:
-            return 204
+            return 200
 
         def read(self) -> bytes:
-            return b""
+            return b'{"id":"999"}'
 
         def __enter__(self) -> _Resp:
             return self
@@ -323,14 +323,14 @@ def test_discord_provider_end_to_end_posts_embed(monkeypatch) -> None:  # type: 
     monkeypatch.setattr(discord_mod, "urlopen", fake_urlopen)
     channel = build_channel(
         MessengerConfig(
-            provider="discord", discord=DiscordConfig(webhook_url="https://discord.test/wh")
-        ),
-        TelegramConfig(),
+            provider="discord",
+            discord=DiscordConfig(webhook_url="https://discord.com/api/webhooks/123/test-token"),
+        )
     )
     assert notify_run_started_event(channel, _started_event()) is True
 
     embed = json.loads(posted["data"])["embeds"][0]
-    assert embed["title"] == "orca_auto ORCA Started"
+    assert embed["title"] == r"orca\_auto ORCA Started"
     field_names = [field["name"] for field in embed["fields"]]
     assert "Job" in field_names
     assert "Attempt" in field_names

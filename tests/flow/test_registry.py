@@ -6,7 +6,12 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.messaging import SendResult, TelegramChannel, render_telegram
+from orca_auto.core.messaging import (
+    DiscordWebhookChannel,
+    SendResult,
+    TelegramChannel,
+    render_telegram,
+)
 from orca_auto.flow import registry, worker_state_store
 from orca_auto.flow.registry import _notifications as registry_notifications
 from orca_auto.flow.registry import store as registry_store
@@ -298,6 +303,33 @@ def test_messenger_channel_from_env_uses_orca_auto_config_fallback(
     assert channel.config.timeout_seconds == 7.5
     assert channel.config.max_attempts == 3
     assert channel.config.retry_backoff_seconds == 0.25
+
+
+def test_messenger_channel_from_env_does_not_override_config_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "messenger:",
+                "  provider: discord",
+                "  discord:",
+                "    webhook_url: https://discord.com/api/webhooks/123/journal-token",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ORCA_AUTO_CONFIG", str(config_path))
+    monkeypatch.setenv("ORCA_AUTO_FLOW_TELEGRAM_BOT_TOKEN", "legacy-token")
+    monkeypatch.setenv("ORCA_AUTO_FLOW_TELEGRAM_CHAT_ID", "legacy-chat")
+
+    channel = registry_notifications.messenger_channel_from_env()
+
+    assert isinstance(channel, DiscordWebhookChannel)
+    assert channel.config.webhook_url == ("https://discord.com/api/webhooks/123/journal-token")
 
 
 def test_maybe_notify_journal_event_sends_message_and_swallows_channel_errors(

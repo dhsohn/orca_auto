@@ -1032,7 +1032,7 @@ def _run_terminal_replay_side_effects(
         item.reaction_dir,
         expected_job_id=item.task_id,
     )
-    if worker.cfg.telegram.enabled:
+    if worker.cfg.messenger.enabled:
         replayed_state = load_state(Path(item.reaction_dir).expanduser().resolve())
         if (
             not replayed_state

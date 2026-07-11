@@ -27,7 +27,8 @@
 
 결합 런타임 타깃을 활성화하기 전에:
 
-- `orca_auto.yaml`에 `telegram.bot_token`과 `telegram.chat_id`를 설정하세요.
+- `orca_auto.yaml`에 `messenger.telegram.bot_token`과
+  `messenger.telegram.chat_id`를 설정하세요.
 - `chmod 600 config/orca_auto.yaml`로 로컬 설정 권한을 제한하세요.
 
 결합 런타임 타깃 설치:
@@ -39,9 +40,9 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 
 설치 프로그램은 저장소 경로로 유닛 파일을 렌더링해 `/etc/systemd/system`에 쓰고,
 `systemctl daemon-reload`를 실행한 뒤, 현재 설정에 맞는 런타임을 활성화/시작합니다.
-Telegram이 아직 설정되지 않았다면 큐 워커만 활성화합니다. `telegram.bot_token`과
-`telegram.chat_id`를 설정한 뒤 같은 명령을 다시 실행하면 전체 런타임 타깃이
-활성화됩니다.
+Telegram이 아직 설정되지 않았다면 큐 워커만 활성화합니다.
+`messenger.telegram.bot_token`과 `messenger.telegram.chat_id`를 설정한 뒤 같은 명령을
+다시 실행하면 전체 런타임 타깃이 활성화됩니다.
 
 결합 런타임 타깃 모니터링:
 

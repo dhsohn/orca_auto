@@ -48,7 +48,8 @@ src/orca_auto/
 │   ├── indexing/        # 작업 위치 인덱스 (각 작업의 출력 위치)
 │   ├── state/           # 공용 엔진 상태 헬퍼
 │   ├── config/          # 설정 스키마 + 로딩
-│   ├── notifications/   # 텔레그램 전송 + 엔진 알림 훅
+│   ├── messaging/       # 중립 Doc/port + Telegram/Discord adapter
+│   ├── notifications/   # 저수준 Telegram 전송 + 엔진 알림 훅
 │   ├── commands/        # 공용 run-dir / queue 명령 로직
 │   ├── paths/           # 경로 검증 + 워크플로우 경로 해석
 │   └── utils/           # 락, 영속화, 프로세스 추적, 형 변환
@@ -363,18 +364,27 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 
 ## 9. 알림
 
-`core/notifications/`는 텔레그램 전송(`telegram_*.py`)과 엔진 알림 훅 계층
-(`engine_notifier.py`, `engine_delivery.py`)을 제공합니다. 각 `EngineDefinition`은
+`core/messaging/`은 provider-neutral 발신 경계를 소유합니다. 불변 semantic `Message`
+문서, `MessageChannel` port와 `SendResult` receipt, provider registry, Telegram/Discord
+renderer와 adapter가 여기에 있습니다. 도메인 notifier는 문서만 만들며 wire markup을
+선택하지 않습니다. `MessengerConfig`가 두 adapter 설정을 소유하고 registry는 unknown
+provider를 거부하면서 정확히 하나의 활성 provider를 해석합니다.
+
+`core/notifications/`는 `TelegramChannel`이 재사용하는 저수준 Telegram Bot API 전송과
+엔진 알림 훅 계층(`engine_notifier.py`, `engine_delivery.py`)을 유지합니다.
+`DiscordWebhookChannel`은 자체 webhook 전송을 소유합니다. 각 `EngineDefinition`은
 `job_started` / `job_finished` / `retry` 훅을 등록할 수 있습니다.
 
-`flow/telegram/`은 통합 텔레그램 봇입니다. `queue list` 테이블을
+`flow/telegram/`은 발신 messenger port와 분리된 앱 전용 inbound Telegram 봇
+adapter입니다. `queue list` 테이블을
 `/list`(모바일을 위해 ID 열 제외)로 반영하고, 인라인 버튼 확인을 통한
 `/cancel <target>`과, 활동별 취소 / 새로고침 / "완료 항목 정리" 액션을 지원합니다.
 워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST 및 반응 경로 xTB 자식
 페이즈는 각각 한 메시지로 요약합니다.
 
-텔레그램은 `telegram.bot_token`과 `telegram.chat_id`가 모두 설정된 경우에만
-활성화됩니다(`TelegramConfig.enabled`).
+선택된 발신 adapter는 해당 credential이 완전할 때만 활성화됩니다. Telegram에는
+`messenger.telegram.bot_token`과 `chat_id`가 필요하고, Discord에는 검증된 공식 HTTPS
+`messenger.discord.webhook_url`이 필요합니다.
 
 ---
 
@@ -432,7 +442,7 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 - `run-dir <path>` — 내구성 제출 (ORCA 또는 워크플로우, 자동 라우팅)
 - `queue list` / `queue cancel` / `queue list clear` — 큐 점검/유지보수
 - `service status` / `service restart` — 런타임 상태 (systemd 경유)
-- `scan-notify` — 일회성 탐색 스캔 + 텔레그램 알림
+- `scan-notify` — 일회성 탐색 스캔 + 활성 메신저 알림
 - `systemd install` — 유닛 렌더링 및 활성화
 
 엔진별 CLI 모듈은 런타임 전용 워커 엔트리포인트이며, 사용자 명령을 추가하는

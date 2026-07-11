@@ -168,18 +168,18 @@ def notify_terminal_job_from_state(
     expected_job_id: str | None = None,
     callbacks: OrcaQueueWorkerTrackingCallbacks,
 ) -> bool:
-    channel = build_channel(cfg.messenger, cfg.telegram, logger=logger)
+    channel = build_channel(cfg.messenger, logger=logger)
     if not channel.enabled:
         return False
 
     job_dir = Path(reaction_dir).expanduser().resolve()
     state = callbacks.load_state(job_dir)
     if not state:
-        logger.warning("Skipping terminal Telegram notification; state missing for %s", job_dir)
+        logger.warning("Skipping terminal messenger notification; state missing for %s", job_dir)
         return False
     if not payload_matches_expected_job_id(state, expected_job_id):
         logger.warning(
-            "Skipping terminal Telegram notification; state generation mismatch for %s "
+            "Skipping terminal messenger notification; state generation mismatch for %s "
             "(expected_job_id=%s state_job_id=%s)",
             job_dir,
             str(expected_job_id or "").strip(),
@@ -192,7 +192,7 @@ def notify_terminal_job_from_state(
     final_result = state.get("final_result")
     if not isinstance(final_result, dict):
         logger.warning(
-            "Skipping terminal Telegram notification; final_result missing for %s",
+            "Skipping terminal messenger notification; final_result missing for %s",
             job_dir,
         )
         return False
@@ -210,10 +210,10 @@ def notify_terminal_job_from_state(
     sent = callbacks.notify_run_finished_event(channel, notification)
     if sent:
         callbacks.mark_finished_notification_sent(job_dir, state)
-        logger.info("Terminal Telegram notification sent by queue worker: %s", job_dir)
+        logger.info("Terminal messenger notification sent by queue worker: %s", job_dir)
         return True
 
-    logger.warning("Terminal Telegram notification failed in queue worker: %s", job_dir)
+    logger.warning("Terminal messenger notification failed in queue worker: %s", job_dir)
     return False
 
 

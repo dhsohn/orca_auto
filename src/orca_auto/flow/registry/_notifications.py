@@ -163,20 +163,21 @@ def journal_notification_enabled(event_type: str) -> bool:
 def messenger_channel_from_env() -> MessageChannel | None:
     """Resolve the active channel for journal notifications.
 
-    An explicit ``ORCA_AUTO_FLOW_TELEGRAM_*`` env pair forces Telegram; otherwise
-    the messenger provider is taken from the config file referenced by
-    ``ORCA_AUTO_CONFIG``.
+    When ``ORCA_AUTO_CONFIG`` is set, its messenger provider is authoritative.
+    The legacy ``ORCA_AUTO_FLOW_TELEGRAM_*`` pair is used only when no shared
+    config path is configured, so it cannot silently replace a Discord route.
     """
+    config_path = config_env_value(ORCA_AUTO_CONFIG_ENV_VAR)
+    if config_path:
+        channel = build_channel_from_config_path(config_path)
+        return channel if channel.enabled else None
+
     token = os.environ.get("ORCA_AUTO_FLOW_TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("ORCA_AUTO_FLOW_TELEGRAM_CHAT_ID", "").strip()
     if token and chat_id:
         return TelegramChannel(TelegramConfig(bot_token=token, chat_id=chat_id))
 
-    config_path = config_env_value(ORCA_AUTO_CONFIG_ENV_VAR)
-    if not config_path:
-        return None
-    channel = build_channel_from_config_path(config_path)
-    return channel if channel.enabled else None
+    return None
 
 
 def journal_event_context(event: dict[str, Any], workflow_root: str | Path) -> dict[str, str]:

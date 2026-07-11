@@ -13,6 +13,15 @@ class SendResult:
     sent: bool
     skipped: bool = False
     error: str = ""
+    provider: str | None = None
+    message_id: str | None = None
+    message_ids: tuple[str, ...] = ()
+    sent_count: int = 0
+    total_count: int = 0
+
+    @property
+    def partial(self) -> bool:
+        return 0 < self.sent_count < self.total_count
 
 
 def send_ok(result: SendResult, *, skipped_ok: bool = False) -> bool:

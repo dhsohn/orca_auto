@@ -87,9 +87,9 @@ class Message:
     """A complete notification.
 
     ``title`` is the semantic headline (Discord embed title / Telegram bold
-    first line). By convention the first group's heading is ``(bold(title),)``
-    so Telegram renders the title inline; the Discord renderer de-duplicates it
-    against the embed title.
+    first line). Renderers own its native representation. Existing builders may
+    still include the same bold title in a decorated first line; renderers
+    detect that form and avoid duplicating it.
     """
 
     title: str
@@ -111,7 +111,7 @@ def group(*items: Item, heading: tuple[Span, ...] = ()) -> Group:
 
 
 def title_heading(title: str) -> tuple[Span, ...]:
-    """The conventional first-group heading that carries the message title."""
+    """Build an explicit first-group title heading for legacy-stable layouts."""
     return (bold(title),)
 
 

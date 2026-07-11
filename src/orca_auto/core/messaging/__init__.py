@@ -8,10 +8,10 @@ messenger can be swapped from config alone.
 
 from __future__ import annotations
 
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
 from .channel import MessageChannel, SendResult, send_ok
-from .config_io import build_channel_from_config_path, load_messenger_config_from_file
-from .discord_webhook import DiscordWebhookChannel
-from .registry import build_channel
 from .render_discord import render_discord_embed
 from .render_telegram import render_telegram
 from .richtext import (
@@ -30,7 +30,31 @@ from .richtext import (
     text,
     title_heading,
 )
-from .telegram_channel import TelegramChannel
+
+if TYPE_CHECKING:
+    from .config_io import build_channel_from_config_path, load_messenger_config_from_file
+    from .discord_webhook import DiscordWebhookChannel
+    from .registry import build_channel
+    from .telegram_channel import TelegramChannel
+
+_LAZY_EXPORTS = {
+    "DiscordWebhookChannel": (".discord_webhook", "DiscordWebhookChannel"),
+    "TelegramChannel": (".telegram_channel", "TelegramChannel"),
+    "build_channel": (".registry", "build_channel"),
+    "build_channel_from_config_path": (".config_io", "build_channel_from_config_path"),
+    "load_messenger_config_from_file": (".config_io", "load_messenger_config_from_file"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    try:
+        module_name, attribute_name = _LAZY_EXPORTS[name]
+    except KeyError as exc:
+        raise AttributeError(name) from exc
+    value = getattr(import_module(module_name, __name__), attribute_name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "DiscordWebhookChannel",

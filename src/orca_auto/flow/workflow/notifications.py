@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -36,6 +37,7 @@ from orca_auto.core.utils import (
 
 from .status import workflow_status_is_terminal
 
+LOGGER = logging.getLogger(__name__)
 _ACTIVE_STATUSES = frozenset(
     {"planned", "queued", "running", "submitted", "cancel_requested", "retrying"}
 )
@@ -426,10 +428,6 @@ def maybe_notify_workflow_phase_summary(
     if _phase_summary_already_sent(notification_state, state_key=summary.state_key):
         return False
 
-    channel = build_channel_from_config_path(config_path)
-    if not channel.enabled:
-        return False
-
     message = _build_phase_summary_message(
         payload=payload,
         phase_engine=summary.engine,
@@ -438,7 +436,27 @@ def maybe_notify_workflow_phase_summary(
         stage_buckets=summary.stage_buckets,
         extra_lines=extra_lines,
     )
-    if not channel.send(message).sent:
+    try:
+        channel = build_channel_from_config_path(config_path)
+        if not channel.enabled:
+            return False
+        result = channel.send(message)
+    except Exception as exc:  # noqa: BLE001 - optional notification boundary
+        LOGGER.warning(
+            "workflow_phase_notification_failed: workflow_id=%s engine=%s error_type=%s",
+            _normalize_text(payload.get("workflow_id")) or "-",
+            normalized_engine,
+            type(exc).__name__,
+        )
+        return False
+    if not result.sent:
+        if not result.skipped:
+            LOGGER.warning(
+                "workflow_phase_notification_failed: workflow_id=%s engine=%s error=%s",
+                _normalize_text(payload.get("workflow_id")) or "-",
+                normalized_engine,
+                result.error or "unknown_error",
+            )
         return False
 
     _mark_phase_summary_sent(
