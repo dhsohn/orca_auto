@@ -103,7 +103,6 @@ Supported configuration paths:
 - `messenger.telegram.timeout_seconds`
 - `messenger.telegram.max_attempts`
 - `messenger.telegram.retry_backoff_seconds`
-- `messenger.discord.webhook_url`
 - `messenger.discord.bot_token`
 - `messenger.discord.channel_ids`
 - `messenger.discord.default_channel_id`
@@ -129,8 +128,7 @@ Stable behavior:
   `messenger.telegram.bot_token` and `messenger.telegram.chat_id` values.
 - Canonical Discord delivery uses `messenger.discord.bot_token` plus
   `default_channel_id`; `channel_ids` authorizes inbound channels. The interactive gateway
-  additionally requires a non-empty `allowed_user_ids` operator allowlist. A valid official
-  HTTPS webhook remains a notification-only fallback when bot delivery is incomplete.
+  additionally requires a non-empty `allowed_user_ids` operator allowlist.
 - Both adapters bound delivery timeouts to 0.1–120 seconds, total attempts to 1–10,
   and configured retry backoff to 0–120 seconds.
 
@@ -141,7 +139,7 @@ Migration note:
   `messenger.telegram` values take precedence.
 - New configuration, generated examples, and tooling write `messenger.telegram`; do not add
   new top-level `telegram:` blocks. Discord has no legacy alias: use the nested
-  `messenger.discord` bot fields; `webhook_url` is retained for outbound compatibility.
+  `messenger.discord` bot fields.
 
 ## Queue And Activity Contract
 
@@ -370,7 +368,7 @@ Stable behavior:
 
 - The installer enables the queue worker.
 - The selected Telegram/Discord bot is enabled only when its interactive config is complete;
-  Discord webhook-only mode remains worker-only.
+  otherwise the install remains worker-only.
 - `service status` reports the runtime target, queue worker, and bot status.
 - `service restart` restarts the runtime target when enabled; otherwise it
   restarts the queue worker.

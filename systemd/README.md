@@ -38,8 +38,8 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 The installer renders the unit files with the repository path, writes them to
 `/etc/systemd/system`, runs `systemctl daemon-reload`, and enables/starts the
 right runtime for the current config. Telegram needs a token and chat ID. Discord needs
-a separate bot token, at least one inbound command channel, and an operator user ID. A webhook-only Discord
-configuration is notification-only, so the installer selects the queue worker. Rerun the
+a separate bot token, at least one inbound command channel, and an operator user ID. When
+the bot is not fully configured, the installer selects the queue worker only. Rerun the
 command after completing bot configuration to enable the full runtime target.
 
 Monitor the combined runtime target:
@@ -82,7 +82,7 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 
 Use the worker-only service when you do not want an interactive bot managed by
 systemd, or when the selected provider is incomplete. The installer chooses that mode
-automatically, including for Discord webhook-only configuration.
+automatically when the bot is not fully configured.
 
 Monitor the unified engine worker:
 

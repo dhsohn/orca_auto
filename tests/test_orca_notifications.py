@@ -292,12 +292,12 @@ def test_notify_monitor_report_sends_when_updates_exist() -> None:
 
 
 def test_discord_provider_end_to_end_posts_embed(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """provider=discord config -> build_channel -> notify_* -> webhook embed POST."""
+    """provider=discord config -> build_channel -> notify_* -> bot embed POST."""
     import json
 
     from orca_auto.core.config import DiscordConfig, MessengerConfig
     from orca_auto.core.messaging import build_channel
-    from orca_auto.core.messaging import discord_webhook as discord_mod
+    from orca_auto.core.messaging import discord_bot as discord_mod
 
     posted: dict[str, bytes] = {}
 
@@ -324,7 +324,7 @@ def test_discord_provider_end_to_end_posts_embed(monkeypatch) -> None:  # type: 
     channel = build_channel(
         MessengerConfig(
             provider="discord",
-            discord=DiscordConfig(webhook_url="https://discord.com/api/webhooks/123/test-token"),
+            discord=DiscordConfig(bot_token="test-bot-token", default_channel_id="123"),
         )
     )
     assert notify_run_started_event(channel, _started_event()) is True

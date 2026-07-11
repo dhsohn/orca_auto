@@ -35,8 +35,7 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
 선택된 Telegram 또는 Discord provider의 인터랙티브 bot 설정이 완전하면 orca_auto는
-전체 런타임 타깃을 활성화합니다. 그렇지 않으면 큐 워커만 활성화하며, Discord
-webhook만 있는 설정은 알림 전용입니다.
+전체 런타임 타깃을 활성화합니다. 그렇지 않으면 큐 워커만 활성화합니다.
 
 ## 4) 서비스 확인 또는 재시작
 

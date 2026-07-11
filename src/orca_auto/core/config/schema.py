@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, TypeVar
-from urllib.parse import urlsplit
 
 from orca_auto.core.utils.coercion import normalize_bool, normalize_text, safe_float, safe_int
 
@@ -17,17 +15,6 @@ MIN_MESSENGER_TIMEOUT_SECONDS = 0.1
 MAX_MESSENGER_TIMEOUT_SECONDS = 120.0
 MAX_MESSENGER_ATTEMPTS = 10
 MAX_MESSENGER_RETRY_BACKOFF_SECONDS = 120.0
-_DISCORD_WEBHOOK_PATH = re.compile(r"^/api(?:/v\d+)?/webhooks/[1-9]\d{0,19}/[A-Za-z0-9._-]+$")
-_DISCORD_WEBHOOK_HOSTS = frozenset(
-    {
-        "discord.com",
-        "discordapp.com",
-        "canary.discord.com",
-        "canary.discordapp.com",
-        "ptb.discord.com",
-        "ptb.discordapp.com",
-    }
-)
 _MAX_DISCORD_SNOWFLAKE = (1 << 64) - 1
 
 
@@ -68,32 +55,6 @@ def _bounded_delivery_float(value: Any, default: float, *, minimum: float, maxim
 
 def _bounded_delivery_attempts(value: Any, default: int) -> int:
     return min(MAX_MESSENGER_ATTEMPTS, max(1, as_int(value, default)))
-
-
-def discord_webhook_url_is_valid(raw_url: object) -> bool:
-    """Accept only Discord's HTTPS execute-webhook endpoint shape."""
-
-    if (
-        not isinstance(raw_url, str)
-        or raw_url != raw_url.strip()
-        or any(ord(character) < 0x21 or ord(character) == 0x7F for character in raw_url)
-    ):
-        return False
-    try:
-        parsed = urlsplit(raw_url)
-        host = (parsed.hostname or "").lower()
-        port = parsed.port
-    except (TypeError, ValueError):
-        return False
-    return bool(
-        parsed.scheme.lower() == "https"
-        and host in _DISCORD_WEBHOOK_HOSTS
-        and port in (None, 443)
-        and parsed.username is None
-        and parsed.password is None
-        and not parsed.fragment
-        and _DISCORD_WEBHOOK_PATH.fullmatch(parsed.path)
-    )
 
 
 def _positive_ascii_id(
@@ -335,7 +296,6 @@ def telegram_config_from_mapping(raw: object) -> TelegramConfig:
 
 @dataclass(frozen=True)
 class DiscordConfig:
-    webhook_url: str = field(default="", repr=False)
     timeout_seconds: float = 5.0
     max_attempts: int = 2
     retry_backoff_seconds: float = 0.5
@@ -377,7 +337,7 @@ class DiscordConfig:
 
     @property
     def notification_enabled(self) -> bool:
-        return self.bot_notification_enabled or bool(self.webhook_url.strip())
+        return self.bot_notification_enabled
 
     @property
     def interaction_channel_ids(self) -> tuple[str, ...]:
@@ -398,8 +358,7 @@ class DiscordConfig:
 
 def discord_config_from_mapping(raw: object) -> DiscordConfig:
     discord_raw = raw if isinstance(raw, Mapping) else {}
-    config = DiscordConfig(
-        webhook_url=as_str(discord_raw.get("webhook_url")),
+    return DiscordConfig(
         bot_token=as_str(discord_raw.get("bot_token")),
         channel_ids=_discord_snowflake_tuple(
             discord_raw.get("channel_ids"),
@@ -429,11 +388,6 @@ def discord_config_from_mapping(raw: object) -> DiscordConfig:
             maximum=MAX_MESSENGER_RETRY_BACKOFF_SECONDS,
         ),
     )
-    if config.webhook_url and not discord_webhook_url_is_valid(config.webhook_url):
-        raise ValueError(
-            "messenger.discord.webhook_url must be an official HTTPS Discord webhook URL."
-        )
-    return config
 
 
 @dataclass(frozen=True)

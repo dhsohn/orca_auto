@@ -33,7 +33,7 @@ class MessageChannel(Protocol):
     """A destination that renders and delivers :class:`Message` notifications.
 
     Implementations own their own native rendering and transport (Telegram HTML
-    over the Bot API, Discord embeds over a webhook, …). Callers build a
+    over the Bot API, Discord embeds over the Bot API, …). Callers build a
     provider-neutral :class:`Message` and never see the wire format.
     """
 

@@ -157,8 +157,6 @@ messenger:
     channel_ids: ["123456789012345678"]
     default_channel_id: "123456789012345678"
     allowed_user_ids: []
-    # 레거시 알림 전용 fallback:
-    webhook_url: ""
 
 orca:
   runtime:
@@ -449,7 +447,7 @@ Discord 인터랙티브 bot 설정을 완성하세요.
 시작합니다. 공유 `scheduler.max_active_simulations` 설정은 여전히 ORCA와 워크플로우가
 관리하는 내부 엔진 단계 전반의 활성 시뮬레이션 결합 수를 제한합니다.
 
-선택된 provider 설정이 완전하지 않으면(Discord webhook-only 포함),
+선택된 provider 설정이 완전하지 않으면
 `orca_auto systemd install`은 `orca_auto-queue-worker@$(whoami)`를 직접 활성화합니다.
 bot 설정을 완성한 뒤 같은 명령을 다시 실행하면 전체 런타임 타깃이 활성화됩니다.
 

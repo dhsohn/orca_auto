@@ -381,8 +381,8 @@ without wire markup, while the interactive application receives only normalized 
 
 `core/notifications/` retains the low-level Telegram Bot API transport reused by
 `TelegramChannel`, plus the engine notification hook layer (`engine_notifier.py`,
-`engine_delivery.py`). `DiscordBotChannel` is canonical when bot credentials are
-complete; `DiscordWebhookChannel` remains a notification-only compatibility adapter.
+`engine_delivery.py`). `DiscordBotChannel` sends bot-authenticated notifications;
+its shared HTTP retry/backoff helpers live in `discord_http.py`.
 Each `EngineDefinition` can register `job_started` / `job_finished` / `retry` hooks.
 
 `flow/bot/application.py` owns provider-neutral `/list`, `/cancel`, and `/help`
@@ -402,7 +402,7 @@ that extension belongs behind the same neutral card/action contracts.
 The selected adapter is enabled only when its credentials are complete. Telegram
 requires `messenger.telegram.bot_token` plus `chat_id`. Interactive Discord requires
 `bot_token`, channel IDs, and an operator allowlist; bot token + default channel is also the canonical
-notification path. A validated webhook URL enables only legacy outbound delivery.
+notification path.
 
 ---
 

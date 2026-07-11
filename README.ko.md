@@ -90,8 +90,6 @@ messenger:
     channel_ids: ["123456789012345678"]       # 명령 수신 채널 allowlist
     default_channel_id: "123456789012345678" # 알림 및 카드 액션 채널
     allowed_user_ids: ["234567890123456789"]  # 필수 operator allowlist
-    # 레거시 알림 전용 fallback; 인터랙티브 봇에서는 생략합니다.
-    webhook_url: ""
 
 orca:
   runtime:
@@ -119,7 +117,6 @@ orca:
   아래에만 존재합니다.
 - Discord 상호작용에는 Message Content Intent를 켠 별도 orca_auto Discord 앱/봇이
   필요합니다. 두 gateway 프로세스가 `ollama_bot` token을 공유하면 안 됩니다.
-  `webhook_url`은 레거시 발신 전용 전달에만 계속 지원됩니다.
 - 봇 초대, 채널 ID, 권한, 서비스 시작, 명령 확인 절차는
   [docs/DISCORD_SETUP.ko.md](docs/DISCORD_SETUP.ko.md)를 따르세요.
 - 전체 템플릿은 [config/orca_auto.yaml.example](config/orca_auto.yaml.example)에 있습니다.
@@ -172,8 +169,7 @@ orca_auto service restart
 
 선택된 provider의 인터랙티브 설정이 완전하지 않으면 설치 프로그램은 큐 워커만
 활성화합니다. Telegram은 token+chat ID, Discord는 bot token+명령 수신 채널+operator
-사용자 ID가 필요합니다. Discord webhook만으로는 액션을 받을 수 없어 worker-only로
-유지됩니다.
+사용자 ID가 필요합니다.
 설정을 마친 뒤 같은 명령을 다시 실행하면 전체 런타임 타깃이 활성화됩니다.
 `systemd/` 아래 파일을 수정했다면,
 재시작 전에

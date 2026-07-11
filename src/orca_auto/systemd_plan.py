@@ -301,14 +301,10 @@ def _bot_runtime_warning(config: Path, *, worker_only: bool) -> str | None:
     )
     if not configured:
         if provider == "discord":
-            mode = (
-                "Discord webhook delivery is notification-only"
-                if messenger.discord.webhook_url
-                else "Discord interactive bot settings are incomplete"
-            )
             return (
-                f"{mode}; configure messenger.discord.bot_token, allowed_user_ids, and at "
-                "least one channel_ids entry to run the interactive bot"
+                "Discord interactive bot settings are incomplete; configure "
+                "messenger.discord.bot_token, allowed_user_ids, and at least one "
+                "channel_ids entry to run the interactive bot"
             )
         if provider == "telegram":
             if messenger.telegram.enabled:

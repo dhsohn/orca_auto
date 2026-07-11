@@ -74,9 +74,6 @@ messenger:
     # Required operator allowlist for interactive controls. Keeping this empty
     # leaves Discord notifications enabled but fails the gateway closed.
     allowed_user_ids: []
-    # Legacy notification-only fallback. Used only when bot token/default
-    # channel are incomplete; it cannot receive commands or button actions.
-    webhook_url: ""
     timeout_seconds: 5.0
     max_attempts: 2
     retry_backoff_seconds: 0.5

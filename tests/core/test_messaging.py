@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from collections.abc import Iterable
-from email.message import Message as EmailMessage
-from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Literal
-from urllib.error import HTTPError
-from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -23,7 +17,7 @@ from orca_auto.core.config import (
     messenger_config_from_mapping,
 )
 from orca_auto.core.messaging import (
-    DiscordWebhookChannel,
+    DiscordBotChannel,
     Message,
     TelegramChannel,
     bold,
@@ -40,7 +34,6 @@ from orca_auto.core.messaging import (
     text,
     title_heading,
 )
-from orca_auto.core.messaging import discord_webhook as discord_mod
 from orca_auto.core.messaging import telegram_channel as telegram_mod
 from orca_auto.core.messaging.render_telegram import render_telegram_chunks
 from orca_auto.core.notifications._engine_transport import _lines_message
@@ -53,7 +46,7 @@ import orca_auto.core.messaging
 blocked = [
     name for name in (
         'orca_auto.core.messaging.discord_bot',
-        'orca_auto.core.messaging.discord_webhook',
+        'orca_auto.core.messaging.discord_http',
         'orca_auto.core.messaging.telegram_channel',
     )
     if name in sys.modules
@@ -285,325 +278,6 @@ def test_telegram_channel_sends_rendered_html(monkeypatch: pytest.MonkeyPatch) -
 
 
 # --------------------------------------------------------------------------- #
-# Discord webhook channel
-# --------------------------------------------------------------------------- #
-class _FakeResponse:
-    def __init__(self, status: int, body: bytes = b'{"id":"999"}') -> None:
-        self.status = status
-        self.body = body
-
-    def getcode(self) -> int:
-        return self.status
-
-    def read(self) -> bytes:
-        return self.body
-
-    def __enter__(self) -> _FakeResponse:
-        return self
-
-    def __exit__(self, *exc: object) -> Literal[False]:
-        return False
-
-
-def test_discord_channel_disabled_is_skipped() -> None:
-    result = DiscordWebhookChannel(DiscordConfig()).send(Message(title="x"))
-    assert result.skipped and not result.sent
-
-
-def test_discord_webhook_channel_stays_disabled_for_bot_only_config() -> None:
-    channel = DiscordWebhookChannel(DiscordConfig(bot_token="token", default_channel_id="123"))
-
-    result = channel.send(Message(title="x"))
-
-    assert not channel.enabled
-    assert result.skipped
-    assert result.error == "discord_disabled"
-
-
-def test_discord_channel_posts_embed_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[object] = []
-
-    def fake_urlopen(request: object, timeout: float) -> _FakeResponse:
-        calls.append(request)
-        return _FakeResponse(200)
-
-    monkeypatch.setattr(discord_mod, "urlopen", fake_urlopen)
-    channel = DiscordWebhookChannel(
-        DiscordConfig(
-            webhook_url=(
-                "https://discord.com/api/v10/webhooks/123/secret?thread_id=456&wait=false&tag="
-            )
-        )
-    )
-    result = channel.send(
-        Message(title="T", groups=(group(field_row("K", text("v")), heading=title_heading("T")),))
-    )
-    assert result.sent
-    assert result.provider == "discord"
-    assert result.message_id == "999"
-    assert result.message_ids == ("999",)
-    assert (result.sent_count, result.total_count) == (1, 1)
-    assert len(calls) == 1
-    query = parse_qs(urlsplit(calls[0].full_url).query, keep_blank_values=True)  # type: ignore[attr-defined]
-    assert query == {"thread_id": ["456"], "tag": [""], "wait": ["true"]}
-    payload = json.loads(calls[0].data)  # type: ignore[attr-defined]
-    assert payload["embeds"][0]["title"] == "T"
-    assert payload["embeds"][0]["fields"] == [{"name": "K", "value": "v", "inline": False}]
-    assert payload["allowed_mentions"] == {"parse": []}
-
-
-@pytest.mark.parametrize(
-    ("status", "body", "error"),
-    [
-        (204, b"", "discord_unconfirmed_delivery"),
-        (200, b"not-json", "discord_invalid_response"),
-        (200, b'{"content":"missing id"}', "discord_invalid_response"),
-        (200, b'{"id":"not-a-snowflake"}', "discord_invalid_response"),
-        (200, b'{"id":"0"}', "discord_invalid_response"),
-    ],
-)
-def test_discord_channel_requires_confirmed_message(
-    monkeypatch: pytest.MonkeyPatch,
-    status: int,
-    body: bytes,
-    error: str,
-) -> None:
-    monkeypatch.setattr(
-        discord_mod, "urlopen", lambda *_args, **_kwargs: _FakeResponse(status, body)
-    )
-    channel = DiscordWebhookChannel(
-        DiscordConfig(webhook_url="https://discord.com/api/webhooks/123/secret")
-    )
-    result = channel.send(Message(title="T"))
-    assert not result.sent
-    assert result.error == error
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "http://discord.com/api/webhooks/123/secret",
-        "https://discord.com.evil.example/api/webhooks/123/secret",
-        "https://discord.com/api/not-webhooks/123/secret",
-        "https://discord.com/api/webhooks/0/secret",
-        "https://user:password@discord.com/api/webhooks/123/secret",
-    ],
-)
-def test_discord_channel_rejects_non_discord_webhook_urls_without_leaking_secret(
-    monkeypatch: pytest.MonkeyPatch,
-    url: str,
-) -> None:
-    called = False
-
-    def fake_urlopen(*_args: object, **_kwargs: object) -> _FakeResponse:
-        nonlocal called
-        called = True
-        return _FakeResponse(200)
-
-    monkeypatch.setattr(discord_mod, "urlopen", fake_urlopen)
-    result = DiscordWebhookChannel(DiscordConfig(webhook_url=url)).send(Message(title="T"))
-    assert not called
-    assert not result.sent
-    assert result.error == "discord_invalid_webhook_url"
-    assert "secret" not in result.error
-
-
-def test_discord_channel_retries_on_http_429(monkeypatch: pytest.MonkeyPatch) -> None:
-    headers = EmailMessage()
-    headers["Retry-After"] = "0.25"
-    response_body = BytesIO(b'{"retry_after": 9}')
-    sequence: list[_FakeResponse | HTTPError] = [
-        HTTPError(
-            "https://discord.com/api/webhooks/123/secret",
-            429,
-            "rate",
-            headers,
-            response_body,
-        ),
-        _FakeResponse(200),
-    ]
-    delays: list[float] = []
-
-    def fake_urlopen(request: object, timeout: float) -> _FakeResponse:
-        item = sequence.pop(0)
-        if isinstance(item, HTTPError):
-            raise item
-        return item
-
-    monkeypatch.setattr(discord_mod, "urlopen", fake_urlopen)
-    channel = DiscordWebhookChannel(
-        DiscordConfig(
-            webhook_url="https://discord.com/api/webhooks/123/secret",
-            max_attempts=2,
-            retry_backoff_seconds=0.0,
-        ),
-        sleeper=delays.append,
-    )
-    result = channel.send(Message(title="T"))
-    assert result.sent
-    assert sequence == []
-    assert delays == [0.25]
-    assert response_body.closed
-
-
-def test_discord_channel_uses_retry_after_json_body(monkeypatch: pytest.MonkeyPatch) -> None:
-    sequence: list[_FakeResponse | HTTPError] = [
-        HTTPError(
-            "https://discord.com/api/webhooks/123/secret",
-            429,
-            "rate",
-            EmailMessage(),
-            BytesIO(b'{"retry_after": 0.125}'),
-        ),
-        _FakeResponse(200),
-    ]
-    delays: list[float] = []
-
-    def fake_urlopen(request: object, timeout: float) -> _FakeResponse:
-        item = sequence.pop(0)
-        if isinstance(item, HTTPError):
-            raise item
-        return item
-
-    monkeypatch.setattr(discord_mod, "urlopen", fake_urlopen)
-    channel = DiscordWebhookChannel(
-        DiscordConfig(
-            webhook_url="https://discord.com/api/webhooks/123/secret",
-            max_attempts=2,
-        ),
-        sleeper=delays.append,
-    )
-    assert channel.send(Message(title="T")).sent
-    assert delays == [0.125]
-
-
-def test_discord_channel_allows_documented_global_retry_window(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    headers = EmailMessage()
-    headers["Retry-After"] = "65"
-    sequence: list[_FakeResponse | HTTPError] = [
-        HTTPError(
-            "https://discord.com/api/webhooks/123/secret",
-            429,
-            "global rate limit",
-            headers,
-            BytesIO(b'{"retry_after":65,"global":true}'),
-        ),
-        _FakeResponse(200),
-    ]
-    delays: list[float] = []
-
-    def fake_urlopen(request: object, timeout: float) -> _FakeResponse:
-        item = sequence.pop(0)
-        if isinstance(item, HTTPError):
-            raise item
-        return item
-
-    monkeypatch.setattr(discord_mod, "urlopen", fake_urlopen)
-    channel = DiscordWebhookChannel(
-        DiscordConfig(
-            webhook_url="https://discord.com/api/webhooks/123/secret",
-            max_attempts=2,
-        ),
-        sleeper=delays.append,
-    )
-    assert channel.send(Message(title="T")).sent
-    assert delays == [65.0]
-
-
-def test_discord_channel_rejects_excessive_retry_after_without_sleep(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    headers = EmailMessage()
-    headers["Retry-After"] = "1337"
-    calls = 0
-
-    def fake_urlopen(request: object, timeout: float) -> _FakeResponse:
-        nonlocal calls
-        calls += 1
-        raise HTTPError(
-            "https://discord.com/api/webhooks/123/super-secret-token",
-            429,
-            "rate",
-            headers,
-            BytesIO(b'{"retry_after": 0.1}'),
-        )
-
-    monkeypatch.setattr(discord_mod, "urlopen", fake_urlopen)
-    channel = DiscordWebhookChannel(
-        DiscordConfig(
-            webhook_url="https://discord.com/api/webhooks/123/super-secret-token",
-            max_attempts=2,
-        ),
-        sleeper=lambda _delay: pytest.fail("must not sleep"),
-    )
-    result = channel.send(Message(title="T"))
-    assert calls == 1
-    assert not result.sent
-    assert result.error == "discord_retry_after_exceeds_limit"
-    assert "super-secret-token" not in result.error
-
-
-def test_discord_channel_gives_up_after_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_urlopen(request: object, timeout: float) -> _FakeResponse:
-        raise HTTPError(
-            "https://discord.com/api/webhooks/123/super-secret-token",
-            500,
-            "err",
-            EmailMessage(),
-            None,
-        )
-
-    monkeypatch.setattr(discord_mod, "urlopen", fake_urlopen)
-    monkeypatch.setattr(discord_mod.time, "sleep", lambda _seconds: None)
-    channel = DiscordWebhookChannel(
-        DiscordConfig(
-            webhook_url="https://discord.com/api/webhooks/123/super-secret-token",
-            max_attempts=2,
-            retry_backoff_seconds=0.0,
-        )
-    )
-    result = channel.send(Message(title="T"))
-    assert not result.sent
-    assert result.error == "discord_http_500"
-    assert "super-secret-token" not in result.error
-
-
-def test_discord_channel_defensively_caps_programmatic_attempts_and_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    timeouts: list[float] = []
-
-    def fake_urlopen(request: object, timeout: float) -> _FakeResponse:
-        timeouts.append(timeout)
-        raise HTTPError(
-            "https://discord.com/api/webhooks/123/secret",
-            500,
-            "err",
-            EmailMessage(),
-            None,
-        )
-
-    monkeypatch.setattr(discord_mod, "urlopen", fake_urlopen)
-    channel = DiscordWebhookChannel(
-        DiscordConfig(
-            webhook_url="https://discord.com/api/webhooks/123/secret",
-            timeout_seconds=float("inf"),
-            max_attempts=1_000_000_000,
-            retry_backoff_seconds=0.0,
-        ),
-        sleeper=lambda _delay: None,
-    )
-
-    result = channel.send(Message(title="T"))
-
-    assert not result.sent
-    assert result.error == "discord_http_500"
-    assert timeouts == [5.0] * 10
-
-
-# --------------------------------------------------------------------------- #
 # Registry / config
 # --------------------------------------------------------------------------- #
 def test_build_channel_selects_provider() -> None:
@@ -612,20 +286,25 @@ def test_build_channel_selects_provider() -> None:
         build_channel(MessengerConfig(provider="telegram", telegram=telegram)), TelegramChannel
     )
     discord = build_channel(
-        MessengerConfig(provider="discord", discord=DiscordConfig(webhook_url="https://x"))
+        MessengerConfig(
+            provider="discord",
+            discord=DiscordConfig(bot_token="token", default_channel_id="123"),
+        )
     )
-    assert isinstance(discord, DiscordWebhookChannel)
+    assert isinstance(discord, DiscordBotChannel)
     with pytest.raises(ValueError, match="Unsupported messenger provider"):
         build_channel(MessengerConfig(provider="bogus", telegram=telegram))
 
 
 def test_messenger_config_from_mapping() -> None:
-    webhook_url = "https://discord.com/api/webhooks/123/secret"
     cfg = messenger_config_from_mapping(
-        {"provider": "Discord", "discord": {"webhook_url": webhook_url}}
+        {
+            "provider": "Discord",
+            "discord": {"bot_token": "token", "default_channel_id": "123"},
+        }
     )
     assert cfg.normalized_provider == "discord"
-    assert cfg.discord.webhook_url == webhook_url
+    assert cfg.discord.bot_token == "token"
     assert cfg.discord.enabled
 
     telegram = messenger_config_from_mapping(
@@ -639,10 +318,6 @@ def test_messenger_config_from_mapping() -> None:
 
     with pytest.raises(ValueError, match="messenger.provider"):
         messenger_config_from_mapping({"provider": "disocrd"})
-    with pytest.raises(ValueError, match="messenger.discord.webhook_url"):
-        messenger_config_from_mapping(
-            {"provider": "discord", "discord": {"webhook_url": "https://example.test/hook"}}
-        )
 
 
 @pytest.mark.parametrize(
@@ -650,7 +325,7 @@ def test_messenger_config_from_mapping() -> None:
     [
         ("telegram", "messenger config"),
         ({"telegram": "token"}, "messenger.telegram"),
-        ({"discord": ["webhook"]}, "messenger.discord"),
+        ({"discord": ["bot"]}, "messenger.discord"),
     ],
 )
 def test_messenger_config_rejects_malformed_sections(raw: object, expected: str) -> None:
