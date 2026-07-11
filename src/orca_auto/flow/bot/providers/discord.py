@@ -18,6 +18,7 @@ from orca_auto.core.messaging.interactive import (
     ConversationAddress,
     IncomingAction,
     IncomingCommand,
+    IncomingUpload,
 )
 
 from ..application import BotApplication
@@ -309,6 +310,13 @@ class DiscordInteractiveMessenger:
         return SendResult(sent=True, provider=self.provider, sent_count=1, total_count=1)
 
 
+def _is_run_command(text: str) -> bool:
+    if not text.startswith(("/", "!")):
+        return False
+    parts = text.split(maxsplit=1)
+    return parts[0][1:].split("@", 1)[0].strip().lower() == "run"
+
+
 def _command_from_message(message: Any) -> IncomingCommand | None:
     text = str(getattr(message, "content", "") or "").strip()
     if not text.startswith(("/", "!")):
@@ -379,6 +387,11 @@ def run_discord_bot(application: BotApplication, config: DiscordConfig) -> int:
         finally:
             messenger.discard_interaction(incoming.ack_token)
 
+    def _dispatch_upload(incoming: IncomingUpload) -> None:
+        if messenger is None:
+            return
+        application.dispatch_upload(incoming, messenger=messenger)
+
     async def _submit(channel_id: str, callback: Any, incoming: Any) -> str:
         if not admission.acquire(channel_id):
             return "busy"
@@ -405,28 +418,91 @@ def run_discord_bot(application: BotApplication, config: DiscordConfig) -> int:
             )
         LOGGER.info("orca_auto Discord gateway ready as %s", client.user)
 
+    async def _reply_plain(channel: Any, text: str) -> None:
+        if channel is not None:
+            await channel.send(text, allowed_mentions=discord.AllowedMentions.none())
+
+    async def _handle_upload(
+        message: Any,
+        channel: Any,
+        channel_id: str,
+        actor: Actor,
+        attachment: Any,
+    ) -> None:
+        if messenger is None:
+            return
+        if not config.uploads.enabled:
+            await _reply_plain(channel, "File uploads are disabled.")
+            return
+        size = int(getattr(attachment, "size", 0) or 0)
+        if size > config.uploads.max_archive_bytes:
+            limit_mib = config.uploads.max_archive_bytes / (1024 * 1024)
+            await _reply_plain(channel, f"Attachment too large (limit {limit_mib:.0f} MiB).")
+            return
+        filename = str(getattr(attachment, "filename", "upload"))
+        try:
+            staged = application.stage_upload_path(filename)
+            await attachment.save(staged)
+        except Exception:  # noqa: BLE001 - download failures are reported to the channel
+            LOGGER.exception("discord_upload_download_failed")
+            await _reply_plain(channel, "Could not download the attachment. Try again.")
+            return
+        upload = IncomingUpload(
+            address=ConversationAddress(PROVIDER, channel_id),
+            actor=actor,
+            filename=filename,
+            size=size,
+            archive_path=str(staged),
+            message_id=str(getattr(message, "id", "")).strip() or None,
+        )
+        outcome = await _submit(channel_id, _dispatch_upload, upload)
+        if outcome != "ok":
+            # dispatch (which owns staged-file cleanup) never ran on a busy/failed
+            # admission, so remove the archive we already downloaded rather than
+            # leave it for the hour-long staging sweep.
+            try:
+                staged.unlink(missing_ok=True)
+            except OSError:
+                LOGGER.debug("discord_upload_staging_cleanup_skip")
+            await _reply_plain(
+                channel,
+                (
+                    "orca_auto is already processing a request for this channel. Try again."
+                    if outcome == "busy"
+                    else "orca_auto could not process that upload. Try again."
+                ),
+            )
+
     @client.event
     async def on_message(message: Any) -> None:
         author = getattr(message, "author", None)
         if bool(getattr(author, "bot", False)):
             return
+        channel = getattr(message, "channel", None)
+        channel_id = str(getattr(channel, "id", "")).strip()
+        if not channel_id or channel_id not in config.channel_ids:
+            return
+        actor = _actor(author)
+        if config.allowed_user_ids and actor.user_id not in config.allowed_user_ids:
+            return
+        text = str(getattr(message, "content", "") or "").strip()
+        attachments = list(getattr(message, "attachments", ()) or ())
+        if _is_run_command(text) and attachments:
+            await _handle_upload(message, channel, channel_id, actor, attachments[0])
+            return
         incoming = _command_from_message(message)
-        if incoming is None or incoming.address.channel_id not in config.channel_ids:
+        if incoming is None:
             return
-        if config.allowed_user_ids and incoming.actor.user_id not in config.allowed_user_ids:
-            return
-        outcome = await _submit(incoming.address.channel_id, _dispatch_command, incoming)
+        outcome = await _submit(channel_id, _dispatch_command, incoming)
         if outcome != "ok":
-            channel = getattr(message, "channel", None)
-            if channel is not None:
-                await channel.send(
-                    (
-                        "orca_auto is already processing a command for this channel. Try again."
-                        if outcome == "busy"
-                        else "orca_auto could not process that command. Try again."
-                    ),
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
+            await _reply_plain(
+                channel,
+                (
+                    "orca_auto is already processing a command for this channel. Try again."
+                    if outcome == "busy"
+                    else "orca_auto could not process that command. Try again."
+                ),
+            )
 
     @client.event
     async def on_interaction(interaction: Any) -> None:

@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, TypeVar
 
+from orca_auto.core.ingest.policy import UploadPolicy, upload_policy_from_mapping
 from orca_auto.core.utils.coercion import normalize_bool, normalize_text, safe_float, safe_int
 
 _RuntimeAdmissionConfigT = TypeVar("_RuntimeAdmissionConfigT", bound="RuntimeAdmissionMixin")
@@ -303,6 +304,7 @@ class DiscordConfig:
     channel_ids: tuple[str, ...] = field(default=(), repr=False)
     default_channel_id: str = field(default="", repr=False)
     allowed_user_ids: tuple[str, ...] = field(default=(), repr=False)
+    uploads: UploadPolicy = field(default_factory=UploadPolicy)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "bot_token", self.bot_token.strip())
@@ -387,6 +389,7 @@ def discord_config_from_mapping(raw: object) -> DiscordConfig:
             minimum=0.0,
             maximum=MAX_MESSENGER_RETRY_BACKOFF_SECONDS,
         ),
+        uploads=upload_policy_from_mapping(discord_raw.get("uploads")),
     )
 
 

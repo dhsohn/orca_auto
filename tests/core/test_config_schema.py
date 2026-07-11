@@ -358,6 +358,30 @@ def test_discord_config_parses_bot_and_authorization_settings() -> None:
     assert config.enabled
 
 
+def test_discord_config_uploads_default_disabled() -> None:
+    config = discord_config_from_mapping({"bot_token": "t"})
+    assert config.uploads.enabled is False
+
+
+def test_discord_config_parses_upload_policy() -> None:
+    config = discord_config_from_mapping(
+        {
+            "uploads": {
+                "enabled": True,
+                "max_archive_bytes": 1024,
+                "max_entries": 10,
+                "allowed_extensions": ["inp", ".XYZ", "yaml"],
+            }
+        }
+    )
+
+    assert config.uploads.enabled is True
+    assert config.uploads.max_archive_bytes == 1024
+    assert config.uploads.max_entries == 10
+    # Extensions are normalized to a leading dot and lowercase.
+    assert config.uploads.allowed_extensions == (".inp", ".xyz", ".yaml")
+
+
 def test_discord_config_capabilities_are_independent_and_fail_closed() -> None:
     interactive = DiscordConfig(
         bot_token="token",

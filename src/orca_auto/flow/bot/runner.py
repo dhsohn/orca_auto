@@ -30,6 +30,7 @@ def run_bot(*, config_path: str | None = None, provider: str | None = None) -> i
     if selected == "discord":
         from .providers.discord import run_discord_bot
 
+        application.upload_policy = messenger_config.discord.uploads
         return run_discord_bot(application, messenger_config.discord)
     raise ValueError(f"unsupported messenger provider: {selected!r}")
 

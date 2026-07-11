@@ -8,6 +8,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Added
+
+- Discord bot can accept a compressed run-dir (`.zip`/`.tar.gz`) attached to the
+  `!run` command, safe-extract it under `runs_root`, and submit it to the queue
+  after an explicit Confirm button. Disabled by default and gated to allowlisted
+  operators; configured under `messenger.discord.uploads`. The archive is bounded
+  by an extension allowlist plus path-traversal, symlink, and decompression-bomb
+  guards, and the queue entry takes the archive's directory name. Results are not
+  sent back — view them over your own remote access.
+
 ## [0.1.0] - 2026-07-09
 
 First tagged release. This entry consolidates the initial public development

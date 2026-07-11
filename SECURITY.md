@@ -51,7 +51,9 @@ or posted publicly.
 
 The following classes of issues are security-relevant for orca_auto:
 
-- path traversal or writing outside configured runtime roots;
+- path traversal or writing outside configured runtime roots, including unsafe
+  extraction of an uploaded run-dir archive (Zip Slip, symlink escape, or
+  decompression bombs) accepted through the Discord `!run` upload path;
 - unsafe acceptance of Windows, `/mnt/<drive>`, relative, or `.exe` executable
   paths where Linux-only executable policy is expected;
 - shell injection or unsafe process invocation;

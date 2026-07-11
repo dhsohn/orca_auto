@@ -77,6 +77,25 @@ messenger:
     timeout_seconds: 5.0
     max_attempts: 2
     retry_backoff_seconds: 0.5
+    # Optional: accept a compressed run-dir (.zip/.tar.gz) from an operator with
+    # the `!run` command and submit it to the queue. DISABLED by default: it
+    # turns the bot into an execution ingress, so only enable it for a trusted,
+    # allowlisted operator. The archive is safe-extracted under `runs_root`
+    # (path-traversal, symlink, and decompression-bomb guards always apply), and
+    # queueing waits for an explicit Confirm button. Results are not sent back;
+    # view them over your own remote access.
+    uploads:
+      enabled: false
+      # Reject the attachment before download above this many bytes. Discord's
+      # own upload cap (10 MiB on unboosted servers) is the practical ceiling.
+      max_archive_bytes: 26214400        # 25 MiB
+      # Decompression-bomb guards: total expanded size and per-file size.
+      max_total_uncompressed_bytes: 209715200  # 200 MiB
+      max_file_bytes: 104857600          # 100 MiB
+      max_entries: 4000
+      # Only these file types are written to disk. Extend for unusual run-dir
+      # contents; a leading dot is optional and matching is case-insensitive.
+      allowed_extensions: [inp, xyz, yaml, yml, json, txt, gbw, hess, pc]
 
 orca:
   runtime:

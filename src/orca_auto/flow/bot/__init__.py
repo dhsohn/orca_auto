@@ -6,6 +6,7 @@ from .application import (
     BotApplicationDeps,
     dispatch_action,
     dispatch_command,
+    dispatch_upload,
 )
 from .settings import BotSettings, settings_from_config
 
@@ -18,5 +19,6 @@ __all__ = [
     "BotSettings",
     "dispatch_action",
     "dispatch_command",
+    "dispatch_upload",
     "settings_from_config",
 ]

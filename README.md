@@ -149,7 +149,11 @@ orca_auto bot run              # foreground Telegram/Discord gateway
 `queue list` prints a compact, terminal-width-aware table; workflow children are grouped
 and indented under their parent. The selected bot mirrors the same application surface
 (Telegram `/list`; Discord `!list`, with matching cancel/help commands) and uses
-provider-native buttons. For the full command
+provider-native buttons. Discord can optionally accept a compressed run-dir
+(`.zip`/`.tar.gz`) attached to `!run`: the archive is safe-extracted under `runs_root`
+and queued after an explicit Confirm button. This is disabled by default and gated to
+allowlisted operators — see the `messenger.discord.uploads` block in
+[config/orca_auto.yaml.example](config/orca_auto.yaml.example). For the full command
 reference — table columns, the `--watch`/`--json`/`--no-color` flags, color and exit
 behavior, and the messenger bot —
 see [docs/REFERENCE.md](docs/REFERENCE.md) §7.

@@ -97,6 +97,23 @@ class IncomingAction:
     message_id: str | None = None
 
 
+@dataclass(frozen=True)
+class IncomingUpload:
+    """An inbound file attachment already downloaded to a local staging path.
+
+    Provider adapters download the attachment inside their own event loop and
+    hand the application only this provider-neutral value; ``archive_path`` is a
+    host path the application owns and may delete.
+    """
+
+    address: ConversationAddress
+    actor: Actor
+    filename: str
+    size: int
+    archive_path: str
+    message_id: str | None = None
+
+
 @runtime_checkable
 class InteractiveMessenger(Protocol):
     """Outbound capabilities required by provider-neutral bot dispatch."""
@@ -131,5 +148,6 @@ __all__ = [
     "ConversationAddress",
     "IncomingAction",
     "IncomingCommand",
+    "IncomingUpload",
     "InteractiveMessenger",
 ]
