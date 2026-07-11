@@ -14,7 +14,6 @@ from orca_auto.core.config import MessengerConfig
 
 from .channel import MessageChannel
 from .discord_bot import DiscordBotChannel
-from .discord_webhook import DiscordWebhookChannel
 from .telegram_channel import TelegramChannel
 
 ChannelBuilder = Callable[[MessengerConfig, logging.Logger | None], MessageChannel]
@@ -31,9 +30,7 @@ def _build_discord(
     messenger: MessengerConfig,
     logger: logging.Logger | None,
 ) -> MessageChannel:
-    if messenger.discord.bot_notification_enabled:
-        return DiscordBotChannel(messenger.discord, logger=logger)
-    return DiscordWebhookChannel(messenger.discord, logger=logger)
+    return DiscordBotChannel(messenger.discord, logger=logger)
 
 
 _CHANNEL_BUILDERS: dict[str, ChannelBuilder] = {

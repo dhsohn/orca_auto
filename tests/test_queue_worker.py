@@ -242,7 +242,7 @@ def test_terminal_replay_uses_selected_discord_provider_for_durability(
         runtime=RuntimeConfig(allowed_root=str(tmp_path)),
         messenger=MessengerConfig(
             provider="discord",
-            discord=DiscordConfig(webhook_url="https://discord.com/api/webhooks/123/secret"),
+            discord=DiscordConfig(bot_token="secret-token", default_channel_id="123"),
         ),
     )
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)

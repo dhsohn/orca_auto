@@ -96,8 +96,6 @@ messenger:
     channel_ids: ["123456789012345678"]       # inbound command allowlist
     default_channel_id: "123456789012345678" # notifications and card actions
     allowed_user_ids: ["234567890123456789"]  # required operator allowlist
-    # Legacy notification-only fallback; omit for an interactive bot.
-    webhook_url: ""
 
 orca:
   runtime:
@@ -117,7 +115,7 @@ Notes:
 - Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs live only under `<runs_root>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`).
 - Discord interactivity requires a separate orca_auto Discord application/bot with
   Message Content Intent enabled. Do not share the `ollama_bot` token between two
-  gateway processes. `webhook_url` remains supported for legacy outbound-only delivery.
+  gateway processes.
 - Follow [docs/DISCORD_SETUP.md](docs/DISCORD_SETUP.md) for the bot invite, channel IDs,
   permissions, service startup, and command verification.
 - The full template lives at [config/orca_auto.yaml.example](config/orca_auto.yaml.example).
@@ -171,9 +169,8 @@ orca_auto service restart
 
 If the selected provider is not configured for interactive operation, the installer
 enables only the queue worker. Telegram needs a token and chat ID; Discord needs a bot
-token, an inbound command channel, and an operator user ID. A Discord webhook alone stays worker-only because
-it cannot receive actions. After completing the provider config, rerun the same command
-to enable the full runtime target. If you edited files under
+token, an inbound command channel, and an operator user ID. After completing the provider
+config, rerun the same command to enable the full runtime target. If you edited files under
 `systemd/`, run
 `sudo systemctl daemon-reload` before restarting. See
 [systemd/README.md](systemd/README.md) for the full runtime setup.

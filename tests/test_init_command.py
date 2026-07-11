@@ -144,7 +144,6 @@ def test_prompt_discord_config_covers_skip_and_retry(capsys) -> None:
             "channel_ids": [],
             "default_channel_id": "",
             "allowed_user_ids": [],
-            "webhook_url": "",
         }
 
     with (
@@ -163,7 +162,6 @@ def test_prompt_discord_config_covers_skip_and_retry(capsys) -> None:
             "channel_ids": ["123"],
             "default_channel_id": "456",
             "allowed_user_ids": ["789"],
-            "webhook_url": "",
         }
 
     assert "Discord bot token" in capsys.readouterr().out
@@ -184,13 +182,13 @@ def test_prompt_messenger_config_selects_provider_and_adapter(capsys) -> None:
         ),
         patch(
             "orca_auto.orca.commands.init._prompt_discord_config",
-            return_value={"webhook_url": "https://discord.com/api/webhooks/123/secret"},
+            return_value={"bot_token": "bot-token", "default_channel_id": "123"},
         ),
         patch("orca_auto.orca.commands.init._prompt_telegram_config") as telegram_prompt,
     ):
         assert init._prompt_messenger_config() == {
             "provider": "discord",
-            "discord": {"webhook_url": "https://discord.com/api/webhooks/123/secret"},
+            "discord": {"bot_token": "bot-token", "default_channel_id": "123"},
         }
     telegram_prompt.assert_not_called()
 
@@ -394,13 +392,14 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
 
 def test_cmd_init_force_preserves_existing_discord_messenger(tmp_path: Path, capsys) -> None:
     config_path = tmp_path / "orca_auto.yaml"
-    webhook_url = "https://discord.com/api/webhooks/123/existing-secret"
+    bot_token = "existing-bot-secret"
+    existing_discord = {"bot_token": bot_token, "default_channel_id": "123456789012345678"}
     config_path.write_text(
         yaml.safe_dump(
             {
                 "messenger": {
                     "provider": "discord",
-                    "discord": {"webhook_url": webhook_url},
+                    "discord": existing_discord,
                 }
             },
             sort_keys=False,
@@ -441,11 +440,11 @@ def test_cmd_init_force_preserves_existing_discord_messenger(tmp_path: Path, cap
     written = yaml.safe_load(config_path.read_text(encoding="utf-8").split("\n", 1)[1])
     assert written["messenger"] == {
         "provider": "discord",
-        "discord": {"webhook_url": webhook_url},
+        "discord": existing_discord,
     }
     output = capsys.readouterr().out
     assert "Preserving existing messenger settings (discord)." in output
-    assert webhook_url not in output
+    assert bot_token not in output
 
 
 def test_prompt_init_values_can_replace_existing_messenger() -> None:

@@ -79,7 +79,7 @@ def load_yaml_mapping(
             parsed = yaml.safe_load(handle) or {}
     except yaml.YAMLError:
         # PyYAML's exception text includes source snippets. Config files contain
-        # bot tokens/webhook URLs, so never propagate the raw parser message.
+        # bot tokens, so never propagate the raw parser message.
         raise ValueError(f"Invalid YAML syntax: {path}") from None
     if not isinstance(parsed, dict):
         raise ValueError(invalid_message.format(path=path))

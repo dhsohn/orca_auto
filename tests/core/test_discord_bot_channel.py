@@ -13,7 +13,6 @@ import pytest
 from orca_auto.core.config import DiscordConfig, MessengerConfig
 from orca_auto.core.messaging import (
     DiscordBotChannel,
-    DiscordWebhookChannel,
     Message,
     build_channel,
 )
@@ -87,6 +86,8 @@ def test_discord_bot_channel_posts_confirmed_embed_without_mentions(
     [
         (_FakeResponse(204, b""), "discord_unconfirmed_delivery"),
         (_FakeResponse(200, b"not-json"), "discord_invalid_response"),
+        (_FakeResponse(200, b'{"content":"missing id"}'), "discord_invalid_response"),
+        (_FakeResponse(200, b'{"id":"not-a-snowflake"}'), "discord_invalid_response"),
         (_FakeResponse(200, b'{"id":"0"}'), "discord_invalid_response"),
     ],
 )
@@ -165,24 +166,167 @@ def test_discord_bot_channel_errors_do_not_expose_token(
     assert "secret-token" not in result.error
 
 
-def test_registry_prefers_complete_bot_rest_then_legacy_webhook() -> None:
-    complete = MessengerConfig(
-        provider="discord",
-        discord=_bot_config(webhook_url="https://discord.com/api/webhooks/123/secret"),
-    )
+def test_registry_always_builds_discord_bot_channel() -> None:
+    complete = MessengerConfig(provider="discord", discord=_bot_config())
     assert isinstance(build_channel(complete), DiscordBotChannel)
 
-    webhook_only = MessengerConfig(
-        provider="discord",
-        discord=DiscordConfig(webhook_url="https://discord.com/api/webhooks/123/secret"),
-    )
-    assert isinstance(build_channel(webhook_only), DiscordWebhookChannel)
-
+    # An incomplete bot config still resolves to the bot channel; it fails closed
+    # at send time rather than routing through another transport.
     incomplete_bot = MessengerConfig(
         provider="discord",
-        discord=DiscordConfig(
-            webhook_url="https://discord.com/api/webhooks/123/secret",
-            bot_token="token",
-        ),
+        discord=DiscordConfig(bot_token="token"),
     )
-    assert isinstance(build_channel(incomplete_bot), DiscordWebhookChannel)
+    assert isinstance(build_channel(incomplete_bot), DiscordBotChannel)
+
+
+# --------------------------------------------------------------------------- #
+# Shared HTTP retry/backoff behavior (discord_http helpers, via the bot sender)
+# --------------------------------------------------------------------------- #
+def test_discord_bot_channel_uses_retry_after_json_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sequence: list[_FakeResponse | HTTPError] = [
+        HTTPError(
+            "https://discord.com/api/v10/channels/123/messages",
+            429,
+            "rate",
+            EmailMessage(),
+            BytesIO(b'{"retry_after": 0.125}'),
+        ),
+        _FakeResponse(),
+    ]
+    delays: list[float] = []
+
+    def fake_urlopen(request: object, timeout: float) -> _FakeResponse:
+        del request, timeout
+        item = sequence.pop(0)
+        if isinstance(item, HTTPError):
+            raise item
+        return item
+
+    monkeypatch.setattr(bot_mod, "urlopen", fake_urlopen)
+    channel = DiscordBotChannel(_bot_config(max_attempts=2), sleeper=delays.append)
+
+    assert channel.send(Message(title="T")).sent
+    assert delays == [0.125]
+
+
+def test_discord_bot_channel_allows_documented_global_retry_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    headers = EmailMessage()
+    headers["Retry-After"] = "65"
+    sequence: list[_FakeResponse | HTTPError] = [
+        HTTPError(
+            "https://discord.com/api/v10/channels/123/messages",
+            429,
+            "global rate limit",
+            headers,
+            BytesIO(b'{"retry_after":65,"global":true}'),
+        ),
+        _FakeResponse(),
+    ]
+    delays: list[float] = []
+
+    def fake_urlopen(request: object, timeout: float) -> _FakeResponse:
+        del request, timeout
+        item = sequence.pop(0)
+        if isinstance(item, HTTPError):
+            raise item
+        return item
+
+    monkeypatch.setattr(bot_mod, "urlopen", fake_urlopen)
+    channel = DiscordBotChannel(_bot_config(max_attempts=2), sleeper=delays.append)
+
+    assert channel.send(Message(title="T")).sent
+    assert delays == [65.0]
+
+
+def test_discord_bot_channel_rejects_excessive_retry_after_without_sleep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    headers = EmailMessage()
+    headers["Retry-After"] = "1337"
+    calls = 0
+
+    def fake_urlopen(request: object, timeout: float) -> _FakeResponse:
+        nonlocal calls
+        del request, timeout
+        calls += 1
+        raise HTTPError(
+            "https://discord.com/api/v10/channels/123/messages",
+            429,
+            "rate",
+            headers,
+            BytesIO(b'{"retry_after": 0.1}'),
+        )
+
+    monkeypatch.setattr(bot_mod, "urlopen", fake_urlopen)
+    channel = DiscordBotChannel(
+        _bot_config(max_attempts=2),
+        sleeper=lambda _delay: pytest.fail("must not sleep"),
+    )
+
+    result = channel.send(Message(title="T"))
+
+    assert calls == 1
+    assert not result.sent
+    assert result.error == "discord_retry_after_exceeds_limit"
+    assert "secret-token" not in result.error
+
+
+def test_discord_bot_channel_gives_up_after_max_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(request: object, timeout: float) -> _FakeResponse:
+        del request, timeout
+        raise HTTPError(
+            "https://discord.com/api/v10/channels/123/messages",
+            500,
+            "err",
+            EmailMessage(),
+            None,
+        )
+
+    monkeypatch.setattr(bot_mod, "urlopen", fake_urlopen)
+    monkeypatch.setattr(bot_mod.time, "sleep", lambda _seconds: None)
+    channel = DiscordBotChannel(_bot_config(max_attempts=2, retry_backoff_seconds=0.0))
+
+    result = channel.send(Message(title="T"))
+
+    assert not result.sent
+    assert result.error == "discord_http_500"
+    assert "secret-token" not in result.error
+
+
+def test_discord_bot_channel_defensively_caps_attempts_and_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeouts: list[float] = []
+
+    def fake_urlopen(request: object, timeout: float) -> _FakeResponse:
+        del request
+        timeouts.append(timeout)
+        raise HTTPError(
+            "https://discord.com/api/v10/channels/123/messages",
+            500,
+            "err",
+            EmailMessage(),
+            None,
+        )
+
+    monkeypatch.setattr(bot_mod, "urlopen", fake_urlopen)
+    channel = DiscordBotChannel(
+        _bot_config(
+            timeout_seconds=float("inf"),
+            max_attempts=1_000_000_000,
+            retry_backoff_seconds=0.0,
+        ),
+        sleeper=lambda _delay: None,
+    )
+
+    result = channel.send(Message(title="T"))
+
+    assert not result.sent
+    assert result.error == "discord_http_500"
+    assert timeouts == [5.0] * 10

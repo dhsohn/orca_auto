@@ -603,7 +603,7 @@ def test_discord_without_operator_allowlist_stays_worker_only(tmp_path: Path) ->
     assert any("allowed_user_ids" in warning for warning in plan.warnings)
 
 
-def test_discord_webhook_only_stays_worker_only_even_with_telegram_credentials(
+def test_discord_notification_only_stays_worker_only_even_with_telegram_credentials(
     tmp_path: Path,
 ) -> None:
     repo, config_path = _make_repo(tmp_path)
@@ -616,7 +616,8 @@ def test_discord_webhook_only_stays_worker_only_even_with_telegram_credentials(
                 "    bot_token: telegram-token",
                 "    chat_id: telegram-chat",
                 "  discord:",
-                "    webhook_url: https://discord.com/api/webhooks/123/secret",
+                "    bot_token: discord-token",
+                '    default_channel_id: "123456789012345678"',
             ]
         )
         + "\n",
@@ -633,7 +634,7 @@ def test_discord_webhook_only_stays_worker_only_even_with_telegram_credentials(
     )
 
     assert plan.enabled_unit == "orca_auto-queue-worker@alice.service"
-    assert any("notification-only" in warning for warning in plan.warnings)
+    assert any("interactive bot settings are incomplete" in warning for warning in plan.warnings)
 
 
 @pytest.mark.parametrize("content", [None, "messenger: [\n"])

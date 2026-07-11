@@ -340,7 +340,6 @@ def test_messenger_delivery_settings_bound_nonfinite_and_unbounded_values(
 def test_discord_config_parses_bot_and_authorization_settings() -> None:
     config = discord_config_from_mapping(
         {
-            "webhook_url": "https://discord.com/api/webhooks/123/secret",
             "bot_token": " bot-token ",
             "channel_ids": [111, "222", "111"],
             "default_channel_id": 333,
@@ -360,11 +359,6 @@ def test_discord_config_parses_bot_and_authorization_settings() -> None:
 
 
 def test_discord_config_capabilities_are_independent_and_fail_closed() -> None:
-    webhook = DiscordConfig(webhook_url="https://discord.com/api/webhooks/123/secret")
-    assert webhook.notification_enabled
-    assert webhook.enabled
-    assert not webhook.interactive_enabled
-
     interactive = DiscordConfig(
         bot_token="token",
         channel_ids=("111",),
@@ -401,7 +395,6 @@ def test_messenger_config_repr_redacts_credentials() -> None:
     discord = repr(
         DiscordConfig(
             bot_token="discord-secret",
-            webhook_url="https://discord.com/api/webhooks/123/webhook-secret",
             channel_ids=("456",),
             default_channel_id="789",
             allowed_user_ids=("10",),
@@ -412,7 +405,6 @@ def test_messenger_config_repr_redacts_credentials() -> None:
     assert "123" not in telegram
     assert "('7',)" not in telegram
     assert "discord-secret" not in discord
-    assert "webhook-secret" not in discord
     assert "('456',)" not in discord
     assert "789" not in discord
     assert "('10',)" not in discord

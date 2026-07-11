@@ -196,7 +196,6 @@ def _prompt_discord_config() -> dict[str, object]:
         "channel_ids": [],
         "default_channel_id": "",
         "allowed_user_ids": [],
-        "webhook_url": "",
     }
     if not _prompt_yes_no("Configure the Discord bot now?", default=False):
         return empty
@@ -211,7 +210,6 @@ def _prompt_discord_config() -> dict[str, object]:
             "allowed_user_ids": _comma_separated_ids(
                 _prompt_text("Discord operator user ids (comma-separated)")
             ),
-            "webhook_url": "",
         }
         try:
             config = discord_config_from_mapping(raw)

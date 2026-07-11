@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from orca_auto.core.messaging import (
-    DiscordWebhookChannel,
+    DiscordBotChannel,
     SendResult,
     TelegramChannel,
     render_telegram,
@@ -316,7 +316,8 @@ def test_messenger_channel_from_env_does_not_override_config_provider(
                 "messenger:",
                 "  provider: discord",
                 "  discord:",
-                "    webhook_url: https://discord.com/api/webhooks/123/journal-token",
+                "    bot_token: config-bot-token",
+                '    default_channel_id: "123456789012345678"',
             ]
         )
         + "\n",
@@ -328,8 +329,8 @@ def test_messenger_channel_from_env_does_not_override_config_provider(
 
     channel = registry_notifications.messenger_channel_from_env()
 
-    assert isinstance(channel, DiscordWebhookChannel)
-    assert channel.config.webhook_url == ("https://discord.com/api/webhooks/123/journal-token")
+    assert isinstance(channel, DiscordBotChannel)
+    assert channel.config.bot_token == "config-bot-token"
 
 
 def test_maybe_notify_journal_event_sends_message_and_swallows_channel_errors(

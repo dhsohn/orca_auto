@@ -61,7 +61,6 @@ messenger:
     timeout_seconds: 5.0
     max_attempts: 2
     retry_backoff_seconds: 0.5
-    webhook_url: ""  # legacy outbound-only fallback; leave empty for bot mode
 ```
 
 Discord IDs must be quoted positive decimal strings. Protect the local config:
@@ -73,9 +72,7 @@ chmod 600 config/orca_auto.yaml
 `bot_token` plus at least one `channel_ids` entry and a non-empty
 `allowed_user_ids` list enables the gateway. `bot_token` plus
 `default_channel_id` enables bot-authenticated notifications even without the
-gateway. A webhook alone can send legacy notifications but cannot
-receive commands or component interactions, so it does not enable the bot
-service.
+gateway.
 
 ## 4. Install and verify the service
 
@@ -131,7 +128,7 @@ command cards only.
 - **Notifications do not arrive:** verify `default_channel_id`, **Send Messages**,
   and **Embed Links** in that channel.
 - **Only the queue worker starts:** rerun `systemd install` after completing the
-  bot token, channel, and operator-user configuration; webhook-only mode is
-  intentionally worker-only.
+  bot token, channel, and operator-user configuration; an incomplete bot
+  configuration is intentionally worker-only.
 - **Discord reports an invalid token or privileged-intent close:** reset the
   token if necessary and enable Message Content Intent before restarting.

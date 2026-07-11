@@ -60,7 +60,6 @@ messenger:
     timeout_seconds: 5.0
     max_attempts: 2
     retry_backoff_seconds: 0.5
-    webhook_url: ""  # 레거시 발신 전용 fallback; bot 모드에서는 비워 둠
 ```
 
 Discord ID는 따옴표로 감싼 양의 10진수 문자열이어야 합니다. 로컬 설정 파일도
@@ -72,9 +71,7 @@ chmod 600 config/orca_auto.yaml
 
 `bot_token`, 하나 이상의 `channel_ids` 항목, 비어 있지 않은
 `allowed_user_ids`가 있으면 gateway가 활성화됩니다. Bot 인증 알림은 gateway 없이도
-`bot_token`과 `default_channel_id`만 있으면 보낼 수 있습니다. Webhook만으로는 레거시
-알림을 보낼 수 있지만 명령이나 component interaction을 받을 수 없으므로 bot 서비스가
-활성화되지 않습니다.
+`bot_token`과 `default_channel_id`만 있으면 보낼 수 있습니다.
 
 ## 4. 서비스 설치 및 확인
 
@@ -128,7 +125,7 @@ audience 정책이 있지만 단기 메모리 구현은 의도적으로 gateway�
 - **알림이 오지 않음:** `default_channel_id`와 해당 채널의 **Send Messages**,
   **Embed Links** 권한을 확인합니다.
 - **큐 worker만 시작됨:** token, 채널, operator 사용자 설정을 완성한 뒤
-  `systemd install`을 다시 실행합니다. Webhook-only 모드는 의도적으로
+  `systemd install`을 다시 실행합니다. bot 설정이 완전하지 않으면 의도적으로
   worker-only입니다.
 - **잘못된 token 또는 privileged intent 종료 오류:** 필요하면 token을 재발급하고
   Message Content Intent를 켠 뒤 재시작합니다.

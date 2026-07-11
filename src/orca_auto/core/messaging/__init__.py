@@ -50,13 +50,11 @@ if TYPE_CHECKING:
         load_required_messenger_config_from_file,
     )
     from .discord_bot import DiscordBotChannel
-    from .discord_webhook import DiscordWebhookChannel
     from .registry import build_channel
     from .telegram_channel import TelegramChannel
 
 _LAZY_EXPORTS = {
     "DiscordBotChannel": (".discord_bot", "DiscordBotChannel"),
-    "DiscordWebhookChannel": (".discord_webhook", "DiscordWebhookChannel"),
     "TelegramChannel": (".telegram_channel", "TelegramChannel"),
     "build_channel": (".registry", "build_channel"),
     "build_channel_from_config_path": (".config_io", "build_channel_from_config_path"),
@@ -86,7 +84,6 @@ __all__ = [
     "CardAction",
     "ConversationAddress",
     "DiscordBotChannel",
-    "DiscordWebhookChannel",
     "Field",
     "Group",
     "IncomingAction",

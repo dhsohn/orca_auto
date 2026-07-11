@@ -372,9 +372,9 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 거부합니다.
 
 `core/notifications/`는 `TelegramChannel`이 재사용하는 저수준 Telegram Bot API 전송과
-엔진 알림 훅 계층(`engine_notifier.py`, `engine_delivery.py`)을 유지합니다. Bot 설정이
-완전하면 `DiscordBotChannel`이 정식 발신자이며, `DiscordWebhookChannel`은 알림 전용
-호환 adapter로 남습니다. 각 `EngineDefinition`은
+엔진 알림 훅 계층(`engine_notifier.py`, `engine_delivery.py`)을 유지합니다.
+`DiscordBotChannel`이 bot 인증 알림을 발신하며, 공유 HTTP 재시도/백오프 헬퍼는
+`discord_http.py`에 있습니다. 각 `EngineDefinition`은
 `job_started` / `job_finished` / `retry` 훅을 등록할 수 있습니다.
 
 `flow/bot/application.py`는 provider-neutral `/list`, `/cancel`, `/help` 동작을
@@ -393,8 +393,7 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 선택된 adapter는 해당 credential이 완전할 때만 활성화됩니다. Telegram에는
 `messenger.telegram.bot_token`과 `chat_id`가 필요합니다. 인터랙티브 Discord에는 bot
 token, 채널 ID, operator allowlist가 필요하며, bot token+기본 채널이 정식 알림
-경로입니다. 검증된
-webhook URL은 레거시 발신 전용 전달만 활성화합니다.
+경로입니다.
 
 ---
 

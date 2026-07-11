@@ -33,8 +33,7 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
 If the selected Telegram or Discord provider has complete interactive bot settings,
-orca_auto enables the full runtime target. Otherwise it enables only the queue worker;
-a Discord webhook by itself is notification-only.
+orca_auto enables the full runtime target. Otherwise it enables only the queue worker.
 
 ## 4) Check Or Restart Services
 

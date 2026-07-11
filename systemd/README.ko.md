@@ -40,7 +40,7 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 설치 프로그램은 저장소 경로로 유닛 파일을 렌더링해 `/etc/systemd/system`에 쓰고,
 `systemctl daemon-reload`를 실행한 뒤, 현재 설정에 맞는 런타임을 활성화/시작합니다.
 Telegram은 token+chat ID, Discord는 별도 bot token+명령 수신 채널+operator 사용자 ID가 필요합니다.
-Discord webhook-only 설정은 알림 전용이므로 설치 프로그램이 큐 워커만 선택합니다.
+bot 설정이 완전하지 않으면 설치 프로그램이 큐 워커만 선택합니다.
 bot 설정을 완성한 뒤 같은 명령을 다시 실행하면 전체 런타임 타깃이 활성화됩니다.
 
 결합 런타임 타깃 모니터링:
@@ -84,7 +84,7 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
 인터랙티브 봇을 systemd로 관리하고 싶지 않거나 선택된 provider 설정이 완전하지
-않을 때는 워커 전용 서비스를 사용하세요. Discord webhook-only 설정을 포함해 설치
+않을 때는 워커 전용 서비스를 사용하세요. bot 설정이 완전하지 않으면 설치
 프로그램이 자동으로 그 모드를 선택합니다.
 
 통합 엔진 워커 모니터링:

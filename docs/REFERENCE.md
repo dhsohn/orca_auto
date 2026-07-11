@@ -155,8 +155,6 @@ messenger:
     channel_ids: ["123456789012345678"]
     default_channel_id: "123456789012345678"
     allowed_user_ids: []
-    # Legacy notification-only fallback:
-    webhook_url: ""
 
 orca:
   runtime:
@@ -442,9 +440,9 @@ supervision plus the internal CREST and xTB workers. The shared
 `scheduler.max_active_simulations` setting still limits the combined number of
 active simulations across ORCA and workflow-managed internal engine stages.
 
-If the selected provider is incomplete (including Discord webhook-only),
-`orca_auto systemd install` enables `orca_auto-queue-worker@$(whoami)` directly. Run the
-same command again after completing bot configuration to enable the full runtime target.
+If the selected provider is incomplete, `orca_auto systemd install` enables
+`orca_auto-queue-worker@$(whoami)` directly. Run the same command again after
+completing bot configuration to enable the full runtime target.
 
 Workflow supervision belongs to `orca_auto-queue-worker@.service`.
 

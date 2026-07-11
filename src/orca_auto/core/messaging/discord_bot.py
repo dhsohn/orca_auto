@@ -21,7 +21,7 @@ from urllib.request import Request, urlopen
 from orca_auto.core.config import DiscordConfig
 
 from .channel import SendResult
-from .discord_webhook import (
+from .discord_http import (
     _DEFAULT_RETRY_BACKOFF_SECONDS,
     _MAX_TOTAL_RETRY_DELAY_SECONDS,
     _SUPPRESS_NOTIFICATIONS,
