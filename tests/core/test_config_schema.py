@@ -258,6 +258,21 @@ def test_telegram_config_enabled(bot_token: str, chat_id: str, expected: bool) -
     assert config.enabled is expected
 
 
+def test_telegram_interactive_readiness_distinguishes_private_and_group_chats() -> None:
+    assert TelegramConfig(bot_token="token", chat_id="123").interactive_enabled
+    assert not TelegramConfig(bot_token="token", chat_id="-100123").interactive_enabled
+    assert TelegramConfig(
+        bot_token="token",
+        chat_id="-100123",
+        allowed_user_ids=("7",),
+    ).interactive_enabled
+    assert not TelegramConfig(
+        bot_token="token",
+        chat_id="@announcement",
+        allowed_user_ids=("7",),
+    ).interactive_enabled
+
+
 def test_telegram_config_from_mapping_normalizes_delivery_settings() -> None:
     config = telegram_config_from_mapping(
         {
@@ -266,6 +281,7 @@ def test_telegram_config_from_mapping_normalizes_delivery_settings() -> None:
             "timeout_seconds": "0",
             "max_attempts": "0",
             "retry_backoff_seconds": "-2",
+            "allowed_user_ids": [123, "456", "123"],
         }
     )
 
@@ -274,6 +290,13 @@ def test_telegram_config_from_mapping_normalizes_delivery_settings() -> None:
     assert config.timeout_seconds == 0.1
     assert config.max_attempts == 1
     assert config.retry_backoff_seconds == 0.0
+    assert config.allowed_user_ids == ("123", "456")
+
+
+@pytest.mark.parametrize("value", [[False], ["0"], ["-1"], ["１２３"], "123,456"])
+def test_telegram_config_rejects_invalid_allowed_user_ids(value: object) -> None:
+    with pytest.raises(ValueError, match="messenger.telegram.allowed_user_ids"):
+        telegram_config_from_mapping({"allowed_user_ids": value})
 
 
 def test_telegram_config_from_mapping_uses_defaults_for_non_mapping() -> None:
@@ -312,3 +335,113 @@ def test_messenger_delivery_settings_bound_nonfinite_and_unbounded_values(
     assert bounded.timeout_seconds == 120.0
     assert bounded.max_attempts == 10
     assert bounded.retry_backoff_seconds == 120.0
+
+
+def test_discord_config_parses_bot_and_authorization_settings() -> None:
+    config = discord_config_from_mapping(
+        {
+            "webhook_url": "https://discord.com/api/webhooks/123/secret",
+            "bot_token": " bot-token ",
+            "channel_ids": [111, "222", "111"],
+            "default_channel_id": 333,
+            "allowed_user_ids": ["444", 555, "444"],
+        }
+    )
+
+    assert config.bot_token == "bot-token"
+    assert config.channel_ids == ("111", "222")
+    assert config.default_channel_id == "333"
+    assert config.allowed_user_ids == ("444", "555")
+    assert config.interaction_channel_ids == ("111", "222", "333")
+    assert config.bot_notification_enabled
+    assert config.notification_enabled
+    assert config.interactive_enabled
+    assert config.enabled
+
+
+def test_discord_config_capabilities_are_independent_and_fail_closed() -> None:
+    webhook = DiscordConfig(webhook_url="https://discord.com/api/webhooks/123/secret")
+    assert webhook.notification_enabled
+    assert webhook.enabled
+    assert not webhook.interactive_enabled
+
+    interactive = DiscordConfig(
+        bot_token="token",
+        channel_ids=("111",),
+        allowed_user_ids=("222",),
+    )
+    assert interactive.interactive_enabled
+    assert not interactive.notification_enabled
+    assert not interactive.enabled
+
+    incomplete = DiscordConfig(bot_token="token")
+    assert not incomplete.notification_enabled
+    assert not incomplete.interactive_enabled
+
+    no_operators = DiscordConfig(bot_token="token", channel_ids=("111",))
+    assert not no_operators.interactive_enabled
+
+    default_only = DiscordConfig(
+        bot_token="token",
+        default_channel_id="111",
+        allowed_user_ids=("222",),
+    )
+    assert default_only.notification_enabled
+    assert not default_only.interactive_enabled
+
+
+def test_messenger_config_repr_redacts_credentials() -> None:
+    telegram = repr(
+        TelegramConfig(
+            bot_token="telegram-secret",
+            chat_id="123",
+            allowed_user_ids=("7",),
+        )
+    )
+    discord = repr(
+        DiscordConfig(
+            bot_token="discord-secret",
+            webhook_url="https://discord.com/api/webhooks/123/webhook-secret",
+            channel_ids=("456",),
+            default_channel_id="789",
+            allowed_user_ids=("10",),
+        )
+    )
+
+    assert "telegram-secret" not in telegram
+    assert "123" not in telegram
+    assert "('7',)" not in telegram
+    assert "discord-secret" not in discord
+    assert "webhook-secret" not in discord
+    assert "('456',)" not in discord
+    assert "789" not in discord
+    assert "('10',)" not in discord
+
+
+def test_discord_interaction_channels_include_default_once() -> None:
+    config = DiscordConfig(
+        bot_token="token",
+        channel_ids=("111", "222"),
+        default_channel_id="222",
+    )
+
+    assert config.interaction_channel_ids == ("111", "222")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("default_channel_id", "0"),
+        ("default_channel_id", "001"),
+        ("default_channel_id", "-1"),
+        ("default_channel_id", "１２３"),
+        ("default_channel_id", True),
+        ("default_channel_id", str(1 << 64)),
+        ("channel_ids", ["abc"]),
+        ("channel_ids", "111,222"),
+        ("allowed_user_ids", [False]),
+    ],
+)
+def test_discord_config_rejects_invalid_snowflakes(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match=rf"messenger\.discord\.{field}"):
+        discord_config_from_mapping({field: value})

@@ -74,7 +74,8 @@ src/orca_auto/
     ├── templates.py     # Workflow template registry
     ├── manifest.py      # flow.yaml parsing
     ├── registry/        # Workflow registry + journal
-    └── telegram/        # Unified Telegram bot
+    ├── bot/             # Provider-neutral bot application + gateway adapters
+    └── telegram/        # Legacy-compatible Telegram facade/transport helpers
 ```
 
 ### Import rules (from DEVELOPMENT.md)
@@ -372,27 +373,36 @@ consume ORCA results without coupling to ORCA internals.
 
 ## 9. Notifications
 
-`core/messaging/` owns the provider-neutral outbound boundary: immutable semantic
-`Message` documents, the `MessageChannel` port and `SendResult` receipt, provider
-registry, and Telegram/Discord renderers and adapters. Domain notifiers construct
-documents and never choose wire markup. `MessengerConfig` owns both adapter configs,
-and the registry resolves exactly one active provider with unknown values rejected.
+`core/messaging/` owns two provider-neutral capability boundaries: immutable semantic
+`Message` documents plus the notification `MessageChannel`, and normalized
+command/action models plus `InteractiveMessenger`. Domain notifiers construct documents
+without wire markup, while the interactive application receives only normalized values.
+`MessengerConfig` owns both adapter configs and rejects unknown providers.
 
 `core/notifications/` retains the low-level Telegram Bot API transport reused by
 `TelegramChannel`, plus the engine notification hook layer (`engine_notifier.py`,
-`engine_delivery.py`). `DiscordWebhookChannel` owns its webhook transport directly.
+`engine_delivery.py`). `DiscordBotChannel` is canonical when bot credentials are
+complete; `DiscordWebhookChannel` remains a notification-only compatibility adapter.
 Each `EngineDefinition` can register `job_started` / `job_finished` / `retry` hooks.
 
-`flow/telegram/` is the application-specific inbound Telegram bot adapter, separate
-from the outbound messenger port. It mirrors the `queue list`
-table as `/list` (minus the ID column for mobile), supports `/cancel <target>`
-with inline-button confirmation, and per-activity cancel / refresh / "clear
-finished" actions. Workflow alerts keep per-job ORCA messages but summarize
+`flow/bot/application.py` owns provider-neutral `/list`, `/cancel`, and `/help`
+behavior. Native Telegram polling and Discord gateway adapters translate provider
+events at the edge. Destructive actions use short, expiring, one-time opaque IDs bound
+to the requesting provider, channel, and actor instead of embedding raw queue IDs in
+button payloads. Workflow alerts keep per-job ORCA messages but summarize
 internal CREST and reaction-path xTB child phases into one message each.
 
-The selected outbound adapter is enabled only when its credentials are complete.
-Telegram requires `messenger.telegram.bot_token` plus `chat_id`; Discord requires a
-validated official HTTPS `messenger.discord.webhook_url`.
+The `ActionStore` port defines one-time resolution and originator/operator audience
+policies. Its current in-memory implementation intentionally serves cards created by
+the gateway in response to commands. Notification messages do not yet carry actions.
+When notification-origin controls are added, the worker-side sender and gateway must
+share a durable `ActionStore` implementation so bindings survive the process boundary;
+that extension belongs behind the same neutral card/action contracts.
+
+The selected adapter is enabled only when its credentials are complete. Telegram
+requires `messenger.telegram.bot_token` plus `chat_id`. Interactive Discord requires
+`bot_token`, channel IDs, and an operator allowlist; bot token + default channel is also the canonical
+notification path. A validated webhook URL enables only legacy outbound delivery.
 
 ---
 
@@ -431,12 +441,12 @@ the public CLI. Units live under `systemd/`:
 | Unit                                  | Role                                            |
 |---------------------------------------|-------------------------------------------------|
 | `orca_auto-queue-worker@.service`     | Supervises ORCA plus workflow + internal xTB/CREST workers |
-| `orca_auto-bot@.service`              | Unified Telegram bot                            |
+| `orca_auto-bot@.service`              | Selected provider-neutral messenger bot        |
 | `orca_auto-runtime@.target`           | Starts both together                            |
 
 `orca_auto systemd install --user <user> --repo <repo>` renders and enables the
-units. If Telegram is unconfigured, only the queue worker is enabled; rerun after
-setting the Telegram credentials to enable the full target. On WSL, `systemd`
+units. If the selected provider lacks interactive bot settings, only the queue worker is
+enabled; rerun after completing them to enable the full target. On WSL, `systemd`
 must be enabled in `/etc/wsl.conf`.
 
 ---

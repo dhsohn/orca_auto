@@ -139,20 +139,34 @@ def test_prompt_telegram_config_covers_skip_and_retry(capsys) -> None:
 
 def test_prompt_discord_config_covers_skip_and_retry(capsys) -> None:
     with patch("orca_auto.orca.commands.init._prompt_yes_no", return_value=False):
-        assert init._prompt_discord_config() == {"webhook_url": ""}
+        assert init._prompt_discord_config() == {
+            "bot_token": "",
+            "channel_ids": [],
+            "default_channel_id": "",
+            "allowed_user_ids": [],
+            "webhook_url": "",
+        }
 
     with (
         patch("orca_auto.orca.commands.init._prompt_yes_no", return_value=True),
         patch(
             "orca_auto.orca.commands.init._prompt_secret_text",
-            side_effect=["", "https://discord.com/api/webhooks/123/secret"],
+            side_effect=["", "bot-token"],
+        ),
+        patch(
+            "orca_auto.orca.commands.init._prompt_text",
+            side_effect=["123", "456", "", "123", "456", "789"],
         ),
     ):
         assert init._prompt_discord_config() == {
-            "webhook_url": "https://discord.com/api/webhooks/123/secret"
+            "bot_token": "bot-token",
+            "channel_ids": ["123"],
+            "default_channel_id": "456",
+            "allowed_user_ids": ["789"],
+            "webhook_url": "",
         }
 
-    assert "valid HTTPS Discord webhook URL is required" in capsys.readouterr().out
+    assert "Discord bot token" in capsys.readouterr().out
 
 
 def test_prompt_messenger_config_selects_provider_and_adapter(capsys) -> None:
@@ -417,6 +431,7 @@ def test_cmd_init_force_preserves_existing_discord_messenger(tmp_path: Path, cap
             "orca_auto.orca.commands.init._prompt_max_active_simulations",
             return_value=4,
         ),
+        patch("orca_auto.orca.commands.init._prompt_yes_no", return_value=True),
         patch("orca_auto.orca.commands.init._prompt_messenger_config") as messenger_prompt,
         patch("orca_auto.orca.commands.init._validate_generated_config"),
     ):
@@ -431,3 +446,47 @@ def test_cmd_init_force_preserves_existing_discord_messenger(tmp_path: Path, cap
     output = capsys.readouterr().out
     assert "Preserving existing messenger settings (discord)." in output
     assert webhook_url not in output
+
+
+def test_prompt_init_values_can_replace_existing_messenger() -> None:
+    replacement = {
+        "provider": "discord",
+        "discord": {
+            "bot_token": "token",
+            "channel_ids": ["100"],
+            "default_channel_id": "200",
+            "allowed_user_ids": ["7"],
+        },
+    }
+    with (
+        patch("orca_auto.orca.commands.init._prompt_yes_no", return_value=False),
+        patch(
+            "orca_auto.orca.commands.init._prompt_messenger_config",
+            return_value=replacement,
+        ),
+        patch(
+            "orca_auto.orca.commands.init._prompt_orca_runtime",
+            return_value={
+                "runs_root": "/runs",
+                "default_max_retries": 2,
+                "executable": "/usr/bin/orca",
+            },
+        ),
+        patch(
+            "orca_auto.orca.commands.init._prompt_xtb_runtime",
+            return_value={"executable": "/usr/bin/xtb"},
+        ),
+        patch(
+            "orca_auto.orca.commands.init._prompt_crest_runtime",
+            return_value={"executable": "/usr/bin/crest"},
+        ),
+        patch(
+            "orca_auto.orca.commands.init._prompt_max_active_simulations",
+            return_value=4,
+        ),
+    ):
+        values = init._prompt_init_values(
+            existing_messenger={"provider": "telegram", "telegram": {"bot_token": "old"}}
+        )
+
+    assert values.messenger == replacement

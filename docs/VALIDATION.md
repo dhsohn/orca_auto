@@ -35,7 +35,7 @@ CI does not prove:
 - that a local ORCA, xTB, CREST, OpenMPI, or site scheduler installation is valid;
 - that requested memory/core settings are accepted by a particular cluster or
   workstation policy;
-- that Telegram credentials are configured or network delivery succeeds;
+- that messenger credentials are configured or network delivery succeeds;
 - that a chemically meaningful calculation converges;
 - that private research structures or proprietary outputs are safe to publish.
 

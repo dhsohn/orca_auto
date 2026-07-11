@@ -20,6 +20,7 @@ from orca_auto.activity_view import (
 from orca_auto.core.activity_icons import activity_status_icon
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config.files import config_env_value
+from orca_auto.core.messaging import load_messenger_config_from_file
 from orca_auto.core.notifications import (
     build_telegram_transport,
     escape_html,
@@ -28,6 +29,7 @@ from orca_auto.core.notifications import (
 
 from ..activity import _sources as _activity_sources
 from ..activity import cancel_activity, clear_activities, list_activities
+from ..bot.runner import run_bot as _run_neutral_bot
 from . import bot_api as _api
 from . import commands as _commands
 from . import dispatch as _dispatch
@@ -340,6 +342,39 @@ def _dispatch_update(settings: TelegramBotSettings, update: Any) -> int | None:
 
 
 def run_bot(settings: TelegramBotSettings | None = None) -> int:
+    """Run the canonical bot, retaining explicit-settings legacy test compatibility.
+
+    Existing installed units may still invoke this historical module path.  A
+    no-argument call therefore delegates to the provider-neutral application so
+    upgrades cannot accidentally keep the old Telegram-only action dispatcher.
+    """
+
+    if settings is None:
+        config_path = config_env_value(ORCA_AUTO_CONFIG_ENV_VAR) or None
+        messenger_config = load_messenger_config_from_file(config_path)
+        if (
+            messenger_config.normalized_provider == "telegram"
+            and not messenger_config.telegram.enabled
+        ):
+            legacy_settings = settings_from_config(config_path)
+            if legacy_settings.telegram.interactive_enabled:
+                from ..bot.application import BotApplication
+                from ..bot.providers.telegram import run_telegram_bot
+                from ..bot.settings import BotSettings
+
+                return run_telegram_bot(
+                    BotApplication(
+                        BotSettings(
+                            workflow_root=legacy_settings.workflow_root,
+                            crest_config=legacy_settings.crest_config,
+                            xtb_config=legacy_settings.xtb_config,
+                            orca_config=legacy_settings.orca_config,
+                            orca_repo_root=legacy_settings.orca_repo_root,
+                        )
+                    ),
+                    legacy_settings.telegram,
+                )
+        return int(_run_neutral_bot(config_path=config_path))
     return _dispatch.run_bot(
         settings,
         settings_from_env_fn=settings_from_env,
@@ -351,8 +386,7 @@ def run_bot(settings: TelegramBotSettings | None = None) -> int:
 
 
 def main() -> int:
-    config_path = config_env_value(ORCA_AUTO_CONFIG_ENV_VAR) or None
-    return int(run_bot(settings_from_config(config_path)))
+    return run_bot()
 
 
 __all__ = [

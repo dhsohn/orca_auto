@@ -14,7 +14,7 @@ from orca_auto.core.config.files import (
     messenger_mapping_from_root,
     secure_config_file_permissions,
 )
-from orca_auto.core.config.schema import discord_webhook_url_is_valid
+from orca_auto.core.config.schema import discord_config_from_mapping
 from orca_auto.core.engine_runner import validate_executable_file
 from orca_auto.core.paths import is_rejected_windows_path
 from orca_auto.core.utils.persistence import atomic_write_text
@@ -186,15 +186,44 @@ def _prompt_telegram_config() -> dict[str, str]:
         )
 
 
-def _prompt_discord_config() -> dict[str, str]:
-    if not _prompt_yes_no("Configure Discord notifications now?", default=False):
-        return {"webhook_url": ""}
+def _comma_separated_ids(raw: str) -> list[str]:
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _prompt_discord_config() -> dict[str, object]:
+    empty: dict[str, object] = {
+        "bot_token": "",
+        "channel_ids": [],
+        "default_channel_id": "",
+        "allowed_user_ids": [],
+        "webhook_url": "",
+    }
+    if not _prompt_yes_no("Configure the Discord bot now?", default=False):
+        return empty
 
     while True:
-        webhook_url = _prompt_secret_text("Discord webhook URL")
-        if discord_webhook_url_is_valid(webhook_url):
-            return {"webhook_url": webhook_url}
-        print("A valid HTTPS Discord webhook URL is required, or choose not to configure Discord.")
+        raw: dict[str, object] = {
+            "bot_token": _prompt_secret_text("Discord bot token"),
+            "channel_ids": _comma_separated_ids(
+                _prompt_text("Discord inbound channel ids (comma-separated)")
+            ),
+            "default_channel_id": _prompt_text("Discord default notification channel id"),
+            "allowed_user_ids": _comma_separated_ids(
+                _prompt_text("Discord operator user ids (comma-separated)")
+            ),
+            "webhook_url": "",
+        }
+        try:
+            config = discord_config_from_mapping(raw)
+        except ValueError as exc:
+            print(f"Invalid Discord bot configuration: {exc}")
+            continue
+        if config.bot_notification_enabled and config.channel_ids and config.allowed_user_ids:
+            return raw
+        print(
+            "Discord bot token, an inbound channel id, a default channel id, and at least "
+            "one operator user id are required."
+        )
 
 
 def _prompt_messenger_provider(*, default: str = "telegram") -> str:
@@ -281,16 +310,24 @@ def _confirm_existing_config_overwrite(config_path: Path) -> int | None:
 def _prompt_init_values(
     *, existing_messenger: Mapping[str, object] | None = None
 ) -> _PromptedInitValues:
+    orca_runtime = _prompt_orca_runtime()
+    xtb_runtime = _prompt_xtb_runtime()
+    crest_runtime = _prompt_crest_runtime()
+    max_active_simulations = _prompt_max_active_simulations()
+    if existing_messenger is not None and _prompt_yes_no(
+        "Keep the existing messenger settings?",
+        default=True,
+    ):
+        messenger = dict(existing_messenger)
+        print(f"Preserving existing messenger settings ({messenger.get('provider', 'telegram')}).")
+    else:
+        messenger = _prompt_messenger_config()
     return _PromptedInitValues(
-        orca_runtime=_prompt_orca_runtime(),
-        xtb_runtime=_prompt_xtb_runtime(),
-        crest_runtime=_prompt_crest_runtime(),
-        max_active_simulations=_prompt_max_active_simulations(),
-        messenger=(
-            dict(existing_messenger)
-            if existing_messenger is not None
-            else _prompt_messenger_config()
-        ),
+        orca_runtime=orca_runtime,
+        xtb_runtime=xtb_runtime,
+        crest_runtime=crest_runtime,
+        max_active_simulations=max_active_simulations,
+        messenger=messenger,
     )
 
 
@@ -377,12 +414,6 @@ def cmd_init(args: Any) -> int:
     existing_messenger = (
         _load_existing_messenger_mapping(config_path) if config_path.exists() else None
     )
-    if existing_messenger is not None:
-        print(
-            "Preserving existing messenger settings "
-            f"({existing_messenger.get('provider', 'telegram')})."
-        )
-
     print(f"Creating config at: {config_path}")
 
     try:

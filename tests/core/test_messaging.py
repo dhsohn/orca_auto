@@ -33,6 +33,7 @@ from orca_auto.core.messaging import (
     group,
     line,
     load_messenger_config_from_file,
+    load_required_messenger_config_from_file,
     raw,
     render_discord_embed,
     render_telegram,
@@ -51,6 +52,7 @@ import sys
 import orca_auto.core.messaging
 blocked = [
     name for name in (
+        'orca_auto.core.messaging.discord_bot',
         'orca_auto.core.messaging.discord_webhook',
         'orca_auto.core.messaging.telegram_channel',
     )
@@ -306,6 +308,16 @@ class _FakeResponse:
 def test_discord_channel_disabled_is_skipped() -> None:
     result = DiscordWebhookChannel(DiscordConfig()).send(Message(title="x"))
     assert result.skipped and not result.sent
+
+
+def test_discord_webhook_channel_stays_disabled_for_bot_only_config() -> None:
+    channel = DiscordWebhookChannel(DiscordConfig(bot_token="token", default_channel_id="123"))
+
+    result = channel.send(Message(title="x"))
+
+    assert not channel.enabled
+    assert result.skipped
+    assert result.error == "discord_disabled"
 
 
 def test_discord_channel_posts_embed_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -675,3 +687,14 @@ def test_messenger_config_file_dual_reads_legacy_with_nested_precedence(
     nested = load_messenger_config_from_file(config_path)
     assert nested.telegram.bot_token == ""
     assert nested.telegram.chat_id == "nested-chat"
+
+
+def test_required_messenger_config_rejects_missing_and_invalid_files(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.yaml"
+    with pytest.raises(FileNotFoundError, match="bot config does not exist"):
+        load_required_messenger_config_from_file(missing)
+
+    invalid = tmp_path / "invalid.yaml"
+    invalid.write_text("messenger: [\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Invalid YAML syntax"):
+        load_required_messenger_config_from_file(invalid)

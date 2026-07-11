@@ -99,10 +99,15 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `messenger.provider` (`telegram` 또는 `discord`)
 - `messenger.telegram.bot_token`
 - `messenger.telegram.chat_id`
+- `messenger.telegram.allowed_user_ids`
 - `messenger.telegram.timeout_seconds`
 - `messenger.telegram.max_attempts`
 - `messenger.telegram.retry_backoff_seconds`
 - `messenger.discord.webhook_url`
+- `messenger.discord.bot_token`
+- `messenger.discord.channel_ids`
+- `messenger.discord.default_channel_id`
+- `messenger.discord.allowed_user_ids`
 - `messenger.discord.timeout_seconds`
 - `messenger.discord.max_attempts`
 - `messenger.discord.retry_backoff_seconds`
@@ -121,8 +126,10 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   활성화합니다.
 - 발신 Telegram 전송에는 `messenger.provider: telegram`과 비어 있지 않은
   `messenger.telegram.bot_token`, `messenger.telegram.chat_id` 값이 필요합니다.
-- 발신 Discord 전송에는 `messenger.provider: discord`와 유효한 공식 HTTPS Discord
-  execute-webhook URL인 `messenger.discord.webhook_url` 값이 필요합니다.
+- 정식 Discord 전송에는 `messenger.discord.bot_token`과 `default_channel_id`를
+  사용하고, `channel_ids`가 명령 수신 채널을 허용합니다. 인터랙티브 gateway에는
+  비어 있지 않은 `allowed_user_ids` operator allowlist도 필요합니다. 유효한 공식 HTTPS
+  webhook은 bot 전송 설정이 완전하지 않을 때 알림 전용 fallback으로 남습니다.
 - 두 adapter 모두 전송 timeout을 0.1~120초, 총 시도 횟수를 1~10회, 설정된 retry
   backoff를 0~120초로 제한합니다.
 
@@ -132,8 +139,8 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   `messenger.telegram`을 모두 읽습니다. 둘 다 있으면 중첩된 `messenger.telegram` 값이
   우선합니다.
 - 새 설정, 생성 예제, 도구는 `messenger.telegram`을 기록합니다. 새 최상위 `telegram:`
-  블록을 추가하지 마세요. Discord에는 기존 별칭이 없으므로
-  `messenger.provider: discord`와 `messenger.discord.webhook_url`을 사용하세요.
+  블록을 추가하지 마세요. Discord에는 기존 별칭이 없으므로 중첩된
+  `messenger.discord` bot 필드를 사용하고, `webhook_url`은 발신 호환용으로만 둡니다.
 
 ## 큐와 activity 계약
 
@@ -354,7 +361,8 @@ ORCA analyzer 상태:
 안정 동작:
 
 - installer는 큐 워커를 활성화합니다.
-- Telegram 봇은 Telegram 설정이 완성되었을 때만 활성화됩니다.
+- 선택된 Telegram/Discord 봇은 인터랙티브 설정이 완성되었을 때만 활성화되며,
+  Discord webhook-only 모드는 worker-only로 남습니다.
 - `service status`는 runtime target, queue worker, bot 상태를 보고합니다.
 - `service restart`는 runtime target이 활성화되어 있으면 그것을 재시작하고, 아니면 큐
   워커를 재시작합니다.

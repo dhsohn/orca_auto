@@ -152,7 +152,7 @@ class DiscordWebhookChannel:
 
     @property
     def enabled(self) -> bool:
-        return self.config.enabled
+        return bool(self.config.webhook_url.strip())
 
     def _payload(self, message: Message, *, silent: bool) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -228,7 +228,7 @@ class DiscordWebhookChannel:
             )
 
     def send(self, message: Message, *, silent: bool = False) -> SendResult:
-        if not self.config.enabled:
+        if not self.enabled:
             return SendResult(
                 sent=False,
                 skipped=True,

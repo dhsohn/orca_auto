@@ -81,10 +81,16 @@ messenger:
   telegram:
     bot_token: ""
     chat_id: ""
+    allowed_user_ids: [] # 그룹 채팅 제어에는 필수
     timeout_seconds: 5.0
     max_attempts: 2
     retry_backoff_seconds: 0.5
   discord:
+    bot_token: ""
+    channel_ids: ["123456789012345678"]       # 명령 수신 채널 allowlist
+    default_channel_id: "123456789012345678" # 알림 및 카드 액션 채널
+    allowed_user_ids: ["234567890123456789"]  # 필수 operator allowlist
+    # 레거시 알림 전용 fallback; 인터랙티브 봇에서는 생략합니다.
     webhook_url: ""
 
 orca:
@@ -111,6 +117,11 @@ orca:
 - 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은
   오직 `<runs_root>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`, `03_orca`)
   아래에만 존재합니다.
+- Discord 상호작용에는 Message Content Intent를 켠 별도 orca_auto Discord 앱/봇이
+  필요합니다. 두 gateway 프로세스가 `ollama_bot` token을 공유하면 안 됩니다.
+  `webhook_url`은 레거시 발신 전용 전달에만 계속 지원됩니다.
+- 봇 초대, 채널 ID, 권한, 서비스 시작, 명령 확인 절차는
+  [docs/DISCORD_SETUP.ko.md](docs/DISCORD_SETUP.ko.md)를 따르세요.
 - 전체 템플릿은 [config/orca_auto.yaml.example](config/orca_auto.yaml.example)에 있습니다.
 
 ## 사용자 명령어
@@ -136,17 +147,19 @@ orca_auto queue cancel <target>
 orca_auto service status
 orca_auto service restart
 orca_auto scan-notify
+orca_auto bot run              # 포그라운드 Telegram/Discord gateway
 ```
 
 `queue list`는 터미널 너비에 맞춰 조정되는 간결한 표를 출력하며, 워크플로우 자식은
-부모 아래에 들여쓰기되어 묶입니다. Telegram 봇은 동일한 표면(`/list`, `/cancel`)을
-인라인 버튼으로 제공합니다. 표 컬럼, `--watch`/`--json`/`--no-color` 플래그, 색상·종료
-동작, Telegram 봇 등 전체 명령 레퍼런스는
+부모 아래에 들여쓰기되어 묶입니다. 선택된 봇은 동일한 앱 표면(Telegram `/list`,
+Discord `!list`, 동일한 cancel/help 명령)을 provider-native 버튼으로 제공합니다. 표 컬럼,
+`--watch`/`--json`/`--no-color` 플래그, 색상·종료 동작, messenger 봇 등 전체 명령
+레퍼런스는
 [docs/REFERENCE.ko.md](docs/REFERENCE.ko.md) §7을 참고하세요.
 
 ## 서비스
 
-장기 실행 서비스(큐 워커와 Telegram 봇)는 오직 `systemd`로만 관리됩니다.
+장기 실행 서비스(큐 워커와 선택된 messenger 봇)는 오직 `systemd`로만 관리됩니다.
 `orca_auto.yaml` 설정을 마친 뒤, 통합 런타임 타깃을 한 번 활성화하면 `systemd`가 둘 다
 계속 실행합니다:
 
@@ -157,9 +170,12 @@ orca_auto service status
 orca_auto service restart
 ```
 
-Telegram이 아직 설정되지 않았다면 설치 프로그램은 큐 워커만 활성화합니다.
-`messenger.telegram.bot_token`과 `messenger.telegram.chat_id`를 설정한 뒤 같은 명령을
-다시 실행하면 전체 런타임 타깃이 활성화됩니다. `systemd/` 아래 파일을 수정했다면,
+선택된 provider의 인터랙티브 설정이 완전하지 않으면 설치 프로그램은 큐 워커만
+활성화합니다. Telegram은 token+chat ID, Discord는 bot token+명령 수신 채널+operator
+사용자 ID가 필요합니다. Discord webhook만으로는 액션을 받을 수 없어 worker-only로
+유지됩니다.
+설정을 마친 뒤 같은 명령을 다시 실행하면 전체 런타임 타깃이 활성화됩니다.
+`systemd/` 아래 파일을 수정했다면,
 재시작 전에
 `sudo systemctl daemon-reload`를 실행하세요. 전체 런타임 설정은
 [systemd/README.ko.md](systemd/README.ko.md)를 참고하세요.
@@ -193,7 +209,7 @@ CI는 또한 Gitleaks 비밀 스캔, `scripts/*.sh`용 ShellCheck, 렌더링된 
 Python 3.11/3.12/3.13 검사 매트릭스, 그리고 타입 패키지 메타데이터를 확인하는 wheel
 스모크 테스트를 실행합니다. 이 검사들은 라이선스가 필요한 ORCA 바이너리 없이도 큐,
 워크플로우, 파서, 알림, 가짜 엔진 통합 경로를 점검합니다. 다만 로컬 ORCA/OpenMPI
-설치가 유효한지, 사이트 스케줄러가 요청한 자원을 허용하는지, Telegram 자격 증명과
+설치가 유효한지, 사이트 스케줄러가 요청한 자원을 허용하는지, messenger 자격 증명과
 네트워크 전송이 배포 환경에서 동작하는지까지 증명하지는 않습니다.
 
 대규모 리팩터 후 로컬 Python/test/tool 캐시를 정리하려면:

@@ -36,7 +36,7 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
                 "messenger:",
                 "  telegram:",
                 "    bot_token: token",
-                "    chat_id: chat",
+                "    chat_id: '123'",
                 "orca:",
                 "  paths:",
                 f"    orca_executable: {orca_executable}",
@@ -129,7 +129,7 @@ def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
                 "messenger:",
                 "  telegram:",
                 "    bot_token: token",
-                "    chat_id: chat",
+                "    chat_id: '123'",
             ]
         )
         + "\n",
@@ -170,7 +170,7 @@ def test_systemd_rejects_orca_scoped_admission_override(
                 "messenger:",
                 "  telegram:",
                 "    bot_token: token",
-                "    chat_id: chat",
+                "    chat_id: '123'",
             ]
         )
         + "\n",
@@ -200,7 +200,7 @@ def test_systemd_rejects_non_mapping_orca_scheduler(tmp_path: Path) -> None:
                 "messenger:",
                 "  telegram:",
                 "    bot_token: token",
-                "    chat_id: chat",
+                "    chat_id: '123'",
             ]
         )
         + "\n",
@@ -226,7 +226,7 @@ def test_systemd_read_write_paths_omit_invalid_runs_root(tmp_path: Path) -> None
                 "messenger:",
                 "  telegram:",
                 "    bot_token: token",
-                "    chat_id: chat",
+                "    chat_id: '123'",
             ]
         )
         + "\n",
@@ -315,7 +315,7 @@ def test_systemd_read_write_paths_reject_whitespace_from_config(tmp_path: Path) 
                 "messenger:",
                 "  telegram:",
                 "    bot_token: token",
-                "    chat_id: chat",
+                "    chat_id: '123'",
             ]
         )
         + "\n",
@@ -502,6 +502,138 @@ def test_full_runtime_warns_when_telegram_is_not_configured(tmp_path: Path) -> N
 
     assert plan.enabled_unit == "orca_auto-queue-worker@alice.service"
     assert any("Telegram is not fully configured" in warning for warning in plan.warnings)
+
+
+def test_telegram_group_without_operator_allowlist_stays_worker_only(tmp_path: Path) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    config_path.write_text(
+        "\n".join(
+            [
+                "messenger:",
+                "  provider: telegram",
+                "  telegram:",
+                "    bot_token: token",
+                "    chat_id: '-100123'",
+                "    allowed_user_ids: []",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=repo,
+        config=config_path,
+        unit_dir=tmp_path / "units",
+        no_start=True,
+        is_root=lambda: True,
+    )
+
+    assert plan.enabled_unit == "orca_auto-queue-worker@alice.service"
+    assert any("allowed_user_ids" in warning for warning in plan.warnings)
+
+
+def test_discord_bot_credentials_enable_full_runtime_with_neutral_entrypoint(
+    tmp_path: Path,
+) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    config_path.write_text(
+        "\n".join(
+            [
+                "messenger:",
+                "  provider: discord",
+                "  discord:",
+                "    bot_token: token",
+                "    channel_ids:",
+                "      - '100'",
+                "    default_channel_id: '200'",
+                "    allowed_user_ids:",
+                "      - '7'",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=repo,
+        config=config_path,
+        unit_dir=tmp_path / "units",
+        no_start=True,
+        is_root=lambda: True,
+    )
+
+    assert plan.enabled_unit == "orca_auto-runtime@alice.target"
+    bot_unit = next(unit for unit in plan.units if unit.name == "orca_auto-bot@.service")
+    assert "-m orca_auto.flow.bot.runner" in bot_unit.content
+    assert "orca_auto.flow.telegram.bot" not in bot_unit.content
+    assert not any("notification-only" in warning for warning in plan.warnings)
+
+
+def test_discord_without_operator_allowlist_stays_worker_only(tmp_path: Path) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    config_path.write_text(
+        "\n".join(
+            [
+                "messenger:",
+                "  provider: discord",
+                "  discord:",
+                "    bot_token: token",
+                "    channel_ids: ['100']",
+                "    default_channel_id: '200'",
+                "    allowed_user_ids: []",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=repo,
+        config=config_path,
+        unit_dir=tmp_path / "units",
+        no_start=True,
+        is_root=lambda: True,
+    )
+
+    assert plan.enabled_unit == "orca_auto-queue-worker@alice.service"
+    assert any("allowed_user_ids" in warning for warning in plan.warnings)
+
+
+def test_discord_webhook_only_stays_worker_only_even_with_telegram_credentials(
+    tmp_path: Path,
+) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    config_path.write_text(
+        "\n".join(
+            [
+                "messenger:",
+                "  provider: discord",
+                "  telegram:",
+                "    bot_token: telegram-token",
+                "    chat_id: telegram-chat",
+                "  discord:",
+                "    webhook_url: https://discord.com/api/webhooks/123/secret",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=repo,
+        config=config_path,
+        unit_dir=tmp_path / "units",
+        no_start=True,
+        is_root=lambda: True,
+    )
+
+    assert plan.enabled_unit == "orca_auto-queue-worker@alice.service"
+    assert any("notification-only" in warning for warning in plan.warnings)
 
 
 @pytest.mark.parametrize("content", [None, "messenger: [\n"])

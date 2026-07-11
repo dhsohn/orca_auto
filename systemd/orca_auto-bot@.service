@@ -1,5 +1,5 @@
 [Unit]
-Description=orca_auto unified Telegram bot for %i
+Description=orca_auto provider-neutral messenger bot for %i
 After=network-online.target
 Wants=network-online.target
 PartOf=orca_auto-runtime@%i.target
@@ -11,7 +11,7 @@ WorkingDirectory=/home/%i/orca_auto
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=ORCA_AUTO_CONFIG=/home/%i/orca_auto/config/orca_auto.yaml
-ExecStart=/home/%i/orca_auto/.venv/bin/python -m orca_auto.flow.telegram.bot
+ExecStart=/home/%i/orca_auto/.venv/bin/python -m orca_auto.flow.bot.runner
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
