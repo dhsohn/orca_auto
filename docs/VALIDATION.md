@@ -121,7 +121,7 @@ justifies them.
 - Keep fixtures minimal, sanitized, and deterministic.
 - Prefer output snippets that exercise a parser or classifier over full raw
   output files.
-- Do not commit credentials, private paths, Telegram tokens, chat IDs, or private
+- Do not commit credentials, private paths, messenger bot tokens, chat/channel IDs, or private
   research data.
 - When a fixture represents a failure mode, document the expected classifier,
   retry decision, and safe next action.

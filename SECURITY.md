@@ -1,7 +1,7 @@
 # Security policy
 
 orca_auto runs local processes, reads configuration files, writes calculation
-artifacts, and can optionally send Telegram notifications. Treat credentials,
+artifacts, and can optionally send Telegram or Discord notifications. Treat credentials,
 private structures, and raw calculation outputs as sensitive unless they are
 explicitly public.
 
@@ -36,7 +36,7 @@ Please include:
 
 Before posting issues, PRs, logs, fixtures, or examples, remove:
 
-- Telegram bot tokens and chat IDs;
+- messenger bot tokens (Telegram or Discord) and chat/channel IDs;
 - shell environment variables containing credentials;
 - private workstation or cluster usernames when not needed;
 - proprietary ORCA output or unpublished structures;
@@ -55,7 +55,7 @@ The following classes of issues are security-relevant for orca_auto:
 - unsafe acceptance of Windows, `/mnt/<drive>`, relative, or `.exe` executable
   paths where Linux-only executable policy is expected;
 - shell injection or unsafe process invocation;
-- Telegram token leakage or accidental notification to the wrong destination;
+- messenger bot token leakage or accidental notification to the wrong destination;
 - logs, reports, examples, or fixtures that expose private structures or secrets;
 - GitHub Actions or release-process changes that weaken secret handling.
 

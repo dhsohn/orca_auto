@@ -33,7 +33,7 @@ that should change cautiously and with tests, docs, and release notes:
 
 - CLI commands: `orca_auto init`, `orca_auto run-dir`, `orca_auto queue ...`,
   `orca_auto scaffold ...`, `orca_auto service ...`, and `orca_auto scan-notify`.
-- Configuration keys under `scheduler`, `workflow`, `telegram`, and `orca`.
+- Configuration keys under `scheduler`, `workflow`, `messenger`, and `orca`.
 - Queue behavior: durable submission, cancellation, worker ownership, terminal
   queue state, and shared admission-slot accounting.
 - ORCA job artifacts: `job_state.json`, `job_report.json`, `job_report.md`, and
