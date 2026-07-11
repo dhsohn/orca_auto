@@ -1068,6 +1068,7 @@ def test_confirm_rejects_workflow_resources_above_server_cap(tmp_path: Path) -> 
         "workflow_type: scan_ts_search\nscan_coordinate: 'B 0 1 = 1.2, 3.0, 999'\n",
         "workflow_type: conformer_screening\norca_route_line: '!ExtOpt'\n",
         "workflow_type: conformer_screening\norca_route_line: '! Compound'\n",
+        "workflow_type: conformer_screening\norca_route_line: '! r2scan-3c MD'\n",
         "workflow_type: conformer_screening\nroute_line: '! r2scan-3c GCP(FILE)'\n",
     ],
 )
