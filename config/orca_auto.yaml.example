@@ -86,13 +86,21 @@ messenger:
     # view them over your own remote access.
     uploads:
       enabled: false
-      # Reject the attachment before download above this many bytes. Discord's
-      # own upload cap (10 MiB on unboosted servers) is the practical ceiling.
+      # Reserve this declared size before download, then enforce the same limit
+      # again against the bytes actually streamed from Discord's trusted CDN.
       max_archive_bytes: 26214400        # 25 MiB
       # Decompression-bomb guards: total expanded size and per-file size.
       max_total_uncompressed_bytes: 209715200  # 200 MiB
       max_file_bytes: 104857600          # 100 MiB
       max_entries: 4000
+      # Durable staging quota and lifecycle. A reservation is taken before the
+      # Discord CDN download starts, bounding concurrent count and bytes.
+      max_staged_bytes: 536870912        # 512 MiB across pending uploads
+      max_staged_uploads: 32
+      max_pending_per_actor: 4
+      max_concurrent_downloads: 4
+      staging_ttl_seconds: 3600          # unconfirmed/failed upload retention
+      committed_retention_seconds: 86400 # idempotency receipt retention
       # Only these file types are written to disk. Extend for unusual run-dir
       # contents; a leading dot is optional and matching is case-insensitive.
       allowed_extensions: [inp, xyz, yaml, yml, json, txt, gbw, hess, pc]

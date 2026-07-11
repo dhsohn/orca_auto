@@ -1,8 +1,8 @@
 """End-to-end: an uploaded archive, once confirmed, reaches the real queue.
 
-This exercises the actual CLI submission handlers (not a stub), so it guards the
-``argparse.Namespace`` contract in ``_submit_extracted_run_dir`` against drift and
-proves the extracted run-dir enqueues under its directory name.
+This exercises the direct submission API (not a stub), so it guards the typed
+upload adapter contract in ``_submit_extracted_run_dir`` against drift and proves
+the extracted run-dir enqueues under its directory name.
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import zipfile
 from pathlib import Path
+
+import pytest
 
 from orca_auto.core.ingest import UploadPolicy
 from orca_auto.core.messaging.channel import SendResult
@@ -132,3 +134,59 @@ def test_uploaded_orca_run_dir_enqueues_under_its_name(tmp_path: Path) -> None:
         entry.get("engine") == "orca" and entry.get("task_kind") == "orca_run_inp"
         for entry in entries
     )
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, ValueError])
+def test_postcommit_notification_exception_returns_queue_receipt_and_preserves_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[Exception],
+) -> None:
+    from orca_auto.orca.commands import run_inp
+
+    config = _write_config(tmp_path)
+    runs = tmp_path / "runs"
+    job_dir = runs / "postcommit"
+    job_dir.mkdir()
+    (job_dir / "postcommit.inp").write_text(_WATER_INP, encoding="utf-8")
+    app = BotApplication(
+        settings=settings_from_config(str(config)),
+        upload_policy=UploadPolicy(enabled=True),
+    )
+
+    def _raise_after_enqueue(*args: object, **kwargs: object) -> bool:
+        del args, kwargs
+        raise error_type("notification transport failed")
+
+    monkeypatch.setattr(run_inp, "notify_queue_enqueued_event", _raise_after_enqueue)
+
+    receipt = app._submit_extracted_run_dir(job_dir, run_dir_kind="orca")
+
+    assert receipt.committed is True
+    assert receipt.kind == "orca"
+    assert receipt.submission_id
+    assert "notification transport failed" in receipt.detail
+    assert job_dir.is_dir()
+    entries = json.loads((runs / "queue.json").read_text(encoding="utf-8"))
+    assert any(entry.get("queue_id") == receipt.submission_id for entry in entries)
+
+
+def test_existing_queue_entry_reconciles_as_committed_receipt(tmp_path: Path) -> None:
+    config = _write_config(tmp_path)
+    runs = tmp_path / "runs"
+    job_dir = runs / "idempotent"
+    job_dir.mkdir()
+    (job_dir / "idempotent.inp").write_text(_WATER_INP, encoding="utf-8")
+    app = BotApplication(
+        settings=settings_from_config(str(config)),
+        upload_policy=UploadPolicy(enabled=True),
+    )
+
+    first = app._submit_extracted_run_dir(job_dir, run_dir_kind="orca")
+    repeated = app._submit_extracted_run_dir(job_dir, run_dir_kind="orca")
+
+    assert first.committed is True
+    assert repeated.committed is True
+    assert repeated.submission_id == first.submission_id
+    assert repeated.failure_reason == "submission_conflict"
+    assert job_dir.is_dir()

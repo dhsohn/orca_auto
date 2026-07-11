@@ -101,9 +101,10 @@ class IncomingAction:
 class IncomingUpload:
     """An inbound file attachment already downloaded to a local staging path.
 
-    Provider adapters download the attachment inside their own event loop and
-    hand the application only this provider-neutral value; ``archive_path`` is a
-    host path the application owns and may delete.
+    Durable adapters reserve and finalize ``upload_id`` before constructing this
+    value; ``archive_path`` is then the fixed store-owned path for that session.
+    ``None`` remains accepted only for compatibility with older local callers,
+    which the application adopts into a durable session before inspection.
     """
 
     address: ConversationAddress
@@ -112,6 +113,8 @@ class IncomingUpload:
     size: int
     archive_path: str
     message_id: str | None = None
+    attachment_id: str | None = None
+    upload_id: str | None = None
 
 
 @runtime_checkable

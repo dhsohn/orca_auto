@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import shutil
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from orca_auto.core.ingest import UploadPolicy
+from orca_auto.core.ingest import UploadPolicy, UploadState
 from orca_auto.core.messaging.channel import SendResult
 from orca_auto.core.messaging.interactive import (
     Actor,
@@ -18,6 +20,7 @@ from orca_auto.core.messaging.interactive import (
     IncomingUpload,
 )
 from orca_auto.flow.bot import ActionRegistry, BotApplication, BotSettings
+from orca_auto.flow.bot.application import SubmissionReceipt
 
 ADDRESS = ConversationAddress(provider="discord", channel_id="100")
 ACTOR = Actor(user_id="42", label="chemist")
@@ -49,6 +52,15 @@ class FakeMessenger:
         return SendResult(sent=True, provider=self.provider)
 
 
+class FailingMessenger(FakeMessenger):
+    def send_reply(
+        self, address: ConversationAddress, reply: BotReply, *, silent: bool = False
+    ) -> SendResult:
+        del address, silent
+        self.replies.append(reply)
+        return SendResult(sent=False, error="transport failed", provider=self.provider)
+
+
 def _app(tmp_path: Path, *, enabled: bool = True) -> BotApplication:
     settings = BotSettings(
         workflow_root=str(tmp_path),
@@ -73,14 +85,35 @@ def _make_zip(path: Path, entries: dict[str, bytes]) -> Path:
 
 
 def _stage(app: BotApplication, archive: Path, filename: str) -> IncomingUpload:
-    staged = app.stage_upload_path(filename)
-    shutil.copy(archive, staged)
+    if app.upload_policy is None or not app.upload_policy.enabled:
+        staged = app.stage_upload_path(filename)
+        shutil.copy(archive, staged)
+        return IncomingUpload(
+            address=ADDRESS,
+            actor=ACTOR,
+            filename=filename,
+            size=staged.stat().st_size,
+            archive_path=str(staged),
+        )
+    attachment_id = f"attachment:{filename}"
+    reservation = app.reserve_upload(
+        address=ADDRESS,
+        actor=ACTOR,
+        message_id=f"message:{filename}",
+        attachment_ids=(attachment_id,),
+        expected_bytes=archive.stat().st_size,
+    )
+    shutil.copy(archive, reservation.session.archive_path)
+    session = app.finalize_upload(reservation.session.upload_id)
     return IncomingUpload(
         address=ADDRESS,
         actor=ACTOR,
         filename=filename,
-        size=staged.stat().st_size,
-        archive_path=str(staged),
+        size=session.actual_bytes or 0,
+        archive_path=str(session.archive_path),
+        message_id=session.message_id,
+        attachment_id=attachment_id,
+        upload_id=session.upload_id,
     )
 
 
@@ -106,6 +139,44 @@ def test_upload_sends_confirmation(tmp_path: Path) -> None:
     assert len(reply.actions[0]) == 2
 
 
+def test_reservation_is_idempotent_before_download(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+
+    first = app.reserve_upload(
+        address=ADDRESS,
+        actor=ACTOR,
+        message_id="message-7",
+        attachment_ids=("attachment-7",),
+        expected_bytes=42,
+    )
+    retry = app.reserve_upload(
+        address=ADDRESS,
+        actor=ACTOR,
+        message_id="message-7",
+        attachment_ids=("attachment-7",),
+        expected_bytes=42,
+    )
+
+    assert first.created is True
+    assert retry.created is False
+    assert retry.session.upload_id == first.session.upload_id
+    app.abandon_upload(first.session.upload_id, "test complete")
+
+
+def test_confirmation_delivery_failure_discards_durable_session(tmp_path: Path) -> None:
+    archive = _make_zip(tmp_path / "mol42.zip", {"mol42/job.inp": b"x"})
+    app = _app(tmp_path)
+    upload = _stage(app, archive, "mol42.zip")
+
+    status = app.dispatch_upload(upload, messenger=FailingMessenger())
+
+    assert status == "upload-confirmation-sent-delivery-failed"
+    assert app.upload_sessions is not None
+    session = app.upload_sessions.get(upload.upload_id or "")
+    assert session.state is UploadState.DISCARDED
+    assert not session.archive_path.parent.exists()
+
+
 def test_upload_disabled_is_refused(tmp_path: Path) -> None:
     archive = _make_zip(tmp_path / "mol42.zip", {"job.inp": b"x"})
     app = _app(tmp_path, enabled=False)
@@ -118,6 +189,35 @@ def test_upload_disabled_is_refused(tmp_path: Path) -> None:
     assert "disabled" in messenger.replies[-1].text
     # Refused uploads leave nothing staged.
     assert not Path(upload.archive_path).exists()
+
+
+def test_disabled_upload_never_unlinks_an_unowned_caller_path(tmp_path: Path) -> None:
+    app = _app(tmp_path, enabled=False)
+    messenger = FakeMessenger()
+    unowned = tmp_path / "service-owned.json"
+    unowned.write_text("important", encoding="utf-8")
+    upload = IncomingUpload(
+        address=ADDRESS,
+        actor=ACTOR,
+        filename="upload.zip",
+        size=unowned.stat().st_size,
+        archive_path=str(unowned),
+    )
+
+    assert app.dispatch_upload(upload, messenger=messenger) == "upload-disabled"
+    assert unowned.read_text(encoding="utf-8") == "important"
+
+
+def test_upload_rejects_runtime_reserved_published_name(tmp_path: Path) -> None:
+    archive = _make_zip(tmp_path / "queue.json.zip", {"job.inp": b"! r2scan-3c\n"})
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+
+    status = app.dispatch_upload(_stage(app, archive, "queue.json.zip"), messenger=messenger)
+
+    assert status == "upload-rejected"
+    assert "reserved for runtime state" in messenger.replies[-1].text
+    assert not (tmp_path / "queue.json").exists()
 
 
 def test_upload_rejects_bad_archive_and_cleans_up(tmp_path: Path) -> None:
@@ -143,9 +243,9 @@ def test_confirm_extracts_and_submits(tmp_path: Path, monkeypatch: pytest.Monkey
 
     submitted: list[Path] = []
 
-    def _fake_submit(job_dir: Path) -> tuple[bool, str]:
+    def _fake_submit(job_dir: Path, *, run_dir_kind: str | None = None) -> SubmissionReceipt:
         submitted.append(job_dir)
-        return True, "ok"
+        return SubmissionReceipt(True, "q-test", "", run_dir_kind or "unknown")  # type: ignore[arg-type]
 
     monkeypatch.setattr(app, "_submit_extracted_run_dir", _fake_submit)
 
@@ -166,6 +266,84 @@ def test_confirm_extracts_and_submits(tmp_path: Path, monkeypatch: pytest.Monkey
     assert not Path(upload.archive_path).exists()
 
 
+def test_confirmation_action_survives_application_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = _make_zip(tmp_path / "restart.zip", {"restart/job.inp": b"x"})
+    first_app = _app(tmp_path)
+    messenger = FakeMessenger()
+    upload = _stage(first_app, archive, "restart.zip")
+    assert first_app.dispatch_upload(upload, messenger=messenger) == "upload-confirmation-sent"
+    confirm_id = _confirm_action_id(messenger.replies[-1])
+
+    restarted = _app(tmp_path)
+    monkeypatch.setattr(
+        restarted,
+        "_submit_extracted_run_dir",
+        lambda job_dir, **kwargs: SubmissionReceipt(True, "q-restart", "", "orca"),
+    )
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=confirm_id,
+        ack_token="restart-token",
+        message_id="confirmation-message",
+    )
+
+    assert restarted.dispatch_action(action, messenger=messenger) == "run-submitted"
+    assert restarted.upload_sessions is not None
+    session = restarted.upload_sessions.get(upload.upload_id or "")
+    assert session.state is UploadState.COMMITTED
+    assert session.receipt is not None
+    assert session.receipt.queue_id == "q-restart"
+    assert (tmp_path / "restart" / "job.inp").is_file()
+    assert restarted.dispatch_upload(upload, messenger=messenger) == "upload-already-submitted"
+
+
+def test_two_same_named_uploads_publish_without_deleting_each_other(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_archive = _make_zip(tmp_path / "first.zip", {"same/job.inp": b"first"})
+    second_archive = _make_zip(tmp_path / "second.zip", {"same/job.inp": b"second"})
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    first = _stage(app, first_archive, "first.zip")
+    second = _stage(app, second_archive, "second.zip")
+    app.dispatch_upload(first, messenger=messenger)
+    first_action = _confirm_action_id(messenger.replies[-1])
+    app.dispatch_upload(second, messenger=messenger)
+    second_action = _confirm_action_id(messenger.replies[-1])
+
+    monkeypatch.setattr(
+        app,
+        "_submit_extracted_run_dir",
+        lambda job_dir, **kwargs: SubmissionReceipt(True, f"q-{job_dir.name}", "", "orca"),
+    )
+
+    def submit(action_id: str) -> str:
+        return app.dispatch_action(
+            IncomingAction(
+                address=ADDRESS,
+                actor=ACTOR,
+                action_id=action_id,
+                ack_token=action_id,
+            ),
+            messenger=messenger,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = list(pool.map(submit, (first_action, second_action)))
+
+    assert statuses == ["run-submitted", "run-submitted"]
+    contents = {
+        (tmp_path / "same" / "job.inp").read_text(),
+        (tmp_path / "same-2" / "job.inp").read_text(),
+    }
+    assert contents == {"first", "second"}
+
+
 def test_confirm_cleans_up_extracted_dir_on_submission_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -173,7 +351,11 @@ def test_confirm_cleans_up_extracted_dir_on_submission_failure(
     app = _app(tmp_path)
     messenger = FakeMessenger()
 
-    monkeypatch.setattr(app, "_submit_extracted_run_dir", lambda job_dir: (False, "boom"))
+    monkeypatch.setattr(
+        app,
+        "_submit_extracted_run_dir",
+        lambda job_dir, **kwargs: SubmissionReceipt(False, None, "boom", "orca"),
+    )
 
     upload = _stage(app, archive, "mol42.zip")
     app.dispatch_upload(upload, messenger=messenger)
@@ -182,12 +364,807 @@ def test_confirm_cleans_up_extracted_dir_on_submission_failure(
     action = IncomingAction(
         address=ADDRESS, actor=ACTOR, action_id=confirm_id, ack_token="tok", message_id="1"
     )
-    app.dispatch_action(action, messenger=messenger)
+    status = app.dispatch_action(action, messenger=messenger)
 
+    assert status == "run-submission-failed"
     assert "Submission failed" in messenger.replies[-1].text
     # The freshly-extracted run-dir must not be stranded in runs_root.
     assert not (tmp_path / "mol42").exists()
     assert not Path(upload.archive_path).exists()
+    assert app.upload_sessions is not None
+    assert app.upload_sessions.get(upload.upload_id or "").state is UploadState.FAILED
+
+
+def test_confirm_preserves_committed_dir_and_reports_postcommit_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = _make_zip(tmp_path / "mol42.zip", {"mol42/job.inp": b"x"})
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    monkeypatch.setattr(
+        app,
+        "_submit_extracted_run_dir",
+        lambda job_dir, **kwargs: SubmissionReceipt(
+            True, "q-committed", "notification failed", "orca"
+        ),
+    )
+
+    upload = _stage(app, archive, "mol42.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+        message_id="1",
+    )
+
+    status = app.dispatch_action(action, messenger=messenger)
+
+    assert status == "run-submitted-with-warning"
+    assert "q-committed" in messenger.replies[-1].text
+    assert (tmp_path / "mol42" / "job.inp").is_file()
+
+
+def test_commit_receipt_persistence_error_is_uncertain_and_preserved(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = _make_zip(tmp_path / "mol42.zip", {"mol42/job.inp": b"x"})
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    monkeypatch.setattr(
+        app,
+        "_submit_extracted_run_dir",
+        lambda job_dir, **kwargs: SubmissionReceipt(True, "q-durable", "", "orca"),
+    )
+    assert app.upload_sessions is not None
+    monkeypatch.setattr(
+        app.upload_sessions,
+        "mark_committed",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+
+    upload = _stage(app, archive, "mol42.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+    )
+
+    assert app.dispatch_action(action, messenger=messenger) == "run-submission-uncertain"
+    session = app.upload_sessions.get(upload.upload_id or "")
+    assert session.state is UploadState.AMBIGUOUS
+    assert (tmp_path / "mol42" / "job.inp").is_file()
+    assert (tmp_path / "mol42" / ".orca-auto-upload").is_file()
+
+
+def test_nondurable_publish_is_preserved_and_never_submitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = _make_zip(tmp_path / "mol42.zip", {"mol42/job.inp": b"x"})
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    original_publish = app._atomic_publish_upload
+
+    def publish_without_durable_root_sync(
+        extracted_dir: Path,
+        *,
+        job_name: str,
+        upload_id: str,
+    ) -> tuple[Path, bool]:
+        published, _ = original_publish(
+            extracted_dir,
+            job_name=job_name,
+            upload_id=upload_id,
+        )
+        return published, False
+
+    monkeypatch.setattr(app, "_atomic_publish_upload", publish_without_durable_root_sync)
+    monkeypatch.setattr(
+        app,
+        "_submit_extracted_run_dir",
+        lambda *args, **kwargs: pytest.fail("a nondurable publication must not be submitted"),
+    )
+
+    upload = _stage(app, archive, "mol42.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+    )
+
+    assert app.dispatch_action(action, messenger=messenger) == "run-submission-uncertain"
+    assert app.upload_sessions is not None
+    session = app.upload_sessions.get(upload.upload_id or "")
+    assert session.state is UploadState.AMBIGUOUS
+    assert (tmp_path / "mol42" / "job.inp").is_file()
+    assert (tmp_path / "mol42" / ".orca-auto-upload").is_file()
+
+
+def test_publish_rename_success_then_error_is_never_downgraded_to_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.flow.bot import application as application_module
+
+    archive = _make_zip(tmp_path / "rename_race.zip", {"rename_race/job.inp": b"x"})
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+
+    def replace_then_raise(source: Path, destination: Path) -> None:
+        application_module.os.replace(source, destination)
+        raise OSError("late filesystem error")
+
+    monkeypatch.setattr(application_module, "_replace_directory", replace_then_raise)
+    monkeypatch.setattr(
+        app,
+        "_submit_extracted_run_dir",
+        lambda *args, **kwargs: pytest.fail("an uncertain publication must not be submitted"),
+    )
+
+    upload = _stage(app, archive, "rename_race.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+    )
+
+    assert app.dispatch_action(action, messenger=messenger) == "run-submission-uncertain"
+    assert app.upload_sessions is not None
+    session = app.upload_sessions.get(upload.upload_id or "")
+    assert session.state is UploadState.AMBIGUOUS
+    assert session.published_path == (tmp_path / "rename_race").resolve()
+    assert (tmp_path / "rename_race" / ".orca-auto-upload").is_file()
+
+    restarted = _app(tmp_path)
+    assert restarted.upload_sessions is not None
+    assert restarted.upload_sessions.get(upload.upload_id or "").state is UploadState.AMBIGUOUS
+    assert (tmp_path / "rename_race" / "job.inp").is_file()
+
+
+def test_failed_publish_cleanup_is_state_first_and_retried_on_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = _make_zip(tmp_path / "mol42.zip", {"mol42/job.inp": b"x"})
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    monkeypatch.setattr(
+        app,
+        "_submit_extracted_run_dir",
+        lambda job_dir, **kwargs: SubmissionReceipt(False, None, "rejected", "orca"),
+    )
+    monkeypatch.setattr(app, "_remove_owned_published_upload", lambda *args: False)
+
+    upload = _stage(app, archive, "mol42.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+    )
+
+    assert app.dispatch_action(action, messenger=messenger) == "run-submission-failed"
+    assert app.upload_sessions is not None
+    session = app.upload_sessions.get(upload.upload_id or "")
+    assert session.state is UploadState.FAILED
+    assert session.published_path == (tmp_path / "mol42").resolve()
+    assert (tmp_path / "mol42" / ".orca-auto-upload").is_file()
+
+    restarted = _app(tmp_path)
+    assert restarted.upload_sessions is not None
+    assert restarted.upload_sessions.get(upload.upload_id or "").state is UploadState.FAILED
+    assert not (tmp_path / "mol42").exists()
+
+
+def test_failed_state_persistence_error_never_authorizes_public_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = _make_zip(tmp_path / "mol42.zip", {"mol42/job.inp": b"x"})
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    monkeypatch.setattr(
+        app,
+        "_submit_extracted_run_dir",
+        lambda job_dir, **kwargs: SubmissionReceipt(False, None, "rejected", "orca"),
+    )
+
+    upload = _stage(app, archive, "mol42.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    assert app.upload_sessions is not None
+    monkeypatch.setattr(
+        app.upload_sessions,
+        "mark_failed",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("state disk unavailable")),
+    )
+    monkeypatch.setattr(
+        app,
+        "_remove_owned_published_upload",
+        lambda *args, **kwargs: pytest.fail("cleanup requires durable FAILED state"),
+    )
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+    )
+
+    assert app.dispatch_action(action, messenger=messenger) == "run-submission-failed"
+    session = app.upload_sessions.get(upload.upload_id or "")
+    assert session.state is UploadState.AMBIGUOUS
+    assert (tmp_path / "mol42" / "job.inp").is_file()
+    assert (tmp_path / "mol42" / ".orca-auto-upload").is_file()
+
+
+def test_confirm_preserves_dir_when_commit_outcome_is_uncertain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = _make_zip(tmp_path / "mol42.zip", {"mol42/job.inp": b"x"})
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    monkeypatch.setattr(
+        app,
+        "_submit_extracted_run_dir",
+        lambda job_dir, **kwargs: SubmissionReceipt(None, None, "transport failed", "orca"),
+    )
+
+    upload = _stage(app, archive, "mol42.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+        message_id="1",
+    )
+
+    status = app.dispatch_action(action, messenger=messenger)
+
+    assert status == "run-submission-uncertain"
+    assert (tmp_path / "mol42" / "job.inp").is_file()
+    assert app.upload_sessions is not None
+    session = app.upload_sessions.get(upload.upload_id or "")
+    assert session.state is UploadState.AMBIGUOUS
+    assert session.published_path == (tmp_path / "mol42").resolve()
+
+
+def test_startup_sweep_recovers_publish_before_state_persistence(tmp_path: Path) -> None:
+    archive = _make_zip(tmp_path / "crash.zip", {"crash/job.inp": b"x"})
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    upload = _stage(app, archive, "crash.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    confirm_id = _confirm_action_id(messenger.replies[-1])
+    assert app.upload_sessions is not None
+    app.upload_sessions.consume_action(
+        confirm_id,
+        binding=app._upload_binding(ADDRESS, ACTOR),
+    )
+
+    published = tmp_path / "crash"
+    published.mkdir()
+    (published / "job.inp").write_text("x", encoding="utf-8")
+    (published / ".orca-auto-upload").write_text(
+        f"{upload.upload_id}\n",
+        encoding="ascii",
+    )
+
+    restarted = _app(tmp_path)
+    assert restarted.upload_sessions is not None
+    recovered = restarted.upload_sessions.get(upload.upload_id or "")
+    assert recovered.state is UploadState.AMBIGUOUS
+    assert recovered.published_path == published.resolve()
+    assert published.is_dir()
+
+
+def test_startup_sweep_recovers_commit_before_receipt_persistence(tmp_path: Path) -> None:
+    archive = _make_zip(
+        tmp_path / "flow_crash.zip",
+        {
+            "flow_crash/flow.yaml": b"workflow_type: conformer_screening\n",
+            "flow_crash/input.xyz": b"1\n\nH 0 0 0\n",
+        },
+    )
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    upload = _stage(app, archive, "flow_crash.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    confirm_id = _confirm_action_id(messenger.replies[-1])
+    assert app.upload_sessions is not None
+    app.upload_sessions.consume_action(
+        confirm_id,
+        binding=app._upload_binding(ADDRESS, ACTOR),
+    )
+
+    published = tmp_path / "flow_crash"
+    published.mkdir()
+    (published / "flow.yaml").write_text(
+        "workflow_type: conformer_screening\n",
+        encoding="utf-8",
+    )
+    (published / "workflow.json").write_text(
+        '{"workflow_id": "wf-crash"}',
+        encoding="utf-8",
+    )
+    (published / ".orca-auto-upload").write_text(
+        f"{upload.upload_id}\n",
+        encoding="ascii",
+    )
+
+    restarted = _app(tmp_path)
+    assert restarted.upload_sessions is not None
+    recovered = restarted.upload_sessions.get(upload.upload_id or "")
+    assert recovered.state is UploadState.COMMITTED
+    assert recovered.receipt is not None
+    assert recovered.receipt.workflow_id == "wf-crash"
+    assert published.is_dir()
+    assert not (published / ".orca-auto-upload").exists()
+
+
+def test_sweep_rejects_marker_for_a_different_recorded_publish_path(tmp_path: Path) -> None:
+    archive = _make_zip(tmp_path / "bound.zip", {"bound/job.inp": b"x"})
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    upload = _stage(app, archive, "bound.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    confirm_id = _confirm_action_id(messenger.replies[-1])
+    assert app.upload_sessions is not None
+    app.upload_sessions.consume_action(
+        confirm_id,
+        binding=app._upload_binding(ADDRESS, ACTOR),
+    )
+
+    recorded = tmp_path / "recorded"
+    recorded.mkdir()
+    (recorded / "job.inp").write_text("x", encoding="utf-8")
+    app.upload_sessions.mark_published(
+        upload.upload_id or "",
+        published_path=recorded,
+    )
+
+    tampered = tmp_path / "tampered"
+    tampered.mkdir()
+    (tampered / "workflow.json").write_text(
+        '{"workflow_id": "wrong-workflow"}',
+        encoding="utf-8",
+    )
+    (tampered / ".orca-auto-upload").write_text(
+        f"{upload.upload_id}\n",
+        encoding="ascii",
+    )
+
+    app.sweep_upload_sessions()
+
+    session = app.upload_sessions.get(upload.upload_id or "")
+    assert session.state is UploadState.AMBIGUOUS
+    assert session.published_path == recorded.resolve()
+    assert session.receipt is None
+    assert (tampered / ".orca-auto-upload").is_file()
+
+
+@pytest.mark.parametrize(
+    "forbidden_manifest",
+    [
+        "workflow_root: /tmp/escape\n",
+        "workflow:\n  root: /tmp/escape\n",
+        "allow_external_inputs: true\n",
+    ],
+)
+def test_confirm_rejects_server_owned_workflow_fields(
+    tmp_path: Path,
+    forbidden_manifest: str,
+) -> None:
+    archive = _make_zip(
+        tmp_path / "untrusted.zip",
+        {
+            "untrusted/flow.yaml": (
+                "workflow_type: conformer_screening\n" + forbidden_manifest
+            ).encode(),
+            "untrusted/input.xyz": b"1\n\nH 0 0 0\n",
+        },
+    )
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+
+    upload = _stage(app, archive, "untrusted.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+        message_id="1",
+    )
+
+    status = app.dispatch_action(action, messenger=messenger)
+
+    assert status == "run-rejected"
+    assert "server-owned fields" in messenger.replies[-1].text
+    assert not (tmp_path / "untrusted").exists()
+
+
+def test_confirm_rejects_standalone_orca_resources_above_server_cap(tmp_path: Path) -> None:
+    archive = _make_zip(
+        tmp_path / "oversized.zip",
+        {"oversized/job.inp": b"! r2scan-3c PAL999\n%maxcore 999999\n"},
+    )
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+
+    upload = _stage(app, archive, "oversized.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+        message_id="1",
+    )
+
+    status = app.dispatch_action(action, messenger=messenger)
+
+    assert status == "run-submission-failed"
+    assert not (tmp_path / "oversized").exists()
+
+
+@pytest.mark.parametrize(
+    "directive",
+    [
+        "% maxcore 999999",
+        "% pal nprocs 999 end",
+    ],
+)
+def test_standalone_orca_resource_caps_cover_spaced_percent_syntax(
+    tmp_path: Path,
+    directive: str,
+) -> None:
+    job_dir = tmp_path / "spaced_resource"
+    job_dir.mkdir()
+    (job_dir / "job.inp").write_text(
+        f"! r2scan-3c\n{directive}\n* xyz 0 1\nH 0 0 0\n*\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="server limit"):
+        BotApplication._validate_orca_resource_limits(
+            job_dir,
+            max_cores=4,
+            max_memory_gb=8,
+        )
+
+
+@pytest.mark.parametrize(
+    "input_text",
+    [
+        "! r2scan-3c\n* xyzfile 0 1 ../../secret.xyz\n",
+        '! r2scan-3c\n%moinp "/etc/passwd"\n* xyz 0 1\nH 0 0 0\n*\n',
+        '! r2scan-3c\n%pointcharges "../outside.pc"\n* xyz 0 1\nH 0 0 0\n*\n',
+        ('! r2scan-3c\n%geom\n  InHessName "../outside.hess"\nend\n* xyz 0 1\nH 0 0 0\n*\n'),
+        '! r2scan-3c\n%base "../../overwrite"\n* xyz 0 1\nH 0 0 0\n*\n',
+        '! r2scan-3c\n%unknown "/tmp/external.dat"\n* xyz 0 1\nH 0 0 0\n*\n',
+        '! r2scan-3c\n%moinp "..\\outside.gbw"\n* xyz 0 1\nH 0 0 0\n*\n',
+        '! r2scan-3c\n% pointcharges "missing.pc"\n* xyz 0 1\nH 0 0 0\n*\n',
+        '! r2scan-3c\n% base "job;id"\n* xyz 0 1\nH 0 0 0\n*\n',
+        '! r2scan-3c\n% base "job$(id)"\n* xyz 0 1\nH 0 0 0\n*\n',
+    ],
+    ids=[
+        "xyzfile-traversal",
+        "absolute-moinp",
+        "pointcharges-traversal",
+        "inhess-traversal",
+        "base-output-traversal",
+        "unknown-absolute-reference",
+        "backslash-traversal",
+        "spaced-pointcharges-missing",
+        "spaced-base-shell-separator",
+        "spaced-base-command-substitution",
+    ],
+)
+def test_confirm_rejects_external_orca_file_references(
+    tmp_path: Path,
+    input_text: str,
+) -> None:
+    archive = _make_zip(
+        tmp_path / "external_refs.zip",
+        {"external_refs/job.inp": input_text.encode()},
+    )
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+
+    upload = _stage(app, archive, "external_refs.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+        message_id="1",
+    )
+
+    assert app.dispatch_action(action, messenger=messenger) == "run-submission-failed"
+    assert not (tmp_path / "external_refs").exists()
+
+
+@pytest.mark.parametrize(
+    "input_text",
+    [
+        '%compound\n  SYS_CMD "touch /tmp/owned"\nend\n',
+        '%compound "payload.txt"\n',
+        ('! ExtOpt\n%method\n  ProgExt "/bin/sh"\n  Ext_Params "-c id"\nend\n'),
+        "!ExtOpt\n* xyz 0 1\nH 0 0 0\n*\n",
+        '%method\n  ProgSCF "sh"\nend\n',
+        '%xtb\n  XTBINPUTSTRING "--input arbitrary"\nend\n',
+        "%md\n  Run 999999999\nend\n",
+        "% md\n  Run 999999999\nend\n",
+        "! MD\n* xyz 0 1\nH 0 0 0\n*\n",
+        "! r2scan-3c\n$new_job\n! r2scan-3c\n",
+        "! r2scan-3c GCP(FILE)\n",
+        '%eda\n  Frag1_MethodFile "nested.txt"\nend\n',
+        '%qmmm\n  QM2CustomFile "nested.txt"\nend\n',
+    ],
+    ids=[
+        "compound-system-command",
+        "compound-include",
+        "external-optimizer",
+        "external-optimizer-no-space",
+        "program-override",
+        "external-xtb-options",
+        "molecular-dynamics-block",
+        "spaced-molecular-dynamics-block",
+        "molecular-dynamics-route",
+        "multiple-jobs",
+        "external-gcp-parameters",
+        "eda-input-include",
+        "qmmm-input-include",
+    ],
+)
+def test_confirm_rejects_remote_orca_execution_and_include_features(
+    tmp_path: Path,
+    input_text: str,
+) -> None:
+    archive = _make_zip(
+        tmp_path / "unsafe_orca.zip",
+        {
+            "unsafe_orca/job.inp": input_text.encode(),
+            "unsafe_orca/payload.txt": b'SYS_CMD "id"\n',
+            "unsafe_orca/nested.txt": b"! ExtOpt\n",
+        },
+    )
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+
+    upload = _stage(app, archive, "unsafe_orca.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+        message_id="1",
+    )
+
+    assert app.dispatch_action(action, messenger=messenger) == "run-submission-failed"
+    assert not (tmp_path / "unsafe_orca").exists()
+
+
+def test_standalone_orca_allows_existing_nested_file_references(tmp_path: Path) -> None:
+    job_dir = tmp_path / "contained"
+    assets = job_dir / "assets"
+    assets.mkdir(parents=True)
+    for filename in ("input.xyz", "seed.gbw", "charges.pc", "seed.hess"):
+        (assets / filename).write_text("contained\n", encoding="utf-8")
+    (job_dir / "job.inp").write_text(
+        "\n".join(
+            (
+                "! r2scan-3c PAL2",
+                '%moinp "assets/seed.gbw"',
+                '% pointcharges "assets/charges.pc"',
+                '% base "result"',
+                "%geom",
+                '  InHessName "assets/seed.hess"',
+                "end",
+                '* xyzfile 0 1 "assets/input.xyz"',
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    BotApplication._validate_orca_resource_limits(
+        job_dir,
+        max_cores=4,
+        max_memory_gb=8,
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure_reason", "expected_commit"),
+    [
+        ("invalid_submission_input", None),
+        ("unexpected_future_reason", None),
+        ("invalid_submission_target", False),
+    ],
+)
+def test_empty_queue_reconciliation_is_cleanup_safe_only_for_precommit_target_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_reason: str,
+    expected_commit: bool | None,
+) -> None:
+    from orca_auto.orca.commands import run_inp
+    from orca_auto.orca.commands.run_inp_submission import DirectQueueSubmission
+
+    job_dir = tmp_path / "submission_boundary"
+    job_dir.mkdir()
+    (job_dir / "job.inp").write_text("! r2scan-3c\n", encoding="utf-8")
+    app = _app(tmp_path)
+    monkeypatch.setattr(
+        run_inp,
+        "submit_reaction_dir_to_queue",
+        lambda args: DirectQueueSubmission(
+            status="failed",
+            reason=failure_reason,
+            stderr="submission returned failure",
+        ),
+    )
+    monkeypatch.setattr(app, "_orca_entries_for_run_dir", lambda *args: {})
+
+    receipt = app._submit_extracted_run_dir(job_dir, run_dir_kind="orca")
+
+    assert receipt.committed is expected_commit
+    assert receipt.failure_reason == failure_reason
+
+
+def test_confirm_rejects_workflow_resources_above_server_cap(tmp_path: Path) -> None:
+    archive = _make_zip(
+        tmp_path / "oversized_flow.zip",
+        {
+            "oversized_flow/flow.yaml": (
+                b"workflow_type: conformer_screening\nresources:\n  max_cores: 999\n"
+            ),
+            "oversized_flow/input.xyz": b"1\n\nH 0 0 0\n",
+        },
+    )
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+
+    upload = _stage(app, archive, "oversized_flow.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+        message_id="1",
+    )
+
+    status = app.dispatch_action(action, messenger=messenger)
+
+    assert status == "run-submission-failed"
+    assert not (tmp_path / "oversized_flow").exists()
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        "workflow_type: conformer_screening\nmax_orca_stages: 999\n",
+        (
+            "workflow_type: conformer_screening\n"
+            "orca_route_line: |\n  ! r2scan-3c\n  %pal nprocs 999 end\n"
+        ),
+        "workflow_type: conformer_screening\norca_route_line: '! Opt PAL999'\n",
+        ("workflow_type: scan_ts_search\nscan_coordinate: |\n  B 0 1 = 1.2, 3.0, 16\n  end\n"),
+        "workflow_type: scan_ts_search\nscan_coordinate: 'B 0 1 = 1.2, 3.0, 999'\n",
+        "workflow_type: conformer_screening\norca_route_line: '!ExtOpt'\n",
+        "workflow_type: conformer_screening\norca_route_line: '! Compound'\n",
+        "workflow_type: conformer_screening\nroute_line: '! r2scan-3c GCP(FILE)'\n",
+    ],
+)
+def test_uploaded_workflow_rejects_injected_or_unbounded_generation(
+    tmp_path: Path,
+    manifest: str,
+) -> None:
+    job_dir = tmp_path / "remote_flow"
+    job_dir.mkdir()
+    (job_dir / "flow.yaml").write_text(manifest, encoding="utf-8")
+    (job_dir / "input.xyz").write_text("1\n\nH 0 0 0\n", encoding="utf-8")
+    app = _app(tmp_path)
+
+    receipt = app._submit_extracted_run_dir(job_dir, run_dir_kind="workflow")
+
+    assert receipt.committed is False
+    assert receipt.detail
+    assert not (job_dir / "workflow.json").exists()
+
+
+def test_workflow_submission_forces_runs_root_and_trusted_resource_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.flow.cli import run_dir as workflow_run_dir
+
+    job_dir = tmp_path / "flow_job"
+    job_dir.mkdir()
+    (job_dir / "flow.yaml").write_text(
+        "workflow_type: conformer_screening\nmax_cores: 1\nmax_memory_gb: 2\n",
+        encoding="utf-8",
+    )
+    (job_dir / "input.xyz").write_text("1\n\nH 0 0 0\n", encoding="utf-8")
+    app = BotApplication(
+        settings=BotSettings(
+            workflow_root=str(tmp_path / "different_workflow_root"),
+            crest_config=None,
+            xtb_config=None,
+            orca_config=None,
+            orca_repo_root=None,
+            runs_root=str(tmp_path),
+        ),
+        upload_policy=UploadPolicy(enabled=True),
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_create(args: Any, submitted_dir: Path) -> dict[str, object]:
+        captured["workflow_root"] = args.workflow_root
+        captured["max_cores"] = args.max_cores
+        captured["max_memory_gb"] = args.max_memory_gb
+        payload: dict[str, object] = {"workflow_id": submitted_dir.name}
+        (submitted_dir / "workflow.json").write_text(
+            '{"workflow_id": "flow_job"}', encoding="utf-8"
+        )
+        return payload
+
+    monkeypatch.setattr(workflow_run_dir, "_create_run_dir_workflow", _fake_create)
+
+    receipt = app._submit_extracted_run_dir(job_dir, run_dir_kind="workflow")
+
+    assert receipt == SubmissionReceipt(True, "flow_job", "", "workflow")
+    assert captured == {
+        "workflow_root": str(tmp_path.resolve()),
+        "max_cores": 8,
+        "max_memory_gb": 32,
+    }
+
+
+def test_workflow_postcommit_exception_returns_committed_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.flow.cli import run_dir as workflow_run_dir
+
+    job_dir = tmp_path / "flow_job"
+    job_dir.mkdir()
+    (job_dir / "flow.yaml").write_text(
+        "workflow_type: conformer_screening\n",
+        encoding="utf-8",
+    )
+    (job_dir / "input.xyz").write_text("1\n\nH 0 0 0\n", encoding="utf-8")
+    app = _app(tmp_path)
+
+    def _raise_after_persist(args: Any, submitted_dir: Path) -> dict[str, object]:
+        del args
+        (submitted_dir / "workflow.json").write_text(
+            '{"workflow_id": "flow_job"}', encoding="utf-8"
+        )
+        raise RuntimeError("registry sync failed")
+
+    monkeypatch.setattr(workflow_run_dir, "_create_run_dir_workflow", _raise_after_persist)
+
+    receipt = app._submit_extracted_run_dir(job_dir, run_dir_kind="workflow")
+
+    assert receipt.committed is True
+    assert receipt.submission_id == "flow_job"
+    assert "registry sync failed" in receipt.detail
 
 
 def test_dismiss_discards_staged_archive(tmp_path: Path) -> None:
@@ -239,3 +1216,39 @@ def test_run_command_usage_without_attachment(tmp_path: Path) -> None:
 
     assert status == "run-usage"
     assert "Attach" in messenger.replies[-1].text
+
+
+def test_disabled_discord_help_does_not_advertise_upload_command(tmp_path: Path) -> None:
+    from orca_auto.core.messaging.interactive import IncomingCommand
+
+    app = _app(tmp_path, enabled=False)
+    messenger = FakeMessenger()
+    command = IncomingCommand(address=ADDRESS, actor=ACTOR, command="help")
+
+    status = app.dispatch_command(command, messenger=messenger)
+
+    assert status == "help-sent"
+    assert "!run" not in messenger.replies[-1].text
+
+
+def test_telegram_run_command_is_not_advertised_or_accepted(tmp_path: Path) -> None:
+    from orca_auto.core.messaging.interactive import IncomingCommand
+
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    messenger.provider = "telegram"
+    address = ConversationAddress(provider="telegram", channel_id="100")
+
+    help_status = app.dispatch_command(
+        IncomingCommand(address=address, actor=ACTOR, command="help"),
+        messenger=messenger,
+    )
+    run_status = app.dispatch_command(
+        IncomingCommand(address=address, actor=ACTOR, command="run"),
+        messenger=messenger,
+    )
+
+    assert help_status == "help-sent"
+    assert "/run" not in messenger.replies[-2].text
+    assert run_status == "run-unavailable"
+    assert "only through Discord" in messenger.replies[-1].text
