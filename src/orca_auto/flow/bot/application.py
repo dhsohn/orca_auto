@@ -1720,7 +1720,7 @@ class BotApplication:
                 match.group(0).lower()
                 for token in route[1:].split()
                 if (match := _REMOTE_ORCA_IDENTIFIER_RE.match(token)) is not None
-                and _remote_orca_identifier_is_forbidden(match.group(0))
+                and (token.lower() == "md" or _remote_orca_identifier_is_forbidden(match.group(0)))
             }
             if unsafe_identifiers:
                 shown = ", ".join(sorted(unsafe_identifiers))
