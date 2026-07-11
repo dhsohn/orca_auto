@@ -61,6 +61,19 @@ messenger:
     timeout_seconds: 5.0
     max_attempts: 2
     retry_backoff_seconds: 0.5
+    uploads:
+      enabled: false
+      max_archive_bytes: 26214400
+      max_total_uncompressed_bytes: 209715200
+      max_file_bytes: 104857600
+      max_entries: 4000
+      max_staged_bytes: 536870912
+      max_staged_uploads: 32
+      max_pending_per_actor: 4
+      max_concurrent_downloads: 4
+      staging_ttl_seconds: 3600
+      committed_retention_seconds: 86400
+      allowed_extensions: [inp, xyz, yaml, yml, json, txt, gbw, hess, pc]
 ```
 
 Discord IDs must be quoted positive decimal strings. Protect the local config:
@@ -73,6 +86,34 @@ chmod 600 config/orca_auto.yaml
 `allowed_user_ids` list enables the gateway. `bot_token` plus
 `default_channel_id` enables bot-authenticated notifications even without the
 gateway.
+
+Uploads are deliberately disabled by default because they turn the bot into an
+execution ingress. After setting limits for the host, enable them and attach one
+`.zip` or `.tar.gz` run-directory to `!run`. The gateway reserves staging quota
+before downloading, validates the archive, and shows a single-use Queue button
+bound to the originating channel and operator. A fresh upload must contain
+exactly one root `flow.yaml` or one root, lower-case `*.inp`; persisted runtime
+state such as `workflow.json` is rejected.
+
+Remote standalone ORCA input is intentionally narrower than local CLI input.
+Every file reference must remain inside the uploaded run-directory, and inputs
+that can select executables, inject external-program arguments, include nested
+ORCA input, run Compound commands, load external GCP parameters, define multiple
+jobs, or start unbounded molecular dynamics are rejected. ORCA `.nodes` host
+files are never accepted, even if an operator adds that suffix to the extension
+allowlist.
+
+These checks are an ingress boundary, not a substitute for host isolation. Give
+upload access only to trusted operator IDs, run ORCA workers as a dedicated
+least-privilege account, and apply site-appropriate filesystem, process, disk,
+memory, and wall-time limits. Do not give the worker account access to messenger
+tokens or unrelated research data.
+
+The confirmation and downstream commit receipt are durable. If the process
+stops around queue commit, orca_auto reconciles the published run with workflow
+state or the ORCA queue on startup. An outcome it still cannot prove is kept as
+ambiguous and its files are preserved for operator inspection; it is never
+blindly retried or deleted.
 
 ## 4. Install and verify the service
 
@@ -97,11 +138,12 @@ After the gateway reports that it is ready, test in an allowed command channel:
 !help
 !list
 !cancel TARGET
+!run  # attach one archive to this message
 ```
 
-Cancellation always requires a second button confirmation. Action IDs are
-short-lived, single-use, and bound to the originating provider, channel, and
-user.
+Cancellation and upload submission always require button confirmation. Action
+IDs are short-lived, single-use, and bound to the originating provider, channel,
+and user.
 
 ## 5. Architecture and future notification controls
 

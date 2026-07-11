@@ -97,6 +97,26 @@ class IncomingAction:
     message_id: str | None = None
 
 
+@dataclass(frozen=True)
+class IncomingUpload:
+    """An inbound file attachment already downloaded to a local staging path.
+
+    Durable adapters reserve and finalize ``upload_id`` before constructing this
+    value; ``archive_path`` is then the fixed store-owned path for that session.
+    ``None`` remains accepted only for compatibility with older local callers,
+    which the application adopts into a durable session before inspection.
+    """
+
+    address: ConversationAddress
+    actor: Actor
+    filename: str
+    size: int
+    archive_path: str
+    message_id: str | None = None
+    attachment_id: str | None = None
+    upload_id: str | None = None
+
+
 @runtime_checkable
 class InteractiveMessenger(Protocol):
     """Outbound capabilities required by provider-neutral bot dispatch."""
@@ -131,5 +151,6 @@ __all__ = [
     "ConversationAddress",
     "IncomingAction",
     "IncomingCommand",
+    "IncomingUpload",
     "InteractiveMessenger",
 ]

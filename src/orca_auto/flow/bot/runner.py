@@ -22,14 +22,18 @@ def run_bot(*, config_path: str | None = None, provider: str | None = None) -> i
     resolved_path = requested_path or settings.orca_config
     messenger_config = load_required_messenger_config_from_file(resolved_path)
     selected = (provider or messenger_config.normalized_provider).strip().lower()
-    application = BotApplication(settings)
     if selected == "telegram":
         from .providers.telegram import run_telegram_bot
 
+        application = BotApplication(settings)
         return run_telegram_bot(application, messenger_config.telegram)
     if selected == "discord":
         from .providers.discord import run_discord_bot
 
+        application = BotApplication(
+            settings,
+            upload_policy=messenger_config.discord.uploads,
+        )
         return run_discord_bot(application, messenger_config.discord)
     raise ValueError(f"unsupported messenger provider: {selected!r}")
 

@@ -365,6 +365,13 @@ cancelled entries from the unified list.
   cancelling. In the `/list` actions message the cancel button still routes through that
   confirmation step. At most four cancellable activities are shown so the shared card fits
   Discord's five-row component limit; executing a cancel or clear auto-refreshes the list.
+- When `messenger.discord.uploads.enabled` is true, an allowlisted Discord operator
+  can attach one `.zip` or `.tar.gz` run-directory to `!run`. Admission and actual
+  download bytes are bounded before inspection. Exactly one root `flow.yaml` or
+  lower-case `*.inp` is required, server-owned paths and resource ceilings cannot be
+  overridden, and the durable Queue/Discard action is bound to the originating
+  message, attachment, channel, and actor. Extraction is published atomically under
+  `runs_root`; uncertain commits are retained and reconciled rather than deleted.
 
 ### 7.6 `scan-notify`
 

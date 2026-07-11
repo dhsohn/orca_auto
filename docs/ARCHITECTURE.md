@@ -389,12 +389,17 @@ Each `EngineDefinition` can register `job_started` / `job_finished` / `retry` ho
 behavior. Native Telegram polling and Discord gateway adapters translate provider
 events at the edge. Destructive actions use short, expiring, one-time opaque IDs bound
 to the requesting provider, channel, and actor instead of embedding raw queue IDs in
-button payloads. Workflow alerts keep per-job ORCA messages but summarize
+button payloads. Discord `!run` additionally reserves a durable upload session before
+the CDN download. Its confirmation action, archive digest, atomic publication path,
+and downstream queue/workflow receipt survive gateway restarts; an indeterminate
+commit is preserved for reconciliation. Workflow alerts keep per-job ORCA messages but summarize
 internal CREST and reaction-path xTB child phases into one message each.
 
 The `ActionStore` port defines one-time resolution and originator/operator audience
-policies. Its current in-memory implementation intentionally serves cards created by
-the gateway in response to commands. Notification messages do not yet carry actions.
+policies. Its current in-memory implementation serves list/cancel cards created by
+the gateway in response to commands. Execution-authorizing upload confirmations use
+the separate durable upload-session store so a restart cannot lose identity,
+single-consumer, or commit-state guarantees. Notification messages do not yet carry actions.
 When notification-origin controls are added, the worker-side sender and gateway must
 share a durable `ActionStore` implementation so bindings survive the process boundary;
 that extension belongs behind the same neutral card/action contracts.

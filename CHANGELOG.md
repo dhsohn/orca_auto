@@ -8,6 +8,22 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Added
+
+- Discord bot can accept a compressed run-dir (`.zip`/`.tar.gz`) attached to the
+  `!run` command and submit it after an explicit confirmation. Disabled by
+  default and gated to allowlisted operators, the ingress reserves bounded
+  staging before downloading, streams only from Discord's trusted CDN, and
+  persists idempotent, actor-bound confirmation state across restarts. Archive
+  inspection rejects traversal, links, runtime state, ambiguous entrypoints,
+  and compressed or metadata bombs; extraction is privately materialized and
+  atomically published under `runs_root`. Server-owned roots and resource caps
+  override uploaded data, while uncertain downstream commits preserve the run
+  for reconciliation instead of deleting possibly queued work. Remote ORCA
+  inputs also reject executable overrides, Compound/external-argument features,
+  nested input includes, external path references, multi-job/MD directives, and
+  ORCA host-list control files.
+
 ## [0.1.0] - 2026-07-09
 
 First tagged release. This entry consolidates the initial public development

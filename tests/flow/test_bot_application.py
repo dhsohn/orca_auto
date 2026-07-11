@@ -561,4 +561,5 @@ def test_settings_from_config_resolves_shared_paths_without_provider_credentials
         xtb_config="/explicit/orca_auto.yaml",
         orca_config="/explicit/orca_auto.yaml",
         orca_repo_root="/repo",
+        runs_root="/configured-runs",
     )

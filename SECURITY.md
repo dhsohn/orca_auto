@@ -51,13 +51,29 @@ or posted publicly.
 
 The following classes of issues are security-relevant for orca_auto:
 
-- path traversal or writing outside configured runtime roots;
+- path traversal or writing outside configured runtime roots, including unsafe
+  extraction of an uploaded run-dir archive (Zip Slip, symlink escape, or
+  decompression bombs) accepted through the Discord `!run` upload path;
+- bypassing upload staging, identity, resource, or commit-state controls in a
+  way that can run a different archive than the operator confirmed, exceed
+  server-owned limits, or delete a run whose queue outcome is uncertain;
 - unsafe acceptance of Windows, `/mnt/<drive>`, relative, or `.exe` executable
   paths where Linux-only executable policy is expected;
 - shell injection or unsafe process invocation;
 - messenger bot token leakage or accidental notification to the wrong destination;
 - logs, reports, examples, or fixtures that expose private structures or secrets;
 - GitHub Actions or release-process changes that weaken secret handling.
+
+## Discord execution ingress
+
+Enabling `messenger.discord.uploads` authorizes allowlisted Discord users to
+submit work to an ORCA worker. Archive, path, resource, idempotency, and known
+ORCA execution-feature checks reduce this surface, but an ORCA input language
+validator is not an operating-system sandbox. Deploy the bot and workers under
+dedicated least-privilege identities with site-appropriate filesystem, process,
+disk, memory, and wall-time controls. Keep bot credentials and unrelated data
+outside the worker's readable environment, and grant `allowed_user_ids` only to
+trusted operators.
 
 ## Non-security issues
 

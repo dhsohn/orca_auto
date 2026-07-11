@@ -4,12 +4,15 @@ import asyncio
 import concurrent.futures
 import html
 import sys
+import threading
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from orca_auto.core.config import DiscordConfig, MessengerConfig, TelegramConfig
+from orca_auto.core.ingest import UploadPolicy, UploadState
 from orca_auto.core.messaging.interactive import (
     Actor,
     BotReply,
@@ -17,8 +20,9 @@ from orca_auto.core.messaging.interactive import (
     ConversationAddress,
     IncomingAction,
     IncomingCommand,
+    IncomingUpload,
 )
-from orca_auto.flow.bot import BotSettings, runner
+from orca_auto.flow.bot import BotApplication, BotSettings, runner
 from orca_auto.flow.bot.providers import discord as discord_provider
 from orca_auto.flow.bot.providers import telegram as telegram_provider
 
@@ -611,6 +615,347 @@ def test_discord_channel_admission_is_single_flight_and_globally_bounded() -> No
     assert admission.acquire("300")
 
 
+def test_discord_upload_admission_is_nonblocking_and_bounded() -> None:
+    admission = discord_provider._CounterAdmission(max_pending=2)
+
+    assert admission.acquire()
+    assert admission.acquire()
+    assert not admission.acquire()
+
+    admission.release()
+    assert admission.acquire()
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "http://cdn.discordapp.com/attachments/1/2/job.zip",
+        "https://example.com/job.zip",
+        "https://cdn.discordapp.com.evil.test/job.zip",
+        "https://user@cdn.discordapp.com/job.zip",
+    ),
+)
+def test_discord_attachment_url_validation_fails_closed(url: str) -> None:
+    with pytest.raises(discord_provider.AttachmentDownloadRejected):
+        discord_provider._trusted_attachment_url(url)
+
+
+def test_discord_attachment_download_streams_with_actual_byte_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"archive-bytes"
+
+    class Response:
+        status = 200
+        headers = {"Content-Length": str(len(payload))}
+
+        def __init__(self) -> None:
+            self.remaining = payload
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def getcode(self) -> int:
+            return self.status
+
+        def read(self, amount: int) -> bytes:
+            chunk, self.remaining = self.remaining[:amount], self.remaining[amount:]
+            return chunk
+
+    class Opener:
+        def open(self, *_args: object, **_kwargs: object) -> Response:
+            return Response()
+
+    monkeypatch.setattr(discord_provider, "build_opener", lambda *_args: Opener())
+    destination = tmp_path / "archive"
+
+    written = discord_provider._download_attachment_url_bounded(
+        "https://cdn.discordapp.com/attachments/1/2/job.zip",
+        destination,
+        max_bytes=len(payload),
+        timeout_seconds=1,
+    )
+
+    assert written == len(payload)
+    assert destination.read_bytes() == payload
+
+
+def test_discord_attachment_download_removes_oversize_partial_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"x" * 9
+
+    class Response:
+        status = 200
+        headers: dict[str, str] = {}
+
+        def __init__(self) -> None:
+            self.remaining = payload
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def getcode(self) -> int:
+            return self.status
+
+        def read(self, amount: int) -> bytes:
+            chunk, self.remaining = self.remaining[:amount], self.remaining[amount:]
+            return chunk
+
+    class Opener:
+        def open(self, *_args: object, **_kwargs: object) -> Response:
+            return Response()
+
+    monkeypatch.setattr(discord_provider, "build_opener", lambda *_args: Opener())
+    destination = tmp_path / "partial"
+
+    with pytest.raises(discord_provider.AttachmentDownloadRejected, match="byte limit"):
+        discord_provider._download_attachment_url_bounded(
+            "https://media.discordapp.net/attachments/1/2/job.zip",
+            destination,
+            max_bytes=8,
+            timeout_seconds=1,
+        )
+
+    assert not destination.exists()
+
+
+def test_discord_attachment_download_does_not_delete_preexisting_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        status = 200
+        headers = {"Content-Length": "1"}
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def getcode(self) -> int:
+            return self.status
+
+    class Opener:
+        def open(self, *_args: object, **_kwargs: object) -> Response:
+            return Response()
+
+    monkeypatch.setattr(discord_provider, "build_opener", lambda *_args: Opener())
+    destination = tmp_path / "existing"
+    destination.write_bytes(b"owned-by-another-operation")
+
+    with pytest.raises(FileExistsError):
+        discord_provider._download_attachment_url_bounded(
+            "https://cdn.discordapp.com/attachments/1/2/job.zip",
+            destination,
+            max_bytes=8,
+            timeout_seconds=1,
+        )
+
+    assert destination.read_bytes() == b"owned-by-another-operation"
+
+
+def test_discord_download_cancellation_waits_for_executor_file_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    destination = tmp_path / "cancelled-download"
+
+    def blocking_download(
+        url: str,
+        path: Path,
+        *,
+        max_bytes: int,
+        timeout_seconds: float,
+    ) -> int:
+        del url, max_bytes, timeout_seconds
+        started.set()
+        assert release.wait(timeout=2)
+        path.write_bytes(b"x")
+        return 1
+
+    monkeypatch.setattr(
+        discord_provider,
+        "_download_attachment_url_bounded",
+        blocking_download,
+    )
+
+    async def exercise() -> None:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            attachment = SimpleNamespace(url="https://cdn.discordapp.com/attachments/1/2/job.zip")
+            task = asyncio.create_task(
+                discord_provider._download_attachment_bounded(
+                    attachment,
+                    destination,
+                    max_bytes=8,
+                    timeout_seconds=1,
+                    executor=executor,
+                )
+            )
+            assert await asyncio.to_thread(started.wait, 1)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(exercise())
+    assert destination.read_bytes() == b"x"
+
+
+def test_discord_gateway_reserves_before_download_without_redispatching_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    uploads: list[IncomingUpload] = []
+    archive_path = tmp_path / "archive"
+    session = SimpleNamespace(
+        upload_id="upl_test",
+        archive_path=archive_path,
+        actual_bytes=None,
+        state=UploadState.RECEIVING,
+    )
+    reserve_count = 0
+
+    class Application:
+        def reserve_upload(self, **kwargs: object) -> object:
+            nonlocal reserve_count
+            events.append("reserve")
+            assert kwargs["message_id"] == "501"
+            assert kwargs["attachment_ids"] == ("601",)
+            assert kwargs["expected_bytes"] == 7
+            reserve_count += 1
+            return SimpleNamespace(session=session, created=reserve_count == 1)
+
+        def finalize_upload(self, upload_id: str) -> object:
+            events.append("finalize")
+            assert upload_id == "upl_test"
+            session.actual_bytes = archive_path.stat().st_size
+            return session
+
+        def dispatch_upload(self, incoming: IncomingUpload, *, messenger: object) -> None:
+            del messenger
+            events.append("dispatch")
+            uploads.append(incoming)
+            session.state = UploadState.AWAITING_CONFIRM
+
+        def abandon_upload(self, upload_id: str, reason: str) -> None:
+            raise AssertionError(f"unexpected abandon: {upload_id}: {reason}")
+
+        def sweep_upload_sessions(self) -> None:
+            events.append("sweep")
+
+    async def bounded_download(
+        attachment: object,
+        destination: Path,
+        *,
+        max_bytes: int,
+        timeout_seconds: float,
+        executor: object,
+    ) -> int:
+        del attachment, timeout_seconds, executor
+        events.append("download")
+        assert max_bytes == 64
+        destination.write_bytes(b"archive")
+        return 7
+
+    class Channel:
+        id = 100
+
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send(self, text: str, **_kwargs: object) -> object:
+            self.sent.append(text)
+            return SimpleNamespace(id=len(self.sent))
+
+    channel = Channel()
+    attachment = SimpleNamespace(
+        id=601,
+        filename="job.zip",
+        size=7,
+        url="https://cdn.discordapp.com/attachments/1/2/job.zip",
+    )
+    message = SimpleNamespace(
+        id=501,
+        content="!run",
+        channel=channel,
+        author=SimpleNamespace(id=7, name="operator", bot=False),
+        attachments=[attachment],
+    )
+
+    class Intents:
+        @staticmethod
+        def default() -> object:
+            return SimpleNamespace(message_content=False)
+
+    class Client:
+        def __init__(self, *, intents: object) -> None:
+            self.intents = intents
+            self.events: dict[str, Any] = {}
+            self.user = "orca-test"
+
+        def event(self, fn: Any) -> Any:
+            self.events[fn.__name__] = fn
+            return fn
+
+        def run(self, _token: str, *, log_handler: object) -> None:
+            del log_handler
+
+            async def drive() -> None:
+                await self.events["on_ready"]()
+                await self.events["on_message"](message)
+                await self.events["on_message"](message)
+
+            asyncio.run(drive())
+
+        def get_channel(self, _channel_id: int) -> Channel:
+            return channel
+
+    sdk = _fake_discord_sdk(
+        Intents=Intents,
+        Client=Client,
+        InteractionType=SimpleNamespace(component=object()),
+    )
+    monkeypatch.setitem(sys.modules, "discord", sdk)
+    monkeypatch.setattr(discord_provider, "ThreadPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(discord_provider, "_download_attachment_bounded", bounded_download)
+    config = DiscordConfig(
+        bot_token="token",
+        channel_ids=("100",),
+        allowed_user_ids=("7",),
+        uploads=UploadPolicy(
+            enabled=True,
+            max_archive_bytes=64,
+            max_staged_bytes=64,
+        ),
+    )
+
+    assert discord_provider.run_discord_bot(Application(), config) == 0  # type: ignore[arg-type]
+
+    assert events == ["reserve", "download", "finalize", "dispatch", "reserve"]
+    assert len(uploads) == 1
+    assert uploads[0].upload_id == "upl_test"
+    assert uploads[0].attachment_id == "601"
+    assert uploads[0].archive_path == str(archive_path)
+    assert channel.sent == [
+        "This upload is already awaiting confirmation; use the original buttons."
+    ]
+
+
 def test_discord_gateway_enforces_bot_user_and_channel_allowlists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -801,6 +1146,7 @@ def test_discord_reconnect_keeps_the_same_interaction_bridge(
 )
 def test_runner_selects_configured_or_explicit_provider(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     configured: str,
     override: str | None,
     expected: str,
@@ -815,7 +1161,7 @@ def test_runner_selects_configured_or_explicit_provider(
             allowed_user_ids=("7",),
         ),
     )
-    settings = BotSettings(None, None, None, None, None)
+    settings = BotSettings(None, None, None, None, None, runs_root=str(tmp_path))
     monkeypatch.setattr(
         runner,
         "load_required_messenger_config_from_file",
@@ -827,7 +1173,9 @@ def test_runner_selects_configured_or_explicit_provider(
         calls.append(("telegram", adapter))
         return 11
 
-    def run_discord(_application: object, adapter: object) -> int:
+    def run_discord(_application: BotApplication, adapter: object) -> int:
+        assert _application.upload_policy == config.discord.uploads
+        assert _application.upload_sessions is not None
         calls.append(("discord", adapter))
         return 12
 
