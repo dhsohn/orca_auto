@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, TypeVar
 from urllib.parse import urlsplit
@@ -28,6 +28,7 @@ _DISCORD_WEBHOOK_HOSTS = frozenset(
         "ptb.discordapp.com",
     }
 )
+_MAX_DISCORD_SNOWFLAKE = (1 << 64) - 1
 
 
 def as_str(value: Any, default: str = "") -> str:
@@ -93,6 +94,74 @@ def discord_webhook_url_is_valid(raw_url: object) -> bool:
         and not parsed.fragment
         and _DISCORD_WEBHOOK_PATH.fullmatch(parsed.path)
     )
+
+
+def _positive_ascii_id(
+    value: object,
+    *,
+    field_name: str,
+    id_kind: str,
+    maximum: int = _MAX_DISCORD_SNOWFLAKE,
+) -> str:
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ValueError(f"{field_name} must be a positive ASCII {id_kind}.")
+    text = str(value).strip()
+    if (
+        not text
+        or not text.isascii()
+        or not text.isdigit()
+        or text.startswith("0")
+        or len(text) > 20
+        or int(text) > maximum
+    ):
+        raise ValueError(f"{field_name} must be a positive ASCII {id_kind}.")
+    return text
+
+
+def _discord_snowflake(value: object, *, field_name: str) -> str:
+    """Normalize one Discord snowflake and reject ambiguous numeric text."""
+
+    return _positive_ascii_id(value, field_name=field_name, id_kind="Discord snowflake")
+
+
+def _optional_discord_snowflake(value: object, *, field_name: str) -> str:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return ""
+    return _discord_snowflake(value, field_name=field_name)
+
+
+def _discord_snowflake_tuple(value: object, *, field_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes, bytearray, Mapping)) or not isinstance(value, Sequence):
+        raise ValueError(f"{field_name} must be a list of positive ASCII Discord snowflakes.")
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        snowflake = _discord_snowflake(item, field_name=field_name)
+        if snowflake not in seen:
+            seen.add(snowflake)
+            result.append(snowflake)
+    return tuple(result)
+
+
+def _telegram_user_id_tuple(value: object, *, field_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes, bytearray, Mapping)) or not isinstance(value, Sequence):
+        raise ValueError(f"{field_name} must be a list of positive ASCII Telegram user ids.")
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        user_id = _positive_ascii_id(
+            item,
+            field_name=field_name,
+            id_kind="Telegram user id",
+        )
+        if user_id not in seen:
+            seen.add(user_id)
+            result.append(user_id)
+    return tuple(result)
 
 
 def positive_int(value: Any) -> int | None:
@@ -200,15 +269,41 @@ class EmptyBehaviorConfig:
 
 @dataclass(frozen=True)
 class TelegramConfig:
-    bot_token: str = ""
-    chat_id: str = ""
+    bot_token: str = field(default="", repr=False)
+    chat_id: str = field(default="", repr=False)
     timeout_seconds: float = 5.0
     max_attempts: int = 2
     retry_backoff_seconds: float = 0.5
+    allowed_user_ids: tuple[str, ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "allowed_user_ids",
+            _telegram_user_id_tuple(
+                self.allowed_user_ids,
+                field_name="messenger.telegram.allowed_user_ids",
+            ),
+        )
 
     @property
     def enabled(self) -> bool:
+        """Backward-compatible alias for outbound notification readiness."""
+
         return bool(str(self.bot_token).strip() and str(self.chat_id).strip())
+
+    @property
+    def interactive_enabled(self) -> bool:
+        if not self.enabled:
+            return False
+        chat_id = str(self.chat_id).strip()
+        numeric_chat = (
+            chat_id.isascii() and chat_id.removeprefix("-").isdigit() and int(chat_id) != 0
+        )
+        if not numeric_chat:
+            return False
+        private_chat = not chat_id.startswith("-")
+        return private_chat or bool(self.allowed_user_ids)
 
 
 def telegram_config_from_mapping(raw: object) -> TelegramConfig:
@@ -231,25 +326,93 @@ def telegram_config_from_mapping(raw: object) -> TelegramConfig:
             minimum=0.0,
             maximum=MAX_MESSENGER_RETRY_BACKOFF_SECONDS,
         ),
+        allowed_user_ids=_telegram_user_id_tuple(
+            telegram_raw.get("allowed_user_ids"),
+            field_name="messenger.telegram.allowed_user_ids",
+        ),
     )
 
 
 @dataclass(frozen=True)
 class DiscordConfig:
-    webhook_url: str = ""
+    webhook_url: str = field(default="", repr=False)
     timeout_seconds: float = 5.0
     max_attempts: int = 2
     retry_backoff_seconds: float = 0.5
+    bot_token: str = field(default="", repr=False)
+    channel_ids: tuple[str, ...] = field(default=(), repr=False)
+    default_channel_id: str = field(default="", repr=False)
+    allowed_user_ids: tuple[str, ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "bot_token", self.bot_token.strip())
+        object.__setattr__(
+            self,
+            "channel_ids",
+            _discord_snowflake_tuple(
+                self.channel_ids,
+                field_name="messenger.discord.channel_ids",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "default_channel_id",
+            _optional_discord_snowflake(
+                self.default_channel_id,
+                field_name="messenger.discord.default_channel_id",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "allowed_user_ids",
+            _discord_snowflake_tuple(
+                self.allowed_user_ids,
+                field_name="messenger.discord.allowed_user_ids",
+            ),
+        )
+
+    @property
+    def bot_notification_enabled(self) -> bool:
+        return bool(self.bot_token.strip() and self.default_channel_id)
+
+    @property
+    def notification_enabled(self) -> bool:
+        return self.bot_notification_enabled or bool(self.webhook_url.strip())
+
+    @property
+    def interaction_channel_ids(self) -> tuple[str, ...]:
+        if self.default_channel_id and self.default_channel_id not in self.channel_ids:
+            return (*self.channel_ids, self.default_channel_id)
+        return self.channel_ids
+
+    @property
+    def interactive_enabled(self) -> bool:
+        return bool(self.bot_token.strip() and self.channel_ids and self.allowed_user_ids)
 
     @property
     def enabled(self) -> bool:
-        return bool(self.webhook_url.strip())
+        """Backward-compatible alias for outbound notification readiness."""
+
+        return self.notification_enabled
 
 
 def discord_config_from_mapping(raw: object) -> DiscordConfig:
     discord_raw = raw if isinstance(raw, Mapping) else {}
     config = DiscordConfig(
         webhook_url=as_str(discord_raw.get("webhook_url")),
+        bot_token=as_str(discord_raw.get("bot_token")),
+        channel_ids=_discord_snowflake_tuple(
+            discord_raw.get("channel_ids"),
+            field_name="messenger.discord.channel_ids",
+        ),
+        default_channel_id=_optional_discord_snowflake(
+            discord_raw.get("default_channel_id"),
+            field_name="messenger.discord.default_channel_id",
+        ),
+        allowed_user_ids=_discord_snowflake_tuple(
+            discord_raw.get("allowed_user_ids"),
+            field_name="messenger.discord.allowed_user_ids",
+        ),
         timeout_seconds=_bounded_delivery_float(
             discord_raw.get("timeout_seconds"),
             DiscordConfig.timeout_seconds,

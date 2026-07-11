@@ -32,8 +32,9 @@ Telegram notifications, set `messenger.telegram.bot_token` and
 orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
-If Telegram is configured, orca_auto enables the full runtime target. If
-Telegram is still empty, orca_auto enables only the queue worker.
+If the selected Telegram or Discord provider has complete interactive bot settings,
+orca_auto enables the full runtime target. Otherwise it enables only the queue worker;
+a Discord webhook by itself is notification-only.
 
 ## 4) Check Or Restart Services
 
@@ -42,7 +43,7 @@ orca_auto service status
 orca_auto service restart
 ```
 
-`service status` shows the runtime target, queue worker, and Telegram bot.
+`service status` shows the runtime target, queue worker, and selected messenger bot.
 `service restart` restarts the full runtime target when it is enabled; otherwise
 it restarts the queue worker.
 

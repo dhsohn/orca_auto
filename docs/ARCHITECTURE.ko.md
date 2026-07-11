@@ -73,7 +73,8 @@ src/orca_auto/
     ├── templates.py     # 워크플로우 템플릿 레지스트리
     ├── manifest.py      # flow.yaml 파싱
     ├── registry/        # 워크플로우 레지스트리 + 저널
-    └── telegram/        # 통합 텔레그램 봇
+    ├── bot/             # provider-neutral bot 애플리케이션 + gateway adapter
+    └── telegram/        # 레거시 호환 Telegram facade/전송 헬퍼
 ```
 
 ### 임포트 규칙 (DEVELOPMENT.md 기준)
@@ -364,27 +365,36 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 
 ## 9. 알림
 
-`core/messaging/`은 provider-neutral 발신 경계를 소유합니다. 불변 semantic `Message`
-문서, `MessageChannel` port와 `SendResult` receipt, provider registry, Telegram/Discord
-renderer와 adapter가 여기에 있습니다. 도메인 notifier는 문서만 만들며 wire markup을
-선택하지 않습니다. `MessengerConfig`가 두 adapter 설정을 소유하고 registry는 unknown
-provider를 거부하면서 정확히 하나의 활성 provider를 해석합니다.
+`core/messaging/`은 두 provider-neutral capability 경계를 소유합니다. 불변 semantic
+`Message` 문서와 알림 `MessageChannel`, 정규화된 command/action 모델과
+`InteractiveMessenger`가 여기에 있습니다. 도메인 notifier는 wire markup을 선택하지
+않고 인터랙티브 앱은 정규화된 값만 받습니다. `MessengerConfig`는 unknown provider를
+거부합니다.
 
 `core/notifications/`는 `TelegramChannel`이 재사용하는 저수준 Telegram Bot API 전송과
-엔진 알림 훅 계층(`engine_notifier.py`, `engine_delivery.py`)을 유지합니다.
-`DiscordWebhookChannel`은 자체 webhook 전송을 소유합니다. 각 `EngineDefinition`은
+엔진 알림 훅 계층(`engine_notifier.py`, `engine_delivery.py`)을 유지합니다. Bot 설정이
+완전하면 `DiscordBotChannel`이 정식 발신자이며, `DiscordWebhookChannel`은 알림 전용
+호환 adapter로 남습니다. 각 `EngineDefinition`은
 `job_started` / `job_finished` / `retry` 훅을 등록할 수 있습니다.
 
-`flow/telegram/`은 발신 messenger port와 분리된 앱 전용 inbound Telegram 봇
-adapter입니다. `queue list` 테이블을
-`/list`(모바일을 위해 ID 열 제외)로 반영하고, 인라인 버튼 확인을 통한
-`/cancel <target>`과, 활동별 취소 / 새로고침 / "완료 항목 정리" 액션을 지원합니다.
+`flow/bot/application.py`는 provider-neutral `/list`, `/cancel`, `/help` 동작을
+소유합니다. Telegram polling과 Discord gateway adapter가 provider 이벤트를 경계에서
+변환합니다. 파괴적 액션은 raw queue ID 대신 provider·채널·사용자에 묶인 짧고
+만료되며 일회성인 opaque ID를 사용합니다.
 워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST 및 반응 경로 xTB 자식
 페이즈는 각각 한 메시지로 요약합니다.
 
-선택된 발신 adapter는 해당 credential이 완전할 때만 활성화됩니다. Telegram에는
-`messenger.telegram.bot_token`과 `chat_id`가 필요하고, Discord에는 검증된 공식 HTTPS
-`messenger.discord.webhook_url`이 필요합니다.
+`ActionStore` port는 일회성 해석과 originator/operator audience 정책을 정의합니다.
+현재 메모리 구현은 명령에 응답해 gateway가 만든 카드만 의도적으로 담당하며, 알림
+메시지는 아직 액션을 포함하지 않습니다. 알림에서 시작되는 제어를 추가할 때는 worker
+발신자와 gateway가 내구성 있는 `ActionStore` 구현을 공유해 binding이 프로세스 경계를
+넘어 유지되도록 해야 합니다. 이 확장도 동일한 중립 card/action 계약 뒤에 둡니다.
+
+선택된 adapter는 해당 credential이 완전할 때만 활성화됩니다. Telegram에는
+`messenger.telegram.bot_token`과 `chat_id`가 필요합니다. 인터랙티브 Discord에는 bot
+token, 채널 ID, operator allowlist가 필요하며, bot token+기본 채널이 정식 알림
+경로입니다. 검증된
+webhook URL은 레거시 발신 전용 전달만 활성화합니다.
 
 ---
 
@@ -421,13 +431,13 @@ adapter입니다. `queue list` 테이블을
 | 유닛                                  | 역할                                            |
 |---------------------------------------|-------------------------------------------------|
 | `orca_auto-queue-worker@.service`     | ORCA 감독 + 워크플로우/내부 xTB/CREST 워커 시작 |
-| `orca_auto-bot@.service`              | 통합 텔레그램 봇                                |
+| `orca_auto-bot@.service`              | 선택된 provider-neutral messenger 봇            |
 | `orca_auto-runtime@.target`           | 둘을 함께 시작                                  |
 
 `orca_auto systemd install --user <user> --repo <repo>`가 유닛을 렌더링하고
-활성화합니다. 텔레그램이 미설정이면 큐 워커만 활성화되며, 텔레그램 자격 증명
-설정 후 다시 실행하면 전체 타깃이 활성화됩니다. WSL에서는 `/etc/wsl.conf`에서
-`systemd`가 활성화되어 있어야 합니다.
+활성화합니다. 선택된 provider의 인터랙티브 봇 설정이 불완전하면 큐 워커만
+활성화되며, 설정 후 다시 실행하면 전체 타깃이 활성화됩니다. WSL에서는
+`/etc/wsl.conf`에서 `systemd`가 활성화되어 있어야 합니다.
 
 ---
 

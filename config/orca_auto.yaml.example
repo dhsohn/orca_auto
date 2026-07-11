@@ -46,10 +46,8 @@ workflow:
 
 messenger:
   # Selects where outbound run/queue/monitor notifications are delivered.
-  # `telegram` (default) delivers via the `telegram:` block below; `discord`
-  # posts embeds to a Discord webhook (no bot or gateway required). Interactive
-  # control (/list, /cancel) always runs on Telegram until the Phase 2 gateway
-  # adapter lands, so keep `telegram` filled in if you use the bot.
+  # `telegram` (default) and `discord` both support outbound notifications and
+  # interactive /list, /cancel, and /help commands through the same bot app.
   provider: telegram  # telegram | discord
   telegram:
     # Telegram credentials. Used by the interactive bot and, when
@@ -57,6 +55,8 @@ messenger:
     # disable the Telegram bot and Telegram notifications.
     bot_token: ""
     chat_id: ""
+    # Required for group chats; private chats are implicitly single-user.
+    allowed_user_ids: []
     # Each Telegram API call waits up to this many seconds before retry/fail.
     timeout_seconds: 5.0
     # Retry transient Telegram send failures this many times total.
@@ -64,8 +64,18 @@ messenger:
     # Pause between retry attempts for transient Telegram failures.
     retry_backoff_seconds: 0.5
   discord:
-    # Channel webhook URL (Server Settings -> Integrations -> Webhooks).
-    # Leave blank to keep Discord notifications disabled.
+    # Use a separate Discord application/bot for orca_auto. The bot token plus
+    # default channel sends notifications; channel_ids authorizes ordinary
+    # inbound commands. The default-only channel still accepts this bot's
+    # component-button interactions.
+    bot_token: ""
+    channel_ids: []
+    default_channel_id: ""
+    # Required operator allowlist for interactive controls. Keeping this empty
+    # leaves Discord notifications enabled but fails the gateway closed.
+    allowed_user_ids: []
+    # Legacy notification-only fallback. Used only when bot token/default
+    # channel are incomplete; it cannot receive commands or button actions.
     webhook_url: ""
     timeout_seconds: 5.0
     max_attempts: 2

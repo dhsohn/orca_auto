@@ -34,8 +34,9 @@ ORCA, xTB, CREST, 실행 디렉터리에는 절대 Linux 경로를 사용하세�
 orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
-Telegram이 설정되어 있으면 orca_auto는 전체 런타임 타깃을 활성화합니다. Telegram이
-아직 비어 있으면 큐 워커만 활성화합니다.
+선택된 Telegram 또는 Discord provider의 인터랙티브 bot 설정이 완전하면 orca_auto는
+전체 런타임 타깃을 활성화합니다. 그렇지 않으면 큐 워커만 활성화하며, Discord
+webhook만 있는 설정은 알림 전용입니다.
 
 ## 4) 서비스 확인 또는 재시작
 
@@ -44,7 +45,7 @@ orca_auto service status
 orca_auto service restart
 ```
 
-`service status`는 런타임 타깃, 큐 워커, Telegram 봇을 보여줍니다. `service restart`는
+`service status`는 런타임 타깃, 큐 워커, 선택된 messenger 봇을 보여줍니다. `service restart`는
 전체 런타임 타깃이 활성화되어 있으면 그것을 재시작하고, 그렇지 않으면 큐 워커를
 재시작합니다.
 

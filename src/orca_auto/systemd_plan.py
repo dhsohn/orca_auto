@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.cli_common import _repo_root
+from orca_auto.core.config import MessengerConfig, messenger_config_from_mapping
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
     engine_config_mapping,
@@ -253,17 +254,21 @@ def _systemctl_transition_commands(
     return tuple(commands)
 
 
-def _telegram_mapping(config: Path) -> dict[str, Any]:
+def _messenger_mapping(config: Path) -> dict[str, Any]:
     _, parsed = load_yaml_mapping(
         config,
         invalid_message=(
-            "could not read Telegram settings from {path}: top-level YAML is not a mapping"
+            "could not read messenger settings from {path}: top-level YAML is not a mapping"
         ),
     )
     try:
-        messenger = messenger_mapping_from_root(parsed)
+        return messenger_mapping_from_root(parsed)
     except ValueError as exc:
-        raise ValueError(f"could not read Telegram settings from {config}: {exc}") from exc
+        raise ValueError(f"could not read messenger settings from {config}: {exc}") from exc
+
+
+def _telegram_mapping(config: Path) -> dict[str, Any]:
+    messenger = _messenger_mapping(config)
     telegram_raw = messenger.get("telegram")
     if telegram_raw is None:
         return {}
@@ -275,43 +280,69 @@ def _telegram_mapping(config: Path) -> dict[str, Any]:
     return telegram_raw
 
 
-def _telegram_credentials_configured(telegram: dict[str, Any]) -> bool:
-    return bool(
-        normalize_text(telegram.get("bot_token")) and normalize_text(telegram.get("chat_id"))
-    )
+def _selected_messenger_config(config: Path) -> MessengerConfig:
+    return messenger_config_from_mapping(_messenger_mapping(config))
 
 
-def _telegram_runtime_warning(config: Path, *, worker_only: bool) -> str | None:
+def _bot_runtime_warning(config: Path, *, worker_only: bool) -> str | None:
     if worker_only or not config.exists():
         return None
     try:
-        telegram = _telegram_mapping(config)
+        messenger = _selected_messenger_config(config)
     except ValueError as exc:
         return str(exc)
     except YAML_CONFIG_LOAD_EXCEPTIONS:
-        return f"could not read Telegram settings from {config}: invalid configuration"
-    if not _telegram_credentials_configured(telegram):
+        return f"could not read messenger settings from {config}: invalid configuration"
+    provider = messenger.normalized_provider
+    configured = (
+        messenger.telegram.interactive_enabled
+        if provider == "telegram"
+        else messenger.discord.interactive_enabled
+    )
+    if not configured:
+        if provider == "discord":
+            mode = (
+                "Discord webhook delivery is notification-only"
+                if messenger.discord.webhook_url
+                else "Discord interactive bot settings are incomplete"
+            )
+            return (
+                f"{mode}; configure messenger.discord.bot_token, allowed_user_ids, and at "
+                "least one channel_ids entry to run the interactive bot"
+            )
+        if provider == "telegram":
+            if messenger.telegram.enabled:
+                return (
+                    "Telegram interactive polling requires a numeric messenger.telegram.chat_id; "
+                    "group chats also require messenger.telegram.allowed_user_ids"
+                )
+            return (
+                "Telegram is not fully configured; set messenger.telegram.bot_token and "
+                "messenger.telegram.chat_id to run the interactive bot"
+            )
         return (
-            "full runtime target includes the Telegram bot, but messenger.telegram.bot_token "
-            "or messenger.telegram.chat_id is empty; use --worker-only if Telegram is not ready"
+            f"full runtime target includes the {provider} bot, but its interactive "
+            "credentials or channel allowlist are incomplete; use --worker-only until ready"
         )
     return None
 
 
-def _telegram_configured(config: Path) -> bool:
+def _bot_configured(config: Path) -> bool:
     if not config.exists():
         return False
     try:
-        telegram = _telegram_mapping(config)
+        messenger = _selected_messenger_config(config)
     except YAML_CONFIG_LOAD_EXCEPTIONS:
         return False
-    return _telegram_credentials_configured(telegram)
+    if messenger.normalized_provider == "telegram":
+        return messenger.telegram.interactive_enabled
+    return messenger.discord.interactive_enabled
 
 
 def _auto_worker_only(config: Path, *, worker_only: bool, no_enable: bool) -> bool:
     if worker_only or no_enable:
         return worker_only
-    return not _telegram_configured(config)
+    return not _bot_configured(config)
 
 
 def _validate_worker_config(config: Path) -> None:
@@ -349,16 +380,19 @@ def _collect_warnings(
         )
     if not config.exists():
         warnings.append(f"config file does not exist yet: {config}")
-    if not auto_selected_worker_only:
-        telegram_warning = _telegram_runtime_warning(config, worker_only=worker_only)
-        if telegram_warning:
-            warnings.append(telegram_warning)
     if auto_selected_worker_only and not worker_only:
+        bot_warning = _bot_runtime_warning(config, worker_only=False)
         warnings.append(
-            "Telegram is not fully configured, so the installer will enable only the "
-            "queue worker; rerun the same command after setting messenger.telegram.bot_token "
-            "and messenger.telegram.chat_id to enable the full runtime target"
+            bot_warning
+            or (
+                "The selected messenger is not configured for interactive bot operation; "
+                "only the queue worker will be enabled"
+            )
         )
+    elif not auto_selected_worker_only:
+        bot_warning = _bot_runtime_warning(config, worker_only=worker_only)
+        if bot_warning:
+            warnings.append(bot_warning)
     if no_enable:
         warnings.append(
             "--no-enable leaves the existing boot selection and live services unchanged; "

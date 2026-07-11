@@ -1,9 +1,10 @@
-"""Messenger-neutral notification layer.
+"""Messenger-neutral notification and interactive contracts.
 
 Domain code builds a :class:`Message` (see :mod:`.richtext`) and sends it through
 a :class:`MessageChannel` resolved by :func:`build_channel`. Per-messenger markup
 and transport live in the adapter modules (Telegram, Discord) so the active
-messenger can be swapped from config alone.
+messenger can be swapped from config alone. Interactive bot applications use
+the neutral values and port exported from :mod:`.interactive`.
 """
 
 from __future__ import annotations
@@ -12,6 +13,17 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 from .channel import MessageChannel, SendResult, send_ok
+from .interactive import (
+    ActionRows,
+    Actor,
+    BotReply,
+    BotReplyFormat,
+    CardAction,
+    ConversationAddress,
+    IncomingAction,
+    IncomingCommand,
+    InteractiveMessenger,
+)
 from .render_discord import render_discord_embed
 from .render_telegram import render_telegram
 from .richtext import (
@@ -32,17 +44,27 @@ from .richtext import (
 )
 
 if TYPE_CHECKING:
-    from .config_io import build_channel_from_config_path, load_messenger_config_from_file
+    from .config_io import (
+        build_channel_from_config_path,
+        load_messenger_config_from_file,
+        load_required_messenger_config_from_file,
+    )
+    from .discord_bot import DiscordBotChannel
     from .discord_webhook import DiscordWebhookChannel
     from .registry import build_channel
     from .telegram_channel import TelegramChannel
 
 _LAZY_EXPORTS = {
+    "DiscordBotChannel": (".discord_bot", "DiscordBotChannel"),
     "DiscordWebhookChannel": (".discord_webhook", "DiscordWebhookChannel"),
     "TelegramChannel": (".telegram_channel", "TelegramChannel"),
     "build_channel": (".registry", "build_channel"),
     "build_channel_from_config_path": (".config_io", "build_channel_from_config_path"),
     "load_messenger_config_from_file": (".config_io", "load_messenger_config_from_file"),
+    "load_required_messenger_config_from_file": (
+        ".config_io",
+        "load_required_messenger_config_from_file",
+    ),
 }
 
 
@@ -57,9 +79,19 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "ActionRows",
+    "Actor",
+    "BotReply",
+    "BotReplyFormat",
+    "CardAction",
+    "ConversationAddress",
+    "DiscordBotChannel",
     "DiscordWebhookChannel",
     "Field",
     "Group",
+    "IncomingAction",
+    "IncomingCommand",
+    "InteractiveMessenger",
     "Line",
     "Message",
     "MessageChannel",
@@ -72,6 +104,7 @@ __all__ = [
     "build_channel_from_config_path",
     "code",
     "load_messenger_config_from_file",
+    "load_required_messenger_config_from_file",
     "field_row",
     "group",
     "line",

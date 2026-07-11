@@ -148,10 +148,16 @@ messenger:
   telegram:
     bot_token: ""
     chat_id: ""
+    allowed_user_ids: ["234567890123456789"]
     timeout_seconds: 5.0
     max_attempts: 2
     retry_backoff_seconds: 0.5
   discord:
+    bot_token: ""
+    channel_ids: ["123456789012345678"]
+    default_channel_id: "123456789012345678"
+    allowed_user_ids: []
+    # 레거시 알림 전용 fallback:
     webhook_url: ""
 
 orca:
@@ -345,7 +351,7 @@ ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 자식 작업은 잡음을 
 뷰에서 숨겨지지만 `--engine ... --kind job` 필터와 `--json`으로는 여전히 확인할 수
 있습니다. 최상위 ORCA 작업은 최상위 항목으로 남습니다. `active_simulations` 줄은 공유
 `scheduler.max_active_simulations` 슬롯을 소비하는 현재 실행 중 시뮬레이션만 셉니다.
-통합 Telegram 봇 `/list` 명령은 동일한 표 레이아웃과 기본 워크플로우-자식 가시성
+선택된 봇의 list 명령(Telegram `/list`, Discord `!list`)은 동일한 표 레이아웃과 기본 워크플로우-자식 가시성
 정책을 렌더링하되, 좁은 모바일 화면에서 각 행이 한 줄에 맞도록 `ID` 컬럼만 생략합니다.
 그 액션 메시지는 활동별 취소 버튼과 새로고침·"완료 정리" 버튼(후자는 `/list clear`와
 동등)을 제공합니다.
@@ -363,9 +369,9 @@ ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 자식 작업은 잡음을 
 - `orca_auto --version`은 설치된 버전을 출력하고, 명령 없이 `orca_auto`를 실행하면
   도움말이 표시됩니다. 오류와 복구 힌트는 stderr로 출력됩니다.
 - `orca_auto service status --json`은 스크립팅을 위한 기계 판독용 출력을 내보냅니다.
-- Telegram 봇은 인라인 버튼을 통한 확인 후 취소하는 `/cancel <target>`을 지원합니다.
-  `/list` 액션 메시지의 취소 버튼도 그 확인 단계를 거칩니다. 취소 가능한 활동이 8개를
-  초과하면 메시지가 표시된 개수를 안내하며, 취소나 정리를 실행하면 목록이 자동으로
+- messenger 봇은 provider-native 버튼 확인 후 취소하는 명령(Telegram `/cancel`, Discord `!cancel`)을 지원합니다.
+  `/list` 액션 메시지의 취소 버튼도 그 확인 단계를 거칩니다. 공통 카드가 Discord의
+  5-row 제한에 맞도록 취소 가능한 활동은 최대 4개를 표시하며, 취소나 정리를 실행하면 목록이 자동으로
   새로고침됩니다.
 
 ### 7.6 `scan-notify`
@@ -381,7 +387,7 @@ orca_auto scan-notify
 
 ### 7.7 장기 실행 서비스
 
-장기 실행 워커와 Telegram 봇 프로세스는 오직 `systemd`로만 관리됩니다. 공개 CLI 명령은
+장기 실행 워커와 messenger 봇 프로세스는 오직 `systemd`로만 관리됩니다. 공개 CLI 명령은
 그 서비스들을 직접 시작하지 않습니다.
 
 동작:
@@ -392,8 +398,8 @@ orca_auto scan-notify
 - ORCA, xTB, CREST는 동일한 admission 상한을 공유합니다. ORCA는 부모 워커에서 슬롯을
   예약하고, 자식이 시작된 뒤 큐 정체성 메타데이터를 붙이며, ORCA 자식이 실행 중에 그
   예약을 활성화/해제하도록 합니다.
-- `orca_auto-bot@.service`는 `orca_auto.yaml`의 `messenger.telegram.bot_token`과
-  `messenger.telegram.chat_id`로 통합 Telegram 봇을 시작합니다.
+- `orca_auto-bot@.service`는 `orca_auto.flow.bot.runner`를 실행하고,
+  `orca_auto.yaml`에서 선택된 Telegram 또는 Discord gateway를 시작합니다.
 - 워크플로우 메신저 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST와 반응 경로 xTB
   자식 단계는 해당 단계가 끝난 뒤 각각 한 메시지로 요약합니다.
 - `orca_auto-runtime@.target`은 두 서비스를 함께 시작합니다.
@@ -419,7 +425,7 @@ wsl --shutdown
 - [`systemd/orca_auto-queue-worker@.service`](../systemd/orca_auto-queue-worker@.service)
 - [`systemd/orca_auto-bot@.service`](../systemd/orca_auto-bot@.service)
 
-Telegram이 설정된 경우 권장 상시 가동 런타임 설치 흐름:
+선택된 messenger 봇이 설정된 경우 권장 상시 가동 런타임 설치 흐름:
 
 ```bash
 cd <repo_root>
@@ -429,10 +435,8 @@ journalctl -u "orca_auto-queue-worker@$(whoami)" -f
 journalctl -u "orca_auto-bot@$(whoami)" -f
 ```
 
-결합 런타임 타깃을 활성화하기 전에:
-
-- `orca_auto.yaml`에 `messenger.telegram.bot_token`과
-  `messenger.telegram.chat_id`를 설정하세요.
+결합 런타임 타깃을 활성화하기 전에 `orca_auto.yaml`에서 선택된 Telegram 또는
+Discord 인터랙티브 bot 설정을 완성하세요.
 
 통합 런타임 템플릿의 가정:
 
@@ -445,10 +449,9 @@ journalctl -u "orca_auto-bot@$(whoami)" -f
 시작합니다. 공유 `scheduler.max_active_simulations` 설정은 여전히 ORCA와 워크플로우가
 관리하는 내부 엔진 단계 전반의 활성 시뮬레이션 결합 수를 제한합니다.
 
-Telegram이 아직 설정되지 않았다면, `orca_auto systemd install`은
-`orca_auto-queue-worker@$(whoami)`를 직접 활성화합니다.
-`messenger.telegram.bot_token`과 `messenger.telegram.chat_id`를 설정한 뒤 같은 명령을
-다시 실행하면 전체 런타임 타깃이 활성화됩니다.
+선택된 provider 설정이 완전하지 않으면(Discord webhook-only 포함),
+`orca_auto systemd install`은 `orca_auto-queue-worker@$(whoami)`를 직접 활성화합니다.
+bot 설정을 완성한 뒤 같은 명령을 다시 실행하면 전체 런타임 타깃이 활성화됩니다.
 
 워크플로우 감독은 `orca_auto-queue-worker@.service`에 속합니다.
 

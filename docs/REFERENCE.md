@@ -146,10 +146,16 @@ messenger:
   telegram:
     bot_token: ""
     chat_id: ""
+    allowed_user_ids: ["234567890123456789"]
     timeout_seconds: 5.0
     max_attempts: 2
     retry_backoff_seconds: 0.5
   discord:
+    bot_token: ""
+    channel_ids: ["123456789012345678"]
+    default_channel_id: "123456789012345678"
+    allowed_user_ids: []
+    # Legacy notification-only fallback:
     webhook_url: ""
 
 orca:
@@ -339,7 +345,7 @@ combined text view to reduce noise, but remain available through `--engine ... -
 filters and `--json`. Top-level ORCA jobs remain top-level entries. The
 `active_simulations` line counts only the currently running
 simulations that consume the shared `scheduler.max_active_simulations` slots.
-The integrated Telegram bot `/list` command renders the same table layout and default
+The selected bot's list command (Telegram `/list`, Discord `!list`) renders the same table layout and default
 workflow-child visibility policy, except it omits the `ID` column so each row fits on a
 single line on narrow mobile screens. Its actions message offers per-activity cancel
 buttons plus refresh and "clear finished" buttons (the latter equivalent to `/list clear`).
@@ -357,10 +363,10 @@ cancelled entries from the unified list.
 - `orca_auto --version` prints the installed version, and running `orca_auto` with no
   command prints help. Errors and recovery hints are written to stderr.
 - `orca_auto service status --json` emits machine-readable output for scripting.
-- The Telegram bot supports `/cancel <target>` with confirmation via inline buttons before
+- The messenger bot supports cancel (`/cancel` on Telegram, `!cancel` on Discord) with confirmation via native buttons before
   cancelling. In the `/list` actions message the cancel button still routes through that
-  confirmation step; when more than eight activities are cancellable the message notes how
-  many are shown, and executing a cancel or clear auto-refreshes the list.
+  confirmation step. At most four cancellable activities are shown so the shared card fits
+  Discord's five-row component limit; executing a cancel or clear auto-refreshes the list.
 
 ### 7.6 `scan-notify`
 
@@ -375,7 +381,7 @@ Behavior:
 
 ### 7.7 Long-Running Services
 
-Long-running worker and Telegram bot processes are managed through `systemd`
+Long-running worker and messenger bot processes are managed through `systemd`
 only. Public CLI commands do not start those services directly.
 
 Behavior:
@@ -385,8 +391,8 @@ Behavior:
 - ORCA, xTB, and CREST share the same admission cap. ORCA reserves a slot in
   the parent worker, attaches queue identity metadata after the child starts,
   and lets the ORCA child activate/release that reservation during execution.
-- `orca_auto-bot@.service` starts the unified Telegram bot using
-  `messenger.telegram.bot_token` and `messenger.telegram.chat_id` from `orca_auto.yaml`
+- `orca_auto-bot@.service` runs `orca_auto.flow.bot.runner`, which selects the configured
+  Telegram or Discord gateway from `orca_auto.yaml`
 - Workflow messenger alerts keep per-job ORCA messages, but summarize internal CREST and reaction-path xTB child phases in one message each after those phases finish
 - `orca_auto-runtime@.target` starts both services together
 
@@ -411,7 +417,7 @@ This repository includes service assets under `systemd/`:
 - [`systemd/orca_auto-queue-worker@.service`](../systemd/orca_auto-queue-worker@.service)
 - [`systemd/orca_auto-bot@.service`](../systemd/orca_auto-bot@.service)
 
-Recommended always-on runtime install flow when Telegram is configured:
+Recommended always-on runtime install flow when the selected messenger bot is configured:
 
 ```bash
 cd <repo_root>
@@ -421,9 +427,8 @@ journalctl -u "orca_auto-queue-worker@$(whoami)" -f
 journalctl -u "orca_auto-bot@$(whoami)" -f
 ```
 
-Before enabling the combined runtime target:
-
-- Set `messenger.telegram.bot_token` and `messenger.telegram.chat_id` in `orca_auto.yaml`
+Before enabling the combined runtime target, complete the selected Telegram or Discord
+interactive bot settings in `orca_auto.yaml`.
 
 Assumptions of the unified runtime templates:
 
@@ -437,10 +442,9 @@ supervision plus the internal CREST and xTB workers. The shared
 `scheduler.max_active_simulations` setting still limits the combined number of
 active simulations across ORCA and workflow-managed internal engine stages.
 
-If Telegram is not configured yet, `orca_auto systemd install` enables
-`orca_auto-queue-worker@$(whoami)` directly. Run the same command again after
-setting `messenger.telegram.bot_token` and `messenger.telegram.chat_id` to enable the full
-runtime target.
+If the selected provider is incomplete (including Discord webhook-only),
+`orca_auto systemd install` enables `orca_auto-queue-worker@$(whoami)` directly. Run the
+same command again after completing bot configuration to enable the full runtime target.
 
 Workflow supervision belongs to `orca_auto-queue-worker@.service`.
 

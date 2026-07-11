@@ -87,10 +87,16 @@ messenger:
   telegram:
     bot_token: ""
     chat_id: ""
+    allowed_user_ids: [] # required for group-chat controls
     timeout_seconds: 5.0
     max_attempts: 2
     retry_backoff_seconds: 0.5
   discord:
+    bot_token: ""
+    channel_ids: ["123456789012345678"]       # inbound command allowlist
+    default_channel_id: "123456789012345678" # notifications and card actions
+    allowed_user_ids: ["234567890123456789"]  # required operator allowlist
+    # Legacy notification-only fallback; omit for an interactive bot.
     webhook_url: ""
 
 orca:
@@ -109,6 +115,11 @@ Notes:
 - `scheduler.max_active_simulations` is the shared cap across ORCA, internal xTB workflow stages, and internal CREST workflow stages.
 - Everything lives under the single runs root (`runs_root`): standalone ORCA jobs and workflow workspaces sit side by side in it, and the shared admission directory defaults to `<runs_root>/.admission`.
 - Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs live only under `<runs_root>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`).
+- Discord interactivity requires a separate orca_auto Discord application/bot with
+  Message Content Intent enabled. Do not share the `ollama_bot` token between two
+  gateway processes. `webhook_url` remains supported for legacy outbound-only delivery.
+- Follow [docs/DISCORD_SETUP.md](docs/DISCORD_SETUP.md) for the bot invite, channel IDs,
+  permissions, service startup, and command verification.
 - The full template lives at [config/orca_auto.yaml.example](config/orca_auto.yaml.example).
 
 ## User Commands
@@ -134,17 +145,20 @@ orca_auto queue cancel <target>
 orca_auto service status
 orca_auto service restart
 orca_auto scan-notify
+orca_auto bot run              # foreground Telegram/Discord gateway
 ```
 
 `queue list` prints a compact, terminal-width-aware table; workflow children are grouped
-and indented under their parent. The Telegram bot mirrors the same surface (`/list`,
-`/cancel`) with inline buttons. For the full command reference — table columns, the
-`--watch`/`--json`/`--no-color` flags, color and exit behavior, and the Telegram bot —
+and indented under their parent. The selected bot mirrors the same application surface
+(Telegram `/list`; Discord `!list`, with matching cancel/help commands) and uses
+provider-native buttons. For the full command
+reference — table columns, the `--watch`/`--json`/`--no-color` flags, color and exit
+behavior, and the messenger bot —
 see [docs/REFERENCE.md](docs/REFERENCE.md) §7.
 
 ## Services
 
-Long-running services (the queue worker and Telegram bot) are managed through `systemd`
+Long-running services (the queue worker and selected messenger bot) are managed through `systemd`
 only. After `orca_auto.yaml` is configured, enable the combined runtime target once and
 let `systemd` keep both running:
 
@@ -155,9 +169,11 @@ orca_auto service status
 orca_auto service restart
 ```
 
-If Telegram is not configured yet, the installer enables only the queue worker; run the
-same command again after setting `messenger.telegram.bot_token` and
-`messenger.telegram.chat_id` to enable the full runtime target. If you edited files under
+If the selected provider is not configured for interactive operation, the installer
+enables only the queue worker. Telegram needs a token and chat ID; Discord needs a bot
+token, an inbound command channel, and an operator user ID. A Discord webhook alone stays worker-only because
+it cannot receive actions. After completing the provider config, rerun the same command
+to enable the full runtime target. If you edited files under
 `systemd/`, run
 `sudo systemctl daemon-reload` before restarting. See
 [systemd/README.md](systemd/README.md) for the full runtime setup.
@@ -192,7 +208,7 @@ smoke test that confirms typed-package metadata. These checks exercise the
 queue, workflow, parser, notification, and fake-engine integration paths without
 requiring a licensed ORCA binary. They do not prove that a local ORCA/OpenMPI
 installation is valid, that your site scheduler allows the requested resources,
-or that Telegram credentials and network delivery work in your deployment.
+or that messenger credentials and network delivery work in your deployment.
 
 To clear local Python/test/tool caches after a large refactor:
 

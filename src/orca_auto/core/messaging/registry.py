@@ -13,6 +13,7 @@ from collections.abc import Callable
 from orca_auto.core.config import MessengerConfig
 
 from .channel import MessageChannel
+from .discord_bot import DiscordBotChannel
 from .discord_webhook import DiscordWebhookChannel
 from .telegram_channel import TelegramChannel
 
@@ -30,6 +31,8 @@ def _build_discord(
     messenger: MessengerConfig,
     logger: logging.Logger | None,
 ) -> MessageChannel:
+    if messenger.discord.bot_notification_enabled:
+        return DiscordBotChannel(messenger.discord, logger=logger)
     return DiscordWebhookChannel(messenger.discord, logger=logger)
 
 

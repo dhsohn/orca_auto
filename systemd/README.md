@@ -7,16 +7,16 @@ This directory is the single home for long-running orca_auto service assets.
 ## Included units
 
 - `orca_auto-runtime@.target`
-  - recommended combined runtime target for the unified queue worker and Telegram bot
+  - recommended combined runtime target for the queue worker and selected messenger bot
 - `orca_auto-queue-worker@.service`
   - recommended unified queue worker template
 - `orca_auto-bot@.service`
-  - unified Telegram bot template
+  - provider-neutral Telegram/Discord bot template
 
 ## Combined runtime target
 
 Use `orca_auto-runtime@.target` when you want the unified queue worker and the
-unified Telegram bot to start together at boot.
+selected Telegram or Discord bot to start together at boot.
 
 It pulls in:
 
@@ -25,7 +25,7 @@ It pulls in:
 
 Before enabling the combined runtime target:
 
-- Set `messenger.telegram.bot_token` and `messenger.telegram.chat_id` in `orca_auto.yaml`
+- Complete the selected provider's interactive credentials in `orca_auto.yaml`
 - Restrict local config permissions with `chmod 600 config/orca_auto.yaml`
 
 Install the combined runtime target:
@@ -37,10 +37,10 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 
 The installer renders the unit files with the repository path, writes them to
 `/etc/systemd/system`, runs `systemctl daemon-reload`, and enables/starts the
-right runtime for the current config. If Telegram is not configured yet, it
-enables only the queue worker; run the same command again after setting
-`messenger.telegram.bot_token` and `messenger.telegram.chat_id` to enable the full runtime
-target.
+right runtime for the current config. Telegram needs a token and chat ID. Discord needs
+a separate bot token, at least one inbound command channel, and an operator user ID. A webhook-only Discord
+configuration is notification-only, so the installer selects the queue worker. Rerun the
+command after completing bot configuration to enable the full runtime target.
 
 Monitor the combined runtime target:
 
@@ -80,9 +80,9 @@ cd <repo_root>
 orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
-Use the worker-only service when you do not want the Telegram bot managed by
-systemd, or when Telegram is not configured yet. The installer chooses that
-mode automatically while Telegram settings are empty.
+Use the worker-only service when you do not want an interactive bot managed by
+systemd, or when the selected provider is incomplete. The installer chooses that mode
+automatically, including for Discord webhook-only configuration.
 
 Monitor the unified engine worker:
 

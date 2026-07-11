@@ -82,13 +82,13 @@ def add_scaffold_parser(subparsers: argparse._SubParsersAction[argparse.Argument
 
 
 def add_monitor_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    # ``scan-notify`` performs a single filesystem scan and sends Telegram
+    # ``scan-notify`` performs a single filesystem scan and sends messenger
     # alerts, then exits.
     monitor_parser = subparsers.add_parser(
         "scan-notify",
         help=(
             "Run a one-shot scan for newly discovered DFT results (or scan "
-            "failures) and send ORCA Telegram alerts. Not a live monitor."
+            "failures) and send ORCA messenger alerts. Not a live monitor."
         ),
     )
     add_engine_config_argument(monitor_parser)
