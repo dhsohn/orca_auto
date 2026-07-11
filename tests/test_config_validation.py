@@ -3,7 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from orca_auto.orca.config import load_config
+from orca_auto.core.config import MessengerConfig, TelegramConfig
+from orca_auto.orca.config import AppConfig, load_config
 
 
 def _orca_config(payload: dict[str, object]) -> dict[str, object]:
@@ -30,6 +31,19 @@ def _write_orca_config(config_path: Path, payload: dict[str, object]) -> Path:
 
 
 class TestConfigValidation(unittest.TestCase):
+    def test_telegram_compatibility_alias_stays_synchronized(self) -> None:
+        cfg = AppConfig()
+        legacy = TelegramConfig(bot_token="legacy-token", chat_id="legacy-chat")
+
+        cfg.telegram = legacy
+
+        self.assertEqual(cfg.messenger.telegram, legacy)
+
+        nested = TelegramConfig(bot_token="nested-token", chat_id="nested-chat")
+        cfg.messenger = MessengerConfig(telegram=nested)
+
+        self.assertEqual(cfg.telegram, nested)
+
     def test_windows_runs_root_raises(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg_path = _write_orca_config(
@@ -127,12 +141,14 @@ class TestConfigValidation(unittest.TestCase):
                 {
                     "runs_root": str(allowed),
                     "paths": {"orca_executable": str(fake_orca)},
-                    "telegram": {
-                        "bot_token": "token",
-                        "chat_id": "chat",
-                        "timeout_seconds": 3.5,
-                        "max_attempts": 4,
-                        "retry_backoff_seconds": 0.25,
+                    "messenger": {
+                        "telegram": {
+                            "bot_token": "token",
+                            "chat_id": "chat",
+                            "timeout_seconds": 3.5,
+                            "max_attempts": 4,
+                            "retry_backoff_seconds": 0.25,
+                        },
                     },
                 },
             )
@@ -144,6 +160,52 @@ class TestConfigValidation(unittest.TestCase):
             self.assertEqual(cfg.telegram.timeout_seconds, 3.5)
             self.assertEqual(cfg.telegram.max_attempts, 4)
             self.assertEqual(cfg.telegram.retry_backoff_seconds, 0.25)
+            self.assertEqual(cfg.messenger.telegram, cfg.telegram)
+
+    def test_legacy_top_level_telegram_is_promoted_into_messenger(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            allowed = root / "orca_runs"
+            allowed.mkdir()
+            fake_orca = root / "orca"
+            _write_fake_executable(fake_orca)
+
+            cfg_path = _write_orca_config(
+                root / "orca_auto.yaml",
+                {
+                    "runs_root": str(allowed),
+                    "paths": {"orca_executable": str(fake_orca)},
+                    "telegram": {
+                        "bot_token": "legacy-token",
+                        "chat_id": "legacy-chat",
+                    },
+                },
+            )
+
+            cfg = load_config(str(cfg_path))
+
+            self.assertEqual(cfg.telegram.bot_token, "legacy-token")
+            self.assertEqual(cfg.telegram.chat_id, "legacy-chat")
+            self.assertEqual(cfg.messenger.telegram, cfg.telegram)
+
+    def test_unknown_messenger_provider_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            allowed = root / "orca_runs"
+            allowed.mkdir()
+            fake_orca = root / "orca"
+            _write_fake_executable(fake_orca)
+            cfg_path = _write_orca_config(
+                root / "orca_auto.yaml",
+                {
+                    "runs_root": str(allowed),
+                    "paths": {"orca_executable": str(fake_orca)},
+                    "messenger": {"provider": "disocrd"},
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "messenger.provider"):
+                load_config(str(cfg_path))
 
     def test_workflow_root_equals_runs_root(self) -> None:
         with tempfile.TemporaryDirectory() as td:

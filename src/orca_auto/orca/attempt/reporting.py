@@ -17,7 +17,8 @@ from ..types import (
 )
 
 logger = logging.getLogger(__name__)
-FINISHED_NOTIFICATION_SENT_AT_KEY = "telegram_finished_notification_sent_at"
+FINISHED_NOTIFICATION_SENT_AT_KEY = "finished_notification_sent_at"
+LEGACY_FINISHED_NOTIFICATION_SENT_AT_KEY = "telegram_finished_notification_sent_at"
 
 
 @dataclass(frozen=True)
@@ -301,7 +302,13 @@ def finished_notification_already_sent(state: Mapping[str, Any]) -> bool:
     final_result = state.get("final_result")
     if not isinstance(final_result, Mapping):
         return False
-    return bool(str(final_result.get(FINISHED_NOTIFICATION_SENT_AT_KEY) or "").strip())
+    return any(
+        bool(str(final_result.get(key) or "").strip())
+        for key in (
+            FINISHED_NOTIFICATION_SENT_AT_KEY,
+            LEGACY_FINISHED_NOTIFICATION_SENT_AT_KEY,
+        )
+    )
 
 
 def mark_finished_notification_sent(
@@ -313,7 +320,12 @@ def mark_finished_notification_sent(
     final_result = state.get("final_result")
     if not isinstance(final_result, dict):
         return
-    final_result["telegram_finished_notification_sent_at"] = sent_at or now_utc_iso()
+    timestamp = sent_at or now_utc_iso()
+    # Dual-write for one compatibility window: new readers use the neutral key
+    # while a rollback to the previous release still sees the legacy marker and
+    # does not resend an already delivered terminal notification.
+    final_result["finished_notification_sent_at"] = timestamp
+    final_result["telegram_finished_notification_sent_at"] = timestamp
     state["final_result"] = final_result
     finalize_state(
         reaction_dir,

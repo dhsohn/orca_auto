@@ -10,6 +10,7 @@ from orca_auto.core.admission import (
     complete_slot_engine_process,
     get_slot,
 )
+from orca_auto.core.messaging import build_channel
 from orca_auto.core.utils.process_lock import parse_lock_info
 from orca_auto.core.utils.process_tracking import active_run_lock_pid
 
@@ -152,18 +153,19 @@ def active_direct_run_error(reaction_dir: Path, *, logger: logging.Logger) -> st
 
 
 def notification_callbacks(cfg: Any, *, deps: Any) -> tuple[Any, Any, Any]:
-    if not cfg.telegram.enabled:
+    channel = build_channel(cfg.messenger, logger=logging.getLogger(__name__))
+    if not channel.enabled:
         return None, None, None
     notifications = deps.notifications
 
     def notify_started(event: Any) -> bool:
-        return notifications.notify_run_started_event(cfg.telegram, event)
+        return notifications.notify_run_started_event(channel, event)
 
     def notify_finished(event: Any) -> bool:
-        return notifications.notify_run_finished_event(cfg.telegram, event)
+        return notifications.notify_run_finished_event(channel, event)
 
     def notify_retry(event: Any) -> bool:
-        return notifications.notify_retry_event(cfg.telegram, event)
+        return notifications.notify_retry_event(channel, event)
 
     return notify_started, notify_finished, notify_retry
 

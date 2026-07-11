@@ -136,9 +136,10 @@ def test_load_config_reads_and_normalizes_all_sections(
         resources:
           max_cores_per_task: "12"
           max_memory_gb_per_task: "48"
-        telegram:
-          bot_token: " token-123 "
-          chat_id: " 4567 "
+        messenger:
+          telegram:
+            bot_token: " token-123 "
+            chat_id: " 4567 "
         """,
     )
     monkeypatch.setattr(config_mod, "default_shared_config_path", lambda: str(config_path))
@@ -155,6 +156,27 @@ def test_load_config_reads_and_normalizes_all_sections(
     assert cfg.resources.max_memory_gb_per_task == 48
     assert cfg.telegram.bot_token == "token-123"
     assert cfg.telegram.chat_id == "4567"
+    assert cfg.messenger.telegram == cfg.telegram
+
+
+def test_load_config_dual_reads_legacy_top_level_telegram(tmp_path: Path) -> None:
+    workflow_root = tmp_path / "workflow_root"
+    workflow_root.mkdir()
+    config_path = _write_config(
+        tmp_path / "orca_auto.yaml",
+        f"""
+        runs_root: {workflow_root}
+        telegram:
+          bot_token: legacy-token
+          chat_id: legacy-chat
+        """,
+    )
+
+    cfg = config_mod.load_crest_config(str(config_path))
+
+    assert cfg.telegram.bot_token == "legacy-token"
+    assert cfg.telegram.chat_id == "legacy-chat"
+    assert cfg.messenger.telegram == cfg.telegram
 
 
 def test_load_config_no_longer_supports_top_level_runtime_and_paths_shape(tmp_path: Path) -> None:
@@ -173,9 +195,10 @@ def test_load_config_no_longer_supports_top_level_runtime_and_paths_shape(tmp_pa
         resources:
           max_cores_per_task: "12"
           max_memory_gb_per_task: "48"
-        telegram:
-          bot_token: " token-123 "
-          chat_id: " 4567 "
+        messenger:
+          telegram:
+            bot_token: " token-123 "
+            chat_id: " 4567 "
         """,
     )
 

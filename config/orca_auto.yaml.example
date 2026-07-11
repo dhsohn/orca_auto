@@ -44,17 +44,32 @@ workflow:
   # job_locations.json, and job dirs under one directory per engine stage,
   # e.g. <runs_root>/<workflow_id>/01_crest, .../02_xtb, .../03_orca.
 
-telegram:
-  # Leave blank to disable the unified Telegram bot and shared Telegram
-  # notifications that use this config.
-  bot_token: ""
-  chat_id: ""
-  # Each Telegram API call waits up to this many seconds before retry/fail.
-  timeout_seconds: 5.0
-  # Retry transient Telegram send failures this many times total.
-  max_attempts: 2
-  # Pause between retry attempts for transient Telegram failures.
-  retry_backoff_seconds: 0.5
+messenger:
+  # Selects where outbound run/queue/monitor notifications are delivered.
+  # `telegram` (default) delivers via the `telegram:` block below; `discord`
+  # posts embeds to a Discord webhook (no bot or gateway required). Interactive
+  # control (/list, /cancel) always runs on Telegram until the Phase 2 gateway
+  # adapter lands, so keep `telegram` filled in if you use the bot.
+  provider: telegram  # telegram | discord
+  telegram:
+    # Telegram credentials. Used by the interactive bot and, when
+    # `provider` is `telegram`, by outbound notifications. Leave blank to
+    # disable the Telegram bot and Telegram notifications.
+    bot_token: ""
+    chat_id: ""
+    # Each Telegram API call waits up to this many seconds before retry/fail.
+    timeout_seconds: 5.0
+    # Retry transient Telegram send failures this many times total.
+    max_attempts: 2
+    # Pause between retry attempts for transient Telegram failures.
+    retry_backoff_seconds: 0.5
+  discord:
+    # Channel webhook URL (Server Settings -> Integrations -> Webhooks).
+    # Leave blank to keep Discord notifications disabled.
+    webhook_url: ""
+    timeout_seconds: 5.0
+    max_attempts: 2
+    retry_backoff_seconds: 0.5
 
 orca:
   runtime:

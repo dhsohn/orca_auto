@@ -13,6 +13,7 @@ from .files import (
     default_shared_admission_root,
     load_required_yaml_mapping,
     mapping_section,
+    messenger_mapping_from_root,
     runs_root_from_mapping,
     validated_runs_root_text,
 )
@@ -20,7 +21,9 @@ from .schema import (
     CommonResourceConfig,
     CommonRuntimeConfig,
     EmptyBehaviorConfig,
+    MessengerConfig,
     TelegramConfig,
+    reconcile_legacy_telegram_alias,
 )
 from .schema import (
     as_bool as as_bool,
@@ -39,6 +42,9 @@ from .schema import (
 )
 from .schema import (
     explicit_positive_int as explicit_positive_int,
+)
+from .schema import (
+    messenger_config_from_mapping as messenger_config_from_mapping,
 )
 from .schema import (
     normalize_admission_limit as normalize_admission_limit,
@@ -80,6 +86,12 @@ class WorkflowEngineAppConfig:
     behavior: WorkflowEngineBehaviorConfig = field(default_factory=WorkflowEngineBehaviorConfig)
     resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    messenger: MessengerConfig = field(default_factory=MessengerConfig)
+
+    def __post_init__(self) -> None:
+        messenger, telegram = reconcile_legacy_telegram_alias(self.messenger, self.telegram)
+        object.__setattr__(self, "messenger", messenger)
+        object.__setattr__(self, "telegram", telegram)
 
 
 @dataclass(frozen=True)
@@ -257,13 +269,14 @@ def load_workflow_engine_config(
     workflow_raw = mapping_section(raw, "workflow")
     workflow_paths_raw = mapping_section(workflow_raw, "paths")
     resources_raw = mapping_section(raw, "resources")
-    telegram_raw = mapping_section(raw, "telegram")
+    messenger_raw = messenger_mapping_from_root(raw)
     workflow_root = _required_workflow_root(raw, path)
     executable_value = _validate_workflow_engine_executable(
         as_str(workflow_paths_raw.get(executable_key)),
         executable_key=executable_key,
         display_name=executable_display_name,
     )
+    messenger = messenger_config_from_mapping(messenger_raw)
 
     return app_config_cls(
         runtime=_runtime_config_from_scheduler(scheduler_raw, workflow_root),
@@ -273,7 +286,8 @@ def load_workflow_engine_config(
         ),
         behavior=behavior_cls(),
         resources=_resource_config(resources_raw),
-        telegram=telegram_config_from_mapping(telegram_raw),
+        telegram=messenger.telegram,
+        messenger=messenger,
     )
 
 

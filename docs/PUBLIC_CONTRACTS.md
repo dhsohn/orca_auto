@@ -87,7 +87,7 @@ Config discovery order:
 2. `<project_root>/config/orca_auto.yaml`
 3. `~/orca_auto/config/orca_auto.yaml`
 
-Supported top-level sections and keys:
+Supported configuration paths:
 
 - `runs_root`
 - `resources.max_cores_per_task`
@@ -96,11 +96,16 @@ Supported top-level sections and keys:
 - `scheduler.admission_root`
 - `workflow.paths.xtb_executable`
 - `workflow.paths.crest_executable`
-- `telegram.bot_token`
-- `telegram.chat_id`
-- `telegram.timeout_seconds`
-- `telegram.max_attempts`
-- `telegram.retry_backoff_seconds`
+- `messenger.provider` (`telegram` or `discord`)
+- `messenger.telegram.bot_token`
+- `messenger.telegram.chat_id`
+- `messenger.telegram.timeout_seconds`
+- `messenger.telegram.max_attempts`
+- `messenger.telegram.retry_backoff_seconds`
+- `messenger.discord.webhook_url`
+- `messenger.discord.timeout_seconds`
+- `messenger.discord.max_attempts`
+- `messenger.discord.retry_backoff_seconds`
 - `orca.runtime.default_max_retries`
 - `orca.paths.orca_executable`
 
@@ -115,8 +120,21 @@ Stable behavior:
 - `orca.runtime.default_max_retries: 0` disables ORCA retries.
 - A positive `default_max_retries` enables calculation-type retry policy, still
   capped by ORCA route type.
-- Telegram is enabled only when both `telegram.bot_token` and `telegram.chat_id`
-  are non-empty.
+- Outbound Telegram delivery requires `messenger.provider: telegram` and non-empty
+  `messenger.telegram.bot_token` and `messenger.telegram.chat_id` values.
+- Outbound Discord delivery requires `messenger.provider: discord` and a valid official
+  HTTPS Discord execute-webhook URL in `messenger.discord.webhook_url`.
+- Both adapters bound delivery timeouts to 0.1–120 seconds, total attempts to 1–10,
+  and configured retry backoff to 0–120 seconds.
+
+Migration note:
+
+- During the current compatibility window, readers accept both the legacy top-level
+  `telegram:` block and canonical `messenger.telegram`. If both are present, the nested
+  `messenger.telegram` values take precedence.
+- New configuration, generated examples, and tooling write `messenger.telegram`; do not add
+  new top-level `telegram:` blocks. Discord has no legacy alias: use
+  `messenger.provider: discord` with `messenger.discord.webhook_url`.
 
 ## Queue And Activity Contract
 

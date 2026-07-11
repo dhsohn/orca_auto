@@ -6,13 +6,18 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from orca_auto.core.messaging import render_telegram
 from orca_auto.orca.config import AppConfig, PathsConfig, RuntimeConfig, TelegramConfig
 from orca_auto.orca.dft.monitor import MonitorResult, ParseFailure, ScanReport
-from orca_auto.orca.telegram_notifier import (
-    _format_monitor_dft_section,
-    _format_monitor_failure_section,
-    format_monitor_message,
+from orca_auto.orca.notifications import (
+    _monitor_dft_groups,
+    _monitor_failure_groups,
+    monitor_message,
 )
+
+
+def _render_monitor(report: ScanReport, **kwargs: object) -> str:
+    return render_telegram(monitor_message(report, **kwargs))  # type: ignore[arg-type]
 
 
 def _sample_report(n: int = 1) -> ScanReport:
@@ -48,28 +53,26 @@ def _sample_running_report() -> ScanReport:
     )
 
 
-class TestFormatDftSection:
-    def test_empty_report_returns_none(self) -> None:
+class TestMonitorDftGroups:
+    def test_empty_report_yields_no_groups(self) -> None:
         report = ScanReport(new_results=[], scanned_files=5)
-        assert _format_monitor_dft_section(report) is None
+        assert _monitor_dft_groups(report) == []
 
     def test_dft_section_content(self) -> None:
-        report = _sample_report()
-        result = _format_monitor_dft_section(report)
-        assert result is not None
-        assert "New Calculations Detected" in result
-        assert "C6H6" in result
-        assert "B3LYP/6-31G(d)" in result
+        rendered = _render_monitor(_sample_report())
+        assert "New Calculations Detected" in rendered
+        assert "C6H6" in rendered
+        assert "B3LYP/6-31G(d)" in rendered
 
     def test_running_only_results_are_suppressed(self) -> None:
         report = _sample_running_report()
-        assert _format_monitor_dft_section(report) is None
+        assert _monitor_dft_groups(report) == []
 
 
-class TestFormatFailureSection:
-    def test_no_failures_returns_none(self) -> None:
+class TestMonitorFailureGroups:
+    def test_no_failures_yields_no_groups(self) -> None:
         report = ScanReport(new_results=[], scanned_files=5)
-        assert _format_monitor_failure_section(report) is None
+        assert _monitor_failure_groups(report) == []
 
     def test_failure_section_content(self) -> None:
         report = ScanReport(
@@ -83,15 +86,14 @@ class TestFormatFailureSection:
             ],
             scanned_files=5,
         )
-        result = _format_monitor_failure_section(report)
-        assert result is not None
-        assert "Scan Parse Failures" in result
-        assert "ValueError" in result
+        rendered = _render_monitor(report)
+        assert "Scan Parse Failures" in rendered
+        assert "ValueError" in rendered
 
 
 class TestBuildMessage:
     def test_contains_header_scope_and_divider(self) -> None:
-        message = format_monitor_message(ScanReport(new_results=[], scanned_files=0))
+        message = _render_monitor(ScanReport(new_results=[], scanned_files=0))
         assert "orca_auto scan-notify" in message
         assert "\u2500" in message
         assert "Filesystem discovery only" in message
@@ -101,7 +103,7 @@ class TestBuildMessage:
         from datetime import datetime
         from zoneinfo import ZoneInfo
 
-        message = format_monitor_message(
+        message = _render_monitor(
             ScanReport(new_results=[], scanned_files=0),
             now=datetime(2026, 3, 10, 21, 0, tzinfo=ZoneInfo("Asia/Seoul")),
         )
@@ -118,7 +120,7 @@ class TestBuildMessage:
             ],
             scanned_files=1,
         )
-        message = format_monitor_message(report)
+        message = _render_monitor(report)
         assert "New Calculations Detected" in message
         assert "Scan Parse Failures" in message
         assert "UnicodeDecodeError" in message

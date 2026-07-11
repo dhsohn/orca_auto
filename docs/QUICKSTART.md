@@ -23,8 +23,8 @@ orca_auto init
 ```
 
 Use absolute Linux paths for ORCA, xTB, CREST, and run directories. If you want
-Telegram notifications, set `telegram.bot_token` and `telegram.chat_id` during
-init or edit `config/orca_auto.yaml` afterward.
+Telegram notifications, set `messenger.telegram.bot_token` and
+`messenger.telegram.chat_id` during init or edit `config/orca_auto.yaml` afterward.
 
 ## 3) Install The Runtime Service
 

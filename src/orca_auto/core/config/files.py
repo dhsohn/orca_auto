@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Iterable
+import warnings
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -73,8 +74,13 @@ def load_yaml_mapping(
     invalid_message: str = "YAML top-level is not a mapping: {path}",
 ) -> tuple[Path, dict[str, Any]]:
     path = Path(config_path).expanduser().resolve()
-    with path.open("r", encoding="utf-8") as handle:
-        parsed = yaml.safe_load(handle) or {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            parsed = yaml.safe_load(handle) or {}
+    except yaml.YAMLError:
+        # PyYAML's exception text includes source snippets. Config files contain
+        # bot tokens/webhook URLs, so never propagate the raw parser message.
+        raise ValueError(f"Invalid YAML syntax: {path}") from None
     if not isinstance(parsed, dict):
         raise ValueError(invalid_message.format(path=path))
     return path, parsed
@@ -99,6 +105,47 @@ def mapping_section(raw: dict[str, Any] | None, key: str) -> dict[str, Any]:
     return section if isinstance(section, dict) else {}
 
 
+def messenger_mapping_from_root(raw: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return the canonical ``messenger`` mapping with legacy Telegram support.
+
+    ``messenger.telegram`` is authoritative whenever that key is present.  The
+    legacy top-level ``telegram`` value is copied only when the nested key is
+    absent; the two mappings are deliberately never merged field-by-field.  In
+    particular, an explicitly empty nested mapping must not be repopulated with
+    credentials from the legacy location.
+    """
+    root = raw if isinstance(raw, Mapping) else {}
+    messenger_raw = root.get("messenger")
+    if messenger_raw is None:
+        messenger: dict[str, Any] = {}
+    elif isinstance(messenger_raw, Mapping):
+        messenger = dict(messenger_raw)
+    else:
+        raise ValueError("messenger section must be a mapping when configured.")
+
+    if "telegram" not in messenger and "telegram" in root:
+        warnings.warn(
+            "Top-level 'telegram' config is deprecated; move it to 'messenger.telegram'.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        legacy_telegram = root.get("telegram")
+        # Historical loaders treated a non-mapping legacy value as disabled.
+        # Preserve that read behavior during the migration window, while the
+        # new canonical nested section remains strict.
+        if legacy_telegram is None or isinstance(legacy_telegram, Mapping):
+            messenger["telegram"] = legacy_telegram
+    return messenger
+
+
+def config_with_canonical_messenger(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a shallow config copy whose shared messenger block is canonical."""
+    resolved = dict(raw)
+    if "messenger" in raw or "telegram" in raw:
+        resolved["messenger"] = messenger_mapping_from_root(raw)
+    return resolved
+
+
 def resolve_configured_path(value: Any) -> Path | None:
     text = normalize_text(value)
     return Path(text).expanduser().resolve() if text else None
@@ -108,7 +155,7 @@ def engine_config_mapping(
     raw: dict[str, Any],
     engine: str,
     *,
-    inherit_keys: Iterable[str] = ("behavior", "resources", "telegram"),
+    inherit_keys: Iterable[str] = ("behavior", "resources", "messenger"),
 ) -> dict[str, Any]:
     section = raw.get(engine)
     if not isinstance(section, dict):

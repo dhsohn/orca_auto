@@ -6,6 +6,7 @@ import pytest
 
 from orca_auto.core.config.schema import (
     CommonRuntimeConfig,
+    DiscordConfig,
     RetryRuntimeConfig,
     TelegramConfig,
     as_bool,
@@ -13,6 +14,7 @@ from orca_auto.core.config.schema import (
     as_int,
     as_nonempty_str,
     as_str,
+    discord_config_from_mapping,
     normalize_admission_limit,
     normalize_default_max_retries,
     normalize_max_concurrent,
@@ -245,6 +247,8 @@ def test_normalize_admission_limit_rejects_invalid_explicit_values(value: object
         ("", "", False),
         ("token", "", False),
         ("", "chat", False),
+        ("   ", "chat", False),
+        ("token", "   ", False),
         ("token", "chat", True),
     ],
 )
@@ -274,3 +278,37 @@ def test_telegram_config_from_mapping_normalizes_delivery_settings() -> None:
 
 def test_telegram_config_from_mapping_uses_defaults_for_non_mapping() -> None:
     assert telegram_config_from_mapping(None) == TelegramConfig()
+
+
+@pytest.mark.parametrize(
+    ("parser", "default"),
+    [
+        (telegram_config_from_mapping, TelegramConfig()),
+        (discord_config_from_mapping, DiscordConfig()),
+    ],
+)
+def test_messenger_delivery_settings_bound_nonfinite_and_unbounded_values(
+    parser: Any,
+    default: TelegramConfig | DiscordConfig,
+) -> None:
+    nonfinite = parser(
+        {
+            "timeout_seconds": float("inf"),
+            "max_attempts": 1_000_000_000,
+            "retry_backoff_seconds": float("nan"),
+        }
+    )
+    assert nonfinite.timeout_seconds == default.timeout_seconds
+    assert nonfinite.max_attempts == 10
+    assert nonfinite.retry_backoff_seconds == default.retry_backoff_seconds
+
+    bounded = parser(
+        {
+            "timeout_seconds": 999,
+            "max_attempts": 999,
+            "retry_backoff_seconds": 999,
+        }
+    )
+    assert bounded.timeout_seconds == 120.0
+    assert bounded.max_attempts == 10
+    assert bounded.retry_backoff_seconds == 120.0

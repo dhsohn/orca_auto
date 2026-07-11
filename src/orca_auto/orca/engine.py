@@ -10,8 +10,8 @@ from orca_auto.core.engines import (
 from orca_auto.core.queue.internal_engine import own_engine_accept_entry
 
 from .config import load_config
+from .notifications import notify_run_finished_event
 from .queue.adapter import dequeue_entry_if_pending, dequeue_next, list_queue
-from .telegram_notifier import notify_run_finished_event
 
 ENGINE_DEFINITION = build_queue_engine_definition(
     engine="orca",

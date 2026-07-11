@@ -6,6 +6,12 @@ from typing import Any
 
 import pytest
 
+from orca_auto.core.messaging import (
+    DiscordWebhookChannel,
+    SendResult,
+    TelegramChannel,
+    render_telegram,
+)
 from orca_auto.flow import registry, worker_state_store
 from orca_auto.flow.registry import _notifications as registry_notifications
 from orca_auto.flow.registry import store as registry_store
@@ -78,7 +84,7 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "<b>orca_auto Flow Status Changed</b>",
                 "<b>Workflow</b>: <code>wf_1</code>",
                 "<b>Template</b>: <code>reaction_ts_search</code>",
-                "<b>Status</b>: <code>planned</code> -> <code>running</code>",
+                "<b>Status</b>: <code>planned</code> -&gt; <code>running</code>",
             ],
         ),
         (
@@ -116,7 +122,7 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "<b>Event</b>: <code>workflow_stage_submitted</code>",
                 "<b>Stage</b>: <code>xtb_path_search_01</code>",
                 "<b>Task</b>: <code>xtb/path_search</code>",
-                "<b>Stage status</b>: <code>planned</code> -> <code>queued</code>",
+                "<b>Stage status</b>: <code>planned</code> -&gt; <code>queued</code>",
             ],
         ),
         (
@@ -140,7 +146,7 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "<b>Stage</b>: <code>xtb_path_search_01</code>",
                 "<b>Task</b>: <code>xtb/path_search</code>",
                 "<b>Stage status</b>: <code>completed</code>",
-                "<b>Reaction handoff</b>: <code>queued</code> -> <code>ready</code>",
+                "<b>Reaction handoff</b>: <code>queued</code> -&gt; <code>ready</code>",
                 "<b>Reason</b>: <code>xtb_ts_guess_ready</code>",
             ],
         ),
@@ -216,7 +222,7 @@ def test_journal_event_message_formats_supported_event_types(
     event: dict[str, Any],
     expected_lines: list[str],
 ) -> None:
-    message = registry_notifications.journal_event_message(event, "/tmp/root_3")
+    message = render_telegram(registry_notifications.journal_event_message(event, "/tmp/root_3"))
 
     assert message.startswith("<b>orca_auto Flow")
     for line in expected_lines:
@@ -241,7 +247,7 @@ def test_notification_configuration_helpers_cover_default_override_and_transport
         registry_notifications.journal_notification_enabled("workflow_stage_handoff_ready") is False
     )
     assert registry_notifications.journal_notification_enabled("workflow_phase_finished") is False
-    assert registry_notifications.telegram_transport_from_env() is None
+    assert registry_notifications.messenger_channel_from_env() is None
 
     monkeypatch.setenv(
         "ORCA_AUTO_FLOW_NOTIFY_EVENT_TYPES",
@@ -259,23 +265,14 @@ def test_notification_configuration_helpers_cover_default_override_and_transport
     monkeypatch.setenv("ORCA_AUTO_FLOW_TELEGRAM_BOT_TOKEN", "bot-token")
     monkeypatch.setenv("ORCA_AUTO_FLOW_TELEGRAM_CHAT_ID", "chat-id")
 
-    captured: dict[str, Any] = {}
-
-    def fake_build_telegram_transport(config: Any) -> str:
-        captured["bot_token"] = config.bot_token
-        captured["chat_id"] = config.chat_id
-        return "transport"
-
-    monkeypatch.setattr(
-        registry_notifications, "build_telegram_transport", fake_build_telegram_transport
-    )
-
     assert registry_notifications.journal_notification_enabled("custom_event") is True
-    assert registry_notifications.telegram_transport_from_env() == "transport"
-    assert captured == {"bot_token": "bot-token", "chat_id": "chat-id"}
+    channel = registry_notifications.messenger_channel_from_env()
+    assert isinstance(channel, TelegramChannel)
+    assert channel.config.bot_token == "bot-token"
+    assert channel.config.chat_id == "chat-id"
 
 
-def test_telegram_transport_from_env_uses_orca_auto_config_fallback(
+def test_messenger_channel_from_env_uses_orca_auto_config_fallback(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -285,57 +282,75 @@ def test_telegram_transport_from_env_uses_orca_auto_config_fallback(
     config_path.write_text(
         "\n".join(
             [
-                "telegram:",
-                "  bot_token: config-token",
-                "  chat_id: config-chat",
-                "  timeout_seconds: 7.5",
-                "  max_attempts: 3",
-                "  retry_backoff_seconds: 0.25",
+                "messenger:",
+                "  telegram:",
+                "    bot_token: config-token",
+                "    chat_id: config-chat",
+                "    timeout_seconds: 7.5",
+                "    max_attempts: 3",
+                "    retry_backoff_seconds: 0.25",
             ]
         )
         + "\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("ORCA_AUTO_CONFIG", str(config_path))
-    captured: dict[str, Any] = {}
 
-    def fake_build_telegram_transport(config: Any) -> str:
-        captured["bot_token"] = config.bot_token
-        captured["chat_id"] = config.chat_id
-        captured["timeout_seconds"] = config.timeout_seconds
-        captured["max_attempts"] = config.max_attempts
-        captured["retry_backoff_seconds"] = config.retry_backoff_seconds
-        return "transport"
-
-    monkeypatch.setattr(
-        registry_notifications, "build_telegram_transport", fake_build_telegram_transport
-    )
-
-    assert registry_notifications.telegram_transport_from_env() == "transport"
-    assert captured == {
-        "bot_token": "config-token",
-        "chat_id": "config-chat",
-        "timeout_seconds": 7.5,
-        "max_attempts": 3,
-        "retry_backoff_seconds": 0.25,
-    }
+    channel = registry_notifications.messenger_channel_from_env()
+    assert isinstance(channel, TelegramChannel)
+    assert channel.config.bot_token == "config-token"
+    assert channel.config.chat_id == "config-chat"
+    assert channel.config.timeout_seconds == 7.5
+    assert channel.config.max_attempts == 3
+    assert channel.config.retry_backoff_seconds == 0.25
 
 
-def test_maybe_notify_journal_event_sends_message_and_swallows_transport_errors(
+def test_messenger_channel_from_env_does_not_override_config_provider(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    sent_messages: list[str] = []
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "messenger:",
+                "  provider: discord",
+                "  discord:",
+                "    webhook_url: https://discord.com/api/webhooks/123/journal-token",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ORCA_AUTO_CONFIG", str(config_path))
+    monkeypatch.setenv("ORCA_AUTO_FLOW_TELEGRAM_BOT_TOKEN", "legacy-token")
+    monkeypatch.setenv("ORCA_AUTO_FLOW_TELEGRAM_CHAT_ID", "legacy-chat")
 
-    class FakeTransport:
+    channel = registry_notifications.messenger_channel_from_env()
+
+    assert isinstance(channel, DiscordWebhookChannel)
+    assert channel.config.webhook_url == ("https://discord.com/api/webhooks/123/journal-token")
+
+
+def test_maybe_notify_journal_event_sends_message_and_swallows_channel_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sent_messages: list[Any] = []
+
+    class FakeChannel:
         def __init__(self, *, fail: bool) -> None:
             self.fail = fail
 
-        def send_text(self, message: str, *, parse_mode: str | None = None) -> None:
+        @property
+        def enabled(self) -> bool:
+            return True
+
+        def send(self, message: Any, *, silent: bool = False) -> SendResult:
             if self.fail:
-                raise RuntimeError("transport failed")
-            assert parse_mode == "HTML"
+                raise RuntimeError("channel failed")
             sent_messages.append(message)
+            return SendResult(sent=True)
 
     event = {
         "event_type": "workflow_status_changed",
@@ -350,7 +365,7 @@ def test_maybe_notify_journal_event_sends_message_and_swallows_transport_errors(
         registry_notifications, "journal_notification_enabled", lambda event_type: True
     )
     monkeypatch.setattr(
-        registry_notifications, "telegram_transport_from_env", lambda: FakeTransport(fail=False)
+        registry_notifications, "messenger_channel_from_env", lambda: FakeChannel(fail=False)
     )
     workflow_journal._maybe_notify_journal_event(event, tmp_path)
     workflow_journal._maybe_notify_journal_event(
@@ -395,11 +410,11 @@ def test_maybe_notify_journal_event_sends_message_and_swallows_transport_errors(
     )
 
     assert len(sent_messages) == 2
-    assert "<b>Workflow</b>: <code>wf_notify</code>" in sent_messages[0]
-    assert "<b>Phase</b>: <code>xTB</code>" in sent_messages[1]
+    assert "<b>Workflow</b>: <code>wf_notify</code>" in render_telegram(sent_messages[0])
+    assert "<b>Phase</b>: <code>xTB</code>" in render_telegram(sent_messages[1])
 
     monkeypatch.setattr(
-        registry_notifications, "telegram_transport_from_env", lambda: FakeTransport(fail=True)
+        registry_notifications, "messenger_channel_from_env", lambda: FakeChannel(fail=True)
     )
     workflow_journal._maybe_notify_journal_event(event, tmp_path)
     assert len(sent_messages) == 2

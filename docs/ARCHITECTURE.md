@@ -49,7 +49,8 @@ src/orca_auto/
 │   ├── indexing/        # Job-location index (where each job's outputs live)
 │   ├── state/           # Shared engine state helpers
 │   ├── config/          # Config schema + loading
-│   ├── notifications/   # Telegram transport + engine notification hooks
+│   ├── messaging/       # Neutral Doc/port + Telegram/Discord adapters
+│   ├── notifications/   # Low-level Telegram transport + engine hooks
 │   ├── commands/        # Shared run-dir / queue command logic
 │   ├── paths/           # Path validation + workflow path resolution
 │   └── utils/           # Locks, persistence, process tracking, coercion
@@ -371,18 +372,27 @@ consume ORCA results without coupling to ORCA internals.
 
 ## 9. Notifications
 
-`core/notifications/` provides Telegram transport (`telegram_*.py`) plus an
-engine notification hook layer (`engine_notifier.py`, `engine_delivery.py`). Each
-`EngineDefinition` can register `job_started` / `job_finished` / `retry` hooks.
+`core/messaging/` owns the provider-neutral outbound boundary: immutable semantic
+`Message` documents, the `MessageChannel` port and `SendResult` receipt, provider
+registry, and Telegram/Discord renderers and adapters. Domain notifiers construct
+documents and never choose wire markup. `MessengerConfig` owns both adapter configs,
+and the registry resolves exactly one active provider with unknown values rejected.
 
-`flow/telegram/` is the unified Telegram bot. It mirrors the `queue list`
+`core/notifications/` retains the low-level Telegram Bot API transport reused by
+`TelegramChannel`, plus the engine notification hook layer (`engine_notifier.py`,
+`engine_delivery.py`). `DiscordWebhookChannel` owns its webhook transport directly.
+Each `EngineDefinition` can register `job_started` / `job_finished` / `retry` hooks.
+
+`flow/telegram/` is the application-specific inbound Telegram bot adapter, separate
+from the outbound messenger port. It mirrors the `queue list`
 table as `/list` (minus the ID column for mobile), supports `/cancel <target>`
 with inline-button confirmation, and per-activity cancel / refresh / "clear
 finished" actions. Workflow alerts keep per-job ORCA messages but summarize
 internal CREST and reaction-path xTB child phases into one message each.
 
-Telegram is enabled only when both `telegram.bot_token` and `telegram.chat_id`
-are configured (`TelegramConfig.enabled`).
+The selected outbound adapter is enabled only when its credentials are complete.
+Telegram requires `messenger.telegram.bot_token` plus `chat_id`; Discord requires a
+validated official HTTPS `messenger.discord.webhook_url`.
 
 ---
 
@@ -442,7 +452,7 @@ status-aware colorized table rendering (`terminal_table.py`, `activity_*.py`,
 - `run-dir <path>` — durable submission (ORCA or workflow, auto-routed)
 - `queue list` / `queue cancel` / `queue list clear` — inspect/maintain the queue
 - `service status` / `service restart` — runtime status (via systemd)
-- `scan-notify` — one-shot discovery scan + Telegram alerts
+- `scan-notify` — one-shot discovery scan + active-messenger alerts
 - `systemd install` — render and enable units
 
 Engine-specific CLI modules are runtime-only worker entrypoints and are not a

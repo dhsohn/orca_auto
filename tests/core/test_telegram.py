@@ -141,7 +141,7 @@ def test_successful_send_path_uses_urlopen_and_returns_payload(
     def fake_urlopen(request, timeout):
         seen["request"] = request
         seen["timeout"] = timeout
-        return _FakeResponse(body='{"ok":true}', status=200)
+        return _FakeResponse(body='{"ok":true,"result":{"message_id":42}}', status=200)
 
     monkeypatch.setattr(telegram_transport_mod, "urlopen", fake_urlopen)
 
@@ -156,8 +156,9 @@ def test_successful_send_path_uses_urlopen_and_returns_payload(
     assert result.sent is True
     assert result.skipped is False
     assert result.status_code == 200
-    assert result.response_text == '{"ok":true}'
+    assert result.response_text == '{"ok":true,"result":{"message_id":42}}'
     assert result.error == ""
+    assert result.message_id == "42"
     assert result.payload == {
         "chat_id": "chat-id",
         "text": "hello world",
@@ -178,6 +179,33 @@ def test_successful_send_path_uses_urlopen_and_returns_payload(
         "disable_notification": ["true"],
         "parse_mode": ["MarkdownV2"],
     }
+
+
+@pytest.mark.parametrize(
+    ("body", "error"),
+    [
+        ("not-json", "telegram_invalid_response"),
+        ('{"ok":false,"description":"rejected"}', "telegram_api_error"),
+        ('{"ok":true}', "telegram_invalid_response"),
+        ('{"ok":true,"result":{"message_id":0}}', "telegram_invalid_response"),
+    ],
+)
+def test_http_success_requires_confirmed_telegram_message(
+    monkeypatch: pytest.MonkeyPatch,
+    body: str,
+    error: str,
+) -> None:
+    monkeypatch.setattr(
+        telegram_transport_mod,
+        "urlopen",
+        lambda *_args, **_kwargs: _FakeResponse(body=body, status=200),
+    )
+
+    result = _make_transport().send_text("hello")
+
+    assert not result.sent
+    assert result.error == error
+    assert result.message_id == ""
 
 
 def test_non_2xx_response_status_sets_http_error_and_preserves_body(
@@ -321,7 +349,7 @@ def test_network_unreachable_retries_with_ipv4_fallback(monkeypatch: pytest.Monk
         calls.append((request.full_url, timeout))
         if len(calls) == 1:
             raise URLError(OSError(101, "Network is unreachable"))
-        return _FakeResponse(body='{"ok":true}', status=200)
+        return _FakeResponse(body='{"ok":true,"result":{"message_id":42}}', status=200)
 
     monkeypatch.setattr(telegram_transport_mod, "urlopen", fake_urlopen)
 
@@ -368,6 +396,22 @@ def test_build_telegram_transport_uses_defaults() -> None:
     assert transport.base_url == telegram_config_mod.DEFAULT_TELEGRAM_BASE_URL
 
 
+def test_build_telegram_transport_defensively_bounds_programmatic_config() -> None:
+    config = TelegramConfig(
+        bot_token="token",
+        chat_id="chat",
+        timeout_seconds=float("inf"),
+        max_attempts=1_000_000_000,
+        retry_backoff_seconds=float("nan"),
+    )
+
+    transport = telegram_transport_mod.build_telegram_transport(config)
+
+    assert transport.timeout == 5.0
+    assert transport.max_attempts == 10
+    assert transport.retry_backoff_seconds == 0.5
+
+
 def test_escape_helpers_and_config_loader(tmp_path: Path) -> None:
     assert telegram_format_mod.escape_html("<b>&test</b>") == "&lt;b&gt;&amp;test&lt;/b&gt;"
     assert telegram_format_mod.html_code("ready") == "<code>ready</code>"
@@ -379,12 +423,13 @@ def test_escape_helpers_and_config_loader(tmp_path: Path) -> None:
     config_path.write_text(
         "\n".join(
             [
-                "telegram:",
-                "  bot_token: bot-token",
-                "  chat_id: chat-id",
-                "  timeout_seconds: 7.5",
-                "  max_attempts: 3",
-                "  retry_backoff_seconds: 0.25",
+                "messenger:",
+                "  telegram:",
+                "    bot_token: bot-token",
+                "    chat_id: chat-id",
+                "    timeout_seconds: 7.5",
+                "    max_attempts: 3",
+                "    retry_backoff_seconds: 0.25",
             ]
         )
         + "\n",
@@ -398,6 +443,32 @@ def test_escape_helpers_and_config_loader(tmp_path: Path) -> None:
     assert config.max_attempts == 3
     assert config.retry_backoff_seconds == 0.25
 
+    config_path.write_text(
+        "telegram:\n  bot_token: legacy-token\n  chat_id: legacy-chat\n",
+        encoding="utf-8",
+    )
+    legacy = telegram_config_mod.load_telegram_config_from_file(config_path)
+    assert legacy.bot_token == "legacy-token"
+    assert legacy.chat_id == "legacy-chat"
+
+    config_path.write_text(
+        "\n".join(
+            [
+                "telegram:",
+                "  bot_token: legacy-token",
+                "  chat_id: legacy-chat",
+                "messenger:",
+                "  telegram:",
+                "    chat_id: nested-chat",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    nested = telegram_config_mod.load_telegram_config_from_file(config_path)
+    assert nested.bot_token == ""
+    assert nested.chat_id == "nested-chat"
+
 
 def test_timeout_error_is_retried_and_can_succeed(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, float]] = []
@@ -406,7 +477,7 @@ def test_timeout_error_is_retried_and_can_succeed(monkeypatch: pytest.MonkeyPatc
         calls.append((request.full_url, timeout))
         if len(calls) == 1:
             raise URLError(TimeoutError("timed out"))
-        return _FakeResponse(body='{"ok":true}', status=200)
+        return _FakeResponse(body='{"ok":true,"result":{"message_id":42}}', status=200)
 
     monkeypatch.setattr(telegram_transport_mod, "urlopen", fake_urlopen)
 
@@ -431,7 +502,7 @@ def test_retryable_http_error_is_retried_and_can_succeed(monkeypatch: pytest.Mon
                 hdrs=None,
                 fp=BytesIO(b"busy"),
             )
-        return _FakeResponse(body='{"ok":true}', status=200)
+        return _FakeResponse(body='{"ok":true,"result":{"message_id":42}}', status=200)
 
     monkeypatch.setattr(telegram_transport_mod, "urlopen", fake_urlopen)
 
@@ -441,6 +512,101 @@ def test_retryable_http_error_is_retried_and_can_succeed(monkeypatch: pytest.Mon
 
     assert result.sent is True
     assert len(calls) == 2
+
+
+def test_rate_limit_honors_bounded_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+    delays: list[float] = []
+
+    def fake_urlopen(request, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise HTTPError(
+                url=request.full_url,
+                code=429,
+                msg="Too Many Requests",
+                hdrs=None,
+                fp=BytesIO(b'{"parameters":{"retry_after":65}}'),
+            )
+        return _FakeResponse(body='{"ok":true,"result":{"message_id":42}}', status=200)
+
+    monkeypatch.setattr(telegram_transport_mod, "urlopen", fake_urlopen)
+    monkeypatch.setattr(telegram_transport_mod, "_sleep_before_retry", delays.append)
+
+    result = _make_transport(base_url="https://api.telegram.org/").send_text("hello")
+
+    assert result.sent
+    assert calls == 2
+    assert delays == [65.0]
+
+
+def test_rate_limit_rejects_unbounded_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def fake_urlopen(request, timeout):
+        nonlocal calls
+        calls += 1
+        raise HTTPError(
+            url=request.full_url,
+            code=429,
+            msg="Too Many Requests",
+            hdrs=None,
+            fp=BytesIO(b'{"parameters":{"retry_after":121}}'),
+        )
+
+    monkeypatch.setattr(telegram_transport_mod, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        telegram_transport_mod,
+        "_sleep_before_retry",
+        lambda _delay: pytest.fail("must not sleep for an unbounded retry"),
+    )
+
+    result = _make_transport(base_url="https://api.telegram.org/").send_text("hello")
+
+    assert not result.sent
+    assert result.error == "telegram_retry_after_exceeds_limit"
+    assert calls == 1
+
+
+def test_rendered_chunk_delivery_reports_partial_progress_and_message_ids() -> None:
+    outcomes = iter(
+        [
+            telegram_transport_mod.TelegramSendResult(sent=True, message_id="7"),
+            telegram_transport_mod.TelegramSendResult(
+                sent=False,
+                error="telegram_url_error:timed out",
+            ),
+        ]
+    )
+    silent_values: list[bool] = []
+
+    class FakeTransport:
+        def send_text(
+            self,
+            _text: str,
+            *,
+            parse_mode: str | None,
+            silent: bool,
+        ) -> telegram_transport_mod.TelegramSendResult:
+            del parse_mode
+            silent_values.append(silent)
+            return next(outcomes)
+
+    result = telegram_transport_mod.send_rendered_telegram_chunks(
+        TelegramConfig(bot_token="token", chat_id="chat"),
+        (("<b>one</b>", "one"), ("<b>two</b>", "two")),
+        silent=True,
+        transport_factory=lambda _config: FakeTransport(),
+    )
+
+    assert not result.sent
+    assert result.partial
+    assert result.sent_count == 1
+    assert result.total_count == 2
+    assert result.message_ids == ("7",)
+    assert result.error == "telegram_url_error:timed out"
+    assert silent_values == [True, True]
 
 
 def test_telegram_api_client_skips_empty_token_without_transport(

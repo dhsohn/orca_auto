@@ -25,7 +25,7 @@ It pulls in:
 
 Before enabling the combined runtime target:
 
-- Set `telegram.bot_token` and `telegram.chat_id` in `orca_auto.yaml`
+- Set `messenger.telegram.bot_token` and `messenger.telegram.chat_id` in `orca_auto.yaml`
 - Restrict local config permissions with `chmod 600 config/orca_auto.yaml`
 
 Install the combined runtime target:
@@ -39,7 +39,8 @@ The installer renders the unit files with the repository path, writes them to
 `/etc/systemd/system`, runs `systemctl daemon-reload`, and enables/starts the
 right runtime for the current config. If Telegram is not configured yet, it
 enables only the queue worker; run the same command again after setting
-`telegram.bot_token` and `telegram.chat_id` to enable the full runtime target.
+`messenger.telegram.bot_token` and `messenger.telegram.chat_id` to enable the full runtime
+target.
 
 Monitor the combined runtime target:
 

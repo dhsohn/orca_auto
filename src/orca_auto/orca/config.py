@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.config import CommonResourceConfig, TelegramConfig
+from orca_auto.core.config import CommonResourceConfig, MessengerConfig, TelegramConfig
 from orca_auto.core.config import engines as _config_engines
 from orca_auto.core.config.files import (
+    config_with_canonical_messenger,
     default_shared_admission_root,
     engine_config_mapping,
     load_required_yaml_mapping,
+    messenger_mapping_from_root,
     runs_root_from_mapping,
 )
 from orca_auto.core.config.schema import (
     RetryRuntimeConfig,
-    telegram_config_from_mapping,
+    messenger_config_from_mapping,
+    reconcile_legacy_telegram_alias,
 )
 
 from .config_validation import _validate_config
@@ -85,6 +88,30 @@ class AppConfig:
     behavior: BehaviorConfig = field(default_factory=BehaviorConfig)
     resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    messenger: MessengerConfig = field(default_factory=MessengerConfig)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # ``telegram`` remains a writable compatibility alias for older callers,
+        # but MessengerConfig is the canonical adapter configuration owner. Keep
+        # both directions synchronized so a legacy assignment cannot make the
+        # provider factory observe stale credentials.
+        if name == "telegram" and isinstance(value, TelegramConfig):
+            object.__setattr__(self, name, value)
+            messenger = self.__dict__.get("messenger")
+            if isinstance(messenger, MessengerConfig):
+                object.__setattr__(self, "messenger", replace(messenger, telegram=value))
+            return
+        if name == "messenger" and isinstance(value, MessengerConfig):
+            if "messenger" in self.__dict__:
+                object.__setattr__(self, "messenger", value)
+                object.__setattr__(self, "telegram", value.telegram)
+                return
+            telegram = self.__dict__.get("telegram", TelegramConfig())
+            resolved, alias = reconcile_legacy_telegram_alias(value, telegram)
+            object.__setattr__(self, "messenger", resolved)
+            object.__setattr__(self, "telegram", alias)
+            return
+        object.__setattr__(self, name, value)
 
 
 def _load_raw_config(path: Path) -> dict[str, Any]:
@@ -145,11 +172,12 @@ def load_config(config_path: str) -> AppConfig:
     path = Path(config_path).expanduser().resolve()
     raw = _load_raw_config(path)
     runs_root = _config_engines.as_nonempty_str(runs_root_from_mapping(raw), "")
-    raw = engine_config_mapping(raw, "orca", inherit_keys=("resources", "telegram", "scheduler"))
+    raw = config_with_canonical_messenger(raw)
+    raw = engine_config_mapping(raw, "orca", inherit_keys=("resources", "messenger", "scheduler"))
     scheduler_raw = _section_mapping(raw, "scheduler")
     runtime_raw = _section_mapping(raw, "runtime")
     paths_raw = _section_mapping(raw, "paths")
-    telegram_raw = _section_mapping(raw, "telegram")
+    messenger_raw = messenger_mapping_from_root(raw)
     resources_raw = _section_mapping(raw, "resources")
 
     orca_executable = _required_config_paths(path, runs_root, paths_raw)
@@ -161,7 +189,7 @@ def load_config(config_path: str) -> AppConfig:
         scheduler_raw,
         runs_root,
     )
-    telegram_cfg = telegram_config_from_mapping(telegram_raw)
+    messenger_cfg = messenger_config_from_mapping(messenger_raw)
 
     cfg = AppConfig(
         runtime=CommonRuntimeConfig(
@@ -177,7 +205,8 @@ def load_config(config_path: str) -> AppConfig:
         ),
         behavior=BehaviorConfig(),
         resources=_config_engines.resource_config_from_mapping(resources_raw),
-        telegram=telegram_cfg,
+        telegram=messenger_cfg.telegram,
+        messenger=messenger_cfg,
     )
     placeholder_keys = _placeholder_keys(cfg)
     if placeholder_keys:

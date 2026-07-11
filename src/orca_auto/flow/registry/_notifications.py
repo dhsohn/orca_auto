@@ -6,11 +6,18 @@ from typing import Any
 
 from orca_auto.core.config.files import ORCA_AUTO_CONFIG_ENV_VAR, config_env_value
 from orca_auto.core.config.schema import TelegramConfig
-from orca_auto.core.notifications import (
-    build_telegram_transport,
-    escape_html,
-    html_code,
-    load_telegram_config_from_file,
+from orca_auto.core.messaging import (
+    Message,
+    MessageChannel,
+    Severity,
+    Span,
+    TelegramChannel,
+    build_channel_from_config_path,
+    code,
+    field_row,
+    group,
+    raw,
+    title_heading,
 )
 from orca_auto.core.utils import coerce_mapping, normalize_text
 
@@ -43,16 +50,26 @@ STAGE_HANDOFF_EVENT_TYPES = frozenset(
         "workflow_stage_reaction_handoff_status_changed",
     }
 )
+_ERROR_EVENT_TYPES = frozenset(
+    {
+        "workflow_advance_failed",
+        "workflow_stage_failed",
+        "workflow_stage_handoff_failed",
+        "worker_interrupted",
+        "worker_lock_error",
+    }
+)
+_SUCCESS_EVENT_TYPES = frozenset({"workflow_stage_completed", "workflow_stage_handoff_ready"})
 
 
 def event_text(event: dict[str, Any], metadata: dict[str, Any], *keys: str) -> str:
     for key in keys:
-        text = normalize_text(event.get(key))
-        if text:
-            return text
-        text = normalize_text(metadata.get(key))
-        if text:
-            return text
+        text_value = normalize_text(event.get(key))
+        if text_value:
+            return text_value
+        text_value = normalize_text(metadata.get(key))
+        if text_value:
+            return text_value
     return ""
 
 
@@ -85,16 +102,16 @@ def format_stage_statuses(value: Any) -> str:
     return ",".join(parts) if parts else "-"
 
 
-def transition_html(previous: str, current: str) -> str:
+def _transition_spans(previous: str, current: str) -> tuple[Span, ...]:
     previous_text = normalize_text(previous)
     current_text = normalize_text(current)
     if previous_text and current_text:
-        return f"{html_code(previous_text)} -> {html_code(current_text)}"
+        return (code(previous_text), raw(" -> "), code(current_text))
     if current_text:
-        return html_code(current_text)
+        return (code(current_text),)
     if previous_text:
-        return html_code(previous_text)
-    return html_code("-")
+        return (code(previous_text),)
+    return (code("-"),)
 
 
 def title_from_event_type(event_type: str) -> str:
@@ -119,11 +136,21 @@ def title_from_event_type(event_type: str) -> str:
     return f"orca_auto Flow {labels.get(event_type, 'Event')}"
 
 
+def _severity_for(event_type: str) -> Severity:
+    if event_type in _ERROR_EVENT_TYPES:
+        return "error"
+    if event_type in _SUCCESS_EVENT_TYPES:
+        return "success"
+    if event_type == "workflow_stage_cancelled":
+        return "warning"
+    return "info"
+
+
 def notification_event_types_from_env() -> set[str]:
-    raw = os.environ.get("ORCA_AUTO_FLOW_NOTIFY_EVENT_TYPES", "")
-    if not raw.strip():
+    raw_value = os.environ.get("ORCA_AUTO_FLOW_NOTIFY_EVENT_TYPES", "")
+    if not raw_value.strip():
         return set(DEFAULT_NOTIFICATION_EVENT_TYPES)
-    return {item.strip() for item in raw.split(",") if item.strip()}
+    return {item.strip() for item in raw_value.split(",") if item.strip()}
 
 
 def journal_notification_enabled(event_type: str) -> bool:
@@ -133,19 +160,24 @@ def journal_notification_enabled(event_type: str) -> bool:
     return event_type in notification_event_types_from_env()
 
 
-def telegram_transport_from_env():
+def messenger_channel_from_env() -> MessageChannel | None:
+    """Resolve the active channel for journal notifications.
+
+    When ``ORCA_AUTO_CONFIG`` is set, its messenger provider is authoritative.
+    The legacy ``ORCA_AUTO_FLOW_TELEGRAM_*`` pair is used only when no shared
+    config path is configured, so it cannot silently replace a Discord route.
+    """
+    config_path = config_env_value(ORCA_AUTO_CONFIG_ENV_VAR)
+    if config_path:
+        channel = build_channel_from_config_path(config_path)
+        return channel if channel.enabled else None
+
     token = os.environ.get("ORCA_AUTO_FLOW_TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("ORCA_AUTO_FLOW_TELEGRAM_CHAT_ID", "").strip()
     if token and chat_id:
-        return build_telegram_transport(TelegramConfig(bot_token=token, chat_id=chat_id))
+        return TelegramChannel(TelegramConfig(bot_token=token, chat_id=chat_id))
 
-    config_path = config_env_value(ORCA_AUTO_CONFIG_ENV_VAR)
-    if not config_path:
-        return None
-    telegram = load_telegram_config_from_file(config_path)
-    if not telegram.enabled:
-        return None
-    return build_telegram_transport(telegram)
+    return None
 
 
 def journal_event_context(event: dict[str, Any], workflow_root: str | Path) -> dict[str, str]:
@@ -174,99 +206,129 @@ def journal_event_context(event: dict[str, Any], workflow_root: str | Path) -> d
     }
 
 
-def workflow_status_event_message(context: dict[str, str]) -> str:
-    event_type = context["event_type"]
-    return "\n".join(
-        [
-            f"<b>{escape_html(title_from_event_type(event_type))}</b>",
-            f"<b>Workflow</b>: {html_code(context['workflow_id'])}",
-            f"<b>Template</b>: {html_code(context['template_name'])}",
-            f"<b>Status</b>: {transition_html(context['previous_status'], context['status'])}",
-            f"<b>Worker session</b>: {html_code(context['session'])}",
-        ]
+def _message(context: dict[str, str], *fields: Any) -> Message:
+    title = title_from_event_type(context["event_type"])
+    return Message(
+        title=title,
+        severity=_severity_for(context["event_type"]),
+        groups=(group(*fields, heading=title_heading(title)),),
     )
 
 
-def workflow_advance_failed_event_message(context: dict[str, str]) -> str:
-    event_type = context["event_type"]
-    return "\n".join(
-        [
-            f"<b>{escape_html(title_from_event_type(event_type))}</b>",
-            f"<b>Workflow</b>: {html_code(context['workflow_id'])}",
-            f"<b>Template</b>: {html_code(context['template_name'])}",
-            f"<b>Reason</b>: {html_code(context['reason'])}",
-            f"<b>Worker session</b>: {html_code(context['session'])}",
-        ]
+def workflow_status_event_message(context: dict[str, str]) -> Message:
+    return _message(
+        context,
+        field_row("Workflow", code(context["workflow_id"])),
+        field_row("Template", code(context["template_name"])),
+        field_row("Status", *_transition_spans(context["previous_status"], context["status"])),
+        field_row("Worker session", code(context["session"])),
     )
 
 
-def stage_status_event_message(context: dict[str, str]) -> str:
-    event_type = context["event_type"]
-    task = f"{context['engine']}/{context['task_kind']}"
-    lines = [
-        f"<b>{escape_html(title_from_event_type(event_type))}</b>",
-        f"<b>Workflow</b>: {html_code(context['workflow_id'])}",
-        f"<b>Template</b>: {html_code(context['template_name'])}",
-        f"<b>Event</b>: {html_code(event_type)}",
-        f"<b>Stage</b>: {html_code(context['stage_id'])}",
-        f"<b>Task</b>: {html_code(task)}",
-        f"<b>Stage status</b>: {transition_html(context['previous_stage_status'], context['stage_status'])}",
-        f"<b>Worker session</b>: {html_code(context['session'])}",
-    ]
-    if context["reason"]:
-        lines.append(f"<b>Reason</b>: {html_code(context['reason'])}")
-    return "\n".join(lines)
+def workflow_advance_failed_event_message(context: dict[str, str]) -> Message:
+    return _message(
+        context,
+        field_row("Workflow", code(context["workflow_id"])),
+        field_row("Template", code(context["template_name"])),
+        field_row("Reason", code(context["reason"])),
+        field_row("Worker session", code(context["session"])),
+    )
 
 
-def stage_handoff_event_message(context: dict[str, str]) -> str:
-    event_type = context["event_type"]
+def stage_status_event_message(context: dict[str, str]) -> Message:
     task = f"{context['engine']}/{context['task_kind']}"
-    lines = [
-        f"<b>{escape_html(title_from_event_type(event_type))}</b>",
-        f"<b>Workflow</b>: {html_code(context['workflow_id'])}",
-        f"<b>Template</b>: {html_code(context['template_name'])}",
-        f"<b>Event</b>: {html_code(event_type)}",
-        f"<b>Stage</b>: {html_code(context['stage_id'])}",
-        f"<b>Task</b>: {html_code(task)}",
-        f"<b>Stage status</b>: {transition_html(context['previous_stage_status'], context['stage_status'])}",
-        (
-            "<b>Reaction handoff</b>: "
-            f"{transition_html(context['previous_reaction_handoff_status'], context['reaction_handoff_status'])}"
+    fields = [
+        field_row("Workflow", code(context["workflow_id"])),
+        field_row("Template", code(context["template_name"])),
+        field_row("Event", code(context["event_type"])),
+        field_row("Stage", code(context["stage_id"])),
+        field_row("Task", code(task)),
+        field_row(
+            "Stage status",
+            *_transition_spans(context["previous_stage_status"], context["stage_status"]),
         ),
-        f"<b>Worker session</b>: {html_code(context['session'])}",
+        field_row("Worker session", code(context["session"])),
     ]
     if context["reason"]:
-        lines.append(f"<b>Reason</b>: {html_code(context['reason'])}")
-    return "\n".join(lines)
+        fields.append(field_row("Reason", code(context["reason"])))
+    return _message(context, *fields)
 
 
-def worker_lifecycle_event_message(context: dict[str, str]) -> str:
-    event_type = context["event_type"]
-    return "\n".join(
-        [
-            f"<b>{escape_html(title_from_event_type(event_type))}</b>",
-            f"<b>Event</b>: {html_code(event_type)}",
-            f"<b>Workflow root</b>: {html_code(context['root_text'])}",
-            f"<b>Worker session</b>: {html_code(context['session'])}",
-            f"<b>Reason</b>: {html_code(context['reason'])}",
-        ]
+def stage_handoff_event_message(context: dict[str, str]) -> Message:
+    task = f"{context['engine']}/{context['task_kind']}"
+    fields = [
+        field_row("Workflow", code(context["workflow_id"])),
+        field_row("Template", code(context["template_name"])),
+        field_row("Event", code(context["event_type"])),
+        field_row("Stage", code(context["stage_id"])),
+        field_row("Task", code(task)),
+        field_row(
+            "Stage status",
+            *_transition_spans(context["previous_stage_status"], context["stage_status"]),
+        ),
+        field_row(
+            "Reaction handoff",
+            *_transition_spans(
+                context["previous_reaction_handoff_status"], context["reaction_handoff_status"]
+            ),
+        ),
+        field_row("Worker session", code(context["session"])),
+    ]
+    if context["reason"]:
+        fields.append(field_row("Reason", code(context["reason"])))
+    return _message(context, *fields)
+
+
+def worker_lifecycle_event_message(context: dict[str, str]) -> Message:
+    return _message(
+        context,
+        field_row("Event", code(context["event_type"])),
+        field_row("Workflow root", code(context["root_text"])),
+        field_row("Worker session", code(context["session"])),
+        field_row("Reason", code(context["reason"])),
     )
 
 
-def default_journal_event_message(context: dict[str, str]) -> str:
-    event_type = context["event_type"]
-    return "\n".join(
-        [
-            f"<b>{escape_html(title_from_event_type(event_type))}</b>",
-            f"<b>Event</b>: {html_code(event_type)}",
-            f"<b>Workflow</b>: {html_code(context['workflow_id'])}",
-            f"<b>Status</b>: {html_code(context['status'])}",
-            f"<b>Worker session</b>: {html_code(context['session'])}",
-        ]
+def default_journal_event_message(context: dict[str, str]) -> Message:
+    return _message(
+        context,
+        field_row("Event", code(context["event_type"])),
+        field_row("Workflow", code(context["workflow_id"])),
+        field_row("Status", code(context["status"])),
+        field_row("Worker session", code(context["session"])),
     )
 
 
-def journal_event_message(event: dict[str, Any], workflow_root: str | Path) -> str:
+def _phase_finished_event_message(
+    event: dict[str, Any], metadata: dict[str, Any], context: dict[str, str]
+) -> Message:
+    fields = [
+        field_row("Workflow", code(context["workflow_id"])),
+        field_row("Template", code(context["template_name"])),
+        field_row("Event", code(context["event_type"])),
+        field_row("Phase", code(event_text(event, metadata, "phase_label", "phase") or "-")),
+        field_row(
+            "Phase outcome", code(event_text(event, metadata, "phase_outcome", "status") or "-")
+        ),
+        field_row("Stage count", code(event_text(event, metadata, "stage_count") or "0")),
+        field_row(
+            "Stage status counts", code(format_count_mapping(metadata.get("stage_status_counts")))
+        ),
+        field_row("Stage statuses", code(format_stage_statuses(metadata.get("stage_statuses")))),
+        field_row("Worker session", code(context["session"])),
+    ]
+    handoff_counts = format_count_mapping(metadata.get("reaction_handoff_status_counts"))
+    if handoff_counts != "-":
+        fields.append(field_row("Reaction handoff counts", code(handoff_counts)))
+    failure_reasons = metadata.get("failure_reasons")
+    if isinstance(failure_reasons, list):
+        joined = ",".join(normalize_text(item) for item in failure_reasons if normalize_text(item))
+        if joined:
+            fields.append(field_row("Failure reasons", code(joined)))
+    return _message(context, *fields)
+
+
+def journal_event_message(event: dict[str, Any], workflow_root: str | Path) -> Message:
     context = journal_event_context(event, workflow_root)
     event_type = context["event_type"]
     metadata = coerce_mapping(event.get("metadata"))
@@ -280,29 +342,7 @@ def journal_event_message(event: dict[str, Any], workflow_root: str | Path) -> s
     if event_type in STAGE_HANDOFF_EVENT_TYPES:
         return stage_handoff_event_message(context)
     if event_type == WORKFLOW_PHASE_FINISHED_EVENT:
-        lines = [
-            f"<b>{escape_html(title_from_event_type(event_type))}</b>",
-            f"<b>Workflow</b>: {html_code(context['workflow_id'])}",
-            f"<b>Template</b>: {html_code(context['template_name'])}",
-            f"<b>Event</b>: {html_code(event_type)}",
-            f"<b>Phase</b>: {html_code(event_text(event, metadata, 'phase_label', 'phase') or '-')}",
-            f"<b>Phase outcome</b>: {html_code(event_text(event, metadata, 'phase_outcome', 'status') or '-')}",
-            f"<b>Stage count</b>: {html_code(event_text(event, metadata, 'stage_count') or '0')}",
-            f"<b>Stage status counts</b>: {html_code(format_count_mapping(metadata.get('stage_status_counts')))}",
-            f"<b>Stage statuses</b>: {html_code(format_stage_statuses(metadata.get('stage_statuses')))}",
-            f"<b>Worker session</b>: {html_code(context['session'])}",
-        ]
-        handoff_counts = format_count_mapping(metadata.get("reaction_handoff_status_counts"))
-        if handoff_counts != "-":
-            lines.append(f"<b>Reaction handoff counts</b>: {html_code(handoff_counts)}")
-        failure_reasons = metadata.get("failure_reasons")
-        if isinstance(failure_reasons, list):
-            joined = ",".join(
-                normalize_text(item) for item in failure_reasons if normalize_text(item)
-            )
-            if joined:
-                lines.append(f"<b>Failure reasons</b>: {html_code(joined)}")
-        return "\n".join(lines)
+        return _phase_finished_event_message(event, metadata, context)
     if event_type in {
         "worker_started",
         "worker_stopped",
@@ -320,3 +360,14 @@ def should_suppress_stage_notification(event: dict[str, Any]) -> bool:
         event_type in STAGE_STATUS_EVENT_TYPES | STAGE_HANDOFF_EVENT_TYPES
         and engine.lower() in SUPPRESSED_STAGE_NOTIFICATION_ENGINES
     )
+
+
+__all__ = [
+    "DEFAULT_NOTIFICATION_EVENT_TYPES",
+    "STAGE_HANDOFF_EVENT_TYPES",
+    "STAGE_STATUS_EVENT_TYPES",
+    "journal_event_message",
+    "journal_notification_enabled",
+    "messenger_channel_from_env",
+    "should_suppress_stage_notification",
+]

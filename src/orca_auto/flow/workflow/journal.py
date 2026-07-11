@@ -36,13 +36,18 @@ def _maybe_notify_journal_event(event: dict[str, Any], workflow_root: str | Path
         return
     if _notifications.should_suppress_stage_notification(event):
         return
-    transport = _notifications.telegram_transport_from_env()
-    if transport is None:
-        return
     try:
-        transport.send_text(
-            _notifications.journal_event_message(event, workflow_root), parse_mode="HTML"
-        )
+        channel = _notifications.messenger_channel_from_env()
+        if channel is None:
+            return
+        result = channel.send(_notifications.journal_event_message(event, workflow_root))
+        if not result.sent and not result.skipped:
+            LOGGER.warning(
+                "workflow_journal_notification_failed: workflow_root=%s event_type=%s error=%s",
+                workflow_root,
+                event_type,
+                result.error or "unknown_error",
+            )
     except Exception as exc:  # noqa: BLE001
         LOGGER.debug(
             "workflow_journal_notification_failed: workflow_root=%s event_type=%s error=%s",

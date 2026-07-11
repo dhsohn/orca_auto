@@ -141,12 +141,16 @@ workflow:
     xtb_executable: "/path/to/xtb"
     crest_executable: "/path/to/crest"
 
-telegram:
-  bot_token: ""
-  chat_id: ""
-  timeout_seconds: 5.0
-  max_attempts: 2
-  retry_backoff_seconds: 0.5
+messenger:
+  provider: telegram  # telegram | discord
+  telegram:
+    bot_token: ""
+    chat_id: ""
+    timeout_seconds: 5.0
+    max_attempts: 2
+    retry_backoff_seconds: 0.5
+  discord:
+    webhook_url: ""
 
 orca:
   runtime:
@@ -367,7 +371,7 @@ orca_auto scan-notify
 Behavior:
 
 - `scan-notify` runs a one-shot scan of the configured ORCA root and sends
-  Telegram discovery alerts, then exits. It is not a live monitor.
+  discovery alerts through the active messenger provider, then exits. It is not a live monitor.
 
 ### 7.7 Long-Running Services
 
@@ -381,8 +385,9 @@ Behavior:
 - ORCA, xTB, and CREST share the same admission cap. ORCA reserves a slot in
   the parent worker, attaches queue identity metadata after the child starts,
   and lets the ORCA child activate/release that reservation during execution.
-- `orca_auto-bot@.service` starts the unified Telegram bot using `telegram.bot_token` and `telegram.chat_id` from `orca_auto.yaml`
-- Workflow Telegram alerts keep per-job ORCA messages, but summarize internal CREST and reaction-path xTB child phases in one message each after those phases finish
+- `orca_auto-bot@.service` starts the unified Telegram bot using
+  `messenger.telegram.bot_token` and `messenger.telegram.chat_id` from `orca_auto.yaml`
+- Workflow messenger alerts keep per-job ORCA messages, but summarize internal CREST and reaction-path xTB child phases in one message each after those phases finish
 - `orca_auto-runtime@.target` starts both services together
 
 ## 8) WSL systemd Setup
@@ -418,7 +423,7 @@ journalctl -u "orca_auto-bot@$(whoami)" -f
 
 Before enabling the combined runtime target:
 
-- Set `telegram.bot_token` and `telegram.chat_id` in `orca_auto.yaml`
+- Set `messenger.telegram.bot_token` and `messenger.telegram.chat_id` in `orca_auto.yaml`
 
 Assumptions of the unified runtime templates:
 
@@ -434,8 +439,8 @@ active simulations across ORCA and workflow-managed internal engine stages.
 
 If Telegram is not configured yet, `orca_auto systemd install` enables
 `orca_auto-queue-worker@$(whoami)` directly. Run the same command again after
-setting `telegram.bot_token` and `telegram.chat_id` to enable the full runtime
-target.
+setting `messenger.telegram.bot_token` and `messenger.telegram.chat_id` to enable the full
+runtime target.
 
 Workflow supervision belongs to `orca_auto-queue-worker@.service`.
 

@@ -1,20 +1,23 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from orca_auto.core.config import TelegramConfig
-from orca_auto.core.notifications import (
-    build_telegram_transport,
-    load_telegram_config_from_file,
-    split_telegram_message,
-)
-from orca_auto.core.notifications import (
-    escape_html as _escape_html,
-)
-from orca_auto.core.notifications import (
-    html_code as _metric_code,
+from orca_auto.core.messaging import (
+    Group,
+    Line,
+    Message,
+    bold,
+    build_channel_from_config_path,
+    code,
+    field_row,
+    group,
+    line,
+    raw,
+    text,
+    title_heading,
 )
 from orca_auto.core.utils import (
     coerce_list as _coerce_sequence,
@@ -34,6 +37,7 @@ from orca_auto.core.utils import (
 
 from .status import workflow_status_is_terminal
 
+LOGGER = logging.getLogger(__name__)
 _ACTIVE_STATUSES = frozenset(
     {"planned", "queued", "running", "submitted", "cancel_requested", "retrying"}
 )
@@ -53,10 +57,6 @@ class _PhaseStageRow:
     stage_label: str
     result: str
     metrics: tuple[tuple[str, Any], ...]
-
-
-def _load_telegram_config(config_path: str | None) -> TelegramConfig:
-    return load_telegram_config_from_file(config_path)
 
 
 def _phase_notification_state(payload: dict[str, Any]) -> dict[str, Any]:
@@ -218,62 +218,69 @@ def _phase_stage_row(
     )
 
 
-def _format_phase_stage_row(row: _PhaseStageRow) -> str:
+def _stage_row_lines(row: _PhaseStageRow) -> list[Line]:
     lines = [
-        f"<b>Stage</b>: {_escape_html(row.stage_label)}  <b>Result</b>: {_metric_code(row.result)}"
+        line(
+            bold("Stage"),
+            raw(": "),
+            text(row.stage_label),
+            raw("  "),
+            bold("Result"),
+            raw(": "),
+            code(row.result),
+        )
     ]
     if row.metrics:
-        lines.append(
-            "  ".join(f"<b>{label}</b>: {_metric_code(value)}" for label, value in row.metrics)
-        )
-    return "\n".join(lines)
+        spans = []
+        for index, (label, value) in enumerate(row.metrics):
+            if index:
+                spans.append(raw("  "))
+            spans.extend((bold(label), raw(": "), code(value)))
+        lines.append(line(*spans))
+    return lines
 
 
-def _extra_lines_section(extra_lines: list[str] | None) -> str | None:
-    rows: list[str] = []
+def _notes_group(extra_lines: list[str] | None) -> Group | None:
+    items: list[Any] = []
     for raw_line in extra_lines or []:
-        line = _normalize_text(raw_line)
-        if not line:
+        entry = _normalize_text(raw_line)
+        if not entry:
             continue
-        if ":" in line:
-            key, value = line.split(":", 1)
+        if ":" in entry:
+            key, value = entry.split(":", 1)
             normalized_key = _normalize_text(key)
             normalized_value = _normalize_text(value) or "-"
             if normalized_key:
-                rows.append(
-                    f"<b>{_escape_html(normalized_key)}</b>: {_metric_code(normalized_value)}"
-                )
+                items.append(field_row(normalized_key, code(normalized_value)))
                 continue
-        rows.append(_escape_html(line))
-    if not rows:
+        items.append(line(text(entry)))
+    if not items:
         return None
-    return "<b>Notes</b>\n" + "\n".join(rows)
+    return group(*items, heading=(bold("Notes"),))
 
 
-def _format_phase_summary_message(
+def _overview_fields(
     *,
     payload: dict[str, Any],
     phase_engine: str,
     stages: list[dict[str, Any]],
     counts: dict[str, int],
-    stage_buckets: dict[int, str],
-    extra_lines: list[str] | None,
-) -> str:
-    phase = _phase_label(phase_engine)
+) -> list[Any]:
     workflow_id = _normalize_text(payload.get("workflow_id")) or "-"
     template_name = _normalize_text(payload.get("template_name")) or "-"
-    outcome = _phase_outcome(counts)
-
-    overview = [
-        f"<b>orca_auto Flow {phase} Phase Summary</b>",
-        f"<b>Workflow</b>: {_metric_code(workflow_id)}",
-        f"<b>Template</b>: {_metric_code(template_name)}",
-        f"<b>Outcome</b>: {_metric_code(outcome)}",
-        (
-            f"<b>Stages</b>: {_metric_code(len(stages))}  "
-            f"completed={_metric_code(counts['completed'])}  "
-            f"failed={_metric_code(counts['failed'])}  "
-            f"cancelled={_metric_code(counts['cancelled'])}"
+    fields = [
+        field_row("Workflow", code(workflow_id)),
+        field_row("Template", code(template_name)),
+        field_row("Outcome", code(_phase_outcome(counts))),
+        field_row(
+            "Stages",
+            code(len(stages)),
+            raw("  completed="),
+            code(counts["completed"]),
+            raw("  failed="),
+            code(counts["failed"]),
+            raw("  cancelled="),
+            code(counts["cancelled"]),
         ),
     ]
     if phase_engine == "xtb":
@@ -283,27 +290,51 @@ def _format_phase_summary_message(
             if _normalize_text(_stage_metadata(stage).get("reaction_handoff_status")).lower()
             == "ready"
         )
-        overview.append(f"<b>Ready for ORCA</b>: {_metric_code(ready_count)}")
+        fields.append(field_row("Ready for ORCA", code(ready_count)))
+    return fields
+
+
+def _build_phase_summary_message(
+    *,
+    payload: dict[str, Any],
+    phase_engine: str,
+    stages: list[dict[str, Any]],
+    counts: dict[str, int],
+    stage_buckets: dict[int, str],
+    extra_lines: list[str] | None,
+) -> Message:
+    title = f"orca_auto Flow {_phase_label(phase_engine)} Phase Summary"
+    overview = group(
+        *_overview_fields(payload=payload, phase_engine=phase_engine, stages=stages, counts=counts),
+        heading=title_heading(title),
+    )
+    groups: list[Group] = [overview]
+
+    notes = _notes_group(extra_lines)
+    if notes is not None:
+        groups.append(notes)
 
     stage_rows = [
         _phase_stage_row(
-            stage,
-            phase_engine=phase_engine,
-            bucket=stage_buckets.get(id(stage), "failed"),
+            stage, phase_engine=phase_engine, bucket=stage_buckets.get(id(stage), "failed")
         )
         for stage in stages
     ]
+    for index, row in enumerate(stage_rows):
+        heading = (bold("Stage details"),) if index == 0 else ()
+        groups.append(group(*_stage_row_lines(row), heading=heading))
 
-    sections: list[str] = ["\n".join(overview)]
-    notes = _extra_lines_section(extra_lines)
-    if notes is not None:
-        sections.append(notes)
-    if stage_rows:
-        sections.append(
-            "<b>Stage details</b>\n"
-            + "\n\n".join(_format_phase_stage_row(row) for row in stage_rows)
-        )
-    return "\n\n".join(sections)
+    return Message(title=title, severity=_summary_severity(counts), groups=tuple(groups))
+
+
+def _summary_severity(counts: dict[str, int]) -> Any:
+    outcome = _phase_outcome(counts)
+    return {
+        "completed": "success",
+        "failed": "error",
+        "mixed": "warning",
+        "cancelled": "warning",
+    }.get(outcome, "info")
 
 
 def _phase_summary_counts(
@@ -361,22 +392,6 @@ def _phase_summary_already_sent(
     return bool(previous_state.get("sent_at"))
 
 
-def _send_phase_summary_message(telegram: TelegramConfig, message: str) -> bool:
-    chunks = split_telegram_message(message)
-    if not chunks:
-        return False
-
-    transport = build_telegram_transport(telegram)
-    for chunk in chunks:
-        result = transport.send_text(chunk, parse_mode="HTML")
-        if result.sent or result.skipped:
-            continue
-        fallback_result = transport.send_text(chunk, parse_mode=None)
-        if not (fallback_result.sent or fallback_result.skipped):
-            return False
-    return True
-
-
 def _mark_phase_summary_sent(
     notification_state: dict[str, Any],
     *,
@@ -413,11 +428,7 @@ def maybe_notify_workflow_phase_summary(
     if _phase_summary_already_sent(notification_state, state_key=summary.state_key):
         return False
 
-    telegram = _load_telegram_config(config_path)
-    if not telegram.enabled:
-        return False
-
-    message = _format_phase_summary_message(
+    message = _build_phase_summary_message(
         payload=payload,
         phase_engine=summary.engine,
         stages=summary.stages,
@@ -425,7 +436,27 @@ def maybe_notify_workflow_phase_summary(
         stage_buckets=summary.stage_buckets,
         extra_lines=extra_lines,
     )
-    if not _send_phase_summary_message(telegram, message):
+    try:
+        channel = build_channel_from_config_path(config_path)
+        if not channel.enabled:
+            return False
+        result = channel.send(message)
+    except Exception as exc:  # noqa: BLE001 - optional notification boundary
+        LOGGER.warning(
+            "workflow_phase_notification_failed: workflow_id=%s engine=%s error_type=%s",
+            _normalize_text(payload.get("workflow_id")) or "-",
+            normalized_engine,
+            type(exc).__name__,
+        )
+        return False
+    if not result.sent:
+        if not result.skipped:
+            LOGGER.warning(
+                "workflow_phase_notification_failed: workflow_id=%s engine=%s error=%s",
+                _normalize_text(payload.get("workflow_id")) or "-",
+                normalized_engine,
+                result.error or "unknown_error",
+            )
         return False
 
     _mark_phase_summary_sent(

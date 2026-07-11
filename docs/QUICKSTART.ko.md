@@ -25,8 +25,8 @@ orca_auto init
 ```
 
 ORCA, xTB, CREST, 실행 디렉터리에는 절대 Linux 경로를 사용하세요. Telegram 알림을
-원한다면 init 중에 `telegram.bot_token`과 `telegram.chat_id`를 설정하거나, 이후에
-`config/orca_auto.yaml`을 편집하세요.
+원한다면 init 중에 `messenger.telegram.bot_token`과 `messenger.telegram.chat_id`를
+설정하거나, 이후에 `config/orca_auto.yaml`을 편집하세요.
 
 ## 3) 런타임 서비스 설치
 

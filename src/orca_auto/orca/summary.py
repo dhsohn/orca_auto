@@ -9,6 +9,7 @@ from html import unescape
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.notifications import escape_html
 from orca_auto.core.paths import is_subpath
 
 from .parser import parse_opt_progress
@@ -21,7 +22,6 @@ from .run_snapshot import (
     status_icon,
 )
 from .runtime.run_lock import LOCK_FILE_NAME
-from .telegram_notifier import escape_html
 
 logger = logging.getLogger(__name__)
 

@@ -87,7 +87,7 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 2. `<project_root>/config/orca_auto.yaml`
 3. `~/orca_auto/config/orca_auto.yaml`
 
-지원되는 최상위 섹션과 키:
+지원되는 설정 경로:
 
 - `runs_root`
 - `resources.max_cores_per_task`
@@ -96,11 +96,16 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `scheduler.admission_root`
 - `workflow.paths.xtb_executable`
 - `workflow.paths.crest_executable`
-- `telegram.bot_token`
-- `telegram.chat_id`
-- `telegram.timeout_seconds`
-- `telegram.max_attempts`
-- `telegram.retry_backoff_seconds`
+- `messenger.provider` (`telegram` 또는 `discord`)
+- `messenger.telegram.bot_token`
+- `messenger.telegram.chat_id`
+- `messenger.telegram.timeout_seconds`
+- `messenger.telegram.max_attempts`
+- `messenger.telegram.retry_backoff_seconds`
+- `messenger.discord.webhook_url`
+- `messenger.discord.timeout_seconds`
+- `messenger.discord.max_attempts`
+- `messenger.discord.retry_backoff_seconds`
 - `orca.runtime.default_max_retries`
 - `orca.paths.orca_executable`
 
@@ -114,8 +119,21 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `orca.runtime.default_max_retries: 0`은 ORCA 재시도를 비활성화합니다.
 - 양수 `default_max_retries`는 ORCA route 종류별 cap을 따르는 계산 종류별 재시도 정책을
   활성화합니다.
-- Telegram은 `telegram.bot_token`과 `telegram.chat_id`가 모두 비어 있지 않을 때만
-  활성화됩니다.
+- 발신 Telegram 전송에는 `messenger.provider: telegram`과 비어 있지 않은
+  `messenger.telegram.bot_token`, `messenger.telegram.chat_id` 값이 필요합니다.
+- 발신 Discord 전송에는 `messenger.provider: discord`와 유효한 공식 HTTPS Discord
+  execute-webhook URL인 `messenger.discord.webhook_url` 값이 필요합니다.
+- 두 adapter 모두 전송 timeout을 0.1~120초, 총 시도 횟수를 1~10회, 설정된 retry
+  backoff를 0~120초로 제한합니다.
+
+마이그레이션 참고:
+
+- 현재 호환 기간에는 설정 읽기 로직이 기존 최상위 `telegram:` 블록과 정규
+  `messenger.telegram`을 모두 읽습니다. 둘 다 있으면 중첩된 `messenger.telegram` 값이
+  우선합니다.
+- 새 설정, 생성 예제, 도구는 `messenger.telegram`을 기록합니다. 새 최상위 `telegram:`
+  블록을 추가하지 마세요. Discord에는 기존 별칭이 없으므로
+  `messenger.provider: discord`와 `messenger.discord.webhook_url`을 사용하세요.
 
 ## 큐와 activity 계약
 

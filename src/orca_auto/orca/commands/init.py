@@ -10,7 +10,11 @@ from typing import Any, TypedDict
 
 import yaml
 
-from orca_auto.core.config.files import secure_config_file_permissions
+from orca_auto.core.config.files import (
+    messenger_mapping_from_root,
+    secure_config_file_permissions,
+)
+from orca_auto.core.config.schema import discord_webhook_url_is_valid
 from orca_auto.core.engine_runner import validate_executable_file
 from orca_auto.core.paths import is_rejected_windows_path
 from orca_auto.core.utils.persistence import atomic_write_text
@@ -36,7 +40,7 @@ class _PromptedInitValues:
     xtb_runtime: dict[str, str]
     crest_runtime: dict[str, str]
     max_active_simulations: int
-    telegram: dict[str, str]
+    messenger: dict[str, object]
 
 
 def _stdin_supports_interactive_prompts() -> bool:
@@ -182,6 +186,32 @@ def _prompt_telegram_config() -> dict[str, str]:
         )
 
 
+def _prompt_discord_config() -> dict[str, str]:
+    if not _prompt_yes_no("Configure Discord notifications now?", default=False):
+        return {"webhook_url": ""}
+
+    while True:
+        webhook_url = _prompt_secret_text("Discord webhook URL")
+        if discord_webhook_url_is_valid(webhook_url):
+            return {"webhook_url": webhook_url}
+        print("A valid HTTPS Discord webhook URL is required, or choose not to configure Discord.")
+
+
+def _prompt_messenger_provider(*, default: str = "telegram") -> str:
+    while True:
+        provider = _prompt_text("Messenger provider (telegram/discord)", default).lower()
+        if provider in {"telegram", "discord"}:
+            return provider
+        print("Messenger provider must be 'telegram' or 'discord'.")
+
+
+def _prompt_messenger_config() -> dict[str, object]:
+    provider = _prompt_messenger_provider()
+    if provider == "discord":
+        return {"provider": provider, "discord": _prompt_discord_config()}
+    return {"provider": provider, "telegram": _prompt_telegram_config()}
+
+
 def _prompt_runs_root() -> str:
     """Single runs root: ORCA jobs, workflow workspaces, and .admission live here."""
     prompt_label = "runs root directory (ORCA jobs + workflows)"
@@ -248,13 +278,19 @@ def _confirm_existing_config_overwrite(config_path: Path) -> int | None:
     return None
 
 
-def _prompt_init_values() -> _PromptedInitValues:
+def _prompt_init_values(
+    *, existing_messenger: Mapping[str, object] | None = None
+) -> _PromptedInitValues:
     return _PromptedInitValues(
         orca_runtime=_prompt_orca_runtime(),
         xtb_runtime=_prompt_xtb_runtime(),
         crest_runtime=_prompt_crest_runtime(),
         max_active_simulations=_prompt_max_active_simulations(),
-        telegram=_prompt_telegram_config(),
+        messenger=(
+            dict(existing_messenger)
+            if existing_messenger is not None
+            else _prompt_messenger_config()
+        ),
     )
 
 
@@ -276,7 +312,7 @@ def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
                 "crest_executable": str(values.crest_runtime["executable"]),
             },
         },
-        "telegram": values.telegram,
+        "messenger": values.messenger,
         "orca": {
             "runtime": {
                 "default_max_retries": values.orca_runtime["default_max_retries"],
@@ -295,6 +331,38 @@ def _print_init_summary(config_path: Path, values: _PromptedInitValues) -> None:
     print(f"  max_active_simulations: {values.max_active_simulations}")
     print(f"  xtb_executable: {values.xtb_runtime['executable']}")
     print(f"  crest_executable: {values.crest_runtime['executable']}")
+    print(f"  messenger_provider: {values.messenger.get('provider', 'telegram')}")
+
+
+def _load_existing_messenger_mapping(config_path: Path) -> dict[str, object] | None:
+    try:
+        parsed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        print("warning: existing messenger settings could not be read and will be configured again")
+        return None
+    if parsed is None:
+        return None
+    if not isinstance(parsed, Mapping):
+        print(
+            "warning: existing config is not a mapping; messenger settings will be configured again"
+        )
+        return None
+    try:
+        messenger = messenger_mapping_from_root(parsed)
+    except ValueError as exc:
+        print(f"warning: {exc}; messenger settings will be configured again")
+        return None
+    if not messenger:
+        return None
+
+    preserved: dict[str, object] = dict(messenger)
+    provider = str(preserved.get("provider", "") or "").strip().lower()
+    if not provider:
+        provider = (
+            "discord" if "discord" in preserved and "telegram" not in preserved else "telegram"
+        )
+    preserved["provider"] = provider
+    return preserved
 
 
 def cmd_init(args: Any) -> int:
@@ -306,10 +374,19 @@ def cmd_init(args: Any) -> int:
         if overwrite_status is not None:
             return overwrite_status
 
+    existing_messenger = (
+        _load_existing_messenger_mapping(config_path) if config_path.exists() else None
+    )
+    if existing_messenger is not None:
+        print(
+            "Preserving existing messenger settings "
+            f"({existing_messenger.get('provider', 'telegram')})."
+        )
+
     print(f"Creating config at: {config_path}")
 
     try:
-        values = _prompt_init_values()
+        values = _prompt_init_values(existing_messenger=existing_messenger)
     except (EOFError, KeyboardInterrupt):
         print("\nCancelled.")
         return 1

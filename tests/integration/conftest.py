@@ -56,9 +56,10 @@ def _write_shared_config(
             resources:
               max_cores_per_task: 2
               max_memory_gb_per_task: 2
-            telegram:
-              bot_token: ""
-              chat_id: ""
+            messenger:
+              telegram:
+                bot_token: ""
+                chat_id: ""
             """
         ).lstrip(),
         encoding="utf-8",

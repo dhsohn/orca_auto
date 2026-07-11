@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from orca_auto.core.config import CommonRuntimeConfig, TelegramConfig
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
+from orca_auto.core.messaging import SendResult, render_telegram
+from orca_auto.core.notifications import _engine_transport
 from orca_auto.core.notifications import engines as notifications
 
 
@@ -24,20 +26,24 @@ def _patch_transport(
     *,
     sent: bool,
     skipped: bool = False,
-) -> tuple[list[TelegramConfig], list[str]]:
-    build_calls: list[TelegramConfig] = []
+) -> tuple[list[Any], list[str]]:
+    build_calls: list[Any] = []
     messages: list[str] = []
 
-    class FakeTransport:
-        def send_text(self, text: str) -> SimpleNamespace:
-            messages.append(text)
-            return SimpleNamespace(sent=sent, skipped=skipped)
+    class FakeChannel:
+        @property
+        def enabled(self) -> bool:
+            return True
 
-    def fake_build(telegram_cfg: TelegramConfig) -> FakeTransport:
-        build_calls.append(telegram_cfg)
-        return FakeTransport()
+        def send(self, message: Any, *, silent: bool = False) -> SendResult:
+            messages.append(render_telegram(message))
+            return SendResult(sent=sent, skipped=skipped)
 
-    monkeypatch.setattr(notifications, "build_telegram_transport", fake_build)
+    def fake_build(messenger: Any) -> FakeChannel:
+        build_calls.append(messenger)
+        return FakeChannel()
+
+    monkeypatch.setattr(_engine_transport, "build_channel", fake_build)
     return build_calls, messages
 
 
@@ -59,14 +65,10 @@ def test_send_joins_lines_and_maps_transport_result(
     cfg = _cfg(tmp_path)
     build_calls, messages = _patch_transport(monkeypatch, sent=sent, skipped=skipped)
 
-    result = notifications.send_lines(
-        cfg,
-        ["first line", "second line"],
-        build_transport=notifications.build_telegram_transport,
-    )
+    result = notifications.send_lines(cfg, ["first line", "second line"])
 
     assert result is expected
-    assert build_calls == [cfg.telegram]
+    assert build_calls == [cfg.messenger]
     assert messages == ["first line\nsecond line"]
 
 

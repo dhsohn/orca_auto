@@ -137,6 +137,50 @@ def test_prompt_telegram_config_covers_skip_and_retry(capsys) -> None:
     assert "Both Telegram bot token and chat id are required" in capsys.readouterr().out
 
 
+def test_prompt_discord_config_covers_skip_and_retry(capsys) -> None:
+    with patch("orca_auto.orca.commands.init._prompt_yes_no", return_value=False):
+        assert init._prompt_discord_config() == {"webhook_url": ""}
+
+    with (
+        patch("orca_auto.orca.commands.init._prompt_yes_no", return_value=True),
+        patch(
+            "orca_auto.orca.commands.init._prompt_secret_text",
+            side_effect=["", "https://discord.com/api/webhooks/123/secret"],
+        ),
+    ):
+        assert init._prompt_discord_config() == {
+            "webhook_url": "https://discord.com/api/webhooks/123/secret"
+        }
+
+    assert "valid HTTPS Discord webhook URL is required" in capsys.readouterr().out
+
+
+def test_prompt_messenger_config_selects_provider_and_adapter(capsys) -> None:
+    with patch(
+        "orca_auto.orca.commands.init._prompt_text",
+        side_effect=["matrix", "discord"],
+    ):
+        assert init._prompt_messenger_provider() == "discord"
+    assert "must be 'telegram' or 'discord'" in capsys.readouterr().out
+
+    with (
+        patch(
+            "orca_auto.orca.commands.init._prompt_messenger_provider",
+            return_value="discord",
+        ),
+        patch(
+            "orca_auto.orca.commands.init._prompt_discord_config",
+            return_value={"webhook_url": "https://discord.com/api/webhooks/123/secret"},
+        ),
+        patch("orca_auto.orca.commands.init._prompt_telegram_config") as telegram_prompt,
+    ):
+        assert init._prompt_messenger_config() == {
+            "provider": "discord",
+            "discord": {"webhook_url": "https://discord.com/api/webhooks/123/secret"},
+        }
+    telegram_prompt.assert_not_called()
+
+
 def test_write_config_adds_generated_header(tmp_path: Path) -> None:
     config_path = tmp_path / "config" / "orca_auto.yaml"
     payload = {"runtime": {"allowed_root": "/tmp/runs"}}
@@ -237,8 +281,11 @@ def test_cmd_init_handles_write_or_load_failure(tmp_path: Path, capsys) -> None:
             return_value=4,
         ),
         patch(
-            "orca_auto.orca.commands.init._prompt_telegram_config",
-            return_value={"bot_token": "", "chat_id": ""},
+            "orca_auto.orca.commands.init._prompt_messenger_config",
+            return_value={
+                "provider": "telegram",
+                "telegram": {"bot_token": "", "chat_id": ""},
+            },
         ),
         patch(
             "orca_auto.orca.commands.init._validate_generated_config",
@@ -281,8 +328,11 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
             return_value=4,
         ),
         patch(
-            "orca_auto.orca.commands.init._prompt_telegram_config",
-            return_value={"bot_token": "token", "chat_id": "123"},
+            "orca_auto.orca.commands.init._prompt_messenger_config",
+            return_value={
+                "provider": "telegram",
+                "telegram": {"bot_token": "token", "chat_id": "123"},
+            },
         ),
         patch(
             "orca_auto.orca.commands.init._validate_generated_config"
@@ -298,6 +348,7 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
     assert "xtb_executable" in output
     assert "crest_executable" in output
     assert "max_active_simulations: 4" in output
+    assert "messenger_provider: telegram" in output
     assert yaml.safe_load(config_path.read_text(encoding="utf-8").split("\n", 1)[1]) == {
         "runs_root": str(orca_allowed_root),
         "resources": {
@@ -313,7 +364,10 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
                 "crest_executable": "/usr/bin/crest",
             },
         },
-        "telegram": {"bot_token": "token", "chat_id": "123"},
+        "messenger": {
+            "provider": "telegram",
+            "telegram": {"bot_token": "token", "chat_id": "123"},
+        },
         "orca": {
             "runtime": {
                 "default_max_retries": 2,
@@ -322,3 +376,58 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
         },
     }
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+
+
+def test_cmd_init_force_preserves_existing_discord_messenger(tmp_path: Path, capsys) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    webhook_url = "https://discord.com/api/webhooks/123/existing-secret"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "messenger": {
+                    "provider": "discord",
+                    "discord": {"webhook_url": webhook_url},
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    orca_allowed_root = tmp_path / "orca_allowed"
+
+    with (
+        patch("orca_auto.orca.commands.init.default_config_path", return_value=str(config_path)),
+        patch(
+            "orca_auto.orca.commands.init._prompt_orca_runtime",
+            return_value={
+                "runs_root": str(orca_allowed_root),
+                "default_max_retries": 2,
+                "executable": "/usr/bin/orca",
+            },
+        ),
+        patch(
+            "orca_auto.orca.commands.init._prompt_xtb_runtime",
+            return_value={"executable": "/usr/bin/xtb"},
+        ),
+        patch(
+            "orca_auto.orca.commands.init._prompt_crest_runtime",
+            return_value={"executable": "/usr/bin/crest"},
+        ),
+        patch(
+            "orca_auto.orca.commands.init._prompt_max_active_simulations",
+            return_value=4,
+        ),
+        patch("orca_auto.orca.commands.init._prompt_messenger_config") as messenger_prompt,
+        patch("orca_auto.orca.commands.init._validate_generated_config"),
+    ):
+        assert init.cmd_init(Namespace(force=True)) == 0
+
+    messenger_prompt.assert_not_called()
+    written = yaml.safe_load(config_path.read_text(encoding="utf-8").split("\n", 1)[1])
+    assert written["messenger"] == {
+        "provider": "discord",
+        "discord": {"webhook_url": webhook_url},
+    }
+    output = capsys.readouterr().out
+    assert "Preserving existing messenger settings (discord)." in output
+    assert webhook_url not in output

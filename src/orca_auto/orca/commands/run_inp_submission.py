@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from orca_auto.core.messaging import build_channel
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 
 from ..input_artifacts import selected_input_artifacts
@@ -378,7 +379,8 @@ def notify_queued_submission(
     deps: Any,
 ) -> None:
     notification = build_queue_enqueued_notification(result.entry, deps=deps)
-    deps.notifications.notify_queue_enqueued_event(cfg.telegram, notification)
+    channel = build_channel(cfg.messenger)
+    deps.notifications.notify_queue_enqueued_event(channel, notification)
 
 
 def submit_reaction_dir_to_queue(

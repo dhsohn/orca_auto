@@ -62,9 +62,11 @@ def test_load_config_parses_defaults_and_normalizes_values(tmp_path: Path) -> No
                     "max_cores_per_task": "0",
                     "max_memory_gb_per_task": "-5",
                 },
-                "telegram": {
-                    "bot_token": " token ",
-                    "chat_id": " chat ",
+                "messenger": {
+                    "telegram": {
+                        "bot_token": " token ",
+                        "chat_id": " chat ",
+                    },
                 },
             },
             sort_keys=False,

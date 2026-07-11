@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import tempfile
@@ -72,6 +73,11 @@ def apply_systemd_install_plan(
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> int:
+    python_path = plan.repo / ".venv" / "bin" / "python"
+    if not python_path.is_file() or not os.access(python_path, os.X_OK):
+        emit_error(f"service Python is missing or not executable: {python_path}; run `make venv`")
+        return 1
+
     if plan.use_sudo and shutil.which("sudo") is None:
         emit_error("sudo is required to write system units; rerun as root or use --no-sudo")
         return 1

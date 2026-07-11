@@ -82,12 +82,16 @@ workflow:
     xtb_executable: /home/user/bin/xtb-dist/bin/xtb
     crest_executable: /home/user/bin/crest/crest
 
-telegram:
-  bot_token: ""
-  chat_id: ""
-  timeout_seconds: 5.0
-  max_attempts: 2
-  retry_backoff_seconds: 0.5
+messenger:
+  provider: telegram  # telegram | discord
+  telegram:
+    bot_token: ""
+    chat_id: ""
+    timeout_seconds: 5.0
+    max_attempts: 2
+    retry_backoff_seconds: 0.5
+  discord:
+    webhook_url: ""
 
 orca:
   runtime:
@@ -152,8 +156,9 @@ orca_auto service restart
 ```
 
 If Telegram is not configured yet, the installer enables only the queue worker; run the
-same command again after setting `telegram.bot_token` and `telegram.chat_id` to enable the
-full runtime target. If you edited files under `systemd/`, run
+same command again after setting `messenger.telegram.bot_token` and
+`messenger.telegram.chat_id` to enable the full runtime target. If you edited files under
+`systemd/`, run
 `sudo systemctl daemon-reload` before restarting. See
 [systemd/README.md](systemd/README.md) for the full runtime setup.
 

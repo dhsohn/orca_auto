@@ -13,6 +13,7 @@ from orca_auto.core.config.files import (
     engine_config_mapping,
     load_yaml_mapping,
     mapping_section,
+    messenger_mapping_from_root,
     scheduler_admission_root,
     usable_runs_root_from_mapping,
 )
@@ -213,10 +214,43 @@ def _enabled_unit_for_args(*, target_user: str, worker_only: bool, no_enable: bo
     return f"orca_auto-runtime@{target_user}.target"
 
 
-def _systemctl_enable_command(enabled_unit: str, *, no_start: bool) -> tuple[str, ...]:
-    if no_start:
-        return ("systemctl", "enable", enabled_unit)
-    return ("systemctl", "enable", "--now", enabled_unit)
+def _runtime_unit_for_user(target_user: str) -> str:
+    return f"orca_auto-runtime@{target_user}.target"
+
+
+def _worker_unit_for_user(target_user: str) -> str:
+    return f"orca_auto-queue-worker@{target_user}.service"
+
+
+def _systemctl_transition_commands(
+    *,
+    target_user: str,
+    worker_only: bool,
+    enabled_unit: str | None,
+    no_start: bool,
+) -> tuple[tuple[str, ...], ...]:
+    commands: list[tuple[str, ...]] = [("systemctl", "daemon-reload")]
+    if enabled_unit is None:
+        return tuple(commands)
+
+    # Stage the desired boot unit before touching the currently selected mode.
+    # If enable fails, the existing live service and boot selection remain
+    # intact instead of turning an installation error into an outage.
+    commands.append(("systemctl", "enable", enabled_unit))
+    opposite_unit = (
+        _runtime_unit_for_user(target_user) if worker_only else _worker_unit_for_user(target_user)
+    )
+    disable_command = ["systemctl", "disable"]
+    if not no_start:
+        disable_command.append("--now")
+    disable_command.append(opposite_unit)
+    commands.append(tuple(disable_command))
+    if not no_start:
+        # `restart` also starts an inactive unit. Unlike `enable --now`, it
+        # reliably reloads code and reapplies the runtime target's Wants= graph
+        # when the requested mode was already active.
+        commands.append(("systemctl", "restart", enabled_unit))
+    return tuple(commands)
 
 
 def _telegram_mapping(config: Path) -> dict[str, Any]:
@@ -226,12 +260,19 @@ def _telegram_mapping(config: Path) -> dict[str, Any]:
             "could not read Telegram settings from {path}: top-level YAML is not a mapping"
         ),
     )
-    telegram = parsed.get("telegram") or {}
-    if not isinstance(telegram, dict):
+    try:
+        messenger = messenger_mapping_from_root(parsed)
+    except ValueError as exc:
+        raise ValueError(f"could not read Telegram settings from {config}: {exc}") from exc
+    telegram_raw = messenger.get("telegram")
+    if telegram_raw is None:
+        return {}
+    if not isinstance(telegram_raw, dict):
         raise ValueError(
-            f"could not read Telegram settings from {config}: telegram section is not a mapping"
+            f"could not read Telegram settings from {config}: "
+            "messenger.telegram section is not a mapping"
         )
-    return telegram
+    return telegram_raw
 
 
 def _telegram_credentials_configured(telegram: dict[str, Any]) -> bool:
@@ -247,12 +288,12 @@ def _telegram_runtime_warning(config: Path, *, worker_only: bool) -> str | None:
         telegram = _telegram_mapping(config)
     except ValueError as exc:
         return str(exc)
-    except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
-        return f"could not read Telegram settings from {config}: {exc}"
+    except YAML_CONFIG_LOAD_EXCEPTIONS:
+        return f"could not read Telegram settings from {config}: invalid configuration"
     if not _telegram_credentials_configured(telegram):
         return (
-            "full runtime target includes the Telegram bot, but telegram.bot_token or "
-            "telegram.chat_id is empty; use --worker-only if Telegram is not ready"
+            "full runtime target includes the Telegram bot, but messenger.telegram.bot_token "
+            "or messenger.telegram.chat_id is empty; use --worker-only if Telegram is not ready"
         )
     return None
 
@@ -273,12 +314,28 @@ def _auto_worker_only(config: Path, *, worker_only: bool, no_enable: bool) -> bo
     return not _telegram_configured(config)
 
 
+def _validate_worker_config(config: Path) -> None:
+    """Run the same config loaders used by supervised engine workers."""
+
+    try:
+        from orca_auto.core.config.engines import load_crest_config, load_xtb_config
+        from orca_auto.orca.config import load_config
+
+        load_config(str(config))
+        load_xtb_config(str(config))
+        load_crest_config(str(config))
+    except Exception as exc:
+        raise ValueError(f"runtime config preflight failed: {exc}") from exc
+
+
 def _collect_warnings(
     repo: Path,
     config: Path,
     *,
     worker_only: bool,
     auto_selected_worker_only: bool,
+    no_enable: bool,
+    no_start: bool,
 ) -> tuple[str, ...]:
     warnings: list[str] = []
     if not repo.exists():
@@ -286,8 +343,10 @@ def _collect_warnings(
     elif not repo.is_dir():
         warnings.append(f"repo path is not a directory: {repo}")
     python_path = repo / ".venv" / "bin" / "python"
-    if not python_path.exists():
-        warnings.append(f"service Python does not exist yet: {python_path}")
+    if not python_path.is_file() or not os.access(python_path, os.X_OK):
+        warnings.append(
+            f"service Python is missing or not executable: {python_path}; run `make venv`"
+        )
     if not config.exists():
         warnings.append(f"config file does not exist yet: {config}")
     if not auto_selected_worker_only:
@@ -297,8 +356,18 @@ def _collect_warnings(
     if auto_selected_worker_only and not worker_only:
         warnings.append(
             "Telegram is not fully configured, so the installer will enable only the "
-            "queue worker; rerun the same command after setting telegram.bot_token and "
-            "telegram.chat_id to enable the full runtime target"
+            "queue worker; rerun the same command after setting messenger.telegram.bot_token "
+            "and messenger.telegram.chat_id to enable the full runtime target"
+        )
+    if no_enable:
+        warnings.append(
+            "--no-enable leaves the existing boot selection and live services unchanged; "
+            "only unit files are installed and systemd is reloaded"
+        )
+    elif no_start:
+        warnings.append(
+            "--no-start updates the boot selection without stopping or restarting live "
+            "services; rerun without --no-start to apply the selected mode immediately"
         )
     return tuple(warnings)
 
@@ -328,9 +397,14 @@ def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstal
         worker_only=effective_worker_only,
         no_enable=options.no_enable,
     )
-    commands: list[tuple[str, ...]] = [("systemctl", "daemon-reload")]
-    if enabled_unit:
-        commands.append(_systemctl_enable_command(enabled_unit, no_start=options.no_start))
+    if enabled_unit is not None and not options.no_start:
+        _validate_worker_config(options.config)
+    commands = _systemctl_transition_commands(
+        target_user=options.target_user,
+        worker_only=effective_worker_only,
+        enabled_unit=enabled_unit,
+        no_start=options.no_start,
+    )
 
     return SystemdInstallPlan(
         target_user=options.target_user,
@@ -338,7 +412,7 @@ def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstal
         config=options.config,
         unit_dir=options.unit_dir,
         units=units,
-        commands=tuple(commands),
+        commands=commands,
         enabled_unit=enabled_unit,
         use_sudo=False
         if options.no_sudo
@@ -348,6 +422,8 @@ def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstal
             options.config,
             worker_only=options.worker_only,
             auto_selected_worker_only=effective_worker_only,
+            no_enable=options.no_enable,
+            no_start=options.no_start,
         ),
     )
 

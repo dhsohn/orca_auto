@@ -103,7 +103,7 @@ def _paint_field(text: str, width: int, color: str | None) -> str:
 
 
 def _print_service_status(target_user: str, statuses: Sequence[ServiceUnitStatus]) -> None:
-    print(f"orca_auto service status for {target_user}:")
+    print(f"orca_auto service status for {target_user} ({_selected_service_mode(statuses)}):")
     print(cli_style.paint(f"{'Name':<10} {'Active':<14} Unit", cli_style.BOLD))
     for status in statuses:
         active = _paint_field(status.active, 14, _service_active_color(status.active))
@@ -113,19 +113,52 @@ def _print_service_status(target_user: str, statuses: Sequence[ServiceUnitStatus
 def _service_status_payload(
     target_user: str, statuses: Sequence[ServiceUnitStatus]
 ) -> dict[str, Any]:
+    mode = _selected_service_mode(statuses)
+    required_labels = _required_service_labels(mode)
     return {
         "target_user": target_user,
-        "ok": not any(status.active == "failed" for status in statuses),
+        "mode": mode,
+        "ok": _required_services_active(statuses, required_labels=required_labels),
         "services": [
             {
                 "label": status.label,
                 "unit": status.unit,
                 "active": status.active,
                 "enabled": status.enabled,
+                "required": status.label in required_labels,
             }
             for status in statuses
         ],
     }
+
+
+def _selected_service_mode(statuses: Sequence[ServiceUnitStatus]) -> str:
+    by_label = {status.label: status for status in statuses}
+    runtime = by_label.get("runtime")
+    worker = by_label.get("worker")
+    if runtime is not None and runtime.enabled == "enabled":
+        return "full"
+    if worker is not None and worker.enabled == "enabled":
+        return "worker-only"
+    # Fall back to the live graph when neither boot selection can be read.
+    if runtime is not None and runtime.active == "active":
+        return "full"
+    return "worker-only"
+
+
+def _required_service_labels(mode: str) -> frozenset[str]:
+    if mode == "full":
+        return frozenset({"runtime", "worker", "bot"})
+    return frozenset({"worker"})
+
+
+def _required_services_active(
+    statuses: Sequence[ServiceUnitStatus], *, required_labels: frozenset[str]
+) -> bool:
+    by_label = {status.label: status for status in statuses}
+    return all(
+        label in by_label and by_label[label].active == "active" for label in required_labels
+    )
 
 
 def _systemctl_available(*, which: Callable[[str], str | None] = shutil.which) -> bool:
@@ -188,13 +221,12 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceCliDeps | None 
     except ValueError as exc:
         emit_error(exc)
         return 1
+    payload = _service_status_payload(target_user, statuses)
     if bool(getattr(args, "json", False)):
-        print(
-            json.dumps(_service_status_payload(target_user, statuses), ensure_ascii=True, indent=2)
-        )
+        print(json.dumps(payload, ensure_ascii=True, indent=2))
     else:
         _print_service_status(target_user, statuses)
-    return 1 if any(status.active == "failed" for status in statuses) else 0
+    return 0 if payload["ok"] else 1
 
 
 def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceCliDeps | None = None) -> int:

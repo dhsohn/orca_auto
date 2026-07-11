@@ -15,8 +15,8 @@ from ._engine_rendering import (
 from ._engine_rendering import (
     event_lines as event_lines,
 )
+from ._engine_transport import channel_line_sender as channel_line_sender
 from ._engine_transport import send_lines as send_lines
-from ._engine_transport import telegram_line_sender
 from .engine_delivery import (
     send_lifecycle_event,
     send_terminal_event,
@@ -62,6 +62,7 @@ __all__ = [
     "build_engine_notification_module",
     "build_engine_notifier",
     "build_telegram_transport",
+    "channel_line_sender",
     "event_lines",
     "is_workflow_child",
     "job_event_fields",
@@ -79,6 +80,5 @@ __all__ = [
     "send_lines",
     "send_terminal_event",
     "split_telegram_message",
-    "telegram_line_sender",
     "terminal_headline",
 ]
