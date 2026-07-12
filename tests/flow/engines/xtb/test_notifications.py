@@ -7,7 +7,7 @@ import pytest
 
 from orca_auto.core.config import CommonRuntimeConfig, TelegramConfig
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
-from orca_auto.core.messaging import Message, render_telegram
+from orca_auto.core.messaging import Message, render_discord_embed, render_telegram
 from orca_auto.core.notifications import TelegramSendResult, _engine_transport
 from orca_auto.core.notifications import engines as notifications
 
@@ -18,12 +18,14 @@ class _FakeTransport:
     def __init__(self, result: TelegramSendResult) -> None:
         self.result = result
         self.messages: list[str] = []
+        self.documents: list[Message] = []
 
     @property
     def enabled(self) -> bool:
         return True
 
     def send(self, message: Message, *, silent: bool = False) -> TelegramSendResult:
+        self.documents.append(message)
         self.messages.append(render_telegram(message))
         return self.result
 
@@ -70,7 +72,7 @@ def test_send_joins_lines_and_maps_transport_result(
     sent = notifications.send_lines(cfg, ["line 1", "line 2"])
 
     assert sent is expected
-    assert transport.messages == ["line 1\nline 2"]
+    assert transport.messages == ["orca_auto\nline 1\nline 2"]
 
 
 def test_notify_job_queued_and_started_render_expected_fields(
@@ -105,7 +107,7 @@ def test_notify_job_queued_and_started_render_expected_fields(
     assert transport.messages == [
         "\n".join(
             [
-                "[orca_auto_xtb] Job queued",
+                "orca_auto\n[xTB] Job queued",
                 "job_id: job-001",
                 "queue_id: queue-001",
                 "job_type: ranking",
@@ -116,7 +118,7 @@ def test_notify_job_queued_and_started_render_expected_fields(
         ),
         "\n".join(
             [
-                "[orca_auto_xtb] Job started",
+                "orca_auto\n[xTB] Job started",
                 "job_id: job-001",
                 "queue_id: queue-001",
                 "job_type: ranking",
@@ -154,7 +156,7 @@ def test_notify_job_terminal_includes_extra_lines(
     assert transport.messages == [
         "\n".join(
             [
-                "[orca_auto_xtb] Job failed",
+                "orca_auto\n[xTB] Job failed",
                 "job_id: job-002",
                 "queue_id: queue-002",
                 "status: failed",
@@ -171,12 +173,12 @@ def test_notify_job_terminal_includes_extra_lines(
 
 
 @pytest.mark.parametrize(
-    ("status", "headline"),
+    ("status", "headline", "severity", "embed_title"),
     [
-        ("completed", "Job finished"),
-        ("failed", "Job failed"),
-        ("cancelled", "Job cancelled"),
-        ("running", "Job finished"),
+        ("completed", "Job finished", "success", "✅ [xTB] Job finished"),
+        ("failed", "Job failed", "error", "❌ [xTB] Job failed"),
+        ("cancelled", "Job cancelled", "warning", "⚠️ [xTB] Job cancelled"),
+        ("running", "Job status unknown", "info", "[xTB] Job status unknown"),
     ],
 )
 def test_notify_job_finished_maps_headlines_and_optional_fields(
@@ -184,6 +186,8 @@ def test_notify_job_finished_maps_headlines_and_optional_fields(
     monkeypatch: pytest.MonkeyPatch,
     status: str,
     headline: str,
+    severity: str,
+    embed_title: str,
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
     transport = _FakeTransport(TelegramSendResult(sent=True))
@@ -210,7 +214,10 @@ def test_notify_job_finished_maps_headlines_and_optional_fields(
     )
 
     message = transport.messages[-1]
-    assert message.startswith(f"[orca_auto_xtb] {headline}\n")
+    assert message.startswith(f"orca_auto\n[xTB] {headline}\n")
+    document = transport.documents[-1]
+    assert document.severity == severity
+    assert render_discord_embed(document)["title"] == embed_title
     assert "job_id: job-003" in message
     assert f"status: {status}" in message
     assert "job_dir: job-003" in message
@@ -222,6 +229,35 @@ def test_notify_job_finished_maps_headlines_and_optional_fields(
     else:
         assert "resource_request: " not in message
         assert "resource_actual: " not in message
+
+
+def test_notify_job_terminal_uses_status_for_severity_not_headline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path, enabled=True)
+    transport = _FakeTransport(TelegramSendResult(sent=True))
+    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger: transport)
+
+    assert notifications.notify_xtb_job_terminal(
+        cfg,
+        headline="Job finished",
+        job_id="job-mismatch",
+        queue_id="queue-mismatch",
+        status="running",
+        reason="unexpected_non_terminal_status",
+        job_type="opt",
+        reaction_key="rxn-mismatch",
+        job_dir=tmp_path / "job-mismatch",
+        selected_xyz=tmp_path / "inputs" / "optimized.xyz",
+        candidate_count=0,
+    )
+
+    document = transport.documents[-1]
+    assert document.severity == "info"
+    embed = render_discord_embed(document)
+    assert embed["title"] == "[xTB] Job finished"
+    assert embed["color"] == 0x3498DB
 
 
 def test_workflow_child_notifications_are_suppressed(

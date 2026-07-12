@@ -6,8 +6,8 @@ renderers (:mod:`.render_telegram`, :mod:`.render_discord`) turn it into the
 native markup. This keeps HTML / Markdown out of the domain code so the active
 messenger can be swapped without touching any notifier.
 
-Span construction bakes the value-vs-literal distinction in at build time so the
-Telegram renderer can reproduce the pre-existing HTML byte-for-byte:
+Span construction bakes the value-vs-literal distinction in at build time so each
+renderer can preserve the intended text semantics:
 
 * :func:`text`, :func:`bold`, :func:`code` normalise their value with
   ``str(value).strip()`` — matching the old ``escape_html`` / ``html_code``.
@@ -54,10 +54,17 @@ def code(value: object) -> Span:
 
 @dataclass(frozen=True)
 class Field:
-    """A ``label: value`` row. Maps to an embed field on Discord."""
+    """A ``label: value`` row. Maps to an embed field on Discord.
+
+    ``inline`` is a Discord layout hint: inline fields sit side by side (up to
+    three per row) instead of each spanning the full width. The Telegram
+    renderer ignores it — every field is still one ``label: value`` line — so
+    setting it never changes the Telegram output.
+    """
 
     label: str
     value: tuple[Span, ...]
+    inline: bool = False
 
 
 @dataclass(frozen=True)
@@ -90,16 +97,22 @@ class Message:
     first line). Renderers own its native representation. Existing builders may
     still include the same bold title in a decorated first line; renderers
     detect that form and avoid duplicating it.
+
+    ``author`` is an optional sender identity shown above the title: the embed
+    author line on Discord, a leading plain line on Telegram (which has no author
+    slot). It lets a builder drop a redundant "orca_auto …" prefix from the title
+    and surface the identity as chrome instead.
     """
 
     title: str
     severity: Severity = "info"
     groups: tuple[Group, ...] = field(default_factory=tuple)
+    author: str | None = None
 
 
-def field_row(label: str, *value: Span) -> Field:
+def field_row(label: str, *value: Span, inline: bool = False) -> Field:
     """Convenience builder for a ``label: value`` field."""
-    return Field(label=label, value=tuple(value))
+    return Field(label=label, value=tuple(value), inline=inline)
 
 
 def line(*spans: Span) -> Line:

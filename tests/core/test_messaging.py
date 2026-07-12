@@ -19,6 +19,7 @@ from orca_auto.core.config import (
 from orca_auto.core.messaging import (
     DiscordBotChannel,
     Message,
+    Severity,
     TelegramChannel,
     bold,
     build_channel,
@@ -156,13 +157,14 @@ def test_render_discord_embed_dedups_title_and_maps_fields() -> None:
         ),
     )
     embed = render_discord_embed(message)
-    assert embed["title"] == "ORCA Started"
+    assert embed["title"] == "✅ ORCA Started"
     assert embed["color"] == 0x2ECC71
     assert embed["fields"] == [
         {"name": "Job", "value": "rxn", "inline": False},
         {"name": "Attempt", "value": r"\#3", "inline": False},
     ]
     assert "description" not in embed
+    assert "author" not in embed
 
 
 def test_render_discord_embed_routes_lines_and_headings_to_description() -> None:
@@ -181,10 +183,11 @@ def test_render_discord_embed_routes_lines_and_headings_to_description() -> None
 def test_engine_line_message_uses_native_discord_title_without_description_duplication() -> None:
     message = _lines_message(["Job queued", "job_id: one"])
 
-    assert render_telegram(message) == "Job queued\njob_id: one"
+    assert render_telegram(message) == "orca_auto\nJob queued\njob_id: one"
     assert render_discord_embed(message) == {
         "title": "Job queued",
         "color": 0x3498DB,
+        "author": {"name": "orca_auto"},
         "description": r"job\_id: one",
     }
 
@@ -200,10 +203,12 @@ def test_render_discord_embed_escapes_markdown_and_embedded_backticks() -> None:
         ),
     )
     embed = render_discord_embed(message)
-    assert embed["title"] == r"\*literal\*"
+    # The embed title is literal text on Discord (no Markdown), so it is not
+    # escaped; field values do parse Markdown and stay escaped.
+    assert embed["title"] == "*literal*"
     assert embed["fields"] == [
         {
-            "name": r"\[key\]",
+            "name": "[key]",
             "value": r"@everyone \*\*not bold\*\*`` a`b ``",
             "inline": False,
         }
@@ -230,6 +235,59 @@ def test_render_discord_embed_enforces_aggregate_budget_and_marks_omissions() ->
     assert len(embed["description"]) <= 4096
     assert len(embed["fields"]) <= 25
     assert embed["fields"][-1] == {"name": "More", "value": "…", "inline": False}
+
+
+def test_render_discord_embed_prefixes_title_emoji_by_severity() -> None:
+    def title_for(severity: Severity) -> str:
+        return render_discord_embed(Message(title="Job", severity=severity))["title"]
+
+    assert title_for("success") == "✅ Job"
+    assert title_for("warning") == "⚠️ Job"
+    assert title_for("error") == "❌ Job"
+    # info stays bare so routine, non-outcome events read quietly.
+    assert title_for("info") == "Job"
+
+
+def test_render_discord_embed_renders_author_when_present() -> None:
+    embed = render_discord_embed(Message(title="Stage completed", author="orca_auto"))
+    assert embed["author"] == {"name": "orca_auto"}
+
+
+def test_render_discord_embed_marks_inline_fields() -> None:
+    message = Message(
+        title="T",
+        groups=(
+            group(
+                field_row("Workflow", text("wf1"), inline=True),
+                field_row("Reason", text("boom")),
+            ),
+        ),
+    )
+    fields = render_discord_embed(message)["fields"]
+    assert fields[0] == {"name": "Workflow", "value": "wf1", "inline": True}
+    assert fields[1] == {"name": "Reason", "value": "boom", "inline": False}
+
+
+def test_engine_terminal_presentation_uses_structured_status_and_fails_closed() -> None:
+    from orca_auto.core.notifications._engine_rendering import (
+        terminal_headline,
+        terminal_severity,
+    )
+
+    assert terminal_headline("completed") == "Job finished"
+    assert terminal_headline("failed") == "Job failed"
+    assert terminal_headline("cancelled") == "Job cancelled"
+    assert terminal_severity("completed") == "success"
+    assert terminal_severity("failed") == "error"
+    assert terminal_severity("cancelled") == "warning"
+    for unknown_status in ("running", "unknown", "", "COMPLETED", " completed "):
+        assert terminal_headline(unknown_status) == "Job status unknown"
+        assert terminal_severity(unknown_status) == "info"
+
+    embed = render_discord_embed(_lines_message(["[xTB] Job failed", "status: failed"], "error"))
+    assert embed["color"] == 0xE74C3C
+    assert embed["title"] == "❌ [xTB] Job failed"
+    assert embed["author"] == {"name": "orca_auto"}
 
 
 # --------------------------------------------------------------------------- #

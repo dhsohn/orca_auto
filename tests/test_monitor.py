@@ -94,7 +94,8 @@ class TestMonitorFailureGroups:
 class TestBuildMessage:
     def test_contains_header_scope_and_divider(self) -> None:
         message = _render_monitor(ScanReport(new_results=[], scanned_files=0))
-        assert "orca_auto scan-notify" in message
+        assert "orca_auto" in message
+        assert "scan-notify" in message
         assert "\u2500" in message
         assert "Filesystem discovery only" in message
         assert "run-dir alerts" in message

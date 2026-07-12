@@ -4,7 +4,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.messaging import Severity
+
 from ._engine_rendering import EngineEventField, event_lines
+
+EngineLineSender = Callable[[Any, list[str], Severity], bool]
 
 
 def is_workflow_child(job_dir: Path, *, engine: str) -> bool:
@@ -19,8 +23,9 @@ def send_job_event(
     engine: str,
     job_dir: Path,
     headline: str,
+    severity: Severity,
     fields: list[EngineEventField],
-    send_fn: Callable[[Any, list[str]], bool],
+    send_fn: EngineLineSender,
     extra_lines: list[str] | None = None,
 ) -> bool:
     if is_workflow_child(job_dir, engine=engine):
@@ -33,4 +38,5 @@ def send_job_event(
             fields=fields,
             extra_lines=extra_lines,
         ),
+        severity,
     )

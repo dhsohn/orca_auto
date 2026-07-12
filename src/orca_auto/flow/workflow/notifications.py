@@ -269,9 +269,9 @@ def _overview_fields(
     workflow_id = _normalize_text(payload.get("workflow_id")) or "-"
     template_name = _normalize_text(payload.get("template_name")) or "-"
     fields = [
-        field_row("Workflow", code(workflow_id)),
-        field_row("Template", code(template_name)),
-        field_row("Outcome", code(_phase_outcome(counts))),
+        field_row("Workflow", code(workflow_id), inline=True),
+        field_row("Template", code(template_name), inline=True),
+        field_row("Outcome", code(_phase_outcome(counts)), inline=True),
         field_row(
             "Stages",
             code(len(stages)),
@@ -290,7 +290,7 @@ def _overview_fields(
             if _normalize_text(_stage_metadata(stage).get("reaction_handoff_status")).lower()
             == "ready"
         )
-        fields.append(field_row("Ready for ORCA", code(ready_count)))
+        fields.append(field_row("Ready for ORCA", code(ready_count), inline=True))
     return fields
 
 
@@ -303,7 +303,7 @@ def _build_phase_summary_message(
     stage_buckets: dict[int, str],
     extra_lines: list[str] | None,
 ) -> Message:
-    title = f"orca_auto Flow {_phase_label(phase_engine)} Phase Summary"
+    title = f"{_phase_label(phase_engine)} phase summary"
     overview = group(
         *_overview_fields(payload=payload, phase_engine=phase_engine, stages=stages, counts=counts),
         heading=title_heading(title),
@@ -324,7 +324,9 @@ def _build_phase_summary_message(
         heading = (bold("Stage details"),) if index == 0 else ()
         groups.append(group(*_stage_row_lines(row), heading=heading))
 
-    return Message(title=title, severity=_summary_severity(counts), groups=tuple(groups))
+    return Message(
+        title=title, severity=_summary_severity(counts), groups=tuple(groups), author="orca_auto"
+    )
 
 
 def _summary_severity(counts: dict[str, int]) -> Any:

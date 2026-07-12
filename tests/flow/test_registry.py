@@ -81,10 +81,10 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "worker_session_id": "session-1",
             },
             [
-                "<b>orca_auto Flow Status Changed</b>",
+                "<b>Status changed</b>",
                 "<b>Workflow</b>: <code>wf_1</code>",
                 "<b>Template</b>: <code>reaction_ts_search</code>",
-                "<b>Status</b>: <code>planned</code> -&gt; <code>running</code>",
+                "<b>Status</b>: <code>planned</code> → <code>running</code>",
             ],
         ),
         (
@@ -96,7 +96,7 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "worker_session_id": "session-2",
             },
             [
-                "<b>orca_auto Flow Advance Failed</b>",
+                "<b>Advance failed</b>",
                 "<b>Workflow</b>: <code>wf_2</code>",
                 "<b>Reason</b>: <code>boom</code>",
                 "<b>Worker session</b>: <code>session-2</code>",
@@ -117,12 +117,11 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "worker_session_id": "session-stage",
             },
             [
-                "<b>orca_auto Flow Stage Submitted</b>",
+                "<b>Stage submitted</b>",
                 "<b>Workflow</b>: <code>wf_stage</code>",
-                "<b>Event</b>: <code>workflow_stage_submitted</code>",
                 "<b>Stage</b>: <code>xtb_path_search_01</code>",
                 "<b>Task</b>: <code>xtb/path_search</code>",
-                "<b>Stage status</b>: <code>planned</code> -&gt; <code>queued</code>",
+                "<b>Stage status</b>: <code>planned</code> → <code>queued</code>",
             ],
         ),
         (
@@ -140,13 +139,12 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "worker_session_id": "session-handoff",
             },
             [
-                "<b>orca_auto Flow Handoff Ready</b>",
+                "<b>Handoff ready</b>",
                 "<b>Workflow</b>: <code>wf_stage</code>",
-                "<b>Event</b>: <code>workflow_stage_handoff_ready</code>",
                 "<b>Stage</b>: <code>xtb_path_search_01</code>",
                 "<b>Task</b>: <code>xtb/path_search</code>",
                 "<b>Stage status</b>: <code>completed</code>",
-                "<b>Reaction handoff</b>: <code>queued</code> -&gt; <code>ready</code>",
+                "<b>Reaction handoff</b>: <code>queued</code> → <code>ready</code>",
                 "<b>Reason</b>: <code>xtb_ts_guess_ready</code>",
             ],
         ),
@@ -157,8 +155,7 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "worker_session_id": "session-1",
             },
             [
-                "<b>orca_auto Flow Worker Started</b>",
-                "<b>Event</b>: <code>worker_started</code>",
+                "<b>Worker started</b>",
                 "<b>Workflow root</b>: <code>/tmp/root_3</code>",
                 "<b>Reason</b>: <code>started</code>",
             ],
@@ -189,9 +186,8 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 },
             },
             [
-                "<b>orca_auto Flow Phase Finished</b>",
+                "<b>Phase finished</b>",
                 "<b>Workflow</b>: <code>wf_phase</code>",
-                "<b>Event</b>: <code>workflow_phase_finished</code>",
                 "<b>Phase</b>: <code>xTB</code>",
                 "<b>Phase outcome</b>: <code>mixed</code>",
                 "<b>Stage status counts</b>: <code>completed:2</code>",
@@ -210,7 +206,7 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "worker_session_id": "session-1",
             },
             [
-                "<b>orca_auto Flow Event</b>",
+                "<b>Workflow event</b>",
                 "<b>Event</b>: <code>custom_event</code>",
                 "<b>Workflow</b>: <code>wf_4</code>",
                 "<b>Status</b>: <code>queued</code>",
@@ -224,7 +220,7 @@ def test_journal_event_message_formats_supported_event_types(
 ) -> None:
     message = render_telegram(registry_notifications.journal_event_message(event, "/tmp/root_3"))
 
-    assert message.startswith("<b>orca_auto Flow")
+    assert message.startswith("orca_auto\n" + expected_lines[0])
     for line in expected_lines:
         assert line in message
 

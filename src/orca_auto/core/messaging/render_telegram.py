@@ -1,9 +1,8 @@
 """Render a :class:`~orca_auto.core.messaging.richtext.Message` to Telegram HTML.
 
-The output is intentionally byte-identical to the hand-written HTML the notifiers
-produced before the Doc model was introduced: value spans were normalised with
-``str(value).strip()`` at build time, so here we only HTML-escape (no stripping)
-and wrap with ``<b>`` / ``<code>`` exactly as ``escape_html`` / ``html_code`` did.
+Value spans are normalised when the document is built, so this renderer only
+HTML-escapes their text and applies the supported ``<b>`` / ``<code>`` styles.
+Message-level presentation such as the optional author line is owned here.
 """
 
 from __future__ import annotations
@@ -60,6 +59,14 @@ def _message_spans(message: Message) -> tuple[Span, ...]:
     """
 
     tokens: list[Span] = []
+    if message.author and message.author.strip():
+        # Discord shows the identity as the embed author line; Telegram has no
+        # such slot, so surface it as a leading plain line above the bold title.
+        # Strip to match the Discord renderer (a blank author is omitted, not a
+        # blank line).
+        tokens.append(Span(message.author.strip(), "plain"))
+        if message.title or message.groups:
+            tokens.append(Span("\n", "plain"))
     if message.title and not _has_inline_title(message):
         tokens.append(Span(message.title, "bold"))
         if message.groups:

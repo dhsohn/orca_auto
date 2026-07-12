@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 from typing import Any
 
+from ._engine_delivery import EngineLineSender
 from ._engine_rendering import EngineEventField
 from .engine_delivery import EngineNotificationDelivery
 from .engine_notifier import EngineNotifier, build_engine_notifier
@@ -102,7 +103,7 @@ def build_engine_notification_module(
     selected_field_name: str,
     detail_field_names: tuple[str, ...],
     terminal_count_field: str,
-    send_fn: Callable[[Any, list[str]], bool],
+    send_fn: EngineLineSender,
 ) -> EngineNotificationModule:
     return EngineNotificationModule(
         notifier=build_engine_notifier(label=label, engine=engine, send_fn=send_fn),
@@ -230,7 +231,7 @@ def build_engine_job_notifications(
     selected_field_name: str,
     detail_field_names: tuple[str, ...],
     terminal_count_field: str,
-    send_fn: Callable[[Any, list[str]], bool],
+    send_fn: EngineLineSender,
     terminal_count_param_name: str | None = None,
 ) -> EngineJobNotifications:
     return EngineJobNotifications(

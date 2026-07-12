@@ -2,15 +2,26 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from orca_auto.core.messaging.richtext import Severity
+
 EngineEventField = tuple[str, object]
+
+_TERMINAL_PRESENTATION: dict[str, tuple[str, Severity]] = {
+    "completed": ("Job finished", "success"),
+    "failed": ("Job failed", "error"),
+    "cancelled": ("Job cancelled", "warning"),
+}
 
 
 def terminal_headline(status: str) -> str:
-    return {
-        "completed": "Job finished",
-        "failed": "Job failed",
-        "cancelled": "Job cancelled",
-    }.get(status, "Job finished")
+    presentation = _TERMINAL_PRESENTATION.get(status)
+    return presentation[0] if presentation is not None else "Job status unknown"
+
+
+def terminal_severity(status: str) -> Severity:
+    """Map a structured terminal status to presentation severity, failing closed."""
+    presentation = _TERMINAL_PRESENTATION.get(status)
+    return presentation[1] if presentation is not None else "info"
 
 
 def optional_terminal_lines(

@@ -10,6 +10,7 @@ from ._engine_rendering import (
     job_event_fields,
     optional_terminal_lines,
     terminal_headline,
+    terminal_severity,
 )
 from .engine_notifier import EngineNotifier
 from .engine_requests import (
@@ -101,6 +102,7 @@ def send_lifecycle_event(
         cfg,
         job_dir=job_dir,
         headline=headline,
+        severity="info",
         fields=job_event_fields(
             job_id=job_id,
             queue_id=queue_id,
@@ -132,6 +134,7 @@ def send_terminal_event(
         cfg,
         job_dir=job_dir,
         headline=headline,
+        severity=terminal_severity(status),
         fields=job_event_fields(
             job_id=job_id,
             queue_id=queue_id,
