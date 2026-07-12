@@ -6,36 +6,22 @@ from orca_auto.core.messaging.richtext import Severity
 
 EngineEventField = tuple[str, object]
 
-
-def terminal_headline(status: str) -> str:
-    return {
-        "completed": "Job finished",
-        "failed": "Job failed",
-        "cancelled": "Job cancelled",
-    }.get(status, "Job finished")
-
-
-# Kept next to ``terminal_headline`` so the headline vocabulary has one home.
-_HEADLINE_SEVERITY: dict[str, Severity] = {
-    "Job finished": "success",
-    "Job failed": "error",
-    "Job cancelled": "warning",
+_TERMINAL_PRESENTATION: dict[str, tuple[str, Severity]] = {
+    "completed": ("Job finished", "success"),
+    "failed": ("Job failed", "error"),
+    "cancelled": ("Job cancelled", "warning"),
 }
 
 
-def severity_for_event_line(first_line: str) -> Severity:
-    """Best-effort embed severity for a rendered engine event.
+def terminal_headline(status: str) -> str:
+    presentation = _TERMINAL_PRESENTATION.get(status)
+    return presentation[0] if presentation is not None else "Job status unknown"
 
-    ``event_lines`` formats the first line as ``[label] <headline>``; match the
-    known terminal headlines by suffix so the ``[label]`` prefix does not defeat
-    the lookup. Anything else — lifecycle headlines, unknown text — falls back
-    to ``info``, the pre-existing behaviour, so this only ever adds colour and
-    never misreports a state it cannot confirm.
-    """
-    for headline, severity in _HEADLINE_SEVERITY.items():
-        if first_line == headline or first_line.endswith(f"] {headline}"):
-            return severity
-    return "info"
+
+def terminal_severity(status: str) -> Severity:
+    """Map a structured terminal status to presentation severity, failing closed."""
+    presentation = _TERMINAL_PRESENTATION.get(status)
+    return presentation[1] if presentation is not None else "info"
 
 
 def optional_terminal_lines(

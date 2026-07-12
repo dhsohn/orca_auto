@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 from orca_auto.core.messaging import (
@@ -12,7 +11,7 @@ from orca_auto.core.messaging import (
     raw,
 )
 
-from ._engine_rendering import severity_for_event_line
+from ._engine_delivery import EngineLineSender
 
 
 def _lines_message(lines: list[str], severity: Severity = "info") -> Message:
@@ -38,18 +37,18 @@ def _lines_message(lines: list[str], severity: Severity = "info") -> Message:
     )
 
 
-def send_lines(cfg: Any, lines: list[str]) -> bool:
+def send_lines(cfg: Any, lines: list[str], severity: Severity = "info") -> bool:
     if not lines:
         return False
     # ``build_channel`` is referenced as a module global (not a default arg) so
     # tests can monkeypatch it.
     channel = build_channel(cfg.messenger)
-    result = channel.send(_lines_message(lines, severity_for_event_line(lines[0])))
+    result = channel.send(_lines_message(lines, severity))
     return bool(result.sent or result.skipped)
 
 
-def channel_line_sender() -> Callable[[Any, list[str]], bool]:
-    def send(cfg: Any, lines: list[str]) -> bool:
-        return send_lines(cfg, lines)
+def channel_line_sender() -> EngineLineSender:
+    def send(cfg: Any, lines: list[str], severity: Severity) -> bool:
+        return send_lines(cfg, lines, severity)
 
     return send

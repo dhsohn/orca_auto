@@ -6,8 +6,8 @@ renderers (:mod:`.render_telegram`, :mod:`.render_discord`) turn it into the
 native markup. This keeps HTML / Markdown out of the domain code so the active
 messenger can be swapped without touching any notifier.
 
-Span construction bakes the value-vs-literal distinction in at build time so the
-Telegram renderer can reproduce the pre-existing HTML byte-for-byte:
+Span construction bakes the value-vs-literal distinction in at build time so each
+renderer can preserve the intended text semantics:
 
 * :func:`text`, :func:`bold`, :func:`code` normalise their value with
   ``str(value).strip()`` — matching the old ``escape_html`` / ``html_code``.

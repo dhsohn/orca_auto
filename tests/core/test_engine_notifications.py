@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.messaging import Severity
 from orca_auto.core.notifications import engines as engine_facade
 from orca_auto.core.notifications.engine_jobs import (
     build_engine_job_notifications,
@@ -10,7 +11,7 @@ from orca_auto.core.notifications.engine_jobs import (
 )
 
 
-def _send_ok(_cfg: Any, _lines: list[str]) -> bool:
+def _send_ok(_cfg: Any, _lines: list[str], _severity: Severity) -> bool:
     return True
 
 

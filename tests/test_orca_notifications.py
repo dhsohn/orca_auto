@@ -1,9 +1,7 @@
 """ORCA lifecycle notification tests.
 
-The Telegram renders are asserted byte-for-byte against the HTML the previous
-``telegram_notifier`` module produced, proving the Doc-model migration is
-behaviour-preserving for the Telegram path. ``notify_*`` delivery is exercised
-through a fake :class:`MessageChannel`.
+The Telegram renders are asserted exactly against the current golden HTML.
+``notify_*`` delivery is exercised through a fake :class:`MessageChannel`.
 """
 
 from __future__ import annotations
@@ -123,7 +121,7 @@ def _sample_report() -> ScanReport:
 
 
 # --------------------------------------------------------------------------- #
-# Golden Telegram renders (byte-identical to the pre-migration output)
+# Current golden Telegram renders
 # --------------------------------------------------------------------------- #
 _GOLDEN_STARTED = (
     "orca_auto\n"
@@ -187,7 +185,7 @@ _GOLDEN_MONITOR = (
 )
 
 
-def test_run_started_render_is_byte_identical() -> None:
+def test_run_started_render_matches_golden() -> None:
     assert render_telegram(run_started_message(_started_event())) == _GOLDEN_STARTED
 
 
@@ -200,11 +198,11 @@ def test_run_started_resumed_render() -> None:
     assert "<b>Mode</b>: resumed run" in rendered
 
 
-def test_retry_render_is_byte_identical() -> None:
+def test_retry_render_matches_golden() -> None:
     assert render_telegram(retry_message(_retry_event())) == _GOLDEN_RETRY
 
 
-def test_run_finished_render_is_byte_identical() -> None:
+def test_run_finished_render_matches_golden() -> None:
     assert render_telegram(run_finished_message(_finished_event())) == _GOLDEN_FINISHED
 
 
@@ -217,11 +215,11 @@ def test_run_finished_cancelled_title_and_severity() -> None:
     assert message.severity == "warning"
 
 
-def test_queue_enqueued_render_is_byte_identical() -> None:
+def test_queue_enqueued_render_matches_golden() -> None:
     assert render_telegram(queue_enqueued_message(_queued_event())) == _GOLDEN_QUEUED
 
 
-def test_monitor_render_is_byte_identical() -> None:
+def test_monitor_render_matches_golden() -> None:
     report = _sample_report()
     rendered = render_telegram(
         monitor_message(report, now=datetime(2026, 3, 10, 12, 0, tzinfo=UTC))

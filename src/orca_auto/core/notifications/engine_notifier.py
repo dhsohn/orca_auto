@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ._engine_delivery import send_job_event
+from orca_auto.core.messaging import Severity
+
+from ._engine_delivery import EngineLineSender, send_job_event
 
 
 @dataclass(frozen=True)
 class EngineNotifier:
     label: str
     engine: str
-    send_fn: Callable[[Any, list[str]], bool]
+    send_fn: EngineLineSender
 
     def send_job_event(
         self,
@@ -20,6 +21,7 @@ class EngineNotifier:
         *,
         job_dir: Path,
         headline: str,
+        severity: Severity,
         fields: list[tuple[str, object]],
         extra_lines: list[str] | None = None,
     ) -> bool:
@@ -29,6 +31,7 @@ class EngineNotifier:
             engine=self.engine,
             job_dir=job_dir,
             headline=headline,
+            severity=severity,
             fields=fields,
             send_fn=self.send_fn,
             extra_lines=extra_lines,
@@ -39,7 +42,7 @@ def build_engine_notifier(
     *,
     label: str,
     engine: str,
-    send_fn: Callable[[Any, list[str]], bool],
+    send_fn: EngineLineSender,
 ) -> EngineNotifier:
     return EngineNotifier(label=label, engine=engine, send_fn=send_fn)
 

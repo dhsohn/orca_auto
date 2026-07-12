@@ -7,7 +7,7 @@ import pytest
 
 from orca_auto.core.config import CommonRuntimeConfig, TelegramConfig
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
-from orca_auto.core.messaging import SendResult, render_telegram
+from orca_auto.core.messaging import Message, SendResult, render_discord_embed, render_telegram
 from orca_auto.core.notifications import _engine_transport
 from orca_auto.core.notifications import engines as notifications
 
@@ -26,16 +26,18 @@ def _patch_transport(
     *,
     sent: bool,
     skipped: bool = False,
-) -> tuple[list[Any], list[str]]:
+) -> tuple[list[Any], list[str], list[Message]]:
     build_calls: list[Any] = []
     messages: list[str] = []
+    documents: list[Message] = []
 
     class FakeChannel:
         @property
         def enabled(self) -> bool:
             return True
 
-        def send(self, message: Any, *, silent: bool = False) -> SendResult:
+        def send(self, message: Message, *, silent: bool = False) -> SendResult:
+            documents.append(message)
             messages.append(render_telegram(message))
             return SendResult(sent=sent, skipped=skipped)
 
@@ -44,7 +46,7 @@ def _patch_transport(
         return FakeChannel()
 
     monkeypatch.setattr(_engine_transport, "build_channel", fake_build)
-    return build_calls, messages
+    return build_calls, messages, documents
 
 
 @pytest.mark.parametrize(
@@ -63,7 +65,7 @@ def test_send_joins_lines_and_maps_transport_result(
     expected: bool,
 ) -> None:
     cfg = _cfg(tmp_path)
-    build_calls, messages = _patch_transport(monkeypatch, sent=sent, skipped=skipped)
+    build_calls, messages, _ = _patch_transport(monkeypatch, sent=sent, skipped=skipped)
 
     result = notifications.send_lines(cfg, ["first line", "second line"])
 
@@ -77,7 +79,7 @@ def test_notify_job_queued_sends_expected_message(
     tmp_path: Path,
 ) -> None:
     cfg = _cfg(tmp_path)
-    _, messages = _patch_transport(monkeypatch, sent=True)
+    _, messages, _ = _patch_transport(monkeypatch, sent=True)
     job_dir = tmp_path / "runs" / "job-001"
     selected_xyz = job_dir / "picked.xyz"
 
@@ -110,7 +112,7 @@ def test_notify_job_started_sends_expected_message(
     tmp_path: Path,
 ) -> None:
     cfg = _cfg(tmp_path)
-    _, messages = _patch_transport(monkeypatch, sent=True)
+    _, messages, _ = _patch_transport(monkeypatch, sent=True)
     job_dir = tmp_path / "runs" / "job-002"
     selected_xyz = job_dir / "selected_input.xyz"
 
@@ -139,11 +141,12 @@ def test_notify_job_started_sends_expected_message(
 
 
 @pytest.mark.parametrize(
-    ("status", "headline"),
+    ("status", "headline", "severity", "embed_title"),
     [
-        ("completed", "Job finished"),
-        ("failed", "Job failed"),
-        ("cancelled", "Job cancelled"),
+        ("completed", "Job finished", "success", "✅ [CREST] Job finished"),
+        ("failed", "Job failed", "error", "❌ [CREST] Job failed"),
+        ("cancelled", "Job cancelled", "warning", "⚠️ [CREST] Job cancelled"),
+        ("running", "Job status unknown", "info", "[CREST] Job status unknown"),
     ],
 )
 def test_notify_job_finished_maps_terminal_headlines(
@@ -151,9 +154,11 @@ def test_notify_job_finished_maps_terminal_headlines(
     tmp_path: Path,
     status: str,
     headline: str,
+    severity: str,
+    embed_title: str,
 ) -> None:
     cfg = _cfg(tmp_path)
-    _, messages = _patch_transport(monkeypatch, sent=True)
+    _, messages, documents = _patch_transport(monkeypatch, sent=True)
     job_dir = tmp_path / "runs" / f"job-{status}"
     selected_xyz = job_dir / "input.xyz"
 
@@ -170,6 +175,9 @@ def test_notify_job_finished_maps_terminal_headlines(
     )
 
     assert result is True
+    document = documents[-1]
+    assert document.severity == severity
+    assert render_discord_embed(document)["title"] == embed_title
     assert messages == [
         "\n".join(
             [
@@ -192,7 +200,7 @@ def test_notify_job_finished_includes_optional_extra_lines(
     tmp_path: Path,
 ) -> None:
     cfg = _cfg(tmp_path)
-    _, messages = _patch_transport(monkeypatch, sent=True)
+    _, messages, _ = _patch_transport(monkeypatch, sent=True)
     job_dir = tmp_path / "runs" / "job-complete"
     selected_xyz = job_dir / "input.xyz"
     resource_request = {"max_cores": 6, "max_memory_gb": 14}
@@ -237,7 +245,7 @@ def test_workflow_child_notifications_are_suppressed(
     tmp_path: Path,
 ) -> None:
     cfg = _cfg(tmp_path)
-    _, messages = _patch_transport(monkeypatch, sent=True)
+    _, messages, _ = _patch_transport(monkeypatch, sent=True)
     workflow_job_dirs = [
         tmp_path / "wf-1" / "01_crest" / "job-queued",
         tmp_path / "wf-1" / "01_crest" / "crest_reactant_01",

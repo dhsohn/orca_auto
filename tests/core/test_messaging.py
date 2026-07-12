@@ -268,13 +268,21 @@ def test_render_discord_embed_marks_inline_fields() -> None:
     assert fields[1] == {"name": "Reason", "value": "boom", "inline": False}
 
 
-def test_engine_line_message_maps_terminal_headline_to_severity() -> None:
-    from orca_auto.core.notifications._engine_rendering import severity_for_event_line
+def test_engine_terminal_presentation_uses_structured_status_and_fails_closed() -> None:
+    from orca_auto.core.notifications._engine_rendering import (
+        terminal_headline,
+        terminal_severity,
+    )
 
-    assert severity_for_event_line("[xTB] Job failed") == "error"
-    assert severity_for_event_line("[xTB] Job cancelled") == "warning"
-    assert severity_for_event_line("[xTB] Job finished") == "success"
-    assert severity_for_event_line("[xTB] Job queued") == "info"
+    assert terminal_headline("completed") == "Job finished"
+    assert terminal_headline("failed") == "Job failed"
+    assert terminal_headline("cancelled") == "Job cancelled"
+    assert terminal_severity("completed") == "success"
+    assert terminal_severity("failed") == "error"
+    assert terminal_severity("cancelled") == "warning"
+    for unknown_status in ("running", "unknown", "", "COMPLETED", " completed "):
+        assert terminal_headline(unknown_status) == "Job status unknown"
+        assert terminal_severity(unknown_status) == "info"
 
     embed = render_discord_embed(_lines_message(["[xTB] Job failed", "status: failed"], "error"))
     assert embed["color"] == 0xE74C3C

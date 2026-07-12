@@ -48,26 +48,6 @@ def _escape_markdown(value: str) -> str:
     return _MARKDOWN_SPECIAL.sub(r"\\\1", value)
 
 
-def _escaped_text(value: str, limit: int) -> str:
-    escaped = _escape_markdown(value)
-    if len(escaped) <= limit:
-        return escaped
-    if limit <= 1:
-        return "…"[:limit]
-
-    # Escaping expands some source characters. Search on source text so the
-    # result never ends with a dangling Markdown escape character.
-    budget = limit - 1
-    low, high = 0, len(value)
-    while low < high:
-        middle = (low + high + 1) // 2
-        if len(_escape_markdown(value[:middle])) <= budget:
-            low = middle
-        else:
-            high = middle - 1
-    return _escape_markdown(value[:low]) + "…"
-
-
 def _truncate(value: str, limit: int) -> str:
     """Length-bound plain text without Markdown escaping.
 
