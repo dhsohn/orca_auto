@@ -323,6 +323,13 @@ ORCA 고유 노트:
   파일명이어야 합니다.
 - CREST 토폴로지 재정의는 `flow.yaml`의 `crest:` 아래에 둘 수 있으며, `gfn: ff`,
   `no_preopt: true`, `noreftopo: true`, `notopo: true`, `nocbonds: true`를 포함합니다.
+- CREST conformer 탐색 노브도 `crest:` 아래에 둘 수 있습니다(CREST 3.0.2 기준 검증):
+  `mdlen`/`len`(MD 길이 ps, 실수), `wscal`(벽 퍼텐셜 스케일, 실수), `tstep`(MD 스텝 fs,
+  정수), `mddump`(궤적 dump fs, 정수), `shake`(`0`/`1`/`2`), `norotmd`(불리언),
+  `cross`/`nocross`(상호배제 불리언). 값은 검증되며 잘못된 값은 CREST에 전달되지 않고
+  작업을 fail-closed로 실패시키고, 알 수 없는 `crest:` 키는 무시됩니다. CREST 버전에
+  따라 플래그 지원이 달라질 수 있어 안정 계약 목록으로 승격하지 않고 여기에만
+  문서화합니다.
 - `scaffold ts_search`와 `scaffold conformer_search`는 기본적으로 `crest_mode: standard`로
   `flow.yaml`을 작성합니다. 필요할 때 `nci`로 변경하세요.
 

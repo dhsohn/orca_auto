@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import resource
 import subprocess
@@ -144,6 +145,93 @@ def _append_crest_scalar_options(command: list[str], manifest: dict[str, Any]) -
             command.extend([option, value])
 
 
+# CREST 3.0.2 (`crest --help conf`) conformational-search knobs, exposed as
+# additive `crest:` manifest keys. Unlike the older lenient scalar options above,
+# these are validated strictly and fail the job closed on a bad value rather than
+# forwarding an arbitrary token to CREST. Flag spellings are verified against the
+# pinned CREST version; CREST accepts the `--` prefix used across this runner.
+
+
+def _crest_positive_real(manifest: dict[str, Any], key: str) -> str | None:
+    """A strictly-positive real → normalized CREST arg (no exponent), or None if absent."""
+    raw = manifest.get(key)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    if isinstance(raw, bool):
+        raise ValueError(f"CREST option {key!r} must be a positive number, not a boolean")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"CREST option {key!r} must be a positive number, got {raw!r}") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"CREST option {key!r} must be a positive number, got {raw!r}")
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _crest_int(manifest: dict[str, Any], key: str) -> int | None:
+    """A whole-number value → int, or None if absent; rejects bools and fractional values."""
+    raw = manifest.get(key)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    if isinstance(raw, bool):
+        raise ValueError(f"CREST option {key!r} must be a whole number, not a boolean")
+    if isinstance(raw, int):
+        return raw
+    try:
+        as_float = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"CREST option {key!r} must be a whole number, got {raw!r}") from exc
+    if not as_float.is_integer():
+        raise ValueError(f"CREST option {key!r} must be a whole number, got {raw!r}")
+    return int(as_float)
+
+
+def _resolve_mdlen(manifest: dict[str, Any]) -> str | None:
+    """``mdlen`` with its documented ``len`` alias; both present must agree."""
+    mdlen = _crest_positive_real(manifest, "mdlen")
+    length = _crest_positive_real(manifest, "len")
+    if mdlen is not None and length is not None and mdlen != length:
+        raise ValueError("CREST options 'mdlen' and 'len' are aliases and must match")
+    return mdlen if mdlen is not None else length
+
+
+def _append_crest_sampling_options(command: list[str], manifest: dict[str, Any]) -> None:
+    mdlen = _resolve_mdlen(manifest)
+    if mdlen is not None:
+        command.extend(["--mdlen", mdlen])
+
+    wscal = _crest_positive_real(manifest, "wscal")
+    if wscal is not None:
+        command.extend(["--wscal", wscal])
+
+    for manifest_key, option in (("tstep", "--tstep"), ("mddump", "--mddump")):
+        value = _crest_int(manifest, manifest_key)
+        if value is not None:
+            if value <= 0:
+                raise ValueError(f"CREST option {manifest_key!r} must be a positive integer")
+            command.extend([option, str(value)])
+
+    shake = _crest_int(manifest, "shake")
+    if shake is not None:
+        if shake not in (0, 1, 2):
+            raise ValueError(f"CREST option 'shake' must be 0, 1, or 2, got {shake}")
+        command.extend(["--shake", str(shake)])
+
+    if _engine_runner.bool_flag(manifest, "norotmd"):
+        command.append("--norotmd")
+
+    cross = _engine_runner.bool_flag(manifest, "cross")
+    nocross = _engine_runner.bool_flag(manifest, "nocross") or _engine_runner.bool_flag(
+        manifest, "no_cross"
+    )
+    if cross and nocross:
+        raise ValueError("CREST options 'cross' and 'nocross' are mutually exclusive")
+    if cross:
+        command.append("--cross")
+    if nocross:
+        command.append("--nocross")
+
+
 def _build_command(
     cfg: AppConfig,
     *,
@@ -171,6 +259,7 @@ def _build_command(
     _append_crest_int_options(command, manifest)
     _engine_runner.append_solvent_option(command, manifest)
     _append_crest_scalar_options(command, manifest)
+    _append_crest_sampling_options(command, manifest)
     if _engine_runner.bool_flag(manifest, "esort"):
         command.append("--esort")
 

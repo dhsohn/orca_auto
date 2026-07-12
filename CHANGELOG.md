@@ -20,6 +20,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   missing or inconsistent. `si_data.csv` appends `cluster_key`, `rel_E_kcalmol`,
   `rel_G_kcalmol`, `boltzmann_T_K`, and `boltzmann_population` after its existing
   columns.
+- CREST conformational-search knobs can be set under the existing `crest:`
+  manifest block: `mdlen`/`len`, `wscal`, `tstep`, `mddump`, `shake`, `norotmd`,
+  and `cross`/`nocross` (verified against CREST 3.0.2). Values are validated and a
+  malformed value fails the job closed instead of reaching CREST; unknown `crest:`
+  keys are ignored and `crest_mode` is unchanged.
 - Discord bot can accept a compressed run-dir (`.zip`/`.tar.gz`) attached to the
   `!run` command and submit it after an explicit confirmation. Disabled by
   default and gated to allowlisted operators, the ingress reserves bounded

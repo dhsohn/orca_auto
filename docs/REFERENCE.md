@@ -320,6 +320,7 @@ Workflow notes:
   `xcontrol_file` names the source file to copy, while `xcontrol` must be a
   plain file name materialized inside the xTB job directory.
 - CREST topology overrides can be placed under `crest:` in `flow.yaml`, including `gfn: ff`, `no_preopt: true`, `noreftopo: true`, `notopo: true`, and `nocbonds: true`
+- CREST conformational-search knobs are also accepted under `crest:`, verified against CREST 3.0.2: `mdlen`/`len` (MD length in ps, real), `wscal` (wall-potential scaling, real), `tstep` (MD step in fs, integer), `mddump` (trajectory dump in fs, integer), `shake` (`0`/`1`/`2`), `norotmd` (boolean), and `cross`/`nocross` (mutually exclusive booleans). Values are validated and a malformed value fails the job closed rather than reaching CREST; unknown `crest:` keys are ignored. Exact flag support can vary across CREST versions, so these are documented here rather than promoted to the stable contract list.
 - `scaffold ts_search` and `scaffold conformer_search` write `flow.yaml` with `crest_mode: standard` by default; change it to `nci` when needed
 
 There is no public direct-execution mode for new work. `run-dir` is the durable submission path.
