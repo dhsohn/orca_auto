@@ -329,6 +329,31 @@ Workflow notes:
   corresponding fraction in `[0, 1]`. CSV `rel_E_kcalmol` and
   `rel_G_kcalmol` use the lowest E and G inside that row's population group as
   their local baselines under the shared convention.
+- `conformer_screening` accepts an optional `rmsd_dedup:` block that collapses
+  DFT-degenerate optimized minima to one representative. Two minima merge only
+  when their heavy-atom element sequences match, their optimal-rotation
+  (proper-rotation-only, so enantiomers are never merged) RMSD is below
+  `rmsd_threshold_angstrom` (default 0.25), AND their energies differ by less
+  than `energy_window_kcal` (default 0.1) — both conditions are required, so a
+  coincidental low RMSD never drops a genuinely distinct minimum. Grouping keeps
+  the lowest-energy member; `heavy_atoms_only` (default true) ignores hydrogen
+  positions. Only when enabled, `si_data.csv` appends `rmsd_group`, `degeneracy`,
+  and `merged_stage_ids` after the existing columns (when disabled the file is
+  unchanged), and the relative-energy table notes how many minima were merged.
+- `conformer_screening` accepts an optional `interaction_energy:` block that
+  reports ΔE_int = E(complex) − Σ E(fragment_i). `fragments` is a list of
+  `{atom_indices (0-based), charge, multiplicity, label}` that MUST partition
+  every atom of the complex (disjoint and exhaustive); a gap or overlap omits
+  ΔE_int for that complex. The complex and each fragment run a fresh single point
+  at `sp_route_line` (default `! r2scan-3c TightSCF`) on the complex-optimized
+  geometry, so all energies share one level of theory and geometry. Fan-out
+  targets only the RMSD-dedup representatives and is capped by `max_fragments`
+  (≤ 8). Results are written to `interaction_energy.csv` (one row per
+  complex/fragment) and an optional `## Interaction energies` SI section. A
+  missing or non-finite complex/fragment energy makes that ΔE_int a fail-closed
+  omission (never a partial sum). `sp_route_line` is validated for remote uploads
+  exactly like other route-line keys. Ghost-atom counterpoise (BSSE) is not part
+  of this feature.
 - Set `runs_root` in `orca_auto.yaml` (or `workflow_root`/`workflow.root` in
   `flow.yaml`) before submitting workflow directories.
 - Public workflow `run-dir` reads workflow type and XYZ inputs from `flow.yaml`

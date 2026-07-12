@@ -10,7 +10,11 @@ from orca_auto.cli_common import (
 )
 from orca_auto.core.utils.coercion import normalize_text
 
-from ..manifest import optional_positive_float
+from ..manifest import (
+    normalize_interaction_energy_block,
+    normalize_rmsd_dedup_block,
+    optional_positive_float,
+)
 
 RUN_DIR_COMMON_WORKFLOW_OPTION_FIELDS = (
     "workflow_root",
@@ -48,6 +52,8 @@ class RunDirWorkflowOptions:
     max_crest_candidates: int
     max_xtb_stages: int
     boltzmann_temperature_k: float | None = None
+    interaction_energy: dict[str, Any] | None = None
+    rmsd_dedup: dict[str, Any] | None = None
 
     def common_kwargs(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in RUN_DIR_COMMON_WORKFLOW_OPTION_FIELDS}
@@ -336,6 +342,19 @@ def _resolve_run_dir_stage_options(
     }
 
 
+def _resolve_run_dir_interaction_options(manifest: dict[str, Any]) -> dict[str, Any]:
+    # Validate at admission for EVERY template so a malformed (or misplaced)
+    # block fails closed with a clear error instead of being silently dropped;
+    # only conformer_screening actually consumes the normalized result. The
+    # workflow factory re-normalizes idempotently as the canonical gate.
+    return {
+        "interaction_energy": normalize_interaction_energy_block(
+            manifest.get("interaction_energy")
+        ),
+        "rmsd_dedup": normalize_rmsd_dedup_block(manifest.get("rmsd_dedup")),
+    }
+
+
 def _resolve_run_dir_workflow_options(
     args: Any,
     manifest: dict[str, Any],
@@ -359,6 +378,7 @@ def _resolve_run_dir_workflow_options(
         **_resolve_run_dir_resource_options(args, manifest, sections),
         **_resolve_run_dir_orca_options(args, manifest, sections, defaults=defaults),
         **_resolve_run_dir_stage_options(args, manifest, defaults=defaults),
+        **_resolve_run_dir_interaction_options(manifest),
     )
 
 

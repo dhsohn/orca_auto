@@ -39,6 +39,148 @@ def optional_positive_float(
     return value
 
 
+# The interaction-energy fan-out materializes one single point per fragment per
+# retained representative; this hard cap bounds that fan-out regardless of what a
+# manifest declares. It is also enforced against remote uploads (see the bot's
+# _REMOTE_WORKFLOW_COUNT_LIMITS) and against the materialized stage count.
+INTERACTION_ENERGY_MAX_FRAGMENTS_CAP = 8
+DEFAULT_INTERACTION_SP_ROUTE_LINE = "! r2scan-3c TightSCF"
+DEFAULT_RMSD_THRESHOLD_ANGSTROM = 0.25
+# A finite default energy window is mandatory: heavy-atom RMSD with no energy
+# guard would silently merge distinct minima that differ only in hydrogen/rotamer
+# positions. Merging requires BOTH low RMSD and a small energy gap.
+DEFAULT_RMSD_ENERGY_WINDOW_KCAL = 0.1
+
+
+def _require_int(value: Any, *, field: str, minimum: int | None = None) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be an integer, not a boolean")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be an integer. got={value!r}") from exc
+    if minimum is not None and parsed < minimum:
+        raise ValueError(f"{field} must be >= {minimum}. got={parsed}")
+    return parsed
+
+
+def normalize_interaction_energy_block(raw: Any) -> dict[str, Any] | None:
+    """Validate and normalize the ``interaction_energy:`` manifest block.
+
+    Returns ``None`` when absent or disabled (the feature is a no-op). Raises
+    ``ValueError`` on any malformed value so a bad configuration fails closed at
+    admission instead of silently producing nothing or an unsafe stage.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("interaction_energy must be a mapping")
+    block = manifest_mapping(raw)
+    if not normalize_bool(block.get("enabled"), default=False):
+        return None
+
+    raw_fragments = block.get("fragments")
+    if not isinstance(raw_fragments, list) or not raw_fragments:
+        raise ValueError(
+            "interaction_energy.fragments must be a non-empty list when the feature is enabled"
+        )
+    max_fragments = _require_int(
+        block.get("max_fragments", INTERACTION_ENERGY_MAX_FRAGMENTS_CAP),
+        field="interaction_energy.max_fragments",
+        minimum=1,
+    )
+    if max_fragments > INTERACTION_ENERGY_MAX_FRAGMENTS_CAP:
+        raise ValueError(
+            f"interaction_energy.max_fragments={max_fragments} exceeds the "
+            f"{INTERACTION_ENERGY_MAX_FRAGMENTS_CAP}-fragment ceiling"
+        )
+    if len(raw_fragments) > max_fragments:
+        raise ValueError(
+            f"interaction_energy.fragments has {len(raw_fragments)} fragments; "
+            f"max_fragments is {max_fragments}"
+        )
+
+    fragments: list[dict[str, Any]] = []
+    for position, fragment in enumerate(raw_fragments):
+        if not isinstance(fragment, dict):
+            raise ValueError(f"interaction_energy.fragments[{position}] must be a mapping")
+        raw_indices = fragment.get("atom_indices")
+        if not isinstance(raw_indices, list) or not raw_indices:
+            raise ValueError(
+                f"interaction_energy.fragments[{position}].atom_indices must be a non-empty list"
+            )
+        indices = [
+            _require_int(
+                index,
+                field=f"interaction_energy.fragments[{position}].atom_indices",
+                minimum=0,
+            )
+            for index in raw_indices
+        ]
+        label = normalize_text(fragment.get("label")) or f"fragment_{position + 1}"
+        fragments.append(
+            {
+                "atom_indices": indices,
+                "charge": _require_int(
+                    fragment.get("charge", 0),
+                    field=f"interaction_energy.fragments[{position}].charge",
+                ),
+                "multiplicity": _require_int(
+                    fragment.get("multiplicity", 1),
+                    field=f"interaction_energy.fragments[{position}].multiplicity",
+                    minimum=1,
+                ),
+                "label": label,
+            }
+        )
+
+    normalized: dict[str, Any] = {
+        "enabled": True,
+        "fragments": fragments,
+        "sp_route_line": normalize_text(block.get("sp_route_line"))
+        or DEFAULT_INTERACTION_SP_ROUTE_LINE,
+        "max_fragments": max_fragments,
+    }
+    for key, minimum in (("priority", None), ("max_cores", 1), ("max_memory_gb", 1)):
+        if block.get(key) is not None and normalize_text(block.get(key)) != "":
+            normalized[key] = _require_int(
+                block.get(key), field=f"interaction_energy.{key}", minimum=minimum
+            )
+    return normalized
+
+
+def normalize_rmsd_dedup_block(raw: Any) -> dict[str, Any] | None:
+    """Validate and normalize the ``rmsd_dedup:`` manifest block.
+
+    Returns ``None`` when absent or disabled. Raises ``ValueError`` on malformed
+    values. The energy window always resolves to a finite positive default so
+    structure-dropping never runs without an energy guard.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("rmsd_dedup must be a mapping")
+    block = manifest_mapping(raw)
+    if not normalize_bool(block.get("enabled"), default=False):
+        return None
+    threshold = optional_positive_float(
+        block, "rmsd_threshold_angstrom", label="rmsd_dedup.rmsd_threshold_angstrom"
+    )
+    energy_window = optional_positive_float(
+        block, "energy_window_kcal", label="rmsd_dedup.energy_window_kcal"
+    )
+    return {
+        "enabled": True,
+        "rmsd_threshold_angstrom": (
+            threshold if threshold is not None else DEFAULT_RMSD_THRESHOLD_ANGSTROM
+        ),
+        "energy_window_kcal": (
+            energy_window if energy_window is not None else DEFAULT_RMSD_ENERGY_WINDOW_KCAL
+        ),
+        "heavy_atoms_only": normalize_bool(block.get("heavy_atoms_only"), default=True),
+    }
+
+
 def load_flow_manifest(
     directory: Path,
     *,
@@ -168,10 +310,16 @@ def resolve_endpoint_pairing_manifest(
 
 
 __all__ = [
+    "DEFAULT_INTERACTION_SP_ROUTE_LINE",
+    "DEFAULT_RMSD_ENERGY_WINDOW_KCAL",
+    "DEFAULT_RMSD_THRESHOLD_ANGSTROM",
     "FLOW_MANIFEST_FILENAMES",
+    "INTERACTION_ENERGY_MAX_FRAGMENTS_CAP",
     "load_flow_manifest",
     "manifest_allows_external_inputs",
     "manifest_mapping",
+    "normalize_interaction_energy_block",
+    "normalize_rmsd_dedup_block",
     "optional_positive_float",
     "resolve_endpoint_pairing_manifest",
     "resolve_engine_manifest",

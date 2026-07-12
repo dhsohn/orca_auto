@@ -66,6 +66,7 @@ from orca_auto.core.utils.lock import file_lock
 
 from .._orca_stage_materialization import safe_name
 from ..activity import cancel_activity, clear_activities, list_activities
+from ..manifest import INTERACTION_ENERGY_MAX_FRAGMENTS_CAP
 from .action_registry import ActionKind, ActionRegistry, ActionStore, RegisteredAction
 from .settings import BotSettings
 
@@ -90,8 +91,16 @@ _REMOTE_WORKFLOW_COUNT_LIMITS = {
     "max_candidates": 20,
     "max_scan_extensions": 4,
     "max_xtb_handoff_retries": 4,
+    # Caps the interaction-energy fragment fan-out an uploaded manifest may
+    # declare; the materializer enforces the same ceiling on real stage counts.
+    "max_fragments": INTERACTION_ENERGY_MAX_FRAGMENTS_CAP,
 }
-_REMOTE_ROUTE_LINE_KEYS = frozenset({"route_line", "orca_route_line", "orca_optts_route_line"})
+# sp_route_line carries a real ORCA route into a fragment single point, so it
+# MUST be scanned for forbidden identifiers / '%' / core caps like every other
+# route-line key. Omitting it would be a remote arbitrary-ORCA-feature bypass.
+_REMOTE_ROUTE_LINE_KEYS = frozenset(
+    {"route_line", "orca_route_line", "orca_optts_route_line", "sp_route_line"}
+)
 _REMOTE_DISABLED_CREST_COST_KEYS = frozenset({"mdlen", "len", "tstep", "mddump"})
 _REMOTE_SCAN_POINTS_LIMIT = 200
 _REMOTE_SCAN_COORDINATE_RE = re.compile(

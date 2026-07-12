@@ -329,6 +329,25 @@ ORCA 고유 노트:
   백분율로 표시하지만 `boltzmann_population`은 `[0, 1]` 범위의 대응 분율입니다. CSV의
   `rel_E_kcalmol`과 `rel_G_kcalmol`은 공통 규약 아래 해당 population 그룹의 최저 E와
   G를 각각 기준으로 한 그룹 로컬 상대값입니다.
+- `conformer_screening`은 DFT 최적화된 minima를 대표 하나로 병합하는 선택적
+  `rmsd_dedup:` 블록을 받습니다. 두 minima는 heavy-atom 원소 서열이 같고, proper-rotation
+  전용(거울상은 절대 병합 안 됨) 정렬 RMSD가 `rmsd_threshold_angstrom`(기본 0.25) 미만이며,
+  에너지 차가 `energy_window_kcal`(기본 0.1) 미만일 때에만 병합합니다 — 두 조건이 모두
+  필요하므로 우연한 저 RMSD로 서로 다른 minimum을 버리지 않습니다. 그룹은 최저에너지
+  구성원을 유지하고, `heavy_atoms_only`(기본 true)는 수소 위치를 무시합니다. 활성화된
+  경우에만 `si_data.csv`가 기존 컬럼 뒤에 `rmsd_group`, `degeneracy`, `merged_stage_ids`를
+  append하며(비활성 시 파일 불변), 상대에너지 표에 병합 수를 주석으로 남깁니다.
+- `conformer_screening`은 ΔE_int = E(complex) − Σ E(fragment_i)를 보고하는 선택적
+  `interaction_energy:` 블록을 받습니다. `fragments`는
+  `{atom_indices(0-based), charge, multiplicity, label}` 목록이며 complex의 모든 원자를
+  **분할**(disjoint·exhaustive)해야 합니다. gap이나 overlap이면 그 complex의 ΔE_int을
+  생략합니다. complex와 각 fragment는 complex 최적화 기하 위에서 `sp_route_line`(기본
+  `! r2scan-3c TightSCF`)로 fresh single point를 돌려 모든 에너지가 동일 이론수준·기하를
+  공유합니다. fan-out은 RMSD-dedup 대표에만 하며 `max_fragments`(≤ 8)로 제한됩니다. 결과는
+  `interaction_energy.csv`(complex/fragment당 1행)와 선택적 `## Interaction energies` SI
+  섹션에 기록됩니다. complex/fragment 에너지가 결측·비유한이면 그 ΔE_int을 fail-closed로
+  생략합니다(부분합 금지). `sp_route_line`은 다른 route-line 키처럼 원격 업로드에서
+  검증됩니다. ghost-atom counterpoise(BSSE)는 이 기능에 포함되지 않습니다.
 - 워크플로우 디렉터리를 제출하기 전에 `orca_auto.yaml`에 `runs_root`를 설정하세요
   (또는 `flow.yaml`에 `workflow_root`/`workflow.root`를 설정).
 - 공개 워크플로우 `run-dir`는 `flow.yaml` 또는 `scaffold`가 작성한 표준 파일명에서

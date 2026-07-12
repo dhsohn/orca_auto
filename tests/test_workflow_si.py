@@ -10,9 +10,15 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.artifacts import WORKFLOW_SI_CSV_FILE, WORKFLOW_SI_MD_FILE
+from orca_auto.core.artifacts import (
+    INTERACTION_ENERGY_CSV_FILE,
+    WORKFLOW_SI_CSV_FILE,
+    WORKFLOW_SI_MD_FILE,
+)
 from orca_auto.flow.workflow.si import (
+    _CSV_COLUMNS,
     collect_workflow_si_data,
+    render_interaction_energy_csv,
     render_workflow_si_csv,
     render_workflow_si_md,
     write_workflow_si,
@@ -1339,3 +1345,207 @@ def test_boltzmann_override_ignores_minimum_without_parsed_temperature(tmp_path:
     )
     # An unverified temperature must not be Boltzmann-weighted at the override value.
     assert csv_rows[0]["boltzmann_population"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Interaction energy (ΔE_int) and RMSD re-dedup (feature 2)
+# ---------------------------------------------------------------------------
+
+_SP_ROUTE = "r2scan-3c TightSCF"
+_OPT_ROUTE = "B3LYP def2-SVP Opt"
+
+
+def _interaction_stage(
+    stage_id: str,
+    stage_dir: Path,
+    *,
+    role: str,
+    parent: str,
+    status: str = "completed",
+    fragment_index: int | None = None,
+    fragment_label: str = "",
+    fragment_charge: int = 0,
+    fragment_multiplicity: int = 1,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "selected_input_label": stage_id,
+        "role": role,
+        "parent_stage_id": parent,
+    }
+    if fragment_index is not None:
+        metadata.update(
+            {
+                "fragment_index": fragment_index,
+                "fragment_label": fragment_label,
+                "fragment_charge": fragment_charge,
+                "fragment_multiplicity": fragment_multiplicity,
+            }
+        )
+    return {
+        "stage_id": stage_id,
+        "stage_kind": "orca_stage",
+        "status": status,
+        "metadata": metadata,
+        "output_artifacts": [{"kind": "orca_output_dir", "path": str(stage_dir)}],
+    }
+
+
+def _params_payload(
+    stages: list[dict[str, Any]],
+    *,
+    interaction_energy: dict[str, Any] | None = None,
+    rmsd_dedup: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_si_test",
+        "template_name": "conformer_screening",
+        "status": "completed",
+        "reaction_key": "input",
+        "stages": stages,
+    }
+    parameters: dict[str, Any] = {}
+    if interaction_energy is not None:
+        parameters["interaction_energy"] = interaction_energy
+    if rmsd_dedup is not None:
+        parameters["rmsd_dedup"] = rmsd_dedup
+    if parameters:
+        payload["metadata"] = {"request": {"parameters": parameters}}
+    return payload
+
+
+def _interaction_payload(tmp_path: Path, *, fragment_b_completed: bool = True) -> dict[str, Any]:
+    complex_opt = _stage_dir(tmp_path, "cx_opt", route=_OPT_ROUTE, energy=-100.0, coords=_COORDS_A)
+    complex_sp = _stage_dir(tmp_path, "cx_sp", route=_SP_ROUTE, energy=-100.0, coords=_COORDS_A)
+    frag_a = _stage_dir(tmp_path, "frag_a", route=_SP_ROUTE, energy=-60.0, coords=_COORDS_A)
+    stages = [
+        _orca_stage("orca_conf_01", complex_opt, label="conf1"),
+        _interaction_stage(
+            "ie_complex", complex_sp, role="interaction_complex_sp", parent="orca_conf_01"
+        ),
+        _interaction_stage(
+            "ie_f0",
+            frag_a,
+            role="interaction_fragment",
+            parent="orca_conf_01",
+            fragment_index=0,
+            fragment_label="host",
+        ),
+    ]
+    if fragment_b_completed:
+        frag_b = _stage_dir(tmp_path, "frag_b", route=_SP_ROUTE, energy=-39.99, coords=_COORDS_B)
+        frag_b_dir = frag_b
+    else:
+        frag_b_dir = tmp_path / "frag_b_missing"  # no state → fail-closed
+        frag_b_dir.mkdir()
+    stages.append(
+        _interaction_stage(
+            "ie_f1",
+            frag_b_dir,
+            role="interaction_fragment",
+            parent="orca_conf_01",
+            status="completed" if fragment_b_completed else "running",
+            fragment_index=1,
+            fragment_label="guest",
+        )
+    )
+    interaction_energy = {
+        "enabled": True,
+        "sp_route_line": f"! {_SP_ROUTE}",
+        "max_fragments": 2,
+        "fragments": [
+            {"atom_indices": [0], "charge": 0, "multiplicity": 1, "label": "host"},
+            {"atom_indices": [1], "charge": 0, "multiplicity": 1, "label": "guest"},
+        ],
+    }
+    return _params_payload(stages, interaction_energy=interaction_energy)
+
+
+def test_interaction_stages_never_leak_into_the_structure_path(tmp_path: Path) -> None:
+    data = collect_workflow_si_data(_interaction_payload(tmp_path))
+    structure_ids = {entry.stage_id for entry in (*data.entries, *data.extra_blocks)}
+    assert structure_ids == {"orca_conf_01"}
+    assert "ie_complex" not in structure_ids
+    assert "ie_f0" not in structure_ids and "ie_f1" not in structure_ids
+    # And never rendered as an SI structure row.
+    csv_text = render_workflow_si_csv(data)
+    rows = list(csv.DictReader(csv_text.splitlines()))
+    assert {row["stage_id"] for row in rows} == {"orca_conf_01"}
+
+
+def test_interaction_energy_is_computed_and_rendered(tmp_path: Path) -> None:
+    data = collect_workflow_si_data(_interaction_payload(tmp_path))
+    assert len(data.interaction_energies) == 1
+    result = data.interaction_energies[0]
+    assert result.resolved
+    assert result.de_int_hartree is not None
+    assert abs(result.de_int_hartree - (-100.0 - (-60.0 - 39.99))) < 1e-9
+
+    md = render_workflow_si_md(data)
+    assert "## Interaction energies" in md
+    assert "conf1 (orca_conf_01)" in md
+
+    interaction_csv = render_interaction_energy_csv(data)
+    assert interaction_csv is not None
+    ie_rows = list(csv.DictReader(interaction_csv.splitlines()))
+    assert {row["fragment_label"] for row in ie_rows} == {"host", "guest"}
+    assert all(row["complex_stage_id"] == "orca_conf_01" for row in ie_rows)
+
+
+def test_interaction_energy_fails_closed_on_missing_fragment(tmp_path: Path) -> None:
+    data = collect_workflow_si_data(_interaction_payload(tmp_path, fragment_b_completed=False))
+    assert len(data.interaction_energies) == 1
+    result = data.interaction_energies[0]
+    assert not result.resolved
+    assert result.de_int_hartree is None
+    md = render_workflow_si_md(data)
+    assert "ΔE_int omitted" in md
+
+
+def test_write_workflow_si_emits_interaction_csv(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    write_workflow_si(workspace, _interaction_payload(tmp_path))
+    assert (workspace / INTERACTION_ENERGY_CSV_FILE).is_file()
+
+
+def test_rmsd_dedup_collapses_degenerate_minima(tmp_path: Path) -> None:
+    keep = _stage_dir(tmp_path, "keep", route=_OPT_ROUTE, energy=-50.00005, coords=_COORDS_C)
+    drop = _stage_dir(tmp_path, "drop", route=_OPT_ROUTE, energy=-50.0, coords=_COORDS_C)
+    payload = _params_payload(
+        [
+            _orca_stage("orca_conf_keep", keep, label="keep"),
+            _orca_stage("orca_conf_drop", drop, label="drop"),
+        ],
+        rmsd_dedup={
+            "enabled": True,
+            "rmsd_threshold_angstrom": 0.25,
+            "energy_window_kcal": 1.0,
+            "heavy_atoms_only": True,
+        },
+    )
+    data = collect_workflow_si_data(payload)
+    # Both are identical NO geometries within 1 kcal/mol → one representative kept.
+    assert [entry.block.name for entry in data.entries] == ["keep"]
+    assert data.rmsd_dedup_enabled
+    csv_text = render_workflow_si_csv(data)
+    header = csv_text.splitlines()[0].split(",")
+    assert header[-3:] == ["rmsd_group", "degeneracy", "merged_stage_ids"]
+    row = next(csv.DictReader(csv_text.splitlines()))
+    assert row["degeneracy"] == "2"
+    assert row["merged_stage_ids"] == "orca_conf_drop"
+    assert "RMSD representatives" in render_workflow_si_md(data)
+
+
+def test_features_off_are_byte_identical_to_baseline(tmp_path: Path) -> None:
+    stage = _stage_dir(tmp_path, "conf", route=_OPT_ROUTE, energy=-100.0, coords=_COORDS_A)
+    payload = _payload([_orca_stage("orca_conf_01", stage, label="conf1")])
+    data = collect_workflow_si_data(payload)
+
+    csv_text = render_workflow_si_csv(data)
+    header = csv_text.splitlines()[0].split(",")
+    assert header == _CSV_COLUMNS  # no rmsd_dedup columns appended when off
+
+    md = render_workflow_si_md(data)
+    assert "## Interaction energies" not in md
+    assert "RMSD representatives" not in md
+    assert render_interaction_energy_csv(data) is None

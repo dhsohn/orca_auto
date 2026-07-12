@@ -10,6 +10,19 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Added
 
+- `conformer_screening` gained two optional, fail-closed manifest blocks. `rmsd_dedup:`
+  collapses DFT-degenerate optimized minima to one lowest-energy representative using
+  proper-rotation heavy-atom RMSD; merging requires both a low RMSD and a small energy
+  gap, so distinct minima are never dropped on a coincidental overlap. When enabled it
+  appends `rmsd_group`, `degeneracy`, and `merged_stage_ids` to `si_data.csv` (the file
+  is unchanged when disabled) and notes the merge in the relative-energy table.
+  `interaction_energy:` reports ΔE_int = E(complex) − Σ E(fragment) from fresh
+  same-level single points on the optimized geometry for fragments that partition the
+  complex; it fans out only the RMSD-dedup representatives (bounded by `max_fragments`),
+  writes `interaction_energy.csv` and a `## Interaction energies` SI section, and omits
+  a complex's ΔE_int (never a partial sum) when any energy is missing. `sp_route_line`
+  is validated for remote uploads like every other route-line key. Ghost-atom
+  counterpoise is not included.
 - Workflow Supporting Information (`workflow_si.md` and `si_data.csv`) now reports
   Boltzmann populations for a complete, terminal conformer ensemble only. Every
   route-classified minimum must be converged and carry a complete 3N vibrational

@@ -144,6 +144,31 @@ def _manifest(workflow_type: str, crest_mode: str) -> str:
                 "# The optional finite, positive temperature pin is stored at admission",
                 "# and must match every parsed Freq temperature within 0.01 K.",
                 "# boltzmann_temperature_k: 298.15",
+                "# Optional post-DFT heavy-atom RMSD re-dedup of the optimized minima.",
+                "# Merging needs BOTH low RMSD and a small energy gap, so distinct",
+                "# minima are never dropped on a coincidental low RMSD.",
+                "# rmsd_dedup:",
+                "#   enabled: true",
+                "#   rmsd_threshold_angstrom: 0.25",
+                "#   energy_window_kcal: 0.1",
+                "#   heavy_atoms_only: true",
+                "# Optional interaction energy dE_int = E(complex) - sum E(fragment).",
+                "# Fragments must partition every atom (0-based indices); the complex and",
+                "# each fragment run a fresh single point at sp_route_line on the optimized",
+                "# geometry. Only RMSD-dedup representatives are fanned out.",
+                "# interaction_energy:",
+                "#   enabled: true",
+                '#   sp_route_line: "! r2scan-3c TightSCF"',
+                "#   max_fragments: 2",
+                "#   fragments:",
+                "#     - label: host",
+                "#       atom_indices: [0, 1, 2, 3]",
+                "#       charge: 0",
+                "#       multiplicity: 1",
+                "#     - label: guest",
+                "#       atom_indices: [4, 5, 6]",
+                "#       charge: 0",
+                "#       multiplicity: 1",
                 "resources:",
                 "  max_cores: 8",
                 "  max_memory_gb: 32",
@@ -216,6 +241,14 @@ def _readme(root: Path, workflow_type: str) -> str:
             "terminal ensemble must contain only converged minima with complete 3N spectra, "
             "Nimag=0, and finite E/G/T; the durable `boltzmann_temperature_k` pin must be finite, "
             "positive, and within 0.01 K of every parsed temperature.",
+            "- Enable `rmsd_dedup:` to collapse DFT-degenerate minima to one representative "
+            "(degeneracy in `si_data.csv`); merging needs both a low heavy-atom RMSD and a small "
+            "energy gap.",
+            "- Enable `interaction_energy:` for dE_int = E(complex) - sum E(fragment). Fragments "
+            "must partition every atom by 0-based index; the complex and each fragment are fresh "
+            "single points at `sp_route_line` on the optimized geometry, and only the RMSD-dedup "
+            "representatives are computed. Results land in `interaction_energy.csv` and a "
+            "`## Interaction energies` SI section.",
         ]
     elif workflow_type == SCAN_TS_SEARCH_TEMPLATE_ID:
         lines = [

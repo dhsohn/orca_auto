@@ -57,7 +57,11 @@ _CONFORMER_RUN_DIR_WORKFLOW_SPEC = _RunDirWorkflowCreationSpec(
     missing_inputs_error="conformer_screening requires input.xyz (or manifest/CLI override).",
     default_orca_route_line="! r2scan-3c Opt TightSCF",
     default_max_orca_stages=20,
-    option_kwargs=(("boltzmann_temperature_k", "boltzmann_temperature_k"),),
+    option_kwargs=(
+        ("boltzmann_temperature_k", "boltzmann_temperature_k"),
+        ("interaction_energy", "interaction_energy"),
+        ("rmsd_dedup", "rmsd_dedup"),
+    ),
     manifest_kwargs=(("crest_job_manifest", "crest_manifest"),),
 )
 

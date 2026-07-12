@@ -187,6 +187,8 @@ def test_cmd_run_dir_reads_manifest_for_conformer_workflow(
         "charge": -1,
         "multiplicity": 2,
         "boltzmann_temperature_k": 310.0,
+        "interaction_energy": None,
+        "rmsd_dedup": None,
     }
 
 

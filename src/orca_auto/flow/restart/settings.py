@@ -22,6 +22,12 @@ from ..manifest import (
 from ..manifest import (
     manifest_mapping as _manifest_mapping,
 )
+from ..manifest import (
+    normalize_interaction_energy_block as _normalize_interaction_energy_block,
+)
+from ..manifest import (
+    normalize_rmsd_dedup_block as _normalize_rmsd_dedup_block,
+)
 from ..manifest import optional_positive_float as _optional_positive_float
 from ..manifest import (
     resolve_endpoint_pairing_manifest as _resolve_endpoint_pairing_manifest,
@@ -271,6 +277,18 @@ def _update_request_parameters(
             params.pop("boltzmann_temperature_k", None)
         else:
             params["boltzmann_temperature_k"] = temperature
+    if "interaction_energy" in manifest:
+        interaction_energy = _normalize_interaction_energy_block(manifest.get("interaction_energy"))
+        if interaction_energy is None:
+            params.pop("interaction_energy", None)
+        else:
+            params["interaction_energy"] = interaction_energy
+    if "rmsd_dedup" in manifest:
+        rmsd_dedup = _normalize_rmsd_dedup_block(manifest.get("rmsd_dedup"))
+        if rmsd_dedup is None:
+            params.pop("rmsd_dedup", None)
+        else:
+            params["rmsd_dedup"] = rmsd_dedup
 
 
 def _flow_restart_settings(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:

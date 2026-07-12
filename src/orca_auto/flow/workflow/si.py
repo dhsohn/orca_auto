@@ -27,10 +27,20 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, TypeGuard
 
-from orca_auto.core.artifacts import WORKFLOW_SI_CSV_FILE, WORKFLOW_SI_MD_FILE
+from orca_auto.core.artifacts import (
+    INTERACTION_ENERGY_CSV_FILE,
+    WORKFLOW_SI_CSV_FILE,
+    WORKFLOW_SI_MD_FILE,
+)
 from orca_auto.core.utils.persistence import atomic_write_text
 from orca_auto.orca.input_blocks import geometry_range
+from orca_auto.orca.report.interaction_energy import (
+    InteractionEnergyResult,
+    InteractionFragmentEnergy,
+    compute_interaction_energy,
+)
 from orca_auto.orca.report.render import KCAL_PER_HARTREE, R_KCAL_PER_MOL_K
+from orca_auto.orca.report.rmsd import RmsdCandidate, RmsdGroup, group_by_rmsd
 from orca_auto.orca.report.si import (
     SiBlock,
     SiBlockError,
@@ -39,7 +49,11 @@ from orca_auto.orca.report.si import (
 )
 from orca_auto.orca.state import load_state
 
-from ..manifest import optional_positive_float
+from ..manifest import (
+    DEFAULT_RMSD_ENERGY_WINDOW_KCAL,
+    DEFAULT_RMSD_THRESHOLD_ANGSTROM,
+    optional_positive_float,
+)
 from .report import (
     _crest_stage_detail,
     _orca_stage_output_dir,
@@ -73,6 +87,10 @@ _POP_NO_GIBBS_NOTE = (
     "minima with complete 3N spectra, finite Gibbs free energies, and "
     "thermochemistry temperatures)"
 )
+
+# Metadata role prefix carried by the interaction-energy single-point stages the
+# orchestration fans out (``interaction_complex_sp`` and ``interaction_fragment``).
+_INTERACTION_ROLE_PREFIX = "interaction_"
 
 
 @dataclass(frozen=True)
@@ -135,9 +153,21 @@ class WorkflowSiData:
     boltzmann_temperature_source: str = ""
     population_note: str = ""
     populations: tuple[PopulationRow | None, ...] = ()
+    # Interaction energies (ΔE_int) per retained representative complex, and the
+    # RMSD re-dedup grouping applied to the minima. Both are empty/off unless the
+    # respective manifest feature is enabled.
+    interaction_energies: tuple[InteractionEnergyResult, ...] = ()
+    rmsd_dedup_enabled: bool = False
+    rmsd_groups: tuple[RmsdGroup, ...] = ()
 
     def has_orca_stages(self) -> bool:
-        return bool(self.entries or self.extra_blocks or self.excluded)
+        return bool(self.entries or self.extra_blocks or self.excluded or self.interaction_energies)
+
+    def rmsd_group_for(self, stage_id: str) -> tuple[int, RmsdGroup] | None:
+        for index, group in enumerate(self.rmsd_groups, start=1):
+            if stage_id in group.member_stage_ids:
+                return index, group
+        return None
 
 
 def _geometry_matches(a: SiBlock, b: SiBlock) -> bool:
@@ -290,6 +320,9 @@ def collect_workflow_si_data(
 ) -> WorkflowSiData:
     template_name = _text(payload.get("template_name"))
     workflow_status = _text(payload.get("status"))
+    parameters = _request_parameters(payload)
+    rmsd_cfg = parameters.get("rmsd_dedup")
+    rmsd_cfg = rmsd_cfg if isinstance(rmsd_cfg, Mapping) else None
     crest_total: int | None = None
     xtb_total: int | None = None
     stationary: list[WorkflowSiEntry] = []
@@ -297,6 +330,12 @@ def collect_workflow_si_data(
     extra: list[WorkflowSiEntry] = []
     excluded: list[ExcludedStage] = []
     incomplete_population_stages: list[str] = []
+    # Interaction-energy fragment/complex single points are internal inputs, not
+    # SI structures: they carry a ``role`` starting ``interaction_`` and must be
+    # pulled out BEFORE any min/ts/sp classification so they can never leak into
+    # the relative-energy table, the structures list, or si_data.csv, nor be
+    # folded into a stationary structure by ``_pair_single_points``.
+    interaction_raw_stages: list[Mapping[str, Any]] = []
 
     for stage in _stage_dicts(payload):
         stage_kind = _text(stage.get("stage_kind"))
@@ -310,6 +349,9 @@ def collect_workflow_si_data(
             xtb_total = (xtb_total or 0) + candidates
             continue
         if stage_kind != "orca_stage":
+            continue
+        if _text(_stage_metadata(stage).get("role")).startswith(_INTERACTION_ROLE_PREFIX):
+            interaction_raw_stages.append(stage)
             continue
 
         stage_id = _text(stage.get("stage_id"))
@@ -353,7 +395,27 @@ def collect_workflow_si_data(
             entry.block.result.energy_hartree or 0.0,
         )
     )
+
+    # RMSD re-dedup and interaction-energy assembly are additive report-time
+    # features isolated behind their own guards: a failure in either omits only
+    # that feature and still renders the base SI (methods, table, structures).
+    rmsd_groups: tuple[RmsdGroup, ...] = ()
+    if rmsd_cfg is not None:
+        try:
+            stationary, rmsd_groups = _dedup_minima(stationary, rmsd_cfg)
+        except Exception:  # noqa: BLE001
+            logger.warning("Workflow SI RMSD dedup failed", exc_info=True)
+            rmsd_groups = ()
+
     ranked, unpaired = _pair_single_points(stationary, single_points)
+
+    interaction_energies: tuple[InteractionEnergyResult, ...] = ()
+    if interaction_raw_stages:
+        try:
+            interaction_energies = _interaction_energy_results(interaction_raw_stages, ranked)
+        except Exception:  # noqa: BLE001
+            logger.warning("Workflow SI interaction-energy assembly failed", exc_info=True)
+            interaction_energies = ()
 
     # A population bug must never replace a valid SI with stale files: isolate the
     # computation so the base document (methods, relative-energy table, structures)
@@ -396,7 +458,133 @@ def collect_workflow_si_data(
         boltzmann_temperature_source=temperature_source,
         population_note=population_note,
         populations=populations,
+        interaction_energies=interaction_energies,
+        rmsd_dedup_enabled=rmsd_cfg is not None,
+        rmsd_groups=rmsd_groups,
     )
+
+
+# ---------------------------------------------------------------------------
+# RMSD re-dedup and interaction energies
+# ---------------------------------------------------------------------------
+
+
+def _meta_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _dedup_minima(
+    stationary: list[WorkflowSiEntry], cfg: Mapping[str, Any]
+) -> tuple[list[WorkflowSiEntry], tuple[RmsdGroup, ...]]:
+    """Collapse geometrically degenerate minima to their lowest-energy member.
+
+    Only ``min`` entries are grouped (TS/SP are never merged). Non-representative
+    minima are dropped from the returned list — which preserves the incoming
+    energy sort — while the groups (including singletons) are returned so the SI
+    can annotate each representative with its degeneracy.
+    """
+    mins = [entry for entry in stationary if entry.block.kind == "min"]
+    if len(mins) < 2:
+        return stationary, ()
+    candidates = [
+        RmsdCandidate(
+            stage_id=entry.stage_id,
+            coordinates=tuple(entry.block.result.coordinates),
+            energy_hartree=entry.block.result.energy_hartree,
+        )
+        for entry in mins
+    ]
+    grouping = group_by_rmsd(
+        candidates,
+        rmsd_threshold_angstrom=float(
+            cfg.get("rmsd_threshold_angstrom") or DEFAULT_RMSD_THRESHOLD_ANGSTROM
+        ),
+        energy_window_kcal=float(cfg.get("energy_window_kcal") or DEFAULT_RMSD_ENERGY_WINDOW_KCAL),
+        heavy_atoms_only=bool(cfg.get("heavy_atoms_only", True)),
+    )
+    representatives = grouping.representative_ids
+    dropped = {c.stage_id for c in candidates if c.stage_id not in representatives}
+    kept = [entry for entry in stationary if entry.stage_id not in dropped]
+    return kept, grouping.groups
+
+
+def _interaction_energy_results(
+    interaction_stages: list[Mapping[str, Any]],
+    ranked: list[WorkflowSiEntry],
+) -> tuple[InteractionEnergyResult, ...]:
+    """Assemble ΔE_int per representative complex from its fan-out single points.
+
+    Each interaction stage carries ``role`` (``interaction_complex_sp`` /
+    ``interaction_fragment``) and ``parent_stage_id`` linking it to the complex
+    optimization it was fanned out from. The complex and fragment energies come
+    from the same-level single points; a missing one makes that complex's ΔE_int
+    a fail-closed omission (never a partial sum).
+    """
+    entry_by_stage = {entry.stage_id: entry for entry in ranked}
+    order: list[str] = []
+    complex_sp: dict[str, tuple[float | None, int, int]] = {}
+    fragments: dict[str, list[tuple[int, InteractionFragmentEnergy]]] = {}
+    for stage in interaction_stages:
+        meta = _stage_metadata(stage)
+        role = _text(meta.get("role"))
+        parent = _text(meta.get("parent_stage_id"))
+        if not parent:
+            continue
+        if parent not in fragments:
+            order.append(parent)
+            fragments[parent] = []
+        block, _reason = _collect_stage_block(stage)
+        energy = block.result.energy_hartree if block is not None else None
+        charge = (
+            block.result.charge if block is not None else _meta_int(meta.get("fragment_charge"), 0)
+        )
+        multiplicity = (
+            block.result.multiplicity
+            if block is not None
+            else _meta_int(meta.get("fragment_multiplicity"), 1)
+        )
+        if role == "interaction_complex_sp":
+            complex_sp[parent] = (energy, charge, multiplicity)
+        elif role == "interaction_fragment":
+            index = _meta_int(meta.get("fragment_index"), len(fragments[parent]))
+            label = _text(meta.get("fragment_label")) or f"fragment_{index + 1}"
+            fragments[parent].append(
+                (
+                    index,
+                    InteractionFragmentEnergy(
+                        label=label,
+                        stage_id=_text(stage.get("stage_id")),
+                        charge=charge,
+                        multiplicity=multiplicity,
+                        energy_hartree=energy,
+                    ),
+                )
+            )
+    results: list[InteractionEnergyResult] = []
+    for parent in order:
+        complex_data = complex_sp.get(parent)
+        complex_energy = complex_data[0] if complex_data is not None else None
+        complex_charge = complex_data[1] if complex_data is not None else 0
+        complex_multiplicity = complex_data[2] if complex_data is not None else 1
+        entry = entry_by_stage.get(parent)
+        complex_label = entry.block.name if entry is not None else parent
+        ordered_fragments = [
+            fragment for _, fragment in sorted(fragments[parent], key=lambda item: item[0])
+        ]
+        results.append(
+            compute_interaction_energy(
+                complex_stage_id=parent,
+                complex_label=complex_label,
+                complex_charge=complex_charge,
+                complex_multiplicity=complex_multiplicity,
+                complex_energy_hartree=complex_energy,
+                fragments=ordered_fragments,
+            )
+        )
+    return tuple(results)
 
 
 # ---------------------------------------------------------------------------
@@ -878,6 +1066,13 @@ def _table_lines(data: WorkflowSiData) -> list[str]:
         )
     if convention.note:
         notes.append(f"⚠ {convention.note}.")
+    if data.rmsd_dedup_enabled:
+        merged = sum(group.degeneracy - 1 for group in data.rmsd_groups)
+        if merged > 0:
+            notes.append(
+                f"Minima are heavy-atom RMSD representatives; {merged} degenerate "
+                "minima were merged (per-structure degeneracy in si_data.csv)."
+            )
     if notes:
         lines.append("")
         lines.extend(notes)
@@ -941,6 +1136,39 @@ def _population_lines(data: WorkflowSiData) -> list[str]:
     return lines
 
 
+def _interaction_energy_lines(data: WorkflowSiData) -> list[str]:
+    """Body of ``## Interaction energies`` — [] omits the whole section."""
+    if not data.interaction_energies:
+        return []
+    lines = [
+        "Interaction energies ΔE_int = E(complex) − Σ E(fragment), from same-level "
+        "single points on the complex-optimized geometry.",
+        "",
+    ]
+    for result in data.interaction_energies:
+        header = f"{result.complex_label} ({result.complex_stage_id})"
+        if result.resolved:
+            assert result.de_int_hartree is not None and result.de_int_kcalmol is not None
+            lines.append(
+                f"{header}: ΔE_int = {result.de_int_hartree:.6f} Eh "
+                f"({result.de_int_kcalmol:+.2f} kcal·mol⁻¹)"
+            )
+        else:
+            lines.append(f"{header}: ΔE_int omitted — {result.note or 'incomplete data'}")
+        for fragment in result.fragments:
+            energy_cell = (
+                f"{fragment.energy_hartree:16.6f} Eh" if _finite(fragment.energy_hartree) else "–"
+            )
+            lines.append(
+                f"  {fragment.label} (charge {fragment.charge}, "
+                f"multiplicity {fragment.multiplicity}): {energy_cell}"
+            )
+        if result.resolved and result.note:
+            lines.append(f"  ⚠ {result.note}")
+        lines.append("")
+    return lines
+
+
 def render_workflow_si_md(data: WorkflowSiData) -> str:
     lines = [f"# Supporting Information — {data.workflow_id}"]
     meta = [f"template {data.template_name}" if data.template_name else ""]
@@ -966,6 +1194,13 @@ def render_workflow_si_md(data: WorkflowSiData) -> str:
         lines.append("## Boltzmann populations")
         lines.append("")
         lines.extend(population_lines)
+        lines.append("")
+
+    interaction_lines = _interaction_energy_lines(data)
+    if interaction_lines:
+        lines.append("## Interaction energies")
+        lines.append("")
+        lines.extend(interaction_lines)
         lines.append("")
 
     lines.append("## Structures")
@@ -1034,9 +1269,37 @@ _CSV_COLUMNS = [
     "boltzmann_population",
 ]
 
+# Appended to si_data.csv ONLY when rmsd_dedup is enabled, so the file stays
+# byte-identical to the feature-off baseline when it is not.
+_RMSD_DEDUP_CSV_COLUMNS = ["rmsd_group", "degeneracy", "merged_stage_ids"]
+
+_INTERACTION_CSV_COLUMNS = [
+    "complex_stage_id",
+    "complex_label",
+    "complex_charge",
+    "complex_multiplicity",
+    "E_complex_Eh",
+    "fragment_label",
+    "fragment_stage_id",
+    "fragment_charge",
+    "fragment_multiplicity",
+    "E_fragment_Eh",
+    "dE_int_Eh",
+    "dE_int_kcalmol",
+    "note",
+]
+
 
 def _finite_or_blank(value: float | None) -> float | str:
     return value if _finite(value) else ""
+
+
+def _rmsd_dedup_cells(data: WorkflowSiData, entry: WorkflowSiEntry) -> list[Any]:
+    lookup = data.rmsd_group_for(entry.stage_id)
+    if lookup is None:
+        return ["", "", ""]
+    index, group = lookup
+    return [index, group.degeneracy, ";".join(group.merged_stage_ids)]
 
 
 def _si_csv_row(
@@ -1089,14 +1352,53 @@ def _si_csv_row(
 def render_workflow_si_csv(data: WorkflowSiData) -> str:
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
-    writer.writerow(_CSV_COLUMNS)
+    columns = list(_CSV_COLUMNS)
+    if data.rmsd_dedup_enabled:
+        columns = columns + _RMSD_DEDUP_CSV_COLUMNS
+    writer.writerow(columns)
     # Populations align 1:1 with entries; extra blocks (unpaired SPs) are never
     # populated. An empty populations tuple means no minima → all-blank cells.
     populations = _aligned_populations(data)
+
+    def emit(entry: WorkflowSiEntry, population: PopulationRow | None) -> None:
+        row = _si_csv_row(entry, population, data.boltzmann_temperature_k)
+        if data.rmsd_dedup_enabled:
+            row = row + _rmsd_dedup_cells(data, entry)
+        writer.writerow(row)
+
     for entry, population in zip(data.entries, populations, strict=True):
-        writer.writerow(_si_csv_row(entry, population, data.boltzmann_temperature_k))
+        emit(entry, population)
     for entry in data.extra_blocks:
-        writer.writerow(_si_csv_row(entry, None, data.boltzmann_temperature_k))
+        emit(entry, None)
+    return buffer.getvalue()
+
+
+def render_interaction_energy_csv(data: WorkflowSiData) -> str | None:
+    """Machine-readable ΔE_int table; ``None`` when the feature produced nothing."""
+    if not data.interaction_energies:
+        return None
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(_INTERACTION_CSV_COLUMNS)
+    for result in data.interaction_energies:
+        for fragment in result.fragments:
+            writer.writerow(
+                [
+                    result.complex_stage_id,
+                    result.complex_label,
+                    result.complex_charge,
+                    result.complex_multiplicity,
+                    _finite_or_blank(result.complex_energy_hartree),
+                    fragment.label,
+                    fragment.stage_id,
+                    fragment.charge,
+                    fragment.multiplicity,
+                    _finite_or_blank(fragment.energy_hartree),
+                    _finite_or_blank(result.de_int_hartree),
+                    _finite_or_blank(result.de_int_kcalmol),
+                    result.note,
+                ]
+            )
     return buffer.getvalue()
 
 
@@ -1125,8 +1427,8 @@ def _boltzmann_temperature_override(
         return None, "(populations omitted: durable boltzmann_temperature_k is invalid)"
 
 
-def _remove_si_pair(md_path: Path, csv_path: Path) -> None:
-    for path in (md_path, csv_path):
+def _remove_si_artifacts(*paths: Path) -> None:
+    for path in paths:
         try:
             path.unlink(missing_ok=True)
         except OSError:
@@ -1134,13 +1436,16 @@ def _remove_si_pair(md_path: Path, csv_path: Path) -> None:
 
 
 def write_workflow_si(workspace_dir: Path, payload: Mapping[str, Any]) -> Path | None:
-    """Write ``workflow_si.md`` + ``si_data.csv``; never raises.
+    """Write ``workflow_si.md`` + ``si_data.csv`` (+ ``interaction_energy.csv``); never raises.
 
     A workflow without ORCA stages has no SI: stale files from an earlier
-    template are removed so nothing obsolete can be pasted into a paper.
+    template are removed so nothing obsolete can be pasted into a paper. The
+    interaction-energy CSV is written only when ΔE_int data exists and is removed
+    otherwise so a disabled feature never leaves a stale table behind.
     """
     md_path = workspace_dir / WORKFLOW_SI_MD_FILE
     csv_path = workspace_dir / WORKFLOW_SI_CSV_FILE
+    interaction_path = workspace_dir / INTERACTION_ENERGY_CSV_FILE
     try:
         override, population_blocker = _boltzmann_temperature_override(payload)
         data = collect_workflow_si_data(
@@ -1149,21 +1454,25 @@ def write_workflow_si(workspace_dir: Path, payload: Mapping[str, Any]) -> Path |
             population_blocker=population_blocker,
         )
         if not data.has_orca_stages():
-            md_path.unlink(missing_ok=True)
-            csv_path.unlink(missing_ok=True)
+            _remove_si_artifacts(md_path, csv_path, interaction_path)
             return None
-        # Render both documents before writing either, so a rendering failure
-        # leaves the previous consistent pair on disk instead of a fresh md next
-        # to a stale csv.
+        # Render every document before writing any, so a rendering failure leaves
+        # the previous consistent set on disk instead of a fresh md next to a
+        # stale csv.
         md_text = render_workflow_si_md(data)
         csv_text = render_workflow_si_csv(data)
+        interaction_text = render_interaction_energy_csv(data)
         try:
             atomic_write_text(md_path, md_text)
             atomic_write_text(csv_path, csv_text)
+            if interaction_text is not None:
+                atomic_write_text(interaction_path, interaction_text)
+            else:
+                interaction_path.unlink(missing_ok=True)
         except Exception:
-            # A caught second-file failure must never leave a fresh MD beside a
-            # stale CSV (or vice versa). Both artifacts are reproducible.
-            _remove_si_pair(md_path, csv_path)
+            # A caught mid-write failure must never leave an inconsistent mix of
+            # fresh and stale SI artifacts. All of them are reproducible.
+            _remove_si_artifacts(md_path, csv_path, interaction_path)
             raise
         return md_path
     except Exception:  # noqa: BLE001
@@ -1177,6 +1486,7 @@ __all__ = [
     "WorkflowSiData",
     "WorkflowSiEntry",
     "collect_workflow_si_data",
+    "render_interaction_energy_csv",
     "render_workflow_si_csv",
     "render_workflow_si_md",
     "write_workflow_si",
