@@ -330,7 +330,7 @@ def test_discord_provider_end_to_end_posts_embed(monkeypatch) -> None:  # type: 
     assert notify_run_started_event(channel, _started_event()) is True
 
     embed = json.loads(posted["data"])["embeds"][0]
-    assert embed["title"] == r"orca\_auto ORCA Started"
+    assert embed["title"] == "orca_auto ORCA Started"
     field_names = [field["name"] for field in embed["fields"]]
     assert "Job" in field_names
     assert "Attempt" in field_names

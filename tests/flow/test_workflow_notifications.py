@@ -69,7 +69,7 @@ def test_maybe_notify_workflow_phase_summary_sends_crest_summary_once(monkeypatc
     )
     assert len(channel.messages) == 1
     rendered = render_telegram(channel.messages[0])
-    assert "<b>orca_auto Flow CREST Phase Summary</b>" in rendered
+    assert "<b>CREST phase summary</b>" in rendered
     assert "<b>Stages</b>: <code>2</code>" in rendered
     assert "<b>Stage</b>: reactant" in rendered
     assert "<b>Retained conformers</b>: <code>2</code>" in rendered
@@ -126,7 +126,7 @@ def test_maybe_notify_workflow_phase_summary_sends_xtb_ready_counts(monkeypatch:
 
     assert len(channel.messages) == 1
     rendered = render_telegram(channel.messages[0])
-    assert "<b>orca_auto Flow xTB Phase Summary</b>" in rendered
+    assert "<b>xTB phase summary</b>" in rendered
     assert "wf_&lt;xtb&gt;_1" in rendered
     assert "<b>Ready for ORCA</b>: <code>1</code>" in rendered
     assert "<b>planned_orca_stages</b>: <code>1</code>" in rendered

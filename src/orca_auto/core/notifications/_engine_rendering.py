@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from orca_auto.core.messaging.richtext import Severity
+
 EngineEventField = tuple[str, object]
 
 
@@ -11,6 +13,29 @@ def terminal_headline(status: str) -> str:
         "failed": "Job failed",
         "cancelled": "Job cancelled",
     }.get(status, "Job finished")
+
+
+# Kept next to ``terminal_headline`` so the headline vocabulary has one home.
+_HEADLINE_SEVERITY: dict[str, Severity] = {
+    "Job finished": "success",
+    "Job failed": "error",
+    "Job cancelled": "warning",
+}
+
+
+def severity_for_event_line(first_line: str) -> Severity:
+    """Best-effort embed severity for a rendered engine event.
+
+    ``event_lines`` formats the first line as ``[label] <headline>``; match the
+    known terminal headlines by suffix so the ``[label]`` prefix does not defeat
+    the lookup. Anything else — lifecycle headlines, unknown text — falls back
+    to ``info``, the pre-existing behaviour, so this only ever adds colour and
+    never misreports a state it cannot confirm.
+    """
+    for headline, severity in _HEADLINE_SEVERITY.items():
+        if first_line == headline or first_line.endswith(f"] {headline}"):
+            return severity
+    return "info"
 
 
 def optional_terminal_lines(

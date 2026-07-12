@@ -106,7 +106,7 @@ def _transition_spans(previous: str, current: str) -> tuple[Span, ...]:
     previous_text = normalize_text(previous)
     current_text = normalize_text(current)
     if previous_text and current_text:
-        return (code(previous_text), raw(" -> "), code(current_text))
+        return (code(previous_text), raw(" → "), code(current_text))
     if current_text:
         return (code(current_text),)
     if previous_text:
@@ -116,24 +116,24 @@ def _transition_spans(previous: str, current: str) -> tuple[Span, ...]:
 
 def title_from_event_type(event_type: str) -> str:
     labels = {
-        "workflow_status_changed": "Status Changed",
-        "workflow_advance_failed": "Advance Failed",
-        "workflow_stage_submitted": "Stage Submitted",
-        "workflow_stage_completed": "Stage Completed",
-        "workflow_stage_failed": "Stage Failed",
-        "workflow_stage_cancelled": "Stage Cancelled",
-        "workflow_stage_status_changed": "Stage Status Changed",
-        "workflow_stage_handoff_ready": "Handoff Ready",
-        "workflow_stage_handoff_retrying": "Handoff Retrying",
-        "workflow_stage_handoff_failed": "Handoff Failed",
-        "workflow_stage_reaction_handoff_status_changed": "Handoff Status Changed",
-        WORKFLOW_PHASE_FINISHED_EVENT: "Phase Finished",
-        "worker_started": "Worker Started",
-        "worker_stopped": "Worker Stopped",
-        "worker_interrupted": "Worker Interrupted",
-        "worker_lock_error": "Worker Lock Error",
+        "workflow_status_changed": "Status changed",
+        "workflow_advance_failed": "Advance failed",
+        "workflow_stage_submitted": "Stage submitted",
+        "workflow_stage_completed": "Stage completed",
+        "workflow_stage_failed": "Stage failed",
+        "workflow_stage_cancelled": "Stage cancelled",
+        "workflow_stage_status_changed": "Stage status changed",
+        "workflow_stage_handoff_ready": "Handoff ready",
+        "workflow_stage_handoff_retrying": "Handoff retrying",
+        "workflow_stage_handoff_failed": "Handoff failed",
+        "workflow_stage_reaction_handoff_status_changed": "Handoff status changed",
+        WORKFLOW_PHASE_FINISHED_EVENT: "Phase finished",
+        "worker_started": "Worker started",
+        "worker_stopped": "Worker stopped",
+        "worker_interrupted": "Worker interrupted",
+        "worker_lock_error": "Worker lock error",
     }
-    return f"orca_auto Flow {labels.get(event_type, 'Event')}"
+    return labels.get(event_type, "Workflow event")
 
 
 def _severity_for(event_type: str) -> Severity:
@@ -212,14 +212,15 @@ def _message(context: dict[str, str], *fields: Any) -> Message:
         title=title,
         severity=_severity_for(context["event_type"]),
         groups=(group(*fields, heading=title_heading(title)),),
+        author="orca_auto",
     )
 
 
 def workflow_status_event_message(context: dict[str, str]) -> Message:
     return _message(
         context,
-        field_row("Workflow", code(context["workflow_id"])),
-        field_row("Template", code(context["template_name"])),
+        field_row("Workflow", code(context["workflow_id"]), inline=True),
+        field_row("Template", code(context["template_name"]), inline=True),
         field_row("Status", *_transition_spans(context["previous_status"], context["status"])),
         field_row("Worker session", code(context["session"])),
     )
@@ -228,8 +229,8 @@ def workflow_status_event_message(context: dict[str, str]) -> Message:
 def workflow_advance_failed_event_message(context: dict[str, str]) -> Message:
     return _message(
         context,
-        field_row("Workflow", code(context["workflow_id"])),
-        field_row("Template", code(context["template_name"])),
+        field_row("Workflow", code(context["workflow_id"]), inline=True),
+        field_row("Template", code(context["template_name"]), inline=True),
         field_row("Reason", code(context["reason"])),
         field_row("Worker session", code(context["session"])),
     )
@@ -238,18 +239,17 @@ def workflow_advance_failed_event_message(context: dict[str, str]) -> Message:
 def stage_status_event_message(context: dict[str, str]) -> Message:
     task = f"{context['engine']}/{context['task_kind']}"
     fields = [
-        field_row("Workflow", code(context["workflow_id"])),
+        field_row("Workflow", code(context["workflow_id"]), inline=True),
+        field_row("Stage", code(context["stage_id"]), inline=True),
+        field_row("Task", code(task), inline=True),
         field_row("Template", code(context["template_name"])),
-        field_row("Event", code(context["event_type"])),
-        field_row("Stage", code(context["stage_id"])),
-        field_row("Task", code(task)),
         field_row(
             "Stage status",
             *_transition_spans(context["previous_stage_status"], context["stage_status"]),
         ),
         field_row("Worker session", code(context["session"])),
     ]
-    if context["reason"]:
+    if context["reason"] and context["reason"] != "-":
         fields.append(field_row("Reason", code(context["reason"])))
     return _message(context, *fields)
 
@@ -257,11 +257,10 @@ def stage_status_event_message(context: dict[str, str]) -> Message:
 def stage_handoff_event_message(context: dict[str, str]) -> Message:
     task = f"{context['engine']}/{context['task_kind']}"
     fields = [
-        field_row("Workflow", code(context["workflow_id"])),
+        field_row("Workflow", code(context["workflow_id"]), inline=True),
+        field_row("Stage", code(context["stage_id"]), inline=True),
+        field_row("Task", code(task), inline=True),
         field_row("Template", code(context["template_name"])),
-        field_row("Event", code(context["event_type"])),
-        field_row("Stage", code(context["stage_id"])),
-        field_row("Task", code(task)),
         field_row(
             "Stage status",
             *_transition_spans(context["previous_stage_status"], context["stage_status"]),
@@ -274,7 +273,7 @@ def stage_handoff_event_message(context: dict[str, str]) -> Message:
         ),
         field_row("Worker session", code(context["session"])),
     ]
-    if context["reason"]:
+    if context["reason"] and context["reason"] != "-":
         fields.append(field_row("Reason", code(context["reason"])))
     return _message(context, *fields)
 
@@ -282,7 +281,6 @@ def stage_handoff_event_message(context: dict[str, str]) -> Message:
 def worker_lifecycle_event_message(context: dict[str, str]) -> Message:
     return _message(
         context,
-        field_row("Event", code(context["event_type"])),
         field_row("Workflow root", code(context["root_text"])),
         field_row("Worker session", code(context["session"])),
         field_row("Reason", code(context["reason"])),
@@ -305,12 +303,17 @@ def _phase_finished_event_message(
     fields = [
         field_row("Workflow", code(context["workflow_id"])),
         field_row("Template", code(context["template_name"])),
-        field_row("Event", code(context["event_type"])),
-        field_row("Phase", code(event_text(event, metadata, "phase_label", "phase") or "-")),
         field_row(
-            "Phase outcome", code(event_text(event, metadata, "phase_outcome", "status") or "-")
+            "Phase", code(event_text(event, metadata, "phase_label", "phase") or "-"), inline=True
         ),
-        field_row("Stage count", code(event_text(event, metadata, "stage_count") or "0")),
+        field_row(
+            "Phase outcome",
+            code(event_text(event, metadata, "phase_outcome", "status") or "-"),
+            inline=True,
+        ),
+        field_row(
+            "Stage count", code(event_text(event, metadata, "stage_count") or "0"), inline=True
+        ),
         field_row(
             "Stage status counts", code(format_count_mapping(metadata.get("stage_status_counts")))
         ),

@@ -30,19 +30,20 @@ def _render(event: dict[str, Any]) -> str:
 
 
 def test_status_changed_render() -> None:
-    # The ``->`` separator is HTML-escaped now (valid HTML; Telegram shows "->").
+    # Identity moved to the Discord author line, so the title no longer carries
+    # the "orca_auto Flow" prefix; the transition uses a "→" arrow.
     assert _render(_event(event_type="workflow_status_changed")) == (
-        "<b>orca_auto Flow Status Changed</b>\n"
+        "<b>Status changed</b>\n"
         "<b>Workflow</b>: <code>wf1</code>\n"
         "<b>Template</b>: <code>tmpl</code>\n"
-        "<b>Status</b>: <code>queued</code> -&gt; <code>running</code>\n"
+        "<b>Status</b>: <code>queued</code> → <code>running</code>\n"
         "<b>Worker session</b>: <code>sess&lt;1&gt;</code>"
     )
 
 
 def test_advance_failed_render() -> None:
     assert _render(_event(event_type="workflow_advance_failed")) == (
-        "<b>orca_auto Flow Advance Failed</b>\n"
+        "<b>Advance failed</b>\n"
         "<b>Workflow</b>: <code>wf1</code>\n"
         "<b>Template</b>: <code>tmpl</code>\n"
         "<b>Reason</b>: <code>because</code>\n"
@@ -63,10 +64,12 @@ def test_stage_status_render_escapes_special_chars() -> None:
             },
         )
     )
-    assert "<b>orca_auto Flow Stage Completed</b>" in rendered
+    assert "<b>Stage completed</b>" in rendered
     assert "<b>Stage</b>: <code>s&lt;1&gt;</code>" in rendered
     assert "<b>Task</b>: <code>orca/opt</code>" in rendered
-    assert "<b>Stage status</b>: <code>running</code> -&gt; <code>completed</code>" in rendered
+    assert "<b>Stage status</b>: <code>running</code> → <code>completed</code>" in rendered
+    # The internal event-type enum is no longer surfaced as a field.
+    assert "<b>Event</b>" not in rendered
 
 
 def test_handoff_render_has_two_transitions() -> None:
@@ -84,13 +87,13 @@ def test_handoff_render_has_two_transitions() -> None:
             },
         )
     )
-    assert "<b>Reaction handoff</b>: <code>pending</code> -&gt; <code>ready</code>" in rendered
+    assert "<b>Reaction handoff</b>: <code>pending</code> → <code>ready</code>" in rendered
 
 
 def test_worker_lifecycle_render() -> None:
+    # The title already names the worker event, so no redundant "Event" field.
     assert _render(_event(event_type="worker_started")) == (
-        "<b>orca_auto Flow Worker Started</b>\n"
-        "<b>Event</b>: <code>worker_started</code>\n"
+        "<b>Worker started</b>\n"
         "<b>Workflow root</b>: <code>/tmp/wfroot</code>\n"
         "<b>Worker session</b>: <code>sess&lt;1&gt;</code>\n"
         "<b>Reason</b>: <code>because</code>"
@@ -98,8 +101,10 @@ def test_worker_lifecycle_render() -> None:
 
 
 def test_default_event_render() -> None:
+    # Unknown event types keep the "Event" field: the generic title alone does
+    # not say what happened.
     rendered = _render(_event(event_type="something_else"))
-    assert rendered.startswith("<b>orca_auto Flow Event</b>")
+    assert rendered.startswith("<b>Workflow event</b>")
     assert "<b>Event</b>: <code>something_else</code>" in rendered
 
 
