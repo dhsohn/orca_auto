@@ -149,6 +149,18 @@ def test_create_reaction_ts_search_workflow_rejects_non_positive_limits(
         ({"max_cores": 0}, "max_cores must be >= 1"),
         ({"multiplicity": 0}, "multiplicity must be >= 1"),
         ({"max_memory_gb": "lots"}, "max_memory_gb must be an integer >= 1"),
+        (
+            {"boltzmann_temperature_k": float("nan")},
+            "boltzmann_temperature_k must be a positive finite number",
+        ),
+        (
+            {"boltzmann_temperature_k": 0},
+            "boltzmann_temperature_k must be a positive finite number",
+        ),
+        (
+            {"boltzmann_temperature_k": True},
+            "boltzmann_temperature_k must be a positive finite number",
+        ),
     ],
 )
 def test_create_conformer_screening_workflow_rejects_invalid_positive_fields(
@@ -165,6 +177,28 @@ def test_create_conformer_screening_workflow_rejects_invalid_positive_fields(
             workflow_root=tmp_path,
             **kwargs,
         )
+
+
+def test_conformer_request_preserves_existing_positional_manifest_slot() -> None:
+    manifest = {"ewin": 8}
+
+    request = orchestration.ConformerScreeningWorkflowRequest(
+        "input.xyz",
+        "/runs",
+        None,
+        "standard",
+        10,
+        8,
+        32,
+        20,
+        "! r2scan-3c Opt TightSCF",
+        0,
+        1,
+        manifest,
+    )
+
+    assert request.crest_job_manifest == manifest
+    assert request.boltzmann_temperature_k is None
 
 
 @pytest.mark.parametrize("crest_mode", ["standard", "nci"])
@@ -302,6 +336,7 @@ def test_create_conformer_screening_nci_workflow_writes_expected_request_shape(
         orca_route_line="! nci route",
         charge=-1,
         multiplicity=3,
+        boltzmann_temperature_k=310.0,
     )
 
     assert payload["workflow_id"] == "wf_conf_nci_extra"
@@ -324,6 +359,7 @@ def test_create_conformer_screening_nci_workflow_writes_expected_request_shape(
         "orca_route_line": "! nci route",
         "charge": -1,
         "multiplicity": 3,
+        "boltzmann_temperature_k": 310.0,
         "crest_mode": "nci",
     }
     assert sync_calls == ["wf_conf_nci_extra"]

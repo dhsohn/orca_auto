@@ -169,6 +169,7 @@ def create_conformer_screening_workflow(
     orca_route_line: str = "! r2scan-3c Opt TightSCF",
     charge: int = 0,
     multiplicity: int = 1,
+    boltzmann_temperature_k: float | None = None,
     crest_job_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return create_conformer_screening_workflow_from_request(
@@ -184,6 +185,7 @@ def create_conformer_screening_workflow(
             orca_route_line=orca_route_line,
             charge=charge,
             multiplicity=multiplicity,
+            boltzmann_temperature_k=boltzmann_temperature_k,
             crest_job_manifest=crest_job_manifest,
         )
     )

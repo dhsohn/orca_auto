@@ -22,6 +22,7 @@ from ..manifest import (
 from ..manifest import (
     manifest_mapping as _manifest_mapping,
 )
+from ..manifest import optional_positive_float as _optional_positive_float
 from ..manifest import (
     resolve_endpoint_pairing_manifest as _resolve_endpoint_pairing_manifest,
 )
@@ -264,6 +265,12 @@ def _update_request_parameters(
         endpoint_pairing=endpoint_pairing,
     )
     _apply_orca_request_parameters(params, manifest)
+    if "boltzmann_temperature_k" in manifest:
+        temperature = _optional_positive_float(manifest, "boltzmann_temperature_k")
+        if temperature is None:
+            params.pop("boltzmann_temperature_k", None)
+        else:
+            params["boltzmann_temperature_k"] = temperature
 
 
 def _flow_restart_settings(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:

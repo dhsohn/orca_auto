@@ -346,6 +346,7 @@ def test_restart_failed_workflow_reloads_flow_yaml_for_crest_stage(tmp_path: Pat
                 "workflow_type: reaction_ts_search",
                 "crest_mode: nci",
                 "priority: 4",
+                "boltzmann_temperature_k: 310.0",
                 "resources:",
                 "  max_cores: 3",
                 "  max_memory_gb: 11",
@@ -444,6 +445,7 @@ def test_restart_failed_workflow_reloads_flow_yaml_for_crest_stage(tmp_path: Pat
     assert params["priority"] == 4
     assert params["max_cores"] == 3
     assert params["max_memory_gb"] == 11
+    assert params["boltzmann_temperature_k"] == pytest.approx(310.0)
     assert params["crest_job_manifest"] == expected_overrides
 
 

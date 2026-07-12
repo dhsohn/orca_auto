@@ -210,6 +210,11 @@ def _conformer_template_request(
             "orca_route_line": str(request.orca_route_line),
             "charge": int(request.charge),
             "multiplicity": int(request.multiplicity),
+            **(
+                {"boltzmann_temperature_k": request.boltzmann_temperature_k}
+                if request.boltzmann_temperature_k is not None
+                else {}
+            ),
             **_optional_mapping_parameter("crest_job_manifest", request.crest_job_manifest),
         },
         source_artifacts=(

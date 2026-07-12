@@ -103,6 +103,9 @@ class OrcaResult:
     solvation: str = ""
     elements: list[str] = field(default_factory=list)
     coordinates: list[AtomRow] = field(default_factory=list)
+    # True only when charge/multiplicity were explicitly parsed from the
+    # executed output. Appended for positional compatibility.
+    electronic_state_verified: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +165,7 @@ def _populate_input_metadata(result: OrcaResult, text: str) -> None:
     if cm_match:
         result.charge = int(cm_match.group(1))
         result.multiplicity = int(cm_match.group(2))
+        result.electronic_state_verified = True
 
 
 def _populate_coordinates(result: OrcaResult, text: str) -> None:

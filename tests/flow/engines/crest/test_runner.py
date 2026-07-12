@@ -349,7 +349,7 @@ def test_build_command_emits_verified_sampling_flags(
         {
             "mdlen": 1.25,
             "wscal": 1.0,
-            "tstep": 5,
+            "tstep": 2.5,
             "mddump": 100,
             "shake": 2,
             "norotmd": True,
@@ -360,7 +360,7 @@ def test_build_command_emits_verified_sampling_flags(
     # an int-valued real (wscal 1.0) normalizes to "1".
     assert command[command.index("--mdlen") + 1] == "1.25"
     assert command[command.index("--wscal") + 1] == "1"
-    assert command[command.index("--tstep") + 1] == "5"
+    assert command[command.index("--tstep") + 1] == "2.5"
     assert command[command.index("--mddump") + 1] == "100"
     assert command[command.index("--shake") + 1] == "2"
     assert "--norotmd" in command
@@ -393,7 +393,14 @@ def test_build_command_false_bools_and_unknown_keys_omit_flags(
     command = _sampling_command(
         monkeypatch,
         tmp_path,
-        {"norotmd": False, "nocross": False, "cross": False, "mdlenn": 1.0, "shakee": 2},
+        {
+            "norotmd": False,
+            "nocross": False,
+            "cross": False,
+            "mdlenn": 1.0,
+            "shakee": 2,
+            "no_cross": True,
+        },
     )
     assert "--norotmd" not in command
     assert "--nocross" not in command
@@ -409,6 +416,15 @@ def test_build_command_cross_and_nocross_are_mutually_exclusive(
         _sampling_command(monkeypatch, tmp_path, {"cross": True, "nocross": True})
 
 
+def test_build_command_cross_true_keeps_crest_default_without_redundant_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    command = _sampling_command(monkeypatch, tmp_path, {"cross": True})
+
+    assert "--cross" not in command
+    assert "--nocross" not in command
+
+
 @pytest.mark.parametrize(
     "manifest",
     [
@@ -416,7 +432,6 @@ def test_build_command_cross_and_nocross_are_mutually_exclusive(
         {"mdlen": -1.0},
         {"wscal": "fast"},
         {"mdlen": True},
-        {"tstep": 2.5},
         {"tstep": 0},
         {"tstep": "fast"},
         {"mddump": 1.5},
@@ -429,6 +444,65 @@ def test_build_command_rejects_malformed_sampling_values(
 ) -> None:
     with pytest.raises(ValueError):
         _sampling_command(monkeypatch, tmp_path, manifest)
+
+
+@pytest.mark.parametrize("key", ["cross", "nocross", "norotmd"])
+@pytest.mark.parametrize("value", ["treu", 2, [], {}])
+def test_build_command_rejects_malformed_sampling_booleans(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    key: str,
+    value: Any,
+) -> None:
+    with pytest.raises(ValueError, match=key):
+        _sampling_command(monkeypatch, tmp_path, {key: value})
+
+
+def test_build_command_accepts_canonical_boolean_strings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    command = _sampling_command(
+        monkeypatch,
+        tmp_path,
+        {"norotmd": "yes", "nocross": "true", "cross": "false"},
+    )
+
+    assert "--norotmd" in command
+    assert "--nocross" in command
+    assert "--cross" not in command
+
+
+@pytest.mark.parametrize("manifest", [{"mdlen": 4e-7}, {"wscal": 4e-7}])
+def test_build_command_never_rounds_positive_sampling_values_to_zero(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    manifest: dict[str, Any],
+) -> None:
+    with pytest.raises(ValueError):
+        _sampling_command(monkeypatch, tmp_path, manifest)
+
+
+def test_build_command_enforces_crest_native_numeric_bounds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    max_int = (1 << 31) - 1
+    command = _sampling_command(monkeypatch, tmp_path, {"mddump": max_int})
+    assert command[command.index("--mddump") + 1] == str(max_int)
+
+    with pytest.raises(ValueError, match="mddump"):
+        _sampling_command(monkeypatch, tmp_path, {"mddump": max_int + 1})
+    with pytest.raises(ValueError, match="MD steps"):
+        _sampling_command(monkeypatch, tmp_path, {"mdlen": 10_000_000, "tstep": 0.001})
+    with pytest.raises(ValueError, match="MD steps"):
+        _sampling_command(monkeypatch, tmp_path, {"mdlen": 1e308, "tstep": 0.001})
+
+
+@pytest.mark.parametrize("tstep", [0.0009, 2500.1, float("nan"), float("inf")])
+def test_build_command_rejects_native_unsafe_tstep(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tstep: float
+) -> None:
+    with pytest.raises(ValueError, match="tstep"):
+        _sampling_command(monkeypatch, tmp_path, {"tstep": tstep})
 
 
 def test_start_crest_job_fails_closed_on_malformed_sampling_value(

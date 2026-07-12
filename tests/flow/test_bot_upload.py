@@ -1070,6 +1070,11 @@ def test_confirm_rejects_workflow_resources_above_server_cap(tmp_path: Path) -> 
         "workflow_type: conformer_screening\norca_route_line: '! Compound'\n",
         "workflow_type: conformer_screening\norca_route_line: '! r2scan-3c MD'\n",
         "workflow_type: conformer_screening\nroute_line: '! r2scan-3c GCP(FILE)'\n",
+        "workflow_type: conformer_screening\ncrest:\n  mdlen: 1000000000\n",
+        "workflow_type: conformer_screening\ncrest:\n  len: 1\n",
+        "workflow_type: conformer_screening\ncrest:\n  tstep: 0.001\n",
+        "workflow_type: conformer_screening\ncrest:\n  mddump: 1\n",
+        ("workflow_type: conformer_screening\ncrest: &cost\n  mdlen: 1000000000\nshared: *cost\n"),
     ],
 )
 def test_uploaded_workflow_rejects_injected_or_unbounded_generation(

@@ -315,15 +315,40 @@ ORCA analyzer 상태:
 - `workflow_report.html`은 워크플로우 advance 때 다시 쓰이는 사람용 요약입니다.
 - `workflow_si.md`와 `si_data.csv`는 ORCA stage가 있는 워크플로우에서 advance 때
   다시 쓰입니다: 논문 SI용 조립본(계산 세부사항, 상대 에너지, 구조별 블록)과
-  기계가독 companion입니다. minimum 중 하나라도 Gibbs 자유에너지를 가지면 Boltzmann
-  population도 포함합니다 — **minima만** 대상(전이상태 제외)이며 화학종
-  (`formula|charge|multiplicity`)별로 독립 정규화합니다. `si_data.csv`는 `warnings`
+  기계가독 companion입니다. `conformer_screening` population은 워크플로우가 종료
+  `completed` 상태이고 ensemble 전체가 완전할 때만 냅니다. route상 minimum으로 분류된
+  모든 구조가 최적화 수렴하고 완전한 3N 진동 스펙트럼에서 `Nimag = 0`이어야 하며,
+  유한한 전자/Gibbs 에너지와 유한한 양의 thermochemistry 온도를 가져야 합니다.
+  끝나지 않았거나 실패했거나 사용할 수 없는
+  conformer가 하나라도 있으면 일부 ensemble을 100%로 재정규화하지 않고 전체
+  population을 note와 함께 생략합니다.
+- 상대 에너지와 population은 동일한 유효 E/G 규약을 사용합니다. single-point E는
+  정확한 provenance가 동일한 refinement가 전체 구조를 빠짐없이 덮을 때만 사용하고,
+  합성 G는 열화학 correction도 완전하며 최적화/주파수 provenance까지 정확히 같아야
+  사용합니다. 정확한 provenance에는 실제 실행 method, basis, solvation, ORCA version,
+  route, charge, multiplicity가 포함됩니다. refinement가 일부뿐이거나 서로 섞였으면 해당
+  최적화 수준 값으로 일관되게 fallback하고 note를 남깁니다. 최적화/주파수의 실제 실행
+  route 또는 ORCA version 증거가 빠졌으면 population을 생략하고, 선택적 SP provenance가
+  불완전하면 그 refinement를 사용하지 않습니다. 파싱한 charge/multiplicity도 선택된
+  입력과 일치해야 합니다. 각
+  `formula|charge|multiplicity` population 그룹 안에서도 최적화/주파수 provenance가
+  정확히 같아야 합니다.
+- Population은 `formula|charge|multiplicity` 그룹별로 독립 정규화합니다. 이 키는 연결성
+  정체성이 아니라 화학량론적 proxy입니다. 보존된 minimum마다 통계 가중치 1을 쓰며,
+  대칭성/축퇴도 보정이나 post-DFT 중복 제거를 하지 않습니다. `si_data.csv`는 `warnings`
   뒤에 5개 컬럼(`cluster_key`, `rel_E_kcalmol`, `rel_G_kcalmol`, `boltzmann_T_K`,
   `boltzmann_population`)을 append하며 기존 컬럼의 이름·순서·인덱스는 그대로입니다.
-  온도는 파싱된 thermochemistry 온도를 쓰며, 선택적 `boltzmann_temperature_k` 매니페스트
-  키는 그 파싱 온도와 일치할 때 사용하는 값을 고정할 뿐(주파수 작업이 쓰지 않은 온도를
-  임의로 지정할 수 없음)입니다. minimum에 Gibbs 에너지가 없거나 온도가 없거나
-  불일치하면 population은 (가정 온도로 지어내지 않고) 생략합니다.
+  Markdown은 population을 백분율로 표시하지만 `boltzmann_population`은 `[0, 1]` 범위의
+  분율입니다. CSV의 `rel_E_kcalmol`과 `rel_G_kcalmol`은 공통 에너지 규약 아래 해당
+  population 그룹의 최저 E와 G를 각각 기준으로 한 그룹 로컬 상대값이며, 그룹 전체를
+  가로지르는 전역 기준값이 아닙니다.
+- Population 온도는 파싱된 thermochemistry 온도입니다. 선택적
+  `boltzmann_temperature_k` 매니페스트 키는 admission에서 유한한 양수인지 검증해 내구성
+  워크플로우 요청에 저장하는 pin입니다. 모든 주파수 작업의 파싱 온도와 0.01 K 이내로
+  일치해야 하며, 작업이 사용하지 않은 온도의 열화학 값을 만들 수는 없습니다. SI는 이후
+  수정된 원본 `flow.yaml`이 아니라 내구성 요청에 저장된 값을 읽습니다. 자료가 없거나
+  유한하지 않거나 양수가 아니거나 서로 불일치하면 가정 온도로 지어내지 않고 population을
+  생략합니다.
 - `workflow_registry.json`과 `workflow_registry.journal.jsonl`은 워크플로우 목록과 이벤트
   히스토리를 지원합니다.
 - 내부 엔진 큐와 출력은 `<runs root>/<workflow_id>/01_crest`, `02_xtb`, `03_orca` 같은

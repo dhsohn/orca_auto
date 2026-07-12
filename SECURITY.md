@@ -56,7 +56,8 @@ The following classes of issues are security-relevant for orca_auto:
   decompression bombs) accepted through the Discord `!run` upload path;
 - bypassing upload staging, identity, resource, or commit-state controls in a
   way that can run a different archive than the operator confirmed, exceed
-  server-owned limits, or delete a run whose queue outcome is uncertain;
+  server-owned limits (including CREST runtime/trajectory controls), or delete
+  a run whose queue outcome is uncertain;
 - unsafe acceptance of Windows, `/mnt/<drive>`, relative, or `.exe` executable
   paths where Linux-only executable policy is expected;
 - shell injection or unsafe process invocation;
@@ -74,6 +75,12 @@ dedicated least-privilege identities with site-appropriate filesystem, process,
 disk, memory, and wall-time controls. Keep bot credentials and unrelated data
 outside the worker's readable environment, and grant `allowed_user_ids` only to
 trusted operators.
+
+Uploaded workflows cannot set `crest.mdlen`, `crest.len`, `crest.tstep`, or
+`crest.mddump`. These controls can directly expand CREST runtime or trajectory
+volume and therefore remain server-owned at the Discord ingress boundary. Do
+not weaken or bypass that rejection when extending upload manifests; trusted
+local `run-dir` workflows remain the place for those validated overrides.
 
 ## Non-security issues
 

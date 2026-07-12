@@ -35,6 +35,14 @@ _RETAINED_ENSEMBLE_CANDIDATES = (
     "crest_rotamers.xyz",
     "crest_best.xyz",
 )
+_CREST_NATIVE_INT_MAX = (1 << 31) - 1
+_CREST_FIXED_REAL_MIN = 1e-6
+_CREST_DEFAULT_TSTEP_FS = 5.0
+# CREST 3.0.2 auto-selects 2.5–500 ps when mdlen is absent. These bounds keep
+# its default-integer MD step count in [1, INT32_MAX] without inventing a
+# chemistry-policy cap.
+_CREST_TSTEP_MIN_FS = 0.001
+_CREST_TSTEP_MAX_FS = 2500.0
 
 
 @dataclass(frozen=True)
@@ -152,7 +160,13 @@ def _append_crest_scalar_options(command: list[str], manifest: dict[str, Any]) -
 # pinned CREST version; CREST accepts the `--` prefix used across this runner.
 
 
-def _crest_positive_real(manifest: dict[str, Any], key: str) -> str | None:
+def _crest_positive_real(
+    manifest: dict[str, Any],
+    key: str,
+    *,
+    minimum: float = _CREST_FIXED_REAL_MIN,
+    maximum: float | None = None,
+) -> str | None:
     """A strictly-positive real → normalized CREST arg (no exponent), or None if absent."""
     raw = manifest.get(key)
     if raw is None or (isinstance(raw, str) and not raw.strip()):
@@ -163,9 +177,12 @@ def _crest_positive_real(manifest: dict[str, Any], key: str) -> str | None:
         value = float(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"CREST option {key!r} must be a positive number, got {raw!r}") from exc
-    if not math.isfinite(value) or value <= 0:
+    if not math.isfinite(value) or value < minimum or (maximum is not None and value > maximum):
         raise ValueError(f"CREST option {key!r} must be a positive number, got {raw!r}")
-    return f"{value:.6f}".rstrip("0").rstrip(".")
+    rendered = f"{value:.6f}".rstrip("0").rstrip(".")
+    if not rendered or float(rendered) <= 0:
+        raise ValueError(f"CREST option {key!r} is too small to represent safely")
+    return rendered
 
 
 def _crest_int(manifest: dict[str, Any], key: str) -> int | None:
@@ -195,21 +212,62 @@ def _resolve_mdlen(manifest: dict[str, Any]) -> str | None:
     return mdlen if mdlen is not None else length
 
 
+def _crest_bool(manifest: dict[str, Any], key: str) -> bool:
+    """Strict optional boolean for the new sampling contract."""
+    raw = manifest.get(key)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return False
+    if isinstance(raw, bool):
+        return raw
+    text = str(raw).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"CREST option {key!r} must be a boolean, got {raw!r}")
+
+
+def _validate_md_step_count(mdlen: str | None, tstep: str | None) -> None:
+    if mdlen is None:
+        return
+    step_fs = float(tstep) if tstep is not None else _CREST_DEFAULT_TSTEP_FS
+    raw_step_count = (float(mdlen) / step_fs) * 1000.0
+    if not math.isfinite(raw_step_count):
+        raise ValueError(
+            "CREST mdlen/tstep combination must produce between 1 and "
+            f"{_CREST_NATIVE_INT_MAX} MD steps"
+        )
+    step_count = math.floor(raw_step_count + 0.5)
+    if step_count < 1 or step_count > _CREST_NATIVE_INT_MAX:
+        raise ValueError(
+            "CREST mdlen/tstep combination must produce between 1 and "
+            f"{_CREST_NATIVE_INT_MAX} MD steps"
+        )
+
+
 def _append_crest_sampling_options(command: list[str], manifest: dict[str, Any]) -> None:
     mdlen = _resolve_mdlen(manifest)
+    wscal = _crest_positive_real(manifest, "wscal")
+    tstep = _crest_positive_real(
+        manifest,
+        "tstep",
+        minimum=_CREST_TSTEP_MIN_FS,
+        maximum=_CREST_TSTEP_MAX_FS,
+    )
+    _validate_md_step_count(mdlen, tstep)
+
+    mddump = _crest_int(manifest, "mddump")
+    if mddump is not None and not (1 <= mddump <= _CREST_NATIVE_INT_MAX):
+        raise ValueError(f"CREST option 'mddump' must be between 1 and {_CREST_NATIVE_INT_MAX}")
+
     if mdlen is not None:
         command.extend(["--mdlen", mdlen])
-
-    wscal = _crest_positive_real(manifest, "wscal")
     if wscal is not None:
         command.extend(["--wscal", wscal])
-
-    for manifest_key, option in (("tstep", "--tstep"), ("mddump", "--mddump")):
-        value = _crest_int(manifest, manifest_key)
-        if value is not None:
-            if value <= 0:
-                raise ValueError(f"CREST option {manifest_key!r} must be a positive integer")
-            command.extend([option, str(value)])
+    if tstep is not None:
+        command.extend(["--tstep", tstep])
+    if mddump is not None:
+        command.extend(["--mddump", str(mddump)])
 
     shake = _crest_int(manifest, "shake")
     if shake is not None:
@@ -217,17 +275,16 @@ def _append_crest_sampling_options(command: list[str], manifest: dict[str, Any])
             raise ValueError(f"CREST option 'shake' must be 0, 1, or 2, got {shake}")
         command.extend(["--shake", str(shake)])
 
-    if _engine_runner.bool_flag(manifest, "norotmd"):
+    if _crest_bool(manifest, "norotmd"):
         command.append("--norotmd")
 
-    cross = _engine_runner.bool_flag(manifest, "cross")
-    nocross = _engine_runner.bool_flag(manifest, "nocross") or _engine_runner.bool_flag(
-        manifest, "no_cross"
-    )
+    cross = _crest_bool(manifest, "cross")
+    nocross = _crest_bool(manifest, "nocross")
     if cross and nocross:
         raise ValueError("CREST options 'cross' and 'nocross' are mutually exclusive")
-    if cross:
-        command.append("--cross")
+    # GC crossing is CREST 3.0.2's default. Its advertised explicit ``--cross``
+    # flag makes a dry run lose the conformational-search job type, so ``true``
+    # validates the default without emitting that broken redundant flag.
     if nocross:
         command.append("--nocross")
 

@@ -9,6 +9,7 @@ import pytest
 
 from orca_auto import cli_common
 from orca_auto.flow.cli import run_dir as cli_run_dir
+from orca_auto.flow.run_dir import manifest as run_dir_manifest
 from orca_auto.flow.run_dir import options as run_dir_options
 
 
@@ -19,6 +20,26 @@ def _create_payload(template_name: str) -> dict[str, Any]:
         "metadata": {"workspace_dir": "/tmp/workflows/wf_create"},
         "stages": [{}, {}],
     }
+
+
+def test_run_dir_options_preserve_existing_positional_field_order() -> None:
+    options = run_dir_options.RunDirWorkflowOptions(
+        "/runs",
+        "standard",
+        10,
+        8,
+        32,
+        20,
+        "! r2scan-3c Opt TightSCF",
+        0,
+        1,
+        3,
+        4,
+    )
+
+    assert options.max_crest_candidates == 3
+    assert options.max_xtb_stages == 4
+    assert options.boltzmann_temperature_k is None
 
 
 def test_cmd_run_dir_reads_manifest_for_reaction_workflow(
@@ -113,6 +134,7 @@ def test_cmd_run_dir_reads_manifest_for_conformer_workflow(
                 'orca_route_line: "! test"',
                 "charge: -1",
                 "multiplicity: 2",
+                "boltzmann_temperature_k: 310.0",
             ]
         )
         + "\n",
@@ -164,7 +186,47 @@ def test_cmd_run_dir_reads_manifest_for_conformer_workflow(
         "orca_route_line": "! test",
         "charge": -1,
         "multiplicity": 2,
+        "boltzmann_temperature_k": 310.0,
     }
+
+
+@pytest.mark.parametrize("section", ["crest: fast", "xtb: []", "orca: 3"])
+def test_run_dir_rejects_non_mapping_engine_sections(tmp_path: Path, section: str) -> None:
+    workflow_dir = tmp_path / "bad_engine_section"
+    workflow_dir.mkdir()
+    (workflow_dir / "input.xyz").write_text("1\n\nH 0 0 0\n", encoding="utf-8")
+    (workflow_dir / "flow.yaml").write_text(
+        f"workflow_type: conformer_screening\n{section}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="section must be a mapping"):
+        run_dir_manifest._load_run_dir_workflow_config(
+            SimpleNamespace(workflow_type=None), workflow_dir
+        )
+
+
+def test_run_dir_rejects_invalid_boltzmann_temperature_at_admission(tmp_path: Path) -> None:
+    workflow_dir = tmp_path / "bad_temperature"
+    workflow_dir.mkdir()
+    (workflow_dir / "input.xyz").write_text("1\n\nH 0 0 0\n", encoding="utf-8")
+    (workflow_dir / "flow.yaml").write_text(
+        "workflow_type: conformer_screening\nboltzmann_temperature_k: fast\n",
+        encoding="utf-8",
+    )
+    config = run_dir_manifest._load_run_dir_workflow_config(
+        SimpleNamespace(workflow_type=None), workflow_dir
+    )
+
+    with pytest.raises(ValueError, match="boltzmann_temperature_k must be"):
+        run_dir_options._resolve_run_dir_workflow_options(
+            SimpleNamespace(),
+            config.manifest,
+            config.sections,
+            default_orca_route_line="! r2scan-3c Opt TightSCF",
+            default_max_orca_stages=20,
+            workflow_root=str(tmp_path / "runs"),
+        )
 
 
 def test_cmd_run_dir_reuses_direct_child_workflow_directory_when_already_under_workflow_root(

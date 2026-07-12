@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -14,6 +15,28 @@ def manifest_mapping(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     return {str(key): item for key, item in value.items() if normalize_text(key)}
+
+
+def optional_positive_float(
+    mapping: dict[str, Any],
+    key: str,
+    *,
+    label: str | None = None,
+) -> float | None:
+    """Return one optional positive finite numeric field, rejecting malformed values."""
+    raw = mapping.get(key)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    field = label or key
+    if isinstance(raw, bool):
+        raise ValueError(f"{field} must be a positive finite number, not a boolean")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a positive finite number. got={raw!r}") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{field} must be a positive finite number. got={raw!r}")
+    return value
 
 
 def load_flow_manifest(
@@ -104,7 +127,12 @@ def resolve_manifest_file_value(
 
 
 def resolve_engine_manifest(base_dir: Path, manifest: dict[str, Any], key: str) -> dict[str, Any]:
-    section = manifest_mapping(manifest.get(key))
+    raw = manifest.get(key)
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{key} section must be a mapping")
+    section = manifest_mapping(raw)
     if not section:
         return {}
     resolved = dict(section)
@@ -123,7 +151,7 @@ def resolve_engine_manifest_with_presence(
     manifest: dict[str, Any],
     key: str,
 ) -> tuple[bool, dict[str, Any]]:
-    if not isinstance(manifest.get(key), dict):
+    if key not in manifest or manifest.get(key) is None:
         return False, {}
     return True, resolve_engine_manifest(base_dir, manifest, key)
 
@@ -144,6 +172,7 @@ __all__ = [
     "load_flow_manifest",
     "manifest_allows_external_inputs",
     "manifest_mapping",
+    "optional_positive_float",
     "resolve_endpoint_pairing_manifest",
     "resolve_engine_manifest",
     "resolve_engine_manifest_with_presence",

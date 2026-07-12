@@ -290,19 +290,45 @@ Workflow notes:
   on every advance: a paper-ready Supporting Information assembly with a
   computational-details paragraph generated from the routes and ORCA versions
   that actually ran, the CREST → xTB → ORCA funnel provenance, a relative
-  energy table (ΔE/ΔG), and each completed structure's SI block. When an
-  opt+freq structure has a single-point stage on the identical geometry, the
-  table adds the composite G = E(SP) + [G − E(el)](opt level). When at least one
-  minimum has a Gibbs free energy, a Boltzmann-populations section follows:
-  populations are computed over minima only (transition states are excluded) and
-  normalized independently within each species (`formula|charge|multiplicity`),
-  using the parsed thermochemistry temperature (or the optional
-  `boltzmann_temperature_k` manifest override, which must match that temperature).
-  They are omitted with a note — never fabricated — when no minimum has a Gibbs
-  energy or the temperature is missing/inconsistent. `si_data.csv` carries the
-  same numbers for data-availability requirements and appends `cluster_key`,
-  `rel_E_kcalmol`, `rel_G_kcalmol`, `boltzmann_T_K`, and `boltzmann_population`
-  after its existing columns.
+  energy table (ΔE/ΔG), and each completed structure's SI block. A single-point
+  stage pairs only through a globally unique 1:1 identical-geometry match with
+  the same charge/multiplicity. The relative table and populations then use one
+  shared energy convention: SP E requires complete coverage at one exact
+  executed provenance, and composite G = E(SP) + [G − E(el)](opt level)
+  additionally requires complete corrections at one exact
+  optimization/frequency provenance.
+  Exact provenance includes the executed method, basis, solvation, ORCA version,
+  route, charge, and multiplicity. Missing optimization/frequency route or
+  ORCA-version evidence omits populations; incomplete optional SP provenance
+  disables that refinement. Parsed charge/multiplicity must also match the
+  selected input. Partial or mixed refinements fall back consistently to the
+  applicable optimization-level value and produce a note.
+- For `conformer_screening`, the Boltzmann section is populated only after the
+  workflow reaches terminal `completed` state with every ORCA ensemble member
+  usable. Every route-classified minimum must have converged optimization,
+  a complete 3N vibrational spectrum with `Nimag = 0`, finite electronic and
+  Gibbs energies, a finite positive thermochemistry temperature, and exact
+  optimization/frequency provenance shared within its
+  `formula|charge|multiplicity` group. One unfinished, failed,
+  or unusable member omits the entire set; a partial ensemble is never
+  renormalized to 100%.
+- Populations are normalized independently within each
+  `formula|charge|multiplicity` group. This is a stoichiometric proxy rather than
+  a connectivity identity: each retained minimum has statistical weight one,
+  with no symmetry/degeneracy correction or post-DFT deduplication. The parsed
+  thermochemistry temperature is used unless `boltzmann_temperature_k` pins it.
+  That optional key must be finite and strictly positive, is persisted in the
+  durable request at admission, and must agree with every parsed temperature
+  within 0.01 K. It cannot create thermochemistry at a temperature the frequency
+  jobs did not use; SI reads the durable request rather than a subsequently
+  edited source `flow.yaml`. Missing, non-finite, non-positive, or inconsistent
+  data cause populations to be omitted with a note rather than fabricated.
+- `si_data.csv` appends `cluster_key`, `rel_E_kcalmol`, `rel_G_kcalmol`,
+  `boltzmann_T_K`, and `boltzmann_population` after its existing columns.
+  Markdown renders population as a percentage; `boltzmann_population` is the
+  corresponding fraction in `[0, 1]`. CSV `rel_E_kcalmol` and
+  `rel_G_kcalmol` use the lowest E and G inside that row's population group as
+  their local baselines under the shared convention.
 - Set `runs_root` in `orca_auto.yaml` (or `workflow_root`/`workflow.root` in
   `flow.yaml`) before submitting workflow directories.
 - Public workflow `run-dir` reads workflow type and XYZ inputs from `flow.yaml`
@@ -320,7 +346,26 @@ Workflow notes:
   `xcontrol_file` names the source file to copy, while `xcontrol` must be a
   plain file name materialized inside the xTB job directory.
 - CREST topology overrides can be placed under `crest:` in `flow.yaml`, including `gfn: ff`, `no_preopt: true`, `noreftopo: true`, `notopo: true`, and `nocbonds: true`
-- CREST conformational-search knobs are also accepted under `crest:`, verified against CREST 3.0.2: `mdlen`/`len` (MD length in ps, real), `wscal` (wall-potential scaling, real), `tstep` (MD step in fs, integer), `mddump` (trajectory dump in fs, integer), `shake` (`0`/`1`/`2`), `norotmd` (boolean), and `cross`/`nocross` (mutually exclusive booleans). Values are validated and a malformed value fails the job closed rather than reaching CREST; unknown `crest:` keys are ignored. Exact flag support can vary across CREST versions, so these are documented here rather than promoted to the stable contract list.
+- CREST conformational-search knobs are also accepted under `crest:`, verified
+  against CREST 3.0.2. `mdlen`/`len` (MD length in ps; aliases that must agree)
+  and `wscal` are finite positive reals rendered without exponent notation to
+  at most six decimal places; values below `0.000001` are rejected.
+  `tstep` is a finite positive real in the native-safe 0.001–2500 fs range;
+  `mddump` is an integer in `1..2147483647`; and an explicit MD length must
+  combine with the selected/default time step to produce `1..2147483647` MD
+  steps. `shake` is `0`, `1`, or `2`. The exact `norotmd`, `cross`, and
+  `nocross` keys accept YAML booleans or canonical boolean forms
+  (`1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off`), and `cross`/`nocross` are
+  mutually exclusive. `cross: true` keeps CREST 3.0.2's default GC crossing
+  without emitting its broken redundant `--cross` flag; `nocross: true` emits
+  `--nocross`. Malformed values fail the job closed rather than reaching CREST;
+  unknown `crest:` keys are ignored. Exact flag support can vary across
+  CREST versions, so these are documented here rather than promoted to the
+  stable contract list.
+- Discord-uploaded workflows may not set `crest.mdlen`, `crest.len`,
+  `crest.tstep`, or `crest.mddump`. Those remote runtime and trajectory-volume
+  controls are server-owned; trusted local `run-dir` workflows may use the
+  validated knobs above.
 - `scaffold ts_search` and `scaffold conformer_search` write `flow.yaml` with `crest_mode: standard` by default; change it to `nci` when needed
 
 There is no public direct-execution mode for new work. `run-dir` is the durable submission path.
@@ -379,9 +424,11 @@ cancelled entries from the unified list.
   can attach one `.zip` or `.tar.gz` run-directory to `!run`. Admission and actual
   download bytes are bounded before inspection. Exactly one root `flow.yaml` or
   lower-case `*.inp` is required, server-owned paths and resource ceilings cannot be
-  overridden, and the durable Queue/Discard action is bound to the originating
-  message, attachment, channel, and actor. Extraction is published atomically under
-  `runs_root`; uncertain commits are retained and reconciled rather than deleted.
+  overridden; uploaded workflows also reject the CREST runtime/trajectory controls
+  `mdlen`, `len`, `tstep`, and `mddump`. The durable Queue/Discard action is bound to
+  the originating message, attachment, channel, and actor. Extraction is published
+  atomically under `runs_root`; uncertain commits are retained and reconciled rather
+  than deleted.
 
 ### 7.6 `scan-notify`
 

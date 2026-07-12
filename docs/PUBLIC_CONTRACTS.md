@@ -322,18 +322,45 @@ Workflow runtime artifacts:
 - `workflow_si.md` and `si_data.csv` are rewritten on workflow advances when
   the workflow has ORCA stages: a paper-ready Supporting Information assembly
   (computational details, relative energies, per-structure blocks) and its
-  machine-readable companion. When at least one minimum carries a Gibbs free
-  energy, both also include Boltzmann populations — computed over minima only
-  (transition states excluded) and normalized independently within each species
-  (`formula|charge|multiplicity`). `si_data.csv` appends five columns after
-  `warnings` (`cluster_key`, `rel_E_kcalmol`, `rel_G_kcalmol`, `boltzmann_T_K`,
+  machine-readable companion. A `conformer_screening` population set is emitted
+  only after the workflow is terminal and complete and every route-classified
+  minimum is converged and has a complete 3N vibrational spectrum with
+  `Nimag = 0`, finite electronic/Gibbs energies, and a finite positive
+  thermochemistry temperature. Any unfinished,
+  failed, or unusable conformer omits the whole set with a note; a usable subset
+  is never renormalized to 100%.
+- Relative energies and populations use the same effective E/G convention.
+  Single-point E is used only with complete, uniform exact-provenance coverage;
+  composite G additionally requires complete thermochemical corrections at one
+  exact optimization/frequency provenance. Exact provenance includes the
+  executed method, basis, solvation, ORCA version, route, charge, and
+  multiplicity. Missing optimization/frequency route or ORCA-version evidence
+  omits populations; incomplete optional SP provenance disables that refinement.
+  Parsed charge/multiplicity must also match the selected input. Mixed or partial
+  refinement falls back consistently to the
+  applicable optimization-level quantity and is noted. Population members
+  within each `formula|charge|multiplicity` group must also share exact
+  optimization/frequency provenance.
+- Populations are normalized independently within each
+  `formula|charge|multiplicity` group. This key is a stoichiometric proxy, not a
+  connectivity identity: every retained minimum has statistical weight one, and
+  no symmetry/degeneracy correction or post-DFT deduplication is applied.
+  `si_data.csv` appends five columns after `warnings` (`cluster_key`,
+  `rel_E_kcalmol`, `rel_G_kcalmol`, `boltzmann_T_K`,
   `boltzmann_population`); the existing columns keep their names, order, and
-  index. The temperature is the parsed thermochemistry temperature, or the
-  optional `boltzmann_temperature_k` manifest key when it agrees with that parsed
-  temperature (the key pins the value used, it cannot set a temperature the
-  frequency jobs did not use); populations are omitted (never fabricated at an
-  assumed temperature) when no minimum has a Gibbs energy or the temperature is
-  missing or inconsistent.
+  index. Markdown renders population as percent, while
+  `boltzmann_population` is the fraction in `[0, 1]`. CSV `rel_E_kcalmol` and
+  `rel_G_kcalmol` are relative to the lowest E and G within that row's
+  population group under the shared convention, not global cross-group
+  baselines.
+- The population temperature is the parsed thermochemistry temperature. The
+  optional `boltzmann_temperature_k` manifest key is a finite, strictly positive
+  pin validated at admission and stored in the durable workflow request; it must
+  agree with every parsed frequency-job temperature within 0.01 K and cannot
+  create thermochemistry at a temperature the jobs did not use. SI reads the
+  durable request value rather than a subsequently edited source `flow.yaml`.
+  Missing, non-finite, non-positive, or inconsistent data cause populations to
+  be omitted rather than fabricated at an assumed temperature.
 - `workflow_registry.json` and `workflow_registry.journal.jsonl` support
   cross-workflow listing and event history.
 - Internal engine queues and outputs live under workflow stage directories such
