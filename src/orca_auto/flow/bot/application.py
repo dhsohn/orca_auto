@@ -92,6 +92,7 @@ _REMOTE_WORKFLOW_COUNT_LIMITS = {
     "max_xtb_handoff_retries": 4,
 }
 _REMOTE_ROUTE_LINE_KEYS = frozenset({"route_line", "orca_route_line", "orca_optts_route_line"})
+_REMOTE_DISABLED_CREST_COST_KEYS = frozenset({"mdlen", "len", "tstep", "mddump"})
 _REMOTE_SCAN_POINTS_LIMIT = 200
 _REMOTE_SCAN_COORDINATE_RE = re.compile(
     r"\A\s*(?P<kind>[BADbad])\s+(?P<atoms>\d+(?:\s+\d+){1,3})\s*=\s*"
@@ -1703,6 +1704,24 @@ class BotApplication:
             "max_memory_gb": max_memory_gb,
             "max_memory_gb_per_task": max_memory_gb,
         }
+
+        # This check is path-sensitive, so perform it directly on the canonical
+        # top-level section. A global identity-based traversal can otherwise
+        # inspect a YAML-aliased mapping first at a benign path and skip the same
+        # object when it later appears under ``crest``.
+        crest_manifest = manifest.get("crest")
+        if isinstance(crest_manifest, dict):
+            for raw_key, item in crest_manifest.items():
+                key = str(raw_key).strip()
+                if (
+                    key in _REMOTE_DISABLED_CREST_COST_KEYS
+                    and item is not None
+                    and (not isinstance(item, str) or item.strip())
+                ):
+                    raise ValueError(
+                        f"flow.yaml crest.{key} is disabled for uploaded workflows; "
+                        "CREST runtime and trajectory-volume controls are server-owned"
+                    )
 
         def validate_route_line(value: object, *, path: str) -> None:
             from orca_auto.orca.resource_directives import PAL_ROUTE_RE

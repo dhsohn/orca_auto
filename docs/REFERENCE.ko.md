@@ -296,9 +296,39 @@ ORCA 고유 노트:
 - ORCA stage가 있는 워크플로우는 advance마다 `workflow_si.md`와 `si_data.csv`도
   다시 씁니다: 실제 실행된 route와 ORCA 버전에서 생성한 계산 세부사항 문단,
   CREST → xTB → ORCA 깔때기 provenance, 상대 에너지 테이블(ΔE/ΔG), 완료된
-  구조별 SI 블록을 담은 논문 SI용 조립본입니다. opt+freq 구조와 동일 지오메트리의
-  single point 스테이지가 있으면 합성 G = E(SP) + [G − E(el)](opt level)을
-  테이블에 추가합니다. `si_data.csv`는 같은 수치의 기계가독 버전입니다.
+  구조별 SI 블록을 담은 논문 SI용 조립본입니다. single-point 스테이지는 지오메트리가
+  동일하고 charge/multiplicity가 맞는 전역적으로 유일한 1:1 대응일 때만 짝지어집니다.
+  상대 에너지 표와 population은 하나의 공통 에너지 규약을 사용합니다. 정확한 실행
+  provenance가 하나로 동일한 SP가 전체 구조를 빠짐없이 덮어야 SP E를 사용하고,
+  합성 G = E(SP) + [G − E(el)](opt level)은 correction이 완전하며 정확한
+  최적화/주파수 provenance까지 하나로 같아야 사용합니다. 정확한 provenance에는 실제
+  실행 method, basis, solvation, ORCA version, route, charge, multiplicity가 포함됩니다.
+  최적화/주파수의 실제 실행 route 또는 ORCA version 증거가 빠졌으면 population을
+  생략하고, 선택적 SP provenance가 불완전하면 그 refinement를 사용하지 않습니다. 파싱한
+  charge/multiplicity도 선택된 입력과 일치해야 합니다. 일부 refinement만 있거나 수준이
+  섞이면 해당 최적화 수준 값으로 일관되게 fallback하고 note를 남깁니다.
+- `conformer_screening`의 Boltzmann 섹션은 워크플로우가 종료 `completed` 상태이고 모든
+  ORCA ensemble 구성원을 사용할 수 있을 때만 채웁니다. route상 minimum으로 분류된 모든
+  구조는 최적화가 수렴하고 완전한 3N 진동 스펙트럼에서 `Nimag = 0`이어야 하며, 유한한
+  전자/Gibbs 에너지, 유한한 양의 thermochemistry 온도, 각
+  `formula|charge|multiplicity` 그룹에서 동일한 정확한 최적화/주파수 provenance를
+  가져야 합니다. 끝나지 않았거나 실패했거나 사용할 수 없는
+  구성원이 하나라도 있으면 전체 population을 생략하며, 일부 ensemble을 100%로
+  재정규화하지 않습니다.
+- Population은 `formula|charge|multiplicity` 그룹별로 독립 정규화합니다. 이 키는 연결성
+  정체성이 아니라 화학량론적 proxy입니다. 보존된 minimum마다 통계 가중치 1을 쓰며
+  대칭성/축퇴도 보정이나 post-DFT 중복 제거를 하지 않습니다. 선택적
+  `boltzmann_temperature_k`가 고정하지 않으면 파싱된 thermochemistry 온도를 사용합니다.
+  이 키는 유한한 양수여야 하고 admission 때 내구성 요청에 저장되며, 파싱된 모든 온도와
+  0.01 K 이내로 일치해야 합니다. 주파수 작업이 쓰지 않은 온도의 열화학 값을 만들 수는
+  없습니다. SI는 이후 수정된 원본 `flow.yaml`이 아니라 내구성 요청을 읽습니다. 자료가
+  없거나 유한하지 않거나 양수가 아니거나 서로 불일치하면 지어내지 않고 note와 함께
+  population을 생략합니다.
+- `si_data.csv`는 기존 컬럼 뒤에 `cluster_key`, `rel_E_kcalmol`, `rel_G_kcalmol`,
+  `boltzmann_T_K`, `boltzmann_population`을 append합니다. Markdown은 population을
+  백분율로 표시하지만 `boltzmann_population`은 `[0, 1]` 범위의 대응 분율입니다. CSV의
+  `rel_E_kcalmol`과 `rel_G_kcalmol`은 공통 규약 아래 해당 population 그룹의 최저 E와
+  G를 각각 기준으로 한 그룹 로컬 상대값입니다.
 - 워크플로우 디렉터리를 제출하기 전에 `orca_auto.yaml`에 `runs_root`를 설정하세요
   (또는 `flow.yaml`에 `workflow_root`/`workflow.root`를 설정).
 - 공개 워크플로우 `run-dir`는 `flow.yaml` 또는 `scaffold`가 작성한 표준 파일명에서
@@ -316,6 +346,24 @@ ORCA 고유 노트:
   파일명이어야 합니다.
 - CREST 토폴로지 재정의는 `flow.yaml`의 `crest:` 아래에 둘 수 있으며, `gfn: ff`,
   `no_preopt: true`, `noreftopo: true`, `notopo: true`, `nocbonds: true`를 포함합니다.
+- CREST conformer 탐색 노브도 `crest:` 아래에 둘 수 있습니다(CREST 3.0.2 기준 검증).
+  `mdlen`/`len`(MD 길이 ps이며 둘 다 쓰면 같아야 하는 별칭)과 `wscal`은 유한한 양의
+  실수이며 지수 표기 없이 소수점 아래 최대 6자리로 렌더링됩니다. `0.000001`보다 작은
+  값은 거부합니다. `tstep`은 native-safe 범위 0.001~2500 fs의 유한한 양의 실수이고,
+  `mddump`는 `1..2147483647` 범위의 정수입니다.
+  명시적인 MD 길이와 선택/default time step으로 계산한 MD step 수도
+  `1..2147483647` 범위여야 합니다. `shake`는 `0`, `1`, `2` 중 하나입니다. 정확한 키 이름
+  `norotmd`, `cross`, `nocross`는 YAML 불리언 또는 정규 불리언 형식
+  (`1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off`)만 받으며 `cross`와 `nocross`는
+  상호배제입니다. `cross: true`는 CREST 3.0.2의 기본 GC crossing을 유지하되 job type을
+  깨뜨리는 불필요한 `--cross` 플래그를 내지 않고, `nocross: true`만 `--nocross`를 냅니다.
+  잘못된 값은 CREST에 전달하지 않고 작업을 fail-closed로 실패시키며,
+  알 수 없는 `crest:` 키는 무시합니다. CREST 버전에 따라 플래그 지원이 달라질 수 있어
+  안정 계약 목록으로 승격하지 않고 여기에만 문서화합니다.
+- Discord로 업로드한 워크플로우는 `crest.mdlen`, `crest.len`, `crest.tstep`,
+  `crest.mddump`를 설정할 수 없습니다. 원격 CREST 실행 시간과 trajectory 용량을 좌우하는
+  이 값들은 서버가 소유하며, 신뢰된 로컬 `run-dir` 워크플로우만 위의 검증된 노브를
+  사용할 수 있습니다.
 - `scaffold ts_search`와 `scaffold conformer_search`는 기본적으로 `crest_mode: standard`로
   `flow.yaml`을 작성합니다. 필요할 때 `nci`로 변경하세요.
 
@@ -371,6 +419,13 @@ ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 자식 작업은 잡음을 
   `/list` 액션 메시지의 취소 버튼도 그 확인 단계를 거칩니다. 공통 카드가 Discord의
   5-row 제한에 맞도록 취소 가능한 활동은 최대 4개를 표시하며, 취소나 정리를 실행하면 목록이 자동으로
   새로고침됩니다.
+- `messenger.discord.uploads.enabled`가 true이면 allowlist에 든 Discord 운영자가 `!run`에
+  `.zip` 또는 `.tar.gz` run-directory 하나를 첨부할 수 있습니다. 검사 전에 admission 및
+  실제 download byte에 상한을 적용합니다. 루트에는 `flow.yaml` 하나 또는 소문자 `*.inp`
+  하나만 있어야 하고, 서버 소유 경로·리소스 상한과 CREST 실행/trajectory 제어값
+  `mdlen`, `len`, `tstep`, `mddump`를 재정의할 수 없습니다. 내구성 Queue/Discard 액션은
+  원본 메시지·첨부·채널·행위자에 바인딩됩니다. 압축 해제 결과는 `runs_root` 아래에
+  원자적으로 게시하며, 결과가 불확실한 commit은 삭제하지 않고 보존·조정합니다.
 
 ### 7.6 `scan-notify`
 

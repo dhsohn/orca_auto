@@ -46,6 +46,7 @@ class ConformerScreeningWorkflowRequest:
     charge: int = 0
     multiplicity: int = 1
     crest_job_manifest: dict[str, Any] | None = None
+    boltzmann_temperature_k: float | None = None
 
 
 @dataclass(frozen=True)

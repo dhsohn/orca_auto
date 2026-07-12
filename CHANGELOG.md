@@ -10,6 +10,44 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Added
 
+- Workflow Supporting Information (`workflow_si.md` and `si_data.csv`) now reports
+  Boltzmann populations for a complete, terminal conformer ensemble only. Every
+  route-classified minimum must be converged and carry a complete 3N vibrational
+  spectrum with `Nimag = 0`, finite electronic/Gibbs energies, and a finite
+  positive thermochemistry temperature;
+  an unfinished, failed, or unusable member omits the whole population set instead
+  of renormalizing a partial ensemble to 100%. Populations use the same E/G
+  convention as the relative-energy table; SP/composite refinements require
+  complete, uniform exact-provenance coverage. Missing optimization/frequency
+  route or ORCA-version evidence omits populations, while incomplete optional SP
+  provenance disables that refinement and falls back; parsed charge/multiplicity
+  must also match the selected input. They are normalized
+  independently within each `formula|charge|multiplicity` group. Each retained
+  minimum has unit
+  statistical weight; no symmetry/degeneracy correction, connectivity-aware
+  grouping, or post-DFT deduplication is applied. The optional
+  `boltzmann_temperature_k` pin is validated as finite and strictly positive at
+  admission, stored in the durable request, and must agree with every parsed
+  thermochemistry temperature within 0.01 K. Markdown reports population as a
+  percentage, while the appended `si_data.csv` `boltzmann_population` value is a
+  fraction in `[0, 1]`; the other appended columns are `cluster_key`,
+  `rel_E_kcalmol`, `rel_G_kcalmol`, and `boltzmann_T_K`. The two relative
+  columns use the lowest E and G in that row's population group as their local
+  baselines.
+- CREST conformational-search knobs can be set under the existing `crest:`
+  manifest block: `mdlen`/`len`, `wscal`, `tstep`, `mddump`, `shake`, `norotmd`,
+  and `cross`/`nocross` (verified against CREST 3.0.2). `mdlen`/`len` and `wscal`
+  are finite positive reals, `tstep` is a finite positive real within CREST's
+  native-safe range, and `mddump` is a positive native-safe integer; the derived
+  MD step count is bounded too. The exact `norotmd`, `cross`, and `nocross` keys
+  accept only canonical boolean values, and `cross`/`nocross` remain mutually
+  exclusive. `cross: true` preserves CREST 3.0.2's GC-crossing default without
+  emitting its broken redundant `--cross` flag; `nocross: true` emits
+  `--nocross`.
+  Malformed values fail the job closed instead of reaching CREST; unknown `crest:`
+  keys are ignored and `crest_mode` is unchanged. Uploaded Discord workflows may
+  not set `mdlen`, `len`, `tstep`, or `mddump`, because remote CREST runtime and
+  trajectory-volume controls remain server-owned.
 - Discord bot can accept a compressed run-dir (`.zip`/`.tar.gz`) attached to the
   `!run` command and submit it after an explicit confirmation. Disabled by
   default and gated to allowlisted operators, the ingress reserves bounded

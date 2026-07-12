@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from orca_auto.core.utils import now_utc_iso, timestamped_token
+from orca_auto.flow.manifest import optional_positive_float
 from orca_auto.flow.orchestration.builders import (
     create_conformer_screening_workflow_impl,
     create_reaction_ts_search_workflow_impl,
@@ -122,6 +123,10 @@ def _normalized_conformer_screening_request(
             field_name="max_orca_stages",
         ),
         multiplicity=_positive_int_field(request.multiplicity, field_name="multiplicity"),
+        boltzmann_temperature_k=optional_positive_float(
+            {"boltzmann_temperature_k": request.boltzmann_temperature_k},
+            "boltzmann_temperature_k",
+        ),
     )
 
 

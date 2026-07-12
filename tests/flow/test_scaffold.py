@@ -45,10 +45,16 @@ def test_cmd_scaffold_creates_reaction_workflow_scaffold(
     assert "#   noreftopo: true" in flow_text
     assert "#   notopo: true" in flow_text
     assert "#   nocbonds: true" in flow_text
+    assert "#   shake: 2" in flow_text  # verified CREST sampling knobs are advertised
+    assert "#   mddump: 100" in flow_text
     assert "orca_auto scaffold ts_search" in readme
     assert "crest_mode: nci" in readme
     assert "`gfn: ff`, `noreftopo: true`, `notopo: true`, or `nocbonds: true`" in readme
+    assert "Sampling knobs" in readme
     assert "waits for the xTB phase to finish" in readme
+    # SI Boltzmann populations apply to conformer minima; a TS-search scaffold
+    # intentionally does not advertise the temperature key.
+    assert "boltzmann_temperature_k" not in flow_text
 
 
 def test_cmd_scaffold_is_idempotent_for_conformer_workflow(
@@ -73,8 +79,16 @@ def test_cmd_scaffold_is_idempotent_for_conformer_workflow(
     assert "#   noreftopo: true" in flow_text
     assert "#   notopo: true" in flow_text
     assert "#   nocbonds: true" in flow_text
+    assert "#   shake: 2" in flow_text  # verified CREST sampling knobs are advertised
+    assert "#   mddump: 100" in flow_text
+    # SI Boltzmann-population temperature is an optional, commented override — the
+    # scaffold advertises it without making it an active manifest key.
+    assert "# boltzmann_temperature_k: 298.15" in flow_text
+    assert "boltzmann_temperature_k" not in manifest
     assert "20 retained CREST conformers" in readme
     assert "`gfn: ff`, `noreftopo: true`, `notopo: true`, or `nocbonds: true`" in readme
+    assert "Sampling knobs" in readme
+    assert "SI Boltzmann populations" in readme
     capsys.readouterr()
 
     custom_input = "1\ncustom\nHe 0.0 0.0 0.0\n"

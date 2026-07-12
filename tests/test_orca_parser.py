@@ -354,6 +354,7 @@ def test_parser_reads_charge_multiplicity_from_xyzfile(tmp_path: Path) -> None:
 
     assert result.charge == -1
     assert result.multiplicity == 2
+    assert result.electronic_state_verified is True
 
 
 def test_parser_derives_gibbs_correction_when_line_absent(tmp_path: Path) -> None:

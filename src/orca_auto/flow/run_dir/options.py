@@ -10,6 +10,8 @@ from orca_auto.cli_common import (
 )
 from orca_auto.core.utils.coercion import normalize_text
 
+from ..manifest import optional_positive_float
+
 RUN_DIR_COMMON_WORKFLOW_OPTION_FIELDS = (
     "workflow_root",
     "crest_mode",
@@ -45,6 +47,7 @@ class RunDirWorkflowOptions:
     multiplicity: int
     max_crest_candidates: int
     max_xtb_stages: int
+    boltzmann_temperature_k: float | None = None
 
     def common_kwargs(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in RUN_DIR_COMMON_WORKFLOW_OPTION_FIELDS}
@@ -303,6 +306,10 @@ def _resolve_run_dir_orca_options(
             "multiplicity",
             1,
             minimum=1,
+        ),
+        "boltzmann_temperature_k": optional_positive_float(
+            manifest,
+            "boltzmann_temperature_k",
         ),
     }
 

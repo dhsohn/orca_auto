@@ -325,6 +325,205 @@ def test_finalize_crest_job_collects_retained_outputs(tmp_path: Path) -> None:
     assert result.resource_actual == {"assigned_cores": 4, "memory_limit_gb": 8}
 
 
+def _sampling_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, manifest: dict[str, Any]
+) -> list[str]:
+    cfg = _cfg(tmp_path)
+    job_dir = tmp_path / "job"
+    job_dir.mkdir(exist_ok=True)  # helper may run twice within one test
+    selected_xyz = job_dir / "input.xyz"
+    _write_xyz(selected_xyz, ("conf_a",))
+    monkeypatch.setattr(
+        "orca_auto.flow.engines.crest.runner._resolve_crest_executable",
+        lambda _cfg: "/usr/bin/crest",
+    )
+    return _build_command(cfg, job_dir=job_dir, selected_xyz=selected_xyz, manifest=manifest)
+
+
+def test_build_command_emits_verified_sampling_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    command = _sampling_command(
+        monkeypatch,
+        tmp_path,
+        {
+            "mdlen": 1.25,
+            "wscal": 1.0,
+            "tstep": 2.5,
+            "mddump": 100,
+            "shake": 2,
+            "norotmd": True,
+            "nocross": True,
+        },
+    )
+    # Flags verified against CREST 3.0.2 `--help conf`; reals carry no exponent and
+    # an int-valued real (wscal 1.0) normalizes to "1".
+    assert command[command.index("--mdlen") + 1] == "1.25"
+    assert command[command.index("--wscal") + 1] == "1"
+    assert command[command.index("--tstep") + 1] == "2.5"
+    assert command[command.index("--mddump") + 1] == "100"
+    assert command[command.index("--shake") + 1] == "2"
+    assert "--norotmd" in command
+    assert "--nocross" in command
+    assert "--cross" not in command
+
+
+def test_build_command_len_is_an_alias_for_mdlen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    command = _sampling_command(monkeypatch, tmp_path, {"len": 2.0})
+    assert command[command.index("--mdlen") + 1] == "2"
+    assert command.count("--mdlen") == 1
+
+    with pytest.raises(ValueError, match="must match"):
+        _sampling_command(monkeypatch, tmp_path, {"mdlen": 2.0, "len": 3.0})
+
+
+def test_build_command_shake_zero_is_emitted_not_dropped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # 0 disables SHAKE — a meaningful value, not "absent".
+    command = _sampling_command(monkeypatch, tmp_path, {"shake": 0})
+    assert command[command.index("--shake") + 1] == "0"
+
+
+def test_build_command_false_bools_and_unknown_keys_omit_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    command = _sampling_command(
+        monkeypatch,
+        tmp_path,
+        {
+            "norotmd": False,
+            "nocross": False,
+            "cross": False,
+            "mdlenn": 1.0,
+            "shakee": 2,
+            "no_cross": True,
+        },
+    )
+    assert "--norotmd" not in command
+    assert "--nocross" not in command
+    assert "--cross" not in command
+    assert "--mdlen" not in command  # a typo'd key is silently ignored, never shipped
+    assert "--shake" not in command
+
+
+def test_build_command_cross_and_nocross_are_mutually_exclusive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _sampling_command(monkeypatch, tmp_path, {"cross": True, "nocross": True})
+
+
+def test_build_command_cross_true_keeps_crest_default_without_redundant_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    command = _sampling_command(monkeypatch, tmp_path, {"cross": True})
+
+    assert "--cross" not in command
+    assert "--nocross" not in command
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"mdlen": 0},
+        {"mdlen": -1.0},
+        {"wscal": "fast"},
+        {"mdlen": True},
+        {"tstep": 0},
+        {"tstep": "fast"},
+        {"mddump": 1.5},
+        {"shake": 3},
+        {"shake": -1},
+    ],
+)
+def test_build_command_rejects_malformed_sampling_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, manifest: dict[str, Any]
+) -> None:
+    with pytest.raises(ValueError):
+        _sampling_command(monkeypatch, tmp_path, manifest)
+
+
+@pytest.mark.parametrize("key", ["cross", "nocross", "norotmd"])
+@pytest.mark.parametrize("value", ["treu", 2, [], {}])
+def test_build_command_rejects_malformed_sampling_booleans(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    key: str,
+    value: Any,
+) -> None:
+    with pytest.raises(ValueError, match=key):
+        _sampling_command(monkeypatch, tmp_path, {key: value})
+
+
+def test_build_command_accepts_canonical_boolean_strings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    command = _sampling_command(
+        monkeypatch,
+        tmp_path,
+        {"norotmd": "yes", "nocross": "true", "cross": "false"},
+    )
+
+    assert "--norotmd" in command
+    assert "--nocross" in command
+    assert "--cross" not in command
+
+
+@pytest.mark.parametrize("manifest", [{"mdlen": 4e-7}, {"wscal": 4e-7}])
+def test_build_command_never_rounds_positive_sampling_values_to_zero(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    manifest: dict[str, Any],
+) -> None:
+    with pytest.raises(ValueError):
+        _sampling_command(monkeypatch, tmp_path, manifest)
+
+
+def test_build_command_enforces_crest_native_numeric_bounds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    max_int = (1 << 31) - 1
+    command = _sampling_command(monkeypatch, tmp_path, {"mddump": max_int})
+    assert command[command.index("--mddump") + 1] == str(max_int)
+
+    with pytest.raises(ValueError, match="mddump"):
+        _sampling_command(monkeypatch, tmp_path, {"mddump": max_int + 1})
+    with pytest.raises(ValueError, match="MD steps"):
+        _sampling_command(monkeypatch, tmp_path, {"mdlen": 10_000_000, "tstep": 0.001})
+    with pytest.raises(ValueError, match="MD steps"):
+        _sampling_command(monkeypatch, tmp_path, {"mdlen": 1e308, "tstep": 0.001})
+
+
+@pytest.mark.parametrize("tstep", [0.0009, 2500.1, float("nan"), float("inf")])
+def test_build_command_rejects_native_unsafe_tstep(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tstep: float
+) -> None:
+    with pytest.raises(ValueError, match="tstep"):
+        _sampling_command(monkeypatch, tmp_path, {"tstep": tstep})
+
+
+def test_start_crest_job_fails_closed_on_malformed_sampling_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A bad value must raise before launch so the execution layer records a failed
+    # job, never forwarding a bad token to CREST.
+    cfg = _cfg(tmp_path)
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "molecule.xyz"
+    _write_xyz(selected_xyz, ("conf_a",))
+    (job_dir / MANIFEST_FILE_NAME).write_text("mode: standard\nmdlen: fast\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "orca_auto.flow.engines.crest.runner._resolve_crest_executable", lambda _cfg: "/opt/crest"
+    )
+
+    with pytest.raises(ValueError, match="mdlen"):
+        start_crest_job(cfg, job_dir=job_dir, selected_xyz=selected_xyz)
+
+
 def test_finalize_crest_job_can_force_cancelled_result(tmp_path: Path) -> None:
     job_dir = tmp_path / "job"
     job_dir.mkdir()
