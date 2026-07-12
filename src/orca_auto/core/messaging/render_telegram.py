@@ -60,6 +60,14 @@ def _message_spans(message: Message) -> tuple[Span, ...]:
     """
 
     tokens: list[Span] = []
+    if message.author and message.author.strip():
+        # Discord shows the identity as the embed author line; Telegram has no
+        # such slot, so surface it as a leading plain line above the bold title.
+        # Strip to match the Discord renderer (a blank author is omitted, not a
+        # blank line).
+        tokens.append(Span(message.author.strip(), "plain"))
+        if message.title or message.groups:
+            tokens.append(Span("\n", "plain"))
     if message.title and not _has_inline_title(message):
         tokens.append(Span(message.title, "bold"))
         if message.groups:

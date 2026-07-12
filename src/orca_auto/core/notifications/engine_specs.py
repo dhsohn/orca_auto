@@ -6,7 +6,7 @@ from .engine_jobs import build_engine_job_notifications
 _ENGINE_LINE_SENDER = channel_line_sender()
 
 _XTB_JOB_NOTIFICATIONS = build_engine_job_notifications(
-    label="orca_auto_xtb",
+    label="xTB",
     engine="xtb",
     selected_field_name="selected_input_xyz",
     detail_field_names=("job_type", "reaction_key"),
@@ -20,7 +20,7 @@ notify_xtb_job_terminal = _XTB_JOB_NOTIFICATIONS.notify_job_terminal
 notify_xtb_job_finished = _XTB_JOB_NOTIFICATIONS.notify_job_finished
 
 _CREST_JOB_NOTIFICATIONS = build_engine_job_notifications(
-    label="orca_auto_crest",
+    label="CREST",
     engine="crest",
     selected_field_name="selected_xyz",
     detail_field_names=("mode",),

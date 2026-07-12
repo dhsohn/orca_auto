@@ -69,7 +69,7 @@ def test_send_joins_lines_and_maps_transport_result(
 
     assert result is expected
     assert build_calls == [cfg.messenger]
-    assert messages == ["first line\nsecond line"]
+    assert messages == ["orca_auto\nfirst line\nsecond line"]
 
 
 def test_notify_job_queued_sends_expected_message(
@@ -94,7 +94,7 @@ def test_notify_job_queued_sends_expected_message(
     assert messages == [
         "\n".join(
             [
-                "[orca_auto_crest] Job queued",
+                "orca_auto\n[CREST] Job queued",
                 "job_id: job-001",
                 "queue_id: queue-001",
                 "mode: nci",
@@ -127,7 +127,7 @@ def test_notify_job_started_sends_expected_message(
     assert messages == [
         "\n".join(
             [
-                "[orca_auto_crest] Job started",
+                "orca_auto\n[CREST] Job started",
                 "job_id: job-002",
                 "queue_id: queue-002",
                 "mode: standard",
@@ -173,7 +173,7 @@ def test_notify_job_finished_maps_terminal_headlines(
     assert messages == [
         "\n".join(
             [
-                f"[orca_auto_crest] {headline}",
+                f"orca_auto\n[CREST] {headline}",
                 f"job_id: job-{status}",
                 f"queue_id: queue-{status}",
                 f"status: {status}",
@@ -216,7 +216,7 @@ def test_notify_job_finished_includes_optional_extra_lines(
     assert messages == [
         "\n".join(
             [
-                "[orca_auto_crest] Job finished",
+                "orca_auto\n[CREST] Job finished",
                 "job_id: job-complete",
                 "queue_id: queue-complete",
                 "status: completed",

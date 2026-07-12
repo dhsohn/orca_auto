@@ -34,6 +34,7 @@ def _lines_message(lines: list[str], severity: Severity = "info") -> Message:
                 heading=(raw(title),) if title else (),
             ),
         ),
+        author="orca_auto",
     )
 
 

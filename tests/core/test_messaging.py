@@ -183,10 +183,11 @@ def test_render_discord_embed_routes_lines_and_headings_to_description() -> None
 def test_engine_line_message_uses_native_discord_title_without_description_duplication() -> None:
     message = _lines_message(["Job queued", "job_id: one"])
 
-    assert render_telegram(message) == "Job queued\njob_id: one"
+    assert render_telegram(message) == "orca_auto\nJob queued\njob_id: one"
     assert render_discord_embed(message) == {
         "title": "Job queued",
         "color": 0x3498DB,
+        "author": {"name": "orca_auto"},
         "description": r"job\_id: one",
     }
 
@@ -270,16 +271,15 @@ def test_render_discord_embed_marks_inline_fields() -> None:
 def test_engine_line_message_maps_terminal_headline_to_severity() -> None:
     from orca_auto.core.notifications._engine_rendering import severity_for_event_line
 
-    assert severity_for_event_line("[orca_auto_xtb] Job failed") == "error"
-    assert severity_for_event_line("[orca_auto_xtb] Job cancelled") == "warning"
-    assert severity_for_event_line("[orca_auto_xtb] Job finished") == "success"
-    assert severity_for_event_line("[orca_auto_xtb] Job queued") == "info"
+    assert severity_for_event_line("[xTB] Job failed") == "error"
+    assert severity_for_event_line("[xTB] Job cancelled") == "warning"
+    assert severity_for_event_line("[xTB] Job finished") == "success"
+    assert severity_for_event_line("[xTB] Job queued") == "info"
 
-    embed = render_discord_embed(
-        _lines_message(["[orca_auto_xtb] Job failed", "status: failed"], "error")
-    )
+    embed = render_discord_embed(_lines_message(["[xTB] Job failed", "status: failed"], "error"))
     assert embed["color"] == 0xE74C3C
-    assert embed["title"] == "❌ [orca_auto_xtb] Job failed"
+    assert embed["title"] == "❌ [xTB] Job failed"
+    assert embed["author"] == {"name": "orca_auto"}
 
 
 # --------------------------------------------------------------------------- #

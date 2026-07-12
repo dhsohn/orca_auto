@@ -3,9 +3,10 @@
 Builders turn a lifecycle event into a messenger-neutral
 :class:`~orca_auto.core.messaging.Message`; the ``notify_*`` helpers deliver it
 through a :class:`~orca_auto.core.messaging.MessageChannel` resolved from config.
-The Telegram renderer reproduces the previous HTML byte-for-byte (see
-``tests/test_orca_notifications.py``), so switching the active messenger changes
-only where the message goes, not what these builders emit.
+Each per-messenger renderer owns the native markup, so switching the active
+messenger changes only where the message goes, not what these builders emit.
+The identity is carried on ``Message.author`` (the Discord embed author line /
+a leading Telegram line), keeping it out of the title.
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ def run_started_message(event: RunStartedNotification) -> Message:
     current_inp = Path(event["current_inp"])
     status = str(event["status"]).strip().lower()
     resumed = bool(event.get("resumed"))
-    title = "orca_auto ORCA Resumed" if resumed else "orca_auto ORCA Started"
+    title = "ORCA resumed" if resumed else "ORCA started"
 
     fields = [
         field_row("Job", text(reaction_dir.name or reaction_dir.as_posix())),
@@ -71,7 +72,10 @@ def run_started_message(event: RunStartedNotification) -> Message:
         fields.append(field_row("Mode", text("resumed run")))
     fields.append(field_row("Directory", code(event["reaction_dir"])))
     return Message(
-        title=title, severity="info", groups=(group(*fields, heading=title_heading(title)),)
+        title=title,
+        severity="info",
+        groups=(group(*fields, heading=title_heading(title)),),
+        author="orca_auto",
     )
 
 
@@ -106,9 +110,10 @@ def retry_message(event: RetryNotification) -> Message:
         fields.append(field_row("Mode", text("resumed run")))
     fields.append(field_row("Directory", code(event["reaction_dir"])))
     return Message(
-        title="orca_auto ORCA Retry",
+        title="ORCA retry",
         severity="warning",
-        groups=(group(*fields, heading=title_heading("orca_auto ORCA Retry")),),
+        groups=(group(*fields, heading=title_heading("ORCA retry")),),
+        author="orca_auto",
     )
 
 
@@ -116,9 +121,9 @@ def run_finished_message(event: RunFinishedNotification) -> Message:
     reaction_dir = Path(event["reaction_dir"])
     status = str(event["status"]).strip().lower()
     title = {
-        "completed": "orca_auto ORCA Completed",
-        "cancelled": "orca_auto ORCA Cancelled",
-    }.get(status, "orca_auto ORCA Failed")
+        "completed": "ORCA completed",
+        "cancelled": "ORCA cancelled",
+    }.get(status, "ORCA failed")
     if status == "completed":
         severity: Severity = "success"
     elif status == "cancelled":
@@ -143,7 +148,10 @@ def run_finished_message(event: RunFinishedNotification) -> Message:
         fields.append(field_row("Mode", text("resumed run")))
     fields.append(field_row("Directory", code(event["reaction_dir"])))
     return Message(
-        title=title, severity=severity, groups=(group(*fields, heading=title_heading(title)),)
+        title=title,
+        severity=severity,
+        groups=(group(*fields, heading=title_heading(title)),),
+        author="orca_auto",
     )
 
 
@@ -158,9 +166,10 @@ def queue_enqueued_message(event: QueueEnqueuedNotification) -> Message:
         fields.append(field_row("Mode", text("force re-enqueue")))
     fields.append(field_row("Directory", code(event["reaction_dir"])))
     return Message(
-        title="orca_auto ORCA Queued",
+        title="ORCA queued",
         severity="info",
-        groups=(group(*fields, heading=title_heading("orca_auto ORCA Queued")),),
+        groups=(group(*fields, heading=title_heading("ORCA queued")),),
+        author="orca_auto",
     )
 
 
@@ -228,7 +237,7 @@ def monitor_message(report: ScanReport, *, now: datetime | None = None) -> Messa
     timestamp = current_time.strftime("%Y-%m-%d %H:%M %Z")
 
     groups: list[Group] = [
-        group(line(raw("⚙️ "), bold("orca_auto scan-notify"), raw("  "), code(timestamp))),
+        group(line(raw("⚙️ "), bold("scan-notify"), raw("  "), code(timestamp))),
         group(line(raw(_MONITOR_DIVIDER))),
         group(
             line(raw("\U0001f50d "), bold("Scope")),
@@ -239,7 +248,7 @@ def monitor_message(report: ScanReport, *, now: datetime | None = None) -> Messa
     ]
     groups.extend(_monitor_dft_groups(report))
     groups.extend(_monitor_failure_groups(report))
-    return Message(title="orca_auto scan-notify", severity="info", groups=tuple(groups))
+    return Message(title="scan-notify", severity="info", groups=tuple(groups), author="orca_auto")
 
 
 # --------------------------------------------------------------------------- #

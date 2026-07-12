@@ -69,6 +69,7 @@ def test_maybe_notify_workflow_phase_summary_sends_crest_summary_once(monkeypatc
     )
     assert len(channel.messages) == 1
     rendered = render_telegram(channel.messages[0])
+    assert rendered.startswith("orca_auto\n")
     assert "<b>CREST phase summary</b>" in rendered
     assert "<b>Stages</b>: <code>2</code>" in rendered
     assert "<b>Stage</b>: reactant" in rendered

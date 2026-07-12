@@ -126,7 +126,8 @@ def _sample_report() -> ScanReport:
 # Golden Telegram renders (byte-identical to the pre-migration output)
 # --------------------------------------------------------------------------- #
 _GOLDEN_STARTED = (
-    "<b>orca_auto ORCA Started</b>\n"
+    "orca_auto\n"
+    "<b>ORCA started</b>\n"
     "<b>Job</b>: rxn&lt;demo&gt;\n"
     "<b>Attempt</b>: #1 (<code>running</code>)\n"
     "<b>Input</b>: <code>rxn.inp</code>\n"
@@ -135,7 +136,8 @@ _GOLDEN_STARTED = (
 )
 
 _GOLDEN_RETRY = (
-    "<b>orca_auto ORCA Retry</b>\n"
+    "orca_auto\n"
+    "<b>ORCA retry</b>\n"
     "<b>Job</b>: rxn&lt;demo&gt;\n"
     "<b>Attempt</b>: 1 failed; retry 1/2 is starting\n"
     "<b>Reason</b>: <code>error_scf</code> (scf_not_converged)\n"
@@ -146,7 +148,8 @@ _GOLDEN_RETRY = (
 )
 
 _GOLDEN_FINISHED = (
-    "<b>orca_auto ORCA Completed</b>\n"
+    "orca_auto\n"
+    "<b>ORCA completed</b>\n"
     "<b>Job</b>: rxn&lt;demo&gt;\n"
     "<b>Result</b>: <code>completed</code>\n"
     "<b>Attempts</b>: 2\n"
@@ -157,7 +160,8 @@ _GOLDEN_FINISHED = (
 )
 
 _GOLDEN_QUEUED = (
-    "<b>orca_auto ORCA Queued</b>\n"
+    "orca_auto\n"
+    "<b>ORCA queued</b>\n"
     "<b>Job</b>: rxn&lt;demo&gt;\n"
     "<b>Queue ID</b>: <code>q&lt;1&gt;</code>\n"
     "<b>Priority</b>: 5\n"
@@ -166,7 +170,8 @@ _GOLDEN_QUEUED = (
 )
 
 _GOLDEN_MONITOR = (
-    "⚙️ <b>orca_auto scan-notify</b>  <code>2026-03-10 12:00 UTC</code>\n\n" + "─" * 28 + "\n\n"
+    "orca_auto\n"
+    "⚙️ <b>scan-notify</b>  <code>2026-03-10 12:00 UTC</code>\n\n" + "─" * 28 + "\n\n"
     "\U0001f50d <b>Scope</b>\n"
     "Filesystem discovery only. Use run-dir alerts for immediate lifecycle events.\n\n"
     "\U0001f9ea <b>New Calculations Detected</b>  (2)\n\n"
@@ -191,7 +196,7 @@ def test_run_started_resumed_render() -> None:
     event["resumed"] = True
     event["status"] = ""
     rendered = render_telegram(run_started_message(event))
-    assert "<b>orca_auto ORCA Resumed</b>" in rendered
+    assert "<b>ORCA resumed</b>" in rendered
     assert "<b>Mode</b>: resumed run" in rendered
 
 
@@ -208,7 +213,7 @@ def test_run_finished_cancelled_title_and_severity() -> None:
     event["status"] = "cancelled"
     event["reason"] = "cancel_requested"
     message = run_finished_message(event)
-    assert message.title == "orca_auto ORCA Cancelled"
+    assert message.title == "ORCA cancelled"
     assert message.severity == "warning"
 
 
@@ -259,7 +264,7 @@ def test_notify_run_started_delivers_message() -> None:
     channel = _FakeChannel()
     assert notify_run_started_event(channel, _started_event()) is True
     assert len(channel.sent_messages) == 1
-    assert channel.sent_messages[0].title == "orca_auto ORCA Started"
+    assert channel.sent_messages[0].title == "ORCA started"
 
 
 def test_notify_skips_when_channel_disabled() -> None:
@@ -330,7 +335,8 @@ def test_discord_provider_end_to_end_posts_embed(monkeypatch) -> None:  # type: 
     assert notify_run_started_event(channel, _started_event()) is True
 
     embed = json.loads(posted["data"])["embeds"][0]
-    assert embed["title"] == "orca_auto ORCA Started"
+    assert embed["title"] == "ORCA started"
+    assert embed["author"] == {"name": "orca_auto"}
     field_names = [field["name"] for field in embed["fields"]]
     assert "Job" in field_names
     assert "Attempt" in field_names

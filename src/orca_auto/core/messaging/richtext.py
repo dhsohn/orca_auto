@@ -98,10 +98,10 @@ class Message:
     still include the same bold title in a decorated first line; renderers
     detect that form and avoid duplicating it.
 
-    ``author`` is an optional sender identity shown above the title on Discord
-    (the embed author line). It lets a builder drop a redundant "orca_auto …"
-    prefix from the title and surface the identity as chrome instead. The
-    Telegram renderer ignores it, so setting it never changes Telegram output.
+    ``author`` is an optional sender identity shown above the title: the embed
+    author line on Discord, a leading plain line on Telegram (which has no author
+    slot). It lets a builder drop a redundant "orca_auto …" prefix from the title
+    and surface the identity as chrome instead.
     """
 
     title: str

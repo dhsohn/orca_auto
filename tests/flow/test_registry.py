@@ -220,7 +220,7 @@ def test_journal_event_message_formats_supported_event_types(
 ) -> None:
     message = render_telegram(registry_notifications.journal_event_message(event, "/tmp/root_3"))
 
-    assert message.startswith(expected_lines[0])
+    assert message.startswith("orca_auto\n" + expected_lines[0])
     for line in expected_lines:
         assert line in message
 

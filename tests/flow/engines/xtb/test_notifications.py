@@ -70,7 +70,7 @@ def test_send_joins_lines_and_maps_transport_result(
     sent = notifications.send_lines(cfg, ["line 1", "line 2"])
 
     assert sent is expected
-    assert transport.messages == ["line 1\nline 2"]
+    assert transport.messages == ["orca_auto\nline 1\nline 2"]
 
 
 def test_notify_job_queued_and_started_render_expected_fields(
@@ -105,7 +105,7 @@ def test_notify_job_queued_and_started_render_expected_fields(
     assert transport.messages == [
         "\n".join(
             [
-                "[orca_auto_xtb] Job queued",
+                "orca_auto\n[xTB] Job queued",
                 "job_id: job-001",
                 "queue_id: queue-001",
                 "job_type: ranking",
@@ -116,7 +116,7 @@ def test_notify_job_queued_and_started_render_expected_fields(
         ),
         "\n".join(
             [
-                "[orca_auto_xtb] Job started",
+                "orca_auto\n[xTB] Job started",
                 "job_id: job-001",
                 "queue_id: queue-001",
                 "job_type: ranking",
@@ -154,7 +154,7 @@ def test_notify_job_terminal_includes_extra_lines(
     assert transport.messages == [
         "\n".join(
             [
-                "[orca_auto_xtb] Job failed",
+                "orca_auto\n[xTB] Job failed",
                 "job_id: job-002",
                 "queue_id: queue-002",
                 "status: failed",
@@ -210,7 +210,7 @@ def test_notify_job_finished_maps_headlines_and_optional_fields(
     )
 
     message = transport.messages[-1]
-    assert message.startswith(f"[orca_auto_xtb] {headline}\n")
+    assert message.startswith(f"orca_auto\n[xTB] {headline}\n")
     assert "job_id: job-003" in message
     assert f"status: {status}" in message
     assert "job_dir: job-003" in message

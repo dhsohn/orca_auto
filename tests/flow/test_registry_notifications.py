@@ -30,9 +30,11 @@ def _render(event: dict[str, Any]) -> str:
 
 
 def test_status_changed_render() -> None:
-    # Identity moved to the Discord author line, so the title no longer carries
-    # the "orca_auto Flow" prefix; the transition uses a "→" arrow.
+    # Identity renders as a leading author line (Telegram has no author slot);
+    # the title no longer carries the "orca_auto Flow" prefix and the transition
+    # uses a "→" arrow.
     assert _render(_event(event_type="workflow_status_changed")) == (
+        "orca_auto\n"
         "<b>Status changed</b>\n"
         "<b>Workflow</b>: <code>wf1</code>\n"
         "<b>Template</b>: <code>tmpl</code>\n"
@@ -43,6 +45,7 @@ def test_status_changed_render() -> None:
 
 def test_advance_failed_render() -> None:
     assert _render(_event(event_type="workflow_advance_failed")) == (
+        "orca_auto\n"
         "<b>Advance failed</b>\n"
         "<b>Workflow</b>: <code>wf1</code>\n"
         "<b>Template</b>: <code>tmpl</code>\n"
@@ -93,6 +96,7 @@ def test_handoff_render_has_two_transitions() -> None:
 def test_worker_lifecycle_render() -> None:
     # The title already names the worker event, so no redundant "Event" field.
     assert _render(_event(event_type="worker_started")) == (
+        "orca_auto\n"
         "<b>Worker started</b>\n"
         "<b>Workflow root</b>: <code>/tmp/wfroot</code>\n"
         "<b>Worker session</b>: <code>sess&lt;1&gt;</code>\n"
@@ -104,7 +108,7 @@ def test_default_event_render() -> None:
     # Unknown event types keep the "Event" field: the generic title alone does
     # not say what happened.
     rendered = _render(_event(event_type="something_else"))
-    assert rendered.startswith("<b>Workflow event</b>")
+    assert rendered.startswith("orca_auto\n<b>Workflow event</b>")
     assert "<b>Event</b>: <code>something_else</code>" in rendered
 
 
