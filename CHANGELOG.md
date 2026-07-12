@@ -10,6 +10,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Added
 
+- Workflow Supporting Information (`workflow_si.md` and `si_data.csv`) now reports
+  Boltzmann populations when the workflow has minima with Gibbs free energies.
+  Populations are computed over minima only (transition states excluded) and
+  normalized independently within each species (`formula|charge|multiplicity`),
+  at the parsed thermochemistry temperature or an optional
+  `boltzmann_temperature_k` manifest override that must match it; they are omitted
+  with a note rather than fabricated when a Gibbs energy or the temperature is
+  missing or inconsistent. `si_data.csv` appends `cluster_key`, `rel_E_kcalmol`,
+  `rel_G_kcalmol`, `boltzmann_T_K`, and `boltzmann_population` after its existing
+  columns.
 - Discord bot can accept a compressed run-dir (`.zip`/`.tar.gz`) attached to the
   `!run` command and submit it after an explicit confirmation. Disabled by
   default and gated to allowlisted operators, the ingress reserves bounded

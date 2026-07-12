@@ -123,6 +123,10 @@ def _manifest(workflow_type: str, crest_mode: str) -> str:
                 "priority: 10",
                 "# Up to 20 retained CREST conformers are handed off to ORCA by default.",
                 "max_orca_stages: 20",
+                "# SI Boltzmann populations need Gibbs energies: add `Freq` to the ORCA",
+                "# route below. Temperature (K) defaults to the parsed thermochemistry",
+                "# temperature; uncomment only to override (must match the Freq temperature).",
+                "# boltzmann_temperature_k: 298.15",
                 "resources:",
                 "  max_cores: 8",
                 "  max_memory_gb: 32",
@@ -185,6 +189,9 @@ def _readme(root: Path, workflow_type: str) -> str:
             "`gfn: ff`, `noreftopo: true`, `notopo: true`, or `nocbonds: true` "
             "when topology filtering is too strict.",
             f"- {CONFORMER_SCREENING_SHORTCUT} hands off up to 20 retained CREST conformers to ORCA child jobs by default.",
+            "- Add `Freq` to the ORCA `route_line` to get SI Boltzmann populations "
+            "(per-species, over minima); set `boltzmann_temperature_k` only to override "
+            "the parsed thermochemistry temperature.",
         ]
     elif workflow_type == SCAN_TS_SEARCH_TEMPLATE_ID:
         lines = [

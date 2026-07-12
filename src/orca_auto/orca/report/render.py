@@ -12,6 +12,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 KCAL_PER_HARTREE = 627.5094740631
+# Molar gas constant R in kcal·mol⁻¹·K⁻¹ (CODATA 8.314462618 J·mol⁻¹·K⁻¹),
+# used for Boltzmann populations: p_i ∝ exp(−ΔG_i / (R·T)).
+R_KCAL_PER_MOL_K = 1.987204259e-3
 
 REASON_NOTES = {
     "ts_criteria_met": "TS criteria met: exactly one imaginary mode at the converged structure.",

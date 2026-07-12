@@ -311,6 +311,7 @@ Manifest keys that users may rely on:
 - `barrier_threshold_kcal`
 - `max_scan_extensions`
 - `orca_optts_route_line`
+- `boltzmann_temperature_k`
 - `allow_external_inputs`
 
 Workflow runtime artifacts:
@@ -321,7 +322,18 @@ Workflow runtime artifacts:
 - `workflow_si.md` and `si_data.csv` are rewritten on workflow advances when
   the workflow has ORCA stages: a paper-ready Supporting Information assembly
   (computational details, relative energies, per-structure blocks) and its
-  machine-readable companion.
+  machine-readable companion. When at least one minimum carries a Gibbs free
+  energy, both also include Boltzmann populations — computed over minima only
+  (transition states excluded) and normalized independently within each species
+  (`formula|charge|multiplicity`). `si_data.csv` appends five columns after
+  `warnings` (`cluster_key`, `rel_E_kcalmol`, `rel_G_kcalmol`, `boltzmann_T_K`,
+  `boltzmann_population`); the existing columns keep their names, order, and
+  index. The temperature is the parsed thermochemistry temperature, or the
+  optional `boltzmann_temperature_k` manifest key when it agrees with that parsed
+  temperature (the key pins the value used, it cannot set a temperature the
+  frequency jobs did not use); populations are omitted (never fabricated at an
+  assumed temperature) when no minimum has a Gibbs energy or the temperature is
+  missing or inconsistent.
 - `workflow_registry.json` and `workflow_registry.journal.jsonl` support
   cross-workflow listing and event history.
 - Internal engine queues and outputs live under workflow stage directories such

@@ -21,6 +21,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -28,7 +29,7 @@ from typing import Any
 
 from orca_auto.core.artifacts import WORKFLOW_SI_CSV_FILE, WORKFLOW_SI_MD_FILE
 from orca_auto.core.utils.persistence import atomic_write_text
-from orca_auto.orca.report.render import KCAL_PER_HARTREE
+from orca_auto.orca.report.render import KCAL_PER_HARTREE, R_KCAL_PER_MOL_K
 from orca_auto.orca.report.si import (
     SiBlock,
     SiBlockError,
@@ -37,6 +38,7 @@ from orca_auto.orca.report.si import (
 )
 from orca_auto.orca.state import load_state
 
+from ..manifest import load_flow_manifest
 from .report import (
     _crest_stage_detail,
     _orca_stage_output_dir,
@@ -53,6 +55,20 @@ logger = logging.getLogger(__name__)
 # below this; an SP run on anything else (reordered atoms, re-optimized
 # geometry) must not pair.
 _GEOMETRY_TOL_ANGSTROM = 1e-4
+
+# Boltzmann populations are physical only among interconverting minima of one
+# species. This groups minima by formula/charge/multiplicity as a stoichiometric
+# proxy for "one species" (it does not read connectivity, so constitutional
+# isomers of the same formula pool together as an equilibrium over those minima)
+# and requires a Gibbs free energy. Transition states and cross-group mixing are
+# excluded, and populations are omitted (never fabricated) when the temperature is
+# missing or ambiguous. ORCA prints THERMOCHEMISTRY AT to 2 decimals, so this
+# tolerance only guards rounding and mixed-temperature runs.
+_TEMP_TOLERANCE_K = 0.5
+_POP_NO_GIBBS_NOTE = (
+    "(populations require Gibbs free energies over minima; none available — "
+    "add a frequency calculation to enable them)"
+)
 
 
 @dataclass(frozen=True)
@@ -76,6 +92,22 @@ class ExcludedStage:
 
 
 @dataclass(frozen=True)
+class PopulationRow:
+    """One minimum's Boltzmann result within its ``formula|charge|multiplicity`` group.
+
+    ``rel_e_kcalmol`` is relative to the group's lowest-electronic-energy member and
+    ``rel_g_kcalmol`` to its lowest-Gibbs member (the population reference) — the same
+    two-baseline convention as the relative-energy table; ``population`` is the
+    within-group fraction (each group sums to 1).
+    """
+
+    cluster_key: str
+    rel_e_kcalmol: float | None
+    rel_g_kcalmol: float | None
+    population: float | None
+
+
+@dataclass(frozen=True)
 class WorkflowSiData:
     workflow_id: str
     template_name: str
@@ -86,6 +118,12 @@ class WorkflowSiData:
     entries: tuple[WorkflowSiEntry, ...]
     extra_blocks: tuple[WorkflowSiEntry, ...]
     excluded: tuple[ExcludedStage, ...]
+    # Boltzmann populations aligned 1:1 with ``entries`` (empty tuple when the
+    # workflow has no minima); ``None`` for a non-minimum or uncomputed entry.
+    boltzmann_temperature_k: float | None = None
+    boltzmann_temperature_source: str = ""
+    population_note: str = ""
+    populations: tuple[PopulationRow | None, ...] = ()
 
     def has_orca_stages(self) -> bool:
         return bool(self.entries or self.extra_blocks or self.excluded)
@@ -163,7 +201,11 @@ def _pair_single_points(
     return paired, unused
 
 
-def collect_workflow_si_data(payload: Mapping[str, Any]) -> WorkflowSiData:
+def collect_workflow_si_data(
+    payload: Mapping[str, Any],
+    *,
+    boltzmann_temperature_k: float | None = None,
+) -> WorkflowSiData:
     crest_total: int | None = None
     xtb_total: int | None = None
     stationary: list[WorkflowSiEntry] = []
@@ -218,6 +260,17 @@ def collect_workflow_si_data(payload: Mapping[str, Any]) -> WorkflowSiData:
     )
     ranked, unpaired = _pair_single_points(stationary, single_points)
 
+    # A population bug must never replace a valid SI with stale files: isolate the
+    # computation so the base document (methods, relative-energy table, structures)
+    # still renders even if this raises.
+    try:
+        populations, temperature, temperature_source, population_note = _compute_populations(
+            tuple(ranked), boltzmann_temperature_k
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("Boltzmann population computation failed", exc_info=True)
+        populations, temperature, temperature_source, population_note = (), None, "", ""
+
     return WorkflowSiData(
         workflow_id=_text(payload.get("workflow_id")),
         template_name=_text(payload.get("template_name")),
@@ -228,7 +281,128 @@ def collect_workflow_si_data(payload: Mapping[str, Any]) -> WorkflowSiData:
         entries=tuple(ranked),
         extra_blocks=tuple(unpaired + extra),
         excluded=tuple(excluded),
+        boltzmann_temperature_k=temperature,
+        boltzmann_temperature_source=temperature_source,
+        population_note=population_note,
+        populations=populations,
     )
+
+
+# ---------------------------------------------------------------------------
+# Boltzmann populations
+# ---------------------------------------------------------------------------
+
+
+def _cluster_key(entry: WorkflowSiEntry) -> str:
+    result = entry.block.result
+    return f"{result.formula or '?'}|{result.charge}|{result.multiplicity}"
+
+
+def _compute_populations(
+    entries: tuple[WorkflowSiEntry, ...],
+    override: float | None,
+) -> tuple[tuple[PopulationRow | None, ...], float | None, str, str]:
+    """Per-species Boltzmann populations over minima; fail closed to omission.
+
+    Returns ``(rows, temperature, source, note)``. ``rows`` aligns 1:1 with
+    ``entries``; it is an empty tuple when the workflow has no minima at all (the
+    section is suppressed), and a length-matched tuple of mostly ``None`` when
+    minima exist but populations cannot be computed (the section shows ``note``).
+    Only ``kind == "min"`` entries with a Gibbs energy and a parsed thermochemistry
+    temperature are populated, and each species is normalized independently.
+    """
+    min_indices = [i for i, entry in enumerate(entries) if entry.block.kind == "min"]
+    if not min_indices:
+        return (), None, "", ""
+
+    usable = [
+        i
+        for i in min_indices
+        if entries[i].block.result.gibbs_energy is not None
+        and entries[i].block.result.thermo_temperature_k is not None
+    ]
+    blank: tuple[PopulationRow | None, ...] = tuple(None for _ in entries)
+    if not usable:
+        return blank, None, "", _POP_NO_GIBBS_NOTE
+
+    temps = [t for i in usable if (t := entries[i].block.result.thermo_temperature_k) is not None]
+    t_low, t_high = min(temps), max(temps)
+    # Pooled minima must share one frequency temperature: a Gibbs energy embeds
+    # −T·S at the job's own T, so mixing temperatures is unphysical no matter which
+    # temperature the weighting uses. The manifest key only pins/labels that shared
+    # temperature — it cannot reconcile genuinely disagreeing frequency jobs.
+    if t_high - t_low > _TEMP_TOLERANCE_K:
+        return (
+            blank,
+            None,
+            "",
+            "(populations omitted: thermochemistry temperatures disagree — "
+            f"{t_low:.2f}–{t_high:.2f} K; populations need one frequency temperature)",
+        )
+    if override is not None:
+        if abs(override - t_low) > _TEMP_TOLERANCE_K or abs(override - t_high) > _TEMP_TOLERANCE_K:
+            return (
+                blank,
+                None,
+                "",
+                f"(populations omitted: manifest boltzmann_temperature_k = {override:.2f} K "
+                f"disagrees with the thermochemistry temperature {t_low:.2f}–{t_high:.2f} K)",
+            )
+        temperature = override
+        source = "manifest boltzmann_temperature_k"
+    else:
+        temperature = temps[0]
+        source = "thermochemistry output"
+
+    clusters: dict[str, list[int]] = {}
+    for i in usable:
+        clusters.setdefault(_cluster_key(entries[i]), []).append(i)
+
+    rows: list[PopulationRow | None] = [None] * len(entries)
+    rt = R_KCAL_PER_MOL_K * temperature
+    for key, members in clusters.items():
+        # Composite G (E(SP) + [G−E(el)]) and its E(SP) are used only when every
+        # member has one AND the paired single points share one level of theory,
+        # so the composite electronic baseline stays consistent within the species.
+        composite_ready = all(entries[i].composite_gibbs is not None for i in members)
+        sp_levels = {
+            _level_key(sp) for sp in (entries[i].sp_block for i in members) if sp is not None
+        }
+        use_composite = composite_ready and len(sp_levels) <= 1
+        gibbs: dict[int, float] = {}
+        energy: dict[int, float | None] = {}
+        for i in members:
+            entry = entries[i]
+            value = entry.composite_gibbs if use_composite else entry.block.result.gibbs_energy
+            assert value is not None  # usable + all-composite gate guarantee this
+            gibbs[i] = value
+            energy[i] = entry.sp_energy if use_composite else entry.block.result.energy_hartree
+        g_min = min(gibbs.values())
+        present_energy = [e for e in energy.values() if e is not None]
+        e_min = min(present_energy) if present_energy else None
+        weights = {i: math.exp(-((gibbs[i] - g_min) * KCAL_PER_HARTREE) / rt) for i in members}
+        partition = sum(weights.values())
+        for i in members:
+            e_i = energy[i]
+            rows[i] = PopulationRow(
+                cluster_key=key,
+                rel_e_kcalmol=(
+                    (e_i - e_min) * KCAL_PER_HARTREE
+                    if e_i is not None and e_min is not None
+                    else None
+                ),
+                rel_g_kcalmol=(gibbs[i] - g_min) * KCAL_PER_HARTREE,
+                population=weights[i] / partition if partition > 0 else None,
+            )
+
+    covered = sum(1 for row in rows if row is not None)
+    note = ""
+    if covered < len(min_indices):
+        note = (
+            f"⚠ populations cover {covered} of {len(min_indices)} minima; "
+            "structures without Gibbs free energies are omitted"
+        )
+    return tuple(rows), temperature, source, note
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +644,52 @@ def _table_lines(data: WorkflowSiData) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _population_lines(data: WorkflowSiData) -> list[str]:
+    """Body of ``## Boltzmann populations`` — [] omits the whole section."""
+    if not any(entry.block.kind == "min" for entry in data.entries):
+        return []
+    populated = [
+        (entry, row)
+        for entry, row in zip(data.entries, data.populations, strict=False)
+        if row is not None and row.population is not None
+    ]
+    if not populated:
+        return [data.population_note or _POP_NO_GIBBS_NOTE]
+
+    temperature = data.boltzmann_temperature_k
+    assert temperature is not None  # a populated set implies a resolved temperature
+    lines = [
+        f"Boltzmann populations at {temperature:.2f} K "
+        f"({data.boltzmann_temperature_source}), normalized within each "
+        "formula|charge|multiplicity group (an equilibrium over that group's minima).",
+        "",
+    ]
+    clusters: dict[str, list[tuple[WorkflowSiEntry, PopulationRow]]] = {}
+    for entry, row in populated:
+        clusters.setdefault(row.cluster_key, []).append((entry, row))
+    multi = len(clusters) > 1
+    for key, members in clusters.items():
+        members.sort(key=lambda pair: pair[1].rel_g_kcalmol or 0.0)
+        if multi:
+            lines.append(f"group {key}")
+        name_width = max(9, *(len(entry.block.name) for entry, _ in members))
+        header = (
+            f"{'#':>2}  {'structure':<{name_width}}  {'ΔG/kcal·mol⁻¹':>14}  {'population/%':>12}"
+        )
+        lines.append(header)
+        lines.append("-" * len(header))
+        for rank, (entry, row) in enumerate(members, start=1):
+            rel_g = row.rel_g_kcalmol if row.rel_g_kcalmol is not None else 0.0
+            population = (row.population or 0.0) * 100.0
+            lines.append(
+                f"{rank:>2}  {entry.block.name:<{name_width}}  {rel_g:>+14.2f}  {population:>12.2f}"
+            )
+        lines.append("")
+    if data.population_note:
+        lines.append(data.population_note)
+    return lines
+
+
 def render_workflow_si_md(data: WorkflowSiData) -> str:
     lines = [f"# Supporting Information — {data.workflow_id}"]
     meta = [f"template {data.template_name}" if data.template_name else ""]
@@ -489,6 +709,13 @@ def render_workflow_si_md(data: WorkflowSiData) -> str:
     lines.append("")
     lines.extend(_table_lines(data))
     lines.append("")
+
+    population_lines = _population_lines(data)
+    if population_lines:
+        lines.append("## Boltzmann populations")
+        lines.append("")
+        lines.extend(population_lines)
+        lines.append("")
 
     lines.append("## Structures")
     lines.append("")
@@ -546,48 +773,100 @@ _CSV_COLUMNS = [
     "lowest_freq_cm1",
     "temperature_K",
     "warnings",
+    # Appended after the frozen 27-column schema; header-keyed and
+    # unknown-field-ignoring consumers, and positional readers of the first 27
+    # fields, are unaffected.
+    "cluster_key",
+    "rel_E_kcalmol",
+    "rel_G_kcalmol",
+    "boltzmann_T_K",
+    "boltzmann_population",
 ]
+
+
+def _si_csv_row(
+    entry: WorkflowSiEntry,
+    population: PopulationRow | None,
+    temperature: float | None,
+) -> list[Any]:
+    result = entry.block.result
+    sp = entry.sp_block.result if entry.sp_block is not None else None
+    return [
+        entry.block.name,
+        entry.stage_id,
+        entry.block.kind,
+        result.formula,
+        result.charge,
+        result.multiplicity,
+        result.method,
+        result.basis_set,
+        result.solvation,
+        result.orca_version,
+        result.input_line,
+        result.energy_hartree,
+        result.zpe_correction,
+        result.enthalpy,
+        result.gibbs_energy,
+        result.gibbs_correction,
+        sp.method if sp is not None else "",
+        sp.basis_set if sp is not None else "",
+        sp.solvation if sp is not None else "",
+        sp.orca_version if sp is not None else "",
+        sp.input_line if sp is not None else "",
+        entry.sp_energy,
+        entry.composite_gibbs,
+        entry.block.imaginary_count,
+        result.lowest_freq_cm1,
+        result.thermo_temperature_k,
+        "; ".join(entry.block.warnings),
+        population.cluster_key if population is not None else "",
+        population.rel_e_kcalmol if population is not None else "",
+        population.rel_g_kcalmol if population is not None else "",
+        temperature if population is not None and population.population is not None else "",
+        population.population if population is not None else "",
+    ]
 
 
 def render_workflow_si_csv(data: WorkflowSiData) -> str:
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow(_CSV_COLUMNS)
-    for entry in (*data.entries, *data.extra_blocks):
-        result = entry.block.result
-        sp = entry.sp_block.result if entry.sp_block is not None else None
-        writer.writerow(
-            [
-                entry.block.name,
-                entry.stage_id,
-                entry.block.kind,
-                result.formula,
-                result.charge,
-                result.multiplicity,
-                result.method,
-                result.basis_set,
-                result.solvation,
-                result.orca_version,
-                result.input_line,
-                result.energy_hartree,
-                result.zpe_correction,
-                result.enthalpy,
-                result.gibbs_energy,
-                result.gibbs_correction,
-                sp.method if sp is not None else "",
-                sp.basis_set if sp is not None else "",
-                sp.solvation if sp is not None else "",
-                sp.orca_version if sp is not None else "",
-                sp.input_line if sp is not None else "",
-                entry.sp_energy,
-                entry.composite_gibbs,
-                entry.block.imaginary_count,
-                result.lowest_freq_cm1,
-                result.thermo_temperature_k,
-                "; ".join(entry.block.warnings),
-            ]
-        )
+    # Populations align 1:1 with entries; extra blocks (unpaired SPs) are never
+    # populated. An empty populations tuple means no minima → all-blank cells.
+    populations = data.populations or ((None,) * len(data.entries))
+    for entry, population in zip(data.entries, populations, strict=False):
+        writer.writerow(_si_csv_row(entry, population, data.boltzmann_temperature_k))
+    for entry in data.extra_blocks:
+        writer.writerow(_si_csv_row(entry, None, data.boltzmann_temperature_k))
     return buffer.getvalue()
+
+
+def _boltzmann_temperature_override(workspace_dir: Path) -> float | None:
+    """Optional ``boltzmann_temperature_k`` from ``flow.yaml``; never raises.
+
+    A malformed or missing manifest must not suppress the SI, so every failure
+    (unreadable file, invalid YAML, non-mapping, non-positive value) logs and
+    falls back to ``None`` — the parsed thermochemistry temperature is then used.
+    """
+    try:
+        manifest = load_flow_manifest(workspace_dir)
+    except (ValueError, OSError):
+        logger.warning(
+            "Ignoring flow manifest for Boltzmann temperature in %s", workspace_dir, exc_info=True
+        )
+        return None
+    raw = manifest.get("boltzmann_temperature_k")
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("Ignoring non-numeric boltzmann_temperature_k=%r in %s", raw, workspace_dir)
+        return None
+    if not math.isfinite(value) or value <= 0:
+        logger.warning("Ignoring non-positive boltzmann_temperature_k=%r in %s", raw, workspace_dir)
+        return None
+    return value
 
 
 def write_workflow_si(workspace_dir: Path, payload: Mapping[str, Any]) -> Path | None:
@@ -599,13 +878,19 @@ def write_workflow_si(workspace_dir: Path, payload: Mapping[str, Any]) -> Path |
     md_path = workspace_dir / WORKFLOW_SI_MD_FILE
     csv_path = workspace_dir / WORKFLOW_SI_CSV_FILE
     try:
-        data = collect_workflow_si_data(payload)
+        override = _boltzmann_temperature_override(workspace_dir)
+        data = collect_workflow_si_data(payload, boltzmann_temperature_k=override)
         if not data.has_orca_stages():
             md_path.unlink(missing_ok=True)
             csv_path.unlink(missing_ok=True)
             return None
-        atomic_write_text(md_path, render_workflow_si_md(data))
-        atomic_write_text(csv_path, render_workflow_si_csv(data))
+        # Render both documents before writing either, so a rendering failure
+        # leaves the previous consistent pair on disk instead of a fresh md next
+        # to a stale csv.
+        md_text = render_workflow_si_md(data)
+        csv_text = render_workflow_si_csv(data)
+        atomic_write_text(md_path, md_text)
+        atomic_write_text(csv_path, csv_text)
         return md_path
     except Exception:  # noqa: BLE001
         logger.warning("Workflow SI generation failed for %s", workspace_dir, exc_info=True)
@@ -614,6 +899,7 @@ def write_workflow_si(workspace_dir: Path, payload: Mapping[str, Any]) -> Path |
 
 __all__ = [
     "ExcludedStage",
+    "PopulationRow",
     "WorkflowSiData",
     "WorkflowSiEntry",
     "collect_workflow_si_data",

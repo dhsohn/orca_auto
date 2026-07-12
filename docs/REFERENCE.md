@@ -292,8 +292,17 @@ Workflow notes:
   that actually ran, the CREST → xTB → ORCA funnel provenance, a relative
   energy table (ΔE/ΔG), and each completed structure's SI block. When an
   opt+freq structure has a single-point stage on the identical geometry, the
-  table adds the composite G = E(SP) + [G − E(el)](opt level). `si_data.csv`
-  carries the same numbers for data-availability requirements.
+  table adds the composite G = E(SP) + [G − E(el)](opt level). When at least one
+  minimum has a Gibbs free energy, a Boltzmann-populations section follows:
+  populations are computed over minima only (transition states are excluded) and
+  normalized independently within each species (`formula|charge|multiplicity`),
+  using the parsed thermochemistry temperature (or the optional
+  `boltzmann_temperature_k` manifest override, which must match that temperature).
+  They are omitted with a note — never fabricated — when no minimum has a Gibbs
+  energy or the temperature is missing/inconsistent. `si_data.csv` carries the
+  same numbers for data-availability requirements and appends `cluster_key`,
+  `rel_E_kcalmol`, `rel_G_kcalmol`, `boltzmann_T_K`, and `boltzmann_population`
+  after its existing columns.
 - Set `runs_root` in `orca_auto.yaml` (or `workflow_root`/`workflow.root` in
   `flow.yaml`) before submitting workflow directories.
 - Public workflow `run-dir` reads workflow type and XYZ inputs from `flow.yaml`

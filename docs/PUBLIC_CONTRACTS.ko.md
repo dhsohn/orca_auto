@@ -306,6 +306,7 @@ ORCA analyzer 상태:
 - `barrier_threshold_kcal`
 - `max_scan_extensions`
 - `orca_optts_route_line`
+- `boltzmann_temperature_k`
 - `allow_external_inputs`
 
 워크플로우 런타임 산출물:
@@ -314,7 +315,15 @@ ORCA analyzer 상태:
 - `workflow_report.html`은 워크플로우 advance 때 다시 쓰이는 사람용 요약입니다.
 - `workflow_si.md`와 `si_data.csv`는 ORCA stage가 있는 워크플로우에서 advance 때
   다시 쓰입니다: 논문 SI용 조립본(계산 세부사항, 상대 에너지, 구조별 블록)과
-  기계가독 companion입니다.
+  기계가독 companion입니다. minimum 중 하나라도 Gibbs 자유에너지를 가지면 Boltzmann
+  population도 포함합니다 — **minima만** 대상(전이상태 제외)이며 화학종
+  (`formula|charge|multiplicity`)별로 독립 정규화합니다. `si_data.csv`는 `warnings`
+  뒤에 5개 컬럼(`cluster_key`, `rel_E_kcalmol`, `rel_G_kcalmol`, `boltzmann_T_K`,
+  `boltzmann_population`)을 append하며 기존 컬럼의 이름·순서·인덱스는 그대로입니다.
+  온도는 파싱된 thermochemistry 온도를 쓰며, 선택적 `boltzmann_temperature_k` 매니페스트
+  키는 그 파싱 온도와 일치할 때 사용하는 값을 고정할 뿐(주파수 작업이 쓰지 않은 온도를
+  임의로 지정할 수 없음)입니다. minimum에 Gibbs 에너지가 없거나 온도가 없거나
+  불일치하면 population은 (가정 온도로 지어내지 않고) 생략합니다.
 - `workflow_registry.json`과 `workflow_registry.journal.jsonl`은 워크플로우 목록과 이벤트
   히스토리를 지원합니다.
 - 내부 엔진 큐와 출력은 `<runs root>/<workflow_id>/01_crest`, `02_xtb`, `03_orca` 같은

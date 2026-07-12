@@ -298,7 +298,14 @@ ORCA 고유 노트:
   CREST → xTB → ORCA 깔때기 provenance, 상대 에너지 테이블(ΔE/ΔG), 완료된
   구조별 SI 블록을 담은 논문 SI용 조립본입니다. opt+freq 구조와 동일 지오메트리의
   single point 스테이지가 있으면 합성 G = E(SP) + [G − E(el)](opt level)을
-  테이블에 추가합니다. `si_data.csv`는 같은 수치의 기계가독 버전입니다.
+  테이블에 추가합니다. minimum 중 하나라도 Gibbs 자유에너지를 가지면 Boltzmann
+  population 섹션이 이어집니다: **minima만** 대상(전이상태 제외)이며 화학종
+  (`formula|charge|multiplicity`)별로 독립 정규화하고, 파싱된 thermochemistry
+  온도(또는 그 온도와 일치해야 하는 선택적 `boltzmann_temperature_k` 매니페스트
+  override)를 사용합니다. minimum에 Gibbs 에너지가 없거나 온도가 없거나 불일치하면
+  지어내지 않고 note와 함께 생략합니다. `si_data.csv`는 같은 수치의 기계가독
+  버전이며 기존 컬럼 뒤에 `cluster_key`, `rel_E_kcalmol`, `rel_G_kcalmol`,
+  `boltzmann_T_K`, `boltzmann_population`을 append합니다.
 - 워크플로우 디렉터리를 제출하기 전에 `orca_auto.yaml`에 `runs_root`를 설정하세요
   (또는 `flow.yaml`에 `workflow_root`/`workflow.root`를 설정).
 - 공개 워크플로우 `run-dir`는 `flow.yaml` 또는 `scaffold`가 작성한 표준 파일명에서
