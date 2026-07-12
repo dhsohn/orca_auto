@@ -15,7 +15,15 @@ from orca_auto.flow.orchestration.workflow_builders import (
     _REACTION_TS_SEARCH_CREST_MANIFEST_DEFAULTS,
     _merge_manifest_defaults,
 )
+from orca_auto.flow.xyz_utils import load_xyz_atom_sequence
+from orca_auto.orca.report.interaction_energy import (
+    validate_fragment_electronic_states,
+    validate_fragment_partition,
+)
 
+from ..manifest import (
+    interaction_energy_config_fingerprint as _interaction_energy_config_fingerprint,
+)
 from ..manifest import (
     load_flow_manifest as _load_flow_manifest,
 )
@@ -35,6 +43,12 @@ from ..manifest import (
 from ..manifest import (
     resolve_engine_manifest_with_presence as _resolve_engine_manifest,
 )
+from ..manifest import (
+    validate_conformer_postprocessing_template as _validate_conformer_postprocessing_template,
+)
+from ..manifest import (
+    validate_interaction_energy_state_balance as _validate_interaction_energy_state_balance,
+)
 from .orca_input import rematerialize_orca_restart_input
 from .stage_ops import (
     _REMATERIALIZED_ENGINES,
@@ -44,6 +58,11 @@ from .stage_ops import (
     _task_metadata,
     _task_payload,
 )
+
+_INTERACTION_ROLE_PREFIX = "interaction_"
+_INTERACTION_COMPLEX_ROLE = "interaction_complex_sp"
+_INTERACTION_FRAGMENT_ROLE = "interaction_fragment"
+_INTERACTION_CONFIG_FINGERPRINT_KEY = "interaction_config_fingerprint"
 
 
 def _positive_int(value: Any) -> int | None:
@@ -93,6 +112,34 @@ def _flow_crest_mode(manifest: dict[str, Any], crest_manifest: dict[str, Any]) -
 
 def _workflow_template_name(payload: dict[str, Any], manifest: dict[str, Any]) -> str:
     return _normalize_text(payload.get("template_name") or manifest.get("workflow_type")).lower()
+
+
+def _interaction_source_atom_sequence(workspace: Path, payload: dict[str, Any]) -> tuple[str, ...]:
+    """Load the immutable copied complex input used by interaction fragments."""
+    request = _coerce_mapping(_coerce_mapping(payload.get("metadata")).get("request"))
+    raw_artifacts = request.get("source_artifacts")
+    candidates: list[Path] = []
+    if isinstance(raw_artifacts, list):
+        for raw in raw_artifacts:
+            artifact = _coerce_mapping(raw)
+            if _normalize_text(artifact.get("kind")) != "input_xyz":
+                continue
+            path_text = _normalize_text(artifact.get("path"))
+            if path_text:
+                candidates.append(Path(path_text))
+    candidates.extend((workspace / "input.xyz", workspace / "inputs" / "input.xyz"))
+    resolved_workspace = workspace.expanduser().resolve()
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve()
+            resolved.relative_to(resolved_workspace)
+        except (OSError, ValueError):
+            continue
+        if resolved.is_file():
+            return load_xyz_atom_sequence(resolved)
+    raise ValueError(
+        "interaction_energy restart cannot validate fragments without the copied input XYZ"
+    )
 
 
 def _crest_manifest_with_defaults(
@@ -243,6 +290,7 @@ def _manifest_orca_route_line(manifest: dict[str, Any]) -> str:
 def _update_request_parameters(
     payload: dict[str, Any],
     *,
+    template_name: str,
     manifest: dict[str, Any],
     resources: dict[str, int],
     priority: int | None,
@@ -289,6 +337,23 @@ def _update_request_parameters(
             params.pop("rmsd_dedup", None)
         else:
             params["rmsd_dedup"] = rmsd_dedup
+    # Revalidate the complete effective durable state, not only keys changed by
+    # this restart manifest. This also closes legacy/manual payload injection.
+    interaction_energy = _normalize_interaction_energy_block(params.get("interaction_energy"))
+    rmsd_dedup = _normalize_rmsd_dedup_block(params.get("rmsd_dedup"))
+    _validate_conformer_postprocessing_template(
+        template_name,
+        interaction_energy=interaction_energy,
+        rmsd_dedup=rmsd_dedup,
+    )
+    if interaction_energy is None:
+        params.pop("interaction_energy", None)
+    else:
+        params["interaction_energy"] = interaction_energy
+    if rmsd_dedup is None:
+        params.pop("rmsd_dedup", None)
+    else:
+        params["rmsd_dedup"] = rmsd_dedup
 
 
 def _flow_restart_settings(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -316,6 +381,7 @@ def _flow_restart_settings_from_manifest(
     crest_mode = _flow_crest_mode(manifest, crest_manifest)
     _update_request_parameters(
         payload,
+        template_name=template_name,
         manifest=manifest,
         resources=resources,
         priority=priority,
@@ -345,6 +411,59 @@ def _flow_restart_settings_from_manifest(
     multiplicity = params.get(
         "multiplicity", manifest_multiplicity if manifest_multiplicity is not None else 1
     )
+    interaction_cfg = params.get("interaction_energy")
+    interaction_cfg = interaction_cfg if isinstance(interaction_cfg, dict) else None
+    rmsd_cfg = params.get("rmsd_dedup")
+    rmsd_cfg = rmsd_cfg if isinstance(rmsd_cfg, dict) else None
+    if interaction_cfg is not None:
+        _validate_interaction_energy_state_balance(
+            interaction_cfg,
+            complex_charge=int(charge),
+            complex_multiplicity=int(multiplicity),
+        )
+        atom_symbols = _interaction_source_atom_sequence(workspace, payload)
+        fragments = interaction_cfg.get("fragments")
+        if not isinstance(fragments, list):
+            raise ValueError("interaction_energy restart fragments are unavailable")
+        partition_reason = validate_fragment_partition(
+            [fragment["atom_indices"] for fragment in fragments], len(atom_symbols)
+        )
+        if partition_reason:
+            raise ValueError(
+                f"interaction_energy restart fragments do not partition input.xyz: "
+                f"{partition_reason}"
+            )
+        state_reason = validate_fragment_electronic_states(atom_symbols, fragments)
+        if state_reason:
+            raise ValueError(
+                f"interaction_energy restart fragment state is impossible: {state_reason}"
+            )
+    interaction_fingerprint = (
+        _interaction_energy_config_fingerprint(
+            interaction_cfg,
+            complex_charge=int(charge),
+            complex_multiplicity=int(multiplicity),
+            rmsd_dedup=rmsd_cfg,
+        )
+        if interaction_cfg is not None
+        else ""
+    )
+    if interaction_cfg is not None:
+        for raw_stage in payload.get("stages", []):
+            if not isinstance(raw_stage, dict):
+                continue
+            metadata = _stage_metadata(raw_stage)
+            role = _normalize_text(metadata.get("role"))
+            if not role.startswith(_INTERACTION_ROLE_PREFIX):
+                continue
+            if (
+                _normalize_text(metadata.get(_INTERACTION_CONFIG_FINGERPRINT_KEY))
+                != interaction_fingerprint
+            ):
+                raise ValueError(
+                    "interaction_energy scientific settings cannot change after its stages "
+                    "were materialized; disable the feature or start a new workflow"
+                )
     route_line = _manifest_orca_route_line(manifest)
     return {
         "applied": True,
@@ -360,6 +479,11 @@ def _flow_restart_settings_from_manifest(
         ),
         "charge": charge,
         "multiplicity": multiplicity,
+        "interaction_energy": interaction_cfg,
+        "interaction_energy_fingerprint": interaction_fingerprint,
+        "interaction_energy_disabled": (
+            "interaction_energy" in manifest and interaction_cfg is None
+        ),
         "orca_charge": manifest_charge,
         "orca_multiplicity": manifest_multiplicity,
         "orca_route_line_present": bool(route_line),
@@ -419,6 +543,92 @@ def _apply_flow_restart_settings(
     stage_view = WorkflowStageView(stage)
     task_view = WorkflowTaskView(task)
     engine = _task_engine(task)
+    stage_metadata = _stage_metadata(stage)
+    interaction_role = _normalize_text(stage_metadata.get("role"))
+
+    if engine == "orca" and interaction_role.startswith(_INTERACTION_ROLE_PREFIX):
+        interaction_cfg = settings.get("interaction_energy")
+        if not isinstance(interaction_cfg, dict):
+            raise ValueError("disabled interaction-energy stages must be retired before restart")
+        expected_fingerprint = _normalize_text(settings.get("interaction_energy_fingerprint"))
+        if (
+            not expected_fingerprint
+            or _normalize_text(stage_metadata.get(_INTERACTION_CONFIG_FINGERPRINT_KEY))
+            != expected_fingerprint
+        ):
+            raise ValueError(
+                "interaction-energy restart config generation does not match the stage"
+            )
+
+        interaction_resources = dict(_coerce_mapping(settings.get("resources")))
+        for key in ("max_cores", "max_memory_gb"):
+            if isinstance(interaction_cfg.get(key), int):
+                interaction_resources[key] = int(interaction_cfg[key])
+        _apply_resource_request(task, interaction_resources)
+        interaction_priority = (
+            int(interaction_cfg["priority"])
+            if isinstance(interaction_cfg.get("priority"), int)
+            else settings.get("priority")
+        )
+        _apply_priority(
+            task,
+            interaction_priority if isinstance(interaction_priority, int) else None,
+        )
+
+        charge = int(settings.get("charge", 0))
+        multiplicity = int(settings.get("multiplicity", 1))
+        if interaction_role == _INTERACTION_FRAGMENT_ROLE:
+            fragment_index = stage_metadata.get("fragment_index")
+            fragments = interaction_cfg.get("fragments")
+            if (
+                not isinstance(fragment_index, int)
+                or isinstance(fragment_index, bool)
+                or not isinstance(fragments, list)
+                or fragment_index < 0
+                or fragment_index >= len(fragments)
+                or not isinstance(fragments[fragment_index], dict)
+            ):
+                raise ValueError("interaction fragment restart has no matching current descriptor")
+            fragment = fragments[fragment_index]
+            charge = int(fragment["charge"])
+            multiplicity = int(fragment["multiplicity"])
+            stage_metadata.update(
+                {
+                    "fragment_label": fragment["label"],
+                    "fragment_charge": charge,
+                    "fragment_multiplicity": multiplicity,
+                    "fragment_atom_indices": list(fragment["atom_indices"]),
+                }
+            )
+        elif interaction_role != _INTERACTION_COMPLEX_ROLE:
+            raise ValueError(f"unknown interaction-energy stage role: {interaction_role}")
+
+        interaction_settings = dict(settings)
+        interaction_settings.update(
+            {
+                "orca_input_updates": True,
+                "orca_route_line_present": True,
+                "orca_route_line": interaction_cfg["sp_route_line"],
+                "orca_charge": charge,
+                "orca_multiplicity": multiplicity,
+                "resources": interaction_resources,
+            }
+        )
+        task_view.update_enqueue_payload(
+            {
+                key: int(interaction_resources[key])
+                for key in ("max_cores", "max_memory_gb")
+                if key in interaction_resources
+            }
+        )
+        rematerialize_orca_restart_input(
+            stage,
+            interaction_settings,
+            allowed_root=restart_allowed_root,
+            created_restart_dirs=created_restart_dirs,
+        )
+        return
+
     _apply_resource_request(task, _coerce_mapping(settings.get("resources")))
     _apply_priority(
         task,

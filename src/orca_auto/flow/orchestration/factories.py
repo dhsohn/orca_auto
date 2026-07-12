@@ -10,6 +10,7 @@ from orca_auto.flow.manifest import (
     normalize_interaction_energy_block,
     normalize_rmsd_dedup_block,
     optional_positive_float,
+    validate_interaction_energy_state_balance,
 )
 from orca_auto.flow.orchestration.builders import (
     create_conformer_screening_workflow_impl,
@@ -29,6 +30,10 @@ from orca_auto.flow.orchestration.workflow_builders import _copy_input_impl
 from orca_auto.flow.registry import sync_workflow_registry
 from orca_auto.flow.state import write_workflow_payload
 from orca_auto.flow.xyz_utils import load_xyz_atom_sequence
+from orca_auto.orca.report.interaction_energy import (
+    validate_fragment_electronic_states,
+    validate_fragment_partition,
+)
 
 
 @dataclass(frozen=True)
@@ -114,6 +119,28 @@ def _normalized_conformer_screening_request(
     normalized_crest_mode = deps.normalize_text(request.crest_mode).lower()
     if normalized_crest_mode not in {"standard", "nci"}:
         raise ValueError("conformer_screening only supports crest_mode 'standard' or 'nci'")
+    interaction_energy = normalize_interaction_energy_block(request.interaction_energy)
+    validate_interaction_energy_state_balance(
+        interaction_energy,
+        complex_charge=int(request.charge),
+        complex_multiplicity=int(request.multiplicity),
+    )
+    if interaction_energy is not None:
+        atom_symbols = deps.load_xyz_atom_sequence_fn(request.input_xyz)
+        atom_count = len(atom_symbols)
+        partition_reason = validate_fragment_partition(
+            [fragment["atom_indices"] for fragment in interaction_energy["fragments"]],
+            atom_count,
+        )
+        if partition_reason:
+            raise ValueError(
+                f"interaction_energy fragments do not partition input.xyz: {partition_reason}"
+            )
+        state_reason = validate_fragment_electronic_states(
+            atom_symbols, interaction_energy["fragments"]
+        )
+        if state_reason:
+            raise ValueError(f"interaction_energy fragment state is impossible: {state_reason}")
     return replace(
         request,
         crest_mode=normalized_crest_mode,
@@ -131,7 +158,7 @@ def _normalized_conformer_screening_request(
             {"boltzmann_temperature_k": request.boltzmann_temperature_k},
             "boltzmann_temperature_k",
         ),
-        interaction_energy=normalize_interaction_energy_block(request.interaction_energy),
+        interaction_energy=interaction_energy,
         rmsd_dedup=normalize_rmsd_dedup_block(request.rmsd_dedup),
     )
 

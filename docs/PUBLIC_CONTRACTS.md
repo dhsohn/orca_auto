@@ -312,7 +312,30 @@ Manifest keys that users may rely on:
 - `max_scan_extensions`
 - `orca_optts_route_line`
 - `boltzmann_temperature_k`
+- `rmsd_dedup.enabled`
+- `rmsd_dedup.rmsd_threshold_angstrom`
+- `rmsd_dedup.energy_window_kcal`
+- `rmsd_dedup.heavy_atoms_only`
+- `interaction_energy.enabled`
+- `interaction_energy.sp_route_line`
+- `interaction_energy.max_fragments`
+- `interaction_energy.priority`
+- `interaction_energy.max_cores`
+- `interaction_energy.max_memory_gb`
+- `interaction_energy.fragments[].atom_indices`
+- `interaction_energy.fragments[].charge`
+- `interaction_energy.fragments[].multiplicity`
+- `interaction_energy.fragments[].label`
 - `allow_external_inputs`
+
+The `rmsd_dedup` and `interaction_energy` blocks use strict schemas: unknown
+keys, malformed booleans, non-integral integer fields, non-string routes, and
+multiline/control/non-printable route or label text are rejected at admission.
+Fragment labels are at most 80 characters. An enabled interaction-energy block
+requires 2–8 fragments; each multiplicity is an integer in `[1, 100]`, and
+`sp_route_line` must describe a pure single-point calculation. Fragment indices
+must be a static, gap-free, disjoint partition of every input atom. Remote
+workflow uploads may not set the server-owned `interaction_energy.priority`.
 
 Workflow runtime artifacts:
 
@@ -344,7 +367,10 @@ Workflow runtime artifacts:
 - Populations are normalized independently within each
   `formula|charge|multiplicity` group. This key is a stoichiometric proxy, not a
   connectivity identity: every retained minimum has statistical weight one, and
-  no symmetry/degeneracy correction or post-DFT deduplication is applied.
+  no symmetry/degeneracy correction is applied. When `rmsd_dedup` is enabled,
+  completeness and provenance are checked against the full pre-dedup ensemble
+  before representatives are selected. The reported `degeneracy` is a workflow
+  duplicate count and is not a statistical/symmetry weight.
   `si_data.csv` appends five columns after `warnings` (`cluster_key`,
   `rel_E_kcalmol`, `rel_G_kcalmol`, `boltzmann_T_K`,
   `boltzmann_population`); the existing columns keep their names, order, and
@@ -353,6 +379,87 @@ Workflow runtime artifacts:
   `rel_G_kcalmol` are relative to the lowest E and G within that row's
   population group under the shared convention, not global cross-group
   baselines.
+- `rmsd_dedup` compares all atoms by default and considers converged minima;
+  a known nonzero `Nimag` excludes a candidate, while Opt-only candidates with
+  no frequency result remain eligible. Candidates must have the same
+  selected-atom element sequence, formula, charge, multiplicity, and exact optimization provenance
+  (method, basis, solvation, ORCA version, and route). A merge requires both a
+  proper-rotation RMSD and the maximum aligned-atom displacement to be below
+  `rmsd_threshold_angstrom` (default 0.25), plus an effective-energy difference
+  below `energy_window_kcal` (default 0.1). A complete uniform exact-provenance
+  SP refinement supplies that energy; otherwise the optimization energy does.
+  Nondegenerate pairs whose best unconstrained alignment prefers a global
+  reflection are kept separate. This remains a geometric/energy heuristic:
+  nearby distinct minima,
+  especially local stereochemical variants, can still merge. Setting
+  `heavy_atoms_only: true` increases that risk by ignoring H/D/T. Review
+  `merged_stage_ids` before treating groups as chemically identical. When
+  enabled, `si_data.csv` appends `rmsd_group`, `degeneracy`, and
+  `merged_stage_ids`; when disabled, those columns are absent.
+- `interaction_energy` is available only for `conformer_screening`. It requires
+  2–8 fragments whose indices form one disjoint, exhaustive partition of the
+  optimized complex. Fragment charges must sum to the complex charge. Their
+  multiplicities must also be able to couple to the complex multiplicity under
+  the generalized angular-momentum spin-coupling manifold. For each fragment,
+  `N_e = ΣZ − charge` must be nonnegative and `2S = multiplicity − 1` must not
+  exceed `N_e` or differ from it in parity. `sp_route_line` is a
+  pure single-point route; optimization, frequency, gradient, IRC, MD, NEB,
+  GOAT, and scan job directives are rejected.
+- Fan-out uses only valid terminal optimized minima and the RMSD representatives.
+  A terminal partial-success ensemble may use its completed, converged subset
+  after excluding known saddles. The representative energy convention is computed
+  from that same eligible set, so an unusable/saddle stage cannot change the parent.
+  When the public dedup report is off, the same all-atom
+  default grouping still bounds fan-out while the SI structure table remains
+  undeduplicated. The interaction generation fingerprint includes those RMSD
+  grouping settings.
+- A resolved interaction energy requires exactly one completed current-generation
+  complex SP and one completed fragment SP at every expected index. The selected
+  input and parsed output must agree on route and electronic state; executed
+  method, basis, solvation, ORCA version, optimized complex geometry, indexed
+  geometry subsets, and the shared energy convention must also agree. Missing,
+  duplicate, running, stale-generation, mixed-level, wrong-state, wrong-geometry,
+  or non-finite input omits ΔE_int rather than using a partial sum.
+- `interaction_energy.csv` is present only for an enabled feature with reportable
+  rows. Its 23 columns are `parent_stage_id`, `complex_stage_id`, `complex_label`,
+  `complex_charge`, `complex_multiplicity`, `complex_formula`, `E_complex_Eh`,
+  `method`, `basis_set`, `solvation`, `orca_version`, `route_line`,
+  `ghost_counterpoise_applied`, `fragment_label`, `fragment_stage_id`,
+  `fragment_atom_indices`, `fragment_formula`, `fragment_charge`,
+  `fragment_multiplicity`, `E_fragment_Eh`, `dE_int_Eh`, `dE_int_kcalmol`, and
+  `note`. `ghost_counterpoise_applied=false` means no separate Boys–Bernardi
+  ghost-atom counterpoise calculation was run; it does not deny a method's
+  inherent correction such as r2SCAN-3c gCP. Formula-leading text is neutralized
+  for spreadsheet safety.
+- The adjacent owner marker binds the generated CSV to a hashed workflow identity
+  and records current/pending content digests. Digest-bound ownership logic
+  recovers safely from interrupted create, replace, or delete operations. A missing,
+  foreign, malformed, or digest-mismatched marker never authorizes overwrite or
+  deletion; user-modified content is preserved and released from ownership.
+  Ownership conflicts are preflighted before replacing the last-good base SI.
+  Uploaded archives may not supply either generated file.
+- A restart preserves the interaction SP route, per-fragment electronic state,
+  interaction-specific resources, and generation fingerprint. Interaction and
+  RMSD grouping settings are immutable after fan-out; reopening an original
+  primary stage is also rejected while its interaction fan-out exists. Disabling
+  the feature retires those persisted interaction stages. Before accepting an
+  enabled config, restart reloads the copied durable input XYZ and revalidates
+  its exhaustive partition and per-fragment electron states.
+- SI publication is checkpointed in workflow and registry state with
+  `si_publish_pending`, `si_publish_attempts`, `si_publish_next_retry_at`,
+  `si_publish_blocked`, generation, and error metadata. Transient failures use
+  30/60/120/240-second exponential backoff and block after the fifth failed
+  writer attempt. Deterministic conflicts block immediately. Pre-writer
+  workflow/registry/report checkpoint failures do not consume this writer budget;
+  any successfully persisted pending marker remains immediately due for infrastructure
+  reconciliation. Registry clear uses workflow-then-registry lock order and
+  rechecks authoritative workflow identity/status; publication-pending,
+  publication-blocked, final-child-sync-pending, identity-quarantined, or
+  authoritatively active records cannot be cleared as stale. A quarantined payload
+  keeps its observed durable ID as evidence while the registry keys the single row
+  by the trusted workspace name and records the observed ID in metadata. After fixing
+  the cause, an operator can re-arm a blocked publication with
+  `orca_auto run-dir <workflow_dir> --force`.
 - The population temperature is the parsed thermochemistry temperature. The
   optional `boltzmann_temperature_k` manifest key is a finite, strictly positive
   pin validated at admission and stored in the durable workflow request; it must

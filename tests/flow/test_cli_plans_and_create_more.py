@@ -231,6 +231,40 @@ def test_run_dir_rejects_invalid_boltzmann_temperature_at_admission(tmp_path: Pa
         )
 
 
+def test_run_dir_rejects_interaction_features_on_unsupported_template(tmp_path: Path) -> None:
+    workflow_dir = tmp_path / "reaction"
+    workflow_dir.mkdir()
+    (workflow_dir / "reactant.xyz").write_text("1\nr\nH 0 0 0\n", encoding="utf-8")
+    (workflow_dir / "product.xyz").write_text("1\np\nH 0 0 0\n", encoding="utf-8")
+    (workflow_dir / "flow.yaml").write_text(
+        "\n".join(
+            [
+                "workflow_type: reaction_ts_search",
+                "interaction_energy:",
+                "  enabled: true",
+                "  fragments:",
+                "    - atom_indices: [0]",
+                "    - atom_indices: [1]",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config = run_dir_manifest._load_run_dir_workflow_config(
+        SimpleNamespace(workflow_type=None), workflow_dir
+    )
+    with pytest.raises(ValueError, match="supported only for conformer_screening"):
+        run_dir_options._resolve_run_dir_workflow_options(
+            SimpleNamespace(),
+            config.manifest,
+            config.sections,
+            default_orca_route_line="! r2scan-3c OptTS Freq TightSCF",
+            default_max_orca_stages=3,
+            workflow_root=str(tmp_path / "runs"),
+            workflow_type=config.workflow_type,
+        )
+
+
 def test_cmd_run_dir_reuses_direct_child_workflow_directory_when_already_under_workflow_root(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -14,6 +14,8 @@ from ..manifest import (
     normalize_interaction_energy_block,
     normalize_rmsd_dedup_block,
     optional_positive_float,
+    validate_conformer_postprocessing_template,
+    validate_interaction_energy_state_balance,
 )
 
 RUN_DIR_COMMON_WORKFLOW_OPTION_FIELDS = (
@@ -342,15 +344,25 @@ def _resolve_run_dir_stage_options(
     }
 
 
-def _resolve_run_dir_interaction_options(manifest: dict[str, Any]) -> dict[str, Any]:
+def _resolve_run_dir_interaction_options(
+    manifest: dict[str, Any],
+    *,
+    complex_charge: int | None = None,
+    complex_multiplicity: int | None = None,
+) -> dict[str, Any]:
     # Validate at admission for EVERY template so a malformed (or misplaced)
     # block fails closed with a clear error instead of being silently dropped;
     # only conformer_screening actually consumes the normalized result. The
     # workflow factory re-normalizes idempotently as the canonical gate.
+    interaction_energy = normalize_interaction_energy_block(manifest.get("interaction_energy"))
+    if complex_charge is not None and complex_multiplicity is not None:
+        validate_interaction_energy_state_balance(
+            interaction_energy,
+            complex_charge=complex_charge,
+            complex_multiplicity=complex_multiplicity,
+        )
     return {
-        "interaction_energy": normalize_interaction_energy_block(
-            manifest.get("interaction_energy")
-        ),
+        "interaction_energy": interaction_energy,
         "rmsd_dedup": normalize_rmsd_dedup_block(manifest.get("rmsd_dedup")),
     }
 
@@ -365,6 +377,7 @@ def _resolve_run_dir_workflow_options(
     default_max_crest_candidates: int = 3,
     default_max_xtb_stages: int = 3,
     workflow_root: str | None = None,
+    workflow_type: str = "",
 ) -> RunDirWorkflowOptions:
     defaults = _RunDirWorkflowOptionDefaults(
         orca_route_line=default_orca_route_line,
@@ -373,12 +386,24 @@ def _resolve_run_dir_workflow_options(
         max_xtb_stages=default_max_xtb_stages,
     )
 
+    orca_options = _resolve_run_dir_orca_options(args, manifest, sections, defaults=defaults)
+    interaction_options = _resolve_run_dir_interaction_options(
+        manifest,
+        complex_charge=orca_options["charge"],
+        complex_multiplicity=orca_options["multiplicity"],
+    )
+    if workflow_type:
+        validate_conformer_postprocessing_template(
+            workflow_type,
+            interaction_energy=interaction_options["interaction_energy"],
+            rmsd_dedup=interaction_options["rmsd_dedup"],
+        )
     return RunDirWorkflowOptions(
         **_resolve_run_dir_core_options(args, manifest, sections, workflow_root=workflow_root),
         **_resolve_run_dir_resource_options(args, manifest, sections),
-        **_resolve_run_dir_orca_options(args, manifest, sections, defaults=defaults),
+        **orca_options,
         **_resolve_run_dir_stage_options(args, manifest, defaults=defaults),
-        **_resolve_run_dir_interaction_options(manifest),
+        **interaction_options,
     )
 
 
@@ -392,6 +417,7 @@ def _resolve_run_dir_workflow_option_bundle(
     default_max_crest_candidates: int = 3,
     default_max_xtb_stages: int = 3,
     workflow_root: str | None = None,
+    workflow_type: str = "",
 ) -> tuple[RunDirWorkflowOptions, dict[str, Any]]:
     options = _resolve_run_dir_workflow_options(
         args,
@@ -402,6 +428,7 @@ def _resolve_run_dir_workflow_option_bundle(
         default_max_crest_candidates=default_max_crest_candidates,
         default_max_xtb_stages=default_max_xtb_stages,
         workflow_root=workflow_root,
+        workflow_type=workflow_type,
     )
     return options, options.common_kwargs()
 

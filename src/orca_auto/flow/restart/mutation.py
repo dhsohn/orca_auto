@@ -23,6 +23,7 @@ from .stage_ops import (
 )
 
 _RESTARTABLE_WORKFLOW_STATUSES = frozenset({*WORKFLOW_FAILED_STATUSES, STATUS_CANCELLED})
+_INTERACTION_ROLE_PREFIX = "interaction_"
 
 
 @dataclass
@@ -136,6 +137,56 @@ def _reset_restartable_stages(
     directory_transaction: RestartDirectoryTransaction | None = None,
 ) -> list[dict[str, str]]:
     restarted_stages: list[dict[str, str]] = []
+    has_interaction_stages = any(
+        isinstance(raw_stage, dict)
+        and _normalize_text(
+            raw_stage.get("metadata", {}).get("role")
+            if isinstance(raw_stage.get("metadata"), dict)
+            else ""
+        ).startswith(_INTERACTION_ROLE_PREFIX)
+        for raw_stage in payload.get("stages", [])
+    )
+    if has_interaction_stages and not flow_settings.get("interaction_energy_disabled"):
+        reopening_primary_orca = []
+        for raw_stage in payload.get("stages", []):
+            if not isinstance(raw_stage, dict) or not _stage_needs_restart(raw_stage):
+                continue
+            metadata = raw_stage.get("metadata")
+            role = _normalize_text(metadata.get("role")) if isinstance(metadata, dict) else ""
+            if _normalize_text(raw_stage.get("stage_kind")) == "orca_stage" and not role.startswith(
+                _INTERACTION_ROLE_PREFIX
+            ):
+                reopening_primary_orca.append(_normalize_text(raw_stage.get("stage_id")))
+        if reopening_primary_orca:
+            raise ValueError(
+                "cannot restart primary ORCA stages after interaction-energy fan-out; "
+                "disable interaction_energy to retire its stages first: "
+                + ", ".join(reopening_primary_orca)
+            )
+    if flow_settings.get("interaction_energy_disabled"):
+        retained: list[Any] = []
+        for raw_stage in payload.get("stages", []):
+            if not isinstance(raw_stage, dict):
+                retained.append(raw_stage)
+                continue
+            metadata = raw_stage.get("metadata")
+            role = _normalize_text(metadata.get("role")) if isinstance(metadata, dict) else ""
+            if not role.startswith(_INTERACTION_ROLE_PREFIX):
+                retained.append(raw_stage)
+                continue
+            task = raw_stage.get("task")
+            restarted_stages.append(
+                {
+                    "stage_id": _normalize_text(raw_stage.get("stage_id")),
+                    "previous_status": _normalize_text(raw_stage.get("status")),
+                    "previous_task_status": (
+                        _normalize_text(task.get("status")) if isinstance(task, dict) else ""
+                    ),
+                    "engine": "orca",
+                    "action": "retired_disabled_interaction_energy",
+                }
+            )
+        payload["stages"] = retained
     for raw_stage in payload.get("stages", []):
         if not isinstance(raw_stage, dict) or not _stage_needs_restart(raw_stage):
             continue
@@ -152,6 +203,22 @@ def _reset_restartable_stages(
                 raw_stage,
                 rematerialize=_stage_should_rematerialize(raw_stage, flow_settings),
             )
+        )
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict) and bool(metadata.get("si_publish_blocked")):
+        metadata["si_publish_pending"] = True
+        metadata.pop("si_publish_blocked", None)
+        metadata.pop("si_publish_attempts", None)
+        metadata.pop("si_publish_next_retry_at", None)
+        metadata.pop("si_publish_error", None)
+        restarted_stages.append(
+            {
+                "stage_id": "workflow_si",
+                "previous_status": "blocked",
+                "previous_task_status": "",
+                "engine": "workflow",
+                "action": "rearmed_si_publication",
+            }
         )
     return restarted_stages
 

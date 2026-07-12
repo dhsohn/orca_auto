@@ -612,6 +612,8 @@ def test_rejects_file_directory_path_collision(tmp_path: Path) -> None:
         "xtb_job.yaml",
         "crest_job.yaml",
         "upload_sessions.json",
+        "interaction_energy.csv",
+        ".interaction_energy.csv.orca_auto-owner",
         "WORKFLOW.JSON",
         ".orca-auto-upload",
     ],

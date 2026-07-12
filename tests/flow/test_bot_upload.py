@@ -1080,6 +1080,24 @@ def test_confirm_rejects_workflow_resources_above_server_cap(tmp_path: Path) -> 
             "workflow_type: conformer_screening\n"
             "interaction_energy:\n  sp_route_line: '! r2scan-3c GCP(FILE)'\n"
         ),
+        (
+            "workflow_type: conformer_screening\n"
+            "interaction_energy:\n"
+            "  enabled: true\n"
+            "  sp_route_line: '! HF TightOpt'\n"
+            "  fragments:\n"
+            "    - atom_indices: [0]\n"
+            "    - atom_indices: [1]\n"
+        ),
+        (
+            "workflow_type: conformer_screening\n"
+            "interaction_energy:\n"
+            "  enabled: true\n"
+            "  priority: -1000000000\n"
+            "  fragments:\n"
+            "    - atom_indices: [0]\n"
+            "    - atom_indices: [1]\n"
+        ),
         # The fragment fan-out count is bounded remotely.
         "workflow_type: conformer_screening\ninteraction_energy:\n  max_fragments: 99\n",
         "workflow_type: conformer_screening\ncrest:\n  mdlen: 1000000000\n",

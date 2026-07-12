@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 from orca_auto.core.utils import (
     atomic_write_json,
     file_lock,
@@ -21,7 +22,12 @@ from orca_auto.core.utils import (
     safe_int as _safe_int,
 )
 
-from ..state import iter_workflow_workspaces, load_workflow_payload, workflow_summary
+from ..state import (
+    acquire_workflow_lock,
+    iter_workflow_workspaces,
+    load_workflow_payload,
+    workflow_summary,
+)
 from . import _markers as _markers
 
 WORKFLOW_REGISTRY_FILE_NAME = "workflow_registry.json"
@@ -114,12 +120,28 @@ def _record_from_summary(summary: dict[str, Any]) -> WorkflowRegistryRecord:
         "parent_workflow": _coerce_mapping(summary.get("parent_workflow")),
         "final_child_sync_pending": bool(summary.get("final_child_sync_pending")),
     }
+    if bool(summary.get("si_publish_pending")):
+        metadata["si_publish_pending"] = True
+    if bool(summary.get("si_publish_blocked")):
+        metadata["si_publish_blocked"] = True
     last_restarted_at = _normalize_text(summary.get("last_restarted_at"))
     if last_restarted_at:
         metadata["last_restarted_at"] = last_restarted_at
     restart_summary = _coerce_mapping(summary.get("restart_summary"))
     if restart_summary:
         metadata["restart_summary"] = restart_summary
+    for key in (
+        "si_publish_generation",
+        "si_published_generation",
+        "si_publish_error",
+        "si_publish_next_retry_at",
+    ):
+        value = _normalize_text(summary.get(key))
+        if value:
+            metadata[key] = value
+    si_publish_attempts = _safe_int(summary.get("si_publish_attempts"), default=0)
+    if si_publish_attempts > 0:
+        metadata["si_publish_attempts"] = si_publish_attempts
     return WorkflowRegistryRecord(
         workflow_id=_normalize_text(summary.get("workflow_id")),
         template_name=_normalize_text(summary.get("template_name")),
@@ -138,6 +160,64 @@ def _record_from_summary(summary: dict[str, Any]) -> WorkflowRegistryRecord:
         task_status_counts=_coerce_counts(summary.get("task_status_counts")),
         submission_summary=_coerce_mapping(summary.get("submission_summary")),
         metadata=metadata,
+    )
+
+
+def _record_for_workspace(
+    workspace_dir: str | Path,
+    payload: dict[str, Any],
+) -> WorkflowRegistryRecord:
+    workspace = Path(workspace_dir).expanduser().resolve()
+    indexed_payload = payload
+    metadata = payload.get("metadata")
+    workflow_error = metadata.get("workflow_error") if isinstance(metadata, dict) else None
+    persisted_id = _normalize_text(payload.get("workflow_id"))
+    try:
+        validated_id = validate_workflow_workspace_identity(workspace, payload.get("workflow_id"))
+    except (OSError, TypeError, ValueError):
+        identity_valid = False
+        validated_id = ""
+    else:
+        identity_valid = True
+    if identity_valid and not persisted_id:
+        # Missing IDs are a supported legacy form: workspace identity is the
+        # authoritative fallback. Normalize only the registry view.
+        indexed_payload = dict(payload)
+        indexed_payload["workflow_id"] = validated_id
+    elif not identity_valid:
+        # Keep the durable payload untouched while the registry remains
+        # addressable by its trusted workspace identity. Pre-quarantine rows
+        # and invalid path segments must stay visible so cleared markers cannot
+        # hide reconciliation.
+        quarantined = (
+            _normalize_text(payload.get("status")).lower() == "failed"
+            and isinstance(workflow_error, dict)
+            and workflow_error.get("scope") == "workflow_identity_validation"
+        )
+        indexed_payload = dict(payload)
+        indexed_payload["workflow_id"] = workspace.name
+    else:
+        quarantined = False
+    record = _record_from_summary(workflow_summary(workspace, indexed_payload))
+    if identity_valid:
+        return record
+    identity_metadata = (
+        {
+            "identity_quarantined": True,
+            "quarantined_persisted_workflow_id": persisted_id,
+        }
+        if quarantined
+        else {
+            "identity_reconciliation_required": True,
+            "identity_reconciliation_persisted_workflow_id": persisted_id,
+        }
+    )
+    return replace(
+        record,
+        metadata={
+            **record.metadata,
+            **identity_metadata,
+        },
     )
 
 
@@ -223,6 +303,26 @@ def upsert_workflow_registry_record(
 ) -> WorkflowRegistryRecord:
     resolved_root = Path(workflow_root).expanduser().resolve()
     resolved_root.mkdir(parents=True, exist_ok=True)
+    try:
+        record_workspace = Path(record.workspace_dir).expanduser().resolve()
+    except OSError:
+        record_workspace = None
+    if (
+        record_workspace is not None
+        and record_workspace.parent == resolved_root
+        and record_workspace.name != record.workflow_id
+    ):
+        raise ValueError(
+            f"workflow registry id {record.workflow_id!r} does not match direct workspace "
+            f"name {record_workspace.name!r}"
+        )
+    trusted_workspace_key = (
+        str(record_workspace)
+        if record_workspace is not None
+        and record_workspace.parent == resolved_root
+        and record_workspace.name == record.workflow_id
+        else ""
+    )
     with file_lock(_registry_lock_path(resolved_root)):
         cleared_markers = _load_cleared_markers(resolved_root)
         records = _load_records(resolved_root)
@@ -240,15 +340,16 @@ def upsert_workflow_registry_record(
             if removed_marker:
                 _save_cleared_markers(resolved_root, cleared_markers)
 
-        updated = False
-        for index, existing in enumerate(records):
-            if existing.workflow_id != record.workflow_id:
-                continue
-            records[index] = record
-            updated = True
-            break
-        if not updated:
-            records.append(record)
+        records = [
+            existing
+            for existing in records
+            if existing.workflow_id != record.workflow_id
+            and not (
+                trusted_workspace_key
+                and _markers.normal_path_key(existing.workspace_dir) == trusted_workspace_key
+            )
+        ]
+        records.append(record)
         records.sort(key=lambda item: (item.requested_at, item.workflow_id), reverse=True)
         _save_records(resolved_root, records)
     return record
@@ -257,8 +358,8 @@ def upsert_workflow_registry_record(
 def sync_workflow_registry(
     workflow_root: str | Path, workspace_dir: str | Path, payload: dict[str, Any] | None = None
 ) -> WorkflowRegistryRecord:
-    summary = workflow_summary(workspace_dir, payload)
-    record = _record_from_summary(summary)
+    current = payload if payload is not None else load_workflow_payload(workspace_dir)
+    record = _record_for_workspace(workspace_dir, current)
     return upsert_workflow_registry_record(workflow_root, record)
 
 
@@ -269,10 +370,10 @@ def reindex_workflow_registry(workflow_root: str | Path) -> list[WorkflowRegistr
     for workspace_dir in iter_workflow_workspaces(root):
         try:
             payload = load_workflow_payload(workspace_dir)
-            summary = workflow_summary(workspace_dir, payload)
+            record = _record_for_workspace(workspace_dir, payload)
         except (FileNotFoundError, ValueError, json.JSONDecodeError):
             continue
-        records.append(_record_from_summary(summary))
+        records.append(record)
     records.sort(key=lambda item: (item.requested_at, item.workflow_id), reverse=True)
     with file_lock(_registry_lock_path(root)):
         _load_records(root)
@@ -331,29 +432,108 @@ def clear_terminal_workflow_registry(
     if not target_statuses:
         return 0
 
+    # Snapshot under the registry lock, then release it before attempting any
+    # workflow lock. All mutators use workflow -> registry lock order; reversing
+    # that order here would deadlock with advance/restart/cancellation.
     with file_lock(_registry_lock_path(resolved_root)):
-        records = _load_records(resolved_root)
-        removed_records = [
+        candidates = [
             record
-            for record in records
-            if _normalize_text(record.status).lower() in target_statuses
+            for record in _load_records(resolved_root)
+            if _record_is_clearable_terminal(record, target_statuses)
         ]
-        kept_records = [
-            record
-            for record in records
-            if _normalize_text(record.status).lower() not in target_statuses
-        ]
-        removed_count = len(records) - len(kept_records)
-        if removed_count > 0:
+
+    def remove_if_still_clearable(
+        candidate: WorkflowRegistryRecord, *, require_missing_payload: bool = False
+    ) -> bool:
+        with file_lock(_registry_lock_path(resolved_root)):
+            records = _load_records(resolved_root)
+            matches = [record for record in records if record.workflow_id == candidate.workflow_id]
+            if len(matches) != 1:
+                return False
+            current = matches[0]
+            if (
+                current.workspace_dir != candidate.workspace_dir
+                or not _record_is_clearable_terminal(current, target_statuses)
+            ):
+                return False
+            if require_missing_payload:
+                current_workspace = _normalize_text(current.workspace_dir)
+                if (
+                    current_workspace
+                    and (Path(current_workspace).expanduser().resolve() / "workflow.json").is_file()
+                ):
+                    return False
+            try:
+                authoritative = load_workflow_payload(current.workspace_dir)
+            except FileNotFoundError:
+                authoritative = None
+            except (OSError, ValueError, json.JSONDecodeError):
+                # Corrupt/unreadable durable state is not safe to hide.
+                return False
+            if authoritative is not None:
+                try:
+                    authoritative_id = validate_workflow_workspace_identity(
+                        current.workspace_dir,
+                        authoritative.get("workflow_id"),
+                    )
+                except (OSError, TypeError, ValueError):
+                    return False
+                if authoritative_id != current.workflow_id:
+                    return False
+                if _normalize_text(authoritative.get("status")).lower() not in target_statuses:
+                    # A restart/other mutator may have persisted an active state
+                    # before its registry sync. Never clear its only discoverable row.
+                    return False
+                metadata = authoritative.get("metadata")
+                if isinstance(metadata, dict) and bool(
+                    metadata.get("si_publish_pending")
+                    or metadata.get("si_publish_blocked")
+                    or metadata.get("final_child_sync_pending")
+                ):
+                    return False
+
             markers, markers_changed = _markers.add_cleared_markers(
                 _load_cleared_markers(resolved_root),
-                removed_records,
+                [current],
                 cleared_at=now_utc_iso(),
             )
             if markers_changed:
                 _save_cleared_markers(resolved_root, markers)
-            _save_records(resolved_root, kept_records)
-        return removed_count
+            records.remove(current)
+            _save_records(resolved_root, records)
+            return True
+
+    removed_count = 0
+    for candidate in candidates:
+        workspace_text = _normalize_text(candidate.workspace_dir)
+        try:
+            workspace = Path(workspace_text).expanduser().resolve() if workspace_text else None
+        except OSError:
+            continue
+        # Registry state is not trusted to choose arbitrary lock-file targets.
+        # Workflow workspaces are direct root children named by workflow_id;
+        # resolving first also rejects a child symlink that escapes the root.
+        if (
+            workspace is None
+            or workspace.parent != resolved_root
+            or workspace.name != candidate.workflow_id
+        ):
+            continue
+        if not (workspace / "workflow.json").is_file():
+            # Do not acquire the normal lock for a missing workspace: file_lock
+            # would create its directory/lock file. Recheck absence while serializing
+            # against registry writers; a later active/pending upsert removes
+            # the cleared marker and safely resurrects the record.
+            removed_count += int(remove_if_still_clearable(candidate, require_missing_payload=True))
+            continue
+        try:
+            # Busy means a mutator may be between authoritative and registry
+            # checkpoints. Keep the row and let a later clear retry.
+            with acquire_workflow_lock(workspace, timeout_seconds=0.0):
+                removed_count += int(remove_if_still_clearable(candidate))
+        except (OSError, TimeoutError):
+            continue
+    return removed_count
 
 
 def get_workflow_registry_record(

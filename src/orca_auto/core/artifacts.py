@@ -13,6 +13,7 @@ SI_BLOCK_MD_FILE = "si_block.md"
 WORKFLOW_SI_MD_FILE = "workflow_si.md"
 WORKFLOW_SI_CSV_FILE = "si_data.csv"
 INTERACTION_ENERGY_CSV_FILE = "interaction_energy.csv"
+INTERACTION_ENERGY_CSV_OWNER_FILE = ".interaction_energy.csv.orca_auto-owner"
 QUEUE_FILE = "queue.json"
 RECORDS_JSONL_FILE = "records.jsonl"
 WORKFLOW_FILE = "workflow.json"
@@ -24,6 +25,7 @@ __all__ = [
     "CREST_JOB_MANIFEST_FILE",
     "FLOW_MANIFEST_FILE",
     "INTERACTION_ENERGY_CSV_FILE",
+    "INTERACTION_ENERGY_CSV_OWNER_FILE",
     "JOB_REPORT_HTML_FILE",
     "JOB_REPORT_JSON_FILE",
     "JOB_REPORT_MD_FILE",

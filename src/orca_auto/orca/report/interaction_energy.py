@@ -15,10 +15,21 @@ fragment set is rejected before any energy is combined.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from orca_auto.orca.report.render import KCAL_PER_HARTREE
+
+_ELEMENT_SYMBOLS = (
+    "H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe "
+    "Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In "
+    "Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf "
+    "Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm "
+    "Bk Cf Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og"
+).split()
+_ATOMIC_NUMBER = {symbol: index for index, symbol in enumerate(_ELEMENT_SYMBOLS, start=1)}
+_ATOMIC_NUMBER.update({"D": 1, "T": 1})
 
 
 def validate_fragment_partition(fragment_atom_indices: Sequence[Sequence[int]], natoms: int) -> str:
@@ -53,6 +64,56 @@ def validate_fragment_partition(fragment_atom_indices: Sequence[Sequence[int]], 
     return ""
 
 
+def validate_fragment_electronic_states(
+    atom_symbols: Sequence[str], fragments: Sequence[Mapping[str, Any]]
+) -> str:
+    """Return a blocker for fragment states impossible for their electron counts."""
+    for position, fragment in enumerate(fragments, start=1):
+        raw_indices = fragment.get("atom_indices")
+        if not isinstance(raw_indices, (list, tuple)):
+            return f"fragment {position} atom_indices are unavailable"
+        raw_charge = fragment.get("charge", 0)
+        raw_multiplicity = fragment.get("multiplicity", 1)
+        if (
+            any(not isinstance(index, int) or isinstance(index, bool) for index in raw_indices)
+            or not isinstance(raw_charge, int)
+            or isinstance(raw_charge, bool)
+            or not isinstance(raw_multiplicity, int)
+            or isinstance(raw_multiplicity, bool)
+        ):
+            return f"fragment {position} has a malformed electronic state"
+        indices = list(raw_indices)
+        charge = raw_charge
+        multiplicity = raw_multiplicity
+        nuclear_charge = 0
+        for index in indices:
+            if index < 0 or index >= len(atom_symbols):
+                return f"fragment {position} atom index {index} is outside the complex"
+            symbol = str(atom_symbols[index]).strip().capitalize()
+            atomic_number = _ATOMIC_NUMBER.get(symbol)
+            if atomic_number is None:
+                return f"fragment {position} uses unsupported element symbol {symbol or '?'}"
+            nuclear_charge += atomic_number
+        electrons = nuclear_charge - charge
+        if electrons < 0:
+            return (
+                f"fragment {position} charge {charge} leaves a negative electron count "
+                f"({electrons})"
+            )
+        doubled_spin = multiplicity - 1
+        if multiplicity < 1 or doubled_spin > electrons:
+            return (
+                f"fragment {position} multiplicity {multiplicity} is impossible for "
+                f"{electrons} electron(s)"
+            )
+        if doubled_spin % 2 != electrons % 2:
+            return (
+                f"fragment {position} multiplicity {multiplicity} has the wrong parity for "
+                f"{electrons} electron(s)"
+            )
+    return ""
+
+
 @dataclass(frozen=True)
 class InteractionFragmentEnergy:
     """One fragment's contribution to an interaction energy."""
@@ -62,6 +123,8 @@ class InteractionFragmentEnergy:
     charge: int
     multiplicity: int
     energy_hartree: float | None
+    atom_indices: tuple[int, ...] = ()
+    formula: str = ""
 
 
 @dataclass(frozen=True)
@@ -77,6 +140,14 @@ class InteractionEnergyResult:
     de_int_hartree: float | None
     de_int_kcalmol: float | None
     note: str
+    complex_formula: str = ""
+    method: str = ""
+    basis_set: str = ""
+    solvation: str = ""
+    orca_version: str = ""
+    input_line: str = ""
+    parent_stage_id: str = ""
+    ghost_counterpoise_applied: bool = False
 
     @property
     def resolved(self) -> bool:
@@ -87,31 +158,43 @@ def _finite(value: float | None) -> bool:
     return value is not None and math.isfinite(value)
 
 
-def _charge_spin_note(
+def interaction_electronic_state_mismatch_reason(
     complex_charge: int,
     complex_multiplicity: int,
-    fragments: Sequence[InteractionFragmentEnergy],
+    fragment_states: Sequence[tuple[int, int]],
 ) -> str:
-    """A soft ⚠ when fragment charge/spin do not add up to the complex.
-
-    Fragment charge/multiplicity are user-supplied generic metadata; no
-    chemistry-specific rule is enforced, but a mismatch is worth surfacing
-    because it usually signals a mis-specified fragmentation.
-    """
-    notes: list[str] = []
-    charge_sum = sum(fragment.charge for fragment in fragments)
+    """Return a hard blocker when charge or spin coupling is inconsistent."""
+    charge_sum = sum(charge for charge, _multiplicity in fragment_states)
     if charge_sum != complex_charge:
-        notes.append(
-            f"fragment charges sum to {charge_sum}, not the complex charge {complex_charge}"
+        return (
+            f"fragment charges sum to {charge_sum}, not the complex charge {complex_charge}; "
+            "electron count is not conserved"
         )
-    unpaired_sum = sum(fragment.multiplicity - 1 for fragment in fragments)
-    complex_unpaired = complex_multiplicity - 1
-    if unpaired_sum != complex_unpaired:
-        notes.append(
-            f"fragment unpaired-electron counts sum to {unpaired_sum}, "
-            f"not the complex's {complex_unpaired}"
+    multiplicities = [multiplicity for _charge, multiplicity in fragment_states]
+    if complex_multiplicity < 1 or any(multiplicity < 1 for multiplicity in multiplicities):
+        return "complex and fragment multiplicities must be positive integers"
+
+    # Work in doubled-spin units, where 2S = multiplicity - 1. The generalized
+    # triangle rule yields one parity-preserving interval; checking its bounds
+    # is O(number of fragments) and never materializes a multiplicity-sized set.
+    doubled_spins = [multiplicity - 1 for multiplicity in multiplicities]
+    maximum_doubled_spin = sum(doubled_spins)
+    largest_fragment_spin = max(doubled_spins, default=0)
+    minimum_doubled_spin = max(
+        2 * largest_fragment_spin - maximum_doubled_spin,
+        maximum_doubled_spin % 2,
+    )
+    complex_doubled_spin = complex_multiplicity - 1
+    if (
+        complex_doubled_spin < minimum_doubled_spin
+        or complex_doubled_spin > maximum_doubled_spin
+        or (complex_doubled_spin - maximum_doubled_spin) % 2 != 0
+    ):
+        return (
+            f"complex multiplicity {complex_multiplicity} cannot be formed by coupling "
+            f"fragment multiplicities {multiplicities}"
         )
-    return "; ".join(notes)
+    return ""
 
 
 def compute_interaction_energy(
@@ -122,16 +205,39 @@ def compute_interaction_energy(
     complex_multiplicity: int,
     complex_energy_hartree: float | None,
     fragments: Sequence[InteractionFragmentEnergy],
+    blocker: str = "",
+    complex_formula: str = "",
+    method: str = "",
+    basis_set: str = "",
+    solvation: str = "",
+    orca_version: str = "",
+    input_line: str = "",
+    parent_stage_id: str = "",
+    ghost_counterpoise_applied: bool = False,
 ) -> InteractionEnergyResult:
     """Combine the complex and fragment single-point energies into ΔE_int.
 
     ``de_int_hartree`` is ``None`` (never a partial sum) unless the complex and
     every fragment carry a finite energy.
     """
-    note = _charge_spin_note(complex_charge, complex_multiplicity, fragments)
     fragments = tuple(fragments)
-    if not fragments:
-        reason = "no fragments were computed"
+    state_blocker = interaction_electronic_state_mismatch_reason(
+        complex_charge,
+        complex_multiplicity,
+        [(fragment.charge, fragment.multiplicity) for fragment in fragments],
+    )
+    hard_blocker = "; ".join(part for part in (blocker, state_blocker) if part)
+    common_tail = (
+        complex_formula,
+        method,
+        basis_set,
+        solvation,
+        orca_version,
+        input_line,
+        parent_stage_id,
+        ghost_counterpoise_applied,
+    )
+    if hard_blocker:
         return InteractionEnergyResult(
             complex_stage_id,
             complex_label,
@@ -141,7 +247,22 @@ def compute_interaction_energy(
             fragments,
             None,
             None,
-            "; ".join(part for part in (note, reason) if part),
+            hard_blocker,
+            *common_tail,
+        )
+    if len(fragments) < 2:
+        reason = "at least two fragments are required for an interaction energy"
+        return InteractionEnergyResult(
+            complex_stage_id,
+            complex_label,
+            complex_charge,
+            complex_multiplicity,
+            complex_energy_hartree,
+            fragments,
+            None,
+            None,
+            reason,
+            *common_tail,
         )
 
     missing = [f.label or f.stage_id for f in fragments if not _finite(f.energy_hartree)]
@@ -159,7 +280,8 @@ def compute_interaction_energy(
             fragments,
             None,
             None,
-            "; ".join(part for part in (note, reason) if part),
+            reason,
+            *common_tail,
         )
 
     assert complex_energy_hartree is not None  # guarded by _finite above
@@ -176,7 +298,8 @@ def compute_interaction_energy(
             fragments,
             None,
             None,
-            "; ".join(part for part in (note, "interaction energy is not finite") if part),
+            "interaction energy is not finite",
+            *common_tail,
         )
     return InteractionEnergyResult(
         complex_stage_id,
@@ -187,7 +310,8 @@ def compute_interaction_energy(
         fragments,
         de_int,
         de_int * KCAL_PER_HARTREE,
-        note,
+        "",
+        *common_tail,
     )
 
 
@@ -195,5 +319,7 @@ __all__ = [
     "InteractionEnergyResult",
     "InteractionFragmentEnergy",
     "compute_interaction_energy",
+    "interaction_electronic_state_mismatch_reason",
+    "validate_fragment_electronic_states",
     "validate_fragment_partition",
 ]

@@ -273,12 +273,16 @@ def write_fragment_xyz(
     out-of-range or duplicate index, or an empty selection, raises ``ValueError``
     rather than emitting a malformed geometry.
     """
+    if not isinstance(comment, str) or (comment and not comment.isprintable()):
+        raise ValueError("fragment XYZ comment must be a single line")
     natoms = len(coordinates)
     selected = list(atom_indices)
     if not selected:
         raise ValueError("fragment atom_indices is empty")
     seen: set[int] = set()
     for index in selected:
+        if not isinstance(index, int) or isinstance(index, bool):
+            raise ValueError(f"fragment atom index {index!r} is not an integer")
         if index < 0 or index >= natoms:
             raise ValueError(f"fragment atom index {index} is outside 0..{natoms - 1}")
         if index in seen:

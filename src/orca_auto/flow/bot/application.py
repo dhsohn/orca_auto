@@ -1707,6 +1707,9 @@ class BotApplication:
         """Reject resource overrides above caps anywhere in an uploaded manifest."""
 
         manifest = BotApplication._uploaded_flow_manifest(job_dir)
+        from ..manifest import normalize_interaction_energy_block
+
+        normalize_interaction_energy_block(manifest.get("interaction_energy"))
         limits = {
             "max_cores": max_cores,
             "max_cores_per_task": max_cores,
@@ -1731,6 +1734,17 @@ class BotApplication:
                         f"flow.yaml crest.{key} is disabled for uploaded workflows; "
                         "CREST runtime and trajectory-volume controls are server-owned"
                     )
+
+        interaction_manifest = manifest.get("interaction_energy")
+        if isinstance(interaction_manifest, dict):
+            remote_priority = interaction_manifest.get("priority")
+            if remote_priority is not None and (
+                not isinstance(remote_priority, str) or remote_priority.strip()
+            ):
+                raise ValueError(
+                    "flow.yaml interaction_energy.priority is disabled for uploaded workflows; "
+                    "queue priority is server-owned"
+                )
 
         def validate_route_line(value: object, *, path: str) -> None:
             from orca_auto.orca.resource_directives import PAL_ROUTE_RE

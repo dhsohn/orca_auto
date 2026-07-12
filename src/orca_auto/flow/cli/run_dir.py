@@ -166,6 +166,7 @@ def _run_dir_workflow_kwargs(
         default_orca_route_line=spec.default_orca_route_line,
         default_max_orca_stages=spec.default_max_orca_stages,
         workflow_root=workflow_root,
+        workflow_type=config.workflow_type,
     )
 
     workflow_kwargs.update(

@@ -317,7 +317,8 @@ ORCA 고유 노트:
   재정규화하지 않습니다.
 - Population은 `formula|charge|multiplicity` 그룹별로 독립 정규화합니다. 이 키는 연결성
   정체성이 아니라 화학량론적 proxy입니다. 보존된 minimum마다 통계 가중치 1을 쓰며
-  대칭성/축퇴도 보정이나 post-DFT 중복 제거를 하지 않습니다. 선택적
+  대칭성/축퇴도 보정을 하지 않습니다. 선택적 post-DFT dedup은 전체 ensemble을 먼저
+  검증하고 그 중복 수를 통계 가중치로 쓰지 않습니다. 선택적
   `boltzmann_temperature_k`가 고정하지 않으면 파싱된 thermochemistry 온도를 사용합니다.
   이 키는 유한한 양수여야 하고 admission 때 내구성 요청에 저장되며, 파싱된 모든 온도와
   0.01 K 이내로 일치해야 합니다. 주파수 작업이 쓰지 않은 온도의 열화학 값을 만들 수는
@@ -329,25 +330,72 @@ ORCA 고유 노트:
   백분율로 표시하지만 `boltzmann_population`은 `[0, 1]` 범위의 대응 분율입니다. CSV의
   `rel_E_kcalmol`과 `rel_G_kcalmol`은 공통 규약 아래 해당 population 그룹의 최저 E와
   G를 각각 기준으로 한 그룹 로컬 상대값입니다.
-- `conformer_screening`은 DFT 최적화된 minima를 대표 하나로 병합하는 선택적
-  `rmsd_dedup:` 블록을 받습니다. 두 minima는 heavy-atom 원소 서열이 같고, proper-rotation
-  전용(거울상은 절대 병합 안 됨) 정렬 RMSD가 `rmsd_threshold_angstrom`(기본 0.25) 미만이며,
-  에너지 차가 `energy_window_kcal`(기본 0.1) 미만일 때에만 병합합니다 — 두 조건이 모두
-  필요하므로 우연한 저 RMSD로 서로 다른 minimum을 버리지 않습니다. 그룹은 최저에너지
-  구성원을 유지하고, `heavy_atoms_only`(기본 true)는 수소 위치를 무시합니다. 활성화된
-  경우에만 `si_data.csv`가 기존 컬럼 뒤에 `rmsd_group`, `degeneracy`, `merged_stage_ids`를
-  append하며(비활성 시 파일 불변), 상대에너지 표에 병합 수를 주석으로 남깁니다.
+- `conformer_screening`은 최적화된 minima를 그룹화하고 최저에너지 대표를 보존하는 선택적
+  `rmsd_dedup:` 블록을 받습니다. 수렴한 후보는 `Nimag`가 없거나 0이면 허용하고, 알려진
+  nonzero 값이면 제외합니다. 선택 원자 원소 서열, formula/전자상태, exact 최적화
+  provenance가 같은 후보만 비교합니다. proper-rotation RMSD와
+  정렬 뒤 원자별 최대 변위가 모두 `rmsd_threshold_angstrom`(기본 0.25)보다 작고 유효 에너지
+  차도 `energy_window_kcal`(기본 0.1)보다 작아야 합니다. 완전하고 균일한 exact-provenance
+  SP refinement가 있으면 그 에너지를, 아니면 최적화 에너지를 사용합니다. 제한 없는 최적
+  정렬이 전역 reflection을 선호하는 nondegenerate 쌍은 분리합니다. 그래도 heuristic이므로 가까운 서로
+  다른 minimum이나 국소 입체화학 variant를 병합할 수 있습니다. 기본은 모든 원자를 비교하고,
+  `heavy_atoms_only: true`는 H/D/T를 무시해 위험을 키웁니다. 구성원을 화학적으로 동일하다고
+  보기 전에 `merged_stage_ids`를 검토하세요. 활성화된 경우에만 `si_data.csv`가
+  `rmsd_group`, `degeneracy`, `merged_stage_ids`를 append합니다. Population 완전성은 dedup 전에
+  검사하며 `degeneracy`는 통계/대칭 가중치가 아니라 workflow 중복 수입니다.
 - `conformer_screening`은 ΔE_int = E(complex) − Σ E(fragment_i)를 보고하는 선택적
-  `interaction_energy:` 블록을 받습니다. `fragments`는
-  `{atom_indices(0-based), charge, multiplicity, label}` 목록이며 complex의 모든 원자를
-  **분할**(disjoint·exhaustive)해야 합니다. gap이나 overlap이면 그 complex의 ΔE_int을
-  생략합니다. complex와 각 fragment는 complex 최적화 기하 위에서 `sp_route_line`(기본
-  `! r2scan-3c TightSCF`)로 fresh single point를 돌려 모든 에너지가 동일 이론수준·기하를
-  공유합니다. fan-out은 RMSD-dedup 대표에만 하며 `max_fragments`(≤ 8)로 제한됩니다. 결과는
-  `interaction_energy.csv`(complex/fragment당 1행)와 선택적 `## Interaction energies` SI
-  섹션에 기록됩니다. complex/fragment 에너지가 결측·비유한이면 그 ΔE_int을 fail-closed로
-  생략합니다(부분합 금지). `sp_route_line`은 다른 route-line 키처럼 원격 업로드에서
-  검증됩니다. ghost-atom counterpoise(BSSE)는 이 기능에 포함되지 않습니다.
+  `interaction_energy:` 블록을 받습니다. 안전한 한 줄 label과 `[1, 100]` 정수 multiplicity를
+  가진 fragment 2–8개가 필요합니다. `{atom_indices(0-based), charge, multiplicity, label}`은
+  모든 입력 원자를 정적으로 겹침 없이 완전 분할해야 합니다. fragment 전하 합은 complex
+  전하와 같고, spin들은 일반화된 각운동량 coupling manifold에서 complex multiplicity로
+  결합할 수 있어야 합니다. 원자에서 계산한 각 `N_e = ΣZ − charge`는 0 이상이고
+  `multiplicity − 1`은 `N_e` 이하이면서 같은 parity여야 합니다.
+  `sp_route_line`(기본 `! r2scan-3c TightSCF`)은 순수 single-point
+  route여야 하며 optimization, frequency, gradient, IRC, MD, NEB, GOAT, scan directive는
+  거부합니다.
+- complex와 각 fragment는 complex 최적화 기하에서 fresh single point를 실행합니다. fan-out은
+  terminal ensemble의 유효한 최적화 minimum 중 RMSD 대표만 대상으로 하며, partial-success
+  ensemble은 완료·수렴한 후보에서 알려진 saddle을 제외한 subset을 사용할 수 있습니다.
+  대표 에너지 규약도 같은 eligible set에서 정하므로 unusable/saddle member가 parent를 바꾸지
+  못합니다.
+  공개 dedup 보고가 꺼져도
+  all-atom 기본 grouping이 fan-out을 제한하지만 SI 구조 표는 dedup하지 않습니다. interaction
+  generation fingerprint에는 이 RMSD 설정도 포함됩니다.
+- 확정 결과는 현재 generation의 completed complex SP 정확히 1개와 예상 index별 completed
+  fragment SP 정확히 1개를 요구합니다. 선택 입력과 파싱 출력의 route/state, 실제
+  method/basis/solvation/ORCA version, 최적화 complex 기하, 인덱스별 fragment subset, 에너지
+  규약이 모두 같아야 합니다. 결측·중복·실행 중·stale·혼합·잘못된 상태/기하·비유한 자료는
+  부분합을 쓰지 않고 ΔE_int을 생략합니다.
+- `interaction_energy.csv`는 complex/fragment 쌍마다 한 행이며 23개 컬럼은
+  `parent_stage_id`, `complex_stage_id`, `complex_label`, `complex_charge`,
+  `complex_multiplicity`, `complex_formula`, `E_complex_Eh`, `method`, `basis_set`,
+  `solvation`, `orca_version`, `route_line`, `ghost_counterpoise_applied`, `fragment_label`,
+  `fragment_stage_id`, `fragment_atom_indices`, `fragment_formula`, `fragment_charge`,
+  `fragment_multiplicity`, `E_fragment_Eh`, `dE_int_Eh`, `dE_int_kcalmol`, `note`입니다.
+  `ghost_counterpoise_applied=false`는 별도 Boys–Bernardi ghost-atom 계산을 하지 않았다는
+  뜻이며 r2SCAN-3c gCP 같은 method 내재 보정에는 영향을 주지 않습니다. spreadsheet formula
+  선행 문자는 중화합니다.
+- 생성 CSV는 hash한 workflow identity와 current/pending content digest를 가진 인접 v2 owner
+  marker를 사용합니다. digest-bound 소유권 로직은 중단된 create, replace, delete를 복구합니다.
+  foreign/malformed/missing marker 또는 digest 불일치는 덮어쓰기·삭제를 허가하지 않으며 사용자
+  수정 내용은 보존합니다. last-good base SI를 교체하기 전에 소유권을 preflight합니다.
+  업로드 archive는 CSV나 marker를 포함할 수 없고, 원격 업로드는
+  서버 소유 `interaction_energy.priority`를 설정할 수 없습니다.
+- restart는 interaction route, fragment별 state/resource, generation fingerprint를 보존합니다.
+  fan-out 뒤에는 interaction 및 RMSD grouping 설정을 바꿀 수 없고 해당 fan-out이 남아 있는
+  동안 원래 primary stage도 다시 열 수 없습니다. 기능을 끄면 interaction stage를 retire합니다.
+  활성 config를 받기 전 복사된 durable input XYZ로 완전 partition과 fragment 전자상태를
+  다시 검증합니다.
+- SI publish는 workflow/registry metadata에 pending, attempt count, next-retry time, blocked,
+  generation, error를 저장합니다. SI writer의 일시적 실패는 30/60/120/240초 지수 backoff로
+  재시도하고 5번째 실패 뒤 block합니다. 결정적 충돌은 즉시 block합니다. writer 전
+  workflow/registry/report checkpoint 실패는 이 writer budget을 소모하지 않으며, 저장된 pending
+  marker는 인프라 복구를 위해 즉시 due로 남습니다. Registry clear는 workflow→registry lock
+  순서로 authoritative identity/status를 다시 확인하므로 publication pending·blocked,
+  final-child-sync pending, identity quarantine, authoritative active record는 stale로 지우지
+  않습니다. 격리된 durable ID는 payload에 증거로 보존하고 registry는 신뢰할 수 있는 workspace
+  이름을 유일 key로 사용하면서 관측 ID를 metadata에 기록합니다. 원인을 고친 뒤
+  `orca_auto run-dir <workflow_dir> --force`로 blocked publication을 다시 arm하세요.
 - 워크플로우 디렉터리를 제출하기 전에 `orca_auto.yaml`에 `runs_root`를 설정하세요
   (또는 `flow.yaml`에 `workflow_root`/`workflow.root`를 설정).
 - 공개 워크플로우 `run-dir`는 `flow.yaml` 또는 `scaffold`가 작성한 표준 파일명에서

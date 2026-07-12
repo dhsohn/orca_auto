@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -432,8 +433,8 @@ def test_clear_terminal_workflow_registry_removes_only_terminal_rows(
             source_job_type="reaction_ts_search",
             reaction_key="rxn-1",
             requested_at="2026-04-19T00:00:00+00:00",
-            workspace_dir="/tmp/wf-completed",
-            workflow_file="/tmp/wf-completed/workflow.json",
+            workspace_dir=str(tmp_path / "wf-completed"),
+            workflow_file=str(tmp_path / "wf-completed" / "workflow.json"),
         ),
         registry.WorkflowRegistryRecord(
             workflow_id="wf-running",
@@ -443,8 +444,8 @@ def test_clear_terminal_workflow_registry_removes_only_terminal_rows(
             source_job_type="reaction_ts_search",
             reaction_key="rxn-2",
             requested_at="2026-04-19T00:01:00+00:00",
-            workspace_dir="/tmp/wf-running",
-            workflow_file="/tmp/wf-running/workflow.json",
+            workspace_dir=str(tmp_path / "wf-running"),
+            workflow_file=str(tmp_path / "wf-running" / "workflow.json"),
         ),
         registry.WorkflowRegistryRecord(
             workflow_id="wf-cancelled",
@@ -454,8 +455,8 @@ def test_clear_terminal_workflow_registry_removes_only_terminal_rows(
             source_job_type="reaction_ts_search",
             reaction_key="rxn-3",
             requested_at="2026-04-19T00:02:00+00:00",
-            workspace_dir="/tmp/wf-cancelled",
-            workflow_file="/tmp/wf-cancelled/workflow.json",
+            workspace_dir=str(tmp_path / "wf-cancelled"),
+            workflow_file=str(tmp_path / "wf-cancelled" / "workflow.json"),
         ),
     ]
     registry_store._save_records(tmp_path, records)
@@ -534,6 +535,431 @@ def test_clear_terminal_workflow_registry_prevents_reindex_resurrection(
         "wf-completed",
         "wf-running",
     }
+
+
+def test_terminal_workflow_with_pending_si_publication_is_not_clearable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "wf-pending-si"
+    workspace.mkdir()
+    payload = {
+        "workflow_id": "wf-pending-si",
+        "template_name": "conformer_screening",
+        "status": "completed",
+        "source_job_id": "job-pending-si",
+        "source_job_type": "conformer_screening",
+        "reaction_key": "input",
+        "requested_at": "2026-04-19T00:00:00+00:00",
+        "stages": [],
+        "metadata": {"si_publish_pending": True, "si_publish_generation": "generation-1"},
+    }
+    (workspace / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
+    registry.sync_workflow_registry(tmp_path, workspace, payload)
+
+    assert registry.clear_terminal_workflow_registry(tmp_path) == 0
+    records = registry.list_workflow_registry(tmp_path, reindex_if_missing=False)
+    assert [
+        (record.workflow_id, record.metadata.get("si_publish_pending")) for record in records
+    ] == [("wf-pending-si", True)]
+    assert not registry_store._cleared_path(tmp_path).exists()
+
+    reindexed = registry.reindex_workflow_registry(tmp_path)
+    assert [
+        (record.workflow_id, record.metadata.get("si_publish_pending")) for record in reindexed
+    ] == [("wf-pending-si", True)]
+
+
+@pytest.mark.parametrize("pending_flag", ["si_publish_pending", "final_child_sync_pending"])
+def test_clear_consults_authoritative_pending_when_registry_sync_lagged(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    pending_flag: str,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "wf-authoritative-pending"
+    workspace.mkdir()
+    payload = {
+        "workflow_id": "wf-authoritative-pending",
+        "template_name": "conformer_screening",
+        "status": "completed",
+        "requested_at": "2026-04-19T00:00:00+00:00",
+        "stages": [],
+        "metadata": {pending_flag: True},
+    }
+    (workspace / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
+    stale_record = registry.WorkflowRegistryRecord(
+        workflow_id="wf-authoritative-pending",
+        template_name="conformer_screening",
+        status="completed",
+        source_job_id="",
+        source_job_type="",
+        reaction_key="",
+        requested_at="2026-04-19T00:00:00+00:00",
+        workspace_dir=str(workspace),
+        workflow_file=str(workspace / "workflow.json"),
+    )
+    registry_store._save_records(tmp_path, [stale_record])
+    assert registry.clear_terminal_workflow_registry(tmp_path) == 0
+    assert registry.get_workflow_registry_record(tmp_path, "wf-authoritative-pending") is not None
+
+
+def test_clear_keeps_stale_terminal_row_when_authoritative_restart_is_active(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "wf-restart-sync-lag"
+    workspace.mkdir()
+    active_payload = {
+        "workflow_id": "wf-restart-sync-lag",
+        "template_name": "conformer_screening",
+        "status": "planned",
+        "requested_at": "2026-04-19T00:00:00+00:00",
+        "stages": [],
+        "metadata": {},
+    }
+    (workspace / "workflow.json").write_text(json.dumps(active_payload), encoding="utf-8")
+    stale_record = registry.WorkflowRegistryRecord(
+        workflow_id="wf-restart-sync-lag",
+        template_name="conformer_screening",
+        status="failed",
+        source_job_id="",
+        source_job_type="",
+        reaction_key="",
+        requested_at="2026-04-19T00:00:00+00:00",
+        workspace_dir=str(workspace),
+        workflow_file=str(workspace / "workflow.json"),
+    )
+    registry_store._save_records(tmp_path, [stale_record])
+
+    assert registry.clear_terminal_workflow_registry(tmp_path) == 0
+    assert registry.get_workflow_registry_record(tmp_path, "wf-restart-sync-lag") is not None
+
+
+def test_clear_keeps_row_while_pending_checkpoint_holds_workflow_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "wf-checkpoint-race"
+    workspace.mkdir()
+    payload: dict[str, Any] = {
+        "workflow_id": "wf-checkpoint-race",
+        "template_name": "conformer_screening",
+        "status": "completed",
+        "requested_at": "2026-04-19T00:00:00+00:00",
+        "stages": [],
+        "metadata": {},
+    }
+    (workspace / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
+    registry.sync_workflow_registry(tmp_path, workspace, payload)
+
+    with registry_store.acquire_workflow_lock(workspace):
+        payload["metadata"]["si_publish_pending"] = True
+        (workspace / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
+        # Simulate a crash/pause before registry sync. Clear must fail closed
+        # instead of observing the old cached row and racing the checkpoint.
+        assert registry.clear_terminal_workflow_registry(tmp_path) == 0
+
+    record = registry.get_workflow_registry_record(tmp_path, "wf-checkpoint-race")
+    assert record is not None
+
+
+def test_clear_never_locks_registry_workspace_outside_direct_root_child(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "nested" / "wf-outside"
+    workspace.mkdir(parents=True)
+    (workspace / "workflow.json").write_text(
+        json.dumps(
+            {
+                "workflow_id": "wf-outside",
+                "template_name": "conformer_screening",
+                "status": "completed",
+                "stages": [],
+                "metadata": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    record = registry.WorkflowRegistryRecord(
+        workflow_id="wf-outside",
+        template_name="conformer_screening",
+        status="completed",
+        source_job_id="",
+        source_job_type="",
+        reaction_key="",
+        requested_at="2026-04-19T00:00:00+00:00",
+        workspace_dir=str(workspace),
+        workflow_file=str(workspace / "workflow.json"),
+    )
+    registry_store._save_records(tmp_path, [record])
+
+    assert registry.clear_terminal_workflow_registry(tmp_path) == 0
+    assert not (workspace / "workflow.lock").exists()
+    assert registry.get_workflow_registry_record(tmp_path, "wf-outside") is not None
+
+
+def test_clear_missing_payload_does_not_create_workflow_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "wf-missing-payload"
+    workspace.mkdir()
+    record = registry.WorkflowRegistryRecord(
+        workflow_id="wf-missing-payload",
+        template_name="conformer_screening",
+        status="completed",
+        source_job_id="",
+        source_job_type="",
+        reaction_key="",
+        requested_at="2026-04-19T00:00:00+00:00",
+        workspace_dir=str(workspace),
+        workflow_file=str(workspace / "workflow.json"),
+    )
+    registry_store._save_records(tmp_path, [record])
+
+    assert registry.clear_terminal_workflow_registry(tmp_path) == 1
+    assert not (workspace / "workflow.lock").exists()
+
+
+@pytest.mark.parametrize(
+    "flag", ["si_publish_pending", "si_publish_blocked", "final_child_sync_pending"]
+)
+def test_stale_registry_publication_guard_is_not_clearable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    flag: str,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / f"wf-{flag}"
+    workspace.mkdir()
+    (workspace / "workflow.json").write_text(
+        json.dumps(
+            {
+                "workflow_id": f"wf-{flag}",
+                "template_name": "conformer_screening",
+                "status": "completed",
+                "stages": [],
+                "metadata": {flag: False},
+            }
+        ),
+        encoding="utf-8",
+    )
+    record = registry.WorkflowRegistryRecord(
+        workflow_id=f"wf-{flag}",
+        template_name="conformer_screening",
+        status="completed",
+        source_job_id="",
+        source_job_type="",
+        reaction_key="",
+        requested_at="2026-04-19T00:00:00+00:00",
+        workspace_dir=str(workspace),
+        workflow_file=str(workspace / "workflow.json"),
+        metadata={flag: True},
+    )
+    registry_store._save_records(tmp_path, [record])
+    assert registry.clear_terminal_workflow_registry(tmp_path) == 0
+
+
+def test_sync_quarantined_identity_uses_workspace_key_without_mutating_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "wf_expected"
+    workspace.mkdir()
+    payload = {
+        "workflow_id": "wf_tampered",
+        "template_name": "conformer_screening",
+        "status": "failed",
+        "requested_at": "2026-04-19T00:00:00+00:00",
+        "stages": [],
+        "metadata": {
+            "workflow_error": {
+                "status": "failed",
+                "scope": "workflow_identity_validation",
+            }
+        },
+    }
+
+    record = registry.sync_workflow_registry(tmp_path, workspace, payload)
+
+    assert payload["workflow_id"] == "wf_tampered"
+    assert record.workflow_id == "wf_expected"
+    assert record.metadata["quarantined_persisted_workflow_id"] == "wf_tampered"
+
+
+def test_sync_prequarantine_identity_mismatch_stays_visible_by_workspace_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "wf_expected"
+    workspace.mkdir()
+    payload = {
+        "workflow_id": "wf_tampered",
+        "template_name": "conformer_screening",
+        "status": "completed",
+        "requested_at": "2026-04-19T00:00:00+00:00",
+        "stages": [],
+        "metadata": {},
+    }
+
+    record = registry.sync_workflow_registry(tmp_path, workspace, payload)
+
+    assert payload["workflow_id"] == "wf_tampered"
+    assert record.workflow_id == "wf_expected"
+    assert record.metadata["identity_reconciliation_persisted_workflow_id"] == "wf_tampered"
+
+
+def test_sync_legacy_missing_identity_uses_workspace_key_without_mutating_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "wf_legacy"
+    workspace.mkdir()
+    payload = {
+        "template_name": "conformer_screening",
+        "status": "running",
+        "requested_at": "2026-04-19T00:00:00+00:00",
+        "stages": [],
+        "metadata": {},
+    }
+
+    record = registry.sync_workflow_registry(tmp_path, workspace, payload)
+
+    assert "workflow_id" not in payload
+    assert record.workflow_id == "wf_legacy"
+    assert "quarantined_persisted_workflow_id" not in record.metadata
+
+
+def test_clear_accepts_legacy_missing_identity_workspace_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "wf_legacy"
+    workspace.mkdir()
+    payload = {
+        "template_name": "conformer_screening",
+        "status": "completed",
+        "requested_at": "2026-04-19T00:00:00+00:00",
+        "stages": [],
+        "metadata": {},
+    }
+    (workspace / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
+    registry.sync_workflow_registry(tmp_path, workspace, payload)
+
+    assert registry.clear_terminal_workflow_registry(tmp_path) == 1
+    assert registry.list_workflow_registry(tmp_path, reindex_if_missing=False) == []
+
+
+def test_identity_quarantine_resurrects_a_previously_cleared_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "wf_expected"
+    workspace.mkdir()
+    valid_payload = {
+        "workflow_id": "wf_expected",
+        "template_name": "conformer_screening",
+        "status": "completed",
+        "requested_at": "2026-04-19T00:00:00+00:00",
+        "stages": [],
+        "metadata": {},
+    }
+    (workspace / "workflow.json").write_text(json.dumps(valid_payload), encoding="utf-8")
+    registry.sync_workflow_registry(tmp_path, workspace, valid_payload)
+    assert registry.clear_terminal_workflow_registry(tmp_path) == 1
+
+    quarantined_payload = {
+        **valid_payload,
+        "workflow_id": "wf_tampered",
+        "status": "failed",
+        "metadata": {
+            "workflow_error": {
+                "status": "failed",
+                "scope": "workflow_identity_validation",
+            }
+        },
+    }
+    (workspace / "workflow.json").write_text(json.dumps(quarantined_payload), encoding="utf-8")
+
+    registry.sync_workflow_registry(tmp_path, workspace, quarantined_payload)
+
+    records = registry.list_workflow_registry(tmp_path, reindex_if_missing=False)
+    assert [(record.workflow_id, record.status) for record in records] == [
+        ("wf_expected", "failed")
+    ]
+    assert records[0].metadata["quarantined_persisted_workflow_id"] == "wf_tampered"
+    assert registry_store._load_cleared_markers(tmp_path) == []
+
+
+def test_upsert_replaces_all_rows_for_the_same_trusted_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "wf_expected"
+    workspace.mkdir()
+
+    def record(workflow_id: str, status: str) -> registry.WorkflowRegistryRecord:
+        return registry.WorkflowRegistryRecord(
+            workflow_id=workflow_id,
+            template_name="conformer_screening",
+            status=status,
+            source_job_id="",
+            source_job_type="",
+            reaction_key="",
+            requested_at="2026-04-19T00:00:00+00:00",
+            workspace_dir=str(workspace),
+            workflow_file=str(workspace / "workflow.json"),
+        )
+
+    registry_store._save_records(
+        tmp_path,
+        [record("wf_expected", "running"), record("wf_tampered", "failed")],
+    )
+    replacement = record("wf_expected", "failed")
+
+    registry.upsert_workflow_registry_record(tmp_path, replacement)
+
+    assert registry.list_workflow_registry(tmp_path, reindex_if_missing=False) == [replacement]
+
+
+def test_upsert_rejects_unvalidated_direct_workspace_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "wf_expected"
+    workspace.mkdir()
+    expected = registry.WorkflowRegistryRecord(
+        workflow_id="wf_expected",
+        template_name="conformer_screening",
+        status="running",
+        source_job_id="",
+        source_job_type="",
+        reaction_key="",
+        requested_at="2026-04-19T00:00:00+00:00",
+        workspace_dir=str(workspace),
+        workflow_file=str(workspace / "workflow.json"),
+    )
+    registry_store._save_records(tmp_path, [expected])
+    tampered = replace(expected, workflow_id="wf_tampered", status="cancelled")
+
+    with pytest.raises(ValueError, match="does not match direct workspace name"):
+        registry.upsert_workflow_registry_record(tmp_path, tampered)
+
+    assert registry.list_workflow_registry(tmp_path, reindex_if_missing=False) == [expected]
 
 
 def test_sync_skips_cleared_terminal_workflow_until_it_becomes_active(

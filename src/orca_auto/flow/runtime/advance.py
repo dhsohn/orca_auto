@@ -56,15 +56,50 @@ def _workspace_matches_registry_record(
         payload = deps.load_workflow_payload_fn(workspace_dir)
     except (FileNotFoundError, ValueError, OSError, TypeError):
         return False
-    persisted_id = deps.normalize_text_fn(payload.get("workflow_id"))
+    persisted_raw_id = deps.normalize_text_fn(payload.get("workflow_id"))
     record_id = deps.normalize_text_fn(record.workflow_id)
-    if persisted_id != record_id:
-        return False
     try:
-        validate_workflow_workspace_identity(Path(workspace_dir), persisted_id)
+        persisted_id = validate_workflow_workspace_identity(
+            Path(workspace_dir),
+            payload.get("workflow_id"),
+        )
     except (OSError, TypeError, ValueError):
-        return False
-    return True
+        payload_metadata = payload.get("metadata")
+        workflow_error = (
+            payload_metadata.get("workflow_error") if isinstance(payload_metadata, dict) else None
+        )
+        record_metadata = getattr(record, "metadata", {})
+        try:
+            workspace_name = Path(workspace_dir).expanduser().resolve().name
+        except OSError:
+            return False
+        cached_quarantine = isinstance(record_metadata, dict) and bool(
+            record_metadata.get("identity_quarantined")
+            or deps.normalize_text_fn(record_metadata.get("quarantined_persisted_workflow_id"))
+        )
+        cached_reconciliation = isinstance(record_metadata, dict) and bool(
+            record_metadata.get("identity_reconciliation_required")
+            or deps.normalize_text_fn(
+                record_metadata.get("identity_reconciliation_persisted_workflow_id")
+            )
+        )
+        quarantine_match = bool(
+            deps.normalize_text_fn(payload.get("status")).lower() == "failed"
+            and isinstance(workflow_error, dict)
+            and workflow_error.get("scope") == "workflow_identity_validation"
+            and cached_quarantine
+            and deps.normalize_text_fn(record_metadata.get("quarantined_persisted_workflow_id"))
+            == persisted_raw_id
+        )
+        reconciliation_match = bool(
+            cached_reconciliation
+            and deps.normalize_text_fn(
+                record_metadata.get("identity_reconciliation_persisted_workflow_id")
+            )
+            == persisted_raw_id
+        )
+        return workspace_name == record_id and (quarantine_match or reconciliation_match)
+    return persisted_id == record_id
 
 
 def _workflow_record_location(

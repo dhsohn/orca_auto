@@ -26,6 +26,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, NoReturn, Protocol
 
+from orca_auto.core.artifacts import (
+    INTERACTION_ENERGY_CSV_FILE,
+    INTERACTION_ENERGY_CSV_OWNER_FILE,
+)
+
 from .policy import UploadPolicy
 
 _FLOW_MANIFEST_NAME = "flow.yaml"
@@ -54,6 +59,8 @@ _FORBIDDEN_RUNTIME_BASENAMES = frozenset(
         "job_report.json",
         "job_report.md",
         "job_state.json",
+        INTERACTION_ENERGY_CSV_FILE,
+        INTERACTION_ENERGY_CSV_OWNER_FILE,
         "orca.process.json",
         "queue.json",
         "queue.lock",

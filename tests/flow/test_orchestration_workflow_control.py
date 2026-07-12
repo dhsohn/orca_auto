@@ -8,6 +8,7 @@ from typing import Any, cast
 import pytest
 import yaml
 
+import orca_auto.flow.orchestration.advance as advance_module
 from orca_auto.flow import orchestration
 from orca_auto.flow.orchestration.deps import orchestration_deps
 from orca_auto.flow.orchestration.stage_runtime.crest import ensure_crest_job_dir_impl
@@ -35,6 +36,134 @@ def _write_xyz_ensemble(path: Path, comments: tuple[str, ...]) -> None:
             ]
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _si_publication_test_deps(
+    tmp_path: Path,
+    payload: dict[str, Any],
+    *,
+    sync_workflow_registry: Any | None = None,
+) -> Any:
+    return orchestration_deps(
+        overrides={
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / str(payload["workflow_id"])
+            ),
+            "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
+            "load_workflow_payload": lambda workspace_dir: payload,
+            "now_utc_iso": lambda: "2026-07-12T12:00:00+00:00",
+            "_append_conformer_orca_stages": lambda current_payload, **kwargs: False,
+            "_append_interaction_energy_stages": lambda current_payload, **kwargs: False,
+            "_maybe_notify_workflow_phase_summary": lambda *args, **kwargs: None,
+            "_recompute_workflow_status": lambda current_payload: str(
+                current_payload.get("status", "running")
+            ),
+            "_workflow_has_active_children": lambda current_payload: False,
+            "write_workflow_payload": lambda workspace_dir, current_payload: None,
+            "sync_workflow_registry": sync_workflow_registry
+            or (lambda workflow_root, workspace_dir, current_payload: None),
+        }
+    )
+
+
+def test_nonterminal_si_publication_honors_backoff_without_resetting_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_si_backoff",
+        "template_name": "conformer_screening",
+        "status": "running",
+        "stages": [],
+        "metadata": {},
+    }
+    writer_calls = 0
+
+    def fail_writer(*args: Any, **kwargs: Any) -> None:
+        nonlocal writer_calls
+        writer_calls += 1
+        raise PermissionError("transient denial")
+
+    monkeypatch.setattr(advance_module, "write_workflow_si", fail_writer)
+    monkeypatch.setattr(advance_module, "write_workflow_html_report", lambda *args: None)
+    deps = _si_publication_test_deps(tmp_path, payload)
+
+    orchestration.advance_workflow(target="wf_si_backoff", workflow_root=tmp_path, deps=deps)
+    assert payload["metadata"]["si_publish_attempts"] == 1
+    assert payload["metadata"]["si_publish_pending"] is True
+    retry_at = payload["metadata"]["si_publish_next_retry_at"]
+
+    orchestration.advance_workflow(target="wf_si_backoff", workflow_root=tmp_path, deps=deps)
+    assert writer_calls == 1
+    assert payload["metadata"]["si_publish_attempts"] == 1
+    assert payload["metadata"]["si_publish_next_retry_at"] == retry_at
+
+
+def test_permanent_si_publication_error_blocks_without_automatic_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_si_block",
+        "template_name": "conformer_screening",
+        "status": "running",
+        "stages": [],
+        "metadata": {},
+    }
+    writer_calls = 0
+
+    def blocked_writer(*args: Any, **kwargs: Any) -> None:
+        nonlocal writer_calls
+        writer_calls += 1
+        raise FileExistsError("unowned interaction_energy.csv")
+
+    monkeypatch.setattr(advance_module, "write_workflow_si", blocked_writer)
+    monkeypatch.setattr(advance_module, "write_workflow_html_report", lambda *args: None)
+    deps = _si_publication_test_deps(tmp_path, payload)
+    orchestration.advance_workflow(target="wf_si_block", workflow_root=tmp_path, deps=deps)
+    assert payload["metadata"]["si_publish_blocked"] is True
+    assert payload["metadata"]["si_publish_pending"] is False
+
+    orchestration.advance_workflow(target="wf_si_block", workflow_root=tmp_path, deps=deps)
+    assert writer_calls == 1
+    assert payload["metadata"]["si_publish_blocked"] is True
+
+
+def test_registry_checkpoint_failure_does_not_consume_si_writer_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_si_registry_failure",
+        "template_name": "conformer_screening",
+        "status": "running",
+        "stages": [],
+        "metadata": {},
+    }
+    writer_calls = 0
+
+    def writer(*args: Any, **kwargs: Any) -> None:
+        nonlocal writer_calls
+        writer_calls += 1
+
+    def fail_registry(*args: Any, **kwargs: Any) -> None:
+        raise OSError("registry unavailable")
+
+    monkeypatch.setattr(advance_module, "write_workflow_si", writer)
+    monkeypatch.setattr(advance_module, "write_workflow_html_report", lambda *args: None)
+    deps = _si_publication_test_deps(
+        tmp_path,
+        payload,
+        sync_workflow_registry=fail_registry,
+    )
+    with pytest.raises(OSError, match="registry unavailable"):
+        orchestration.advance_workflow(
+            target="wf_si_registry_failure",
+            workflow_root=tmp_path,
+            deps=deps,
+        )
+    assert writer_calls == 0
+    assert "si_publish_attempts" not in payload["metadata"]
 
 
 def test_xtb_retry_helpers_and_job_writer_materialize_attempt_files(tmp_path: Path) -> None:
