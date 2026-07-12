@@ -10,6 +10,34 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Added
 
+- `conformer_screening` gained two optional, fail-closed manifest blocks. `rmsd_dedup:`
+  collapses DFT-degenerate optimized minima to one lowest-energy representative using
+  all atoms by default; comparable candidates require converged results without a known
+  imaginary mode and exact
+  optimization provenance, while merging requires low proper-rotation RMSD, low maximum
+  aligned-atom displacement, and a small energy gap. Nondegenerate global reflection-preferred pairs stay
+  separate, but this remains a heuristic that can merge nearby distinct/local stereochemical
+  minima—inspect `merged_stage_ids`, especially with `heavy_atoms_only: true`. When enabled it
+  appends `rmsd_group`, `degeneracy`, and `merged_stage_ids` to `si_data.csv` (the file is
+  unchanged when disabled) and notes the merge in the relative-energy table.
+  `interaction_energy:` reports ΔE_int = E(complex) − Σ E(fragment) from fresh
+  same-level single points on the optimized geometry for 2–8 fragments that exhaustively
+  partition the complex, conserve charge, have electron-count-compatible multiplicities,
+  and can spin-couple to the complex multiplicity.
+  Only a pure-SP `sp_route_line` is accepted. It fans out terminal valid RMSD representatives,
+  fingerprints the RMSD grouping, and omits ΔE_int unless the current generation has exactly
+  one completed, same-level/same-geometry, input/output route-and-state-verified complex stage
+  plus every fragment stage. The 23-column `interaction_energy.csv` distinguishes parent and
+  actual complex-SP stages and records that no separate Boys–Bernardi ghost calculation was
+  performed (method-inherent corrections such as r2SCAN-3c gCP remain possible). Strict schemas,
+  immutable post-fan-out science settings, role-aware restart, uploaded-artifact denial, and a
+  content-digest owner-marker transaction protect provenance and user files. Restart also
+  revalidates partition/electron states against the copied durable input. SI publication now
+  persists generation/attempt/backoff/blocked state, retries SI-writer failures at most five times,
+  blocks deterministic conflicts, and can be re-armed explicitly with `run-dir --force` after the
+  cause is fixed. Registry reconciliation also preserves publication/child-sync liveness, prevents
+  identity-quarantine hot loops and duplicate workspace rows, and keeps those durable states from
+  being cleared as stale. Disabling the feature retires its stages.
 - Workflow Supporting Information (`workflow_si.md` and `si_data.csv`) now reports
   Boltzmann populations for a complete, terminal conformer ensemble only. Every
   route-classified minimum must be converged and carry a complete 3N vibrational
@@ -24,8 +52,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   must also match the selected input. They are normalized
   independently within each `formula|charge|multiplicity` group. Each retained
   minimum has unit
-  statistical weight; no symmetry/degeneracy correction, connectivity-aware
-  grouping, or post-DFT deduplication is applied. The optional
+  statistical weight; no symmetry/degeneracy correction or connectivity-aware
+  grouping is applied. Optional post-DFT dedup checks ensemble completeness first,
+  and its duplicate count is not a population weight. The optional
   `boltzmann_temperature_k` pin is validated as finite and strictly positive at
   admission, stored in the durable request, and must agree with every parsed
   thermochemistry temperature within 0.01 K. Markdown reports population as a

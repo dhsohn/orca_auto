@@ -216,6 +216,8 @@ def _conformer_template_request(
                 else {}
             ),
             **_optional_mapping_parameter("crest_job_manifest", request.crest_job_manifest),
+            **_optional_mapping_parameter("interaction_energy", request.interaction_energy),
+            **_optional_mapping_parameter("rmsd_dedup", request.rmsd_dedup),
         },
         source_artifacts=(
             WorkflowArtifactRef(kind="input_xyz", path=copied_input.input_xyz, selected=True),

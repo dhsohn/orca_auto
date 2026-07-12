@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from orca_auto.flow import orchestration
+from orca_auto.flow import orchestration, registry, runtime
 from orca_auto.flow.orchestration.deps import orchestration_deps
+from orca_auto.flow.registry import store as registry_store
 
 
 def _write_xyz_ensemble(path: Path, comments: tuple[str, ...]) -> None:
@@ -65,7 +67,7 @@ def test_cancel_materialized_workflow_mixes_local_remote_and_failed_cancellation
 
     deps = orchestration_deps(
         overrides={
-            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "wf_cancel_01",
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "crest_cancel_target": lambda **kwargs: {
@@ -122,7 +124,7 @@ def test_cancel_materialized_workflow_reports_cancelled_when_no_remote_request_p
 
     deps = orchestration_deps(
         overrides={
-            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "wf_cancel_02",
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "write_workflow_payload": lambda workspace_dir, current_payload: None,
@@ -159,7 +161,9 @@ def test_cancel_materialized_workflow_reports_cancel_failed_when_stage_cancellat
 
     deps = orchestration_deps(
         overrides={
-            "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / "wf_failed_cancel"
+            ),
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "orca_cancel_target": lambda **kwargs: {
@@ -206,3 +210,89 @@ def test_cancel_materialized_workflow_reports_busy_lock_timeout(
             workflow_root=tmp_path,
             deps=deps,
         )
+
+
+def test_cancel_quarantines_identity_mismatch_without_registry_duplicate(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "wf_expected"
+    workspace.mkdir()
+    payload = {
+        "workflow_id": "wf_tampered",
+        "template_name": "conformer_screening",
+        "status": "running",
+        "requested_at": "2026-07-12T00:00:00+00:00",
+        "stages": [],
+        "metadata": {"si_publish_blocked": True},
+    }
+    (workspace / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
+    registry_store._save_records(
+        tmp_path,
+        [
+            registry.WorkflowRegistryRecord(
+                workflow_id="wf_expected",
+                template_name="conformer_screening",
+                status="running",
+                source_job_id="",
+                source_job_type="",
+                reaction_key="",
+                requested_at="2026-07-12T00:00:00+00:00",
+                workspace_dir=str(workspace),
+                workflow_file=str(workspace / "workflow.json"),
+            )
+        ],
+    )
+
+    result = orchestration.cancel_materialized_workflow(
+        target="wf_expected",
+        workflow_root=tmp_path,
+    )
+    cycle = runtime.advance_workflow_registry_once(
+        workflow_root=tmp_path,
+        submit_ready=False,
+        worker_session_id="post-quarantine-cancel",
+        lease_seconds=0,
+    )
+
+    assert result["workflow_id"] == "wf_expected"
+    assert result["status"] == "failed"
+    assert (cycle["advanced_count"], cycle["skipped_count"]) == (0, 1)
+    records = registry.list_workflow_registry(tmp_path, reindex_if_missing=False)
+    assert [(record.workflow_id, record.status) for record in records] == [
+        ("wf_expected", "failed")
+    ]
+    assert records[0].metadata["quarantined_persisted_workflow_id"] == "wf_tampered"
+
+
+def test_cancel_clears_stale_identity_error_after_workspace_recovery(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "wf_restored"
+    workspace.mkdir()
+    payload = {
+        "workflow_id": "wf_restored",
+        "template_name": "conformer_screening",
+        "status": "failed",
+        "requested_at": "2026-07-12T00:00:00+00:00",
+        "stages": [],
+        "metadata": {
+            "workflow_error": {
+                "status": "failed",
+                "scope": "workflow_identity_validation",
+                "reason": "old mismatch",
+            }
+        },
+    }
+    (workspace / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    result = orchestration.cancel_materialized_workflow(
+        target="wf_restored",
+        workflow_root=tmp_path,
+    )
+
+    assert result["status"] == "cancelled"
+    persisted = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    assert "workflow_error" not in persisted["metadata"]
+    record = registry.get_workflow_registry_record(tmp_path, "wf_restored")
+    assert record is not None
+    assert "identity_quarantined" not in record.metadata

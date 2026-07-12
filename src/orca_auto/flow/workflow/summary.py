@@ -154,6 +154,8 @@ def workflow_summary(
         "precomplex_handoff": precomplex_handoff,
         "parent_workflow": parent_workflow,
         "final_child_sync_pending": _coerce_bool(metadata.get("final_child_sync_pending")),
+        "si_publish_pending": _coerce_bool(metadata.get("si_publish_pending")),
+        "si_publish_blocked": _coerce_bool(metadata.get("si_publish_blocked")),
         "stage_summaries": stage_summaries,
     }
     last_restarted_at = _normalize_text(metadata.get("last_restarted_at"))
@@ -162,6 +164,24 @@ def workflow_summary(
     restart_summary = _coerce_mapping(metadata.get("restart_summary"))
     if restart_summary:
         summary["restart_summary"] = restart_summary
+    si_publish_generation = _normalize_text(metadata.get("si_publish_generation"))
+    if si_publish_generation:
+        summary["si_publish_generation"] = si_publish_generation
+    si_published_generation = _normalize_text(metadata.get("si_published_generation"))
+    if si_published_generation:
+        summary["si_published_generation"] = si_published_generation
+    si_publish_error = _normalize_text(metadata.get("si_publish_error"))
+    if si_publish_error:
+        summary["si_publish_error"] = si_publish_error
+    try:
+        si_publish_attempts = max(0, int(metadata.get("si_publish_attempts", 0)))
+    except (TypeError, ValueError):
+        si_publish_attempts = 0
+    if si_publish_attempts:
+        summary["si_publish_attempts"] = si_publish_attempts
+    si_publish_next_retry_at = _normalize_text(metadata.get("si_publish_next_retry_at"))
+    if si_publish_next_retry_at:
+        summary["si_publish_next_retry_at"] = si_publish_next_retry_at
     return summary
 
 

@@ -10,9 +10,17 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.artifacts import WORKFLOW_SI_CSV_FILE, WORKFLOW_SI_MD_FILE
+from orca_auto.core.artifacts import (
+    INTERACTION_ENERGY_CSV_FILE,
+    INTERACTION_ENERGY_CSV_OWNER_FILE,
+    WORKFLOW_SI_CSV_FILE,
+    WORKFLOW_SI_MD_FILE,
+)
+from orca_auto.flow.manifest import interaction_energy_config_fingerprint
 from orca_auto.flow.workflow.si import (
+    _CSV_COLUMNS,
     collect_workflow_si_data,
+    render_interaction_energy_csv,
     render_workflow_si_csv,
     render_workflow_si_md,
     write_workflow_si,
@@ -1339,3 +1347,860 @@ def test_boltzmann_override_ignores_minimum_without_parsed_temperature(tmp_path:
     )
     # An unverified temperature must not be Boltzmann-weighted at the override value.
     assert csv_rows[0]["boltzmann_population"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Interaction energy (ΔE_int) and RMSD re-dedup (feature 2)
+# ---------------------------------------------------------------------------
+
+_SP_ROUTE = "r2scan-3c TightSCF"
+_OPT_ROUTE = "B3LYP def2-SVP Opt"
+_IE_COORDS = (("C", 0.0, 0.0, 0.0), ("O", 1.2, 0.0, 0.0))
+
+
+def _interaction_stage(
+    stage_id: str,
+    stage_dir: Path,
+    *,
+    role: str,
+    parent: str,
+    status: str = "completed",
+    fragment_index: int | None = None,
+    fragment_label: str = "",
+    fragment_charge: int = 0,
+    fragment_multiplicity: int = 1,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "selected_input_label": stage_id,
+        "role": role,
+        "parent_stage_id": parent,
+    }
+    if fragment_index is not None:
+        metadata.update(
+            {
+                "fragment_index": fragment_index,
+                "fragment_label": fragment_label,
+                "fragment_charge": fragment_charge,
+                "fragment_multiplicity": fragment_multiplicity,
+            }
+        )
+    return {
+        "stage_id": stage_id,
+        "stage_kind": "orca_stage",
+        "status": status,
+        "metadata": metadata,
+        "output_artifacts": [{"kind": "orca_output_dir", "path": str(stage_dir)}],
+    }
+
+
+def _params_payload(
+    stages: list[dict[str, Any]],
+    *,
+    interaction_energy: dict[str, Any] | None = None,
+    rmsd_dedup: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_si_test",
+        "template_name": "conformer_screening",
+        "status": "completed",
+        "reaction_key": "input",
+        "stages": stages,
+    }
+    parameters: dict[str, Any] = {}
+    if interaction_energy is not None:
+        parameters["interaction_energy"] = interaction_energy
+    if rmsd_dedup is not None:
+        parameters["rmsd_dedup"] = rmsd_dedup
+    if parameters:
+        payload["metadata"] = {"request": {"parameters": parameters}}
+    return payload
+
+
+def _interaction_payload(tmp_path: Path, *, fragment_b_completed: bool = True) -> dict[str, Any]:
+    interaction_energy: dict[str, Any] = {
+        "enabled": True,
+        "sp_route_line": f"! {_SP_ROUTE}",
+        "max_fragments": 2,
+        "fragments": [
+            {"atom_indices": [0], "charge": 0, "multiplicity": 1, "label": "host"},
+            {"atom_indices": [1], "charge": 0, "multiplicity": 1, "label": "guest"},
+        ],
+    }
+    fingerprint = interaction_energy_config_fingerprint(
+        interaction_energy, complex_charge=0, complex_multiplicity=1
+    )
+    complex_opt = _stage_dir(tmp_path, "cx_opt", route=_OPT_ROUTE, energy=-100.0, coords=_IE_COORDS)
+    complex_sp = _stage_dir(tmp_path, "cx_sp", route=_SP_ROUTE, energy=-100.0, coords=_IE_COORDS)
+    frag_a = _stage_dir(tmp_path, "frag_a", route=_SP_ROUTE, energy=-60.0, coords=(_IE_COORDS[0],))
+    stages = [
+        _orca_stage("orca_conf_01", complex_opt, label="conf1"),
+        _interaction_stage(
+            "ie_complex", complex_sp, role="interaction_complex_sp", parent="orca_conf_01"
+        ),
+        _interaction_stage(
+            "ie_f0",
+            frag_a,
+            role="interaction_fragment",
+            parent="orca_conf_01",
+            fragment_index=0,
+            fragment_label="host",
+        ),
+    ]
+    if fragment_b_completed:
+        frag_b = _stage_dir(
+            tmp_path, "frag_b", route=_SP_ROUTE, energy=-39.99, coords=(_IE_COORDS[1],)
+        )
+        frag_b_dir = frag_b
+    else:
+        frag_b_dir = tmp_path / "frag_b_missing"  # no state → fail-closed
+        frag_b_dir.mkdir()
+    stages.append(
+        _interaction_stage(
+            "ie_f1",
+            frag_b_dir,
+            role="interaction_fragment",
+            parent="orca_conf_01",
+            status="completed" if fragment_b_completed else "running",
+            fragment_index=1,
+            fragment_label="guest",
+        )
+    )
+    for stage in stages:
+        metadata = stage.get("metadata", {})
+        if str(metadata.get("role", "")).startswith("interaction_"):
+            metadata["interaction_config_fingerprint"] = fingerprint
+        fragment_index = metadata.get("fragment_index")
+        if isinstance(fragment_index, int):
+            metadata["fragment_atom_indices"] = interaction_energy["fragments"][fragment_index][
+                "atom_indices"
+            ]
+    return _params_payload(stages, interaction_energy=interaction_energy)
+
+
+def test_interaction_stages_never_leak_into_the_structure_path(tmp_path: Path) -> None:
+    data = collect_workflow_si_data(_interaction_payload(tmp_path))
+    structure_ids = {entry.stage_id for entry in (*data.entries, *data.extra_blocks)}
+    assert structure_ids == {"orca_conf_01"}
+    assert "ie_complex" not in structure_ids
+    assert "ie_f0" not in structure_ids and "ie_f1" not in structure_ids
+    # And never rendered as an SI structure row.
+    csv_text = render_workflow_si_csv(data)
+    rows = list(csv.DictReader(csv_text.splitlines()))
+    assert {row["stage_id"] for row in rows} == {"orca_conf_01"}
+
+
+def test_interaction_energy_is_computed_and_rendered(tmp_path: Path) -> None:
+    data = collect_workflow_si_data(_interaction_payload(tmp_path))
+    assert len(data.interaction_energies) == 1
+    result = data.interaction_energies[0]
+    assert result.resolved
+    assert result.de_int_hartree is not None
+    assert abs(result.de_int_hartree - (-100.0 - (-60.0 - 39.99))) < 1e-9
+
+    md = render_workflow_si_md(data)
+    assert "## Interaction energies" in md
+    assert "conf1 (orca_conf_01)" in md
+
+    interaction_csv = render_interaction_energy_csv(data)
+    assert interaction_csv is not None
+    ie_rows = list(csv.DictReader(interaction_csv.splitlines()))
+    assert {row["fragment_label"] for row in ie_rows} == {"host", "guest"}
+    assert all(row["parent_stage_id"] == "orca_conf_01" for row in ie_rows)
+    assert all(row["complex_stage_id"] == "ie_complex" for row in ie_rows)
+    assert all(row["ghost_counterpoise_applied"] == "false" for row in ie_rows)
+    assert {row["fragment_atom_indices"] for row in ie_rows} == {"0", "1"}
+    assert all(row["route_line"] == _SP_ROUTE for row in ie_rows)
+    assert "Interaction-energy single points were performed" in md
+    assert "No separate Boys–Bernardi ghost-atom counterpoise" in md
+    assert "r2SCAN-3c gCP" in md
+
+
+def test_interaction_energy_fails_closed_on_missing_fragment(tmp_path: Path) -> None:
+    data = collect_workflow_si_data(_interaction_payload(tmp_path, fragment_b_completed=False))
+    assert len(data.interaction_energies) == 1
+    result = data.interaction_energies[0]
+    assert not result.resolved
+    assert result.de_int_hartree is None
+    md = render_workflow_si_md(data)
+    assert "ΔE_int omitted" in md
+
+
+def test_interaction_energy_fails_closed_on_impossible_fragment_electron_state(
+    tmp_path: Path,
+) -> None:
+    payload = _interaction_payload(tmp_path)
+    cfg = payload["metadata"]["request"]["parameters"]["interaction_energy"]
+    for fragment in cfg["fragments"]:
+        fragment["multiplicity"] = 2
+    fingerprint = interaction_energy_config_fingerprint(
+        cfg, complex_charge=0, complex_multiplicity=1
+    )
+    for stage in payload["stages"]:
+        metadata = stage.get("metadata", {})
+        if str(metadata.get("role", "")).startswith("interaction_"):
+            metadata["interaction_config_fingerprint"] = fingerprint
+        if isinstance(metadata.get("fragment_index"), int):
+            metadata["fragment_multiplicity"] = 2
+
+    result = collect_workflow_si_data(payload).interaction_energies[0]
+
+    assert not result.resolved
+    assert "wrong parity" in result.note
+
+
+def test_interaction_energy_fails_closed_when_fragment_stage_is_absent(tmp_path: Path) -> None:
+    payload = _interaction_payload(tmp_path)
+    payload["stages"] = [stage for stage in payload["stages"] if stage["stage_id"] != "ie_f1"]
+    result = collect_workflow_si_data(payload).interaction_energies[0]
+    assert not result.resolved
+    assert result.de_int_hartree is None
+    assert "fragment 1 expected exactly one stage" in result.note
+
+
+def test_interaction_energy_fails_closed_on_duplicate_fragment_index(tmp_path: Path) -> None:
+    payload = _interaction_payload(tmp_path)
+    duplicate = dict(next(stage for stage in payload["stages"] if stage["stage_id"] == "ie_f0"))
+    duplicate["stage_id"] = "ie_f0_duplicate"
+    duplicate["metadata"] = dict(duplicate["metadata"])
+    payload["stages"].append(duplicate)
+    result = collect_workflow_si_data(payload).interaction_energies[0]
+    assert not result.resolved
+    assert "fragment 0 expected exactly one stage, found 2" in result.note
+
+
+def test_running_interaction_stage_never_reads_stale_completed_output(tmp_path: Path) -> None:
+    payload = _interaction_payload(tmp_path)
+    fragment = next(stage for stage in payload["stages"] if stage["stage_id"] == "ie_f1")
+    fragment["status"] = "running"
+    fragment["metadata"]["reaction_dir"] = fragment["output_artifacts"][0]["path"]
+    fragment["output_artifacts"] = []
+    result = collect_workflow_si_data(payload).interaction_energies[0]
+    assert not result.resolved
+    assert "stage status is running" in result.note
+
+
+def test_disabled_interaction_config_ignores_persisted_stages(tmp_path: Path) -> None:
+    payload = _interaction_payload(tmp_path)
+    payload["metadata"]["request"]["parameters"].pop("interaction_energy")
+    data = collect_workflow_si_data(payload)
+    assert data.interaction_energies == ()
+    assert not data.interaction_energy_enabled
+    assert "## Interaction energies" not in render_workflow_si_md(data)
+
+
+def test_interaction_energy_rejects_mixed_executed_routes(tmp_path: Path) -> None:
+    payload = _interaction_payload(tmp_path)
+    fragment = next(stage for stage in payload["stages"] if stage["stage_id"] == "ie_f1")
+    stage_dir = Path(fragment["output_artifacts"][0]["path"])
+    out_path = stage_dir / "job.out"
+    out_path.write_text(
+        out_path.read_text(encoding="utf-8").replace(_SP_ROUTE, "HF STO-3G"),
+        encoding="utf-8",
+    )
+    inp_path = stage_dir / "job.inp"
+    inp_path.write_text(
+        inp_path.read_text(encoding="utf-8").replace(_SP_ROUTE, "HF STO-3G"),
+        encoding="utf-8",
+    )
+    result = collect_workflow_si_data(payload).interaction_energies[0]
+    assert not result.resolved
+    assert "levels differ" in result.note
+
+
+def test_interaction_energy_rejects_selected_input_output_route_mismatch(
+    tmp_path: Path,
+) -> None:
+    payload = _interaction_payload(tmp_path)
+    fragment = next(stage for stage in payload["stages"] if stage["stage_id"] == "ie_f1")
+    stage_dir = Path(fragment["output_artifacts"][0]["path"])
+    inp_path = stage_dir / "job.inp"
+    inp_path.write_text(
+        inp_path.read_text(encoding="utf-8").replace(_SP_ROUTE, "HF STO-3G"),
+        encoding="utf-8",
+    )
+    result = collect_workflow_si_data(payload).interaction_energies[0]
+    assert not result.resolved
+    assert "selected-input route/electronic state" in result.note
+
+
+def test_enabled_interaction_energy_reports_whole_missing_fanout(tmp_path: Path) -> None:
+    payload = _interaction_payload(tmp_path)
+    payload["stages"] = [
+        stage
+        for stage in payload["stages"]
+        if not str(stage.get("metadata", {}).get("role", "")).startswith("interaction_")
+    ]
+    data = collect_workflow_si_data(payload)
+    assert len(data.interaction_energies) == 1
+    result = data.interaction_energies[0]
+    assert not result.resolved
+    assert "expected exactly one complex single point, found 0" in result.note
+    assert "fragment 0 expected exactly one stage, found 0" in result.note
+
+
+def test_hidden_default_rmsd_grouping_does_not_report_intentional_nonrepresentative(
+    tmp_path: Path,
+) -> None:
+    payload = _interaction_payload(tmp_path)
+    duplicate = _stage_dir(
+        tmp_path,
+        "duplicate_opt",
+        route=_OPT_ROUTE,
+        energy=-99.99995,
+        coords=_IE_COORDS,
+    )
+    payload["stages"].append(_orca_stage("orca_conf_02", duplicate, label="conf2"))
+    data = collect_workflow_si_data(payload)
+    assert {entry.stage_id for entry in data.entries} == {"orca_conf_01", "orca_conf_02"}
+    assert [result.parent_stage_id for result in data.interaction_energies] == ["orca_conf_01"]
+
+
+def test_write_workflow_si_emits_interaction_csv(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    write_workflow_si(workspace, _interaction_payload(tmp_path))
+    assert (workspace / INTERACTION_ENERGY_CSV_FILE).is_file()
+    assert (workspace / INTERACTION_ENERGY_CSV_OWNER_FILE).is_file()
+
+
+def test_feature_off_preserves_unowned_interaction_csv(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    sentinel = workspace / INTERACTION_ENERGY_CSV_FILE
+    sentinel.write_text("USER RESEARCH DATA\n", encoding="utf-8")
+    stage = _stage_dir(tmp_path, "conf", route=_OPT_ROUTE, energy=-100.0, coords=_COORDS_A)
+    write_workflow_si(workspace, _payload([_orca_stage("conf", stage)]))
+    assert sentinel.read_text(encoding="utf-8") == "USER RESEARCH DATA\n"
+
+
+def test_unowned_interaction_conflict_preserves_last_good_base_si(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    base_stage = _stage_dir(
+        tmp_path, "base_conf", route=_OPT_ROUTE, energy=-80.0, coords=_IE_COORDS
+    )
+    write_workflow_si(
+        workspace,
+        _payload([_orca_stage("base_conf", base_stage)]),
+        raise_on_error=True,
+    )
+    md_path = workspace / WORKFLOW_SI_MD_FILE
+    csv_path = workspace / WORKFLOW_SI_CSV_FILE
+    before_md = md_path.read_bytes()
+    before_csv = csv_path.read_bytes()
+    sentinel = workspace / INTERACTION_ENERGY_CSV_FILE
+    sentinel.write_text("USER RESEARCH DATA\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="refusing to overwrite unowned"):
+        write_workflow_si(workspace, _interaction_payload(tmp_path), raise_on_error=True)
+
+    assert md_path.read_bytes() == before_md
+    assert csv_path.read_bytes() == before_csv
+    assert sentinel.read_text(encoding="utf-8") == "USER RESEARCH DATA\n"
+
+
+def test_enabled_feature_refuses_to_overwrite_unowned_interaction_csv(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    sentinel = workspace / INTERACTION_ENERGY_CSV_FILE
+    sentinel.write_text("USER RESEARCH DATA\n", encoding="utf-8")
+    assert write_workflow_si(workspace, _interaction_payload(tmp_path)) is None
+    assert sentinel.read_text(encoding="utf-8") == "USER RESEARCH DATA\n"
+    assert not (workspace / INTERACTION_ENERGY_CSV_OWNER_FILE).exists()
+
+
+def test_disabling_feature_removes_only_owned_interaction_csv(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    payload = _interaction_payload(tmp_path)
+    write_workflow_si(workspace, payload)
+    payload["metadata"]["request"]["parameters"].pop("interaction_energy")
+    write_workflow_si(workspace, payload)
+    assert not (workspace / INTERACTION_ENERGY_CSV_FILE).exists()
+    assert not (workspace / INTERACTION_ENERGY_CSV_OWNER_FILE).exists()
+
+
+def test_interaction_csv_neutralizes_formula_leading_labels(tmp_path: Path) -> None:
+    data = collect_workflow_si_data(_interaction_payload(tmp_path))
+    first = data.interaction_energies[0].fragments[0]
+    hardened = replace(
+        data,
+        interaction_energies=(
+            replace(
+                data.interaction_energies[0],
+                fragments=(replace(first, label='=HYPERLINK("https://invalid")'),),
+            ),
+        ),
+    )
+    csv_text = render_interaction_energy_csv(hardened)
+    assert csv_text is not None
+    rows = list(csv.DictReader(csv_text.splitlines()))
+    assert rows[0]["fragment_label"].startswith("'=")
+
+
+def test_interaction_csv_neutralizes_every_durable_text_field(tmp_path: Path) -> None:
+    data = collect_workflow_si_data(_interaction_payload(tmp_path))
+    result = data.interaction_energies[0]
+    fragment = result.fragments[0]
+    formula = '=HYPERLINK("https://invalid")'
+    hardened = replace(
+        data,
+        interaction_energies=(
+            replace(
+                result,
+                parent_stage_id=formula,
+                complex_stage_id=formula,
+                complex_label=formula,
+                complex_formula=formula,
+                method=formula,
+                basis_set=formula,
+                solvation=formula,
+                orca_version=formula,
+                input_line=formula,
+                note=formula,
+                fragments=(replace(fragment, label=formula, stage_id=formula, formula=formula),),
+            ),
+        ),
+    )
+    csv_text = render_interaction_energy_csv(hardened)
+    assert csv_text is not None
+    row = next(csv.DictReader(csv_text.splitlines()))
+    for column in (
+        "parent_stage_id",
+        "complex_stage_id",
+        "complex_label",
+        "complex_formula",
+        "method",
+        "basis_set",
+        "solvation",
+        "orca_version",
+        "route_line",
+        "fragment_label",
+        "fragment_stage_id",
+        "fragment_formula",
+        "note",
+    ):
+        assert row[column].startswith("'=")
+
+
+def test_modified_or_marker_only_interaction_csv_is_never_overwritten(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    payload = _interaction_payload(tmp_path)
+    write_workflow_si(workspace, payload)
+    interaction_path = workspace / INTERACTION_ENERGY_CSV_FILE
+    owner_path = workspace / INTERACTION_ENERGY_CSV_OWNER_FILE
+
+    interaction_path.write_text("USER MODIFIED DATA\n", encoding="utf-8")
+    assert write_workflow_si(workspace, payload) is None
+    assert interaction_path.read_text(encoding="utf-8") == "USER MODIFIED DATA\n"
+    assert not owner_path.exists()
+
+    interaction_path.unlink()
+    write_workflow_si(workspace, payload)
+    interaction_path.unlink()
+    assert write_workflow_si(workspace, payload, raise_on_error=True) is not None
+    assert interaction_path.exists()
+    interaction_path.unlink()
+    interaction_path.write_text("USER NEW DATA\n", encoding="utf-8")
+    assert write_workflow_si(workspace, payload) is None
+    assert interaction_path.read_text(encoding="utf-8") == "USER NEW DATA\n"
+
+
+def test_interaction_owner_pending_digest_recovers_after_marker_finalize_crash(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import orca_auto.flow.workflow.si as si_mod
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    payload = _interaction_payload(tmp_path)
+    owner_path = workspace / INTERACTION_ENERGY_CSV_OWNER_FILE
+    real_write = si_mod.atomic_write_text
+    owner_writes = 0
+
+    def crash_final_marker(path: Path, text: str) -> None:
+        nonlocal owner_writes
+        if path == owner_path:
+            owner_writes += 1
+            if owner_writes == 2:
+                raise KeyboardInterrupt("simulated process crash")
+        real_write(path, text)
+
+    monkeypatch.setattr(si_mod, "atomic_write_text", crash_final_marker)
+    with pytest.raises(KeyboardInterrupt):
+        si_mod.write_workflow_si(workspace, payload, raise_on_error=True)
+    monkeypatch.setattr(si_mod, "atomic_write_text", real_write)
+
+    assert si_mod.write_workflow_si(workspace, payload, raise_on_error=True) is not None
+    assert si_mod._owned_interaction_artifact(
+        workspace / INTERACTION_ENERGY_CSV_FILE,
+        owner_path,
+        workflow_id="wf_si_test",
+    )
+
+
+def test_invalid_durable_interaction_config_preserves_last_good_artifacts(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    payload = _interaction_payload(tmp_path)
+    write_workflow_si(workspace, payload, raise_on_error=True)
+    interaction_path = workspace / INTERACTION_ENERGY_CSV_FILE
+    before = interaction_path.read_bytes()
+    payload["metadata"]["request"]["parameters"]["interaction_energy"]["typo"] = True
+    with pytest.raises(ValueError, match="unknown key"):
+        write_workflow_si(workspace, payload, raise_on_error=True)
+    assert interaction_path.read_bytes() == before
+
+
+def test_unsupported_template_feature_preserves_last_good_artifacts(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    payload = _interaction_payload(tmp_path)
+    write_workflow_si(workspace, payload, raise_on_error=True)
+    interaction_path = workspace / INTERACTION_ENERGY_CSV_FILE
+    before = interaction_path.read_bytes()
+    payload["template_name"] = "reaction_ts_search"
+
+    with pytest.raises(ValueError, match="supported only for conformer_screening"):
+        write_workflow_si(workspace, payload, raise_on_error=True)
+
+    assert interaction_path.read_bytes() == before
+
+
+def test_corrupt_interaction_stage_metadata_preserves_last_good_artifacts(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    payload = _interaction_payload(tmp_path)
+    write_workflow_si(workspace, payload, raise_on_error=True)
+    interaction_path = workspace / INTERACTION_ENERGY_CSV_FILE
+    before = interaction_path.read_bytes()
+    fragment = next(stage for stage in payload["stages"] if stage["stage_id"] == "ie_f0")
+    fragment["metadata"]["fragment_atom_indices"] = 0
+
+    with pytest.raises(TypeError):
+        write_workflow_si(workspace, payload, raise_on_error=True)
+
+    assert interaction_path.read_bytes() == before
+
+
+def test_lost_parent_removes_owned_stale_interaction_csv(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    payload = _interaction_payload(tmp_path)
+    write_workflow_si(workspace, payload, raise_on_error=True)
+    payload["stages"] = [
+        stage for stage in payload["stages"] if stage["stage_id"] != "orca_conf_01"
+    ]
+    assert write_workflow_si(workspace, payload, raise_on_error=True) is None
+    assert not (workspace / INTERACTION_ENERGY_CSV_FILE).exists()
+    assert not (workspace / INTERACTION_ENERGY_CSV_OWNER_FILE).exists()
+
+
+def test_strict_no_orca_cleanup_propagates_unlink_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    md_path = workspace / WORKFLOW_SI_MD_FILE
+    md_path.write_text("stale\n", encoding="utf-8")
+    real_unlink = Path.unlink
+
+    def fail_md_unlink(path: Path, missing_ok: bool = False) -> None:
+        if path == md_path:
+            raise PermissionError("simulated cleanup denial")
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_md_unlink)
+    with pytest.raises(PermissionError, match="cleanup denial"):
+        write_workflow_si(
+            workspace,
+            {"workflow_id": "wf_empty", "template_name": "conformer_screening", "stages": []},
+            raise_on_error=True,
+        )
+
+
+def test_rmsd_dedup_collapses_degenerate_minima(tmp_path: Path) -> None:
+    keep = _stage_dir(tmp_path, "keep", route=_OPT_ROUTE, energy=-50.00005, coords=_COORDS_C)
+    drop = _stage_dir(tmp_path, "drop", route=_OPT_ROUTE, energy=-50.0, coords=_COORDS_C)
+    payload = _params_payload(
+        [
+            _orca_stage("orca_conf_keep", keep, label="keep"),
+            _orca_stage("orca_conf_drop", drop, label="drop"),
+        ],
+        rmsd_dedup={
+            "enabled": True,
+            "rmsd_threshold_angstrom": 0.25,
+            "energy_window_kcal": 1.0,
+            "heavy_atoms_only": True,
+        },
+    )
+    data = collect_workflow_si_data(payload)
+    # Both are identical NO geometries within 1 kcal/mol → one representative kept.
+    assert [entry.block.name for entry in data.entries] == ["keep"]
+    assert data.rmsd_dedup_enabled
+    csv_text = render_workflow_si_csv(data)
+    header = csv_text.splitlines()[0].split(",")
+    assert header[-3:] == ["rmsd_group", "degeneracy", "merged_stage_ids"]
+    row = next(csv.DictReader(csv_text.splitlines()))
+    assert row["degeneracy"] == "2"
+    assert row["merged_stage_ids"] == "orca_conf_drop"
+    assert "RMSD representatives" in render_workflow_si_md(data)
+
+
+def test_rmsd_dedup_cannot_hide_an_unusable_population_member(tmp_path: Path) -> None:
+    usable = _minimum(tmp_path, "usable", energy=-50.00005, coords=_COORDS_C)
+    unusable = _stage_dir(
+        tmp_path,
+        "unusable",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-50.0,
+        coords=_COORDS_C,
+    )
+    payload = _params_payload(
+        [
+            _orca_stage("orca_conf_usable", usable, label="usable"),
+            _orca_stage("orca_conf_unusable", unusable, label="unusable"),
+        ],
+        rmsd_dedup={
+            "enabled": True,
+            "rmsd_threshold_angstrom": 0.25,
+            "energy_window_kcal": 1.0,
+            "heavy_atoms_only": False,
+        },
+    )
+    data = collect_workflow_si_data(payload)
+    assert [entry.block.name for entry in data.entries] == ["usable"]
+    assert data.populations == (None,)
+    assert "1 of 2 route-classified minima are usable" in data.population_note
+
+
+def test_rmsd_dedup_never_uses_unconverged_or_known_saddle_as_representative(
+    tmp_path: Path,
+) -> None:
+    good = _stage_dir(
+        tmp_path,
+        "good",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-50.0,
+        coords=_COORDS_C,
+        freqs=_MIN_FREQS,
+    )
+    unknown = _stage_dir(
+        tmp_path,
+        "unknown",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-50.00005,
+        coords=_COORDS_C,
+        freqs=_MIN_FREQS,
+        opt_converged=None,
+    )
+    saddle = _stage_dir(
+        tmp_path,
+        "saddle",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-50.00006,
+        coords=_COORDS_C,
+        freqs=_ONE_IMAG_FREQS,
+    )
+    payload = _params_payload(
+        [
+            _orca_stage("good", good),
+            _orca_stage("unknown", unknown),
+            _orca_stage("saddle", saddle),
+        ],
+        rmsd_dedup={
+            "enabled": True,
+            "rmsd_threshold_angstrom": 0.25,
+            "energy_window_kcal": 1.0,
+            "heavy_atoms_only": False,
+        },
+    )
+    data = collect_workflow_si_data(payload)
+    assert {entry.stage_id for entry in data.entries} == {"good", "unknown", "saddle"}
+    assert all(group.degeneracy == 1 for group in data.rmsd_groups)
+
+
+def test_single_minimum_rmsd_metadata_reports_singleton_group(tmp_path: Path) -> None:
+    only = _stage_dir(
+        tmp_path,
+        "only",
+        route=_OPT_ROUTE,
+        energy=-50.0,
+        coords=_COORDS_C,
+    )
+    data = collect_workflow_si_data(
+        _params_payload(
+            [_orca_stage("only", only)],
+            rmsd_dedup={"enabled": True},
+        )
+    )
+    row = next(csv.DictReader(render_workflow_si_csv(data).splitlines()))
+    assert row["rmsd_group"] == "1"
+    assert row["degeneracy"] == "1"
+
+
+def test_rmsd_dedup_uses_the_uniform_single_point_energy_convention(tmp_path: Path) -> None:
+    opt_a = _stage_dir(tmp_path, "opt_a", route=_OPT_ROUTE, energy=-50.00005, coords=_COORDS_C)
+    opt_b = _stage_dir(tmp_path, "opt_b", route=_OPT_ROUTE, energy=-50.0, coords=_COORDS_D)
+    sp_a = _stage_dir(tmp_path, "sp_a", route=_SP_ROUTE, energy=-100.0, coords=_COORDS_C)
+    sp_b = _stage_dir(tmp_path, "sp_b", route=_SP_ROUTE, energy=-100.00005, coords=_COORDS_D)
+    payload = _params_payload(
+        [
+            _orca_stage("opt_a", opt_a, label="opt_a"),
+            _orca_stage("opt_b", opt_b, label="opt_b"),
+            _orca_stage("sp_a", sp_a, label="sp_a"),
+            _orca_stage("sp_b", sp_b, label="sp_b"),
+        ],
+        rmsd_dedup={
+            "enabled": True,
+            "rmsd_threshold_angstrom": 0.25,
+            "energy_window_kcal": 0.1,
+            "heavy_atoms_only": False,
+        },
+    )
+    data = collect_workflow_si_data(payload)
+    assert [entry.block.name for entry in data.entries] == ["opt_b"]
+    assert data.entries[0].sp_energy == pytest.approx(-100.00005)
+
+
+@pytest.mark.parametrize(
+    ("winner", "refine_a_energy", "refine_b_energy"),
+    [
+        ("parent_a", -100.00005, -100.0),
+        ("parent_b", -100.0, -100.00005),
+    ],
+)
+def test_interaction_parent_grouping_ignores_known_saddle_in_sp_convention(
+    tmp_path: Path,
+    winner: str,
+    refine_a_energy: float,
+    refine_b_energy: float,
+) -> None:
+    coords_a = (("C", 0.0, 0.0, 0.0), ("O", 1.10, 0.0, 0.0))
+    coords_b = (("C", 0.0, 0.0, 0.0), ("O", 1.15, 0.0, 0.0))
+    coords_saddle = coords_a
+    opt_a = _stage_dir(tmp_path, "parent_a", route=_OPT_ROUTE, energy=-50.00005, coords=coords_a)
+    opt_b = _stage_dir(tmp_path, "parent_b", route=_OPT_ROUTE, energy=-50.0, coords=coords_b)
+    saddle = _stage_dir(
+        tmp_path,
+        "known_saddle",
+        route=f"{_OPT_ROUTE} Freq",
+        energy=-50.1,
+        coords=coords_saddle,
+        freqs=_ONE_IMAG_FREQS,
+    )
+    refine_a = _stage_dir(
+        tmp_path, "refine_a", route=_SP_ROUTE, energy=refine_a_energy, coords=coords_a
+    )
+    refine_b = _stage_dir(
+        tmp_path, "refine_b", route=_SP_ROUTE, energy=refine_b_energy, coords=coords_b
+    )
+    winner_coords = coords_a if winner == "parent_a" else coords_b
+    winner_energy = refine_a_energy if winner == "parent_a" else refine_b_energy
+    ie_complex = _stage_dir(
+        tmp_path, f"{winner}_ie", route=_SP_ROUTE, energy=winner_energy, coords=winner_coords
+    )
+    ie_c = _stage_dir(
+        tmp_path, f"{winner}_c", route=_SP_ROUTE, energy=-60.0, coords=(winner_coords[0],)
+    )
+    ie_o = _stage_dir(
+        tmp_path, f"{winner}_o", route=_SP_ROUTE, energy=-39.99, coords=(winner_coords[1],)
+    )
+    rmsd_cfg = {
+        "enabled": True,
+        "rmsd_threshold_angstrom": 0.25,
+        "energy_window_kcal": 0.1,
+        "heavy_atoms_only": False,
+    }
+    interaction_cfg: dict[str, Any] = {
+        "enabled": True,
+        "sp_route_line": f"! {_SP_ROUTE}",
+        "max_fragments": 2,
+        "fragments": [
+            {"atom_indices": [0], "charge": 0, "multiplicity": 1, "label": "carbon"},
+            {"atom_indices": [1], "charge": 0, "multiplicity": 1, "label": "oxygen"},
+        ],
+    }
+    fingerprint = interaction_energy_config_fingerprint(
+        interaction_cfg,
+        complex_charge=0,
+        complex_multiplicity=1,
+        rmsd_dedup=rmsd_cfg,
+    )
+    interaction_stages = [
+        _interaction_stage(
+            f"ie_{winner}_complex",
+            ie_complex,
+            role="interaction_complex_sp",
+            parent=winner,
+        ),
+        _interaction_stage(
+            f"ie_{winner}_c",
+            ie_c,
+            role="interaction_fragment",
+            parent=winner,
+            fragment_index=0,
+            fragment_label="carbon",
+        ),
+        _interaction_stage(
+            f"ie_{winner}_o",
+            ie_o,
+            role="interaction_fragment",
+            parent=winner,
+            fragment_index=1,
+            fragment_label="oxygen",
+        ),
+    ]
+    for stage in interaction_stages:
+        stage["metadata"]["interaction_config_fingerprint"] = fingerprint
+        index = stage["metadata"].get("fragment_index")
+        if isinstance(index, int):
+            stage["metadata"]["fragment_atom_indices"] = interaction_cfg["fragments"][index][
+                "atom_indices"
+            ]
+    payload = _params_payload(
+        [
+            _orca_stage("parent_a", opt_a),
+            _orca_stage("parent_b", opt_b),
+            _orca_stage("known_saddle", saddle),
+            _orca_stage("refine_a", refine_a),
+            _orca_stage("refine_b", refine_b),
+            *interaction_stages,
+        ],
+        interaction_energy=interaction_cfg,
+        rmsd_dedup=rmsd_cfg,
+    )
+
+    data = collect_workflow_si_data(payload)
+
+    merged = next(group for group in data.rmsd_groups if "parent_a" in group.member_stage_ids)
+    assert merged.representative_stage_id == winner
+    assert merged.member_stage_ids == ("parent_a", "parent_b")
+    representative = next(entry for entry in data.entries if entry.stage_id == winner)
+    assert representative.sp_energy == pytest.approx(winner_energy)
+    assert representative.sp_label == f"refine_{winner[-1]}"
+    assert {entry.stage_id for entry in data.extra_blocks}.isdisjoint({"refine_a", "refine_b"})
+    assert [result.parent_stage_id for result in data.interaction_energies] == [winner]
+    assert data.interaction_energies[0].resolved
+
+
+def test_features_off_are_byte_identical_to_baseline(tmp_path: Path) -> None:
+    stage = _stage_dir(tmp_path, "conf", route=_OPT_ROUTE, energy=-100.0, coords=_COORDS_A)
+    payload = _payload([_orca_stage("orca_conf_01", stage, label="conf1")])
+    data = collect_workflow_si_data(payload)
+
+    csv_text = render_workflow_si_csv(data)
+    header = csv_text.splitlines()[0].split(",")
+    assert header == _CSV_COLUMNS  # no rmsd_dedup columns appended when off
+
+    md = render_workflow_si_md(data)
+    assert "## Interaction energies" not in md
+    assert "RMSD representatives" not in md
+    assert render_interaction_energy_csv(data) is None

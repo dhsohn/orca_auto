@@ -19,18 +19,38 @@ Generation must never break the advance: errors are logged and swallowed.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import logging
 import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, TypeGuard
 
-from orca_auto.core.artifacts import WORKFLOW_SI_CSV_FILE, WORKFLOW_SI_MD_FILE
+from orca_auto.core.artifacts import (
+    INTERACTION_ENERGY_CSV_FILE,
+    INTERACTION_ENERGY_CSV_OWNER_FILE,
+    WORKFLOW_SI_CSV_FILE,
+    WORKFLOW_SI_MD_FILE,
+)
 from orca_auto.core.utils.persistence import atomic_write_text
-from orca_auto.orca.input_blocks import geometry_range
+from orca_auto.orca.input_blocks import file_route_lines, geometry_range
+from orca_auto.orca.report.interaction_energy import (
+    InteractionEnergyResult,
+    InteractionFragmentEnergy,
+    compute_interaction_energy,
+    validate_fragment_electronic_states,
+    validate_fragment_partition,
+)
 from orca_auto.orca.report.render import KCAL_PER_HARTREE, R_KCAL_PER_MOL_K
+from orca_auto.orca.report.rmsd import (
+    RmsdCandidate,
+    RmsdGroup,
+    group_by_rmsd,
+    rmsd_comparison_key,
+)
 from orca_auto.orca.report.si import (
     SiBlock,
     SiBlockError,
@@ -39,7 +59,16 @@ from orca_auto.orca.report.si import (
 )
 from orca_auto.orca.state import load_state
 
-from ..manifest import optional_positive_float
+from ..manifest import (
+    DEFAULT_RMSD_ENERGY_WINDOW_KCAL,
+    DEFAULT_RMSD_THRESHOLD_ANGSTROM,
+    interaction_energy_config_fingerprint,
+    normalize_interaction_energy_block,
+    normalize_rmsd_dedup_block,
+    optional_positive_float,
+    validate_conformer_postprocessing_template,
+    validate_interaction_energy_state_balance,
+)
 from .report import (
     _crest_stage_detail,
     _orca_stage_output_dir,
@@ -73,6 +102,13 @@ _POP_NO_GIBBS_NOTE = (
     "minima with complete 3N spectra, finite Gibbs free energies, and "
     "thermochemistry temperatures)"
 )
+
+# Metadata role prefix carried by the interaction-energy single-point stages the
+# orchestration fans out (``interaction_complex_sp`` and ``interaction_fragment``).
+_INTERACTION_ROLE_PREFIX = "interaction_"
+_INTERACTION_CONFIG_FINGERPRINT_KEY = "interaction_config_fingerprint"
+_ROLE_INTERACTION_COMPLEX = "interaction_complex_sp"
+_ROLE_INTERACTION_FRAGMENT = "interaction_fragment"
 
 
 @dataclass(frozen=True)
@@ -135,9 +171,22 @@ class WorkflowSiData:
     boltzmann_temperature_source: str = ""
     population_note: str = ""
     populations: tuple[PopulationRow | None, ...] = ()
+    # Interaction energies (ΔE_int) per retained representative complex, and the
+    # RMSD re-dedup grouping applied to the minima. Both are empty/off unless the
+    # respective manifest feature is enabled.
+    interaction_energies: tuple[InteractionEnergyResult, ...] = ()
+    interaction_energy_enabled: bool = False
+    rmsd_dedup_enabled: bool = False
+    rmsd_groups: tuple[RmsdGroup, ...] = ()
 
     def has_orca_stages(self) -> bool:
-        return bool(self.entries or self.extra_blocks or self.excluded)
+        return bool(self.entries or self.extra_blocks or self.excluded or self.interaction_energies)
+
+    def rmsd_group_for(self, stage_id: str) -> tuple[int, RmsdGroup] | None:
+        for index, group in enumerate(self.rmsd_groups, start=1):
+            if stage_id in group.member_stage_ids:
+                return index, group
+        return None
 
 
 def _geometry_matches(a: SiBlock, b: SiBlock) -> bool:
@@ -207,11 +256,14 @@ def _collect_stage_block(
         return None, "output contains a non-finite numeric result"
     selected_raw = str(state.get("selected_inp") or "").strip()
     selected_state: tuple[int, int] | None = None
+    selected_route = ""
     if selected_raw:
         try:
+            selected_path = Path(selected_raw)
             geometry = geometry_range(
-                Path(selected_raw).read_text(encoding="utf-8", errors="ignore").splitlines()
+                selected_path.read_text(encoding="utf-8", errors="ignore").splitlines()
             )
+            selected_route = _normalized_route_line(" ".join(file_route_lines(selected_path)))
         except OSError:
             geometry = None
         if geometry is not None:
@@ -221,9 +273,11 @@ def _collect_stage_block(
         result.electronic_state_verified
         and selected_state is not None
         and (result.charge, result.multiplicity) == selected_state
+        and bool(selected_route)
+        and selected_route == _normalized_route_line(result.input_line)
     )
     if not state_verified:
-        warning = "electronic-state provenance missing or inconsistent with selected input"
+        warning = "route/electronic-state provenance missing or inconsistent with selected input"
         block = replace(
             block,
             result=replace(result, electronic_state_verified=False),
@@ -287,9 +341,31 @@ def collect_workflow_si_data(
     *,
     boltzmann_temperature_k: float | None = None,
     population_blocker: str = "",
+    raise_feature_errors: bool = False,
 ) -> WorkflowSiData:
     template_name = _text(payload.get("template_name"))
     workflow_status = _text(payload.get("status"))
+    parameters = _request_parameters(payload)
+    try:
+        interaction_cfg = normalize_interaction_energy_block(parameters.get("interaction_energy"))
+    except ValueError:
+        logger.warning("Invalid durable interaction_energy configuration", exc_info=True)
+        interaction_cfg = None
+    try:
+        rmsd_cfg = normalize_rmsd_dedup_block(parameters.get("rmsd_dedup"))
+    except ValueError:
+        logger.warning("Invalid durable rmsd_dedup configuration", exc_info=True)
+        rmsd_cfg = None
+    try:
+        validate_conformer_postprocessing_template(
+            template_name,
+            interaction_energy=interaction_cfg,
+            rmsd_dedup=rmsd_cfg,
+        )
+    except ValueError:
+        logger.warning("Conformer post-processing is disabled for this template", exc_info=True)
+        interaction_cfg = None
+        rmsd_cfg = None
     crest_total: int | None = None
     xtb_total: int | None = None
     stationary: list[WorkflowSiEntry] = []
@@ -297,6 +373,12 @@ def collect_workflow_si_data(
     extra: list[WorkflowSiEntry] = []
     excluded: list[ExcludedStage] = []
     incomplete_population_stages: list[str] = []
+    # Interaction-energy fragment/complex single points are internal inputs, not
+    # SI structures: they carry a ``role`` starting ``interaction_`` and must be
+    # pulled out BEFORE any min/ts/sp classification so they can never leak into
+    # the relative-energy table, the structures list, or si_data.csv, nor be
+    # folded into a stationary structure by ``_pair_single_points``.
+    interaction_raw_stages: list[Mapping[str, Any]] = []
 
     for stage in _stage_dicts(payload):
         stage_kind = _text(stage.get("stage_kind"))
@@ -310,6 +392,9 @@ def collect_workflow_si_data(
             xtb_total = (xtb_total or 0) + candidates
             continue
         if stage_kind != "orca_stage":
+            continue
+        if _text(_stage_metadata(stage).get("role")).startswith(_INTERACTION_ROLE_PREFIX):
+            interaction_raw_stages.append(stage)
             continue
 
         stage_id = _text(stage.get("stage_id"))
@@ -353,11 +438,27 @@ def collect_workflow_si_data(
             entry.block.result.energy_hartree or 0.0,
         )
     )
-    ranked, unpaired = _pair_single_points(stationary, single_points)
+    # Give scientifically eligible minima first claim on optional SP refinements.
+    # A known saddle/unconverged structure at the same geometry must not make an
+    # otherwise unique minimum refinement ambiguous. Remaining stationary
+    # structures may pair only with SPs left after that canonical pass.
+    eligible_stationary = [entry for entry in stationary if _rmsd_eligible_minimum(entry)]
+    eligible_paired, remaining_single_points = _pair_single_points(
+        eligible_stationary, single_points
+    )
+    eligible_blocks = {id(entry.block) for entry in eligible_stationary}
+    ineligible_paired, pre_dedup_unpaired = _pair_single_points(
+        [entry for entry in stationary if id(entry.block) not in eligible_blocks],
+        remaining_single_points,
+    )
+    # Stage IDs in corrupt/legacy payloads are not guaranteed unique. The SiBlock
+    # identity is stable through dataclass replacement and keeps this merge 1:1.
+    paired_by_block = {id(entry.block): entry for entry in (*eligible_paired, *ineligible_paired)}
+    pre_dedup_ranked = [paired_by_block.get(id(entry.block), entry) for entry in stationary]
 
-    # A population bug must never replace a valid SI with stale files: isolate the
-    # computation so the base document (methods, relative-energy table, structures)
-    # still renders even if this raises.
+    # Validate population completeness against the full pre-dedup ensemble.
+    # Dropping an unusable duplicate must never turn an incomplete ensemble into
+    # a fabricated 100% population for the remaining representative.
     try:
         if not population_blocker and template_name == "conformer_screening":
             if workflow_status != "completed":
@@ -370,6 +471,56 @@ def collect_workflow_si_data(
                     "(populations omitted: the conformer ensemble is incomplete; "
                     f"{len(incomplete_population_stages)} ORCA stage(s) are not usable)"
                 )
+        if not population_blocker and template_name == "conformer_screening":
+            pre_rows, _pre_t, _pre_source, pre_note = _compute_populations(
+                tuple(pre_dedup_ranked), boltzmann_temperature_k
+            )
+            pre_min_indices = [
+                index for index, entry in enumerate(pre_dedup_ranked) if entry.block.kind == "min"
+            ]
+            if pre_min_indices and any(pre_rows[index] is None for index in pre_min_indices):
+                population_blocker = pre_note or "(populations omitted: pre-dedup ensemble invalid)"
+    except Exception:  # noqa: BLE001
+        logger.warning("Pre-dedup population validation failed", exc_info=True)
+        population_blocker = "(populations omitted: population validation failed)"
+
+    # RMSD re-dedup and interaction-energy assembly are additive report-time
+    # features isolated behind their own guards: a failure in either omits only
+    # that feature and still renders the base SI (methods, table, structures).
+    rmsd_groups: tuple[RmsdGroup, ...] = ()
+    ranked = pre_dedup_ranked
+    if rmsd_cfg is not None:
+        try:
+            ranked, rmsd_groups = _dedup_minima(pre_dedup_ranked, rmsd_cfg)
+        except Exception:  # noqa: BLE001
+            if raise_feature_errors:
+                raise
+            logger.warning("Workflow SI RMSD dedup failed", exc_info=True)
+            rmsd_groups = ()
+            ranked = pre_dedup_ranked
+    unpaired = pre_dedup_unpaired
+
+    interaction_energies: tuple[InteractionEnergyResult, ...] = ()
+    if interaction_cfg is not None:
+        try:
+            interaction_energies = _interaction_energy_results(
+                interaction_raw_stages,
+                stationary,
+                single_points,
+                interaction_cfg,
+                parameters,
+                rmsd_cfg,
+            )
+        except Exception:  # noqa: BLE001
+            if raise_feature_errors:
+                raise
+            logger.warning("Workflow SI interaction-energy assembly failed", exc_info=True)
+            interaction_energies = ()
+
+    # A population bug must never replace a valid SI with stale files: isolate the
+    # computation so the base document (methods, relative-energy table, structures)
+    # still renders even if this raises.
+    try:
         populations, temperature, temperature_source, population_note = _compute_populations(
             tuple(ranked), boltzmann_temperature_k, blocker=population_blocker
         )
@@ -396,7 +547,369 @@ def collect_workflow_si_data(
         boltzmann_temperature_source=temperature_source,
         population_note=population_note,
         populations=populations,
+        interaction_energies=interaction_energies,
+        interaction_energy_enabled=interaction_cfg is not None,
+        rmsd_dedup_enabled=rmsd_cfg is not None,
+        rmsd_groups=rmsd_groups,
     )
+
+
+# ---------------------------------------------------------------------------
+# RMSD re-dedup and interaction energies
+# ---------------------------------------------------------------------------
+
+
+def _meta_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _dedup_minima(
+    stationary: list[WorkflowSiEntry],
+    cfg: Mapping[str, Any],
+) -> tuple[list[WorkflowSiEntry], tuple[RmsdGroup, ...]]:
+    """Collapse geometrically degenerate minima to their lowest-energy member.
+
+    Only ``min`` entries are grouped (TS/SP are never merged). Non-representative
+    minima are dropped from the returned list — which preserves the incoming
+    energy sort — while the groups (including singletons) are returned so the SI
+    can annotate each representative with its degeneracy.
+    """
+    mins = [entry for entry in stationary if _rmsd_eligible_minimum(entry)]
+    if not mins:
+        return stationary, ()
+    if len(mins) == 1:
+        only = mins[0].stage_id
+        return stationary, (RmsdGroup(only, (only,)),)
+    convention = _energy_convention(tuple(mins))
+    candidates = [
+        RmsdCandidate(
+            stage_id=entry.stage_id,
+            coordinates=tuple(entry.block.result.coordinates),
+            energy_hartree=(
+                entry.sp_energy
+                if convention.use_single_point_energy
+                else entry.block.result.energy_hartree
+            ),
+            comparison_key=rmsd_comparison_key(
+                formula=entry.block.result.formula,
+                charge=entry.block.result.charge,
+                multiplicity=entry.block.result.multiplicity,
+                method=entry.block.result.method,
+                basis_set=entry.block.result.basis_set,
+                solvation=entry.block.result.solvation,
+                orca_version=entry.block.result.orca_version,
+                input_line=entry.block.result.input_line,
+                electronic_state_verified=entry.block.result.electronic_state_verified,
+            ),
+        )
+        for entry in mins
+    ]
+    grouping = group_by_rmsd(
+        candidates,
+        rmsd_threshold_angstrom=float(
+            cfg.get("rmsd_threshold_angstrom") or DEFAULT_RMSD_THRESHOLD_ANGSTROM
+        ),
+        energy_window_kcal=float(cfg.get("energy_window_kcal") or DEFAULT_RMSD_ENERGY_WINDOW_KCAL),
+        heavy_atoms_only=bool(cfg.get("heavy_atoms_only", False)),
+    )
+    representatives = grouping.representative_ids
+    dropped = {c.stage_id for c in candidates if c.stage_id not in representatives}
+    kept = [entry for entry in stationary if entry.stage_id not in dropped]
+    return kept, grouping.groups
+
+
+def _rmsd_eligible_minimum(
+    entry: WorkflowSiEntry,
+    *,
+    expected_charge: int | None = None,
+    expected_multiplicity: int | None = None,
+) -> bool:
+    """Match the materializer's fail-closed optimized-parent eligibility."""
+    result = entry.block.result
+    return bool(
+        entry.block.kind == "min"
+        and result.opt_converged is True
+        and entry.block.imaginary_count in (None, 0)
+        and _finite(result.energy_hartree)
+        and bool(result.coordinates)
+        and _has_required_provenance(entry.block)
+        and (expected_charge is None or result.charge == expected_charge)
+        and (expected_multiplicity is None or result.multiplicity == expected_multiplicity)
+    )
+
+
+def _normalized_route_line(value: Any) -> str:
+    text = _text(value)
+    if text.startswith("!"):
+        text = text[1:]
+    return " ".join(text.split()).lower()
+
+
+def _coordinates_match(
+    expected: tuple[tuple[str, float, float, float], ...],
+    actual: tuple[tuple[str, float, float, float], ...],
+) -> bool:
+    if len(expected) != len(actual) or not expected:
+        return False
+    for expected_row, actual_row in zip(expected, actual, strict=True):
+        if expected_row[0] != actual_row[0]:
+            return False
+        if any(
+            abs(left - right) > _GEOMETRY_TOL_ANGSTROM + _GEOMETRY_COMPARISON_EPSILON_ANGSTROM
+            for left, right in zip(expected_row[1:], actual_row[1:], strict=True)
+        ):
+            return False
+    return True
+
+
+def _completed_interaction_block(stage: Mapping[str, Any]) -> tuple[SiBlock | None, str]:
+    status = _text(stage.get("status"))
+    if status != "completed":
+        return None, f"stage status is {status or 'unknown'}"
+    block, reason = _collect_stage_block(stage)
+    if block is None:
+        return None, reason
+    if block.kind != "sp" or block.analysis is not None:
+        return None, "stage did not execute as a pure single point"
+    return block, ""
+
+
+def _interaction_energy_results(
+    interaction_stages: list[Mapping[str, Any]],
+    stationary: list[WorkflowSiEntry],
+    single_points: list[WorkflowSiEntry],
+    cfg: dict[str, Any],
+    parameters: Mapping[str, Any],
+    rmsd_cfg: dict[str, Any] | None,
+) -> tuple[InteractionEnergyResult, ...]:
+    """Assemble ΔE_int per representative complex from its fan-out single points.
+
+    Each interaction stage carries ``role`` (``interaction_complex_sp`` /
+    ``interaction_fragment``) and ``parent_stage_id`` linking it to the complex
+    optimization it was fanned out from. The complex and fragment energies come
+    from the same-level single points; a missing one makes that complex's ΔE_int
+    a fail-closed omission (never a partial sum).
+    """
+    expected_fragments = cfg.get("fragments")
+    if not isinstance(expected_fragments, list):
+        return ()
+    complex_charge = _meta_int(parameters.get("charge"), 0)
+    complex_multiplicity = _meta_int(parameters.get("multiplicity"), 1)
+    eligible = [
+        entry
+        for entry in stationary
+        if _rmsd_eligible_minimum(
+            entry,
+            expected_charge=complex_charge,
+            expected_multiplicity=complex_multiplicity,
+        )
+    ]
+    eligible, _unused_single_points = _pair_single_points(eligible, single_points)
+    entry_by_stage = {entry.stage_id: entry for entry in eligible}
+    stages_by_parent: dict[str, list[Mapping[str, Any]]] = {}
+    for stage in interaction_stages:
+        meta = _stage_metadata(stage)
+        parent = _text(meta.get("parent_stage_id"))
+        if not parent or parent not in entry_by_stage:
+            continue
+        stages_by_parent.setdefault(parent, []).append(stage)
+    expected_fingerprint = interaction_energy_config_fingerprint(
+        cfg,
+        complex_charge=complex_charge,
+        complex_multiplicity=complex_multiplicity,
+        rmsd_dedup=rmsd_cfg,
+    )
+    effective_rmsd_cfg: Mapping[str, Any] = rmsd_cfg or {
+        "rmsd_threshold_angstrom": DEFAULT_RMSD_THRESHOLD_ANGSTROM,
+        "energy_window_kcal": DEFAULT_RMSD_ENERGY_WINDOW_KCAL,
+        "heavy_atoms_only": False,
+    }
+    expected_ranked, _hidden_groups = _dedup_minima(eligible, effective_rmsd_cfg)
+    expected_parent_ids = {entry.stage_id for entry in expected_ranked}
+    expected_route = _normalized_route_line(cfg.get("sp_route_line"))
+    results: list[InteractionEnergyResult] = []
+    for parent in (entry.stage_id for entry in eligible if entry.stage_id in expected_parent_ids):
+        entry = entry_by_stage[parent]
+        parent_stages = stages_by_parent.get(parent, [])
+        blockers: list[str] = []
+        complex_candidates = [
+            stage
+            for stage in parent_stages
+            if _text(_stage_metadata(stage).get("role")) == _ROLE_INTERACTION_COMPLEX
+        ]
+        fragment_candidates: dict[int, list[Mapping[str, Any]]] = {}
+        for stage in parent_stages:
+            meta = _stage_metadata(stage)
+            role = _text(meta.get("role"))
+            if role == _ROLE_INTERACTION_FRAGMENT:
+                index = _meta_int(meta.get("fragment_index"), -1)
+                fragment_candidates.setdefault(index, []).append(stage)
+            elif role != _ROLE_INTERACTION_COMPLEX:
+                blockers.append(f"unexpected interaction stage role {role or 'missing'}")
+
+        if len(complex_candidates) != 1:
+            blockers.append(
+                f"expected exactly one complex single point, found {len(complex_candidates)}"
+            )
+        unexpected_indices = sorted(set(fragment_candidates) - set(range(len(expected_fragments))))
+        if unexpected_indices:
+            blockers.append(f"unexpected fragment indices {unexpected_indices}")
+
+        opt_coordinates = tuple(entry.block.result.coordinates)
+        partition_reason = validate_fragment_partition(
+            [fragment["atom_indices"] for fragment in expected_fragments],
+            len(opt_coordinates),
+        )
+        if partition_reason:
+            blockers.append(partition_reason)
+        state_reason = validate_fragment_electronic_states(
+            [row[0] for row in opt_coordinates], expected_fragments
+        )
+        if state_reason:
+            blockers.append(state_reason)
+
+        observed_blocks: list[SiBlock] = []
+        complex_block: SiBlock | None = None
+        complex_sp_stage_id = ""
+        if len(complex_candidates) == 1:
+            complex_stage = complex_candidates[0]
+            complex_sp_stage_id = _text(complex_stage.get("stage_id"))
+            meta = _stage_metadata(complex_stage)
+            if _text(meta.get(_INTERACTION_CONFIG_FINGERPRINT_KEY)) != expected_fingerprint:
+                blockers.append("complex stage belongs to another interaction config generation")
+            complex_block, reason = _completed_interaction_block(complex_stage)
+            if complex_block is None:
+                blockers.append(f"complex single point unavailable: {reason}")
+            else:
+                observed_blocks.append(complex_block)
+                if not _geometry_matches(entry.block, complex_block):
+                    blockers.append(
+                        "complex single point does not use the optimized complex geometry"
+                    )
+                if (
+                    not complex_block.result.electronic_state_verified
+                    or complex_block.result.charge != complex_charge
+                    or complex_block.result.multiplicity != complex_multiplicity
+                ):
+                    blockers.append(
+                        "complex single-point selected-input route/electronic state does not "
+                        "match the request"
+                    )
+
+        fragment_rows: list[InteractionFragmentEnergy] = []
+        for index, expected in enumerate(expected_fragments):
+            candidates = fragment_candidates.get(index, [])
+            expected_indices = tuple(int(value) for value in expected["atom_indices"])
+            expected_charge = int(expected["charge"])
+            expected_multiplicity = int(expected["multiplicity"])
+            expected_label = _text(expected.get("label")) or f"fragment_{index + 1}"
+            block: SiBlock | None = None
+            stage_id = ""
+            if len(candidates) != 1:
+                blockers.append(
+                    f"fragment {index} expected exactly one stage, found {len(candidates)}"
+                )
+            else:
+                stage = candidates[0]
+                stage_id = _text(stage.get("stage_id"))
+                meta = _stage_metadata(stage)
+                if _text(meta.get(_INTERACTION_CONFIG_FINGERPRINT_KEY)) != expected_fingerprint:
+                    blockers.append(f"fragment {index} belongs to another config generation")
+                if tuple(meta.get("fragment_atom_indices", ())) != expected_indices:
+                    blockers.append(
+                        f"fragment {index} atom-index metadata differs from the request"
+                    )
+                if (
+                    _meta_int(meta.get("fragment_charge"), expected_charge) != expected_charge
+                    or _meta_int(meta.get("fragment_multiplicity"), expected_multiplicity)
+                    != expected_multiplicity
+                ):
+                    blockers.append(f"fragment {index} electronic-state metadata differs")
+                block, reason = _completed_interaction_block(stage)
+                if block is None:
+                    blockers.append(f"fragment {index} single point unavailable: {reason}")
+                else:
+                    observed_blocks.append(block)
+                    expected_coordinates = tuple(
+                        opt_coordinates[position] for position in expected_indices
+                    )
+                    if not _coordinates_match(
+                        expected_coordinates, tuple(block.result.coordinates)
+                    ):
+                        blockers.append(
+                            f"fragment {index} geometry is not the requested complex subset"
+                        )
+                    if (
+                        not block.result.electronic_state_verified
+                        or block.result.charge != expected_charge
+                        or block.result.multiplicity != expected_multiplicity
+                    ):
+                        blockers.append(
+                            f"fragment {index} selected-input route/electronic state does not "
+                            "match the request"
+                        )
+            fragment_rows.append(
+                InteractionFragmentEnergy(
+                    label=expected_label,
+                    stage_id=stage_id,
+                    charge=expected_charge,
+                    multiplicity=expected_multiplicity,
+                    energy_hartree=block.result.energy_hartree if block is not None else None,
+                    atom_indices=expected_indices,
+                    formula=block.result.formula if block is not None else "",
+                )
+            )
+
+        provenance: tuple[str, str, str, str, str] = ("", "", "", "", "")
+        if len(observed_blocks) != 1 + len(expected_fragments):
+            blockers.append("the complete complex/fragment single-point set is not available")
+        elif any(not _has_required_provenance(block) for block in observed_blocks):
+            blockers.append("single-point provenance is incomplete")
+        else:
+            levels = {
+                (
+                    block.result.method,
+                    block.result.basis_set,
+                    block.result.solvation,
+                    block.result.orca_version,
+                    _normalized_route_line(block.result.input_line),
+                )
+                for block in observed_blocks
+            }
+            if len(levels) != 1:
+                blockers.append("complex and fragment single-point levels differ")
+            else:
+                provenance = next(iter(levels))
+                if provenance[4] != expected_route:
+                    blockers.append(
+                        "executed single-point route differs from interaction_energy.sp_route_line"
+                    )
+
+        results.append(
+            compute_interaction_energy(
+                complex_stage_id=complex_sp_stage_id,
+                complex_label=entry.block.name,
+                complex_charge=complex_charge,
+                complex_multiplicity=complex_multiplicity,
+                complex_energy_hartree=(
+                    complex_block.result.energy_hartree if complex_block is not None else None
+                ),
+                fragments=fragment_rows,
+                blocker="; ".join(dict.fromkeys(blockers)),
+                complex_formula=(complex_block.result.formula if complex_block is not None else ""),
+                method=provenance[0],
+                basis_set=provenance[1],
+                solvation=provenance[2],
+                orca_version=provenance[3],
+                input_line=(complex_block.result.input_line if complex_block is not None else ""),
+                parent_stage_id=parent,
+                ghost_counterpoise_applied=False,
+            )
+        )
+    return tuple(results)
 
 
 # ---------------------------------------------------------------------------
@@ -770,6 +1283,18 @@ def _composite_sentence(data: WorkflowSiData) -> str:
     return sentence + "."
 
 
+def _interaction_level_sentences(data: WorkflowSiData) -> list[str]:
+    levels: list[tuple[str, str, str, str]] = []
+    for result in data.interaction_energies:
+        level = (result.method, result.basis_set, result.solvation, result.orca_version)
+        if result.input_line and level not in levels:
+            levels.append(level)
+    return [
+        "Interaction-energy single points were performed " + _level_phrase(*level) + "."
+        for level in levels
+    ]
+
+
 def _documented_blocks(data: WorkflowSiData) -> list[SiBlock]:
     """Every block whose level the SI must document, including matched SPs."""
     blocks: list[SiBlock] = []
@@ -793,9 +1318,14 @@ def _methods_lines(data: WorkflowSiData) -> list[str]:
     composite = _composite_sentence(data)
     if composite:
         lines.append(composite)
+    lines.extend(_interaction_level_sentences(data))
     routes: list[str] = []
     for block in _documented_blocks(data):
         route = block.result.input_line
+        if route and route not in routes:
+            routes.append(route)
+    for result in data.interaction_energies:
+        route = result.input_line
         if route and route not in routes:
             routes.append(route)
     if routes:
@@ -878,6 +1408,13 @@ def _table_lines(data: WorkflowSiData) -> list[str]:
         )
     if convention.note:
         notes.append(f"⚠ {convention.note}.")
+    if data.rmsd_dedup_enabled:
+        merged = sum(group.degeneracy - 1 for group in data.rmsd_groups)
+        if merged > 0:
+            notes.append(
+                f"Minima are RMSD representatives; {merged} degenerate "
+                "minima were merged (per-structure degeneracy in si_data.csv)."
+            )
     if notes:
         lines.append("")
         lines.extend(notes)
@@ -941,6 +1478,47 @@ def _population_lines(data: WorkflowSiData) -> list[str]:
     return lines
 
 
+def _interaction_energy_lines(data: WorkflowSiData) -> list[str]:
+    """Body of ``## Interaction energies`` — [] omits the whole section."""
+    if not data.interaction_energies:
+        return []
+    lines = [
+        "Interaction energies ΔE_int = E(complex) − Σ E(fragment), from same-level "
+        "single points on the complex-optimized geometry.",
+        "No separate Boys–Bernardi ghost-atom counterpoise calculation was performed; "
+        "method-inherent corrections (for example, r2SCAN-3c gCP) remain part of the "
+        "stated method.",
+        "",
+    ]
+    for result in data.interaction_energies:
+        parent = result.parent_stage_id or result.complex_stage_id or "unidentified parent"
+        header = f"{result.complex_label} ({parent})"
+        if result.resolved:
+            assert result.de_int_hartree is not None and result.de_int_kcalmol is not None
+            lines.append(
+                f"{header}: ΔE_int = {result.de_int_hartree:.6f} Eh "
+                f"({result.de_int_kcalmol:+.2f} kcal·mol⁻¹)"
+            )
+        else:
+            lines.append(f"{header}: ΔE_int omitted — {result.note or 'incomplete data'}")
+        if result.input_line:
+            lines.append(f"  executed route: ! {result.input_line} (ORCA {result.orca_version})")
+        if result.complex_stage_id:
+            lines.append(f"  complex single-point stage: {result.complex_stage_id}")
+        for fragment in result.fragments:
+            energy_cell = (
+                f"{fragment.energy_hartree:16.6f} Eh" if _finite(fragment.energy_hartree) else "–"
+            )
+            lines.append(
+                f"  {fragment.label} [atoms {','.join(str(i) for i in fragment.atom_indices)}] "
+                f"(charge {fragment.charge}, multiplicity {fragment.multiplicity}): {energy_cell}"
+            )
+        if result.resolved and result.note:
+            lines.append(f"  ⚠ {result.note}")
+        lines.append("")
+    return lines
+
+
 def render_workflow_si_md(data: WorkflowSiData) -> str:
     lines = [f"# Supporting Information — {data.workflow_id}"]
     meta = [f"template {data.template_name}" if data.template_name else ""]
@@ -966,6 +1544,13 @@ def render_workflow_si_md(data: WorkflowSiData) -> str:
         lines.append("## Boltzmann populations")
         lines.append("")
         lines.extend(population_lines)
+        lines.append("")
+
+    interaction_lines = _interaction_energy_lines(data)
+    if interaction_lines:
+        lines.append("## Interaction energies")
+        lines.append("")
+        lines.extend(interaction_lines)
         lines.append("")
 
     lines.append("## Structures")
@@ -1034,9 +1619,55 @@ _CSV_COLUMNS = [
     "boltzmann_population",
 ]
 
+# Appended to si_data.csv ONLY when rmsd_dedup is enabled, so the file stays
+# byte-identical to the feature-off baseline when it is not.
+_RMSD_DEDUP_CSV_COLUMNS = ["rmsd_group", "degeneracy", "merged_stage_ids"]
+
+_INTERACTION_CSV_COLUMNS = [
+    "parent_stage_id",
+    "complex_stage_id",
+    "complex_label",
+    "complex_charge",
+    "complex_multiplicity",
+    "complex_formula",
+    "E_complex_Eh",
+    "method",
+    "basis_set",
+    "solvation",
+    "orca_version",
+    "route_line",
+    "ghost_counterpoise_applied",
+    "fragment_label",
+    "fragment_stage_id",
+    "fragment_atom_indices",
+    "fragment_formula",
+    "fragment_charge",
+    "fragment_multiplicity",
+    "E_fragment_Eh",
+    "dE_int_Eh",
+    "dE_int_kcalmol",
+    "note",
+]
+
 
 def _finite_or_blank(value: float | None) -> float | str:
     return value if _finite(value) else ""
+
+
+def _spreadsheet_safe_text(value: Any) -> str:
+    """Neutralize formula-leading text when a CSV is opened in a spreadsheet."""
+    text = _text(value)
+    if text and text[0] in {"=", "+", "-", "@"}:
+        return "'" + text
+    return text
+
+
+def _rmsd_dedup_cells(data: WorkflowSiData, entry: WorkflowSiEntry) -> list[Any]:
+    lookup = data.rmsd_group_for(entry.stage_id)
+    if lookup is None:
+        return ["", "", ""]
+    index, group = lookup
+    return [index, group.degeneracy, ";".join(group.merged_stage_ids)]
 
 
 def _si_csv_row(
@@ -1089,14 +1720,63 @@ def _si_csv_row(
 def render_workflow_si_csv(data: WorkflowSiData) -> str:
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
-    writer.writerow(_CSV_COLUMNS)
+    columns = list(_CSV_COLUMNS)
+    if data.rmsd_dedup_enabled:
+        columns = columns + _RMSD_DEDUP_CSV_COLUMNS
+    writer.writerow(columns)
     # Populations align 1:1 with entries; extra blocks (unpaired SPs) are never
     # populated. An empty populations tuple means no minima → all-blank cells.
     populations = _aligned_populations(data)
+
+    def emit(entry: WorkflowSiEntry, population: PopulationRow | None) -> None:
+        row = _si_csv_row(entry, population, data.boltzmann_temperature_k)
+        if data.rmsd_dedup_enabled:
+            row = row + _rmsd_dedup_cells(data, entry)
+        writer.writerow(row)
+
     for entry, population in zip(data.entries, populations, strict=True):
-        writer.writerow(_si_csv_row(entry, population, data.boltzmann_temperature_k))
+        emit(entry, population)
     for entry in data.extra_blocks:
-        writer.writerow(_si_csv_row(entry, None, data.boltzmann_temperature_k))
+        emit(entry, None)
+    return buffer.getvalue()
+
+
+def render_interaction_energy_csv(data: WorkflowSiData) -> str | None:
+    """Machine-readable ΔE_int table; ``None`` when the feature produced nothing."""
+    if not data.interaction_energies:
+        return None
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(_INTERACTION_CSV_COLUMNS)
+    for result in data.interaction_energies:
+        for fragment in result.fragments:
+            writer.writerow(
+                [
+                    _spreadsheet_safe_text(result.parent_stage_id),
+                    _spreadsheet_safe_text(result.complex_stage_id),
+                    _spreadsheet_safe_text(result.complex_label),
+                    result.complex_charge,
+                    result.complex_multiplicity,
+                    _spreadsheet_safe_text(result.complex_formula),
+                    _finite_or_blank(result.complex_energy_hartree),
+                    _spreadsheet_safe_text(result.method),
+                    _spreadsheet_safe_text(result.basis_set),
+                    _spreadsheet_safe_text(result.solvation),
+                    _spreadsheet_safe_text(result.orca_version),
+                    _spreadsheet_safe_text(result.input_line),
+                    "true" if result.ghost_counterpoise_applied else "false",
+                    _spreadsheet_safe_text(fragment.label),
+                    _spreadsheet_safe_text(fragment.stage_id),
+                    _spreadsheet_safe_text(";".join(str(index) for index in fragment.atom_indices)),
+                    _spreadsheet_safe_text(fragment.formula),
+                    fragment.charge,
+                    fragment.multiplicity,
+                    _finite_or_blank(fragment.energy_hartree),
+                    _finite_or_blank(result.de_int_hartree),
+                    _finite_or_blank(result.de_int_kcalmol),
+                    _spreadsheet_safe_text(result.note),
+                ]
+            )
     return buffer.getvalue()
 
 
@@ -1125,49 +1805,276 @@ def _boltzmann_temperature_override(
         return None, "(populations omitted: durable boltzmann_temperature_k is invalid)"
 
 
-def _remove_si_pair(md_path: Path, csv_path: Path) -> None:
-    for path in (md_path, csv_path):
+def _remove_si_artifacts(*paths: Path, raise_on_error: bool = False) -> None:
+    first_error: OSError | None = None
+    for path in paths:
         try:
             path.unlink(missing_ok=True)
-        except OSError:
+        except OSError as exc:
+            first_error = first_error or exc
             logger.warning("Failed to remove inconsistent SI artifact %s", path, exc_info=True)
+    if raise_on_error and first_error is not None:
+        raise first_error
 
 
-def write_workflow_si(workspace_dir: Path, payload: Mapping[str, Any]) -> Path | None:
-    """Write ``workflow_si.md`` + ``si_data.csv``; never raises.
+def _interaction_content_digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _interaction_owner_identity(workflow_id: str) -> str:
+    return hashlib.sha256(workflow_id.encode("utf-8")).hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _interaction_owner_text(
+    workflow_id: str,
+    digest: str,
+    *,
+    pending_digest: str = "-",
+) -> str:
+    return (
+        "orca_auto interaction_energy.csv owner v2\n"
+        f"workflow-sha256:{_interaction_owner_identity(workflow_id)}\n"
+        f"sha256:{digest}\npending-sha256:{pending_digest}\n"
+    )
+
+
+def _read_interaction_owner(owner_path: Path) -> tuple[str, str, str] | None:
+    if not owner_path.is_file() or owner_path.is_symlink():
+        return None
+    try:
+        lines = owner_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    if len(lines) != 4 or lines[0] != "orca_auto interaction_energy.csv owner v2":
+        return None
+    if not lines[2].startswith("sha256:") or not lines[3].startswith("pending-sha256:"):
+        return None
+    digest = lines[2][7:]
+    pending_digest = lines[3][15:]
+    if any(
+        value != "-" and (len(value) != 64 or re.fullmatch(r"[0-9a-f]{64}", value) is None)
+        for value in (digest, pending_digest)
+    ):
+        return None
+    if not lines[1].startswith("workflow-sha256:"):
+        return None
+    identity = lines[1][16:]
+    if len(identity) != 64 or re.fullmatch(r"[0-9a-f]{64}", identity) is None:
+        return None
+    return identity, digest, pending_digest
+
+
+def _owned_interaction_artifact(
+    interaction_path: Path,
+    owner_path: Path,
+    *,
+    workflow_id: str,
+) -> bool:
+    if not interaction_path.is_file() or interaction_path.is_symlink():
+        return False
+    owner = _read_interaction_owner(owner_path)
+    if owner is None or owner[0] != _interaction_owner_identity(workflow_id):
+        return False
+    try:
+        digest = _file_sha256(interaction_path)
+    except OSError:
+        return False
+    return digest in {owner[1], owner[2]} - {"-"}
+
+
+def _write_owned_interaction_artifact(
+    interaction_path: Path,
+    owner_path: Path,
+    *,
+    workflow_id: str,
+    text: str,
+) -> None:
+    desired_digest = _interaction_content_digest(text)
+    current_digest = "-"
+    if interaction_path.exists() or interaction_path.is_symlink():
+        if not _owned_interaction_artifact(interaction_path, owner_path, workflow_id=workflow_id):
+            raise FileExistsError(
+                f"refusing to overwrite unowned or modified interaction-energy artifact: "
+                f"{interaction_path}"
+            )
+        current_digest = _file_sha256(interaction_path)
+    elif owner_path.exists() or owner_path.is_symlink():
+        owner = _read_interaction_owner(owner_path)
+        if owner is None or owner[0] != _interaction_owner_identity(workflow_id):
+            raise FileExistsError(
+                f"interaction-energy artifact owner marker is not owned by {workflow_id}"
+            )
+    atomic_write_text(
+        owner_path,
+        _interaction_owner_text(
+            workflow_id,
+            current_digest,
+            pending_digest=desired_digest,
+        ),
+    )
+    atomic_write_text(interaction_path, text)
+    atomic_write_text(
+        owner_path,
+        _interaction_owner_text(workflow_id, desired_digest),
+    )
+
+
+def _preflight_interaction_artifact_write(
+    interaction_path: Path,
+    owner_path: Path,
+    *,
+    workflow_id: str,
+) -> None:
+    """Reject an unowned/conflicting target before base SI files are touched."""
+    if interaction_path.exists() or interaction_path.is_symlink():
+        if not _owned_interaction_artifact(interaction_path, owner_path, workflow_id=workflow_id):
+            owner = _read_interaction_owner(owner_path)
+            if owner is not None and owner[0] == _interaction_owner_identity(workflow_id):
+                # The data was edited/replaced after publication. Preserve it,
+                # but release this workflow's stale authority before blocking.
+                owner_path.unlink(missing_ok=True)
+            raise FileExistsError(
+                f"refusing to overwrite unowned or modified interaction-energy artifact: "
+                f"{interaction_path}"
+            )
+        return
+    if owner_path.exists() or owner_path.is_symlink():
+        owner = _read_interaction_owner(owner_path)
+        if owner is None or owner[0] != _interaction_owner_identity(workflow_id):
+            raise FileExistsError(
+                f"interaction-energy artifact owner marker is not owned by {workflow_id}"
+            )
+
+
+def _remove_owned_interaction_artifact(
+    interaction_path: Path,
+    owner_path: Path,
+    *,
+    workflow_id: str,
+) -> None:
+    owner = _read_interaction_owner(owner_path)
+    if owner is None or owner[0] != _interaction_owner_identity(workflow_id):
+        return
+    if not interaction_path.exists():
+        owner_path.unlink(missing_ok=True)
+        return
+    if interaction_path.is_symlink() or not _owned_interaction_artifact(
+        interaction_path, owner_path, workflow_id=workflow_id
+    ):
+        # Preserve a user-replaced or edited file, and release the stale marker
+        # so it can never authorize an overwrite.
+        owner_path.unlink(missing_ok=True)
+        return
+    interaction_path.unlink()
+    owner_path.unlink(missing_ok=True)
+
+
+def write_workflow_si(
+    workspace_dir: Path,
+    payload: Mapping[str, Any],
+    *,
+    raise_on_error: bool = False,
+) -> Path | None:
+    """Write ``workflow_si.md`` + ``si_data.csv`` (+ ``interaction_energy.csv``).
 
     A workflow without ORCA stages has no SI: stale files from an earlier
-    template are removed so nothing obsolete can be pasted into a paper.
+    template are removed so nothing obsolete can be pasted into a paper. The
+    interaction-energy CSV is written only when ΔE_int data exists and is removed
+    otherwise so a disabled feature never leaves a stale table behind.
+    Errors are logged and suppressed by default; ``raise_on_error=True`` exposes
+    them to the durable publication retry state machine.
     """
     md_path = workspace_dir / WORKFLOW_SI_MD_FILE
     csv_path = workspace_dir / WORKFLOW_SI_CSV_FILE
+    interaction_path = workspace_dir / INTERACTION_ENERGY_CSV_FILE
+    interaction_owner_path = workspace_dir / INTERACTION_ENERGY_CSV_OWNER_FILE
+    workflow_id = _text(payload.get("workflow_id"))
     try:
+        # Durable corruption is not equivalent to an explicit feature disable.
+        # Validate before touching the last known-good publication.
+        parameters = _request_parameters(payload)
+        normalized_interaction = normalize_interaction_energy_block(
+            parameters.get("interaction_energy")
+        )
+        validate_interaction_energy_state_balance(
+            normalized_interaction,
+            complex_charge=_meta_int(parameters.get("charge"), 0),
+            complex_multiplicity=_meta_int(parameters.get("multiplicity"), 1),
+        )
+        normalized_rmsd = normalize_rmsd_dedup_block(parameters.get("rmsd_dedup"))
+        validate_conformer_postprocessing_template(
+            payload.get("template_name"),
+            interaction_energy=normalized_interaction,
+            rmsd_dedup=normalized_rmsd,
+        )
         override, population_blocker = _boltzmann_temperature_override(payload)
         data = collect_workflow_si_data(
             payload,
             boltzmann_temperature_k=override,
             population_blocker=population_blocker,
+            raise_feature_errors=True,
         )
         if not data.has_orca_stages():
-            md_path.unlink(missing_ok=True)
-            csv_path.unlink(missing_ok=True)
+            _remove_si_artifacts(md_path, csv_path, raise_on_error=raise_on_error)
+            _remove_owned_interaction_artifact(
+                interaction_path,
+                interaction_owner_path,
+                workflow_id=workflow_id,
+            )
             return None
-        # Render both documents before writing either, so a rendering failure
-        # leaves the previous consistent pair on disk instead of a fresh md next
-        # to a stale csv.
+        # Render every document before writing any, so a rendering failure leaves
+        # the previous consistent set on disk instead of a fresh md next to a
+        # stale csv.
         md_text = render_workflow_si_md(data)
         csv_text = render_workflow_si_csv(data)
+        interaction_text = render_interaction_energy_csv(data)
+        if interaction_text is not None:
+            # A deterministic ownership conflict must not replace/delete the
+            # already published base SI before the durable state is blocked.
+            _preflight_interaction_artifact_write(
+                interaction_path,
+                interaction_owner_path,
+                workflow_id=workflow_id,
+            )
         try:
             atomic_write_text(md_path, md_text)
             atomic_write_text(csv_path, csv_text)
+            if interaction_text is not None:
+                _write_owned_interaction_artifact(
+                    interaction_path,
+                    interaction_owner_path,
+                    workflow_id=workflow_id,
+                    text=interaction_text,
+                )
+            else:
+                _remove_owned_interaction_artifact(
+                    interaction_path,
+                    interaction_owner_path,
+                    workflow_id=workflow_id,
+                )
         except Exception:
-            # A caught second-file failure must never leave a fresh MD beside a
-            # stale CSV (or vice versa). Both artifacts are reproducible.
-            _remove_si_pair(md_path, csv_path)
+            # A caught mid-write failure must never leave an inconsistent mix of
+            # fresh and stale SI artifacts. All of them are reproducible.
+            _remove_si_artifacts(md_path, csv_path)
+            _remove_owned_interaction_artifact(
+                interaction_path,
+                interaction_owner_path,
+                workflow_id=workflow_id,
+            )
             raise
         return md_path
     except Exception:  # noqa: BLE001
         logger.warning("Workflow SI generation failed for %s", workspace_dir, exc_info=True)
+        if raise_on_error:
+            raise
         return None
 
 
@@ -1177,6 +2084,7 @@ __all__ = [
     "WorkflowSiData",
     "WorkflowSiEntry",
     "collect_workflow_si_data",
+    "render_interaction_energy_csv",
     "render_workflow_si_csv",
     "render_workflow_si_md",
     "write_workflow_si",

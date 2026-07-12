@@ -246,6 +246,24 @@ def _append_scan_optts_phase(
     )
 
 
+def _append_interaction_energy_phase(
+    payload: dict[str, Any], context: AdvanceContext, _config: WorkflowEngineOptions
+) -> None:
+    """Fan out ΔE_int single points once the conformer optimizations are terminal.
+
+    Runs after the ORCA sync so it sees fresh terminal statuses; the appended
+    single points are submitted by the next advance cycle. The materializer gates
+    on interaction_energy.enabled and is idempotent, so this is a safe no-op for
+    every other workflow and on repeat advances.
+    """
+    if context.sync_only or context.template_name != "conformer_screening":
+        return
+    context.deps.stages.materialization._append_interaction_energy_stages(
+        payload,
+        workspace_dir=context.workspace_dir,
+    )
+
+
 def _advance_phases(config: WorkflowEngineOptions) -> tuple[AdvancePhase, ...]:
     def bind(phase: ConfiguredAdvancePhase) -> AdvancePhase:
         return lambda payload, context: phase(payload, context, config)
@@ -262,6 +280,7 @@ def _advance_phases(config: WorkflowEngineOptions) -> tuple[AdvancePhase, ...]:
         bind(_sync_orca_phase),
         bind(_record_orca_exhaustion_after_sync_phase),
         bind(_append_scan_optts_phase),
+        bind(_append_interaction_energy_phase),
     )
 
 
@@ -298,6 +317,7 @@ __all__ = [
     "ConfiguredAdvancePhase",
     "_advance_phases",
     "_append_conformer_orca_phase",
+    "_append_interaction_energy_phase",
     "_append_reaction_orca_phase",
     "_append_reaction_xtb_phase",
     "_append_scan_optts_phase",

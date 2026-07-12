@@ -85,10 +85,18 @@ def test_cmd_scaffold_is_idempotent_for_conformer_workflow(
     # scaffold advertises it without making it an active manifest key.
     assert "# boltzmann_temperature_k: 298.15" in flow_text
     assert "boltzmann_temperature_k" not in manifest
+    # Interaction energy and RMSD re-dedup are advertised as commented blocks, so
+    # they parse away to nothing until a user opts in.
+    assert "# interaction_energy:" in flow_text
+    assert "# rmsd_dedup:" in flow_text
+    assert "interaction_energy" not in manifest
+    assert "rmsd_dedup" not in manifest
     assert "20 retained CREST conformers" in readme
     assert "`gfn: ff`, `noreftopo: true`, `notopo: true`, or `nocbonds: true`" in readme
     assert "Sampling knobs" in readme
     assert "SI Boltzmann populations" in readme
+    assert "interaction_energy.csv" in readme
+    assert "rmsd_dedup" in readme
     capsys.readouterr()
 
     custom_input = "1\ncustom\nHe 0.0 0.0 0.0\n"

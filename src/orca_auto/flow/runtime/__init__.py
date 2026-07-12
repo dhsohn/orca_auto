@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.admission import active_slot_count
+from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 from orca_auto.core.utils import now_utc_iso, timestamped_token
 
 from ..engine_options import WorkflowEngineOptions
@@ -46,6 +47,7 @@ from .cycle import (
 )
 from .results import (
     TERMINAL_WORKFLOW_STATUSES,
+    si_publish_retry_due,
     workflow_advance_failed_result,
     workflow_advanced_result,
     workflow_needs_terminal_sync,
@@ -184,9 +186,142 @@ def _workflow_needs_terminal_child_sync(
     previous_status: str,
     workspace_dir: str | Path | None = None,
 ) -> bool:
-    return _workflow_is_terminal_status(previous_status) and _workflow_needs_terminal_sync(
-        workspace_dir or record.workspace_dir
+    if not _workflow_is_terminal_status(previous_status):
+        return False
+    resolved_workspace = workspace_dir or record.workspace_dir
+    payload_needs_sync = _workflow_needs_terminal_sync(resolved_workspace)
+    if payload_needs_sync:
+        return True
+    try:
+        payload = load_workflow_payload(resolved_workspace)
+    except (FileNotFoundError, ValueError):
+        payload = {}
+        payload_loaded = False
+    else:
+        payload_loaded = True
+    payload_status = _runtime_common.normalize_text(payload.get("status")).lower()
+    payload_workflow_id = _runtime_common.normalize_text(payload.get("workflow_id"))
+    record_workflow_id = _runtime_common.normalize_text(getattr(record, "workflow_id", ""))
+    payload_metadata = payload.get("metadata")
+    record_metadata = getattr(record, "metadata", {})
+    workflow_error = (
+        payload_metadata.get("workflow_error") if isinstance(payload_metadata, dict) else None
     )
+    identity_error_marked = (
+        isinstance(workflow_error, dict)
+        and workflow_error.get("scope") == "workflow_identity_validation"
+    )
+    authoritative_workflow_id = ""
+    identity_valid = False
+    if payload_loaded:
+        try:
+            authoritative_workflow_id = validate_workflow_workspace_identity(
+                resolved_workspace,
+                payload_workflow_id,
+            )
+        except (OSError, TypeError, ValueError):
+            pass
+        else:
+            identity_valid = True
+    identity_quarantined = (
+        payload_status == "failed" and identity_error_marked and not identity_valid
+    )
+    if payload_loaded:
+        payload_pending = isinstance(payload_metadata, dict) and bool(
+            payload_metadata.get("si_publish_pending")
+        )
+        payload_blocked = isinstance(payload_metadata, dict) and bool(
+            payload_metadata.get("si_publish_blocked")
+        )
+        payload_child_pending = isinstance(payload_metadata, dict) and bool(
+            payload_metadata.get("final_child_sync_pending")
+        )
+        record_pending = isinstance(record_metadata, dict) and bool(
+            record_metadata.get("si_publish_pending")
+        )
+        record_blocked = isinstance(record_metadata, dict) and bool(
+            record_metadata.get("si_publish_blocked")
+        )
+        record_child_pending = isinstance(record_metadata, dict) and bool(
+            record_metadata.get("final_child_sync_pending")
+        )
+        if (
+            payload_pending != record_pending
+            or payload_blocked != record_blocked
+            or payload_child_pending != record_child_pending
+        ):
+            # A durable publication/child-sync checkpoint may have committed
+            # before registry sync. Reconcile the marker drift exactly once;
+            # this does not retry a writer that is blocked or not yet due.
+            return True
+        record_quarantine_marker = isinstance(record_metadata, dict) and bool(
+            record_metadata.get("identity_quarantined")
+            or _runtime_common.normalize_text(
+                record_metadata.get("quarantined_persisted_workflow_id")
+            )
+        )
+        record_reconciliation_marker = isinstance(record_metadata, dict) and bool(
+            record_metadata.get("identity_reconciliation_required")
+            or _runtime_common.normalize_text(
+                record_metadata.get("identity_reconciliation_persisted_workflow_id")
+            )
+        )
+        if not identity_quarantined and (record_quarantine_marker or record_reconciliation_marker):
+            # Identity recovery may have committed in workflow.json before the
+            # normalized registry marker was cleared. Refresh that cached row.
+            return True
+        if identity_error_marked and identity_valid:
+            # The workspace/ID invariant has been restored but the durable
+            # quarantine error survived a prior crash. Clear it in one pass.
+            return True
+    if identity_quarantined:
+        # The first mismatch pass persists the quarantine and active-child sync
+        # is handled above. A crash may still have left the cached row at its old
+        # status or without the normalized quarantine identity; reconcile that
+        # once, then suppress the intentionally irreconcilable durable ID.
+        cached_quarantine_id = (
+            _runtime_common.normalize_text(record_metadata.get("quarantined_persisted_workflow_id"))
+            if isinstance(record_metadata, dict)
+            else ""
+        )
+        try:
+            resolved_path = Path(resolved_workspace).expanduser().resolve()
+            cached_path = Path(getattr(record, "workspace_dir", "")).expanduser().resolve()
+        except OSError:
+            trusted_cached_identity = False
+        else:
+            trusted_cached_identity = (
+                resolved_path == cached_path and resolved_path.name == record_workflow_id
+            )
+        return not (
+            previous_status == "failed"
+            and record_quarantine_marker
+            and cached_quarantine_id == payload_workflow_id
+            and trusted_cached_identity
+        )
+    if not payload_loaded:
+        # No authoritative state exists to reconcile. Keep the cached terminal
+        # row visible and idle; only an explicitly due cached SI retry warrants
+        # another attempt instead of a permanent missing-path hot loop.
+        return isinstance(record_metadata, dict) and si_publish_retry_due(record_metadata)
+    if not identity_valid:
+        # Reindex/cancellation can expose a terminal payload before ordinary
+        # advance has quarantined its directory/ID mismatch. Force that one
+        # validation pass even when cached and persisted IDs agree with each other.
+        return True
+    if authoritative_workflow_id != record_workflow_id:
+        # Upgrade/self-heal legacy cached rows that predate workspace-name
+        # normalization for payloads with an omitted workflow_id.
+        return True
+    if payload_status and payload_status != previous_status:
+        # A workflow mutation may have committed authoritative state and crashed
+        # before registry sync. Force one cycle to reconcile the stale terminal row.
+        return True
+    if payload_workflow_id and record_workflow_id and payload_workflow_id != record_workflow_id:
+        return True
+    if isinstance(payload_metadata, dict) and bool(payload_metadata.get("si_publish_pending")):
+        return si_publish_retry_due(payload_metadata)
+    return isinstance(record_metadata, dict) and si_publish_retry_due(record_metadata)
 
 
 def _start_workflow_cycle(

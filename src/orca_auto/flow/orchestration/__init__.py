@@ -171,6 +171,8 @@ def create_conformer_screening_workflow(
     multiplicity: int = 1,
     boltzmann_temperature_k: float | None = None,
     crest_job_manifest: dict[str, Any] | None = None,
+    interaction_energy: dict[str, Any] | None = None,
+    rmsd_dedup: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return create_conformer_screening_workflow_from_request(
         ConformerScreeningWorkflowRequest(
@@ -187,6 +189,8 @@ def create_conformer_screening_workflow(
             multiplicity=multiplicity,
             boltzmann_temperature_k=boltzmann_temperature_k,
             crest_job_manifest=crest_job_manifest,
+            interaction_energy=interaction_energy,
+            rmsd_dedup=rmsd_dedup,
         )
     )
 

@@ -66,6 +66,7 @@ from orca_auto.core.utils.lock import file_lock
 
 from .._orca_stage_materialization import safe_name
 from ..activity import cancel_activity, clear_activities, list_activities
+from ..manifest import INTERACTION_ENERGY_MAX_FRAGMENTS_CAP
 from .action_registry import ActionKind, ActionRegistry, ActionStore, RegisteredAction
 from .settings import BotSettings
 
@@ -90,8 +91,16 @@ _REMOTE_WORKFLOW_COUNT_LIMITS = {
     "max_candidates": 20,
     "max_scan_extensions": 4,
     "max_xtb_handoff_retries": 4,
+    # Caps the interaction-energy fragment fan-out an uploaded manifest may
+    # declare; the materializer enforces the same ceiling on real stage counts.
+    "max_fragments": INTERACTION_ENERGY_MAX_FRAGMENTS_CAP,
 }
-_REMOTE_ROUTE_LINE_KEYS = frozenset({"route_line", "orca_route_line", "orca_optts_route_line"})
+# sp_route_line carries a real ORCA route into a fragment single point, so it
+# MUST be scanned for forbidden identifiers / '%' / core caps like every other
+# route-line key. Omitting it would be a remote arbitrary-ORCA-feature bypass.
+_REMOTE_ROUTE_LINE_KEYS = frozenset(
+    {"route_line", "orca_route_line", "orca_optts_route_line", "sp_route_line"}
+)
 _REMOTE_DISABLED_CREST_COST_KEYS = frozenset({"mdlen", "len", "tstep", "mddump"})
 _REMOTE_SCAN_POINTS_LIMIT = 200
 _REMOTE_SCAN_COORDINATE_RE = re.compile(
@@ -1698,6 +1707,9 @@ class BotApplication:
         """Reject resource overrides above caps anywhere in an uploaded manifest."""
 
         manifest = BotApplication._uploaded_flow_manifest(job_dir)
+        from ..manifest import normalize_interaction_energy_block
+
+        normalize_interaction_energy_block(manifest.get("interaction_energy"))
         limits = {
             "max_cores": max_cores,
             "max_cores_per_task": max_cores,
@@ -1722,6 +1734,17 @@ class BotApplication:
                         f"flow.yaml crest.{key} is disabled for uploaded workflows; "
                         "CREST runtime and trajectory-volume controls are server-owned"
                     )
+
+        interaction_manifest = manifest.get("interaction_energy")
+        if isinstance(interaction_manifest, dict):
+            remote_priority = interaction_manifest.get("priority")
+            if remote_priority is not None and (
+                not isinstance(remote_priority, str) or remote_priority.strip()
+            ):
+                raise ValueError(
+                    "flow.yaml interaction_energy.priority is disabled for uploaded workflows; "
+                    "queue priority is server-owned"
+                )
 
         def validate_route_line(value: object, *, path: str) -> None:
             from orca_auto.orca.resource_directives import PAL_ROUTE_RE

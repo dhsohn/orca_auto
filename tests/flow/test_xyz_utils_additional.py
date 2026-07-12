@@ -175,3 +175,28 @@ def test_write_orca_ready_xyz_materializes_requested_multiframe_index(tmp_path: 
     assert metadata["requested_frame_index"] == 2
     assert metadata["selected_frame_index"] == 2
     assert metadata["selection_reason"] == "requested_frame"
+
+
+@pytest.mark.parametrize(
+    "comment",
+    [
+        "host\nH 99 98 97",
+        "host\rguest",
+        "host\x00guest",
+        "host\u0085H 99 98 97",
+        "host\u2028H 99 98 97",
+        "host\u2029H 99 98 97",
+    ],
+)
+def test_write_fragment_xyz_rejects_multiline_or_control_comments(
+    tmp_path: Path, comment: str
+) -> None:
+    target = tmp_path / "fragment.xyz"
+    with pytest.raises(ValueError, match="comment"):
+        xyz_utils.write_fragment_xyz(
+            coordinates=[("Cl", 0.0, 0.0, 0.0)],
+            atom_indices=[0],
+            target_path=target,
+            comment=comment,
+        )
+    assert not target.exists()

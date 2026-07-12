@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from orca_auto.core.statuses import (
     STATUS_RUNNING,
     STATUS_SUBMITTED,
 )
+from orca_auto.core.utils import parse_iso_utc
 
 from . import _common as _runtime_common
 from .models import WorkflowAdvanceResult
@@ -29,6 +31,17 @@ TERMINAL_WORKFLOW_STATUSES = frozenset(
 ACTIVE_TERMINAL_SYNC_STATUSES = frozenset(
     {STATUS_QUEUED, STATUS_RUNNING, STATUS_SUBMITTED, STATUS_CANCEL_REQUESTED}
 )
+
+
+def si_publish_retry_due(
+    metadata: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> bool:
+    if bool(metadata.get("si_publish_blocked")) or not bool(metadata.get("si_publish_pending")):
+        return False
+    retry_at = parse_iso_utc(metadata.get("si_publish_next_retry_at"))
+    return retry_at is None or retry_at <= (now or datetime.now(UTC))
 
 
 def workflow_advance_failed_result(
@@ -96,6 +109,8 @@ def workflow_needs_terminal_sync(
     metadata = payload.get("metadata")
     if isinstance(metadata, dict) and bool(metadata.get("final_child_sync_pending")):
         return True
+    if isinstance(metadata, dict) and si_publish_retry_due(metadata):
+        return True
     for raw_stage in payload.get("stages", []):
         if not isinstance(raw_stage, dict):
             continue
@@ -113,6 +128,7 @@ def workflow_needs_terminal_sync(
 __all__ = [
     "ACTIVE_TERMINAL_SYNC_STATUSES",
     "TERMINAL_WORKFLOW_STATUSES",
+    "si_publish_retry_due",
     "workflow_advance_failed_result",
     "workflow_advanced_result",
     "workflow_needs_terminal_sync",

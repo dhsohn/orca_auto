@@ -307,7 +307,29 @@ ORCA analyzer 상태:
 - `max_scan_extensions`
 - `orca_optts_route_line`
 - `boltzmann_temperature_k`
+- `rmsd_dedup.enabled`
+- `rmsd_dedup.rmsd_threshold_angstrom`
+- `rmsd_dedup.energy_window_kcal`
+- `rmsd_dedup.heavy_atoms_only`
+- `interaction_energy.enabled`
+- `interaction_energy.sp_route_line`
+- `interaction_energy.max_fragments`
+- `interaction_energy.priority`
+- `interaction_energy.max_cores`
+- `interaction_energy.max_memory_gb`
+- `interaction_energy.fragments[].atom_indices`
+- `interaction_energy.fragments[].charge`
+- `interaction_energy.fragments[].multiplicity`
+- `interaction_energy.fragments[].label`
 - `allow_external_inputs`
+
+`rmsd_dedup`과 `interaction_energy` 블록은 strict schema를 사용합니다. 알 수 없는 키,
+잘못된 boolean, 정수가 아닌 integer 필드, 문자열이 아닌 route, 여러 줄/제어문자/비인쇄
+문자가 포함된 route 또는 label은 admission에서 거부합니다. fragment label은 최대 80자입니다.
+활성 interaction-energy 블록은 fragment 2–8개를 요구하고 각 multiplicity는 `[1, 100]`
+정수여야 하며, `sp_route_line`은 순수 single-point 계산만 기술해야 합니다. fragment 인덱스는
+모든 입력 원자를 gap 없이 정적으로 완전 분할해야 합니다. 원격 workflow 업로드에서는 서버가
+소유하는 `interaction_energy.priority`를 설정할 수 없습니다.
 
 워크플로우 런타임 산출물:
 
@@ -335,13 +357,77 @@ ORCA analyzer 상태:
   정확히 같아야 합니다.
 - Population은 `formula|charge|multiplicity` 그룹별로 독립 정규화합니다. 이 키는 연결성
   정체성이 아니라 화학량론적 proxy입니다. 보존된 minimum마다 통계 가중치 1을 쓰며,
-  대칭성/축퇴도 보정이나 post-DFT 중복 제거를 하지 않습니다. `si_data.csv`는 `warnings`
+  대칭성/축퇴도 보정을 하지 않습니다. `rmsd_dedup`이 켜지면 대표 선택 전에 전체 pre-dedup
+  ensemble의 완전성과 provenance를 검사합니다. `degeneracy`는 workflow 중복 수이며 통계/
+  대칭 가중치가 아닙니다. `si_data.csv`는 `warnings`
   뒤에 5개 컬럼(`cluster_key`, `rel_E_kcalmol`, `rel_G_kcalmol`, `boltzmann_T_K`,
   `boltzmann_population`)을 append하며 기존 컬럼의 이름·순서·인덱스는 그대로입니다.
   Markdown은 population을 백분율로 표시하지만 `boltzmann_population`은 `[0, 1]` 범위의
   분율입니다. CSV의 `rel_E_kcalmol`과 `rel_G_kcalmol`은 공통 에너지 규약 아래 해당
   population 그룹의 최저 E와 G를 각각 기준으로 한 그룹 로컬 상대값이며, 그룹 전체를
   가로지르는 전역 기준값이 아닙니다.
+- `rmsd_dedup`은 기본적으로 모든 원자를 비교하며 수렴한 minimum을 대상으로 합니다. 알려진
+  `Nimag`가 0이 아니면 제외하지만 frequency 결과가 없는 Opt-only 후보는 허용합니다. 후보의
+  선택 원자 원소 서열, formula, charge, multiplicity와
+  최적화 provenance(method, basis, solvation, ORCA version, route)가 정확히 같아야 합니다.
+  proper-rotation RMSD와 정렬 뒤 원자별 최대 변위가 모두
+  `rmsd_threshold_angstrom`(기본 0.25)보다 작고 유효 에너지 차도
+  `energy_window_kcal`(기본 0.1)보다 작을 때만 병합합니다. 완전하고 exact provenance가
+  균일한 SP refinement가 있으면 그 에너지를, 아니면 최적화 에너지를 사용합니다. 제한 없는
+  최적 정렬이 전역 reflection을 선호하는 nondegenerate 쌍은 분리합니다. 그래도 이는 기하/에너지
+  heuristic이므로 가까운 서로 다른 minimum, 특히 국소 입체화학 variant를 병합할 수 있습니다.
+  `heavy_atoms_only: true`는 H/D/T를 무시해 그 위험을 키웁니다. 그룹을 화학적으로 동일하다고
+  보기 전에 `merged_stage_ids`를 검토해야 합니다. 활성화 시에만 `si_data.csv`에
+  `rmsd_group`, `degeneracy`, `merged_stage_ids`를 append합니다.
+- `interaction_energy`는 `conformer_screening`에서만 지원하며 complex 전체를 겹침 없이 완전
+  분할하는 fragment 2–8개를 요구합니다. fragment 전하 합은 complex 전하와 같아야 하고,
+  fragment multiplicity들은 일반화된 각운동량 spin-coupling manifold에서 complex
+  multiplicity로 결합할 수 있어야 합니다. 각 fragment에서 `N_e = ΣZ − charge`는 0 이상이고
+  `2S = multiplicity − 1`은 `N_e` 이하이면서 같은 parity여야 합니다. `sp_route_line`은 순수 single-point route이며
+  optimization, frequency, gradient, IRC, MD, NEB, GOAT, scan job directive는 거부합니다.
+- fan-out은 terminal ensemble의 유효한 최적화 minimum 중 RMSD 대표만 대상으로 합니다.
+  partial-success로 종료된 ensemble은 완료·수렴한 후보에서 알려진 saddle을 제외한 subset을
+  사용할 수 있습니다. 대표 에너지 규약도 같은 eligible set에서 정하므로 unusable/saddle
+  stage가 parent를 바꿀 수 없습니다.
+  공개 dedup 보고가 꺼져도 fan-out 제한에는 같은 all-atom 기본 grouping을 쓰지만 SI 구조
+  표 자체는 dedup하지 않습니다. interaction generation fingerprint에는 이 RMSD grouping
+  설정도 포함됩니다.
+- 확정된 interaction energy는 현재 config generation의 completed complex SP 정확히 1개와
+  각 예상 fragment index의 completed SP 정확히 1개를 요구합니다. 선택 입력과 파싱 출력의
+  route 및 전자상태가 일치해야 하고, 실제 method, basis, solvation, ORCA version, 최적화
+  complex 기하, 인덱스별 fragment subset, 공통 에너지 규약도 모두 같아야 합니다. 결측·중복·
+  실행 중·stale generation·혼합 수준·잘못된 상태/기하·비유한 자료는 부분합을 쓰지 않고
+  ΔE_int을 생략합니다.
+- `interaction_energy.csv`는 기능이 활성화되고 보고할 행이 있을 때만 존재합니다. 23개 컬럼은
+  `parent_stage_id`, `complex_stage_id`, `complex_label`, `complex_charge`,
+  `complex_multiplicity`, `complex_formula`, `E_complex_Eh`, `method`, `basis_set`,
+  `solvation`, `orca_version`, `route_line`, `ghost_counterpoise_applied`, `fragment_label`,
+  `fragment_stage_id`, `fragment_atom_indices`, `fragment_formula`, `fragment_charge`,
+  `fragment_multiplicity`, `E_fragment_Eh`, `dE_int_Eh`, `dE_int_kcalmol`, `note`입니다.
+  `ghost_counterpoise_applied=false`는 별도 Boys–Bernardi ghost-atom counterpoise 계산을 하지
+  않았다는 뜻이며, r2SCAN-3c gCP 같은 method 내재 보정이 없다는 뜻은 아닙니다. spreadsheet
+  formula로 해석될 수 있는 선행 문자는 안전하게 중화합니다.
+- 인접 owner marker는 생성 CSV를 hash한 workflow identity에 연결하고 current/pending content
+  digest를 기록합니다. digest-bound 소유권 로직은 create, replace, delete 도중 중단돼도 안전하게
+  복구합니다. marker가 없거나 foreign/malformed이거나 digest가 다르면 덮어쓰기·삭제 권한이
+  없으며, 사용자가 수정한 내용은 보존하고 소유권을 해제합니다. 업로드 archive는 두 생성
+  파일을 포함할 수 없습니다. 소유권 충돌은 last-good base SI를 교체하기 전에 검사합니다.
+- restart는 interaction SP route, fragment별 전자상태, interaction별 자원, generation
+  fingerprint를 보존합니다. fan-out 뒤에는 interaction 설정과 RMSD grouping 설정을 바꿀 수
+  없고, interaction fan-out이 남아 있는 동안 원래 primary stage를 다시 여는 것도 거부합니다.
+  기능을 끄면 저장된 interaction stage를 retire합니다. 활성 config를 받기 전에는 복사해 둔
+  durable input XYZ를 다시 읽어 완전 partition과 fragment별 전자상태도 재검증합니다.
+- SI publish는 workflow와 registry에 `si_publish_pending`, `si_publish_attempts`,
+  `si_publish_next_retry_at`, `si_publish_blocked`, generation, error metadata로 checkpoint됩니다.
+  SI writer의 일시적 실패는 30/60/120/240초 지수 backoff를 쓰고 5번째 실패 뒤 block합니다.
+  결정적 충돌은 즉시 block합니다. writer 전 workflow/registry/report checkpoint 실패는 이 writer
+  budget을 소모하지 않으며, 성공적으로 저장된 pending marker는 인프라 복구를 위해 즉시 due로
+  남습니다. Registry clear는 workflow→registry lock 순서를 지키고 authoritative identity/status를
+  다시 확인하므로 publication pending·blocked, final-child-sync pending, identity quarantine,
+  authoritative active record는 stale로 지울 수 없습니다. 격리된 payload의 관측 durable ID는
+  증거로 보존하고, registry의 단일 row는 신뢰할 수 있는 workspace 이름으로 key를 지정하면서
+  관측 ID를 metadata에 기록합니다. 원인을 고친 뒤 운영자는
+  `orca_auto run-dir <workflow_dir> --force`로 blocked publication을 다시 arm할 수 있습니다.
 - Population 온도는 파싱된 thermochemistry 온도입니다. 선택적
   `boltzmann_temperature_k` 매니페스트 키는 admission에서 유한한 양수인지 검증해 내구성
   워크플로우 요청에 저장하는 pin입니다. 모든 주파수 작업의 파싱 온도와 0.01 K 이내로

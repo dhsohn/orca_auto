@@ -315,7 +315,8 @@ Workflow notes:
 - Populations are normalized independently within each
   `formula|charge|multiplicity` group. This is a stoichiometric proxy rather than
   a connectivity identity: each retained minimum has statistical weight one,
-  with no symmetry/degeneracy correction or post-DFT deduplication. The parsed
+  with no symmetry/degeneracy correction. Optional post-DFT deduplication validates
+  the full ensemble first, and its duplicate count is not a statistical weight. The parsed
   thermochemistry temperature is used unless `boltzmann_temperature_k` pins it.
   That optional key must be finite and strictly positive, is persisted in the
   durable request at admission, and must agree with every parsed temperature
@@ -329,6 +330,86 @@ Workflow notes:
   corresponding fraction in `[0, 1]`. CSV `rel_E_kcalmol` and
   `rel_G_kcalmol` use the lowest E and G inside that row's population group as
   their local baselines under the shared convention.
+- `conformer_screening` accepts an optional `rmsd_dedup:` block that groups
+  optimized minima and keeps the lowest-energy representative. Converged
+  candidates are eligible when `Nimag` is absent or zero; a known nonzero value
+  excludes them. Comparable candidates also need identical selected-atom element
+  sequences, formula/electronic state, and exact optimization provenance.
+  Both the proper-rotation RMSD and maximum aligned-atom displacement must be
+  below `rmsd_threshold_angstrom` (default 0.25), and their effective energies
+  must differ by less than `energy_window_kcal` (default 0.1). A complete uniform
+  exact-provenance SP refinement supplies that energy; otherwise optimization
+  energy is used. A nondegenerate pair whose best unconstrained alignment
+  prefers a global reflection is retained separately. This is still a heuristic
+  and can merge nearby distinct or local stereochemical minima. All atoms are compared by
+  default; `heavy_atoms_only: true` ignores H/D/T and increases that risk. Inspect
+  `merged_stage_ids` before treating members as chemically identical. Only when
+  enabled, `si_data.csv` appends `rmsd_group`, `degeneracy`, and
+  `merged_stage_ids`; population completeness is checked before dedup, and
+  `degeneracy` is a workflow duplicate count, not a statistical/symmetry weight.
+- `conformer_screening` accepts an optional `interaction_energy:` block that
+  reports ΔE_int = E(complex) − Σ E(fragment_i). It requires 2–8 fragments with
+  safe single-line labels and integer multiplicities in `[1, 100]`.
+  `{atom_indices (0-based), charge, multiplicity, label}` entries must form a
+  static, disjoint, exhaustive partition of every input atom. Fragment charges
+  must sum to the complex charge, and their spins must be able to couple to the
+  complex multiplicity under the generalized angular-momentum coupling manifold.
+  Each atom-derived electron count `N_e = ΣZ − charge` must be nonnegative;
+  `multiplicity − 1` must be no greater than `N_e` and have the same parity.
+  `sp_route_line` (default `! r2scan-3c TightSCF`) must be a pure single-point
+  route; job directives for optimization, frequency, gradients, IRC, MD, NEB,
+  GOAT, or scans are rejected.
+- The complex and each fragment run a fresh single point on the complex-optimized
+  geometry. Fan-out uses only valid terminal optimized minima and the RMSD
+  representatives. A terminal partial-success ensemble may use its completed,
+  converged subset after excluding known saddles. The same eligible set determines
+  the representative energy convention, so an unusable/saddle member cannot
+  switch the parent. When public dedup reporting is off, the all-atom
+  default grouping still bounds fan-out while the SI structure table stays
+  undeduplicated. The interaction generation fingerprint includes these RMSD
+  settings.
+- A resolved result needs exactly one completed current-generation complex SP
+  and one completed fragment SP per expected index. Selected input and parsed
+  output route/state, executed method/basis/solvation/ORCA version, optimized
+  complex geometry, indexed fragment subsets, and energy convention must match.
+  Missing, duplicate, running, stale, mixed, wrong-state/wrong-geometry, or
+  non-finite data omits ΔE_int rather than using a partial sum.
+- `interaction_energy.csv` has one row per complex/fragment pair and these 23
+  columns: `parent_stage_id`, `complex_stage_id`, `complex_label`,
+  `complex_charge`, `complex_multiplicity`, `complex_formula`, `E_complex_Eh`,
+  `method`, `basis_set`, `solvation`, `orca_version`, `route_line`,
+  `ghost_counterpoise_applied`, `fragment_label`, `fragment_stage_id`,
+  `fragment_atom_indices`, `fragment_formula`, `fragment_charge`,
+  `fragment_multiplicity`, `E_fragment_Eh`, `dE_int_Eh`, `dE_int_kcalmol`, and
+  `note`. `ghost_counterpoise_applied=false` means no separate Boys–Bernardi
+  ghost-atom calculation was run; method-inherent corrections such as r2SCAN-3c
+  gCP are unaffected. Spreadsheet-formula-leading text is neutralized.
+- The generated CSV uses an adjacent v2 owner marker with a hashed workflow
+  identity and current/pending content digests. Digest-bound ownership logic
+  recovers interrupted creates, replacements, and deletes. Foreign, malformed, missing,
+  or digest-mismatched ownership never authorizes overwrite/deletion; user-edited
+  content is preserved. Ownership is preflighted before replacing last-good base
+  SI files. Uploaded archives cannot supply the CSV or marker, and
+  remote uploads cannot set server-owned `interaction_energy.priority`.
+- Restart preserves the interaction route, per-fragment state/resources, and
+  generation fingerprint. Interaction and RMSD grouping settings are immutable
+  after fan-out, and an original primary stage cannot be reopened while that
+  fan-out exists; disabling the feature retires its interaction stages. Restart
+  reloads the copied durable input XYZ to revalidate the full partition and each
+  fragment electron state before accepting an enabled config.
+- SI publication persists pending, attempt count, next-retry time, blocked state,
+  generation, and error in workflow/registry metadata. Transient failures retry
+  after 30/60/120/240-second exponential delays and block after the fifth failed
+  writer attempt; deterministic conflicts block immediately. Pre-writer
+  workflow/registry/report checkpoint failures do not consume this writer budget;
+  any persisted pending marker remains immediately due for infrastructure
+  reconciliation. Registry clear follows workflow-then-registry lock order and
+  rechecks authoritative workflow identity/status; publication-pending,
+  publication-blocked, final-child-sync-pending, identity-quarantined, or
+  authoritatively active records are not cleared as stale. Quarantined durable IDs
+  remain in the payload as evidence while the registry uses the trusted workspace
+  name as its unique key and records the observed ID in metadata. Fix the cause, then run
+  `orca_auto run-dir <workflow_dir> --force` to re-arm a blocked publication.
 - Set `runs_root` in `orca_auto.yaml` (or `workflow_root`/`workflow.root` in
   `flow.yaml`) before submitting workflow directories.
 - Public workflow `run-dir` reads workflow type and XYZ inputs from `flow.yaml`

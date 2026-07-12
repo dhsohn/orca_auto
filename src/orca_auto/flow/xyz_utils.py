@@ -259,6 +259,44 @@ def choose_orca_geometry_frame(
     return frame, metadata
 
 
+def write_fragment_xyz(
+    *,
+    coordinates: Sequence[tuple[str, float, float, float]],
+    atom_indices: Sequence[int],
+    target_path: str | Path,
+    comment: str = "",
+) -> None:
+    """Write a single-frame XYZ holding a fragment sliced from a full geometry.
+
+    ``atom_indices`` are 0-based positions into ``coordinates`` (the complex's
+    optimized Cartesian coordinates). Indices are validated fail-closed: an
+    out-of-range or duplicate index, or an empty selection, raises ``ValueError``
+    rather than emitting a malformed geometry.
+    """
+    if not isinstance(comment, str) or (comment and not comment.isprintable()):
+        raise ValueError("fragment XYZ comment must be a single line")
+    natoms = len(coordinates)
+    selected = list(atom_indices)
+    if not selected:
+        raise ValueError("fragment atom_indices is empty")
+    seen: set[int] = set()
+    for index in selected:
+        if not isinstance(index, int) or isinstance(index, bool):
+            raise ValueError(f"fragment atom index {index!r} is not an integer")
+        if index < 0 or index >= natoms:
+            raise ValueError(f"fragment atom index {index} is outside 0..{natoms - 1}")
+        if index in seen:
+            raise ValueError(f"fragment atom index {index} is duplicated")
+        seen.add(index)
+    lines = [str(len(selected)), comment]
+    for index in selected:
+        element, x, y, z = coordinates[index]
+        lines.append(f"{str(element):<2} {float(x):18.10f} {float(y):18.10f} {float(z):18.10f}")
+    target = Path(target_path).expanduser().resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_orca_ready_xyz(
     *,
     source_path: str | Path,
@@ -288,5 +326,6 @@ __all__ = [
     "load_xyz_frames",
     "load_xyz_atom_sequence",
     "parse_xyz_file",
+    "write_fragment_xyz",
     "write_orca_ready_xyz",
 ]

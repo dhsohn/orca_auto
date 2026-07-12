@@ -58,6 +58,17 @@ def record_is_clearable_terminal(
     target_statuses = {
         normalize_text(status).lower() for status in statuses if normalize_text(status)
     }
+    metadata = getattr(record, "metadata", {})
+    if isinstance(metadata, dict) and bool(
+        metadata.get("si_publish_pending")
+        or metadata.get("si_publish_blocked")
+        or metadata.get("final_child_sync_pending")
+        or metadata.get("identity_quarantined")
+        or metadata.get("identity_reconciliation_required")
+        or metadata.get("quarantined_persisted_workflow_id")
+        or metadata.get("identity_reconciliation_persisted_workflow_id")
+    ):
+        return False
     return normalize_text(record.status).lower() in target_statuses
 
 

@@ -364,6 +364,7 @@ def _stage_materialization_defaults(
     del overrides
     from orca_auto.flow.orchestration.materialization import (
         append_crest_orca_stages_impl,
+        append_interaction_energy_stages_impl,
         append_reaction_orca_stages_impl,
         append_reaction_xtb_stages_impl,
         append_scan_optts_stages_impl,
@@ -376,6 +377,7 @@ def _stage_materialization_defaults(
             "_append_reaction_orca_stages": append_reaction_orca_stages_impl,
             "_append_reaction_xtb_stages": append_reaction_xtb_stages_impl,
             "_append_scan_optts_stages": append_scan_optts_stages_impl,
+            "_append_interaction_energy_stages": append_interaction_energy_stages_impl,
         },
     )
 

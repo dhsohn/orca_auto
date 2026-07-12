@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 from orca_auto.core.statuses import (
     STATUS_CANCEL_FAILED,
     STATUS_CANCEL_REQUESTED,
@@ -229,6 +230,36 @@ def cancel_materialized_workflow(
         lock_context = o.persistence.acquire_workflow_lock(workspace_dir, timeout_seconds=5.0)
         with lock_context:
             payload = o.persistence.load_workflow_payload(workspace_dir)
+            identity_error = ""
+            try:
+                validate_workflow_workspace_identity(
+                    workspace_dir,
+                    payload.get("workflow_id"),
+                )
+            except ValueError as exc:
+                identity_error = str(exc)
+                metadata = payload.get("metadata")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                    payload["metadata"] = metadata
+                metadata["workflow_error"] = {
+                    "status": STATUS_FAILED,
+                    "scope": "workflow_identity_validation",
+                    "reason": identity_error,
+                    "message": identity_error,
+                    "detected_at": o.persistence.now_utc_iso(),
+                }
+            else:
+                metadata = payload.get("metadata")
+                workflow_error = (
+                    metadata.get("workflow_error") if isinstance(metadata, dict) else None
+                )
+                if (
+                    isinstance(metadata, dict)
+                    and isinstance(workflow_error, dict)
+                    and workflow_error.get("scope") == "workflow_identity_validation"
+                ):
+                    metadata.pop("workflow_error", None)
             config = engine_options or WorkflowEngineOptions.from_values(
                 crest_config=crest_config,
                 xtb_config=xtb_config,
@@ -240,17 +271,24 @@ def cancel_materialized_workflow(
             failed = cancellation["failed"]
 
             payload_view = WorkflowPayloadView(payload)
-            payload_view.set_status(
-                STATUS_CANCEL_REQUESTED
-                if any(item.get("status") == STATUS_CANCEL_REQUESTED for item in cancelled)
-                else STATUS_CANCEL_FAILED
-                if failed
-                else STATUS_CANCELLED
-            )
+            if identity_error:
+                payload_view.set_status(STATUS_FAILED)
+            else:
+                payload_view.set_status(
+                    STATUS_CANCEL_REQUESTED
+                    if any(item.get("status") == STATUS_CANCEL_REQUESTED for item in cancelled)
+                    else STATUS_CANCEL_FAILED
+                    if failed
+                    else STATUS_CANCELLED
+                )
             o.persistence.write_workflow_payload(workspace_dir, payload)
             o.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
             return {
-                "workflow_id": payload.get("workflow_id", ""),
+                "workflow_id": (
+                    workspace_dir.name
+                    if identity_error
+                    else payload.get("workflow_id") or workspace_dir.name
+                ),
                 "workspace_dir": str(workspace_dir),
                 "status": payload_view.raw.get("status", ""),
                 "cancelled": cancelled,

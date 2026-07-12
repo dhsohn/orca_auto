@@ -9,6 +9,7 @@ import pytest
 
 from orca_auto import cli_handlers as cli_run_dir
 from orca_auto.flow.cli import run_dir as flow_cli
+from orca_auto.flow.manifest import interaction_energy_config_fingerprint
 from orca_auto.flow.restart import restart_failed_workflow
 
 
@@ -150,6 +151,412 @@ def test_restart_failed_workflow_resets_failed_and_cancelled_stages(tmp_path: Pa
     assert registry[0]["status"] == "planned"
     journal = (root / "workflow_registry.journal.jsonl").read_text(encoding="utf-8")
     assert "workflow_restarted" in journal
+
+
+def test_restart_preserves_interaction_fragment_sp_route_state_and_resources(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_ie_restart"
+    reaction_dir = workspace / "03_orca" / "fragment"
+    reaction_dir.mkdir(parents=True)
+    (workspace / "input.xyz").write_text("2\ncomplex\nCl 0 0 0\nNa 2.5 0 0\n", encoding="utf-8")
+    (reaction_dir / "input.xyz").write_text("1\nfragment\nCl 0 0 0\n", encoding="utf-8")
+    (reaction_dir / "input.inp").write_text(
+        "! r2scan-3c TightSCF\n* xyzfile -1 1 input.xyz\n", encoding="utf-8"
+    )
+    interaction = {
+        "enabled": True,
+        "sp_route_line": "! r2scan-3c TightSCF",
+        "max_fragments": 2,
+        "priority": 4,
+        "max_cores": 3,
+        "max_memory_gb": 9,
+        "fragments": [
+            {"atom_indices": [0], "charge": -1, "multiplicity": 1, "label": "anion"},
+            {"atom_indices": [1], "charge": 1, "multiplicity": 1, "label": "cation"},
+        ],
+    }
+    rmsd_dedup = {
+        "enabled": True,
+        "rmsd_threshold_angstrom": 0.18,
+        "energy_window_kcal": 0.25,
+        "heavy_atoms_only": False,
+    }
+    fingerprint = interaction_energy_config_fingerprint(
+        interaction,
+        complex_charge=0,
+        complex_multiplicity=1,
+        rmsd_dedup=rmsd_dedup,
+    )
+    (workspace / "flow.yaml").write_text(
+        "\n".join(
+            [
+                "workflow_type: conformer_screening",
+                "orca:",
+                "  route_line: '! r2scan-3c Opt TightSCF'",
+                "  charge: 0",
+                "  multiplicity: 1",
+                "interaction_energy:",
+                "  enabled: true",
+                "  sp_route_line: '! r2scan-3c TightSCF'",
+                "  max_fragments: 2",
+                "  priority: 4",
+                "  max_cores: 3",
+                "  max_memory_gb: 9",
+                "  fragments:",
+                "    - atom_indices: [0]",
+                "      charge: -1",
+                "      multiplicity: 1",
+                "      label: anion",
+                "    - atom_indices: [1]",
+                "      charge: 1",
+                "      multiplicity: 1",
+                "      label: cation",
+                "rmsd_dedup:",
+                "  enabled: true",
+                "  rmsd_threshold_angstrom: 0.18",
+                "  energy_window_kcal: 0.25",
+                "  heavy_atoms_only: false",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stage = _failed_orca_restart_stage("ie_fragment", reaction_dir)
+    stage["metadata"] = {
+        "role": "interaction_fragment",
+        "parent_stage_id": "orca_conf_01",
+        "fragment_index": 0,
+        "fragment_label": "anion",
+        "fragment_charge": -1,
+        "fragment_multiplicity": 1,
+        "fragment_atom_indices": [0],
+        "interaction_config_fingerprint": fingerprint,
+    }
+    _write_workflow(
+        workspace,
+        {
+            "workflow_id": "wf_ie_restart",
+            "template_name": "conformer_screening",
+            "status": "failed",
+            "stages": [stage],
+            "metadata": {
+                "request": {
+                    "parameters": {
+                        "charge": 0,
+                        "multiplicity": 1,
+                        "interaction_energy": interaction,
+                        "rmsd_dedup": rmsd_dedup,
+                    }
+                }
+            },
+        },
+    )
+
+    restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    restarted = saved["stages"][0]
+    restarted_dir = workspace / "03_orca" / "fragment.restart-001"
+    restarted_text = (restarted_dir / "input.inp").read_text(encoding="utf-8")
+    assert "! r2scan-3c TightSCF" in restarted_text
+    assert " Opt " not in restarted_text
+    assert "* xyzfile -1 1 input.xyz" in restarted_text
+    assert "nprocs 3" in restarted_text
+    assert "%maxcore 3072" in restarted_text
+    assert restarted["task"]["resource_request"] == {"max_cores": 3, "max_memory_gb": 9}
+    assert restarted["task"]["enqueue_payload"]["priority"] == 4
+
+
+@pytest.mark.parametrize("template_name", ["reaction_ts_search", "scan_ts_search"])
+@pytest.mark.parametrize("feature", ["interaction_energy", "rmsd_dedup"])
+def test_restart_rejects_conformer_postprocessing_on_unsupported_template(
+    tmp_path: Path,
+    template_name: str,
+    feature: str,
+) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / f"wf_{template_name}_{feature}"
+    workspace.mkdir(parents=True)
+    if feature == "interaction_energy":
+        feature_yaml = """
+interaction_energy:
+  enabled: true
+  fragments:
+    - atom_indices: [0]
+      charge: 0
+      multiplicity: 2
+      label: atom_a
+    - atom_indices: [1]
+      charge: 0
+      multiplicity: 2
+      label: atom_b
+"""
+    else:
+        feature_yaml = """
+rmsd_dedup:
+  enabled: true
+"""
+    (workspace / "flow.yaml").write_text(
+        f"workflow_type: {template_name}\n{feature_yaml.lstrip()}", encoding="utf-8"
+    )
+    original: dict[str, object] = {
+        "workflow_id": workspace.name,
+        "template_name": template_name,
+        "status": "failed",
+        "stages": [],
+        "metadata": {"request": {"parameters": {"charge": 0, "multiplicity": 1}}},
+    }
+    _write_workflow(workspace, original)
+
+    with pytest.raises(ValueError, match="supported only for conformer_screening"):
+        restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    assert json.loads((workspace / "workflow.json").read_text(encoding="utf-8")) == original
+
+
+def test_restart_disabling_interaction_energy_retires_existing_stages(tmp_path: Path) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_ie_disable"
+    workspace.mkdir(parents=True)
+    (workspace / "flow.yaml").write_text(
+        "workflow_type: conformer_screening\ninteraction_energy:\n  enabled: false\n",
+        encoding="utf-8",
+    )
+    interaction = {
+        "enabled": True,
+        "sp_route_line": "! HF TightSCF",
+        "max_fragments": 1,
+        "fragments": [{"atom_indices": [0], "charge": 0, "multiplicity": 1, "label": "fragment"}],
+    }
+    _write_workflow(
+        workspace,
+        {
+            "workflow_id": "wf_ie_disable",
+            "template_name": "conformer_screening",
+            "status": "failed",
+            "stages": [
+                {
+                    "stage_id": "ie_failed",
+                    "status": "failed",
+                    "task": {"engine": "orca", "status": "failed", "payload": {}},
+                    "metadata": {"role": "interaction_fragment"},
+                }
+            ],
+            "metadata": {"request": {"parameters": {"interaction_energy": interaction}}},
+        },
+    )
+
+    result = restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    assert result["restarted_count"] == 1
+    assert result["restarted_stages"][0]["action"] == "retired_disabled_interaction_energy"
+    assert saved["stages"] == []
+    assert "interaction_energy" not in saved["metadata"]["request"]["parameters"]
+
+
+def test_restart_rejects_rmsd_grouping_change_after_interaction_fanout(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_ie_rmsd_change"
+    workspace.mkdir(parents=True)
+    (workspace / "input.xyz").write_text("2\ncomplex\nC 0 0 0\nO 1.2 0 0\n", encoding="utf-8")
+    interaction = {
+        "enabled": True,
+        "sp_route_line": "! HF TightSCF",
+        "max_fragments": 2,
+        "fragments": [
+            {"atom_indices": [0], "charge": 0, "multiplicity": 1, "label": "a"},
+            {"atom_indices": [1], "charge": 0, "multiplicity": 1, "label": "b"},
+        ],
+    }
+    old_rmsd = {
+        "enabled": True,
+        "rmsd_threshold_angstrom": 0.1,
+        "energy_window_kcal": 0.01,
+        "heavy_atoms_only": False,
+    }
+    fingerprint = interaction_energy_config_fingerprint(
+        interaction,
+        complex_charge=0,
+        complex_multiplicity=1,
+        rmsd_dedup=old_rmsd,
+    )
+    (workspace / "flow.yaml").write_text(
+        "\n".join(
+            [
+                "workflow_type: conformer_screening",
+                "rmsd_dedup:",
+                "  enabled: true",
+                "  rmsd_threshold_angstrom: 0.25",
+                "  energy_window_kcal: 1.0",
+                "  heavy_atoms_only: false",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stage: dict[str, object] = {
+        "stage_id": "ie_failed",
+        "stage_kind": "orca_stage",
+        "status": "failed",
+        "task": {"engine": "orca", "status": "failed", "payload": {}},
+        "metadata": {
+            "role": "interaction_fragment",
+            "interaction_config_fingerprint": fingerprint,
+        },
+    }
+    payload: dict[str, object] = {
+        "workflow_id": "wf_ie_rmsd_change",
+        "template_name": "conformer_screening",
+        "status": "failed",
+        "stages": [stage],
+        "metadata": {
+            "request": {
+                "parameters": {
+                    "charge": 0,
+                    "multiplicity": 1,
+                    "interaction_energy": interaction,
+                    "rmsd_dedup": old_rmsd,
+                }
+            }
+        },
+    }
+    _write_workflow(workspace, payload)
+
+    with pytest.raises(ValueError, match="scientific settings cannot change"):
+        restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+    assert json.loads((workspace / "workflow.json").read_text(encoding="utf-8")) == payload
+
+
+def test_restart_rejects_primary_orca_reopen_after_interaction_fanout(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_ie_primary_restart"
+    payload: dict[str, object] = {
+        "workflow_id": "wf_ie_primary_restart",
+        "template_name": "conformer_screening",
+        "status": "failed",
+        "stages": [
+            {
+                "stage_id": "orca_conf_failed",
+                "stage_kind": "orca_stage",
+                "status": "failed",
+                "task": {"engine": "orca", "status": "failed", "payload": {}},
+                "metadata": {},
+            },
+            {
+                "stage_id": "ie_existing",
+                "stage_kind": "orca_stage",
+                "status": "completed",
+                "task": {"engine": "orca", "status": "completed", "payload": {}},
+                "metadata": {"role": "interaction_complex_sp"},
+            },
+        ],
+        "metadata": {},
+    }
+    _write_workflow(workspace, payload)
+    with pytest.raises(ValueError, match="cannot restart primary ORCA stages"):
+        restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+    assert json.loads((workspace / "workflow.json").read_text(encoding="utf-8")) == payload
+
+
+def test_force_restart_rearms_blocked_si_publication_without_failed_stage(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_si_blocked"
+    _write_workflow(
+        workspace,
+        {
+            "workflow_id": "wf_si_blocked",
+            "template_name": "conformer_screening",
+            "status": "completed",
+            "stages": [],
+            "metadata": {
+                "si_publish_blocked": True,
+                "si_publish_attempts": 5,
+                "si_publish_error": "PermissionError: denied",
+            },
+        },
+    )
+    result = restart_failed_workflow(
+        workspace_dir=workspace,
+        workflow_root=root,
+        force=True,
+    )
+    saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    assert result["restarted_stages"][0]["action"] == "rearmed_si_publication"
+    assert saved["status"] == "planned"
+    assert saved["metadata"]["si_publish_pending"] is True
+    assert "si_publish_blocked" not in saved["metadata"]
+    assert "si_publish_attempts" not in saved["metadata"]
+
+
+@pytest.mark.parametrize(("fragment_multiplicity", "accepted"), [(1, False), (2, True)])
+def test_force_restart_validates_fragment_electron_state_against_copied_input(
+    tmp_path: Path,
+    fragment_multiplicity: int,
+    accepted: bool,
+) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / f"wf_restart_h2_m{fragment_multiplicity}"
+    copied_input = workspace / "inputs" / "molecule.xyz"
+    copied_input.parent.mkdir(parents=True)
+    copied_input.write_text("2\nH2\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+    (workspace / "flow.yaml").write_text(
+        "\n".join(
+            [
+                "workflow_type: conformer_screening",
+                "interaction_energy:",
+                "  enabled: true",
+                "  fragments:",
+                "    - atom_indices: [0]",
+                "      charge: 0",
+                f"      multiplicity: {fragment_multiplicity}",
+                "      label: h_a",
+                "    - atom_indices: [1]",
+                "      charge: 0",
+                f"      multiplicity: {fragment_multiplicity}",
+                "      label: h_b",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    original: dict[str, object] = {
+        "workflow_id": workspace.name,
+        "template_name": "conformer_screening",
+        "status": "completed",
+        "stages": [],
+        "metadata": {
+            "si_publish_blocked": True,
+            "si_publish_attempts": 5,
+            "request": {
+                "parameters": {"charge": 0, "multiplicity": 1},
+                "source_artifacts": [
+                    {"kind": "input_xyz", "path": str(copied_input), "selected": True}
+                ],
+            },
+        },
+    }
+    _write_workflow(workspace, original)
+
+    if not accepted:
+        with pytest.raises(ValueError, match="wrong parity"):
+            restart_failed_workflow(workspace_dir=workspace, workflow_root=root, force=True)
+        assert json.loads((workspace / "workflow.json").read_text(encoding="utf-8")) == original
+        return
+
+    result = restart_failed_workflow(workspace_dir=workspace, workflow_root=root, force=True)
+    saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    assert result["restarted_stages"][0]["action"] == "rearmed_si_publication"
+    fragments = saved["metadata"]["request"]["parameters"]["interaction_energy"]["fragments"]
+    assert [fragment["multiplicity"] for fragment in fragments] == [2, 2]
 
 
 def test_restart_failed_workflow_rejects_active_sibling_before_cancellation_finishes(

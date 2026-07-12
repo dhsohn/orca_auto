@@ -179,6 +179,48 @@ def test_create_conformer_screening_workflow_rejects_invalid_positive_fields(
         )
 
 
+def test_conformer_factory_rejects_fragment_state_with_wrong_electron_parity(
+    tmp_path: Path,
+) -> None:
+    input_xyz = tmp_path / "hydrogen.xyz"
+    _write_xyz(input_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
+    interaction = {
+        "enabled": True,
+        "fragments": [
+            {"atom_indices": [0], "charge": 0, "multiplicity": 1, "label": "h_a"},
+            {"atom_indices": [1], "charge": 0, "multiplicity": 1, "label": "h_b"},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="wrong parity"):
+        orchestration.create_conformer_screening_workflow(
+            input_xyz=str(input_xyz),
+            workflow_root=tmp_path,
+            interaction_energy=interaction,
+        )
+
+
+def test_conformer_factory_accepts_spin_coupled_hydrogen_doublets(tmp_path: Path) -> None:
+    input_xyz = tmp_path / "hydrogen.xyz"
+    _write_xyz(input_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
+    interaction = {
+        "enabled": True,
+        "fragments": [
+            {"atom_indices": [0], "charge": 0, "multiplicity": 2, "label": "h_a"},
+            {"atom_indices": [1], "charge": 0, "multiplicity": 2, "label": "h_b"},
+        ],
+    }
+
+    payload = orchestration.create_conformer_screening_workflow(
+        input_xyz=str(input_xyz),
+        workflow_root=tmp_path,
+        interaction_energy=interaction,
+    )
+
+    fragments = payload["metadata"]["request"]["parameters"]["interaction_energy"]["fragments"]
+    assert [fragment["multiplicity"] for fragment in fragments] == [2, 2]
+
+
 def test_conformer_request_preserves_existing_positional_manifest_slot() -> None:
     manifest = {"ewin": 8}
 
