@@ -222,7 +222,11 @@ orca_auto bot run              # foreground Telegram/Discord gateway
 ```
 
 `queue list` prints a compact, terminal-width-aware table; workflow children are grouped
-and indented under their parent. The selected bot mirrors the same application surface
+under their parent. On an interactive terminal it adds a styled summary band (per-status
+counts), box-drawing tree connectors for workflow children, and a status-colored left
+rail; the `--watch` view adds a spinner, a clock, a live system CPU/RAM/load gauge, and
+per-running-job CPU/RAM for every engine (sampled from `/proc`, no new dependency). Piped,
+`--json`, and `--no-color` output stays plain and byte-stable for scripts. The selected bot mirrors the same application surface
 (Telegram `/list`; Discord `!list`, with matching cancel/help commands) and uses
 provider-native buttons. Discord can optionally accept a compressed run-dir
 (`.zip`/`.tar.gz`) attached to `!run`: the archive is safe-extracted under `runs_root`

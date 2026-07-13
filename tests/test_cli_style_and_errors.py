@@ -21,6 +21,7 @@ def test_activity_status_icon_known_and_fallback() -> None:
     assert activity_status_icon("cancelled") == "⛔"
     assert activity_status_icon("failed") == "❌"
     assert activity_status_icon("submission_failed") == "❌"
+    assert activity_status_icon("repair_blocked") == "❌"
     assert activity_status_icon("submitted") == "📤"
     assert activity_status_icon("mystery") == "•"
     assert activity_status_icon(None) == "•"
@@ -62,6 +63,8 @@ def test_paint_noop_when_disabled_and_wraps_when_enabled() -> None:
 def test_status_color_mapping() -> None:
     assert cli_style.status_color("completed") == cli_style.GREEN
     assert cli_style.status_color("failed") == cli_style.RED
+    assert cli_style.status_color("repair_blocked") == cli_style.RED
+    assert cli_style.status_color("error") == cli_style.RED
     assert cli_style.status_color("running") == cli_style.BLUE
     assert cli_style.status_color("unknown-status") is None
 

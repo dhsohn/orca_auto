@@ -183,6 +183,76 @@ def test_queue_table_lines_shrinks_detail_before_id(monkeypatch) -> None:
     assert "orca_keep_this_id" in "\n".join(lines)
 
 
+def test_tree_prefixes_marks_last_child_and_continuations() -> None:
+    assert rendering._tree_prefixes([0, 1, 1]) == ["", "├─ ", "└─ "]
+    assert rendering._tree_prefixes([0, 1, 1, 0, 1]) == ["", "├─ ", "└─ ", "", "└─ "]
+    # A deeper branch keeps a continuation bar while an ancestor still has a
+    # later sibling, and drops it once the ancestor is the last child.
+    assert rendering._tree_prefixes([0, 1, 2, 2, 1]) == [
+        "",
+        "├─ ",
+        "│  ├─ ",
+        "│  └─ ",
+        "└─ ",
+    ]
+
+
+def test_queue_table_lines_tree_glyphs_are_opt_in(monkeypatch) -> None:
+    monkeypatch.setattr(
+        rendering,
+        "_queue_table_now",
+        lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=UTC),
+    )
+    rows: list[tuple[int, dict[str, object]]] = [
+        (
+            0,
+            {
+                "activity_id": "wf_1",
+                "kind": "workflow",
+                "status": "running",
+                "label": "screen",
+                "submitted_at": "2026-05-20T00:00:00+00:00",
+            },
+        ),
+        (
+            1,
+            {
+                "activity_id": "orca_1",
+                "kind": "job",
+                "engine": "orca",
+                "status": "completed",
+                "label": "opt",
+                "updated_at": "2026-05-20T00:00:00+00:00",
+                "metadata": {"workflow_id": "wf_1"},
+            },
+        ),
+        (
+            1,
+            {
+                "activity_id": "orca_2",
+                "kind": "job",
+                "engine": "orca",
+                "status": "running",
+                "label": "freq",
+                "updated_at": "2026-05-20T00:00:00+00:00",
+                "metadata": {"workflow_id": "wf_1"},
+            },
+        ),
+    ]
+
+    joined_default = "\n".join(rendering.queue_table_lines(rows))
+    tree_lines = rendering.queue_table_lines(rows, use_tree_glyphs=True)
+    joined_tree = "\n".join(tree_lines)
+
+    # Opt-in only: the default stays on plain indentation so messaging/piped
+    # surfaces are unaffected.
+    assert "├─" not in joined_default and "└─" not in joined_default
+    assert "├─" in joined_tree and "└─" in joined_tree
+    # The wider connector prefix must not break column alignment.
+    widths = [rendering._queue_display_width(line) for line in tree_lines]
+    assert len(set(widths)) == 1
+
+
 def test_terminal_max_width_returns_none_without_terminal(monkeypatch) -> None:
     monkeypatch.delenv("COLUMNS", raising=False)
     monkeypatch.setattr(

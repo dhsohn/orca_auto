@@ -14,6 +14,7 @@ STATUS_PARTIALLY_SUBMITTED = "partially_submitted"
 STATUS_PENDING = "pending"
 STATUS_PLANNED = "planned"
 STATUS_QUEUED = "queued"
+STATUS_REPAIR_BLOCKED = "repair_blocked"
 STATUS_RETRYING = "retrying"
 STATUS_RUNNING = "running"
 STATUS_SKIPPED = "skipped"
@@ -158,6 +159,7 @@ __all__ = [
     "STATUS_PENDING",
     "STATUS_PLANNED",
     "STATUS_QUEUED",
+    "STATUS_REPAIR_BLOCKED",
     "STATUS_RETRYING",
     "STATUS_RUNNING",
     "STATUS_SKIPPED",

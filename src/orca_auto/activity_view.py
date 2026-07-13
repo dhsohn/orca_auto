@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.admission import AdmissionStoreCorruptError, active_slot_count
+from orca_auto.core.admission import AdmissionStoreCorruptError, read_active_slot_count
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.paths.workflow import (
     WORKFLOW_STAGE_DIRNAMES,
@@ -176,7 +176,7 @@ def count_global_active_simulations(
         admission_root = runtime_paths.get("admission_root")
         if isinstance(admission_root, Path):
             try:
-                return max(0, int(active_slot_count(admission_root)))
+                return max(0, int(read_active_slot_count(admission_root)))
             except (AdmissionStoreCorruptError, OSError) as exc:
                 LOGGER.debug(
                     "active_simulation_slot_count_failed: admission_root=%s error=%s",

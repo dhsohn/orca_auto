@@ -72,7 +72,10 @@ _ACTIVITY_STATUS_COLORS = {
     _s.STATUS_FAILED: RED,
     _s.STATUS_CANCEL_FAILED: RED,
     _s.STATUS_SUBMISSION_FAILED: RED,
+    _s.STATUS_REPAIR_BLOCKED: RED,
     _s.STATUS_CANCELLED: MAGENTA,
+    # ORCA run results can report this bare failure variant.
+    "error": RED,
 }
 
 
@@ -103,6 +106,10 @@ def sgr(*codes: str) -> str:
 
 # Public alias so callers can append a reset after a raw :func:`sgr` opener.
 RESET = _RESET
+
+# Braille spinner frames for the ``queue list --watch`` banner. Kept here so any
+# animated CLI affordance shares one definition.
+SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 
 def label(text: str, *, stream: IO[str] | None = None) -> str:
@@ -136,6 +143,7 @@ __all__ = [
     "MAGENTA",
     "RED",
     "RESET",
+    "SPINNER_FRAMES",
     "YELLOW",
     "clear_screen",
     "color_enabled",

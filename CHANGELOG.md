@@ -8,6 +8,32 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Added
+
+- `queue list --watch` now shows a live system resource line on an interactive
+  terminal — CPU utilization, RAM used/total, and load average with colored
+  block-bar gauges — sampled from Linux `/proc` between refreshes with no new
+  dependency. It fails closed: on a host without a readable `/proc` (or for any
+  field that cannot be read) the line is simply omitted, and it never appears in
+  piped, `--json`, or `--no-color` output.
+- `queue list --watch` also annotates each running job with its own CPU% and
+  resident memory on an interactive terminal, across every engine (ORCA, internal
+  xTB/CREST, and standalone xTB-MD). Attribution reuses the engine PID/PGID the
+  worker already records in the durable admission slot — validated against its
+  boot id and process start ticks so a recycled PID/PGID is never mis-attributed —
+  and aggregates `/proc` by process group. Same fail-closed, terminal-only rules
+  as the system line.
+
+### Changed
+
+- `queue list` now renders a styled view on an interactive terminal: a summary
+  band with per-status counts, box-drawing tree connectors (`├─`/`└─`) for
+  workflow children, and a status-colored left rail, plus a spinner and clock in
+  the `--watch` banner. The styling is terminal-only — piped output, `--json`,
+  `NO_COLOR`, and `--no-color` keep the previous plain, byte-stable table
+  (including the `active_simulations:` line and plain indentation), and the
+  messenger `/list` view is unchanged.
+
 ## [0.2.0] - 2026-07-13
 
 Second tagged release. This release adds standalone xTB molecular dynamics,

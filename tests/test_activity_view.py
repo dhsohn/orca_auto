@@ -127,7 +127,7 @@ def test_count_global_active_simulations_uses_orca_runtime_paths(
         return {"admission_root": admission_root}
 
     monkeypatch.setattr(activity_view, "engine_runtime_paths", fake_engine_runtime_paths)
-    monkeypatch.setattr(activity_view, "active_slot_count", lambda root: 5)
+    monkeypatch.setattr(activity_view, "read_active_slot_count", lambda root: 5)
 
     assert (
         activity_view.count_global_active_simulations(

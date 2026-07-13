@@ -593,13 +593,30 @@ ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 자식 작업은 잡음을 
 뷰에서 숨겨지지만 `--engine ... --kind job` 필터와 `--json`으로는 여전히 확인할 수
 있습니다. 최상위 ORCA 작업은 최상위 항목으로 남습니다. `active_simulations` 줄은 공유
 `scheduler.max_active_simulations` 슬롯을 소비하는 현재 실행 중 시뮬레이션만 셉니다.
+
+대화형 터미널에서는 텍스트 뷰가 스타일링됩니다. plain `active_simulations:` 줄 대신
+상태별 개수(running·queued·done·failed·cancelled) 요약 밴드가 표시되고, 워크플로우
+자식은 들여쓰기 대신 박스 드로잉 트리 커넥터(`├─`/`└─`)로 그려지며, 각 행에 상태색
+좌측 레일이 붙습니다. `queue list --watch` 배너에는 스피너와 시각이 표시됩니다. 이
+연출은 터미널 전용이며, 파이프 출력·`--json`·`NO_COLOR`·`--no-color`에서는 plain·바이트
+안정 표(`active_simulations:` 줄과 plain 들여쓰기 포함)를 유지하므로 스크립트와 메신저
+`/list` 뷰는 영향받지 않습니다.
+
 선택된 봇의 list 명령(Telegram `/list`, Discord `!list`)은 동일한 표 레이아웃과 기본 워크플로우-자식 가시성
 정책을 렌더링하되, 좁은 모바일 화면에서 각 행이 한 줄에 맞도록 `ID` 컬럼만 생략합니다.
 그 액션 메시지는 활동별 취소 버튼과 새로고침·"완료 정리" 버튼(후자는 `/list clear`와
 동등)을 제공합니다.
 
 `queue list --watch`는 중단할 때까지 목록을 계속 갱신합니다. `--interval`로 새로고침
-초를 설정합니다(기본 2.0). `queue list clear`는 통합 목록에서 완료/실패/취소 항목을
+초를 설정합니다(기본 2.0). 대화형 터미널에서는 watch 뷰가 표 위에 실시간 시스템 자원
+라인 — CPU 사용률, RAM 사용/전체, load average를 색상 블록 바 게이지로 — 를 함께
+그립니다. Linux `/proc`를 새로고침 간에 샘플링하며 의존성 추가는 없습니다. fail-closed
+동작이라 `/proc`를 읽을 수 없는 호스트(또는 개별 필드 읽기 실패)에서는 라인을 생략하고,
+파이프·`--no-color` 출력에는 절대 나타나지 않습니다(CPU 사용률은 delta 측정이라 두 번째
+새로고침부터 표시). 실행 중 각 작업에는 전 엔진(ORCA·내부 xTB/CREST·독립 xTB-MD)에 걸쳐
+작업별 CPU%·상주 메모리가 함께 표시됩니다. 워커가 admission slot에 durable하게 기록한
+engine PID/PGID를 boot id·process start ticks로 검증(재사용 id 오귀속 방지)해 `/proc`를
+프로세스 그룹 단위로 집계합니다. `queue list clear`는 통합 목록에서 완료/실패/취소 항목을
 정리합니다.
 
 ### 7.5 CLI 출력 및 전역 플래그
