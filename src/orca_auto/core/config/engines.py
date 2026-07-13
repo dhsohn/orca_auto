@@ -257,6 +257,8 @@ def _required_workflow_root(raw: dict[str, Any], path: Path) -> str:
 def _runtime_config_from_scheduler(
     scheduler_raw: dict[str, Any],
     workflow_root: str,
+    *,
+    engine_admission_limit: int | None = None,
 ) -> CommonRuntimeConfig:
     scheduler = scheduler_runtime_settings(
         scheduler_raw,
@@ -269,6 +271,7 @@ def _runtime_config_from_scheduler(
         max_concurrent=scheduler.max_active,
         admission_root=scheduler.admission_root,
         admission_limit=scheduler.admission_limit,
+        engine_admission_limit=engine_admission_limit,
     )
 
 
@@ -364,6 +367,46 @@ def load_xtb_config(config_path: str | None = None) -> WorkflowEngineAppConfig:
         paths_cls=WorkflowEnginePathsConfig,
         behavior_cls=WorkflowEngineBehaviorConfig,
         app_config_cls=WorkflowEngineAppConfig,
+    )
+
+
+def load_xtb_md_config(config_path: str | None = None) -> WorkflowEngineAppConfig:
+    path = Path(config_path or default_shared_config_path()).expanduser().resolve()
+    raw = _load_config_mapping(path)
+    validate_shared_config_sections(raw)
+
+    scheduler_raw = mapping_section(raw, "scheduler")
+    workflow_raw = mapping_section(raw, "workflow")
+    workflow_paths_raw = mapping_section(workflow_raw, "paths")
+    resources_raw = mapping_section(raw, "resources")
+    messenger_raw = messenger_mapping_from_root(raw)
+    runs_root = _required_workflow_root(raw, path)
+    xtb_executable = _validate_workflow_engine_executable(
+        as_str(workflow_paths_raw.get("xtb_executable")),
+        executable_key="xtb_executable",
+        display_name="xTB",
+    )
+    if "max_active_xtb_md" in scheduler_raw:
+        engine_admission_limit = explicit_positive_int(
+            scheduler_raw.get("max_active_xtb_md"),
+            field_name="scheduler.max_active_xtb_md",
+        )
+    else:
+        engine_admission_limit = 1
+    messenger = messenger_config_from_mapping(messenger_raw)
+
+    return WorkflowEngineAppConfig(
+        runtime=_runtime_config_from_scheduler(
+            scheduler_raw,
+            runs_root,
+            engine_admission_limit=engine_admission_limit,
+        ),
+        workflow_root="",
+        paths=WorkflowEnginePathsConfig(xtb_executable=xtb_executable),
+        behavior=WorkflowEngineBehaviorConfig(),
+        resources=_resource_config(resources_raw),
+        telegram=messenger.telegram,
+        messenger=messenger,
     )
 
 

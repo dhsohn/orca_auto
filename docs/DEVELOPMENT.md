@@ -7,13 +7,15 @@ This repository now uses a monorepo-style package layout under `src/orca_auto`.
 ## Canonical Import Rules
 
 - ORCA implementation: `orca_auto.orca.*`
+- Standalone xTB-MD implementation: `orca_auto.xtb_md.*`
 - Shared infrastructure: `orca_auto.core.*`
 - Workflow orchestration: `orca_auto.flow.*`
 - Engine packages: `orca_auto.flow.engines.xtb.*`, `orca_auto.flow.engines.crest.*`
 
 New code, tests, and docs should import from `orca_auto.*`.
 
-The three packages form enforced layers — `flow` → `orca` → `core` — checked
+The domain packages form enforced layers — `flow` → `orca` → `core`, with
+`xtb_md` depending only on `core` — checked
 by import-linter (`lint-imports`, configured in `pyproject.toml` and run by
 `scripts/check.sh`, so also by CI). Higher layers may import lower ones; the
 reverse fails the build. Cross-layer engine wiring goes through the lazy
@@ -27,6 +29,7 @@ string module registries (`core/engines/registry.py`,
 ├── src/
 │   └── orca_auto/
 │       ├── core/
+│       ├── xtb_md/
 │       ├── flow/
 │       │   └── engines/
 │       │       ├── xtb/
@@ -34,6 +37,7 @@ string module registries (`core/engines/registry.py`,
 │       └── orca/
 ├── tests/
 │   ├── core/
+│   ├── xtb_md/
 │   ├── flow/
 │   ├── integration/
 │   └── flow/engines/
@@ -79,6 +83,7 @@ Keep imports under `orca_auto.*`; avoid top-level aliases or alternate shims.
 
 - `tests/flow/`: flow unit and contract tests
 - `tests/flow/engines/`: internal xTB/CREST engine tests
+- `tests/xtb_md/`: standalone xTB-MD manifest, runner, and artifact tests
 - `tests/integration/`: in-repo integration smoke tests
 - `tests/core/`: shared infrastructure tests
 - top-level `tests/test_*.py`: ORCA-focused regression tests
@@ -128,15 +133,21 @@ implementation-coupled tests. Treat it as an audit report, not a failure gate.
 - Shared engine definitions, queue workers, child entrypoints, artifacts, and
   registry helpers live under `orca_auto.core.engines`
 - Internal xTB/CREST implementations live under `orca_auto.flow.engines`
+- Standalone xTB-MD lives under `orca_auto.xtb_md`, imports `core` only, and
+  must not reuse workflow xTB execution semantics
 - Keep top-level alias packages, console-script aliases, and alternate runtime
   readers out of the codebase
 
 ## Internal Engine Workers
 
-xTB, CREST, and ORCA all execute through the common engine runtime. Engine-local
+xTB-MD, xTB, CREST, and ORCA all execute through the common engine runtime. Engine-local
 packages should expose an `EngineDefinition`; parent workers use
 `EngineQueueWorker`, and children use
-`python -m orca_auto.core.engines.worker_child --engine <orca|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`.
+`python -m orca_auto.core.engines.worker_child --engine <orca|xtb_md|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`.
+
+Standalone xTB-MD exposes only the shared `run-dir` and queue/activity surface.
+Keep its single-attempt, no-retry/no-resume contract in `orca_auto.xtb_md`; do
+not add a direct execution CLI or import ORCA/workflow packages there.
 
 ORCA-specific state, retry, input selection, reports, and the downstream
 `reaction_dir` contract stay in `orca_auto.orca`. The

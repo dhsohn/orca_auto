@@ -157,6 +157,18 @@ def test_build_parser_parses_unified_run_dir_commands() -> None:
     assert workflow_args.func is cli_run_dir.cmd_run_dir
 
 
+def test_run_dir_help_renders_engine_directives(capsys: pytest.CaptureFixture[str]) -> None:
+    parser = unified_cli.build_parser()
+
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["run-dir", "--help"])
+
+    assert exc_info.value.code == 0
+    rendered = capsys.readouterr().out
+    assert "%pal/%maxcore" in rendered
+    assert "standalone xTB-MD" in rendered
+
+
 @pytest.mark.parametrize(
     "removed_option",
     ["--workflow-type", "--workflow-root", "--reactant-xyz", "--product-xyz", "--input-xyz"],

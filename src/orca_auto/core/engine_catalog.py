@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final, Literal
 
-WorkflowStageRole = Literal["shared-root", "workflow-stage"]
+ActivityRole = Literal["engine-queue", "orca-run"]
+WorkflowStageRole = Literal["none", "shared-root", "workflow-stage"]
 SupervisionRole = Literal["default", "with-workflow"]
 
 
@@ -21,8 +22,9 @@ class EngineCatalogEntry:
     admission_source: str
     app_id: str
     source_id: str
+    activity_role: ActivityRole
     workflow_stage_role: WorkflowStageRole
-    workflow_stage_dirname: str
+    workflow_stage_dirname: str | None
     workflow_stage_aliases: tuple[str, ...]
     managed_admission: bool
     default_supervision_role: SupervisionRole
@@ -39,6 +41,7 @@ _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
         admission_source="orca_auto.orca.queue_worker",
         app_id="orca_auto_orca",
         source_id="orca_auto_orca",
+        activity_role="orca-run",
         workflow_stage_role="shared-root",
         workflow_stage_dirname="03_orca",
         workflow_stage_aliases=("02_orca",),
@@ -49,18 +52,36 @@ _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
         task_kinds=("orca_run_inp",),
     ),
     EngineCatalogEntry(
+        engine_id="xtb_md",
+        definition_module="orca_auto.xtb_md.engine",
+        worker_module="orca_auto.core.engines.queue_worker",
+        admission_source="orca_auto.xtb_md.queue_runtime",
+        app_id="orca_auto_xtb_md",
+        source_id="orca_auto_xtb_md",
+        activity_role="engine-queue",
+        workflow_stage_role="none",
+        workflow_stage_dirname=None,
+        workflow_stage_aliases=(),
+        managed_admission=True,
+        default_supervision_role="default",
+        supervision_order=1,
+        activity_order=3,
+        task_kinds=("xtb_md",),
+    ),
+    EngineCatalogEntry(
         engine_id="xtb",
         definition_module="orca_auto.flow.engines.xtb.engine",
         worker_module="orca_auto.core.engines.queue_worker",
         admission_source="orca_auto.flow.engines.xtb.queue_worker",
         app_id="orca_auto_xtb",
         source_id="orca_auto_xtb",
+        activity_role="engine-queue",
         workflow_stage_role="workflow-stage",
         workflow_stage_dirname="02_xtb",
         workflow_stage_aliases=(),
         managed_admission=True,
         default_supervision_role="with-workflow",
-        supervision_order=2,
+        supervision_order=3,
         activity_order=1,
         task_kinds=("xtb_path_search", "xtb_opt", "xtb_sp", "xtb_hess", "xtb_ranking"),
     ),
@@ -71,12 +92,13 @@ _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
         admission_source="orca_auto.flow.engines.crest.queue_worker",
         app_id="orca_auto_crest",
         source_id="orca_auto_crest",
+        activity_role="engine-queue",
         workflow_stage_role="workflow-stage",
         workflow_stage_dirname="01_crest",
         workflow_stage_aliases=(),
         managed_admission=True,
         default_supervision_role="with-workflow",
-        supervision_order=1,
+        supervision_order=2,
         activity_order=0,
         task_kinds=("crest_conformer_search",),
     ),
@@ -145,6 +167,7 @@ def activity_engine_entries() -> tuple[EngineCatalogEntry, ...]:
 
 
 __all__ = [
+    "ActivityRole",
     "EngineCatalogEntry",
     "SupervisionRole",
     "WorkflowStageRole",

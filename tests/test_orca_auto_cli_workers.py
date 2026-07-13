@@ -110,9 +110,10 @@ def test_build_worker_specs_defaults_to_engine_workers(monkeypatch: pytest.Monke
         SimpleNamespace(app=None, workflow_root=None, orca_auto_config=None)
     )
 
-    assert [spec.app for spec in specs] == ["orca"]
+    assert [spec.app for spec in specs] == ["orca", "xtb_md"]
     assert str(specs[0].argv[2]) == "orca_auto.core.engines.queue_worker"
     assert specs[0].argv[-2:] == ("--engine", "orca")
+    assert specs[1].argv[-2:] == ("--engine", "xtb_md")
     assert specs[0].env is not None
     assert specs[0].env == {}
 
@@ -143,11 +144,19 @@ def test_build_worker_specs_defaults_to_all_workers_when_workflow_root_is_config
         SimpleNamespace(app=None, workflow_root=None, orca_auto_config=None)
     )
 
-    assert [spec.app for spec in specs] == ["orca", "crest", "xtb", "workflow"]
+    assert [spec.app for spec in specs] == [
+        "orca",
+        "xtb_md",
+        "crest",
+        "xtb",
+        "workflow",
+    ]
     assert str(specs[1].argv[2]) == "orca_auto.core.engines.queue_worker"
     assert str(specs[2].argv[2]) == "orca_auto.core.engines.queue_worker"
-    assert specs[1].argv[-2:] == ("--engine", "crest")
-    assert specs[2].argv[-2:] == ("--engine", "xtb")
+    assert str(specs[3].argv[2]) == "orca_auto.core.engines.queue_worker"
+    assert specs[1].argv[-2:] == ("--engine", "xtb_md")
+    assert specs[2].argv[-2:] == ("--engine", "crest")
+    assert specs[3].argv[-2:] == ("--engine", "xtb")
     assert specs[-1].argv[1:3] == (
         "-m",
         "orca_auto.flow.cli.workflow",

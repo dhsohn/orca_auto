@@ -119,6 +119,93 @@ def test_cmd_run_dir_dispatches_to_workflow_for_manifest_directories(
     assert calls == [("workflow", str(target), str(target))]
 
 
+def test_cmd_run_dir_dispatches_to_xtb_md_for_exact_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "xtb_md_job"
+    target.mkdir()
+    (target / "xtb_md_job.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+    (target / "start.xyz").write_text("1\nH\nH 0 0 0\n", encoding="utf-8")
+    calls: list[tuple[str, str, int]] = []
+
+    def _fake_xtb_md_run_dir(args: Any) -> int:
+        calls.append(("xtb_md", args.path, args.priority))
+        return 43
+
+    monkeypatch.setattr(cli_run_dir, "cmd_xtb_md_run_dir", _fake_xtb_md_run_dir)
+
+    result = cli_run_dir.cmd_run_dir(SimpleNamespace(path=str(target), priority=None))
+
+    assert result == 43
+    assert calls == [("xtb_md", str(target), 10)]
+
+
+@pytest.mark.parametrize(
+    ("extra_name", "extra_payload"),
+    [
+        ("flow.yaml", "workflow_type: conformer_screening\n"),
+        ("job.inp", "! Opt\n"),
+    ],
+)
+def test_cmd_run_dir_rejects_ambiguous_xtb_md_markers(
+    extra_name: str,
+    extra_payload: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target = tmp_path / "ambiguous_job"
+    target.mkdir()
+    (target / "xtb_md_job.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+    (target / extra_name).write_text(extra_payload, encoding="utf-8")
+
+    assert cli_run_dir.cmd_run_dir(SimpleNamespace(path=str(target))) == 1
+    error = capsys.readouterr().err
+    assert "Ambiguous run-dir target" in error
+    assert "xtb_md" in error
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"force": True},
+        {"max_cores": 2},
+        {"max_memory_gb": 4},
+    ],
+)
+def test_cmd_run_dir_rejects_xtb_md_retry_and_cli_resource_overrides(
+    overrides: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target = tmp_path / "xtb_md_job"
+    target.mkdir()
+    (target / "xtb_md_job.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        cli_run_dir,
+        "cmd_xtb_md_run_dir",
+        lambda args: (_ for _ in ()).throw(AssertionError(f"unexpected submit: {args}")),
+    )
+    values = {
+        "path": str(target),
+        "priority": None,
+        "force": False,
+        "max_cores": None,
+        "max_memory_gb": None,
+    }
+    values.update(overrides)
+    args = SimpleNamespace(**values)
+
+    assert cli_run_dir.cmd_run_dir(args) == 1
+    error = capsys.readouterr().err
+    if overrides.get("force"):
+        assert "retry, or resume" in error
+    else:
+        assert "xtb_md_job.yaml" in error
+
+
 def test_cmd_run_dir_rejects_resource_overrides_for_orca_directories(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

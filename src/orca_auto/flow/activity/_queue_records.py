@@ -236,10 +236,28 @@ def collect_orca_activity(
     deps: ActivityListDeps,
 ) -> list[ActivityRecord]:
     del request
-    if not normalize_text(resolved.orca_config):
+    config_path = normalize_text(resolved.config_for_engine("orca"))
+    if not config_path:
         return []
     return deps._orca_records(
-        config_path=str(resolved.orca_config),
+        config_path=config_path,
+    )
+
+
+def collect_standalone_queue_activity(
+    entry: EngineCatalogEntry,
+    resolved: ResolvedActivitySources,
+    *,
+    deps: ActivityListDeps,
+) -> list[ActivityRecord]:
+    config_path = normalize_text(resolved.config_for_engine(entry.engine_id))
+    if not config_path:
+        return []
+    return engine_queue_records(
+        app_name=entry.source_id,
+        engine=entry.engine_id,
+        config_path=config_path,
+        deps=deps,
     )
 
 
@@ -250,6 +268,8 @@ def collect_catalog_engine_activity(
     *,
     deps: ActivityListDeps,
 ) -> list[ActivityRecord]:
+    if entry.activity_role == "orca-run":
+        return collect_orca_activity(resolved, request, deps=deps)
     if entry.workflow_stage_role == "workflow-stage":
         return collect_child_queue_activity(
             resolved,
@@ -259,9 +279,11 @@ def collect_catalog_engine_activity(
             config_path=resolved.config_for_engine(entry.engine_id),
             deps=deps,
         )
-    if entry.engine_id == "orca":
-        return collect_orca_activity(resolved, request, deps=deps)
-    raise ValueError(f"Unsupported catalog activity engine: {entry.engine_id}")
+    if entry.activity_role == "engine-queue":
+        return collect_standalone_queue_activity(entry, resolved, deps=deps)
+    raise ValueError(
+        f"Unsupported catalog activity role for {entry.engine_id}: {entry.activity_role}"
+    )
 
 
 __all__ = [
@@ -272,6 +294,7 @@ __all__ = [
     "collect_catalog_engine_activity",
     "collect_crest_activity",
     "collect_orca_activity",
+    "collect_standalone_queue_activity",
     "collect_xtb_activity",
     "engine_queue_records",
     "engine_queue_roots",

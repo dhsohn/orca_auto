@@ -6,9 +6,14 @@ from typing import Any
 
 from .types import QueueEntry
 
-_TERMINAL_RESULT_METADATA_KEYS = {
+# Metadata is generation identity by default. Only server-owned lifecycle/result
+# fields may opt out, so unknown or newly added submission fields fail closed.
+_MUTABLE_LIFECYCLE_METADATA_KEYS = {
+    "attempt",
     "candidate_count",
+    "execution_dir",
     "retained_conformer_count",
+    "terminal_artifacts",
     "terminal_repair_blocked_reason",
 }
 
@@ -17,7 +22,7 @@ def immutable_generation_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
         for key, value in metadata.items()
-        if key not in _TERMINAL_RESULT_METADATA_KEYS
+        if key not in _MUTABLE_LIFECYCLE_METADATA_KEYS
         and not str(key).startswith("_orca_auto_queued_record_sync")
     }
 

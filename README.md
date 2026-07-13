@@ -8,11 +8,11 @@
 
 **English** | [한국어](README.ko.md)
 
-orca_auto is a queue-first interface for ORCA and workflow orchestration on Linux and WSL. It submits work durably, runs it under supervised workers, and records per-job state and reports.
+orca_auto is a queue-first interface for standalone ORCA, standalone xTB molecular dynamics (xTB-MD), and workflow orchestration on Linux and WSL. It submits work durably, runs it under supervised workers, and records per-job state and reports.
 
 ## Statement of need
 
-Computational chemistry projects often outgrow one-shot ORCA commands and ad hoc shell loops. Users need durable submission, supervised execution, restart-aware queue state, consistent job reports, and an explicit record of which calculation failed and what next action is safe. ORCA remains the electronic-structure engine; orca_auto adds the Linux/WSL runtime and observability layer around ORCA-centered workflows.
+Computational chemistry projects often outgrow one-shot engine commands and ad hoc shell loops. Users need durable submission, supervised execution, explicit recovery semantics, consistent job reports, and an explicit record of which calculation failed and what next action is safe. ORCA remains the primary electronic-structure engine, while xTB-MD is a deliberately separate standalone dynamics surface; orca_auto adds the Linux/WSL runtime and observability layer around both and around ORCA-centered workflows.
 
 The project is intended for researchers running repeated ORCA calculations, transition-state searches, and reaction or conformer workflows who want auditable state and recovery behavior without adopting a general workflow platform. It focuses on CLI, configuration, queue, report, and retry contracts rather than replacing chemical judgment, site scheduler policy, or ORCA input design. See [docs/RELATED_WORK.md](docs/RELATED_WORK.md) for scope and ecosystem positioning.
 
@@ -39,7 +39,8 @@ Requirements:
 - Python 3.11+
 - Linux or WSL2
 - ORCA installed at an absolute Linux path if you use ORCA
-- xTB and CREST installed at absolute Linux paths if you use workflow stages that depend on them
+- xTB installed at an absolute Linux path if you use standalone xTB-MD or workflow stages that depend on it
+- CREST installed at an absolute Linux path if you use workflow stages that depend on it
 
 Setup:
 
@@ -76,6 +77,7 @@ runs_root: /home/user/runs
 
 scheduler:
   max_active_simulations: 4
+  max_active_xtb_md: 1
 
 workflow:
   paths:
@@ -107,11 +109,11 @@ orca:
 Notes:
 
 - Use Linux paths only; Windows drive paths, `/mnt/<drive>/...`, relative executable paths, and `.exe` binaries are rejected.
-- Configured ORCA/xTB/CREST executable paths must point to existing executable Linux binaries. Leave `workflow.paths.xtb_executable` or `workflow.paths.crest_executable` blank only when you intentionally want PATH lookup at submission; the resolved executable identity is then bound to the queued generation.
+- Configured ORCA/xTB/CREST executable paths must point to existing executable Linux binaries. Leave `workflow.paths.xtb_executable` or `workflow.paths.crest_executable` blank only when you intentionally want PATH lookup at submission; the resolved executable identity is then bound to the queued generation. The same canonical `workflow.paths.xtb_executable` is used by standalone xTB-MD and workflow xTB stages.
 - `default_max_retries: 0` disables ORCA retries; any positive value enables the
   calculation-type retry policy, capped by ORCA route type.
-- `scheduler.max_active_simulations` is the shared cap across ORCA, internal xTB workflow stages, and internal CREST workflow stages.
-- Everything lives under the single runs root (`runs_root`): standalone ORCA jobs and workflow workspaces sit side by side in it, and the shared admission directory defaults to `<runs_root>/.admission`.
+- `scheduler.max_active_simulations` is the shared cap across ORCA, standalone xTB-MD, internal xTB workflow stages, and internal CREST workflow stages. `scheduler.max_active_xtb_md` is a positive standalone xTB-MD subcap and defaults to `1`.
+- Everything lives under the single runs root (`runs_root`): standalone ORCA/xTB-MD jobs and workflow workspaces sit side by side in it, and the shared admission directory defaults to `<runs_root>/.admission`.
 - Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs live only under `<runs_root>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`).
 - Discord interactivity requires a separate orca_auto Discord application/bot with
   Message Content Intent enabled. Do not share the `ollama_bot` token between two
@@ -119,6 +121,76 @@ Notes:
 - Follow [docs/DISCORD_SETUP.md](docs/DISCORD_SETUP.md) for the bot invite, channel IDs,
   permissions, service startup, and command verification.
 - The full template lives at [config/orca_auto.yaml.example](config/orca_auto.yaml.example).
+
+## Standalone xTB-MD
+
+Put one optimized starting geometry (strongly recommended) and exactly one
+`xtb_md_job.yaml` in a job directory under `runs_root`. For example:
+
+```yaml
+schema_version: 1
+input_xyz: start.xyz
+gfn: 2
+charge: 0
+uhf: 0
+ensemble: nvt       # nvt | nve
+temperature_k: 298.15
+time_ps: 1.0
+walltime_seconds: 3600
+step_fs: 2.0
+dump_fs: 50.0
+hydrogen_mass_amu: 4
+shake: 2
+scc_accuracy: 2.0
+# solvent_model: alpb  # optional; gbsa | alpb, paired with solvent
+# solvent: water
+resources:
+  max_cores: 4
+  max_memory_gb: 8
+```
+
+Submit and inspect it through the same queue-first surface:
+
+```bash
+orca_auto run-dir '/home/user/runs/water_md'
+orca_auto queue list --engine xtb_md
+orca_auto queue cancel q_20260713_160000_ab12cd
+orca_auto queue list clear
+```
+
+`queue list --engine xtb_md` filters the unified activity view. `queue cancel`
+accepts the displayed activity/queue id and known path aliases. `queue list
+clear` is intentionally unfiltered and prunes terminal entries across all
+activity sources, not only xTB-MD.
+
+The required manifest fields are `schema_version`, `input_xyz`, `gfn`,
+`ensemble`, `temperature_k`, `time_ps`, `walltime_seconds`, `step_fs`, and
+`dump_fs`. Unknown fields fail closed. `charge` and `uhf` default to `0`;
+`hydrogen_mass_amu`, `shake`, and `scc_accuracy` default to `4`, `2`, and `2.0`.
+The optional `resources` mapping can request values only at or below the
+configured per-task ceilings. `time_ps` and `dump_fs` must each be an exact positive multiple of
+`step_fs` after converting picoseconds to femtoseconds.
+
+The standalone adapter supports NVT and NVE only. It does not use a workflow,
+retry or resume a generation, or expose an arbitrary random seed, `--omd`, raw
+xcontrol, constraints, or metadynamics. It generates one canonical fresh-run
+`$md` input with the fixed `$samerand` sequence. A cancellation terminates the
+active process group and reaches a terminal state; service interruption or an
+orphaned generation fails terminally instead of being requeued.
+
+Server-owned ceilings are 10,000 atoms, 999,999 MD steps, 100,000,000
+atom-steps, 100,000 trajectory frames, 86,400 seconds wall time, 1 GiB retained
+output, and 10,000 output files. A successful job writes `job_state.json`,
+`job_report.json`, and `job_report.md` at the job root. Its immutable execution
+tree and validated `xtb.trj`, `mdrestart`, `xtbmdok`, and logs are retained under
+`.orca_auto_xtb_md_executions/<job_id>/`.
+
+Standalone xTB-MD currently accepts exactly xTB 6.7.1, which was the latest
+stable release when this contract was added. This is not a claim that the
+upstream release is issue-free: exit code 0 and `xtbmdok` are insufficient on
+their own, and the adapter fails closed on known false-success markers such as
+`MD is unstable, emergency exit` and `but still taking it as converged!`, as
+well as incomplete or invalid trajectory/checkpoint evidence.
 
 ## User Commands
 
@@ -135,9 +207,11 @@ orca_auto scaffold conformer_search '/home/user/workflow_inputs/conf_001'
 # submit work
 orca_auto run-dir '/home/user/orca_runs/sample_rxn'
 orca_auto run-dir '/home/user/workflow_inputs/reaction_case'
+orca_auto run-dir '/home/user/runs/water_md'
 
 # inspect and maintain
 orca_auto queue list --engine orca
+orca_auto queue list --engine xtb_md
 orca_auto queue list clear      # prune completed/failed/cancelled
 orca_auto queue cancel <target>
 orca_auto service status
@@ -191,13 +265,13 @@ config, rerun the same command to enable the full runtime target. If you edited 
 - ORCA selects the most recently modified `.inp` at submission and binds that
   input plus supported file dependencies into a private execution snapshot.
   Editing the source afterward does not change the queued generation.
-- `flow.yaml` and internal engine job manifests are limited to 1 MiB, 32 YAML
+- `flow.yaml`, `xtb_md_job.yaml`, and internal engine job manifests are limited to 1 MiB, 32 YAML
   aliases, 10,000 parsed/expanded nodes, and 64 nesting levels; cyclic/recursive
   YAML graphs fail closed. Local geometries are limited to 10,000 atoms, reduced
   to 1,000 for xTB/ORCA Hessian-producing jobs and 200 for Discord-uploaded work.
 - When retrying or resuming an interrupted ORCA run, orca_auto uses a matching
   non-empty `.gbw` file by generating a restart input with `MORead` and `%moinp`.
-- Completed ORCA runs write state and report files such as `job_state.json`, `job_report.json`, and `job_report.md`.
+- Completed ORCA and standalone xTB-MD runs write state and report files such as `job_state.json`, `job_report.json`, and `job_report.md`.
 - Use the `systemd` assets in [systemd/README.md](systemd/README.md) for unattended WSL or Linux execution.
 
 ## Testing

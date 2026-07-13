@@ -143,6 +143,30 @@ layers = [
     "orca_auto.core",
 ]
 
+[[tool.importlinter.contracts]]
+name = "Layered architecture: standalone xtb_md -> core"
+type = "layers"
+layers = [
+    "orca_auto.xtb_md",
+    "orca_auto.core",
+]
+
+[[tool.importlinter.contracts]]
+name = "Standalone xtb_md is independent from ORCA"
+type = "independence"
+modules = [
+    "orca_auto.xtb_md",
+    "orca_auto.orca",
+]
+
+[[tool.importlinter.contracts]]
+name = "Standalone xtb_md is independent from workflow orchestration"
+type = "independence"
+modules = [
+    "orca_auto.xtb_md",
+    "orca_auto.flow",
+]
+
 [tool.coverage.run]
 source = ["src/orca_auto"]
 

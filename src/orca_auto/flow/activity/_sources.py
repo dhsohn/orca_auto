@@ -8,6 +8,7 @@ from orca_auto.core.config.files import (
     discover_shared_config_path,
     shared_workflow_root_from_config,
 )
+from orca_auto.core.engine_catalog import activity_engine_entries
 from orca_auto.core.utils import mapping_or_empty, normalize_text
 
 from ._model import ActivitySourceRequest, ResolvedActivitySources
@@ -79,11 +80,22 @@ def resolve_activity_source_request(
         if normalize_text(request.orca_config)
         else resolved_shared_config
     )
+    engine_configs = {
+        entry.engine_id: resolved_shared_config for entry in activity_engine_entries()
+    }
+    engine_configs.update(
+        {
+            "crest": resolved_crest_config,
+            "xtb": resolved_xtb_config,
+            "orca": resolved_orca_config,
+        }
+    )
     return ResolvedActivitySources(
         workflow_root=resolved_workflow_root,
         crest_config=resolved_crest_config,
         xtb_config=resolved_xtb_config,
         orca_config=resolved_orca_config,
+        engine_configs=engine_configs,
     )
 
 

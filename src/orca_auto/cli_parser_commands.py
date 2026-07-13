@@ -31,15 +31,18 @@ def _add_workflow_scaffold_shortcut(
 def add_run_dir_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     run_dir_parser = subparsers.add_parser(
         "run-dir",
-        help="Submit an ORCA job directory or workflow input directory through the unified CLI.",
+        help="Submit an ORCA, standalone xTB-MD, or workflow input directory.",
     )
     add_engine_config_argument(run_dir_parser)
     add_orca_logging_arguments(run_dir_parser)
-    run_dir_parser.add_argument("path", help="ORCA job directory or workflow input directory")
+    run_dir_parser.add_argument("path", help="ORCA, standalone xTB-MD, or workflow input directory")
     run_dir_parser.add_argument(
         "--force",
         action="store_true",
-        help="Force ORCA re-run, or allow restarting an existing workflow workspace outside failed status",
+        help=(
+            "Force ORCA re-run, or allow restarting an existing workflow workspace outside "
+            "failed status (not supported for xTB-MD)"
+        ),
     )
     run_dir_parser.add_argument(
         "--priority",
@@ -48,7 +51,7 @@ def add_run_dir_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         help="Queue priority when submission is enqueued (lower = higher)",
     )
     add_resource_override_arguments(run_dir_parser)
-    add_json_argument(run_dir_parser, help_text="Print JSON output for workflow submission")
+    add_json_argument(run_dir_parser, help_text="Print JSON submission output")
     run_dir_parser.set_defaults(func=cli_handlers.cmd_run_dir)
 
 

@@ -5,7 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.engine_catalog import activity_engine_entries, workflow_stage_engine_entries
+from orca_auto.core.engine_catalog import (
+    activity_engine_entries,
+    get_engine_catalog_entry,
+    workflow_stage_engine_entries,
+)
+from orca_auto.core.queue.internal_engine import own_engine_accept_entry
 from orca_auto.core.utils import normalize_text
 
 from ._model import ActivitySourceRequest, ResolvedActivitySources
@@ -24,17 +29,22 @@ class ActivityClearDeps:
 
 _ENGINE_QUEUE_CLEAR_SOURCES = tuple(
     (entry.engine_id, f"{entry.engine_id}_queue_entries")
-    for entry in workflow_stage_engine_entries()
+    for entry in (
+        *workflow_stage_engine_entries(),
+        *(
+            candidate
+            for candidate in activity_engine_entries()
+            if candidate.activity_role == "engine-queue"
+            and candidate.workflow_stage_role != "workflow-stage"
+        ),
+    )
 )
 
 
 def _clear_counts() -> dict[str, int]:
     cleared = {"workflows": 0}
-    for entry in workflow_stage_engine_entries():
-        cleared[f"{entry.engine_id}_queue_entries"] = 0
     for entry in activity_engine_entries():
-        if entry.workflow_stage_role != "workflow-stage":
-            cleared[f"{entry.engine_id}_queue_entries"] = 0
+        cleared[f"{entry.engine_id}_queue_entries"] = 0
     cleared["orca_run_states"] = 0
     return cleared
 
@@ -46,10 +56,16 @@ def _clear_engine_queue(
     deps: ActivityClearDeps,
 ) -> int:
     config_path = normalize_text(resolved.config_for_engine(engine))
-    if not config_path or not normalize_text(resolved.workflow_root):
+    if not config_path:
+        return 0
+    entry = get_engine_catalog_entry(engine)
+    if entry.workflow_stage_role == "workflow-stage" and not normalize_text(resolved.workflow_root):
         return 0
     return sum(
-        deps.clear_queue_terminal(root)
+        deps.clear_queue_terminal(
+            root,
+            select_entry_fn=own_engine_accept_entry(engine),
+        )
         for root in deps._engine_queue_roots(config_path, engine=engine)
     )
 

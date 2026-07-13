@@ -15,12 +15,12 @@ from .artifacts import (
 )
 from .definitions import (
     EngineArtifactAdapter,
+    EngineCancellationHooks,
     EngineDefinition,
     EngineNotificationHooks,
     EngineQueueFunctions,
     EngineRunnerCallbacks,
 )
-from .worker_child import build_worker_child_command_for_engine
 
 QueueEntryById = Callable[[str | Path, str], Any | None]
 QueueList = Callable[[str | Path], list[Any]]
@@ -79,6 +79,12 @@ def build_lazy_queue_worker_runner(
     return run_queue_worker
 
 
+def build_worker_child_command_for_engine(engine: str) -> WorkerChildCommandBuilder:
+    from .worker_child import build_worker_child_command_for_engine as build_command
+
+    return build_command(engine)
+
+
 def build_queue_entry_by_id(list_queue: QueueList) -> QueueEntryById:
     return build_queue_entry_lookup(
         list_queue_fn=list_queue,
@@ -134,6 +140,7 @@ def build_queue_engine_definition(
     job_started: NotificationHook | None = None,
     job_finished: NotificationHook | None = None,
     retry: NotificationHook | None = None,
+    before_pending_cancel: NotificationHook | None = None,
 ) -> EngineDefinition:
     engine_id = str(engine).strip().lower()
     runtime_roots = runtime_roots_for_cfg or build_engine_runtime_roots(engine)
@@ -172,6 +179,9 @@ def build_queue_engine_definition(
             job_started=job_started,
             job_finished=job_finished,
             retry=retry,
+        ),
+        cancellation_hooks=EngineCancellationHooks(
+            before_pending_cancel=before_pending_cancel,
         ),
         queue_worker_runner=queue_worker_runner,
     )

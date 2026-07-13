@@ -12,13 +12,180 @@ from orca_auto.core.app_ids import (
     ORCA_AUTO_ORCA_SOURCE,
     ORCA_AUTO_REPO_ROOT_ENV_VAR,
 )
+from orca_auto.core.queue import (
+    dequeue_entry_if_pending,
+    enqueue,
+    list_queue,
+    mark_completed,
+)
+from orca_auto.core.queue.internal_engine import own_engine_accept_entry
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.flow import activity
 from orca_auto.flow.activity import _cancel as _activity_cancel
+from orca_auto.flow.activity import _clear as _activity_clear
 from orca_auto.flow.activity import _list as _activity_list
 from orca_auto.flow.activity import _model as _activity_model
 from orca_auto.flow.activity import _orca as _activity_orca
 from orca_auto.flow.activity import _sources as _activity_sources
+
+
+def _shared_config(tmp_path: Path) -> tuple[Path, Path]:
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
+    return config_path, runs_root
+
+
+def test_xtb_md_standalone_activity_is_visible_without_workflow_children(tmp_path: Path) -> None:
+    config_path, runs_root = _shared_config(tmp_path)
+    queued = enqueue(
+        runs_root,
+        app_name="orca_auto_xtb_md",
+        task_id="md-job-1",
+        task_kind="xtb_md",
+        engine="xtb_md",
+        metadata={"job_dir": str(runs_root / "md-job-1")},
+    )
+
+    payload = activity.list_activities(
+        shared_config=str(config_path),
+        child_job_engines=(),
+    )
+
+    assert [(row["activity_id"], row["engine"]) for row in payload["activities"]] == [
+        (queued.queue_id, "xtb_md")
+    ]
+    assert payload["sources"]["xtb_md_config"] == str(config_path.resolve())
+
+
+def test_cancel_xtb_md_standalone_activity_uses_generation_bound_shared_queue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, runs_root = _shared_config(tmp_path)
+    queued = enqueue(
+        runs_root,
+        app_name="orca_auto_xtb_md",
+        task_id="md-job-1",
+        task_kind="xtb_md",
+        engine="xtb_md",
+        metadata={"job_dir": str(runs_root / "md-job-1")},
+    )
+    monkeypatch.setattr(
+        activity,
+        "get_engine_definition",
+        lambda _engine: SimpleNamespace(cancellation_hooks=None),
+    )
+
+    payload = activity.cancel_activity(
+        target="md-job-1",
+        shared_config=str(config_path),
+    )
+
+    assert payload["status"] == "cancelled"
+    assert payload["engine"] == "xtb_md"
+    persisted = {entry.queue_id: entry for entry in list_queue(runs_root)}
+    assert persisted[queued.queue_id].status == QueueStatus.CANCELLED
+
+
+def test_cancel_xtb_md_recovers_committed_result_after_uncertain_store_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path, runs_root = _shared_config(tmp_path)
+    queued = enqueue(
+        runs_root,
+        app_name="orca_auto_xtb_md",
+        task_id="md-job-uncertain",
+        task_kind="xtb_md",
+        engine="xtb_md",
+        metadata={"job_dir": str(runs_root / "md-job-uncertain")},
+    )
+    real_request_cancel = activity.request_cancel
+
+    def commit_then_raise(*args: Any, **kwargs: Any) -> None:
+        assert real_request_cancel(*args, **kwargs) is not None
+        raise OSError("simulated uncertain queue-store result")
+
+    monkeypatch.setattr(
+        activity,
+        "get_engine_definition",
+        lambda _engine: SimpleNamespace(cancellation_hooks=None),
+    )
+    monkeypatch.setattr(activity, "request_cancel", commit_then_raise)
+
+    payload = activity.cancel_activity(
+        target=queued.queue_id,
+        shared_config=str(config_path),
+    )
+
+    assert payload["status"] == "cancelled"
+    assert {entry.queue_id: entry for entry in list_queue(runs_root)}[
+        queued.queue_id
+    ].status == QueueStatus.CANCELLED
+
+
+def test_clear_xtb_md_standalone_queue_preserves_foreign_shared_root_entries(
+    tmp_path: Path,
+) -> None:
+    config_path, runs_root = _shared_config(tmp_path)
+    xtb_md = enqueue(
+        runs_root,
+        app_name="orca_auto_xtb_md",
+        task_id="md-job-1",
+        task_kind="xtb_md",
+        engine="xtb_md",
+    )
+    orca = enqueue(
+        runs_root,
+        app_name="orca_auto_orca",
+        task_id="orca-job-1",
+        task_kind="orca_run_inp",
+        engine="orca",
+    )
+    running_xtb_md = dequeue_entry_if_pending(
+        runs_root,
+        xtb_md.queue_id,
+        accept_entry_fn=own_engine_accept_entry("xtb_md"),
+    )
+    running_orca = dequeue_entry_if_pending(
+        runs_root,
+        orca.queue_id,
+        accept_entry_fn=own_engine_accept_entry("orca"),
+    )
+    assert running_xtb_md is not None
+    assert running_orca is not None
+    assert (
+        mark_completed(
+            runs_root,
+            xtb_md.queue_id,
+            expected_entry=running_xtb_md,
+        )
+        is not None
+    )
+    assert (
+        mark_completed(
+            runs_root,
+            orca.queue_id,
+            expected_entry=running_orca,
+        )
+        is not None
+    )
+
+    resolved = _activity_sources.resolve_activity_source_request(
+        _activity_model.ActivitySourceRequest(shared_config=str(config_path))
+    )
+    cleared = _activity_clear._clear_engine_queue(
+        resolved,
+        engine="xtb_md",
+        deps=activity._activity_clear_deps(),
+    )
+
+    assert cleared == 1
+    assert [(entry.queue_id, entry.engine) for entry in list_queue(runs_root)] == [
+        (orca.queue_id, "orca")
+    ]
 
 
 def test_list_activities_merges_workflows_and_standalone_sources(monkeypatch) -> None:
@@ -759,13 +926,14 @@ def test_clear_activities_clears_workflow_and_engine_terminal_sources(monkeypatc
         lambda config_path, *, engine, **kwargs: (
             (Path("/tmp/xtb_root_a"), Path("/tmp/xtb_root_b"))
             if engine == "xtb"
-            else (Path("/tmp/crest_root"),)
+            else ((Path("/tmp/xtb_md_root"),) if engine == "xtb_md" else (Path("/tmp/crest_root"),))
         ),
     )
 
     cleared_roots: list[str] = []
 
-    def fake_clear_queue_terminal(root: Path) -> int:
+    def fake_clear_queue_terminal(root: Path, **kwargs: Any) -> int:
+        assert callable(kwargs.get("select_entry_fn"))
         cleared_roots.append(str(root))
         if "xtb_root_a" in str(root):
             return 1
@@ -788,16 +956,22 @@ def test_clear_activities_clears_workflow_and_engine_terminal_sources(monkeypatc
         orca_config="/tmp/orca_auto.yaml",
     )
 
-    assert payload["total_cleared"] == 17
+    assert payload["total_cleared"] == 20
     assert payload["cleared"] == {
         "workflows": 2,
         "xtb_queue_entries": 3,
         "crest_queue_entries": 3,
+        "xtb_md_queue_entries": 3,
         "orca_queue_entries": 4,
         "orca_run_states": 5,
     }
     assert "submission_failed" in captured_statuses
-    assert cleared_roots == ["/tmp/xtb_root_a", "/tmp/xtb_root_b", "/tmp/crest_root"]
+    assert cleared_roots == [
+        "/tmp/xtb_root_a",
+        "/tmp/xtb_root_b",
+        "/tmp/crest_root",
+        "/tmp/xtb_md_root",
+    ]
 
 
 def test_clear_activities_keeps_cleared_terminal_workflows_hidden_from_listing(
@@ -864,6 +1038,7 @@ def test_list_activities_autodiscovers_defaults_when_no_args(monkeypatch) -> Non
         "crest_config": "/tmp/orca_auto.yaml",
         "xtb_config": "/tmp/orca_auto.yaml",
         "orca_config": "/tmp/orca_auto.yaml",
+        "xtb_md_config": "/tmp/orca_auto.yaml",
     }
     assert captured["workflow_root"] == "/tmp/workflow_root"
     assert captured["crest_config"] == "/tmp/orca_auto.yaml"
