@@ -22,7 +22,7 @@ from orca_auto.core.ingest import (
     UploadSessionError,
     UploadState,
 )
-from orca_auto.core.messaging import SendResult
+from orca_auto.core.messaging import SendResult, render_discord_embed
 from orca_auto.core.messaging.interactive import (
     ActionRows,
     Actor,
@@ -254,6 +254,15 @@ def _reply_chunks(reply: BotReply) -> list[str]:
     return _chunks(reply.text, limit=_DISCORD_TEXT_LIMIT)
 
 
+def _embed_object(reply: BotReply) -> Any:
+    """Build a Discord embed from ``reply.message``, or ``None`` for plain text."""
+    if reply.message is None:
+        return None
+    import discord
+
+    return discord.Embed.from_dict(render_discord_embed(reply.message))
+
+
 def _view(actions: ActionRows | None) -> Any:
     import discord
 
@@ -322,11 +331,25 @@ class DiscordInteractiveMessenger:
         actions: ActionRows,
         message_ids: list[str],
         *,
+        embed: Any = None,
         silent: bool,
     ) -> list[str]:
         import discord
 
         channel = await self._resolve_channel(address.channel_id)
+        if embed is not None:
+            # A rich reply is one embed message carrying the action buttons.
+            try:
+                message = await channel.send(
+                    embed=embed,
+                    view=(_view(actions) if actions else None),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                    silent=silent,
+                )
+            except Exception as exc:  # noqa: BLE001 - preserve partial SDK delivery receipt
+                raise _PartialDiscordSendError(message_ids, 1) from exc
+            message_ids.append(str(message.id))
+            return message_ids
         for index, chunk in enumerate(chunks):
             try:
                 message = await channel.send(
@@ -347,7 +370,9 @@ class DiscordInteractiveMessenger:
         *,
         silent: bool = False,
     ) -> SendResult:
-        chunks = _reply_chunks(reply)
+        embed = _embed_object(reply)
+        chunks = [] if embed is not None else _reply_chunks(reply)
+        total = 1 if embed is not None else len(chunks)
         message_ids: list[str] = []
         try:
             self._run(
@@ -356,6 +381,7 @@ class DiscordInteractiveMessenger:
                     chunks,
                     reply.actions,
                     message_ids,
+                    embed=embed,
                     silent=silent,
                 )
             )
@@ -379,7 +405,7 @@ class DiscordInteractiveMessenger:
                 message_id=message_ids[-1] if message_ids else None,
                 message_ids=tuple(message_ids),
                 sent_count=len(message_ids),
-                total_count=len(chunks),
+                total_count=total,
             )
         except Exception as exc:  # noqa: BLE001 - SDK exceptions stay behind adapter boundary
             LOGGER.warning("discord_reply_failed: %s", type(exc).__name__)
@@ -390,7 +416,7 @@ class DiscordInteractiveMessenger:
                 message_id=message_ids[-1] if message_ids else None,
                 message_ids=tuple(message_ids),
                 sent_count=len(message_ids),
-                total_count=len(chunks),
+                total_count=total,
             )
         return SendResult(
             sent=True,

@@ -23,7 +23,7 @@ from typing import Literal
 from orca_auto.core.utils.coercion import normalize_text
 
 Severity = Literal["info", "success", "warning", "error"]
-SpanStyle = Literal["plain", "bold", "code"]
+SpanStyle = Literal["plain", "bold", "code", "pre"]
 
 
 @dataclass(frozen=True)
@@ -50,6 +50,16 @@ def bold(value: object) -> Span:
 
 def code(value: object) -> Span:
     return Span(normalize_text(value), "code")
+
+
+def code_block(value: object) -> Span:
+    """A preformatted block, kept verbatim (newlines/whitespace preserved).
+
+    Renders as a fenced code block on Discord and a ``<pre>`` block on Telegram.
+    Use it for tables and other monospace content; put it in its own
+    :func:`line` so it stands alone.
+    """
+    return Span(str(value), "pre")
 
 
 @dataclass(frozen=True)
@@ -139,6 +149,7 @@ __all__ = [
     "SpanStyle",
     "bold",
     "code",
+    "code_block",
     "field_row",
     "group",
     "line",

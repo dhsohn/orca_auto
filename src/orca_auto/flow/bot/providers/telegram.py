@@ -18,6 +18,7 @@ from orca_auto.core.messaging.interactive import (
     IncomingAction,
     IncomingCommand,
 )
+from orca_auto.core.messaging.render_telegram import render_telegram_chunks
 from orca_auto.core.notifications import split_telegram_message
 from orca_auto.flow.telegram.bot_api import POLL_TIMEOUT_SECONDS, api_call
 
@@ -156,6 +157,8 @@ def _escaped_preformatted_chunks(text: str) -> list[str]:
 
 
 def _reply_chunks(reply: BotReply) -> list[tuple[str, str | None]]:
+    if reply.message is not None:
+        return [(chunk.html, "HTML") for chunk in render_telegram_chunks(reply.message)]
     if reply.format == "preformatted":
         return [
             (f"<pre>{chunk}</pre>", "HTML") for chunk in _escaped_preformatted_chunks(reply.text)

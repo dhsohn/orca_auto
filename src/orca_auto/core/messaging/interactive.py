@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol, TypeAlias, runtime_checkable
 
 from .channel import SendResult
+from .richtext import Message
 
 BotReplyFormat = Literal["plain", "preformatted"]
 
@@ -64,11 +65,18 @@ ActionRows: TypeAlias = tuple[tuple[CardAction, ...], ...]
 
 @dataclass(frozen=True)
 class BotReply:
-    """Application reply plus optional provider-rendered action rows."""
+    """Application reply plus optional provider-rendered action rows.
+
+    ``message`` is an optional rich document. When present, a provider adapter
+    renders it natively — a Discord embed, or Telegram HTML — and ``text`` is the
+    plain fallback (logs, and any path without rich rendering). When absent, the
+    reply is the plain ``text`` as before.
+    """
 
     text: str
     format: BotReplyFormat = "plain"
     actions: ActionRows = ()
+    message: Message | None = None
 
     def __post_init__(self) -> None:
         if self.format not in ("plain", "preformatted"):

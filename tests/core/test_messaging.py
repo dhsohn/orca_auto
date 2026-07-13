@@ -24,6 +24,7 @@ from orca_auto.core.messaging import (
     bold,
     build_channel,
     code,
+    code_block,
     field_row,
     group,
     line,
@@ -288,6 +289,27 @@ def test_engine_terminal_presentation_uses_structured_status_and_fails_closed() 
     assert embed["color"] == 0xE74C3C
     assert embed["title"] == "❌ [xTB] Job failed"
     assert embed["author"] == {"name": "orca_auto"}
+
+
+def test_code_block_renders_fenced_on_discord_and_pre_on_telegram() -> None:
+    message = Message(
+        title="Activities",
+        author="orca_auto",
+        groups=(group(line(code_block("Status  Name\nrun     rxn1"))),),
+    )
+    embed = render_discord_embed(message)
+    assert embed["description"] == "```\nStatus  Name\nrun     rxn1\n```"
+    assert embed["author"] == {"name": "orca_auto"}
+    assert render_telegram(message) == (
+        "orca_auto\n<b>Activities</b>\n<pre>Status  Name\nrun     rxn1</pre>"
+    )
+
+
+def test_code_block_uses_a_longer_fence_when_content_contains_backticks() -> None:
+    # A 3-backtick run inside the content forces a 4-backtick fence so Discord
+    # cannot break out of the block.
+    embed = render_discord_embed(Message(title="t", groups=(group(line(code_block("a ``` b"))),)))
+    assert embed["description"] == "````\na ``` b\n````"
 
 
 # --------------------------------------------------------------------------- #

@@ -71,6 +71,17 @@ from ..activity import cancel_activity, clear_activities, list_activities
 from ..manifest import INTERACTION_ENERGY_MAX_FRAGMENTS_CAP
 from ..xyz_utils import validated_xyz_atom_count
 from .action_registry import ActionKind, ActionRegistry, ActionStore, RegisteredAction
+from .replies import (
+    code,
+    code_block,
+    error_message,
+    field_row,
+    info_message,
+    raw,
+    reply_message,
+    text,
+)
+from .replies import line as reply_line
 from .settings import BotSettings
 
 LOGGER = logging.getLogger(__name__)
@@ -87,6 +98,10 @@ _UPLOAD_PUBLISH_LOCK_NAME = ".upload-publish.lock"
 _UPLOAD_PUBLISH_MARKER = ".orca-auto-upload"
 _UPLOAD_ACTION_TTL_SECONDS = 5 * 60.0
 _UPLOAD_ACTION_PREFIX = "act_"
+# Largest activity table (chars) rendered inside a Discord embed description
+# (limit 4096, minus room for the code fence). Larger tables fall back to the
+# paginated plain path so no rows are dropped.
+_LIST_EMBED_MAX_CHARS = 3900
 _REMOTE_WORKFLOW_COUNT_LIMITS = {
     "max_orca_stages": 20,
     "max_crest_candidates": 8,
@@ -554,8 +569,18 @@ class BotApplication:
         payload = self._activity_payload(
             child_job_engines=() if not filter_status else None,
         )
+        table = self._list_text(filter_status, payload=payload)
+        title = "Activities" if not filter_status else f"{filter_status.capitalize()} activities"
+        # Keep the embed only when the table fits Discord's description limit;
+        # for an oversized table fall back to the paginated plain path (message
+        # omitted) so every row is delivered instead of being truncated.
+        message = (
+            reply_message(title, reply_line(code_block(table)))
+            if len(table) <= _LIST_EMBED_MAX_CHARS
+            else None
+        )
         return BotReply(
-            self._list_text(filter_status, payload=payload),
+            table,
             format="preformatted",
             actions=self._list_actions(
                 address=address,
@@ -563,6 +588,7 @@ class BotApplication:
                 filter_status=filter_status,
                 payload=payload,
             ),
+            message=message,
         )
 
     def _cancel_confirmation_reply(
@@ -586,6 +612,12 @@ class BotApplication:
                     CardAction(dismiss_id, "Keep running"),
                 ),
             ),
+            message=reply_message(
+                "Cancel this activity?",
+                field_row("Activity", code(label), inline=True),
+                field_row("ID", code(activity_id), inline=True),
+                severity="warning",
+            ),
         )
 
     def _cancel_result(self, binding: str) -> BotReply:
@@ -600,10 +632,18 @@ class BotApplication:
                 orca_repo_root=self.settings.orca_repo_root,
             )
         except (LookupError, ValueError) as exc:
-            return BotReply(str(exc))
+            return BotReply(str(exc), message=error_message("Cancellation failed", str(exc)))
         label = str(payload.get("label", payload.get("activity_id", target)))
         status = str(payload.get("status", "unknown"))
-        return BotReply(f"{self.deps.status_icon(status)} {label}\nstatus: {status}")
+        return BotReply(
+            f"{self.deps.status_icon(status)} {label}\nstatus: {status}",
+            message=reply_message(
+                "Cancellation requested",
+                field_row("Activity", code(label), inline=True),
+                field_row("Status", code(status), inline=True),
+                severity="success",
+            ),
+        )
 
     # -- Upload → safe-extract → queue submission ------------------------------
 
@@ -882,6 +922,13 @@ class BotApplication:
                     CardAction(dismiss_id, "Discard"),
                 ),
             ),
+            message=reply_message(
+                "Queue this run-dir?",
+                field_row("Job", code(job_name), inline=True),
+                field_row("Engine", code(engine), inline=True),
+                field_row("Contents", raw(f"{entries} files · {mib:.1f} MiB"), inline=True),
+                *([field_row("Entry", code(selected))] if selected else []),
+            ),
         )
 
     def dispatch_upload(
@@ -899,11 +946,25 @@ class BotApplication:
                 self.abandon_upload(upload.upload_id, "uploads disabled")
             else:
                 self._discard_legacy_upload_path(upload.archive_path)
-            status, reply = "upload-disabled", BotReply("File uploads are disabled.")
+            status, reply = (
+                "upload-disabled",
+                BotReply(
+                    "File uploads are disabled.",
+                    message=error_message("Uploads disabled", "File uploads are disabled."),
+                ),
+            )
         elif self.upload_sessions is None:
             if upload.upload_id is None:
                 self._discard_legacy_upload_path(upload.archive_path)
-            status, reply = "upload-misconfigured", BotReply("Upload staging is not configured.")
+            status, reply = (
+                "upload-misconfigured",
+                BotReply(
+                    "Upload staging is not configured.",
+                    message=error_message(
+                        "Uploads not configured", "Upload staging is not configured."
+                    ),
+                ),
+            )
         else:
             try:
                 session = self._incoming_upload_session(upload)
@@ -936,7 +997,12 @@ class BotApplication:
                     )
                 elif session.state is UploadState.COMMITTED:
                     status = "upload-already-submitted"
-                    reply = BotReply("This upload was already submitted.")
+                    reply = BotReply(
+                        "This upload was already submitted.",
+                        message=info_message(
+                            "Already submitted", "This upload was already submitted."
+                        ),
+                    )
                 elif session.state in {
                     UploadState.PROCESSING,
                     UploadState.PUBLISHED,
@@ -944,15 +1010,30 @@ class BotApplication:
                 }:
                     status = "upload-already-processing"
                     reply = BotReply(
-                        "This upload is already being processed; check the list command."
+                        "This upload is already being processed; check the list command.",
+                        message=info_message(
+                            "Already processing",
+                            "This upload is already being processed; check the list command.",
+                        ),
                     )
                 else:
                     status = "upload-unavailable"
-                    reply = BotReply("This upload is no longer available.")
+                    reply = BotReply(
+                        "This upload is no longer available.",
+                        message=error_message(
+                            "Upload unavailable", "This upload is no longer available."
+                        ),
+                    )
             except UploadRejected as exc:
                 if "session" in locals():
                     self.abandon_upload(session.upload_id, f"archive rejected: {exc.reason}")
-                status, reply = "upload-rejected", BotReply(f"Rejected: {exc.reason}")
+                status, reply = (
+                    "upload-rejected",
+                    BotReply(
+                        f"Rejected: {exc.reason}",
+                        message=error_message("Upload rejected", str(exc.reason)),
+                    ),
+                )
             except (
                 UploadArchiveError,
                 UploadBindingMismatchError,
@@ -965,7 +1046,12 @@ class BotApplication:
                     UploadBindingMismatchError,
                 ):
                     self.abandon_upload(session.upload_id, str(exc))
-                status, reply = "upload-rejected", BotReply(f"Rejected: {exc}")
+                status, reply = (
+                    "upload-rejected",
+                    BotReply(
+                        f"Rejected: {exc}", message=error_message("Upload rejected", str(exc))
+                    ),
+                )
 
         try:
             result = messenger.send_reply(upload.address, reply)
@@ -1170,52 +1256,70 @@ class BotApplication:
     @staticmethod
     def _submission_outcome(job_dir: Path, receipt: SubmissionReceipt) -> RunSubmissionOutcome:
         if receipt.cleanup_safe:
+            note = f"Submission failed for {job_dir.name}. See the bot log."
             return RunSubmissionOutcome(
                 "run-submission-failed",
-                BotReply(f"Submission failed for {job_dir.name}. See the bot log."),
+                BotReply(note, message=error_message("Submission failed", note)),
                 receipt,
             )
         if receipt.committed is False:
+            note = (
+                f"{job_dir.name} is already owned by an existing submission; "
+                "its files were preserved. Check the list command before retrying."
+            )
             return RunSubmissionOutcome(
                 "run-submission-conflict",
-                BotReply(
-                    f"{job_dir.name} is already owned by an existing submission; "
-                    "its files were preserved. Check the list command before retrying."
-                ),
+                BotReply(note, message=error_message("Already submitted", note)),
                 receipt,
             )
         if receipt.committed is None:
+            note = (
+                f"Submission outcome is uncertain for {job_dir.name}; its files were "
+                "preserved. Check the list command and bot log before retrying."
+            )
             return RunSubmissionOutcome(
                 "run-submission-uncertain",
-                BotReply(
-                    f"Submission outcome is uncertain for {job_dir.name}; its files were "
-                    "preserved. Check the list command and bot log before retrying."
-                ),
+                BotReply(note, message=error_message("Submission uncertain", note)),
                 receipt,
             )
 
         identifier = f" (id: {receipt.submission_id})" if receipt.submission_id else ""
         if receipt.failure_reason == "submission_conflict":
+            note = (
+                f"{job_dir.name} is already queued{identifier}; its files were preserved. "
+                "Track it with the list command."
+            )
             return RunSubmissionOutcome(
                 "run-already-submitted",
-                BotReply(
-                    f"{job_dir.name} is already queued{identifier}; its files were preserved. "
-                    "Track it with the list command."
-                ),
+                BotReply(note, message=info_message("Already queued", note)),
                 receipt,
             )
         if receipt.detail:
+            note = (
+                f"Queued {job_dir.name}{identifier}, but a post-submission step failed. "
+                "The committed run was preserved; check the bot log."
+            )
             return RunSubmissionOutcome(
                 "run-submitted-with-warning",
                 BotReply(
-                    f"Queued {job_dir.name}{identifier}, but a post-submission step failed. "
-                    "The committed run was preserved; check the bot log."
+                    note,
+                    message=reply_message(
+                        "Queued with a warning", reply_line(text(note)), severity="warning"
+                    ),
                 ),
                 receipt,
             )
         return RunSubmissionOutcome(
             "run-submitted",
-            BotReply(f"Queued {job_dir.name}{identifier}. Track it with the list command."),
+            BotReply(
+                f"Queued {job_dir.name}{identifier}. Track it with the list command.",
+                message=reply_message(
+                    "Queued",
+                    field_row("Run-dir", code(job_dir.name)),
+                    reply_line(text("Track it with the list command.")),
+                    severity="success",
+                ),
+            ),
             receipt,
         )
 
@@ -1239,7 +1343,10 @@ class BotApplication:
                 LOGGER.warning("upload_disabled_state_failed", exc_info=True)
             return RunSubmissionOutcome(
                 "run-disabled",
-                BotReply("File uploads are disabled."),
+                BotReply(
+                    "File uploads are disabled.",
+                    message=error_message("Uploads disabled", "File uploads are disabled."),
+                ),
             )
 
         extract_root = session.archive_path.parent / _UPLOAD_EXTRACT_DIRNAME
@@ -1253,11 +1360,20 @@ class BotApplication:
                 LOGGER.warning("upload_expired_state_failed", exc_info=True)
             return RunSubmissionOutcome(
                 "run-expired",
-                BotReply("Upload expired or changed before it could be processed."),
+                BotReply(
+                    "Upload expired or changed before it could be processed.",
+                    message=error_message(
+                        "Upload expired",
+                        "Upload expired or changed before it could be processed.",
+                    ),
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - stable durability boundary
             LOGGER.warning("upload_archive_identity_check_failed", exc_info=True)
-            return RunSubmissionOutcome("run-unavailable", BotReply(str(exc)))
+            return RunSubmissionOutcome(
+                "run-unavailable",
+                BotReply(str(exc), message=error_message("Upload unavailable", str(exc))),
+            )
 
         try:
             if extract_root.exists() or extract_root.is_symlink():
@@ -1286,7 +1402,7 @@ class BotApplication:
                 LOGGER.warning("upload_rejected_state_failed", exc_info=True)
             return RunSubmissionOutcome(
                 "run-rejected",
-                BotReply(f"Rejected: {reason}"),
+                BotReply(f"Rejected: {reason}", message=error_message("Upload rejected", reason)),
             )
 
         try:
@@ -1298,12 +1414,13 @@ class BotApplication:
         except _UploadPublicationUncertain as exc:
             reason = self._exception_detail(exc)
             self._mark_upload_ambiguous(session.upload_id, reason)
+            note = (
+                "Publication outcome is uncertain; any visible files were preserved. "
+                "Check the bot log before retrying."
+            )
             return RunSubmissionOutcome(
                 "run-submission-uncertain",
-                BotReply(
-                    "Publication outcome is uncertain; any visible files were preserved. "
-                    "Check the bot log before retrying."
-                ),
+                BotReply(note, message=error_message("Submission uncertain", note)),
             )
         except Exception as exc:  # noqa: BLE001 - no public namespace change was observed
             reason = self._exception_detail(exc)
@@ -1313,7 +1430,12 @@ class BotApplication:
                 LOGGER.warning("upload_publish_failure_state_failed", exc_info=True)
             return RunSubmissionOutcome(
                 "run-publish-failed",
-                BotReply("Could not safely publish the upload. See the bot log."),
+                BotReply(
+                    "Could not safely publish the upload. See the bot log.",
+                    message=error_message(
+                        "Publish failed", "Could not safely publish the upload. See the bot log."
+                    ),
+                ),
             )
 
         try:
@@ -1321,23 +1443,25 @@ class BotApplication:
         except Exception as exc:  # noqa: BLE001 - publication exists; never delete it
             reason = f"published before state persistence: {self._exception_detail(exc)}"
             self._mark_upload_ambiguous(session.upload_id, reason)
+            note = (
+                f"Publication outcome is uncertain for {published_dir.name}; its files "
+                "were preserved. Check the bot log before retrying."
+            )
             return RunSubmissionOutcome(
                 "run-submission-uncertain",
-                BotReply(
-                    f"Publication outcome is uncertain for {published_dir.name}; its files "
-                    "were preserved. Check the bot log before retrying."
-                ),
+                BotReply(note, message=error_message("Submission uncertain", note)),
             )
 
         if not publication_durable:
             reason = "published run-dir could not be durably synced"
             self._mark_upload_ambiguous(session.upload_id, reason)
+            note = (
+                f"Publication durability is uncertain for {published_dir.name}; its files "
+                "were preserved and were not submitted. Check the bot log before retrying."
+            )
             return RunSubmissionOutcome(
                 "run-submission-uncertain",
-                BotReply(
-                    f"Publication durability is uncertain for {published_dir.name}; its files "
-                    "were preserved and were not submitted. Check the bot log before retrying."
-                ),
+                BotReply(note, message=error_message("Submission uncertain", note)),
             )
 
         try:
@@ -1371,13 +1495,14 @@ class BotApplication:
                     session.upload_id,
                     f"commit receipt persistence failed: {self._exception_detail(exc)}",
                 )
+                note = (
+                    f"Submission {receipt.submission_id} reached the downstream system, "
+                    "but its local receipt could not be persisted. The run directory and "
+                    "reconciliation marker were preserved."
+                )
                 return RunSubmissionOutcome(
                     "run-submission-uncertain",
-                    BotReply(
-                        f"Submission {receipt.submission_id} reached the downstream system, "
-                        "but its local receipt could not be persisted. The run directory and "
-                        "reconciliation marker were preserved."
-                    ),
+                    BotReply(note, message=error_message("Submission uncertain", note)),
                     receipt,
                 )
         elif receipt.cleanup_safe:
@@ -2231,19 +2356,24 @@ class BotApplication:
         )
 
     def _help_reply(self, prefix: str, *, provider: str) -> BotReply:
-        lines = [
-            "orca_auto bot commands",
-            "",
-            f"{prefix}list — Show unified activities",
-            f"{prefix}list clear — Remove completed, failed, and cancelled entries",
-            f"{prefix}list running — Show running activities only",
-            f"{prefix}list failed — Show failed activities only",
-            f"{prefix}cancel TARGET — Ask to cancel a workflow or queued job",
+        commands = [
+            (f"{prefix}list", "Show unified activities"),
+            (f"{prefix}list clear", "Remove completed, failed, and cancelled entries"),
+            (f"{prefix}list running", "Show running activities only"),
+            (f"{prefix}list failed", "Show failed activities only"),
+            (f"{prefix}cancel TARGET", "Ask to cancel a workflow or queued job"),
         ]
         if self._upload_command_available(provider):
-            lines.append(f"{prefix}run — Attach a .zip/.tar.gz run-dir to queue it")
-        lines.append(f"{prefix}help — Show this help message")
-        return BotReply("\n".join(lines))
+            commands.append((f"{prefix}run", "Attach a .zip/.tar.gz run-dir to queue it"))
+        commands.append((f"{prefix}help", "Show this help message"))
+        fallback = "orca_auto bot commands\n\n" + "\n".join(
+            f"{name} — {desc}" for name, desc in commands
+        )
+        message = reply_message(
+            "Commands",
+            *(reply_line(code(name), raw(f" — {desc}")) for name, desc in commands),
+        )
+        return BotReply(fallback, message=message)
 
     @staticmethod
     def _check_provider(
@@ -2274,7 +2404,14 @@ class BotApplication:
         status = "unknown-command"
         if name == "list":
             if args.lower() == "clear":
-                reply = BotReply(self._list_clear_text(), format="preformatted")
+                clear_text = self._list_clear_text()
+                reply = BotReply(
+                    clear_text,
+                    format="preformatted",
+                    message=reply_message(
+                        "Cleared", reply_line(code_block(clear_text)), severity="success"
+                    ),
+                )
                 status = "list-cleared"
             else:
                 reply = self._list_reply(
@@ -2285,7 +2422,13 @@ class BotApplication:
                 status = "list-sent"
         elif name == "cancel":
             if not args:
-                reply = BotReply(f"Usage: {prefix}cancel TARGET")
+                reply = BotReply(
+                    f"Usage: {prefix}cancel TARGET",
+                    message=reply_message(
+                        "Cancel a workflow or job",
+                        reply_line(text("Usage: "), code(f"{prefix}cancel TARGET")),
+                    ),
+                )
                 status = "cancel-usage"
             else:
                 # Cancellation is never executed from the text command.  Even a
@@ -2294,7 +2437,9 @@ class BotApplication:
                 try:
                     binding = self._resolve_cancel_binding(args)
                 except (LookupError, ValueError) as exc:
-                    reply = BotReply(str(exc))
+                    reply = BotReply(
+                        str(exc), message=error_message("Cancel target not found", str(exc))
+                    )
                     status = "cancel-target-invalid"
                 else:
                     reply = self._cancel_confirmation_reply(
@@ -2305,23 +2450,50 @@ class BotApplication:
                     status = "cancel-confirmation-sent"
         elif name == "run":
             if command.address.provider != "discord":
-                reply = BotReply("File uploads are available only through Discord.")
+                reply = BotReply(
+                    "File uploads are available only through Discord.",
+                    message=error_message(
+                        "Uploads unavailable", "File uploads are available only through Discord."
+                    ),
+                )
                 status = "run-unavailable"
             elif self.upload_policy is None or not self.upload_policy.enabled:
-                reply = BotReply("File uploads are disabled.")
+                reply = BotReply(
+                    "File uploads are disabled.",
+                    message=error_message("Uploads disabled", "File uploads are disabled."),
+                )
                 status = "run-disabled"
             elif self.upload_sessions is None:
-                reply = BotReply("Upload staging is not configured.")
+                reply = BotReply(
+                    "Upload staging is not configured.",
+                    message=error_message(
+                        "Uploads not configured", "Upload staging is not configured."
+                    ),
+                )
                 status = "run-misconfigured"
             else:
-                reply = BotReply(f"Attach a .zip or .tar.gz run-dir to {prefix}run to queue it.")
+                reply = BotReply(
+                    f"Attach a .zip or .tar.gz run-dir to {prefix}run to queue it.",
+                    message=reply_message(
+                        "Upload a run-dir",
+                        reply_line(
+                            raw("Attach a .zip or .tar.gz run-dir to "),
+                            code(f"{prefix}run"),
+                            raw(" to queue it."),
+                        ),
+                    ),
+                )
                 status = "run-usage"
         elif name in {"help", "start"}:
             reply = self._help_reply(prefix, provider=command.address.provider)
             status = "help-sent"
         else:
             reply = BotReply(
-                f"Unknown command: {prefix}{name}\nType {prefix}help for available commands."
+                f"Unknown command: {prefix}{name}\nType {prefix}help for available commands.",
+                message=error_message(
+                    "Unknown command",
+                    f"Type {prefix}help for available commands.",
+                ),
             )
 
         result = messenger.send_reply(command.address, reply)
@@ -2401,7 +2573,16 @@ class BotApplication:
             return "cancel-processed"
         if registered.kind == "cancel_dismiss":
             self._acknowledge(incoming, "Cancellation dismissed.", messenger)
-            self._send_action_reply(incoming, BotReply("Cancellation dismissed."), messenger)
+            self._send_action_reply(
+                incoming,
+                BotReply(
+                    "Cancellation dismissed.",
+                    message=info_message(
+                        "Kept running", "Cancellation dismissed — the activity keeps running."
+                    ),
+                ),
+                messenger,
+            )
             return "cancel-dismissed"
         if registered.kind == "list_refresh":
             self._acknowledge(incoming, "Refreshed.", messenger)
@@ -2418,18 +2599,33 @@ class BotApplication:
         if registered.kind == "run_confirm":
             text = "This legacy upload action is no longer available. Upload the file again."
             self._acknowledge(incoming, text, messenger)
-            self._send_action_reply(incoming, BotReply(text), messenger)
+            self._send_action_reply(
+                incoming,
+                BotReply(text, message=error_message("Action unavailable", text)),
+                messenger,
+            )
             return "run-unavailable"
         if registered.kind == "run_dismiss":
             text = "This legacy upload action is no longer available."
             self._acknowledge(incoming, text, messenger)
-            self._send_action_reply(incoming, BotReply(text), messenger)
+            self._send_action_reply(
+                incoming,
+                BotReply(text, message=error_message("Action unavailable", text)),
+                messenger,
+            )
             return "run-unavailable"
         if registered.kind == "list_clear":
             self._acknowledge(incoming, "Finished entries cleared.", messenger)
+            clear_text = self._list_clear_text()
             self._send_action_reply(
                 incoming,
-                BotReply(self._list_clear_text(), format="preformatted"),
+                BotReply(
+                    clear_text,
+                    format="preformatted",
+                    message=reply_message(
+                        "Cleared", reply_line(code_block(clear_text)), severity="success"
+                    ),
+                ),
                 messenger,
             )
             self._send_action_reply(
@@ -2474,7 +2670,14 @@ class BotApplication:
             self._clear_origin_actions(incoming, messenger)
             if consumed.action.kind is UploadActionKind.DISMISS:
                 self._acknowledge(incoming, "Upload discarded.", messenger)
-                self._send_action_reply(incoming, BotReply("Upload discarded."), messenger)
+                self._send_action_reply(
+                    incoming,
+                    BotReply(
+                        "Upload discarded.",
+                        message=info_message("Upload discarded", "The upload was discarded."),
+                    ),
+                    messenger,
+                )
                 return "run-dismissed"
 
             self._acknowledge(incoming, "Submitting…", messenger)
@@ -2484,7 +2687,11 @@ class BotApplication:
 
         text = self._invalid_action_text(status)
         self._acknowledge(incoming, text, messenger)
-        self._send_action_reply(incoming, BotReply(text), messenger)
+        self._send_action_reply(
+            incoming,
+            BotReply(text, message=error_message("Action unavailable", text)),
+            messenger,
+        )
         return status
 
     def dispatch_action(
@@ -2507,7 +2714,11 @@ class BotApplication:
         if resolution.action is None:
             text = self._invalid_action_text(resolution.status)
             self._acknowledge(action, text, messenger)
-            self._send_action_reply(action, BotReply(text), messenger)
+            self._send_action_reply(
+                action,
+                BotReply(text, message=error_message("Action unavailable", text)),
+                messenger,
+            )
             return resolution.status
         return self._dispatch_registered_action(resolution.action, action, messenger)
 
