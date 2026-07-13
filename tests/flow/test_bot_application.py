@@ -204,13 +204,49 @@ def test_list_clear_and_help_use_discord_command_prefix() -> None:
         "list-cleared"
     )
     assert fixture.clear_count == 1
-    assert messenger.replies[-1][1] == BotReply("cleared: 3", format="preformatted")
+    clear_reply = messenger.replies[-1][1]
+    assert clear_reply.text == "cleared: 3"
+    assert clear_reply.format == "preformatted"
+    assert clear_reply.message is not None
+    assert clear_reply.message.title == "Cleared"
+    assert clear_reply.message.author == "orca_auto"
 
     assert application.dispatch_command(_command("help"), messenger=messenger) == "help-sent"
     help_reply = messenger.replies[-1][1]
     assert "!list" in help_reply.text and "!cancel TARGET" in help_reply.text
     assert "<b>" not in help_reply.text
     assert "```" not in help_reply.text
+
+
+def test_interactive_replies_carry_orca_auto_embed_message() -> None:
+    application = _application(ActivityFixture())
+    messenger = FakeMessenger()
+
+    application.dispatch_command(_command("help"), messenger=messenger)
+    help_message = messenger.replies[-1][1].message
+    assert help_message is not None
+    assert help_message.author == "orca_auto"
+    assert help_message.title == "Commands"
+
+    application.dispatch_command(_command("bogus"), messenger=messenger)
+    error = messenger.replies[-1][1].message
+    assert error is not None
+    assert error.severity == "error"
+    assert error.title == "Unknown command"
+
+
+def test_oversized_list_table_falls_back_to_plain_pagination(monkeypatch: Any) -> None:
+    application = _application(ActivityFixture())
+    messenger = FakeMessenger()
+
+    monkeypatch.setattr(application, "_list_text", lambda *_a, **_k: "row\n" * 2000)
+    application.dispatch_command(_command("list"), messenger=messenger)
+    reply = messenger.replies[-1][1]
+    # A table too large for an embed description degrades to the paginated plain
+    # path (no embed) so every row is delivered instead of truncated.
+    assert reply.message is None
+    assert reply.format == "preformatted"
+    assert reply.text.count("row") == 2000
 
 
 def test_help_uses_telegram_command_prefix() -> None:
@@ -366,7 +402,10 @@ def test_cancel_and_clear_actions_refresh_the_list() -> None:
     application.dispatch_action(_incoming_action(clear.action_id), messenger=messenger)
     clear_replies = [reply for _address, reply in messenger.replies[before_clear:]]
     assert fixture.clear_count == 1
-    assert clear_replies[0] == BotReply("cleared: 3", format="preformatted")
+    assert clear_replies[0].text == "cleared: 3"
+    assert clear_replies[0].format == "preformatted"
+    assert clear_replies[0].message is not None
+    assert clear_replies[0].message.title == "Cleared"
     assert clear_replies[-1].actions
 
     application.dispatch_command(_command("cancel", "run-1"), messenger=messenger)

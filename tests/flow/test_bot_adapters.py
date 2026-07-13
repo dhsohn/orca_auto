@@ -27,6 +27,27 @@ from orca_auto.flow.bot.providers import discord as discord_provider
 from orca_auto.flow.bot.providers import telegram as telegram_provider
 
 
+def test_discord_reply_message_becomes_an_embed() -> None:
+    from orca_auto.flow.bot.replies import reply_message
+
+    assert discord_provider._embed_object(BotReply("plain")) is None
+    embed = discord_provider._embed_object(BotReply("fallback", message=reply_message("Commands")))
+    assert embed is not None
+    assert embed.title == "Commands"
+    assert embed.author.name == "orca_auto"
+
+
+def test_telegram_reply_message_renders_html_chunks() -> None:
+    from orca_auto.flow.bot.replies import reply_message
+
+    chunks = telegram_provider._reply_chunks(
+        BotReply("fallback", message=reply_message("Commands"))
+    )
+    assert chunks[0][1] == "HTML"
+    assert "<b>Commands</b>" in chunks[0][0]
+    assert chunks[0][0].startswith("orca_auto")
+
+
 def test_telegram_parses_allowed_command_and_callback_into_neutral_events() -> None:
     command_update = {
         "update_id": 10,

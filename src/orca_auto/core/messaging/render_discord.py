@@ -74,11 +74,20 @@ def _code_span(value: str) -> str:
     return f"{fence}{padding}{value}{padding}{fence}"
 
 
+def _fenced_block(value: str) -> str:
+    """Render a multi-line preformatted block as a Discord fenced code block."""
+    longest_run = max((len(run) for run in re.findall(r"`+", value)), default=0)
+    fence = "`" * max(3, longest_run + 1)
+    return f"{fence}\n{value}\n{fence}"
+
+
 def _md_span(span: Span) -> str:
     if span.style == "bold":
         return f"**{_escape_markdown(span.text)}**" if span.text else ""
     if span.style == "code":
         return _code_span(span.text)
+    if span.style == "pre":
+        return _fenced_block(span.text)
     return _escape_markdown(span.text)
 
 

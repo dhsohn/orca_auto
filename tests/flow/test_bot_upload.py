@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from orca_auto.core.ingest import UploadPolicy, UploadState
+from orca_auto.core.messaging import render_discord_embed
 from orca_auto.core.messaging.channel import SendResult
 from orca_auto.core.messaging.interactive import (
     Actor,
@@ -262,6 +263,13 @@ def test_confirm_extracts_and_submits(tmp_path: Path, monkeypatch: pytest.Monkey
     assert submitted == [tmp_path / "mol42"]
     assert (tmp_path / "mol42" / "job.inp").exists()
     assert "Queued mol42" in messenger.replies[-1].text
+    # The rich success reply keeps exposing the submission id operators track by.
+    success_message = messenger.replies[-1].message
+    assert success_message is not None
+    success_embed = render_discord_embed(success_message)
+    assert any(
+        field["name"] == "ID" and "q-test" in field["value"] for field in success_embed["fields"]
+    )
     # Staged archive is consumed.
     assert not Path(upload.archive_path).exists()
 

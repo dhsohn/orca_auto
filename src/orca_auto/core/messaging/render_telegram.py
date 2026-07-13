@@ -25,6 +25,8 @@ def _render_span(span: Span) -> str:
         return f"<b>{escaped}</b>"
     if span.style == "code":
         return f"<code>{escaped}</code>"
+    if span.style == "pre":
+        return f"<pre>{escaped}</pre>"
     return escaped
 
 
