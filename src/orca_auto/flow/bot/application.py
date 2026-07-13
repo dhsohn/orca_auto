@@ -1309,13 +1309,16 @@ class BotApplication:
                 ),
                 receipt,
             )
+        submission_fields = [field_row("Run-dir", code(job_dir.name), inline=True)]
+        if receipt.submission_id:
+            submission_fields.append(field_row("ID", code(receipt.submission_id), inline=True))
         return RunSubmissionOutcome(
             "run-submitted",
             BotReply(
                 f"Queued {job_dir.name}{identifier}. Track it with the list command.",
                 message=reply_message(
                     "Queued",
-                    field_row("Run-dir", code(job_dir.name)),
+                    *submission_fields,
                     reply_line(text("Track it with the list command.")),
                     severity="success",
                 ),
