@@ -473,6 +473,20 @@ def list_all_slots(root: str | Path) -> list[AdmissionSlot]:
         return store.load_slots_fn(store.root)
 
 
+def read_slots(root: str | Path) -> list[AdmissionSlot]:
+    """Load admission slots read-only: no lock, no prune, no rewrite.
+
+    For passive observers (e.g. the ``queue list --watch`` per-job metrics view)
+    that must not touch the worker's durable state or contend for its lock. Slot
+    writes use atomic replace, so an unlocked read always sees a complete old or
+    new file — never a torn one — and a malformed file raises
+    :class:`AdmissionStoreCorruptError`, so callers can fail closed.
+    """
+
+    store = AdmissionStore.for_root(root)
+    return store.load_slots_fn(store.root)
+
+
 def get_slot(root: str | Path, token: str) -> AdmissionSlot | None:
     return next((slot for slot in list_all_slots(root) if slot.token == token), None)
 

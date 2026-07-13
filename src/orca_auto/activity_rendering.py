@@ -38,16 +38,53 @@ def _terminal_max_width() -> int | None:
     return _terminal_table.terminal_max_width(get_terminal_size=shutil.get_terminal_size)
 
 
+def _tree_prefixes(indents: Sequence[int]) -> list[str]:
+    """Return box-drawing tree prefixes for a flat, depth-ordered row list.
+
+    A row is the last child at its depth when no later row shares that depth
+    before the indentation drops below it; ancestors that still have a later
+    sibling contribute a ``│`` continuation bar. Depth-0 rows get no prefix, so
+    the result lines up one-to-one with ``rows``.
+    """
+
+    normalized = [max(0, int(value)) for value in indents]
+    count = len(normalized)
+
+    def _has_later_row_at(start: int, depth: int) -> bool:
+        for later in range(start, count):
+            if normalized[later] < depth:
+                return False
+            if normalized[later] == depth:
+                return True
+        return False
+
+    prefixes: list[str] = []
+    for index, depth in enumerate(normalized):
+        if depth <= 0:
+            prefixes.append("")
+            continue
+        segments = [
+            "│  " if _has_later_row_at(index + 1, level) else "   " for level in range(1, depth)
+        ]
+        segments.append("├─ " if _has_later_row_at(index + 1, depth) else "└─ ")
+        prefixes.append("".join(segments))
+    return prefixes
+
+
 def _prepare_queue_table_rows(
     rows: Sequence[tuple[int, dict[str, Any]]],
     *,
     now: datetime | None = None,
+    use_tree_glyphs: bool = False,
 ) -> list[dict[str, str]]:
     prepared: list[dict[str, str]] = []
     resolved_now = now or _queue_table_now()
-    for indent, item in rows:
+    prefixes = _tree_prefixes([indent for indent, _ in rows]) if use_tree_glyphs else None
+    for position, (indent, item) in enumerate(rows):
         name = _queue_name_text(item)
-        if int(indent) > 0:
+        if prefixes is not None:
+            name = prefixes[position] + name
+        elif int(indent) > 0:
             name = ("  " * int(indent)) + name
         item_id = normalize_text(item.get("activity_id")) or "-"
         prepared.append(
@@ -68,8 +105,9 @@ def queue_table_lines(
     now: datetime | None = None,
     max_width: int | None = None,
     include_id: bool = True,
+    use_tree_glyphs: bool = False,
 ) -> list[str]:
-    prepared = _prepare_queue_table_rows(rows, now=now)
+    prepared = _prepare_queue_table_rows(rows, now=now, use_tree_glyphs=use_tree_glyphs)
     return _terminal_table.queue_table_lines(
         prepared,
         max_width=max_width,
@@ -85,12 +123,21 @@ def queue_list_text_lines(
     max_width: int | None = None,
     include_id: bool = True,
     empty_message: str = "No matching activities.",
+    use_tree_glyphs: bool = False,
 ) -> list[str]:
     lines = [f"active_simulations: {int(active_simulations)}"]
     if not rows:
         lines.append(empty_message)
         return lines
-    lines.extend(queue_table_lines(rows, now=now, max_width=max_width, include_id=include_id))
+    lines.extend(
+        queue_table_lines(
+            rows,
+            now=now,
+            max_width=max_width,
+            include_id=include_id,
+            use_tree_glyphs=use_tree_glyphs,
+        )
+    )
     return lines
 
 

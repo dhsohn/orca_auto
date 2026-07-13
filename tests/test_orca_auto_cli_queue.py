@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,14 +9,21 @@ from typing import Any
 
 import pytest
 
-from orca_auto import cli_common
+from orca_auto import cli_common, cli_style
 from orca_auto import cli_queue as unified_cli
+from orca_auto.system_metrics import JobMetrics, SystemMetrics, SystemMetricsSampler
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 def test_cmd_queue_list_watch_loops_until_interrupt() -> None:
     calls = {"emit": 0}
 
-    def _emit_once(args: Any, request: Any) -> int:
+    def _emit_once(args: Any, request: Any, **_kwargs: Any) -> int:
         calls["emit"] += 1
         return 0
 
@@ -39,6 +47,297 @@ def test_cmd_queue_list_watch_loops_until_interrupt() -> None:
     assert unified_cli.cmd_queue_list(args, deps=deps) == 0
     # One render happened before the (mocked) sleep raised KeyboardInterrupt.
     assert calls["emit"] == 1
+
+
+def test_watch_banner_plain_without_color_matches_legacy() -> None:
+    # Non-TTY `--watch` must keep the historical banner byte-for-byte — no spinner
+    # glyph and no clock leaking into piped/`--no-color` output.
+    cli_style.set_color_override(False)
+    try:
+        assert (
+            unified_cli._watch_banner_line("⠋", 2.0)
+            == "orca_auto queue list — refresh every 2s · Ctrl-C to exit"
+        )
+    finally:
+        cli_style.set_color_override(None)
+
+
+def test_watch_banner_styled_with_color() -> None:
+    cli_style.set_color_override(True)
+    try:
+        line = unified_cli._watch_banner_line(
+            "⠋", 2.0, now=datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+        )
+    finally:
+        cli_style.set_color_override(None)
+    plain = _strip_ansi(line)
+    assert "⠋ live" in plain
+    assert "03:00:00" in plain
+    assert "\x1b[" in line
+
+
+def test_resource_gauge_line_renders_available_fields() -> None:
+    metrics = SystemMetrics(
+        cpu_percent=58.0,
+        mem_used_bytes=8 * 1024**3,
+        mem_total_bytes=32 * 1024**3,
+        load1=1.0,
+        load5=2.0,
+        load15=3.0,
+    )
+    cli_style.set_color_override(True)
+    try:
+        line = unified_cli._resource_gauge_line(metrics)
+    finally:
+        cli_style.set_color_override(None)
+    assert line is not None
+    plain = _strip_ansi(line)
+    assert "CPU" in plain and "58%" in plain
+    assert "RAM" in plain and "8.0/32.0G" in plain
+    assert "load 1.00 2.00 3.00" in plain
+    assert "█" in plain or "░" in plain
+
+
+def test_resource_gauge_line_is_none_when_all_sources_missing() -> None:
+    empty = SystemMetrics(
+        cpu_percent=None,
+        mem_used_bytes=None,
+        mem_total_bytes=None,
+        load1=None,
+        load5=None,
+        load15=None,
+    )
+    assert unified_cli._resource_gauge_line(empty) is None
+
+
+class _FixedSampler(SystemMetricsSampler):
+    def __init__(self, metrics: SystemMetrics) -> None:
+        self._metrics = metrics
+
+    def sample(self) -> SystemMetrics | None:
+        return self._metrics
+
+
+def _watch_args() -> SimpleNamespace:
+    return SimpleNamespace(
+        action=None,
+        orca_auto_config=None,
+        limit=0,
+        refresh=False,
+        engine=None,
+        status=None,
+        kind=None,
+        json=False,
+        watch=True,
+        interval=2.0,
+    )
+
+
+def test_watch_prints_system_resource_gauge_on_tty(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def _emit(_args: Any, _request: Any, **_kwargs: Any) -> int:
+        return 0
+
+    def _sleep(_interval: float) -> None:
+        raise KeyboardInterrupt
+
+    sampler = _FixedSampler(
+        SystemMetrics(
+            cpu_percent=58.0,
+            mem_used_bytes=8 * 1024**3,
+            mem_total_bytes=32 * 1024**3,
+            load1=1.0,
+            load5=2.0,
+            load15=3.0,
+        )
+    )
+    deps = unified_cli.QueueCliDeps(
+        emit_queue_list_once=_emit, sleep=_sleep, system_metrics_sampler=sampler
+    )
+    cli_style.set_color_override(True)
+    try:
+        assert unified_cli.cmd_queue_list(_watch_args(), deps=deps) == 0
+    finally:
+        cli_style.set_color_override(None)
+    out = _strip_ansi(capsys.readouterr().out)
+    assert "CPU" in out and "58%" in out
+    assert "8.0/32.0G" in out
+    assert "load 1.00 2.00 3.00" in out
+
+
+def test_watch_omits_resource_gauge_without_color(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def _emit(_args: Any, _request: Any, **_kwargs: Any) -> int:
+        return 0
+
+    def _sleep(_interval: float) -> None:
+        raise KeyboardInterrupt
+
+    sampler = _FixedSampler(
+        SystemMetrics(
+            cpu_percent=58.0,
+            mem_used_bytes=8 * 1024**3,
+            mem_total_bytes=32 * 1024**3,
+            load1=1.0,
+            load5=2.0,
+            load15=3.0,
+        )
+    )
+    deps = unified_cli.QueueCliDeps(
+        emit_queue_list_once=_emit, sleep=_sleep, system_metrics_sampler=sampler
+    )
+    # Non-TTY: the gauge must not leak, and the banner stays byte-for-byte legacy.
+    cli_style.set_color_override(False)
+    try:
+        assert unified_cli.cmd_queue_list(_watch_args(), deps=deps) == 0
+    finally:
+        cli_style.set_color_override(None)
+    out = capsys.readouterr().out
+    assert "CPU" not in out and "load 1.00" not in out
+    assert "orca_auto queue list — refresh every 2s · Ctrl-C to exit" in out
+
+
+def test_fmt_rss_units() -> None:
+    assert unified_cli._fmt_rss(6 * 1024**3) == "6.0G"
+    assert unified_cli._fmt_rss(512 * 1024**2) == "512M"
+    assert unified_cli._fmt_rss(700 * 1024) == "700K"
+
+
+def test_row_job_metric_matches_only_job_rows() -> None:
+    metric = JobMetrics(cpu_percent=780.0, rss_bytes=6 * 1024**3)
+    job_metrics = {"q1": metric}
+    assert unified_cli._row_job_metric({"kind": "job", "activity_id": "q1"}, job_metrics) is metric
+    assert (
+        unified_cli._row_job_metric(
+            {"kind": "job", "activity_id": "wf", "metadata": {"queue_id": "q1"}}, job_metrics
+        )
+        is metric
+    )
+    assert unified_cli._row_job_metric({"kind": "job", "activity_id": "other"}, job_metrics) is None
+    # A workflow parent whose id collides with a queue id must NOT be annotated.
+    assert (
+        unified_cli._row_job_metric({"kind": "workflow", "activity_id": "q1"}, job_metrics) is None
+    )
+
+
+def test_job_annotation_renders_cpu_and_ram() -> None:
+    cli_style.set_color_override(True)
+    try:
+        line = unified_cli._job_annotation(JobMetrics(cpu_percent=780.0, rss_bytes=6 * 1024**3))
+    finally:
+        cli_style.set_color_override(None)
+    plain = _strip_ansi(line)
+    assert "cpu 780%" in plain and "ram 6.0G" in plain
+
+
+def test_job_annotation_omits_cpu_when_none() -> None:
+    line = unified_cli._job_annotation(JobMetrics(cpu_percent=None, rss_bytes=2 * 1024**3))
+    plain = _strip_ansi(line)
+    assert "cpu" not in plain and "ram 2.0G" in plain
+
+
+def _running_job_payload() -> dict[str, Any]:
+    return {
+        "count": 1,
+        "activities": [
+            {
+                "activity_id": "q1",
+                "kind": "job",
+                "engine": "orca",
+                "status": "running",
+                "label": "TD-DFT",
+                "source": "orca_auto_orca",
+                "submitted_at": "2026-04-26T02:57:00+00:00",
+                "updated_at": "2026-04-26T02:57:00+00:00",
+                "metadata": {"queue_id": "q1"},
+            },
+        ],
+        "sources": {},
+    }
+
+
+def test_watch_annotates_running_row_with_job_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+    )
+    monkeypatch.setattr(unified_cli, "list_activities", lambda **kwargs: _running_job_payload())
+
+    def _sleep(_interval: float) -> None:
+        raise KeyboardInterrupt
+
+    def _provider(_config: str | None) -> dict[str, JobMetrics]:
+        return {"q1": JobMetrics(cpu_percent=780.0, rss_bytes=6 * 1024**3)}
+
+    deps = unified_cli.QueueCliDeps(sleep=_sleep, job_metrics_provider=_provider)
+    args = SimpleNamespace(
+        action=None,
+        orca_auto_config=None,
+        workflow_root=None,
+        limit=0,
+        refresh=False,
+        engine=None,
+        status=None,
+        kind=None,
+        json=False,
+        watch=True,
+        interval=2.0,
+    )
+    cli_style.set_color_override(True)
+    try:
+        assert unified_cli.cmd_queue_list(args, deps=deps) == 0
+    finally:
+        cli_style.set_color_override(None)
+    out = _strip_ansi(capsys.readouterr().out)
+    assert "TD-DFT" in out
+    assert "cpu 780%" in out and "ram 6.0G" in out
+
+
+def test_watch_omits_job_metrics_without_color(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+    )
+    monkeypatch.setattr(unified_cli, "list_activities", lambda **kwargs: _running_job_payload())
+
+    def _sleep(_interval: float) -> None:
+        raise KeyboardInterrupt
+
+    calls = {"provider": 0}
+
+    def _provider(_config: str | None) -> dict[str, JobMetrics]:
+        calls["provider"] += 1
+        return {"q1": JobMetrics(cpu_percent=999.0, rss_bytes=1)}
+
+    deps = unified_cli.QueueCliDeps(sleep=_sleep, job_metrics_provider=_provider)
+    args = SimpleNamespace(
+        action=None,
+        orca_auto_config=None,
+        workflow_root=None,
+        limit=0,
+        refresh=False,
+        engine=None,
+        status=None,
+        kind=None,
+        json=False,
+        watch=True,
+        interval=2.0,
+    )
+    cli_style.set_color_override(False)
+    try:
+        assert unified_cli.cmd_queue_list(args, deps=deps) == 0
+    finally:
+        cli_style.set_color_override(None)
+    out = capsys.readouterr().out
+    # Non-TTY: the provider is never consulted and no annotation leaks.
+    assert calls["provider"] == 0
+    assert "cpu" not in out and "999%" not in out
 
 
 def test_cmd_queue_list_rejects_watch_json(
@@ -190,6 +489,195 @@ def test_cmd_queue_list_filters_text_output(
     assert "01:00:00" in stdout
     assert "crest-q-1" not in stdout
     assert "wf-1" not in stdout
+
+
+def test_cmd_queue_list_tty_renders_styled_view(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+    )
+    monkeypatch.setattr(
+        unified_cli,
+        "list_activities",
+        lambda **kwargs: {
+            "count": 3,
+            "activities": [
+                {
+                    "activity_id": "wf-1",
+                    "kind": "workflow",
+                    "engine": "workflow",
+                    "status": "running",
+                    "label": "screen",
+                    "source": "orca_auto_flow",
+                    "submitted_at": "2026-04-26T00:47:00+00:00",
+                    "updated_at": "2026-04-26T00:47:00+00:00",
+                },
+                {
+                    "activity_id": "orca-1",
+                    "kind": "job",
+                    "engine": "orca",
+                    "status": "completed",
+                    "label": "opt",
+                    "source": "orca_auto_orca",
+                    "parent_workflow_id": "wf-1",
+                    "metadata": {"workflow_id": "wf-1"},
+                    "submitted_at": "2026-04-26T02:00:00+00:00",
+                    "updated_at": "2026-04-26T02:41:00+00:00",
+                },
+                {
+                    "activity_id": "orca-2",
+                    "kind": "job",
+                    "engine": "orca",
+                    "status": "running",
+                    "label": "freq",
+                    "source": "orca_auto_orca",
+                    "parent_workflow_id": "wf-1",
+                    "metadata": {"workflow_id": "wf-1"},
+                    "submitted_at": "2026-04-26T02:57:00+00:00",
+                    "updated_at": "2026-04-26T02:57:00+00:00",
+                },
+            ],
+            "sources": {},
+        },
+    )
+
+    # ``set_color_override`` is process-global, so always restore it.
+    cli_style.set_color_override(True)
+    try:
+        result = unified_cli.cmd_queue_list(
+            SimpleNamespace(
+                workflow_root=None,
+                orca_auto_config=None,
+                limit=0,
+                refresh=False,
+                engine=None,
+                status=None,
+                kind=None,
+                json=False,
+            )
+        )
+    finally:
+        cli_style.set_color_override(None)
+
+    assert result == 0
+    stdout = capsys.readouterr().out
+    plain = _strip_ansi(stdout)
+
+    # The styled summary band replaces the plain ``active_simulations:`` line on
+    # a TTY, and reports the status breakdown.
+    assert "orca_auto queue" in plain
+    assert "active" in plain and "running" in plain
+    assert "active_simulations:" not in plain
+    # Tree connectors for the workflow's ORCA children plus the per-row rail.
+    assert "├─" in plain and "└─" in plain
+    assert "▎" in plain
+    # Real ANSI SGR codes were emitted (not just the plain fallback).
+    assert "\x1b[" in stdout
+
+
+def test_cmd_queue_list_tty_rail_never_overflows_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from orca_auto.terminal_table import display_width
+
+    monkeypatch.setattr(
+        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+    )
+    monkeypatch.setattr(
+        unified_cli,
+        "list_activities",
+        lambda **kwargs: {
+            "count": 3,
+            "activities": [
+                {
+                    "activity_id": "wf-1",
+                    "kind": "workflow",
+                    "engine": "workflow",
+                    "status": "running",
+                    "label": "screen",
+                    "source": "orca_auto_flow",
+                    "submitted_at": "2026-04-26T00:47:00+00:00",
+                    "updated_at": "2026-04-26T00:47:00+00:00",
+                },
+                {
+                    "activity_id": "orca-1",
+                    "kind": "job",
+                    "engine": "orca",
+                    "status": "completed",
+                    "label": "opt",
+                    "source": "orca_auto_orca",
+                    "parent_workflow_id": "wf-1",
+                    "metadata": {"workflow_id": "wf-1"},
+                    "submitted_at": "2026-04-26T02:00:00+00:00",
+                    "updated_at": "2026-04-26T02:41:00+00:00",
+                },
+                {
+                    "activity_id": "orca-2",
+                    "kind": "job",
+                    "engine": "orca",
+                    "status": "running",
+                    "label": "freq",
+                    "source": "orca_auto_orca",
+                    "parent_workflow_id": "wf-1",
+                    "metadata": {"workflow_id": "wf-1"},
+                    "submitted_at": "2026-04-26T02:57:00+00:00",
+                    "updated_at": "2026-04-26T02:57:00+00:00",
+                },
+            ],
+            "sources": {},
+        },
+    )
+
+    args = SimpleNamespace(
+        workflow_root=None,
+        orca_auto_config=None,
+        limit=0,
+        refresh=False,
+        engine=None,
+        status=None,
+        kind=None,
+        json=False,
+    )
+
+    def _render(width: int, *, color: bool) -> str:
+        monkeypatch.setattr(unified_cli, "_queue_terminal_width", lambda: width)
+        cli_style.set_color_override(color)
+        try:
+            assert unified_cli.cmd_queue_list(args) == 0
+        finally:
+            cli_style.set_color_override(None)
+        return capsys.readouterr().out
+
+    def _table_lines(out: str) -> list[str]:
+        lines = _strip_ansi(out).split("\n")
+        # The table starts at the header row; the band above it is not
+        # width-bounded and is excluded.
+        header = next(i for i, line in enumerate(lines) if "Status" in line and "Name" in line)
+        return [line for line in lines[header:] if line.strip()]
+
+    def _table_width(out: str) -> int:
+        # The divider is a run of dashes exactly as wide as the table, before any
+        # rail/gutter, so it recovers the intrinsic width regardless of the rail.
+        divider = next(line for line in _strip_ansi(out).split("\n") if "─" in line)
+        return divider.count("─")
+
+    # Fully shrink the styled table to learn its (tree-glyph) column floor.
+    min_width = _table_width(_render(1, color=True))
+
+    # At a terminal exactly as wide as that floor the rail cannot be absorbed, so
+    # it must be dropped and the block must not overflow. The original code added
+    # the rail unconditionally and overflowed by the rail width here.
+    tight = _table_lines(_render(min_width, color=True))
+    assert max(display_width(line) for line in tight) <= min_width
+    assert not any(line.startswith("▎") for line in tight)
+
+    # With just enough extra room the rail returns and still fits.
+    roomy = _table_lines(_render(min_width + 2, color=True))
+    assert any(line.startswith("▎") for line in roomy)
+    assert max(display_width(line) for line in roomy) <= min_width + 2
 
 
 def test_cmd_queue_list_hides_non_orca_workflow_children_in_default_text_output(

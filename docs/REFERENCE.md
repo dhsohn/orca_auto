@@ -640,14 +640,34 @@ combined text view to reduce noise, but remain available through `--engine ... -
 filters and `--json`. Top-level ORCA jobs remain top-level entries. The
 `active_simulations` line counts only the currently running
 simulations that consume the shared `scheduler.max_active_simulations` slots.
+
+On an interactive terminal the text view is styled: a summary band replaces the plain
+`active_simulations:` line with per-status counts (running, queued, done, failed,
+cancelled), workflow children are drawn with box-drawing tree connectors (`├─`/`└─`)
+instead of plain indentation, and each row carries a status-colored left rail.
+`queue list --watch` shows a spinner and a clock in its banner. These affordances are
+terminal-only: piped output, `--json`, `NO_COLOR`, and `--no-color` keep the plain,
+byte-stable table — including the `active_simulations:` line and plain indentation — so
+scripts and the messenger `/list` view are unaffected.
+
 The selected bot's list command (Telegram `/list`, Discord `!list`) renders the same table layout and default
 workflow-child visibility policy, except it omits the `ID` column so each row fits on a
 single line on narrow mobile screens. Its actions message offers per-activity cancel
 buttons plus refresh and "clear finished" buttons (the latter equivalent to `/list clear`).
 
 `queue list --watch` continuously refreshes the list until interrupted; `--interval` sets
-the refresh seconds (default 2.0). `queue list clear` prunes completed, failed, and
-cancelled entries from the unified list.
+the refresh seconds (default 2.0). On an interactive terminal the watch view also draws a
+live system resource line above the table — CPU utilization, RAM used/total, and load
+average with colored block-bar gauges — sampled from Linux `/proc` between refreshes with
+no added dependency. It fails closed: on a host without a readable `/proc` (or for any
+individual field that cannot be read) the line is omitted, and it never appears in piped or
+`--no-color` output. (CPU utilization is a delta measurement, so it first appears on the
+second refresh.) Each running job is additionally annotated with its own CPU% and resident
+memory, across every engine (ORCA, internal xTB/CREST, standalone xTB-MD): the usage is
+attributed from the engine PID/PGID the worker records in the durable admission slot —
+validated against its boot id and process start ticks so a recycled id is never
+mis-attributed — and aggregated from `/proc` by process group. `queue list clear` prunes
+completed, failed, and cancelled entries from the unified list.
 
 ### 7.5 CLI Output and Global Flags
 

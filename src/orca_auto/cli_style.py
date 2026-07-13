@@ -104,6 +104,10 @@ def sgr(*codes: str) -> str:
 # Public alias so callers can append a reset after a raw :func:`sgr` opener.
 RESET = _RESET
 
+# Braille spinner frames for the ``queue list --watch`` banner. Kept here so any
+# animated CLI affordance shares one definition.
+SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
 
 def label(text: str, *, stream: IO[str] | None = None) -> str:
     """Dim a field label (e.g. ``workflow_id:``) for key/value output."""
@@ -136,6 +140,7 @@ __all__ = [
     "MAGENTA",
     "RED",
     "RESET",
+    "SPINNER_FRAMES",
     "YELLOW",
     "clear_screen",
     "color_enabled",
