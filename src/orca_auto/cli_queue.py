@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -8,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from orca_auto import activity_rendering as _activity_rendering
-from orca_auto import cli_style
+from orca_auto import cli_common, cli_style
 from orca_auto.activity_presenter import (
     QueueListPresentationDeps,
     QueueListPresentationRequest,
@@ -97,6 +98,26 @@ def _queue_terminal_width() -> int | None:
     return _activity_rendering._terminal_max_width()
 
 
+def _stdout_isatty() -> bool:
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _layout_interactive() -> bool:
+    """Whether to use the interactive layout (summary band, tree glyphs, rail,
+    watch redraw) instead of the machine-readable plain view.
+
+    Layout changes require a real terminal, so ``FORCE_COLOR`` — which enables
+    color on a pipe — never restructures piped output; ``--no-color``/``NO_COLOR``
+    keep the plain view. Color painting still follows
+    :func:`cli_style.color_enabled`.
+    """
+
+    return cli_style.color_enabled() and _stdout_isatty()
+
+
 # The queue table gains a status-colored left rail on a TTY; the rail glyph plus
 # its trailing space are reserved from the terminal width so the fitted table and
 # the rail together never exceed the terminal.
@@ -164,10 +185,10 @@ def _queue_header_band_lines(
 
 
 def _watch_banner_line(spinner: str, interval: float, *, now: Any | None = None) -> str:
-    # Non-TTY keeps the historical plain banner byte-for-byte (no spinner/clock),
-    # so piped/`--no-color` `--watch` output is unchanged; the spinner and clock
-    # are TTY-only affordances.
-    if not cli_style.color_enabled():
+    # A non-interactive terminal keeps the historical plain banner byte-for-byte
+    # (no spinner/clock), so piped, `--no-color`, and `FORCE_COLOR`-piped `--watch`
+    # output is unchanged; the spinner and clock are interactive-only affordances.
+    if not _layout_interactive():
         return f"orca_auto queue list — refresh every {interval:g}s · Ctrl-C to exit"
     clock = (now or _queue_table_now()).strftime("%H:%M:%S")
     left = cli_style.paint(f"{spinner} live", cli_style.CYAN) + cli_style.label(
@@ -292,7 +313,7 @@ def _queue_list_text_lines(
         max_width=max_width if max_width is not None else _queue_terminal_width(),
         include_id=include_id,
         empty_message=empty_message,
-        use_tree_glyphs=cli_style.color_enabled(),
+        use_tree_glyphs=_layout_interactive(),
     )
 
 
@@ -418,7 +439,7 @@ def _print_queue_list_text(
     request: _QueueListRequest,
     job_metrics: dict[str, JobMetrics] | None = None,
 ) -> int:
-    tty = cli_style.color_enabled()
+    tty = _layout_interactive()
     term_width = _queue_terminal_width()
     rail_width = _queue_display_width(_QUEUE_RAIL)
     max_width = term_width
@@ -519,30 +540,37 @@ def _watch_queue_list(
     emit_once = (deps.emit_queue_list_once if deps else None) or _emit_queue_list_once
     sleep = (deps.sleep if deps else None) or time.sleep
     frames = cli_style.SPINNER_FRAMES
-    # The sampler holds the previous /proc snapshot so CPU% is a delta over the
-    # refresh interval. It is TTY-only, so piped/`--no-color` watch output keeps
-    # the plain banner + table and never grows a resource line.
+    interactive = _layout_interactive()
+    # The sampler, the per-job provider, and the resource line are all
+    # interactive-only, so piped/`--no-color`/`FORCE_COLOR`-piped watch output
+    # keeps the plain banner and table and never grows a resource line. The
+    # sampler holds the previous /proc snapshot so CPU% is a delta over the
+    # refresh interval.
     sampler = (deps.system_metrics_sampler if deps else None) or (
-        SystemMetricsSampler() if cli_style.color_enabled() else None
+        SystemMetricsSampler() if interactive else None
     )
-    # Per-job CPU/RSS is likewise TTY-only. The provider carries its own
-    # ProcessGroupSampler so CPU% is a delta across refreshes.
+    # The provider carries its own ProcessGroupSampler so CPU% is a delta across
+    # refreshes. Resolve the effective config once (discovering env/default) so
+    # per-job metrics also appear in the no-argument `queue list --watch` flow,
+    # where ``request.shared_config`` is None but a default config is discovered.
     job_metrics_provider = (deps.job_metrics_provider if deps else None) or (
-        _default_job_metrics_provider() if cli_style.color_enabled() else None
+        _default_job_metrics_provider() if interactive else None
     )
+    metrics_config = cli_common._discover_shared_config_path(request.shared_config)
     tick = 0
     try:
         while True:
-            cli_style.clear_screen()
+            if interactive:
+                cli_style.clear_screen()
             print(_watch_banner_line(frames[tick % len(frames)], interval))
-            if sampler is not None and cli_style.color_enabled():
+            if sampler is not None and interactive:
                 metrics = sampler.sample()
                 gauge = _resource_gauge_line(metrics) if metrics is not None else None
                 if gauge:
                     print(gauge)
             job_metrics = (
-                job_metrics_provider(request.shared_config)
-                if job_metrics_provider is not None and cli_style.color_enabled()
+                job_metrics_provider(metrics_config)
+                if job_metrics_provider is not None and interactive
                 else None
             )
             emit_once(args, request, job_metrics=job_metrics)

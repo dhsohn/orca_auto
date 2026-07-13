@@ -62,7 +62,8 @@ def test_watch_banner_plain_without_color_matches_legacy() -> None:
         cli_style.set_color_override(None)
 
 
-def test_watch_banner_styled_with_color() -> None:
+def test_watch_banner_styled_with_color(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
     cli_style.set_color_override(True)
     try:
         line = unified_cli._watch_banner_line(
@@ -134,8 +135,11 @@ def _watch_args() -> SimpleNamespace:
 
 
 def test_watch_prints_system_resource_gauge_on_tty(
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
+
     def _emit(_args: Any, _request: Any, **_kwargs: Any) -> int:
         return 0
 
@@ -197,6 +201,159 @@ def test_watch_omits_resource_gauge_without_color(
     out = capsys.readouterr().out
     assert "CPU" not in out and "load 1.00" not in out
     assert "orca_auto queue list — refresh every 2s · Ctrl-C to exit" in out
+
+
+def test_layout_interactive_requires_real_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Color alone (e.g. FORCE_COLOR on a pipe) must NOT enable the interactive
+    # layout — a real terminal is required — while ``--no-color`` stays plain even
+    # on a terminal.
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: False)
+    cli_style.set_color_override(True)
+    try:
+        assert unified_cli._layout_interactive() is False
+    finally:
+        cli_style.set_color_override(None)
+
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
+    cli_style.set_color_override(True)
+    try:
+        assert unified_cli._layout_interactive() is True
+    finally:
+        cli_style.set_color_override(None)
+
+    cli_style.set_color_override(False)
+    try:
+        assert unified_cli._layout_interactive() is False
+    finally:
+        cli_style.set_color_override(None)
+
+
+def test_queue_list_stays_plain_under_force_color_pipe(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Regression: FORCE_COLOR on a pipe (color on, not a TTY) must keep the
+    # machine-readable plain layout — the ``active_simulations:`` line, no summary
+    # band / tree glyphs / rail — while still emitting color codes.
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: False)
+    monkeypatch.setattr(
+        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+    )
+    monkeypatch.setattr(
+        unified_cli,
+        "list_activities",
+        lambda **kwargs: {
+            "count": 3,
+            "activities": [
+                {
+                    "activity_id": "wf-1",
+                    "kind": "workflow",
+                    "engine": "workflow",
+                    "status": "running",
+                    "label": "screen",
+                    "source": "orca_auto_flow",
+                    "submitted_at": "2026-04-26T00:47:00+00:00",
+                    "updated_at": "2026-04-26T00:47:00+00:00",
+                },
+                {
+                    "activity_id": "orca-1",
+                    "kind": "job",
+                    "engine": "orca",
+                    "status": "running",
+                    "label": "opt",
+                    "source": "orca_auto_orca",
+                    "parent_workflow_id": "wf-1",
+                    "metadata": {"workflow_id": "wf-1"},
+                    "submitted_at": "2026-04-26T02:00:00+00:00",
+                    "updated_at": "2026-04-26T02:00:00+00:00",
+                },
+                {
+                    "activity_id": "orca-2",
+                    "kind": "job",
+                    "engine": "orca",
+                    "status": "running",
+                    "label": "freq",
+                    "source": "orca_auto_orca",
+                    "parent_workflow_id": "wf-1",
+                    "metadata": {"workflow_id": "wf-1"},
+                    "submitted_at": "2026-04-26T02:57:00+00:00",
+                    "updated_at": "2026-04-26T02:57:00+00:00",
+                },
+            ],
+            "sources": {},
+        },
+    )
+    cli_style.set_color_override(True)  # FORCE_COLOR-like: color on, not a TTY
+    try:
+        result = unified_cli.cmd_queue_list(
+            SimpleNamespace(
+                workflow_root=None,
+                orca_auto_config=None,
+                limit=0,
+                refresh=False,
+                engine=None,
+                status=None,
+                kind=None,
+                json=False,
+            )
+        )
+    finally:
+        cli_style.set_color_override(None)
+    assert result == 0
+    stdout = capsys.readouterr().out
+    plain = _strip_ansi(stdout)
+    assert "active_simulations:" in plain  # plain layout kept
+    assert "orca_auto queue" not in plain  # no summary band
+    assert "├─" not in plain and "└─" not in plain  # no tree connectors
+    assert "▎" not in plain  # no rail
+    assert "\x1b[" in stdout  # color codes are still emitted
+
+
+def test_watch_uses_discovered_config_for_job_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Regression: no-argument `queue list --watch` has request.shared_config=None,
+    # but a default config is discovered; the provider must get the discovered
+    # config so per-job metrics appear.
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
+    monkeypatch.setattr(
+        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+    )
+    monkeypatch.setattr(unified_cli, "list_activities", lambda **kwargs: _running_job_payload())
+    monkeypatch.setattr(
+        cli_common, "_discover_shared_config_path", lambda explicit: "/discovered/orca_auto.yaml"
+    )
+
+    seen: dict[str, str | None] = {}
+
+    def _provider(config: str | None) -> dict[str, JobMetrics]:
+        seen["config"] = config
+        return {}
+
+    def _sleep(_interval: float) -> None:
+        raise KeyboardInterrupt
+
+    deps = unified_cli.QueueCliDeps(sleep=_sleep, job_metrics_provider=_provider)
+    args = SimpleNamespace(
+        action=None,
+        orca_auto_config=None,
+        workflow_root=None,
+        limit=0,
+        refresh=False,
+        engine=None,
+        status=None,
+        kind=None,
+        json=False,
+        watch=True,
+        interval=2.0,
+    )
+    cli_style.set_color_override(True)
+    try:
+        assert unified_cli.cmd_queue_list(args, deps=deps) == 0
+    finally:
+        cli_style.set_color_override(None)
+    assert seen.get("config") == "/discovered/orca_auto.yaml"  # discovered, not None
 
 
 def test_fmt_rss_units() -> None:
@@ -262,6 +419,7 @@ def test_watch_annotates_running_row_with_job_metrics(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
     monkeypatch.setattr(
         unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
@@ -495,6 +653,7 @@ def test_cmd_queue_list_tty_renders_styled_view(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
     monkeypatch.setattr(
         unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
@@ -644,6 +803,9 @@ def test_cmd_queue_list_tty_rail_never_overflows_terminal(
 
     def _render(width: int, *, color: bool) -> str:
         monkeypatch.setattr(unified_cli, "_queue_terminal_width", lambda: width)
+        # Interactive layout needs a real terminal; color alone (e.g. FORCE_COLOR)
+        # must not restructure. color=False stays plain via color_enabled anyway.
+        monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
         cli_style.set_color_override(color)
         try:
             assert unified_cli.cmd_queue_list(args) == 0
