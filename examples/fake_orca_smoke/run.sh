@@ -128,7 +128,19 @@ report = load_report_json(reaction_dir)
 if report is None or report.get("status", {}).get("state") != "completed":
     raise SystemExit(f"job_report.json did not complete: {report}")
 
-out_path = reaction_dir / "water_opt.out"
+artifacts = report.get("artifacts")
+if not isinstance(artifacts, dict):
+    raise SystemExit(f"job_report.json artifacts are invalid: {artifacts}")
+out_path_text = artifacts.get("last_out_path")
+if not isinstance(out_path_text, str) or not out_path_text.strip():
+    raise SystemExit(f"job_report.json has no last_out_path: {artifacts}")
+out_path = Path(out_path_text).resolve()
+try:
+    out_path.relative_to(reaction_dir.resolve())
+except ValueError as exc:
+    raise SystemExit(f"reported ORCA output escaped the job directory: {out_path}") from exc
+if not out_path.is_file():
+    raise SystemExit(f"reported ORCA output is missing: {out_path}")
 if "****ORCA TERMINATED NORMALLY****" not in out_path.read_text(encoding="utf-8"):
     raise SystemExit(f"normal termination marker missing from {out_path}")
 

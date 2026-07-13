@@ -17,8 +17,8 @@ expectations belong in [docs/VALIDATION.md](docs/VALIDATION.md).
   behavior as the main user-facing contracts.
 - Prefer fail-closed recovery over broad automatic reruns that can waste compute
   or hide unsafe chemistry.
-- Keep xTB and CREST as internal workflow-stage engines unless a reusable public
-  surface is clearly justified.
+- Keep general xTB and CREST calculations as internal workflow-stage engines.
+  Standalone xTB-MD is the deliberately narrow public exception.
 - Make public CI honest: fake-engine tests should prove project contracts, while
   real ORCA acceptance should be recorded separately when runtime semantics
   depend on licensed or site-specific binaries.
@@ -40,14 +40,16 @@ that should change cautiously and with tests, docs, and release notes:
   `job_report.html`.
 - Workflow artifacts: `flow.yaml`, workflow registry/journal state, staged
   engine workspaces, and `workflow_report.html`.
+- Standalone xTB-MD artifacts: strict `xtb_md_job.yaml`, immutable execution
+  snapshots, terminal trajectory/checkpoint validation, state, and reports.
 - Runtime supervision assets under `systemd/`.
 - Retry and classification reason strings exposed through reports, queue output,
   or issue triage.
 
-## 0.1.x: Hardening The Current Surface
+## 0.1.x: Initial Public Surface (Released)
 
-The 0.1 development series should prioritize making the current design reliable
-before adding broad new public commands.
+The 0.1 development series established the initial queue-first ORCA and workflow
+surface. Its hardening priorities were:
 
 - Stabilize the single runs-root model after organize removal.
 - Keep workflow workspaces, standalone ORCA runs, and shared admission state
@@ -64,9 +66,18 @@ before adding broad new public commands.
 - Keep Korean documentation updated for user-facing behavior when English docs
   change substantially.
 
-## 0.2: Public Contract Clarity
+## 0.2.0: Durable Multi-Engine Runtime (Released)
 
-The next minor line should make the public surface easier to depend on.
+The 0.2.0 release binds queue execution to immutable generation snapshots,
+strengthens cancellation and recovery, and adds standalone xTB-MD as a
+single-attempt first-class engine. It also adds provider-neutral Telegram and
+Discord messaging, durable Discord archive submission, richer conformer
+science outputs, and stricter resource and artifact provenance checks. The
+shipped details and upgrade note live in [CHANGELOG.md](CHANGELOG.md).
+
+## 0.2.x: Continue Public Contract Clarity
+
+The remainder of the 0.2 series should make the public surface easier to depend on.
 
 - Document the stable subset of queue, state, report, and workflow JSON fields.
 - Add migration notes for any renamed config keys, artifact fields, or reason

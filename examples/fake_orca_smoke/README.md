@@ -19,7 +19,8 @@ The script:
 4. submits `water_opt.inp` through `orca_auto run-dir`;
 5. runs one queue-worker poll;
 6. asserts that the queue entry, `job_state.json`, and `job_report.json` all
-   report completion.
+   report completion, then follows `artifacts.last_out_path` to the confined
+   generation output and verifies the normal-termination marker.
 
 Pass an explicit work directory if you want to inspect the generated files after
 success:
