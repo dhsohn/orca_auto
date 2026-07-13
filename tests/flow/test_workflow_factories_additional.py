@@ -112,6 +112,44 @@ def test_create_reaction_ts_search_workflow_rejects_invalid_crest_mode(tmp_path:
         )
 
 
+def test_create_conformer_workflow_accepts_matching_engine_electronic_state(
+    tmp_path: Path,
+) -> None:
+    input_xyz = tmp_path / "matching_state.xyz"
+    _write_xyz(input_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
+
+    payload = orchestration.create_conformer_screening_workflow(
+        input_xyz=str(input_xyz),
+        workflow_root=tmp_path,
+        workflow_id="wf_matching_state",
+        charge=-1,
+        multiplicity=2,
+        crest_job_manifest={"charge": "-1", "uhf": 1, "gfn": 1},
+    )
+
+    overrides = payload["stages"][0]["task"]["payload"]["job_manifest_overrides"]
+    assert overrides == {"charge": -1, "uhf": 1, "gfn": 1}
+
+
+def test_create_conformer_workflow_rejects_conflicting_engine_electronic_state(
+    tmp_path: Path,
+) -> None:
+    input_xyz = tmp_path / "conflicting_state.xyz"
+    _write_xyz(input_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
+
+    with pytest.raises(
+        ValueError, match="engine manifest charge=0 conflicts with workflow charge=-1"
+    ):
+        orchestration.create_conformer_screening_workflow(
+            input_xyz=str(input_xyz),
+            workflow_root=tmp_path,
+            workflow_id="wf_conflicting_state",
+            charge=-1,
+            multiplicity=2,
+            crest_job_manifest={"charge": 0, "uhf": 1},
+        )
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
@@ -119,9 +157,24 @@ def test_create_reaction_ts_search_workflow_rejects_invalid_crest_mode(tmp_path:
         ({"max_memory_gb": 0}, "max_memory_gb must be >= 1"),
         ({"max_crest_candidates": 0}, "max_crest_candidates must be >= 1"),
         ({"max_xtb_stages": 0}, "max_xtb_stages must be >= 1"),
+        (
+            {"max_xtb_handoff_retries": -1},
+            "max_xtb_handoff_retries must be >= 0",
+        ),
+        (
+            {"max_xtb_handoff_retries": 1.5},
+            "max_xtb_handoff_retries must be an integer >= 0",
+        ),
+        (
+            {"max_xtb_handoff_retries": True},
+            "max_xtb_handoff_retries must be an integer",
+        ),
         ({"max_orca_stages": 0}, "max_orca_stages must be >= 1"),
         ({"multiplicity": 0}, "multiplicity must be >= 1"),
         ({"max_cores": "many"}, "max_cores must be an integer >= 1"),
+        ({"charge": -0.5}, "charge must be an integer"),
+        ({"multiplicity": 2.5}, "multiplicity must be an integer >= 1"),
+        ({"charge": True}, "charge must be an integer"),
     ],
 )
 def test_create_reaction_ts_search_workflow_rejects_non_positive_limits(
@@ -143,11 +196,77 @@ def test_create_reaction_ts_search_workflow_rejects_non_positive_limits(
         )
 
 
+def test_create_reaction_ts_search_workflow_accepts_zero_handoff_retries(
+    tmp_path: Path,
+) -> None:
+    reactant_xyz = tmp_path / "reactant.xyz"
+    product_xyz = tmp_path / "product.xyz"
+    _write_xyz(reactant_xyz, [("H", 0.0, 0.0, 0.0), ("O", 0.0, 0.0, 0.96)])
+    _write_xyz(product_xyz, [("H", 0.1, 0.0, 0.0), ("O", 0.0, 0.0, 0.96)])
+
+    payload = orchestration.create_reaction_ts_search_workflow(
+        reactant_xyz=str(reactant_xyz),
+        product_xyz=str(product_xyz),
+        workflow_root=tmp_path,
+        max_xtb_handoff_retries=0,
+    )
+
+    assert payload["metadata"]["request"]["parameters"]["max_xtb_handoff_retries"] == 0
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        (
+            {"barrier_threshold_kcal": float("nan")},
+            "barrier_threshold_kcal must be a positive finite number",
+        ),
+        (
+            {"barrier_threshold_kcal": float("inf")},
+            "barrier_threshold_kcal must be a positive finite number",
+        ),
+        (
+            {"barrier_threshold_kcal": True},
+            "barrier_threshold_kcal must be a positive finite number",
+        ),
+        (
+            {"max_scan_extensions": -1},
+            "max_scan_extensions must be >= 0",
+        ),
+        (
+            {"max_scan_extensions": 1.5},
+            "max_scan_extensions must be an integer >= 0",
+        ),
+        (
+            {"max_scan_extensions": True},
+            "max_scan_extensions must be an integer",
+        ),
+    ],
+)
+def test_create_scan_ts_search_workflow_rejects_lossy_scientific_settings(
+    tmp_path: Path,
+    kwargs: dict[str, Any],
+    message: str,
+) -> None:
+    input_xyz = tmp_path / "scan.xyz"
+    _write_xyz(input_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
+
+    with pytest.raises(ValueError, match=message):
+        orchestration.create_scan_ts_search_workflow(
+            input_xyz=str(input_xyz),
+            scan_coordinate="B 1 2 = 0.7, 2.0, 8",
+            workflow_root=tmp_path,
+            **kwargs,
+        )
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
         ({"max_cores": 0}, "max_cores must be >= 1"),
         ({"multiplicity": 0}, "multiplicity must be >= 1"),
+        ({"charge": -0.5}, "charge must be an integer"),
+        ({"multiplicity": 2.5}, "multiplicity must be an integer >= 1"),
         ({"max_memory_gb": "lots"}, "max_memory_gb must be an integer >= 1"),
         (
             {"boltzmann_temperature_k": float("nan")},

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
+from orca_auto.core.engine_process import recreate_confined_directory
 
 from .ranking_artifacts import (
     ranking_result_payload,
@@ -65,7 +66,7 @@ def run_ranking_job(
         raise ValueError(f"No ranking candidates available in job directory: {job_dir}")
 
     ranking_root = job_dir / ".ranking_runs"
-    ranking_root.mkdir(parents=True, exist_ok=True)
+    recreate_confined_directory(job_dir, ranking_root, label="xTB ranking directory")
     context = ranking_context(
         cfg,
         job_dir=job_dir,

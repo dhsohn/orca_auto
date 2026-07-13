@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import os
+import secrets
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from orca_auto.core.engine_process import atomic_write_confined_bytes, ensure_confined_directory
 from orca_auto.core.paths.workflow import (
     WORKFLOW_FILE_NAME,
     validate_workflow_id_path_segment,
 )
+from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
+from orca_auto.core.queue.publication import current_process_start_token, process_start_token
+from orca_auto.core.utils import atomic_write_json
+from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory, load_json_mapping_file
 from orca_auto.flow.contracts import (
     WorkflowPlan,
     WorkflowPlanPayload,
@@ -24,8 +31,10 @@ from orca_auto.flow.orchestration.requests import (
     WorkflowPersistenceContext,
 )
 from orca_auto.flow.workflow.store import acquire_workflow_create_lock
+from orca_auto.flow.xyz_utils import validated_xyz_atom_count
 
 _REACTION_TS_SEARCH_CREST_MANIFEST_DEFAULTS: dict[str, Any] = {"rthr": 0.3}
+_CREATION_MARKER = ".orca_auto_workflow_creation.json"
 
 
 @dataclass(frozen=True)
@@ -74,17 +83,35 @@ def _validate_workflow_id_path_segment(value: Any) -> str:
 
 
 def _ensure_new_workflow_workspace(workspace_dir: Path) -> None:
+    if workspace_dir.is_symlink():
+        raise ValueError(f"workflow workspace must not be a symlink: {workspace_dir}")
     workflow_file = workspace_dir / WORKFLOW_FILE_NAME
     if workflow_file.exists():
         raise FileExistsError(f"workflow already exists: {workflow_file}")
+    if workspace_dir.exists():
+        raise FileExistsError(f"workflow already exists: {workspace_dir}")
 
 
 def _copy_input_impl(source: str, target: Path) -> str:
     src = Path(source).expanduser().resolve()
     if not src.exists():
         raise FileNotFoundError(f"Input XYZ not found: {src}")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, target)
+    validated_xyz_atom_count(src)
+    inputs_dir = next((parent for parent in target.parents if parent.name == "inputs"), None)
+    if inputs_dir is None:
+        raise ValueError("workflow input target must be inside a reserved inputs directory")
+    trusted_workspace_root = inputs_dir.parent
+    ensure_confined_directory(
+        trusted_workspace_root,
+        target.parent,
+        label="workflow input directory",
+    )
+    atomic_write_confined_bytes(
+        trusted_workspace_root,
+        target,
+        read_stable_regular_file(src),
+        label="workflow materialized input",
+    )
     return str(target.resolve())
 
 
@@ -112,16 +139,18 @@ def _persist_workflow(
     payload = plan.to_dict()
     payload["stages"] = cast(list[WorkflowStagePayload], list(stages))
     callback_payload = cast(dict[str, Any], payload)
-    with acquire_workflow_create_lock(persistence_context.workflow_root_path):
-        _ensure_new_workflow_workspace(persistence_context.workspace_dir)
-        creation_context.write_workflow_payload_fn(
-            persistence_context.workspace_dir, callback_payload
-        )
-        creation_context.sync_workflow_registry_fn(
-            persistence_context.workflow_root_path,
-            persistence_context.workspace_dir,
-            callback_payload,
-        )
+    creation_context.write_workflow_payload_fn(persistence_context.workspace_dir, callback_payload)
+    creation_context.sync_workflow_registry_fn(
+        persistence_context.workflow_root_path,
+        persistence_context.workspace_dir,
+        callback_payload,
+    )
+    try:
+        (persistence_context.workspace_dir / _CREATION_MARKER).unlink()
+    except FileNotFoundError:
+        pass
+    else:
+        fsync_directory(persistence_context.workspace_dir)
     return payload
 
 
@@ -144,13 +173,68 @@ def _workflow_workspace(
         raise ValueError(
             f"workflow_id must resolve under workflow_root: {resolved_workflow_id!r}"
         ) from exc
-    _ensure_new_workflow_workspace(workspace_dir)
+    durable_mkdir(workflow_root_path, parents=True, exist_ok=True)
+    with acquire_workflow_create_lock(workflow_root_path):
+        if workspace_dir.exists() and not (workspace_dir / WORKFLOW_FILE_NAME).exists():
+            marker = load_json_mapping_file(workspace_dir / _CREATION_MARKER) or {}
+            owner_pid = marker.get("owner_pid")
+            owner_start = str(marker.get("owner_process_start") or "")
+            owner_is_current = (
+                type(owner_pid) is int
+                and owner_pid > 0
+                and bool(owner_start)
+                and process_start_token(owner_pid) == owner_start
+            )
+            if marker and not owner_is_current and not workspace_dir.is_symlink():
+                shutil.rmtree(workspace_dir)
+                fsync_directory(workflow_root_path)
+        _ensure_new_workflow_workspace(workspace_dir)
+        staging_dir = workflow_root_path / (
+            f".{resolved_workflow_id}.creating-{secrets.token_hex(12)}"
+        )
+        try:
+            durable_mkdir(staging_dir, mode=0o700, exist_ok=False)
+            atomic_write_json(
+                staging_dir / _CREATION_MARKER,
+                {
+                    "workflow_id": resolved_workflow_id,
+                    "owner_pid": os.getpid(),
+                    "owner_process_start": current_process_start_token(),
+                },
+                ensure_ascii=True,
+                indent=2,
+            )
+            staging_dir.rename(workspace_dir)
+            fsync_directory(workflow_root_path)
+        except BaseException:
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                fsync_directory(workflow_root_path)
+            elif workspace_dir.exists() and not (workspace_dir / WORKFLOW_FILE_NAME).exists():
+                shutil.rmtree(workspace_dir, ignore_errors=True)
+                fsync_directory(workflow_root_path)
+            raise
     return _WorkflowWorkspace(
         workflow_id=resolved_workflow_id,
         workflow_root_path=workflow_root_path,
         workspace_dir=workspace_dir,
         requested_at=context.now_utc_iso_fn(),
     )
+
+
+def _cleanup_reserved_workflow_workspace(workspace: _WorkflowWorkspace) -> None:
+    resolved_root = workspace.workflow_root_path.expanduser().resolve()
+    path = workspace.workspace_dir
+    if path.is_symlink():
+        return
+    if (path / WORKFLOW_FILE_NAME).exists():
+        # Publication may already be durable even if registry sync reported an
+        # ambiguous post-commit failure. Preserve the workflow for reindex/repair.
+        return
+    resolved_path = path.expanduser().resolve()
+    if resolved_path.is_relative_to(resolved_root) and resolved_path != resolved_root:
+        shutil.rmtree(resolved_path, ignore_errors=True)
+        fsync_directory(resolved_root)
 
 
 def _validate_reaction_atom_sequence(
@@ -226,6 +310,7 @@ __all__ = [
     "_copy_conformer_input",
     "_copy_input_impl",
     "_copy_reaction_inputs",
+    "_cleanup_reserved_workflow_workspace",
     "_ensure_new_workflow_workspace",
     "_merge_manifest_defaults",
     "_optional_mapping_parameter",

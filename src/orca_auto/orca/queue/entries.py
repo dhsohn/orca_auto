@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from orca_auto.core.queue import store as _core_queue
+from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils import normalize_bool as _shared_normalize_bool
 from orca_auto.core.utils import normalize_text as _shared_normalize_text
@@ -49,14 +50,7 @@ def normalize_bool(value: object) -> bool:
 
 
 def normalize_priority(value: object, *, default: int = 10) -> int:
-    try:
-        if isinstance(value, bool):
-            return int(value)
-        if isinstance(value, (int, float, str)):
-            return int(value)
-    except (TypeError, ValueError):
-        pass
-    return default
+    return normalize_queue_priority(value, default=default)
 
 
 def normalize_optional_text(value: object | None) -> str | None:
@@ -87,13 +81,13 @@ def normalized_raw(raw: dict[str, Any]) -> dict[str, Any]:
     else:
         metadata.pop("run_id", None)
 
-    normalized["app_name"] = normalize_text(normalized.get("app_name")) or QUEUE_APP_NAME
-    queue_id = normalize_text(normalized.get("queue_id"))
-    task_id = normalize_text(normalized.get("task_id")) or queue_id
-    if task_id:
-        normalized["task_id"] = task_id
-    normalized["task_kind"] = normalize_text(normalized.get("task_kind")) or QUEUE_TASK_KIND
-    normalized["engine"] = normalize_text(normalized.get("engine")) or QUEUE_ENGINE
+    # Durable queue identity is evidence, not a legacy default.  Preserve
+    # missing fields as blank so the exact worker identity predicate can
+    # quarantine incomplete or foreign rows instead of promoting them to ORCA.
+    normalized["app_name"] = normalize_text(normalized.get("app_name"))
+    normalized["task_id"] = normalize_text(normalized.get("task_id"))
+    normalized["task_kind"] = normalize_text(normalized.get("task_kind"))
+    normalized["engine"] = normalize_text(normalized.get("engine"))
     normalized["priority"] = normalize_priority(normalized.get("priority"), default=10)
     normalized["status"] = (
         normalize_text(normalized.get("status")).lower() or QueueStatus.PENDING.value
@@ -166,7 +160,7 @@ def queue_entry_priority(entry: QueueEntry) -> int:
 
 
 def queue_entry_app_name(entry: QueueEntry) -> str:
-    return normalize_text(entry.app_name) or QUEUE_APP_NAME
+    return normalize_text(entry.app_name)
 
 
 def _resolved_path_text(value: str) -> str:

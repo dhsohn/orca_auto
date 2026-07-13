@@ -107,10 +107,15 @@ def _default_dequeue_next(root: Path) -> Any | None:
     return dequeue_next(root)
 
 
-def _default_dequeue_entry_if_pending(root: Path, queue_id: str) -> Any | None:
+def _default_dequeue_entry_if_pending(
+    root: Path,
+    queue_id: str,
+    *,
+    expected_entry: Any | None = None,
+) -> Any | None:
     from orca_auto.core.queue import dequeue_entry_if_pending
 
-    return dequeue_entry_if_pending(root, queue_id)
+    return dequeue_entry_if_pending(root, queue_id, expected_entry=expected_entry)
 
 
 def build_queue_engine_definition(

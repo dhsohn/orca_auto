@@ -38,6 +38,7 @@ from tests.engine_artifact_helpers import (
 from tests.engine_artifact_helpers import (
     timestamps as _timestamps,
 )
+from tests.execution_snapshot_helpers import stage_execution_snapshot
 
 
 def _cfg(tmp_path: Path) -> SimpleNamespace:
@@ -58,17 +59,39 @@ def _entry(
     mode: str = "standard",
     molecule_key: str = "",
 ) -> SimpleNamespace:
+    job_path = Path(job_dir)
+    selected_path = Path(selected_xyz)
+    resource_request = {"max_cores": 4, "max_memory_gb": 16}
+    execution_snapshot: dict[str, Any] | None = None
+    selected_snapshot = selected_path
+    if job_path.is_dir() and selected_path.is_file():
+        selected_snapshot, execution_snapshot = stage_execution_snapshot(
+            job_path,
+            selected_path,
+            engine="crest",
+            manifest={"mode": mode},
+            resource_request=resource_request,
+            identity={"mode": mode, "molecule_key": molecule_key},
+        )
+    metadata = {
+        "job_dir": str(job_path),
+        "selected_input_xyz": str(selected_snapshot),
+        "mode": mode,
+        "molecule_key": molecule_key,
+        "resource_request": resource_request,
+    }
+    if execution_snapshot is not None:
+        metadata["execution_snapshot"] = execution_snapshot
     return SimpleNamespace(
         task_id=task_id,
         queue_id=queue_id,
         app_name=app_name,
+        task_kind="crest_conformer_search",
+        engine="crest",
+        priority=10,
+        enqueued_at="2026-04-18T23:59:00+00:00",
         started_at=started_at,
-        metadata={
-            "job_dir": str(job_dir),
-            "selected_input_xyz": str(selected_xyz),
-            "mode": mode,
-            "molecule_key": molecule_key,
-        },
+        metadata=metadata,
     )
 
 
@@ -138,6 +161,25 @@ def _notify_ok(*args: Any, **kwargs: Any) -> bool:
     return True
 
 
+def _commit_terminal(*args: Any, **kwargs: Any) -> bool:
+    before_update_fn = kwargs.get("before_update_fn")
+    if before_update_fn is not None:
+        before_update_fn()
+    return True
+
+
+def _record_committed_terminal(
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]],
+    *args: Any,
+    **kwargs: Any,
+) -> bool:
+    before_update_fn = kwargs.pop("before_update_fn", None)
+    if before_update_fn is not None:
+        before_update_fn()
+    calls.append((args, kwargs))
+    return True
+
+
 def _dependencies(**overrides: Callable[..., Any]) -> worker_execution.WorkerExecutionDependencies:
     defaults: dict[str, Any] = {
         "now_utc_iso": lambda: "2026-04-19T09:15:00+00:00",
@@ -150,9 +192,9 @@ def _dependencies(**overrides: Callable[..., Any]) -> worker_execution.WorkerExe
         "cancel_check_interval_seconds": worker_execution.CANCEL_CHECK_INTERVAL_SECONDS,
         "write_running_state": _noop,
         "write_execution_artifacts": _noop,
-        "mark_completed": _noop,
-        "mark_cancelled": _noop,
-        "mark_failed": _noop,
+        "mark_completed": _commit_terminal,
+        "mark_cancelled": _commit_terminal,
+        "mark_failed": _commit_terminal,
         "upsert_job_record": _noop,
         "notify_job_started": _notify_ok,
         "notify_job_finished": _notify_ok,
@@ -237,7 +279,12 @@ class ProcessDequeuedEntrySpy:
         assert running_job is self.running
         return self.result
 
-    def get_cancel_requested(self, root: str, queue_id: str) -> bool:
+    def get_cancel_requested(
+        self,
+        root: str,
+        queue_id: str,
+        **_kwargs: object,
+    ) -> bool:
         self.cancel_checks.append((root, queue_id))
         return False
 
@@ -252,7 +299,7 @@ class ProcessDequeuedEntrySpy:
     def dependencies(self) -> worker_execution.WorkerExecutionDependencies:
         return _dependencies(
             get_cancel_requested=self.get_cancel_requested,
-            start_crest_job=lambda cfg, *, job_dir, selected_xyz: self.running,
+            start_crest_job=lambda cfg, *, job_dir, selected_xyz, execution_snapshot: self.running,
             finalize_crest_job=self.finalize,
             terminate_process=lambda proc: self.terminate_calls.append(proc),
             write_running_state=lambda cfg, actual_entry: self.running_state_calls.append(
@@ -261,9 +308,15 @@ class ProcessDequeuedEntrySpy:
             write_execution_artifacts=lambda actual_entry, actual_result: (
                 self.artifact_results.append(actual_result)
             ),
-            mark_completed=lambda *args, **kwargs: self.mark_completed_calls.append((args, kwargs)),
-            mark_cancelled=lambda *args, **kwargs: self.mark_cancelled_calls.append((args, kwargs)),
-            mark_failed=lambda *args, **kwargs: self.mark_failed_calls.append((args, kwargs)),
+            mark_completed=lambda *args, **kwargs: _record_committed_terminal(
+                self.mark_completed_calls, *args, **kwargs
+            ),
+            mark_cancelled=lambda *args, **kwargs: _record_committed_terminal(
+                self.mark_cancelled_calls, *args, **kwargs
+            ),
+            mark_failed=lambda *args, **kwargs: _record_committed_terminal(
+                self.mark_failed_calls, *args, **kwargs
+            ),
             upsert_job_record=lambda cfg, **kwargs: self.upsert_calls.append(kwargs),
             notify_job_started=self.notify_started,
             notify_job_finished=self.notify_finished,
@@ -386,7 +439,7 @@ def test_write_running_state_writes_running_payload_with_fallback_timestamps(
     assert payload["engine"] == "crest"
     assert _job(payload)["id"] == entry.task_id
     assert _job(payload)["dir"] == str(job_dir.resolve())
-    assert _input_payload(payload)["selected_xyz_path"] == str(selected_xyz)
+    assert _input_payload(payload)["selected_xyz_path"] == entry.metadata["selected_input_xyz"]
     assert _engine_payload(payload)["molecule_key"] == "mol-42"
     assert _engine_payload(payload)["mode"] == "nci"
     assert _status(payload)["state"] == "running"
@@ -631,6 +684,15 @@ def test_process_dequeued_entry_uses_context_dependency_group(tmp_path: Path) ->
     selected_xyz = job_dir / "selected_input.xyz"
     selected_xyz.write_text("1\nselected\nH 0.0 0.0 0.0\n", encoding="utf-8")
     entry = _entry("ignored-job-dir", "ignored-selected-xyz", mode="ignored")
+    _selected_snapshot, execution_snapshot = stage_execution_snapshot(
+        job_dir,
+        selected_xyz,
+        engine="crest",
+        manifest={"mode": "nci"},
+        resource_request={"max_cores": 2, "max_memory_gb": 6},
+        identity={"mode": "nci", "molecule_key": "ctx-key"},
+    )
+    entry.metadata["execution_snapshot"] = execution_snapshot
     running = SimpleNamespace(process=FakeProcess(None, 0))
     result = _result(job_dir, selected_xyz, reason="ok", mode="nci")
     sleeps: list[float] = []
@@ -663,7 +725,7 @@ def test_process_dequeued_entry_uses_context_dependency_group(tmp_path: Path) ->
             },
         ),
         runner=worker_execution.WorkerRunnerDependencies(
-            start_crest_job=lambda _cfg, *, job_dir, selected_xyz: running,
+            start_crest_job=lambda _cfg, *, job_dir, selected_xyz, execution_snapshot: running,
             finalize_crest_job=lambda actual_running, **kwargs: result,
             terminate_process=lambda _process: True,
             wait_for_cancellable_process=(
@@ -749,7 +811,7 @@ def test_process_dequeued_entry_polls_sleeps_and_completes(
     job_dir.mkdir()
     selected_xyz = job_dir / "selected_input.xyz"
     selected_xyz.write_text("1\nselected\nH 0.0 0.0 0.0\n", encoding="utf-8")
-    entry = _entry(job_dir, selected_xyz)
+    entry = _entry(job_dir, selected_xyz, molecule_key="derived-key")
     proc = FakeProcess(None, 0)
     running = SimpleNamespace(process=proc)
     result = _result(job_dir, selected_xyz, reason="ok")
@@ -774,13 +836,19 @@ def test_process_dequeued_entry_polls_sleeps_and_completes(
     assert spy.finalize_kwargs == [{}]
     assert spy.terminate_calls == []
     assert spy.running_state_calls == [entry.task_id]
-    assert spy.artifact_results == [result]
+    assert len(spy.artifact_results) == 1
+    [artifact_result] = spy.artifact_results
+    assert artifact_result.status == result.status
+    assert artifact_result.reason == result.reason
+    assert set(artifact_result.output_identities) == {
+        result.stdout_log,
+        result.stderr_log,
+    }
     assert [call["status"] for call in spy.upsert_calls] == ["running", "completed"]
     assert len(spy.mark_completed_calls) == 1
     assert spy.mark_completed_calls[0][0] == (cfg.runtime.allowed_root, entry.queue_id)
     assert spy.mark_completed_calls[0][1]["metadata_update"] == {
         "retained_conformer_count": result.retained_conformer_count,
-        "mode": result.mode,
     }
     assert spy.mark_cancelled_calls == []
     assert spy.mark_failed_calls == []
@@ -801,7 +869,7 @@ def test_process_dequeued_entry_terminates_and_forces_cancelled_result(
     job_dir.mkdir()
     selected_xyz = job_dir / "selected_input.xyz"
     selected_xyz.write_text("1\nselected\nH 0.0 0.0 0.0\n", encoding="utf-8")
-    entry = _entry(job_dir, selected_xyz)
+    entry = _entry(job_dir, selected_xyz, molecule_key="cancel-key")
     proc = FakeProcess(None)
     running = SimpleNamespace(process=proc)
     result = _result(
@@ -832,10 +900,12 @@ def test_process_dequeued_entry_terminates_and_forces_cancelled_result(
 
     deps = _dependencies(
         get_cancel_requested=lambda *args, **kwargs: True,
-        start_crest_job=lambda cfg, *, job_dir, selected_xyz: running,
+        start_crest_job=lambda cfg, *, job_dir, selected_xyz, execution_snapshot: running,
         finalize_crest_job=fake_finalize,
         terminate_process=terminate,
-        mark_cancelled=lambda *args, **kwargs: mark_cancelled_calls.append((args, kwargs)),
+        mark_cancelled=lambda *args, **kwargs: _record_committed_terminal(
+            mark_cancelled_calls, *args, **kwargs
+        ),
         notify_job_finished=fake_notify_finished,
     )
 
@@ -873,7 +943,7 @@ def test_process_dequeued_entry_builds_failed_result_when_runner_raises(
     selected_xyz.write_text("1\nselected\nH 0.0 0.0 0.0\n", encoding="utf-8")
     manifest_path = job_dir / "crest_job.yaml"
     manifest_path.write_text("mode: standard\n", encoding="utf-8")
-    entry = _entry(job_dir, selected_xyz, started_at=None)
+    entry = _entry(job_dir, selected_xyz, started_at=None, molecule_key="failure-key")
     failure_time = "2026-04-19T11:30:00+00:00"
 
     sleeps: list[int] = []
@@ -890,16 +960,18 @@ def test_process_dequeued_entry_builds_failed_result_when_runner_raises(
 
     deps = _dependencies(
         now_utc_iso=lambda: failure_time,
-        start_crest_job=lambda cfg, *, job_dir, selected_xyz: (_ for _ in ()).throw(
-            RuntimeError("boom")
-        ),
+        start_crest_job=lambda cfg, *, job_dir, selected_xyz, execution_snapshot: (
+            _ for _ in ()
+        ).throw(RuntimeError("boom")),
         finalize_crest_job=lambda *args, **kwargs: pytest.fail("finalize should not run"),
         get_cancel_requested=lambda *args, **kwargs: pytest.fail("cancel should not be checked"),
         terminate_process=lambda *args, **kwargs: pytest.fail("terminate should not run"),
         write_execution_artifacts=lambda actual_entry, actual_result: artifact_results.append(
             actual_result
         ),
-        mark_failed=lambda *args, **kwargs: mark_failed_calls.append((args, kwargs)),
+        mark_failed=lambda *args, **kwargs: _record_committed_terminal(
+            mark_failed_calls, *args, **kwargs
+        ),
         upsert_job_record=lambda cfg, **kwargs: upsert_calls.append(kwargs),
         notify_job_finished=fake_notify_finished,
     )
@@ -941,7 +1013,7 @@ def test_process_dequeued_entry_raises_worker_shutdown_requested_before_start(
     job_dir.mkdir()
     selected_xyz = job_dir / "selected_input.xyz"
     selected_xyz.write_text("1\nselected\nH 0.0 0.0 0.0\n", encoding="utf-8")
-    entry = _entry(job_dir, selected_xyz)
+    entry = _entry(job_dir, selected_xyz, molecule_key="shutdown-key")
 
     deps = _dependencies(
         write_running_state=lambda *args, **kwargs: pytest.fail(
@@ -974,7 +1046,7 @@ def test_process_dequeued_entry_raises_worker_shutdown_requested_after_start(
     job_dir.mkdir()
     selected_xyz = job_dir / "selected_input.xyz"
     selected_xyz.write_text("1\nselected\nH 0.0 0.0 0.0\n", encoding="utf-8")
-    entry = _entry(job_dir, selected_xyz)
+    entry = _entry(job_dir, selected_xyz, molecule_key="shutdown-key")
     proc = FakeProcess(None)
     running = SimpleNamespace(process=proc)
 
@@ -990,7 +1062,7 @@ def test_process_dequeued_entry_raises_worker_shutdown_requested_after_start(
 
     deps = _dependencies(
         get_cancel_requested=lambda *args, **kwargs: False,
-        start_crest_job=lambda cfg, *, job_dir, selected_xyz: running,
+        start_crest_job=lambda cfg, *, job_dir, selected_xyz, execution_snapshot: running,
         terminate_process=terminate,
         finalize_crest_job=lambda *args, **kwargs: pytest.fail("finalize should not run"),
         write_execution_artifacts=lambda *args, **kwargs: pytest.fail(

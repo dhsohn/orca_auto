@@ -65,18 +65,26 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   baselines.
 - CREST conformational-search knobs can be set under the existing `crest:`
   manifest block: `mdlen`/`len`, `wscal`, `tstep`, `mddump`, `shake`, `norotmd`,
-  and `cross`/`nocross` (verified against CREST 3.0.2). `mdlen`/`len` and `wscal`
+  and `cross`/`nocross` (implemented against CREST 3.0.2 semantics). `mdlen`/`len` and `wscal`
   are finite positive reals, `tstep` is a finite positive real within CREST's
   native-safe range, and `mddump` is a positive native-safe integer; the derived
-  MD step count is bounded too. The exact `norotmd`, `cross`, and `nocross` keys
+  aggregate MD step count is bounded to 10,000,000 by default for explicit MD
+  lengths; an omitted `mdlen` uses a 14,000,000-step automatic-length budget,
+  which admits standard GFN-xTB defaults. Under the standard non-quick trajectory
+  multiplicity, GFN-FF/composite automatic length requires an explicit bounded
+  length or acknowledged higher step budget. All local work remains at or below
+  50,000,000,000 atom-steps. Estimated dump volume
+  defaults to 100,000 frames. Larger local budgets require explicit high-cost and
+  high-volume acknowledgements, and method-aware time-step limits require a
+  separate expert override. The exact `norotmd`, `cross`, and `nocross` keys
   accept only canonical boolean values, and `cross`/`nocross` remain mutually
   exclusive. `cross: true` preserves CREST 3.0.2's GC-crossing default without
   emitting its broken redundant `--cross` flag; `nocross: true` emits
   `--nocross`.
-  Malformed values fail the job closed instead of reaching CREST; unknown `crest:`
-  keys are ignored and `crest_mode` is unchanged. Uploaded Discord workflows may
-  not set `mdlen`, `len`, `tstep`, or `mddump`, because remote CREST runtime and
-  trajectory-volume controls remain server-owned.
+  Malformed or unknown values fail the job closed instead of reaching CREST, and
+  `crest_mode` is unchanged. Uploaded Discord workflows cannot override CREST
+  length/time-step/dump or budget/acknowledgement keys; xTB ranking cost controls
+  are likewise server-owned for remote ingress.
 - Discord bot can accept a compressed run-dir (`.zip`/`.tar.gz`) attached to the
   `!run` command and submit it after an explicit confirmation. Disabled by
   default and gated to allowlisted operators, the ingress reserves bounded
@@ -90,6 +98,65 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   inputs also reject executable overrides, Compound/external-argument features,
   nested input includes, external path references, multi-job/MD directives, and
   ORCA host-list control files.
+
+### Fixed
+
+- Pre-MD workflow hardening now enforces `max_xtb_stages` and `max_orca_stages` as
+  total fan-out caps, keeps workflow charge/multiplicity authoritative across
+  CREST/xTB/ORCA, rejects non-finite energies and coordinates, and requires a
+  successful CREST run to retain at least one strictly valid XYZ frame. Overlapping
+  CREST retained files no longer duplicate downstream geometries. Explicit malformed
+  scheduler/resource/workflow config fails closed instead of selecting defaults or an
+  unintended PATH executable. Queue publication, terminal index persistence, and
+  workflow submit/cancel writes now use repair/adoption or exact intent fencing across
+  partial failures. xTB/CREST terminal publication now commits canonical state, JSON,
+  Markdown, and index records under the exact queue-generation lock; cancellation wins
+  completion races, direct pending cancellation is finalized on reconciliation, and
+  partial terminal writes are repaired without replaying already-consistent rows.
+  Internal-engine queue artifacts now carry an immutable-generation fingerprint;
+  deployments upgrading from a pre-fingerprint/pre-snapshot build must first drain
+  those rows with the old build, or cancel/clear and resubmit them with the new build.
+  Integer priority `0` and negative values retain their ordering.
+  Queue claim, orphan recovery, publication replay, and terminal artifact adoption now
+  require one exact engine/task/generation identity; malformed publication markers are
+  quarantined, cross-engine rows are excluded from activity, cancellation, duplicate,
+  and clear operations, and xTB/CREST workers repair their own queued index before dequeue.
+  Explicit workflow restart rotates its submission intent, and all valid CREST retained
+  files contribute distinct downstream geometries while cross-file overlaps are removed.
+  Built-in engine registry, worker, admission, workflow-path, and activity routing now
+  share one import-safe catalog, and historical Telegram entrypoints use the actor-bound
+  canonical action path.
+- Queue execution is now bound at submission. xTB and CREST run content-addressed
+  immutable input/manifest snapshots in unique, exclusively reserved submission
+  namespaces, while ORCA executes a private per-generation
+  tree with supported input references rewritten to confined copies. Inputs are
+  limited to 64 MiB per file, xTB/ORCA generations to 256 MiB aggregate, ORCA
+  file-reference directives to 128, and downstream XYZ materialization to 512 MiB. Exact executable
+  identities and source/executed descriptors are recorded and checked; pre-upgrade
+  xTB/CREST/ORCA queue rows without snapshots must be drained or resubmitted.
+  Ambiguous duplicate ORCA resource/checkpoint directives fail closed, while
+  resource admission evaluates the largest active request before normalization.
+  Unbound external ORCA include/program hooks are rejected instead of remaining
+  mutable after enqueue.
+- YAML flow/job manifests are limited to 1 MiB, 32 aliases, 10,000 parsed/expanded
+  nodes, and 64 nesting levels, with cyclic/recursive graphs rejected. Geometry
+  admission caps local work at 10,000 atoms, xTB/ORCA Hessian-producing work at
+  1,000, and Discord-uploaded work at 200. Remote CREST ingress injects a
+  server-owned 5.0 ps MD length and enforces a 50,000,000 atom-step ceiling.
+- xTB now always emits explicit charge/UHF and `--norestart`, rejects a non-empty
+  legacy `namespace`, and caps ranking at 100 evaluations by default (up to 1,000
+  with an explicit high-cost acknowledgement). CREST uses the absolute immutable
+  input instead of its unsafe legacy `--scratch` copier, binds xTB with `-xnam`,
+  emits `--legacy` for `gfn2//gfnff`, and accepts only documented solvent tokens.
+  Both engine-job manifests reject unknown fields.
+- xTB/CREST retained outputs now carry terminal SHA-256/size identities that are
+  verified before downstream parsing. Legacy completed artifacts receive an
+  explicitly marked read-time identity backfill, while irreparable same-generation
+  terminal state/report loss becomes visible `repair_blocked` activity instead of
+  an endless repair loop. xTB/CREST also run with a private clean HOME and captured
+  runtime environment; external parameter/shared-library contents and semantic
+  engine-version compatibility remain deployment trust requirements rather than
+  snapshot-bound guarantees.
 
 ## [0.1.0] - 2026-07-09
 

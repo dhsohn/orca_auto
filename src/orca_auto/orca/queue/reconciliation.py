@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.queue.internal_engine import entry_matches_engine_identity
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
@@ -195,13 +196,20 @@ def reconcile_orphaned_running_entries(
     changed = 0
     with deps.queue_lock(allowed_root):
         entries = deps.load_entries(allowed_root)
-        prior_evidence_by_key = _prior_terminal_generation_evidence(entries)
+        owned_entries = [entry for entry in entries if entry_matches_engine_identity(entry, "orca")]
+        prior_evidence_by_key = _prior_terminal_generation_evidence(owned_entries)
         for index, entry in enumerate(entries):
+            if not entry_matches_engine_identity(entry, "orca"):
+                continue
             if deps.queue_entry_status(entry) != QueueStatus.RUNNING.value:
                 continue
             queue_id = str(deps.queue_entry_id(entry) or "").strip()
             reaction_dir = str(deps.queue_entry_reaction_dir(entry) or "").strip()
             normalized_dir = str(Path(reaction_dir).expanduser().resolve()) if reaction_dir else ""
+            if not normalized_dir or not Path(normalized_dir).is_relative_to(
+                allowed_root.expanduser().resolve()
+            ):
+                continue
             if queue_id in (protected_queue_ids or set()) or (
                 queue_id,
                 normalized_dir,

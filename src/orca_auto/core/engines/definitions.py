@@ -12,7 +12,7 @@ class EngineQueueFunctions:
     runtime_roots_for_cfg: Callable[[Any], tuple[Path, ...]]
     list_queue: Callable[[str | Path], list[Any]]
     dequeue_next: Callable[[Path], Any | None]
-    dequeue_entry_if_pending: Callable[[Path, str], Any | None] | None = None
+    dequeue_entry_if_pending: Callable[..., Any | None] | None = None
     queue_entry_by_id: Callable[[str | Path, str], Any | None] | None = None
     worker_pid_file_name: str = ""
 

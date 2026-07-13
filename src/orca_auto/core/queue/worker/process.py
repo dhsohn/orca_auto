@@ -227,7 +227,12 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
         mark_failed_fn: Callable[..., Any],
     ) -> None:
         try:
-            mark_failed_fn(queue_root, self._running_queue_id(entry), error=error)
+            mark_failed_fn(
+                queue_root,
+                self._running_queue_id(entry),
+                error=error,
+                expected_entry=entry,
+            )
         finally:
             self._release_admission_slot(admission_token)
 

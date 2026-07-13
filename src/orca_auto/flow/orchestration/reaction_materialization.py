@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin
+from orca_auto.core.queue.priority import normalize_queue_priority
+from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin, strict_int
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.deps import (
     orchestration_context as _orchestration_context,
@@ -59,12 +60,32 @@ def _record_endpoint_pairing_summary(
 
 def _record_endpoint_pairing_failure(payload: dict[str, Any]) -> None:
     payload_metadata = payload.setdefault("metadata", {})
-    if isinstance(payload_metadata, dict):
+    if isinstance(payload_metadata, dict) and not isinstance(
+        payload_metadata.get("workflow_error"), dict
+    ):
         payload_metadata["workflow_error"] = {
             "status": "failed",
             "scope": "reaction_ts_search_endpoint_pairing",
             "reason": "no_endpoint_pairs",
             "message": "No CREST reactant/product conformer pair passed endpoint pairing filters.",
+        }
+
+
+def _record_crest_handoff_failure(
+    payload: dict[str, Any],
+    *,
+    missing_roles: tuple[str, ...],
+) -> None:
+    payload_metadata = payload.setdefault("metadata", {})
+    if isinstance(payload_metadata, dict) and not isinstance(
+        payload_metadata.get("workflow_error"), dict
+    ):
+        roles = ", ".join(missing_roles)
+        payload_metadata["workflow_error"] = {
+            "status": "failed",
+            "scope": "reaction_ts_search_crest_handoff",
+            "reason": "crest_no_usable_conformers",
+            "message": f"Completed CREST stage(s) have no usable retained geometry: {roles}.",
         }
 
 
@@ -83,7 +104,16 @@ def _completed_reaction_crest_contracts(
     product_contract = o.stages.runtime._completed_crest_stage(
         roles["product"], crest_config=crest_config
     )
-    if reactant_contract is None or product_contract is None:
+    missing_roles = tuple(
+        role
+        for role, contract in (
+            ("reactant", reactant_contract),
+            ("product", product_contract),
+        )
+        if contract is None
+    )
+    if missing_roles:
+        _record_crest_handoff_failure(payload, missing_roles=missing_roles)
         return None
     return reactant_contract, product_contract
 
@@ -115,14 +145,25 @@ def _reaction_xtb_stage_plan(
             max_candidates=int(params.get("max_crest_candidates", 3) or 3)
         ),
     )
+    missing_roles = tuple(
+        role
+        for role, inputs in (("reactant", reactant_inputs), ("product", product_inputs))
+        if not inputs
+    )
+    if missing_roles:
+        _record_crest_handoff_failure(payload, missing_roles=missing_roles)
+        return None
     pairing_policy = o.contracts.EndpointPairingPolicy.from_raw(
         params.get("endpoint_pairing"),
-        default_max_pairs=int(params.get("max_xtb_stages", 0) or 0),
+        default_max_pairs=int(params.get("max_xtb_stages", 3) or 3),
     )
-    endpoint_pairs = o.engines.select_endpoint_pairs(
-        reactant_inputs,
-        product_inputs,
-        policy=pairing_policy,
+    max_xtb_stages = max(0, int(params.get("max_xtb_stages", 3) or 3))
+    endpoint_pairs = tuple(
+        o.engines.select_endpoint_pairs(
+            reactant_inputs,
+            product_inputs,
+            policy=pairing_policy,
+        )[:max_xtb_stages]
     )
     candidate_pair_count = len(reactant_inputs) * len(product_inputs)
     _record_endpoint_pairing_summary(
@@ -166,10 +207,14 @@ def append_reaction_xtb_stages_impl(
             reaction_key=f"{payload.get('reaction_key', 'reaction')}_{created:02d}",
             reactant_input=endpoint_pair.reactant.to_dict(),
             product_input=endpoint_pair.product.to_dict(),
-            priority=int(plan.params.get("priority", 10) or 10),
+            priority=normalize_queue_priority(plan.params.get("priority")),
             max_cores=int(plan.params.get("max_cores", 8) or 8),
             max_memory_gb=int(plan.params.get("max_memory_gb", 32) or 32),
-            max_handoff_retries=int(plan.params.get("max_xtb_handoff_retries", 2) or 2),
+            max_handoff_retries=strict_int(
+                plan.params.get("max_xtb_handoff_retries", 2),
+                field="max_xtb_handoff_retries",
+                minimum=0,
+            ),
             manifest_overrides=_xtb_manifest_with_charge_spin(o, plan.params),
         )
         if plan.pairing_enabled:

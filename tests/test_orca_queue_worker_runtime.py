@@ -31,10 +31,12 @@ def test_make_running_job_attaches_queue_root(tmp_path: Path) -> None:
 def test_check_cancel_requests_cancels_and_discards_matching_jobs(tmp_path: Path) -> None:
     job = SimpleNamespace(
         queue_root=tmp_path / "queue",
+        task_id="task-1",
         process=SimpleNamespace(poll=lambda: None),
     )
     cancelled: list[tuple[str, Any]] = []
     discarded: list[str] = []
+    cancel_checks: list[tuple[Path, str, dict[str, object]]] = []
     worker = SimpleNamespace(
         _running_jobs=lambda: [("queue-1", job), ("queue-2", job)],
         _discard_running_job=lambda queue_id: discarded.append(queue_id),
@@ -44,15 +46,27 @@ def test_check_cancel_requests_cancels_and_discards_matching_jobs(tmp_path: Path
         cancelled.append((queue_id, job_obj))
         return True
 
+    def get_cancel_requested(
+        root: Path,
+        queue_id: str,
+        **kwargs: object,
+    ) -> bool:
+        cancel_checks.append((root, queue_id, kwargs))
+        return queue_id == "queue-1"
+
     queue_worker_runtime.check_cancel_requests(
         worker,
-        get_cancel_requested_fn=lambda _root, queue_id: queue_id == "queue-1",
+        get_cancel_requested_fn=get_cancel_requested,
         job_queue_root_fn=lambda _worker, job_obj: job_obj.queue_root,
         cancel_running_job_fn=cancel_running_job,
     )
 
     assert cancelled == [("queue-1", job)]
     assert discarded == ["queue-1"]
+    assert cancel_checks == [
+        (tmp_path / "queue", "queue-1", {"expected_task_id": "task-1"}),
+        (tmp_path / "queue", "queue-2", {"expected_task_id": "task-1"}),
+    ]
 
 
 def test_check_cancel_requests_skips_completed_retained_child(tmp_path: Path) -> None:

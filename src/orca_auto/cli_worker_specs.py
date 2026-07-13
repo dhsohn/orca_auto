@@ -18,14 +18,22 @@ from orca_auto.core.app_ids import (
     ORCA_AUTO_CONFIG_ENV_VAR,
     ORCA_AUTO_WORKFLOW_WORKER_MODULE,
 )
+from orca_auto.core.engine_catalog import supervised_engine_entries
 from orca_auto.core.utils import normalize_text
 
-_WORKFLOW_ENGINE_APPS = ("crest", "xtb")
-_ENGINE_APPS = ("orca",)
+_SUPERVISED_ENGINE_ENTRIES = supervised_engine_entries()
+_WORKFLOW_ENGINE_APPS = tuple(
+    entry.engine_id
+    for entry in _SUPERVISED_ENGINE_ENTRIES
+    if entry.default_supervision_role == "with-workflow"
+)
+_ENGINE_APPS = tuple(
+    entry.engine_id
+    for entry in _SUPERVISED_ENGINE_ENTRIES
+    if entry.default_supervision_role == "default"
+)
 _ENGINE_WORKER_MODULES = {
-    "orca": "orca_auto.core.engines.queue_worker",
-    "crest": "orca_auto.core.engines.queue_worker",
-    "xtb": "orca_auto.core.engines.queue_worker",
+    entry.engine_id: entry.worker_module for entry in _SUPERVISED_ENGINE_ENTRIES
 }
 _KNOWN_WORKER_APPS = (*_ENGINE_APPS, "workflow")
 _DEFAULT_WORKER_APPS = _ENGINE_APPS

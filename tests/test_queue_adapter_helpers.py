@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from orca_auto.core.queue import store as queue_store
+from orca_auto.core.queue.internal_engine import entry_matches_engine_identity
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import entries as queue_entries
@@ -31,6 +32,10 @@ def _entry(
 ) -> QueueEntry:
     entry: dict[str, Any] = {
         "queue_id": queue_id,
+        "app_name": "orca_auto_orca",
+        "task_id": queue_id,
+        "task_kind": "orca_run_inp",
+        "engine": "orca",
         "status": status,
         "priority": priority,
         "enqueued_at": "2026-03-10T00:00:00+00:00",
@@ -60,6 +65,34 @@ def _save_entries(root: Path, entries: list[QueueEntry]) -> None:
     queue_store.save_entries(root, entries)
 
 
+def _foreign_entry(
+    queue_id: str,
+    *,
+    status: QueueStatus = QueueStatus.PENDING,
+    reaction_dir: str = "",
+) -> QueueEntry:
+    return QueueEntry(
+        queue_id=queue_id,
+        app_name="orca_auto_xtb",
+        task_id=f"xtb-{queue_id}",
+        task_kind="xtb_sp",
+        engine="xtb",
+        status=status,
+        priority=1,
+        enqueued_at="2026-03-10T00:00:00+00:00",
+        finished_at=(
+            "2026-03-10T00:01:00+00:00"
+            if status in {QueueStatus.COMPLETED, QueueStatus.FAILED, QueueStatus.CANCELLED}
+            else ""
+        ),
+        metadata={
+            "job_type": "sp",
+            "job_dir": reaction_dir,
+            "reaction_dir": reaction_dir,
+        },
+    )
+
+
 def test_load_entries_cover_edge_cases(tmp_path: Path) -> None:
     assert _load_entries(tmp_path) == []
 
@@ -86,8 +119,11 @@ def test_load_entries_cover_edge_cases(tmp_path: Path) -> None:
     [entry] = _load_entries(tmp_path)
     assert entry.queue_id == "q_ok"
     assert entry.status == QueueStatus.PENDING
-    assert entry.app_name == "orca_auto_orca"
-    assert entry.task_id == "q_ok"
+    assert entry.app_name == ""
+    assert entry.task_id == ""
+    assert entry.task_kind == ""
+    assert entry.engine == ""
+    assert not entry_matches_engine_identity(entry, "orca")
 
 
 def test_enqueue_overwrites_worker_log_metadata_with_safe_queue_log(tmp_path: Path) -> None:
@@ -247,7 +283,60 @@ def test_find_entry_by_target_matches_orca_cancel_aliases(tmp_path: Path) -> Non
     assert queue_adapter.find_entry_by_target(entries, "missing") is None
 
 
-def test_list_queue_normalizes_common_fields_for_partial_entries(tmp_path: Path) -> None:
+def test_find_entry_by_target_prefers_active_orca_generation_and_rejects_ambiguity(
+    tmp_path: Path,
+) -> None:
+    reaction_dir = str(tmp_path / "rxn")
+    old = _entry(
+        "q_old",
+        reaction_dir,
+        QueueStatus.COMPLETED.value,
+        finished_at="2026-03-10T00:01:00+00:00",
+    )
+    active = _entry("q_active", reaction_dir, QueueStatus.PENDING.value)
+
+    assert queue_adapter.find_entry_by_target([old, active], reaction_dir) == active
+    assert (
+        queue_adapter.find_entry_by_target(
+            [old, _foreign_entry("q_foreign", reaction_dir=reaction_dir)],
+            reaction_dir,
+        )
+        == old
+    )
+
+    second_active = _entry("q_active_2", reaction_dir, QueueStatus.RUNNING.value)
+    with pytest.raises(queue_adapter.AmbiguousQueueTargetError, match="multiple active"):
+        queue_adapter.find_entry_by_target([active, second_active], reaction_dir)
+
+
+def test_orca_queue_view_and_mutations_ignore_foreign_rows(tmp_path: Path) -> None:
+    reaction_dir = str(tmp_path / "rxn")
+    foreign_pending = _foreign_entry("q_foreign_pending", reaction_dir=reaction_dir)
+    foreign_terminal = _foreign_entry(
+        "q_foreign_terminal",
+        status=QueueStatus.COMPLETED,
+        reaction_dir=reaction_dir,
+    )
+    _save_entries(tmp_path, [foreign_pending, foreign_terminal])
+
+    assert queue_adapter.list_queue(tmp_path) == []
+    assert queue_adapter.get_active_entry_for_reaction_dir(tmp_path, reaction_dir) is None
+    assert queue_adapter.cancel(tmp_path, foreign_pending.queue_id) is None
+    assert queue_adapter.clear_terminal(tmp_path) == 0
+
+    durable = _load_entries(tmp_path)
+    assert [(entry.queue_id, entry.status) for entry in durable] == [
+        (foreign_pending.queue_id, QueueStatus.PENDING),
+        (foreign_terminal.queue_id, QueueStatus.COMPLETED),
+    ]
+
+    created = queue_adapter.enqueue(tmp_path, reaction_dir)
+    assert created.engine == "orca"
+
+
+def test_list_queue_quarantines_partial_entries_without_synthesizing_identity(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "queue_root"
     root.mkdir()
     _save_entries(
@@ -266,22 +355,25 @@ def test_list_queue_normalizes_common_fields_for_partial_entries(tmp_path: Path)
         ],
     )
 
-    entries = queue_adapter.list_queue(root)
-
-    assert len(entries) == 1
-    entry = entries[0]
-    assert entry.app_name == "orca_auto_orca"
-    assert entry.task_id == "q_partial"
-    assert entry.task_kind == "orca_run_inp"
-    assert entry.engine == "orca"
+    [entry] = _load_entries(root)
+    assert entry.app_name == ""
+    assert entry.task_id == ""
+    assert entry.task_kind == ""
+    assert entry.engine == ""
+    assert not entry_matches_engine_identity(entry, "orca")
     assert entry.metadata["reaction_dir"] == str(root / "rxn")
     assert entry.metadata["force"] is False
+    assert queue_adapter.list_queue(root) == []
 
 
 def test_queue_entry_accessors_read_common_fields_from_metadata(tmp_path: Path) -> None:
     entry = queue_entries.entry_from_json_payload(
         {
             "queue_id": "q_meta",
+            "app_name": "orca_auto_orca",
+            "task_id": "task_meta",
+            "task_kind": "orca_run_inp",
+            "engine": "orca",
             "status": "PENDING",
             "priority": 7,
             "metadata": {
@@ -292,7 +384,7 @@ def test_queue_entry_accessors_read_common_fields_from_metadata(tmp_path: Path) 
     )
 
     assert queue_adapter.queue_entry_id(entry) == "q_meta"
-    assert queue_adapter.queue_entry_task_id(entry) == "q_meta"
+    assert queue_adapter.queue_entry_task_id(entry) == "task_meta"
     assert queue_adapter.queue_entry_status(entry) == QueueStatus.PENDING.value
     assert queue_adapter.queue_entry_priority(entry) == 7
     assert queue_adapter.queue_entry_force(entry) is True
@@ -311,6 +403,10 @@ def test_save_entries_uses_core_queue_entry_as_storage_model(tmp_path: Path) -> 
             queue_entries.entry_from_json_payload(
                 {
                     "queue_id": "q_backend",
+                    "app_name": "orca_auto_orca",
+                    "task_id": "task_backend",
+                    "task_kind": "orca_run_inp",
+                    "engine": "orca",
                     "status": QueueStatus.RUNNING.value,
                     "metadata": {
                         "reaction_dir": str(root / "rxn"),
@@ -324,7 +420,7 @@ def test_save_entries_uses_core_queue_entry_as_storage_model(tmp_path: Path) -> 
 
     payload = json.loads((root / queue_entries.QUEUE_FILE_NAME).read_text(encoding="utf-8"))
     assert payload[0]["app_name"] == "orca_auto_orca"
-    assert payload[0]["task_id"] == "q_backend"
+    assert payload[0]["task_id"] == "task_backend"
     assert payload[0]["task_kind"] == "orca_run_inp"
     assert payload[0]["engine"] == "orca"
     assert payload[0]["status"] == QueueStatus.RUNNING.value
@@ -524,6 +620,140 @@ def test_mark_cancelled_requeue_cancel_and_update_terminal_cover_missing_and_wro
     assert queue_adapter.get_cancel_requested(root, "q_missing") is False
 
     assert queue_adapter.update_terminal(root, "q_missing", QueueStatus.COMPLETED.value) is False
+
+
+def test_orca_adapter_mutations_never_change_foreign_engine_rows(tmp_path: Path) -> None:
+    root = tmp_path / "shared_queue"
+    root.mkdir()
+    pending = _foreign_entry("foreign-pending")
+    running = _foreign_entry("foreign-running", status=QueueStatus.RUNNING)
+    terminal = _foreign_entry("foreign-terminal", status=QueueStatus.COMPLETED)
+    _save_entries(root, [pending, running, terminal])
+
+    assert queue_adapter.dequeue_next(root) is None
+    assert queue_adapter.dequeue_entry_if_pending(root, pending.queue_id) is None
+    assert queue_adapter.mark_completed(root, pending.queue_id) is False
+    assert queue_adapter.mark_failed(root, pending.queue_id, error="foreign") is False
+    assert queue_adapter.cancel(root, pending.queue_id) is None
+    assert queue_adapter.requeue_running_entry(root, running.queue_id) is False
+    assert queue_adapter.mark_cancelled(root, running.queue_id) is False
+    assert queue_adapter.update_metadata(root, running.queue_id, {"foreign": "changed"}) is False
+    assert queue_adapter.get_cancel_requested(root, running.queue_id) is False
+    assert (
+        queue_adapter.update_terminal(
+            root,
+            terminal.queue_id,
+            QueueStatus.FAILED.value,
+        )
+        is False
+    )
+
+    assert queue_store.list_queue(root) == [pending, running, terminal]
+
+
+def test_orca_terminal_completion_does_not_erase_racing_cancel(tmp_path: Path) -> None:
+    root = tmp_path / "shared_queue"
+    reaction_dir = root / "reaction"
+    reaction_dir.mkdir(parents=True)
+    entry = queue_adapter.enqueue(root, str(reaction_dir), task_id="task-a")
+    running = queue_adapter.dequeue_next(root)
+    assert running is not None
+    assert queue_adapter.cancel(root, entry.queue_id, expected_entry=running) is not None
+
+    assert queue_adapter.mark_completed(root, entry.queue_id, expected_entry=running) is False
+    [cancel_requested] = queue_adapter.list_queue(root)
+    assert cancel_requested.status == QueueStatus.RUNNING
+    assert cancel_requested.cancel_requested is True
+    assert queue_adapter.mark_cancelled(root, entry.queue_id, expected_entry=running) is True
+    [cancelled] = queue_adapter.list_queue(root)
+    assert cancelled.status == QueueStatus.CANCELLED
+
+
+def test_orca_publication_recovery_rejects_noncanonical_task_identity(tmp_path: Path) -> None:
+    root = tmp_path / "shared_queue"
+    root.mkdir()
+    reaction_dir = str((root / "reaction").resolve())
+    token = "foreign-publication-token"
+    foreign = QueueEntry(
+        queue_id="foreign-publication",
+        app_name="orca_auto_orca",
+        task_id="foreign-task",
+        task_kind="xtb_sp",
+        engine="orca",
+        priority=1,
+        metadata={
+            "reaction_dir": reaction_dir,
+            "force": False,
+            "_orca_auto_queued_record_sync": "preparing",
+            "_orca_auto_queued_record_sync_token": token,
+            "_orca_auto_queued_record_sync_owner_pid": 1234,
+            "_orca_auto_queued_record_sync_owner_start": "owner-start",
+        },
+    )
+    _save_entries(root, [foreign])
+    queue_path = root / queue_entries.QUEUE_FILE_NAME
+    before = queue_path.read_bytes()
+
+    recovered = queue_adapter.recover_enqueue_publication(
+        root,
+        reaction_dir=reaction_dir,
+        task_id=foreign.task_id,
+        task_kind=foreign.task_kind,
+        priority=foreign.priority,
+        force=False,
+        token=token,
+        owner_pid=1234,
+        owner_start="owner-start",
+    )
+
+    assert recovered is None
+    assert queue_path.read_bytes() == before
+
+
+def test_orca_adapter_expected_generation_rejects_replaced_queue_id(tmp_path: Path) -> None:
+    root = tmp_path / "queue"
+    root.mkdir()
+    stale = _entry("same-id", str(root / "old"), QueueStatus.RUNNING.value)
+    replacement = _entry("same-id", str(root / "new"), QueueStatus.RUNNING.value)
+    replacement = QueueEntry(
+        **{
+            **replacement.__dict__,
+            "task_id": "replacement-task",
+        }
+    )
+    _save_entries(root, [replacement])
+
+    assert queue_adapter.mark_completed(root, stale.queue_id, expected_entry=stale) is False
+    assert (
+        queue_adapter.mark_failed(
+            root,
+            stale.queue_id,
+            error="stale",
+            expected_entry=stale,
+        )
+        is False
+    )
+    assert (
+        queue_adapter.requeue_running_entry(
+            root,
+            stale.queue_id,
+            expected_entry=stale,
+        )
+        is False
+    )
+    assert queue_adapter.cancel(root, stale.queue_id, expected_entry=stale) is None
+    assert (
+        queue_adapter.update_terminal(
+            root,
+            stale.queue_id,
+            QueueStatus.FAILED.value,
+            expected_entry=stale,
+        )
+        is False
+    )
+
+    [current] = queue_adapter.list_queue(root)
+    assert current == replacement
 
 
 def test_clear_terminal_keep_last_keeps_newest_terminal_entries(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from orca_auto.core.queue.store import queue_entries_same_generation
 from orca_auto.core.statuses import (
     STATUS_CANCEL_REQUESTED,
     STATUS_CANCELLED,
@@ -115,9 +116,36 @@ def _find_cancel_match(
 def _cancel_updated_entry(
     match: _InternalEngineCancelMatch,
     *,
-    request_cancel_fn: Callable[[Any, str], Any | None],
+    request_cancel_fn: Callable[..., Any | None],
 ) -> Any | None:
-    return request_cancel_fn(match.queue_root, match.entry.queue_id)
+    return request_cancel_fn(
+        match.queue_root,
+        match.entry.queue_id,
+        expected_entry=match.entry,
+    )
+
+
+def _recover_cancel_after_error(
+    cfg: Any,
+    match: _InternalEngineCancelMatch,
+    *,
+    queue_entries_with_roots_fn: Callable[[Any], list[tuple[Any, Any]]],
+) -> Any | None:
+    recovered: list[Any] = []
+    for queue_root, current in queue_entries_with_roots_fn(cfg):
+        if queue_root != match.queue_root or current.queue_id != match.entry.queue_id:
+            continue
+        if queue_entries_same_generation(current, match.entry):
+            recovered.append(current)
+    if len(recovered) != 1:
+        return None
+    current = recovered[0]
+    status = _queue_entry_status_text(current).lower()
+    if status == STATUS_CANCELLED or (
+        status == STATUS_RUNNING and bool(getattr(current, "cancel_requested", False))
+    ):
+        return current
+    return None
 
 
 def _cancel_success_fields(updated: Any, status: str) -> dict[str, str]:
@@ -134,7 +162,7 @@ def cancel_internal_engine_target(
     *,
     load_config_fn: Callable[[Any], Any],
     queue_entries_with_roots_fn: Callable[[Any], list[tuple[Any, Any]]],
-    request_cancel_fn: Callable[[Any, str], Any | None],
+    request_cancel_fn: Callable[..., Any | None],
     display_status_fn: Callable[[Any], str],
     api_name: str,
     target: str,
@@ -164,7 +192,19 @@ def cancel_internal_engine_target(
                 stderr=f"queue target not found: {request.target}\n",
             )
 
-        updated = _cancel_updated_entry(match, request_cancel_fn=request_cancel_fn)
+        try:
+            updated = _cancel_updated_entry(match, request_cancel_fn=request_cancel_fn)
+        except Exception as cancel_exc:
+            try:
+                updated = _recover_cancel_after_error(
+                    cfg,
+                    match,
+                    queue_entries_with_roots_fn=queue_entries_with_roots_fn,
+                )
+            except Exception as reload_exc:
+                raise cancel_exc from reload_exc
+            if updated is None:
+                raise
         if updated is None:
             return _cancel_failure_payload(
                 command_trace=request.command_trace,

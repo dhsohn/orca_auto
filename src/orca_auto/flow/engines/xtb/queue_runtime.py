@@ -44,12 +44,15 @@ from orca_auto.core.queue import (
     execution as _queue_execution,
 )
 from orca_auto.core.queue import lifecycle as _queue_lifecycle
+from orca_auto.core.queue.engine import artifacts as _engine_artifacts
+from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.internal_engine import (
     InternalEngineQueueModule,
     InternalEngineQueueWorkerDeps,
     InternalEngineQueueWorkerFacadeBindings,
     InternalEngineSpec,
     build_late_bound_internal_engine_queue_worker_deps,
+    entry_matches_engine_identity,
     own_engine_accept_entry,
 )
 from orca_auto.core.queue.worker import (
@@ -65,6 +68,7 @@ from orca_auto.core.queue.worker import (
 from orca_auto.core.queue.worker import (
     pid_is_alive as worker_pid_is_alive,
 )
+from orca_auto.core.statuses import TERMINAL_STATUSES
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.flow.engines.xtb import artifacts as _queue_artifacts
 from orca_auto.flow.engines.xtb import execution as _worker_execution
@@ -75,6 +79,9 @@ from . import queue_admission as _queue_admission
 from . import queue_runtime_terminal as _runtime_terminal
 from .engine import ENGINE_DEFINITION
 from .job_locations import (
+    list_job_records_for_cfg,
+    record_from_artifacts,
+    resolve_job_location_for_cfg,
     runtime_roots_for_cfg,
     upsert_job_record,
 )
@@ -90,9 +97,14 @@ from .runner import (
     start_xtb_job,
 )
 from .state import (
+    REPORT_MD_FILE_NAME,
     load_report_json,
     load_state,
+    write_report_json,
+    write_report_md_lines,
+    write_state,
 )
+from .submission import _record_queued as _record_queued_submission
 
 # Keep queue_runtime.subprocess available for tests/callers that patch Popen.
 _SUBPROCESS_MODULE = subprocess
@@ -100,6 +112,7 @@ POLL_INTERVAL_SECONDS = 5
 CANCEL_CHECK_INTERVAL_SECONDS = 1
 WORKER_PID_FILE = "xtb_queue_worker.pid"
 WORKER_SHUTDOWN_GRACE_SECONDS = 10.0
+TERMINAL_REPAIR_SCAN_INTERVAL_SECONDS = 300.0
 WORKER_JOB_MODULE = _worker_execution.WORKER_JOB_MODULE
 _ENGINE_SPEC = InternalEngineSpec(
     engine="xtb",
@@ -376,6 +389,7 @@ def _handle_worker_start_error(
 
 
 def _finalize_completed_job(worker: Any, _queue_id: str, job: Any, rc: int) -> None:
+    _adopt_terminal_artifacts(worker.cfg, job.queue_root, job.entry)
     _runtime_terminal.finalize_completed_job(
         _runtime_terminal_callbacks(),
         worker,
@@ -386,11 +400,552 @@ def _finalize_completed_job(worker: Any, _queue_id: str, job: Any, rc: int) -> N
 
 
 def _finalize_child_exit(worker: Any, job: _RunningJob, *, rc: int) -> None:
+    _adopt_terminal_artifacts(worker.cfg, job.queue_root, job.entry)
     _queue_module.finalize_child_exit(worker, job, rc=rc)
 
 
 def _sync_terminal_running_entries(worker: Any) -> None:
-    _runtime_terminal.sync_terminal_running_entries(_runtime_terminal_callbacks(), worker)
+    monotonic_now = time.monotonic()
+    full_terminal_scan = monotonic_now >= float(
+        getattr(worker, "_orca_auto_terminal_repair_next_scan", 0.0) or 0.0
+    )
+    indexed_by_job_id: dict[str, Any] = {}
+    if full_terminal_scan:
+        try:
+            indexed_by_job_id = {
+                record.job_id: record for _root, record in list_job_records_for_cfg(worker.cfg)
+            }
+        except (OSError, RuntimeError, ValueError):
+            indexed_by_job_id = {}
+    for queue_root, entry in queue_entries_with_roots(worker.cfg):
+        if not _is_xtb_queue_entry(entry):
+            continue
+        status = str(getattr(getattr(entry, "status", None), "value", "")).strip().lower()
+        cancelled_marker_needs_repair = status == "cancelled" and (
+            bool(getattr(entry, "cancel_requested", False))
+            or str(getattr(entry, "error", "") or "").strip() != "cancel_requested"
+        )
+        if status == "running" or (
+            status in TERMINAL_STATUSES
+            and (full_terminal_scan or cancelled_marker_needs_repair)
+            and _terminal_entry_needs_repair(
+                worker.cfg,
+                entry,
+                status=status,
+                indexed_record=indexed_by_job_id.get(str(entry.task_id)),
+                index_loaded=full_terminal_scan,
+            )
+        ):
+            _adopt_terminal_artifacts(worker.cfg, queue_root, entry)
+    if full_terminal_scan:
+        worker._orca_auto_terminal_repair_next_scan = (
+            monotonic_now + TERMINAL_REPAIR_SCAN_INTERVAL_SECONDS
+        )
+
+
+def _terminal_entry_needs_repair(
+    cfg: Any,
+    entry: Any,
+    *,
+    status: str,
+    indexed_record: Any | None = None,
+    index_loaded: bool = False,
+) -> bool:
+    entry_metadata = getattr(entry, "metadata", {})
+    if (
+        isinstance(entry_metadata, dict)
+        and str(entry_metadata.get("terminal_repair_blocked_reason") or "").strip()
+    ):
+        return False
+    if status == "cancelled" and (
+        bool(getattr(entry, "cancel_requested", False))
+        or str(getattr(entry, "error", "") or "").strip() != "cancel_requested"
+    ):
+        return True
+    try:
+        job_dir = _job_dir(entry)
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError):
+        return False
+    state = load_state(job_dir) or {}
+    report = load_report_json(job_dir) or {}
+    expected_reason = (
+        "completed"
+        if status == "completed"
+        else (
+            "cancel_requested"
+            if status == "cancelled"
+            else str(getattr(entry, "error", "") or "worker_failed").strip()
+        )
+    )
+    if not _engine_artifacts.terminal_artifact_pair_is_consistent(
+        state=state,
+        report=report,
+        entry=entry,
+        engine="xtb",
+        job_dir=job_dir,
+        expected_status=status,
+        expected_reason=expected_reason,
+    ):
+        return True
+    try:
+        markdown_lines = (job_dir / REPORT_MD_FILE_NAME).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return True
+    if markdown_lines != _engine_artifacts.build_engine_report_markdown(report):
+        return True
+    entry_metadata = getattr(entry, "metadata", {})
+    if not isinstance(entry_metadata, dict):
+        return True
+    job_type = str(entry_metadata.get("job_type") or "").strip()
+    reaction_key = str(entry_metadata.get("reaction_key") or "").strip()
+    selected_input = str(entry_metadata.get("selected_input_xyz") or "").strip()
+    input_summary = entry_metadata.get("input_summary")
+    resource_request = entry_metadata.get("resource_request")
+    artifact_input = state.get("input")
+    artifact_resources = state.get("resources")
+    if (
+        not job_type
+        or not reaction_key
+        or not selected_input
+        or not isinstance(input_summary, dict)
+        or not isinstance(resource_request, dict)
+        or not isinstance(artifact_input, dict)
+        or not isinstance(artifact_resources, dict)
+        or (
+            job_type != "ranking"
+            and str(artifact_input.get("selected_xyz_path") or "") != selected_input
+        )
+        or (
+            job_type == "ranking"
+            and str(artifact_input.get("selected_xyz_path") or "")
+            != _ranking_expected_selected_output(
+                state,
+                report,
+                input_summary=input_summary,
+                status=status,
+                queued_selected_path=selected_input,
+            )
+        )
+        or str(_artifact_value(state, report, "job_type", "")) != job_type
+        or str(_artifact_value(state, report, "reaction_key", "")) != reaction_key
+        or _artifact_value(state, report, "input_summary", None) != input_summary
+        or artifact_resources.get("request") != resource_request
+    ):
+        return True
+    indexed = indexed_record
+    if not index_loaded:
+        try:
+            _index_root, indexed = resolve_job_location_for_cfg(cfg, str(entry.task_id))
+        except (OSError, RuntimeError, ValueError):
+            return True
+    return bool(
+        indexed is None
+        or indexed.status != status
+        or indexed.job_type != f"xtb_{job_type}"
+        or indexed.molecule_key != reaction_key
+        or indexed.selected_input_xyz != str(artifact_input.get("selected_xyz_path") or "")
+        or indexed.resource_request != resource_request
+        or Path(indexed.original_run_dir).expanduser().resolve() != job_dir
+    )
+
+
+def _artifact_value(
+    state: dict[str, Any],
+    report: dict[str, Any],
+    key: str,
+    default: Any = None,
+) -> Any:
+    if key in state:
+        return state[key]
+    state_engine_payload = state.get("engine_payload")
+    if isinstance(state_engine_payload, dict) and key in state_engine_payload:
+        return state_engine_payload[key]
+    engine_payload = report.get("engine_payload")
+    if isinstance(engine_payload, dict) and key in engine_payload:
+        return engine_payload[key]
+    return default
+
+
+def _ranking_expected_selected_output(
+    state: dict[str, Any],
+    report: dict[str, Any],
+    *,
+    input_summary: dict[str, Any],
+    status: str,
+    queued_selected_path: str,
+) -> str:
+    if status != "completed":
+        return queued_selected_path
+    candidate_paths = input_summary.get("candidate_paths")
+    selected_candidates = _artifact_value(state, report, "selected_candidate_paths", None)
+    analysis_summary = _artifact_value(state, report, "analysis_summary", None)
+    if (
+        isinstance(candidate_paths, list)
+        and isinstance(selected_candidates, list)
+        and selected_candidates
+        and isinstance(analysis_summary, dict)
+    ):
+        best_path = str(selected_candidates[0])
+        if (
+            best_path in candidate_paths
+            and str(analysis_summary.get("best_candidate_path") or "") == best_path
+        ):
+            return best_path
+    return ""
+
+
+def _terminal_reason(state: dict[str, Any], report: dict[str, Any]) -> str:
+    for payload in (state, report):
+        status_payload = payload.get("status")
+        if isinstance(status_payload, dict):
+            reason = str(status_payload.get("reason") or "").strip()
+            if reason:
+                return reason
+    return "terminal_artifact_replay"
+
+
+def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
+    if not _is_xtb_queue_entry(entry):
+        return False
+    try:
+        job_dir = _job_dir(entry)
+        resolved_queue_root = queue_root.expanduser().resolve()
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError):
+        return False
+    if not job_dir.is_relative_to(resolved_queue_root):
+        return False
+    raw_state = load_state(job_dir) or {}
+    raw_report = load_report_json(job_dir) or {}
+    matched = _engine_artifacts.matching_terminal_artifacts_for_entry(
+        state=raw_state,
+        report=raw_report,
+        entry=entry,
+        engine="xtb",
+        job_dir=job_dir,
+    )
+    durable_status = str(getattr(getattr(entry, "status", None), "value", "")).strip().lower()
+    if matched is not None:
+        state = matched.state
+        report = matched.report
+    elif durable_status in TERMINAL_STATUSES:
+        exact_state = _engine_artifacts.exact_artifact_envelope_for_entry(
+            raw_state,
+            entry=entry,
+            engine="xtb",
+            job_dir=job_dir,
+            require_job_dir=True,
+            require_generation=True,
+        )
+        exact_report = _engine_artifacts.exact_artifact_envelope_for_entry(
+            raw_report,
+            entry=entry,
+            engine="xtb",
+            job_dir=job_dir,
+            require_job_dir=False,
+            require_generation=True,
+        )
+        state = exact_state
+        report = {} if exact_state else exact_report
+        if not state and not report:
+            terminal_reason = (
+                "completed"
+                if durable_status == "completed"
+                else (
+                    "cancel_requested"
+                    if durable_status == "cancelled"
+                    else str(getattr(entry, "error", "") or "terminal_artifacts_unrecoverable")
+                )
+            )
+            _queue_execution.mark_terminal_status(
+                queue_root,
+                entry.queue_id,
+                status=durable_status,
+                reason=terminal_reason,
+                metadata_update={
+                    "terminal_repair_blocked_reason": "terminal_artifacts_unrecoverable"
+                },
+                mark_completed_fn=mark_completed,
+                mark_cancelled_fn=mark_cancelled,
+                mark_failed_fn=mark_failed,
+                expected_entry=entry,
+                expected_task_id=str(entry.task_id),
+            )
+            return False
+    else:
+        return False
+    record = record_from_artifacts(job_dir=job_dir, state=state, report=report)
+    if (
+        record is None
+        or (record.status not in TERMINAL_STATUSES and durable_status not in TERMINAL_STATUSES)
+        or record.job_id != str(entry.task_id)
+    ):
+        return False
+    entry_metadata = getattr(entry, "metadata", {})
+    if not isinstance(entry_metadata, dict):
+        return False
+    selected_input = str(entry_metadata.get("selected_input_xyz") or "").strip()
+    try:
+        selected_input_path = Path(selected_input).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return False
+    if not selected_input or not selected_input_path.is_relative_to(job_dir):
+        return False
+    try:
+        artifact_selected_input_path = Path(str(record.selected_input_xyz)).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return False
+    if not artifact_selected_input_path.is_relative_to(job_dir):
+        return False
+
+    artifact_job_type = str(
+        _artifact_value(state, report, "job_type", "path_search") or "path_search"
+    )
+    artifact_reaction_key = str(_artifact_value(state, report, "reaction_key", record.molecule_key))
+    job_type = str(entry_metadata.get("job_type") or "").strip()
+    reaction_key = str(entry_metadata.get("reaction_key") or "").strip()
+    queue_resource_request = entry_metadata.get("resource_request")
+    if not isinstance(queue_resource_request, dict):
+        queue_resource_request = {}
+    input_summary = entry_metadata.get("input_summary")
+    if not isinstance(input_summary, dict):
+        input_summary = {}
+    if not job_type or not reaction_key:
+        return False
+    artifact_input_summary = _artifact_value(state, report, "input_summary", None)
+    expected_ranking_selected = (
+        _ranking_expected_selected_output(
+            state,
+            report,
+            input_summary=input_summary,
+            status=record.status,
+            queued_selected_path=str(selected_input_path),
+        )
+        if job_type == "ranking"
+        else ""
+    )
+    if (
+        durable_status == "completed"
+        and job_type == "ranking"
+        and record.status == "completed"
+        and not expected_ranking_selected
+    ):
+        _queue_execution.mark_terminal_status(
+            queue_root,
+            entry.queue_id,
+            status="completed",
+            reason="completed",
+            metadata_update={
+                "terminal_repair_blocked_reason": "ranking_selection_identity_unrecoverable"
+            },
+            mark_completed_fn=mark_completed,
+            mark_cancelled_fn=mark_cancelled,
+            mark_failed_fn=mark_failed,
+            expected_entry=entry,
+            expected_task_id=str(entry.task_id),
+        )
+        return False
+    if durable_status not in TERMINAL_STATUSES and (
+        artifact_job_type != job_type
+        or artifact_reaction_key != reaction_key
+        or (
+            job_type == "ranking" and record.status == "completed" and not expected_ranking_selected
+        )
+        or (
+            (job_type != "ranking" or record.status != "completed")
+            and artifact_selected_input_path != selected_input_path
+        )
+        or artifact_input_summary != input_summary
+        or dict(record.resource_request) != queue_resource_request
+    ):
+        return False
+
+    def upsert_status(status: str) -> None:
+        indexed_selected_input = (
+            Path(expected_ranking_selected)
+            if job_type == "ranking" and expected_ranking_selected and status == "completed"
+            else selected_input_path
+        )
+        upsert_job_record(
+            cfg,
+            job_id=record.job_id,
+            status=status,
+            job_dir=job_dir,
+            job_type=job_type,
+            selected_input_xyz=str(indexed_selected_input),
+            reaction_key=reaction_key,
+            resource_request=queue_resource_request,
+            resource_actual=record.resource_actual,
+        )
+
+    authoritative_payload = (
+        report
+        if isinstance(report.get("engine_payload"), dict) and "command" in report["engine_payload"]
+        else (state or report)
+    )
+
+    def persist_terminal(status: str, reason: str) -> None:
+        source_status = authoritative_payload.get("status")
+        source_exit_code = (
+            source_status.get("exit_code") if isinstance(source_status, dict) else None
+        )
+        exit_code: int | None
+        if status == "completed":
+            exit_code = 0
+        elif status == "failed":
+            exit_code = (
+                source_exit_code
+                if (
+                    isinstance(source_status, dict)
+                    and str(source_status.get("state") or "").strip().lower() == status
+                    and type(source_exit_code) is int
+                )
+                else 1
+            )
+        else:
+            exit_code = (
+                source_exit_code
+                if (
+                    isinstance(source_status, dict)
+                    and str(source_status.get("state") or "").strip().lower() == status
+                    and type(source_exit_code) is int
+                )
+                else None
+            )
+        payloads = _engine_artifacts.canonical_terminal_artifact_payloads(
+            authoritative_payload,
+            job_dir=job_dir,
+            status=status,
+            reason=reason,
+            exit_code=exit_code,
+            generation=queue_entry_generation_token(entry),
+            updated_at=now_utc_iso(),
+        )
+        for payload in (payloads.state, payloads.report):
+            input_payload = payload.get("input")
+            if not isinstance(input_payload, dict):
+                input_payload = {}
+                payload["input"] = input_payload
+            canonical_selected_input = (
+                Path(expected_ranking_selected)
+                if job_type == "ranking" and expected_ranking_selected and status == "completed"
+                else selected_input_path
+            )
+            input_payload.update(
+                {
+                    "primary_path": str(canonical_selected_input),
+                    "selected_xyz_path": str(canonical_selected_input),
+                }
+            )
+            engine_payload = payload.get("engine_payload")
+            if not isinstance(engine_payload, dict):
+                engine_payload = {}
+                payload["engine_payload"] = engine_payload
+            engine_payload.update({"job_type": job_type, "reaction_key": reaction_key})
+            engine_payload["input_summary"] = dict(input_summary)
+            resources = payload.get("resources")
+            if not isinstance(resources, dict):
+                resources = {}
+                payload["resources"] = resources
+            resources["request"] = dict(queue_resource_request)
+        write_state(job_dir, payloads.state)
+        write_report_json(job_dir, payloads.report)
+        write_report_md_lines(
+            job_dir,
+            _engine_artifacts.build_engine_report_markdown(payloads.report),
+        )
+        upsert_status(status)
+
+    terminal_reason = _terminal_reason(state, report)
+    target_status = durable_status if durable_status in TERMINAL_STATUSES else record.status
+    if target_status == "completed":
+        target_reason = "completed"
+    elif target_status == "cancelled":
+        target_reason = str(getattr(entry, "error", "") or "cancel_requested").strip()
+        if target_reason != "cancel_requested":
+            target_reason = "cancel_requested"
+    else:
+        target_reason = str(getattr(entry, "error", "") or terminal_reason).strip()
+        if not target_reason:
+            target_reason = "worker_failed"
+
+    terminal = _queue_execution.mark_terminal_status(
+        queue_root,
+        entry.queue_id,
+        status=target_status,
+        reason=target_reason,
+        metadata_update={
+            "candidate_count": int(_artifact_value(state, report, "candidate_count", 0) or 0)
+        },
+        mark_completed_fn=mark_completed,
+        mark_cancelled_fn=mark_cancelled,
+        mark_failed_fn=mark_failed,
+        expected_entry=entry,
+        expected_task_id=str(entry.task_id),
+        before_update_fn=lambda: persist_terminal(target_status, target_reason),
+    )
+    if terminal is not None:
+        return True
+    if not get_cancel_requested(
+        queue_root,
+        entry.queue_id,
+        expected_entry=entry,
+        expected_task_id=str(entry.task_id),
+    ):
+        return False
+
+    _queue_execution.mark_terminal_status(
+        queue_root,
+        entry.queue_id,
+        status="cancelled",
+        reason="cancel_requested",
+        metadata_update=None,
+        mark_completed_fn=mark_completed,
+        mark_cancelled_fn=mark_cancelled,
+        mark_failed_fn=mark_failed,
+        expected_entry=entry,
+        expected_task_id=str(entry.task_id),
+        before_update_fn=lambda: persist_terminal("cancelled", "cancel_requested"),
+    )
+    return False
+
+
+def _is_xtb_queue_entry(entry: Any) -> bool:
+    return entry_matches_engine_identity(entry, "xtb")
+
+
+def _repair_xtb_queue_publications(worker: Any) -> bool:
+    from orca_auto.flow.submitters.internal_engine_submission import (
+        repair_internal_engine_queue_publication,
+    )
+
+    repaired_all = True
+    for queue_root, entry in queue_entries_with_roots(worker.cfg):
+        if not _is_xtb_queue_entry(entry):
+            continue
+        try:
+            repaired = repair_internal_engine_queue_publication(
+                cfg=worker.cfg,
+                queue_root=queue_root,
+                entry=entry,
+                record_queued_fn=_record_queued_submission,
+                entry_matches_fn=_is_xtb_queue_entry,
+            )
+        except Exception:  # noqa: BLE001
+            repaired = False
+        if not repaired:
+            repaired_all = False
+    return repaired_all
+
+
+def _after_xtb_worker_init(worker: Any) -> None:
+    reserve_next_entry = worker._reserve_next_entry
+
+    def reserve_next_after_publication_repair() -> tuple[str, Any | None]:
+        if not _repair_xtb_queue_publications(worker):
+            return "blocked", None
+        return reserve_next_entry()
+
+    worker.__dict__["_reserve_next_entry"] = reserve_next_after_publication_repair
 
 
 def _live_worker_pid_slots(worker: Any) -> list[Any]:
@@ -443,6 +998,7 @@ def QueueWorker(
         hooks=_queue_worker_hooks(),
         worker_pid_file_name=WORKER_PID_FILE,
         admission_root=_admission_root(cfg),
+        after_init=_after_xtb_worker_init,
         finalize_child_exit=_finalize_child_exit,
         reconcile_orphaned_running=_reconcile_orphaned_running,
         worker_builder=build_engine_queue_worker,

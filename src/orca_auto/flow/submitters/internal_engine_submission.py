@@ -13,6 +13,7 @@ from orca_auto.core.commands.run_dir import (
     EngineRunDirSubmission,
 )
 from orca_auto.core.queue import (
+    QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
     QUEUE_RECORD_SYNC_OWNER_PID_KEY,
@@ -27,8 +28,10 @@ from orca_auto.core.queue import (
     QueueStatus,
     process_start_token,
     queue_record_publication_lock,
-    queue_record_sync_is_stale,
 )
+from orca_auto.core.queue.engine.input_snapshot import cleanup_unowned_input_snapshot_namespace
+from orca_auto.core.queue.internal_engine.runtime import entry_matches_engine_identity
+from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.store import mutate_entries, reject_active_task_duplicate
 from orca_auto.core.statuses import (
     STATUS_ADMISSION_LIMIT_REACHED,
@@ -91,6 +94,28 @@ class _ActiveJobDirCancellationPending(RuntimeError):
         super().__init__(existing.queue_id)
 
 
+class _EnqueueOwnershipUnknown(RuntimeError):
+    """Raised when a failed enqueue cannot be proven committed or uncommitted."""
+
+
+def _cleanup_unowned_submission_snapshot(submission: Any | None) -> None:
+    if not isinstance(submission, EngineRunDirSubmission):
+        return
+    execution_snapshot = submission.metadata.get("execution_snapshot")
+    if not isinstance(execution_snapshot, dict):
+        return
+    snapshot_namespace = normalize_text(execution_snapshot.get("snapshot_namespace"))
+    if not snapshot_namespace:
+        return
+    job_dir = submission.context.get("job_dir") or submission.metadata.get("job_dir")
+    if not isinstance(job_dir, (str, Path)):
+        return
+    cleanup_unowned_input_snapshot_namespace(
+        job_dir,
+        snapshot_namespace,
+    )
+
+
 def _active_job_dir_key(entry: QueueEntry) -> tuple[str, str] | None:
     metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
     job_dir = normalize_text(metadata.get("job_dir"))
@@ -115,6 +140,26 @@ def _reject_active_job_dir_duplicate(
                 raise _ActiveJobDirCancellationPending(existing)
             raise _ActiveJobDirReplay(existing)
     reject_active_task_duplicate(entries, entry)
+
+
+def _matches_submission_engine_identity(entry: QueueEntry, submission: Any) -> bool:
+    expected_engine = normalize_text(getattr(submission, "engine", ""))
+    if not entry_matches_engine_identity(entry, expected_engine):
+        return False
+    if any(
+        normalize_text(getattr(entry, field, "")) != normalize_text(getattr(submission, field, ""))
+        for field in ("app_name", "engine", "task_kind")
+    ):
+        return False
+    if expected_engine != "xtb":
+        return True
+    entry_metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+    submission_metadata = getattr(submission, "metadata", {})
+    if not isinstance(submission_metadata, dict):
+        return False
+    return normalize_text(entry_metadata.get("job_type")) == normalize_text(
+        submission_metadata.get("job_type")
+    )
 
 
 def transient_submission_block_reason(
@@ -249,7 +294,7 @@ def _internal_engine_submission_request(
     priority: int,
     config_path: str,
 ) -> _InternalEngineSubmissionRequest:
-    priority_value = int(priority)
+    priority_value = normalize_queue_priority(priority)
     return _InternalEngineSubmissionRequest(
         command_trace=internal_call_argv(
             api_name=api_name,
@@ -324,6 +369,40 @@ def _submission_for_existing_entry(
     )
 
 
+def _same_queue_generation(current: QueueEntry, expected: QueueEntry) -> bool:
+    current_job_dir = normalize_text(current.metadata.get("job_dir"))
+    expected_job_dir = normalize_text(expected.metadata.get("job_dir"))
+    try:
+        same_job_dir = bool(current_job_dir and expected_job_dir) and (
+            Path(current_job_dir).expanduser().resolve()
+            == Path(expected_job_dir).expanduser().resolve()
+        )
+    except (OSError, RuntimeError):
+        return False
+    return bool(
+        same_job_dir
+        and current.queue_id == expected.queue_id
+        and current.app_name == expected.app_name
+        and current.task_id == expected.task_id
+        and current.task_kind == expected.task_kind
+        and current.engine == expected.engine
+        and current.priority == expected.priority
+        and _immutable_publication_metadata(current.metadata)
+        == _immutable_publication_metadata(expected.metadata)
+    )
+
+
+def _immutable_publication_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    lease_keys = {
+        QUEUE_RECORD_SYNC_KEY,
+        QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
+        QUEUE_RECORD_SYNC_OWNER_PID_KEY,
+        QUEUE_RECORD_SYNC_OWNER_START_KEY,
+        QUEUE_RECORD_SYNC_TOKEN_KEY,
+    }
+    return {key: value for key, value in metadata.items() if key not in lease_keys}
+
+
 def _queued_record_sync_metadata(
     sync_state: str,
     *,
@@ -365,6 +444,8 @@ def _transition_owned_queued_record_sync(
         for index, current in enumerate(entries):
             if current.queue_id != entry.queue_id:
                 continue
+            if not _same_queue_generation(current, entry):
+                return (current, False), False
             current_sync_state = normalize_text(current.metadata.get(QUEUE_RECORD_SYNC_KEY)).lower()
             current_token = normalize_text(current.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY))
             if current_sync_state == QUEUE_RECORD_SYNC_COMPLETE:
@@ -411,6 +492,8 @@ def _owns_queued_record_publication(
         for current in entries:
             if current.queue_id != entry.queue_id:
                 continue
+            if not _same_queue_generation(current, entry):
+                return (current, False), False
             current_sync_state = normalize_text(current.metadata.get(QUEUE_RECORD_SYNC_KEY)).lower()
             current_token = normalize_text(current.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY))
             owns_publication = (
@@ -564,14 +647,38 @@ def _recover_post_commit_enqueue(
         return matches[0]
 
     def recover(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
-        match = unique_match(
-            entries,
-            sync_state=QUEUE_RECORD_SYNC_PREPARING,
-            owner_pid=expected_owner_pid,
-            owner_start=expected_owner_start,
-        )
-        if match is None:
+        matches = [
+            (index, current)
+            for index, current in enumerate(entries)
+            if identity_matches(
+                current,
+                sync_state=QUEUE_RECORD_SYNC_PREPARING,
+                owner_pid=expected_owner_pid,
+                owner_start=expected_owner_start,
+            )
+        ]
+        if not matches:
             return None, False
+        if len(matches) != 1:
+            finished_at = now_utc_iso()
+            for index, current in matches:
+                metadata = dict(current.metadata)
+                metadata.update(
+                    _queued_record_sync_metadata(
+                        QUEUE_RECORD_SYNC_ABORTED,
+                        token="",
+                        owner_pid=0,
+                    )
+                )
+                entries[index] = replace(
+                    current,
+                    status=QueueStatus.CANCELLED,
+                    cancel_requested=True,
+                    finished_at=finished_at,
+                    metadata=metadata,
+                )
+            return None, True
+        match = matches[0]
         index, current = match
         metadata = dict(current.metadata)
         metadata.update(
@@ -621,6 +728,9 @@ def _recover_post_commit_enqueue(
                     recovery_error.__traceback__,
                 ),
             )
+            raise _EnqueueOwnershipUnknown(
+                "queue enqueue ownership is indeterminate after recovery failure"
+            ) from recovery_error
         return None
     if recovery_error is not None:
         logger.warning(
@@ -736,12 +846,14 @@ def _repair_queued_record(
     if submission is None or not isinstance(entry, QueueEntry):
         return
 
-    repair_token = timestamped_token("record_sync", token_bytes=8)
+    repair_token = timestamped_token("record_sync", token_bytes=16)
 
     def claim(entries: list[QueueEntry]) -> tuple[tuple[str, QueueEntry], bool]:
         for index, current in enumerate(entries):
             if current.queue_id != entry.queue_id:
                 continue
+            if not _same_queue_generation(current, entry):
+                return ("identity_changed", current), False
             if current.cancel_requested:
                 return ("cancel_requested", current), False
             sync_state = normalize_text(current.metadata.get(QUEUE_RECORD_SYNC_KEY)).lower()
@@ -751,10 +863,12 @@ def _repair_queued_record(
                 return ("running", current), False
             if current.status != QueueStatus.PENDING:
                 return ("terminal", current), False
-            if sync_state in {QUEUE_RECORD_SYNC_PREPARING, QUEUE_RECORD_SYNC_REPAIRING} and not (
-                queue_record_sync_is_stale(current)
-            ):
-                return ("in_progress", current), False
+            if sync_state and sync_state not in {
+                QUEUE_RECORD_SYNC_PREPARING,
+                QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                QUEUE_RECORD_SYNC_REPAIRING,
+            }:
+                return ("invalid_state", current), False
             metadata = dict(current.metadata)
             metadata.update(
                 _queued_record_sync_metadata(
@@ -771,7 +885,12 @@ def _repair_queued_record(
         )
 
     try:
-        outcome, current = mutate_entries(submission.queue_root, claim)
+        # The publication lock, rather than a live PID recorded in the row, is
+        # the authoritative proof of an active publication scope. Once this
+        # lock is acquired an abandoned PREPARING/REPAIRING lease is safe to
+        # reclaim even when its publisher is a still-running bot/API process.
+        with queue_record_publication_lock(submission.queue_root, entry.queue_id):
+            outcome, current = mutate_entries(submission.queue_root, claim)
     except BaseException as exc:  # noqa: BLE001
         # The queue mutation may have committed the REPAIRING lease before its
         # durability barrier reported failure.  Fence it back to retryable
@@ -808,6 +927,11 @@ def _repair_queued_record(
         )
         if outcome == "cancel_requested":
             state.deferred_reason = STATUS_CANCEL_REQUESTED
+        elif outcome == "invalid_state":
+            raise RuntimeError(
+                "queued job state/index repair refused an invalid publication state "
+                f"for queue_id={current.queue_id}"
+            )
         elif outcome == "running":
             _append_warning(
                 state,
@@ -815,6 +939,11 @@ def _repair_queued_record(
             )
         elif outcome == "in_progress":
             _append_warning(state, "queued job state/index publication is already in progress")
+        elif outcome == "identity_changed":
+            _append_warning(
+                state,
+                "queued job state/index repair refused a changed queue generation",
+            )
         return
 
     # From the moment claim commits, every subsequent operation belongs to the
@@ -893,6 +1022,107 @@ def _repair_queued_record(
     _append_warning(state, "queued job state/index repaired")
 
 
+def repair_internal_engine_queue_publication(
+    *,
+    cfg: Any,
+    queue_root: Path,
+    entry: QueueEntry,
+    record_queued_fn: Callable[[Any, Any, Any], Any],
+    entry_matches_fn: Callable[[QueueEntry], bool],
+) -> bool:
+    """Repair one internal-engine queued record before a worker may claim it."""
+
+    if not entry_matches_fn(entry):
+        return True
+    if entry.status != QueueStatus.PENDING or entry.cancel_requested:
+        return True
+    sync_state = normalize_text(entry.metadata.get(QUEUE_RECORD_SYNC_KEY)).lower()
+    if not sync_state or sync_state == QUEUE_RECORD_SYNC_COMPLETE:
+        return True
+    if sync_state not in {
+        QUEUE_RECORD_SYNC_PREPARING,
+        QUEUE_RECORD_SYNC_REPAIR_PENDING,
+        QUEUE_RECORD_SYNC_REPAIRING,
+    }:
+        logger.error(
+            "Cannot repair internal-engine queue publication with invalid state %r: queue_id=%s",
+            sync_state,
+            entry.queue_id,
+        )
+        return False
+
+    raw_job_dir = normalize_text(entry.metadata.get("job_dir"))
+    if not raw_job_dir:
+        logger.error(
+            "Cannot repair internal-engine queue publication without job_dir: queue_id=%s",
+            entry.queue_id,
+        )
+        return False
+    try:
+        resolved_job_dir = Path(raw_job_dir).expanduser().resolve()
+        resolved_queue_root = queue_root.expanduser().resolve()
+    except (OSError, RuntimeError):
+        return False
+    if not resolved_job_dir.is_relative_to(resolved_queue_root):
+        logger.error(
+            "Cannot repair internal-engine publication outside its queue root: "
+            "queue_id=%s job_dir=%s queue_root=%s",
+            entry.queue_id,
+            resolved_job_dir,
+            resolved_queue_root,
+        )
+        return False
+    selected_input_text = normalize_text(entry.metadata.get("selected_input_xyz"))
+    if selected_input_text:
+        try:
+            selected_input = Path(selected_input_text).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return False
+        if not selected_input.is_relative_to(resolved_job_dir):
+            return False
+    resource_request = entry.metadata.get("resource_request")
+    if not isinstance(resource_request, dict):
+        resource_request = {}
+    base_submission = EngineRunDirSubmission(
+        queue_root=resolved_queue_root,
+        app_name=entry.app_name,
+        task_id=entry.task_id,
+        task_kind=entry.task_kind,
+        engine=entry.engine,
+        priority=entry.priority,
+        metadata=dict(entry.metadata),
+        context={
+            "job_dir": resolved_job_dir,
+            "resource_request": resource_request,
+            SUPPRESS_QUEUED_NOTIFICATION_CONTEXT_KEY: True,
+        },
+    )
+    state = _InternalEngineSubmissionState(
+        resolved_job_dir=resolved_job_dir,
+        submission=base_submission,
+        entry=entry,
+        publication_token=normalize_text(entry.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY)),
+    )
+    _repair_queued_record(
+        cfg=cfg,
+        state=state,
+        record_queued_fn=record_queued_fn,
+        suppress_queued_notification=True,
+    )
+
+    def reload(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
+        current = next((item for item in entries if item.queue_id == entry.queue_id), None)
+        return current, False
+
+    current = mutate_entries(resolved_queue_root, reload)
+    if current is None or current.status != QueueStatus.PENDING or current.cancel_requested:
+        return True
+    return (
+        normalize_text(current.metadata.get(QUEUE_RECORD_SYNC_KEY)).lower()
+        == QUEUE_RECORD_SYNC_COMPLETE
+    )
+
+
 def _enqueue_internal_engine_submission(
     *,
     request: _InternalEngineSubmissionRequest,
@@ -908,7 +1138,7 @@ def _enqueue_internal_engine_submission(
     state.resolved_job_dir = resolve_job_dir_fn(cfg, request.job_dir)
     manifest = load_manifest_fn(state.resolved_job_dir)
     state.submission = build_submission_fn(cfg, state.resolved_job_dir, manifest, request.args)
-    state.publication_token = timestamped_token("record_sync", token_bytes=8)
+    state.publication_token = timestamped_token("record_sync", token_bytes=16)
     publication_metadata = _queued_record_sync_metadata(
         QUEUE_RECORD_SYNC_PREPARING,
         token=state.publication_token,
@@ -928,11 +1158,19 @@ def _enqueue_internal_engine_submission(
             duplicate_policy=_reject_active_job_dir_duplicate,
         )
     except _ActiveJobDirCancellationPending as pending:
+        _cleanup_unowned_submission_snapshot(state.submission)
         state.entry = pending.existing
         state.submission = _submission_for_existing_entry(state.submission, pending.existing)
         state.deferred_reason = STATUS_CANCEL_REQUESTED
         return
     except _ActiveJobDirReplay as replay:
+        if not _matches_submission_engine_identity(replay.existing, state.submission):
+            _cleanup_unowned_submission_snapshot(state.submission)
+            raise RuntimeError(
+                "active job directory is owned by a conflicting queue identity "
+                f"(queue_id={replay.existing.queue_id})"
+            ) from replay
+        _cleanup_unowned_submission_snapshot(state.submission)
         state.entry = replay.existing
         state.submission = _submission_for_existing_entry(state.submission, replay.existing)
         _append_warning(
@@ -952,6 +1190,7 @@ def _enqueue_internal_engine_submission(
             enqueue_metadata=enqueue_metadata,
         )
         if recovered is None:
+            _cleanup_unowned_submission_snapshot(state.submission)
             raise
         _append_warning(
             state,

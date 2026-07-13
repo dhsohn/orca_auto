@@ -210,7 +210,7 @@ def test_xtb_retry_helpers_and_job_writer_materialize_attempt_files(tmp_path: Pa
     assert (job_path / "reactants" / "r1.xyz").exists()
     assert (job_path / "products" / "p1.xyz").exists()
     assert (job_path / "path_retry_02.inp").read_text(encoding="utf-8").startswith("$path")
-    assert "namespace: retry_02" in (job_path / "xtb_job.yaml").read_text(encoding="utf-8")
+    assert "namespace:" not in (job_path / "xtb_job.yaml").read_text(encoding="utf-8")
     assert payload["job_dir"] == str(job_path)
     assert payload["selected_input_xyz"] == str(job_path / "reactants" / "r1.xyz")
     assert payload["secondary_input_xyz"] == str(job_path / "products" / "p1.xyz")
@@ -221,7 +221,7 @@ def test_xtb_retry_helpers_and_job_writer_materialize_attempt_files(tmp_path: Pa
     assert attempt["attempt_number"] == 2
     assert attempt["recipe_id"] == "path_input_refined"
     assert attempt["job_dir"] == str(job_path)
-    assert attempt["namespace"] == "retry_02"
+    assert attempt["namespace"] == ""
 
     metadata["xtb_active_attempt_number"] = 4
     assert xtb_current_attempt_number_impl(stage) == 4
@@ -317,6 +317,35 @@ def test_xtb_job_writer_materializes_ranked_multiframe_inputs(tmp_path: Path) ->
     assert manifest["product_xyz"] == "p3.xyz"
 
 
+def test_xtb_job_writer_rejects_endpoint_element_order_mismatch(tmp_path: Path) -> None:
+    reactant_xyz = tmp_path / "inputs" / "reactant.xyz"
+    product_xyz = tmp_path / "inputs" / "product.xyz"
+    reactant_xyz.parent.mkdir(parents=True)
+    reactant_xyz.write_text("2\nr\nH 0 0 0\nO 0 0 1\n", encoding="utf-8")
+    product_xyz.write_text("2\np\nO 0 0 0\nH 0 0 1\n", encoding="utf-8")
+    stage: dict[str, Any] = {
+        "stage_id": "xtb_path_search_01",
+        "metadata": {},
+        "task": {
+            "resource_request": {"max_cores": 2, "max_memory_gb": 4},
+            "payload": {
+                "reaction_key": "rxn_mismatch",
+                "reactant_source": {"artifact_path": str(reactant_xyz), "rank": 1},
+                "product_source": {"artifact_path": str(product_xyz), "rank": 1},
+            },
+            "enqueue_payload": {},
+        },
+    }
+
+    with pytest.raises(ValueError, match="identical atom counts and element order"):
+        write_xtb_path_job_impl(
+            stage,
+            xtb_allowed_root=tmp_path / "xtb_mismatch",
+            workflow_id="wf_mismatch",
+            attempt_number=0,
+        )
+
+
 def test_job_dir_writers_apply_manifest_overrides(tmp_path: Path) -> None:
     input_xyz = tmp_path / "crest_input.xyz"
     input_xyz.write_text("2\ncrest\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
@@ -375,7 +404,6 @@ def test_job_dir_writers_apply_manifest_overrides(tmp_path: Path) -> None:
                     "uhf": 1,
                     "solvent_model": "alpb",
                     "solvent": "water",
-                    "namespace": "baseline_ns",
                     "xcontrol_file": str(xcontrol_file),
                 },
             },
@@ -401,7 +429,6 @@ def test_job_dir_writers_apply_manifest_overrides(tmp_path: Path) -> None:
         "reaction_key": "rxn_override",
         "reactant_xyz": "r1.xyz",
         "product_xyz": "p1.xyz",
-        "namespace": "baseline_ns",
         "xcontrol": "workflow_xcontrol.inp",
     }
     assert (xtb_job_path / "workflow_xcontrol.inp").read_text(

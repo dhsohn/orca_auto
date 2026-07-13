@@ -60,6 +60,10 @@ class TestDetectJobType(unittest.TestCase):
             )
             self.assertEqual(detect_job_type(p), "opt")
 
+    def test_route_after_closed_comment_is_classified(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(detect_job_type(self._inp(td, "# hidden # ! Freq")), "freq")
+
     def test_missing_file_is_other(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             self.assertEqual(detect_job_type(Path(td) / "missing.inp"), "other")

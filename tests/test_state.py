@@ -126,7 +126,7 @@ class TestState(unittest.TestCase):
             inp = reaction / "rxn.inp"
             inp.write_text("! Opt\n", encoding="utf-8")
             state = new_state(reaction, inp, max_retries=1)
-            self.assertRegex(str(state["run_id"]), re.compile(r"^run_\d{8}_\d{6}_[0-9a-f]{8}$"))
+            self.assertRegex(str(state["run_id"]), re.compile(r"^run_\d{8}_\d{6}_[0-9a-f]{32}$"))
 
             save_state(reaction, state)
             loaded = load_state(reaction)
@@ -207,8 +207,24 @@ class TestState(unittest.TestCase):
                     "out_path": str(reaction / "rxn.out"),
                     "return_code": 0,
                     "analyzer_status": "completed",
+                    "command": ["/opt/orca/orca", "rxn.inp"],
+                    "input_identity": {
+                        "path": str(inp),
+                        "sha256": "a" * 64,
+                        "size_bytes": 6,
+                    },
+                    "executable_identity": {
+                        "path": "/opt/orca/orca",
+                        "sha256": "b" * 64,
+                        "size_bytes": 1024,
+                    },
                 }
             ]
+            state["execution_provenance"] = {
+                "bound_selected_identity": state["attempts"][0]["input_identity"],
+                "materialized_inputs": {},
+                "executable_identity": state["attempts"][0]["executable_identity"],
+            }
             state["final_result"] = {
                 "status": "completed",
                 "analyzer_status": "completed",
@@ -225,6 +241,10 @@ class TestState(unittest.TestCase):
             self.assertEqual(report["engine_payload"]["max_retries"], 3)
             self.assertEqual(len(report["engine_payload"]["attempts"]), 1)
             self.assertEqual(report["engine_payload"]["attempts"], state["attempts"])
+            self.assertEqual(
+                report["engine_payload"]["execution_provenance"],
+                state["execution_provenance"],
+            )
             self.assertIsNotNone(report["engine_payload"]["final_result"])
 
             md = report_md_path.read_text(encoding="utf-8")

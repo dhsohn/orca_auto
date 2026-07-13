@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -9,8 +10,17 @@ import pytest
 
 from orca_auto.core.config import CommonResourceConfig, CommonRuntimeConfig
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
+from orca_auto.core.engine_runner import engine_runtime_identity
 from orca_auto.core.indexing import get_job_location, list_job_locations
-from orca_auto.core.queue import enqueue, list_queue, request_cancel
+from orca_auto.core.queue import dequeue_next, enqueue, list_queue, mark_cancelled, request_cancel
+from orca_auto.core.queue.generation import queue_entry_generation_token
+from orca_auto.core.queue.internal_engine import own_engine_accept_entry
+from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_COMPLETE,
+    QUEUE_RECORD_SYNC_KEY,
+    QUEUE_RECORD_SYNC_REPAIR_PENDING,
+    queue_record_sync_metadata,
+)
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.flow.engines.crest import queue_runtime as queue_cmd
 from orca_auto.flow.engines.crest.runner import CrestRunResult
@@ -18,8 +28,12 @@ from orca_auto.flow.engines.crest.state import (
     REPORT_JSON_FILE_NAME,
     REPORT_MD_FILE_NAME,
     STATE_FILE_NAME,
+    load_report_json,
     load_state,
+    write_report_json,
+    write_state,
 )
+from tests.engine_artifact_helpers import artifact_payload
 from tests.engine_artifact_helpers import (
     artifacts as _artifacts,
 )
@@ -36,6 +50,7 @@ from tests.engine_artifact_helpers import (
     status as _status,
 )
 from tests.engine_process_helpers import process_one_crest_for_test
+from tests.execution_snapshot_helpers import stage_execution_snapshot
 
 
 def _find_entry_by_target(entries: list[Any], target: str) -> Any | None:
@@ -106,22 +121,37 @@ def _enqueue_job(
     job_dir.mkdir(parents=True)
     selected_xyz = job_dir / "selected_input.xyz"
     selected_xyz.write_text("1\nselected\nH 0.0 0.0 0.0\n", encoding="utf-8")
+    resolved_molecule_key = molecule_key or selected_xyz.stem
+    runtime_identity = engine_runtime_identity(job_dir)
+    selected_snapshot, execution_snapshot = stage_execution_snapshot(
+        job_dir,
+        selected_xyz,
+        engine="crest",
+        manifest={"mode": mode, "_orca_auto_runtime_identity": runtime_identity},
+        resource_request={"max_cores": 4, "max_memory_gb": 16},
+        identity={
+            "mode": mode,
+            "molecule_key": resolved_molecule_key,
+            "runtime_identity": runtime_identity,
+        },
+    )
     metadata = {
         "job_dir": str(job_dir),
-        "selected_input_xyz": str(selected_xyz),
+        "selected_input_xyz": str(selected_snapshot),
         "mode": mode,
+        "resource_request": {"max_cores": 4, "max_memory_gb": 16},
+        "execution_snapshot": execution_snapshot,
+        "molecule_key": resolved_molecule_key,
     }
-    if molecule_key is not None:
-        metadata["molecule_key"] = molecule_key
     entry = enqueue(
         env.allowed_root,
         app_name="orca_auto_crest",
         task_id=task_id,
-        task_kind="conformer_search",
+        task_kind="crest_conformer_search",
         engine="crest",
         metadata=metadata,
     )
-    return SimpleNamespace(entry=entry, job_dir=job_dir, selected_xyz=selected_xyz)
+    return SimpleNamespace(entry=entry, job_dir=job_dir, selected_xyz=selected_snapshot)
 
 
 def _make_result(
@@ -166,6 +196,277 @@ def _make_result(
 
 def _read_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_worker_adopts_terminal_artifacts_before_orphan_requeue(queue_env: SimpleNamespace) -> None:
+    job = _enqueue_job(queue_env, task_id="terminal-adoption", molecule_key="mol")
+    running = dequeue_next(queue_env.allowed_root)
+    assert running is not None
+    current_claim = replace(running, started_at="2026-04-19T00:00:00+00:00")
+    result = _make_result(
+        job.job_dir,
+        job.selected_xyz,
+        status="completed",
+        reason="completed",
+        retained_names=("crest_conformers.xyz",),
+    )
+    queue_cmd._write_execution_artifacts(running, result)
+
+    assert queue_cmd._adopt_terminal_artifacts(
+        queue_env.cfg,
+        queue_env.allowed_root,
+        current_claim,
+    )
+
+    [terminal] = list_queue(queue_env.allowed_root)
+    assert terminal.status == QueueStatus.COMPLETED
+    indexed = get_job_location(queue_env.allowed_root, "terminal-adoption")
+    assert indexed is not None
+    assert indexed.status == "completed"
+
+
+def test_terminal_adoption_finalizes_racing_cancel_consistently(
+    queue_env: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _enqueue_job(queue_env, task_id="crest-cancel-adoption", molecule_key="mol")
+    running = dequeue_next(queue_env.allowed_root)
+    assert running is not None
+    current_claim = replace(running, started_at="2026-04-19T00:00:00+00:00")
+    result = _make_result(
+        job.job_dir,
+        job.selected_xyz,
+        status="completed",
+        reason="completed",
+        retained_names=("crest_conformers.xyz",),
+    )
+    queue_cmd._write_execution_artifacts(running, result)
+    assert (
+        request_cancel(
+            queue_env.allowed_root,
+            running.queue_id,
+            expected_entry=running,
+        )
+        is not None
+    )
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+
+    assert not queue_cmd._adopt_terminal_artifacts(
+        queue_env.cfg,
+        queue_env.allowed_root,
+        current_claim,
+    )
+
+    [cancelled] = list_queue(queue_env.allowed_root)
+    assert cancelled.status == QueueStatus.CANCELLED
+    assert cancelled.cancel_requested is False
+    assert [row["status"] for row in upserts] == ["cancelled"]
+    persisted_state = load_state(job.job_dir)
+    persisted_report = load_report_json(job.job_dir)
+    assert persisted_state is not None
+    assert persisted_report is not None
+    assert persisted_state["status"]["state"] == "cancelled"
+    assert persisted_report["status"]["state"] == "cancelled"
+    assert "Status: `cancelled`" in (job.job_dir / REPORT_MD_FILE_NAME).read_text(encoding="utf-8")
+
+
+def test_worker_rejects_report_older_than_exact_running_state(
+    queue_env: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _enqueue_job(queue_env, task_id="running-state-stale-report", molecule_key="mol")
+    running = dequeue_next(queue_env.allowed_root)
+    assert running is not None
+    common_fields: dict[str, Any] = {
+        "engine": "crest",
+        "job_id": running.task_id,
+        "queue_id": running.queue_id,
+        "app_name": running.app_name,
+        "task_id": running.task_id,
+        "primary_path": str(job.selected_xyz),
+        "engine_payload": {"mode": "standard", "molecule_key": "mol"},
+    }
+    write_state(
+        job.job_dir,
+        artifact_payload(
+            **common_fields,
+            job_dir=str(job.job_dir),
+            status="running",
+            reason="current_attempt",
+        ),
+    )
+    write_report_json(
+        job.job_dir,
+        artifact_payload(
+            **common_fields,
+            status="completed",
+            reason="stale_attempt",
+        ),
+    )
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+
+    assert not queue_cmd._adopt_terminal_artifacts(
+        queue_env.cfg,
+        queue_env.allowed_root,
+        running,
+    )
+    [unchanged] = list_queue(queue_env.allowed_root)
+    assert unchanged.status == QueueStatus.RUNNING
+    assert upserts == []
+
+
+def test_worker_rejects_report_when_exact_state_status_is_malformed(
+    queue_env: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _enqueue_job(queue_env, task_id="malformed-current-state", molecule_key="mol")
+    running = dequeue_next(queue_env.allowed_root)
+    assert running is not None
+    common_fields: dict[str, Any] = {
+        "engine": "crest",
+        "job_id": running.task_id,
+        "queue_id": running.queue_id,
+        "app_name": running.app_name,
+        "task_id": running.task_id,
+        "primary_path": str(job.selected_xyz),
+        "engine_payload": {"mode": "standard", "molecule_key": "mol"},
+    }
+    malformed_state = artifact_payload(
+        **common_fields,
+        job_dir=str(job.job_dir),
+        status="completed",
+        reason="current_attempt",
+    )
+    malformed_state["status"] = None
+    write_state(job.job_dir, malformed_state)
+    write_report_json(
+        job.job_dir,
+        artifact_payload(
+            **common_fields,
+            status="completed",
+            reason="stale_attempt",
+        ),
+    )
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+
+    assert not queue_cmd._adopt_terminal_artifacts(
+        queue_env.cfg,
+        queue_env.allowed_root,
+        running,
+    )
+    [unchanged] = list_queue(queue_env.allowed_root)
+    assert unchanged.status == QueueStatus.RUNNING
+    assert upserts == []
+
+
+def test_terminal_adoption_rebuilds_foreign_state_from_exact_report(
+    queue_env: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _enqueue_job(queue_env, task_id="crest-current-report", molecule_key="mol")
+    running = dequeue_next(queue_env.allowed_root)
+    assert running is not None
+    write_state(
+        job.job_dir,
+        artifact_payload(
+            engine="crest",
+            job_id="foreign-job",
+            queue_id="foreign-queue",
+            app_name=running.app_name,
+            task_id="foreign-job",
+            job_dir=str(job.job_dir),
+            status="failed",
+            primary_path=str(job.selected_xyz),
+            updated_at="2999-01-01T00:00:00+00:00",
+            engine_payload={"mode": "standard", "molecule_key": "foreign"},
+        ),
+    )
+    write_report_json(
+        job.job_dir,
+        artifact_payload(
+            engine="crest",
+            job_id=running.task_id,
+            queue_id=running.queue_id,
+            app_name=running.app_name,
+            task_id=running.task_id,
+            generation=queue_entry_generation_token(running),
+            status="completed",
+            reason="current_completed",
+            primary_path=str(job.selected_xyz),
+            resource_request={"max_cores": 4, "max_memory_gb": 16},
+            updated_at="2999-01-01T00:00:01+00:00",
+            engine_payload={"mode": "standard", "molecule_key": "mol"},
+        ),
+    )
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda *_args, **_kwargs: None)
+
+    assert queue_cmd._adopt_terminal_artifacts(
+        queue_env.cfg,
+        queue_env.allowed_root,
+        running,
+    )
+    state = load_state(job.job_dir)
+    report = load_report_json(job.job_dir)
+    assert state is not None and report is not None
+    assert state["job"]["id"] == running.task_id
+    assert state["job"]["queue_id"] == running.queue_id
+    assert report["job"]["id"] == running.task_id
+    assert state["status"]["state"] == report["status"]["state"] == "completed"
+    assert "Status: `completed`" in (job.job_dir / REPORT_MD_FILE_NAME).read_text(encoding="utf-8")
+
+
+def test_worker_repairs_crest_publication_before_claim(
+    queue_env: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = queue_env.allowed_root / "jobs" / "repair-publication"
+    job_dir.mkdir(parents=True)
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    entry = enqueue(
+        queue_env.allowed_root,
+        app_name="orca_auto_crest",
+        task_id="crest-repair-job",
+        task_kind="crest_conformer_search",
+        engine="crest",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            "mode": "standard",
+            "molecule_key": "repair",
+            "resource_request": {},
+            **queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                token="crest-repair-token",
+                owner_pid=0,
+            ),
+        },
+    )
+    recorded: list[str] = []
+
+    def record_queued(_cfg: object, _submission: object, current: Any) -> bool:
+        recorded.append(str(current.task_id))
+        return True
+
+    monkeypatch.setattr(
+        queue_cmd,
+        "_record_queued_submission",
+        record_queued,
+    )
+
+    assert queue_cmd._repair_crest_queue_publications(SimpleNamespace(cfg=queue_env.cfg))
+
+    [repaired] = list_queue(queue_env.allowed_root)
+    assert recorded == [entry.task_id]
+    assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+    claimed = dequeue_next(
+        queue_env.allowed_root,
+        accept_entry_fn=own_engine_accept_entry("crest"),
+    )
+    assert claimed is not None and claimed.queue_id == entry.queue_id
 
 
 def _patch_common(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
@@ -215,7 +516,9 @@ def test_process_one_completed_updates_queue_artifacts_index_without_organizing(
     monkeypatch.setattr(
         queue_cmd,
         "start_crest_job",
-        lambda cfg, *, job_dir, selected_xyz: SimpleNamespace(process=FakeProcess(0)),
+        lambda cfg, *, job_dir, selected_xyz, execution_snapshot: SimpleNamespace(
+            process=FakeProcess(0)
+        ),
     )
     monkeypatch.setattr(queue_cmd, "finalize_crest_job", lambda running: completed_result)
 
@@ -231,7 +534,7 @@ def test_process_one_completed_updates_queue_artifacts_index_without_organizing(
     state_payload = _read_json(job.job_dir / STATE_FILE_NAME)
     assert _status(state_payload)["state"] == "completed"
     assert _status(state_payload)["reason"] == "ok"
-    assert _engine_payload(state_payload)["molecule_key"] == ""
+    assert _engine_payload(state_payload)["molecule_key"] == "selected_input"
     assert _engine_payload(state_payload)["retained_conformer_count"] == 2
 
     report_payload = _read_json(job.job_dir / REPORT_JSON_FILE_NAME)
@@ -280,7 +583,13 @@ def test_process_one_runner_failure_marks_failed_and_writes_failure_artifacts(
     manifest_path.write_text("mode: standard\n", encoding="utf-8")
     calls = _patch_common(monkeypatch)
 
-    def boom(cfg: AppConfig, *, job_dir: Path, selected_xyz: Path) -> SimpleNamespace:
+    def boom(
+        cfg: AppConfig,
+        *,
+        job_dir: Path,
+        selected_xyz: Path,
+        execution_snapshot: dict[str, Any],
+    ) -> SimpleNamespace:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(queue_cmd, "start_crest_job", boom)
@@ -350,10 +659,14 @@ def test_process_one_cancel_requested_terminates_and_marks_cancelled(
     monkeypatch.setattr(
         queue_cmd,
         "start_crest_job",
-        lambda cfg, *, job_dir, selected_xyz: SimpleNamespace(process=process),
+        lambda cfg, *, job_dir, selected_xyz, execution_snapshot: SimpleNamespace(process=process),
     )
 
-    def fake_get_cancel_requested(root: str, queue_id: str) -> bool:
+    def fake_get_cancel_requested(
+        root: str,
+        queue_id: str,
+        **_kwargs: object,
+    ) -> bool:
         request_cancel(root, queue_id)
         return True
 
@@ -380,7 +693,7 @@ def test_process_one_cancel_requested_terminates_and_marks_cancelled(
     assert outcome == "processed"
     entry = list_queue(queue_env.allowed_root)[0]
     assert entry.status == QueueStatus.CANCELLED
-    assert entry.cancel_requested is True
+    assert entry.cancel_requested is False
     assert entry.error == "cancel_requested"
     assert entry.metadata["retained_conformer_count"] == 0
     assert entry.metadata["mode"] == "standard"
@@ -569,3 +882,59 @@ def test_queue_worker_reconcile_orphaned_cancel_requested_marks_cancelled(
     assert updated is not None
     assert updated.status == QueueStatus.CANCELLED
     assert updated.error == "cancel_requested"
+
+
+def test_terminal_reconcile_repairs_partial_cancelled_artifacts(
+    queue_env: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _enqueue_job(queue_env, task_id="crest-partial-terminal", molecule_key="mol")
+    running = dequeue_next(queue_env.allowed_root)
+    assert running is not None
+    cancelled = mark_cancelled(
+        queue_env.allowed_root,
+        running.queue_id,
+        error="cancel_requested",
+        expected_entry=running,
+    )
+    assert cancelled is not None
+    common_fields: dict[str, Any] = {
+        "engine": "crest",
+        "job_id": running.task_id,
+        "queue_id": running.queue_id,
+        "app_name": running.app_name,
+        "task_id": running.task_id,
+        "generation": queue_entry_generation_token(cancelled),
+        "primary_path": str(job.selected_xyz),
+        "updated_at": "2999-01-01T00:00:00+00:00",
+        "engine_payload": {"mode": "standard", "molecule_key": "mol"},
+    }
+    write_state(
+        job.job_dir,
+        artifact_payload(
+            **common_fields,
+            job_dir=str(job.job_dir),
+            status="cancelled",
+            reason="cancel_requested",
+        ),
+    )
+    write_report_json(
+        job.job_dir,
+        artifact_payload(**common_fields, status="completed", reason="completed"),
+    )
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        queue_cmd,
+        "queue_entries_with_roots",
+        lambda _cfg: [(queue_env.allowed_root, cancelled)],
+    )
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+
+    queue_cmd._sync_terminal_running_entries(SimpleNamespace(cfg=queue_env.cfg))
+
+    state = load_state(job.job_dir)
+    report = load_report_json(job.job_dir)
+    assert state is not None and report is not None
+    assert state["status"]["state"] == report["status"]["state"] == "cancelled"
+    assert upserts[-1]["status"] == "cancelled"
+    assert "Status: `cancelled`" in (job.job_dir / REPORT_MD_FILE_NAME).read_text(encoding="utf-8")

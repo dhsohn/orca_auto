@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engine_catalog import activity_engine_entries, workflow_stage_engine_entries
 from orca_auto.core.utils import normalize_text
 
 from ._model import ActivitySourceRequest, ResolvedActivitySources
@@ -21,30 +22,30 @@ class ActivityClearDeps:
     engine_runtime_paths: Callable[..., dict[str, Path]]
 
 
-_ENGINE_QUEUE_CLEAR_SOURCES = (
-    ("xtb", "xtb_config", "xtb_queue_entries"),
-    ("crest", "crest_config", "crest_queue_entries"),
+_ENGINE_QUEUE_CLEAR_SOURCES = tuple(
+    (entry.engine_id, f"{entry.engine_id}_queue_entries")
+    for entry in workflow_stage_engine_entries()
 )
 
 
 def _clear_counts() -> dict[str, int]:
-    return {
-        "workflows": 0,
-        "xtb_queue_entries": 0,
-        "crest_queue_entries": 0,
-        "orca_queue_entries": 0,
-        "orca_run_states": 0,
-    }
+    cleared = {"workflows": 0}
+    for entry in workflow_stage_engine_entries():
+        cleared[f"{entry.engine_id}_queue_entries"] = 0
+    for entry in activity_engine_entries():
+        if entry.workflow_stage_role != "workflow-stage":
+            cleared[f"{entry.engine_id}_queue_entries"] = 0
+    cleared["orca_run_states"] = 0
+    return cleared
 
 
 def _clear_engine_queue(
     resolved: ResolvedActivitySources,
     *,
     engine: str,
-    config_attr: str,
     deps: ActivityClearDeps,
 ) -> int:
-    config_path = normalize_text(getattr(resolved, config_attr))
+    config_path = normalize_text(resolved.config_for_engine(engine))
     if not config_path or not normalize_text(resolved.workflow_root):
         return 0
     return sum(
@@ -72,12 +73,11 @@ def _clear_engine_queues(
     *,
     deps: ActivityClearDeps,
 ) -> dict[str, int]:
-    cleared = {"xtb_queue_entries": 0, "crest_queue_entries": 0}
-    for engine, config_attr, cleared_key in _ENGINE_QUEUE_CLEAR_SOURCES:
+    cleared = {cleared_key: 0 for _, cleared_key in _ENGINE_QUEUE_CLEAR_SOURCES}
+    for engine, cleared_key in _ENGINE_QUEUE_CLEAR_SOURCES:
         cleared[cleared_key] += _clear_engine_queue(
             resolved,
             engine=engine,
-            config_attr=config_attr,
             deps=deps,
         )
     return cleared
@@ -106,9 +106,10 @@ def _clear_sources_payload(resolved: ResolvedActivitySources) -> dict[str, str]:
         "workflow_root": str(Path(workflow_root_text).expanduser().resolve())
         if workflow_root_text
         else "",
-        "crest_config": normalize_text(resolved.crest_config),
-        "xtb_config": normalize_text(resolved.xtb_config),
-        "orca_config": normalize_text(resolved.orca_config),
+        **{
+            f"{entry.engine_id}_config": normalize_text(resolved.config_for_engine(entry.engine_id))
+            for entry in activity_engine_entries()
+        },
     }
 
 

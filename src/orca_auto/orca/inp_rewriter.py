@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from orca_auto.core.utils.persistence import atomic_write_text
+
 from .input_blocks import (
     BLOCK_START_RE,
     GEOM_HEADER_RE,
@@ -68,7 +70,7 @@ def rewrite_for_retry(
     if not allow_no_effective_change and not _has_effective_retry_change(actions):
         raise RuntimeError("no_retry_rewrite_available")
 
-    target_inp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    atomic_write_text(target_inp, "\n".join(lines).rstrip() + "\n")
     return actions
 
 
@@ -115,7 +117,7 @@ def prepare_checkpoint_restart_input(
         if uses_scants:
             actions.extend(apply_scants_relaxed_scan_resume_rewrite(lines, source_inp))
         _apply_geometry_restart(lines, actions, source_inp, target_inp, reaction_dir)
-    target_inp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    atomic_write_text(target_inp, "\n".join(lines).rstrip() + "\n")
     return target_inp, actions
 
 

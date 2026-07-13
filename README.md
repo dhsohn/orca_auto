@@ -107,7 +107,7 @@ orca:
 Notes:
 
 - Use Linux paths only; Windows drive paths, `/mnt/<drive>/...`, relative executable paths, and `.exe` binaries are rejected.
-- Configured ORCA/xTB/CREST executable paths must point to existing executable Linux binaries. Leave `workflow.paths.xtb_executable` or `workflow.paths.crest_executable` blank only when you intentionally want PATH lookup at runtime.
+- Configured ORCA/xTB/CREST executable paths must point to existing executable Linux binaries. Leave `workflow.paths.xtb_executable` or `workflow.paths.crest_executable` blank only when you intentionally want PATH lookup at submission; the resolved executable identity is then bound to the queued generation.
 - `default_max_retries: 0` disables ORCA retries; any positive value enables the
   calculation-type retry policy, capped by ORCA route type.
 - `scheduler.max_active_simulations` is the shared cap across ORCA, internal xTB workflow stages, and internal CREST workflow stages.
@@ -188,7 +188,13 @@ config, rerun the same command to enable the full runtime target. If you edited 
   `queue.json` entry remains the source of truth while the public
   `reaction_dir` contract is preserved.
 - If no worker is running, queued jobs remain pending until one returns.
-- ORCA selects the most recently modified `.inp` when execution starts.
+- ORCA selects the most recently modified `.inp` at submission and binds that
+  input plus supported file dependencies into a private execution snapshot.
+  Editing the source afterward does not change the queued generation.
+- `flow.yaml` and internal engine job manifests are limited to 1 MiB, 32 YAML
+  aliases, 10,000 parsed/expanded nodes, and 64 nesting levels; cyclic/recursive
+  YAML graphs fail closed. Local geometries are limited to 10,000 atoms, reduced
+  to 1,000 for xTB/ORCA Hessian-producing jobs and 200 for Discord-uploaded work.
 - When retrying or resuming an interrupted ORCA run, orca_auto uses a matching
   non-empty `.gbw` file by generating a restart input with `MORead` and `%moinp`.
 - Completed ORCA runs write state and report files such as `job_state.json`, `job_report.json`, and `job_report.md`.

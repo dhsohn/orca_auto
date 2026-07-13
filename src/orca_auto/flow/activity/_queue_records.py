@@ -3,7 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engine_catalog import (
+    EngineCatalogEntry,
+    find_engine_catalog_entry,
+    get_engine_catalog_entry,
+)
 from orca_auto.core.paths.workflow import workflow_stage_dirnames_for_engine
+from orca_auto.core.queue.internal_engine import entry_matches_engine_identity
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.utils import normalize_text
 
@@ -37,7 +43,8 @@ def engine_queue_roots(
     deps: ActivityListDeps,
 ) -> tuple[Path, ...]:
     runtime_paths = runtime_paths_for_engine(config_path, engine=engine, deps=deps)
-    if engine not in {"xtb", "crest"}:
+    entry = find_engine_catalog_entry(engine)
+    if entry is None or entry.workflow_stage_role != "workflow-stage":
         engine_roots: list[Path] = [runtime_paths["allowed_root"]]
         return tuple(engine_roots)
 
@@ -105,11 +112,12 @@ def _engine_queue_record(
     started_at = normalize_text(entry.started_at)
     finished_at = normalize_text(entry.finished_at)
     updated_at = finished_at or started_at or enqueued_at
+    repair_blocked_reason = normalize_text(metadata.get("terminal_repair_blocked_reason"))
     return ActivityRecord(
         activity_id=normalize_text(entry.queue_id) or normalize_text(entry.task_id),
         kind="job",
         engine=engine,
-        status=queue_entry_status(entry),
+        status="repair_blocked" if repair_blocked_reason else queue_entry_status(entry),
         label=_queue_record_label(entry, metadata, path_text),
         source=app_name,
         submitted_at=enqueued_at,
@@ -131,6 +139,8 @@ def _engine_queue_record(
             "job_dir": path_text,
             "allowed_root": str(allowed_root),
             "priority": int(entry.priority),
+            "repair_blocked_reason": repair_blocked_reason,
+            "queue_error": normalize_text(getattr(entry, "error", "")),
             **deps._timestamp_metadata(
                 enqueued_at=enqueued_at,
                 started_at=started_at,
@@ -150,6 +160,8 @@ def engine_queue_records(
     rows: list[ActivityRecord] = []
     for allowed_root in engine_queue_roots(config_path, engine=engine, deps=deps):
         for entry in deps.list_queue(allowed_root):
+            if not entry_matches_engine_identity(entry, engine):
+                continue
             rows.append(
                 _engine_queue_record(
                     entry,
@@ -201,13 +213,8 @@ def collect_crest_activity(
     *,
     deps: ActivityListDeps,
 ) -> list[ActivityRecord]:
-    return collect_child_queue_activity(
-        resolved,
-        request,
-        app_name="orca_auto_crest",
-        engine="crest",
-        config_path=resolved.crest_config,
-        deps=deps,
+    return collect_catalog_engine_activity(
+        get_engine_catalog_entry("crest"), resolved, request, deps=deps
     )
 
 
@@ -217,13 +224,8 @@ def collect_xtb_activity(
     *,
     deps: ActivityListDeps,
 ) -> list[ActivityRecord]:
-    return collect_child_queue_activity(
-        resolved,
-        request,
-        app_name="orca_auto_xtb",
-        engine="xtb",
-        config_path=resolved.xtb_config,
-        deps=deps,
+    return collect_catalog_engine_activity(
+        get_engine_catalog_entry("xtb"), resolved, request, deps=deps
     )
 
 
@@ -241,11 +243,33 @@ def collect_orca_activity(
     )
 
 
+def collect_catalog_engine_activity(
+    entry: EngineCatalogEntry,
+    resolved: ResolvedActivitySources,
+    request: ActivityListRequest,
+    *,
+    deps: ActivityListDeps,
+) -> list[ActivityRecord]:
+    if entry.workflow_stage_role == "workflow-stage":
+        return collect_child_queue_activity(
+            resolved,
+            request,
+            app_name=entry.source_id,
+            engine=entry.engine_id,
+            config_path=resolved.config_for_engine(entry.engine_id),
+            deps=deps,
+        )
+    if entry.engine_id == "orca":
+        return collect_orca_activity(resolved, request, deps=deps)
+    raise ValueError(f"Unsupported catalog activity engine: {entry.engine_id}")
+
+
 __all__ = [
     "_engine_queue_record",
     "_queue_record_aliases",
     "_queue_record_label",
     "collect_child_queue_activity",
+    "collect_catalog_engine_activity",
     "collect_crest_activity",
     "collect_orca_activity",
     "collect_xtb_activity",

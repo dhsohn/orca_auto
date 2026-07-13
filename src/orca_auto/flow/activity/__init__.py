@@ -67,8 +67,7 @@ class _OrcaActivityDeps:
 
 @dataclass(frozen=True)
 class _ActivityCancelDeps:
-    cancel_crest_target: Any
-    cancel_xtb_target: Any
+    cancel_engine_targets: dict[str, Any]
     cancel_orca_target: Any
     _discover_orca_repo_root: Any
 
@@ -84,8 +83,10 @@ def _orca_activity_deps() -> _OrcaActivityDeps:
 
 def _activity_cancel_deps() -> _ActivityCancelDeps:
     return _ActivityCancelDeps(
-        cancel_crest_target=cancel_crest_target,
-        cancel_xtb_target=cancel_xtb_target,
+        cancel_engine_targets={
+            "crest": cancel_crest_target,
+            "xtb": cancel_xtb_target,
+        },
         cancel_orca_target=cancel_orca_target,
         _discover_orca_repo_root=_activity_sources.discover_orca_repo_root,
     )

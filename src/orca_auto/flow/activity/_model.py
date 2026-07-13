@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engine_catalog import activity_engine_entries
 from orca_auto.core.utils import normalize_text
 
 from ..engine_options import WorkflowEngineOptions
@@ -41,9 +42,13 @@ class ResolvedActivitySources:
     xtb_config: str | None
     orca_config: str | None
 
+    def config_for_engine(self, engine: str) -> str | None:
+        return getattr(self, f"{normalize_text(engine).lower()}_config", None)
+
     @property
     def shared_config(self) -> str | None:
-        for config in (self.crest_config, self.xtb_config, self.orca_config):
+        for entry in activity_engine_entries():
+            config = self.config_for_engine(entry.engine_id)
             text = normalize_text(config)
             if text:
                 return text

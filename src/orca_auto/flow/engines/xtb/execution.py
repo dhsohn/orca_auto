@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.admission import activate_reserved_slot, release_slot
 from orca_auto.core.config.engines import load_xtb_config as load_config
 from orca_auto.core.engines.worker_child import (
@@ -26,9 +28,12 @@ from orca_auto.core.queue import (
     requeue_running_entry,
 )
 from orca_auto.core.queue.engine import execution as _engine_execution
+from orca_auto.core.queue.engine.input_snapshot import verify_input_snapshots
 from orca_auto.core.queue.internal_engine import (
     InternalEngineSpec,
     create_worker_shutdown_exception_type,
+    entry_matches_engine_identity,
+    entry_status_is_running,
 )
 from orca_auto.core.queue.worker import execution_dependencies as _worker_dependencies
 from orca_auto.core.queue.worker import (
@@ -103,6 +108,9 @@ build_worker_child_command = build_worker_child_command_for_engine("xtb")
 
 _worker_child = _ENGINE_SPEC.worker_child_module_facade(
     WorkerShutdownRequested,
+    entry_ready_fn=lambda entry: (
+        entry_status_is_running(entry) and entry_matches_engine_identity(entry, "xtb")
+    ),
     build_worker_child_command=build_worker_child_command,
 )
 _WORKER_CHILD = _worker_child.worker_child
@@ -390,10 +398,12 @@ def _mark_recovery_pending_context(
 
 
 def _mark_recovery_pending_entry(cfg: Any, entry: Any, *, reason: str) -> None:
-    context = _build_execution_context(
+    dependencies = default_worker_execution_dependencies()
+    context = _build_worker_execution_context(
         cfg,
         entry,
-        dependencies=default_worker_execution_dependencies(),
+        context_deps=dependencies.context,
+        verify_execution_snapshot=False,
     )
     _mark_recovery_pending_context(cfg, context, reason=reason)
 
@@ -474,6 +484,7 @@ def _run_xtb_job_for_entry(
                 prepare_running_job=prepare_running_job,
                 on_running_job=register_running_job,
                 terminate_process=runner_deps.terminate_process,
+                execution_snapshot=context.execution_snapshot,
             )
             _raise_if_shutdown_requested(context, shutdown_requested)
             return result
@@ -488,6 +499,7 @@ def _run_xtb_job_for_entry(
                 cfg,
                 job_dir=context.job_dir,
                 selected_input_xyz=context.selected_xyz,
+                execution_snapshot=context.execution_snapshot,
                 **launch_kwargs,
             )
 
@@ -514,7 +526,9 @@ def _run_xtb_job_for_entry(
                 prepare_running_job=prepare_running_job,
                 on_running_job=register_running_job,
                 terminate_process=runner_deps.terminate_process,
+                execution_snapshot=context.execution_snapshot,
             )
+            _raise_if_shutdown_requested(context, shutdown_requested)
         return result
     except Exception as exc:  # noqa: BLE001
         if isinstance(exc, (WorkerShutdownRequested, _engine_execution.ProcessCleanupError)):
@@ -531,6 +545,152 @@ def _finalize_processed_entry(
     emit_output: bool,
     dependencies: WorkerExecutionDependencies,
 ) -> Any:
+    output_identity_matches = True
+    expected_output_identities = dict(getattr(result, "output_identities", {}))
+    if dataclasses.is_dataclass(result):
+        capture_outputs = str(getattr(result, "status", "")).strip().lower() == "completed" or bool(
+            expected_output_identities
+        )
+        output_paths = (
+            {
+                str(path)
+                for path in getattr(result, "selected_candidate_paths", ())
+                if str(path).strip()
+            }
+            if capture_outputs
+            else set()
+        )
+        if capture_outputs:
+            output_paths.update(
+                str(path)
+                for path in (
+                    getattr(result, "stdout_log", ""),
+                    getattr(result, "stderr_log", ""),
+                )
+                if str(path).strip()
+            )
+        analysis_summary = getattr(result, "analysis_summary", {})
+        if capture_outputs and isinstance(analysis_summary, dict):
+            for candidate_result in analysis_summary.get("candidate_results", []):
+                if not isinstance(candidate_result, dict):
+                    continue
+                evidence = candidate_result.get("energy_evidence_identity")
+                if isinstance(evidence, dict) and str(evidence.get("path") or ""):
+                    output_paths.add(str(evidence["path"]))
+        for detail in getattr(result, "candidate_details", ()) if capture_outputs else ():
+            if isinstance(detail, dict):
+                for key in ("path", "hessian_path"):
+                    if str(detail.get(key) or "").strip():
+                        output_paths.add(str(detail[key]))
+        output_identities: dict[str, dict[str, Any]] = {}
+        try:
+            for path in sorted(output_paths):
+                identity = _engine_runner.confined_output_identity(context.job_dir, path)
+                output_identities[str(identity["path"])] = identity
+        except (OSError, RuntimeError, TypeError, ValueError):
+            output_identity_matches = False
+        if any(
+            output_identities.get(path) != identity
+            for path, identity in expected_output_identities.items()
+        ):
+            output_identity_matches = False
+        candidate_details = tuple(
+            {
+                **detail,
+                "output_identity": output_identities.get(str(detail.get("path") or ""), {}),
+                **(
+                    {"hessian_identity": output_identities[str(detail.get("hessian_path") or "")]}
+                    if str(detail.get("hessian_path") or "") in output_identities
+                    else {}
+                ),
+            }
+            if isinstance(detail, dict) and str(detail.get("path") or "") in output_identities
+            else detail
+            for detail in getattr(result, "candidate_details", ())
+        )
+        for detail in candidate_details:
+            if not isinstance(detail, dict):
+                continue
+            provenance = detail.get("hessian_provenance")
+            output_identity = detail.get("output_identity")
+            hessian_identity = detail.get("hessian_identity")
+            if isinstance(provenance, dict) and provenance.get("status") == "completed":
+                if (
+                    not isinstance(output_identity, dict)
+                    or output_identity.get("sha256") != provenance.get("ts_guess_sha256")
+                    or not isinstance(hessian_identity, dict)
+                    or hessian_identity.get("sha256") != provenance.get("hessian_sha256")
+                ):
+                    output_identity_matches = False
+        analysis_summary = getattr(result, "analysis_summary", {})
+        if isinstance(analysis_summary, dict):
+            for candidate_result in analysis_summary.get("candidate_results", []):
+                if not isinstance(candidate_result, dict):
+                    continue
+                evidence = candidate_result.get("energy_evidence_identity")
+                if not isinstance(evidence, dict) or not evidence:
+                    continue
+                if output_identities.get(str(evidence.get("path") or "")) != evidence:
+                    output_identity_matches = False
+        result = dataclasses.replace(  # type: ignore[type-var]
+            result,
+            candidate_details=candidate_details,
+            output_identities=output_identities,
+        )
+    snapshot_inputs = context.execution_snapshot.get("input_snapshots")
+    identity_matches = isinstance(snapshot_inputs, dict)
+    if isinstance(snapshot_inputs, dict):
+        try:
+            verify_input_snapshots(context.job_dir, snapshot_inputs)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            identity_matches = False
+    executable_identities = context.execution_snapshot.get("executable_identities")
+    if isinstance(executable_identities, dict):
+        try:
+            _engine_runner.verify_executable_identity(executable_identities.get("xtb"))
+        except (OSError, RuntimeError, TypeError, ValueError):
+            identity_matches = False
+    else:
+        identity_matches = False
+    result_selected = str(getattr(result, "selected_input_xyz", ""))
+    if context.job_type == "ranking" and getattr(result, "status", "") == "completed":
+        selected_candidates = tuple(getattr(result, "selected_candidate_paths", ()))
+        analysis_summary = getattr(result, "analysis_summary", {})
+        candidate_paths = context.input_summary.get("candidate_paths", [])
+        selected_identity_matches = bool(
+            selected_candidates
+            and result_selected == str(selected_candidates[0])
+            and result_selected in candidate_paths
+            and isinstance(analysis_summary, dict)
+            and str(analysis_summary.get("best_candidate_path") or "") == result_selected
+        )
+    else:
+        selected_identity_matches = result_selected == str(context.selected_xyz)
+    identity_matches = (
+        identity_matches
+        and output_identity_matches
+        and selected_identity_matches
+        and all(
+            (
+                str(getattr(result, "job_type", "")) == context.job_type,
+                str(getattr(result, "reaction_key", "")) == context.reaction_key,
+                getattr(result, "input_summary", None) == context.input_summary,
+                getattr(result, "resource_request", None) == context.resource_request,
+            )
+        )
+    )
+    if not identity_matches and dataclasses.is_dataclass(result):
+        result = dataclasses.replace(  # type: ignore[type-var]
+            result,
+            status="failed",
+            reason="terminal_identity_mismatch",
+            exit_code=1,
+            selected_input_xyz=str(context.selected_xyz),
+            job_type=context.job_type,
+            reaction_key=context.reaction_key,
+            input_summary=dict(context.input_summary),
+            resource_request=dict(context.resource_request),
+        )
     return dependencies.artifacts.finalize_execution_result(
         cfg,
         queue_root=queue_root,

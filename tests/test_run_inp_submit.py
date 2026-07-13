@@ -188,7 +188,16 @@ class TestRunInpSubmit(unittest.TestCase):
             self.assertEqual(entry.priority, 3)
             self.assertEqual(entry.app_name, "orca_auto_orca")
             self.assertTrue(entry.task_id.startswith("orca_"))
-            self.assertEqual(metadata["selected_inp"], str(reaction_dir / "rxn.inp"))
+            self.assertEqual(metadata["source_selected_inp"], str(reaction_dir / "rxn.inp"))
+            self.assertTrue(
+                Path(metadata["selected_inp"]).is_relative_to(
+                    reaction_dir / ".orca_auto_orca_executions"
+                )
+            )
+            self.assertEqual(
+                metadata["execution_snapshot"]["selected_inp"],
+                metadata["selected_inp"],
+            )
             self.assertEqual(metadata["selected_input_path"], str(reaction_dir / "rxn.inp"))
             self.assertEqual(metadata["selected_input_xyz"], "")
             self.assertEqual(metadata["max_retries"], 0)
@@ -281,7 +290,12 @@ class TestRunInpSubmit(unittest.TestCase):
             entry = list_queue(root)[0]
             metadata = queue_entry_metadata(entry)
             xyz_path = str((reaction_dir / "geom.xyz").resolve())
-            self.assertEqual(metadata["selected_inp"], str(reaction_dir / "rxn.inp"))
+            self.assertEqual(metadata["source_selected_inp"], str(reaction_dir / "rxn.inp"))
+            self.assertTrue(
+                Path(metadata["selected_inp"]).is_relative_to(
+                    reaction_dir / ".orca_auto_orca_executions"
+                )
+            )
             self.assertEqual(metadata["selected_input_xyz"], xyz_path)
             self.assertEqual(metadata["selected_input_path"], xyz_path)
             self.assertEqual(metadata["job_type"], "opt")

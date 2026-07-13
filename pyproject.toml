@@ -128,7 +128,7 @@ warn_unused_ignores = true
 
 # Layering is enforced by import-linter (`lint-imports`, run by scripts/check.sh
 # and therefore by CI). Engine wiring crosses layers only through lazy string
-# module paths (core/engines/registry.py, core/queue/worker/admission.py); that
+# module paths (core/engine_catalog.py); that
 # is the deliberate plugin seam and is invisible to the import graph on purpose.
 [tool.importlinter]
 root_packages = ["orca_auto"]

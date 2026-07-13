@@ -32,6 +32,16 @@ Supported runtime assumptions:
 - Linux/POSIX paths for configured roots and executables.
 - ORCA, xTB, and CREST executables, when configured, must be absolute Linux
   executable paths.
+- The account running a chemistry engine owns and trusts its job directory and
+  executable distribution for the lifetime of the job. For xTB/CREST this also
+  includes the captured `PATH`/`LD_LIBRARY_PATH` and any `XTBPATH`/`XTBHOME`
+  parameter roots. Executable bytes are content-identified, but shared-library
+  and external-parameter contents are not copied into the queue generation.
+  Untrusted processes under the same UID are therefore outside the isolation
+  boundary.
+- Executable content identity is not an engine-version compatibility check.
+  orca_auto does not currently probe or enforce semantic ORCA/xTB/CREST
+  versions; operators must qualify and pin the exact distributions they deploy.
 
 Unsupported path and process assumptions:
 
@@ -121,6 +131,10 @@ Stable behavior:
   `scheduler.admission_root` is set.
 - `scheduler.max_active_simulations` caps active ORCA, internal xTB, and
   internal CREST jobs together.
+- Explicit `scheduler`, `resources`, `workflow`, and `workflow.paths` sections
+  must be mappings. `scheduler.admission_root` must be an absolute Linux path,
+  and explicit scheduler/resource limits must be positive integers; malformed
+  execution controls are rejected rather than defaulted.
 - `orca.runtime.default_max_retries: 0` disables ORCA retries.
 - A positive `default_max_retries` enables calculation-type retry policy, still
   capped by ORCA route type.
@@ -170,6 +184,9 @@ Queue statuses:
 - `failed`
 - `cancelled`
 
+Queue priorities are integers ordered from lowest numeric value to highest; `0`
+and negative priorities are valid and are never treated as missing values.
+
 `orca_auto queue list --json` returns:
 
 - `count`
@@ -194,7 +211,29 @@ Each activity item contains:
 The `metadata` mapping is intentionally extensible. Scripts may use known keys
 such as `queue_id`, `task_id`, `task_kind`, `run_id`, `workflow_id`,
 `reaction_dir`, `job_dir`, `allowed_root`, `priority`, `template_name`, and
-`workspace_dir`, but should tolerate missing or additional keys.
+`workspace_dir`, but should tolerate missing or additional keys. A terminal row
+whose same-generation state/report pair cannot be reconstructed is exposed as
+`repair_blocked` activity with `repair_blocked_reason` and `queue_error`
+metadata instead of being retried indefinitely.
+
+xTB/CREST queue artifacts carry an internal immutable-generation fingerprint,
+and new xTB/CREST/ORCA rows carry a submit-time execution snapshot. Before
+upgrading from a build without these fields, deployments must either drain those
+rows under the old build or cancel/clear and resubmit them under the new build.
+In-place adoption of pre-snapshot queue rows is not supported; unverifiable
+artifacts fail closed instead of being attached to a newer generation.
+xTB/CREST snapshots use a unique namespace that is exclusively reserved for the
+submission, rather than using the public task id alone as snapshot ownership.
+ORCA snapshots also reject ambiguous duplicate `%pal`/`nprocs`, `%maxcore`,
+`%moinp`, and route `PALn` directives before execution. External include/program
+hooks that are not explicitly snapshot-bound are unsupported and fail closed.
+
+New xTB/CREST terminal artifacts bind retained outputs to SHA-256 and byte-size
+identities. Downstream readers verify the current file against that terminal
+identity. A completed legacy artifact without an identity can be read only after
+the reader computes and marks an `identity_backfilled_from_legacy_artifact`
+identity; this proves the bytes seen at read time, not the bytes that existed at
+the historical terminal transition.
 
 ## ORCA Job Artifact Contract
 
@@ -231,7 +270,9 @@ Stable top-level expectations:
 - `job.dir` points at the job directory.
 - `status.state` is the job state.
 - `status.reason` is the final or current reason when available.
-- `input.primary_path` is the selected ORCA input path.
+- For snapshot-bound rows, `input.primary_path` is the exact private ORCA input
+  that executed, not the subsequently mutable source path. ORCA execution
+  provenance retains the selected source path and bound content identities.
 - `timestamps.started_at`, `timestamps.updated_at`, and
   `timestamps.finished_at` are UTC-style ISO text when available.
 - `artifacts.last_out_path` points at the last ORCA output path when known.
@@ -282,6 +323,11 @@ documented or tested. Important current examples include `normal_termination`,
 
 Workflow input manifests are named `flow.yaml`.
 
+`flow.yaml` and internal engine YAML job manifests are single-link regular UTF-8
+files limited to 1 MiB, 32 alias uses, 10,000 parsed and expanded object-graph
+nodes, and 64 nesting levels. Cyclic/recursive alias or object graphs are
+rejected before workflow materialization.
+
 Workflow names and IDs must be single path segments and cannot contain `(` or
 `)`. An existing workflow directory must not be renamed because its persisted
 ID and artifact paths are tied to that directory; create a new workflow under
@@ -304,8 +350,10 @@ Manifest keys that users may rely on:
 - `orca.charge`
 - `orca.multiplicity`
 - `crest`
+- `xtb`
 - `endpoint_pairing`
 - `max_crest_candidates`
+- `max_xtb_stages`
 - `max_orca_stages`
 - `scan_coordinate`
 - `barrier_threshold_kcal`
@@ -328,7 +376,8 @@ Manifest keys that users may rely on:
 - `interaction_energy.fragments[].label`
 - `allow_external_inputs`
 
-The `rmsd_dedup` and `interaction_energy` blocks use strict schemas: unknown
+The `crest` and `xtb` engine-job mappings, `xtb.ts_guess_validation`,
+`rmsd_dedup`, and `interaction_energy` use strict schemas: unknown
 keys, malformed booleans, non-integral integer fields, non-string routes, and
 multiline/control/non-printable route or label text are rejected at admission.
 Fragment labels are at most 80 characters. An enabled interaction-energy block
@@ -336,6 +385,36 @@ requires 2–8 fragments; each multiplicity is an integer in `[1, 100]`, and
 `sp_route_line` must describe a pure single-point calculation. Fragment indices
 must be a static, gap-free, disjoint partition of every input atom. Remote
 workflow uploads may not set the server-owned `interaction_energy.priority`.
+The former xTB `namespace` option is not part of the canonical artifact
+contract: an absent or empty compatibility field is harmless, but a non-empty
+value is rejected and must be removed before resubmission.
+
+For `reaction_ts_search`, `max_xtb_stages` and `max_orca_stages` are total hard
+caps, including stages already attempted before restart. Endpoint-pairing mode
+does not disable either cap. Workflow `orca.charge`/`orca.multiplicity` is the
+authoritative electronic state; conflicting CREST/xTB `charge` or `uhf` values
+are rejected. The exact selected xTB/CREST snapshot must use known elements in
+the current GFN range (atomic numbers 1–86), leave a nonnegative electron count,
+and have a UHF unpaired-electron count within that total and with matching
+parity. A completed CREST stage must expose at least one strictly valid,
+finite retained XYZ frame, and overlapping retained files cannot duplicate a
+downstream geometry; distinct geometries present only in later valid retained
+files remain candidates. Non-finite coordinates or xTB energies are not valid
+workflow artifacts.
+
+Local geometry admission is capped at 10,000 atoms. xTB Hessian jobs and ORCA
+frequency/Hessian-producing inputs use the stricter 1,000-atom cap. Remote
+Discord workflow and ORCA uploads use a 200-atom cap.
+
+For trusted local CREST work, an explicit `mdlen` uses a default aggregate
+`max_md_steps` budget of 10,000,000. If `mdlen` is omitted, admission evaluates
+CREST's automatic-length worst case with a 14,000,000-step default budget;
+under the standard non-quick trajectory multiplicity, GFN-FF and `gfn2//gfnff`
+therefore require an explicit bounded `mdlen` or an explicit higher step budget
+with its high-cost acknowledgement. Every local CREST job is also capped at
+50,000,000,000 atom-steps. Remote workflow ingress
+injects the server-owned `mdlen: 5.0` ps and rejects work above 50,000,000
+atom-steps; uploaded manifests cannot override the CREST runtime/cost controls.
 
 Workflow runtime artifacts:
 
@@ -470,6 +549,10 @@ Workflow runtime artifacts:
   be omitted rather than fabricated at an assumed temperature.
 - `workflow_registry.json` and `workflow_registry.journal.jsonl` support
   cross-workflow listing and event history.
+- xTB/CREST terminal output identities are verified before downstream parsing.
+  A single output XYZ handed to a downstream stage has a 512 MiB
+  materialization cap; larger output ensembles fail closed rather than being
+  loaded without a bound.
 - Internal engine queues and outputs live under workflow stage directories such
   as `<runs root>/<workflow_id>/01_crest`, `02_xtb`, and `03_orca`.
 

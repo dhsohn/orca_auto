@@ -15,6 +15,11 @@ def _entry(job_dir: Path, selected_xyz: Path) -> SimpleNamespace:
     return SimpleNamespace(
         task_id="job-001",
         queue_id="queue-001",
+        app_name="orca_auto_crest",
+        task_kind="crest_conformer_search",
+        engine="crest",
+        priority=10,
+        enqueued_at="2026-04-18T23:59:00+00:00",
         started_at="2026-04-19T00:00:00+00:00",
         metadata={
             "job_dir": str(job_dir),
@@ -56,6 +61,18 @@ def _result(job_dir: Path, selected_xyz: Path, *, status: str = "completed") -> 
     )
 
 
+def _record_committed_call(
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]],
+    *args: Any,
+    **kwargs: Any,
+) -> bool:
+    before_update_fn = kwargs.pop("before_update_fn", None)
+    if before_update_fn is not None:
+        before_update_fn()
+    calls.append((args, kwargs))
+    return True
+
+
 def test_mark_queue_terminal_sets_status_and_metadata(tmp_path: Path) -> None:
     job_dir = tmp_path / "job"
     selected_xyz = job_dir / "selected_input.xyz"
@@ -82,8 +99,9 @@ def test_mark_queue_terminal_sets_status_and_metadata(tmp_path: Path) -> None:
             {
                 "metadata_update": {
                     "retained_conformer_count": 2,
-                    "mode": "standard",
-                }
+                },
+                "expected_entry": entry,
+                "expected_task_id": entry.task_id,
             },
         )
     ]
@@ -134,7 +152,9 @@ def test_finalize_processed_entry_runs_terminal_side_effects(tmp_path: Path) -> 
             ),
         ),
         queue=SimpleNamespace(
-            mark_completed=lambda *args, **kwargs: completed_calls.append((args, kwargs)),
+            mark_completed=lambda *args, **kwargs: _record_committed_call(
+                completed_calls, *args, **kwargs
+            ),
             mark_cancelled=lambda *args, **kwargs: pytest.fail("unexpected cancelled mark"),
             mark_failed=lambda *args, **kwargs: pytest.fail("unexpected failed mark"),
         ),
@@ -157,3 +177,51 @@ def test_finalize_processed_entry_runs_terminal_side_effects(tmp_path: Path) -> 
     assert completed_calls
     assert upsert_calls and upsert_calls[0]["status"] == "completed"
     assert finished_calls and finished_calls[0]["retained_conformer_count"] == 2
+
+
+def test_terminal_completion_racing_cancel_commits_only_cancelled(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job"
+    selected_xyz = job_dir / "selected_input.xyz"
+    entry = _entry(job_dir, selected_xyz)
+    context = _context(entry, job_dir, selected_xyz)
+    result = _result(job_dir, selected_xyz)
+    artifact_statuses: list[str] = []
+    record_statuses: list[str] = []
+    notification_statuses: list[str] = []
+
+    def commit_cancelled(*args: Any, **kwargs: Any) -> bool:
+        assert kwargs["require_cancel_requested"] is True
+        kwargs["before_update_fn"]()
+        return True
+
+    deps = SimpleNamespace(
+        artifacts=SimpleNamespace(
+            write_execution_artifacts=lambda _entry, actual_result: artifact_statuses.append(
+                actual_result.status
+            )
+        ),
+        queue=SimpleNamespace(
+            mark_completed=lambda *args, **kwargs: None,
+            mark_cancelled=commit_cancelled,
+            mark_failed=lambda *args, **kwargs: pytest.fail("unexpected failed mark"),
+        ),
+        tracking=SimpleNamespace(
+            upsert_job_record=lambda _cfg, **kwargs: record_statuses.append(kwargs["status"]),
+            notify_job_finished=lambda _cfg, **kwargs: notification_statuses.append(
+                kwargs["status"]
+            ),
+        ),
+    )
+
+    organized_output_dir = worker_terminal.finalize_processed_entry(
+        SimpleNamespace(),
+        context,
+        result,
+        queue_root=tmp_path,
+        dependencies=deps,
+    )
+
+    assert organized_output_dir is None
+    assert artifact_statuses == ["cancelled"]
+    assert record_statuses == ["cancelled"]
+    assert notification_statuses == ["cancelled"]

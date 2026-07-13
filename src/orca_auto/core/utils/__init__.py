@@ -12,6 +12,8 @@ from .lock import file_lock
 from .persistence import (
     atomic_write_json,
     atomic_write_text,
+    durable_mkdir,
+    fsync_directory,
     load_json_file,
     load_json_mapping_file,
     load_json_mapping_list_file,
@@ -26,7 +28,9 @@ __all__ = [
     "coerce_int_mapping",
     "coerce_list",
     "coerce_mapping",
+    "durable_mkdir",
     "file_lock",
+    "fsync_directory",
     "load_json_file",
     "load_json_mapping_file",
     "load_json_mapping_list_file",

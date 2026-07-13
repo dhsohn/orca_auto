@@ -27,6 +27,16 @@ from orca_auto.core.admission import (
 )
 from orca_auto.core.config import DiscordConfig, MessengerConfig
 from orca_auto.core.queue.lifecycle import TerminalProcessQueueMarkResult
+from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_ABORTED,
+    QUEUE_RECORD_SYNC_COMPLETE,
+    QUEUE_RECORD_SYNC_KEY,
+    QUEUE_RECORD_SYNC_REPAIR_PENDING,
+    queue_record_sync_metadata,
+)
+from orca_auto.core.queue.store import enqueue as enqueue_core
+from orca_auto.core.queue.store import list_queue as list_queue_core
+from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.statuses import (
     STATUS_CANCELLED,
@@ -103,8 +113,199 @@ def test_lifecycle_callbacks_use_current_queue_worker_symbols() -> None:
         callbacks = queue_worker_mod._lifecycle_callbacks()
 
     assert callbacks.terminate_process is terminate_process
-    assert callbacks.requeue_running_entry is queue_worker_mod.requeue_running_entry
+    assert callbacks.requeue_running_entry is queue_worker_mod._requeue_running_expected
     assert callbacks.on_completed is None
+
+
+def test_orca_worker_repairs_queued_publication_before_claim(tmp_path: Path) -> None:
+    cfg = _make_cfg(str(tmp_path))
+    metadata = {
+        "reaction_dir": str(tmp_path / "rxn"),
+        "selected_input_xyz": str(tmp_path / "rxn" / "input.xyz"),
+        "job_type": "opt",
+        "molecule_key": "mol",
+        "resource_request": {"max_cores": 1, "max_memory_gb": 1},
+        **queue_record_sync_metadata(
+            QUEUE_RECORD_SYNC_REPAIR_PENDING,
+            token="repair-token",
+            owner_pid=0,
+        ),
+    }
+    entry = enqueue(
+        tmp_path,
+        str(tmp_path / "rxn"),
+        task_id="task-repair",
+        metadata=metadata,
+    )
+    upserts: list[str] = []
+
+    with patch.object(
+        queue_worker_mod,
+        "_upsert_queued_job_record",
+        side_effect=lambda _cfg, current: upserts.append(current.task_id),
+    ):
+        assert queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, entry) is True
+
+    [repaired] = list_queue(tmp_path)
+    assert upserts == ["task-repair"]
+    assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+
+
+def test_orca_worker_keeps_failed_publication_repair_unclaimable(tmp_path: Path) -> None:
+    cfg = _make_cfg(str(tmp_path))
+    entry = enqueue(
+        tmp_path,
+        str(tmp_path / "rxn"),
+        task_id="task-repair",
+        metadata={
+            "reaction_dir": str(tmp_path / "rxn"),
+            **queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                token="repair-token",
+                owner_pid=0,
+            ),
+        },
+    )
+
+    with patch.object(
+        queue_worker_mod,
+        "_upsert_queued_job_record",
+        side_effect=OSError("index unavailable"),
+    ):
+        assert queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, entry) is False
+
+    [pending] = list_queue(tmp_path)
+    assert pending.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
+    assert dequeue_next(tmp_path) is None
+
+
+def test_orca_publication_repair_ignores_foreign_engine_row(tmp_path: Path) -> None:
+    cfg = _make_cfg(str(tmp_path))
+    foreign = enqueue_core(
+        tmp_path,
+        app_name="orca_auto_xtb",
+        task_id="xtb-foreign",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(tmp_path / "xtb-job"),
+            **queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                token="foreign-token",
+                owner_pid=0,
+            ),
+        },
+    )
+
+    with patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert:
+        assert queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, foreign)
+
+    upsert.assert_not_called()
+    [unchanged] = list_queue_core(tmp_path)
+    assert unchanged.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
+
+
+def test_orca_publication_repair_reclaims_abandoned_live_pid_lease(tmp_path: Path) -> None:
+    cfg = _make_cfg(str(tmp_path))
+    entry = enqueue(
+        tmp_path,
+        str(tmp_path / "rxn"),
+        task_id="task-live-publisher",
+        metadata={
+            "reaction_dir": str(tmp_path / "rxn"),
+            **queue_record_sync_metadata(
+                "preparing",
+                token="live-token",
+                owner_pid=os.getpid(),
+            ),
+        },
+    )
+
+    with patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert:
+        assert queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, entry)
+
+    upsert.assert_called_once()
+    [repaired] = list_queue(tmp_path)
+    assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+
+
+@pytest.mark.parametrize("changed_state", ["future_v2_marker", QUEUE_RECORD_SYNC_ABORTED])
+def test_orca_publication_repair_rejects_invalid_marker_after_lock_reload(
+    tmp_path: Path,
+    changed_state: str,
+) -> None:
+    cfg = _make_cfg(str(tmp_path))
+    entry = enqueue(
+        tmp_path,
+        str(tmp_path / "rxn"),
+        task_id="task-marker-race",
+        metadata={
+            "reaction_dir": str(tmp_path / "rxn"),
+            **queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                token="marker-race-token",
+                owner_pid=0,
+            ),
+        },
+    )
+    changed = replace(
+        entry,
+        metadata={**entry.metadata, QUEUE_RECORD_SYNC_KEY: changed_state},
+    )
+
+    with (
+        patch.object(queue_worker_mod, "get_entry_by_id", return_value=changed),
+        patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert,
+    ):
+        assert not queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, entry)
+
+    upsert.assert_not_called()
+
+
+def test_orca_publication_repair_ignores_malformed_terminal_history(tmp_path: Path) -> None:
+    cfg = _make_cfg(str(tmp_path))
+    terminal = QueueEntry(
+        queue_id="terminal-history",
+        app_name="orca_auto_orca",
+        task_id="terminal-task",
+        task_kind="orca_run_inp",
+        engine="orca",
+        status=QueueStatus.COMPLETED,
+        metadata={
+            "reaction_dir": "/outside/history",
+            QUEUE_RECORD_SYNC_KEY: "corrupt-terminal-marker",
+        },
+    )
+
+    with patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert:
+        assert queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, terminal)
+
+    upsert.assert_not_called()
+
+
+def test_orca_publication_repair_validates_every_selected_input_path(tmp_path: Path) -> None:
+    cfg = _make_cfg(str(tmp_path))
+    reaction_dir = tmp_path / "rxn"
+    entry = enqueue(
+        tmp_path,
+        str(reaction_dir),
+        task_id="task-conflicting-input-paths",
+        metadata={
+            "reaction_dir": str(reaction_dir),
+            "selected_inp": str(reaction_dir / "job.inp"),
+            "selected_input_xyz": str(tmp_path.parent / "outside.xyz"),
+            **queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                token="conflicting-input-token",
+                owner_pid=0,
+            ),
+        },
+    )
+
+    with patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert:
+        assert not queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, entry)
+
+    upsert.assert_not_called()
 
 
 def _terminal_replay_entry(tmp_path: Path, status: QueueStatus) -> QueueEntry:
@@ -314,6 +515,7 @@ def test_terminal_replay_finalizes_cancelled_state_before_side_effects(tmp_path:
         entry.queue_id,
         STATUS_CANCELLED,
         run_id="run-cancelled",
+        expected_task_id=entry.task_id,
     )
     key = (str(tmp_path.resolve()), entry.queue_id)
     assert worker._orca_reconcile_statuses[key] == QueueStatus.CANCELLED.value
@@ -345,6 +547,7 @@ def test_terminal_replay_corrects_cancelled_queue_to_existing_completed_state(
         entry.queue_id,
         STATUS_COMPLETED,
         run_id="run-completed",
+        expected_task_id=entry.task_id,
     )
     key = (str(tmp_path.resolve()), entry.queue_id)
     assert worker._orca_reconcile_statuses[key] == STATUS_COMPLETED
@@ -2151,6 +2354,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             snapshot.queue_id,
             STATUS_FAILED,
             run_id="run-b",
+            expected_task_id="task-b",
         )
         self.assertEqual(side_effects.call_args.args[1].task_id, "task-b")
         self.assertEqual(
@@ -2545,6 +2749,73 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         self.assertIn(entry.queue_id, self.worker._running)
         mock_mark_cancelled.assert_not_called()
+
+    @patch("orca_auto.orca.queue.worker.mark_cancelled", return_value=True)
+    def test_check_cancel_requests_ignores_replacement_generation(
+        self,
+        mock_mark_cancelled: MagicMock,
+    ) -> None:
+        rxn = self.root / "mol_cancel_replacement"
+        rxn.mkdir()
+        selected = enqueue(self.root, str(rxn), task_id="task-a")
+        running = dequeue_next(self.root)
+        assert running is not None
+        replacement = replace(
+            running,
+            task_id="task-b",
+            cancel_requested=True,
+        )
+        save_entries_core(self.root, [replacement])
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        self.worker._running[selected.queue_id] = _RunningJob(
+            queue_id=selected.queue_id,
+            reaction_dir=str(rxn),
+            process=mock_proc,
+            admission_token="slot-a",
+            task_id="task-a",
+        )
+
+        with patch("orca_auto.orca.queue.worker._terminate_process") as terminate:
+            self.worker._check_cancel_requests()
+
+        terminate.assert_not_called()
+        mock_mark_cancelled.assert_not_called()
+        self.assertIn(selected.queue_id, self.worker._running)
+        [durable] = list_queue(self.root)
+        self.assertEqual(durable.task_id, "task-b")
+        self.assertTrue(durable.cancel_requested)
+
+    def test_start_error_does_not_fail_replacement_generation(self) -> None:
+        rxn = self.root / "mol_start_error_replacement"
+        rxn.mkdir()
+        selected = enqueue(self.root, str(rxn), task_id="task-a")
+        running = dequeue_next(self.root)
+        assert running is not None
+        token = reserve_slot(
+            self.root,
+            2,
+            work_dir=str(rxn),
+            queue_id=selected.queue_id,
+            source="queue_worker",
+            state="reserved",
+        )
+        assert token is not None
+        replacement = replace(running, task_id="task-b")
+        save_entries_core(self.root, [replacement])
+
+        self.worker._mark_entry_failed_and_release(
+            self.root,
+            running,
+            token,
+            error="worker start failed",
+            mark_failed_fn=queue_worker_mod.mark_failed,
+        )
+
+        [durable] = list_queue(self.root)
+        self.assertEqual(durable.task_id, "task-b")
+        self.assertEqual(durable.status, QueueStatus.RUNNING)
+        self.assertEqual(active_slot_count(self.root), 0)
 
     def test_cancel_finalizes_state_before_deferred_slot_release(self) -> None:
         rxn = self.root / "mol_cancel_order"
@@ -3069,7 +3340,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
         with patch("orca_auto.orca.queue.worker._terminate_process", return_value=True):
             self.worker._shutdown_all()
         self.assertEqual(len(self.worker._running), 0)
-        mock_requeue.assert_called_once_with(self.root, entry.queue_id)
+        mock_requeue.assert_called_once()
+        self.assertEqual(mock_requeue.call_args.args, (self.root, entry.queue_id))
+        self.assertEqual(mock_requeue.call_args.kwargs["expected_entry"].task_id, entry.task_id)
 
     def test_shutdown_finalizes_cancel_requested_job(self) -> None:
         # A cancel pending when the worker shuts down must be finalized (terminal +

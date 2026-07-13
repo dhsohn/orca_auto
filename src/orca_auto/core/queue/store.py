@@ -13,12 +13,15 @@ from ..utils.persistence import (
     timestamped_token,
 )
 from . import persistence as _queue_persistence
+from .generation import queue_entries_same_generation
+from .priority import normalize_queue_priority
 from .publication import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_KEY,
     QUEUE_RECORD_SYNC_OWNER_PID_KEY,
     QUEUE_RECORD_SYNC_OWNER_START_KEY,
     QUEUE_RECORD_SYNC_PREPARING,
+    QUEUE_RECORD_SYNC_REPAIR_PENDING,
     QUEUE_RECORD_SYNC_REPAIRING,
     QUEUE_RECORD_SYNC_TOKEN_KEY,
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
@@ -33,6 +36,7 @@ _ACTIVE_STATUSES = frozenset({QueueStatus.PENDING, QueueStatus.RUNNING})
 _TERMINAL_STATUSES = frozenset({QueueStatus.COMPLETED, QueueStatus.FAILED, QueueStatus.CANCELLED})
 _QueueEntryT = TypeVar("_QueueEntryT", bound=QueueEntry)
 _MutationResultT = TypeVar("_MutationResultT")
+_TOKEN_COLLISION_RETRY_LIMIT = 32
 
 QueueDuplicatePolicy = Callable[[Sequence[QueueEntry], QueueEntry], None]
 DuplicateErrorFactory = Callable[[str, QueueEntry], Exception]
@@ -284,6 +288,7 @@ def clear_terminal(
     *,
     keep_last: int = 0,
     retain_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    select_entry_fn: Callable[[QueueEntry], bool] | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
 ) -> int:
@@ -292,7 +297,12 @@ def clear_terminal(
         return 0
 
     def clear(entries: list[QueueEntry]) -> tuple[int, bool]:
-        terminal_entries = [entry for entry in entries if entry.status in _TERMINAL_STATUSES]
+        terminal_entries = [
+            entry
+            for entry in entries
+            if entry.status in _TERMINAL_STATUSES
+            and (select_entry_fn is None or select_entry_fn(entry))
+        ]
         if not terminal_entries:
             return 0, False
 
@@ -312,7 +322,9 @@ def clear_terminal(
         kept_entries = [
             entry
             for entry in entries
-            if entry.status not in _TERMINAL_STATUSES or entry.queue_id in kept_terminal_ids
+            if entry.status not in _TERMINAL_STATUSES
+            or (select_entry_fn is not None and not select_entry_fn(entry))
+            or entry.queue_id in kept_terminal_ids
         ]
         removed_count = len(entries) - len(kept_entries)
         if removed_count <= 0:
@@ -336,11 +348,12 @@ def enqueue_entry(
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
 ) -> QueueEntry:
     reject_duplicate = duplicate_policy or reject_active_task_duplicate
+    normalized_entry = replace(entry, priority=normalize_queue_priority(entry.priority))
 
     def append(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
-        reject_duplicate(entries, entry)
-        entries.append(entry)
-        return entry, True
+        reject_duplicate(entries, normalized_entry)
+        entries.append(normalized_entry)
+        return normalized_entry, True
 
     return QueueStore.for_root(
         root,
@@ -361,17 +374,37 @@ def enqueue(
     duplicate_policy: QueueDuplicatePolicy | None = None,
 ) -> QueueEntry:
     resolved_root = resolve_root_path(root)
-    entry = QueueEntry(
-        queue_id=timestamped_token("q"),
-        app_name=app_name.strip(),
-        task_id=task_id.strip(),
-        task_kind=task_kind.strip(),
-        engine=engine.strip(),
-        priority=int(priority),
-        enqueued_at=now_utc_iso(),
-        metadata=dict(metadata or {}),
-    )
-    return enqueue_entry(resolved_root, entry, duplicate_policy=duplicate_policy)
+    reject_duplicate = duplicate_policy or reject_active_task_duplicate
+    normalized_priority = normalize_queue_priority(priority)
+
+    def append(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
+        occupied_queue_ids = {entry.queue_id for entry in entries}
+        queue_id = ""
+        for _attempt in range(_TOKEN_COLLISION_RETRY_LIMIT):
+            candidate = timestamped_token("q")
+            if candidate not in occupied_queue_ids:
+                queue_id = candidate
+                break
+        if not queue_id:
+            raise RuntimeError(
+                "Could not allocate a unique queue id after "
+                f"{_TOKEN_COLLISION_RETRY_LIMIT} attempts"
+            )
+        entry = QueueEntry(
+            queue_id=queue_id,
+            app_name=app_name.strip(),
+            task_id=task_id.strip(),
+            task_kind=task_kind.strip(),
+            engine=engine.strip(),
+            priority=normalized_priority,
+            enqueued_at=now_utc_iso(),
+            metadata=dict(metadata or {}),
+        )
+        reject_duplicate(entries, entry)
+        entries.append(entry)
+        return entry, True
+
+    return QueueStore.for_root(resolved_root).mutate_entries(append)
 
 
 def dequeue_next(
@@ -410,12 +443,16 @@ def dequeue_entry_if_pending(
     *,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
+    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    expected_entry: QueueEntry | None = None,
 ) -> QueueEntry | None:
     """Mark one selected pending entry running if it is still eligible."""
 
     def dequeue(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
         if (
-            entry.status != QueueStatus.PENDING
+            (accept_entry_fn is not None and not accept_entry_fn(entry))
+            or (expected_entry is not None and entry != expected_entry)
+            or entry.status != QueueStatus.PENDING
             or entry.cancel_requested
             or not queue_entry_is_claimable(entry)
         ):
@@ -434,15 +471,28 @@ def request_cancel(
     root: str | Path,
     queue_id: str,
     *,
+    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    expected_entry: QueueEntry | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
 ) -> QueueEntry | None:
     def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
+        if accept_entry_fn is not None and not accept_entry_fn(entry):
+            return None, None
+        if expected_entry is not None and not queue_entries_same_generation(
+            entry,
+            expected_entry,
+        ):
+            return None, None
         if entry.status == QueueStatus.PENDING:
             finished_at = now_utc_iso()
             metadata = dict(entry.metadata)
             sync_state = str(metadata.get(QUEUE_RECORD_SYNC_KEY, "")).strip().lower()
-            if sync_state in {QUEUE_RECORD_SYNC_PREPARING, QUEUE_RECORD_SYNC_REPAIRING}:
+            if sync_state in {
+                QUEUE_RECORD_SYNC_PREPARING,
+                QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                QUEUE_RECORD_SYNC_REPAIRING,
+            }:
                 # Cancellation owns the per-entry publication lock here. Revoke
                 # the publisher's fencing token before releasing it so a
                 # publisher that had not started its side effects cannot resume.
@@ -491,10 +541,18 @@ def get_cancel_requested(
     queue_id: str,
     *,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
+    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
 ) -> bool:
     entries = QueueStore.for_root(root, load_entries_fn=load_entries_fn).list_entries()
     for entry in entries:
-        if entry.queue_id == queue_id:
+        if (
+            entry.queue_id == queue_id
+            and (accept_entry_fn is None or accept_entry_fn(entry))
+            and (expected_entry is None or queue_entries_same_generation(entry, expected_entry))
+            and (expected_task_id is None or entry.task_id == expected_task_id)
+        ):
             return bool(entry.cancel_requested)
     return False
 
@@ -506,10 +564,13 @@ def update_metadata(
     *,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
+    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
 ) -> QueueEntry | None:
     """Merge metadata into one queue entry without changing its lifecycle state."""
 
     def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
+        if accept_entry_fn is not None and not accept_entry_fn(entry):
+            return None, None
         merged = dict(entry.metadata)
         merged.update(metadata_update)
         if merged == entry.metadata:
@@ -530,10 +591,22 @@ def requeue_running_entry(
     *,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
+    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
 ) -> QueueEntry | None:
     def requeue(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
         for index, entry in enumerate(entries):
-            if entry.queue_id != queue_id or entry.status != QueueStatus.RUNNING:
+            if (
+                entry.queue_id != queue_id
+                or entry.status != QueueStatus.RUNNING
+                or (accept_entry_fn is not None and not accept_entry_fn(entry))
+                or (
+                    expected_entry is not None
+                    and not queue_entries_same_generation(entry, expected_entry)
+                )
+                or (expected_task_id is not None and entry.task_id != expected_task_id)
+            ):
                 continue
             if entry.cancel_requested:
                 # A cancel was requested while this entry was running. Requeueing it
@@ -579,14 +652,57 @@ def _mark_status(
     metadata_update: dict[str, Any] | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
+    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
+    before_update_fn: Callable[[], Any] | None = None,
+    require_cancel_requested: bool = False,
 ) -> QueueEntry | None:
     def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
+        if accept_entry_fn is not None and not accept_entry_fn(entry):
+            return None, None
+        if expected_entry is not None and not queue_entries_same_generation(
+            entry,
+            expected_entry,
+        ):
+            return None, None
+        if expected_task_id is not None and entry.task_id != expected_task_id:
+            return None, None
+        if status != QueueStatus.CANCELLED and entry.cancel_requested:
+            # Cancellation and terminal completion race under the same queue
+            # mutation lock. Once cancellation is acknowledged, a completed or
+            # failed writer must not overwrite it; its owner can retry and take
+            # the cancelled branch against the durable flag.
+            return None, None
         if entry.status in _TERMINAL_STATUSES:
-            # A terminal outcome is final at this layer: a cancel landing just
-            # after a natural completion (or vice versa) must not flip the
-            # recorded result. Deliberate reconciliation goes through the
-            # adapter's update_terminal, which replaces the entry directly.
-            return entry, None
+            # Idempotent replays of the authoritative terminal status must
+            # still repair artifacts/indexes under the same generation lock.
+            # A conflicting terminal writer is rejected and can reconcile to
+            # the durable status through its explicit fallback path.
+            if entry.status != status:
+                return None, None
+            if before_update_fn is not None:
+                before_update_fn()
+            merged = dict(entry.metadata)
+            if metadata_update:
+                merged.update(metadata_update)
+            updated = replace(
+                entry,
+                cancel_requested=(
+                    False if status == QueueStatus.CANCELLED else entry.cancel_requested
+                ),
+                error=error.strip() or entry.error,
+                metadata=merged,
+            )
+            return updated, (updated if updated != entry else None)
+        if (
+            status == QueueStatus.CANCELLED
+            and require_cancel_requested
+            and not entry.cancel_requested
+        ):
+            return None, None
+        if before_update_fn is not None:
+            before_update_fn()
         merged = dict(entry.metadata)
         if metadata_update:
             merged.update(metadata_update)
@@ -594,6 +710,7 @@ def _mark_status(
             entry,
             status=status,
             finished_at=now_utc_iso(),
+            cancel_requested=(False if status == QueueStatus.CANCELLED else entry.cancel_requested),
             error=error.strip(),
             metadata=merged,
         )
@@ -613,6 +730,10 @@ def mark_completed(
     metadata_update: dict[str, Any] | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
+    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
+    before_update_fn: Callable[[], Any] | None = None,
 ) -> QueueEntry | None:
     return _mark_status(
         root,
@@ -621,6 +742,10 @@ def mark_completed(
         metadata_update=metadata_update,
         load_entries_fn=load_entries_fn,
         save_entries_fn=save_entries_fn,
+        accept_entry_fn=accept_entry_fn,
+        expected_entry=expected_entry,
+        expected_task_id=expected_task_id,
+        before_update_fn=before_update_fn,
     )
 
 
@@ -632,6 +757,10 @@ def mark_failed(
     metadata_update: dict[str, Any] | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
+    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
+    before_update_fn: Callable[[], Any] | None = None,
 ) -> QueueEntry | None:
     return _mark_status(
         root,
@@ -641,6 +770,10 @@ def mark_failed(
         metadata_update=metadata_update,
         load_entries_fn=load_entries_fn,
         save_entries_fn=save_entries_fn,
+        accept_entry_fn=accept_entry_fn,
+        expected_entry=expected_entry,
+        expected_task_id=expected_task_id,
+        before_update_fn=before_update_fn,
     )
 
 
@@ -652,6 +785,11 @@ def mark_cancelled(
     metadata_update: dict[str, Any] | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
+    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
+    before_update_fn: Callable[[], Any] | None = None,
+    require_cancel_requested: bool = False,
 ) -> QueueEntry | None:
     return _mark_status(
         root,
@@ -661,4 +799,9 @@ def mark_cancelled(
         metadata_update=metadata_update,
         load_entries_fn=load_entries_fn,
         save_entries_fn=save_entries_fn,
+        accept_entry_fn=accept_entry_fn,
+        expected_entry=expected_entry,
+        expected_task_id=expected_task_id,
+        before_update_fn=before_update_fn,
+        require_cancel_requested=require_cancel_requested,
     )

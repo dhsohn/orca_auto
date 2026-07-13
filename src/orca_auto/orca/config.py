@@ -14,6 +14,8 @@ from orca_auto.core.config.files import (
     load_required_yaml_mapping,
     messenger_mapping_from_root,
     runs_root_from_mapping,
+    validate_shared_config_sections,
+    validated_runs_root_text,
 )
 from orca_auto.core.config.schema import (
     RetryRuntimeConfig,
@@ -171,7 +173,9 @@ def _placeholder_keys(cfg: AppConfig) -> list[str]:
 def load_config(config_path: str) -> AppConfig:
     path = Path(config_path).expanduser().resolve()
     raw = _load_raw_config(path)
-    runs_root = _config_engines.as_nonempty_str(runs_root_from_mapping(raw), "")
+    validate_shared_config_sections(raw)
+    runs_root_raw = _config_engines.as_nonempty_str(runs_root_from_mapping(raw), "")
+    runs_root = validated_runs_root_text(runs_root_raw) if runs_root_raw else ""
     raw = config_with_canonical_messenger(raw)
     raw = engine_config_mapping(raw, "orca", inherit_keys=("resources", "messenger", "scheduler"))
     scheduler_raw = _section_mapping(raw, "scheduler")

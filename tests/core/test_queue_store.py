@@ -5,6 +5,7 @@ import os
 import signal
 from collections.abc import Sequence
 from contextlib import nullcontext
+from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import count
 from multiprocessing import get_context
@@ -14,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from orca_auto.core.queue import publication, store
+from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_KEY,
@@ -41,6 +43,36 @@ def _install_deterministic_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
         "now_utc_iso",
         lambda: f"2026-04-19T00:00:{next(time_counter):02d}+00:00",
     )
+
+
+def test_queue_generation_token_tracks_only_immutable_identity() -> None:
+    entry = store.QueueEntry(
+        queue_id="q-generation",
+        app_name="app",
+        task_id="task",
+        task_kind="kind",
+        engine="engine",
+        status=QueueStatus.RUNNING,
+        enqueued_at="2026-04-19T00:00:00+00:00",
+        metadata={"reaction_key": "current", "candidate_count": 0},
+    )
+    token = queue_entry_generation_token(entry)
+
+    lifecycle_update = replace(
+        entry,
+        status=QueueStatus.CANCELLED,
+        cancel_requested=True,
+        error="cancel_requested",
+        metadata={
+            "reaction_key": "current",
+            "candidate_count": 3,
+            QUEUE_RECORD_SYNC_UPDATED_AT_KEY: "later",
+        },
+    )
+    replacement = replace(entry, metadata={"reaction_key": "replacement"})
+
+    assert queue_entry_generation_token(lifecycle_update) == token
+    assert queue_entry_generation_token(replacement) != token
 
 
 def _queue_file(root: Path) -> Path:
@@ -123,6 +155,120 @@ def test_entry_to_dict_serializes_status_value() -> None:
     assert serialized["queue_id"] == "q-1"
 
 
+@pytest.mark.parametrize("priority", [False, 1.0, 1.5, "1.5"])
+def test_enqueue_rejects_noninteger_priority_before_persistence(
+    tmp_path: Path,
+    priority: object,
+) -> None:
+    with pytest.raises(ValueError, match="priority must be an integer"):
+        store.enqueue(
+            tmp_path,
+            app_name="app",
+            task_id="task",
+            task_kind="kind",
+            engine="engine",
+            priority=priority,  # type: ignore[arg-type]
+        )
+
+    assert not _queue_file(tmp_path).exists()
+
+
+@pytest.mark.parametrize("priority", [False, 1.0, 1.5, "1.5"])
+def test_enqueue_entry_rejects_noninteger_priority_before_persistence(
+    tmp_path: Path,
+    priority: object,
+) -> None:
+    entry = store.QueueEntry(
+        queue_id="q-invalid-priority",
+        app_name="app",
+        task_id="task",
+        task_kind="kind",
+        engine="engine",
+        priority=priority,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ValueError, match="priority must be an integer"):
+        store.enqueue_entry(tmp_path, entry)
+
+    assert not _queue_file(tmp_path).exists()
+
+
+@pytest.mark.parametrize("priority", [0, -7])
+def test_enqueue_entry_preserves_zero_and_negative_priority(
+    tmp_path: Path,
+    priority: int,
+) -> None:
+    entry = store.QueueEntry(
+        queue_id=f"q-priority-{priority}",
+        app_name="app",
+        task_id=f"task-{priority}",
+        task_kind="kind",
+        engine="engine",
+        priority=priority,
+    )
+
+    persisted = store.enqueue_entry(tmp_path, entry)
+
+    assert persisted.priority == priority
+    assert store.list_queue(tmp_path)[0].priority == priority
+
+
+def test_enqueue_retries_queue_id_collision_under_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generated = iter(["q_same", "q_same", "q_unique"])
+    monkeypatch.setattr(store, "timestamped_token", lambda _prefix: next(generated))
+
+    first = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="task-first",
+        task_kind="kind",
+        engine="engine",
+    )
+    second = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="task-second",
+        task_kind="kind",
+        engine="engine",
+    )
+
+    assert first.queue_id == "q_same"
+    assert second.queue_id == "q_unique"
+    assert [entry.queue_id for entry in store.list_queue(tmp_path)] == ["q_same", "q_unique"]
+
+
+def test_enqueue_permanent_queue_id_collision_preserves_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(store, "timestamped_token", lambda _prefix: "q_same")
+    store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="task-first",
+        task_kind="kind",
+        engine="engine",
+    )
+    queue_path = _queue_file(tmp_path)
+    original = queue_path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="unique queue id"):
+        store.enqueue(
+            tmp_path,
+            app_name="app",
+            task_id="task-second",
+            task_kind="kind",
+            engine="engine",
+        )
+
+    assert queue_path.read_bytes() == original
+    [remaining] = store.list_queue(tmp_path)
+    assert remaining.task_id == "task-first"
+
+
 def test_list_queue_handles_missing_and_rejects_corrupt_json(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -147,6 +293,13 @@ def test_list_queue_handles_missing_and_rejects_corrupt_json(
         store.list_queue(tmp_path)
 
     _queue_file(tmp_path).write_text(
+        json.dumps([{**_entry("q-bad-priority"), "priority": False}], indent=2),
+        encoding="utf-8",
+    )
+    with pytest.raises(store.QueueStoreCorruptError, match="priority must be an integer"):
+        store.list_queue(tmp_path)
+
+    _queue_file(tmp_path).write_text(
         json.dumps([_entry("q-3"), "not-a-dict"], indent=2), encoding="utf-8"
     )
     with pytest.raises(store.QueueStoreCorruptError, match="must be a JSON object"):
@@ -160,6 +313,23 @@ def test_list_queue_handles_missing_and_rejects_corrupt_json(
     assert len(entries) == 1
     assert entries[0].status == QueueStatus.PENDING
     assert entries[0].metadata == {}
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [{**_entry("q-blank"), "queue_id": ""}],
+        [_entry("q-duplicate"), _entry("q-duplicate", task_id="other")],
+    ],
+)
+def test_list_queue_rejects_blank_or_duplicate_queue_ids(
+    tmp_path: Path,
+    rows: list[dict[str, object]],
+) -> None:
+    _queue_file(tmp_path).write_text(json.dumps(rows, indent=2), encoding="utf-8")
+
+    with pytest.raises(store.QueueStoreCorruptError, match="queue_id"):
+        store.list_queue(tmp_path)
 
 
 def test_queue_store_facade_groups_root_and_overrides(tmp_path: Path) -> None:
@@ -430,6 +600,145 @@ def test_dequeue_entry_if_pending_ignores_cancel_requested_entry(
     assert entries[0].cancel_requested is True
 
 
+def test_dequeue_entry_if_pending_rejects_replacement_with_same_queue_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    _queue_file(tmp_path).write_text(
+        json.dumps([_entry("q-same", task_id="task-a")], indent=2),
+        encoding="utf-8",
+    )
+    [selected] = store.list_queue(tmp_path)
+    _queue_file(tmp_path).write_text(
+        json.dumps([_entry("q-same", task_id="task-b")], indent=2),
+        encoding="utf-8",
+    )
+
+    assert (
+        store.dequeue_entry_if_pending(
+            tmp_path,
+            "q-same",
+            expected_entry=selected,
+        )
+        is None
+    )
+    [replacement] = store.list_queue(tmp_path)
+    assert replacement.task_id == "task-b"
+    assert replacement.status == QueueStatus.PENDING
+
+
+def test_request_cancel_rejects_replacement_with_same_queue_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    _queue_file(tmp_path).write_text(
+        json.dumps([_entry("q-same", task_id="task-a")], indent=2),
+        encoding="utf-8",
+    )
+    [selected] = store.list_queue(tmp_path)
+    _queue_file(tmp_path).write_text(
+        json.dumps([_entry("q-same", task_id="task-b")], indent=2),
+        encoding="utf-8",
+    )
+
+    assert store.request_cancel(tmp_path, "q-same", expected_entry=selected) is None
+    [replacement] = store.list_queue(tmp_path)
+    assert replacement.task_id == "task-b"
+    assert replacement.status == QueueStatus.PENDING
+    assert replacement.cancel_requested is False
+
+
+def test_request_cancel_accepts_same_generation_after_publication_transition(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    preparing_metadata = {
+        "job_dir": str(tmp_path / "job"),
+        **publication.queue_record_sync_metadata(
+            publication.QUEUE_RECORD_SYNC_PREPARING,
+            token="publication-token",
+            owner_pid=os.getpid(),
+        ),
+    }
+    _queue_file(tmp_path).write_text(
+        json.dumps([_entry("q-same", metadata=preparing_metadata)], indent=2),
+        encoding="utf-8",
+    )
+    [selected] = store.list_queue(tmp_path)
+    complete_metadata = {
+        **preparing_metadata,
+        **publication.queue_record_sync_metadata(
+            publication.QUEUE_RECORD_SYNC_COMPLETE,
+            token="publication-token",
+            owner_pid=0,
+        ),
+    }
+    _queue_file(tmp_path).write_text(
+        json.dumps([_entry("q-same", metadata=complete_metadata)], indent=2),
+        encoding="utf-8",
+    )
+
+    cancelled = store.request_cancel(tmp_path, "q-same", expected_entry=selected)
+
+    assert cancelled is not None
+    assert cancelled.status == QueueStatus.CANCELLED
+
+
+def test_terminal_mark_rejects_replacement_with_same_queue_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    _queue_file(tmp_path).write_text(
+        json.dumps(
+            [_entry("q-same", task_id="task-a", status=QueueStatus.RUNNING)],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    [selected] = store.list_queue(tmp_path)
+    _queue_file(tmp_path).write_text(
+        json.dumps(
+            [_entry("q-same", task_id="task-b", status=QueueStatus.RUNNING)],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    assert store.mark_completed(tmp_path, "q-same", expected_entry=selected) is None
+    [replacement] = store.list_queue(tmp_path)
+    assert replacement.task_id == "task-b"
+    assert replacement.status == QueueStatus.RUNNING
+
+
+def test_terminal_completion_does_not_overwrite_acknowledged_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    entry = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="task-a",
+        task_kind="kind",
+        engine="engine",
+    )
+    running = store.dequeue_next(tmp_path)
+    assert running is not None
+    assert store.request_cancel(tmp_path, entry.queue_id, expected_entry=running) is not None
+
+    assert store.mark_completed(tmp_path, entry.queue_id, expected_entry=running) is None
+    [cancel_requested] = store.list_queue(tmp_path)
+    assert cancel_requested.status == QueueStatus.RUNNING
+    assert cancel_requested.cancel_requested is True
+    assert store.mark_cancelled(tmp_path, entry.queue_id, expected_entry=running) is not None
+    [cancelled] = store.list_queue(tmp_path)
+    assert cancelled.status == QueueStatus.CANCELLED
+
+
 def test_request_cancel_handles_pending_running_and_terminal_entries(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -478,6 +787,31 @@ def test_request_cancel_handles_pending_running_and_terminal_entries(
     )
     assert store.mark_completed(tmp_path, terminal.queue_id) is not None
     assert store.request_cancel(tmp_path, terminal.queue_id) is None
+
+
+def test_request_cancel_revalidates_selected_identity_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    entry = store.enqueue(
+        tmp_path,
+        app_name="foreign-app",
+        task_id="foreign-task",
+        task_kind="foreign-kind",
+        engine="foreign",
+    )
+
+    assert (
+        store.request_cancel(
+            tmp_path,
+            entry.queue_id,
+            accept_entry_fn=lambda current: current.engine == "owned",
+        )
+        is None
+    )
+    [unchanged] = store.list_queue(tmp_path)
+    assert unchanged.status == QueueStatus.PENDING
 
 
 def test_request_cancel_revokes_transient_publication_ownership(
@@ -549,6 +883,24 @@ def test_dequeue_skips_live_queue_record_publishers(
 
     assert claimed is not None
     assert claimed.queue_id == ready.queue_id
+
+
+@pytest.mark.parametrize("sync_state", ["repair_pendng", QUEUE_RECORD_SYNC_ABORTED])
+def test_dequeue_quarantines_unknown_or_aborted_publication_state(
+    tmp_path: Path,
+    sync_state: str,
+) -> None:
+    blocked = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="blocked",
+        task_kind="kind",
+        engine="engine",
+        metadata={QUEUE_RECORD_SYNC_KEY: sync_state},
+    )
+
+    assert store.dequeue_entry_if_pending(tmp_path, blocked.queue_id) is None
+    assert store.dequeue_next(tmp_path) is None
 
 
 def test_dequeue_recovers_preparing_entry_after_publisher_is_sigkilled(
@@ -783,6 +1135,50 @@ def test_clear_terminal_removes_terminal_entries_and_can_keep_latest(
     assert store.clear_terminal(tmp_path / "missing") == 0
 
 
+def test_clear_terminal_scopes_keep_last_to_selected_entries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    _queue_file(tmp_path).write_text(
+        json.dumps(
+            [
+                _entry(
+                    "q-owned-old",
+                    app_name="owned",
+                    status=QueueStatus.COMPLETED,
+                    finished_at="2026-04-19T00:00:01+00:00",
+                ),
+                _entry(
+                    "q-foreign-new",
+                    app_name="foreign",
+                    status=QueueStatus.COMPLETED,
+                    finished_at="2026-04-19T00:00:03+00:00",
+                ),
+                _entry(
+                    "q-owned-new",
+                    app_name="owned",
+                    status=QueueStatus.COMPLETED,
+                    finished_at="2026-04-19T00:00:02+00:00",
+                ),
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        store.clear_terminal(
+            tmp_path,
+            keep_last=1,
+            select_entry_fn=lambda entry: entry.app_name == "owned",
+        )
+        == 1
+    )
+    remaining = store.list_queue(tmp_path)
+    assert [entry.queue_id for entry in remaining] == ["q-foreign-new", "q-owned-new"]
+
+
 @pytest.mark.parametrize(
     ("helper_name", "helper_kwargs", "expected_status"),
     [
@@ -844,7 +1240,7 @@ def test_mark_status_never_flips_a_terminal_outcome(
     assert completed is not None and completed.status == QueueStatus.COMPLETED
 
     refused = store.mark_cancelled(tmp_path, "q-1")
-    assert refused is not None and refused.status == QueueStatus.COMPLETED
+    assert refused is None
     assert store.list_queue(tmp_path)[0].status == QueueStatus.COMPLETED
 
 
@@ -858,5 +1254,35 @@ def test_mark_status_does_not_resurrect_a_cancelled_entry(
     assert cancelled is not None and cancelled.status == QueueStatus.CANCELLED
 
     refused = store.mark_completed(tmp_path, "q-1")
-    assert refused is not None and refused.status == QueueStatus.CANCELLED
+    assert refused is None
     assert store.list_queue(tmp_path)[0].status == QueueStatus.CANCELLED
+
+
+def test_mark_status_replays_same_terminal_side_effect_under_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    _write_single_running_entry(tmp_path)
+    [running] = store.list_queue(tmp_path)
+    assert (
+        store.mark_cancelled(
+            tmp_path,
+            "q-1",
+            metadata_update={"candidate_count": 2},
+            expected_entry=running,
+        )
+        is not None
+    )
+    calls: list[str] = []
+
+    replayed = store.mark_cancelled(
+        tmp_path,
+        "q-1",
+        expected_entry=running,
+        require_cancel_requested=True,
+        before_update_fn=lambda: calls.append("repair"),
+    )
+
+    assert replayed is not None
+    assert replayed.status == QueueStatus.CANCELLED
+    assert calls == ["repair"]

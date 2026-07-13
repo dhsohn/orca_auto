@@ -43,11 +43,22 @@ def _write_config(tmp_path: Path) -> tuple[Path, Path]:
     workflow_root = tmp_path / "workflow_root"
     allowed_root = workflow_root / "wf_001" / "01_crest"
     allowed_root.mkdir(parents=True)
+    executable_dir = tmp_path / "bin"
+    executable_dir.mkdir()
+    crest_executable = executable_dir / "crest"
+    xtb_executable = executable_dir / "xtb"
+    for executable in (crest_executable, xtb_executable):
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o700)
     config_path = tmp_path / "orca_auto.yaml"
     config_path.write_text(
         "\n".join(
             [
                 f"runs_root: {json.dumps(str(workflow_root))}",
+                "workflow:",
+                "  paths:",
+                f"    crest_executable: {json.dumps(str(crest_executable))}",
+                f"    xtb_executable: {json.dumps(str(xtb_executable))}",
                 "resources:",
                 "  max_cores_per_task: 6",
                 "  max_memory_gb_per_task: 14",
@@ -61,7 +72,10 @@ def _write_config(tmp_path: Path) -> tuple[Path, Path]:
 
 def _write_xyz(path: Path, label: str = "sample") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"1\n{label}\nH 0.0 0.0 0.0\n", encoding="utf-8")
+    path.write_text(
+        f"2\n{label}\nH 0.0 0.0 0.0\nH 0.0 0.0 0.7\n",
+        encoding="utf-8",
+    )
 
 
 def _patch_crest_e2e_notifications(
@@ -94,11 +108,21 @@ def _patch_crest_e2e_runner(monkeypatch: pytest.MonkeyPatch, job_dir: Path) -> N
         def poll(self) -> int | None:
             return 0
 
-    def fake_start_crest_job(cfg: Any, *, job_dir: Path, selected_xyz: Path) -> Any:
-        return type("Running", (), {"process": _FakeProcess()})()
+    def fake_start_crest_job(
+        cfg: Any,
+        *,
+        job_dir: Path,
+        selected_xyz: Path,
+        execution_snapshot: dict[str, Any],
+    ) -> Any:
+        return type(
+            "Running",
+            (),
+            {"process": _FakeProcess(), "selected_input_xyz": str(selected_xyz.resolve())},
+        )()
 
     def fake_finalize_crest_job(running: Any) -> CrestRunResult:
-        selected_xyz = job_dir / "input.xyz"
+        selected_xyz = Path(running.selected_input_xyz)
         stdout_log = job_dir / "crest.stdout.log"
         stderr_log = job_dir / "crest.stderr.log"
         retained_path = job_dir / "crest_best.xyz"
@@ -177,11 +201,16 @@ def test_cmd_run_dir_queues_job_updates_state_and_index(
 
     assert len(queue_entries) == 1
     entry = queue_entries[0]
+    selected_snapshot = Path(entry.metadata["selected_input_xyz"])
+    assert selected_snapshot.is_relative_to(job_dir / ".orca_auto_input_snapshots")
+    assert selected_snapshot.read_text(encoding="utf-8") == (job_dir / "preferred.xyz").read_text(
+        encoding="utf-8"
+    )
     assert entry.task_id == "crest-fixed-id"
     assert entry.priority == 4
     expected_metadata = {
         "job_dir": str(job_dir.resolve()),
-        "selected_input_xyz": str((job_dir / "preferred.xyz").resolve()),
+        "selected_input_xyz": str(selected_snapshot),
         "mode": "nci",
         "molecule_key": "preferred",
         "manifest_present": "true",
@@ -197,7 +226,7 @@ def test_cmd_run_dir_queues_job_updates_state_and_index(
     assert state is not None
     assert _job(state)["id"] == "crest-fixed-id"
     assert _job(state)["dir"] == str(job_dir.resolve())
-    assert _input_payload(state)["selected_xyz_path"] == str((job_dir / "preferred.xyz").resolve())
+    assert _input_payload(state)["selected_xyz_path"] == str(selected_snapshot)
     assert _status(state)["state"] == "queued"
     assert _engine_payload(state)["mode"] == "nci"
     assert _engine_payload(state)["molecule_key"] == "preferred"
@@ -210,7 +239,7 @@ def test_cmd_run_dir_queues_job_updates_state_and_index(
     assert record.job_type == "crest_nci_conformer_search"
     assert record.original_run_dir == str(job_dir.resolve())
     assert record.latest_known_path == str(job_dir.resolve())
-    assert record.selected_input_xyz == str((job_dir / "preferred.xyz").resolve())
+    assert record.selected_input_xyz == str(selected_snapshot)
     assert record.resource_request == {"max_cores": 9, "max_memory_gb": 21}
     assert record.resource_actual == {"max_cores": 9, "max_memory_gb": 21}
 
@@ -220,7 +249,7 @@ def test_cmd_run_dir_queues_job_updates_state_and_index(
             "queue_id": entry.queue_id,
             "job_dir": job_dir.resolve(),
             "mode": "nci",
-            "selected_xyz": (job_dir / "preferred.xyz").resolve(),
+            "selected_xyz": selected_snapshot,
         }
     ]
 

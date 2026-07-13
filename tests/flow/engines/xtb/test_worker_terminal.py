@@ -23,6 +23,10 @@ def _entry(job_dir: Path, selected_xyz: Path) -> SimpleNamespace:
         queue_id="queue-1",
         app_name="orca_auto",
         task_id="job-1",
+        task_kind="xtb_opt",
+        engine="xtb",
+        priority=10,
+        enqueued_at="2026-04-19T23:59:00Z",
         started_at="2026-04-20T00:00:00Z",
         metadata={
             "job_dir": str(job_dir),
@@ -109,12 +113,22 @@ def test_finalize_execution_result_syncs_terminal_side_effects(
     record_calls: list[dict[str, Any]] = []
     finished_calls: list[dict[str, Any]] = []
 
+    def fake_mark_completed(
+        root: Any,
+        queue_id: str,
+        metadata_update: dict[str, Any] | None = None,
+        before_update_fn: Any = None,
+        **_kwargs: Any,
+    ) -> bool:
+        if before_update_fn is not None:
+            before_update_fn()
+        completed_calls.append((root, queue_id, metadata_update))
+        return True
+
     monkeypatch.setattr(
         worker_terminal,
         "mark_completed",
-        lambda root, queue_id, metadata_update=None: completed_calls.append(
-            (root, queue_id, metadata_update)
-        ),
+        fake_mark_completed,
     )
     monkeypatch.setattr(
         worker_terminal,
@@ -151,8 +165,120 @@ def test_finalize_execution_result_syncs_terminal_side_effects(
     )
 
     assert outcome == worker_terminal.WorkerExecutionOutcome(result=result)
-    assert completed_calls == [
-        (str(queue_root), "queue-1", {"candidate_count": 1, "job_type": "path_search"})
-    ]
+    assert completed_calls == [(str(queue_root), "queue-1", {"candidate_count": 1})]
     assert record_calls and record_calls[0]["job_id"] == "job-1"
     assert finished_calls and finished_calls[0]["status"] == "completed"
+
+
+def test_terminal_generation_replacement_writes_no_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_root = tmp_path / "queue"
+    queue_root.mkdir()
+    job_dir = queue_root / "job-1"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    entry = _entry(job_dir, selected_xyz)
+    result = _result(selected_xyz)
+    artifact_statuses: list[str] = []
+    cancelled_requirements: list[bool] = []
+
+    monkeypatch.setattr(worker_terminal, "mark_completed", lambda *args, **kwargs: None)
+
+    def reject_cancelled(*args: Any, **kwargs: Any) -> None:
+        cancelled_requirements.append(bool(kwargs.get("require_cancel_requested")))
+
+    monkeypatch.setattr(worker_terminal, "mark_cancelled", reject_cancelled)
+    monkeypatch.setattr(
+        worker_terminal,
+        "mark_failed",
+        lambda *args, **kwargs: pytest.fail("unexpected failed mark"),
+    )
+    monkeypatch.setattr(
+        worker_terminal,
+        "write_execution_artifacts",
+        lambda _entry, actual_result, **_kwargs: artifact_statuses.append(actual_result.status),
+    )
+    monkeypatch.setattr(
+        worker_terminal,
+        "upsert_job_record",
+        lambda *args, **kwargs: pytest.fail("stale index write"),
+    )
+    monkeypatch.setattr(
+        worker_terminal,
+        "notify_job_finished",
+        lambda *args, **kwargs: pytest.fail("stale notification"),
+    )
+
+    outcome = worker_terminal.finalize_execution_result(
+        _cfg(tmp_path),
+        queue_root=queue_root,
+        entry=entry,
+        result=result,
+        emit_output=False,
+    )
+
+    assert outcome.result is result
+    assert artifact_statuses == []
+    assert cancelled_requirements == [True]
+
+
+def test_terminal_completion_racing_cancel_commits_only_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_root = tmp_path / "queue"
+    queue_root.mkdir()
+    job_dir = queue_root / "job-1"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    entry = _entry(job_dir, selected_xyz)
+    result = _result(selected_xyz)
+    artifact_statuses: list[str] = []
+    record_statuses: list[str] = []
+    notification_statuses: list[str] = []
+
+    monkeypatch.setattr(worker_terminal, "mark_completed", lambda *args, **kwargs: None)
+
+    def commit_cancelled(*args: Any, **kwargs: Any) -> bool:
+        assert kwargs["require_cancel_requested"] is True
+        kwargs["before_update_fn"]()
+        return True
+
+    monkeypatch.setattr(worker_terminal, "mark_cancelled", commit_cancelled)
+    monkeypatch.setattr(
+        worker_terminal,
+        "mark_failed",
+        lambda *args, **kwargs: pytest.fail("unexpected failed mark"),
+    )
+    monkeypatch.setattr(
+        worker_terminal,
+        "write_execution_artifacts",
+        lambda _entry, actual_result, **_kwargs: artifact_statuses.append(actual_result.status),
+    )
+    monkeypatch.setattr(
+        worker_terminal,
+        "upsert_job_record",
+        lambda *args, **kwargs: record_statuses.append(kwargs["status"]),
+    )
+    monkeypatch.setattr(
+        worker_terminal,
+        "notify_job_finished",
+        lambda *args, **kwargs: notification_statuses.append(kwargs["status"]),
+    )
+
+    outcome = worker_terminal.finalize_execution_result(
+        _cfg(tmp_path),
+        queue_root=queue_root,
+        entry=entry,
+        result=result,
+        emit_output=False,
+    )
+
+    assert outcome.result.status == "cancelled"
+    assert artifact_statuses == ["cancelled"]
+    assert record_statuses == ["cancelled"]
+    assert notification_statuses == ["cancelled"]

@@ -354,7 +354,8 @@ class InternalEngineQueueWorkerDepsResolver:
 
     def find_queue_entry(self, queue_root: Any, queue_id: str) -> Any | None:
         if self.deps.find_queue_entry is not None:
-            return self.deps.find_queue_entry(queue_root, queue_id)
+            entry = self.deps.find_queue_entry(queue_root, queue_id)
+            return entry if entry is None or self.runtime.accepts_entry(entry) else None
         return self.runtime.queue_entry_by_id(queue_root, queue_id)
 
     def queue_worker_deps(

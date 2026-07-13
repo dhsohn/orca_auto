@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engine_process import atomic_write_confined_bytes
+from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.utils import atomic_write_json, normalize_text
 from orca_auto.core.utils.persistence import load_json_mapping_file
 from orca_auto.flow._orca_stage_materialization import ensure_route_line
@@ -17,6 +19,7 @@ from orca_auto.orca.input_blocks import (
     geometry_range,
     orca_line_tokens,
     quote_orca_path,
+    route_line_indices,
     set_block_key_value,
 )
 from orca_auto.orca.resource_directives import maxcore_mb_per_core, read_nprocs, set_maxcore
@@ -270,7 +273,12 @@ def _copy_auxiliary_input_files(
         if target_path in copied_targets:
             continue
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(copy.source_path, target_path)
+        atomic_write_confined_bytes(
+            target_dir,
+            target_path,
+            read_stable_regular_file(copy.source_path),
+            label="ORCA restart auxiliary input",
+        )
         copied_targets.add(target_path)
 
     replacements: dict[int, list[tuple[int, int, str]]] = {}
@@ -343,7 +351,7 @@ def _rewrite_restart_input(
         reserved_copies=reserved_copies,
     )
     if bool(settings.get("orca_route_line_present")):
-        route_indices = [index for index, line in enumerate(lines) if line.strip().startswith("!")]
+        route_indices = route_line_indices(lines)
         route_line = ensure_route_line(normalize_text(settings.get("orca_route_line")))
         if not route_indices:
             lines.insert(0, route_line)
@@ -378,7 +386,12 @@ def _rewrite_restart_input(
                     max_cores=effective_cores,
                 ),
             )
-    target_inp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    atomic_write_confined_bytes(
+        target_inp.parent,
+        target_inp,
+        ("\n".join(lines).rstrip() + "\n").encode("utf-8"),
+        label="ORCA restart input",
+    )
 
 
 def _restart_relative_path(path: Path, *, reaction_dir: Path, label: str) -> Path:
@@ -482,7 +495,12 @@ def rematerialize_orca_restart_input(
         )
         if previous_xyz is not None and target_xyz is not None:
             target_xyz.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(previous_xyz, target_xyz)
+            atomic_write_confined_bytes(
+                reaction_dir,
+                target_xyz,
+                read_stable_regular_file(previous_xyz),
+                label="ORCA restart geometry",
+            )
         provenance = _source_payload(
             previous_dir,
             previous_inp=previous_inp,

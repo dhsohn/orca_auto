@@ -13,6 +13,11 @@ from orca_auto.core.queue.engine import execution as engine_execution
 from orca_auto.core.queue.internal_engine import InternalEngineSpec
 
 
+def _append_and_return(items: Any, value: Any, result: Any) -> Any:
+    items.append(value)
+    return result
+
+
 class _WorkerShutdownRequested(RuntimeError):
     def __init__(self, context: Any):
         super().__init__("worker_shutdown")
@@ -77,7 +82,7 @@ def test_run_engine_worker_child_job_processes_entry_with_extra_kwargs(
     tmp_path: Path,
 ) -> None:
     cfg = SimpleNamespace(admission_root=tmp_path / "admission")
-    entry = SimpleNamespace(queue_id="queue-1", status="running")
+    entry = SimpleNamespace(queue_id="queue-1", task_id="task-1", status="running")
     dependencies = object()
     resolver = object()
     installed: list[Any] = []
@@ -120,7 +125,7 @@ def test_run_engine_worker_child_job_processes_entry_with_extra_kwargs(
 
 def test_run_engine_worker_child_job_can_map_outcome_to_exit_code(tmp_path: Path) -> None:
     cfg = SimpleNamespace(admission_root=tmp_path / "admission")
-    entry = SimpleNamespace(queue_id="queue-1", status="running")
+    entry = SimpleNamespace(queue_id="queue-1", task_id="task-1", status="running")
     released: list[tuple[Path, str]] = []
 
     rc = engine_child.run_engine_worker_child_job(
@@ -316,7 +321,11 @@ def test_run_engine_worker_child_job_requeues_and_marks_recovery_on_shutdown(
         install_signal_handlers_fn=lambda _controller: None,
         process_dequeued_entry_fn=raise_shutdown,
         dependencies_fn=lambda: object(),
-        requeue_running_entry_fn=lambda root, queue_id: requeued.append((root, queue_id)),
+        requeue_running_entry_fn=lambda root, queue_id, **_kwargs: _append_and_return(
+            requeued,
+            (root, queue_id),
+            entry,
+        ),
         mark_recovery_pending_context_fn=lambda cfg_obj, context_obj, *, reason: recovery.append(
             (cfg_obj, context_obj, reason)
         ),
@@ -332,7 +341,7 @@ def test_run_engine_worker_child_job_skips_recovery_when_requeue_cancels(
     tmp_path: Path,
 ) -> None:
     cfg = SimpleNamespace(admission_root=tmp_path / "admission")
-    entry = SimpleNamespace(queue_id="queue-1", status="running")
+    entry = SimpleNamespace(queue_id="queue-1", task_id="task-1", status="running")
     context = SimpleNamespace(job_dir=tmp_path / "job")
     requeued: list[tuple[Path, str]] = []
     recovery: list[tuple[Any, Any, str]] = []
@@ -341,7 +350,7 @@ def test_run_engine_worker_child_job_skips_recovery_when_requeue_cancels(
     def raise_shutdown(*_args: Any, **_kwargs: Any) -> None:
         raise _WorkerShutdownRequested(context)
 
-    def requeue(root: Path, queue_id: str) -> SimpleNamespace:
+    def requeue(root: Path, queue_id: str, **_kwargs: object) -> SimpleNamespace:
         requeued.append((root, queue_id))
         return SimpleNamespace(status=SimpleNamespace(value="cancelled"))
 

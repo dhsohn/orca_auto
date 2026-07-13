@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from contextlib import contextmanager
 from multiprocessing import get_context
@@ -16,14 +17,15 @@ from orca_auto.core.queue import (
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
     DuplicateQueueEntryError,
     QueueEntry,
+    QueueStatus,
     dequeue_next,
     enqueue,
     list_queue,
     mark_cancelled,
     request_cancel,
-    requeue_running_entry,
     update_metadata,
 )
+from orca_auto.core.queue.engine.input_snapshot import snapshot_input_file
 from orca_auto.flow import engine_runtime
 from orca_auto.flow.submitters import (
     crest as crest_submitter,
@@ -43,6 +45,11 @@ def _wait_for_thread_event(event: Event, thread: Thread) -> bool:
         if not thread.is_alive():
             return event.is_set()
     return event.is_set()
+
+
+def _append_and_return(items: Any, value: Any, result: Any) -> Any:
+    items.append(value)
+    return result
 
 
 def _join_thread(thread: Thread) -> None:
@@ -493,7 +500,7 @@ def _post_commit_enqueue_submission(tmp_path: Path) -> tuple[Path, Path, SimpleN
 def _submit_with_enqueue(
     *,
     job_dir: Path,
-    submission: SimpleNamespace,
+    submission: Any,
     enqueue_fn: Any,
     record_queued_fn: Any,
 ) -> dict[str, Any]:
@@ -509,6 +516,119 @@ def _submit_with_enqueue(
         priority=submission.priority,
         config_path="",
     )
+
+
+def _submission_with_generation_snapshot(
+    tmp_path: Path,
+    *,
+    task_id: str,
+) -> tuple[Path, Path, internal_engine_submission.EngineRunDirSubmission, Path]:
+    queue_root = tmp_path / "queue"
+    job_dir = tmp_path / "job"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    selected = job_dir / "input.xyz"
+    selected.write_text("1\nH\nH 0 0 0\n", encoding="utf-8")
+    descriptor = snapshot_input_file(
+        job_dir,
+        selected,
+        role="selected",
+        namespace=task_id,
+    )
+    submission = internal_engine_submission.EngineRunDirSubmission(
+        queue_root=queue_root,
+        app_name="orca_auto_crest",
+        task_id=task_id,
+        task_kind="crest_conformer_search",
+        engine="crest",
+        priority=6,
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": descriptor["snapshot_path"],
+            "execution_snapshot": {"snapshot_namespace": task_id},
+        },
+        context={"job_dir": job_dir},
+    )
+    return queue_root, job_dir, submission, Path(descriptor["snapshot_path"])
+
+
+def test_precommit_enqueue_failure_cleans_unowned_generation_snapshot(tmp_path: Path) -> None:
+    _queue_root, job_dir, submission, snapshot_path = _submission_with_generation_snapshot(
+        tmp_path,
+        task_id="crest-precommit",
+    )
+
+    result = _submit_with_enqueue(
+        job_dir=job_dir,
+        submission=submission,
+        enqueue_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("precommit")),
+        record_queued_fn=lambda *_args: pytest.fail("precommit failure must not publish"),
+    )
+
+    assert result["status"] == "failed"
+    assert not snapshot_path.exists()
+
+
+def test_active_replay_cleans_only_new_unowned_generation_snapshot(tmp_path: Path) -> None:
+    queue_root, job_dir, submission, snapshot_path = _submission_with_generation_snapshot(
+        tmp_path,
+        task_id="crest-replay-new",
+    )
+    existing = enqueue(
+        queue_root,
+        app_name=submission.app_name,
+        task_id="crest-existing",
+        task_kind=submission.task_kind,
+        engine=submission.engine,
+        priority=submission.priority,
+        metadata={"job_dir": str(job_dir)},
+    )
+
+    result = _submit_with_enqueue(
+        job_dir=job_dir,
+        submission=submission,
+        enqueue_fn=enqueue,
+        record_queued_fn=lambda *_args: True,
+    )
+
+    assert result["status"] == "submitted"
+    assert result["queue_id"] == existing.queue_id
+    assert not snapshot_path.exists()
+
+
+def test_indeterminate_postcommit_recovery_preserves_generation_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    queue_root, job_dir, submission, snapshot_path = _submission_with_generation_snapshot(
+        tmp_path,
+        task_id="crest-indeterminate",
+    )
+    real_mutate = internal_engine_submission.mutate_entries
+    calls = 0
+
+    def persist_then_raise(root: Path, **kwargs: Any) -> None:
+        enqueue(root, **kwargs)
+        raise OSError("postcommit")
+
+    def unavailable_recovery(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            raise OSError("recovery unavailable")
+        return real_mutate(*args, **kwargs)
+
+    monkeypatch.setattr(internal_engine_submission, "mutate_entries", unavailable_recovery)
+
+    result = _submit_with_enqueue(
+        job_dir=job_dir,
+        submission=submission,
+        enqueue_fn=persist_then_raise,
+        record_queued_fn=lambda *_args: pytest.fail("indeterminate enqueue must not publish"),
+    )
+
+    assert result["status"] == "failed"
+    assert len(list_queue(queue_root)) == 1
+    assert snapshot_path.is_file()
 
 
 def test_enqueue_post_commit_error_recovers_and_publishes_durable_entry(tmp_path: Path) -> None:
@@ -666,6 +786,39 @@ def test_enqueue_post_commit_recovery_never_mutates_a_different_submission(tmp_p
     assert foreign.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] > 0
 
 
+def test_enqueue_post_commit_recovery_terminally_fences_ambiguous_exact_rows(
+    tmp_path: Path,
+) -> None:
+    queue_root, job_dir, submission = _post_commit_enqueue_submission(tmp_path)
+
+    def persist_two_then_raise(root: Path, **kwargs: Any) -> None:
+        enqueue_kwargs = {key: value for key, value in kwargs.items() if key != "duplicate_policy"}
+        for _ in range(2):
+            enqueue(
+                root,
+                **enqueue_kwargs,
+                duplicate_policy=lambda _entries, _entry: None,
+            )
+        raise OSError("ambiguous enqueue result")
+
+    result = _submit_with_enqueue(
+        job_dir=job_dir,
+        submission=submission,
+        enqueue_fn=persist_two_then_raise,
+        record_queued_fn=lambda *_args: pytest.fail("ambiguous rows must not publish"),
+    )
+
+    rows = list_queue(queue_root)
+    assert result["status"] == "failed"
+    assert len(rows) == 2
+    assert all(row.status == QueueStatus.CANCELLED for row in rows)
+    assert all(row.cancel_requested for row in rows)
+    assert all(
+        row.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "aborted"
+        for row in rows
+    )
+
+
 def test_fresh_publication_keyboard_interrupt_is_retryable_and_propagates(
     tmp_path: Path,
 ) -> None:
@@ -753,7 +906,49 @@ def test_repair_publication_system_exit_is_retryable_and_propagates(tmp_path: Pa
     assert persisted.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
 
 
-def test_xtb_active_replay_uses_existing_entry_identity_and_metadata(
+def test_internal_publication_repair_reclaims_abandoned_live_pid_lease(
+    tmp_path: Path,
+) -> None:
+    queue_root = tmp_path / "queue"
+    job_dir = queue_root / "job"
+    job_dir.mkdir(parents=True)
+    entry = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="xtb-live-owner",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "job_type": "opt",
+            "resource_request": {},
+            **internal_engine_submission._queued_record_sync_metadata(
+                internal_engine_submission.QUEUE_RECORD_SYNC_PREPARING,
+                token="live-owner-token",
+                owner_pid=os.getpid(),
+            ),
+        },
+    )
+    recorded: list[str] = []
+
+    assert internal_engine_submission.repair_internal_engine_queue_publication(
+        cfg=object(),
+        queue_root=queue_root,
+        entry=entry,
+        record_queued_fn=lambda _cfg, _submission, current: _append_and_return(
+            recorded,
+            current.task_id,
+            True,
+        ),
+        entry_matches_fn=lambda current: current.engine == "xtb",
+    )
+
+    assert recorded == ["xtb-live-owner"]
+    [repaired] = list_queue(queue_root)
+    assert repaired.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
+
+
+def test_xtb_active_replay_rejects_conflicting_job_identity(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -799,15 +994,70 @@ def test_xtb_active_replay_uses_existing_entry_identity_and_metadata(
     )
 
     assert first["job_id"] == "xtb-old"
-    assert replay["job_id"] == "xtb-old"
-    assert replay["parsed_stdout"]["priority"] == "4"
-    assert replay["job_type"] == "opt"
-    assert replay["reaction_key"] == "old-rxn"
+    assert replay["status"] == "failed"
+    assert replay["job_id"] == ""
+    assert "conflicting queue identity" in replay["stderr"]
     entry = list_queue(queue_root)[0]
     assert entry.task_id == "xtb-old"
     assert entry.task_kind == "xtb_opt"
     assert entry.metadata["job_type"] == "opt"
     assert entry.metadata["reaction_key"] == "old-rxn"
+
+
+def test_active_replay_quarantines_unknown_publication_marker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job_dir = (tmp_path / "job").resolve()
+    queue_root = tmp_path / "queue"
+    existing = enqueue(
+        queue_root,
+        app_name="orca_auto_crest",
+        task_id="crest-existing",
+        task_kind="crest_conformer_search",
+        engine="crest",
+        metadata={
+            "job_dir": str(job_dir),
+            "mode": "standard",
+            internal_engine_submission._QUEUED_RECORD_SYNC_KEY: "future_protocol_state",
+        },
+    )
+    record_calls: list[str] = []
+    monkeypatch.setattr(crest_submitter, "load_config", lambda _path: object())
+    monkeypatch.setattr(crest_submitter, "resolve_job_dir", lambda *_args: job_dir)
+    monkeypatch.setattr(crest_submitter, "load_job_manifest", lambda _job_dir: {})
+    monkeypatch.setattr(
+        crest_submitter,
+        "build_submission",
+        lambda _cfg, _job_dir, _manifest, args: SimpleNamespace(
+            queue_root=queue_root,
+            app_name="orca_auto_crest",
+            task_id="crest-replay",
+            task_kind="crest_conformer_search",
+            engine="crest",
+            priority=int(args.priority),
+            metadata={"job_dir": str(job_dir), "mode": "standard"},
+            context={},
+        ),
+    )
+    monkeypatch.setattr(
+        crest_submitter,
+        "record_queued",
+        lambda *_args: record_calls.append("published"),
+    )
+
+    replay = crest_submitter.submit_job_dir(
+        job_dir=str(job_dir), priority=8, config_path="/tmp/config.yaml"
+    )
+
+    assert replay["status"] == "failed"
+    assert record_calls == []
+    [persisted] = list_queue(queue_root)
+    assert persisted.queue_id == existing.queue_id
+    assert (
+        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY]
+        == "future_protocol_state"
+    )
 
 
 def test_legacy_pending_entry_without_sync_marker_is_repaired(
@@ -1358,8 +1608,10 @@ def test_cancel_after_repair_claim_revokes_fence_before_any_side_effect(
     replay_thread.start()
     try:
         assert _wait_for_thread_event(waiting_before_lock, replay_thread)
-        repairing = list_queue(queue_root)[0]
-        assert repairing.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repairing"
+        waiting = list_queue(queue_root)[0]
+        assert (
+            waiting.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
+        )
 
         cancelled = request_cancel(queue_root, existing.queue_id)
         assert cancelled is not None
@@ -1384,13 +1636,13 @@ def test_cancel_after_repair_claim_revokes_fence_before_any_side_effect(
     )
 
 
-def test_running_replay_keeps_repair_pending_until_requeue_can_repair(
+def test_repair_pending_replay_repairs_before_dequeue(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     job_dir = (tmp_path / "job").resolve()
     queue_root = tmp_path / "queue"
-    task_ids = iter(("crest-original", "crest-running-replay", "crest-pending-replay"))
+    task_ids = iter(("crest-original", "crest-replay"))
     record_calls: list[str] = []
 
     monkeypatch.setattr(crest_submitter, "load_config", lambda _path: object())
@@ -1421,31 +1673,20 @@ def test_running_replay_keeps_repair_pending_until_requeue_can_repair(
     first = crest_submitter.submit_job_dir(
         job_dir=str(job_dir), priority=4, config_path="/tmp/config.yaml"
     )
-    running = dequeue_next(queue_root)
-    assert running is not None
+    assert dequeue_next(queue_root) is None
 
-    replay_while_running = crest_submitter.submit_job_dir(
+    replay = crest_submitter.submit_job_dir(
         job_dir=str(job_dir), priority=5, config_path="/tmp/config.yaml"
-    )
-    running_entry = list_queue(queue_root)[0]
-
-    assert "repair skipped because the worker is running" in replay_while_running["stderr"]
-    assert (
-        running_entry.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY]
-        == "repair_pending"
-    )
-    assert requeue_running_entry(queue_root, running.queue_id) is not None
-
-    replay_after_requeue = crest_submitter.submit_job_dir(
-        job_dir=str(job_dir), priority=6, config_path="/tmp/config.yaml"
     )
     repaired = list_queue(queue_root)[0]
 
     assert first["status"] == "submitted"
-    assert "state/index repaired" in replay_after_requeue["stderr"]
+    assert "state/index repaired" in replay["stderr"]
     assert record_calls == ["crest-original", "crest-original"]
     assert repaired.status.value == "pending"
     assert repaired.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
+    running = dequeue_next(queue_root)
+    assert running is not None and running.queue_id == repaired.queue_id
 
 
 def test_known_notification_failure_is_warned_and_not_retried(
@@ -1582,8 +1823,12 @@ def test_cancel_target_uses_structured_queue_update(
         captured["listed_cfg"] = cfg_arg
         return [(queue_root, original_entry)]
 
-    def fake_request_cancel(root: Path, requested_queue_id: str) -> Any:
-        captured["request_cancel"] = (root, requested_queue_id)
+    def fake_request_cancel(
+        root: Path,
+        requested_queue_id: str,
+        **kwargs: object,
+    ) -> Any:
+        captured["request_cancel"] = (root, requested_queue_id, kwargs)
         return SimpleNamespace(
             queue_id=requested_queue_id,
             task_id=job_id,
@@ -1609,7 +1854,10 @@ def test_cancel_target_uses_structured_queue_update(
 
     assert captured["config_path"] == "/tmp/config.yaml"
     assert captured["listed_cfg"] is cfg
-    assert captured["request_cancel"] == (queue_root, queue_id)
+    request_root, requested_queue_id, request_kwargs = captured["request_cancel"]
+    assert (request_root, requested_queue_id) == (queue_root, queue_id)
+    assert request_kwargs["expected_entry"] is original_entry
+    assert callable(request_kwargs["accept_entry_fn"])
     assert result["status"] == expected_status
     assert result["returncode"] == 0
     assert result["command_argv"] == [
@@ -1636,7 +1884,7 @@ def test_cancel_target_reports_structured_error(
     def fake_queue_entries_with_roots(_cfg: Any) -> list[tuple[Path, Any]]:
         return [(tmp_path / "queue", SimpleNamespace(queue_id="q-1", task_id="job-1"))]
 
-    def fake_request_cancel(_root: Path, _queue_id: str) -> Any:
+    def fake_request_cancel(_root: Path, _queue_id: str, **_kwargs: object) -> Any:
         raise RuntimeError("cancel failed")
 
     monkeypatch.setattr(module, "load_queue_config", fake_load_queue_config)
@@ -1653,3 +1901,43 @@ def test_cancel_target_reports_structured_error(
     assert result["returncode"] == 1
     assert result["stdout"] == ""
     assert result["stderr"] == "RuntimeError: cancel failed\n"
+
+
+def test_internal_cancel_recovers_durable_post_commit_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    queue_root = tmp_path / "queue"
+    job_dir = queue_root / "job"
+    job_dir.mkdir(parents=True)
+    entry = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="xtb-cancel-post-commit",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={"job_dir": str(job_dir), "job_type": "opt"},
+    )
+    monkeypatch.setattr(xtb_submitter, "load_queue_config", lambda _path: object())
+    monkeypatch.setattr(
+        xtb_submitter,
+        "queue_entries_with_roots",
+        lambda _cfg: [(queue_root, current) for current in list_queue(queue_root)],
+    )
+
+    def persist_then_raise(root: Path, queue_id: str, **kwargs: Any) -> Any:
+        updated = request_cancel(root, queue_id, **kwargs)
+        assert updated is not None
+        raise OSError("cancel durability barrier failed")
+
+    monkeypatch.setattr(xtb_submitter, "request_cancel", persist_then_raise)
+
+    result = xtb_submitter.cancel_target(
+        target=entry.queue_id,
+        config_path="/tmp/xtb.yaml",
+    )
+
+    assert result["status"] == "cancelled"
+    assert result["returncode"] == 0
+    [cancelled] = list_queue(queue_root)
+    assert cancelled.status == QueueStatus.CANCELLED

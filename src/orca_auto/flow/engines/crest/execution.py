@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import json
 import os
 import signal
 import subprocess
@@ -10,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.admission import activate_reserved_slot, release_slot
 from orca_auto.core.config.engines import load_crest_config as load_config
 from orca_auto.core.engines.worker_child import (
@@ -34,9 +37,15 @@ from orca_auto.core.queue import (
     requeue_running_entry,
 )
 from orca_auto.core.queue.engine import execution as _engine_execution
+from orca_auto.core.queue.engine.input_snapshot import (
+    read_stable_regular_file,
+    verify_input_snapshots,
+)
 from orca_auto.core.queue.internal_engine import (
     InternalEngineSpec,
     create_worker_shutdown_exception_type,
+    entry_matches_engine_identity,
+    entry_status_is_running,
 )
 from orca_auto.core.queue.worker import execution_dependencies as _worker_dependencies
 from orca_auto.core.queue.worker import (
@@ -96,6 +105,9 @@ build_worker_child_command = build_worker_child_command_for_engine("crest")
 
 _worker_child = _ENGINE_SPEC.worker_child_module_facade(
     WorkerShutdownRequested,
+    entry_ready_fn=lambda entry: (
+        entry_status_is_running(entry) and entry_matches_engine_identity(entry, "crest")
+    ),
     process_dequeued_entry_kwargs_fn=lambda: {"molecule_key_resolver": _molecule_key},
     build_worker_child_command=build_worker_child_command,
 )
@@ -339,6 +351,7 @@ def _build_execution_context(
     *,
     dependencies: WorkerExecutionDependencies,
     molecule_key_resolver: Callable[[Any, Path, Path], str] | None = None,
+    verify_execution_snapshot: bool = True,
 ) -> ExecutionContext:
     context_deps = dependencies.context
     job_dir = _engine_execution.require_path_within_roots(
@@ -352,13 +365,54 @@ def _build_execution_context(
         label="Queue metadata 'selected_input_xyz'",
     )
     resolve_molecule_key = molecule_key_resolver or context_deps.molecule_key
+    resource_request = context_deps.entry_resource_request(cfg, entry)
+    snapshot = _engine_execution.entry_metadata_dict(entry, "execution_snapshot")
+    if verify_execution_snapshot and snapshot.get("version") != 1:
+        raise ValueError("Queue metadata 'execution_snapshot' has an unsupported version")
+    manifest_snapshot = snapshot.get("manifest")
+    input_snapshots = snapshot.get("input_snapshots")
+    if verify_execution_snapshot and (
+        not isinstance(manifest_snapshot, dict) or not isinstance(input_snapshots, dict)
+    ):
+        raise ValueError("Queue metadata 'execution_snapshot' is incomplete")
+    resolved_mode = context_deps.mode(entry)
+    resolved_molecule_key = resolve_molecule_key(entry, selected_xyz, job_dir)
+    if verify_execution_snapshot:
+        assert isinstance(input_snapshots, dict)
+        verified_inputs = verify_input_snapshots(job_dir, input_snapshots)
+        if verified_inputs.get("selected") != selected_xyz:
+            raise ValueError("Queued selected CREST input does not match its immutable snapshot")
+        manifest_path = verified_inputs.get("manifest")
+        if (
+            not isinstance(manifest_snapshot, dict)
+            or manifest_path is None
+            or str(snapshot.get("manifest_path") or "") != str(manifest_path)
+            or read_stable_regular_file(manifest_path, require_single_link=True)
+            != json.dumps(
+                manifest_snapshot,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ):
+            raise ValueError("Queued CREST manifest payload does not match its immutable snapshot")
+        if str(snapshot.get("selected_input_xyz") or "") != str(selected_xyz):
+            raise ValueError("Queued CREST execution snapshot has a mismatched selected input")
+        if str(snapshot.get("mode") or "") != resolved_mode:
+            raise ValueError("Queued CREST execution snapshot has a mismatched mode")
+        if str(snapshot.get("molecule_key") or "") != resolved_molecule_key:
+            raise ValueError("Queued CREST execution snapshot has a mismatched molecule key")
+        if snapshot.get("resource_request") != resource_request:
+            raise ValueError("Queued CREST execution snapshot has a mismatched resource request")
     return ExecutionContext(
         entry=entry,
         job_dir=job_dir,
         selected_xyz=selected_xyz,
-        molecule_key=resolve_molecule_key(entry, selected_xyz, job_dir),
-        mode=context_deps.mode(entry),
-        resource_request=context_deps.entry_resource_request(cfg, entry),
+        molecule_key=resolved_molecule_key,
+        mode=resolved_mode,
+        resource_request=resource_request,
+        execution_snapshot=snapshot,
     )
 
 
@@ -387,6 +441,7 @@ def _mark_recovery_pending_entry(cfg: Any, entry: Any, *, reason: str) -> None:
         cfg,
         entry,
         dependencies=default_worker_execution_dependencies(),
+        verify_execution_snapshot=False,
     )
     _mark_recovery_pending_context(cfg, context, reason=reason)
 
@@ -471,6 +526,7 @@ def _run_crest_job_for_entry(
             cfg,
             job_dir=context.job_dir,
             selected_xyz=context.selected_xyz,
+            execution_snapshot=context.execution_snapshot,
             **launch_kwargs,
         )
 
@@ -505,6 +561,64 @@ def _finalize_processed_entry(
     queue_root: Path,
     dependencies: WorkerExecutionDependencies,
 ) -> Path | None:
+    output_identity_matches = True
+    output_identities: dict[str, dict[str, Any]] = {}
+    expected_output_identities = dict(result.output_identities)
+    try:
+        evidence_paths = (
+            {
+                *result.retained_conformer_paths,
+                result.stdout_log,
+                result.stderr_log,
+            }
+            if result.status == "completed" or expected_output_identities
+            else set()
+        )
+        for path in sorted(path for path in evidence_paths if path):
+            identity = _engine_runner.confined_output_identity(context.job_dir, path)
+            output_identities[str(identity["path"])] = identity
+    except (OSError, RuntimeError, TypeError, ValueError):
+        output_identity_matches = False
+    if expected_output_identities and output_identities != expected_output_identities:
+        output_identity_matches = False
+    result = dataclasses.replace(result, output_identities=output_identities)
+    snapshot_inputs = context.execution_snapshot.get("input_snapshots")
+    identity_matches = isinstance(snapshot_inputs, dict)
+    if isinstance(snapshot_inputs, dict):
+        try:
+            verify_input_snapshots(context.job_dir, snapshot_inputs)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            identity_matches = False
+    executable_identities = context.execution_snapshot.get("executable_identities")
+    if isinstance(executable_identities, dict):
+        try:
+            _engine_runner.verify_executable_identity(executable_identities.get("crest"))
+            _engine_runner.verify_executable_identity(executable_identities.get("xtb"))
+        except (OSError, RuntimeError, TypeError, ValueError):
+            identity_matches = False
+    else:
+        identity_matches = False
+    identity_matches = (
+        identity_matches
+        and output_identity_matches
+        and all(
+            (
+                str(getattr(result, "selected_input_xyz", "")) == str(context.selected_xyz),
+                str(getattr(result, "mode", "")) == context.mode,
+                getattr(result, "resource_request", None) == context.resource_request,
+            )
+        )
+    )
+    if not identity_matches and dataclasses.is_dataclass(result):
+        result = dataclasses.replace(
+            result,
+            status="failed",
+            reason="terminal_identity_mismatch",
+            exit_code=1,
+            selected_input_xyz=str(context.selected_xyz),
+            mode=context.mode,
+            resource_request=dict(context.resource_request),
+        )
     return _terminal_finalize_processed_entry(
         cfg,
         context,

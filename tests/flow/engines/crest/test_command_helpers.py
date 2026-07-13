@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import errno
 import os
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 from orca_auto.core.config.schema import CommonRuntimeConfig
+from orca_auto.core.queue.engine.input_snapshot import SNAPSHOT_DIR_NAME
 from orca_auto.flow.engines.crest import job_inputs as _helpers
+from orca_auto.flow.engines.crest import submission as crest_submission
 from tests.engine_artifact_helpers import (
     engine_payload as _engine_payload,
 )
@@ -54,6 +58,69 @@ def test_load_job_manifest_returns_empty_dict_when_manifest_is_missing(tmp_path:
     assert _helpers.load_job_manifest(tmp_path) == {}
 
 
+def test_submission_failure_removes_its_snapshot_namespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    namespace: Path | None = None
+
+    def fail_after_namespace(*args: object, **kwargs: object) -> object:
+        nonlocal namespace
+        snapshot_namespace = kwargs["snapshot_namespace"]
+        assert isinstance(snapshot_namespace, str)
+        namespace = job_dir / SNAPSHOT_DIR_NAME / snapshot_namespace
+        (namespace / "partial").write_text("partial", encoding="utf-8")
+        raise OSError(errno.EIO, "simulated snapshot fsync failure")
+
+    monkeypatch.setattr(crest_submission, "new_job_id", lambda: "crest-fsync-failure")
+    monkeypatch.setattr(crest_submission, "_build_submission_impl", fail_after_namespace)
+
+    with pytest.raises(OSError, match="simulated snapshot fsync failure"):
+        crest_submission._build_submission(object(), job_dir, {}, object())
+
+    assert namespace is not None
+    assert not namespace.exists()
+
+
+def test_submission_validates_electronic_state_on_selected_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed_root = tmp_path / "allowed"
+    job_dir = allowed_root / "job"
+    job_dir.mkdir(parents=True)
+    selected = job_dir / "h.xyz"
+    selected.write_text("1\ndoublet\nH 0 0 0\n", encoding="utf-8")
+    executable_dir = tmp_path / "bin"
+    executable_dir.mkdir()
+    crest_executable = executable_dir / "crest"
+    xtb_executable = executable_dir / "xtb"
+    for executable in (crest_executable, xtb_executable):
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o700)
+    cfg = SimpleNamespace(
+        runtime=SimpleNamespace(allowed_root=str(allowed_root)),
+        resources=SimpleNamespace(max_cores_per_task=4, max_memory_gb_per_task=8),
+        paths=SimpleNamespace(
+            crest_executable=str(crest_executable),
+            xtb_executable=str(xtb_executable),
+        ),
+    )
+    monkeypatch.setattr(crest_submission, "new_job_id", lambda: "crest-electronic-state")
+
+    with pytest.raises(ValueError, match="parity"):
+        crest_submission._build_submission(
+            cfg,
+            job_dir,
+            {"input_xyz": "h.xyz", "charge": 0, "uhf": 0},
+            SimpleNamespace(priority=10),
+        )
+
+    assert not (job_dir / SNAPSHOT_DIR_NAME / "crest-electronic-state").exists()
+
+
 def test_load_job_manifest_reads_yaml_mapping(tmp_path: Path) -> None:
     manifest_path = tmp_path / _helpers.MANIFEST_FILE_NAME
     manifest_path.write_text("mode: nci\ninput_xyz: picked.xyz\n", encoding="utf-8")
@@ -76,11 +143,15 @@ def test_load_job_manifest_rejects_non_mapping_yaml(tmp_path: Path) -> None:
     [
         ({}, "standard"),
         ({"mode": " NCI "}, "nci"),
-        ({"mode": "fast"}, "standard"),
     ],
 )
 def test_job_mode_normalizes_mode_values(manifest: dict[str, object], expected: str) -> None:
     assert _helpers.job_mode(manifest) == expected
+
+
+def test_job_mode_rejects_unknown_value() -> None:
+    with pytest.raises(ValueError, match="standard.*nci"):
+        _helpers.job_mode({"mode": "fast"})
 
 
 def test_select_latest_xyz_prefers_non_generated_candidates(tmp_path: Path) -> None:
@@ -204,4 +275,4 @@ def test_resolve_job_dir_accepts_job_under_allowed_root(tmp_path: Path) -> None:
 def test_new_job_id_uses_crest_prefix_and_timestamp_shape() -> None:
     job_id = _helpers.new_job_id()
 
-    assert re.fullmatch(r"crest_\d{8}_\d{6}_[0-9a-f]{6}", job_id)
+    assert re.fullmatch(r"crest_\d{8}_\d{6}_[0-9a-f]{32}", job_id)

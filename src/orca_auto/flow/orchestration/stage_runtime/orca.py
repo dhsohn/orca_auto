@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.stage_runtime.shared import (
     _apply_contract_status,
@@ -40,7 +41,7 @@ def _submit_orca_stage(
 ) -> None:
     submission = o.engines.submit_reaction_dir(
         reaction_dir=str(enqueue_payload.get("reaction_dir", "")),
-        priority=int(enqueue_payload.get("priority", 10) or 10),
+        priority=normalize_queue_priority(enqueue_payload.get("priority")),
         config_path=str(orca_config),
         repo_root=orca_repo_root,
         **_orca_submission_resource_kwargs(o, enqueue_payload),

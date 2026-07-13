@@ -278,7 +278,11 @@ def orca_records(
     if callable(reconcile):
         reconcile(allowed_root)
 
-    queue_entries = list(queue_adapter.list_queue(allowed_root))
+    queue_entries = [
+        entry
+        for entry in queue_adapter.list_queue(allowed_root)
+        if queue_adapter.is_orca_queue_entry(entry)
+    ]
     snapshots = list(run_snapshot.collect_run_snapshots(allowed_root))
     snapshot_by_run_id, snapshot_by_dir = snapshot_indexes(snapshots)
     represented_snapshot_keys: set[str] = set()

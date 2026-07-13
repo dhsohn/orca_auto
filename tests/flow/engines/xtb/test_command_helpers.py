@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import errno
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
+from orca_auto.core.queue.engine.input_snapshot import SNAPSHOT_DIR_NAME
 from orca_auto.flow.engines.xtb import job_inputs as _helpers
+from orca_auto.flow.engines.xtb import submission as xtb_submission
 from tests.engine_artifact_helpers import (
     engine_payload as _engine_payload,
 )
@@ -76,7 +80,6 @@ def test_as_int_new_job_id_and_choose_xyz_error_paths(
     text_file = xyz_root / "notes.txt"
     text_file.write_text("not xyz\n", encoding="utf-8")
 
-    assert _helpers._as_int("oops", 7) == 7
     monkeypatch.setattr(_helpers, "timestamped_token", lambda prefix: f"{prefix}_001")
     assert _helpers.new_job_id() == "xtb_001"
 
@@ -127,7 +130,7 @@ def test_resolve_job_inputs_ranking_collects_sorted_candidates(tmp_path: Path) -
     manifest = {
         "job_type": "ranking",
         "candidates_dir": "screening-set",
-        "top_n": 0,
+        "top_n": 2,
     }
 
     resolved = _helpers.resolve_job_inputs(job_dir, manifest)
@@ -144,9 +147,69 @@ def test_resolve_job_inputs_ranking_collects_sorted_candidates(tmp_path: Path) -
                 str(selected_candidate.resolve()),
                 str(trailing_candidate.resolve()),
             ],
-            "top_n": 1,
+            "top_n": 2,
+            "estimated_evaluations": 2,
+            "max_ranking_evaluations": 100,
         },
     }
+
+
+def test_submission_failure_removes_its_snapshot_namespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    namespace: Path | None = None
+
+    def fail_after_namespace(*args: object, **kwargs: object) -> object:
+        nonlocal namespace
+        snapshot_namespace = kwargs["snapshot_namespace"]
+        assert isinstance(snapshot_namespace, str)
+        namespace = job_dir / SNAPSHOT_DIR_NAME / snapshot_namespace
+        (namespace / "partial").write_text("partial", encoding="utf-8")
+        raise OSError(errno.EIO, "simulated snapshot fsync failure")
+
+    monkeypatch.setattr(xtb_submission, "new_job_id", lambda: "xtb-fsync-failure")
+    monkeypatch.setattr(xtb_submission, "_build_submission_impl", fail_after_namespace)
+
+    with pytest.raises(OSError, match="simulated snapshot fsync failure"):
+        xtb_submission._build_submission(object(), job_dir, {}, object())
+
+    assert namespace is not None
+    assert not namespace.exists()
+
+
+def test_submission_validates_electronic_state_on_selected_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed_root = tmp_path / "allowed"
+    job_dir = allowed_root / "job"
+    job_dir.mkdir(parents=True)
+    selected = job_dir / "h.xyz"
+    selected.write_text("1\ndoublet\nH 0 0 0\n", encoding="utf-8")
+    executable_dir = tmp_path / "bin"
+    executable_dir.mkdir()
+    xtb_executable = executable_dir / "xtb"
+    xtb_executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    xtb_executable.chmod(0o700)
+    cfg = SimpleNamespace(
+        runtime=SimpleNamespace(allowed_root=str(allowed_root)),
+        resources=SimpleNamespace(max_cores_per_task=4, max_memory_gb_per_task=8),
+        paths=SimpleNamespace(xtb_executable=str(xtb_executable)),
+    )
+    monkeypatch.setattr(xtb_submission, "new_job_id", lambda: "xtb-electronic-state")
+
+    with pytest.raises(ValueError, match="parity"):
+        xtb_submission._build_submission(
+            cfg,
+            job_dir,
+            {"job_type": "sp", "input_xyz": "h.xyz", "charge": 0, "uhf": 0},
+            SimpleNamespace(priority=10),
+        )
+
+    assert not (job_dir / SNAPSHOT_DIR_NAME / "xtb-electronic-state").exists()
 
 
 def test_resolve_job_inputs_reports_missing_required_directories_and_candidates(

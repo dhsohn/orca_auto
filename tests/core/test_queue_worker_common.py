@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -29,6 +29,11 @@ from orca_auto.core.queue.publication import (
 )
 from orca_auto.core.queue.worker import process as worker_process_helpers
 from tests.process_helpers import FakeManagedProcess, recording_killpg
+
+
+def _append_and_return(items: Any, value: Any, result: Any) -> Any:
+    items.append(value)
+    return result
 
 
 def _cfg(**runtime_overrides: object) -> SimpleNamespace:
@@ -216,7 +221,11 @@ def test_dequeue_next_across_roots_filters_single_root_and_dequeues_accepted_ent
     entries = [rejected, accepted]
     dequeued_ids: list[str] = []
 
-    def dequeue_entry(_root: Path, queue_id: str) -> SimpleNamespace | None:
+    def dequeue_entry(
+        _root: Path,
+        queue_id: str,
+        **_kwargs: object,
+    ) -> SimpleNamespace | None:
         dequeued_ids.append(queue_id)
         for entry in entries:
             if entry.queue_id == queue_id:
@@ -280,6 +289,24 @@ def test_dequeue_next_across_roots_selects_best_pending_entry(tmp_path: Path) ->
     )
 
     assert result == (second, queues[second][0])
+
+
+def test_dequeue_next_across_roots_preserves_zero_priority(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    zero_priority = _entry("zero", priority=0)
+    queues = {
+        first: [zero_priority],
+        second: [_entry("one", priority=1)],
+    }
+
+    result = worker_common.dequeue_next_across_roots(
+        (first, second),
+        list_queue_fn=lambda root: queues[root],
+        dequeue_next_fn=lambda root: queues[root][0],
+    )
+
+    assert result == (first, zero_priority)
 
 
 def test_dequeue_next_across_roots_skips_entry_with_live_publisher(tmp_path: Path) -> None:
@@ -349,10 +376,14 @@ def test_dequeue_next_across_roots_dequeues_selected_queue_id(tmp_path: Path) ->
         first: [_entry("wrong-root-entry", priority=5)],
         second: [winner, _entry("same-root-later", priority=9)],
     }
-    dequeued_ids: list[tuple[Path, str]] = []
+    dequeued_calls: list[tuple[Path, str, dict[str, object]]] = []
 
-    def dequeue_entry(root: Path, queue_id: str) -> SimpleNamespace | None:
-        dequeued_ids.append((root, queue_id))
+    def dequeue_entry(
+        root: Path,
+        queue_id: str,
+        **kwargs: object,
+    ) -> SimpleNamespace | None:
+        dequeued_calls.append((root, queue_id, kwargs))
         for entry in queues[root]:
             if entry.queue_id == queue_id:
                 return entry
@@ -369,7 +400,9 @@ def test_dequeue_next_across_roots_dequeues_selected_queue_id(tmp_path: Path) ->
     )
 
     assert result == (second, winner)
-    assert dequeued_ids == [(second, "winner")]
+    assert dequeued_calls == [
+        (second, "winner", {"expected_entry": winner}),
+    ]
 
 
 def test_dequeue_next_across_roots_returns_none_when_selected_entry_disappears(
@@ -381,7 +414,11 @@ def test_dequeue_next_across_roots_returns_none_when_selected_entry_disappears(
     def fail_dequeue_next(_root: Path) -> SimpleNamespace | None:
         pytest.fail("dequeue_next should not run with id dequeuer")
 
-    def missing_entry(_root: Path, _queue_id: str) -> SimpleNamespace | None:
+    def missing_entry(
+        _root: Path,
+        _queue_id: str,
+        **_kwargs: object,
+    ) -> SimpleNamespace | None:
         return None
 
     result = worker_common.dequeue_next_across_roots(
@@ -481,7 +518,9 @@ def test_start_background_process_redirects_output_to_log_file(
     def fake_popen(command: list[str], **kwargs: object) -> object:
         calls.append({"command": command, **kwargs})
         stdout = kwargs["stdout"]
-        assert getattr(stdout, "name", None) == str(log_path)
+        descriptor = getattr(stdout, "name", None)
+        assert isinstance(descriptor, int)
+        assert Path(f"/proc/self/fd/{descriptor}").resolve() == log_path.resolve()
         assert not bool(getattr(stdout, "closed", True))
         return expected
 
@@ -1243,10 +1282,14 @@ def test_reconcile_orphaned_child_queue_entries_cancels_or_requeues_only_orphans
             str(admission_root)
         ),
         running_status=SimpleNamespace(value="running"),
-        mark_cancelled_fn=lambda root, queue_id, *, error: cancelled.append(
+        mark_cancelled_fn=lambda root, queue_id, *, error, **_kwargs: cancelled.append(
             (str(root), queue_id, error)
         ),
-        requeue_running_entry_fn=lambda root, queue_id: requeued.append((str(root), queue_id)),
+        requeue_running_entry_fn=lambda root, queue_id, **_kwargs: _append_and_return(
+            requeued,
+            (str(root), queue_id),
+            next(current for current in entries if current.queue_id == queue_id),
+        ),
         mark_recovery_pending_fn=lambda _cfg, entry: recovery_pending.append(entry.queue_id),
     )
 
@@ -1266,7 +1309,7 @@ def test_finalize_child_exit_with_policy_preserves_root_and_uses_recovery_entry(
         entry=_entry("job-entry", status="running"),
         admission_token="slot-1",
     )
-    requeued: list[tuple[Path, str]] = []
+    requeued: list[tuple[Path, str, dict[str, object]]] = []
     recovery: list[tuple[object, str, str]] = []
     released: list[str] = []
 
@@ -1278,16 +1321,84 @@ def test_finalize_child_exit_with_policy_preserves_root_and_uses_recovery_entry(
         ),
         find_queue_entry_fn=lambda _root, _queue_id: current,
         mark_cancelled_fn=lambda *args, **kwargs: None,
-        requeue_running_entry_fn=lambda root, queue_id: requeued.append((root, queue_id)),
+        requeue_running_entry_fn=lambda root, queue_id, **kwargs: _append_and_return(
+            requeued,
+            (root, queue_id, kwargs),
+            current,
+        ),
         mark_recovery_pending_fn=lambda cfg_obj, entry, *, reason: recovery.append(
             (cfg_obj, entry.queue_id, reason)
         ),
         release_admission_slot_fn=released.append,
     )
 
-    assert requeued == [(tmp_path / "queue", "current")]
+    assert requeued == [
+        (tmp_path / "queue", "current", {"expected_entry": current}),
+    ]
     assert recovery == [(cfg, "job-entry", "worker_shutdown")]
     assert released == ["slot-1"]
+
+
+def test_finalize_child_exit_skips_replacement_generation(tmp_path: Path) -> None:
+    job_entry = _entry("q-same", status="running")
+    job_entry.task_id = "task-a"
+    replacement = _entry("q-same", status="running", cancel_requested=True)
+    replacement.task_id = "task-b"
+    job = SimpleNamespace(
+        queue_root=tmp_path / "queue",
+        entry=job_entry,
+        admission_token="slot-a",
+    )
+    mutations: list[str] = []
+    released: list[str] = []
+
+    lifecycle_helpers.finalize_child_exit_with_policy(
+        object(),
+        job,
+        policy=lifecycle_helpers.ChildExitPolicy(),
+        find_queue_entry_fn=lambda _root, _queue_id: replacement,
+        mark_cancelled_fn=lambda *_args, **_kwargs: mutations.append("cancelled"),
+        requeue_running_entry_fn=lambda *_args, **_kwargs: mutations.append("requeued"),
+        mark_recovery_pending_fn=lambda *_args, **_kwargs: mutations.append("recovery"),
+        release_admission_slot_fn=released.append,
+    )
+
+    assert mutations == []
+    assert released == ["slot-a"]
+
+
+def test_start_error_mark_is_fenced_to_selected_entry(tmp_path: Path) -> None:
+    selected = SimpleNamespace(queue_id="q-same", task_id="task-a")
+    replacement = SimpleNamespace(queue_id="q-same", task_id="task-b")
+    durable = [replacement]
+    released: list[str] = []
+    worker = SimpleNamespace(
+        _running_queue_id=lambda entry: entry.queue_id,
+        _release_admission_slot=released.append,
+    )
+
+    def mark_failed(
+        _root: Path,
+        queue_id: str,
+        *,
+        expected_entry: object,
+        **_kwargs: object,
+    ) -> None:
+        if durable[0] is expected_entry:
+            durable.clear()
+        assert queue_id == "q-same"
+
+    worker_process_helpers.ChildProcessQueueWorker._mark_entry_failed_and_release(
+        cast(Any, worker),
+        tmp_path,
+        selected,
+        "slot-a",
+        error="start failed",
+        mark_failed_fn=mark_failed,
+    )
+
+    assert durable == [replacement]
+    assert released == ["slot-a"]
 
 
 def test_terminal_mark_result_preserves_premark_generation_context(
@@ -1303,7 +1414,7 @@ def test_terminal_mark_result_preserves_premark_generation_context(
     job = SimpleNamespace(
         queue_root=queue_root,
         reaction_dir=str(tmp_path / "rxn"),
-        task_id="task-job",
+        task_id="task-current",
     )
 
     def get_run_id(reaction_dir: str, **kwargs: object) -> str:
@@ -1337,7 +1448,12 @@ def test_terminal_mark_result_preserves_premark_generation_context(
         (
             queue_root.resolve(),
             "q-1",
-            {"error": "exit_code=17", "run_id": "run-current"},
+            {
+                "error": "exit_code=17",
+                "run_id": "run-current",
+                "expected_entry": current,
+                "expected_task_id": "task-current",
+            },
         )
     ]
 
@@ -1352,7 +1468,7 @@ def test_terminal_mark_result_preserves_skipped_entry_identity_and_bool_api(
     job = SimpleNamespace(
         queue_root=queue_root,
         reaction_dir=str(tmp_path / "rxn"),
-        task_id="task-job",
+        task_id="task-current",
     )
     hooks = _process_lifecycle_hooks(
         find_queue_entry_fn=lambda _root, _queue_id: current,
@@ -1391,7 +1507,7 @@ def test_terminal_mark_result_reports_failed_queue_mutation(tmp_path: Path) -> N
     job = SimpleNamespace(
         queue_root=queue_root,
         reaction_dir=str(tmp_path / "rxn"),
-        task_id="task-job",
+        task_id="task-current",
     )
 
     result = lifecycle_helpers.mark_terminal_process_queue_entry_with_result(
@@ -1737,7 +1853,11 @@ def test_reconcile_orphaned_running_with_policy_preserves_roots_and_reason(
         list_slots_fn=lambda _root: [],
         reconcile_stale_slots_fn=lambda _root: None,
         mark_cancelled_fn=lambda *args, **kwargs: None,
-        requeue_running_entry_fn=lambda root, queue_id: requeued.append((root, queue_id)),
+        requeue_running_entry_fn=lambda root, queue_id, **_kwargs: _append_and_return(
+            requeued,
+            (root, queue_id),
+            entry,
+        ),
         mark_recovery_pending_fn=lambda _cfg, current, *, reason: recovery.append(
             (current.queue_id, reason)
         ),

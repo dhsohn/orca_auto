@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.flow.orchestration.stage_runtime.shared import (
     _apply_submission_result,
     _submission_is_deferred,
@@ -66,7 +67,7 @@ def _submit_xtb_stage(
     )
     submission = o.engines.submit_xtb_job_dir(
         job_dir=job_dir,
-        priority=int(task["enqueue_payload"].get("priority", 10) or 10),
+        priority=normalize_queue_priority(task["enqueue_payload"].get("priority")),
         config_path=str(xtb_config),
     )
     submission["submitted_at"] = o.persistence.now_utc_iso()

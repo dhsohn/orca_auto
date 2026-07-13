@@ -68,7 +68,14 @@ def test_engine_artifact_payload_has_common_shape(engine: str, state: str) -> No
         "artifacts",
         "engine_payload",
     }
-    assert set(payload["job"]) == {"id", "queue_id", "dir", "app_name", "task_id"}
+    assert set(payload["job"]) == {
+        "id",
+        "queue_id",
+        "dir",
+        "app_name",
+        "task_id",
+        "generation",
+    }
     assert set(payload["status"]) == {"state", "reason", "exit_code"}
     assert set(payload["input"]) == {"primary_path", "selected_xyz_path"}
     assert set(payload["resources"]) == {"request", "actual"}

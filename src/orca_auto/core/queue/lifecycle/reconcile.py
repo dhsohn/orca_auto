@@ -84,9 +84,10 @@ def reconcile_orphaned_running(
             queue_id,
             **kwargs,
         ),
-        requeue_running_entry_fn=lambda root, queue_id: requeue_running_entry_fn(
+        requeue_running_entry_fn=lambda root, queue_id, **kwargs: requeue_running_entry_fn(
             root,
             queue_id,
+            **kwargs,
         ),
         mark_recovery_pending_fn=lambda cfg_obj, entry: mark_recovery_pending_fn(
             cfg_obj,

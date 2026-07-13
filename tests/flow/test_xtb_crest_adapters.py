@@ -10,7 +10,7 @@ from orca_auto.flow.adapters.crest import (
     select_crest_downstream_inputs,
 )
 from orca_auto.flow.adapters.xtb import load_xtb_artifact_contract, select_xtb_downstream_inputs
-from orca_auto.flow.contracts.crest import CrestDownstreamPolicy
+from orca_auto.flow.contracts.crest import CrestArtifactContract, CrestDownstreamPolicy
 from orca_auto.flow.contracts.xtb import XtbArtifactContract, XtbDownstreamPolicy
 from tests.engine_artifact_helpers import artifact_payload
 
@@ -125,6 +125,28 @@ def _write_crest_state(
     )
 
 
+def _write_xtb_state(
+    job_dir: Path,
+    *,
+    job_id: str,
+    status: str,
+    selected_input_xyz: Path | str = "",
+    engine_payload: dict[str, object] | None = None,
+) -> None:
+    _write_json(
+        job_dir / "job_state.json",
+        artifact_payload(
+            engine="xtb",
+            job_id=job_id,
+            job_dir=str(job_dir),
+            status=status,
+            primary_path=str(selected_input_xyz),
+            selected_xyz_path=str(selected_input_xyz),
+            engine_payload=engine_payload,
+        ),
+    )
+
+
 def test_load_xtb_artifact_contract_parses_candidate_details_from_direct_path_target(
     tmp_path: Path,
 ) -> None:
@@ -182,7 +204,9 @@ def test_load_xtb_artifact_contract_parses_candidate_details_from_direct_path_ta
     details_by_kind = {detail.kind: detail for detail in contract.candidate_details}
     assert details_by_kind["ts_guess"].selected is True
     assert details_by_kind["ts_guess"].score == pytest.approx(-0.5)
-    assert details_by_kind["ts_guess"].metadata == {"source": "scan"}
+    assert details_by_kind["ts_guess"].metadata["source"] == "scan"
+    assert details_by_kind["ts_guess"].metadata["identity_backfilled_from_legacy_artifact"] is True
+    assert details_by_kind["ts_guess"].metadata["output_identity"]["sha256"]
     assert details_by_kind["optimized_geometry"].selected is False
 
     stage_inputs = select_xtb_downstream_inputs(contract, require_geometry=True)
@@ -191,7 +215,8 @@ def test_load_xtb_artifact_contract_parses_candidate_details_from_direct_path_ta
     assert stage_inputs[0].artifact_path == str(ts_guess)
     assert stage_inputs[0].kind == "ts_guess"
     assert stage_inputs[0].selected is True
-    assert stage_inputs[0].metadata == {"source": "scan"}
+    assert stage_inputs[0].metadata["source"] == "scan"
+    assert stage_inputs[0].metadata["output_identity"]["sha256"]
 
 
 def test_load_xtb_artifact_contract_preserves_selected_candidate_paths_without_details(
@@ -242,6 +267,67 @@ def test_load_xtb_artifact_contract_preserves_selected_candidate_paths_without_d
     assert contract.resource_request == {"max_cores": 8}
     assert contract.resource_actual == {"max_cores": 8}
     assert contract.candidate_details == ()
+
+
+def test_load_xtb_artifact_contract_prefers_active_state_over_stale_report(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "xtb_active_state"
+    old_candidate = job_dir / "old.xyz"
+    active_input = job_dir / "active_input.xyz"
+    _write_xyz(old_candidate)
+    _write_xyz(active_input)
+    _write_xtb_report(
+        job_dir,
+        job_id="old-job",
+        engine_payload={
+            "job_type": "path_search",
+            "reaction_key": "old",
+            "candidate_details": [{"rank": 1, "kind": "ts_guess", "path": str(old_candidate)}],
+        },
+    )
+    _write_xtb_state(
+        job_dir,
+        job_id="new-job",
+        status="running",
+        selected_input_xyz=active_input,
+        engine_payload={"job_type": "opt", "reaction_key": "new"},
+    )
+
+    contract = load_xtb_artifact_contract(xtb_index_root=tmp_path, target=str(job_dir))
+
+    assert contract.job_id == "new-job"
+    assert contract.status == "running"
+    assert contract.reaction_key == "new"
+    assert contract.candidate_details == ()
+
+
+def test_xtb_and_crest_contracts_reject_existing_artifacts_outside_job_dir(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside.xyz"
+    _write_xyz(outside)
+    xtb_job_dir = tmp_path / "xtb_job"
+    _write_xtb_report(
+        xtb_job_dir,
+        job_id="xtb-job",
+        engine_payload={
+            "candidate_details": [
+                {"rank": 1, "kind": "ts_guess", "path": str(outside), "selected": True}
+            ]
+        },
+    )
+    with pytest.raises(ValueError, match="escapes job_dir"):
+        load_xtb_artifact_contract(xtb_index_root=tmp_path, target=str(xtb_job_dir))
+
+    crest_job_dir = tmp_path / "crest_job"
+    _write_crest_report(
+        crest_job_dir,
+        job_id="crest-job",
+        engine_payload={"retained_conformer_paths": [str(outside)]},
+    )
+    with pytest.raises(ValueError, match="escapes job_dir"):
+        load_crest_artifact_contract(crest_index_root=tmp_path, target=str(crest_job_dir))
 
 
 def test_load_xtb_artifact_contract_ignores_malformed_candidate_details(
@@ -385,7 +471,11 @@ def test_load_crest_artifact_contract_and_select_retained_conformers(tmp_path: P
     assert stage_inputs[0].source_job_type == "crest_nci"
     assert stage_inputs[0].kind == "crest_conformer"
     assert stage_inputs[0].selected is True
-    assert stage_inputs[0].metadata == {"mode": "nci"}
+    assert stage_inputs[0].metadata["mode"] == "nci"
+    assert (
+        stage_inputs[0].metadata["output_identity"]["identity_backfilled_from_legacy_artifact"]
+        is True
+    )
     assert stage_inputs[1].artifact_path == str(conformer_two)
     assert stage_inputs[1].selected is False
 
@@ -532,12 +622,45 @@ def test_select_crest_downstream_inputs_splits_multiframe_retained_ensemble(tmp_
     assert [item.rank for item in stage_inputs] == [1, 2]
     assert all(item.artifact_path == str(retained_ensemble.resolve()) for item in stage_inputs)
     assert stage_inputs[0].selected is True
-    assert stage_inputs[0].metadata == {
+    expected_metadata = {
         "mode": "standard",
         "source_artifact_path": str(retained_ensemble.resolve()),
         "source_frame_index": 1,
         "source_frame_count": 3,
         "source_frame_energy": -2.0,
     }
+    assert {
+        key: value for key, value in stage_inputs[0].metadata.items() if key != "output_identity"
+    } == expected_metadata
+    assert stage_inputs[0].metadata["output_identity"]["sha256"]
     assert stage_inputs[1].selected is False
     assert stage_inputs[1].metadata["source_frame_index"] == 2
+
+
+def test_select_crest_downstream_inputs_deduplicates_geometry_across_retained_files(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "crest_duplicate"
+    first = job_dir / "crest_conformers.xyz"
+    duplicate = job_dir / "crest_best.xyz"
+    distinct = job_dir / "crest_rotamers.xyz"
+    _write_xyz(first, comment="first source")
+    _write_xyz(duplicate, comment="duplicate source")
+    distinct.parent.mkdir(parents=True, exist_ok=True)
+    distinct.write_text("2\ndistinct\nH 0.2 0 0\nH 0 0 0.74\n", encoding="utf-8")
+    contract = CrestArtifactContract(
+        job_id="crest-duplicate",
+        mode="standard",
+        status="completed",
+        reason="completed",
+        job_dir=str(job_dir),
+        latest_known_path=str(job_dir),
+        retained_conformer_paths=(str(first), str(duplicate), str(distinct)),
+    )
+
+    stage_inputs = select_crest_downstream_inputs(
+        contract, policy=CrestDownstreamPolicy.build(max_candidates=8)
+    )
+
+    assert [item.artifact_path for item in stage_inputs] == [str(first), str(distinct)]
+    assert [item.rank for item in stage_inputs] == [1, 2]

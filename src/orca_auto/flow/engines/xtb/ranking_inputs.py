@@ -6,16 +6,23 @@ from typing import Any
 
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 
+from .job_inputs import MAX_RANKING_CANDIDATES
 from .ranking_models import RankingDeps, RankingRunContext
 
 
 def ranking_top_n(manifest: dict[str, Any]) -> int:
     raw = manifest.get("top_n", 3)
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        value = 3
-    return max(1, value)
+    if isinstance(raw, bool):
+        raise ValueError("xTB ranking top_n must be a positive integer")
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str) and raw.strip().isdigit():
+        value = int(raw.strip())
+    else:
+        raise ValueError("xTB ranking top_n must be a positive integer")
+    if not 1 <= value <= MAX_RANKING_CANDIDATES:
+        raise ValueError(f"xTB ranking top_n must be between 1 and {MAX_RANKING_CANDIDATES}")
+    return value
 
 
 def safe_rank_name(name: str, *, fallback: str) -> str:

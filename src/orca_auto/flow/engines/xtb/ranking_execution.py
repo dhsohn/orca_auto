@@ -5,6 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 
 from .ranking_inputs import ranking_candidate_run_dir
@@ -58,6 +59,7 @@ def ranking_candidate_result(
     result: Any,
     energy: float | None,
     energy_source: str,
+    energy_evidence_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "candidate_path": str(candidate_path.resolve()),
@@ -68,6 +70,7 @@ def ranking_candidate_result(
         "selected_input_xyz": result.selected_input_xyz,
         "total_energy": energy,
         "energy_source": energy_source,
+        "energy_evidence_identity": dict(energy_evidence_identity or {}),
         "command": list(result.command),
         "analysis_summary": dict(result.analysis_summary),
     }
@@ -102,7 +105,28 @@ def collect_ranking_candidate_results(
             terminate_process=terminate_process,
             deps=deps,
         )
+        evidence_path = candidate_run_dir / "xtbout.json"
+        evidence_before: dict[str, Any] | None = None
+        if evidence_path.exists():
+            try:
+                evidence_before = _engine_runner.confined_output_identity(
+                    candidate_run_dir,
+                    evidence_path,
+                )
+            except (OSError, RuntimeError, TypeError, ValueError):
+                evidence_before = None
         energy, energy_source = deps.extract_sp_energy(candidate_run_dir, candidate_path)
+        evidence_after: dict[str, Any] | None = None
+        if evidence_before is not None:
+            try:
+                evidence_after = _engine_runner.confined_output_identity(
+                    candidate_run_dir,
+                    evidence_path,
+                )
+            except (OSError, RuntimeError, TypeError, ValueError):
+                evidence_after = None
+        if evidence_before != evidence_after:
+            energy, energy_source = None, ""
         command_summary.append(list(result.command))
         candidate_results.append(
             ranking_candidate_result(
@@ -111,6 +135,7 @@ def collect_ranking_candidate_results(
                 result=result,
                 energy=energy,
                 energy_source=energy_source,
+                energy_evidence_identity=evidence_after,
             )
         )
         if result.status == "cancelled":

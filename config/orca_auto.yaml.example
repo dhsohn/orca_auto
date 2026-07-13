@@ -36,13 +36,18 @@ workflow:
   paths:
     # Executables used by workflow-managed internal stages. If set, each value
     # must be an absolute Linux path to an existing executable file. Leave blank
-    # only when you intentionally want PATH lookup at runtime.
+    # only when you intentionally want PATH lookup during submission; the
+    # resolved executable path and content identity are then bound to that queue generation.
     xtb_executable: /home/user/bin/xtb-dist/bin/xtb
     crest_executable: /home/user/bin/crest/crest
   # Internal xTB/CREST runtime roots are derived automatically and are not set
   # directly in config. Each workflow keeps its own queue.json,
   # job_locations.json, and job dirs under one directory per engine stage,
   # e.g. <runs_root>/<workflow_id>/01_crest, .../02_xtb, .../03_orca.
+  # Fixed admission guardrails are not config knobs: YAML job manifests are at
+  # most 1 MiB/32 aliases/10,000 nodes/64 levels with cyclic/recursive graphs
+  # rejected; geometries are capped at 10,000 atoms locally, 1,000 for xTB/ORCA
+  # Hessian-producing jobs, and 200 for remote uploads.
 
 messenger:
   # Selects where outbound run/queue/monitor notifications are delivered.

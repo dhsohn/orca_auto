@@ -62,6 +62,10 @@ def test_write_execution_artifacts_includes_ranking_summary_lines(tmp_path: Path
         task_id="job-1",
         queue_id="queue-1",
         app_name="orca_auto",
+        task_kind="xtb_ranking",
+        engine="xtb",
+        priority=10,
+        enqueued_at="2026-04-19T23:59:00Z",
         metadata={"job_dir": str(job_dir)},
     )
     result = queue_cmd.XtbRunResult(
@@ -366,7 +370,7 @@ def test_terminal_summary_helpers_cover_status_reason_and_metadata(
         job_id="job-1",
         status="cancelled",
         reason="cancel_requested",
-        metadata_update={"job_type": "ranking"},
+        metadata_update={},
     )
     assert terminal_mod.terminal_status({}, {}, None, 0) == "completed"
     assert terminal_mod.terminal_status({}, {}, None, 1) == "failed"
@@ -424,7 +428,7 @@ def test_ensure_terminal_queue_status_skips_terminal_and_marks_nonterminal(
         ),
         mark_completed_fn=lambda *_args, **_kwargs: pytest.fail("should mark failed"),
         mark_cancelled_fn=lambda *_args, **_kwargs: pytest.fail("should mark failed"),
-        mark_failed_fn=lambda root, queue_id, *, error, metadata_update: calls.append(
+        mark_failed_fn=lambda root, queue_id, *, error, metadata_update, **_kwargs: calls.append(
             (root, queue_id, error, metadata_update)
         ),
     )

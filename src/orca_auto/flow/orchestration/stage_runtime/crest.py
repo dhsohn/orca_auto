@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from orca_auto.core.engine_process import atomic_write_confined_bytes, ensure_confined_directory
+from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
+from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.stage_runtime.shared import (
     _apply_contract_status,
@@ -42,9 +44,14 @@ def ensure_crest_job_dir_impl(
         return existing
     stage_id = stage_view.stage_id(o)
     job_dir = crest_allowed_root / stage_id
-    job_dir.mkdir(parents=True, exist_ok=True)
+    ensure_confined_directory(crest_allowed_root, job_dir, label="CREST stage job directory")
     input_target = job_dir / "input.xyz"
-    shutil.copy2(Path(payload["source_input_xyz"]).expanduser().resolve(), input_target)
+    atomic_write_confined_bytes(
+        job_dir,
+        input_target,
+        read_stable_regular_file(Path(payload["source_input_xyz"]).expanduser()),
+        label="CREST materialized input",
+    )
     overrides = _manifest_override_mapping(payload.get("job_manifest_overrides"))
     task_resource_request = task_view.resource_request()
     manifest_payload: dict[str, Any] = {
@@ -63,9 +70,11 @@ def ensure_crest_job_dir_impl(
         ),
     }
     manifest_payload["input_xyz"] = "input.xyz"
-    (job_dir / "crest_job.yaml").write_text(
-        yaml.safe_dump(manifest_payload, sort_keys=False, allow_unicode=False),
-        encoding="utf-8",
+    atomic_write_confined_bytes(
+        job_dir,
+        job_dir / "crest_job.yaml",
+        yaml.safe_dump(manifest_payload, sort_keys=False, allow_unicode=False).encode("utf-8"),
+        label="CREST materialized manifest",
     )
     task_view.record_crest_job_materialization(job_dir=job_dir, input_target=input_target)
     return str(job_dir)
@@ -89,7 +98,7 @@ def _submit_crest_stage(
     enqueue_payload = task_view.enqueue_payload()
     submission = o.engines.submit_crest_job_dir(
         job_dir=job_dir,
-        priority=int(enqueue_payload.get("priority", 10) or 10),
+        priority=normalize_queue_priority(enqueue_payload.get("priority")),
         config_path=str(crest_config),
     )
     submission["submitted_at"] = o.persistence.now_utc_iso()

@@ -52,6 +52,7 @@ def test_build_execution_context_resolves_entry_metadata(tmp_path: Path) -> None
             f"{actual_entry is entry}:{actual_selected == selected_xyz.resolve()}:"
             f"{actual_job_dir == job_dir.resolve()}"
         ),
+        verify_execution_snapshot=False,
     )
 
     assert context == worker_context.ExecutionContext(

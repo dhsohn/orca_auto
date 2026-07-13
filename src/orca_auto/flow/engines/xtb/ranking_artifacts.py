@@ -3,17 +3,26 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engine_process import atomic_write_confined_bytes
+
 from .job_inputs import MANIFEST_FILE_NAME
 from .ranking_models import RankingLogPaths, RankingRunContext
 
 
 def _write_text(path: Path, text: str) -> str:
-    path.write_text(text, encoding="utf-8")
+    atomic_write_confined_bytes(
+        path.parent,
+        path,
+        text.encode("utf-8"),
+        label="xTB ranking summary log",
+    )
     return str(path.resolve())
 
 
 def _ranking_manifest_path(context: RankingRunContext) -> str:
-    return str((context.job_dir / MANIFEST_FILE_NAME).resolve())
+    return str(
+        context.inputs.get("manifest_path") or (context.job_dir / MANIFEST_FILE_NAME).resolve()
+    )
 
 
 def write_ranking_terminal_logs(

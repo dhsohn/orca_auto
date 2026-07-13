@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from orca_auto.core import engine_runner
 from orca_auto.core.config import CommonResourceConfig, CommonRuntimeConfig, TelegramConfig
 from orca_auto.core.config.engines import (
     WorkflowEngineAppConfig as AppConfig,
@@ -10,8 +12,10 @@ from orca_auto.core.config.engines import (
 from orca_auto.core.config.engines import (
     WorkflowEnginePathsConfig as PathsConfig,
 )
+from orca_auto.core.queue.engine.input_snapshot import snapshot_input_file, snapshot_input_payload
 from orca_auto.flow.engines.xtb import queue_runtime as queue_cmd
 from orca_auto.flow.engines.xtb import runner as runner_mod
+from orca_auto.flow.engines.xtb.job_locations import reaction_key_from_job_dir
 
 
 def make_cfg(tmp_path: Path) -> SimpleNamespace:
@@ -166,16 +170,98 @@ def make_entry(
     status: str = "running",
     cancel_requested: bool = False,
 ) -> SimpleNamespace:
+    reaction_key = reaction_key or reaction_key_from_job_dir(job_dir)
+    resource_request = {"max_cores": 4, "max_memory_gb": 8}
+    selected_descriptor = snapshot_input_file(job_dir, selected_input_xyz, role="selected")
+    selected_snapshot = Path(selected_descriptor["snapshot_path"])
+    summary = {"candidate_count": 0, "candidate_paths": [], **dict(input_summary or {})}
+    raw_candidate_paths = summary.get("candidate_paths", [])
+    assert isinstance(raw_candidate_paths, list)
+    summary["candidate_paths"] = [
+        str(selected_snapshot)
+        if Path(str(path)).expanduser().resolve() == selected_input_xyz.expanduser().resolve()
+        else str(Path(str(path)).expanduser().resolve())
+        for path in raw_candidate_paths
+    ]
+    input_snapshots = {"selected": selected_descriptor}
+    secondary_snapshot = ""
+    if job_type == "path_search":
+        secondary_source = job_dir / "product_test.xyz"
+        secondary_source.write_bytes(selected_snapshot.read_bytes())
+        secondary_descriptor = snapshot_input_file(job_dir, secondary_source, role="secondary")
+        input_snapshots["secondary"] = secondary_descriptor
+        secondary_snapshot = str(secondary_descriptor["snapshot_path"])
+        summary.update(
+            {
+                "reactant_xyz": str(selected_snapshot),
+                "product_xyz": secondary_snapshot,
+                "reactant_count": 1,
+                "product_count": 1,
+            }
+        )
+    elif job_type == "ranking":
+        summary.update(
+            {
+                "candidate_count": 1,
+                "candidate_paths": [str(selected_snapshot)],
+                "candidates_dir": str(selected_snapshot.parent),
+                "top_n": 3,
+                "estimated_evaluations": 1,
+                "max_ranking_evaluations": 100,
+            }
+        )
+    else:
+        summary["input_xyz"] = str(selected_snapshot)
+    executable_path = job_dir / ".xtb_test_executable"
+    executable_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable_path.chmod(0o700)
+    executable_identity = engine_runner.executable_identity(executable_path)
+    manifest = {
+        "job_type": job_type,
+        "resources": resource_request,
+        "_orca_auto_xtb_executable": executable_identity["path"],
+    }
+    if job_type == "ranking":
+        manifest["top_n"] = 3
+    manifest_descriptor = snapshot_input_payload(
+        job_dir,
+        json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        role="manifest",
+        suffix=".json",
+        source_path=job_dir / "xtb_job.yaml",
+    )
+    execution_snapshot = {
+        "version": 1,
+        "manifest": manifest,
+        "input_snapshots": {**input_snapshots, "manifest": manifest_descriptor},
+        "selected_input_xyz": str(selected_snapshot),
+        "secondary_input_xyz": secondary_snapshot,
+        "job_type": job_type,
+        "reaction_key": reaction_key,
+        "input_summary": summary,
+        "resource_request": resource_request,
+        "manifest_path": manifest_descriptor["snapshot_path"],
+        "executable_identities": {"xtb": executable_identity},
+    }
+    if selected_input_xyz != selected_snapshot:
+        selected_input_xyz.unlink()
+        selected_input_xyz.symlink_to(selected_snapshot)
     return SimpleNamespace(
         queue_id=queue_id,
         task_id=job_id,
         app_name=app_name,
+        task_kind=f"xtb_{job_type}",
+        engine="xtb",
+        priority=10,
+        enqueued_at="2026-04-19T23:59:00Z",
         metadata={
             "job_dir": str(job_dir),
-            "selected_input_xyz": str(selected_input_xyz),
+            "selected_input_xyz": str(selected_snapshot),
             "job_type": job_type,
             "reaction_key": reaction_key,
-            "input_summary": dict(input_summary or {}),
+            "input_summary": summary,
+            "resource_request": resource_request,
+            "execution_snapshot": execution_snapshot,
         },
         started_at="2026-04-20T00:00:00Z",
         status=SimpleNamespace(value=status),
@@ -195,6 +281,35 @@ def make_result(
 ) -> queue_cmd.XtbRunResult:
     resource_request = {"max_cores": 4, "max_memory_gb": 8}
     resource_actual = {"assigned_cores": 4, "memory_limit_gb": 8}
+    resolved_selected = selected_input_xyz.resolve()
+    normalized_candidate_paths = [
+        str(Path(path).expanduser().resolve()) for path in candidate_paths
+    ]
+    if job_type == "path_search":
+        input_summary = {
+            "candidate_count": len(normalized_candidate_paths),
+            "candidate_paths": normalized_candidate_paths,
+            "reactant_xyz": str(resolved_selected),
+            "product_xyz": str(resolved_selected),
+            "reactant_count": 1,
+            "product_count": 1,
+        }
+    elif job_type == "ranking":
+        input_summary = {
+            "candidate_count": 1,
+            "candidate_paths": [str(resolved_selected)],
+            "candidates_dir": str(resolved_selected.parent),
+            "top_n": 3,
+            "estimated_evaluations": 1,
+            "max_ranking_evaluations": 100,
+        }
+    else:
+        input_summary = {"input_xyz": str(resolved_selected)}
+    stdout_log = selected_input_xyz.parent / "xtb.stdout.log"
+    stderr_log = selected_input_xyz.parent / "xtb.stderr.log"
+    if status == "completed":
+        stdout_log.write_text("completed\n", encoding="utf-8")
+        stderr_log.write_text("", encoding="utf-8")
     return queue_cmd.XtbRunResult(
         status=status,
         reason=reason,
@@ -202,19 +317,25 @@ def make_result(
         exit_code=0 if status == "completed" else 1,
         started_at="2026-04-20T00:00:00Z",
         finished_at="2026-04-20T00:05:00Z",
-        stdout_log=str((selected_input_xyz.parent / "xtb.stdout.log").resolve()),
-        stderr_log=str((selected_input_xyz.parent / "xtb.stderr.log").resolve()),
-        selected_input_xyz=str(selected_input_xyz),
+        stdout_log=str(stdout_log.resolve()),
+        stderr_log=str(stderr_log.resolve()),
+        selected_input_xyz=str(resolved_selected),
         job_type=job_type,
         reaction_key=reaction_key,
-        input_summary={
-            "candidate_count": len(candidate_paths),
-            "candidate_paths": list(candidate_paths),
-        },
+        input_summary=input_summary,
         candidate_count=len(candidate_paths),
-        selected_candidate_paths=candidate_paths,
-        candidate_details=tuple({"path": path} for path in candidate_paths),
-        analysis_summary={"candidate_paths": list(candidate_paths)},
+        selected_candidate_paths=tuple(normalized_candidate_paths),
+        candidate_details=tuple(
+            {"path": str(Path(path).expanduser().resolve())} for path in candidate_paths
+        ),
+        analysis_summary={
+            "candidate_paths": [str(Path(path).expanduser().resolve()) for path in candidate_paths],
+            **(
+                {"best_candidate_path": normalized_candidate_paths[0]}
+                if job_type == "ranking" and normalized_candidate_paths
+                else {}
+            ),
+        },
         manifest_path="",
         resource_request=resource_request,
         resource_actual=resource_actual,

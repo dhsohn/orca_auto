@@ -72,12 +72,9 @@ def test_crest_submitter_roundtrip_smoke(
     assert _status(report_payload)["state"] == "completed"
     assert _engine_payload(report_payload)["mode"] == "standard"
     assert _engine_payload(report_payload)["retained_conformer_count"] == 2
-    assert sorted(
+    assert [
         Path(path).name for path in _engine_payload(report_payload)["retained_conformer_paths"]
-    ) == [
-        "crest_best.xyz",
-        "crest_conformers.xyz",
-    ]
+    ] == ["crest_conformers.xyz", "crest_best.xyz"]
 
     contract = load_crest_artifact_contract(
         crest_index_root=smoke_workspace.crest_allowed_root,
@@ -86,9 +83,9 @@ def test_crest_submitter_roundtrip_smoke(
     assert contract.status == "completed"
     assert contract.mode == "standard"
     assert contract.retained_conformer_count == 2
-    assert sorted(Path(path).name for path in contract.retained_conformer_paths) == [
-        "crest_best.xyz",
+    assert [Path(path).name for path in contract.retained_conformer_paths] == [
         "crest_conformers.xyz",
+        "crest_best.xyz",
     ]
 
     queue_entries_after = list_queue(smoke_workspace.crest_allowed_root)

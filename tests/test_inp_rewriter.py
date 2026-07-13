@@ -9,6 +9,8 @@ from orca_auto.orca.inp_rewriter import (
     read_resource_request_from_input,
     rewrite_for_retry,
 )
+from orca_auto.orca.input_blocks import ensure_route_keywords, set_block_key_value, set_moinp
+from orca_auto.orca.resource_directives import clamp_maxcore_to_budget, read_maxcore, read_nprocs
 
 BASE_INP = """! OptTS Freq IRC
 
@@ -159,7 +161,7 @@ class TestInpRewriter(unittest.TestCase):
             src = root / "rxn.inp"
             dst = root / "rxn.retry01.inp"
             src.write_text(
-                "! Opt\n%pal\n  nprocs 8\nend\n%maxcore 100000\n"
+                "! Opt\n%pal\n  nprocs 8\nend\n# hidden # %maxcore 100000\n"
                 "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
                 encoding="utf-8",
             )
@@ -171,6 +173,69 @@ class TestInpRewriter(unittest.TestCase):
         self.assertIn("%maxcore 4096", text)
         self.assertNotIn("%maxcore 100000", text)
         self.assertIn("maxcore_clamped_to_budget", actions)
+
+    def test_mutators_replace_active_directives_after_closed_comments(self) -> None:
+        lines = [
+            "# Freq is commentary # ! SP",
+            "# block provenance # %pal",
+            "# stale value # nprocs 999",
+            "end",
+            '# old checkpoint # %moinp "old.gbw"',
+            '%moinp "older.gbw"',
+            "* xyz 0 1",
+            "H 0 0 0",
+            "*",
+        ]
+
+        self.assertTrue(ensure_route_keywords(lines, ["Freq"]))
+        self.assertTrue(set_block_key_value(lines, "pal", "nprocs", "4"))
+        self.assertTrue(set_moinp(lines, Path("new.gbw"), Path.cwd()))
+
+        self.assertEqual(lines[0], "! SP Freq")
+        self.assertEqual(read_nprocs(lines), 4)
+        self.assertEqual(sum(line.startswith("%pal") for line in lines), 1)
+        self.assertIn('%moinp "new.gbw"', lines)
+        self.assertEqual(sum(line.startswith("%moinp") for line in lines), 1)
+        self.assertFalse(any("999" in line or "old" in line for line in lines))
+
+        inline_lines = ["# hidden # %pal nprocs 999 end", "* xyz 0 1", "H 0 0 0", "*"]
+        self.assertTrue(set_block_key_value(inline_lines, "pal", "nprocs", "4"))
+        self.assertEqual(inline_lines[0], "%pal nprocs 4 end")
+        self.assertEqual(read_nprocs(inline_lines), 4)
+
+    def test_resource_readers_use_maximum_and_maxcore_clamp_collapses_duplicates(self) -> None:
+        lines = [
+            "%maxcore 1000",
+            "# hidden # %maxcore 999999",
+            "! SP PAL4 PAL8",
+            "* xyz 0 1",
+            "H 0 0 0",
+            "*",
+        ]
+
+        self.assertEqual(read_maxcore(lines), 999999)
+        self.assertEqual(read_nprocs(lines), 8)
+        self.assertTrue(clamp_maxcore_to_budget(lines, max_memory_gb=4))
+        self.assertEqual(read_maxcore(lines), 512)
+        self.assertEqual(sum(line.startswith("%maxcore") for line in lines), 1)
+
+    def test_block_mutator_rejects_duplicate_blocks_and_keys(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duplicate %pal blocks"):
+            set_block_key_value(
+                ["%pal nprocs 4 end", "# hidden # %pal nprocs 999 end"],
+                "pal",
+                "nprocs",
+                "4",
+            )
+        with self.assertRaisesRegex(ValueError, "duplicate nprocs"):
+            duplicate_inline = ["# hidden # %pal nprocs 4 nprocs 999 end"]
+            self.assertEqual(read_nprocs(duplicate_inline), 999)
+            set_block_key_value(
+                duplicate_inline,
+                "pal",
+                "nprocs",
+                "4",
+            )
 
     def test_rewrite_for_retry_leaves_within_budget_maxcore_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as td:

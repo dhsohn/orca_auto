@@ -1044,6 +1044,63 @@ def test_list_workflow_registry_does_not_reindex_valid_empty_registry(
     assert registry.list_workflow_registry(tmp_path) == []
 
 
+def test_list_workflow_registry_repairs_published_creation_marker_before_cached_return(
+    tmp_path: Path,
+) -> None:
+    registry_store._save_records(tmp_path, [])
+    workspace = tmp_path / "wf_crash_repair"
+    workspace.mkdir()
+    (workspace / "workflow.json").write_text("{}", encoding="utf-8")
+    marker = workspace / ".orca_auto_workflow_creation.json"
+    marker.write_text("{}", encoding="utf-8")
+    record = registry.WorkflowRegistryRecord(
+        workflow_id=workspace.name,
+        template_name="conformer_screening",
+        status="planned",
+        source_job_id="",
+        source_job_type="raw_xyz",
+        reaction_key="mol",
+        requested_at="2026-07-13T00:00:00+00:00",
+        workspace_dir=str(workspace.resolve()),
+        workflow_file=str((workspace / "workflow.json").resolve()),
+    )
+    calls: list[Path] = []
+
+    def repair(root: str | Path) -> list[registry.WorkflowRegistryRecord]:
+        calls.append(Path(root).resolve())
+        return [record]
+
+    assert registry.list_workflow_registry(tmp_path, reindex_fn=repair) == [record]
+    assert calls == [tmp_path.resolve()]
+    assert not marker.exists()
+
+
+def test_list_workflow_registry_keeps_marker_when_reindex_skips_workspace(tmp_path: Path) -> None:
+    registry_store._save_records(tmp_path, [])
+    workspace = tmp_path / "wf_corrupt_repair"
+    workspace.mkdir()
+    (workspace / "workflow.json").write_text("not-json", encoding="utf-8")
+    marker = workspace / ".orca_auto_workflow_creation.json"
+    marker.write_text("{}", encoding="utf-8")
+
+    assert registry.list_workflow_registry(tmp_path, reindex_fn=lambda _root: []) == []
+    assert marker.exists()
+
+
+def test_list_workflow_registry_ignores_unpublished_creation_marker(tmp_path: Path) -> None:
+    registry_store._save_records(tmp_path, [])
+    workspace = tmp_path / "wf_incomplete_reservation"
+    workspace.mkdir()
+    marker = workspace / ".orca_auto_workflow_creation.json"
+    marker.write_text("{}", encoding="utf-8")
+
+    def unexpected_reindex(_root: str | Path) -> list[registry.WorkflowRegistryRecord]:
+        raise AssertionError("unpublished reservations must not trigger reindex")
+
+    assert registry.list_workflow_registry(tmp_path, reindex_fn=unexpected_reindex) == []
+    assert marker.exists()
+
+
 def test_list_workflow_registry_missing_without_reindex_returns_empty(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -3,16 +3,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from orca_auto.core.engine_catalog import engine_catalog
 from orca_auto.core.utils import coerce_list, coerce_mapping, normalize_text
 
 WORKFLOW_FILE_NAME = "workflow.json"
 WORKFLOW_STAGE_DIRNAMES = {
-    "crest": "01_crest",
-    "xtb": "02_xtb",
-    "orca": "03_orca",
+    entry.engine_id: entry.workflow_stage_dirname
+    for entry in sorted(engine_catalog(), key=lambda entry: entry.workflow_stage_dirname)
 }
 WORKFLOW_STAGE_DIRNAME_ALIASES = {
-    "orca": ("02_orca",),
+    entry.engine_id: entry.workflow_stage_aliases
+    for entry in engine_catalog()
+    if entry.workflow_stage_aliases
 }
 
 

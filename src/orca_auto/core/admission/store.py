@@ -27,6 +27,7 @@ from .records import (
 ADMISSION_FILE_NAME = _admission_persistence.ADMISSION_FILE_NAME
 ADMISSION_LOCK_NAME = _admission_persistence.ADMISSION_LOCK_NAME
 _MutationResultT = TypeVar("_MutationResultT")
+_TOKEN_COLLISION_RETRY_LIMIT = 32
 
 
 class _ExpectationUnset:
@@ -94,7 +95,12 @@ def _load_slots(root: Path) -> list[AdmissionSlot]:
 
 
 def _save_slots(root: Path, slots: list[AdmissionSlot]) -> None:
-    _admission_persistence.save_slots(root, slots, slot_to_dict_fn=_slot_to_dict)
+    _admission_persistence.save_slots(
+        root,
+        slots,
+        slot_to_dict_fn=_slot_to_dict,
+        corrupt_error=AdmissionStoreCorruptError,
+    )
 
 
 def _process_identity_alive(
@@ -216,7 +222,11 @@ def _reservation_limit_reached(
     return len(counted) + extra_active_count >= max(1, int(request.limit))
 
 
-def _slot_from_reservation_request(request: AdmissionReservationRequest) -> AdmissionSlot:
+def _slot_from_reservation_request(
+    request: AdmissionReservationRequest,
+    *,
+    token: str,
+) -> AdmissionSlot:
     resolved_owner_pid = request.owner_pid if request.owner_pid is not None else os.getpid()
     if type(resolved_owner_pid) is not int or resolved_owner_pid <= 0:
         raise ValueError("Admission slot owner PID must be a positive integer")
@@ -232,7 +242,7 @@ def _slot_from_reservation_request(request: AdmissionReservationRequest) -> Admi
     if engine_process_state and (owner_start_ticks is None or owner_boot_id is None):
         raise ValueError("Cannot verify managed admission slot owner process identity")
     return AdmissionSlot(
-        token=timestamped_token("slot"),
+        token=token,
         owner_pid=resolved_owner_pid,
         process_start_ticks=owner_start_ticks,
         source=request.source.strip(),
@@ -505,7 +515,19 @@ def reserve_slot_from_request(
     def reserve(slots: list[AdmissionSlot]) -> tuple[str | None, bool]:
         if _reservation_limit_reached(store.root, slots, request):
             return None, True
-        slot = _slot_from_reservation_request(request)
+        occupied_tokens = {slot.token for slot in slots}
+        token = ""
+        for _attempt in range(_TOKEN_COLLISION_RETRY_LIMIT):
+            candidate = timestamped_token("slot")
+            if candidate not in occupied_tokens:
+                token = candidate
+                break
+        if not token:
+            raise RuntimeError(
+                "Could not allocate a unique admission slot token after "
+                f"{_TOKEN_COLLISION_RETRY_LIMIT} attempts"
+            )
+        slot = _slot_from_reservation_request(request, token=token)
         slots.append(slot)
         return slot.token, True
 

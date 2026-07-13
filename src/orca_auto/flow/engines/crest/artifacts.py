@@ -20,6 +20,7 @@ def _engine_fields(entry: Any, result: CrestRunResult) -> dict[str, Any]:
     return {
         "molecule_key": _engine_execution.entry_metadata_text(entry, "molecule_key"),
         "mode": result.mode,
+        "execution_provenance": _engine_execution.sanitized_execution_provenance(entry),
     }
 
 
@@ -27,6 +28,7 @@ def _detail_fields(result: CrestRunResult) -> dict[str, Any]:
     return {
         "retained_conformer_count": result.retained_conformer_count,
         "retained_conformer_paths": list(result.retained_conformer_paths),
+        "output_identities": dict(result.output_identities),
     }
 
 

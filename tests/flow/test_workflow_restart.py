@@ -4,6 +4,7 @@ import json
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -11,6 +12,7 @@ from orca_auto import cli_handlers as cli_run_dir
 from orca_auto.flow.cli import run_dir as flow_cli
 from orca_auto.flow.manifest import interaction_energy_config_fingerprint
 from orca_auto.flow.restart import restart_failed_workflow
+from orca_auto.flow.restart import settings as restart_settings
 
 
 def _write_workflow(workspace: Path, payload: dict[str, object]) -> None:
@@ -40,6 +42,90 @@ def _failed_orca_restart_stage(stage_id: str, reaction_dir: Path) -> dict[str, o
         },
         "metadata": {},
     }
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"charge": -0.5, "multiplicity": 2},
+        {"charge": 0, "multiplicity": 2.5},
+        {"orca": {"charge": True, "multiplicity": 1}},
+    ],
+)
+def test_restart_manifest_electronic_state_rejects_lossy_integer_values(
+    manifest: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match=r"workflow (?:charge|multiplicity) must be an integer"):
+        restart_settings._manifest_electronic_state(manifest)
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"resources": {"max_cores": 1.5}},
+        {"resources": {"max_memory_gb": True}},
+        {"max_cores": 0},
+    ],
+)
+def test_restart_manifest_rejects_lossy_resource_limits(
+    manifest: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match=r"resources\.max_(?:cores|memory_gb) must"):
+        restart_settings._resolved_resource_request(manifest)
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"workflow_type": "reaction_ts_search", "max_crest_candidates": 2.5},
+        {"workflow_type": "reaction_ts_search", "max_xtb_handoff_retries": True},
+        {"workflow_type": "reaction_ts_search", "max_orca_stages": 0},
+    ],
+)
+def test_restart_manifest_rejects_lossy_workflow_caps(
+    tmp_path: Path,
+    manifest: dict[str, object],
+) -> None:
+    payload = {
+        "template_name": "reaction_ts_search",
+        "metadata": {"request": {"parameters": {"charge": 0, "multiplicity": 1}}},
+        "stages": [],
+    }
+
+    with pytest.raises(ValueError, match=r"max_.* must"):
+        restart_settings._flow_restart_settings_from_manifest(tmp_path, payload, manifest)
+
+
+def test_restart_manifest_accepts_zero_xtb_handoff_retries(tmp_path: Path) -> None:
+    stage: dict[str, Any] = {
+        "metadata": {"max_handoff_retries": 2},
+        "task": {
+            "engine": "xtb",
+            "payload": {"max_handoff_retries": 2},
+            "metadata": {"max_handoff_retries": 2},
+        },
+    }
+    payload: dict[str, Any] = {
+        "template_name": "reaction_ts_search",
+        "metadata": {"request": {"parameters": {"charge": 0, "multiplicity": 1}}},
+        "stages": [stage],
+    }
+
+    settings = restart_settings._flow_restart_settings_from_manifest(
+        tmp_path,
+        payload,
+        {"workflow_type": "reaction_ts_search", "max_xtb_handoff_retries": 0},
+    )
+    restart_settings._apply_flow_restart_settings(
+        stage,
+        settings,
+        restart_allowed_root=tmp_path,
+    )
+
+    assert payload["metadata"]["request"]["parameters"]["max_xtb_handoff_retries"] == 0
+    assert stage["task"]["payload"]["max_handoff_retries"] == 0
+    assert stage["task"]["metadata"]["max_handoff_retries"] == 0
+    assert stage["metadata"]["max_handoff_retries"] == 0
 
 
 def test_restart_failed_workflow_resets_failed_and_cancelled_stages(tmp_path: Path) -> None:
@@ -86,6 +172,7 @@ def test_restart_failed_workflow_resets_failed_and_cancelled_stages(tmp_path: Pa
                         "run_id": "run_old",
                         "reason": "orca_crash",
                         "latest_known_path": "/tmp/rxn",
+                        "submission_intent_token": "stale-restart-intent",
                     },
                 },
                 {
@@ -136,6 +223,7 @@ def test_restart_failed_workflow_resets_failed_and_cancelled_stages(tmp_path: Pa
     assert restarted_orca["output_artifacts"] == []
     assert restarted_orca["task"]["enqueue_payload"]["force"] is True
     assert "queue_id" not in restarted_orca["metadata"]
+    assert "submission_intent_token" not in restarted_orca["metadata"]
     assert "last_out_path" not in restarted_orca["task"]["payload"]
 
     restarted_crest = saved["stages"][2]
@@ -752,7 +840,7 @@ def test_restart_failed_workflow_reloads_flow_yaml_for_crest_stage(tmp_path: Pat
             [
                 "workflow_type: reaction_ts_search",
                 "crest_mode: nci",
-                "priority: 4",
+                "priority: 0",
                 "boltzmann_temperature_k: 310.0",
                 "resources:",
                 "  max_cores: 3",
@@ -837,7 +925,7 @@ def test_restart_failed_workflow_reloads_flow_yaml_for_crest_stage(tmp_path: Pat
     assert result["status"] == "restarted"
     assert saved["metadata"]["restart_summary"]["flow_manifest_applied"] is True
     assert task["resource_request"] == {"max_cores": 3, "max_memory_gb": 11}
-    assert task["enqueue_payload"]["priority"] == 4
+    assert task["enqueue_payload"]["priority"] == 0
     assert task["enqueue_payload"]["job_dir"] == ""
     assert task["payload"]["job_dir"] == ""
     assert task["payload"]["selected_input_xyz"] == ""
@@ -849,7 +937,7 @@ def test_restart_failed_workflow_reloads_flow_yaml_for_crest_stage(tmp_path: Pat
     assert stage["metadata"]["job_manifest_overrides"] == expected_overrides
     params = saved["metadata"]["request"]["parameters"]
     assert params["crest_mode"] == "nci"
-    assert params["priority"] == 4
+    assert params["priority"] == 0
     assert params["max_cores"] == 3
     assert params["max_memory_gb"] == 11
     assert params["boltzmann_temperature_k"] == pytest.approx(310.0)
@@ -1560,3 +1648,59 @@ def test_restart_electronic_state_when_workflow_json_has_no_request_block(
     # And the rematerialized xTB stage keeps its manifest key plus the state.
     assert xtb_task["payload"]["job_manifest_overrides"] == {"charge": -1, "uhf": 1, "gfn": 1}
     assert xtb_task["payload"]["job_dir"] == ""
+
+
+def test_restart_rejects_engine_state_conflicting_with_canonical_workflow_state(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_conflicting_restart_state"
+    old_xtb = workspace / "old_xtb"
+    old_xtb.mkdir(parents=True)
+    (workspace / "flow.yaml").write_text(
+        "\n".join(
+            [
+                "workflow_type: reaction_ts_search",
+                "charge: -1",
+                "orca:",
+                "  multiplicity: 2",
+                "xtb:",
+                "  charge: 0",
+                "  uhf: 1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_workflow(
+        workspace,
+        {
+            "workflow_id": "wf_conflicting_restart_state",
+            "template_name": "reaction_ts_search",
+            "status": "failed",
+            "requested_at": "2026-04-27T00:00:00+00:00",
+            "stages": [
+                {
+                    "stage_id": "xtb_path_01",
+                    "status": "failed",
+                    "task": {
+                        "engine": "xtb",
+                        "status": "failed",
+                        "payload": {
+                            "job_dir": str(old_xtb),
+                            "job_manifest_overrides": {"gfn": 1},
+                        },
+                        "enqueue_payload": {"job_dir": str(old_xtb)},
+                    },
+                    "metadata": {},
+                }
+            ],
+            "metadata": {"request": {"parameters": {}}},
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="engine manifest charge=0 conflicts with workflow charge=-1",
+    ):
+        restart_failed_workflow(workspace_dir=workspace, workflow_root=root)

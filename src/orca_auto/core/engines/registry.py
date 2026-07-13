@@ -1,31 +1,23 @@
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Final
+
+from orca_auto.core.engine_catalog import get_engine_catalog_entry
+from orca_auto.core.engine_catalog import known_engine_ids as catalog_engine_ids
 
 from .definitions import EngineDefinition
 
-_ENGINE_MODULES: Final[dict[str, str]] = {
-    "orca": "orca_auto.orca.engine",
-    "xtb": "orca_auto.flow.engines.xtb.engine",
-    "crest": "orca_auto.flow.engines.crest.engine",
-}
-
 
 def known_engine_ids() -> tuple[str, ...]:
-    return tuple(_ENGINE_MODULES)
+    return catalog_engine_ids()
 
 
 def get_engine_definition(engine: str) -> EngineDefinition:
-    engine_id = str(engine or "").strip().lower()
-    module_name = _ENGINE_MODULES.get(engine_id)
-    if module_name is None:
-        supported = ", ".join(known_engine_ids())
-        raise ValueError(f"unsupported engine: {engine_id or '<blank>'} (supported: {supported})")
-    module = import_module(module_name)
+    entry = get_engine_catalog_entry(engine)
+    module = import_module(entry.definition_module)
     definition = module.ENGINE_DEFINITION
     if not isinstance(definition, EngineDefinition):
-        raise TypeError(f"{module_name}.ENGINE_DEFINITION is not an EngineDefinition")
+        raise TypeError(f"{entry.definition_module}.ENGINE_DEFINITION is not an EngineDefinition")
     return definition
 
 

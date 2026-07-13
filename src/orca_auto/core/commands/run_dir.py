@@ -5,10 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from orca_auto.core.config.files import load_bounded_yaml_data
 from orca_auto.core.paths import validate_job_dir
 from orca_auto.core.paths.workflow import workflow_workspace_internal_engine_paths_from_path
+from orca_auto.core.queue.generation import queue_entry_generation_token
+from orca_auto.core.queue.priority import normalize_queue_priority
 
 SUPPRESS_QUEUED_NOTIFICATION_CONTEXT_KEY = "suppress_queued_notification"
 
@@ -80,7 +81,7 @@ def build_engine_run_dir_submission(
         task_id=task_id,
         task_kind=task_kind,
         engine=engine,
-        priority=int(getattr(args, "priority", 10)),
+        priority=normalize_queue_priority(getattr(args, "priority", 10)),
         metadata=metadata,
         context=context,
     )
@@ -182,8 +183,7 @@ def load_yaml_job_manifest(
             return {}
         raise ValueError(missing_message.format(path=path))
 
-    with path.open("r", encoding="utf-8") as handle:
-        parsed = yaml.safe_load(handle) or {}
+    parsed = load_bounded_yaml_data(path) or {}
     if not isinstance(parsed, dict):
         raise ValueError(invalid_message.format(path=path))
     return parsed
@@ -236,6 +236,17 @@ def record_queued_common(
     raw_job_dir = submission.metadata.get("job_dir") or submission.context["job_dir"]
     job_dir = Path(raw_job_dir).expanduser().resolve()
     record = build_record_fn(submission, entry)
+    state_job = record.state_payload.get("job")
+    if not isinstance(state_job, dict):
+        raise ValueError("queued engine state is missing its job identity")
+    state_job.update(
+        {
+            "queue_id": str(entry.queue_id),
+            "app_name": str(entry.app_name),
+            "task_id": str(entry.task_id),
+            "generation": queue_entry_generation_token(entry),
+        }
+    )
     write_state_fn(job_dir, record.state_payload)
     upsert_job_record_fn(
         cfg,

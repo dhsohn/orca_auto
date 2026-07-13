@@ -1,10 +1,47 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
 
 from orca_auto.flow import xyz_utils
+
+
+@pytest.mark.parametrize(
+    ("symbol", "charge", "uhf", "message"),
+    [
+        ("Xx", 0, 0, "Unknown element"),
+        ("Og", 0, 0, "atomic-number"),
+        ("H", 2, 0, "negative electron"),
+        ("H", 0, 0, "parity"),
+        ("H", 0, 2, "between 0 and the electron count"),
+    ],
+)
+def test_validate_electronic_state_rejects_unsupported_or_inconsistent_state(
+    tmp_path: Path,
+    symbol: str,
+    charge: int,
+    uhf: int,
+    message: str,
+) -> None:
+    xyz_path = tmp_path / "state.xyz"
+    xyz_path.write_text(f"1\nstate\n{symbol} 0 0 0\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        xyz_utils.validate_electronic_state(xyz_path, charge=charge, uhf=uhf)
+
+
+def test_validate_electronic_state_accepts_hydrogen_doublet(tmp_path: Path) -> None:
+    xyz_path = tmp_path / "h.xyz"
+    xyz_path.write_text("1\ndoublet\nH 0 0 0\n", encoding="utf-8")
+
+    assert xyz_utils.validate_electronic_state(xyz_path, charge=0, uhf=1) == {
+        "nuclear_charge": 1,
+        "electron_count": 1,
+        "charge": 0,
+        "uhf": 1,
+    }
 
 
 def test_load_xyz_frames_rejects_missing_invalid_and_truncated_inputs(tmp_path: Path) -> None:
@@ -24,6 +61,37 @@ def test_load_xyz_frames_rejects_missing_invalid_and_truncated_inputs(tmp_path: 
     assert xyz_utils.load_xyz_frames(truncated) == ()
     assert xyz_utils.load_xyz_frames(non_positive) == ()
     assert xyz_utils.has_xyz_geometry(invalid_tokens) is False
+
+
+@pytest.mark.parametrize("coordinate", ["nan", "inf", "-inf"])
+def test_load_xyz_frames_rejects_nonfinite_coordinates(tmp_path: Path, coordinate: str) -> None:
+    xyz_path = tmp_path / "nonfinite.xyz"
+    xyz_path.write_text(
+        f"2\ninvalid geometry\nH {coordinate} 0 0\nH 0 0 0.74\n",
+        encoding="utf-8",
+    )
+
+    result = xyz_utils.parse_xyz_file(xyz_path)
+
+    assert result.ok is False
+    assert result.error_reason == "invalid_atom_line"
+    assert xyz_utils.load_xyz_frames(xyz_path) == ()
+
+
+@pytest.mark.parametrize("coordinate", [math.nan, math.inf, -math.inf])
+def test_write_fragment_xyz_rejects_nonfinite_coordinates(
+    tmp_path: Path, coordinate: float
+) -> None:
+    target = tmp_path / "fragment.xyz"
+
+    with pytest.raises(ValueError, match="non-finite coordinates"):
+        xyz_utils.write_fragment_xyz(
+            coordinates=[("H", coordinate, 0.0, 0.0)],
+            atom_indices=[0],
+            target_path=target,
+        )
+
+    assert not target.exists()
 
 
 def test_load_xyz_frames_extracts_energy_and_render_round_trips(tmp_path: Path) -> None:
@@ -52,6 +120,26 @@ def test_load_xyz_frames_extracts_energy_and_render_round_trips(tmp_path: Path) 
     assert frames[0].energy == -1.25
     assert frames[1].energy == 3.5
     assert frames[0].render().startswith("2\nenergy: -1.25\n")
+
+
+def test_load_xyz_frames_parses_scientific_notation_energy_without_truncation(
+    tmp_path: Path,
+) -> None:
+    xyz_path = tmp_path / "scientific.xyz"
+    xyz_path.write_text(
+        "1\nenergy: -1.0E+02\nH 0 0 0\n1\nenergy: -9.0E+01\nH 0.1 0 0\n",
+        encoding="utf-8",
+    )
+
+    frames = xyz_utils.load_xyz_frames(xyz_path)
+
+    assert [frame.energy for frame in frames] == [-100.0, -90.0]
+    selected, metadata = xyz_utils.choose_orca_geometry_frame(
+        xyz_path,
+        candidate_kind="selected_path",
+    )
+    assert selected is not None and selected.index == 2
+    assert metadata["selected_frame_energy"] == -90.0
 
 
 def test_load_xyz_atom_sequence_raises_for_invalid_or_multiframe_input(tmp_path: Path) -> None:

@@ -4,10 +4,14 @@ import math
 import re
 from pathlib import Path
 
+from orca_auto.core.engine_process import atomic_write_confined_bytes
+
 from .input_blocks import (
     BLOCK_START_RE,
     GEOM_HEADER_RE,
+    active_orca_directive_text,
     find_route_idx,
+    orca_route_line,
     set_block_key_value,
 )
 
@@ -18,67 +22,78 @@ PAL_ROUTE_RE = re.compile(r"\bPAL(\d+)\b", re.IGNORECASE)
 
 
 def read_maxcore(lines: list[str]) -> int | None:
+    values: list[int] = []
     for line in lines:
-        m = MAXCORE_RE.match(line)
+        active_line = active_orca_directive_text(line)
+        m = MAXCORE_RE.match(active_line)
         if m:
             try:
-                return int(m.group(1))
+                values.append(int(m.group(1)))
             except ValueError:
-                return None
-    return None
+                continue
+    return max(values) if values else None
 
 
 def read_nprocs(lines: list[str]) -> int | None:
     # An explicit %pal block wins over the route-line shorthand; fall back to
     # "! PALn" so a PAL-only input is not treated as having no nprocs (which would
     # inject a conflicting %pal block and compute the wrong resource_request).
-    block_value = _read_nprocs_from_pal_block(lines)
-    if block_value is not None:
-        return block_value
-    return _read_nprocs_from_pal_shorthand(lines)
+    values = [
+        value
+        for value in (
+            _read_nprocs_from_pal_block(lines),
+            _read_nprocs_from_pal_shorthand(lines),
+        )
+        if value is not None
+    ]
+    return max(values) if values else None
 
 
 def _read_nprocs_from_pal_shorthand(lines: list[str]) -> int | None:
+    values: list[int] = []
     for line in lines:
-        stripped = line.lstrip()
-        if not stripped.startswith("!"):
+        route = orca_route_line(line)
+        if route is None:
             continue
-        route = stripped.split("#", 1)[0]
-        match = PAL_ROUTE_RE.search(route)
-        if not match:
-            continue
-        try:
-            value = int(match.group(1))
-        except ValueError:
-            continue
-        if value > 0:
-            return value
-    return None
+        for match in PAL_ROUTE_RE.finditer(route):
+            try:
+                value = int(match.group(1))
+            except ValueError:
+                continue
+            if value > 0:
+                values.append(value)
+    return max(values) if values else None
 
 
 def _read_nprocs_from_pal_block(lines: list[str]) -> int | None:
     in_pal_block = False
+    values: list[int] = []
     for line in lines:
-        block_match = BLOCK_START_RE.match(line)
-        if not in_pal_block:
-            if not _is_block_start(block_match, "pal"):
+        active_line = active_orca_directive_text(line)
+        block_match = BLOCK_START_RE.match(active_line)
+        if block_match is not None:
+            in_pal_block = _is_block_start(block_match, "pal")
+            if not in_pal_block:
                 continue
-            remainder = line[block_match.end() :] if block_match else ""
+            remainder = active_line[block_match.end() :] if block_match else ""
             inline_value = read_nprocs_from_text(remainder)
             if inline_value is not None:
-                return inline_value
+                values.append(inline_value)
             if re.search(r"\bend\b", remainder, re.IGNORECASE):
-                return None
-            in_pal_block = True
+                in_pal_block = False
             continue
 
-        if ends_pal_block(line):
-            return None
+        if not in_pal_block:
+            continue
 
-        value = read_nprocs_from_text(line)
+        if ends_pal_block(active_line):
+            in_pal_block = False
+            continue
+
+        value = read_nprocs_from_text(active_line)
         if value is not None:
-            return value
-    return None
+            values.append(value)
+    return max(values) if values else None
 
 
 def _is_block_start(block_match: re.Match[str] | None, name: str) -> bool:
@@ -86,14 +101,15 @@ def _is_block_start(block_match: re.Match[str] | None, name: str) -> bool:
 
 
 def read_nprocs_from_text(text: str) -> int | None:
-    nprocs_match = NPROCS_RE.search(text)
-    if not nprocs_match:
-        return None
-    try:
-        value = int(nprocs_match.group(1))
-    except ValueError:
-        return None
-    return value if value > 0 else None
+    values: list[int] = []
+    for match in NPROCS_RE.finditer(text):
+        try:
+            value = int(match.group(1))
+        except ValueError:
+            continue
+        if value > 0:
+            values.append(value)
+    return max(values) if values else None
 
 
 def ends_pal_block(line: str) -> bool:
@@ -157,19 +173,27 @@ def ensure_submission_resource_request(
         raise ValueError(f"Could not determine ORCA resource_request from input: {inp_path}")
 
     if actions:
-        inp_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+        atomic_write_confined_bytes(
+            inp_path.parent,
+            inp_path,
+            ("\n".join(lines).rstrip() + "\n").encode("utf-8"),
+            label="ORCA resource-normalized input",
+        )
     return resource_request, actions
 
 
 def set_maxcore(lines: list[str], value_mb: int) -> bool:
-    for i, line in enumerate(lines):
-        m = MAXCORE_RE.match(line)
-        if m:
-            new_line = f"%maxcore {value_mb}"
-            if lines[i].strip() == new_line:
-                return False
-            lines[i] = new_line
-            return True
+    matches = [
+        i for i, line in enumerate(lines) if MAXCORE_RE.match(active_orca_directive_text(line))
+    ]
+    if matches:
+        new_line = f"%maxcore {value_mb}"
+        first = matches[0]
+        changed = lines[first] != new_line or len(matches) > 1
+        lines[first] = new_line
+        for index in reversed(matches[1:]):
+            del lines[index]
+        return changed
     insert_at = find_route_idx(lines)
     if insert_at is not None:
         insert_at += 1

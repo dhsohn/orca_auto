@@ -146,6 +146,10 @@ def _read_atoms(xyz_path: str | Path) -> list[tuple[str, float, float, float]]:
             raise GeometryValidationError(
                 f"Non-numeric coordinates in atom line {line!r} in {xyz_path}"
             ) from exc
+        if not all(math.isfinite(value) for value in (x, y, z)):
+            raise GeometryValidationError(
+                f"Non-finite coordinates in atom line {line!r} in {xyz_path}"
+            )
         atoms.append((parts[0].capitalize(), x, y, z))
     return atoms
 

@@ -312,6 +312,23 @@ def test_route_and_scan_block_helpers_tolerate_missing_targets() -> None:
     assert _remove_geom_scan_subblock(["! ScanTS", "* xyz 0 1", "H 0 0 0", "*"]) is False
 
 
+def test_scants_mutators_use_active_text_after_closed_comments() -> None:
+    lines = [
+        "# route provenance # ! SCANTS Freq",
+        "# block provenance # %geom",
+        "# scan provenance # Scan",
+        "# coordinate provenance # B 4 20 = 1.86, 3.40, 32",
+        "# scan end provenance # end",
+        "end",
+        "* xyzfile 0 1 input.xyz",
+    ]
+
+    assert _replace_scants_route_with_optts(lines) is True
+    assert lines[0] == "! OPTTS Freq"
+    assert _remove_geom_scan_subblock(lines) is True
+    assert not any("B 4 20" in line or "scan provenance" in line for line in lines)
+
+
 def test_remove_geom_scan_subblock_handles_truncated_block() -> None:
     # a truncated input can end mid-scan with no closing `end` lines at all
     lines = ["! ScanTS B3LYP", "%geom", "  Scan", "    B 4 20 = 1.86, 3.40, 32"]

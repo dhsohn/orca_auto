@@ -566,8 +566,8 @@ def test_failed_scants_retry_removes_moread_from_all_route_lines(tmp_path: Path)
     _write_scan_xyz_series(tmp_path, "rxn", count=32)
     lines = [
         "! ScanTS B3LYP",
-        "! MORead",
-        '%moinp "stale.gbw"',
+        "# route provenance # ! MORead",
+        '# checkpoint provenance # %moinp "stale.gbw"',
         "%geom",
         "  Scan",
         "    B 4 20 = 1.86, 3.40, 32",

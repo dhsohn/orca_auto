@@ -9,6 +9,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engine_process import open_confined_log
 from orca_auto.core.statuses import STATUS_CANCELLED, normalize_status
 
 LOGGER = logging.getLogger(__name__)
@@ -86,7 +87,12 @@ def start_background_process(
 
     resolved_log_path = Path(log_path).expanduser()
     resolved_log_path.parent.mkdir(parents=True, exist_ok=True)
-    with resolved_log_path.open("a", encoding="utf-8") as log_handle:
+    with open_confined_log(
+        resolved_log_path.parent,
+        resolved_log_path,
+        label="background worker log",
+        append=True,
+    ) as log_handle:
         return subprocess.Popen(
             list(command),
             stdout=log_handle,
@@ -216,11 +222,24 @@ def reconcile_orphaned_child_queue_entries(
                 unscoped_live_queue_ids=unscoped_live_queue_ids,
             ):
                 continue
+            generation_kwargs = {"expected_entry": entry}
+            task_id = str(getattr(entry, "task_id", "") or "").strip()
+            if task_id:
+                generation_kwargs["expected_task_id"] = task_id
             if getattr(entry, "cancel_requested", False):
-                mark_cancelled_fn(queue_root, queue_id, error="cancel_requested")
+                mark_cancelled_fn(
+                    queue_root,
+                    queue_id,
+                    error="cancel_requested",
+                    **generation_kwargs,
+                )
             else:
-                updated = requeue_running_entry_fn(queue_root, queue_id)
-                if requeue_result_is_cancelled(updated):
+                updated = requeue_running_entry_fn(
+                    queue_root,
+                    queue_id,
+                    **generation_kwargs,
+                )
+                if updated is None or requeue_result_is_cancelled(updated):
                     continue
                 mark_recovery_pending_fn(cfg, entry)
 

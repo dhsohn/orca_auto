@@ -7,6 +7,8 @@ from typing import Any
 import pytest
 
 from orca_auto.core.commands import run_dir
+from orca_auto.core.queue.generation import queue_entry_generation_token
+from orca_auto.core.queue.types import QueueEntry
 
 
 def _cfg(allowed_root: Path, *, workflow_root: Path | None = None) -> SimpleNamespace:
@@ -14,6 +16,28 @@ def _cfg(allowed_root: Path, *, workflow_root: Path | None = None) -> SimpleName
         workflow_root=str(workflow_root or ""),
         runtime=SimpleNamespace(allowed_root=str(allowed_root)),
     )
+
+
+def _queue_entry(*, engine: str) -> QueueEntry:
+    return QueueEntry(
+        queue_id="q-1",
+        app_name="app",
+        task_id="job-1",
+        task_kind="run_dir",
+        engine=engine,
+        priority=5,
+        enqueued_at="2026-07-13T00:00:00+00:00",
+    )
+
+
+def _queued_job_identity(entry: QueueEntry) -> dict[str, str]:
+    return {
+        "id": "job-1",
+        "queue_id": entry.queue_id,
+        "app_name": entry.app_name,
+        "task_id": entry.task_id,
+        "generation": queue_entry_generation_token(entry),
+    }
 
 
 def test_load_yaml_job_manifest_handles_missing_invalid_and_mapping(tmp_path: Path) -> None:
@@ -177,7 +201,7 @@ def test_record_queued_common_applies_shared_fields(tmp_path: Path) -> None:
         metadata={},
         context={"job_dir": job_dir},
     )
-    entry = SimpleNamespace(queue_id="q-1")
+    entry = _queue_entry(engine="xtb")
     calls: dict[str, Any] = {}
 
     def build_record(
@@ -186,7 +210,7 @@ def test_record_queued_common_applies_shared_fields(tmp_path: Path) -> None:
     ) -> run_dir.EngineQueuedRecord:
         calls["build"] = (submission_arg, entry_arg)
         return run_dir.EngineQueuedRecord(
-            state_payload={"status": "queued"},
+            state_payload={"status": "queued", "job": {"id": "job-1"}},
             index_fields={"selected_input_xyz": "input.xyz"},
             notification_fields={"selected_xyz": "input.xyz"},
         )
@@ -212,7 +236,10 @@ def test_record_queued_common_applies_shared_fields(tmp_path: Path) -> None:
     )
 
     assert calls["build"] == (submission, entry)
-    assert calls["state"] == (job_dir, {"status": "queued"})
+    assert calls["state"] == (
+        job_dir,
+        {"status": "queued", "job": _queued_job_identity(entry)},
+    )
     assert calls["index"] == (
         cfg,
         {
@@ -249,7 +276,7 @@ def test_record_queued_common_can_repair_state_and_index_without_notification(
         metadata={"job_dir": str(job_dir)},
         context={"job_dir": job_dir, "suppress_queued_notification": True},
     )
-    entry = SimpleNamespace(queue_id="q-1")
+    entry = _queue_entry(engine="crest")
     calls: list[str] = []
 
     notification_delivered = run_dir.record_queued_common(
@@ -257,7 +284,7 @@ def test_record_queued_common_can_repair_state_and_index_without_notification(
         submission,
         entry,
         build_record_fn=lambda *_args: run_dir.EngineQueuedRecord(
-            state_payload={"status": "queued"},
+            state_payload={"status": "queued", "job": {"id": "job-1"}},
             index_fields={"mode": "nci"},
             notification_fields={"mode": "nci"},
         ),
@@ -286,8 +313,8 @@ def test_record_queued_common_reports_known_notification_failure(tmp_path: Path)
     notification_delivered = run_dir.record_queued_common(
         object(),
         submission,
-        SimpleNamespace(queue_id="q-1"),
-        build_record_fn=lambda *_args: run_dir.EngineQueuedRecord({}, {}, {}),
+        _queue_entry(engine="crest"),
+        build_record_fn=lambda *_args: run_dir.EngineQueuedRecord({"job": {"id": "job-1"}}, {}, {}),
         write_state_fn=lambda *_args: None,
         upsert_job_record_fn=lambda *_args, **_kwargs: None,
         notify_job_queued_fn=lambda *_args, **_kwargs: False,
@@ -311,7 +338,7 @@ def test_engine_run_dir_queued_recorder_from_callbacks_applies_shared_fields(
         metadata={},
         context={"job_dir": job_dir},
     )
-    entry = SimpleNamespace(queue_id="q-1")
+    entry = _queue_entry(engine="crest")
     calls: dict[str, Any] = {}
 
     def build_record(
@@ -320,7 +347,7 @@ def test_engine_run_dir_queued_recorder_from_callbacks_applies_shared_fields(
     ) -> run_dir.EngineQueuedRecord:
         calls["build"] = (submission_arg, entry_arg)
         return run_dir.EngineQueuedRecord(
-            state_payload={"status": "queued"},
+            state_payload={"status": "queued", "job": {"id": "job-1"}},
             index_fields={"mode": "nci"},
             notification_fields={"mode": "nci"},
         )
@@ -346,7 +373,10 @@ def test_engine_run_dir_queued_recorder_from_callbacks_applies_shared_fields(
     assert recorder.__name__ == "_record_queued"
     assert recorder.__module__ == "orca_auto.demo.submission"
     assert calls["build"] == (submission, entry)
-    assert calls["state"] == (job_dir, {"status": "queued"})
+    assert calls["state"] == (
+        job_dir,
+        {"status": "queued", "job": _queued_job_identity(entry)},
+    )
     assert calls["index"] == (
         cfg,
         {"job_id": "job-1", "status": "queued", "job_dir": job_dir, "mode": "nci"},

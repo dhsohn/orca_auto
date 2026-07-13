@@ -10,7 +10,7 @@ from orca_auto.flow.adapters.orca import load_orca_artifact_contract
 from orca_auto.flow.orchestration.stage_views import WorkflowTaskView
 from orca_auto.flow.restart.orca_input import rematerialize_orca_restart_input
 from orca_auto.orca.input_blocks import set_block_key_value
-from orca_auto.orca.resource_directives import read_nprocs
+from orca_auto.orca.resource_directives import read_maxcore, read_nprocs
 
 
 def _restart_stage(reaction_dir: Path) -> dict[str, object]:
@@ -59,7 +59,7 @@ def test_rematerialize_orca_restart_input_advances_generation_and_repoints_comma
         encoding="utf-8",
     )
     (original / "input.inp").write_text(
-        "! OLD Opt\n%pal\n  nprocs 1\nend\n%maxcore 1024\n* xyzfile 0 1 input.xyz\n",
+        "# provenance # ! OLD Opt\n%pal\n  nprocs 1\nend\n%maxcore 1024\n* xyzfile 0 1 input.xyz\n",
         encoding="utf-8",
     )
     stage = _restart_stage(original)
@@ -95,7 +95,9 @@ def test_rematerialize_orca_restart_input_advances_generation_and_repoints_comma
     assert (first / "input.out").read_text(encoding="utf-8") == "first output"
     assert not (second / "input.out").exists()
     assert not (second / "job_state.json").exists()
-    assert "! NEW Opt" in (second / "input.inp").read_text(encoding="utf-8")
+    restarted_input = (second / "input.inp").read_text(encoding="utf-8")
+    assert "! NEW Opt" in restarted_input
+    assert "OLD Opt" not in restarted_input
     provenance = json.loads((second / "source_candidate.json").read_text())["restart_provenance"]
     assert provenance["previous_reaction_dir"] == str(first)
     persisted_enqueue = json.loads((second / "enqueue_payload.json").read_text())
@@ -656,6 +658,17 @@ def test_set_block_key_value_updates_hybrid_pal_start_line_without_duplicate() -
     assert lines[1] == "%pal nprocs 7"
     assert "  nprocs 7" not in lines
     assert read_nprocs(lines) == 7
+
+
+def test_resource_directives_parse_active_text_after_closed_comments() -> None:
+    lines = [
+        "# ordinary ! PAL999 %maxcore 999999",
+        "# hidden # ! PAL7",
+        "# hidden # %maxcore 2048",
+    ]
+
+    assert read_nprocs(lines) == 7
+    assert read_maxcore(lines) == 2048
 
 
 def test_rematerialize_orca_restart_input_preserves_inline_geometry(tmp_path: Path) -> None:

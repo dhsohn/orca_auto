@@ -6,7 +6,9 @@ from typing import Any
 
 import pytest
 
+from orca_auto.flow._orca_stage_materialization import render_orca_input
 from orca_auto.flow.contracts import WorkflowStageInput
+from orca_auto.flow.endpoint_pairing import EndpointPairingPolicy, select_endpoint_pairs
 from orca_auto.flow.orchestration.deps import orchestration_deps
 from orca_auto.flow.orchestration.materialization import (
     append_crest_orca_stages_impl,
@@ -81,7 +83,174 @@ def _write_xyz(path: Path, coords: list[tuple[str, float, float, float]]) -> str
     return str(path)
 
 
-def test_append_reaction_xtb_stages_creates_full_cartesian_product(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("charge", "multiplicity"),
+    [(1.9, 2), (1, 2.9), (True, 1), (0, True)],
+)
+def test_orca_input_renderer_rejects_lossy_electronic_state(
+    charge: object,
+    multiplicity: object,
+) -> None:
+    with pytest.raises(ValueError, match=r"(?:charge|multiplicity) must be an integer"):
+        render_orca_input(
+            route_line="! r2scan-3c",
+            charge=charge,  # type: ignore[arg-type]
+            multiplicity=multiplicity,  # type: ignore[arg-type]
+            max_cores=1,
+            max_memory_gb=1,
+            xyz_filename="input.xyz",
+        )
+
+
+def test_disabled_endpoint_pairing_caps_eight_by_eight_cartesian_product() -> None:
+    reactants = [
+        _candidate(
+            f"/tmp/reactant_{index}.xyz",
+            source_job_id="crest_r",
+            source_job_type="crest",
+            reaction_key=f"reactant_{index}",
+            rank=index,
+            kind="conformer",
+        )
+        for index in range(1, 9)
+    ]
+    products = [
+        _candidate(
+            f"/tmp/product_{index}.xyz",
+            source_job_id="crest_p",
+            source_job_type="crest",
+            reaction_key=f"product_{index}",
+            rank=index,
+            kind="conformer",
+        )
+        for index in range(1, 9)
+    ]
+
+    policy = EndpointPairingPolicy.from_raw(None, default_max_pairs=8)
+    pairs = select_endpoint_pairs(reactants, products, policy=policy)
+
+    assert policy.enabled is False
+    assert policy.max_pairs == 8
+    assert len(pairs) == 8
+    assert [(pair.reactant.rank, pair.product.rank) for pair in pairs] == [
+        (index, index) for index in range(1, 9)
+    ]
+
+
+@pytest.mark.parametrize("field", ["max_distance_rmsd", "max_rmsd", "rank_weight"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), "nan", "-inf"])
+def test_endpoint_pairing_rejects_nonfinite_policy_values(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match="must be a finite number"):
+        EndpointPairingPolicy.from_raw({"enabled": True, field: value})
+
+
+def test_endpoint_pairing_never_falls_back_across_element_order_mismatch(tmp_path: Path) -> None:
+    reactant = _write_xyz(
+        tmp_path / "reactant.xyz",
+        [("H", 0, 0, 0), ("O", 0, 0, 1)],
+    )
+    product = _write_xyz(
+        tmp_path / "product.xyz",
+        [("O", 0, 0, 0), ("H", 0, 0, 1)],
+    )
+    policy = EndpointPairingPolicy.from_raw(
+        {
+            "enabled": True,
+            "comparison_atoms": [1, 2],
+            "fallback_to_ranked": True,
+        }
+    )
+
+    pairs = select_endpoint_pairs(
+        [
+            _candidate(
+                reactant,
+                source_job_id="r",
+                source_job_type="crest",
+                reaction_key="rxn",
+                rank=1,
+                kind="conformer",
+            )
+        ],
+        [
+            _candidate(
+                product,
+                source_job_id="p",
+                source_job_type="crest",
+                reaction_key="rxn",
+                rank=1,
+                kind="conformer",
+            )
+        ],
+        policy=policy,
+    )
+
+    assert pairs == ()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"comparison_atoms": [1.5, 2]},
+        {"comparison_atoms": [True, 2]},
+        {"comparison_atoms": ["bogus"]},
+        {"max_distance_rmsd": -0.1},
+        {"rank_weight": -1},
+    ],
+)
+def test_endpoint_pairing_rejects_lossy_scientific_policy_values(
+    raw: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="endpoint_pairing"):
+        EndpointPairingPolicy.from_raw(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"enabled": "tru"},
+        {"enabled": 1},
+        {"fallback_to_ranked": "maybe"},
+        {"fallback_to_ranked": 0},
+        {"mode": "disabledd"},
+        {"mode": True},
+        {"enable": False},
+        {"fallback_to_rankd": False},
+        "geometry",
+        1,
+        ["enabled"],
+    ],
+)
+def test_endpoint_pairing_rejects_invalid_boolean_and_shorthand_types(raw: object) -> None:
+    with pytest.raises(ValueError, match="endpoint_pairing"):
+        EndpointPairingPolicy.from_raw(raw)
+
+
+@pytest.mark.parametrize("raw", [True, "true", "yes", "on", "enabled", "1"])
+def test_endpoint_pairing_accepts_supported_enabled_shorthand(raw: object) -> None:
+    assert EndpointPairingPolicy.from_raw(raw).enabled is True
+
+
+@pytest.mark.parametrize("raw", [False, "false", "no", "off", "disabled", "0"])
+def test_endpoint_pairing_accepts_supported_disabled_shorthand(raw: object) -> None:
+    assert EndpointPairingPolicy.from_raw(raw).enabled is False
+
+
+@pytest.mark.parametrize("mode", ["true", "yes", "on", "enabled", "1"])
+def test_endpoint_pairing_accepts_supported_enabled_mapping_modes(mode: str) -> None:
+    assert EndpointPairingPolicy.from_raw({"mode": mode}).enabled is True
+
+
+@pytest.mark.parametrize("mode", ["false", "no", "off", "disabled", "0", "none"])
+def test_endpoint_pairing_accepts_supported_disabled_mapping_modes(mode: str) -> None:
+    assert EndpointPairingPolicy.from_raw({"mode": mode}).enabled is False
+
+
+@pytest.mark.parametrize("max_handoff_retries", [0, 4])
+def test_append_reaction_xtb_stages_caps_cartesian_product(
+    tmp_path: Path,
+    max_handoff_retries: int,
+) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_reaction_01",
         "stages": [
@@ -103,7 +272,7 @@ def test_append_reaction_xtb_stages_creates_full_cartesian_product(tmp_path: Pat
                 "parameters": {
                     "max_crest_candidates": 2,
                     "max_xtb_stages": 3,
-                    "max_xtb_handoff_retries": 4,
+                    "max_xtb_handoff_retries": max_handoff_retries,
                     "charge": -1,
                     "multiplicity": 2,
                     "xtb_job_manifest": {"gfn": 1},
@@ -176,9 +345,11 @@ def test_append_reaction_xtb_stages_creates_full_cartesian_product(tmp_path: Pat
         "xtb_path_search_01",
         "xtb_path_search_02",
         "xtb_path_search_03",
-        "xtb_path_search_04",
     ]
-    assert all(stage["task"]["payload"]["max_handoff_retries"] == 4 for stage in xtb_stages)
+    assert all(
+        stage["task"]["payload"]["max_handoff_retries"] == max_handoff_retries
+        for stage in xtb_stages
+    )
     assert all(
         stage["task"]["payload"]["job_manifest_overrides"]
         == {
@@ -188,6 +359,57 @@ def test_append_reaction_xtb_stages_creates_full_cartesian_product(tmp_path: Pat
         }
         for stage in xtb_stages
     )
+
+
+def test_append_reaction_xtb_stages_fails_when_completed_crest_has_no_geometry(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_empty_crest",
+        "template_name": "reaction_ts_search",
+        "status": "running",
+        "stages": [
+            {
+                "stage_id": "crest_reactant",
+                "status": "completed",
+                "metadata": {"input_role": "reactant"},
+                "task": {"engine": "crest"},
+            },
+            {
+                "stage_id": "crest_product",
+                "status": "completed",
+                "metadata": {"input_role": "product"},
+                "task": {"engine": "crest"},
+            },
+        ],
+        "metadata": {"request": {"parameters": {}}},
+    }
+    deps = orchestration_deps(
+        overrides={
+            "_completed_crest_stage": lambda stage, **kwargs: stage["metadata"]["input_role"],
+            "select_crest_downstream_inputs": lambda contract, policy: (
+                ()
+                if contract == "reactant"
+                else (
+                    _candidate(
+                        "/tmp/product.xyz",
+                        source_job_id="crest_p",
+                        source_job_type="crest",
+                        reaction_key="p",
+                        rank=1,
+                        kind="conformer",
+                    ),
+                )
+            ),
+        }
+    )
+
+    created = append_reaction_xtb_stages_impl(
+        payload, workspace_dir=tmp_path, crest_config="/tmp/crest.yaml", deps=deps
+    )
+
+    assert created is False
+    assert payload["metadata"]["workflow_error"]["scope"] == ("reaction_ts_search_crest_handoff")
 
 
 def test_append_reaction_xtb_stages_filters_endpoint_pairs(
@@ -738,13 +960,22 @@ def test_append_reaction_orca_stages_appends_unattempted_candidate_without_mutat
         kind="ts_guess",
         score=-9.0,
     )
+    third_candidate = _candidate(
+        "/tmp/candidate_03.xyz",
+        source_job_id="xtb_job_02",
+        source_job_type="path_search",
+        reaction_key="rxn_02",
+        rank=3,
+        kind="ts_guess",
+        score=-8.0,
+    )
     payload: dict[str, Any] = {
         "workflow_id": "wf_reaction_03",
         "metadata": {
             "workflow_error": {"scope": "reaction_ts_search_orca_candidate_exhausted"},
             "request": {
                 "parameters": {
-                    "max_orca_stages": 3,
+                    "max_orca_stages": 2,
                     "orca_route_line": "! custom route",
                 }
             },
@@ -786,6 +1017,7 @@ def test_append_reaction_orca_stages_appends_unattempted_candidate_without_mutat
             "select_xtb_downstream_inputs": lambda *args, **kwargs: (
                 first_candidate,
                 second_candidate,
+                third_candidate,
             ),
             "build_materialized_orca_stage": _orca_stage_result,
             "now_utc_iso": lambda: "2026-04-19T15:00:00+00:00",
@@ -807,8 +1039,11 @@ def test_append_reaction_orca_stages_appends_unattempted_candidate_without_mutat
     assert "workflow_error" not in payload["metadata"]
     assert appended["stage_id"] == "orca_optts_freq_02"
     assert appended["metadata"]["reaction_candidate_attempt_index"] == 2
-    assert appended["metadata"]["reaction_candidate_pool_size"] == 2
+    assert appended["metadata"]["reaction_candidate_pool_size"] == 3
+    assert appended["metadata"]["reaction_candidate_limit"] == 2
+    assert appended["metadata"]["reaction_candidates_omitted_by_limit"] == 1
     assert appended["metadata"]["reaction_remaining_candidates_after_this"] == 0
+    assert len(payload["stages"]) == 3
 
 
 def test_append_reaction_orca_stages_fails_workflow_when_all_orca_candidates_fail(
@@ -1076,6 +1311,42 @@ def test_append_crest_orca_stages_fails_workflow_when_all_conformers_fail(
         "reason": "conformers_failed",
         "message": "All conformer optimization stages failed; no optimized conformer was produced.",
     }
+
+
+def test_append_crest_orca_stages_fails_when_completed_crest_has_no_geometry(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_conf_empty_crest",
+        "metadata": {
+            "request": {"parameters": {"max_orca_stages": 2}},
+            "workspace_dir": str(tmp_path),
+        },
+        "stages": [
+            {"stage_id": "crest_stage_01", "status": "completed", "task": {"engine": "crest"}}
+        ],
+    }
+    deps = orchestration_deps(
+        overrides={
+            "_completed_crest_stage": lambda stage, **kwargs: "crest_contract",
+            "_load_config_root": lambda path, **kwargs: tmp_path,
+            "select_crest_downstream_inputs": lambda contract, policy: (),
+        }
+    )
+
+    created = append_crest_orca_stages_impl(
+        payload,
+        template_name="conformer_screening",
+        crest_config="/tmp/crest.yaml",
+        orca_config="/tmp/orca.yaml",
+        stage_id_prefix="orca_conformer",
+        xyz_filename="conformer.xyz",
+        inp_filename="conformer.inp",
+        deps=deps,
+    )
+
+    assert created is False
+    assert payload["metadata"]["workflow_error"]["scope"] == ("conformer_screening_crest_handoff")
 
 
 def test_append_crest_orca_stages_materializes_twenty_orca_children(

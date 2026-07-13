@@ -68,7 +68,7 @@ class _EngineChildJobRunner:
     controller: ChildWorkerShutdownController
     process_dequeued_entry_fn: Callable[..., Any]
     dependencies_fn: Callable[[], Any]
-    requeue_running_entry_fn: Callable[[Path, str], Any]
+    requeue_running_entry_fn: Callable[..., Any]
     mark_recovery_pending_context_fn: Callable[..., Any]
     process_kwargs: Mapping[str, Any]
     admission_token: str | None
@@ -121,8 +121,16 @@ class _EngineChildJobRunner:
         return int(self.spec.outcome_exit_code_fn(outcome))
 
     def _handle_shutdown(self, job: ChildWorkerEntrypointJob, exc: BaseException) -> int:
-        updated = self.requeue_running_entry_fn(job.queue_root, self.queue_id)
-        if not requeue_result_is_cancelled(updated):
+        task_id = str(getattr(job.entry, "task_id", "") or "").strip()
+        generation_kwargs = {"expected_entry": job.entry}
+        if task_id:
+            generation_kwargs["expected_task_id"] = task_id
+        updated = self.requeue_running_entry_fn(
+            job.queue_root,
+            self.queue_id,
+            **generation_kwargs,
+        )
+        if updated is not None and not requeue_result_is_cancelled(updated):
             self.mark_recovery_pending_context_fn(
                 job.cfg,
                 self.spec.shutdown_context_fn(exc),

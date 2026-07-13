@@ -32,6 +32,14 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - 네이티브 Linux 또는 WSL2.
 - 설정된 루트와 실행 파일에는 Linux/POSIX 경로 사용.
 - ORCA, xTB, CREST 실행 파일을 설정할 경우 절대 Linux 실행 경로 사용.
+- 계산 엔진을 실행하는 계정은 작업이 끝날 때까지 작업 디렉터리와 실행 파일 배포본을
+  소유하고 신뢰해야 합니다. xTB/CREST에서는 캡처된 `PATH`/`LD_LIBRARY_PATH`와
+  `XTBPATH`/`XTBHOME` 파라미터 루트도 포함됩니다. 실행 파일 바이트에는 콘텐츠 정체성을
+  부여하지만 공유 라이브러리와 외부 파라미터 내용은 큐 generation 안으로 복사하지
+  않습니다. 따라서 같은 UID로 실행되는 신뢰할 수 없는 프로세스는 격리 경계 밖입니다.
+- 실행 파일 콘텐츠 정체성은 엔진 버전 호환성 검사와 다릅니다. 현재 orca_auto는
+  ORCA/xTB/CREST semantic version을 probe하거나 강제하지 않으므로 운영자가 배포할 정확한
+  배포본을 qualification하고 고정해야 합니다.
 
 지원하지 않는 가정:
 
@@ -120,6 +128,9 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `scheduler.admission_root`를 따로 설정하지 않으면 admission 디렉터리는
   `<runs_root>/.admission`입니다.
 - `scheduler.max_active_simulations`는 ORCA, 내부 xTB, 내부 CREST 작업의 공통 active 상한입니다.
+- 명시한 `scheduler`, `resources`, `workflow`, `workflow.paths` section은 mapping이어야 합니다.
+  `scheduler.admission_root`는 절대 Linux 경로여야 하고 명시한 scheduler/resource 상한은
+  양의 정수여야 합니다. 잘못된 실행 제어 값은 기본값으로 바꾸지 않고 거부합니다.
 - `orca.runtime.default_max_retries: 0`은 ORCA 재시도를 비활성화합니다.
 - 양수 `default_max_retries`는 ORCA route 종류별 cap을 따르는 계산 종류별 재시도 정책을
   활성화합니다.
@@ -169,6 +180,9 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `failed`
 - `cancelled`
 
+큐 우선순위는 숫자가 낮은 정수부터 높은 정수 순으로 처리합니다. `0`과 음수도
+유효하며, 누락된 값으로 취급하지 않습니다.
+
 `orca_auto queue list --json`은 다음을 반환합니다:
 
 - `count`
@@ -193,7 +207,26 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 `metadata`는 확장 가능한 mapping입니다. 스크립트는 `queue_id`, `task_id`, `task_kind`,
 `run_id`, `workflow_id`, `reaction_dir`, `job_dir`, `allowed_root`, `priority`,
 `template_name`, `workspace_dir` 같은 알려진 키를 사용할 수 있지만, 키가 없거나 새 키가
-추가되는 상황을 견뎌야 합니다.
+추가되는 상황을 견뎌야 합니다. 같은 generation의 state/report 쌍을 재구성할 수 없는 종료
+행은 무한히 복구를 반복하지 않고 `repair_blocked` activity로 노출하며,
+`repair_blocked_reason`과 `queue_error` metadata를 제공합니다.
+
+xTB/CREST 큐 산출물에는 내부 immutable-generation fingerprint가 기록되고, 새
+xTB/CREST/ORCA 행에는 제출 시점 execution snapshot이 들어갑니다. 이 필드가 없던
+빌드에서 업그레이드하기 전에는 이전 빌드로 해당 행을 drain하거나 취소/clear한 뒤 새
+빌드에서 다시 제출해야 합니다. snapshot 이전 큐 행의 in-place adoption은 지원하지
+않으며, 검증할 수 없는 산출물은 새 generation에 연결하지 않고 fail-closed합니다.
+xTB/CREST snapshot은 공개 task id만으로 소유권을 정하지 않고 제출마다 배타적으로 예약한
+고유 namespace를 사용합니다.
+ORCA snapshot은 실행 전에 중복 `%pal`/`nprocs`, `%maxcore`, `%moinp`, route `PALn`
+지시어처럼 선후순위가 모호한 입력도 거부합니다. 명시적으로 snapshot에 바인딩하지 않는
+외부 include/program hook은 지원하지 않고 fail-closed합니다.
+
+새 xTB/CREST 종료 산출물은 보존 출력에 SHA-256과 byte-size 정체성을 연결하고 downstream
+reader는 현재 파일을 그 종료 정체성과 대조합니다. 정체성이 없는 완료된 legacy 산출물은
+reader가 현재 내용을 hash한 뒤 `identity_backfilled_from_legacy_artifact`로 표시해야만 읽을
+수 있습니다. 이는 읽은 시점의 바이트를 증명할 뿐 과거 종료 전이 시점의 바이트를
+증명하지는 않습니다.
 
 ## ORCA 작업 산출물 계약
 
@@ -229,7 +262,9 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `job.dir`은 작업 디렉터리를 가리킵니다.
 - `status.state`는 작업 상태입니다.
 - `status.reason`은 가능할 때 현재 또는 최종 reason입니다.
-- `input.primary_path`는 선택된 ORCA 입력 경로입니다.
+- snapshot에 바인딩된 행의 `input.primary_path`는 이후 변경 가능한 소스 경로가 아니라 실제
+  실행한 정확한 private ORCA 입력입니다. ORCA execution provenance는 선택한 소스 경로와
+  바인딩한 콘텐츠 정체성을 보존합니다.
 - `timestamps.started_at`, `timestamps.updated_at`, `timestamps.finished_at`은 가능할 때
   UTC 계열 ISO 문자열입니다.
 - `artifacts.last_out_path`는 알려진 경우 마지막 ORCA 출력 경로입니다.
@@ -278,6 +313,10 @@ ORCA analyzer 상태:
 
 워크플로우 입력 manifest 이름은 `flow.yaml`입니다.
 
+`flow.yaml`과 내부 엔진 YAML 작업 manifest는 single-link regular UTF-8 파일이어야 하며
+1 MiB, alias 사용 32개, 파싱 및 확장 object-graph node 10,000개, 중첩 64단계로 제한됩니다.
+순환/재귀 alias 또는 object graph는 workflow 구체화 전에 거부합니다.
+
 워크플로우 이름과 ID는 단일 경로 조각이어야 하며 `(` 또는 `)`를 포함할 수 없습니다.
 기존 워크플로우 디렉터리는 저장된 ID와 아티팩트 경로가 해당 디렉터리에 연결되어 있으므로
 이름을 바꾸지 말고, 새 이름으로 새 워크플로우를 생성해야 합니다.
@@ -299,8 +338,10 @@ ORCA analyzer 상태:
 - `orca.charge`
 - `orca.multiplicity`
 - `crest`
+- `xtb`
 - `endpoint_pairing`
 - `max_crest_candidates`
+- `max_xtb_stages`
 - `max_orca_stages`
 - `scan_coordinate`
 - `barrier_threshold_kcal`
@@ -323,13 +364,40 @@ ORCA analyzer 상태:
 - `interaction_energy.fragments[].label`
 - `allow_external_inputs`
 
-`rmsd_dedup`과 `interaction_energy` 블록은 strict schema를 사용합니다. 알 수 없는 키,
+`crest`와 `xtb` 엔진 작업 mapping, `xtb.ts_guess_validation`, `rmsd_dedup`,
+`interaction_energy` 블록은 strict schema를 사용합니다. 알 수 없는 키,
 잘못된 boolean, 정수가 아닌 integer 필드, 문자열이 아닌 route, 여러 줄/제어문자/비인쇄
 문자가 포함된 route 또는 label은 admission에서 거부합니다. fragment label은 최대 80자입니다.
 활성 interaction-energy 블록은 fragment 2–8개를 요구하고 각 multiplicity는 `[1, 100]`
 정수여야 하며, `sp_route_line`은 순수 single-point 계산만 기술해야 합니다. fragment 인덱스는
 모든 입력 원자를 gap 없이 정적으로 완전 분할해야 합니다. 원격 workflow 업로드에서는 서버가
 소유하는 `interaction_energy.priority`를 설정할 수 없습니다.
+예전 xTB `namespace` 옵션은 정규 artifact 계약에 포함되지 않습니다. 없거나 빈 호환 필드는
+무해하지만 비어 있지 않은 값은 거부되므로 다시 제출하기 전에 제거해야 합니다.
+
+`reaction_ts_search`에서 `max_xtb_stages`와 `max_orca_stages`는 재시작 전에 이미 시도한
+stage까지 포함하는 전체 hard cap입니다. endpoint-pairing 모드도 이 상한을 해제하지
+않습니다. 워크플로우 `orca.charge`/`orca.multiplicity`가 정규 전자 상태이며, 충돌하는
+CREST/xTB `charge` 또는 `uhf` 값은 거부합니다. 정확히 선택된 xTB/CREST snapshot은 현재
+GFN 범위(원자번호 1~86)의 알려진 원소만 사용하고 전자 수가 0 이상이어야 하며, UHF
+비짝전자 수는 전체 전자 수 이내이고 parity가 맞아야 합니다. 완료된 CREST stage는 엄격히 유효하고
+유한한 retained XYZ frame을 하나 이상 제공해야 하며, 서로 겹치는 retained 파일은
+downstream geometry를 중복시킬 수 없습니다. 뒤쪽의 유효한 retained 파일에만 있는 서로
+다른 geometry는 후보로 유지합니다. 유한하지 않은 좌표나 xTB 에너지는 유효한
+워크플로우 artifact가 아닙니다.
+
+로컬 geometry admission 상한은 10,000원자입니다. xTB Hessian 작업과 ORCA
+frequency/Hessian 생성 입력에는 더 엄격한 1,000원자 상한을 적용합니다. 원격 Discord
+workflow 및 ORCA 업로드 상한은 200원자입니다.
+
+신뢰된 로컬 CREST 작업에서 명시적 `mdlen`의 기본 aggregate `max_md_steps` budget은
+10,000,000입니다. `mdlen`을 생략하면 CREST 자동 길이의 최악 조건을 14,000,000-step 기본
+budget으로 admission합니다. 따라서 표준 non-quick trajectory 배수에서는 GFN-FF와
+`gfn2//gfnff`에 명시적으로 제한한 `mdlen` 또는 high-cost 승인을 동반한 더 큰 명시적 step
+budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-step 상한도 적용합니다.
+원격 workflow ingress는 서버 소유
+`mdlen: 5.0` ps를 주입하고 50,000,000 atom-step을 넘는 작업을 거부하며, 업로드 manifest는
+CREST runtime/cost 제어를 재정의할 수 없습니다.
 
 워크플로우 런타임 산출물:
 
@@ -437,6 +505,9 @@ ORCA analyzer 상태:
   생략합니다.
 - `workflow_registry.json`과 `workflow_registry.journal.jsonl`은 워크플로우 목록과 이벤트
   히스토리를 지원합니다.
+- xTB/CREST 종료 출력 정체성은 downstream 파싱 전에 검증합니다. downstream stage로 넘기는
+  단일 출력 XYZ의 materialization 상한은 512 MiB이며, 더 큰 출력 ensemble은 제한 없이
+  메모리에 올리지 않고 fail-closed합니다.
 - 내부 엔진 큐와 출력은 `<runs root>/<workflow_id>/01_crest`, `02_xtb`, `03_orca` 같은
   워크플로우 단계 디렉터리 아래에 있습니다.
 

@@ -148,6 +148,11 @@ src/orca_auto/
   큐 항목을 해석합니다. 레거시 ORCA `--reaction-dir` 직접 모드는 지원되지
   않습니다. `reaction_dir` 필드는 다운스트림 계약으로서 큐 항목에 그대로
   보존됩니다.
+- **큐 generation은 제출 시점에 실행 입력을 바인딩합니다.** xTB/CREST는 콘텐츠 주소형
+  입력 snapshot을 제출마다 배타적으로 예약한 고유 namespace에 만들고, ORCA는 private
+  generation 트리를 만들어 지원하는 파일 참조를 그 안의 confined 복사본으로 다시 씁니다.
+  워커는 변경 가능한 소스 파일을 실행 계약으로 다시 읽지 않고 입력 및 실행 파일 정체성을
+  검증합니다.
 - **워커가 실행 중이 아니면 작업은 대기 상태로 남습니다** — 워커가 돌아올 때까지
   `queue.json`에 보관됩니다. `status: queued` 이후 제출 터미널을 닫아도
   안전합니다.
@@ -235,8 +240,9 @@ python -m orca_auto.core.engines.worker_child \
 `orca_auto.orca`는 정규 ORCA 구현으로 가장 깊은 도메인 로직을 갖습니다. 주요
 구성요소:
 
-- **입력 선택:** 실제 실행이 시작될 때, ORCA는 대상 디렉터리에서 가장 최근에
-  수정된 `*.inp`를 선택합니다.
+- **입력 선택과 바인딩:** 제출할 때 ORCA는 대상 디렉터리에서 가장 최근에 수정된
+  `*.inp`를 선택하고 지원하는 파일 의존성과 함께 snapshot한 뒤, 해당 큐 generation의
+  private 바인딩 입력만 실행합니다.
 - **시도 엔진**(`attempt/engine.py`, `attempt/retry.py`, `attempt/resume.py`):
   시도를 실행하고 출력을 파싱·분류한 뒤 재시도 여부를 결정합니다.
 - **출력 분석**(`parser/`, `out_analyzer.py`, `output_status.py`,
@@ -302,6 +308,11 @@ ORCA가 다운스트림에 노출하는 필드("계약 동결")는
 구체화(materialize)됩니다. `scaffold`는 시작용 `flow.yaml`과 표준 XYZ 파일명을
 작성합니다.
 
+구체화 전에 manifest admission을 제한합니다. 공용 loader는 작업 manifest 하나를 1 MiB,
+YAML alias 32개, 파싱/확장 node 10,000개, 중첩 64단계로 제한하고 순환/재귀 graph를
+거부합니다. 중앙 geometry 상한은 로컬 작업 10,000원자, xTB/ORCA Hessian 생성 작업
+1,000원자, 원격 업로드 작업 200원자입니다.
+
 ### advance 루프
 
 `flow/orchestration/advance.py`는 오케스트레이션의 심장인
@@ -321,9 +332,10 @@ ORCA가 다운스트림에 노출하는 필드("계약 동결")는
 
 ### 예시: 반응 TS 탐색
 
-`reaction_ts_search`는 선택된 모든 반응물×생성물 CREST 쌍을 xTB 자식 작업으로
-전개하고, xTB 페이즈 전체가 종료 상태에 도달할 때까지 기다린 뒤, 보존된
-`ts_guess` 아티팩트로부터 일치하는 ORCA OptTS 자식 작업을 배치합니다.
+`reaction_ts_search`는 선택된 반응물×생성물 CREST 쌍을 결정론적으로 정렬하고 설정된
+전체 xTB stage 상한까지만 구체화합니다. 그 xTB 페이즈가 종료 상태에 도달할 때까지 기다린
+뒤, 보존된 `ts_guess` 아티팩트에서 일치하는 ORCA OptTS 자식 작업을 설정된 전체 ORCA
+stage 상한까지 배치합니다.
 
 ### 예시: 컨포머 스크리닝
 

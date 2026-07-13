@@ -1,22 +1,28 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import subprocess
 from argparse import Namespace
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.admission import release_slot
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_APP_NAME
+from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.engines.worker_child import (
     WORKER_CHILD_MODULE,
     build_worker_child_command_for_engine,
 )
 from orca_auto.core.queue.child.execution import find_queue_entry_by_id
 from orca_auto.core.queue.engine import execution as _engine_execution
-from orca_auto.core.queue.internal_engine import InternalEngineSpec
+from orca_auto.core.queue.internal_engine import (
+    InternalEngineSpec,
+    entry_matches_engine_identity,
+    entry_status_is_running,
+)
 from orca_auto.core.queue.worker import (
     install_shutdown_signal_handlers,
     resolve_admission_root,
@@ -26,6 +32,7 @@ from orca_auto.core.queue.worker.execution_dependencies import run_worker_child_
 from .attempt.reporting import build_final_result
 from .commands.run_inp import _cmd_run_inp_execute
 from .config import load_config
+from .execution_binding import verify_orca_execution_snapshot
 from .orca_runner import OrcaRunner, WorkerShutdownInterrupt
 from .queue.adapter import (
     get_cancel_requested,
@@ -63,6 +70,12 @@ class OrcaWorkerExecutionContext:
     admission_token: str | None
     admission_app_name: str | None
     admission_task_id: str | None
+    selected_inp: str
+    selected_input_xyz: str
+    resource_request: dict[str, int]
+    max_retries: int
+    execution_snapshot: dict[str, Any]
+    orca_executable: str
 
 
 @dataclass(frozen=True)
@@ -81,6 +94,9 @@ build_worker_child_command = build_worker_child_command_for_engine("orca")
 
 _worker_child = _ENGINE_SPEC.worker_child_module_facade(
     WorkerShutdownRequested,
+    entry_ready_fn=lambda entry: (
+        entry_status_is_running(entry) and entry_matches_engine_identity(entry, "orca")
+    ),
     outcome_exit_code_fn=_orca_worker_outcome_exit_code,
     build_worker_child_command=build_worker_child_command,
 )
@@ -105,25 +121,69 @@ def _queue_entry_by_id(queue_root: Path, queue_id: str) -> Any | None:
 
 
 def _build_execution_context(
-    _cfg: Any,
+    cfg: Any,
     entry: Any,
     *,
     worker_config_path: str,
     admission_token: str | None,
 ) -> OrcaWorkerExecutionContext:
+    metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+    raw_reaction_dir = Path(queue_entry_reaction_dir(entry)).expanduser()
+    reaction_dir = raw_reaction_dir.resolve()
+    allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
+    if (
+        raw_reaction_dir.is_symlink()
+        or not reaction_dir.is_relative_to(allowed_root)
+        or not reaction_dir.is_dir()
+    ):
+        raise ValueError("Queued ORCA reaction directory is outside the configured root")
+    selected_inp = str(metadata.get("selected_inp") or "").strip()
+    selected_input_xyz = str(metadata.get("selected_input_xyz") or "").strip()
+    snapshot = metadata.get("execution_snapshot")
+    if not isinstance(snapshot, dict):
+        raise ValueError(
+            "Queued ORCA entry predates immutable execution snapshots; drain or resubmit it"
+        )
+    resource_request = metadata.get("resource_request")
+    if (
+        not isinstance(resource_request, dict)
+        or set(resource_request) != {"max_cores", "max_memory_gb"}
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in resource_request.values()
+        )
+    ):
+        raise ValueError("Queued ORCA entry has no resource request")
+    max_retries = metadata.get("max_retries")
+    if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
+        raise ValueError("Queued ORCA entry has an invalid retry budget")
+    verified_selected, orca_executable = verify_orca_execution_snapshot(
+        reaction_dir,
+        snapshot,
+        expected_selected_inp=selected_inp,
+        expected_selected_input_xyz=selected_input_xyz,
+        expected_resource_request=resource_request,
+        expected_max_retries=max_retries,
+    )
     return OrcaWorkerExecutionContext(
         entry=entry,
         config_path=worker_config_path,
-        reaction_dir=queue_entry_reaction_dir(entry),
+        reaction_dir=str(reaction_dir),
         force=queue_entry_force(entry),
         admission_token=admission_token,
         admission_app_name=queue_entry_app_name(entry) or None,
         admission_task_id=queue_entry_task_id(entry) or None,
+        selected_inp=str(verified_selected),
+        selected_input_xyz=selected_input_xyz,
+        resource_request=dict(resource_request),
+        max_retries=max_retries,
+        execution_snapshot=snapshot,
+        orca_executable=orca_executable,
     )
 
 
 def _run_orca_job_for_entry(
-    _cfg: Any,
+    cfg: Any,
     context: OrcaWorkerExecutionContext,
     _queue_root: Path,
     _options: _engine_execution.InternalWorkerOptions,
@@ -137,14 +197,73 @@ def _run_orca_job_for_entry(
         )
 
     class ShutdownAwareOrcaRunner(OrcaRunner):
-        def __init__(self, orca_executable: str) -> None:
-            super().__init__(orca_executable)
+        def __init__(self, _configured_orca_executable: str) -> None:
+            super().__init__(context.orca_executable)
+            self.set_executable_identity(
+                context.execution_snapshot["executable_identities"]["orca"]
+            )
             self.set_shutdown_requested(stop_requested)
+
+        def run(self, inp_path: Path) -> Any:
+            try:
+                current_input = require_confined_regular_file(
+                    Path(context.execution_snapshot["execution_dir"]),
+                    inp_path,
+                    label="ORCA queued execution input",
+                )
+                if (
+                    current_input.parent
+                    != Path(context.execution_snapshot["execution_dir"]).resolve()
+                    or current_input.suffix.lower() != ".inp"
+                ):
+                    raise ValueError("ORCA queued execution input must be a private .inp file")
+                verify_orca_execution_snapshot(
+                    context.reaction_dir,
+                    context.execution_snapshot,
+                    expected_selected_inp=context.selected_inp,
+                    expected_selected_input_xyz=context.selected_input_xyz,
+                    expected_resource_request=context.resource_request,
+                    expected_max_retries=context.max_retries,
+                )
+                result = super().run(inp_path)
+                result.execution_provenance = {
+                    "execution_dir": context.execution_snapshot["execution_dir"],
+                    "source_selected_inp": context.execution_snapshot["source_selected_inp"],
+                    "bound_selected_identity": dict(
+                        context.execution_snapshot["bound_selected_identity"]
+                    ),
+                    "materialized_inputs": dict(context.execution_snapshot["materialized_inputs"]),
+                    "executable_identity": dict(
+                        context.execution_snapshot["executable_identities"]["orca"]
+                    ),
+                }
+                return result
+            finally:
+                verify_orca_execution_snapshot(
+                    context.reaction_dir,
+                    context.execution_snapshot,
+                    expected_selected_inp=context.selected_inp,
+                    expected_selected_input_xyz=context.selected_input_xyz,
+                    expected_resource_request=context.resource_request,
+                    expected_max_retries=context.max_retries,
+                )
+
+    bound_cfg = copy.copy(cfg)
+    bound_cfg.runtime = copy.copy(cfg.runtime)
+    bound_cfg.runtime.default_max_retries = context.max_retries
+    if hasattr(cfg, "resources"):
+        bound_cfg.resources = replace(
+            cfg.resources,
+            max_cores_per_task=context.resource_request["max_cores"],
+            max_memory_gb_per_task=context.resource_request["max_memory_gb"],
+        )
 
     try:
         return execute_run_job(
             context.config_path,
             context.reaction_dir,
+            selected_inp=context.selected_inp,
+            cfg=bound_cfg,
             force=context.force,
             reservation_token=context.admission_token,
             admission_app_name=context.admission_app_name,
@@ -220,7 +339,11 @@ def process_dequeued_entry(
             admission_token=admission_token,
         ),
         shutdown_requested=shutdown_requested,
-        should_cancel=lambda: get_cancel_requested(queue_root, str(entry.queue_id)),
+        should_cancel=lambda: get_cancel_requested(
+            queue_root,
+            str(entry.queue_id),
+            expected_entry=entry,
+        ),
     )
 
 
@@ -263,6 +386,8 @@ def execute_run_job(
     config_path: str,
     reaction_dir: str,
     *,
+    selected_inp: str | Path | None = None,
+    cfg: Any | None = None,
     force: bool = False,
     reservation_token: str | None = None,
     admission_app_name: str | None = None,
@@ -276,6 +401,9 @@ def execute_run_job(
             force=force,
         ),
         runner_cls=runner_cls,
+        cfg=cfg,
+        reaction_dir=Path(reaction_dir).expanduser().resolve(),
+        selected_inp=(Path(selected_inp).expanduser().resolve() if selected_inp else None),
         reservation_token=reservation_token,
         admission_app_name=_canonical_admission_app_name(admission_app_name),
         admission_task_id=admission_task_id,

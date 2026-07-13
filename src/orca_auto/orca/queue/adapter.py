@@ -3,12 +3,26 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 from orca_auto.core.queue import store as _queue_store
+from orca_auto.core.queue.internal_engine import entry_matches_engine_identity
+from orca_auto.core.queue.priority import normalize_queue_priority
+from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_ABORTED,
+    QUEUE_RECORD_SYNC_KEY,
+    QUEUE_RECORD_SYNC_OWNER_PID_KEY,
+    QUEUE_RECORD_SYNC_OWNER_START_KEY,
+    QUEUE_RECORD_SYNC_PREPARING,
+    QUEUE_RECORD_SYNC_REPAIRING,
+    QUEUE_RECORD_SYNC_TOKEN_KEY,
+    QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
+    queue_record_sync_metadata,
+)
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import now_utc_iso, timestamped_token
 
@@ -42,10 +56,13 @@ logger = logging.getLogger(__name__)
 
 _UNSET = object()
 TERMINAL_REPLAY_METADATA_KEY = "orca_terminal_replay"
+_TOKEN_COLLISION_RETRY_LIMIT = 32
 
 __all__ = [
     "ACTIVE_STATUSES",
     "DuplicateEntryError",
+    "AmbiguousPublicationRecoveryError",
+    "AmbiguousQueueTargetError",
     "QUEUE_APP_NAME",
     "QUEUE_ENGINE",
     "QUEUE_FILE_NAME",
@@ -59,8 +76,10 @@ __all__ = [
     "dequeue_next",
     "enqueue",
     "get_active_entry_for_reaction_dir",
+    "get_entry_by_id",
     "get_cancel_requested",
     "has_pending_entries",
+    "is_orca_queue_entry",
     "find_entry_by_target",
     "list_queue",
     "mark_cancelled",
@@ -76,10 +95,13 @@ __all__ = [
     "queue_entry_run_id",
     "queue_entry_status",
     "queue_entry_task_id",
+    "queue_entries_same_publication_generation",
     "reconcile_orphaned_running_entries",
+    "recover_enqueue_publication",
     "requeue_running_entry",
     "update_running_entry_state",
     "update_terminal",
+    "transition_queue_record_publication",
     "worker_log_path",
 ]
 
@@ -89,6 +111,11 @@ def _now_iso() -> str:
 
 
 def worker_log_path(allowed_root: Path, queue_id: str) -> Path:
+    if (
+        queue_id in {".", ".."}
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", queue_id) is None
+    ):
+        raise ValueError("Queue id is not safe for a worker log filename")
     return Path(allowed_root).expanduser().resolve() / "logs" / f"{queue_id}.log"
 
 
@@ -117,12 +144,26 @@ class DuplicateEntryError(ValueError):
         )
 
 
+class AmbiguousPublicationRecoveryError(RuntimeError):
+    """Raised when an outcome-unknown enqueue has multiple exact durable rows."""
+
+
+class AmbiguousQueueTargetError(ValueError):
+    """Raised when a cancel alias names multiple active ORCA generations."""
+
+
+def is_orca_queue_entry(entry: Any) -> bool:
+    """Return whether a row carries the complete canonical ORCA identity."""
+    return entry_matches_engine_identity(entry, QUEUE_ENGINE)
+
+
 def _reject_duplicate_reaction_dir(
     entries: Sequence[QueueEntry],
     entry: QueueEntry,
 ) -> None:
     entry_key = queue_entry_reaction_dir(entry)
-    for existing in entries:
+    owned_entries = [existing for existing in entries if is_orca_queue_entry(existing)]
+    for existing in owned_entries:
         if (
             queue_entry_reaction_dir(existing) == entry_key
             and queue_entry_status(existing) in TERMINAL_STATUSES
@@ -134,13 +175,27 @@ def _reject_duplicate_reaction_dir(
             # state/index/notification side effects impossible to replay safely.
             raise DuplicateEntryError(entry_key, existing)
     _queue_store.reject_duplicate_entry_key(
-        entries,
+        owned_entries,
         key=entry_key,
         key_fn=queue_entry_reaction_dir,
         force=queue_entry_force(entry),
         active_statuses=ACTIVE_STATUSES,
         terminal_statuses=TERMINAL_STATUSES,
         error_factory=DuplicateEntryError,
+    )
+
+
+def _unique_timestamped_token(
+    prefix: str,
+    *,
+    occupied: set[str],
+) -> str:
+    for _attempt in range(_TOKEN_COLLISION_RETRY_LIMIT):
+        candidate = timestamped_token(prefix)
+        if candidate not in occupied:
+            return candidate
+    raise RuntimeError(
+        f"Could not allocate a unique {prefix} token after {_TOKEN_COLLISION_RETRY_LIMIT} attempts"
     )
 
 
@@ -157,34 +212,313 @@ def enqueue(
     """Add a reaction directory to the ORCA queue."""
     resolved = str(Path(reaction_dir).expanduser().resolve())
     reconcile_orphaned_running_entries(allowed_root)
-    queue_id = timestamped_token("q", token_bytes=4)
-    queue_metadata = entry_metadata(
-        reaction_dir=resolved,
-        force=force,
-        extra=metadata,
-    )
-    queue_metadata["worker_log"] = str(worker_log_path(allowed_root, queue_id))
+    normalized_priority = normalize_queue_priority(priority)
+    normalized_task_id = normalize_text(task_id)
+    normalized_task_kind = normalize_text(task_kind) or QUEUE_TASK_KIND
 
-    entry = QueueEntry(
-        queue_id=queue_id,
-        app_name=QUEUE_APP_NAME,
-        task_id=normalize_text(task_id) or timestamped_token("orca", token_bytes=4),
-        task_kind=normalize_text(task_kind) or QUEUE_TASK_KIND,
-        engine=QUEUE_ENGINE,
-        status=QueueStatus.PENDING,
-        priority=priority,
-        enqueued_at=_now_iso(),
-        metadata=queue_metadata,
-    )
-    entry = _queue_store.enqueue_entry(
+    def append(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
+        queue_id = _unique_timestamped_token(
+            "q",
+            occupied={entry.queue_id for entry in entries},
+        )
+        resolved_task_id = normalized_task_id or _unique_timestamped_token(
+            "orca",
+            occupied={normalize_text(entry.task_id) for entry in entries},
+        )
+        queue_metadata = entry_metadata(
+            reaction_dir=resolved,
+            force=force,
+            extra=metadata,
+        )
+        queue_metadata["worker_log"] = str(worker_log_path(allowed_root, queue_id))
+        entry = QueueEntry(
+            queue_id=queue_id,
+            app_name=QUEUE_APP_NAME,
+            task_id=resolved_task_id,
+            task_kind=normalized_task_kind,
+            engine=QUEUE_ENGINE,
+            status=QueueStatus.PENDING,
+            priority=normalized_priority,
+            enqueued_at=_now_iso(),
+            metadata=queue_metadata,
+        )
+        _reject_duplicate_reaction_dir(entries, entry)
+        entries.append(entry)
+        return entry, True
+
+    entry = _queue_store.mutate_entries(
         allowed_root,
-        entry,
-        duplicate_policy=_reject_duplicate_reaction_dir,
+        append,
         load_entries_fn=_load_entries,
         save_entries_fn=_queue_store.save_entries,
     )
     logger.info("Enqueued: %s (queue_id=%s, force=%s)", resolved, entry.queue_id, force)
     return entry
+
+
+def _publication_identity_matches(
+    entry: QueueEntry,
+    *,
+    reaction_dir: str,
+    task_id: str,
+    task_kind: str,
+    priority: int,
+    force: bool,
+    token: str,
+    sync_state: str,
+    owner_pid: int,
+    owner_start: str,
+) -> bool:
+    metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+    try:
+        current_owner_pid = int(metadata.get(QUEUE_RECORD_SYNC_OWNER_PID_KEY, 0) or 0)
+        current_priority = int(entry.priority)
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        is_orca_queue_entry(entry)
+        and entry.status == QueueStatus.PENDING
+        and not entry.cancel_requested
+        and normalize_text(entry.app_name) == QUEUE_APP_NAME
+        and normalize_text(entry.task_id) == task_id
+        and normalize_text(entry.task_kind) == task_kind
+        and normalize_text(entry.engine) == QUEUE_ENGINE
+        and current_priority == priority
+        and queue_entry_reaction_dir(entry) == reaction_dir
+        and queue_entry_force(entry) is force
+        and normalize_text(metadata.get(QUEUE_RECORD_SYNC_KEY)).lower() == sync_state
+        and normalize_text(metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY)) == token
+        and current_owner_pid == owner_pid
+        and normalize_text(metadata.get(QUEUE_RECORD_SYNC_OWNER_START_KEY)) == owner_start
+    )
+
+
+def recover_enqueue_publication(
+    allowed_root: Path,
+    *,
+    reaction_dir: str,
+    task_id: str,
+    task_kind: str,
+    priority: int,
+    force: bool,
+    token: str,
+    owner_pid: int,
+    owner_start: str,
+) -> QueueEntry | None:
+    """Fence and recover exactly one ORCA enqueue that may have committed."""
+    resolved_reaction_dir = str(Path(reaction_dir).expanduser().resolve())
+    expected_task_id = normalize_text(task_id)
+    expected_task_kind = normalize_text(task_kind)
+    expected_token = normalize_text(token)
+    expected_owner_start = normalize_text(owner_start)
+    if (
+        not expected_task_id
+        or expected_task_kind != QUEUE_TASK_KIND
+        or not expected_token
+        or int(owner_pid) <= 0
+    ):
+        return None
+
+    def matching_entries(
+        entries: Sequence[QueueEntry],
+        *,
+        sync_state: str,
+    ) -> list[tuple[int, QueueEntry]]:
+        return [
+            (index, entry)
+            for index, entry in enumerate(entries)
+            if _publication_identity_matches(
+                entry,
+                reaction_dir=resolved_reaction_dir,
+                task_id=expected_task_id,
+                task_kind=expected_task_kind,
+                priority=int(priority),
+                force=bool(force),
+                token=expected_token,
+                sync_state=sync_state,
+                owner_pid=int(owner_pid),
+                owner_start=expected_owner_start,
+            )
+        ]
+
+    def unique_match(
+        entries: Sequence[QueueEntry],
+        *,
+        sync_state: str,
+    ) -> tuple[int, QueueEntry] | None:
+        matches = matching_entries(entries, sync_state=sync_state)
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise AmbiguousPublicationRecoveryError(
+                "ambiguous persisted ORCA queue entries after enqueue error; refusing recovery"
+            )
+        return matches[0]
+
+    def recover(entries: list[QueueEntry]) -> tuple[tuple[str, QueueEntry | None], bool]:
+        matches = matching_entries(entries, sync_state=QUEUE_RECORD_SYNC_PREPARING)
+        if not matches:
+            return ("missing", None), False
+        if len(matches) != 1:
+            finished_at = _now_iso()
+            for index, current in matches:
+                metadata = dict(current.metadata)
+                metadata.update(
+                    queue_record_sync_metadata(
+                        QUEUE_RECORD_SYNC_ABORTED,
+                        token=expected_token,
+                        owner_pid=0,
+                    )
+                )
+                entries[index] = replace(
+                    current,
+                    status=QueueStatus.CANCELLED,
+                    cancel_requested=True,
+                    finished_at=finished_at,
+                    metadata=metadata,
+                )
+            return ("ambiguous", None), True
+        index, current = matches[0]
+        metadata = dict(current.metadata)
+        metadata.update(
+            queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_REPAIRING,
+                token=expected_token,
+                owner_pid=int(owner_pid),
+            )
+        )
+        updated = replace(current, metadata=metadata)
+        entries[index] = updated
+        return ("recovered", updated), True
+
+    def visible_recovery(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
+        match = unique_match(entries, sync_state=QUEUE_RECORD_SYNC_REPAIRING)
+        return (match[1] if match is not None else None), False
+
+    try:
+        outcome, recovered = cast(
+            tuple[str, QueueEntry | None],
+            _queue_store.mutate_entries(
+                allowed_root,
+                recover,
+                load_entries_fn=_load_entries,
+                save_entries_fn=_queue_store.save_entries,
+            ),
+        )
+        if outcome == "ambiguous":
+            raise AmbiguousPublicationRecoveryError(
+                "ambiguous persisted ORCA queue entries after enqueue error; "
+                "all exact rows were terminally fenced"
+            )
+        return recovered
+    except BaseException as exc:  # noqa: BLE001
+        try:
+            recovered = cast(
+                QueueEntry | None,
+                _queue_store.mutate_entries(
+                    allowed_root,
+                    visible_recovery,
+                    load_entries_fn=_load_entries,
+                    save_entries_fn=_queue_store.save_entries,
+                ),
+            )
+        except BaseException as reload_exc:  # noqa: BLE001
+            raise exc from reload_exc
+        if recovered is None or not isinstance(exc, Exception):
+            raise
+        logger.warning(
+            "ORCA enqueue recovery became visible after a durability error: task_id=%s",
+            expected_task_id,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        return recovered
+
+
+def transition_queue_record_publication(
+    allowed_root: Path,
+    queue_id: str,
+    *,
+    expected_token: str,
+    expected_state: str,
+    target_state: str,
+    owner_pid: int,
+    expected_entry: QueueEntry | None = None,
+) -> tuple[QueueEntry | None, bool]:
+    """Atomically compare-and-set one ORCA queue publication lease."""
+    normalized_token = normalize_text(expected_token)
+    normalized_expected = normalize_text(expected_state).lower()
+    normalized_target = normalize_text(target_state).lower()
+
+    def transition(current: QueueEntry) -> tuple[tuple[QueueEntry, bool], QueueEntry | None]:
+        if not is_orca_queue_entry(current):
+            return (current, False), None
+        if expected_entry is not None and not queue_entries_same_publication_generation(
+            current, expected_entry
+        ):
+            return (current, False), None
+        metadata = current.metadata if isinstance(current.metadata, dict) else {}
+        current_state = normalize_text(metadata.get(QUEUE_RECORD_SYNC_KEY)).lower()
+        current_token = normalize_text(metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY))
+        if current_state == normalized_target and current_token == normalized_token:
+            return (current, True), None
+        if (
+            current.status != QueueStatus.PENDING
+            or current.cancel_requested
+            or current_state != normalized_expected
+            or current_token != normalized_token
+        ):
+            return (current, False), None
+        updated_metadata = dict(metadata)
+        updated_metadata.update(
+            queue_record_sync_metadata(
+                normalized_target,
+                token=normalized_token,
+                owner_pid=int(owner_pid),
+            )
+        )
+        updated = replace(current, metadata=updated_metadata)
+        return (updated, True), updated
+
+    missing_result: tuple[QueueEntry | None, bool] = (None, False)
+    return cast(
+        tuple[QueueEntry | None, bool],
+        _queue_store.mutate_entry_by_id(
+            allowed_root,
+            queue_id,
+            transition,
+            missing_result=missing_result,
+            load_entries_fn=_load_entries,
+            save_entries_fn=_queue_store.save_entries,
+        ),
+    )
+
+
+def queue_entries_same_publication_generation(current: QueueEntry, expected: QueueEntry) -> bool:
+    return bool(
+        current.queue_id == expected.queue_id
+        and current.app_name == expected.app_name
+        and current.task_id == expected.task_id
+        and current.task_kind == expected.task_kind
+        and current.engine == expected.engine
+        and current.priority == expected.priority
+        and queue_entry_reaction_dir(current) == queue_entry_reaction_dir(expected)
+        and queue_entry_force(current) is queue_entry_force(expected)
+        and _immutable_publication_metadata(current.metadata)
+        == _immutable_publication_metadata(expected.metadata)
+    )
+
+
+def _immutable_publication_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    lease_keys = {
+        QUEUE_RECORD_SYNC_KEY,
+        QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
+        QUEUE_RECORD_SYNC_OWNER_PID_KEY,
+        QUEUE_RECORD_SYNC_OWNER_START_KEY,
+        QUEUE_RECORD_SYNC_TOKEN_KEY,
+        TERMINAL_REPLAY_METADATA_KEY,
+        "run_id",
+    }
+    return {key: value for key, value in metadata.items() if key not in lease_keys}
 
 
 def dequeue_next(
@@ -199,11 +533,15 @@ def dequeue_next(
     an app filter (like the internal engines do) to avoid claiming a foreign
     engine's entry on the single-root dequeue fast path.
     """
+
+    def accepts_orca(entry: QueueEntry) -> bool:
+        return is_orca_queue_entry(entry) and (accept_entry_fn is None or accept_entry_fn(entry))
+
     entry = _queue_store.dequeue_next(
         allowed_root,
         load_entries_fn=_load_entries,
         save_entries_fn=_queue_store.save_entries,
-        accept_entry_fn=accept_entry_fn,
+        accept_entry_fn=accepts_orca,
     )
     if entry is None:
         return None
@@ -215,13 +553,20 @@ def dequeue_next(
     return entry
 
 
-def dequeue_entry_if_pending(allowed_root: Path, queue_id: str) -> QueueEntry | None:
+def dequeue_entry_if_pending(
+    allowed_root: Path,
+    queue_id: str,
+    *,
+    expected_entry: QueueEntry | None = None,
+) -> QueueEntry | None:
     """Mark a selected pending ORCA queue entry running if it is still eligible."""
     entry = _queue_store.dequeue_entry_if_pending(
         allowed_root,
         queue_id,
         load_entries_fn=_load_entries,
         save_entries_fn=_queue_store.save_entries,
+        accept_entry_fn=is_orca_queue_entry,
+        expected_entry=expected_entry,
     )
     if entry is None:
         return None
@@ -234,12 +579,37 @@ def dequeue_entry_if_pending(allowed_root: Path, queue_id: str) -> QueueEntry | 
 
 
 def find_entry_by_target(entries: Sequence[QueueEntry], target: str) -> QueueEntry | None:
-    """Return the first entry matching a user-facing queue cancel target."""
+    """Return the unique active ORCA generation for a cancel target.
 
-    for entry in entries:
-        if queue_entry_matches_target(entry, target):
-            return entry
-    return None
+    Path and run aliases may remain on older terminal generations.  An active
+    generation takes precedence; multiple active matches are ambiguous and
+    must not be changed.  With no active match, return the newest terminal row
+    so cancellation retries can observe an already-cancelled outcome.
+    """
+
+    matches = [
+        entry
+        for entry in entries
+        if is_orca_queue_entry(entry) and queue_entry_matches_target(entry, target)
+    ]
+    active = [entry for entry in matches if queue_entry_status(entry) in ACTIVE_STATUSES]
+    if len(active) > 1:
+        raise AmbiguousQueueTargetError(
+            f"queue target matches multiple active ORCA generations: {target}"
+        )
+    if active:
+        return active[0]
+    if not matches:
+        return None
+    return max(
+        matches,
+        key=lambda entry: (
+            normalize_text(entry.finished_at),
+            normalize_text(entry.started_at),
+            normalize_text(entry.enqueued_at),
+            queue_entry_id(entry),
+        ),
+    )
 
 
 def mark_completed(
@@ -248,6 +618,8 @@ def mark_completed(
     *,
     run_id: str | None = None,
     metadata_update: dict[str, Any] | None = None,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
 ) -> bool:
     """Mark a queue entry as completed."""
     merged_metadata = dict(metadata_update or {})
@@ -260,6 +632,17 @@ def mark_completed(
             metadata_update=merged_metadata or None,
             load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
+            accept_entry_fn=lambda current: (
+                is_orca_queue_entry(current)
+                and (
+                    expected_entry is None
+                    or queue_entries_same_publication_generation(current, expected_entry)
+                )
+                and (
+                    expected_task_id is None
+                    or normalize_text(current.task_id) == normalize_text(expected_task_id)
+                )
+            ),
         )
         is not None
     )
@@ -272,6 +655,8 @@ def mark_failed(
     error: str | None = None,
     run_id: str | None = None,
     metadata_update: dict[str, Any] | None = None,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
 ) -> bool:
     """Mark a queue entry as failed."""
     merged_metadata = dict(metadata_update or {})
@@ -285,6 +670,17 @@ def mark_failed(
             metadata_update=merged_metadata or None,
             load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
+            accept_entry_fn=lambda current: (
+                is_orca_queue_entry(current)
+                and (
+                    expected_entry is None
+                    or queue_entries_same_publication_generation(current, expected_entry)
+                )
+                and (
+                    expected_task_id is None
+                    or normalize_text(current.task_id) == normalize_text(expected_task_id)
+                )
+            ),
         )
         is not None
     )
@@ -295,6 +691,8 @@ def mark_cancelled(
     queue_id: str,
     *,
     metadata_update: dict[str, Any] | None = None,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
 ) -> bool:
     """Mark a running queue entry as cancelled after the worker stops it."""
     return update_running_entry_state(
@@ -304,10 +702,18 @@ def mark_cancelled(
         finished_at=_now_iso(),
         cancel_requested=False,
         metadata_update=metadata_update,
+        expected_entry=expected_entry,
+        expected_task_id=expected_task_id,
     )
 
 
-def requeue_running_entry(allowed_root: Path, queue_id: str) -> bool:
+def requeue_running_entry(
+    allowed_root: Path,
+    queue_id: str,
+    *,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
+) -> bool:
     """Return a running queue entry back to pending during worker shutdown.
 
     If a cancel was requested for the entry, it is marked cancelled instead of
@@ -319,42 +725,49 @@ def requeue_running_entry(allowed_root: Path, queue_id: str) -> bool:
             queue_id,
             load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
+            accept_entry_fn=lambda current: (
+                is_orca_queue_entry(current)
+                and (
+                    expected_entry is None
+                    or queue_entries_same_publication_generation(current, expected_entry)
+                )
+                and (
+                    expected_task_id is None
+                    or normalize_text(current.task_id) == normalize_text(expected_task_id)
+                )
+            ),
         )
         is not None
     )
 
 
-def cancel(allowed_root: Path, queue_id: str) -> QueueEntry | None:
+def cancel(
+    allowed_root: Path,
+    queue_id: str,
+    *,
+    expected_entry: QueueEntry | None = None,
+) -> QueueEntry | None:
     """Cancel a queue entry."""
-
-    def cancel_entry(current: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
-        if current.status == QueueStatus.PENDING:
-            entry = cancel_pending_entry(current, finished_at=_now_iso())
-            logger.info("Cancelled pending entry: %s", queue_id)
-            return entry, entry
-        if current.status == QueueStatus.RUNNING:
-            entry = replace(current, cancel_requested=True)
-            logger.info("Cancel requested for running entry: %s", queue_id)
-            return entry, entry
-
-        logger.debug(
-            "Cannot cancel entry in terminal state: %s (%s)",
-            queue_id,
-            current.status.value,
-        )
-        return None, None
-
-    return cast(
-        QueueEntry | None,
-        _queue_store.mutate_entry_by_id(
-            allowed_root,
-            queue_id,
-            cancel_entry,
-            missing_result=None,
-            load_entries_fn=_load_entries,
-            save_entries_fn=_queue_store.save_entries,
+    entry = _queue_store.request_cancel(
+        allowed_root,
+        queue_id,
+        accept_entry_fn=lambda current: (
+            is_orca_queue_entry(current)
+            and (
+                expected_entry is None
+                or queue_entries_same_publication_generation(current, expected_entry)
+            )
         ),
+        load_entries_fn=_load_entries,
+        save_entries_fn=_queue_store.save_entries,
     )
+    if entry is None:
+        logger.debug("Cannot cancel missing or terminal entry: %s", queue_id)
+    elif entry.status == QueueStatus.CANCELLED:
+        logger.info("Cancelled pending entry: %s", queue_id)
+    else:
+        logger.info("Cancel requested for running entry: %s", queue_id)
+    return entry
 
 
 def list_queue(
@@ -363,11 +776,20 @@ def list_queue(
     status_filter: str | None = None,
 ) -> list[QueueEntry]:
     """List queue entries, optionally filtered by status."""
-    entries = _queue_store.list_queue(allowed_root, load_entries_fn=_load_entries)
+    entries = [
+        entry
+        for entry in _queue_store.list_queue(allowed_root, load_entries_fn=_load_entries)
+        if is_orca_queue_entry(entry)
+    ]
     if status_filter:
         normalized_filter = normalize_text(status_filter).lower()
         entries = [e for e in entries if queue_entry_status(e) == normalized_filter]
     return entries
+
+
+def get_entry_by_id(allowed_root: Path, queue_id: str) -> QueueEntry | None:
+    """Return one queue entry without changing its state."""
+    return next((entry for entry in list_queue(allowed_root) if entry.queue_id == queue_id), None)
 
 
 def has_pending_entries(allowed_root: Path) -> bool:
@@ -381,12 +803,29 @@ def get_active_entry_for_reaction_dir(allowed_root: Path, reaction_dir: str) -> 
     return find_active_entry(list_queue(allowed_root), resolved)
 
 
-def get_cancel_requested(allowed_root: Path, queue_id: str) -> bool:
+def get_cancel_requested(
+    allowed_root: Path,
+    queue_id: str,
+    *,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
+) -> bool:
     """Check if a running entry has a cancel request."""
     return _queue_store.get_cancel_requested(
         allowed_root,
         queue_id,
         load_entries_fn=_load_entries,
+        accept_entry_fn=lambda current: (
+            is_orca_queue_entry(current)
+            and (
+                expected_entry is None
+                or queue_entries_same_publication_generation(current, expected_entry)
+            )
+            and (
+                expected_task_id is None
+                or normalize_text(current.task_id) == normalize_text(expected_task_id)
+            )
+        ),
     )
 
 
@@ -396,6 +835,7 @@ def clear_terminal(allowed_root: Path, *, keep_last: int = 0) -> int:
         allowed_root,
         keep_last=keep_last,
         retain_entry_fn=_has_pending_terminal_replay,
+        select_entry_fn=is_orca_queue_entry,
         load_entries_fn=_load_entries,
         save_entries_fn=_queue_store.save_entries,
     )
@@ -407,6 +847,8 @@ def update_metadata(
     allowed_root: Path,
     queue_id: str,
     metadata_update: dict[str, Any],
+    *,
+    expected_entry: QueueEntry | None = None,
 ) -> bool:
     return (
         _queue_store.update_metadata(
@@ -415,6 +857,13 @@ def update_metadata(
             metadata_update,
             load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
+            accept_entry_fn=lambda current: (
+                is_orca_queue_entry(current)
+                and (
+                    expected_entry is None
+                    or queue_entries_same_publication_generation(current, expected_entry)
+                )
+            ),
         )
         is not None
     )
@@ -427,8 +876,20 @@ def update_terminal(
     *,
     error: str | None = None,
     run_id: str | None = None,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
 ) -> bool:
-    def update(current: QueueEntry) -> tuple[bool, QueueEntry]:
+    def update(current: QueueEntry) -> tuple[bool, QueueEntry | None]:
+        if not is_orca_queue_entry(current):
+            return False, None
+        if expected_entry is not None and not queue_entries_same_publication_generation(
+            current, expected_entry
+        ):
+            return False, None
+        if expected_task_id is not None and normalize_text(current.task_id) != normalize_text(
+            expected_task_id
+        ):
+            return False, None
         metadata = dict(current.metadata)
         if run_id is not None:
             metadata["run_id"] = run_id
@@ -467,8 +928,20 @@ def update_running_entry_state(
     finished_at: object = _UNSET,
     cancel_requested: bool | None = None,
     metadata_update: dict[str, Any] | None = None,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
 ) -> bool:
     def update(current: QueueEntry) -> tuple[bool, QueueEntry | None]:
+        if not is_orca_queue_entry(current):
+            return False, None
+        if expected_entry is not None and not queue_entries_same_publication_generation(
+            current, expected_entry
+        ):
+            return False, None
+        if expected_task_id is not None and normalize_text(current.task_id) != normalize_text(
+            expected_task_id
+        ):
+            return False, None
         if current.status != QueueStatus.RUNNING:
             return False, None
         updates: dict[str, Any] = {"status": QueueStatus(status)}

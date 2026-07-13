@@ -37,7 +37,7 @@ class EngineQueueRuntime:
     dequeue_next: Callable[[Path], Any | None]
     worker_pid_file_name: str
     dequeue_next_across_roots: Callable[..., tuple[Path, Any] | None] = dequeue_next_across_roots
-    dequeue_entry_if_pending: Callable[[Path, str], Any | None] | None = None
+    dequeue_entry_if_pending: Callable[..., Any | None] | None = None
     accept_entry_fn: Callable[[Any], bool] | None = None
 
     def _queue_runtime(self) -> QueueRuntime:
@@ -61,11 +61,14 @@ class EngineQueueRuntime:
         return self._queue_runtime().dequeue_next_entry(cfg)
 
     def queue_entry_by_id(self, queue_root: Path | str, queue_id: str) -> Any | None:
-        return _queue_entry_by_id(
+        entry = _queue_entry_by_id(
             queue_root,
             queue_id,
             list_queue_fn=self.list_queue,
         )
+        if entry is not None and self.accept_entry_fn is not None:
+            return entry if self.accept_entry_fn(entry) else None
+        return entry
 
     def admission_root(self, cfg: Any) -> str:
         return resolve_admission_root(cfg)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engine_catalog import activity_engine_entries
 from orca_auto.core.utils import normalize_text
 
 from ._collectors import (
@@ -14,6 +15,7 @@ from ._collectors import (
 from ._list_deps import ActivityListDeps, ActivityListProvider
 from ._model import ActivityListRequest, ActivitySourceRequest
 from ._queue_records import (
+    collect_catalog_engine_activity,
     collect_child_queue_activity,
     collect_crest_activity,
     collect_orca_activity,
@@ -74,9 +76,12 @@ def list_activities(
             "workflow_root": str(Path(workflow_root_text).expanduser().resolve())
             if workflow_root_text
             else "",
-            "crest_config": normalize_text(resolved.crest_config),
-            "xtb_config": normalize_text(resolved.xtb_config),
-            "orca_config": normalize_text(resolved.orca_config),
+            **{
+                f"{entry.engine_id}_config": normalize_text(
+                    resolved.config_for_engine(entry.engine_id)
+                )
+                for entry in activity_engine_entries()
+            },
         },
     }
 
@@ -88,6 +93,7 @@ __all__ = [
     "collect_activity_records",
     "collect_activity_records_from_request",
     "collect_child_queue_activity",
+    "collect_catalog_engine_activity",
     "collect_crest_activity",
     "collect_orca_activity",
     "collect_workflow_activity",

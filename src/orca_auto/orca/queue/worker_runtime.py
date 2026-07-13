@@ -54,7 +54,7 @@ def make_running_job(
 def check_cancel_requests(
     worker: Any,
     *,
-    get_cancel_requested_fn: Callable[[Path, str], bool],
+    get_cancel_requested_fn: Callable[..., bool],
     job_queue_root_fn: Callable[[Any, Any], Path],
     cancel_running_job_fn: Callable[[Any, str, Any], bool],
 ) -> None:
@@ -64,7 +64,14 @@ def check_cancel_requests(
         # reaped numeric PID could terminate an unrelated reused session.
         if job.process.poll() is not None:
             continue
-        if get_cancel_requested_fn(job_queue_root_fn(worker, job), queue_id):
+        generation_kwargs = {}
+        if getattr(job, "task_id", None):
+            generation_kwargs["expected_task_id"] = job.task_id
+        if get_cancel_requested_fn(
+            job_queue_root_fn(worker, job),
+            queue_id,
+            **generation_kwargs,
+        ):
             if cancel_running_job_fn(worker, queue_id, job) is True:
                 worker._discard_running_job(queue_id)
 

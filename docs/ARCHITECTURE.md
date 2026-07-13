@@ -150,6 +150,12 @@ Key properties:
   current queue entry itself. The legacy ORCA `--reaction-dir` direct mode is not
   supported. The `reaction_dir` field is still preserved in the queue entry as
   the downstream contract.
+- **A queue generation binds its executable inputs at submission.** xTB/CREST
+  use content-addressed input snapshots in an exclusively reserved, unique
+  namespace for each submission; ORCA builds a private generation tree and
+  rewrites supported file references to confined copies. Workers verify those
+  input and executable identities instead of re-reading mutable source files as
+  the execution contract.
 - **If no worker is running, work stays pending** in `queue.json` until a worker
   returns. Closing the submission terminal after `status: queued` is safe.
 
@@ -239,8 +245,9 @@ currently consume a shared slot.
 `orca_auto.orca` is the canonical ORCA implementation and has the deepest domain
 logic. Notable pieces:
 
-- **Input selection:** when execution actually starts, ORCA selects the most
-  recently modified `*.inp` in the target directory.
+- **Input selection and binding:** at submission, ORCA selects the most recently
+  modified `*.inp`, snapshots it and its supported file dependencies, and
+  executes only the private bound input for that queue generation.
 - **Attempt engine** (`attempt/engine.py`, `attempt/retry.py`,
   `attempt/resume.py`): runs an attempt, parses output, classifies the result,
   and decides whether to retry.
@@ -310,6 +317,12 @@ A workflow is materialized from a `flow.yaml` manifest (`flow/manifest.py`) in
 the submitted directory. `scaffold` writes a starter `flow.yaml` plus the
 standard XYZ filenames.
 
+Manifest admission is bounded before materialization: the shared loader caps a
+job manifest at 1 MiB, 32 YAML aliases, 10,000 parsed/expanded nodes, and 64
+nesting levels, and rejects cyclic/recursive graphs. Central geometry limits cap
+local work at 10,000 atoms, xTB/ORCA Hessian-producing work at 1,000, and
+remote-upload work at 200.
+
 ### The advance loop
 
 `flow/orchestration/advance.py` exposes `advance_workflow(...)`, the heart of
@@ -329,9 +342,11 @@ handoff).
 
 ### Example: reaction TS search
 
-`reaction_ts_search` expands all selected reactant×product CREST pairs into xTB
-child jobs, waits for the whole xTB phase to reach terminal states, and then
-batches matching ORCA OptTS child jobs from the retained `ts_guess` artifacts.
+`reaction_ts_search` orders selected reactant×product CREST pairs
+deterministically, materializes at most the configured total xTB-stage cap,
+waits for that xTB phase to reach terminal states, and then batches matching
+ORCA OptTS child jobs from retained `ts_guess` artifacts up to the configured
+total ORCA-stage cap.
 
 ### Example: conformer screening
 

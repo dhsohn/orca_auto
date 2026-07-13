@@ -23,7 +23,7 @@ CLI, 설정, JSON 산출물, 워크플로우, systemd 표면 중 공개 계약�
 ## 1) 프로젝트 목적
 
 - 설정된 `runs_root` 안에서만 작업합니다.
-- 대상 디렉터리에서 가장 최근에 수정된 `*.inp`를 선택합니다.
+- 제출할 때 대상 디렉터리에서 가장 최근에 수정된 `*.inp`를 선택하고 바인딩합니다.
 - 큐를 통해 작업을 내구성 있게 제출합니다.
 - 감독되는 워커가 큐에 쌓인 작업을 실행하도록 합니다.
 - 인식된 실패에 대해 원본 입력을 덮어쓰지 않고 보수적으로 재시도합니다.
@@ -192,8 +192,11 @@ orca:
   않습니다.
 - ORCA, xTB, CREST의 설정된 실행 경로는 실제 존재하는 실행 파일을 가리키는 절대 Linux
   경로여야 하며 `.exe`로 끝나면 안 됩니다. `workflow.paths.xtb_executable` 또는
-  `workflow.paths.crest_executable`을 비워 두면, 워크플로우 러너는 실행 시점에 PATH
-  탐색으로 대체합니다.
+  `workflow.paths.crest_executable`을 비워 두면, 제출 시 PATH에서 해석한 실행 파일
+  정체성을 해당 큐 generation에 바인딩합니다.
+- 명시한 `scheduler`, `resources`, `workflow`, `workflow.paths` 값은 mapping이어야 합니다.
+  admission 루트는 절대 Linux 경로여야 하고 scheduler/resource 상한은 양의 정수여야 합니다.
+  잘못된 실행 제어 값은 기본값으로 대체하지 않고 거부합니다.
 
 ## 7) CLI 사용법
 
@@ -245,7 +248,9 @@ worker_pid: 12345
 
 ORCA 고유 노트:
 
-- 실행이 실제로 시작될 때 최신 `*.inp`를 선택합니다.
+- 제출할 때 최신 `*.inp`를 선택한 뒤 해당 큐 generation의 변경 불가능한 private 복사본을
+  실행합니다. 제출 성공 뒤 원본을 편집해도 큐에 들어간 계산은 바뀌지 않습니다. 편집한
+  입력을 실행하려면 새 generation으로 다시 제출하세요.
 - 큐 워커는 직접 `reaction_dir` 명령줄을 전달하는 대신 큐 id로 실행합니다. 큐 항목은
   여전히 `reaction_dir`를 저장하며, 다운스트림 ORCA/워크플로우 계약은 그 필드를 계속
   사용해야 합니다.
@@ -253,6 +258,12 @@ ORCA 고유 노트:
 - 단독 ORCA 자원 메타데이터는 선택된 입력의 `%pal` 및 `%maxcore` 지시어에서 오며,
   그 지시어가 없을 때만 설정 기본값이 주입됩니다. 공유 `--max-cores`와
   `--max-memory-gb` 플래그는 단독 ORCA 입력 지시어를 재정의하지 않습니다.
+- ORCA admission은 중복 `%pal`/`nprocs`, `%maxcore`, `%moinp` 또는 route `PALn`
+  지시어처럼 선후순위가 모호한 입력을 거부합니다. 정규화 전 자원 reader는 모든 활성값
+  중 최댓값을 사용하므로 뒤쪽 중복값으로 더 큰 요청을 숨길 수 없습니다.
+- snapshot에 바인딩하지 않는 외부 ORCA include/program hook(예: `ExtOpt`/`Prog*`,
+  fragment/QM2 method file, `XTBINPUTSTRING`, `GCP(FILE)`)은 지원하지 않으며 로컬·원격
+  실행 전에 거부합니다.
 - 재시도 입력과 재개된 워커-종료 입력은, 원본 입력에 일치하는 비어 있지 않은 `.gbw`
   체크포인트가 있을 때 `MORead`와 `%moinp`를 추가합니다. 재개 입력은 `*.resume.inp`로
   작성되므로 원본 사용자 입력은 변경되지 않습니다.
@@ -269,9 +280,12 @@ ORCA 고유 노트:
   `flow.yaml`은 포함하지 않으면, `run-dir`는 ORCA 직접 제출을 선호합니다.
 - 반응 경로(reaction-path) 및 conformer 워크플로우는 내부적으로 xTB/CREST 단계를
   생성하고 제출합니다.
-- `reaction_ts_search`는 선택된 모든 반응물 × 생성물 CREST 쌍을 xTB 자식 작업으로
-  펼치고, xTB 단계 전체가 종료 상태에 이를 때까지 기다린 뒤, 보존된 `ts_guess`
-  아티팩트에서 일치하는 ORCA OptTS 자식 작업을 일괄 처리합니다.
+- `reaction_ts_search`는 선택된 반응물 × 생성물 CREST 쌍을 rank gap 순서로 결정론적으로
+  정렬해 상한이 있어도 첫 반응물만 소진하지 않고 양쪽 endpoint ensemble을 표집합니다.
+  최대 `max_xtb_stages`개만 xTB 자식 작업으로 펼치고, 그 xTB 단계가 종료 상태에
+  이를 때까지 기다린 다음, 재시작 전에 이미 시도한 stage를 포함하여 전체
+  `max_orca_stages`개까지만 ORCA OptTS 후보를 제출합니다. 어느 상한에서든 생략된
+  후보는 큐에 들어가지 않습니다.
 - `conformer_screening`은 하나의 CREST 자식 작업으로 시작한 뒤, 다음 워크플로우
   사이클에서 보존된 conformer를 최대 20개까지 ORCA 자식 작업으로 넘깁니다. 스캐폴드
   단축 명령은 `orca_auto scaffold conformer_search <path>`입니다.
@@ -401,6 +415,9 @@ ORCA 고유 노트:
 - 공개 워크플로우 `run-dir`는 `flow.yaml` 또는 `scaffold`가 작성한 표준 파일명에서
   워크플로우 유형과 XYZ 입력을 읽습니다. 워크플로우 자원 재정의로는 `--max-cores`와
   `--max-memory-gb`만 받습니다.
+- `flow.yaml`과 내부 엔진 YAML 작업 manifest는 1 MiB 이하의 single-link regular UTF-8
+  파일이어야 합니다. bounded loader는 alias 사용 32개, 파싱/확장 node 10,000개, 중첩
+  64단계까지만 허용하며 재귀/순환 alias 또는 object graph는 fail-closed합니다.
 - 매니페스트 제어 입력 경로(`reactant_xyz`, `product_xyz`, `input_xyz`,
   `xtb.xcontrol_file`)는 기본적으로 제출된 워크플로우 디렉터리의 신뢰 경계를 따릅니다.
   상대 경로는 `workflow_dir`에서 해석되고, 절대 경로나 `..` 탈출은 여전히 그 디렉터리
@@ -411,31 +428,117 @@ ORCA 고유 노트:
 - xTB `xcontrol` 대상 이름은 `xcontrol_file` 소스 경로와 별개입니다. `xcontrol_file`은
   복사할 소스 파일을 지정하고, `xcontrol`은 xTB 작업 디렉터리 안에 구체화되는 일반
   파일명이어야 합니다.
+- `crest:`와 `xtb:` 엔진 mapping은 엔진 제출 시 strict합니다. 알 수 없는 옵션 이름은
+  무시하지 않고 거부합니다. 비어 있지 않은 예전 xTB `namespace`도 거부하므로 다시
+  제출하기 전에 제거하세요. xTB는 항상 명시적 `--chrg`, `--uhf`, `--norestart`를 내므로
+  오래된 restart 파일이 새 generation을 조용히 바꿀 수 없습니다.
 - CREST 토폴로지 재정의는 `flow.yaml`의 `crest:` 아래에 둘 수 있으며, `gfn: ff`,
   `no_preopt: true`, `noreftopo: true`, `notopo: true`, `nocbonds: true`를 포함합니다.
-- CREST conformer 탐색 노브도 `crest:` 아래에 둘 수 있습니다(CREST 3.0.2 기준 검증).
+- 워크플로우 수준 `orca.charge`와 `orca.multiplicity`가 모든 CREST, xTB, ORCA stage의
+  전자 상태를 정의합니다. 엔진별 `charge`/`uhf`가 같은 상태를 반복하는 것은 허용하지만,
+  충돌하거나 잘못된 값은 거부합니다. 선택한 xTB/CREST 입력은 원자번호 86 이하의 알려진
+  원소만 포함하고 전자 수가 0 이상이어야 하며, UHF 비짝전자 수가 범위 안에 있고 전자 수와
+  parity가 맞아야 합니다.
+- 로컬 geometry 입력은 10,000원자로 제한합니다. xTB Hessian 작업과 ORCA
+  frequency/Hessian 생성 입력은 1,000원자 상한을 사용합니다. Discord로 업로드한 workflow
+  XYZ 및 standalone ORCA geometry에는 원격 200원자 상한을 적용합니다.
+- CREST 종료 코드가 0이어도 보존 출력에 엄격히 유효하고 유한한 XYZ frame이 하나 이상
+  있어야 성공으로 인정합니다. 유효한 named retained ensemble을 모두 보존하므로 뒤쪽
+  rotamer 출력에만 있는 geometry도 후보로 남고, 파일 사이에서 겹치는 geometry만 downstream
+  후보에서 중복 제거합니다. 유한하지
+  않은 xTB 에너지와 XYZ 좌표는 사용할 수 없고 ORCA 입력으로 materialize하지 않습니다.
+- CREST에는 변경 불가능한 입력 snapshot의 절대 경로와 명시적으로 고정한 xTB 실행 파일
+  (`-xnam`)을 전달합니다. CREST 3.0.2의 레거시 scratch copier가 안전하지 않은 shell 경로를
+  호출하므로 orca_auto는 `--scratch`를 전달하지 않습니다. `gfn2//gfnff` 합성 모드는 필요한
+  `--legacy`를 함께 내며, 중성 singlet 값까지 charge와 UHF를 항상 명시합니다.
+- `solvent_model`은 `gbsa` 또는 `alpb`여야 하고 `solvent`와 함께 써야 합니다. xTB와 CREST가
+  받는 정규 solvent token은 다음뿐입니다: `acetone`, `acetonitrile`, `aniline`, `benzene`,
+  `benzaldehyde`, `ch2cl2`, `chcl3`, `chloroform`, `cs2`, `dmf`, `dmso`, `dioxane`,
+  `dichlormethane`, `ether`, `ethanol`, `ethylacetate`, `furane`, `hexadecane`, `hexane`,
+  `h2o`, `methanol`, `nitromethane`, `nhexan`, `n-hexan`, `nhexane`, `n-hexane`, `octanol`,
+  `phenol`, `thf`, `toluene`, `water`, `woctanol`. 자유 형식 또는 여러 token으로 된 값과 shell 문법은 전달하지
+  않고 거부합니다.
+- CREST conformer 탐색 노브는 CREST 3.0.2 semantics에 맞춰 `crest:` 아래에 둘 수 있습니다.
   `mdlen`/`len`(MD 길이 ps이며 둘 다 쓰면 같아야 하는 별칭)과 `wscal`은 유한한 양의
   실수이며 지수 표기 없이 소수점 아래 최대 6자리로 렌더링됩니다. `0.000001`보다 작은
-  값은 거부합니다. `tstep`은 native-safe 범위 0.001~2500 fs의 유한한 양의 실수이고,
-  `mddump`는 `1..2147483647` 범위의 정수입니다.
-  명시적인 MD 길이와 선택/default time step으로 계산한 MD step 수도
-  `1..2147483647` 범위여야 합니다. `shake`는 `0`, `1`, `2` 중 하나입니다. 정확한 키 이름
+  값은 거부합니다. `tstep`과 `mddump`는 각각 명시적 MD 길이가 있어야 합니다. 전문가
+  override가 없으면 `tstep`은 GFN-xTB에서 5.0 fs, GFN-FF에서 1.5 fs,
+  `gfn2//gfnff`에서 2.0 fs 이하여야 하며 `shake: 1`이면 상한이 2.0 fs로 더 좁아집니다.
+  `allow_high_tstep: true`는 native 0.001~2500 fs 범위를 허용하지만 work budget을 우회하지
+  않습니다. `mddump`는 `1..2147483647` 범위의 정수입니다. `mdlen`을 명시했을 때 기본
+  `max_md_steps`는 CREST의 예상 trajectory/restart/rotamer 배수를 합한 10,000,000
+  step입니다. 이 배수는 `nci` 또는
+  quick 모드에서 base 6, 그 밖에는 14이고, 여기에 `mquick`이면 restart 1, 아니면 5를 곱한
+  뒤 `nci`, quick 모드 또는 `norotmd`이면 rotamer 1, 아니면 2를 곱합니다. 더 큰 상한은 native
+  integer 한도 안에서 `allow_high_cost_md: true`를 함께 써야 합니다. `mdlen`이 없으면 CREST의
+  자동 2.5~500 ps 범위를 최악 조건인 500 ps와 기본 14,000,000-step budget으로 admission합니다.
+  표준 GFN-xTB 기본값은 이 범위에 들어옵니다. 표준 non-quick trajectory 배수에서 GFN-FF와
+  `gfn2//gfnff`는 이 budget을 넘으므로 제한한 `mdlen`을 명시하거나 더 큰 `max_md_steps`와
+  `allow_high_cost_md: true`를 함께 써야 합니다. 기본
+  `max_dump_frames`는 aggregate simulated time을 `mddump`로 나눈 예상 frame 100,000개이며
+  더 크게 지정하려면
+  `allow_high_volume_md: true`가 필요합니다. `shake`는 `0`, `1`, `2` 중 하나입니다. 정확한 키 이름
   `norotmd`, `cross`, `nocross`는 YAML 불리언 또는 정규 불리언 형식
   (`1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off`)만 받으며 `cross`와 `nocross`는
   상호배제입니다. `cross: true`는 CREST 3.0.2의 기본 GC crossing을 유지하되 job type을
   깨뜨리는 불필요한 `--cross` 플래그를 내지 않고, `nocross: true`만 `--nocross`를 냅니다.
-  잘못된 값은 CREST에 전달하지 않고 작업을 fail-closed로 실패시키며,
-  알 수 없는 `crest:` 키는 무시합니다. CREST 버전에 따라 플래그 지원이 달라질 수 있어
-  안정 계약 목록으로 승격하지 않고 여기에만 문서화합니다.
+  잘못된 값은 CREST에 전달하지 않고 작업을 fail-closed로 실패시킵니다. step 상한과 별개로
+  원자 수와 예상 aggregate MD step의 곱은 로컬 절대 상한 50,000,000,000 atom-step을 넘을 수
+  없습니다.
+- xTB ranking은 기본적으로 후보 평가를 최대 100개 허용합니다. 로컬 반응 워크플로우 manifest는 native
+  후보 상한 1,000 안에서 `xtb.max_ranking_evaluations`를 정할 수 있고, 100보다 큰 값은
+  `xtb.allow_high_cost_ranking: true`도 필요합니다.
 - Discord로 업로드한 워크플로우는 `crest.mdlen`, `crest.len`, `crest.tstep`,
-  `crest.mddump`를 설정할 수 없습니다. 원격 CREST 실행 시간과 trajectory 용량을 좌우하는
-  이 값들은 서버가 소유하며, 신뢰된 로컬 `run-dir` 워크플로우만 위의 검증된 노브를
-  사용할 수 있습니다.
+  `crest.allow_high_tstep`, `crest.mddump`, `crest.max_md_steps`,
+  `crest.allow_high_cost_md`, `crest.max_dump_frames`, `crest.allow_high_volume_md`,
+  `xtb.max_ranking_evaluations`, `xtb.allow_high_cost_ranking`을 설정할 수 없습니다. 이 비용과
+  출력 용량 budget은 원격 ingress에서 서버가 소유합니다. 신뢰된 로컬 `run-dir`
+  워크플로우만 위의 검증된 제어를 사용할 수 있습니다. 원격 workflow ingress는
+  `crest.mdlen: 5.0` ps를 주입하고 예상 CREST 작업이 50,000,000 atom-step을 넘으면
+  요청을 거부합니다.
 - `scaffold ts_search`와 `scaffold conformer_search`는 기본적으로 `crest_mode: standard`로
   `flow.yaml`을 작성합니다. 필요할 때 `nci`로 변경하세요.
 
 새 작업에 대한 공개 직접 실행 모드는 없습니다. `run-dir`가 내구성 있는 제출
 경로입니다.
+
+#### 변경 불가능한 실행, provenance, 업그레이드 경계
+
+- xTB, CREST, ORCA는 제출 시점에 선택 입력을 바인딩합니다. 소스 파일 하나의 상한은
+  64 MiB입니다. xTB와 ORCA는 큐 generation 하나의 aggregate 바인딩 입력도 256 MiB로
+  제한하며, ORCA 입력의 파일 참조 지시어는 최대 128개입니다. CREST는 파일별 상한만
+  있고 별도 aggregate 상한은 없습니다. downstream 출력 XYZ materialization 상한은
+  512 MiB입니다.
+- xTB/CREST snapshot은 `.orca_auto_input_snapshots/` 아래에서 제출마다 배타적으로 예약한
+  고유 private 디렉터리에 있으며 공개 task id만으로 snapshot 소유권을 정하지 않습니다.
+  ORCA는 `.orca_auto_orca_executions/generation-*` 아래에서 지원되는 XYZ, GBW,
+  Hessian, point-charge, IRC, NEB 의존성을 가둬 복사하고 참조를 다시 쓴 private 입력 트리를
+  실행합니다. 이 숨은 실제 실행 경로는 사용자용 소스 경로와 다를 수 있습니다. 감사용
+  provenance는 해당될 때 source path, executed path, SHA-256, byte size를 기록합니다. 큐에
+  들어간 작업을 바꾸기 위해 숨은 snapshot을 편집하지 마세요.
+- 이 숨은 트리는 큐 replay, retry, reconciliation, 감사에 필요하도록 보존합니다. 독립적인
+  snapshot GC 명령은 없습니다. pending, running, retrying, cancel-pending 또는 복구 가능한
+  terminal 행이 사용하는 트리는 삭제하면 안 됩니다. 어떤 큐나 복구 레코드도 더는 참조하지
+  않음을 확인한 뒤 의도적으로 퇴역시키는 작업/워크플로우와 함께만 회수하세요.
+- xTB/CREST는 작업별 clean `HOME`/`XDG_CONFIG_HOME`과 캡처된 `PATH`,
+  `LD_LIBRARY_PATH`, `XTBPATH`, `XTBHOME`을 사용합니다. 실행 전후로 실행 파일 경로,
+  SHA-256, 크기를 검증합니다. 공유 라이브러리, `XTBPATH`, `XTBHOME`을 통해 도달하는 내용은
+  snapshot하지 않으며 엔진 semantic version도 자동 probe하지 않습니다. 작업 수명 동안
+  qualification한 정확한 배포본과 외부 파라미터를 변경하지 말고 worker UID의 다른 프로세스를
+  적대적 격리 tenant로 간주하지 마세요.
+- 이 snapshot 형식을 배포하기 전에는 업그레이드 전 xTB, CREST, ORCA 큐 행을 이전 빌드로
+  drain하거나 취소/clear한 뒤 업그레이드 후 다시 제출하세요. snapshot이 없는 행은 in-place로
+  채택하지 않고 fail-closed합니다.
+- 새 xTB/CREST 종료 출력은 downstream 파싱 전에 검증하는 콘텐츠 정체성을 가집니다. 완료된
+  legacy 출력에는 읽는 시점의 표시된 identity backfill을 만들 수 있지만, 이것이 과거 종료
+  시점의 바이트를 소급해 증명하지는 않습니다. 같은 generation의 정확한 terminal
+  state/report 쌍을 복구할 수 없으면 모호한 복구를 반복하지 않고 activity에
+  `repair_blocked`와 reason을 표시합니다.
+- xTB-MD는 아직 지원하는 작업 유형이 아닙니다. 활성화하기 전에 내구성 계약이 명시적 random
+  seed, 초기/생성 velocity 정체성, restart generation과 `mdrestart` 정체성, 정확한 resume
+  semantics를 바인딩해야 합니다. 종료 코드 0만으로 성공으로 보면 안 됩니다. 해당 generation은
+  예상 `xtbmdok` marker와 terminal trajectory/checkpoint 정체성도 바인딩해야 하며 step,
+  wall-time, 출력 용량 budget을 명시해야 합니다.
 
 ### 7.3 `queue cancel`
 
@@ -489,8 +592,9 @@ ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 자식 작업은 잡음을 
 - `messenger.discord.uploads.enabled`가 true이면 allowlist에 든 Discord 운영자가 `!run`에
   `.zip` 또는 `.tar.gz` run-directory 하나를 첨부할 수 있습니다. 검사 전에 admission 및
   실제 download byte에 상한을 적용합니다. 루트에는 `flow.yaml` 하나 또는 소문자 `*.inp`
-  하나만 있어야 하고, 서버 소유 경로·리소스 상한과 CREST 실행/trajectory 제어값
-  `mdlen`, `len`, `tstep`, `mddump`를 재정의할 수 없습니다. 내구성 Queue/Discard 액션은
+  하나만 있어야 하고, 서버 소유 경로·리소스 상한과 §7.2에 나열한 모든 CREST
+  실행/trajectory budget 및 xTB ranking 비용 제어를 재정의할 수 없습니다. 내구성
+  Queue/Discard 액션은
   원본 메시지·첨부·채널·행위자에 바인딩됩니다. 압축 해제 결과는 `runs_root` 아래에
   원자적으로 게시하며, 결과가 불확실한 commit은 삭제하지 않고 보존·조정합니다.
 
@@ -662,6 +766,7 @@ Opt 모드 완료:
 - `run_id`
 - `reaction_dir`
 - `selected_inp`
+- `execution_provenance`
 - `max_retries`
 - `status`
 - `attempts[]`
@@ -677,6 +782,10 @@ Opt 모드 완료:
 - `analyzer_reason`
 - `markers`
 - `patch_actions`
+- `command`
+- `input_identity`
+- `executable_identity`
+- `output_identity`
 - `started_at`
 - `ended_at`
 
@@ -691,6 +800,11 @@ Opt 모드 완료:
 - `max_retries`
 - `attempts[]`
 - `final_result`
+
+snapshot에 바인딩된 작업에서 `selected_inp`/attempt `inp_path`는 실제 실행한 정확한 private
+입력을 가리킵니다. `execution_provenance.source_selected_inp`는 제출 때 선택한 사용자용
+소스를 기록하고, 바인딩/구체화한 identity 및 attempt identity 레코드는 path, SHA-256,
+byte size를 보존합니다.
 
 ## 11.1) 다운스트림 계약 동결
 

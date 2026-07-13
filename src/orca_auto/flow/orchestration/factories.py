@@ -17,6 +17,7 @@ from orca_auto.flow.orchestration.builders import (
     create_reaction_ts_search_workflow_impl,
     create_scan_ts_search_workflow_impl,
 )
+from orca_auto.flow.orchestration.charge_spin import strict_int
 from orca_auto.flow.orchestration.requests import (
     ConformerScreeningWorkflowRequest,
     NewCrestStageFactory,
@@ -70,12 +71,13 @@ class WorkflowFactoryDeps:
 
 
 def _positive_int_field(value: Any, *, field_name: str) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field_name} must be an integer >= 1. got={value!r}") from exc
-    if parsed < 1:
-        raise ValueError(f"{field_name} must be >= 1. got={parsed}")
+    return strict_int(value, field=field_name, minimum=1)
+
+
+def _positive_float_field(value: Any, *, field_name: str) -> float:
+    parsed = optional_positive_float({field_name: value}, field_name)
+    if parsed is None:
+        raise ValueError(f"{field_name} must be a positive finite number. got={value!r}")
     return parsed
 
 
@@ -90,6 +92,7 @@ def _normalized_reaction_ts_request(
     return replace(
         request,
         crest_mode=normalized_crest_mode,
+        charge=strict_int(request.charge, field="charge"),
         max_cores=_positive_int_field(request.max_cores, field_name="max_cores"),
         max_memory_gb=_positive_int_field(
             request.max_memory_gb,
@@ -102,6 +105,11 @@ def _normalized_reaction_ts_request(
         max_xtb_stages=_positive_int_field(
             request.max_xtb_stages,
             field_name="max_xtb_stages",
+        ),
+        max_xtb_handoff_retries=strict_int(
+            request.max_xtb_handoff_retries,
+            field="max_xtb_handoff_retries",
+            minimum=0,
         ),
         max_orca_stages=_positive_int_field(
             request.max_orca_stages,
@@ -119,11 +127,13 @@ def _normalized_conformer_screening_request(
     normalized_crest_mode = deps.normalize_text(request.crest_mode).lower()
     if normalized_crest_mode not in {"standard", "nci"}:
         raise ValueError("conformer_screening only supports crest_mode 'standard' or 'nci'")
+    charge = strict_int(request.charge, field="charge")
+    multiplicity = strict_int(request.multiplicity, field="multiplicity", minimum=1)
     interaction_energy = normalize_interaction_energy_block(request.interaction_energy)
     validate_interaction_energy_state_balance(
         interaction_energy,
-        complex_charge=int(request.charge),
-        complex_multiplicity=int(request.multiplicity),
+        complex_charge=charge,
+        complex_multiplicity=multiplicity,
     )
     if interaction_energy is not None:
         atom_symbols = deps.load_xyz_atom_sequence_fn(request.input_xyz)
@@ -144,6 +154,7 @@ def _normalized_conformer_screening_request(
     return replace(
         request,
         crest_mode=normalized_crest_mode,
+        charge=charge,
         max_cores=_positive_int_field(request.max_cores, field_name="max_cores"),
         max_memory_gb=_positive_int_field(
             request.max_memory_gb,
@@ -153,7 +164,7 @@ def _normalized_conformer_screening_request(
             request.max_orca_stages,
             field_name="max_orca_stages",
         ),
-        multiplicity=_positive_int_field(request.multiplicity, field_name="multiplicity"),
+        multiplicity=multiplicity,
         boltzmann_temperature_k=optional_positive_float(
             {"boltzmann_temperature_k": request.boltzmann_temperature_k},
             "boltzmann_temperature_k",
@@ -202,15 +213,19 @@ def _normalized_scan_ts_request(
             "scan_ts_search requires scan_coordinate like 'B 20 61 = 1.80, 5.00, 32'. "
             f"got={request.scan_coordinate!r}"
         )
-    threshold = float(request.barrier_threshold_kcal)
-    if threshold <= 0:
-        raise ValueError(f"barrier_threshold_kcal must be > 0. got={threshold}")
-    max_scan_extensions = int(request.max_scan_extensions)
-    if max_scan_extensions < 0:
-        raise ValueError(f"max_scan_extensions must be >= 0. got={max_scan_extensions}")
+    threshold = _positive_float_field(
+        request.barrier_threshold_kcal,
+        field_name="barrier_threshold_kcal",
+    )
+    max_scan_extensions = strict_int(
+        request.max_scan_extensions,
+        field="max_scan_extensions",
+        minimum=0,
+    )
     return replace(
         request,
         scan_coordinate=scan_coordinate,
+        charge=strict_int(request.charge, field="charge"),
         barrier_threshold_kcal=threshold,
         max_scan_extensions=max_scan_extensions,
         max_cores=_positive_int_field(request.max_cores, field_name="max_cores"),

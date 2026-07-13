@@ -9,6 +9,7 @@ from typing import Any
 
 import yaml
 
+from orca_auto.core.config.files import load_bounded_yaml_data
 from orca_auto.core.utils import normalize_bool, normalize_text
 from orca_auto.orca.completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from orca_auto.orca.job_type import FREQ_RE
@@ -101,7 +102,7 @@ def _require_bool(value: Any, *, field: str, default: bool) -> bool:
     raise ValueError(f"{field} must be a boolean")
 
 
-def _require_int(value: Any, *, field: str, minimum: int | None = None) -> int:
+def require_int(value: Any, *, field: str, minimum: int | None = None) -> int:
     if isinstance(value, bool):
         raise ValueError(f"{field} must be an integer, not a boolean")
     if isinstance(value, int):
@@ -117,6 +118,9 @@ def _require_int(value: Any, *, field: str, minimum: int | None = None) -> int:
     if minimum is not None and parsed < minimum:
         raise ValueError(f"{field} must be >= {minimum}. got={parsed}")
     return parsed
+
+
+_require_int = require_int
 
 
 def _require_interaction_text(
@@ -419,7 +423,7 @@ def load_flow_manifest(
         if not candidate.is_file():
             continue
         try:
-            parsed = yaml.safe_load(candidate.read_text(encoding="utf-8"))
+            parsed = load_bounded_yaml_data(candidate)
         except yaml.YAMLError as exc:
             raise ValueError(_invalid_manifest_yaml_message(candidate, description, exc)) from exc
         if parsed is None:

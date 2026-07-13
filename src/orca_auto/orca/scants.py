@@ -5,12 +5,17 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from orca_auto.core.utils.persistence import atomic_write_text
+
 from .input_blocks import (
     GEOM_HEADER_RE,
     MOINP_RE,
+    active_orca_directive_text,
+    active_orca_line_text,
     file_route_lines,
     find_block_range,
     nonempty_file,
+    orca_route_line,
     replace_geometry_with_xyzfile,
     route_line_indices,
 )
@@ -201,7 +206,7 @@ def first_scan_coordinate_spec(inp_path: Path) -> ScanCoordinateSpec | None:
     except OSError:
         return None
     for idx in _simple_scan_coord_line_indices(lines):
-        spec = parse_scan_coordinate(lines[idx])
+        spec = parse_scan_coordinate(active_orca_line_text(lines[idx]))
         if spec is not None:
             return spec
     return None
@@ -326,12 +331,12 @@ def _simple_scan_coord_line_indices(lines: list[str]) -> list[int]:
     indices: list[int] = []
     i = start + 1
     while i < end:
-        if not _GEOM_SCAN_START_RE.match(lines[i]):
+        if not _GEOM_SCAN_START_RE.match(active_orca_line_text(lines[i])):
             i += 1
             continue
         scan_end = _scan_subblock_end(lines, i + 1, end)
         for idx in range(i + 1, scan_end - 1):
-            if _SIMPLE_SCAN_COORD_LINE_RE.match(lines[idx]):
+            if _SIMPLE_SCAN_COORD_LINE_RE.match(active_orca_line_text(lines[idx])):
                 indices.append(idx)
         i = scan_end
     return indices
@@ -348,7 +353,7 @@ def _scan_lines_with_shared_total(lines: list[str]) -> tuple[list[int], int] | N
         return None
     totals: set[int] = set()
     for idx in scan_line_indices:
-        match = _SIMPLE_SCAN_COORD_LINE_RE.match(lines[idx])
+        match = _SIMPLE_SCAN_COORD_LINE_RE.match(active_orca_line_text(lines[idx]))
         if match is None:
             return None
         totals.add(int(match.group("points")))
@@ -369,8 +374,9 @@ def _scan_line_rewrites(
     """
     rewrites: list[tuple[int, str]] = []
     for offset, line_idx in enumerate(indices):
-        rewritten = rewriter(lines[line_idx], offset)
-        if rewritten is None or rewritten == lines[line_idx]:
+        active_line = active_orca_line_text(lines[line_idx])
+        rewritten = rewriter(active_line, offset)
+        if rewritten is None or rewritten == active_line:
             return None
         rewrites.append((line_idx, rewritten))
     return rewrites
@@ -408,7 +414,7 @@ def _remove_checkpoint_restart_directives(lines: list[str]) -> list[str]:
 
     removed_moinp = False
     for idx in range(len(lines) - 1, -1, -1):
-        if MOINP_RE.match(lines[idx]):
+        if MOINP_RE.match(active_orca_directive_text(lines[idx])):
             del lines[idx]
             removed_moinp = True
     if removed_moinp:
@@ -419,11 +425,11 @@ def _remove_checkpoint_restart_directives(lines: list[str]) -> list[str]:
 def _remove_route_keywords(lines: list[str], keywords: set[str]) -> bool:
     changed = False
     for route_idx in route_line_indices(lines):
-        stripped = lines[route_idx].strip()
-        if not stripped.startswith("!"):
+        route = orca_route_line(lines[route_idx])
+        if route is None:
             continue
 
-        tokens = stripped[1:].split()
+        tokens = route[1:].split()
         kept = [token for token in tokens if token.upper() not in keywords]
         if len(kept) == len(tokens):
             continue
@@ -511,7 +517,10 @@ def _continue_simple_scan_from_last_numbered_xyz(
 
 def _scants_route_idx(lines: list[str]) -> int | None:
     for idx in route_line_indices(lines):
-        tokens = lines[idx].strip()[1:].split()
+        route = orca_route_line(lines[idx])
+        if route is None:
+            continue
+        tokens = route[1:].split()
         if any(token.upper() == "SCANTS" for token in tokens):
             return idx
     return None
@@ -569,7 +578,7 @@ def _write_prepared_input(
     """Shared tail of the ``prepare_scants_*`` builders: clamp maxcore and write."""
     if max_memory_gb is not None and clamp_maxcore_to_budget(lines, max_memory_gb=max_memory_gb):
         actions.append("maxcore_clamped_to_budget")
-    target_inp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    atomic_write_text(target_inp, "\n".join(lines).rstrip() + "\n")
     return target_inp, actions
 
 
@@ -659,7 +668,10 @@ def _replace_scants_route_with_optts(lines: list[str]) -> bool:
     route_idx = _scants_route_idx(lines)
     if route_idx is None:
         return False
-    tokens = lines[route_idx].strip()[1:].split()
+    route = orca_route_line(lines[route_idx])
+    if route is None:
+        return False
+    tokens = route[1:].split()
     rewritten: list[str] = []
     inserted_optts = False
     for token in tokens:
@@ -681,7 +693,7 @@ def _remove_geom_scan_subblock(lines: list[str]) -> bool:
     changed = False
     i = start + 1
     while i < end:
-        if not _GEOM_SCAN_START_RE.match(lines[i]):
+        if not _GEOM_SCAN_START_RE.match(active_orca_line_text(lines[i])):
             i += 1
             continue
         remove_until = _scan_subblock_end(lines, i + 1, end)
@@ -693,6 +705,6 @@ def _remove_geom_scan_subblock(lines: list[str]) -> bool:
 
 def _scan_subblock_end(lines: list[str], start: int, stop: int) -> int:
     for idx in range(start, stop):
-        if _GEOM_END_RE.match(lines[idx]):
+        if _GEOM_END_RE.match(active_orca_line_text(lines[idx])):
             return idx + 1
     return stop

@@ -14,6 +14,10 @@ class AttemptRecord(TypedDict, total=False):
     patch_actions: list[str]
     started_at: str
     ended_at: str
+    command: list[str]
+    input_identity: dict[str, Any]
+    executable_identity: dict[str, Any]
+    output_identity: dict[str, Any]
 
 
 class RunFinalResult(TypedDict, total=False):
@@ -36,6 +40,7 @@ class RunState(TypedDict, total=False):
     selected_inp: str
     max_retries: int
     max_memory_gb_per_task: int
+    execution_provenance: dict[str, Any]
     status: str
     started_at: str
     updated_at: str

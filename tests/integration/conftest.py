@@ -121,8 +121,9 @@ def smoke_workspace(tmp_path: Path) -> SmokeWorkspace:
         done
 
         if [[ "$mode" == "path_search" ]]; then
-          printf '2\\nenergy: -0.45\\nH 0.0 0.0 0.0\\nH 0.0 0.0 0.74\\n' > xtbpath_ts.xyz
-          printf '2\\nenergy: -0.90\\nH 0.0 0.0 0.0\\nH 0.0 0.0 0.80\\n2\\nenergy: -0.55\\nH 0.0 0.0 0.0\\nH 0.0 0.0 0.78\\n2\\nenergy: -0.18\\nH 0.0 0.0 0.0\\nH 0.0 0.0 0.76\\n2\\nenergy: 0.05\\nH 0.0 0.0 0.0\\nH 0.0 0.0 0.75\\n2\\nenergy: 0.22\\nH 0.0 0.0 0.0\\nH 0.0 0.0 0.74\\n2\\nenergy: 0.11\\nH 0.0 0.0 0.0\\nH 0.0 0.0 0.73\\n2\\nenergy: -0.12\\nH 0.0 0.0 0.0\\nH 0.0 0.0 0.72\\n' > xtbpath_0.xyz
+          cp "$1" xtbpath_ts.xyz
+          : > xtbpath_0.xyz
+          for _ in 1 2 3 4 5 6 7; do cat "$1" >> xtbpath_0.xyz; done
           printf '{"total energy": -4.2, "electronic energy": -4.4}\\n' > xtbout.json
           printf 'forward barrier (kcal) : 12.4\\n'
           printf 'backward barrier (kcal) : 8.6\\n'
@@ -132,7 +133,7 @@ def smoke_workspace(tmp_path: Path) -> SmokeWorkspace:
           exit 0
         fi
 
-        printf '1\\nfake xtb optimized\\nH 0.0 0.0 0.0\\n' > xtbopt.xyz
+        cp "$1" xtbopt.xyz
         : > .xtboptok
         printf '{"total energy": -4.2, "electronic energy": -4.4}\\n' > xtbout.json
         printf 'charges\\n' > charges
@@ -149,19 +150,8 @@ def smoke_workspace(tmp_path: Path) -> SmokeWorkspace:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        cat > crest_conformers.xyz <<'EOF'
-        1
-        conf_a
-        H 0.0 0.0 0.0
-        1
-        conf_b
-        H 0.0 0.0 0.1
-        EOF
-        cat > crest_best.xyz <<'EOF'
-        1
-        best
-        H 0.0 0.0 0.0
-        EOF
+        cp "$1" crest_best.xyz
+        cat "$1" "$1" > crest_conformers.xyz
         exit 0
         """,
     )

@@ -2,9 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from orca_auto.core.queue.internal_engine import InternalEngineSpec
 from orca_auto.core.queue.types import QueueStatus
+
+
+def _append_and_return(items: Any, value: Any, result: Any) -> Any:
+    items.append(value)
+    return result
+
 
 queue_lifecycle = SimpleNamespace(
     finalize_child_exit=InternalEngineSpec(engine="crest").lifecycle().finalize_child_exit,
@@ -34,7 +41,7 @@ def test_finalize_child_exit_marks_failed_for_unexpected_child_exit(tmp_path: Pa
     failed: list[tuple[Path, str, str]] = []
     released: list[str] = []
 
-    def mark_failed(root: Path, queue_id: str, *, error: str) -> None:
+    def mark_failed(root: Path, queue_id: str, *, error: str, **_kwargs: object) -> None:
         failed.append((root, queue_id, error))
 
     queue_lifecycle.finalize_child_exit(
@@ -73,7 +80,11 @@ def test_finalize_child_exit_requeues_on_worker_shutdown(tmp_path: Path) -> None
         shutdown_requested=True,
         find_queue_entry_fn=lambda _root, _queue_id: entry,
         mark_cancelled_fn=lambda *args, **kwargs: None,
-        requeue_running_entry_fn=lambda root, queue_id: requeued.append((root, queue_id)),
+        requeue_running_entry_fn=lambda root, queue_id, **_kwargs: _append_and_return(
+            requeued,
+            (root, queue_id),
+            entry,
+        ),
         mark_failed_fn=lambda *args, **kwargs: None,
         mark_recovery_pending_fn=lambda cfg_obj, entry_obj, *, reason: recovery.append(
             (cfg_obj, entry_obj, reason)
@@ -94,7 +105,7 @@ def test_finalize_child_exit_marks_cancelled_when_cancel_requested(tmp_path: Pat
     )
     cancelled: list[tuple[Path, str, str]] = []
 
-    def mark_cancelled(root: Path, queue_id: str, *, error: str) -> None:
+    def mark_cancelled(root: Path, queue_id: str, *, error: str, **_kwargs: object) -> None:
         cancelled.append((root, queue_id, error))
 
     queue_lifecycle.finalize_child_exit(

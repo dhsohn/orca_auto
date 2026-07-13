@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engine_process import open_confined_log, read_confined_text
 from orca_auto.core.utils import (
     coerce_mapping as _coerce_mapping,
 )
@@ -100,7 +101,12 @@ def append_workflow_journal_event(
     }
     with file_lock(_registry_lock_path(resolved_root)):
         path = workflow_journal_path(resolved_root)
-        with path.open("a", encoding="utf-8") as handle:
+        with open_confined_log(
+            resolved_root,
+            path,
+            label="workflow journal",
+            append=True,
+        ) as handle:
             handle.write(json.dumps(event, ensure_ascii=True))
             handle.write("\n")
     _maybe_notify_journal_event(event, resolved_root)
@@ -114,7 +120,8 @@ def list_workflow_journal(workflow_root: str | Path, *, limit: int = 50) -> list
         return []
     rows: list[dict[str, Any]] = []
     with file_lock(_registry_lock_path(resolved_root)):
-        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        journal_text = read_confined_text(resolved_root, path, label="workflow journal")
+        for line_number, line in enumerate(journal_text.splitlines(), start=1):
             text = line.strip()
             if not text:
                 continue

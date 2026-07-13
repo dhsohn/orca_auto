@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.messaging import build_channel
-from orca_auto.core.statuses import STATUS_RUNNING, TERMINAL_STATUSES, normalize_status
+from orca_auto.core.statuses import (
+    STATUS_QUEUED,
+    STATUS_RUNNING,
+    TERMINAL_STATUSES,
+    normalize_status,
+)
 
 from ..config import AppConfig
 
@@ -80,6 +85,35 @@ def upsert_running_job_record(
         cfg,
         job_id=task_id,
         status=STATUS_RUNNING,
+        job_dir=reaction_dir,
+        job_type=job_type,
+        selected_input_xyz=selected_input,
+        molecule_key=molecule_key,
+        resource_request=requested,
+        resource_actual=actual,
+    )
+
+
+def upsert_queued_job_record(
+    cfg: AppConfig,
+    entry: Any,
+    *,
+    callbacks: OrcaQueueWorkerTrackingCallbacks,
+) -> None:
+    task_id = callbacks.queue_entry_task_id(entry)
+    if not task_id:
+        raise ValueError("ORCA publication repair requires a queue task_id")
+    reaction_dir = Path(callbacks.queue_entry_reaction_dir(entry)).expanduser().resolve()
+    selected_input, job_type, molecule_key, requested, actual = tracking_metadata_from_queue_entry(
+        cfg,
+        entry,
+        reaction_dir=reaction_dir,
+        callbacks=callbacks,
+    )
+    callbacks.upsert_job_record(
+        cfg,
+        job_id=task_id,
+        status=STATUS_QUEUED,
         job_dir=reaction_dir,
         job_type=job_type,
         selected_input_xyz=selected_input,
@@ -224,6 +258,7 @@ __all__ = [
     "payload_job_id",
     "payload_matches_expected_job_id",
     "tracking_metadata_from_queue_entry",
+    "upsert_queued_job_record",
     "upsert_running_job_record",
     "upsert_terminal_job_record",
 ]

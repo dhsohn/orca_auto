@@ -6,7 +6,11 @@ from .child import (
 )
 from .policies import InternalEngineAdmission, InternalEngineLifecycle
 from .queue_module import InternalEngineQueueModule
-from .runtime import InternalEngineQueueRuntime, own_engine_accept_entry
+from .runtime import (
+    InternalEngineQueueRuntime,
+    entry_matches_engine_identity,
+    own_engine_accept_entry,
+)
 from .spec import (
     InternalEngineSpec,
     InternalEngineWorkerChildModuleFacade,
@@ -45,6 +49,7 @@ __all__ = [
     "InternalEngineWorkerChildModuleFacade",
     "create_worker_shutdown_exception_type",
     "entry_status_is_running",
+    "entry_matches_engine_identity",
     "build_internal_engine_queue_worker_deps",
     "build_late_bound_internal_engine_queue_worker_deps",
     "build_late_bound_internal_engine_queue_worker_facade_callbacks",

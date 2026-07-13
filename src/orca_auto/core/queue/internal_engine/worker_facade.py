@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .runtime import InternalEngineQueueRuntime
+from .runtime import InternalEngineQueueRuntime, own_engine_accept_entry
 from .worker_deps import (
     InternalEngineQueueWorkerDeps,
     InternalEngineQueueWorkerDepsResolver,
@@ -72,11 +72,14 @@ class InternalEngineQueueWorkerLifecycleFacade:
         list_slots_fn: Callable[[Any], list[Any]] | None = None,
     ) -> None:
         deps = self.resolver.deps
+        accept_entry = own_engine_accept_entry(self.runtime.spec.engine)
         self.runtime.spec.lifecycle().reconcile_orphaned_running(
             worker.cfg,
             admission_root=worker.admission_root,
             queue_roots_fn=self.runtime.queue_roots,
-            list_queue_fn=deps.list_queue,
+            list_queue_fn=lambda root: [
+                entry for entry in deps.list_queue(root) if accept_entry(entry)
+            ],
             list_slots_fn=list_slots_fn or deps.list_slots,
             reconcile_stale_slots_fn=deps.reconcile_stale_slots,
             reconcile_orphaned_child_queue_entries_fn=(deps.reconcile_orphaned_child_queue_entries),

@@ -341,12 +341,38 @@ def _dispatch_update(settings: TelegramBotSettings, update: Any) -> int | None:
     )
 
 
+def _run_canonical_telegram(settings: TelegramBotSettings) -> int:
+    if not settings.telegram.interactive_enabled:
+        logger.error(
+            "Telegram interactive controls require bot_token/chat_id; "
+            "group chats also require allowed_user_ids."
+        )
+        return 1
+    from ..bot.application import BotApplication
+    from ..bot.providers.telegram import run_telegram_bot
+    from ..bot.settings import BotSettings
+
+    return run_telegram_bot(
+        BotApplication(
+            BotSettings(
+                workflow_root=settings.workflow_root,
+                crest_config=settings.crest_config,
+                xtb_config=settings.xtb_config,
+                orca_config=settings.orca_config,
+                orca_repo_root=settings.orca_repo_root,
+            )
+        ),
+        settings.telegram,
+    )
+
+
 def run_bot(settings: TelegramBotSettings | None = None) -> int:
-    """Run the canonical bot, retaining explicit-settings legacy test compatibility.
+    """Run the provider-neutral Telegram adapter from every historical entrypoint.
 
     Existing installed units may still invoke this historical module path.  A
-    no-argument call therefore delegates to the provider-neutral application so
-    upgrades cannot accidentally keep the old Telegram-only action dispatcher.
+    no-argument call therefore delegates to the provider-neutral application.
+    Explicit settings use the same actor-bound, one-time action implementation;
+    the old raw-target callback dispatcher is no longer an executable path.
     """
 
     if settings is None:
@@ -358,31 +384,9 @@ def run_bot(settings: TelegramBotSettings | None = None) -> int:
         ):
             legacy_settings = settings_from_config(config_path)
             if legacy_settings.telegram.interactive_enabled:
-                from ..bot.application import BotApplication
-                from ..bot.providers.telegram import run_telegram_bot
-                from ..bot.settings import BotSettings
-
-                return run_telegram_bot(
-                    BotApplication(
-                        BotSettings(
-                            workflow_root=legacy_settings.workflow_root,
-                            crest_config=legacy_settings.crest_config,
-                            xtb_config=legacy_settings.xtb_config,
-                            orca_config=legacy_settings.orca_config,
-                            orca_repo_root=legacy_settings.orca_repo_root,
-                        )
-                    ),
-                    legacy_settings.telegram,
-                )
+                return _run_canonical_telegram(legacy_settings)
         return int(_run_neutral_bot(config_path=config_path))
-    return _dispatch.run_bot(
-        settings,
-        settings_from_env_fn=settings_from_env,
-        set_bot_commands_fn=_set_bot_commands,
-        poll_updates_fn=_poll_updates,
-        dispatch_update_fn=_dispatch_update,
-        logger=logger,
-    )
+    return _run_canonical_telegram(settings)
 
 
 def main() -> int:

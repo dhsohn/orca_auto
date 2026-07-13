@@ -53,6 +53,7 @@ def test_build_execution_context_uses_injected_context_dependencies(tmp_path: Pa
         cfg,
         entry,
         context_deps=context_deps,
+        verify_execution_snapshot=False,
     )
 
     assert context == worker_context.XtbExecutionContext(

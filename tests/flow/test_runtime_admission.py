@@ -35,6 +35,24 @@ def test_submission_admission_has_capacity_fails_closed_for_invalid_configured_l
     assert runtime_admission.submission_admission_has_capacity(config) is False
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "scheduler: disabled\n",
+        "resources: disabled\n",
+        "workflow:\n  paths: disabled\n",
+    ],
+)
+def test_submission_admission_has_capacity_rejects_malformed_shared_sections(
+    tmp_path: Path,
+    payload: str,
+) -> None:
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text(payload, encoding="utf-8")
+
+    assert runtime_admission.submission_admission_has_capacity(config) is False
+
+
 def test_submission_admission_root_for_internal_engine_requires_workflow_root(
     tmp_path: Path,
 ) -> None:

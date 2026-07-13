@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -68,19 +68,24 @@ def mark_queue_terminal(
     result: CrestRunResult,
     *,
     queue_deps: Any,
-) -> None:
-    _engine_execution.mark_result_terminal_status(
+    before_update_fn: Callable[[], Any] | None = None,
+    require_cancel_requested: bool = False,
+) -> Any:
+    return _engine_execution.mark_result_terminal_status(
         queue_root,
         context.entry.queue_id,
         result,
         metadata_update={
             "retained_conformer_count": result.retained_conformer_count,
-            "mode": result.mode,
         },
         mark_terminal_status_fn=_queue_execution.mark_terminal_status,
         mark_completed_fn=queue_deps.mark_completed,
         mark_cancelled_fn=queue_deps.mark_cancelled,
         mark_failed_fn=queue_deps.mark_failed,
+        expected_entry=context.entry,
+        expected_task_id=str(context.entry.task_id),
+        before_update_fn=before_update_fn,
+        require_cancel_requested=require_cancel_requested,
     )
 
 
@@ -138,6 +143,7 @@ def finalize_processed_entry(
     *,
     queue_root: Path,
     dependencies: Any,
+    require_cancel_requested: bool = False,
 ) -> Path | None:
     artifact_deps = dependencies.artifacts
     tracking_deps = dependencies.tracking
@@ -157,17 +163,32 @@ def finalize_processed_entry(
             resource_actual=result.resource_actual,
         )
 
+    handle_uncommitted_terminal: Callable[[], Any] | None = None
+    if result.status != "cancelled":
+
+        def handle_uncommitted_terminal() -> Any:
+            return finalize_processed_entry(
+                cfg,
+                context,
+                replace(result, status="cancelled", reason="cancel_requested"),
+                queue_root=queue_root,
+                dependencies=dependencies,
+                require_cancel_requested=True,
+            )
+
     return _engine_execution.sync_terminal_result(
         _engine_execution.TerminalSyncActions(
             write_artifacts=lambda: artifact_deps.write_execution_artifacts(
                 context.entry,
                 result,
             ),
-            mark_queue_terminal=lambda: mark_queue_terminal(
+            mark_queue_terminal=lambda before_update_fn: mark_queue_terminal(
                 queue_root,
                 context,
                 result,
                 queue_deps=dependencies.queue,
+                before_update_fn=before_update_fn,
+                require_cancel_requested=require_cancel_requested,
             ),
             sync_job_record=lambda: sync_job_tracking(
                 cfg,
@@ -177,6 +198,7 @@ def finalize_processed_entry(
             ),
             notify_finished=notify_finished,
             build_outcome=lambda sync_result: sync_result,
+            handle_uncommitted_terminal=handle_uncommitted_terminal,
         ),
     )
 

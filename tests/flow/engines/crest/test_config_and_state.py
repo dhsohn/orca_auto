@@ -206,7 +206,9 @@ def test_load_config_no_longer_supports_top_level_runtime_and_paths_shape(tmp_pa
         config_mod.load_crest_config(str(config_path))
 
 
-def test_load_config_applies_defaults_for_missing_or_invalid_sections(tmp_path: Path) -> None:
+def test_load_config_applies_defaults_for_missing_and_legacy_optional_sections(
+    tmp_path: Path,
+) -> None:
     workflow_root = tmp_path / "workflow_root"
     workflow_root.mkdir()
     config_path = _write_config(
@@ -215,10 +217,7 @@ def test_load_config_applies_defaults_for_missing_or_invalid_sections(tmp_path: 
         runs_root: {workflow_root}
         scheduler:
           max_active_simulations: 1
-        workflow:
-          paths: []
         behavior: invalid
-        resources: nope
         telegram: []
         """,
     )

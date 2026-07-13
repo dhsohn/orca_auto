@@ -66,7 +66,7 @@ def validate_configured_executable_path(
         raise ValueError(
             f"{label} must point to Linux {display_name} binary, not Windows executable: {text!r}"
         )
-    return validate_executable_file(
+    resolved = validate_executable_file(
         candidate,
         missing_message=lambda _resolved: (
             f"{label} not found: {text!r}. "
@@ -76,6 +76,15 @@ def validate_configured_executable_path(
         not_executable_message=lambda _resolved: f"{label} is not executable: {text!r}",
         access_fn=access_fn,
     )
+    resolved_text = str(resolved)
+    if is_rejected_windows_path(resolved_text):
+        raise ValueError(f"{label} must resolve to a Linux path outside Windows mounts: {text!r}")
+    if resolved_text.lower().endswith(".exe"):
+        raise ValueError(
+            f"{label} must resolve to a Linux {display_name} binary, not a Windows executable: "
+            f"{text!r}"
+        )
+    return resolved
 
 
 def resolve_local_path(path_text: str | Path) -> Path:

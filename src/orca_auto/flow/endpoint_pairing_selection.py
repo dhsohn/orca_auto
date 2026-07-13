@@ -76,6 +76,8 @@ def _candidate_pair(
             atom_indices=policy.comparison_atoms,
             excluded_indices=policy.excluded_atoms,
         )
+        if metric_reason in {"atom_count_mismatch", "element_order_mismatch"}:
+            return None
         if distance_rmsd is None and not policy.fallback_to_ranked:
             return None
         if (
@@ -142,9 +144,9 @@ def select_endpoint_pairs(
             if pair is not None:
                 pairs.append(pair)
 
-    if not policy.enabled:
-        return tuple(pairs)
-
+    # Rank-gap ordering is also the deterministic, balanced fallback when
+    # geometry pairing is disabled.  A capped Cartesian product must not spend
+    # every slot on the first reactant conformer.
     pairs.sort(key=_pair_sort_key)
     if policy.max_pairs:
         pairs = pairs[: policy.max_pairs]

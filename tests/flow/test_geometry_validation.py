@@ -171,12 +171,66 @@ def test_ts_guess_validation_fields_annotations(tmp_path: Path) -> None:
     )
     assert tuned is not None
     assert tuned["geometry_validation"]["reacting_bond_stretch_scale"] == 2.5
-    # unreadable comparison -> error recorded, no verdict
+    # incompatible comparison -> fail-closed invalid verdict
     bad = _write(tmp_path / "bad.xyz", ["C 0.0 0.0 0.0"])
     fields = _ts_guess_validation_fields(str(bad), input_summary, {})
     assert fields is not None
-    assert "geometry_valid" not in fields
+    assert fields["geometry_valid"] is False
     assert "error" in fields["geometry_validation"]
+
+
+def test_ts_guess_validation_rejects_multiframe_geometry(tmp_path: Path) -> None:
+    reactant, product = _endpoints(tmp_path)
+    frame = ["C 0.0 0.0 0.0", "H 1.25 0.0 0.0", "O 4.0 0.0 0.0", "H 4.95 0.0 0.0"]
+    ts = tmp_path / "multi_ts.xyz"
+    ts.write_text(
+        "\n".join(["4", "first", *frame, "4", "second", *frame, ""]),
+        encoding="utf-8",
+    )
+
+    fields = _ts_guess_validation_fields(
+        str(ts), {"reactant_xyz": str(reactant), "product_xyz": str(product)}, {}
+    )
+
+    assert fields is not None
+    assert fields["geometry_valid"] is False
+    assert "exactly one" in fields["geometry_validation"]["error"]
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"bond_scale": 0},
+        {"bond_scale": float("nan")},
+        {"bond_scale": float("inf")},
+        {"bond_scale": True},
+        {"reacting_bond_stretch_scale": 0},
+        {"reacting_bond_stretch_scale": float("nan")},
+        {"max_spurious_bond_changes": -1},
+        {"max_spurious_bond_changes": 0.5},
+        {"max_spurious_bond_changes": True},
+    ],
+)
+def test_ts_guess_validation_rejects_lossy_or_nonphysical_options(
+    tmp_path: Path,
+    options: dict[str, object],
+) -> None:
+    reactant, product = _endpoints(tmp_path)
+    ts = _write(
+        tmp_path / "ts.xyz",
+        ["C 0.0 0.0 0.0", "H 1.25 0.0 0.0", "O 4.0 0.0 0.0", "H 4.95 0.0 0.0"],
+    )
+
+    fields = _ts_guess_validation_fields(
+        str(ts),
+        {"reactant_xyz": str(reactant), "product_xyz": str(product)},
+        {"ts_guess_validation": options},
+    )
+
+    assert fields is not None
+    assert fields["geometry_valid"] is False
+    assert fields["geometry_validation"]["valid"] is False
+    assert "must be" in fields["geometry_validation"]["error"]
 
 
 def _invalid_ts_contract(tmp_path: Path) -> XtbArtifactContract:

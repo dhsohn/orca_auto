@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from orca_auto.core import queue as _queue_store
 from orca_auto.core.commands import queue as _queue_commands
+from orca_auto.core.queue.internal_engine import own_engine_accept_entry
 from orca_auto.flow.engines.crest import queue_runtime as _queue_runtime
 from orca_auto.flow.engines.crest import submission as _submission
 
@@ -39,7 +40,12 @@ def _submitter_deps() -> InternalEngineSubmitterDeps:
         enqueue_fn=lambda *args, **kwargs: enqueue(*args, **kwargs),
         load_queue_config_fn=lambda config_path: load_queue_config(config_path),
         queue_entries_with_roots_fn=lambda cfg: queue_entries_with_roots(cfg),
-        request_cancel_fn=lambda queue_root, queue_id: request_cancel(queue_root, queue_id),
+        request_cancel_fn=lambda queue_root, queue_id, **kwargs: request_cancel(
+            queue_root,
+            queue_id,
+            accept_entry_fn=own_engine_accept_entry("crest"),
+            **kwargs,
+        ),
         display_status_fn=lambda entry: display_status(entry),
     )
 

@@ -177,6 +177,17 @@ def test_engine_config_mapping_rejects_non_mapping_engine_scheduler(invalid: obj
         engine_config_mapping(raw, "orca", inherit_keys=("scheduler",))
 
 
+@pytest.mark.parametrize("invalid", [None, "disabled", []])
+def test_engine_config_mapping_rejects_non_mapping_engine_resources(invalid: object) -> None:
+    raw = {
+        "resources": {"max_cores_per_task": 2, "max_memory_gb_per_task": 4},
+        "orca": {"resources": invalid},
+    }
+
+    with pytest.raises(ValueError, match="orca.resources must be a mapping"):
+        engine_config_mapping(raw, "orca", inherit_keys=("resources",))
+
+
 def test_yaml_mapping_and_section_helpers(tmp_path: Path) -> None:
     config_path = tmp_path / "orca_auto.yaml"
     config_path.write_text("scheduler:\n  max_active_simulations: 4\n", encoding="utf-8")
