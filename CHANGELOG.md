@@ -8,8 +8,35 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-13
+
+Second tagged release. This release adds standalone xTB molecular dynamics,
+strengthens durable queue execution and recovery, and expands the workflow and
+messenger surfaces introduced after `v0.1.0`.
+
+Deployment upgrade note: drain active and pending pre-snapshot internal-engine
+queue rows with the old build before switching, or cancel, clear, and resubmit
+them after upgrading. The generation-bound workers in 0.2.0 intentionally reject
+legacy rows that lack immutable execution snapshots or generation fingerprints.
+
 ### Added
 
+- Standalone xTB molecular dynamics is now a first-class, queue-first engine,
+  independent from ORCA and workflow orchestration. A strict `xtb_md_job.yaml`
+  admits bounded NVT or NVE jobs, snapshots the geometry, manifest, executable
+  identity, environment, and resource request, and runs one private supervised
+  attempt. Success requires the requested step count, both normal-termination
+  markers, a fresh `xtbmdok`, a complete finite `xtb.trj`, and a valid finite
+  `mdrestart`; return code zero alone is not sufficient. The adapter accepts
+  exactly stable xTB 6.7.1. Workflow integration, retry, and resume remain out
+  of scope for this release.
+- The messenger stack now has provider-neutral notification and interactive-bot
+  contracts with Telegram and Discord adapters. Discord notifications no longer
+  depend on the removed webhook-only path, and interactive commands share the
+  same actor-bound action surface across providers.
+- Reaction workflows can hand a validated xTB Hessian to ORCA OptTS through
+  `InHess Read`. TS guesses are screened for finite geometry, plausible reacting
+  distances, and duplicate structures before ORCA fan-out.
 - `conformer_screening` gained two optional, fail-closed manifest blocks. `rmsd_dedup:`
   collapses DFT-degenerate optimized minima to one lowest-energy representative using
   all atoms by default; comparable candidates require converged results without a known
@@ -99,8 +126,25 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   nested input includes, external path references, multi-job/MD directives, and
   ORCA host-list control files.
 
+### Changed
+
+- Discord and Telegram notification documents now use the same engine-aware
+  identity, severity, author line, fields, and footer conventions. The provider
+  adapters render the shared document model instead of maintaining divergent
+  notification wording.
+
 ### Fixed
 
+- Workflow failure reports now retain actionable failure reasons and resolve the
+  canonical current workspace and retry report instead of linking stale attempt
+  paths. Existing-output queue submissions preserve their original task identity.
+- ORCA shutdown cleanup is idempotent under repeated termination signals, so a
+  second `SIGTERM` cannot unwind the first cleanup path or release process state
+  prematurely.
+- The release fake-ORCA smoke follows the normalized
+  `job_report.json` `artifacts.last_out_path` into the confined generation
+  directory instead of assuming that execution output is copied back to the job
+  root.
 - Pre-MD workflow hardening now enforces `max_xtb_stages` and `max_orca_stages` as
   total fan-out caps, keeps workflow charge/multiplicity authoritative across
   CREST/xTB/ORCA, rejects non-finite energies and coordinates, and requires a
