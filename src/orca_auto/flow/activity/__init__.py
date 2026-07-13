@@ -7,8 +7,9 @@ from typing import Any
 from orca_auto.core.config.files import (
     shared_workflow_root_from_config,
 )
+from orca_auto.core.engines import get_engine_definition
 from orca_auto.core.queue import clear_terminal as clear_queue_terminal
-from orca_auto.core.queue import list_queue
+from orca_auto.core.queue import list_queue, request_cancel
 
 from ..engine_options import WorkflowEngineOptions
 from ..engine_runtime import engine_runtime_paths
@@ -70,6 +71,10 @@ class _ActivityCancelDeps:
     cancel_engine_targets: dict[str, Any]
     cancel_orca_target: Any
     _discover_orca_repo_root: Any
+    engine_queue_roots: Any
+    list_queue: Any
+    request_cancel: Any
+    get_engine_definition: Any
 
 
 def _orca_activity_deps() -> _OrcaActivityDeps:
@@ -82,6 +87,13 @@ def _orca_activity_deps() -> _OrcaActivityDeps:
 
 
 def _activity_cancel_deps() -> _ActivityCancelDeps:
+    def engine_queue_roots(config_path: str, *, engine: str) -> tuple[Path, ...]:
+        return _activity_list.engine_queue_roots(
+            config_path,
+            engine=engine,
+            deps=_activity_list_deps(),
+        )
+
     return _ActivityCancelDeps(
         cancel_engine_targets={
             "crest": cancel_crest_target,
@@ -89,6 +101,10 @@ def _activity_cancel_deps() -> _ActivityCancelDeps:
         },
         cancel_orca_target=cancel_orca_target,
         _discover_orca_repo_root=_activity_sources.discover_orca_repo_root,
+        engine_queue_roots=engine_queue_roots,
+        list_queue=list_queue,
+        request_cancel=request_cancel,
+        get_engine_definition=get_engine_definition,
     )
 
 

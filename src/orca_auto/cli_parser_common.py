@@ -31,14 +31,16 @@ def add_resource_override_arguments(parser: argparse.ArgumentParser) -> None:
         "--max-cores",
         type=int,
         default=None,
-        help=("Set workflow max cores; standalone ORCA uses %pal/%maxcore from the selected input"),
+        help=(
+            "Set workflow max cores; standalone ORCA uses %%pal/%%maxcore from the selected input"
+        ),
     )
     parser.add_argument(
         "--max-memory-gb",
         type=int,
         default=None,
         help=(
-            "Set workflow max memory in GB; standalone ORCA uses %pal/%maxcore "
+            "Set workflow max memory in GB; standalone ORCA uses %%pal/%%maxcore "
             "from the selected input"
         ),
     )

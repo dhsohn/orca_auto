@@ -191,6 +191,7 @@ class CommonRuntimeConfig(RuntimeAdmissionMixin):
     max_concurrent: int = 4
     admission_root: str | None = None
     admission_limit: int | None = None
+    engine_admission_limit: int | None = None
 
 
 @dataclass

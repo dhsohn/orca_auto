@@ -10,11 +10,11 @@
 
 > 이 문서는 [README.md](README.md)(영어판)의 한국어 번역본입니다.
 
-orca_auto는 Linux 및 WSL 환경에서 ORCA 실행과 워크플로우 오케스트레이션을 위한
-**큐 우선(queue-first)** 인터페이스입니다. xTB와 CREST도 런타임의 일부이지만, 이제는
-독립 공개 명령이 아니라 워크플로우 단계 내부에서 사용됩니다. orca_auto는 작업을
-내구성 있게 제출하고, 감독되는 워커 아래에서 실행하며, 작업별 상태와 리포트를
-기록합니다.
+orca_auto는 Linux 및 WSL 환경에서 단독 ORCA, 단독 xTB 분자동역학(xTB-MD),
+워크플로우 오케스트레이션을 제공하는 **큐 우선(queue-first)** 인터페이스입니다.
+작업을 내구성 있게 제출하고, 감독되는 워커 아래에서 실행하며, 작업별 상태와
+리포트를 기록합니다. 일반 xTB와 CREST 계산은 워크플로우 내부 단계이며, 단독
+xTB-MD는 별도의 1급 엔진입니다.
 
 ## 문서
 
@@ -33,7 +33,8 @@ orca_auto는 Linux 및 WSL 환경에서 ORCA 실행과 워크플로우 오케스
 - Python 3.11 이상
 - Linux 또는 WSL2
 - ORCA를 사용하려면 절대 Linux 경로에 설치된 ORCA
-- xTB/CREST에 의존하는 워크플로우 단계를 사용하려면 절대 Linux 경로에 설치된 xTB와 CREST
+- 단독 xTB-MD 또는 xTB 의존 워크플로우 단계를 사용하려면 절대 Linux 경로에 설치된 xTB
+- CREST 의존 워크플로우 단계를 사용하려면 절대 Linux 경로에 설치된 CREST
 
 설치:
 
@@ -70,6 +71,7 @@ runs_root: /home/user/runs
 
 scheduler:
   max_active_simulations: 4
+  max_active_xtb_md: 1
 
 workflow:
   paths:
@@ -105,14 +107,17 @@ orca:
 - 설정된 ORCA/xTB/CREST 실행 경로는 실제로 존재하는 실행 가능한 Linux 바이너리를
   가리켜야 합니다. 제출 시 PATH 탐색을 의도하는 경우에만
   `workflow.paths.xtb_executable` 또는 `workflow.paths.crest_executable`을 비워 두세요.
-  해석된 실행 파일 정체성은 그 큐 generation에 바인딩됩니다.
+  해석된 실행 파일 정체성은 그 큐 generation에 바인딩됩니다. 단독 xTB-MD와
+  워크플로우 xTB 단계는 동일한 정규 키 `workflow.paths.xtb_executable`을 사용합니다.
 - `default_max_retries: 0`은 ORCA 재시도를 비활성화합니다. 양수 값은 ORCA route
   종류별 cap을 따르는 계산 종류별 재시도 정책을 활성화합니다.
-- `scheduler.max_active_simulations`는 ORCA, 내부 xTB 워크플로우 단계, 내부 CREST
-  워크플로우 단계 전반에 걸친 공유 상한입니다.
+- `scheduler.max_active_simulations`는 ORCA, 단독 xTB-MD, 내부 xTB 워크플로우 단계,
+  내부 CREST 워크플로우 단계 전반에 걸친 공유 상한입니다.
+  `scheduler.max_active_xtb_md`는 단독 xTB-MD에만 적용되는 양의 부분 상한이며,
+  생략하면 `1`입니다.
 - 모든 것이 단일 runs 루트(`runs_root`) 아래에 존재합니다.
-  단독 ORCA 작업과 워크플로우 워크스페이스가 그 안에 나란히 놓이고, 공유 admission
-  디렉터리는 `<runs_root>/.admission`이 기본값입니다.
+  단독 ORCA/xTB-MD 작업과 워크플로우 워크스페이스가 그 안에 나란히 놓이고, 공유
+  admission 디렉터리는 `<runs_root>/.admission`이 기본값입니다.
 - 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은
   오직 `<runs_root>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`, `03_orca`)
   아래에만 존재합니다.
@@ -121,6 +126,72 @@ orca:
 - 봇 초대, 채널 ID, 권한, 서비스 시작, 명령 확인 절차는
   [docs/DISCORD_SETUP.ko.md](docs/DISCORD_SETUP.ko.md)를 따르세요.
 - 전체 템플릿은 [config/orca_auto.yaml.example](config/orca_auto.yaml.example)에 있습니다.
+
+## 단독 xTB-MD
+
+`runs_root` 아래 작업 디렉터리에 시작 구조 하나(최적화된 구조를 강하게 권장)와 정확히
+하나의 `xtb_md_job.yaml`을 둡니다. 예:
+
+```yaml
+schema_version: 1
+input_xyz: start.xyz
+gfn: 2
+charge: 0
+uhf: 0
+ensemble: nvt       # nvt | nve
+temperature_k: 298.15
+time_ps: 1.0
+walltime_seconds: 3600
+step_fs: 2.0
+dump_fs: 50.0
+hydrogen_mass_amu: 4
+shake: 2
+scc_accuracy: 2.0
+# solvent_model: alpb  # 선택; gbsa | alpb, solvent와 함께 지정
+# solvent: water
+resources:
+  max_cores: 4
+  max_memory_gb: 8
+```
+
+동일한 큐 우선 표면으로 제출하고 확인합니다:
+
+```bash
+orca_auto run-dir '/home/user/runs/water_md'
+orca_auto queue list --engine xtb_md
+orca_auto queue cancel q_20260713_160000_ab12cd
+orca_auto queue list clear
+```
+
+`queue list --engine xtb_md`는 통합 activity view를 필터링합니다. `queue cancel`은 화면에
+표시된 activity/queue id와 알려진 경로 alias를 받습니다. `queue list clear`는 의도적으로
+필터를 받지 않으며 xTB-MD만이 아니라 모든 activity source의 종료 항목을 정리합니다.
+
+필수 manifest 필드는 `schema_version`, `input_xyz`, `gfn`, `ensemble`,
+`temperature_k`, `time_ps`, `walltime_seconds`, `step_fs`, `dump_fs`입니다. 알 수 없는
+필드는 fail-closed합니다. `charge`와 `uhf`의 기본값은 `0`이고,
+`hydrogen_mass_amu`, `shake`, `scc_accuracy`의 기본값은 각각 `4`, `2`, `2.0`입니다.
+선택적 `resources` mapping은 설정의 작업별 상한 이하 값만 요청할 수 있습니다.
+피코초를 펨토초로 변환한 `time_ps`와 `dump_fs`는 각각 `step_fs`의 정확한 양의 정수배여야
+합니다.
+
+단독 adapter는 NVT와 NVE만 지원합니다. 워크플로우를 사용하지 않으며 한 generation을
+재시도하거나 재개하지 않고, 임의 random seed, `--omd`, raw xcontrol, constraint,
+metadynamics를 노출하지 않습니다. 고정 `$samerand` 시퀀스를 쓰는 fresh-run 정규 `$md`
+입력 하나만 생성합니다. 취소는 활성 프로세스 그룹을 종료하고 종료 상태에 도달합니다.
+서비스 중단이나 고아 generation은 다시 큐에 넣지 않고 종료 실패로 확정합니다.
+
+서버 소유 상한은 원자 10,000개, MD 999,999 step, 100,000,000 atom-step,
+trajectory frame 100,000개, wall time 86,400초, 보존 출력 1 GiB, 출력 파일 10,000개입니다.
+성공한 작업은 루트에 `job_state.json`, `job_report.json`, `job_report.md`를 씁니다.
+불변 실행 트리와 검증된 `xtb.trj`, `mdrestart`, `xtbmdok`, 로그는
+`.orca_auto_xtb_md_executions/<job_id>/` 아래에 보존합니다.
+
+단독 xTB-MD는 현재 이 계약을 추가할 때 최신 안정판이던 xTB 6.7.1만 받습니다. 이는 해당
+upstream release에 이슈가 없다는 뜻이 아닙니다. 종료 코드 0과 `xtbmdok`만으로는 성공이
+아니며, adapter는 `MD is unstable, emergency exit`,
+`but still taking it as converged!` 같은 알려진 false-success marker와 불완전하거나 잘못된
+trajectory/checkpoint 증거를 fail-closed합니다.
 
 ## 사용자 명령어
 
@@ -137,9 +208,11 @@ orca_auto scaffold conformer_search '/home/user/workflow_inputs/conf_001'
 # 작업 제출
 orca_auto run-dir '/home/user/orca_runs/sample_rxn'
 orca_auto run-dir '/home/user/workflow_inputs/reaction_case'
+orca_auto run-dir '/home/user/runs/water_md'
 
 # 조회 및 유지보수
 orca_auto queue list --engine orca
+orca_auto queue list --engine xtb_md
 orca_auto queue list clear      # 완료/실패/취소 항목 정리
 orca_auto queue cancel <target>
 orca_auto service status
@@ -186,14 +259,14 @@ orca_auto service restart
 - ORCA는 제출할 때 가장 최근에 수정된 `.inp`를 선택하고 해당 입력과 지원하는 파일 의존성을
   private execution snapshot에 바인딩합니다. 이후 원본을 편집해도 큐에 들어간 generation은
   바뀌지 않습니다.
-- `flow.yaml`과 내부 엔진 작업 manifest는 1 MiB, YAML alias 32개, 파싱/확장 node 10,000개,
+- `flow.yaml`, `xtb_md_job.yaml`, 내부 엔진 작업 manifest는 1 MiB, YAML alias 32개, 파싱/확장 node 10,000개,
   중첩 64단계로 제한하며 순환/재귀 YAML graph는 fail-closed합니다. 로컬 geometry는 최대
   10,000원자이며 xTB/ORCA Hessian 생성 작업은 1,000원자, Discord 업로드 작업은
   200원자로 더 제한합니다.
 - 중단된 ORCA 실행을 재시도하거나 재개할 때, orca_auto는 일치하는 비어 있지 않은
   `.gbw` 파일을 사용해 `MORead`와 `%moinp`가 포함된 재시작 입력을 생성합니다.
-- 완료된 ORCA 실행은 `job_state.json`, `job_report.json`, `job_report.md` 같은 상태 및
-  리포트 파일을 기록합니다.
+- 완료된 ORCA와 단독 xTB-MD 실행은 `job_state.json`, `job_report.json`,
+  `job_report.md` 같은 상태 및 리포트 파일을 기록합니다.
 - 무인 WSL 또는 Linux 실행을 위해서는 [systemd/README.ko.md](systemd/README.ko.md)의
   `systemd` 자산을 사용하세요.
 

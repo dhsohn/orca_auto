@@ -19,6 +19,7 @@ RECORDS_JSONL_FILE = "records.jsonl"
 WORKFLOW_FILE = "workflow.json"
 FLOW_MANIFEST_FILE = "flow.yaml"
 XTB_JOB_MANIFEST_FILE = "xtb_job.yaml"
+XTB_MD_JOB_MANIFEST_FILE = "xtb_md_job.yaml"
 CREST_JOB_MANIFEST_FILE = "crest_job.yaml"
 
 __all__ = [
@@ -42,4 +43,5 @@ __all__ = [
     "WORKFLOW_SI_CSV_FILE",
     "WORKFLOW_SI_MD_FILE",
     "XTB_JOB_MANIFEST_FILE",
+    "XTB_MD_JOB_MANIFEST_FILE",
 ]

@@ -4,7 +4,7 @@ import json
 import os
 import signal
 from collections.abc import Sequence
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import count
@@ -15,7 +15,10 @@ from pathlib import Path
 import pytest
 
 from orca_auto.core.queue import publication, store
-from orca_auto.core.queue.generation import queue_entry_generation_token
+from orca_auto.core.queue.generation import (
+    queue_entries_same_generation,
+    queue_entry_generation_token,
+)
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_KEY,
@@ -48,31 +51,112 @@ def _install_deterministic_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_queue_generation_token_tracks_only_immutable_identity() -> None:
     entry = store.QueueEntry(
         queue_id="q-generation",
-        app_name="app",
-        task_id="task",
-        task_kind="kind",
-        engine="engine",
-        status=QueueStatus.RUNNING,
+        app_name="orca_auto_xtb_md",
+        task_id="xtbmd-task",
+        task_kind="xtb_md",
+        engine="xtb_md",
+        status=QueueStatus.PENDING,
         enqueued_at="2026-04-19T00:00:00+00:00",
-        metadata={"reaction_key": "current", "candidate_count": 0},
+        metadata={
+            "job_dir": "/runs/water-md",
+            "resource_request": {"max_cores": 2, "max_memory_gb": 4},
+            "resource_actual": {"max_cores": 2, "max_memory_gb": 4},
+            "execution_snapshot": {
+                "snapshot_namespace": "snapshot-generation",
+                "selected_input_xyz": "/runs/water-md/snapshot/input.xyz",
+            },
+            "retry_supported": False,
+            "resume_supported": False,
+        },
     )
     token = queue_entry_generation_token(entry)
 
-    lifecycle_update = replace(
+    running = replace(
         entry,
+        status=QueueStatus.RUNNING,
+        started_at="2026-04-19T00:01:00+00:00",
+        metadata={
+            **entry.metadata,
+            "execution_dir": "/runs/water-md/.orca_auto_xtb_md_executions/xtbmd-task",
+            "attempt": 1,
+        },
+    )
+    terminal = replace(
+        running,
         status=QueueStatus.CANCELLED,
+        finished_at="2026-04-19T00:02:00+00:00",
         cancel_requested=True,
         error="cancel_requested",
         metadata={
-            "reaction_key": "current",
-            "candidate_count": 3,
+            **running.metadata,
+            "terminal_artifacts": {
+                "trajectory": {"path": "xtb.trj", "sha256": "a" * 64},
+            },
             QUEUE_RECORD_SYNC_UPDATED_AT_KEY: "later",
         },
     )
-    replacement = replace(entry, metadata={"reaction_key": "replacement"})
 
-    assert queue_entry_generation_token(lifecycle_update) == token
-    assert queue_entry_generation_token(replacement) != token
+    assert queue_entry_generation_token(running) == token
+    assert queue_entry_generation_token(terminal) == token
+    assert queue_entries_same_generation(running, entry)
+    assert queue_entries_same_generation(terminal, entry)
+
+
+def test_queue_generation_rejects_immutable_xtb_md_metadata_changes() -> None:
+    entry = store.QueueEntry(
+        queue_id="q-generation",
+        app_name="orca_auto_xtb_md",
+        task_id="xtbmd-task",
+        task_kind="xtb_md",
+        engine="xtb_md",
+        status=QueueStatus.PENDING,
+        enqueued_at="2026-04-19T00:00:00+00:00",
+        metadata={
+            "job_dir": "/runs/water-md",
+            "resource_request": {"max_cores": 2, "max_memory_gb": 4},
+            "resource_actual": {"max_cores": 2, "max_memory_gb": 4},
+            "execution_snapshot": {
+                "snapshot_namespace": "snapshot-generation",
+                "selected_input_xyz": "/runs/water-md/snapshot/input.xyz",
+            },
+            "retry_supported": False,
+            "resume_supported": False,
+        },
+    )
+    token = queue_entry_generation_token(entry)
+    replacements = (
+        replace(entry, metadata={**entry.metadata, "job_dir": "/runs/replacement"}),
+        replace(
+            entry,
+            metadata={
+                **entry.metadata,
+                "resource_request": {"max_cores": 4, "max_memory_gb": 4},
+            },
+        ),
+        replace(
+            entry,
+            metadata={
+                **entry.metadata,
+                "resource_actual": {"max_cores": 4, "max_memory_gb": 4},
+            },
+        ),
+        replace(
+            entry,
+            metadata={
+                **entry.metadata,
+                "execution_snapshot": {
+                    "snapshot_namespace": "snapshot-replacement",
+                    "selected_input_xyz": "/runs/replacement/input.xyz",
+                },
+            },
+        ),
+        replace(entry, metadata={**entry.metadata, "retry_supported": True}),
+        replace(entry, metadata={**entry.metadata, "resume_supported": True}),
+    )
+
+    for replacement in replacements:
+        assert queue_entry_generation_token(replacement) != token
+        assert not queue_entries_same_generation(replacement, entry)
 
 
 def _queue_file(root: Path) -> Path:
@@ -687,6 +771,131 @@ def test_request_cancel_accepts_same_generation_after_publication_transition(
     assert cancelled.status == QueueStatus.CANCELLED
 
 
+def test_pending_cancel_callback_runs_before_queue_transition_under_both_locks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    lock_state = {"publication": False, "queue": False}
+
+    @contextmanager
+    def publication_lock(_root: Path, _queue_id: str):
+        assert lock_state == {"publication": False, "queue": False}
+        lock_state["publication"] = True
+        try:
+            yield
+        finally:
+            lock_state["publication"] = False
+
+    @contextmanager
+    def queue_mutation_lock(_root: Path, *, timeout_seconds: float = 10.0):
+        del timeout_seconds
+        assert lock_state == {"publication": True, "queue": False}
+        lock_state["queue"] = True
+        try:
+            yield
+        finally:
+            lock_state["queue"] = False
+
+    entry = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="pending-callback",
+        task_kind="kind",
+        engine="engine",
+    )
+    monkeypatch.setattr(store, "queue_record_publication_lock", publication_lock)
+    monkeypatch.setattr(store, "queue_lock", queue_mutation_lock)
+    events: list[tuple[str, QueueStatus]] = []
+    real_save_entries = store.save_entries
+
+    def before_pending_cancel(candidate: store.QueueEntry) -> None:
+        assert lock_state == {"publication": True, "queue": True}
+        [durable] = store.load_entries(tmp_path)
+        assert durable.status == QueueStatus.PENDING
+        assert candidate.status == QueueStatus.CANCELLED
+        events.append(("callback", candidate.status))
+
+    def save_after_callback(root: Path, entries: Sequence[store.QueueEntry]) -> None:
+        assert lock_state == {"publication": True, "queue": True}
+        events.append(("save", entries[0].status))
+        real_save_entries(root, entries)
+
+    cancelled = store.request_cancel(
+        tmp_path,
+        entry.queue_id,
+        expected_entry=entry,
+        before_pending_cancel_fn=before_pending_cancel,
+        save_entries_fn=save_after_callback,
+    )
+
+    assert cancelled is not None and cancelled.status == QueueStatus.CANCELLED
+    assert events == [
+        ("callback", QueueStatus.CANCELLED),
+        ("save", QueueStatus.CANCELLED),
+    ]
+    assert lock_state == {"publication": False, "queue": False}
+
+
+def test_pending_cancel_callback_failure_leaves_queue_pending(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    entry = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="pending-callback-failure",
+        task_kind="kind",
+        engine="engine",
+    )
+
+    def reject_cancel(_candidate: store.QueueEntry) -> None:
+        raise OSError("artifact publication failed")
+
+    with pytest.raises(OSError, match="artifact publication failed"):
+        store.request_cancel(
+            tmp_path,
+            entry.queue_id,
+            expected_entry=entry,
+            before_pending_cancel_fn=reject_cancel,
+        )
+
+    [unchanged] = store.list_queue(tmp_path)
+    assert unchanged.status == QueueStatus.PENDING
+    assert unchanged.cancel_requested is False
+    assert unchanged.finished_at == ""
+
+
+def test_running_cancel_does_not_invoke_pending_cancel_callback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    pending = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="running-callback",
+        task_kind="kind",
+        engine="engine",
+    )
+    running = store.dequeue_next(tmp_path)
+    assert running is not None
+
+    requested = store.request_cancel(
+        tmp_path,
+        pending.queue_id,
+        expected_entry=running,
+        before_pending_cancel_fn=lambda _candidate: pytest.fail(
+            "running cancellation must remain worker-owned"
+        ),
+    )
+
+    assert requested is not None
+    assert requested.status == QueueStatus.RUNNING
+    assert requested.cancel_requested is True
+
+
 def test_terminal_mark_rejects_replacement_with_same_queue_id(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1024,6 +1233,54 @@ def test_update_metadata_merges_without_changing_lifecycle_fields(
     assert updated.enqueued_at == entry.enqueued_at
     assert updated.metadata == {"keep": "yes", "sync": "complete", "added": 1}
     assert store.update_metadata(tmp_path, "missing", {"sync": "complete"}) is None
+
+
+def test_update_metadata_can_fence_the_exact_queue_generation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    submitted = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="task",
+        task_kind="kind",
+        engine="engine",
+        metadata={"generation": "original"},
+    )
+    current = store.update_metadata(
+        tmp_path,
+        submitted.queue_id,
+        {"attached": True},
+        expected_entry=submitted,
+        expected_task_id=submitted.task_id,
+    )
+
+    assert current is not None
+    assert current.metadata["attached"] is True
+    assert (
+        store.update_metadata(
+            tmp_path,
+            submitted.queue_id,
+            {"stale_writer": True},
+            expected_entry=submitted,
+            expected_task_id=submitted.task_id,
+        )
+        is None
+    )
+    assert (
+        store.update_metadata(
+            tmp_path,
+            submitted.queue_id,
+            {"wrong_task": True},
+            expected_entry=current,
+            expected_task_id="replacement-task",
+        )
+        is None
+    )
+    persisted = store.list_queue(tmp_path)[0]
+    assert "stale_writer" not in persisted.metadata
+    assert "wrong_task" not in persisted.metadata
 
 
 def test_requeue_running_entry_returns_running_entry_to_pending(

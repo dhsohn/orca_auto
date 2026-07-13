@@ -2,11 +2,11 @@
 
 **English** | [한국어](REFERENCE.ko.md)
 
-orca_auto is a queue-first executor for ORCA and workflow orchestration. ORCA
+orca_auto is a queue-first executor for ORCA, standalone xTB-MD, and workflow orchestration. ORCA
 uses the shared internal-engine queue lifecycle for worker admission, child
 entry execution, terminal side effects, and orphan recovery while preserving
-its public ORCA queue contract. xTB and CREST run as internal workflow-stage
-engines. This reference standardizes the shared public CLI and keeps the deeper
+its public ORCA queue contract. Standalone xTB-MD is an independent single-attempt
+engine; general xTB and CREST run as internal workflow-stage engines. This reference standardizes the shared public CLI and keeps the deeper
 ORCA runtime behavior documented in one place, since ORCA still has the richest
 retry, reporting, and monitoring surface.
 
@@ -61,6 +61,7 @@ Operational consequences:
   src/
     orca_auto/
       core/               # Shared chemistry-platform infrastructure
+      xtb_md/             # Standalone xTB-MD engine
       flow/               # Workflow orchestration package
         engines/
           xtb/            # Internal xTB workflow-stage engine
@@ -134,6 +135,7 @@ resources:
 
 scheduler:
   max_active_simulations: 4
+  max_active_xtb_md: 1
   admission_root: "/path/to/chem_admission"
 
 workflow:
@@ -165,16 +167,17 @@ orca:
 
 Field descriptions:
 
-- `runs_root`: The single runs root shared by standalone ORCA jobs and workflow
+- `runs_root`: The single runs root shared by standalone ORCA/xTB-MD jobs and workflow
   workspaces; completed runs stay here under their submitted directory names
 - `orca.runtime.default_max_retries`: `0` disables ORCA retries; positive values
   enable the calculation-type retry policy
-- `scheduler.max_active_simulations`: Shared total active-run cap across ORCA, internal xTB stages, and internal CREST stages
+- `scheduler.max_active_simulations`: Shared total active-run cap across ORCA, standalone xTB-MD, internal xTB stages, and internal CREST stages
+- `scheduler.max_active_xtb_md`: Positive standalone xTB-MD subcap; defaults to `1`
 - `scheduler.admission_root`: Shared admission root for machine-wide slot
   coordination; defaults to `<runs_root>/.admission`. Scheduler controls belong
   at the top level; engine-scoped values may not diverge because that would
   split the shared admission pool.
-- `workflow.paths.xtb_executable`: xTB executable path used by workflow-managed internal stages
+- `workflow.paths.xtb_executable`: xTB executable path used by standalone xTB-MD and workflow-managed internal stages
 - `workflow.paths.crest_executable`: CREST executable path used by workflow-managed internal stages
 - Internal xTB/CREST runtimes are scoped to each workflow
 - Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under `<runs_root>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`)
@@ -203,7 +206,7 @@ documented through `orca_auto ...`.
 Public command surface:
 
 - ORCA public commands are exposed through `orca_auto ...`
-- xTB and CREST run as internal workflow/runtime engines; submit their work through workflow `run-dir` requests
+- Standalone xTB-MD is submitted with `run-dir`; general xTB and CREST work remains workflow-internal
 
 ### 7.1 `init`
 
@@ -222,6 +225,7 @@ Behavior:
 cd <repo_root>
 orca_auto run-dir '/absolute/path/to/orca_runs/Int1_DMSO'
 orca_auto run-dir '/absolute/path/to/workflow_inputs/reaction_case'
+orca_auto run-dir '/absolute/path/to/runs/water_md'
 ```
 
 Successful ORCA submission example:
@@ -237,7 +241,7 @@ worker_pid: 12345
 
 Shared behavior:
 
-- Inspects the target directory and routes it to ORCA or workflow handling automatically
+- Inspects the target directory and routes it to ORCA, standalone xTB-MD, or workflow handling automatically
 - Validates the target directory against the detected run type and configured roots
 - Rejects duplicate active queue entries for the same directory
 - Writes the queue entry durably before returning
@@ -573,12 +577,39 @@ There is no public direct-execution mode for new work. `run-dir` is the durable 
   terminal bytes. If an exact same-generation terminal state/report pair is
   unrecoverable, activity shows `repair_blocked` with its reason instead of
   repeatedly attempting an ambiguous repair.
-- xTB-MD is not a supported job type yet. Before enabling it, the durable
-  contract must bind an explicit random seed, initial/generated velocity
-  identity, restart generation and `mdrestart` identity, and exact resume
-  semantics. Exit code 0 alone must not mean success: the generation must also
-  bind the expected `xtbmdok` marker and terminal trajectory/checkpoint
-  identities, with explicit step, wall-time, and output-volume budgets.
+#### Standalone xTB-MD contract
+
+- `xtb_md_job.yaml` is recognized only for a standalone directory under
+  `runs_root`; it does not create or join a workflow. An optimized starting
+  geometry is strongly recommended.
+- Required fields are `schema_version: 1`, one local-file `input_xyz`, `gfn`
+  (`1` or `2`), `ensemble` (`nvt` or `nve`), positive finite `temperature_k`,
+  `time_ps`, `step_fs`, and `dump_fs`, plus positive integer
+  `walltime_seconds`. Unknown fields are rejected. `time_ps` (after conversion
+  to fs) and `dump_fs` must be exact positive integer multiples of `step_fs`.
+- Optional fields are `charge`/`uhf` (default `0`),
+  `hydrogen_mass_amu` (default `4`), `shake` (`0`, `1`, or `2`; default `2`),
+  positive finite `scc_accuracy` (default `2.0`), paired
+  `solvent_model`/`solvent`, and `resources.max_cores`/
+  `resources.max_memory_gb` within the configured ceilings.
+- Server-owned ceilings are 10,000 atoms, 999,999 steps, 100,000,000
+  atom-steps, 100,000 frames, 86,400 seconds wall time, 1 GiB output, and
+  10,000 output files. These are not manifest override knobs.
+- The adapter creates one canonical fresh `$md` input with `$samerand` and
+  `restart=false`. It exposes no arbitrary seed, `--omd`, raw xcontrol,
+  constraint/metadynamics, workflow, retry, or resume surface. Cancellation
+  terminates the active process group; interruption/orphan recovery is terminal
+  rather than requeued.
+- The adapter currently accepts exactly xTB 6.7.1, the latest stable release
+  when this contract was introduced. This does not claim that 6.7.1 is
+  issue-free. Exit code 0 and `xtbmdok` are insufficient: known false-success
+  markers such as `MD is unstable, emergency exit` and
+  `but still taking it as converged!`, or incomplete/non-finite trajectory and
+  checkpoint evidence, fail the job closed.
+- `job_state.json`, `job_report.json`, and `job_report.md` live at the job root.
+  The immutable generated input, logs, `xtb.trj`, `mdrestart`, and `xtbmdok`
+  are retained under `.orca_auto_xtb_md_executions/<job_id>/` with content
+  identities in the terminal report.
 
 ### 7.3 `queue cancel`
 
@@ -595,6 +626,7 @@ and known path aliases for individual jobs.
 ```bash
 orca_auto queue list
 orca_auto queue list --engine orca
+orca_auto queue list --engine xtb_md
 orca_auto queue list --status pending
 orca_auto queue list --engine xtb
 ```
@@ -658,9 +690,9 @@ only. Public CLI commands do not start those services directly.
 
 Behavior:
 
-- `orca_auto-queue-worker@.service` supervises ORCA by default
+- `orca_auto-queue-worker@.service` supervises ORCA and standalone xTB-MD by default
 - The same worker service also starts workflow supervision plus the internal CREST and xTB workers under the shared `runs_root`
-- ORCA, xTB, and CREST share the same admission cap. ORCA reserves a slot in
+- ORCA, xTB-MD, xTB, and CREST share the same admission cap; xTB-MD also obeys its subcap. ORCA reserves a slot in
   the parent worker, attaches queue identity metadata after the child starts,
   and lets the ORCA child activate/release that reservation during execution.
 - `orca_auto-bot@.service` runs `orca_auto.flow.bot.runner`, which selects the configured
@@ -917,7 +949,7 @@ Compatibility note:
   Shared core helpers may also understand generic `job_dir` metadata for other
   engines, but ORCA producers should not replace `reaction_dir` with `job_dir`.
 - Engine workers run only from queue identity. The unified child entrypoint is
-  `python -m orca_auto.core.engines.worker_child --engine <orca|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`.
+  `python -m orca_auto.core.engines.worker_child --engine <orca|xtb_md|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`.
   Legacy ORCA worker-job direct execution by reaction directory is not supported.
 
 ## 12) Recommended Workflow

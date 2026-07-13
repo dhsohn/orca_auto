@@ -23,8 +23,8 @@ The GitHub Actions workflow runs multiple independent checks:
 - Ruff, Ruff format check, mypy, and coverage-gated pytest.
 - Wheel smoke check that verifies typed-package metadata.
 
-The pytest suite exercises ORCA-facing logic with unit tests, sanitized fixtures,
-and fake-engine integration paths. These checks cover durable queue behavior,
+The pytest suite exercises ORCA and standalone xTB-MD logic with unit tests,
+sanitized fixtures, and fake-engine integration paths. These checks cover durable queue behavior,
 state/report writing, parser behavior, retry policy, notification formatting,
 workflow handoff contracts, and CLI surfaces.
 
@@ -54,6 +54,7 @@ For focused changes, pass pytest selectors through the shared script:
 
 ```bash
 bash scripts/check.sh tests/test_scants_support.py -q
+bash scripts/check.sh tests/xtb_md -q
 bash scripts/check.sh tests/flow -q
 ```
 
@@ -115,6 +116,21 @@ A minimal acceptance record should include:
 Use small, non-confidential systems. Prefer sanitized or public fixtures, and do
 not commit proprietary structures or large raw outputs unless a separate issue
 justifies them.
+
+## Standalone xTB-MD acceptance
+
+Fake-engine checks must cover strict manifest admission, immutable snapshots,
+NVT/NVE command generation, cancellation/process-group termination, no
+retry/resume, resource/output/time ceilings, and rejection of return-code-zero
+false success, stale, truncated, wrong-atom, or non-finite artifacts.
+
+Changes to the standalone MD invocation or terminal validator also require a
+small sanitized real-xTB NVT and NVE acceptance. Record the exact xTB version
+and executable identity, manifest, generated `$md` input, queue terminal state,
+`xtbmdok`, trajectory frame/atom counts, `mdrestart` validation, and output
+identities. The supported adapter version is currently xTB 6.7.1; describe it as
+the latest stable version selected for this adapter, not as issue-free. Confirm
+that a fixture containing a known false-success marker fails closed.
 
 ## Fixture and artifact policy
 

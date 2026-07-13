@@ -189,6 +189,35 @@ def test_reserve_queue_worker_slot_uses_common_resolved_values() -> None:
     assert calls == [("/admission", 4, "source-name", "app-name")]
 
 
+def test_reserve_engine_queue_worker_slot_passes_configured_app_limit() -> None:
+    calls: list[dict[str, Any]] = []
+
+    def reserve_slot(root: str, limit: int, **kwargs: Any) -> str:
+        calls.append({"root": root, "limit": limit, **kwargs})
+        return "slot-1"
+
+    result = worker_common.reserve_engine_queue_worker_slot(
+        _cfg(
+            admission_root="/admission",
+            admission_limit=4,
+            engine_admission_limit=2,
+        ),
+        engine="custom",
+        reserve_slot_fn=reserve_slot,
+    )
+
+    assert result == "slot-1"
+    assert calls == [
+        {
+            "root": "/admission",
+            "limit": 4,
+            "source": "orca_auto.custom.queue_worker",
+            "app_name": "orca_auto_custom",
+            "app_limit": 2,
+        }
+    ]
+
+
 def test_dequeue_next_across_roots_handles_single_root_idle_and_selected_entry(
     tmp_path: Path,
 ) -> None:

@@ -9,13 +9,15 @@
 ## 정규 임포트 규칙
 
 - ORCA 구현: `orca_auto.orca.*`
+- 단독 xTB-MD 구현: `orca_auto.xtb_md.*`
 - 공용 인프라: `orca_auto.core.*`
 - 워크플로우 오케스트레이션: `orca_auto.flow.*`
 - 엔진 패키지: `orca_auto.flow.engines.xtb.*`, `orca_auto.flow.engines.crest.*`
 
 새 코드, 테스트, 문서는 `orca_auto.*`에서 임포트해야 합니다.
 
-세 패키지는 강제되는 계층 — `flow` → `orca` → `core` — 을 이룹니다.
+도메인 패키지는 강제되는 계층 — `flow` → `orca` → `core`, 그리고 `core`에만
+의존하는 `xtb_md` — 을 이룹니다.
 import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 실행하므로 CI에서도 검사)가 확인합니다. 상위 계층은 하위 계층을 임포트할 수
 있지만 그 역방향은 빌드 실패입니다. 계층을 넘는 엔진 배선은 임포트 대신 지연
@@ -29,6 +31,7 @@ import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 ├── src/
 │   └── orca_auto/
 │       ├── core/
+│       ├── xtb_md/
 │       ├── flow/
 │       │   └── engines/
 │       │       ├── xtb/
@@ -36,6 +39,7 @@ import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 │       └── orca/
 ├── tests/
 │   ├── core/
+│   ├── xtb_md/
 │   ├── flow/
 │   ├── integration/
 │   └── flow/engines/
@@ -81,6 +85,7 @@ from orca_auto.core.indexing import get_job_location
 
 - `tests/flow/`: flow 단위 및 계약 테스트
 - `tests/flow/engines/`: 내부 xTB/CREST 엔진 테스트
+- `tests/xtb_md/`: 단독 xTB-MD manifest, 러너, 아티팩트 테스트
 - `tests/integration/`: 저장소 내 통합 스모크 테스트
 - `tests/core/`: 공용 인프라 테스트
 - 최상위 `tests/test_*.py`: ORCA 중심 회귀 테스트
@@ -128,14 +133,20 @@ bash scripts/clean_artifacts.sh
 - 공용 엔진 정의, 큐 워커, 자식 진입점, 아티팩트, 레지스트리 헬퍼는
   `orca_auto.core.engines` 아래에 있습니다.
 - 내부 xTB/CREST 구현은 `orca_auto.flow.engines` 아래에 있습니다.
+- 단독 xTB-MD는 `orca_auto.xtb_md` 아래에 있고 `core`만 임포트합니다. 워크플로우
+  xTB 실행 의미를 재사용하지 않습니다.
 - 최상위 별칭 패키지, 콘솔 스크립트 별칭, 대체 런타임 리더는 코드베이스에서 배제하세요.
 
 ## 내부 엔진 워커
 
-xTB, CREST, ORCA는 모두 공통 엔진 런타임을 통해 실행됩니다. 엔진 로컬 패키지는
+xTB-MD, xTB, CREST, ORCA는 모두 공통 엔진 런타임을 통해 실행됩니다. 엔진 로컬 패키지는
 `EngineDefinition`을 노출해야 하며, 부모 워커는 `EngineQueueWorker`를 사용하고, 자식은
-`python -m orca_auto.core.engines.worker_child --engine <orca|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`을
+`python -m orca_auto.core.engines.worker_child --engine <orca|xtb_md|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`을
 사용합니다.
+
+단독 xTB-MD는 공용 `run-dir`와 queue/activity 표면만 노출합니다. 단일 시도,
+no-retry/no-resume 계약은 `orca_auto.xtb_md`에 두고, 직접 실행 CLI를 만들거나 그
+패키지에서 ORCA/workflow 패키지를 임포트하지 마세요.
 
 ORCA 고유의 상태, 재시도, 입력 선택, 리포트, 자동 정리 동작, 그리고 다운스트림
 `reaction_dir` 계약은 `orca_auto.orca`에 남아 있습니다. 직접 ORCA 워커-작업

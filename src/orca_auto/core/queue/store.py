@@ -473,6 +473,7 @@ def request_cancel(
     *,
     accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
     expected_entry: QueueEntry | None = None,
+    before_pending_cancel_fn: Callable[[QueueEntry], Any] | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
 ) -> QueueEntry | None:
@@ -517,6 +518,14 @@ def request_cancel(
                 finished_at=finished_at,
                 metadata=metadata,
             )
+            if before_pending_cancel_fn is not None:
+                # This runs while both the entry-scoped publication lock and
+                # queue mutation lock are held. Engine adapters can therefore
+                # publish generation-bound terminal artifacts before the
+                # durable queue transition makes a replacement submission
+                # eligible. An exception aborts the queue write and leaves the
+                # pending entry unchanged for explicit reconciliation.
+                before_pending_cancel_fn(updated)
         elif entry.status == QueueStatus.RUNNING:
             updated = replace(entry, cancel_requested=True)
         else:
@@ -565,11 +574,20 @@ def update_metadata(
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
     accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
 ) -> QueueEntry | None:
-    """Merge metadata into one queue entry without changing its lifecycle state."""
+    """Merge metadata without changing lifecycle state or a fenced generation."""
 
     def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
         if accept_entry_fn is not None and not accept_entry_fn(entry):
+            return None, None
+        if expected_entry is not None and not queue_entries_same_generation(
+            entry,
+            expected_entry,
+        ):
+            return None, None
+        if expected_task_id is not None and entry.task_id != expected_task_id:
             return None, None
         merged = dict(entry.metadata)
         merged.update(metadata_update)

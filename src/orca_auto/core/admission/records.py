@@ -40,6 +40,7 @@ class AdmissionReservationRequest:
     engine_process_state: str = ""
     exclude_work_dirs: set[str] | None = None
     extra_active_count_fn: Callable[[Path, set[str], set[str]], int] | None = None
+    app_limit: int | None = None
 
 
 @dataclass(frozen=True)

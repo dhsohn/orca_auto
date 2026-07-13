@@ -19,12 +19,14 @@ from orca_auto.core.engine_catalog import (
     workflow_stage_engine_entries,
 )
 from orca_auto.core.engines.registry import get_engine_definition
+from orca_auto.core.indexing.roots import runtime_roots_for_cfg
 from orca_auto.core.paths.workflow import (
     WORKFLOW_STAGE_DIRNAME_ALIASES,
     WORKFLOW_STAGE_DIRNAMES,
     workflow_stage_dirnames_for_engine,
     workflow_workspace_internal_engine_paths,
 )
+from orca_auto.core.queue import enqueue, list_queue
 from orca_auto.core.queue.worker.admission import (
     engine_queue_worker_source,
     reserve_engine_queue_worker_slot,
@@ -68,18 +70,57 @@ assert not any(name.startswith(('orca_auto.flow', 'orca_auto.orca')) for name in
     subprocess.run([sys.executable, "-c", script], check=True, env=env)
 
 
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "orca_auto.core.engines.queue_worker",
+        "orca_auto.core.engines.worker_child",
+    ],
+)
+def test_engine_entrypoint_module_runs_without_eager_import_warning(module_name: str) -> None:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2] / "src")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-W",
+            "error::RuntimeWarning",
+            "-m",
+            module_name,
+            "--help",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "RuntimeWarning" not in result.stderr
+
+
 def test_catalog_preserves_public_engine_and_routing_orders() -> None:
-    assert known_engine_ids() == ("orca", "xtb", "crest")
+    assert known_engine_ids() == ("orca", "xtb_md", "xtb", "crest")
     assert tuple(entry.engine_id for entry in supervised_engine_entries()) == (
         "orca",
+        "xtb_md",
         "crest",
         "xtb",
     )
     assert tuple(entry.engine_id for entry in workflow_stage_engine_entries()) == ("xtb", "crest")
-    assert tuple(entry.engine_id for entry in activity_engine_entries()) == ("crest", "xtb", "orca")
+    assert tuple(entry.engine_id for entry in activity_engine_entries()) == (
+        "crest",
+        "xtb",
+        "orca",
+        "xtb_md",
+    )
     assert tuple(WORKFLOW_STAGE_DIRNAMES) == ("crest", "xtb", "orca")
     entries = {entry.engine_id: entry for entry in engine_catalog()}
     assert entries["orca"].task_kinds == ("orca_run_inp",)
+    assert entries["xtb_md"].task_kinds == ("xtb_md",)
+    assert entries["xtb_md"].activity_role == "engine-queue"
+    assert entries["xtb_md"].workflow_stage_role == "none"
     assert entries["crest"].task_kinds == ("crest_conformer_search",)
     assert {kind.removeprefix("xtb_") for kind in entries["xtb"].task_kinds} == set(
         SUPPORTED_JOB_TYPES
@@ -134,21 +175,25 @@ def test_every_catalog_engine_has_registry_supervision_admission_and_stage_metad
         assert captured[0]["app_name"] == entry.app_id
         assert ("engine_process_state" in captured[0]) is entry.managed_admission
 
-        assert WORKFLOW_STAGE_DIRNAMES[entry.engine_id] == entry.workflow_stage_dirname
-        assert (
-            WORKFLOW_STAGE_DIRNAME_ALIASES.get(entry.engine_id, ()) == entry.workflow_stage_aliases
-        )
-        assert workflow_stage_dirnames_for_engine(entry.engine_id) == (
-            entry.workflow_stage_dirname,
-            *entry.workflow_stage_aliases,
-        )
-        assert (
-            workflow_workspace_internal_engine_paths(
+        if entry.workflow_stage_role == "none":
+            assert entry.engine_id not in WORKFLOW_STAGE_DIRNAMES
+            assert workflow_stage_dirnames_for_engine(entry.engine_id) == ()
+            with pytest.raises(ValueError, match="does not support workflow stages"):
+                workflow_workspace_internal_engine_paths(tmp_path, engine=entry.engine_id)
+        else:
+            assert WORKFLOW_STAGE_DIRNAMES[entry.engine_id] == entry.workflow_stage_dirname
+            assert (
+                WORKFLOW_STAGE_DIRNAME_ALIASES.get(entry.engine_id, ())
+                == entry.workflow_stage_aliases
+            )
+            assert workflow_stage_dirnames_for_engine(entry.engine_id) == (
+                entry.workflow_stage_dirname,
+                *entry.workflow_stage_aliases,
+            )
+            assert workflow_workspace_internal_engine_paths(
                 tmp_path,
                 engine=entry.engine_id,
-            )["allowed_root"]
-            == tmp_path / entry.workflow_stage_dirname
-        )
+            )["allowed_root"] == tmp_path / str(entry.workflow_stage_dirname)
 
 
 def test_orca_worker_reservation_uses_catalog_identity(
@@ -169,6 +214,55 @@ def test_orca_worker_reservation_uses_catalog_identity(
     orca_entry = next(entry for entry in engine_catalog() if entry.engine_id == "orca")
     assert captured[0]["source"] == orca_entry.admission_source
     assert captured[0]["app_name"] == orca_entry.app_id
+
+
+def test_standalone_only_engine_does_not_discover_workflow_stage_roots(tmp_path: Path) -> None:
+    workflow_root = tmp_path / "workflows"
+    fake_stage = workflow_root / "wf-1" / "stage_xtb_md"
+    fake_stage.mkdir(parents=True)
+    cfg = type(
+        "Cfg",
+        (),
+        {
+            "runtime": type("Runtime", (), {"allowed_root": str(tmp_path / "runs")})(),
+            "workflow_root": str(workflow_root),
+        },
+    )()
+
+    assert runtime_roots_for_cfg(cfg, engine="xtb_md") == ((tmp_path / "runs").resolve(),)
+
+
+def test_xtb_md_engine_definition_quarantines_foreign_shared_queue_rows(tmp_path: Path) -> None:
+    orca = enqueue(
+        tmp_path,
+        app_name="orca_auto_orca",
+        task_id="orca-job",
+        task_kind="orca_run_inp",
+        engine="orca",
+        priority=0,
+    )
+    xtb_md = enqueue(
+        tmp_path,
+        app_name="orca_auto_xtb_md",
+        task_id="md-job",
+        task_kind="xtb_md",
+        engine="xtb_md",
+        priority=10,
+    )
+    definition = get_engine_definition("xtb_md")
+    queue_functions = definition.queue_functions
+    assert queue_functions is not None
+
+    assert [entry.queue_id for entry in queue_functions.list_queue(tmp_path)] == [xtb_md.queue_id]
+    assert queue_functions.queue_entry_by_id is not None
+    assert queue_functions.queue_entry_by_id(tmp_path, orca.queue_id) is None
+    claimed = queue_functions.dequeue_next(tmp_path)
+
+    assert claimed is not None
+    assert claimed.queue_id == xtb_md.queue_id
+    persisted = {entry.queue_id: entry for entry in list_queue(tmp_path)}
+    assert persisted[orca.queue_id].status.value == "pending"
+    assert persisted[xtb_md.queue_id].status.value == "running"
 
 
 def test_every_catalog_engine_has_queue_filter_list_cancel_and_clear_coverage() -> None:
@@ -198,6 +292,8 @@ def test_every_catalog_engine_has_queue_filter_list_cancel_and_clear_coverage() 
         assert f"{entry.engine_id}_queue_entries" in clear_counts
         if entry.workflow_stage_role == "workflow-stage":
             assert entry.engine_id in cancel_deps.cancel_engine_targets
-        else:
-            assert entry.engine_id == "orca"
+        elif entry.activity_role == "orca-run":
             assert callable(cancel_deps.cancel_orca_target)
+        else:
+            assert callable(cancel_deps.request_cancel)
+            assert callable(cancel_deps.engine_queue_roots)

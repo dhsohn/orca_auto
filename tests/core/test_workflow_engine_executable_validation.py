@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.config.engines import load_crest_config, load_xtb_config
+from orca_auto.core.config.engines import load_crest_config, load_xtb_config, load_xtb_md_config
 from orca_auto.orca.config import load_config as load_orca_config
 
 Loader = Callable[[str], Any]
@@ -231,6 +231,61 @@ def test_workflow_engine_config_keeps_blank_executable_for_path_fallback(
     cfg = loader(str(config_path))
 
     assert getattr(cfg.paths, path_key) == ""
+
+
+def test_xtb_md_config_uses_standalone_root_and_default_engine_cap(tmp_path: Path) -> None:
+    executable = _write_file(tmp_path / "bin" / "xtb", executable=True)
+    config_path = _write_shared_config(
+        tmp_path,
+        {
+            "scheduler": {"max_active_simulations": 5},
+            "workflow": {"paths": {"xtb_executable": str(executable)}},
+        },
+    )
+
+    cfg = load_xtb_md_config(str(config_path))
+
+    assert cfg.runtime.allowed_root == str((tmp_path / "runs").resolve())
+    assert cfg.runtime.max_concurrent == 5
+    assert cfg.runtime.admission_limit == 5
+    assert cfg.runtime.engine_admission_limit == 1
+    assert cfg.workflow_root == ""
+    assert cfg.paths.xtb_executable == str(executable.resolve())
+
+
+def test_xtb_md_config_accepts_explicit_engine_cap(tmp_path: Path) -> None:
+    config_path = _write_shared_config(
+        tmp_path,
+        {
+            "scheduler": {
+                "max_active_simulations": 7,
+                "max_active_xtb_md": 3,
+            }
+        },
+    )
+
+    cfg = load_xtb_md_config(str(config_path))
+
+    assert cfg.runtime.max_concurrent == 7
+    assert cfg.runtime.admission_limit == 7
+    assert cfg.runtime.engine_admission_limit == 3
+
+
+@pytest.mark.parametrize("invalid", [None, "", 0, -1, True, False, 1.5])
+def test_xtb_md_config_rejects_invalid_explicit_engine_cap(
+    tmp_path: Path,
+    invalid: object,
+) -> None:
+    config_path = _write_shared_config(
+        tmp_path,
+        {"scheduler": {"max_active_xtb_md": invalid}},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="scheduler.max_active_xtb_md must be an integer >= 1",
+    ):
+        load_xtb_md_config(str(config_path))
 
 
 @pytest.mark.parametrize(

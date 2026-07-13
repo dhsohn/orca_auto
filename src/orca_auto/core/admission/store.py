@@ -212,6 +212,14 @@ def _reservation_limit_reached(
     slots: list[AdmissionSlot],
     request: AdmissionReservationRequest,
 ) -> bool:
+    app_limit = request.app_limit
+    app_name = request.app_name.strip()
+    if app_limit is not None:
+        if type(app_limit) is not int or app_limit <= 0:
+            raise ValueError("Admission app limit must be a positive integer")
+        if not app_name:
+            raise ValueError("Admission app name is required when an app limit is configured")
+
     excluded = _normalize_work_dir_set(request.exclude_work_dirs)
     counted, represented_work_dirs = _counted_slots(slots, exclude_work_dirs=excluded)
     extra_active_count = (
@@ -219,7 +227,9 @@ def _reservation_limit_reached(
         if request.extra_active_count_fn is not None
         else 0
     )
-    return len(counted) + extra_active_count >= max(1, int(request.limit))
+    if len(counted) + extra_active_count >= max(1, int(request.limit)):
+        return True
+    return app_limit is not None and sum(slot.app_name == app_name for slot in counted) >= app_limit
 
 
 def _slot_from_reservation_request(
@@ -477,6 +487,7 @@ def reserve_slot(
     *,
     source: str,
     app_name: str = "",
+    app_limit: int | None = None,
     task_id: str = "",
     workflow_id: str = "",
     state: str = "active",
@@ -493,6 +504,7 @@ def reserve_slot(
             limit=limit,
             source=source,
             app_name=app_name,
+            app_limit=app_limit,
             task_id=task_id,
             workflow_id=workflow_id,
             state=state,
@@ -540,6 +552,7 @@ def reserve_slot_or_raise(
     *,
     source: str,
     app_name: str = "",
+    app_limit: int | None = None,
     task_id: str = "",
     workflow_id: str = "",
     state: str = "active",
@@ -555,6 +568,7 @@ def reserve_slot_or_raise(
         limit,
         source=source,
         app_name=app_name,
+        app_limit=app_limit,
         task_id=task_id,
         workflow_id=workflow_id,
         state=state,

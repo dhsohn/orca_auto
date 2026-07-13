@@ -9,35 +9,40 @@
 # not supported.
 
 # The single runs root. Everything lives under this directory: standalone ORCA
-# jobs and workflow workspaces sit side by side in it, and the shared admission
-# directory defaults to a hidden ".admission" inside it:
-#   <runs_root>/<your_job_dir>/          standalone ORCA runs (names are yours)
+# and xTB-MD jobs and workflow workspaces sit side by side in it, and the shared
+# admission directory defaults to a hidden ".admission" inside it:
+#   <runs_root>/<your_job_dir>/          standalone ORCA or xTB-MD runs
 #   <runs_root>/<workflow_id>/           workflow workspaces
 #   <runs_root>/.admission/              shared admission slots (automatic)
 runs_root: /home/user/runs
 
 resources:
   # Default per-task resource requests. ORCA uses these as defaults for missing
-  # input directives; workflow-managed xTB/CREST use them for launch flags/env
-  # and memory limits unless a task or manifest overrides them.
+  # input directives; standalone xTB-MD and workflow-managed xTB/CREST use them
+  # unless a validated task or manifest requests a value at or below them.
   max_cores_per_task: 8
   max_memory_gb_per_task: 32
 
 scheduler:
-  # Shared total active-run cap across ORCA, internal xTB workflow stages, and
-  # internal CREST workflow stages. All engine workers use this shared
-  # admission lifecycle.
+  # Shared total active-run cap across ORCA, standalone xTB-MD, internal xTB
+  # workflow stages, and internal CREST workflow stages. All engine workers use
+  # this shared admission lifecycle.
   max_active_simulations: 4
+  # Standalone xTB-MD subcap within the shared total above. This is deliberately
+  # conservative and defaults to 1 when omitted. It must be a positive integer.
+  max_active_xtb_md: 1
   # Shared admission directory for machine-wide slot coordination.
   # If omitted, orca_auto defaults to "<runs_root>/.admission".
   # admission_root: /home/user/runs/.admission
 
 workflow:
   paths:
-    # Executables used by workflow-managed internal stages. If set, each value
-    # must be an absolute Linux path to an existing executable file. Leave blank
-    # only when you intentionally want PATH lookup during submission; the
-    # resolved executable path and content identity are then bound to that queue generation.
+    # xTB is used by standalone xTB-MD and workflow-managed internal stages;
+    # CREST is workflow-only. If set, each value must be an absolute Linux path
+    # to an existing executable file. Leave blank only when you intentionally
+    # want PATH lookup during submission; the resolved executable path and
+    # content identity are then bound to that queue generation. Standalone
+    # xTB-MD currently accepts exactly stable xTB 6.7.1.
     xtb_executable: /home/user/bin/xtb-dist/bin/xtb
     crest_executable: /home/user/bin/crest/crest
   # Internal xTB/CREST runtime roots are derived automatically and are not set

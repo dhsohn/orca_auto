@@ -41,9 +41,13 @@ class ResolvedActivitySources:
     crest_config: str | None
     xtb_config: str | None
     orca_config: str | None
+    engine_configs: dict[str, str | None] = field(default_factory=dict)
 
     def config_for_engine(self, engine: str) -> str | None:
-        return getattr(self, f"{normalize_text(engine).lower()}_config", None)
+        engine_id = normalize_text(engine).lower()
+        if engine_id in self.engine_configs:
+            return self.engine_configs[engine_id]
+        return getattr(self, f"{engine_id}_config", None)
 
     @property
     def shared_config(self) -> str | None:

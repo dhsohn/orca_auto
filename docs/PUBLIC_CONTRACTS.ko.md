@@ -37,9 +37,9 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   `XTBPATH`/`XTBHOME` 파라미터 루트도 포함됩니다. 실행 파일 바이트에는 콘텐츠 정체성을
   부여하지만 공유 라이브러리와 외부 파라미터 내용은 큐 generation 안으로 복사하지
   않습니다. 따라서 같은 UID로 실행되는 신뢰할 수 없는 프로세스는 격리 경계 밖입니다.
-- 실행 파일 콘텐츠 정체성은 엔진 버전 호환성 검사와 다릅니다. 현재 orca_auto는
-  ORCA/xTB/CREST semantic version을 probe하거나 강제하지 않으므로 운영자가 배포할 정확한
-  배포본을 qualification하고 고정해야 합니다.
+- 실행 파일 콘텐츠 정체성은 일반적인 엔진 버전 호환성 검사와 다릅니다. ORCA와
+  워크플로우 xTB/CREST 버전은 운영자가 qualification합니다. 단독 xTB-MD adapter만
+  예외로, 큐에 넣기 전에 version을 probe해 현재 stable xTB 6.7.1만 받습니다.
 
 지원하지 않는 가정:
 
@@ -101,6 +101,7 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `resources.max_cores_per_task`
 - `resources.max_memory_gb_per_task`
 - `scheduler.max_active_simulations`
+- `scheduler.max_active_xtb_md`
 - `scheduler.admission_root`
 - `workflow.paths.xtb_executable`
 - `workflow.paths.crest_executable`
@@ -123,11 +124,13 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 
 안정 동작:
 
-- `runs_root`는 단일 runs 루트입니다. 단독 ORCA 작업과 워크플로우 워크스페이스가
+- `runs_root`는 단일 runs 루트입니다. 단독 ORCA/xTB-MD 작업과 워크플로우 워크스페이스가
   모두 그 아래에 존재합니다.
 - `scheduler.admission_root`를 따로 설정하지 않으면 admission 디렉터리는
   `<runs_root>/.admission`입니다.
-- `scheduler.max_active_simulations`는 ORCA, 내부 xTB, 내부 CREST 작업의 공통 active 상한입니다.
+- `scheduler.max_active_simulations`는 ORCA, 단독 xTB-MD, 내부 xTB, 내부 CREST 작업의
+  공통 active 상한입니다.
+- `scheduler.max_active_xtb_md`는 양의 단독 xTB-MD 부분 상한이며 생략하면 `1`입니다.
 - 명시한 `scheduler`, `resources`, `workflow`, `workflow.paths` section은 mapping이어야 합니다.
   `scheduler.admission_root`는 절대 Linux 경로여야 하고 명시한 scheduler/resource 상한은
   양의 정수여야 합니다. 잘못된 실행 제어 값은 기본값으로 바꾸지 않고 거부합니다.
@@ -194,7 +197,7 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 
 - `activity_id`
 - `kind` (`job` 또는 `workflow`)
-- `engine` (`orca`, `xtb`, `crest`, `workflow`)
+- `engine` (`orca`, `xtb_md`, `xtb`, `crest`, `workflow`)
 - `status`
 - `label`
 - `source`
@@ -211,12 +214,12 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 행은 무한히 복구를 반복하지 않고 `repair_blocked` activity로 노출하며,
 `repair_blocked_reason`과 `queue_error` metadata를 제공합니다.
 
-xTB/CREST 큐 산출물에는 내부 immutable-generation fingerprint가 기록되고, 새
-xTB/CREST/ORCA 행에는 제출 시점 execution snapshot이 들어갑니다. 이 필드가 없던
+xTB-MD/xTB/CREST 큐 산출물에는 내부 immutable-generation fingerprint가 기록되고, 새
+xTB-MD/xTB/CREST/ORCA 행에는 제출 시점 execution snapshot이 들어갑니다. 이 필드가 없던
 빌드에서 업그레이드하기 전에는 이전 빌드로 해당 행을 drain하거나 취소/clear한 뒤 새
 빌드에서 다시 제출해야 합니다. snapshot 이전 큐 행의 in-place adoption은 지원하지
 않으며, 검증할 수 없는 산출물은 새 generation에 연결하지 않고 fail-closed합니다.
-xTB/CREST snapshot은 공개 task id만으로 소유권을 정하지 않고 제출마다 배타적으로 예약한
+xTB-MD/xTB/CREST snapshot은 공개 task id만으로 소유권을 정하지 않고 제출마다 배타적으로 예약한
 고유 namespace를 사용합니다.
 Generation 디렉터리를 만들기 전에 소유 queue root에 내부 durable intent를 기록합니다.
 Worker는 bounded intent만 raw queue 행 및 생성자 생존 여부와 대조해 보수적으로 복구하고,
@@ -231,6 +234,34 @@ reader는 현재 파일을 그 종료 정체성과 대조합니다. 정체성이
 reader가 현재 내용을 hash한 뒤 `identity_backfilled_from_legacy_artifact`로 표시해야만 읽을
 수 있습니다. 이는 읽은 시점의 바이트를 증명할 뿐 과거 종료 전이 시점의 바이트를
 증명하지는 않습니다.
+
+## 단독 xTB-MD 작업 계약
+
+공개 입력 marker는 `runs_root` 아래 디렉터리의 `xtb_md_job.yaml`입니다. Strict schema
+version 1이며 필수 필드는 `schema_version`, `input_xyz`, `gfn`, `ensemble`,
+`temperature_k`, `time_ps`, `walltime_seconds`, `step_fs`, `dump_fs`입니다. 알 수 없는
+필드는 거부하고 NVT/NVE만 지원합니다. 검증되는 선택 필드와 정확한 서버 소유 상한은
+[REFERENCE.ko.md](REFERENCE.ko.md) §7.2를 따릅니다.
+
+제출마다 fresh generation 하나를 정확히 한 번 시도합니다. 워크플로우, 자동 retry,
+checkpoint resume, 임의 seed, `--omd`, raw xcontrol, constraint, metadynamics 계약은
+없습니다. 취소는 종료 상태이며 서비스 중단/crash/orphan 복구가 attempt를 조용히 다시
+큐에 넣으면 안 됩니다.
+
+adapter는 현재 xTB 6.7.1만 받습니다. 이는 호환성 pin이지 issue-free 주장인 것은
+아닙니다. 종료 코드 0과 `xtbmdok`만으로 성공을 증명하지 않으며, 제출 budget 안의 fresh,
+finite, 원자 수가 일치하는 `xtb.trj`와 `mdrestart` 증거도 요구하고 알려진 false-success
+marker를 거부합니다.
+
+단독 xTB-MD는 작업 루트에 다음 공개 산출물을 씁니다:
+
+- `job_state.json`
+- `job_report.json`
+- `job_report.md`
+
+불변 generated input, 로그, `xtb.trj`, `mdrestart`, `xtbmdok`는
+`.orca_auto_xtb_md_executions/<job_id>/` 아래에 보존합니다. 종료 JSON은 검증된 출력에
+path, SHA-256, byte size, modification time을 바인딩합니다.
 
 ## ORCA 작업 산출물 계약
 
