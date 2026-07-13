@@ -103,8 +103,9 @@ orca:
 - Linux 경로만 사용하세요. Windows 드라이브 경로, `/mnt/<drive>/...`, 상대 실행 경로,
   `.exe` 바이너리는 거부됩니다.
 - 설정된 ORCA/xTB/CREST 실행 경로는 실제로 존재하는 실행 가능한 Linux 바이너리를
-  가리켜야 합니다. 런타임에 PATH 탐색을 의도하는 경우에만
+  가리켜야 합니다. 제출 시 PATH 탐색을 의도하는 경우에만
   `workflow.paths.xtb_executable` 또는 `workflow.paths.crest_executable`을 비워 두세요.
+  해석된 실행 파일 정체성은 그 큐 generation에 바인딩됩니다.
 - `default_max_retries: 0`은 ORCA 재시도를 비활성화합니다. 양수 값은 ORCA route
   종류별 cap을 따르는 계산 종류별 재시도 정책을 활성화합니다.
 - `scheduler.max_active_simulations`는 ORCA, 내부 xTB 워크플로우 단계, 내부 CREST
@@ -182,7 +183,13 @@ orca_auto service restart
 - ORCA 워커는 큐 정체성으로 큐 자식을 실행하므로, 내구성 있는 `queue.json` 항목이
   사실의 원천(source of truth)으로 유지되는 한편 공개 `reaction_dir` 계약도 보존됩니다.
 - 워커가 실행 중이 아니면, 큐에 들어간 작업은 워커가 돌아올 때까지 대기 상태로 남습니다.
-- ORCA는 실행이 시작될 때 가장 최근에 수정된 `.inp`를 선택합니다.
+- ORCA는 제출할 때 가장 최근에 수정된 `.inp`를 선택하고 해당 입력과 지원하는 파일 의존성을
+  private execution snapshot에 바인딩합니다. 이후 원본을 편집해도 큐에 들어간 generation은
+  바뀌지 않습니다.
+- `flow.yaml`과 내부 엔진 작업 manifest는 1 MiB, YAML alias 32개, 파싱/확장 node 10,000개,
+  중첩 64단계로 제한하며 순환/재귀 YAML graph는 fail-closed합니다. 로컬 geometry는 최대
+  10,000원자이며 xTB/ORCA Hessian 생성 작업은 1,000원자, Discord 업로드 작업은
+  200원자로 더 제한합니다.
 - 중단된 ORCA 실행을 재시도하거나 재개할 때, orca_auto는 일치하는 비어 있지 않은
   `.gbw` 파일을 사용해 `MORead`와 `%moinp`가 포함된 재시작 입력을 생성합니다.
 - 완료된 ORCA 실행은 `job_state.json`, `job_report.json`, `job_report.md` 같은 상태 및

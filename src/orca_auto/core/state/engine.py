@@ -332,6 +332,7 @@ def recovery_pending_payload(
             dir=str(job_dir.resolve()),
             app_name=normalize_text(existing_job.get("app_name")),
             task_id=normalize_text(existing_job.get("task_id")) or normalize_text(job_id),
+            generation=normalize_text(existing_job.get("generation")),
         ),
         status=EngineArtifactStatus(state="queued", reason=normalize_text(reason)),
         input=EngineArtifactInput(

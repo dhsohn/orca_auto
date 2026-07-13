@@ -9,6 +9,7 @@ from typing import Any
 
 import yaml
 
+from orca_auto.core.config.files import load_bounded_yaml_data
 from orca_auto.core.utils import normalize_bool, normalize_text
 from orca_auto.orca.completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from orca_auto.orca.job_type import FREQ_RE
@@ -54,6 +55,7 @@ def optional_positive_float(
 INTERACTION_ENERGY_MAX_FRAGMENTS_CAP = 8
 INTERACTION_ENERGY_MAX_MULTIPLICITY = 100
 INTERACTION_ENERGY_RMSD_GROUPING_VERSION = 2
+MAX_CREST_CANDIDATES = 32
 DEFAULT_INTERACTION_SP_ROUTE_LINE = "! r2scan-3c TightSCF"
 DEFAULT_RMSD_THRESHOLD_ANGSTROM = 0.25
 # A finite default energy window is mandatory: geometry-only threshold grouping
@@ -101,7 +103,7 @@ def _require_bool(value: Any, *, field: str, default: bool) -> bool:
     raise ValueError(f"{field} must be a boolean")
 
 
-def _require_int(value: Any, *, field: str, minimum: int | None = None) -> int:
+def require_int(value: Any, *, field: str, minimum: int | None = None) -> int:
     if isinstance(value, bool):
         raise ValueError(f"{field} must be an integer, not a boolean")
     if isinstance(value, int):
@@ -116,6 +118,18 @@ def _require_int(value: Any, *, field: str, minimum: int | None = None) -> int:
         raise ValueError(f"{field} must be an integer. got={value!r}")
     if minimum is not None and parsed < minimum:
         raise ValueError(f"{field} must be >= {minimum}. got={parsed}")
+    return parsed
+
+
+_require_int = require_int
+
+
+def require_crest_candidate_count(value: Any, *, field: str = "max_crest_candidates") -> int:
+    """Return one bounded CREST handoff count for local and durable workflows."""
+
+    parsed = require_int(value, field=field, minimum=1)
+    if parsed > MAX_CREST_CANDIDATES:
+        raise ValueError(f"{field} must be <= {MAX_CREST_CANDIDATES}. got={parsed}")
     return parsed
 
 
@@ -419,7 +433,7 @@ def load_flow_manifest(
         if not candidate.is_file():
             continue
         try:
-            parsed = yaml.safe_load(candidate.read_text(encoding="utf-8"))
+            parsed = load_bounded_yaml_data(candidate)
         except yaml.YAMLError as exc:
             raise ValueError(_invalid_manifest_yaml_message(candidate, description, exc)) from exc
         if parsed is None:
@@ -544,6 +558,7 @@ __all__ = [
     "INTERACTION_ENERGY_MAX_FRAGMENTS_CAP",
     "INTERACTION_ENERGY_MAX_MULTIPLICITY",
     "INTERACTION_ENERGY_RMSD_GROUPING_VERSION",
+    "MAX_CREST_CANDIDATES",
     "interaction_energy_config_fingerprint",
     "load_flow_manifest",
     "manifest_allows_external_inputs",
@@ -551,6 +566,7 @@ __all__ = [
     "normalize_interaction_energy_block",
     "normalize_rmsd_dedup_block",
     "optional_positive_float",
+    "require_crest_candidate_count",
     "resolve_endpoint_pairing_manifest",
     "resolve_engine_manifest",
     "resolve_engine_manifest_with_presence",

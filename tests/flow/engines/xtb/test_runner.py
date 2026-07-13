@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,10 @@ from orca_auto.core.config.engines import (
 )
 from orca_auto.flow.engines.xtb import runner as runner_mod
 from orca_auto.flow.engines.xtb import runner_artifacts, runner_ranking
+from orca_auto.flow.engines.xtb.ranking_selection import (
+    rank_usable_candidates,
+    usable_ranking_candidates,
+)
 from tests.flow.engines.xtb.factories import (
     CandidateSpDeps,
     FakeCandidateProcess,
@@ -85,7 +90,6 @@ def test_build_command_handles_job_types_and_manifest_options(
             "uhf": 1,
             "solvent_model": "gbsa",
             "solvent": "water",
-            "namespace": "rxn_001",
             "xcontrol": "input.inp",
             "dry_run": "true",
             "resources": {"max_cores": 10, "max_memory_gb": 28},
@@ -100,6 +104,7 @@ def test_build_command_handles_job_types_and_manifest_options(
         "--parallel",
         "10",
         "--json",
+        "--norestart",
         "--gfn",
         "1",
         "--chrg",
@@ -108,8 +113,6 @@ def test_build_command_handles_job_types_and_manifest_options(
         "1",
         "--gbsa",
         "water",
-        "--namespace",
-        "rxn_001",
         "--input",
         "input.inp",
         "--path",
@@ -170,11 +173,104 @@ def test_extract_sp_energy_prefers_xtbout_then_string_then_comment(tmp_path: Pat
         "xtbout.json:total energy",
     )
 
+    (job_dir / "xtbout.json").write_text(
+        json.dumps({"electronic energy": "-1.25E+02"}),
+        encoding="utf-8",
+    )
+    assert runner_mod._extract_sp_energy(job_dir, candidate_xyz) == (
+        -125.0,
+        "xtbout.json:electronic energy",
+    )
+
     (job_dir / "xtbout.json").unlink()
-    assert runner_mod._extract_sp_energy(job_dir, candidate_xyz) == (-17.25, "candidate_comment")
+    assert runner_mod._extract_sp_energy(job_dir, candidate_xyz) == (None, "")
 
     candidate_xyz.write_text("3\nno energy here\nH 0 0 0\nH 0 0 1\nH 0 1 0\n", encoding="utf-8")
     assert runner_mod._extract_sp_energy(job_dir, candidate_xyz) == (None, "")
+
+
+def test_extract_sp_energy_parses_exponents_and_rejects_json_boolean(tmp_path: Path) -> None:
+    job_dir = tmp_path / "sp"
+    job_dir.mkdir()
+    candidate_xyz = _write_xyz(job_dir / "candidate.xyz", comment="energy = -1.0E+02")
+
+    (job_dir / "xtbout.json").write_text(json.dumps({"total energy": True}), encoding="utf-8")
+
+    assert runner_mod._extract_sp_energy(job_dir, candidate_xyz) == (None, "")
+    count, paths, _details, summary = runner_mod._collect_sp_candidates(job_dir)
+    assert count == 0
+    assert paths == ()
+    assert "no finite energy" in summary["result_validation_error"]
+
+
+def test_path_summary_parses_scientific_notation(tmp_path: Path) -> None:
+    job_dir = tmp_path / "path"
+    job_dir.mkdir()
+    stdout = job_dir / "xtb.stdout.log"
+    stdout.write_text(
+        "forward barrier (kcal) : 1.2E+02\n"
+        "backward barrier (kcal) : 3.5e+01\n"
+        "reaction energy (kcal) : -4.5E-01\n",
+        encoding="utf-8",
+    )
+
+    summary = runner_artifacts._parse_path_search_stdout(job_dir, str(stdout))
+
+    assert summary["forward_barrier_kcal"] == 120.0
+    assert summary["backward_barrier_kcal"] == 35.0
+    assert summary["reaction_energy_kcal"] == -0.45
+
+
+def test_path_summary_drops_overflowed_scientific_notation(tmp_path: Path) -> None:
+    job_dir = tmp_path / "path-overflow"
+    job_dir.mkdir()
+    stdout = job_dir / "xtb.stdout.log"
+    stdout.write_text(
+        "forward barrier (kcal) : 1E999\n"
+        "run 1 barrier: 1E999 dE: -1E999 product-end path RMSD: 1E999\n",
+        encoding="utf-8",
+    )
+
+    summary = runner_artifacts._parse_path_search_stdout(job_dir, str(stdout))
+
+    assert "forward_barrier_kcal" not in summary
+    assert "path_trials" not in summary
+
+
+@pytest.mark.parametrize("energy", [math.nan, math.inf, -math.inf, "NaN", "Infinity"])
+def test_nonfinite_sp_energy_is_never_rankable(tmp_path: Path, energy: object) -> None:
+    job_dir = tmp_path / "sp-job"
+    candidate_xyz = _write_xyz(job_dir / "candidate.xyz")
+    (job_dir / "xtbout.json").write_text(json.dumps({"total energy": energy}), encoding="utf-8")
+
+    assert runner_mod._extract_sp_energy(job_dir, candidate_xyz) == (None, "")
+
+    candidates = [
+        {
+            "candidate_path": "nonfinite.xyz",
+            "candidate_run_dir_path": "nonfinite",
+            "energy_source": "test",
+            "status": "completed",
+            "reason": "completed",
+            "exit_code": 0,
+            "total_energy": energy,
+        },
+        {
+            "candidate_path": "finite.xyz",
+            "candidate_run_dir_path": "finite",
+            "energy_source": "test",
+            "status": "completed",
+            "reason": "completed",
+            "exit_code": 0,
+            "total_energy": -10.0,
+        },
+    ]
+    usable = usable_ranking_candidates(candidates)
+    ranked, details, selected = rank_usable_candidates(usable, top_n=1)
+
+    assert [item["candidate_path"] for item in ranked] == ["finite.xyz"]
+    assert details[0]["score"] == 10.0
+    assert selected == ["finite.xyz"]
 
 
 def test_runner_helper_functions_cover_invalid_and_fallback_paths(
@@ -184,9 +280,14 @@ def test_runner_helper_functions_cover_invalid_and_fallback_paths(
     assert engine_runner.manifest_int({"charge": "   "}, "charge") is None
     with pytest.raises(ValueError, match="must be an integer-compatible value"):
         engine_runner.manifest_int({"charge": object()}, "charge")
+    for invalid_integer in (True, 1.5, float("nan")):
+        with pytest.raises(ValueError, match="must be an integer"):
+            engine_runner.manifest_int({"charge": invalid_integer}, "charge")
 
     assert runner_artifacts._safe_float("not-a-number") is None
-    assert runner_ranking.ranking_top_n({"top_n": "bad"}) == 3
+    assert runner_artifacts._safe_float(True) is None
+    with pytest.raises(ValueError, match="top_n must be a positive integer"):
+        runner_ranking.ranking_top_n({"top_n": "bad"})
 
     job_dir = tmp_path / "job"
     job_dir.mkdir()
@@ -206,18 +307,6 @@ def test_runner_helper_functions_cover_invalid_and_fallback_paths(
     invalid_json_dir.mkdir()
     (invalid_json_dir / "xtbout.json").write_text("{not-json", encoding="utf-8")
     assert runner_artifacts._load_xtbout_json(invalid_json_dir) == {}
-
-    short_xyz = job_dir / "short.xyz"
-    short_xyz.write_text("1\n", encoding="utf-8")
-    assert runner_artifacts._parse_candidate_comment_energy(short_xyz) is None
-
-    def fake_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
-        if self == short_xyz:
-            raise OSError("blocked")
-        return Path.read_text(self, *args, **kwargs)
-
-    monkeypatch.setattr(runner_artifacts.Path, "read_text", fake_read_text, raising=False)
-    assert runner_artifacts._parse_candidate_comment_energy(short_xyz) is None
 
 
 def test_run_xtb_ranking_job_returns_failed_result_when_no_usable_energy(
@@ -309,7 +398,10 @@ def test_run_candidate_sp_job_writes_scaffold_and_finalizes_result(
     )
 
     manifest = yaml.safe_load((candidate_run_dir / "xtb_job.yaml").read_text(encoding="utf-8"))
-    assert result is expected_result
+    assert result.status == expected_result.status
+    assert result.reason == expected_result.reason
+    assert len(result.analysis_summary["executed_input_sha256"]) == 64
+    assert result.analysis_summary["executed_input_size_bytes"] == candidate_xyz.stat().st_size
     assert started == [(candidate_run_dir, candidate_run_dir / "input.xyz")]
     assert finalized == [sentinel_running]
     assert (candidate_run_dir / "input.xyz").read_text(encoding="utf-8") == candidate_xyz.read_text(
@@ -410,12 +502,55 @@ def test_run_candidate_sp_job_cancels_process_and_clears_running_callback(
     )
 
     manifest = yaml.safe_load((candidate_run_dir / "xtb_job.yaml").read_text(encoding="utf-8"))
-    assert result is expected_result
+    assert result.status == expected_result.status
+    assert result.reason == expected_result.reason
+    assert len(result.analysis_summary["executed_input_sha256"]) == 64
+    assert result.analysis_summary["executed_input_size_bytes"] == candidate_xyz.stat().st_size
     assert manifest["job_type"] == "sp"
     assert manifest["input_xyz"] == "input.xyz"
     assert running_callbacks == [running, None]
     assert stopped_processes == [process]
     assert process.terminate_calls == 1
+
+
+def test_run_candidate_sp_job_rejects_bound_input_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _cfg(tmp_path)
+    candidate_xyz = _write_xyz(tmp_path / "input-candidates" / "candidate.xyz")
+    candidate_run_dir = tmp_path / "ranking-job" / ".ranking_runs" / "01_candidate"
+    running = SimpleNamespace(process=FakeCandidateProcess([0]))
+
+    monkeypatch.setattr(
+        runner_mod,
+        "start_xtb_job",
+        lambda cfg_obj, *, job_dir, selected_input_xyz: running,
+    )
+
+    def mutate_then_finalize(actual_running: object) -> runner_mod.XtbRunResult:
+        assert actual_running is running
+        (candidate_run_dir / "input.xyz").write_text(
+            "1\nmutated\nHe 0 0 0\n",
+            encoding="utf-8",
+        )
+        return make_ranking_result(candidate_xyz)
+
+    monkeypatch.setattr(runner_mod, "finalize_xtb_job", mutate_then_finalize)
+
+    result = runner_mod._run_candidate_sp_job(
+        cfg,
+        candidate_xyz=candidate_xyz,
+        candidate_run_dir=candidate_run_dir,
+        manifest={"job_type": "ranking"},
+    )
+
+    assert result.status == "failed"
+    assert result.reason == "candidate_input_changed_during_execution"
+    assert (
+        result.analysis_summary["expected_input_sha256"]
+        != result.analysis_summary["executed_input_sha256"]
+    )
 
 
 def test_request_candidate_process_stop_uses_confirming_terminator(
@@ -848,6 +983,45 @@ def test_collect_opt_and_sp_candidates_return_expected_metadata(tmp_path: Path) 
     )
 
 
+def test_collect_opt_and_sp_candidates_reject_nonfinite_results(tmp_path: Path) -> None:
+    opt_job_dir = tmp_path / "invalid-opt"
+    invalid_geometry = opt_job_dir / "xtbopt.xyz"
+    invalid_geometry.parent.mkdir(parents=True)
+    invalid_geometry.write_text("1\ninvalid\nH nan 0 0\n", encoding="utf-8")
+    (opt_job_dir / ".xtboptok").write_text("", encoding="utf-8")
+
+    opt_count, opt_paths, opt_details, opt_summary = runner_mod._collect_opt_candidates(opt_job_dir)
+    assert (opt_count, opt_paths, opt_details) == (0, (), ())
+    assert opt_summary["canonical_result_path"] == ""
+    assert "exactly one valid finite XYZ frame" in opt_summary["result_validation_error"]
+
+    sp_job_dir = tmp_path / "invalid-sp"
+    sp_job_dir.mkdir()
+    (sp_job_dir / "xtbout.json").write_text(
+        '{"total energy": NaN, "electronic energy": "inf"}',
+        encoding="utf-8",
+    )
+
+    sp_count, sp_paths, sp_details, sp_summary = runner_mod._collect_sp_candidates(sp_job_dir)
+    assert (sp_count, sp_paths, sp_details) == (0, (), ())
+    assert sp_summary["canonical_result_path"] == ""
+    assert "no finite energy" in sp_summary["result_validation_error"]
+
+
+def test_collect_opt_candidate_rejects_atom_identity_mismatch(tmp_path: Path) -> None:
+    job_dir = tmp_path / "opt-mismatch"
+    selected_input = _write_xyz(job_dir / "input.xyz")
+    (job_dir / "xtbopt.xyz").write_text("1\nstale\nCl 0 0 0\n", encoding="utf-8")
+    (job_dir / ".xtboptok").write_text("", encoding="utf-8")
+
+    count, paths, details, summary = runner_mod._collect_opt_candidates(
+        job_dir, selected_input_xyz=selected_input
+    )
+
+    assert (count, paths, details) == (0, (), ())
+    assert "element order" in summary["result_validation_error"]
+
+
 def test_start_xtb_job_passes_expected_subprocess_options(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -856,6 +1030,7 @@ def test_start_xtb_job_passes_expected_subprocess_options(
     job_dir = tmp_path / "job"
     selected_xyz = _write_xyz(job_dir / "input.xyz")
     secondary_xyz = _write_xyz(job_dir / "product.xyz")
+    stale_ts = _write_xyz(job_dir / "xtbpath_ts.xyz")
     popen_calls: dict[str, Any] = {}
     build_command_calls: list[dict[str, Any]] = []
 
@@ -875,6 +1050,7 @@ def test_start_xtb_job_passes_expected_subprocess_options(
         selected_input_xyz: Path,
         secondary_input_xyz: Path | None,
         job_type: str,
+        resource_request: dict[str, int] | None = None,
     ) -> list[str]:
         build_command_calls.append(
             {
@@ -910,6 +1086,7 @@ def test_start_xtb_job_passes_expected_subprocess_options(
 
     running = runner_mod.start_xtb_job(cfg, job_dir=job_dir, selected_input_xyz=selected_xyz)
 
+    assert not stale_ts.exists()
     assert build_command_calls == [
         {
             "manifest": {
@@ -941,6 +1118,30 @@ def test_start_xtb_job_passes_expected_subprocess_options(
     running.stderr_handle.close()
 
 
+def test_stale_xtb_output_fsync_failure_blocks_launch_preparation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    selected = _write_xyz(job_dir / "input.xyz")
+    stale = _write_xyz(job_dir / "xtbpath_ts.xyz")
+    monkeypatch.setattr(
+        runner_mod,
+        "fsync_directory",
+        lambda _path: (_ for _ in ()).throw(OSError("stale unlink fsync failed")),
+    )
+
+    with pytest.raises(OSError, match="stale unlink fsync failed"):
+        runner_mod._clear_stale_xtb_outputs(
+            job_dir,
+            job_type="path_search",
+            selected_input_xyz=selected,
+            secondary_input_xyz=None,
+        )
+
+    assert not stale.exists()
+
+
 def test_finalize_xtb_job_defaults_for_completed_path_search_and_unknown_job_type(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -961,11 +1162,13 @@ def test_finalize_xtb_job_defaults_for_completed_path_search_and_unknown_job_typ
         "_collect_path_search_candidates",
         lambda job_dir, stdout_log, input_summary=None, manifest=None: (
             2,
-            ("a.xyz", "b.xyz"),
+            (str(path_job_dir / "a.xyz"), str(path_job_dir / "b.xyz")),
             ({"kind": "ts_guess"}, {"kind": "selected_path"}),
             {"path_file": "a.xyz"},
         ),
     )
+    _write_xyz(path_job_dir / "a.xyz")
+    _write_xyz(path_job_dir / "b.xyz")
     monkeypatch.setattr(runner_mod, "now_utc_iso", lambda: "2026-04-20T00:10:00Z")
 
     path_running = runner_mod.XtbRunningJob(
@@ -990,7 +1193,10 @@ def test_finalize_xtb_job_defaults_for_completed_path_search_and_unknown_job_typ
     assert path_result.status == "completed"
     assert path_result.reason == "completed"
     assert path_result.candidate_count == 2
-    assert path_result.selected_candidate_paths == ("a.xyz", "b.xyz")
+    assert path_result.selected_candidate_paths == (
+        str(path_job_dir / "a.xyz"),
+        str(path_job_dir / "b.xyz"),
+    )
 
     unknown_job_dir = tmp_path / "unknown-job"
     unknown_job_dir.mkdir()
@@ -1044,12 +1250,13 @@ def test_finalize_xtb_job_waits_for_process_and_uses_forced_status(
             return 7
 
     process = _Process()
+    optimized_xyz = _write_xyz(job_dir / "optimized.xyz")
     monkeypatch.setattr(
         runner_mod,
         "_collect_opt_candidates",
-        lambda path: (
+        lambda path, **kwargs: (
             1,
-            ("optimized.xyz",),
+            (str(optimized_xyz),),
             ({"kind": "optimized_geometry"},),
             {"optimization_ok": True},
         ),
@@ -1085,7 +1292,7 @@ def test_finalize_xtb_job_waits_for_process_and_uses_forced_status(
     assert result.reason == "cancel_requested"
     assert result.exit_code == 7
     assert result.candidate_count == 1
-    assert result.selected_candidate_paths == ("optimized.xyz",)
+    assert result.selected_candidate_paths == (str(optimized_xyz),)
     assert result.analysis_summary == {"optimization_ok": True}
 
 
@@ -1099,13 +1306,15 @@ def test_finalize_xtb_job_uses_single_point_candidate_collection(
     stderr_path = job_dir / "xtb.stderr.log"
     stdout_handle = stdout_path.open("w", encoding="utf-8")
     stderr_handle = stderr_path.open("w", encoding="utf-8")
+    xtbout_json = job_dir / "xtbout.json"
+    xtbout_json.write_text('{"energy": -4.2}\n', encoding="utf-8")
 
     monkeypatch.setattr(
         runner_mod,
         "_collect_sp_candidates",
         lambda path: (
             1,
-            ("xtbout.json",),
+            (str(xtbout_json),),
             ({"kind": "single_point_result"},),
             {"total_energy": -4.2},
         ),
@@ -1134,8 +1343,65 @@ def test_finalize_xtb_job_uses_single_point_candidate_collection(
     assert result.status == "completed"
     assert result.reason == "completed"
     assert result.candidate_count == 1
-    assert result.selected_candidate_paths == ("xtbout.json",)
+    assert result.selected_candidate_paths == (str(xtbout_json),)
     assert result.analysis_summary == {"total_energy": -4.2}
+
+
+def test_finalize_xtb_job_rejects_output_mutation_during_identity_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "sp-mutation"
+    job_dir.mkdir()
+    stdout_path = job_dir / "xtb.stdout.log"
+    stderr_path = job_dir / "xtb.stderr.log"
+    xtbout_json = job_dir / "xtbout.json"
+    xtbout_json.write_text('{"energy": -4.2}\n', encoding="utf-8")
+    monkeypatch.setattr(
+        runner_mod,
+        "_collect_sp_candidates",
+        lambda path: (
+            1,
+            (str(xtbout_json),),
+            ({"kind": "single_point_result", "path": str(xtbout_json)},),
+            {"total_energy": -4.2},
+        ),
+    )
+    original_identity = engine_runner.confined_output_identity
+    mutated = False
+
+    def identity_then_mutate(root: str | Path, path: str | Path) -> dict[str, Any]:
+        nonlocal mutated
+        identity = original_identity(root, path)
+        if Path(path).resolve() == xtbout_json.resolve() and not mutated:
+            xtbout_json.write_text('{"energy": -1.0}\n', encoding="utf-8")
+            mutated = True
+        return identity
+
+    monkeypatch.setattr(runner_mod._engine_runner, "confined_output_identity", identity_then_mutate)
+    running = runner_mod.XtbRunningJob(
+        process=cast(Any, SimpleNamespace(poll=lambda: 0)),
+        command=("xtb", "input.xyz", "--sp"),
+        started_at="2026-04-20T00:00:00Z",
+        stdout_log=str(stdout_path.resolve()),
+        stderr_log=str(stderr_path.resolve()),
+        stdout_handle=stdout_path.open("w", encoding="utf-8"),
+        stderr_handle=stderr_path.open("w", encoding="utf-8"),
+        selected_input_xyz=str((job_dir / "input.xyz").resolve()),
+        job_type="sp",
+        reaction_key="mol-sp",
+        input_summary={},
+        manifest_path="",
+        resource_request={"max_cores": 4, "max_memory_gb": 12},
+        resource_actual={"assigned_cores": 4, "memory_limit_gb": 12},
+        job_dir=str(job_dir.resolve()),
+    )
+
+    result = runner_mod.finalize_xtb_job(running)
+
+    assert mutated is True
+    assert result.status == "failed"
+    assert result.reason == "xtb_output_changed_during_collection"
 
 
 def _make_path_search_result(
@@ -1179,7 +1445,10 @@ def test_ts_hessian_followup_records_hessian_path(
         assert kwargs["job_type"] == "hess"
         assert kwargs["candidate_run_dir"] == hessian_run_dir
         hessian_run_dir.mkdir(parents=True, exist_ok=True)
-        (hessian_run_dir / "hessian").write_text("$hessian\n0.1\n", encoding="utf-8")
+        (hessian_run_dir / "input.xyz").write_bytes(kwargs["candidate_payload"])
+        (hessian_run_dir / "hessian").write_text(
+            "$hessian\n0.1 0 0 0 0.1 0 0 0 0.1\n", encoding="utf-8"
+        )
         return hessian_result
 
     monkeypatch.setattr(runner_mod, "_run_candidate_sp_job", fake_sp_job)
@@ -1231,13 +1500,19 @@ def test_ts_hessian_followup_falls_back_when_hessian_job_fails(
         "_run_candidate_sp_job",
         lambda *args, **kwargs: make_ranking_result(ts_guess_xyz, status="failed"),
     )
-    assert runner_mod.run_path_search_ts_hessian_followup(cfg, result, job_dir=job_dir) is result
+    failed_followup = runner_mod.run_path_search_ts_hessian_followup(cfg, result, job_dir=job_dir)
+    assert failed_followup.status == "completed"
+    assert failed_followup.analysis_summary["ts_hessian_provenance"]["status"] == "failed"
 
     def raising_sp_job(*args: Any, **kwargs: Any) -> runner_mod.XtbRunResult:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(runner_mod, "_run_candidate_sp_job", raising_sp_job)
-    assert runner_mod.run_path_search_ts_hessian_followup(cfg, result, job_dir=job_dir) is result
+    crashed_followup = runner_mod.run_path_search_ts_hessian_followup(cfg, result, job_dir=job_dir)
+    assert crashed_followup.status == "completed"
+    assert crashed_followup.analysis_summary["ts_hessian_provenance"]["reason"] == (
+        "hessian_followup_exception"
+    )
 
 
 def test_collect_hessian_candidates(tmp_path: Path) -> None:
@@ -1247,7 +1522,10 @@ def test_collect_hessian_candidates(tmp_path: Path) -> None:
     assert count == 0 and paths == () and details == ()
     assert summary["canonical_result_path"] == ""
 
-    (job_dir / "hessian").write_text("$hessian\n0.1\n", encoding="utf-8")
+    (job_dir / "hessian").write_text(
+        "$hessian\n" + " ".join(["0.1"] * 9) + "\n",
+        encoding="utf-8",
+    )
     count, paths, details, summary = runner_artifacts._collect_hessian_candidates(job_dir)
     assert count == 1
     assert details[0]["kind"] == "hessian"
@@ -1274,4 +1552,8 @@ def test_ts_hessian_followup_skips_geometry_invalid_guess(
         "_run_candidate_sp_job",
         lambda *args, **kwargs: pytest.fail("hessian job should not run for invalid guess"),
     )
-    assert runner_mod.run_path_search_ts_hessian_followup(cfg, result, job_dir=job_dir) is result
+    skipped = runner_mod.run_path_search_ts_hessian_followup(cfg, result, job_dir=job_dir)
+    assert skipped.analysis_summary["ts_hessian_provenance"] == {
+        "status": "skipped",
+        "reason": "ts_guess_geometry_invalid",
+    }

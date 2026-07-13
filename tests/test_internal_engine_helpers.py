@@ -17,6 +17,22 @@ from orca_auto.core.queue.internal_engine import (
 from orca_auto.core.queue.types import QueueStatus
 
 
+def _append_and_return(items: Any, value: Any, result: Any) -> Any:
+    items.append(value)
+    return result
+
+
+def _demo_entry(queue_id: str, status: QueueStatus = QueueStatus.RUNNING) -> SimpleNamespace:
+    return SimpleNamespace(
+        queue_id=queue_id,
+        app_name="orca_auto_demo",
+        task_id=f"demo-task-{queue_id}",
+        task_kind="demo_run",
+        engine="demo",
+        status=status,
+    )
+
+
 def _facade_deps(*, time_module: Any | None = None, **overrides: Any) -> Any:
     callback_values: dict[str, Any] = {
         "release_slot": lambda *_args, **_kwargs: None,
@@ -69,7 +85,11 @@ def test_internal_engine_lifecycle_policy_preserves_roots_and_recovers_job_entry
         shutdown_requested=True,
         find_queue_entry_fn=lambda _root, _queue_id: current_entry,
         mark_cancelled_fn=lambda *args, **kwargs: None,
-        requeue_running_entry_fn=lambda root, queue_id: requeued.append((root, queue_id)),
+        requeue_running_entry_fn=lambda root, queue_id, **_kwargs: _append_and_return(
+            requeued,
+            (root, queue_id),
+            current_entry,
+        ),
         mark_failed_fn=lambda *args, **kwargs: None,
         mark_recovery_pending_fn=lambda cfg_obj, entry_obj, *, reason: recovery.append(
             (cfg_obj, entry_obj, reason)
@@ -243,8 +263,8 @@ def test_internal_engine_queue_worker_facade_finalizes_child_exit(
     tmp_path: Path,
 ) -> None:
     cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path)))
-    current_entry = SimpleNamespace(queue_id="queue-1", status=QueueStatus.RUNNING)
-    job_entry = SimpleNamespace(queue_id="queue-1", status=QueueStatus.RUNNING)
+    current_entry = _demo_entry("queue-1")
+    job_entry = _demo_entry("queue-1")
     job = SimpleNamespace(
         queue_root=tmp_path / "queue",
         entry=job_entry,
@@ -268,7 +288,11 @@ def test_internal_engine_queue_worker_facade_finalizes_child_exit(
         deps=_facade_deps(
             find_queue_entry=lambda _root, _queue_id: current_entry,
             mark_cancelled=lambda *_args, **_kwargs: None,
-            requeue_running_entry=lambda root, queue_id: requeued.append((root, queue_id)),
+            requeue_running_entry=lambda root, queue_id, **_kwargs: _append_and_return(
+                requeued,
+                (root, queue_id),
+                current_entry,
+            ),
             mark_failed=lambda *_args, **_kwargs: None,
             mark_recovery_pending=lambda cfg_obj, entry_obj, *, reason: recovery.append(
                 (cfg_obj, entry_obj, reason)
@@ -294,8 +318,8 @@ def test_internal_engine_queue_worker_facade_reconciles_orphaned_running(
     tmp_path: Path,
 ) -> None:
     cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path)))
-    live_entry = SimpleNamespace(queue_id="live", status=QueueStatus.RUNNING)
-    orphan_entry = SimpleNamespace(queue_id="orphan", status=QueueStatus.RUNNING)
+    live_entry = _demo_entry("live")
+    orphan_entry = _demo_entry("orphan")
     queue_root = tmp_path / "queue"
     requeued: list[tuple[Path, str]] = []
     recovery: list[tuple[object, object, str]] = []
@@ -317,7 +341,11 @@ def test_internal_engine_queue_worker_facade_reconciles_orphaned_running(
             reconcile_stale_slots=lambda _root: None,
             reconcile_orphaned_child_queue_entries=reconcile_orphaned_child_queue_entries,
             mark_cancelled=lambda *_args, **_kwargs: None,
-            requeue_running_entry=lambda root, queue_id: requeued.append((root, queue_id)),
+            requeue_running_entry=lambda root, queue_id, **_kwargs: _append_and_return(
+                requeued,
+                (root, queue_id),
+                orphan_entry,
+            ),
             mark_failed=lambda *_args, **_kwargs: None,
             mark_recovery_pending=lambda cfg_obj, entry_obj, *, reason: recovery.append(
                 (cfg_obj, entry_obj, reason)

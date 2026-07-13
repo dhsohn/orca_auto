@@ -13,6 +13,9 @@ from orca_auto.flow.contracts import (
 from orca_auto.flow.orchestration.charge_spin import (
     manifest_with_charge_spin as _manifest_with_charge_spin,
 )
+from orca_auto.flow.orchestration.charge_spin import (
+    strict_int,
+)
 from orca_auto.flow.orchestration.requests import (
     ConformerScreeningWorkflowRequest,
     ReactionTsSearchWorkflowRequest,
@@ -175,8 +178,8 @@ def _reaction_template_request(
             "max_xtb_handoff_retries": int(request.max_xtb_handoff_retries),
             "max_orca_stages": int(request.max_orca_stages),
             "orca_route_line": str(request.orca_route_line),
-            "charge": int(request.charge),
-            "multiplicity": int(request.multiplicity),
+            "charge": strict_int(request.charge, field="charge"),
+            "multiplicity": strict_int(request.multiplicity, field="multiplicity", minimum=1),
             **_optional_mapping_parameter("crest_job_manifest", resolved_crest_job_manifest),
             **_optional_mapping_parameter("xtb_job_manifest", request.xtb_job_manifest),
             **_optional_mapping_parameter("endpoint_pairing", request.endpoint_pairing),
@@ -208,8 +211,8 @@ def _conformer_template_request(
             "max_memory_gb": int(request.max_memory_gb),
             "max_orca_stages": int(request.max_orca_stages),
             "orca_route_line": str(request.orca_route_line),
-            "charge": int(request.charge),
-            "multiplicity": int(request.multiplicity),
+            "charge": strict_int(request.charge, field="charge"),
+            "multiplicity": strict_int(request.multiplicity, field="multiplicity", minimum=1),
             **(
                 {"boltzmann_temperature_k": request.boltzmann_temperature_k}
                 if request.boltzmann_temperature_k is not None
@@ -291,8 +294,8 @@ def _scan_ts_scan_stage(
         candidate=candidate,
         task_kind="relaxed_scan",
         route_line=str(request.orca_route_line),
-        charge=int(request.charge),
-        multiplicity=int(request.multiplicity),
+        charge=strict_int(request.charge, field="charge"),
+        multiplicity=strict_int(request.multiplicity, field="multiplicity", minimum=1),
         max_cores=int(request.max_cores),
         max_memory_gb=int(request.max_memory_gb),
         priority=int(request.priority),
@@ -335,8 +338,8 @@ def _scan_ts_template_request(
             "orca_optts_route_line": str(request.orca_optts_route_line),
             "scan_coordinate": str(request.scan_coordinate),
             "barrier_threshold_kcal": float(request.barrier_threshold_kcal),
-            "charge": int(request.charge),
-            "multiplicity": int(request.multiplicity),
+            "charge": strict_int(request.charge, field="charge"),
+            "multiplicity": strict_int(request.multiplicity, field="multiplicity", minimum=1),
         },
         source_artifacts=(
             WorkflowArtifactRef(kind="input_xyz", path=copied_input.input_xyz, selected=True),

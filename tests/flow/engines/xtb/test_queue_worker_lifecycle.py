@@ -3,9 +3,28 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
+from orca_auto.core.queue import (
+    dequeue_next,
+    enqueue,
+    list_queue,
+    mark_cancelled,
+    mark_completed,
+    request_cancel,
+)
+from orca_auto.core.queue.engine.artifacts import matching_terminal_artifacts_for_entry
+from orca_auto.core.queue.generation import queue_entry_generation_token
+from orca_auto.core.queue.internal_engine import own_engine_accept_entry
+from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_COMPLETE,
+    QUEUE_RECORD_SYNC_KEY,
+    QUEUE_RECORD_SYNC_REPAIR_PENDING,
+    queue_record_sync_metadata,
+)
+from orca_auto.core.queue.types import QueueEntry
 from orca_auto.flow.engines.xtb import queue_runtime as queue_cmd
 from orca_auto.flow.engines.xtb import state as state_mod
 from tests.engine_artifact_helpers import artifact_payload
@@ -18,8 +37,881 @@ from tests.flow.engines.xtb.factories import (
 )
 
 
+def _append_and_return(items: Any, value: Any, result: Any) -> Any:
+    items.append(value)
+    return result
+
+
 def _dequeued_running_entry(entry: SimpleNamespace) -> SimpleNamespace:
     return SimpleNamespace(**{**vars(entry), "status": SimpleNamespace(value="running")})
+
+
+def test_worker_adopts_terminal_artifact_with_guarded_index_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "terminal-adoption"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    pending = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="job-adoption",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            "job_type": "opt",
+            "reaction_key": "rxn-adoption",
+        },
+    )
+    running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert running is not None
+    entry = replace(running, started_at="2026-04-20T00:00:00Z")
+    state_mod.write_state(
+        job_dir,
+        artifact_payload(
+            engine="xtb",
+            job_id="job-adoption",
+            queue_id=pending.queue_id,
+            app_name="orca_auto_xtb",
+            task_id="job-adoption",
+            generation=queue_entry_generation_token(entry),
+            job_dir=str(job_dir),
+            status="completed",
+            reason="completed",
+            primary_path=str(selected_xyz),
+            selected_xyz_path=str(selected_xyz),
+            updated_at="2026-04-20T00:00:01Z",
+            engine_payload={
+                "job_type": "opt",
+                "reaction_key": "rxn-adoption",
+                "input_summary": {},
+            },
+        ),
+    )
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        queue_cmd,
+        "upsert_job_record",
+        lambda _cfg, **kwargs: upserts.append(kwargs),
+    )
+
+    assert queue_cmd._adopt_terminal_artifacts(cfg, queue_root, entry)
+    assert upserts == [
+        {
+            "job_id": "job-adoption",
+            "status": "completed",
+            "job_dir": job_dir,
+            "job_type": "opt",
+            "selected_input_xyz": str(selected_xyz),
+            "reaction_key": "rxn-adoption",
+            "resource_request": {},
+            "resource_actual": {},
+        }
+    ]
+
+
+def test_terminal_adoption_finalizes_racing_cancel_consistently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "cancel-adoption"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    pending = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="cancel-adoption-job",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            "job_type": "opt",
+            "reaction_key": "cancel-adoption",
+        },
+    )
+    running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert running is not None
+    current_claim = replace(running, started_at="2026-04-20T00:00:00Z")
+    state_mod.write_state(
+        job_dir,
+        artifact_payload(
+            engine="xtb",
+            job_id=pending.task_id,
+            queue_id=pending.queue_id,
+            app_name=pending.app_name,
+            task_id=pending.task_id,
+            generation=queue_entry_generation_token(current_claim),
+            job_dir=str(job_dir),
+            status="completed",
+            primary_path=str(selected_xyz),
+            updated_at="2026-04-20T00:00:01Z",
+            engine_payload={
+                "job_type": "opt",
+                "reaction_key": "cancel-adoption",
+                "input_summary": {},
+            },
+        ),
+    )
+    assert request_cancel(queue_root, pending.queue_id, expected_entry=running) is not None
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+
+    assert not queue_cmd._adopt_terminal_artifacts(cfg, queue_root, current_claim)
+
+    [cancelled] = list_queue(queue_root)
+    assert cancelled.status.value == "cancelled"
+    assert cancelled.cancel_requested is False
+    assert [row["status"] for row in upserts] == ["cancelled"]
+    persisted_state = state_mod.load_state(job_dir)
+    persisted_report = state_mod.load_report_json(job_dir)
+    assert persisted_state is not None
+    assert persisted_report is not None
+    assert persisted_state["status"]["state"] == "cancelled"
+    assert persisted_report["status"]["state"] == "cancelled"
+    assert "Status: `cancelled`" in (job_dir / state_mod.REPORT_MD_FILE_NAME).read_text(
+        encoding="utf-8"
+    )
+
+
+def test_worker_repairs_own_publication_and_ignores_foreign_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "repair-publication"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    publication = queue_record_sync_metadata(
+        QUEUE_RECORD_SYNC_REPAIR_PENDING,
+        token="xtb-repair-token",
+        owner_pid=0,
+    )
+    own = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="xtb-repair-job",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            "job_type": "opt",
+            "reaction_key": "repair",
+            "resource_request": {},
+            **publication,
+        },
+    )
+    foreign = enqueue(
+        queue_root,
+        app_name="orca_auto_orca",
+        task_id="orca-foreign-job",
+        task_kind="orca_run_inp",
+        engine="orca",
+        metadata={"reaction_dir": str(queue_root / "foreign"), **publication},
+    )
+    recorded: list[str] = []
+
+    def record_queued(_cfg: object, _submission: object, entry: Any) -> bool:
+        recorded.append(str(entry.task_id))
+        return True
+
+    monkeypatch.setattr(
+        queue_cmd,
+        "_record_queued_submission",
+        record_queued,
+    )
+
+    assert queue_cmd._repair_xtb_queue_publications(SimpleNamespace(cfg=cfg))
+
+    rows = {entry.queue_id: entry for entry in list_queue(queue_root)}
+    assert recorded == [own.task_id]
+    assert rows[own.queue_id].metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+    assert (
+        rows[foreign.queue_id].metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
+    )
+    claimed = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert claimed is not None and claimed.queue_id == own.queue_id
+
+
+def test_terminal_adoption_rejects_foreign_artifact_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "foreign-artifact"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    entry = _make_entry(
+        job_dir,
+        selected_xyz,
+        queue_id="queue-current",
+        job_id="job-current",
+        job_type="opt",
+    )
+    state_mod.write_state(
+        job_dir,
+        artifact_payload(
+            engine="crest",
+            job_id="job-current",
+            queue_id="queue-current",
+            app_name="orca_auto_crest",
+            task_id="job-current",
+            job_dir=str(job_dir),
+            status="completed",
+            primary_path=str(selected_xyz),
+        ),
+    )
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+
+    assert not queue_cmd._adopt_terminal_artifacts(cfg, queue_root, entry)
+    assert upserts == []
+
+
+def test_terminal_adoption_uses_exact_state_when_report_is_stale(tmp_path: Path) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "stale-report"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    pending = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="job-current",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            "job_type": "opt",
+            "reaction_key": "current",
+        },
+    )
+    running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert running is not None
+    current_claim = replace(running, started_at="2026-07-13T01:00:00+00:00")
+    state_mod.write_state(
+        job_dir,
+        artifact_payload(
+            engine="xtb",
+            job_id=pending.task_id,
+            queue_id=pending.queue_id,
+            app_name=pending.app_name,
+            task_id=pending.task_id,
+            generation=queue_entry_generation_token(current_claim),
+            job_dir=str(job_dir),
+            status="completed",
+            reason="current_completed",
+            primary_path=str(selected_xyz),
+            updated_at="2026-07-13T02:00:00+00:00",
+            engine_payload={"job_type": "opt", "reaction_key": "current", "input_summary": {}},
+        ),
+    )
+    state_mod.write_report_json(
+        job_dir,
+        artifact_payload(
+            engine="xtb",
+            job_id=pending.task_id,
+            queue_id="stale-queue",
+            app_name=pending.app_name,
+            task_id=pending.task_id,
+            generation=queue_entry_generation_token(current_claim),
+            status="failed",
+            reason="stale_failed",
+            primary_path=str(selected_xyz),
+            engine_payload={"job_type": "opt", "reaction_key": "stale"},
+        ),
+    )
+
+    assert queue_cmd._adopt_terminal_artifacts(cfg, queue_root, current_claim)
+    [terminal] = list_queue(queue_root)
+    assert terminal.status.value == "completed"
+    assert terminal.error == ""
+
+
+@pytest.mark.parametrize(
+    ("report_updated_at", "expected_adopted"),
+    [
+        ("", False),
+        ("not-a-timestamp", False),
+        ("2026-07-13T01:59:59+00:00", False),
+        ("2026-07-13T02:00:00+00:00", True),
+        ("2026-07-13T02:00:01+00:00", True),
+    ],
+)
+def test_report_only_terminal_adoption_requires_timestamp_during_current_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    report_updated_at: str,
+    expected_adopted: bool,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "report-only"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    pending = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="report-only-job",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            "job_type": "opt",
+            "reaction_key": "report-only",
+        },
+    )
+    running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert running is not None
+    current_claim = replace(running, started_at="2026-07-13T02:00:00+00:00")
+    state_mod.write_report_json(
+        job_dir,
+        artifact_payload(
+            engine="xtb",
+            job_id=pending.task_id,
+            queue_id=pending.queue_id,
+            app_name=pending.app_name,
+            task_id=pending.task_id,
+            generation=queue_entry_generation_token(current_claim),
+            job_dir=str(job_dir),
+            status="completed",
+            reason="report_only_completed",
+            primary_path=str(selected_xyz),
+            updated_at=report_updated_at,
+            engine_payload={
+                "job_type": "opt",
+                "reaction_key": "report-only",
+                "input_summary": {},
+            },
+        ),
+    )
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+
+    assert queue_cmd._adopt_terminal_artifacts(cfg, queue_root, current_claim) is expected_adopted
+    [persisted] = list_queue(queue_root)
+    assert persisted.status.value == ("completed" if expected_adopted else "running")
+    assert bool(upserts) is expected_adopted
+
+
+@pytest.mark.parametrize(
+    "report_updated_at",
+    ["2026-07-13T01:00:00+00:00", "2026-07-13T02:00:00+00:00", ""],
+)
+def test_terminal_adoption_uses_state_when_report_is_not_provably_newer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    report_updated_at: str,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "same-status-stale-report"
+    job_dir.mkdir()
+    current_xyz = job_dir / "current.xyz"
+    stale_xyz = job_dir / "stale.xyz"
+    for path in (current_xyz, stale_xyz):
+        path.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    pending = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="same-status-job",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(current_xyz),
+            "job_type": "opt",
+            "reaction_key": "current",
+        },
+    )
+    running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert running is not None
+    current_claim = replace(running, started_at="2026-07-13T01:00:00+00:00")
+    common_fields: dict[str, Any] = {
+        "engine": "xtb",
+        "job_id": pending.task_id,
+        "queue_id": pending.queue_id,
+        "app_name": pending.app_name,
+        "task_id": pending.task_id,
+        "generation": queue_entry_generation_token(current_claim),
+        "status": "completed",
+    }
+    state_mod.write_state(
+        job_dir,
+        artifact_payload(
+            **common_fields,
+            job_dir=str(job_dir),
+            reason="current_completed",
+            primary_path=str(current_xyz),
+            updated_at="2026-07-13T02:00:00+00:00",
+            engine_payload={"job_type": "opt", "reaction_key": "current", "input_summary": {}},
+        ),
+    )
+    state_mod.write_report_json(
+        job_dir,
+        artifact_payload(
+            **common_fields,
+            reason="stale_completed",
+            primary_path=str(stale_xyz),
+            updated_at=report_updated_at,
+            engine_payload={"job_type": "sp", "reaction_key": "stale", "input_summary": {}},
+        ),
+    )
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+
+    assert queue_cmd._adopt_terminal_artifacts(cfg, queue_root, current_claim)
+    assert upserts[0]["selected_input_xyz"] == str(current_xyz)
+    assert upserts[0]["job_type"] == "opt"
+    assert upserts[0]["reaction_key"] == "current"
+    repaired_state = state_mod.load_state(job_dir)
+    repaired_report = state_mod.load_report_json(job_dir)
+    assert repaired_state is not None and repaired_report is not None
+    assert repaired_state["input"]["primary_path"] == str(current_xyz)
+    assert repaired_report["input"]["primary_path"] == str(current_xyz)
+    assert repaired_report["engine_payload"]["job_type"] == "opt"
+    assert repaired_report["status"]["reason"] == "completed"
+
+
+def test_terminal_adoption_uses_provably_newer_same_status_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "newer-report"
+    job_dir.mkdir()
+    stale_xyz = job_dir / "stale.xyz"
+    current_xyz = job_dir / "current.xyz"
+    for path in (stale_xyz, current_xyz):
+        path.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    pending = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="newer-report-job",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(current_xyz),
+            "job_type": "opt",
+            "reaction_key": "current",
+        },
+    )
+    running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert running is not None
+    current_claim = replace(running, started_at="2026-07-13T01:00:00+00:00")
+    common_fields: dict[str, Any] = {
+        "engine": "xtb",
+        "job_id": pending.task_id,
+        "queue_id": pending.queue_id,
+        "app_name": pending.app_name,
+        "task_id": pending.task_id,
+        "generation": queue_entry_generation_token(current_claim),
+        "status": "completed",
+    }
+    state_mod.write_state(
+        job_dir,
+        artifact_payload(
+            **common_fields,
+            job_dir=str(job_dir),
+            reason="stale_completed",
+            primary_path=str(stale_xyz),
+            updated_at="2026-07-13T01:00:00+00:00",
+            engine_payload={"job_type": "sp", "reaction_key": "stale", "input_summary": {}},
+        ),
+    )
+    state_mod.write_report_json(
+        job_dir,
+        artifact_payload(
+            **common_fields,
+            reason="current_completed",
+            primary_path=str(current_xyz),
+            updated_at="2026-07-13T02:00:00+00:00",
+            engine_payload={"job_type": "opt", "reaction_key": "current", "input_summary": {}},
+        ),
+    )
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+
+    assert queue_cmd._adopt_terminal_artifacts(cfg, queue_root, current_claim)
+    assert upserts[0]["selected_input_xyz"] == str(current_xyz)
+    assert upserts[0]["job_type"] == "opt"
+    assert upserts[0]["reaction_key"] == "current"
+
+
+def test_terminal_adoption_rebuilds_foreign_state_from_exact_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "foreign-state-current-report"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "current.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    pending = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="current-report-job",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            "job_type": "opt",
+            "reaction_key": "current",
+        },
+    )
+    running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert running is not None
+    state_mod.write_state(
+        job_dir,
+        artifact_payload(
+            engine="xtb",
+            job_id="foreign-job",
+            queue_id="foreign-queue",
+            app_name=pending.app_name,
+            task_id="foreign-job",
+            job_dir=str(job_dir),
+            status="failed",
+            primary_path=str(selected_xyz),
+            updated_at="2999-01-01T00:00:00+00:00",
+            engine_payload={"job_type": "opt", "reaction_key": "foreign"},
+        ),
+    )
+    state_mod.write_report_json(
+        job_dir,
+        artifact_payload(
+            engine="xtb",
+            job_id=pending.task_id,
+            queue_id=pending.queue_id,
+            app_name=pending.app_name,
+            task_id=pending.task_id,
+            generation=queue_entry_generation_token(running),
+            status="completed",
+            reason="current_completed",
+            primary_path=str(selected_xyz),
+            updated_at="2999-01-01T00:00:01+00:00",
+            engine_payload={"job_type": "opt", "reaction_key": "current", "input_summary": {}},
+        ),
+    )
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda *_args, **_kwargs: None)
+
+    assert queue_cmd._adopt_terminal_artifacts(cfg, queue_root, running)
+    state = state_mod.load_state(job_dir)
+    report = state_mod.load_report_json(job_dir)
+    assert state is not None and report is not None
+    assert state["job"]["id"] == pending.task_id
+    assert state["job"]["queue_id"] == pending.queue_id
+    assert report["job"]["id"] == pending.task_id
+    assert state["status"]["state"] == report["status"]["state"] == "completed"
+    assert "Status: `completed`" in (job_dir / state_mod.REPORT_MD_FILE_NAME).read_text(
+        encoding="utf-8"
+    )
+
+
+def test_same_timestamp_terminal_pair_preserves_report_command(tmp_path: Path) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "same-timestamp-command"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    pending = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="same-timestamp-job",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            "job_type": "opt",
+            "reaction_key": "same-timestamp",
+        },
+    )
+    running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert running is not None
+    current_claim = replace(running, started_at="2026-07-13T01:00:00+00:00")
+    common: dict[str, Any] = {
+        "engine": "xtb",
+        "job_id": pending.task_id,
+        "queue_id": pending.queue_id,
+        "app_name": pending.app_name,
+        "task_id": pending.task_id,
+        "generation": queue_entry_generation_token(current_claim),
+        "status": "completed",
+        "reason": "completed",
+        "exit_code": 0,
+        "primary_path": str(selected_xyz),
+        "updated_at": "2026-07-13T02:00:00+00:00",
+    }
+    engine_payload = {
+        "job_type": "opt",
+        "reaction_key": "same-timestamp",
+        "input_summary": {},
+    }
+    state_mod.write_state(
+        job_dir,
+        artifact_payload(**common, job_dir=str(job_dir), engine_payload=engine_payload),
+    )
+    state_mod.write_report_json(
+        job_dir,
+        artifact_payload(
+            **common,
+            engine_payload={**engine_payload, "command": ["xtb", str(selected_xyz), "--opt"]},
+        ),
+    )
+
+    assert queue_cmd._adopt_terminal_artifacts(cfg, queue_root, current_claim)
+    report = state_mod.load_report_json(job_dir)
+    assert report is not None
+    assert report["engine_payload"]["command"] == ["xtb", str(selected_xyz), "--opt"]
+
+
+def test_failed_terminal_repair_preserves_zero_exit_code(tmp_path: Path) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "failed-exit-zero"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    pending = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="failed-exit-zero-job",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            "job_type": "opt",
+            "reaction_key": "failed-exit-zero",
+        },
+    )
+    running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert running is not None
+    current_claim = replace(running, started_at="2026-07-13T01:00:00+00:00")
+    state_mod.write_state(
+        job_dir,
+        artifact_payload(
+            engine="xtb",
+            job_id=pending.task_id,
+            queue_id=pending.queue_id,
+            app_name=pending.app_name,
+            task_id=pending.task_id,
+            generation=queue_entry_generation_token(current_claim),
+            job_dir=str(job_dir),
+            status="failed",
+            reason="scientific_validation_failed",
+            exit_code=0,
+            primary_path=str(selected_xyz),
+            updated_at="2026-07-13T02:00:00+00:00",
+            engine_payload={
+                "job_type": "opt",
+                "reaction_key": "failed-exit-zero",
+                "input_summary": {},
+            },
+        ),
+    )
+
+    assert queue_cmd._adopt_terminal_artifacts(cfg, queue_root, current_claim)
+    report = state_mod.load_report_json(job_dir)
+    assert report is not None
+    assert report["status"] == {
+        "state": "failed",
+        "reason": "scientific_validation_failed",
+        "exit_code": 0,
+    }
+
+
+def test_terminal_without_exact_artifacts_records_repair_blocker(tmp_path: Path) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "missing-terminal-artifacts"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="missing-artifacts-job",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            "job_type": "opt",
+            "reaction_key": "missing-artifacts",
+        },
+    )
+    running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert running is not None
+    terminal = mark_completed(queue_root, running.queue_id, expected_entry=running)
+    assert terminal is not None
+
+    assert not queue_cmd._adopt_terminal_artifacts(cfg, queue_root, terminal)
+    [persisted] = list_queue(queue_root)
+    assert persisted.status.value == "completed"
+    assert (
+        persisted.metadata["terminal_repair_blocked_reason"] == "terminal_artifacts_unrecoverable"
+    )
+
+
+def test_terminal_artifact_pair_older_than_current_claim_is_rejected(tmp_path: Path) -> None:
+    job_dir = tmp_path / "older-terminal-pair"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    entry = _make_entry(
+        job_dir,
+        selected_xyz,
+        queue_id="older-pair-queue",
+        job_id="older-pair-job",
+        status="running",
+    )
+    entry.started_at = "2026-07-13T03:00:00+00:00"
+    common_fields: dict[str, Any] = {
+        "engine": "xtb",
+        "job_id": entry.task_id,
+        "queue_id": entry.queue_id,
+        "app_name": entry.app_name,
+        "task_id": entry.task_id,
+        "job_dir": str(job_dir),
+        "status": "completed",
+        "primary_path": str(selected_xyz),
+    }
+
+    matched = matching_terminal_artifacts_for_entry(
+        state=artifact_payload(
+            **common_fields,
+            updated_at="2026-07-13T01:00:00+00:00",
+        ),
+        report=artifact_payload(
+            **common_fields,
+            updated_at="2026-07-13T02:00:00+00:00",
+        ),
+        entry=cast(QueueEntry, entry),
+        engine="xtb",
+        job_dir=job_dir,
+    )
+
+    assert matched is None
+
+
+def test_terminal_state_only_older_than_current_claim_is_rejected(tmp_path: Path) -> None:
+    job_dir = tmp_path / "older-terminal-state"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    entry = _make_entry(
+        job_dir,
+        selected_xyz,
+        queue_id="older-state-queue",
+        job_id="older-state-job",
+        status="running",
+    )
+    entry.started_at = "2026-07-13T03:00:00+00:00"
+    state = artifact_payload(
+        engine="xtb",
+        job_id=entry.task_id,
+        queue_id=entry.queue_id,
+        app_name=entry.app_name,
+        task_id=entry.task_id,
+        job_dir=str(job_dir),
+        status="completed",
+        primary_path=str(selected_xyz),
+        updated_at="2026-07-13T02:00:00+00:00",
+    )
+
+    matched = matching_terminal_artifacts_for_entry(
+        state=state,
+        report={},
+        entry=cast(QueueEntry, entry),
+        engine="xtb",
+        job_dir=job_dir,
+    )
+
+    assert matched is None
+
+
+def test_terminal_adoption_rejects_report_older_than_exact_running_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "running-state-stale-report"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    pending = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="job-current",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            "job_type": "opt",
+            "reaction_key": "current",
+        },
+    )
+    running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert running is not None
+    common_fields: dict[str, Any] = {
+        "engine": "xtb",
+        "job_id": pending.task_id,
+        "queue_id": pending.queue_id,
+        "app_name": pending.app_name,
+        "task_id": pending.task_id,
+        "primary_path": str(selected_xyz),
+        "engine_payload": {"job_type": "opt", "reaction_key": "current"},
+    }
+    state_mod.write_state(
+        job_dir,
+        artifact_payload(
+            **common_fields,
+            job_dir=str(job_dir),
+            status="running",
+            reason="current_attempt",
+        ),
+    )
+    state_mod.write_report_json(
+        job_dir,
+        artifact_payload(
+            **common_fields,
+            status="completed",
+            reason="stale_attempt",
+        ),
+    )
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+
+    assert not queue_cmd._adopt_terminal_artifacts(cfg, queue_root, running)
+    [unchanged] = list_queue(queue_root)
+    assert unchanged.status.value == "running"
+    assert upserts == []
 
 
 def test_queue_worker_parser_has_no_organize_flags() -> None:
@@ -236,7 +1128,13 @@ def test_queue_worker_shutdown_requeues_running_entries(
         lambda proc: hard_terminated.append(proc.pid),
     )
     monkeypatch.setattr(
-        queue_cmd, "requeue_running_entry", lambda root, queue_id: requeued.append((root, queue_id))
+        queue_cmd,
+        "requeue_running_entry",
+        lambda root, queue_id, **_kwargs: _append_and_return(
+            requeued,
+            (root, queue_id),
+            entry,
+        ),
     )
     monkeypatch.setattr(queue_cmd, "_queue_entry_by_id", lambda _root, _queue_id: entry)
     monkeypatch.setattr(
@@ -379,7 +1277,13 @@ def test_queue_worker_reconcile_worker_state_requeues_stale_running_entries(
     monkeypatch.setattr(queue_cmd, "list_queue", lambda _root: [entry])
     monkeypatch.setattr(queue_cmd, "_pid_is_alive", lambda _pid: False)
     monkeypatch.setattr(
-        queue_cmd, "requeue_running_entry", lambda root, queue_id: requeued.append((root, queue_id))
+        queue_cmd,
+        "requeue_running_entry",
+        lambda root, queue_id, **_kwargs: _append_and_return(
+            requeued,
+            (root, queue_id),
+            entry,
+        ),
     )
 
     worker = queue_cmd.QueueWorker(cfg, config_path="/tmp/cfg.yaml")
@@ -431,3 +1335,171 @@ def test_cmd_queue_worker_constructs_xtb_worker_without_organize_flags(
     assert seen[0] == ("init", "/tmp/default-orca_auto.yaml")
     assert exit_code == 23
     assert seen[-1] == ("run", "")
+
+
+def test_terminal_reconcile_repairs_partial_cancelled_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "partial-terminal-repair"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    pending = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="partial-terminal-job",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            "job_type": "opt",
+            "reaction_key": "partial",
+        },
+    )
+    running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert running is not None
+    cancelled = mark_cancelled(
+        queue_root,
+        pending.queue_id,
+        error="cancel_requested",
+        expected_entry=running,
+    )
+    assert cancelled is not None
+    common_fields: dict[str, Any] = {
+        "engine": "xtb",
+        "job_id": pending.task_id,
+        "queue_id": pending.queue_id,
+        "app_name": pending.app_name,
+        "task_id": pending.task_id,
+        "generation": queue_entry_generation_token(cancelled),
+        "primary_path": str(selected_xyz),
+        "updated_at": "2999-01-01T00:00:00+00:00",
+        "engine_payload": {"job_type": "sp", "reaction_key": "stale"},
+    }
+    state_mod.write_state(
+        job_dir,
+        artifact_payload(
+            **common_fields,
+            job_dir=str(job_dir),
+            status="cancelled",
+            reason="cancel_requested",
+        ),
+    )
+    state_mod.write_report_json(
+        job_dir,
+        artifact_payload(**common_fields, status="completed", reason="completed"),
+    )
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        queue_cmd,
+        "queue_entries_with_roots",
+        lambda _cfg: [(queue_root, list_queue(queue_root)[0])],
+    )
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+    monkeypatch.setattr(
+        queue_cmd,
+        "resolve_job_location_for_cfg",
+        lambda _cfg, _job_id: (
+            queue_root,
+            SimpleNamespace(status="cancelled", original_run_dir=str(job_dir)),
+        ),
+    )
+
+    worker = SimpleNamespace(cfg=cfg)
+    queue_cmd._sync_terminal_running_entries(worker)
+
+    state = state_mod.load_state(job_dir)
+    report = state_mod.load_report_json(job_dir)
+    assert state is not None and report is not None
+    assert state["status"]["state"] == report["status"]["state"] == "cancelled"
+    assert state["engine_payload"]["job_type"] == "opt"
+    assert report["engine_payload"]["reaction_key"] == "partial"
+    assert list_queue(queue_root)[0].metadata["reaction_key"] == "partial"
+    assert upserts[-1]["status"] == "cancelled"
+
+    queue_cmd._sync_terminal_running_entries(worker)
+
+    assert len(upserts) == 1
+    assert "Status: `cancelled`" in (job_dir / state_mod.REPORT_MD_FILE_NAME).read_text(
+        encoding="utf-8"
+    )
+
+
+def test_terminal_reconcile_finalizes_direct_pending_cancel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "pending-cancel-repair"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    pending = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="pending-cancel-job",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            "job_type": "opt",
+            "reaction_key": "pending-cancel",
+        },
+    )
+    state_mod.write_state(
+        job_dir,
+        artifact_payload(
+            engine="xtb",
+            job_id=pending.task_id,
+            queue_id=pending.queue_id,
+            app_name=pending.app_name,
+            task_id=pending.task_id,
+            generation=queue_entry_generation_token(pending),
+            job_dir=str(job_dir),
+            status="queued",
+            reason="queued",
+            primary_path=str(selected_xyz),
+            updated_at="2999-01-01T00:00:00+00:00",
+            engine_payload={"job_type": "opt", "reaction_key": "pending-cancel"},
+        ),
+    )
+    cancelled = request_cancel(queue_root, pending.queue_id, expected_entry=pending)
+    assert cancelled is not None and cancelled.status.value == "cancelled"
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        queue_cmd,
+        "queue_entries_with_roots",
+        lambda _cfg: [(queue_root, list_queue(queue_root)[0])],
+    )
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+    monkeypatch.setattr(
+        queue_cmd,
+        "resolve_job_location_for_cfg",
+        lambda _cfg, _job_id: (
+            queue_root,
+            SimpleNamespace(status="cancelled", original_run_dir=str(job_dir)),
+        ),
+    )
+
+    worker = SimpleNamespace(cfg=cfg)
+    queue_cmd._sync_terminal_running_entries(worker)
+
+    [persisted] = list_queue(queue_root)
+    state = state_mod.load_state(job_dir)
+    report = state_mod.load_report_json(job_dir)
+    assert persisted.status.value == "cancelled"
+    assert persisted.cancel_requested is False
+    assert persisted.error == "cancel_requested"
+    assert state is not None and report is not None
+    assert state["status"]["state"] == report["status"]["state"] == "cancelled"
+    assert upserts[-1]["status"] == "cancelled"
+
+    queue_cmd._sync_terminal_running_entries(worker)
+
+    assert len(upserts) == 1

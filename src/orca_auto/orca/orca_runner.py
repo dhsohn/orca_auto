@@ -6,11 +6,17 @@ import os
 import signal
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType, SimpleNamespace, TracebackType
 from typing import Any
 
+from orca_auto.core.engine_process import (
+    atomic_write_confined_bytes,
+    open_confined_log,
+    require_confined_regular_file,
+)
+from orca_auto.core.engine_runner import confined_output_identity, executable_identity
 from orca_auto.core.queue.cancellable import (
     ProcessCleanupError,
     retain_process_ownership_until_exit,
@@ -134,6 +140,11 @@ class ShutdownSignalGuard:
 class RunResult:
     out_path: str
     return_code: int
+    command: tuple[str, ...] = ()
+    input_identity: dict[str, Any] = field(default_factory=dict)
+    executable_identity: dict[str, Any] = field(default_factory=dict)
+    output_identity: dict[str, Any] = field(default_factory=dict)
+    execution_provenance: dict[str, Any] = field(default_factory=dict)
 
 
 class OrcaRunner:
@@ -142,6 +153,7 @@ class OrcaRunner:
         self._prepare_running_job: Callable[[], None] | None = None
         self._register_running_job: Callable[[Any | None], None] | None = None
         self._shutdown_requested: Callable[[], bool] | None = None
+        self._bound_executable_identity: dict[str, Any] = {}
 
     def set_running_job_registrar(
         self,
@@ -154,6 +166,9 @@ class OrcaRunner:
 
     def set_shutdown_requested(self, callback: Callable[[], bool]) -> None:
         self._shutdown_requested = callback
+
+    def set_executable_identity(self, identity: dict[str, Any]) -> None:
+        self._bound_executable_identity = dict(identity)
 
     def _terminate_subprocess_tree(self, proc: subprocess.Popen) -> bool:
         """Terminate the ORCA process group; True only when it is confirmed gone."""
@@ -201,20 +216,30 @@ class OrcaRunner:
         """Ensure a trailing newline so ORCA's Fortran parser reads the last line correctly."""
         data = path.read_bytes()
         if data and not data.endswith(b"\n"):
-            with path.open("ab") as fh:
-                fh.write(b"\n")
+            atomic_write_confined_bytes(
+                path.parent,
+                path,
+                data + b"\n",
+                label="ORCA normalized input",
+            )
 
     def run(self, inp_path: Path) -> RunResult:
-        inp = inp_path.resolve()
+        inp = require_confined_regular_file(
+            inp_path.parent,
+            inp_path,
+            label="ORCA selected input",
+        )
         self._ensure_trailing_newline(inp)
         out = inp.with_suffix(".out")
         cwd = str(inp.parent)
 
         command: list[str] = [self.orca_executable, inp.name]
+        input_identity = executable_identity(inp)
+        bound_executable_identity = dict(self._bound_executable_identity)
         logger.info("Running ORCA: %s in %s", command, cwd)
 
         return_code = 1
-        with out.open("w", encoding="utf-8") as handle:
+        with open_confined_log(inp.parent, out, label="ORCA output") as handle:
             with ShutdownSignalGuard() as shutdown_guard:
 
                 def _raise_if_shutdown_requested() -> None:
@@ -354,7 +379,17 @@ class OrcaRunner:
             # delivered only after ownership has been released. A worker's restored
             # handler may also have set the polling callback during handler restore.
             _raise_if_shutdown_requested()
-        return RunResult(out_path=str(out), return_code=return_code)
+        if executable_identity(inp) != input_identity:
+            raise RuntimeError(f"ORCA execution input changed while it was running: {inp}")
+        output_identity = confined_output_identity(inp.parent, out)
+        return RunResult(
+            out_path=str(out),
+            return_code=return_code,
+            command=tuple(command),
+            input_identity=input_identity,
+            executable_identity=bound_executable_identity,
+            output_identity=output_identity,
+        )
 
     @staticmethod
     def _clear_process_record_if_group_gone(

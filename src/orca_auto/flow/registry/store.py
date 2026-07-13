@@ -10,6 +10,7 @@ from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 from orca_auto.core.utils import (
     atomic_write_json,
     file_lock,
+    fsync_directory,
     now_utc_iso,
 )
 from orca_auto.core.utils import (
@@ -33,6 +34,7 @@ from . import _markers as _markers
 WORKFLOW_REGISTRY_FILE_NAME = "workflow_registry.json"
 WORKFLOW_REGISTRY_LOCK_NAME = "workflow_registry.lock"
 WORKFLOW_REGISTRY_CLEARED_FILE_NAME = "workflow_registry_cleared.json"
+_WORKFLOW_CREATION_MARKER = ".orca_auto_workflow_creation.json"
 _TERMINAL_WORKFLOW_STATUSES = frozenset(
     {"completed", "failed", "cancelled", "cancel_failed", "submission_failed"}
 )
@@ -404,6 +406,29 @@ def list_workflow_registry(
     resolved_root = Path(workflow_root).expanduser().resolve()
     resolved_root.mkdir(parents=True, exist_ok=True)
     path = _registry_path(resolved_root)
+    published_creation_markers = [
+        workspace / _WORKFLOW_CREATION_MARKER
+        for workspace in resolved_root.iterdir()
+        if not workspace.is_symlink()
+        and workspace.is_dir()
+        and (workspace / "workflow.json").is_file()
+        and (workspace / _WORKFLOW_CREATION_MARKER).is_file()
+    ]
+    if published_creation_markers:
+        repaired_records = (reindex_fn or reindex_workflow_registry)(resolved_root)
+        repaired_workspaces = {
+            Path(record.workspace_dir).expanduser().resolve() for record in repaired_records
+        }
+        for marker in published_creation_markers:
+            if marker.parent.resolve() not in repaired_workspaces:
+                continue
+            try:
+                marker.unlink()
+            except FileNotFoundError:
+                pass
+            else:
+                fsync_directory(marker.parent)
+        return repaired_records
     with file_lock(_registry_lock_path(resolved_root)):
         if path.exists():
             return _load_records(resolved_root)

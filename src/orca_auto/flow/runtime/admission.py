@@ -13,6 +13,11 @@ from orca_auto.core.config.files import (
     mapping_section,
     scheduler_admission_root,
     usable_runs_root_from_mapping,
+    validate_shared_config_sections,
+)
+from orca_auto.core.engine_catalog import (
+    engine_catalog,
+    find_engine_catalog_entry,
 )
 
 from . import _common as _runtime_common
@@ -40,6 +45,7 @@ def submission_admission_limit_from_config(
 ) -> int | None:
     try:
         _, raw = load_yaml_mapping(config_path)
+        validate_shared_config_sections(raw)
     except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
         LOGGER.debug(
             "submission_admission_limit_config_load_failed: config_path=%s error=%s",
@@ -65,6 +71,7 @@ def _submission_admission_root_from_config(
 ) -> Path | None:
     try:
         _, raw = load_yaml_mapping(config_path)
+        validate_shared_config_sections(raw)
     except YAML_CONFIG_LOAD_EXCEPTIONS:
         return None
 
@@ -74,7 +81,8 @@ def _submission_admission_root_from_config(
     # counts slots in a store the workers themselves would reject.
     runs_root = usable_runs_root_from_mapping(raw)
 
-    if engine in {"xtb", "crest"}:
+    catalog_entry = find_engine_catalog_entry(engine)
+    if catalog_entry is not None and catalog_entry.workflow_stage_role == "workflow-stage":
         if not runs_root:
             return None
         return scheduler_admission_root(
@@ -101,6 +109,7 @@ def submission_admission_has_capacity(
 ) -> bool | None:
     try:
         _, raw = load_yaml_mapping(config_path)
+        validate_shared_config_sections(raw)
     except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
         LOGGER.debug(
             "submission_admission_capacity_config_load_failed: config_path=%s error=%s",
@@ -114,7 +123,25 @@ def submission_admission_has_capacity(
     if limit is None:
         return False if admission_configured else None
     admission_root: Path | None = None
-    for engine in (None, "xtb", "crest", "orca"):
+    managed_entries = tuple(entry for entry in engine_catalog() if entry.managed_admission)
+    workflow_stage_ids = {
+        entry.engine_id
+        for entry in managed_entries
+        if entry.workflow_stage_role == "workflow-stage"
+    }
+    admission_engine_ids = (
+        *(
+            entry.engine_id
+            for entry in managed_entries
+            if entry.workflow_stage_role == "workflow-stage"
+        ),
+        *(
+            entry.engine_id
+            for entry in managed_entries
+            if entry.engine_id not in workflow_stage_ids
+        ),
+    )
+    for engine in (None, *admission_engine_ids):
         try:
             if engine_runtime_paths_fn is None:
                 candidate = _submission_admission_root_from_config(config_path, engine=engine)

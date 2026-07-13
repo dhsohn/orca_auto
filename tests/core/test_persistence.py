@@ -28,9 +28,16 @@ def test_now_utc_iso_returns_utc_isoformat(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_timestamped_token_uses_timestamp_and_token_hex(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(persistence, "datetime", _FixedDatetime)
-    monkeypatch.setattr(persistence, "token_hex", lambda n: "abc123")
+    requested_bytes: list[int] = []
+
+    def fake_token_hex(token_bytes: int) -> str:
+        requested_bytes.append(token_bytes)
+        return "abc123"
+
+    monkeypatch.setattr(persistence, "token_hex", fake_token_hex)
 
     assert persistence.timestamped_token("job") == "job_20260419_123456_abc123"
+    assert requested_bytes == [16]
 
 
 @pytest.mark.parametrize(
@@ -111,6 +118,16 @@ def test_atomic_write_json_success_path(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == (
         '{\n  "b": 1,\n  "a": [\n    1,\n    2\n  ],\n  "text": "caf\\u00e9"\n}'
     )
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_atomic_write_json_rejects_nonfinite_numbers(tmp_path: Path, value: float) -> None:
+    path = tmp_path / "payload.json"
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        persistence.atomic_write_json(path, {"value": value})
+
+    assert not path.exists()
 
 
 def test_atomic_write_json_fsyncs_parent_dir_after_replace(

@@ -137,19 +137,84 @@ def test_workflow_workspace_rejects_existing_workflow_payload(tmp_path: Path) ->
         )
 
 
-def test_workflow_workspace_allows_existing_scaffold_without_payload(tmp_path: Path) -> None:
+def test_workflow_workspace_rejects_existing_scaffold_without_payload(tmp_path: Path) -> None:
     workspace_dir = tmp_path / "workflows" / "rxn.case-01"
     workspace_dir.mkdir(parents=True)
 
+    with pytest.raises(FileExistsError, match="workflow already exists"):
+        _workflow_workspace(
+            workflow_id="rxn.case-01",
+            workflow_root=tmp_path / "workflows",
+            default_id_prefix="wf_demo",
+            context=_workflow_context(),
+        )
+
+
+def test_workflow_workspace_reclaims_stale_owned_reservation(tmp_path: Path) -> None:
+    workflow_root = tmp_path / "workflows"
+    workspace_dir = workflow_root / "wf_stale"
+    workspace_dir.mkdir(parents=True)
+    (workspace_dir / ".orca_auto_workflow_creation.json").write_text(
+        '{"owner_pid": 999999999, "owner_process_start": "stale"}',
+        encoding="utf-8",
+    )
+    (workspace_dir / "stale.txt").write_text("stale", encoding="utf-8")
+
     workspace = _workflow_workspace(
-        workflow_id="rxn.case-01",
-        workflow_root=tmp_path / "workflows",
+        workflow_id="wf_stale",
+        workflow_root=workflow_root,
         default_id_prefix="wf_demo",
         context=_workflow_context(),
     )
 
-    assert workspace.workflow_id == "rxn.case-01"
     assert workspace.workspace_dir == workspace_dir.resolve()
+    assert not (workspace_dir / "stale.txt").exists()
+    assert (workspace_dir / ".orca_auto_workflow_creation.json").is_file()
+
+
+def test_workflow_workspace_rejects_second_live_reservation(tmp_path: Path) -> None:
+    workflow_root = tmp_path / "workflows"
+    _workflow_workspace(
+        workflow_id="wf_live",
+        workflow_root=workflow_root,
+        default_id_prefix="wf_demo",
+        context=_workflow_context(),
+    )
+
+    with pytest.raises(FileExistsError, match="workflow already exists"):
+        _workflow_workspace(
+            workflow_id="wf_live",
+            workflow_root=workflow_root,
+            default_id_prefix="wf_demo",
+            context=_workflow_context(),
+        )
+
+
+def test_workflow_workspace_cleans_staging_when_durable_mkdir_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    real_durable_mkdir = workflow_builder_module.durable_mkdir
+
+    def fail_after_staging_create(path: str | Path, **kwargs: Any) -> Path:
+        created = real_durable_mkdir(path, **kwargs)
+        if ".creating-" in Path(path).name:
+            raise PermissionError("injected directory fsync failure")
+        return created
+
+    monkeypatch.setattr(workflow_builder_module, "durable_mkdir", fail_after_staging_create)
+    workflow_root = tmp_path / "workflows"
+
+    with pytest.raises(PermissionError, match="injected"):
+        _workflow_workspace(
+            workflow_id="wf_fsync",
+            workflow_root=workflow_root,
+            default_id_prefix="wf_demo",
+            context=_workflow_context(),
+        )
+
+    assert not (workflow_root / "wf_fsync").exists()
+    assert not list(workflow_root.glob(".wf_fsync.creating-*"))
 
 
 def test_copy_reaction_inputs_uses_role_directories_and_reaction_key(tmp_path: Path) -> None:
@@ -289,7 +354,7 @@ def test_persist_workflow_writes_and_syncs_under_creation_lock(
         ),
     )
 
-    assert events == ["lock_enter", "write", "sync", "lock_exit"]
+    assert events == ["write", "sync"]
 
 
 def test_persist_workflow_rechecks_existing_payload_under_creation_lock(
@@ -322,26 +387,23 @@ def test_persist_workflow_rechecks_existing_payload_under_creation_lock(
         source_artifacts=(),
     )
 
-    with pytest.raises(FileExistsError, match="workflow already exists"):
-        _persist_workflow(
-            persistence_context=WorkflowPersistenceContext(
-                workflow_root_path=tmp_path / "workflows",
-                workspace_dir=workspace_dir,
-                workflow_id="wf_race",
-                template_name="conformer_screening",
-                source_job_id="",
-                source_job_type="raw_xyz",
-                reaction_key="mol",
-                requested_at="2026-05-29T00:00:00+00:00",
-            ),
-            request=request,
-            stages=[],
-            creation_context=_workflow_context(
-                write_workflow_payload_fn=lambda _workspace_dir, _payload: events.append("write"),
-                sync_workflow_registry_fn=lambda _root, _workspace_dir, _payload: events.append(
-                    "sync"
-                ),
-            ),
-        )
+    _persist_workflow(
+        persistence_context=WorkflowPersistenceContext(
+            workflow_root_path=tmp_path / "workflows",
+            workspace_dir=workspace_dir,
+            workflow_id="wf_race",
+            template_name="conformer_screening",
+            source_job_id="",
+            source_job_type="raw_xyz",
+            reaction_key="mol",
+            requested_at="2026-05-29T00:00:00+00:00",
+        ),
+        request=request,
+        stages=[],
+        creation_context=_workflow_context(
+            write_workflow_payload_fn=lambda _workspace_dir, _payload: events.append("write"),
+            sync_workflow_registry_fn=lambda _root, _workspace_dir, _payload: events.append("sync"),
+        ),
+    )
 
-    assert events == ["lock_enter", "lock_exit"]
+    assert events == ["write", "sync"]

@@ -219,10 +219,11 @@ def select_active_artifact_payload(
     if state and state_status in active_statuses:
         return state
 
-    report_job_id = normalize_text(report_payload.get("job_id"))
-    state_job_id = normalize_text(state_payload.get("job_id"))
-    if state and report_job_id and state_job_id and report_job_id != state_job_id:
-        return state
+    for identity_key in ("job_id", "queue_id", "task_id"):
+        report_identity = normalize_text(report_payload.get(identity_key))
+        state_identity = normalize_text(state_payload.get(identity_key))
+        if state and report_identity and state_identity and report_identity != state_identity:
+            return state
 
     return report or state
 
@@ -241,6 +242,8 @@ def flatten_engine_artifact_payload(payload: dict[str, Any]) -> dict[str, Any]:
     flattened = dict(engine_payload)
     flattened.setdefault("job_id", normalize_text(job.get("id")))
     flattened.setdefault("queue_id", normalize_text(job.get("queue_id")))
+    flattened.setdefault("app_name", normalize_text(job.get("app_name")))
+    flattened.setdefault("task_id", normalize_text(job.get("task_id")))
     flattened.setdefault("job_dir", normalize_text(job.get("dir")))
     flattened.setdefault("status", normalize_text(status.get("state")))
     flattened.setdefault("reason", normalize_text(status.get("reason")))
@@ -276,6 +279,30 @@ def validate_record_app(
         )
 
 
+def validate_record_artifact_identity(
+    record: JobLocationRecord | None,
+    payload: dict[str, Any],
+    *,
+    label: str,
+) -> None:
+    if record is None:
+        return
+    record_job_id = normalize_text(record.job_id)
+    payload_job_id = normalize_text(payload.get("job_id"))
+    if record_job_id and payload_job_id != record_job_id:
+        raise ValueError(
+            f"{label} artifact job_id does not match its index record: "
+            f"{payload_job_id or '<missing>'} != {record_job_id}"
+        )
+    record_status = normalize_text(record.status).lower()
+    payload_status = normalize_text(payload.get("status")).lower()
+    if record_status and payload_status != record_status:
+        raise ValueError(
+            f"{label} artifact status does not match its terminal index record: "
+            f"{payload_status or '<missing>'} != {record_status}"
+        )
+
+
 def latest_known_path(record: JobLocationRecord | None, job_dir: Path) -> str:
     return normalize_text((record.latest_known_path if record is not None else "") or str(job_dir))
 
@@ -308,17 +335,36 @@ def resolve_artifact_path(
     text = normalize_scalar_text(value)
     if not text:
         return ""
-    try:
-        resolved = path_factory(text).expanduser().resolve()
-    except OSError:
-        return text
-    if resolved.exists():
-        return str(resolved)
+    resolved_roots: list[Path] = []
     for root in roots:
-        remapped = root / resolved.name
-        if remapped.exists():
-            return str(remapped.resolve())
-    return str(resolved)
+        try:
+            resolved_root = Path(root).expanduser().resolve()
+        except OSError:
+            continue
+        if resolved_root not in resolved_roots:
+            resolved_roots.append(resolved_root)
+
+    try:
+        raw_path = path_factory(text).expanduser()
+    except (OSError, TypeError, ValueError):
+        return ""
+    candidates: list[Path] = []
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+    else:
+        candidates.extend(root / raw_path for root in resolved_roots)
+    candidates.extend(root / raw_path.name for root in resolved_roots)
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if not resolved.is_file():
+            continue
+        if any(resolved.is_relative_to(root) for root in resolved_roots):
+            return str(resolved)
+    return ""
 
 
 def load_contract_artifact_bundle(
@@ -354,6 +400,7 @@ def load_contract_artifact_bundle(
         select_payload_fn=select_payload_fn,
     )
     validate_record_app(record, expected_app_name, label=missing_label)
+    validate_record_artifact_identity(record, loaded.payload, label=missing_label)
     resource_request = coerce_resource_dict_fn(
         loaded.payload.get("resource_request")
     ) or coerce_resource_dict_fn(record.resource_request if record is not None else {})

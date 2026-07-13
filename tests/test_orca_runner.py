@@ -55,7 +55,7 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
         with tempfile.TemporaryDirectory() as td:
             inp = Path(td) / "test.inp"
             inp.write_text("! Opt\n", encoding="utf-8")
-            runner.run(inp)
+            result = runner.run(inp)
 
         args, kwargs = mock_popen.call_args
         command = args[0]
@@ -63,6 +63,9 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
         self.assertEqual(command[1], "test.inp")
         self.assertEqual(len(command), 2)
         self.assertTrue(kwargs["start_new_session"])
+        self.assertEqual(result.command, ("/opt/orca/orca", "test.inp"))
+        self.assertEqual(result.input_identity["path"], str(inp))
+        self.assertEqual(result.input_identity["size_bytes"], len(b"! Opt\n"))
 
 
 class TestOrcaRunnerTermination(OrcaRunnerTestCase):

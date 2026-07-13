@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from functools import partial
 from pathlib import Path
+from typing import Any
 
+from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.indexing import resolve_job_location
 from orca_auto.core.utils.coercion import coerce_int_mapping
 
@@ -47,8 +49,37 @@ def load_crest_artifact_contract(
     molecule_key = fields.payload_record_text("molecule_key", "molecule_key")
     selected_input_xyz = fields.payload_record_text("selected_input_xyz", "selected_input_xyz")
     artifact_roots = fields.artifact_roots()
-    selected_input_xyz = fields.resolved_path(selected_input_xyz, roots=artifact_roots)
-    retained_paths = fields.resolved_paths(retained_paths, roots=artifact_roots)
+    if selected_input_xyz:
+        selected_input_xyz = fields.resolved_path(selected_input_xyz, roots=artifact_roots)
+        if not selected_input_xyz:
+            raise ValueError("CREST selected input artifact escapes job_dir")
+    raw_retained_paths = retained_paths
+    retained_paths = fields.resolved_paths(raw_retained_paths, roots=artifact_roots)
+    if len(retained_paths) != len(raw_retained_paths):
+        raise ValueError("CREST retained artifact escapes job_dir")
+    raw_output_identities = payload.get("output_identities")
+    output_identities: dict[str, dict[str, Any]] = {}
+    for raw_path, current_path in zip(raw_retained_paths, retained_paths, strict=True):
+        identity = (
+            raw_output_identities.get(raw_path) if isinstance(raw_output_identities, dict) else None
+        )
+        if identity is not None:
+            if not isinstance(identity, dict):
+                raise ValueError("CREST output identity must be a mapping")
+            verified = _engine_runner.verify_confined_output_identity(
+                fields.job_dir,
+                identity,
+                path_override=current_path,
+            )
+            output_identities[str(verified)] = {**identity, "path": str(verified)}
+    if status == "completed":
+        for path in retained_paths:
+            if path not in output_identities:
+                output_identities[path] = _engine_runner.confined_output_identity(
+                    fields.job_dir,
+                    path,
+                )
+                output_identities[path]["identity_backfilled_from_legacy_artifact"] = True
     latest_known_path = bundle.latest_known_path
 
     return CrestArtifactContract(
@@ -62,6 +93,7 @@ def load_crest_artifact_contract(
         selected_input_xyz=selected_input_xyz,
         retained_conformer_count=retained_count,
         retained_conformer_paths=retained_paths,
+        output_identities=output_identities,
         resource_request=bundle.resource_request,
         resource_actual=bundle.resource_actual,
     )

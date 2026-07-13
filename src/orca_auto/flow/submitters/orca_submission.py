@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.app_ids import ORCA_SUBMITTERS
+from orca_auto.core.queue.priority import normalize_queue_priority
+from orca_auto.core.queue.publication import QUEUE_SUBMISSION_INTENT_KEY
 from orca_auto.core.statuses import (
     STATUS_ADMISSION_BLOCKED,
     STATUS_ADMISSION_LIMIT_REACHED,
@@ -23,6 +26,7 @@ from orca_auto.core.statuses import (
     SUBMISSION_SUBMITTED_STAGE_STATUSES,
     SUBMISSION_SUBMITTED_TASK_STATUSES,
 )
+from orca_auto.core.utils import timestamped_token
 from orca_auto.flow.orchestration.stage_views import (
     WorkflowPayloadView,
     WorkflowStageView,
@@ -77,10 +81,12 @@ class SubmissionDeps:
     normalize_text: Callable[[Any], str]
     now_utc_iso: Callable[[], str]
     resolve_workflow_workspace: Callable[..., Path]
+    acquire_workflow_lock: Callable[[Path], AbstractContextManager[None]]
     load_workflow_payload: Callable[[Path], dict[str, Any]]
     write_workflow_payload: Callable[[Path, dict[str, Any]], Any]
     sync_workflow_registry: Callable[[str | Path, Path, dict[str, Any]], Any]
     submit_reaction_dir: Callable[..., dict[str, Any]]
+    recover_exact_reaction_dir_submission: Callable[..., dict[str, Any] | None]
 
 
 @dataclass(frozen=True)
@@ -449,13 +455,42 @@ def submission_stage_request(
     submitter_config: SiblingSubmitterConfig,
     reaction_dir: str,
 ) -> _SubmissionStageRequest:
+    submitter_kwargs = submission_kwargs(context.enqueue_payload)
+    intent_token = str(context.stage_metadata.get(QUEUE_SUBMISSION_INTENT_KEY) or "").strip()
+    if intent_token:
+        submitter_kwargs[QUEUE_SUBMISSION_INTENT_KEY] = intent_token
     return _SubmissionStageRequest(
         reaction_dir=reaction_dir,
-        priority=int(context.enqueue_payload.get("priority", 10) or 10),
+        priority=normalize_queue_priority(context.enqueue_payload.get("priority")),
         config_path=submitter_config.config_path,
         repo_root=submitter_config.repo_root,
-        submitter_kwargs=submission_kwargs(context.enqueue_payload),
+        submitter_kwargs=submitter_kwargs,
     )
+
+
+def ensure_submission_intents(payload: dict[str, Any], deps: SubmissionDeps) -> bool:
+    changed = False
+    for stage_view in WorkflowPayloadView(payload).stage_views:
+        context = _SubmissionStageContext.from_stage(stage_view.raw)
+        if context is None or not context.should_submit_to_orca(deps.normalize_text):
+            continue
+        if not context.reaction_dir(deps.normalize_text):
+            continue
+        if skip_submission_reason(
+            stage=context.stage.raw,
+            task=context.task.raw,
+            skip_submitted=True,
+            normalize_text=deps.normalize_text,
+        ):
+            continue
+        if str(context.stage_metadata.get(QUEUE_SUBMISSION_INTENT_KEY) or "").strip():
+            continue
+        context.stage_metadata[QUEUE_SUBMISSION_INTENT_KEY] = timestamped_token(
+            "orca_workflow_submission",
+            token_bytes=16,
+        )
+        changed = True
+    return changed
 
 
 def submit_stage_request(
@@ -463,6 +498,27 @@ def submit_stage_request(
     deps: SubmissionDeps,
 ) -> dict[str, Any]:
     return deps.submit_reaction_dir(**request.call_kwargs())
+
+
+def recover_submission_conflict(
+    request: _SubmissionStageRequest,
+    submission_record: dict[str, Any],
+    deps: SubmissionDeps,
+) -> dict[str, Any]:
+    if (
+        not submission_is_deferred(
+            submission_record,
+            normalize_text=deps.normalize_text,
+        )
+        or submission_deferred_reason(
+            submission_record,
+            normalize_text=deps.normalize_text,
+        )
+        != "submission_conflict"
+    ):
+        return submission_record
+    recovered = deps.recover_exact_reaction_dir_submission(**request.call_kwargs())
+    return recovered if recovered is not None else submission_record
 
 
 def skipped_submission_outcome(stage_id: Any, reason: str) -> WorkflowStageOutcome:
@@ -542,7 +598,13 @@ def submission_stage_outcome(
         submitter_config=submitter_config,
         reaction_dir=reaction_dir,
     )
-    submission_record = submit_stage_request(request, deps)
+    submission_record = deps.recover_exact_reaction_dir_submission(**request.call_kwargs())
+    if submission_record is None:
+        submission_record = recover_submission_conflict(
+            request,
+            submit_stage_request(request, deps),
+            deps,
+        )
     return workflow_submission_outcome(
         context=context,
         reaction_dir=reaction_dir,
@@ -637,24 +699,31 @@ def submit_reaction_ts_search_workflow(
         target=workflow_target,
         workflow_root=workflow_root,
     )
-    payload = deps.load_workflow_payload(workspace_dir)
-    submitter_config = sibling_submitter_config(
-        orca_config=orca_config,
-        orca_repo_root=orca_repo_root,
-        normalize_text=deps.normalize_text,
-    )
-    buckets = record_workflow_submission_outcomes(
-        payload=payload,
-        submitter_config=submitter_config,
-        skip_submitted=skip_submitted,
-        deps=deps,
-    )
+    with deps.acquire_workflow_lock(workspace_dir):
+        payload = deps.load_workflow_payload(workspace_dir)
+        submitter_config = sibling_submitter_config(
+            orca_config=orca_config,
+            orca_repo_root=orca_repo_root,
+            normalize_text=deps.normalize_text,
+        )
+        if ensure_submission_intents(payload, deps):
+            deps.write_workflow_payload(workspace_dir, payload)
+        buckets = record_workflow_submission_outcomes(
+            payload=payload,
+            submitter_config=submitter_config,
+            skip_submitted=skip_submitted,
+            deps=deps,
+        )
 
-    record_submission_summary(payload, buckets, deps)
-    persist_submission_workflow(
-        workflow_root=workflow_root,
-        workspace_dir=workspace_dir,
-        payload=payload,
-        deps=deps,
-    )
-    return submission_workflow_result(payload=payload, workspace_dir=workspace_dir, buckets=buckets)
+        record_submission_summary(payload, buckets, deps)
+        persist_submission_workflow(
+            workflow_root=workflow_root,
+            workspace_dir=workspace_dir,
+            payload=payload,
+            deps=deps,
+        )
+        return submission_workflow_result(
+            payload=payload,
+            workspace_dir=workspace_dir,
+            buckets=buckets,
+        )

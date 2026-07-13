@@ -6,26 +6,21 @@ from typing import Any, TypeVar
 
 from orca_auto.core.admission import reserve_slot
 from orca_auto.core.config.schema import resolved_admission_limit
+from orca_auto.core.engine_catalog import find_engine_catalog_entry
 
 from ..child.execution import find_queue_entry_by_id
 from ..dependencies import ChildQueueWorkerDeps
+from ..priority import normalize_queue_priority
 from ..publication import queue_entry_is_claimable
 from .models import ReservedQueueEntry
 
 T = TypeVar("T")
 
-_INTERNAL_ENGINE_WORKER_SOURCES = {
-    "crest": "orca_auto.flow.engines.crest.queue_worker",
-    "xtb": "orca_auto.flow.engines.xtb.queue_worker",
-}
-
 
 def engine_queue_worker_source(engine: str) -> str:
     engine_slug = str(engine).strip().replace("-", "_")
-    return _INTERNAL_ENGINE_WORKER_SOURCES.get(
-        engine_slug,
-        f"orca_auto.{engine_slug}.queue_worker",
-    )
+    entry = find_engine_catalog_entry(engine_slug)
+    return entry.admission_source if entry is not None else f"orca_auto.{engine_slug}.queue_worker"
 
 
 def resolve_admission_root(cfg: Any) -> str:
@@ -69,11 +64,12 @@ def reserve_engine_queue_worker_slot(
     reserve_slot_fn: Callable[..., str | None] = reserve_slot,
 ) -> str | None:
     engine_slug = str(engine).strip().replace("-", "_")
+    entry = find_engine_catalog_entry(engine_slug)
     reservation_kwargs: dict[str, Any] = {
         "source": engine_queue_worker_source(engine_slug),
-        "app_name": f"orca_auto_{engine_slug}",
+        "app_name": entry.app_id if entry is not None else f"orca_auto_{engine_slug}",
     }
-    if engine_slug in {"crest", "orca", "xtb"}:
+    if entry is not None and entry.managed_admission:
         # Internal-engine child entrypoints publish engine identities through
         # register_running_job (ORCA once per retry attempt).
         reservation_kwargs["engine_process_state"] = "idle"
@@ -89,7 +85,7 @@ def dequeue_next_across_roots(
     *,
     list_queue_fn: Callable[[Path], list[T]],
     dequeue_next_fn: Callable[[Path], T | None],
-    dequeue_entry_fn: Callable[[Path, str], T | None] | None = None,
+    dequeue_entry_fn: Callable[..., T | None] | None = None,
     accept_entry_fn: Callable[[T], bool] | None = None,
 ) -> tuple[Path, T] | None:
     if len(roots) == 1 and accept_entry_fn is None:
@@ -100,6 +96,7 @@ def dequeue_next_across_roots(
 
     selected_root: Path | None = None
     selected_queue_id = ""
+    selected_entry: T | None = None
     selected_key: tuple[int, str, int, int] | None = None
 
     for root_index, root in enumerate(roots):
@@ -115,7 +112,7 @@ def dequeue_next_across_roots(
                     break
                 continue
             key = (
-                int(getattr(entry, "priority", 10) or 10),
+                normalize_queue_priority(getattr(entry, "priority", None)),
                 str(getattr(entry, "enqueued_at", "")),
                 root_index,
                 entry_index,
@@ -124,14 +121,19 @@ def dequeue_next_across_roots(
                 selected_key = key
                 selected_root = root
                 selected_queue_id = str(getattr(entry, "queue_id", "")).strip()
+                selected_entry = entry
             if dequeue_entry_fn is None:
                 break
 
     if selected_root is None:
         return None
 
-    if dequeue_entry_fn is not None and selected_queue_id:
-        entry = dequeue_entry_fn(selected_root, selected_queue_id)
+    if dequeue_entry_fn is not None and selected_queue_id and selected_entry is not None:
+        entry = dequeue_entry_fn(
+            selected_root,
+            selected_queue_id,
+            expected_entry=selected_entry,
+        )
     else:
         entry = dequeue_next_fn(selected_root)
     if entry is None:

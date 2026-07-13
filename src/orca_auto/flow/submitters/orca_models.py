@@ -121,6 +121,9 @@ class CancelStageContext:
     stage_status: str
     queue_id: str
     reaction_dir: str
+    submission_intent_token: str = ""
+    priority: int = 10
+    force: bool = False
 
 
 def apply_task_stage_mutation(

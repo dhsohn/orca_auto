@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orca_auto.core.app_ids import ORCA_AUTO_ORCA_SOURCE
+from orca_auto.core.engine_catalog import EngineCatalogEntry, activity_engine_entries
 from orca_auto.core.utils import normalize_text
 
 from ._list_deps import ActivityListDeps, ActivityListProvider
@@ -12,11 +12,7 @@ from ._model import (
     ActivitySourceRequest,
     ResolvedActivitySources,
 )
-from ._queue_records import (
-    collect_crest_activity,
-    collect_orca_activity,
-    collect_xtb_activity,
-)
+from ._queue_records import collect_catalog_engine_activity
 from ._workflow_records import workflow_records
 
 
@@ -35,8 +31,22 @@ def collect_workflow_activity(
     )
 
 
+def _catalog_activity_provider(
+    entry: EngineCatalogEntry,
+    *,
+    deps: ActivityListDeps,
+) -> ActivityListProvider:
+    def collect(
+        resolved: ResolvedActivitySources,
+        request: ActivityListRequest,
+    ) -> list[ActivityRecord]:
+        return collect_catalog_engine_activity(entry, resolved, request, deps=deps)
+
+    return ActivityListProvider(entry.source_id, collect)
+
+
 def activity_list_providers(deps: ActivityListDeps) -> tuple[ActivityListProvider, ...]:
-    return (
+    providers = [
         ActivityListProvider(
             "orca_auto_flow",
             lambda resolved, request: collect_workflow_activity(
@@ -44,32 +54,11 @@ def activity_list_providers(deps: ActivityListDeps) -> tuple[ActivityListProvide
                 request,
                 deps=deps,
             ),
-        ),
-        ActivityListProvider(
-            "orca_auto_crest",
-            lambda resolved, request: collect_crest_activity(
-                resolved,
-                request,
-                deps=deps,
-            ),
-        ),
-        ActivityListProvider(
-            "orca_auto_xtb",
-            lambda resolved, request: collect_xtb_activity(
-                resolved,
-                request,
-                deps=deps,
-            ),
-        ),
-        ActivityListProvider(
-            ORCA_AUTO_ORCA_SOURCE,
-            lambda resolved, request: collect_orca_activity(
-                resolved,
-                request,
-                deps=deps,
-            ),
-        ),
-    )
+        )
+    ]
+    for entry in activity_engine_entries():
+        providers.append(_catalog_activity_provider(entry, deps=deps))
+    return tuple(providers)
 
 
 def collect_activity_records_from_request(

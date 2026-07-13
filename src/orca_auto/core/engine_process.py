@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import secrets
+import shutil
+import stat
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -8,6 +12,7 @@ from typing import Any, TextIO
 
 from orca_auto.core.queue.cancellable import retain_process_ownership_until_exit
 from orca_auto.core.queue.processes import terminate_process_group
+from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory
 
 
 @dataclass(frozen=True)
@@ -20,6 +25,67 @@ class LoggedEngineProcess:
     stderr_handle: TextIO
 
 
+def ensure_confined_directory(root: Path, path: Path, *, label: str) -> Path:
+    """Create an engine-owned directory without following an escape symlink."""
+
+    resolved_root = root.expanduser().resolve()
+    candidate = path.expanduser()
+    prospective_path = candidate.resolve(strict=False)
+    if not prospective_path.is_relative_to(resolved_root):
+        raise ValueError(f"{label} must stay inside the job directory: {path}")
+    current = candidate
+    while current != resolved_root and current != current.parent:
+        if current.is_symlink():
+            raise ValueError(f"{label} must not contain symlinks: {current}")
+        current = current.parent
+    durable_mkdir(path, parents=True, exist_ok=True)
+    resolved_path = path.expanduser().resolve()
+    if not path.is_dir() or not resolved_path.is_relative_to(resolved_root):
+        raise ValueError(f"{label} must stay inside the job directory: {path}")
+    return resolved_path
+
+
+def require_confined_regular_file(root: Path, path: Path, *, label: str) -> Path:
+    resolved_root = root.expanduser().resolve()
+    if path.is_symlink():
+        raise ValueError(f"{label} must not be a symlink: {path}")
+    resolved_path = path.expanduser().resolve()
+    if not resolved_path.is_relative_to(resolved_root):
+        raise ValueError(f"{label} must stay inside its root: {path}")
+    try:
+        file_status = path.stat()
+    except OSError as exc:
+        raise ValueError(f"{label} is not a readable regular file: {path}") from exc
+    if not stat.S_ISREG(file_status.st_mode) or file_status.st_nlink != 1:
+        raise ValueError(f"{label} must be a single-link regular file: {path}")
+    return resolved_path
+
+
+def recreate_confined_directory(root: Path, path: Path, *, label: str) -> Path:
+    """Recreate an engine-owned directory so stale entries cannot redirect outputs."""
+
+    resolved_root = root.expanduser().resolve()
+    prospective_path = path.expanduser().resolve(strict=False)
+    if not prospective_path.is_relative_to(resolved_root):
+        raise ValueError(f"{label} must stay inside the job directory: {path}")
+    current = path.expanduser()
+    while current != resolved_root and current != current.parent:
+        if current.is_symlink():
+            raise ValueError(f"{label} must not contain symlinks: {current}")
+        current = current.parent
+    if path.exists():
+        resolved_path = path.expanduser().resolve()
+        if not path.is_dir() or not resolved_path.is_relative_to(resolved_root):
+            raise ValueError(f"{label} must stay inside the job directory: {path}")
+        shutil.rmtree(path)
+        fsync_directory(path.parent)
+    durable_mkdir(path, parents=True, exist_ok=False)
+    resolved_path = path.expanduser().resolve()
+    if not resolved_path.is_relative_to(resolved_root):
+        raise ValueError(f"{label} must stay inside the job directory: {path}")
+    return resolved_path
+
+
 def thread_limited_env(base_env: Mapping[str, str], max_cores: int) -> dict[str, str]:
     thread_count = str(max(1, int(max_cores)))
     return {
@@ -29,6 +95,134 @@ def thread_limited_env(base_env: Mapping[str, str], max_cores: int) -> dict[str,
         "MKL_NUM_THREADS": thread_count,
         "NUMEXPR_NUM_THREADS": thread_count,
     }
+
+
+def open_confined_log(
+    cwd: Path,
+    log_path: Path,
+    *,
+    label: str,
+    append: bool = False,
+) -> TextIO:
+    resolved_cwd = cwd.expanduser().resolve()
+    parent = log_path.parent
+    if not parent.expanduser().resolve().is_relative_to(resolved_cwd):
+        raise ValueError(f"Engine {label} must stay inside the job directory: {log_path}")
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    directory_fd = os.open(parent, directory_flags)
+    try:
+        file_flags = os.O_WRONLY | os.O_CREAT
+        if append:
+            file_flags |= os.O_APPEND
+        if hasattr(os, "O_NONBLOCK"):
+            file_flags |= os.O_NONBLOCK
+        if hasattr(os, "O_NOFOLLOW"):
+            file_flags |= os.O_NOFOLLOW
+        descriptor = os.open(log_path.name, file_flags, 0o600, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    file_status = os.fstat(descriptor)
+    if not stat.S_ISREG(file_status.st_mode) or file_status.st_nlink != 1:
+        os.close(descriptor)
+        raise ValueError(f"Engine {label} must be a single-link regular file: {log_path}")
+    if not append:
+        os.ftruncate(descriptor, 0)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+    return os.fdopen(descriptor, "w", encoding="utf-8")
+
+
+def read_confined_text(
+    root: Path,
+    path: Path,
+    *,
+    label: str,
+    max_links: int = 1,
+) -> str:
+    resolved_root = root.expanduser().resolve()
+    parent = path.parent
+    if parent.is_symlink() or not parent.expanduser().resolve().is_relative_to(resolved_root):
+        raise ValueError(f"{label} must stay inside its root: {path}")
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    directory_fd = os.open(parent, directory_flags)
+    try:
+        file_flags = os.O_RDONLY
+        if hasattr(os, "O_NONBLOCK"):
+            file_flags |= os.O_NONBLOCK
+        if hasattr(os, "O_NOFOLLOW"):
+            file_flags |= os.O_NOFOLLOW
+        descriptor = os.open(path.name, file_flags, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    file_status = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(file_status.st_mode)
+        or file_status.st_nlink < 1
+        or file_status.st_nlink > max_links
+    ):
+        os.close(descriptor)
+        raise ValueError(f"{label} must be a single-link regular file: {path}")
+    with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
+def atomic_write_confined_bytes(
+    root: Path,
+    path: Path,
+    payload: bytes,
+    *,
+    label: str,
+    mode: int = 0o600,
+) -> None:
+    """Atomically replace a regular file without following a final symlink."""
+
+    resolved_root = root.expanduser().resolve()
+    parent = path.parent
+    if parent.is_symlink() or not parent.expanduser().resolve().is_relative_to(resolved_root):
+        raise ValueError(f"{label} must stay inside its engine directory: {path}")
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    directory_fd = os.open(parent, directory_flags)
+    temporary_name = f".{path.name}.{secrets.token_hex(12)}.tmp"
+    descriptor = -1
+    try:
+        file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            file_flags |= os.O_NOFOLLOW
+        descriptor = os.open(temporary_name, file_flags, 0o600, dir_fd=directory_fd)
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            view = view[written:]
+        os.fchmod(descriptor, mode)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.replace(
+            temporary_name,
+            path.name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        os.fsync(directory_fd)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary_name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+        os.close(directory_fd)
 
 
 def start_logged_process(
@@ -46,8 +240,12 @@ def start_logged_process(
 ) -> LoggedEngineProcess:
     started_at = now_utc_iso_fn()
     env = thread_limited_env(base_env, max_cores)
-    stdout_handle = stdout_log.open("w", encoding="utf-8")
-    stderr_handle = stderr_log.open("w", encoding="utf-8")
+    stdout_handle = open_confined_log(cwd, stdout_log, label="stdout log")
+    try:
+        stderr_handle = open_confined_log(cwd, stderr_log, label="stderr log")
+    except Exception:
+        stdout_handle.close()
+        raise
     try:
         process = popen_fn(
             list(command),
@@ -95,7 +293,13 @@ def cleanup_failed_logged_process_start(
 
 __all__ = [
     "LoggedEngineProcess",
+    "atomic_write_confined_bytes",
     "cleanup_failed_logged_process_start",
+    "ensure_confined_directory",
+    "open_confined_log",
+    "recreate_confined_directory",
+    "read_confined_text",
+    "require_confined_regular_file",
     "start_logged_process",
     "thread_limited_env",
 ]

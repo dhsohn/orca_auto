@@ -16,6 +16,7 @@ QUEUE_RECORD_SYNC_UPDATED_AT_KEY = "_orca_auto_queued_record_sync_updated_at"
 QUEUE_RECORD_SYNC_OWNER_PID_KEY = "_orca_auto_queued_record_sync_owner_pid"
 QUEUE_RECORD_SYNC_OWNER_START_KEY = "_orca_auto_queued_record_sync_owner_start"
 QUEUE_RECORD_SYNC_TOKEN_KEY = "_orca_auto_queued_record_sync_token"
+QUEUE_SUBMISSION_INTENT_KEY = "submission_intent_token"
 
 QUEUE_RECORD_SYNC_PREPARING = "preparing"
 QUEUE_RECORD_SYNC_REPAIR_PENDING = "repair_pending"
@@ -107,6 +108,25 @@ def process_start_token(process_id: int) -> str:
 
 def current_process_start_token() -> str:
     return process_start_token(os.getpid())
+
+
+def queue_record_sync_metadata(
+    sync_state: str,
+    *,
+    token: str,
+    owner_pid: int,
+) -> dict[str, Any]:
+    """Build the canonical fencing metadata for one publication lease."""
+    normalized_owner_pid = int(owner_pid)
+    return {
+        QUEUE_RECORD_SYNC_KEY: str(sync_state).strip().lower(),
+        QUEUE_RECORD_SYNC_UPDATED_AT_KEY: datetime.now(UTC).isoformat(),
+        QUEUE_RECORD_SYNC_OWNER_PID_KEY: normalized_owner_pid,
+        QUEUE_RECORD_SYNC_OWNER_START_KEY: (
+            process_start_token(normalized_owner_pid) if normalized_owner_pid > 0 else ""
+        ),
+        QUEUE_RECORD_SYNC_TOKEN_KEY: str(token).strip(),
+    }
 
 
 def _same_process_start(recorded: str, current: str) -> bool:
@@ -207,7 +227,13 @@ def queue_record_sync_is_stale(
 
 def queue_entry_is_claimable(entry: Any) -> bool:
     state = queue_record_sync_state(entry)
-    return state not in _UNCLAIMABLE_SYNC_STATES or queue_record_sync_is_stale(entry)
+    if not state or state == QUEUE_RECORD_SYNC_COMPLETE:
+        return True
+    if state in _UNCLAIMABLE_SYNC_STATES:
+        return queue_record_sync_is_stale(entry)
+    # REPAIR_PENDING, ABORTED, and unknown nonblank markers are never legacy.
+    # Only an explicit repair/cancellation path may make them executable.
+    return False
 
 
 __all__ = [
@@ -223,10 +249,12 @@ __all__ = [
     "QUEUE_RECORD_SYNC_REPAIRING",
     "QUEUE_RECORD_SYNC_TOKEN_KEY",
     "QUEUE_RECORD_SYNC_UPDATED_AT_KEY",
+    "QUEUE_SUBMISSION_INTENT_KEY",
     "current_process_start_token",
     "process_start_token",
     "queue_entry_is_claimable",
     "queue_record_publication_lock",
+    "queue_record_sync_metadata",
     "queue_record_sync_is_stale",
     "queue_record_sync_state",
 ]

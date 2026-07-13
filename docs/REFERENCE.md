@@ -23,7 +23,7 @@ surfaces that are treated as public contracts, see
 ## 1) Project Purpose
 
 - Work only within the configured `runs_root`
-- Select the most recently modified `*.inp` in the target directory
+- Select and bind the most recently modified `*.inp` at submission
 - Submit work durably through the queue
 - Let a supervised worker execute queued jobs
 - Retry conservatively on recognized failures without overwriting the original input
@@ -188,7 +188,12 @@ Notes:
 - Configured executable paths for ORCA, xTB, and CREST must be absolute Linux
   paths to existing executable files and must not end in `.exe`. If
   `workflow.paths.xtb_executable` or `workflow.paths.crest_executable` is left
-  blank, the workflow runner falls back to PATH lookup at execution time.
+  blank, submission resolves it from PATH and binds that executable identity to
+  the queued generation.
+- Explicit `scheduler`, `resources`, `workflow`, and `workflow.paths` values must
+  be mappings. Configured admission roots must be absolute Linux paths, and
+  configured scheduler/resource limits must be positive integers. Malformed
+  execution controls are rejected instead of being replaced with defaults.
 
 ## 7) CLI Usage
 
@@ -240,7 +245,10 @@ Shared behavior:
 
 ORCA-specific notes:
 
-- Chooses the latest `*.inp` when execution actually starts
+- Chooses the latest `*.inp` at submission, then executes an immutable private
+  copy for that queue generation. Editing the source after a successful
+  submission does not change the queued calculation; submit a new generation
+  to run the edited input.
 - Queue workers execute by queue id rather than passing a direct
   `reaction_dir` command line. The queue entry still stores `reaction_dir`, and
   downstream ORCA/workflow contracts should keep using that field.
@@ -249,6 +257,12 @@ ORCA-specific notes:
   and `%maxcore` directives, with config defaults injected only when those
   directives are missing. The shared `--max-cores` and `--max-memory-gb`
   flags do not override standalone ORCA input directives.
+- ORCA admission rejects ambiguous duplicate `%pal`/`nprocs`, `%maxcore`,
+  `%moinp`, or route `PALn` directives. Resource readers use the largest active
+  value before normalization so a later duplicate cannot hide a larger request.
+- External ORCA include/program hooks that are not snapshot-bound (for example
+  `ExtOpt`/`Prog*`, fragment/QM2 method files, `XTBINPUTSTRING`, and `GCP(FILE)`)
+  are unsupported and rejected before local or remote execution.
 - Retry inputs and resumed worker-shutdown inputs add `MORead` plus `%moinp`
   when the source input has a matching non-empty `.gbw` checkpoint. Resumed
   inputs are written as `*.resume.inp` so the original user input is not mutated.
@@ -262,7 +276,13 @@ Workflow notes:
 - If the target already contains `workflow.json` and the workflow failed, `run-dir` restarts failed/cancelled stages in that existing workspace instead of creating a new workflow
 - If a directory mixes raw ORCA `*.inp` files with scaffold-style filenames but does not include `flow.yaml`, `run-dir` prefers ORCA direct submission
 - reaction-path and conformer workflows create and submit xTB/CREST stages internally
-- `reaction_ts_search` expands all selected reactant x product CREST pairs into xTB child jobs, waits for the full xTB phase to reach terminal states, and then batches any matching ORCA OptTS child jobs from the retained `ts_guess` artifacts
+- `reaction_ts_search` orders the selected reactant × product CREST pairs
+  deterministically by rank gap, so a capped fallback samples both endpoint
+  ensembles instead of exhausting the first reactant. It expands at most
+  `max_xtb_stages` pairs into xTB child jobs, waits for that xTB phase to reach
+  terminal states, then submits at
+  most `max_orca_stages` total ORCA OptTS candidates, including stages already
+  attempted before a restart. Candidates omitted by either cap are never queued.
 - `conformer_screening` starts with one CREST child job and then hands off up to 20 retained conformers to ORCA child jobs in the next workflow cycle. The scaffold shortcut is `orca_auto scaffold conformer_search <path>`.
 - `scan_ts_search` starts with an ORCA relaxed scan built from `orca.route_line`
   plus the required `scan_coordinate` manifest key (ORCA scan syntax, 0-based
@@ -415,6 +435,10 @@ Workflow notes:
 - Public workflow `run-dir` reads workflow type and XYZ inputs from `flow.yaml`
   or the standard filenames written by `scaffold`; it accepts only
   `--max-cores` and `--max-memory-gb` as workflow resource overrides.
+- `flow.yaml` and internal engine YAML job manifests must be single-link regular
+  UTF-8 files no larger than 1 MiB. The bounded loader admits at most 32 alias
+  uses, 10,000 parsed/expanded nodes, and 64 nesting levels; recursive/cyclic
+  aliases or object graphs fail closed.
 - Manifest-controlled input paths (`reactant_xyz`, `product_xyz`, `input_xyz`,
   and `xtb.xcontrol_file`) default to the submitted workflow directory trust
   boundary: relative paths are resolved from `workflow_dir`, absolute paths or
@@ -426,30 +450,135 @@ Workflow notes:
 - xTB `xcontrol` target names are separate from `xcontrol_file` source paths:
   `xcontrol_file` names the source file to copy, while `xcontrol` must be a
   plain file name materialized inside the xTB job directory.
+- The `crest:` and `xtb:` engine mappings are strict at engine submission:
+  unknown option names are rejected instead of ignored. A non-empty legacy xTB
+  `namespace` is also rejected; remove it before resubmitting. xTB always emits
+  explicit `--chrg` and `--uhf` values plus `--norestart`, so an older restart
+  file cannot silently alter a new generation.
 - CREST topology overrides can be placed under `crest:` in `flow.yaml`, including `gfn: ff`, `no_preopt: true`, `noreftopo: true`, `notopo: true`, and `nocbonds: true`
-- CREST conformational-search knobs are also accepted under `crest:`, verified
-  against CREST 3.0.2. `mdlen`/`len` (MD length in ps; aliases that must agree)
+- Workflow-level `orca.charge` and `orca.multiplicity` define the electronic
+  state for every CREST, xTB, and ORCA stage. Engine-local `charge`/`uhf` values
+  may repeat that state, but conflicting or malformed values are rejected. The
+  selected xTB/CREST input must contain known elements with atomic number at
+  most 86, leave a nonnegative electron count, and use a UHF unpaired-electron
+  count in range with electron-count-compatible parity.
+- Local geometry inputs are limited to 10,000 atoms. xTB Hessian jobs and ORCA
+  frequency/Hessian-producing inputs use a 1,000-atom limit. Discord-uploaded
+  workflow XYZ and standalone ORCA geometries use the remote 200-atom limit.
+- CREST exit code 0 is accepted only when a retained output contains at least
+  one strictly valid, finite XYZ frame. Every valid named retained ensemble is
+  preserved: geometries found only in later rotamer outputs remain candidates,
+  while cross-file overlaps do not duplicate downstream candidates. Non-finite xTB energies and XYZ
+  coordinates are unusable and are never materialized for ORCA.
+- CREST receives an absolute immutable input-snapshot path and an explicitly
+  bound xTB executable (`-xnam`). orca_auto does not pass `--scratch`, because
+  CREST 3.0.2's legacy scratch copier invokes an unsafe shell path. The
+  `gfn2//gfnff` composite emits the required `--legacy`; charge and UHF are
+  always explicit, including neutral singlet values.
+- `solvent_model` must be `gbsa` or `alpb` and must be paired with `solvent`.
+  Both xTB and CREST accept only these canonical solvent tokens:
+  `acetone`, `acetonitrile`, `aniline`, `benzene`, `benzaldehyde`, `ch2cl2`,
+  `chcl3`, `chloroform`, `cs2`, `dmf`, `dmso`, `dioxane`,
+  `dichlormethane`, `ether`, `ethanol`, `ethylacetate`, `furane`,
+  `hexadecane`, `hexane`, `h2o`, `methanol`, `nitromethane`, `nhexan`,
+  `n-hexan`, `nhexane`, `n-hexane`, `octanol`, `phenol`, `thf`, `toluene`,
+  `water`, and `woctanol`. Free-form or multi-token values and shell syntax are
+  rejected rather than forwarded.
+- CREST conformational-search knobs are accepted under `crest:` with flag
+  semantics implemented against CREST 3.0.2. `mdlen`/`len` (MD length in ps;
+  aliases that must agree)
   and `wscal` are finite positive reals rendered without exponent notation to
   at most six decimal places; values below `0.000001` are rejected.
-  `tstep` is a finite positive real in the native-safe 0.001–2500 fs range;
-  `mddump` is an integer in `1..2147483647`; and an explicit MD length must
-  combine with the selected/default time step to produce `1..2147483647` MD
-  steps. `shake` is `0`, `1`, or `2`. The exact `norotmd`, `cross`, and
+  `tstep` and `mddump` each require an explicit MD length. Without an expert
+  override, `tstep` is at most 5.0 fs for GFN-xTB, 1.5 fs for GFN-FF, and 2.0 fs
+  for `gfn2//gfnff`; `shake: 1` tightens that cap to 2.0 fs. Setting
+  `allow_high_tstep: true` permits the native 0.001–2500 fs range but does not
+  bypass the work budget. `mddump` is an integer in `1..2147483647`.
+  With an explicit `mdlen`, the default `max_md_steps` is 10,000,000 aggregate
+  steps across CREST's
+  estimated trajectory/restart/rotamer multiplicity: base 6 for `nci` or a
+  quick mode and 14 otherwise, multiplied by 1 restart for `mquick` or 5
+  otherwise, then by 1 for `nci`, a quick mode, or `norotmd` and 2 otherwise.
+  Without `mdlen`, CREST's automatic 2.5–500 ps range is admitted at its 500 ps
+  worst case with a default 14,000,000-step budget. This admits standard GFN-xTB
+  defaults. At the standard non-quick trajectory multiplicity, GFN-FF and
+  `gfn2//gfnff` exceed that budget and must provide a bounded `mdlen` or an
+  explicit higher `max_md_steps` plus `allow_high_cost_md: true`.
+  A larger bound, up to the
+  native integer limit, requires `allow_high_cost_md: true`. The default
+  `max_dump_frames` is 100,000 estimated aggregate frames (aggregate simulated
+  time divided by `mddump`); a larger bound
+  requires `allow_high_volume_md: true`. `shake` is `0`, `1`, or `2`. The exact
+  `norotmd`, `cross`, and
   `nocross` keys accept YAML booleans or canonical boolean forms
   (`1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off`), and `cross`/`nocross` are
   mutually exclusive. `cross: true` keeps CREST 3.0.2's default GC crossing
   without emitting its broken redundant `--cross` flag; `nocross: true` emits
-  `--nocross`. Malformed values fail the job closed rather than reaching CREST;
-  unknown `crest:` keys are ignored. Exact flag support can vary across
-  CREST versions, so these are documented here rather than promoted to the
-  stable contract list.
+  `--nocross`. Malformed values fail the job closed rather than reaching CREST.
+  Independently of the step bound, atom count multiplied by estimated aggregate
+  MD steps must not exceed the absolute local ceiling of 50,000,000,000
+  atom-steps.
+- xTB ranking admits at most 100 candidate evaluations by default. Local
+  reaction-workflow manifests may set `xtb.max_ranking_evaluations` up to the native candidate
+  cap of 1,000; values above 100 also require
+  `xtb.allow_high_cost_ranking: true`.
 - Discord-uploaded workflows may not set `crest.mdlen`, `crest.len`,
-  `crest.tstep`, or `crest.mddump`. Those remote runtime and trajectory-volume
-  controls are server-owned; trusted local `run-dir` workflows may use the
-  validated knobs above.
+  `crest.tstep`, `crest.allow_high_tstep`, `crest.mddump`,
+  `crest.max_md_steps`, `crest.allow_high_cost_md`,
+  `crest.max_dump_frames`, `crest.allow_high_volume_md`,
+  `xtb.max_ranking_evaluations`, or `xtb.allow_high_cost_ranking`. These cost
+  and output-volume budgets are server-owned for remote ingress; trusted local
+  `run-dir` workflows may use the validated controls above. Remote workflow
+  ingress injects `crest.mdlen: 5.0` ps and rejects the request when its estimated
+  CREST work exceeds 50,000,000 atom-steps.
 - `scaffold ts_search` and `scaffold conformer_search` write `flow.yaml` with `crest_mode: standard` by default; change it to `nci` when needed
 
 There is no public direct-execution mode for new work. `run-dir` is the durable submission path.
+
+#### Immutable execution, provenance, and upgrade boundary
+
+- xTB, CREST, and ORCA bind selected inputs at submission. Each source file is
+  limited to 64 MiB. xTB and ORCA additionally cap one generation's aggregate
+  bound input at 256 MiB; ORCA accepts at most 128 file-reference directives.
+  CREST has the per-file limit but no separate aggregate limit. A downstream
+  output XYZ materialization is bounded at 512 MiB.
+- xTB/CREST snapshots live in private per-submission directories under
+  `.orca_auto_input_snapshots/`; each namespace is unique and reserved
+  exclusively. A public task
+  id alone is not the snapshot-ownership key. ORCA executes a rewritten, private
+  input tree
+  under `.orca_auto_orca_executions/generation-*`, including confined copies of
+  supported XYZ, GBW, Hessian, point-charge, IRC, and NEB dependencies. These
+  hidden executed paths can differ from the user-facing source paths. Audit
+  provenance records source path, executed path, SHA-256, and byte size where
+  applicable; do not edit hidden snapshots to change a queued job.
+- These hidden trees are retained for queue replay, retry, reconciliation, and
+  audit. There is no standalone snapshot-GC command. Never delete a tree used
+  by a pending, running, retrying, cancel-pending, or repairable terminal row.
+  Reclaim it only with the intentionally retired job/workflow after confirming
+  that no queue or recovery record still references it.
+- xTB/CREST run with a job-local clean `HOME`/`XDG_CONFIG_HOME` and a captured
+  `PATH`, `LD_LIBRARY_PATH`, `XTBPATH`, and `XTBHOME`. Executable path, SHA-256,
+  and size are verified around execution. Contents reached through shared
+  libraries, `XTBPATH`, or `XTBHOME` are not snapshotted, and engine semantic
+  versions are not automatically probed. Keep the exact qualified
+  distribution and external parameters immutable for the job lifetime, and do
+  not treat other processes under the worker UID as hostile isolation tenants.
+- Before deploying this snapshot format, drain pre-upgrade queued xTB, CREST,
+  and ORCA rows with the old build, or cancel/clear and resubmit them after the
+  upgrade. Snapshot-less rows are not adopted in place and fail closed.
+- New xTB/CREST terminal outputs carry content identities that are verified
+  before downstream parsing. A legacy completed output can receive a marked
+  read-time identity backfill, which does not retroactively prove historical
+  terminal bytes. If an exact same-generation terminal state/report pair is
+  unrecoverable, activity shows `repair_blocked` with its reason instead of
+  repeatedly attempting an ambiguous repair.
+- xTB-MD is not a supported job type yet. Before enabling it, the durable
+  contract must bind an explicit random seed, initial/generated velocity
+  identity, restart generation and `mdrestart` identity, and exact resume
+  semantics. Exit code 0 alone must not mean success: the generation must also
+  bind the expected `xtbmdok` marker and terminal trajectory/checkpoint
+  identities, with explicit step, wall-time, and output-volume budgets.
 
 ### 7.3 `queue cancel`
 
@@ -505,8 +634,8 @@ cancelled entries from the unified list.
   can attach one `.zip` or `.tar.gz` run-directory to `!run`. Admission and actual
   download bytes are bounded before inspection. Exactly one root `flow.yaml` or
   lower-case `*.inp` is required, server-owned paths and resource ceilings cannot be
-  overridden; uploaded workflows also reject the CREST runtime/trajectory controls
-  `mdlen`, `len`, `tstep`, and `mddump`. The durable Queue/Discard action is bound to
+  overridden; uploaded workflows also reject every CREST runtime/trajectory budget
+  and xTB ranking-cost control listed in §7.2. The durable Queue/Discard action is bound to
   the originating message, attachment, channel, and actor. Extraction is published
   atomically under `runs_root`; uncertain commits are retained and reconciled rather
   than deleted.
@@ -684,6 +813,7 @@ Important `job_state.json` fields:
 - `run_id`
 - `reaction_dir`
 - `selected_inp`
+- `execution_provenance`
 - `max_retries`
 - `status`
 - `attempts[]`
@@ -699,6 +829,10 @@ Important `attempts[]` fields:
 - `analyzer_reason`
 - `markers`
 - `patch_actions`
+- `command`
+- `input_identity`
+- `executable_identity`
+- `output_identity`
 - `started_at`
 - `ended_at`
 
@@ -713,6 +847,11 @@ Important `job_report.json` fields:
 - `max_retries`
 - `attempts[]`
 - `final_result`
+
+For snapshot-bound jobs, `selected_inp`/attempt `inp_path` name the exact private
+input that executed. `execution_provenance.source_selected_inp` records the
+user-facing source selected at submission; the bound/materialized and attempt
+identity records carry their path, SHA-256, and byte size.
 
 ## 11.1) Downstream Contract Freeze
 

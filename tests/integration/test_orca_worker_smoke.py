@@ -129,14 +129,19 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert list_slots(admission_root) == []
     assert not worker_pid_file_path(allowed_root, WORKER_PID_FILE).exists()
 
-    out_path = reaction_dir / "rxn.out"
+    execution_snapshot = completed.metadata["execution_snapshot"]
+    bound_input = Path(execution_snapshot["selected_inp"])
+    assert bound_input.is_relative_to(reaction_dir / ".orca_auto_orca_executions")
+    out_path = bound_input.with_suffix(".out")
     assert out_path.exists()
     assert "****ORCA TERMINATED NORMALLY****" in out_path.read_text(encoding="utf-8")
 
     state = load_state(reaction_dir)
     assert state is not None
     assert state["status"] == "completed"
-    assert state["selected_inp"] == str(selected_inp.resolve())
+    assert state["selected_inp"] == str(bound_input.resolve())
+    assert state["execution_provenance"]["source_selected_inp"] == str(selected_inp.resolve())
+    assert state["attempts"][0]["output_identity"]["path"] == str(out_path.resolve())
     assert state["final_result"] is not None
     assert state["final_result"]["status"] == "completed"
 

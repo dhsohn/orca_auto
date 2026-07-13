@@ -8,8 +8,15 @@ from typing import Any
 import pytest
 
 from orca_auto.core.config.engines import load_crest_config, load_xtb_config
+from orca_auto.orca.config import load_config as load_orca_config
 
-Loader = Callable[[str | None], Any]
+Loader = Callable[[str], Any]
+
+_SHARED_CONFIG_LOADERS: tuple[tuple[str, Loader], ...] = (
+    ("orca", load_orca_config),
+    ("xtb", load_xtb_config),
+    ("crest", load_crest_config),
+)
 
 
 def _write_config(
@@ -40,6 +47,145 @@ def _write_file(path: Path, *, executable: bool) -> Path:
     path.write_text("#!/bin/sh\n", encoding="utf-8")
     path.chmod(0o755 if executable else 0o644)
     return path
+
+
+def _write_shared_config(tmp_path: Path, override: dict[str, object]) -> Path:
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir(exist_ok=True)
+    orca_executable = _write_file(tmp_path / "bin" / "orca", executable=True)
+    payload: dict[str, object] = {
+        "runs_root": str(runs_root),
+        "workflow": {"paths": {}},
+        "orca": {"paths": {"orca_executable": str(orca_executable)}},
+    }
+    payload.update(override)
+    config_path = tmp_path / "shared-config.yaml"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    return config_path
+
+
+@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
+@pytest.mark.parametrize("invalid", [None, "disabled", []])
+@pytest.mark.parametrize(
+    ("section_path", "message"),
+    [
+        pytest.param("scheduler", "scheduler section must be a mapping", id="scheduler"),
+        pytest.param("resources", "resources section must be a mapping", id="resources"),
+        pytest.param("workflow", "workflow section must be a mapping", id="workflow"),
+        pytest.param(
+            "workflow.paths",
+            "workflow.paths section must be a mapping",
+            id="workflow-paths",
+        ),
+    ],
+)
+def test_shared_engine_loaders_reject_non_mapping_execution_sections(
+    tmp_path: Path,
+    loader_name: str,
+    loader: Loader,
+    invalid: object,
+    section_path: str,
+    message: str,
+) -> None:
+    del loader_name
+    override: dict[str, object]
+    if section_path == "workflow.paths":
+        override = {"workflow": {"paths": invalid}}
+    else:
+        override = {section_path: invalid}
+    config_path = _write_shared_config(tmp_path, override)
+
+    with pytest.raises(ValueError, match=message):
+        loader(str(config_path))
+
+
+@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
+@pytest.mark.parametrize(
+    ("raw_path", "message"),
+    [
+        pytest.param("relative/pool", "absolute Linux path", id="relative"),
+        pytest.param("", "absolute Linux path", id="blank"),
+        pytest.param(None, "absolute Linux path", id="null"),
+        pytest.param(r"C:\\runtime\\pool", "Linux path", id="windows"),
+        pytest.param("/mnt/c/runtime/pool", "Linux path", id="wsl-windows-mount"),
+        pytest.param(
+            "/tmp/../mnt/c/runtime/pool",
+            "outside Windows mounts",
+            id="normalized-wsl-windows-mount",
+        ),
+    ],
+)
+def test_shared_engine_loaders_reject_invalid_admission_root(
+    tmp_path: Path,
+    loader_name: str,
+    loader: Loader,
+    raw_path: object,
+    message: str,
+) -> None:
+    del loader_name
+    config_path = _write_shared_config(
+        tmp_path,
+        {"scheduler": {"admission_root": raw_path}},
+    )
+
+    with pytest.raises(ValueError, match=message):
+        loader(str(config_path))
+
+
+def test_orca_loader_rejects_runs_root_that_canonicalizes_to_windows_mount(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_shared_config(
+        tmp_path,
+        {
+            "runs_root": "/tmp/../mnt/c/orca-runs",
+            "scheduler": {"admission_root": str(tmp_path / "admission")},
+        },
+    )
+
+    with pytest.raises(ValueError, match="outside Windows mounts"):
+        load_orca_config(str(config_path))
+
+
+@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
+@pytest.mark.parametrize("invalid", [None, "", "bad", 0, -1, True, 1.5])
+@pytest.mark.parametrize(
+    ("section", "key", "message"),
+    [
+        pytest.param(
+            "scheduler",
+            "max_active_simulations",
+            "scheduler.max_active_simulations must be an integer >= 1",
+            id="max-active-simulations",
+        ),
+        pytest.param(
+            "resources",
+            "max_cores_per_task",
+            "resources.max_cores_per_task must be an integer >= 1",
+            id="max-cores-per-task",
+        ),
+        pytest.param(
+            "resources",
+            "max_memory_gb_per_task",
+            "resources.max_memory_gb_per_task must be an integer >= 1",
+            id="max-memory-per-task",
+        ),
+    ],
+)
+def test_shared_engine_loaders_reject_invalid_execution_limits(
+    tmp_path: Path,
+    loader_name: str,
+    loader: Loader,
+    invalid: object,
+    section: str,
+    key: str,
+    message: str,
+) -> None:
+    del loader_name
+    config_path = _write_shared_config(tmp_path, {section: {key: invalid}})
+
+    with pytest.raises(ValueError, match=message):
+        loader(str(config_path))
 
 
 @pytest.mark.parametrize(

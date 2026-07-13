@@ -164,7 +164,21 @@ class _CaptureSuccessRunner:
             "****ORCA TERMINATED NORMALLY****\nTOTAL RUN TIME: 0 days 0 hours 0 minutes 1 seconds 0 msec\n",
             encoding="utf-8",
         )
-        return SimpleNamespace(out_path=str(out_path), return_code=0)
+        return SimpleNamespace(
+            out_path=str(out_path),
+            return_code=0,
+            command=("/opt/orca/orca", inp_path.name),
+            input_identity={
+                "path": str(inp_path),
+                "sha256": "a" * 64,
+                "size_bytes": inp_path.stat().st_size,
+            },
+            executable_identity={
+                "path": "/opt/orca/orca",
+                "sha256": "b" * 64,
+                "size_bytes": 1024,
+            },
+        )
 
 
 def _retry_inp_path(selected_inp: Path, retry_number: int) -> Path:
@@ -531,6 +545,15 @@ class TestAttemptEngine(unittest.TestCase):
         self.assertIn('%moinp "rxn.gbw"', resume_text)
         self.assertIn("MORead", resume_text)
         self.assertEqual(saved["attempts"][0]["inp_path"], str(resume_inp))
+        self.assertEqual(
+            saved["attempts"][0]["command"],
+            ["/opt/orca/orca", resume_inp.name],
+        )
+        self.assertEqual(saved["attempts"][0]["input_identity"]["path"], str(resume_inp))
+        self.assertEqual(
+            saved["attempts"][0]["executable_identity"]["sha256"],
+            "b" * 64,
+        )
         self.assertIn(
             "resume_checkpoint_restart_from_rxn.gbw", saved["attempts"][0]["patch_actions"]
         )

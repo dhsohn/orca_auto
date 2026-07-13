@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from orca_auto import cli_queue, cli_workers
+from orca_auto.core.engine_catalog import known_engine_ids, supervised_engine_entries
 from orca_auto.flow.cli.worker_options import (
     WorkflowWorkerOptionConfig,
     add_workflow_worker_cli_options,
@@ -49,7 +50,7 @@ def _add_queue_list_parser(
     list_parser.add_argument(
         "--engine",
         action="append",
-        choices=["orca", "xtb", "crest", "workflow"],
+        choices=[*known_engine_ids(), "workflow"],
         help="Filter by engine; may be passed more than once",
     )
     list_parser.add_argument(
@@ -88,7 +89,14 @@ def _add_queue_worker_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--app",
         action="append",
-        choices=["orca", "workflow"],
+        choices=[
+            *(
+                entry.engine_id
+                for entry in supervised_engine_entries()
+                if entry.default_supervision_role == "default"
+            ),
+            "workflow",
+        ],
         help="Worker app to supervise; may be passed more than once",
     )
     add_workflow_worker_cli_options(

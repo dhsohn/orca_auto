@@ -92,6 +92,7 @@ def _state_from_normalized_payload(payload: dict[str, Any]) -> RunState | None:
         "started_at": _text(timestamps.get("started_at")),
         "updated_at": _text(timestamps.get("updated_at")),
         "attempts": list(engine_payload.get("attempts") or []),
+        "execution_provenance": _dict(engine_payload.get("execution_provenance")),
         "final_result": cast(RunFinalResult | None, engine_payload.get("final_result")),
     }
     return state
@@ -117,7 +118,7 @@ def load_report_json(reaction_dir: Path) -> dict[str, Any] | None:
 
 
 def new_state(reaction_dir: Path, selected_inp: Path, max_retries: int) -> RunState:
-    run_id = timestamped_token("run", token_bytes=4)
+    run_id = timestamped_token("run", token_bytes=16)
     ts = now_utc_iso()
     return {
         "run_id": run_id,
@@ -220,6 +221,7 @@ def _normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any])
             "run_id": _text(state.get("run_id")),
             "max_retries": int(state.get("max_retries", 0) or 0),
             "attempts": attempts,
+            "execution_provenance": _dict(state.get("execution_provenance")),
             "final_result": final_result,
         },
     )

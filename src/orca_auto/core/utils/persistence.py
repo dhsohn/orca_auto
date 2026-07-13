@@ -17,11 +17,7 @@ JSON_LOAD_EXCEPTIONS = (OSError, UnicodeDecodeError, json.JSONDecodeError)
 _DIR_FSYNC_UNSUPPORTED_ERRNOS = {
     code
     for code in (
-        errno.EACCES,
-        errno.EBADF,
         errno.EINVAL,
-        errno.EISDIR,
-        errno.EPERM,
         getattr(errno, "ENOSYS", None),
         getattr(errno, "ENOTSUP", None),
         getattr(errno, "ENOTTY", None),
@@ -50,7 +46,7 @@ def parse_iso_utc(value: Any) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def timestamped_token(prefix: str, *, token_bytes: int = 3) -> str:
+def timestamped_token(prefix: str, *, token_bytes: int = 16) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     return f"{prefix}_{stamp}_{token_hex(token_bytes)}"
 
@@ -129,13 +125,15 @@ def _is_unsupported_dir_fsync_error(exc: OSError) -> bool:
     return exc.errno in _DIR_FSYNC_UNSUPPORTED_ERRNOS
 
 
-def _fsync_parent_dir(path: Path) -> None:
+def fsync_directory(path: str | Path) -> None:
+    """Durably publish directory-entry changes when the filesystem supports it."""
+
     flags = os.O_RDONLY
     if hasattr(os, "O_DIRECTORY"):
         flags |= os.O_DIRECTORY
 
     try:
-        dir_fd = os.open(str(path.parent), flags)
+        dir_fd = os.open(str(Path(path)), flags)
     except OSError as exc:
         if _is_unsupported_dir_fsync_error(exc):
             return
@@ -151,8 +149,41 @@ def _fsync_parent_dir(path: Path) -> None:
         os.close(dir_fd)
 
 
+def durable_mkdir(
+    path: str | Path,
+    *,
+    mode: int = 0o777,
+    parents: bool = False,
+    exist_ok: bool = False,
+) -> Path:
+    """Create a directory and durably publish every newly needed path component."""
+
+    target = Path(path)
+    missing: list[Path] = []
+    current = target
+    if parents:
+        while not current.exists():
+            missing.append(current)
+            if current == current.parent:
+                break
+            current = current.parent
+    elif not target.exists():
+        missing.append(target)
+    target.mkdir(mode=mode, parents=parents, exist_ok=exist_ok)
+    # Always sync the leaf parent. Another creator may have won after the
+    # existence probe, and its directory entry still needs our durability gate.
+    fsync_directory(target.parent)
+    for created in missing[1:]:
+        fsync_directory(created.parent)
+    return target
+
+
+def _fsync_parent_dir(path: Path) -> None:
+    fsync_directory(path.parent)
+
+
 def atomic_write_text(path: Path, payload: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    durable_mkdir(path.parent, parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     tmp_path = Path(tmp_name)
     try:
@@ -177,5 +208,11 @@ def atomic_write_json(
 ) -> None:
     atomic_write_text(
         path,
-        json.dumps(payload, ensure_ascii=ensure_ascii, indent=indent, sort_keys=False),
+        json.dumps(
+            payload,
+            ensure_ascii=ensure_ascii,
+            indent=indent,
+            sort_keys=False,
+            allow_nan=False,
+        ),
     )

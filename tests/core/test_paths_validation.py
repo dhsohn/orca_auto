@@ -11,6 +11,7 @@ from orca_auto.core.paths.validation import (
     require_subpath,
     resolve_artifact_path,
     resolve_local_path,
+    validate_configured_executable_path,
     validate_job_dir,
 )
 
@@ -32,6 +33,21 @@ def test_windows_path_rejection(path_text: str) -> None:
 def test_empty_path_rejection(path_text: str) -> None:
     with pytest.raises(ValueError, match="Path must not be empty"):
         resolve_local_path(path_text)
+
+
+def test_executable_validation_rejects_symlink_to_windows_executable(tmp_path: Path) -> None:
+    target = tmp_path / "cmd.exe"
+    target.write_text("#!/bin/sh\n", encoding="utf-8")
+    target.chmod(0o755)
+    alias = tmp_path / "orca"
+    alias.symlink_to(target)
+
+    with pytest.raises(ValueError, match="must resolve to a Linux ORCA binary"):
+        validate_configured_executable_path(
+            alias,
+            label="orca.paths.orca_executable",
+            display_name="ORCA",
+        )
 
 
 def test_ensure_directory_success(tmp_path: Path) -> None:

@@ -16,21 +16,30 @@ from orca_auto.core.config.engines import (
     WorkflowEnginePathsConfig as PathsConfig,
 )
 from orca_auto.core.config.schema import CommonResourceConfig, CommonRuntimeConfig, TelegramConfig
+from orca_auto.flow.engines.crest import runner as runner_mod
 from orca_auto.flow.engines.crest.job_inputs import MANIFEST_FILE_NAME
 from orca_auto.flow.engines.crest.runner import (
     CrestRunningJob,
     _build_command,
+    _count_xyz_structures,
     finalize_crest_job,
     start_crest_job,
 )
 
 
 def _cfg(tmp_path: Path) -> AppConfig:
+    xtb_executable = tmp_path / "bin" / "xtb"
+    xtb_executable.parent.mkdir(parents=True, exist_ok=True)
+    xtb_executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    xtb_executable.chmod(0o700)
     return AppConfig(
         runtime=CommonRuntimeConfig(
             allowed_root=str(tmp_path / "runs"),
         ),
-        paths=PathsConfig(crest_executable="/opt/crest"),
+        paths=PathsConfig(
+            crest_executable="/opt/crest",
+            xtb_executable=str(xtb_executable),
+        ),
         behavior=BehaviorConfig(),
         resources=CommonResourceConfig(max_cores_per_task=6, max_memory_gb_per_task=14),
         telegram=TelegramConfig(),
@@ -92,9 +101,11 @@ def test_build_command_includes_manifest_flags(
 
     assert command == [
         "/usr/bin/crest",
-        "input.xyz",
+        str(selected_xyz.resolve()),
         "--T",
         "6",
+        "-xnam",
+        str(tmp_path / "bin" / "xtb"),
         "--nci",
         "--squick",
         "--dry",
@@ -103,6 +114,7 @@ def test_build_command_includes_manifest_flags(
         "--noreftopo",
         "--notopo",
         "--nocbonds",
+        "--legacy",
         "--gfn2//gfnff",
         "--chrg",
         "2",
@@ -121,9 +133,25 @@ def test_build_command_includes_manifest_flags(
         "--cluster",
         "3",
         "--esort",
-        "--scratch",
-        str(job_dir / ".crest_scratch"),
     ]
+    assert "--scratch" not in command
+
+
+@pytest.mark.parametrize(
+    "solvent",
+    ["water;touch", "water acetone", "$(id)", "`id`", "water\n--T 99"],
+)
+def test_build_command_rejects_solvent_shell_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    solvent: str,
+) -> None:
+    with pytest.raises(ValueError, match="solvent"):
+        _sampling_command(
+            monkeypatch,
+            tmp_path,
+            {"solvent_model": "gbsa", "solvent": solvent},
+        )
 
 
 def test_build_command_preserves_nested_input_path(
@@ -146,7 +174,7 @@ def test_build_command_preserves_nested_input_path(
         manifest={},
     )
 
-    assert command[1] == "nested/input.xyz"
+    assert command[1] == str(selected_xyz.resolve())
 
 
 def test_build_command_rejects_input_outside_job_dir(
@@ -191,7 +219,7 @@ def test_build_command_protects_dash_prefixed_input_name(
         manifest={},
     )
 
-    assert command[1] == "./-input.xyz"
+    assert command[1] == str(selected_xyz.resolve())
 
 
 def test_build_command_accepts_topology_aliases_without_duplicate_flags(
@@ -236,6 +264,8 @@ def test_start_crest_job_passes_expected_subprocess_options(
     job_dir.mkdir()
     selected_xyz = job_dir / "molecule.xyz"
     _write_xyz(selected_xyz, ("conf_a",))
+    stale_output = job_dir / "crest_conformers.xyz"
+    _write_xyz(stale_output, ("stale",))
     (job_dir / MANIFEST_FILE_NAME).write_text(
         "mode: standard\nresources:\n  max_cores: 11\n  max_memory_gb: 22\n",
         encoding="utf-8",
@@ -258,11 +288,23 @@ def test_start_crest_job_passes_expected_subprocess_options(
 
     running = start_crest_job(cfg, job_dir=job_dir, selected_xyz=selected_xyz)
 
-    assert running.command[:4] == ("/opt/crest", "molecule.xyz", "--T", "11")
+    assert not stale_output.exists()
+    assert running.command[:4] == (
+        "/opt/crest",
+        str(selected_xyz.resolve()),
+        "--T",
+        "11",
+    )
     assert running.mode == "standard"
     assert running.selected_input_xyz == str(selected_xyz.resolve())
     kwargs = popen_calls["kwargs"]
-    assert popen_calls["args"][0][:4] == ["/opt/crest", "molecule.xyz", "--T", "11"]
+    assert popen_calls["args"][0][:4] == [
+        "/opt/crest",
+        str(selected_xyz.resolve()),
+        "--T",
+        "11",
+    ]
+    assert "--scratch" not in popen_calls["args"][0]
     assert kwargs["cwd"] == job_dir
     assert kwargs["text"] is True
     assert kwargs["stdin"] is not None
@@ -287,6 +329,28 @@ def test_start_crest_job_passes_expected_subprocess_options(
     running.stderr_handle.close()
 
 
+def test_stale_crest_output_fsync_failure_blocks_launch_preparation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected = job_dir / "input.xyz"
+    _write_xyz(selected, ("input",))
+    stale = job_dir / "crest_conformers.xyz"
+    _write_xyz(stale, ("stale",))
+    monkeypatch.setattr(
+        runner_mod,
+        "fsync_directory",
+        lambda _path: (_ for _ in ()).throw(OSError("stale unlink fsync failed")),
+    )
+
+    with pytest.raises(OSError, match="stale unlink fsync failed"):
+        runner_mod._clear_stale_crest_outputs(job_dir, selected_input_xyz=selected)
+
+    assert not stale.exists()
+
+
 def test_finalize_crest_job_collects_retained_outputs(tmp_path: Path) -> None:
     job_dir = tmp_path / "job"
     job_dir.mkdir()
@@ -294,6 +358,7 @@ def test_finalize_crest_job_collects_retained_outputs(tmp_path: Path) -> None:
     stderr_path = job_dir / "crest.stderr.log"
     stdout_handle = stdout_path.open("w", encoding="utf-8")
     stderr_handle = stderr_path.open("w", encoding="utf-8")
+    _write_xyz(job_dir / "input.xyz", ("input",))
     _write_xyz(job_dir / "crest_conformers.xyz", ("conf_a", "conf_b"))
 
     process = MagicMock()
@@ -323,6 +388,157 @@ def test_finalize_crest_job_collects_retained_outputs(tmp_path: Path) -> None:
     assert result.retained_conformer_paths == (str((job_dir / "crest_conformers.xyz").resolve()),)
     assert result.resource_request == {"max_cores": 4, "max_memory_gb": 8}
     assert result.resource_actual == {"assigned_cores": 4, "memory_limit_gb": 8}
+
+
+@pytest.mark.parametrize(
+    "retained_payload",
+    [None, "10\ntruncated\nH 0 0 0\n", "1\nnonfinite\nH nan 0 0\n"],
+)
+def test_finalize_crest_job_rejects_missing_or_invalid_retained_ensemble(
+    tmp_path: Path, retained_payload: str | None
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    _write_xyz(job_dir / "input.xyz", ("input",))
+    if retained_payload is not None:
+        retained = job_dir / "crest_conformers.xyz"
+        retained.write_text(retained_payload, encoding="utf-8")
+        assert _count_xyz_structures(retained) == 0
+    stdout_path = job_dir / "crest.stdout.log"
+    stderr_path = job_dir / "crest.stderr.log"
+    process = MagicMock()
+    process.poll.return_value = 0
+    running = CrestRunningJob(
+        process=process,
+        command=("crest", "input.xyz"),
+        started_at="2026-04-19T00:00:00+00:00",
+        stdout_log=str(stdout_path.resolve()),
+        stderr_log=str(stderr_path.resolve()),
+        stdout_handle=stdout_path.open("w", encoding="utf-8"),
+        stderr_handle=stderr_path.open("w", encoding="utf-8"),
+        selected_input_xyz=str((job_dir / "input.xyz").resolve()),
+        mode="standard",
+        manifest_path="",
+        resource_request={"max_cores": 4, "max_memory_gb": 8},
+        resource_actual={"assigned_cores": 4, "memory_limit_gb": 8},
+        job_dir=str(job_dir.resolve()),
+    )
+
+    result = finalize_crest_job(running)
+
+    assert result.status == "failed"
+    assert result.reason == "crest_no_valid_retained_ensemble"
+    assert result.retained_conformer_count == 0
+    assert result.retained_conformer_paths == ()
+
+
+def test_finalize_crest_job_preserves_all_valid_retained_ensembles(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    _write_xyz(job_dir / "input.xyz", ("input",))
+    _write_xyz(job_dir / "crest_conformers.xyz", ("first", "second"))
+    _write_xyz(job_dir / "crest_best.xyz", ("first",))
+    stdout_path = job_dir / "crest.stdout.log"
+    stderr_path = job_dir / "crest.stderr.log"
+    process = MagicMock()
+    process.poll.return_value = 0
+    running = CrestRunningJob(
+        process=process,
+        command=("crest", "input.xyz"),
+        started_at="2026-04-19T00:00:00+00:00",
+        stdout_log=str(stdout_path.resolve()),
+        stderr_log=str(stderr_path.resolve()),
+        stdout_handle=stdout_path.open("w", encoding="utf-8"),
+        stderr_handle=stderr_path.open("w", encoding="utf-8"),
+        selected_input_xyz=str((job_dir / "input.xyz").resolve()),
+        mode="standard",
+        manifest_path="",
+        resource_request={"max_cores": 4, "max_memory_gb": 8},
+        resource_actual={"assigned_cores": 4, "memory_limit_gb": 8},
+        job_dir=str(job_dir.resolve()),
+    )
+
+    result = finalize_crest_job(running)
+
+    assert result.status == "completed"
+    assert result.retained_conformer_count == 2
+    assert result.retained_conformer_paths == (
+        str((job_dir / "crest_conformers.xyz").resolve()),
+        str((job_dir / "crest_best.xyz").resolve()),
+    )
+
+
+def test_finalize_crest_job_preserves_distinct_rotamer_geometry(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    _write_xyz(job_dir / "input.xyz", ("input",))
+    _write_xyz(job_dir / "crest_conformers.xyz", ("conformer",))
+    rotamer = job_dir / "crest_rotamers.xyz"
+    rotamer.write_text("1\nrotamer\nH 1.0 0.0 0.0\n", encoding="utf-8")
+    stdout_path = job_dir / "crest.stdout.log"
+    stderr_path = job_dir / "crest.stderr.log"
+    process = MagicMock()
+    process.poll.return_value = 0
+    running = CrestRunningJob(
+        process=process,
+        command=("crest", "input.xyz"),
+        started_at="2026-04-19T00:00:00+00:00",
+        stdout_log=str(stdout_path.resolve()),
+        stderr_log=str(stderr_path.resolve()),
+        stdout_handle=stdout_path.open("w", encoding="utf-8"),
+        stderr_handle=stderr_path.open("w", encoding="utf-8"),
+        selected_input_xyz=str((job_dir / "input.xyz").resolve()),
+        mode="standard",
+        manifest_path="",
+        resource_request={"max_cores": 4, "max_memory_gb": 8},
+        resource_actual={"assigned_cores": 4, "memory_limit_gb": 8},
+        job_dir=str(job_dir.resolve()),
+    )
+
+    result = finalize_crest_job(running)
+
+    assert result.status == "completed"
+    assert result.retained_conformer_count == 2
+    assert result.retained_conformer_paths == (
+        str((job_dir / "crest_conformers.xyz").resolve()),
+        str(rotamer.resolve()),
+    )
+
+
+def test_finalize_crest_job_rejects_retained_output_for_different_atoms(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    _write_xyz(job_dir / "input.xyz", ("input",))
+    (job_dir / "crest_conformers.xyz").write_text(
+        "1\nstale other molecule\nCl 0 0 0\n", encoding="utf-8"
+    )
+    stdout_path = job_dir / "crest.stdout.log"
+    stderr_path = job_dir / "crest.stderr.log"
+    process = MagicMock()
+    process.poll.return_value = 0
+    running = CrestRunningJob(
+        process=process,
+        command=("crest", "input.xyz"),
+        started_at="2026-04-19T00:00:00+00:00",
+        stdout_log=str(stdout_path.resolve()),
+        stderr_log=str(stderr_path.resolve()),
+        stdout_handle=stdout_path.open("w", encoding="utf-8"),
+        stderr_handle=stderr_path.open("w", encoding="utf-8"),
+        selected_input_xyz=str((job_dir / "input.xyz").resolve()),
+        mode="standard",
+        manifest_path="",
+        resource_request={"max_cores": 4, "max_memory_gb": 8},
+        resource_actual={"assigned_cores": 4, "memory_limit_gb": 8},
+        job_dir=str(job_dir.resolve()),
+    )
+
+    result = finalize_crest_job(running)
+
+    assert result.status == "failed"
+    assert result.reason == "crest_no_valid_retained_ensemble"
+    assert result.retained_conformer_paths == ()
 
 
 def _sampling_command(
@@ -486,11 +702,11 @@ def test_build_command_enforces_crest_native_numeric_bounds(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     max_int = (1 << 31) - 1
-    command = _sampling_command(monkeypatch, tmp_path, {"mddump": max_int})
+    command = _sampling_command(monkeypatch, tmp_path, {"mdlen": 0.001, "mddump": max_int})
     assert command[command.index("--mddump") + 1] == str(max_int)
 
     with pytest.raises(ValueError, match="mddump"):
-        _sampling_command(monkeypatch, tmp_path, {"mddump": max_int + 1})
+        _sampling_command(monkeypatch, tmp_path, {"mdlen": 0.001, "mddump": max_int + 1})
     with pytest.raises(ValueError, match="MD steps"):
         _sampling_command(monkeypatch, tmp_path, {"mdlen": 10_000_000, "tstep": 0.001})
     with pytest.raises(ValueError, match="MD steps"):
@@ -503,6 +719,78 @@ def test_build_command_rejects_native_unsafe_tstep(
 ) -> None:
     with pytest.raises(ValueError, match="tstep"):
         _sampling_command(monkeypatch, tmp_path, {"tstep": tstep})
+
+
+def test_sampling_budget_uses_method_specific_default_timestep(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with pytest.raises(ValueError, match="admitted work budget"):
+        _sampling_command(monkeypatch, tmp_path, {"gfn": "ff", "mdlen": 120})
+
+    command = _sampling_command(monkeypatch, tmp_path, {"gfn": 2, "mdlen": 120})
+    assert command[command.index("--mdlen") + 1] == "120"
+
+    with pytest.raises(ValueError, match="admitted work budget"):
+        _sampling_command(monkeypatch, tmp_path, {"gfn": "2//ff", "mdlen": 150})
+
+
+def test_sampling_budget_requires_explicit_high_cost_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manifest = {"gfn": "ff", "mdlen": 120, "max_md_steps": 12_000_000}
+    with pytest.raises(ValueError, match="allow_high_cost_md"):
+        _sampling_command(monkeypatch, tmp_path, manifest)
+
+    command = _sampling_command(
+        monkeypatch,
+        tmp_path,
+        {**manifest, "allow_high_cost_md": True},
+    )
+    assert command[command.index("--mdlen") + 1] == "120"
+
+
+def test_sampling_budget_caps_atom_count_times_aggregate_md_steps(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = _cfg(tmp_path)
+    job_dir = tmp_path / "atom-work-budget"
+    job_dir.mkdir()
+    atom_count = 6_000
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text(
+        f"{atom_count}\nlarge molecule\n" + "H 0 0 0\n" * atom_count,
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "orca_auto.flow.engines.crest.runner._resolve_crest_executable",
+        lambda _cfg: "/usr/bin/crest",
+    )
+
+    with pytest.raises(ValueError, match="server work-unit ceiling"):
+        _build_command(
+            cfg,
+            job_dir=job_dir,
+            selected_xyz=selected_xyz,
+            manifest={"gfn": 2, "mdlen": 300},
+        )
+
+
+def test_automatic_mdlen_respects_explicit_max_md_steps(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="automatic mdlen worst case"):
+        _sampling_command(monkeypatch, tmp_path, {"max_md_steps": 1})
+
+
+def test_local_default_uses_server_automatic_md_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    command = _sampling_command(monkeypatch, tmp_path, {})
+
+    assert "--mdlen" not in command
 
 
 def test_start_crest_job_fails_closed_on_malformed_sampling_value(

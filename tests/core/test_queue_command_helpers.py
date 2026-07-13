@@ -41,6 +41,23 @@ def test_queue_entry_listing_skips_missing_roots_without_calling_list_queue(tmp_
     assert not missing_root.exists()
 
 
+def test_queue_runtime_listing_applies_entry_acceptance_filter(tmp_path: Any) -> None:
+    queue_root = tmp_path / "queue"
+    queue_root.mkdir()
+    accepted = SimpleNamespace(queue_id="accepted")
+    rejected = SimpleNamespace(queue_id="rejected")
+    runtime = queue_cmd.QueueRuntime(
+        load_config_fn=lambda value: value,
+        runtime_roots_for_cfg_fn=lambda _cfg: (queue_root,),
+        list_queue_fn=lambda _root: [rejected, accepted],
+        dequeue_next_fn=lambda _root: None,
+        dequeue_next_across_roots_fn=lambda *_args, **_kwargs: None,
+        accept_entry_fn=lambda entry: entry is accepted,
+    )
+
+    assert runtime.queue_entries_with_roots(SimpleNamespace()) == [(queue_root, accepted)]
+
+
 def test_run_queue_worker_command_uses_existing_pid_reporter(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

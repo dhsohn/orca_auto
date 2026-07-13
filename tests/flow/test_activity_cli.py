@@ -75,7 +75,7 @@ def test_list_activities_merges_workflows_and_standalone_sources(monkeypatch) ->
         queue_id="crest-q-1",
         app_name="orca_auto_crest",
         task_id="crest-job-1",
-        task_kind="crest_run_dir",
+        task_kind="crest_conformer_search",
         engine="crest",
         status=QueueStatus.PENDING,
         priority=10,
@@ -86,18 +86,25 @@ def test_list_activities_merges_workflows_and_standalone_sources(monkeypatch) ->
         queue_id="xtb-q-1",
         app_name="orca_auto_xtb",
         task_id="xtb-job-1",
-        task_kind="xtb_run_dir",
+        task_kind="xtb_path_search",
         engine="xtb",
         status=QueueStatus.RUNNING,
         priority=5,
         enqueued_at="2026-04-20T10:02:00+00:00",
         started_at="2026-04-20T10:03:00+00:00",
-        metadata={"job_dir": "/tmp/xtb_root/jobs/rxn-a", "reaction_key": "rxn-a"},
+        metadata={
+            "job_dir": "/tmp/xtb_root/jobs/rxn-a",
+            "job_type": "path_search",
+            "reaction_key": "rxn-a",
+            "terminal_repair_blocked_reason": "terminal_artifacts_unrecoverable",
+        },
     )
     monkeypatch.setattr(
         activity,
         "list_queue",
-        lambda root: [crest_entry] if str(root).endswith("crest_root") else [xtb_entry],
+        # Shared or malformed roots can expose foreign rows. Each catalog
+        # collector must retain only its complete canonical identity.
+        lambda _root: [crest_entry, xtb_entry],
     )
     monkeypatch.setattr(
         _activity_orca,
@@ -139,6 +146,8 @@ def test_list_activities_merges_workflows_and_standalone_sources(monkeypatch) ->
     assert workflow_item["metadata"]["current_engine"] == "xtb"
     assert workflow_item["metadata"]["elapsed_started_at"] == "2026-04-20T10:05:00+00:00"
     xtb_item = next(item for item in payload["activities"] if item["activity_id"] == "xtb-q-1")
+    assert xtb_item["status"] == "repair_blocked"
+    assert xtb_item["metadata"]["repair_blocked_reason"] == "terminal_artifacts_unrecoverable"
     assert xtb_item["metadata"]["elapsed_started_at"] == "2026-04-20T10:03:00+00:00"
 
 
@@ -380,7 +389,7 @@ def test_orca_records_merge_queue_entries_and_snapshots(
             queue_id="q-1",
             app_name="orca_auto_orca",
             task_id="task-1",
-            task_kind="orca_run",
+            task_kind="orca_run_inp",
             engine="orca",
             status=QueueStatus.RUNNING,
             priority=3,
@@ -398,13 +407,24 @@ def test_orca_records_merge_queue_entries_and_snapshots(
             queue_id="q-2",
             app_name="orca_auto_orca",
             task_id="task-2",
-            task_kind="orca_run",
+            task_kind="orca_run_inp",
             engine="orca",
             status=QueueStatus.RUNNING,
             priority=4,
             enqueued_at="2026-04-26T00:02:00+00:00",
             cancel_requested=True,
             metadata={"reaction_dir": str(tmp_path / "missing")},
+        ),
+        QueueEntry(
+            queue_id="xtb-foreign",
+            app_name="orca_auto_xtb",
+            task_id="xtb-task",
+            task_kind="xtb_sp",
+            engine="xtb",
+            status=QueueStatus.PENDING,
+            priority=1,
+            enqueued_at="2026-04-26T00:03:00+00:00",
+            metadata={"job_type": "sp", "job_dir": str(tmp_path / "xtb")},
         ),
     ]
     snapshots = [
@@ -456,6 +476,7 @@ def test_orca_records_merge_queue_entries_and_snapshots(
 
     assert reconciled == [allowed]
     by_id = {row.activity_id: row for row in rows}
+    assert "xtb-foreign" not in by_id
     assert by_id["q-1"].status == "completed"
     assert by_id["q-1"].label == "tracked-name"
     assert by_id["q-1"].metadata["elapsed_started_at"] == "2026-04-26T00:01:00+00:00"
@@ -482,7 +503,7 @@ def test_orca_records_suppress_stale_snapshot_for_terminal_entry(
             queue_id="q-cancel",
             app_name="orca_auto_orca",
             task_id="task-ts3",
-            task_kind="orca_run",
+            task_kind="orca_run_inp",
             engine="orca",
             status=QueueStatus.CANCELLED,
             priority=3,
@@ -543,7 +564,7 @@ def test_orca_records_keep_live_snapshot_despite_terminal_entry(
             queue_id="q-done",
             app_name="orca_auto_orca",
             task_id="task-ts4",
-            task_kind="orca_run",
+            task_kind="orca_run_inp",
             engine="orca",
             status=QueueStatus.COMPLETED,
             priority=3,

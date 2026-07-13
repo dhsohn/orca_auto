@@ -472,10 +472,14 @@ def test_raise_if_shutdown_callback_requested_uses_engine_context() -> None:
 
 
 def test_queue_cancel_callback_uses_normalized_queue_root_and_entry_id() -> None:
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, dict[str, object]]] = []
 
-    def get_cancel_requested(root: str, queue_id: str) -> bool:
-        calls.append((root, queue_id))
+    def get_cancel_requested(
+        root: str,
+        queue_id: str,
+        **kwargs: object,
+    ) -> bool:
+        calls.append((root, queue_id, kwargs))
         return True
 
     queue_deps = engine_execution.InternalWorkerQueueDependencies(
@@ -488,11 +492,20 @@ def test_queue_cancel_callback_uses_normalized_queue_root_and_entry_id() -> None
     callback = engine_execution.queue_cancel_callback(
         queue_deps,
         Path("/tmp/queue"),
-        SimpleNamespace(queue_id="queue-1"),
+        SimpleNamespace(queue_id="queue-1", task_id="task-1"),
     )
 
     assert callback() is True
-    assert calls == [("/tmp/queue", "queue-1")]
+    assert calls == [
+        (
+            "/tmp/queue",
+            "queue-1",
+            {
+                "expected_entry": SimpleNamespace(queue_id="queue-1", task_id="task-1"),
+                "expected_task_id": "task-1",
+            },
+        )
+    ]
 
 
 def test_sync_terminal_result_runs_common_terminal_sequence() -> None:
@@ -502,10 +515,15 @@ def test_sync_terminal_result_runs_common_terminal_sequence() -> None:
         calls.append("sync")
         return "organized"
 
+    def mark_queue_terminal(before_update: Any) -> bool:
+        before_update()
+        calls.append("mark")
+        return True
+
     outcome = engine_execution.sync_terminal_result(
         engine_execution.TerminalSyncActions(
             write_artifacts=lambda: calls.append("write"),
-            mark_queue_terminal=lambda: calls.append("mark"),
+            mark_queue_terminal=mark_queue_terminal,
             sync_job_record=sync_job_record,
             notify_finished=lambda sync_result: calls.append(f"notify:{sync_result}"),
             emit_output=lambda sync_result: calls.append(f"emit:{sync_result}"),
@@ -514,12 +532,61 @@ def test_sync_terminal_result_runs_common_terminal_sequence() -> None:
         emit_output=True,
     )
 
-    assert calls == ["write", "mark", "sync", "notify:organized", "emit:organized"]
+    assert calls == ["write", "sync", "mark", "notify:organized", "emit:organized"]
     assert outcome == ("outcome", "organized")
+
+
+def test_sync_terminal_result_leaves_queue_replayable_when_index_sync_fails() -> None:
+    calls: list[str] = []
+
+    def fail_sync() -> str:
+        calls.append("sync")
+        raise OSError("index fsync failed")
+
+    def mark_queue_terminal(before_update: Any) -> bool:
+        before_update()
+        calls.append("mark")
+        return True
+
+    with pytest.raises(OSError, match="index fsync failed"):
+        engine_execution.sync_terminal_result(
+            engine_execution.TerminalSyncActions(
+                write_artifacts=lambda: calls.append("write"),
+                sync_job_record=fail_sync,
+                mark_queue_terminal=mark_queue_terminal,
+                notify_finished=lambda _result: calls.append("notify"),
+                build_outcome=lambda result: result,
+            )
+        )
+
+    assert calls == ["write", "sync"]
+
+
+def test_sync_terminal_result_does_not_write_for_rejected_generation() -> None:
+    calls: list[str] = []
+
+    def handle_rejected() -> str:
+        calls.append("fallback")
+        return "rejected"
+
+    outcome = engine_execution.sync_terminal_result(
+        engine_execution.TerminalSyncActions(
+            write_artifacts=lambda: calls.append("write"),
+            sync_job_record=lambda: calls.append("sync"),
+            mark_queue_terminal=lambda _before_update: None,
+            notify_finished=lambda _result: calls.append("notify"),
+            build_outcome=lambda _result: "default",
+            handle_uncommitted_terminal=handle_rejected,
+        )
+    )
+
+    assert outcome == "rejected"
+    assert calls == ["fallback"]
 
 
 def test_mark_result_terminal_status_passes_result_fields() -> None:
     calls: list[dict[str, Any]] = []
+    expected_entry = SimpleNamespace(queue_id="queue-1", task_id="task-1")
 
     engine_execution.mark_result_terminal_status(
         "/tmp/queue",
@@ -532,6 +599,8 @@ def test_mark_result_terminal_status_passes_result_fields() -> None:
         mark_completed_fn=lambda *args, **kwargs: None,
         mark_cancelled_fn=lambda *args, **kwargs: None,
         mark_failed_fn=lambda *args, **kwargs: None,
+        expected_entry=expected_entry,
+        expected_task_id="task-1",
     )
 
     assert calls[0]["args"] == ("/tmp/queue", "queue-1")
@@ -541,6 +610,8 @@ def test_mark_result_terminal_status_passes_result_fields() -> None:
     assert callable(calls[0]["kwargs"]["mark_completed_fn"])
     assert callable(calls[0]["kwargs"]["mark_cancelled_fn"])
     assert callable(calls[0]["kwargs"]["mark_failed_fn"])
+    assert calls[0]["kwargs"]["expected_entry"] is expected_entry
+    assert calls[0]["kwargs"]["expected_task_id"] == "task-1"
 
 
 def test_default_entry_resource_request_uses_common_resource_caps() -> None:

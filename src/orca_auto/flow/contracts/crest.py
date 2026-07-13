@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from orca_auto.core.utils.coercion import normalize_text
 
-from ..xyz_utils import load_xyz_frames
+from ..manifest import require_int
+from ..xyz_utils import load_output_xyz_frames
 from .xtb import WorkflowStageInput
+
+_OVERLAPPING_CREST_OUTPUT_NAMES = frozenset(
+    {"crest_conformers.xyz", "crest_ensemble.xyz", "crest_rotamers.xyz", "crest_best.xyz"}
+)
 
 
 @dataclass(frozen=True)
@@ -21,6 +27,7 @@ class CrestArtifactContract:
     selected_input_xyz: str = ""
     retained_conformer_count: int = 0
     retained_conformer_paths: tuple[str, ...] = ()
+    output_identities: dict[str, dict[str, Any]] = field(default_factory=dict)
     resource_request: dict[str, int] = field(default_factory=dict)
     resource_actual: dict[str, int] = field(default_factory=dict)
 
@@ -36,6 +43,7 @@ class CrestArtifactContract:
             "selected_input_xyz": self.selected_input_xyz,
             "retained_conformer_count": self.retained_conformer_count,
             "retained_conformer_paths": list(self.retained_conformer_paths),
+            "output_identities": dict(self.output_identities),
             "resource_request": dict(self.resource_request),
             "resource_actual": dict(self.resource_actual),
         }
@@ -47,7 +55,7 @@ class CrestDownstreamPolicy:
 
     @classmethod
     def build(cls, *, max_candidates: int = 3) -> CrestDownstreamPolicy:
-        return cls(max_candidates=max(1, int(max_candidates)))
+        return cls(max_candidates=require_int(max_candidates, field="max_candidates", minimum=1))
 
 
 def _crest_stage_input(
@@ -57,6 +65,9 @@ def _crest_stage_input(
     artifact_path: str,
     metadata: dict[str, Any],
 ) -> WorkflowStageInput:
+    output_identity = contract.output_identities.get(artifact_path)
+    if output_identity:
+        metadata = {**metadata, "output_identity": dict(output_identity)}
     return WorkflowStageInput(
         source_job_id=contract.job_id,
         source_job_type=f"crest_{contract.mode}",
@@ -88,15 +99,33 @@ def _crest_frame_metadata(
     return metadata
 
 
+def _crest_frame_geometry_key(frame: Any) -> tuple[tuple[str, float, float, float], ...]:
+    return tuple(
+        (parts[0].casefold(), float(parts[1]), float(parts[2]), float(parts[3]))
+        for line in frame.atom_lines
+        if len(parts := line.split()) >= 4
+    )
+
+
 def _crest_conformer_inputs_for_path(
     contract: CrestArtifactContract,
     *,
     artifact_path: str,
     start_rank: int,
     max_candidates: int,
+    seen_geometries: set[tuple[tuple[str, float, float, float], ...]],
 ) -> tuple[WorkflowStageInput, ...]:
-    frames = load_xyz_frames(artifact_path)
-    if len(frames) <= 1:
+    frames = load_output_xyz_frames(artifact_path)
+    if not frames or max_candidates <= 0:
+        return ()
+    deduplicate_across_outputs = Path(artifact_path).name in _OVERLAPPING_CREST_OUTPUT_NAMES
+    prior_geometries = set(seen_geometries) if deduplicate_across_outputs else set()
+    if len(frames) == 1:
+        geometry_key = _crest_frame_geometry_key(frames[0])
+        if geometry_key in prior_geometries:
+            return ()
+        if deduplicate_across_outputs:
+            seen_geometries.add(geometry_key)
         return (
             _crest_stage_input(
                 contract,
@@ -108,8 +137,13 @@ def _crest_conformer_inputs_for_path(
 
     rows: list[WorkflowStageInput] = []
     frame_count = len(frames)
-    for offset, frame in enumerate(frames):
-        rank = start_rank + offset
+    for frame in frames:
+        geometry_key = _crest_frame_geometry_key(frame)
+        if geometry_key in prior_geometries:
+            continue
+        if deduplicate_across_outputs:
+            seen_geometries.add(geometry_key)
+        rank = start_rank + len(rows)
         rows.append(
             _crest_stage_input(
                 contract,
@@ -136,6 +170,7 @@ def to_workflow_stage_inputs(
     active_policy = policy or CrestDownstreamPolicy.build()
     rows: list[WorkflowStageInput] = []
     next_rank = 1
+    seen_geometries: set[tuple[tuple[str, float, float, float], ...]] = set()
     for path in contract.retained_conformer_paths:
         text = normalize_text(path, none="None")
         if not text:
@@ -145,6 +180,7 @@ def to_workflow_stage_inputs(
             artifact_path=text,
             start_rank=next_rank,
             max_candidates=active_policy.max_candidates - len(rows),
+            seen_geometries=seen_geometries,
         ):
             rows.append(stage_input)
             next_rank += 1

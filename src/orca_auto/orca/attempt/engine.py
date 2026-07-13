@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from ...core.engine_runner import (
+    confined_output_identity,
+    verify_confined_output_identity,
+)
 from ..completion_rules import detect_completion_mode
 from ..orca_runner import WorkerShutdownInterrupt
 from ..out_analyzer import OutAnalysis, analyze_output
@@ -118,8 +122,20 @@ def _run_and_record_attempt(
     run_result = runner.run(current_inp)
     out_path = Path(run_result.out_path)
 
+    runner_output_identity = getattr(run_result, "output_identity", None)
+    if isinstance(runner_output_identity, dict) and runner_output_identity:
+        verify_confined_output_identity(
+            reaction_dir,
+            runner_output_identity,
+            path_override=out_path,
+        )
+    output_identity_before = confined_output_identity(reaction_dir, out_path)
+
     mode = detect_completion_mode(current_inp)
     analysis = analyze_output(out_path, mode)
+    output_identity = confined_output_identity(reaction_dir, out_path)
+    if output_identity != output_identity_before:
+        raise RuntimeError(f"ORCA output changed while it was analyzed: {out_path}")
     attempt: AttemptRecord = {
         "index": execution_index,
         "inp_path": str(current_inp),
@@ -132,6 +148,19 @@ def _run_and_record_attempt(
         "started_at": started_at,
         "ended_at": now_utc_iso(),
     }
+    command = getattr(run_result, "command", ())
+    if isinstance(command, (list, tuple)) and all(isinstance(part, str) for part in command):
+        attempt["command"] = list(command)
+    input_identity = getattr(run_result, "input_identity", None)
+    if isinstance(input_identity, dict):
+        attempt["input_identity"] = dict(input_identity)
+    executable_identity = getattr(run_result, "executable_identity", None)
+    if isinstance(executable_identity, dict):
+        attempt["executable_identity"] = dict(executable_identity)
+    attempt["output_identity"] = output_identity
+    execution_provenance = getattr(run_result, "execution_provenance", None)
+    if isinstance(execution_provenance, dict) and execution_provenance:
+        state["execution_provenance"] = dict(execution_provenance)
     state["attempts"].append(attempt)
     save_state(reaction_dir, state)
 

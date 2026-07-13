@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.queue.priority import normalize_queue_priority
+from orca_auto.core.queue.publication import QUEUE_SUBMISSION_INTENT_KEY
 from orca_auto.core.statuses import (
     CANCEL_ACK_STATUSES,
     STATUS_CANCEL_FAILED,
@@ -35,10 +38,12 @@ class CancellationDeps:
     normalize_text: Callable[[Any], str]
     now_utc_iso: Callable[[], str]
     resolve_workflow_workspace: Callable[..., Path]
+    acquire_workflow_lock: Callable[[Path], AbstractContextManager[None]]
     load_workflow_payload: Callable[[Path], dict[str, Any]]
     write_workflow_payload: Callable[[Path, dict[str, Any]], Any]
     sync_workflow_registry: Callable[[str | Path, Path, dict[str, Any]], Any]
     cancel_target: Callable[..., dict[str, Any]]
+    recover_exact_reaction_dir_submission: Callable[..., dict[str, Any] | None]
 
 
 CANCEL_RESULT = TaskRecordMutator("cancel_result")
@@ -65,6 +70,12 @@ def cancel_stage_context(
 
     payload = task.get("payload")
     payload_reaction_dir = payload.get("reaction_dir") if isinstance(payload, dict) else ""
+    raw_force = enqueue_payload.get("force", False)
+    force = (
+        raw_force
+        if isinstance(raw_force, bool)
+        else str(raw_force).strip().lower() in {"1", "true", "yes", "on"}
+    )
     return CancelStageContext(
         stage=stage,
         task=task,
@@ -76,6 +87,11 @@ def cancel_stage_context(
         queue_id=deps.normalize_text(stage_metadata.get("queue_id")),
         reaction_dir=deps.normalize_text(payload_reaction_dir)
         or deps.normalize_text(enqueue_payload.get("reaction_dir")),
+        submission_intent_token=deps.normalize_text(
+            stage_metadata.get(QUEUE_SUBMISSION_INTENT_KEY)
+        ),
+        priority=normalize_queue_priority(enqueue_payload.get("priority")),
+        force=force,
     )
 
 
@@ -101,9 +117,47 @@ def record_cancel_skip(context: CancelStageContext, reason: str) -> WorkflowStag
 def needs_orca_cancel(context: CancelStageContext) -> bool:
     return bool(
         context.queue_id
+        or context.submission_intent_token
         or context.task_status in {STATUS_SUBMITTED}
         or context.stage_status in {STATUS_QUEUED, STATUS_RUNNING}
     )
+
+
+def recover_intent_queue_id(
+    context: CancelStageContext,
+    *,
+    submitter_config: SiblingSubmitterConfig,
+    deps: CancellationDeps,
+) -> WorkflowStageOutcome | None:
+    """Recover the queue row committed before a workflow payload crash."""
+    if context.queue_id or not context.submission_intent_token:
+        return None
+    try:
+        recovered = deps.recover_exact_reaction_dir_submission(
+            reaction_dir=context.reaction_dir,
+            priority=context.priority,
+            config_path=submitter_config.config_path,
+            force=context.force,
+            repo_root=submitter_config.repo_root,
+            submission_intent_token=context.submission_intent_token,
+            allow_unclaimable_active=True,
+            raise_on_lookup_error=True,
+        )
+    except (OSError, ValueError):
+        return record_cancel_failure(
+            context,
+            reason="submission_intent_lookup_failed",
+            deps=deps,
+        )
+    if recovered is None:
+        return None
+    queue_id = deps.normalize_text(recovered.get("queue_id"))
+    if not queue_id:
+        reason = deps.normalize_text(recovered.get("reason")) or "ambiguous_submission_recovery"
+        return record_cancel_failure(context, reason=reason, deps=deps)
+    context.queue_id = queue_id
+    context.stage_metadata["queue_id"] = queue_id
+    return None
 
 
 def apply_cancel_result(
@@ -292,6 +346,15 @@ def cancel_stage_outcome(
         return preflight_failure
     if not orca_submitter_matches(context.enqueue_payload, normalize_text=deps.normalize_text):
         return None
+    recovery_failure = recover_intent_queue_id(
+        context,
+        submitter_config=submitter_config,
+        deps=deps,
+    )
+    if recovery_failure is not None:
+        return recovery_failure
+    if not context.queue_id and context.submission_intent_token:
+        return record_local_cancel(context, deps)
     return record_remote_cancel(
         context,
         cancel_identifier=remote_cancel_identifier(context),
@@ -378,25 +441,28 @@ def cancel_reaction_ts_search_workflow(
         target=workflow_target,
         workflow_root=workflow_root,
     )
-    payload = deps.load_workflow_payload(workspace_dir)
-    submitter_config = sibling_submitter_config(
-        orca_config=orca_config,
-        orca_repo_root=orca_repo_root,
-        normalize_text=deps.normalize_text,
-    )
-    buckets = record_workflow_cancellation_outcomes(
-        payload=payload,
-        submitter_config=submitter_config,
-        deps=deps,
-    )
+    with deps.acquire_workflow_lock(workspace_dir):
+        payload = deps.load_workflow_payload(workspace_dir)
+        submitter_config = sibling_submitter_config(
+            orca_config=orca_config,
+            orca_repo_root=orca_repo_root,
+            normalize_text=deps.normalize_text,
+        )
+        buckets = record_workflow_cancellation_outcomes(
+            payload=payload,
+            submitter_config=submitter_config,
+            deps=deps,
+        )
 
-    write_cancellation_summary(payload, buckets, deps)
-    persist_cancellation_workflow(
-        workflow_root=workflow_root,
-        workspace_dir=workspace_dir,
-        payload=payload,
-        deps=deps,
-    )
-    return cancellation_workflow_result(
-        payload=payload, workspace_dir=workspace_dir, buckets=buckets
-    )
+        write_cancellation_summary(payload, buckets, deps)
+        persist_cancellation_workflow(
+            workflow_root=workflow_root,
+            workspace_dir=workspace_dir,
+            payload=payload,
+            deps=deps,
+        )
+        return cancellation_workflow_result(
+            payload=payload,
+            workspace_dir=workspace_dir,
+            buckets=buckets,
+        )

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -25,6 +26,7 @@ from orca_auto.core.admission import (
     update_slot_metadata,
 )
 from orca_auto.core.config.schema import resolved_admission_limit
+from orca_auto.core.engine_catalog import get_engine_catalog_entry
 from orca_auto.core.engines.queue_worker import (
     EngineQueueWorker,
     build_engine_queue_worker,
@@ -34,6 +36,7 @@ from orca_auto.core.queue.engine.execution import coerce_resource_request
 from orca_auto.core.queue.internal_engine import (
     InternalEngineQueueModule,
     InternalEngineSpec,
+    entry_matches_engine_identity,
 )
 from orca_auto.core.queue.lifecycle import (
     EngineQueueProcessLifecycleHooks,
@@ -43,7 +46,16 @@ from orca_auto.core.queue.lifecycle import (
 from orca_auto.core.queue.lifecycle import (
     job_queue_root as _lifecycle_job_queue_root,
 )
-from orca_auto.core.queue.types import QueueEntry
+from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_COMPLETE,
+    QUEUE_RECORD_SYNC_PREPARING,
+    QUEUE_RECORD_SYNC_REPAIR_PENDING,
+    QUEUE_RECORD_SYNC_REPAIRING,
+    QUEUE_RECORD_SYNC_TOKEN_KEY,
+    queue_record_publication_lock,
+    queue_record_sync_state,
+)
+from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker import (
     EngineRunningJob as _RunningJob,
 )
@@ -102,6 +114,7 @@ from . import worker_tracking as _tracking_helpers
 from .adapter import (
     TERMINAL_REPLAY_METADATA_KEY,
     get_cancel_requested,
+    get_entry_by_id,
     list_queue,
     mark_cancelled,
     mark_completed,
@@ -113,6 +126,7 @@ from .adapter import (
     queue_entry_task_id,
     reconcile_orphaned_running_entries,
     requeue_running_entry,
+    transition_queue_record_publication,
     update_terminal,
     worker_log_path,
 )
@@ -277,9 +291,10 @@ def _admission_root_for_cfg(cfg: AppConfig) -> str:
 
 
 def _reserve_orca_worker_slot(root: str | Path, limit: int, **kwargs: Any) -> str | None:
+    catalog_entry = get_engine_catalog_entry("orca")
     slot_kwargs = dict(kwargs)
-    slot_kwargs["source"] = "queue_worker"
-    slot_kwargs["app_name"] = "orca_auto_orca"
+    slot_kwargs["source"] = catalog_entry.admission_source
+    slot_kwargs["app_name"] = catalog_entry.app_id
     slot_kwargs["state"] = "reserved"
     return reserve_slot(
         Path(root),
@@ -363,6 +378,161 @@ def _upsert_running_job_record(cfg: AppConfig, entry: QueueEntry) -> None:
         entry,
         callbacks=_tracking_callbacks(),
     )
+
+
+def _upsert_queued_job_record(cfg: AppConfig, entry: QueueEntry) -> None:
+    _tracking_helpers.upsert_queued_job_record(
+        cfg,
+        entry,
+        callbacks=_tracking_callbacks(),
+    )
+
+
+def _repair_orca_queue_publication(
+    cfg: AppConfig,
+    queue_root: Path,
+    entry: QueueEntry,
+) -> bool:
+    """Repair one queued-index publication before the row can be claimed."""
+    if not entry_matches_engine_identity(entry, "orca"):
+        return True
+    if entry.status != QueueStatus.PENDING or entry.cancel_requested:
+        return True
+    reaction_dir_text = queue_entry_reaction_dir(entry)
+    try:
+        reaction_dir = Path(reaction_dir_text).expanduser().resolve()
+        resolved_queue_root = queue_root.expanduser().resolve()
+    except (OSError, RuntimeError):
+        return False
+    if not reaction_dir_text or not reaction_dir.is_relative_to(resolved_queue_root):
+        return False
+    for key in ("selected_inp", "selected_input_path", "selected_input_xyz"):
+        selected_input_text = str(entry.metadata.get(key) or "").strip()
+        if not selected_input_text:
+            continue
+        try:
+            selected_input = Path(selected_input_text).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return False
+        if not selected_input.is_relative_to(reaction_dir):
+            return False
+    state = queue_record_sync_state(entry)
+    if not state or state == QUEUE_RECORD_SYNC_COMPLETE:
+        return True
+    if state not in {
+        QUEUE_RECORD_SYNC_PREPARING,
+        QUEUE_RECORD_SYNC_REPAIR_PENDING,
+        QUEUE_RECORD_SYNC_REPAIRING,
+    }:
+        logger.error(
+            "Cannot repair ORCA queue publication with invalid state %r: %s",
+            state,
+            queue_entry_id(entry),
+        )
+        return False
+    queue_id = queue_entry_id(entry)
+    with queue_record_publication_lock(queue_root, queue_id):
+        current = get_entry_by_id(queue_root, queue_id)
+        if current is None or current.status != QueueStatus.PENDING or current.cancel_requested:
+            return True
+        if not entry_matches_engine_identity(current, "orca"):
+            return False
+        current_reaction_dir_text = queue_entry_reaction_dir(current)
+        try:
+            current_reaction_dir = Path(current_reaction_dir_text).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return False
+        if (
+            not current_reaction_dir_text
+            or not current_reaction_dir.is_relative_to(resolved_queue_root)
+            or current_reaction_dir != reaction_dir
+            or queue_entry_task_id(current) != queue_entry_task_id(entry)
+        ):
+            return False
+        state = queue_record_sync_state(current)
+        if state == QUEUE_RECORD_SYNC_COMPLETE:
+            return True
+        if state not in {
+            QUEUE_RECORD_SYNC_PREPARING,
+            QUEUE_RECORD_SYNC_REPAIR_PENDING,
+            QUEUE_RECORD_SYNC_REPAIRING,
+        }:
+            logger.error(
+                "Cannot repair ORCA queue publication after marker changed to invalid state %r: %s",
+                state,
+                queue_id,
+            )
+            return False
+        # Acquiring the entry-scoped publication lock proves that no publisher
+        # still owns this scope, even when a cleanup write failed and left the
+        # long-lived publisher PID in PREPARING/REPAIRING metadata. Reclaim the
+        # durable lease here instead of trusting process liveness forever.
+        token = str(current.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY, "")).strip()
+        if not token:
+            logger.error("Cannot repair ORCA queue publication without a token: %s", queue_id)
+            return False
+
+        repairing, transitioned = transition_queue_record_publication(
+            queue_root,
+            queue_id,
+            expected_token=token,
+            expected_state=state,
+            target_state=QUEUE_RECORD_SYNC_REPAIRING,
+            owner_pid=os.getpid(),
+            expected_entry=entry,
+        )
+        if not transitioned or repairing is None:
+            return queue_record_sync_state(repairing) == QUEUE_RECORD_SYNC_COMPLETE
+        try:
+            _upsert_queued_job_record(cfg, repairing)
+            completed, transitioned = transition_queue_record_publication(
+                queue_root,
+                queue_id,
+                expected_token=token,
+                expected_state=QUEUE_RECORD_SYNC_REPAIRING,
+                target_state=QUEUE_RECORD_SYNC_COMPLETE,
+                owner_pid=0,
+                expected_entry=repairing,
+            )
+            return bool(
+                completed is not None
+                and (
+                    transitioned or queue_record_sync_state(completed) == QUEUE_RECORD_SYNC_COMPLETE
+                )
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to repair ORCA queued publication: queue_id=%s", queue_id)
+            try:
+                transition_queue_record_publication(
+                    queue_root,
+                    queue_id,
+                    expected_token=token,
+                    expected_state=QUEUE_RECORD_SYNC_REPAIRING,
+                    target_state=QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                    owner_pid=0,
+                    expected_entry=repairing,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "Failed to return ORCA publication to repair_pending: queue_id=%s",
+                    queue_id,
+                )
+            return False
+
+
+def _repair_orca_queue_publications(worker: EngineQueueWorker) -> bool:
+    repaired_all = True
+    for queue_root in queue_roots(worker.cfg):
+        try:
+            entries = list_queue(queue_root)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to inspect ORCA publication repairs: %s", queue_root)
+            repaired_all = False
+            continue
+        for entry in entries:
+            if not _repair_orca_queue_publication(worker.cfg, queue_root, entry):
+                repaired_all = False
+    return repaired_all
 
 
 def _upsert_terminal_job_record(
@@ -459,7 +629,9 @@ def _terminal_replay_blocks_new_generation(worker: Any) -> bool:
 
 def _queue_entry_by_id(queue_root: Any, target_queue_id: str) -> QueueEntry | None:
     for entry in list_queue(Path(queue_root)):
-        if queue_entry_id(entry) == target_queue_id:
+        if queue_entry_id(entry) == target_queue_id and entry_matches_engine_identity(
+            entry, "orca"
+        ):
             return entry
     return None
 
@@ -471,6 +643,50 @@ def _reaction_generation_key(entry: Any) -> str | None:
     return str(Path(reaction_dir).expanduser().resolve())
 
 
+def _expected_queue_entry(queue_root: Any, queue_id: str) -> QueueEntry | None:
+    return _queue_entry_by_id(queue_root, queue_id)
+
+
+def _mark_failed_expected(queue_root: Any, queue_id: str, **kwargs: Any) -> bool:
+    expected = kwargs.pop("expected_entry", None) or _expected_queue_entry(queue_root, queue_id)
+    return bool(
+        expected is not None
+        and mark_failed(queue_root, queue_id, expected_entry=expected, **kwargs)
+    )
+
+
+def _mark_cancelled_expected(queue_root: Any, queue_id: str, **kwargs: Any) -> bool:
+    expected = kwargs.pop("expected_entry", None) or _expected_queue_entry(queue_root, queue_id)
+    return bool(
+        expected is not None
+        and mark_cancelled(queue_root, queue_id, expected_entry=expected, **kwargs)
+    )
+
+
+def _mark_completed_expected(queue_root: Any, queue_id: str, **kwargs: Any) -> bool:
+    expected = kwargs.pop("expected_entry", None) or _expected_queue_entry(queue_root, queue_id)
+    return bool(
+        expected is not None
+        and mark_completed(queue_root, queue_id, expected_entry=expected, **kwargs)
+    )
+
+
+def _cancel_requested_expected(queue_root: Any, queue_id: str, **kwargs: Any) -> bool:
+    expected = kwargs.pop("expected_entry", None) or _expected_queue_entry(queue_root, queue_id)
+    return bool(
+        expected is not None
+        and get_cancel_requested(queue_root, queue_id, expected_entry=expected, **kwargs)
+    )
+
+
+def _requeue_running_expected(queue_root: Any, queue_id: str, **kwargs: Any) -> bool:
+    expected = kwargs.pop("expected_entry", None) or _expected_queue_entry(queue_root, queue_id)
+    return bool(
+        expected is not None
+        and requeue_running_entry(queue_root, queue_id, expected_entry=expected, **kwargs)
+    )
+
+
 def _lifecycle_callbacks() -> _lifecycle_helpers.OrcaQueueWorkerLifecycleCallbacks:
     return _lifecycle_helpers.OrcaQueueWorkerLifecycleCallbacks(
         queue_entry_id=queue_entry_id,
@@ -478,12 +694,12 @@ def _lifecycle_callbacks() -> _lifecycle_helpers.OrcaQueueWorkerLifecycleCallbac
         queue_entry_task_id=queue_entry_task_id,
         update_slot_metadata=update_slot_metadata,
         terminate_process=_terminate_process,
-        mark_failed=mark_failed,
+        mark_failed=_mark_failed_expected,
         upsert_running_job_record=_upsert_running_job_record,
         get_run_id_from_state=_get_run_id_from_state,
-        get_cancel_requested=get_cancel_requested,
-        mark_cancelled=mark_cancelled,
-        mark_completed=mark_completed,
+        get_cancel_requested=_cancel_requested_expected,
+        mark_cancelled=_mark_cancelled_expected,
+        mark_completed=_mark_completed_expected,
         upsert_terminal_job_record=_upsert_terminal_job_record,
         notify_terminal_job_from_state=_notify_terminal_job_from_state,
         find_queue_entry=_queue_entry_by_id,
@@ -491,7 +707,7 @@ def _lifecycle_callbacks() -> _lifecycle_helpers.OrcaQueueWorkerLifecycleCallbac
         queue_roots=queue_roots,
         reconcile_stale_slots=reconcile_stale_slots,
         reconcile_orphaned_running_entries=reconcile_orphaned_running_entries,
-        requeue_running_entry=requeue_running_entry,
+        requeue_running_entry=_requeue_running_expected,
     )
 
 
@@ -612,11 +828,16 @@ def _finalize_finished_job(worker: Any, queue_id: str, job: _RunningJob, *, rc: 
         )
         return {_TERMINAL_REPLAY_METADATA_KEY: captured_marker}
 
-    def mark_cancelled_with_evidence(root: Any, target_queue_id: str) -> Any:
+    def mark_cancelled_with_evidence(
+        root: Any,
+        target_queue_id: str,
+        **generation_kwargs: Any,
+    ) -> Any:
         return hooks.mark_cancelled_fn(
             root,
             target_queue_id,
             metadata_update=marker_for(STATUS_CANCELLED, "cancel_requested"),
+            **generation_kwargs,
         )
 
     def mark_completed_with_evidence(
@@ -624,12 +845,14 @@ def _finalize_finished_job(worker: Any, queue_id: str, job: _RunningJob, *, rc: 
         target_queue_id: str,
         *,
         run_id: str | None = None,
+        **generation_kwargs: Any,
     ) -> Any:
         return hooks.mark_completed_fn(
             root,
             target_queue_id,
             run_id=run_id,
             metadata_update=marker_for(STATUS_COMPLETED, ""),
+            **generation_kwargs,
         )
 
     def mark_failed_with_evidence(
@@ -638,6 +861,7 @@ def _finalize_finished_job(worker: Any, queue_id: str, job: _RunningJob, *, rc: 
         *,
         error: str,
         run_id: str | None = None,
+        **generation_kwargs: Any,
     ) -> Any:
         return hooks.mark_failed_fn(
             root,
@@ -645,6 +869,7 @@ def _finalize_finished_job(worker: Any, queue_id: str, job: _RunningJob, *, rc: 
             error=error,
             run_id=run_id,
             metadata_update=marker_for(STATUS_FAILED, error),
+            **generation_kwargs,
         )
 
     mark_result = mark_terminal_process_queue_entry_with_result(
@@ -1078,6 +1303,7 @@ def _strictly_finish_terminal_replay(
             prepared_item.queue_id,
             prepared_item.resolved_status,
             run_id=prepared_item.run_id,
+            expected_task_id=prepared_item.task_id,
         )
         if not updated:
             logger.info(
@@ -1362,6 +1588,7 @@ def _reconcile_orphaned_running(worker: Any) -> None:
                     item.queue_id,
                     item.resolved_status,
                     run_id=item.run_id,
+                    expected_task_id=item.task_id,
                 )
                 if not updated:
                     logger.info(
@@ -1434,7 +1661,11 @@ def _reconcile_worker_state(worker: Any) -> None:
 
 
 def _shutdown_running_job(worker: Any, queue_id: str, job: Any) -> None:
-    if get_cancel_requested(_job_queue_root(worker, job), queue_id):
+    if get_cancel_requested(
+        _job_queue_root(worker, job),
+        queue_id,
+        expected_task_id=job.task_id,
+    ):
         # A cancel landed before the worker loop could process it proactively. The
         # shared requeue chokepoint would still honor it (mark the entry cancelled
         # instead of requeuing for resume) but skip the terminal side effects --
@@ -1474,6 +1705,9 @@ def _after_orca_worker_init(worker: EngineQueueWorker) -> None:
     def reserve_next_after_terminal_replay() -> tuple[str, Any | None]:
         if _terminal_replay_blocks_new_generation(worker):
             logger.warning("Queue admission paused until durable ORCA terminal replay completes")
+            return "blocked", None
+        if not _repair_orca_queue_publications(worker):
+            logger.warning("Queue admission paused until ORCA queued publication repair succeeds")
             return "blocked", None
         return reserve_next_entry()
 
@@ -1792,7 +2026,13 @@ def _finalize_cancelled_run(
                 if terminal_status in (STATUS_COMPLETED, STATUS_CANCELLED)
                 else STATUS_FAILED
             )
-            updated = update_terminal(queue_root, job.queue_id, queue_status, run_id=run_id)
+            updated = update_terminal(
+                queue_root,
+                job.queue_id,
+                queue_status,
+                run_id=run_id,
+                expected_task_id=job.task_id,
+            )
             if not updated:
                 logger.info(
                     "Queue entry disappeared after cancelled state preparation; "
@@ -1826,7 +2066,11 @@ def _cancel_orca_running_job(worker: EngineQueueWorker, queue_id: str, job: _Run
             recover_slot_engine_process(worker.admission_root, job.admission_token)
         return terminated
 
-    def mark_cancelled_with_evidence(root: Any, target_queue_id: str) -> Any:
+    def mark_cancelled_with_evidence(
+        root: Any,
+        target_queue_id: str,
+        **generation_kwargs: Any,
+    ) -> Any:
         nonlocal captured_marker
         captured_marker = _terminal_replay_marker(
             reaction_dir=str(job.reaction_dir or ""),
@@ -1839,6 +2083,7 @@ def _cancel_orca_running_job(worker: EngineQueueWorker, queue_id: str, job: _Run
             root,
             target_queue_id,
             metadata_update={_TERMINAL_REPLAY_METADATA_KEY: captured_marker},
+            **generation_kwargs,
         )
 
     try:

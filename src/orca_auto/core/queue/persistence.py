@@ -10,10 +10,10 @@ from orca_auto.core.artifacts import QUEUE_FILE
 from ..utils.persistence import (
     atomic_write_json,
     coerce_bool,
-    coerce_int,
     load_json_list_file,
     resolve_root_path,
 )
+from .priority import normalize_queue_priority
 from .types import QueueEntry, QueueStatus
 
 QUEUE_FILE_NAME = QUEUE_FILE
@@ -22,6 +22,21 @@ QUEUE_LOCK_NAME = "queue.lock"
 
 class QueueStoreCorruptError(RuntimeError):
     """Raised when the queue file exists but cannot be safely loaded."""
+
+
+def _validate_queue_ids(
+    entries: Sequence[QueueEntry],
+    *,
+    corrupt_error: type[Exception] = QueueStoreCorruptError,
+) -> None:
+    seen: set[str] = set()
+    for index, entry in enumerate(entries):
+        queue_id = str(getattr(entry, "queue_id", "") or "").strip()
+        if not queue_id:
+            raise corrupt_error(f"Queue file entry at index {index} has a blank queue_id")
+        if queue_id in seen:
+            raise corrupt_error(f"Queue file has duplicate queue_id {queue_id!r}")
+        seen.add(queue_id)
 
 
 def queue_path(root: Path) -> Path:
@@ -35,6 +50,7 @@ def queue_lock_path(root: Path) -> Path:
 def entry_to_dict(entry: QueueEntry) -> dict[str, Any]:
     data = asdict(entry)
     data["status"] = entry.status.value
+    data["priority"] = normalize_queue_priority(entry.priority)
     return data
 
 
@@ -59,7 +75,7 @@ def _entry_from_dict(raw: dict[str, Any]) -> QueueEntry:
         task_kind=str(raw.get("task_kind", "")).strip(),
         engine=str(raw.get("engine", "")).strip(),
         status=status,
-        priority=coerce_int(raw.get("priority", 10), default=10),
+        priority=normalize_queue_priority(raw.get("priority"), default=10),
         enqueued_at=str(raw.get("enqueued_at", "")).strip(),
         started_at=str(raw.get("started_at", "")).strip(),
         finished_at=str(raw.get("finished_at", "")).strip(),
@@ -97,6 +113,7 @@ def load_entries(
             raise corrupt_error(str(exc)) from exc
         except (TypeError, ValueError) as exc:
             raise corrupt_error(f"Queue file entry at index {index} is invalid: {exc}") from exc
+    _validate_queue_ids(entries, corrupt_error=corrupt_error)
     return entries
 
 
@@ -107,6 +124,7 @@ def save_entries(
     entry_to_dict_fn: Callable[[QueueEntry], dict[str, Any]] = entry_to_dict,
 ) -> None:
     resolved_root = resolve_root_path(root)
+    _validate_queue_ids(entries)
     atomic_write_json(
         queue_path(resolved_root),
         [entry_to_dict_fn(item) for item in entries],

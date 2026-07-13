@@ -8,11 +8,22 @@ from orca_auto.core.queue.types import QueueStatus
 from orca_auto.flow.engines.crest import execution as worker_child
 
 
+def _crest_entry(status: object) -> SimpleNamespace:
+    return SimpleNamespace(
+        queue_id="queue-1",
+        app_name="orca_auto_crest",
+        task_id="crest-task-1",
+        task_kind="crest_conformer_search",
+        engine="crest",
+        status=status,
+    )
+
+
 def test_run_worker_child_job_processes_loaded_entry_and_releases_slot(
     tmp_path: Path,
 ) -> None:
     cfg = SimpleNamespace(name="cfg")
-    entry = SimpleNamespace(queue_id="queue-1", status=QueueStatus.RUNNING)
+    entry = _crest_entry(QueueStatus.RUNNING)
     dependencies = object()
     installed: list[Any] = []
     released: list[tuple[str, str]] = []
@@ -55,7 +66,7 @@ def test_run_worker_child_job_injects_default_molecule_key_resolver(
     tmp_path: Path,
 ) -> None:
     cfg = SimpleNamespace(name="cfg")
-    entry = SimpleNamespace(queue_id="queue-1", status=QueueStatus.RUNNING)
+    entry = _crest_entry(QueueStatus.RUNNING)
     processed: list[dict[str, Any]] = []
 
     rc = worker_child._worker_child.run_worker_child_job(
@@ -85,7 +96,7 @@ def test_run_worker_child_job_requeues_and_marks_recovery_on_shutdown(
     tmp_path: Path,
 ) -> None:
     cfg = SimpleNamespace(name="cfg")
-    entry = SimpleNamespace(queue_id="queue-1", status=QueueStatus.RUNNING)
+    entry = _crest_entry(QueueStatus.RUNNING)
     context = SimpleNamespace(job_dir=tmp_path / "job")
     requeued: list[tuple[Path, str]] = []
     recovery: list[tuple[object, object, str]] = []
@@ -93,6 +104,10 @@ def test_run_worker_child_job_requeues_and_marks_recovery_on_shutdown(
 
     def raise_shutdown(*_args: Any, **_kwargs: Any) -> None:
         raise worker_child.WorkerShutdownRequested(context)
+
+    def requeue(root: Path, queue_id: str, **_kwargs: object) -> object:
+        requeued.append((root, queue_id))
+        return entry
 
     rc = worker_child._worker_child.run_worker_child_job(
         config_path="/tmp/orca_auto.yaml",
@@ -107,7 +122,7 @@ def test_run_worker_child_job_requeues_and_marks_recovery_on_shutdown(
         process_dequeued_entry_fn=raise_shutdown,
         dependencies_fn=lambda: object(),
         molecule_key_resolver=lambda *_args: "mol-1",
-        requeue_running_entry_fn=lambda root, queue_id: requeued.append((root, queue_id)),
+        requeue_running_entry_fn=requeue,
         mark_recovery_pending_context_fn=lambda cfg_obj, context_obj, *, reason: recovery.append(
             (cfg_obj, context_obj, reason)
         ),

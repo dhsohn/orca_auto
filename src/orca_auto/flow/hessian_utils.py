@@ -9,8 +9,11 @@ whitespace-separated float stream. ORCA's ``%geom InHess Read`` expects its own
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
+from orca_auto.core.engine_process import atomic_write_confined_bytes
+from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.flow.xyz_utils import load_xyz_frames
 
 ANGSTROM_TO_BOHR = 1.8897261254578281
@@ -111,23 +114,53 @@ class HessianConversionError(ValueError):
     """The xTB hessian could not be converted for ORCA consumption."""
 
 
-def parse_xtb_hessian(hessian_path: str | Path) -> list[list[float]]:
+def parse_xtb_hessian(
+    hessian_path: str | Path,
+    *,
+    payload: bytes | None = None,
+) -> list[list[float]]:
     """Parse a Turbomole-style xTB ``hessian`` file into a square matrix."""
     path = Path(hessian_path)
     try:
-        tokens = path.read_text(encoding="utf-8", errors="ignore").split()
-    except OSError as exc:
+        lines = (
+            read_stable_regular_file(path, max_bytes=512 * 1024 * 1024).decode(
+                "utf-8", errors="strict"
+            )
+            if payload is None
+            else payload.decode("utf-8", errors="strict")
+        ).splitlines()
+    except (OSError, UnicodeError) as exc:
         raise HessianConversionError(f"Cannot read xTB hessian file: {path}") from exc
+    first_content = next((index for index, line in enumerate(lines) if line.strip()), None)
+    if first_content is None or lines[first_content].strip().lower() != "$hessian":
+        raise HessianConversionError(f"xTB hessian must start with a $hessian block: {path}")
+    tokens: list[str] = []
+    saw_end = False
+    for line in lines[first_content + 1 :]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("$"):
+            if stripped.lower() != "$end":
+                raise HessianConversionError(
+                    f"Unexpected section {stripped!r} after xTB hessian data: {path}"
+                )
+            saw_end = True
+            continue
+        if saw_end:
+            raise HessianConversionError(f"Unexpected content after $end in xTB hessian: {path}")
+        tokens.extend(stripped.split())
     values: list[float] = []
     for token in tokens:
-        if token.startswith("$"):
-            continue
         try:
-            values.append(float(token))
+            value = float(token)
         except ValueError as exc:
             raise HessianConversionError(
                 f"Non-numeric token {token!r} in xTB hessian file: {path}"
             ) from exc
+        if not math.isfinite(value):
+            raise HessianConversionError(f"Non-finite value {token!r} in xTB hessian file: {path}")
+        values.append(value)
     if not values:
         raise HessianConversionError(f"Empty xTB hessian file: {path}")
     dimension = round(len(values) ** 0.5)
@@ -135,7 +168,17 @@ def parse_xtb_hessian(hessian_path: str | Path) -> list[list[float]]:
         raise HessianConversionError(
             f"xTB hessian is not a square 3N matrix: {len(values)} values in {path}"
         )
-    return [values[row * dimension : (row + 1) * dimension] for row in range(dimension)]
+    matrix = [values[row * dimension : (row + 1) * dimension] for row in range(dimension)]
+    for row in range(dimension):
+        for column in range(row + 1, dimension):
+            left = matrix[row][column]
+            right = matrix[column][row]
+            if not math.isclose(left, right, rel_tol=1e-8, abs_tol=1e-10):
+                raise HessianConversionError(f"xTB hessian is not symmetric: {path}")
+            average = (left + right) / 2.0
+            matrix[row][column] = average
+            matrix[column][row] = average
+    return matrix
 
 
 def _parse_xyz_atoms(xyz_path: str | Path) -> list[tuple[str, float, float, float]]:
@@ -154,6 +197,10 @@ def _parse_xyz_atoms(xyz_path: str | Path) -> list[tuple[str, float, float, floa
             raise HessianConversionError(
                 f"Non-numeric coordinates in atom line {line!r} in {xyz_path}"
             ) from exc
+        if not all(math.isfinite(value) for value in (x, y, z)):
+            raise HessianConversionError(
+                f"Non-finite coordinates in atom line {line!r} in {xyz_path}"
+            )
         atoms.append((symbol, x, y, z))
     return atoms
 
@@ -189,13 +236,14 @@ def write_orca_hess_from_xtb(
     xtb_hessian_path: str | Path,
     xyz_path: str | Path,
     target_path: str | Path,
+    hessian_payload: bytes | None = None,
 ) -> Path:
     """Write an ORCA ``.hess`` file from an xTB hessian and its xyz geometry.
 
     The xyz file must hold the same geometry (atom count and order) the xTB
     hessian was computed for; coordinates are converted from Angstrom to Bohr.
     """
-    matrix = parse_xtb_hessian(xtb_hessian_path)
+    matrix = parse_xtb_hessian(xtb_hessian_path, payload=hessian_payload)
     atoms = _parse_xyz_atoms(xyz_path)
     if len(matrix) != 3 * len(atoms):
         raise HessianConversionError(
@@ -213,7 +261,12 @@ def write_orca_hess_from_xtb(
         "",
     ]
     target = Path(target_path)
-    target.write_text("\n".join(lines), encoding="utf-8")
+    atomic_write_confined_bytes(
+        target.parent,
+        target,
+        "\n".join(lines).encode("utf-8"),
+        label="ORCA Hessian",
+    )
     return target
 
 

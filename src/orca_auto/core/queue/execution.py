@@ -62,23 +62,41 @@ def mark_terminal_status(
     mark_completed_fn: Callable[..., Any],
     mark_cancelled_fn: Callable[..., Any],
     mark_failed_fn: Callable[..., Any],
-) -> None:
+    expected_entry: Any | None = None,
+    expected_task_id: str | None = None,
+    before_update_fn: Callable[[], Any] | None = None,
+    require_cancel_requested: bool = False,
+) -> Any:
+    generation_kwargs = {}
+    if expected_entry is not None:
+        generation_kwargs["expected_entry"] = expected_entry
+    if expected_task_id:
+        generation_kwargs["expected_task_id"] = expected_task_id
+    if before_update_fn is not None:
+        generation_kwargs["before_update_fn"] = before_update_fn
+    if require_cancel_requested:
+        generation_kwargs["require_cancel_requested"] = True
     if status == "completed":
-        mark_completed_fn(str(queue_root), queue_id, metadata_update=metadata_update)
-        return
+        return mark_completed_fn(
+            str(queue_root),
+            queue_id,
+            metadata_update=metadata_update,
+            **generation_kwargs,
+        )
     if status == "cancelled":
-        mark_cancelled_fn(
+        return mark_cancelled_fn(
             str(queue_root),
             queue_id,
             error=reason,
             metadata_update=metadata_update,
+            **generation_kwargs,
         )
-        return
-    mark_failed_fn(
+    return mark_failed_fn(
         str(queue_root),
         queue_id,
         error=reason,
         metadata_update=metadata_update,
+        **generation_kwargs,
     )
 
 

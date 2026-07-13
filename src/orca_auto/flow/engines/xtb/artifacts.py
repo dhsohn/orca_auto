@@ -22,11 +22,12 @@ def _candidate_paths(result: XtbRunResult) -> list[Any]:
     return candidate_paths
 
 
-def _engine_fields(result: XtbRunResult) -> dict[str, Any]:
+def _engine_fields(entry: Any, result: XtbRunResult) -> dict[str, Any]:
     return {
         "job_type": result.job_type,
         "reaction_key": result.reaction_key,
         "input_summary": dict(result.input_summary),
+        "execution_provenance": _engine_execution.sanitized_execution_provenance(entry),
     }
 
 
@@ -37,14 +38,17 @@ def _detail_fields(result: XtbRunResult) -> dict[str, Any]:
         "selected_candidate_paths": list(result.selected_candidate_paths),
         "candidate_details": [dict(item) for item in result.candidate_details],
         "analysis_summary": dict(result.analysis_summary),
+        "output_identities": dict(result.output_identities),
     }
 
 
-def _result_artifact_fields(result: XtbRunResult) -> _engine_execution.EngineArtifactFields:
+def _result_artifact_fields(
+    entry: Any, result: XtbRunResult
+) -> _engine_execution.EngineArtifactFields:
     return _engine_execution.EngineArtifactFields(
         selected_input_xyz=result.selected_input_xyz,
         engine="xtb",
-        engine_fields=_engine_fields(result),
+        engine_fields=_engine_fields(entry, result),
         detail_fields=_detail_fields(result),
     )
 
@@ -140,7 +144,7 @@ def write_execution_artifacts(
         job_dir_text=job_dir_text,
         previous_state=base_state,
         resumed=resumed,
-        artifact_fields=_result_artifact_fields(result),
+        artifact_fields=_result_artifact_fields(entry, result),
         report_lines=report_lines(entry, result),
         writers=_engine_execution.TerminalArtifactWriters(
             write_state=write_state,

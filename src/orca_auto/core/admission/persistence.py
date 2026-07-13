@@ -64,11 +64,24 @@ def save_slots(
     slots: Sequence[AdmissionSlot],
     *,
     slot_to_dict_fn: Callable[[AdmissionSlot], dict[str, object]] = slot_to_dict,
+    corrupt_error: type[Exception] = AdmissionStoreCorruptError,
 ) -> None:
     resolved_root = resolve_root_path(root)
+    serialized: list[dict[str, object]] = []
+    seen_tokens: set[str] = set()
+    for index, slot in enumerate(slots):
+        item = slot_to_dict_fn(slot)
+        raw_token = item.get("token")
+        if not isinstance(raw_token, str) or not raw_token.strip():
+            raise corrupt_error(f"Admission slot at index {index} has a blank token")
+        token = raw_token.strip()
+        if token in seen_tokens:
+            raise corrupt_error(f"Admission slot list has duplicate token {token!r}")
+        seen_tokens.add(token)
+        serialized.append(item)
     atomic_write_json(
         admission_path(resolved_root),
-        [slot_to_dict_fn(slot) for slot in slots],
+        serialized,
         ensure_ascii=True,
         indent=2,
     )

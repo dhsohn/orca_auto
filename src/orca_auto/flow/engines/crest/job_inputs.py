@@ -32,11 +32,20 @@ def load_job_manifest(job_dir: Path) -> dict[str, Any]:
 
 def job_mode(manifest: dict[str, Any]) -> str:
     mode = str(manifest.get("mode", "standard")).strip().lower()
-    return "nci" if mode == "nci" else "standard"
+    if mode not in {"standard", "nci"}:
+        raise ValueError("CREST mode must be 'standard' or 'nci'.")
+    return mode
 
 
 def select_latest_xyz(job_dir: Path) -> Path:
-    candidates = list(job_dir.glob("*.xyz"))
+    resolved_job_dir = job_dir.expanduser().resolve()
+    candidates = []
+    for path in job_dir.glob("*.xyz"):
+        resolved = path.resolve()
+        if not resolved.is_relative_to(resolved_job_dir):
+            raise ValueError(f"CREST input must stay inside the job directory: {path}")
+        if resolved.is_file():
+            candidates.append(resolved)
     if not candidates:
         raise ValueError(f"No .xyz file found in: {job_dir}")
 
@@ -52,6 +61,8 @@ def select_input_xyz(job_dir: Path, manifest: dict[str, Any]) -> Path:
     input_xyz = str(manifest.get("input_xyz", "")).strip()
     if input_xyz:
         candidate = (job_dir / input_xyz).resolve()
+        if not candidate.is_relative_to(job_dir.expanduser().resolve()):
+            raise ValueError(f"Manifest input_xyz must stay inside the job directory: {candidate}")
         if not candidate.exists() or not candidate.is_file():
             raise ValueError(f"Manifest input_xyz not found: {candidate}")
         if candidate.suffix.lower() != ".xyz":

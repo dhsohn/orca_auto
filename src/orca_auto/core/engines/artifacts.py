@@ -17,6 +17,7 @@ class EngineArtifactJob:
     dir: str
     app_name: str = ""
     task_id: str = ""
+    generation: str = ""
 
 
 @dataclass(frozen=True)
@@ -132,6 +133,7 @@ def build_engine_artifact_payload(
             "dir": _clean_text(job.dir),
             "app_name": _clean_text(job.app_name),
             "task_id": _clean_text(job.task_id),
+            "generation": _clean_text(job.generation),
         },
         "status": {
             "state": _clean_text(status.state),

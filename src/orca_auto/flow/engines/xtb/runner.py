@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import logging
-import os
 import resource
-import shutil
 import subprocess
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -22,13 +22,20 @@ from orca_auto.core.config.engines import (
     resource_request_from_manifest,
 )
 from orca_auto.core.engine_process import (
+    atomic_write_confined_bytes,
     cleanup_failed_logged_process_start,
+    recreate_confined_directory,
     start_logged_process,
 )
 from orca_auto.core.queue.engine import execution as _engine_execution
+from orca_auto.core.queue.engine.input_snapshot import (
+    read_stable_regular_file,
+    verify_input_snapshots,
+)
 from orca_auto.core.queue.processes import terminate_process_group
-from orca_auto.core.utils import now_utc_iso
+from orca_auto.core.utils import fsync_directory, now_utc_iso
 from orca_auto.core.utils import process as process_utils
+from orca_auto.flow.hessian_utils import parse_xtb_hessian
 
 from . import runner_ranking as _runner_ranking
 from .job_inputs import (
@@ -45,6 +52,12 @@ from .runner_artifacts import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+_STALE_OUTPUT_NAMES_BY_JOB_TYPE: dict[str, tuple[str, ...]] = {
+    "opt": ("xtbopt.xyz", "xtbopt.log", ".xtboptok"),
+    "sp": ("xtbout.json", "charges", "wbo", "xtbtopo.mol"),
+    "hess": ("hessian", "vibspectrum", "xtbout.json"),
+}
 
 
 @dataclass(frozen=True)
@@ -68,6 +81,7 @@ class XtbRunResult:
     manifest_path: str
     resource_request: dict[str, int]
     resource_actual: dict[str, int]
+    output_identities: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -87,6 +101,8 @@ class XtbRunningJob:
     resource_request: dict[str, int]
     resource_actual: dict[str, int]
     job_dir: str
+    manifest_snapshot: dict[str, Any] = field(default_factory=dict)
+    execution_snapshot: dict[str, Any] = field(default_factory=dict)
 
 
 def _resolve_xtb_executable(cfg: AppConfig) -> str:
@@ -98,22 +114,53 @@ def _resolve_xtb_executable(cfg: AppConfig) -> str:
     )
 
 
+def _verify_execution_manifest(
+    execution_snapshot: dict[str, Any],
+    verified_inputs: dict[str, Path],
+) -> dict[str, Any]:
+    manifest = execution_snapshot.get("manifest")
+    manifest_path = verified_inputs.get("manifest")
+    if not isinstance(manifest, dict) or manifest_path is None:
+        raise ValueError("Queued xTB execution snapshot has no immutable manifest")
+    if str(execution_snapshot.get("manifest_path") or "") != str(
+        manifest_path
+    ) or read_stable_regular_file(
+        manifest_path,
+        require_single_link=True,
+    ) != json.dumps(
+        manifest,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8"):
+        raise ValueError("Queued xTB manifest payload does not match its immutable snapshot")
+    return dict(manifest)
+
+
 def _append_xtb_scalar_options(command: list[str], manifest: dict[str, Any]) -> None:
-    gfn = str(manifest.get("gfn", "2")).strip()
+    gfn = str(manifest.get("gfn", "2")).strip().lower()
+    if gfn not in {"1", "2", "ff", "gfnff"}:
+        raise ValueError("xTB gfn must be one of 1, 2, or ff.")
     if gfn:
-        command.extend(["--gfn", gfn])
+        command.extend(["--gfn", "ff" if gfn == "gfnff" else gfn])
 
     for manifest_key, option in (("charge", "--chrg"), ("uhf", "--uhf")):
         value = _engine_runner.manifest_int(manifest, manifest_key)
-        if value is not None:
-            command.extend([option, str(value)])
+        if value is None:
+            value = 0
+        if manifest_key == "uhf" and value < 0:
+            raise ValueError("xTB uhf must be a nonnegative integer.")
+        command.extend([option, str(value)])
 
 
 def _append_xtb_optional_text_options(command: list[str], manifest: dict[str, Any]) -> None:
-    for manifest_key, option in (("namespace", "--namespace"), ("xcontrol", "--input")):
-        value = str(manifest.get(manifest_key, "")).strip()
-        if value:
-            command.extend([option, value])
+    namespace = str(manifest.get("namespace", "")).strip()
+    if namespace:
+        raise ValueError("xTB namespace is not supported by the canonical artifact contract")
+    xcontrol = str(manifest.get("xcontrol", "")).strip()
+    if xcontrol:
+        command.extend(["--input", xcontrol])
 
 
 def _append_xtb_job_type_options(
@@ -133,6 +180,17 @@ def _append_xtb_job_type_options(
             str(manifest.get("opt_level", manifest.get("opt", "normal"))).strip().lower()
             or "normal"
         )
+        if opt_level not in {
+            "crude",
+            "sloppy",
+            "loose",
+            "lax",
+            "normal",
+            "tight",
+            "verytight",
+            "extreme",
+        }:
+            raise ValueError("Unsupported xTB optimization level")
         command.extend(["--opt", opt_level])
         return
     if job_type == "sp":
@@ -144,6 +202,33 @@ def _append_xtb_job_type_options(
     raise ValueError(f"Unsupported xtb job_type: {job_type}")
 
 
+def _clear_stale_xtb_outputs(
+    job_dir: Path,
+    *,
+    job_type: str,
+    selected_input_xyz: Path,
+    secondary_input_xyz: Path | None,
+) -> None:
+    protected = {selected_input_xyz.expanduser().resolve()}
+    if secondary_input_xyz is not None:
+        protected.add(secondary_input_xyz.expanduser().resolve())
+    candidates = [job_dir / name for name in _STALE_OUTPUT_NAMES_BY_JOB_TYPE.get(job_type, ())]
+    candidates.append(job_dir / "xtbrestart")
+    if job_type == "path_search":
+        candidates.extend(job_dir.glob("xtbpath*.xyz"))
+    removed = False
+    for path in candidates:
+        if path.parent.resolve() / path.name in protected:
+            raise ValueError(f"xTB input path conflicts with canonical output name: {path}")
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+            removed = True
+        elif path.exists():
+            raise ValueError(f"xTB stale output path must not be a directory: {path}")
+    if removed:
+        fsync_directory(job_dir)
+
+
 def _build_command(
     cfg: AppConfig,
     *,
@@ -151,14 +236,19 @@ def _build_command(
     selected_input_xyz: Path,
     secondary_input_xyz: Path | None,
     job_type: str,
+    resource_request: dict[str, int] | None = None,
 ) -> list[str]:
-    resource_request = resource_request_from_manifest(cfg, manifest)
+    resources = dict(resource_request or resource_request_from_manifest(cfg, manifest))
+    executable = str(manifest.get("_orca_auto_xtb_executable") or "").strip()
+    if not executable:
+        executable = _resolve_xtb_executable(cfg)
     command = [
-        _resolve_xtb_executable(cfg),
+        executable,
         str(selected_input_xyz),
         "--parallel",
-        str(resource_request["max_cores"]),
+        str(resources["max_cores"]),
         "--json",
+        "--norestart",
     ]
 
     _append_xtb_scalar_options(command, manifest)
@@ -188,16 +278,44 @@ def _run_candidate_sp_job(
     prepare_running_job: Callable[[], None] | None = None,
     on_running_job: Callable[[XtbRunningJob | None], None] | None = None,
     terminate_process: Callable[[subprocess.Popen[str]], bool] | None = None,
+    candidate_payload: bytes | None = None,
 ) -> XtbRunResult:
-    candidate_run_dir.mkdir(parents=True, exist_ok=True)
+    recreate_confined_directory(
+        candidate_run_dir.parent,
+        candidate_run_dir,
+        label="xTB ranking candidate directory",
+    )
     candidate_input = candidate_run_dir / "input.xyz"
-    shutil.copy2(candidate_xyz, candidate_input)
+    bound_candidate_payload = (
+        candidate_payload
+        if candidate_payload is not None
+        else read_stable_regular_file(candidate_xyz)
+    )
+    atomic_write_confined_bytes(
+        candidate_run_dir,
+        candidate_input,
+        bound_candidate_payload,
+        label="xTB ranking candidate input",
+    )
     candidate_manifest = dict(manifest)
     candidate_manifest["job_type"] = job_type
     candidate_manifest["input_xyz"] = "input.xyz"
+    if job_type != "path_search":
+        candidate_manifest.pop("xcontrol", None)
+    parent_runtime_identity = candidate_manifest.get("_orca_auto_runtime_identity")
+    if parent_runtime_identity is not None:
+        candidate_manifest["_orca_auto_runtime_identity"] = (
+            _engine_runner.rebase_engine_runtime_identity(
+                parent_runtime_identity,
+                candidate_run_dir,
+            )
+        )
     candidate_manifest_path = candidate_run_dir / MANIFEST_FILE_NAME
-    candidate_manifest_path.write_text(
-        yaml.safe_dump(candidate_manifest, sort_keys=False), encoding="utf-8"
+    atomic_write_confined_bytes(
+        candidate_run_dir,
+        candidate_manifest_path,
+        yaml.safe_dump(candidate_manifest, sort_keys=False).encode("utf-8"),
+        label="xTB ranking candidate manifest",
     )
 
     def start_candidate() -> XtbRunningJob:
@@ -213,7 +331,7 @@ def _run_candidate_sp_job(
             **launch_kwargs,
         )
 
-    return _engine_execution.run_cancellable_engine_process(
+    result = _engine_execution.run_cancellable_engine_process(
         start_job=start_candidate,
         finalize_job=finalize_xtb_job,
         terminate_process=terminate_process or terminate_process_group,
@@ -222,6 +340,31 @@ def _run_candidate_sp_job(
         check_cancel_before_poll=True,
         register_running_job=on_running_job,
         should_reraise_exception=lambda _exc: True,
+    )
+    try:
+        executed_payload = read_stable_regular_file(candidate_input)
+    except (OSError, ValueError):
+        executed_payload = b""
+    input_sha256 = hashlib.sha256(bound_candidate_payload).hexdigest()
+    if executed_payload != bound_candidate_payload:
+        return dataclasses.replace(
+            result,
+            status="failed",
+            reason="candidate_input_changed_during_execution",
+            exit_code=1,
+            analysis_summary={
+                **result.analysis_summary,
+                "executed_input_sha256": hashlib.sha256(executed_payload).hexdigest(),
+                "expected_input_sha256": input_sha256,
+            },
+        )
+    return dataclasses.replace(
+        result,
+        analysis_summary={
+            **result.analysis_summary,
+            "executed_input_sha256": input_sha256,
+            "executed_input_size_bytes": len(bound_candidate_payload),
+        },
     )
 
 
@@ -264,6 +407,26 @@ def _request_candidate_process_stop(
 TS_HESSIAN_DIR_NAME = "ts_hess"
 
 
+def _with_ts_hessian_provenance(
+    result: XtbRunResult,
+    provenance: dict[str, Any],
+    *,
+    ts_detail: dict[str, Any] | None = None,
+) -> XtbRunResult:
+    candidate_details = tuple(
+        {**item, "hessian_provenance": dict(provenance)} if item is ts_detail else item
+        for item in result.candidate_details
+    )
+    return dataclasses.replace(
+        result,
+        candidate_details=candidate_details,
+        analysis_summary={
+            **result.analysis_summary,
+            "ts_hessian_provenance": dict(provenance),
+        },
+    )
+
+
 def run_path_search_ts_hessian_followup(
     cfg: AppConfig,
     result: XtbRunResult,
@@ -273,13 +436,13 @@ def run_path_search_ts_hessian_followup(
     prepare_running_job: Callable[[], None] | None = None,
     on_running_job: Callable[[XtbRunningJob | None], None] | None = None,
     terminate_process: Callable[[subprocess.Popen[str]], bool] | None = None,
+    execution_snapshot: dict[str, Any] | None = None,
 ) -> XtbRunResult:
     """Compute a GFN Hessian for the path-search TS guess and record its path.
 
     The Hessian seeds the downstream ORCA OptTS stage (``InHess Read``). It is
-    best-effort: any failure or cancellation leaves the completed path-search
-    result untouched, and the ORCA stage simply starts without an initial
-    Hessian.
+    best-effort: a scientific failure leaves the path result usable and records
+    why no Hessian was produced. Cancellation remains cancellation.
     """
     if result.status != "completed" or result.job_type != "path_search":
         return result
@@ -288,16 +451,49 @@ def run_path_search_ts_hessian_followup(
         None,
     )
     if ts_detail is None:
-        return result
+        return _with_ts_hessian_provenance(
+            result,
+            {"status": "skipped", "reason": "ts_guess_missing"},
+        )
     if ts_detail.get("geometry_valid") is False:
         LOGGER.info("TS guess failed geometry validation; skipping Hessian follow-up")
-        return result
+        return _with_ts_hessian_provenance(
+            result,
+            {"status": "skipped", "reason": "ts_guess_geometry_invalid"},
+            ts_detail=ts_detail,
+        )
     ts_guess_xyz = Path(str(ts_detail.get("path") or ""))
     if not ts_guess_xyz.is_file():
-        return result
+        return _with_ts_hessian_provenance(
+            result,
+            {"status": "skipped", "reason": "ts_guess_missing_on_disk"},
+            ts_detail=ts_detail,
+        )
+    try:
+        ts_guess_bytes = read_stable_regular_file(ts_guess_xyz)
+    except (OSError, ValueError) as exc:
+        return _with_ts_hessian_provenance(
+            result,
+            {
+                "status": "skipped",
+                "reason": "ts_guess_unreadable",
+                "error_type": type(exc).__name__,
+            },
+            ts_detail=ts_detail,
+        )
+    ts_guess_sha256 = hashlib.sha256(ts_guess_bytes).hexdigest()
     hessian_run_dir = job_dir / TS_HESSIAN_DIR_NAME
     try:
-        manifest = load_job_manifest(job_dir)
+        recreate_confined_directory(
+            job_dir,
+            hessian_run_dir,
+            label="xTB Hessian follow-up directory",
+        )
+        manifest = (
+            dict(execution_snapshot.get("manifest") or {})
+            if execution_snapshot is not None
+            else load_job_manifest(job_dir)
+        )
         hessian_result = _run_candidate_sp_job(
             cfg,
             candidate_xyz=ts_guess_xyz,
@@ -308,11 +504,65 @@ def run_path_search_ts_hessian_followup(
             prepare_running_job=prepare_running_job,
             on_running_job=on_running_job,
             terminate_process=terminate_process,
+            candidate_payload=ts_guess_bytes,
         )
-    except Exception:  # noqa: BLE001
+    except _engine_execution.ProcessCleanupError:
+        raise
+    except Exception as exc:  # noqa: BLE001
         LOGGER.exception("TS guess Hessian follow-up crashed; continuing without a Hessian")
-        return result
+        return _with_ts_hessian_provenance(
+            result,
+            {
+                "status": "failed",
+                "reason": "hessian_followup_exception",
+                "error_type": type(exc).__name__,
+                "ts_guess_sha256": ts_guess_sha256,
+            },
+            ts_detail=ts_detail,
+        )
     hessian_path = hessian_run_dir / "hessian"
+    attempted_provenance = {
+        "status": hessian_result.status,
+        "reason": hessian_result.reason,
+        "exit_code": hessian_result.exit_code,
+        "command": list(hessian_result.command),
+        "selected_input_xyz": hessian_result.selected_input_xyz,
+        "manifest_path": hessian_result.manifest_path,
+        "resource_request": dict(hessian_result.resource_request),
+        "resource_actual": dict(hessian_result.resource_actual),
+        "started_at": hessian_result.started_at,
+        "finished_at": hessian_result.finished_at,
+        "stdout_log": hessian_result.stdout_log,
+        "stderr_log": hessian_result.stderr_log,
+        "analysis_summary": dict(hessian_result.analysis_summary),
+        "ts_guess_sha256": ts_guess_sha256,
+    }
+    try:
+        executed_ts_bytes = read_stable_regular_file(hessian_run_dir / "input.xyz")
+    except (OSError, ValueError):
+        executed_ts_bytes = b""
+    if hashlib.sha256(executed_ts_bytes).hexdigest() != ts_guess_sha256:
+        return _with_ts_hessian_provenance(
+            result,
+            {
+                **attempted_provenance,
+                "status": "failed",
+                "reason": "ts_guess_changed_before_hessian_execution",
+            },
+            ts_detail=ts_detail,
+        )
+    if hessian_result.status == "cancelled":
+        cancelled = _with_ts_hessian_provenance(
+            result,
+            attempted_provenance,
+            ts_detail=ts_detail,
+        )
+        return dataclasses.replace(
+            cancelled,
+            status="cancelled",
+            reason="cancel_requested",
+            exit_code=hessian_result.exit_code,
+        )
     if hessian_result.status != "completed" or not hessian_path.is_file():
         LOGGER.warning(
             "TS guess Hessian follow-up did not produce a hessian file "
@@ -320,13 +570,48 @@ def run_path_search_ts_hessian_followup(
             hessian_result.status,
             hessian_path,
         )
-        return result
+        return _with_ts_hessian_provenance(
+            result,
+            attempted_provenance,
+            ts_detail=ts_detail,
+        )
     resolved_hessian = str(hessian_path.resolve())
+    try:
+        hessian_bytes = read_stable_regular_file(hessian_path)
+        hessian_matrix = parse_xtb_hessian(hessian_path, payload=hessian_bytes)
+    except (OSError, ValueError):
+        LOGGER.warning("TS guess Hessian became invalid before provenance capture", exc_info=True)
+        return _with_ts_hessian_provenance(
+            result,
+            {
+                **attempted_provenance,
+                "status": "failed",
+                "reason": "hessian_provenance_invalid",
+            },
+            ts_detail=ts_detail,
+        )
+    hessian_provenance = {
+        **attempted_provenance,
+        "hessian_path": resolved_hessian,
+        "hessian_sha256": hashlib.sha256(hessian_bytes).hexdigest(),
+        "hessian_size_bytes": len(hessian_bytes),
+        "hessian_dimension": len(hessian_matrix),
+    }
     candidate_details = tuple(
-        {**item, "hessian_path": resolved_hessian} if item is ts_detail else item
+        {
+            **item,
+            "hessian_path": resolved_hessian,
+            "hessian_provenance": hessian_provenance,
+        }
+        if item is ts_detail
+        else item
         for item in result.candidate_details
     )
-    analysis_summary = {**result.analysis_summary, "ts_hessian_path": resolved_hessian}
+    analysis_summary = {
+        **result.analysis_summary,
+        "ts_hessian_path": resolved_hessian,
+        "ts_hessian_provenance": hessian_provenance,
+    }
     return dataclasses.replace(
         result,
         candidate_details=candidate_details,
@@ -353,10 +638,52 @@ def run_xtb_ranking_job(
     prepare_running_job: Callable[[], None] | None = None,
     on_running_job: Callable[[XtbRunningJob | None], None] | None = None,
     terminate_process: Callable[[subprocess.Popen[str]], bool] | None = None,
+    execution_snapshot: dict[str, Any] | None = None,
 ) -> XtbRunResult:
-    manifest = load_job_manifest(job_dir)
-    inputs = resolve_job_inputs(job_dir, manifest)
-    return _runner_ranking.run_ranking_job(
+    if execution_snapshot is None:
+        manifest = load_job_manifest(job_dir)
+        inputs = resolve_job_inputs(job_dir, manifest)
+    else:
+        input_snapshots = execution_snapshot.get("input_snapshots")
+        if not isinstance(input_snapshots, dict):
+            raise ValueError("Queued xTB execution snapshot has no input descriptors")
+        verified_inputs = verify_input_snapshots(job_dir, input_snapshots)
+        manifest = _verify_execution_manifest(execution_snapshot, verified_inputs)
+        identities = execution_snapshot.get("executable_identities")
+        if not isinstance(identities, dict):
+            raise ValueError("Queued xTB execution snapshot has no executable identity")
+        executable_path = _engine_runner.verify_executable_identity(identities.get("xtb"))
+        if str(manifest.get("_orca_auto_xtb_executable") or "") != executable_path:
+            raise ValueError("Queued xTB manifest has a mismatched executable path")
+        input_summary = execution_snapshot.get("input_summary")
+        if not isinstance(input_summary, dict):
+            raise ValueError("Queued xTB ranking snapshot has no input summary")
+        expected_candidates = [verified_inputs["selected"]]
+        expected_candidates.extend(
+            verified_inputs[role]
+            for role in sorted(verified_inputs)
+            if role.startswith("candidate_")
+        )
+        actual_candidates = [
+            Path(str(path)).expanduser().resolve()
+            for path in input_summary.get("candidate_paths", [])
+        ]
+        if (
+            actual_candidates != expected_candidates
+            or int(input_summary.get("candidate_count", -1)) != len(expected_candidates)
+            or Path(str(execution_snapshot.get("selected_input_xyz") or "")).resolve()
+            != verified_inputs["selected"]
+        ):
+            raise ValueError("Queued xTB ranking candidates do not match immutable snapshots")
+        inputs = {
+            "job_type": str(execution_snapshot.get("job_type") or ""),
+            "reaction_key": str(execution_snapshot.get("reaction_key") or ""),
+            "selected_input_xyz": execution_snapshot.get("selected_input_xyz"),
+            "secondary_input_xyz": execution_snapshot.get("secondary_input_xyz") or None,
+            "input_summary": dict(execution_snapshot.get("input_summary") or {}),
+            "manifest_path": str(execution_snapshot.get("manifest_path") or ""),
+        }
+    result = _runner_ranking.run_ranking_job(
         cfg,
         job_dir=job_dir,
         manifest=manifest,
@@ -367,6 +694,22 @@ def run_xtb_ranking_job(
         terminate_process=terminate_process,
         deps=_ranking_deps(),
     )
+    if execution_snapshot is not None:
+        try:
+            descriptors = execution_snapshot.get("input_snapshots")
+            if not isinstance(descriptors, dict):
+                raise ValueError("Queued xTB execution snapshot has no input descriptors")
+            verify_input_snapshots(job_dir, descriptors)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return dataclasses.replace(
+                result,
+                status="failed",
+                reason="input_snapshot_changed",
+                exit_code=1,
+                candidate_count=0,
+                selected_candidate_paths=(),
+            )
+    return result
 
 
 def start_xtb_job(
@@ -376,11 +719,59 @@ def start_xtb_job(
     selected_input_xyz: Path,
     before_popen: Callable[[], None] | None = None,
     on_launch_aborted: Callable[[], None] | None = None,
+    execution_snapshot: dict[str, Any] | None = None,
 ) -> XtbRunningJob:
-    manifest = load_job_manifest(job_dir)
-    resource_request = resource_request_from_manifest(cfg, manifest)
+    if execution_snapshot is None:
+        manifest = load_job_manifest(job_dir)
+        resource_request = resource_request_from_manifest(cfg, manifest)
+        inputs = resolve_job_inputs(job_dir, manifest)
+    else:
+        input_snapshots = execution_snapshot.get("input_snapshots")
+        if not isinstance(input_snapshots, dict):
+            raise ValueError("Queued xTB execution snapshot has no input descriptors")
+        verified_inputs = verify_input_snapshots(job_dir, input_snapshots)
+        manifest = _verify_execution_manifest(execution_snapshot, verified_inputs)
+        identities = execution_snapshot.get("executable_identities")
+        if not isinstance(identities, dict):
+            raise ValueError("Queued xTB execution snapshot has no executable identity")
+        executable_path = _engine_runner.verify_executable_identity(identities.get("xtb"))
+        if str(manifest.get("_orca_auto_xtb_executable") or "") != executable_path:
+            raise ValueError("Queued xTB manifest has a mismatched executable path")
+        if verified_inputs.get("selected") != selected_input_xyz.expanduser().resolve():
+            raise ValueError("Selected xTB input does not match the queued immutable snapshot")
+        secondary_text = str(execution_snapshot.get("secondary_input_xyz") or "").strip()
+        if secondary_text:
+            if verified_inputs.get("secondary") != Path(secondary_text).expanduser().resolve():
+                raise ValueError("Secondary xTB input does not match the immutable snapshot")
+        elif "secondary" in verified_inputs:
+            raise ValueError("Queued xTB execution snapshot has an unexpected secondary input")
+        resource_raw = execution_snapshot.get("resource_request")
+        if not isinstance(resource_raw, dict):
+            raise ValueError("Queued xTB execution snapshot has no resource request")
+        resource_request = dict(resource_raw)
+        inputs = {
+            "job_type": str(execution_snapshot.get("job_type") or ""),
+            "reaction_key": str(execution_snapshot.get("reaction_key") or ""),
+            "selected_input_xyz": execution_snapshot.get("selected_input_xyz"),
+            "secondary_input_xyz": execution_snapshot.get("secondary_input_xyz") or None,
+            "input_summary": dict(execution_snapshot.get("input_summary") or {}),
+        }
+    runtime_identity = (
+        execution_snapshot.get("runtime_identity")
+        if execution_snapshot is not None
+        else manifest.get("_orca_auto_runtime_identity")
+    )
+    if runtime_identity is None:
+        runtime_identity = _engine_runner.engine_runtime_identity(job_dir)
+    if execution_snapshot is not None and runtime_identity != manifest.get(
+        "_orca_auto_runtime_identity"
+    ):
+        raise ValueError("Queued xTB manifest has a mismatched runtime identity")
+    runtime_environment = _engine_runner.verified_engine_runtime_environment(
+        job_dir,
+        runtime_identity,
+    )
     resource_actual = _engine_runner.resource_actual_dict(resource_request)
-    inputs = resolve_job_inputs(job_dir, manifest)
     secondary_raw = inputs.get("secondary_input_xyz")
     secondary_input_xyz = None
     if secondary_raw:
@@ -391,6 +782,7 @@ def start_xtb_job(
         selected_input_xyz=selected_input_xyz,
         secondary_input_xyz=secondary_input_xyz,
         job_type=str(inputs["job_type"]),
+        resource_request=resource_request,
     )
 
     stdout_log = job_dir / "xtb.stdout.log"
@@ -398,7 +790,11 @@ def start_xtb_job(
     resolved_stdout_log = str(stdout_log.resolve())
     resolved_stderr_log = str(stderr_log.resolve())
     resolved_selected_input = str(selected_input_xyz.resolve())
-    resolved_manifest_path = str((job_dir / MANIFEST_FILE_NAME).resolve())
+    resolved_manifest_path = str(
+        execution_snapshot.get("manifest_path")
+        if execution_snapshot is not None
+        else (job_dir / MANIFEST_FILE_NAME).resolve()
+    )
     resolved_job_dir = str(job_dir.resolve())
     resolved_job_type = str(inputs["job_type"])
     resolved_reaction_key = str(inputs["reaction_key"])
@@ -406,13 +802,19 @@ def start_xtb_job(
     if before_popen is not None:
         before_popen()
     try:
+        _clear_stale_xtb_outputs(
+            job_dir,
+            job_type=resolved_job_type,
+            selected_input_xyz=selected_input_xyz,
+            secondary_input_xyz=secondary_input_xyz,
+        )
         launched = start_logged_process(
             command,
             cwd=job_dir,
             stdout_log=stdout_log,
             stderr_log=stderr_log,
             max_cores=resource_request["max_cores"],
-            base_env=os.environ,
+            base_env=runtime_environment,
             now_utc_iso_fn=now_utc_iso,
             popen_fn=subprocess.Popen,
             stdin_value=subprocess.DEVNULL,
@@ -443,6 +845,8 @@ def start_xtb_job(
             job_dir=resolved_job_dir,
             resource_request=resource_request,
             resource_actual=resource_actual,
+            manifest_snapshot=dict(manifest),
+            execution_snapshot=dict(execution_snapshot or {}),
         )
     except BaseException:
         cleanup_failed_logged_process_start(launched)
@@ -471,9 +875,85 @@ def finalize_xtb_job(
 
     status = forced_status if forced_status is not None else _status_from_exit_code(exit_code)
     reason = forced_reason if forced_reason is not None else _reason_from_exit_code(exit_code)
-    candidate_count, candidate_paths, candidate_details, analysis_summary = _collect_candidates(
-        running
-    )
+    snapshot_valid = True
+    if running.execution_snapshot:
+        try:
+            descriptors = running.execution_snapshot.get("input_snapshots")
+            if not isinstance(descriptors, dict):
+                raise ValueError("Queued xTB execution snapshot has no input descriptors")
+            verify_input_snapshots(running.job_dir, descriptors)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            snapshot_valid = False
+    if snapshot_valid:
+        candidate_count, candidate_paths, candidate_details, analysis_summary = _collect_candidates(
+            running
+        )
+        first_collection = (
+            candidate_count,
+            candidate_paths,
+            candidate_details,
+            analysis_summary,
+        )
+        candidate_count, candidate_paths, candidate_details, analysis_summary = _collect_candidates(
+            running
+        )
+        collection_stable = first_collection == (
+            candidate_count,
+            candidate_paths,
+            candidate_details,
+            analysis_summary,
+        )
+    else:
+        status = "failed"
+        reason = "input_snapshot_changed"
+        candidate_count, candidate_paths, candidate_details, analysis_summary = 0, (), (), {}
+        collection_stable = False
+    output_identities: dict[str, dict[str, Any]] = {}
+    if snapshot_valid and collection_stable:
+        output_paths = {
+            *candidate_paths,
+            running.stdout_log,
+            running.stderr_log,
+        }
+        for detail in candidate_details:
+            if isinstance(detail, dict):
+                output_paths.update(str(detail.get(key) or "") for key in ("path", "hessian_path"))
+        try:
+            for output_path in sorted(path for path in output_paths if path):
+                identity = _engine_runner.confined_output_identity(running.job_dir, output_path)
+                output_identities[str(identity["path"])] = identity
+            third_collection = _collect_candidates(running)
+            identities_after: dict[str, dict[str, Any]] = {}
+            for output_path in sorted(path for path in output_paths if path):
+                identity = _engine_runner.confined_output_identity(running.job_dir, output_path)
+                identities_after[str(identity["path"])] = identity
+            collection_stable = (
+                third_collection
+                == (candidate_count, candidate_paths, candidate_details, analysis_summary)
+                and identities_after == output_identities
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            collection_stable = False
+    if snapshot_valid and not collection_stable:
+        status = "failed"
+        reason = "xtb_output_changed_during_collection"
+        candidate_count, candidate_paths, candidate_details, analysis_summary = 0, (), (), {}
+    if (
+        forced_status is None
+        and snapshot_valid
+        and collection_stable
+        and exit_code == 0
+        and candidate_count < 1
+    ):
+        if running.job_type == "opt":
+            status = "failed"
+            reason = "xtb_opt_no_valid_geometry"
+        elif running.job_type == "sp":
+            status = "failed"
+            reason = "xtb_sp_no_finite_energy"
+        elif running.job_type == "hess":
+            status = "failed"
+            reason = "xtb_hess_invalid_hessian"
 
     return XtbRunResult(
         status=status,
@@ -495,6 +975,7 @@ def finalize_xtb_job(
         manifest_path=running.manifest_path,
         resource_request=running.resource_request,
         resource_actual=running.resource_actual,
+        output_identities=output_identities,
     )
 
 
@@ -511,20 +992,22 @@ def _collect_candidates(
 ) -> tuple[int, tuple[str, ...], tuple[dict[str, Any], ...], dict[str, Any]]:
     if running.job_type == "path_search":
         job_dir = Path(running.job_dir)
-        try:
-            manifest = load_job_manifest(job_dir)
-        except Exception:  # noqa: BLE001
-            manifest = {}
         return _collect_path_search_candidates(
             job_dir,
             running.stdout_log,
             input_summary=dict(running.input_summary),
-            manifest=manifest,
+            manifest=dict(running.manifest_snapshot),
         )
     if running.job_type == "opt":
-        return _collect_opt_candidates(Path(running.job_dir))
+        return _collect_opt_candidates(
+            Path(running.job_dir),
+            selected_input_xyz=running.selected_input_xyz,
+        )
     if running.job_type == "sp":
         return _collect_sp_candidates(Path(running.job_dir))
     if running.job_type == "hess":
-        return _collect_hessian_candidates(Path(running.job_dir))
+        return _collect_hessian_candidates(
+            Path(running.job_dir),
+            selected_input_xyz=running.selected_input_xyz,
+        )
     return 0, (), (), {}

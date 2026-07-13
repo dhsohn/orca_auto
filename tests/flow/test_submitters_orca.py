@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from threading import Event, Thread
 from types import SimpleNamespace
 from typing import Any
 
@@ -270,8 +273,13 @@ def test_cancel_target_uses_direct_queue_adapter(
         captured["list_root"] = root
         return [original_entry]
 
-    def fake_cancel(root: Path, queue_id: str) -> QueueEntry:
-        captured["cancel"] = (root, queue_id)
+    def fake_cancel(
+        root: Path,
+        queue_id: str,
+        *,
+        expected_entry: QueueEntry | None = None,
+    ) -> QueueEntry:
+        captured["cancel"] = (root, queue_id, expected_entry)
         return updated_entry
 
     monkeypatch.setattr(queue_adapter, "list_queue", fake_list_queue)
@@ -285,7 +293,7 @@ def test_cancel_target_uses_direct_queue_adapter(
 
     resolved_allowed_root = allowed_root.resolve()
     assert captured["list_root"] == resolved_allowed_root
-    assert captured["cancel"] == (resolved_allowed_root, "q_123")
+    assert captured["cancel"] == (resolved_allowed_root, "q_123", original_entry)
     assert result["status"] == expected_status
     assert result["returncode"] == 0
     assert result["queue_id"] == "q_123"
@@ -326,6 +334,77 @@ def test_cancel_target_reports_missing_and_empty_targets(
     assert result["status"] == "failed"
     assert result["reason"] == "target_not_found"
     assert result["stderr"] == "queue target not found: missing\n"
+
+
+def test_cancel_target_refuses_foreign_queue_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "allowed"
+    foreign = QueueEntry(
+        queue_id="q_foreign",
+        app_name="orca_auto_xtb",
+        task_id="xtb-task",
+        task_kind="xtb_sp",
+        engine="xtb",
+        status=QueueStatus.PENDING,
+        metadata={"job_type": "sp", "job_dir": str(tmp_path / "xtb")},
+    )
+    monkeypatch.setattr(
+        orca_config,
+        "load_config",
+        lambda _config_path: SimpleNamespace(
+            runtime=SimpleNamespace(allowed_root=str(allowed_root))
+        ),
+    )
+    monkeypatch.setattr(queue_adapter, "list_queue", lambda _root: [foreign])
+    monkeypatch.setattr(
+        queue_adapter,
+        "cancel",
+        lambda *_args: pytest.fail("foreign row must not reach ORCA cancellation"),
+    )
+
+    result = orca_submitter.cancel_target(
+        target=foreign.queue_id,
+        config_path="/tmp/orca.yaml",
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "target_not_found"
+
+
+def test_cancel_target_recovers_committed_cancel_after_save_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "allowed"
+    reaction_dir = tmp_path / "reaction"
+    entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
+    monkeypatch.setattr(
+        orca_config,
+        "load_config",
+        lambda _config_path: SimpleNamespace(
+            runtime=SimpleNamespace(allowed_root=str(allowed_root))
+        ),
+    )
+    real_save = queue_adapter._queue_store.save_entries
+
+    def save_then_raise(root: Path, entries: Any) -> None:
+        real_save(root, entries)
+        raise OSError("durability barrier failed after commit")
+
+    monkeypatch.setattr(queue_adapter._queue_store, "save_entries", save_then_raise)
+
+    result = orca_submitter.cancel_target(
+        target=entry.queue_id,
+        config_path="/tmp/orca.yaml",
+    )
+
+    assert result["status"] == "cancelled"
+    assert result["returncode"] == 0
+    [cancelled] = queue_adapter.list_queue(allowed_root)
+    assert cancelled.queue_id == entry.queue_id
+    assert cancelled.status == QueueStatus.CANCELLED
 
 
 def test_submit_reaction_ts_search_workflow_updates_skip_failure_and_submit_branches(
@@ -440,6 +519,10 @@ def test_submit_reaction_ts_search_workflow_updates_skip_failure_and_submit_bran
         orca_repo_root=" /tmp/orca_repo ",
     )
 
+    intent_tokens = [call.pop("submission_intent_token") for call in submit_calls]
+    assert all(intent_tokens)
+    assert len(set(intent_tokens)) == 2
+    conflict_intent, submit_intent = intent_tokens
     assert submit_calls == [
         {
             "reaction_dir": "/tmp/rxn_conflict",
@@ -471,12 +554,12 @@ def test_submit_reaction_ts_search_workflow_updates_skip_failure_and_submit_bran
         ],
         "failed": [{"stage_id": "missing_stage", "reason": "missing_reaction_dir"}],
     }
-    assert len(saved_payloads) == 1
+    assert len(saved_payloads) == 2
     assert len(sync_calls) == 1
     assert sync_calls[0]["workflow_root"] == workflow_root
     assert sync_calls[0]["workspace_dir"] == workspace_dir
 
-    saved_payload = saved_payloads[0]["payload"]
+    saved_payload = saved_payloads[-1]["payload"]
     skip_stage, missing_stage, conflict_stage, submit_stage = saved_payload["stages"]
 
     assert missing_stage["status"] == "submission_failed"
@@ -493,6 +576,7 @@ def test_submit_reaction_ts_search_workflow_updates_skip_failure_and_submit_bran
 
     assert conflict_stage["status"] == "planned"
     assert conflict_stage["metadata"] == {
+        "submission_intent_token": conflict_intent,
         "submission_status": "waiting_for_slot",
         "submission_deferred_reason": "submission_conflict",
         "last_submission_attempt_at": "2026-04-19T00:01:00+00:00",
@@ -506,6 +590,7 @@ def test_submit_reaction_ts_search_workflow_updates_skip_failure_and_submit_bran
     assert submit_stage["status"] == "queued"
     assert submit_stage["metadata"] == {
         "queue_id": "q_submit",
+        "submission_intent_token": submit_intent,
         "submission_status": "submitted",
         "submitted_at": "2026-04-19T00:02:00+00:00",
     }
@@ -847,3 +932,642 @@ def test_cancel_reaction_ts_search_workflow_records_requested_and_cancelled_stat
         ],
         "updated_at": "2026-04-19T00:22:00+00:00",
     }
+
+
+def test_submit_workflow_waits_for_prior_writer_before_loading_and_submitting(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_dir = tmp_path / "workflow_root" / "wf_lock"
+    workflow_root = workspace_dir.parent
+    workspace_dir.mkdir(parents=True)
+    initial_payload: dict[str, Any] = {
+        "workflow_id": "wf_lock",
+        "template_name": "reaction_ts_search",
+        "status": "planned",
+        "metadata": {},
+        "stages": [
+            {
+                "stage_id": "submit_stage",
+                "status": "planned",
+                "metadata": {},
+                "task": {
+                    "status": "planned",
+                    "enqueue_payload": {
+                        "reaction_dir": "/tmp/rxn_lock",
+                        "priority": 7,
+                        "submitter": "orca_auto_orca",
+                    },
+                },
+            }
+        ],
+    }
+    orca_submitter.write_workflow_payload(workspace_dir, initial_payload)
+
+    real_acquire_workflow_lock = orca_submitter.acquire_workflow_lock
+    writer_locked = Event()
+    allow_writer = Event()
+    submit_lock_attempted = Event()
+    submit_called = Event()
+    submit_calls: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
+    thread_errors: list[BaseException] = []
+
+    @contextmanager
+    def tracked_acquire_workflow_lock(current_workspace_dir: Path) -> Iterator[None]:
+        submit_lock_attempted.set()
+        with real_acquire_workflow_lock(current_workspace_dir):
+            yield
+
+    monkeypatch.setattr(
+        orca_submitter,
+        "resolve_workflow_workspace",
+        lambda *, target, workflow_root: workspace_dir,
+    )
+    monkeypatch.setattr(
+        orca_submitter,
+        "acquire_workflow_lock",
+        tracked_acquire_workflow_lock,
+    )
+    monkeypatch.setattr(orca_submitter, "sync_workflow_registry", lambda *_args: None)
+
+    def fake_submit_reaction_dir(**kwargs: Any) -> dict[str, Any]:
+        submit_calls.append(kwargs)
+        submit_called.set()
+        return {
+            "status": "submitted",
+            "returncode": 0,
+            "stdout": "status: queued\nqueue_id: q_lock\njob_dir: /tmp/rxn_lock\n",
+            "stderr": "",
+            "parsed_stdout": {
+                "status": "queued",
+                "queue_id": "q_lock",
+                "job_dir": "/tmp/rxn_lock",
+            },
+            "queue_id": "q_lock",
+            "reaction_dir": "/tmp/rxn_lock",
+            "priority": 7,
+        }
+
+    monkeypatch.setattr(orca_submitter, "submit_reaction_dir", fake_submit_reaction_dir)
+
+    def run_prior_writer() -> None:
+        try:
+            with real_acquire_workflow_lock(workspace_dir):
+                writer_locked.set()
+                if not allow_writer.wait(timeout=5):
+                    raise TimeoutError("test did not release prior workflow writer")
+                payload = orca_submitter.load_workflow_payload(workspace_dir)
+                payload["stages"].append(
+                    {
+                        "stage_id": "writer_stage",
+                        "status": "queued",
+                        "metadata": {"queue_id": "q_writer", "writer_revision": 1},
+                        "task": None,
+                    }
+                )
+                orca_submitter.write_workflow_payload(workspace_dir, payload)
+        except BaseException as exc:  # noqa: BLE001
+            thread_errors.append(exc)
+
+    def run_submission() -> None:
+        try:
+            results.append(
+                orca_submitter.submit_reaction_ts_search_workflow(
+                    workflow_target="wf_lock",
+                    workflow_root=workflow_root,
+                    orca_config="/tmp/orca.yaml",
+                )
+            )
+        except BaseException as exc:  # noqa: BLE001
+            thread_errors.append(exc)
+
+    writer_thread = Thread(target=run_prior_writer)
+    writer_thread.start()
+    assert writer_locked.wait(timeout=5)
+
+    submission_thread = Thread(target=run_submission)
+    submission_thread.start()
+    assert submit_lock_attempted.wait(timeout=5)
+    assert not submit_called.is_set()
+
+    allow_writer.set()
+    writer_thread.join(timeout=5)
+    submission_thread.join(timeout=5)
+    assert not writer_thread.is_alive()
+    assert not submission_thread.is_alive()
+    assert thread_errors == []
+
+    final_payload = orca_submitter.load_workflow_payload(workspace_dir)
+    stages = {stage["stage_id"]: stage for stage in final_payload["stages"]}
+    assert set(stages) == {"submit_stage", "writer_stage"}
+    assert stages["writer_stage"] == {
+        "stage_id": "writer_stage",
+        "status": "queued",
+        "metadata": {"queue_id": "q_writer", "writer_revision": 1},
+        "task": None,
+    }
+    assert stages["submit_stage"]["status"] == "queued"
+    assert stages["submit_stage"]["metadata"]["queue_id"] == "q_lock"
+    assert stages["submit_stage"]["task"]["submission_result"]["queue_id"] == "q_lock"
+    [intent_token] = [call.pop("submission_intent_token") for call in submit_calls]
+    assert intent_token == stages["submit_stage"]["metadata"]["submission_intent_token"]
+    assert submit_calls == [
+        {
+            "reaction_dir": "/tmp/rxn_lock",
+            "priority": 7,
+            "config_path": "/tmp/orca.yaml",
+            "repo_root": None,
+        }
+    ]
+    assert len(results) == 1
+
+
+def test_cancel_workflow_holds_lock_through_external_cancel_and_registry_sync(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_dir = tmp_path / "workflow_workspace"
+    workflow_root = tmp_path / "workflow_root"
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_cancel_lock",
+        "status": "queued",
+        "metadata": {},
+        "stages": [
+            {
+                "stage_id": "cancel_stage",
+                "status": "queued",
+                "metadata": {"queue_id": "q_cancel_lock"},
+                "task": {
+                    "status": "submitted",
+                    "enqueue_payload": {
+                        "reaction_dir": "/tmp/rxn_cancel_lock",
+                        "submitter": "orca_auto_orca",
+                    },
+                },
+            }
+        ],
+    }
+    events: list[str] = []
+    lock_held = False
+
+    @contextmanager
+    def tracked_acquire_workflow_lock(current_workspace_dir: Path) -> Iterator[None]:
+        nonlocal lock_held
+        assert current_workspace_dir == workspace_dir
+        events.append("lock_enter")
+        lock_held = True
+        try:
+            yield
+        finally:
+            lock_held = False
+            events.append("lock_exit")
+
+    def fake_load_workflow_payload(current_workspace_dir: Path) -> dict[str, Any]:
+        assert current_workspace_dir == workspace_dir
+        assert lock_held
+        events.append("load")
+        return payload
+
+    def fake_cancel_target(**_kwargs: Any) -> dict[str, Any]:
+        assert lock_held
+        events.append("cancel")
+        return {"status": "cancelled", "returncode": 0}
+
+    def fake_write_workflow_payload(
+        current_workspace_dir: Path,
+        current_payload: dict[str, Any],
+    ) -> None:
+        assert current_workspace_dir == workspace_dir
+        assert current_payload is payload
+        assert lock_held
+        events.append("write")
+
+    def fake_sync_workflow_registry(
+        current_workflow_root: str | Path,
+        current_workspace_dir: Path,
+        current_payload: dict[str, Any],
+    ) -> None:
+        assert current_workflow_root == workflow_root
+        assert current_workspace_dir == workspace_dir
+        assert current_payload is payload
+        assert lock_held
+        events.append("sync")
+
+    monkeypatch.setattr(
+        orca_submitter,
+        "resolve_workflow_workspace",
+        lambda *, target, workflow_root: workspace_dir,
+    )
+    monkeypatch.setattr(
+        orca_submitter,
+        "acquire_workflow_lock",
+        tracked_acquire_workflow_lock,
+    )
+    monkeypatch.setattr(orca_submitter, "load_workflow_payload", fake_load_workflow_payload)
+    monkeypatch.setattr(orca_submitter, "cancel_target", fake_cancel_target)
+    monkeypatch.setattr(orca_submitter, "write_workflow_payload", fake_write_workflow_payload)
+    monkeypatch.setattr(orca_submitter, "sync_workflow_registry", fake_sync_workflow_registry)
+    install_orca_timestamps(
+        monkeypatch,
+        "2026-04-19T00:30:00+00:00",
+        "2026-04-19T00:31:00+00:00",
+    )
+
+    result = orca_submitter.cancel_reaction_ts_search_workflow(
+        workflow_target="wf_cancel_lock",
+        workflow_root=workflow_root,
+        orca_config="/tmp/orca.yaml",
+    )
+
+    assert events == ["lock_enter", "load", "cancel", "write", "sync", "lock_exit"]
+    assert result["status"] == "cancelled"
+
+
+def _install_real_orca_workflow_queue(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> tuple[Any, Path, Path]:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "reaction"
+    reaction_dir.mkdir(parents=True)
+    (reaction_dir / "job.inp").write_text(
+        "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+        encoding="utf-8",
+    )
+    fake_orca = tmp_path / "fake_orca"
+    fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_orca.chmod(0o755)
+    cfg = orca_config.AppConfig(
+        runtime=orca_config.RuntimeConfig(allowed_root=str(allowed_root)),
+        paths=orca_config.PathsConfig(orca_executable=str(fake_orca)),
+        resources=orca_config.CommonResourceConfig(
+            max_cores_per_task=2,
+            max_memory_gb_per_task=4,
+        ),
+    )
+    monkeypatch.setattr(orca_config, "load_config", lambda _config_path: cfg)
+    monkeypatch.setattr(run_inp_cmd, "load_config", lambda _config_path: cfg)
+    monkeypatch.setattr(
+        run_inp_cmd,
+        "notify_queue_enqueued_event",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr("orca_auto.orca.queue.worker.read_worker_pid", lambda _root: None)
+    return cfg, allowed_root, reaction_dir
+
+
+@pytest.mark.parametrize(
+    ("terminal_before_retry", "force"),
+    [(False, False), (True, False), (True, True)],
+)
+def test_submit_workflow_recovers_exact_queue_row_after_payload_write_crash(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    terminal_before_retry: bool,
+    force: bool,
+) -> None:
+    _cfg, allowed_root, reaction_dir = _install_real_orca_workflow_queue(
+        monkeypatch,
+        tmp_path,
+    )
+    workspace_dir = tmp_path / "workflow_root" / "wf_submit_replay"
+    workflow_root = workspace_dir.parent
+    workspace_dir.mkdir(parents=True)
+    initial_payload: dict[str, Any] = {
+        "workflow_id": "wf_submit_replay",
+        "status": "planned",
+        "metadata": {},
+        "stages": [
+            {
+                "stage_id": "orca_stage",
+                "status": "planned",
+                "metadata": {},
+                "task": {
+                    "status": "planned",
+                    "enqueue_payload": {
+                        "reaction_dir": str(reaction_dir),
+                        "priority": 7,
+                        "submitter": "orca_auto_orca",
+                        "force": force,
+                    },
+                },
+            }
+        ],
+    }
+    orca_submitter.write_workflow_payload(workspace_dir, initial_payload)
+    real_write_workflow_payload = orca_submitter.write_workflow_payload
+    workflow_write_count = 0
+
+    def crash_before_workflow_commit(
+        current_workspace_dir: Path,
+        current_payload: dict[str, Any],
+    ) -> None:
+        nonlocal workflow_write_count
+        workflow_write_count += 1
+        if workflow_write_count == 2:
+            raise OSError("simulated workflow payload write crash")
+        real_write_workflow_payload(current_workspace_dir, current_payload)
+
+    monkeypatch.setattr(
+        orca_submitter,
+        "resolve_workflow_workspace",
+        lambda *, target, workflow_root: workspace_dir,
+    )
+    monkeypatch.setattr(
+        orca_submitter,
+        "write_workflow_payload",
+        crash_before_workflow_commit,
+    )
+    monkeypatch.setattr(orca_submitter, "sync_workflow_registry", lambda *_args: None)
+
+    with pytest.raises(OSError, match="simulated workflow payload write crash"):
+        orca_submitter.submit_reaction_ts_search_workflow(
+            workflow_target="wf_submit_replay",
+            workflow_root=workflow_root,
+            orca_config="/tmp/orca.yaml",
+        )
+
+    [durable_entry] = queue_adapter.list_queue(allowed_root)
+    stale_payload = orca_submitter.load_workflow_payload(workspace_dir)
+    assert stale_payload["stages"][0]["status"] == "planned"
+    intent_token = stale_payload["stages"][0]["metadata"]["submission_intent_token"]
+    assert durable_entry.metadata["submission_intent_token"] == intent_token
+    if terminal_before_retry:
+        assert queue_adapter.mark_completed(allowed_root, durable_entry.queue_id)
+    assert (
+        orca_submitter.recover_exact_reaction_dir_submission(
+            reaction_dir=str(reaction_dir),
+            priority=7,
+            config_path="/tmp/orca.yaml",
+            submission_intent_token="unrelated-workflow-intent",
+        )
+        is None
+    )
+    assert (
+        orca_submitter.recover_exact_reaction_dir_submission(
+            reaction_dir=str(reaction_dir),
+            priority=8,
+            config_path="/tmp/orca.yaml",
+            submission_intent_token=intent_token,
+        )
+        is None
+    )
+
+    result = orca_submitter.submit_reaction_ts_search_workflow(
+        workflow_target="wf_submit_replay",
+        workflow_root=workflow_root,
+        orca_config="/tmp/orca.yaml",
+    )
+
+    [final_entry] = queue_adapter.list_queue(allowed_root)
+    assert final_entry.queue_id == durable_entry.queue_id
+    assert result["submitted"] == [
+        {
+            "stage_id": "orca_stage",
+            "queue_id": durable_entry.queue_id,
+            "reaction_dir": str(reaction_dir.resolve()),
+        }
+    ]
+    final_payload = orca_submitter.load_workflow_payload(workspace_dir)
+    final_stage = final_payload["stages"][0]
+    assert final_stage["status"] == "queued"
+    assert final_stage["metadata"]["queue_id"] == durable_entry.queue_id
+    assert final_stage["task"]["submission_result"]["queue_id"] == durable_entry.queue_id
+    assert (
+        f"recovered exact {'completed' if terminal_before_retry else 'pending'} queue entry"
+        in final_stage["task"]["submission_result"]["parsed_stdout"]["worker_detail"]
+    )
+
+
+def test_cancel_workflow_recovers_queue_row_from_submission_intent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _cfg, allowed_root, reaction_dir = _install_real_orca_workflow_queue(
+        monkeypatch,
+        tmp_path,
+    )
+    intent_token = "workflow-intent-after-queue-commit"
+    entry = queue_adapter.enqueue(
+        allowed_root,
+        str(reaction_dir),
+        priority=7,
+        metadata={
+            "submission_intent_token": intent_token,
+            "_orca_auto_queued_record_sync": "repair_pending",
+            "_orca_auto_queued_record_sync_token": "repair-token",
+        },
+    )
+    workspace_dir = tmp_path / "workflow_root" / "wf_cancel_intent_recovery"
+    workspace_dir.mkdir(parents=True)
+    orca_submitter.write_workflow_payload(
+        workspace_dir,
+        {
+            "workflow_id": "wf_cancel_intent_recovery",
+            "status": "planned",
+            "metadata": {},
+            "stages": [
+                {
+                    "stage_id": "orca_stage",
+                    "status": "planned",
+                    "metadata": {"submission_intent_token": intent_token},
+                    "task": {
+                        "status": "planned",
+                        "enqueue_payload": {
+                            "reaction_dir": str(reaction_dir),
+                            "priority": 7,
+                            "submitter": "orca_auto_orca",
+                            "force": False,
+                        },
+                    },
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        orca_submitter,
+        "resolve_workflow_workspace",
+        lambda *, target, workflow_root: workspace_dir,
+    )
+    monkeypatch.setattr(orca_submitter, "sync_workflow_registry", lambda *_args: None)
+
+    result = orca_submitter.cancel_reaction_ts_search_workflow(
+        workflow_target="wf_cancel_intent_recovery",
+        workflow_root=workspace_dir.parent,
+        orca_config="/tmp/orca.yaml",
+    )
+
+    assert result["cancelled"] == [
+        {
+            "stage_id": "orca_stage",
+            "queue_id": entry.queue_id,
+            "reaction_dir": str(reaction_dir),
+        }
+    ]
+    [cancelled] = queue_adapter.list_queue(allowed_root)
+    assert cancelled.queue_id == entry.queue_id
+    assert cancelled.status == QueueStatus.CANCELLED
+
+
+def test_cancel_workflow_fails_closed_when_submission_intent_lookup_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_dir = tmp_path / "workflow_root" / "wf_cancel_intent_error"
+    workspace_dir.mkdir(parents=True)
+    orca_submitter.write_workflow_payload(
+        workspace_dir,
+        {
+            "workflow_id": "wf_cancel_intent_error",
+            "status": "planned",
+            "metadata": {},
+            "stages": [
+                {
+                    "stage_id": "orca_stage",
+                    "status": "planned",
+                    "metadata": {"submission_intent_token": "intent-token"},
+                    "task": {
+                        "status": "planned",
+                        "enqueue_payload": {
+                            "reaction_dir": str(tmp_path / "reaction"),
+                            "priority": 7,
+                            "submitter": "orca_auto_orca",
+                        },
+                    },
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        orca_submitter,
+        "resolve_workflow_workspace",
+        lambda *, target, workflow_root: workspace_dir,
+    )
+    monkeypatch.setattr(orca_submitter, "sync_workflow_registry", lambda *_args: None)
+    monkeypatch.setattr(
+        orca_submitter,
+        "recover_exact_reaction_dir_submission",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("transient lookup failure")),
+    )
+    cancel_calls: list[str] = []
+    monkeypatch.setattr(
+        orca_submitter,
+        "cancel_target",
+        lambda **kwargs: cancel_calls.append(str(kwargs["target"])),
+    )
+
+    result = orca_submitter.cancel_reaction_ts_search_workflow(
+        workflow_target="wf_cancel_intent_error",
+        workflow_root=workspace_dir.parent,
+        orca_config="/tmp/orca.yaml",
+    )
+
+    assert result["status"] == "cancel_failed"
+    assert result["cancelled"] == []
+    assert result["failed"][0]["reason"] == "submission_intent_lookup_failed"
+    assert cancel_calls == []
+    stage = orca_submitter.load_workflow_payload(workspace_dir)["stages"][0]
+    assert stage["status"] == "planned"
+    assert stage["task"]["status"] == "planned"
+
+
+def test_cancel_workflow_adopts_exact_cancelled_row_after_payload_write_crash(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _cfg, allowed_root, reaction_dir = _install_real_orca_workflow_queue(
+        monkeypatch,
+        tmp_path,
+    )
+    entry = queue_adapter.enqueue(
+        allowed_root,
+        str(reaction_dir),
+        priority=5,
+    )
+    workspace_dir = tmp_path / "workflow_root" / "wf_cancel_replay"
+    workflow_root = workspace_dir.parent
+    workspace_dir.mkdir(parents=True)
+    initial_payload: dict[str, Any] = {
+        "workflow_id": "wf_cancel_replay",
+        "status": "queued",
+        "metadata": {},
+        "stages": [
+            {
+                "stage_id": "orca_stage",
+                "status": "queued",
+                "metadata": {"queue_id": entry.queue_id},
+                "task": {
+                    "status": "submitted",
+                    "enqueue_payload": {
+                        "reaction_dir": str(reaction_dir),
+                        "submitter": "orca_auto_orca",
+                    },
+                },
+            }
+        ],
+    }
+    orca_submitter.write_workflow_payload(workspace_dir, initial_payload)
+    real_write_workflow_payload = orca_submitter.write_workflow_payload
+    fail_next_workflow_write = True
+
+    def crash_before_workflow_commit(
+        current_workspace_dir: Path,
+        current_payload: dict[str, Any],
+    ) -> None:
+        nonlocal fail_next_workflow_write
+        if fail_next_workflow_write:
+            fail_next_workflow_write = False
+            raise OSError("simulated cancellation payload write crash")
+        real_write_workflow_payload(current_workspace_dir, current_payload)
+
+    monkeypatch.setattr(
+        orca_submitter,
+        "resolve_workflow_workspace",
+        lambda *, target, workflow_root: workspace_dir,
+    )
+    monkeypatch.setattr(
+        orca_submitter,
+        "write_workflow_payload",
+        crash_before_workflow_commit,
+    )
+    monkeypatch.setattr(orca_submitter, "sync_workflow_registry", lambda *_args: None)
+
+    with pytest.raises(OSError, match="simulated cancellation payload write crash"):
+        orca_submitter.cancel_reaction_ts_search_workflow(
+            workflow_target="wf_cancel_replay",
+            workflow_root=workflow_root,
+            orca_config="/tmp/orca.yaml",
+        )
+
+    [cancelled_entry] = queue_adapter.list_queue(allowed_root)
+    assert cancelled_entry.status == QueueStatus.CANCELLED
+    stale_payload = orca_submitter.load_workflow_payload(workspace_dir)
+    assert stale_payload["stages"][0]["status"] == "queued"
+    alias_retry = orca_submitter.cancel_target(
+        target=str(reaction_dir),
+        config_path="/tmp/orca.yaml",
+    )
+    assert alias_retry["status"] == "cancelled"
+    assert alias_retry["queue_id"] == entry.queue_id
+
+    result = orca_submitter.cancel_reaction_ts_search_workflow(
+        workflow_target="wf_cancel_replay",
+        workflow_root=workflow_root,
+        orca_config="/tmp/orca.yaml",
+    )
+
+    assert result["status"] == "cancelled"
+    assert result["failed"] == []
+    assert result["cancelled"] == [
+        {
+            "stage_id": "orca_stage",
+            "queue_id": entry.queue_id,
+            "reaction_dir": str(reaction_dir),
+        }
+    ]
+    final_payload = orca_submitter.load_workflow_payload(workspace_dir)
+    final_stage = final_payload["stages"][0]
+    assert final_stage["status"] == "cancelled"
+    assert final_stage["task"]["status"] == "cancelled"
+    assert final_stage["task"]["cancel_result"]["status"] == "cancelled"

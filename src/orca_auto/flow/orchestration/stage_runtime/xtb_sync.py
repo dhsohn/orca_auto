@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.statuses import STATUS_COMPLETED, STATUS_FAILED, status_in
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.stage_runtime.shared import (
@@ -187,7 +188,7 @@ def _submit_xtb_handoff_retry(
     task_view.update_enqueue_payload({"job_dir": retry_job_dir})
     submission = o.engines.submit_xtb_job_dir(
         job_dir=retry_job_dir,
-        priority=int(task["enqueue_payload"].get("priority", 10) or 10),
+        priority=normalize_queue_priority(task["enqueue_payload"].get("priority")),
         config_path=str(xtb_config),
     )
     submission["submitted_at"] = o.persistence.now_utc_iso()

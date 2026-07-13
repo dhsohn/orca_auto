@@ -87,11 +87,11 @@ def mark_terminal_process_queue_entry_with_result(
 ) -> TerminalProcessQueueMarkResult:
     queue_root = job_queue_root(worker, job)
     current = None
+    job_task_id = getattr(job, "task_id", None)
     if hooks.find_queue_entry_fn is not None:
         current = hooks.find_queue_entry_fn(queue_root, queue_id)
-        expected_job_id = (
-            hooks.queue_entry_task_id_fn(current) if current is not None else None
-        ) or getattr(job, "task_id", None)
+        current_task_id = hooks.queue_entry_task_id_fn(current) if current is not None else None
+        expected_job_id = current_task_id or job_task_id
         if current is None or not entry_status_is_running(current):
             logger.info(
                 "Skipping terminal mark for %s; entry is no longer running",
@@ -104,8 +104,20 @@ def mark_terminal_process_queue_entry_with_result(
                 current_entry=current,
                 queue_root=queue_root,
             )
+        if job_task_id and current_task_id and job_task_id != current_task_id:
+            logger.error(
+                "Skipping terminal mark for %s; running queue generation changed",
+                queue_id,
+            )
+            return TerminalProcessQueueMarkResult(
+                marked=False,
+                status=None,
+                expected_job_id=job_task_id,
+                current_entry=current,
+                queue_root=queue_root,
+            )
     else:
-        expected_job_id = getattr(job, "task_id", None)
+        expected_job_id = job_task_id
     if expected_job_id:
         run_id = hooks.get_run_id_from_state_fn(
             job.reaction_dir,
@@ -113,14 +125,23 @@ def mark_terminal_process_queue_entry_with_result(
         )
     else:
         run_id = hooks.get_run_id_from_state_fn(job.reaction_dir)
-    if hooks.get_cancel_requested_fn(queue_root, queue_id):
+    generation_kwargs = {
+        "expected_entry": current,
+        "expected_task_id": expected_job_id,
+    }
+    if hooks.get_cancel_requested_fn(queue_root, queue_id, **generation_kwargs):
         status = QueueStatus.CANCELLED.value
         logger.info("Job cancelled: %s (rc=%d)", queue_id, rc)
-        mark_outcome = hooks.mark_cancelled_fn(queue_root, queue_id)
+        mark_outcome = hooks.mark_cancelled_fn(queue_root, queue_id, **generation_kwargs)
     elif rc == 0:
         status = QueueStatus.COMPLETED.value
         logger.info("Job completed: %s (rc=%d)", queue_id, rc)
-        mark_outcome = hooks.mark_completed_fn(queue_root, queue_id, run_id=run_id)
+        mark_outcome = hooks.mark_completed_fn(
+            queue_root,
+            queue_id,
+            run_id=run_id,
+            **generation_kwargs,
+        )
     else:
         status = QueueStatus.FAILED.value
         logger.warning("Job failed: %s (rc=%d)", queue_id, rc)
@@ -129,6 +150,7 @@ def mark_terminal_process_queue_entry_with_result(
             queue_id,
             error=f"exit_code={rc}",
             run_id=run_id,
+            **generation_kwargs,
         )
     if mark_outcome is False:
         logger.info(

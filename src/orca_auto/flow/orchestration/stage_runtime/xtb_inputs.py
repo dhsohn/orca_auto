@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-import shutil
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+from orca_auto.core.engine_process import atomic_write_confined_bytes, ensure_confined_directory
+from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.utils.coercion import normalize_text, safe_int
-from orca_auto.flow.xyz_utils import load_xyz_frames
+from orca_auto.flow.xyz_utils import (
+    load_output_xyz_frames,
+    load_verified_xyz_frames,
+    load_xyz_atom_sequence,
+)
 
 
 def _safe_xcontrol_target_name(value: Any, *, fallback_name: str) -> str:
@@ -31,12 +36,7 @@ def _safe_xcontrol_target_name(value: Any, *, fallback_name: str) -> str:
 
 def _safe_xcontrol_target_path(job_dir: Path, target_name: str) -> Path:
     job_dir_resolved = job_dir.expanduser().resolve()
-    target = (job_dir_resolved / target_name).resolve()
-    try:
-        target.relative_to(job_dir_resolved)
-    except ValueError as exc:
-        raise ValueError(f"xcontrol target escapes job_dir: {target}") from exc
-    return target
+    return job_dir_resolved / target_name
 
 
 def _materialize_xtb_override_xcontrol(
@@ -57,7 +57,12 @@ def _materialize_xtb_override_xcontrol(
     if xcontrol_file:
         source = Path(xcontrol_file).expanduser().resolve()
         if source.exists() and source.is_file():
-            shutil.copy2(source, target_path)
+            atomic_write_confined_bytes(
+                job_dir,
+                target_path,
+                read_stable_regular_file(source),
+                label="xTB materialized xcontrol",
+            )
             return target_name
 
     lines: list[str] = []
@@ -69,7 +74,12 @@ def _materialize_xtb_override_xcontrol(
         lines = xcontrol_text.splitlines()
 
     if lines:
-        target_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        atomic_write_confined_bytes(
+            job_dir,
+            target_path,
+            ("\n".join(lines) + "\n").encode("utf-8"),
+            label="xTB materialized xcontrol",
+        )
         return target_name
 
     return ""
@@ -91,17 +101,34 @@ def _materialize_xtb_stage_input(source: dict[str, Any], target: Path) -> str:
     metadata = _stage_input_mapping(source.get("metadata"))
     frame_index = safe_int(metadata.get("source_frame_index", 0) or 0, default=0)
 
-    target.parent.mkdir(parents=True, exist_ok=True)
+    output_identity = metadata.get("output_identity")
+    frames = (
+        load_verified_xyz_frames(source_path, output_identity)
+        if isinstance(output_identity, dict)
+        else load_output_xyz_frames(source_path)
+    )
+    if not frames:
+        raise ValueError(f"xTB workflow input artifact is not a valid finite XYZ: {source_path}")
     if frame_index > 0:
-        frames = load_xyz_frames(source_path)
         if frame_index > len(frames):
             raise ValueError(
                 f"Requested CREST frame {frame_index} is unavailable in retained artifact: {source_path}"
             )
-        target.write_text(frames[frame_index - 1].render(), encoding="utf-8")
-        return str(target.resolve())
+        selected_frame = frames[frame_index - 1]
+    else:
+        if len(frames) != 1:
+            raise ValueError(
+                f"xTB workflow input artifact must contain exactly one XYZ frame: {source_path}"
+            )
+        selected_frame = frames[0]
 
-    shutil.copy2(source_path, target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_confined_bytes(
+        target.parent,
+        target,
+        selected_frame.render().encode("utf-8"),
+        label="xTB materialized XYZ input",
+    )
     return str(target.resolve())
 
 
@@ -112,8 +139,8 @@ def _materialize_xtb_path_inputs(
 ) -> tuple[Path, Path]:
     reactants_dir = job_dir / "reactants"
     products_dir = job_dir / "products"
-    reactants_dir.mkdir(parents=True, exist_ok=True)
-    products_dir.mkdir(parents=True, exist_ok=True)
+    ensure_confined_directory(job_dir, reactants_dir, label="xTB reactants directory")
+    ensure_confined_directory(job_dir, products_dir, label="xTB products directory")
 
     reactant_source = _stage_input_mapping(payload.get("reactant_source"))
     product_source = _stage_input_mapping(payload.get("product_source"))
@@ -121,4 +148,10 @@ def _materialize_xtb_path_inputs(
     product_target = products_dir / f"p{_stage_input_rank(product_source)}.xyz"
     _materialize_xtb_stage_input(reactant_source, reactant_target)
     _materialize_xtb_stage_input(product_source, product_target)
+    reactant_atoms = tuple(atom.casefold() for atom in load_xyz_atom_sequence(reactant_target))
+    product_atoms = tuple(atom.casefold() for atom in load_xyz_atom_sequence(product_target))
+    if reactant_atoms != product_atoms:
+        raise ValueError(
+            "xTB path-search endpoints must have identical atom counts and element order"
+        )
     return reactant_target, product_target

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from orca_auto.core.queue.publication import QUEUE_SUBMISSION_INTENT_KEY
 from orca_auto.flow.orchestration.stage_views import WorkflowStageView, WorkflowTaskView
 
 from . import stages as _restart_stages
@@ -39,6 +40,7 @@ _STALE_STAGE_METADATA_KEYS = frozenset(
         "queue_status",
         "reason",
         "run_id",
+        QUEUE_SUBMISSION_INTENT_KEY,
         "state_status",
         "submission_status",
         "submitted_at",

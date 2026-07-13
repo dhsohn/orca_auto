@@ -9,11 +9,12 @@ from typing import Any
 @dataclass(frozen=True)
 class TerminalSyncActions:
     write_artifacts: Callable[[], Any]
-    mark_queue_terminal: Callable[[], Any]
+    mark_queue_terminal: Callable[[Callable[[], Any]], Any]
     sync_job_record: Callable[[], Any]
     notify_finished: Callable[[Any], Any]
     build_outcome: Callable[[Any], Any]
     emit_output: Callable[[Any], Any] | None = None
+    handle_uncommitted_terminal: Callable[[], Any] | None = None
 
 
 def sync_terminal_result(
@@ -21,9 +22,26 @@ def sync_terminal_result(
     *,
     emit_output: bool = False,
 ) -> Any:
-    actions.write_artifacts()
-    actions.mark_queue_terminal()
-    sync_result = actions.sync_job_record()
+    # Keep the queue entry replayable until both the terminal artifacts and
+    # idempotent terminal index are durable. The queue mutation invokes these
+    # writes while holding its generation/cancellation CAS lock, so a stale
+    # generation cannot overwrite another job's artifacts and a racing
+    # cancellation either wins before any terminal write or waits until the
+    # terminal transition is durable.
+    sync_results: list[Any] = []
+
+    def sync_before_queue_update() -> Any:
+        actions.write_artifacts()
+        result = actions.sync_job_record()
+        sync_results.append(result)
+        return result
+
+    marked = actions.mark_queue_terminal(sync_before_queue_update)
+    if marked is None or marked is False:
+        if actions.handle_uncommitted_terminal is not None:
+            return actions.handle_uncommitted_terminal()
+        return actions.build_outcome(None)
+    sync_result = sync_results[0] if sync_results else None
     actions.notify_finished(sync_result)
     if emit_output and actions.emit_output is not None:
         actions.emit_output(sync_result)
@@ -40,8 +58,12 @@ def mark_result_terminal_status(
     mark_completed_fn: Callable[..., Any],
     mark_cancelled_fn: Callable[..., Any],
     mark_failed_fn: Callable[..., Any],
-) -> None:
-    mark_terminal_status_fn(
+    expected_entry: Any | None = None,
+    expected_task_id: str | None = None,
+    before_update_fn: Callable[[], Any] | None = None,
+    require_cancel_requested: bool = False,
+) -> Any:
+    return mark_terminal_status_fn(
         queue_root,
         queue_id,
         status=result.status,
@@ -50,6 +72,10 @@ def mark_result_terminal_status(
         mark_completed_fn=mark_completed_fn,
         mark_cancelled_fn=mark_cancelled_fn,
         mark_failed_fn=mark_failed_fn,
+        expected_entry=expected_entry,
+        expected_task_id=expected_task_id,
+        before_update_fn=before_update_fn,
+        require_cancel_requested=require_cancel_requested,
     )
 
 

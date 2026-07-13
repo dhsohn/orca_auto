@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.indexing import JobLocationRecord, resolve_job_location
 from orca_auto.core.utils.coercion import coerce_int_mapping
 
@@ -15,6 +18,10 @@ from ..contracts.xtb import (
 from ..xyz_utils import has_xyz_geometry
 from . import _engine_adapter_helpers as _adapter_helpers
 
+_ACTIVE_PAYLOAD_STATUSES = frozenset(
+    {"queued", "running", "submitted", "cancel_requested", "retrying"}
+)
+
 
 def _job_type_from_record(record: JobLocationRecord | None, fallback: str) -> str:
     if record is None:
@@ -25,7 +32,13 @@ def _job_type_from_record(record: JobLocationRecord | None, fallback: str) -> st
     return value or fallback
 
 
-def _load_candidate_details(payload: dict[str, Any]) -> tuple[XtbCandidateArtifact, ...]:
+def _load_candidate_details(
+    payload: dict[str, Any],
+    *,
+    fields: _adapter_helpers.ContractFieldReader,
+    artifact_roots: tuple[Path, ...],
+    require_identity: bool,
+) -> tuple[XtbCandidateArtifact, ...]:
     raw_items = payload.get("candidate_details")
     if not isinstance(raw_items, list):
         return ()
@@ -35,7 +48,32 @@ def _load_candidate_details(payload: dict[str, Any]) -> tuple[XtbCandidateArtifa
             continue
         detail = XtbCandidateArtifact.from_raw(raw)
         if detail.path:
-            details.append(detail)
+            resolved = fields.resolved_path(detail.path, roots=artifact_roots)
+            if not resolved:
+                raise ValueError(f"xTB candidate artifact escapes job_dir: {detail.path}")
+            identity = detail.metadata.get("output_identity")
+            if require_identity and not isinstance(identity, dict):
+                identity = _engine_runner.confined_output_identity(artifact_roots[0], resolved)
+                detail = replace(
+                    detail,
+                    metadata={
+                        **detail.metadata,
+                        "output_identity": identity,
+                        "identity_backfilled_from_legacy_artifact": True,
+                    },
+                )
+            if isinstance(identity, dict):
+                verified = _engine_runner.verify_confined_output_identity(
+                    artifact_roots[0],
+                    identity,
+                    path_override=resolved,
+                )
+                identity = {**identity, "path": str(verified)}
+                detail = replace(
+                    detail,
+                    metadata={**detail.metadata, "output_identity": identity},
+                )
+            details.append(replace(detail, path=resolved))
     return tuple(details)
 
 
@@ -101,13 +139,31 @@ def load_xtb_artifact_contract(*, xtb_index_root: str | Path, target: str) -> Xt
         missing_label="xTB",
         expected_app_name="orca_auto_xtb",
         coerce_resource_dict_fn=coerce_int_mapping,
+        select_payload_fn=partial(
+            _adapter_helpers.select_active_artifact_payload,
+            active_statuses=_ACTIVE_PAYLOAD_STATUSES,
+        ),
     )
     fields = _adapter_helpers.ContractFieldReader(bundle)
     payload = fields.payload
+    artifact_roots = fields.artifact_roots()
 
-    candidate_details = _load_candidate_details(payload)
+    status = fields.payload_record_text("status", "status", default="unknown")
+    candidate_details = _load_candidate_details(
+        payload,
+        fields=fields,
+        artifact_roots=artifact_roots,
+        require_identity=status == "completed",
+    )
 
-    selected_candidate_paths = fields.payload_sequence("selected_candidate_paths") or tuple(
+    raw_selected_paths = fields.payload_sequence("selected_candidate_paths")
+    selected_candidate_paths = fields.resolved_paths(
+        raw_selected_paths,
+        roots=artifact_roots,
+    )
+    if len(selected_candidate_paths) != len(raw_selected_paths):
+        raise ValueError("xTB selected candidate artifact escapes job_dir")
+    selected_candidate_paths = selected_candidate_paths or tuple(
         item.path for item in candidate_details if item.selected
     )
 
@@ -115,11 +171,14 @@ def load_xtb_artifact_contract(*, xtb_index_root: str | Path, target: str) -> Xt
         payload.get("job_type"),
         default=_job_type_from_record(fields.record, "unknown"),
     )
-    status = fields.payload_record_text("status", "status", default="unknown")
     reason = _adapter_helpers.normalize_text(payload.get("reason"))
     job_id = fields.payload_record_text("job_id", "job_id")
     reaction_key = fields.payload_record_text("reaction_key", "molecule_key")
     selected_input_xyz = fields.payload_record_text("selected_input_xyz", "selected_input_xyz")
+    if selected_input_xyz:
+        selected_input_xyz = fields.resolved_path(selected_input_xyz, roots=artifact_roots)
+        if not selected_input_xyz:
+            raise ValueError("xTB selected input artifact escapes job_dir")
     latest_known_path = bundle.latest_known_path
 
     analysis_summary = payload.get("analysis_summary")

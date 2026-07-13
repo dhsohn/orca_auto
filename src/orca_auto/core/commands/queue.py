@@ -22,7 +22,7 @@ class QueueRuntime:
     list_queue_fn: Callable[[Path], list[Any]]
     dequeue_next_fn: Callable[[Path], Any | None]
     dequeue_next_across_roots_fn: Callable[..., tuple[Path, Any] | None]
-    dequeue_entry_if_pending_fn: Callable[[Path, str], Any | None] | None = None
+    dequeue_entry_if_pending_fn: Callable[..., Any | None] | None = None
     accept_entry_fn: Callable[[Any], bool] | None = None
 
     def queue_roots(self, cfg: Any) -> tuple[Path, ...]:
@@ -36,6 +36,7 @@ class QueueRuntime:
             cfg,
             queue_roots_fn=self.queue_roots,
             list_queue_fn=self.list_queue_fn,
+            accept_entry_fn=self.accept_entry_fn,
         )
 
     def dequeue_next_entry(self, cfg: Any) -> tuple[Path, Any] | None:
@@ -67,10 +68,13 @@ def queue_entries_with_roots(
     *,
     queue_roots_fn: Callable[[Any], tuple[Path, ...]],
     list_queue_fn: Callable[[Path], list[Any]],
+    accept_entry_fn: Callable[[Any], bool] | None = None,
 ) -> list[tuple[Path, Any]]:
     rows: list[tuple[Path, Any]] = []
     for root in existing_queue_roots(queue_roots_fn(cfg)):
         for entry in list_queue_fn(root):
+            if accept_entry_fn is not None and not accept_entry_fn(entry):
+                continue
             rows.append((root, entry))
     return rows
 
@@ -82,7 +86,7 @@ def dequeue_next_entry(
     list_queue_fn: Callable[[Path], list[Any]],
     dequeue_next_fn: Callable[[Path], Any | None],
     dequeue_next_across_roots_fn: Callable[..., tuple[Path, Any] | None],
-    dequeue_entry_if_pending_fn: Callable[[Path, str], Any | None] | None = None,
+    dequeue_entry_if_pending_fn: Callable[..., Any | None] | None = None,
     accept_entry_fn: Callable[[Any], bool] | None = None,
 ) -> tuple[Path, Any] | None:
     return dequeue_next_across_roots_fn(

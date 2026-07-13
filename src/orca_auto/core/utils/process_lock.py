@@ -6,6 +6,7 @@ import errno
 import json
 import logging
 import os
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
@@ -13,14 +14,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
+from orca_auto.core.engine_process import read_confined_text
 from orca_auto.core.utils import process as process_utils
 from orca_auto.core.utils.lock import file_lock
 
 
 def parse_lock_info(lock_path: Path) -> dict[str, Any]:
     try:
-        raw = lock_path.read_text(encoding="utf-8").strip()
-    except OSError:
+        raw = read_confined_text(
+            lock_path.parent,
+            lock_path,
+            label="process lock",
+            max_links=2,
+        ).strip()
+    except (OSError, ValueError):
         return _empty_lock_info()
     if not raw:
         return _empty_lock_info()
@@ -72,14 +79,22 @@ def _write_lock_payload(lock_path: Path, lock_payload: str) -> bool:
     # temp file first, then hard-link it into place: ``os.link`` raises
     # ``FileExistsError`` if the target already exists (preserving exclusive
     # creation), and the linked file is never observed empty.
-    tmp_path = lock_path.with_name(f".{lock_path.name}.{os.getpid()}.tmp")
+    if lock_path.parent.is_symlink():
+        raise ValueError(f"Process lock directory must not be a symlink: {lock_path.parent}")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{lock_path.name}.",
+        suffix=".tmp",
+        dir=lock_path.parent,
+    )
+    tmp_path = Path(temporary_name)
     try:
-        with open(tmp_path, "w", encoding="utf-8") as handle:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(lock_payload + "\n")
             handle.flush()
             os.fsync(handle.fileno())
         try:
-            os.link(tmp_path, lock_path)
+            os.link(tmp_path, lock_path, follow_symlinks=False)
         except FileExistsError:
             return False
         return True

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.queue.priority import normalize_queue_priority
+from orca_auto.flow.orchestration.charge_spin import strict_int
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.deps import (
     orchestration_context as _orchestration_context,
@@ -57,15 +59,19 @@ def _crest_orca_stage_plan(
 ) -> _CrestOrcaStagePlan | None:
     if _engine_stages(o, payload, "orca"):
         return None
+    has_completed_crest_stage = any(
+        view.status(o) == "completed" for view in _engine_stage_views(o, payload, "crest")
+    )
     crest_contract = _completed_crest_stage_for_orca(
         o,
         payload,
         crest_config=crest_config,
     )
-    if (
-        crest_contract is None
-        or o.stages.support._load_config_root(orca_config, engine="orca") is None
-    ):
+    if crest_contract is None:
+        if has_completed_crest_stage:
+            _record_conformer_crest_handoff_failure(payload)
+        return None
+    if o.stages.support._load_config_root(orca_config, engine="orca") is None:
         return None
     payload_metadata = o.stages.support._coerce_mapping(payload.get("metadata"))
     workspace_dir_text = o.stages.support._normalize_text(payload_metadata.get("workspace_dir"))
@@ -119,6 +125,16 @@ def _maybe_record_conformer_orca_exhausted(o: Any, payload: dict[str, Any]) -> N
     )
 
 
+def _record_conformer_crest_handoff_failure(payload: dict[str, Any]) -> None:
+    _record_workflow_error(
+        payload,
+        scope="conformer_screening_crest_handoff",
+        stage_id="",
+        reason="crest_no_usable_conformers",
+        message="The completed CREST stage has no usable retained conformer geometry.",
+    )
+
+
 def append_crest_orca_stages_impl(
     payload: dict[str, Any],
     *,
@@ -140,6 +156,9 @@ def append_crest_orca_stages_impl(
     if plan is None:
         _maybe_record_conformer_orca_exhausted(o, payload)
         return False
+    if not plan.candidates:
+        _record_conformer_crest_handoff_failure(payload)
+        return False
     created = 0
     for candidate in plan.candidates:
         created += 1
@@ -154,11 +173,13 @@ def append_crest_orca_stages_impl(
             candidate=candidate,
             task_kind="opt",
             route_line=str(plan.params.get("orca_route_line", "! r2scan-3c Opt TightSCF")),
-            charge=int(plan.params.get("charge", 0) or 0),
-            multiplicity=int(plan.params.get("multiplicity", 1) or 1),
+            charge=strict_int(plan.params.get("charge", 0), field="charge"),
+            multiplicity=strict_int(
+                plan.params.get("multiplicity", 1), field="multiplicity", minimum=1
+            ),
             max_cores=int(plan.params.get("max_cores", 8) or 8),
             max_memory_gb=int(plan.params.get("max_memory_gb", 32) or 32),
-            priority=int(plan.params.get("priority", 10) or 10),
+            priority=normalize_queue_priority(plan.params.get("priority")),
             xyz_filename=xyz_filename,
             inp_filename=inp_filename,
         ).to_dict()

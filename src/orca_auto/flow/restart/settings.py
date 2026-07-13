@@ -3,13 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.utils import (
     mapping_or_empty as _coerce_mapping,
 )
 from orca_auto.core.utils import (
     normalize_text as _normalize_text,
 )
-from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin
+from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin, strict_int
 from orca_auto.flow.orchestration.stage_views import WorkflowStageView, WorkflowTaskView
 from orca_auto.flow.orchestration.workflow_builders import (
     _REACTION_TS_SEARCH_CREST_MANIFEST_DEFAULTS,
@@ -37,6 +38,7 @@ from ..manifest import (
     normalize_rmsd_dedup_block as _normalize_rmsd_dedup_block,
 )
 from ..manifest import optional_positive_float as _optional_positive_float
+from ..manifest import require_crest_candidate_count as _require_crest_candidate_count
 from ..manifest import (
     resolve_endpoint_pairing_manifest as _resolve_endpoint_pairing_manifest,
 )
@@ -65,33 +67,33 @@ _INTERACTION_FRAGMENT_ROLE = "interaction_fragment"
 _INTERACTION_CONFIG_FINGERPRINT_KEY = "interaction_config_fingerprint"
 
 
-def _positive_int(value: Any) -> int | None:
+def _strict_optional_int(
+    value: Any,
+    *,
+    field_name: str,
+    minimum: int,
+) -> int | None:
     if value in (None, ""):
         return None
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
-
-
-def _optional_int(value: Any) -> int | None:
-    if value in (None, ""):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    return strict_int(value, field=field_name, minimum=minimum)
 
 
 def _resolved_resource_request(manifest: dict[str, Any]) -> dict[str, int]:
     resources = _manifest_mapping(manifest.get("resources"))
     resolved: dict[str, int] = {}
-    max_cores = _positive_int(resources.get("max_cores")) or _positive_int(
-        manifest.get("max_cores")
+    max_cores = _strict_optional_int(
+        resources.get("max_cores")
+        if resources.get("max_cores") not in (None, "")
+        else manifest.get("max_cores"),
+        field_name="resources.max_cores",
+        minimum=1,
     )
-    max_memory_gb = _positive_int(resources.get("max_memory_gb")) or _positive_int(
-        manifest.get("max_memory_gb")
+    max_memory_gb = _strict_optional_int(
+        resources.get("max_memory_gb")
+        if resources.get("max_memory_gb") not in (None, "")
+        else manifest.get("max_memory_gb"),
+        field_name="resources.max_memory_gb",
+        minimum=1,
     )
     if max_cores is not None:
         resolved["max_cores"] = max_cores
@@ -251,23 +253,33 @@ def _apply_restart_request_manifests(
         "max_xtb_handoff_retries",
         "max_orca_stages",
     ):
-        parsed = _positive_int(manifest.get(key))
+        parsed = _strict_optional_int(
+            manifest.get(key),
+            field_name=key,
+            minimum=0 if key == "max_xtb_handoff_retries" else 1,
+        )
         if parsed is not None:
-            params[key] = parsed
+            params[key] = (
+                _require_crest_candidate_count(parsed) if key == "max_crest_candidates" else parsed
+            )
 
 
 def _manifest_electronic_state(manifest: dict[str, Any]) -> tuple[int | None, int | None]:
     """(charge, multiplicity) the flow manifest states, ``None`` when absent."""
     orca_manifest = _manifest_mapping(manifest.get("orca"))
-    charge = _optional_int(
-        manifest.get("charge") if "charge" in manifest else orca_manifest.get("charge")
-    )
+    raw_charge = manifest.get("charge") if "charge" in manifest else orca_manifest.get("charge")
+    charge = None if raw_charge in (None, "") else strict_int(raw_charge, field="workflow charge")
     raw_multiplicity = (
         manifest.get("multiplicity")
         if "multiplicity" in manifest
         else orca_manifest.get("multiplicity")
     )
-    return charge, _positive_int(raw_multiplicity)
+    multiplicity = (
+        None
+        if raw_multiplicity in (None, "")
+        else strict_int(raw_multiplicity, field="workflow multiplicity", minimum=1)
+    )
+    return charge, multiplicity
 
 
 def _apply_orca_request_parameters(params: dict[str, Any], manifest: dict[str, Any]) -> None:
@@ -376,7 +388,9 @@ def _flow_restart_settings_from_manifest(
         template_name=template_name,
         crest_manifest=crest_manifest,
     )
-    priority = _positive_int(manifest.get("priority"))
+    priority = (
+        normalize_queue_priority(manifest.get("priority")) if "priority" in manifest else None
+    )
     resources = _resolved_resource_request(manifest)
     crest_mode = _flow_crest_mode(manifest, crest_manifest)
     _update_request_parameters(
@@ -506,6 +520,9 @@ def _flow_restart_settings_from_manifest(
             manifest_overrides=xtb_manifest,
         )
         or {},
+        "max_xtb_handoff_retries": (
+            params.get("max_xtb_handoff_retries") if "max_xtb_handoff_retries" in manifest else None
+        ),
         "endpoint_pairing": endpoint_pairing,
     }
 
@@ -647,6 +664,14 @@ def _apply_flow_restart_settings(
         elif electronic_state_present:
             _merge_stage_charge_spin(stage, settings)
     elif engine == "xtb":
+        max_handoff_retries = settings.get("max_xtb_handoff_retries")
+        if isinstance(max_handoff_retries, int) and not isinstance(
+            max_handoff_retries,
+            bool,
+        ):
+            task_view.set_payload_field("max_handoff_retries", max_handoff_retries)
+            task_view.set_metadata_field("max_handoff_retries", max_handoff_retries)
+            stage_view.set_metadata_field("max_handoff_retries", max_handoff_retries)
         if bool(settings.get("xtb_present")):
             _set_stage_manifest_overrides(stage, _coerce_mapping(settings.get("xtb_overrides")))
         elif electronic_state_present:

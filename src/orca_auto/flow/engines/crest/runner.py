@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import json
 import math
-import os
 import resource
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -20,8 +20,17 @@ from orca_auto.core.engine_process import (
     cleanup_failed_logged_process_start,
     start_logged_process,
 )
-from orca_auto.core.utils import now_utc_iso
+from orca_auto.core.queue.engine.input_snapshot import (
+    read_stable_regular_file,
+    verify_input_snapshots,
+)
+from orca_auto.core.utils import fsync_directory, now_utc_iso
 from orca_auto.core.utils import process as process_utils
+from orca_auto.flow.xyz_utils import (
+    load_output_xyz_frames,
+    load_xyz_frames,
+    validated_xyz_atom_count,
+)
 
 from .job_inputs import (
     MANIFEST_FILE_NAME,
@@ -36,13 +45,20 @@ _RETAINED_ENSEMBLE_CANDIDATES = (
     "crest_best.xyz",
 )
 _CREST_NATIVE_INT_MAX = (1 << 31) - 1
+_CREST_DEFAULT_MAX_MD_STEPS = 10_000_000
+_CREST_DEFAULT_MAX_AUTOMATIC_MD_STEPS = 14_000_000
+_CREST_DEFAULT_MAX_DUMP_FRAMES = 100_000
 _CREST_FIXED_REAL_MIN = 1e-6
-_CREST_DEFAULT_TSTEP_FS = 5.0
-# CREST 3.0.2 auto-selects 2.5–500 ps when mdlen is absent. These bounds keep
-# its default-integer MD step count in [1, INT32_MAX] without inventing a
-# chemistry-policy cap.
+_CREST_GFN_XTB_DEFAULT_TSTEP_FS = 5.0
+_CREST_GFN_FF_DEFAULT_TSTEP_FS = 1.5
+_CREST_COMPOSITE_DEFAULT_TSTEP_FS = 2.0
+# CREST 3.0.2 auto-selects 2.5–500 ps when mdlen is absent. Native integer
+# bounds are supplemented by a conservative admission budget; a larger budget
+# requires an explicit high-cost acknowledgement in the manifest.
 _CREST_TSTEP_MIN_FS = 0.001
 _CREST_TSTEP_MAX_FS = 2500.0
+_CREST_MAX_AUTOMATIC_MDLEN_FS = 500_000.0
+_CREST_MAX_ATOM_MD_WORK_UNITS = 50_000_000_000
 
 
 @dataclass(frozen=True)
@@ -62,6 +78,7 @@ class CrestRunResult:
     manifest_path: str
     resource_request: dict[str, int]
     resource_actual: dict[str, int]
+    output_identities: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -79,6 +96,8 @@ class CrestRunningJob:
     resource_request: dict[str, int]
     resource_actual: dict[str, int]
     job_dir: str
+    manifest_snapshot: dict[str, Any] = field(default_factory=dict)
+    execution_snapshot: dict[str, Any] = field(default_factory=dict)
 
 
 def _resolve_crest_executable(cfg: AppConfig) -> str:
@@ -90,12 +109,38 @@ def _resolve_crest_executable(cfg: AppConfig) -> str:
     )
 
 
+def _verify_execution_manifest(
+    execution_snapshot: dict[str, Any],
+    verified_inputs: dict[str, Path],
+) -> dict[str, Any]:
+    manifest = execution_snapshot.get("manifest")
+    manifest_path = verified_inputs.get("manifest")
+    if not isinstance(manifest, dict) or manifest_path is None:
+        raise ValueError("Queued CREST execution snapshot has no immutable manifest")
+    if str(execution_snapshot.get("manifest_path") or "") != str(
+        manifest_path
+    ) or read_stable_regular_file(
+        manifest_path,
+        require_single_link=True,
+    ) != json.dumps(
+        manifest,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8"):
+        raise ValueError("Queued CREST manifest payload does not match its immutable snapshot")
+    return dict(manifest)
+
+
 def _append_crest_mode_flags(command: list[str], manifest: dict[str, Any]) -> None:
     if job_mode(manifest) == "nci":
         command.append("--nci")
 
     speed = str(manifest.get("speed", "")).strip().lower()
-    if speed in {"quick", "squick", "mquick"}:
+    if speed and speed not in {"quick", "squick", "mquick"}:
+        raise ValueError("CREST speed must be 'quick', 'squick', or 'mquick'.")
+    if speed:
         command.append(f"--{speed}")
 
 
@@ -129,15 +174,22 @@ def _append_crest_gfn_flag(command: list[str], manifest: dict[str, Any]) -> None
         "gfn2//gfnff": "--gfn2//gfnff",
     }
     option = gfn_options.get(str(manifest.get("gfn", "")).strip().lower())
+    if str(manifest.get("gfn", "")).strip() and option is None:
+        raise ValueError("CREST gfn must be one of 1, 2, ff, or 2//ff.")
     if option:
+        if option == "--gfn2//gfnff":
+            command.append("--legacy")
         command.append(option)
 
 
 def _append_crest_int_options(command: list[str], manifest: dict[str, Any]) -> None:
     for manifest_key, option in (("charge", "--chrg"), ("uhf", "--uhf")):
-        value = _engine_runner.manifest_int(manifest, manifest_key, zero_is_absent=True)
-        if value is not None:
-            command.extend([option, str(value)])
+        value = _engine_runner.manifest_int(manifest, manifest_key)
+        if value is None:
+            value = 0
+        if manifest_key == "uhf" and value < 0:
+            raise ValueError("CREST uhf must be a nonnegative integer.")
+        command.extend([option, str(value)])
 
 
 def _append_crest_scalar_options(command: list[str], manifest: dict[str, Any]) -> None:
@@ -146,11 +198,17 @@ def _append_crest_scalar_options(command: list[str], manifest: dict[str, Any]) -
         ("ewin", "--ewin"),
         ("ethr", "--ethr"),
         ("bthr", "--bthr"),
-        ("cluster", "--cluster"),
     ):
-        value = _engine_runner.manifest_scalar_text(manifest, manifest_key)
+        value = _crest_positive_real(manifest, manifest_key)
         if value:
             command.extend([option, value])
+    cluster = _crest_int(manifest, "cluster")
+    if cluster is not None:
+        if not 1 <= cluster <= _CREST_NATIVE_INT_MAX:
+            raise ValueError(
+                f"CREST option 'cluster' must be between 1 and {_CREST_NATIVE_INT_MAX}"
+            )
+        command.extend(["--cluster", str(cluster)])
 
 
 # CREST 3.0.2 (`crest --help conf`) conformational-search knobs, exposed as
@@ -227,38 +285,151 @@ def _crest_bool(manifest: dict[str, Any], key: str) -> bool:
     raise ValueError(f"CREST option {key!r} must be a boolean, got {raw!r}")
 
 
-def _validate_md_step_count(mdlen: str | None, tstep: str | None) -> None:
+def _validate_md_step_count(
+    mdlen: str | None,
+    tstep: str | None,
+    *,
+    gfn: Any = None,
+    max_steps: int = _CREST_DEFAULT_MAX_MD_STEPS,
+    trajectory_count: int = 1,
+) -> int:
     if mdlen is None:
-        return
-    step_fs = float(tstep) if tstep is not None else _CREST_DEFAULT_TSTEP_FS
-    raw_step_count = (float(mdlen) / step_fs) * 1000.0
+        if tstep is not None:
+            raise ValueError("CREST tstep requires an explicit mdlen for work-budget admission")
+        step_count = math.ceil(
+            (_CREST_MAX_AUTOMATIC_MDLEN_FS / _default_timestep_fs(gfn)) * trajectory_count
+        )
+        if step_count > min(_CREST_NATIVE_INT_MAX, max_steps):
+            raise ValueError(
+                "CREST automatic mdlen worst case exceeds the admitted work budget of "
+                f"{min(_CREST_NATIVE_INT_MAX, max_steps)} MD steps"
+            )
+        return step_count
+    normalized_gfn = str(gfn or "").strip().lower()
+    if normalized_gfn in {"ff", "gfnff"}:
+        default_tstep_fs = _CREST_GFN_FF_DEFAULT_TSTEP_FS
+    elif normalized_gfn in {"2//ff", "gfn2//gfnff"}:
+        default_tstep_fs = _CREST_COMPOSITE_DEFAULT_TSTEP_FS
+    else:
+        default_tstep_fs = _CREST_GFN_XTB_DEFAULT_TSTEP_FS
+    step_fs = float(tstep) if tstep is not None else default_tstep_fs
+    raw_step_count = (float(mdlen) / step_fs) * 1000.0 * trajectory_count
     if not math.isfinite(raw_step_count):
         raise ValueError(
             "CREST mdlen/tstep combination must produce between 1 and "
             f"{_CREST_NATIVE_INT_MAX} MD steps"
         )
     step_count = math.floor(raw_step_count + 0.5)
-    if step_count < 1 or step_count > _CREST_NATIVE_INT_MAX:
+    if step_count < 1 or step_count > min(_CREST_NATIVE_INT_MAX, max_steps):
         raise ValueError(
-            "CREST mdlen/tstep combination must produce between 1 and "
-            f"{_CREST_NATIVE_INT_MAX} MD steps"
+            "CREST mdlen/tstep combination exceeds the admitted work budget of "
+            f"{min(_CREST_NATIVE_INT_MAX, max_steps)} MD steps"
         )
+    return step_count
 
 
-def _append_crest_sampling_options(command: list[str], manifest: dict[str, Any]) -> None:
+def _default_timestep_fs(gfn: Any) -> float:
+    normalized_gfn = str(gfn or "").strip().lower()
+    if normalized_gfn in {"ff", "gfnff"}:
+        return _CREST_GFN_FF_DEFAULT_TSTEP_FS
+    if normalized_gfn in {"2//ff", "gfn2//gfnff"}:
+        return _CREST_COMPOSITE_DEFAULT_TSTEP_FS
+    return _CREST_GFN_XTB_DEFAULT_TSTEP_FS
+
+
+def _append_crest_sampling_options(
+    command: list[str],
+    manifest: dict[str, Any],
+    *,
+    atom_count: int,
+) -> None:
     mdlen = _resolve_mdlen(manifest)
     wscal = _crest_positive_real(manifest, "wscal")
+    normalized_gfn = str(manifest.get("gfn") or "").strip().lower()
+    if normalized_gfn in {"ff", "gfnff"}:
+        scientific_tstep_max = _CREST_GFN_FF_DEFAULT_TSTEP_FS
+    elif normalized_gfn in {"2//ff", "gfn2//gfnff"}:
+        scientific_tstep_max = _CREST_COMPOSITE_DEFAULT_TSTEP_FS
+    else:
+        scientific_tstep_max = _CREST_GFN_XTB_DEFAULT_TSTEP_FS
+    shake = _crest_int(manifest, "shake")
+    if shake == 1:
+        scientific_tstep_max = min(scientific_tstep_max, 2.0)
+    allow_high_tstep = _crest_bool(manifest, "allow_high_tstep")
     tstep = _crest_positive_real(
         manifest,
         "tstep",
         minimum=_CREST_TSTEP_MIN_FS,
-        maximum=_CREST_TSTEP_MAX_FS,
+        maximum=_CREST_TSTEP_MAX_FS if allow_high_tstep else scientific_tstep_max,
     )
-    _validate_md_step_count(mdlen, tstep)
+    configured_max_md_steps = _crest_int(manifest, "max_md_steps")
+    max_md_steps = configured_max_md_steps
+    if max_md_steps is None:
+        max_md_steps = (
+            _CREST_DEFAULT_MAX_AUTOMATIC_MD_STEPS if mdlen is None else _CREST_DEFAULT_MAX_MD_STEPS
+        )
+    if not 1 <= max_md_steps <= _CREST_NATIVE_INT_MAX:
+        raise ValueError(f"CREST max_md_steps must be between 1 and {_CREST_NATIVE_INT_MAX}")
+    if (
+        configured_max_md_steps is not None
+        and max_md_steps > _CREST_DEFAULT_MAX_MD_STEPS
+        and not _crest_bool(manifest, "allow_high_cost_md")
+    ):
+        raise ValueError(
+            "CREST max_md_steps above the default budget requires allow_high_cost_md=true"
+        )
+    speed = str(manifest.get("speed") or "").strip().lower()
+    mode = job_mode(manifest)
+    base_trajectories = 6 if mode == "nci" or speed in {"quick", "squick", "mquick"} else 14
+    restart_iterations = 1 if speed == "mquick" else 5
+    rotamer_factor = (
+        1
+        if mode == "nci"
+        or speed in {"quick", "squick", "mquick"}
+        or _crest_bool(manifest, "norotmd")
+        else 2
+    )
+    trajectory_count = base_trajectories * restart_iterations * rotamer_factor
+    estimated_md_steps = _validate_md_step_count(
+        mdlen,
+        tstep,
+        gfn=manifest.get("gfn"),
+        max_steps=max_md_steps,
+        trajectory_count=trajectory_count,
+    )
+    estimated_work_units = atom_count * estimated_md_steps
+    if estimated_work_units > _CREST_MAX_ATOM_MD_WORK_UNITS:
+        raise ValueError(
+            "CREST molecule size and aggregate MD steps exceed the server work-unit "
+            f"ceiling of {_CREST_MAX_ATOM_MD_WORK_UNITS} atom-steps"
+        )
 
     mddump = _crest_int(manifest, "mddump")
     if mddump is not None and not (1 <= mddump <= _CREST_NATIVE_INT_MAX):
         raise ValueError(f"CREST option 'mddump' must be between 1 and {_CREST_NATIVE_INT_MAX}")
+    if mddump is not None and mdlen is None:
+        raise ValueError("CREST mddump requires an explicit mdlen for volume-budget admission")
+    max_dump_frames = _crest_int(manifest, "max_dump_frames")
+    if max_dump_frames is None:
+        max_dump_frames = _CREST_DEFAULT_MAX_DUMP_FRAMES
+    if not 1 <= max_dump_frames <= _CREST_NATIVE_INT_MAX:
+        raise ValueError(f"CREST max_dump_frames must be between 1 and {_CREST_NATIVE_INT_MAX}")
+    if max_dump_frames > _CREST_DEFAULT_MAX_DUMP_FRAMES and not _crest_bool(
+        manifest, "allow_high_volume_md"
+    ):
+        raise ValueError(
+            "CREST max_dump_frames above the default requires allow_high_volume_md=true"
+        )
+    estimated_dump_frames = (
+        math.ceil((float(mdlen) * 1000.0 * trajectory_count) / mddump)
+        if mdlen is not None and mddump is not None
+        else 0
+    )
+    if estimated_dump_frames > max_dump_frames:
+        raise ValueError(
+            "CREST mddump would exceed the admitted trajectory-volume budget of "
+            f"{max_dump_frames} frames"
+        )
 
     if mdlen is not None:
         command.extend(["--mdlen", mdlen])
@@ -269,7 +440,6 @@ def _append_crest_sampling_options(command: list[str], manifest: dict[str, Any])
     if mddump is not None:
         command.extend(["--mddump", str(mddump)])
 
-    shake = _crest_int(manifest, "shake")
     if shake is not None:
         if shake not in (0, 1, 2):
             raise ValueError(f"CREST option 'shake' must be 0, 1, or 2, got {shake}")
@@ -295,19 +465,35 @@ def _build_command(
     job_dir: Path,
     selected_xyz: Path,
     manifest: dict[str, Any],
+    resource_request: dict[str, int] | None = None,
 ) -> list[str]:
-    resource_request = resource_request_from_manifest(cfg, manifest)
-    try:
-        selected_xyz_arg = str(selected_xyz.resolve().relative_to(job_dir.resolve()))
-    except ValueError as exc:
-        raise ValueError(f"CREST input must be inside the job directory: {selected_xyz}") from exc
+    resources = dict(resource_request or resource_request_from_manifest(cfg, manifest))
+    crest_executable = str(manifest.get("_orca_auto_crest_executable") or "").strip()
+    if not crest_executable:
+        crest_executable = _resolve_crest_executable(cfg)
+    xtb_executable = str(manifest.get("_orca_auto_xtb_executable") or "").strip()
+    if not xtb_executable:
+        xtb_executable = _engine_runner.resolve_configured_executable(
+            cfg,
+            path_attr="xtb_executable",
+            executable_name="xtb",
+            display_name="xTB",
+        )
+    resolved_selected_xyz = selected_xyz.resolve()
+    if not resolved_selected_xyz.is_relative_to(job_dir.resolve()):
+        raise ValueError(f"CREST input must be inside the job directory: {selected_xyz}")
+    # Keep the exact immutable input absolute. This is unambiguous for nested
+    # snapshots and avoids CREST's unsafe legacy shell-based scratch copier.
+    selected_xyz_arg = str(resolved_selected_xyz)
     if selected_xyz_arg.startswith("-"):
         selected_xyz_arg = f"./{selected_xyz_arg}"
     command = [
-        _resolve_crest_executable(cfg),
+        crest_executable,
         selected_xyz_arg,
         "--T",
-        str(resource_request["max_cores"]),
+        str(resources["max_cores"]),
+        "-xnam",
+        xtb_executable,
     ]
 
     _append_crest_mode_flags(command, manifest)
@@ -316,53 +502,92 @@ def _build_command(
     _append_crest_int_options(command, manifest)
     _engine_runner.append_solvent_option(command, manifest)
     _append_crest_scalar_options(command, manifest)
-    _append_crest_sampling_options(command, manifest)
+    _append_crest_sampling_options(
+        command,
+        manifest,
+        atom_count=validated_xyz_atom_count(resolved_selected_xyz),
+    )
     if _engine_runner.bool_flag(manifest, "esort"):
         command.append("--esort")
-
-    scratch_dir = job_dir / ".crest_scratch"
-    command.extend(["--scratch", str(scratch_dir)])
 
     return command
 
 
 def _count_xyz_structures(path: Path) -> int:
-    try:
-        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
-        return 0
-
-    count = 0
-    index = 0
-    total = len(lines)
-    while index < total:
-        text = lines[index].strip()
-        if not text:
-            index += 1
-            continue
-        try:
-            atom_count = int(text)
-        except ValueError:
-            break
-        index += 1  # atom count
-        if index < total:
-            index += 1  # comment line
-        index += atom_count
-        count += 1
-    return count
+    return len(load_output_xyz_frames(path))
 
 
-def _retained_outputs(job_dir: Path) -> tuple[int, tuple[str, ...]]:
-    found: list[str] = []
-    count = 0
+def _frame_atom_sequence(frame: Any) -> tuple[str, ...]:
+    return tuple(line.split()[0].casefold() for line in frame.atom_lines)
+
+
+def _retained_outputs(
+    job_dir: Path,
+    *,
+    selected_input_xyz: str | Path,
+    output_identities: dict[str, dict[str, Any]] | None = None,
+) -> tuple[int, tuple[str, ...]]:
+    # CREST's named retained files overlap (``crest_best.xyz`` is commonly a
+    # member of ``crest_conformers.xyz``), but later files can also contain
+    # distinct rotamers. Preserve every strictly valid source and retain each
+    # file's ensemble multiplicity while removing only cross-file overlap, as
+    # downstream fan-out does.
+    input_frames = load_xyz_frames(selected_input_xyz)
+    if len(input_frames) != 1:
+        return 0, ()
+    expected_atoms = _frame_atom_sequence(input_frames[0])
+
+    retained_paths: list[str] = []
+    seen_geometries: set[tuple[tuple[str, float, float, float], ...]] = set()
+    retained_count = 0
     for name in _RETAINED_ENSEMBLE_CANDIDATES:
         path = job_dir / name
         if not path.exists():
             continue
-        resolved = str(path.resolve())
-        found.append(resolved)
-        count = max(count, _count_xyz_structures(path))
-    return count, tuple(found)
+        resolved_path = path.expanduser().resolve()
+        if not resolved_path.is_relative_to(job_dir.expanduser().resolve()):
+            continue
+        try:
+            identity_before = _engine_runner.confined_output_identity(job_dir, resolved_path)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            continue
+        frames = load_output_xyz_frames(resolved_path)
+        try:
+            identity_after = _engine_runner.confined_output_identity(job_dir, resolved_path)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            continue
+        if identity_before != identity_after:
+            continue
+        if not frames or any(_frame_atom_sequence(frame) != expected_atoms for frame in frames):
+            continue
+        if output_identities is not None:
+            output_identities[str(resolved_path)] = identity_after
+        retained_paths.append(str(resolved_path))
+        prior_geometries = set(seen_geometries)
+        for frame in frames:
+            geometry_key = tuple(
+                (parts[0].casefold(), float(parts[1]), float(parts[2]), float(parts[3]))
+                for line in frame.atom_lines
+                if len(parts := line.split()) >= 4
+            )
+            if geometry_key not in prior_geometries:
+                retained_count += 1
+            seen_geometries.add(geometry_key)
+    return retained_count, tuple(retained_paths)
+
+
+def _clear_stale_crest_outputs(job_dir: Path, *, selected_input_xyz: Path) -> None:
+    protected = selected_input_xyz.expanduser().resolve()
+    removed = False
+    for name in _RETAINED_ENSEMBLE_CANDIDATES:
+        path = job_dir / name
+        if path.parent.resolve() / path.name == protected:
+            raise ValueError(f"CREST input path conflicts with retained output name: {path}")
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+            removed = True
+    if removed:
+        fsync_directory(job_dir)
 
 
 def start_crest_job(
@@ -372,11 +597,56 @@ def start_crest_job(
     selected_xyz: Path,
     before_popen: Callable[[], None] | None = None,
     on_launch_aborted: Callable[[], None] | None = None,
+    execution_snapshot: dict[str, Any] | None = None,
 ) -> CrestRunningJob:
-    manifest = load_job_manifest(job_dir)
-    resource_request = resource_request_from_manifest(cfg, manifest)
+    if execution_snapshot is None:
+        manifest = load_job_manifest(job_dir)
+        resource_request = resource_request_from_manifest(cfg, manifest)
+    else:
+        input_snapshots = execution_snapshot.get("input_snapshots")
+        if not isinstance(input_snapshots, dict):
+            raise ValueError("Queued CREST execution snapshot has no input descriptors")
+        verified_inputs = verify_input_snapshots(job_dir, input_snapshots)
+        manifest = _verify_execution_manifest(execution_snapshot, verified_inputs)
+        identities = execution_snapshot.get("executable_identities")
+        if not isinstance(identities, dict):
+            raise ValueError("Queued CREST execution snapshot has no executable identities")
+        crest_path = _engine_runner.verify_executable_identity(identities.get("crest"))
+        xtb_path = _engine_runner.verify_executable_identity(identities.get("xtb"))
+        if (
+            str(manifest.get("_orca_auto_crest_executable") or "") != crest_path
+            or str(manifest.get("_orca_auto_xtb_executable") or "") != xtb_path
+        ):
+            raise ValueError("Queued CREST manifest has mismatched executable paths")
+        if verified_inputs.get("selected") != selected_xyz.expanduser().resolve():
+            raise ValueError("Selected CREST input does not match the queued immutable snapshot")
+        resource_raw = execution_snapshot.get("resource_request")
+        if not isinstance(resource_raw, dict):
+            raise ValueError("Queued CREST execution snapshot has no resource request")
+        resource_request = dict(resource_raw)
+    runtime_identity = (
+        execution_snapshot.get("runtime_identity")
+        if execution_snapshot is not None
+        else manifest.get("_orca_auto_runtime_identity")
+    )
+    if runtime_identity is None:
+        runtime_identity = _engine_runner.engine_runtime_identity(job_dir)
+    if execution_snapshot is not None and runtime_identity != manifest.get(
+        "_orca_auto_runtime_identity"
+    ):
+        raise ValueError("Queued CREST manifest has a mismatched runtime identity")
+    runtime_environment = _engine_runner.verified_engine_runtime_environment(
+        job_dir,
+        runtime_identity,
+    )
     resource_actual = _engine_runner.resource_actual_dict(resource_request)
-    command = _build_command(cfg, job_dir=job_dir, selected_xyz=selected_xyz, manifest=manifest)
+    command = _build_command(
+        cfg,
+        job_dir=job_dir,
+        selected_xyz=selected_xyz,
+        manifest=manifest,
+        resource_request=resource_request,
+    )
 
     stdout_log = job_dir / "crest.stdout.log"
     stderr_log = job_dir / "crest.stderr.log"
@@ -386,17 +656,22 @@ def start_crest_job(
     resolved_job_dir = str(job_dir.resolve())
     resolved_mode = job_mode(manifest)
     manifest_file = job_dir / MANIFEST_FILE_NAME
-    resolved_manifest_path = str(manifest_file.resolve()) if manifest_file.exists() else ""
+    resolved_manifest_path = (
+        str(execution_snapshot.get("manifest_path") or "")
+        if execution_snapshot is not None
+        else (str(manifest_file.resolve()) if manifest_file.exists() else "")
+    )
     if before_popen is not None:
         before_popen()
     try:
+        _clear_stale_crest_outputs(job_dir, selected_input_xyz=selected_xyz)
         launched = start_logged_process(
             command,
             cwd=job_dir,
             stdout_log=stdout_log,
             stderr_log=stderr_log,
             max_cores=resource_request["max_cores"],
-            base_env=os.environ,
+            base_env=runtime_environment,
             now_utc_iso_fn=now_utc_iso,
             popen_fn=subprocess.Popen,
             stdin_value=subprocess.DEVNULL,
@@ -425,6 +700,8 @@ def start_crest_job(
             job_dir=resolved_job_dir,
             resource_request=resource_request,
             resource_actual=resource_actual,
+            manifest_snapshot=dict(manifest),
+            execution_snapshot=dict(execution_snapshot or {}),
         )
     except BaseException:
         cleanup_failed_logged_process_start(launched)
@@ -450,16 +727,47 @@ def finalize_crest_job(
     if exit_code is None:
         exit_code = running.process.wait()
 
-    retained_count, retained_paths = _retained_outputs(Path(running.job_dir))
+    snapshot_valid = True
+    if running.execution_snapshot:
+        try:
+            descriptors = running.execution_snapshot.get("input_snapshots")
+            if not isinstance(descriptors, dict):
+                raise ValueError("Queued CREST execution snapshot has no input descriptors")
+            verify_input_snapshots(running.job_dir, descriptors)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            snapshot_valid = False
+    output_identities: dict[str, dict[str, Any]] = {}
+    if snapshot_valid:
+        retained_count, retained_paths = _retained_outputs(
+            Path(running.job_dir),
+            selected_input_xyz=running.selected_input_xyz,
+            output_identities=output_identities,
+        )
+    else:
+        retained_count, retained_paths = 0, ()
     finished_at = now_utc_iso()
+    for evidence_path in (running.stdout_log, running.stderr_log):
+        try:
+            identity = _engine_runner.confined_output_identity(running.job_dir, evidence_path)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            continue
+        output_identities[str(identity["path"])] = identity
 
-    if forced_status is not None:
+    if not snapshot_valid:
+        status = "failed"
+    elif forced_status is not None:
         status = forced_status
+    elif exit_code == 0 and retained_count < 1:
+        status = "failed"
     else:
         status = "completed" if exit_code == 0 else "failed"
 
-    if forced_reason is not None:
+    if not snapshot_valid:
+        reason = "input_snapshot_changed"
+    elif forced_reason is not None:
         reason = forced_reason
+    elif exit_code == 0 and retained_count < 1:
+        reason = "crest_no_valid_retained_ensemble"
     else:
         reason = "completed" if exit_code == 0 else f"crest_exit_code_{exit_code}"
 
@@ -479,4 +787,5 @@ def finalize_crest_job(
         manifest_path=running.manifest_path,
         resource_request=running.resource_request,
         resource_actual=running.resource_actual,
+        output_identities=output_identities,
     )

@@ -29,6 +29,8 @@ from orca_auto.activity_view import (
     queue_list_display_rows,
 )
 from orca_auto.core.activity_icons import activity_status_icon
+from orca_auto.core.engine_process import atomic_write_confined_bytes
+from orca_auto.core.geometry_limits import MAX_REMOTE_ADMISSION_ATOMS
 from orca_auto.core.ingest import (
     UploadActionConsumedError,
     UploadActionExpiredError,
@@ -67,6 +69,7 @@ from orca_auto.core.utils.lock import file_lock
 from .._orca_stage_materialization import safe_name
 from ..activity import cancel_activity, clear_activities, list_activities
 from ..manifest import INTERACTION_ENERGY_MAX_FRAGMENTS_CAP
+from ..xyz_utils import validated_xyz_atom_count
 from .action_registry import ActionKind, ActionRegistry, ActionStore, RegisteredAction
 from .settings import BotSettings
 
@@ -101,17 +104,31 @@ _REMOTE_WORKFLOW_COUNT_LIMITS = {
 _REMOTE_ROUTE_LINE_KEYS = frozenset(
     {"route_line", "orca_route_line", "orca_optts_route_line", "sp_route_line"}
 )
-_REMOTE_DISABLED_CREST_COST_KEYS = frozenset({"mdlen", "len", "tstep", "mddump"})
+_REMOTE_DISABLED_CREST_COST_KEYS = frozenset(
+    {
+        "mdlen",
+        "len",
+        "tstep",
+        "allow_high_tstep",
+        "mddump",
+        "max_md_steps",
+        "allow_high_cost_md",
+        "max_dump_frames",
+        "allow_high_volume_md",
+    }
+)
+_REMOTE_DISABLED_XTB_COST_KEYS = frozenset({"max_ranking_evaluations", "allow_high_cost_ranking"})
 _REMOTE_SCAN_POINTS_LIMIT = 200
+_REMOTE_CREST_MDLEN_PS = 5.0
+_REMOTE_CREST_MAX_ATOM_MD_WORK_UNITS = 50_000_000
+_REMOTE_CREST_MAX_TRAJECTORIES = 140
 _REMOTE_SCAN_COORDINATE_RE = re.compile(
     r"\A\s*(?P<kind>[BADbad])\s+(?P<atoms>\d+(?:\s+\d+){1,3})\s*=\s*"
     r"(?P<start>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?)\s*,\s*"
     r"(?P<end>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?)\s*,\s*"
     r"(?P<points>\d+)\s*\Z"
 )
-_REMOTE_ORCA_SIMPLE_INPUT_REFERENCE_KEYS = frozenset(
-    {"%cclib", "%ljcoefficients", "%moinp", "%pointcharges"}
-)
+_REMOTE_ORCA_SIMPLE_INPUT_REFERENCE_KEYS = frozenset({"%moinp"})
 _REMOTE_ORCA_BLOCK_INPUT_REFERENCE_KEYS = frozenset(
     {
         "hessfile",
@@ -119,14 +136,6 @@ _REMOTE_ORCA_BLOCK_INPUT_REFERENCE_KEYS = frozenset(
         "inhessname",
         "ircinithess",
         "moinp",
-        "neb_end_xyzfile",
-        "neb_end_pdbfile",
-        "neb_restart_xyzfile",
-        "neb_ts_xyzfile",
-        "orcafffilename",
-        "product_pdbfile",
-        "restart_allxyzfile",
-        "ts_pdbfile",
     }
 )
 _REMOTE_ORCA_BLOCK_CONTAINED_OUTPUT_KEYS = frozenset(
@@ -136,10 +145,14 @@ _REMOTE_ORCA_FORBIDDEN_IDENTIFIERS = frozenset(
     {
         "%compound",
         "%compound_file",
+        "%cclib",
+        "%ljcoefficients",
+        "%pointcharges",
         "$new_job",
         "$newjob",
         "compound",
         "compound_file",
+        "cclib",
         "ext_params",
         "ext_args",
         "extargs",
@@ -149,16 +162,34 @@ _REMOTE_ORCA_FORBIDDEN_IDENTIFIERS = frozenset(
         "frag1methodfile",
         "frag2_methodfile",
         "frag2methodfile",
-        "gcpmethod",
+        "gtoauxcname",
+        "gtoauxjname",
+        "gtoauxjkname",
+        "gtoauxname",
+        "gtoname",
+        "ljcoefficients",
+        "neb_end_pdbfile",
+        "orcafffilename",
         "openfile",
         "progext",
         "progplot",
+        "pointcharges",
+        "product_pdbfile",
         "qm2customfile",
         "qm2_customfile",
+        "readfragaux",
+        "readfragauxc",
+        "readfragauxj",
+        "readfragauxjk",
+        "readfragbasis",
+        "readfragecp",
+        "restart_allxyzfile",
         "sys_cmd",
         "write2file",
+        "ts_pdbfile",
         "xtbinputstring",
         "xtbinputstring2",
+        "xtbparamfile",
     }
 )
 _REMOTE_ORCA_IDENTIFIER_RE = re.compile(r"\A[%$A-Za-z_][%$A-Za-z0-9_]*")
@@ -172,6 +203,7 @@ def _remote_orca_identifier_is_forbidden(identifier: str) -> bool:
         normalized in _REMOTE_ORCA_FORBIDDEN_IDENTIFIERS
         or normalized.startswith("%compound")
         or normalized.startswith("compound_file")
+        or normalized.startswith("neb")
         or (normalized.startswith("prog") and len(normalized) > len("prog"))
     )
 
@@ -1429,6 +1461,103 @@ class BotApplication:
         )
 
     @staticmethod
+    def _validate_remote_xyz_atom_limits(job_dir: Path) -> int:
+        resolved_root = job_dir.expanduser().resolve()
+        largest_atom_count = 0
+        for candidate in sorted(job_dir.rglob("*")):
+            if candidate.suffix.lower() != ".xyz":
+                continue
+            if candidate.is_symlink():
+                raise ValueError(f"uploaded XYZ input must not be a symlink: {candidate.name}")
+            resolved = candidate.resolve()
+            if not resolved.is_relative_to(resolved_root) or not resolved.is_file():
+                raise ValueError(f"uploaded XYZ input escapes the run directory: {candidate.name}")
+            largest_atom_count = max(
+                largest_atom_count,
+                validated_xyz_atom_count(
+                    resolved,
+                    max_atoms=MAX_REMOTE_ADMISSION_ATOMS,
+                ),
+            )
+        return largest_atom_count
+
+    @staticmethod
+    def _apply_remote_workflow_crest_policy(job_dir: Path, *, atom_count: int) -> None:
+        manifest = BotApplication._uploaded_flow_manifest(job_dir)
+        workflow_type = str(manifest.get("workflow_type") or "").strip().lower()
+        if workflow_type == "scan_ts_search":
+            return
+        raw_crest = manifest.get("crest")
+        if raw_crest is None:
+            crest: dict[str, Any] = {}
+        elif isinstance(raw_crest, dict):
+            crest = dict(raw_crest)
+        else:
+            raise ValueError("flow.yaml crest must be a mapping")
+        normalized_gfn = str(crest.get("gfn") or "").strip().lower()
+        if normalized_gfn in {"ff", "gfnff"}:
+            timestep_fs = 1.5
+        elif normalized_gfn in {"2//ff", "gfn2//gfnff"}:
+            timestep_fs = 2.0
+        else:
+            timestep_fs = 5.0
+        estimated_steps = math.ceil(
+            ((_REMOTE_CREST_MDLEN_PS * 1000.0) / timestep_fs) * _REMOTE_CREST_MAX_TRAJECTORIES
+        )
+        estimated_work_units = atom_count * estimated_steps
+        if estimated_work_units > _REMOTE_CREST_MAX_ATOM_MD_WORK_UNITS:
+            raise ValueError(
+                "uploaded workflow molecule size and CREST MD policy exceed the remote "
+                f"work-unit ceiling of {_REMOTE_CREST_MAX_ATOM_MD_WORK_UNITS} atom-steps"
+            )
+        crest["mdlen"] = _REMOTE_CREST_MDLEN_PS
+        manifest["crest"] = crest
+        try:
+            serialized_manifest = json.dumps(
+                manifest,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "uploaded flow.yaml must contain only JSON-compatible scalar values"
+            ) from exc
+        atomic_write_confined_bytes(
+            job_dir,
+            job_dir / "flow.yaml",
+            (serialized_manifest + "\n").encode("utf-8"),
+            label="remote workflow policy manifest",
+        )
+
+    @staticmethod
+    def _validate_remote_orca_inline_atom_limits(inp_path: Path, lines: list[str]) -> None:
+        from orca_auto.orca.input_blocks import (
+            GEOM_HEADER_RE,
+            validate_supported_xyz_geometry_syntax,
+        )
+
+        validate_supported_xyz_geometry_syntax(lines, label=inp_path.name)
+
+        cursor = 0
+        while cursor < len(lines):
+            match = GEOM_HEADER_RE.match(lines[cursor].strip())
+            cursor += 1
+            if match is None or match.group(1).lower() == "xyzfile":
+                continue
+            atom_count = 0
+            while cursor < len(lines) and lines[cursor].strip() != "*":
+                if lines[cursor].strip():
+                    atom_count += 1
+                    if atom_count > MAX_REMOTE_ADMISSION_ATOMS:
+                        raise ValueError(
+                            f"{inp_path.name} exceeds the remote atom-count limit of "
+                            f"{MAX_REMOTE_ADMISSION_ATOMS}"
+                        )
+                cursor += 1
+
+    @staticmethod
     def _validate_orca_resource_limits(
         job_dir: Path,
         *,
@@ -1437,26 +1566,28 @@ class BotApplication:
     ) -> None:
         """Reject standalone inputs whose explicit directives exceed server caps."""
 
+        from orca_auto.orca.input_blocks import active_orca_line_text, orca_route_line
         from orca_auto.orca.resource_directives import MAXCORE_RE, NPROCS_RE, PAL_ROUTE_RE
 
         for inp_path in sorted(job_dir.glob("*.inp")):
             lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            BotApplication._validate_remote_orca_inline_atom_limits(inp_path, lines)
             BotApplication._validate_orca_file_references(job_dir, inp_path, lines)
             core_requests: list[int] = []
             maxcore_requests: list[int] = []
             for line in lines:
+                active_line = active_orca_line_text(line)
                 normalized_line = re.sub(
                     r"\A(?P<indent>\s*)%\s+(?=[A-Za-z])",
                     r"\g<indent>%",
-                    line,
+                    active_line,
                     count=1,
                 )
-                nprocs_match = NPROCS_RE.search(normalized_line)
-                if nprocs_match:
-                    core_requests.append(int(nprocs_match.group(1)))
-                stripped = normalized_line.lstrip()
-                if stripped.startswith("!"):
-                    route = stripped.split("#", 1)[0]
+                core_requests.extend(
+                    int(match.group(1)) for match in NPROCS_RE.finditer(normalized_line)
+                )
+                route = orca_route_line(line)
+                if route is not None:
                     core_requests.extend(
                         int(match.group(1)) for match in PAL_ROUTE_RE.finditer(route)
                     )
@@ -1491,7 +1622,11 @@ class BotApplication:
     ) -> None:
         """Confine remote ORCA input/output paths to the uploaded run directory."""
 
-        from orca_auto.orca.input_blocks import OrcaLineToken, orca_line_tokens
+        from orca_auto.orca.input_blocks import (
+            OrcaLineToken,
+            orca_line_tokens,
+            orca_route_tokens,
+        )
 
         resolved_root = job_dir.resolve()
 
@@ -1532,7 +1667,7 @@ class BotApplication:
             directive: str,
             must_exist: bool,
             single_component: bool = False,
-        ) -> None:
+        ) -> Path:
             normalized = normalized_path_text(value, raw_token=raw_token)
             pure = PurePosixPath(normalized)
             if not pure.parts or pure == PurePosixPath("."):
@@ -1551,11 +1686,12 @@ class BotApplication:
             if must_exist:
                 if candidate.is_symlink() or not candidate.is_file():
                     raise ValueError(f"{inp_path.name} {directive} file is missing: {normalized!r}")
-                return
+                return candidate
             if candidate.is_symlink() or not candidate.parent.is_dir():
                 raise ValueError(
                     f"{inp_path.name} {directive} output path is unavailable: {normalized!r}"
                 )
+            return candidate
 
         def value_token_after(
             tokens: Sequence[OrcaLineToken],
@@ -1591,25 +1727,22 @@ class BotApplication:
             spaced_percent_keyword = ""
             if len(tokens) >= 2 and tokens[0].value == "%" and not tokens[1].quoted:
                 spaced_percent_keyword = f"%{tokens[1].value.lower()}"
-            stripped = line.lstrip()
-            if stripped.startswith("!"):
-                route_start = line.index("!") + 1
-                for route_token in orca_line_tokens(line, start=route_start):
-                    if route_token.quoted:
-                        continue
-                    route_identifier_match = _REMOTE_ORCA_IDENTIFIER_RE.match(route_token.value)
-                    route_identifier = (
-                        route_identifier_match.group(0).lower()
-                        if route_identifier_match is not None
-                        else ""
+            for route_token in orca_route_tokens(line):
+                if route_token.quoted:
+                    continue
+                route_identifier_match = _REMOTE_ORCA_IDENTIFIER_RE.match(route_token.value)
+                route_identifier = (
+                    route_identifier_match.group(0).lower()
+                    if route_identifier_match is not None
+                    else ""
+                )
+                if route_token.value.lower() == "md" or (
+                    route_identifier and _remote_orca_identifier_is_forbidden(route_identifier)
+                ):
+                    raise ValueError(
+                        f"{inp_path.name} uses a remote-disabled ORCA feature: "
+                        f"{route_identifier or route_token.value.lower()}"
                     )
-                    if route_token.value.lower() == "md" or (
-                        route_identifier and _remote_orca_identifier_is_forbidden(route_identifier)
-                    ):
-                        raise ValueError(
-                            f"{inp_path.name} uses a remote-disabled ORCA feature: "
-                            f"{route_identifier or route_token.value.lower()}"
-                        )
             if tokens[0].value.lower() == "%md" or spaced_percent_keyword == "%md":
                 raise ValueError(
                     f"{inp_path.name} uses the remote-disabled ORCA molecular dynamics block"
@@ -1620,16 +1753,56 @@ class BotApplication:
                     f"{inp_path.name} uses a remote-disabled external GCP parameter source"
                 )
 
+            geometry_type = ""
+            geometry_path_index = -1
+            if len(tokens) >= 2 and tokens[0].value == "*":
+                geometry_type = tokens[1].value.lower()
+                geometry_path_index = 4
+            elif tokens[0].value.startswith("*"):
+                geometry_type = tokens[0].value[1:].lower()
+                geometry_path_index = 3
+
+            reference_value_indices: set[int] = set()
+            if geometry_type.endswith("file") and geometry_path_index < len(tokens):
+                reference_value_indices.add(geometry_path_index)
+            for index, token in enumerate(tokens):
+                if token.quoted:
+                    continue
+                keyword = token.value.lower()
+                simple_input = (
+                    index == 0 and keyword in _REMOTE_ORCA_SIMPLE_INPUT_REFERENCE_KEYS
+                ) or (
+                    index == 1
+                    and spaced_percent_keyword in _REMOTE_ORCA_SIMPLE_INPUT_REFERENCE_KEYS
+                )
+                block_input = keyword in _REMOTE_ORCA_BLOCK_INPUT_REFERENCE_KEYS
+                contained_output = keyword in _REMOTE_ORCA_BLOCK_CONTAINED_OUTPUT_KEYS
+                output_base = (index == 0 and keyword == "%base") or (
+                    index == 1 and spaced_percent_keyword == "%base"
+                )
+                if simple_input or block_input or contained_output or output_base:
+                    value_token = value_token_after(tokens, index, token.value)
+                    reference_value_indices.add(tokens.index(value_token))
+                if keyword == "gcpmethod":
+                    value_token = value_token_after(tokens, index, token.value)
+                    if value_token.value.strip().lower() == "file":
+                        raise ValueError(
+                            f"{inp_path.name} uses a remote-disabled external GCP parameter source"
+                        )
+
             # Reject unmistakable traversal syntax even for less-common ORCA
             # file directives. Known directives below additionally require the
             # referenced input file to exist in the extracted snapshot.
-            for token in tokens:
+            for index, token in enumerate(tokens):
                 if not token.quoted:
                     identifier_match = _REMOTE_ORCA_IDENTIFIER_RE.match(token.value)
                     identifier = (
                         identifier_match.group(0).lower() if identifier_match is not None else ""
                     )
-                    if _remote_orca_identifier_is_forbidden(identifier):
+                    if (
+                        index not in reference_value_indices
+                        and _remote_orca_identifier_is_forbidden(identifier)
+                    ):
                         raise ValueError(
                             f"{inp_path.name} uses a remote-disabled ORCA feature: {identifier}"
                         )
@@ -1652,23 +1825,23 @@ class BotApplication:
                         f"{inp_path.name} contains an external file reference: {token.value!r}"
                     )
 
-            geometry_type = ""
-            geometry_path_index = -1
-            if len(tokens) >= 2 and tokens[0].value == "*":
-                geometry_type = tokens[1].value.lower()
-                geometry_path_index = 4
-            elif tokens[0].value.startswith("*"):
-                geometry_type = tokens[0].value[1:].lower()
-                geometry_path_index = 3
             if geometry_type.endswith("file"):
                 if len(tokens) <= geometry_path_index:
                     raise ValueError(f"{inp_path.name} has an invalid {geometry_type} reference")
+                if geometry_type != "xyzfile":
+                    raise ValueError(
+                        f"{inp_path.name} uses a remote-disabled geometry format: {geometry_type}"
+                    )
                 value_token = tokens[geometry_path_index]
-                validate_reference(
+                geometry_path = validate_reference(
                     value_token.value,
                     raw_token=line[value_token.start : value_token.end],
                     directive=geometry_type,
                     must_exist=True,
+                )
+                validated_xyz_atom_count(
+                    geometry_path,
+                    max_atoms=MAX_REMOTE_ADMISSION_ATOMS,
                 )
 
             for index, token in enumerate(tokens):
@@ -1733,6 +1906,22 @@ class BotApplication:
                     raise ValueError(
                         f"flow.yaml crest.{key} is disabled for uploaded workflows; "
                         "CREST runtime and trajectory-volume controls are server-owned"
+                    )
+
+        for section_name in ("xtb", "xtb_job_manifest"):
+            xtb_manifest = manifest.get(section_name)
+            if not isinstance(xtb_manifest, dict):
+                continue
+            for raw_key, item in xtb_manifest.items():
+                key = str(raw_key).strip()
+                if (
+                    key in _REMOTE_DISABLED_XTB_COST_KEYS
+                    and item is not None
+                    and (not isinstance(item, str) or item.strip())
+                ):
+                    raise ValueError(
+                        f"flow.yaml {section_name}.{key} is disabled for uploaded workflows; "
+                        "xTB evaluation budgets are server-owned"
                     )
 
         interaction_manifest = manifest.get("interaction_energy")
@@ -1997,11 +2186,16 @@ class BotApplication:
 
         try:
             max_cores, max_memory_gb = self._trusted_upload_resource_limits()
+            remote_atom_count = self._validate_remote_xyz_atom_limits(job_dir)
             if kind == "workflow":
                 self._validate_workflow_resource_limits(
                     job_dir,
                     max_cores=max_cores,
                     max_memory_gb=max_memory_gb,
+                )
+                self._apply_remote_workflow_crest_policy(
+                    job_dir,
+                    atom_count=remote_atom_count,
                 )
             else:
                 self._validate_orca_resource_limits(

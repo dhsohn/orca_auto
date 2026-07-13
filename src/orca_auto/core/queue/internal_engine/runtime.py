@@ -5,27 +5,56 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engine_catalog import find_engine_catalog_entry
+
 from ..engine import admission as _engine_admission
 from ..engine.runtime import EngineQueueRuntime
 from . import runtime_adapters as _runtime_adapters
 from .spec import InternalEngineSpec
 
 
-def _entry_app_name(entry: Any) -> str:
-    return str(getattr(entry, "app_name", "") or "").strip()
+def _entry_text(entry: Any, field: str) -> str:
+    return str(getattr(entry, field, "") or "").strip()
+
+
+def entry_matches_engine_identity(entry: Any, engine: str) -> bool:
+    """Return whether a queue row has the complete canonical engine identity."""
+    expected_engine = str(engine).strip()
+    catalog_entry = find_engine_catalog_entry(expected_engine)
+    task_kind = _entry_text(entry, "task_kind")
+    if catalog_entry is None:
+        expected_app_name = f"orca_auto_{expected_engine}"
+        task_kind_matches = task_kind.startswith(f"{expected_engine}_") and bool(
+            task_kind.removeprefix(f"{expected_engine}_")
+        )
+    else:
+        expected_app_name = catalog_entry.app_id
+        task_kind_matches = task_kind in catalog_entry.task_kinds
+    if expected_engine == "xtb" and catalog_entry is not None:
+        metadata = getattr(entry, "metadata", {})
+        job_type = str(metadata.get("job_type") or "").strip() if isinstance(metadata, dict) else ""
+        task_kind_matches = task_kind_matches and (
+            task_kind == f"xtb_{job_type}" and task_kind in catalog_entry.task_kinds
+        )
+    return bool(
+        expected_engine
+        and _entry_text(entry, "app_name") == expected_app_name
+        and _entry_text(entry, "engine") == expected_engine
+        and _entry_text(entry, "queue_id")
+        and _entry_text(entry, "task_id")
+        and task_kind_matches
+    )
 
 
 def own_engine_accept_entry(engine: str) -> Callable[[Any], bool]:
-    """Predicate: claim only this engine's entries (or unlabeled ones).
+    """Predicate: claim only rows with this engine's complete identity.
 
     Internal-engine workers share the single runs root with standalone ORCA
-    jobs, so they must never claim another engine's entry (e.g. an ORCA
-    OptTS). Reject only entries whose app_name is set and does not match;
-    unlabeled entries stay claimable so malformed/legacy rows are not
-    stranded.
+    jobs, so they must never claim another engine's entry (e.g. an ORCA OptTS).
+    Incomplete, conflicting, or historical task labels remain durable for
+    inspection but are quarantined from execution.
     """
-    expected = f"orca_auto_{engine}"
-    return lambda entry: _entry_app_name(entry) in ("", expected)
+    return lambda entry: entry_matches_engine_identity(entry, engine)
 
 
 @dataclass(frozen=True)
@@ -73,6 +102,10 @@ class InternalEngineQueueRuntime:
 
     def queue_entry_by_id(self, queue_root: Path | str, queue_id: str) -> Any | None:
         return self.runtime.queue_entry_by_id(queue_root, queue_id)
+
+    def accepts_entry(self, entry: Any) -> bool:
+        accept_entry = self.runtime.accept_entry_fn
+        return bool(accept_entry is None or accept_entry(entry))
 
     def admission_root(self, cfg: Any) -> str:
         return self.runtime.admission_root(cfg)
@@ -174,4 +207,8 @@ class InternalEngineQueueRuntime:
         )
 
 
-__all__ = ["InternalEngineQueueRuntime"]
+__all__ = [
+    "InternalEngineQueueRuntime",
+    "entry_matches_engine_identity",
+    "own_engine_accept_entry",
+]

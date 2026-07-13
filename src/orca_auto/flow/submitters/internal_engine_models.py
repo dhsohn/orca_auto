@@ -24,7 +24,7 @@ class InternalEngineSubmitterDeps:
     enqueue_fn: Callable[..., Any]
     load_queue_config_fn: Callable[[Any], Any]
     queue_entries_with_roots_fn: Callable[[Any], list[tuple[Any, Any]]]
-    request_cancel_fn: Callable[[Any, str], Any | None]
+    request_cancel_fn: Callable[..., Any | None]
     display_status_fn: Callable[[Any], str]
 
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
+import math
 import re
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.utils.persistence import load_json_mapping_file
+from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.flow.geometry_validation import (
     DEFAULT_BOND_SCALE,
     DEFAULT_MAX_SPURIOUS_BOND_CHANGES,
@@ -12,22 +14,35 @@ from orca_auto.flow.geometry_validation import (
     GeometryValidationError,
     validate_ts_guess_geometry,
 )
+from orca_auto.flow.hessian_utils import HessianConversionError, parse_xtb_hessian
+from orca_auto.flow.xyz_utils import (
+    FINITE_NUMBER_PATTERN,
+    load_output_xyz_frames,
+    load_xyz_atom_sequence,
+    load_xyz_frames,
+)
+
+_NUMBER_END = r"(?![A-Za-z0-9_.])"
 
 _TRIAL_RE = re.compile(
-    r"run\s+(\d+)\s+barrier:\s*([-+]?\d+(?:\.\d+)?)\s+dE:\s*([-+]?\d+(?:\.\d+)?)\s+product-end path RMSD:\s*([-+]?\d+(?:\.\d+)?)"
+    rf"run\s+(\d+)\s+barrier:\s*({FINITE_NUMBER_PATTERN})\s+"
+    rf"dE:\s*({FINITE_NUMBER_PATTERN})\s+product-end path RMSD:\s*"
+    rf"({FINITE_NUMBER_PATTERN}){_NUMBER_END}"
 )
 _FORWARD_BARRIER_RE = re.compile(
-    r"forward\s+barrier\s+\(kcal\)\s*:\s*([-+]?\d+(?:\.\d+)?)", re.IGNORECASE
+    rf"forward\s+barrier\s+\(kcal\)\s*:\s*({FINITE_NUMBER_PATTERN}){_NUMBER_END}",
+    re.IGNORECASE,
 )
 _BACKWARD_BARRIER_RE = re.compile(
-    r"backward\s+barrier\s+\(kcal\)\s*:\s*([-+]?\d+(?:\.\d+)?)", re.IGNORECASE
+    rf"backward\s+barrier\s+\(kcal\)\s*:\s*({FINITE_NUMBER_PATTERN}){_NUMBER_END}",
+    re.IGNORECASE,
 )
 _REACTION_ENERGY_RE = re.compile(
-    r"reaction energy\s+\(kcal\)\s*:\s*([-+]?\d+(?:\.\d+)?)", re.IGNORECASE
+    rf"reaction energy\s+\(kcal\)\s*:\s*({FINITE_NUMBER_PATTERN}){_NUMBER_END}",
+    re.IGNORECASE,
 )
 _TS_FILE_RE = re.compile(r"estimated TS on file\s+(\S+)", re.IGNORECASE)
 _POINT_COUNT_RE = re.compile(r"path\s+(\d+)\s+taken with\s+(\d+)\s+points", re.IGNORECASE)
-_COMMENT_ENERGY_RE = re.compile(r"energy\s*[:=]\s*([-+]?\d+(?:\.\d+)?)", re.IGNORECASE)
 
 
 def _resolve_existing_path(job_dir: Path, path_text: str) -> str:
@@ -38,57 +53,83 @@ def _resolve_existing_path(job_dir: Path, path_text: str) -> str:
         resolved = candidate.resolve()
     except OSError:
         return ""
-    if not resolved.exists() or not resolved.is_file():
+    if (
+        not resolved.is_relative_to(job_dir.expanduser().resolve())
+        or not resolved.exists()
+        or not resolved.is_file()
+    ):
         return ""
     return str(resolved)
 
 
-def _safe_float(value: str) -> float | None:
+def _safe_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _positive_finite_float(value: Any, *, field_name: str) -> float:
+    parsed = _safe_float(value)
+    if parsed is None or parsed <= 0:
+        raise ValueError(f"{field_name} must be a positive finite number")
+    return parsed
+
+
+def _nonnegative_int(value: Any, *, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a nonnegative integer")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise ValueError(f"{field_name} must be a nonnegative integer")
+        parsed = int(value)
+    elif isinstance(value, str) and re.fullmatch(r"[-+]?\d+", value.strip()):
+        parsed = int(value.strip())
+    else:
+        raise ValueError(f"{field_name} must be a nonnegative integer")
+    if parsed < 0:
+        raise ValueError(f"{field_name} must be a nonnegative integer")
+    return parsed
 
 
 def _load_xtbout_json(job_dir: Path) -> dict[str, Any]:
-    return load_json_mapping_file(job_dir / "xtbout.json") or {}
-
-
-def _parse_candidate_comment_energy(candidate_xyz: Path) -> float | None:
     try:
-        lines = candidate_xyz.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
-        return None
-    if len(lines) < 2:
-        return None
-    match = _COMMENT_ENERGY_RE.search(lines[1])
-    if not match:
-        return None
-    return _safe_float(match.group(1))
+        parsed = json.loads(
+            read_stable_regular_file(job_dir / "xtbout.json").decode(
+                "utf-8",
+                errors="strict",
+            )
+        )
+    except (OSError, UnicodeError, ValueError):
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
 
 
 def _extract_sp_energy(job_dir: Path, candidate_xyz: Path) -> tuple[float | None, str]:
+    del candidate_xyz
     xtbout = _load_xtbout_json(job_dir)
     for key in ("total energy", "electronic energy"):
-        value = xtbout.get(key)
-        if isinstance(value, (int, float)):
-            return float(value), f"xtbout.json:{key}"
-    if isinstance(xtbout.get("total energy"), str):
-        value = _safe_float(xtbout["total energy"])
+        value = _safe_float(xtbout.get(key))
         if value is not None:
-            return value, "xtbout.json:total energy"
-    comment_energy = _parse_candidate_comment_energy(candidate_xyz)
-    if comment_energy is not None:
-        return comment_energy, "candidate_comment"
+            return value, f"xtbout.json:{key}"
     return None, ""
 
 
-def _path_trial_from_match(match: re.Match[str]) -> dict[str, Any]:
+def _path_trial_from_match(match: re.Match[str]) -> dict[str, Any] | None:
+    values = tuple(_safe_float(match.group(index)) for index in range(2, 5))
+    if any(value is None for value in values):
+        return None
+    barrier_kcal, delta_e_kcal, product_end_rmsd = values
     return {
         "trial_index": int(match.group(1)),
-        "barrier_kcal": float(match.group(2)),
-        "delta_e_kcal": float(match.group(3)),
-        "product_end_rmsd": float(match.group(4)),
+        "barrier_kcal": barrier_kcal,
+        "delta_e_kcal": delta_e_kcal,
+        "product_end_rmsd": product_end_rmsd,
     }
 
 
@@ -96,16 +137,24 @@ def _apply_path_search_stdout_line(
     job_dir: Path, line: str, summary: dict[str, Any], trials: list[dict[str, Any]]
 ) -> None:
     if match := _TRIAL_RE.search(line):
-        trials.append(_path_trial_from_match(match))
+        trial = _path_trial_from_match(match)
+        if trial is not None:
+            trials.append(trial)
         return
     if match := _FORWARD_BARRIER_RE.search(line):
-        summary["forward_barrier_kcal"] = float(match.group(1))
+        value = _safe_float(match.group(1))
+        if value is not None:
+            summary["forward_barrier_kcal"] = value
         return
     if match := _BACKWARD_BARRIER_RE.search(line):
-        summary["backward_barrier_kcal"] = float(match.group(1))
+        value = _safe_float(match.group(1))
+        if value is not None:
+            summary["backward_barrier_kcal"] = value
         return
     if match := _REACTION_ENERGY_RE.search(line):
-        summary["reaction_energy_kcal"] = float(match.group(1))
+        value = _safe_float(match.group(1))
+        if value is not None:
+            summary["reaction_energy_kcal"] = value
         return
     if match := _TS_FILE_RE.search(line):
         ts_guess_path = _resolve_existing_path(job_dir, match.group(1))
@@ -118,13 +167,17 @@ def _apply_path_search_stdout_line(
 
 
 def _parse_path_search_stdout(job_dir: Path, stdout_log: str) -> dict[str, Any]:
-    path = Path(stdout_log)
-    if not path.exists():
+    path = Path(stdout_log).expanduser().resolve()
+    if not path.is_relative_to(job_dir.expanduser().resolve()) or not path.exists():
         return {}
 
     summary: dict[str, Any] = {}
     trials: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+    try:
+        stdout_lines = read_stable_regular_file(path).decode("utf-8", errors="ignore").splitlines()
+    except (OSError, ValueError):
+        return {}
+    for line in stdout_lines:
         _apply_path_search_stdout_line(job_dir, line, summary, trials)
 
     if trials:
@@ -144,30 +197,66 @@ def _ts_guess_validation_fields(
     manifest: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Judge the TS guess against its endpoints; None when validation cannot run."""
+    ts_frames = load_output_xyz_frames(ts_guess_path)
+    if len(ts_frames) != 1:
+        return {
+            "geometry_valid": False,
+            "geometry_validation": {
+                "valid": False,
+                "error": "TS guess must contain exactly one valid finite XYZ frame",
+            },
+        }
     reactant_xyz = str(input_summary.get("reactant_xyz", "")).strip()
     product_xyz = str(input_summary.get("product_xyz", "")).strip()
     if not reactant_xyz or not product_xyz:
         return None
+    try:
+        ts_atoms = tuple(line.split()[0].casefold() for line in ts_frames[0].atom_lines)
+        reactant_atoms = tuple(atom.casefold() for atom in load_xyz_atom_sequence(reactant_xyz))
+        product_atoms = tuple(atom.casefold() for atom in load_xyz_atom_sequence(product_xyz))
+    except (OSError, ValueError) as exc:
+        return {
+            "geometry_valid": False,
+            "geometry_validation": {"valid": False, "error": str(exc)},
+        }
+    if ts_atoms != reactant_atoms or ts_atoms != product_atoms:
+        return {
+            "geometry_valid": False,
+            "geometry_validation": {
+                "valid": False,
+                "error": "TS guess atom count or element order does not match both endpoints",
+            },
+        }
     options_raw = manifest.get("ts_guess_validation")
     options = options_raw if isinstance(options_raw, dict) else {}
     if options.get("enabled") is False:
         return None
     try:
+        bond_scale = _positive_finite_float(
+            options.get("bond_scale", DEFAULT_BOND_SCALE),
+            field_name="ts_guess_validation.bond_scale",
+        )
+        max_spurious_bond_changes = _nonnegative_int(
+            options.get("max_spurious_bond_changes", DEFAULT_MAX_SPURIOUS_BOND_CHANGES),
+            field_name="ts_guess_validation.max_spurious_bond_changes",
+        )
+        reacting_bond_stretch_scale = _positive_finite_float(
+            options.get("reacting_bond_stretch_scale", DEFAULT_REACTING_BOND_STRETCH_SCALE),
+            field_name="ts_guess_validation.reacting_bond_stretch_scale",
+        )
         verdict = validate_ts_guess_geometry(
             ts_guess_xyz=ts_guess_path,
             reactant_xyz=reactant_xyz,
             product_xyz=product_xyz,
-            bond_scale=float(options.get("bond_scale", DEFAULT_BOND_SCALE)),
-            max_spurious_bond_changes=int(
-                options.get("max_spurious_bond_changes", DEFAULT_MAX_SPURIOUS_BOND_CHANGES)
-            ),
-            reacting_bond_stretch_scale=float(
-                options.get("reacting_bond_stretch_scale", DEFAULT_REACTING_BOND_STRETCH_SCALE)
-            ),
+            bond_scale=bond_scale,
+            max_spurious_bond_changes=max_spurious_bond_changes,
+            reacting_bond_stretch_scale=reacting_bond_stretch_scale,
         )
     except (GeometryValidationError, OSError, TypeError, ValueError) as exc:
-        # Unknown, not invalid: keep the candidate but record why we could not judge it.
-        return {"geometry_validation": {"error": str(exc)}}
+        return {
+            "geometry_valid": False,
+            "geometry_validation": {"valid": False, "error": str(exc)},
+        }
     return {"geometry_valid": verdict.valid, "geometry_validation": verdict.to_metadata()}
 
 
@@ -223,6 +312,8 @@ def _collect_path_search_candidates(
 
 def _collect_opt_candidates(
     job_dir: Path,
+    *,
+    selected_input_xyz: str | Path | None = None,
 ) -> tuple[int, tuple[str, ...], tuple[dict[str, Any], ...], dict[str, Any]]:
     optimized_geometry = _resolve_existing_path(job_dir, "xtbopt.xyz")
     summary = {
@@ -230,7 +321,31 @@ def _collect_opt_candidates(
         "optimization_log_path": _resolve_existing_path(job_dir, "xtbopt.log"),
         "optimization_ok": (job_dir / ".xtboptok").exists(),
     }
-    if not optimized_geometry:
+    optimized_frames = load_output_xyz_frames(optimized_geometry) if optimized_geometry else ()
+    validation_error = ""
+    if not summary["optimization_ok"]:
+        validation_error = "xTB optimization did not emit the .xtboptok success marker"
+    elif len(optimized_frames) != 1:
+        validation_error = "xtbopt.xyz must contain exactly one valid finite XYZ frame"
+    elif selected_input_xyz is not None:
+        try:
+            expected_atoms = tuple(
+                atom.casefold() for atom in load_xyz_atom_sequence(selected_input_xyz)
+            )
+        except (OSError, ValueError) as exc:
+            validation_error = f"selected xTB input is invalid: {exc}"
+        else:
+            optimized_atoms = tuple(
+                line.split()[0].casefold() for line in optimized_frames[0].atom_lines
+            )
+            if optimized_atoms != expected_atoms:
+                validation_error = (
+                    "xtbopt.xyz atom count or element order does not match the selected input"
+                )
+    if not optimized_geometry or validation_error:
+        if optimized_geometry:
+            summary["result_validation_error"] = validation_error
+            summary["canonical_result_path"] = ""
         return 0, (), (), summary
     detail = {
         "rank": 1,
@@ -253,11 +368,18 @@ def _collect_sp_candidates(
         "wbo_path": _resolve_existing_path(job_dir, "wbo"),
         "topology_path": _resolve_existing_path(job_dir, "xtbtopo.mol"),
     }
-    if isinstance(xtbout.get("total energy"), (int, float)):
-        summary["total_energy"] = float(xtbout["total energy"])
-    if isinstance(xtbout.get("electronic energy"), (int, float)):
-        summary["electronic_energy"] = float(xtbout["electronic energy"])
-    if not result_json:
+    for source_key, summary_key in (
+        ("total energy", "total_energy"),
+        ("electronic energy", "electronic_energy"),
+    ):
+        parsed = _safe_float(xtbout.get(source_key))
+        if parsed is not None:
+            summary[summary_key] = parsed
+    finite_energy = summary.get("total_energy", summary.get("electronic_energy"))
+    if not result_json or finite_energy is None:
+        if result_json:
+            summary["result_validation_error"] = "xtbout.json has no finite energy"
+            summary["canonical_result_path"] = ""
         return 0, (), (), summary
     detail = {
         "rank": 1,
@@ -266,14 +388,15 @@ def _collect_sp_candidates(
         "score": 1000.0,
         "selected": True,
     }
-    if "total_energy" in summary:
-        detail["total_energy"] = summary["total_energy"]
-        detail["score"] = round(-float(summary["total_energy"]), 6)
+    detail["total_energy"] = finite_energy
+    detail["score"] = round(-float(finite_energy), 6)
     return 1, (result_json,), (detail,), summary
 
 
 def _collect_hessian_candidates(
     job_dir: Path,
+    *,
+    selected_input_xyz: str | Path | None = None,
 ) -> tuple[int, tuple[str, ...], tuple[dict[str, Any], ...], dict[str, Any]]:
     hessian_path = _resolve_existing_path(job_dir, "hessian")
     summary = {
@@ -281,6 +404,18 @@ def _collect_hessian_candidates(
         "vibspectrum_path": _resolve_existing_path(job_dir, "vibspectrum"),
     }
     if not hessian_path:
+        return 0, (), (), summary
+    try:
+        matrix = parse_xtb_hessian(hessian_path)
+        if selected_input_xyz is not None:
+            frames = load_xyz_frames(selected_input_xyz)
+            if len(frames) != 1 or len(matrix) != 3 * len(frames[0].atom_lines):
+                raise HessianConversionError(
+                    "xTB Hessian dimension does not match its selected XYZ input"
+                )
+    except (HessianConversionError, OSError, ValueError) as exc:
+        summary["result_validation_error"] = str(exc)
+        summary["canonical_result_path"] = ""
         return 0, (), (), summary
     detail = {
         "rank": 1,

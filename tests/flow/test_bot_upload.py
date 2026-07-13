@@ -795,6 +795,37 @@ def test_confirm_rejects_server_owned_workflow_fields(
     assert not (tmp_path / "untrusted").exists()
 
 
+def test_confirm_rejects_remote_crest_solvent_shell_token(tmp_path: Path) -> None:
+    archive = _make_zip(
+        tmp_path / "solvent_injection.zip",
+        {
+            "solvent_injection/flow.yaml": (
+                b"workflow_type: conformer_screening\n"
+                b"crest:\n"
+                b"  solvent_model: gbsa\n"
+                b'  solvent: "water;touch"\n'
+            ),
+            "solvent_injection/input.xyz": b"2\nH2\nH 0 0 0\nH 0 0 0.7\n",
+        },
+    )
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    upload = _stage(app, archive, "solvent_injection.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+        message_id="1",
+    )
+
+    status = app.dispatch_action(action, messenger=messenger)
+
+    assert status == "run-submission-failed"
+    assert not (tmp_path / "solvent_injection").exists()
+
+
 def test_confirm_rejects_standalone_orca_resources_above_server_cap(tmp_path: Path) -> None:
     archive = _make_zip(
         tmp_path / "oversized.zip",
@@ -824,6 +855,8 @@ def test_confirm_rejects_standalone_orca_resources_above_server_cap(tmp_path: Pa
     [
         "% maxcore 999999",
         "% pal nprocs 999 end",
+        "# hidden # % maxcore 999999",
+        "# hidden # ! PAL999",
     ],
 )
 def test_standalone_orca_resource_caps_cover_spaced_percent_syntax(
@@ -909,6 +942,8 @@ def test_confirm_rejects_external_orca_file_references(
         "%md\n  Run 999999999\nend\n",
         "% md\n  Run 999999999\nend\n",
         "! MD\n* xyz 0 1\nH 0 0 0\n*\n",
+        "# hidden # ! MD\n* xyz 0 1\nH 0 0 0\n*\n",
+        "# hidden # !Compound\n* xyz 0 1\nH 0 0 0\n*\n",
         "! r2scan-3c\n$new_job\n! r2scan-3c\n",
         "! r2scan-3c GCP(FILE)\n",
         '%eda\n  Frag1_MethodFile "nested.txt"\nend\n',
@@ -924,6 +959,8 @@ def test_confirm_rejects_external_orca_file_references(
         "molecular-dynamics-block",
         "spaced-molecular-dynamics-block",
         "molecular-dynamics-route",
+        "closed-comment-molecular-dynamics-route",
+        "closed-comment-compound-route",
         "multiple-jobs",
         "external-gcp-parameters",
         "eda-input-include",
@@ -963,21 +1000,36 @@ def test_standalone_orca_allows_existing_nested_file_references(tmp_path: Path) 
     job_dir = tmp_path / "contained"
     assets = job_dir / "assets"
     assets.mkdir(parents=True)
-    for filename in ("input.xyz", "seed.gbw", "charges.pc", "seed.hess"):
+    for filename in ("progress.gbw", "progress.hess"):
         (assets / filename).write_text("contained\n", encoding="utf-8")
+    (assets / "progress.xyz").write_text("1\ncontained\nH 0 0 0\n", encoding="utf-8")
     (job_dir / "job.inp").write_text(
         "\n".join(
             (
                 "! r2scan-3c PAL2",
-                '%moinp "assets/seed.gbw"',
-                '% pointcharges "assets/charges.pc"',
+                "%moinp assets/progress.gbw",
                 '% base "result"',
                 "%geom",
-                '  InHessName "assets/seed.hess"',
+                "  InHessName assets/progress.hess",
                 "end",
-                '* xyzfile 0 1 "assets/input.xyz"',
+                "* xyzfile 0 1 assets/progress.xyz",
             )
         ),
+        encoding="utf-8",
+    )
+
+    BotApplication._validate_orca_resource_limits(
+        job_dir,
+        max_cores=4,
+        max_memory_gb=8,
+    )
+
+
+def test_standalone_orca_allows_builtin_gcpmethod(tmp_path: Path) -> None:
+    job_dir = tmp_path / "builtin-gcp"
+    job_dir.mkdir()
+    (job_dir / "job.inp").write_text(
+        '! SP\n%method GCPMETHOD "dft/svp" end\n* xyz 0 1\nH 0 0 0\n*\n',
         encoding="utf-8",
     )
 
@@ -1007,7 +1059,10 @@ def test_empty_queue_reconciliation_is_cleanup_safe_only_for_precommit_target_fa
 
     job_dir = tmp_path / "submission_boundary"
     job_dir.mkdir()
-    (job_dir / "job.inp").write_text("! r2scan-3c\n", encoding="utf-8")
+    (job_dir / "job.inp").write_text(
+        "! r2scan-3c\n* xyz 0 1\nH 0 0 0\n*\n",
+        encoding="utf-8",
+    )
     app = _app(tmp_path)
     monkeypatch.setattr(
         run_inp,
@@ -1053,6 +1108,185 @@ def test_confirm_rejects_workflow_resources_above_server_cap(tmp_path: Path) -> 
 
     assert status == "run-submission-failed"
     assert not (tmp_path / "oversized_flow").exists()
+
+
+def test_uploaded_workflow_cannot_override_remote_atom_cap(tmp_path: Path) -> None:
+    job_dir = tmp_path / "remote_atom_cap"
+    job_dir.mkdir()
+    atom_count = 201
+    (job_dir / "flow.yaml").write_text(
+        "workflow_type: conformer_screening\nmax_atoms: 999999\n",
+        encoding="utf-8",
+    )
+    (job_dir / "input.xyz").write_text(
+        f"{atom_count}\nremote molecule\n" + "H 0 0 0\n" * atom_count,
+        encoding="utf-8",
+    )
+    app = _app(tmp_path)
+
+    receipt = app._submit_extracted_run_dir(job_dir, run_dir_kind="workflow")
+
+    assert receipt.committed is False
+    assert "atom-count limit of 200" in receipt.detail
+    assert not (job_dir / "workflow.json").exists()
+
+
+def test_uploaded_orca_inline_geometry_uses_remote_atom_cap(tmp_path: Path) -> None:
+    job_dir = tmp_path / "remote_orca_atom_cap"
+    job_dir.mkdir()
+    atom_count = 201
+    (job_dir / "job.inp").write_text(
+        "! SP\n* xyz 0 1\n" + "H 0 0 0\n" * atom_count + "*\n",
+        encoding="utf-8",
+    )
+    app = _app(tmp_path)
+
+    receipt = app._submit_extracted_run_dir(job_dir, run_dir_kind="orca")
+
+    assert receipt.committed is False
+    assert "remote atom-count limit of 200" in receipt.detail
+
+
+@pytest.mark.parametrize(("atom_count", "accepted"), [(200, True), (201, False)])
+def test_uploaded_xyz_remote_atom_cap_boundary(
+    tmp_path: Path,
+    atom_count: int,
+    accepted: bool,
+) -> None:
+    job_dir = tmp_path / f"xyz-boundary-{atom_count}"
+    job_dir.mkdir()
+    (job_dir / "input.xyz").write_text(
+        f"{atom_count}\nboundary\n" + "H 0 0 0\n" * atom_count,
+        encoding="utf-8",
+    )
+
+    if accepted:
+        assert BotApplication._validate_remote_xyz_atom_limits(job_dir) == atom_count
+    else:
+        with pytest.raises(ValueError, match="atom-count limit of 200"):
+            BotApplication._validate_remote_xyz_atom_limits(job_dir)
+
+
+@pytest.mark.parametrize(("atom_count", "accepted"), [(200, True), (201, False)])
+def test_uploaded_orca_inline_remote_atom_cap_boundary(
+    tmp_path: Path,
+    atom_count: int,
+    accepted: bool,
+) -> None:
+    inp_path = tmp_path / f"inline-{atom_count}.inp"
+    lines = ["! SP", "* xyz 0 1", *("H 0 0 0" for _ in range(atom_count)), "*"]
+
+    if accepted:
+        BotApplication._validate_remote_orca_inline_atom_limits(inp_path, lines)
+    else:
+        with pytest.raises(ValueError, match="remote atom-count limit of 200"):
+            BotApplication._validate_remote_orca_inline_atom_limits(inp_path, lines)
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        ["! Freq", "* int 0 1", *("H 0 0 0" for _ in range(201)), "*"],
+        ["! SP", "* internal 0 1", "H 0 0 0", "*"],
+        ["! SP", "* gzmtfile 0 1 geometry.gzmt"],
+        [
+            "! Freq",
+            "%coords",
+            "  CTyp xyz",
+            "  Charge 0",
+            "  Mult 1",
+            "  coords",
+            *("    H 0 0 0" for _ in range(201)),
+            "  end",
+            "end",
+        ],
+        ["# hidden # % coords", "  CTyp xyz", "end"],
+        ["%compound", "end"],
+        ["* xyzfile 0 1"],
+    ],
+)
+def test_uploaded_orca_rejects_unbounded_geometry_formats(
+    tmp_path: Path,
+    lines: list[str],
+) -> None:
+    inp_path = tmp_path / "unsupported.inp"
+
+    with pytest.raises(ValueError, match="unsupported|invalid"):
+        BotApplication._validate_remote_orca_inline_atom_limits(inp_path, lines)
+
+
+@pytest.mark.parametrize(
+    "directive",
+    [
+        '%pointcharges "aux.dat"',
+        'orcafffilename "aux.dat"',
+        'neb_end_pdbfile "aux.dat"',
+        'restart_allxyzfile "aux.dat"',
+        'GTOName "aux.dat"',
+        'ReadFragBasis "aux.dat"',
+        'XTBParamFile "aux.dat"',
+    ],
+)
+def test_uploaded_orca_rejects_remote_unbounded_auxiliary_formats(
+    tmp_path: Path,
+    directive: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    inp_path = job_dir / "job.inp"
+    lines = ["! SP", directive, "* xyz 0 1", "H 0 0 0", "*"]
+    (job_dir / "aux.dat").write_text("aux", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="remote-disabled"):
+        BotApplication._validate_orca_file_references(job_dir, inp_path, lines)
+
+
+def test_remote_workflow_policy_injects_server_owned_mdlen(tmp_path: Path) -> None:
+    job_dir = tmp_path / "remote-md-policy"
+    job_dir.mkdir()
+    (job_dir / "flow.yaml").write_text(
+        "workflow_type: conformer_screening\ncrest:\n  gfn: 2\n",
+        encoding="utf-8",
+    )
+
+    BotApplication._apply_remote_workflow_crest_policy(job_dir, atom_count=50)
+
+    manifest = BotApplication._uploaded_flow_manifest(job_dir)
+    assert manifest["crest"] == {"gfn": 2, "mdlen": 5.0}
+
+
+def test_remote_workflow_policy_rejects_non_json_yaml_scalar(tmp_path: Path) -> None:
+    job_dir = tmp_path / "remote-non-json"
+    job_dir.mkdir()
+    flow_path = job_dir / "flow.yaml"
+    original = "workflow_type: conformer_screening\nmetadata: 2026-01-01\n"
+    flow_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="JSON-compatible"):
+        BotApplication._apply_remote_workflow_crest_policy(job_dir, atom_count=10)
+
+    assert flow_path.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(("atom_count", "accepted"), [(107, True), (108, False)])
+def test_remote_crest_atom_step_work_boundary(
+    tmp_path: Path,
+    atom_count: int,
+    accepted: bool,
+) -> None:
+    job_dir = tmp_path / f"remote-work-{atom_count}"
+    job_dir.mkdir()
+    (job_dir / "flow.yaml").write_text(
+        "workflow_type: conformer_screening\ncrest:\n  gfn: ff\n",
+        encoding="utf-8",
+    )
+
+    if accepted:
+        BotApplication._apply_remote_workflow_crest_policy(job_dir, atom_count=atom_count)
+        assert BotApplication._uploaded_flow_manifest(job_dir)["crest"]["mdlen"] == 5.0
+    else:
+        with pytest.raises(ValueError, match="remote work-unit ceiling"):
+            BotApplication._apply_remote_workflow_crest_policy(job_dir, atom_count=atom_count)
 
 
 @pytest.mark.parametrize(

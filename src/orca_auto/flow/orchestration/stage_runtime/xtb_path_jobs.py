@@ -5,6 +5,7 @@ from typing import Any
 
 import yaml
 
+from orca_auto.core.engine_process import atomic_write_confined_bytes, ensure_confined_directory
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.stage_runtime.shared import (
     _manifest_override_mapping,
@@ -21,9 +22,13 @@ from orca_auto.flow.orchestration.stage_views import WorkflowStageView, Workflow
 def _write_xtb_recipe_xcontrol(o: Any, job_dir: Path, recipe: dict[str, Any]) -> str:
     xcontrol_name = o.stages.support._normalize_text(recipe.get("xcontrol_name"))
     if xcontrol_name:
-        (job_dir / xcontrol_name).write_text(
-            "\n".join(str(line) for line in recipe.get("xcontrol_lines", ())) + "\n",
-            encoding="utf-8",
+        atomic_write_confined_bytes(
+            job_dir,
+            job_dir / xcontrol_name,
+            ("\n".join(str(line) for line in recipe.get("xcontrol_lines", ())) + "\n").encode(
+                "utf-8"
+            ),
+            label="xTB path recipe xcontrol",
         )
     return xcontrol_name
 
@@ -73,10 +78,10 @@ def _write_xtb_path_manifest(
 ) -> tuple[str, str]:
     overrides = _manifest_override_mapping(payload.get("job_manifest_overrides"))
     manifest_payload = _base_xtb_path_manifest(o, task_view, overrides)
-    namespace = (
-        o.stages.support._normalize_text(recipe.get("namespace"))
-        or str(overrides.get("namespace", "")).strip()
-    )
+    namespace = o.stages.support._normalize_text(recipe.get("namespace"))
+    override_namespace = str(overrides.get("namespace", "")).strip()
+    if namespace or override_namespace:
+        raise ValueError("xTB namespace is not supported by the canonical artifact contract")
     xcontrol_name = _write_xtb_recipe_xcontrol(o, job_dir, recipe)
     xcontrol_override_name = (
         "" if xcontrol_name else _materialize_xtb_override_xcontrol(job_dir, overrides=overrides)
@@ -88,14 +93,14 @@ def _write_xtb_path_manifest(
     )
     manifest_payload["reactant_xyz"] = reactant_target.name
     manifest_payload["product_xyz"] = product_target.name
-    if namespace:
-        manifest_payload["namespace"] = namespace
     if selected_xcontrol_name:
         manifest_payload["xcontrol"] = selected_xcontrol_name
 
-    (job_dir / "xtb_job.yaml").write_text(
-        yaml.safe_dump(manifest_payload, sort_keys=False, allow_unicode=False),
-        encoding="utf-8",
+    atomic_write_confined_bytes(
+        job_dir,
+        job_dir / "xtb_job.yaml",
+        yaml.safe_dump(manifest_payload, sort_keys=False, allow_unicode=False).encode("utf-8"),
+        label="xTB path manifest",
     )
     return namespace, selected_xcontrol_name
 
@@ -177,6 +182,7 @@ def write_xtb_path_job_impl(
     recipe = o.stages.runtime._xtb_retry_recipe(attempt_number)
     stage_id = stage_view.stage_id(o)
     job_dir = _xtb_path_job_dir(xtb_allowed_root, stage_id, attempt_number)
+    ensure_confined_directory(xtb_allowed_root, job_dir, label="xTB path stage job directory")
     reactant_target, product_target = _materialize_xtb_path_inputs(payload, job_dir=job_dir)
     namespace, selected_xcontrol_name = _write_xtb_path_manifest(
         o,

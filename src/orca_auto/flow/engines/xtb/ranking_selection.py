@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from typing import Any
 
@@ -42,7 +43,10 @@ def rank_usable_candidates(
     *,
     top_n: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
-    ranked = sorted(candidate_results, key=lambda item: float(item["total_energy"]))
+    finite_candidates = [
+        item for item in candidate_results if math.isfinite(float(item["total_energy"]))
+    ]
+    ranked = sorted(finite_candidates, key=lambda item: float(item["total_energy"]))
     candidate_details: list[dict[str, Any]] = []
     selected_paths: list[str] = []
     for rank, item in enumerate(ranked, start=1):
@@ -78,11 +82,19 @@ def ranking_was_cancelled(
 
 
 def usable_ranking_candidates(candidate_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        item
-        for item in candidate_results
-        if item.get("total_energy") is not None and item["status"] == "completed"
-    ]
+    usable: list[dict[str, Any]] = []
+    for item in candidate_results:
+        if item.get("total_energy") is None or item["status"] != "completed":
+            continue
+        if isinstance(item["total_energy"], bool):
+            continue
+        try:
+            energy = float(item["total_energy"])
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(energy):
+            usable.append(item)
+    return usable
 
 
 def ranking_success_analysis(

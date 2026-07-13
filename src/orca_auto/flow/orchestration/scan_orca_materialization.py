@@ -24,6 +24,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.statuses import (
     STATUS_CANCEL_FAILED,
     STATUS_CANCEL_REQUESTED,
@@ -34,6 +35,7 @@ from orca_auto.core.statuses import (
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.flow._orca_stage_materialization import build_materialized_orca_stage
 from orca_auto.flow.contracts import WorkflowStageInput
+from orca_auto.flow.orchestration.charge_spin import strict_int
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.template_builders import scan_geom_block
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
@@ -303,11 +305,13 @@ def _append_optts_candidate_stages(
             candidate=candidate,
             task_kind="optts_freq",
             route_line=route_line,
-            charge=int(parameters.get("charge", 0) or 0),
-            multiplicity=int(parameters.get("multiplicity", 1) or 1),
+            charge=strict_int(parameters.get("charge", 0), field="charge"),
+            multiplicity=strict_int(
+                parameters.get("multiplicity", 1), field="multiplicity", minimum=1
+            ),
             max_cores=int(parameters.get("max_cores", 8) or 8),
             max_memory_gb=int(parameters.get("max_memory_gb", 32) or 32),
-            priority=int(parameters.get("priority", 10) or 10),
+            priority=normalize_queue_priority(parameters.get("priority")),
             xyz_filename="ts_guess.xyz",
             inp_filename="ts_guess.inp",
         )
@@ -350,11 +354,11 @@ def _append_scan_stage(
         candidate=candidate,
         task_kind="relaxed_scan",
         route_line=normalize_text(parameters.get("orca_route_line")) or "! Opt r2scan-3c TightSCF",
-        charge=int(parameters.get("charge", 0) or 0),
-        multiplicity=int(parameters.get("multiplicity", 1) or 1),
+        charge=strict_int(parameters.get("charge", 0), field="charge"),
+        multiplicity=strict_int(parameters.get("multiplicity", 1), field="multiplicity", minimum=1),
         max_cores=int(parameters.get("max_cores", 8) or 8),
         max_memory_gb=int(parameters.get("max_memory_gb", 32) or 32),
-        priority=int(parameters.get("priority", 10) or 10),
+        priority=normalize_queue_priority(parameters.get("priority")),
         xyz_filename="scan_input.xyz",
         inp_filename="scan.inp",
         geom_block=scan_geom_block(scan_coordinate),

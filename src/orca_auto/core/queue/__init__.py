@@ -1,3 +1,4 @@
+from .priority import normalize_queue_priority
 from .publication import (
     QUEUE_RECORD_PUBLICATION_LOCK_TIMEOUT_SECONDS,
     QUEUE_RECORD_SYNC_ABORTED,
@@ -11,11 +12,13 @@ from .publication import (
     QUEUE_RECORD_SYNC_REPAIRING,
     QUEUE_RECORD_SYNC_TOKEN_KEY,
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
+    QUEUE_SUBMISSION_INTENT_KEY,
     current_process_start_token,
     process_start_token,
     queue_entry_is_claimable,
     queue_record_publication_lock,
     queue_record_sync_is_stale,
+    queue_record_sync_metadata,
     queue_record_sync_state,
 )
 from .store import (
@@ -52,6 +55,7 @@ __all__ = [
     "QUEUE_RECORD_SYNC_REPAIRING",
     "QUEUE_RECORD_SYNC_TOKEN_KEY",
     "QUEUE_RECORD_SYNC_UPDATED_AT_KEY",
+    "QUEUE_SUBMISSION_INTENT_KEY",
     "QueueEntry",
     "QueueStore",
     "QueueStoreCorruptError",
@@ -67,9 +71,11 @@ __all__ = [
     "mark_cancelled",
     "mark_completed",
     "mark_failed",
+    "normalize_queue_priority",
     "process_start_token",
     "queue_entry_is_claimable",
     "queue_record_publication_lock",
+    "queue_record_sync_metadata",
     "queue_record_sync_is_stale",
     "queue_record_sync_state",
     "requeue_running_entry",

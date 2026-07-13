@@ -15,6 +15,8 @@ from .files import (
     mapping_section,
     messenger_mapping_from_root,
     runs_root_from_mapping,
+    validate_shared_config_sections,
+    validated_absolute_linux_path_text,
     validated_runs_root_text,
 )
 from .schema import (
@@ -122,21 +124,64 @@ def default_shared_config_path() -> str:
 
 def resource_request_from_manifest(cfg: Any, manifest: dict[str, Any]) -> dict[str, int]:
     resources = manifest.get("resources")
-    resource_overrides = dict(resources) if isinstance(resources, dict) else {}
+    if resources is not None and not isinstance(resources, dict):
+        raise ValueError("Manifest field 'resources' must be a mapping.")
+    resource_overrides = dict(resources or {})
+    unknown_resource_keys = set(resource_overrides) - {
+        "max_cores",
+        "max_cores_per_task",
+        "max_memory_gb",
+        "max_memory_gb_per_task",
+    }
+    if unknown_resource_keys:
+        raise ValueError(
+            f"Unknown manifest resource fields: {sorted(str(key) for key in unknown_resource_keys)}"
+        )
+
+    def explicit_positive_value(*values: tuple[str, Any]) -> int | None:
+        parsed_values: list[tuple[str, int]] = []
+        for label, raw in values:
+            if raw is None or raw == "":
+                continue
+            if isinstance(raw, bool):
+                raise ValueError(f"Manifest resource {label!r} must be a positive integer.")
+            if isinstance(raw, int):
+                parsed = raw
+            elif isinstance(raw, str) and raw.strip().isdigit():
+                parsed = int(raw.strip())
+            else:
+                raise ValueError(f"Manifest resource {label!r} must be a positive integer.")
+            if parsed < 1:
+                raise ValueError(f"Manifest resource {label!r} must be a positive integer.")
+            parsed_values.append((label, parsed))
+        if not parsed_values:
+            return None
+        if len({value for _label, value in parsed_values}) != 1:
+            labels = ", ".join(label for label, _value in parsed_values)
+            raise ValueError(f"Conflicting manifest resource aliases: {labels}")
+        return parsed_values[0][1]
+
     default_cores = max(1, int(cfg.resources.max_cores_per_task))
     default_memory = max(1, int(cfg.resources.max_memory_gb_per_task))
     max_cores = (
-        positive_int(resource_overrides.get("max_cores"))
-        or positive_int(resource_overrides.get("max_cores_per_task"))
-        or positive_int(manifest.get("max_cores"))
-        or positive_int(manifest.get("max_cores_per_task"))
+        explicit_positive_value(
+            ("resources.max_cores", resource_overrides.get("max_cores")),
+            ("resources.max_cores_per_task", resource_overrides.get("max_cores_per_task")),
+            ("max_cores", manifest.get("max_cores")),
+            ("max_cores_per_task", manifest.get("max_cores_per_task")),
+        )
         or default_cores
     )
     max_memory_gb = (
-        positive_int(resource_overrides.get("max_memory_gb"))
-        or positive_int(resource_overrides.get("max_memory_gb_per_task"))
-        or positive_int(manifest.get("max_memory_gb"))
-        or positive_int(manifest.get("max_memory_gb_per_task"))
+        explicit_positive_value(
+            ("resources.max_memory_gb", resource_overrides.get("max_memory_gb")),
+            (
+                "resources.max_memory_gb_per_task",
+                resource_overrides.get("max_memory_gb_per_task"),
+            ),
+            ("max_memory_gb", manifest.get("max_memory_gb")),
+            ("max_memory_gb_per_task", manifest.get("max_memory_gb_per_task")),
+        )
         or default_memory
     )
     return {
@@ -188,10 +233,13 @@ def scheduler_runtime_settings(
     if reject_nonpositive and raw_max_active < 1:
         raise ValueError("scheduler.max_active_simulations must be an integer >= 1.")
     max_active = max(1, raw_max_active)
-    admission_root = as_str(
-        scheduler_raw.get("admission_root"),
-        default_admission_root,
-    )
+    if "admission_root" in scheduler_raw:
+        admission_root = validated_absolute_linux_path_text(
+            as_str(scheduler_raw.get("admission_root")),
+            field_name="scheduler.admission_root",
+        )
+    else:
+        admission_root = default_admission_root
     return SchedulerRuntimeSettings(
         max_active=max_active,
         admission_root=admission_root,
@@ -225,9 +273,17 @@ def _runtime_config_from_scheduler(
 
 
 def resource_config_from_mapping(resources_raw: dict[str, Any]) -> CommonResourceConfig:
+    def configured_positive_int(key: str, default: int) -> int:
+        if key not in resources_raw:
+            return default
+        return explicit_positive_int(
+            resources_raw.get(key),
+            field_name=f"resources.{key}",
+        )
+
     return CommonResourceConfig(
-        max_cores_per_task=max(1, as_int(resources_raw.get("max_cores_per_task"), 8)),
-        max_memory_gb_per_task=max(1, as_int(resources_raw.get("max_memory_gb_per_task"), 32)),
+        max_cores_per_task=configured_positive_int("max_cores_per_task", 8),
+        max_memory_gb_per_task=configured_positive_int("max_memory_gb_per_task", 32),
     )
 
 
@@ -258,12 +314,14 @@ def load_workflow_engine_config(
     default_config_path_fn: Callable[[], str],
     executable_key: str,
     executable_display_name: str,
+    additional_executables: tuple[tuple[str, str], ...] = (),
     paths_cls: Callable[..., Any],
     behavior_cls: Callable[..., Any],
     app_config_cls: Callable[..., _AppConfigT],
 ) -> _AppConfigT:
     path = Path(config_path or default_config_path_fn()).expanduser().resolve()
     raw = _load_config_mapping(path)
+    validate_shared_config_sections(raw)
 
     scheduler_raw = mapping_section(raw, "scheduler")
     workflow_raw = mapping_section(raw, "workflow")
@@ -271,19 +329,25 @@ def load_workflow_engine_config(
     resources_raw = mapping_section(raw, "resources")
     messenger_raw = messenger_mapping_from_root(raw)
     workflow_root = _required_workflow_root(raw, path)
-    executable_value = _validate_workflow_engine_executable(
-        as_str(workflow_paths_raw.get(executable_key)),
-        executable_key=executable_key,
-        display_name=executable_display_name,
-    )
+    executable_values = {
+        executable_key: _validate_workflow_engine_executable(
+            as_str(workflow_paths_raw.get(executable_key)),
+            executable_key=executable_key,
+            display_name=executable_display_name,
+        )
+    }
+    for additional_key, additional_display_name in additional_executables:
+        executable_values[additional_key] = _validate_workflow_engine_executable(
+            as_str(workflow_paths_raw.get(additional_key)),
+            executable_key=additional_key,
+            display_name=additional_display_name,
+        )
     messenger = messenger_config_from_mapping(messenger_raw)
 
     return app_config_cls(
         runtime=_runtime_config_from_scheduler(scheduler_raw, workflow_root),
         workflow_root=workflow_root,
-        paths=paths_cls(
-            **{executable_key: executable_value},
-        ),
+        paths=paths_cls(**executable_values),
         behavior=behavior_cls(),
         resources=_resource_config(resources_raw),
         telegram=messenger.telegram,
@@ -309,6 +373,7 @@ def load_crest_config(config_path: str | None = None) -> WorkflowEngineAppConfig
         default_config_path_fn=default_shared_config_path,
         executable_key="crest_executable",
         executable_display_name="CREST",
+        additional_executables=(("xtb_executable", "xTB"),),
         paths_cls=WorkflowEnginePathsConfig,
         behavior_cls=WorkflowEngineBehaviorConfig,
         app_config_cls=WorkflowEngineAppConfig,

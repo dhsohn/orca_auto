@@ -949,7 +949,9 @@ def test_run_bot_disabled_settings_returns_error() -> None:
     assert bot.run_bot(settings) == 1
 
 
-def test_run_bot_processes_known_unknown_and_handler_error_updates(monkeypatch) -> None:
+def test_legacy_dispatch_helpers_process_known_unknown_and_handler_error_updates(
+    monkeypatch,
+) -> None:
     settings = _settings()
     sent: list[tuple[str, str | None]] = []
     calls = {"polls": 0}
@@ -994,7 +996,44 @@ def test_run_bot_processes_known_unknown_and_handler_error_updates(monkeypatch) 
     monkeypatch.setattr(bot, "_send_response", fake_send_response)
     monkeypatch.setattr(bot, "_send_preformatted_response", fake_send_response)
 
-    assert bot.run_bot(settings) == 0
+    assert (
+        bot._dispatch.run_bot(
+            settings,
+            settings_from_env_fn=bot.settings_from_env,
+            set_bot_commands_fn=bot._set_bot_commands,
+            poll_updates_fn=bot._poll_updates,
+            dispatch_update_fn=bot._dispatch_update,
+            logger=bot.logger,
+        )
+        == 0
+    )
     assert any("Unknown command: /unknown" in text for text, _mode in sent)
     assert any(text == "list body" and mode == "HTML" for text, mode in sent)
     assert any("Error: bad &lt;boom&gt;" in text for text, _mode in sent)
+
+
+def test_historical_run_bot_with_explicit_settings_uses_canonical_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = bot.TelegramBotSettings(
+        telegram=TelegramConfig(bot_token="bot-token", chat_id="123"),
+        workflow_root="/tmp/workflows",
+        crest_config="/tmp/orca_auto.yaml",
+        xtb_config="/tmp/orca_auto.yaml",
+        orca_config="/tmp/orca_auto.yaml",
+        orca_repo_root=None,
+    )
+    captured: list[bot.TelegramBotSettings] = []
+
+    def run_canonical(actual: bot.TelegramBotSettings) -> int:
+        captured.append(actual)
+        return 17
+
+    monkeypatch.setattr(
+        bot,
+        "_run_canonical_telegram",
+        run_canonical,
+    )
+
+    assert bot.run_bot(settings) == 17
+    assert captured == [settings]

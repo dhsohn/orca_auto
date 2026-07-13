@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -106,11 +106,6 @@ def terminal_metadata_update(
     state = _flatten_engine_payload(state)
     report = _flatten_engine_payload(report)
     metadata_update: dict[str, Any] = {}
-    job_type = str(
-        report.get("job_type") or state.get("job_type") or entry.metadata.get("job_type", "")
-    ).strip()
-    if job_type:
-        metadata_update["job_type"] = job_type
     candidate_count_raw = report.get("candidate_count")
     if candidate_count_raw is None:
         candidate_count_raw = state.get("candidate_count")
@@ -188,6 +183,8 @@ def ensure_terminal_queue_status(
         mark_completed_fn=mark_completed_fn,
         mark_cancelled_fn=mark_cancelled_fn,
         mark_failed_fn=mark_failed_fn,
+        expected_entry=entry,
+        expected_task_id=str(getattr(entry, "task_id", "") or "") or None,
     )
 
 
@@ -208,15 +205,16 @@ def _terminal_paths(
 def _terminal_metadata(result: XtbRunResult) -> dict[str, Any]:
     return {
         "candidate_count": result.candidate_count,
-        "job_type": result.job_type,
     }
 
 
 def _mark_queue_terminal(
     request: XtbTerminalFinalizationRequest,
     dependencies: XtbTerminalDependencies,
-) -> None:
-    _engine_execution.mark_result_terminal_status(
+    before_update_fn: Callable[[], Any] | None = None,
+    require_cancel_requested: bool = False,
+) -> Any:
+    return _engine_execution.mark_result_terminal_status(
         request.queue_root,
         request.entry.queue_id,
         request.result,
@@ -225,6 +223,10 @@ def _mark_queue_terminal(
         mark_completed_fn=dependencies.mark_completed,
         mark_cancelled_fn=dependencies.mark_cancelled,
         mark_failed_fn=dependencies.mark_failed,
+        expected_entry=request.entry,
+        expected_task_id=str(request.entry.task_id),
+        before_update_fn=before_update_fn,
+        require_cancel_requested=require_cancel_requested,
     )
 
 
@@ -291,6 +293,25 @@ def _terminal_sync_actions(
     paths: _XtbTerminalPaths,
     dependencies: XtbTerminalDependencies,
 ) -> _engine_execution.TerminalSyncActions:
+    handle_uncommitted_terminal: Callable[[], Any] | None = None
+    if request.result.status != "cancelled":
+
+        def handle_uncommitted_terminal() -> Any:
+            cancelled_request = replace(
+                request,
+                result=replace(
+                    request.result,
+                    status="cancelled",
+                    reason="cancel_requested",
+                ),
+            )
+            return finalize_terminal_result(
+                cancelled_request,
+                dependencies=dependencies,
+                require_cancel_requested=True,
+                uncommitted_result=request.result,
+            )
+
     return _engine_execution.TerminalSyncActions(
         write_artifacts=lambda: dependencies.write_execution_artifacts(
             request.entry,
@@ -298,7 +319,11 @@ def _terminal_sync_actions(
             previous_state=request.previous_state,
             resumed=request.resumed,
         ),
-        mark_queue_terminal=lambda: _mark_queue_terminal(request, dependencies),
+        mark_queue_terminal=lambda before_update_fn: _mark_queue_terminal(
+            request,
+            dependencies,
+            before_update_fn,
+        ),
         sync_job_record=lambda: _sync_job_record(request, paths, dependencies),
         notify_finished=lambda sync_result: _notify_terminal_finished(
             request,
@@ -310,6 +335,7 @@ def _terminal_sync_actions(
         build_outcome=lambda sync_result: request.outcome_cls(
             result=request.result,
         ),
+        handle_uncommitted_terminal=handle_uncommitted_terminal,
     )
 
 
@@ -317,10 +343,28 @@ def finalize_terminal_result(
     request: XtbTerminalFinalizationRequest,
     *,
     dependencies: XtbTerminalDependencies,
+    require_cancel_requested: bool = False,
+    uncommitted_result: XtbRunResult | None = None,
 ) -> Any:
     paths = _terminal_paths(request, dependencies)
+    actions = _terminal_sync_actions(request, paths, dependencies)
+    if require_cancel_requested:
+        actions = replace(
+            actions,
+            mark_queue_terminal=lambda before_update_fn: _mark_queue_terminal(
+                request,
+                dependencies,
+                before_update_fn,
+                require_cancel_requested=True,
+            ),
+            handle_uncommitted_terminal=(
+                (lambda: request.outcome_cls(result=uncommitted_result))
+                if uncommitted_result is not None
+                else None
+            ),
+        )
     return _engine_execution.sync_terminal_result(
-        _terminal_sync_actions(request, paths, dependencies),
+        actions,
         emit_output=request.emit_output,
     )
 

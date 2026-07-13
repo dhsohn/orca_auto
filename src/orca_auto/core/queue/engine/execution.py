@@ -71,6 +71,7 @@ from .artifacts import (
     default_engine_resource_caps,
     default_entry_resource_request,
     is_resumed_state,
+    sanitized_execution_provenance,
     terminal_report_lines,
     write_running_engine_state_artifact,
     write_running_state_artifact,
@@ -86,6 +87,7 @@ from .lifecycle import (
 __all__ = [
     "CancellableProcessExecution",
     "ProcessCleanupError",
+    "sanitized_execution_provenance",
     "retain_process_ownership_until_exit",
     "EngineArtifactFields",
     "EngineWorkerLifecycle",

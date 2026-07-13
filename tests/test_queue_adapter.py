@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
@@ -63,6 +64,45 @@ class TestQueueStore(unittest.TestCase):
         self.assertTrue(qp.exists())
         entries = json.loads(qp.read_text(encoding="utf-8"))
         self.assertEqual(len(entries), 1)
+
+    def test_enqueue_retries_generated_queue_and_task_id_collisions(self) -> None:
+        generated = {
+            "q": iter(["q_same", "q_same", "q_unique"]),
+            "orca": iter(["orca_same", "orca_same", "orca_unique"]),
+        }
+
+        def next_token(prefix: str) -> str:
+            return next(generated[prefix])
+
+        with patch(
+            "orca_auto.orca.queue.adapter.timestamped_token",
+            side_effect=next_token,
+        ):
+            first = enqueue(self.root, str(self.root / "mol_A"))
+            second = enqueue(self.root, str(self.root / "mol_B"))
+
+        self.assertEqual((first.queue_id, first.task_id), ("q_same", "orca_same"))
+        self.assertEqual((second.queue_id, second.task_id), ("q_unique", "orca_unique"))
+        self.assertEqual(
+            [(entry.queue_id, entry.task_id) for entry in list_queue(self.root)],
+            [("q_same", "orca_same"), ("q_unique", "orca_unique")],
+        )
+
+    def test_enqueue_permanent_generated_id_collision_preserves_queue(self) -> None:
+        with patch(
+            "orca_auto.orca.queue.adapter.timestamped_token",
+            side_effect=lambda prefix: f"{prefix}_same",
+        ):
+            first = enqueue(self.root, str(self.root / "mol_A"))
+            queue_path = self.root / "queue.json"
+            original = queue_path.read_bytes()
+            with self.assertRaisesRegex(RuntimeError, "unique q token"):
+                enqueue(self.root, str(self.root / "mol_B"))
+
+        self.assertEqual(queue_path.read_bytes(), original)
+        [remaining] = list_queue(self.root)
+        self.assertEqual(remaining.queue_id, first.queue_id)
+        self.assertIn("mol_A", queue_entry_reaction_dir(remaining))
 
     def test_list_queue_empty(self) -> None:
         self.assertEqual(list_queue(self.root), [])

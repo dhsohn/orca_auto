@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.statuses import is_failed_status, is_queue_active_status
+from orca_auto.flow.orchestration.charge_spin import strict_int
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.deps import (
     orchestration_context as _orchestration_context,
@@ -37,6 +39,8 @@ class _ReactionOrcaStagePlan:
     ordered_candidates: list[Any]
     remaining_candidates: list[Any]
     existing_stages: list[dict[str, Any]]
+    max_stage_count: int
+    omitted_candidate_count: int
     has_pending_xtb: bool
     handoff_errors: list[dict[str, str]]
 
@@ -263,12 +267,19 @@ def _maybe_record_reaction_orca_candidates_exhausted(
     if not _all_terminal_none_verified(plan.existing_stages):
         return
     stage_id = str(plan.existing_stages[0].get("stage_id") or "")
+    limit_exhausted = plan.omitted_candidate_count > 0
     _record_workflow_error(
         payload,
         scope="reaction_ts_search_orca_candidate_exhausted",
         stage_id=stage_id,
-        reason="ts_candidates_exhausted",
-        message="All reaction TS candidates were attempted; none verified a transition state.",
+        reason="ts_candidate_limit_exhausted" if limit_exhausted else "ts_candidates_exhausted",
+        message=(
+            f"The max_orca_stages={plan.max_stage_count} reaction-candidate limit was exhausted; "
+            f"{plan.omitted_candidate_count} additional candidate(s) were not submitted and none "
+            "of the attempted candidates verified a transition state."
+            if limit_exhausted
+            else "All reaction TS candidates were attempted; none verified a transition state."
+        ),
     )
 
 
@@ -299,7 +310,11 @@ def _reaction_orca_stage_plan(
     )
     ordered_candidates = _unique_ordered_candidates(candidate_pool)
     existing = _engine_stages(o, payload, "orca")
-    remaining_candidates = _remaining_orca_candidates(o, existing, ordered_candidates)
+    unattempted_candidates = _remaining_orca_candidates(o, existing, ordered_candidates)
+    max_stage_count = max(0, int(params.get("max_orca_stages", 3) or 3))
+    available_slots = max(0, max_stage_count - len(existing))
+    remaining_candidates = unattempted_candidates[:available_slots]
+    omitted_candidate_count = len(unattempted_candidates) - len(remaining_candidates)
     return _ReactionOrcaStagePlan(
         payload_metadata=payload_metadata,
         params=params,
@@ -307,6 +322,8 @@ def _reaction_orca_stage_plan(
         ordered_candidates=ordered_candidates,
         remaining_candidates=remaining_candidates,
         existing_stages=existing,
+        max_stage_count=max_stage_count,
+        omitted_candidate_count=omitted_candidate_count,
         has_pending_xtb=_has_pending_xtb_stage(o, payload),
         handoff_errors=handoff_errors,
     )
@@ -341,11 +358,13 @@ def _build_reaction_orca_stage(
         candidate=candidate,
         task_kind="optts_freq",
         route_line=str(plan.params.get("orca_route_line", "! r2scan-3c OptTS Freq TightSCF")),
-        charge=int(plan.params.get("charge", 0) or 0),
-        multiplicity=int(plan.params.get("multiplicity", 1) or 1),
+        charge=strict_int(plan.params.get("charge", 0), field="charge"),
+        multiplicity=strict_int(
+            plan.params.get("multiplicity", 1), field="multiplicity", minimum=1
+        ),
         max_cores=int(plan.params.get("max_cores", 8) or 8),
         max_memory_gb=int(plan.params.get("max_memory_gb", 32) or 32),
-        priority=int(plan.params.get("priority", 10) or 10),
+        priority=normalize_queue_priority(plan.params.get("priority")),
         xyz_filename="ts_guess.xyz",
         inp_filename="ts_guess.inp",
         inhess_source_path=str(candidate.metadata.get("hessian_path") or ""),
@@ -363,6 +382,8 @@ def _annotate_reaction_orca_stage(
     stage_metadata = o.stages.support._stage_metadata(stage)
     stage_metadata["reaction_candidate_attempt_index"] = next_index
     stage_metadata["reaction_candidate_pool_size"] = len(plan.ordered_candidates)
+    stage_metadata["reaction_candidate_limit"] = plan.max_stage_count
+    stage_metadata["reaction_candidates_omitted_by_limit"] = plan.omitted_candidate_count
     stage_metadata["reaction_remaining_candidates_after_this"] = max(
         0,
         len(plan.remaining_candidates) - offset,

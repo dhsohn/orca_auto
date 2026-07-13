@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from orca_auto.flow.manifest import interaction_energy_config_fingerprint
 from orca_auto.flow.orchestration.interaction_energy_materialization import (
     append_interaction_energy_stages_impl,
@@ -196,6 +198,36 @@ def test_materializer_rejects_fragment_states_with_wrong_electron_parity(
 
     assert append_interaction_energy_stages_impl(payload, workspace_dir=tmp_path / "ws") is False
     assert _interaction_stages(payload) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("charge", -0.5),
+        ("charge", True),
+        ("multiplicity", 1.5),
+        ("multiplicity", True),
+    ],
+)
+def test_materializer_rejects_lossy_complex_electronic_state(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    payload = _two_conformer_payload(tmp_path)
+    payload["metadata"]["request"]["parameters"][field] = value
+
+    assert append_interaction_energy_stages_impl(payload, workspace_dir=tmp_path / "ws") is False
+    assert _interaction_stages(payload) == []
+    assert payload["metadata"]["workflow_error"] == {
+        "status": "failed",
+        "scope": "conformer_screening_interaction_energy",
+        "reason": "invalid_electronic_state",
+        "message": (
+            "The complex and fragment electronic states required for interaction energy "
+            "are invalid or incompatible."
+        ),
+    }
 
 
 def test_materializer_enforces_hard_fragment_cap_against_durable_state(tmp_path: Path) -> None:

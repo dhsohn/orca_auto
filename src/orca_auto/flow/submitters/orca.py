@@ -6,12 +6,22 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.commands.queue import display_status
+from orca_auto.core.queue.priority import normalize_queue_priority
+from orca_auto.core.queue.publication import (
+    QUEUE_SUBMISSION_INTENT_KEY,
+    queue_entry_is_claimable,
+)
 from orca_auto.core.statuses import STATUS_WAITING_FOR_SLOT
 from orca_auto.core.utils import normalize_text as _normalize_text
 from orca_auto.core.utils import now_utc_iso
 
 from ..registry import sync_workflow_registry
-from ..state import load_workflow_payload, resolve_workflow_workspace, write_workflow_payload
+from ..state import (
+    acquire_workflow_lock,
+    load_workflow_payload,
+    resolve_workflow_workspace,
+    write_workflow_payload,
+)
 from . import internal_engine_models as _engine_models
 from . import orca_cancellation as _cancellation
 from . import orca_submission as _submission
@@ -27,6 +37,7 @@ class _OrcaDirectSubmitRequest:
     reaction_dir: str
     priority: int
     force: bool
+    submission_intent_token: str
 
 
 @dataclass(frozen=True)
@@ -34,6 +45,13 @@ class _OrcaDirectCancelRequest:
     command_argv: list[str]
     config_path: str
     target: str
+
+
+@dataclass(frozen=True)
+class _RecoveredQueuedSubmission:
+    entry: Any
+    reaction_dir: Path
+    worker_info: Any
 
 
 def _trace_argv(*, api_name: str, config_path: str, kwargs: dict[str, Any]) -> list[str]:
@@ -171,7 +189,23 @@ def _find_orca_cancel_entry(request: _OrcaDirectCancelRequest) -> tuple[Path, An
 def _request_orca_cancel(allowed_root: Path, entry: Any) -> Any | None:
     from orca_auto.orca.queue import adapter as queue_adapter
 
-    return queue_adapter.cancel(allowed_root, queue_adapter.queue_entry_id(entry))
+    return queue_adapter.cancel(
+        allowed_root,
+        queue_adapter.queue_entry_id(entry),
+        expected_entry=entry,
+    )
+
+
+def _cancel_request_targets_exact_entry(
+    request: _OrcaDirectCancelRequest,
+    entry: Any,
+) -> bool:
+    from orca_auto.orca.queue import adapter as queue_adapter
+
+    return bool(
+        queue_adapter.is_orca_queue_entry(entry)
+        and queue_adapter.queue_entry_matches_target(entry, request.target)
+    )
 
 
 def _cancel_success_payload(
@@ -209,19 +243,24 @@ def _submit_request(
     max_cores: int | None,
     max_memory_gb: int | None,
     force: bool,
+    submission_intent_token: str = "",
 ) -> _OrcaDirectSubmitRequest:
     normalized_config = _normalize_text(config_path)
-    priority_value = int(priority)
+    priority_value = normalize_queue_priority(priority)
     force_value = bool(force)
+    intent_token = _normalize_text(submission_intent_token)
+    trace_kwargs: dict[str, Any] = {
+        "reaction_dir": reaction_dir,
+        "priority": priority_value,
+        "force": force_value,
+    }
+    if intent_token:
+        trace_kwargs[QUEUE_SUBMISSION_INTENT_KEY] = intent_token
     return _OrcaDirectSubmitRequest(
         command_argv=_trace_argv(
             api_name=_SUBMIT_API_NAME,
             config_path=normalized_config,
-            kwargs={
-                "reaction_dir": reaction_dir,
-                "priority": priority_value,
-                "force": force_value,
-            },
+            kwargs=trace_kwargs,
         ),
         args=Namespace(
             config=normalized_config,
@@ -230,10 +269,12 @@ def _submit_request(
             force=force_value,
             max_cores=max_cores,
             max_memory_gb=max_memory_gb,
+            submission_intent_token=intent_token,
         ),
         reaction_dir=reaction_dir,
         priority=priority_value,
         force=force_value,
+        submission_intent_token=intent_token,
     )
 
 
@@ -246,6 +287,120 @@ def _submit_reaction_dir_to_queue(args: Namespace) -> Any:
 def _submission_reaction_dir(submission: Any, default_reaction_dir: str) -> str:
     context = submission.context
     return str(context.reaction_dir) if context is not None else default_reaction_dir
+
+
+def _entry_matches_submission_request(
+    entry: Any,
+    *,
+    reaction_dir: Path,
+    priority: int,
+    force: bool,
+    submission_intent_token: str,
+    allow_unclaimable_active: bool = False,
+) -> bool:
+    from orca_auto.orca.queue import adapter as queue_adapter
+
+    status = queue_adapter.queue_entry_status(entry)
+    if status in queue_adapter.ACTIVE_STATUSES:
+        eligible_status = not bool(getattr(entry, "cancel_requested", False)) and (
+            allow_unclaimable_active or bool(queue_entry_is_claimable(entry))
+        )
+    else:
+        eligible_status = status in queue_adapter.TERMINAL_STATUSES
+    return bool(
+        eligible_status
+        and queue_adapter.queue_entry_app_name(entry) == queue_adapter.QUEUE_APP_NAME
+        and _normalize_text(getattr(entry, "task_kind", "")) == queue_adapter.QUEUE_TASK_KIND
+        and _normalize_text(getattr(entry, "engine", "")) == queue_adapter.QUEUE_ENGINE
+        and queue_adapter.queue_entry_reaction_dir(entry) == str(reaction_dir)
+        and queue_adapter.queue_entry_priority(entry) == priority
+        and queue_adapter.queue_entry_force(entry) is force
+        and _normalize_text(
+            queue_adapter.queue_entry_metadata(entry).get(QUEUE_SUBMISSION_INTENT_KEY)
+        )
+        == submission_intent_token
+    )
+
+
+def recover_exact_reaction_dir_submission(
+    *,
+    reaction_dir: str,
+    priority: int,
+    config_path: str,
+    max_cores: int | None = None,
+    max_memory_gb: int | None = None,
+    force: bool = False,
+    repo_root: str | None = None,
+    submission_intent_token: str = "",
+    allow_unclaimable_active: bool = False,
+    raise_on_lookup_error: bool = False,
+) -> dict[str, Any] | None:
+    """Adopt the exact ORCA row created by a replayed workflow submission."""
+    del max_cores, max_memory_gb, repo_root
+    from orca_auto.orca.commands.run_inp_context import WorkerStatusInfo
+    from orca_auto.orca.config import load_config
+    from orca_auto.orca.queue import adapter as queue_adapter
+
+    request = _submit_request(
+        reaction_dir=reaction_dir,
+        priority=priority,
+        config_path=config_path,
+        max_cores=None,
+        max_memory_gb=None,
+        force=force,
+        submission_intent_token=submission_intent_token,
+    )
+    if not request.submission_intent_token:
+        return None
+    try:
+        cfg = load_config(request.args.config)
+        allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
+        resolved_reaction_dir = Path(reaction_dir).expanduser().resolve()
+        entries = queue_adapter.list_queue(allowed_root)
+    except (OSError, ValueError):
+        if raise_on_lookup_error:
+            raise
+        return None
+    matches = [
+        entry
+        for entry in entries
+        if _entry_matches_submission_request(
+            entry,
+            reaction_dir=resolved_reaction_dir,
+            priority=request.priority,
+            force=request.force,
+            submission_intent_token=request.submission_intent_token,
+            allow_unclaimable_active=allow_unclaimable_active,
+        )
+    ]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        return _deferred_payload(
+            command_argv=request.command_argv,
+            reaction_dir=str(resolved_reaction_dir),
+            stderr=(
+                "multiple queue entries match the workflow submission intent; "
+                "refusing to choose an ambiguous queue generation"
+            ),
+            reason="ambiguous_submission_recovery",
+        )
+    entry = matches[0]
+    entry_status = queue_adapter.queue_entry_status(entry)
+    return _queued_payload(
+        command_argv=request.command_argv,
+        result=_RecoveredQueuedSubmission(
+            entry=entry,
+            reaction_dir=resolved_reaction_dir,
+            worker_info=WorkerStatusInfo(
+                detail=(
+                    f"recovered exact {entry_status} queue entry after workflow submission replay"
+                )
+            ),
+        ),
+        priority=request.priority,
+        force=request.force,
+    )
 
 
 def _failure_payload_for_submission(
@@ -286,6 +441,7 @@ def submit_reaction_dir(
     max_memory_gb: int | None = None,
     force: bool = False,
     repo_root: str | None = None,
+    submission_intent_token: str = "",
 ) -> dict[str, Any]:
     del repo_root
     request = _submit_request(
@@ -295,6 +451,7 @@ def submit_reaction_dir(
         max_cores=max_cores,
         max_memory_gb=max_memory_gb,
         force=force,
+        submission_intent_token=submission_intent_token,
     )
     try:
         submission = _submit_reaction_dir_to_queue(request.args)
@@ -331,6 +488,8 @@ def cancel_target(
             stderr="queue cancel requires a target",
         )
 
+    allowed_root: Path | None = None
+    matched: Any | None = None
     try:
         entry_with_root = _find_orca_cancel_entry(request)
         if entry_with_root is None:
@@ -342,12 +501,52 @@ def cancel_target(
         allowed_root, matched = entry_with_root
         updated = _request_orca_cancel(allowed_root, matched)
         if updated is None:
-            return _failure_payload(
-                command_argv=request.command_argv,
-                stderr=f"queue target already terminal: {request.target}",
-                reason="already_terminal",
+            from orca_auto.orca.queue import adapter as queue_adapter
+
+            current = queue_adapter.get_entry_by_id(
+                allowed_root,
+                queue_adapter.queue_entry_id(matched),
             )
+            if (
+                current is None
+                or not _cancel_request_targets_exact_entry(request, current)
+                or not queue_adapter.queue_entries_same_publication_generation(current, matched)
+                or queue_adapter.queue_entry_status(current) != "cancelled"
+            ):
+                return _failure_payload(
+                    command_argv=request.command_argv,
+                    stderr=f"queue target already terminal: {request.target}",
+                    reason="already_terminal",
+                )
+            updated = current
     except Exception as exc:  # noqa: BLE001
+        if allowed_root is not None and matched is not None:
+            try:
+                from orca_auto.orca.queue import adapter as queue_adapter
+
+                current = queue_adapter.get_entry_by_id(
+                    allowed_root,
+                    queue_adapter.queue_entry_id(matched),
+                )
+                committed = bool(
+                    current is not None
+                    and queue_adapter.queue_entries_same_publication_generation(current, matched)
+                    and (
+                        queue_adapter.queue_entry_status(current) == "cancelled"
+                        or (
+                            queue_adapter.queue_entry_status(current)
+                            in queue_adapter.ACTIVE_STATUSES
+                            and bool(getattr(current, "cancel_requested", False))
+                        )
+                    )
+                )
+                if committed:
+                    return _cancel_success_payload(
+                        command_argv=request.command_argv,
+                        updated=current,
+                    )
+            except Exception:  # noqa: BLE001
+                pass
         return _failure_payload(
             command_argv=request.command_argv,
             stderr=f"{exc.__class__.__name__}: {exc}",
@@ -362,10 +561,12 @@ def _submission_deps() -> _submission.SubmissionDeps:
         normalize_text=_normalize_text,
         now_utc_iso=now_utc_iso,
         resolve_workflow_workspace=resolve_workflow_workspace,
+        acquire_workflow_lock=acquire_workflow_lock,
         load_workflow_payload=load_workflow_payload,
         write_workflow_payload=write_workflow_payload,
         sync_workflow_registry=sync_workflow_registry,
         submit_reaction_dir=submit_reaction_dir,
+        recover_exact_reaction_dir_submission=recover_exact_reaction_dir_submission,
     )
 
 
@@ -392,10 +593,12 @@ def _cancellation_deps() -> _cancellation.CancellationDeps:
         normalize_text=_normalize_text,
         now_utc_iso=now_utc_iso,
         resolve_workflow_workspace=resolve_workflow_workspace,
+        acquire_workflow_lock=acquire_workflow_lock,
         load_workflow_payload=load_workflow_payload,
         write_workflow_payload=write_workflow_payload,
         sync_workflow_registry=sync_workflow_registry,
         cancel_target=cancel_target,
+        recover_exact_reaction_dir_submission=recover_exact_reaction_dir_submission,
     )
 
 

@@ -118,9 +118,9 @@ class TestWriteLockPayload(unittest.TestCase):
             observed: list[str] = []
             real_link = os.link
 
-            def spy_link(src: str, dst: str) -> None:
+            def spy_link(src: str, dst: str, *, follow_symlinks: bool = True) -> None:
                 observed.append(Path(src).read_text(encoding="utf-8"))
-                real_link(src, dst)
+                real_link(src, dst, follow_symlinks=follow_symlinks)
 
             with patch("orca_auto.core.utils.process_lock.os.link", side_effect=spy_link):
                 self.assertTrue(_write_lock_payload(lock_path, json.dumps({"pid": 111})))

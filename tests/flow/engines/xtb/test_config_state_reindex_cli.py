@@ -59,8 +59,8 @@ def test_load_config_parses_defaults_and_normalizes_values(tmp_path: Path) -> No
                     "auto_organize_on_terminal": "yes",
                 },
                 "resources": {
-                    "max_cores_per_task": "0",
-                    "max_memory_gb_per_task": "-5",
+                    "max_cores_per_task": "1",
+                    "max_memory_gb_per_task": "1",
                 },
                 "messenger": {
                     "telegram": {
@@ -137,7 +137,7 @@ def test_helper_normalizers_cover_string_and_int_defaults() -> None:
     assert as_int("not-a-number", 7) == 7
 
 
-def test_load_config_applies_defaults_for_missing_and_non_mapping_optional_sections(
+def test_load_config_applies_defaults_for_missing_and_legacy_optional_sections(
     tmp_path: Path,
 ) -> None:
     workflow_root = tmp_path / "workflow_root"
@@ -147,11 +147,7 @@ def test_load_config_applies_defaults_for_missing_and_non_mapping_optional_secti
         yaml.safe_dump(
             {
                 "runs_root": str(workflow_root),
-                "workflow": {
-                    "paths": [],
-                },
                 "behavior": [],
-                "resources": [],
                 "telegram": [],
             },
             sort_keys=False,

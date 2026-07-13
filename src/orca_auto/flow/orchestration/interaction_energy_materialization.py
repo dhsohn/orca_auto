@@ -30,6 +30,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engine_process import ensure_confined_directory
 from orca_auto.core.statuses import STATUS_COMPLETED, is_stage_terminal_status
 from orca_auto.core.utils.coercion import normalize_text, safe_int
 from orca_auto.flow._orca_stage_materialization import build_materialized_orca_stage, safe_name
@@ -42,6 +43,7 @@ from orca_auto.flow.manifest import (
     interaction_energy_config_fingerprint,
     normalize_interaction_energy_block,
     normalize_rmsd_dedup_block,
+    require_int,
     validate_interaction_energy_state_balance,
 )
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
@@ -100,6 +102,23 @@ def _request_parameters(payload: dict[str, Any]) -> dict[str, Any]:
         return {}
     parameters = request.get("parameters")
     return parameters if isinstance(parameters, dict) else {}
+
+
+def _record_interaction_energy_error(
+    payload: dict[str, Any],
+    *,
+    reason: str,
+    message: str,
+) -> None:
+    metadata = payload.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        return
+    metadata["workflow_error"] = {
+        "status": "failed",
+        "scope": "conformer_screening_interaction_energy",
+        "reason": reason,
+        "message": message,
+    }
 
 
 def _orca_reaction_dir(stage: Mapping[str, Any]) -> Path | None:
@@ -402,6 +421,11 @@ def append_interaction_energy_stages_impl(
     try:
         normalized_cfg = normalize_interaction_energy_block(cfg)
     except ValueError:
+        _record_interaction_energy_error(
+            payload,
+            reason="invalid_interaction_energy_config",
+            message="The durable interaction-energy configuration is invalid.",
+        )
         logger.warning(
             "interaction_energy fan-out skipped: invalid durable configuration", exc_info=True
         )
@@ -412,6 +436,11 @@ def append_interaction_energy_stages_impl(
     try:
         rmsd_cfg = normalize_rmsd_dedup_block(params.get("rmsd_dedup"))
     except ValueError:
+        _record_interaction_energy_error(
+            payload,
+            reason="invalid_rmsd_config",
+            message="The durable RMSD configuration required for interaction energy is invalid.",
+        )
         logger.warning(
             "interaction_energy fan-out skipped: invalid durable RMSD configuration",
             exc_info=True,
@@ -435,17 +464,27 @@ def append_interaction_energy_stages_impl(
         )
         return False
 
-    complex_charge = safe_int(params.get("charge", 0), default=0)
-    complex_multiplicity = safe_int(params.get("multiplicity", 1), default=1)
     try:
+        complex_charge = require_int(params.get("charge", 0), field="charge")
+        complex_multiplicity = require_int(
+            params.get("multiplicity", 1), field="multiplicity", minimum=1
+        )
         validate_interaction_energy_state_balance(
             cfg,
             complex_charge=complex_charge,
             complex_multiplicity=complex_multiplicity,
         )
     except ValueError:
+        _record_interaction_energy_error(
+            payload,
+            reason="invalid_electronic_state",
+            message=(
+                "The complex and fragment electronic states required for interaction energy "
+                "are invalid or incompatible."
+            ),
+        )
         logger.warning(
-            "interaction_energy fan-out skipped: fragment electronic states are incompatible",
+            "interaction_energy fan-out skipped: electronic states are invalid or incompatible",
             exc_info=True,
         )
         return False
@@ -520,7 +559,11 @@ def append_interaction_energy_stages_impl(
     existing = _existing_interaction_keys(orca_stages)
     orca_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="orca")
     allowed_root = orca_paths["allowed_root"]
-    source_root = allowed_root / _INTERACTION_SOURCE_DIRNAME
+    source_root = ensure_confined_directory(
+        allowed_root,
+        allowed_root / _INTERACTION_SOURCE_DIRNAME,
+        label="interaction-energy source directory",
+    )
     created = 0
 
     for stage_id, _stage, block in representatives:

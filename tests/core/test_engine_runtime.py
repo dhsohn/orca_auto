@@ -6,7 +6,13 @@ from typing import Any
 
 from orca_auto.core.engines.definitions import EngineDefinition, EngineQueueFunctions
 from orca_auto.core.queue.engine.runtime import EngineQueueRuntime
-from orca_auto.core.queue.internal_engine import InternalEngineQueueModule, InternalEngineSpec
+from orca_auto.core.queue.internal_engine import (
+    InternalEngineQueueModule,
+    InternalEngineQueueRuntime,
+    InternalEngineSpec,
+    entry_matches_engine_identity,
+    own_engine_accept_entry,
+)
 from orca_auto.core.queue.internal_engine.worker_deps import (
     InternalEngineQueueWorkerDeps,
     InternalEngineQueueWorkerFacadeBindings,
@@ -41,6 +47,89 @@ def _runtime(
         dequeue_next=lambda root: dict(dequeued or {}).get(root),
         worker_pid_file_name="engine_worker.pid",
     )
+
+
+def _internal_entry(engine: str, queue_id: str) -> SimpleNamespace:
+    task_kind = {
+        "orca": "orca_run_inp",
+        "crest": "crest_conformer_search",
+        "xtb": "xtb_opt",
+    }.get(engine, f"{engine}_run")
+    return SimpleNamespace(
+        queue_id=queue_id,
+        app_name=f"orca_auto_{engine}",
+        task_id=f"{engine}-task-{queue_id}",
+        task_kind=task_kind,
+        engine=engine,
+        metadata={"job_type": "opt"} if engine == "xtb" else {},
+        status=SimpleNamespace(value="pending"),
+    )
+
+
+def test_internal_engine_identity_rejects_conflicting_present_labels() -> None:
+    accept_xtb = own_engine_accept_entry("xtb")
+
+    own_entry = SimpleNamespace(
+        queue_id="q-xtb",
+        app_name="orca_auto_xtb",
+        task_id="xtb-1",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={"job_type": "opt"},
+    )
+    assert accept_xtb(own_entry)
+
+    for overrides in (
+        {"app_name": "orca_auto_crest"},
+        {"engine": "crest"},
+        {"queue_id": ""},
+        {"task_id": ""},
+        {"task_kind": ""},
+        {"task_kind": "crest_conformer_search"},
+        {"app_name": "", "engine": ""},
+    ):
+        assert not accept_xtb(SimpleNamespace(**{**vars(own_entry), **overrides}))
+
+    assert not entry_matches_engine_identity(
+        SimpleNamespace(
+            queue_id="q-crest-legacy",
+            app_name="orca_auto_crest",
+            task_id="crest-1",
+            task_kind="conformer_search",
+            engine="crest",
+        ),
+        "crest",
+    )
+
+
+def test_internal_engine_runtime_lists_only_exact_identity_rows(tmp_path: Path) -> None:
+    queue_root = tmp_path / "queue"
+    queue_root.mkdir()
+    own_entry = SimpleNamespace(
+        queue_id="q-own",
+        app_name="orca_auto_xtb",
+        task_id="xtb-1",
+        task_kind="xtb_sp",
+        engine="xtb",
+        metadata={"job_type": "sp"},
+    )
+    foreign_entry = SimpleNamespace(
+        queue_id="q-foreign",
+        app_name="orca_auto_crest",
+        task_id="crest-1",
+        task_kind="crest_conformer_search",
+        engine="crest",
+    )
+    unlabeled_entry = SimpleNamespace(queue_id="q-legacy")
+    runtime = InternalEngineQueueRuntime.create(
+        spec=InternalEngineSpec(engine="xtb", worker_pid_file_name="xtb_worker.pid"),
+        load_config=lambda value: value,
+        runtime_roots_for_cfg=lambda _cfg: (queue_root,),
+        list_queue=lambda _root: [foreign_entry, unlabeled_entry, own_entry],
+        dequeue_next=lambda _root: own_entry,
+    )
+
+    assert runtime.queue_entries_with_roots(SimpleNamespace()) == [(queue_root, own_entry)]
 
 
 def test_engine_queue_runtime_combines_roots_entries_and_next_entry(
@@ -823,7 +912,7 @@ def test_internal_engine_queue_module_preserves_worker_facade_contract(
             max_concurrent=1,
         )
     )
-    entry = SimpleNamespace(queue_id="queue-1", status=SimpleNamespace(value="pending"))
+    entry = _internal_entry("xtb", "queue-1")
     deps = build_internal_engine_queue_worker_deps(
         InternalEngineQueueWorkerFacadeCallbacks(
             release_slot=record("release_slot"),
@@ -925,7 +1014,7 @@ def test_internal_engine_queue_module_create_from_definition_uses_queue_contract
 ) -> None:
     queue_root = tmp_path / "queue-root"
     queue_root.mkdir()
-    entry = SimpleNamespace(queue_id="queue-1", status=SimpleNamespace(value="pending"))
+    entry = _internal_entry("demo", "queue-1")
     cfg = SimpleNamespace(
         runtime=SimpleNamespace(
             allowed_root=str(tmp_path),
@@ -1017,8 +1106,8 @@ def test_internal_engine_queue_module_create_from_definition_accepts_queue_overr
     override_root = tmp_path / "override-root"
     default_root.mkdir()
     override_root.mkdir()
-    default_entry = SimpleNamespace(queue_id="default", status=SimpleNamespace(value="pending"))
-    override_entry = SimpleNamespace(queue_id="override", status=SimpleNamespace(value="pending"))
+    default_entry = _internal_entry("demo", "default")
+    override_entry = _internal_entry("demo", "override")
     cfg = SimpleNamespace(
         runtime=SimpleNamespace(
             allowed_root=str(tmp_path),

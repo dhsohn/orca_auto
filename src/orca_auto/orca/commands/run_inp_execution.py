@@ -10,6 +10,7 @@ from orca_auto.core.admission import (
     complete_slot_engine_process,
     get_slot,
 )
+from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.messaging import build_channel
 from orca_auto.core.utils.process_lock import parse_lock_info
 from orca_auto.core.utils.process_tracking import active_run_lock_pid
@@ -25,6 +26,7 @@ from ._helpers import ORCA_GENERATED_INP_RE, RETRY_INP_RE
 
 
 def select_latest_inp(reaction_dir: Path) -> Path:
+    resolved_reaction_dir = reaction_dir.expanduser().resolve()
     all_candidates = list(reaction_dir.glob("*.inp"))
     if not all_candidates:
         raise ValueError(f"No .inp file found in: {reaction_dir}")
@@ -36,6 +38,14 @@ def select_latest_inp(reaction_dir: Path) -> Path:
     ]
     if not candidates:
         candidates = all_candidates
+    candidates = [
+        require_confined_regular_file(
+            resolved_reaction_dir,
+            candidate,
+            label="ORCA selected input",
+        )
+        for candidate in candidates
+    ]
     candidates.sort(key=lambda p: (p.stat().st_mtime_ns, p.name.lower()), reverse=True)
     if len(candidates) > 1:
         logging.getLogger(__name__).warning(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from os import PathLike
 from pathlib import Path
 
@@ -383,6 +384,72 @@ def test_reserve_slot_honors_capacity_limit_and_raise_variant(
     assert store.reserve_slot_or_raise(tmp_path, 2, source="queue-4") == "slot_second"
     with pytest.raises(store.AdmissionLimitReachedError):
         store.reserve_slot_or_raise(tmp_path, 1, source="queue-3")
+
+
+def test_reserve_slot_retries_collision_and_mutates_only_selected_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_deterministic_liveness(monkeypatch)
+    generated = iter(["slot_same", "slot_same", "slot_unique"])
+    monkeypatch.setattr(store, "timestamped_token", lambda _prefix: next(generated))
+
+    first = store.reserve_slot(tmp_path, 2, source="first", state="reserved")
+    second = store.reserve_slot(tmp_path, 2, source="second", state="reserved")
+
+    assert first == "slot_same"
+    assert second == "slot_unique"
+    assert [slot.token for slot in store.list_all_slots(tmp_path)] == [first, second]
+
+    activated = store.activate_reserved_slot(tmp_path, second, source="activated-second")
+    assert activated is not None and activated.token == second
+    slots = store.list_all_slots(tmp_path)
+    assert [(slot.token, slot.source, slot.state) for slot in slots] == [
+        (first, "first", "reserved"),
+        (second, "activated-second", "active"),
+    ]
+
+    assert store.release_slot(tmp_path, first) is True
+    [remaining] = store.list_all_slots(tmp_path)
+    assert remaining.token == second
+    assert remaining.source == "activated-second"
+
+
+def test_reserve_slot_permanent_collision_preserves_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_deterministic_liveness(monkeypatch)
+    assert store.reserve_slot(tmp_path, 2, source="first") == "slot_fixed"
+    admission_path = tmp_path / store.ADMISSION_FILE_NAME
+    original = admission_path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="unique admission slot token"):
+        store.reserve_slot(tmp_path, 2, source="second")
+
+    assert admission_path.read_bytes() == original
+    [remaining] = store.list_all_slots(tmp_path)
+    assert remaining.token == "slot_fixed"
+    assert remaining.source == "first"
+
+
+def test_save_slots_rejects_duplicate_tokens_before_replace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_deterministic_liveness(monkeypatch)
+    token = store.reserve_slot(tmp_path, 2, source="first")
+    assert token == "slot_fixed"
+    admission_path = tmp_path / store.ADMISSION_FILE_NAME
+    original = admission_path.read_bytes()
+    [slot] = store.list_all_slots(tmp_path)
+
+    with pytest.raises(store.AdmissionStoreCorruptError, match="duplicate token"):
+        store._save_slots(tmp_path, [slot, replace(slot, source="wrong-owner")])
+
+    assert admission_path.read_bytes() == original
+    [remaining] = store.list_all_slots(tmp_path)
+    assert remaining.source == "first"
 
 
 def test_reserve_activate_and_release_slot_lifecycle(

@@ -24,7 +24,7 @@ def _write_slow_fake_xtb(path: Path) -> None:
         """#!/usr/bin/env bash
 set -euo pipefail
 sleep 1.5
-printf '1\\nfake xtb optimized\\nH 0.0 0.0 0.0\\n' > xtbopt.xyz
+cp "$1" xtbopt.xyz
 : > .xtboptok
 printf '{"total energy": -4.2, "electronic energy": -4.4}\\n' > xtbout.json
 printf 'charges\\n' > charges

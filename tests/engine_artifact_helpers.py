@@ -25,6 +25,7 @@ def artifact_payload(
     queue_id: str = "",
     app_name: str = "",
     task_id: str = "",
+    generation: str = "",
     primary_path: str = "",
     selected_xyz_path: str = "",
     resource_request: Mapping[str, Any] | None = None,
@@ -48,6 +49,7 @@ def artifact_payload(
             dir=job_dir,
             app_name=app_name,
             task_id=task_id or job_id,
+            generation=generation,
         ),
         status=EngineArtifactStatus(state=status, reason=reason, exit_code=exit_code),
         input=EngineArtifactInput(

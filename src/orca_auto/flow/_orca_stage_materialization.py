@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,12 +10,19 @@ from orca_auto.core.app_ids import (
     ORCA_AUTO_CLI_MODULE,
     ORCA_AUTO_ORCA_SUBMITTER,
 )
+from orca_auto.core.engine_process import (
+    atomic_write_confined_bytes,
+    ensure_confined_directory,
+    require_confined_regular_file,
+)
+from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.utils import atomic_write_json, normalize_text
 from orca_auto.core.utils.coercion import safe_int
 
 from . import _orca_stage_payloads
 from .contracts import WorkflowArtifactRef, WorkflowStage, WorkflowStageInput, WorkflowTask
 from .hessian_utils import HessianConversionError, write_orca_hess_from_xtb
+from .manifest import require_int
 from .xyz_utils import write_orca_ready_xyz
 
 
@@ -37,13 +45,7 @@ def maxcore_mb_per_core(*, max_memory_gb: int, max_cores: int) -> int:
 
 
 def _positive_multiplicity(value: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"multiplicity must be an integer >= 1. got={value!r}") from exc
-    if parsed < 1:
-        raise ValueError(f"multiplicity must be >= 1. got={parsed}")
-    return parsed
+    return require_int(value, field="multiplicity", minimum=1)
 
 
 def render_orca_input(
@@ -57,6 +59,7 @@ def render_orca_input(
     default_route_line: str = "r2scan-3c TightSCF",
     geom_block: str = "",
 ) -> str:
+    parsed_charge = require_int(charge, field="charge")
     parsed_multiplicity = _positive_multiplicity(multiplicity)
     geom_lines = [*geom_block.splitlines(), ""] if geom_block.strip() else []
     return "\n".join(
@@ -69,7 +72,7 @@ def render_orca_input(
             f"%maxcore {maxcore_mb_per_core(max_memory_gb=max_memory_gb, max_cores=max_cores)}",
             "",
             *geom_lines,
-            f"* xyzfile {int(charge)} {parsed_multiplicity} {xyz_filename}",
+            f"* xyzfile {parsed_charge} {parsed_multiplicity} {xyz_filename}",
             "",
         ]
     )
@@ -209,6 +212,8 @@ class OrcaStageMaterializationRequest:
     extra_source_payload: dict[str, Any] | None = None
     geom_block: str = ""
     inhess_source_path: str = ""
+    source_artifact_identity: dict[str, Any] | None = None
+    inhess_source_identity: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -248,6 +253,23 @@ class OrcaStageBuildContext:
     def materialization_request(
         self, *, extra_source_payload: dict[str, Any] | None = None
     ) -> OrcaStageMaterializationRequest:
+        source_identity_raw = self.candidate.metadata.get("output_identity")
+        hessian_identity_raw = self.candidate.metadata.get("hessian_identity")
+        hessian_provenance = self.candidate.metadata.get("hessian_provenance")
+        source_identity = (
+            dict(source_identity_raw) if isinstance(source_identity_raw, dict) else None
+        )
+        hessian_identity = (
+            dict(hessian_identity_raw) if isinstance(hessian_identity_raw, dict) else None
+        )
+        if isinstance(hessian_provenance, dict) and hessian_provenance.get("status") == "completed":
+            if (
+                source_identity is None
+                or source_identity.get("sha256") != hessian_provenance.get("ts_guess_sha256")
+                or hessian_identity is None
+                or hessian_identity.get("sha256") != hessian_provenance.get("hessian_sha256")
+            ):
+                raise ValueError("TS geometry and Hessian terminal identities do not agree")
         return OrcaStageMaterializationRequest(
             workspace_dir=self.workspace_dir,
             stage_root_name=self.stage_root_name,
@@ -265,6 +287,8 @@ class OrcaStageBuildContext:
             extra_source_payload=extra_source_payload,
             geom_block=self.geom_block,
             inhess_source_path=self.inhess_source_path,
+            source_artifact_identity=source_identity,
+            inhess_source_identity=hessian_identity,
         )
 
 
@@ -313,13 +337,19 @@ def _candidate_source_frame_index(candidate: WorkflowStageInput) -> int:
 def materialize_orca_stage_from_request(
     request: OrcaStageMaterializationRequest,
 ) -> OrcaStageMaterialization:
-    source_xyz = Path(request.source_artifact_path).expanduser().resolve()
-    if not source_xyz.exists():
-        raise FileNotFoundError(f"ORCA stage source artifact not found: {source_xyz}")
+    source_xyz = Path(request.source_artifact_path).expanduser()
+    source_xyz = require_confined_regular_file(
+        source_xyz.parent,
+        source_xyz,
+        label="ORCA stage source artifact",
+    )
 
     stage_dir = _orca_stage_dir(request)
-    reaction_dir = stage_dir
-    reaction_dir.mkdir(parents=True, exist_ok=True)
+    reaction_dir = ensure_confined_directory(
+        request.workspace_dir,
+        stage_dir,
+        label="ORCA stage directory",
+    )
 
     target_xyz, geometry_metadata = _materialize_orca_geometry(
         request=request,
@@ -377,6 +407,7 @@ def _materialize_orca_geometry(
         target_path=target_xyz,
         candidate_kind=request.candidate_kind,
         source_frame_index=request.source_frame_index,
+        source_identity=request.source_artifact_identity,
     )
     return target_xyz, dict(geometry_metadata)
 
@@ -405,12 +436,32 @@ def _materialize_inhess_file(
     source_path = Path(source_text).expanduser()
     target_hess = reaction_dir / f"{Path(request.inp_filename).stem}.hess"
     try:
+        hessian_payload: bytes | None = None
+        if request.inhess_source_identity is not None:
+            identity = request.inhess_source_identity
+            resolved_source = source_path.resolve()
+            if str(identity.get("path") or "") != str(resolved_source):
+                raise HessianConversionError("xTB Hessian identity names another artifact")
+            hessian_payload = read_stable_regular_file(
+                resolved_source,
+                require_single_link=True,
+            )
+            if (
+                identity.get("size_bytes") != len(hessian_payload)
+                or identity.get("sha256") != hashlib.sha256(hessian_payload).hexdigest()
+            ):
+                raise HessianConversionError(
+                    "xTB Hessian no longer matches its terminal content identity"
+                )
         write_orca_hess_from_xtb(
             xtb_hessian_path=source_path,
             xyz_path=target_xyz,
             target_path=target_hess,
+            hessian_payload=hessian_payload,
         )
-    except (HessianConversionError, OSError) as exc:
+    except (HessianConversionError, OSError, ValueError) as exc:
+        if request.inhess_source_identity is not None:
+            raise ValueError("Verified xTB Hessian could not be materialized safely") from exc
         return None, {"source_path": source_text, "error": str(exc)}
     return target_hess, {"source_path": source_text, "hess_path": str(target_hess)}
 
@@ -423,7 +474,9 @@ def _write_orca_input_file(
     geom_block: str | None = None,
 ) -> Path:
     target_inp = reaction_dir / request.inp_filename
-    target_inp.write_text(
+    atomic_write_confined_bytes(
+        reaction_dir,
+        target_inp,
         render_orca_input(
             route_line=request.route_line,
             charge=request.charge,
@@ -432,8 +485,8 @@ def _write_orca_input_file(
             max_memory_gb=request.max_memory_gb,
             xyz_filename=xyz_filename,
             geom_block=request.geom_block if geom_block is None else geom_block,
-        ),
-        encoding="utf-8",
+        ).encode("utf-8"),
+        label="ORCA materialized input",
     )
     return target_inp
 

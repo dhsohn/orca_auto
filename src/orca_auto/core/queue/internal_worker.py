@@ -10,7 +10,7 @@ from .engine.lifecycle import EngineWorkerLifecycle, run_engine_worker_lifecycle
 
 DependencyT = TypeVar("DependencyT", covariant=True)
 
-CancelRequested = Callable[[str, str], bool]
+CancelRequested = Callable[..., bool]
 CancellableProcessWaiter = Callable[..., Any]
 DependencyBuilder = Callable[..., DependencyT]
 DependencyFactory = Callable[[], Any]
@@ -308,7 +308,12 @@ def queue_cancel_requested(
     queue_root: str | Path,
     entry: Any,
 ) -> bool:
-    return queue_deps.get_cancel_requested(str(queue_root), str(entry.queue_id))
+    return queue_deps.get_cancel_requested(
+        str(queue_root),
+        str(entry.queue_id),
+        expected_entry=entry,
+        expected_task_id=str(entry.task_id),
+    )
 
 
 def queue_cancel_callback(

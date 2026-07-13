@@ -21,6 +21,40 @@ from tests.flow.engines.xtb.factories import (
 )
 
 
+def _record_committed_terminal(
+    calls: list[tuple[object, object, object | None]],
+    root: object,
+    queue_id: object,
+    metadata_update: object | None = None,
+    **kwargs: object,
+) -> bool:
+    before_update_fn = kwargs.get("before_update_fn")
+    if callable(before_update_fn):
+        before_update_fn()
+    calls.append((root, queue_id, metadata_update))
+    return True
+
+
+def _commit_terminal(*args: object, **kwargs: object) -> bool:
+    before_update_fn = kwargs.get("before_update_fn")
+    if callable(before_update_fn):
+        before_update_fn()
+    return True
+
+
+def _record_committed_terminal_error(
+    calls: list[tuple[object, object, object, object | None]],
+    root: object,
+    queue_id: object,
+    error: object,
+    metadata_update: object | None = None,
+    **kwargs: object,
+) -> bool:
+    _commit_terminal(root, queue_id, **kwargs)
+    calls.append((root, queue_id, error, metadata_update))
+    return True
+
+
 @pytest.mark.parametrize(
     ("entry", "expected"),
     [
@@ -68,7 +102,7 @@ def test_execute_queue_entry_processes_completed_job(
     monkeypatch.setattr(
         queue_cmd,
         "start_xtb_job",
-        lambda _cfg, *, job_dir, selected_input_xyz: SimpleNamespace(
+        lambda _cfg, *, job_dir, selected_input_xyz, execution_snapshot: SimpleNamespace(
             process=SimpleNamespace(poll=lambda: 0)
         ),
     )
@@ -76,8 +110,8 @@ def test_execute_queue_entry_processes_completed_job(
     monkeypatch.setattr(
         queue_cmd,
         "mark_completed",
-        lambda root, queue_id, metadata_update=None: completed_calls.append(
-            (root, queue_id, metadata_update)
+        lambda root, queue_id, metadata_update=None, **kwargs: _record_committed_terminal(
+            completed_calls, root, queue_id, metadata_update, **kwargs
         ),
     )
     monkeypatch.setattr(
@@ -100,7 +134,7 @@ def test_execute_queue_entry_processes_completed_job(
         (
             cfg.runtime.allowed_root,
             "queue-1",
-            {"candidate_count": 1, "job_type": "path_search"},
+            {"candidate_count": 1},
         )
     ]
 
@@ -110,7 +144,7 @@ def test_execute_queue_entry_processes_completed_job(
     assert report is not None
     assert state["status"]["state"] == "completed"
     assert report["status"]["reason"] == "xtb_ok"
-    assert report["engine_payload"]["selected_candidate_paths"] == [str(selected_xyz)]
+    assert report["engine_payload"]["selected_candidate_paths"] == [str(selected_xyz.resolve())]
 
 
 def test_execute_queue_entry_marks_runner_errors_failed(
@@ -143,8 +177,10 @@ def test_execute_queue_entry_marks_runner_errors_failed(
     monkeypatch.setattr(
         queue_cmd,
         "mark_failed",
-        lambda root, queue_id, error, metadata_update=None: failed_calls.append(
-            (root, queue_id, error, metadata_update)
+        lambda root, queue_id, error, metadata_update=None, **kwargs: (
+            _record_committed_terminal_error(
+                failed_calls, root, queue_id, error, metadata_update, **kwargs
+            )
         ),
     )
     monkeypatch.setattr(queue_cmd, "notify_job_started", lambda *args, **kwargs: True)
@@ -159,7 +195,7 @@ def test_execute_queue_entry_marks_runner_errors_failed(
             cfg.runtime.allowed_root,
             "queue-1",
             "runner_error:boom",
-            {"candidate_count": 0, "job_type": "path_search"},
+            {"candidate_count": 0},
         )
     ]
 
@@ -199,7 +235,9 @@ def test_execute_queue_entry_cancels_running_job(
     monkeypatch.setattr(
         queue_cmd,
         "start_xtb_job",
-        lambda _cfg, *, job_dir, selected_input_xyz: SimpleNamespace(process=_Process()),
+        lambda _cfg, *, job_dir, selected_input_xyz, execution_snapshot: SimpleNamespace(
+            process=_Process()
+        ),
     )
 
     def terminate(process: _Process) -> bool:
@@ -227,8 +265,10 @@ def test_execute_queue_entry_cancels_running_job(
     monkeypatch.setattr(
         queue_cmd,
         "mark_cancelled",
-        lambda root, queue_id, error, metadata_update=None: cancelled_calls.append(
-            (root, queue_id, error, metadata_update)
+        lambda root, queue_id, error, metadata_update=None, **kwargs: (
+            _record_committed_terminal_error(
+                cancelled_calls, root, queue_id, error, metadata_update, **kwargs
+            )
         ),
     )
     monkeypatch.setattr(queue_cmd, "notify_job_started", lambda *args, **kwargs: True)
@@ -251,7 +291,7 @@ def test_execute_queue_entry_cancels_running_job(
             cfg.runtime.allowed_root,
             "queue-1",
             "cancel_requested",
-            {"candidate_count": 0, "job_type": "path_search"},
+            {"candidate_count": 0},
         )
     ]
 
@@ -308,8 +348,10 @@ def test_execute_queue_entry_cancels_before_start_and_updates_terminal_metadata(
     monkeypatch.setattr(
         queue_cmd,
         "mark_cancelled",
-        lambda root, queue_id, error, metadata_update=None: cancelled_calls.append(
-            (root, queue_id, error, metadata_update)
+        lambda root, queue_id, error, metadata_update=None, **kwargs: (
+            _record_committed_terminal_error(
+                cancelled_calls, root, queue_id, error, metadata_update, **kwargs
+            )
         ),
     )
 
@@ -339,7 +381,7 @@ def test_execute_queue_entry_cancels_before_start_and_updates_terminal_metadata(
             cfg.runtime.allowed_root,
             "queue-1",
             "cancel_requested",
-            {"candidate_count": 0, "job_type": "path_search"},
+            {"candidate_count": 0},
         )
     ]
 
@@ -365,7 +407,11 @@ def test_process_dequeued_entry_uses_queue_cancel_callback(
     entry = _make_entry(job_dir, selected_xyz)
     cancelled_calls: list[tuple[object, object, object, object | None]] = []
 
-    monkeypatch.setattr(queue_cmd, "get_cancel_requested", lambda _root, _queue_id: True)
+    monkeypatch.setattr(
+        queue_cmd,
+        "get_cancel_requested",
+        lambda _root, _queue_id, **_kwargs: True,
+    )
     monkeypatch.setattr(
         queue_cmd,
         "start_xtb_job",
@@ -384,7 +430,7 @@ def test_process_dequeued_entry_uses_queue_cancel_callback(
     monkeypatch.setattr(
         queue_cmd,
         "mark_cancelled",
-        lambda root, queue_id, error, metadata_update=None: cancelled_calls.append(
+        lambda root, queue_id, error, metadata_update=None, **_kwargs: cancelled_calls.append(
             (root, queue_id, error, metadata_update)
         ),
     )
@@ -405,7 +451,7 @@ def test_process_dequeued_entry_uses_queue_cancel_callback(
             cfg.runtime.allowed_root,
             "queue-1",
             "cancel_requested",
-            {"candidate_count": 0, "job_type": "path_search"},
+            {"candidate_count": 0},
         )
     ]
 
@@ -426,7 +472,7 @@ def test_execute_queue_entry_processes_ranking_job_without_auto_organizing(
         status="completed",
         reason="completed",
         job_type="ranking",
-        reaction_key="ranking-job",
+        reaction_key=str(entry.metadata["reaction_key"]),
         candidate_paths=(str(selected_xyz),),
     )
     finished_calls: list[dict[str, object]] = []
@@ -441,7 +487,7 @@ def test_execute_queue_entry_processes_ranking_job_without_auto_organizing(
         "start_xtb_job",
         lambda *args, **kwargs: pytest.fail("start_xtb_job should not be called for ranking"),
     )
-    monkeypatch.setattr(queue_cmd, "mark_completed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(queue_cmd, "mark_completed", _commit_terminal)
     monkeypatch.setattr(queue_cmd, "notify_job_started", lambda *args, **kwargs: True)
 
     def fake_notify_job_finished(cfg_obj: object, **kwargs: object) -> bool:
