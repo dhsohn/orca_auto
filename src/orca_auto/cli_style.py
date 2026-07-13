@@ -72,7 +72,10 @@ _ACTIVITY_STATUS_COLORS = {
     _s.STATUS_FAILED: RED,
     _s.STATUS_CANCEL_FAILED: RED,
     _s.STATUS_SUBMISSION_FAILED: RED,
+    _s.STATUS_REPAIR_BLOCKED: RED,
     _s.STATUS_CANCELLED: MAGENTA,
+    # ORCA run results can report this bare failure variant.
+    "error": RED,
 }
 
 

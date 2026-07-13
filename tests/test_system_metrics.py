@@ -16,14 +16,16 @@ def test_parse_cpu_times_fails_closed_on_bad_input() -> None:
     assert sm.parse_cpu_times("cpu  1 2 3") is None  # too few fields
     assert sm.parse_cpu_times("intr 1 2 3 4 5") is None  # no cpu line
     assert sm.parse_cpu_times("cpu  0 0 0 0 0") is None  # zero total
+    assert sm.parse_cpu_times("cpu  10 -1 3 4 5") is None
 
 
 def test_cpu_percent_between_is_clamped_and_guards_nonpositive_delta() -> None:
     assert sm.cpu_percent_between(CpuTimes(100, 80), CpuTimes(200, 130)) == 50.0
     # No elapsed jiffies -> undefined -> None.
     assert sm.cpu_percent_between(CpuTimes(100, 80), CpuTimes(100, 80)) is None
-    # Idle moving faster than total (counter quirk) clamps to 0, never negative.
-    assert sm.cpu_percent_between(CpuTimes(100, 50), CpuTimes(200, 250)) == 0.0
+    # Counter rollback or idle advancing beyond total is not a valid sample.
+    assert sm.cpu_percent_between(CpuTimes(100, 50), CpuTimes(200, 40)) is None
+    assert sm.cpu_percent_between(CpuTimes(100, 50), CpuTimes(200, 250)) is None
 
 
 def test_parse_meminfo_uses_available_and_reports_bytes() -> None:
@@ -37,6 +39,8 @@ def test_parse_meminfo_uses_available_and_reports_bytes() -> None:
 def test_parse_meminfo_fails_closed() -> None:
     assert sm.parse_meminfo("MemTotal: 1000 kB\n") is None  # no MemAvailable
     assert sm.parse_meminfo("MemTotal: 0 kB\nMemAvailable: 0 kB\n") is None  # zero total
+    assert sm.parse_meminfo("MemTotal: 100 kB\nMemAvailable: 101 kB\n") is None
+    assert sm.parse_meminfo("MemTotal: 100 bytes\nMemAvailable: 50 bytes\n") is None
     assert sm.parse_meminfo("garbage") is None
 
 
@@ -46,6 +50,7 @@ def test_parse_loadavg() -> None:
     assert sm.parse_loadavg("a b c") is None
     # ``float()`` parses these, but a non-finite load is corrupt -> fail closed.
     assert sm.parse_loadavg("inf nan 1.0") is None
+    assert sm.parse_loadavg("-1.0 0.0 1.0") is None
 
 
 def test_sampler_cpu_percent_needs_two_samples() -> None:
@@ -90,6 +95,7 @@ def test_parse_pid_stat_handles_comm_with_spaces_and_parens() -> None:
 def test_parse_pid_stat_fails_closed() -> None:
     assert sm.parse_pid_stat("no closing paren") is None
     assert sm.parse_pid_stat("1 (x) R 1 2") is None  # too few fields after comm
+    assert sm.parse_pid_stat("1 (x) R 1 10 10 0 10 0 0 0 0 0 -1 1 0 0 20 0 1 0 1 1 1") is None
 
 
 def _write_stat(proc_root, pid, pgrp, utime, stime, rss_pages) -> None:
@@ -119,14 +125,42 @@ def test_read_process_group_usage_buckets_by_pgid(tmp_path) -> None:
 def test_process_group_sampler_delta_and_forgetting() -> None:
     reads = iter([{100: (1000, 4096)}, {100: (1000 + 400, 4096)}])
     sampler = sm.ProcessGroupSampler(read_usage=lambda pgids: next(reads), clk_tck=100)
-    first = sampler.sample([100], now=0.0)
-    assert first[100].cpu_percent is None and first[100].rss_bytes == 4096
+    first = sampler.sample({"job": 100}, now=0.0)
+    assert first["job"].cpu_percent is None and first["job"].rss_bytes == 4096
     # 400 jiffies / 100 tck = 4 cpu-seconds over 2 wall-seconds -> 200% (multi-core).
-    second = sampler.sample([100], now=2.0)
-    assert second[100].cpu_percent == 200.0
+    second = sampler.sample({"job": 100}, now=2.0)
+    assert second["job"].cpu_percent == 200.0
     # A group with no live member drops out entirely (fail closed).
     gone = sm.ProcessGroupSampler(read_usage=lambda pgids: {}, clk_tck=100)
-    assert gone.sample([100], now=0.0) == {}
+    assert gone.sample({"job": 100}, now=0.0) == {}
+
+
+def test_process_group_sampler_keys_history_by_full_identity_and_clears_empty_frame() -> None:
+    calls: list[set[int]] = []
+    reads = iter(
+        [
+            {100: (1000, 4096)},
+            {},
+            {100: (1200, 8192)},
+            {100: (1400, 8192)},
+        ]
+    )
+
+    def _read(pgids) -> dict[int, tuple[int, int]]:
+        calls.append(set(pgids))
+        return next(reads)
+
+    sampler = sm.ProcessGroupSampler(read_usage=_read, clk_tck=100)
+    old_identity = ("boot-A", 100, 100, 10)
+    new_identity = ("boot-A", 100, 100, 20)
+
+    assert sampler.sample({old_identity: 100}, now=0.0)[old_identity].cpu_percent is None
+    assert sampler.sample({}, now=1.0) == {}
+    first_new = sampler.sample({new_identity: 100}, now=2.0)
+    assert first_new[new_identity].cpu_percent is None
+    second_new = sampler.sample({new_identity: 100}, now=3.0)
+    assert second_new[new_identity].cpu_percent == 200.0
+    assert calls == [{100}, set(), {100}, {100}]
 
 
 def test_read_process_group_usage_finds_own_group_on_linux() -> None:

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from orca_auto import activity_rendering as _activity_rendering
-from orca_auto import cli_common, cli_style
+from orca_auto import cli_common, cli_style, terminal_table
 from orca_auto.activity_presenter import (
     QueueListPresentationDeps,
     QueueListPresentationRequest,
@@ -32,7 +32,7 @@ from orca_auto.core import statuses as _s
 from orca_auto.core.activity_icons import activity_status_icon
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.activity import cancel_activity, clear_activities, list_activities
-from orca_auto.job_resource import live_job_pgids
+from orca_auto.job_resource import live_job_processes
 from orca_auto.system_metrics import (
     JobMetrics,
     ProcessGroupSampler,
@@ -64,7 +64,7 @@ class _QueueListRequest:
 class QueueCliDeps:
     """Optional overrides for the `queue list --watch` loop (test seams)."""
 
-    emit_queue_list_once: Callable[..., int] | None = None
+    emit_queue_list_once: Callable[[Any, _QueueListRequest], int] | None = None
     sleep: Callable[[float], None] | None = None
     system_metrics_sampler: SystemMetricsSampler | None = None
     job_metrics_provider: Callable[[str | None], dict[str, JobMetrics]] | None = None
@@ -130,7 +130,7 @@ _QUEUE_RAIL = _QUEUE_RAIL_GLYPH + " "
 # queued glyph, so a bucket glyph illustrates its group rather than matching every
 # row in it exactly.
 _PENDING_STATUSES = frozenset(_s.QUEUE_ACTIVE_STATUSES - {_s.STATUS_RUNNING})
-_FAILED_STATUSES = frozenset(_s.FAILED_STATUSES | {"error"})
+_FAILED_STATUSES = frozenset(_s.FAILED_STATUSES | {"error", _s.STATUS_REPAIR_BLOCKED})
 _SUMMARY_ORDER = ("running", "pending", "done", "failed", "cancelled", "other")
 _SUMMARY_META: dict[str, tuple[str, str]] = {
     "running": ("running", _s.STATUS_RUNNING),
@@ -161,11 +161,12 @@ def _queue_header_band_lines(
     display_rows: Sequence[tuple[int, dict[str, Any]]],
     *,
     active_simulations: int,
+    max_width: int | None = None,
 ) -> list[str]:
     """Build the TTY summary band: a title line plus a status-count line."""
 
     counts = Counter(_summary_status_group(item.get("status")) for _indent, item in display_rows)
-    segments: list[str] = []
+    segments: list[tuple[str, str | None]] = []
     for key in _SUMMARY_ORDER:
         count = counts.get(key, 0)
         if count <= 0:
@@ -173,28 +174,115 @@ def _queue_header_band_lines(
         label, representative = _SUMMARY_META[key]
         text = f"{activity_status_icon(representative)} {count} {label}"
         color = cli_style.status_color(representative)
-        segments.append(cli_style.paint(text, color) if color else text)
-    title = cli_style.paint(_QUEUE_RAIL, cli_style.CYAN) + cli_style.paint(
-        "orca_auto queue", cli_style.BOLD
+        segments.append((text, color))
+
+    active_plain = f"{int(active_simulations)} active"
+    title_candidates = (
+        (
+            cli_style.paint(_QUEUE_RAIL, cli_style.CYAN)
+            + cli_style.paint("orca_auto queue", cli_style.BOLD)
+            + "   "
+            + cli_style.paint(active_plain, cli_style.BOLD),
+            f"{_QUEUE_RAIL}orca_auto queue   {active_plain}",
+        ),
+        (
+            cli_style.paint(_QUEUE_RAIL, cli_style.CYAN)
+            + cli_style.paint("queue", cli_style.BOLD)
+            + "   "
+            + cli_style.paint(active_plain, cli_style.BOLD),
+            f"{_QUEUE_RAIL}queue   {active_plain}",
+        ),
+        (cli_style.paint(active_plain, cli_style.BOLD), active_plain),
     )
-    active_text = cli_style.paint(f"{int(active_simulations)} active", cli_style.BOLD)
-    lines = [f"{title}   {active_text}"]
+    title = next(
+        (
+            styled
+            for styled, plain in title_candidates
+            if max_width is None or _queue_display_width(plain) <= max_width
+        ),
+        cli_style.paint(
+            terminal_table.truncate(active_plain, max_width=max(0, max_width or 0)),
+            cli_style.BOLD,
+        ),
+    )
+    lines = [title]
     if segments:
-        lines.append("  " + cli_style.paint(" · ", cli_style.DIM).join(segments))
+        rows: list[list[tuple[str, str | None]]] = []
+        current: list[tuple[str, str | None]] = []
+        for segment in segments:
+            candidate = [*current, segment]
+            candidate_plain = "  " + " · ".join(text for text, _color in candidate)
+            if (
+                current
+                and max_width is not None
+                and _queue_display_width(candidate_plain) > max_width
+            ):
+                rows.append(current)
+                current = [segment]
+            else:
+                current = candidate
+        if current:
+            rows.append(current)
+
+        separator = cli_style.paint(" · ", cli_style.DIM)
+        for row in rows:
+            plain = "  " + " · ".join(text for text, _color in row)
+            if max_width is not None and _queue_display_width(plain) > max_width:
+                # Only possible when one segment is wider than the terminal.
+                # Keep a visible, bounded prefix instead of dropping the bucket.
+                text, color = row[0]
+                bounded = terminal_table.truncate(f"  {text}", max_width=max_width)
+                lines.append(cli_style.paint(bounded, color) if color else bounded)
+                continue
+            styled = [cli_style.paint(text, color) if color else text for text, color in row]
+            lines.append("  " + separator.join(styled))
     return lines
 
 
-def _watch_banner_line(spinner: str, interval: float, *, now: Any | None = None) -> str:
+def _watch_banner_line(
+    spinner: str,
+    interval: float,
+    *,
+    now: Any | None = None,
+    max_width: int | None = None,
+) -> str:
     # A non-interactive terminal keeps the historical plain banner byte-for-byte
     # (no spinner/clock), so piped, `--no-color`, and `FORCE_COLOR`-piped `--watch`
     # output is unchanged; the spinner and clock are interactive-only affordances.
     if not _layout_interactive():
         return f"orca_auto queue list — refresh every {interval:g}s · Ctrl-C to exit"
     clock = (now or _queue_table_now()).strftime("%H:%M:%S")
-    left = cli_style.paint(f"{spinner} live", cli_style.CYAN) + cli_style.label(
-        f" · refresh {interval:g}s · Ctrl-C to exit"
+    lead = cli_style.paint(f"{spinner} live", cli_style.CYAN)
+    candidates = (
+        (
+            lead
+            + cli_style.label(f" · refresh {interval:g}s · Ctrl-C to exit")
+            + f"   {cli_style.label(clock)}",
+            f"{spinner} live · refresh {interval:g}s · Ctrl-C to exit   {clock}",
+        ),
+        (
+            lead + cli_style.label(f" · refresh {interval:g}s · Ctrl-C to exit"),
+            f"{spinner} live · refresh {interval:g}s · Ctrl-C to exit",
+        ),
+        (
+            lead + cli_style.label(f" · {interval:g}s · Ctrl-C"),
+            f"{spinner} live · {interval:g}s · Ctrl-C",
+        ),
+        (
+            lead + cli_style.label(f" · {interval:g}s"),
+            f"{spinner} live · {interval:g}s",
+        ),
     )
-    return f"{left}   {cli_style.label(clock)}"
+    for styled, plain in candidates:
+        if max_width is None or _queue_display_width(plain) <= max_width:
+            return styled
+    return cli_style.paint(
+        terminal_table.truncate(
+            f"{spinner} live",
+            max_width=max(0, max_width or 0),
+        ),
+        cli_style.CYAN,
+    )
 
 
 def _resource_bar(fraction: float, *, width: int = 12) -> str:
@@ -211,32 +299,91 @@ def _resource_bar(fraction: float, *, width: int = 12) -> str:
     )
 
 
-def _resource_gauge_line(metrics: SystemMetrics) -> str | None:
+def _resource_gauge_segments(
+    metrics: SystemMetrics,
+    *,
+    bars: bool,
+) -> list[tuple[str, str]]:
+    """Return ``(styled, plain)`` resource segments for width fitting."""
+
+    segments: list[tuple[str, str]] = []
+    if metrics.cpu_percent is not None:
+        value = f"{metrics.cpu_percent:3.0f}%"
+        if bars:
+            fraction = max(0.0, min(1.0, metrics.cpu_percent / 100.0))
+            filled = round(fraction * 12)
+            plain_bar = "█" * filled + "░" * (12 - filled)
+            segments.append(
+                (
+                    f"{cli_style.label('CPU')} {_resource_bar(fraction)} {value}",
+                    f"CPU {plain_bar} {value}",
+                )
+            )
+        else:
+            segments.append((f"{cli_style.label('CPU')} {value}", f"CPU {value}"))
+    if metrics.mem_used_bytes is not None and metrics.mem_total_bytes:
+        fraction = metrics.mem_used_bytes / metrics.mem_total_bytes
+        used_gb = metrics.mem_used_bytes / 1024**3
+        total_gb = metrics.mem_total_bytes / 1024**3
+        value = f"{used_gb:.1f}/{total_gb:.1f}G"
+        if bars:
+            normalized = max(0.0, min(1.0, fraction))
+            filled = round(normalized * 12)
+            plain_bar = "█" * filled + "░" * (12 - filled)
+            segments.append(
+                (
+                    f"{cli_style.label('RAM')} {_resource_bar(fraction)} {value}",
+                    f"RAM {plain_bar} {value}",
+                )
+            )
+        else:
+            segments.append((f"{cli_style.label('RAM')} {value}", f"RAM {value}"))
+    if metrics.load1 is not None and metrics.load5 is not None and metrics.load15 is not None:
+        value = f"{metrics.load1:.2f} {metrics.load5:.2f} {metrics.load15:.2f}"
+        segments.append((f"{cli_style.label('load')} {value}", f"load {value}"))
+    return segments
+
+
+def _resource_gauge_line(
+    metrics: SystemMetrics,
+    *,
+    max_width: int | None = None,
+) -> str | None:
     """Render the TTY system CPU/RAM/load gauge line, or ``None`` if empty.
 
     Each field is included only when the underlying ``/proc`` source was
     available, so a partial read (e.g. load without meminfo) still renders.
     """
 
-    segments: list[str] = []
-    if metrics.cpu_percent is not None:
-        segments.append(
-            f"{cli_style.label('CPU')} {_resource_bar(metrics.cpu_percent / 100.0)}"
-            f" {metrics.cpu_percent:3.0f}%"
-        )
-    if metrics.mem_used_bytes is not None and metrics.mem_total_bytes:
-        fraction = metrics.mem_used_bytes / metrics.mem_total_bytes
-        used_gb = metrics.mem_used_bytes / 1024**3
-        total_gb = metrics.mem_total_bytes / 1024**3
-        segments.append(
-            f"{cli_style.label('RAM')} {_resource_bar(fraction)} {used_gb:.1f}/{total_gb:.1f}G"
-        )
-    if metrics.load1 is not None and metrics.load5 is not None and metrics.load15 is not None:
-        load = f"{metrics.load1:.2f} {metrics.load5:.2f} {metrics.load15:.2f}"
-        segments.append(f"{cli_style.label('load')} {load}")
-    if not segments:
+    full = _resource_gauge_segments(metrics, bars=True)
+    compact = _resource_gauge_segments(metrics, bars=False)
+    if not full:
         return None
-    return "  " + "   ".join(segments)
+
+    def render(parts: Sequence[tuple[str, str]]) -> tuple[str, str]:
+        return (
+            "  " + "   ".join(styled for styled, _plain in parts),
+            "  " + "   ".join(plain for _styled, plain in parts),
+        )
+
+    candidates = [
+        full,
+        compact,
+        [part for part in full if not part[1].startswith("load ")],
+        [part for part in compact if not part[1].startswith("load ")],
+        *[[part] for part in compact],
+    ]
+    seen: set[str] = set()
+    for parts in candidates:
+        if not parts:
+            continue
+        styled, plain = render(parts)
+        if plain in seen:
+            continue
+        seen.add(plain)
+        if max_width is None or _queue_display_width(plain) <= max_width:
+            return styled
+    return None
 
 
 def _default_job_metrics_provider() -> Callable[[str | None], dict[str, JobMetrics]]:
@@ -249,12 +396,19 @@ def _default_job_metrics_provider() -> Callable[[str | None], dict[str, JobMetri
     sampler = ProcessGroupSampler()
 
     def provide(shared_config: str | None) -> dict[str, JobMetrics]:
-        pgid_by_queue = live_job_pgids(shared_config)
-        if not pgid_by_queue:
-            return {}
-        metrics = sampler.sample(pgid_by_queue.values(), now=time.monotonic())
+        identities = live_job_processes(shared_config)
+        metrics = sampler.sample(
+            {identity: identity.pgid for identity in identities},
+            now=time.monotonic(),
+        )
+        # Revalidate after the /proc scan. A leader that exited or changed
+        # identity during sampling is omitted instead of attributing a newly
+        # reused numeric process group to the prior queue row.
+        validated_after_scan = set(live_job_processes(shared_config)) if identities else set()
         return {
-            queue_id: metrics[pgid] for queue_id, pgid in pgid_by_queue.items() if pgid in metrics
+            identity.queue_id: metrics[identity]
+            for identity in identities
+            if identity in metrics and identity in validated_after_scan
         }
 
     return provide
@@ -269,31 +423,28 @@ def _fmt_rss(rss_bytes: int) -> str:
 
 
 def _row_job_metric(item: dict[str, Any], job_metrics: dict[str, JobMetrics]) -> JobMetrics | None:
-    # Only per-job rows carry engine metrics; guarding on kind keeps a workflow
-    # parent whose id happens to collide with a queue id from being annotated
-    # with a child's usage.
-    if normalize_text(item.get("kind")).lower() != "job":
+    # Bind only a currently-running job row to its canonical queue id. Aliases
+    # are intentionally ignored: a run/workflow id collision must never attach
+    # another queue's process metrics, and a terminal transition between the
+    # process sample and activity read must drop the stale annotation.
+    if (
+        normalize_text(item.get("kind")).lower() != "job"
+        or _s.normalize_status(item.get("status")) != _s.STATUS_RUNNING
+    ):
         return None
     metadata = item.get("metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
-    candidates = (
-        item.get("activity_id"),
-        metadata.get("queue_id"),
-        metadata.get("run_id"),
-        item.get("cancel_target"),
-    )
-    for candidate in candidates:
-        key = normalize_text(candidate)
-        if key and key in job_metrics:
-            return job_metrics[key]
-    return None
+    queue_id = normalize_text(metadata.get("queue_id"))
+    return job_metrics.get(queue_id) if queue_id else None
 
 
-def _job_annotation(metrics: JobMetrics) -> str:
+def _job_annotation(metrics: JobMetrics, *, styled: bool = True) -> str:
     parts: list[str] = []
+    cpu_label = cli_style.label("cpu") if styled else "cpu"
+    ram_label = cli_style.label("ram") if styled else "ram"
     if metrics.cpu_percent is not None:
-        parts.append(f"{cli_style.label('cpu')} {metrics.cpu_percent:.0f}%")
-    parts.append(f"{cli_style.label('ram')} {_fmt_rss(metrics.rss_bytes)}")
+        parts.append(f"{cpu_label} {metrics.cpu_percent:.0f}%")
+    parts.append(f"{ram_label} {_fmt_rss(metrics.rss_bytes)}")
     return "  " + "  ".join(parts)
 
 
@@ -344,8 +495,12 @@ def _queue_list_presentation_request(
 
 
 def _queue_list_request(args: Any) -> _QueueListRequest:
+    explicit_config = _effective_shared_config_text(args) or None
     return _QueueListRequest(
-        shared_config=_effective_shared_config_text(args) or None,
+        # Resolve one effective config up front so the activity rows, global
+        # active count, and per-job metrics can never discover different repo
+        # defaults in an alternate editable checkout.
+        shared_config=cli_common._discover_shared_config_path(explicit_config),
         limit=int(getattr(args, "limit", 0) or 0),
         engine_values=normalize_activity_filter_values(getattr(args, "engine", None)),
         status_values=normalize_activity_filter_values(getattr(args, "status", None)),
@@ -366,7 +521,7 @@ def _cmd_queue_list_clear(args: Any, request: _QueueListRequest) -> int:
         return 1
 
     payload = clear_activities(
-        workflow_root=_workflow_root_for_args(args),
+        workflow_root=_workflow_root_for_args(args, config_path=request.shared_config),
         crest_config=request.shared_config,
         xtb_config=request.shared_config,
         orca_config=request.shared_config,
@@ -381,7 +536,7 @@ def _cmd_queue_list_clear(args: Any, request: _QueueListRequest) -> int:
 
 def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]:
     return list_activities(
-        workflow_root=_workflow_root_for_args(args),
+        workflow_root=_workflow_root_for_args(args, config_path=request.shared_config),
         limit=0,
         refresh=bool(getattr(args, "refresh", False)),
         crest_config=request.shared_config,
@@ -442,9 +597,19 @@ def _print_queue_list_text(
     tty = _layout_interactive()
     term_width = _queue_terminal_width()
     rail_width = _queue_display_width(_QUEUE_RAIL)
+    annotation_width = 0
+    if tty and job_metrics:
+        annotation_width = max(
+            (
+                _queue_display_width(_job_annotation(metric, styled=False))
+                for item in filtered_activities
+                if (metric := _row_job_metric(item, job_metrics)) is not None
+            ),
+            default=0,
+        )
     max_width = term_width
     if tty and term_width is not None:
-        max_width = max(0, term_width - rail_width)
+        max_width = max(0, term_width - rail_width - annotation_width)
     presentation = queue_list_text_presentation(
         payload,
         request=_queue_list_presentation_request(
@@ -465,7 +630,9 @@ def _print_queue_list_text(
     # ``active_simulations: N`` line that piped/scripted/`--json` consumers parse.
     if tty:
         for band_line in _queue_header_band_lines(
-            display_rows, active_simulations=presentation.active_simulations
+            display_rows,
+            active_simulations=presentation.active_simulations,
+            max_width=term_width,
         ):
             print(band_line)
     else:
@@ -505,7 +672,14 @@ def _print_queue_list_text(
         if job_metrics:
             metric = _row_job_metric(item, job_metrics)
             if metric is not None:
-                body = body + _job_annotation(metric)
+                annotated = body + _job_annotation(metric)
+                if term_width is None or (
+                    _queue_display_width(line)
+                    + (rail_width if show_rail else 0)
+                    + _queue_display_width(_job_annotation(metric, styled=False))
+                    <= term_width
+                ):
+                    body = annotated
         print(body)
     return 0
 
@@ -537,7 +711,7 @@ def _watch_queue_list(
     deps: QueueCliDeps | None = None,
 ) -> int:
     interval = max(0.5, float(getattr(args, "interval", 2.0) or 2.0))
-    emit_once = (deps.emit_queue_list_once if deps else None) or _emit_queue_list_once
+    custom_emit_once = deps.emit_queue_list_once if deps else None
     sleep = (deps.sleep if deps else None) or time.sleep
     frames = cli_style.SPINNER_FRAMES
     interactive = _layout_interactive()
@@ -550,22 +724,33 @@ def _watch_queue_list(
         SystemMetricsSampler() if interactive else None
     )
     # The provider carries its own ProcessGroupSampler so CPU% is a delta across
-    # refreshes. Resolve the effective config once (discovering env/default) so
-    # per-job metrics also appear in the no-argument `queue list --watch` flow,
-    # where ``request.shared_config`` is None but a default config is discovered.
-    job_metrics_provider = (deps.job_metrics_provider if deps else None) or (
-        _default_job_metrics_provider() if interactive else None
-    )
-    metrics_config = cli_common._discover_shared_config_path(request.shared_config)
+    # refreshes. The request already carries the one discovered effective config
+    # shared by activity collection, active counting, and metric attribution.
+    job_metrics_provider = None
+    if interactive and custom_emit_once is None:
+        job_metrics_provider = (deps.job_metrics_provider if deps else None) or (
+            _default_job_metrics_provider()
+        )
+    metrics_config = request.shared_config
     tick = 0
     try:
         while True:
             if interactive:
                 cli_style.clear_screen()
-            print(_watch_banner_line(frames[tick % len(frames)], interval))
+            print(
+                _watch_banner_line(
+                    frames[tick % len(frames)],
+                    interval,
+                    max_width=_queue_terminal_width(),
+                )
+            )
             if sampler is not None and interactive:
                 metrics = sampler.sample()
-                gauge = _resource_gauge_line(metrics) if metrics is not None else None
+                gauge = (
+                    _resource_gauge_line(metrics, max_width=_queue_terminal_width())
+                    if metrics is not None
+                    else None
+                )
                 if gauge:
                     print(gauge)
             job_metrics = (
@@ -573,7 +758,12 @@ def _watch_queue_list(
                 if job_metrics_provider is not None and interactive
                 else None
             )
-            emit_once(args, request, job_metrics=job_metrics)
+            if custom_emit_once is not None:
+                # Preserve the released two-argument test-seam contract. The
+                # production renderer alone consumes the new metrics payload.
+                custom_emit_once(args, request)
+            else:
+                _emit_queue_list_once(args, request, job_metrics=job_metrics)
             sleep(interval)
             tick += 1
     except KeyboardInterrupt:

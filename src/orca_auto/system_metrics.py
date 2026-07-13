@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import math
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Hashable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 _PROC = Path("/proc")
+_SampleIdentityT = TypeVar("_SampleIdentityT", bound=Hashable)
+_MAX_PROC_INTEGER = (1 << 64) - 1
 
 try:
     _CLK_TCK = os.sysconf("SC_CLK_TCK")
@@ -67,6 +70,8 @@ def parse_cpu_times(stat_text: str) -> CpuTimes | None:
             values = [int(field) for field in fields[:8]]
         except ValueError:
             return None
+        if any(value < 0 or value > _MAX_PROC_INTEGER for value in values):
+            return None
         total = sum(values)
         idle = values[3] + values[4]
         if total <= 0:
@@ -80,7 +85,7 @@ def cpu_percent_between(previous: CpuTimes, current: CpuTimes) -> float | None:
 
     total_delta = current.total - previous.total
     idle_delta = current.idle - previous.idle
-    if total_delta <= 0:
+    if total_delta <= 0 or idle_delta < 0 or idle_delta > total_delta:
         return None
     percent = (total_delta - idle_delta) / total_delta * 100.0
     return max(0.0, min(100.0, percent))
@@ -88,12 +93,13 @@ def cpu_percent_between(previous: CpuTimes, current: CpuTimes) -> float | None:
 
 def _meminfo_kb(line: str) -> int | None:
     parts = line.split()
-    if len(parts) < 2:
+    if len(parts) < 3 or parts[2] != "kB":
         return None
     try:
-        return int(parts[1])
+        value = int(parts[1])
     except ValueError:
         return None
+    return value if 0 <= value <= _MAX_PROC_INTEGER else None
 
 
 def parse_meminfo(meminfo_text: str) -> tuple[int, int] | None:
@@ -113,7 +119,7 @@ def parse_meminfo(meminfo_text: str) -> tuple[int, int] | None:
             available_kb = _meminfo_kb(line)
         if total_kb is not None and available_kb is not None:
             break
-    if total_kb is None or available_kb is None or total_kb <= 0:
+    if total_kb is None or available_kb is None or total_kb <= 0 or available_kb > total_kb:
         return None
     used_kb = max(0, total_kb - available_kb)
     return used_kb * 1024, total_kb * 1024
@@ -129,7 +135,7 @@ def parse_loadavg(loadavg_text: str) -> tuple[float, float, float] | None:
         return None
     # ``float()`` also accepts ``inf``/``nan``; reject non-finite so a corrupt
     # file degrades to "no load" rather than rendering a bogus literal.
-    if not all(math.isfinite(value) for value in values):
+    if not all(math.isfinite(value) and value >= 0 for value in values):
         return None
     return values
 
@@ -229,12 +235,18 @@ def parse_pid_stat(stat_text: str) -> tuple[int, int, int] | None:
         return None
     try:
         pgrp = int(after[2])
-        cpu_jiffies = int(after[11]) + int(after[12])
+        utime = int(after[11])
+        stime = int(after[12])
         rss_pages = int(after[21])
     except ValueError:
         return None
-    if rss_pages < 0:
-        rss_pages = 0
+    if (
+        pgrp <= 0
+        or any(value < 0 or value > _MAX_PROC_INTEGER for value in (utime, stime, rss_pages))
+        or utime + stime > _MAX_PROC_INTEGER
+    ):
+        return None
+    cpu_jiffies = utime + stime
     return pgrp, cpu_jiffies, rss_pages
 
 
@@ -257,6 +269,8 @@ def read_process_group_usage(
         return {}
     root = proc_root if proc_root is not None else _PROC
     page = page_size if page_size is not None else _PAGE_SIZE
+    if type(page) is not int or page <= 0:
+        return {}
     totals: dict[int, list[int]] = {}
     try:
         entries = list(root.iterdir())
@@ -287,8 +301,10 @@ class ProcessGroupSampler:
     ``cpu_percent`` is a delta measurement (percent of one core, ``top`` style, so
     a multithreaded job can exceed 100%), needing two samples; ``rss_bytes`` is
     instantaneous. The wall clock (``now``) is injected so callers control the
-    interval and tests are deterministic. Process groups that disappear are
-    forgotten so state cannot grow unbounded or reuse a stale delta.
+    interval and tests are deterministic. Callers key each group by a stable,
+    boot-scoped identity. Groups or identities that disappear are forgotten so
+    state cannot grow unbounded or reuse a stale delta when a numeric PGID is
+    recycled.
     """
 
     def __init__(
@@ -301,26 +317,38 @@ class ProcessGroupSampler:
     ) -> None:
         self._read_usage = read_usage
         self._clk_tck = clk_tck if clk_tck is not None else _CLK_TCK
-        self._previous: dict[int, tuple[int, float]] = {}
+        self._previous: dict[Hashable, tuple[int, int, float]] = {}
 
-    def sample(self, pgids: Iterable[int], *, now: float) -> dict[int, JobMetrics]:
-        targets = {int(pgid) for pgid in pgids if pgid and int(pgid) > 0}
-        current = self._read_usage(targets)
-        result: dict[int, JobMetrics] = {}
-        for pgid, (cpu_jiffies, rss_bytes) in current.items():
+    def sample(
+        self,
+        pgids_by_identity: Mapping[_SampleIdentityT, int],
+        *,
+        now: float,
+    ) -> dict[_SampleIdentityT, JobMetrics]:
+        normalized = {
+            identity: pgid
+            for identity, pgid in pgids_by_identity.items()
+            if type(pgid) is int and pgid > 0
+        }
+        current = self._read_usage(set(normalized.values()))
+        result: dict[_SampleIdentityT, JobMetrics] = {}
+        next_previous: dict[Hashable, tuple[int, int, float]] = {}
+        for identity, pgid in normalized.items():
+            usage = current.get(pgid)
+            if usage is None:
+                continue
+            cpu_jiffies, rss_bytes = usage
             cpu_percent: float | None = None
-            previous = self._previous.get(pgid)
-            if previous is not None and self._clk_tck > 0:
-                previous_jiffies, previous_now = previous
+            previous = self._previous.get(identity)
+            if previous is not None and previous[0] == pgid and self._clk_tck > 0:
+                _previous_pgid, previous_jiffies, previous_now = previous
                 elapsed = now - previous_now
                 delta = cpu_jiffies - previous_jiffies
                 if elapsed > 0 and delta >= 0:
                     cpu_percent = max(0.0, (delta / self._clk_tck) / elapsed * 100.0)
-            self._previous[pgid] = (cpu_jiffies, now)
-            result[pgid] = JobMetrics(cpu_percent=cpu_percent, rss_bytes=rss_bytes)
-        # Forget process groups that are no longer present.
-        for pgid in [pgid for pgid in self._previous if pgid not in current]:
-            del self._previous[pgid]
+            next_previous[identity] = (pgid, cpu_jiffies, now)
+            result[identity] = JobMetrics(cpu_percent=cpu_percent, rss_bytes=rss_bytes)
+        self._previous = next_previous
         return result
 
 

@@ -23,6 +23,7 @@ _ACTIVITY_STATUS_ICONS = {
     _s.STATUS_FAILED: "❌",
     _s.STATUS_CANCEL_FAILED: "❌",
     _s.STATUS_SUBMISSION_FAILED: "❌",
+    _s.STATUS_REPAIR_BLOCKED: "❌",
     _s.STATUS_CANCELLED: "⛔",
     # ORCA run results can report a bare "error" status (a failure variant).
     "error": "❌",

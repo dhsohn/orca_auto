@@ -15,7 +15,9 @@ never mis-attributed.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,36 +29,18 @@ from orca_auto.flow.engine_runtime import engine_runtime_paths
 LOGGER = logging.getLogger(__name__)
 
 
-def _engine_process_alive(
-    slot: Any,
-    *,
-    is_alive: Callable[[int], bool],
-    start_ticks: Callable[[int], int | None],
-    boot_id: Callable[[], str | None],
-) -> bool:
-    pid = getattr(slot, "engine_pid", None)
-    if not isinstance(pid, int) or pid <= 0:
-        return False
-    expected_boot = getattr(slot, "engine_process_boot_id", None)
-    if isinstance(expected_boot, str) and expected_boot.strip():
-        observed_boot = boot_id()
-        if (
-            isinstance(observed_boot, str)
-            and observed_boot.strip()
-            and observed_boot.strip() != expected_boot.strip()
-        ):
-            return False  # recorded on a previous boot -> not our live process
-    if not is_alive(pid):
-        return False
-    expected_ticks = getattr(slot, "engine_process_start_ticks", None)
-    if isinstance(expected_ticks, int) and expected_ticks > 0:
-        observed_ticks = start_ticks(pid)
-        if observed_ticks is None or observed_ticks != expected_ticks:
-            return False  # PID reused by a different process
-    return True
+@dataclass(frozen=True)
+class JobProcessIdentity:
+    """Boot-scoped identity for one queue job's engine process group."""
+
+    queue_id: str
+    pid: int
+    pgid: int
+    start_ticks: int
+    boot_id: str
 
 
-def live_job_pgids(
+def live_job_processes(
     shared_config: str | None,
     *,
     engine_runtime_paths_fn: Callable[..., dict[str, Any]] = engine_runtime_paths,
@@ -64,46 +48,80 @@ def live_job_pgids(
     is_alive: Callable[[int], bool] = process_lock.is_process_alive,
     start_ticks: Callable[[int], int | None] = process_lock.process_start_ticks,
     boot_id: Callable[[], str | None] = process_lock.current_boot_id,
-) -> dict[str, int]:
-    """Return ``{queue_id: engine_pgid}`` for slots with a validated-live engine.
+) -> list[JobProcessIdentity]:
+    """Return unambiguous, validated-live engine identities.
 
-    Only process groups whose recorded engine identity still validates are
-    returned, so aggregating ``/proc`` by these PGIDs cannot pick up an unrelated
-    process that reused the id.
+    A passive metric is omitted unless its recorded and observed boot IDs match,
+    the process leader is live, and its start ticks still match. Duplicate queue
+    IDs or process groups are ambiguous and therefore omitted rather than being
+    resolved by iteration order.
     """
 
     config_text = (shared_config or "").strip()
     if not config_text:
-        return {}
+        return []
     try:
         # All engines share one admission root derived from ``runs_root``; the
         # ``engine`` arg only selects which config block supplies it, so "orca"
         # resolves the same root every engine's slots live in.
         runtime_paths = engine_runtime_paths_fn(config_text, engine="orca")
     except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
-        LOGGER.debug("job_pgids_runtime_paths_failed: error=%s", exc)
-        return {}
+        LOGGER.debug("job_processes_runtime_paths_failed: error=%s", exc)
+        return []
     admission_root = runtime_paths.get("admission_root")
     if not isinstance(admission_root, Path):
-        return {}
+        return []
     try:
         slots = read_slots_fn(admission_root)
     except (AdmissionStoreCorruptError, OSError) as exc:
-        LOGGER.debug("job_pgids_read_slots_failed: root=%s error=%s", admission_root, exc)
-        return {}
+        LOGGER.debug("job_processes_read_slots_failed: root=%s error=%s", admission_root, exc)
+        return []
 
-    result: dict[str, int] = {}
+    observed_boot = boot_id()
+    if not isinstance(observed_boot, str) or not observed_boot.strip():
+        return []
+    observed_boot = observed_boot.strip()
+
+    candidates: list[JobProcessIdentity] = []
     for slot in slots:
         queue_id = str(getattr(slot, "queue_id", "") or "").strip()
+        pid = getattr(slot, "engine_pid", None)
         pgid = getattr(slot, "engine_pgid", None)
-        if not queue_id or not isinstance(pgid, int) or pgid <= 0:
-            continue
-        if not _engine_process_alive(
-            slot, is_alive=is_alive, start_ticks=start_ticks, boot_id=boot_id
+        expected_ticks = getattr(slot, "engine_process_start_ticks", None)
+        expected_boot = getattr(slot, "engine_process_boot_id", None)
+        if (
+            not queue_id
+            or type(pid) is not int
+            or pid <= 0
+            or type(pgid) is not int
+            or pgid <= 0
+            or pgid != pid
+            or type(expected_ticks) is not int
+            or expected_ticks <= 0
+            or not isinstance(expected_boot, str)
+            or not expected_boot.strip()
+            or expected_boot.strip() != observed_boot
         ):
             continue
-        result[queue_id] = pgid
-    return result
+        if not is_alive(pid) or start_ticks(pid) != expected_ticks:
+            continue
+        candidates.append(
+            JobProcessIdentity(
+                queue_id=queue_id,
+                pid=pid,
+                pgid=pgid,
+                start_ticks=expected_ticks,
+                boot_id=observed_boot,
+            )
+        )
+
+    queue_counts = Counter(identity.queue_id for identity in candidates)
+    pgid_counts = Counter(identity.pgid for identity in candidates)
+    return [
+        identity
+        for identity in candidates
+        if queue_counts[identity.queue_id] == 1 and pgid_counts[identity.pgid] == 1
+    ]
 
 
-__all__ = ["live_job_pgids"]
+__all__ = ["JobProcessIdentity", "live_job_processes"]

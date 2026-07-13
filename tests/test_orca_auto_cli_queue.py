@@ -9,8 +9,9 @@ from typing import Any
 
 import pytest
 
-from orca_auto import cli_common, cli_style
+from orca_auto import cli_common, cli_style, terminal_table
 from orca_auto import cli_queue as unified_cli
+from orca_auto.job_resource import JobProcessIdentity
 from orca_auto.system_metrics import JobMetrics, SystemMetrics, SystemMetricsSampler
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -20,15 +21,24 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
-def test_cmd_queue_list_watch_loops_until_interrupt() -> None:
-    calls = {"emit": 0}
+def test_cmd_queue_list_watch_loops_until_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"emit": 0, "provider": 0}
 
-    def _emit_once(args: Any, request: Any, **_kwargs: Any) -> int:
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
+
+    def _emit_once(args: Any, request: Any) -> int:
+        del args, request
         calls["emit"] += 1
         return 0
 
     def _sleep(_interval: float) -> None:
         raise KeyboardInterrupt
+
+    def _provider(_config: str | None) -> dict[str, JobMetrics]:
+        calls["provider"] += 1
+        return {}
 
     args = SimpleNamespace(
         action=None,
@@ -42,11 +52,20 @@ def test_cmd_queue_list_watch_loops_until_interrupt() -> None:
         watch=True,
         interval=2.0,
     )
-    deps = unified_cli.QueueCliDeps(emit_queue_list_once=_emit_once, sleep=_sleep)
+    deps = unified_cli.QueueCliDeps(
+        emit_queue_list_once=_emit_once,
+        sleep=_sleep,
+        job_metrics_provider=_provider,
+    )
 
-    assert unified_cli.cmd_queue_list(args, deps=deps) == 0
+    cli_style.set_color_override(True)
+    try:
+        assert unified_cli.cmd_queue_list(args, deps=deps) == 0
+    finally:
+        cli_style.set_color_override(None)
     # One render happened before the (mocked) sleep raised KeyboardInterrupt.
     assert calls["emit"] == 1
+    assert calls["provider"] == 0  # custom emitters stay isolated from the new metrics path
 
 
 def test_watch_banner_plain_without_color_matches_legacy() -> None:
@@ -77,6 +96,23 @@ def test_watch_banner_styled_with_color(monkeypatch: pytest.MonkeyPatch) -> None
     assert "\x1b[" in line
 
 
+def test_watch_banner_compacts_to_terminal_width(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
+    cli_style.set_color_override(True)
+    try:
+        line = unified_cli._watch_banner_line(
+            "⠋",
+            2.0,
+            now=datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC),
+            max_width=40,
+        )
+    finally:
+        cli_style.set_color_override(None)
+    plain = _strip_ansi(line)
+    assert terminal_table.display_width(plain) <= 40
+    assert "⠋ live" in plain and "Ctrl-C" in plain
+
+
 def test_resource_gauge_line_renders_available_fields() -> None:
     metrics = SystemMetrics(
         cpu_percent=58.0,
@@ -97,6 +133,12 @@ def test_resource_gauge_line_renders_available_fields() -> None:
     assert "RAM" in plain and "8.0/32.0G" in plain
     assert "load 1.00 2.00 3.00" in plain
     assert "█" in plain or "░" in plain
+
+    compact = unified_cli._resource_gauge_line(metrics, max_width=60)
+    assert compact is not None
+    compact_plain = _strip_ansi(compact)
+    assert terminal_table.display_width(compact_plain) <= 60
+    assert "CPU" in compact_plain and "RAM" in compact_plain and "load" in compact_plain
 
 
 def test_resource_gauge_line_is_none_when_all_sources_missing() -> None:
@@ -140,7 +182,7 @@ def test_watch_prints_system_resource_gauge_on_tty(
 ) -> None:
     monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
 
-    def _emit(_args: Any, _request: Any, **_kwargs: Any) -> int:
+    def _emit(_args: Any, _request: Any) -> int:
         return 0
 
     def _sleep(_interval: float) -> None:
@@ -173,7 +215,7 @@ def test_watch_prints_system_resource_gauge_on_tty(
 def test_watch_omits_resource_gauge_without_color(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    def _emit(_args: Any, _request: Any, **_kwargs: Any) -> int:
+    def _emit(_args: Any, _request: Any) -> int:
         return 0
 
     def _sleep(_interval: float) -> None:
@@ -313,14 +355,18 @@ def test_watch_uses_discovered_config_for_job_metrics(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # Regression: no-argument `queue list --watch` has request.shared_config=None,
-    # but a default config is discovered; the provider must get the discovered
-    # config so per-job metrics appear.
+    # Regression: no-argument watch must resolve one default config and use it
+    # for both activity collection and per-job metrics.
     monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
     monkeypatch.setattr(
         unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
-    monkeypatch.setattr(unified_cli, "list_activities", lambda **kwargs: _running_job_payload())
+
+    def _list_activities(**kwargs: Any) -> dict[str, Any]:
+        seen["list_config"] = kwargs.get("orca_config")
+        return _running_job_payload()
+
+    monkeypatch.setattr(unified_cli, "list_activities", _list_activities)
     monkeypatch.setattr(
         cli_common, "_discover_shared_config_path", lambda explicit: "/discovered/orca_auto.yaml"
     )
@@ -354,6 +400,32 @@ def test_watch_uses_discovered_config_for_job_metrics(
     finally:
         cli_style.set_color_override(None)
     assert seen.get("config") == "/discovered/orca_auto.yaml"  # discovered, not None
+    assert seen.get("list_config") == seen.get("config")
+
+
+def test_default_job_metrics_provider_clears_empty_and_revalidates_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old = JobProcessIdentity("old", 100, 100, 10, "boot-A")
+    new = JobProcessIdentity("new", 100, 100, 20, "boot-A")
+    live_reads = iter(([old], [old], [], [new], [new]))
+    monkeypatch.setattr(unified_cli, "live_job_processes", lambda _config: next(live_reads))
+
+    calls: list[dict[JobProcessIdentity, int]] = []
+
+    class _ProbeSampler:
+        def sample(self, targets, *, now: float):
+            del now
+            calls.append(dict(targets))
+            return {identity: JobMetrics(cpu_percent=None, rss_bytes=1) for identity in targets}
+
+    monkeypatch.setattr(unified_cli, "ProcessGroupSampler", _ProbeSampler)
+    provider = unified_cli._default_job_metrics_provider()
+
+    assert set(provider("config")) == {"old"}
+    assert provider("config") == {}
+    assert set(provider("config")) == {"new"}
+    assert calls == [{old: 100}, {}, {new: 100}]
 
 
 def test_fmt_rss_units() -> None:
@@ -365,18 +437,74 @@ def test_fmt_rss_units() -> None:
 def test_row_job_metric_matches_only_job_rows() -> None:
     metric = JobMetrics(cpu_percent=780.0, rss_bytes=6 * 1024**3)
     job_metrics = {"q1": metric}
-    assert unified_cli._row_job_metric({"kind": "job", "activity_id": "q1"}, job_metrics) is metric
     assert (
         unified_cli._row_job_metric(
-            {"kind": "job", "activity_id": "wf", "metadata": {"queue_id": "q1"}}, job_metrics
+            {"kind": "job", "status": "running", "metadata": {"queue_id": "q1"}},
+            job_metrics,
         )
         is metric
     )
-    assert unified_cli._row_job_metric({"kind": "job", "activity_id": "other"}, job_metrics) is None
-    # A workflow parent whose id collides with a queue id must NOT be annotated.
+    # Aliases and terminal/workflow rows cannot bind a live queue metric.
     assert (
-        unified_cli._row_job_metric({"kind": "workflow", "activity_id": "q1"}, job_metrics) is None
+        unified_cli._row_job_metric(
+            {"kind": "job", "status": "running", "activity_id": "q1"}, job_metrics
+        )
+        is None
     )
+    assert (
+        unified_cli._row_job_metric(
+            {
+                "kind": "job",
+                "status": "completed",
+                "metadata": {"queue_id": "q1"},
+            },
+            job_metrics,
+        )
+        is None
+    )
+    assert (
+        unified_cli._row_job_metric(
+            {
+                "kind": "workflow",
+                "status": "running",
+                "metadata": {"queue_id": "q1"},
+            },
+            job_metrics,
+        )
+        is None
+    )
+
+
+def test_repair_blocked_is_counted_as_failed() -> None:
+    assert unified_cli._summary_status_group("repair_blocked") == "failed"
+
+
+def test_queue_header_band_respects_terminal_width() -> None:
+    rows = [
+        (0, {"status": status})
+        for status in ("running", "queued", "completed", "repair_blocked", "cancelled", "unknown")
+    ]
+    cli_style.set_color_override(True)
+    try:
+        lines = unified_cli._queue_header_band_lines(
+            rows,
+            active_simulations=3,
+            max_width=40,
+        )
+        narrow_title = unified_cli._queue_header_band_lines(
+            rows,
+            active_simulations=3,
+            max_width=20,
+        )[0]
+    finally:
+        cli_style.set_color_override(None)
+    plain_lines = [_strip_ansi(line) for line in lines]
+    assert all(terminal_table.display_width(line) <= 40 for line in plain_lines)
+    summary = " ".join(plain_lines[1:])
+    assert all(
+        label in summary for label in ("running", "queued", "done", "failed", "cancelled", "other")
+    )
+    assert "3 active" in _strip_ansi(narrow_title)
 
 
 def test_job_annotation_renders_cpu_and_ram() -> None:
@@ -420,6 +548,7 @@ def test_watch_annotates_running_row_with_job_metrics(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
+    monkeypatch.setattr(unified_cli, "_queue_terminal_width", lambda: 80)
     monkeypatch.setattr(
         unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
@@ -453,6 +582,7 @@ def test_watch_annotates_running_row_with_job_metrics(
     out = _strip_ansi(capsys.readouterr().out)
     assert "TD-DFT" in out
     assert "cpu 780%" in out and "ram 6.0G" in out
+    assert max(terminal_table.display_width(line) for line in out.splitlines()) <= 80
 
 
 def test_watch_omits_job_metrics_without_color(
