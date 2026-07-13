@@ -16,9 +16,18 @@ from orca_auto.core.engine_process import (
 from orca_auto.core.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
 from orca_auto.core.queue.engine.input_snapshot import (
     MAX_INPUT_SNAPSHOT_BYTES,
+    cleanup_unowned_input_snapshot_namespace,
+    input_snapshot_namespace_dir,
     read_stable_regular_file,
+    reserve_input_snapshot_namespace,
     snapshot_input_file,
     verify_input_snapshot,
+)
+from orca_auto.core.queue.engine.snapshot_intent import (
+    SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
+    SNAPSHOT_INTENT_TOKEN_KEY,
+    create_snapshot_intent,
+    discard_snapshot_intent_if_generations_absent,
 )
 from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory
 
@@ -275,14 +284,14 @@ def _reference_source(job_dir: Path, selected_inp: Path, reference: str) -> Path
     )
 
 
-def _execution_directory(job_dir: Path) -> Path:
+def _execution_directory(job_dir: Path, generation_name: str) -> Path:
     execution_parent = job_dir / ORCA_EXECUTION_ROOT_NAME
     if execution_parent.is_symlink():
         raise ValueError(f"ORCA execution snapshot root must not be a symlink: {execution_parent}")
     durable_mkdir(execution_parent, mode=0o700, exist_ok=True)
     if not execution_parent.is_dir() or not execution_parent.resolve().is_relative_to(job_dir):
         raise ValueError("ORCA execution snapshot root escapes the job directory")
-    execution_dir = execution_parent / f"generation-{secrets.token_hex(16)}"
+    execution_dir = execution_parent / generation_name
     try:
         durable_mkdir(execution_dir, mode=0o700, exist_ok=False)
     except BaseException:
@@ -299,6 +308,7 @@ def _snapshot_with_budget(
     *,
     role: str,
     consumed_bytes: int,
+    namespace: str,
 ) -> tuple[dict[str, Any], int]:
     size = source.stat().st_size
     if size > MAX_INPUT_SNAPSHOT_BYTES:
@@ -307,7 +317,7 @@ def _snapshot_with_budget(
         )
     if consumed_bytes + size > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
         raise ValueError("ORCA submission inputs exceed the aggregate snapshot size limit")
-    descriptor = snapshot_input_file(job_dir, source, role=role)
+    descriptor = snapshot_input_file(job_dir, source, role=role, namespace=namespace)
     actual_size = int(descriptor.get("size_bytes") or 0)
     if consumed_bytes + actual_size > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
         raise ValueError("ORCA submission inputs exceed the aggregate snapshot size limit")
@@ -386,6 +396,8 @@ def build_orca_execution_snapshot(
     resource_request: Mapping[str, int],
     max_retries: int,
     orca_executable: str | Path,
+    queue_root: str | Path | None = None,
+    snapshot_intent_token: str | None = None,
 ) -> dict[str, Any]:
     """Create an isolated, immutable input tree for one ORCA queue generation."""
 
@@ -408,14 +420,28 @@ def build_orca_execution_snapshot(
     if source_selected.suffix.lower() != ".inp":
         raise ValueError(f"ORCA selected input must be an .inp file: {source_selected}")
 
-    execution_dir = _execution_directory(resolved_job_dir)
+    resolved_queue_root = Path(queue_root or resolved_job_dir).expanduser().resolve()
+    resolved_intent_token = snapshot_intent_token or f"snapshot-{secrets.token_hex(16)}"
+    generation_name = f"generation-{secrets.token_hex(16)}"
+    input_snapshot_namespace = generation_name
+    execution_dir = resolved_job_dir / ORCA_EXECUTION_ROOT_NAME / generation_name
+    input_generation = resolved_job_dir / ".orca_auto_input_snapshots" / input_snapshot_namespace
+    create_snapshot_intent(
+        resolved_queue_root,
+        token=resolved_intent_token,
+        kind="orca_execution_pair",
+        generation_paths=[execution_dir, input_generation],
+    )
     try:
+        execution_dir = _execution_directory(resolved_job_dir, generation_name)
+        reserve_input_snapshot_namespace(resolved_job_dir, input_snapshot_namespace)
         input_snapshots: dict[str, dict[str, Any]] = {}
         selected_descriptor, consumed_bytes = _snapshot_with_budget(
             resolved_job_dir,
             source_selected,
             role="selected_source",
             consumed_bytes=0,
+            namespace=input_snapshot_namespace,
         )
         input_snapshots["selected_source"] = selected_descriptor
         selected_snapshot_path = verify_input_snapshot(
@@ -476,6 +502,7 @@ def build_orca_execution_snapshot(
                 dependency,
                 role=role,
                 consumed_bytes=consumed_bytes,
+                namespace=input_snapshot_namespace,
             )
             input_snapshots[role] = descriptor
             target = _private_input_path(
@@ -521,6 +548,9 @@ def build_orca_execution_snapshot(
         return {
             "version": 1,
             "execution_dir": str(execution_dir),
+            "input_snapshot_namespace": input_snapshot_namespace,
+            SNAPSHOT_INTENT_TOKEN_KEY: resolved_intent_token,
+            SNAPSHOT_INTENT_QUEUE_ROOT_KEY: str(resolved_queue_root),
             "source_selected_inp": str(source_selected),
             "selected_inp": str(bound_selected.resolve()),
             "selected_input_xyz": str(selected_input_xyz or ""),
@@ -533,9 +563,46 @@ def build_orca_execution_snapshot(
             "executable_identities": {"orca": executable},
         }
     except BaseException:
-        shutil.rmtree(execution_dir, ignore_errors=True)
-        fsync_directory(execution_dir.parent)
+        try:
+            cleanup_unowned_input_snapshot_namespace(
+                resolved_job_dir,
+                input_snapshot_namespace,
+            )
+        finally:
+            shutil.rmtree(execution_dir, ignore_errors=True)
+            fsync_directory(execution_dir.parent)
+            discard_snapshot_intent_if_generations_absent(
+                resolved_queue_root,
+                resolved_intent_token,
+            )
         raise
+
+
+def orca_execution_snapshot_generation_dirs(
+    job_dir: str | Path,
+    snapshot: Any,
+) -> tuple[Path, Path]:
+    """Return the exact private generations owned by one ORCA submission."""
+
+    if not isinstance(snapshot, Mapping):
+        raise ValueError("ORCA execution snapshot must be an object")
+    resolved_job_dir = Path(job_dir).expanduser().resolve()
+    raw_execution_dir = Path(str(snapshot.get("execution_dir") or "")).expanduser()
+    execution_dir = raw_execution_dir.resolve()
+    raw_expected_parent = resolved_job_dir / ORCA_EXECUTION_ROOT_NAME
+    expected_parent = raw_expected_parent.resolve()
+    if (
+        raw_expected_parent.is_symlink()
+        or raw_execution_dir.is_symlink()
+        or not execution_dir.is_dir()
+        or execution_dir.parent != expected_parent
+    ):
+        raise ValueError("Queued ORCA execution directory escapes its job directory")
+    namespace = str(snapshot.get("input_snapshot_namespace") or "").strip()
+    if not namespace or namespace != execution_dir.name:
+        raise ValueError("Queued ORCA input snapshot namespace does not match its generation")
+    input_generation = input_snapshot_namespace_dir(resolved_job_dir, namespace)
+    return execution_dir, input_generation
 
 
 def _verify_identity(identity: Any, *, root: Path, label: str) -> Path:
@@ -566,16 +633,10 @@ def verify_orca_execution_snapshot(
     resolved_job_dir = Path(job_dir).expanduser().resolve()
     if not isinstance(snapshot, Mapping) or snapshot.get("version") != 1:
         raise ValueError("Queue metadata 'execution_snapshot' has an unsupported version")
-    raw_execution_dir = Path(str(snapshot.get("execution_dir") or "")).expanduser()
-    execution_dir = raw_execution_dir.resolve()
-    expected_execution_parent = resolved_job_dir / ORCA_EXECUTION_ROOT_NAME
-    if (
-        expected_execution_parent.is_symlink()
-        or raw_execution_dir.is_symlink()
-        or not execution_dir.is_relative_to(expected_execution_parent.resolve())
-        or not execution_dir.is_dir()
-    ):
-        raise ValueError("Queued ORCA execution directory escapes its job directory")
+    execution_dir, input_generation = orca_execution_snapshot_generation_dirs(
+        resolved_job_dir,
+        snapshot,
+    )
 
     raw_inputs = snapshot.get("input_snapshots")
     materialized_inputs = snapshot.get("materialized_inputs")
@@ -599,7 +660,11 @@ def verify_orca_execution_snapshot(
     for role, descriptor in raw_inputs.items():
         if not isinstance(role, str) or not isinstance(descriptor, Mapping):
             raise ValueError("Queued ORCA execution snapshot has an invalid source descriptor")
-        verify_input_snapshot(resolved_job_dir, descriptor, role=role)
+        source_snapshot = verify_input_snapshot(resolved_job_dir, descriptor, role=role)
+        if source_snapshot.parent != input_generation:
+            raise ValueError(
+                f"Queued ORCA source snapshot {role!r} escapes its submission generation"
+            )
     for index, expected_source in enumerate(dependency_paths):
         role = f"dependency_{index:06d}"
         descriptor = raw_inputs[role]
@@ -660,11 +725,24 @@ def cleanup_unowned_orca_execution_snapshot(job_dir: str | Path, snapshot: Any) 
         or execution_dir.parent != expected_parent.resolve()
     ):
         raise ValueError("Refusing to clean an unconfined ORCA execution snapshot")
+    namespace = str(snapshot.get("input_snapshot_namespace") or "").strip()
+    if not namespace or namespace != execution_dir.name:
+        raise ValueError("Refusing to clean a mismatched ORCA execution snapshot pair")
     try:
-        shutil.rmtree(execution_dir)
-    except FileNotFoundError:
-        return
-    fsync_directory(execution_dir.parent)
+        try:
+            cleanup_unowned_input_snapshot_namespace(resolved_job_dir, namespace)
+        finally:
+            try:
+                shutil.rmtree(execution_dir)
+            except FileNotFoundError:
+                pass
+            else:
+                fsync_directory(execution_dir.parent)
+    finally:
+        intent_token = str(snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or "").strip()
+        intent_root = str(snapshot.get(SNAPSHOT_INTENT_QUEUE_ROOT_KEY) or "").strip()
+        if intent_token and intent_root:
+            discard_snapshot_intent_if_generations_absent(intent_root, intent_token)
 
 
 __all__ = [
@@ -673,5 +751,6 @@ __all__ = [
     "ORCA_EXECUTION_ROOT_NAME",
     "build_orca_execution_snapshot",
     "cleanup_unowned_orca_execution_snapshot",
+    "orca_execution_snapshot_generation_dirs",
     "verify_orca_execution_snapshot",
 ]

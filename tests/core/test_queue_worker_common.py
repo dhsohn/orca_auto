@@ -610,8 +610,12 @@ def test_start_background_job_process_builds_child_command(
     ]
 
 
-def test_hooked_pidfile_child_worker_runs_engine_hooks(tmp_path: Path) -> None:
+def test_hooked_pidfile_child_worker_runs_engine_hooks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[tuple[str, tuple[object, ...]]] = []
+    snapshot_reconcile_calls: list[tuple[Path, ...]] = []
     cfg = _cfg(allowed_root=str(tmp_path), admission_root=str(tmp_path / "admission"))
 
     def record_started(
@@ -660,10 +664,48 @@ def test_hooked_pidfile_child_worker_runs_engine_hooks(tmp_path: Path) -> None:
         hooks=hooks,
         worker_pid_file_name="engine.pid",
     )
+
+    def record_snapshot_reconcile(roots: tuple[Path, ...]) -> int:
+        snapshot_reconcile_calls.append(tuple(roots))
+        return 0
+
+    monkeypatch.setattr(
+        worker_process_helpers,
+        "snapshot_runtime_roots_for_cfg",
+        lambda _cfg: (tmp_path,),
+    )
+    monkeypatch.setattr(
+        worker_process_helpers,
+        "reconcile_orphaned_snapshot_generations",
+        record_snapshot_reconcile,
+    )
+    finalized_entries: list[tuple[Path, object]] = []
+    started_entries: list[tuple[Path, object, str]] = []
+    monkeypatch.setattr(
+        worker_process_helpers,
+        "finalize_queued_snapshot_intent",
+        lambda queue_root, queued_entry: finalized_entries.append((queue_root, queued_entry)),
+    )
+
+    def record_start_job(
+        queue_root: Path,
+        queued_entry: object,
+        *,
+        admission_token: str,
+    ) -> bool:
+        started_entries.append((queue_root, queued_entry, admission_token))
+        return True
+
+    worker.__dict__["_start_job"] = record_start_job
     entry = _entry("queue-1")
     root = tmp_path / "queue"
     process = SimpleNamespace(pid=1234)
     job = SimpleNamespace()
+    reserved = SimpleNamespace(queue_root=root, entry=entry, admission_token="slot-reserved")
+
+    assert worker._start_reserved(reserved)
+    assert finalized_entries == [(root, entry)]
+    assert started_entries == [(root, entry, "slot-reserved")]
 
     worker._handle_worker_start_error(root, entry, "slot-1", OSError("boom"))
     assert worker._on_worker_process_started(
@@ -676,6 +718,7 @@ def test_hooked_pidfile_child_worker_runs_engine_hooks(tmp_path: Path) -> None:
     worker._before_shutdown_all(2)
     worker._shutdown_running_job("queue-1", job)
     worker._reconcile_worker_state()
+    worker._reconcile_worker_state()
 
     assert worker.worker_pid_file_name == "engine.pid"
     assert [name for name, _args in calls] == [
@@ -685,8 +728,10 @@ def test_hooked_pidfile_child_worker_runs_engine_hooks(tmp_path: Path) -> None:
         "before_shutdown",
         "shutdown",
         "reconcile",
+        "reconcile",
     ]
     assert all(args[0] is worker for _name, args in calls)
+    assert snapshot_reconcile_calls == [(tmp_path,)]
 
 
 def test_shutdown_all_reaps_finished_job_before_requeuing(tmp_path: Path) -> None:

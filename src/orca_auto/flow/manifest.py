@@ -55,6 +55,7 @@ def optional_positive_float(
 INTERACTION_ENERGY_MAX_FRAGMENTS_CAP = 8
 INTERACTION_ENERGY_MAX_MULTIPLICITY = 100
 INTERACTION_ENERGY_RMSD_GROUPING_VERSION = 2
+MAX_CREST_CANDIDATES = 32
 DEFAULT_INTERACTION_SP_ROUTE_LINE = "! r2scan-3c TightSCF"
 DEFAULT_RMSD_THRESHOLD_ANGSTROM = 0.25
 # A finite default energy window is mandatory: geometry-only threshold grouping
@@ -121,6 +122,15 @@ def require_int(value: Any, *, field: str, minimum: int | None = None) -> int:
 
 
 _require_int = require_int
+
+
+def require_crest_candidate_count(value: Any, *, field: str = "max_crest_candidates") -> int:
+    """Return one bounded CREST handoff count for local and durable workflows."""
+
+    parsed = require_int(value, field=field, minimum=1)
+    if parsed > MAX_CREST_CANDIDATES:
+        raise ValueError(f"{field} must be <= {MAX_CREST_CANDIDATES}. got={parsed}")
+    return parsed
 
 
 def _require_interaction_text(
@@ -548,6 +558,7 @@ __all__ = [
     "INTERACTION_ENERGY_MAX_FRAGMENTS_CAP",
     "INTERACTION_ENERGY_MAX_MULTIPLICITY",
     "INTERACTION_ENERGY_RMSD_GROUPING_VERSION",
+    "MAX_CREST_CANDIDATES",
     "interaction_energy_config_fingerprint",
     "load_flow_manifest",
     "manifest_allows_external_inputs",
@@ -555,6 +566,7 @@ __all__ = [
     "normalize_interaction_energy_block",
     "normalize_rmsd_dedup_block",
     "optional_positive_float",
+    "require_crest_candidate_count",
     "resolve_endpoint_pairing_manifest",
     "resolve_engine_manifest",
     "resolve_engine_manifest_with_presence",

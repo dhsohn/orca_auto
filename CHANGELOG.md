@@ -134,6 +134,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   file-reference directives to 128, and downstream XYZ materialization to 512 MiB. Exact executable
   identities and source/executed descriptors are recorded and checked; pre-upgrade
   xTB/CREST/ORCA queue rows without snapshots must be drained or resubmitted.
+  A bounded queue-root intent journal is persisted before generation directories
+  are created, reconciles abandoned pre-enqueue snapshots conservatively, and is
+  finalized before a reserved worker child can start.
   Ambiguous duplicate ORCA resource/checkpoint directives fail closed, while
   resource admission evaluates the largest active request before normalization.
   Unbound external ORCA include/program hooks are rejected instead of remaining
@@ -143,6 +146,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   admission caps local work at 10,000 atoms, xTB/ORCA Hessian-producing work at
   1,000, and Discord-uploaded work at 200. Remote CREST ingress injects a
   server-owned 5.0 ps MD length and enforces a 50,000,000 atom-step ceiling.
+  Reaction endpoint fan-out accepts at most 32 CREST candidates per side,
+  retains only the requested top pairs in memory, caps geometry comparison at
+  256 effective atoms, and parses each candidate ensemble once per selection.
 - xTB now always emits explicit charge/UHF and `--norestart`, rejects a non-empty
   legacy `namespace`, and caps ranking at 100 evaluations by default (up to 1,000
   with an explicit high-cost acknowledgement). CREST uses the absolute immutable

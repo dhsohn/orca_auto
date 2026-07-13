@@ -132,3 +132,18 @@ def test_snapshot_namespace_reservation_is_exclusive_and_preserves_owner(tmp_pat
         input_snapshot.reserve_input_snapshot_namespace(job_dir, "same-generation")
 
     assert owner_marker.read_text(encoding="utf-8") == "owner"
+
+
+@pytest.mark.parametrize(
+    "namespace",
+    ["x" * 81, "contains spaces", "../escape", " leading", "trailing "],
+)
+def test_snapshot_namespace_rejects_lossy_path_normalization(
+    tmp_path: Path,
+    namespace: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+
+    with pytest.raises(ValueError, match="safe path segment"):
+        input_snapshot.reserve_input_snapshot_namespace(job_dir, namespace)

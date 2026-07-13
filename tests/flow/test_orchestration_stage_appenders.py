@@ -6,9 +6,14 @@ from typing import Any
 
 import pytest
 
+from orca_auto.flow import endpoint_pairing as endpoint_pairing_module
 from orca_auto.flow._orca_stage_materialization import render_orca_input
-from orca_auto.flow.contracts import WorkflowStageInput
-from orca_auto.flow.endpoint_pairing import EndpointPairingPolicy, select_endpoint_pairs
+from orca_auto.flow.contracts import CrestDownstreamPolicy, WorkflowStageInput
+from orca_auto.flow.endpoint_pairing import (
+    MAX_ENDPOINT_PAIRING_COMPARISON_ATOMS,
+    EndpointPairingPolicy,
+    select_endpoint_pairs,
+)
 from orca_auto.flow.orchestration.deps import orchestration_deps
 from orca_auto.flow.orchestration.materialization import (
     append_crest_orca_stages_impl,
@@ -83,6 +88,182 @@ def _write_xyz(path: Path, coords: list[tuple[str, float, float, float]]) -> str
     return str(path)
 
 
+def test_generic_crest_handoff_policy_is_not_reaction_candidate_cap() -> None:
+    assert CrestDownstreamPolicy.build(max_candidates=33).max_candidates == 33
+
+
+def test_endpoint_pairing_rejects_unbounded_distance_fingerprint_atoms(tmp_path: Path) -> None:
+    atom_count = MAX_ENDPOINT_PAIRING_COMPARISON_ATOMS + 1
+    coords = [("H", float(index), 0.0, 0.0) for index in range(atom_count)]
+    reactant_path = _write_xyz(tmp_path / "reactant-large.xyz", coords)
+    product_path = _write_xyz(tmp_path / "product-large.xyz", coords)
+
+    reactant = _candidate(
+        reactant_path,
+        source_job_id="crest_r",
+        source_job_type="crest",
+        reaction_key="reactant",
+        rank=1,
+        kind="conformer",
+    )
+    product = _candidate(
+        product_path,
+        source_job_id="crest_p",
+        source_job_type="crest",
+        reaction_key="product",
+        rank=1,
+        kind="conformer",
+    )
+
+    with pytest.raises(ValueError, match="comparison atom count exceeds"):
+        select_endpoint_pairs(
+            [reactant],
+            [product],
+            policy=EndpointPairingPolicy.from_raw({"max_distance_rmsd": 0.5}),
+        )
+
+
+def test_endpoint_pairing_loads_each_ensemble_once_per_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reactant_path = _write_xyz(
+        tmp_path / "reactant.xyz",
+        [("H", 0.0, 0.0, 0.0), ("H", 1.0, 0.0, 0.0)],
+    )
+    product_path = _write_xyz(
+        tmp_path / "product.xyz",
+        [("H", 0.0, 0.0, 0.0), ("H", 1.0, 0.0, 0.0)],
+    )
+    original_loader = endpoint_pairing_module.load_output_xyz_frames
+    loaded_paths: list[Path] = []
+
+    def counted_loader(path: Path) -> tuple[Any, ...]:
+        loaded_paths.append(path)
+        return original_loader(path)
+
+    monkeypatch.setattr(endpoint_pairing_module, "load_output_xyz_frames", counted_loader)
+    reactants = [
+        _candidate(
+            reactant_path,
+            source_job_id="crest_r",
+            source_job_type="crest",
+            reaction_key=f"reactant_{index}",
+            rank=index,
+            kind="conformer",
+        )
+        for index in (1, 2)
+    ]
+    products = [
+        _candidate(
+            product_path,
+            source_job_id="crest_p",
+            source_job_type="crest",
+            reaction_key=f"product_{index}",
+            rank=index,
+            kind="conformer",
+        )
+        for index in (1, 2)
+    ]
+
+    pairs = select_endpoint_pairs(
+        reactants,
+        products,
+        policy=EndpointPairingPolicy.from_raw(
+            {"comparison_atoms": [1, 2], "max_pairs": 2},
+        ),
+    )
+
+    assert len(pairs) == 2
+    assert loaded_paths == [Path(reactant_path), Path(product_path)]
+
+
+def test_endpoint_pairing_handles_extreme_finite_coordinates(tmp_path: Path) -> None:
+    reactant_path = _write_xyz(
+        tmp_path / "reactant-extreme.xyz",
+        [("H", 0.0, 0.0, 0.0), ("H", 1.0e200, 0.0, 0.0)],
+    )
+    product_path = _write_xyz(
+        tmp_path / "product-extreme.xyz",
+        [("H", 0.0, 0.0, 0.0), ("H", 0.9e200, 0.0, 0.0)],
+    )
+
+    pairs = select_endpoint_pairs(
+        [
+            _candidate(
+                reactant_path,
+                source_job_id="crest_r",
+                source_job_type="crest",
+                reaction_key="reactant",
+                rank=1,
+                kind="conformer",
+            )
+        ],
+        [
+            _candidate(
+                product_path,
+                source_job_id="crest_p",
+                source_job_type="crest",
+                reaction_key="product",
+                rank=1,
+                kind="conformer",
+            )
+        ],
+        policy=EndpointPairingPolicy.from_raw(
+            {"comparison_atoms": [1, 2], "max_distance_rmsd": 2.0e199},
+        ),
+    )
+
+    assert len(pairs) == 1
+    assert pairs[0].metadata["distance_fingerprint_rmsd"] == pytest.approx(1.0e199)
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"comparison_atoms": [999, 1000]},
+        {"moving_atoms": [999], "max_distance_rmsd": 0.5},
+    ],
+)
+def test_endpoint_pairing_revalidates_atom_indices_against_durable_geometry(
+    tmp_path: Path,
+    policy: dict[str, object],
+) -> None:
+    reactant_path = _write_xyz(
+        tmp_path / "reactant-small.xyz",
+        [("H", 0.0, 0.0, 0.0), ("H", 1.0, 0.0, 0.0)],
+    )
+    product_path = _write_xyz(
+        tmp_path / "product-small.xyz",
+        [("H", 0.0, 0.0, 0.0), ("H", 1.0, 0.0, 0.0)],
+    )
+
+    with pytest.raises(ValueError, match="atom indices must be within"):
+        select_endpoint_pairs(
+            [
+                _candidate(
+                    reactant_path,
+                    source_job_id="crest_r",
+                    source_job_type="crest",
+                    reaction_key="reactant",
+                    rank=1,
+                    kind="conformer",
+                )
+            ],
+            [
+                _candidate(
+                    product_path,
+                    source_job_id="crest_p",
+                    source_job_type="crest",
+                    reaction_key="product",
+                    rank=1,
+                    kind="conformer",
+                )
+            ],
+            policy=EndpointPairingPolicy.from_raw(policy),
+        )
+
+
 @pytest.mark.parametrize(
     ("charge", "multiplicity"),
     [(1.9, 2), (1, 2.9), (True, 1), (0, True)],
@@ -135,6 +316,35 @@ def test_disabled_endpoint_pairing_caps_eight_by_eight_cartesian_product() -> No
     assert [(pair.reactant.rank, pair.product.rank) for pair in pairs] == [
         (index, index) for index in range(1, 9)
     ]
+
+
+def test_endpoint_pairing_rejects_inputs_above_candidate_ceiling() -> None:
+    reactants = [
+        _candidate(
+            f"/tmp/reactant_{index}.xyz",
+            source_job_id="crest_r",
+            source_job_type="crest",
+            reaction_key=f"reactant_{index}",
+            rank=index,
+            kind="conformer",
+        )
+        for index in range(1, 34)
+    ]
+    product = _candidate(
+        "/tmp/product.xyz",
+        source_job_id="crest_p",
+        source_job_type="crest",
+        reaction_key="product",
+        rank=1,
+        kind="conformer",
+    )
+
+    with pytest.raises(ValueError, match="per-side candidate limit"):
+        select_endpoint_pairs(
+            reactants,
+            [product],
+            policy=EndpointPairingPolicy.from_raw(None, default_max_pairs=3),
+        )
 
 
 @pytest.mark.parametrize("field", ["max_distance_rmsd", "max_rmsd", "rank_weight"])
@@ -196,6 +406,11 @@ def test_endpoint_pairing_never_falls_back_across_element_order_mismatch(tmp_pat
         {"comparison_atoms": ["bogus"]},
         {"max_distance_rmsd": -0.1},
         {"rank_weight": -1},
+        {"comparison_atoms": [1, 2], "atoms": [1, 2]},
+        {"moving_atoms": [1], "excluded_atoms": [1]},
+        {"comparison_atoms": [1, 2], "moving_atoms": [2]},
+        {"max_distance_rmsd": 0.1, "max_rmsd": 0.2},
+        {"enabled": True, "mode": "enabled"},
     ],
 )
 def test_endpoint_pairing_rejects_lossy_scientific_policy_values(
@@ -273,6 +488,7 @@ def test_append_reaction_xtb_stages_caps_cartesian_product(
                     "max_crest_candidates": 2,
                     "max_xtb_stages": 3,
                     "max_xtb_handoff_retries": max_handoff_retries,
+                    "endpoint_pairing": {"enabled": False, "max_pairs": 0},
                     "charge": -1,
                     "multiplicity": 2,
                     "xtb_job_manifest": {"gfn": 1},
@@ -316,6 +532,15 @@ def test_append_reaction_xtb_stages_caps_cartesian_product(
             kind="conformer",
         ),
     ]
+    observed_pair_limits: list[int] = []
+
+    def select_pairs(reactants: Any, products: Any, *, policy: Any) -> tuple[Any, ...]:
+        observed_pair_limits.append(policy.max_pairs)
+        return endpoint_pairing_module.select_endpoint_pairs(
+            reactants,
+            products,
+            policy=policy,
+        )
 
     deps = orchestration_deps(
         overrides={
@@ -327,6 +552,7 @@ def test_append_reaction_xtb_stages_caps_cartesian_product(
             "select_crest_downstream_inputs": lambda contract, policy: (
                 reactant_inputs if contract == "reactant_contract" else product_inputs
             ),
+            "select_endpoint_pairs": select_pairs,
         }
     )
 
@@ -350,6 +576,7 @@ def test_append_reaction_xtb_stages_caps_cartesian_product(
         stage["task"]["payload"]["max_handoff_retries"] == max_handoff_retries
         for stage in xtb_stages
     )
+    assert observed_pair_limits == [3]
     assert all(
         stage["task"]["payload"]["job_manifest_overrides"]
         == {
@@ -359,6 +586,69 @@ def test_append_reaction_xtb_stages_caps_cartesian_product(
         }
         for stage in xtb_stages
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_crest_candidates", 2.5),
+        ("max_crest_candidates", 33),
+        ("max_xtb_stages", 2.5),
+    ],
+)
+def test_append_reaction_xtb_stages_revalidates_durable_candidate_caps(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_reaction_invalid_cap",
+        "stages": [
+            {
+                "stage_id": "crest_reactant",
+                "status": "completed",
+                "metadata": {"input_role": "reactant"},
+                "task": {"engine": "crest"},
+            },
+            {
+                "stage_id": "crest_product",
+                "status": "completed",
+                "metadata": {"input_role": "product"},
+                "task": {"engine": "crest"},
+            },
+        ],
+        "metadata": {
+            "request": {
+                "parameters": {
+                    "max_crest_candidates": 2,
+                    "max_xtb_stages": 2,
+                    field: value,
+                }
+            }
+        },
+    }
+    candidate = _candidate(
+        "/tmp/candidate.xyz",
+        source_job_id="crest",
+        source_job_type="crest",
+        reaction_key="candidate",
+        rank=1,
+        kind="conformer",
+    )
+    deps = orchestration_deps(
+        overrides={
+            "_completed_crest_stage": lambda stage, **kwargs: stage["metadata"]["input_role"],
+            "select_crest_downstream_inputs": lambda contract, policy: (candidate,),
+        }
+    )
+
+    with pytest.raises(ValueError, match=field):
+        append_reaction_xtb_stages_impl(
+            payload,
+            workspace_dir=tmp_path,
+            crest_config="/tmp/crest.yaml",
+            deps=deps,
+        )
 
 
 def test_append_reaction_xtb_stages_fails_when_completed_crest_has_no_geometry(

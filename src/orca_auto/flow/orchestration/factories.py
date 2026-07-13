@@ -6,10 +6,15 @@ from pathlib import Path
 from typing import Any, cast
 
 from orca_auto.core.utils import now_utc_iso, timestamped_token
+from orca_auto.flow.endpoint_pairing import (
+    EndpointPairingPolicy,
+    validate_endpoint_pairing_atom_budget,
+)
 from orca_auto.flow.manifest import (
     normalize_interaction_energy_block,
     normalize_rmsd_dedup_block,
     optional_positive_float,
+    require_crest_candidate_count,
     validate_interaction_energy_state_balance,
 )
 from orca_auto.flow.orchestration.builders import (
@@ -89,6 +94,27 @@ def _normalized_reaction_ts_request(
     normalized_crest_mode = deps.normalize_text(request.crest_mode).lower()
     if normalized_crest_mode not in {"standard", "nci"}:
         raise ValueError("reaction_ts_search only supports crest_mode 'standard' or 'nci'")
+    max_crest_candidates = require_crest_candidate_count(
+        request.max_crest_candidates,
+    )
+    max_xtb_stages = _positive_int_field(
+        request.max_xtb_stages,
+        field_name="max_xtb_stages",
+    )
+    pairing_policy = EndpointPairingPolicy.from_raw(
+        request.endpoint_pairing,
+        default_max_pairs=max_xtb_stages,
+    )
+    if pairing_policy.enabled and (
+        pairing_policy.comparison_atoms
+        or pairing_policy.excluded_atoms
+        or pairing_policy.max_distance_rmsd is not None
+    ):
+        validate_endpoint_pairing_atom_budget(
+            pairing_policy,
+            len(deps.load_xyz_atom_sequence_fn(request.reactant_xyz)),
+            len(deps.load_xyz_atom_sequence_fn(request.product_xyz)),
+        )
     return replace(
         request,
         crest_mode=normalized_crest_mode,
@@ -98,14 +124,8 @@ def _normalized_reaction_ts_request(
             request.max_memory_gb,
             field_name="max_memory_gb",
         ),
-        max_crest_candidates=_positive_int_field(
-            request.max_crest_candidates,
-            field_name="max_crest_candidates",
-        ),
-        max_xtb_stages=_positive_int_field(
-            request.max_xtb_stages,
-            field_name="max_xtb_stages",
-        ),
+        max_crest_candidates=max_crest_candidates,
+        max_xtb_stages=max_xtb_stages,
         max_xtb_handoff_retries=strict_int(
             request.max_xtb_handoff_retries,
             field="max_xtb_handoff_retries",

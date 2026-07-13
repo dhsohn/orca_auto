@@ -156,6 +156,7 @@ def test_create_conformer_workflow_rejects_conflicting_engine_electronic_state(
         ({"max_cores": 0}, "max_cores must be >= 1"),
         ({"max_memory_gb": 0}, "max_memory_gb must be >= 1"),
         ({"max_crest_candidates": 0}, "max_crest_candidates must be >= 1"),
+        ({"max_crest_candidates": 33}, "max_crest_candidates must be <= 32"),
         ({"max_xtb_stages": 0}, "max_xtb_stages must be >= 1"),
         (
             {"max_xtb_handoff_retries": -1},
@@ -175,6 +176,14 @@ def test_create_conformer_workflow_rejects_conflicting_engine_electronic_state(
         ({"charge": -0.5}, "charge must be an integer"),
         ({"multiplicity": 2.5}, "multiplicity must be an integer >= 1"),
         ({"charge": True}, "charge must be an integer"),
+        (
+            {"endpoint_pairing": {"comparison_atoms": [999, 1000]}},
+            "atom indices must be within",
+        ),
+        (
+            {"endpoint_pairing": {"moving_atoms": [999], "max_distance_rmsd": 0.5}},
+            "atom indices must be within",
+        ),
     ],
 )
 def test_create_reaction_ts_search_workflow_rejects_non_positive_limits(
@@ -212,6 +221,24 @@ def test_create_reaction_ts_search_workflow_accepts_zero_handoff_retries(
     )
 
     assert payload["metadata"]["request"]["parameters"]["max_xtb_handoff_retries"] == 0
+
+
+def test_create_reaction_workflow_rejects_implicit_oversized_endpoint_metric(
+    tmp_path: Path,
+) -> None:
+    coords = [("H", float(index), 0.0, 0.0) for index in range(257)]
+    reactant_xyz = tmp_path / "reactant-large.xyz"
+    product_xyz = tmp_path / "product-large.xyz"
+    _write_xyz(reactant_xyz, coords)
+    _write_xyz(product_xyz, coords)
+
+    with pytest.raises(ValueError, match="comparison atom count exceeds"):
+        orchestration.create_reaction_ts_search_workflow(
+            reactant_xyz=str(reactant_xyz),
+            product_xyz=str(product_xyz),
+            workflow_root=tmp_path,
+            endpoint_pairing={"max_distance_rmsd": 0.5},
+        )
 
 
 @pytest.mark.parametrize(

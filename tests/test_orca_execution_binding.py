@@ -94,10 +94,59 @@ def test_orca_execution_snapshot_binds_selected_dependencies_and_executable(
         "dependency_000002",
         "dependency_000003",
     }
+    input_generation = (
+        job_dir / ".orca_auto_input_snapshots" / snapshot["input_snapshot_namespace"]
+    ).resolve()
+    assert all(
+        Path(descriptor["snapshot_path"]).parent == input_generation
+        for descriptor in snapshot["input_snapshots"].values()
+    )
+    assert (
+        job_dir / ".orca_auto_snapshot_intents" / f"{snapshot['snapshot_intent_token']}.json"
+    ).is_file()
     bound_text = verified_selected.read_text(encoding="utf-8")
     assert str(job_dir) not in bound_text
     assert '".inputs/dependency_000003-' in bound_text
     assert '".inputs/dependency_000001-' in bound_text
+
+
+def test_orca_cleanup_rejects_a_mismatched_generation_pair(tmp_path: Path) -> None:
+    import orca_auto.orca.execution_binding as binding
+
+    job_dir, _selected, snapshot, _resources = _snapshot(tmp_path)
+    foreign_namespace = "generation-foreign"
+    foreign_generation = job_dir / ".orca_auto_input_snapshots" / foreign_namespace
+    foreign_generation.mkdir()
+    mismatched = dict(snapshot)
+    mismatched["input_snapshot_namespace"] = foreign_namespace
+
+    with pytest.raises(ValueError, match="mismatched"):
+        binding.cleanup_unowned_orca_execution_snapshot(job_dir, mismatched)
+
+    assert Path(snapshot["execution_dir"]).is_dir()
+    assert foreign_generation.is_dir()
+
+
+def test_orca_cleanup_failure_retains_durable_intent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import orca_auto.orca.execution_binding as binding
+
+    job_dir, _selected, snapshot, _resources = _snapshot(tmp_path)
+    intent_path = (
+        job_dir / ".orca_auto_snapshot_intents" / f"{snapshot['snapshot_intent_token']}.json"
+    )
+
+    def fail_remove(_path: Path) -> None:
+        raise OSError("simulated execution cleanup failure")
+
+    monkeypatch.setattr(binding.shutil, "rmtree", fail_remove)
+    with pytest.raises(OSError, match="simulated"):
+        binding.cleanup_unowned_orca_execution_snapshot(job_dir, snapshot)
+
+    assert Path(snapshot["execution_dir"]).is_dir()
+    assert intent_path.is_file()
 
 
 @pytest.mark.parametrize(

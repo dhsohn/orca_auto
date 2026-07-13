@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +29,31 @@ from tests.engine_artifact_helpers import (
 from tests.engine_artifact_helpers import (
     timestamps as _timestamps,
 )
+
+
+def test_default_submission_namespace_matches_durable_intent_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    captured: dict[str, str] = {}
+    sentinel = object()
+
+    def capture_submission(*args: object, **kwargs: object) -> object:
+        captured["namespace"] = str(kwargs["snapshot_namespace"])
+        return sentinel
+
+    monkeypatch.setattr(xtb_submission, "_build_submission_impl", capture_submission)
+
+    assert xtb_submission._build_submission(object(), job_dir, {}, object()) is sentinel
+    namespace = captured["namespace"]
+    generation = (job_dir / SNAPSHOT_DIR_NAME / namespace).resolve()
+    marker = job_dir / ".orca_auto_snapshot_intents" / f"{namespace}.json"
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    assert len(namespace) <= 80
+    assert generation.is_dir()
+    assert payload["generation_paths"] == [str(generation)]
 
 
 def _write_xyz(path: Path, comment: str) -> Path:

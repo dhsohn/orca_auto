@@ -26,6 +26,11 @@ from orca_auto.core.queue import (
     update_metadata,
 )
 from orca_auto.core.queue.engine.input_snapshot import snapshot_input_file
+from orca_auto.core.queue.engine.snapshot_intent import (
+    SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
+    SNAPSHOT_INTENT_TOKEN_KEY,
+    create_snapshot_intent,
+)
 from orca_auto.flow import engine_runtime
 from orca_auto.flow.submitters import (
     crest as crest_submitter,
@@ -524,10 +529,18 @@ def _submission_with_generation_snapshot(
     task_id: str,
 ) -> tuple[Path, Path, internal_engine_submission.EngineRunDirSubmission, Path]:
     queue_root = tmp_path / "queue"
-    job_dir = tmp_path / "job"
+    queue_root.mkdir()
+    job_dir = queue_root / "job"
     job_dir.mkdir(parents=True, exist_ok=True)
     selected = job_dir / "input.xyz"
     selected.write_text("1\nH\nH 0 0 0\n", encoding="utf-8")
+    intent_token = f"snapshot-{task_id}"
+    create_snapshot_intent(
+        queue_root,
+        token=intent_token,
+        kind="input_snapshot_namespace",
+        generation_paths=[job_dir / ".orca_auto_input_snapshots" / task_id],
+    )
     descriptor = snapshot_input_file(
         job_dir,
         selected,
@@ -544,7 +557,11 @@ def _submission_with_generation_snapshot(
         metadata={
             "job_dir": str(job_dir),
             "selected_input_xyz": descriptor["snapshot_path"],
-            "execution_snapshot": {"snapshot_namespace": task_id},
+            "execution_snapshot": {
+                "snapshot_namespace": task_id,
+                SNAPSHOT_INTENT_TOKEN_KEY: intent_token,
+                SNAPSHOT_INTENT_QUEUE_ROOT_KEY: str(queue_root.resolve()),
+            },
         },
         context={"job_dir": job_dir},
     )
@@ -552,7 +569,7 @@ def _submission_with_generation_snapshot(
 
 
 def test_precommit_enqueue_failure_cleans_unowned_generation_snapshot(tmp_path: Path) -> None:
-    _queue_root, job_dir, submission, snapshot_path = _submission_with_generation_snapshot(
+    queue_root, job_dir, submission, snapshot_path = _submission_with_generation_snapshot(
         tmp_path,
         task_id="crest-precommit",
     )
@@ -566,6 +583,11 @@ def test_precommit_enqueue_failure_cleans_unowned_generation_snapshot(tmp_path: 
 
     assert result["status"] == "failed"
     assert not snapshot_path.exists()
+    assert not (
+        queue_root
+        / ".orca_auto_snapshot_intents"
+        / f"{submission.metadata['execution_snapshot'][SNAPSHOT_INTENT_TOKEN_KEY]}.json"
+    ).exists()
 
 
 def test_active_replay_cleans_only_new_unowned_generation_snapshot(tmp_path: Path) -> None:
@@ -593,6 +615,11 @@ def test_active_replay_cleans_only_new_unowned_generation_snapshot(tmp_path: Pat
     assert result["status"] == "submitted"
     assert result["queue_id"] == existing.queue_id
     assert not snapshot_path.exists()
+    assert not (
+        queue_root
+        / ".orca_auto_snapshot_intents"
+        / f"{submission.metadata['execution_snapshot'][SNAPSHOT_INTENT_TOKEN_KEY]}.json"
+    ).exists()
 
 
 def test_indeterminate_postcommit_recovery_preserves_generation_snapshot(
@@ -629,6 +656,11 @@ def test_indeterminate_postcommit_recovery_preserves_generation_snapshot(
     assert result["status"] == "failed"
     assert len(list_queue(queue_root)) == 1
     assert snapshot_path.is_file()
+    assert (
+        queue_root
+        / ".orca_auto_snapshot_intents"
+        / f"{submission.metadata['execution_snapshot'][SNAPSHOT_INTENT_TOKEN_KEY]}.json"
+    ).is_file()
 
 
 def test_enqueue_post_commit_error_recovers_and_publishes_durable_entry(tmp_path: Path) -> None:

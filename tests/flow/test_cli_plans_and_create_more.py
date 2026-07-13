@@ -231,6 +231,40 @@ def test_run_dir_rejects_invalid_boltzmann_temperature_at_admission(tmp_path: Pa
         )
 
 
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"charge": -0.5, "multiplicity": 2.5},
+        {"orca": {"charge": -0.5, "multiplicity": 2.5}},
+    ],
+)
+def test_run_dir_rejects_fractional_electronic_state_at_public_ingress(
+    manifest: dict[str, object],
+) -> None:
+    orca_raw = manifest.get("orca")
+    orca_section = (
+        {str(key): value for key, value in orca_raw.items()} if isinstance(orca_raw, dict) else {}
+    )
+    sections = run_dir_options.RunDirManifestSections(
+        resources={},
+        crest={},
+        xtb={},
+        endpoint_pairing={},
+        orca=orca_section,
+    )
+
+    with pytest.raises(ValueError, match="charge must be an integer"):
+        run_dir_options._resolve_run_dir_workflow_options(
+            SimpleNamespace(),
+            manifest,
+            sections,
+            default_orca_route_line="! r2scan-3c OptTS Freq TightSCF",
+            default_max_orca_stages=3,
+            workflow_root="/tmp/runs",
+            workflow_type="reaction_ts_search",
+        )
+
+
 def test_run_dir_rejects_interaction_features_on_unsupported_template(tmp_path: Path) -> None:
     workflow_dir = tmp_path / "reaction"
     workflow_dir.mkdir()

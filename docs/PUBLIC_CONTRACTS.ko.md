@@ -218,6 +218,10 @@ xTB/CREST/ORCA 행에는 제출 시점 execution snapshot이 들어갑니다. �
 않으며, 검증할 수 없는 산출물은 새 generation에 연결하지 않고 fail-closed합니다.
 xTB/CREST snapshot은 공개 task id만으로 소유권을 정하지 않고 제출마다 배타적으로 예약한
 고유 namespace를 사용합니다.
+Generation 디렉터리를 만들기 전에 소유 queue root에 내부 durable intent를 기록합니다.
+Worker는 bounded intent만 raw queue 행 및 생성자 생존 여부와 대조해 보수적으로 복구하고,
+예약된 child를 시작하기 전에 intent를 종료합니다. Generation 제거가 불확실하면 intent를
+보존합니다. 이 intent 파일은 내부 구현 상태이므로 client가 편집하면 안 됩니다.
 ORCA snapshot은 실행 전에 중복 `%pal`/`nprocs`, `%maxcore`, `%moinp`, route `PALn`
 지시어처럼 선후순위가 모호한 입력도 거부합니다. 명시적으로 snapshot에 바인딩하지 않는
 외부 include/program hook은 지원하지 않고 fail-closed합니다.
@@ -363,6 +367,11 @@ ORCA analyzer 상태:
 - `interaction_energy.fragments[].multiplicity`
 - `interaction_energy.fragments[].label`
 - `allow_external_inputs`
+
+`max_crest_candidates`는 반응물/생성물 각 side마다 최대 32입니다. Endpoint pairing은
+이 제한된 Cartesian 공간을 평가하면서 요청한 최상위 pair만 보존하며, 모든 pair를 메모리에
+구체화해 정렬하지 않습니다. Geometry metric pairing은 effective 비교 원자를 최대 256개로
+제한하고 각 candidate ensemble을 selection 호출당 한 번만 읽습니다.
 
 `crest`와 `xtb` 엔진 작업 mapping, `xtb.ts_guess_validation`, `rmsd_dedup`,
 `interaction_energy` 블록은 strict schema를 사용합니다. 알 수 없는 키,

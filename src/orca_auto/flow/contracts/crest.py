@@ -6,6 +6,7 @@ from typing import Any
 
 from orca_auto.core.utils.coercion import normalize_text
 
+from ..manifest import require_int
 from ..xyz_utils import load_output_xyz_frames
 from .xtb import WorkflowStageInput
 
@@ -54,7 +55,7 @@ class CrestDownstreamPolicy:
 
     @classmethod
     def build(cls, *, max_candidates: int = 3) -> CrestDownstreamPolicy:
-        return cls(max_candidates=max(1, int(max_candidates)))
+        return cls(max_candidates=require_int(max_candidates, field="max_candidates", minimum=1))
 
 
 def _crest_stage_input(

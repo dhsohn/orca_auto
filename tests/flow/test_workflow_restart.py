@@ -78,6 +78,7 @@ def test_restart_manifest_rejects_lossy_resource_limits(
     "manifest",
     [
         {"workflow_type": "reaction_ts_search", "max_crest_candidates": 2.5},
+        {"workflow_type": "reaction_ts_search", "max_crest_candidates": 33},
         {"workflow_type": "reaction_ts_search", "max_xtb_handoff_retries": True},
         {"workflow_type": "reaction_ts_search", "max_orca_stages": 0},
     ],

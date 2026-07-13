@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.queue.priority import normalize_queue_priority
+from orca_auto.flow.manifest import require_crest_candidate_count
 from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin, strict_int
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.deps import (
@@ -133,17 +134,16 @@ def _reaction_xtb_stage_plan(
         return None
     reactant_contract, product_contract = contracts
     params = _request_params(o, payload)
+    max_crest_candidates = require_crest_candidate_count(
+        params.get("max_crest_candidates", 3),
+    )
     reactant_inputs = o.engines.select_crest_downstream_inputs(
         reactant_contract,
-        policy=o.contracts.CrestDownstreamPolicy.build(
-            max_candidates=int(params.get("max_crest_candidates", 3) or 3)
-        ),
+        policy=o.contracts.CrestDownstreamPolicy.build(max_candidates=max_crest_candidates),
     )
     product_inputs = o.engines.select_crest_downstream_inputs(
         product_contract,
-        policy=o.contracts.CrestDownstreamPolicy.build(
-            max_candidates=int(params.get("max_crest_candidates", 3) or 3)
-        ),
+        policy=o.contracts.CrestDownstreamPolicy.build(max_candidates=max_crest_candidates),
     )
     missing_roles = tuple(
         role
@@ -153,11 +153,23 @@ def _reaction_xtb_stage_plan(
     if missing_roles:
         _record_crest_handoff_failure(payload, missing_roles=missing_roles)
         return None
+    max_xtb_stages = strict_int(
+        params.get("max_xtb_stages", 3),
+        field="max_xtb_stages",
+        minimum=1,
+    )
     pairing_policy = o.contracts.EndpointPairingPolicy.from_raw(
         params.get("endpoint_pairing"),
-        default_max_pairs=int(params.get("max_xtb_stages", 3) or 3),
+        default_max_pairs=max_xtb_stages,
     )
-    max_xtb_stages = max(0, int(params.get("max_xtb_stages", 3) or 3))
+    pairing_policy = replace(
+        pairing_policy,
+        max_pairs=(
+            min(pairing_policy.max_pairs, max_xtb_stages)
+            if pairing_policy.max_pairs
+            else max_xtb_stages
+        ),
+    )
     endpoint_pairs = tuple(
         o.engines.select_endpoint_pairs(
             reactant_inputs,

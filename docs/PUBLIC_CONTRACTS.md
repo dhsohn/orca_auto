@@ -224,6 +224,11 @@ In-place adoption of pre-snapshot queue rows is not supported; unverifiable
 artifacts fail closed instead of being attached to a newer generation.
 xTB/CREST snapshots use a unique namespace that is exclusively reserved for the
 submission, rather than using the public task id alone as snapshot ownership.
+Generation directories are preceded by an internal durable intent under the
+owning queue root. Workers reconcile only bounded, dead-owner intents against raw
+queue rows and retire the intent before starting a reserved child; cleanup retains
+the intent whenever generation removal is uncertain. These intent files are
+implementation state and must not be edited by clients.
 ORCA snapshots also reject ambiguous duplicate `%pal`/`nprocs`, `%maxcore`,
 `%moinp`, and route `PALn` directives before execution. External include/program
 hooks that are not explicitly snapshot-bound are unsupported and fail closed.
@@ -375,6 +380,12 @@ Manifest keys that users may rely on:
 - `interaction_energy.fragments[].multiplicity`
 - `interaction_energy.fragments[].label`
 - `allow_external_inputs`
+
+`max_crest_candidates` is capped at 32 per reaction side. Endpoint pairing
+keeps only the requested best pairs while evaluating this bounded Cartesian
+space, rather than materializing and sorting every pair. Geometry-metric pairing
+compares at most 256 effective atoms and loads each candidate ensemble only once
+per selection call.
 
 The `crest` and `xtb` engine-job mappings, `xtb.ts_guess_validation`,
 `rmsd_dedup`, and `interaction_energy` use strict schemas: unknown

@@ -38,6 +38,7 @@ from ..manifest import (
     normalize_rmsd_dedup_block as _normalize_rmsd_dedup_block,
 )
 from ..manifest import optional_positive_float as _optional_positive_float
+from ..manifest import require_crest_candidate_count as _require_crest_candidate_count
 from ..manifest import (
     resolve_endpoint_pairing_manifest as _resolve_endpoint_pairing_manifest,
 )
@@ -258,7 +259,9 @@ def _apply_restart_request_manifests(
             minimum=0 if key == "max_xtb_handoff_retries" else 1,
         )
         if parsed is not None:
-            params[key] = parsed
+            params[key] = (
+                _require_crest_candidate_count(parsed) if key == "max_crest_candidates" else parsed
+            )
 
 
 def _manifest_electronic_state(manifest: dict[str, Any]) -> tuple[int | None, int | None]:

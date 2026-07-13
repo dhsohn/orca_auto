@@ -29,7 +29,19 @@ from orca_auto.core.queue import (
     process_start_token,
     queue_record_publication_lock,
 )
-from orca_auto.core.queue.engine.input_snapshot import cleanup_unowned_input_snapshot_namespace
+from orca_auto.core.queue.engine.input_snapshot import (
+    cleanup_unowned_input_snapshot_namespace,
+)
+from orca_auto.core.queue.engine.snapshot_intent import (
+    SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
+    SNAPSHOT_INTENT_STATE_CREATING,
+    SNAPSHOT_INTENT_STATE_ENQUEUEING,
+    SNAPSHOT_INTENT_STATE_OWNED,
+    SNAPSHOT_INTENT_TOKEN_KEY,
+    discard_snapshot_intent,
+    discard_snapshot_intent_if_generations_absent,
+    transition_snapshot_intent,
+)
 from orca_auto.core.queue.internal_engine.runtime import entry_matches_engine_identity
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.store import mutate_entries, reject_active_task_duplicate
@@ -114,6 +126,48 @@ def _cleanup_unowned_submission_snapshot(submission: Any | None) -> None:
         job_dir,
         snapshot_namespace,
     )
+    intent_token = normalize_text(execution_snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY))
+    intent_root = normalize_text(execution_snapshot.get(SNAPSHOT_INTENT_QUEUE_ROOT_KEY))
+    if intent_token and intent_root:
+        discard_snapshot_intent_if_generations_absent(intent_root, intent_token)
+
+
+def _submission_snapshot_intent(submission: Any) -> tuple[Path, str] | None:
+    execution_snapshot = submission.metadata.get("execution_snapshot")
+    if not isinstance(execution_snapshot, dict):
+        return None
+    intent_token = normalize_text(execution_snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY))
+    intent_root = normalize_text(execution_snapshot.get(SNAPSHOT_INTENT_QUEUE_ROOT_KEY))
+    if not intent_token or not intent_root:
+        return None
+    if (
+        Path(intent_root).expanduser().resolve()
+        != Path(submission.queue_root).expanduser().resolve()
+    ):
+        raise ValueError("Internal engine snapshot intent names another queue root")
+    return Path(intent_root), intent_token
+
+
+def _mark_submission_snapshot_owned(submission: Any, state: _InternalEngineSubmissionState) -> None:
+    try:
+        intent = _submission_snapshot_intent(submission)
+        if intent is None:
+            return
+        intent_root, intent_token = intent
+        transition_snapshot_intent(
+            intent_root,
+            intent_token,
+            target_state=SNAPSHOT_INTENT_STATE_OWNED,
+            expected_states={SNAPSHOT_INTENT_STATE_ENQUEUEING},
+        )
+        discard_snapshot_intent(intent_root, intent_token)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "queued snapshot ownership marker update failed; durable queue entry retains ownership: %s",
+            exc,
+            exc_info=True,
+        )
+        _append_warning(state, "queued snapshot ownership marker repair is pending")
 
 
 def _active_job_dir_key(entry: QueueEntry) -> tuple[str, str] | None:
@@ -1147,6 +1201,19 @@ def _enqueue_internal_engine_submission(
     state.submission.metadata.update(publication_metadata)
     enqueue_metadata = dict(state.submission.metadata)
     try:
+        intent = _submission_snapshot_intent(state.submission)
+        if intent is not None:
+            intent_root, intent_token = intent
+            transition_snapshot_intent(
+                intent_root,
+                intent_token,
+                target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
+                expected_states={SNAPSHOT_INTENT_STATE_CREATING},
+            )
+    except BaseException:
+        _cleanup_unowned_submission_snapshot(state.submission)
+        raise
+    try:
         state.entry = enqueue_fn(
             state.submission.queue_root,
             app_name=state.submission.app_name,
@@ -1192,6 +1259,7 @@ def _enqueue_internal_engine_submission(
         if recovered is None:
             _cleanup_unowned_submission_snapshot(state.submission)
             raise
+        _mark_submission_snapshot_owned(state.submission, state)
         _append_warning(
             state,
             "queue enqueue reported an error after durable persistence; "
@@ -1206,6 +1274,7 @@ def _enqueue_internal_engine_submission(
             suppress_queued_notification=False,
         )
         return
+    _mark_submission_snapshot_owned(state.submission, state)
     if isinstance(state.entry, QueueEntry):
         _set_state_entry(state, state.entry)
     _record_queued_with_warning(

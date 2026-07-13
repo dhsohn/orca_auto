@@ -7,6 +7,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from orca_auto.core.messaging import build_channel
+from orca_auto.core.queue.engine.snapshot_intent import (
+    SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
+    SNAPSHOT_INTENT_STATE_CREATING,
+    SNAPSHOT_INTENT_STATE_ENQUEUEING,
+    SNAPSHOT_INTENT_STATE_OWNED,
+    SNAPSHOT_INTENT_TOKEN_KEY,
+    discard_snapshot_intent,
+    transition_snapshot_intent,
+)
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
@@ -35,6 +44,29 @@ if TYPE_CHECKING:
     from .run_inp_context import WorkerStatusInfo
 
 logger = logging.getLogger(__name__)
+
+
+def _mark_orca_snapshot_owned(
+    intent_root: Path,
+    intent_token: str,
+) -> str | None:
+    try:
+        transition_snapshot_intent(
+            intent_root,
+            intent_token,
+            target_state=SNAPSHOT_INTENT_STATE_OWNED,
+            expected_states={SNAPSHOT_INTENT_STATE_ENQUEUEING},
+        )
+        discard_snapshot_intent(intent_root, intent_token)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "queued ORCA snapshot ownership marker update failed; "
+            "durable queue entry retains ownership: %s",
+            exc,
+            exc_info=True,
+        )
+        return "queued snapshot ownership marker repair is pending"
+    return None
 
 
 @dataclass(frozen=True)
@@ -245,6 +277,8 @@ def build_queue_metadata(
         resource_request=requested,
         max_retries=max_retries,
         orca_executable=cfg.paths.orca_executable,
+        queue_root=Path(cfg.runtime.allowed_root).expanduser().resolve(),
+        snapshot_intent_token=timestamped_token("snapshot_intent", token_bytes=16),
     )
     if artifacts.selected_inp:
         metadata["source_selected_inp"] = artifacts.selected_inp
@@ -391,6 +425,27 @@ def create_queued_submission(
     queue_metadata.update(publication_metadata)
     expected_state = QUEUE_RECORD_SYNC_PREPARING
     enqueue_warning: str | None = None
+    execution_snapshot = queue_metadata.get("execution_snapshot")
+    try:
+        if not isinstance(execution_snapshot, dict):
+            raise ValueError("ORCA submission has no execution snapshot")
+        intent_root = (
+            Path(str(execution_snapshot.get(SNAPSHOT_INTENT_QUEUE_ROOT_KEY) or ""))
+            .expanduser()
+            .resolve()
+        )
+        intent_token = str(execution_snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or "").strip()
+        if intent_root != allowed_root or not intent_token:
+            raise ValueError("ORCA submission snapshot intent does not match its queue root")
+        transition_snapshot_intent(
+            intent_root,
+            intent_token,
+            target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
+            expected_states={SNAPSHOT_INTENT_STATE_CREATING},
+        )
+    except BaseException:
+        cleanup_unowned_orca_execution_snapshot(reaction_dir, execution_snapshot)
+        raise
     try:
         entry = queue_adapter.enqueue(
             allowed_root,
@@ -420,6 +475,7 @@ def create_queued_submission(
             )
             raise
         entry = recovered
+        marker_warning = _mark_orca_snapshot_owned(intent_root, intent_token)
         expected_state = QUEUE_RECORD_SYNC_REPAIRING
         enqueue_warning = (
             "queue enqueue reported an error after durable persistence; recovered exact "
@@ -427,6 +483,8 @@ def create_queued_submission(
         )
         if not isinstance(exc, Exception):
             raise
+    else:
+        marker_warning = _mark_orca_snapshot_owned(intent_root, intent_token)
 
     entry, publication_warning = _publish_queued_submission(
         cfg,
@@ -445,6 +503,7 @@ def create_queued_submission(
         queue_entry_worker_log(entry, deps=deps),
     )
     worker_info = worker_status_with_detail(worker_info, enqueue_warning)
+    worker_info = worker_status_with_detail(worker_info, marker_warning)
     worker_info = worker_status_with_detail(worker_info, publication_warning)
     return QueuedSubmissionResult(
         entry=entry,

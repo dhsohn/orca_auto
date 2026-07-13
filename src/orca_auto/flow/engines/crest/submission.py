@@ -29,6 +29,12 @@ from orca_auto.core.queue.engine.input_snapshot import (
     snapshot_input_file,
     snapshot_input_payload,
 )
+from orca_auto.core.queue.engine.snapshot_intent import (
+    SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
+    SNAPSHOT_INTENT_TOKEN_KEY,
+    create_snapshot_intent,
+    discard_snapshot_intent_if_generations_absent,
+)
 from orca_auto.flow.xyz_utils import load_xyz_frames, validate_electronic_state
 
 from . import job_locations as _job_locations
@@ -201,6 +207,8 @@ def _build_submission_impl(
     execution_snapshot = {
         "version": 1,
         "snapshot_namespace": snapshot_namespace,
+        SNAPSHOT_INTENT_TOKEN_KEY: snapshot_namespace,
+        SNAPSHOT_INTENT_QUEUE_ROOT_KEY: str(index_root_for_path(cfg, job_dir)),
         "manifest": manifest_snapshot,
         "input_snapshots": {"selected": selected_descriptor, "manifest": manifest_descriptor},
         "selected_input_xyz": str(selected_xyz),
@@ -245,9 +253,24 @@ def _build_submission(
     args: Any,
 ) -> EngineRunDirSubmission:
     job_id = new_job_id()
-    snapshot_namespace = f"{job_id}-{secrets.token_hex(16)}"
+    snapshot_namespace = f"snapshot-{secrets.token_hex(16)}"
+    resolved_job_dir = Path(job_dir).expanduser().resolve()
+    queue_root = (
+        index_root_for_path(cfg, resolved_job_dir)
+        if getattr(cfg, "runtime", None) is not None
+        else resolved_job_dir
+    )
+    generation_path = resolved_job_dir / ".orca_auto_input_snapshots" / snapshot_namespace
     reserved = False
+    intent_created = False
     try:
+        create_snapshot_intent(
+            queue_root,
+            token=snapshot_namespace,
+            kind="input_snapshot_namespace",
+            generation_paths=[generation_path],
+        )
+        intent_created = True
         reserve_input_snapshot_namespace(job_dir, snapshot_namespace)
         reserved = True
         return _build_submission_impl(
@@ -261,6 +284,8 @@ def _build_submission(
     except BaseException:
         if reserved:
             cleanup_unowned_input_snapshot_namespace(job_dir, snapshot_namespace)
+        if intent_created:
+            discard_snapshot_intent_if_generations_absent(queue_root, snapshot_namespace)
         raise
 
 

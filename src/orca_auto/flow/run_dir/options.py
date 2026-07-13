@@ -9,11 +9,13 @@ from orca_auto.cli_common import (
     _workflow_root_for_args as _cli_workflow_root_for_args,
 )
 from orca_auto.core.utils.coercion import normalize_text
+from orca_auto.flow.orchestration.charge_spin import strict_int
 
 from ..manifest import (
     normalize_interaction_energy_block,
     normalize_rmsd_dedup_block,
     optional_positive_float,
+    require_crest_candidate_count,
     validate_conformer_postprocessing_template,
     validate_interaction_energy_state_balance,
 )
@@ -124,11 +126,9 @@ def _int_requirement(minimum: int | None) -> str:
 
 def _coerce_int_option(value: Any, *, key: str, minimum: int | None = None) -> int:
     try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
+        parsed = strict_int(value, field=key, minimum=minimum)
+    except ValueError as exc:
         raise ValueError(f"{key} must be {_int_requirement(minimum)}. got={value!r}") from exc
-    if minimum is not None and parsed < minimum:
-        raise ValueError(f"{key} must be >= {minimum}. got={parsed}")
     return parsed
 
 
@@ -328,13 +328,14 @@ def _resolve_run_dir_stage_options(
     *,
     defaults: _RunDirWorkflowOptionDefaults,
 ) -> dict[str, Any]:
+    max_crest_candidates = _resolve_positive_int_option(
+        getattr(args, "max_crest_candidates", None),
+        manifest,
+        "max_crest_candidates",
+        defaults.max_crest_candidates,
+    )
     return {
-        "max_crest_candidates": _resolve_positive_int_option(
-            getattr(args, "max_crest_candidates", None),
-            manifest,
-            "max_crest_candidates",
-            defaults.max_crest_candidates,
-        ),
+        "max_crest_candidates": require_crest_candidate_count(max_crest_candidates),
         "max_xtb_stages": _resolve_positive_int_option(
             getattr(args, "max_xtb_stages", None),
             manifest,

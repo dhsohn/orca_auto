@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.queue.engine.snapshot_intent import (
+    finalize_queued_snapshot_intent,
+    reconcile_orphaned_snapshot_generations,
+    snapshot_runtime_roots_for_cfg,
+)
 from orca_auto.core.utils.lock import file_lock
 
 from ..processes import (
@@ -17,6 +24,9 @@ from ..processes import (
 from .loop import QueueWorkerLoop
 from .models import BackgroundRunningJob
 from .signals import install_shutdown_signal_handlers as _install_shutdown_signal_handlers
+
+logger = logging.getLogger(__name__)
+_SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS = 300.0
 
 
 @dataclass(frozen=True)
@@ -106,6 +116,18 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
         )
 
     def _start_reserved(self, reserved: Any) -> bool:
+        try:
+            # Retire the journal before execution so even a very fast terminal
+            # job cannot lose its queue row while an ENQUEUEING intent remains.
+            finalize_queued_snapshot_intent(reserved.queue_root, reserved.entry)
+        except Exception as exc:  # noqa: BLE001
+            self._handle_worker_start_error(
+                reserved.queue_root,
+                reserved.entry,
+                reserved.admission_token,
+                OSError(f"snapshot intent finalization failed: {exc}"),
+            )
+            return False
         return self._start_job(
             reserved.queue_root,
             reserved.entry,
@@ -404,6 +426,25 @@ class HookedPidFileChildProcessQueueWorker(PidFileChildProcessQueueWorker):
         self.hooks.shutdown_running_job(self, queue_id, job)
 
     def _reconcile_worker_state(self) -> None:
+        now = time.monotonic()
+        last_reconcile = self.__dict__.get("_snapshot_intent_last_reconcile_monotonic")
+        if (
+            last_reconcile is None
+            or now - float(last_reconcile) >= _SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS
+        ):
+            self.__dict__["_snapshot_intent_last_reconcile_monotonic"] = now
+            try:
+                removed = reconcile_orphaned_snapshot_generations(
+                    snapshot_runtime_roots_for_cfg(self.cfg)
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("Snapshot orphan reconciliation failed; retaining all candidates")
+            else:
+                if removed:
+                    logger.info(
+                        "Removed %d abandoned pre-enqueue snapshot intent(s)",
+                        removed,
+                    )
         self.hooks.reconcile_worker_state(self)
 
 

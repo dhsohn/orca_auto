@@ -24,6 +24,19 @@ def _safe_role(role: str) -> str:
     return value[:80]
 
 
+def canonical_input_snapshot_namespace(namespace: str) -> str:
+    """Return an exact safe namespace, rejecting lossy normalization or truncation."""
+
+    original = str(namespace)
+    raw = original.strip()
+    canonical = _safe_role(raw)
+    if original != raw or canonical != original:
+        raise ValueError(
+            "Input snapshot namespace must already be a safe path segment of at most 80 characters"
+        )
+    return canonical
+
+
 def read_stable_regular_file(
     path: str | Path,
     *,
@@ -112,7 +125,7 @@ def _ensure_snapshot_root(resolved_job_dir: Path) -> Path:
 def _snapshot_namespace(snapshot_root: Path, namespace: str | None) -> Path:
     if namespace is None:
         return snapshot_root
-    namespaced_root = snapshot_root / _safe_role(namespace)
+    namespaced_root = snapshot_root / canonical_input_snapshot_namespace(namespace)
     if namespaced_root.is_symlink():
         raise ValueError(f"Input snapshot namespace must not be a symlink: {namespaced_root}")
     durable_mkdir(namespaced_root, mode=0o700, exist_ok=True)
@@ -124,7 +137,7 @@ def reserve_input_snapshot_namespace(job_dir: str | Path, namespace: str) -> Pat
 
     resolved_job_dir = Path(job_dir).expanduser().resolve()
     snapshot_root = _ensure_snapshot_root(resolved_job_dir)
-    namespace_dir = snapshot_root / _safe_role(namespace)
+    namespace_dir = snapshot_root / canonical_input_snapshot_namespace(namespace)
     if namespace_dir.is_symlink():
         raise ValueError(f"Input snapshot namespace must not be a symlink: {namespace_dir}")
     created = False
@@ -138,6 +151,20 @@ def reserve_input_snapshot_namespace(job_dir: str | Path, namespace: str) -> Pat
             fsync_directory(snapshot_root)
         raise
     return namespace_dir.resolve()
+
+
+def input_snapshot_namespace_dir(job_dir: str | Path, namespace: str) -> Path:
+    """Return one existing, confined snapshot generation namespace."""
+
+    resolved_job_dir = Path(job_dir).expanduser().resolve()
+    snapshot_root = _ensure_snapshot_root(resolved_job_dir)
+    namespace_dir = snapshot_root / canonical_input_snapshot_namespace(namespace)
+    if namespace_dir.is_symlink():
+        raise ValueError(f"Input snapshot namespace must not be a symlink: {namespace_dir}")
+    resolved_namespace = namespace_dir.resolve()
+    if not namespace_dir.is_dir() or resolved_namespace.parent != snapshot_root.resolve():
+        raise ValueError(f"Input snapshot namespace is not a confined directory: {namespace_dir}")
+    return resolved_namespace
 
 
 def snapshot_input_file(
@@ -326,7 +353,7 @@ def cleanup_unowned_input_snapshot_namespace(
     resolved_root = snapshot_root.resolve()
     if not resolved_root.is_dir() or not resolved_root.is_relative_to(resolved_job_dir):
         raise ValueError("Input snapshot directory escapes its job directory")
-    namespace_dir = snapshot_root / _safe_role(namespace)
+    namespace_dir = snapshot_root / canonical_input_snapshot_namespace(namespace)
     if namespace_dir.is_symlink():
         raise ValueError(f"Input snapshot namespace must not be a symlink: {namespace_dir}")
     if not namespace_dir.exists():
@@ -341,7 +368,9 @@ def cleanup_unowned_input_snapshot_namespace(
 __all__ = [
     "SNAPSHOT_DIR_NAME",
     "MAX_INPUT_SNAPSHOT_BYTES",
+    "canonical_input_snapshot_namespace",
     "cleanup_unowned_input_snapshot_namespace",
+    "input_snapshot_namespace_dir",
     "read_stable_regular_file",
     "reserve_input_snapshot_namespace",
     "snapshot_input_file",
