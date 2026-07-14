@@ -8,6 +8,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-14
+
+This patch release adds retained smoke-review packets and interactive queue
+resource visibility, and hardens real-engine smoke admission cleanup.
+
 ### Added
 
 - Added `orca_auto smoke`, with 11 retained fake ORCA, standalone xTB-MD, and
@@ -31,6 +36,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Interactive Telegram and Discord command replies now share the rich
+  notification presentation, while retaining plain-text fallbacks and preserving
+  queue or workflow IDs in successful submission replies.
 - Reserved `.orca_auto_smoke` trees are excluded from production submission,
   discovery, reindexing, snapshots, and cleanup. Queue publication and
   ORCA/xTB-MD snapshot rollback now preserve path identity and fail closed
@@ -43,6 +51,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `NO_COLOR`, and `--no-color` keep the previous plain, byte-stable table
   (including the `active_simulations:` line and plain indentation), and the
   messenger `/list` view is unchanged.
+
+### Fixed
+
+- Cleanup-proven real-engine smoke startup failures now return pending admission
+  leases to the idle state before release, so a pre-launch supervisor failure
+  cannot leave smoke capacity stuck until manual cleanup.
 
 ## [0.2.0] - 2026-07-13
 

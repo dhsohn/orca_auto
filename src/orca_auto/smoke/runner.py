@@ -12,7 +12,12 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 
-from orca_auto.core.admission import release_slot, reserve_slot, update_slot_metadata
+from orca_auto.core.admission import (
+    complete_slot_engine_process,
+    release_slot,
+    reserve_slot,
+    update_slot_metadata,
+)
 from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.core.utils.persistence import now_utc_iso
 
@@ -533,7 +538,6 @@ def _run_scenario(
     setup_error = ""
     lease: tuple[Path, str] | None = None
     lease_release_safe = True
-    lease_bound_to_supervisor = False
 
     junit_access_path = Path("/proc") / str(os.getpid()) / "fd" / str(junit_fd)
     command = [
@@ -591,7 +595,6 @@ def _run_scenario(
                 stderr_handle=stderr_handle,
                 lease=lease,
             )
-            lease_bound_to_supervisor = lease is not None
             process = supervised.process
             try:
                 return_code = process.wait(timeout=scenario.timeout_seconds)
@@ -647,16 +650,11 @@ def _run_scenario(
         if lease is not None and lease_release_safe:
             lease_root, lease_token = lease
             try:
-                if lease_bound_to_supervisor:
-                    releasable = update_slot_metadata(
-                        lease_root,
-                        lease_token,
-                        engine_process_state="idle",
+                releasable = complete_slot_engine_process(lease_root, lease_token)
+                if releasable is None or releasable.engine_process_state != "idle":
+                    raise RuntimeError(
+                        "could not mark the real-engine smoke admission lease releasable"
                     )
-                    if releasable is None or releasable.engine_process_state != "idle":
-                        raise RuntimeError(
-                            "could not mark the real-engine smoke admission lease releasable"
-                        )
                 release_slot(lease_root, lease_token)
             except (OSError, RuntimeError, ValueError) as exc:
                 release_error = f"{type(exc).__name__}: {exc}"

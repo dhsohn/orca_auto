@@ -931,6 +931,62 @@ def test_real_engine_interrupt_retains_slot_when_cleanup_is_unconfirmed(
     assert release_slot(admission_root, slots[0].token) is True
 
 
+def test_real_engine_startup_failure_resets_pending_slot_before_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    runs_root = tmp_path / "runs"
+    admission_root = tmp_path / "admission"
+    _write_tiny_repo(repo_root, status="completed")
+    real_scenario = _scenario(expected_status="completed", profile="real-xtb")
+    monkeypatch.setattr(runner, "scenarios_for_profile", lambda _profile: (real_scenario,))
+
+    original_update_slot_metadata = runner.update_slot_metadata
+
+    def fail_after_pending_bind(*_args: Any, **kwargs: Any) -> Any:
+        lease_root, lease_token = kwargs["lease"]
+        pending = original_update_slot_metadata(
+            lease_root,
+            lease_token,
+            owner_pid=os.getpid(),
+            engine_process_state="pending",
+        )
+        assert pending is not None
+        assert pending.engine_process_state == "pending"
+        raise RuntimeError("smoke supervisor exited before the launch gate was released")
+
+    monkeypatch.setattr(runner, "_start_scenario_process", fail_after_pending_bind)
+    original_release_slot = runner.release_slot
+    release_states: list[str] = []
+
+    def observe_release_state(root: Path, token: str) -> bool:
+        slot = next(item for item in list_all_slots(root) if item.token == token)
+        release_states.append(slot.engine_process_state)
+        return original_release_slot(root, token)
+
+    monkeypatch.setattr(runner, "release_slot", observe_release_state)
+
+    result = runner.run_smoke_suite(
+        repo_root=repo_root,
+        runs_root=runs_root,
+        profile="real-xtb",
+        real_engine_admission=runner.RealEngineAdmission(
+            root=admission_root,
+            global_limit=1,
+            xtb_md_limit=1,
+        ),
+    )
+
+    assert result.exit_code == 1
+    manifest = json.loads(result.batch_manifest_path.read_text(encoding="utf-8"))
+    assert (
+        "supervisor exited before the launch gate" in manifest["cases"][0]["pytest"]["setup_error"]
+    )
+    assert release_states == ["idle"]
+    assert list_all_slots(admission_root) == []
+
+
 def test_real_engine_case_terminates_child_when_admission_rebind_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
