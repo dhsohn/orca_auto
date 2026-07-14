@@ -89,4 +89,19 @@ echo "[pre-push] Running full check suite (scripts/check.sh)…"
 # python>=3.11 is on the hook's PATH. SKIP_INSTALL keeps it from rebuilding the
 # already-usable venv — except when this push changes dependency metadata (see
 # dep_files_changed above), where CI-parity requires the install step.
-PYTHON_BIN="$VENV_DIR/bin/python" ORCA_AUTO_CHECK_SKIP_INSTALL=$skip_install exec bash "$ROOT/scripts/check.sh"
+# Git exports repository-local variables such as GIT_DIR to hooks.  If they
+# reach pytest, tests that create a temporary repository can mutate this
+# worktree instead because their `git -C ...`/cwd is overridden by GIT_DIR.
+# Keep the variables for the parity checks above, then remove every name Git
+# itself identifies as repository-local before the suite starts.
+git_local_env_output="$(git rev-parse --local-env-vars)"
+while IFS= read -r name; do
+  [[ -n "$name" ]] && unset "$name"
+done <<< "$git_local_env_output"
+
+# A shared venv may be an editable install of a sibling worktree.  Prepending
+# this checkout makes the gate validate the commit that is actually pushed.
+PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+  PYTHON_BIN="$VENV_DIR/bin/python" \
+  ORCA_AUTO_CHECK_SKIP_INSTALL=$skip_install \
+  exec bash "$ROOT/scripts/check.sh"
