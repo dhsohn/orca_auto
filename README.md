@@ -13,7 +13,7 @@ orca_auto is a queue-first interface for standalone ORCA, standalone xTB molecul
 
 ## Statement of need
 
-Computational chemistry projects often outgrow one-shot engine commands and ad hoc shell loops. Users need durable submission, supervised execution, explicit recovery semantics, consistent job reports, and an explicit record of which calculation failed and what next action is safe. ORCA remains the primary electronic-structure engine, while xTB-MD is a deliberately separate standalone dynamics surface; orca_auto adds the Linux/WSL runtime and observability layer around both and around ORCA-centered workflows.
+Computational chemistry projects often outgrow one-shot engine commands and ad hoc shell loops. Users need durable submission, supervised execution, explicit recovery semantics, consistent job reports, and an explicit record of which calculation failed and what next action is safe.
 
 The project is intended for researchers running repeated ORCA calculations, transition-state searches, and reaction or conformer workflows who want auditable state and recovery behavior without adopting a general workflow platform. It focuses on CLI, configuration, queue, report, and retry contracts rather than replacing chemical judgment, site scheduler policy, or ORCA input design. See [docs/RELATED_WORK.md](docs/RELATED_WORK.md) for scope and ecosystem positioning.
 
