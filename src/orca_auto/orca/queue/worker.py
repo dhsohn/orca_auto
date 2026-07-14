@@ -117,7 +117,6 @@ from . import worker_lifecycle as _lifecycle_helpers
 from . import worker_runtime as _runtime_helpers
 from . import worker_tracking as _tracking_helpers
 from .adapter import (
-    TERMINAL_REPLAY_METADATA_KEY,
     get_cancel_requested,
     get_entry_by_id,
     list_queue,
@@ -137,6 +136,27 @@ from .adapter import (
 )
 from .adapter import (
     update_metadata as update_queue_metadata,
+)
+from .terminal_replay import (
+    TERMINAL_REPLAY_METADATA_KEY,
+    TerminalReplayMarkerKind,
+    terminal_replay_is_fence_only,
+    terminal_replay_marker_kind,
+)
+from .terminal_replay import (
+    StateGenerationFingerprint as _StateGenerationFingerprint,
+)
+from .terminal_replay import (
+    load_state_generation_fingerprint as _load_state_generation_fingerprint,
+)
+from .terminal_replay import (
+    state_fingerprint_from_payload as _state_fingerprint_from_payload,
+)
+from .terminal_replay import (
+    terminal_replay_marker_from_entry as _terminal_replay_marker_from_entry,
+)
+from .terminal_replay import (
+    terminal_status_from_run_state as _terminal_status_from_run_state,
 )
 from .worker_deps import (
     OrcaQueueWorkerFacadeBindings,
@@ -186,15 +206,6 @@ class _ArtifactGeneration:
     readable: bool
     state_job_id: str = ""
     report_job_id: str = ""
-
-
-@dataclass(frozen=True)
-class _StateGenerationFingerprint:
-    present: bool
-    readable: bool
-    job_id: str = ""
-    run_id: str = ""
-    terminal_status: str = ""
 
 
 @dataclass(frozen=True)
@@ -456,6 +467,7 @@ def _fence_invalid_orca_publication(
             queue_root,
             entry.queue_id,
             error=f"queue_publication_job_dir_invalid:{issue}",
+            publish_terminal_side_effects=False,
             metadata_update=queue_record_sync_metadata(
                 QUEUE_RECORD_SYNC_ABORTED,
                 token=token,
@@ -857,36 +869,6 @@ def _on_worker_process_started(
     )
 
 
-def _terminal_replay_item_from_mark_result(
-    mark_result: Any,
-    job: _RunningJob,
-    *,
-    marker: dict[str, Any],
-    rc: int,
-) -> _TerminalReplayWorkItem:
-    reaction_dir = str(job.reaction_dir or "").strip()
-    entry = mark_result.current_entry
-    metadata = queue_entry_metadata(entry) if entry is not None else {}
-    selected_inp = str(
-        marker.get("selected_inp")
-        or metadata.get("selected_inp")
-        or metadata.get("selected_input_path")
-        or ""
-    ).strip()
-    return _TerminalReplayWorkItem(
-        queue_root=mark_result.queue_root,
-        queue_id=job.queue_id,
-        reaction_dir=reaction_dir,
-        reaction_key=str(Path(reaction_dir).expanduser().resolve()) if reaction_dir else "",
-        task_id=str(mark_result.expected_job_id or job.task_id or "").strip(),
-        observed_status=str(mark_result.status or "").strip().lower(),
-        selected_inp=selected_inp,
-        error=str(marker.get("error") or f"exit_code={rc}"),
-        recorded_run_id=str(mark_result.run_id or "").strip(),
-        observed_state=_state_fingerprint_from_payload(marker.get("observed_state")),
-    )
-
-
 def _finalize_finished_job(worker: Any, queue_id: str, job: _RunningJob, *, rc: int) -> None:
     # A child can exit while its engine process is still recorded as active.  Do
     # not publish a terminal queue state (or make the capacity reusable) until
@@ -907,85 +889,12 @@ def _finalize_finished_job(worker: Any, queue_id: str, job: _RunningJob, *, rc: 
                 job.__dict__.pop(_TERMINAL_FINALIZE_RETRY_ATTR, None)
         return
 
-    hooks = _orca_worker_lifecycle_hooks()
-    entry_before_mark = _queue_entry_by_id(_job_queue_root(worker, job), queue_id)
-    entry_metadata = (
-        queue_entry_metadata(entry_before_mark) if entry_before_mark is not None else {}
-    )
-    task_id_before_mark = (
-        queue_entry_task_id(entry_before_mark) if entry_before_mark is not None else None
-    ) or job.task_id
-    selected_inp = str(
-        entry_metadata.get("selected_inp") or entry_metadata.get("selected_input_path") or ""
-    ).strip()
-    captured_marker: dict[str, Any] | None = None
-
-    def marker_for(status: str, error: str) -> dict[str, Any]:
-        nonlocal captured_marker
-        captured_marker = _terminal_replay_marker(
-            reaction_dir=str(job.reaction_dir or ""),
-            task_id=task_id_before_mark,
-            selected_inp=selected_inp,
-            status=status,
-            error=error,
-        )
-        return {_TERMINAL_REPLAY_METADATA_KEY: captured_marker}
-
-    def mark_cancelled_with_evidence(
-        root: Any,
-        target_queue_id: str,
-        **generation_kwargs: Any,
-    ) -> Any:
-        return hooks.mark_cancelled_fn(
-            root,
-            target_queue_id,
-            metadata_update=marker_for(STATUS_CANCELLED, "cancel_requested"),
-            **generation_kwargs,
-        )
-
-    def mark_completed_with_evidence(
-        root: Any,
-        target_queue_id: str,
-        *,
-        run_id: str | None = None,
-        **generation_kwargs: Any,
-    ) -> Any:
-        return hooks.mark_completed_fn(
-            root,
-            target_queue_id,
-            run_id=run_id,
-            metadata_update=marker_for(STATUS_COMPLETED, ""),
-            **generation_kwargs,
-        )
-
-    def mark_failed_with_evidence(
-        root: Any,
-        target_queue_id: str,
-        *,
-        error: str,
-        run_id: str | None = None,
-        **generation_kwargs: Any,
-    ) -> Any:
-        return hooks.mark_failed_fn(
-            root,
-            target_queue_id,
-            error=error,
-            run_id=run_id,
-            metadata_update=marker_for(STATUS_FAILED, error),
-            **generation_kwargs,
-        )
-
     mark_result = mark_terminal_process_queue_entry_with_result(
         worker,
         queue_id,
         job,
         rc=rc,
-        hooks=replace(
-            hooks,
-            mark_cancelled_fn=mark_cancelled_with_evidence,
-            mark_completed_fn=mark_completed_with_evidence,
-            mark_failed_fn=mark_failed_with_evidence,
-        ),
+        hooks=_orca_worker_lifecycle_hooks(),
     )
     release_slot_after_finalize = False
     try:
@@ -993,45 +902,37 @@ def _finalize_finished_job(worker: Any, queue_id: str, job: _RunningJob, *, rc: 
         # queue row. The mark result carries a pre-mark snapshot, so re-read before
         # deciding: an actually RUNNING row has no durable terminal owner and must
         # retain the job and slot for the supervised completion retry.
-        if not mark_result.marked:
-            current_after_mark = _queue_entry_by_id(mark_result.queue_root, queue_id)
-            if _normalized_entry_status(current_after_mark) == STATUS_RUNNING:
-                raise RuntimeError(
-                    "terminal queue mark did not update the running entry; "
-                    f"retaining retry ownership for {queue_id}"
-                )
-            if (
-                current_after_mark is not None
-                and _normalized_entry_status(current_after_mark) in _TERMINAL_QUEUE_STATUSES
-                and _terminal_replay_marker_from_entry(current_after_mark) is not None
-            ):
-                reaction_dir = queue_entry_reaction_dir(current_after_mark)
-                reaction_key = _reaction_generation_key(current_after_mark)
-                if reaction_dir and reaction_key:
-                    item = _new_terminal_replay_work_item(
-                        mark_result.queue_root,
-                        current_after_mark,
-                        reaction_dir=reaction_dir,
-                        reaction_key=reaction_key,
-                    )
-                    _strictly_finish_terminal_replay(worker, job, item)
-            release_slot_after_finalize = True
-            return
-        if captured_marker is None:
-            captured_marker = _terminal_replay_marker(
-                reaction_dir=str(job.reaction_dir or ""),
-                task_id=mark_result.expected_job_id,
-                selected_inp=selected_inp,
-                status=str(mark_result.status or ""),
-                error=f"exit_code={rc}" if rc else "",
+        current_after_mark = _queue_entry_by_id(mark_result.queue_root, queue_id)
+        if _normalized_entry_status(current_after_mark) == STATUS_RUNNING:
+            raise RuntimeError(
+                "terminal queue mark did not update the running entry; "
+                f"retaining retry ownership for {queue_id}"
             )
-        item = _terminal_replay_item_from_mark_result(
-            mark_result,
-            job,
-            marker=captured_marker,
-            rc=rc,
+        marker = (
+            _terminal_replay_marker_from_entry(current_after_mark)
+            if current_after_mark is not None
+            else None
         )
-        _strictly_finish_terminal_replay(worker, job, item)
+        if marker is not None:
+            assert current_after_mark is not None
+            reaction_dir = queue_entry_reaction_dir(current_after_mark)
+            reaction_key = _reaction_generation_key(current_after_mark)
+            if not reaction_dir or not reaction_key:
+                raise RuntimeError(
+                    f"terminal replay marker has no durable reaction identity: {queue_id}"
+                )
+            item = _new_terminal_replay_work_item(
+                mark_result.queue_root,
+                current_after_mark,
+                reaction_dir=reaction_dir,
+                reaction_key=reaction_key,
+            )
+            _strictly_finish_terminal_replay(worker, job, item)
+        elif mark_result.marked:
+            logger.info(
+                "Terminal queue generation was already closed before finalizer replay: %s",
+                queue_id,
+            )
         release_slot_after_finalize = True
     finally:
         if release_slot_after_finalize:
@@ -1051,95 +952,6 @@ def _finalize_child_exit(worker: Any, job: _RunningJob, *, rc: int) -> None:
 def _normalized_entry_status(entry: Any) -> str:
     raw_status = getattr(entry, "status", None)
     return str(getattr(raw_status, "value", raw_status) or "").strip().lower()
-
-
-def _load_state_generation_fingerprint(
-    reaction_dir: Path,
-) -> _StateGenerationFingerprint:
-    state_file = state_path(reaction_dir)
-    present = state_file.exists()
-    try:
-        state = load_state(reaction_dir)
-    except Exception:  # noqa: BLE001
-        return _StateGenerationFingerprint(present=True, readable=False)
-    present = present or state_file.exists()
-    if state is None:
-        return _StateGenerationFingerprint(present=present, readable=not present)
-    return _StateGenerationFingerprint(
-        present=True,
-        readable=True,
-        job_id=_tracking_helpers.payload_job_id(state),
-        run_id=str(state.get("run_id") or "").strip(),
-        terminal_status=_terminal_status_from_run_state(state) or "",
-    )
-
-
-def _state_fingerprint_payload(
-    fingerprint: _StateGenerationFingerprint,
-) -> dict[str, Any]:
-    return {
-        "present": fingerprint.present,
-        "readable": fingerprint.readable,
-        "job_id": fingerprint.job_id,
-        "run_id": fingerprint.run_id,
-        "terminal_status": fingerprint.terminal_status,
-    }
-
-
-def _state_fingerprint_from_payload(payload: Any) -> _StateGenerationFingerprint | None:
-    if not isinstance(payload, dict):
-        return None
-    present = payload.get("present")
-    readable = payload.get("readable")
-    if not isinstance(present, bool) or not isinstance(readable, bool):
-        return None
-    return _StateGenerationFingerprint(
-        present=present,
-        readable=readable,
-        job_id=str(payload.get("job_id") or "").strip(),
-        run_id=str(payload.get("run_id") or "").strip(),
-        terminal_status=str(payload.get("terminal_status") or "").strip(),
-    )
-
-
-def _terminal_replay_marker(
-    *,
-    reaction_dir: str,
-    task_id: str | None,
-    selected_inp: str,
-    status: str,
-    error: str,
-) -> dict[str, Any]:
-    reaction_text = str(reaction_dir or "").strip()
-    fingerprint = (
-        _load_state_generation_fingerprint(Path(reaction_text).expanduser().resolve())
-        if reaction_text
-        else _StateGenerationFingerprint(present=False, readable=True)
-    )
-    return {
-        "version": 1,
-        "task_id": str(task_id or "").strip(),
-        "selected_inp": selected_inp,
-        "status": status,
-        "error": error,
-        "observed_state": _state_fingerprint_payload(fingerprint),
-    }
-
-
-def _terminal_replay_marker_from_entry(entry: Any) -> dict[str, Any] | None:
-    marker = queue_entry_metadata(entry).get(_TERMINAL_REPLAY_METADATA_KEY)
-    if not isinstance(marker, dict):
-        return None
-    version = marker.get("version")
-    if type(version) is not int or version != 1:
-        return None
-    if _state_fingerprint_from_payload(marker.get("observed_state")) is None:
-        return None
-    marker_task_id = str(marker.get("task_id") or "").strip()
-    entry_task_id = str(queue_entry_task_id(entry) or "").strip()
-    if marker_task_id and entry_task_id and marker_task_id != entry_task_id:
-        return None
-    return marker
 
 
 def _clear_terminal_replay_marker(item: _TerminalReplayWorkItem) -> bool:
@@ -1472,7 +1284,15 @@ def _reconcile_orphaned_running(worker: Any) -> None:
     }
     previous_statuses = getattr(worker, "_orca_reconcile_statuses", None)
     if not isinstance(previous_statuses, dict):
-        previous_statuses = {key: "running" for key in before_by_key}
+        # Process startup has no observed status edge.  Treat the first queue
+        # snapshot as the replay cursor instead of inventing RUNNING origins for
+        # historical terminal rows.  A terminal row that really has unfinished
+        # side effects remains replayable through its durable marker below, while
+        # lifecycle reconciliation can still expose a real active -> terminal edge
+        # between ``before_entries`` and ``after_entries`` in this same poll.
+        previous_statuses = {
+            key: _normalized_entry_status(entry) for key, entry in before_by_key.items()
+        }
     protected_queue_keys, protected_queue_ids = live_queue_slot_keys_for_slots(
         worker.admission_root,
         list_slots_fn=list_slots,
@@ -1496,14 +1316,38 @@ def _reconcile_orphaned_running(worker: Any) -> None:
         for key, item in pending_replays.items()
         if isinstance(key, tuple) and isinstance(item, _TerminalReplayWorkItem)
     }
+    raw_blocked_markers: object = getattr(worker, "_orca_invalid_terminal_replay_markers", set())
+    previously_blocked_markers: set[tuple[str, str]] = (
+        {
+            key
+            for key in raw_blocked_markers
+            if isinstance(key, tuple)
+            and len(key) == 2
+            and all(isinstance(part, str) for part in key)
+        }
+        if isinstance(raw_blocked_markers, set)
+        else set()
+    )
+    blocked_marker_keys: set[tuple[str, str]] = set()
     for queue_root, entry in after_entries:
-        if (
-            _normalized_entry_status(entry) not in _TERMINAL_QUEUE_STATUSES
-            or _terminal_replay_marker_from_entry(entry) is None
-        ):
+        if _normalized_entry_status(entry) not in _TERMINAL_QUEUE_STATUSES:
             continue
         resolved_root = str(Path(queue_root).expanduser().resolve())
         key = (resolved_root, queue_entry_id(entry))
+        marker_kind = terminal_replay_marker_kind(entry)
+        if marker_kind is TerminalReplayMarkerKind.INVALID_OR_UNSUPPORTED:
+            blocked_marker_keys.add(key)
+            if key not in previously_blocked_markers:
+                logger.error(
+                    "ORCA terminal replay is repair-blocked by an invalid or unsupported "
+                    "durable marker; retaining the queue generation from clear/force: "
+                    "queue_id=%s queue_root=%s",
+                    queue_entry_id(entry),
+                    resolved_root,
+                )
+            continue
+        if marker_kind is not TerminalReplayMarkerKind.VALID:
+            continue
         reaction_key = _reaction_generation_key(entry)
         if reaction_key is None:
             continue
@@ -1520,6 +1364,7 @@ def _reconcile_orphaned_running(worker: Any) -> None:
             and existing_item.reaction_key == durable_item.reaction_key
         ):
             pending_replays[key] = durable_item
+    worker._orca_invalid_terminal_replay_markers = blocked_marker_keys
 
     superseded_replay_keys: set[tuple[str, str]] = set()
     for key, item in list(pending_replays.items()):
@@ -1553,6 +1398,17 @@ def _reconcile_orphaned_running(worker: Any) -> None:
         pending_item = pending_replays.get(owner)
         pending_replay = isinstance(pending_item, _TerminalReplayWorkItem)
         current_generation_keys.add(owner)
+        marker_kind = terminal_replay_marker_kind(entry)
+        if _normalized_entry_status(entry) in _TERMINAL_QUEUE_STATUSES and (
+            terminal_replay_is_fence_only(entry)
+            or marker_kind is TerminalReplayMarkerKind.INVALID_OR_UNSUPPORTED
+        ):
+            # Administrative fences own no run artifact generation.  An
+            # invalid/unsupported marker is likewise excluded so neither an
+            # observed edge nor a stale in-memory snapshot can bypass its
+            # repair-blocked boundary.
+            pending_replays.pop(owner, None)
+            continue
         generation_rows.setdefault(reaction_key, []).append(
             _ReactionGenerationRow(
                 owner=owner,
@@ -1620,6 +1476,13 @@ def _reconcile_orphaned_running(worker: Any) -> None:
         if status not in _TERMINAL_QUEUE_STATUSES:
             pending_replays.pop(key, None)
             continue
+        marker_kind = terminal_replay_marker_kind(entry)
+        if (
+            terminal_replay_is_fence_only(entry)
+            or marker_kind is TerminalReplayMarkerKind.INVALID_OR_UNSUPPORTED
+        ):
+            pending_replays.pop(key, None)
+            continue
         if key in superseded_replay_keys:
             # The newer generation identity is definitive.  Advance the cursor
             # to this row's terminal status so it is not reconsidered forever.
@@ -1627,17 +1490,17 @@ def _reconcile_orphaned_running(worker: Any) -> None:
             continue
         before_entry = before_by_key.get(key)
         before_status = _normalized_entry_status(before_entry)
-        # ``before_entries`` is sampled after an external PENDING cancellation
-        # may already have made the entry terminal, so requiring a visible
-        # RUNNING -> terminal edge misses that transition for the lifetime of a
-        # long-running worker.  The previous successful reconcile is the durable
-        # in-process replay cursor: retry a new terminal status, and leave failed
-        # side effects at the synthetic ``running`` cursor below.
-        if (
-            key not in pending_replays
-            and previous_statuses.get(key) == status
-            and before_status == status
-        ):
+        # Replay requires positive evidence: either a durable replay marker (or
+        # an in-memory retry snapshot), an active row terminalized during this
+        # reconciliation, or an active status observed by the prior poll.  A
+        # terminal row first seen after startup is closed history, not proof of a
+        # transition; replaying it can rewrite its state/run identity and resend
+        # an old notification.
+        observed_active_transition = (
+            before_status in _ACTIVE_QUEUE_STATUSES
+            or previous_statuses.get(key) in _ACTIVE_QUEUE_STATUSES
+        )
+        if key not in pending_replays and not observed_active_transition:
             continue
         reaction_dir = queue_entry_reaction_dir(entry)
         if not reaction_dir:
@@ -1859,16 +1722,6 @@ def _check_orca_cancel_requests(worker: EngineQueueWorker) -> None:
         job_queue_root_fn=_job_queue_root,
         cancel_running_job_fn=_cancel_orca_running_job,
     )
-
-
-def _terminal_status_from_run_state(state: RunState | None) -> str | None:
-    if state is None:
-        return None
-    final_result = state.get("final_result")
-    if not isinstance(final_result, dict):
-        return None
-    status = str(final_result.get("status") or "").strip().lower()
-    return status if status in _TERMINAL_QUEUE_STATUSES else None
 
 
 def _load_state_for_terminal_generation(
@@ -2152,15 +2005,6 @@ def _finalize_cancelled_run(
 def _cancel_orca_running_job(worker: EngineQueueWorker, queue_id: str, job: _RunningJob) -> bool:
     hooks = _orca_worker_lifecycle_hooks()
     queue_root = _job_queue_root(worker, job)
-    entry_snapshot = _queue_entry_by_id(queue_root, queue_id)
-    metadata = queue_entry_metadata(entry_snapshot) if entry_snapshot is not None else {}
-    task_id = (
-        queue_entry_task_id(entry_snapshot) if entry_snapshot is not None else None
-    ) or job.task_id
-    selected_inp = str(
-        metadata.get("selected_inp") or metadata.get("selected_input_path") or ""
-    ).strip()
-    captured_marker: dict[str, Any] | None = None
 
     def terminate_child_and_recover(process: Any) -> bool:
         terminated = hooks.terminate_process_fn(process)
@@ -2168,26 +2012,6 @@ def _cancel_orca_running_job(worker: EngineQueueWorker, queue_id: str, job: _Run
             job.__dict__[_TERMINAL_FINALIZE_RETRY_ATTR] = True
             recover_slot_engine_process(worker.admission_root, job.admission_token)
         return terminated
-
-    def mark_cancelled_with_evidence(
-        root: Any,
-        target_queue_id: str,
-        **generation_kwargs: Any,
-    ) -> Any:
-        nonlocal captured_marker
-        captured_marker = _terminal_replay_marker(
-            reaction_dir=str(job.reaction_dir or ""),
-            task_id=task_id,
-            selected_inp=selected_inp,
-            status=STATUS_CANCELLED,
-            error="cancel_requested",
-        )
-        return hooks.mark_cancelled_fn(
-            root,
-            target_queue_id,
-            metadata_update={_TERMINAL_REPLAY_METADATA_KEY: captured_marker},
-            **generation_kwargs,
-        )
 
     try:
         cancelled = cancel_running_process_job(
@@ -2197,7 +2021,6 @@ def _cancel_orca_running_job(worker: EngineQueueWorker, queue_id: str, job: _Run
             hooks=replace(
                 hooks,
                 terminate_process_fn=terminate_child_and_recover,
-                mark_cancelled_fn=mark_cancelled_with_evidence,
             ),
             release_admission_slot=False,
         )
@@ -2209,26 +2032,34 @@ def _cancel_orca_running_job(worker: EngineQueueWorker, queue_id: str, job: _Run
         return False
     if not cancelled:
         return False
-    marker = captured_marker or _terminal_replay_marker(
-        reaction_dir=str(job.reaction_dir or ""),
-        task_id=task_id,
-        selected_inp=selected_inp,
-        status=STATUS_CANCELLED,
-        error="cancel_requested",
+    terminal_entry = _queue_entry_by_id(queue_root, queue_id)
+    if _normalized_entry_status(terminal_entry) == STATUS_RUNNING:
+        logger.error(
+            "Cancellation returned without a durable terminal queue transition: %s",
+            queue_id,
+        )
+        return False
+    marker = (
+        _terminal_replay_marker_from_entry(terminal_entry) if terminal_entry is not None else None
     )
-    replay_item = _TerminalReplayWorkItem(
-        queue_root=queue_root,
-        queue_id=queue_id,
-        reaction_dir=str(job.reaction_dir or "").strip(),
-        reaction_key=(
-            str(Path(job.reaction_dir).expanduser().resolve()) if job.reaction_dir else ""
-        ),
-        task_id=str(task_id or "").strip(),
-        observed_status=STATUS_CANCELLED,
-        selected_inp=selected_inp,
-        error="cancel_requested",
-        recorded_run_id=str(metadata.get("run_id") or "").strip(),
-        observed_state=_state_fingerprint_from_payload(marker.get("observed_state")),
+    if marker is None:
+        # Another owner may already have completed and cleared this exact
+        # generation while the stale cancellation snapshot was in flight.
+        worker._release_admission_slot(job.admission_token)
+        job.__dict__.pop("_orca_terminal_replay_item", None)
+        job.__dict__.pop(_TERMINAL_FINALIZE_RETRY_ATTR, None)
+        return True
+    assert terminal_entry is not None
+    reaction_dir = queue_entry_reaction_dir(terminal_entry)
+    reaction_key = _reaction_generation_key(terminal_entry)
+    if not reaction_dir or not reaction_key:
+        logger.error("Durable cancellation marker has no reaction identity: %s", queue_id)
+        return False
+    replay_item = _new_terminal_replay_work_item(
+        queue_root,
+        terminal_entry,
+        reaction_dir=reaction_dir,
+        reaction_key=reaction_key,
     )
     release_slot = False
     try:

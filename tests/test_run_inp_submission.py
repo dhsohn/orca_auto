@@ -327,6 +327,8 @@ def test_orca_compensation_failure_fences_row_without_publication(
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.status == QueueStatus.FAILED
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_ABORTED
+    assert entry.metadata[queue_adapter.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY] is True
+    assert entry.metadata.get(queue_adapter.TERMINAL_REPLAY_METADATA_KEY) is None
     assert "queue_after_commit_guard_failed" in entry.error
     assert queue_entry_is_claimable(entry) is False
     assert not (tmp_path / "job_locations.json").exists()

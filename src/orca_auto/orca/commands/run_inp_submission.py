@@ -416,6 +416,7 @@ def _fence_uncompensated_orca_enqueue(
                 f"{error.after_commit_error.__class__.__name__}:"
                 f"{error.after_commit_error}"
             ),
+            publish_terminal_side_effects=False,
             metadata_update=queue_record_sync_metadata(
                 QUEUE_RECORD_SYNC_ABORTED,
                 token=publication_token,

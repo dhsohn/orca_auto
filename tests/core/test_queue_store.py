@@ -1137,11 +1137,19 @@ def test_pending_cancel_callback_runs_before_queue_transition_under_both_locks(
     events: list[tuple[str, QueueStatus]] = []
     real_save_entries = store.save_entries
 
+    def pending_metadata(candidate: store.QueueEntry) -> dict[str, object]:
+        assert lock_state == {"publication": True, "queue": True}
+        assert candidate.status == QueueStatus.CANCELLED
+        assert candidate.cancel_requested is True
+        events.append(("metadata", candidate.status))
+        return {"terminal_replay": {"status": candidate.status.value}}
+
     def before_pending_cancel(candidate: store.QueueEntry) -> None:
         assert lock_state == {"publication": True, "queue": True}
         [durable] = store.load_entries(tmp_path)
         assert durable.status == QueueStatus.PENDING
         assert candidate.status == QueueStatus.CANCELLED
+        assert candidate.metadata["terminal_replay"] == {"status": "cancelled"}
         events.append(("callback", candidate.status))
 
     def save_after_callback(root: Path, entries: Sequence[store.QueueEntry]) -> None:
@@ -1153,12 +1161,14 @@ def test_pending_cancel_callback_runs_before_queue_transition_under_both_locks(
         tmp_path,
         entry.queue_id,
         expected_entry=entry,
+        pending_metadata_update_fn=pending_metadata,
         before_pending_cancel_fn=before_pending_cancel,
         save_entries_fn=save_after_callback,
     )
 
     assert cancelled is not None and cancelled.status == QueueStatus.CANCELLED
     assert events == [
+        ("metadata", QueueStatus.CANCELLED),
         ("callback", QueueStatus.CANCELLED),
         ("save", QueueStatus.CANCELLED),
     ]
@@ -1195,6 +1205,44 @@ def test_pending_cancel_callback_failure_leaves_queue_pending(
     assert unchanged.finished_at == ""
 
 
+def test_pending_cancel_metadata_callback_failure_aborts_queue_write(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    entry = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="pending-metadata-failure",
+        task_kind="kind",
+        engine="engine",
+        metadata={"keep": "yes"},
+    )
+    before = _queue_file(tmp_path).read_bytes()
+    save_calls = 0
+
+    def reject_metadata(_candidate: store.QueueEntry) -> dict[str, object]:
+        raise OSError("metadata generation failed")
+
+    def count_save(_root: Path, _entries: Sequence[store.QueueEntry]) -> None:
+        nonlocal save_calls
+        save_calls += 1
+
+    with pytest.raises(OSError, match="metadata generation failed"):
+        store.request_cancel(
+            tmp_path,
+            entry.queue_id,
+            pending_metadata_update_fn=reject_metadata,
+            save_entries_fn=count_save,
+        )
+
+    assert save_calls == 0
+    assert _queue_file(tmp_path).read_bytes() == before
+    [unchanged] = store.list_queue(tmp_path)
+    assert unchanged.status == QueueStatus.PENDING
+    assert unchanged.metadata == {"keep": "yes"}
+
+
 def test_running_cancel_does_not_invoke_pending_cancel_callback(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1214,6 +1262,9 @@ def test_running_cancel_does_not_invoke_pending_cancel_callback(
         tmp_path,
         pending.queue_id,
         expected_entry=running,
+        pending_metadata_update_fn=lambda _candidate: pytest.fail(
+            "pending metadata callback must not run for a running cancellation"
+        ),
         before_pending_cancel_fn=lambda _candidate: pytest.fail(
             "running cancellation must remain worker-owned"
         ),
@@ -1630,7 +1681,13 @@ def test_requeue_running_entry_returns_running_entry_to_pending(
     assert dequeued.queue_id == running.queue_id
     assert dequeued.status == QueueStatus.RUNNING
 
-    updated = store.requeue_running_entry(tmp_path, running.queue_id)
+    updated = store.requeue_running_entry(
+        tmp_path,
+        running.queue_id,
+        cancel_metadata_update_fn=lambda _candidate: pytest.fail(
+            "cancel metadata callback must not run for an ordinary requeue"
+        ),
+    )
     assert updated is not None
     assert updated.status == QueueStatus.PENDING
     assert updated.started_at == ""
@@ -1664,15 +1721,85 @@ def test_requeue_running_entry_cancels_when_cancel_requested(
     assert store.dequeue_next(tmp_path) is not None
     assert store.request_cancel(tmp_path, running.queue_id) is not None
 
-    updated = store.requeue_running_entry(tmp_path, running.queue_id)
+    lock_held = False
+
+    @contextmanager
+    def mutation_lock(_root: Path, *, timeout_seconds: float = 10.0):
+        nonlocal lock_held
+        del timeout_seconds
+        assert lock_held is False
+        lock_held = True
+        try:
+            yield
+        finally:
+            lock_held = False
+
+    monkeypatch.setattr(store, "queue_lock", mutation_lock)
+
+    def cancel_metadata(candidate: store.QueueEntry) -> dict[str, object]:
+        assert lock_held is True
+        assert candidate.status == QueueStatus.CANCELLED
+        assert candidate.cancel_requested is False
+        return {"terminal_replay": {"status": candidate.status.value}}
+
+    updated = store.requeue_running_entry(
+        tmp_path,
+        running.queue_id,
+        cancel_metadata_update_fn=cancel_metadata,
+    )
     assert updated is not None
     assert updated.status == QueueStatus.CANCELLED
     assert updated.finished_at != ""
     # The cancel has been honored; the terminal entry no longer advertises it.
     assert updated.cancel_requested is False
+    assert updated.metadata["terminal_replay"] == {"status": "cancelled"}
+    assert lock_held is False
 
     # The cancelled entry is terminal and is never handed back out for a resume.
     assert store.dequeue_next(tmp_path) is None
+
+
+def test_requeue_cancel_metadata_callback_failure_aborts_queue_write(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    entry = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="running-metadata-failure",
+        task_kind="kind",
+        engine="engine",
+        metadata={"keep": "yes"},
+    )
+    running = store.dequeue_next(tmp_path)
+    assert running is not None
+    requested = store.request_cancel(tmp_path, entry.queue_id)
+    assert requested is not None and requested.cancel_requested is True
+    before = _queue_file(tmp_path).read_bytes()
+    save_calls = 0
+
+    def reject_metadata(_candidate: store.QueueEntry) -> dict[str, object]:
+        raise OSError("metadata generation failed")
+
+    def count_save(_root: Path, _entries: Sequence[store.QueueEntry]) -> None:
+        nonlocal save_calls
+        save_calls += 1
+
+    with pytest.raises(OSError, match="metadata generation failed"):
+        store.requeue_running_entry(
+            tmp_path,
+            entry.queue_id,
+            cancel_metadata_update_fn=reject_metadata,
+            save_entries_fn=count_save,
+        )
+
+    assert save_calls == 0
+    assert _queue_file(tmp_path).read_bytes() == before
+    [unchanged] = store.list_queue(tmp_path)
+    assert unchanged.status == QueueStatus.RUNNING
+    assert unchanged.cancel_requested is True
+    assert unchanged.metadata == {"keep": "yes"}
 
 
 def test_clear_terminal_removes_terminal_entries_and_can_keep_latest(
@@ -1804,6 +1931,112 @@ def test_mark_helpers_merge_metadata_updates(
     if helper_name != "mark_completed":
         assert updated.error == str(helper_kwargs["error"]).strip()
     assert helper(tmp_path, "missing-queue-id", **helper_kwargs) is None
+
+
+@pytest.mark.parametrize(
+    ("helper_name", "helper_kwargs", "expected_status"),
+    [
+        ("mark_completed", {}, QueueStatus.COMPLETED),
+        ("mark_failed", {"error": "boom"}, QueueStatus.FAILED),
+        ("mark_cancelled", {}, QueueStatus.CANCELLED),
+    ],
+)
+def test_mark_helpers_merge_callback_metadata_under_queue_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    helper_name: str,
+    helper_kwargs: dict[str, object],
+    expected_status: QueueStatus,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    entry = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id=f"callback-{helper_name}",
+        task_kind="kind",
+        engine="engine",
+        metadata={"keep": "yes", "shared": "original"},
+    )
+    lock_held = False
+
+    @contextmanager
+    def mutation_lock(_root: Path, *, timeout_seconds: float = 10.0):
+        nonlocal lock_held
+        del timeout_seconds
+        assert lock_held is False
+        lock_held = True
+        try:
+            yield
+        finally:
+            lock_held = False
+
+    monkeypatch.setattr(store, "queue_lock", mutation_lock)
+    callback_entries: list[store.QueueEntry] = []
+
+    def dynamic_metadata(current: store.QueueEntry) -> dict[str, object]:
+        assert lock_held is True
+        assert current.status == QueueStatus.PENDING
+        callback_entries.append(current)
+        return {"shared": "dynamic", "terminal_replay": expected_status.value}
+
+    helper = getattr(store, helper_name)
+    updated = helper(
+        tmp_path,
+        entry.queue_id,
+        metadata_update={"shared": "static", "static": True},
+        metadata_update_fn=dynamic_metadata,
+        **helper_kwargs,
+    )
+
+    assert updated is not None and updated.status == expected_status
+    assert updated.metadata == {
+        "keep": "yes",
+        "shared": "dynamic",
+        "static": True,
+        "terminal_replay": expected_status.value,
+    }
+    assert callback_entries == [entry]
+    assert lock_held is False
+
+
+def test_mark_metadata_callback_failure_aborts_queue_write(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    entry = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="mark-metadata-failure",
+        task_kind="kind",
+        engine="engine",
+        metadata={"keep": "yes"},
+    )
+    before = _queue_file(tmp_path).read_bytes()
+    save_calls = 0
+
+    def reject_metadata(_current: store.QueueEntry) -> dict[str, object]:
+        raise OSError("metadata generation failed")
+
+    def count_save(_root: Path, _entries: Sequence[store.QueueEntry]) -> None:
+        nonlocal save_calls
+        save_calls += 1
+
+    with pytest.raises(OSError, match="metadata generation failed"):
+        store.mark_failed(
+            tmp_path,
+            entry.queue_id,
+            error="boom",
+            metadata_update_fn=reject_metadata,
+            save_entries_fn=count_save,
+        )
+
+    assert save_calls == 0
+    assert _queue_file(tmp_path).read_bytes() == before
+    [unchanged] = store.list_queue(tmp_path)
+    assert unchanged.status == QueueStatus.PENDING
+    assert unchanged.error == ""
+    assert unchanged.metadata == {"keep": "yes"}
 
 
 def _write_single_running_entry(root: Path) -> None:

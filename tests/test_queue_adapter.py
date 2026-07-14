@@ -10,6 +10,7 @@ from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.engine import ENGINE_DEFINITION
 from orca_auto.orca.queue.adapter import (
+    TERMINAL_REPLAY_METADATA_KEY,
     DuplicateEntryError,
     cancel,
     clear_terminal,
@@ -25,6 +26,7 @@ from orca_auto.orca.queue.adapter import (
     queue_entry_reaction_dir,
     queue_entry_run_id,
     reconcile_orphaned_running_entries,
+    update_metadata,
 )
 from orca_auto.orca.state import finalize_state, load_state, new_state, report_json_path
 from tests.engine_artifact_helpers import orca_artifact_payload
@@ -43,6 +45,16 @@ class TestQueueStore(unittest.TestCase):
             if entry.queue_id == queue_id:
                 return entry
         return None
+
+    def _finish_terminal_replay(self, queue_id: str) -> None:
+        """Model the worker completing side effects and clearing its replay claim."""
+        self.assertTrue(
+            update_metadata(
+                self.root,
+                queue_id,
+                {TERMINAL_REPLAY_METADATA_KEY: None},
+            )
+        )
 
     # -- enqueue / basic flow -------------------------------------------
 
@@ -163,6 +175,10 @@ class TestQueueStore(unittest.TestCase):
         """Completed/failed entries allow re-enqueue with --force (intentional retry)."""
         entry = enqueue(self.root, str(self.root / "mol_A"))
         mark_completed(self.root, entry.queue_id)
+        with self.assertRaises(DuplicateEntryError):
+            enqueue(self.root, str(self.root / "mol_A"), force=True)
+
+        self._finish_terminal_replay(entry.queue_id)
         new_entry = enqueue(self.root, str(self.root / "mol_A"), force=True)
         self.assertNotEqual(entry.queue_id, new_entry.queue_id)
         self.assertTrue(queue_entry_force(new_entry))
@@ -241,6 +257,10 @@ class TestQueueStore(unittest.TestCase):
         enqueue(self.root, str(self.root / "c"))  # stays pending
         mark_completed(self.root, e1.queue_id)
         mark_failed(self.root, e2.queue_id)
+
+        self.assertEqual(clear_terminal(self.root), 0)
+        self._finish_terminal_replay(e1.queue_id)
+        self._finish_terminal_replay(e2.queue_id)
         removed = clear_terminal(self.root)
         self.assertEqual(removed, 2)
         remaining = list_queue(self.root)
@@ -254,7 +274,16 @@ class TestQueueStore(unittest.TestCase):
         marker = {
             "version": 1,
             "task_id": protected.task_id,
-            "observed_state": {"present": False, "readable": True},
+            "selected_inp": "",
+            "status": QueueStatus.COMPLETED.value,
+            "error": "",
+            "observed_state": {
+                "present": False,
+                "readable": True,
+                "job_id": "",
+                "run_id": "",
+                "terminal_status": "",
+            },
         }
         mark_completed(
             self.root,
@@ -264,12 +293,15 @@ class TestQueueStore(unittest.TestCase):
         mark_failed(self.root, ordinary.queue_id)
         mark_completed(self.root, newest.queue_id)
 
+        self.assertEqual(clear_terminal(self.root, keep_last=1), 0)
+        self._finish_terminal_replay(ordinary.queue_id)
         removed = clear_terminal(self.root, keep_last=1)
 
         self.assertEqual(removed, 1)
         remaining_ids = {entry.queue_id for entry in list_queue(self.root)}
         self.assertEqual(remaining_ids, {protected.queue_id, newest.queue_id})
 
+        self._finish_terminal_replay(newest.queue_id)
         self.assertEqual(clear_terminal(self.root), 1)
         [still_protected] = list_queue(self.root)
         self.assertEqual(still_protected.queue_id, protected.queue_id)
@@ -408,6 +440,7 @@ class TestQueueStore(unittest.TestCase):
         )
         dequeue_next(self.root)
         mark_completed(self.root, previous_entry.queue_id, run_id=previous_run_id)
+        self._finish_terminal_replay(previous_entry.queue_id)
         current = enqueue(
             self.root,
             str(reaction_dir),
@@ -450,6 +483,7 @@ class TestQueueStore(unittest.TestCase):
         )
         dequeue_next(self.root)
         mark_completed(self.root, previous_entry.queue_id, run_id=previous["run_id"])
+        self._finish_terminal_replay(previous_entry.queue_id)
         current = enqueue(
             self.root,
             str(reaction_dir),
@@ -493,6 +527,7 @@ class TestQueueStore(unittest.TestCase):
         )
         dequeue_next(self.root)
         mark_completed(self.root, previous_entry.queue_id, run_id=previous_run_id)
+        self._finish_terminal_replay(previous_entry.queue_id)
         report_json_path(reaction_dir).write_text(
             json.dumps(
                 orca_artifact_payload(

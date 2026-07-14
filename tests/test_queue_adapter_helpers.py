@@ -13,6 +13,11 @@ from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.queue import orphans as queue_orphans
+from orca_auto.orca.queue.terminal_replay import (
+    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
+    TERMINAL_REPLAY_METADATA_KEY,
+    terminal_replay_marker_from_entry,
+)
 from orca_auto.orca.state import report_json_path
 from orca_auto.orca.statuses import RunStatus
 from tests.engine_artifact_helpers import orca_artifact_payload
@@ -63,6 +68,20 @@ def _load_entries(root: Path) -> list[QueueEntry]:
 
 def _save_entries(root: Path, entries: list[QueueEntry]) -> None:
     queue_store.save_entries(root, entries)
+
+
+def _assert_terminal_replay_marker(
+    entry: QueueEntry,
+    *,
+    status: QueueStatus,
+    error: str,
+) -> None:
+    marker = terminal_replay_marker_from_entry(entry)
+    assert marker is not None
+    assert marker == entry.metadata[TERMINAL_REPLAY_METADATA_KEY]
+    assert marker["task_id"] == entry.task_id
+    assert marker["status"] == status.value
+    assert marker["error"] == error
 
 
 def _foreign_entry(
@@ -512,8 +531,18 @@ def test_reconcile_orphaned_running_entries_covers_state_terminal_paths_and_pend
     entries = {entry.queue_id: entry for entry in queue_adapter.list_queue(root)}
     assert entries["q_done"].status == QueueStatus.COMPLETED
     assert queue_adapter.queue_entry_run_id(entries["q_done"]) == "run_done"
+    _assert_terminal_replay_marker(
+        entries["q_done"],
+        status=QueueStatus.COMPLETED,
+        error="",
+    )
     assert entries["q_fail"].status == QueueStatus.FAILED
     assert entries["q_fail"].error == "orca_crash"
+    _assert_terminal_replay_marker(
+        entries["q_fail"],
+        status=QueueStatus.FAILED,
+        error="orca_crash",
+    )
     assert entries["q_requeue"].status == QueueStatus.PENDING
     assert entries["q_requeue"].started_at == ""
 
@@ -547,6 +576,209 @@ def test_reconcile_orphaned_running_entries_skips_blank_dirs_and_active_locks(
     entries = {entry.queue_id: entry for entry in queue_adapter.list_queue(root)}
     assert entries["q_blank"].status == QueueStatus.RUNNING
     assert entries["q_locked"].status == QueueStatus.RUNNING
+
+
+@pytest.mark.parametrize(
+    ("status", "error"),
+    [
+        (QueueStatus.COMPLETED, ""),
+        (QueueStatus.FAILED, "exit_code=1"),
+        (QueueStatus.CANCELLED, "cancel_requested"),
+    ],
+)
+def test_orca_terminal_marks_persist_valid_replay_marker(
+    tmp_path: Path,
+    status: QueueStatus,
+    error: str,
+) -> None:
+    root = tmp_path / "queue_root"
+    reaction_dir = root / status.value
+    reaction_dir.mkdir(parents=True)
+    entry = queue_adapter.enqueue(root, str(reaction_dir), task_id=f"task-{status.value}")
+    running = queue_adapter.dequeue_next(root)
+    assert running is not None
+
+    if status == QueueStatus.COMPLETED:
+        changed = queue_adapter.mark_completed(root, entry.queue_id, expected_entry=running)
+    elif status == QueueStatus.FAILED:
+        changed = queue_adapter.mark_failed(
+            root,
+            entry.queue_id,
+            error=error,
+            expected_entry=running,
+        )
+    else:
+        changed = queue_adapter.mark_cancelled(root, entry.queue_id, expected_entry=running)
+
+    assert changed is True
+    [terminal] = queue_adapter.list_queue(root)
+    assert terminal.status == status
+    if status == QueueStatus.CANCELLED:
+        assert terminal.error == ""
+    _assert_terminal_replay_marker(terminal, status=status, error=error)
+
+
+def test_orca_pending_cancel_persists_valid_replay_marker(tmp_path: Path) -> None:
+    root = tmp_path / "queue_root"
+    reaction_dir = root / "pending_cancel"
+    reaction_dir.mkdir(parents=True)
+    entry = queue_adapter.enqueue(root, str(reaction_dir), task_id="task-pending-cancel")
+
+    cancelled = queue_adapter.cancel(root, entry.queue_id, expected_entry=entry)
+
+    assert cancelled is not None
+    assert cancelled.status == QueueStatus.CANCELLED
+    [persisted] = queue_adapter.list_queue(root)
+    assert persisted == cancelled
+    _assert_terminal_replay_marker(
+        persisted,
+        status=QueueStatus.CANCELLED,
+        error="cancel_requested",
+    )
+
+
+def test_orca_requeue_honors_racing_cancel_with_valid_replay_marker(tmp_path: Path) -> None:
+    root = tmp_path / "queue_root"
+    reaction_dir = root / "requeue_cancel"
+    reaction_dir.mkdir(parents=True)
+    entry = queue_adapter.enqueue(root, str(reaction_dir), task_id="task-requeue-cancel")
+    running = queue_adapter.dequeue_next(root)
+    assert running is not None
+    cancel_requested = queue_adapter.cancel(root, entry.queue_id, expected_entry=running)
+    assert cancel_requested is not None
+    assert cancel_requested.status == QueueStatus.RUNNING
+    assert cancel_requested.cancel_requested is True
+
+    assert (
+        queue_adapter.requeue_running_entry(
+            root,
+            entry.queue_id,
+            expected_entry=cancel_requested,
+        )
+        is True
+    )
+
+    [cancelled] = queue_adapter.list_queue(root)
+    assert cancelled.status == QueueStatus.CANCELLED
+    assert cancelled.cancel_requested is False
+    _assert_terminal_replay_marker(
+        cancelled,
+        status=QueueStatus.CANCELLED,
+        error="cancel_requested",
+    )
+
+
+def test_same_terminal_mark_after_replay_clear_does_not_resurrect_marker(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "queue_root"
+    reaction_dir = root / "completed"
+    reaction_dir.mkdir(parents=True)
+    entry = queue_adapter.enqueue(root, str(reaction_dir), task_id="task-completed")
+    running = queue_adapter.dequeue_next(root)
+    assert running is not None
+    assert queue_adapter.mark_completed(root, entry.queue_id, expected_entry=running) is True
+    [terminal] = queue_adapter.list_queue(root)
+    _assert_terminal_replay_marker(terminal, status=QueueStatus.COMPLETED, error="")
+
+    assert queue_adapter.update_metadata(
+        root,
+        entry.queue_id,
+        {TERMINAL_REPLAY_METADATA_KEY: None},
+        expected_entry=terminal,
+    )
+    [closed] = queue_adapter.list_queue(root)
+    assert closed.metadata[TERMINAL_REPLAY_METADATA_KEY] is None
+
+    assert queue_adapter.mark_completed(root, entry.queue_id, expected_entry=closed) is True
+    [stable] = queue_adapter.list_queue(root)
+    assert stable == closed
+    assert stable.metadata[TERMINAL_REPLAY_METADATA_KEY] is None
+
+
+def test_administrative_failed_mark_rejects_side_effect_marker(tmp_path: Path) -> None:
+    root = tmp_path / "queue_root"
+    reaction_dir = root / "administrative_fence"
+    reaction_dir.mkdir(parents=True)
+    entry = queue_adapter.enqueue(root, str(reaction_dir), task_id="task-fence")
+    before = (root / queue_entries.QUEUE_FILE_NAME).read_bytes()
+
+    with pytest.raises(ValueError, match="cannot carry a side-effect replay marker"):
+        queue_adapter.mark_failed(
+            root,
+            entry.queue_id,
+            error="administrative_fence",
+            publish_terminal_side_effects=False,
+            metadata_update={TERMINAL_REPLAY_METADATA_KEY: {"version": 1}},
+            expected_entry=entry,
+        )
+
+    assert (root / queue_entries.QUEUE_FILE_NAME).read_bytes() == before
+    [unchanged] = queue_adapter.list_queue(root)
+    assert unchanged.status == QueueStatus.PENDING
+
+    running = queue_adapter.dequeue_next(root)
+    assert running is not None
+    assert queue_adapter.mark_failed(
+        root,
+        entry.queue_id,
+        error="worker_start_error",
+        expected_entry=running,
+    )
+    [pending_replay] = queue_adapter.list_queue(root)
+    with pytest.raises(ValueError, match="cannot replace pending side-effect replay"):
+        queue_adapter.mark_failed(
+            root,
+            entry.queue_id,
+            error="administrative_fence",
+            publish_terminal_side_effects=False,
+            expected_entry=pending_replay,
+        )
+    assert queue_adapter.list_queue(root) == [pending_replay]
+
+
+@pytest.mark.parametrize("marker_kind", ["malformed", "unsupported"])
+def test_invalid_terminal_replay_marker_blocks_clear_and_forced_successor(
+    tmp_path: Path,
+    marker_kind: str,
+) -> None:
+    root = tmp_path / "queue_root"
+    reaction_dir = root / marker_kind
+    reaction_dir.mkdir(parents=True)
+    entry = queue_adapter.enqueue(root, str(reaction_dir), task_id=f"task-{marker_kind}")
+    running = queue_adapter.dequeue_next(root)
+    assert running is not None
+    assert queue_adapter.mark_completed(root, entry.queue_id, expected_entry=running) is True
+
+    marker: dict[str, Any]
+    if marker_kind == "malformed":
+        marker = {"version": 1, "task_id": entry.task_id}
+    else:
+        marker = {
+            "version": 2,
+            "task_id": entry.task_id,
+            "selected_inp": "",
+            "status": QueueStatus.COMPLETED.value,
+            "error": "",
+            "observed_state": {
+                "present": False,
+                "readable": True,
+                "job_id": "",
+                "run_id": "",
+                "terminal_status": "",
+            },
+        }
+    assert queue_adapter.update_metadata(
+        root,
+        entry.queue_id,
+        {TERMINAL_REPLAY_METADATA_KEY: marker},
+    )
+
+    [blocked] = queue_adapter.list_queue(root)
+    assert terminal_replay_marker_from_entry(blocked) is None
+    assert queue_adapter.clear_terminal(root) == 0
+    with pytest.raises(queue_adapter.DuplicateEntryError):
+        queue_adapter.enqueue(root, str(reaction_dir), force=True)
 
 
 def test_mark_cancelled_requeue_cancel_and_update_terminal_cover_missing_and_wrong_statuses(
@@ -620,6 +852,25 @@ def test_mark_cancelled_requeue_cancel_and_update_terminal_cover_missing_and_wro
     assert queue_adapter.get_cancel_requested(root, "q_missing") is False
 
     assert queue_adapter.update_terminal(root, "q_missing", QueueStatus.COMPLETED.value) is False
+    assert queue_adapter.update_terminal(root, "q_terminal", QueueStatus.RUNNING.value) is False
+
+
+def test_running_state_helper_cannot_bypass_terminal_marker_writer(tmp_path: Path) -> None:
+    root = tmp_path / "queue_root"
+    root.mkdir()
+    running = _entry("q_running", str(root / "running"), QueueStatus.RUNNING.value)
+    _save_entries(root, [running])
+
+    assert (
+        queue_adapter.update_running_entry_state(
+            root,
+            running.queue_id,
+            status=QueueStatus.FAILED.value,
+            finished_at="now",
+        )
+        is False
+    )
+    assert queue_adapter.list_queue(root) == [running]
 
 
 def test_orca_adapter_mutations_never_change_foreign_engine_rows(tmp_path: Path) -> None:
@@ -708,6 +959,58 @@ def test_orca_publication_recovery_rejects_noncanonical_task_identity(tmp_path: 
 
     assert recovered is None
     assert queue_path.read_bytes() == before
+
+
+def test_ambiguous_enqueue_recovery_is_durable_fence_only_history(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "shared_queue"
+    reaction_dir = root / "reaction"
+    reaction_dir.mkdir(parents=True)
+    token = "ambiguous-publication-token"
+    owner_pid = 1234
+    owner_start = "owner-start"
+    metadata = {
+        "reaction_dir": str(reaction_dir.resolve()),
+        "force": False,
+        "_orca_auto_queued_record_sync": "preparing",
+        "_orca_auto_queued_record_sync_token": token,
+        "_orca_auto_queued_record_sync_owner_pid": owner_pid,
+        "_orca_auto_queued_record_sync_owner_start": owner_start,
+    }
+    entries = [
+        QueueEntry(
+            queue_id=queue_id,
+            app_name="orca_auto_orca",
+            task_id="task-ambiguous",
+            task_kind="orca_run_inp",
+            engine="orca",
+            priority=7,
+            metadata=dict(metadata),
+        )
+        for queue_id in ("queue-a", "queue-b")
+    ]
+    _save_entries(root, entries)
+
+    with pytest.raises(queue_adapter.AmbiguousPublicationRecoveryError):
+        queue_adapter.recover_enqueue_publication(
+            root,
+            reaction_dir=str(reaction_dir),
+            task_id="task-ambiguous",
+            task_kind="orca_run_inp",
+            priority=7,
+            force=False,
+            token=token,
+            owner_pid=owner_pid,
+            owner_start=owner_start,
+        )
+
+    fenced = queue_adapter.list_queue(root)
+    assert len(fenced) == 2
+    assert {entry.status for entry in fenced} == {QueueStatus.CANCELLED}
+    assert all(entry.metadata[TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY] is True for entry in fenced)
+    assert all(entry.metadata.get(TERMINAL_REPLAY_METADATA_KEY) is None for entry in fenced)
+    assert queue_adapter.clear_terminal(root) == 2
 
 
 def test_orca_adapter_expected_generation_rejects_replaced_queue_id(tmp_path: Path) -> None:

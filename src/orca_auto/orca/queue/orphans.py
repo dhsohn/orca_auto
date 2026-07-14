@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,11 @@ from .entries import (
 )
 from .entries import (
     load_entries as _load_entries,
+)
+from .terminal_replay import (
+    TERMINAL_REPLAY_METADATA_KEY,
+    terminal_replay_marker_for_entry,
+    terminal_replay_marker_from_entry,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,7 +81,7 @@ def apply_terminal_reconciliation(
     finished_at: str | None,
     error: str | None = None,
 ) -> QueueEntry:
-    return _queue_reconciliation.apply_terminal_reconciliation(
+    updated = _queue_reconciliation.apply_terminal_reconciliation(
         entry,
         status=status,
         run_id=run_id,
@@ -84,6 +89,15 @@ def apply_terminal_reconciliation(
         error=error,
         now_iso_fn=_now_iso,
     )
+    if terminal_replay_marker_from_entry(updated) is not None:
+        return updated
+    metadata = dict(updated.metadata)
+    metadata[TERMINAL_REPLAY_METADATA_KEY] = terminal_replay_marker_for_entry(
+        updated,
+        status=status,
+        error=error if error is not None else updated.error,
+    )
+    return replace(updated, metadata=metadata)
 
 
 @dataclass(frozen=True)

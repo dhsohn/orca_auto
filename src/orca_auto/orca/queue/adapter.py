@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -51,11 +51,18 @@ from .entries import (
     load_entries as _load_entries,
 )
 from .orphans import reconcile_orphaned_running_entries
+from .terminal_replay import (
+    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
+    TERMINAL_REPLAY_METADATA_KEY,
+    TerminalReplayMarkerKind,
+    terminal_replay_is_fence_only,
+    terminal_replay_marker_for_entry,
+    terminal_replay_marker_kind,
+)
 
 logger = logging.getLogger(__name__)
 
 _UNSET = object()
-TERMINAL_REPLAY_METADATA_KEY = "orca_terminal_replay"
 _TOKEN_COLLISION_RETRY_LIMIT = 32
 
 __all__ = [
@@ -68,6 +75,7 @@ __all__ = [
     "QUEUE_FILE_NAME",
     "QUEUE_TASK_KIND",
     "TERMINAL_STATUSES",
+    "TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY",
     "TERMINAL_REPLAY_METADATA_KEY",
     "cancel",
     "cancel_pending_entry",
@@ -120,10 +128,58 @@ def worker_log_path(allowed_root: Path, queue_id: str) -> Path:
 
 
 def _has_pending_terminal_replay(entry: QueueEntry) -> bool:
-    return isinstance(
-        queue_entry_metadata(entry).get(TERMINAL_REPLAY_METADATA_KEY),
-        dict,
-    )
+    # Unsupported future versions and malformed markers remain a conservative
+    # clear/force barrier.  The worker admits only VALID markers and logs the
+    # others as repair-blocked, so an older process cannot erase newer pending
+    # side effects merely because it cannot decode their evidence.
+    return terminal_replay_marker_kind(entry) is not TerminalReplayMarkerKind.ABSENT
+
+
+def _terminal_metadata_update_fn(
+    *,
+    status: QueueStatus,
+    error: str,
+    metadata_update: Mapping[str, Any] | None = None,
+    allow_terminal_candidate: bool = False,
+) -> Callable[[QueueEntry], Mapping[str, Any] | None]:
+    supplied_metadata = dict(metadata_update or {})
+
+    def update(current: QueueEntry) -> Mapping[str, Any] | None:
+        if supplied_metadata.get(TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY) is True:
+            raise ValueError(
+                "terminal side-effect replay and an administrative fence are mutually exclusive"
+            )
+        if not allow_terminal_candidate and current.status not in {
+            QueueStatus.PENDING,
+            QueueStatus.RUNNING,
+        }:
+            # Core terminal marks permit idempotent same-status calls.  Once a
+            # completed marker has been cleared, such a call must not resurrect
+            # replay work for closed history.  Explicit metadata still follows
+            # the caller's request through the static update path.
+            return None
+        candidate_metadata = dict(current.metadata)
+        candidate_metadata.update(supplied_metadata)
+        candidate = replace(current, metadata=candidate_metadata)
+        return {
+            TERMINAL_REPLAY_METADATA_KEY: terminal_replay_marker_for_entry(
+                candidate,
+                status=status.value,
+                error=error,
+            )
+        }
+
+    return update
+
+
+def _administrative_terminal_metadata_update_fn(
+    current: QueueEntry,
+) -> Mapping[str, Any]:
+    if terminal_replay_marker_kind(current) is not TerminalReplayMarkerKind.ABSENT:
+        raise ValueError(
+            "an administrative terminal fence cannot replace pending side-effect replay"
+        )
+    return {TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY: True}
 
 
 class DuplicateEntryError(ValueError):
@@ -295,6 +351,8 @@ def _publication_identity_matches(
         and normalize_text(metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY)) == token
         and current_owner_pid == owner_pid
         and normalize_text(metadata.get(QUEUE_RECORD_SYNC_OWNER_START_KEY)) == owner_start
+        and terminal_replay_marker_kind(entry) is TerminalReplayMarkerKind.ABSENT
+        and not terminal_replay_is_fence_only(entry)
     )
 
 
@@ -375,6 +433,7 @@ def recover_enqueue_publication(
                         owner_pid=0,
                     )
                 )
+                metadata[TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY] = True
                 entries[index] = replace(
                     current,
                     status=QueueStatus.CANCELLED,
@@ -635,6 +694,11 @@ def mark_completed(
             allowed_root,
             queue_id,
             metadata_update=merged_metadata or None,
+            metadata_update_fn=_terminal_metadata_update_fn(
+                status=QueueStatus.COMPLETED,
+                error="",
+                metadata_update=merged_metadata,
+            ),
             load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
             accept_entry_fn=lambda current: (
@@ -660,19 +724,36 @@ def mark_failed(
     error: str | None = None,
     run_id: str | None = None,
     metadata_update: dict[str, Any] | None = None,
+    publish_terminal_side_effects: bool = True,
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
 ) -> bool:
     """Mark a queue entry as failed."""
+    normalized_error = error or ""
     merged_metadata = dict(metadata_update or {})
+    if not publish_terminal_side_effects:
+        if merged_metadata.get(TERMINAL_REPLAY_METADATA_KEY) is not None:
+            raise ValueError(
+                "an administrative terminal fence cannot carry a side-effect replay marker"
+            )
+        merged_metadata[TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY] = True
     if run_id is not None:
         merged_metadata["run_id"] = run_id
     return (
         _queue_store.mark_failed(
             allowed_root,
             queue_id,
-            error=error or "",
+            error=normalized_error,
             metadata_update=merged_metadata or None,
+            metadata_update_fn=(
+                _terminal_metadata_update_fn(
+                    status=QueueStatus.FAILED,
+                    error=normalized_error,
+                    metadata_update=merged_metadata,
+                )
+                if publish_terminal_side_effects
+                else _administrative_terminal_metadata_update_fn
+            ),
             load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
             accept_entry_fn=lambda current: (
@@ -700,15 +781,33 @@ def mark_cancelled(
     expected_task_id: str | None = None,
 ) -> bool:
     """Mark a running queue entry as cancelled after the worker stops it."""
-    return update_running_entry_state(
-        allowed_root,
-        queue_id,
-        status=QueueStatus.CANCELLED.value,
-        finished_at=_now_iso(),
-        cancel_requested=False,
-        metadata_update=metadata_update,
-        expected_entry=expected_entry,
-        expected_task_id=expected_task_id,
+    return (
+        _queue_store.mark_cancelled(
+            allowed_root,
+            queue_id,
+            error="",
+            metadata_update=metadata_update,
+            metadata_update_fn=_terminal_metadata_update_fn(
+                status=QueueStatus.CANCELLED,
+                error="cancel_requested",
+                metadata_update=metadata_update,
+            ),
+            load_entries_fn=_load_entries,
+            save_entries_fn=_queue_store.save_entries,
+            accept_entry_fn=lambda current: (
+                is_orca_queue_entry(current)
+                and current.status == QueueStatus.RUNNING
+                and (
+                    expected_entry is None
+                    or queue_entries_same_publication_generation(current, expected_entry)
+                )
+                and (
+                    expected_task_id is None
+                    or normalize_text(current.task_id) == normalize_text(expected_task_id)
+                )
+            ),
+        )
+        is not None
     )
 
 
@@ -728,6 +827,11 @@ def requeue_running_entry(
         _queue_store.requeue_running_entry(
             allowed_root,
             queue_id,
+            cancel_metadata_update_fn=_terminal_metadata_update_fn(
+                status=QueueStatus.CANCELLED,
+                error="cancel_requested",
+                allow_terminal_candidate=True,
+            ),
             load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
             accept_entry_fn=lambda current: (
@@ -756,6 +860,11 @@ def cancel(
     entry = _queue_store.request_cancel(
         allowed_root,
         queue_id,
+        pending_metadata_update_fn=_terminal_metadata_update_fn(
+            status=QueueStatus.CANCELLED,
+            error="cancel_requested",
+            allow_terminal_candidate=True,
+        ),
         accept_entry_fn=lambda current: (
             is_orca_queue_entry(current)
             and (
@@ -884,8 +993,21 @@ def update_terminal(
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
 ) -> bool:
+    target_status = normalize_text(status).lower()
+    if target_status not in TERMINAL_STATUSES:
+        return False
+
     def update(current: QueueEntry) -> tuple[bool, QueueEntry | None]:
         if not is_orca_queue_entry(current):
+            return False, None
+        if current.status not in {
+            QueueStatus.COMPLETED,
+            QueueStatus.FAILED,
+            QueueStatus.CANCELLED,
+        }:
+            # Recovery-only correction.  Active -> terminal transitions must
+            # use the canonical mark/cancel APIs so their replay marker is part
+            # of the same durable queue write.
             return False, None
         if expected_entry is not None and not queue_entries_same_publication_generation(
             current, expected_entry
@@ -900,12 +1022,12 @@ def update_terminal(
             metadata["run_id"] = run_id
         entry = replace(
             current,
-            status=QueueStatus(status),
+            status=QueueStatus(target_status),
             finished_at=_now_iso(),
             error=error if error is not None else current.error,
             metadata=metadata,
         )
-        logger.info("Entry %s -> %s", queue_id, status)
+        logger.info("Entry %s -> %s", queue_id, target_status)
         return True, entry
 
     return bool(
@@ -936,6 +1058,12 @@ def update_running_entry_state(
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
 ) -> bool:
+    target_status = normalize_text(status).lower()
+    if target_status != QueueStatus.RUNNING.value:
+        # Active -> terminal writes must use mark/cancel so replay evidence is
+        # persisted in the same queue mutation.
+        return False
+
     def update(current: QueueEntry) -> tuple[bool, QueueEntry | None]:
         if not is_orca_queue_entry(current):
             return False, None
@@ -949,7 +1077,7 @@ def update_running_entry_state(
             return False, None
         if current.status != QueueStatus.RUNNING:
             return False, None
-        updates: dict[str, Any] = {"status": QueueStatus(status)}
+        updates: dict[str, Any] = {"status": QueueStatus(target_status)}
         if started_at is not _UNSET:
             updates["started_at"] = cast(str | None, started_at) or ""
         if finished_at is not _UNSET:
@@ -961,7 +1089,7 @@ def update_running_entry_state(
             merged_metadata.update(metadata_update)
             updates["metadata"] = merged_metadata
         entry = replace(current, **updates)
-        logger.info("Entry %s -> %s", queue_id, status)
+        logger.info("Entry %s -> %s", queue_id, target_status)
         return True, entry
 
     return bool(

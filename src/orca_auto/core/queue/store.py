@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -37,6 +37,8 @@ _TERMINAL_STATUSES = frozenset({QueueStatus.COMPLETED, QueueStatus.FAILED, Queue
 _QueueEntryT = TypeVar("_QueueEntryT", bound=QueueEntry)
 _MutationResultT = TypeVar("_MutationResultT")
 _TOKEN_COLLISION_RETRY_LIMIT = 32
+
+_MetadataUpdateFn = Callable[[QueueEntry], Mapping[str, Any] | None]
 
 QueueDuplicatePolicy = Callable[[Sequence[QueueEntry], QueueEntry], None]
 DuplicateErrorFactory = Callable[[str, QueueEntry], Exception]
@@ -114,6 +116,24 @@ def _status_value(status: QueueStatus | str) -> str:
 
 def _status_values(statuses: Collection[QueueStatus | str]) -> set[str]:
     return {_status_value(status) for status in statuses}
+
+
+def _merged_metadata(
+    entry: QueueEntry,
+    *,
+    metadata_update: Mapping[str, Any] | None = None,
+    metadata_update_fn: _MetadataUpdateFn | None = None,
+) -> dict[str, Any]:
+    merged = dict(entry.metadata)
+    if metadata_update:
+        merged.update(metadata_update)
+    if metadata_update_fn is not None:
+        generated_update = metadata_update_fn(entry)
+        if generated_update is not None:
+            if not isinstance(generated_update, Mapping):
+                raise TypeError("metadata update callback must return a mapping or None")
+            merged.update(generated_update)
+    return merged
 
 
 def find_entry_by_key(
@@ -562,6 +582,7 @@ def request_cancel(
     *,
     accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
     expected_entry: QueueEntry | None = None,
+    pending_metadata_update_fn: _MetadataUpdateFn | None = None,
     before_pending_cancel_fn: Callable[[QueueEntry], Any] | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
@@ -600,12 +621,19 @@ def request_cancel(
                         QUEUE_RECORD_SYNC_TOKEN_KEY: "",
                     }
                 )
-            updated = replace(
+            candidate = replace(
                 entry,
                 status=QueueStatus.CANCELLED,
                 cancel_requested=True,
                 finished_at=finished_at,
                 metadata=metadata,
+            )
+            updated = replace(
+                candidate,
+                metadata=_merged_metadata(
+                    candidate,
+                    metadata_update_fn=pending_metadata_update_fn,
+                ),
             )
             if before_pending_cancel_fn is not None:
                 # This runs while both the entry-scoped publication lock and
@@ -701,6 +729,7 @@ def requeue_running_entry(
     accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
+    cancel_metadata_update_fn: _MetadataUpdateFn | None = None,
 ) -> QueueEntry | None:
     def requeue(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
         for index, entry in enumerate(entries):
@@ -724,11 +753,18 @@ def requeue_running_entry(
                 # is the chokepoint that keeps "cancel" from turning into "resume".
                 # Clear cancel_requested: it has now been honored, so the terminal
                 # entry should not keep advertising a pending cancellation.
-                updated = replace(
+                candidate = replace(
                     entry,
                     status=QueueStatus.CANCELLED,
                     finished_at=now_utc_iso(),
                     cancel_requested=False,
+                )
+                updated = replace(
+                    candidate,
+                    metadata=_merged_metadata(
+                        candidate,
+                        metadata_update_fn=cancel_metadata_update_fn,
+                    ),
                 )
                 entries[index] = updated
                 return updated, True
@@ -757,6 +793,7 @@ def _mark_status(
     status: QueueStatus,
     error: str = "",
     metadata_update: dict[str, Any] | None = None,
+    metadata_update_fn: _MetadataUpdateFn | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
     accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
@@ -788,11 +825,13 @@ def _mark_status(
             # the durable status through its explicit fallback path.
             if entry.status != status:
                 return None, None
+            merged = _merged_metadata(
+                entry,
+                metadata_update=metadata_update,
+                metadata_update_fn=metadata_update_fn,
+            )
             if before_update_fn is not None:
                 before_update_fn()
-            merged = dict(entry.metadata)
-            if metadata_update:
-                merged.update(metadata_update)
             updated = replace(
                 entry,
                 cancel_requested=(
@@ -808,11 +847,13 @@ def _mark_status(
             and not entry.cancel_requested
         ):
             return None, None
+        merged = _merged_metadata(
+            entry,
+            metadata_update=metadata_update,
+            metadata_update_fn=metadata_update_fn,
+        )
         if before_update_fn is not None:
             before_update_fn()
-        merged = dict(entry.metadata)
-        if metadata_update:
-            merged.update(metadata_update)
         updated = replace(
             entry,
             status=status,
@@ -835,6 +876,7 @@ def mark_completed(
     queue_id: str,
     *,
     metadata_update: dict[str, Any] | None = None,
+    metadata_update_fn: _MetadataUpdateFn | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
     accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
@@ -847,6 +889,7 @@ def mark_completed(
         queue_id,
         status=QueueStatus.COMPLETED,
         metadata_update=metadata_update,
+        metadata_update_fn=metadata_update_fn,
         load_entries_fn=load_entries_fn,
         save_entries_fn=save_entries_fn,
         accept_entry_fn=accept_entry_fn,
@@ -862,6 +905,7 @@ def mark_failed(
     *,
     error: str,
     metadata_update: dict[str, Any] | None = None,
+    metadata_update_fn: _MetadataUpdateFn | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
     accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
@@ -875,6 +919,7 @@ def mark_failed(
         status=QueueStatus.FAILED,
         error=error,
         metadata_update=metadata_update,
+        metadata_update_fn=metadata_update_fn,
         load_entries_fn=load_entries_fn,
         save_entries_fn=save_entries_fn,
         accept_entry_fn=accept_entry_fn,
@@ -890,6 +935,7 @@ def mark_cancelled(
     *,
     error: str = "",
     metadata_update: dict[str, Any] | None = None,
+    metadata_update_fn: _MetadataUpdateFn | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
     accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
@@ -904,6 +950,7 @@ def mark_cancelled(
         status=QueueStatus.CANCELLED,
         error=error,
         metadata_update=metadata_update,
+        metadata_update_fn=metadata_update_fn,
         load_entries_fn=load_entries_fn,
         save_entries_fn=save_entries_fn,
         accept_entry_fn=accept_entry_fn,
