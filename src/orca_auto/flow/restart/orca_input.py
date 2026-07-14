@@ -17,10 +17,13 @@ from orca_auto.orca.input_artifacts import derive_selected_input_xyz
 from orca_auto.orca.input_blocks import (
     GEOM_HEADER_RE,
     geometry_range,
+    is_safe_unquoted_orca_path,
+    neb_file_reference_context,
     orca_line_tokens,
     quote_orca_path,
     route_line_indices,
     set_block_key_value,
+    unquoted_orca_path,
 )
 from orca_auto.orca.resource_directives import maxcore_mb_per_core, read_nprocs, set_maxcore
 
@@ -35,7 +38,6 @@ _BLOCK_AUXILIARY_REFERENCE_KEYS = frozenset(
         "ircinithess",
     }
 )
-_SAFE_ORCA_PATH_RE = re.compile(r"^[A-Za-z0-9._/+\-]+$")
 _RESERVED_GEOMETRY_PATH = Path(".orca_auto_inputs") / "geometry.xyz"
 
 
@@ -138,26 +140,48 @@ def _selected_input_paths(
     return reaction_dir, selected_inp, selected_xyz
 
 
-def _orca_path_reference(path_text: str) -> str:
-    if (
-        not path_text
-        or any(ord(character) < 32 for character in path_text)
-        or _SAFE_ORCA_PATH_RE.fullmatch(path_text) is None
-    ):
-        raise ValueError(f"Unsafe ORCA input path reference: {path_text!r}")
-    return path_text
-
-
 def _auxiliary_references(lines: list[str]) -> list[_AuxiliaryReference]:
     references: list[_AuxiliaryReference] = []
+    in_neb_block = False
     for line_index, line in enumerate(lines):
         tokens = orca_line_tokens(line)
+        neb_keyword_indices, in_neb_block = neb_file_reference_context(
+            tokens,
+            in_neb_block=in_neb_block,
+        )
+        reference_value_indices: set[int] = set()
         for token_index, token in enumerate(tokens):
             if token.quoted:
                 continue
             keyword = token.value.lower()
             is_simple_reference = token_index == 0 and keyword in _SIMPLE_AUXILIARY_REFERENCE_KEYS
-            if not is_simple_reference and keyword not in _BLOCK_AUXILIARY_REFERENCE_KEYS:
+            is_neb_file_reference = (
+                token_index in neb_keyword_indices and token_index not in reference_value_indices
+            )
+            if (
+                not is_simple_reference
+                and keyword not in _BLOCK_AUXILIARY_REFERENCE_KEYS
+                and not is_neb_file_reference
+            ):
+                continue
+            value_index = token_index + 1
+            if value_index < len(tokens) and tokens[value_index].value == "=":
+                value_index += 1
+            if value_index < len(tokens):
+                reference_value_indices.add(value_index)
+        for token_index, token in enumerate(tokens):
+            if token.quoted:
+                continue
+            keyword = token.value.lower()
+            is_simple_reference = token_index == 0 and keyword in _SIMPLE_AUXILIARY_REFERENCE_KEYS
+            is_neb_file_reference = (
+                token_index in neb_keyword_indices and token_index not in reference_value_indices
+            )
+            if (
+                not is_simple_reference
+                and keyword not in _BLOCK_AUXILIARY_REFERENCE_KEYS
+                and not is_neb_file_reference
+            ):
                 continue
 
             value_index = token_index + 1
@@ -316,7 +340,7 @@ def _rewrite_geometry_header(
         raise ValueError("ORCA restart input has an invalid geometry header")
     geometry_type = match.group(1).lower()
     if selected_xyz_reference:
-        selected_xyz_ref = _orca_path_reference(selected_xyz_reference)
+        selected_xyz_ref = unquoted_orca_path(selected_xyz_reference)
         lines[start:end] = [
             f"* xyzfile {resolved_charge} {resolved_multiplicity} {selected_xyz_ref}"
         ]
@@ -407,7 +431,7 @@ def _restart_geometry_relative_path(path: Path, *, reaction_dir: Path) -> Path:
         reaction_dir=reaction_dir,
         label="selected geometry",
     )
-    if _SAFE_ORCA_PATH_RE.fullmatch(relative_path.as_posix()):
+    if is_safe_unquoted_orca_path(relative_path.as_posix()):
         return relative_path
     return _RESERVED_GEOMETRY_PATH
 

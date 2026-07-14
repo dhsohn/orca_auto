@@ -33,9 +33,11 @@ from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory
 
 from .input_blocks import (
     GEOM_HEADER_RE,
+    neb_file_reference_context,
     orca_line_tokens,
     orca_route_line,
     quote_orca_path,
+    unquoted_orca_path,
     validate_supported_xyz_geometry_syntax,
 )
 from .job_type import FREQ_RE
@@ -58,6 +60,7 @@ _BLOCK_FILE_REFERENCE_KEYS = frozenset(
         "restart_allxyzfile",
     }
 )
+_XYZ_GEOMETRY_REFERENCE_KINDS = frozenset({"geometry", "neb_geometry"})
 _UNSUPPORTED_FILE_REFERENCE_KEYS = frozenset(
     {
         "%cclib",
@@ -127,8 +130,13 @@ class _FileReference:
 
 def _file_references(lines: list[str]) -> list[_FileReference]:
     references: list[_FileReference] = []
+    in_neb_block = False
     for line_index, line in enumerate(lines):
         tokens = orca_line_tokens(line)
+        neb_keyword_indices, in_neb_block = neb_file_reference_context(
+            tokens,
+            in_neb_block=in_neb_block,
+        )
         compact_active = "".join(token.value.lower() for token in tokens if not token.quoted)
         if "gcp(file)" in compact_active:
             raise ValueError("Unsupported ORCA auxiliary or external program directive: GCP(FILE)")
@@ -156,7 +164,12 @@ def _file_references(lines: list[str]) -> list[_FileReference]:
             is_simple = effective_keyword in _SIMPLE_FILE_REFERENCE_KEYS and (
                 token_index == 0 or bool(spaced_percent_keyword)
             )
-            is_value_directive = is_simple or keyword in _BLOCK_FILE_REFERENCE_KEYS
+            is_neb_file_directive = (
+                token_index in neb_keyword_indices and token_index not in reference_value_indices
+            )
+            is_value_directive = (
+                is_simple or keyword in _BLOCK_FILE_REFERENCE_KEYS or is_neb_file_directive
+            )
             is_value_directive = is_value_directive or effective_keyword == "%base"
             if not is_value_directive:
                 continue
@@ -197,7 +210,14 @@ def _file_references(lines: list[str]) -> list[_FileReference]:
             is_simple = effective_keyword in _SIMPLE_FILE_REFERENCE_KEYS and (
                 token_index == 0 or bool(spaced_percent_keyword)
             )
-            if not is_simple and keyword not in _BLOCK_FILE_REFERENCE_KEYS:
+            is_neb_file_directive = (
+                token_index in neb_keyword_indices and token_index not in reference_value_indices
+            )
+            if (
+                not is_simple
+                and keyword not in _BLOCK_FILE_REFERENCE_KEYS
+                and not is_neb_file_directive
+            ):
                 continue
             value_index = token_index + 1
             if value_index < len(tokens) and tokens[value_index].value == "=":
@@ -214,7 +234,7 @@ def _file_references(lines: list[str]) -> list[_FileReference]:
                     value=value,
                     start=value_token.start,
                     end=value_token.end,
-                    kind="auxiliary",
+                    kind="neb_geometry" if is_neb_file_directive else "auxiliary",
                 )
             )
     if len(references) > MAX_ORCA_INPUT_REFERENCES:
@@ -222,6 +242,12 @@ def _file_references(lines: list[str]) -> list[_FileReference]:
             f"ORCA input has more than {MAX_ORCA_INPUT_REFERENCES} external file references"
         )
     return references
+
+
+def _render_bound_reference(reference: _FileReference, relative_path: str) -> str:
+    if reference.kind != "geometry":
+        return quote_orca_path(relative_path)
+    return unquoted_orca_path(relative_path)
 
 
 def _inline_geometry_atom_count(selected_text: str) -> int | None:
@@ -379,7 +405,7 @@ def _rewrite_bound_input(
         private_path = private_paths[source]
         relative = private_path.relative_to(execution_dir).as_posix()
         replacements.setdefault(reference.line_index, []).append(
-            (reference.start, reference.end, quote_orca_path(relative))
+            (reference.start, reference.end, _render_bound_reference(reference, relative))
         )
     rewritten = list(lines)
     for line_index, line_replacements in replacements.items():
@@ -509,7 +535,7 @@ def build_orca_execution_snapshot(
             )
             if dependency == source_selected:
                 raise ValueError("ORCA selected input must not reference itself as an input file")
-            if reference.kind == "geometry":
+            if reference.kind in _XYZ_GEOMETRY_REFERENCE_KINDS:
                 _validated_xyz_atom_count(
                     dependency,
                     max_atoms=(

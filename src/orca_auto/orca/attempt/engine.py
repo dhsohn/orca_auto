@@ -315,11 +315,24 @@ def _mark_and_notify_attempt_started(
 
 def _finish_retry_limit_if_needed(ctx: AttemptRunContext, loop: AttemptLoopState) -> int | None:
     if loop.retries_used > ctx.max_retries:
+        analyzer_status: AnalyzerStatus | str = AnalyzerStatus.INCOMPLETE
+        reason = "retry_limit_reached"
+        if ctx.max_retries == 0:
+            reason = "run_incomplete"
+            attempts = ctx.state.get("attempts")
+            last_attempt = attempts[-1] if isinstance(attempts, list) and attempts else None
+            if isinstance(last_attempt, dict):
+                raw_status = last_attempt.get("analyzer_status")
+                if isinstance(raw_status, str) and raw_status.strip():
+                    analyzer_status = raw_status.strip()
+                raw_reason = last_attempt.get("analyzer_reason")
+                if isinstance(raw_reason, str) and raw_reason.strip():
+                    reason = raw_reason.strip()
         return _finish_attempt(
             ctx,
             status=RunStatus.FAILED,
-            analyzer_status=AnalyzerStatus.INCOMPLETE,
-            reason="retry_limit_reached",
+            analyzer_status=analyzer_status,
+            reason=reason,
             last_out_path=_last_out_path_from_state(ctx.state),
             exit_code=1,
         )

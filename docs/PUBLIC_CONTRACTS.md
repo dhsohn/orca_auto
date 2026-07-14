@@ -365,6 +365,10 @@ documented or tested. Important current examples include `normal_termination`,
 `worker_shutdown`, `crashed_recovery`, `runner_exception`, `cancel_requested`,
 `rewrite_failed`, and `scants_recipes_exhausted`.
 
+When the effective `max_retries` is zero, the first failed attempt is terminal
+and its analyzer reason is preserved as the final reason. `retry_limit_reached`
+is reserved for exhaustion of a positive retry budget.
+
 ## Workflow Contract
 
 Workflow input manifests are named `flow.yaml`.

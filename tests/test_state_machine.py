@@ -42,6 +42,16 @@ def test_parse_analyzer_status_and_decide_attempt_outcome_cover_terminal_and_ret
         exit_code=1,
     )
     assert decide_attempt_outcome(
+        analyzer_status=AnalyzerStatus.UNKNOWN_FAILURE.value,
+        analyzer_reason="error_termination",
+        retries_used=0,
+        max_retries=0,
+    ) == AttemptDecision(
+        run_status=RunStatus.FAILED,
+        reason="error_termination",
+        exit_code=1,
+    )
+    assert decide_attempt_outcome(
         analyzer_status=AnalyzerStatus.INCOMPLETE.value,
         analyzer_reason="will_retry",
         retries_used=2,

@@ -42,6 +42,12 @@ def decide_attempt_outcome(
         return AttemptDecision(run_status=RunStatus.COMPLETED, reason=analyzer_reason, exit_code=0)
     if parsed == AnalyzerStatus.ERROR_MULTIPLICITY_IMPOSSIBLE:
         return AttemptDecision(run_status=RunStatus.FAILED, reason=analyzer_reason, exit_code=1)
+    if max_retries <= 0:
+        return AttemptDecision(
+            run_status=RunStatus.FAILED,
+            reason=analyzer_reason,
+            exit_code=1,
+        )
     if retries_used >= max_retries:
         return AttemptDecision(
             run_status=RunStatus.FAILED, reason="retry_limit_reached", exit_code=1
