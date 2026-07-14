@@ -302,6 +302,38 @@ def test_rematerialize_orca_restart_input_allows_same_source_copy_target(
     assert restarted_geometry.read_text() == geometry.read_text()
 
 
+def test_rematerialize_orca_restart_input_copies_official_neb_geometry_files(
+    tmp_path: Path,
+) -> None:
+    original = tmp_path / "orca_stage"
+    original.mkdir()
+    (original / "input.xyz").write_text("1\nreactant\nH 0 0 0\n", encoding="utf-8")
+    product = original / "endpoints" / "product.xyz"
+    product.parent.mkdir()
+    product.write_text("1\nproduct\nH 0 0 0\n", encoding="utf-8")
+    guess = original / "guesses" / "guessTS.xyz"
+    guess.parent.mkdir()
+    guess.write_text("1\nTS guess\nH 0 0 0\n", encoding="utf-8")
+    (original / "input.inp").write_text(
+        '! NEB-TS\n%neb\n  Product "endpoints/product.xyz"\n'
+        '  TS = "guesses/guessTS.xyz"\nend\n* xyzfile 0 1 input.xyz\n',
+        encoding="utf-8",
+    )
+
+    assert rematerialize_orca_restart_input(
+        _restart_stage(original),
+        {"orca_input_updates": True},
+        allowed_root=tmp_path,
+    )
+
+    restarted = tmp_path / "orca_stage.restart-001"
+    assert (restarted / "endpoints" / "product.xyz").read_bytes() == product.read_bytes()
+    assert (restarted / "guesses" / "guessTS.xyz").read_bytes() == guess.read_bytes()
+    restarted_text = (restarted / "input.inp").read_text(encoding="utf-8")
+    assert 'Product "endpoints/product.xyz"' in restarted_text
+    assert 'TS = "guesses/guessTS.xyz"' in restarted_text
+
+
 @pytest.mark.parametrize(
     "reserved_name",
     ["input.inp", "source_candidate.json", "enqueue_payload.json"],

@@ -248,6 +248,45 @@ class TestAttemptEngine(unittest.TestCase):
         self.assertEqual(saved["status"], "running")
         self.assertEqual(emitted_payloads, [])
 
+    def test_zero_retry_overbudget_state_preserves_last_analyzer_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction_dir = Path(td)
+            selected_inp = reaction_dir / "rxn.inp"
+            selected_inp.write_text(
+                "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                encoding="utf-8",
+            )
+            out_path = reaction_dir / "rxn.out"
+            state = new_state(reaction_dir, selected_inp, max_retries=0)
+            state["attempts"] = [
+                {
+                    "out_path": str(out_path),
+                    "analyzer_status": "error_scf",
+                    "analyzer_reason": "scf_not_converged",
+                }
+            ]
+
+            rc = run_attempts(
+                reaction_dir,
+                selected_inp,
+                state,
+                resumed=False,
+                runner=_UnusedRunner(),
+                max_retries=0,
+                retry_inp_path=_retry_inp_path,
+                to_resolved_local=lambda raw: Path(raw),
+                emit=lambda _payload: None,
+            )
+            saved = load_state(reaction_dir)
+
+        self.assertEqual(rc, 1)
+        self.assertIsNotNone(saved)
+        assert saved is not None
+        final_result = saved.get("final_result")
+        assert final_result is not None
+        self.assertEqual(final_result.get("analyzer_status"), "error_scf")
+        self.assertEqual(final_result.get("reason"), "scf_not_converged")
+
     def test_standalone_optts_policy_disables_retry_notifications(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction_dir = Path(td)
@@ -282,7 +321,7 @@ class TestAttemptEngine(unittest.TestCase):
         self.assertEqual(saved["max_retries"], 0)
         final_result = saved.get("final_result")
         assert final_result is not None
-        self.assertEqual(final_result.get("reason"), "retry_limit_reached")
+        self.assertEqual(final_result.get("reason"), "ts_criteria_failed")
 
     def test_opt_policy_disables_artifact_restart_despite_configured_count(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -315,7 +354,7 @@ class TestAttemptEngine(unittest.TestCase):
         self.assertEqual(saved["max_retries"], 0)
         final_result = saved.get("final_result")
         assert final_result is not None
-        self.assertEqual(final_result.get("reason"), "retry_limit_reached")
+        self.assertEqual(final_result.get("reason"), "scf_not_converged")
 
     def test_no_retry_policy_ignores_missing_artifacts_for_non_scants_routes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -348,7 +387,7 @@ class TestAttemptEngine(unittest.TestCase):
         self.assertEqual(saved["max_retries"], 0)
         final_result = saved.get("final_result")
         assert final_result is not None
-        self.assertEqual(final_result.get("reason"), "retry_limit_reached")
+        self.assertEqual(final_result.get("reason"), "scf_not_converged")
 
     def test_standalone_optts_policy_disables_retry_despite_configured_count(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -383,7 +422,7 @@ class TestAttemptEngine(unittest.TestCase):
         self.assertEqual(saved["max_retries"], 0)
         final_result = saved.get("final_result")
         assert final_result is not None
-        self.assertEqual(final_result.get("reason"), "retry_limit_reached")
+        self.assertEqual(final_result.get("reason"), "ts_criteria_failed")
 
     def test_neb_ts_policy_disables_retry_despite_configured_count(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -416,6 +455,9 @@ class TestAttemptEngine(unittest.TestCase):
         self.assertIsNotNone(saved)
         assert saved is not None
         self.assertEqual(saved["max_retries"], 0)
+        final_result = saved.get("final_result")
+        assert final_result is not None
+        self.assertEqual(final_result.get("reason"), "ts_criteria_failed")
 
     def test_start_and_finish_callbacks_emit_immediate_terminal_lifecycle_events(self) -> None:
         with tempfile.TemporaryDirectory() as td:

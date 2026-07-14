@@ -557,7 +557,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(state["status"], "failed")
         self.assertEqual(len(state["attempts"]), 1)
         final_result = _final_result(state)
-        self.assertEqual(final_result["reason"], "retry_limit_reached")
+        self.assertEqual(final_result["reason"], "disk_write_failed")
         self.assertEqual(final_result["analyzer_status"], "error_disk_io")
 
     def test_positive_default_max_retries_uses_route_policy_cap(self) -> None:
@@ -602,10 +602,10 @@ class TestCli(unittest.TestCase):
         self.assertEqual(state["max_retries"], 0)
         self.assertEqual(len(state["attempts"]), 1)
         final_result = _final_result(state)
-        self.assertEqual(final_result["reason"], "retry_limit_reached")
+        self.assertEqual(final_result["reason"], "disk_write_failed")
         self.assertEqual(final_result["analyzer_status"], "error_disk_io")
 
-    def test_retry_limit_already_reached_finalizes_cleanly(self) -> None:
+    def test_zero_retry_resume_preserves_last_analyzer_reason(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             reaction = root / "orca_runs" / "rxn4"
@@ -656,6 +656,7 @@ class TestCli(unittest.TestCase):
                         "out_path": str(reaction / "rxn.retry01.out"),
                         "return_code": 1,
                         "analyzer_status": "incomplete",
+                        "analyzer_reason": "run_incomplete",
                         "markers": {},
                         "patch_actions": [],
                         "started_at": "2026-01-01T00:00:02+00:00",
@@ -674,7 +675,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(saved["status"], "failed")
         final_result = _final_result(saved)
-        self.assertEqual(final_result["reason"], "retry_limit_reached")
+        self.assertEqual(final_result["reason"], "run_incomplete")
         self.assertEqual(final_result["last_out_path"], str(reaction / "rxn.retry01.out"))
 
     def test_resume_runs_prepared_retry_input_after_multiple_attempts(self) -> None:

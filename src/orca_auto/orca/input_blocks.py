@@ -14,6 +14,8 @@ MOINP_RE = re.compile(r"^\s*%moinp\b", re.IGNORECASE)
 MAXCORE_DIRECTIVE_RE = re.compile(r"^\s*%maxcore\b", re.IGNORECASE)
 NPROCS_DIRECTIVE_RE = re.compile(r"\bnprocs\s+\d+\b", re.IGNORECASE)
 PAL_ROUTE_TOKEN_RE = re.compile(r"\APAL\d+\Z", re.IGNORECASE)
+_SAFE_UNQUOTED_ORCA_PATH_RE = re.compile(r"^[A-Za-z0-9._/+\-]+$")
+_NEB_FILE_REFERENCE_KEYS = frozenset({"product", "ts"})
 NESTED_BLOCK_NAMES = {"scan", "constraints"}
 
 
@@ -23,6 +25,54 @@ class OrcaLineToken:
     start: int
     end: int
     quoted: bool = False
+
+
+def neb_file_reference_context(
+    tokens: list[OrcaLineToken],
+    *,
+    in_neb_block: bool,
+) -> tuple[set[int], bool]:
+    """Return official ``%neb`` file-key indices and the next block state."""
+
+    body_start = 0
+    block_name = ""
+    if (
+        tokens
+        and not tokens[0].quoted
+        and tokens[0].value.startswith("%")
+        and tokens[0].value != "%"
+    ):
+        block_name = tokens[0].value[1:].lower()
+        body_start = 1
+    elif (
+        len(tokens) >= 2
+        and not tokens[0].quoted
+        and tokens[0].value == "%"
+        and not tokens[1].quoted
+    ):
+        block_name = tokens[1].value.lower()
+        body_start = 2
+    if block_name:
+        if block_name != "neb":
+            return set(), False
+    elif not in_neb_block:
+        return set(), False
+
+    end_index = next(
+        (
+            token_index
+            for token_index in range(body_start, len(tokens))
+            if not tokens[token_index].quoted and tokens[token_index].value.lower() == "end"
+        ),
+        len(tokens),
+    )
+    keyword_indices = {
+        token_index
+        for token_index in range(body_start, end_index)
+        if not tokens[token_index].quoted
+        and tokens[token_index].value.lower() in _NEB_FILE_REFERENCE_KEYS
+    }
+    return keyword_indices, end_index == len(tokens)
 
 
 def validate_supported_xyz_geometry_syntax(
@@ -484,6 +534,16 @@ def format_relative_or_absolute(path: Path, base_dir: Path) -> str:
 def quote_orca_path(path_text: str) -> str:
     escaped = path_text.replace('"', '\\"')
     return f'"{escaped}"'
+
+
+def is_safe_unquoted_orca_path(path_text: str) -> bool:
+    return bool(path_text and _SAFE_UNQUOTED_ORCA_PATH_RE.fullmatch(path_text))
+
+
+def unquoted_orca_path(path_text: str) -> str:
+    if not is_safe_unquoted_orca_path(path_text):
+        raise ValueError(f"Unsafe unquoted ORCA input path reference: {path_text!r}")
+    return path_text
 
 
 def set_moinp(lines: list[str], checkpoint: Path, base_dir: Path) -> bool:

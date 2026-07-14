@@ -262,19 +262,19 @@ def test_orca_queue_worker_rejects_return_code_zero_without_normal_marker(
     assert attempt["markers"]["terminated_normally"] is False
     assert state["final_result"] is not None
     assert state["final_result"]["status"] == "failed"
-    assert state["final_result"]["reason"] == "retry_limit_reached"
+    assert state["final_result"]["reason"] == "run_incomplete"
     assert state["final_result"]["last_out_path"] == str(out_path.resolve())
 
     report = load_report_json(reaction_dir)
     assert report is not None
     assert report["status"]["state"] == "failed"
-    assert report["status"]["reason"] == "retry_limit_reached"
+    assert report["status"]["reason"] == "run_incomplete"
     assert report_json_path(reaction_dir).exists()
     assert report_md_path(reaction_dir).exists()
     report_html = reaction_dir / RUN_REPORT_HTML_FILE
     assert report_html.exists()
     report_html_text = report_html.read_text(encoding="utf-8")
-    assert "retry_limit_reached" in report_html_text
+    assert "retry_limit_reached" not in report_html_text
     assert "run_incomplete" in report_html_text
     assert not (reaction_dir / SI_BLOCK_MD_FILE).exists()
 
@@ -300,9 +300,11 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
         admission_root=admission_root,
         orca_executable=executable,
     )
+    geometry = reaction_dir / "h2.xyz"
+    geometry.write_text("2\nH2\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
     selected_inp = reaction_dir / "h2.inp"
     selected_inp.write_text(
-        "! HF STO-3G SP TightSCF\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+        "! HF STO-3G SP TightSCF\n* xyzfile 0 1 h2.xyz\n",
         encoding="utf-8",
     )
 
@@ -324,11 +326,21 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     assert list_slots(admission_root) == []
     assert not worker_pid_file_path(allowed_root, WORKER_PID_FILE).exists()
 
-    bound_input = Path(completed.metadata["execution_snapshot"]["selected_inp"])
+    execution_snapshot = completed.metadata["execution_snapshot"]
+    assert execution_snapshot["dependency_paths"] == [str(geometry.resolve())]
+    assert set(execution_snapshot["materialized_inputs"]) == {"dependency_000000"}
+    private_geometry = Path(execution_snapshot["materialized_inputs"]["dependency_000000"]["path"])
+    assert private_geometry.is_file()
+    bound_input = Path(execution_snapshot["selected_inp"])
     assert bound_input.is_relative_to((reaction_dir / ".orca_auto_orca_executions").resolve())
-    assert "! HF STO-3G SP TightSCF" in bound_input.read_text(encoding="utf-8")
+    bound_text = bound_input.read_text(encoding="utf-8")
+    assert "! HF STO-3G SP TightSCF" in bound_text
+    assert "* xyzfile 0 1 .inputs/dependency_000000-" in bound_text
+    assert '* xyzfile 0 1 ".inputs/' not in bound_text
     out_path = bound_input.with_suffix(".out")
     raw_output = out_path.read_text(encoding="utf-8")
+    assert "ORCA_ReadXYZFile::Error" not in raw_output
+    assert "CANNOT OPEN FILE" not in raw_output
     assert "FINAL SINGLE POINT ENERGY" in raw_output
     assert "****ORCA TERMINATED NORMALLY****" in raw_output
 

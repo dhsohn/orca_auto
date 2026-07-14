@@ -8,6 +8,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- ORCA execution snapshots now render simple `* xyzfile` geometry paths without
+  quotes, bind and rematerialize the official `%neb Product` and `TS` files,
+  enforce their geometry admission cap, and preserve the analyzer reason when a
+  no-retry run fails on its first attempt.
+
 ## [0.2.1] - 2026-07-14
 
 This patch release adds retained smoke-review packets and interactive queue

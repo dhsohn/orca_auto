@@ -106,8 +106,130 @@ def test_orca_execution_snapshot_binds_selected_dependencies_and_executable(
     ).is_file()
     bound_text = verified_selected.read_text(encoding="utf-8")
     assert str(job_dir) not in bound_text
-    assert '".inputs/dependency_000003-' in bound_text
+    assert "* xyzfile 0 1 .inputs/dependency_000003-" in bound_text
+    assert '* xyzfile 0 1 ".inputs/' not in bound_text
     assert '".inputs/dependency_000001-' in bound_text
+
+
+@pytest.mark.parametrize(
+    "neb_block",
+    [
+        '%neb\n  Product "product.xyz"\n  TS = "guessTS.xyz"\nend',
+        '% neb Product "product.xyz" TS = "guessTS.xyz" end',
+    ],
+)
+def test_orca_execution_snapshot_binds_official_neb_geometry_files(
+    tmp_path: Path,
+    neb_block: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    for name, label in (
+        ("input.xyz", "reactant"),
+        ("product.xyz", "product"),
+        ("guessTS.xyz", "TS guess"),
+    ):
+        (job_dir / name).write_text(f"1\n{label}\nH 0 0 0\n", encoding="utf-8")
+    selected = job_dir / "neb.inp"
+    selected.write_text(
+        f"! NEB-TS HF STO-3G\n{neb_block}\n* xyzfile 0 1 input.xyz\n",
+        encoding="utf-8",
+    )
+
+    snapshot = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz=str((job_dir / "input.xyz").resolve()),
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        max_retries=0,
+        orca_executable=_write_executable(tmp_path / "orca"),
+    )
+
+    assert snapshot["dependency_paths"] == [
+        str((job_dir / "guessTS.xyz").resolve()),
+        str((job_dir / "input.xyz").resolve()),
+        str((job_dir / "product.xyz").resolve()),
+    ]
+    assert set(snapshot["materialized_inputs"]) == {
+        "dependency_000000",
+        "dependency_000001",
+        "dependency_000002",
+    }
+    assert set(snapshot["input_snapshots"]) == {
+        "selected_source",
+        "dependency_000000",
+        "dependency_000001",
+        "dependency_000002",
+    }
+    bound_text = Path(snapshot["selected_inp"]).read_text(encoding="utf-8")
+    assert "* xyzfile 0 1 .inputs/dependency_000001-" in bound_text
+    assert 'Product ".inputs/dependency_000002-' in bound_text
+    assert 'TS = ".inputs/dependency_000000-' in bound_text
+    assert '* xyzfile 0 1 ".inputs/' not in bound_text
+    assert all(name not in bound_text for name in ("input.xyz", "product.xyz", "guessTS.xyz"))
+    assert all(
+        Path(identity["path"]).is_file() for identity in snapshot["materialized_inputs"].values()
+    )
+
+
+def test_orca_execution_snapshot_does_not_bind_product_or_ts_outside_neb_block(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected = job_dir / "job.inp"
+    selected.write_text(
+        "! SP TS Product\n%scf Product missing-product.xyz TS missing-ts.xyz end\n"
+        "* xyz 0 1\nH 0 0 0\n*\n",
+        encoding="utf-8",
+    )
+
+    snapshot = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        max_retries=0,
+        orca_executable=_write_executable(tmp_path / "orca"),
+    )
+
+    assert snapshot["dependency_paths"] == []
+
+
+def test_orca_execution_snapshot_limits_neb_file_keys_to_end_boundary(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / "product.xyz").write_text("1\nproduct\nH 0 0 0\n", encoding="utf-8")
+    (job_dir / "guessTS.xyz").write_text("1\nTS guess\nH 0 0 0\n", encoding="utf-8")
+    selected = job_dir / "job.inp"
+    selected.write_text(
+        '! NEB-TS\n%NEB Product = # kept # "product.xyz" TS "guessTS.xyz" end '
+        'Product "missing-product.xyz" TS "missing-ts.xyz"\n'
+        "%scf Product missing-scf-product.xyz TS missing-scf-ts.xyz end\n"
+        "* xyz 0 1\nH 0 0 0\n*\n",
+        encoding="utf-8",
+    )
+
+    snapshot = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        max_retries=0,
+        orca_executable=_write_executable(tmp_path / "orca"),
+    )
+
+    assert snapshot["dependency_paths"] == [
+        str((job_dir / "guessTS.xyz").resolve()),
+        str((job_dir / "product.xyz").resolve()),
+    ]
+    bound_text = Path(snapshot["selected_inp"]).read_text(encoding="utf-8")
+    assert '# kept # ".inputs/dependency_000001-' in bound_text
+    assert 'TS ".inputs/dependency_000000-' in bound_text
+    assert 'Product "missing-product.xyz" TS "missing-ts.xyz"' in bound_text
+    assert "%scf Product missing-scf-product.xyz TS missing-scf-ts.xyz end" in bound_text
 
 
 def test_orca_cleanup_rejects_a_mismatched_generation_pair(tmp_path: Path) -> None:
@@ -381,6 +503,34 @@ def test_orca_execution_snapshot_allows_unquoted_progress_input_filenames(
     }
 
 
+def test_orca_execution_snapshot_rejects_unsafe_generated_xyzfile_path_and_cleans_up(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    geometry = job_dir / "geometry.xyz bad"
+    geometry.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    selected = job_dir / "job.inp"
+    selected.write_text(
+        '! SP\n* xyzfile 0 1 "geometry.xyz bad"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unsafe unquoted ORCA input path"):
+        build_orca_execution_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz=str(geometry.resolve()),
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            max_retries=0,
+            orca_executable=_write_executable(tmp_path / "orca"),
+        )
+
+    assert not list((job_dir / ".orca_auto_orca_executions").glob("generation-*"))
+    assert not list((job_dir / ".orca_auto_input_snapshots").glob("generation-*"))
+    assert not list((job_dir / ".orca_auto_snapshot_intents").glob("*.json"))
+
+
 def test_orca_execution_snapshot_allows_builtin_gcpmethod(tmp_path: Path) -> None:
     job_dir = tmp_path / "job"
     job_dir.mkdir()
@@ -647,6 +797,35 @@ def test_orca_execution_snapshot_rejects_xyzfile_geometry_above_atom_cap(
     )
     selected = job_dir / "job.inp"
     selected.write_text("! SP\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="server atom-count limit"):
+        build_orca_execution_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz=str(job_dir / "input.xyz"),
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            max_retries=0,
+            orca_executable=_write_executable(tmp_path / "orca"),
+        )
+
+
+@pytest.mark.parametrize("neb_key", ["Product", "TS"])
+def test_orca_execution_snapshot_rejects_neb_geometry_above_atom_cap(
+    tmp_path: Path,
+    neb_key: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / "input.xyz").write_text("1\nreactant\nH 0 0 0\n", encoding="utf-8")
+    (job_dir / "oversized.xyz").write_text(
+        f"{MAX_ADMISSION_ATOMS + 1}\noversized\n",
+        encoding="utf-8",
+    )
+    selected = job_dir / "job.inp"
+    selected.write_text(
+        f'! NEB-TS\n%neb\n  {neb_key} "oversized.xyz"\nend\n* xyzfile 0 1 input.xyz\n',
+        encoding="utf-8",
+    )
 
     with pytest.raises(ValueError, match="server atom-count limit"):
         build_orca_execution_snapshot(

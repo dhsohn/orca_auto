@@ -351,6 +351,9 @@ ORCA analyzer 상태:
 `interrupted_by_user`, `worker_shutdown`, `crashed_recovery`, `runner_exception`,
 `cancel_requested`, `rewrite_failed`, `scants_recipes_exhausted`입니다.
 
+유효 `max_retries`가 0이면 첫 실패 attempt가 terminal이 되며 analyzer reason을 final reason으로
+보존합니다. `retry_limit_reached`는 양수 retry budget을 소진한 경우에만 사용합니다.
+
 ## 워크플로우 계약
 
 워크플로우 입력 manifest 이름은 `flow.yaml`입니다.
