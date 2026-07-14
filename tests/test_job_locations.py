@@ -8,8 +8,10 @@ from unittest.mock import patch
 
 import pytest
 
+from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RuntimeConfig
 from orca_auto.orca.job_locations import _contracts as _job_location_contracts
+from orca_auto.orca.job_locations import _records as _job_location_records
 from orca_auto.orca.job_locations import (
     collect_reindex_payload,
     index_root_for_cfg,
@@ -972,6 +974,155 @@ def test_reindex_job_locations_skips_workflow_workspace_jobs() -> None:
         assert reindex_job_locations(cfg) == 1
         loaded = _load_job_locations(index_root_for_cfg(cfg))
         assert [record["job_id"] for record in loaded] == ["job_standalone"]
+
+
+def test_reindex_excludes_production_smoke_tree_but_case_root_indexes_it(tmp_path: Path) -> None:
+    cfg = _make_cfg(tmp_path)
+    allowed_root = Path(cfg.runtime.allowed_root)
+    standalone = allowed_root / "standalone"
+    case_parent = allowed_root / SMOKE_RESULTS_DIRNAME / "batch" / "case" / "runtime"
+    case_parent.mkdir(parents=True)
+    case_cfg = _make_cfg(case_parent)
+    case_runs_root = Path(case_cfg.runtime.allowed_root)
+    smoke_job = case_runs_root / "smoke-job"
+
+    for run_dir, job_id in ((standalone, "job-production"), (smoke_job, "job-smoke")):
+        run_dir.mkdir(parents=True)
+        selected_inp = run_dir / "calc.inp"
+        selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
+        _write_orca_state(
+            run_dir,
+            job_id=job_id,
+            status="completed",
+            selected_inp=selected_inp,
+        )
+
+    assert reindex_job_locations(cfg) == 1
+    assert [record["job_id"] for record in _load_job_locations(allowed_root)] == ["job-production"]
+
+    assert reindex_job_locations(case_cfg) == 1
+    assert [record["job_id"] for record in _load_job_locations(case_runs_root)] == ["job-smoke"]
+
+
+def test_reindex_skips_job_when_an_artifact_symlink_escapes_runs_root(tmp_path: Path) -> None:
+    cfg = _make_cfg(tmp_path)
+    allowed_root = Path(cfg.runtime.allowed_root)
+    job_dir = allowed_root / "linked-report"
+    outside = tmp_path / "outside"
+    job_dir.mkdir(parents=True)
+    outside.mkdir()
+    selected_inp = job_dir / "calc.inp"
+    selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
+    _write_orca_state(
+        job_dir,
+        job_id="job-linked",
+        status="completed",
+        selected_inp=selected_inp,
+    )
+    outside_report = outside / "job_report.json"
+    _write_json(
+        outside_report,
+        _orca_payload(
+            job_id="job-linked",
+            reaction_dir=job_dir,
+            selected_inp=selected_inp,
+        ),
+    )
+    report_json_path(job_dir).symlink_to(outside_report)
+
+    assert reindex_job_locations(cfg) == 0
+    assert _load_job_locations(allowed_root) == []
+
+
+def test_reindex_revalidates_candidate_after_directory_is_replaced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    allowed_root = Path(cfg.runtime.allowed_root)
+    normal_job = allowed_root / "normal"
+    original_job = allowed_root / "normal-original"
+    smoke_job = allowed_root / SMOKE_RESULTS_DIRNAME / "batch" / "smoke"
+
+    for run_dir, job_id in ((normal_job, "job-normal"), (smoke_job, "job-smoke")):
+        run_dir.mkdir(parents=True)
+        selected_inp = run_dir / "calc.inp"
+        selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
+        _write_orca_state(
+            run_dir,
+            job_id=job_id,
+            status="completed",
+            selected_inp=selected_inp,
+        )
+
+    original_candidates = _job_location_records._candidate_reindex_dirs
+
+    def _candidates_then_replace(root: Path) -> set[Path]:
+        candidates = original_candidates(root)
+        normal_job.rename(original_job)
+        normal_job.symlink_to(smoke_job, target_is_directory=True)
+        return candidates
+
+    monkeypatch.setattr(
+        _job_location_records,
+        "_candidate_reindex_dirs",
+        _candidates_then_replace,
+    )
+
+    assert reindex_job_locations(cfg) == 0
+    assert _load_job_locations(allowed_root) == []
+    assert state_path(original_job).exists()
+    assert state_path(smoke_job).exists()
+
+
+def test_reindex_reads_artifacts_from_discovered_directory_inode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    allowed_root = Path(cfg.runtime.allowed_root)
+    normal_job = allowed_root / "normal-aba"
+    temporary_job = allowed_root / "normal-aba-temporary"
+    smoke_job = allowed_root / SMOKE_RESULTS_DIRNAME / "batch" / "smoke-aba"
+
+    for run_dir, job_id in ((normal_job, "job-normal"), (smoke_job, "job-smoke")):
+        run_dir.mkdir(parents=True)
+        selected_inp = run_dir / "calc.inp"
+        selected_inp.write_text(
+            "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+            encoding="utf-8",
+        )
+        artifact_kwargs = {
+            "job_id": job_id,
+            "status": "completed",
+            "selected_inp": selected_inp,
+        }
+        _write_orca_state(run_dir, **artifact_kwargs)
+        _write_orca_report(run_dir, **artifact_kwargs)
+
+    smoke_report = json.loads(report_json_path(smoke_job).read_text(encoding="utf-8"))
+    smoke_report["job"]["dir"] = ""
+    _write_json(report_json_path(smoke_job), smoke_report)
+
+    original_load_report_json = _job_location_records.load_report_json
+
+    def _swap_only_while_report_is_read(artifact_dir: Path) -> dict[str, Any] | None:
+        normal_job.rename(temporary_job)
+        smoke_job.rename(normal_job)
+        try:
+            return original_load_report_json(artifact_dir)
+        finally:
+            normal_job.rename(smoke_job)
+            temporary_job.rename(normal_job)
+
+    monkeypatch.setattr(
+        _job_location_records,
+        "load_report_json",
+        _swap_only_while_report_is_read,
+    )
+
+    assert reindex_job_locations(cfg) == 1
+    assert [record["job_id"] for record in _load_job_locations(allowed_root)] == ["job-normal"]
 
 
 def test_reindex_job_locations_handles_missing_root_and_skips_unidentifiable_artifacts() -> None:

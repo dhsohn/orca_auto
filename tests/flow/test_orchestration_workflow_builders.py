@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import pytest
 
+from orca_auto.core.commands.run_dir import use_run_dir_publication_guard
 from orca_auto.flow.contracts import (
     WorkflowArtifactRef,
     WorkflowStagePayload,
@@ -299,6 +300,119 @@ def test_persist_workflow_writes_payload_and_syncs_registry(tmp_path: Path) -> N
     assert syncs == [
         (tmp_path / "workflows", workspace_dir, cast(dict[str, Any], payload)),
     ]
+
+
+def test_public_run_dir_guard_aborts_workflow_before_first_durable_write(
+    tmp_path: Path,
+) -> None:
+    workflow_root = tmp_path / "workflows"
+    workspace_dir = workflow_root / "wf_guarded"
+    writes: list[dict[str, Any]] = []
+    syncs: list[dict[str, Any]] = []
+    stages: list[str] = []
+    request = WorkflowTemplateRequest(
+        workflow_id="wf_guarded",
+        template_name="conformer_screening",
+        source_job_id="",
+        source_job_type="raw_xyz",
+        reaction_key="mol",
+        status="planned",
+        requested_at="2026-05-29T00:00:00+00:00",
+        parameters={},
+        source_artifacts=(),
+    )
+
+    def reject_publication(stage: str) -> None:
+        stages.append(stage)
+        raise RuntimeError("run-dir target moved into reserved smoke results")
+
+    with (
+        use_run_dir_publication_guard(reject_publication),
+        pytest.raises(RuntimeError, match="moved into reserved smoke results"),
+    ):
+        _persist_workflow(
+            persistence_context=WorkflowPersistenceContext(
+                workflow_root_path=workflow_root,
+                workspace_dir=workspace_dir,
+                workflow_id="wf_guarded",
+                template_name="conformer_screening",
+                source_job_id="",
+                source_job_type="raw_xyz",
+                reaction_key="mol",
+                requested_at="2026-05-29T00:00:00+00:00",
+            ),
+            request=request,
+            stages=[],
+            creation_context=_workflow_context(
+                write_workflow_payload_fn=lambda _workspace, payload: writes.append(payload),
+                sync_workflow_registry_fn=lambda _root, _workspace, payload: syncs.append(payload),
+            ),
+        )
+
+    assert stages == ["workflow durable payload pre-commit"]
+    assert writes == []
+    assert syncs == []
+    assert not (workspace_dir / "workflow.json").exists()
+    assert not (workflow_root / "workflow_registry.json").exists()
+
+
+def test_public_run_dir_guard_removes_workflow_payload_after_post_commit_rejection(
+    tmp_path: Path,
+) -> None:
+    workflow_root = tmp_path / "workflows"
+    workspace_dir = workflow_root / "wf_guarded"
+    workspace_dir.mkdir(parents=True)
+    stages: list[str] = []
+    syncs: list[dict[str, Any]] = []
+    request = WorkflowTemplateRequest(
+        workflow_id="wf_guarded",
+        template_name="conformer_screening",
+        source_job_id="",
+        source_job_type="raw_xyz",
+        reaction_key="mol",
+        status="planned",
+        requested_at="2026-05-29T00:00:00+00:00",
+        parameters={},
+        source_artifacts=(),
+    )
+
+    def reject_after_commit(stage: str) -> None:
+        stages.append(stage)
+        if stage.endswith("post-commit"):
+            raise RuntimeError("run-dir target moved into reserved smoke results")
+
+    def write_payload(workspace: Path, _payload: dict[str, Any]) -> None:
+        (workspace / "workflow.json").write_text("{}\n", encoding="utf-8")
+
+    with (
+        use_run_dir_publication_guard(reject_after_commit),
+        pytest.raises(RuntimeError, match="moved into reserved smoke results"),
+    ):
+        _persist_workflow(
+            persistence_context=WorkflowPersistenceContext(
+                workflow_root_path=workflow_root,
+                workspace_dir=workspace_dir,
+                workflow_id="wf_guarded",
+                template_name="conformer_screening",
+                source_job_id="",
+                source_job_type="raw_xyz",
+                reaction_key="mol",
+                requested_at="2026-05-29T00:00:00+00:00",
+            ),
+            request=request,
+            stages=[],
+            creation_context=_workflow_context(
+                write_workflow_payload_fn=write_payload,
+                sync_workflow_registry_fn=lambda _root, _workspace, payload: syncs.append(payload),
+            ),
+        )
+
+    assert stages == [
+        "workflow durable payload pre-commit",
+        "workflow durable payload post-commit",
+    ]
+    assert not (workspace_dir / "workflow.json").exists()
+    assert syncs == []
 
 
 def test_persist_workflow_writes_and_syncs_under_creation_lock(

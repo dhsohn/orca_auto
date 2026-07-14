@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from orca_auto.flow.workflow import report as workflow_report
 from orca_auto.flow.workflow.report import (
     _energy_axis_ticks,
     _tick_label,
@@ -69,6 +71,18 @@ def _orca_stage(stage_id: str, stage_dir: Path, *, status: str, label: str) -> d
             {"kind": "orca_output_dir", "path": str(stage_dir)},
             {"kind": "orca_report_json", "path": str(stage_dir / "job_report.json")},
         ],
+    }
+
+
+def _orca_output_report(out_path: Path) -> dict[str, Any]:
+    return {
+        "engine_payload": {
+            "attempts": [{"index": 1, "out_path": str(out_path)}],
+            "final_result": {
+                "reason": "normal_termination",
+                "last_out_path": str(out_path),
+            },
+        }
     }
 
 
@@ -137,6 +151,136 @@ def test_collect_ranks_orca_results_and_counts_funnel(tmp_path: Path) -> None:
     assert data.orca_results[0].imaginary_count == 0
     assert data.orca_results[0].report_href is not None
     assert "orca_b" in data.orca_results[0].report_href
+
+
+def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: Path) -> None:
+    stage_dir = tmp_path / "orca_from_output"
+    stage_dir.mkdir()
+    out_path = stage_dir / "opt.out"
+    out_path.write_text(
+        "\n".join(
+            [
+                "|  1> ! r2scan-3c Opt TightSCF",
+                "FINAL SINGLE POINT ENERGY -1.000000000000",
+                "FINAL SINGLE POINT ENERGY -1.100000000000",
+                "****ORCA TERMINATED NORMALLY****",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    report = {
+        "engine_payload": {
+            "attempts": [
+                {
+                    "index": 1,
+                    "out_path": str(out_path),
+                    "markers": {"imaginary_frequency_count": 0},
+                }
+            ],
+            "final_result": {
+                "reason": "normal_termination",
+                "last_out_path": str(out_path),
+            },
+        }
+    }
+    (stage_dir / "job_report.json").write_text(json.dumps(report), encoding="utf-8")
+    (stage_dir / "job_report.html").write_text("<html></html>", encoding="utf-8")
+    payload = _payload(
+        tmp_path,
+        [_orca_stage("orca_conformer_01", stage_dir, status="completed", label="conf_01")],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.orca_results[0].energy == pytest.approx(-1.1)
+    assert data.orca_results[0].rel_kcal == pytest.approx(0.0)
+
+
+def test_orca_output_energy_reads_only_bounded_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage_dir = tmp_path / "orca_large_output"
+    stage_dir.mkdir()
+    out_path = stage_dir / "opt.out"
+    out_path.write_bytes(
+        b"FINAL SINGLE POINT ENERGY -9.000000000000\n"
+        + b"x" * (workflow_report._MAX_ORCA_ENERGY_SCAN_BYTES + 4096)
+        + b"\nFINAL SINGLE POINT ENERGY -2.500000000000\n"
+    )
+    bytes_requested = 0
+    original_pread = workflow_report.os.pread
+
+    def tracked_pread(descriptor: int, count: int, offset: int) -> bytes:
+        nonlocal bytes_requested
+        bytes_requested += count
+        return original_pread(descriptor, count, offset)
+
+    monkeypatch.setattr(workflow_report.os, "pread", tracked_pread)
+
+    energy = workflow_report._orca_report_output_energy(stage_dir, _orca_output_report(out_path))
+
+    assert out_path.stat().st_size > workflow_report._MAX_ORCA_ENERGY_SCAN_BYTES
+    assert bytes_requested == workflow_report._MAX_ORCA_ENERGY_SCAN_BYTES
+    assert energy == pytest.approx(-2.5)
+
+
+def test_orca_output_energy_rejects_file_changed_during_tail_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage_dir = tmp_path / "orca_changing_output"
+    stage_dir.mkdir()
+    out_path = stage_dir / "opt.out"
+    out_path.write_text(
+        "FINAL SINGLE POINT ENERGY -1.100000000000\n",
+        encoding="utf-8",
+    )
+    original_pread = workflow_report.os.pread
+    changed = False
+
+    def mutating_pread(descriptor: int, count: int, offset: int) -> bytes:
+        nonlocal changed
+        chunk = original_pread(descriptor, count, offset)
+        if not changed:
+            changed = True
+            with out_path.open("ab") as handle:
+                handle.write(b"changed\n")
+        return chunk
+
+    monkeypatch.setattr(workflow_report.os, "pread", mutating_pread)
+
+    assert (
+        workflow_report._orca_report_output_energy(stage_dir, _orca_output_report(out_path)) is None
+    )
+
+
+def test_orca_output_energy_rejects_nonregular_multilink_or_unconfined_paths(
+    tmp_path: Path,
+) -> None:
+    stage_dir = tmp_path / "orca_untrusted_output"
+    stage_dir.mkdir()
+    target = stage_dir / "target.out"
+    target.write_text(
+        "FINAL SINGLE POINT ENERGY -1.100000000000\n",
+        encoding="utf-8",
+    )
+    symlink = stage_dir / "symlink.out"
+    symlink.symlink_to(target.name)
+    hardlink = stage_dir / "hardlink.out"
+    os.link(target, hardlink)
+    fifo = stage_dir / "fifo.out"
+    os.mkfifo(fifo)
+    outside = tmp_path / "outside.out"
+    outside.write_text(
+        "FINAL SINGLE POINT ENERGY -2.200000000000\n",
+        encoding="utf-8",
+    )
+
+    for candidate in (symlink, hardlink, fifo, outside):
+        assert (
+            workflow_report._orca_report_output_energy(stage_dir, _orca_output_report(candidate))
+            is None
+        )
 
 
 def test_write_workflow_html_report_renders_sections(tmp_path: Path) -> None:

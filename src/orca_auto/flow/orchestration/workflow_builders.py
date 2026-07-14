@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from orca_auto.core.commands.run_dir import assert_run_dir_publication_allowed
 from orca_auto.core.engine_process import atomic_write_confined_bytes, ensure_confined_directory
 from orca_auto.core.paths.workflow import (
     WORKFLOW_FILE_NAME,
@@ -139,7 +140,18 @@ def _persist_workflow(
     payload = plan.to_dict()
     payload["stages"] = cast(list[WorkflowStagePayload], list(stages))
     callback_payload = cast(dict[str, Any], payload)
+    assert_run_dir_publication_allowed("workflow durable payload pre-commit")
     creation_context.write_workflow_payload_fn(persistence_context.workspace_dir, callback_payload)
+    try:
+        assert_run_dir_publication_allowed("workflow durable payload post-commit")
+    except BaseException:
+        try:
+            (persistence_context.workspace_dir / WORKFLOW_FILE_NAME).unlink()
+        except FileNotFoundError:
+            pass
+        else:
+            fsync_directory(persistence_context.workspace_dir)
+        raise
     creation_context.sync_workflow_registry_fn(
         persistence_context.workflow_root_path,
         persistence_context.workspace_dir,

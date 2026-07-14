@@ -23,6 +23,7 @@ from .resource_directives import (
     clamp_maxcore_to_budget,
     ensure_submission_resource_request,
     maxcore_mb_per_core,
+    prepare_submission_resource_request,
     read_resource_request_from_input,
 )
 from .retry_policy import RetryRecipeName
@@ -43,6 +44,7 @@ __all__ = [
     "MOINP_RE",
     "ensure_submission_resource_request",
     "maxcore_mb_per_core",
+    "prepare_submission_resource_request",
     "prepare_checkpoint_restart_input",
     "prepare_scants_optts_fallback_input",
     "prepare_scants_scan_retry_input",

@@ -121,6 +121,86 @@ def test_cleanup_unowned_snapshot_namespace_removes_only_requested_generation(
     assert Path(second["snapshot_path"]).is_file()
 
 
+def test_cleanup_unowned_snapshot_namespace_does_not_follow_substituted_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    namespace = "generation-race"
+    generation = input_snapshot.reserve_input_snapshot_namespace(job_dir, namespace)
+    (generation / "owned.txt").write_text("owned", encoding="utf-8")
+    snapshot_root = job_dir / input_snapshot.SNAPSHOT_DIR_NAME
+    moved_root = job_dir / "moved-snapshot-root"
+    outside_root = tmp_path / "outside"
+    outside_generation = outside_root / namespace
+    outside_generation.mkdir(parents=True)
+    sentinel = outside_generation / "sentinel.txt"
+    sentinel.write_text("must survive", encoding="utf-8")
+    original_remove = input_snapshot._remove_directory_contents_at
+    substituted = False
+
+    def substitute_root(directory_fd: int, *, label: str) -> None:
+        nonlocal substituted
+        if not substituted and label == "Input snapshot generation":
+            substituted = True
+            snapshot_root.rename(moved_root)
+            snapshot_root.symlink_to(outside_root, target_is_directory=True)
+        original_remove(directory_fd, label=label)
+
+    monkeypatch.setattr(input_snapshot, "_remove_directory_contents_at", substitute_root)
+
+    with pytest.raises(ValueError, match="Input snapshot root"):
+        input_snapshot.cleanup_unowned_input_snapshot_namespace(job_dir, namespace)
+
+    assert substituted
+    assert sentinel.read_text(encoding="utf-8") == "must survive"
+    assert snapshot_root.is_symlink()
+
+
+def test_cleanup_unowned_snapshot_namespace_does_not_follow_substituted_component(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    namespace = "generation-component-race"
+    generation = input_snapshot.reserve_input_snapshot_namespace(job_dir, namespace)
+    nested = generation / "nested"
+    nested.mkdir()
+    (nested / "owned.txt").write_text("owned", encoding="utf-8")
+    moved_nested = generation / "moved-nested"
+    outside = tmp_path / "outside-component"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("must survive", encoding="utf-8")
+    original_open = input_snapshot.os.open
+    substituted = False
+
+    def substitute_component(
+        path: str | bytes,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal substituted
+        if path == "nested" and dir_fd is not None and not substituted:
+            substituted = True
+            nested.rename(moved_nested)
+            nested.symlink_to(outside, target_is_directory=True)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(input_snapshot.os, "open", substitute_component)
+
+    with pytest.raises(ValueError, match="component"):
+        input_snapshot.cleanup_unowned_input_snapshot_namespace(job_dir, namespace)
+
+    assert substituted
+    assert sentinel.read_text(encoding="utf-8") == "must survive"
+    assert nested.is_symlink()
+
+
 def test_snapshot_namespace_reservation_is_exclusive_and_preserves_owner(tmp_path: Path) -> None:
     job_dir = tmp_path / "job"
     job_dir.mkdir()

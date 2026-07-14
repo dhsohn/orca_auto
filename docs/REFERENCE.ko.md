@@ -113,6 +113,7 @@ bash scripts/bootstrap_wsl.sh
 - `init`
 - `scaffold <ts_search|conformer_search>`
 - `scan-notify`
+- `smoke`
 
 먼저 `.venv`를 활성화하거나, `.venv/bin/orca_auto ...`를 직접 호출하세요.
 기본적으로 설정은 `ORCA_AUTO_CONFIG`, 그다음 `<repo_root>/config/orca_auto.yaml`,
@@ -652,7 +653,25 @@ orca_auto scan-notify
 - `scan-notify`는 설정된 ORCA 루트를 일회성으로 스캔해 활성 메신저 provider로 발견
   알림을 보낸 뒤 종료합니다. 실시간 모니터가 아닙니다.
 
-### 7.7 장기 실행 서비스
+### 7.7 `smoke`
+
+```bash
+orca_auto smoke
+```
+
+기본 fake 프로필은 라이선스 엔진 바이너리 없이 ORCA·단독 xTB-MD·워크플로우의
+성공/fail-closed 시나리오 11개를 실행하고 결과를 보존합니다. 명령은 배치 디렉터리와
+오프라인 `review/index.html`, `summary.md` 경로를 출력합니다. 리뷰 인덱스에서 생성된
+리포트, SI 파일, 상태, 로그, raw artifact를 확인하세요. 스모크 PASS는 선언한 소프트웨어
+계약을 검증할 뿐 화학적 의미를 보증하지 않습니다.
+
+배치는 `<runs_root>/.orca_auto_smoke/batches/` 아래에 남습니다. 이 예약 트리는 production
+제출·발견에서 제외됩니다. 일부 자식 파일만 지우지 말고 검토가 끝난 배치 전체를
+보관하거나 삭제하세요. 실제 엔진 acceptance는 `--profile real-orca` 또는
+`--profile real-xtb`, 명시적 실행 파일 환경 변수, 공유 production 설정을 사용해야 하는
+opt-in 검사입니다. 정확한 명령과 한계는 [VALIDATION.md](VALIDATION.md)를 참고하세요.
+
+### 7.8 장기 실행 서비스
 
 장기 실행 워커와 messenger 봇 프로세스는 오직 `systemd`로만 관리됩니다. 공개 CLI 명령은
 그 서비스들을 직접 시작하지 않습니다.

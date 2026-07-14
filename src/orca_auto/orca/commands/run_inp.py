@@ -18,7 +18,11 @@ from orca_auto.core.admission import (
 
 from ..attempt.engine import _exit_with_result, run_attempts
 from ..config import load_config
-from ..inp_rewriter import ensure_submission_resource_request, read_resource_request_from_input
+from ..inp_rewriter import (
+    ensure_submission_resource_request,
+    prepare_submission_resource_request,
+    read_resource_request_from_input,
+)
 from ..notifications import (
     notify_queue_enqueued_event,
     notify_retry_event,
@@ -107,6 +111,7 @@ def _run_inp_deps() -> _RunInpDeps:
         ),
         submission=_RunInpSubmissionDeps(
             ensure_submission_resource_request=ensure_submission_resource_request,
+            prepare_submission_resource_request=prepare_submission_resource_request,
             read_resource_request_from_input=read_resource_request_from_input,
             active_direct_run_error=_active_direct_run_error,
             emit_queued_submission=_emit_queued_submission,

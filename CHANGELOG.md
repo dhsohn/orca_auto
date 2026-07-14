@@ -10,6 +10,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Added
 
+- Added `orca_auto smoke`, with 11 retained fake ORCA, standalone xTB-MD, and
+  workflow success/fail-closed scenarios plus opt-in real ORCA and real xTB
+  profiles. Each batch is isolated under `<runs_root>/.orca_auto_smoke` and
+  includes a short-path offline HTML/Markdown review packet with provenance,
+  bounded previews/copies, and expected-versus-observed terminal states.
 - `queue list --watch` now shows a live system resource line on an interactive
   terminal — CPU utilization, RAM used/total, and load average with colored
   block-bar gauges — sampled from Linux `/proc` between refreshes with no new
@@ -26,6 +31,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Reserved `.orca_auto_smoke` trees are excluded from production submission,
+  discovery, reindexing, snapshots, and cleanup. Queue publication and
+  ORCA/xTB-MD snapshot rollback now preserve path identity and fail closed
+  across post-commit and namespace-replacement races; workflow reports use a
+  bounded ORCA-output tail fallback when no `.engrad` energy is available.
 - `queue list` now renders a styled view on an interactive terminal: a summary
   band with per-status counts, box-drawing tree connectors (`├─`/`└─`) for
   workflow children, and a status-colored left rail, plus a spinner and clock in

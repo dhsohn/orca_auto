@@ -10,7 +10,9 @@ from __future__ import annotations
 import copy
 import logging
 import os
+import stat
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -32,6 +34,7 @@ from orca_auto.core.engines.queue_worker import (
     build_engine_queue_worker,
     build_runtime_engine_queue_worker,
 )
+from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue.engine.execution import coerce_resource_request
 from orca_auto.core.queue.internal_engine import (
     InternalEngineQueueModule,
@@ -47,12 +50,14 @@ from orca_auto.core.queue.lifecycle import (
     job_queue_root as _lifecycle_job_queue_root,
 )
 from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_PREPARING,
     QUEUE_RECORD_SYNC_REPAIR_PENDING,
     QUEUE_RECORD_SYNC_REPAIRING,
     QUEUE_RECORD_SYNC_TOKEN_KEY,
     queue_record_publication_lock,
+    queue_record_sync_metadata,
     queue_record_sync_state,
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
@@ -388,6 +393,97 @@ def _upsert_queued_job_record(cfg: AppConfig, entry: QueueEntry) -> None:
     )
 
 
+def _orca_publication_job_dir_issue(queue_root: Path, entry: QueueEntry) -> str:
+    """Return why a new snapshot no longer names its submission directory."""
+
+    reaction_dir_text = queue_entry_reaction_dir(entry)
+    if not reaction_dir_text:
+        return "reaction_dir_missing"
+    try:
+        lexical_reaction_dir = Path(reaction_dir_text).expanduser().absolute()
+        resolved_queue_root = queue_root.expanduser().resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return "queue_or_reaction_path_invalid"
+    if should_exclude_from_production_runs_scan(lexical_reaction_dir, resolved_queue_root):
+        return "reaction_dir_reserved_or_unsafe"
+
+    metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+    snapshot = metadata.get("execution_snapshot")
+    if not isinstance(snapshot, Mapping):
+        # Legacy rows predate the bound directory identity. Keep their existing
+        # repair behavior; their immutable input verification remains the final
+        # execution boundary.
+        return ""
+    identity = snapshot.get("job_dir_identity")
+    if identity is None:
+        return ""
+    if not isinstance(identity, Mapping):
+        return "job_dir_identity_invalid"
+    try:
+        expected_identity = (
+            int(identity.get("device", -1)),
+            int(identity.get("inode", -1)),
+        )
+        resolved_reaction_dir = lexical_reaction_dir.resolve(strict=True)
+        named_status = lexical_reaction_dir.lstat()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return "job_dir_identity_unverifiable"
+    if (
+        lexical_reaction_dir != resolved_reaction_dir
+        or not stat.S_ISDIR(named_status.st_mode)
+        or (int(named_status.st_dev), int(named_status.st_ino)) != expected_identity
+    ):
+        return "job_dir_namespace_or_identity_changed"
+    if not resolved_reaction_dir.is_relative_to(resolved_queue_root):
+        return "reaction_dir_outside_queue_root"
+    if should_exclude_from_production_runs_scan(resolved_reaction_dir, resolved_queue_root):
+        return "reaction_dir_reserved_or_unsafe"
+    return ""
+
+
+def _fence_invalid_orca_publication(
+    queue_root: Path,
+    entry: QueueEntry,
+    *,
+    issue: str,
+) -> bool:
+    """Terminally fence an exact pending row whose bound job path changed."""
+
+    metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+    token = str(metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY) or "").strip()
+    try:
+        fenced = mark_failed(
+            queue_root,
+            entry.queue_id,
+            error=f"queue_publication_job_dir_invalid:{issue}",
+            metadata_update=queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_ABORTED,
+                token=token,
+                owner_pid=0,
+            ),
+            expected_entry=entry,
+            expected_task_id=entry.task_id,
+        )
+    except Exception:  # noqa: BLE001 - retain the row unclaimable on persistence failure
+        logger.exception(
+            "Failed to fence ORCA publication with changed job path: queue_id=%s issue=%s",
+            entry.queue_id,
+            issue,
+        )
+        return False
+    if fenced:
+        logger.error(
+            "Fenced ORCA publication whose bound job path changed: queue_id=%s issue=%s",
+            entry.queue_id,
+            issue,
+        )
+        return True
+    current = get_entry_by_id(queue_root, entry.queue_id)
+    return bool(
+        current is None or current.status != QueueStatus.PENDING or current.cancel_requested
+    )
+
+
 def _repair_orca_queue_publication(
     cfg: AppConfig,
     queue_root: Path,
@@ -398,6 +494,13 @@ def _repair_orca_queue_publication(
         return True
     if entry.status != QueueStatus.PENDING or entry.cancel_requested:
         return True
+    job_dir_issue = _orca_publication_job_dir_issue(queue_root, entry)
+    if job_dir_issue:
+        return _fence_invalid_orca_publication(
+            queue_root,
+            entry,
+            issue=job_dir_issue,
+        )
     reaction_dir_text = queue_entry_reaction_dir(entry)
     try:
         reaction_dir = Path(reaction_dir_text).expanduser().resolve()

@@ -290,6 +290,32 @@ installs `.[dev]`, then runs `ruff check`, `ruff format --check`, `mypy`, `lint-
 the coverage-gated pytest suite. Pass pytest selectors directly to the script when you want a narrower
 loop, for example `bash scripts/check.sh tests/flow -q`.
 
+Run the retained fake-engine smoke suite after each behavioral patch. From the
+source checkout backing the installed command, the default fake profile discovers
+the shared config and uses its `runs_root`:
+
+```bash
+orca_auto smoke
+```
+
+Use `--runs-root /absolute/path/to/runs` for an isolated fake batch or
+`--config /absolute/path/to/orca_auto.yaml` for a non-default config. The retained
+`scripts/smoke.sh` wrapper accepts the same options and pins the current worktree,
+which is useful in CI and parallel checkouts.
+
+Each batch is kept under `<runs_root>/.orca_auto_smoke/`, including actual
+fake-engine outputs, `batch.json`/`case.json`, a Markdown summary, and the
+offline `review/index.html` artifact index. Its Open buttons use bounded,
+Windows-friendly byte copies under a short `review/g-*/open/` path; the original
+runtime tree remains authoritative, and `artifacts.json` maps every copy back to
+its full source path and matching SHA-256. Workflow-report bundles retain their
+confined relative links to child job reports. A deliberately failing simulation
+case passes only when the observed terminal failure matches its declared
+expectation; harness failures, skips, terminal mismatches, missing required
+artifacts, source drift, or an incomplete source identity still fail the batch.
+See [docs/VALIDATION.md](docs/VALIDATION.md) for the review policy, bounded-copy
+limits, and separate opt-in real-ORCA and real-xTB boundaries.
+
 CI also runs Gitleaks secret scanning, ShellCheck for `scripts/*.sh`, rendered
 systemd unit verification, the Python 3.11/3.12/3.13 check matrix, and a wheel
 smoke test that confirms typed-package metadata. These checks exercise the

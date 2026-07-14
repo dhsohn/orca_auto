@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 from collections.abc import Sequence
@@ -8,7 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core import engine_runner
-from orca_auto.core.commands.run_dir import resolve_engine_job_dir
+from orca_auto.core.commands.run_dir import (
+    active_run_dir_pinned_target,
+    assert_run_dir_publication_allowed,
+    resolve_engine_job_dir,
+)
 from orca_auto.core.config.engines import load_xtb_md_config
 from orca_auto.core.queue import (
     DuplicateQueueEntryError,
@@ -44,6 +49,7 @@ from orca_auto.core.queue.publication import (
     queue_record_sync_metadata,
     queue_record_sync_state,
 )
+from orca_auto.core.queue.store import QueueAfterCommitError
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.core.utils.persistence import timestamped_token
@@ -64,6 +70,34 @@ from .version import probe_xtb_version
 APP_NAME = "orca_auto_xtb_md"
 ENGINE = "xtb_md"
 TASK_KIND = "xtb_md"
+
+logger = logging.getLogger(__name__)
+
+
+def _snapshot_cleanup_job_dir(
+    job_dir: Path,
+    job_path_identity: Any,
+) -> Path:
+    pinned_target = active_run_dir_pinned_target()
+    if pinned_target is None:
+        return job_dir
+    if not isinstance(job_path_identity, dict):
+        raise ValueError("xTB-MD cleanup has no bound job directory identity")
+    expected = job_path_identity.get("job_dir")
+    if not isinstance(expected, dict):
+        raise ValueError("xTB-MD cleanup has no bound job directory descriptor")
+    expected_identity = (
+        int(expected.get("device", -1)),
+        int(expected.get("inode", -1)),
+    )
+    for candidate in (job_dir, pinned_target):
+        try:
+            candidate_stat = candidate.stat()
+        except OSError:
+            continue
+        if (int(candidate_stat.st_dev), int(candidate_stat.st_ino)) == expected_identity:
+            return candidate
+    raise ValueError("xTB-MD cleanup target identity changed after submission")
 
 
 class XtbMdSubmissionError(RuntimeError):
@@ -261,8 +295,12 @@ def _build_submission(
         return metadata, task_id, queue_root
     except BaseException:
         path_identity_valid = False
+        cleanup_job_dir = job_dir
         try:
-            if execution_snapshot is not None:
+            cleanup_job_dir = _snapshot_cleanup_job_dir(job_dir, job_path_identity)
+            if cleanup_job_dir != job_dir:
+                path_identity_valid = True
+            elif execution_snapshot is not None:
                 validate_execution_snapshot_job_dir(cfg.runtime.allowed_root, execution_snapshot)
                 path_identity_valid = True
             else:
@@ -271,7 +309,7 @@ def _build_submission(
         except Exception:  # noqa: BLE001
             path_identity_valid = False
         if namespace_created and path_identity_valid:
-            cleanup_unowned_input_snapshot_namespace(job_dir, snapshot_namespace)
+            cleanup_unowned_input_snapshot_namespace(cleanup_job_dir, snapshot_namespace)
         if intent_created:
             discard_snapshot_intent_if_generations_absent(queue_root, snapshot_namespace)
         raise
@@ -287,12 +325,63 @@ def _publish_queued_record(cfg: Any, entry: QueueEntry) -> None:
     persist_job_artifact(cfg, entry, payload)
 
 
+def _fence_uncompensated_xtb_md_enqueue(
+    queue_root: Path,
+    *,
+    error: QueueAfterCommitError,
+    publication_token: str,
+    task_id: str,
+) -> QueueEntry | None:
+    """Terminally fence one exact provisional row without publishing it."""
+
+    entry = error.provisional_result
+    metadata = entry.metadata if isinstance(entry, QueueEntry) else {}
+    if (
+        not isinstance(entry, QueueEntry)
+        or entry.task_id != task_id
+        or str(metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY) or "") != publication_token
+    ):
+        logger.error("Cannot identify the provisional xTB-MD row after compensation failure")
+        return None
+    try:
+        fenced = mark_failed(
+            queue_root,
+            entry.queue_id,
+            error=(
+                "queue_after_commit_guard_failed:"
+                f"compensation={error.compensation_outcome}:"
+                f"{error.after_commit_error.__class__.__name__}:"
+                f"{error.after_commit_error}"
+            ),
+            metadata_update=queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_ABORTED,
+                token=publication_token,
+                owner_pid=0,
+            ),
+            expected_entry=entry,
+            expected_task_id=task_id,
+        )
+    except BaseException:  # noqa: BLE001 - preserve the guard-origin failure path
+        logger.exception(
+            "Failed to terminally fence the provisional xTB-MD row: queue_id=%s",
+            entry.queue_id,
+        )
+        return None
+    if fenced is None:
+        logger.error(
+            "Provisional xTB-MD row was not visible for terminal fencing: queue_id=%s",
+            entry.queue_id,
+        )
+    return fenced
+
+
 def _enqueue_submission(
     cfg: Any,
     job_dir: Path,
     *,
     priority: int,
 ) -> QueueEntry:
+    assert_run_dir_publication_allowed("xTB-MD target mutation preflight")
     metadata, task_id, queue_root = _build_submission(cfg, job_dir)
     publication_token = timestamped_token("record_sync", token_bytes=16)
     metadata.update(
@@ -320,7 +409,39 @@ def _enqueue_submission(
             priority=priority,
             metadata=metadata,
             duplicate_policy=_reject_active_job_dir_duplicate,
+            before_commit_fn=lambda: assert_run_dir_publication_allowed(
+                "xTB-MD durable queue pre-commit"
+            ),
+            after_commit_fn=lambda: assert_run_dir_publication_allowed(
+                "xTB-MD durable queue post-commit"
+            ),
         )
+    except QueueAfterCommitError as exc:
+        if exc.compensation_succeeded:
+            try:
+                cleanup_unowned_input_snapshot_namespace(
+                    _snapshot_cleanup_job_dir(
+                        job_dir,
+                        metadata["execution_snapshot"].get(JOB_PATH_IDENTITY_KEY),
+                    ),
+                    snapshot_namespace,
+                )
+                discard_snapshot_intent_if_generations_absent(
+                    queue_root,
+                    snapshot_namespace,
+                )
+            except BaseException:  # noqa: BLE001 - preserve the guard-origin failure path
+                logger.exception(
+                    "Failed to clean the compensated xTB-MD submission snapshot; retaining it"
+                )
+        else:
+            _fence_uncompensated_xtb_md_enqueue(
+                queue_root,
+                error=exc,
+                publication_token=publication_token,
+                task_id=task_id,
+            )
+        raise
     except BaseException as exc:
         recovered = [
             candidate
@@ -332,7 +453,13 @@ def _enqueue_submission(
             and str(candidate.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY) or "") == publication_token
         ]
         if len(recovered) != 1:
-            cleanup_unowned_input_snapshot_namespace(job_dir, snapshot_namespace)
+            cleanup_unowned_input_snapshot_namespace(
+                _snapshot_cleanup_job_dir(
+                    job_dir,
+                    metadata["execution_snapshot"].get(JOB_PATH_IDENTITY_KEY),
+                ),
+                snapshot_namespace,
+            )
             discard_snapshot_intent_if_generations_absent(queue_root, snapshot_namespace)
             raise
         if not isinstance(exc, Exception):
@@ -419,6 +546,17 @@ def submit_job_dir(
             resolved_job_dir,
             priority=priority,
         )
+    except QueueAfterCommitError as exc:
+        return {
+            "status": "failed",
+            "reason": (
+                "submission_failed"
+                if exc.compensation_succeeded
+                else "queue_enqueue_outcome_unknown"
+            ),
+            "stderr": f"{exc.__class__.__name__}: {exc}",
+            "job_dir": str(job_dir),
+        }
     except XtbMdSubmissionError as exc:
         failed_entry = exc.entry
         return {

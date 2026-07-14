@@ -112,6 +112,7 @@ commands:
 - `init`
 - `scaffold <ts_search|conformer_search>`
 - `scan-notify`
+- `smoke`
 Activate `.venv` first, or call `.venv/bin/orca_auto ...` directly.
 By default, config is resolved from `ORCA_AUTO_CONFIG`, then `<repo_root>/config/orca_auto.yaml`, then `~/orca_auto/config/orca_auto.yaml`.
 Add `--config <path>` only when you want to override default config discovery.
@@ -703,7 +704,27 @@ Behavior:
 - `scan-notify` runs a one-shot scan of the configured ORCA root and sends
   discovery alerts through the active messenger provider, then exits. It is not a live monitor.
 
-### 7.7 Long-Running Services
+### 7.7 `smoke`
+
+```bash
+orca_auto smoke
+```
+
+The default fake profile runs 11 retained ORCA, standalone xTB-MD, and workflow
+success/fail-closed scenarios without licensed engine binaries. It prints the
+batch directory and the offline `review/index.html` and `summary.md` paths. Open
+the review index to inspect generated reports, SI files, states, logs, and raw
+artifacts; a smoke PASS verifies the declared software contract, not chemical
+meaning.
+
+Batches are retained under `<runs_root>/.orca_auto_smoke/batches/`. That tree is
+reserved and excluded from production submission/discovery. Remove or archive a
+whole reviewed batch rather than selected child files. Real-engine acceptance is
+opt-in with `--profile real-orca` or `--profile real-xtb`, an explicit executable
+environment variable, and the shared production config; see
+[VALIDATION.md](VALIDATION.md) for the exact commands and limitations.
+
+### 7.8 Long-Running Services
 
 Long-running worker and messenger bot processes are managed through `systemd`
 only. Public CLI commands do not start those services directly.

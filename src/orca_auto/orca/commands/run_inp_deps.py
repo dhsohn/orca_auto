@@ -44,6 +44,7 @@ class RunInpNotificationDeps:
 @dataclass(frozen=True)
 class RunInpSubmissionDeps:
     ensure_submission_resource_request: Any
+    prepare_submission_resource_request: Any
     read_resource_request_from_input: Any
     active_direct_run_error: Any
     emit_queued_submission: Any

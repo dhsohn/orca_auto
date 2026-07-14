@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -16,6 +16,16 @@ from orca_auto.flow.orchestration import (
 from orca_auto.flow.registry import sync_workflow_registry
 from orca_auto.flow.state import load_workflow_payload, resolve_workflow_workspace, workflow_summary
 from tests.engine_process_helpers import process_one_crest_for_test
+from tests.integration.smoke_support import (
+    assert_orca_job_publications,
+    assert_workflow_publications,
+    configure_fake_orca,
+    orca_job_directories,
+    pump_workflow,
+    submit_public_workflow,
+    write_fake_orca,
+    write_h2,
+)
 
 
 def _write_xyz(path: Path) -> None:
@@ -252,3 +262,87 @@ def test_conformer_screening_workflow_handoff_smoke(
     )
     _assert_planned_orca_handoff_stages(handed_off_payload, case)
     _assert_persisted_handoff(case)
+
+
+def _public_conformer_case(
+    smoke_workspace: Any,
+    capsys: Any,
+    *,
+    orca_mode: Literal["success", "nonconverged"],
+) -> tuple[dict[str, Any], Path]:
+    fake_orca = smoke_workspace.root / "bin" / f"fake_orca_{orca_mode}"
+    write_fake_orca(fake_orca, mode=orca_mode)
+    configure_fake_orca(smoke_workspace.config_path, fake_orca)
+    input_dir = smoke_workspace.root / f"conformer_{orca_mode}_input"
+    write_h2(input_dir / "input.xyz", comment=f"conformer {orca_mode}")
+    (input_dir / "flow.yaml").write_text(
+        "\n".join(
+            [
+                "workflow_type: conformer_screening",
+                "max_orca_stages: 1",
+                "resources:",
+                "  max_cores: 1",
+                "  max_memory_gb: 1",
+                "orca:",
+                '  route_line: "! r2scan-3c Opt TightSCF"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    created = submit_public_workflow(input_dir, smoke_workspace.config_path, capsys)
+    workspace_dir = Path(created["metadata"]["workspace_dir"])
+    payload = pump_workflow(
+        workflow_root=smoke_workspace.xtb_allowed_root.parents[1],
+        workspace_dir=workspace_dir,
+        config_path=smoke_workspace.config_path,
+        admission_root=smoke_workspace.admission_root,
+    )
+    return payload, workspace_dir
+
+
+def test_conformer_screening_workflow_completes_fake_engine_lifecycle(
+    smoke_workspace: Any,
+    capsys: Any,
+) -> None:
+    payload, workspace_dir = _public_conformer_case(
+        smoke_workspace,
+        capsys,
+        orca_mode="success",
+    )
+
+    assert payload["status"] == "completed"
+    crest_stages = _engine_stages(payload, "crest")
+    orca_stages = _engine_stages(payload, "orca")
+    assert len(crest_stages) == 1 and crest_stages[0]["status"] == "completed"
+    assert len(orca_stages) == 1 and orca_stages[0]["status"] == "completed"
+    job_dirs = orca_job_directories(payload)
+    assert len(job_dirs) == 1
+    state = assert_orca_job_publications(job_dirs[0], expected_status="completed", expect_si=True)
+    assert state["engine_payload"]["final_result"]["reason"] == "normal_termination"
+    assert_workflow_publications(workspace_dir, payload)
+    workflow_si = (workspace_dir / "workflow_si.md").read_text(encoding="utf-8")
+    assert "! r2scan-3c Opt TightSCF" in workflow_si
+
+
+def test_conformer_screening_workflow_terminalizes_all_orca_failures(
+    smoke_workspace: Any,
+    capsys: Any,
+) -> None:
+    payload, workspace_dir = _public_conformer_case(
+        smoke_workspace,
+        capsys,
+        orca_mode="nonconverged",
+    )
+
+    assert payload["status"] == "failed"
+    workflow_error = payload["metadata"]["workflow_error"]
+    assert workflow_error["scope"] == "conformer_screening_orca_conformers_exhausted"
+    assert workflow_error["reason"] == "conformers_failed"
+    orca_stages = _engine_stages(payload, "orca")
+    assert len(orca_stages) == 1 and orca_stages[0]["status"] == "failed"
+    job_dirs = orca_job_directories(payload)
+    assert len(job_dirs) == 1
+    state = assert_orca_job_publications(job_dirs[0], expected_status="failed", expect_si=False)
+    assert state["engine_payload"]["attempts"][-1]["analyzer_reason"] == ("geometry_not_converged")
+    assert_workflow_publications(workspace_dir, payload)

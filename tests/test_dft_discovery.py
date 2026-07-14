@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.orca.dft.discovery import discover_orca_targets
 from tests.engine_artifact_helpers import orca_artifact_payload
 
@@ -155,3 +156,58 @@ def test_workflow_workspace_jobs_are_excluded(tmp_path: Path) -> None:
     targets = discover_orca_targets(kb_dir, max_bytes=1024 * 1024)
 
     assert [str(t.path) for t in targets] == [str(standalone / "calc.out")]
+
+
+def test_smoke_tree_is_excluded_from_production_dft_discovery_but_not_case_root(
+    tmp_path: Path,
+) -> None:
+    kb_dir = tmp_path / "runs"
+    standalone = kb_dir / "standalone"
+    case_runs_root = kb_dir / SMOKE_RESULTS_DIRNAME / "batch" / "case" / "runtime" / "runs"
+    smoke_job = case_runs_root / "smoke-job"
+
+    for run_dir, output in ((standalone, "production"), (smoke_job, "smoke")):
+        run_dir.mkdir(parents=True)
+        (run_dir / "calc.out").write_text(output, encoding="utf-8")
+        _write_orca_state(run_dir, status="completed")
+
+    assert [target.path for target in discover_orca_targets(kb_dir, max_bytes=1024)] == [
+        standalone / "calc.out"
+    ]
+    assert [target.path for target in discover_orca_targets(case_runs_root, max_bytes=1024)] == [
+        smoke_job / "calc.out"
+    ]
+
+
+def test_dft_discovery_skips_state_and_output_symlinks_that_escape_runs_root(
+    tmp_path: Path,
+) -> None:
+    kb_dir = tmp_path / "runs"
+    outside = tmp_path / "outside"
+    linked_state_job = kb_dir / "linked-state"
+    linked_output_job = kb_dir / "linked-output"
+    outside.mkdir()
+    linked_state_job.mkdir(parents=True)
+    linked_output_job.mkdir()
+
+    outside_state = outside / "job_state.json"
+    outside_state.write_text(
+        json.dumps(
+            orca_artifact_payload(
+                job_id="outside",
+                run_id="outside",
+                reaction_dir=str(outside),
+                status="completed",
+            )
+        ),
+        encoding="utf-8",
+    )
+    (linked_state_job / "job_state.json").symlink_to(outside_state)
+    (linked_state_job / "calc.out").write_text("local", encoding="utf-8")
+
+    _write_orca_state(linked_output_job, status="completed")
+    outside_output = outside / "outside.out"
+    outside_output.write_text("outside", encoding="utf-8")
+    (linked_output_job / "calc.out").symlink_to(outside_output)
+
+    assert discover_orca_targets(kb_dir, max_bytes=1024) == []

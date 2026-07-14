@@ -31,6 +31,7 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
+    QUEUE_RECORD_SYNC_PREPARING,
     QUEUE_RECORD_SYNC_REPAIR_PENDING,
     queue_record_sync_metadata,
 )
@@ -227,6 +228,48 @@ def test_orca_publication_repair_reclaims_abandoned_live_pid_lease(tmp_path: Pat
     upsert.assert_called_once()
     [repaired] = list_queue(tmp_path)
     assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+
+
+def test_orca_publication_repair_fences_crash_row_after_job_moves_to_smoke_tree(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_cfg(str(tmp_path))
+    reaction_dir = tmp_path / "rxn"
+    reaction_dir.mkdir()
+    original_status = reaction_dir.stat()
+    entry = enqueue(
+        tmp_path,
+        str(reaction_dir),
+        task_id="task-crashed-publisher",
+        metadata={
+            "reaction_dir": str(reaction_dir),
+            "execution_snapshot": {
+                "job_dir_identity": {
+                    "device": int(original_status.st_dev),
+                    "inode": int(original_status.st_ino),
+                }
+            },
+            **queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_PREPARING,
+                token="crashed-publication-token",
+                owner_pid=999_999,
+            ),
+        },
+    )
+    reserved_dir = tmp_path / ".orca_auto_smoke" / "batches" / "batch" / "rxn"
+    reserved_dir.parent.mkdir(parents=True)
+    reaction_dir.rename(reserved_dir)
+    reaction_dir.symlink_to(reserved_dir, target_is_directory=True)
+
+    with patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert:
+        assert queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, entry)
+
+    upsert.assert_not_called()
+    [fenced] = list_queue(tmp_path)
+    assert fenced.status == QueueStatus.FAILED
+    assert fenced.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_ABORTED
+    assert fenced.error == ("queue_publication_job_dir_invalid:reaction_dir_reserved_or_unsafe")
+    assert dequeue_next(tmp_path) is None
 
 
 @pytest.mark.parametrize("changed_state", ["future_v2_marker", QUEUE_RECORD_SYNC_ABORTED])

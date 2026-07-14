@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 
 from orca_auto.core.engine_process import atomic_write_confined_bytes
@@ -19,6 +21,14 @@ MAXCORE_RE = re.compile(r"^\s*%maxcore\s+(\d+)", re.IGNORECASE)
 NPROCS_RE = re.compile(r"\bnprocs\s+(\d+)\b", re.IGNORECASE)
 # ORCA route-line shorthand "! PALn" (PAL2..PAL8) requests n parallel processes.
 PAL_ROUTE_RE = re.compile(r"\bPAL(\d+)\b", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class PreparedSubmissionResourceInput:
+    resource_request: dict[str, int]
+    actions: tuple[str, ...]
+    normalized_payload: bytes
+    source_sha256: str
 
 
 def read_maxcore(lines: list[str]) -> int | None:
@@ -149,7 +159,35 @@ def ensure_submission_resource_request(
     default_max_cores: int,
     default_max_memory_gb: int,
 ) -> tuple[dict[str, int], list[str]]:
-    lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    prepared = prepare_submission_resource_request(
+        inp_path,
+        default_max_cores=default_max_cores,
+        default_max_memory_gb=default_max_memory_gb,
+    )
+    if prepared.actions:
+        atomic_write_confined_bytes(
+            inp_path.parent,
+            inp_path,
+            prepared.normalized_payload,
+            label="ORCA resource-normalized input",
+        )
+    return dict(prepared.resource_request), list(prepared.actions)
+
+
+def prepare_submission_resource_request(
+    inp_path: Path,
+    *,
+    default_max_cores: int,
+    default_max_memory_gb: int,
+) -> PreparedSubmissionResourceInput:
+    """Normalize submission resources in memory without changing the public input."""
+
+    source_payload = inp_path.read_bytes()
+    try:
+        source_text = source_payload.decode("utf-8", errors="strict")
+    except UnicodeError as exc:
+        raise ValueError("ORCA selected input must be UTF-8 text") from exc
+    lines = source_text.splitlines()
     actions: list[str] = []
 
     max_cores = read_nprocs(lines)
@@ -171,15 +209,13 @@ def ensure_submission_resource_request(
     resource_request = resource_request_from_lines(lines)
     if not resource_request:
         raise ValueError(f"Could not determine ORCA resource_request from input: {inp_path}")
-
-    if actions:
-        atomic_write_confined_bytes(
-            inp_path.parent,
-            inp_path,
-            ("\n".join(lines).rstrip() + "\n").encode("utf-8"),
-            label="ORCA resource-normalized input",
-        )
-    return resource_request, actions
+    normalized_payload = ("\n".join(lines).rstrip() + "\n").encode("utf-8")
+    return PreparedSubmissionResourceInput(
+        resource_request=resource_request,
+        actions=tuple(actions),
+        normalized_payload=normalized_payload,
+        source_sha256=sha256(source_payload).hexdigest(),
+    )
 
 
 def set_maxcore(lines: list[str], value_mb: int) -> bool:

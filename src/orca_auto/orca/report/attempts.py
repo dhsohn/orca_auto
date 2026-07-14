@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..statuses import AnalyzerStatus
+
 
 @dataclass(frozen=True)
 class AttemptReportRow:
@@ -20,6 +22,11 @@ class AttemptReportRow:
     duration_text: str
     detail: str
     terminal_actions: tuple[str, ...]
+
+
+def analyzer_status_text(value: Any) -> str:
+    """Canonical analyzer status text for both durable strings and live enums."""
+    return value.value if isinstance(value, AnalyzerStatus) else str(value or "")
 
 
 def attempt_dicts(state: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -69,7 +76,7 @@ def attempt_report_rows(
                 index=int(attempt.get("index", position + 1) or (position + 1)),
                 label=label,
                 direction="forward",
-                analyzer_status=str(attempt.get("analyzer_status") or ""),
+                analyzer_status=analyzer_status_text(attempt.get("analyzer_status")),
                 analyzer_reason=str(attempt.get("analyzer_reason") or ""),
                 duration_text=duration_text(attempt.get("started_at"), attempt.get("ended_at")),
                 detail="",

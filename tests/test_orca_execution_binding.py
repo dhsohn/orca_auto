@@ -127,6 +127,25 @@ def test_orca_cleanup_rejects_a_mismatched_generation_pair(tmp_path: Path) -> No
     assert foreign_generation.is_dir()
 
 
+def test_orca_execution_directory_collision_preserves_existing_generation(
+    tmp_path: Path,
+) -> None:
+    import orca_auto.orca.execution_binding as binding
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    generation_name = "generation-existing"
+    existing = job_dir / binding.ORCA_EXECUTION_ROOT_NAME / generation_name
+    existing.mkdir(parents=True)
+    marker = existing / "owner.txt"
+    marker.write_text("owner", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        binding._execution_directory(job_dir, generation_name)
+
+    assert marker.read_text(encoding="utf-8") == "owner"
+
+
 def test_orca_cleanup_failure_retains_durable_intent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -138,15 +157,52 @@ def test_orca_cleanup_failure_retains_durable_intent(
         job_dir / ".orca_auto_snapshot_intents" / f"{snapshot['snapshot_intent_token']}.json"
     )
 
-    def fail_remove(_path: Path) -> None:
+    def fail_remove(*_args: object, **_kwargs: object) -> None:
         raise OSError("simulated execution cleanup failure")
 
-    monkeypatch.setattr(binding.shutil, "rmtree", fail_remove)
+    monkeypatch.setattr(binding, "_cleanup_unowned_generation_directory", fail_remove)
     with pytest.raises(OSError, match="simulated"):
         binding.cleanup_unowned_orca_execution_snapshot(job_dir, snapshot)
 
     assert Path(snapshot["execution_dir"]).is_dir()
     assert intent_path.is_file()
+
+
+def test_orca_cleanup_does_not_follow_substituted_execution_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import orca_auto.core.queue.engine.input_snapshot as input_snapshot
+    import orca_auto.orca.execution_binding as binding
+
+    job_dir, _selected, snapshot, _resources = _snapshot(tmp_path)
+    namespace = snapshot["input_snapshot_namespace"]
+    execution_root = job_dir / binding.ORCA_EXECUTION_ROOT_NAME
+    moved_root = job_dir / "moved-execution-root"
+    outside_root = tmp_path / "outside-executions"
+    outside_generation = outside_root / namespace
+    outside_generation.mkdir(parents=True)
+    sentinel = outside_generation / "sentinel.txt"
+    sentinel.write_text("must survive", encoding="utf-8")
+    original_remove = input_snapshot._remove_directory_contents_at
+    substituted = False
+
+    def substitute_root(directory_fd: int, *, label: str) -> None:
+        nonlocal substituted
+        if not substituted and label == "ORCA execution snapshot generation":
+            substituted = True
+            execution_root.rename(moved_root)
+            execution_root.symlink_to(outside_root, target_is_directory=True)
+        original_remove(directory_fd, label=label)
+
+    monkeypatch.setattr(input_snapshot, "_remove_directory_contents_at", substitute_root)
+
+    with pytest.raises(ValueError, match="ORCA execution snapshot root"):
+        binding.cleanup_unowned_orca_execution_snapshot(job_dir, snapshot)
+
+    assert substituted
+    assert sentinel.read_text(encoding="utf-8") == "must survive"
+    assert execution_root.is_symlink()
 
 
 @pytest.mark.parametrize(
@@ -521,7 +577,10 @@ def test_orca_execution_snapshot_checks_aggregate_budget_before_dependency_copy(
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
-    snapshot_names = {path.name for path in (job_dir / ".orca_auto_input_snapshots").iterdir()}
+    snapshot_root = job_dir / ".orca_auto_input_snapshots"
+    snapshot_names = (
+        {path.name for path in snapshot_root.iterdir()} if snapshot_root.exists() else set()
+    )
     assert all(not name.startswith("dependency_") for name in snapshot_names)
     execution_root = job_dir / binding.ORCA_EXECUTION_ROOT_NAME
     assert list(execution_root.iterdir()) == []
@@ -548,7 +607,10 @@ def test_orca_execution_snapshot_rejects_oversized_dependency_before_copy(
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
-    snapshot_names = {path.name for path in (job_dir / ".orca_auto_input_snapshots").iterdir()}
+    snapshot_root = job_dir / ".orca_auto_input_snapshots"
+    snapshot_names = (
+        {path.name for path in snapshot_root.iterdir()} if snapshot_root.exists() else set()
+    )
     assert all(not name.startswith("dependency_") for name in snapshot_names)
 
 

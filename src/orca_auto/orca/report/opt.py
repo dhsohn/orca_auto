@@ -245,7 +245,16 @@ def opt_report_component(
         )
         sections.append(("Attempt chain", attempts_html))
     if include_vibrational:
-        sections.append(("Vibrational summary", mode_section_html(data.mode_summaries, None)))
+        sections.append(
+            (
+                "Vibrational summary",
+                mode_section_html(
+                    data.mode_summaries,
+                    None,
+                    frequency_calculation_found=data.frequency_attempt_index is not None,
+                ),
+            )
+        )
     return ReportComponent(
         metrics_html=_metric_cards(
             data,

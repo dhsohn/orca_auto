@@ -8,7 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.paths import path_is_inside_workflow_workspace
+from orca_auto.core.paths import (
+    iter_production_runs_artifacts,
+    path_is_inside_workflow_workspace,
+    should_exclude_from_production_runs_scan,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +42,9 @@ def discover_orca_targets(
     """
     targets: dict[str, DiscoveredTarget] = {}
 
-    for state_path in kb_path.rglob("job_state.json"):
+    for state_path in iter_production_runs_artifacts(kb_path, "job_state.json"):
+        if should_exclude_from_production_runs_scan(state_path, kb_path):
+            continue
         if path_is_inside_workflow_workspace(state_path.parent, kb_path):
             continue
         data = _load_report_json(state_path)
@@ -51,7 +57,7 @@ def discover_orca_targets(
         # runtime environment differences, so we trust only the latest .out
         # in the folder where job_state.json is located.
         resolved = _find_latest_out_in_dir(state_path.parent)
-        if resolved is None:
+        if resolved is None or should_exclude_from_production_runs_scan(resolved, kb_path):
             continue
         _add_if_valid_target(
             resolved=resolved,

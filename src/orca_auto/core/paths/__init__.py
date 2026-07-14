@@ -1,3 +1,9 @@
+from .smoke import (
+    SMOKE_RESULTS_DIRNAME,
+    is_path_in_reserved_smoke_tree,
+    iter_production_runs_artifacts,
+    should_exclude_from_production_runs_scan,
+)
 from .validation import (
     ensure_directory,
     first_existing_named_file,
@@ -27,14 +33,17 @@ from .workflow import (
 )
 
 __all__ = [
+    "SMOKE_RESULTS_DIRNAME",
     "WORKFLOW_FILE_NAME",
     "WORKFLOW_STAGE_DIRNAME_ALIASES",
     "WORKFLOW_STAGE_DIRNAMES",
     "ensure_directory",
     "first_existing_named_file",
     "iter_existing_dirs",
+    "iter_production_runs_artifacts",
     "iter_workflow_runtime_workspaces",
     "is_rejected_windows_path",
+    "is_path_in_reserved_smoke_tree",
     "path_is_inside_workflow_workspace",
     "is_subpath",
     "recent_file_candidates",
@@ -43,6 +52,7 @@ __all__ = [
     "resolve_local_path",
     "resolved_path_text",
     "safe_is_subpath",
+    "should_exclude_from_production_runs_scan",
     "validate_configured_executable_path",
     "validate_executable_file",
     "validate_job_dir",

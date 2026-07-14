@@ -67,6 +67,7 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `orca_auto service restart`
 - `orca_auto systemd install --user <name> --repo <path>`
 - `orca_auto scan-notify`
+- `orca_auto smoke`
 
 안정 동작:
 
@@ -79,6 +80,9 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - 스크립트는 `queue list --json`, `queue cancel --json`, `service status --json`을 사용해야
   합니다.
 - `queue list --watch`는 사람용이며 `--json`과 함께 쓰지 않습니다.
+- `smoke`는 source-checkout 개발자 명령입니다. 옵션 없이 실행하면 fake profile과
+  자동 발견한 공유 설정의 `runs_root`를 사용하며, repository tests·Git metadata·
+  `runs_root` 중 하나라도 없으면 fail closed합니다.
 
 비계약 CLI 표면:
 
@@ -86,6 +90,9 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   워커는 보통 `systemd`로 관리합니다.
 - 숨겨진 `systemd install` 플래그는 테스트/유지보수용이며, 레퍼런스에 문서화되지 않으면
   지원되는 운영자 인터페이스가 아닙니다.
+- `python -m orca_auto.smoke`와 `scripts/smoke.sh`는 유지보수 진입점이며,
+  shell wrapper만 자신의 checkout을 고정합니다. 사용자 대상 문서는
+  `orca_auto smoke`를 사용합니다.
 
 ## 설정 계약
 

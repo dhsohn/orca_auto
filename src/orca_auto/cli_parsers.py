@@ -11,6 +11,7 @@ from orca_auto.cli_parser_commands import (
     add_monitor_parser,
     add_run_dir_parser,
     add_scaffold_parser,
+    add_smoke_parser,
 )
 from orca_auto.cli_parser_queue import add_queue_parser
 from orca_auto.cli_parser_systemd import add_service_parser, add_systemd_parser
@@ -24,6 +25,7 @@ _EXAMPLES_EPILOG = """\
 examples:
   orca_auto init
   orca_auto run-dir /home/user/orca_runs/sample_rxn
+  orca_auto smoke
   orca_auto queue list --engine orca
   orca_auto queue cancel <target>
   orca_auto service status
@@ -60,6 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_init_parser(subparsers)
     add_scaffold_parser(subparsers)
     add_monitor_parser(subparsers)
+    add_smoke_parser(subparsers)
     add_systemd_parser(subparsers)
     add_service_parser(subparsers)
     add_bot_parser(subparsers)

@@ -15,6 +15,8 @@ import json
 import logging
 import math
 import os
+import re
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -34,6 +36,14 @@ from orca_auto.orca.report.render import (
 logger = logging.getLogger(__name__)
 
 _ENGRAD_ENERGY_MARKER = "current total energy"
+_MAX_ORCA_ENERGY_SCAN_BYTES = 256 * 1024
+_MAX_ORCA_ENERGY_CANDIDATES = 8
+_ORCA_ENERGY_READ_CHUNK_BYTES = 64 * 1024
+_FINAL_SINGLE_POINT_ENERGY_RE = re.compile(
+    rb"(?m)^[ \t]*FINAL SINGLE POINT ENERGY[ \t]+"
+    rb"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?)"
+    rb"[ \t]*\r?$"
+)
 _FAILED_STAGE_STATUSES = frozenset({"failed", "cancel_failed", "submission_failed"})
 _DIAGNOSTIC_STAGE_STATUSES = frozenset({*_FAILED_STAGE_STATUSES, "cancelled"})
 
@@ -412,6 +422,192 @@ def _orca_stage_output_dir(stage: Mapping[str, Any]) -> Path | None:
     return None
 
 
+def _same_file_snapshot(left: os.stat_result, right: os.stat_result) -> bool:
+    return (
+        left.st_dev,
+        left.st_ino,
+        left.st_mode,
+        left.st_nlink,
+        left.st_size,
+        left.st_mtime_ns,
+        left.st_ctime_ns,
+    ) == (
+        right.st_dev,
+        right.st_ino,
+        right.st_mode,
+        right.st_nlink,
+        right.st_size,
+        right.st_mtime_ns,
+        right.st_ctime_ns,
+    )
+
+
+def _same_node(left: os.stat_result, right: os.stat_result) -> bool:
+    return (left.st_dev, left.st_ino, left.st_mode) == (
+        right.st_dev,
+        right.st_ino,
+        right.st_mode,
+    )
+
+
+def _open_absolute_directory_nofollow(path: Path, flags: int) -> int:
+    """Open an absolute directory without following any path-component symlink."""
+    if not path.is_absolute() or path.anchor != os.path.sep:
+        raise OSError("expected an absolute POSIX directory path")
+    descriptor = os.open(path.anchor, flags)
+    try:
+        for component in path.parts[1:]:
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[bytes, int] | None:
+    """Read at most the bounded tail of one confined, stable regular output."""
+    if not all(hasattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW", "pread")):
+        return None
+    root_fd = -1
+    parent_fd = -1
+    output_fd = -1
+    try:
+        root = output_root.resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
+        relative = resolved.relative_to(root)
+        if not relative.parts:
+            return None
+
+        candidate_before = os.stat(candidate, follow_symlinks=False)
+        if not stat.S_ISREG(candidate_before.st_mode) or candidate_before.st_nlink != 1:
+            return None
+        root_before = os.stat(root, follow_symlinks=False)
+        if not stat.S_ISDIR(root_before.st_mode):
+            return None
+
+        directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        directory_flags |= getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        root_fd = _open_absolute_directory_nofollow(root, directory_flags)
+        root_opened = os.fstat(root_fd)
+        if not stat.S_ISDIR(root_opened.st_mode) or not _same_node(root_before, root_opened):
+            return None
+
+        parent_fd = root_fd
+        for component in relative.parts[:-1]:
+            next_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            if parent_fd != root_fd:
+                os.close(parent_fd)
+            parent_fd = next_fd
+            if not stat.S_ISDIR(os.fstat(parent_fd).st_mode):
+                return None
+
+        output_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        output_flags |= getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        output_fd = os.open(relative.parts[-1], output_flags, dir_fd=parent_fd)
+        opened = os.fstat(output_fd)
+        named_opened = os.stat(relative.parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or not _same_file_snapshot(candidate_before, opened)
+            or not _same_file_snapshot(opened, named_opened)
+        ):
+            return None
+
+        read_size = min(opened.st_size, _MAX_ORCA_ENERGY_SCAN_BYTES)
+        read_offset = opened.st_size - read_size
+        tail = bytearray()
+        while len(tail) < read_size:
+            chunk = os.pread(
+                output_fd,
+                min(_ORCA_ENERGY_READ_CHUNK_BYTES, read_size - len(tail)),
+                read_offset + len(tail),
+            )
+            if not chunk:
+                break
+            tail.extend(chunk)
+
+        after = os.fstat(output_fd)
+        named_after = os.stat(relative.parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+        candidate_after = os.stat(candidate, follow_symlinks=False)
+        root_after = os.stat(root, follow_symlinks=False)
+        if (
+            len(tail) != read_size
+            or not _same_file_snapshot(opened, after)
+            or not _same_file_snapshot(after, named_after)
+            or not _same_file_snapshot(named_after, candidate_after)
+            or not _same_node(root_opened, root_after)
+        ):
+            return None
+        return bytes(tail), read_offset
+    except (OSError, ValueError):
+        return None
+    finally:
+        if output_fd >= 0:
+            os.close(output_fd)
+        if parent_fd >= 0 and parent_fd != root_fd:
+            os.close(parent_fd)
+        if root_fd >= 0:
+            os.close(root_fd)
+
+
+def _final_single_point_energy_from_output(output_root: Path, candidate: Path) -> float | None:
+    tail_snapshot = _read_pinned_orca_output_tail(output_root, candidate)
+    if tail_snapshot is None:
+        return None
+    tail, read_offset = tail_snapshot
+
+    energy_text: bytes | None = None
+    for match in _FINAL_SINGLE_POINT_ENERGY_RE.finditer(tail):
+        # A bounded tail can start in the middle of a line.  Do not treat that
+        # truncated first line as a complete ORCA marker.
+        if read_offset and match.start() == 0:
+            continue
+        energy_text = match.group(1)
+    if energy_text is None:
+        return None
+    try:
+        energy = float(energy_text.replace(b"D", b"E").replace(b"d", b"e"))
+    except ValueError:
+        return None
+    return energy if math.isfinite(energy) else None
+
+
+def _orca_report_output_energy(
+    output_dir: Path,
+    report_payload: Mapping[str, Any],
+) -> float | None:
+    """Final bounded ORCA output energy when a stage did not retain an ``.engrad``."""
+    try:
+        output_root = output_dir.resolve(strict=True)
+    except OSError:
+        return None
+
+    engine_payload = _mapping(report_payload.get("engine_payload"))
+    final_result = _mapping(engine_payload.get("final_result"))
+    candidates = [_text(final_result.get("last_out_path"))]
+    attempts = engine_payload.get("attempts")
+    if isinstance(attempts, list):
+        for attempt in reversed(attempts[-(_MAX_ORCA_ENERGY_CANDIDATES - 1) :]):
+            if isinstance(attempt, Mapping):
+                candidates.append(_text(attempt.get("out_path")))
+
+    seen: set[str] = set()
+    for raw_path in candidates:
+        if not raw_path:
+            continue
+        candidate_key = os.path.abspath(raw_path)
+        if candidate_key in seen:
+            continue
+        seen.add(candidate_key)
+        energy = _final_single_point_energy_from_output(output_root, Path(raw_path))
+        if energy is not None:
+            return energy
+    return None
+
+
 def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaStageResult:
     metadata = _stage_metadata(stage)
     stage_id = _text(stage.get("stage_id"))
@@ -443,6 +639,8 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
 
     output_dir = _orca_stage_output_dir(stage)
     energy = latest_engrad_energy(output_dir) if output_dir is not None else None
+    if energy is None and output_dir is not None and report_payload is not None:
+        energy = _orca_report_output_energy(output_dir, report_payload)
 
     report_href: str | None = None
     if output_dir is not None and report_json_path is not None:

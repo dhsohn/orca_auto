@@ -475,6 +475,334 @@ def test_enqueue_rejects_corrupt_queue_file_without_overwriting(
     assert _queue_file(tmp_path).read_text(encoding="utf-8") == corrupt_text
 
 
+def test_enqueue_compensates_row_when_post_commit_contract_rejects(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    stages: list[str] = []
+    guard_error = RuntimeError("publication target moved")
+
+    def before_commit() -> None:
+        stages.append("before")
+
+    def reject_after_commit() -> None:
+        stages.append("after")
+        raise guard_error
+
+    with pytest.raises(store.QueueAfterCommitError, match="publication target moved") as error_info:
+        store.enqueue(
+            tmp_path,
+            app_name="app",
+            task_id="task-1",
+            task_kind="kind",
+            engine="engine",
+            before_commit_fn=before_commit,
+            after_commit_fn=reject_after_commit,
+        )
+
+    assert stages == ["before", "after"]
+    assert error_info.value.after_commit_error is guard_error
+    assert error_info.value.compensation_outcome == "restored"
+    assert error_info.value.compensation_succeeded is True
+    assert error_info.value.compensation_error is None
+    assert store.list_queue(tmp_path) == []
+
+
+def test_after_commit_error_reports_unrestored_compensation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    persisted: list[str] = ["original"]
+    save_count = 0
+    guard_error = RuntimeError("publication target moved")
+    rollback_error = OSError("compensation write failed before replace")
+
+    def load(_root: Path) -> list[str]:
+        return list(persisted)
+
+    def save(_root: Path, entries: Sequence[str]) -> None:
+        nonlocal save_count
+        save_count += 1
+        if save_count == 2:
+            raise rollback_error
+        persisted[:] = entries
+
+    queue_store = store.QueueStore.for_root(
+        tmp_path,
+        load_entries_fn=load,
+        save_entries_fn=save,
+    )
+
+    def append(entries: list[str]) -> tuple[str, bool]:
+        entries.append("provisional")
+        return "provisional-result", True
+
+    def reject_after_commit() -> None:
+        raise guard_error
+
+    with pytest.raises(store.QueueAfterCommitError) as error_info:
+        queue_store.mutate_entries(
+            append,
+            after_commit_fn=reject_after_commit,
+        )
+
+    error = error_info.value
+    assert error.after_commit_error is guard_error
+    assert error.compensation_outcome == "not_restored"
+    assert error.compensation_succeeded is False
+    assert error.compensation_error is rollback_error
+    assert error.verification_error is None
+    assert error.provisional_result == "provisional-result"
+    assert persisted == ["original", "provisional"]
+
+
+def test_after_commit_error_reports_unknown_compensation_when_reload_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    persisted: list[str] = []
+    load_count = 0
+    save_count = 0
+    verification_error = OSError("queue reload failed")
+
+    def load(_root: Path) -> list[str]:
+        nonlocal load_count
+        load_count += 1
+        if load_count == 2:
+            raise verification_error
+        return list(persisted)
+
+    def save(_root: Path, entries: Sequence[str]) -> None:
+        nonlocal save_count
+        save_count += 1
+        if save_count == 2:
+            raise OSError("compensation write failed")
+        persisted[:] = entries
+
+    queue_store = store.QueueStore.for_root(
+        tmp_path,
+        load_entries_fn=load,
+        save_entries_fn=save,
+    )
+
+    def append(entries: list[str]) -> tuple[str, bool]:
+        entries.append("provisional")
+        return "provisional-result", True
+
+    def reject_after_commit() -> None:
+        raise RuntimeError("publication target moved")
+
+    with pytest.raises(store.QueueAfterCommitError) as error_info:
+        queue_store.mutate_entries(append, after_commit_fn=reject_after_commit)
+
+    error = error_info.value
+    assert error.compensation_outcome == "unknown"
+    assert error.compensation_succeeded is False
+    assert error.verification_error is verification_error
+    assert persisted == ["provisional"]
+
+
+def test_after_commit_error_requires_clean_return_to_report_restored_compensation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    persisted: list[str] = ["original"]
+    save_count = 0
+    rollback_error = OSError("compensation fsync failed after replace")
+
+    def load(_root: Path) -> list[str]:
+        return list(persisted)
+
+    def save(_root: Path, entries: Sequence[str]) -> None:
+        nonlocal save_count
+        save_count += 1
+        persisted[:] = entries
+        if save_count == 2:
+            raise rollback_error
+
+    queue_store = store.QueueStore.for_root(
+        tmp_path,
+        load_entries_fn=load,
+        save_entries_fn=save,
+    )
+
+    def append(entries: list[str]) -> tuple[str, bool]:
+        entries.append("provisional")
+        return "provisional-result", True
+
+    def reject_after_commit() -> None:
+        raise RuntimeError("publication target moved")
+
+    with pytest.raises(store.QueueAfterCommitError) as error_info:
+        queue_store.mutate_entries(append, after_commit_fn=reject_after_commit)
+
+    error = error_info.value
+    assert error.compensation_outcome == "unknown"
+    assert error.compensation_succeeded is False
+    assert error.compensation_error is rollback_error
+    assert error.verification_error is None
+    assert persisted == ["original"]
+
+
+@pytest.mark.parametrize(
+    "guard_error",
+    [
+        pytest.param(KeyboardInterrupt("interrupted after commit"), id="keyboard-interrupt"),
+        pytest.param(SystemExit("exiting after commit"), id="system-exit"),
+    ],
+)
+def test_after_commit_base_exception_is_wrapped_after_clean_compensation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    guard_error: BaseException,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    persisted: list[str] = []
+
+    def load(_root: Path) -> list[str]:
+        return list(persisted)
+
+    def save(_root: Path, entries: Sequence[str]) -> None:
+        persisted[:] = entries
+
+    queue_store = store.QueueStore.for_root(
+        tmp_path,
+        load_entries_fn=load,
+        save_entries_fn=save,
+    )
+
+    def append(entries: list[str]) -> tuple[str, bool]:
+        entries.append("provisional")
+        return "provisional-result", True
+
+    def reject_after_commit() -> None:
+        raise guard_error
+
+    with pytest.raises(store.QueueAfterCommitError) as error_info:
+        queue_store.mutate_entries(append, after_commit_fn=reject_after_commit)
+
+    error = error_info.value
+    assert error.after_commit_error is guard_error
+    assert error.compensation_outcome == "restored"
+    assert error.compensation_succeeded is True
+    assert error.compensation_error is None
+    assert persisted == []
+
+
+@pytest.mark.parametrize(
+    "compensation_error",
+    [
+        pytest.param(
+            KeyboardInterrupt("interrupted before compensation replace"),
+            id="keyboard-interrupt",
+        ),
+        pytest.param(SystemExit("exiting before compensation replace"), id="system-exit"),
+    ],
+)
+def test_compensation_base_exception_is_preserved_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    compensation_error: BaseException,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    persisted: list[str] = []
+    save_count = 0
+    guard_error = RuntimeError("publication target moved")
+
+    def load(_root: Path) -> list[str]:
+        return list(persisted)
+
+    def save(_root: Path, entries: Sequence[str]) -> None:
+        nonlocal save_count
+        save_count += 1
+        if save_count == 2:
+            raise compensation_error
+        persisted[:] = entries
+
+    queue_store = store.QueueStore.for_root(
+        tmp_path,
+        load_entries_fn=load,
+        save_entries_fn=save,
+    )
+
+    def append(entries: list[str]) -> tuple[str, bool]:
+        entries.append("provisional")
+        return "provisional-result", True
+
+    with pytest.raises(store.QueueAfterCommitError) as error_info:
+        queue_store.mutate_entries(
+            append,
+            after_commit_fn=lambda: (_ for _ in ()).throw(guard_error),
+        )
+
+    error = error_info.value
+    assert error.after_commit_error is guard_error
+    assert error.compensation_outcome == "not_restored"
+    assert error.compensation_succeeded is False
+    assert error.compensation_error is compensation_error
+    assert error.provisional_result == "provisional-result"
+    assert persisted == ["provisional"]
+
+
+@pytest.mark.parametrize(
+    "verification_error",
+    [
+        pytest.param(KeyboardInterrupt("queue reload interrupted"), id="keyboard-interrupt"),
+        pytest.param(SystemExit("queue reload exited"), id="system-exit"),
+    ],
+)
+def test_compensation_verification_base_exception_is_preserved_as_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    verification_error: BaseException,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    persisted: list[str] = []
+    load_count = 0
+    save_count = 0
+
+    def load(_root: Path) -> list[str]:
+        nonlocal load_count
+        load_count += 1
+        if load_count == 2:
+            raise verification_error
+        return list(persisted)
+
+    def save(_root: Path, entries: Sequence[str]) -> None:
+        nonlocal save_count
+        save_count += 1
+        if save_count == 2:
+            raise OSError("compensation write failed")
+        persisted[:] = entries
+
+    queue_store = store.QueueStore.for_root(
+        tmp_path,
+        load_entries_fn=load,
+        save_entries_fn=save,
+    )
+
+    def append(entries: list[str]) -> tuple[str, bool]:
+        entries.append("provisional")
+        return "provisional-result", True
+
+    with pytest.raises(store.QueueAfterCommitError) as error_info:
+        queue_store.mutate_entries(
+            append,
+            after_commit_fn=lambda: (_ for _ in ()).throw(RuntimeError("publication target moved")),
+        )
+
+    error = error_info.value
+    assert error.compensation_outcome == "unknown"
+    assert error.compensation_succeeded is False
+    assert isinstance(error.compensation_error, OSError)
+    assert error.verification_error is verification_error
+    assert persisted == ["provisional"]
+
+
 def test_enqueue_blocks_active_duplicates_and_allows_reenqueue_after_terminal_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
