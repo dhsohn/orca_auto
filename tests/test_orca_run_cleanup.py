@@ -12,6 +12,7 @@ import pytest
 from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.orca import run_cleanup, run_snapshot
 from orca_auto.orca.queue import adapter as queue_adapter
+from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
 from orca_auto.orca.run_snapshot import RunSnapshot
 from orca_auto.orca.state import load_state, save_state, state_path
 
@@ -365,6 +366,72 @@ def test_clear_terminal_entries_reports_queue_and_run_state_counts(tmp_path: Pat
         assert run_cleanup.clear_terminal_entries(allowed_root) == (2, 3)
 
 
+def test_clear_terminal_state_preserves_active_queue_finalization_window(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "rxn_finalizing"
+    allowed_root.mkdir()
+    entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
+    assert queue_adapter.dequeue_next(allowed_root) is not None
+    _write_state(reaction_dir, run_id="run-finalizing", status="completed")
+
+    assert run_cleanup.clear_terminal_run_states(allowed_root) == 0
+    assert state_path(reaction_dir).exists()
+    [running] = queue_adapter.list_queue(allowed_root)
+    assert running.queue_id == entry.queue_id
+    assert running.status.value == "running"
+
+
+def test_clear_terminal_state_rechecks_queue_marker_before_unlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "rxn_cleanup_race"
+    allowed_root.mkdir()
+    _write_state(reaction_dir, run_id="run-cleanup-race", status="completed")
+    real_open = run_cleanup._open_stable_reaction_dir
+    transition_written = False
+
+    def open_then_terminalize(
+        candidate: Path,
+        root: Path,
+        *,
+        expected_identity: tuple[int, int] | None,
+    ) -> int | None:
+        nonlocal transition_written
+        directory_fd = real_open(
+            candidate,
+            root,
+            expected_identity=expected_identity,
+        )
+        if directory_fd is not None and not transition_written:
+            transition_written = True
+            entry = queue_adapter.enqueue(
+                allowed_root,
+                str(reaction_dir),
+                task_id="task-cleanup-race",
+            )
+            running = queue_adapter.dequeue_next(allowed_root)
+            assert running is not None
+            assert queue_adapter.mark_failed(
+                allowed_root,
+                entry.queue_id,
+                error="worker_start_error",
+                expected_entry=running,
+            )
+        return directory_fd
+
+    monkeypatch.setattr(run_cleanup, "_open_stable_reaction_dir", open_then_terminalize)
+
+    assert run_cleanup.clear_terminal_run_states(allowed_root) == 0
+    assert transition_written
+    assert state_path(reaction_dir).exists()
+    [terminal] = queue_adapter.list_queue(allowed_root)
+    assert terminal_replay_marker_from_entry(terminal) is not None
+
+
 def test_clear_terminal_entries_removes_cancelled_queue_stale_running_state(
     tmp_path: Path,
 ) -> None:
@@ -377,6 +444,11 @@ def test_clear_terminal_entries_removes_cancelled_queue_stale_running_state(
     queue_adapter.dequeue_next(allowed_root)
     queue_adapter.cancel(allowed_root, entry.queue_id)
     queue_adapter.requeue_running_entry(allowed_root, entry.queue_id)
+    assert queue_adapter.update_metadata(
+        allowed_root,
+        entry.queue_id,
+        {queue_adapter.TERMINAL_REPLAY_METADATA_KEY: None},
+    )
 
     assert state_path(reaction_dir).exists()
 
@@ -396,11 +468,19 @@ def test_clear_terminal_entries_removes_cancelled_queue_cancelled_run_state(
 
     entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
     queue_adapter.dequeue_next(allowed_root)
-    queue_adapter.update_terminal(
+    assert queue_adapter.mark_cancelled(
         allowed_root,
         entry.queue_id,
-        "cancelled",
-        run_id="run_cancelled",
+        metadata_update={"run_id": "run_cancelled"},
+    )
+    assert run_cleanup.clear_terminal_entries(allowed_root) == (0, 0)
+    assert len(queue_adapter.list_queue(allowed_root)) == 1
+    assert state_path(reaction_dir).exists()
+
+    assert queue_adapter.update_metadata(
+        allowed_root,
+        entry.queue_id,
+        {queue_adapter.TERMINAL_REPLAY_METADATA_KEY: None},
     )
 
     assert state_path(reaction_dir).exists()
@@ -423,6 +503,11 @@ def test_clear_terminal_entries_keeps_live_running_state_despite_terminal_queue(
     queue_adapter.dequeue_next(allowed_root)
     queue_adapter.cancel(allowed_root, entry.queue_id)
     queue_adapter.requeue_running_entry(allowed_root, entry.queue_id)
+    assert queue_adapter.update_metadata(
+        allowed_root,
+        entry.queue_id,
+        {queue_adapter.TERMINAL_REPLAY_METADATA_KEY: None},
+    )
 
     with patch("orca_auto.orca.run_cleanup.active_run_lock_pid", return_value=12345):
         assert run_cleanup.clear_terminal_entries(allowed_root) == (1, 0)
@@ -441,6 +526,11 @@ def test_clear_terminal_entries_keeps_state_when_same_dir_has_active_entry(
 
     old_entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
     queue_adapter.mark_completed(allowed_root, old_entry.queue_id)
+    assert queue_adapter.update_metadata(
+        allowed_root,
+        old_entry.queue_id,
+        {queue_adapter.TERMINAL_REPLAY_METADATA_KEY: None},
+    )
     active_entry = queue_adapter.enqueue(allowed_root, str(reaction_dir), force=True)
 
     assert run_cleanup.clear_terminal_entries(allowed_root) == (1, 0)

@@ -10,6 +10,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- Restarting the ORCA worker no longer treats historical terminal queue rows as
+  fresh active-to-terminal transitions, so stable state/report provenance,
+  `run_id`, timestamps, failure reasons, and terminal notifications are preserved;
+  supported terminal writers now persist incomplete side-effect evidence with the
+  queue transition so real crash windows still recover without replaying
+  administrative publication fences.
 - ORCA execution snapshots now render simple `* xyzfile` geometry paths without
   quotes, bind and rematerialize the official `%neb Product` and `TS` files,
   enforce their geometry admission cap, and preserve the analyzer reason when a

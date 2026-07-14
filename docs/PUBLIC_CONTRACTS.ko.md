@@ -221,6 +221,17 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 행은 무한히 복구를 반복하지 않고 `repair_blocked` activity로 노출하며,
 `repair_blocked_reason`과 `queue_error` metadata를 제공합니다.
 
+ORCA worker가 처음 관측할 때 이미 종료 상태인 행은 닫힌 이력으로 취급합니다. Worker를
+시작하거나 재시작해도 해당 행의 state/report를 다시 만들거나 `run_id`, `finished_at`,
+`error`를 교체하거나 종료 알림을 재발송하지 않습니다. 종료 side effect는 durable 행에
+worker가 기록한 유효한 미완료 replay marker가 있거나, 현재 worker가 그 행의
+`pending`/`running`에서 종료 상태로의 전이를 직접 관측한 경우에만 replay합니다. Replay
+side effect가 필요한 terminal writer는 해당 marker와 queue 전이를 원자적으로 저장하며,
+명시적인 administrative publication fence는 replay하지 않습니다. Marker가 남아 있는 동안
+cleanup은 queue generation과 run state를 모두 보존합니다. 유효하지 않거나 지원하지 않는 marker는
+replay하지 않고 오류를 기록하며, clear와 강제 후속 제출을 막은 채 보수적으로 보존합니다. Replay와
+fence marker는 내부 구현 상태이므로 client가 편집하면 안 됩니다.
+
 xTB-MD/xTB/CREST 큐 산출물에는 내부 immutable-generation fingerprint가 기록되고, 새
 xTB-MD/xTB/CREST/ORCA 행에는 제출 시점 execution snapshot이 들어갑니다. 이 필드가 없던
 빌드에서 업그레이드하기 전에는 이전 빌드로 해당 행을 drain하거나 취소/clear한 뒤 새

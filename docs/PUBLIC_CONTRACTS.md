@@ -227,6 +227,19 @@ whose same-generation state/report pair cannot be reconstructed is exposed as
 `repair_blocked` activity with `repair_blocked_reason` and `queue_error`
 metadata instead of being retried indefinitely.
 
+An ORCA row that is already terminal when a worker first observes it is treated
+as closed history. Starting or restarting the worker does not regenerate that
+row's state/report, replace its `run_id`, `finished_at`, or `error`, or resend its
+terminal notification. Terminal side effects are replayed only when the durable
+row carries the worker's valid incomplete-replay marker or the current worker
+observed that exact row transition from `pending`/`running` to a terminal status.
+Side-effect-bearing terminal writers store that marker atomically with the queue
+transition; explicit administrative publication fences are excluded from replay.
+While a marker is pending, cleanup preserves both its queue generation and run
+state. Invalid or unsupported markers fail closed: they are logged and retained
+as clear/forced-successor barriers rather than replayed. Replay and fence markers
+are internal implementation state and must not be edited by clients.
+
 xTB-MD/xTB/CREST queue artifacts carry an internal immutable-generation fingerprint,
 and new xTB-MD/xTB/CREST/ORCA rows carry a submit-time execution snapshot. Before
 upgrading from a build without these fields, deployments must either drain those

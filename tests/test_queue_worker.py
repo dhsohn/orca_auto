@@ -54,8 +54,13 @@ from orca_auto.orca.queue.adapter import (
     enqueue,
     list_queue,
     mark_cancelled,
+    mark_failed,
     queue_entry_reaction_dir,
     requeue_running_entry,
+)
+from orca_auto.orca.queue.terminal_replay import (
+    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
+    terminal_replay_marker,
 )
 from orca_auto.orca.queue.worker import (
     DEFAULT_MAX_CONCURRENT,
@@ -268,6 +273,8 @@ def test_orca_publication_repair_fences_crash_row_after_job_moves_to_smoke_tree(
     [fenced] = list_queue(tmp_path)
     assert fenced.status == QueueStatus.FAILED
     assert fenced.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_ABORTED
+    assert fenced.metadata[TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY] is True
+    assert fenced.metadata.get("orca_terminal_replay") is None
     assert fenced.error == ("queue_publication_job_dir_invalid:reaction_dir_reserved_or_unsafe")
     assert dequeue_next(tmp_path) is None
 
@@ -363,7 +370,19 @@ def _terminal_replay_entry(tmp_path: Path, status: QueueStatus) -> QueueEntry:
     )
 
 
-def _run_terminal_replay(worker: object, tmp_path: Path, entry: QueueEntry) -> None:
+def _run_terminal_replay(
+    worker: object,
+    tmp_path: Path,
+    entry: QueueEntry,
+    *,
+    previous_status: str | None = None,
+) -> None:
+    if previous_status is not None:
+        statuses = worker.__dict__.get("_orca_reconcile_statuses")
+        if not isinstance(statuses, dict):
+            statuses = {}
+        statuses[(str(tmp_path.resolve()), entry.queue_id)] = previous_status
+        worker.__dict__["_orca_reconcile_statuses"] = statuses
     with (
         patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
         patch.object(
@@ -379,6 +398,256 @@ def _run_terminal_replay(worker: object, tmp_path: Path, entry: QueueEntry) -> N
         patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
     ):
         queue_worker_mod._reconcile_orphaned_running(worker)
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    [QueueStatus.COMPLETED, QueueStatus.FAILED, QueueStatus.CANCELLED],
+)
+@pytest.mark.parametrize("existing_cursor", [False, True])
+@pytest.mark.parametrize("replay_marker", [None, {"version": 2}])
+def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
+    tmp_path: Path,
+    terminal_status: QueueStatus,
+    existing_cursor: bool,
+    replay_marker: object,
+) -> None:
+    entry = replace(
+        _terminal_replay_entry(tmp_path, terminal_status),
+        metadata={
+            "reaction_dir": str(tmp_path / "rxn"),
+            "run_id": "run-original",
+            "orca_terminal_replay": replay_marker,
+        },
+    )
+    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    if existing_cursor:
+        worker._orca_reconcile_statuses = {(str(tmp_path.resolve()), "other-queue"): STATUS_RUNNING}
+
+    with (
+        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(
+            queue_worker_mod,
+            "queue_entries_with_roots",
+            return_value=[(tmp_path, entry)],
+        ),
+        patch.object(
+            queue_worker_mod,
+            "live_queue_slot_keys_for_slots",
+            return_value=(set(), set()),
+        ),
+        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
+        patch.object(
+            queue_worker_mod,
+            "_record_failed_run_state",
+            return_value=("run-rewritten", STATUS_FAILED),
+        ) as record_failed,
+        patch.object(
+            queue_worker_mod,
+            "_record_cancelled_run_state",
+            return_value=("run-rewritten", STATUS_CANCELLED),
+        ) as record_cancelled,
+        patch.object(queue_worker_mod, "update_terminal", return_value=True) as update,
+        patch.object(
+            queue_worker_mod,
+            "_upsert_terminal_job_record",
+            return_value=True,
+        ) as upsert,
+        patch.object(
+            queue_worker_mod,
+            "_notify_terminal_job_from_state",
+            return_value=False,
+        ) as notify,
+        patch.object(queue_worker_mod, "_clear_terminal_replay_marker") as clear_marker,
+    ):
+        queue_worker_mod._reconcile_orphaned_running(worker)
+
+    record_failed.assert_not_called()
+    record_cancelled.assert_not_called()
+    update.assert_not_called()
+    upsert.assert_not_called()
+    notify.assert_not_called()
+    clear_marker.assert_not_called()
+    key = (str(tmp_path.resolve()), entry.queue_id)
+    assert worker._orca_reconcile_statuses[key] == terminal_status.value
+    assert worker._orca_pending_terminal_replays == {}
+
+
+def test_repeated_worker_startup_preserves_historical_failed_queue_bytes(
+    tmp_path: Path,
+) -> None:
+    reaction_dir = tmp_path / "rxn"
+    reaction_dir.mkdir()
+    entry = replace(
+        _terminal_replay_entry(tmp_path, QueueStatus.FAILED),
+        finished_at="2026-07-14T10:51:04+00:00",
+        error="retry_limit_reached",
+        metadata={
+            "reaction_dir": str(reaction_dir),
+            "run_id": "run-original",
+            "orca_terminal_replay": None,
+        },
+    )
+    save_entries_core(tmp_path, [entry])
+    queue_file = tmp_path / "queue.json"
+    queue_bytes = queue_file.read_bytes()
+    queue_mtime_ns = queue_file.stat().st_mtime_ns
+    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+
+    def current_entries(_cfg: AppConfig) -> list[tuple[Path, QueueEntry]]:
+        return [(tmp_path, list_queue(tmp_path)[0])]
+
+    with (
+        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(
+            queue_worker_mod,
+            "queue_entries_with_roots",
+            side_effect=current_entries,
+        ),
+        patch.object(
+            queue_worker_mod,
+            "live_queue_slot_keys_for_slots",
+            return_value=(set(), set()),
+        ),
+        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
+        patch.object(
+            queue_worker_mod,
+            "_record_failed_run_state",
+            wraps=queue_worker_mod._record_failed_run_state,
+        ) as record_failed,
+        patch.object(
+            queue_worker_mod,
+            "update_terminal",
+            wraps=queue_worker_mod.update_terminal,
+        ) as update,
+        patch.object(
+            queue_worker_mod,
+            "_upsert_terminal_job_record",
+            return_value=True,
+        ) as upsert,
+        patch.object(
+            queue_worker_mod,
+            "_notify_terminal_job_from_state",
+            return_value=False,
+        ) as notify,
+    ):
+        for _restart in range(2):
+            worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+            queue_worker_mod._reconcile_orphaned_running(worker)
+
+    record_failed.assert_not_called()
+    update.assert_not_called()
+    upsert.assert_not_called()
+    notify.assert_not_called()
+    assert queue_file.read_bytes() == queue_bytes
+    assert queue_file.stat().st_mtime_ns == queue_mtime_ns
+    assert not state_path(reaction_dir).exists()
+    assert not report_json_path(reaction_dir).exists()
+    [preserved] = list_queue(tmp_path)
+    assert preserved.finished_at == entry.finished_at
+    assert preserved.error == entry.error
+    assert preserved.metadata["run_id"] == "run-original"
+
+
+@pytest.mark.parametrize(
+    ("writer", "expected_status"),
+    [
+        ("pending_cancel", STATUS_CANCELLED),
+        ("start_like_failure", STATUS_FAILED),
+        ("requeue_cancel", STATUS_CANCELLED),
+        ("orphan_cancel", STATUS_CANCELLED),
+    ],
+)
+def test_terminal_writer_marker_replays_once_after_fresh_worker_restart(
+    tmp_path: Path,
+    writer: str,
+    expected_status: str,
+) -> None:
+    reaction_dir = tmp_path / writer
+    reaction_dir.mkdir()
+    entry = enqueue(
+        tmp_path,
+        str(reaction_dir),
+        task_id=f"task-{writer}",
+        metadata={"selected_inp": str(reaction_dir / "job.inp")},
+    )
+
+    if writer == "pending_cancel":
+        assert cancel(tmp_path, entry.queue_id, expected_entry=entry) is not None
+    else:
+        running = dequeue_next(tmp_path)
+        assert running is not None
+        if writer == "start_like_failure":
+            assert mark_failed(
+                tmp_path,
+                entry.queue_id,
+                error="worker_start_error",
+                expected_entry=running,
+            )
+        else:
+            requested = cancel(tmp_path, entry.queue_id, expected_entry=running)
+            assert requested is not None and requested.cancel_requested
+            if writer == "requeue_cancel":
+                assert requeue_running_entry(
+                    tmp_path,
+                    entry.queue_id,
+                    expected_entry=requested,
+                )
+            else:
+                assert (
+                    queue_worker_mod.reconcile_orphaned_running_entries(
+                        tmp_path,
+                        ignore_worker_pid=True,
+                    )
+                    == 1
+                )
+
+    [terminal] = list_queue(tmp_path)
+    assert terminal.status.value == expected_status
+    assert queue_worker_mod._terminal_replay_marker_from_entry(terminal) is not None
+    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+
+    def current_entries(_cfg: AppConfig) -> list[tuple[Path, QueueEntry]]:
+        return [(tmp_path, current) for current in list_queue(tmp_path)]
+
+    with (
+        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(
+            queue_worker_mod,
+            "queue_entries_with_roots",
+            side_effect=current_entries,
+        ),
+        patch.object(
+            queue_worker_mod,
+            "live_queue_slot_keys_for_slots",
+            return_value=(set(), set()),
+        ),
+        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
+        patch.object(
+            queue_worker_mod,
+            "_upsert_terminal_job_record",
+            return_value=True,
+        ) as upsert,
+        patch.object(
+            queue_worker_mod,
+            "_notify_terminal_job_from_state",
+            return_value=False,
+        ) as notify,
+    ):
+        queue_worker_mod._reconcile_orphaned_running(MagicMock(cfg=cfg, admission_root=tmp_path))
+        queue_worker_mod._reconcile_orphaned_running(MagicMock(cfg=cfg, admission_root=tmp_path))
+
+    upsert.assert_called_once()
+    notify.assert_called_once()
+    [closed] = list_queue(tmp_path)
+    assert queue_worker_mod._terminal_replay_marker_from_entry(closed) is None
+    state = load_state(reaction_dir)
+    assert state is not None
+    assert state["job_id"] == entry.task_id
+    final_result = state["final_result"]
+    assert final_result is not None
+    assert final_result["status"] == expected_status
 
 
 @pytest.mark.parametrize("bad_version", [None, True, 2, "1", [], {}])
@@ -421,6 +690,131 @@ def test_terminal_replay_marker_rejects_malformed_state_fingerprint(
     )
 
     assert queue_worker_mod._terminal_replay_marker_from_entry(entry) is None
+
+
+@pytest.mark.parametrize(
+    ("marker_task_id", "marker_status"),
+    [
+        ("other-task", STATUS_FAILED),
+        ("task-replay", STATUS_RUNNING),
+        ("task-replay", ""),
+    ],
+)
+def test_terminal_replay_marker_rejects_unbound_identity_or_nonterminal_status(
+    marker_task_id: str,
+    marker_status: str,
+) -> None:
+    entry = QueueEntry(
+        queue_id="queue-invalid-binding",
+        app_name="orca_auto_orca",
+        task_id="task-replay",
+        task_kind="orca_run_inp",
+        engine="orca",
+        status=QueueStatus.FAILED,
+        metadata={
+            "reaction_dir": "/tmp/reaction",
+            "orca_terminal_replay": {
+                "version": 1,
+                "task_id": marker_task_id,
+                "selected_inp": "",
+                "status": marker_status,
+                "error": "exit_code=1",
+                "observed_state": {
+                    "present": False,
+                    "readable": True,
+                    "job_id": "",
+                    "run_id": "",
+                    "terminal_status": "",
+                },
+            },
+        },
+    )
+
+    assert queue_worker_mod._terminal_replay_marker_from_entry(entry) is None
+
+
+def test_terminal_replay_marker_allows_durable_status_correction() -> None:
+    entry = QueueEntry(
+        queue_id="queue-corrected-status",
+        app_name="orca_auto_orca",
+        task_id="task-corrected-status",
+        task_kind="orca_run_inp",
+        engine="orca",
+        status=QueueStatus.COMPLETED,
+        metadata={
+            "reaction_dir": "/tmp/reaction",
+            "orca_terminal_replay": {
+                "version": 1,
+                "task_id": "task-corrected-status",
+                "selected_inp": "",
+                # A cancellation replay may discover an already-completed state
+                # and correct the queue before it clears the original marker.
+                "status": STATUS_CANCELLED,
+                "error": "cancel_requested",
+                "observed_state": {
+                    "present": False,
+                    "readable": True,
+                    "job_id": "",
+                    "run_id": "",
+                    "terminal_status": "",
+                },
+            },
+        },
+    )
+
+    assert queue_worker_mod._terminal_replay_marker_from_entry(entry) is not None
+
+
+@pytest.mark.parametrize("blocked_kind", ["fence_only", "malformed", "conflict"])
+def test_repair_blocked_terminal_never_uses_observed_active_edge(
+    tmp_path: Path,
+    blocked_kind: str,
+) -> None:
+    reaction_dir = tmp_path / "rxn"
+    reaction_dir.mkdir()
+    metadata: dict[str, Any] = {"reaction_dir": str(reaction_dir)}
+    if blocked_kind == "fence_only":
+        metadata[TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY] = True
+    elif blocked_kind == "malformed":
+        metadata["orca_terminal_replay"] = {"version": 2}
+    else:
+        metadata[TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY] = True
+        metadata["orca_terminal_replay"] = terminal_replay_marker(
+            reaction_dir=str(reaction_dir),
+            task_id="task-replay",
+            selected_inp="",
+            status=STATUS_FAILED,
+            error="administrative_fence",
+        )
+    entry = replace(
+        _terminal_replay_entry(tmp_path, QueueStatus.FAILED),
+        metadata=metadata,
+    )
+    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+
+    with (
+        patch.object(queue_worker_mod, "_record_failed_run_state") as record_failed,
+        patch.object(queue_worker_mod, "update_terminal") as update,
+        patch.object(queue_worker_mod, "_upsert_terminal_job_record") as upsert,
+        patch.object(queue_worker_mod, "_notify_terminal_job_from_state") as notify,
+        patch.object(queue_worker_mod, "_clear_terminal_replay_marker") as clear_marker,
+    ):
+        _run_terminal_replay(
+            worker,
+            tmp_path,
+            entry,
+            previous_status=STATUS_RUNNING,
+        )
+
+    record_failed.assert_not_called()
+    update.assert_not_called()
+    upsert.assert_not_called()
+    notify.assert_not_called()
+    clear_marker.assert_not_called()
+    key = (str(tmp_path.resolve()), entry.queue_id)
+    assert worker._orca_reconcile_statuses[key] == STATUS_FAILED
+    assert worker._orca_pending_terminal_replays == {}
 
 
 def test_terminal_replay_with_empty_reaction_dir_never_resolves_workspace() -> None:
@@ -469,7 +863,12 @@ def test_terminal_replay_retries_failed_notification_until_marker_is_durable(
         ) as notify,
         patch.object(queue_worker_mod, "load_state", return_value=state),
     ):
-        _run_terminal_replay(worker, tmp_path, entry)
+        _run_terminal_replay(
+            worker,
+            tmp_path,
+            entry,
+            previous_status=STATUS_RUNNING,
+        )
         _run_terminal_replay(worker, tmp_path, entry)
 
     assert notify.call_count == 2
@@ -502,7 +901,12 @@ def test_terminal_replay_uses_selected_discord_provider_for_durability(
         ) as notify,
         patch.object(queue_worker_mod, "load_state", return_value=state),
     ):
-        _run_terminal_replay(worker, tmp_path, entry)
+        _run_terminal_replay(
+            worker,
+            tmp_path,
+            entry,
+            previous_status=STATUS_RUNNING,
+        )
         _run_terminal_replay(worker, tmp_path, entry)
 
     assert notify.call_count == 2
@@ -522,7 +926,12 @@ def test_terminal_replay_retries_when_job_record_artifacts_are_not_ready(
         patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=False),
         patch.object(queue_worker_mod, "_notify_terminal_job_from_state") as notify,
     ):
-        _run_terminal_replay(worker, tmp_path, entry)
+        _run_terminal_replay(
+            worker,
+            tmp_path,
+            entry,
+            previous_status=STATUS_RUNNING,
+        )
 
     notify.assert_not_called()
     key = (str(tmp_path.resolve()), entry.queue_id)
@@ -546,7 +955,12 @@ def test_terminal_replay_finalizes_cancelled_state_before_side_effects(tmp_path:
         patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
         patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
     ):
-        _run_terminal_replay(worker, tmp_path, entry)
+        _run_terminal_replay(
+            worker,
+            tmp_path,
+            entry,
+            previous_status=STATUS_RUNNING,
+        )
 
     record_cancelled.assert_called_once()
     assert record_cancelled.call_args.args == (reaction_dir.resolve(),)
@@ -583,7 +997,12 @@ def test_terminal_replay_corrects_cancelled_queue_to_existing_completed_state(
         patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
         patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
     ):
-        _run_terminal_replay(worker, tmp_path, entry)
+        _run_terminal_replay(
+            worker,
+            tmp_path,
+            entry,
+            previous_status=STATUS_RUNNING,
+        )
 
     update_terminal.assert_called_once_with(
         tmp_path.resolve(),
@@ -818,6 +1237,9 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
     entries = [(old_root, old_cancelled), (new_root, new_cancelled)]
     cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker._orca_reconcile_statuses = {
+        (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
+    }
 
     with (
         patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
@@ -887,6 +1309,9 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
     entries = [(root_a, cancelled_a), (root_b, cancelled_b)]
     cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker._orca_reconcile_statuses = {
+        (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
+    }
 
     with (
         patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
@@ -933,6 +1358,7 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
     entries = [(tmp_path, entry)]
     cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker._orca_reconcile_statuses = {(str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING}
 
     with (
         patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
@@ -989,6 +1415,7 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
     entries = [(tmp_path, entry)]
     cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker._orca_reconcile_statuses = {(str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING}
 
     with (
         patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
@@ -1162,7 +1589,7 @@ def test_durable_terminal_replay_drops_old_finalizer_after_newer_terminal_state(
         status=STATUS_CANCELLED,
         final_result={"status": STATUS_CANCELLED, "reason": "cancel_requested"},
     )
-    marker = queue_worker_mod._terminal_replay_marker(
+    marker = terminal_replay_marker(
         reaction_dir=str(reaction_dir),
         task_id="task-a",
         selected_inp=str(reaction_dir / "a.inp"),
@@ -1229,6 +1656,9 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
     new_entries = [(new_root, new_running)]
     cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker._orca_reconcile_statuses = {
+        (str(old_root.resolve()), old_cancelled.queue_id): STATUS_RUNNING
+    }
 
     with (
         patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
@@ -2297,7 +2727,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         [completed] = list_queue(self.root)
         self.assertEqual(completed.status, QueueStatus.COMPLETED)
 
-    def test_finalize_uses_mark_snapshot_when_entry_disappears(self) -> None:
+    def test_finalize_does_not_publish_without_persisted_marker_after_mark(self) -> None:
         rxn = self.root / "mol_mark_snapshot"
         rxn.mkdir()
         selected_inp = rxn / "task-b.inp"
@@ -2334,14 +2764,6 @@ class TestQueueWorkerMethods(unittest.TestCase):
             events.append("mark")
             return result
 
-        def record_failed(*_args: object, **_kwargs: object) -> tuple[str, str]:
-            events.append("state")
-            return "run-b", STATUS_FAILED
-
-        def update_state(*_args: object, **_kwargs: object) -> bool:
-            events.append("update")
-            return False
-
         with (
             patch.object(
                 queue_worker_mod,
@@ -2356,12 +2778,10 @@ class TestQueueWorkerMethods(unittest.TestCase):
             patch.object(
                 queue_worker_mod,
                 "_record_failed_run_state",
-                side_effect=record_failed,
             ) as record_failed,
             patch.object(
                 queue_worker_mod,
                 "update_terminal",
-                side_effect=update_state,
             ) as update,
             patch.object(
                 queue_worker_mod,
@@ -2376,7 +2796,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             patch.object(
                 queue_worker_mod,
                 "_queue_entry_by_id",
-                side_effect=[snapshot, AssertionError("must not re-read after mark")],
+                return_value=None,
             ),
             patch.object(
                 self.worker,
@@ -2386,24 +2806,52 @@ class TestQueueWorkerMethods(unittest.TestCase):
         ):
             self.worker._finalize_finished_job(snapshot.queue_id, job, rc=1)
 
-        record_failed.assert_called_once()
-        self.assertEqual(record_failed.call_args.args, (rxn.resolve(),))
-        self.assertEqual(record_failed.call_args.kwargs["fallback_job_id"], "task-b")
-        self.assertEqual(record_failed.call_args.kwargs["selected_inp"], str(selected_inp))
-        self.assertEqual(record_failed.call_args.kwargs["reason"], "exit_code=1")
-        self.assertIsNotNone(record_failed.call_args.kwargs["observed_state"])
-        update.assert_called_once_with(
-            self.root,
-            snapshot.queue_id,
-            STATUS_FAILED,
-            run_id="run-b",
-            expected_task_id="task-b",
+        record_failed.assert_not_called()
+        update.assert_not_called()
+        side_effects.assert_not_called()
+        self.assertEqual(events, ["recover", "mark", "release"])
+
+    def test_stale_finalizer_does_not_resurrect_cleared_terminal_marker(self) -> None:
+        rxn = self.root / "mol_stale_finalizer"
+        rxn.mkdir()
+        entry = enqueue(self.root, str(rxn), task_id="task-stale-finalizer")
+        running = dequeue_next(self.root)
+        assert running is not None
+        self.assertTrue(
+            mark_failed(
+                self.root,
+                entry.queue_id,
+                error="first_owner",
+                expected_entry=running,
+            )
         )
-        self.assertEqual(side_effects.call_args.args[1].task_id, "task-b")
-        self.assertEqual(
-            events,
-            ["recover", "mark", "state", "update", "side-effects", "clear", "release"],
+        self.assertTrue(
+            queue_worker_mod.update_queue_metadata(
+                self.root,
+                entry.queue_id,
+                {"orca_terminal_replay": None},
+            )
         )
+        [closed] = list_queue(self.root)
+        job = _RunningJob(
+            queue_id=entry.queue_id,
+            reaction_dir=str(rxn),
+            process=MagicMock(),
+            admission_token="slot-stale-finalizer",
+            task_id=entry.task_id,
+        )
+
+        with (
+            patch.object(queue_worker_mod, "recover_slot_engine_process"),
+            patch.object(queue_worker_mod, "_record_failed_run_state") as record_failed,
+            patch.object(self.worker, "_release_admission_slot") as release,
+        ):
+            self.worker._finalize_finished_job(entry.queue_id, job, rc=1)
+
+        record_failed.assert_not_called()
+        release.assert_called_once_with(job.admission_token)
+        self.assertEqual(list_queue(self.root), [closed])
+        self.assertIsNone(closed.metadata.get("orca_terminal_replay"))
 
     def test_finalize_child_exit_recovers_once_and_releases_on_benign_mark_noop(
         self,
@@ -2738,7 +3186,10 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.worker._check_completed_jobs()
         self.assertEqual(len(self.worker._running), 1)
 
-    @patch("orca_auto.orca.queue.worker.mark_cancelled", return_value=True)
+    @patch(
+        "orca_auto.orca.queue.worker.mark_cancelled",
+        wraps=queue_worker_mod.mark_cancelled,
+    )
     def test_check_cancel_requests(self, mock_mark_cancelled: MagicMock) -> None:
         rxn = self.root / "mol_cancel"
         rxn.mkdir()
@@ -2765,8 +3216,10 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertNotIn(entry.queue_id, self.worker._running)
         mock_mark_cancelled.assert_called_once()
         self.assertEqual(mock_mark_cancelled.call_args.args, (self.root, entry.queue_id))
-        marker = mock_mark_cancelled.call_args.kwargs["metadata_update"]
-        self.assertEqual(marker["orca_terminal_replay"]["task_id"], entry.task_id)
+        self.assertNotIn("metadata_update", mock_mark_cancelled.call_args.kwargs)
+        [cancelled] = list_queue(self.root)
+        self.assertEqual(cancelled.status, QueueStatus.CANCELLED)
+        self.assertIsNone(cancelled.metadata.get("orca_terminal_replay"))
 
     @patch("orca_auto.orca.queue.worker.mark_cancelled", return_value=True)
     def test_check_cancel_requests_retains_live_job_when_termination_fails(
@@ -3442,7 +3895,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         entry = enqueue(self.root, str(rxn))
         dequeue_next(self.root)
         # Mirror cancel_running_process_job, which marks the entry cancelled first.
-        queue_worker_mod.update_terminal(self.root, entry.queue_id, "cancelled")
+        self.assertTrue(mark_cancelled(self.root, entry.queue_id))
 
         state = new_state(rxn, rxn / "job.inp", max_retries=3)
         state["job_id"] = entry.task_id
@@ -3487,7 +3940,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             metadata={"selected_inp": str(selected_inp)},
         )
         dequeue_next(self.root)
-        queue_worker_mod.update_terminal(self.root, entry.queue_id, STATUS_CANCELLED)
+        self.assertTrue(mark_cancelled(self.root, entry.queue_id))
 
         previous = new_state(rxn, rxn / "task-a.inp", max_retries=3)
         previous["job_id"] = "task-a"

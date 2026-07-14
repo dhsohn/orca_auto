@@ -9,7 +9,12 @@ from unittest.mock import patch
 
 from orca_auto.cli import main
 from orca_auto.core.admission import activate_reserved_slot, reserve_slot
-from orca_auto.orca.queue.adapter import dequeue_next, enqueue, mark_completed
+from orca_auto.orca.queue.adapter import (
+    dequeue_next,
+    enqueue,
+    mark_completed,
+    update_metadata,
+)
 from orca_auto.orca.state import report_json_path, save_state, state_path
 from tests.engine_artifact_helpers import orca_artifact_payload
 
@@ -394,6 +399,14 @@ class TestListClear(_ListTestBase):
             rxn_dir.mkdir()
             entry = enqueue(allowed, str(rxn_dir))
             mark_completed(allowed, entry.queue_id)
+            # Mirror the worker after terminal side effects are durably published.
+            self.assertTrue(
+                update_metadata(
+                    allowed,
+                    entry.queue_id,
+                    {"orca_terminal_replay": None},
+                )
+            )
 
             captured = io.StringIO()
             with patch("sys.stdout", captured):
