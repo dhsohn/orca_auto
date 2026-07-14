@@ -79,6 +79,46 @@ def _scenario(
     )
 
 
+def _force_timeout_after_descendant_ready(
+    monkeypatch: pytest.MonkeyPatch,
+    pid_path: Path,
+) -> None:
+    original_start = runner._start_scenario_process
+
+    def start_with_ready_timeout(*args: Any, **kwargs: Any) -> Any:
+        supervised = original_start(*args, **kwargs)
+        original_wait = supervised.process.wait
+        first_wait = True
+
+        def wait_after_ready(timeout: float | None = None) -> int:
+            nonlocal first_wait
+            if not first_wait:
+                return original_wait(timeout=timeout)
+            first_wait = False
+            timeout_value = 0.0 if timeout is None else timeout
+
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                try:
+                    descendant_pid = int(pid_path.read_text(encoding="utf-8"))
+                except (FileNotFoundError, ValueError):
+                    descendant_pid = 0
+                if descendant_pid > 0 and (Path("/proc") / str(descendant_pid)).exists():
+                    raise subprocess.TimeoutExpired(supervised.process.args, timeout_value)
+                if supervised.process.poll() is not None:
+                    return original_wait(timeout=0)
+                time.sleep(0.01)
+
+            # Drive the normal runner cleanup path even when fixture readiness
+            # itself fails, so a failed regression cannot leak the supervisor.
+            raise subprocess.TimeoutExpired(supervised.process.args, timeout_value)
+
+        monkeypatch.setattr(supervised.process, "wait", wait_after_ready)
+        return supervised
+
+    monkeypatch.setattr(runner, "_start_scenario_process", start_with_ready_timeout)
+
+
 @pytest.mark.parametrize("expected_status", ["completed", "failed"])
 def test_run_smoke_suite_keeps_expected_terminal_separate_from_verdict(
     tmp_path: Path,
@@ -631,6 +671,7 @@ while True:
         timeout_seconds=0.5,
     )
     monkeypatch.setattr(runner, "scenarios_for_profile", lambda _profile: (real_scenario,))
+    _force_timeout_after_descendant_ready(monkeypatch, engine_pid_path)
 
     original_release_slot = runner.release_slot
     release_observations: list[tuple[bool, tuple[int, ...]]] = []
@@ -660,7 +701,7 @@ while True:
             real_engine_admission=admission,
         )
 
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             if engine_pid_path.is_file() and engine_term_path.is_file():
                 break
@@ -721,6 +762,7 @@ while True:
     )
     scenario = _scenario(expected_status="completed", timeout_seconds=0.5)
     monkeypatch.setattr(runner, "scenarios_for_profile", lambda _profile: (scenario,))
+    _force_timeout_after_descendant_ready(monkeypatch, child_pid_path)
 
     result = runner.run_smoke_suite(repo_root=repo_root, runs_root=runs_root)
 
