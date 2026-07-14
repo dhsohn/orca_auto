@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
-from orca_auto.orca import run_cleanup
+import pytest
+
+from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
+from orca_auto.orca import run_cleanup, run_snapshot
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.run_snapshot import RunSnapshot
-from orca_auto.orca.state import save_state, state_path
+from orca_auto.orca.state import load_state, save_state, state_path
 
 
 def _snapshot(
@@ -19,6 +25,7 @@ def _snapshot(
     selected_inp_name: str = "calc.inp",
 ) -> RunSnapshot:
     reaction_dir.mkdir(parents=True, exist_ok=True)
+    directory_stat = reaction_dir.stat()
     return RunSnapshot(
         key=f"key-{name}",
         name=name,
@@ -34,6 +41,7 @@ def _snapshot(
         final_reason="",
         elapsed=3600.0,
         elapsed_text="1h 00m",
+        reaction_dir_identity=(directory_stat.st_dev, directory_stat.st_ino),
     )
 
 
@@ -109,6 +117,24 @@ def test_clear_terminal_run_states_clears_tracked_and_untracked_terminal_states(
     assert state_path(running_dir).exists()
 
 
+def test_clear_terminal_run_states_leaves_production_smoke_tree_owned_by_case_root(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    case_runs_root = (
+        allowed_root / SMOKE_RESULTS_DIRNAME / "batch-1" / "case-1" / "runtime" / "runs"
+    )
+    smoke_job = case_runs_root / "smoke-job"
+    allowed_root.mkdir()
+    _write_state(smoke_job, run_id="run_smoke", status="completed")
+
+    assert run_cleanup.clear_terminal_run_states(allowed_root) == 0
+    assert state_path(smoke_job).exists()
+
+    assert run_cleanup.clear_terminal_run_states(case_runs_root) == 1
+    assert not state_path(smoke_job).exists()
+
+
 def test_clear_terminal_run_states_skips_missing_files_and_warns_on_unlink_error(
     tmp_path: Path,
 ) -> None:
@@ -116,29 +142,35 @@ def test_clear_terminal_run_states_skips_missing_files_and_warns_on_unlink_error
     missing_snapshot = _snapshot(
         allowed_root / "missing", run_id="run_missing", name="missing", status="completed"
     )
-    failed_snapshot = _snapshot(
-        allowed_root / "failed", run_id="run_failed", name="failed", status="failed"
-    )
-    success_snapshot = _snapshot(
-        allowed_root / "success", run_id="run_success", name="success", status="completed"
-    )
-    running_snapshot = _snapshot(
-        allowed_root / "running", run_id="run_running", name="running", status="running"
-    )
+    failed_dir = allowed_root / "failed"
+    success_dir = allowed_root / "success"
+    running_dir = allowed_root / "running"
+    _write_state(failed_dir, run_id="run_failed", status="failed")
+    _write_state(success_dir, run_id="run_success", status="completed")
+    _write_state(running_dir, run_id="run_running", status="running")
+    snapshots = {
+        snapshot.reaction_dir: snapshot
+        for snapshot in run_snapshot.collect_run_snapshots(allowed_root)
+    }
+    failed_snapshot = snapshots[failed_dir]
+    success_snapshot = snapshots[success_dir]
+    running_snapshot = snapshots[running_dir]
 
-    failed_state = state_path(failed_snapshot.reaction_dir)
-    success_state = state_path(success_snapshot.reaction_dir)
-    running_state = state_path(running_snapshot.reaction_dir)
-    failed_state.write_text("{}", encoding="utf-8")
-    success_state.write_text("{}", encoding="utf-8")
-    running_state.write_text("{}", encoding="utf-8")
+    failed_state = state_path(failed_dir)
+    success_state = state_path(success_dir)
+    running_state = state_path(running_dir)
 
-    original_unlink = Path.unlink
+    original_unlink = os.unlink
 
-    def fake_unlink(self: Path, *args, **kwargs) -> None:
-        if self == failed_state:
+    def fake_unlink(path: str | bytes, *, dir_fd: int | None = None) -> None:
+        if dir_fd is not None:
+            parent = Path(os.readlink(f"/proc/self/fd/{dir_fd}"))
+            candidate = parent / os.fsdecode(path)
+        else:
+            candidate = Path(os.fsdecode(path))
+        if candidate == failed_state:
             raise OSError("cannot remove")
-        return original_unlink(self, *args, **kwargs)
+        return original_unlink(path, dir_fd=dir_fd)
 
     with (
         patch(
@@ -146,7 +178,7 @@ def test_clear_terminal_run_states_skips_missing_files_and_warns_on_unlink_error
             return_value=[missing_snapshot, failed_snapshot, success_snapshot, running_snapshot],
         ),
         patch(
-            "pathlib.Path.unlink",
+            "orca_auto.orca.run_cleanup.os.unlink",
             new=fake_unlink,
         ),
         patch("orca_auto.orca.run_cleanup.logger.warning") as warning,
@@ -158,6 +190,165 @@ def test_clear_terminal_run_states_skips_missing_files_and_warns_on_unlink_error
     assert failed_state.exists()
     assert not success_state.exists()
     assert running_state.exists()
+
+
+def test_clear_terminal_run_states_revalidates_directory_after_snapshot_collection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    normal_job = allowed_root / "normal"
+    original_job = allowed_root / "normal-original"
+    smoke_job = allowed_root / SMOKE_RESULTS_DIRNAME / "batch" / "smoke"
+    _write_state(normal_job, run_id="run-normal", status="completed")
+    _write_state(smoke_job, run_id="run-smoke", status="completed")
+    original_collect = run_cleanup.collect_run_snapshots
+
+    def _collect_then_replace(root: Path) -> list[RunSnapshot]:
+        snapshots = original_collect(root)
+        normal_job.rename(original_job)
+        normal_job.symlink_to(smoke_job, target_is_directory=True)
+        return snapshots
+
+    monkeypatch.setattr(run_cleanup, "collect_run_snapshots", _collect_then_replace)
+
+    assert run_cleanup.clear_terminal_run_states(allowed_root) == 0
+    assert state_path(original_job).exists()
+    assert state_path(smoke_job).exists()
+
+
+def test_clear_terminal_run_states_rejects_real_smoke_directory_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    normal_job = allowed_root / "normal"
+    original_job = allowed_root / "normal-original"
+    smoke_job = allowed_root / SMOKE_RESULTS_DIRNAME / "batch" / "smoke"
+    _write_state(normal_job, run_id="run-normal", status="completed")
+    _write_state(smoke_job, run_id="run-smoke", status="completed")
+    original_collect = run_cleanup.collect_run_snapshots
+
+    def _collect_then_replace(root: Path) -> list[RunSnapshot]:
+        snapshots = original_collect(root)
+        normal_job.rename(original_job)
+        smoke_job.rename(normal_job)
+        return snapshots
+
+    monkeypatch.setattr(run_cleanup, "collect_run_snapshots", _collect_then_replace)
+
+    assert run_cleanup.clear_terminal_run_states(allowed_root) == 0
+    assert state_path(original_job).exists()
+    assert state_path(normal_job).exists()
+
+
+def test_cleanup_snapshot_reads_state_from_discovered_directory_inode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    normal_job = allowed_root / "normal"
+    temporary_job = allowed_root / "normal-temporary"
+    smoke_job = allowed_root / SMOKE_RESULTS_DIRNAME / "batch" / "smoke"
+    _write_state(normal_job, run_id="run-normal", status="running")
+    _write_state(smoke_job, run_id="run-smoke", status="completed")
+    original_load_json = run_snapshot.load_json_mapping_file
+
+    def _swap_only_while_state_is_read(state_file: Path) -> dict[str, Any] | None:
+        normal_job.rename(temporary_job)
+        smoke_job.rename(normal_job)
+        try:
+            return original_load_json(state_file)
+        finally:
+            normal_job.rename(smoke_job)
+            temporary_job.rename(normal_job)
+
+    monkeypatch.setattr(
+        run_snapshot,
+        "load_json_mapping_file",
+        _swap_only_while_state_is_read,
+    )
+
+    assert run_cleanup.clear_terminal_run_states(allowed_root) == 0
+    assert state_path(normal_job).exists()
+    assert state_path(smoke_job).exists()
+
+
+def test_clear_terminal_run_states_preserves_new_atomic_state_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    reaction_dir = allowed_root / "job"
+    _write_state(reaction_dir, run_id="run-terminal", status="completed")
+    original_collect = run_cleanup.collect_run_snapshots
+
+    def _collect_then_publish_new_generation(root: Path) -> list[RunSnapshot]:
+        snapshots = original_collect(root)
+        _write_state(reaction_dir, run_id="run-running", status="running")
+        return snapshots
+
+    monkeypatch.setattr(
+        run_cleanup,
+        "collect_run_snapshots",
+        _collect_then_publish_new_generation,
+    )
+
+    assert run_cleanup.clear_terminal_run_states(allowed_root) == 0
+    current_state = load_state(reaction_dir)
+    assert current_state is not None
+    assert current_state["run_id"] == "run-running"
+    assert current_state["status"] == "running"
+    assert state_path(reaction_dir).exists()
+
+
+def test_cleanup_serializes_atomic_state_publish_after_final_identity_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    reaction_dir = allowed_root / "job"
+    _write_state(reaction_dir, run_id="run-terminal", status="completed")
+    identity_checked = threading.Event()
+    writer_started = threading.Event()
+    writer_finished = threading.Event()
+    original_is_current = run_cleanup._snapshot_state_is_current
+
+    def _publish_new_generation() -> None:
+        assert identity_checked.wait(timeout=5)
+        writer_started.set()
+        _write_state(reaction_dir, run_id="run-running", status="running")
+        writer_finished.set()
+
+    writer = threading.Thread(target=_publish_new_generation)
+    writer.start()
+
+    def _checked_then_wait_for_writer(
+        snapshot: RunSnapshot,
+        directory_fd: int,
+    ) -> bool:
+        is_current = original_is_current(snapshot, directory_fd)
+        identity_checked.set()
+        assert writer_started.wait(timeout=5)
+        assert not writer_finished.wait(timeout=0.2)
+        return is_current
+
+    monkeypatch.setattr(
+        run_cleanup,
+        "_snapshot_state_is_current",
+        _checked_then_wait_for_writer,
+    )
+    try:
+        assert run_cleanup.clear_terminal_run_states(allowed_root) == 1
+    finally:
+        writer.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert writer_finished.is_set()
+    current_state = load_state(reaction_dir)
+    assert current_state is not None
+    assert current_state["run_id"] == "run-running"
+    assert current_state["status"] == "running"
 
 
 def test_clear_terminal_entries_reports_queue_and_run_state_counts(tmp_path: Path) -> None:

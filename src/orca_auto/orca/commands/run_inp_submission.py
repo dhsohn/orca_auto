@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from orca_auto.core.commands.run_dir import (
+    active_run_dir_pinned_target,
+    assert_run_dir_publication_allowed,
+)
 from orca_auto.core.messaging import build_channel
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
@@ -18,6 +22,7 @@ from orca_auto.core.queue.engine.snapshot_intent import (
 )
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
     QUEUE_RECORD_SYNC_OWNER_START_KEY,
@@ -29,6 +34,7 @@ from orca_auto.core.queue.publication import (
     queue_record_publication_lock,
     queue_record_sync_metadata,
 )
+from orca_auto.core.queue.store import QueueAfterCommitError
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import timestamped_token
 
@@ -44,6 +50,27 @@ if TYPE_CHECKING:
     from .run_inp_context import WorkerStatusInfo
 
 logger = logging.getLogger(__name__)
+
+
+def _snapshot_cleanup_job_dir(reaction_dir: Path, snapshot: Any) -> Path:
+    identity = snapshot.get("job_dir_identity") if isinstance(snapshot, dict) else None
+    if not isinstance(identity, dict):
+        return reaction_dir
+    expected = (
+        int(identity.get("device", -1)),
+        int(identity.get("inode", -1)),
+    )
+    candidates = (reaction_dir, active_run_dir_pinned_target())
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            candidate_stat = candidate.stat()
+        except OSError:
+            continue
+        if (int(candidate_stat.st_dev), int(candidate_stat.st_ino)) == expected:
+            return candidate
+    raise ValueError("ORCA cleanup target no longer matches the execution snapshot")
 
 
 def _mark_orca_snapshot_owned(
@@ -216,20 +243,36 @@ def resource_request_from_selected_inp(
     deps: Any,
     logger: logging.Logger,
 ) -> dict[str, int]:
+    prepared = prepared_resource_input_from_selected_inp(
+        cfg,
+        selected_inp,
+        deps=deps,
+        logger=logger,
+    )
+    return dict(prepared.resource_request)
+
+
+def prepared_resource_input_from_selected_inp(
+    cfg: Any,
+    selected_inp: Path | None,
+    *,
+    deps: Any,
+    logger: logging.Logger,
+) -> Any:
     if selected_inp is None:
         raise ValueError("No .inp file selected for ORCA queue submission.")
-    resource_request, actions = deps.submission.ensure_submission_resource_request(
+    prepared = deps.submission.prepare_submission_resource_request(
         selected_inp,
         default_max_cores=int(cfg.resources.max_cores_per_task),
         default_max_memory_gb=int(cfg.resources.max_memory_gb_per_task),
     )
-    if actions:
+    if prepared.actions:
         logger.info(
-            "Updated ORCA input resource directives in %s: %s",
+            "Prepared private ORCA input resource directives for %s: %s",
             selected_inp,
-            ", ".join(actions),
+            ", ".join(prepared.actions),
         )
-    return resource_request
+    return prepared
 
 
 def warn_ignored_resource_override_flags(args: Any, *, logger: logging.Logger) -> None:
@@ -253,7 +296,13 @@ def build_queue_metadata(
 
     artifacts = selected_input_artifacts(selected_inp)
     job_type, molecule_key = resolve_job_metadata(artifacts.selected_inp, reaction_dir)
-    requested = resource_request_from_selected_inp(cfg, selected_inp, deps=deps, logger=logger)
+    prepared_input = prepared_resource_input_from_selected_inp(
+        cfg,
+        selected_inp,
+        deps=deps,
+        logger=logger,
+    )
+    requested = dict(prepared_input.resource_request)
     assert selected_inp is not None
     max_retries = effective_max_retries(
         selected_inp,
@@ -279,6 +328,8 @@ def build_queue_metadata(
         orca_executable=cfg.paths.orca_executable,
         queue_root=Path(cfg.runtime.allowed_root).expanduser().resolve(),
         snapshot_intent_token=timestamped_token("snapshot_intent", token_bytes=16),
+        normalized_selected_payload=prepared_input.normalized_payload,
+        source_selected_sha256=prepared_input.source_sha256,
     )
     if artifacts.selected_inp:
         metadata["source_selected_inp"] = artifacts.selected_inp
@@ -333,6 +384,58 @@ def upsert_queued_job_record(
         resource_request=requested,
         resource_actual=actual,
     )
+
+
+def _fence_uncompensated_orca_enqueue(
+    allowed_root: Path,
+    *,
+    error: QueueAfterCommitError,
+    publication_token: str,
+    task_id: str,
+) -> bool:
+    """Terminally fence one exact provisional row without publishing it."""
+
+    from ..queue import adapter as queue_adapter
+
+    entry = error.provisional_result
+    metadata = entry.metadata if isinstance(entry, QueueEntry) else {}
+    if (
+        not isinstance(entry, QueueEntry)
+        or entry.task_id != task_id
+        or str(metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY) or "") != publication_token
+    ):
+        logger.error("Cannot identify the provisional ORCA row after compensation failure")
+        return False
+    try:
+        fenced = queue_adapter.mark_failed(
+            allowed_root,
+            entry.queue_id,
+            error=(
+                "queue_after_commit_guard_failed:"
+                f"compensation={error.compensation_outcome}:"
+                f"{error.after_commit_error.__class__.__name__}:"
+                f"{error.after_commit_error}"
+            ),
+            metadata_update=queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_ABORTED,
+                token=publication_token,
+                owner_pid=0,
+            ),
+            expected_entry=entry,
+            expected_task_id=task_id,
+        )
+    except BaseException:  # noqa: BLE001 - preserve the guard-origin failure path
+        logger.exception(
+            "Failed to terminally fence the provisional ORCA row: queue_id=%s",
+            entry.queue_id,
+        )
+        return False
+    if not fenced:
+        logger.error(
+            "Provisional ORCA row was not visible for terminal fencing: queue_id=%s",
+            entry.queue_id,
+        )
+    return fenced
 
 
 def record_queued_job_side_effect(
@@ -407,6 +510,7 @@ def create_queued_submission(
     warn_ignored_resource_override_flags(args, logger=logger)
     priority = normalize_queue_priority(getattr(args, "priority", 10))
     force = bool(getattr(args, "force", False))
+    assert_run_dir_publication_allowed("ORCA target mutation preflight")
     queue_metadata = build_queue_metadata(
         cfg,
         reaction_dir=reaction_dir,
@@ -444,7 +548,10 @@ def create_queued_submission(
             expected_states={SNAPSHOT_INTENT_STATE_CREATING},
         )
     except BaseException:
-        cleanup_unowned_orca_execution_snapshot(reaction_dir, execution_snapshot)
+        cleanup_unowned_orca_execution_snapshot(
+            _snapshot_cleanup_job_dir(reaction_dir, execution_snapshot),
+            execution_snapshot,
+        )
         raise
     try:
         entry = queue_adapter.enqueue(
@@ -455,7 +562,35 @@ def create_queued_submission(
             task_id=task_id,
             task_kind=queue_adapter.QUEUE_TASK_KIND,
             metadata=queue_metadata,
+            before_commit_fn=lambda: assert_run_dir_publication_allowed(
+                "ORCA durable queue pre-commit"
+            ),
+            after_commit_fn=lambda: assert_run_dir_publication_allowed(
+                "ORCA durable queue post-commit"
+            ),
         )
+    except QueueAfterCommitError as exc:
+        if exc.compensation_succeeded:
+            try:
+                cleanup_unowned_orca_execution_snapshot(
+                    _snapshot_cleanup_job_dir(
+                        reaction_dir,
+                        queue_metadata.get("execution_snapshot"),
+                    ),
+                    queue_metadata.get("execution_snapshot"),
+                )
+            except BaseException:  # noqa: BLE001 - preserve the guard-origin failure path
+                logger.exception(
+                    "Failed to clean the compensated ORCA submission snapshot; retaining it"
+                )
+        else:
+            _fence_uncompensated_orca_enqueue(
+                allowed_root,
+                error=exc,
+                publication_token=publication_token,
+                task_id=task_id,
+            )
+        raise
     except BaseException as exc:  # noqa: BLE001
         recovered = queue_adapter.recover_enqueue_publication(
             allowed_root,
@@ -470,7 +605,10 @@ def create_queued_submission(
         )
         if recovered is None:
             cleanup_unowned_orca_execution_snapshot(
-                reaction_dir,
+                _snapshot_cleanup_job_dir(
+                    reaction_dir,
+                    queue_metadata.get("execution_snapshot"),
+                ),
                 queue_metadata.get("execution_snapshot"),
             )
             raise
@@ -826,6 +964,7 @@ def submit_reaction_dir_to_queue(
         reason = (
             "queue_enqueue_outcome_unknown"
             if isinstance(exc, AmbiguousPublicationRecoveryError)
+            or (isinstance(exc, QueueAfterCommitError) and not exc.compensation_succeeded)
             else "queue_submission_failed"
         )
         return DirectQueueSubmission(

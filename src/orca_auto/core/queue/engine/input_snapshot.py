@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import re
-import shutil
 import stat
 import tempfile
 from collections.abc import Mapping
@@ -35,6 +35,216 @@ def canonical_input_snapshot_namespace(namespace: str) -> str:
             "Input snapshot namespace must already be a safe path segment of at most 80 characters"
         )
     return canonical
+
+
+def _directory_open_flags() -> int:
+    if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError("Safe no-follow directory access is unavailable")
+    return os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _directory_identity(details: os.stat_result) -> tuple[int, int]:
+    if not stat.S_ISDIR(details.st_mode):
+        raise ValueError("Snapshot cleanup path must be a directory")
+    return int(details.st_dev), int(details.st_ino)
+
+
+def _open_stable_directory(
+    path: Path,
+    *,
+    label: str,
+    expected_identity: tuple[int, int] | None = None,
+) -> tuple[int, tuple[int, int]]:
+    try:
+        before = os.stat(path, follow_symlinks=False)
+        before_identity = _directory_identity(before)
+        descriptor = os.open(path, _directory_open_flags())
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"{label} is unavailable or unsafe") from exc
+    try:
+        opened_identity = _directory_identity(os.fstat(descriptor))
+        after_identity = _directory_identity(os.stat(path, follow_symlinks=False))
+        if not (
+            before_identity == opened_identity == after_identity
+            and (expected_identity is None or opened_identity == expected_identity)
+        ):
+            raise ValueError(f"{label} identity changed")
+        return descriptor, opened_identity
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_stable_directory_at(
+    parent_fd: int,
+    name: str,
+    *,
+    label: str,
+    missing_ok: bool = False,
+    expected_identity: tuple[int, int] | None = None,
+) -> tuple[int, tuple[int, int]] | None:
+    try:
+        before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        if missing_ok:
+            return None
+        raise ValueError(f"{label} identity changed") from None
+    try:
+        before_identity = _directory_identity(before)
+        descriptor = os.open(name, _directory_open_flags(), dir_fd=parent_fd)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"{label} is unavailable or unsafe") from exc
+    try:
+        opened_identity = _directory_identity(os.fstat(descriptor))
+        after_identity = _directory_identity(os.stat(name, dir_fd=parent_fd, follow_symlinks=False))
+        if not (
+            before_identity == opened_identity == after_identity
+            and (expected_identity is None or opened_identity == expected_identity)
+        ):
+            raise ValueError(f"{label} identity changed")
+        return descriptor, opened_identity
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _remove_directory_contents_at(directory_fd: int, *, label: str) -> None:
+    """Remove entries below one pinned directory without following links."""
+
+    with os.scandir(directory_fd) as entries:
+        names = [entry.name for entry in entries]
+    for name in names:
+        try:
+            details = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISDIR(details.st_mode):
+            try:
+                os.unlink(name, dir_fd=directory_fd)
+            except FileNotFoundError:
+                continue
+            continue
+
+        opened = _open_stable_directory_at(
+            directory_fd,
+            name,
+            label=f"{label} component",
+        )
+        assert opened is not None
+        child_fd, child_identity = opened
+        try:
+            _remove_directory_contents_at(child_fd, label=label)
+            verified = _open_stable_directory_at(
+                directory_fd,
+                name,
+                label=f"{label} component",
+                expected_identity=child_identity,
+            )
+            assert verified is not None
+            verified_fd, _identity = verified
+            try:
+                os.rmdir(name, dir_fd=directory_fd)
+            finally:
+                os.close(verified_fd)
+        finally:
+            os.close(child_fd)
+    os.fsync(directory_fd)
+
+
+def _cleanup_unowned_generation_directory(
+    job_dir: str | Path,
+    *,
+    root_name: str,
+    namespace: str,
+    label: str,
+    expected_job_identity: tuple[int, int] | None = None,
+    remove_root_if_empty: bool = True,
+) -> None:
+    """Remove one unowned generation through pinned, no-follow directory descriptors."""
+
+    if (
+        not root_name
+        or root_name in {".", ".."}
+        or "\x00" in root_name
+        or Path(root_name).name != root_name
+    ):
+        raise ValueError(f"{label} root must be one safe path component")
+    safe_namespace = canonical_input_snapshot_namespace(namespace)
+    raw_job_dir = Path(job_dir).expanduser()
+    try:
+        resolved_job_dir = raw_job_dir.resolve(strict=True)
+    except FileNotFoundError:
+        if expected_job_identity is not None:
+            raise ValueError("Snapshot cleanup job directory identity changed") from None
+        return
+    job_fd, _job_identity = _open_stable_directory(
+        resolved_job_dir,
+        label="Snapshot cleanup job directory",
+        expected_identity=expected_job_identity,
+    )
+    try:
+        opened_root = _open_stable_directory_at(
+            job_fd,
+            root_name,
+            label=f"{label} root",
+            missing_ok=True,
+        )
+        if opened_root is None:
+            return
+        root_fd, root_identity = opened_root
+        try:
+            opened_namespace = _open_stable_directory_at(
+                root_fd,
+                safe_namespace,
+                label=f"{label} generation",
+                missing_ok=True,
+            )
+            if opened_namespace is None:
+                return
+            namespace_fd, namespace_identity = opened_namespace
+            try:
+                _remove_directory_contents_at(namespace_fd, label=f"{label} generation")
+                verified_namespace = _open_stable_directory_at(
+                    root_fd,
+                    safe_namespace,
+                    label=f"{label} generation",
+                    expected_identity=namespace_identity,
+                )
+                assert verified_namespace is not None
+                verified_namespace_fd, _identity = verified_namespace
+                try:
+                    os.rmdir(safe_namespace, dir_fd=root_fd)
+                finally:
+                    os.close(verified_namespace_fd)
+                os.fsync(root_fd)
+            finally:
+                os.close(namespace_fd)
+
+            if not remove_root_if_empty:
+                return
+            verified_root = _open_stable_directory_at(
+                job_fd,
+                root_name,
+                label=f"{label} root",
+                expected_identity=root_identity,
+            )
+            assert verified_root is not None
+            verified_root_fd, _identity = verified_root
+            try:
+                try:
+                    os.rmdir(root_name, dir_fd=job_fd)
+                except OSError as exc:
+                    if exc.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
+                        raise
+                    os.fsync(root_fd)
+                else:
+                    os.fsync(job_fd)
+            finally:
+                os.close(verified_root_fd)
+        finally:
+            os.close(root_fd)
+    finally:
+        os.close(job_fd)
 
 
 def read_stable_regular_file(
@@ -146,9 +356,14 @@ def reserve_input_snapshot_namespace(job_dir: str | Path, namespace: str) -> Pat
         created = True
         fsync_directory(snapshot_root)
     except BaseException:
-        if created and namespace_dir.is_dir() and not namespace_dir.is_symlink():
-            shutil.rmtree(namespace_dir, ignore_errors=True)
-            fsync_directory(snapshot_root)
+        if created:
+            _cleanup_unowned_generation_directory(
+                resolved_job_dir,
+                root_name=SNAPSHOT_DIR_NAME,
+                namespace=namespace,
+                label="Input snapshot",
+                remove_root_if_empty=False,
+            )
         raise
     return namespace_dir.resolve()
 
@@ -341,28 +556,18 @@ def verify_input_snapshots(
 def cleanup_unowned_input_snapshot_namespace(
     job_dir: str | Path,
     namespace: str,
+    *,
+    expected_job_identity: tuple[int, int] | None = None,
 ) -> None:
     """Remove one generation namespace that never obtained a durable queue owner."""
 
-    resolved_job_dir = Path(job_dir).expanduser().resolve()
-    snapshot_root = resolved_job_dir / SNAPSHOT_DIR_NAME
-    if snapshot_root.is_symlink():
-        raise ValueError(f"Input snapshot directory must not be a symlink: {snapshot_root}")
-    if not snapshot_root.exists():
-        return
-    resolved_root = snapshot_root.resolve()
-    if not resolved_root.is_dir() or not resolved_root.is_relative_to(resolved_job_dir):
-        raise ValueError("Input snapshot directory escapes its job directory")
-    namespace_dir = snapshot_root / canonical_input_snapshot_namespace(namespace)
-    if namespace_dir.is_symlink():
-        raise ValueError(f"Input snapshot namespace must not be a symlink: {namespace_dir}")
-    if not namespace_dir.exists():
-        return
-    resolved_namespace = namespace_dir.resolve()
-    if not resolved_namespace.is_dir() or resolved_namespace.parent != resolved_root:
-        raise ValueError("Input snapshot namespace escapes its snapshot root")
-    shutil.rmtree(resolved_namespace)
-    fsync_directory(resolved_root)
+    _cleanup_unowned_generation_directory(
+        job_dir,
+        root_name=SNAPSHOT_DIR_NAME,
+        namespace=namespace,
+        label="Input snapshot",
+        expected_job_identity=expected_job_identity,
+    )
 
 
 __all__ = [

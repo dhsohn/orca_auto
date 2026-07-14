@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.orca import run_snapshot
 from orca_auto.orca.run_snapshot import (
     RunSnapshot,
@@ -172,14 +173,11 @@ def test_collect_run_snapshots_returns_empty_for_missing_root(tmp_path: Path) ->
 
 def test_collect_run_snapshots_skips_state_files_that_fail_to_load(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
     reaction_dir = allowed_root / "rxn"
     reaction_dir.mkdir(parents=True)
     state_path(reaction_dir).write_text("{}", encoding="utf-8")
-
-    monkeypatch.setattr(run_snapshot, "load_state", lambda _reaction_dir: None)
 
     assert collect_run_snapshots(allowed_root) == []
 
@@ -223,6 +221,163 @@ def test_collect_run_snapshots_skips_workflow_workspace_jobs(tmp_path: Path) -> 
     assert [snapshot.run_id for snapshot in snapshots] == ["run-standalone"]
 
 
+def test_collect_run_snapshots_excludes_production_smoke_tree_but_case_root_can_scan_it(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    standalone = allowed_root / "standalone"
+    case_runs_root = (
+        allowed_root / SMOKE_RESULTS_DIRNAME / "batch-1" / "case-1" / "runtime" / "runs"
+    )
+    smoke_job = case_runs_root / "smoke-job"
+
+    for run_dir, run_id in ((standalone, "run-production"), (smoke_job, "run-smoke")):
+        run_dir.mkdir(parents=True)
+        save_state(
+            run_dir,
+            {
+                "run_id": run_id,
+                "status": "completed",
+                "started_at": "2026-01-10T10:00:00+00:00",
+                "updated_at": "2026-01-10T11:00:00+00:00",
+                "selected_inp": str(run_dir / "calc.inp"),
+                "attempts": [],
+                "final_result": {"completed_at": "2026-01-10T11:00:00+00:00"},
+            },
+        )
+
+    assert [snapshot.run_id for snapshot in collect_run_snapshots(allowed_root)] == [
+        "run-production"
+    ]
+    assert [snapshot.run_id for snapshot in collect_run_snapshots(case_runs_root)] == ["run-smoke"]
+
+
+def test_collect_run_snapshots_skips_state_symlink_that_escapes_runs_root(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    linked_job = allowed_root / "linked-job"
+    outside_job = tmp_path / "outside-job"
+    linked_job.mkdir(parents=True)
+    outside_job.mkdir()
+    save_state(
+        outside_job,
+        {
+            "run_id": "run-outside",
+            "status": "completed",
+            "started_at": "2026-01-10T10:00:00+00:00",
+            "updated_at": "2026-01-10T11:00:00+00:00",
+            "selected_inp": str(outside_job / "calc.inp"),
+            "attempts": [],
+            "final_result": {"completed_at": "2026-01-10T11:00:00+00:00"},
+        },
+    )
+    state_path(linked_job).symlink_to(state_path(outside_job))
+    (allowed_root / "job_locations.json").write_text(
+        json.dumps(
+            [
+                {
+                    "job_id": "job-linked",
+                    "app_name": "orca_auto_orca",
+                    "job_type": "orca_opt",
+                    "status": "completed",
+                    "original_run_dir": str(linked_job),
+                    "molecule_key": "linked-job",
+                    "selected_input_xyz": str(linked_job / "calc.inp"),
+                    "latest_known_path": str(linked_job),
+                    "resource_request": {},
+                    "resource_actual": {},
+                }
+            ],
+            ensure_ascii=True,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    assert collect_run_snapshots(allowed_root) == []
+
+
+def test_collect_run_snapshots_skips_index_record_owned_by_production_smoke_tree(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    relocated_smoke_job = tmp_path / "organized" / "smoke-job"
+    allowed_root.mkdir()
+    relocated_smoke_job.mkdir(parents=True)
+    reserved_alias = allowed_root / SMOKE_RESULTS_DIRNAME / "batch" / "case" / "job"
+    reserved_alias.parent.mkdir(parents=True)
+    reserved_alias.symlink_to(relocated_smoke_job, target_is_directory=True)
+    save_state(
+        relocated_smoke_job,
+        {
+            "run_id": "run-relocated-smoke",
+            "status": "completed",
+            "started_at": "2026-01-10T10:00:00+00:00",
+            "updated_at": "2026-01-10T11:00:00+00:00",
+            "selected_inp": str(relocated_smoke_job / "calc.inp"),
+            "attempts": [],
+            "final_result": {"completed_at": "2026-01-10T11:00:00+00:00"},
+        },
+    )
+    (allowed_root / "job_locations.json").write_text(
+        json.dumps(
+            [
+                {
+                    "job_id": "job-relocated-smoke",
+                    "app_name": "orca_auto_orca",
+                    "job_type": "orca_opt",
+                    "status": "completed",
+                    "original_run_dir": str(reserved_alias),
+                    "molecule_key": "smoke-job",
+                    "selected_input_xyz": str(relocated_smoke_job / "calc.inp"),
+                    "latest_known_path": str(reserved_alias),
+                    "resource_request": {},
+                    "resource_actual": {},
+                }
+            ],
+            ensure_ascii=True,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    assert collect_run_snapshots(allowed_root) == []
+
+
+def test_collect_run_snapshots_rejects_directory_moved_into_smoke_after_state_read(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    reaction_dir = allowed_root / "normal-job"
+    reserved_dir = allowed_root / SMOKE_RESULTS_DIRNAME / "batch" / "case" / "job"
+    save_state(
+        reaction_dir,
+        {
+            "run_id": "run-moved-after-read",
+            "status": "completed",
+            "started_at": "2026-01-10T10:00:00+00:00",
+            "updated_at": "2026-01-10T11:00:00+00:00",
+            "selected_inp": str(reaction_dir / "calc.inp"),
+            "attempts": [],
+            "final_result": {"completed_at": "2026-01-10T11:00:00+00:00"},
+        },
+    )
+    original_load = run_snapshot._load_pinned_state
+
+    def _load_then_move(directory_fd: int):
+        loaded = original_load(directory_fd)
+        reserved_dir.parent.mkdir(parents=True)
+        reaction_dir.rename(reserved_dir)
+        return loaded
+
+    monkeypatch.setattr(run_snapshot, "_load_pinned_state", _load_then_move)
+
+    assert collect_run_snapshots(allowed_root) == []
+    assert state_path(reserved_dir).exists()
+
+
 def test_collect_run_snapshots_builds_basic_snapshot_fields(
     tmp_path: Path,
     monkeypatch,
@@ -230,7 +385,6 @@ def test_collect_run_snapshots_builds_basic_snapshot_fields(
     allowed_root = tmp_path / "orca_runs"
     reaction_dir = allowed_root / "group" / "rxn"
     reaction_dir.mkdir(parents=True)
-    state_path(reaction_dir).write_text("{}", encoding="utf-8")
     out_path = reaction_dir / "calc.out"
     out_path.write_text("done", encoding="utf-8")
 
@@ -246,8 +400,13 @@ def test_collect_run_snapshots_builds_basic_snapshot_fields(
             "reason": "  terminated_normally  ",
         },
     }
-
-    monkeypatch.setattr(run_snapshot, "load_state", lambda _reaction_dir: state)
+    save_state(reaction_dir, state)
+    persisted_state = json.loads(state_path(reaction_dir).read_text(encoding="utf-8"))
+    persisted_state["timestamps"]["updated_at"] = "2026-01-10T11:01:01+00:00"
+    state_path(reaction_dir).write_text(
+        json.dumps(persisted_state, ensure_ascii=True, indent=2),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(run_snapshot, "_compute_elapsed", lambda _state: 3661.0)
 
     snapshots = collect_run_snapshots(allowed_root)

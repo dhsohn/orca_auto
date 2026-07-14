@@ -11,11 +11,13 @@ from typing import Any
 import pytest
 
 import orca_auto.orca.commands.run_inp_submission as submission_mod
+from orca_auto.core.commands.run_dir import use_run_dir_publication_guard
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
+    queue_entry_is_claimable,
 )
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.commands import run_inp
@@ -112,6 +114,30 @@ def test_enqueue_save_after_commit_recovers_exact_row_and_submits(
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
 
 
+def test_submission_normalizes_resources_only_in_private_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    source_inp = reaction_dir / "rxn.inp"
+    source_payload = source_inp.read_bytes()
+
+    result = run_inp.submit_reaction_dir_to_queue(args)
+
+    assert result.status == "submitted"
+    assert source_inp.read_bytes() == source_payload
+    [entry] = queue_adapter.list_queue(tmp_path)
+    private_input = Path(entry.metadata["selected_inp"])
+    private_text = private_input.read_text(encoding="utf-8")
+    assert "%pal" in private_text
+    assert "nprocs 2" in private_text
+    assert "%maxcore 2048" in private_text
+    assert entry.metadata["resource_request"] == {
+        "max_cores": 2,
+        "max_memory_gb": 4,
+    }
+
+
 def test_complete_transition_after_commit_returns_submitted_with_truthful_warning(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -157,7 +183,156 @@ def test_enqueue_save_without_commit_fails_cleanly_without_queue_row(
     assert result.status == "failed"
     assert result.reason == "queue_submission_failed"
     assert queue_adapter.list_queue(tmp_path) == []
-    assert list((reaction_dir / ".orca_auto_orca_executions").iterdir()) == []
+    assert not (reaction_dir / ".orca_auto_orca_executions").exists()
+
+
+def test_public_run_dir_guard_aborts_orca_before_durable_queue_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    stages: list[str] = []
+
+    def reject_publication(stage: str) -> None:
+        stages.append(stage)
+        raise RuntimeError("run-dir target moved into reserved smoke results")
+
+    with use_run_dir_publication_guard(reject_publication):
+        result = run_inp.submit_reaction_dir_to_queue(args)
+
+    assert result.status == "failed"
+    assert result.reason == "queue_submission_failed"
+    assert stages == ["ORCA target mutation preflight"]
+    assert queue_adapter.list_queue(tmp_path) == []
+    assert not (tmp_path / "queue.json").exists()
+    assert not (tmp_path / "job_locations.json").exists()
+    assert not (reaction_dir / "job_state.json").exists()
+    assert not (reaction_dir / "job_report.json").exists()
+    snapshot_root = reaction_dir / ".orca_auto_orca_executions"
+    assert not snapshot_root.exists() or list(snapshot_root.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "guard_error",
+    [
+        pytest.param(
+            RuntimeError("run-dir target moved into reserved smoke results"),
+            id="runtime-error",
+        ),
+        pytest.param(
+            KeyboardInterrupt("run-dir guard interrupted after commit"),
+            id="keyboard-interrupt",
+        ),
+        pytest.param(
+            SystemExit("run-dir guard exited after commit"),
+            id="system-exit",
+        ),
+    ],
+)
+def test_public_run_dir_guard_compensates_orca_post_commit_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    guard_error: BaseException,
+) -> None:
+    reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    stages: list[str] = []
+
+    def reject_after_commit(stage: str) -> None:
+        stages.append(stage)
+        if stage.endswith("post-commit"):
+            raise guard_error
+
+    with use_run_dir_publication_guard(reject_after_commit):
+        result = run_inp.submit_reaction_dir_to_queue(args)
+
+    assert result.status == "failed"
+    assert result.reason == "queue_submission_failed"
+    assert str(guard_error) in result.stderr
+    assert stages == [
+        "ORCA target mutation preflight",
+        "ORCA durable queue pre-commit",
+        "ORCA durable queue post-commit",
+    ]
+    assert queue_adapter.list_queue(tmp_path) == []
+    assert not (tmp_path / "job_locations.json").exists()
+    assert not (reaction_dir / "job_state.json").exists()
+    assert not (reaction_dir / "job_report.json").exists()
+    snapshot_root = reaction_dir / ".orca_auto_orca_executions"
+    assert not snapshot_root.exists() or list(snapshot_root.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "compensation_error",
+    [
+        pytest.param(
+            OSError("queue compensation write failed before replace"),
+            id="os-error",
+        ),
+        pytest.param(
+            KeyboardInterrupt("queue compensation interrupted before replace"),
+            id="keyboard-interrupt",
+        ),
+        pytest.param(
+            SystemExit("queue compensation exited before replace"),
+            id="system-exit",
+        ),
+    ],
+)
+def test_orca_compensation_failure_fences_row_without_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    compensation_error: BaseException,
+) -> None:
+    reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    stages: list[str] = []
+    save_count = 0
+    original_save = queue_store.save_entries
+
+    def fail_compensation_before_replace(root: Path, entries: Any) -> None:
+        nonlocal save_count
+        save_count += 1
+        if save_count == 2:
+            raise compensation_error
+        original_save(root, entries)
+
+    def reject_after_commit(stage: str) -> None:
+        stages.append(stage)
+        if stage.endswith("post-commit"):
+            raise RuntimeError("run-dir target moved into reserved smoke results")
+
+    def reject_normal_recovery(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("guard-origin compensation failure must not use normal enqueue recovery")
+
+    def reject_publication(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("guard-origin compensation failure must not publish a queued record")
+
+    monkeypatch.setattr(queue_store, "save_entries", fail_compensation_before_replace)
+    monkeypatch.setattr(queue_adapter, "recover_enqueue_publication", reject_normal_recovery)
+    monkeypatch.setattr(submission_mod, "_publish_queued_submission", reject_publication)
+
+    with use_run_dir_publication_guard(reject_after_commit):
+        result = run_inp.submit_reaction_dir_to_queue(args)
+
+    assert result.status == "failed"
+    assert result.reason == "queue_enqueue_outcome_unknown"
+    assert "run-dir target moved into reserved smoke results" in result.stderr
+    assert "queue compensation outcome=not_restored" in result.stderr
+    assert str(compensation_error) in result.stderr
+    assert stages == [
+        "ORCA target mutation preflight",
+        "ORCA durable queue pre-commit",
+        "ORCA durable queue post-commit",
+    ]
+    assert save_count == 3
+    [entry] = queue_adapter.list_queue(tmp_path)
+    assert entry.status == QueueStatus.FAILED
+    assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_ABORTED
+    assert "queue_after_commit_guard_failed" in entry.error
+    assert queue_entry_is_claimable(entry) is False
+    assert not (tmp_path / "job_locations.json").exists()
+    assert not (reaction_dir / "job_state.json").exists()
+    assert not (reaction_dir / "job_report.json").exists()
+    assert Path(entry.metadata["execution_snapshot"]["execution_dir"]).is_dir()
 
 
 def test_orca_adapter_rejects_fractional_priority_before_persistence(tmp_path: Path) -> None:

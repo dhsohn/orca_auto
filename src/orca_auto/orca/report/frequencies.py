@@ -288,8 +288,16 @@ def _pair_alignment(
 def mode_section_html(
     summaries: tuple[ModeSummary, ...],
     alignment_label: str | None,
+    *,
+    frequency_calculation_found: bool = False,
 ) -> str:
     if not summaries:
+        if frequency_calculation_found:
+            return (
+                '<p class="muted">Frequency values were parsed, but no usable normal-mode '
+                "displacement vectors were available, so atom-level vibrational details cannot "
+                "be shown.</p>"
+            )
         return (
             '<p class="muted">No frequency calculation found in any attempt output, '
             "so no vibrational summary is available.</p>"

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import fcntl
+import os
 from multiprocessing import get_context
 from pathlib import Path
 
 import pytest
 
-from orca_auto.core.utils.lock import file_lock
+from orca_auto.core.utils.lock import file_lock, file_lock_at
 
 
 def _hold_lock_until_released(lock_path: str, ready, release) -> None:
@@ -77,3 +78,29 @@ def test_file_lock_ignores_unlock_oserror(tmp_path: Path, monkeypatch: pytest.Mo
         pass
 
     assert fcntl.LOCK_UN in calls
+
+
+def test_file_lock_at_uses_pinned_directory_descriptor(tmp_path: Path) -> None:
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with file_lock_at(
+            directory_fd,
+            "resource.lock",
+            display_path=tmp_path / "resource.lock",
+        ):
+            contents = (tmp_path / "resource.lock").read_text(encoding="utf-8")
+    finally:
+        os.close(directory_fd)
+
+    assert f"pid={os.getpid()}\n" in contents
+
+
+@pytest.mark.parametrize("lock_name", ["", ".", "..", "nested/resource.lock"])
+def test_file_lock_at_rejects_non_plain_names(tmp_path: Path, lock_name: str) -> None:
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(ValueError, match="one plain filename"):
+            with file_lock_at(directory_fd, lock_name):
+                pass
+    finally:
+        os.close(directory_fd)

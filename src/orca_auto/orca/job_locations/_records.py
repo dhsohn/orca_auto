@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,7 +16,11 @@ from orca_auto.core.indexing import (
 )
 from orca_auto.core.indexing import engine_artifacts as _engine_artifacts
 from orca_auto.core.indexing import engines as _engine_locations
-from orca_auto.core.paths import path_is_inside_workflow_workspace
+from orca_auto.core.paths import (
+    iter_production_runs_artifacts,
+    path_is_inside_workflow_workspace,
+    should_exclude_from_production_runs_scan,
+)
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
 from ..config import AppConfig
@@ -379,8 +385,12 @@ def record_from_artifacts(
     )
 
 
-def _record_from_job_dir_artifacts(job_dir: Path) -> JobLocationRecord | None:
-    payloads = _load_artifact_record_payloads(job_dir)
+def _record_from_job_dir_artifacts(
+    job_dir: Path,
+    *,
+    artifact_dir: Path | None = None,
+) -> JobLocationRecord | None:
+    payloads = _load_artifact_record_payloads(artifact_dir or job_dir)
     record = record_from_artifacts(
         job_dir=job_dir,
         state=payloads.state,
@@ -410,16 +420,114 @@ def collect_reindex_payload(job_dir: Path) -> dict[str, Any] | None:
     return _reindex_payload_from_record(record)
 
 
+def _job_dir_has_unsafe_reindex_artifact(job_dir: Path, root: Path) -> bool:
+    for filename in ("job_state.json", "job_report.json"):
+        artifact = job_dir / filename
+        try:
+            present = artifact.exists() or artifact.is_symlink()
+        except OSError:
+            return True
+        if present and should_exclude_from_production_runs_scan(artifact, root):
+            return True
+    return False
+
+
+@dataclass(frozen=True)
+class _ReindexSourceIdentity:
+    directory: tuple[int, int]
+    artifacts: tuple[tuple[str, int, int, int, int] | None, ...]
+
+
+def _safe_reindex_source_identity(
+    job_dir: Path,
+    root: Path,
+    *,
+    opened_directory: bool = False,
+) -> _ReindexSourceIdentity | None:
+    if should_exclude_from_production_runs_scan(job_dir, root):
+        return None
+    try:
+        directory_stat = job_dir.stat() if opened_directory else job_dir.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISDIR(directory_stat.st_mode):
+        return None
+    if _job_dir_has_unsafe_reindex_artifact(job_dir, root):
+        return None
+
+    artifact_rows: list[tuple[str, int, int, int, int] | None] = []
+    for filename in ("job_state.json", "job_report.json"):
+        artifact = job_dir / filename
+        try:
+            artifact_stat = artifact.lstat()
+        except FileNotFoundError:
+            artifact_rows.append(None)
+            continue
+        except OSError:
+            return None
+        if not stat.S_ISREG(artifact_stat.st_mode):
+            return None
+        artifact_rows.append(
+            (
+                filename,
+                artifact_stat.st_dev,
+                artifact_stat.st_ino,
+                artifact_stat.st_size,
+                artifact_stat.st_mtime_ns,
+            )
+        )
+    return _ReindexSourceIdentity(
+        directory=(directory_stat.st_dev, directory_stat.st_ino),
+        artifacts=tuple(artifact_rows),
+    )
+
+
+def _open_reindex_source(
+    job_dir: Path,
+    root: Path,
+    *,
+    expected_identity: _ReindexSourceIdentity,
+) -> tuple[int, Path] | None:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        directory_fd = os.open(job_dir, flags)
+    except OSError:
+        return None
+
+    try:
+        pinned_job_dir = Path("/proc/self/fd") / str(directory_fd)
+        if (
+            _safe_reindex_source_identity(
+                pinned_job_dir,
+                root,
+                opened_directory=True,
+            )
+            != expected_identity
+        ):
+            raise OSError("reindex source identity changed before it was opened")
+    except OSError:
+        os.close(directory_fd)
+        return None
+    return directory_fd, pinned_job_dir
+
+
 def _candidate_reindex_dirs(root: Path) -> set[Path]:
     candidate_dirs: set[Path] = set()
+    excluded_dirs: set[Path] = set()
     for pattern in ("job_state.json", "job_report.json"):
-        for artifact in root.rglob(pattern):
+        for artifact in iter_production_runs_artifacts(root, pattern):
+            job_dir = artifact.parent
+            if _job_dir_has_unsafe_reindex_artifact(job_dir, root):
+                excluded_dirs.add(job_dir)
+                candidate_dirs.discard(job_dir)
+                continue
             # Workflow workspaces share the runs root; their internal jobs are
             # indexed by their own stage roots, not the standalone index.
-            if path_is_inside_workflow_workspace(artifact.parent, root):
+            if path_is_inside_workflow_workspace(job_dir, root):
                 continue
-            candidate_dirs.add(artifact.parent)
-    return candidate_dirs
+            if job_dir not in excluded_dirs:
+                candidate_dirs.add(job_dir)
+    return candidate_dirs - excluded_dirs
 
 
 def reindex_job_locations(cfg: AppConfig) -> int:
@@ -429,8 +537,29 @@ def reindex_job_locations(cfg: AppConfig) -> int:
 
     updated = 0
     for job_dir in sorted(_candidate_reindex_dirs(root)):
-        record = _record_from_job_dir_artifacts(job_dir)
+        source_identity = _safe_reindex_source_identity(job_dir, root)
+        if source_identity is None:
+            continue
+        opened_source = _open_reindex_source(
+            job_dir,
+            root,
+            expected_identity=source_identity,
+        )
+        if opened_source is None:
+            continue
+        directory_fd, pinned_job_dir = opened_source
+        try:
+            record = _record_from_job_dir_artifacts(
+                job_dir,
+                artifact_dir=pinned_job_dir,
+            )
+        finally:
+            os.close(directory_fd)
         if record is None:
+            continue
+        if _safe_reindex_source_identity(job_dir, root) != source_identity:
+            continue
+        if should_exclude_from_production_runs_scan(record.original_run_dir, root):
             continue
         upsert_job_location(root, record)
         updated += 1

@@ -4,7 +4,7 @@ from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 from ..utils.lock import file_lock
 from ..utils.persistence import (
@@ -48,6 +48,46 @@ class DuplicateQueueEntryError(RuntimeError):
 
 class QueueStoreCorruptError(_queue_persistence.QueueStoreCorruptError):
     """Raised when the queue file exists but cannot be safely loaded."""
+
+
+QueueCompensationOutcome = Literal["restored", "not_restored", "unknown"]
+
+
+class QueueAfterCommitError(RuntimeError):
+    """Preserve an after-commit rejection and its compensation outcome."""
+
+    def __init__(
+        self,
+        *,
+        after_commit_error: BaseException,
+        compensation_outcome: QueueCompensationOutcome,
+        provisional_result: Any,
+        compensation_error: BaseException | None = None,
+        verification_error: BaseException | None = None,
+    ) -> None:
+        self.after_commit_error = after_commit_error
+        self.compensation_outcome = compensation_outcome
+        self.provisional_result = provisional_result
+        self.compensation_error = compensation_error
+        self.verification_error = verification_error
+        details = [
+            "after-commit contract failed "
+            f"({after_commit_error.__class__.__name__}: {after_commit_error})",
+            f"queue compensation outcome={compensation_outcome}",
+        ]
+        if compensation_error is not None:
+            details.append(
+                f"compensation error={compensation_error.__class__.__name__}: {compensation_error}"
+            )
+        if verification_error is not None:
+            details.append(
+                f"verification error={verification_error.__class__.__name__}: {verification_error}"
+            )
+        super().__init__("; ".join(details))
+
+    @property
+    def compensation_succeeded(self) -> bool:
+        return self.compensation_outcome == "restored"
 
 
 def _queue_path(root: Path) -> Path:
@@ -212,12 +252,53 @@ class QueueStore:
         with queue_lock(self.root):
             return self.load_entries_fn(self.root)
 
-    def mutate_entries(self, mutator: Callable[[list[Any]], tuple[Any, bool]]) -> Any:
+    def mutate_entries(
+        self,
+        mutator: Callable[[list[Any]], tuple[Any, bool]],
+        *,
+        after_commit_fn: Callable[[], Any] | None = None,
+    ) -> Any:
         with queue_lock(self.root):
             entries = self.load_entries_fn(self.root)
+            original_entries = list(entries)
             result, changed = mutator(entries)
             if changed:
                 self.save_entries_fn(self.root, entries)
+                if after_commit_fn is not None:
+                    try:
+                        after_commit_fn()
+                    except BaseException as after_commit_error:
+                        # The queue lock is still held, so no worker can claim
+                        # the provisional row before its failed publication
+                        # contract is compensated.
+                        compensation_error: BaseException | None = None
+                        verification_error: BaseException | None = None
+                        compensation_outcome: QueueCompensationOutcome = "restored"
+                        try:
+                            self.save_entries_fn(self.root, original_entries)
+                        except BaseException as rollback_error:  # noqa: BLE001
+                            compensation_error = rollback_error
+                            try:
+                                visible_entries = list(self.load_entries_fn(self.root))
+                                if visible_entries == entries:
+                                    compensation_outcome = "not_restored"
+                                else:
+                                    # A compensation write that reported an
+                                    # error is not durably proven even when a
+                                    # reload currently resembles the original
+                                    # rows. Only a clean save return establishes
+                                    # the restored outcome.
+                                    compensation_outcome = "unknown"
+                            except BaseException as reload_error:  # noqa: BLE001
+                                compensation_outcome = "unknown"
+                                verification_error = reload_error
+                        raise QueueAfterCommitError(
+                            after_commit_error=after_commit_error,
+                            compensation_outcome=compensation_outcome,
+                            provisional_result=result,
+                            compensation_error=compensation_error,
+                            verification_error=verification_error,
+                        ) from after_commit_error
             return result
 
     def mutate_entry_by_id(
@@ -255,12 +336,13 @@ def mutate_entries(
     *,
     load_entries_fn: Callable[[Path], list[Any]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[Any]], Any] | None = None,
+    after_commit_fn: Callable[[], Any] | None = None,
 ) -> Any:
     return QueueStore.for_root(
         root,
         load_entries_fn=load_entries_fn,
         save_entries_fn=save_entries_fn,
-    ).mutate_entries(mutator)
+    ).mutate_entries(mutator, after_commit_fn=after_commit_fn)
 
 
 def mutate_entry_by_id(
@@ -372,6 +454,8 @@ def enqueue(
     priority: int = 10,
     metadata: dict[str, Any] | None = None,
     duplicate_policy: QueueDuplicatePolicy | None = None,
+    before_commit_fn: Callable[[], Any] | None = None,
+    after_commit_fn: Callable[[], Any] | None = None,
 ) -> QueueEntry:
     resolved_root = resolve_root_path(root)
     reject_duplicate = duplicate_policy or reject_active_task_duplicate
@@ -401,10 +485,15 @@ def enqueue(
             metadata=dict(metadata or {}),
         )
         reject_duplicate(entries, entry)
+        if before_commit_fn is not None:
+            before_commit_fn()
         entries.append(entry)
         return entry, True
 
-    return QueueStore.for_root(resolved_root).mutate_entries(append)
+    return QueueStore.for_root(resolved_root).mutate_entries(
+        append,
+        after_commit_fn=after_commit_fn,
+    )
 
 
 def dequeue_next(

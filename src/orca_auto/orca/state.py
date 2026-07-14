@@ -20,8 +20,10 @@ from orca_auto.core.engines.artifacts import (
     build_engine_artifact_payload,
     build_engine_report_markdown,
 )
+from orca_auto.core.utils.lock import file_lock
 from orca_auto.core.utils.persistence import (
     atomic_write_json,
+    durable_mkdir,
     load_json_mapping_file,
     timestamped_token,
 )
@@ -40,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 STATE_FILE_NAME = RUN_STATE_FILE
+STATE_MUTATION_LOCK_FILE_NAME = ".job_state.mutation.lock"
 REPORT_JSON_NAME = RUN_REPORT_JSON_FILE
 REPORT_MD_NAME = RUN_REPORT_MD_FILE
 
@@ -140,12 +143,14 @@ def write_state(reaction_dir: Path, state: Mapping[str, Any]) -> Path:
     state_payload = dict(state)
     state_payload["updated_at"] = now_utc_iso()
     path = state_path(reaction_dir)
-    atomic_write_json(
-        path,
-        _normalized_payload_from_state(reaction_dir, state_payload),
-        ensure_ascii=True,
-        indent=2,
-    )
+    durable_mkdir(reaction_dir, parents=True, exist_ok=True)
+    with file_lock(reaction_dir / STATE_MUTATION_LOCK_FILE_NAME):
+        atomic_write_json(
+            path,
+            _normalized_payload_from_state(reaction_dir, state_payload),
+            ensure_ascii=True,
+            indent=2,
+        )
     if isinstance(state, dict):
         state["updated_at"] = state_payload["updated_at"]
     logger.debug("State saved: %s", path)

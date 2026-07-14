@@ -29,6 +29,7 @@ string module registries (`core/engines/registry.py`,
 ├── src/
 │   └── orca_auto/
 │       ├── core/
+│       ├── smoke/
 │       ├── xtb_md/
 │       ├── flow/
 │       │   └── engines/
@@ -53,6 +54,7 @@ User-facing docs should standardize on these command forms:
 - `orca_auto init`
 - `orca_auto scaffold <ts_search|conformer_search> <path>`
 - `orca_auto scan-notify`
+- `orca_auto smoke`
 
 Long-running services are not part of the public CLI surface. Users should run
 them only through the `systemd/` units.
@@ -94,9 +96,23 @@ Common commands:
 make test
 bash scripts/check.sh tests/flow -q
 bash scripts/check.sh tests/integration -q
+orca_auto smoke
 make structural-tests
 bash scripts/clean_artifacts.sh
 ```
+
+`orca_auto smoke` is the public source-checkout command for the developer-only
+retained-test harness. It runs each catalog scenario in its own case runtime,
+writes machine-readable batch/case manifests, and builds `summary.md` plus an
+offline HTML artifact review packet under `<runs_root>/.orca_auto_smoke/`. The
+packet's primary links are bounded byte copies under short `review/g-*/open/`
+paths, while generation-local `artifacts.json` preserves full runtime paths and
+source/copy SHA-256 provenance. The default fake profile discovers the shared
+config and uses its `runs_root`; use the checkout's `scripts/smoke.sh` wrapper
+when a parallel worktree must be pinned.
+Keep new smoke scenarios on public submission/worker paths and declare both their
+expected terminal state and required artifacts; negative simulations should
+pass only by matching that declared failure contract.
 
 ## Quality Gates
 

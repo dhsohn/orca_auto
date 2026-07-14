@@ -286,6 +286,30 @@ make test
 게이트가 걸린 pytest 스위트를 실행합니다. 더 좁은 루프를 원하면 pytest 선택자를
 스크립트에 직접 전달하세요. 예: `bash scripts/check.sh tests/flow -q`.
 
+동작을 바꾸는 패치 뒤에는 보존형 fake-engine 스모크 스위트를 실행하세요. 설치된 명령이
+가리키는 source checkout에서 기본 fake profile은 공유 설정을 자동으로 찾고 그
+`runs_root`를 사용합니다:
+
+```bash
+orca_auto smoke
+```
+
+격리된 fake 배치에는 `--runs-root /absolute/path/to/runs`, 기본값이 아닌 설정에는
+`--config /absolute/path/to/orca_auto.yaml`을 사용하세요. 보존된 `scripts/smoke.sh`
+wrapper도 같은 옵션을 받으며 현재 worktree를 고정하므로 CI와 병렬 checkout에서 유용합니다.
+
+각 배치는 실제 fake-engine 출력, `batch.json`/`case.json`, Markdown 요약,
+오프라인 artifact 색인 `review/index.html`과 함께
+`<runs_root>/.orca_auto_smoke/` 아래에 보존됩니다. Open 버튼은 짧은
+`review/g-*/open/` 아래의 bounded Windows-friendly byte copy를 사용합니다. 원본 runtime
+tree가 계속 증거 원본이며 `artifacts.json`이 각 복사본을 전체 원본 경로 및 같은 SHA-256과
+대응시킵니다. workflow report 묶음의 제한된 상대 child job-report 링크도 함께 보존합니다.
+의도적으로 실패시키는 시뮬레이션 사례는 관찰된 종료 실패가 선언된 기대와 일치할 때만
+통과합니다. 하네스 실패, skip, 종료 상태 불일치, 필수 artifact 누락뿐 아니라 실행 중
+source 변경이나 불완전한 source 식별도 배치를 실패시킵니다. 검토 정책, bounded-copy 한계,
+서로 분리된 opt-in real-ORCA·real-xTB 경계는
+[docs/VALIDATION.md](docs/VALIDATION.md)를 참고하세요.
+
 CI는 또한 Gitleaks 비밀 스캔, `scripts/*.sh`용 ShellCheck, 렌더링된 systemd 유닛 검증,
 Python 3.11/3.12/3.13 검사 매트릭스, 그리고 타입 패키지 메타데이터를 확인하는 wheel
 스모크 테스트를 실행합니다. 이 검사들은 라이선스가 필요한 ORCA 바이너리 없이도 큐,

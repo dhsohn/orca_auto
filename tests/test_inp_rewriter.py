@@ -6,6 +6,7 @@ from pathlib import Path
 from orca_auto.orca.inp_rewriter import (
     ensure_submission_resource_request,
     prepare_checkpoint_restart_input,
+    prepare_submission_resource_request,
     read_resource_request_from_input,
     rewrite_for_retry,
 )
@@ -26,6 +27,21 @@ H 0 0 0.74
 
 
 class TestInpRewriter(unittest.TestCase):
+    def test_prepare_submission_resource_request_rejects_invalid_utf8(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "rxn.inp"
+            payload = b"! Opt\n%pal nprocs 2 end\n%maxcore 1024\n\xff\n"
+            inp.write_bytes(payload)
+
+            with self.assertRaisesRegex(ValueError, "UTF-8"):
+                prepare_submission_resource_request(
+                    inp,
+                    default_max_cores=2,
+                    default_max_memory_gb=2,
+                )
+
+            self.assertEqual(inp.read_bytes(), payload)
+
     def test_ensure_submission_resource_request_injects_missing_directives(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

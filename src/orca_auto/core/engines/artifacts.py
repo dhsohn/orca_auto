@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,12 @@ class EngineArtifactProcess:
 
 
 def _json_safe(value: Any) -> Any:
+    # String-valued enums must be unwrapped before the scalar check.  JSON
+    # happens to serialize a ``str`` enum as its value, but Markdown renders a
+    # nested container with Python ``repr`` and would otherwise expose
+    # ``<SomeStatus.COMPLETED: 'completed'>``.
+    if isinstance(value, Enum):
+        return _json_safe(value.value)
     if isinstance(value, str | int | float | bool) or value is None:
         return value
     if isinstance(value, Path):

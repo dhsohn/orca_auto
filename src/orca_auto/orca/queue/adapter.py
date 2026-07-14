@@ -208,6 +208,8 @@ def enqueue(
     task_id: str | None = None,
     task_kind: str = QUEUE_TASK_KIND,
     metadata: dict[str, Any] | None = None,
+    before_commit_fn: Callable[[], Any] | None = None,
+    after_commit_fn: Callable[[], Any] | None = None,
 ) -> QueueEntry:
     """Add a reaction directory to the ORCA queue."""
     resolved = str(Path(reaction_dir).expanduser().resolve())
@@ -243,6 +245,8 @@ def enqueue(
             metadata=queue_metadata,
         )
         _reject_duplicate_reaction_dir(entries, entry)
+        if before_commit_fn is not None:
+            before_commit_fn()
         entries.append(entry)
         return entry, True
 
@@ -251,6 +255,7 @@ def enqueue(
         append,
         load_entries_fn=_load_entries,
         save_entries_fn=_queue_store.save_entries,
+        after_commit_fn=after_commit_fn,
     )
     logger.info("Enqueued: %s (queue_id=%s, force=%s)", resolved, entry.queue_id, force)
     return entry

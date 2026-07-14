@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from enum import Enum
 from pathlib import Path
 
 import pytest
@@ -14,8 +15,13 @@ from orca_auto.core.engines.artifacts import (
     EngineArtifactStatus,
     EngineArtifactTimestamps,
     build_engine_artifact_payload,
+    build_engine_report_markdown,
     load_engine_artifact_payload,
 )
+
+
+class _StringStatus(str, Enum):
+    COMPLETED = "completed"
 
 
 @pytest.mark.parametrize("engine", ["orca", "xtb", "crest"])
@@ -134,6 +140,21 @@ def test_engine_artifact_payload_preserves_engine_payload(
     )
 
     assert payload["engine_payload"] == engine_payload
+
+
+def test_engine_artifact_payload_unwraps_nested_string_enums_for_markdown() -> None:
+    payload = build_engine_artifact_payload(
+        engine="orca",
+        job=EngineArtifactJob(id="job-1", queue_id="queue-1", dir="/tmp/job"),
+        status=EngineArtifactStatus(state="completed"),
+        engine_payload={"attempts": [{"analyzer_status": _StringStatus.COMPLETED}]},
+    )
+
+    assert payload["engine_payload"]["attempts"][0]["analyzer_status"] == "completed"
+    markdown = "\n".join(build_engine_report_markdown(payload))
+    assert "'analyzer_status': 'completed'" in markdown
+    assert "_StringStatus" not in markdown
+    assert "<_StringStatus" not in markdown
 
 
 def test_engine_artifact_loader_rejects_invalid_or_unknown_payloads(tmp_path: Path) -> None:

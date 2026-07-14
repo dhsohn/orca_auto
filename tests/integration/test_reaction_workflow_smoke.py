@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,10 +14,22 @@ from orca_auto.core.queue.processes import worker_pid_file_path
 from orca_auto.flow.adapters.xtb import load_xtb_artifact_contract
 from orca_auto.flow.engines.crest import queue_runtime as crest_queue_cmd
 from orca_auto.flow.engines.xtb import queue_runtime as xtb_queue_cmd
-from orca_auto.flow.orchestration import advance_workflow, create_reaction_ts_search_workflow
+from orca_auto.flow.orchestration import advance_workflow
 from orca_auto.flow.registry import sync_workflow_registry
 from orca_auto.flow.state import load_workflow_payload, resolve_workflow_workspace, workflow_summary
 from orca_auto.orca.queue import worker as orca_queue_cmd
+from tests.integration.smoke_support import (
+    assert_orca_job_publications,
+    assert_workflow_publications,
+    assert_workflow_report,
+    configure_fake_orca,
+    orca_job_directories,
+    pump_workflow,
+    submit_public_workflow,
+)
+from tests.integration.smoke_support import (
+    write_fake_orca as write_public_fake_orca,
+)
 
 
 def _write_xyz(path: Path, *, comment: str, bond: float) -> None:
@@ -52,6 +65,18 @@ def _write_fake_orca(binary_path: Path, counter_path: Path) -> None:
                 "counter.write_text(str(count + 1), encoding='utf-8')",
                 "inp_name = Path(sys.argv[1]).name if len(sys.argv) > 1 else '<missing>'",
                 "print(f'Fake ORCA consumed {inp_name}')",
+                "print('Program Version 6.0.1 - RELEASE -')",
+                "print('|  1> ! r2scan-3c OptTS Freq TightSCF')",
+                "print('|  2> * xyz 0 1')",
+                "print('|  3> H 0 0 0')",
+                "print('|  4> H 0 0 0.74')",
+                "print('|  5> *')",
+                "print('CARTESIAN COORDINATES (ANGSTROEM)')",
+                "print('---------------------------------')",
+                "print(' H 0.000000 0.000000 0.000000')",
+                "print(' H 0.000000 0.000000 0.740000')",
+                "print('')",
+                "print('FINAL SINGLE POINT ENERGY -1.100000000000')",
                 "print('THE OPTIMIZATION HAS CONVERGED')",
                 "print('VIBRATIONAL FREQUENCIES')",
                 "print('  1: -512.34 cm**-1')",
@@ -118,13 +143,10 @@ class ReactionWorkflowSmokeCase:
     config_path: Path
 
 
-def _create_reaction_workflow_smoke_case(smoke_workspace: Any) -> ReactionWorkflowSmokeCase:
-    # Use the runs root from the shared config so direct engine enqueue
-    # validation sees workflow-local paths as <runs_root>/<workflow_id>/...
-    # The ORCA queue shares the same single runs root.
-    workflow_root = smoke_workspace.root / "workflow_root"
-    workflow_root.mkdir(parents=True, exist_ok=True)
-
+def _create_reaction_workflow_smoke_case(
+    smoke_workspace: Any,
+    capsys: Any,
+) -> ReactionWorkflowSmokeCase:
     fake_orca_counter = smoke_workspace.root / "fake_orca_counter.txt"
     fake_orca = smoke_workspace.root / "bin" / "fake_orca"
     _write_fake_orca(fake_orca, fake_orca_counter)
@@ -134,25 +156,34 @@ def _create_reaction_workflow_smoke_case(smoke_workspace: Any) -> ReactionWorkfl
         orca_executable=fake_orca,
     )
 
-    reactant_xyz = smoke_workspace.root / "reaction_inputs" / "reactant.xyz"
-    product_xyz = smoke_workspace.root / "reaction_inputs" / "product.xyz"
+    input_dir = smoke_workspace.root / "reaction_success_input"
+    reactant_xyz = input_dir / "reactant.xyz"
+    product_xyz = input_dir / "product.xyz"
     _write_xyz(reactant_xyz, comment="reaction reactant", bond=0.74)
     _write_xyz(product_xyz, comment="reaction product", bond=0.82)
-
-    created = create_reaction_ts_search_workflow(
-        reactant_xyz=str(reactant_xyz),
-        product_xyz=str(product_xyz),
-        workflow_root=workflow_root,
-        priority=5,
-        max_cores=2,
-        max_memory_gb=2,
-        max_crest_candidates=1,
-        max_xtb_stages=1,
-        max_xtb_handoff_retries=1,
-        max_orca_stages=1,
+    (input_dir / "flow.yaml").write_text(
+        "\n".join(
+            [
+                "workflow_type: reaction_ts_search",
+                "priority: 5",
+                "max_crest_candidates: 1",
+                "max_xtb_stages: 1",
+                "max_xtb_handoff_retries: 1",
+                "max_orca_stages: 1",
+                "resources:",
+                "  max_cores: 2",
+                "  max_memory_gb: 2",
+                "orca:",
+                '  route_line: "! r2scan-3c OptTS Freq TightSCF"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
     )
+    created = submit_public_workflow(input_dir, smoke_workspace.config_path, capsys)
     workflow_id = str(created["workflow_id"])
-    workspace_dir = workflow_root / workflow_id
+    workspace_dir = Path(created["metadata"]["workspace_dir"])
+    workflow_root = workspace_dir.parent
     return ReactionWorkflowSmokeCase(
         workflow_root=workflow_root,
         workflow_id=workflow_id,
@@ -418,8 +449,9 @@ def smoke_workspace_path(case: ReactionWorkflowSmokeCase) -> Path:
 
 def test_reaction_ts_workflow_executes_fake_crest_xtb_and_orca_full_lifecycle(
     smoke_workspace: Any,
+    capsys: Any,
 ) -> None:
-    case = _create_reaction_workflow_smoke_case(smoke_workspace)
+    case = _create_reaction_workflow_smoke_case(smoke_workspace, capsys)
     _assert_initial_reaction_plan(case)
     _submit_reaction_crest_stages(case, smoke_workspace)
     _process_reaction_crest_queue(case, smoke_workspace)
@@ -430,3 +462,92 @@ def test_reaction_ts_workflow_executes_fake_crest_xtb_and_orca_full_lifecycle(
     _process_reaction_orca_queue(case)
     payload = _sync_completed_orca_stage(case, smoke_workspace)
     _assert_reaction_workflow_persisted(case, payload)
+    job_dirs = orca_job_directories(payload)
+    assert len(job_dirs) == 1
+    assert_orca_job_publications(job_dirs[0], expected_status="completed", expect_si=True)
+    job_report = (job_dirs[0] / "job_report.html").read_text(encoding="utf-8")
+    assert "Frequency values were parsed" in job_report
+    assert "No frequency calculation found" not in job_report
+    assert_workflow_publications(case.workspace_dir, payload)
+
+
+def _write_missing_ts_xtb(path: Path) -> None:
+    path.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+            printf 'forward barrier (kcal) : 12.4\n'
+            printf 'backward barrier (kcal) : 8.6\n'
+            printf 'reaction energy (kcal) : -3.1\n'
+            exit 0
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def test_reaction_ts_workflow_terminalizes_failed_xtb_handoff(
+    smoke_workspace: Any,
+    capsys: Any,
+) -> None:
+    fake_orca = smoke_workspace.root / "bin" / "fake_orca_unused"
+    write_public_fake_orca(fake_orca)
+    configure_fake_orca(smoke_workspace.config_path, fake_orca)
+    missing_ts_xtb = smoke_workspace.root / "bin" / "fake_xtb_missing_ts"
+    _write_missing_ts_xtb(missing_ts_xtb)
+    config = yaml.safe_load(smoke_workspace.config_path.read_text(encoding="utf-8"))
+    config["workflow"]["paths"]["xtb_executable"] = str(missing_ts_xtb)
+    smoke_workspace.config_path.write_text(
+        yaml.safe_dump(config, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    input_dir = smoke_workspace.root / "reaction_missing_ts_input"
+    _write_xyz(input_dir / "reactant.xyz", comment="missing ts reactant", bond=0.74)
+    _write_xyz(input_dir / "product.xyz", comment="missing ts product", bond=0.82)
+    (input_dir / "flow.yaml").write_text(
+        "\n".join(
+            [
+                "workflow_type: reaction_ts_search",
+                "max_crest_candidates: 1",
+                "max_xtb_stages: 1",
+                "max_orca_stages: 1",
+                "resources:",
+                "  max_cores: 1",
+                "  max_memory_gb: 1",
+                "orca:",
+                '  route_line: "! r2scan-3c OptTS Freq TightSCF"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    created = submit_public_workflow(input_dir, smoke_workspace.config_path, capsys)
+    workspace_dir = Path(created["metadata"]["workspace_dir"])
+    payload = pump_workflow(
+        workflow_root=smoke_workspace.xtb_allowed_root.parents[1],
+        workspace_dir=workspace_dir,
+        config_path=smoke_workspace.config_path,
+        admission_root=smoke_workspace.admission_root,
+        max_cycles=28,
+    )
+
+    assert payload["status"] == "failed"
+    workflow_error = payload["metadata"]["workflow_error"]
+    assert workflow_error["scope"] == "reaction_ts_search_xtb_handoff"
+    assert workflow_error["reason"] == "xtb_ts_guess_missing"
+    xtb_stages = _engine_stages(payload, "xtb")
+    assert len(xtb_stages) == 1
+    assert xtb_stages[0]["status"] == "completed"
+    final_metadata = xtb_stages[0]["metadata"]
+    assert final_metadata["reaction_handoff_status"] == "failed"
+    assert final_metadata["reaction_handoff_reason"] == "xtb_ts_guess_missing"
+    assert final_metadata["xtb_handoff_retries_used"] == 2
+    assert final_metadata["xtb_handoff_retry_limit"] == 2
+    assert _engine_stages(payload, "orca") == []
+    assert len(list_queue(workspace_dir / "02_xtb")) == 3
+    assert_workflow_report(workspace_dir, payload)
+    assert not (workspace_dir / "workflow_si.md").exists()
+    assert not (workspace_dir / "si_data.csv").exists()

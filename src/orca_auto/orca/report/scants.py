@@ -20,6 +20,7 @@ from ..scants import (
 )
 from .attempts import (
     AttemptReportRow,
+    analyzer_status_text,
     attempt_actions,
     attempt_dicts,
     attempt_role,
@@ -116,7 +117,7 @@ def collect_scants_report_data(
                 index=index,
                 label=label,
                 direction=direction,
-                analyzer_status=str(attempt.get("analyzer_status") or ""),
+                analyzer_status=analyzer_status_text(attempt.get("analyzer_status")),
                 analyzer_reason=str(attempt.get("analyzer_reason") or ""),
                 duration_text=duration_text(attempt.get("started_at"), attempt.get("ended_at")),
                 detail=str(len(points)) if points else "",
@@ -305,7 +306,14 @@ def scants_report_component(
         sections.append(("Attempt chain", attempts_html))
     if include_vibrational:
         sections.append(
-            ("Vibrational summary", mode_section_html(data.mode_summaries, alignment_label))
+            (
+                "Vibrational summary",
+                mode_section_html(
+                    data.mode_summaries,
+                    alignment_label,
+                    frequency_calculation_found=data.frequency_attempt_index is not None,
+                ),
+            )
         )
     return ReportComponent(
         metrics_html=_metric_cards(

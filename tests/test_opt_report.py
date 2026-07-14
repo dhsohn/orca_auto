@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from orca_auto.orca.report import collect_opt_report_data, write_job_html_report
+from orca_auto.orca.statuses import AnalyzerStatus
 
 _OPT_CYCLES_BLOCK = """
                 *** Geometry Optimization Cycle   1 ***
@@ -191,6 +192,38 @@ def test_opt_report_html_renders_convergence_chart(tmp_path: Path) -> None:
     assert "initial Opt" in text
     assert "converged" in text
     assert "No frequency calculation found" in text
+
+
+def test_attempt_table_normalizes_live_analyzer_status_enum(tmp_path: Path) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
+    out_path = tmp_path / "rxn.out"
+    _write_opt_out(out_path)
+    state = _state(tmp_path, out_path, reason="normal_termination")
+    state["attempts"][0]["analyzer_status"] = AnalyzerStatus.COMPLETED
+
+    path = write_job_html_report(tmp_path, state)
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert '<td class="ok">completed<div class="sub">normal_termination</div></td>' in text
+    assert "AnalyzerStatus.COMPLETED" not in text
+
+
+def test_frequency_without_mode_vectors_is_not_reported_as_missing_calculation(
+    tmp_path: Path,
+) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! OptTS B3LYP def2-SVP Freq")
+    out_path = tmp_path / "rxn.out"
+    frequency_only = _FREQ_TS_BLOCK.split("------------\nNORMAL MODES", maxsplit=1)[0]
+    _write_opt_out(out_path, freq_block=frequency_only)
+
+    path = write_job_html_report(tmp_path, _state(tmp_path, out_path, reason="ts_criteria_met"))
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "Frequency values were parsed" in text
+    assert "no usable normal-mode displacement vectors were available" in text
+    assert "No frequency calculation found" not in text
 
 
 def test_optts_report_summarizes_imaginary_mode(tmp_path: Path) -> None:
