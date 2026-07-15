@@ -63,9 +63,12 @@ class TestCli(unittest.TestCase):
             },
         }
         if telegram_enabled:
-            payload["telegram"] = {
-                "bot_token": "123:ABC",
-                "chat_id": "999",
+            payload["messenger"] = {
+                "provider": "telegram",
+                "telegram": {
+                    "bot_token": "123:ABC",
+                    "chat_id": "999",
+                },
             }
         config = root / "orca_auto.yaml"
         config.write_text(

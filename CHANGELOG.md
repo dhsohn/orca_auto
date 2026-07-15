@@ -39,6 +39,21 @@ snapshot intent, or cancel/clear and resubmit them after the upgrade. Existing
 terminal hidden generations are retained as history; there is no in-place
 migration.
 
+### Removed
+
+- The retired pre-neutral Telegram bot stack (`orca_auto.flow.telegram`: the
+  legacy `python -m orca_auto.flow.telegram.bot` entrypoint, its duplicate
+  `/list`/`/cancel`/`/help` handler layer, keyboards, dispatch, the
+  environment-variable-only credential path, and the `bot_api` transport
+  facade). The provider-neutral bot (`python -m orca_auto.flow.bot.runner`,
+  the path the systemd unit already uses) is the only bot implementation; the
+  Telegram polling adapter now talks to the core transport client directly.
+- The legacy top-level `telegram:` configuration block is no longer read.
+  Configuration loading now fails with a pointed error when one is present —
+  move the block to `messenger.telegram`. Previously the legacy block was
+  accepted during a compatibility window and silently ignored when the
+  canonical nested block was also present.
+
 ### Fixed
 
 - `queue list --watch` now keeps system and per-job CPU/RAM sampling active on a

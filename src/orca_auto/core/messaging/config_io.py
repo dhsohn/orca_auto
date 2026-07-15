@@ -1,8 +1,7 @@
 """Resolve a :class:`MessageChannel` from a config file on disk.
 
-The ``messenger:`` block selects the provider and owns all adapter settings.  A
-legacy top-level ``telegram:`` block remains readable through the shared config
-compatibility helper.
+The ``messenger:`` block selects the provider and owns all adapter settings.
+A leftover top-level ``telegram:`` block fails closed with a migration hint.
 """
 
 from __future__ import annotations

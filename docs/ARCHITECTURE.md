@@ -78,8 +78,7 @@ src/orca_auto/
     ├── templates.py     # Workflow template registry
     ├── manifest.py      # flow.yaml parsing
     ├── registry/        # Workflow registry + journal
-    ├── bot/             # Provider-neutral bot application + gateway adapters
-    └── telegram/        # Legacy-compatible Telegram facade/transport helpers
+    └── bot/             # Provider-neutral bot application + gateway adapters
 ```
 
 ### Import rules (from DEVELOPMENT.md)

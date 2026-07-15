@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import stat
-import warnings
 from pathlib import Path
 
 import pytest
@@ -22,35 +21,36 @@ from orca_auto.core.config.files import (
 )
 
 
-def test_messenger_mapping_dual_reads_legacy_without_merging_conflicts() -> None:
+def test_messenger_mapping_rejects_legacy_top_level_telegram_block() -> None:
+    # The migration window is closed: a leftover top-level ``telegram`` block
+    # fails closed with a pointed hint instead of being read or silently
+    # ignored — even when the canonical nested block is also present.
     legacy = {
         "telegram": {"bot_token": "legacy-token", "chat_id": "legacy-chat"},
     }
-    with pytest.warns(FutureWarning, match="messenger.telegram"):
-        assert messenger_mapping_from_root(legacy) == {
-            "telegram": {"bot_token": "legacy-token", "chat_id": "legacy-chat"},
-        }
+    with pytest.raises(ValueError, match="messenger.telegram"):
+        messenger_mapping_from_root(legacy)
+    with pytest.raises(ValueError, match="no longer supported"):
+        messenger_mapping_from_root(
+            {
+                **legacy,
+                "messenger": {
+                    "provider": "telegram",
+                    "telegram": {"chat_id": "nested-chat"},
+                },
+            }
+        )
+    with pytest.raises(ValueError, match="no longer supported"):
+        config_with_canonical_messenger(legacy)
 
-    conflicting = {
-        **legacy,
+    canonical = {
         "messenger": {
             "provider": "telegram",
             "telegram": {"chat_id": "nested-chat"},
         },
     }
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        assert messenger_mapping_from_root(conflicting) == {
-            "provider": "telegram",
-            "telegram": {"chat_id": "nested-chat"},
-        }
-    assert config_with_canonical_messenger(conflicting)["messenger"] == (
-        messenger_mapping_from_root(conflicting)
-    )
-
-    with pytest.warns(FutureWarning, match="deprecated"):
-        assert messenger_mapping_from_root({"telegram": []}) == {}
-    assert caught == []
+    assert messenger_mapping_from_root(canonical) == canonical["messenger"]
+    assert config_with_canonical_messenger(canonical)["messenger"] == canonical["messenger"]
 
 
 def test_messenger_mapping_rejects_non_mapping_new_section() -> None:
@@ -232,7 +232,7 @@ def test_configured_path_and_admission_root_helpers(tmp_path: Path) -> None:
 
 def test_secure_config_file_permissions_sets_owner_only_mode(tmp_path: Path) -> None:
     config_path = tmp_path / "orca_auto.yaml"
-    config_path.write_text("telegram:\n  bot_token: token\n", encoding="utf-8")
+    config_path.write_text("messenger:\n  telegram:\n    bot_token: token\n", encoding="utf-8")
     config_path.chmod(0o644)
 
     secure_config_file_permissions(config_path)

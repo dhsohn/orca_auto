@@ -162,7 +162,7 @@ class TestConfigValidation(unittest.TestCase):
             self.assertEqual(cfg.telegram.retry_backoff_seconds, 0.25)
             self.assertEqual(cfg.messenger.telegram, cfg.telegram)
 
-    def test_legacy_top_level_telegram_is_promoted_into_messenger(self) -> None:
+    def test_legacy_top_level_telegram_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -182,11 +182,8 @@ class TestConfigValidation(unittest.TestCase):
                 },
             )
 
-            cfg = load_config(str(cfg_path))
-
-            self.assertEqual(cfg.telegram.bot_token, "legacy-token")
-            self.assertEqual(cfg.telegram.chat_id, "legacy-chat")
-            self.assertEqual(cfg.messenger.telegram, cfg.telegram)
+            with self.assertRaisesRegex(ValueError, "messenger.telegram"):
+                load_config(str(cfg_path))
 
     def test_unknown_messenger_provider_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -18,7 +18,6 @@ from .telegram_config import (
     DEFAULT_TIMEOUT_SECONDS,
     TelegramConfigLike,
 )
-from .telegram_format import MAX_TELEGRAM_MESSAGE_LENGTH, escape_html, split_telegram_message
 from .telegram_logging import safe_log_body
 from .telegram_network import (
     _is_retryable_http_status,
@@ -490,85 +489,6 @@ def send_rendered_telegram_chunks(
     )
 
 
-def send_telegram_message(
-    config: TelegramConfigLike,
-    text: str,
-    *,
-    parse_mode: str | None = "HTML",
-    limit: int = MAX_TELEGRAM_MESSAGE_LENGTH,
-    skipped_ok: bool = False,
-    logger: logging.Logger | None = None,
-    transport_factory: TelegramTransportFactory | None = None,
-    silent: bool = False,
-) -> bool:
-    """Send a chunked Telegram message with parse-mode fallback."""
-    transport = _telegram_transport_or_none(
-        config,
-        logger=logger,
-        transport_factory=transport_factory,
-    )
-    if transport is None:
-        return False
-
-    chunks = split_telegram_message(text, limit=limit)
-    if not chunks:
-        return False
-
-    result = _send_telegram_chunks(
-        (
-            _TelegramChunkSendRequest(
-                primary_text=chunk,
-                primary_parse_mode=parse_mode,
-                fallback_text=chunk,
-            )
-            for chunk in chunks
-        ),
-        transport=transport,
-        skipped_ok=skipped_ok,
-        logger=logger,
-        silent=silent,
-    )
-    return result.sent
-
-
-def send_preformatted_telegram_message(
-    config: TelegramConfigLike,
-    text: str,
-    *,
-    limit: int = MAX_TELEGRAM_MESSAGE_LENGTH,
-    logger: logging.Logger | None = None,
-    transport_factory: TelegramTransportFactory | None = None,
-) -> bool:
-    """Send text as HTML ``<pre>`` chunks, falling back to plain text per chunk."""
-    wrapper_prefix = "<pre>"
-    wrapper_suffix = "</pre>"
-    wrapper_overhead = len(wrapper_prefix) + len(wrapper_suffix)
-    if limit <= wrapper_overhead:
-        raise ValueError("preformatted message limit must exceed wrapper size")
-    transport = _telegram_transport_or_none(
-        config,
-        logger=logger,
-        transport_factory=transport_factory,
-    )
-    if transport is None:
-        return False
-
-    chunks = split_telegram_message(text, limit=limit - wrapper_overhead)
-    result = _send_telegram_chunks(
-        (
-            _TelegramChunkSendRequest(
-                primary_text=f"{wrapper_prefix}{escape_html(chunk)}{wrapper_suffix}",
-                primary_parse_mode="HTML",
-                fallback_text=chunk,
-            )
-            for chunk in chunks
-        ),
-        transport=transport,
-        logger=logger,
-    )
-    return result.sent
-
-
 def _sleep_before_retry(backoff_seconds: float) -> None:
     delay = max(0.0, float(backoff_seconds))
     if delay > 0:
@@ -618,8 +538,6 @@ __all__ = [
     "_telegram_transport_or_none",
     "build_telegram_transport",
     "log_telegram_send_failure",
-    "send_preformatted_telegram_message",
     "send_rendered_telegram_chunks",
-    "send_telegram_message",
     "telegram_send_result_ok",
 ]

@@ -48,17 +48,15 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
     return repo, config_path
 
 
-def test_systemd_telegram_lookup_dual_reads_legacy_top_level(tmp_path: Path) -> None:
+def test_systemd_telegram_lookup_rejects_legacy_top_level(tmp_path: Path) -> None:
     config_path = tmp_path / "orca_auto.yaml"
     config_path.write_text(
         "telegram:\n  bot_token: legacy-token\n  chat_id: legacy-chat\n",
         encoding="utf-8",
     )
 
-    assert systemd_plan._telegram_mapping(config_path) == {
-        "bot_token": "legacy-token",
-        "chat_id": "legacy-chat",
-    }
+    with pytest.raises(ValueError, match="messenger.telegram"):
+        systemd_plan._telegram_mapping(config_path)
 
 
 def test_systemd_telegram_lookup_rejects_malformed_empty_adapter_section(
