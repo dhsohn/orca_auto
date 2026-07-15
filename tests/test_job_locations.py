@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 from pathlib import Path
@@ -8,8 +9,14 @@ from unittest.mock import patch
 
 import pytest
 
+from orca_auto.core.engine_runner import executable_identity
 from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
+from orca_auto.core.queue.engine.input_snapshot import (
+    bind_direct_generation_owner,
+    require_direct_generation_owner,
+)
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RuntimeConfig
+from orca_auto.orca.execution_binding import orca_execution_provenance
 from orca_auto.orca.job_locations import _contracts as _job_location_contracts
 from orca_auto.orca.job_locations import _records as _job_location_records
 from orca_auto.orca.job_locations import (
@@ -93,6 +100,106 @@ def _make_cfg(root: Path) -> AppConfig:
         paths=PathsConfig(orca_executable=str(fake_orca)),
         resources=CommonResourceConfig(max_cores_per_task=8, max_memory_gb_per_task=16),
     )
+
+
+def _execution_snapshot_locator(job_dir: Path, generation_dir: Path) -> dict[str, object]:
+    job_stat = job_dir.stat()
+    generation_stat = generation_dir.stat()
+    selected_inputs = list(generation_dir.glob("*.inp"))
+    assert len(selected_inputs) == 1
+    selected_inp = selected_inputs[0].resolve()
+    owner_token = hashlib.sha256(str(generation_dir.resolve()).encode()).hexdigest()
+    try:
+        require_direct_generation_owner(
+            job_dir,
+            namespace=generation_dir.name,
+            expected_job_identity=(int(job_stat.st_dev), int(job_stat.st_ino)),
+            expected_generation_identity=(
+                int(generation_stat.st_dev),
+                int(generation_stat.st_ino),
+            ),
+            owner_token=owner_token,
+        )
+    except ValueError:
+        bind_direct_generation_owner(
+            job_dir,
+            namespace=generation_dir.name,
+            expected_job_identity=(int(job_stat.st_dev), int(job_stat.st_ino)),
+            expected_generation_identity=(
+                int(generation_stat.st_dev),
+                int(generation_stat.st_ino),
+            ),
+            owner_token=owner_token,
+        )
+    snapshot: dict[str, object] = {
+        "version": 2,
+        "job_dir_identity": {
+            "device": int(job_stat.st_dev),
+            "inode": int(job_stat.st_ino),
+        },
+        "generation_name": generation_dir.name,
+        "execution_dir_identity": {
+            "device": int(generation_stat.st_dev),
+            "inode": int(generation_stat.st_ino),
+        },
+        "execution_dir": str(generation_dir.resolve()),
+        "snapshot_intent_token": owner_token,
+        "selected_inp": str(selected_inp),
+        "bound_selected_identity": executable_identity(selected_inp),
+    }
+    canonical_provenance = orca_execution_provenance(snapshot)
+    for artifact_path in (state_path(generation_dir), report_json_path(generation_dir)):
+        if not artifact_path.is_file():
+            continue
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            continue
+        engine_payload = payload.get("engine_payload")
+        if not isinstance(engine_payload, dict):
+            continue
+        engine_payload["execution_provenance"] = canonical_provenance
+        _write_json(artifact_path, payload)
+    return snapshot
+
+
+def _write_generation_payloads(
+    *,
+    job_dir: Path,
+    generation_dir: Path,
+    job_id: str,
+    run_id: str,
+) -> tuple[Path, Path]:
+    selected_inp = generation_dir / "nebts.inp"
+    selected_inp.write_text("! NEB-TS\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    out = generation_dir / "nebts.out"
+    out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
+    final_result: dict[str, object] = {
+        "status": "completed",
+        "analyzer_status": "completed",
+        "reason": "normal_termination",
+        "last_out_path": str(out.resolve()),
+    }
+    payload = _orca_payload(
+        job_id=job_id,
+        run_id=run_id,
+        reaction_dir=job_dir,
+        selected_inp=selected_inp,
+        status="completed",
+        attempts=[
+            {
+                "index": 1,
+                "inp_path": str(selected_inp.resolve()),
+                "out_path": str(out.resolve()),
+                "return_code": 0,
+                "analyzer_status": "completed",
+                "analyzer_reason": "normal_termination",
+            }
+        ],
+        final_result=final_result,
+    )
+    _write_json(state_path(generation_dir), payload)
+    _write_json(report_json_path(generation_dir), payload)
+    return selected_inp, out
 
 
 def test_upsert_job_record_writes_allowed_root_index_and_resolves_latest_dir() -> None:
@@ -489,6 +596,697 @@ def test_load_orca_contract_payload_returns_normalized_runtime_fields() -> None:
         }
         assert payload["max_retries"] == 3
         assert payload["resource_request"] == {"max_cores": 8, "max_memory_gb": 16}
+
+
+def test_load_orca_contract_payload_reads_exact_historical_visible_generation(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "TS8(NEB-TS)"
+    first_generation = job_dir / "generation-20260714-224054-11111111"
+    second_generation = job_dir / "generation-20260714-224155-22222222"
+    first_generation.mkdir(parents=True)
+    second_generation.mkdir()
+    first_inp, first_out = _write_generation_payloads(
+        job_dir=job_dir,
+        generation_dir=first_generation,
+        job_id="job_first",
+        run_id="run_first",
+    )
+    second_inp, _second_out = _write_generation_payloads(
+        job_dir=job_dir,
+        generation_dir=second_generation,
+        job_id="job_second",
+        run_id="run_second",
+    )
+
+    root_state = state_path(job_dir)
+    root_report = report_json_path(job_dir)
+    root_state.write_bytes(state_path(first_generation).read_bytes())
+    root_report.write_bytes(report_json_path(first_generation).read_bytes())
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_first",
+                "task_id": "job_first",
+                "status": "completed",
+                "metadata": {
+                    "run_id": "run_first",
+                    "reaction_dir": str(job_dir.resolve()),
+                    "selected_inp": str(first_inp.resolve()),
+                    "execution_snapshot": _execution_snapshot_locator(job_dir, first_generation),
+                },
+            },
+            {
+                "queue_id": "q_second",
+                "task_id": "job_second",
+                "status": "pending",
+                "metadata": {
+                    "run_id": "run_second",
+                    "reaction_dir": str(job_dir.resolve()),
+                    "selected_inp": str(second_inp.resolve()),
+                    "execution_snapshot": _execution_snapshot_locator(job_dir, second_generation),
+                },
+            },
+        ],
+    )
+
+    before_root_advance = load_orca_contract_payload(
+        allowed_root,
+        str(job_dir),
+        queue_id="q_first",
+    )
+    root_state.write_bytes(state_path(second_generation).read_bytes())
+    root_report.write_bytes(report_json_path(second_generation).read_bytes())
+    root_latest_xyz = job_dir / "root-latest.xyz"
+    root_latest_xyz.write_text("1\nroot latest\nH 0 0 0\n", encoding="utf-8")
+    root_state_bytes = root_state.read_bytes()
+    root_report_bytes = root_report.read_bytes()
+    historical = load_orca_contract_payload(
+        allowed_root,
+        str(job_dir),
+        queue_id="q_first",
+    )
+    latest = load_orca_contract_payload(allowed_root, str(job_dir))
+
+    assert before_root_advance["run_state_path"] == str(state_path(first_generation).resolve())
+    assert before_root_advance["report_json_path"] == str(
+        report_json_path(first_generation).resolve()
+    )
+    assert historical["queue_id"] == "q_first"
+    assert historical["run_id"] == "run_first"
+    assert historical["reaction_dir"] == str(job_dir.resolve())
+    assert historical["selected_inp"] == str(first_inp.resolve())
+    assert historical["selected_input_xyz"] == ""
+    assert historical["optimized_xyz_path"] == ""
+    assert historical["last_out_path"] == str(first_out.resolve())
+    assert historical["attempt_count"] == 1
+    assert historical["run_state_path"] == str(state_path(first_generation).resolve())
+    assert historical["report_json_path"] == str(report_json_path(first_generation).resolve())
+    assert historical["report_md_path"] == ""
+    assert latest["run_id"] == "run_second"
+    assert latest["run_state_path"] == str(state_path(second_generation).resolve())
+    assert latest["report_json_path"] == str(report_json_path(second_generation).resolve())
+    assert latest["optimized_xyz_path"] == ""
+    assert root_state.read_bytes() == root_state_bytes
+    assert root_report.read_bytes() == root_report_bytes
+
+
+def test_pending_visible_generation_never_treats_staged_neb_xyz_as_optimized(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "TS8(NEB-TS)"
+    generation = job_dir / "generation-20260714-224054-959479f2"
+    generation.mkdir(parents=True)
+    selected_inp = generation / "nebts.inp"
+    selected_inp.write_text(
+        '! NEB-TS\n%neb Product "output.xyz" TS "guessTS.xyz" end\n* xyzfile 0 1 input.xyz\n',
+        encoding="utf-8",
+    )
+    staged_xyz = []
+    for name, comment in (
+        ("input.xyz", "reactant"),
+        ("output.xyz", "product"),
+        ("guessTS.xyz", "guess"),
+    ):
+        path = generation / name
+        path.write_text(f"1\n{comment}\nH 0 0 0\n", encoding="utf-8")
+        staged_xyz.append(path)
+    snapshot = _execution_snapshot_locator(job_dir, generation)
+    snapshot["materialized_inputs"] = {
+        f"dependency_{index:06d}": executable_identity(path)
+        for index, path in enumerate(staged_xyz)
+    }
+    snapshot["runtime_mutable_input_roles"] = []
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_neb_pending",
+                "task_id": "job_neb_pending",
+                "status": "pending",
+                "metadata": {
+                    "reaction_dir": str(job_dir.resolve()),
+                    "selected_inp": str(selected_inp.resolve()),
+                    "selected_input_xyz": str((job_dir / "input.xyz").resolve()),
+                    "execution_snapshot": snapshot,
+                },
+            }
+        ],
+    )
+
+    payload = load_orca_contract_payload(
+        allowed_root,
+        str(job_dir),
+        queue_id="q_neb_pending",
+    )
+
+    assert payload["queue_status"] == "pending"
+    assert payload["selected_inp"] == str(selected_inp.resolve())
+    assert payload["optimized_xyz_path"] == ""
+
+
+def test_same_stem_xyz_becomes_optimized_only_after_attempt_mutates_it(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "opt"
+    generation = job_dir / "generation-20260714-224054-11111111"
+    generation.mkdir(parents=True)
+    source_xyz = job_dir / "h2.xyz"
+    source_xyz.write_text("2\nsource\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+    selected_inp = generation / "h2.inp"
+    selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
+    runtime_xyz = generation / "h2.xyz"
+    runtime_xyz.write_bytes(source_xyz.read_bytes())
+    initial_identity = executable_identity(runtime_xyz)
+    snapshot = _execution_snapshot_locator(job_dir, generation)
+    snapshot["materialized_inputs"] = {"dependency_000000": initial_identity}
+    snapshot["runtime_mutable_input_roles"] = ["dependency_000000"]
+    queue_payload = [
+        {
+            "queue_id": "q_same_stem",
+            "task_id": "job_same_stem",
+            "status": "pending",
+            "metadata": {
+                "run_id": "run_same_stem",
+                "reaction_dir": str(job_dir.resolve()),
+                "selected_inp": str(selected_inp.resolve()),
+                "selected_input_xyz": str(source_xyz.resolve()),
+                "execution_snapshot": snapshot,
+            },
+        }
+    ]
+    _write_json(allowed_root / "queue.json", queue_payload)
+
+    queued = load_orca_contract_payload(allowed_root, str(job_dir), queue_id="q_same_stem")
+
+    assert queued["optimized_xyz_path"] == ""
+
+    out = generation / "h2.out"
+    out.write_text("ORCA failed after launch\n", encoding="utf-8")
+    attempted_payload = _orca_payload(
+        job_id="job_same_stem",
+        run_id="run_same_stem",
+        reaction_dir=job_dir,
+        selected_inp=selected_inp,
+        selected_xyz_path=source_xyz,
+        status="failed",
+        attempts=[{"index": 1, "out_path": str(out.resolve()), "return_code": 1}],
+        final_result={
+            "status": "failed",
+            "reason": "engine_exit_nonzero",
+            "last_out_path": str(out.resolve()),
+        },
+        engine_payload_extra={"execution_provenance": orca_execution_provenance(snapshot)},
+    )
+    _write_json(state_path(generation), attempted_payload)
+    _write_json(report_json_path(generation), attempted_payload)
+    queue_payload[0]["status"] = "failed"
+    _write_json(allowed_root / "queue.json", queue_payload)
+
+    unchanged = load_orca_contract_payload(
+        allowed_root,
+        str(job_dir),
+        queue_id="q_same_stem",
+    )
+    runtime_xyz.write_text(
+        "2\noptimized\nH 0 0 0\nH 0 0 0.75\n",
+        encoding="utf-8",
+    )
+    mutated = load_orca_contract_payload(
+        allowed_root,
+        str(job_dir),
+        queue_id="q_same_stem",
+    )
+
+    assert unchanged["optimized_xyz_path"] == ""
+    assert mutated["optimized_xyz_path"] == str(runtime_xyz.resolve())
+
+
+def test_queue_absent_visible_generation_uses_provenance_and_rejects_unowned_replacement(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "neb"
+    generation = job_dir / "generation-20260714-224054-22222222"
+    generation.mkdir(parents=True)
+    selected_inp = generation / "nebts.inp"
+    selected_inp.write_text("! NEB-TS\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    staged_xyz: list[Path] = []
+    for name, comment in (("input.xyz", "reactant"), ("output.xyz", "product")):
+        path = generation / name
+        path.write_text(f"1\n{comment}\nH 0 0 0\n", encoding="utf-8")
+        staged_xyz.append(path)
+    out = generation / "nebts.out"
+    out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
+    calculated_xyz = generation / "nebts.xyz"
+    calculated_xyz.write_text("1\ncalculated\nH 0 0 0.1\n", encoding="utf-8")
+    snapshot = _execution_snapshot_locator(job_dir, generation)
+    snapshot["materialized_inputs"] = {
+        f"dependency_{index:06d}": executable_identity(path)
+        for index, path in enumerate(staged_xyz)
+    }
+    snapshot["runtime_mutable_input_roles"] = []
+    provenance: dict[str, object] = {
+        "execution_dir": snapshot["execution_dir"],
+        "execution_dir_identity": snapshot["execution_dir_identity"],
+        "generation_owner_token": snapshot["snapshot_intent_token"],
+        "bound_selected_identity": snapshot["bound_selected_identity"],
+        "materialized_inputs": snapshot["materialized_inputs"],
+        "runtime_mutable_input_roles": [],
+    }
+
+    def publish(payload_provenance: dict[str, object]) -> None:
+        payload = _orca_payload(
+            job_id="job_queue_absent",
+            run_id="run_queue_absent",
+            reaction_dir=job_dir,
+            selected_inp=selected_inp,
+            selected_xyz_path=staged_xyz[0],
+            status="completed",
+            attempts=[{"index": 1, "out_path": str(out.resolve()), "return_code": 0}],
+            final_result={
+                "status": "completed",
+                "reason": "normal_termination",
+                "last_out_path": str(out.resolve()),
+            },
+            engine_payload_extra={"execution_provenance": payload_provenance},
+        )
+        for directory in (job_dir, generation):
+            _write_json(state_path(directory), payload)
+            _write_json(report_json_path(directory), payload)
+
+    publish(provenance)
+    valid = load_orca_contract_payload(allowed_root, str(job_dir))
+
+    assert valid["status"] == "completed"
+    assert valid["selected_inp"] == str(selected_inp.resolve())
+    assert valid["optimized_xyz_path"] == str(calculated_xyz.resolve())
+
+    moved_generation = job_dir / "moved-original-generation"
+    generation.rename(moved_generation)
+    generation.mkdir()
+    for name in ("nebts.inp", "input.xyz", "output.xyz", "nebts.out", "nebts.xyz"):
+        (generation / name).write_bytes((moved_generation / name).read_bytes())
+    replacement_status = generation.stat()
+    provenance["execution_dir_identity"] = {
+        "device": int(replacement_status.st_dev),
+        "inode": int(replacement_status.st_ino),
+    }
+    publish(provenance)
+
+    replacement = load_orca_contract_payload(allowed_root, str(job_dir))
+
+    assert replacement["status"] == "unknown"
+    assert replacement["reason"] == "queue_generation_verification_failed"
+    assert replacement["selected_inp"] == ""
+    assert replacement["optimized_xyz_path"] == ""
+    assert replacement["last_out_path"] == ""
+
+
+def test_queue_snapshot_rejects_generation_payload_with_other_provenance(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "cross-generation"
+    first_generation = job_dir / "generation-20260714-224054-33333333"
+    second_generation = job_dir / "generation-20260714-224155-44444444"
+    first_generation.mkdir(parents=True)
+    second_generation.mkdir()
+    first_inp, _first_out = _write_generation_payloads(
+        job_dir=job_dir,
+        generation_dir=first_generation,
+        job_id="job_cross",
+        run_id="run_cross",
+    )
+    _second_inp, second_out = _write_generation_payloads(
+        job_dir=job_dir,
+        generation_dir=second_generation,
+        job_id="job_second",
+        run_id="run_second",
+    )
+    first_snapshot = _execution_snapshot_locator(job_dir, first_generation)
+    second_snapshot = _execution_snapshot_locator(job_dir, second_generation)
+    cross_payload = _orca_payload(
+        job_id="job_cross",
+        run_id="run_cross",
+        reaction_dir=job_dir,
+        selected_inp=first_inp,
+        status="completed",
+        attempts=[{"index": 1, "out_path": str(second_out.resolve()), "return_code": 0}],
+        final_result={
+            "status": "completed",
+            "reason": "normal_termination",
+            "last_out_path": str(second_out.resolve()),
+        },
+        engine_payload_extra={"execution_provenance": orca_execution_provenance(second_snapshot)},
+    )
+    _write_json(state_path(first_generation), cross_payload)
+    _write_json(report_json_path(first_generation), cross_payload)
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_cross",
+                "task_id": "job_cross",
+                "status": "completed",
+                "metadata": {
+                    "run_id": "run_cross",
+                    "reaction_dir": str(job_dir.resolve()),
+                    "selected_inp": str(first_inp.resolve()),
+                    "execution_snapshot": first_snapshot,
+                },
+            }
+        ],
+    )
+
+    payload = load_orca_contract_payload(allowed_root, str(job_dir), queue_id="q_cross")
+
+    assert payload["status"] == "unknown"
+    assert payload["reason"] == "queue_generation_verification_failed"
+    assert payload["selected_inp"] == ""
+    assert payload["last_out_path"] == ""
+
+
+def test_visible_generation_rejects_out_of_generation_output_hints(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "output-escape"
+    generation = job_dir / "generation-20260714-224054-55555555"
+    generation.mkdir(parents=True)
+    selected_inp, _generation_out = _write_generation_payloads(
+        job_dir=job_dir,
+        generation_dir=generation,
+        job_id="job_output_escape",
+        run_id="run_output_escape",
+    )
+    snapshot = _execution_snapshot_locator(job_dir, generation)
+    root_out = job_dir / "root.out"
+    root_out.write_text("outside generation\n", encoding="utf-8")
+    root_xyz = job_dir / "root.xyz"
+    root_xyz.write_text("1\noutside generation\nH 0 0 0\n", encoding="utf-8")
+    bad_payload = _orca_payload(
+        job_id="job_output_escape",
+        run_id="run_output_escape",
+        reaction_dir=job_dir,
+        selected_inp=selected_inp,
+        status="completed",
+        attempts=[{"index": 1, "out_path": str(root_out.resolve()), "return_code": 0}],
+        final_result={
+            "status": "completed",
+            "reason": "normal_termination",
+            "last_out_path": str(root_out.resolve()),
+        },
+        engine_payload_extra={"execution_provenance": orca_execution_provenance(snapshot)},
+    )
+    for artifact_path in (state_path(generation), report_json_path(generation)):
+        _write_json(artifact_path, bad_payload)
+    queue_payload = [
+        {
+            "queue_id": "q_output_escape",
+            "task_id": "job_output_escape",
+            "status": "completed",
+            "metadata": {
+                "run_id": "run_output_escape",
+                "reaction_dir": str(job_dir.resolve()),
+                "selected_inp": str(selected_inp.resolve()),
+                "execution_snapshot": snapshot,
+            },
+        }
+    ]
+    _write_json(allowed_root / "queue.json", queue_payload)
+
+    by_queue = load_orca_contract_payload(
+        allowed_root,
+        str(job_dir),
+        queue_id="q_output_escape",
+    )
+    by_job_path = load_orca_contract_payload(allowed_root, str(job_dir))
+    _write_json(state_path(job_dir), bad_payload)
+    _write_json(report_json_path(job_dir), bad_payload)
+    _write_json(allowed_root / "queue.json", [])
+    without_queue = load_orca_contract_payload(allowed_root, str(job_dir))
+
+    for payload in (by_queue, by_job_path, without_queue):
+        assert payload["status"] == "unknown"
+        assert payload["reason"] == "queue_generation_verification_failed"
+        assert payload["optimized_xyz_path"] == ""
+        assert payload["last_out_path"] == ""
+
+
+def test_load_orca_contract_payload_validates_learned_run_id_from_running_generation(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "rxn_live_generation"
+    generation = job_dir / "generation-20260715-010203-33333333"
+    generation.mkdir(parents=True)
+    selected_inp = generation / "live.inp"
+    selected_inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    running_payload = _orca_payload(
+        job_id="job_live",
+        run_id="run_live",
+        reaction_dir=job_dir,
+        selected_inp=selected_inp,
+        status="running",
+    )
+    _write_json(state_path(generation), running_payload)
+    _write_json(report_json_path(generation), running_payload)
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_live",
+                "task_id": "job_live",
+                "status": "running",
+                "metadata": {
+                    "reaction_dir": str(job_dir.resolve()),
+                    "selected_inp": str(selected_inp.resolve()),
+                    "execution_snapshot": _execution_snapshot_locator(job_dir, generation),
+                },
+            }
+        ],
+    )
+
+    learned = load_orca_contract_payload(
+        allowed_root,
+        str(job_dir),
+        queue_id="q_live",
+        run_id="run_live",
+    )
+    mismatched = load_orca_contract_payload(
+        allowed_root,
+        str(job_dir),
+        queue_id="q_live",
+        run_id="run_wrong",
+    )
+
+    assert learned["queue_id"] == "q_live"
+    assert learned["run_id"] == "run_live"
+    assert learned["status"] == "running"
+    assert learned["selected_inp"] == str(selected_inp.resolve())
+    assert learned["run_state_path"] == str(state_path(generation).resolve())
+    assert learned["report_json_path"] == str(report_json_path(generation).resolve())
+    assert mismatched["queue_id"] == "q_live"
+    assert mismatched["run_id"] == "run_wrong"
+    assert mismatched["status"] == "unknown"
+    assert mismatched["reason"] == "queue_generation_not_found"
+    assert mismatched["selected_inp"] == ""
+    assert mismatched["run_state_path"] == ""
+    assert mismatched["report_json_path"] == ""
+
+
+@pytest.mark.parametrize(
+    ("queue_id", "run_id"),
+    [
+        ("q_missing", ""),
+        ("q_current", "run_wrong"),
+        ("", "run_missing"),
+    ],
+)
+def test_load_orca_contract_payload_rejects_missing_explicit_queue_generation(
+    tmp_path: Path,
+    queue_id: str,
+    run_id: str,
+) -> None:
+    from orca_auto.flow.adapters.orca import load_orca_artifact_contract
+
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "rxn_selector_miss"
+    job_dir.mkdir(parents=True)
+    selected_inp = job_dir / "current.inp"
+    selected_inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    _write_orca_state(
+        job_dir,
+        job_id="job_current",
+        run_id="run_current",
+        selected_inp=selected_inp,
+    )
+    _write_orca_report(
+        job_dir,
+        job_id="job_current",
+        run_id="run_current",
+        selected_inp=selected_inp,
+    )
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_current",
+                "task_id": "job_current",
+                "status": "completed",
+                "metadata": {
+                    "run_id": "run_current",
+                    "reaction_dir": str(job_dir.resolve()),
+                    "selected_inp": str(selected_inp.resolve()),
+                },
+            }
+        ],
+    )
+
+    payload = load_orca_contract_payload(
+        allowed_root,
+        str(job_dir),
+        queue_id=queue_id,
+        run_id=run_id,
+        reaction_dir=str(job_dir),
+    )
+    contract = load_orca_artifact_contract(
+        target=str(job_dir),
+        orca_allowed_root=allowed_root,
+        queue_id=queue_id,
+        run_id=run_id,
+        reaction_dir=str(job_dir),
+    )
+
+    assert payload["queue_id"] == queue_id
+    assert payload["run_id"] == run_id
+    assert payload["status"] == "unknown"
+    assert payload["reason"] == "queue_generation_not_found"
+    assert payload["reaction_dir"] == ""
+    assert payload["run_state_path"] == ""
+    assert payload["report_json_path"] == ""
+    assert payload["last_out_path"] == ""
+    assert contract.queue_id == queue_id
+    assert contract.run_id == run_id
+    assert contract.status == "unknown"
+    assert contract.reason == "queue_generation_not_found"
+    assert contract.reaction_dir == str(job_dir)
+    assert contract.run_state_path == ""
+    assert contract.report_json_path == ""
+    assert contract.last_out_path == ""
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "execution_escape",
+        "generation_inode",
+        "job_inode",
+        "generation_symlink",
+        "artifact_symlink",
+        "bound_selected",
+    ],
+)
+def test_load_orca_contract_payload_rejects_unverified_historical_generation(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "rxn_historical_tamper"
+    generation = job_dir / "generation-20260714-224054-33333333"
+    generation.mkdir(parents=True)
+    selected_inp, out = _write_generation_payloads(
+        job_dir=job_dir,
+        generation_dir=generation,
+        job_id="job_old",
+        run_id="run_old",
+    )
+    snapshot = _execution_snapshot_locator(job_dir, generation)
+    if tamper == "execution_escape":
+        outside = tmp_path / "generation-20260714-224054-44444444"
+        outside.mkdir()
+        snapshot["generation_name"] = outside.name
+        snapshot["execution_dir"] = str(outside)
+        outside_stat = outside.stat()
+        snapshot["execution_dir_identity"] = {
+            "device": int(outside_stat.st_dev),
+            "inode": int(outside_stat.st_ino),
+        }
+    elif tamper == "generation_inode":
+        assert isinstance(snapshot["execution_dir_identity"], dict)
+        snapshot["execution_dir_identity"]["inode"] = -1
+    elif tamper == "job_inode":
+        assert isinstance(snapshot["job_dir_identity"], dict)
+        snapshot["job_dir_identity"]["inode"] = -1
+    elif tamper == "generation_symlink":
+        outside = tmp_path / generation.name
+        generation.rename(outside)
+        generation.symlink_to(outside, target_is_directory=True)
+    elif tamper == "artifact_symlink":
+        outside = tmp_path / "outside_artifacts"
+        outside.mkdir()
+        outside_state = outside / "job_state.json"
+        outside_report = outside / "job_report.json"
+        state_path(generation).replace(outside_state)
+        report_json_path(generation).replace(outside_report)
+        state_path(generation).symlink_to(outside_state)
+        report_json_path(generation).symlink_to(outside_report)
+    else:
+        selected_inp.write_text("! replacement\n* xyz 0 1\nHe 0 0 0\n*\n", encoding="utf-8")
+
+    matching_root_payload = _orca_payload(
+        job_id="job_old",
+        run_id="run_old",
+        reaction_dir=job_dir,
+        selected_inp=selected_inp,
+        attempts=[{"index": 1, "out_path": str(out.resolve())}],
+        final_result={
+            "status": "completed",
+            "reason": "normal_termination",
+            "last_out_path": str(out.resolve()),
+        },
+    )
+    _write_json(state_path(job_dir), matching_root_payload)
+    _write_json(report_json_path(job_dir), matching_root_payload)
+    _write_json(
+        allowed_root / "queue.json",
+        [
+            {
+                "queue_id": "q_old",
+                "task_id": "job_old",
+                "status": "completed",
+                "metadata": {
+                    "run_id": "run_old",
+                    "reaction_dir": str(job_dir.resolve()),
+                    "selected_inp": str(selected_inp.resolve()),
+                    "execution_snapshot": snapshot,
+                },
+            }
+        ],
+    )
+
+    payload = load_orca_contract_payload(allowed_root, "q_old")
+    payload_by_job_path = load_orca_contract_payload(allowed_root, str(job_dir))
+
+    assert payload["status"] == "unknown"
+    assert payload["reason"] == "queue_generation_verification_failed"
+    assert payload["queue_status"] == "completed"
+    assert payload["selected_inp"] == ""
+    assert payload["selected_input_xyz"] == ""
+    assert payload["optimized_xyz_path"] == ""
+    assert payload["run_state_path"] == ""
+    assert payload["report_json_path"] == ""
+    assert payload["last_out_path"] == ""
+    assert payload["attempt_count"] == 0
+    assert payload_by_job_path["status"] == "unknown"
+    assert payload_by_job_path["reason"] == "queue_generation_verification_failed"
+    assert payload_by_job_path["selected_inp"] == ""
+    assert payload_by_job_path["optimized_xyz_path"] == ""
 
 
 @pytest.mark.parametrize(

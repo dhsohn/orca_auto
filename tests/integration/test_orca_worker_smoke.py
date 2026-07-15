@@ -156,7 +156,11 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
 
     execution_snapshot = completed.metadata["execution_snapshot"]
     bound_input = Path(execution_snapshot["selected_inp"])
-    assert bound_input.is_relative_to((reaction_dir / ".orca_auto_orca_executions").resolve())
+    generation_dir = Path(execution_snapshot["execution_dir"])
+    assert generation_dir.parent == reaction_dir.resolve()
+    assert bound_input == generation_dir / selected_inp.name
+    assert not (reaction_dir / ".orca_auto_orca_executions").exists()
+    assert not (reaction_dir / ".orca_auto_input_snapshots").exists()
     out_path = bound_input.with_suffix(".out")
     assert out_path.exists()
     raw_output = out_path.read_text(encoding="utf-8")
@@ -172,11 +176,14 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert state["attempts"][0]["output_identity"]["path"] == str(out_path.resolve())
     assert state["final_result"] is not None
     assert state["final_result"]["status"] == "completed"
+    generation_state = load_state(generation_dir)
+    assert generation_state == state
 
     report = load_report_json(reaction_dir)
     assert report is not None
     assert report["status"]["state"] == "completed"
     assert report_json_path(reaction_dir).exists()
+    assert load_report_json(generation_dir) == report
     assert report_md_path(reaction_dir).exists()
     report_html = reaction_dir / RUN_REPORT_HTML_FILE
     assert report_html.exists()
@@ -197,6 +204,172 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert "-1.100000 Eh" in si_text
     assert "! Opt" in si_text
     assert "r2scan-3c" not in si_text
+
+
+def test_orca_queue_worker_reuses_job_directory_without_overwriting_prior_generation(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    admission_root = tmp_path / "admission"
+    bin_dir = tmp_path / "bin"
+    reaction_dir = allowed_root / "project_a" / "reusable_job"
+    for path in (allowed_root, admission_root, bin_dir, reaction_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    counter_path = tmp_path / "fake_orca_counter.txt"
+    fake_orca = bin_dir / "fake_orca.py"
+    _write_fake_orca(fake_orca, counter_path)
+    config_path = tmp_path / "orca_auto.yaml"
+    _write_orca_worker_config(
+        config_path,
+        allowed_root=allowed_root,
+        admission_root=admission_root,
+        orca_executable=fake_orca,
+    )
+    selected_inp = reaction_dir / "rxn.inp"
+    selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
+
+    assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
+    first_worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    first_worker.poll_interval_seconds = 0.05
+    assert first_worker.run_once(idle_message=None, blocked_message=None) == 0
+    [first_entry] = list_queue(allowed_root)
+    assert first_entry.status == QueueStatus.COMPLETED
+    first_generation = Path(first_entry.metadata["execution_snapshot"]["execution_dir"])
+    first_state = load_state(first_generation)
+    first_report = load_report_json(first_generation)
+    assert first_state is not None
+    assert first_report is not None
+    first_state_bytes = (first_generation / "job_state.json").read_bytes()
+    first_report_bytes = (first_generation / "job_report.json").read_bytes()
+
+    assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
+    entries = list_queue(allowed_root)
+    assert len(entries) == 2
+    [second_entry] = [entry for entry in entries if entry.status == QueueStatus.PENDING]
+    second_generation = Path(second_entry.metadata["execution_snapshot"]["execution_dir"])
+    assert second_generation != first_generation
+
+    second_worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    second_worker.poll_interval_seconds = 0.05
+    assert second_worker.run_once(idle_message=None, blocked_message=None) == 0
+
+    completed_entries = list_queue(allowed_root)
+    assert len(completed_entries) == 2
+    assert all(entry.status == QueueStatus.COMPLETED for entry in completed_entries)
+    assert counter_path.read_text(encoding="utf-8") == "2"
+    assert (first_generation / "job_state.json").read_bytes() == first_state_bytes
+    assert (first_generation / "job_report.json").read_bytes() == first_report_bytes
+    second_state = load_state(second_generation)
+    second_report = load_report_json(second_generation)
+    assert second_state is not None
+    assert second_report is not None
+    assert second_state["run_id"] != first_state["run_id"]
+    assert second_report["job"]["id"] != first_report["job"]["id"]
+    assert load_state(reaction_dir) == second_state
+    assert load_report_json(reaction_dir) == second_report
+
+
+def test_orca_worker_preflight_failure_publishes_generation_and_root_reports(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    admission_root = tmp_path / "admission"
+    bin_dir = tmp_path / "bin"
+    reaction_dir = allowed_root / "project_a" / "preflight_failure"
+    for path in (allowed_root, admission_root, bin_dir, reaction_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    counter_path = tmp_path / "fake_orca_counter.txt"
+    fake_orca = bin_dir / "fake_orca.py"
+    _write_fake_orca(fake_orca, counter_path)
+    config_path = tmp_path / "orca_auto.yaml"
+    _write_orca_worker_config(
+        config_path,
+        allowed_root=allowed_root,
+        admission_root=admission_root,
+        orca_executable=fake_orca,
+    )
+    (reaction_dir / "rxn.inp").write_text(
+        "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+        encoding="utf-8",
+    )
+
+    assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
+    [entry] = list_queue(allowed_root)
+    generation = Path(entry.metadata["execution_snapshot"]["execution_dir"])
+    bound_input = Path(entry.metadata["selected_inp"])
+    bound_input.chmod(0o600)
+    bound_input.write_text(
+        bound_input.read_text(encoding="utf-8") + "# corrupt\n", encoding="utf-8"
+    )
+
+    worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker.poll_interval_seconds = 0.05
+    assert worker.run_once(idle_message=None, blocked_message=None) == 0
+
+    [failed] = list_queue(allowed_root)
+    assert failed.status == QueueStatus.FAILED
+    assert not counter_path.exists()
+    root_state = load_state(reaction_dir)
+    generation_state = load_state(generation)
+    root_report = load_report_json(reaction_dir)
+    generation_report = load_report_json(generation)
+    assert root_state is not None and root_state["status"] == "failed"
+    assert generation_state == root_state
+    assert root_report is not None and root_report["status"]["state"] == "failed"
+    assert generation_report == root_report
+    assert root_report["job"]["id"] == entry.task_id
+
+
+def test_orca_worker_generation_replacement_never_receives_synthetic_artifacts(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    admission_root = tmp_path / "admission"
+    bin_dir = tmp_path / "bin"
+    reaction_dir = allowed_root / "project_a" / "replaced_generation"
+    for path in (allowed_root, admission_root, bin_dir, reaction_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    counter_path = tmp_path / "fake_orca_counter.txt"
+    fake_orca = bin_dir / "fake_orca.py"
+    _write_fake_orca(fake_orca, counter_path)
+    config_path = tmp_path / "orca_auto.yaml"
+    _write_orca_worker_config(
+        config_path,
+        allowed_root=allowed_root,
+        admission_root=admission_root,
+        orca_executable=fake_orca,
+    )
+    (reaction_dir / "rxn.inp").write_text(
+        "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+        encoding="utf-8",
+    )
+
+    assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
+    [entry] = list_queue(allowed_root)
+    generation = Path(entry.metadata["execution_snapshot"]["execution_dir"])
+    moved_generation = generation.with_name(f"{generation.name}-moved")
+    generation.rename(moved_generation)
+    generation.mkdir()
+    (generation / "sentinel").write_text("replacement", encoding="utf-8")
+
+    worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker.poll_interval_seconds = 0.05
+    assert worker.run_once(idle_message=None, blocked_message=None) == 0
+
+    [failed] = list_queue(allowed_root)
+    assert failed.status == QueueStatus.FAILED
+    assert not counter_path.exists()
+    root_state = load_state(reaction_dir)
+    root_report = load_report_json(reaction_dir)
+    assert root_state is not None and root_state["status"] == "failed"
+    assert root_report is not None and root_report["status"]["state"] == "failed"
+    assert root_report["job"]["id"] == entry.task_id
+    assert {path.name for path in generation.iterdir()} == {"sentinel"}
+    assert not (moved_generation / "job_state.json").exists()
+    assert not (moved_generation / "job_report.json").exists()
 
 
 def test_orca_queue_worker_rejects_return_code_zero_without_normal_marker(
@@ -330,13 +503,14 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     assert execution_snapshot["dependency_paths"] == [str(geometry.resolve())]
     assert set(execution_snapshot["materialized_inputs"]) == {"dependency_000000"}
     private_geometry = Path(execution_snapshot["materialized_inputs"]["dependency_000000"]["path"])
-    assert private_geometry.is_file()
+    assert private_geometry == Path(execution_snapshot["execution_dir"]) / geometry.name
+    assert private_geometry.read_bytes() == geometry.read_bytes()
     bound_input = Path(execution_snapshot["selected_inp"])
-    assert bound_input.is_relative_to((reaction_dir / ".orca_auto_orca_executions").resolve())
+    assert bound_input.parent == reaction_dir.resolve() / execution_snapshot["generation_name"]
+    assert not (bound_input.parent / ".inputs").exists()
     bound_text = bound_input.read_text(encoding="utf-8")
     assert "! HF STO-3G SP TightSCF" in bound_text
-    assert "* xyzfile 0 1 .inputs/dependency_000000-" in bound_text
-    assert '* xyzfile 0 1 ".inputs/' not in bound_text
+    assert "* xyzfile 0 1 h2.xyz" in bound_text
     out_path = bound_input.with_suffix(".out")
     raw_output = out_path.read_text(encoding="utf-8")
     assert "ORCA_ReadXYZFile::Error" not in raw_output

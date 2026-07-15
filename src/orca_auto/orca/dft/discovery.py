@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
@@ -13,6 +14,12 @@ from orca_auto.core.paths import (
     path_is_inside_workflow_workspace,
     should_exclude_from_production_runs_scan,
 )
+from orca_auto.core.queue.engine.input_snapshot import (
+    MAX_INPUT_SNAPSHOT_BYTES,
+    read_stable_regular_file,
+    require_direct_generation_owner,
+)
+from orca_auto.core.queue.generation import is_visible_generation_name
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +43,9 @@ def discover_orca_targets(
 
     Discovery is based on job_state.json:
     - Status is trusted only from job_state.status
-    - Output file tracks the latest .out in the job_state.json folder
+    - A public state selecting its direct visible generation tracks that
+      generation's latest .out; all other states track their own folder
+    - Mirrored state inside a visible generation is never a separate job
     - Workflow workspaces under the same runs root are skipped; their jobs
       are reported through the workflow views instead
     """
@@ -53,12 +62,33 @@ def discover_orca_targets(
 
         status = _state_status(data)
 
-        # Path info (reaction_dir, last_out_path) can be corrupted due to
-        # runtime environment differences, so we trust only the latest .out
-        # in the folder where job_state.json is located.
-        resolved = _find_latest_out_in_dir(state_path.parent)
-        if resolved is None or should_exclude_from_production_runs_scan(resolved, kb_path):
-            continue
+        requires_visible_generation, generation_dir = _selected_visible_generation_dir(
+            state_path=state_path,
+            data=data,
+            runs_root=kb_path,
+        )
+        if not requires_visible_generation:
+            # Legacy path info (reaction_dir, last_out_path, and selected_inp)
+            # can be stale after a runtime move.  Preserve same-directory
+            # discovery unless state provenance claims a visible generation.
+            resolved = _find_latest_out_in_dir(state_path.parent)
+            if resolved is None or should_exclude_from_production_runs_scan(resolved, kb_path):
+                continue
+        else:
+            if generation_dir is None:
+                # A state that claims the schema-v2 visible layout must never
+                # fall back to stale outputs in the public job root.  Missing,
+                # replaced, or otherwise unverifiable generations fail closed.
+                continue
+            # Visible generations are deliberately pruned from production
+            # scans so their mirrored state is not indexed as another job.
+            # The public root state is the sole authority for this exception.
+            resolved = _find_latest_out_in_dir(
+                generation_dir,
+                require_direct_regular_files=True,
+            )
+            if resolved is None:
+                continue
         _add_if_valid_target(
             resolved=resolved,
             max_bytes=max_bytes,
@@ -69,11 +99,209 @@ def discover_orca_targets(
     return sorted(targets.values(), key=lambda t: str(t.path))
 
 
-def _find_latest_out_in_dir(directory: Path) -> Path | None:
+def _selected_input_text(data: dict[str, Any]) -> str:
+    selected = str(data.get("selected_inp") or "").strip()
+    if selected:
+        return selected
+    input_payload = data.get("input")
+    if isinstance(input_payload, dict):
+        return str(input_payload.get("primary_path") or "").strip()
+    return ""
+
+
+def _execution_provenance(data: dict[str, Any]) -> dict[str, Any]:
+    provenance = data.get("execution_provenance")
+    if isinstance(provenance, dict):
+        return provenance
+    engine_payload = data.get("engine_payload")
+    if isinstance(engine_payload, dict):
+        provenance = engine_payload.get("execution_provenance")
+        if isinstance(provenance, dict):
+            return provenance
+    return {}
+
+
+def _path_names_visible_generation(path_text: str) -> bool:
+    if not path_text:
+        return False
+    try:
+        return is_visible_generation_name(Path(path_text).parent.name)
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _matches_bound_selected_identity(
+    selected: Path,
+    identity: Any,
+) -> bool:
+    if not isinstance(identity, dict) or set(identity) != {
+        "path",
+        "sha256",
+        "size_bytes",
+    }:
+        return False
+    expected_path = identity.get("path")
+    expected_sha256 = identity.get("sha256")
+    expected_size = identity.get("size_bytes")
+    if (
+        not isinstance(expected_path, str)
+        or expected_path != str(selected)
+        or not isinstance(expected_sha256, str)
+        or len(expected_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in expected_sha256)
+        or isinstance(expected_size, bool)
+        or not isinstance(expected_size, int)
+        or expected_size < 0
+        or expected_size > MAX_INPUT_SNAPSHOT_BYTES
+    ):
+        return False
+    try:
+        payload = read_stable_regular_file(
+            selected,
+            max_bytes=max(expected_size, 1),
+            require_single_link=True,
+        )
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return len(payload) == expected_size and hashlib.sha256(payload).hexdigest() == expected_sha256
+
+
+def _selected_visible_generation_dir(
+    *,
+    state_path: Path,
+    data: dict[str, Any],
+    runs_root: Path,
+) -> tuple[bool, Path | None]:
+    selected_text = _selected_input_text(data)
+    provenance = _execution_provenance(data)
+    execution_dir_text = str(provenance.get("execution_dir") or "").strip()
+    raw_identity = provenance.get("execution_dir_identity")
+    bound_selected_identity = provenance.get("bound_selected_identity")
+    generation_owner_token = str(provenance.get("generation_owner_token") or "").strip()
+
+    claims_visible_generation = bool(
+        "execution_dir_identity" in provenance
+        or _path_names_visible_generation(selected_text)
+        or (execution_dir_text and is_visible_generation_name(Path(execution_dir_text).name))
+    )
+    if not claims_visible_generation:
+        return False, None
+
+    if (
+        not selected_text
+        or not execution_dir_text
+        or not generation_owner_token
+        or not isinstance(raw_identity, dict)
+    ):
+        return True, None
+
+    device = raw_identity.get("device")
+    inode = raw_identity.get("inode")
+    if (
+        isinstance(device, bool)
+        or not isinstance(device, int)
+        or device < 0
+        or isinstance(inode, bool)
+        or not isinstance(inode, int)
+        or inode <= 0
+    ):
+        return True, None
+
+    selected = Path(selected_text)
+    raw_generation_dir = Path(execution_dir_text)
+    if (
+        not selected.is_absolute()
+        or selected.suffix.lower() != ".inp"
+        or not raw_generation_dir.is_absolute()
+        or not is_visible_generation_name(raw_generation_dir.name)
+    ):
+        return True, None
+
+    public_job_dir = state_path.parent
+
+    try:
+        if (
+            raw_generation_dir.is_symlink()
+            or not raw_generation_dir.is_dir()
+            or selected.is_symlink()
+            or not selected.is_file()
+        ):
+            return True, None
+        resolved_root = runs_root.resolve(strict=True)
+        resolved_job_dir = public_job_dir.resolve(strict=True)
+        resolved_generation_dir = raw_generation_dir.resolve(strict=True)
+        resolved_selected = selected.resolve(strict=True)
+        generation_status = raw_generation_dir.lstat()
+        job_status = resolved_job_dir.stat()
+        resolved_job_dir.relative_to(resolved_root)
+    except (OSError, RuntimeError, ValueError):
+        return True, None
+
+    if (
+        raw_generation_dir != resolved_generation_dir
+        or resolved_generation_dir.parent != resolved_job_dir
+        or selected != resolved_selected
+        or resolved_selected.parent != resolved_generation_dir
+        or (int(generation_status.st_dev), int(generation_status.st_ino)) != (device, inode)
+        or not _matches_bound_selected_identity(resolved_selected, bound_selected_identity)
+    ):
+        return True, None
+
+    try:
+        require_direct_generation_owner(
+            resolved_job_dir,
+            namespace=resolved_generation_dir.name,
+            expected_job_identity=(int(job_status.st_dev), int(job_status.st_ino)),
+            expected_generation_identity=(device, inode),
+            owner_token=generation_owner_token,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return True, None
+
+    # iter_production_runs_artifacts preserves the caller's lexical runs-root
+    # alias, while runtime state stores resolved physical paths.  Rebase the
+    # proven direct generation onto the public job path so a safely symlinked
+    # runs root keeps its existing discovery behavior.
+    public_generation_dir = public_job_dir / raw_generation_dir.name
+    public_selected = public_generation_dir / selected.name
+    try:
+        if public_generation_dir.is_symlink() or public_selected.is_symlink():
+            return True, None
+        if (
+            public_generation_dir.resolve(strict=True) != resolved_generation_dir
+            or public_selected.resolve(strict=True) != resolved_selected
+        ):
+            return True, None
+    except (OSError, RuntimeError):
+        return True, None
+    return True, public_generation_dir
+
+
+def _find_latest_out_in_dir(
+    directory: Path,
+    *,
+    require_direct_regular_files: bool = False,
+) -> Path | None:
     if not directory.is_dir():
         return None
+    resolved_directory: Path | None = None
+    if require_direct_regular_files:
+        try:
+            if directory.is_symlink():
+                return None
+            resolved_directory = directory.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return None
     latest: tuple[float, Path] | None = None
     for candidate in directory.glob("*.out"):
+        if require_direct_regular_files:
+            try:
+                if candidate.is_symlink() or candidate.resolve(strict=True).parent != (
+                    resolved_directory
+                ):
+                    continue
+            except (OSError, RuntimeError):
+                continue
         if not candidate.is_file():
             continue
         try:

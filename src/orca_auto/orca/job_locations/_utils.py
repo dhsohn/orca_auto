@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.paths import (
-    first_existing_named_file,
     iter_existing_dirs,
     recent_file_candidates,
     resolved_path_text,
@@ -128,10 +128,16 @@ def prefer_orca_optimized_xyz(
     current_dir: Path | None,
     latest_known_path: str,
     last_out_path: str,
+    excluded_xyz_paths: Iterable[str] = (),
 ) -> str:
     selected_inp_path = resolve_existing_path(selected_inp)
     selected_input_xyz_path = resolve_existing_path(selected_input_xyz)
     last_out = resolve_existing_path(last_out_path)
+    excluded: set[Path] = set()
+    for path_text in excluded_xyz_paths:
+        resolved = resolve_existing_path(path_text)
+        if resolved is not None and not resolved.is_dir():
+            excluded.add(resolved)
 
     search_dirs = iter_existing_dirs(
         selected_inp_path.parent
@@ -141,11 +147,11 @@ def prefer_orca_optimized_xyz(
         path_or_parent(latest_known_path),
         last_out.parent if last_out is not None and not last_out.is_dir() else None,
     )
-    preferred_match = first_existing_named_file(
-        search_dirs, preferred_xyz_names(selected_inp_path, last_out)
-    )
-    if preferred_match:
-        return preferred_match
+    for search_dir in search_dirs:
+        for filename in preferred_xyz_names(selected_inp_path, last_out):
+            candidate = resolve_existing_path(search_dir / filename)
+            if candidate is not None and not candidate.is_dir() and candidate not in excluded:
+                return resolved_path_text(candidate)
 
     source_input = None
     if selected_input_xyz_path is not None and not selected_input_xyz_path.is_dir():
@@ -153,8 +159,13 @@ def prefer_orca_optimized_xyz(
             source_input = selected_input_xyz_path.resolve()
         except OSError:
             source_input = selected_input_xyz_path
+        excluded.add(source_input)
 
-    xyz_candidates = recent_file_candidates(search_dirs, suffix=".xyz", exclude=source_input)
+    xyz_candidates = [
+        candidate
+        for candidate in recent_file_candidates(search_dirs, suffix=".xyz")
+        if resolve_existing_path(candidate) not in excluded
+    ]
     if not xyz_candidates:
         return ""
     return resolved_path_text(xyz_candidates[0])

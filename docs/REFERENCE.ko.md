@@ -254,13 +254,33 @@ worker_pid: 12345
 
 ORCA 고유 노트:
 
-- 제출할 때 최신 `*.inp`를 선택한 뒤 해당 큐 generation의 변경 불가능한 private 복사본을
-  실행합니다. 제출 성공 뒤 원본을 편집해도 큐에 들어간 계산은 바뀌지 않습니다. 편집한
-  입력을 실행하려면 새 generation으로 다시 제출하세요.
+- 제출할 때 최신 `*.inp`를 선택한 뒤 제출한 작업 디렉터리 바로 아래에 눈에 보이는
+  `generation-YYYYMMDD-HHMMSS-<8자리 hex>/`를 만듭니다. 실제 실행 입력은 선택한
+  `.inp`의 basename을, 지원하는 참조 파일은 각 소스 basename을 그대로 유지하며 raw
+  ORCA 출력도 같은 단계에 기록합니다. 제출 성공 뒤 원본을 편집해도 큐에 들어간 계산은
+  바뀌지 않습니다.
+- 완전히 닫힌 작업 디렉터리는 `--force` 없이 다시 제출할 수 있고 제출마다 새 sibling
+  generation을 만듭니다. 같은 작업 디렉터리에 pending/running/retrying/cancel-pending 행이나
+  미완료 terminal replay가 남아 있으면 새 generation을 차단합니다. `--force`도 이 안전
+  차단을 우회하지 않습니다.
+- 하나의 입력이 서로 다른 소스 경로에 있는 같은 basename의 파일들을 참조하면, 바이트가
+  완전히 같아도 제출을 fail-closed합니다. 같은 canonical 소스 경로를 반복해서 참조하는
+  경우는 의존성 하나로 유지하며 basename 충돌로 보지 않습니다. ORCA가 해당
+  의존성 이름을 출력으로 만들지 않는 route에서는 선택 입력과 stem만 같아도 됩니다.
+  예를 들어 SP `h2.inp`는 `h2.xyz`를 참조할 수 있고 두 exact basename을 그대로
+  유지합니다. Opt, OptTS, ScanTS, NEB, IRC에서는 같은 stem의 XYZ가 보통 ORCA
+  출력입니다. 단 하나의 예외로, 주 `* xyzfile` geometry만 같은 stem을 쓰는 경우에는
+  좌표를 바인딩한 `.inp` 안에 inline하고 exact XYZ basename도 그대로 보이며 ORCA가
+  실행 중 그 파일을 제자리에서 갱신할 수 있습니다. 같은 stem의 보조 NEB Product/TS
+  파일은 계속 거부합니다. 주파수를 생성하는 route는 `<stem>.hess`를, 모든 route는
+  `<stem>.out`과 `<stem>.gbw`를 예약합니다. 선택 `.inp` basename과 generation 자체가
+  소유하는 `job_state.json`, `job_report.json`, `orca.process.json`,
+  `.orca.process.lock`도 의존성 basename으로 쓰면 제출 단계에서 거부합니다. `%base`와
+  NEB restart-GBW basename 제어 같은 출력 base override는 ORCA가 generation 밖에 쓰지
+  못하도록 지원하지 않고 fail-closed합니다.
 - 큐 워커는 직접 `reaction_dir` 명령줄을 전달하는 대신 큐 id로 실행합니다. 큐 항목은
   여전히 `reaction_dir`를 저장하며, 다운스트림 ORCA/워크플로우 계약은 그 필드를 계속
   사용해야 합니다.
-- `--force`는 완료된 출력이 이미 존재해도 다시 실행합니다.
 - 단독 ORCA 자원 메타데이터는 선택된 입력의 `%pal` 및 `%maxcore` 지시어에서 오며,
   그 지시어가 없을 때만 설정 기본값이 주입됩니다. 공유 `--max-cores`와
   `--max-memory-gb` 플래그는 단독 ORCA 입력 지시어를 재정의하지 않습니다.
@@ -515,26 +535,34 @@ ORCA 고유 노트:
   제한하며, ORCA 입력의 파일 참조 지시어는 최대 128개입니다. CREST는 파일별 상한만
   있고 별도 aggregate 상한은 없습니다. downstream 출력 XYZ materialization 상한은
   512 MiB입니다.
-- xTB/CREST snapshot은 `.orca_auto_input_snapshots/` 아래에서 제출마다 배타적으로 예약한
-  고유 private 디렉터리에 있으며 공개 task id만으로 snapshot 소유권을 정하지 않습니다.
-  ORCA는 `.orca_auto_orca_executions/generation-*` 아래에서 지원되는 XYZ, GBW,
-  Hessian, point-charge, IRC, NEB 의존성을 가둬 복사하고 참조를 다시 쓴 private 입력 트리를
-  실행합니다. 이 숨은 실제 실행 경로는 사용자용 소스 경로와 다를 수 있습니다. 감사용
-  provenance는 해당될 때 source path, executed path, SHA-256, byte size를 기록합니다. 큐에
-  들어간 작업을 바꾸기 위해 숨은 snapshot을 편집하지 마세요.
-- 이 숨은 트리는 큐 replay, retry, reconciliation, 감사에 필요하도록 보존합니다. 독립적인
-  snapshot GC 명령은 없습니다. pending, running, retrying, cancel-pending 또는 복구 가능한
-  terminal 행이 사용하는 트리는 삭제하면 안 됩니다. 어떤 큐나 복구 레코드도 더는 참조하지
-  않음을 확인한 뒤 의도적으로 퇴역시키는 작업/워크플로우와 함께만 회수하세요.
+- xTB/CREST snapshot은 계속 `.orca_auto_input_snapshots/` 아래에서 제출마다 배타적으로
+  예약한 고유 private 디렉터리를 사용하며 공개 task id만으로 snapshot 소유권을 정하지
+  않습니다.
+- 새 ORCA 제출은 작업 디렉터리 바로 아래에
+  `generation-YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 눈에 보이게 만듭니다. 실제 실행
+  `.inp`는 소스 basename을 유지합니다. 가둬 복사한 XYZ, GBW, Hessian, point-charge, IRC,
+  NEB 의존성도 소스 basename을 유지하고 `.inputs/` 단계는 없습니다. ORCA raw 출력은 이
+  입력들과 나란히 기록합니다. 새 ORCA 제출은 `.orca_auto_orca_executions/`나 ORCA용
+  `.orca_auto_input_snapshots/`를 만들지 않습니다. 감사용 provenance는 계속 source path,
+  executed path, SHA-256, byte size를 기록하므로 읽기 쉬운 이름이 콘텐츠 정체성 검증을
+  약화하지 않습니다.
+- snapshot과 generation 트리는 큐 replay, retry, reconciliation, 감사에 필요하도록
+  보존합니다. 독립적인 snapshot GC 명령은 없습니다. pending, running, retrying,
+  cancel-pending 또는 복구 가능한 terminal 행이 사용하는 generation은 편집하거나
+  삭제하면 안 됩니다. 어떤 큐나 복구 레코드도 더는 참조하지 않음을 확인한 뒤 의도적으로
+  퇴역시키는 작업/워크플로우와 함께만 회수하세요.
 - xTB/CREST는 작업별 clean `HOME`/`XDG_CONFIG_HOME`과 캡처된 `PATH`,
   `LD_LIBRARY_PATH`, `XTBPATH`, `XTBHOME`을 사용합니다. 실행 전후로 실행 파일 경로,
   SHA-256, 크기를 검증합니다. 공유 라이브러리, `XTBPATH`, `XTBHOME`을 통해 도달하는 내용은
   snapshot하지 않으며 엔진 semantic version도 자동 probe하지 않습니다. 작업 수명 동안
   qualification한 정확한 배포본과 외부 파라미터를 변경하지 말고 worker UID의 다른 프로세스를
   적대적 격리 tenant로 간주하지 마세요.
-- 이 snapshot 형식을 배포하기 전에는 업그레이드 전 xTB, CREST, ORCA 큐 행을 이전 빌드로
-  drain하거나 취소/clear한 뒤 업그레이드 후 다시 제출하세요. snapshot이 없는 행은 in-place로
-  채택하지 않고 fail-closed합니다.
+- ORCA visible-generation 형식을 배포하기 전에는 이전 빌드의 pending/active ORCA 행을
+  모두 drain하고 미완료 terminal replay와 snapshot intent를 끝내세요. 또는 영향받는 작업을
+  취소/clear한 뒤 업그레이드 후 다시 제출하세요. 구형 행은 in-place로 채택하지 않습니다.
+  기존 terminal `.orca_auto_orca_executions/`와 ORCA용
+  `.orca_auto_input_snapshots/` 이력은 제자리에 보존하며 업그레이드가 옮기거나 이름을
+  바꾸지 않습니다. xTB/CREST snapshot 배치는 바뀌지 않습니다.
 - 새 xTB/CREST 종료 출력은 downstream 파싱 전에 검증하는 콘텐츠 정체성을 가집니다. 완료된
   legacy 출력에는 읽는 시점의 표시된 identity backfill을 만들 수 있지만, 이것이 과거 종료
   시점의 바이트를 소급해 증명하지는 않습니다. 같은 generation의 정확한 terminal
@@ -804,9 +832,9 @@ Opt 모드 완료:
 
 ## 11) 출력 파일
 
-작업 디렉터리에 생성됨:
+제출한 ORCA 작업 디렉터리에는 사용자가 작성한 입력, `run.lock`, 최신 공개
+상태/리포트가 남습니다:
 
-- `<stem>.out`, `<stem>.retryNN.out`
 - `job_state.json`
 - `job_report.json`
 - `job_report.md`
@@ -822,6 +850,41 @@ Opt 모드 완료:
   허수 모드 요약, 최종 좌표, 그리고 리뷰어가 잡을 문제를 표시하는 `⚠` lint
   라인을 담은 복사-붙여넣기용 Supporting Information 블록을 생성합니다. IRC
   route는 좌표 없는 요약 전용 validation 블록을 생성합니다.
+
+각 제출의 바인딩 입력과 raw 출력은 눈에 보이는 직접 하위 디렉터리 하나에 배치됩니다.
+예:
+
+```text
+TS8(NEB-TS)/
+├── nebts.inp
+├── input.xyz
+├── output.xyz
+├── guessTS.xyz
+├── job_state.json
+├── job_report.json
+├── run.lock
+└── generation-20260714-224054-959479f2/
+    ├── nebts.inp
+    ├── input.xyz
+    ├── output.xyz
+    ├── guessTS.xyz
+    ├── nebts.out
+    ├── nebts.gbw
+    ├── nebts.NEB.log
+    ├── job_state.json
+    └── job_report.json
+```
+
+이 예시는 모든 파일을 나열한 것이 아닙니다. 내부 동기화 파일인 `.orca.process.lock`은
+generation과/또는 작업 루트에, `.job_state.mutation.lock`은 작업 루트에 남을 수 있습니다.
+ORCA 프로세스 기록이 활성인 동안에는 해당 generation에 `orca.process.json`이 존재합니다.
+
+generation의 실제 실행 `.inp`는 선택한 소스의 basename을 정확히 유지하므로 ORCA
+출력 stem에 `.run`이나 `.bound`를 더하지 않습니다. 참조 입력도 원래
+basename을 유지합니다. generation의 `job_state.json`과 `job_report.json`은 그
+generation 기록을 mirror하고, 작업 루트의 복사본은 최신 공개 요약으로서 나중에
+생긴 sibling generation에 의해 갱신됩니다. `run.lock`은 작업 루트에 남으며, 파일이
+존재한다는 사실만으로 현재 프로세스가 lock을 소유한다고 판정할 수는 없습니다.
 
 주요 `job_state.json` 필드:
 
@@ -864,10 +927,11 @@ Opt 모드 완료:
 - `attempts[]`
 - `final_result`
 
-snapshot에 바인딩된 작업에서 `selected_inp`/attempt `inp_path`는 실제 실행한 정확한 private
-입력을 가리킵니다. `execution_provenance.source_selected_inp`는 제출 때 선택한 사용자용
-소스를 기록하고, 바인딩/구체화한 identity 및 attempt identity 레코드는 path, SHA-256,
-byte size를 보존합니다.
+snapshot에 바인딩된 작업에서 `selected_inp`/attempt `inp_path`는 visible generation
+안에서 실제 실행한 정확한 바인딩 입력을 가리킵니다.
+`execution_provenance.source_selected_inp`는 제출 때 선택한 사용자용 소스를 기록하고,
+바인딩/구체화한 identity 및 attempt identity 레코드는 path, SHA-256, byte size를
+보존합니다.
 
 ## 11.1) 다운스트림 계약 동결
 
@@ -941,7 +1005,8 @@ ORCA 핸드오프 계약은 `orca_auto.flow` 같은 다운스트림 도구에 �
 4. 원한다면 제출 터미널을 닫습니다.
 5. `list` 또는 `journalctl`로 모니터링합니다.
 6. 완료 후 `job_report.md`를 검토합니다.
-7. 의도적인 재실행이 필요할 때만 `--force`를 사용합니다.
+7. 완전히 닫힌 standalone ORCA 디렉터리를 재실행하려면 그냥 다시 제출합니다.
+   `--force` 없이 새 sibling generation이 생깁니다.
 
 ## 13) 자주 마주치는 문제
 

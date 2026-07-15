@@ -8,6 +8,35 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Changed
+
+- New standalone ORCA submissions now create one visible
+  `generation-YYYYMMDD-HHMMSS-<8-hex>` directory directly under the submitted
+  job directory. The bound `.inp`, supported referenced inputs under their
+  original basenames, and raw ORCA outputs all live at that one level; new ORCA
+  submissions no longer create `.orca_auto_orca_executions/`, a nested
+  `.inputs/`, or an ORCA `.orca_auto_input_snapshots/` tree. Referenced files
+  from different source paths that have the same basename always fail
+  submission, even when their bytes match. A sole main same-stem `* xyzfile`
+  geometry is inlined into the bound input and
+  remains visible under its exact basename for ORCA to update; same-stem
+  auxiliary NEB Product/TS inputs remain rejected.
+- A fully closed standalone ORCA job directory can be submitted again without
+  replacing prior results. Each submission receives a new sibling generation,
+  while an active row or incomplete terminal replay still blocks a successor.
+  `job_state.json` and `job_report.json` remain the latest public summaries at
+  the job root and are mirrored into the generation they describe.
+- Visible generations retain an invisible filesystem owner token. State/report
+  mirroring, historical lookups, cleanup, and DFT discovery verify that token so
+  a deleted and recreated same-name directory is not mistaken for the submitted
+  generation, even if a filesystem reuses its inode.
+
+Deployment upgrade note: before switching to this ORCA generation format, drain
+old-build pending and active ORCA rows and finish every terminal replay and
+snapshot intent, or cancel/clear and resubmit them after the upgrade. Existing
+terminal hidden generations are retained as history; there is no in-place
+migration.
+
 ### Fixed
 
 - Restarting the ORCA worker no longer treats historical terminal queue rows as

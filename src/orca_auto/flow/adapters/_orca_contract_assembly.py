@@ -105,6 +105,7 @@ class _ContractPayloadDeps:
         include_state: bool = True,
         include_report: bool = True,
         queue_entry: ContractPayload | None = None,
+        report_md_dir: Path | None = None,
     ) -> dict[str, str]:
         return _canonical_payload.runtime_paths(
             current_dir,
@@ -114,6 +115,7 @@ class _ContractPayloadDeps:
             include_state=include_state,
             include_report=include_report,
             queue_entry=queue_entry,
+            report_md_dir=report_md_dir,
         )
 
     def attempt_count(self, state: ContractPayload, report: ContractPayload) -> int:

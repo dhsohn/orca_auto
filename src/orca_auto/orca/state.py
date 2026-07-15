@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Mapping
 from pathlib import Path
@@ -9,6 +10,10 @@ from orca_auto.core.artifacts import (
     RUN_REPORT_JSON_FILE,
     RUN_REPORT_MD_FILE,
     RUN_STATE_FILE,
+)
+from orca_auto.core.engine_process import (
+    atomic_write_confined_bytes,
+    require_confined_regular_file,
 )
 from orca_auto.core.engines.artifacts import (
     EngineArtifactInput,
@@ -20,6 +25,8 @@ from orca_auto.core.engines.artifacts import (
     build_engine_artifact_payload,
     build_engine_report_markdown,
 )
+from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
+from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.utils.lock import file_lock
 from orca_auto.core.utils.persistence import (
     atomic_write_json,
@@ -73,6 +80,127 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _selected_input_text(payload: Mapping[str, Any]) -> str:
+    selected = _text(payload.get("selected_inp"))
+    if selected:
+        return selected
+    input_payload = payload.get("input")
+    if isinstance(input_payload, Mapping):
+        return _text(input_payload.get("primary_path"))
+    return ""
+
+
+def _execution_provenance(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    provenance = payload.get("execution_provenance")
+    if isinstance(provenance, Mapping):
+        return provenance
+    engine_payload = payload.get("engine_payload")
+    if isinstance(engine_payload, Mapping):
+        provenance = engine_payload.get("execution_provenance")
+        if isinstance(provenance, Mapping):
+            return provenance
+    return {}
+
+
+def _visible_generation_artifact_dir(
+    reaction_dir: Path,
+    payload: Mapping[str, Any],
+) -> tuple[Path, tuple[int, int]] | None:
+    selected_text = _selected_input_text(payload)
+    provenance = _execution_provenance(payload)
+    execution_dir_text = _text(provenance.get("execution_dir"))
+    raw_identity = provenance.get("execution_dir_identity")
+    bound_selected_identity = provenance.get("bound_selected_identity")
+    generation_owner_token = _text(provenance.get("generation_owner_token"))
+    if (
+        not selected_text
+        or not execution_dir_text
+        or not generation_owner_token
+        or not isinstance(raw_identity, Mapping)
+        or not isinstance(bound_selected_identity, Mapping)
+    ):
+        return None
+    try:
+        device = int(raw_identity.get("device", -1))
+        inode = int(raw_identity.get("inode", -1))
+        resolved_reaction_dir = reaction_dir.expanduser().resolve(strict=True)
+        raw_generation_dir = Path(execution_dir_text).expanduser()
+        generation_dir = raw_generation_dir.resolve(strict=True)
+        generation_status = raw_generation_dir.lstat()
+        reaction_status = resolved_reaction_dir.stat()
+        raw_selected = Path(selected_text).expanduser()
+        selected = require_confined_regular_file(
+            generation_dir,
+            raw_selected,
+            label="ORCA generation selected input",
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
+    if (
+        device < 0
+        or inode <= 0
+        or not raw_generation_dir.is_absolute()
+        or raw_generation_dir != generation_dir
+        or raw_generation_dir.is_symlink()
+        or generation_dir.parent != resolved_reaction_dir
+        or not is_visible_generation_name(generation_dir.name)
+        or not generation_dir.is_dir()
+        or raw_selected != selected
+        or selected.parent != generation_dir
+        or _text(bound_selected_identity.get("path")) != str(selected)
+        or (int(generation_status.st_dev), int(generation_status.st_ino)) != (device, inode)
+    ):
+        return None
+    try:
+        require_direct_generation_owner(
+            resolved_reaction_dir,
+            namespace=generation_dir.name,
+            expected_job_identity=(
+                int(reaction_status.st_dev),
+                int(reaction_status.st_ino),
+            ),
+            expected_generation_identity=(device, inode),
+            owner_token=generation_owner_token,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
+    return generation_dir, (device, inode)
+
+
+def _write_generation_json(
+    target: tuple[Path, tuple[int, int]],
+    path: Path,
+    payload: Mapping[str, Any],
+) -> None:
+    _write_generation_bytes(
+        target,
+        path,
+        json.dumps(
+            payload,
+            ensure_ascii=True,
+            indent=2,
+            sort_keys=False,
+            allow_nan=False,
+        ).encode("utf-8"),
+    )
+
+
+def _write_generation_bytes(
+    target: tuple[Path, tuple[int, int]],
+    path: Path,
+    payload: bytes,
+) -> None:
+    generation_dir, generation_identity = target
+    atomic_write_confined_bytes(
+        generation_dir,
+        path,
+        payload,
+        label="ORCA generation artifact",
+        mode=0o600,
+        expected_parent_identity=generation_identity,
+    )
 
 
 def _state_from_normalized_payload(payload: dict[str, Any]) -> RunState | None:
@@ -144,10 +272,18 @@ def write_state(reaction_dir: Path, state: Mapping[str, Any]) -> Path:
     state_payload["updated_at"] = now_utc_iso()
     path = state_path(reaction_dir)
     durable_mkdir(reaction_dir, parents=True, exist_ok=True)
+    payload = _normalized_payload_from_state(reaction_dir, state_payload)
     with file_lock(reaction_dir / STATE_MUTATION_LOCK_FILE_NAME):
+        generation_target = _visible_generation_artifact_dir(reaction_dir, state_payload)
+        if generation_target is not None:
+            _write_generation_json(
+                generation_target,
+                state_path(generation_target[0]),
+                payload,
+            )
         atomic_write_json(
             path,
-            _normalized_payload_from_state(reaction_dir, state_payload),
+            payload,
             ensure_ascii=True,
             indent=2,
         )
@@ -250,6 +386,13 @@ def write_report_json(reaction_dir: Path, report_payload: dict[str, Any]) -> Pat
             "final_result": cast(RunFinalResult | None, report_payload.get("final_result")),
         }
         payload = _normalized_payload_from_state(reaction_dir, state)
+    generation_target = _visible_generation_artifact_dir(reaction_dir, payload)
+    if generation_target is not None:
+        _write_generation_json(
+            generation_target,
+            report_json_path(generation_target[0]),
+            payload,
+        )
     atomic_write_json(path, payload, ensure_ascii=True, indent=2)
     return path
 
@@ -264,10 +407,8 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
     """Write the Markdown body before publishing JSON as the report commit marker."""
 
     report_payload = _normalized_payload_from_state(reaction_dir, state)
-    md_path = write_report_md(
-        reaction_dir,
-        "\n".join(build_engine_report_markdown(report_payload)),
-    )
+    markdown = "\n".join(build_engine_report_markdown(report_payload))
+    md_path = write_report_md(reaction_dir, markdown)
     json_path = write_report_json(reaction_dir, report_payload)
     reports = {"report_json": str(json_path), "report_md": str(md_path)}
     html_path = write_job_html_report(reaction_dir, state)

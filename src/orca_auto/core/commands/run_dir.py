@@ -14,7 +14,10 @@ from orca_auto.core.paths import (
     validate_job_dir,
 )
 from orca_auto.core.paths.workflow import workflow_workspace_internal_engine_paths_from_path
-from orca_auto.core.queue.generation import queue_entry_generation_token
+from orca_auto.core.queue.generation import (
+    is_visible_generation_name,
+    queue_entry_generation_token,
+)
 from orca_auto.core.queue.priority import normalize_queue_priority
 
 SUPPRESS_QUEUED_NOTIFICATION_CONTEXT_KEY = "suppress_queued_notification"
@@ -64,13 +67,26 @@ def validate_production_run_dir_target(
 ) -> None:
     """Reject public submission of the production root's smoke artifacts."""
 
-    if not is_path_in_reserved_smoke_tree(raw_job_dir, runs_root):
+    if is_path_in_reserved_smoke_tree(raw_job_dir, runs_root):
+        reserved_root = Path(runs_root).expanduser() / SMOKE_RESULTS_DIRNAME
+        raise ValueError(
+            "run-dir target is inside the reserved smoke-results subtree: "
+            f"{reserved_root}. Smoke cases must use their case-local runs_root configuration."
+        )
+    try:
+        relative = (
+            Path(raw_job_dir)
+            .expanduser()
+            .resolve()
+            .relative_to(Path(runs_root).expanduser().resolve())
+        )
+    except (OSError, RuntimeError, ValueError):
         return
-    reserved_root = Path(runs_root).expanduser() / SMOKE_RESULTS_DIRNAME
-    raise ValueError(
-        "run-dir target is inside the reserved smoke-results subtree: "
-        f"{reserved_root}. Smoke cases must use their case-local runs_root configuration."
-    )
+    if any(is_visible_generation_name(component) for component in relative.parts):
+        raise ValueError(
+            "run-dir target is inside an ORCA execution generation; submit its public parent "
+            f"job directory instead: {raw_job_dir}"
+        )
 
 
 @dataclass(frozen=True)

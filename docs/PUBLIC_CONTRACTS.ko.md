@@ -75,6 +75,10 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   나중에 실행합니다.
 - 새 제출이 성공하면 `status: queued`를 반환합니다.
 - 큐 제출 성공 뒤 제출 터미널을 닫아도 안전합니다.
+- 완전히 닫힌 standalone ORCA 작업 디렉터리는 다시 제출할 수 있고, 새 제출은
+  sibling visible generation을 만듭니다. 활성 행이나 미완료 terminal replay/fence 상태가
+  남아 있으면 같은 디렉터리의 후속 제출을 계속 차단하며 `--force`로 우회할 수
+  없습니다.
 - `queue cancel`은 화면에 보이는 activity id와 workflow id, queue id, run id, 경로 alias를
   대상으로 받을 수 있습니다.
 - 스크립트는 `queue list --json`, `queue cancel --json`, `service status --json`을 사용해야
@@ -233,10 +237,29 @@ replay하지 않고 오류를 기록하며, clear와 강제 후속 제출을 막
 fence marker는 내부 구현 상태이므로 client가 편집하면 안 됩니다.
 
 xTB-MD/xTB/CREST 큐 산출물에는 내부 immutable-generation fingerprint가 기록되고, 새
-xTB-MD/xTB/CREST/ORCA 행에는 제출 시점 execution snapshot이 들어갑니다. 이 필드가 없던
-빌드에서 업그레이드하기 전에는 이전 빌드로 해당 행을 drain하거나 취소/clear한 뒤 새
-빌드에서 다시 제출해야 합니다. snapshot 이전 큐 행의 in-place adoption은 지원하지
-않으며, 검증할 수 없는 산출물은 새 generation에 연결하지 않고 fail-closed합니다.
+xTB-MD/xTB/CREST/ORCA 행에는 제출 시점 execution snapshot이 들어갑니다. 새 ORCA
+행은 snapshot schema 2와 직접 하위 visible
+`generation-YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 사용하고 ORCA용
+`.orca_auto_input_snapshots/`, `.orca_auto_orca_executions/`, 중첩 `.inputs/`를 만들지
+않습니다. 바인딩한 선택 `.inp`와 의존성은 소스 basename을 유지합니다. 서로 다른
+소스 경로가 같은 basename을 쓰면 바이트가 같아도 제출을 fail-closed합니다.
+Basename이 다르고 ORCA가 그 이름을 출력으로
+만들지 않는 route라면 선택 입력과 stem을 공유해도 됩니다. SP `h2.inp`는
+`h2.xyz`를 참조할 수 있고 두 이름을 그대로 보존합니다. `<stem>.xyz`를 출력하는
+route에서도 주 `* xyzfile` 의존성 하나만 그 exact 이름을 쓰는 경우는 허용합니다.
+바인딩 `.inp`에 그 좌표를 inline하고, 실행 뒤 ORCA가 visible XYZ를 갱신할 수 있습니다.
+같은 stem의 보조 NEB Product/TS 입력은 계속 지원하지 않습니다. 주파수 route는
+`<stem>.hess`를, 모든 route는 `<stem>.out`과 `<stem>.gbw`를 예약합니다. 선택 `.inp`
+basename과 generation이 소유하는 `job_state.json`, `job_report.json`,
+`orca.process.json`, `.orca.process.lock`도 의존성 basename으로 쓰면 제출 단계에서
+거부합니다. `%base`와 NEB restart-GBW basename 제어 같은 출력 base override도
+fail-closed합니다.
+
+이 ORCA 형식을 배포하기 전에는 이전 빌드의 pending/active ORCA 행을 모두 drain하고
+미완료 terminal replay와 snapshot intent를 끝내야 합니다. 또는 영향받는 작업을 취소/clear한 뒤
+새 빌드에서 다시 제출하세요. In-place adoption이나 migration은 지원하지 않습니다. 기존
+terminal 숨은 ORCA generation은 이력 산출물로 제자리에 보존합니다. 검증할 수 없는 산출물은
+새 generation에 연결하지 않고 fail-closed합니다.
 xTB-MD/xTB/CREST snapshot은 공개 task id만으로 소유권을 정하지 않고 제출마다 배타적으로 예약한
 고유 namespace를 사용합니다.
 Generation 디렉터리를 만들기 전에 소유 queue root에 내부 durable intent를 기록합니다.
@@ -283,7 +306,8 @@ path, SHA-256, byte size, modification time을 바인딩합니다.
 
 ## ORCA 작업 산출물 계약
 
-완료, 실패, 취소, 스킵된 ORCA 작업은 작업 디렉터리 옆에 다음 산출물을 씁니다:
+제출한 ORCA 작업 루트는 `run.lock`을 두고 완료, 실패, 취소, 스킵된 작업의 최신
+공개 산출물을 노출합니다:
 
 - `job_state.json`
 - `job_report.json`
@@ -292,6 +316,14 @@ path, SHA-256, byte size, modification time을 바인딩합니다.
 - 정류점으로 끝나는 완료 작업에는 `si_block.md` (route, 에너지, 열화학, Nimag,
   좌표를 담은 복사-붙여넣기용 Supporting Information 블록), IRC route에는 좌표
   없는 요약 전용 validation 블록
+
+각 새 제출은 직접 하위 visible `generation-YYYYMMDD-HHMMSS-<8자리 hex>/`
+하나를 소유합니다. 그 디렉터리에는 소스 basename을 정확히 유지한 바인딩 `.inp`, 지원하는
+의존성, raw ORCA 출력, generation 로컬 `job_state.json`과 `job_report.json` mirror가
+들어갑니다. 루트 JSON은 최신 공개 요약이므로 더 새로운 sibling을 가리키도록 갱신될 수
+있고, generation JSON은 자신이 설명하는 generation의 기록을 보존합니다. 루트에
+`run.lock` 파일이 존재한다는 사실만으로 현재 advisory lock이 소유된다고 판정할 수는
+없습니다.
 
 `job_state.json`과 `job_report.json`은 정규화된 엔진 산출물 형태를 사용합니다:
 
@@ -315,9 +347,9 @@ path, SHA-256, byte size, modification time을 바인딩합니다.
 - `job.dir`은 작업 디렉터리를 가리킵니다.
 - `status.state`는 작업 상태입니다.
 - `status.reason`은 가능할 때 현재 또는 최종 reason입니다.
-- snapshot에 바인딩된 행의 `input.primary_path`는 이후 변경 가능한 소스 경로가 아니라 실제
-  실행한 정확한 private ORCA 입력입니다. ORCA execution provenance는 선택한 소스 경로와
-  바인딩한 콘텐츠 정체성을 보존합니다.
+- snapshot에 바인딩된 행의 `input.primary_path`는 이후 변경 가능한 소스 경로가 아니라
+  visible generation 안에서 실제 실행한 정확한 바인딩 ORCA 입력입니다. ORCA execution
+  provenance는 선택한 소스 경로와 바인딩한 콘텐츠 정체성을 보존합니다.
 - `timestamps.started_at`, `timestamps.updated_at`, `timestamps.finished_at`은 가능할 때
   UTC 계열 ISO 문자열입니다.
 - `artifacts.last_out_path`는 알려진 경우 마지막 ORCA 출력 경로입니다.

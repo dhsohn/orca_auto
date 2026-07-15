@@ -112,3 +112,19 @@ def test_production_artifact_iterator_prunes_reserved_top_level_tree(
     ]
     assert production_job in traversed_roots
     assert production_root / SMOKE_RESULTS_DIRNAME not in traversed_roots
+
+
+def test_visible_execution_generation_is_not_indexed_as_a_second_job(tmp_path: Path) -> None:
+    production_root = tmp_path / "runs"
+    job_dir = production_root / "TS8(NEB-TS)"
+    generation_dir = job_dir / "generation-20260714-224054-959479f2"
+    generation_dir.mkdir(parents=True)
+    public_state = job_dir / "job_state.json"
+    generation_state = generation_dir / "job_state.json"
+    public_state.write_text("{}", encoding="utf-8")
+    generation_state.write_text("{}", encoding="utf-8")
+
+    assert should_exclude_from_production_runs_scan(generation_state, production_root) is True
+    assert list(iter_production_runs_artifacts(production_root, "job_state.json")) == [public_state]
+    with pytest.raises(ValueError, match="public parent job directory"):
+        validate_production_run_dir_target(generation_dir, production_root)

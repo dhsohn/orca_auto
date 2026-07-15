@@ -78,6 +78,10 @@ Stable behavior:
   supervised worker.
 - A successful new submission returns `status: queued`.
 - Closing the submitting terminal after a successful queue submission is safe.
+- A fully closed standalone ORCA job directory may be submitted again; the new
+  submission creates a sibling visible generation. Active rows and incomplete
+  terminal replay/fence state still block a successor for the same directory,
+  and `--force` does not bypass that barrier.
 - `queue cancel` accepts the visible activity id plus known aliases such as
   workflow id, queue id, run id, or path aliases.
 - `queue list --json`, `queue cancel --json`, and `service status --json` are
@@ -241,11 +245,31 @@ as clear/forced-successor barriers rather than replayed. Replay and fence marker
 are internal implementation state and must not be edited by clients.
 
 xTB-MD/xTB/CREST queue artifacts carry an internal immutable-generation fingerprint,
-and new xTB-MD/xTB/CREST/ORCA rows carry a submit-time execution snapshot. Before
-upgrading from a build without these fields, deployments must either drain those
-rows under the old build or cancel/clear and resubmit them under the new build.
-In-place adoption of pre-snapshot queue rows is not supported; unverifiable
-artifacts fail closed instead of being attached to a newer generation.
+and new xTB-MD/xTB/CREST/ORCA rows carry a submit-time execution snapshot. New
+ORCA rows use snapshot schema 2 and one visible direct child named
+`generation-YYYYMMDD-HHMMSS-<8-hex>/`; they do not create an ORCA
+`.orca_auto_input_snapshots/`, `.orca_auto_orca_executions/`, or nested
+`.inputs/` tree. The bound selected `.inp` and dependencies preserve their
+source basenames. Different referenced source paths with one basename always
+fail submission closed, even when their bytes match. A dependency may share the
+selected input stem when its basename differs and ORCA does not produce that
+name: an SP `h2.inp` may refer
+to `h2.xyz`, with both names preserved. For routes that write `<stem>.xyz`, a
+sole main `* xyzfile` dependency may use that exact name: the bound `.inp`
+inlines its coordinates and ORCA may mutate the visible XYZ after launch.
+Same-stem auxiliary NEB Product/TS inputs remain unsupported. Frequency routes
+reserve `<stem>.hess`; every route reserves `<stem>.out` and `<stem>.gbw`.
+Submission also rejects the selected `.inp` basename and generation-owned
+`job_state.json`, `job_report.json`, `orca.process.json`, and
+`.orca.process.lock` as dependency basenames. Output-base overrides such as
+`%base` and NEB restart-GBW basename controls fail closed.
+
+Before deploying this ORCA format, operators must drain all old-build pending
+and active ORCA rows and finish every incomplete terminal replay and snapshot
+intent, or cancel/clear affected work and resubmit it under the new build.
+In-place adoption or migration is not supported. Existing terminal hidden ORCA
+generations remain untouched as historical artifacts. Unverifiable artifacts
+fail closed instead of being attached to a newer generation.
 xTB-MD/xTB/CREST snapshots use a unique namespace that is exclusively reserved for the
 submission, rather than using the public task id alone as snapshot ownership.
 Generation directories are preceded by an internal durable intent under the
@@ -296,8 +320,8 @@ validated outputs to path, SHA-256, byte size, and modification time.
 
 ## ORCA Job Artifact Contract
 
-Completed, failed, cancelled, and skipped ORCA jobs write artifacts next to the
-job directory:
+The submitted ORCA job root keeps `run.lock` and exposes the latest public
+artifacts for completed, failed, cancelled, and skipped jobs:
 
 - `job_state.json`
 - `job_report.json`
@@ -306,6 +330,15 @@ job directory:
 - `si_block.md` for completed jobs ending on a stationary point (a copy-paste
   Supporting Information block: route, energies, thermochemistry, Nimag,
   coordinates) or for IRC routes (summary-only validation block, no coordinates)
+
+Every new submission owns one visible
+`generation-YYYYMMDD-HHMMSS-<8-hex>/` direct child. That directory contains the
+bound `.inp` under the exact source basename, supported dependencies under their
+exact source basenames, raw ORCA outputs, and generation-local mirrors of
+`job_state.json` and `job_report.json`. Root JSON files are the latest public
+summary and may advance to a newer sibling; generation JSON files retain the
+record for the generation they describe. The existence of the root `run.lock`
+file alone does not mean its advisory lock is currently owned.
 
 `job_state.json` and `job_report.json` use the normalized engine artifact shape:
 
@@ -329,9 +362,10 @@ Stable top-level expectations:
 - `job.dir` points at the job directory.
 - `status.state` is the job state.
 - `status.reason` is the final or current reason when available.
-- For snapshot-bound rows, `input.primary_path` is the exact private ORCA input
-  that executed, not the subsequently mutable source path. ORCA execution
-  provenance retains the selected source path and bound content identities.
+- For snapshot-bound rows, `input.primary_path` is the exact bound ORCA input in
+  the visible generation, not the subsequently mutable source path. ORCA
+  execution provenance retains the selected source path and bound content
+  identities.
 - `timestamps.started_at`, `timestamps.updated_at`, and
   `timestamps.finished_at` are UTC-style ISO text when available.
 - `artifacts.last_out_path` points at the last ORCA output path when known.

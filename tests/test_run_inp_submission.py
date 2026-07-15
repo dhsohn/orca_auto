@@ -138,6 +138,65 @@ def test_submission_normalizes_resources_only_in_private_snapshot(
     }
 
 
+def test_submission_rejects_distinct_sources_with_same_basename_before_enqueue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    reactant = reaction_dir / "reactant" / "input.xyz"
+    product = reaction_dir / "product" / "input.xyz"
+    reactant.parent.mkdir()
+    product.parent.mkdir()
+    payload = "1\nsame endpoint\nH 0 0 0\n"
+    reactant.write_text(payload, encoding="utf-8")
+    product.write_text(payload, encoding="utf-8")
+    (reaction_dir / "rxn.inp").write_text(
+        '! NEB-TS\n%neb\n  Product "product/input.xyz"\nend\n* xyzfile 0 1 reactant/input.xyz\n',
+        encoding="utf-8",
+    )
+
+    result = run_inp.submit_reaction_dir_to_queue(args)
+
+    assert result.status == "failed"
+    assert result.reason == "invalid_submission_input"
+    assert "different source paths use the same basename" in result.stderr
+    assert "input.xyz" in result.stderr
+    assert "product/input.xyz" in result.stderr
+    assert "reactant/input.xyz" in result.stderr
+    assert queue_adapter.list_queue(tmp_path) == []
+    assert not list(reaction_dir.glob("generation-*"))
+    intent_root = tmp_path / ".orca_auto_snapshot_intents"
+    assert not list(intent_root.glob("*.json"))
+
+
+def test_closed_job_directory_resubmits_to_a_new_sibling_generation_without_force(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    first_result = run_inp.submit_reaction_dir_to_queue(args)
+    assert first_result.status == "submitted"
+    [first] = queue_adapter.list_queue(tmp_path)
+    assert queue_adapter.mark_completed(tmp_path, first.queue_id)
+    assert queue_adapter.update_metadata(
+        tmp_path,
+        first.queue_id,
+        {queue_adapter.TERMINAL_REPLAY_METADATA_KEY: None},
+    )
+
+    second_result = run_inp.submit_reaction_dir_to_queue(args)
+
+    assert second_result.status == "submitted"
+    first_after, second = queue_adapter.list_queue(tmp_path)
+    first_generation = Path(first_after.metadata["execution_snapshot"]["execution_dir"])
+    second_generation = Path(second.metadata["execution_snapshot"]["execution_dir"])
+    assert first_generation != second_generation
+    assert first_generation.parent == second_generation.parent == reaction_dir.resolve()
+    assert first_generation.is_dir()
+    assert second_generation.is_dir()
+    assert queue_adapter.queue_entry_force(second) is False
+
+
 def test_complete_transition_after_commit_returns_submitted_with_truthful_warning(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -184,6 +243,7 @@ def test_enqueue_save_without_commit_fails_cleanly_without_queue_row(
     assert result.reason == "queue_submission_failed"
     assert queue_adapter.list_queue(tmp_path) == []
     assert not (reaction_dir / ".orca_auto_orca_executions").exists()
+    assert not list(reaction_dir.glob("generation-*"))
 
 
 def test_public_run_dir_guard_aborts_orca_before_durable_queue_commit(
@@ -208,8 +268,7 @@ def test_public_run_dir_guard_aborts_orca_before_durable_queue_commit(
     assert not (tmp_path / "job_locations.json").exists()
     assert not (reaction_dir / "job_state.json").exists()
     assert not (reaction_dir / "job_report.json").exists()
-    snapshot_root = reaction_dir / ".orca_auto_orca_executions"
-    assert not snapshot_root.exists() or list(snapshot_root.iterdir()) == []
+    assert not list(reaction_dir.glob("generation-*"))
 
 
 @pytest.mark.parametrize(
@@ -257,8 +316,7 @@ def test_public_run_dir_guard_compensates_orca_post_commit_rejection(
     assert not (tmp_path / "job_locations.json").exists()
     assert not (reaction_dir / "job_state.json").exists()
     assert not (reaction_dir / "job_report.json").exists()
-    snapshot_root = reaction_dir / ".orca_auto_orca_executions"
-    assert not snapshot_root.exists() or list(snapshot_root.iterdir()) == []
+    assert not list(reaction_dir.glob("generation-*"))
 
 
 @pytest.mark.parametrize(

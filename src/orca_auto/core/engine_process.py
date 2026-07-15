@@ -180,6 +180,7 @@ def atomic_write_confined_bytes(
     *,
     label: str,
     mode: int = 0o600,
+    expected_parent_identity: tuple[int, int] | None = None,
 ) -> None:
     """Atomically replace a regular file without following a final symlink."""
 
@@ -193,6 +194,17 @@ def atomic_write_confined_bytes(
     if hasattr(os, "O_NOFOLLOW"):
         directory_flags |= os.O_NOFOLLOW
     directory_fd = os.open(parent, directory_flags)
+    parent_status = os.fstat(directory_fd)
+    if (
+        expected_parent_identity is not None
+        and (
+            int(parent_status.st_dev),
+            int(parent_status.st_ino),
+        )
+        != expected_parent_identity
+    ):
+        os.close(directory_fd)
+        raise ValueError(f"{label} parent directory identity changed: {parent}")
     temporary_name = f".{path.name}.{secrets.token_hex(12)}.tmp"
     descriptor = -1
     try:

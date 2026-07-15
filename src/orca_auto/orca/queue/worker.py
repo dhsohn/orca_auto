@@ -93,6 +93,7 @@ from ..attempt.reporting import (
 )
 from ..config import AppConfig, load_config
 from ..engine import ENGINE_DEFINITION
+from ..execution_binding import orca_execution_provenance
 from ..inp_rewriter import read_resource_request_from_input
 from ..input_artifacts import selected_input_artifacts
 from ..job_locations import (
@@ -110,6 +111,7 @@ from ..state import (
     new_state,
     report_json_path,
     state_path,
+    write_report_files,
 )
 from ..statuses import AnalyzerStatus
 from ..types import RunState
@@ -218,6 +220,7 @@ class _TerminalReplayWorkItem:
     observed_status: str
     selected_inp: str
     error: str
+    execution_provenance: dict[str, Any] | None = None
     recorded_run_id: str = ""
     resolved_status: str = ""
     run_id: str | None = None
@@ -1090,6 +1093,13 @@ def _new_terminal_replay_work_item(
     reaction_key: str,
 ) -> _TerminalReplayWorkItem:
     metadata = queue_entry_metadata(entry)
+    snapshot = metadata.get("execution_snapshot")
+    try:
+        execution_provenance = (
+            orca_execution_provenance(snapshot) if isinstance(snapshot, Mapping) else None
+        )
+    except (TypeError, ValueError):
+        execution_provenance = None
     marker = _terminal_replay_marker_from_entry(entry)
     selected_inp = str(
         (marker or {}).get("selected_inp")
@@ -1111,6 +1121,7 @@ def _new_terminal_replay_work_item(
         observed_status=_normalized_entry_status(entry),
         selected_inp=selected_inp,
         error=str((marker or {}).get("error") or getattr(entry, "error", "") or "queue_failed"),
+        execution_provenance=execution_provenance,
         recorded_run_id=str(metadata.get("run_id") or "").strip(),
         observed_state=observed_state,
     )
@@ -1132,6 +1143,7 @@ def _prepare_terminal_replay_work_item(
             selected_inp=item.selected_inp,
             reason=item.error,
             observed_state=item.observed_state,
+            execution_provenance=item.execution_provenance,
         )
     elif item.observed_status == STATUS_CANCELLED:
         run_id, terminal_status = _record_cancelled_run_state(
@@ -1139,6 +1151,7 @@ def _prepare_terminal_replay_work_item(
             fallback_job_id=item.task_id,
             selected_inp=item.selected_inp,
             observed_state=item.observed_state,
+            execution_provenance=item.execution_provenance,
         )
     resolved_status = (
         terminal_status
@@ -1826,6 +1839,7 @@ def _record_cancelled_run_state(
     fallback_job_id: str | None = None,
     selected_inp: str | None = None,
     observed_state: _StateGenerationFingerprint | None = None,
+    execution_provenance: Mapping[str, Any] | None = None,
 ) -> tuple[str | None, str | None]:
     """Write a terminal "cancelled" run state for an interrupted run.
 
@@ -1856,6 +1870,8 @@ def _record_cancelled_run_state(
             state = new_state(job_dir, selected_path, max_retries=0)
             if expected_job_id:
                 state["job_id"] = expected_job_id
+        if execution_provenance:
+            state["execution_provenance"] = dict(execution_provenance)
         run_id = str(state.get("run_id") or "").strip() or None
         final_result = state.get("final_result")
         if isinstance(final_result, dict):
@@ -1865,13 +1881,13 @@ def _record_cancelled_run_state(
                 # just before cancellation landed); do not clobber it, and report the
                 # real status so the queue entry is reconciled to what actually
                 # happened instead of being mislabeled "cancelled".
-                if str(state.get("status") or "").strip() != existing_status:
-                    finalize_state(
-                        job_dir,
-                        state,
-                        status=existing_status,
-                        final_result=final_result,
-                    )
+                finalize_state(
+                    job_dir,
+                    state,
+                    status=existing_status,
+                    final_result=final_result,
+                )
+                write_report_files(job_dir, state)
                 return run_id, existing_status
         cancelled_result = build_final_result(
             status=STATUS_CANCELLED,
@@ -1880,6 +1896,7 @@ def _record_cancelled_run_state(
             last_out_path=last_out_path_from_state(state),
         )
         finalize_state(job_dir, state, status=STATUS_CANCELLED, final_result=cancelled_result)
+        write_report_files(job_dir, state)
         return run_id, STATUS_CANCELLED
 
 
@@ -1890,6 +1907,7 @@ def _record_failed_run_state(
     selected_inp: str | None = None,
     reason: str,
     observed_state: _StateGenerationFingerprint | None = None,
+    execution_provenance: Mapping[str, Any] | None = None,
 ) -> tuple[str | None, str | None]:
     """Ensure an exited child has a terminal state for its queue generation."""
 
@@ -1908,18 +1926,20 @@ def _record_failed_run_state(
             state = new_state(job_dir, selected_path, max_retries=0)
             if expected_job_id:
                 state["job_id"] = expected_job_id
+        if execution_provenance:
+            state["execution_provenance"] = dict(execution_provenance)
         run_id = str(state.get("run_id") or "").strip() or None
         final_result = state.get("final_result")
         if isinstance(final_result, dict):
             existing_status = str(final_result.get("status") or "").strip()
             if existing_status in {STATUS_COMPLETED, STATUS_CANCELLED, STATUS_FAILED}:
-                if str(state.get("status") or "").strip() != existing_status:
-                    finalize_state(
-                        job_dir,
-                        state,
-                        status=existing_status,
-                        final_result=final_result,
-                    )
+                finalize_state(
+                    job_dir,
+                    state,
+                    status=existing_status,
+                    final_result=final_result,
+                )
+                write_report_files(job_dir, state)
                 return run_id, existing_status
         failed_result = build_final_result(
             status=STATUS_FAILED,
@@ -1928,6 +1948,7 @@ def _record_failed_run_state(
             last_out_path=last_out_path_from_state(state),
         )
         finalize_state(job_dir, state, status=STATUS_FAILED, final_result=failed_result)
+        write_report_files(job_dir, state)
         return run_id, STATUS_FAILED
 
 
@@ -1955,6 +1976,13 @@ def _finalize_cancelled_run(
         else _queue_entry_by_id(queue_root, job.queue_id)
     )
     metadata = queue_entry_metadata(entry) if entry is not None else {}
+    snapshot = metadata.get("execution_snapshot")
+    try:
+        execution_provenance = (
+            orca_execution_provenance(snapshot) if isinstance(snapshot, Mapping) else None
+        )
+    except (TypeError, ValueError):
+        execution_provenance = None
     selected_inp = str(
         metadata.get("selected_inp") or metadata.get("selected_input_path") or ""
     ).strip()
@@ -1963,6 +1991,7 @@ def _finalize_cancelled_run(
         record_kwargs: dict[str, Any] = {
             "fallback_job_id": task_id,
             "selected_inp": selected_inp,
+            "execution_provenance": execution_provenance,
         }
         if observed_state is not None:
             record_kwargs["observed_state"] = observed_state

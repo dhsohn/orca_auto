@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from orca_auto.core.engine_runner import executable_identity
+from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
 from orca_auto.orca import state as state_module
 from orca_auto.orca.runtime import run_lock
 from orca_auto.orca.runtime.run_lock import acquire_run_lock
@@ -140,6 +142,75 @@ class TestState(unittest.TestCase):
 
             tmp_files = list(reaction.glob("*.tmp.*"))
             self.assertEqual(tmp_files, [])
+
+    def test_public_state_and_report_are_mirrored_into_visible_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            generation = reaction / "generation-20260714-224054-959479f2"
+            generation.mkdir()
+            inp = generation / "nebts.inp"
+            inp.write_text("! NEB-TS\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+            state = new_state(reaction, inp, max_retries=0)
+            generation_status = generation.stat()
+            reaction_status = reaction.stat()
+            owner_token = "state-mirror-owner-token-0001"
+            bind_direct_generation_owner(
+                reaction,
+                namespace=generation.name,
+                expected_job_identity=(reaction_status.st_dev, reaction_status.st_ino),
+                expected_generation_identity=(
+                    generation_status.st_dev,
+                    generation_status.st_ino,
+                ),
+                owner_token=owner_token,
+            )
+            state["execution_provenance"] = {
+                "execution_dir": str(generation),
+                "execution_dir_identity": {
+                    "device": generation_status.st_dev,
+                    "inode": generation_status.st_ino,
+                },
+                "generation_owner_token": owner_token,
+                "bound_selected_identity": executable_identity(inp),
+            }
+
+            save_state(reaction, state)
+            write_report_files(reaction, state)
+
+            self.assertEqual(load_state(generation), load_state(reaction))
+            self.assertEqual(load_report_json(generation), load_report_json(reaction))
+            self.assertFalse((reaction / ".orca_auto_orca_executions").exists())
+            self.assertFalse((reaction / ".orca_auto_input_snapshots").exists())
+
+    def test_replaced_visible_generation_never_receives_state_or_report(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            generation = reaction / "generation-20260714-224054-959479f2"
+            generation.mkdir()
+            inp = generation / "nebts.inp"
+            inp.write_text("! NEB-TS\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+            generation_status = generation.stat()
+            state = new_state(reaction, inp, max_retries=0)
+            state["execution_provenance"] = {
+                "execution_dir": str(generation),
+                "execution_dir_identity": {
+                    "device": generation_status.st_dev,
+                    "inode": generation_status.st_ino,
+                },
+            }
+            moved = reaction / "moved-original-generation"
+            generation.rename(moved)
+            generation.mkdir()
+            (generation / "sentinel").write_text("replacement", encoding="utf-8")
+
+            save_state(reaction, state)
+            write_report_files(reaction, state)
+
+            self.assertTrue((reaction / "job_state.json").is_file())
+            self.assertTrue((reaction / "job_report.json").is_file())
+            self.assertEqual({path.name for path in generation.iterdir()}, {"sentinel"})
+            self.assertFalse((moved / "job_state.json").exists())
+            self.assertFalse((moved / "job_report.json").exists())
 
     def test_atomic_write_text_remains_available(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -159,6 +159,7 @@ def _existing_completed_exit(
     reservation_token: str | None,
     max_retries: int,
     admission_task_id: str | None,
+    execution_provenance: dict[str, Any] | None = None,
 ) -> int | None:
     return _run_inp_execution.existing_completed_exit(
         reaction_dir=reaction_dir,
@@ -167,6 +168,7 @@ def _existing_completed_exit(
         reservation_token=reservation_token,
         max_retries=max_retries,
         admission_task_id=admission_task_id,
+        execution_provenance=execution_provenance,
         deps=_run_inp_deps(),
     )
 
@@ -194,6 +196,7 @@ def _resolve_execution_context(
     reservation_token: str | None = None,
     admission_app_name: str | None = None,
     admission_task_id: str | None = None,
+    execution_provenance: dict[str, Any] | None = None,
 ) -> RunExecutionContext | None:
     return _run_inp_context.resolve_execution_context(
         args,
@@ -203,6 +206,7 @@ def _resolve_execution_context(
         reservation_token=reservation_token,
         admission_app_name=admission_app_name,
         admission_task_id=admission_task_id,
+        execution_provenance=execution_provenance,
         load_config_fn=load_config,
         select_latest_inp_fn=_select_latest_inp,
         logger=logger,
@@ -346,6 +350,7 @@ def _cmd_run_inp_execute(
     reservation_token: str | None = None,
     admission_app_name: str | None = None,
     admission_task_id: str | None = None,
+    execution_provenance: dict[str, Any] | None = None,
 ) -> int:
     return _run_inp_execution.cmd_run_inp_execute(
         args,
@@ -356,6 +361,7 @@ def _cmd_run_inp_execute(
         reservation_token=reservation_token,
         admission_app_name=admission_app_name,
         admission_task_id=admission_task_id,
+        execution_provenance=execution_provenance,
         deps=_run_inp_deps(),
         logger=logger,
     )
