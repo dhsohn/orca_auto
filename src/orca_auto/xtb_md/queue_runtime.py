@@ -32,9 +32,8 @@ from orca_auto.core.queue import (
 from orca_auto.core.queue.generation import queue_entries_same_generation
 from orca_auto.core.queue.internal_engine import (
     InternalEngineQueueModule,
-    InternalEngineQueueWorkerFacadeCallbacks,
+    InternalEngineQueueWorkerDeps,
     InternalEngineSpec,
-    build_internal_engine_queue_worker_deps,
     entry_matches_engine_identity,
 )
 from orca_auto.core.queue.worker import (
@@ -230,8 +229,9 @@ def _activate_slot(
     return activate_reserved_slot(admission_root, admission_token, **metadata)
 
 
-def _callbacks() -> InternalEngineQueueWorkerFacadeCallbacks:
-    return InternalEngineQueueWorkerFacadeCallbacks(
+def _deps() -> InternalEngineQueueWorkerDeps:
+    return InternalEngineQueueWorkerDeps(
+        time_module=time,
         release_slot=release_slot,
         reserve_slot=reserve_slot,
         start_background_process=start_background_process,
@@ -260,7 +260,7 @@ _queue_module = InternalEngineQueueModule.create_from_definition(
     spec=_ENGINE_SPEC,
     poll_interval_seconds=POLL_INTERVAL_SECONDS,
     shutdown_grace_seconds=WORKER_SHUTDOWN_GRACE_SECONDS,
-    deps=build_internal_engine_queue_worker_deps(_callbacks(), time_module=time),
+    deps=_deps(),
     runtime_roots_for_cfg=runtime_roots_for_cfg,
 )
 

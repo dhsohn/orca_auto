@@ -108,7 +108,16 @@ _CallbackSupplier = Callable[[], Callable[..., Any]]
 
 
 @dataclass(frozen=True)
-class InternalEngineQueueWorkerFacadeCallbacks:
+class InternalEngineQueueWorkerDeps:
+    """The one dependency set of the shared internal-engine queue worker.
+
+    Direct consumers (for example ``xtb_md``) construct this with plain
+    callables. Engines whose module-level functions serve as monkeypatchable
+    test seams construct it through
+    ``build_late_bound_internal_engine_queue_worker_deps`` instead, which
+    re-resolves every callback through its supplier at call time.
+    """
+
     release_slot: SlotReleaser
     reserve_slot: SlotReserver
     start_background_process: BackgroundProcessStarter
@@ -129,8 +138,9 @@ class InternalEngineQueueWorkerFacadeCallbacks:
     default_config_path: DefaultConfigPath = _empty_default_config_path
     reconcile_orphaned_child_queue_entries: OrphanedChildQueueReconciler = _noop_callback
     mark_recovery_pending: RecoveryPendingMarker = _noop_callback
+    time_module: Any = time
     try_reserve_admission_slot: AdmissionSlotReserver | None = None
-    start_background_job_process: BackgroundJobProcessStarter | None = None
+    start_background_job_process_fn: BackgroundJobProcessStarter | None = None
     find_queue_entry: QueueEntryFinder | None = None
     load_config: ConfigLoader | None = None
     read_worker_pid: WorkerPidReader | None = None
@@ -202,10 +212,13 @@ def _late_default_config_path(supplier: _CallbackSupplier | None) -> DefaultConf
     return lambda: callback_supplier()()
 
 
-def build_late_bound_internal_engine_queue_worker_facade_callbacks(
+def build_late_bound_internal_engine_queue_worker_deps(
     bindings: InternalEngineQueueWorkerFacadeBindings,
-) -> InternalEngineQueueWorkerFacadeCallbacks:
-    return InternalEngineQueueWorkerFacadeCallbacks(
+    *,
+    time_module: Any = time,
+) -> InternalEngineQueueWorkerDeps:
+    return InternalEngineQueueWorkerDeps(
+        time_module=time_module,
         release_slot=lambda root, token: bindings.release_slot()(root, token),
         reserve_slot=lambda *args, **kwargs: bindings.reserve_slot()(*args, **kwargs),
         start_background_process=lambda command: bindings.start_background_process()(command),
@@ -252,7 +265,7 @@ def build_late_bound_internal_engine_queue_worker_facade_callbacks(
         ),
         mark_recovery_pending=(_late_optional(bindings.mark_recovery_pending) or _noop_callback),
         try_reserve_admission_slot=_late_optional(bindings.try_reserve_admission_slot),
-        start_background_job_process=_late_optional(bindings.start_background_job_process),
+        start_background_job_process_fn=_late_optional(bindings.start_background_job_process),
         find_queue_entry=_late_optional(bindings.find_queue_entry),
         load_config=_late_optional(bindings.load_config),
         read_worker_pid=_late_optional(bindings.read_worker_pid),
@@ -260,90 +273,6 @@ def build_late_bound_internal_engine_queue_worker_facade_callbacks(
         on_worker_process_started=_late_optional(bindings.on_worker_process_started),
         shutdown_running_job=_late_optional(bindings.shutdown_running_job),
         before_shutdown_all=_late_optional(bindings.before_shutdown_all),
-    )
-
-
-@dataclass(frozen=True)
-class InternalEngineQueueWorkerDeps:
-    time_module: Any
-    release_slot: SlotReleaser
-    reserve_slot: SlotReserver
-    start_background_process: BackgroundProcessStarter
-    build_worker_child_command: WorkerChildCommandBuilder
-    config_path_for_worker: ConfigPathForWorker
-    default_config_path: DefaultConfigPath
-    activate_reserved_slot: ReservedSlotActivator
-    terminate_process: ProcessTerminator
-    mark_failed: QueueStatusMarker
-    handle_worker_start_error: WorkerStartErrorHandler
-    finalize_completed_job: CompletedJobFinalizer
-    finalize_child_exit: ChildExitFinalizer
-    reconcile_worker_state: WorkerStateReconciler
-    list_queue: QueueLister
-    list_slots: SlotLister
-    reconcile_stale_slots: StaleSlotReconciler
-    reconcile_orphaned_child_queue_entries: OrphanedChildQueueReconciler
-    mark_cancelled: QueueStatusMarker
-    requeue_running_entry: RunningEntryRequeuer
-    mark_recovery_pending: RecoveryPendingMarker
-    try_reserve_admission_slot: AdmissionSlotReserver | None = None
-    start_background_job_process_fn: BackgroundJobProcessStarter | None = None
-    find_queue_entry: QueueEntryFinder | None = None
-    load_config: ConfigLoader | None = None
-    read_worker_pid: WorkerPidReader | None = None
-    worker_class: WorkerFactory | None = None
-    on_worker_process_started: WorkerProcessStartedHook | None = None
-    shutdown_running_job: ShutdownRunningJob | None = None
-    before_shutdown_all: BeforeShutdownAll | None = None
-
-
-def build_internal_engine_queue_worker_deps(
-    callbacks: InternalEngineQueueWorkerFacadeCallbacks,
-    *,
-    time_module: Any = time,
-) -> InternalEngineQueueWorkerDeps:
-    return InternalEngineQueueWorkerDeps(
-        time_module=time_module,
-        release_slot=callbacks.release_slot,
-        reserve_slot=callbacks.reserve_slot,
-        start_background_process=callbacks.start_background_process,
-        build_worker_child_command=callbacks.build_worker_child_command,
-        config_path_for_worker=callbacks.config_path_for_worker,
-        default_config_path=callbacks.default_config_path,
-        activate_reserved_slot=callbacks.activate_reserved_slot,
-        terminate_process=callbacks.terminate_process,
-        mark_failed=callbacks.mark_failed,
-        handle_worker_start_error=callbacks.handle_worker_start_error,
-        finalize_completed_job=callbacks.finalize_completed_job,
-        finalize_child_exit=callbacks.finalize_child_exit,
-        reconcile_worker_state=callbacks.reconcile_worker_state,
-        list_queue=callbacks.list_queue,
-        list_slots=callbacks.list_slots,
-        reconcile_stale_slots=callbacks.reconcile_stale_slots,
-        reconcile_orphaned_child_queue_entries=(callbacks.reconcile_orphaned_child_queue_entries),
-        mark_cancelled=callbacks.mark_cancelled,
-        requeue_running_entry=callbacks.requeue_running_entry,
-        mark_recovery_pending=callbacks.mark_recovery_pending,
-        try_reserve_admission_slot=callbacks.try_reserve_admission_slot,
-        start_background_job_process_fn=callbacks.start_background_job_process,
-        find_queue_entry=callbacks.find_queue_entry,
-        load_config=callbacks.load_config,
-        read_worker_pid=callbacks.read_worker_pid,
-        worker_class=callbacks.worker_class,
-        on_worker_process_started=callbacks.on_worker_process_started,
-        shutdown_running_job=callbacks.shutdown_running_job,
-        before_shutdown_all=callbacks.before_shutdown_all,
-    )
-
-
-def build_late_bound_internal_engine_queue_worker_deps(
-    bindings: InternalEngineQueueWorkerFacadeBindings,
-    *,
-    time_module: Any = time,
-) -> InternalEngineQueueWorkerDeps:
-    return build_internal_engine_queue_worker_deps(
-        build_late_bound_internal_engine_queue_worker_facade_callbacks(bindings),
-        time_module=time_module,
     )
 
 
@@ -411,10 +340,7 @@ class InternalEngineQueueWorkerDepsResolver:
 
 __all__ = [
     "InternalEngineQueueWorkerFacadeBindings",
-    "InternalEngineQueueWorkerFacadeCallbacks",
     "InternalEngineQueueWorkerDeps",
     "InternalEngineQueueWorkerDepsResolver",
-    "build_internal_engine_queue_worker_deps",
     "build_late_bound_internal_engine_queue_worker_deps",
-    "build_late_bound_internal_engine_queue_worker_facade_callbacks",
 ]
