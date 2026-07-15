@@ -225,8 +225,12 @@ orca_auto bot run              # foreground Telegram/Discord gateway
 under their parent. On an interactive terminal it adds a styled summary band (per-status
 counts), box-drawing tree connectors for workflow children, and a status-colored left
 rail; the `--watch` view adds a spinner, a clock, a live system CPU/RAM/load gauge, and
-per-running-job CPU/RAM for every engine (sampled from `/proc`, no new dependency). Piped,
-`--json`, and `--no-color` output stays plain and byte-stable for scripts. The selected bot mirrors the same application surface
+per-running-job CPU/RAM for every engine (sampled from `/proc`, no new dependency). Piped
+output keeps its stable plain layout (`FORCE_COLOR` can explicitly add ANSI). `--json`
+remains machine-readable JSON and ANSI-free, while messenger output stays plain; this
+resource-view change alters neither output contract. On a real terminal,
+`NO_COLOR` and `--no-color` remove ANSI painting without disabling the live CPU/RAM view.
+The selected bot mirrors the same application surface
 (Telegram `/list`; Discord `!list`, with matching cancel/help commands) and uses
 provider-native buttons. Discord can optionally accept a compressed run-dir
 (`.zip`/`.tar.gz`) attached to `!run`: the archive is safe-extracted under `runs_root`

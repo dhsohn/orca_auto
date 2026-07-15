@@ -620,16 +620,21 @@ orca_auto queue list --engine xtb
 `IRC`, `NEB` 같은 워크플로우/작업 의도를 드러냅니다. 기본적으로 워크플로우 부모 아래에는
 ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 자식 작업은 잡음을 줄이기 위해 통합 텍스트
 뷰에서 숨겨지지만 `--engine ... --kind job` 필터와 `--json`으로는 여전히 확인할 수
-있습니다. 최상위 ORCA 작업은 최상위 항목으로 남습니다. `active_simulations` 줄은 공유
+있습니다. 단, `--watch`에서는 admission slot을 소비하며 live 자원 sample이 있는 활성 내부
+자식(`running`·`retrying`·`cancel_requested`)도 표시됩니다. 최상위 ORCA 작업은 최상위
+항목으로 남습니다. `active_simulations` 줄은 공유
 `scheduler.max_active_simulations` 슬롯을 소비하는 현재 실행 중 시뮬레이션만 셉니다.
 
 대화형 터미널에서는 텍스트 뷰가 스타일링됩니다. plain `active_simulations:` 줄 대신
 상태별 개수(running·queued·done·failed·cancelled) 요약 밴드가 표시되고, 워크플로우
 자식은 들여쓰기 대신 박스 드로잉 트리 커넥터(`├─`/`└─`)로 그려지며, 각 행에 상태색
 좌측 레일이 붙습니다. `queue list --watch` 배너에는 스피너와 시각이 표시됩니다. 이
-연출은 터미널 전용이며, 파이프 출력·`--json`·`NO_COLOR`·`--no-color`에서는 plain·바이트
-안정 표(`active_simulations:` 줄과 plain 들여쓰기 포함)를 유지하므로 스크립트와 메신저
-`/list` 뷰는 영향받지 않습니다.
+연출은 터미널 전용입니다. 파이프 텍스트는 `active_simulations:` 줄과 plain 들여쓰기를
+포함한 기존 표 레이아웃을 유지합니다. `--json`은 machine-readable JSON을, 메신저 `/list`는
+plain 뷰를 유지하며 어느 쪽에도 live 자원 지표를 추가하지 않습니다. 파이프 텍스트는
+`FORCE_COLOR`를 명시하지 않으면 ANSI가 없습니다. 실제
+터미널에서 `NO_COLOR`·`--no-color`는 기존 plain 표를 유지하고, `--watch`에서는 ANSI 색상만
+끄되 실시간 자원 관측은 유지합니다.
 
 선택된 봇의 list 명령(Telegram `/list`, Discord `!list`)은 동일한 표 레이아웃과 기본 워크플로우-자식 가시성
 정책을 렌더링하되, 좁은 모바일 화면에서 각 행이 한 줄에 맞도록 `ID` 컬럼만 생략합니다.
@@ -641,11 +646,15 @@ ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 자식 작업은 잡음을 
 라인 — CPU 사용률, RAM 사용/전체, load average를 색상 블록 바 게이지로 — 를 함께
 그립니다. Linux `/proc`를 새로고침 간에 샘플링하며 의존성 추가는 없습니다. fail-closed
 동작이라 `/proc`를 읽을 수 없는 호스트(또는 개별 필드 읽기 실패)에서는 라인을 생략하고,
-파이프·`--no-color` 출력에는 절대 나타나지 않습니다(CPU 사용률은 delta 측정이라 두 번째
-새로고침부터 표시). 실행 중 각 작업에는 전 엔진(ORCA·내부 xTB/CREST·독립 xTB-MD)에 걸쳐
+파이프·JSON 출력에는 나타나지 않습니다. 색상을 끈 터미널에서는 같은 값을 ANSI 색상
+스타일 없이 표시합니다(CPU 사용률은 delta 측정이라 두 번째 새로고침부터 표시). 실행 중 각
+작업에는 전 엔진(ORCA·내부 xTB/CREST·독립 xTB-MD)에 걸쳐
 작업별 CPU%·상주 메모리가 함께 표시됩니다. 워커가 admission slot에 durable하게 기록한
 engine PID/PGID를 boot id·process start ticks로 검증(재사용 id 오귀속 방지)해 `/proc`를
-프로세스 그룹 단위로 집계합니다. `queue list clear`는 통합 목록에서 완료/실패/취소 항목을
+프로세스 그룹 단위로 집계합니다. CPU 집계에는 회수된 자식 시간이 포함되어 짧게 실행된
+엔진 자식 프로세스가 사라지는 현상을 줄입니다. 이 live 값은 관측용 근사치입니다. RAM은
+현재 멤버 RSS의 합이라 공유 페이지가 중복될 수 있고, 비원자 `/proc` scan은 peak나 할당
+한도가 아닙니다. `queue list clear`는 통합 목록에서 완료/실패/취소 항목을
 정리합니다.
 
 ### 7.5 CLI 출력 및 전역 플래그

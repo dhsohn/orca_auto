@@ -5,7 +5,8 @@ from types import SimpleNamespace
 from typing import Any
 
 from orca_auto import job_resource
-from orca_auto.job_resource import JobProcessIdentity
+from orca_auto.job_resource import JobProcessIdentity, LiveJobMetricsSampler
+from orca_auto.system_metrics import JobMetrics, ProcessGroupSampler
 
 
 def _slot(**overrides: Any) -> SimpleNamespace:
@@ -131,3 +132,71 @@ def test_read_slots_default_is_read_only(tmp_path: Path) -> None:
     assert [slot.token for slot in slots] == ["t1"]  # dead-owner slot not pruned
     assert read_active_slot_count(tmp_path) == 0
     assert path.read_bytes() == before  # passive active count also leaves it in place
+
+
+def test_live_job_metrics_sampler_clears_empty_and_revalidates_identity() -> None:
+    old = JobProcessIdentity("old", 100, 100, 10, "boot-A")
+    new = JobProcessIdentity("new", 100, 100, 20, "boot-A")
+    live_reads = iter(([old], [old], [], [new], [new]))
+    calls: list[dict[JobProcessIdentity, int]] = []
+
+    class _ProbeSampler:
+        def sample(self, targets, *, now: float):
+            del now
+            calls.append(dict(targets))
+            return {identity: JobMetrics(cpu_percent=None, rss_bytes=1) for identity in targets}
+
+        def retain_identities(self, identities) -> None:
+            del identities
+
+    sampler = LiveJobMetricsSampler(
+        process_sampler=_ProbeSampler(),  # type: ignore[arg-type]
+        clock=lambda: 1.0,
+        live_processes_fn=lambda _config: next(live_reads),
+    )
+
+    assert set(sampler.sample("config")) == {"old"}
+    assert sampler.sample("config") == {}
+    assert set(sampler.sample("config")) == {"new"}
+    assert calls == [{old: 100}, {}, {new: 100}]
+
+
+def test_live_job_metrics_sampler_drops_identity_changed_during_scan() -> None:
+    old = JobProcessIdentity("q", 100, 100, 10, "boot-A")
+    reused = JobProcessIdentity("q", 100, 100, 20, "boot-A")
+    live_reads = iter(([old], [reused]))
+
+    class _ProbeSampler:
+        def sample(self, targets, *, now: float):
+            del now
+            return {identity: JobMetrics(cpu_percent=100.0, rss_bytes=1) for identity in targets}
+
+        def retain_identities(self, identities) -> None:
+            del identities
+
+    sampler = LiveJobMetricsSampler(
+        process_sampler=_ProbeSampler(),  # type: ignore[arg-type]
+        live_processes_fn=lambda _config: next(live_reads),
+    )
+
+    assert sampler.sample("config") == {}
+
+
+def test_live_job_metrics_sampler_discards_unpublished_delta_baseline() -> None:
+    identity = JobProcessIdentity("q", 100, 100, 10, "boot-A")
+    live_reads = iter(([identity], [], [identity], [identity]))
+    usage_reads = iter(({100: (100, 1)}, {100: (300, 1)}))
+    clock_reads = iter((0.0, 1.0))
+    process_sampler = ProcessGroupSampler(
+        read_usage=lambda _pgids: next(usage_reads),
+        clk_tck=100,
+    )
+    sampler = LiveJobMetricsSampler(
+        process_sampler=process_sampler,
+        clock=lambda: next(clock_reads),
+        live_processes_fn=lambda _config: next(live_reads),
+    )
+
+    assert sampler.sample("config") == {}
+    recovered = sampler.sample("config")
+    assert recovered["q"].cpu_percent is None

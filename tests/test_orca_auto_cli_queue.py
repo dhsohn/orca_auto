@@ -11,7 +11,6 @@ import pytest
 
 from orca_auto import cli_common, cli_style, terminal_table
 from orca_auto import cli_queue as unified_cli
-from orca_auto.job_resource import JobProcessIdentity
 from orca_auto.system_metrics import JobMetrics, SystemMetrics, SystemMetricsSampler
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -68,9 +67,9 @@ def test_cmd_queue_list_watch_loops_until_interrupt(
     assert calls["provider"] == 0  # custom emitters stay isolated from the new metrics path
 
 
-def test_watch_banner_plain_without_color_matches_legacy() -> None:
+def test_watch_banner_plain_on_non_tty_matches_legacy() -> None:
     # Non-TTY `--watch` must keep the historical banner byte-for-byte — no spinner
-    # glyph and no clock leaking into piped/`--no-color` output.
+    # glyph and no clock leaking into piped output.
     cli_style.set_color_override(False)
     try:
         assert (
@@ -156,8 +155,10 @@ def test_resource_gauge_line_is_none_when_all_sources_missing() -> None:
 class _FixedSampler(SystemMetricsSampler):
     def __init__(self, metrics: SystemMetrics) -> None:
         self._metrics = metrics
+        self.calls = 0
 
     def sample(self) -> SystemMetrics | None:
+        self.calls += 1
         return self._metrics
 
 
@@ -212,7 +213,7 @@ def test_watch_prints_system_resource_gauge_on_tty(
     assert "load 1.00 2.00 3.00" in out
 
 
-def test_watch_omits_resource_gauge_without_color(
+def test_watch_omits_resource_gauge_on_force_color_non_tty(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     def _emit(_args: Any, _request: Any) -> int:
@@ -234,21 +235,65 @@ def test_watch_omits_resource_gauge_without_color(
     deps = unified_cli.QueueCliDeps(
         emit_queue_list_once=_emit, sleep=_sleep, system_metrics_sampler=sampler
     )
-    # Non-TTY: the gauge must not leak, and the banner stays byte-for-byte legacy.
+    # FORCE_COLOR can paint a pipe, but it must not trigger terminal sampling or
+    # change the historical watch banner.
+    cli_style.set_color_override(True)
+    try:
+        assert unified_cli.cmd_queue_list(_watch_args(), deps=deps) == 0
+    finally:
+        cli_style.set_color_override(None)
+    out = capsys.readouterr().out
+    assert sampler.calls == 0
+    assert "CPU" not in out and "load 1.00" not in out
+    assert "orca_auto queue list — refresh every 2s · Ctrl-C to exit" in out
+
+
+def test_watch_prints_plain_resource_gauge_on_no_color_tty(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
+
+    def _emit(_args: Any, _request: Any) -> int:
+        return 0
+
+    frames = 0
+
+    def _sleep(_interval: float) -> None:
+        nonlocal frames
+        frames += 1
+        if frames >= 2:
+            raise KeyboardInterrupt
+
+    sampler = _FixedSampler(
+        SystemMetrics(
+            cpu_percent=58.0,
+            mem_used_bytes=8 * 1024**3,
+            mem_total_bytes=32 * 1024**3,
+            load1=1.0,
+            load5=2.0,
+            load15=3.0,
+        )
+    )
+    deps = unified_cli.QueueCliDeps(
+        emit_queue_list_once=_emit, sleep=_sleep, system_metrics_sampler=sampler
+    )
     cli_style.set_color_override(False)
     try:
         assert unified_cli.cmd_queue_list(_watch_args(), deps=deps) == 0
     finally:
         cli_style.set_color_override(None)
     out = capsys.readouterr().out
-    assert "CPU" not in out and "load 1.00" not in out
-    assert "orca_auto queue list — refresh every 2s · Ctrl-C to exit" in out
+    assert "CPU" in out and "58%" in out and "8.0/32.0G" in out
+    assert out.count("\x1b[2J\x1b[3J\x1b[H") == 2
+    assert _ANSI_RE.search(out) is None  # cursor control remains; SGR color does not
 
 
-def test_layout_interactive_requires_real_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Color alone (e.g. FORCE_COLOR on a pipe) must NOT enable the interactive
-    # layout — a real terminal is required — while ``--no-color`` stays plain even
-    # on a terminal.
+def test_layout_interactive_requires_terminal_and_color(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # FORCE_COLOR on a pipe must not enable the human layout, and a real terminal
+    # keeps the released plain layout when ANSI painting is disabled.
     monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: False)
     cli_style.set_color_override(True)
     try:
@@ -403,29 +448,21 @@ def test_watch_uses_discovered_config_for_job_metrics(
     assert seen.get("list_config") == seen.get("config")
 
 
-def test_default_job_metrics_provider_clears_empty_and_revalidates_identity(
+def test_default_job_metrics_provider_uses_presentation_independent_sampler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    old = JobProcessIdentity("old", 100, 100, 10, "boot-A")
-    new = JobProcessIdentity("new", 100, 100, 20, "boot-A")
-    live_reads = iter(([old], [old], [], [new], [new]))
-    monkeypatch.setattr(unified_cli, "live_job_processes", lambda _config: next(live_reads))
+    calls: list[str | None] = []
 
-    calls: list[dict[JobProcessIdentity, int]] = []
+    class _ProbeLiveSampler:
+        def sample(self, config: str | None) -> dict[str, JobMetrics]:
+            calls.append(config)
+            return {"q": JobMetrics(cpu_percent=None, rss_bytes=1)}
 
-    class _ProbeSampler:
-        def sample(self, targets, *, now: float):
-            del now
-            calls.append(dict(targets))
-            return {identity: JobMetrics(cpu_percent=None, rss_bytes=1) for identity in targets}
-
-    monkeypatch.setattr(unified_cli, "ProcessGroupSampler", _ProbeSampler)
+    monkeypatch.setattr(unified_cli, "LiveJobMetricsSampler", _ProbeLiveSampler)
     provider = unified_cli._default_job_metrics_provider()
 
-    assert set(provider("config")) == {"old"}
-    assert provider("config") == {}
-    assert set(provider("config")) == {"new"}
-    assert calls == [{old: 100}, {}, {new: 100}]
+    assert set(provider("config")) == {"q"}
+    assert calls == ["config"]
 
 
 def test_fmt_rss_units() -> None:
@@ -437,13 +474,14 @@ def test_fmt_rss_units() -> None:
 def test_row_job_metric_matches_only_job_rows() -> None:
     metric = JobMetrics(cpu_percent=780.0, rss_bytes=6 * 1024**3)
     job_metrics = {"q1": metric}
-    assert (
-        unified_cli._row_job_metric(
-            {"kind": "job", "status": "running", "metadata": {"queue_id": "q1"}},
-            job_metrics,
+    for status in ("running", "retrying", "cancel_requested"):
+        assert (
+            unified_cli._row_job_metric(
+                {"kind": "job", "status": status, "metadata": {"queue_id": "q1"}},
+                job_metrics,
+            )
+            is metric
         )
-        is metric
-    )
     # Aliases and terminal/workflow rows cannot bind a live queue metric.
     assert (
         unified_cli._row_job_metric(
@@ -585,14 +623,20 @@ def test_watch_annotates_running_row_with_job_metrics(
     assert max(terminal_table.display_width(line) for line in out.splitlines()) <= 80
 
 
-def test_watch_omits_job_metrics_without_color(
+def test_watch_omits_job_metrics_on_force_color_non_tty(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
         unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
-    monkeypatch.setattr(unified_cli, "list_activities", lambda **kwargs: _running_job_payload())
+    seen: dict[str, object] = {}
+
+    def _list_activities(**kwargs: Any) -> dict[str, Any]:
+        seen["child_job_engines"] = kwargs.get("child_job_engines")
+        return _running_job_payload()
+
+    monkeypatch.setattr(unified_cli, "list_activities", _list_activities)
 
     def _sleep(_interval: float) -> None:
         raise KeyboardInterrupt
@@ -617,15 +661,154 @@ def test_watch_omits_job_metrics_without_color(
         watch=True,
         interval=2.0,
     )
-    cli_style.set_color_override(False)
+    cli_style.set_color_override(True)
     try:
         assert unified_cli.cmd_queue_list(args, deps=deps) == 0
     finally:
         cli_style.set_color_override(None)
     out = capsys.readouterr().out
-    # Non-TTY: the provider is never consulted and no annotation leaks.
+    # FORCE_COLOR on a non-TTY still cannot consult the provider or leak metrics.
     assert calls["provider"] == 0
+    assert seen["child_job_engines"] == ()
     assert "cpu" not in out and "999%" not in out
+
+
+def test_watch_annotates_job_metrics_on_no_color_tty(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
+    monkeypatch.setattr(unified_cli, "_queue_terminal_width", lambda: 80)
+    monkeypatch.setattr(
+        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+    )
+    monkeypatch.setattr(unified_cli, "list_activities", lambda **kwargs: _running_job_payload())
+
+    def _sleep(_interval: float) -> None:
+        raise KeyboardInterrupt
+
+    def _provider(_config: str | None) -> dict[str, JobMetrics]:
+        return {"q1": JobMetrics(cpu_percent=780.0, rss_bytes=6 * 1024**3)}
+
+    deps = unified_cli.QueueCliDeps(sleep=_sleep, job_metrics_provider=_provider)
+    cli_style.set_color_override(False)
+    try:
+        assert unified_cli.cmd_queue_list(_watch_args(), deps=deps) == 0
+    finally:
+        cli_style.set_color_override(None)
+    out = capsys.readouterr().out
+    assert "cpu 780%" in out and "ram 6.0G" in out
+    assert "\x1b[2J\x1b[3J\x1b[H" in out
+    assert _ANSI_RE.search(out) is None
+
+
+def test_watch_keeps_job_metrics_on_continuation_when_row_is_narrow(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
+    monkeypatch.setattr(unified_cli, "_queue_terminal_width", lambda: 45)
+    monkeypatch.setattr(
+        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+    )
+    monkeypatch.setattr(unified_cli, "list_activities", lambda **kwargs: _running_job_payload())
+
+    def _sleep(_interval: float) -> None:
+        raise KeyboardInterrupt
+
+    deps = unified_cli.QueueCliDeps(
+        sleep=_sleep,
+        job_metrics_provider=lambda _config: {
+            "q1": JobMetrics(cpu_percent=780.0, rss_bytes=6 * 1024**3)
+        },
+    )
+    cli_style.set_color_override(False)
+    try:
+        assert unified_cli.cmd_queue_list(_watch_args(), deps=deps) == 0
+    finally:
+        cli_style.set_color_override(None)
+
+    out = capsys.readouterr().out
+    assert "\n  cpu 780%\n  ram 6.0G\n" in out
+
+
+def test_default_watch_shows_live_internal_engine_job(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
+    monkeypatch.setattr(unified_cli, "_queue_terminal_width", lambda: 100)
+    monkeypatch.setattr(
+        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+    )
+    seen: dict[str, object] = {}
+
+    def _list_activities(**kwargs: Any) -> dict[str, Any]:
+        seen["child_job_engines"] = kwargs.get("child_job_engines")
+        return {
+            "count": 3,
+            "activities": [
+                {
+                    "activity_id": "wf-1",
+                    "kind": "workflow",
+                    "engine": "workflow",
+                    "status": "running",
+                    "label": "reaction-workflow",
+                    "source": "orca_auto_flow",
+                    "submitted_at": "2026-04-26T01:00:00+00:00",
+                    "updated_at": "2026-04-26T03:00:00+00:00",
+                    "metadata": {"workflow_id": "wf-1"},
+                },
+                {
+                    "activity_id": "xtb-q-1",
+                    "kind": "job",
+                    "engine": "xtb",
+                    "status": "cancel_requested",
+                    "label": "path-search",
+                    "source": "orca_auto_xtb",
+                    "submitted_at": "2026-04-26T02:00:00+00:00",
+                    "updated_at": "2026-04-26T03:00:00+00:00",
+                    "parent_workflow_id": "wf-1",
+                    "metadata": {"queue_id": "xtb-q-1", "workflow_id": "wf-1"},
+                },
+                {
+                    "activity_id": "crest-q-1",
+                    "kind": "job",
+                    "engine": "crest",
+                    "status": "running",
+                    "label": "hidden-conformer-search",
+                    "source": "orca_auto_crest",
+                    "submitted_at": "2026-04-26T02:30:00+00:00",
+                    "updated_at": "2026-04-26T03:00:00+00:00",
+                    "parent_workflow_id": "wf-1",
+                    "metadata": {"queue_id": "crest-q-1", "workflow_id": "wf-1"},
+                },
+            ],
+            "sources": {},
+        }
+
+    monkeypatch.setattr(unified_cli, "list_activities", _list_activities)
+
+    def _sleep(_interval: float) -> None:
+        raise KeyboardInterrupt
+
+    deps = unified_cli.QueueCliDeps(
+        sleep=_sleep,
+        job_metrics_provider=lambda _config: {
+            "xtb-q-1": JobMetrics(cpu_percent=250.0, rss_bytes=512 * 1024**2)
+        },
+    )
+    cli_style.set_color_override(False)
+    try:
+        assert unified_cli.cmd_queue_list(_watch_args(), deps=deps) == 0
+    finally:
+        cli_style.set_color_override(None)
+
+    out = capsys.readouterr().out
+    assert seen["child_job_engines"] is None
+    assert "path-search" in out
+    assert "hidden-conformer-search" not in out
+    assert "cpu 250%" in out and "ram 512M" in out
 
 
 def test_cmd_queue_list_rejects_watch_json(

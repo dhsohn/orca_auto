@@ -1,10 +1,11 @@
-"""Resolve live per-job engine process groups from admission slots.
+"""Resolve and sample live per-job engine processes from admission slots.
 
-Read-only helper for the ``queue list --watch`` per-job CPU/RAM view. The queue
-worker already records each running job's engine PID/PGID — with a boot-id and
-process-start-tick fence — in the durable admission-slot store, and ORCA, the
-internal xTB/CREST queue, and standalone xTB-MD all register it. So the CLI can
-attribute resource usage per job without any worker or durable-state change.
+This is the read-only resource-observation boundary used by ``queue list
+--watch`` and reusable outside presentation code. The queue worker already
+records each running job's engine PID/PGID — with a boot-id and process-start-
+tick fence — in the durable admission-slot store, and ORCA, the internal
+xTB/CREST queue, and standalone xTB-MD all register it. Resource usage can
+therefore be attributed per job without any worker or durable-state change.
 
 Everything fails closed: a missing config, an unreadable/corrupt slot store, or an
 engine identity that no longer validates (wrong boot, dead PID, or a reused PID
@@ -15,6 +16,7 @@ never mis-attributed.
 from __future__ import annotations
 
 import logging
+import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,6 +27,7 @@ from orca_auto.core.admission import AdmissionStoreCorruptError, read_slots
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.utils import process_lock
 from orca_auto.flow.engine_runtime import engine_runtime_paths
+from orca_auto.system_metrics import JobMetrics, ProcessGroupSampler
 
 LOGGER = logging.getLogger(__name__)
 
@@ -124,4 +127,45 @@ def live_job_processes(
     ]
 
 
-__all__ = ["JobProcessIdentity", "live_job_processes"]
+class LiveJobMetricsSampler:
+    """Sample validated per-queue CPU/RAM independently of CLI presentation.
+
+    The admission-slot observer and process sampler live here so a caller does
+    not need a TTY, ANSI color, or a renderer to collect metrics. Each sample
+    validates the boot-scoped engine identity both before and after the `/proc`
+    scan; a process that exits or is replaced during the scan is omitted rather
+    than attributed to a recycled PID/PGID.
+    """
+
+    def __init__(
+        self,
+        *,
+        process_sampler: ProcessGroupSampler | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        live_processes_fn: Callable[[str | None], list[JobProcessIdentity]] = (live_job_processes),
+    ) -> None:
+        self._process_sampler = (
+            process_sampler if process_sampler is not None else ProcessGroupSampler()
+        )
+        self._clock = clock
+        self._live_processes = live_processes_fn
+
+    def sample(self, shared_config: str | None) -> dict[str, JobMetrics]:
+        identities = self._live_processes(shared_config)
+        metrics = self._process_sampler.sample(
+            {identity: identity.pgid for identity in identities},
+            now=self._clock(),
+        )
+        validated_after_scan = set(self._live_processes(shared_config)) if identities else set()
+        published = {
+            identity: metrics[identity]
+            for identity in identities
+            if identity in metrics and identity in validated_after_scan
+        }
+        # A sample rejected by the post-scan identity fence must not remain as
+        # the baseline for a later CPU delta if the same identity reappears.
+        self._process_sampler.retain_identities(published)
+        return {identity.queue_id: metrics[identity] for identity in published}
+
+
+__all__ = ["JobProcessIdentity", "LiveJobMetricsSampler", "live_job_processes"]

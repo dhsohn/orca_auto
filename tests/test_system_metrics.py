@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from orca_auto import system_metrics as sm
 from orca_auto.system_metrics import CpuTimes, SystemMetricsSampler
 
@@ -88,22 +90,28 @@ def test_sampler_reports_partial_sources() -> None:
 
 def test_parse_pid_stat_handles_comm_with_spaces_and_parens() -> None:
     # comm is "(my proc (x))" — parsing must key off the LAST ')'.
-    stat = "123 (my proc (x)) R 1 100 100 0 100 0 0 0 0 0 50 30 0 0 20 0 1 0 999 123456 200"
-    assert sm.parse_pid_stat(stat) == (100, 50 + 30, 200)
+    stat = "123 (my proc (x)) R 1 100 100 0 100 0 0 0 0 0 50 30 7 3 20 0 1 0 999 123456 200"
+    assert sm.parse_pid_stat(stat) == (100, 50 + 30 + 7 + 3, 200)
 
 
 def test_parse_pid_stat_fails_closed() -> None:
     assert sm.parse_pid_stat("no closing paren") is None
     assert sm.parse_pid_stat("1 (x) R 1 2") is None  # too few fields after comm
     assert sm.parse_pid_stat("1 (x) R 1 10 10 0 10 0 0 0 0 0 -1 1 0 0 20 0 1 0 1 1 1") is None
+    assert sm.parse_pid_stat("1 (x) R 1 10 10 0 10 0 0 0 0 0 1 1 -1 0 20 0 1 0 1 1 1") is None
+    too_large = str((1 << 64) - 1)
+    assert (
+        sm.parse_pid_stat(f"1 (x) R 1 10 10 0 10 0 0 0 0 0 {too_large} 1 0 0 20 0 1 0 1 1 1")
+        is None
+    )
 
 
-def _write_stat(proc_root, pid, pgrp, utime, stime, rss_pages) -> None:
+def _write_stat(proc_root, pid, pgrp, utime, stime, rss_pages, *, cutime=0, cstime=0) -> None:
     directory = proc_root / str(pid)
     directory.mkdir()
     (directory / "stat").write_text(
         f"{pid} (proc) R 1 {pgrp} {pgrp} 0 {pgrp} 0 0 0 0 0 "
-        f"{utime} {stime} 0 0 20 0 1 0 999 123456 {rss_pages}"
+        f"{utime} {stime} {cutime} {cstime} 20 0 1 0 999 123456 {rss_pages}"
     )
 
 
@@ -122,6 +130,45 @@ def test_read_process_group_usage_buckets_by_pgid(tmp_path) -> None:
     assert sm.read_process_group_usage(set(), proc_root=tmp_path) == {}
 
 
+def test_read_process_group_usage_drops_overflowing_group_totals(tmp_path) -> None:
+    maximum = (1 << 64) - 1
+    _write_stat(tmp_path, 10, 100, maximum, 0, 1)
+    _write_stat(tmp_path, 11, 100, 1, 0, 1)  # CPU bucket overflow
+    _write_stat(tmp_path, 20, 200, 1, 0, maximum // 4096 + 1)  # byte overflow
+    _write_stat(tmp_path, 30, 300, 1, 0, 1)
+    _write_stat(tmp_path, 40, 400, maximum, 1, 1)  # per-member CPU parse overflow
+    _write_stat(tmp_path, 41, 400, 1, 0, 1)
+
+    usage = sm.read_process_group_usage({100, 200, 300, 400}, proc_root=tmp_path, page_size=4096)
+
+    assert set(usage) == {300}
+
+
+def test_reaped_child_cpu_stays_in_process_group_counter(tmp_path) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+
+    # Frame 1: child A is live. Frame 2: A has been waited for and its 10
+    # jiffies moved into the leader's cutime while child B is live. The group
+    # counter must advance 12 -> 15 instead of rolling back 12 -> 5.
+    _write_stat(first_root, 10, 100, 2, 0, 10)
+    _write_stat(first_root, 11, 100, 10, 0, 10)
+    _write_stat(second_root, 10, 100, 3, 0, 10, cutime=10)
+    _write_stat(second_root, 12, 100, 2, 0, 10)
+
+    first = sm.read_process_group_usage({100}, proc_root=first_root, page_size=4096)
+    second = sm.read_process_group_usage({100}, proc_root=second_root, page_size=4096)
+    assert first[100][0] == 12
+    assert second[100][0] == 15
+
+    reads = iter([first, second])
+    sampler = sm.ProcessGroupSampler(read_usage=lambda _pgids: next(reads), clk_tck=100)
+    assert sampler.sample({"job": 100}, now=0.0)["job"].cpu_percent is None
+    assert sampler.sample({"job": 100}, now=1.0)["job"].cpu_percent == 3.0
+
+
 def test_process_group_sampler_delta_and_forgetting() -> None:
     reads = iter([{100: (1000, 4096)}, {100: (1000 + 400, 4096)}])
     sampler = sm.ProcessGroupSampler(read_usage=lambda pgids: next(reads), clk_tck=100)
@@ -133,6 +180,25 @@ def test_process_group_sampler_delta_and_forgetting() -> None:
     # A group with no live member drops out entirely (fail closed).
     gone = sm.ProcessGroupSampler(read_usage=lambda pgids: {}, clk_tck=100)
     assert gone.sample({"job": 100}, now=0.0) == {}
+
+
+def test_process_group_sampler_holds_high_watermark_after_counter_rollback() -> None:
+    reads = iter(
+        [
+            {100: (1000, 4096)},
+            {100: (100, 4096)},
+            {100: (200, 4096)},
+            {100: (1100, 4096)},
+            {100: (1200, 4096)},
+        ]
+    )
+    sampler = sm.ProcessGroupSampler(read_usage=lambda _pgids: next(reads), clk_tck=100)
+
+    assert sampler.sample({"job": 100}, now=0.0)["job"].cpu_percent is None
+    assert sampler.sample({"job": 100}, now=1.0)["job"].cpu_percent is None
+    assert sampler.sample({"job": 100}, now=2.0)["job"].cpu_percent is None
+    assert sampler.sample({"job": 100}, now=3.0)["job"].cpu_percent == pytest.approx(100 / 3)
+    assert sampler.sample({"job": 100}, now=4.0)["job"].cpu_percent == 100.0
 
 
 def test_process_group_sampler_keys_history_by_full_identity_and_clears_empty_frame() -> None:
