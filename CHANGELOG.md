@@ -56,6 +56,12 @@ migration.
   quotes, bind and rematerialize the official `%neb Product` and `TS` files,
   enforce their geometry admission cap, and preserve the analyzer reason when a
   no-retry run fails on its first attempt.
+- The workflow SI no longer downgrades a stage to unverified provenance when its
+  selected input splits the route across multiple `!` lines: the SI and the
+  interaction-energy fan-out now share one selection contract
+  (`flow/conformer_selection.py`) for route normalization, geometry tolerance,
+  minimum eligibility, single-point pairing, and RMSD representatives, so such
+  stages participate in SP pairing, populations, RMSD dedup, and ΔE_int again.
 
 ## [0.2.1] - 2026-07-14
 
