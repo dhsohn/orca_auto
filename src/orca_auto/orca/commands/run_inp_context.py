@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,6 +37,7 @@ class RunExecutionContext:
     reservation_token: str | None
     admission_app_name: str | None
     admission_task_id: str | None
+    execution_provenance: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -154,6 +155,7 @@ def resolve_execution_context(
     reservation_token: str | None,
     admission_app_name: str | None,
     admission_task_id: str | None,
+    execution_provenance: Mapping[str, Any] | None = None,
     load_config_fn: Callable[[Any], AppConfig],
     select_latest_inp_fn: Callable[[Path], Path],
     logger: Any,
@@ -195,6 +197,9 @@ def resolve_execution_context(
         ),
         admission_task_id=_explicit_or_env(
             admission_task_id, ADMISSION_TASK_ID_ENV_VAR, env_get_fn
+        ),
+        execution_provenance=(
+            dict(execution_provenance) if isinstance(execution_provenance, Mapping) else None
         ),
     )
 

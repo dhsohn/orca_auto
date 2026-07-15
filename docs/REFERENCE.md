@@ -250,14 +250,37 @@ Shared behavior:
 
 ORCA-specific notes:
 
-- Chooses the latest `*.inp` at submission, then executes an immutable private
-  copy for that queue generation. Editing the source after a successful
-  submission does not change the queued calculation; submit a new generation
-  to run the edited input.
+- Chooses the latest `*.inp` at submission, then creates a visible
+  `generation-YYYYMMDD-HHMMSS-<8-hex>/` directly inside the submitted job
+  directory. The bound input keeps the selected `.inp` basename, supported
+  referenced files keep their source basenames, and raw ORCA outputs are
+  written at that same level. Editing a source after successful submission does
+  not change the queued calculation.
+- A fully closed job directory can be submitted again without `--force`; each
+  submission creates a new sibling generation. A pending/running/retrying/
+  cancel-pending row or an incomplete terminal replay still blocks another
+  generation for that job directory. `--force` does not bypass those safety
+  barriers.
+- If one input refers to different source paths that have the same basename,
+  submission fails closed even when their bytes are identical. Repeated
+  references to the same canonical source path remain one dependency and are
+  not a basename collision. Sharing only the selected input's stem is allowed
+  when ORCA does not produce that dependency name: for example, an SP `h2.inp`
+  may reference `h2.xyz`, and both exact basenames are preserved. For Opt,
+  OptTS, ScanTS, NEB, and IRC, a same-stem XYZ is normally an ORCA output. The
+  one supported collision is a sole main `* xyzfile` geometry: its coordinates
+  are inlined into the bound `.inp`, its exact XYZ basename remains visible,
+  and ORCA may update that file in place. A same-stem auxiliary NEB Product/TS
+  file is still rejected. Frequency-producing routes reserve `<stem>.hess`;
+  every route reserves `<stem>.out` and `<stem>.gbw`. Admission also rejects
+  the selected `.inp` basename and generation-owned `job_state.json`,
+  `job_report.json`, `orca.process.json`, and `.orca.process.lock` as dependency
+  basenames. Output-base overrides such as `%base` and NEB restart-GBW basename
+  controls are unsupported and fail closed so ORCA cannot write outside the
+  generation.
 - Queue workers execute by queue id rather than passing a direct
   `reaction_dir` command line. The queue entry still stores `reaction_dir`, and
   downstream ORCA/workflow contracts should keep using that field.
-- `--force` re-runs even if completed output already exists
 - Standalone ORCA resource metadata comes from the selected input's `%pal`
   and `%maxcore` directives, with config defaults injected only when those
   directives are missing. The shared `--max-cores` and `--max-memory-gb`
@@ -547,21 +570,24 @@ There is no public direct-execution mode for new work. `run-dir` is the durable 
   bound input at 256 MiB; ORCA accepts at most 128 file-reference directives.
   CREST has the per-file limit but no separate aggregate limit. A downstream
   output XYZ materialization is bounded at 512 MiB.
-- xTB/CREST snapshots live in private per-submission directories under
+- xTB/CREST snapshots keep their private per-submission directories under
   `.orca_auto_input_snapshots/`; each namespace is unique and reserved
-  exclusively. A public task
-  id alone is not the snapshot-ownership key. ORCA executes a rewritten, private
-  input tree
-  under `.orca_auto_orca_executions/generation-*`, including confined copies of
-  supported XYZ, GBW, Hessian, point-charge, IRC, and NEB dependencies. These
-  hidden executed paths can differ from the user-facing source paths. Audit
-  provenance records source path, executed path, SHA-256, and byte size where
-  applicable; do not edit hidden snapshots to change a queued job.
-- These hidden trees are retained for queue replay, retry, reconciliation, and
-  audit. There is no standalone snapshot-GC command. Never delete a tree used
-  by a pending, running, retrying, cancel-pending, or repairable terminal row.
-  Reclaim it only with the intentionally retired job/workflow after confirming
-  that no queue or recovery record still references it.
+  exclusively. A public task id alone is not the snapshot-ownership key.
+- A new ORCA submission instead creates exactly one visible direct child named
+  `generation-YYYYMMDD-HHMMSS-<8-hex>/` in the job directory. Its bound `.inp`
+  keeps the source basename. Confined XYZ, GBW, Hessian, point-charge, IRC, and
+  NEB dependencies also keep their source basenames, with no `.inputs/` layer.
+  ORCA raw outputs are written beside those inputs. New ORCA submissions do not
+  create `.orca_auto_orca_executions/` or an ORCA
+  `.orca_auto_input_snapshots/` tree. Audit provenance still records source and
+  executed paths, SHA-256, and byte size; the readable names do not weaken
+  content-identity verification.
+- Snapshot and generation trees are retained for queue replay, retry,
+  reconciliation, and audit. There is no standalone snapshot-GC command. Never
+  edit or delete a generation used by a pending, running, retrying,
+  cancel-pending, or repairable terminal row. Reclaim it only with an
+  intentionally retired job/workflow after confirming that no queue or recovery
+  record still references it.
 - xTB/CREST run with a job-local clean `HOME`/`XDG_CONFIG_HOME` and a captured
   `PATH`, `LD_LIBRARY_PATH`, `XTBPATH`, and `XTBHOME`. Executable path, SHA-256,
   and size are verified around execution. Contents reached through shared
@@ -569,9 +595,13 @@ There is no public direct-execution mode for new work. `run-dir` is the durable 
   versions are not automatically probed. Keep the exact qualified
   distribution and external parameters immutable for the job lifetime, and do
   not treat other processes under the worker UID as hostile isolation tenants.
-- Before deploying this snapshot format, drain pre-upgrade queued xTB, CREST,
-  and ORCA rows with the old build, or cancel/clear and resubmit them after the
-  upgrade. Snapshot-less rows are not adopted in place and fail closed.
+- Before deploying the ORCA visible-generation format, drain all old-build
+  pending and active ORCA rows and finish every incomplete terminal replay and
+  snapshot intent. Alternatively cancel/clear affected work and resubmit it
+  after the upgrade. Old-format rows are not adopted in place. Existing
+  terminal `.orca_auto_orca_executions/` and ORCA
+  `.orca_auto_input_snapshots/` history stays where it is; the upgrade does not
+  migrate or rename it. The xTB/CREST snapshot layout is unchanged.
 - New xTB/CREST terminal outputs carry content identities that are verified
   before downstream parsing. A legacy completed output can receive a marked
   read-time identity backfill, which does not retroactively prove historical
@@ -858,9 +888,9 @@ Principles:
 
 ## 11) Output Files
 
-Generated in the job directory:
+The submitted ORCA job directory keeps the user-authored inputs, `run.lock`, and
+the latest public summaries/reports:
 
-- `<stem>.out`, `<stem>.retryNN.out`
 - `job_state.json`
 - `job_report.json`
 - `job_report.md`
@@ -879,6 +909,43 @@ Generated in the job directory:
   correction, Nimag with an imaginary-mode summary, the final coordinates, and
   `⚠` lint lines for reviewer-visible problems; for IRC routes, a
   summary-only validation block without coordinates
+
+Each submission places its bound inputs and raw outputs in one visible direct
+child, for example:
+
+```text
+TS8(NEB-TS)/
+├── nebts.inp
+├── input.xyz
+├── output.xyz
+├── guessTS.xyz
+├── job_state.json
+├── job_report.json
+├── run.lock
+└── generation-20260714-224054-959479f2/
+    ├── nebts.inp
+    ├── input.xyz
+    ├── output.xyz
+    ├── guessTS.xyz
+    ├── nebts.out
+    ├── nebts.gbw
+    ├── nebts.NEB.log
+    ├── job_state.json
+    └── job_report.json
+```
+
+This example is not an exhaustive file listing. Internal synchronization files
+may also remain: `.orca.process.lock` in the generation and/or job root and
+`.job_state.mutation.lock` at the job root. While an ORCA process record is
+active, `orca.process.json` is present in its generation.
+
+The generation's bound `.inp` has the exact selected source basename, so ORCA
+uses the expected output stem rather than adding `.run` or `.bound`. Referenced
+inputs likewise retain their original basenames. `job_state.json` and
+`job_report.json` in the generation mirror that generation's record; the copies
+at the job root are the latest public summary and are updated by later sibling
+generations. `run.lock` stays at the job root; the mere presence of its file is
+not proof that a process currently owns the lock.
 
 Important `job_state.json` fields:
 
@@ -921,10 +988,10 @@ Important `job_report.json` fields:
 - `attempts[]`
 - `final_result`
 
-For snapshot-bound jobs, `selected_inp`/attempt `inp_path` name the exact private
-input that executed. `execution_provenance.source_selected_inp` records the
-user-facing source selected at submission; the bound/materialized and attempt
-identity records carry their path, SHA-256, and byte size.
+For snapshot-bound jobs, `selected_inp`/attempt `inp_path` name the exact bound
+input in the visible generation. `execution_provenance.source_selected_inp`
+records the user-facing source selected at submission; the bound/materialized
+and attempt identity records carry their path, SHA-256, and byte size.
 
 ## 11.1) Downstream Contract Freeze
 
@@ -1001,7 +1068,8 @@ Compatibility note:
 4. Close the submission terminal if desired
 5. Monitor with `list` or `journalctl`
 6. Review `job_report.md` after completion
-7. Use `--force` only when a deliberate rerun is needed
+7. To rerun a fully closed standalone ORCA directory, submit it again; a new
+   sibling generation is created without `--force`
 
 ## 13) Frequently Encountered Issues
 

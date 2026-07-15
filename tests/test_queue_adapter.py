@@ -10,6 +10,7 @@ from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.engine import ENGINE_DEFINITION
 from orca_auto.orca.queue.adapter import (
+    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
     TERMINAL_REPLAY_METADATA_KEY,
     DuplicateEntryError,
     cancel,
@@ -155,7 +156,7 @@ class TestQueueStore(unittest.TestCase):
             str(ctx.exception),
             f"Reaction directory already queued: {queue_entry_reaction_dir(entry)} "
             f"(queue_id={entry.queue_id}, status=pending). "
-            "Use --force to re-enqueue a completed/failed job, or cancel the existing entry first.",
+            "Wait for the active generation or its terminal publication to finish first.",
         )
 
     def test_duplicate_running_entry_blocked(self) -> None:
@@ -164,12 +165,41 @@ class TestQueueStore(unittest.TestCase):
         with self.assertRaises(DuplicateEntryError):
             enqueue(self.root, str(self.root / "mol_A"))
 
-    def test_duplicate_terminal_without_force_blocked(self) -> None:
-        """Completed/failed entries block re-enqueue without --force (accidental)."""
+    def test_duplicate_terminal_with_pending_replay_is_blocked(self) -> None:
+        """A terminal queue mark still blocks while publication replay is pending."""
         entry = enqueue(self.root, str(self.root / "mol_A"))
         mark_completed(self.root, entry.queue_id)
         with self.assertRaises(DuplicateEntryError):
             enqueue(self.root, str(self.root / "mol_A"))
+
+    def test_closed_terminal_generation_allows_same_directory_without_force(self) -> None:
+        entry = enqueue(self.root, str(self.root / "mol_A"))
+        mark_completed(self.root, entry.queue_id)
+        self._finish_terminal_replay(entry.queue_id)
+
+        new_entry = enqueue(self.root, str(self.root / "mol_A"))
+
+        self.assertNotEqual(entry.queue_id, new_entry.queue_id)
+        self.assertFalse(queue_entry_force(new_entry))
+
+    def test_administratively_fenced_terminal_generation_blocks_successor(self) -> None:
+        reaction_dir = str(self.root / "mol_A")
+        entry = enqueue(self.root, reaction_dir)
+        self.assertTrue(
+            mark_failed(
+                self.root,
+                entry.queue_id,
+                error="administrative_fence",
+                publish_terminal_side_effects=False,
+            )
+        )
+        [fenced] = list_queue(self.root)
+        self.assertIs(fenced.metadata[TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY], True)
+
+        with self.assertRaises(DuplicateEntryError):
+            enqueue(self.root, reaction_dir)
+        with self.assertRaises(DuplicateEntryError):
+            enqueue(self.root, reaction_dir, force=True)
 
     def test_duplicate_terminal_with_force_allowed(self) -> None:
         """Completed/failed entries allow re-enqueue with --force (intentional retry)."""

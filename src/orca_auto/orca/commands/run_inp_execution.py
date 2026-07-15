@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from orca_auto.core.utils.process_tracking import active_run_lock_pid
 from ..completion_rules import detect_completion_mode
 from ..orca_process import OrcaProcessRecoveryError, recover_orphaned_orca_process
 from ..out_analyzer import analyze_output
+from ..retry_policy import retry_input_path
 from ..runtime.run_lock import LOCK_FILE_NAME
 from ..state import load_state
 from ..state_machine import RESUMABLE_RUN_STATUSES
@@ -57,10 +59,7 @@ def select_latest_inp(reaction_dir: Path) -> Path:
 
 
 def retry_inp_path(selected_inp: Path, retry_number: int) -> Path:
-    base_stem = RETRY_INP_RE.sub("", selected_inp.stem)
-    if not base_stem:
-        base_stem = selected_inp.stem
-    return selected_inp.with_name(f"{base_stem}.retry{retry_number:02d}.inp")
+    return retry_input_path(selected_inp, retry_number)
 
 
 def existing_completed_out(selected_inp: Path) -> dict[str, Any] | None:
@@ -111,15 +110,27 @@ def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool
     fresh ``orca.process.json`` we would otherwise mistake for an orphan and
     kill.
     """
+    state = load_state(reaction_dir)
+    process_record_dir = reaction_dir
+    if state:
+        selected_text = str(state.get("selected_inp") or "").strip()
+        if selected_text:
+            try:
+                selected_parent = Path(selected_text).expanduser().resolve().parent
+            except (OSError, RuntimeError):
+                selected_parent = reaction_dir
+            if selected_parent.is_dir() and selected_parent.is_relative_to(
+                reaction_dir.expanduser().resolve()
+            ):
+                process_record_dir = selected_parent
+
     # Reap first, unconditionally: a local Ctrl-C ends the run
     # failed/interrupted_by_user (not running/retrying), yet load_or_create_state
     # still resumes that state, so gating the reap on the running/retrying
     # status would let the resumed rerun start a second calculation over the
     # same output while the interrupted run's PAL children are still alive. The
     # reaper is a no-op when the record is absent or the group is already gone.
-    recover_orphaned_orca_process(reaction_dir, logger=logger)
-
-    state = load_state(reaction_dir)
+    recover_orphaned_orca_process(process_record_dir, logger=logger)
     if not state:
         return False
 
@@ -236,6 +247,7 @@ def existing_completed_exit(
     reservation_token: str | None,
     max_retries: int,
     admission_task_id: str | None,
+    execution_provenance: Mapping[str, Any] | None = None,
     deps: Any,
 ) -> int | None:
     del admission_root, reservation_token
@@ -251,6 +263,10 @@ def existing_completed_exit(
         max_retries=max_retries,
         to_resolved_local=execution._to_resolved_local,
     )
+    state_changed = False
+    if execution_provenance and state.get("execution_provenance") != dict(execution_provenance):
+        state["execution_provenance"] = dict(execution_provenance)
+        state_changed = True
     task_id = str(admission_task_id or "").strip()
     if task_id and state.get("job_id") != task_id:
         # A queued child may discover an already-completed output before the
@@ -258,6 +274,8 @@ def existing_completed_exit(
         # first so the terminal replay can bind the resulting artifacts to
         # this queue generation.
         state["job_id"] = task_id
+        state_changed = True
+    if state_changed:
         execution.save_state(reaction_dir, state)
     return execution._exit_with_result(
         reaction_dir,
@@ -332,14 +350,20 @@ def execute_locked_run(
             admission_app_name=context.admission_app_name,
             admission_task_id=context.admission_task_id,
         ):
+            context_provenance = getattr(context, "execution_provenance", None)
             if not getattr(args, "force", False):
+                existing_kwargs: dict[str, Any] = {
+                    "reaction_dir": context.reaction_dir,
+                    "selected_inp": context.selected_inp,
+                    "admission_root": context.admission_root,
+                    "reservation_token": context.reservation_token,
+                    "max_retries": context.max_retries,
+                    "admission_task_id": context.admission_task_id,
+                }
+                if context_provenance:
+                    existing_kwargs["execution_provenance"] = context_provenance
                 existing_exit = execution._existing_completed_exit(
-                    reaction_dir=context.reaction_dir,
-                    selected_inp=context.selected_inp,
-                    admission_root=context.admission_root,
-                    reservation_token=context.reservation_token,
-                    max_retries=context.max_retries,
-                    admission_task_id=context.admission_task_id,
+                    **existing_kwargs,
                 )
                 if existing_exit is not None:
                     return existing_exit
@@ -350,8 +374,14 @@ def execute_locked_run(
                 max_retries=context.max_retries,
                 to_resolved_local=execution._to_resolved_local,
             )
+            state_changed = False
+            if context_provenance and state.get("execution_provenance") != dict(context_provenance):
+                state["execution_provenance"] = dict(context_provenance)
+                state_changed = True
             if context.admission_task_id and state.get("job_id") != context.admission_task_id:
                 state["job_id"] = context.admission_task_id
+                state_changed = True
+            if state_changed:
                 execution.save_state(context.reaction_dir, state)
             return execution._run_with_state(
                 cfg=context.cfg,
@@ -376,6 +406,7 @@ def cmd_run_inp_execute(
     reservation_token: str | None,
     admission_app_name: str | None,
     admission_task_id: str | None,
+    execution_provenance: Mapping[str, Any] | None = None,
     deps: Any,
     logger: logging.Logger,
 ) -> int:
@@ -389,6 +420,7 @@ def cmd_run_inp_execute(
         reservation_token=reservation_token,
         admission_app_name=admission_app_name,
         admission_task_id=admission_task_id,
+        execution_provenance=execution_provenance,
     )
     if context is None:
         return 1

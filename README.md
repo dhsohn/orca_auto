@@ -268,15 +268,30 @@ config, rerun the same command to enable the full runtime target. If you edited 
   `reaction_dir` contract is preserved.
 - If no worker is running, queued jobs remain pending until one returns.
 - ORCA selects the most recently modified `.inp` at submission and binds that
-  input plus supported file dependencies into a private execution snapshot.
-  Editing the source afterward does not change the queued generation.
+  input plus supported file dependencies into a visible
+  `<job_dir>/generation-YYYYMMDD-HHMMSS-<8-hex>/` directory. The bound input and
+  each dependency keep their original basenames, and raw ORCA files appear at
+  that same level; new ORCA submissions do not add hidden execution or nested
+  input directories. Editing the source afterward does not change the queued
+  generation. References to different source paths that share a basename are
+  rejected even when their bytes are identical. A main same-stem `* xyzfile`
+  geometry is inlined into the bound input so Opt-like
+  routes can keep and later update that exact XYZ filename without a hash or
+  rename; same-stem auxiliary NEB Product/TS files remain ambiguous and are
+  rejected.
+- A fully closed ORCA job directory can be submitted again and receives a new
+  sibling generation. Active work and incomplete terminal publication still
+  block another submission for the same directory.
 - `flow.yaml`, `xtb_md_job.yaml`, and internal engine job manifests are limited to 1 MiB, 32 YAML
   aliases, 10,000 parsed/expanded nodes, and 64 nesting levels; cyclic/recursive
   YAML graphs fail closed. Local geometries are limited to 10,000 atoms, reduced
   to 1,000 for xTB/ORCA Hessian-producing jobs and 200 for Discord-uploaded work.
 - When retrying or resuming an interrupted ORCA run, orca_auto uses a matching
   non-empty `.gbw` file by generating a restart input with `MORead` and `%moinp`.
-- Completed ORCA and standalone xTB-MD runs write state and report files such as `job_state.json`, `job_report.json`, and `job_report.md`.
+- The ORCA job root keeps `run.lock` and the latest public state/report files.
+  `job_state.json` and `job_report.json` are also mirrored into the visible
+  generation they describe. Standalone xTB-MD keeps its existing artifact
+  layout.
 - Use the `systemd` assets in [systemd/README.md](systemd/README.md) for unattended WSL or Linux execution.
 
 ## Testing

@@ -133,6 +133,33 @@ def _find_queue_entry(
     if not entries:
         return None
 
+    normalized_queue_id = normalize_text(queue_id)
+    normalized_run_id = normalize_text(run_id)
+    normalized_target = normalize_text(target)
+    if normalized_queue_id:
+        for entry in reversed(entries):
+            if normalize_text(entry.get("queue_id")) != normalized_queue_id:
+                continue
+            entry_run_id = normalize_text(queue_entry_metadata_value(entry, "run_id"))
+            if normalized_run_id and entry_run_id and entry_run_id != normalized_run_id:
+                return None
+            return dict(entry)
+        return None
+    if normalized_run_id:
+        for entry in reversed(entries):
+            if normalize_text(queue_entry_metadata_value(entry, "run_id")) == normalized_run_id:
+                return dict(entry)
+        return None
+    if normalized_target:
+        for entry in reversed(entries):
+            entry_identities = (
+                normalize_text(entry.get("queue_id")),
+                normalize_text(entry.get("task_id")),
+                normalize_text(queue_entry_metadata_value(entry, "run_id")),
+            )
+            if normalized_target in entry_identities:
+                return dict(entry)
+
     direct_target = resolve_existing_job_dir(target)
     resolved_reaction_dir = resolve_existing_job_dir(reaction_dir)
 
@@ -203,6 +230,7 @@ def _runtime_paths(
     include_state: bool = True,
     include_report: bool = True,
     queue_entry: dict[str, Any] | None = None,
+    report_md_dir: Path | None = None,
 ) -> dict[str, str]:
     return _contract_payload.runtime_paths(
         current_dir,
@@ -212,6 +240,7 @@ def _runtime_paths(
         include_state=include_state,
         include_report=include_report,
         queue_entry=queue_entry,
+        report_md_dir=report_md_dir,
     )
 
 
@@ -220,6 +249,7 @@ def _orca_contract_resolved_fields(
     runtime: JobRuntimeContext,
     payloads: _contract_payload.RuntimePayloads,
     current_dir: Path | None,
+    artifact_dir: Path | None,
     target: str,
     run_id: str,
     deps: _JobLocationDeps,
@@ -228,6 +258,7 @@ def _orca_contract_resolved_fields(
         runtime=runtime,
         payloads=payloads,
         current_dir=current_dir,
+        artifact_dir=artifact_dir,
         target=target,
         run_id=run_id,
         deps=deps,

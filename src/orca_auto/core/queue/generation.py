@@ -2,9 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 from .types import QueueEntry
+
+VISIBLE_GENERATION_NAME_RE = re.compile(r"\Ageneration-\d{8}-\d{6}-[0-9a-f]{8}\Z")
+
+
+def is_visible_generation_name(value: str) -> bool:
+    """Return whether *value* is an exact user-visible execution generation name."""
+
+    return bool(VISIBLE_GENERATION_NAME_RE.fullmatch(str(value)))
+
 
 # Metadata is generation identity by default. Only server-owned lifecycle/result
 # fields may opt out, so unknown or newly added submission fields fail closed.
@@ -62,7 +72,9 @@ def queue_entry_generation_token(entry: QueueEntry) -> str:
 
 
 __all__ = [
+    "VISIBLE_GENERATION_NAME_RE",
     "immutable_generation_metadata",
+    "is_visible_generation_name",
     "queue_entries_same_generation",
     "queue_entry_generation_token",
 ]

@@ -155,10 +155,13 @@ src/orca_auto/
   않습니다. `reaction_dir` 필드는 다운스트림 계약으로서 큐 항목에 그대로
   보존됩니다.
 - **큐 generation은 제출 시점에 실행 입력을 바인딩합니다.** 단독 xTB-MD와 워크플로우
-  xTB/CREST는 콘텐츠 주소형 입력 snapshot을 제출마다 배타적으로 예약한 고유 namespace에 만들고, ORCA는 private
-  generation 트리를 만들어 지원하는 파일 참조를 그 안의 confined 복사본으로 다시 씁니다.
-  워커는 변경 가능한 소스 파일을 실행 계약으로 다시 읽지 않고 입력 및 실행 파일 정체성을
-  검증합니다.
+  xTB/CREST는 콘텐츠 주소형 입력 snapshot을 제출마다 배타적으로 예약한 고유
+  namespace에 만듭니다. ORCA는 제출한 작업 디렉터리 바로 아래에 visible
+  `generation-YYYYMMDD-HHMMSS-<8자리 hex>/`를 만들고 선택한 `.inp`와 의존성의
+  basename을 유지한 채 confined flat 복사본으로 참조를 다시 씁니다. Raw 출력도
+  그와 나란히 쓰며, 새 ORCA generation에는 숨은 실행 parent나 중첩 `.inputs/`가
+  없습니다. 워커는 변경 가능한 소스 파일을 실행 계약으로 다시 읽지 않고 입력 및
+  실행 파일의 콘텐츠 정체성을 검증합니다.
 - **워커가 실행 중이 아니면 작업은 대기 상태로 남습니다** — 워커가 돌아올 때까지
   `queue.json`에 보관됩니다. `status: queued` 이후 제출 터미널을 닫아도
   안전합니다.
@@ -263,8 +266,16 @@ false-success marker 부재가 모두 필요합니다. 공개 상태/리포트�
 구성요소:
 
 - **입력 선택과 바인딩:** 제출할 때 ORCA는 대상 디렉터리에서 가장 최근에 수정된
-  `*.inp`를 선택하고 지원하는 파일 의존성과 함께 snapshot한 뒤, 해당 큐 generation의
-  private 바인딩 입력만 실행합니다.
+  `*.inp`를 선택하고 지원하는 파일 의존성과 함께 visible flat generation에
+  snapshot한 뒤 그 generation의 바인딩 입력만 실행합니다. 서로 다른 두 소스 경로의
+  basename이 같으면 콘텐츠가 같아도 항상 fail-closed합니다.
+- **generation 로컬 근거와 루트 요약:** raw ORCA 입력/출력은 visible generation에
+  보존합니다. Generation의 `job_state.json`과 `job_report.json`은 해당 실행 기록을
+  mirror하고, 작업 루트의 복사본은 최신 공개 요약으로 남으며 `run.lock`이 재사용하는
+  소스 디렉터리 사용을 직렬화합니다. 완전히 닫힌 제출 뒤에는 기존 raw 파일을
+  덮어쓰지 않고 새 sibling generation을 만들 수 있습니다. 보이지 않는 filesystem
+  owner token은 상태/리포트 게시, 이력 조회, cleanup, DFT discovery를 재사용 가능한
+  경로나 inode 번호만이 아니라 실제 제출 때 만든 디렉터리에 바인딩합니다.
 - **시도 엔진**(`attempt/engine.py`, `attempt/retry.py`, `attempt/resume.py`):
   시도를 실행하고 출력을 파싱·분류한 뒤 재시도 여부를 결정합니다.
 - **출력 분석**(`parser/`, `out_analyzer.py`, `output_status.py`,

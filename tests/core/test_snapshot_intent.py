@@ -12,6 +12,7 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_STATE_CREATING,
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
     SNAPSHOT_INTENT_TOKEN_KEY,
+    bind_snapshot_intent_generation_identities,
     create_snapshot_intent,
     discard_snapshot_intent,
     discard_snapshot_intent_if_generations_absent,
@@ -25,6 +26,15 @@ def _generation_path(queue_root: Path, name: str = "generation-0001") -> Path:
     job_dir = queue_root / "job"
     job_dir.mkdir(exist_ok=True)
     return job_dir / ".orca_auto_input_snapshots" / name
+
+
+def _visible_generation_path(
+    queue_root: Path,
+    name: str = "generation-20260714-224054-959479f2",
+) -> Path:
+    job_dir = queue_root / "job"
+    job_dir.mkdir(exist_ok=True)
+    return job_dir / name
 
 
 def _create_generation(path: Path) -> None:
@@ -78,6 +88,154 @@ def test_reconcile_removes_dead_orca_generation_pair(tmp_path: Path) -> None:
     assert removed == 1
     assert not execution_generation.exists()
     assert not input_generation.exists()
+
+
+def test_reconcile_removes_bound_dead_visible_orca_generation(tmp_path: Path) -> None:
+    generation = _visible_generation_path(tmp_path)
+    token = "snapshot-intent-visible-generation"
+    create_snapshot_intent(
+        tmp_path,
+        token=token,
+        kind="orca_visible_generation",
+        generation_paths=[generation],
+    )
+    _create_generation(generation)
+    bind_snapshot_intent_generation_identities(tmp_path, token)
+
+    removed = reconcile_orphaned_snapshot_generations(
+        [tmp_path],
+        list_queue_fn=lambda _root: [],
+        owner_is_alive_fn=lambda _marker: False,
+    )
+
+    assert removed == 1
+    assert not generation.exists()
+    assert not _intent_path(tmp_path, token).exists()
+
+
+def test_visible_generation_rejects_invalid_name_and_outside_path(
+    tmp_path: Path,
+) -> None:
+    invalid_name = _visible_generation_path(tmp_path, "generation-0001")
+    outside = tmp_path.parent / "outside-job" / "generation-20260714-224054-959479f2"
+
+    for token, generation in (
+        ("snapshot-intent-visible-invalid-name", invalid_name),
+        ("snapshot-intent-visible-outside-root", outside),
+    ):
+        with pytest.raises(ValueError, match="escapes"):
+            create_snapshot_intent(
+                tmp_path,
+                token=token,
+                kind="orca_visible_generation",
+                generation_paths=[generation],
+            )
+
+
+def test_reconcile_refuses_to_delete_substituted_visible_generation(
+    tmp_path: Path,
+) -> None:
+    generation = _visible_generation_path(tmp_path)
+    original_generation = generation.with_name(f"{generation.name}-original")
+    token = "snapshot-intent-visible-substituted"
+    create_snapshot_intent(
+        tmp_path,
+        token=token,
+        kind="orca_visible_generation",
+        generation_paths=[generation],
+    )
+    _create_generation(generation)
+    bind_snapshot_intent_generation_identities(tmp_path, token)
+    generation.rename(original_generation)
+    _create_generation(generation)
+
+    removed = reconcile_orphaned_snapshot_generations(
+        [tmp_path],
+        list_queue_fn=lambda _root: [],
+        owner_is_alive_fn=lambda _marker: False,
+    )
+
+    assert removed == 0
+    assert generation.is_dir()
+    assert original_generation.is_dir()
+    assert _intent_path(tmp_path, token).is_file()
+
+
+def test_dead_creator_with_unbound_visible_generation_retires_intent_only(
+    tmp_path: Path,
+) -> None:
+    generation = _visible_generation_path(tmp_path)
+    token = "snapshot-intent-visible-unbound"
+    create_snapshot_intent(
+        tmp_path,
+        token=token,
+        kind="orca_visible_generation",
+        generation_paths=[generation],
+    )
+    _create_generation(generation)
+
+    removed = reconcile_orphaned_snapshot_generations(
+        [tmp_path],
+        list_queue_fn=lambda _root: [],
+        owner_is_alive_fn=lambda _marker: False,
+    )
+
+    assert removed == 0
+    assert generation.is_dir()
+    assert not _intent_path(tmp_path, token).exists()
+
+
+def test_visible_generation_finalize_requires_matching_queue_snapshot_identity(
+    tmp_path: Path,
+) -> None:
+    generation = _visible_generation_path(tmp_path)
+    token = "snapshot-intent-visible-finalize"
+    create_snapshot_intent(
+        tmp_path,
+        token=token,
+        kind="orca_visible_generation",
+        generation_paths=[generation],
+    )
+    _create_generation(generation)
+    bind_snapshot_intent_generation_identities(tmp_path, token)
+    details = generation.stat()
+    job_details = generation.parent.stat()
+    matching_entry = SimpleNamespace(
+        metadata={
+            "execution_snapshot": {
+                "version": 2,
+                "execution_dir": str(generation.resolve()),
+                "execution_dir_identity": {
+                    "device": details.st_dev,
+                    "inode": details.st_ino,
+                },
+                "job_dir_identity": {
+                    "device": job_details.st_dev,
+                    "inode": job_details.st_ino,
+                },
+                SNAPSHOT_INTENT_TOKEN_KEY: token,
+                SNAPSHOT_INTENT_QUEUE_ROOT_KEY: str(tmp_path.resolve()),
+            }
+        }
+    )
+
+    mismatched = SimpleNamespace(
+        metadata={
+            "execution_snapshot": {
+                **matching_entry.metadata["execution_snapshot"],
+                "execution_dir_identity": {
+                    "device": details.st_dev,
+                    "inode": details.st_ino + 1,
+                },
+            }
+        }
+    )
+    with pytest.raises(ValueError, match="does not match metadata"):
+        finalize_queued_snapshot_intent(tmp_path, mismatched)
+    assert _intent_path(tmp_path, token).is_file()
+
+    finalize_queued_snapshot_intent(tmp_path, matching_entry)
+    assert not _intent_path(tmp_path, token).exists()
 
 
 def test_reconcile_preserves_live_creator_without_queue_row(tmp_path: Path) -> None:

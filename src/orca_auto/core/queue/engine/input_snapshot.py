@@ -15,6 +15,8 @@ from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory
 SNAPSHOT_DIR_NAME = ".orca_auto_input_snapshots"
 MAX_INPUT_SNAPSHOT_BYTES = 64 * 1024 * 1024
 _ROLE_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_DIRECT_GENERATION_OWNER_TOKEN_RE = re.compile(r"[A-Za-z0-9._-]{16,160}")
+_DIRECT_GENERATION_OWNER_XATTR = "user.orca_auto.generation_owner"
 
 
 def _safe_role(role: str) -> str:
@@ -106,6 +108,98 @@ def _open_stable_directory_at(
     except BaseException:
         os.close(descriptor)
         raise
+
+
+def _direct_generation_owner_payload(token: str) -> bytes:
+    normalized = str(token).strip()
+    if not _DIRECT_GENERATION_OWNER_TOKEN_RE.fullmatch(normalized):
+        raise ValueError("Generation owner token contains unsupported characters")
+    return f"orca_auto-visible-generation-owner-v1:{normalized}".encode()
+
+
+def _verify_direct_generation_owner(directory_fd: int, token: str) -> None:
+    expected = _direct_generation_owner_payload(token)
+    try:
+        current = os.getxattr(directory_fd, _DIRECT_GENERATION_OWNER_XATTR)
+    except OSError as exc:
+        raise ValueError("Visible generation owner identity is unavailable") from exc
+    if current != expected:
+        raise ValueError("Visible generation owner identity changed")
+
+
+def bind_direct_generation_owner(
+    job_dir: str | Path,
+    *,
+    namespace: str,
+    expected_job_identity: tuple[int, int],
+    expected_generation_identity: tuple[int, int],
+    owner_token: str,
+) -> None:
+    """Bind an invisible durable owner token to one newly-created generation inode."""
+
+    safe_namespace = canonical_input_snapshot_namespace(namespace)
+    resolved_job_dir = Path(job_dir).expanduser().resolve(strict=True)
+    job_fd, _identity = _open_stable_directory(
+        resolved_job_dir,
+        label="Generation owner job directory",
+        expected_identity=expected_job_identity,
+    )
+    try:
+        opened = _open_stable_directory_at(
+            job_fd,
+            safe_namespace,
+            label="Generation owner directory",
+            expected_identity=expected_generation_identity,
+        )
+        assert opened is not None
+        generation_fd, _generation_identity = opened
+        try:
+            os.setxattr(
+                generation_fd,
+                _DIRECT_GENERATION_OWNER_XATTR,
+                _direct_generation_owner_payload(owner_token),
+                flags=getattr(os, "XATTR_CREATE", 1),
+            )
+            os.fsync(generation_fd)
+            _verify_direct_generation_owner(generation_fd, owner_token)
+        finally:
+            os.close(generation_fd)
+    finally:
+        os.close(job_fd)
+
+
+def require_direct_generation_owner(
+    job_dir: str | Path,
+    *,
+    namespace: str,
+    expected_job_identity: tuple[int, int],
+    expected_generation_identity: tuple[int, int],
+    owner_token: str,
+) -> None:
+    """Require one direct generation to retain its durable invisible owner token."""
+
+    safe_namespace = canonical_input_snapshot_namespace(namespace)
+    resolved_job_dir = Path(job_dir).expanduser().resolve(strict=True)
+    job_fd, _identity = _open_stable_directory(
+        resolved_job_dir,
+        label="Generation owner job directory",
+        expected_identity=expected_job_identity,
+    )
+    try:
+        opened = _open_stable_directory_at(
+            job_fd,
+            safe_namespace,
+            label="Generation owner directory",
+            expected_identity=expected_generation_identity,
+        )
+        assert opened is not None
+        generation_fd, _generation_identity = opened
+        try:
+            _verify_direct_generation_owner(generation_fd, owner_token)
+        finally:
+            os.close(generation_fd)
+    finally:
+        os.close(job_fd)
 
 
 def _remove_directory_contents_at(directory_fd: int, *, label: str) -> None:
@@ -243,6 +337,61 @@ def _cleanup_unowned_generation_directory(
                 os.close(verified_root_fd)
         finally:
             os.close(root_fd)
+    finally:
+        os.close(job_fd)
+
+
+def cleanup_unowned_direct_generation_directory(
+    job_dir: str | Path,
+    *,
+    namespace: str,
+    label: str,
+    expected_job_identity: tuple[int, int],
+    expected_generation_identity: tuple[int, int],
+    expected_owner_token: str,
+) -> None:
+    """Remove one exact direct child generation through pinned no-follow handles."""
+
+    safe_namespace = canonical_input_snapshot_namespace(namespace)
+    raw_job_dir = Path(job_dir).expanduser()
+    try:
+        resolved_job_dir = raw_job_dir.resolve(strict=True)
+    except FileNotFoundError:
+        raise ValueError("Generation cleanup job directory identity changed") from None
+    job_fd, _job_identity = _open_stable_directory(
+        resolved_job_dir,
+        label="Generation cleanup job directory",
+        expected_identity=expected_job_identity,
+    )
+    try:
+        opened_generation = _open_stable_directory_at(
+            job_fd,
+            safe_namespace,
+            label=f"{label} generation",
+            missing_ok=True,
+            expected_identity=expected_generation_identity,
+        )
+        if opened_generation is None:
+            return
+        generation_fd, generation_identity = opened_generation
+        try:
+            _verify_direct_generation_owner(generation_fd, expected_owner_token)
+            _remove_directory_contents_at(generation_fd, label=f"{label} generation")
+            verified_generation = _open_stable_directory_at(
+                job_fd,
+                safe_namespace,
+                label=f"{label} generation",
+                expected_identity=generation_identity,
+            )
+            assert verified_generation is not None
+            verified_generation_fd, _identity = verified_generation
+            try:
+                os.rmdir(safe_namespace, dir_fd=job_fd)
+            finally:
+                os.close(verified_generation_fd)
+            os.fsync(job_fd)
+        finally:
+            os.close(generation_fd)
     finally:
         os.close(job_fd)
 
@@ -574,6 +723,7 @@ __all__ = [
     "SNAPSHOT_DIR_NAME",
     "MAX_INPUT_SNAPSHOT_BYTES",
     "canonical_input_snapshot_namespace",
+    "cleanup_unowned_direct_generation_directory",
     "cleanup_unowned_input_snapshot_namespace",
     "input_snapshot_namespace_dir",
     "read_stable_regular_file",

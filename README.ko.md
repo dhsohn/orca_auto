@@ -261,17 +261,28 @@ orca_auto service restart
 - ORCA 워커는 큐 정체성으로 큐 자식을 실행하므로, 내구성 있는 `queue.json` 항목이
   사실의 원천(source of truth)으로 유지되는 한편 공개 `reaction_dir` 계약도 보존됩니다.
 - 워커가 실행 중이 아니면, 큐에 들어간 작업은 워커가 돌아올 때까지 대기 상태로 남습니다.
-- ORCA는 제출할 때 가장 최근에 수정된 `.inp`를 선택하고 해당 입력과 지원하는 파일 의존성을
-  private execution snapshot에 바인딩합니다. 이후 원본을 편집해도 큐에 들어간 generation은
-  바뀌지 않습니다.
+- ORCA는 제출할 때 가장 최근에 수정된 `.inp`와 지원하는 파일 의존성을 눈에 보이는
+  `<작업 디렉터리>/generation-YYYYMMDD-HHMMSS-<8자리 hex>/`에 바인딩합니다. 실제
+  실행 `.inp`와 각 의존성은 원래 basename을 그대로 유지하고 raw ORCA 파일도 같은 단계에
+  생깁니다. 새 ORCA 제출은 숨은 실행 디렉터리나 중첩 입력 디렉터리를 만들지 않습니다.
+  이후 원본을 편집해도 이미 큐에 들어간 generation은 바뀌지 않습니다. 서로 다른 소스
+  경로의 참조 파일이 같은 basename을 쓰면 내용이 같아도 제출을 거부합니다. Opt 계열에서
+  주 `* xyzfile` geometry가 입력과 같은 stem을 쓰면 좌표를 바인딩 입력에 inline하므로
+  hash나 rename 없이 exact
+  XYZ 이름을 유지하고 ORCA가 실행 뒤 갱신할 수 있습니다. 같은 stem의 보조 NEB
+  Product/TS 파일은 여전히 모호하므로 거부합니다.
+- 완전히 닫힌 ORCA 작업 디렉터리는 다시 제출할 수 있으며 매번 새 sibling generation을
+  만듭니다. 같은 디렉터리의 활성 작업이나 미완료 terminal publication이 남아 있으면 새
+  제출을 계속 차단합니다.
 - `flow.yaml`, `xtb_md_job.yaml`, 내부 엔진 작업 manifest는 1 MiB, YAML alias 32개, 파싱/확장 node 10,000개,
   중첩 64단계로 제한하며 순환/재귀 YAML graph는 fail-closed합니다. 로컬 geometry는 최대
   10,000원자이며 xTB/ORCA Hessian 생성 작업은 1,000원자, Discord 업로드 작업은
   200원자로 더 제한합니다.
 - 중단된 ORCA 실행을 재시도하거나 재개할 때, orca_auto는 일치하는 비어 있지 않은
   `.gbw` 파일을 사용해 `MORead`와 `%moinp`가 포함된 재시작 입력을 생성합니다.
-- 완료된 ORCA와 단독 xTB-MD 실행은 `job_state.json`, `job_report.json`,
-  `job_report.md` 같은 상태 및 리포트 파일을 기록합니다.
+- ORCA 작업 루트에는 `run.lock`과 최신 공개 상태/리포트 파일이 남습니다.
+  `job_state.json`과 `job_report.json`은 해당 실행을 설명하는 visible generation에도
+  mirror됩니다. 단독 xTB-MD의 산출물 배치는 기존과 같습니다.
 - 무인 WSL 또는 Linux 실행을 위해서는 [systemd/README.ko.md](systemd/README.ko.md)의
   `systemd` 자산을 사용하세요.
 

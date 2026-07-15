@@ -196,7 +196,7 @@ class DuplicateEntryError(ValueError):
         super().__init__(
             f"Reaction directory already queued: {reaction_dir} "
             f"(queue_id={qid}, status={status}). "
-            f"Use --force to re-enqueue a completed/failed job, or cancel the existing entry first."
+            "Wait for the active generation or its terminal publication to finish first."
         )
 
 
@@ -223,7 +223,7 @@ def _reject_duplicate_reaction_dir(
         if (
             queue_entry_reaction_dir(existing) == entry_key
             and queue_entry_status(existing) in TERMINAL_STATUSES
-            and _has_pending_terminal_replay(existing)
+            and (_has_pending_terminal_replay(existing) or terminal_replay_is_fence_only(existing))
         ):
             # A terminal queue mark is only the first half of publication.  Until
             # its durable replay marker is cleared, the parent still owns this
@@ -234,7 +234,10 @@ def _reject_duplicate_reaction_dir(
         owned_entries,
         key=entry_key,
         key_fn=queue_entry_reaction_dir,
-        force=queue_entry_force(entry),
+        # A closed generation owns its visible execution directory, not the
+        # public source folder. Only an active row (or the replay fence above)
+        # blocks a new sibling generation in the same job directory.
+        force=True,
         active_statuses=ACTIVE_STATUSES,
         terminal_statuses=TERMINAL_STATUSES,
         error_factory=DuplicateEntryError,

@@ -10,6 +10,7 @@ from .input_blocks import file_route_lines
 RetryRecipeName = Literal["scants_retry", "no_route_rewrite"]
 
 _ROUTE_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?")
+_RETRY_STEM_RE = re.compile(r"\.retry\d+$", re.IGNORECASE)
 _TS_TOKENS = {"OPTTS", "NEB-TS"}
 _FREQ_TOKENS = {"FREQ", "NUMFREQ", "ANFREQ"}
 
@@ -81,6 +82,17 @@ def effective_max_retries(inp_path: Path, *, configured_max_retries: int) -> int
     return retry_policy_for_input(inp_path).max_retries
 
 
+def retry_input_path(selected_inp: Path, retry_number: int) -> Path:
+    base_stem = _RETRY_STEM_RE.sub("", selected_inp.stem)
+    if not base_stem:
+        base_stem = selected_inp.stem
+    return selected_inp.with_name(f"{base_stem}.retry{retry_number:02d}.inp")
+
+
+def resume_checkpoint_input_path(current_inp: Path) -> Path:
+    return current_inp.with_name(f"{current_inp.stem}.resume.inp")
+
+
 def retry_recipe_name_for_input(inp_path: Path, retry_number: int) -> RetryRecipeName:
     return retry_policy_for_input(inp_path).recipe_for_retry(retry_number)
 
@@ -94,6 +106,8 @@ __all__ = [
     "RetryPolicy",
     "RetryRecipeName",
     "effective_max_retries",
+    "resume_checkpoint_input_path",
+    "retry_input_path",
     "retry_policy_for_input",
     "retry_recipe_name_for_input",
 ]

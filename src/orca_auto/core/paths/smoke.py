@@ -4,6 +4,8 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
+from orca_auto.core.queue.generation import is_visible_generation_name
+
 SMOKE_RESULTS_DIRNAME = ".orca_auto_smoke"
 
 
@@ -55,6 +57,13 @@ def _relative_is_reserved(relative: Path | None) -> bool:
     )
 
 
+def _relative_is_visible_generation(relative: Path | None) -> bool:
+    return bool(
+        relative is not None
+        and any(is_visible_generation_name(component) for component in relative.parts)
+    )
+
+
 def is_path_in_reserved_smoke_tree(path: str | Path, runs_root: str | Path) -> bool:
     """Return whether *path* belongs to ``<runs_root>/.orca_auto_smoke``.
 
@@ -98,7 +107,16 @@ def should_exclude_from_production_runs_scan(
     """Fail-closed production scan filter for reserved or unsafe paths."""
 
     try:
-        return is_path_in_reserved_smoke_tree(path, runs_root)
+        if is_path_in_reserved_smoke_tree(path, runs_root):
+            return True
+        lexical_root = _lexical_absolute(runs_root, label="runs_root")
+        lexical_path = _lexical_absolute(path, label="path")
+        lexical_relative = _relative_if_inside(lexical_path, lexical_root)
+        if _relative_is_visible_generation(lexical_relative):
+            return True
+        resolved_root = _resolved(lexical_root, label="runs_root")
+        resolved_path = _resolved(lexical_path, label="path")
+        return _relative_is_visible_generation(_relative_if_inside(resolved_path, resolved_root))
     except ValueError:
         return True
 

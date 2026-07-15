@@ -10,7 +10,10 @@ import pytest
 
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca import worker_execution as worker_job
-from orca_auto.orca.execution_binding import build_orca_execution_snapshot
+from orca_auto.orca.execution_binding import (
+    build_orca_execution_snapshot,
+    orca_execution_provenance,
+)
 from orca_auto.orca.orca_runner import OrcaRunner, WorkerShutdownInterrupt
 from orca_auto.orca.queue.adapter import dequeue_next, enqueue, list_queue
 from orca_auto.orca.state import load_state, new_state, save_state
@@ -57,7 +60,7 @@ def test_execute_run_job_builds_run_inp_execution_request(
     tmp_path: Path,
 ) -> None:
     reaction_dir = tmp_path / "rxn"
-    selected_inp = reaction_dir / ".orca_auto_orca_executions" / "generation-1" / "rxn.inp"
+    selected_inp = reaction_dir / "generation-20260714-224054-959479f2" / "rxn.inp"
     rc = execute_run_job(
         "/tmp/config.yaml",
         str(reaction_dir),
@@ -154,6 +157,7 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     assert calls["args"] == ("/tmp/config.yaml", str(reaction_dir))
     runner_cls = calls["kwargs"].pop("runner_cls")
     bound_cfg = calls["kwargs"].pop("cfg")
+    execution_provenance = calls["kwargs"].pop("execution_provenance")
     assert issubclass(runner_cls, OrcaRunner)
     assert bound_cfg.runtime.default_max_retries == 0
     runner = runner_cls("/changed/orca")
@@ -162,6 +166,7 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
         runner._bound_executable_identity
         == entry.metadata["execution_snapshot"]["executable_identities"]["orca"]
     )
+    assert execution_provenance == orca_execution_provenance(entry.metadata["execution_snapshot"])
     assert calls["kwargs"] == {
         "force": True,
         "reservation_token": "slot-1",
@@ -254,8 +259,10 @@ def test_process_dequeued_entry_returns_orca_worker_outcome(
     assert calls["args"] == ("/tmp/config.yaml", str(reaction_dir))
     runner_cls = calls["kwargs"].pop("runner_cls")
     bound_cfg = calls["kwargs"].pop("cfg")
+    execution_provenance = calls["kwargs"].pop("execution_provenance")
     assert issubclass(runner_cls, OrcaRunner)
     assert bound_cfg.runtime.default_max_retries == 0
+    assert execution_provenance == orca_execution_provenance(entry.metadata["execution_snapshot"])
     assert calls["kwargs"] == {
         "force": True,
         "reservation_token": "slot-1",

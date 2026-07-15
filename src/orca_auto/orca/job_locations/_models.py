@@ -19,6 +19,9 @@ class JobArtifactContext:
 class JobRuntimeContext:
     artifact: JobArtifactContext = field(default_factory=JobArtifactContext)
     queue_entry: dict[str, Any] | None = None
+    artifact_dir: Path | None = None
+    selector_miss: bool = False
+    generation_invalid: bool = False
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,7 @@ class OrcaContractPayloadContext:
     state: dict[str, Any]
     report: dict[str, Any]
     current_dir: Path | None
+    artifact_dir: Path | None
     resolved_run_id: str
     latest_known_path: str
     state_status: str
@@ -47,6 +51,8 @@ class OrcaContractPayloadContext:
 
     @property
     def missing(self) -> bool:
+        if self.runtime.selector_miss:
+            return False
         return self.record is None and self.current_dir is None and not self.queue_entry
 
 

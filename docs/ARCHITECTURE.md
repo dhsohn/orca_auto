@@ -156,11 +156,14 @@ Key properties:
   supported. The `reaction_dir` field is still preserved in the queue entry as
   the downstream contract.
 - **A queue generation binds its executable inputs at submission.** Standalone
-  xTB-MD and workflow xTB/CREST use content-addressed input snapshots in an exclusively reserved, unique
-  namespace for each submission; ORCA builds a private generation tree and
-  rewrites supported file references to confined copies. Workers verify those
-  input and executable identities instead of re-reading mutable source files as
-  the execution contract.
+  xTB-MD and workflow xTB/CREST use content-addressed input snapshots in an
+  exclusively reserved, unique namespace for each submission. ORCA creates a
+  visible `generation-YYYYMMDD-HHMMSS-<8-hex>/` directly under the submitted job
+  directory, preserves the selected `.inp` and dependency basenames, rewrites
+  supported file references to those confined flat copies, and writes raw
+  outputs beside them. New ORCA generations have no hidden execution parent or
+  nested `.inputs/`. Workers verify input and executable content identities
+  instead of re-reading mutable source files as the execution contract.
 - **If no worker is running, work stays pending** in `queue.json` until a worker
   returns. Closing the submission terminal after `status: queued` is safe.
 
@@ -270,8 +273,19 @@ raw outputs remain in the private execution tree for audit.
 logic. Notable pieces:
 
 - **Input selection and binding:** at submission, ORCA selects the most recently
-  modified `*.inp`, snapshots it and its supported file dependencies, and
-  executes only the private bound input for that queue generation.
+  modified `*.inp`, snapshots it and its supported file dependencies into one
+  visible flat generation, and executes only that generation's bound input.
+  Two different source paths with the same basename always fail closed, even
+  when their contents match.
+- **Generation-local evidence with a root summary:** raw ORCA inputs and outputs
+  remain in their visible generation. Generation-local `job_state.json` and
+  `job_report.json` mirror the exact execution record, while the job-root copies
+  remain the latest public summary and `run.lock` continues to serialize use of
+  the reusable source directory. A fully closed submission can therefore be
+  followed by a new sibling generation without overwriting old raw files. An
+  invisible filesystem owner token binds state/report publication, historical
+  lookup, cleanup, and DFT discovery to the originally submitted directory
+  rather than only its reusable pathname or inode number.
 - **Attempt engine** (`attempt/engine.py`, `attempt/retry.py`,
   `attempt/resume.py`): runs an attempt, parses output, classifies the result,
   and decides whether to retry.

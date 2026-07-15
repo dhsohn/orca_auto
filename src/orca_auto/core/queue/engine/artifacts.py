@@ -62,17 +62,28 @@ def sanitized_execution_provenance(entry: Any) -> dict[str, Any]:
     snapshot = metadata.get("execution_snapshot")
     if not isinstance(snapshot, Mapping):
         return {}
-    descriptors = snapshot.get("input_snapshots")
+    descriptors = snapshot.get("source_inputs")
+    if not isinstance(descriptors, Mapping):
+        descriptors = snapshot.get("input_snapshots")
+    materialized = snapshot.get("materialized_inputs")
     inputs: list[dict[str, Any]] = []
     if isinstance(descriptors, Mapping):
         for role, descriptor in sorted(descriptors.items(), key=lambda item: str(item[0])):
             if not isinstance(descriptor, Mapping):
                 continue
+            executed_path = str(descriptor.get("snapshot_path") or "")
+            materialized_identity = (
+                materialized.get(role) if isinstance(materialized, Mapping) else None
+            )
+            if isinstance(materialized_identity, Mapping):
+                executed_path = str(materialized_identity.get("path") or executed_path)
+            elif role == "selected_source":
+                executed_path = str(snapshot.get("selected_inp") or executed_path)
             inputs.append(
                 {
                     "role": str(role),
                     "source_path": str(descriptor.get("source_path") or ""),
-                    "executed_path": str(descriptor.get("snapshot_path") or ""),
+                    "executed_path": executed_path,
                     "sha256": str(descriptor.get("sha256") or ""),
                     "size_bytes": descriptor.get("size_bytes"),
                 }
