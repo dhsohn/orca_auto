@@ -12,7 +12,7 @@ from ..inp_rewriter import (
     rewrite_for_retry,
 )
 from ..out_analyzer import OutAnalysis
-from ..retry_policy import retry_recipe_name_for_input
+from ..retry_policy import resume_checkpoint_input_path, retry_recipe_name_for_input
 from ..scants import (
     highest_scants_surface_point,
     input_uses_scants,
@@ -58,7 +58,7 @@ class RetryAttemptRequest:
 
 
 def resume_checkpoint_inp_path(current_inp: Path) -> Path:
-    return current_inp.with_name(f"{current_inp.stem}.resume.inp")
+    return resume_checkpoint_input_path(current_inp)
 
 
 def prepare_resumed_checkpoint_input(

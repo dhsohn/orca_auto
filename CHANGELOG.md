@@ -20,7 +20,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   submission, even when their bytes match. A sole main same-stem `* xyzfile`
   geometry is inlined into the bound input and
   remains visible under its exact basename for ORCA to update; same-stem
-  auxiliary NEB Product/TS inputs remain rejected.
+  auxiliary NEB Product/TS inputs remain rejected. Dependencies whose basenames
+  are reserved for base, retry, or checkpoint-resume runtime inputs and outputs
+  are also rejected before the generation is submitted.
 - A fully closed standalone ORCA job directory can be submitted again without
   replacing prior results. Each submission receives a new sibling generation,
   while an active row or incomplete terminal replay still blocks a successor.

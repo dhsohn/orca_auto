@@ -19,6 +19,7 @@ from orca_auto.core.utils.process_tracking import active_run_lock_pid
 from ..completion_rules import detect_completion_mode
 from ..orca_process import OrcaProcessRecoveryError, recover_orphaned_orca_process
 from ..out_analyzer import analyze_output
+from ..retry_policy import retry_input_path
 from ..runtime.run_lock import LOCK_FILE_NAME
 from ..state import load_state
 from ..state_machine import RESUMABLE_RUN_STATUSES
@@ -58,10 +59,7 @@ def select_latest_inp(reaction_dir: Path) -> Path:
 
 
 def retry_inp_path(selected_inp: Path, retry_number: int) -> Path:
-    base_stem = RETRY_INP_RE.sub("", selected_inp.stem)
-    if not base_stem:
-        base_stem = selected_inp.stem
-    return selected_inp.with_name(f"{base_stem}.retry{retry_number:02d}.inp")
+    return retry_input_path(selected_inp, retry_number)
 
 
 def existing_completed_out(selected_inp: Path) -> dict[str, Any] | None:

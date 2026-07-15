@@ -44,6 +44,11 @@ from .input_blocks import (
 )
 from .job_type import FREQ_RE
 from .resource_directives import resource_request_from_lines
+from .retry_policy import (
+    effective_max_retries,
+    resume_checkpoint_input_path,
+    retry_input_path,
+)
 
 ORCA_EXECUTION_SNAPSHOT_VERSION = 2
 MAX_ORCA_INPUT_REFERENCES = 128
@@ -417,19 +422,30 @@ def _validate_dependency_basename(
     source: Path,
     selected_inp: Path,
     *,
+    effective_retry_count: int,
     hessian_requested: bool,
     same_stem_xyz_is_output: bool,
     inline_same_stem_xyz: bool,
 ) -> None:
     name = source.name
-    runtime_owned_names = _GENERATION_RUNTIME_FILE_NAMES | {
-        selected_inp.with_suffix(".out").name,
-        selected_inp.with_suffix(".gbw").name,
-    }
-    if hessian_requested:
-        runtime_owned_names = runtime_owned_names | {selected_inp.with_suffix(".hess").name}
-    if same_stem_xyz_is_output and not inline_same_stem_xyz:
-        runtime_owned_names = runtime_owned_names | {selected_inp.with_suffix(".xyz").name}
+    retry_inputs = [
+        retry_input_path(selected_inp, retry_number)
+        for retry_number in range(1, effective_retry_count + 1)
+    ]
+    attempt_inputs = [selected_inp, *retry_inputs]
+    resume_inputs = [
+        resume_checkpoint_input_path(attempt_input) for attempt_input in attempt_inputs
+    ]
+    runtime_input_variants = [*attempt_inputs, *resume_inputs]
+    runtime_owned_names = set(_GENERATION_RUNTIME_FILE_NAMES)
+    runtime_owned_names.update(path.name for path in [*retry_inputs, *resume_inputs])
+    for runtime_input in runtime_input_variants:
+        runtime_owned_names.add(runtime_input.with_suffix(".out").name)
+        runtime_owned_names.add(runtime_input.with_suffix(".gbw").name)
+        if hessian_requested:
+            runtime_owned_names.add(runtime_input.with_suffix(".hess").name)
+        if same_stem_xyz_is_output and not inline_same_stem_xyz:
+            runtime_owned_names.add(runtime_input.with_suffix(".xyz").name)
     if name in runtime_owned_names:
         raise ValueError(
             "ORCA referenced input basename conflicts with a generation runtime/output file: "
@@ -662,6 +678,10 @@ def build_orca_execution_snapshot(
         validate_supported_xyz_geometry_syntax(lines, label="ORCA selected input")
         hessian_requested = _route_requests_hessian(lines)
         same_stem_xyz_is_output = _route_writes_same_stem_xyz(lines)
+        effective_retry_count = effective_max_retries(
+            source_selected,
+            configured_max_retries=max_retries,
+        )
         if (
             hessian_requested
             and inline_atom_count is not None
@@ -711,6 +731,7 @@ def build_orca_execution_snapshot(
             _validate_dependency_basename(
                 dependency,
                 source_selected,
+                effective_retry_count=effective_retry_count,
                 hessian_requested=hessian_requested,
                 same_stem_xyz_is_output=same_stem_xyz_is_output,
                 inline_same_stem_xyz=inline_same_stem_xyz,
@@ -1064,10 +1085,15 @@ def verify_orca_execution_snapshot(
     bound_references = _file_references(selected_lines)
     hessian_requested = _route_requests_hessian(selected_lines)
     same_stem_xyz_is_output = _route_writes_same_stem_xyz(selected_lines)
+    effective_retry_count = effective_max_retries(
+        selected,
+        configured_max_retries=expected_max_retries,
+    )
     for role, _descriptor, source_path in verified_dependencies:
         _validate_dependency_basename(
             source_path,
             source_selected_path,
+            effective_retry_count=effective_retry_count,
             hessian_requested=hessian_requested,
             same_stem_xyz_is_output=same_stem_xyz_is_output,
             inline_same_stem_xyz=role in mutable_roles,

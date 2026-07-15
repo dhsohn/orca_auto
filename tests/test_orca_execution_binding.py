@@ -282,6 +282,79 @@ def test_orca_execution_snapshot_rejects_generation_runtime_name_collisions(
     assert not list(job_dir.glob("generation-*"))
 
 
+@pytest.mark.parametrize(
+    ("route", "max_retries", "dependency_name"),
+    [
+        ("! HF STO-3G SP", 0, "h2.resume.inp"),
+        ("! HF STO-3G SP", 0, "h2.resume.out"),
+        ("! HF STO-3G SP", 0, "h2.resume.gbw"),
+        ("! HF STO-3G Freq", 0, "h2.resume.hess"),
+        ("! HF STO-3G Opt", 0, "h2.resume.xyz"),
+        ("! HF STO-3G ScanTS", 1, "h2.retry01.inp"),
+        ("! HF STO-3G ScanTS", 1, "h2.retry01.out"),
+        ("! HF STO-3G ScanTS", 1, "h2.retry03.gbw"),
+        ("! HF STO-3G ScanTS", 1, "h2.retry03.xyz"),
+        ("! HF STO-3G ScanTS Freq", 1, "h2.retry03.hess"),
+        ("! HF STO-3G ScanTS", 1, "h2.retry02.resume.inp"),
+        ("! HF STO-3G ScanTS", 1, "h2.retry02.resume.out"),
+    ],
+)
+def test_orca_execution_snapshot_rejects_retry_and_resume_name_collisions(
+    tmp_path: Path,
+    route: str,
+    max_retries: int,
+    dependency_name: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    dependency = job_dir / dependency_name
+    dependency.write_text("0\n", encoding="utf-8")
+    selected = job_dir / "h2.inp"
+    selected.write_text(
+        f'{route}\n%pointcharges "{dependency_name}"\n* xyz 0 1\nH 0 0 0\n*\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="runtime/output file"):
+        build_orca_execution_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz="",
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            max_retries=max_retries,
+            orca_executable=_write_executable(tmp_path / "orca"),
+        )
+
+    assert not list(job_dir.glob("generation-*"))
+
+
+def test_orca_execution_snapshot_allows_retry_name_outside_effective_budget(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    dependency = job_dir / "h2.retry04.out"
+    dependency.write_text("0\n", encoding="utf-8")
+    selected = job_dir / "h2.inp"
+    selected.write_text(
+        '! HF STO-3G ScanTS\n%pointcharges "h2.retry04.out"\n* xyz 0 1\nH 0 0 0\n*\n',
+        encoding="utf-8",
+    )
+
+    snapshot = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        max_retries=1,
+        orca_executable=_write_executable(tmp_path / "orca"),
+    )
+
+    assert Path(snapshot["materialized_inputs"]["dependency_000000"]["path"]).name == (
+        dependency.name
+    )
+
+
 def test_orca_execution_snapshot_creates_sequential_sibling_generations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -967,6 +1040,33 @@ def test_orca_execution_snapshot_rejects_materialized_basename_metadata_tamper(
         _verify(job_dir, selected, snapshot, resources)
 
     assert generation.is_dir()
+
+
+def test_verify_orca_execution_snapshot_rejects_resume_output_name_tamper(
+    tmp_path: Path,
+) -> None:
+    import orca_auto.orca.execution_binding as binding
+
+    job_dir, selected, snapshot, resources = _snapshot(tmp_path)
+    role = "dependency_000000"
+    original_private = Path(snapshot["materialized_inputs"][role]["path"])
+    reserved_source = job_dir / "job.resume.out"
+    reserved_private = Path(snapshot["execution_dir"]) / reserved_source.name
+    original_private.rename(reserved_private)
+    snapshot["dependency_paths"][0] = str(reserved_source.resolve())
+    snapshot["source_inputs"][role]["source_path"] = str(reserved_source.resolve())
+    snapshot["materialized_inputs"][role] = binding._file_identity(reserved_private)
+    bound_selected = Path(snapshot["selected_inp"])
+    bound_selected.chmod(0o600)
+    bound_selected.write_text(
+        bound_selected.read_text(encoding="utf-8").replace("charges.pc", reserved_source.name),
+        encoding="utf-8",
+    )
+    bound_selected.chmod(0o400)
+    snapshot["bound_selected_identity"] = binding._file_identity(bound_selected)
+
+    with pytest.raises(ValueError, match="runtime/output file: job.resume.out"):
+        _verify(job_dir, selected, snapshot, resources)
 
 
 def test_verify_orca_execution_snapshot_rejects_distinct_sources_with_same_basename(
