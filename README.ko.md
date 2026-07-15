@@ -226,8 +226,11 @@ orca_auto bot run              # 포그라운드 Telegram/Discord gateway
 부모 아래에 묶입니다. 대화형 터미널에서는 상태별 개수 요약 밴드, 워크플로우 자식의
 박스 드로잉 트리 커넥터, 상태색 좌측 레일이 더해지고 `--watch`에는 스피너·시각과 함께
 `/proc` 기반 실시간 시스템 CPU/RAM/load 게이지, 그리고 전 엔진 실행 중 작업별 CPU/RAM이
-표시됩니다(의존성 추가 없음). 파이프·`--json`·`--no-color` 출력은 스크립트를 위해
-plain·바이트 안정으로 유지됩니다. 선택된 봇은 동일한 앱 표면(Telegram `/list`,
+표시됩니다(의존성 추가 없음). 파이프 출력은 안정적인 plain 레이아웃을 유지하며
+(`FORCE_COLOR`는 명시적으로 ANSI를 추가할 수 있음), `--json`은 ANSI 없는 machine-readable
+JSON을 유지하고 메신저 출력은 plain을 유지합니다. 이번 자원 표시 변경은 두 출력 계약을
+바꾸지 않습니다. 실제 터미널에서 `NO_COLOR`·`--no-color`는 ANSI
+색상만 제거하고 실시간 CPU/RAM 관측은 끄지 않습니다. 선택된 봇은 동일한 앱 표면(Telegram `/list`,
 Discord `!list`, 동일한 cancel/help 명령)을 provider-native 버튼으로 제공합니다. 표 컬럼,
 `--watch`/`--json`/`--no-color` 플래그, 색상·종료 동작, messenger 봇 등 전체 명령
 레퍼런스는

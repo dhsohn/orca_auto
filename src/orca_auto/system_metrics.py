@@ -210,10 +210,30 @@ class SystemMetricsSampler:
 
 @dataclass(frozen=True)
 class JobMetrics:
-    """Per-process-group resource usage for one running job."""
+    """Per-process-group resource usage for one active simulation."""
 
     cpu_percent: float | None
     rss_bytes: int
+
+
+def _pid_stat_fields(stat_text: str) -> list[str] | None:
+    end = stat_text.rfind(")")
+    if end == -1:
+        return None
+    return stat_text[end + 1 :].split()
+
+
+def _pid_stat_pgrp(stat_text: str) -> int | None:
+    """Recover a valid pgrp even when a later stat field is malformed."""
+
+    fields = _pid_stat_fields(stat_text)
+    if fields is None or len(fields) < 3:
+        return None
+    try:
+        pgrp = int(fields[2])
+    except ValueError:
+        return None
+    return pgrp if 0 < pgrp <= _MAX_PROC_INTEGER else None
 
 
 def parse_pid_stat(stat_text: str) -> tuple[int, int, int] | None:
@@ -221,32 +241,37 @@ def parse_pid_stat(stat_text: str) -> tuple[int, int, int] | None:
 
     ``comm`` (field 2) may contain spaces or parentheses, so the fields after it
     are taken from the text following the *last* ``)``. Field offsets (1-indexed):
-    5=pgrp, 14=utime, 15=stime, 24=rss (pages). Returns ``None`` on any malformed
-    input.
+    5=pgrp, 14=utime, 15=stime, 16=cutime, 17=cstime, 24=rss (pages).
+    CPU includes already waited-for children so short-lived engine subprocesses
+    remain in the process-group cumulative counter after they are reaped.
+    Returns ``None`` on any malformed input.
     """
 
-    end = stat_text.rfind(")")
-    if end == -1:
+    after = _pid_stat_fields(stat_text)
+    if after is None:
         return None
-    after = stat_text[end + 1 :].split()
     # after[0] is field 3 (state); pgrp=field5→after[2], utime=field14→after[11],
-    # stime=field15→after[12], rss=field24→after[21].
+    # stime=field15→after[12], cutime/cstime=fields16/17→after[13]/[14],
+    # rss=field24→after[21].
     if len(after) < 22:
         return None
     try:
         pgrp = int(after[2])
         utime = int(after[11])
         stime = int(after[12])
+        cutime = int(after[13])
+        cstime = int(after[14])
         rss_pages = int(after[21])
     except ValueError:
         return None
-    if (
-        pgrp <= 0
-        or any(value < 0 or value > _MAX_PROC_INTEGER for value in (utime, stime, rss_pages))
-        or utime + stime > _MAX_PROC_INTEGER
+    if not 0 < pgrp <= _MAX_PROC_INTEGER or any(
+        value < 0 or value > _MAX_PROC_INTEGER
+        for value in (utime, stime, cutime, cstime, rss_pages)
     ):
         return None
-    cpu_jiffies = utime + stime
+    cpu_jiffies = utime + stime + cutime + cstime
+    if cpu_jiffies > _MAX_PROC_INTEGER:
+        return None
     return pgrp, cpu_jiffies, rss_pages
 
 
@@ -276,6 +301,7 @@ def read_process_group_usage(
         entries = list(root.iterdir())
     except OSError:
         return {}
+    invalid_groups: set[int] = set()
     for entry in entries:
         if not entry.name.isdigit():
             continue
@@ -283,15 +309,28 @@ def read_process_group_usage(
             content = (entry / "stat").read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue  # process exited between listing and read
+        candidate_pgrp = _pid_stat_pgrp(content)
         parsed = parse_pid_stat(content)
         if parsed is None:
+            if candidate_pgrp in targets:
+                invalid_groups.add(candidate_pgrp)
+                totals.pop(candidate_pgrp, None)
             continue
         pgrp, cpu_jiffies, rss_pages = parsed
-        if pgrp not in targets:
+        if pgrp not in targets or pgrp in invalid_groups:
             continue
+        if rss_pages > _MAX_PROC_INTEGER // page:
+            invalid_groups.add(pgrp)
+            totals.pop(pgrp, None)
+            continue
+        rss_bytes = rss_pages * page
         bucket = totals.setdefault(pgrp, [0, 0])
+        if bucket[0] > _MAX_PROC_INTEGER - cpu_jiffies or bucket[1] > _MAX_PROC_INTEGER - rss_bytes:
+            invalid_groups.add(pgrp)
+            totals.pop(pgrp, None)
+            continue
         bucket[0] += cpu_jiffies
-        bucket[1] += rss_pages * page
+        bucket[1] += rss_bytes
     return {pgid: (cpu, rss) for pgid, (cpu, rss) in totals.items()}
 
 
@@ -340,16 +379,34 @@ class ProcessGroupSampler:
             cpu_jiffies, rss_bytes = usage
             cpu_percent: float | None = None
             previous = self._previous.get(identity)
+            next_baseline = (pgid, cpu_jiffies, now)
             if previous is not None and previous[0] == pgid and self._clk_tck > 0:
                 _previous_pgid, previous_jiffies, previous_now = previous
                 elapsed = now - previous_now
                 delta = cpu_jiffies - previous_jiffies
-                if elapsed > 0 and delta >= 0:
+                if delta < 0:
+                    # A non-atomic /proc scan can transiently undercount a group.
+                    # Keep the last high-water baseline until the cumulative
+                    # counter recovers; rebasing to the low frame would publish
+                    # the recovery as fresh CPU even if undercount lasts for
+                    # multiple refreshes.
+                    next_baseline = previous
+                elif elapsed > 0:
                     cpu_percent = max(0.0, (delta / self._clk_tck) / elapsed * 100.0)
-            next_previous[identity] = (pgid, cpu_jiffies, now)
+            next_previous[identity] = next_baseline
             result[identity] = JobMetrics(cpu_percent=cpu_percent, rss_bytes=rss_bytes)
         self._previous = next_previous
         return result
+
+    def retain_identities(self, identities: Iterable[Hashable]) -> None:
+        """Keep delta state only for identities whose last sample was published."""
+
+        retained = set(identities)
+        self._previous = {
+            identity: previous
+            for identity, previous in self._previous.items()
+            if identity in retained
+        }
 
 
 __all__ = [

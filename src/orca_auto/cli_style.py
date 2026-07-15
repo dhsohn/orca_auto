@@ -126,10 +126,14 @@ def status_text(status: object, *, stream: IO[str] | None = None) -> str:
     return paint(text, color, stream=stream) if color else text
 
 
-def clear_screen() -> None:
-    """Clear the terminal and home the cursor (only when output is a TTY)."""
+def clear_screen(*, force: bool = False) -> None:
+    """Clear and home a terminal independently of ANSI color painting.
 
-    if color_enabled():
+    ``force`` is for callers that have already verified a real terminal. Cursor
+    control is not color, so a no-color live view can still refresh in place.
+    """
+
+    if force or color_enabled():
         sys.stdout.write("\033[2J\033[3J\033[H")
         sys.stdout.flush()
 

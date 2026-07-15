@@ -41,6 +41,11 @@ migration.
 
 ### Fixed
 
+- `queue list --watch` now keeps system and per-job CPU/RAM sampling active on a
+  real terminal when `NO_COLOR` or `--no-color` disables ANSI painting; piped,
+  JSON, and messenger output remain unchanged. Per-job CPU counters also retain
+  waited-for child CPU to reduce dropped busy refreshes during short-lived
+  ORCA/xTB/CREST subprocess churn.
 - Restarting the ORCA worker no longer treats historical terminal queue rows as
   fresh active-to-terminal transitions, so stable state/report provenance,
   `run_id`, timestamps, failure reasons, and terminal notifications are preserved;

@@ -17,6 +17,7 @@ from orca_auto.activity_presenter import (
     queue_list_text_presentation,
 )
 from orca_auto.activity_view import (
+    ACTIVE_SIMULATION_STATUSES,
     activity_counter_config_path,
     activity_with_parent_hint,
     count_global_active_simulations,
@@ -32,10 +33,9 @@ from orca_auto.core import statuses as _s
 from orca_auto.core.activity_icons import activity_status_icon
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.activity import cancel_activity, clear_activities, list_activities
-from orca_auto.job_resource import live_job_processes
+from orca_auto.job_resource import LiveJobMetricsSampler
 from orca_auto.system_metrics import (
     JobMetrics,
-    ProcessGroupSampler,
     SystemMetrics,
     SystemMetricsSampler,
 )
@@ -106,13 +106,13 @@ def _stdout_isatty() -> bool:
 
 
 def _layout_interactive() -> bool:
-    """Whether to use the interactive layout (summary band, tree glyphs, rail,
-    watch redraw) instead of the machine-readable plain view.
+    """Whether stdout can use the styled human layout.
 
-    Layout changes require a real terminal, so ``FORCE_COLOR`` — which enables
-    color on a pipe — never restructures piped output; ``--no-color``/``NO_COLOR``
-    keep the plain view. Color painting still follows
-    :func:`cli_style.color_enabled`.
+    Layout changes require both a real terminal and enabled ANSI styling. The
+    watch loop separately detects a real terminal so ``NO_COLOR`` and
+    ``--no-color`` can retain live CPU/RAM without changing the released plain
+    table contract. ``FORCE_COLOR`` on a pipe may paint text but cannot enable
+    the human layout.
     """
 
     return cli_style.color_enabled() and _stdout_isatty()
@@ -247,8 +247,8 @@ def _watch_banner_line(
     max_width: int | None = None,
 ) -> str:
     # A non-interactive terminal keeps the historical plain banner byte-for-byte
-    # (no spinner/clock), so piped, `--no-color`, and `FORCE_COLOR`-piped `--watch`
-    # output is unchanged; the spinner and clock are interactive-only affordances.
+    # (no spinner/clock), so piped and `FORCE_COLOR`-piped `--watch` output is
+    # unchanged; the spinner and clock are terminal-only affordances.
     if not _layout_interactive():
         return f"orca_auto queue list — refresh every {interval:g}s · Ctrl-C to exit"
     clock = (now or _queue_table_now()).strftime("%H:%M:%S")
@@ -389,29 +389,12 @@ def _resource_gauge_line(
 def _default_job_metrics_provider() -> Callable[[str | None], dict[str, JobMetrics]]:
     """Build a stateful provider mapping ``queue_id`` to live per-job metrics.
 
-    Holds one :class:`ProcessGroupSampler` so CPU% is a delta across watch
-    refreshes. Returns ``{}`` when no job has a validated-live engine process.
+    Collection is owned by :class:`LiveJobMetricsSampler`, independently of
+    terminal/color presentation. This wrapper keeps the existing watch-loop
+    callable seam.
     """
 
-    sampler = ProcessGroupSampler()
-
-    def provide(shared_config: str | None) -> dict[str, JobMetrics]:
-        identities = live_job_processes(shared_config)
-        metrics = sampler.sample(
-            {identity: identity.pgid for identity in identities},
-            now=time.monotonic(),
-        )
-        # Revalidate after the /proc scan. A leader that exited or changed
-        # identity during sampling is omitted instead of attributing a newly
-        # reused numeric process group to the prior queue row.
-        validated_after_scan = set(live_job_processes(shared_config)) if identities else set()
-        return {
-            identity.queue_id: metrics[identity]
-            for identity in identities
-            if identity in metrics and identity in validated_after_scan
-        }
-
-    return provide
+    return LiveJobMetricsSampler().sample
 
 
 def _fmt_rss(rss_bytes: int) -> str:
@@ -423,13 +406,13 @@ def _fmt_rss(rss_bytes: int) -> str:
 
 
 def _row_job_metric(item: dict[str, Any], job_metrics: dict[str, JobMetrics]) -> JobMetrics | None:
-    # Bind only a currently-running job row to its canonical queue id. Aliases
+    # Bind only an active simulation row to its canonical queue id. Aliases
     # are intentionally ignored: a run/workflow id collision must never attach
     # another queue's process metrics, and a terminal transition between the
     # process sample and activity read must drop the stale annotation.
     if (
         normalize_text(item.get("kind")).lower() != "job"
-        or _s.normalize_status(item.get("status")) != _s.STATUS_RUNNING
+        or _s.normalize_status(item.get("status")) not in ACTIVE_SIMULATION_STATUSES
     ):
         return None
     metadata = item.get("metadata")
@@ -438,14 +421,38 @@ def _row_job_metric(item: dict[str, Any], job_metrics: dict[str, JobMetrics]) ->
     return job_metrics.get(queue_id) if queue_id else None
 
 
-def _job_annotation(metrics: JobMetrics, *, styled: bool = True) -> str:
+def _job_annotation_parts(metrics: JobMetrics, *, styled: bool) -> list[str]:
     parts: list[str] = []
     cpu_label = cli_style.label("cpu") if styled else "cpu"
     ram_label = cli_style.label("ram") if styled else "ram"
     if metrics.cpu_percent is not None:
         parts.append(f"{cpu_label} {metrics.cpu_percent:.0f}%")
     parts.append(f"{ram_label} {_fmt_rss(metrics.rss_bytes)}")
-    return "  " + "  ".join(parts)
+    return parts
+
+
+def _job_annotation(metrics: JobMetrics, *, styled: bool = True) -> str:
+    return "  " + "  ".join(_job_annotation_parts(metrics, styled=styled))
+
+
+def _job_annotation_continuation_lines(
+    metrics: JobMetrics,
+    *,
+    max_width: int | None,
+    styled: bool,
+) -> list[str]:
+    """Keep CPU/RAM visible when the table row cannot fit the full annotation."""
+
+    styled_parts = _job_annotation_parts(metrics, styled=styled)
+    plain_parts = _job_annotation_parts(metrics, styled=False)
+    lines: list[str] = []
+    for styled_part, plain_part in zip(styled_parts, plain_parts, strict=True):
+        plain = f"  {plain_part}"
+        if max_width is None or _queue_display_width(plain) <= max_width:
+            lines.append(f"  {styled_part}")
+        else:
+            lines.append(terminal_table.truncate(plain, max_width=max(0, max_width)))
+    return lines
 
 
 def _queue_list_text_lines(
@@ -479,15 +486,25 @@ def _queue_list_presentation_request(
     active_simulations: int | None = None,
     now: Any | None = None,
     max_width: int | None = None,
+    show_all_workflow_child_engines: bool = False,
 ) -> QueueListPresentationRequest:
     return QueueListPresentationRequest(
         visible_items=visible_items,
         config_hints=(request.shared_config,),
         prefer_config_hints=True,
-        default_visible_items=request.default_combined_text_view,
+        # The default combined view normally applies the public ORCA-only
+        # child filter.  A live watch has already reduced internal engines to
+        # rows with resource samples, so keep those rows for observability.
+        default_visible_items=(
+            request.default_combined_text_view and not show_all_workflow_child_engines
+        ),
         limit=request.limit,
         show_workflow_context=set(request.kind_values) != {"job"},
-        visible_workflow_child_engines=("orca",) if request.default_combined_text_view else None,
+        visible_workflow_child_engines=(
+            None
+            if show_all_workflow_child_engines or not request.default_combined_text_view
+            else ("orca",)
+        ),
         active_simulations=active_simulations,
         now=now,
         max_width=max_width,
@@ -535,6 +552,11 @@ def _cmd_queue_list_clear(args: Any, request: _QueueListRequest) -> int:
 
 
 def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]:
+    watch_with_live_children = (
+        request.default_combined_text_view
+        and bool(getattr(args, "watch", False))
+        and _stdout_isatty()
+    )
     return list_activities(
         workflow_root=_workflow_root_for_args(args, config_path=request.shared_config),
         limit=0,
@@ -542,7 +564,9 @@ def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]
         crest_config=request.shared_config,
         xtb_config=request.shared_config,
         orca_config=request.shared_config,
-        child_job_engines=() if request.default_combined_text_view else None,
+        child_job_engines=(
+            None if watch_with_live_children or not request.default_combined_text_view else ()
+        ),
     )
 
 
@@ -595,29 +619,45 @@ def _print_queue_list_text(
     job_metrics: dict[str, JobMetrics] | None = None,
 ) -> int:
     tty = _layout_interactive()
+    live_metrics_tty = _stdout_isatty() and bool(job_metrics)
+    presented_activities = list(filtered_activities)
+    show_all_workflow_child_engines = False
+    if request.default_combined_text_view and job_metrics is not None:
+        # The normal combined list hides internal xTB/CREST history to keep the
+        # table compact. A live watch must not hide a simulation that currently
+        # consumes an admission slot, so retain only metric-bearing active
+        # rows from those otherwise-hidden engines.
+        presented_activities = [
+            item
+            for item in filtered_activities
+            if normalize_text(item.get("engine")).lower() not in {"xtb", "crest"}
+            or _row_job_metric(item, job_metrics) is not None
+        ]
+        show_all_workflow_child_engines = True
     term_width = _queue_terminal_width()
     rail_width = _queue_display_width(_QUEUE_RAIL)
     annotation_width = 0
-    if tty and job_metrics:
+    if (tty or live_metrics_tty) and job_metrics:
         annotation_width = max(
             (
                 _queue_display_width(_job_annotation(metric, styled=False))
-                for item in filtered_activities
+                for item in presented_activities
                 if (metric := _row_job_metric(item, job_metrics)) is not None
             ),
             default=0,
         )
     max_width = term_width
-    if tty and term_width is not None:
-        max_width = max(0, term_width - rail_width - annotation_width)
+    if (tty or live_metrics_tty) and term_width is not None:
+        max_width = max(0, term_width - (rail_width if tty else 0) - annotation_width)
     presentation = queue_list_text_presentation(
         payload,
         request=_queue_list_presentation_request(
             request,
-            visible_items=filtered_activities,
+            visible_items=presented_activities,
             active_simulations=filtered_payload["active_simulations"],
             now=_queue_table_now(),
             max_width=max_width,
+            show_all_workflow_child_engines=show_all_workflow_child_engines,
         ),
         deps=QueueListPresentationDeps(
             queue_list_text_lines=_queue_list_text_lines,
@@ -651,7 +691,27 @@ def _print_queue_list_text(
         print(lines[2])
         for (_indent, item), line in zip(display_rows, lines[3:], strict=True):
             color = cli_style.status_color(item.get("status"))
-            print(cli_style.paint(line, color) if color else line)
+            body = cli_style.paint(line, color) if color else line
+            continuation_lines: list[str] = []
+            if job_metrics:
+                metric = _row_job_metric(item, job_metrics)
+                if metric is not None:
+                    annotation = _job_annotation(metric)
+                    if term_width is None or (
+                        _queue_display_width(line)
+                        + _queue_display_width(_job_annotation(metric, styled=False))
+                        <= term_width
+                    ):
+                        body += annotation
+                    else:
+                        continuation_lines = _job_annotation_continuation_lines(
+                            metric,
+                            max_width=term_width,
+                            styled=cli_style.color_enabled(),
+                        )
+            print(body)
+            for continuation in continuation_lines:
+                print(continuation)
         return 0
 
     # On a TTY each row gains a status-colored left rail; the header and divider
@@ -669,6 +729,7 @@ def _print_queue_list_text(
         body = cli_style.paint(line, color) if color else line
         if show_rail:
             body = cli_style.paint(_QUEUE_RAIL_GLYPH, color or cli_style.DIM) + " " + body
+        styled_continuation_lines: list[str] = []
         if job_metrics:
             metric = _row_job_metric(item, job_metrics)
             if metric is not None:
@@ -680,7 +741,19 @@ def _print_queue_list_text(
                     <= term_width
                 ):
                     body = annotated
+                else:
+                    styled_continuation_lines = _job_annotation_continuation_lines(
+                        metric,
+                        max_width=(
+                            None
+                            if term_width is None
+                            else max(0, term_width - (rail_width if show_rail else 0))
+                        ),
+                        styled=True,
+                    )
         print(body)
+        for continuation in styled_continuation_lines:
+            print(gutter + continuation)
     return 0
 
 
@@ -714,12 +787,11 @@ def _watch_queue_list(
     custom_emit_once = deps.emit_queue_list_once if deps else None
     sleep = (deps.sleep if deps else None) or time.sleep
     frames = cli_style.SPINNER_FRAMES
-    interactive = _layout_interactive()
-    # The sampler, the per-job provider, and the resource line are all
-    # interactive-only, so piped/`--no-color`/`FORCE_COLOR`-piped watch output
-    # keeps the plain banner and table and never grows a resource line. The
-    # sampler holds the previous /proc snapshot so CPU% is a delta over the
-    # refresh interval.
+    interactive = _stdout_isatty()
+    # Sampling is terminal-only but color-independent: `NO_COLOR`/`--no-color`
+    # retain plain live metrics, while pipes (including FORCE_COLOR pipes) keep
+    # the historical machine-readable output and never invoke the samplers.
+    # Each sampler holds its prior snapshot so CPU% is a refresh-to-refresh delta.
     sampler = (deps.system_metrics_sampler if deps else None) or (
         SystemMetricsSampler() if interactive else None
     )
@@ -736,7 +808,7 @@ def _watch_queue_list(
     try:
         while True:
             if interactive:
-                cli_style.clear_screen()
+                cli_style.clear_screen(force=True)
             print(
                 _watch_banner_line(
                     frames[tick % len(frames)],
