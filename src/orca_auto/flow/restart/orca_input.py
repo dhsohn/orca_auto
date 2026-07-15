@@ -16,43 +16,24 @@ from orca_auto.flow.orchestration.stage_views import WorkflowStageView
 from orca_auto.orca.input_artifacts import derive_selected_input_xyz
 from orca_auto.orca.input_blocks import (
     GEOM_HEADER_RE,
+    OrcaFileReference,
     geometry_range,
     is_safe_unquoted_orca_path,
-    neb_file_reference_context,
-    orca_line_tokens,
     quote_orca_path,
     route_line_indices,
+    scan_orca_file_references,
     set_block_key_value,
     unquoted_orca_path,
 )
 from orca_auto.orca.resource_directives import maxcore_mb_per_core, read_nprocs, set_maxcore
 
 _RESTART_SUFFIX_RE = re.compile(r"\.restart-(\d+)$")
-_SIMPLE_AUXILIARY_REFERENCE_KEYS = frozenset({"%moinp", "%pointcharges"})
-_BLOCK_AUXILIARY_REFERENCE_KEYS = frozenset(
-    {
-        "inhessname",
-        "hessfile",
-        "neb_end_xyzfile",
-        "neb_ts_xyzfile",
-        "ircinithess",
-    }
-)
 _RESERVED_GEOMETRY_PATH = Path(".orca_auto_inputs") / "geometry.xyz"
 
 
 @dataclass(frozen=True)
-class _AuxiliaryReference:
-    line_index: int
-    keyword: str
-    path_text: str
-    value_start: int
-    value_end: int
-
-
-@dataclass(frozen=True)
 class _AuxiliaryCopy:
-    reference: _AuxiliaryReference
+    reference: OrcaFileReference
     source_path: Path
     target_path: Path
     relative_path: Path
@@ -140,72 +121,6 @@ def _selected_input_paths(
     return reaction_dir, selected_inp, selected_xyz
 
 
-def _auxiliary_references(lines: list[str]) -> list[_AuxiliaryReference]:
-    references: list[_AuxiliaryReference] = []
-    in_neb_block = False
-    for line_index, line in enumerate(lines):
-        tokens = orca_line_tokens(line)
-        neb_keyword_indices, in_neb_block = neb_file_reference_context(
-            tokens,
-            in_neb_block=in_neb_block,
-        )
-        reference_value_indices: set[int] = set()
-        for token_index, token in enumerate(tokens):
-            if token.quoted:
-                continue
-            keyword = token.value.lower()
-            is_simple_reference = token_index == 0 and keyword in _SIMPLE_AUXILIARY_REFERENCE_KEYS
-            is_neb_file_reference = (
-                token_index in neb_keyword_indices and token_index not in reference_value_indices
-            )
-            if (
-                not is_simple_reference
-                and keyword not in _BLOCK_AUXILIARY_REFERENCE_KEYS
-                and not is_neb_file_reference
-            ):
-                continue
-            value_index = token_index + 1
-            if value_index < len(tokens) and tokens[value_index].value == "=":
-                value_index += 1
-            if value_index < len(tokens):
-                reference_value_indices.add(value_index)
-        for token_index, token in enumerate(tokens):
-            if token.quoted:
-                continue
-            keyword = token.value.lower()
-            is_simple_reference = token_index == 0 and keyword in _SIMPLE_AUXILIARY_REFERENCE_KEYS
-            is_neb_file_reference = (
-                token_index in neb_keyword_indices and token_index not in reference_value_indices
-            )
-            if (
-                not is_simple_reference
-                and keyword not in _BLOCK_AUXILIARY_REFERENCE_KEYS
-                and not is_neb_file_reference
-            ):
-                continue
-
-            value_index = token_index + 1
-            if value_index < len(tokens) and tokens[value_index].value == "=":
-                value_index += 1
-            if value_index >= len(tokens):
-                raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
-            value_token = tokens[value_index]
-            if not value_token.value.strip() or (
-                not value_token.quoted and value_token.value.lower() == "end"
-            ):
-                raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
-            references.append(
-                _AuxiliaryReference(
-                    line_index=line_index,
-                    keyword=token.value,
-                    path_text=value_token.value.strip(),
-                    value_start=value_token.start,
-                    value_end=value_token.end,
-                )
-            )
-    return references
-
-
 def _auxiliary_copy_plan(
     lines: list[str],
     *,
@@ -225,14 +140,18 @@ def _auxiliary_copy_plan(
             source_path=source.resolve(),
         )
     copies: list[_AuxiliaryCopy] = []
-    for reference in _auxiliary_references(lines):
-        raw_path = Path(reference.path_text).expanduser()
+    # The geometry line is rewritten separately by ``_rewrite_geometry_header``,
+    # so only the auxiliary/NEB references are copied here — but they come from
+    # the same scanner execution binding uses, so a reference accepted at
+    # submission can never be silently dropped on restart.
+    for reference in scan_orca_file_references(lines, include_geometry=False):
+        raw_path = Path(reference.value).expanduser()
         source_path = (raw_path if raw_path.is_absolute() else source_base / raw_path).resolve()
         try:
             relative_path = source_path.relative_to(resolved_source_root)
         except ValueError as exc:
             raise ValueError(
-                f"ORCA auxiliary input escapes the reaction directory: {reference.path_text}"
+                f"ORCA auxiliary input escapes the reaction directory: {reference.value}"
             ) from exc
         if not source_path.is_file():
             raise FileNotFoundError(f"ORCA auxiliary input not found: {source_path}")
@@ -310,8 +229,8 @@ def _copy_auxiliary_input_files(
         reference = copy.reference
         replacements.setdefault(reference.line_index, []).append(
             (
-                reference.value_start,
-                reference.value_end,
+                reference.start,
+                reference.end,
                 quote_orca_path(copy.relative_path.as_posix()),
             )
         )

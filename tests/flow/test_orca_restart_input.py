@@ -795,3 +795,73 @@ def test_pending_generation_contract_keeps_inp_for_repeated_restart(tmp_path: Pa
 
     assert rematerialize_orca_restart_input(stage, settings, allowed_root=tmp_path)
     assert (tmp_path / "orca_stage.restart-002" / "input.inp").exists()
+
+
+def test_rematerialize_orca_restart_input_copies_execution_superset_references(
+    tmp_path: Path,
+) -> None:
+    # Regression: restart now runs the same reference scanner as execution
+    # binding, so references only the execution side used to recognize (the
+    # spaced "% moinp" form and block keys such as restart_allxyzfile) are
+    # copied and rewritten instead of silently left pointing into the old
+    # reaction directory.
+    original = tmp_path / "orca_stage"
+    checkpoint = original / "checkpoints" / "seed.gbw"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
+    (original / "restart.allxyz").write_text("1\nframe\nH 0 0 0\n", encoding="utf-8")
+    (original / "input.xyz").write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
+    (original / "input.inp").write_text(
+        "! OLD MOREAD\n"
+        '% moinp "checkpoints/seed.gbw"\n'
+        "%neb\n"
+        '  restart_allxyzfile "restart.allxyz"\n'
+        "end\n"
+        "* xyzfile 0 1 input.xyz\n",
+        encoding="utf-8",
+    )
+    stage = _restart_stage(original)
+
+    assert rematerialize_orca_restart_input(
+        stage,
+        {
+            "orca_input_updates": True,
+            "orca_route_line_present": True,
+            "orca_route_line": "! NEW MOREAD",
+        },
+        allowed_root=tmp_path,
+    )
+
+    restarted = tmp_path / "orca_stage.restart-001"
+    assert (restarted / "checkpoints" / "seed.gbw").read_bytes() == b"checkpoint"
+    assert (restarted / "restart.allxyz").read_text(encoding="utf-8") == "1\nframe\nH 0 0 0\n"
+    restarted_input = (restarted / "input.inp").read_text(encoding="utf-8")
+    assert '"checkpoints/seed.gbw"' in restarted_input
+    assert '"restart.allxyz"' in restarted_input
+
+
+def test_rematerialize_orca_restart_input_rejects_unsupported_directive(
+    tmp_path: Path,
+) -> None:
+    # A hand-edited input with a directive execution binding would reject must
+    # fail closed at rematerialization time and leave no partial restart dir.
+    original = tmp_path / "orca_stage"
+    original.mkdir()
+    (original / "input.xyz").write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
+    (original / "input.inp").write_text(
+        '! OLD Opt\n%scf\n  progext "/usr/bin/env"\nend\n* xyzfile 0 1 input.xyz\n',
+        encoding="utf-8",
+    )
+    stage = _restart_stage(original)
+
+    with pytest.raises(ValueError, match="external program directive"):
+        rematerialize_orca_restart_input(
+            stage,
+            {
+                "orca_input_updates": True,
+                "orca_route_line_present": True,
+                "orca_route_line": "! NEW Opt",
+            },
+            allowed_root=tmp_path,
+        )
+    assert not (tmp_path / "orca_stage.restart-001").exists()
