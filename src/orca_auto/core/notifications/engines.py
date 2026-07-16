@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from orca_auto.core.messaging.telegram_format import (
+    split_telegram_message as split_telegram_message,
+)
+from orca_auto.core.messaging.telegram_transport import (
+    build_telegram_transport,
+)
+
 from ._engine_delivery import (
     is_workflow_child as is_workflow_child,
 )
@@ -42,12 +49,6 @@ from .engine_specs import (
     notify_xtb_job_queued,
     notify_xtb_job_started,
     notify_xtb_job_terminal,
-)
-from .telegram_format import (
-    split_telegram_message as split_telegram_message,
-)
-from .telegram_transport import (
-    build_telegram_transport,
 )
 
 __all__ = [

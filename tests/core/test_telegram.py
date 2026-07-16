@@ -12,11 +12,11 @@ from urllib.parse import parse_qs
 import pytest
 
 from orca_auto.core.config.schema import TelegramConfig
-from orca_auto.core.notifications import telegram_api as telegram_api_mod
-from orca_auto.core.notifications import telegram_config as telegram_config_mod
-from orca_auto.core.notifications import telegram_format as telegram_format_mod
-from orca_auto.core.notifications import telegram_network as telegram_network_mod
-from orca_auto.core.notifications import telegram_transport as telegram_transport_mod
+from orca_auto.core.messaging import telegram_api as telegram_api_mod
+from orca_auto.core.messaging import telegram_config as telegram_config_mod
+from orca_auto.core.messaging import telegram_format as telegram_format_mod
+from orca_auto.core.messaging import telegram_network as telegram_network_mod
+from orca_auto.core.messaging import telegram_transport as telegram_transport_mod
 
 
 @dataclass

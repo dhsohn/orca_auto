@@ -10,6 +10,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- The Telegram delivery stack (API client, config, network, logging,
+  transport, and HTML format helpers) moved from `core/notifications` into
+  `core/messaging`, removing the one import cycle between the two packages;
+  a new import-linter contract keeps messaging from ever importing the
+  notification layer again. The three Telegram HTML escape implementations
+  share one primitive now, and the 4096-character message limit has a single
+  definition instead of three.
+
 - The `FINAL SINGLE POINT ENERGY` marker is parsed by one shared, line-anchored
   pattern (with Fortran D-exponent support and the real ORCA near-converged
   annotation captured separately) across the ORCA parser, the queue progress

@@ -10,13 +10,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .richtext import Field, Line, Message, Span, SpanStyle
+from .telegram_format import MAX_TELEGRAM_MESSAGE_LENGTH, escape_html_text
 
 # Telegram Bot API sendMessage text limit after entity parsing.
-_TELEGRAM_MESSAGE_LIMIT = 4096
+_TELEGRAM_MESSAGE_LIMIT = MAX_TELEGRAM_MESSAGE_LENGTH
 
-
-def _escape(value: str) -> str:
-    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+_escape = escape_html_text
 
 
 def _render_span(span: Span) -> str:
