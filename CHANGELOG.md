@@ -8,6 +8,19 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- Queue dispatch order no longer depends on the wall clock. Same-priority
+  pending entries are dequeued in queue-file row order (the true arrival
+  order — rows are only appended under the queue lock) instead of by their
+  `enqueued_at` stamp, both in the core store's `dequeue_next` and in the
+  workers' cross-root selection. A WSL2 clock-skew correction between two
+  enqueues could stamp the first arrival with a later time than the second
+  and make a worker start the second job first (the intermittent
+  `test_fill_slots_refills_immediately_after_completion` failure). Across
+  different queue roots the wall clock remains the fairness comparator, as
+  separate queue files share no arrival order.
+
 ### Changed
 
 - The bot's remote-admission policy (server-owned resource caps, atom-count
