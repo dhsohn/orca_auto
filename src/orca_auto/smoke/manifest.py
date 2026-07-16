@@ -17,6 +17,7 @@ from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.utils.lock import file_lock, file_lock_at
 from orca_auto.core.utils.persistence import atomic_write_json, now_utc_iso
+from orca_auto.smoke._fsatomic import atomic_write_bytes_at
 
 from .catalog import SmokeScenario
 
@@ -26,7 +27,6 @@ SMOKE_BATCH_FILENAME = "batch.json"
 SMOKE_CASE_FILENAME = "case.json"
 SMOKE_INDEX_FILENAME = "index.json"
 MAX_SMOKE_MANIFEST_BYTES = 4 * 1024 * 1024
-MAX_UNTRACKED_DIGEST_BYTES = 256 * 1024 * 1024
 MAX_RUNTIME_SCAN_ENTRIES = 100_000
 MAX_RUNTIME_SCAN_DEPTH = 64
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
@@ -43,21 +43,6 @@ _SMOKE_INIT_LOCK_FILENAME = ".orca_auto_smoke.init.lock"
 class _DirectoryIdentity:
     device: int
     inode: int
-
-
-@dataclass(frozen=True)
-class _AtomicJsonSnapshot:
-    device: int
-    inode: int
-    size_bytes: int
-    modified_ns: int
-    sha256: str
-
-
-@dataclass(frozen=True)
-class _AtomicJsonBackup:
-    name: str
-    snapshot: _AtomicJsonSnapshot
 
 
 @dataclass(frozen=True)
@@ -402,226 +387,6 @@ def _digest_descriptor(descriptor: int, *, max_bytes: int) -> tuple[str, int]:
     return digest.hexdigest(), total
 
 
-def _verify_atomic_json_entry(
-    directory_fd: int,
-    name: str,
-    snapshot: _AtomicJsonSnapshot,
-    *,
-    expected_nlinks: frozenset[int],
-) -> None:
-    try:
-        descriptor = os.open(name, _file_open_flags(), dir_fd=directory_fd)
-    except OSError as exc:
-        raise ValueError("smoke manifest publication identity changed") from exc
-    try:
-        before = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_nlink not in expected_nlinks
-            or before.st_dev != snapshot.device
-            or before.st_ino != snapshot.inode
-            or before.st_size != snapshot.size_bytes
-            or before.st_mtime_ns != snapshot.modified_ns
-        ):
-            raise ValueError("smoke manifest publication identity changed")
-        digest, size_bytes = _digest_descriptor(
-            descriptor,
-            max_bytes=MAX_SMOKE_MANIFEST_BYTES,
-        )
-        after = os.fstat(descriptor)
-        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-        if (
-            size_bytes != snapshot.size_bytes
-            or digest != snapshot.sha256
-            or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-            != (snapshot.device, snapshot.inode, snapshot.size_bytes, snapshot.modified_ns)
-            or after.st_nlink not in expected_nlinks
-            or (named.st_dev, named.st_ino, named.st_size, named.st_mtime_ns)
-            != (snapshot.device, snapshot.inode, snapshot.size_bytes, snapshot.modified_ns)
-            or named.st_nlink not in expected_nlinks
-        ):
-            raise ValueError("smoke manifest publication identity changed")
-    finally:
-        os.close(descriptor)
-
-
-def _capture_atomic_json_snapshot(
-    directory_fd: int,
-    name: str,
-) -> _AtomicJsonSnapshot | None:
-    try:
-        opened = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        return None
-    if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
-        raise ValueError("existing smoke manifest is unsafe")
-    if opened.st_size > MAX_SMOKE_MANIFEST_BYTES:
-        raise ValueError("existing smoke manifest exceeds the backup limit")
-    descriptor = os.open(name, _file_open_flags(), dir_fd=directory_fd)
-    try:
-        details = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(details.st_mode)
-            or details.st_nlink != 1
-            or (details.st_dev, details.st_ino, details.st_size, details.st_mtime_ns)
-            != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
-        ):
-            raise ValueError("existing smoke manifest changed during backup")
-        digest, size_bytes = _digest_descriptor(
-            descriptor,
-            max_bytes=MAX_SMOKE_MANIFEST_BYTES,
-        )
-        after = os.fstat(descriptor)
-        if (
-            size_bytes != details.st_size
-            or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-            != (details.st_dev, details.st_ino, details.st_size, details.st_mtime_ns)
-            or after.st_nlink != 1
-        ):
-            raise ValueError("existing smoke manifest changed during backup")
-        return _AtomicJsonSnapshot(
-            device=details.st_dev,
-            inode=details.st_ino,
-            size_bytes=details.st_size,
-            modified_ns=details.st_mtime_ns,
-            sha256=digest,
-        )
-    finally:
-        os.close(descriptor)
-
-
-def _create_atomic_json_backup(
-    directory_fd: int,
-    target_name: str,
-) -> _AtomicJsonBackup | None:
-    snapshot = _capture_atomic_json_snapshot(directory_fd, target_name)
-    if snapshot is None:
-        return None
-    backup_name = f".{target_name}.{token_hex(12)}.bak"
-    linked = False
-    try:
-        _verify_atomic_json_entry(
-            directory_fd,
-            target_name,
-            snapshot,
-            expected_nlinks=frozenset({1}),
-        )
-        os.link(
-            target_name,
-            backup_name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
-            follow_symlinks=False,
-        )
-        linked = True
-        for candidate in (target_name, backup_name):
-            _verify_atomic_json_entry(
-                directory_fd,
-                candidate,
-                snapshot,
-                expected_nlinks=frozenset({2}),
-            )
-        os.fsync(directory_fd)
-        return _AtomicJsonBackup(name=backup_name, snapshot=snapshot)
-    except BaseException:
-        if linked:
-            try:
-                os.unlink(backup_name, dir_fd=directory_fd)
-                os.fsync(directory_fd)
-            except FileNotFoundError:
-                pass
-        raise
-
-
-def _atomic_json_entry_matches(
-    directory_fd: int,
-    name: str,
-    snapshot: _AtomicJsonSnapshot,
-) -> bool:
-    try:
-        descriptor = os.open(name, _file_open_flags(), dir_fd=directory_fd)
-    except OSError:
-        return False
-    try:
-        details = os.fstat(descriptor)
-        return (
-            stat.S_ISREG(details.st_mode)
-            and details.st_dev == snapshot.device
-            and details.st_ino == snapshot.inode
-        )
-    finally:
-        os.close(descriptor)
-
-
-def _restore_atomic_json_entry(
-    directory_fd: int,
-    target_name: str,
-    backup: _AtomicJsonBackup | None,
-) -> None:
-    if backup is None:
-        try:
-            os.unlink(target_name, dir_fd=directory_fd)
-        except FileNotFoundError:
-            pass
-        os.fsync(directory_fd)
-        return
-    if _atomic_json_entry_matches(directory_fd, target_name, backup.snapshot):
-        for candidate in (target_name, backup.name):
-            _verify_atomic_json_entry(
-                directory_fd,
-                candidate,
-                backup.snapshot,
-                expected_nlinks=frozenset({2}),
-            )
-        os.unlink(backup.name, dir_fd=directory_fd)
-        os.fsync(directory_fd)
-    else:
-        _verify_atomic_json_entry(
-            directory_fd,
-            backup.name,
-            backup.snapshot,
-            expected_nlinks=frozenset({1}),
-        )
-        os.replace(
-            backup.name,
-            target_name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
-        )
-        os.fsync(directory_fd)
-    _verify_atomic_json_entry(
-        directory_fd,
-        target_name,
-        backup.snapshot,
-        expected_nlinks=frozenset({1}),
-    )
-
-
-def _discard_atomic_json_backup(
-    directory_fd: int,
-    backup: _AtomicJsonBackup,
-) -> None:
-    try:
-        _verify_atomic_json_entry(
-            directory_fd,
-            backup.name,
-            backup.snapshot,
-            expected_nlinks=frozenset({1, 2}),
-        )
-        os.unlink(backup.name, dir_fd=directory_fd)
-    except (OSError, ValueError):
-        # Publication/rollback has already reached its verified state. Hidden
-        # cleanup residue is safer than turning that committed state into a
-        # false failure or masking the original publication error.
-        return
-    try:
-        os.fsync(directory_fd)
-    except OSError:
-        # The new target was already verified and durably published. A hidden
-        # backup link can safely survive until ordinary batch cleanup.
-        pass
-
-
 def _atomic_write_json_at(
     directory_fd: int,
     name: str,
@@ -638,75 +403,7 @@ def _atomic_write_json_at(
     ).encode("utf-8")
     if len(encoded) > MAX_SMOKE_MANIFEST_BYTES:
         raise ValueError("smoke manifest exceeds the bounded publication limit")
-    temporary = f".{name}.{token_hex(12)}.tmp"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    descriptor: int | None = None
-    backup: _AtomicJsonBackup | None = None
-    preserve_backup = False
-    try:
-        descriptor = os.open(temporary, flags, mode, dir_fd=directory_fd)
-        with os.fdopen(descriptor, "wb", closefd=True) as handle:
-            descriptor = None
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-            details = os.fstat(handle.fileno())
-            if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
-                raise ValueError("smoke manifest staging file is unsafe")
-            expected = _AtomicJsonSnapshot(
-                device=details.st_dev,
-                inode=details.st_ino,
-                size_bytes=details.st_size,
-                modified_ns=details.st_mtime_ns,
-                sha256=hashlib.sha256(encoded).hexdigest(),
-            )
-        _verify_atomic_json_entry(
-            directory_fd,
-            temporary,
-            expected,
-            expected_nlinks=frozenset({1}),
-        )
-        backup = _create_atomic_json_backup(directory_fd, name)
-        try:
-            os.replace(
-                temporary,
-                name,
-                src_dir_fd=directory_fd,
-                dst_dir_fd=directory_fd,
-            )
-            _verify_atomic_json_entry(
-                directory_fd,
-                name,
-                expected,
-                expected_nlinks=frozenset({1}),
-            )
-            os.fsync(directory_fd)
-            _verify_atomic_json_entry(
-                directory_fd,
-                name,
-                expected,
-                expected_nlinks=frozenset({1}),
-            )
-        except BaseException:
-            try:
-                _restore_atomic_json_entry(directory_fd, name, backup)
-                backup = None
-            except BaseException as restore_error:
-                preserve_backup = True
-                raise OSError("previous smoke manifest could not be restored") from restore_error
-            raise
-    finally:
-        if backup is not None and not preserve_backup:
-            _discard_atomic_json_backup(directory_fd, backup)
-        if descriptor is not None:
-            os.close(descriptor)
-        try:
-            os.unlink(temporary, dir_fd=directory_fd)
-        except OSError:
-            # A verified target or verified rollback is already authoritative.
-            # Best-effort staging cleanup must never reverse that outcome.
-            pass
+    atomic_write_bytes_at(directory_fd, name, encoded, mode=mode, error=ValueError)
 
 
 def _bounded_json_mapping_at(directory_fd: int, name: str) -> dict[str, Any] | None:
@@ -866,130 +563,14 @@ def _git_diff_digest(repo_root: Path) -> str:
     return digest.hexdigest() if return_code == 0 else "unavailable"
 
 
-def _untracked_source_identity(repo_root: Path) -> dict[str, Any]:
-    try:
-        result = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard", "-z"],
-            cwd=repo_root,
-            check=False,
-            capture_output=True,
-            timeout=15,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return {
-            "untracked_digest": "unavailable",
-            "untracked_file_count": 0,
-            "untracked_digest_complete": False,
-        }
-    if result.returncode != 0:
-        return {
-            "untracked_digest": "unavailable",
-            "untracked_file_count": 0,
-            "untracked_digest_complete": False,
-        }
-
-    digest = hashlib.sha256(b"orca_auto_untracked_source_v2\0")
-    total_bytes = 0
-    file_count = 0
-    complete = True
-    content_budget_exhausted = False
-    for raw_relative in (item for item in result.stdout.split(b"\0") if item):
-        relative = Path(os.fsdecode(raw_relative))
-        candidate = repo_root / relative
-        file_count += 1
-        digest.update(b"path\0" + raw_relative + b"\0")
-        try:
-            details = candidate.lstat()
-            file_type = stat.S_IFMT(details.st_mode)
-            file_mode = stat.S_IMODE(details.st_mode)
-            digest.update(
-                f"lstat-type\0{file_type:o}\0mode\0{file_mode:o}\0size\0{details.st_size}\0".encode()
-            )
-            if stat.S_ISLNK(details.st_mode):
-                digest.update(b"symlink\0" + os.fsencode(os.readlink(candidate)) + b"\0")
-                after_link = candidate.lstat()
-                if (
-                    after_link.st_dev != details.st_dev
-                    or after_link.st_ino != details.st_ino
-                    or after_link.st_size != details.st_size
-                    or stat.S_IFMT(after_link.st_mode) != file_type
-                    or stat.S_IMODE(after_link.st_mode) != file_mode
-                ):
-                    complete = False
-                    digest.update(b"symlink-changed-while-read\0")
-                continue
-            if not stat.S_ISREG(details.st_mode):
-                complete = False
-                digest.update(b"nonregular\0")
-                continue
-            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-            file_descriptor = os.open(candidate, flags)
-            try:
-                opened = os.fstat(file_descriptor)
-                opened_file_type = stat.S_IFMT(opened.st_mode)
-                opened_mode = stat.S_IMODE(opened.st_mode)
-                digest.update(
-                    f"opened-type\0{opened_file_type:o}\0mode\0{opened_mode:o}\0"
-                    f"size\0{opened.st_size}\0".encode()
-                )
-                if not stat.S_ISREG(opened.st_mode):
-                    complete = False
-                    digest.update(b"changed-before-open\0")
-                    continue
-                if (
-                    opened.st_dev != details.st_dev
-                    or opened.st_ino != details.st_ino
-                    or opened.st_size != details.st_size
-                    or opened_file_type != file_type
-                    or opened_mode != file_mode
-                ):
-                    complete = False
-                    digest.update(b"changed-before-open\0")
-                if (
-                    content_budget_exhausted
-                    or total_bytes + opened.st_size > MAX_UNTRACKED_DIGEST_BYTES
-                ):
-                    complete = False
-                    content_budget_exhausted = True
-                    digest.update(b"content-omitted-after-limit\0")
-                    continue
-                digest.update(b"content\0")
-                bytes_read = 0
-                while bytes_read < opened.st_size:
-                    chunk = os.read(
-                        file_descriptor,
-                        min(1024 * 1024, opened.st_size - bytes_read),
-                    )
-                    if not chunk:
-                        break
-                    digest.update(chunk)
-                    bytes_read += len(chunk)
-                digest.update(b"\0content-end\0")
-                after = os.fstat(file_descriptor)
-                if (
-                    bytes_read != opened.st_size
-                    or after.st_dev != opened.st_dev
-                    or after.st_ino != opened.st_ino
-                    or after.st_size != opened.st_size
-                    or stat.S_IFMT(after.st_mode) != opened_file_type
-                    or stat.S_IMODE(after.st_mode) != opened_mode
-                ):
-                    complete = False
-                    digest.update(b"changed-while-read\0")
-                total_bytes += bytes_read
-            finally:
-                os.close(file_descriptor)
-        except OSError:
-            complete = False
-            digest.update(b"unavailable\0")
-    return {
-        "untracked_digest": digest.hexdigest(),
-        "untracked_file_count": file_count,
-        "untracked_digest_complete": complete,
-    }
-
-
 def source_identity(repo_root: Path) -> dict[str, Any]:
+    """Reproducibility provenance for one smoke run, bounded to git metadata.
+
+    Untracked files influence the identity through their names in the status
+    digest only; their content is deliberately not hashed (a smoke review does
+    not need byte-level provenance of arbitrary workstation files, and hashing
+    them made smoke I/O scale with untracked junk).
+    """
     status = _git_text(repo_root, "status", "--porcelain=v1", "--untracked-files=all")
     identity = {
         "git_head": _git_text(repo_root, "rev-parse", "HEAD") or "unknown",
@@ -998,7 +579,6 @@ def source_identity(repo_root: Path) -> dict[str, Any]:
         "working_tree_digest": _git_diff_digest(repo_root),
         "status_digest": hashlib.sha256(status.encode("utf-8")).hexdigest(),
     }
-    identity.update(_untracked_source_identity(repo_root))
     return identity
 
 

@@ -129,9 +129,11 @@ with production activity:
 ```
 
 `batch.json` records complete source identities at batch start and finish plus
-the aggregate result. A source change, unavailable identity, or bounded digest
-that cannot cover every untracked file fails the batch rather than attaching a
-false provenance claim. Each `case.json` keeps the expected terminal state,
+the aggregate result. The identity covers the git head, the tracked working
+tree diff digest, and the status digest (untracked files reach it through
+their names; their content is deliberately outside the provenance scope). A
+source change or an unavailable identity fails the batch rather than attaching
+a false provenance claim. Each `case.json` keeps the expected terminal state,
 observed terminal state, and harness verdict as separate fields. Consequently,
 a negative simulation that is expected to
 end in `failed` can correctly produce a passing smoke verdict. A skipped or

@@ -83,7 +83,6 @@ def _source_identity_available(identity: Mapping[str, Any]) -> bool:
         "git_short",
         "working_tree_digest",
         "status_digest",
-        "untracked_digest",
     )
     unavailable_values = {"", "unknown", "unavailable"}
     for field in required_text_fields:
@@ -91,12 +90,6 @@ def _source_identity_available(identity: Mapping[str, Any]) -> bool:
         if not isinstance(value, str) or value.strip().lower() in unavailable_values:
             return False
     return True
-
-
-def _source_identity_complete(identity: Mapping[str, Any]) -> bool:
-    return (
-        _source_identity_available(identity) and identity.get("untracked_digest_complete") is True
-    )
 
 
 def _read_stable_regular_file_descriptor(descriptor: int, *, max_bytes: int) -> bytes:
@@ -807,9 +800,7 @@ def run_smoke_suite(
             batch_errors.append(f"source_identity_error:{type(exc).__name__}")
         source_at_start_available = _source_identity_available(source_at_start)
         source_at_end_available = _source_identity_available(source_at_end)
-        if not _source_identity_complete(source_at_start) or not _source_identity_complete(
-            source_at_end
-        ):
+        if not source_at_start_available or not source_at_end_available:
             batch_errors.append("source_identity_incomplete")
         if (
             source_identity_comparable

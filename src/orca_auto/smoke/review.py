@@ -21,6 +21,8 @@ from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit
 
+from orca_auto.smoke._fsatomic import atomic_write_bytes_at
+
 _MAX_FIELD_CHARS = 512
 _MAX_PREVIEW_BYTES = 32 * 1024
 _MAX_TOTAL_PREVIEW_BYTES = 4 * 1024 * 1024
@@ -41,7 +43,6 @@ _MAX_OPEN_COMPONENT_CHARS = 64
 _MAX_PORTABLE_FILENAME_CHARS = 40
 _MAX_CASE_SLUG_CHARS = 16
 _MAX_OPEN_RELATIVE_CHARS = 128
-_MAX_ATOMIC_BACKUP_BYTES = 64 * 1024 * 1024
 _PROJECTION_SCHEMA_VERSION = 2
 
 _DISPOSITION_REVIEW = "review"
@@ -155,19 +156,6 @@ class _HarnessAliasIdentity:
     target_text: str
     target_batch_path: str
     target_directory: _DirectoryIdentity
-
-
-@dataclass(frozen=True)
-class _AtomicFileSnapshot:
-    identity: _SourceIdentity
-    sha256: str
-
-
-@dataclass(frozen=True)
-class _AtomicBackup:
-    name: str
-    target_name: str
-    snapshot: _AtomicFileSnapshot
 
 
 @dataclass(frozen=True)
@@ -305,48 +293,17 @@ def generate_review_packet(
             blocked_count,
         )
 
-        summary_backup = _create_atomic_backup(root_fd, "summary.md")
-        try:
-            index_backup = _create_atomic_backup(review_fd, "index.html")
-        except BaseException:
-            if summary_backup is not None:
-                _discard_atomic_backup(root_fd, summary_backup)
-            raise
-        try:
-            _atomic_write_text(root_fd, "summary.md", summary)
-            _verify_review_projection(
-                root_fd,
-                review_fd,
-                reviews,
-                publication=publication,
-            )
-            review_identity = _directory_identity(review_fd)
-            _assert_named_directory_identity(root_fd, "review", review_identity)
-            _assert_batch_namespace_identity(display_root, root_identity)
-            # index.html is the review packet commit marker and is published last.
-            _atomic_write_text(review_fd, "index.html", index)
-            _assert_named_directory_identity(root_fd, "review", review_identity)
-            _assert_batch_namespace_identity(display_root, root_identity)
-        except BaseException:
-            rollback_error: Exception | None = None
-            for directory_fd, name, backup in (
-                (review_fd, "index.html", index_backup),
-                (root_fd, "summary.md", summary_backup),
-            ):
-                try:
-                    _restore_atomic_surface(directory_fd, name, backup)
-                except (OSError, ReviewPacketError) as exc:
-                    rollback_error = rollback_error or exc
-            if rollback_error is not None:
-                raise ReviewPacketError(
-                    "previous review packet surfaces could not be restored"
-                ) from rollback_error
-            raise
-        else:
-            if index_backup is not None:
-                _discard_atomic_backup(review_fd, index_backup)
-            if summary_backup is not None:
-                _discard_atomic_backup(root_fd, summary_backup)
+        # The packet is regenerable from the retained runtime (batch.json is the
+        # only terminal authority), so a failed publication is reported as a
+        # failure instead of restoring the previous surfaces.
+        _atomic_write_text(root_fd, "summary.md", summary)
+        review_identity = _directory_identity(review_fd)
+        _assert_named_directory_identity(root_fd, "review", review_identity)
+        _assert_batch_namespace_identity(display_root, root_identity)
+        # index.html is the review packet commit marker and is published last.
+        _atomic_write_text(review_fd, "index.html", index)
+        _assert_named_directory_identity(root_fd, "review", review_identity)
+        _assert_batch_namespace_identity(display_root, root_identity)
     finally:
         if review_fd is not None:
             os.close(review_fd)
@@ -454,289 +411,12 @@ def _open_or_create_review_directory(root_fd: int) -> int:
 
 
 def _atomic_write_text(directory_fd: int, name: str, content: str) -> None:
-    encoded = content.encode("utf-8")
-    temporary = f".{name}.{secrets.token_hex(12)}.tmp"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    fd: int | None = None
-    expected_identity: _SourceIdentity | None = None
-    backup: _AtomicBackup | None = None
-    preserve_backup = False
-    try:
-        fd = os.open(temporary, flags, 0o644, dir_fd=directory_fd)
-        with os.fdopen(fd, "wb", closefd=True) as handle:
-            fd = None
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-            details = os.fstat(handle.fileno())
-            if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
-                raise ReviewPacketError("atomic text staging file is unsafe")
-            expected_identity = _SourceIdentity(
-                device=details.st_dev,
-                inode=details.st_ino,
-                size_bytes=details.st_size,
-                modified_ns=details.st_mtime_ns,
-            )
-        assert expected_identity is not None
-        expected_snapshot = _AtomicFileSnapshot(
-            identity=expected_identity,
-            sha256=hashlib.sha256(encoded).hexdigest(),
-        )
-        _verify_atomic_file_entry(
-            directory_fd,
-            temporary,
-            snapshot=expected_snapshot,
-            expected_nlinks=frozenset({1}),
-        )
-        backup = _create_atomic_backup(directory_fd, name)
-        os.replace(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
-        try:
-            _verify_atomic_file_entry(
-                directory_fd,
-                name,
-                snapshot=expected_snapshot,
-                expected_nlinks=frozenset({1}),
-            )
-            os.fsync(directory_fd)
-            _verify_atomic_file_entry(
-                directory_fd,
-                name,
-                snapshot=expected_snapshot,
-                expected_nlinks=frozenset({1}),
-            )
-        except (OSError, ReviewPacketError):
-            try:
-                _restore_atomic_surface(directory_fd, name, backup)
-                backup = None
-            except (OSError, ReviewPacketError) as restore_error:
-                preserve_backup = True
-                raise ReviewPacketError(
-                    "previous atomic text output could not be restored"
-                ) from restore_error
-            raise
-    finally:
-        if backup is not None and not preserve_backup:
-            _discard_atomic_backup(directory_fd, backup)
-        if fd is not None:
-            os.close(fd)
-        try:
-            os.unlink(temporary, dir_fd=directory_fd)
-        except OSError:
-            # A verified publication or rollback is already authoritative.
-            # Best-effort staging cleanup must not turn it into a false error.
-            pass
-
-
-def _verify_atomic_file_entry(
-    directory_fd: int,
-    name: str,
-    *,
-    snapshot: _AtomicFileSnapshot,
-    expected_nlinks: frozenset[int],
-) -> None:
-    try:
-        file_fd = os.open(name, _file_open_flags(), dir_fd=directory_fd)
-    except OSError as exc:
-        raise ReviewPacketError("atomic text output changed during publication") from exc
-    try:
-        before = os.fstat(file_fd)
-        identity = snapshot.identity
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_nlink not in expected_nlinks
-            or before.st_dev != identity.device
-            or before.st_ino != identity.inode
-            or before.st_size != identity.size_bytes
-            or before.st_mtime_ns != identity.modified_ns
-        ):
-            raise ReviewPacketError("atomic text output changed during publication")
-        digest, size_bytes = _digest_file(file_fd)
-        after = os.fstat(file_fd)
-        if (
-            after.st_dev != before.st_dev
-            or after.st_ino != before.st_ino
-            or after.st_size != before.st_size
-            or after.st_mtime_ns != before.st_mtime_ns
-            or after.st_nlink not in expected_nlinks
-            or size_bytes != identity.size_bytes
-            or digest != snapshot.sha256
-        ):
-            raise ReviewPacketError("atomic text output changed during publication")
-    finally:
-        os.close(file_fd)
-
-
-def _capture_atomic_file_snapshot(
-    directory_fd: int,
-    name: str,
-) -> _AtomicFileSnapshot | None:
-    try:
-        file_fd = os.open(name, _file_open_flags(), dir_fd=directory_fd)
-    except FileNotFoundError:
-        return None
-    except OSError:
-        # Existing symlinks and other unsafe entries are replaceable but are not
-        # adopted as trusted packet state or restored after a failed write.
-        return None
-    try:
-        before = os.fstat(file_fd)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-            return None
-        if before.st_size > _MAX_ATOMIC_BACKUP_BYTES:
-            raise ReviewPacketError("existing atomic text output exceeds the backup limit")
-        digest, size_bytes = _digest_file(file_fd)
-        after = os.fstat(file_fd)
-        if (
-            size_bytes != before.st_size
-            or after.st_dev != before.st_dev
-            or after.st_ino != before.st_ino
-            or after.st_size != before.st_size
-            or after.st_mtime_ns != before.st_mtime_ns
-            or after.st_nlink != 1
-        ):
-            raise ReviewPacketError("existing atomic text output changed during backup")
-        return _AtomicFileSnapshot(
-            identity=_SourceIdentity(
-                device=before.st_dev,
-                inode=before.st_ino,
-                size_bytes=before.st_size,
-                modified_ns=before.st_mtime_ns,
-            ),
-            sha256=digest,
-        )
-    finally:
-        os.close(file_fd)
-
-
-def _create_atomic_backup(directory_fd: int, target_name: str) -> _AtomicBackup | None:
-    snapshot = _capture_atomic_file_snapshot(directory_fd, target_name)
-    if snapshot is None:
-        return None
-    backup_name = f".{target_name}.{secrets.token_hex(12)}.bak"
-    linked = False
-    try:
-        _verify_atomic_file_entry(
-            directory_fd,
-            target_name,
-            snapshot=snapshot,
-            expected_nlinks=frozenset({1}),
-        )
-        os.link(
-            target_name,
-            backup_name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
-            follow_symlinks=False,
-        )
-        linked = True
-        for name in (target_name, backup_name):
-            _verify_atomic_file_entry(
-                directory_fd,
-                name,
-                snapshot=snapshot,
-                expected_nlinks=frozenset({2}),
-            )
-        os.fsync(directory_fd)
-        return _AtomicBackup(
-            name=backup_name,
-            target_name=target_name,
-            snapshot=snapshot,
-        )
-    except BaseException:
-        if linked:
-            try:
-                os.unlink(backup_name, dir_fd=directory_fd)
-                os.fsync(directory_fd)
-            except FileNotFoundError:
-                pass
-        raise
-
-
-def _named_entry_matches_snapshot(
-    directory_fd: int,
-    name: str,
-    snapshot: _AtomicFileSnapshot,
-) -> bool:
-    try:
-        file_fd = os.open(name, _file_open_flags(), dir_fd=directory_fd)
-    except OSError:
-        return False
-    try:
-        details = os.fstat(file_fd)
-        identity = snapshot.identity
-        return (
-            stat.S_ISREG(details.st_mode)
-            and details.st_dev == identity.device
-            and details.st_ino == identity.inode
-        )
-    finally:
-        os.close(file_fd)
-
-
-def _discard_atomic_backup(directory_fd: int, backup: _AtomicBackup) -> None:
-    try:
-        _verify_atomic_file_entry(
-            directory_fd,
-            backup.name,
-            snapshot=backup.snapshot,
-            expected_nlinks=frozenset({1, 2}),
-        )
-        os.unlink(backup.name, dir_fd=directory_fd)
-    except (OSError, ReviewPacketError):
-        # The committed surface is already verified. Retaining a hidden backup
-        # is safer than reporting a false publication failure.
-        return
-    try:
-        os.fsync(directory_fd)
-    except OSError:
-        # The replacement itself was already verified and fsynced. At worst a
-        # hidden backup link survives a crash and can be removed with the batch.
-        pass
-
-
-def _restore_atomic_surface(
-    directory_fd: int,
-    target_name: str,
-    backup: _AtomicBackup | None,
-) -> None:
-    if backup is None:
-        try:
-            os.unlink(target_name, dir_fd=directory_fd)
-        except FileNotFoundError:
-            pass
-        os.fsync(directory_fd)
-        return
-
-    if _named_entry_matches_snapshot(directory_fd, target_name, backup.snapshot):
-        for name in (target_name, backup.name):
-            _verify_atomic_file_entry(
-                directory_fd,
-                name,
-                snapshot=backup.snapshot,
-                expected_nlinks=frozenset({2}),
-            )
-        os.unlink(backup.name, dir_fd=directory_fd)
-        os.fsync(directory_fd)
-    else:
-        _verify_atomic_file_entry(
-            directory_fd,
-            backup.name,
-            snapshot=backup.snapshot,
-            expected_nlinks=frozenset({1}),
-        )
-        os.replace(
-            backup.name,
-            target_name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
-        )
-        os.fsync(directory_fd)
-    _verify_atomic_file_entry(
+    atomic_write_bytes_at(
         directory_fd,
-        target_name,
-        snapshot=backup.snapshot,
-        expected_nlinks=frozenset({1}),
+        name,
+        content.encode("utf-8"),
+        mode=0o644,
+        error=ReviewPacketError,
     )
 
 

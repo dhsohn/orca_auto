@@ -10,6 +10,18 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- The smoke review packet and manifests publish through one shared
+  staging-and-rename write. The hardlink backup/rollback layers, the repeated
+  post-publication re-verification passes, and the staging-substitution
+  defenses are gone: smoke outputs live in an owner-only directory whose only
+  writer is the suite itself and are regenerable from the retained runtime,
+  so a failed publication now surfaces as an error instead of restoring the
+  previous surfaces. The no-follow discovery, symlink/hardlink blocking,
+  bounded budgets, redaction, and fail-closed verdicts are unchanged.
+- Smoke source provenance no longer content-hashes untracked files (up to
+  256 MiB per file, twice per suite). Untracked file names still reach the
+  identity through the git status digest; tracked changes keep their diff
+  digest.
 - New standalone ORCA submissions now create one visible
   `generation-YYYYMMDD-HHMMSS-<8-hex>` directory directly under the submitted
   job directory. The bound `.inp`, supported referenced inputs under their
