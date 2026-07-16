@@ -30,7 +30,7 @@ def _generation_path(queue_root: Path, name: str = "generation-0001") -> Path:
 
 def _visible_generation_path(
     queue_root: Path,
-    name: str = "generation-20260714-224054-959479f2",
+    name: str = "20260714-224054-959479f2",
 ) -> Path:
     job_dir = queue_root / "job"
     job_dir.mkdir(exist_ok=True)
@@ -117,7 +117,7 @@ def test_visible_generation_rejects_invalid_name_and_outside_path(
     tmp_path: Path,
 ) -> None:
     invalid_name = _visible_generation_path(tmp_path, "generation-0001")
-    outside = tmp_path.parent / "outside-job" / "generation-20260714-224054-959479f2"
+    outside = tmp_path.parent / "outside-job" / "20260714-224054-959479f2"
 
     for token, generation in (
         ("snapshot-intent-visible-invalid-name", invalid_name),

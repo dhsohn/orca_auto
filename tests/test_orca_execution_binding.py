@@ -9,11 +9,16 @@ import pytest
 
 from orca_auto.core.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
 from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
+from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.orca.execution_binding import (
     build_orca_execution_snapshot,
     verify_orca_execution_snapshot,
 )
 from orca_auto.orca.input_blocks import MAX_ORCA_INPUT_REFERENCES
+
+
+def _visible_generations(job_dir: Path) -> list[Path]:
+    return [path for path in job_dir.iterdir() if is_visible_generation_name(path.name)]
 
 
 def _write_executable(path: Path, payload: str = "#!/bin/sh\nexit 0\n") -> Path:
@@ -123,7 +128,7 @@ def test_orca_execution_snapshot_binds_selected_dependencies_and_executable(
     assert "input_snapshot_namespace" not in snapshot
     execution_dir = Path(snapshot["execution_dir"])
     assert execution_dir.parent == job_dir.resolve()
-    assert re.fullmatch(r"generation-\d{8}-\d{6}-[0-9a-f]{8}", execution_dir.name)
+    assert re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{8}", execution_dir.name)
     assert all(
         Path(identity["path"]).parent == execution_dir
         for identity in snapshot["materialized_inputs"].values()
@@ -149,6 +154,17 @@ def test_orca_execution_snapshot_binds_selected_dependencies_and_executable(
     assert '%pointcharges "charges.pc"' in bound_text
     assert 'InHessName "initial.hess"' in bound_text
     assert ".inputs/" not in bound_text
+
+
+def test_visible_generation_name_contract() -> None:
+    assert is_visible_generation_name("20260716-224400-3da546fd")
+    assert not is_visible_generation_name("generation-20260716-224400-3da546fd")
+    assert not is_visible_generation_name("20260716-224400-3DA546FD")
+    assert not is_visible_generation_name("20260716-224400-3da546f")
+    assert not is_visible_generation_name("20260716-224400-3da546fd0")
+    assert not is_visible_generation_name("2026716-224400-3da546fd")
+    assert not is_visible_generation_name("20260716-224400-3da546fd\n")
+    assert not is_visible_generation_name("٢٠٢٦٠٧١٦-٢٢٤٤٠٠-3da546fd")
 
 
 def test_orca_execution_snapshot_allows_same_stem_xyz_dependency(tmp_path: Path) -> None:
@@ -248,7 +264,7 @@ def test_orca_execution_snapshot_rejects_same_stem_hessian_for_frequency(tmp_pat
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
-    assert not list(job_dir.glob("generation-*"))
+    assert not _visible_generations(job_dir)
 
 
 @pytest.mark.parametrize(
@@ -279,7 +295,7 @@ def test_orca_execution_snapshot_rejects_generation_runtime_name_collisions(
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
-    assert not list(job_dir.glob("generation-*"))
+    assert not _visible_generations(job_dir)
 
 
 @pytest.mark.parametrize(
@@ -325,7 +341,7 @@ def test_orca_execution_snapshot_rejects_retry_and_resume_name_collisions(
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
-    assert not list(job_dir.glob("generation-*"))
+    assert not _visible_generations(job_dir)
 
 
 def test_orca_execution_snapshot_allows_retry_name_outside_effective_budget(
@@ -363,8 +379,8 @@ def test_orca_execution_snapshot_creates_sequential_sibling_generations(
 
     generation_names = iter(
         (
-            "generation-20260714-224054-959479f2",
-            "generation-20260714-224055-deadbeef",
+            "20260714-224054-959479f2",
+            "20260714-224055-deadbeef",
         )
     )
     monkeypatch.setattr(binding, "_new_generation_name", lambda: next(generation_names))
@@ -382,9 +398,9 @@ def test_orca_execution_snapshot_creates_sequential_sibling_generations(
     second_dir = Path(second["execution_dir"])
     assert first_dir != second_dir
     assert first_dir.parent == second_dir.parent == job_dir.resolve()
-    assert {path.name for path in job_dir.glob("generation-*")} == {
-        "generation-20260714-224054-959479f2",
-        "generation-20260714-224055-deadbeef",
+    assert {path.name for path in _visible_generations(job_dir)} == {
+        "20260714-224054-959479f2",
+        "20260714-224055-deadbeef",
     }
     assert first_dir.is_dir()
     assert second_dir.is_dir()
@@ -434,7 +450,7 @@ def test_orca_execution_snapshot_rejects_distinct_sources_with_same_basename_and
     assert "reactant/input.xyz" in message
     assert reactant.read_text(encoding="utf-8") == reactant_payload
     assert product.read_text(encoding="utf-8") == product_payload
-    assert not list(job_dir.glob("generation-*"))
+    assert not _visible_generations(job_dir)
     assert not (job_dir / ".orca_auto_orca_executions").exists()
     assert not (job_dir / ".orca_auto_input_snapshots").exists()
     assert not list((job_dir / ".orca_auto_snapshot_intents").glob("*.json"))
@@ -601,7 +617,7 @@ def test_orca_cleanup_rejects_a_mismatched_visible_generation(tmp_path: Path) ->
     import orca_auto.orca.execution_binding as binding
 
     job_dir, _selected, snapshot, _resources = _snapshot(tmp_path)
-    foreign_namespace = "generation-20000101-000000-deadbeef"
+    foreign_namespace = "20000101-000000-deadbeef"
     foreign_generation = job_dir / foreign_namespace
     foreign_generation.mkdir()
     mismatched = dict(snapshot)
@@ -645,7 +661,7 @@ def test_orca_execution_directory_collision_preserves_existing_generation(
 
     job_dir = tmp_path / "job"
     job_dir.mkdir()
-    generation_name = "generation-20260714-224054-959479f2"
+    generation_name = "20260714-224054-959479f2"
     existing = job_dir / generation_name
     existing.mkdir()
     marker = existing / "owner.txt"
@@ -913,7 +929,7 @@ def test_orca_execution_snapshot_rejects_unsafe_generated_xyzfile_path_and_clean
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
-    assert not list(job_dir.glob("generation-*"))
+    assert not _visible_generations(job_dir)
     assert not (job_dir / ".orca_auto_orca_executions").exists()
     assert not (job_dir / ".orca_auto_input_snapshots").exists()
     assert not list((job_dir / ".orca_auto_snapshot_intents").glob("*.json"))
@@ -1297,7 +1313,7 @@ def test_orca_execution_snapshot_checks_aggregate_budget_before_dependency_copy(
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
-    assert not list(job_dir.glob("generation-*"))
+    assert not _visible_generations(job_dir)
     assert not (job_dir / ".orca_auto_orca_executions").exists()
     assert not (job_dir / ".orca_auto_input_snapshots").exists()
     assert not list((job_dir / ".orca_auto_snapshot_intents").glob("*.json"))
@@ -1324,7 +1340,7 @@ def test_orca_execution_snapshot_rejects_oversized_dependency_before_copy(
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
-    assert not list(job_dir.glob("generation-*"))
+    assert not _visible_generations(job_dir)
     assert not (job_dir / ".orca_auto_orca_executions").exists()
     assert not (job_dir / ".orca_auto_input_snapshots").exists()
     assert not list((job_dir / ".orca_auto_snapshot_intents").glob("*.json"))

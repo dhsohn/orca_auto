@@ -14,6 +14,7 @@ import orca_auto.orca.commands.run_inp_submission as submission_mod
 from orca_auto.core.commands.run_dir import use_run_dir_publication_guard
 from orca_auto.core.queue import enqueue_publication as core_enqueue_publication
 from orca_auto.core.queue import store as queue_store
+from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_COMPLETE,
@@ -174,7 +175,7 @@ def test_submission_rejects_distinct_sources_with_same_basename_before_enqueue(
     assert "product/input.xyz" in result.stderr
     assert "reactant/input.xyz" in result.stderr
     assert queue_adapter.list_queue(tmp_path) == []
-    assert not list(reaction_dir.glob("generation-*"))
+    assert not [path for path in reaction_dir.iterdir() if is_visible_generation_name(path.name)]
     intent_root = tmp_path / ".orca_auto_snapshot_intents"
     assert not list(intent_root.glob("*.json"))
 
@@ -257,7 +258,7 @@ def test_enqueue_save_without_commit_fails_cleanly_without_queue_row(
     assert result.reason == "queue_submission_failed"
     assert queue_adapter.list_queue(tmp_path) == []
     assert not (reaction_dir / ".orca_auto_orca_executions").exists()
-    assert not list(reaction_dir.glob("generation-*"))
+    assert not [path for path in reaction_dir.iterdir() if is_visible_generation_name(path.name)]
 
 
 def test_public_run_dir_guard_aborts_orca_before_durable_queue_commit(
@@ -282,7 +283,7 @@ def test_public_run_dir_guard_aborts_orca_before_durable_queue_commit(
     assert not (tmp_path / "job_locations.json").exists()
     assert not (reaction_dir / "job_state.json").exists()
     assert not (reaction_dir / "job_report.json").exists()
-    assert not list(reaction_dir.glob("generation-*"))
+    assert not [path for path in reaction_dir.iterdir() if is_visible_generation_name(path.name)]
 
 
 @pytest.mark.parametrize(
@@ -330,7 +331,7 @@ def test_public_run_dir_guard_compensates_orca_post_commit_rejection(
     assert not (tmp_path / "job_locations.json").exists()
     assert not (reaction_dir / "job_state.json").exists()
     assert not (reaction_dir / "job_report.json").exists()
-    assert not list(reaction_dir.glob("generation-*"))
+    assert not [path for path in reaction_dir.iterdir() if is_visible_generation_name(path.name)]
 
 
 @pytest.mark.parametrize(

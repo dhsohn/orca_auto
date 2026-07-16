@@ -273,7 +273,7 @@ config, rerun the same command to enable the full runtime target. If you edited 
 - If no worker is running, queued jobs remain pending until one returns.
 - ORCA selects the most recently modified `.inp` at submission and binds that
   input plus supported file dependencies into a visible
-  `<job_dir>/generation-YYYYMMDD-HHMMSS-<8-hex>/` directory. The bound input and
+  `<job_dir>/YYYYMMDD-HHMMSS-<8-hex>/` directory. The bound input and
   each dependency keep their original basenames, and raw ORCA files appear at
   that same level; new ORCA submissions do not add hidden execution or nested
   input directories. Editing the source afterward does not change the queued

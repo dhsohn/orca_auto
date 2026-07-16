@@ -60,7 +60,7 @@ def test_execute_run_job_builds_run_inp_execution_request(
     tmp_path: Path,
 ) -> None:
     reaction_dir = tmp_path / "rxn"
-    selected_inp = reaction_dir / "generation-20260714-224054-959479f2" / "rxn.inp"
+    selected_inp = reaction_dir / "20260714-224054-959479f2" / "rxn.inp"
     rc = execute_run_job(
         "/tmp/config.yaml",
         str(reaction_dir),

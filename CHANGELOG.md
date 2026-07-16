@@ -113,8 +113,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   identity through the git status digest; tracked changes keep their diff
   digest.
 - New standalone ORCA submissions now create one visible
-  `generation-YYYYMMDD-HHMMSS-<8-hex>` directory directly under the submitted
-  job directory. The bound `.inp`, supported referenced inputs under their
+  `YYYYMMDD-HHMMSS-<8-hex>` directory directly under the submitted
+  job directory. That name shape is reserved: any directory whose name
+  matches it (ASCII date, time, and 8 lowercase hex digits) is treated as an
+  execution generation everywhere under `runs_root`, excluded from production
+  scans, and rejected as a `run-dir` submission target. The bound `.inp`, supported referenced inputs under their
   original basenames, and raw ORCA outputs all live at that one level; new ORCA
   submissions no longer create `.orca_auto_orca_executions/`, a nested
   `.inputs/`, or an ORCA `.orca_auto_input_snapshots/` tree. Referenced files

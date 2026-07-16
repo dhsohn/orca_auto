@@ -265,7 +265,7 @@ orca_auto service restart
   사실의 원천(source of truth)으로 유지되는 한편 공개 `reaction_dir` 계약도 보존됩니다.
 - 워커가 실행 중이 아니면, 큐에 들어간 작업은 워커가 돌아올 때까지 대기 상태로 남습니다.
 - ORCA는 제출할 때 가장 최근에 수정된 `.inp`와 지원하는 파일 의존성을 눈에 보이는
-  `<작업 디렉터리>/generation-YYYYMMDD-HHMMSS-<8자리 hex>/`에 바인딩합니다. 실제
+  `<작업 디렉터리>/YYYYMMDD-HHMMSS-<8자리 hex>/`에 바인딩합니다. 실제
   실행 `.inp`와 각 의존성은 원래 basename을 그대로 유지하고 raw ORCA 파일도 같은 단계에
   생깁니다. 새 ORCA 제출은 숨은 실행 디렉터리나 중첩 입력 디렉터리를 만들지 않습니다.
   이후 원본을 편집해도 이미 큐에 들어간 generation은 바뀌지 않습니다. 서로 다른 소스
