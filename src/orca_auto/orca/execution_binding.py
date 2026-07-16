@@ -5,7 +5,6 @@ import io
 import re
 import secrets
 from collections.abc import Mapping
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -35,10 +34,10 @@ from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory
 from .completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from .input_blocks import (
     GEOM_HEADER_RE,
-    neb_file_reference_context,
-    orca_line_tokens,
+    OrcaFileReference,
     orca_route_line,
     quote_orca_path,
+    scan_orca_file_references,
     unquoted_orca_path,
     validate_supported_xyz_geometry_syntax,
 )
@@ -51,7 +50,6 @@ from .retry_policy import (
 )
 
 ORCA_EXECUTION_SNAPSHOT_VERSION = 2
-MAX_ORCA_INPUT_REFERENCES = 128
 MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES = 4 * MAX_INPUT_SNAPSHOT_BYTES
 _GENERATION_RUNTIME_FILE_NAMES = frozenset(
     {
@@ -61,209 +59,11 @@ _GENERATION_RUNTIME_FILE_NAMES = frozenset(
         "orca.process.json",
     }
 )
-_SIMPLE_FILE_REFERENCE_KEYS = frozenset({"%moinp", "%pointcharges"})
-_BLOCK_FILE_REFERENCE_KEYS = frozenset(
-    {
-        "hessfile",
-        "hess_filename",
-        "inhessname",
-        "ircinithess",
-        "moinp",
-        "neb_end_xyzfile",
-        "neb_restart_xyzfile",
-        "neb_ts_xyzfile",
-        "restart_allxyzfile",
-    }
-)
 _XYZ_GEOMETRY_REFERENCE_KINDS = frozenset({"geometry", "neb_geometry"})
 _NEB_ROUTE_RE = re.compile(r"\b(?:ZOOM-)?NEB(?:-(?:TS|CI))?\b", re.IGNORECASE)
-_UNSUPPORTED_FILE_REFERENCE_KEYS = frozenset(
-    {
-        "%cclib",
-        "%ljcoefficients",
-        "neb_end_pdbfile",
-        "orcafffilename",
-        "product_pdbfile",
-        "ts_pdbfile",
-    }
-)
-_UNSUPPORTED_EXTERNAL_HOOK_KEYS = frozenset(
-    {
-        "base",
-        "ext_args",
-        "ext_params",
-        "extargs",
-        "extopt",
-        "extparams",
-        "frag1_methodfile",
-        "frag1methodfile",
-        "frag2_methodfile",
-        "frag2methodfile",
-        "gtoauxcname",
-        "gtoauxjname",
-        "gtoauxjkname",
-        "gtoauxname",
-        "gtoname",
-        "openfile",
-        "progcasscf",
-        "progcc",
-        "progci",
-        "progcorr",
-        "progepr",
-        "progext",
-        "progmdci",
-        "progmp2",
-        "progmrci",
-        "prognmr",
-        "progplot",
-        "progrocis",
-        "progscf",
-        "progtddft",
-        "qm2_customfile",
-        "qm2customfile",
-        "readfragaux",
-        "readfragauxc",
-        "readfragauxj",
-        "readfragauxjk",
-        "readfragbasis",
-        "readfragecp",
-        "neb_restart_gbwname",
-        "restart_gbw_basename",
-        "sys_cmd",
-        "write2file",
-        "xtbinputstring",
-        "xtbinputstring2",
-        "xtbparamfile",
-    }
-)
 
 
-@dataclass(frozen=True)
-class _FileReference:
-    line_index: int
-    value: str
-    start: int
-    end: int
-    kind: str
-
-
-def _file_references(lines: list[str]) -> list[_FileReference]:
-    references: list[_FileReference] = []
-    in_neb_block = False
-    for line_index, line in enumerate(lines):
-        tokens = orca_line_tokens(line)
-        neb_keyword_indices, in_neb_block = neb_file_reference_context(
-            tokens,
-            in_neb_block=in_neb_block,
-        )
-        compact_active = "".join(token.value.lower() for token in tokens if not token.quoted)
-        if "gcp(file)" in compact_active:
-            raise ValueError("Unsupported ORCA auxiliary or external program directive: GCP(FILE)")
-        reference_value_indices: set[int] = set()
-        if len(tokens) >= 5 and tokens[0].value == "*" and tokens[1].value.lower() == "xyzfile":
-            value_token = tokens[4]
-            reference_value_indices.add(4)
-            references.append(
-                _FileReference(
-                    line_index=line_index,
-                    value=value_token.value,
-                    start=value_token.start,
-                    end=value_token.end,
-                    kind="geometry",
-                )
-            )
-        for token_index, token in enumerate(tokens):
-            if token.quoted:
-                continue
-            keyword = token.value.lower()
-            spaced_percent_keyword = (
-                f"%{keyword}" if token_index == 1 and tokens[0].value == "%" else ""
-            )
-            effective_keyword = spaced_percent_keyword or keyword
-            is_simple = effective_keyword in _SIMPLE_FILE_REFERENCE_KEYS and (
-                token_index == 0 or bool(spaced_percent_keyword)
-            )
-            is_neb_file_directive = (
-                token_index in neb_keyword_indices and token_index not in reference_value_indices
-            )
-            is_value_directive = (
-                is_simple or keyword in _BLOCK_FILE_REFERENCE_KEYS or is_neb_file_directive
-            )
-            is_value_directive = is_value_directive or effective_keyword == "%base"
-            if not is_value_directive:
-                continue
-            value_index = token_index + 1
-            if value_index < len(tokens) and tokens[value_index].value == "=":
-                value_index += 1
-            if value_index < len(tokens):
-                reference_value_indices.add(value_index)
-        for token_index, token in enumerate(tokens):
-            if token.quoted:
-                continue
-            keyword = token.value.lower()
-            spaced_percent_keyword = (
-                f"%{keyword}" if token_index == 1 and tokens[0].value == "%" else ""
-            )
-            effective_keyword = spaced_percent_keyword or keyword
-            normalized_keyword = effective_keyword.lstrip("%!")
-            if normalized_keyword == "gcpmethod":
-                value_index = token_index + 1
-                if value_index < len(tokens) and tokens[value_index].value == "=":
-                    value_index += 1
-                if (
-                    value_index < len(tokens)
-                    and tokens[value_index].value.strip().lower() == "file"
-                ):
-                    raise ValueError(
-                        "Unsupported ORCA auxiliary or external program directive: GCPMETHOD file"
-                    )
-            if token_index not in reference_value_indices and (
-                normalized_keyword in _UNSUPPORTED_EXTERNAL_HOOK_KEYS
-                or normalized_keyword.startswith("prog")
-            ):
-                raise ValueError(
-                    f"Unsupported ORCA auxiliary or external program directive: {effective_keyword}"
-                )
-            if effective_keyword in _UNSUPPORTED_FILE_REFERENCE_KEYS:
-                raise ValueError(f"Unsupported ORCA auxiliary file directive: {effective_keyword}")
-            is_simple = effective_keyword in _SIMPLE_FILE_REFERENCE_KEYS and (
-                token_index == 0 or bool(spaced_percent_keyword)
-            )
-            is_neb_file_directive = (
-                token_index in neb_keyword_indices and token_index not in reference_value_indices
-            )
-            if (
-                not is_simple
-                and keyword not in _BLOCK_FILE_REFERENCE_KEYS
-                and not is_neb_file_directive
-            ):
-                continue
-            value_index = token_index + 1
-            if value_index < len(tokens) and tokens[value_index].value == "=":
-                value_index += 1
-            if value_index >= len(tokens):
-                raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
-            value_token = tokens[value_index]
-            value = value_token.value.strip()
-            if not value or (not value_token.quoted and value.lower() == "end"):
-                raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
-            references.append(
-                _FileReference(
-                    line_index=line_index,
-                    value=value,
-                    start=value_token.start,
-                    end=value_token.end,
-                    kind="neb_geometry" if is_neb_file_directive else "auxiliary",
-                )
-            )
-    if len(references) > MAX_ORCA_INPUT_REFERENCES:
-        raise ValueError(
-            f"ORCA input has more than {MAX_ORCA_INPUT_REFERENCES} external file references"
-        )
-    return references
-
-
-def _render_bound_reference(reference: _FileReference, relative_path: str) -> str:
+def _render_bound_reference(reference: OrcaFileReference, relative_path: str) -> str:
     if reference.kind != "geometry":
         return quote_orca_path(relative_path)
     return unquoted_orca_path(relative_path)
@@ -472,7 +272,7 @@ def _write_private_input(
 
 def _rewrite_bound_input(
     lines: list[str],
-    references: list[_FileReference],
+    references: list[OrcaFileReference],
     private_paths: Mapping[Path, Path],
     *,
     job_dir: Path,
@@ -691,7 +491,7 @@ def build_orca_execution_snapshot(
                 "ORCA frequency calculation exceeds the server Hessian atom-count "
                 f"limit of {MAX_HESSIAN_ADMISSION_ATOMS}"
             )
-        references = _file_references(lines)
+        references = scan_orca_file_references(lines)
         dependency_sources: set[Path] = set()
         geometry_dependencies: set[Path] = set()
         dependency_reference_kinds: dict[Path, set[str]] = {}
@@ -1082,7 +882,7 @@ def verify_orca_execution_snapshot(
     except UnicodeError as exc:
         raise ValueError("Queued ORCA bound selected input must be UTF-8 text") from exc
     selected_lines = selected_text.splitlines()
-    bound_references = _file_references(selected_lines)
+    bound_references = scan_orca_file_references(selected_lines)
     hessian_requested = _route_requests_hessian(selected_lines)
     same_stem_xyz_is_output = _route_writes_same_stem_xyz(selected_lines)
     effective_retry_count = effective_max_retries(
@@ -1191,7 +991,6 @@ def cleanup_unowned_orca_execution_snapshot(job_dir: str | Path, snapshot: Any) 
 
 __all__ = [
     "MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES",
-    "MAX_ORCA_INPUT_REFERENCES",
     "ORCA_EXECUTION_SNAPSHOT_VERSION",
     "build_orca_execution_snapshot",
     "cleanup_unowned_orca_execution_snapshot",

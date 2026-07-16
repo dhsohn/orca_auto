@@ -62,6 +62,15 @@ migration.
   (`flow/conformer_selection.py`) for route normalization, geometry tolerance,
   minimum eligibility, single-point pairing, and RMSD representatives, so such
   stages participate in SP pairing, populations, RMSD dedup, and ΔE_int again.
+- ORCA restart rematerialization now scans input file references with the same
+  scanner execution binding uses (`orca/input_blocks.py`), so references only
+  the execution side recognized before — the spaced `% moinp` form and block
+  keys such as `moinp`, `hess_filename`, `neb_restart_xyzfile`, and
+  `restart_allxyzfile` — are copied into the restart directory and rewritten
+  instead of silently left pointing into the previous reaction directory.
+  Restart also now fails closed at rematerialization time on unsupported
+  auxiliary/external-program directives and on more than 128 references
+  (previously such hand-edited inputs restarted and only failed at re-run).
 
 ## [0.2.1] - 2026-07-14
 
