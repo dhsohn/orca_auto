@@ -56,6 +56,13 @@ migration.
 
 ### Fixed
 
+- The xTB-MD queue worker now repairs committed submissions whose queued
+  record was never published before it will claim any work, matching the
+  repair pass the other engines already had. Previously a submitter killed
+  between the durable enqueue commit and the record publication left a stale
+  lease that was eventually claimed and run without any published record.
+  Live publisher leases are left untouched, and a row whose repair fails is
+  parked repair-pending and stays unclaimable instead of running.
 - `queue list --watch` now keeps system and per-job CPU/RAM sampling active on a
   real terminal when `NO_COLOR` or `--no-color` disables ANSI painting; piped,
   JSON, and messenger output remain unchanged. Per-job CPU counters also retain

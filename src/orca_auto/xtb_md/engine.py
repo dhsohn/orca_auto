@@ -10,7 +10,13 @@ from orca_auto.core.engines import (
     build_queue_engine_definition,
     build_queue_entry_by_id,
 )
-from orca_auto.core.queue import dequeue_entry_if_pending, dequeue_next, list_queue
+from orca_auto.core.queue import (
+    QUEUE_RECORD_SYNC_COMPLETE,
+    dequeue_entry_if_pending,
+    dequeue_next,
+    list_queue,
+    queue_record_sync_state,
+)
 from orca_auto.core.queue.internal_engine import own_engine_accept_entry
 
 from .records import build_job_artifact, persist_job_artifact
@@ -18,12 +24,27 @@ from .records import build_job_artifact, persist_job_artifact
 _ACCEPT_XTB_MD_ENTRY = own_engine_accept_entry("xtb_md")
 
 
+def _accept_published_xtb_md_entry(entry: Any) -> bool:
+    """Claim only rows whose queued-record publication completed.
+
+    The worker's pre-claim repair gate publishes any missing queued record;
+    refusing an unfinished sync lease here closes the remaining window where a
+    publisher dies between the gate scan and this claim, so an xTB-MD job can
+    never run without its published record. Rows enqueued before the sync
+    lease existed carry no state and stay claimable.
+    """
+    if not _ACCEPT_XTB_MD_ENTRY(entry):
+        return False
+    sync_state = queue_record_sync_state(entry)
+    return not sync_state or sync_state == QUEUE_RECORD_SYNC_COMPLETE
+
+
 def _list_xtb_md_queue(root: str | Path) -> list[Any]:
     return [entry for entry in list_queue(root) if _ACCEPT_XTB_MD_ENTRY(entry)]
 
 
 def _dequeue_next_xtb_md(root: Path) -> Any | None:
-    return dequeue_next(root, accept_entry_fn=_ACCEPT_XTB_MD_ENTRY)
+    return dequeue_next(root, accept_entry_fn=_accept_published_xtb_md_entry)
 
 
 def _dequeue_xtb_md_entry_if_pending(
@@ -35,7 +56,7 @@ def _dequeue_xtb_md_entry_if_pending(
     return dequeue_entry_if_pending(
         root,
         queue_id,
-        accept_entry_fn=_ACCEPT_XTB_MD_ENTRY,
+        accept_entry_fn=_accept_published_xtb_md_entry,
         expected_entry=expected_entry,
     )
 

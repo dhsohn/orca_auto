@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -386,3 +387,293 @@ def test_cmd_queue_worker_loads_config_and_runs_xtb_md_worker(
 
     assert result == 17
     assert seen == [(cfg, str(config_path), 3)]
+
+
+def _enqueue_with_lease(
+    queue_root: Path,
+    name: str,
+    *,
+    sync_state: str,
+    owner_pid: int,
+    owner_start: str | None = None,
+    job_dir: Path | None = None,
+) -> QueueEntry:
+    from orca_auto.core.queue import (
+        QUEUE_RECORD_SYNC_OWNER_START_KEY,
+        queue_record_sync_metadata,
+    )
+
+    resolved_job_dir = job_dir if job_dir is not None else queue_root / f"job_{name}"
+    resolved_job_dir.mkdir(parents=True, exist_ok=True)
+    lease = queue_record_sync_metadata(sync_state, token=f"tok-{name}", owner_pid=owner_pid)
+    if owner_start is not None:
+        lease[QUEUE_RECORD_SYNC_OWNER_START_KEY] = owner_start
+    return enqueue(
+        queue_root,
+        app_name="orca_auto_xtb_md",
+        task_id=f"task-{name}",
+        task_kind="xtb_md",
+        engine="xtb_md",
+        priority=10,
+        metadata={"job_dir": str(resolved_job_dir), **lease},
+    )
+
+
+def _gate_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    queue_root: Path,
+) -> SimpleNamespace:
+    monkeypatch.setattr(
+        queue_runtime,
+        "queue_entries_with_roots",
+        lambda _cfg: [(queue_root, entry) for entry in list_queue(queue_root)],
+    )
+    return SimpleNamespace(cfg=object())
+
+
+def test_publication_repair_gate_repairs_stale_preparing_before_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The D6 crash window: a publisher SIGKILLed between the durable enqueue
+    # commit and the queued-record publication leaves a dead-owner PREPARING
+    # lease. Without the repair gate that row eventually becomes claimable and
+    # runs without any published record.
+    from orca_auto.core.queue import (
+        QUEUE_RECORD_SYNC_COMPLETE,
+        QUEUE_RECORD_SYNC_PREPARING,
+        queue_entry_is_claimable,
+        queue_record_sync_state,
+    )
+
+    queue_root = tmp_path / "queue"
+    entry = _enqueue_with_lease(
+        queue_root,
+        "sigkilled",
+        sync_state=QUEUE_RECORD_SYNC_PREPARING,
+        owner_pid=2**22 + 12345,
+        owner_start="dead-publisher-start-token",
+    )
+    # This is the hazard: the dead-owner lease is already stale, so the generic
+    # dequeue would claim the row even though no queued record was published.
+    assert queue_entry_is_claimable(_entry_by_task(queue_root, entry.task_id))
+
+    published: list[str] = []
+    monkeypatch.setattr(
+        queue_runtime,
+        "publish_queued_record",
+        lambda _cfg, row: published.append(row.queue_id),
+    )
+    worker = _gate_worker(monkeypatch, queue_root)
+
+    assert queue_runtime._publication_repair_gate(worker) is None
+
+    repaired = _entry_by_task(queue_root, entry.task_id)
+    assert published == [entry.queue_id]
+    assert repaired.status == QueueStatus.PENDING
+    assert queue_record_sync_state(repaired) == QUEUE_RECORD_SYNC_COMPLETE
+    assert queue_entry_is_claimable(repaired)
+
+
+def test_publication_repair_gate_blocks_and_parks_when_publication_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.core.queue import (
+        QUEUE_RECORD_SYNC_REPAIR_PENDING,
+        queue_entry_is_claimable,
+        queue_record_sync_state,
+    )
+
+    queue_root = tmp_path / "queue"
+    entry = _enqueue_with_lease(
+        queue_root,
+        "broken",
+        sync_state=QUEUE_RECORD_SYNC_REPAIR_PENDING,
+        owner_pid=0,
+    )
+
+    def explode(_cfg: object, _row: object) -> None:
+        raise RuntimeError("artifact write failed")
+
+    monkeypatch.setattr(queue_runtime, "publish_queued_record", explode)
+    worker = _gate_worker(monkeypatch, queue_root)
+
+    assert queue_runtime._publication_repair_gate(worker) == ("blocked", None)
+
+    parked = _entry_by_task(queue_root, entry.task_id)
+    assert parked.status == QueueStatus.PENDING
+    assert queue_record_sync_state(parked) == QUEUE_RECORD_SYNC_REPAIR_PENDING
+    assert not queue_entry_is_claimable(parked)
+
+
+def test_publication_repair_gate_leaves_live_preparing_lease_alone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.core.queue import (
+        QUEUE_RECORD_SYNC_PREPARING,
+        queue_record_sync_state,
+    )
+
+    queue_root = tmp_path / "queue"
+    entry = _enqueue_with_lease(
+        queue_root,
+        "live",
+        sync_state=QUEUE_RECORD_SYNC_PREPARING,
+        owner_pid=os.getpid(),
+    )
+
+    monkeypatch.setattr(
+        queue_runtime,
+        "publish_queued_record",
+        lambda _cfg, _row: pytest.fail("a live publisher lease must not be repaired"),
+    )
+    worker = _gate_worker(monkeypatch, queue_root)
+
+    assert queue_runtime._publication_repair_gate(worker) is None
+    current = _entry_by_task(queue_root, entry.task_id)
+    assert queue_record_sync_state(current) == QUEUE_RECORD_SYNC_PREPARING
+
+
+def test_publication_repair_gate_refuses_job_dir_outside_queue_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.core.queue import QUEUE_RECORD_SYNC_REPAIR_PENDING
+
+    queue_root = tmp_path / "queue"
+    outside = tmp_path / "outside_job"
+    _enqueue_with_lease(
+        queue_root,
+        "escape",
+        sync_state=QUEUE_RECORD_SYNC_REPAIR_PENDING,
+        owner_pid=0,
+        job_dir=outside,
+    )
+
+    monkeypatch.setattr(
+        queue_runtime,
+        "publish_queued_record",
+        lambda _cfg, _row: pytest.fail("an escaping job_dir must not be published"),
+    )
+    worker = _gate_worker(monkeypatch, queue_root)
+
+    assert queue_runtime._publication_repair_gate(worker) == ("blocked", None)
+
+
+def test_queue_worker_wires_the_publication_repair_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_builder(cfg: Any, **kwargs: Any) -> str:
+        captured.update(kwargs)
+        return "worker"
+
+    monkeypatch.setattr(queue_runtime, "build_runtime_engine_queue_worker", fake_builder)
+    monkeypatch.setattr(queue_runtime, "resolve_admission_root", lambda _cfg: "/tmp/admission")
+
+    assert queue_runtime.QueueWorker(object(), "/tmp/orca_auto.yaml") == "worker"
+    assert captured["reserve_gate"] is queue_runtime._publication_repair_gate
+
+
+def test_dequeue_refuses_unpublished_sync_lease_even_when_claimable(tmp_path: Path) -> None:
+    # Closes the residual window: if the publisher dies between the repair
+    # gate's scan (which saw a live lease) and the claim, the stale lease is
+    # claimable by the generic rule but the xTB-MD claim itself must refuse
+    # every unfinished publication.
+    from orca_auto.core.queue import (
+        QUEUE_RECORD_SYNC_COMPLETE,
+        QUEUE_RECORD_SYNC_PREPARING,
+        queue_entry_is_claimable,
+        queue_record_sync_metadata,
+    )
+    from orca_auto.xtb_md.engine import _dequeue_next_xtb_md
+
+    queue_root = tmp_path / "queue"
+    stale = _enqueue_with_lease(
+        queue_root,
+        "stale-window",
+        sync_state=QUEUE_RECORD_SYNC_PREPARING,
+        owner_pid=2**22 + 54321,
+        owner_start="dead-publisher-start-token",
+    )
+    assert queue_entry_is_claimable(_entry_by_task(queue_root, stale.task_id))
+
+    assert _dequeue_next_xtb_md(queue_root) is None
+
+    def publish_lease(entries: list[Any]) -> tuple[None, bool]:
+        from dataclasses import replace as dc_replace
+
+        for index, row in enumerate(entries):
+            if row.task_id != stale.task_id:
+                continue
+            metadata = dict(row.metadata)
+            metadata.update(
+                queue_record_sync_metadata(
+                    QUEUE_RECORD_SYNC_COMPLETE, token="tok-stale-window", owner_pid=0
+                )
+            )
+            entries[index] = dc_replace(row, metadata=metadata)
+            return None, True
+        raise AssertionError("row disappeared")
+
+    from orca_auto.core.queue.store import mutate_entries
+
+    mutate_entries(queue_root, publish_lease)
+    claimed = _dequeue_next_xtb_md(queue_root)
+    assert claimed is not None and claimed.task_id == stale.task_id
+
+
+def test_publication_repair_gate_treats_cancel_fenced_row_as_settled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.core.queue import (
+        QUEUE_RECORD_SYNC_REPAIR_PENDING,
+        request_cancel,
+    )
+
+    queue_root = tmp_path / "queue"
+    entry = _enqueue_with_lease(
+        queue_root,
+        "cancel-fenced",
+        sync_state=QUEUE_RECORD_SYNC_REPAIR_PENDING,
+        owner_pid=0,
+    )
+    cancelled = request_cancel(queue_root, entry.queue_id, expected_entry=entry)
+    assert cancelled is not None and cancelled.cancel_requested
+
+    monkeypatch.setattr(
+        queue_runtime,
+        "publish_queued_record",
+        lambda _cfg, _row: pytest.fail("a cancel-fenced row must not be published"),
+    )
+    worker = _gate_worker(monkeypatch, queue_root)
+
+    assert queue_runtime._publication_repair_gate(worker) is None
+
+
+def test_publication_repair_gate_blocks_on_invalid_sync_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.core.queue import QUEUE_RECORD_SYNC_ABORTED
+
+    queue_root = tmp_path / "queue"
+    _enqueue_with_lease(
+        queue_root,
+        "aborted",
+        sync_state=QUEUE_RECORD_SYNC_ABORTED,
+        owner_pid=0,
+    )
+
+    monkeypatch.setattr(
+        queue_runtime,
+        "publish_queued_record",
+        lambda _cfg, _row: pytest.fail("an aborted lease must not be published"),
+    )
+    worker = _gate_worker(monkeypatch, queue_root)
+
+    assert queue_runtime._publication_repair_gate(worker) == ("blocked", None)
