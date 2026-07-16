@@ -10,6 +10,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- The smoke package's descriptor-anchored safety checks — directory identity
+  capture and re-verification, the pinned open flags, and the bounded
+  change-detecting reads of regular files — now live in one internal module
+  shared by the runner, manifest, and review code instead of three parallel
+  private implementations. Review artifact reads now open files with
+  `O_NONBLOCK` like the rest of the package, so a file swapped for a FIFO
+  between discovery and open is rejected instead of blocking the reviewer.
 - The smoke manifest module no longer exports the test-only wrappers
   `artifact_counts`, `observe_terminal`, and `create_batch_directory`, and its
   writers require the pinned directory descriptor the runner always supplies

@@ -21,6 +21,16 @@ from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit
 
+from orca_auto.smoke._dirfd import (
+    DirectoryIdentity,
+    PinnedReadError,
+    directory_identity,
+    directory_open_flags,
+    file_open_flags,
+    open_named_directory_identity,
+    read_pinned_regular_file,
+    stat_identity,
+)
 from orca_auto.smoke._fsatomic import atomic_write_bytes_at
 
 _MAX_FIELD_CHARS = 512
@@ -139,11 +149,8 @@ class _SourceIdentity:
     size_bytes: int
     modified_ns: int
 
-
-@dataclass(frozen=True)
-class _DirectoryIdentity:
-    device: int
-    inode: int
+    def as_stat_identity(self) -> tuple[int, int, int, int]:
+        return (self.device, self.inode, self.size_bytes, self.modified_ns)
 
 
 @dataclass(frozen=True)
@@ -321,7 +328,7 @@ def _normalise_case_manifests(
     return cases
 
 
-def _open_batch_root(batch_dir: Path) -> tuple[Path, int, _DirectoryIdentity]:
+def _open_batch_root(batch_dir: Path) -> tuple[Path, int, DirectoryIdentity]:
     if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
         raise ReviewPacketError("safe no-follow directory access is unavailable on this platform")
     candidate = Path(batch_dir).expanduser()
@@ -335,7 +342,7 @@ def _open_batch_root(batch_dir: Path) -> tuple[Path, int, _DirectoryIdentity]:
         raise ReviewPacketError("batch path must be a directory")
 
     try:
-        root_fd = os.open(root, _directory_open_flags())
+        root_fd = os.open(root, directory_open_flags())
     except OSError as exc:
         raise ReviewPacketError("batch directory could not be opened safely") from exc
     if not stat.S_ISDIR(os.fstat(root_fd).st_mode):
@@ -346,13 +353,13 @@ def _open_batch_root(batch_dir: Path) -> tuple[Path, int, _DirectoryIdentity]:
 
 def _assert_batch_namespace_identity(
     root: Path,
-    expected: _DirectoryIdentity,
+    expected: DirectoryIdentity,
 ) -> None:
     candidate = Path(root).expanduser()
     try:
         if candidate.is_symlink():
             raise ReviewPacketError("batch directory namespace identity changed")
-        descriptor = os.open(candidate, _directory_open_flags())
+        descriptor = os.open(candidate, directory_open_flags())
     except OSError as exc:
         raise ReviewPacketError("batch directory namespace identity changed") from exc
     try:
@@ -362,25 +369,13 @@ def _assert_batch_namespace_identity(
         os.close(descriptor)
 
 
-def _directory_open_flags() -> int:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    return flags
-
-
-def _file_open_flags() -> int:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    return flags
-
-
 def _open_or_create_review_directory(root_fd: int) -> int:
     try:
         os.mkdir("review", mode=0o755, dir_fd=root_fd)
     except FileExistsError:
         pass
     try:
-        review_fd = os.open("review", _directory_open_flags(), dir_fd=root_fd)
+        review_fd = os.open("review", directory_open_flags(), dir_fd=root_fd)
     except OSError as exc:
         raise ReviewPacketError("review output directory is unavailable or unsafe") from exc
     if not stat.S_ISDIR(os.fstat(review_fd).st_mode):
@@ -413,7 +408,7 @@ class _ProjectionPlanEntry:
 class _ProjectionPublication:
     generation: str
     openable_count: int
-    identity: _DirectoryIdentity
+    identity: DirectoryIdentity
     manifest_text: str
 
 
@@ -453,7 +448,7 @@ def _open_or_create_directory(parent_fd: int, name: str) -> int:
     except FileExistsError:
         pass
     try:
-        directory_fd = os.open(name, _directory_open_flags(), dir_fd=parent_fd)
+        directory_fd = os.open(name, directory_open_flags(), dir_fd=parent_fd)
     except OSError as exc:
         raise ReviewPacketError("review projection directory is unavailable or unsafe") from exc
     if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
@@ -464,33 +459,32 @@ def _open_or_create_directory(parent_fd: int, name: str) -> int:
     return directory_fd
 
 
-def _directory_identity(directory_fd: int) -> _DirectoryIdentity:
-    details = os.fstat(directory_fd)
-    if not stat.S_ISDIR(details.st_mode):
-        raise ReviewPacketError("review projection identity is not a directory")
-    return _DirectoryIdentity(device=details.st_dev, inode=details.st_ino)
+def _directory_identity(directory_fd: int) -> DirectoryIdentity:
+    return directory_identity(
+        directory_fd,
+        label="review projection identity",
+        error=ReviewPacketError,
+    )
 
 
 def _open_named_directory_identity(
     parent_fd: int,
     name: str,
-    expected: _DirectoryIdentity,
+    expected: DirectoryIdentity,
 ) -> int:
-    try:
-        directory_fd = os.open(name, _directory_open_flags(), dir_fd=parent_fd)
-    except OSError as exc:
-        raise ReviewPacketError("review projection directory identity changed") from exc
-    actual = _directory_identity(directory_fd)
-    if actual != expected:
-        os.close(directory_fd)
-        raise ReviewPacketError("review projection directory identity changed")
-    return directory_fd
+    return open_named_directory_identity(
+        parent_fd,
+        name,
+        expected,
+        label="review projection directory",
+        error=ReviewPacketError,
+    )
 
 
 def _assert_named_directory_identity(
     parent_fd: int,
     name: str,
-    expected: _DirectoryIdentity,
+    expected: DirectoryIdentity,
 ) -> None:
     directory_fd = _open_named_directory_identity(parent_fd, name, expected)
     os.close(directory_fd)
@@ -505,7 +499,7 @@ def _create_projection_staging(review_fd: int) -> tuple[str, str, int]:
         except FileExistsError:
             continue
         try:
-            staging_fd = os.open(staging, _directory_open_flags(), dir_fd=review_fd)
+            staging_fd = os.open(staging, directory_open_flags(), dir_fd=review_fd)
         except OSError as exc:
             raise ReviewPacketError("review projection staging directory is unsafe") from exc
         os.fsync(review_fd)
@@ -521,7 +515,7 @@ def _create_artifact_staging(case_fd: int, artifact_component: str) -> tuple[str
         except FileExistsError:
             continue
         try:
-            staging_fd = os.open(staging, _directory_open_flags(), dir_fd=case_fd)
+            staging_fd = os.open(staging, directory_open_flags(), dir_fd=case_fd)
         except OSError as exc:
             raise ReviewPacketError("artifact projection staging directory is unsafe") from exc
         os.fsync(case_fd)
@@ -540,7 +534,7 @@ def _remove_projection_tree(parent_fd: int, name: str) -> None:
         os.unlink(name, dir_fd=parent_fd)
         return
 
-    directory_fd = os.open(name, _directory_open_flags(), dir_fd=parent_fd)
+    directory_fd = os.open(name, directory_open_flags(), dir_fd=parent_fd)
     try:
         with os.scandir(directory_fd) as iterator:
             children = [entry.name for entry in iterator]
@@ -593,7 +587,7 @@ def _open_artifact_source(root_fd: int, artifact: _Artifact) -> int:
     parts = _relative_parts(artifact.batch_path, "artifact source path")
     parent_fd = _open_relative_directory(root_fd, parts[:-1])
     try:
-        source_fd = os.open(parts[-1], _file_open_flags(), dir_fd=parent_fd)
+        source_fd = os.open(parts[-1], file_open_flags(), dir_fd=parent_fd)
     except OSError as exc:
         raise _ProjectionUnavailable("source file could not be reopened safely") from exc
     finally:
@@ -602,10 +596,7 @@ def _open_artifact_source(root_fd: int, artifact: _Artifact) -> int:
     if (
         not stat.S_ISREG(opened.st_mode)
         or opened.st_nlink != 1
-        or opened.st_dev != identity.device
-        or opened.st_ino != identity.inode
-        or opened.st_size != identity.size_bytes
-        or opened.st_mtime_ns != identity.modified_ns
+        or stat_identity(opened) != identity.as_stat_identity()
     ):
         os.close(source_fd)
         raise _ProjectionUnavailable("source file changed before review projection")
@@ -617,10 +608,7 @@ def _assert_source_unchanged(source_fd: int, identity: _SourceIdentity) -> None:
     if (
         not stat.S_ISREG(after.st_mode)
         or after.st_nlink != 1
-        or after.st_dev != identity.device
-        or after.st_ino != identity.inode
-        or after.st_size != identity.size_bytes
-        or after.st_mtime_ns != identity.modified_ns
+        or stat_identity(after) != identity.as_stat_identity()
     ):
         raise _ProjectionUnavailable("source file changed while review projection was copied")
 
@@ -628,15 +616,23 @@ def _assert_source_unchanged(source_fd: int, identity: _SourceIdentity) -> None:
 def _read_artifact_bytes(root_fd: int, artifact: _Artifact, *, limit: int) -> bytes:
     if artifact.size_bytes is None or artifact.size_bytes > limit:
         raise _ProjectionUnavailable("HTML report exceeds the local-link scan limit")
+    identity = artifact.source_identity
+    assert identity is not None
     source_fd = _open_artifact_source(root_fd, artifact)
     try:
-        payload = _read_prefix(source_fd, artifact.size_bytes + 1)
-        if len(payload) != artifact.size_bytes:
-            raise _ProjectionUnavailable("HTML report changed while local links were scanned")
-        identity = artifact.source_identity
-        assert identity is not None
-        _assert_source_unchanged(source_fd, identity)
-        return payload
+        return read_pinned_regular_file(
+            source_fd,
+            max_bytes=artifact.size_bytes,
+            expected_identity=identity.as_stat_identity(),
+        )
+    except PinnedReadError as exc:
+        if exc.reason == "short-read":
+            raise _ProjectionUnavailable(
+                "HTML report changed while local links were scanned"
+            ) from exc
+        raise _ProjectionUnavailable(
+            "source file changed while review projection was copied"
+        ) from exc
     finally:
         os.close(source_fd)
 
@@ -910,7 +906,7 @@ def _verify_projection_file(
     try:
         parent_fd = _open_relative_directory(generation_fd, parts[:-1])
         try:
-            file_fd = os.open(parts[-1], _file_open_flags(), dir_fd=parent_fd)
+            file_fd = os.open(parts[-1], file_open_flags(), dir_fd=parent_fd)
         finally:
             os.close(parent_fd)
     except OSError as exc:
@@ -1299,7 +1295,7 @@ def _open_relative_directory(root_fd: int, parts: tuple[str, ...]) -> int:
     current_fd = os.dup(root_fd)
     try:
         for part in parts:
-            next_fd = os.open(part, _directory_open_flags(), dir_fd=current_fd)
+            next_fd = os.open(part, directory_open_flags(), dir_fd=current_fd)
             if not stat.S_ISDIR(os.fstat(next_fd).st_mode):
                 os.close(next_fd)
                 raise NotADirectoryError(part)
@@ -1394,7 +1390,7 @@ def _walk_runtime(
                 )
                 continue
             try:
-                child_fd = os.open(name, _directory_open_flags(), dir_fd=directory_fd)
+                child_fd = os.open(name, directory_open_flags(), dir_fd=directory_fd)
             except OSError:
                 review.artifacts.append(
                     _blocked_artifact(
@@ -1465,7 +1461,7 @@ def _inspect_regular_file(
     batch_path = PurePosixPath(*batch_parts).as_posix()
     kind = _artifact_kind(name)
     try:
-        file_fd = os.open(name, _file_open_flags(), dir_fd=directory_fd)
+        file_fd = os.open(name, file_open_flags(), dir_fd=directory_fd)
     except OSError:
         return _blocked_artifact(runtime_parts, batch_parts, "file could not be opened safely")
 
