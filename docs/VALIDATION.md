@@ -151,13 +151,12 @@ revalidates every copied source and destination before publishing `index.html`
 as the packet commit marker.
 
 Pytest also creates a top-level `pytest/*current` symlink that merely points to
-its latest numbered temporary directory. When that exact sibling-directory
-pattern is recognized, the review UI shows one neutral per-case count instead
-of a misleading blocked artifact card. The numbered directory remains in the
-retained runtime tree, and files discovered there are listed normally subject
-to the same bounded traversal rules. The no-follow provenance record remains
-in `artifacts.json` with disposition `hidden_harness_alias`. Lookalike,
-escaping, or otherwise unrecognized symlinks stay visible as blocked entries.
+its latest numbered temporary directory. The runner removes those transient
+convenience aliases after each scenario, so the retained runtime keeps only
+the numbered directories with the real artifacts, listed normally subject to
+the same bounded traversal rules. Any symlink that does survive in a runtime —
+including aliases from batches produced before the removal — stays visible as
+an ordinary blocked entry and is never followed.
 
 The short projection preserves the confined local `href`/`src` closure needed
 by generated reports. For example, a `workflow_report.html` copy carries its

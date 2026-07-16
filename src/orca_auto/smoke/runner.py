@@ -433,8 +433,13 @@ def _append_harness_error(stderr_fd: int, message: str) -> None:
     os.fsync(stderr_fd)
 
 
-def _rewrite_pytest_current_aliases(pytest_fd: int, advertised_pytest_dir: Path) -> None:
-    """Make pytest convenience aliases durable after the runner procfd disappears."""
+def _unlink_pytest_current_aliases(pytest_fd: int) -> None:
+    """Remove pytest's transient latest-temp convenience aliases.
+
+    The aliases point into the runner's procfd namespace and die with it; the
+    numbered directories they reference remain in the retained runtime tree,
+    so the review packet lists real artifacts only.
+    """
 
     proc_parent = PurePosixPath("/proc", str(os.getpid()), "fd", str(pytest_fd))
     with os.scandir(pytest_fd) as iterator:
@@ -449,20 +454,7 @@ def _rewrite_pytest_current_aliases(pytest_fd: int, advertised_pytest_dir: Path)
         target = PurePosixPath(target_text)
         if target.parent != proc_parent or target.name in {"", ".", ".."}:
             continue
-        sibling = os.stat(target.name, dir_fd=pytest_fd, follow_symlinks=False)
-        if not stat.S_ISDIR(sibling.st_mode):
-            continue
         os.unlink(name, dir_fd=pytest_fd)
-        durable_target = (advertised_pytest_dir / target.name).as_posix()
-        os.symlink(durable_target, name, dir_fd=pytest_fd)
-        replaced = os.stat(name, dir_fd=pytest_fd, follow_symlinks=False)
-        sibling_after = os.stat(target.name, dir_fd=pytest_fd, follow_symlinks=False)
-        if (
-            not stat.S_ISLNK(replaced.st_mode)
-            or os.readlink(name, dir_fd=pytest_fd) != durable_target
-            or (sibling.st_dev, sibling.st_ino) != (sibling_after.st_dev, sibling_after.st_ino)
-        ):
-            raise ValueError("pytest convenience alias changed during normalization")
     os.fsync(pytest_fd)
 
 
@@ -654,10 +646,7 @@ def _run_scenario(
                 setup_error = "; ".join(part for part in (setup_error, release_error) if part)
         try:
             pinned_case.assert_namespace_identity()
-            _rewrite_pytest_current_aliases(
-                pinned_case.pytest_fd,
-                runtime_dir / "pytest",
-            )
+            _unlink_pytest_current_aliases(pinned_case.pytest_fd)
             for name, descriptor, identity in (
                 ("harness.stdout.log", stdout_fd, stdout_identity),
                 ("harness.stderr.log", stderr_fd, stderr_identity),
@@ -862,7 +851,6 @@ def run_smoke_suite(
                 "artifacts": str(review.artifact_manifest_path.relative_to(advertised_batch_dir)),
                 "artifact_count": review.artifact_count,
                 "openable_count": review.openable_count,
-                "hidden_harness_alias_count": review.hidden_harness_alias_count,
             }
         pinned_batch.assert_namespace_identity()
         write_batch_manifest(
