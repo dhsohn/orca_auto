@@ -107,7 +107,7 @@ def _config_path_from_args(args: Any, *, default_config_path_fn: DefaultConfigPa
 _CallbackSupplier = Callable[[], Callable[..., Any]]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class InternalEngineQueueWorkerDeps:
     """The one dependency set of the shared internal-engine queue worker.
 
