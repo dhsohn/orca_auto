@@ -23,17 +23,17 @@ from orca_auto.core.utils.persistence import now_utc_iso
 
 from .catalog import SmokeScenario, scenarios_for_profile
 from .manifest import (
-    _assert_named_directory_identity,
-    _create_pinned_batch_directory,
-    _create_pinned_case_directory,
-    _directory_open_flags,
-    _DirectoryIdentity,
-    _PinnedBatchDirectory,
-    _validate_owned_directory,
+    DirectoryIdentity,
+    PinnedBatchDirectory,
+    assert_named_directory_identity,
     build_case_manifest,
+    create_pinned_batch_directory,
+    create_pinned_case_directory,
+    directory_open_flags,
     prepare_smoke_root,
     rebuild_smoke_index,
     source_identity,
+    validate_owned_directory,
     write_batch_manifest,
     write_case_manifest,
 )
@@ -354,8 +354,8 @@ def _start_scenario_process(
                 pass
 
 
-def _open_direct_cases_root(batch_dir: Path) -> tuple[int, int, _DirectoryIdentity]:
-    batch_fd = os.open(batch_dir, _directory_open_flags())
+def _open_direct_cases_root(batch_dir: Path) -> tuple[int, int, DirectoryIdentity]:
+    batch_fd = os.open(batch_dir, directory_open_flags())
     cases_fd: int | None = None
     try:
         try:
@@ -363,9 +363,9 @@ def _open_direct_cases_root(batch_dir: Path) -> tuple[int, int, _DirectoryIdenti
             os.fsync(batch_fd)
         except FileExistsError:
             pass
-        cases_fd = os.open("cases", _directory_open_flags(), dir_fd=batch_fd)
-        cases_identity = _validate_owned_directory(cases_fd, label="Smoke cases directory")
-        _assert_named_directory_identity(
+        cases_fd = os.open("cases", directory_open_flags(), dir_fd=batch_fd)
+        cases_identity = validate_owned_directory(cases_fd, label="Smoke cases directory")
+        assert_named_directory_identity(
             batch_fd,
             "cases",
             cases_identity,
@@ -458,6 +458,38 @@ def _unlink_pytest_current_aliases(pytest_fd: int) -> None:
     os.fsync(pytest_fd)
 
 
+def _assert_pinned_harness_files(
+    harness_fd: int,
+    entries: tuple[tuple[str, int, tuple[int, int]], ...],
+    *,
+    fsync_files: bool = False,
+) -> None:
+    for name, descriptor, identity in entries:
+        if fsync_files:
+            os.fsync(descriptor)
+        _assert_pinned_harness_file(harness_fd, name, descriptor, identity)
+
+
+def _settle_cleanup_proof(
+    supervised: _SupervisedScenarioProcess,
+    process: subprocess.Popen[bytes],
+    *,
+    lease_retained: bool,
+    cause: BaseException,
+) -> None:
+    """Require durable cleanup proof after the child stopped (or was stopped)."""
+    terminated = process.poll() is not None or _terminate_supervised_process(process)
+    if terminated:
+        cleanup_proven = _consume_cleanup_proof(supervised.cleanup_proof_fd)
+    else:
+        _discard_cleanup_proof(supervised.cleanup_proof_fd)
+        cleanup_proven = False
+    if not cleanup_proven:
+        raise _SmokeProcessCleanupError(
+            _cleanup_failure_message(lease_retained=lease_retained)
+        ) from cause
+
+
 def _run_scenario(
     *,
     repo_root: Path,
@@ -465,7 +497,7 @@ def _run_scenario(
     scenario: SmokeScenario,
     python_executable: str,
     real_engine_admission: RealEngineAdmission | None,
-    pinned_batch: _PinnedBatchDirectory | None = None,
+    pinned_batch: PinnedBatchDirectory | None = None,
 ) -> dict[str, Any]:
     case_dir = batch_dir / "cases" / scenario.scenario_id
     runtime_dir = case_dir / "runtime"
@@ -479,7 +511,7 @@ def _run_scenario(
         cases_fd = pinned_batch.cases_fd
         cases_identity = pinned_batch.cases_identity
     try:
-        pinned_case = _create_pinned_case_directory(
+        pinned_case = create_pinned_case_directory(
             batch_fd=batch_fd,
             cases_fd=cases_fd,
             cases_identity=cases_identity,
@@ -520,9 +552,14 @@ def _run_scenario(
     started_at = now_utc_iso()
     timed_out = False
     return_code: int | None = None
-    setup_error = ""
+    setup_errors: list[str] = []
     lease: tuple[Path, str] | None = None
     lease_release_safe = True
+    harness_files = (
+        ("harness.stdout.log", stdout_fd, stdout_identity),
+        ("harness.stderr.log", stderr_fd, stderr_identity),
+        ("pytest.xml", junit_fd, junit_identity),
+    )
 
     junit_access_path = Path("/proc") / str(os.getpid()) / "fd" / str(junit_fd)
     command = [
@@ -556,17 +593,7 @@ def _run_scenario(
 
     try:
         pinned_case.assert_namespace_identity()
-        for name, descriptor, identity in (
-            ("harness.stdout.log", stdout_fd, stdout_identity),
-            ("harness.stderr.log", stderr_fd, stderr_identity),
-            ("pytest.xml", junit_fd, junit_identity),
-        ):
-            _assert_pinned_harness_file(
-                pinned_case.harness_fd,
-                name,
-                descriptor,
-                identity,
-            )
+        _assert_pinned_harness_files(pinned_case.harness_fd, harness_files)
         lease = _reserve_real_engine_slot(scenario, case_dir, real_engine_admission)
         with (
             os.fdopen(os.dup(stdout_fd), "wb", closefd=True) as stdout_handle,
@@ -589,47 +616,30 @@ def _run_scenario(
                     )
             except subprocess.TimeoutExpired as exc:
                 timed_out = True
-                terminated = _terminate_supervised_process(process)
-                if terminated:
-                    cleanup_proven = _consume_cleanup_proof(supervised.cleanup_proof_fd)
-                else:
-                    _discard_cleanup_proof(supervised.cleanup_proof_fd)
-                    cleanup_proven = False
-                if not cleanup_proven:
-                    raise _SmokeProcessCleanupError(
-                        _cleanup_failure_message(lease_retained=lease is not None)
-                    ) from exc
+                _settle_cleanup_proof(
+                    supervised,
+                    process,
+                    lease_retained=lease is not None,
+                    cause=exc,
+                )
                 return_code = process.returncode
             except BaseException as exc:  # noqa: BLE001 - release only after child exit
                 if isinstance(exc, _SmokeProcessCleanupError):
                     raise
-                terminated = process.poll() is not None or _terminate_supervised_process(process)
-                if terminated:
-                    cleanup_proven = _consume_cleanup_proof(supervised.cleanup_proof_fd)
-                else:
-                    _discard_cleanup_proof(supervised.cleanup_proof_fd)
-                    cleanup_proven = False
-                if not cleanup_proven:
-                    raise _SmokeProcessCleanupError(
-                        _cleanup_failure_message(lease_retained=lease is not None)
-                    ) from exc
+                _settle_cleanup_proof(
+                    supervised,
+                    process,
+                    lease_retained=lease is not None,
+                    cause=exc,
+                )
                 raise
         pinned_case.assert_namespace_identity()
-        for name, descriptor, identity in (
-            ("harness.stdout.log", stdout_fd, stdout_identity),
-            ("harness.stderr.log", stderr_fd, stderr_identity),
-            ("pytest.xml", junit_fd, junit_identity),
-        ):
-            _assert_pinned_harness_file(
-                pinned_case.harness_fd,
-                name,
-                descriptor,
-                identity,
-            )
+        _assert_pinned_harness_files(pinned_case.harness_fd, harness_files)
     except (OSError, RuntimeError, ValueError) as exc:
         if isinstance(exc, _SmokeProcessCleanupError):
             lease_release_safe = False
         setup_error = f"{type(exc).__name__}: {exc}"
+        setup_errors.append(setup_error)
         _append_harness_error(stderr_fd, setup_error)
     finally:
         if lease is not None and lease_release_safe:
@@ -642,27 +652,19 @@ def _run_scenario(
                     )
                 release_slot(lease_root, lease_token)
             except (OSError, RuntimeError, ValueError) as exc:
-                release_error = f"{type(exc).__name__}: {exc}"
-                setup_error = "; ".join(part for part in (setup_error, release_error) if part)
+                setup_errors.append(f"{type(exc).__name__}: {exc}")
         try:
             pinned_case.assert_namespace_identity()
             _unlink_pytest_current_aliases(pinned_case.pytest_fd)
-            for name, descriptor, identity in (
-                ("harness.stdout.log", stdout_fd, stdout_identity),
-                ("harness.stderr.log", stderr_fd, stderr_identity),
-                ("pytest.xml", junit_fd, junit_identity),
-            ):
-                os.fsync(descriptor)
-                _assert_pinned_harness_file(
-                    pinned_case.harness_fd,
-                    name,
-                    descriptor,
-                    identity,
-                )
+            _assert_pinned_harness_files(
+                pinned_case.harness_fd,
+                harness_files,
+                fsync_files=True,
+            )
             os.fsync(pinned_case.harness_fd)
         except (OSError, RuntimeError, ValueError) as exc:
             finalization_error = f"{type(exc).__name__}: {exc}"
-            setup_error = "; ".join(part for part in (setup_error, finalization_error) if part)
+            setup_errors.append(finalization_error)
             try:
                 _append_harness_error(stderr_fd, finalization_error)
             except OSError:
@@ -675,8 +677,8 @@ def _run_scenario(
             timed_out=timed_out,
         )
         pytest_result["selector"] = scenario.pytest_selector
-        if setup_error:
-            pytest_result["setup_error"] = setup_error
+        if setup_errors:
+            pytest_result["setup_error"] = "; ".join(setup_errors)
             pytest_result["passed"] = False
         pinned_case.assert_namespace_identity()
         manifest = build_case_manifest(
@@ -743,7 +745,7 @@ def run_smoke_suite(
             raise ValueError("real-engine smoke requires the production admission configuration")
 
     smoke_root = prepare_smoke_root(resolved_runs_root)
-    pinned_batch = _create_pinned_batch_directory(
+    pinned_batch = create_pinned_batch_directory(
         smoke_root,
         profile=profile,
         repo_root=resolved_repo,

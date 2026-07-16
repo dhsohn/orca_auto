@@ -10,6 +10,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- The smoke manifest module no longer exports the test-only wrappers
+  `artifact_counts`, `observe_terminal`, and `create_batch_directory`, and its
+  writers require the pinned directory descriptor the runner always supplies
+  (the path-based fallback branches are gone). The directory-pinning helpers
+  the runner uses are plain public names now instead of underscore-private
+  imports.
 - The smoke runner now removes pytest's transient `*current` convenience
   symlinks after each scenario instead of rewriting them to durable targets,
   and the review packet's dedicated hidden-alias pipeline is gone: the
