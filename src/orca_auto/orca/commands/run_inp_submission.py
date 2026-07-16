@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -20,19 +19,14 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     discard_snapshot_intent,
     transition_snapshot_intent,
 )
+from orca_auto.core.queue.enqueue_publication import (
+    EnqueuePublicationOutcomeUnknown,
+    EnqueuePublicationSpec,
+    run_enqueue_publication,
+)
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.publication import (
-    QUEUE_RECORD_SYNC_ABORTED,
-    QUEUE_RECORD_SYNC_COMPLETE,
-    QUEUE_RECORD_SYNC_KEY,
-    QUEUE_RECORD_SYNC_OWNER_START_KEY,
-    QUEUE_RECORD_SYNC_PREPARING,
-    QUEUE_RECORD_SYNC_REPAIR_PENDING,
-    QUEUE_RECORD_SYNC_REPAIRING,
-    QUEUE_RECORD_SYNC_TOKEN_KEY,
     QUEUE_SUBMISSION_INTENT_KEY,
-    queue_record_publication_lock,
-    queue_record_sync_metadata,
 )
 from orca_auto.core.queue.store import QueueAfterCommitError
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
@@ -118,8 +112,8 @@ class QueuePublicationCancelledError(RuntimeError):
     """Raised when cancellation revokes publication before its side effects."""
 
 
-class QueuePublicationLostError(RuntimeError):
-    """Raised when a newly-created queue row disappears before publication."""
+class _QueuedRecordPartiallyPublished(RuntimeError):
+    """The queued record is incomplete; raising parks the lease for worker repair."""
 
 
 def active_queue_entry(allowed_root: Path, reaction_dir: Path, *, deps: Any) -> QueueEntry | None:
@@ -386,59 +380,6 @@ def upsert_queued_job_record(
     )
 
 
-def _fence_uncompensated_orca_enqueue(
-    allowed_root: Path,
-    *,
-    error: QueueAfterCommitError,
-    publication_token: str,
-    task_id: str,
-) -> bool:
-    """Terminally fence one exact provisional row without publishing it."""
-
-    from ..queue import adapter as queue_adapter
-
-    entry = error.provisional_result
-    metadata = entry.metadata if isinstance(entry, QueueEntry) else {}
-    if (
-        not isinstance(entry, QueueEntry)
-        or entry.task_id != task_id
-        or str(metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY) or "") != publication_token
-    ):
-        logger.error("Cannot identify the provisional ORCA row after compensation failure")
-        return False
-    try:
-        fenced = queue_adapter.mark_failed(
-            allowed_root,
-            entry.queue_id,
-            error=(
-                "queue_after_commit_guard_failed:"
-                f"compensation={error.compensation_outcome}:"
-                f"{error.after_commit_error.__class__.__name__}:"
-                f"{error.after_commit_error}"
-            ),
-            publish_terminal_side_effects=False,
-            metadata_update=queue_record_sync_metadata(
-                QUEUE_RECORD_SYNC_ABORTED,
-                token=publication_token,
-                owner_pid=0,
-            ),
-            expected_entry=entry,
-            expected_task_id=task_id,
-        )
-    except BaseException:  # noqa: BLE001 - preserve the guard-origin failure path
-        logger.exception(
-            "Failed to terminally fence the provisional ORCA row: queue_id=%s",
-            entry.queue_id,
-        )
-        return False
-    if not fenced:
-        logger.error(
-            "Provisional ORCA row was not visible for terminal fencing: queue_id=%s",
-            entry.queue_id,
-        )
-    return fenced
-
-
 def record_queued_job_side_effect(
     cfg: Any,
     *,
@@ -520,16 +461,6 @@ def create_queued_submission(
         deps=deps,
     )
     task_id = timestamped_token("orca", token_bytes=16)
-    publication_token = timestamped_token("record_sync", token_bytes=16)
-    owner_pid = os.getpid()
-    publication_metadata = queue_record_sync_metadata(
-        QUEUE_RECORD_SYNC_PREPARING,
-        token=publication_token,
-        owner_pid=owner_pid,
-    )
-    queue_metadata.update(publication_metadata)
-    expected_state = QUEUE_RECORD_SYNC_PREPARING
-    enqueue_warning: str | None = None
     execution_snapshot = queue_metadata.get("execution_snapshot")
     try:
         if not isinstance(execution_snapshot, dict):
@@ -554,96 +485,115 @@ def create_queued_submission(
             execution_snapshot,
         )
         raise
-    try:
-        entry = queue_adapter.enqueue(
-            allowed_root,
-            str(reaction_dir),
-            priority=priority,
-            force=force,
-            task_id=task_id,
-            task_kind=queue_adapter.QUEUE_TASK_KIND,
-            metadata=queue_metadata,
-            before_commit_fn=lambda: assert_run_dir_publication_allowed(
-                "ORCA durable queue pre-commit"
-            ),
-            after_commit_fn=lambda: assert_run_dir_publication_allowed(
-                "ORCA durable queue post-commit"
-            ),
-        )
-    except QueueAfterCommitError as exc:
-        if exc.compensation_succeeded:
-            try:
-                cleanup_unowned_orca_execution_snapshot(
-                    _snapshot_cleanup_job_dir(
-                        reaction_dir,
-                        queue_metadata.get("execution_snapshot"),
-                    ),
-                    queue_metadata.get("execution_snapshot"),
-                )
-            except BaseException:  # noqa: BLE001 - preserve the guard-origin failure path
-                logger.exception(
-                    "Failed to clean the compensated ORCA submission snapshot; retaining it"
-                )
-        else:
-            _fence_uncompensated_orca_enqueue(
-                allowed_root,
-                error=exc,
-                publication_token=publication_token,
-                task_id=task_id,
-            )
-        raise
-    except BaseException as exc:  # noqa: BLE001
-        recovered = queue_adapter.recover_enqueue_publication(
-            allowed_root,
-            reaction_dir=str(reaction_dir),
-            task_id=task_id,
-            task_kind=queue_adapter.QUEUE_TASK_KIND,
-            priority=priority,
-            force=force,
-            token=publication_token,
-            owner_pid=owner_pid,
-            owner_start=str(publication_metadata[QUEUE_RECORD_SYNC_OWNER_START_KEY]),
-        )
-        if recovered is None:
-            cleanup_unowned_orca_execution_snapshot(
-                _snapshot_cleanup_job_dir(
-                    reaction_dir,
-                    queue_metadata.get("execution_snapshot"),
-                ),
-                queue_metadata.get("execution_snapshot"),
-            )
-            raise
-        entry = recovered
-        marker_warning = _mark_orca_snapshot_owned(intent_root, intent_token)
-        expected_state = QUEUE_RECORD_SYNC_REPAIRING
-        enqueue_warning = (
-            "queue enqueue reported an error after durable persistence; recovered exact "
-            f"queued entry ({exc.__class__.__name__}: {exc})"
-        )
-        if not isinstance(exc, Exception):
-            raise
-    else:
-        marker_warning = _mark_orca_snapshot_owned(intent_root, intent_token)
 
-    entry, publication_warning = _publish_queued_submission(
-        cfg,
-        allowed_root=allowed_root,
-        reaction_dir=reaction_dir,
-        selected_inp=selected_inp,
-        queue_metadata=queue_metadata,
-        entry=entry,
-        publication_token=publication_token,
-        expected_state=expected_state,
-        deps=deps,
+    # The adapter stamps the resolved reaction_dir into every row it creates;
+    # carrying the same value in the submitted metadata lets the driver's
+    # strict post-commit recovery match the committed row by its job location.
+    queue_metadata.setdefault("reaction_dir", str(Path(reaction_dir).expanduser().resolve()))
+
+    def cleanup_submission_snapshot() -> None:
+        cleanup_unowned_orca_execution_snapshot(
+            _snapshot_cleanup_job_dir(reaction_dir, queue_metadata.get("execution_snapshot")),
+            queue_metadata.get("execution_snapshot"),
+        )
+
+    detail_warnings: list[str] = []
+
+    def publish(current: QueueEntry) -> None:
+        side_effect_warning: str | None = None
+        current_task_id = queue_adapter.queue_entry_task_id(current)
+        if current_task_id:
+            side_effect_warning = record_queued_job_side_effect(
+                cfg,
+                reaction_dir=reaction_dir,
+                selected_inp=selected_inp,
+                job_id=str(current_task_id),
+                queue_metadata=queue_metadata,
+                deps=deps,
+            )
+        notification_result = QueuedSubmissionResult(
+            entry=current,
+            reaction_dir=reaction_dir,
+            selected_inp=selected_inp,
+            queue_metadata=queue_metadata,
+            worker_info=_publication_worker_placeholder(),
+        )
+        if not notify_queued_submission(cfg, notification_result, deps=deps):
+            detail_warnings.append(
+                "queued notification delivery failed; state/index recorded and "
+                "notification was not retried (at-most-once delivery)"
+            )
+        if side_effect_warning:
+            # The queue row is durably committed but its published record is
+            # incomplete; raising here makes the driver park the lease for the
+            # worker repair pass instead of marking the publication COMPLETE.
+            raise _QueuedRecordPartiallyPublished(side_effect_warning)
+
+    def mark_failed_via_adapter(root: Path, queue_id: str, **kwargs: Any) -> Any:
+        # The adapter's mark_failed installs the administrative fence-only
+        # replay marker, keeping the fenced generation's terminal ownership.
+        return queue_adapter.mark_failed(
+            root,
+            queue_id,
+            publish_terminal_side_effects=False,
+            **kwargs,
+        )
+
+    def enqueue_via_adapter(root: Path, **kwargs: Any) -> QueueEntry:
+        return queue_adapter.enqueue(
+            root,
+            str(reaction_dir),
+            priority=kwargs["priority"],
+            force=force,
+            task_id=kwargs["task_id"],
+            task_kind=kwargs["task_kind"],
+            metadata=kwargs["metadata"],
+            before_commit_fn=kwargs.get("before_commit_fn"),
+            after_commit_fn=kwargs.get("after_commit_fn"),
+        )
+
+    spec = EnqueuePublicationSpec(
+        queue_root=allowed_root,
+        app_name=queue_adapter.QUEUE_APP_NAME,
+        task_id=task_id,
+        task_kind=queue_adapter.QUEUE_TASK_KIND,
+        engine=queue_adapter.QUEUE_ENGINE,
+        priority=priority,
+        metadata=queue_metadata,
+        label="ORCA",
+        publish=publish,
+        before_commit_fn=lambda: assert_run_dir_publication_allowed(
+            "ORCA durable queue pre-commit"
+        ),
+        after_commit_fn=lambda: assert_run_dir_publication_allowed(
+            "ORCA durable queue post-commit"
+        ),
+        enqueue_fn=enqueue_via_adapter,
+        mark_failed_fn=mark_failed_via_adapter,
+        # Ambiguity-fenced rows keep the administrative fence-only marker so a
+        # successor generation stays blocked until the duplicates are cleared.
+        ambiguous_fence_metadata={queue_adapter.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY: True},
+        on_compensated_failure=cleanup_submission_snapshot,
+        job_dir_metadata_key="reaction_dir",
+        same_generation=queue_adapter.queue_entries_same_publication_generation,
     )
+    outcome = run_enqueue_publication(spec)
+    entry = outcome.entry
+    marker_warning = _mark_orca_snapshot_owned(intent_root, intent_token)
+    if outcome.cancelled:
+        raise QueuePublicationCancelledError(
+            f"ORCA queue entry was cancelled before publication: {entry.queue_id}"
+        )
 
     worker_info = worker_status_with_log_file(
         worker_status_for_submission(allowed_root),
         queue_entry_worker_log(entry, deps=deps),
     )
-    worker_info = worker_status_with_detail(worker_info, enqueue_warning)
     worker_info = worker_status_with_detail(worker_info, marker_warning)
-    worker_info = worker_status_with_detail(worker_info, publication_warning)
+    for warning in detail_warnings:
+        worker_info = worker_status_with_detail(worker_info, warning)
+    for warning in outcome.warnings:
+        worker_info = worker_status_with_detail(worker_info, warning)
     return QueuedSubmissionResult(
         entry=entry,
         reaction_dir=reaction_dir,
@@ -664,234 +614,6 @@ def notify_queued_submission(
     delivered = bool(deps.notifications.notify_queue_enqueued_event(channel, notification))
     # A disabled channel is an intentional no-op, not a failed delivery.
     return delivered or not channel.enabled
-
-
-def _queue_record_sync_state(entry: QueueEntry) -> str:
-    metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
-    return str(metadata.get(QUEUE_RECORD_SYNC_KEY, "")).strip().lower()
-
-
-def _queue_record_sync_token(entry: QueueEntry) -> str:
-    metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
-    return str(metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY, "")).strip()
-
-
-def _append_detail(detail: str | None, warning: str | None) -> str | None:
-    normalized_warning = str(warning or "").strip()
-    if not normalized_warning:
-        return detail
-    normalized_detail = str(detail or "").strip()
-    return f"{normalized_detail}; {normalized_warning}" if normalized_detail else normalized_warning
-
-
-def _mark_queue_record_repair_pending(
-    allowed_root: Path,
-    entry: QueueEntry,
-    *,
-    publication_token: str,
-    expected_state: str,
-) -> QueueEntry:
-    from ..queue import adapter as queue_adapter
-
-    try:
-        current, _transitioned = queue_adapter.transition_queue_record_publication(
-            allowed_root,
-            entry.queue_id,
-            expected_token=publication_token,
-            expected_state=expected_state,
-            target_state=QUEUE_RECORD_SYNC_REPAIR_PENDING,
-            owner_pid=0,
-            expected_entry=entry,
-        )
-    except BaseException as exc:  # noqa: BLE001
-        current = queue_adapter.get_entry_by_id(allowed_root, entry.queue_id)
-        if (
-            current is not None
-            and _queue_record_sync_state(current) == QUEUE_RECORD_SYNC_REPAIR_PENDING
-            and _queue_record_sync_token(current) == publication_token
-        ):
-            if not isinstance(exc, Exception):
-                raise
-            return current
-        logger.warning(
-            "failed to mark ORCA queued-record publication repair pending: queue_id=%s",
-            entry.queue_id,
-            exc_info=True,
-        )
-        if not isinstance(exc, Exception):
-            raise
-        return current or entry
-    return current or entry
-
-
-def _complete_queue_record_publication(
-    allowed_root: Path,
-    entry: QueueEntry,
-    *,
-    publication_token: str,
-    expected_state: str,
-) -> tuple[QueueEntry, str | None]:
-    from ..queue import adapter as queue_adapter
-
-    try:
-        current, transitioned = queue_adapter.transition_queue_record_publication(
-            allowed_root,
-            entry.queue_id,
-            expected_token=publication_token,
-            expected_state=expected_state,
-            target_state=QUEUE_RECORD_SYNC_COMPLETE,
-            owner_pid=0,
-            expected_entry=entry,
-        )
-    except BaseException as exc:  # noqa: BLE001
-        current = queue_adapter.get_entry_by_id(allowed_root, entry.queue_id)
-        if (
-            current is not None
-            and _queue_record_sync_state(current) == QUEUE_RECORD_SYNC_COMPLETE
-            and _queue_record_sync_token(current) == publication_token
-        ):
-            if not isinstance(exc, Exception):
-                raise
-            return (
-                current,
-                "queue publication completion reported a durability error after commit; "
-                f"durable COMPLETE state recovered ({exc.__class__.__name__}: {exc})",
-            )
-        raise
-    if current is None:
-        raise QueuePublicationLostError(
-            f"ORCA queue entry disappeared during publication: {entry.queue_id}"
-        )
-    if not transitioned:
-        return current, "queue publication ownership changed; worker/replay must reconcile"
-    return current, None
-
-
-def _publish_queued_submission(
-    cfg: Any,
-    *,
-    allowed_root: Path,
-    reaction_dir: Path,
-    selected_inp: Path | None,
-    queue_metadata: dict[str, Any],
-    entry: QueueEntry,
-    publication_token: str,
-    expected_state: str,
-    deps: Any,
-) -> tuple[QueueEntry, str | None]:
-    from ..queue import adapter as queue_adapter
-
-    detail: str | None = None
-    current = entry
-    repair_marked = False
-    try:
-        with queue_record_publication_lock(allowed_root, entry.queue_id):
-            visible = queue_adapter.get_entry_by_id(allowed_root, entry.queue_id)
-            if visible is None:
-                raise QueuePublicationLostError(
-                    f"ORCA queue entry disappeared before publication: {entry.queue_id}"
-                )
-            current = visible
-            if not queue_adapter.queue_entries_same_publication_generation(current, entry):
-                return (
-                    current,
-                    "queue publication generation changed; worker/replay must reconcile",
-                )
-            current_state = _queue_record_sync_state(current)
-            current_token = _queue_record_sync_token(current)
-            if current_state == QUEUE_RECORD_SYNC_COMPLETE and current_token == publication_token:
-                return current, detail
-            if current.status == QueueStatus.CANCELLED or current.cancel_requested:
-                raise QueuePublicationCancelledError(
-                    f"ORCA queue entry was cancelled before publication: {entry.queue_id}"
-                )
-            if (
-                current.status != QueueStatus.PENDING
-                or current_state != expected_state
-                or current_token != publication_token
-            ):
-                return (
-                    current,
-                    "queue publication ownership changed; worker/replay must reconcile",
-                )
-
-            side_effect_warning: str | None = None
-            task_id = queue_adapter.queue_entry_task_id(current)
-            if task_id:
-                side_effect_warning = record_queued_job_side_effect(
-                    cfg,
-                    reaction_dir=reaction_dir,
-                    selected_inp=selected_inp,
-                    job_id=str(task_id),
-                    queue_metadata=queue_metadata,
-                    deps=deps,
-                )
-                detail = _append_detail(
-                    detail,
-                    side_effect_warning,
-                )
-
-            notification_result = QueuedSubmissionResult(
-                entry=current,
-                reaction_dir=reaction_dir,
-                selected_inp=selected_inp,
-                queue_metadata=queue_metadata,
-                worker_info=_publication_worker_placeholder(),
-            )
-            if not notify_queued_submission(cfg, notification_result, deps=deps):
-                detail = _append_detail(
-                    detail,
-                    "queued notification delivery failed; state/index recorded and "
-                    "notification was not retried (at-most-once delivery)",
-                )
-
-            if side_effect_warning:
-                current = _mark_queue_record_repair_pending(
-                    allowed_root,
-                    current,
-                    publication_token=publication_token,
-                    expected_state=expected_state,
-                )
-                repair_marked = True
-                return current, detail
-
-            current, completion_warning = _complete_queue_record_publication(
-                allowed_root,
-                current,
-                publication_token=publication_token,
-                expected_state=expected_state,
-            )
-            detail = _append_detail(detail, completion_warning)
-    except QueuePublicationCancelledError:
-        raise
-    except QueuePublicationLostError:
-        raise
-    except BaseException as exc:  # noqa: BLE001
-        current = _mark_queue_record_repair_pending(
-            allowed_root,
-            current,
-            publication_token=publication_token,
-            expected_state=expected_state,
-        )
-        repair_marked = True
-        if not isinstance(exc, Exception):
-            raise
-        logger.warning(
-            "ORCA queued-record publication failed after queue submission succeeded: "
-            "reaction_dir=%s queue_id=%s error=%s",
-            reaction_dir,
-            entry.queue_id,
-            exc,
-            exc_info=True,
-        )
-        detail = _append_detail(
-            detail,
-            "queued job record/notification publication failed; queue submission succeeded "
-            f"({exc.__class__.__name__}: {exc})",
-        )
-    if repair_marked and _queue_record_sync_state(current) == QUEUE_RECORD_SYNC_COMPLETE:
-        detail = _append_detail(detail, "durable COMPLETE publication state recovered")
-    return current, detail
 
 
 def _publication_worker_placeholder() -> WorkerStatusInfo:
@@ -960,11 +682,9 @@ def submit_reaction_dir_to_queue(
             context=context,
         )
     except Exception as exc:  # noqa: BLE001
-        from ..queue.adapter import AmbiguousPublicationRecoveryError
-
         reason = (
             "queue_enqueue_outcome_unknown"
-            if isinstance(exc, AmbiguousPublicationRecoveryError)
+            if isinstance(exc, EnqueuePublicationOutcomeUnknown)
             or (isinstance(exc, QueueAfterCommitError) and not exc.compensation_succeeded)
             else "queue_submission_failed"
         )

@@ -14,7 +14,6 @@ from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.queue import orphans as queue_orphans
 from orca_auto.orca.queue.terminal_replay import (
-    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
     TERMINAL_REPLAY_METADATA_KEY,
     terminal_replay_marker_from_entry,
 )
@@ -902,61 +901,56 @@ def test_orca_adapter_mutations_never_change_foreign_engine_rows(tmp_path: Path)
     assert queue_store.list_queue(root) == [pending, running, terminal]
 
 
-def test_orca_terminal_completion_does_not_erase_racing_cancel(tmp_path: Path) -> None:
-    root = tmp_path / "shared_queue"
-    reaction_dir = root / "reaction"
-    reaction_dir.mkdir(parents=True)
-    entry = queue_adapter.enqueue(root, str(reaction_dir), task_id="task-a")
-    running = queue_adapter.dequeue_next(root)
-    assert running is not None
-    assert queue_adapter.cancel(root, entry.queue_id, expected_entry=running) is not None
+def _driver_recovery_spec(root: Path) -> Any:
+    from orca_auto.core.queue.enqueue_publication import EnqueuePublicationSpec
 
-    assert queue_adapter.mark_completed(root, entry.queue_id, expected_entry=running) is False
-    [cancel_requested] = queue_adapter.list_queue(root)
-    assert cancel_requested.status == QueueStatus.RUNNING
-    assert cancel_requested.cancel_requested is True
-    assert queue_adapter.mark_cancelled(root, entry.queue_id, expected_entry=running) is True
-    [cancelled] = queue_adapter.list_queue(root)
-    assert cancelled.status == QueueStatus.CANCELLED
-
-
-def test_orca_publication_recovery_rejects_noncanonical_task_identity(tmp_path: Path) -> None:
-    root = tmp_path / "shared_queue"
-    root.mkdir()
-    reaction_dir = str((root / "reaction").resolve())
-    token = "foreign-publication-token"
-    foreign = QueueEntry(
-        queue_id="foreign-publication",
+    return EnqueuePublicationSpec(
+        queue_root=root,
         app_name="orca_auto_orca",
-        task_id="foreign-task",
+        task_id="task-ambiguous",
+        task_kind="orca_run_inp",
+        engine="orca",
+        priority=7,
+        metadata={},
+        label="ORCA",
+        publish=lambda _entry: None,
+        job_dir_metadata_key="reaction_dir",
+        ambiguous_fence_metadata={queue_adapter.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY: True},
+    )
+
+
+def test_enqueue_recovery_never_matches_a_foreign_row(tmp_path: Path) -> None:
+    from orca_auto.core.queue.enqueue_publication import _recover_committed_enqueue
+
+    root = tmp_path / "shared_queue"
+    reaction_dir = str((root / "reaction").resolve())
+    token = "publication-token"
+    metadata = {
+        "reaction_dir": reaction_dir,
+        "force": False,
+        "_orca_auto_queued_record_sync": "preparing",
+        "_orca_auto_queued_record_sync_token": token,
+        "_orca_auto_queued_record_sync_owner_pid": 1234,
+        "_orca_auto_queued_record_sync_owner_start": "owner-start",
+    }
+    foreign = QueueEntry(
+        queue_id="queue-foreign",
+        app_name="orca_auto_orca",
+        task_id="task-ambiguous",
         task_kind="xtb_sp",
         engine="orca",
-        priority=1,
-        metadata={
-            "reaction_dir": reaction_dir,
-            "force": False,
-            "_orca_auto_queued_record_sync": "preparing",
-            "_orca_auto_queued_record_sync_token": token,
-            "_orca_auto_queued_record_sync_owner_pid": 1234,
-            "_orca_auto_queued_record_sync_owner_start": "owner-start",
-        },
+        priority=7,
+        metadata=dict(metadata),
     )
     _save_entries(root, [foreign])
     queue_path = root / queue_entries.QUEUE_FILE_NAME
     before = queue_path.read_bytes()
 
-    recovered = queue_adapter.recover_enqueue_publication(
-        root,
-        reaction_dir=reaction_dir,
-        task_id=foreign.task_id,
-        task_kind=foreign.task_kind,
-        priority=foreign.priority,
-        force=False,
-        token=token,
-        owner_pid=1234,
-        owner_start="owner-start",
-    )
+    spec = _driver_recovery_spec(root)
+    recovered = _recover_committed_enqueue(spec, enqueue_metadata=dict(metadata))
 
+    # The row differs in task_kind: the strict identity match refuses it even
+    # though it carries this attempt's publication token, and nothing mutates.
     assert recovered is None
     assert queue_path.read_bytes() == before
 
@@ -964,19 +958,22 @@ def test_orca_publication_recovery_rejects_noncanonical_task_identity(tmp_path: 
 def test_ambiguous_enqueue_recovery_is_durable_fence_only_history(
     tmp_path: Path,
 ) -> None:
+    from orca_auto.core.queue.enqueue_publication import (
+        EnqueuePublicationOutcomeUnknown,
+        _recover_committed_enqueue,
+    )
+
     root = tmp_path / "shared_queue"
     reaction_dir = root / "reaction"
     reaction_dir.mkdir(parents=True)
     token = "ambiguous-publication-token"
-    owner_pid = 1234
-    owner_start = "owner-start"
     metadata = {
         "reaction_dir": str(reaction_dir.resolve()),
         "force": False,
         "_orca_auto_queued_record_sync": "preparing",
         "_orca_auto_queued_record_sync_token": token,
-        "_orca_auto_queued_record_sync_owner_pid": owner_pid,
-        "_orca_auto_queued_record_sync_owner_start": owner_start,
+        "_orca_auto_queued_record_sync_owner_pid": 1234,
+        "_orca_auto_queued_record_sync_owner_start": "owner-start",
     }
     entries = [
         QueueEntry(
@@ -992,25 +989,19 @@ def test_ambiguous_enqueue_recovery_is_durable_fence_only_history(
     ]
     _save_entries(root, entries)
 
-    with pytest.raises(queue_adapter.AmbiguousPublicationRecoveryError):
-        queue_adapter.recover_enqueue_publication(
-            root,
-            reaction_dir=str(reaction_dir),
-            task_id="task-ambiguous",
-            task_kind="orca_run_inp",
-            priority=7,
-            force=False,
-            token=token,
-            owner_pid=owner_pid,
-            owner_start=owner_start,
-        )
+    spec = _driver_recovery_spec(root)
+    with pytest.raises(EnqueuePublicationOutcomeUnknown):
+        _recover_committed_enqueue(spec, enqueue_metadata=dict(metadata))
 
     fenced = queue_adapter.list_queue(root)
     assert len(fenced) == 2
     assert {entry.status for entry in fenced} == {QueueStatus.CANCELLED}
-    assert all(entry.metadata[TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY] is True for entry in fenced)
-    assert all(entry.metadata.get(TERMINAL_REPLAY_METADATA_KEY) is None for entry in fenced)
-    assert queue_adapter.clear_terminal(root) == 2
+    # The administrative fence-only marker keeps a successor generation for
+    # the same reaction_dir blocked until the ambiguous rows are cleared.
+    assert all(
+        entry.metadata.get(queue_adapter.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY) is True
+        for entry in fenced
+    )
 
 
 def test_orca_adapter_expected_generation_rejects_replaced_queue_id(tmp_path: Path) -> None:

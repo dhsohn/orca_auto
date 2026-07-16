@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import copy
 import logging
-import os
 import stat
 import time
 from collections.abc import Mapping
@@ -37,6 +36,7 @@ from orca_auto.core.engines.queue_worker import (
 )
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue.engine.execution import coerce_resource_request
+from orca_auto.core.queue.enqueue_publication import repair_enqueue_publication
 from orca_auto.core.queue.internal_engine import (
     InternalEngineQueueModule,
     InternalEngineQueueWorkerFacadeBindings,
@@ -59,7 +59,6 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_REPAIR_PENDING,
     QUEUE_RECORD_SYNC_REPAIRING,
     QUEUE_RECORD_SYNC_TOKEN_KEY,
-    queue_record_publication_lock,
     queue_record_sync_metadata,
     queue_record_sync_state,
 )
@@ -128,6 +127,7 @@ from .adapter import (
     mark_cancelled,
     mark_completed,
     mark_failed,
+    queue_entries_same_publication_generation,
     queue_entry_app_name,
     queue_entry_id,
     queue_entry_metadata,
@@ -135,7 +135,6 @@ from .adapter import (
     queue_entry_task_id,
     reconcile_orphaned_running_entries,
     requeue_running_entry,
-    transition_queue_record_publication,
     update_terminal,
     worker_log_path,
 )
@@ -580,94 +579,17 @@ def _repair_orca_queue_publication(
             queue_entry_id(entry),
         )
         return False
-    queue_id = queue_entry_id(entry)
-    with queue_record_publication_lock(queue_root, queue_id):
-        current = get_entry_by_id(queue_root, queue_id)
-        if current is None or current.status != QueueStatus.PENDING or current.cancel_requested:
-            return True
-        if not entry_matches_engine_identity(current, "orca"):
-            return False
-        current_reaction_dir_text = queue_entry_reaction_dir(current)
-        try:
-            current_reaction_dir = Path(current_reaction_dir_text).expanduser().resolve()
-        except (OSError, RuntimeError):
-            return False
-        if (
-            not current_reaction_dir_text
-            or not current_reaction_dir.is_relative_to(resolved_queue_root)
-            or current_reaction_dir != reaction_dir
-            or queue_entry_task_id(current) != queue_entry_task_id(entry)
-        ):
-            return False
-        state = queue_record_sync_state(current)
-        if state == QUEUE_RECORD_SYNC_COMPLETE:
-            return True
-        if state not in {
-            QUEUE_RECORD_SYNC_PREPARING,
-            QUEUE_RECORD_SYNC_REPAIR_PENDING,
-            QUEUE_RECORD_SYNC_REPAIRING,
-        }:
-            logger.error(
-                "Cannot repair ORCA queue publication after marker changed to invalid state %r: %s",
-                state,
-                queue_id,
-            )
-            return False
-        # Acquiring the entry-scoped publication lock proves that no publisher
-        # still owns this scope, even when a cleanup write failed and left the
-        # long-lived publisher PID in PREPARING/REPAIRING metadata. Reclaim the
-        # durable lease here instead of trusting process liveness forever.
-        token = str(current.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY, "")).strip()
-        if not token:
-            logger.error("Cannot repair ORCA queue publication without a token: %s", queue_id)
-            return False
-
-        repairing, transitioned = transition_queue_record_publication(
-            queue_root,
-            queue_id,
-            expected_token=token,
-            expected_state=state,
-            target_state=QUEUE_RECORD_SYNC_REPAIRING,
-            owner_pid=os.getpid(),
-            expected_entry=entry,
-        )
-        if not transitioned or repairing is None:
-            return queue_record_sync_state(repairing) == QUEUE_RECORD_SYNC_COMPLETE
-        try:
-            _upsert_queued_job_record(cfg, repairing)
-            completed, transitioned = transition_queue_record_publication(
-                queue_root,
-                queue_id,
-                expected_token=token,
-                expected_state=QUEUE_RECORD_SYNC_REPAIRING,
-                target_state=QUEUE_RECORD_SYNC_COMPLETE,
-                owner_pid=0,
-                expected_entry=repairing,
-            )
-            return bool(
-                completed is not None
-                and (
-                    transitioned or queue_record_sync_state(completed) == QUEUE_RECORD_SYNC_COMPLETE
-                )
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to repair ORCA queued publication: queue_id=%s", queue_id)
-            try:
-                transition_queue_record_publication(
-                    queue_root,
-                    queue_id,
-                    expected_token=token,
-                    expected_state=QUEUE_RECORD_SYNC_REPAIRING,
-                    target_state=QUEUE_RECORD_SYNC_REPAIR_PENDING,
-                    owner_pid=0,
-                    expected_entry=repairing,
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "Failed to return ORCA publication to repair_pending: queue_id=%s",
-                    queue_id,
-                )
-            return False
+    # The shared repair driver holds one publication-lock acquisition across
+    # claim, publication, and completion, and it claims with a freshly minted
+    # token: the lock, not process liveness or the recorded token, is the
+    # authoritative ownership proof, and the original publisher is hard-fenced.
+    return repair_enqueue_publication(
+        queue_root,
+        entry,
+        publish=lambda current: _upsert_queued_job_record(cfg, current),
+        label="ORCA",
+        same_generation=queue_entries_same_publication_generation,
+    )
 
 
 def _repair_orca_queue_publications(worker: EngineQueueWorker) -> bool:

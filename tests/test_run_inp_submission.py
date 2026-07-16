@@ -12,17 +12,20 @@ import pytest
 
 import orca_auto.orca.commands.run_inp_submission as submission_mod
 from orca_auto.core.commands.run_dir import use_run_dir_publication_guard
+from orca_auto.core.queue import enqueue_publication as core_enqueue_publication
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
+    QUEUE_RECORD_SYNC_REPAIR_PENDING,
     queue_entry_is_claimable,
 )
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.commands import run_inp
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RuntimeConfig
 from orca_auto.orca.queue import adapter as queue_adapter
+from orca_auto.orca.queue import worker as orca_queue_worker
 
 
 def _deps(context: Any) -> SimpleNamespace:
@@ -109,9 +112,16 @@ def test_enqueue_save_after_commit_recovers_exact_row_and_submits(
 
     assert result.status == "submitted"
     assert result.queued_result is not None
-    assert "recovered exact queued entry" in result.queued_result.worker_info.detail
+    # The recovered row is parked for the worker repair pass instead of being
+    # published inline after an unknown enqueue failure.
+    assert "parked for worker repair" in result.queued_result.worker_info.detail
     [entry] = queue_adapter.list_queue(tmp_path)
-    assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+    assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
+
+    cfg = run_inp.load_config("")
+    assert orca_queue_worker._repair_orca_queue_publication(cfg, tmp_path, entry)
+    [repaired] = queue_adapter.list_queue(tmp_path)
+    assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
 
 
 def test_submission_normalizes_resources_only_in_private_snapshot(
@@ -221,7 +231,11 @@ def test_complete_transition_after_commit_returns_submitted_with_truthful_warnin
 
     assert result.status == "submitted"
     assert result.queued_result is not None
-    assert "durable COMPLETE state recovered" in result.queued_result.worker_info.detail
+    # The COMPLETE committed before its durability barrier reported failure:
+    # the row is durably COMPLETE (the token-gated park refused to touch it)
+    # and the submitter defers honestly to the worker repair pass, which will
+    # short-circuit on the durable COMPLETE.
+    assert "worker repair will publish" in result.queued_result.worker_info.detail
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
 
@@ -365,8 +379,11 @@ def test_orca_compensation_failure_fences_row_without_publication(
         pytest.fail("guard-origin compensation failure must not publish a queued record")
 
     monkeypatch.setattr(queue_store, "save_entries", fail_compensation_before_replace)
-    monkeypatch.setattr(queue_adapter, "recover_enqueue_publication", reject_normal_recovery)
-    monkeypatch.setattr(submission_mod, "_publish_queued_submission", reject_publication)
+    monkeypatch.setattr(
+        core_enqueue_publication, "_recover_committed_enqueue", reject_normal_recovery
+    )
+    monkeypatch.setattr(submission_mod, "record_queued_job_side_effect", reject_publication)
+    monkeypatch.setattr(submission_mod, "notify_queued_submission", reject_publication)
 
     with use_run_dir_publication_guard(reject_after_commit):
         result = run_inp.submit_reaction_dir_to_queue(args)
@@ -456,7 +473,12 @@ def test_duplicate_error_after_commit_is_recovered_as_same_submission(
     assert result.queued_result is not None
     assert "DuplicateEntryError" in result.queued_result.worker_info.detail
     [entry] = queue_adapter.list_queue(tmp_path)
-    assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+    assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
+
+    cfg = run_inp.load_config("")
+    assert orca_queue_worker._repair_orca_queue_publication(cfg, tmp_path, entry)
+    [repaired] = queue_adapter.list_queue(tmp_path)
+    assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
 
 
 def test_cancellation_waits_for_publication_boundary(

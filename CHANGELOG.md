@@ -10,6 +10,20 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- ORCA submission and its worker's publication repair now run on the shared
+  enqueue-publication driver, completing the unification of all three
+  engines. An ORCA enqueue that committed but lost its result is parked
+  `repair_pending` for the worker's pre-claim repair pass instead of
+  continuing publication inline under a REPAIRING lease, and its queued
+  notification is then not sent (at-most-once); ambiguous multi-row recovery
+  still terminally fences every candidate and reports
+  `queue_enqueue_outcome_unknown`; the worker repair now claims with a
+  freshly minted token (hard-fencing the original publisher) under a single
+  publication-lock acquisition, and can no longer misreport a COMPLETE
+  written by another lease as its own. A completion durability error is now
+  reported as a deferred publication (the row is durably COMPLETE and the
+  repair pass short-circuits) instead of an inline "durable COMPLETE state
+  recovered" success detail.
 - The workflow xtb/crest submitters now run on the shared enqueue-publication
   driver as well. Their COMPLETE short-circuit is token-verified (a COMPLETE
   written by another lease no longer counts as this publisher's success), the
