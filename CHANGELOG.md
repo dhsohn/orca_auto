@@ -10,6 +10,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- The smoke review packet's Markdown/HTML rendering moved into an internal
+  render-only module; the discovery, projection, and verification logic stays
+  in the review module. The rendered `summary.md` and `review/index.html`
+  output is byte-identical.
 - The smoke package's descriptor-anchored safety checks — directory identity
   capture and re-verification, the pinned open flags, and the bounded
   change-detecting reads of regular files — now live in one internal module
