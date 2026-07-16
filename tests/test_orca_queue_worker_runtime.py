@@ -94,24 +94,3 @@ def test_check_cancel_requests_skips_completed_retained_child(tmp_path: Path) ->
 
     assert cancelled == []
     assert discarded == []
-
-
-def test_install_worker_runtime_methods_binds_worker_instance() -> None:
-    worker = SimpleNamespace()
-    calls: list[tuple[Any, ...]] = []
-    job = object()
-
-    def cancel_running_job(worker_obj: Any, queue_id: str, job_obj: Any) -> bool:
-        calls.append(("cancel", worker_obj is worker, queue_id, job_obj is job))
-        return True
-
-    queue_worker_runtime.install_worker_runtime_methods(
-        worker,
-        cancel_running_job_fn=cancel_running_job,
-    )
-
-    worker._cancel_running_job("queue-1", job)
-
-    assert calls == [
-        ("cancel", True, "queue-1", True),
-    ]

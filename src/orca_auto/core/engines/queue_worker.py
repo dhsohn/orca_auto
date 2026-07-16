@@ -37,9 +37,15 @@ class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
         finalize_child_exit: WorkerCallback | None = None,
         reconcile_orphaned_running: WorkerCallback | None = None,
         check_cancel_requests: WorkerCallback | None = None,
+        reserve_gate: WorkerCallback | None = None,
     ) -> None:
         self.engine = engine
         self.admission_limit: int | None = None
+        # Engine-owned worker state. The engine's after_init hook may attach a
+        # typed object here (for example the ORCA terminal-replay bookkeeping)
+        # instead of stuffing untyped attributes onto the shared worker.
+        self.engine_state: Any = None
+        self._reserve_gate_callback = reserve_gate
         self._after_init_callback = after_init
         self._before_run_callback = before_run
         self._after_run_callback = after_run
@@ -79,6 +85,13 @@ class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
             if self._keyboard_interrupt_callback is not None:
                 self._keyboard_interrupt_callback(self)
             raise
+
+    def _reserve_next_entry(self) -> tuple[str, Any | None]:
+        if self._reserve_gate_callback is not None:
+            gated = self._reserve_gate_callback(self)
+            if gated is not None:
+                return gated
+        return super()._reserve_next_entry()
 
     def _running_queue_id(self, entry: Any) -> str:
         if self._running_queue_id_callback is not None:
@@ -152,6 +165,7 @@ def build_engine_queue_worker(
     finalize_child_exit: WorkerCallback | None = None,
     reconcile_orphaned_running: WorkerCallback | None = None,
     check_cancel_requests: WorkerCallback | None = None,
+    reserve_gate: WorkerCallback | None = None,
 ) -> EngineQueueWorker:
     return EngineQueueWorker(
         cfg,
@@ -172,6 +186,7 @@ def build_engine_queue_worker(
         finalize_child_exit=finalize_child_exit,
         reconcile_orphaned_running=reconcile_orphaned_running,
         check_cancel_requests=check_cancel_requests,
+        reserve_gate=reserve_gate,
     )
 
 
@@ -196,6 +211,7 @@ def build_runtime_engine_queue_worker(
     finalize_child_exit: WorkerCallback | None = None,
     reconcile_orphaned_running: WorkerCallback | None = None,
     check_cancel_requests: WorkerCallback | None = None,
+    reserve_gate: WorkerCallback | None = None,
     normalize_max_concurrent: bool = False,
     worker_builder: Callable[..., EngineQueueWorker] = build_engine_queue_worker,
 ) -> EngineQueueWorker:
@@ -227,6 +243,7 @@ def build_runtime_engine_queue_worker(
         finalize_child_exit=finalize_child_exit,
         reconcile_orphaned_running=reconcile_orphaned_running,
         check_cancel_requests=check_cancel_requests,
+        reserve_gate=reserve_gate,
     )
 
 

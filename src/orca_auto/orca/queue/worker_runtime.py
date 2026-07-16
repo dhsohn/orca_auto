@@ -76,21 +76,10 @@ def check_cancel_requests(
                 worker._discard_running_job(queue_id)
 
 
-def install_worker_runtime_methods(
-    worker: Any,
-    *,
-    cancel_running_job_fn: Callable[[Any, str, Any], bool],
-) -> None:
-    worker.__dict__["_cancel_running_job"] = lambda queue_id, job: cancel_running_job_fn(
-        worker, queue_id, job
-    )
-
-
 __all__ = [
     "after_worker_run",
     "before_worker_run",
     "check_cancel_requests",
-    "install_worker_runtime_methods",
     "log_worker_interrupt",
     "make_running_job",
 ]

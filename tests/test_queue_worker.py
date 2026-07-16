@@ -370,6 +370,12 @@ def _terminal_replay_entry(tmp_path: Path, status: QueueStatus) -> QueueEntry:
     )
 
 
+def _reconcile_statuses(worker: object) -> dict[tuple[str, str], str]:
+    statuses = queue_worker_mod._replay_state(worker).reconcile_statuses
+    assert statuses is not None
+    return statuses
+
+
 def _run_terminal_replay(
     worker: object,
     tmp_path: Path,
@@ -378,11 +384,10 @@ def _run_terminal_replay(
     previous_status: str | None = None,
 ) -> None:
     if previous_status is not None:
-        statuses = worker.__dict__.get("_orca_reconcile_statuses")
-        if not isinstance(statuses, dict):
-            statuses = {}
+        state = queue_worker_mod._replay_state(worker)
+        statuses = dict(state.reconcile_statuses or {})
         statuses[(str(tmp_path.resolve()), entry.queue_id)] = previous_status
-        worker.__dict__["_orca_reconcile_statuses"] = statuses
+        state.reconcile_statuses = statuses
     with (
         patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
         patch.object(
@@ -423,7 +428,9 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
     cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     if existing_cursor:
-        worker._orca_reconcile_statuses = {(str(tmp_path.resolve()), "other-queue"): STATUS_RUNNING}
+        queue_worker_mod._replay_state(worker).reconcile_statuses = {
+            (str(tmp_path.resolve()), "other-queue"): STATUS_RUNNING
+        }
 
     with (
         patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
@@ -470,8 +477,8 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
     notify.assert_not_called()
     clear_marker.assert_not_called()
     key = (str(tmp_path.resolve()), entry.queue_id)
-    assert worker._orca_reconcile_statuses[key] == terminal_status.value
-    assert worker._orca_pending_terminal_replays == {}
+    assert _reconcile_statuses(worker)[key] == terminal_status.value
+    assert queue_worker_mod._replay_state(worker).pending_replays == {}
 
 
 def test_repeated_worker_startup_preserves_historical_failed_queue_bytes(
@@ -813,8 +820,8 @@ def test_repair_blocked_terminal_never_uses_observed_active_edge(
     notify.assert_not_called()
     clear_marker.assert_not_called()
     key = (str(tmp_path.resolve()), entry.queue_id)
-    assert worker._orca_reconcile_statuses[key] == STATUS_FAILED
-    assert worker._orca_pending_terminal_replays == {}
+    assert _reconcile_statuses(worker)[key] == STATUS_FAILED
+    assert queue_worker_mod._replay_state(worker).pending_replays == {}
 
 
 def test_terminal_replay_with_empty_reaction_dir_never_resolves_workspace() -> None:
@@ -873,7 +880,7 @@ def test_terminal_replay_retries_failed_notification_until_marker_is_durable(
 
     assert notify.call_count == 2
     key = (str(tmp_path.resolve()), entry.queue_id)
-    assert worker._orca_reconcile_statuses[key] == "running"
+    assert _reconcile_statuses(worker)[key] == "running"
 
 
 def test_terminal_replay_uses_selected_discord_provider_for_durability(
@@ -911,7 +918,7 @@ def test_terminal_replay_uses_selected_discord_provider_for_durability(
 
     assert notify.call_count == 2
     key = (str(tmp_path.resolve()), entry.queue_id)
-    assert worker._orca_reconcile_statuses[key] == "running"
+    assert _reconcile_statuses(worker)[key] == "running"
 
 
 def test_terminal_replay_retries_when_job_record_artifacts_are_not_ready(
@@ -935,7 +942,7 @@ def test_terminal_replay_retries_when_job_record_artifacts_are_not_ready(
 
     notify.assert_not_called()
     key = (str(tmp_path.resolve()), entry.queue_id)
-    assert worker._orca_reconcile_statuses[key] == "running"
+    assert _reconcile_statuses(worker)[key] == "running"
 
 
 def test_terminal_replay_finalizes_cancelled_state_before_side_effects(tmp_path: Path) -> None:
@@ -975,7 +982,7 @@ def test_terminal_replay_finalizes_cancelled_state_before_side_effects(tmp_path:
         expected_task_id=entry.task_id,
     )
     key = (str(tmp_path.resolve()), entry.queue_id)
-    assert worker._orca_reconcile_statuses[key] == QueueStatus.CANCELLED.value
+    assert _reconcile_statuses(worker)[key] == QueueStatus.CANCELLED.value
 
 
 def test_terminal_replay_corrects_cancelled_queue_to_existing_completed_state(
@@ -1012,7 +1019,7 @@ def test_terminal_replay_corrects_cancelled_queue_to_existing_completed_state(
         expected_task_id=entry.task_id,
     )
     key = (str(tmp_path.resolve()), entry.queue_id)
-    assert worker._orca_reconcile_statuses[key] == STATUS_COMPLETED
+    assert _reconcile_statuses(worker)[key] == STATUS_COMPLETED
 
 
 def test_terminal_replay_observes_pending_to_cancelled_transition(tmp_path: Path) -> None:
@@ -1167,10 +1174,12 @@ def test_terminal_owner_switches_from_terminal_owner_to_seen_active_generation(
     entries = [(root_a, active_a), (root_b, failed_b)]
     cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    worker._orca_generation_owners = {reaction_key: owner_b}
-    worker._orca_generation_owner_active = {reaction_key: True}
-    worker._orca_generation_seen_keys = {owner_a, owner_b}
-    worker._orca_reconcile_statuses = {owner_a: STATUS_RUNNING, owner_b: STATUS_RUNNING}
+    queue_worker_mod._replay_state(worker).generation_owners = {reaction_key: owner_b}
+    queue_worker_mod._replay_state(worker).generation_owner_active = {reaction_key: True}
+    queue_worker_mod._replay_state(worker).reconcile_statuses = {
+        owner_a: STATUS_RUNNING,
+        owner_b: STATUS_RUNNING,
+    }
 
     with (
         patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
@@ -1191,8 +1200,8 @@ def test_terminal_owner_switches_from_terminal_owner_to_seen_active_generation(
     ):
         queue_worker_mod._reconcile_orphaned_running(worker)
 
-    assert worker._orca_generation_owners[reaction_key] == owner_a
-    assert worker._orca_generation_owner_active[reaction_key] is True
+    assert queue_worker_mod._replay_state(worker).generation_owners[reaction_key] == owner_a
+    assert queue_worker_mod._replay_state(worker).generation_owner_active[reaction_key] is True
     record_failed.assert_not_called()
     upsert.assert_not_called()
     notify.assert_not_called()
@@ -1237,7 +1246,7 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
     entries = [(old_root, old_cancelled), (new_root, new_cancelled)]
     cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    worker._orca_reconcile_statuses = {
+    queue_worker_mod._replay_state(worker).reconcile_statuses = {
         (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
     }
 
@@ -1275,12 +1284,12 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
     assert record_cancelled.call_args.kwargs["selected_inp"] == ""
     assert record_cancelled.call_args.kwargs["observed_state"] is not None
     reaction_key = str(reaction_dir.resolve())
-    assert worker._orca_generation_owners[reaction_key] == (
+    assert queue_worker_mod._replay_state(worker).generation_owners[reaction_key] == (
         str(new_root.resolve()),
         new_cancelled.queue_id,
     )
     assert (
-        worker._orca_reconcile_statuses[(str(old_root.resolve()), old_cancelled.queue_id)]
+        _reconcile_statuses(worker)[(str(old_root.resolve()), old_cancelled.queue_id)]
         == STATUS_RUNNING
     )
 
@@ -1309,7 +1318,7 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
     entries = [(root_a, cancelled_a), (root_b, cancelled_b)]
     cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    worker._orca_reconcile_statuses = {
+    queue_worker_mod._replay_state(worker).reconcile_statuses = {
         (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
     }
 
@@ -1337,7 +1346,7 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
     ):
         queue_worker_mod._reconcile_orphaned_running(worker)
         record_cancelled.assert_not_called()
-        assert all(status == STATUS_RUNNING for status in worker._orca_reconcile_statuses.values())
+        assert all(status == STATUS_RUNNING for status in _reconcile_statuses(worker).values())
 
         state = new_state(reaction_dir, reaction_dir / "b.inp", max_retries=0)
         state["job_id"] = cancelled_b.task_id
@@ -1358,7 +1367,9 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
     entries = [(tmp_path, entry)]
     cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    worker._orca_reconcile_statuses = {(str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING}
+    queue_worker_mod._replay_state(worker).reconcile_statuses = {
+        (str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING
+    }
 
     with (
         patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
@@ -1391,7 +1402,7 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
         ) as notify,
     ):
         queue_worker_mod._reconcile_orphaned_running(worker)
-        pending = worker.__dict__["_orca_pending_terminal_replays"]
+        pending = queue_worker_mod._replay_state(worker).pending_replays
         assert len(pending) == 1
 
         queue_worker_mod._reconcile_orphaned_running(worker)
@@ -1403,7 +1414,7 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
         str(reaction_dir),
         expected_job_id=entry.task_id,
     )
-    assert worker.__dict__["_orca_pending_terminal_replays"] == {}
+    assert queue_worker_mod._replay_state(worker).pending_replays == {}
 
 
 def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
@@ -1415,7 +1426,9 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
     entries = [(tmp_path, entry)]
     cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    worker._orca_reconcile_statuses = {(str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING}
+    queue_worker_mod._replay_state(worker).reconcile_statuses = {
+        (str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING
+    }
 
     with (
         patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
@@ -1448,7 +1461,7 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
         ) as notify,
     ):
         queue_worker_mod._reconcile_orphaned_running(worker)
-        pending = worker.__dict__["_orca_pending_terminal_replays"]
+        pending = queue_worker_mod._replay_state(worker).pending_replays
         assert len(pending) == 1
         assert not next(iter(pending.values())).state_prepared
 
@@ -1467,7 +1480,7 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
         str(reaction_dir),
         expected_job_id=entry.task_id,
     )
-    assert worker.__dict__["_orca_pending_terminal_replays"] == {}
+    assert queue_worker_mod._replay_state(worker).pending_replays == {}
 
 
 def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remains(
@@ -1504,7 +1517,7 @@ def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remain
     ):
         _run_terminal_replay(worker, tmp_path, running)
         _run_terminal_replay(worker, tmp_path, cancelled)
-        pending = worker.__dict__["_orca_pending_terminal_replays"]
+        pending = queue_worker_mod._replay_state(worker).pending_replays
         assert len(pending) == 1
         assert not next(iter(pending.values())).state_prepared
 
@@ -1522,8 +1535,10 @@ def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remain
         str(reaction_dir),
         expected_job_id=cancelled.task_id,
     )
-    assert worker.__dict__["_orca_pending_terminal_replays"] == {}
-    assert worker._orca_generation_owners[str(reaction_dir.resolve())] == (
+    assert queue_worker_mod._replay_state(worker).pending_replays == {}
+    assert queue_worker_mod._replay_state(worker).generation_owners[
+        str(reaction_dir.resolve())
+    ] == (
         str(tmp_path.resolve()),
         cancelled.queue_id,
     )
@@ -1554,7 +1569,7 @@ def test_prepared_terminal_replay_is_dropped_when_entry_state_is_superseded(
     ):
         _run_terminal_replay(worker, tmp_path, running)
         _run_terminal_replay(worker, tmp_path, cancelled)
-        pending = worker.__dict__["_orca_pending_terminal_replays"]
+        pending = queue_worker_mod._replay_state(worker).pending_replays
         assert len(pending) == 1
         assert next(iter(pending.values())).state_prepared
 
@@ -1567,9 +1582,9 @@ def test_prepared_terminal_replay_is_dropped_when_entry_state_is_superseded(
     record_cancelled.assert_called_once()
     upsert.assert_called_once()
     notify.assert_not_called()
-    assert worker.__dict__["_orca_pending_terminal_replays"] == {}
+    assert queue_worker_mod._replay_state(worker).pending_replays == {}
     key = (str(tmp_path.resolve()), cancelled.queue_id)
-    assert worker._orca_reconcile_statuses[key] == STATUS_CANCELLED
+    assert _reconcile_statuses(worker)[key] == STATUS_CANCELLED
     written = load_state(reaction_dir)
     assert written is not None
     assert written["job_id"] == "task-newer"
@@ -1625,7 +1640,7 @@ def test_durable_terminal_replay_drops_old_finalizer_after_newer_terminal_state(
     record_cancelled.assert_not_called()
     upsert.assert_not_called()
     notify.assert_not_called()
-    assert worker.__dict__["_orca_pending_terminal_replays"] == {}
+    assert queue_worker_mod._replay_state(worker).pending_replays == {}
     written = load_state(reaction_dir)
     assert written is not None
     assert written["job_id"] == "task-b"
@@ -1656,7 +1671,7 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
     new_entries = [(new_root, new_running)]
     cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    worker._orca_reconcile_statuses = {
+    queue_worker_mod._replay_state(worker).reconcile_statuses = {
         (str(old_root.resolve()), old_cancelled.queue_id): STATUS_RUNNING
     }
 
@@ -1687,15 +1702,17 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
         patch.object(queue_worker_mod, "_notify_terminal_job_from_state") as notify,
     ):
         queue_worker_mod._reconcile_orphaned_running(worker)
-        assert len(worker.__dict__["_orca_pending_terminal_replays"]) == 1
+        assert len(queue_worker_mod._replay_state(worker).pending_replays) == 1
 
         queue_worker_mod._reconcile_orphaned_running(worker)
 
     record_cancelled.assert_called_once()
     upsert.assert_called_once()
     notify.assert_not_called()
-    assert worker.__dict__["_orca_pending_terminal_replays"] == {}
-    assert worker._orca_generation_owners[str(reaction_dir.resolve())] == (
+    assert queue_worker_mod._replay_state(worker).pending_replays == {}
+    assert queue_worker_mod._replay_state(worker).generation_owners[
+        str(reaction_dir.resolve())
+    ] == (
         str(new_root.resolve()),
         new_running.queue_id,
     )
@@ -3128,7 +3145,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         notify.assert_called_once()
         key = (str(self.root.resolve()), entry.queue_id)
-        reconcile_statuses = self.worker.__dict__["_orca_reconcile_statuses"]
+        reconcile_statuses = _reconcile_statuses(self.worker)
         self.assertEqual(reconcile_statuses[key], "failed")
 
     @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
