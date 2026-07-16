@@ -116,6 +116,7 @@ module = [
     "orca_auto.core.utils.lock",
     "orca_auto.core.utils.persistence",
     "orca_auto.core.utils.process",
+    "orca_auto.flow.bot.remote_admission",
 ]
 check_untyped_defs = true
 disallow_any_generics = true

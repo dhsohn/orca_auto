@@ -51,7 +51,8 @@ def optional_positive_float(
 # The interaction-energy fan-out materializes one single point per fragment per
 # retained representative; this hard cap bounds that fan-out regardless of what a
 # manifest declares. It is also enforced against remote uploads (see the bot's
-# _REMOTE_WORKFLOW_COUNT_LIMITS) and against the materialized stage count.
+# remote_admission._REMOTE_WORKFLOW_COUNT_LIMITS) and against the materialized
+# stage count.
 INTERACTION_ENERGY_MAX_FRAGMENTS_CAP = 8
 INTERACTION_ENERGY_MAX_MULTIPLICITY = 100
 INTERACTION_ENERGY_RMSD_GROUPING_VERSION = 2
