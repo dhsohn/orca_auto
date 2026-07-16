@@ -87,9 +87,9 @@ def test_recovery_fences_every_ambiguous_identity_match(tmp_path: Path) -> None:
     spec = _spec(tmp_path)
     enqueue_metadata = dict(first.metadata)
 
-    recovered = _recover_committed_enqueue(spec, enqueue_metadata=enqueue_metadata)
+    with pytest.raises(EnqueuePublicationOutcomeUnknown):
+        _recover_committed_enqueue(spec, enqueue_metadata=enqueue_metadata)
 
-    assert recovered is None
     rows = list_queue(tmp_path)
     assert len(rows) == 2
     for row in rows:

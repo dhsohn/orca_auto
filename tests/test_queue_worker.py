@@ -38,6 +38,7 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.store import enqueue as enqueue_core
 from orca_auto.core.queue.store import list_queue as list_queue_core
 from orca_auto.core.queue.store import save_entries as save_entries_core
+from orca_auto.core.queue.store import update_metadata
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.statuses import (
     STATUS_CANCELLED,
@@ -298,15 +299,18 @@ def test_orca_publication_repair_rejects_invalid_marker_after_lock_reload(
             ),
         },
     )
-    changed = replace(
-        entry,
-        metadata={**entry.metadata, QUEUE_RECORD_SYNC_KEY: changed_state},
+    # The marker changes durably in the store after the prefilter read; the
+    # repair claim re-reads under the publication lock and must refuse it.
+    assert (
+        update_metadata(
+            tmp_path,
+            entry.queue_id,
+            {QUEUE_RECORD_SYNC_KEY: changed_state},
+        )
+        is not None
     )
 
-    with (
-        patch.object(queue_worker_mod, "get_entry_by_id", return_value=changed),
-        patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert,
-    ):
+    with patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert:
         assert not queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, entry)
 
     upsert.assert_not_called()

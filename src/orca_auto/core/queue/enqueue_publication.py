@@ -101,6 +101,9 @@ class EnqueuePublicationSpec:
     finalize_intent: Callable[[QueueEntry], None] | None = None
     on_compensated_failure: Callable[[], None] | None = None
     enqueue_fn: Callable[..., Any] | None = None
+    mark_failed_fn: Callable[..., Any] | None = None
+    job_dir_metadata_key: str = "job_dir"
+    ambiguous_fence_metadata: dict[str, Any] | None = None
     same_generation: Callable[[QueueEntry, QueueEntry], bool] = field(
         default=queue_entries_same_generation
     )
@@ -170,8 +173,9 @@ def _fence_uncompensated_enqueue(
             spec.label,
         )
         return
+    mark_failed_fn = spec.mark_failed_fn if spec.mark_failed_fn is not None else mark_failed
     try:
-        fenced = mark_failed(
+        fenced = mark_failed_fn(
             spec.queue_root,
             entry.queue_id,
             error=(
@@ -195,7 +199,7 @@ def _fence_uncompensated_enqueue(
             entry.queue_id,
         )
         return
-    if fenced is None:
+    if not fenced:
         logger.error(
             "%s: provisional row was not visible for terminal fencing: queue_id=%s",
             spec.label,
@@ -219,7 +223,7 @@ def _recover_committed_enqueue(
 
     expected_token = normalize_text(enqueue_metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY))
     expected_owner_start = normalize_text(enqueue_metadata.get(QUEUE_RECORD_SYNC_OWNER_START_KEY))
-    expected_job_dir = normalize_text(enqueue_metadata.get("job_dir"))
+    expected_job_dir = normalize_text(enqueue_metadata.get(spec.job_dir_metadata_key))
     try:
         expected_owner_pid = int(enqueue_metadata.get(QUEUE_RECORD_SYNC_OWNER_PID_KEY, 0) or 0)
     except (TypeError, ValueError):
@@ -235,7 +239,7 @@ def _recover_committed_enqueue(
             current_priority = int(current.priority)
         except (TypeError, ValueError):
             return False
-        current_job_dir = normalize_text(metadata.get("job_dir"))
+        current_job_dir = normalize_text(metadata.get(spec.job_dir_metadata_key))
         if current_job_dir:
             current_job_dir = str(Path(current_job_dir).expanduser().resolve())
         return bool(
@@ -254,13 +258,17 @@ def _recover_committed_enqueue(
             and current_job_dir == expected_job_dir
         )
 
+    ambiguous = False
+
     def recover(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
+        nonlocal ambiguous
         matches = [
             (index, current) for index, current in enumerate(entries) if identity_matches(current)
         ]
         if not matches:
             return None, False
         if len(matches) != 1:
+            ambiguous = True
             finished_at = now_utc_iso()
             for index, current in matches:
                 metadata = dict(current.metadata)
@@ -271,6 +279,8 @@ def _recover_committed_enqueue(
                         owner_pid=0,
                     )
                 )
+                if spec.ambiguous_fence_metadata:
+                    metadata.update(spec.ambiguous_fence_metadata)
                 entries[index] = replace(
                     current,
                     status=QueueStatus.CANCELLED,
@@ -292,7 +302,16 @@ def _recover_committed_enqueue(
         entries[index] = updated
         return updated, True
 
-    return mutate_entries(spec.queue_root, recover)
+    recovered = mutate_entries(spec.queue_root, recover)
+    if ambiguous:
+        # Multiple rows carry this exact attempt's identity: all of them were
+        # terminally fenced, and the true outcome cannot be reported as either
+        # success or clean failure (D3).
+        raise EnqueuePublicationOutcomeUnknown(
+            f"{spec.label}: ambiguous persisted queue rows after an enqueue error were "
+            "terminally fenced; the enqueue outcome is unknown"
+        )
+    return recovered
 
 
 def _park_repair_pending(
@@ -517,6 +536,8 @@ def run_enqueue_publication(spec: EnqueuePublicationSpec) -> EnqueuePublicationO
         try:
             recovered = _recover_committed_enqueue(spec, enqueue_metadata=metadata)
         except BaseException as recovery_exc:  # noqa: BLE001
+            if isinstance(recovery_exc, EnqueuePublicationOutcomeUnknown):
+                raise
             if not isinstance(recovery_exc, Exception):
                 raise
             logger.warning(
