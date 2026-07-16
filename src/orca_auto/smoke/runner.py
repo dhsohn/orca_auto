@@ -21,19 +21,22 @@ from orca_auto.core.admission import (
 from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.core.utils.persistence import now_utc_iso
 
+from ._dirfd import (
+    DirectoryIdentity,
+    assert_named_directory_identity,
+    directory_open_flags,
+    read_pinned_regular_file,
+    validate_owned_directory,
+)
 from .catalog import SmokeScenario, scenarios_for_profile
 from .manifest import (
-    DirectoryIdentity,
     PinnedBatchDirectory,
-    assert_named_directory_identity,
     build_case_manifest,
     create_pinned_batch_directory,
     create_pinned_case_directory,
-    directory_open_flags,
     prepare_smoke_root,
     rebuild_smoke_index,
     source_identity,
-    validate_owned_directory,
     write_batch_manifest,
     write_case_manifest,
 )
@@ -95,29 +98,7 @@ def _source_identity_available(identity: Mapping[str, Any]) -> bool:
 def _read_stable_regular_file_descriptor(descriptor: int, *, max_bytes: int) -> bytes:
     readable_fd = os.dup(descriptor)
     try:
-        before = os.fstat(readable_fd)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-            raise ValueError("smoke harness output is not a single-link regular file")
-        if before.st_size > max_bytes:
-            raise ValueError("smoke harness output exceeds the bounded read limit")
-        os.lseek(readable_fd, 0, os.SEEK_SET)
-        chunks: list[bytes] = []
-        remaining = before.st_size
-        while remaining:
-            chunk = os.read(readable_fd, min(1024 * 1024, remaining))
-            if not chunk:
-                raise ValueError("smoke harness output changed while it was read")
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        after = os.fstat(readable_fd)
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-        ) or after.st_nlink != 1:
-            raise ValueError("smoke harness output changed while it was read")
-        return b"".join(chunks)
+        return read_pinned_regular_file(readable_fd, max_bytes=max_bytes)
     finally:
         os.close(readable_fd)
 

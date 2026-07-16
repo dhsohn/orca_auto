@@ -17,6 +17,18 @@ from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.utils.lock import file_lock, file_lock_at
 from orca_auto.core.utils.persistence import atomic_write_json, now_utc_iso
+from orca_auto.smoke._dirfd import (
+    DirectoryIdentity,
+    PinnedReadError,
+    assert_named_directory_identity,
+    assert_named_regular_file,
+    directory_identity,
+    directory_open_flags,
+    file_open_flags,
+    read_pinned_regular_file,
+    stat_identity,
+    validate_owned_directory,
+)
 from orca_auto.smoke._fsatomic import atomic_write_bytes_at
 
 from .catalog import SmokeScenario
@@ -37,12 +49,6 @@ _BATCH_PROFILE_CODES = {
     "all": "a",
 }
 _SMOKE_INIT_LOCK_FILENAME = ".orca_auto_smoke.init.lock"
-
-
-@dataclass(frozen=True)
-class DirectoryIdentity:
-    device: int
-    inode: int
 
 
 @dataclass(frozen=True)
@@ -214,46 +220,8 @@ def _bounded_json_mapping(path: Path) -> dict[str, Any] | None:
     return raw if isinstance(raw, dict) else None
 
 
-def directory_open_flags() -> int:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    return flags
-
-
 def _directory_identity(directory_fd: int) -> DirectoryIdentity:
-    details = os.fstat(directory_fd)
-    if not stat.S_ISDIR(details.st_mode):
-        raise ValueError("smoke path identity is not a directory")
-    return DirectoryIdentity(details.st_dev, details.st_ino)
-
-
-def validate_owned_directory(directory_fd: int, *, label: str) -> DirectoryIdentity:
-    details = os.fstat(directory_fd)
-    if not stat.S_ISDIR(details.st_mode):
-        raise ValueError(f"{label} must be a directory")
-    if details.st_uid != os.geteuid():
-        raise ValueError(f"{label} must be owned by the current user")
-    if stat.S_IMODE(details.st_mode) & 0o022:
-        raise ValueError(f"{label} must not be group- or world-writable")
-    return DirectoryIdentity(details.st_dev, details.st_ino)
-
-
-def assert_named_directory_identity(
-    parent_fd: int,
-    name: str,
-    expected: DirectoryIdentity,
-    *,
-    label: str,
-) -> None:
-    try:
-        descriptor = os.open(name, directory_open_flags(), dir_fd=parent_fd)
-    except OSError as exc:
-        raise ValueError(f"{label} identity changed") from exc
-    try:
-        if _directory_identity(descriptor) != expected:
-            raise ValueError(f"{label} identity changed")
-    finally:
-        os.close(descriptor)
+    return directory_identity(directory_fd, label="smoke path identity")
 
 
 def _assert_path_directory_identity(
@@ -366,27 +334,6 @@ def create_pinned_case_directory(
         raise
 
 
-def _file_open_flags() -> int:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    return flags
-
-
-def _digest_descriptor(descriptor: int, *, max_bytes: int) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    total = 0
-    os.lseek(descriptor, 0, os.SEEK_SET)
-    while True:
-        chunk = os.read(descriptor, min(1024 * 1024, max_bytes - total + 1))
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > max_bytes:
-            raise ValueError("smoke manifest exceeds the bounded publication limit")
-        digest.update(chunk)
-    return digest.hexdigest(), total
-
-
 def _atomic_write_json_at(
     directory_fd: int,
     name: str,
@@ -407,45 +354,18 @@ def _atomic_write_json_at(
 
 
 def _bounded_json_mapping_at(directory_fd: int, name: str) -> dict[str, Any] | None:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(name, flags, dir_fd=directory_fd)
+        descriptor = os.open(name, file_open_flags(), dir_fd=directory_fd)
     except OSError:
         return None
     try:
-        before = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_nlink != 1
-            or before.st_uid != os.geteuid()
-            or stat.S_IMODE(before.st_mode) & 0o077
-            or before.st_size > MAX_SMOKE_MANIFEST_BYTES
-        ):
-            return None
-        chunks: list[bytes] = []
-        remaining = before.st_size
-        while remaining:
-            chunk = os.read(descriptor, min(1024 * 1024, remaining))
-            if not chunk:
-                return None
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        after = os.fstat(descriptor)
-        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-        identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-        if identity != (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-        ) or identity != (
-            named.st_dev,
-            named.st_ino,
-            named.st_size,
-            named.st_mtime_ns,
-        ):
-            return None
-        raw = json.loads(b"".join(chunks).decode("utf-8", errors="strict"))
+        payload = read_pinned_regular_file(
+            descriptor,
+            max_bytes=MAX_SMOKE_MANIFEST_BYTES,
+            named_location=(directory_fd, name),
+            require_owner_private=True,
+        )
+        raw = json.loads(payload.decode("utf-8", errors="strict"))
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
         return None
     finally:
@@ -721,35 +641,20 @@ def _read_scanned_regular_file(
 ) -> bytes | None:
     if expected.st_size > MAX_SMOKE_MANIFEST_BYTES:
         return None
-    descriptor = os.open(name, _file_open_flags(), dir_fd=directory_fd)
+    descriptor = os.open(name, file_open_flags(), dir_fd=directory_fd)
     try:
-        before = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_nlink != 1
-            or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-            != (expected.st_dev, expected.st_ino, expected.st_size, expected.st_mtime_ns)
-        ):
-            raise ValueError("smoke runtime file changed before it was read")
-        chunks: list[bytes] = []
-        remaining = before.st_size
-        while remaining:
-            chunk = os.read(descriptor, min(1024 * 1024, remaining))
-            if not chunk:
-                return None
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        after = os.fstat(descriptor)
-        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-        identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-        if (
-            identity != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-            or identity != (named.st_dev, named.st_ino, named.st_size, named.st_mtime_ns)
-            or after.st_nlink != 1
-            or named.st_nlink != 1
-        ):
-            raise ValueError("smoke runtime file changed while it was read")
-        return b"".join(chunks)
+        return read_pinned_regular_file(
+            descriptor,
+            max_bytes=MAX_SMOKE_MANIFEST_BYTES,
+            expected_identity=stat_identity(expected),
+            named_location=(directory_fd, name),
+        )
+    except PinnedReadError as exc:
+        if exc.reason == "short-read":
+            return None
+        if exc.reason == "changed-during":
+            raise ValueError("smoke runtime file changed while it was read") from exc
+        raise ValueError("smoke runtime file changed before it was read") from exc
     finally:
         os.close(descriptor)
 
@@ -806,33 +711,10 @@ def _scan_regular_files_at(
                 else None
             )
             if name not in payload_names:
-                descriptor = os.open(name, _file_open_flags(), dir_fd=current_fd)
                 try:
-                    verified = os.fstat(descriptor)
-                    named = os.stat(name, dir_fd=current_fd, follow_symlinks=False)
-                    expected_identity = (
-                        opened.st_dev,
-                        opened.st_ino,
-                        opened.st_size,
-                        opened.st_mtime_ns,
-                    )
-                    if (
-                        not stat.S_ISREG(verified.st_mode)
-                        or verified.st_nlink != 1
-                        or named.st_nlink != 1
-                        or expected_identity
-                        != (
-                            verified.st_dev,
-                            verified.st_ino,
-                            verified.st_size,
-                            verified.st_mtime_ns,
-                        )
-                        or expected_identity
-                        != (named.st_dev, named.st_ino, named.st_size, named.st_mtime_ns)
-                    ):
-                        raise ValueError("smoke runtime file identity changed")
-                finally:
-                    os.close(descriptor)
+                    assert_named_regular_file(current_fd, name, stat_identity(opened))
+                except PinnedReadError as exc:
+                    raise ValueError("smoke runtime file identity changed") from exc
             results.append(
                 _ScannedRegularFile(
                     relative_path="/".join((*relative_parts, name)),
