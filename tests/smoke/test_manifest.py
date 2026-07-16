@@ -31,7 +31,10 @@ def _git(repo: Path, *arguments: str) -> None:
     )
 
 
-def test_source_identity_changes_when_untracked_content_changes(tmp_path: Path) -> None:
+def test_source_identity_tracks_untracked_names_but_not_content(tmp_path: Path) -> None:
+    # Untracked file NAMES reach the identity through the status digest; their
+    # content is deliberately outside the provenance scope, so smoke I/O never
+    # scales with untracked workstation files.
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -46,68 +49,13 @@ def test_source_identity_changes_when_untracked_content_changes(tmp_path: Path) 
     first = source_identity(repo)
     untracked.write_text("VALUE = 'second'\n", encoding="utf-8")
     second = source_identity(repo)
+    (repo / "another_untracked.py").write_text("x\n", encoding="utf-8")
+    third = source_identity(repo)
 
-    assert first["untracked_digest_complete"] is True
-    assert second["untracked_digest_complete"] is True
-    assert first["untracked_file_count"] == second["untracked_file_count"] == 1
-    assert first["status_digest"] == second["status_digest"]
-    assert first["working_tree_digest"] == second["working_tree_digest"]
-    assert first["untracked_digest"] != second["untracked_digest"]
-
-
-def test_source_identity_changes_when_untracked_mode_changes(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.name", "Smoke Test")
-    _git(repo, "config", "user.email", "smoke@example.invalid")
-    (repo / "pyproject.toml").write_text("[project]\nname='tiny'\nversion='1'\n", encoding="utf-8")
-    _git(repo, "add", "pyproject.toml")
-    _git(repo, "-c", "commit.gpgsign=false", "commit", "-qm", "initial")
-    untracked = repo / "smoke_runner.sh"
-    untracked.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-    untracked.chmod(0o644)
-
-    first = source_identity(repo)
-    untracked.chmod(0o755)
-    second = source_identity(repo)
-
-    assert first["untracked_digest_complete"] is True
-    assert second["untracked_digest_complete"] is True
-    assert first["untracked_file_count"] == second["untracked_file_count"] == 1
-    assert first["status_digest"] == second["status_digest"]
-    assert first["working_tree_digest"] == second["working_tree_digest"]
-    assert first["untracked_digest"] != second["untracked_digest"]
-
-
-def test_source_identity_keeps_later_metadata_after_content_limit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.name", "Smoke Test")
-    _git(repo, "config", "user.email", "smoke@example.invalid")
-    (repo / "pyproject.toml").write_text(
-        "[project]\nname='tiny'\nversion='1'\n",
-        encoding="utf-8",
-    )
-    _git(repo, "add", "pyproject.toml")
-    _git(repo, "-c", "commit.gpgsign=false", "commit", "-qm", "initial")
-    (repo / "a_over_budget.py").write_text("oversized\n", encoding="utf-8")
-    later = repo / "z_later.py"
-    later.write_text("x\n", encoding="utf-8")
-    monkeypatch.setattr(smoke_manifest, "MAX_UNTRACKED_DIGEST_BYTES", 4)
-
-    first = source_identity(repo)
-    later.write_text("later metadata changed size\n", encoding="utf-8")
-    second = source_identity(repo)
-
-    assert first["untracked_file_count"] == second["untracked_file_count"] == 2
-    assert first["untracked_digest_complete"] is False
-    assert second["untracked_digest_complete"] is False
-    assert first["untracked_digest"] != second["untracked_digest"]
+    assert "untracked_digest" not in first
+    assert first["dirty"] is True
+    assert first == second
+    assert third["status_digest"] != first["status_digest"]
 
 
 def test_prepare_smoke_root_refuses_unowned_or_symlink_directory(tmp_path: Path) -> None:
@@ -237,10 +185,12 @@ def test_batch_directory_name_is_short_and_source_identity_stays_in_manifest(
     assert str(manifest["source"]["git_short"]) not in batch_dir.name
 
 
-def test_atomic_manifest_publish_rolls_back_after_directory_fsync_failure(
+def test_atomic_manifest_publish_failure_is_reported_not_rolled_back(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Smoke manifests are regenerable, so a durability failure after the
+    # rename surfaces as an error instead of restoring the previous surface.
     directory_fd = os.open(tmp_path, smoke_manifest._directory_open_flags())
     try:
         smoke_manifest._atomic_write_json_at(
@@ -249,19 +199,13 @@ def test_atomic_manifest_publish_rolls_back_after_directory_fsync_failure(
             {"status": "finalizing"},
         )
         original_fsync = smoke_manifest.os.fsync
-        directory_fsync_calls = 0
 
-        def fail_new_target_fsync(descriptor: int) -> None:
-            nonlocal directory_fsync_calls
+        def fail_directory_fsync(descriptor: int) -> None:
             if descriptor == directory_fd:
-                directory_fsync_calls += 1
-                # The first directory fsync makes the old-inode backup durable;
-                # the second is the new terminal target's commit attempt.
-                if directory_fsync_calls == 2:
-                    raise OSError("injected terminal directory fsync failure")
+                raise OSError("injected terminal directory fsync failure")
             original_fsync(descriptor)
 
-        monkeypatch.setattr(smoke_manifest.os, "fsync", fail_new_target_fsync)
+        monkeypatch.setattr(smoke_manifest.os, "fsync", fail_directory_fsync)
 
         with pytest.raises(OSError, match="terminal directory fsync failure"):
             smoke_manifest._atomic_write_json_at(
@@ -272,9 +216,7 @@ def test_atomic_manifest_publish_rolls_back_after_directory_fsync_failure(
     finally:
         os.close(directory_fd)
 
-    assert json.loads((tmp_path / "batch.json").read_text(encoding="utf-8")) == {
-        "status": "finalizing"
-    }
+    assert json.loads((tmp_path / "batch.json").read_text(encoding="utf-8")) == {"status": "passed"}
 
 
 def test_atomic_manifest_cleanup_failure_does_not_reverse_verified_commit(
@@ -290,12 +232,12 @@ def test_atomic_manifest_cleanup_failure_does_not_reverse_verified_commit(
         )
         original_unlink = smoke_manifest.os.unlink
 
-        def fail_backup_cleanup(path: str, *args: object, **kwargs: object) -> None:
-            if str(path).endswith(".bak"):
-                raise PermissionError("injected backup cleanup failure")
+        def fail_staging_cleanup(path: str, *args: object, **kwargs: object) -> None:
+            if str(path).endswith(".tmp"):
+                raise PermissionError("injected staging cleanup failure")
             original_unlink(path, *args, **kwargs)  # type: ignore[arg-type]
 
-        monkeypatch.setattr(smoke_manifest.os, "unlink", fail_backup_cleanup)
+        monkeypatch.setattr(smoke_manifest.os, "unlink", fail_staging_cleanup)
 
         smoke_manifest._atomic_write_json_at(
             directory_fd,

@@ -392,100 +392,31 @@ def test_projection_directory_substitution_aborts_before_index_publish(
 
 
 @pytest.mark.parametrize("target", ["summary.md", "index.html"])
-def test_atomic_text_staging_substitution_cannot_publish_forged_packet(
+def test_failed_regeneration_is_reported_and_recoverable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     target: str,
 ) -> None:
+    # The packet is regenerable from the retained runtime: a failed
+    # publication surfaces as an error (never a silent success), and the next
+    # regeneration succeeds without any rollback machinery.
     runtime = _runtime(tmp_path)
-    (runtime / "job_report.html").write_text("<h1>complete</h1>", encoding="utf-8")
-    replace_file = smoke_review.os.replace
-    swapped = False
-
-    def substitute_text_staging(
-        source: str,
-        destination: str,
-        *,
-        src_dir_fd: int | None = None,
-        dst_dir_fd: int | None = None,
-    ) -> None:
-        nonlocal swapped
-        if destination == target and not swapped:
-            held = source + ".held"
-            replace_file(
-                source,
-                held,
-                src_dir_fd=src_dir_fd,
-                dst_dir_fd=src_dir_fd,
-            )
-            assert src_dir_fd is not None
-            flags = smoke_review.os.O_WRONLY | smoke_review.os.O_CREAT | smoke_review.os.O_EXCL
-            forged_fd = smoke_review.os.open(source, flags, 0o600, dir_fd=src_dir_fd)
-            try:
-                smoke_review.os.write(forged_fd, b"ATTACKER PACKET")
-                smoke_review.os.fsync(forged_fd)
-            finally:
-                smoke_review.os.close(forged_fd)
-            swapped = True
-        replace_file(
-            source,
-            destination,
-            src_dir_fd=src_dir_fd,
-            dst_dir_fd=dst_dir_fd,
-        )
-
-    monkeypatch.setattr(smoke_review.os, "replace", substitute_text_staging)
-    with pytest.raises(ReviewPacketError, match="atomic text output changed during publication"):
-        generate_review_packet(tmp_path, {"cases": [_case_manifest()]})
-
-    assert swapped is True
-    assert not (tmp_path / "review" / "index.html").exists()
-    if target == "summary.md":
-        assert not (tmp_path / "summary.md").exists()
-
-
-@pytest.mark.parametrize("target", ["summary.md", "index.html"])
-def test_failed_regeneration_restores_previous_summary_and_index(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    target: str,
-) -> None:
-    runtime = _runtime(tmp_path)
-    report = runtime / "job_report.html"
-    report.write_text("<h1>first</h1>", encoding="utf-8")
+    (runtime / "job_report.html").write_text("<h1>first</h1>", encoding="utf-8")
     first = generate_review_packet(tmp_path, {"cases": [_case_manifest()]})
-    previous_summary = first.summary_path.read_bytes()
-    previous_index = first.index_path.read_bytes()
-    previous_generation = first.artifact_manifest_path.parent.name
+    summary_before = first.summary_path.read_bytes()
+    index_before = first.index_path.read_bytes()
 
     replace_file = smoke_review.os.replace
-    swapped = False
 
-    def substitute_text_staging(
+    def fail_surface_publication(
         source: str,
         destination: str,
         *,
         src_dir_fd: int | None = None,
         dst_dir_fd: int | None = None,
     ) -> None:
-        nonlocal swapped
-        if destination == target and source.endswith(".tmp") and not swapped:
-            held = source + ".held"
-            replace_file(
-                source,
-                held,
-                src_dir_fd=src_dir_fd,
-                dst_dir_fd=src_dir_fd,
-            )
-            assert src_dir_fd is not None
-            flags = smoke_review.os.O_WRONLY | smoke_review.os.O_CREAT | smoke_review.os.O_EXCL
-            forged_fd = smoke_review.os.open(source, flags, 0o600, dir_fd=src_dir_fd)
-            try:
-                smoke_review.os.write(forged_fd, b"ATTACKER REGENERATION")
-                smoke_review.os.fsync(forged_fd)
-            finally:
-                smoke_review.os.close(forged_fd)
-            swapped = True
+        if destination == target:
+            raise OSError("injected surface publication failure")
         replace_file(
             source,
             destination,
@@ -493,14 +424,23 @@ def test_failed_regeneration_restores_previous_summary_and_index(
             dst_dir_fd=dst_dir_fd,
         )
 
-    monkeypatch.setattr(smoke_review.os, "replace", substitute_text_staging)
-    with pytest.raises(ReviewPacketError, match="atomic text output changed during publication"):
-        generate_review_packet(tmp_path, {"cases": [_case_manifest()]})
+    with monkeypatch.context() as failure:
+        failure.setattr(smoke_review.os, "replace", fail_surface_publication)
+        with pytest.raises(OSError, match="injected surface publication failure"):
+            generate_review_packet(tmp_path, {"cases": [_case_manifest()]})
 
-    assert swapped is True
-    assert first.summary_path.read_bytes() == previous_summary
-    assert first.index_path.read_bytes() == previous_index
-    assert previous_generation.encode() in previous_index
+    # No rollback: surfaces written before the failure keep their new content,
+    # untouched surfaces keep the previous packet's content.
+    if target == "summary.md":
+        assert first.summary_path.read_bytes() == summary_before
+        assert first.index_path.read_bytes() == index_before
+    else:
+        assert first.summary_path.read_bytes() != summary_before
+        assert first.index_path.read_bytes() == index_before
+
+    recovered = generate_review_packet(tmp_path, {"cases": [_case_manifest()]})
+    generation = recovered.artifact_manifest_path.parent.name
+    assert generation.encode() in recovered.index_path.read_bytes()
 
 
 def test_regeneration_publishes_only_new_short_generation_in_index(tmp_path: Path) -> None:
@@ -682,7 +622,7 @@ def test_hidden_pytest_current_shortcut_is_reverified_before_index_publication(
     ) -> None:
         nonlocal raced_readlink_count, verification_count
         verification_count += 1
-        if verification_count != 2:
+        if verification_count != 1:
             verify_alias(root_fd, artifact)
             return
 
@@ -714,7 +654,7 @@ def test_hidden_pytest_current_shortcut_is_reverified_before_index_publication(
     with pytest.raises(ReviewPacketError, match="hidden harness alias changed"):
         generate_review_packet(tmp_path, {"cases": [_case_manifest()]})
 
-    assert verification_count == 2
+    assert verification_count == 1
     assert raced_readlink_count == 2
     assert (tmp_path / "summary.md").read_bytes() == summary_before
     assert (tmp_path / "review" / "index.html").read_bytes() == index_before

@@ -352,9 +352,6 @@ def test_run_smoke_suite_fails_when_source_changes_during_batch(
         "dirty": True,
         "working_tree_digest": "before",
         "status_digest": "status",
-        "untracked_digest": "unchanged",
-        "untracked_file_count": 0,
-        "untracked_digest_complete": True,
     }
     source_at_end = {
         **source_at_start,
@@ -386,8 +383,8 @@ def test_run_smoke_suite_fails_when_source_changes_during_batch(
 @pytest.mark.parametrize(
     "identity_override",
     [
-        pytest.param({"untracked_digest_complete": False}, id="incomplete"),
         pytest.param({"working_tree_digest": "unavailable"}, id="unavailable"),
+        pytest.param({"status_digest": ""}, id="missing"),
     ],
 )
 def test_run_smoke_suite_retains_review_but_fails_for_untrusted_source_identity(
@@ -406,9 +403,6 @@ def test_run_smoke_suite_retains_review_but_fails_for_untrusted_source_identity(
         "dirty": True,
         "working_tree_digest": "tracked",
         "status_digest": "status",
-        "untracked_digest": "bounded",
-        "untracked_file_count": 2,
-        "untracked_digest_complete": True,
     }
     untrusted_source.update(identity_override)
     monkeypatch.setattr(
