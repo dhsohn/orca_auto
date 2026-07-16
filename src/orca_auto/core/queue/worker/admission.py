@@ -100,9 +100,11 @@ def dequeue_next_across_roots(
     selected_root: Path | None = None
     selected_queue_id = ""
     selected_entry: T | None = None
-    selected_key: tuple[int, str, int, int] | None = None
+    selected_key: tuple[int, str, int] | None = None
 
     for root_index, root in enumerate(roots):
+        champion_entry: T | None = None
+        champion_key: tuple[int, int] | None = None
         for entry_index, entry in enumerate(list_queue_fn(root)):
             status_value = getattr(getattr(entry, "status", None), "value", None)
             status = str(status_value).strip().lower()
@@ -114,19 +116,33 @@ def dequeue_next_across_roots(
                 if dequeue_entry_fn is None:
                     break
                 continue
+            # Within one queue file the row position is the arrival order:
+            # rows are only ever appended under the queue lock. The wall-clock
+            # enqueued_at is not monotonic (WSL2 skew corrections step it
+            # backwards), so it must not reorder same-priority dispatch.
             key = (
                 normalize_queue_priority(getattr(entry, "priority", None)),
-                str(getattr(entry, "enqueued_at", "")),
-                root_index,
                 entry_index,
             )
-            if selected_key is None or key < selected_key:
-                selected_key = key
-                selected_root = root
-                selected_queue_id = str(getattr(entry, "queue_id", "")).strip()
-                selected_entry = entry
+            if champion_key is None or key < champion_key:
+                champion_key = key
+                champion_entry = entry
             if dequeue_entry_fn is None:
                 break
+        if champion_entry is None or champion_key is None:
+            continue
+        # Different queue files share no arrival order, so the wall clock
+        # remains the cross-root fairness comparator.
+        root_key = (
+            champion_key[0],
+            str(getattr(champion_entry, "enqueued_at", "")),
+            root_index,
+        )
+        if selected_key is None or root_key < selected_key:
+            selected_key = root_key
+            selected_root = root
+            selected_queue_id = str(getattr(champion_entry, "queue_id", "")).strip()
+            selected_entry = champion_entry
 
     if selected_root is None:
         return None

@@ -397,6 +397,37 @@ def test_dequeue_next_across_roots_accept_entry_fn_skips_other_engine_entries(
     ) == (orca_root, unlabeled)
 
 
+def test_dequeue_next_across_roots_keeps_root_fifo_when_the_clock_steps_backwards(
+    tmp_path: Path,
+) -> None:
+    # Regression: within one root the row position is the arrival order. A
+    # WSL2 skew correction between two enqueues can stamp the first arrival
+    # with a later enqueued_at than the second; the old sort key then
+    # dispatched the second arrival first
+    # (tests/test_queue_worker.py::TestFillSlots flake, 2026-07-16).
+    root = tmp_path / "queue"
+    first_arrival = _entry("q-first", priority=1, enqueued_at="2026-07-16T14:18:22.5+00:00")
+    second_arrival = _entry("q-second", priority=1, enqueued_at="2026-07-16T14:18:19.4+00:00")
+    entries = [first_arrival, second_arrival]
+
+    def dequeue_entry(
+        _root: Path,
+        queue_id: str,
+        **_kwargs: object,
+    ) -> SimpleNamespace | None:
+        return next((entry for entry in entries if entry.queue_id == queue_id), None)
+
+    result = worker_common.dequeue_next_across_roots(
+        (root,),
+        list_queue_fn=lambda _root: entries,
+        dequeue_next_fn=lambda _root: pytest.fail("id dequeuer should claim the selection"),
+        dequeue_entry_fn=dequeue_entry,
+        accept_entry_fn=lambda _entry: True,
+    )
+
+    assert result == (root, first_arrival)
+
+
 def test_dequeue_next_across_roots_dequeues_selected_queue_id(tmp_path: Path) -> None:
     first = tmp_path / "first"
     second = tmp_path / "second"

@@ -524,8 +524,12 @@ def dequeue_next(
     accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
 ) -> QueueEntry | None:
     def dequeue(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
+        # Within one queue file the row position is the arrival order: rows are
+        # only ever appended under the queue lock. The wall-clock enqueued_at
+        # is not monotonic (WSL2 skew corrections step it backwards), so it
+        # must not reorder same-priority dispatch.
         pending = [
-            (entry.priority, entry.enqueued_at, index, entry)
+            (entry.priority, index, entry)
             for index, entry in enumerate(entries)
             if entry.status == QueueStatus.PENDING
             and not entry.cancel_requested
@@ -534,7 +538,7 @@ def dequeue_next(
         ]
         if not pending:
             return None, False
-        _, _, index, current = min(pending, key=lambda item: (item[0], item[1], item[2]))
+        _, index, current = min(pending, key=lambda item: (item[0], item[1]))
         updated = replace(current, status=QueueStatus.RUNNING, started_at=now_utc_iso())
         entries[index] = updated
         return updated, True

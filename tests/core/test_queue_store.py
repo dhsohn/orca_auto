@@ -908,10 +908,14 @@ def test_enqueue_entry_supports_key_duplicate_policy_with_force(
         )
 
 
-def test_dequeue_next_respects_priority_time_and_insertion_order(
+def test_dequeue_next_respects_priority_then_arrival_order(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    # Row position is the arrival order (rows are only appended under the
+    # queue lock). Within one priority class the file order decides dispatch;
+    # the wall-clock enqueued_at must not, because a stepped clock (WSL2 skew
+    # correction) can stamp a later arrival with an earlier time.
     _install_deterministic_helpers(monkeypatch)
 
     _queue_file(tmp_path).write_text(
@@ -928,8 +932,33 @@ def test_dequeue_next_respects_priority_time_and_insertion_order(
     )
 
     picked = [store.dequeue_next(tmp_path) for _ in range(4)]
-    assert [entry.queue_id for entry in picked if entry is not None] == ["q-3", "q-4", "q-2", "q-1"]
+    assert [entry.queue_id for entry in picked if entry is not None] == ["q-2", "q-3", "q-4", "q-1"]
     assert store.dequeue_next(tmp_path) is None
+
+
+def test_dequeue_next_keeps_fifo_when_the_clock_steps_backwards(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Regression: a WSL2 skew correction between two enqueues stamped the
+    # first arrival ~3s later than the second, and the old enqueued_at sort
+    # key dispatched the second arrival first
+    # (tests/test_queue_worker.py::TestFillSlots flake, 2026-07-16).
+    monkeypatch.setattr(store, "file_lock", lambda *_args, **_kwargs: nullcontext())
+    stamps = iter(
+        [
+            "2026-07-16T14:18:22.500000+00:00",  # first enqueue, skewed ahead
+            "2026-07-16T14:18:19.400000+00:00",  # second enqueue, corrected clock
+        ]
+    )
+    monkeypatch.setattr(store, "now_utc_iso", lambda: next(stamps, "2026-07-16T14:18:25+00:00"))
+
+    first = store.enqueue(tmp_path, app_name="app", task_id="a", task_kind="kind", engine="e")
+    second = store.enqueue(tmp_path, app_name="app", task_id="b", task_kind="kind", engine="e")
+    assert first.enqueued_at > second.enqueued_at
+
+    picked = store.dequeue_next(tmp_path)
+    assert picked is not None and picked.queue_id == first.queue_id
 
 
 def test_dequeue_next_accept_entry_fn_skips_other_engine_entries(
