@@ -11,6 +11,10 @@ from typing import Any
 
 from orca_auto.core.notifications import escape_html
 from orca_auto.core.paths import is_subpath
+from orca_auto.orca.parser.patterns import (
+    FINAL_SINGLE_POINT_ENERGY_RE,
+    final_single_point_energy_value,
+)
 
 from .parser import parse_opt_progress
 from .run_snapshot import (
@@ -37,7 +41,6 @@ __all__ = [
     "status_icon",
 ]
 
-_ENERGY_RE = re.compile(r"FINAL SINGLE POINT ENERGY\s+([-\d.]+)")
 _MAX_CYCLES_RE = re.compile(r"Max\.\s+no of cycles\s+MaxIter\s+\.\.\.\.\s+(\d+)", re.IGNORECASE)
 _MAX_PROGRESS_FILE_BYTES = 128 * 1024 * 1024
 _RUNNING_SHOW_LIMIT = 8
@@ -252,9 +255,12 @@ def _build_progress_snapshot(
                 energy_hartree = best_step.energy_hartree
 
     tail_text = _read_tail_text(out_path, max_bytes=32768)
-    energy_matches = _ENERGY_RE.findall(tail_text)
+    energy_matches = list(FINAL_SINGLE_POINT_ENERGY_RE.finditer(tail_text))
     if energy_matches and energy_hartree is None:
-        energy_hartree = float(energy_matches[-1])
+        try:
+            energy_hartree = final_single_point_energy_value(energy_matches[-1].group(1))
+        except ValueError:
+            energy_hartree = None
 
     updated_label = _updated_ago_text(out_path)
 

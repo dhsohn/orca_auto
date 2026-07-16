@@ -10,9 +10,10 @@ from .parser.extractors import parse_coordinates, parse_input_line, parse_wall_t
 from .parser.io import read_orca_text
 from .parser.patterns import (
     _CONVERGENCE_ITEM_RE,
-    _ENERGY_RE,
     _OPT_CONVERGED_RE,
     _OPT_CYCLE_RE,
+    FINAL_SINGLE_POINT_ENERGY_RE,
+    final_single_point_energy_value,
 )
 
 
@@ -74,7 +75,14 @@ def parse_opt_progress(file_path: str) -> OptProgress:
     if not cycle_positions:
         return progress
 
-    energy_positions = [(m.start(), float(m.group(1))) for m in _ENERGY_RE.finditer(text)]
+    energy_positions = []
+    for energy_match in FINAL_SINGLE_POINT_ENERGY_RE.finditer(text):
+        try:
+            energy_positions.append(
+                (energy_match.start(), final_single_point_energy_value(energy_match.group(1)))
+            )
+        except ValueError:
+            continue
 
     for i, (cycle_start, cycle_num) in enumerate(cycle_positions):
         cycle_end = cycle_positions[i + 1][0] if i + 1 < len(cycle_positions) else len(text)

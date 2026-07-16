@@ -385,3 +385,46 @@ def test_parser_derives_gibbs_correction_when_line_absent(tmp_path: Path) -> Non
     result = parse_orca_output(str(out_file))
 
     assert result.gibbs_correction == pytest.approx(-100.38210988 - (-100.5))
+
+
+def test_final_energy_pattern_is_line_anchored_and_parses_d_exponent() -> None:
+    from orca_auto.orca.parser.patterns import (
+        FINAL_SINGLE_POINT_ENERGY_BYTES_RE,
+        FINAL_SINGLE_POINT_ENERGY_RE,
+        final_single_point_energy_value,
+    )
+
+    text = (
+        "note: FINAL SINGLE POINT ENERGY -1.0 mentioned mid-line\n"
+        "FINAL SINGLE POINT ENERGY   -76.123456789012\r\n"
+        "FINAL SINGLE POINT ENERGY   1.2.3\n"
+        "FINAL SINGLE POINT ENERGY   -7.5D-01\n"
+        "FINAL SINGLE POINT ENERGY  -137.654063943692   (SCF not fully converged!)\n"
+    )
+
+    matches = list(FINAL_SINGLE_POINT_ENERGY_RE.finditer(text))
+    values = [final_single_point_energy_value(match.group(1)) for match in matches]
+
+    # The mid-line phrase and the malformed number never match; \r\n line
+    # endings and the Fortran D exponent parse; the real ORCA near-converged
+    # annotation line still yields its value, with the annotation captured
+    # separately so consumers can reject it.
+    assert values == [
+        pytest.approx(-76.123456789012),
+        pytest.approx(-0.75),
+        pytest.approx(-137.654063943692),
+    ]
+    assert [match.group(2) for match in matches] == [
+        None,
+        None,
+        "(SCF not fully converged!)",
+    ]
+
+    byte_values = [
+        final_single_point_energy_value(match.group(1))
+        for match in FINAL_SINGLE_POINT_ENERGY_BYTES_RE.finditer(text.encode("ascii"))
+    ]
+    assert byte_values == values
+
+    with pytest.raises(ValueError, match="non-finite"):
+        final_single_point_energy_value("1E999")

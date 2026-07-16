@@ -37,7 +37,6 @@ from .extractors import (
 from .io import read_orca_text as _read_orca_text
 from .patterns import (
     _CHARGE_MULT_RE,
-    _ENERGY_RE,
     _ENTHALPY_RE,
     _GIBBS_CORRECTION_RE,
     _GIBBS_RE,
@@ -45,6 +44,8 @@ from .patterns import (
     _OPT_NOT_CONVERGED_RE,
     _THERMO_TEMPERATURE_RE,
     _ZPE_RE,
+    FINAL_SINGLE_POINT_ENERGY_RE,
+    final_single_point_energy_value,
 )
 
 # ---------------------------------------------------------------------------
@@ -179,10 +180,13 @@ def _populate_coordinates(result: OrcaResult, text: str) -> None:
 
 
 def _populate_energy(result: OrcaResult, text: str) -> None:
-    energy_matches = _ENERGY_RE.findall(text)
+    energy_matches = list(FINAL_SINGLE_POINT_ENERGY_RE.finditer(text))
     if not energy_matches:
         return
-    energy = float(energy_matches[-1])
+    try:
+        energy = final_single_point_energy_value(energy_matches[-1].group(1))
+    except ValueError:
+        return
     result.energy_hartree = energy
     result.energy_ev = energy * HARTREE_TO_EV
     result.energy_kcalmol = energy * KCAL_PER_HARTREE

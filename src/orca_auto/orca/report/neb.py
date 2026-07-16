@@ -9,6 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.orca.parser.patterns import (
+    FINAL_SINGLE_POINT_ENERGY_RE,
+    final_single_point_energy_value,
+)
+
 from ..input_blocks import file_route_lines
 from ..orca_opt_progress import OptProgress, parse_opt_progress
 from ..parser import KCAL_PER_HARTREE
@@ -68,7 +73,6 @@ _POSSIBLE_INTERMEDIATE_RE = re.compile(
 _NEB_CONVERGED_RE = re.compile(r"THE\s+NEB\s+OPTIMIZATION\s+HAS\s+CONVERGED", re.I)
 _TS_CONVERGED_RE = re.compile(r"THE\s+TS\s+OPTIMIZATION\s+HAS\s+CONVERGED", re.I)
 _GEOM_CYCLE_RE = re.compile(r"Geometry Optimization Cycle\s+(\d+)", re.I)
-_FINAL_ENERGY_RE = re.compile(r"FINAL SINGLE POINT ENERGY\s+([-\d.]+)")
 
 
 @dataclass(frozen=True)
@@ -336,9 +340,14 @@ def _parse_ts_refinement_steps(out_path: Path) -> tuple[tuple[int, float], ...]:
     cycle_positions = [
         (match.start(), int(match.group(1))) for match in _GEOM_CYCLE_RE.finditer(text)
     ]
-    energy_positions = [
-        (match.start(), float(match.group(1))) for match in _FINAL_ENERGY_RE.finditer(text)
-    ]
+    energy_positions = []
+    for energy_match in FINAL_SINGLE_POINT_ENERGY_RE.finditer(text):
+        try:
+            energy_positions.append(
+                (energy_match.start(), final_single_point_energy_value(energy_match.group(1)))
+            )
+        except ValueError:
+            continue
     steps: list[tuple[int, float]] = []
     for position, (cycle_start, cycle_num) in enumerate(cycle_positions):
         cycle_end = (
