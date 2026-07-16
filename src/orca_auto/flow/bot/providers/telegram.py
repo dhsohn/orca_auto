@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-import html
 import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from orca_auto.core.config import TelegramConfig
-from orca_auto.core.messaging import SendResult
+from orca_auto.core.messaging import (
+    MAX_TELEGRAM_MESSAGE_LENGTH,
+    SendResult,
+    TelegramApiClient,
+    escape_html_text,
+    split_telegram_message,
+)
 from orca_auto.core.messaging.interactive import (
     ActionRows,
     Actor,
@@ -19,7 +24,6 @@ from orca_auto.core.messaging.interactive import (
     IncomingCommand,
 )
 from orca_auto.core.messaging.render_telegram import render_telegram_chunks
-from orca_auto.core.notifications import TelegramApiClient, split_telegram_message
 
 from ..application import BotApplication
 
@@ -155,12 +159,12 @@ def _keyboard(actions: ActionRows | None) -> dict[str, object]:
 
 
 def _escaped_preformatted_chunks(text: str) -> list[str]:
-    limit = 4096 - _PRE_WRAPPER_LENGTH
+    limit = MAX_TELEGRAM_MESSAGE_LENGTH - _PRE_WRAPPER_LENGTH
     chunks: list[str] = []
     current: list[str] = []
     current_size = 0
     for character in text:
-        escaped = html.escape(character, quote=False)
+        escaped = escape_html_text(character)
         if current and current_size + len(escaped) > limit:
             chunks.append("".join(current))
             current = []
@@ -179,7 +183,10 @@ def _reply_chunks(reply: BotReply) -> list[tuple[str, str | None]]:
         return [
             (f"<pre>{chunk}</pre>", "HTML") for chunk in _escaped_preformatted_chunks(reply.text)
         ]
-    return [(chunk, None) for chunk in split_telegram_message(reply.text, limit=4096)]
+    return [
+        (chunk, None)
+        for chunk in split_telegram_message(reply.text, limit=MAX_TELEGRAM_MESSAGE_LENGTH)
+    ]
 
 
 def _telegram_numeric(value: str) -> int | str:

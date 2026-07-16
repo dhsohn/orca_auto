@@ -12,7 +12,7 @@ from .indexing import (
     resolve_job_location,
     upsert_job_location,
 )
-from .notifications import TelegramSendResult, TelegramTransport, build_telegram_transport
+from .messaging import TelegramSendResult, TelegramTransport, build_telegram_transport
 from .queue.types import QueueEntry, QueueStatus
 
 __all__ = [

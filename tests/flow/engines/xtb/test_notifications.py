@@ -7,8 +7,13 @@ import pytest
 
 from orca_auto.core.config import CommonRuntimeConfig, TelegramConfig
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
-from orca_auto.core.messaging import Message, render_discord_embed, render_telegram
-from orca_auto.core.notifications import TelegramSendResult, _engine_transport
+from orca_auto.core.messaging import (
+    Message,
+    TelegramSendResult,
+    render_discord_embed,
+    render_telegram,
+)
+from orca_auto.core.notifications import _engine_transport
 from orca_auto.core.notifications import engines as notifications
 
 

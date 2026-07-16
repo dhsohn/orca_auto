@@ -10,14 +10,11 @@ import logging
 from dataclasses import dataclass
 
 from orca_auto.core.config import TelegramConfig
-from orca_auto.core.notifications import (
-    build_telegram_transport,
-    send_rendered_telegram_chunks,
-)
 
 from .channel import SendResult
 from .render_telegram import render_telegram_chunks
 from .richtext import Message
+from .telegram_transport import build_telegram_transport, send_rendered_telegram_chunks
 
 
 @dataclass(frozen=True)

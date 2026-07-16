@@ -7,9 +7,13 @@ from orca_auto.core.utils.coercion import normalize_text as _normalize_text
 MAX_TELEGRAM_MESSAGE_LENGTH = 4096
 
 
-def escape_html(value: Any) -> str:
-    text = _normalize_text(value)
+def escape_html_text(text: str) -> str:
+    """Escape the Telegram-HTML metacharacters without normalizing whitespace."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def escape_html(value: Any) -> str:
+    return escape_html_text(_normalize_text(value))
 
 
 def html_code(value: Any) -> str:
@@ -85,6 +89,7 @@ __all__ = [
     "_flush_telegram_chunk",
     "_split_long_segment",
     "escape_html",
+    "escape_html_text",
     "html_code",
     "split_telegram_message",
 ]

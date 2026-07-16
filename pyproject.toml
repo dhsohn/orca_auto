@@ -99,8 +99,8 @@ module = [
     "orca_auto.core.indexing.text",
     "orca_auto.core.notifications.engine_requests",
     "orca_auto.core.notifications.engine_validation",
-    "orca_auto.core.notifications.telegram_config",
-    "orca_auto.core.notifications.telegram_format",
+    "orca_auto.core.messaging.telegram_config",
+    "orca_auto.core.messaging.telegram_format",
     "orca_auto.core.paths",
     "orca_auto.core.paths.*",
     "orca_auto.core.queue.cancellable",
@@ -150,6 +150,12 @@ layers = [
     "orca_auto.xtb_md",
     "orca_auto.core",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Messaging never imports the notification layer"
+type = "forbidden"
+source_modules = ["orca_auto.core.messaging"]
+forbidden_modules = ["orca_auto.core.notifications"]
 
 [[tool.importlinter.contracts]]
 name = "Standalone xtb_md is independent from ORCA"
