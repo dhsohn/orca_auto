@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from dataclasses import replace
+from itertools import count
 from pathlib import Path
 from unittest.mock import patch
 
@@ -315,13 +316,23 @@ class TestQueueStore(unittest.TestCase):
                 "terminal_status": "",
             },
         }
-        mark_completed(
-            self.root,
-            protected.queue_id,
-            metadata_update={"orca_terminal_replay": marker},
-        )
-        mark_failed(self.root, ordinary.queue_id)
-        mark_completed(self.root, newest.queue_id)
+        # keep_last orders terminal rows by finished_at with the random
+        # queue-id hex as the only tiebreaker. Relying on the real clock for
+        # the mark order makes this test hostage to timestamp ties and to
+        # non-monotonic clocks (WSL2 skew corrections can step backwards
+        # between marks), either of which lets the wrong row win the
+        # keep_last slot. Stamp explicit, strictly increasing times so
+        # "newest" is genuinely the newest, like the store-level keep_last
+        # tests do.
+        finish_stamps = (f"2026-03-10T00:00:{index:02d}.000000+00:00" for index in count(1))
+        with patch.object(queue_store, "now_utc_iso", side_effect=lambda: next(finish_stamps)):
+            mark_completed(
+                self.root,
+                protected.queue_id,
+                metadata_update={"orca_terminal_replay": marker},
+            )
+            mark_failed(self.root, ordinary.queue_id)
+            mark_completed(self.root, newest.queue_id)
 
         self.assertEqual(clear_terminal(self.root, keep_last=1), 0)
         self._finish_terminal_replay(ordinary.queue_id)
