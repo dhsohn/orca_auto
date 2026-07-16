@@ -572,6 +572,13 @@ ORCA 고유 노트:
 
 - `xtb_md_job.yaml`은 `runs_root` 아래 standalone 디렉터리에서만 인식하며 워크플로우를
   만들거나 결합하지 않습니다. 최적화된 시작 구조를 강하게 권장합니다.
+- queued 기록 발행이 실패한 제출도 durable하게 큐에 남습니다:
+  `"status": "queued"`에 `"publication": "deferred"`와 경고를 함께 보고하고,
+  행이 실행되기 전에 worker의 pre-claim repair pass가 기록을 발행합니다.
+  복구 불가능한 행(예: job 디렉터리가 심링크로 치환됨)이 남아 있는 동안
+  worker는 xTB-MD admission 전체를 멈추고 "queue admission paused"를
+  로그로 남깁니다. 해당 행을 취소(`queue cancel <queue_id>`)하면 엔진이
+  다시 열립니다.
 - 필수 필드는 `schema_version: 1`, 로컬 파일명 `input_xyz`, `gfn`(`1` 또는 `2`),
   `ensemble`(`nvt` 또는 `nve`), 유한한 양수 `temperature_k`, `time_ps`, `step_fs`,
   `dump_fs`, 양의 정수 `walltime_seconds`입니다. 알 수 없는 필드는 거부합니다.

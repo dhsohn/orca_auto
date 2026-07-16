@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import secrets
 from collections.abc import Sequence
 from pathlib import Path
@@ -15,13 +14,7 @@ from orca_auto.core.commands.run_dir import (
     resolve_engine_job_dir,
 )
 from orca_auto.core.config.engines import load_xtb_md_config
-from orca_auto.core.queue import (
-    DuplicateQueueEntryError,
-    enqueue,
-    list_queue,
-    mark_failed,
-    update_metadata,
-)
+from orca_auto.core.queue import DuplicateQueueEntryError
 from orca_auto.core.queue.engine.input_snapshot import (
     cleanup_unowned_input_snapshot_namespace,
     reserve_input_snapshot_namespace,
@@ -38,18 +31,12 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     finalize_queued_snapshot_intent,
     transition_snapshot_intent,
 )
-from orca_auto.core.queue.generation import queue_entries_same_generation
-from orca_auto.core.queue.publication import (
-    QUEUE_RECORD_SYNC_ABORTED,
-    QUEUE_RECORD_SYNC_COMPLETE,
-    QUEUE_RECORD_SYNC_KEY,
-    QUEUE_RECORD_SYNC_PREPARING,
-    QUEUE_RECORD_SYNC_TOKEN_KEY,
-    queue_record_publication_lock,
-    queue_record_sync_metadata,
-    queue_record_sync_state,
+from orca_auto.core.queue.enqueue_publication import (
+    EnqueuePublicationOutcome,
+    EnqueuePublicationOutcomeUnknown,
+    EnqueuePublicationSpec,
+    run_enqueue_publication,
 )
-from orca_auto.core.queue.store import QueueAfterCommitError
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.core.utils.persistence import timestamped_token
@@ -98,12 +85,6 @@ def _snapshot_cleanup_job_dir(
         if (int(candidate_stat.st_dev), int(candidate_stat.st_ino)) == expected_identity:
             return candidate
     raise ValueError("xTB-MD cleanup target identity changed after submission")
-
-
-class XtbMdSubmissionError(RuntimeError):
-    def __init__(self, message: str, *, entry: QueueEntry | None = None):
-        super().__init__(message)
-        self.entry = entry
 
 
 def resolve_job_dir(cfg: Any, raw_job_dir: str) -> Path:
@@ -326,74 +307,26 @@ def publish_queued_record(cfg: Any, entry: QueueEntry) -> None:
     persist_job_artifact(cfg, entry, payload)
 
 
-def _fence_uncompensated_xtb_md_enqueue(
-    queue_root: Path,
-    *,
-    error: QueueAfterCommitError,
-    publication_token: str,
-    task_id: str,
-) -> QueueEntry | None:
-    """Terminally fence one exact provisional row without publishing it."""
-
-    entry = error.provisional_result
-    metadata = entry.metadata if isinstance(entry, QueueEntry) else {}
-    if (
-        not isinstance(entry, QueueEntry)
-        or entry.task_id != task_id
-        or str(metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY) or "") != publication_token
-    ):
-        logger.error("Cannot identify the provisional xTB-MD row after compensation failure")
-        return None
-    try:
-        fenced = mark_failed(
-            queue_root,
-            entry.queue_id,
-            error=(
-                "queue_after_commit_guard_failed:"
-                f"compensation={error.compensation_outcome}:"
-                f"{error.after_commit_error.__class__.__name__}:"
-                f"{error.after_commit_error}"
-            ),
-            metadata_update=queue_record_sync_metadata(
-                QUEUE_RECORD_SYNC_ABORTED,
-                token=publication_token,
-                owner_pid=0,
-            ),
-            expected_entry=entry,
-            expected_task_id=task_id,
-        )
-    except BaseException:  # noqa: BLE001 - preserve the guard-origin failure path
-        logger.exception(
-            "Failed to terminally fence the provisional xTB-MD row: queue_id=%s",
-            entry.queue_id,
-        )
-        return None
-    if fenced is None:
-        logger.error(
-            "Provisional xTB-MD row was not visible for terminal fencing: queue_id=%s",
-            entry.queue_id,
-        )
-    return fenced
-
-
 def _enqueue_submission(
     cfg: Any,
     job_dir: Path,
     *,
     priority: int,
-) -> QueueEntry:
+) -> EnqueuePublicationOutcome:
     assert_run_dir_publication_allowed("xTB-MD target mutation preflight")
     metadata, task_id, queue_root = _build_submission(cfg, job_dir)
-    publication_token = timestamped_token("record_sync", token_bytes=16)
-    metadata.update(
-        queue_record_sync_metadata(
-            QUEUE_RECORD_SYNC_PREPARING,
-            token=publication_token,
-            owner_pid=os.getpid(),
-        )
-    )
     snapshot_namespace = str(metadata["execution_snapshot"][SNAPSHOT_INTENT_TOKEN_KEY])
-    entry: QueueEntry | None = None
+
+    def cleanup_submission_snapshot() -> None:
+        cleanup_unowned_input_snapshot_namespace(
+            _snapshot_cleanup_job_dir(
+                job_dir,
+                metadata["execution_snapshot"].get(JOB_PATH_IDENTITY_KEY),
+            ),
+            snapshot_namespace,
+        )
+        discard_snapshot_intent_if_generations_absent(queue_root, snapshot_namespace)
+
     try:
         transition_snapshot_intent(
             queue_root,
@@ -401,136 +334,34 @@ def _enqueue_submission(
             target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
             expected_states={SNAPSHOT_INTENT_STATE_CREATING},
         )
-        entry = enqueue(
-            queue_root,
-            app_name=APP_NAME,
-            task_id=task_id,
-            task_kind=TASK_KIND,
-            engine=ENGINE,
-            priority=priority,
-            metadata=metadata,
-            duplicate_policy=_reject_active_job_dir_duplicate,
-            before_commit_fn=lambda: assert_run_dir_publication_allowed(
-                "xTB-MD durable queue pre-commit"
-            ),
-            after_commit_fn=lambda: assert_run_dir_publication_allowed(
-                "xTB-MD durable queue post-commit"
-            ),
-        )
-    except QueueAfterCommitError as exc:
-        if exc.compensation_succeeded:
-            try:
-                cleanup_unowned_input_snapshot_namespace(
-                    _snapshot_cleanup_job_dir(
-                        job_dir,
-                        metadata["execution_snapshot"].get(JOB_PATH_IDENTITY_KEY),
-                    ),
-                    snapshot_namespace,
-                )
-                discard_snapshot_intent_if_generations_absent(
-                    queue_root,
-                    snapshot_namespace,
-                )
-            except BaseException:  # noqa: BLE001 - preserve the guard-origin failure path
-                logger.exception(
-                    "Failed to clean the compensated xTB-MD submission snapshot; retaining it"
-                )
-        else:
-            _fence_uncompensated_xtb_md_enqueue(
-                queue_root,
-                error=exc,
-                publication_token=publication_token,
-                task_id=task_id,
-            )
+    except BaseException:
+        try:
+            cleanup_submission_snapshot()
+        except BaseException:  # noqa: BLE001 - preserve the transition-origin failure
+            logger.exception("Failed to clean the xTB-MD submission snapshot after an intent error")
         raise
-    except BaseException as exc:
-        recovered = [
-            candidate
-            for candidate in list_queue(queue_root)
-            if candidate.task_id == task_id
-            and candidate.app_name == APP_NAME
-            and candidate.engine == ENGINE
-            and str(candidate.metadata.get("job_dir") or "") == str(job_dir)
-            and str(candidate.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY) or "") == publication_token
-        ]
-        if len(recovered) != 1:
-            cleanup_unowned_input_snapshot_namespace(
-                _snapshot_cleanup_job_dir(
-                    job_dir,
-                    metadata["execution_snapshot"].get(JOB_PATH_IDENTITY_KEY),
-                ),
-                snapshot_namespace,
-            )
-            discard_snapshot_intent_if_generations_absent(queue_root, snapshot_namespace)
-            raise
-        if not isinstance(exc, Exception):
-            raise
-        entry = recovered[0]
 
-    assert entry is not None
-    try:
-        finalize_queued_snapshot_intent(queue_root, entry)
-        with queue_record_publication_lock(queue_root, entry.queue_id):
-            owned = [
-                candidate
-                for candidate in list_queue(queue_root)
-                if candidate.queue_id == entry.queue_id
-                and candidate.task_id == entry.task_id
-                and queue_entries_same_generation(candidate, entry)
-            ]
-            if len(owned) != 1:
-                raise RuntimeError("xTB-MD queued-record publication ownership was revoked")
-            current = owned[0]
-            if current.status == QueueStatus.CANCELLED:
-                # Pending cancellation publishes its generation-bound terminal
-                # artifacts before committing the queue transition. A late
-                # publisher must not write again here because a replacement
-                # generation may already be publishing in the shared job dir.
-                entry = current
-                return entry
-            if (
-                current.status != QueueStatus.PENDING
-                or queue_record_sync_state(current) != QUEUE_RECORD_SYNC_PREPARING
-                or str(current.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY) or "") != publication_token
-            ):
-                raise RuntimeError("xTB-MD queued-record publication ownership was revoked")
-            entry = current
-            publish_queued_record(cfg, entry)
-            updated = update_metadata(
-                queue_root,
-                entry.queue_id,
-                queue_record_sync_metadata(
-                    QUEUE_RECORD_SYNC_COMPLETE,
-                    token=publication_token,
-                    owner_pid=0,
-                ),
-                expected_entry=entry,
-                expected_task_id=entry.task_id,
-            )
-            if updated is None:
-                raise RuntimeError("xTB-MD queue publication ownership was revoked")
-            entry = updated
-            if entry.status != QueueStatus.PENDING:
-                raise RuntimeError(
-                    "xTB-MD queue entry changed state during queued-record publication"
-                )
-    except BaseException as exc:
-        failure_metadata = {
-            QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_ABORTED,
-        }
-        mark_failed(
-            queue_root,
-            entry.queue_id,
-            error=f"queued_record_publication_failed:{exc}",
-            metadata_update=failure_metadata,
-            expected_entry=entry,
-            expected_task_id=entry.task_id,
-        )
-        raise XtbMdSubmissionError(
-            f"xTB-MD queue publication failed after enqueue: {exc}",
-            entry=entry,
-        ) from exc
-    return entry
+    spec = EnqueuePublicationSpec(
+        queue_root=queue_root,
+        app_name=APP_NAME,
+        task_id=task_id,
+        task_kind=TASK_KIND,
+        engine=ENGINE,
+        priority=priority,
+        metadata=metadata,
+        label="xTB-MD",
+        publish=lambda entry: publish_queued_record(cfg, entry),
+        duplicate_policy=_reject_active_job_dir_duplicate,
+        before_commit_fn=lambda: assert_run_dir_publication_allowed(
+            "xTB-MD durable queue pre-commit"
+        ),
+        after_commit_fn=lambda: assert_run_dir_publication_allowed(
+            "xTB-MD durable queue post-commit"
+        ),
+        finalize_intent=lambda entry: finalize_queued_snapshot_intent(queue_root, entry),
+        on_compensated_failure=cleanup_submission_snapshot,
+    )
+    return run_enqueue_publication(spec)
 
 
 def submit_job_dir(
@@ -542,30 +373,16 @@ def submit_job_dir(
     try:
         cfg = load_xtb_md_config(config_path)
         resolved_job_dir = resolve_job_dir(cfg, job_dir)
-        entry = _enqueue_submission(
+        outcome = _enqueue_submission(
             cfg,
             resolved_job_dir,
             priority=priority,
         )
-    except QueueAfterCommitError as exc:
+    except EnqueuePublicationOutcomeUnknown as exc:
         return {
             "status": "failed",
-            "reason": (
-                "submission_failed"
-                if exc.compensation_succeeded
-                else "queue_enqueue_outcome_unknown"
-            ),
+            "reason": "queue_enqueue_outcome_unknown",
             "stderr": f"{exc.__class__.__name__}: {exc}",
-            "job_dir": str(job_dir),
-        }
-    except XtbMdSubmissionError as exc:
-        failed_entry = exc.entry
-        return {
-            "status": "failed",
-            "reason": "submission_publication_failed",
-            "stderr": str(exc),
-            "queue_id": str(getattr(failed_entry, "queue_id", "") or ""),
-            "job_id": str(getattr(failed_entry, "task_id", "") or ""),
             "job_dir": str(job_dir),
         }
     except Exception as exc:  # noqa: BLE001
@@ -575,7 +392,8 @@ def submit_job_dir(
             "stderr": f"{exc.__class__.__name__}: {exc}",
             "job_dir": str(job_dir),
         }
-    if entry.status == QueueStatus.CANCELLED:
+    entry = outcome.entry
+    if outcome.cancelled or entry.status == QueueStatus.CANCELLED:
         return {
             "status": "cancelled",
             "reason": "submission_cancelled",
@@ -583,7 +401,7 @@ def submit_job_dir(
             "job_id": entry.task_id,
             "queue_id": entry.queue_id,
         }
-    return {
+    payload = {
         "status": "queued",
         "job_dir": str(resolved_job_dir),
         "job_id": entry.task_id,
@@ -591,13 +409,20 @@ def submit_job_dir(
         "priority": entry.priority,
         "ensemble": str(entry.metadata.get("ensemble") or ""),
     }
+    if not outcome.published:
+        # The row is durably queued but its queued record is not published
+        # yet; the worker's pre-claim repair pass reconciles it before the
+        # row can run, so the submission itself succeeded.
+        payload["publication"] = "deferred"
+    if outcome.warnings:
+        payload["warnings"] = list(outcome.warnings)
+    return payload
 
 
 __all__ = [
     "APP_NAME",
     "ENGINE",
     "TASK_KIND",
-    "XtbMdSubmissionError",
     "resolve_job_dir",
     "submit_job_dir",
 ]

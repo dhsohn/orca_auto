@@ -613,6 +613,13 @@ There is no public direct-execution mode for new work. `run-dir` is the durable 
 - `xtb_md_job.yaml` is recognized only for a standalone directory under
   `runs_root`; it does not create or join a workflow. An optimized starting
   geometry is strongly recommended.
+- A submission whose queued-record publication fails is still durably queued:
+  it reports `"status": "queued"` with `"publication": "deferred"` and a
+  warning, and the worker's pre-claim repair pass publishes the record before
+  the row can run. While any row stays unrepairable (for example its job
+  directory was replaced by a symlink), the worker pauses all xTB-MD
+  admission and logs "queue admission paused"; cancel the offending row
+  (`queue cancel <queue_id>`) to unblock the engine.
 - Required fields are `schema_version: 1`, one local-file `input_xyz`, `gfn`
   (`1` or `2`), `ensemble` (`nvt` or `nve`), positive finite `temperature_k`,
   `time_ps`, `step_fs`, and `dump_fs`, plus positive integer

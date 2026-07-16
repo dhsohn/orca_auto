@@ -10,6 +10,18 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- The durable enqueue-publication protocol now has a single shared driver in
+  the core queue package; standalone xTB-MD submission is the first engine on
+  it. Behavior converges on the safest of the three previous copies: a failed
+  queued-record publication parks the row as `repair_pending` for the
+  worker's pre-claim repair pass instead of terminally failing the job (the
+  old `submission_publication_failed` result is gone — the submission reports
+  `"status": "queued"` with `"publication": "deferred"` and a warning), a
+  COMPLETE sync lease written by another publisher is treated as ownership
+  loss rather than one's own success, an enqueue whose commit outcome cannot
+  be determined is reported as `queue_enqueue_outcome_unknown`, and an
+  enqueue that committed but lost its result is recovered by strict identity
+  matching and parked for repair.
 - The smoke review packet's Markdown/HTML rendering moved into an internal
   render-only module; the discovery, projection, and verification logic stays
   in the review module. The rendered `summary.md` and `review/index.html`
