@@ -34,11 +34,18 @@ from orca_auto.core.engine_process import ensure_confined_directory
 from orca_auto.core.statuses import STATUS_COMPLETED, is_stage_terminal_status
 from orca_auto.core.utils.coercion import normalize_text, safe_int
 from orca_auto.flow._orca_stage_materialization import build_materialized_orca_stage, safe_name
+from orca_auto.flow.conformer_selection import (
+    eligible_minimum_block,
+    finite,
+    has_required_provenance,
+    rmsd_candidate_for_block,
+    rmsd_grouping,
+    selected_input_state_matches,
+    unique_single_point_matches,
+)
 from orca_auto.flow.contracts import WorkflowStageInput
 from orca_auto.flow.manifest import (
     DEFAULT_INTERACTION_SP_ROUTE_LINE,
-    DEFAULT_RMSD_ENERGY_WINDOW_KCAL,
-    DEFAULT_RMSD_THRESHOLD_ANGSTROM,
     INTERACTION_ENERGY_MAX_FRAGMENTS_CAP,
     interaction_energy_config_fingerprint,
     normalize_interaction_energy_block,
@@ -49,12 +56,10 @@ from orca_auto.flow.manifest import (
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 from orca_auto.flow.xyz_utils import write_fragment_xyz
-from orca_auto.orca.input_blocks import file_route_lines, geometry_range
 from orca_auto.orca.report.interaction_energy import (
     validate_fragment_electronic_states,
     validate_fragment_partition,
 )
-from orca_auto.orca.report.rmsd import RmsdCandidate, group_by_rmsd, rmsd_comparison_key
 from orca_auto.orca.report.si import SiBlock, SiBlockError, collect_si_block
 from orca_auto.orca.state import load_state
 
@@ -65,7 +70,6 @@ _ROLE_COMPLEX = "interaction_complex_sp"
 _ROLE_FRAGMENT = "interaction_fragment"
 _INTERACTION_SOURCE_DIRNAME = "_interaction_sources"
 _INTERACTION_CONFIG_FINGERPRINT_KEY = "interaction_config_fingerprint"
-_GEOMETRY_TOL_ANGSTROM = 1e-4
 
 
 def _text(value: Any) -> str:
@@ -133,31 +137,6 @@ def _orca_reaction_dir(stage: Mapping[str, Any]) -> Path | None:
     return Path(reaction_dir) if reaction_dir else None
 
 
-def _selected_input_state_matches(block: SiBlock, state: Mapping[str, Any]) -> bool:
-    selected_raw = _text(state.get("selected_inp"))
-    if not selected_raw:
-        return False
-    try:
-        selected_geometry = geometry_range(
-            Path(selected_raw).read_text(encoding="utf-8", errors="ignore").splitlines()
-        )
-    except OSError:
-        return False
-    selected_route = " ".join(file_route_lines(Path(selected_raw)))
-    normalized_selected_route = " ".join(selected_route.replace("!", " ").split()).lower()
-    normalized_output_route = " ".join(block.result.input_line.split()).lower()
-    return (
-        selected_geometry is not None
-        and (
-            block.result.charge,
-            block.result.multiplicity,
-        )
-        == (selected_geometry[2], selected_geometry[3])
-        and bool(normalized_selected_route)
-        and normalized_selected_route == normalized_output_route
-    )
-
-
 def _completed_complex_block(
     stage: Mapping[str, Any],
     *,
@@ -176,27 +155,16 @@ def _completed_complex_block(
         block = collect_si_block(reaction_dir, state)
     except SiBlockError:
         return None
+    # ``eligible_minimum_block`` fails closed on non-finite parsed data so a
+    # corrupt optimized geometry can never seed the RMSD grouping.
     if (
         block is None
-        or block.kind != "min"
-        or block.result.opt_converged is not True
-        or block.imaginary_count not in (None, 0)
-        or block.result.energy_hartree is None
-        or not block.result.coordinates
-        or not block.result.electronic_state_verified
-        or block.result.charge != expected_charge
-        or block.result.multiplicity != expected_multiplicity
-        or not block.result.input_line.strip()
-        or not block.result.orca_version.strip()
-        or not _selected_input_state_matches(block, state)
-    ):
-        return None
-    # Fail closed on non-finite parsed data so a corrupt optimized geometry can
-    # never seed the RMSD grouping (the report path guards this too).
-    if not math.isfinite(block.result.energy_hartree):
-        return None
-    if any(
-        not math.isfinite(value) for _element, *xyz in block.result.coordinates for value in xyz
+        or not eligible_minimum_block(
+            block,
+            expected_charge=expected_charge,
+            expected_multiplicity=expected_multiplicity,
+        )
+        or not selected_input_state_matches(block, state)
     ):
         return None
     return block
@@ -218,13 +186,10 @@ def _completed_single_point_block(stage: Mapping[str, Any]) -> SiBlock | None:
     if (
         block is None
         or block.analysis is not None
-        or block.result.energy_hartree is None
+        or not finite(block.result.energy_hartree)
         or not block.result.coordinates
-        or not block.result.input_line.strip()
-        or not block.result.orca_version.strip()
-        or not block.result.electronic_state_verified
-        or not _selected_input_state_matches(block, state)
-        or not math.isfinite(block.result.energy_hartree)
+        or not has_required_provenance(block)
+        or not selected_input_state_matches(block, state)
     ):
         return None
     if any(
@@ -234,49 +199,20 @@ def _completed_single_point_block(stage: Mapping[str, Any]) -> SiBlock | None:
     return block
 
 
-def _blocks_match_geometry_and_state(left: SiBlock, right: SiBlock) -> bool:
-    a = left.result.coordinates
-    b = right.result.coordinates
-    if len(a) != len(b) or not a:
-        return False
-    if (left.result.charge, left.result.multiplicity) != (
-        right.result.charge,
-        right.result.multiplicity,
-    ):
-        return False
-    for left_row, right_row in zip(a, b, strict=True):
-        if left_row[0] != right_row[0]:
-            return False
-        if any(
-            abs(x - y) > _GEOMETRY_TOL_ANGSTROM
-            for x, y in zip(left_row[1:], right_row[1:], strict=True)
-        ):
-            return False
-    return True
-
-
 def _uniform_single_point_energies(
     optimized: list[tuple[str, dict[str, Any], SiBlock]],
     single_points: list[SiBlock],
 ) -> dict[str, float]:
     if not optimized:
         return {}
-    matches: dict[str, list[int]] = {}
-    match_counts = [0] * len(single_points)
-    for stage_id, _stage, block in optimized:
-        indices = [
-            index
-            for index, single_point in enumerate(single_points)
-            if _blocks_match_geometry_and_state(block, single_point)
-        ]
-        matches[stage_id] = indices
-        for index in indices:
-            match_counts[index] += 1
-    if any(len(indices) != 1 for indices in matches.values()) or any(
-        count > 1 for count in match_counts
-    ):
+    unique = unique_single_point_matches(
+        [block for _stage_id, _stage, block in optimized], single_points
+    )
+    # All-or-nothing: every optimized entry must have its own unique match, or
+    # the single-point energies are not a uniform substitute basis at all.
+    if any(index is None for index in unique):
         return {}
-    matched_indices = {indices[0] for indices in matches.values()}
+    matched_indices = {index for index in unique if index is not None}
     levels = {
         (
             block.result.method,
@@ -291,8 +227,9 @@ def _uniform_single_point_energies(
     if len(levels) != 1:
         return {}
     energies: dict[str, float] = {}
-    for stage_id, indices in matches.items():
-        energy = single_points[indices[0]].result.energy_hartree
+    for (stage_id, _stage, _block), index in zip(optimized, unique, strict=True):
+        assert index is not None  # guaranteed by the all-or-nothing gate above
+        energy = single_points[index].result.energy_hartree
         if energy is None:
             return {}
         energies[stage_id] = energy
@@ -319,36 +256,18 @@ def _rmsd_representative_ids(
     *,
     effective_energies: Mapping[str, float] | None = None,
 ) -> frozenset[str]:
-    rmsd_cfg = rmsd_cfg or {}
-    grouping = group_by_rmsd(
+    grouping = rmsd_grouping(
         [
-            RmsdCandidate(
-                stage_id=stage_id,
-                coordinates=tuple(block.result.coordinates),
+            rmsd_candidate_for_block(
+                stage_id,
+                block,
                 energy_hartree=(effective_energies or {}).get(
                     stage_id, block.result.energy_hartree
-                ),
-                comparison_key=rmsd_comparison_key(
-                    formula=block.result.formula,
-                    charge=block.result.charge,
-                    multiplicity=block.result.multiplicity,
-                    method=block.result.method,
-                    basis_set=block.result.basis_set,
-                    solvation=block.result.solvation,
-                    orca_version=block.result.orca_version,
-                    input_line=block.result.input_line,
-                    electronic_state_verified=block.result.electronic_state_verified,
                 ),
             )
             for stage_id, _stage, block in parsed
         ],
-        rmsd_threshold_angstrom=float(
-            rmsd_cfg.get("rmsd_threshold_angstrom") or DEFAULT_RMSD_THRESHOLD_ANGSTROM
-        ),
-        energy_window_kcal=float(
-            rmsd_cfg.get("energy_window_kcal") or DEFAULT_RMSD_ENERGY_WINDOW_KCAL
-        ),
-        heavy_atoms_only=bool(rmsd_cfg.get("heavy_atoms_only", False)),
+        rmsd_cfg,
     )
     return grouping.representative_ids
 

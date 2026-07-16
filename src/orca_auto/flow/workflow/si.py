@@ -27,7 +27,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import Any
 
 from orca_auto.core.artifacts import (
     INTERACTION_ENERGY_CSV_FILE,
@@ -36,7 +36,6 @@ from orca_auto.core.artifacts import (
     WORKFLOW_SI_MD_FILE,
 )
 from orca_auto.core.utils.persistence import atomic_write_text
-from orca_auto.orca.input_blocks import file_route_lines, geometry_range
 from orca_auto.orca.report.interaction_energy import (
     InteractionEnergyResult,
     InteractionFragmentEnergy,
@@ -45,12 +44,7 @@ from orca_auto.orca.report.interaction_energy import (
     validate_fragment_partition,
 )
 from orca_auto.orca.report.render import KCAL_PER_HARTREE, R_KCAL_PER_MOL_K
-from orca_auto.orca.report.rmsd import (
-    RmsdCandidate,
-    RmsdGroup,
-    group_by_rmsd,
-    rmsd_comparison_key,
-)
+from orca_auto.orca.report.rmsd import RmsdGroup
 from orca_auto.orca.report.si import (
     SiBlock,
     SiBlockError,
@@ -59,9 +53,19 @@ from orca_auto.orca.report.si import (
 )
 from orca_auto.orca.state import load_state
 
+from ..conformer_selection import (
+    blocks_match_geometry,
+    coordinates_match,
+    eligible_minimum_block,
+    finite,
+    has_required_provenance,
+    normalized_route_line,
+    rmsd_candidate_for_block,
+    rmsd_grouping,
+    selected_input_state_matches,
+    unique_single_point_matches,
+)
 from ..manifest import (
-    DEFAULT_RMSD_ENERGY_WINDOW_KCAL,
-    DEFAULT_RMSD_THRESHOLD_ANGSTROM,
     interaction_energy_config_fingerprint,
     normalize_interaction_energy_block,
     normalize_rmsd_dedup_block,
@@ -80,12 +84,6 @@ from .report import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Two geometries printed by ORCA to 6 decimals are "the same structure" well
-# below this; an SP run on anything else (reordered atoms, re-optimized
-# geometry) must not pair.
-_GEOMETRY_TOL_ANGSTROM = 1e-4
-_GEOMETRY_COMPARISON_EPSILON_ANGSTROM = 1e-12
 
 # Boltzmann populations are physical only among interconverting minima of one
 # species. This groups minima by formula/charge/multiplicity as a stoichiometric
@@ -189,21 +187,6 @@ class WorkflowSiData:
         return None
 
 
-def _geometry_matches(a: SiBlock, b: SiBlock) -> bool:
-    coords_a, coords_b = a.result.coordinates, b.result.coordinates
-    if len(coords_a) != len(coords_b) or not coords_a:
-        return False
-    for (el_a, *xyz_a), (el_b, *xyz_b) in zip(coords_a, coords_b, strict=True):
-        if el_a != el_b:
-            return False
-        if any(
-            abs(va - vb) > _GEOMETRY_TOL_ANGSTROM + _GEOMETRY_COMPARISON_EPSILON_ANGSTROM
-            for va, vb in zip(xyz_a, xyz_b, strict=True)
-        ):
-            return False
-    return True
-
-
 def _stage_label(stage: Mapping[str, Any]) -> str:
     return _text(_stage_metadata(stage).get("selected_input_label")) or _text(stage.get("stage_id"))
 
@@ -254,28 +237,8 @@ def _collect_stage_block(
         return None, "job type has no SI block"
     if not _block_has_only_finite_numbers(block):
         return None, "output contains a non-finite numeric result"
-    selected_raw = str(state.get("selected_inp") or "").strip()
-    selected_state: tuple[int, int] | None = None
-    selected_route = ""
-    if selected_raw:
-        try:
-            selected_path = Path(selected_raw)
-            geometry = geometry_range(
-                selected_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-            )
-            selected_route = _normalized_route_line(" ".join(file_route_lines(selected_path)))
-        except OSError:
-            geometry = None
-        if geometry is not None:
-            selected_state = (geometry[2], geometry[3])
     result = block.result
-    state_verified = (
-        result.electronic_state_verified
-        and selected_state is not None
-        and (result.charge, result.multiplicity) == selected_state
-        and bool(selected_route)
-        and selected_route == _normalized_route_line(result.input_line)
-    )
+    state_verified = result.electronic_state_verified and selected_input_state_matches(block, state)
     if not state_verified:
         warning = "route/electronic-state provenance missing or inconsistent with selected input"
         block = replace(
@@ -290,40 +253,29 @@ def _pair_single_points(
     stationary: list[WorkflowSiEntry],
     single_points: list[WorkflowSiEntry],
 ) -> tuple[list[WorkflowSiEntry], list[WorkflowSiEntry]]:
-    """Pair only globally unique 1:1 geometry/electronic-state matches."""
-    matches_by_stationary: list[list[int]] = []
-    match_counts = [0] * len(single_points)
-    for entry in stationary:
-        matches = [
-            index
-            for index, sp in enumerate(single_points)
-            if _has_required_provenance(entry.block)
-            and _has_required_provenance(sp.block)
-            and _finite(sp.block.result.energy_hartree)
-            and entry.block.result.charge == sp.block.result.charge
-            and entry.block.result.multiplicity == sp.block.result.multiplicity
-            and _geometry_matches(entry.block, sp.block)
-        ]
-        matches_by_stationary.append(matches)
-        for index in matches:
-            match_counts[index] += 1
+    """Pair only globally unique 1:1 geometry/electronic-state matches.
 
+    The uniqueness rule (both 1:N and N:1 ambiguity pair nothing) lives in
+    ``conformer_selection.unique_single_point_matches`` shared with the
+    interaction-energy materializer.
+    """
+    unique = unique_single_point_matches(
+        [entry.block for entry in stationary],
+        [entry.block for entry in single_points],
+    )
     paired: list[WorkflowSiEntry] = []
     used: set[int] = set()
-    for entry, matches in zip(stationary, matches_by_stationary, strict=True):
+    for entry, match_index in zip(stationary, unique, strict=True):
         correction = entry.block.result.gibbs_correction
-        # Reject both 1:N (multiple SPs for one structure) and N:1 (one SP for
-        # duplicate stationary geometries) ambiguity instead of picking by order.
-        if len(matches) != 1 or match_counts[matches[0]] != 1:
+        if match_index is None:
             paired.append(entry)
             continue
-        match_index = matches[0]
         match = single_points[match_index]
         used.add(match_index)
         sp_energy = match.block.result.energy_hartree
         assert sp_energy is not None  # guaranteed by the match predicate
         composite_sum = sp_energy + correction if correction is not None else None
-        composite = composite_sum if _finite(composite_sum) else None
+        composite = composite_sum if finite(composite_sum) else None
         paired.append(
             replace(
                 entry,
@@ -585,36 +537,18 @@ def _dedup_minima(
         return stationary, (RmsdGroup(only, (only,)),)
     convention = _energy_convention(tuple(mins))
     candidates = [
-        RmsdCandidate(
-            stage_id=entry.stage_id,
-            coordinates=tuple(entry.block.result.coordinates),
+        rmsd_candidate_for_block(
+            entry.stage_id,
+            entry.block,
             energy_hartree=(
                 entry.sp_energy
                 if convention.use_single_point_energy
                 else entry.block.result.energy_hartree
             ),
-            comparison_key=rmsd_comparison_key(
-                formula=entry.block.result.formula,
-                charge=entry.block.result.charge,
-                multiplicity=entry.block.result.multiplicity,
-                method=entry.block.result.method,
-                basis_set=entry.block.result.basis_set,
-                solvation=entry.block.result.solvation,
-                orca_version=entry.block.result.orca_version,
-                input_line=entry.block.result.input_line,
-                electronic_state_verified=entry.block.result.electronic_state_verified,
-            ),
         )
         for entry in mins
     ]
-    grouping = group_by_rmsd(
-        candidates,
-        rmsd_threshold_angstrom=float(
-            cfg.get("rmsd_threshold_angstrom") or DEFAULT_RMSD_THRESHOLD_ANGSTROM
-        ),
-        energy_window_kcal=float(cfg.get("energy_window_kcal") or DEFAULT_RMSD_ENERGY_WINDOW_KCAL),
-        heavy_atoms_only=bool(cfg.get("heavy_atoms_only", False)),
-    )
+    grouping = rmsd_grouping(candidates, cfg)
     representatives = grouping.representative_ids
     dropped = {c.stage_id for c in candidates if c.stage_id not in representatives}
     kept = [entry for entry in stationary if entry.stage_id not in dropped]
@@ -627,42 +561,12 @@ def _rmsd_eligible_minimum(
     expected_charge: int | None = None,
     expected_multiplicity: int | None = None,
 ) -> bool:
-    """Match the materializer's fail-closed optimized-parent eligibility."""
-    result = entry.block.result
-    return bool(
-        entry.block.kind == "min"
-        and result.opt_converged is True
-        and entry.block.imaginary_count in (None, 0)
-        and _finite(result.energy_hartree)
-        and bool(result.coordinates)
-        and _has_required_provenance(entry.block)
-        and (expected_charge is None or result.charge == expected_charge)
-        and (expected_multiplicity is None or result.multiplicity == expected_multiplicity)
+    """The materializer's fail-closed optimized-parent eligibility (shared rule)."""
+    return eligible_minimum_block(
+        entry.block,
+        expected_charge=expected_charge,
+        expected_multiplicity=expected_multiplicity,
     )
-
-
-def _normalized_route_line(value: Any) -> str:
-    text = _text(value)
-    if text.startswith("!"):
-        text = text[1:]
-    return " ".join(text.split()).lower()
-
-
-def _coordinates_match(
-    expected: tuple[tuple[str, float, float, float], ...],
-    actual: tuple[tuple[str, float, float, float], ...],
-) -> bool:
-    if len(expected) != len(actual) or not expected:
-        return False
-    for expected_row, actual_row in zip(expected, actual, strict=True):
-        if expected_row[0] != actual_row[0]:
-            return False
-        if any(
-            abs(left - right) > _GEOMETRY_TOL_ANGSTROM + _GEOMETRY_COMPARISON_EPSILON_ANGSTROM
-            for left, right in zip(expected_row[1:], actual_row[1:], strict=True)
-        ):
-            return False
-    return True
 
 
 def _completed_interaction_block(stage: Mapping[str, Any]) -> tuple[SiBlock | None, str]:
@@ -722,14 +626,11 @@ def _interaction_energy_results(
         complex_multiplicity=complex_multiplicity,
         rmsd_dedup=rmsd_cfg,
     )
-    effective_rmsd_cfg: Mapping[str, Any] = rmsd_cfg or {
-        "rmsd_threshold_angstrom": DEFAULT_RMSD_THRESHOLD_ANGSTROM,
-        "energy_window_kcal": DEFAULT_RMSD_ENERGY_WINDOW_KCAL,
-        "heavy_atoms_only": False,
-    }
-    expected_ranked, _hidden_groups = _dedup_minima(eligible, effective_rmsd_cfg)
+    # ``rmsd_grouping`` applies the shared defaults when the block is absent,
+    # exactly as the materializer does for its fan-out decision.
+    expected_ranked, _hidden_groups = _dedup_minima(eligible, rmsd_cfg or {})
     expected_parent_ids = {entry.stage_id for entry in expected_ranked}
-    expected_route = _normalized_route_line(cfg.get("sp_route_line"))
+    expected_route = normalized_route_line(cfg.get("sp_route_line"))
     results: list[InteractionEnergyResult] = []
     for parent in (entry.stage_id for entry in eligible if entry.stage_id in expected_parent_ids):
         entry = entry_by_stage[parent]
@@ -785,7 +686,7 @@ def _interaction_energy_results(
                 blockers.append(f"complex single point unavailable: {reason}")
             else:
                 observed_blocks.append(complex_block)
-                if not _geometry_matches(entry.block, complex_block):
+                if not blocks_match_geometry(entry.block, complex_block):
                     blockers.append(
                         "complex single point does not use the optimized complex geometry"
                     )
@@ -836,9 +737,7 @@ def _interaction_energy_results(
                     expected_coordinates = tuple(
                         opt_coordinates[position] for position in expected_indices
                     )
-                    if not _coordinates_match(
-                        expected_coordinates, tuple(block.result.coordinates)
-                    ):
+                    if not coordinates_match(expected_coordinates, tuple(block.result.coordinates)):
                         blockers.append(
                             f"fragment {index} geometry is not the requested complex subset"
                         )
@@ -866,7 +765,7 @@ def _interaction_energy_results(
         provenance: tuple[str, str, str, str, str] = ("", "", "", "", "")
         if len(observed_blocks) != 1 + len(expected_fragments):
             blockers.append("the complete complex/fragment single-point set is not available")
-        elif any(not _has_required_provenance(block) for block in observed_blocks):
+        elif any(not has_required_provenance(block) for block in observed_blocks):
             blockers.append("single-point provenance is incomplete")
         else:
             levels = {
@@ -875,7 +774,7 @@ def _interaction_energy_results(
                     block.result.basis_set,
                     block.result.solvation,
                     block.result.orca_version,
-                    _normalized_route_line(block.result.input_line),
+                    normalized_route_line(block.result.input_line),
                 )
                 for block in observed_blocks
             }
@@ -936,19 +835,6 @@ def _provenance_key(block: SiBlock) -> tuple[str, str, str, str, str, int, int]:
     )
 
 
-def _finite(value: float | None) -> TypeGuard[float]:
-    return value is not None and math.isfinite(value)
-
-
-def _has_required_provenance(block: SiBlock) -> bool:
-    result = block.result
-    return bool(
-        result.input_line.strip()
-        and result.orca_version.strip()
-        and result.electronic_state_verified
-    )
-
-
 def _has_complete_vibrational_spectrum(entry: WorkflowSiEntry) -> bool:
     analysis = entry.block.analysis
     atom_count = len(entry.block.result.coordinates)
@@ -964,12 +850,12 @@ def _temperatures_agree(left: float, right: float) -> bool:
 
 def _energy_convention(entries: tuple[WorkflowSiEntry, ...]) -> _EnergyConvention:
     """One effective E/G convention shared by the relative and population tables."""
-    candidates = [entry for entry in entries if _finite(entry.block.result.energy_hartree)]
+    candidates = [entry for entry in entries if finite(entry.block.result.energy_hartree)]
     if not candidates or not any(entry.sp_energy is not None for entry in candidates):
         return _EnergyConvention(False, False)
 
     all_refined = all(
-        entry.sp_block is not None and _finite(entry.sp_energy) for entry in candidates
+        entry.sp_block is not None and finite(entry.sp_energy) for entry in candidates
     )
     if not all_refined:
         return _EnergyConvention(
@@ -980,7 +866,7 @@ def _energy_convention(entries: tuple[WorkflowSiEntry, ...]) -> _EnergyConventio
         )
 
     if not all(
-        entry.sp_block is not None and _has_required_provenance(entry.sp_block)
+        entry.sp_block is not None and has_required_provenance(entry.sp_block)
         for entry in candidates
     ):
         return _EnergyConvention(
@@ -997,7 +883,7 @@ def _energy_convention(entries: tuple[WorkflowSiEntry, ...]) -> _EnergyConventio
             "single-point refinement levels differ; optimization-level E and G are used throughout",
         )
 
-    composite_ready = all(_finite(entry.composite_gibbs) for entry in candidates)
+    composite_ready = all(finite(entry.composite_gibbs) for entry in candidates)
     opt_levels = {_provenance_key(entry.block) for entry in candidates}
     if not composite_ready:
         return _EnergyConvention(
@@ -1006,7 +892,7 @@ def _energy_convention(entries: tuple[WorkflowSiEntry, ...]) -> _EnergyConventio
             "single-point E is used, but G remains at the optimization level because "
             "thermochemical corrections are incomplete",
         )
-    if not all(_has_required_provenance(entry.block) for entry in candidates):
+    if not all(has_required_provenance(entry.block) for entry in candidates):
         return _EnergyConvention(
             True,
             False,
@@ -1052,9 +938,9 @@ def _compute_populations(
         if entries[i].block.result.opt_converged is True
         and entries[i].block.imaginary_count == 0
         and _has_complete_vibrational_spectrum(entries[i])
-        and _finite(entries[i].block.result.energy_hartree)
-        and _finite(entries[i].block.result.gibbs_energy)
-        and _finite(entries[i].block.result.thermo_temperature_k)
+        and finite(entries[i].block.result.energy_hartree)
+        and finite(entries[i].block.result.gibbs_energy)
+        and finite(entries[i].block.result.thermo_temperature_k)
         and (entries[i].block.result.thermo_temperature_k or 0.0) > 0
     ]
     if len(usable) != len(min_indices):
@@ -1071,7 +957,7 @@ def _compute_populations(
         clusters.setdefault(_cluster_key(entries[i]), []).append(i)
     for key, members in clusters.items():
         if (
-            not all(_has_required_provenance(entries[i].block) for i in members)
+            not all(has_required_provenance(entries[i].block) for i in members)
             or len({_provenance_key(entries[i].block) for i in members}) != 1
         ):
             return (
@@ -1275,7 +1161,7 @@ def _composite_sentence(data: WorkflowSiData) -> str:
     )
     # Claim composite Gibbs energies only when at least one exists: an Opt-only
     # workflow with SP refinements has no G − E(el) correction to combine.
-    if any(_finite(entry.composite_gibbs) for entry in data.entries):
+    if any(finite(entry.composite_gibbs) for entry in data.entries):
         sentence += (
             "; composite Gibbs energies combine E(SP) with the G − E(el) "
             "correction from the optimization level"
@@ -1341,7 +1227,7 @@ def _methods_lines(data: WorkflowSiData) -> list[str]:
 
 
 def _table_lines(data: WorkflowSiData) -> list[str]:
-    candidates = [entry for entry in data.entries if _finite(entry.block.result.energy_hartree)]
+    candidates = [entry for entry in data.entries if finite(entry.block.result.energy_hartree)]
     if not candidates:
         return ["(no completed stationary structures yet)"]
 
@@ -1370,7 +1256,7 @@ def _table_lines(data: WorkflowSiData) -> list[str]:
     entries = [entry for entry, _ in rows]
 
     best_e = rows[0][1]
-    gibbs_values = [g for g in (gibbs_of(entry) for entry in entries) if _finite(g)]
+    gibbs_values = [g for g in (gibbs_of(entry) for entry in entries) if finite(g)]
     best_g = min(gibbs_values) if gibbs_values else None
 
     name_width = max(9, *(len(entry.block.name) for entry in entries))
@@ -1382,13 +1268,13 @@ def _table_lines(data: WorkflowSiData) -> list[str]:
     lines = [header, "-" * len(header)]
     for rank, (entry, energy) in enumerate(rows, start=1):
         gibbs = gibbs_of(entry)
-        gibbs_cell = f"{gibbs:.6f}" if _finite(gibbs) else "–"
+        gibbs_cell = f"{gibbs:.6f}" if finite(gibbs) else "–"
         rel_e = (energy - best_e) * KCAL_PER_HARTREE
         rel_e_cell = f"{rel_e:+.2f}" if math.isfinite(rel_e) else "–"
         rel_g = (
-            (gibbs - best_g) * KCAL_PER_HARTREE if _finite(gibbs) and best_g is not None else None
+            (gibbs - best_g) * KCAL_PER_HARTREE if finite(gibbs) and best_g is not None else None
         )
-        rel_g_cell = f"{rel_g:+.2f}" if _finite(rel_g) else "–"
+        rel_g_cell = f"{rel_g:+.2f}" if finite(rel_g) else "–"
         nimag = str(entry.block.imaginary_count) if entry.block.imaginary_count is not None else "–"
         lines.append(
             f"{rank:>2}  {entry.block.name:<{name_width}}  {energy:>14.6f}  "
@@ -1507,7 +1393,7 @@ def _interaction_energy_lines(data: WorkflowSiData) -> list[str]:
             lines.append(f"  complex single-point stage: {result.complex_stage_id}")
         for fragment in result.fragments:
             energy_cell = (
-                f"{fragment.energy_hartree:16.6f} Eh" if _finite(fragment.energy_hartree) else "–"
+                f"{fragment.energy_hartree:16.6f} Eh" if finite(fragment.energy_hartree) else "–"
             )
             lines.append(
                 f"  {fragment.label} [atoms {','.join(str(i) for i in fragment.atom_indices)}] "
@@ -1557,11 +1443,11 @@ def render_workflow_si_md(data: WorkflowSiData) -> str:
     lines.append("")
     for entry in data.entries:
         lines.append(render_si_block_md(entry.block))
-        if _finite(entry.sp_energy):
+        if finite(entry.sp_energy):
             note = f"E(SP) = {entry.sp_energy:16.6f} Eh  ({entry.sp_label})"
             if entry.sp_block is not None and entry.sp_block.result.input_line:
                 note += f"\n  ! {entry.sp_block.result.input_line}"
-            if _finite(entry.composite_gibbs):
+            if finite(entry.composite_gibbs):
                 note += f"\nG(composite) = {entry.composite_gibbs:16.6f} Eh"
             lines.append(note)
             lines.append("")
@@ -1651,7 +1537,7 @@ _INTERACTION_CSV_COLUMNS = [
 
 
 def _finite_or_blank(value: float | None) -> float | str:
-    return value if _finite(value) else ""
+    return value if finite(value) else ""
 
 
 def _spreadsheet_safe_text(value: Any) -> str:
