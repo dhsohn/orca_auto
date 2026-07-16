@@ -10,10 +10,10 @@ import pytest
 from orca_auto.core.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
 from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.orca.execution_binding import (
-    MAX_ORCA_INPUT_REFERENCES,
     build_orca_execution_snapshot,
     verify_orca_execution_snapshot,
 )
+from orca_auto.orca.input_blocks import MAX_ORCA_INPUT_REFERENCES
 
 
 def _write_executable(path: Path, payload: str = "#!/bin/sh\nexit 0\n") -> Path:

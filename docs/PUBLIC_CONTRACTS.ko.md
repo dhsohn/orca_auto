@@ -158,12 +158,10 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 
 마이그레이션 참고:
 
-- 현재 호환 기간에는 설정 읽기 로직이 기존 최상위 `telegram:` 블록과 정규
-  `messenger.telegram`을 모두 읽습니다. 둘 다 있으면 중첩된 `messenger.telegram` 값이
-  우선합니다.
-- 새 설정, 생성 예제, 도구는 `messenger.telegram`을 기록합니다. 새 최상위 `telegram:`
-  블록을 추가하지 마세요. Discord에는 기존 별칭이 없으므로 중첩된
-  `messenger.discord` bot 필드를 사용합니다.
+- 기존 최상위 `telegram:` 블록은 더 이상 읽지 않습니다. 해당 블록이 있으면
+  설정 로딩이 명확한 오류로 실패합니다. 블록을 `messenger.telegram`으로
+  옮기세요. Discord에는 기존 별칭이 없으므로 중첩된 `messenger.discord` bot
+  필드를 사용합니다.
 
 ## 큐와 activity 계약
 

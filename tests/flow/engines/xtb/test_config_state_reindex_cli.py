@@ -148,7 +148,6 @@ def test_load_config_applies_defaults_for_missing_and_legacy_optional_sections(
             {
                 "runs_root": str(workflow_root),
                 "behavior": [],
-                "telegram": [],
             },
             sort_keys=False,
         ),

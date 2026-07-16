@@ -19,14 +19,30 @@ from orca_auto.core.messaging.interactive import (
     IncomingCommand,
 )
 from orca_auto.core.messaging.render_telegram import render_telegram_chunks
-from orca_auto.core.notifications import split_telegram_message
-from orca_auto.flow.telegram.bot_api import POLL_TIMEOUT_SECONDS, api_call
+from orca_auto.core.notifications import TelegramApiClient, split_telegram_message
 
 from ..application import BotApplication
 
 LOGGER = logging.getLogger(__name__)
 PROVIDER = "telegram"
+POLL_TIMEOUT_SECONDS = 30
 _PRE_WRAPPER_LENGTH = len("<pre></pre>")
+
+
+def api_call(
+    token: str,
+    method: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    timeout: int = POLL_TIMEOUT_SECONDS + 5,
+    logger: logging.Logger | None = None,
+) -> Any | None:
+    client = TelegramApiClient(
+        token=token,
+        timeout=timeout,
+        logger=logger or LOGGER,
+    )
+    return client.api_call(method, payload, timeout=timeout)
 
 
 def _actor(raw: object) -> Actor:

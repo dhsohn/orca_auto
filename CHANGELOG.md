@@ -39,6 +39,21 @@ snapshot intent, or cancel/clear and resubmit them after the upgrade. Existing
 terminal hidden generations are retained as history; there is no in-place
 migration.
 
+### Removed
+
+- The retired pre-neutral Telegram bot stack (`orca_auto.flow.telegram`: the
+  legacy `python -m orca_auto.flow.telegram.bot` entrypoint, its duplicate
+  `/list`/`/cancel`/`/help` handler layer, keyboards, dispatch, the
+  environment-variable-only credential path, and the `bot_api` transport
+  facade). The provider-neutral bot (`python -m orca_auto.flow.bot.runner`,
+  the path the systemd unit already uses) is the only bot implementation; the
+  Telegram polling adapter now talks to the core transport client directly.
+- The legacy top-level `telegram:` configuration block is no longer read.
+  Configuration loading now fails with a pointed error when one is present —
+  move the block to `messenger.telegram`. Previously the legacy block was
+  accepted during a compatibility window and silently ignored when the
+  canonical nested block was also present.
+
 ### Fixed
 
 - `queue list --watch` now keeps system and per-job CPU/RAM sampling active on a
@@ -56,6 +71,21 @@ migration.
   quotes, bind and rematerialize the official `%neb Product` and `TS` files,
   enforce their geometry admission cap, and preserve the analyzer reason when a
   no-retry run fails on its first attempt.
+- The workflow SI no longer downgrades a stage to unverified provenance when its
+  selected input splits the route across multiple `!` lines: the SI and the
+  interaction-energy fan-out now share one selection contract
+  (`flow/conformer_selection.py`) for route normalization, geometry tolerance,
+  minimum eligibility, single-point pairing, and RMSD representatives, so such
+  stages participate in SP pairing, populations, RMSD dedup, and ΔE_int again.
+- ORCA restart rematerialization now scans input file references with the same
+  scanner execution binding uses (`orca/input_blocks.py`), so references only
+  the execution side recognized before — the spaced `% moinp` form and block
+  keys such as `moinp`, `hess_filename`, `neb_restart_xyzfile`, and
+  `restart_allxyzfile` — are copied into the restart directory and rewritten
+  instead of silently left pointing into the previous reaction directory.
+  Restart also now fails closed at rematerialization time on unsupported
+  auxiliary/external-program directives and on more than 128 references
+  (previously such hand-edited inputs restarted and only failed at re-run).
 
 ## [0.2.1] - 2026-07-14
 
