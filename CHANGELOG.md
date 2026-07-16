@@ -10,6 +10,17 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- The `FINAL SINGLE POINT ENERGY` marker is parsed by one shared, line-anchored
+  pattern (with Fortran D-exponent support and the real ORCA near-converged
+  annotation captured separately) across the ORCA parser, the queue progress
+  summary, opt-progress scanning, the NEB report, and the workflow report's
+  bounded output-tail fallback. The previously loose copies could match the
+  phrase mid-line and crash on malformed number fragments; annotated
+  "(SCF not fully converged!)" values still feed progress and parsing as
+  before, while the workflow report's fallback keeps rejecting them, and a
+  non-finite exponent value is now rejected everywhere instead of silently
+  truncating to a wrong number.
+
 - ORCA submission and its worker's publication repair now run on the shared
   enqueue-publication driver, completing the unification of all three
   engines. An ORCA enqueue that committed but lost its result is parked

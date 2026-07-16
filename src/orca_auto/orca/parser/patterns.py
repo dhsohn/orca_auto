@@ -2,13 +2,40 @@
 
 from __future__ import annotations
 
+import math
 import re
 
 # Input line: "! B3LYP def2-TZVP Opt Freq ..." or "|  1> ! B3LYP ..."
 _INPUT_LINE_RE = re.compile(r"^(?:\s*\|\s*\d+>\s*)?!\s*(.+)$", re.MULTILINE)
 
-# Energy
-_ENERGY_RE = re.compile(r"FINAL SINGLE POINT ENERGY\s+([-\d.]+)")
+# Energy. ORCA prints the total energy on its own line; near-converged SCF
+# runs append a parenthesized annotation such as "(SCF not fully converged!)"
+# on that same line, so the pattern captures it as group 2 for consumers that
+# must distinguish annotated values. The value group accepts the full
+# floating-point syntax including Fortran D exponents, and the line anchors
+# reject the phrase embedded mid-line as well as malformed number fragments
+# that float() would crash on.
+FINAL_SINGLE_POINT_ENERGY_PATTERN = (
+    r"(?m)^[ \t]*FINAL SINGLE POINT ENERGY[ \t]+"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?)"
+    r"[ \t]*(\([^)\r\n]*\))?[ \t]*\r?$"
+)
+FINAL_SINGLE_POINT_ENERGY_RE = re.compile(FINAL_SINGLE_POINT_ENERGY_PATTERN)
+FINAL_SINGLE_POINT_ENERGY_BYTES_RE = re.compile(FINAL_SINGLE_POINT_ENERGY_PATTERN.encode("ascii"))
+
+
+def final_single_point_energy_value(raw: str | bytes) -> float:
+    """Parse one captured energy value, accepting Fortran D exponents.
+
+    Raises ValueError for a value that is not finite, so every consumer
+    shares the same rejection of overflowed exponent forms.
+    """
+    text = raw.decode("ascii") if isinstance(raw, (bytes, bytearray)) else raw
+    value = float(text.replace("D", "E").replace("d", "e"))
+    if not math.isfinite(value):
+        raise ValueError(f"non-finite ORCA energy value: {text!r}")
+    return value
+
 
 # Optimization convergence
 _OPT_CONVERGED_RE = re.compile(r"THE OPTIMIZATION HAS CONVERGED")

@@ -15,7 +15,6 @@ import json
 import logging
 import math
 import os
-import re
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -25,6 +24,10 @@ from typing import Any
 from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE, WORKFLOW_REPORT_HTML_FILE
 from orca_auto.core.utils.persistence import atomic_write_text
 from orca_auto.orca.parser import KCAL_PER_HARTREE
+from orca_auto.orca.parser.patterns import (
+    FINAL_SINGLE_POINT_ENERGY_BYTES_RE,
+    final_single_point_energy_value,
+)
 from orca_auto.orca.report.attempts import duration_text
 from orca_auto.orca.report.render import (
     ReportPage,
@@ -39,11 +42,6 @@ _ENGRAD_ENERGY_MARKER = "current total energy"
 _MAX_ORCA_ENERGY_SCAN_BYTES = 256 * 1024
 _MAX_ORCA_ENERGY_CANDIDATES = 8
 _ORCA_ENERGY_READ_CHUNK_BYTES = 64 * 1024
-_FINAL_SINGLE_POINT_ENERGY_RE = re.compile(
-    rb"(?m)^[ \t]*FINAL SINGLE POINT ENERGY[ \t]+"
-    rb"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?)"
-    rb"[ \t]*\r?$"
-)
 _FAILED_STAGE_STATUSES = frozenset({"failed", "cancel_failed", "submission_failed"})
 _DIAGNOSTIC_STAGE_STATUSES = frozenset({*_FAILED_STAGE_STATUSES, "cancelled"})
 
@@ -560,16 +558,20 @@ def _final_single_point_energy_from_output(output_root: Path, candidate: Path) -
     tail, read_offset = tail_snapshot
 
     energy_text: bytes | None = None
-    for match in _FINAL_SINGLE_POINT_ENERGY_RE.finditer(tail):
+    for match in FINAL_SINGLE_POINT_ENERGY_BYTES_RE.finditer(tail):
         # A bounded tail can start in the middle of a line.  Do not treat that
         # truncated first line as a complete ORCA marker.
         if read_offset and match.start() == 0:
+            continue
+        if match.group(2) is not None:
+            # Annotated values ("(SCF not fully converged!)") never feed the
+            # report's fallback energy, matching this site's prior pattern.
             continue
         energy_text = match.group(1)
     if energy_text is None:
         return None
     try:
-        energy = float(energy_text.replace(b"D", b"E").replace(b"d", b"e"))
+        energy = final_single_point_energy_value(energy_text)
     except ValueError:
         return None
     return energy if math.isfinite(energy) else None
