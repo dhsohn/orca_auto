@@ -25,12 +25,14 @@ from orca_auto.core.queue import (
     request_cancel,
     update_metadata,
 )
+from orca_auto.core.queue import enqueue_publication as core_enqueue_publication
 from orca_auto.core.queue.engine.input_snapshot import snapshot_input_file
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_TOKEN_KEY,
     create_snapshot_intent,
 )
+from orca_auto.core.queue.publication import queue_record_sync_metadata
 from orca_auto.flow import engine_runtime
 from orca_auto.flow.submitters import (
     crest as crest_submitter,
@@ -345,11 +347,7 @@ def test_submit_job_dir_uses_structured_engine_dependencies(
 
     def fake_enqueue(root: Path, **kwargs: Any) -> Any:
         captured["enqueue"] = (root, kwargs)
-        return SimpleNamespace(
-            queue_id=queue_id,
-            task_id=kwargs["task_id"],
-            priority=kwargs["priority"],
-        )
+        return enqueue(root, **kwargs)
 
     def fake_record_queued(cfg_arg: Any, submission: Any, entry: Any) -> None:
         captured["record"] = (cfg_arg, submission, entry)
@@ -403,6 +401,8 @@ def test_submit_job_dir_uses_structured_engine_dependencies(
         with pytest.raises(DuplicateQueueEntryError):
             duplicate_policy([existing], proposed)
     assert captured["record"][0] is cfg
+    [persisted] = list_queue(tmp_path / engine / "queue")
+    assert persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
     assert result["status"] == "submitted"
     assert result["returncode"] == 0
     assert result["command_argv"] == [
@@ -415,7 +415,7 @@ def test_submit_job_dir_uses_structured_engine_dependencies(
     assert result["stderr"] == ""
     assert result["parsed_stdout"]["status"] == "queued"
     assert result["job_id"] == job_id
-    assert result["queue_id"] == queue_id
+    assert result["queue_id"] == persisted.queue_id
     assert result["job_dir"] == str(resolved_job_dir)
     if module is xtb_submitter:
         assert result["job_type"] == extras["job_type"]
@@ -481,7 +481,7 @@ def test_submit_job_dir_preserves_durable_success_when_queued_record_update_fail
     assert result["returncode"] == 0
     assert result["queue_id"] == entries[0].queue_id
     assert result["job_id"] == f"{engine}-job-1"
-    warning = "queued job record update failed; queue submission succeeded"
+    warning = "queued record publication failed; queue submission succeeded"
     assert warning in result["parsed_stdout"]["warning"]
     assert "OSError: disk full after enqueue" in result["stderr"]
 
@@ -630,7 +630,7 @@ def test_indeterminate_postcommit_recovery_preserves_generation_snapshot(
         tmp_path,
         task_id="crest-indeterminate",
     )
-    real_mutate = internal_engine_submission.mutate_entries
+    real_mutate = core_enqueue_publication.mutate_entries
     calls = 0
 
     def persist_then_raise(root: Path, **kwargs: Any) -> None:
@@ -644,7 +644,7 @@ def test_indeterminate_postcommit_recovery_preserves_generation_snapshot(
             raise OSError("recovery unavailable")
         return real_mutate(*args, **kwargs)
 
-    monkeypatch.setattr(internal_engine_submission, "mutate_entries", unavailable_recovery)
+    monkeypatch.setattr(core_enqueue_publication, "mutate_entries", unavailable_recovery)
 
     result = _submit_with_enqueue(
         job_dir=job_dir,
@@ -663,8 +663,22 @@ def test_indeterminate_postcommit_recovery_preserves_generation_snapshot(
     ).is_file()
 
 
-def test_enqueue_post_commit_error_recovers_and_publishes_durable_entry(tmp_path: Path) -> None:
-    queue_root, job_dir, submission = _post_commit_enqueue_submission(tmp_path)
+def test_enqueue_post_commit_error_recovers_and_defers_to_worker_repair(
+    tmp_path: Path,
+) -> None:
+    queue_root = tmp_path / "queue"
+    job_dir = queue_root / "job"
+    job_dir.mkdir(parents=True)
+    submission = SimpleNamespace(
+        queue_root=queue_root,
+        app_name="orca_auto_crest",
+        task_id="crest-post-commit",
+        task_kind="crest_conformer_search",
+        engine="crest",
+        priority=6,
+        metadata={"job_dir": str(job_dir), "resource_request": {}},
+        context={},
+    )
     publications: list[tuple[Any, Any]] = []
 
     def persist_then_raise(root: Path, **kwargs: Any) -> None:
@@ -685,10 +699,25 @@ def test_enqueue_post_commit_error_recovers_and_publishes_durable_entry(tmp_path
     persisted = list_queue(queue_root)[0]
     assert result["status"] == "submitted"
     assert result["queue_id"] == persisted.queue_id
-    assert persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
+    # A recovered enqueue whose result was lost is parked for the worker
+    # repair pass instead of being published after an unknown failure.
+    assert (
+        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
+    )
     assert "OSError: enqueue durability barrier failed" in result["stderr"]
+    assert publications == []
+
+    assert internal_engine_submission.repair_internal_engine_queue_publication(
+        cfg=object(),
+        queue_root=queue_root,
+        entry=persisted,
+        record_queued_fn=record_queued,
+        entry_matches_fn=lambda current: current.engine == "crest",
+    )
+    repaired = list_queue(queue_root)[0]
+    assert repaired.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
     assert len(publications) == 1
-    assert not publications[0][0].context.get(
+    assert publications[0][0].context.get(
         internal_engine_submission.SUPPRESS_QUEUED_NOTIFICATION_CONTEXT_KEY,
         False,
     )
@@ -716,12 +745,12 @@ def test_enqueue_post_commit_control_flow_is_fenced_then_propagated(tmp_path: Pa
     assert persisted.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
 
 
-def test_enqueue_post_commit_recovery_accepts_visible_transition_after_error(
+def test_enqueue_post_commit_recovery_barrier_failure_reports_outcome_unknown(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     queue_root, job_dir, submission = _post_commit_enqueue_submission(tmp_path)
-    real_mutate_entries = internal_engine_submission.mutate_entries
+    real_mutate_entries = core_enqueue_publication.mutate_entries
     mutation_calls = 0
 
     def persist_recovery_then_raise(*args: Any, **kwargs: Any) -> Any:
@@ -733,7 +762,7 @@ def test_enqueue_post_commit_recovery_accepts_visible_transition_after_error(
         return result
 
     monkeypatch.setattr(
-        internal_engine_submission,
+        core_enqueue_publication,
         "mutate_entries",
         persist_recovery_then_raise,
     )
@@ -746,14 +775,18 @@ def test_enqueue_post_commit_recovery_accepts_visible_transition_after_error(
         job_dir=job_dir,
         submission=submission,
         enqueue_fn=enqueue_then_raise,
-        record_queued_fn=lambda *_args: True,
+        record_queued_fn=lambda *_args: pytest.fail("an outcome-unknown enqueue must not publish"),
     )
 
-    assert result["status"] == "submitted"
+    # The park committed before its durability barrier reported failure: the
+    # row is already repair-pending for the worker pass, and the submitter
+    # honestly reports the enqueue outcome as unknown instead of success.
+    assert result["status"] == "failed"
+    persisted = list_queue(queue_root)[0]
     assert (
-        list_queue(queue_root)[0].metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY]
-        == "complete"
+        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
     )
+    assert persisted.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
 
 
 def test_enqueue_post_commit_recovery_propagates_new_control_flow_after_visible_fence(
@@ -761,7 +794,7 @@ def test_enqueue_post_commit_recovery_propagates_new_control_flow_after_visible_
     tmp_path: Path,
 ) -> None:
     queue_root, job_dir, submission = _post_commit_enqueue_submission(tmp_path)
-    real_mutate_entries = internal_engine_submission.mutate_entries
+    real_mutate_entries = core_enqueue_publication.mutate_entries
     mutation_calls = 0
 
     def persist_recovery_then_interrupt(*args: Any, **kwargs: Any) -> Any:
@@ -773,7 +806,7 @@ def test_enqueue_post_commit_recovery_propagates_new_control_flow_after_visible_
         return result
 
     monkeypatch.setattr(
-        internal_engine_submission,
+        core_enqueue_publication,
         "mutate_entries",
         persist_recovery_then_interrupt,
     )
@@ -851,52 +884,6 @@ def test_enqueue_post_commit_recovery_terminally_fences_ambiguous_exact_rows(
     )
 
 
-def test_fresh_publication_keyboard_interrupt_is_retryable_and_propagates(
-    tmp_path: Path,
-) -> None:
-    queue_root = tmp_path / "queue"
-    job_dir = tmp_path / "job"
-    token = "fresh-publication-token"
-    submission = SimpleNamespace(
-        queue_root=queue_root,
-        metadata={"job_dir": str(job_dir)},
-    )
-    entry = enqueue(
-        queue_root,
-        app_name="orca_auto_crest",
-        task_id="crest-interrupted",
-        task_kind="crest_conformer_search",
-        engine="crest",
-        metadata={
-            "job_dir": str(job_dir),
-            internal_engine_submission._QUEUED_RECORD_SYNC_KEY: "preparing",
-            internal_engine_submission.QUEUE_RECORD_SYNC_TOKEN_KEY: token,
-        },
-    )
-    state = internal_engine_submission._InternalEngineSubmissionState(
-        resolved_job_dir=job_dir,
-        submission=submission,
-        entry=entry,
-        publication_token=token,
-    )
-
-    def interrupt(*_args: Any) -> None:
-        raise KeyboardInterrupt
-
-    with pytest.raises(KeyboardInterrupt):
-        internal_engine_submission._record_queued_with_warning(
-            cfg=object(),
-            state=state,
-            record_queued_fn=interrupt,
-        )
-
-    persisted = list_queue(queue_root)[0]
-    assert (
-        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
-    )
-    assert persisted.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
-
-
 def test_repair_publication_system_exit_is_retryable_and_propagates(tmp_path: Path) -> None:
     queue_root = tmp_path / "queue"
     job_dir = tmp_path / "job"
@@ -954,7 +941,7 @@ def test_internal_publication_repair_reclaims_abandoned_live_pid_lease(
             "job_dir": str(job_dir),
             "job_type": "opt",
             "resource_request": {},
-            **internal_engine_submission._queued_record_sync_metadata(
+            **queue_record_sync_metadata(
                 internal_engine_submission.QUEUE_RECORD_SYNC_PREPARING,
                 token="live-owner-token",
                 owner_pid=os.getpid(),
@@ -1243,7 +1230,7 @@ def test_record_failure_replay_repairs_existing_identity_without_duplicate_notif
         job_dir=str(job_dir), priority=9, config_path="/tmp/config.yaml"
     )
 
-    assert "record update failed" in first["parsed_stdout"]["warning"]
+    assert "publication failed" in first["parsed_stdout"]["warning"]
     assert "state/index repaired" in replay["parsed_stdout"]["warning"]
     assert states == [("crest-original", "nci"), ("crest-original", "nci")]
     assert indexes == states
@@ -1613,7 +1600,7 @@ def test_cancel_after_repair_claim_revokes_fence_before_any_side_effect(
         "record_queued",
         lambda *_args: record_calls.append("recorded"),
     )
-    original_publication_lock = internal_engine_submission.queue_record_publication_lock
+    original_publication_lock = core_enqueue_publication.queue_record_publication_lock
 
     @contextmanager
     def delayed_publication_lock(root: Path, queue_id: str) -> Any:
@@ -1623,7 +1610,7 @@ def test_cancel_after_repair_claim_revokes_fence_before_any_side_effect(
             yield
 
     monkeypatch.setattr(
-        internal_engine_submission,
+        core_enqueue_publication,
         "queue_record_publication_lock",
         delayed_publication_lock,
     )

@@ -10,6 +10,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- The workflow xtb/crest submitters now run on the shared enqueue-publication
+  driver as well. Their COMPLETE short-circuit is token-verified (a COMPLETE
+  written by another lease no longer counts as this publisher's success), the
+  submit-side repair holds one publication lock across claim, publish, and
+  completion instead of two separate acquisitions, and an enqueue that
+  committed but lost its result is parked `repair_pending` for the worker's
+  pre-claim repair pass instead of being published immediately by the
+  submitter (its queued notification is then not sent, consistent with
+  at-most-once delivery); a recovery scan failure is reported as a failed
+  submission with the row already parked, never as success.
 - The durable enqueue-publication protocol now has a single shared driver in
   the core queue package; standalone xTB-MD submission is the first engine on
   it. Behavior converges on the safest of the three previous copies: a failed

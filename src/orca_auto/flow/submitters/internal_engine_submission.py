@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import logging
-import os
 from argparse import Namespace
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +12,6 @@ from orca_auto.core.commands.run_dir import (
     EngineRunDirSubmission,
 )
 from orca_auto.core.queue import (
-    QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
     QUEUE_RECORD_SYNC_OWNER_PID_KEY,
@@ -26,8 +24,6 @@ from orca_auto.core.queue import (
     DuplicateQueueEntryError,
     QueueEntry,
     QueueStatus,
-    process_start_token,
-    queue_record_publication_lock,
 )
 from orca_auto.core.queue.engine.input_snapshot import (
     cleanup_unowned_input_snapshot_namespace,
@@ -42,6 +38,11 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     discard_snapshot_intent_if_generations_absent,
     transition_snapshot_intent,
 )
+from orca_auto.core.queue.enqueue_publication import (
+    EnqueuePublicationSpec,
+    repair_enqueue_publication_outcome,
+    run_enqueue_publication,
+)
 from orca_auto.core.queue.internal_engine.runtime import entry_matches_engine_identity
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.store import mutate_entries, reject_active_task_duplicate
@@ -55,7 +56,7 @@ from orca_auto.core.statuses import (
     STATUS_WAITING_FOR_SLOT,
     SUBMISSION_DEFERRED_STATUSES,
 )
-from orca_auto.core.utils import normalize_text, now_utc_iso, timestamped_token
+from orca_auto.core.utils import normalize_text
 
 from .internal_engine_models import (
     InternalEngineCommandResult,
@@ -71,9 +72,6 @@ logger = logging.getLogger(__name__)
 
 _QUEUED_RECORD_SYNC_KEY = QUEUE_RECORD_SYNC_KEY
 _QUEUED_RECORD_SYNC_PENDING = QUEUE_RECORD_SYNC_REPAIR_PENDING
-_QUEUED_RECORD_SYNC_PREPARING = QUEUE_RECORD_SYNC_PREPARING
-_QUEUED_RECORD_SYNC_REPAIRING = QUEUE_RECORD_SYNC_REPAIRING
-_QUEUED_RECORD_SYNC_COMPLETE = QUEUE_RECORD_SYNC_COMPLETE
 
 
 @dataclass(frozen=True)
@@ -91,7 +89,6 @@ class _InternalEngineSubmissionState:
     entry: Any | None = None
     warning: str = ""
     deferred_reason: str = ""
-    publication_token: str = ""
 
 
 class _ActiveJobDirReplay(RuntimeError):
@@ -104,10 +101,6 @@ class _ActiveJobDirCancellationPending(RuntimeError):
     def __init__(self, existing: QueueEntry) -> None:
         self.existing = existing
         super().__init__(existing.queue_id)
-
-
-class _EnqueueOwnershipUnknown(RuntimeError):
-    """Raised when a failed enqueue cannot be proven committed or uncommitted."""
 
 
 def _cleanup_unowned_submission_snapshot(submission: Any | None) -> None:
@@ -457,348 +450,11 @@ def _immutable_publication_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in metadata.items() if key not in lease_keys}
 
 
-def _queued_record_sync_metadata(
-    sync_state: str,
-    *,
-    token: str,
-    owner_pid: int,
-) -> dict[str, Any]:
-    return {
-        QUEUE_RECORD_SYNC_KEY: sync_state,
-        QUEUE_RECORD_SYNC_UPDATED_AT_KEY: now_utc_iso(),
-        QUEUE_RECORD_SYNC_OWNER_PID_KEY: owner_pid,
-        QUEUE_RECORD_SYNC_OWNER_START_KEY: (
-            process_start_token(owner_pid) if owner_pid > 0 else ""
-        ),
-        QUEUE_RECORD_SYNC_TOKEN_KEY: token,
-    }
-
-
 def _set_state_entry(state: _InternalEngineSubmissionState, entry: QueueEntry) -> None:
     state.entry = entry
     submission = state.submission
     if submission is not None and isinstance(submission.metadata, dict):
         submission.metadata.update(entry.metadata)
-
-
-def _transition_owned_queued_record_sync(
-    state: _InternalEngineSubmissionState,
-    *,
-    expected_token: str,
-    expected_state: str,
-    target_state: str,
-    owner_pid: int,
-) -> bool:
-    submission = state.submission
-    entry = state.entry
-    if submission is None or not isinstance(entry, QueueEntry):
-        return True
-
-    def transition(entries: list[QueueEntry]) -> tuple[tuple[QueueEntry, bool], bool]:
-        for index, current in enumerate(entries):
-            if current.queue_id != entry.queue_id:
-                continue
-            if not _same_queue_generation(current, entry):
-                return (current, False), False
-            current_sync_state = normalize_text(current.metadata.get(QUEUE_RECORD_SYNC_KEY)).lower()
-            current_token = normalize_text(current.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY))
-            if current_sync_state == QUEUE_RECORD_SYNC_COMPLETE:
-                return (current, True), False
-            if (
-                current.status != QueueStatus.PENDING
-                or current_sync_state != expected_state
-                or current_token != expected_token
-            ):
-                return (current, False), False
-            metadata = dict(current.metadata)
-            metadata.update(
-                _queued_record_sync_metadata(
-                    target_state,
-                    token=expected_token,
-                    owner_pid=owner_pid,
-                )
-            )
-            updated = replace(current, metadata=metadata)
-            entries[index] = updated
-            return (updated, True), True
-        raise RuntimeError(
-            f"queue entry disappeared while publishing queued state: {entry.queue_id}"
-        )
-
-    updated, transitioned = mutate_entries(submission.queue_root, transition)
-    _set_state_entry(state, updated)
-    return transitioned
-
-
-def _owns_queued_record_publication(
-    state: _InternalEngineSubmissionState,
-    *,
-    expected_token: str,
-    expected_state: str,
-) -> bool:
-    """Revalidate the queue-side fencing token before any external write."""
-    submission = state.submission
-    entry = state.entry
-    if submission is None or not isinstance(entry, QueueEntry):
-        return True
-
-    def inspect(entries: list[QueueEntry]) -> tuple[tuple[QueueEntry, bool], bool]:
-        for current in entries:
-            if current.queue_id != entry.queue_id:
-                continue
-            if not _same_queue_generation(current, entry):
-                return (current, False), False
-            current_sync_state = normalize_text(current.metadata.get(QUEUE_RECORD_SYNC_KEY)).lower()
-            current_token = normalize_text(current.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY))
-            owns_publication = (
-                current.status == QueueStatus.PENDING
-                and not current.cancel_requested
-                and current_sync_state == expected_state
-                and current_token == expected_token
-            )
-            return (current, owns_publication), False
-        raise RuntimeError(
-            f"queue entry disappeared while validating queued-state publication: {entry.queue_id}"
-        )
-
-    current, owns_publication = mutate_entries(submission.queue_root, inspect)
-    _set_state_entry(state, current)
-    return owns_publication
-
-
-def _publication_was_cancelled(state: _InternalEngineSubmissionState) -> bool:
-    entry = state.entry
-    return isinstance(entry, QueueEntry) and (
-        entry.cancel_requested or entry.status == QueueStatus.CANCELLED
-    )
-
-
-def _mark_queued_record_repair_pending(
-    state: _InternalEngineSubmissionState,
-    *,
-    expected_token: str,
-    expected_state: str,
-) -> None:
-    try:
-        _transition_owned_queued_record_sync(
-            state,
-            expected_token=expected_token,
-            expected_state=expected_state,
-            target_state=QUEUE_RECORD_SYNC_REPAIR_PENDING,
-            owner_pid=0,
-        )
-    except BaseException:  # noqa: BLE001
-        logger.warning(
-            "failed to mark queued record repair pending: queue_id=%s",
-            getattr(state.entry, "queue_id", ""),
-            exc_info=True,
-        )
-
-
-def _recover_post_commit_enqueue(
-    state: _InternalEngineSubmissionState,
-    *,
-    enqueue_metadata: dict[str, Any],
-) -> QueueEntry | None:
-    """Fence an enqueue that may have committed before reporting an error.
-
-    A queue save can become durable and still raise from a later durability
-    barrier.  In that case the caller never receives the new ``QueueEntry`` and
-    cannot use its queue id for the normal publication rollback.  Recover only
-    the single row carrying every identity of this exact enqueue attempt; the
-    publication token is necessary but deliberately not sufficient by itself.
-    """
-
-    submission = state.submission
-    if submission is None:
-        return None
-
-    expected_app = normalize_text(getattr(submission, "app_name", ""))
-    expected_task = normalize_text(getattr(submission, "task_id", ""))
-    expected_kind = normalize_text(getattr(submission, "task_kind", ""))
-    expected_engine = normalize_text(getattr(submission, "engine", ""))
-    try:
-        expected_priority = int(getattr(submission, "priority", 0))
-    except (TypeError, ValueError):
-        return None
-    expected_token = normalize_text(enqueue_metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY))
-    expected_owner_start = normalize_text(enqueue_metadata.get(QUEUE_RECORD_SYNC_OWNER_START_KEY))
-    try:
-        expected_owner_pid = int(enqueue_metadata.get(QUEUE_RECORD_SYNC_OWNER_PID_KEY, 0) or 0)
-    except (TypeError, ValueError):
-        return None
-    expected_job_dir = normalize_text(enqueue_metadata.get("job_dir"))
-    if (
-        not all(
-            (
-                expected_app,
-                expected_task,
-                expected_kind,
-                expected_engine,
-                expected_token,
-                expected_job_dir,
-            )
-        )
-        or expected_owner_pid <= 0
-    ):
-        return None
-    expected_job_dir = str(Path(expected_job_dir).expanduser().resolve())
-
-    def identity_matches(
-        current: QueueEntry,
-        *,
-        sync_state: str,
-        owner_pid: int,
-        owner_start: str,
-    ) -> bool:
-        metadata = current.metadata if isinstance(current.metadata, dict) else {}
-        try:
-            current_owner_pid = int(metadata.get(QUEUE_RECORD_SYNC_OWNER_PID_KEY, 0) or 0)
-            current_priority = int(current.priority)
-        except (TypeError, ValueError):
-            return False
-        current_job_dir = normalize_text(metadata.get("job_dir"))
-        if current_job_dir:
-            current_job_dir = str(Path(current_job_dir).expanduser().resolve())
-        return bool(
-            current.status == QueueStatus.PENDING
-            and not current.cancel_requested
-            and normalize_text(current.app_name) == expected_app
-            and normalize_text(current.task_id) == expected_task
-            and normalize_text(current.task_kind) == expected_kind
-            and normalize_text(current.engine) == expected_engine
-            and current_priority == expected_priority
-            and normalize_text(metadata.get(QUEUE_RECORD_SYNC_KEY)).lower() == sync_state
-            and normalize_text(metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY)) == expected_token
-            and current_owner_pid == owner_pid
-            and normalize_text(metadata.get(QUEUE_RECORD_SYNC_OWNER_START_KEY)) == owner_start
-            and current_job_dir == expected_job_dir
-        )
-
-    def unique_match(
-        entries: list[QueueEntry],
-        *,
-        sync_state: str,
-        owner_pid: int,
-        owner_start: str,
-    ) -> tuple[int, QueueEntry] | None:
-        matches = [
-            (index, current)
-            for index, current in enumerate(entries)
-            if identity_matches(
-                current,
-                sync_state=sync_state,
-                owner_pid=owner_pid,
-                owner_start=owner_start,
-            )
-        ]
-        if not matches:
-            return None
-        if len(matches) != 1:
-            raise RuntimeError(
-                "ambiguous persisted queue entries after enqueue error; refusing recovery"
-            )
-        return matches[0]
-
-    def recover(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
-        matches = [
-            (index, current)
-            for index, current in enumerate(entries)
-            if identity_matches(
-                current,
-                sync_state=QUEUE_RECORD_SYNC_PREPARING,
-                owner_pid=expected_owner_pid,
-                owner_start=expected_owner_start,
-            )
-        ]
-        if not matches:
-            return None, False
-        if len(matches) != 1:
-            finished_at = now_utc_iso()
-            for index, current in matches:
-                metadata = dict(current.metadata)
-                metadata.update(
-                    _queued_record_sync_metadata(
-                        QUEUE_RECORD_SYNC_ABORTED,
-                        token="",
-                        owner_pid=0,
-                    )
-                )
-                entries[index] = replace(
-                    current,
-                    status=QueueStatus.CANCELLED,
-                    cancel_requested=True,
-                    finished_at=finished_at,
-                    metadata=metadata,
-                )
-            return None, True
-        match = matches[0]
-        index, current = match
-        metadata = dict(current.metadata)
-        metadata.update(
-            _queued_record_sync_metadata(
-                QUEUE_RECORD_SYNC_REPAIR_PENDING,
-                token=expected_token,
-                owner_pid=0,
-            )
-        )
-        updated = replace(current, metadata=metadata)
-        entries[index] = updated
-        return updated, True
-
-    def load_visible_recovery(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
-        match = unique_match(
-            entries,
-            sync_state=QUEUE_RECORD_SYNC_REPAIR_PENDING,
-            owner_pid=0,
-            owner_start="",
-        )
-        return (match[1] if match is not None else None), False
-
-    recovery_error: BaseException | None = None
-    try:
-        recovered = mutate_entries(submission.queue_root, recover)
-    except BaseException as exc:  # noqa: BLE001
-        recovery_error = exc
-        try:
-            recovered = mutate_entries(submission.queue_root, load_visible_recovery)
-        except BaseException as reload_exc:  # noqa: BLE001
-            if not isinstance(reload_exc, Exception):
-                raise
-            recovered = None
-        if not isinstance(exc, Exception):
-            if recovered is not None:
-                _set_state_entry(state, recovered)
-            raise
-    if recovered is None:
-        if recovery_error is not None:
-            logger.warning(
-                "failed to recover a possibly committed queue enqueue: app=%s task_id=%s",
-                expected_app,
-                expected_task,
-                exc_info=(
-                    type(recovery_error),
-                    recovery_error,
-                    recovery_error.__traceback__,
-                ),
-            )
-            raise _EnqueueOwnershipUnknown(
-                "queue enqueue ownership is indeterminate after recovery failure"
-            ) from recovery_error
-        return None
-    if recovery_error is not None:
-        logger.warning(
-            "queue enqueue recovery became visible after a durability error: app=%s task_id=%s",
-            expected_app,
-            expected_task,
-            exc_info=(
-                type(recovery_error),
-                recovery_error,
-                recovery_error.__traceback__,
-            ),
-        )
-    _set_state_entry(state, recovered)
-    return recovered
 
 
 def _notification_failure_warning(state: _InternalEngineSubmissionState) -> None:
@@ -807,85 +463,6 @@ def _notification_failure_warning(state: _InternalEngineSubmissionState) -> None
         "queued notification delivery failed; state/index recorded and notification "
         "was not retried (at-most-once delivery)",
     )
-
-
-def _record_queued_with_warning(
-    *,
-    cfg: Any,
-    state: _InternalEngineSubmissionState,
-    record_queued_fn: Callable[[Any, Any, Any], Any],
-) -> None:
-    publication_token = state.publication_token
-    submission = state.submission
-    entry = state.entry
-    if submission is None or entry is None:
-        return
-    repair_marked = False
-    try:
-        with queue_record_publication_lock(
-            submission.queue_root,
-            getattr(entry, "queue_id", ""),
-        ):
-            if not _owns_queued_record_publication(
-                state,
-                expected_token=publication_token,
-                expected_state=QUEUE_RECORD_SYNC_PREPARING,
-            ):
-                if _publication_was_cancelled(state):
-                    state.deferred_reason = STATUS_CANCEL_REQUESTED
-                else:
-                    _append_warning(
-                        state,
-                        "queued job record publication ownership changed; "
-                        "worker/replay will reconcile",
-                    )
-                return
-            try:
-                notification_delivered = record_queued_fn(cfg, state.submission, state.entry)
-                if notification_delivered is False:
-                    _notification_failure_warning(state)
-                if not _transition_owned_queued_record_sync(
-                    state,
-                    expected_token=publication_token,
-                    expected_state=QUEUE_RECORD_SYNC_PREPARING,
-                    target_state=QUEUE_RECORD_SYNC_COMPLETE,
-                    owner_pid=0,
-                ):
-                    _append_warning(
-                        state,
-                        "queued job record publication ownership changed; "
-                        "worker/replay will reconcile",
-                    )
-            except BaseException:  # noqa: BLE001
-                _mark_queued_record_repair_pending(
-                    state,
-                    expected_token=publication_token,
-                    expected_state=QUEUE_RECORD_SYNC_PREPARING,
-                )
-                repair_marked = True
-                raise
-    except BaseException as exc:  # noqa: BLE001
-        if not repair_marked:
-            _mark_queued_record_repair_pending(
-                state,
-                expected_token=publication_token,
-                expected_state=QUEUE_RECORD_SYNC_PREPARING,
-            )
-        if not isinstance(exc, Exception):
-            raise
-        logger.warning(
-            "queued job record update failed after queue submission succeeded: "
-            "job_dir=%s queue_id=%s error=%s",
-            state.resolved_job_dir,
-            getattr(state.entry, "queue_id", ""),
-            exc,
-            exc_info=True,
-        )
-        _append_warning(
-            state,
-            "queued job record update failed; queue submission succeeded "
-            f"({exc.__class__.__name__}: {exc})",
-        )
 
 
 def _repair_queued_record(
@@ -900,180 +477,72 @@ def _repair_queued_record(
     if submission is None or not isinstance(entry, QueueEntry):
         return
 
-    repair_token = timestamped_token("record_sync", token_bytes=16)
+    def publish(current: QueueEntry) -> None:
+        # From the moment the repair claim commits, the publication belongs to
+        # the repair lease, including reconstruction of the replay submission.
+        _set_state_entry(state, current)
+        state.submission = _submission_for_existing_entry(
+            submission,
+            current,
+            suppress_queued_notification=suppress_queued_notification,
+        )
+        notification_delivered = record_queued_fn(cfg, state.submission, state.entry)
+        if notification_delivered is False:
+            _notification_failure_warning(state)
 
-    def claim(entries: list[QueueEntry]) -> tuple[tuple[str, QueueEntry], bool]:
-        for index, current in enumerate(entries):
-            if current.queue_id != entry.queue_id:
-                continue
-            if not _same_queue_generation(current, entry):
-                return ("identity_changed", current), False
-            if current.cancel_requested:
-                return ("cancel_requested", current), False
-            sync_state = normalize_text(current.metadata.get(QUEUE_RECORD_SYNC_KEY)).lower()
-            if sync_state == QUEUE_RECORD_SYNC_COMPLETE:
-                return ("complete", current), False
-            if current.status == QueueStatus.RUNNING:
-                return ("running", current), False
-            if current.status != QueueStatus.PENDING:
-                return ("terminal", current), False
-            if sync_state and sync_state not in {
-                QUEUE_RECORD_SYNC_PREPARING,
-                QUEUE_RECORD_SYNC_REPAIR_PENDING,
-                QUEUE_RECORD_SYNC_REPAIRING,
-            }:
-                return ("invalid_state", current), False
-            metadata = dict(current.metadata)
-            metadata.update(
-                _queued_record_sync_metadata(
-                    QUEUE_RECORD_SYNC_REPAIRING,
-                    token=repair_token,
-                    owner_pid=os.getpid(),
-                )
-            )
-            updated = replace(current, metadata=metadata)
-            entries[index] = updated
-            return ("claimed", updated), True
+    outcome = repair_enqueue_publication_outcome(
+        Path(submission.queue_root),
+        entry,
+        publish=publish,
+        label=normalize_text(getattr(submission, "engine", "")) or "internal-engine",
+        same_generation=_same_queue_generation,
+        repair_missing_lease=True,
+    )
+    if outcome.reason == "published":
+        _append_warning(state, "queued job state/index repaired")
+        return
+    if outcome.entry is not None and outcome.reason not in {"failed", "claim_failed"}:
+        _set_state_entry(state, outcome.entry)
+        state.submission = _submission_for_existing_entry(
+            submission,
+            outcome.entry,
+            suppress_queued_notification=suppress_queued_notification,
+        )
+    if outcome.reason == "cancelled":
+        state.deferred_reason = STATUS_CANCEL_REQUESTED
+    elif outcome.reason == "invalid_state":
         raise RuntimeError(
-            f"queue entry disappeared while claiming queued-state repair: {entry.queue_id}"
+            "queued job state/index repair refused an invalid publication state "
+            f"for queue_id={outcome.entry.queue_id if outcome.entry is not None else ''}"
         )
-
-    try:
-        # The publication lock, rather than a live PID recorded in the row, is
-        # the authoritative proof of an active publication scope. Once this
-        # lock is acquired an abandoned PREPARING/REPAIRING lease is safe to
-        # reclaim even when its publisher is a still-running bot/API process.
-        with queue_record_publication_lock(submission.queue_root, entry.queue_id):
-            outcome, current = mutate_entries(submission.queue_root, claim)
-    except BaseException as exc:  # noqa: BLE001
-        # The queue mutation may have committed the REPAIRING lease before its
-        # durability barrier reported failure.  Fence it back to retryable
-        # state even for process-control exceptions, while preserving those
-        # exceptions for the caller.
-        _mark_queued_record_repair_pending(
+    elif outcome.reason == "running":
+        _append_warning(
             state,
-            expected_token=repair_token,
-            expected_state=QUEUE_RECORD_SYNC_REPAIRING,
+            "queued job state/index repair skipped because the worker is running",
         )
-        if not isinstance(exc, Exception):
-            raise
+    elif outcome.reason == "identity_changed":
+        _append_warning(
+            state,
+            "queued job state/index repair refused a changed queue generation",
+        )
+    elif outcome.reason in {"failed", "claim_failed", "missing"}:
+        error = outcome.error
+        detail = (
+            f" ({error.__class__.__name__}: {error})"
+            if error is not None
+            else " (queue entry disappeared)"
+        )
+        stage = "repair claim" if outcome.reason in {"claim_failed", "missing"} else "repair"
         logger.warning(
-            "queued job record repair claim failed after queue submission succeeded: "
-            "job_dir=%s queue_id=%s error=%s",
+            "queued job record %s failed after queue submission succeeded: job_dir=%s queue_id=%s",
+            stage,
             state.resolved_job_dir,
             entry.queue_id,
-            exc,
-            exc_info=True,
         )
         _append_warning(
             state,
-            "queued job record repair claim failed; queue submission succeeded "
-            f"({exc.__class__.__name__}: {exc})",
+            f"queued job record {stage} failed; queue submission succeeded{detail}",
         )
-        return
-
-    if outcome != "claimed":
-        _set_state_entry(state, current)
-        state.submission = _submission_for_existing_entry(
-            submission,
-            current,
-            suppress_queued_notification=suppress_queued_notification,
-        )
-        if outcome == "cancel_requested":
-            state.deferred_reason = STATUS_CANCEL_REQUESTED
-        elif outcome == "invalid_state":
-            raise RuntimeError(
-                "queued job state/index repair refused an invalid publication state "
-                f"for queue_id={current.queue_id}"
-            )
-        elif outcome == "running":
-            _append_warning(
-                state,
-                "queued job state/index repair skipped because the worker is running",
-            )
-        elif outcome == "in_progress":
-            _append_warning(state, "queued job state/index publication is already in progress")
-        elif outcome == "identity_changed":
-            _append_warning(
-                state,
-                "queued job state/index repair refused a changed queue generation",
-            )
-        return
-
-    # From the moment claim commits, every subsequent operation belongs to the
-    # repair lease and must be covered by the rollback fence, including local
-    # reconstruction of the replay submission.
-    state.publication_token = repair_token
-    repair_marked = False
-    try:
-        _set_state_entry(state, current)
-        state.submission = _submission_for_existing_entry(
-            submission,
-            current,
-            suppress_queued_notification=suppress_queued_notification,
-        )
-        with queue_record_publication_lock(submission.queue_root, entry.queue_id):
-            if not _owns_queued_record_publication(
-                state,
-                expected_token=repair_token,
-                expected_state=QUEUE_RECORD_SYNC_REPAIRING,
-            ):
-                if _publication_was_cancelled(state):
-                    state.deferred_reason = STATUS_CANCEL_REQUESTED
-                else:
-                    _append_warning(
-                        state,
-                        "queued job state/index repair ownership changed before publication",
-                    )
-                return
-            try:
-                notification_delivered = record_queued_fn(cfg, state.submission, state.entry)
-                if notification_delivered is False:
-                    _notification_failure_warning(state)
-                if not _transition_owned_queued_record_sync(
-                    state,
-                    expected_token=repair_token,
-                    expected_state=QUEUE_RECORD_SYNC_REPAIRING,
-                    target_state=QUEUE_RECORD_SYNC_COMPLETE,
-                    owner_pid=0,
-                ):
-                    _append_warning(
-                        state,
-                        "queued job state/index repaired but publication ownership changed",
-                    )
-                    return
-            except BaseException:  # noqa: BLE001
-                _mark_queued_record_repair_pending(
-                    state,
-                    expected_token=repair_token,
-                    expected_state=QUEUE_RECORD_SYNC_REPAIRING,
-                )
-                repair_marked = True
-                raise
-    except BaseException as exc:  # noqa: BLE001
-        if not repair_marked:
-            _mark_queued_record_repair_pending(
-                state,
-                expected_token=repair_token,
-                expected_state=QUEUE_RECORD_SYNC_REPAIRING,
-            )
-        if not isinstance(exc, Exception):
-            raise
-        logger.warning(
-            "queued job record repair failed after queue submission succeeded: "
-            "job_dir=%s queue_id=%s error=%s",
-            state.resolved_job_dir,
-            entry.queue_id,
-            exc,
-            exc_info=True,
-        )
-        _append_warning(
-            state,
-            "queued job record repair failed; queue submission succeeded "
-            f"({exc.__class__.__name__}: {exc})",
-        )
-        return
-    _append_warning(state, "queued job state/index repaired")
 
 
 def repair_internal_engine_queue_publication(
@@ -1155,7 +624,6 @@ def repair_internal_engine_queue_publication(
         resolved_job_dir=resolved_job_dir,
         submission=base_submission,
         entry=entry,
-        publication_token=normalize_text(entry.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY)),
     )
     _repair_queued_record(
         cfg=cfg,
@@ -1192,16 +660,9 @@ def _enqueue_internal_engine_submission(
     state.resolved_job_dir = resolve_job_dir_fn(cfg, request.job_dir)
     manifest = load_manifest_fn(state.resolved_job_dir)
     state.submission = build_submission_fn(cfg, state.resolved_job_dir, manifest, request.args)
-    state.publication_token = timestamped_token("record_sync", token_bytes=16)
-    publication_metadata = _queued_record_sync_metadata(
-        QUEUE_RECORD_SYNC_PREPARING,
-        token=state.publication_token,
-        owner_pid=os.getpid(),
-    )
-    state.submission.metadata.update(publication_metadata)
-    enqueue_metadata = dict(state.submission.metadata)
+    submission = state.submission
     try:
-        intent = _submission_snapshot_intent(state.submission)
+        intent = _submission_snapshot_intent(submission)
         if intent is not None:
             intent_root, intent_token = intent
             transition_snapshot_intent(
@@ -1211,35 +672,47 @@ def _enqueue_internal_engine_submission(
                 expected_states={SNAPSHOT_INTENT_STATE_CREATING},
             )
     except BaseException:
-        _cleanup_unowned_submission_snapshot(state.submission)
+        _cleanup_unowned_submission_snapshot(submission)
         raise
+
+    def publish(current: QueueEntry) -> None:
+        _set_state_entry(state, current)
+        notification_delivered = record_queued_fn(cfg, state.submission, state.entry)
+        if notification_delivered is False:
+            _notification_failure_warning(state)
+
+    spec = EnqueuePublicationSpec(
+        queue_root=Path(submission.queue_root),
+        app_name=submission.app_name,
+        task_id=submission.task_id,
+        task_kind=submission.task_kind,
+        engine=submission.engine,
+        priority=submission.priority,
+        metadata=dict(submission.metadata),
+        label=normalize_text(getattr(submission, "engine", "")) or "internal-engine",
+        publish=publish,
+        duplicate_policy=_reject_active_job_dir_duplicate,
+        enqueue_fn=enqueue_fn,
+        on_compensated_failure=lambda: _cleanup_unowned_submission_snapshot(submission),
+        same_generation=_same_queue_generation,
+    )
     try:
-        state.entry = enqueue_fn(
-            state.submission.queue_root,
-            app_name=state.submission.app_name,
-            task_id=state.submission.task_id,
-            task_kind=state.submission.task_kind,
-            engine=state.submission.engine,
-            priority=state.submission.priority,
-            metadata=enqueue_metadata,
-            duplicate_policy=_reject_active_job_dir_duplicate,
-        )
+        outcome = run_enqueue_publication(spec)
     except _ActiveJobDirCancellationPending as pending:
-        _cleanup_unowned_submission_snapshot(state.submission)
+        # The driver already ran the compensated-failure cleanup hook before
+        # re-raising, so the unowned snapshot is gone.
         state.entry = pending.existing
-        state.submission = _submission_for_existing_entry(state.submission, pending.existing)
+        state.submission = _submission_for_existing_entry(submission, pending.existing)
         state.deferred_reason = STATUS_CANCEL_REQUESTED
         return
     except _ActiveJobDirReplay as replay:
-        if not _matches_submission_engine_identity(replay.existing, state.submission):
-            _cleanup_unowned_submission_snapshot(state.submission)
+        if not _matches_submission_engine_identity(replay.existing, submission):
             raise RuntimeError(
                 "active job directory is owned by a conflicting queue identity "
                 f"(queue_id={replay.existing.queue_id})"
             ) from replay
-        _cleanup_unowned_submission_snapshot(state.submission)
         state.entry = replay.existing
-        state.submission = _submission_for_existing_entry(state.submission, replay.existing)
+        state.submission = _submission_for_existing_entry(submission, replay.existing)
         _append_warning(
             state,
             "active job directory submission replayed; reused existing queue entry "
@@ -1251,37 +724,13 @@ def _enqueue_internal_engine_submission(
             record_queued_fn=record_queued_fn,
         )
         return
-    except BaseException as exc:  # noqa: BLE001
-        recovered = _recover_post_commit_enqueue(
-            state,
-            enqueue_metadata=enqueue_metadata,
-        )
-        if recovered is None:
-            _cleanup_unowned_submission_snapshot(state.submission)
-            raise
-        _mark_submission_snapshot_owned(state.submission, state)
-        _append_warning(
-            state,
-            "queue enqueue reported an error after durable persistence; "
-            f"recovered queued entry ({exc.__class__.__name__}: {exc})",
-        )
-        if not isinstance(exc, Exception):
-            raise
-        _repair_queued_record(
-            cfg=cfg,
-            state=state,
-            record_queued_fn=record_queued_fn,
-            suppress_queued_notification=False,
-        )
+    _set_state_entry(state, outcome.entry)
+    _mark_submission_snapshot_owned(submission, state)
+    if outcome.cancelled:
+        state.deferred_reason = STATUS_CANCEL_REQUESTED
         return
-    _mark_submission_snapshot_owned(state.submission, state)
-    if isinstance(state.entry, QueueEntry):
-        _set_state_entry(state, state.entry)
-    _record_queued_with_warning(
-        cfg=cfg,
-        state=state,
-        record_queued_fn=record_queued_fn,
-    )
+    for warning in outcome.warnings:
+        _append_warning(state, warning)
 
 
 def _queued_submission_fields(
