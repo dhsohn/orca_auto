@@ -100,9 +100,38 @@ class EnqueuePublicationSpec:
     after_commit_fn: Callable[[], Any] | None = None
     finalize_intent: Callable[[QueueEntry], None] | None = None
     on_compensated_failure: Callable[[], None] | None = None
+    enqueue_fn: Callable[..., Any] | None = None
     same_generation: Callable[[QueueEntry, QueueEntry], bool] = field(
         default=queue_entries_same_generation
     )
+
+
+@dataclass(frozen=True)
+class RepairOutcome:
+    """One repair attempt's result; ``reason`` names the branch taken.
+
+    ``published`` means this call claimed the lease and published the queued
+    record. ``complete``/``cancelled``/``running``/``terminal``/``missing``
+    mean there was nothing left for this repair to do. ``invalid_state`` and
+    ``identity_changed`` are refusals; ``failed``/``claim_failed`` mean the
+    attempt raised (``error`` carries the exception) and the lease was parked
+    back to REPAIR_PENDING.
+    """
+
+    reason: str
+    entry: QueueEntry | None = None
+    error: BaseException | None = None
+
+    @property
+    def repaired(self) -> bool:
+        return self.reason in {
+            "published",
+            "complete",
+            "cancelled",
+            "running",
+            "terminal",
+            "missing",
+        }
 
 
 def _entry_token(entry: QueueEntry) -> str:
@@ -457,8 +486,9 @@ def run_enqueue_publication(spec: EnqueuePublicationSpec) -> EnqueuePublicationO
             owner_pid=os.getpid(),
         )
     )
+    enqueue_fn = spec.enqueue_fn if spec.enqueue_fn is not None else enqueue
     try:
-        entry = enqueue(
+        entry = enqueue_fn(
             spec.queue_root,
             app_name=spec.app_name,
             task_id=spec.task_id,
@@ -560,14 +590,37 @@ def repair_enqueue_publication(
     publish: Callable[[QueueEntry], None],
     label: str,
     same_generation: Callable[[QueueEntry, QueueEntry], bool] = queue_entries_same_generation,
+    repair_missing_lease: bool = False,
 ) -> bool:
+    """Boolean form of :func:`repair_enqueue_publication_outcome`."""
+
+    return repair_enqueue_publication_outcome(
+        queue_root,
+        entry,
+        publish=publish,
+        label=label,
+        same_generation=same_generation,
+        repair_missing_lease=repair_missing_lease,
+    ).repaired
+
+
+def repair_enqueue_publication_outcome(
+    queue_root: Path,
+    entry: QueueEntry,
+    *,
+    publish: Callable[[QueueEntry], None],
+    label: str,
+    same_generation: Callable[[QueueEntry, QueueEntry], bool] = queue_entries_same_generation,
+    repair_missing_lease: bool = False,
+) -> RepairOutcome:
     """Re-publish one committed row whose queued record never landed.
 
     Claims the row under the publication lock with a fresh token (the lock,
     not a live PID in the row, is the authoritative ownership proof), writes
     the queued job artifact, and marks the sync lease COMPLETE. Any failure
     parks the row as REPAIR_PENDING so it stays unclaimable rather than
-    running without its published record.
+    running without its published record. ``repair_missing_lease`` extends
+    the claim to legacy rows carrying no sync lease at all.
     """
 
     repair_token = timestamped_token("record_sync", token_bytes=16)
@@ -583,9 +636,13 @@ def repair_enqueue_publication(
             sync_state = queue_record_sync_state(current)
             if sync_state == QUEUE_RECORD_SYNC_COMPLETE:
                 return ("complete", current), False
+            if current.status == QueueStatus.RUNNING:
+                return ("running", current), False
             if current.status != QueueStatus.PENDING:
                 return ("terminal", current), False
-            if sync_state not in REPAIRABLE_SYNC_STATES:
+            if sync_state not in REPAIRABLE_SYNC_STATES and (
+                sync_state or not repair_missing_lease
+            ):
                 return ("invalid_state", current), False
             metadata = dict(current.metadata)
             metadata.update(
@@ -600,7 +657,7 @@ def repair_enqueue_publication(
             return ("claimed", updated), True
         return ("missing", None), False
 
-    def complete(entries: list[QueueEntry]) -> tuple[None, bool]:
+    def complete(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
         for index, row in enumerate(entries):
             if row.queue_id != entry.queue_id:
                 continue
@@ -625,8 +682,9 @@ def repair_enqueue_publication(
                     owner_pid=0,
                 )
             )
-            entries[index] = replace(row, metadata=metadata)
-            return None, True
+            updated = replace(row, metadata=metadata)
+            entries[index] = updated
+            return updated, True
         raise RuntimeError(f"{label}: queue entry disappeared during repair: {entry.queue_id}")
 
     def park_repair_lease(entries: list[QueueEntry]) -> tuple[None, bool]:
@@ -665,20 +723,19 @@ def repair_enqueue_publication(
                         queue_record_sync_state(current),
                         entry.queue_id,
                     )
-                    return False
-                if outcome == "identity_changed":
+                elif outcome == "identity_changed":
                     logger.warning(
                         "%s: queued record repair refused a changed queue generation: queue_id=%s",
                         label,
                         entry.queue_id,
                     )
-                    return False
-                # complete / cancelled / terminal / missing: nothing left to repair.
-                return True
+                # complete / cancelled / running / terminal / missing: nothing
+                # left for this repair to do.
+                return RepairOutcome(reason=outcome, entry=current)
             claimed = True
             assert current is not None
             publish(current)
-            mutate_entries(queue_root, complete)
+            completed = mutate_entries(queue_root, complete)
     except BaseException as exc:  # noqa: BLE001
         # Even a failed claim may have committed before its durability barrier
         # reported failure; park the lease so the row cannot strand in
@@ -702,9 +759,13 @@ def repair_enqueue_publication(
             entry.queue_id,
             exc_info=True,
         )
-        return False
+        return RepairOutcome(
+            reason="failed" if claimed else "claim_failed",
+            entry=entry,
+            error=exc,
+        )
     logger.info("%s: repaired queued record publication: queue_id=%s", label, entry.queue_id)
-    return True
+    return RepairOutcome(reason="published", entry=completed)
 
 
 __all__ = [
@@ -712,6 +773,8 @@ __all__ = [
     "EnqueuePublicationOutcome",
     "EnqueuePublicationOutcomeUnknown",
     "EnqueuePublicationSpec",
+    "RepairOutcome",
     "repair_enqueue_publication",
+    "repair_enqueue_publication_outcome",
     "run_enqueue_publication",
 ]

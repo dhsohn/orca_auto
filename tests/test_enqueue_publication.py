@@ -175,3 +175,16 @@ def test_repair_base_exception_parks_then_propagates(tmp_path: Path) -> None:
     [row] = list_queue(tmp_path)
     assert row.status == QueueStatus.PENDING
     assert row.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
+
+
+def test_publication_keyboard_interrupt_parks_then_propagates(tmp_path: Path) -> None:
+    (tmp_path / "job").mkdir()
+
+    def interrupted_publish(_entry: Any) -> None:
+        raise KeyboardInterrupt("operator interrupt during publication")
+
+    with pytest.raises(KeyboardInterrupt):
+        run_enqueue_publication(_spec(tmp_path, publish=interrupted_publish))
+    [row] = list_queue(tmp_path)
+    assert row.status == QueueStatus.PENDING
+    assert row.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
