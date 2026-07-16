@@ -7,6 +7,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -14,8 +15,7 @@ from orca_auto.smoke import manifest as smoke_manifest
 from orca_auto.smoke.catalog import SmokeScenario
 from orca_auto.smoke.manifest import (
     build_case_manifest,
-    create_batch_directory,
-    observe_terminal,
+    create_pinned_batch_directory,
     prepare_smoke_root,
     source_identity,
 )
@@ -154,7 +154,7 @@ def test_batch_creation_does_not_follow_replaced_batches_namespace(
     monkeypatch.setattr(smoke_manifest, "source_identity", replace_batches)
 
     with pytest.raises(ValueError, match="Batches root identity changed"):
-        create_batch_directory(smoke_root, profile="fake", repo_root=repo)
+        create_pinned_batch_directory(smoke_root, profile="fake", repo_root=repo)
 
     assert list(outside.iterdir()) == []
 
@@ -172,11 +172,15 @@ def test_batch_directory_name_is_short_and_source_identity_stays_in_manifest(
     _git(repo, "-c", "commit.gpgsign=false", "commit", "-qm", "initial")
     smoke_root = prepare_smoke_root(tmp_path / "runs")
 
-    batch_dir, manifest = create_batch_directory(
+    pinned = create_pinned_batch_directory(
         smoke_root,
         profile="fake",
         repo_root=repo,
     )
+    try:
+        batch_dir, manifest = pinned.batch_dir, pinned.manifest
+    finally:
+        pinned.close()
 
     assert re.fullmatch(r"\d{8}-\d{6}-f-[0-9a-f]{6}", batch_dir.name)
     assert len(batch_dir.name) == 24
@@ -191,7 +195,7 @@ def test_atomic_manifest_publish_failure_is_reported_not_rolled_back(
 ) -> None:
     # Smoke manifests are regenerable, so a durability failure after the
     # rename surfaces as an error instead of restoring the previous surface.
-    directory_fd = os.open(tmp_path, smoke_manifest._directory_open_flags())
+    directory_fd = os.open(tmp_path, smoke_manifest.directory_open_flags())
     try:
         smoke_manifest._atomic_write_json_at(
             directory_fd,
@@ -223,7 +227,7 @@ def test_atomic_manifest_cleanup_failure_does_not_reverse_verified_commit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    directory_fd = os.open(tmp_path, smoke_manifest._directory_open_flags())
+    directory_fd = os.open(tmp_path, smoke_manifest.directory_open_flags())
     try:
         smoke_manifest._atomic_write_json_at(
             directory_fd,
@@ -273,15 +277,20 @@ def test_case_manifest_fails_when_completed_and_queued_records_are_both_present(
         required_artifacts=("job_state.json",),
     )
 
-    manifest = build_case_manifest(
-        scenario=scenario,
-        batch_dir=batch_dir,
-        case_dir=case_dir,
-        runtime_dir=runtime_dir,
-        pytest_result={"passed": True, "skipped": 0},
-        started_at="2026-07-14T00:00:00+00:00",
-        finished_at="2026-07-14T00:00:01+00:00",
-    )
+    runtime_fd = os.open(runtime_dir, smoke_manifest.directory_open_flags())
+    try:
+        manifest = build_case_manifest(
+            scenario=scenario,
+            batch_dir=batch_dir,
+            case_dir=case_dir,
+            runtime_dir=runtime_dir,
+            runtime_fd=runtime_fd,
+            pytest_result={"passed": True, "skipped": 0},
+            started_at="2026-07-14T00:00:00+00:00",
+            finished_at="2026-07-14T00:00:01+00:00",
+        )
+    finally:
+        os.close(runtime_fd)
 
     assert manifest["observed_terminal"]["status"] == "mixed"
     assert {
@@ -292,6 +301,19 @@ def test_case_manifest_fails_when_completed_and_queued_records_are_both_present(
     }
     assert manifest["verdict"] == "failed"
     assert manifest["failure_reasons"] == ["terminal_status_mismatch"]
+
+
+def _observe(runtime_dir: Path, *, surface: str) -> dict[str, Any]:
+    runtime_fd = os.open(runtime_dir, smoke_manifest.directory_open_flags())
+    try:
+        target_name = "workflow.json" if surface == "workflow" else "job_state.json"
+        files = smoke_manifest._scan_runtime(
+            runtime_fd,
+            payload_names=frozenset({target_name}),
+        )
+    finally:
+        os.close(runtime_fd)
+    return smoke_manifest._observe_terminal_from_scan(files, surface=surface)
 
 
 @pytest.mark.parametrize(
@@ -311,7 +333,7 @@ def test_observe_terminal_requires_consistent_terminal_records(
     for index, status in enumerate(statuses):
         _write_job_state(tmp_path, f"job_{index}", {"status": status})
 
-    observed = observe_terminal(tmp_path, surface="orca-standalone")
+    observed = _observe(tmp_path, surface="orca-standalone")
 
     assert observed["status"] == expected_status
     assert sorted(record["status"] for record in observed["records"]) == sorted(statuses)
@@ -325,7 +347,7 @@ def test_observe_terminal_preserves_invalid_and_missing_status_records(tmp_path:
     _write_job_state(tmp_path, "missing_status", {"reason": "not terminalized"})
     _write_job_state(tmp_path, "completed", {"status": "completed"})
 
-    observed = observe_terminal(tmp_path, surface="orca-standalone")
+    observed = _observe(tmp_path, surface="orca-standalone")
 
     assert observed["status"] == "mixed"
     assert {record["path"]: record["status"] for record in observed["records"]} == {
@@ -337,6 +359,6 @@ def test_observe_terminal_preserves_invalid_and_missing_status_records(tmp_path:
 
 
 def test_observe_terminal_reports_missing_when_no_state_records_exist(tmp_path: Path) -> None:
-    observed = observe_terminal(tmp_path, surface="orca-standalone")
+    observed = _observe(tmp_path, surface="orca-standalone")
 
     assert observed == {"status": "missing", "reasons": [], "records": []}

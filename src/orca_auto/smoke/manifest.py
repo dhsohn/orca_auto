@@ -40,7 +40,7 @@ _SMOKE_INIT_LOCK_FILENAME = ".orca_auto_smoke.init.lock"
 
 
 @dataclass(frozen=True)
-class _DirectoryIdentity:
+class DirectoryIdentity:
     device: int
     inode: int
 
@@ -53,7 +53,7 @@ class _ScannedRegularFile:
 
 
 @dataclass
-class _PinnedBatchDirectory:
+class PinnedBatchDirectory:
     smoke_root: Path
     batch_dir: Path
     manifest: dict[str, Any]
@@ -61,10 +61,10 @@ class _PinnedBatchDirectory:
     batches_fd: int
     batch_fd: int
     cases_fd: int
-    smoke_identity: _DirectoryIdentity
-    batches_identity: _DirectoryIdentity
-    batch_identity: _DirectoryIdentity
-    cases_identity: _DirectoryIdentity
+    smoke_identity: DirectoryIdentity
+    batches_identity: DirectoryIdentity
+    batch_identity: DirectoryIdentity
+    cases_identity: DirectoryIdentity
 
     @property
     def smoke_access_path(self) -> Path:
@@ -83,19 +83,19 @@ class _PinnedBatchDirectory:
             self.smoke_identity,
             label="Smoke results root",
         )
-        _assert_named_directory_identity(
+        assert_named_directory_identity(
             self.smoke_root_fd,
             "batches",
             self.batches_identity,
             label="Batches root",
         )
-        _assert_named_directory_identity(
+        assert_named_directory_identity(
             self.batches_fd,
             self.batch_dir.name,
             self.batch_identity,
             label="Smoke batch directory",
         )
-        _assert_named_directory_identity(
+        assert_named_directory_identity(
             self.batch_fd,
             "cases",
             self.cases_identity,
@@ -116,7 +116,7 @@ class _PinnedBatchDirectory:
 
 
 @dataclass
-class _PinnedCaseDirectory:
+class PinnedCaseDirectory:
     case_id: str
     batch_fd: int
     cases_fd: int
@@ -124,11 +124,11 @@ class _PinnedCaseDirectory:
     runtime_fd: int
     harness_fd: int
     pytest_fd: int
-    cases_identity: _DirectoryIdentity
-    case_identity: _DirectoryIdentity
-    runtime_identity: _DirectoryIdentity
-    harness_identity: _DirectoryIdentity
-    pytest_identity: _DirectoryIdentity
+    cases_identity: DirectoryIdentity
+    case_identity: DirectoryIdentity
+    runtime_identity: DirectoryIdentity
+    harness_identity: DirectoryIdentity
+    pytest_identity: DirectoryIdentity
 
     @property
     def case_access_path(self) -> Path:
@@ -147,31 +147,31 @@ class _PinnedCaseDirectory:
         return Path("/proc") / str(os.getpid()) / "fd" / str(self.pytest_fd)
 
     def assert_namespace_identity(self) -> None:
-        _assert_named_directory_identity(
+        assert_named_directory_identity(
             self.batch_fd,
             "cases",
             self.cases_identity,
             label="Smoke cases directory",
         )
-        _assert_named_directory_identity(
+        assert_named_directory_identity(
             self.cases_fd,
             self.case_id,
             self.case_identity,
             label="Smoke case directory",
         )
-        _assert_named_directory_identity(
+        assert_named_directory_identity(
             self.case_fd,
             "runtime",
             self.runtime_identity,
             label="Smoke case runtime directory",
         )
-        _assert_named_directory_identity(
+        assert_named_directory_identity(
             self.runtime_fd,
             "_smoke_harness",
             self.harness_identity,
             label="Smoke harness directory",
         )
-        _assert_named_directory_identity(
+        assert_named_directory_identity(
             self.runtime_fd,
             "pytest",
             self.pytest_identity,
@@ -214,20 +214,20 @@ def _bounded_json_mapping(path: Path) -> dict[str, Any] | None:
     return raw if isinstance(raw, dict) else None
 
 
-def _directory_open_flags() -> int:
+def directory_open_flags() -> int:
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
     return flags
 
 
-def _directory_identity(directory_fd: int) -> _DirectoryIdentity:
+def _directory_identity(directory_fd: int) -> DirectoryIdentity:
     details = os.fstat(directory_fd)
     if not stat.S_ISDIR(details.st_mode):
         raise ValueError("smoke path identity is not a directory")
-    return _DirectoryIdentity(details.st_dev, details.st_ino)
+    return DirectoryIdentity(details.st_dev, details.st_ino)
 
 
-def _validate_owned_directory(directory_fd: int, *, label: str) -> _DirectoryIdentity:
+def validate_owned_directory(directory_fd: int, *, label: str) -> DirectoryIdentity:
     details = os.fstat(directory_fd)
     if not stat.S_ISDIR(details.st_mode):
         raise ValueError(f"{label} must be a directory")
@@ -235,18 +235,18 @@ def _validate_owned_directory(directory_fd: int, *, label: str) -> _DirectoryIde
         raise ValueError(f"{label} must be owned by the current user")
     if stat.S_IMODE(details.st_mode) & 0o022:
         raise ValueError(f"{label} must not be group- or world-writable")
-    return _DirectoryIdentity(details.st_dev, details.st_ino)
+    return DirectoryIdentity(details.st_dev, details.st_ino)
 
 
-def _assert_named_directory_identity(
+def assert_named_directory_identity(
     parent_fd: int,
     name: str,
-    expected: _DirectoryIdentity,
+    expected: DirectoryIdentity,
     *,
     label: str,
 ) -> None:
     try:
-        descriptor = os.open(name, _directory_open_flags(), dir_fd=parent_fd)
+        descriptor = os.open(name, directory_open_flags(), dir_fd=parent_fd)
     except OSError as exc:
         raise ValueError(f"{label} identity changed") from exc
     try:
@@ -258,12 +258,12 @@ def _assert_named_directory_identity(
 
 def _assert_path_directory_identity(
     path: Path,
-    expected: _DirectoryIdentity,
+    expected: DirectoryIdentity,
     *,
     label: str,
 ) -> None:
     try:
-        descriptor = os.open(path, _directory_open_flags())
+        descriptor = os.open(path, directory_open_flags())
     except OSError as exc:
         raise ValueError(f"{label} identity changed") from exc
     try:
@@ -286,33 +286,33 @@ def _validate_path_component(name: str, *, label: str) -> None:
 
 def _create_owned_directory_at(
     parent_fd: int, name: str, *, label: str
-) -> tuple[int, _DirectoryIdentity]:
+) -> tuple[int, DirectoryIdentity]:
     _validate_path_component(name, label=label)
     try:
         os.mkdir(name, mode=0o700, dir_fd=parent_fd)
         os.fsync(parent_fd)
-        directory_fd = os.open(name, _directory_open_flags(), dir_fd=parent_fd)
+        directory_fd = os.open(name, directory_open_flags(), dir_fd=parent_fd)
     except FileExistsError as exc:
         raise ValueError(f"{label} already exists") from exc
     except OSError as exc:
         raise ValueError(f"{label} could not be created safely") from exc
     try:
-        identity = _validate_owned_directory(directory_fd, label=label)
-        _assert_named_directory_identity(parent_fd, name, identity, label=label)
+        identity = validate_owned_directory(directory_fd, label=label)
+        assert_named_directory_identity(parent_fd, name, identity, label=label)
         return directory_fd, identity
     except BaseException:
         os.close(directory_fd)
         raise
 
 
-def _create_pinned_case_directory(
+def create_pinned_case_directory(
     *,
     batch_fd: int,
     cases_fd: int,
-    cases_identity: _DirectoryIdentity,
+    cases_identity: DirectoryIdentity,
     case_id: str,
-) -> _PinnedCaseDirectory:
-    _assert_named_directory_identity(
+) -> PinnedCaseDirectory:
+    assert_named_directory_identity(
         batch_fd,
         "cases",
         cases_identity,
@@ -343,7 +343,7 @@ def _create_pinned_case_directory(
             "pytest",
             label="Smoke pytest directory",
         )
-        pinned = _PinnedCaseDirectory(
+        pinned = PinnedCaseDirectory(
             case_id=case_id,
             batch_fd=batch_fd,
             cases_fd=cases_fd,
@@ -470,7 +470,7 @@ def prepare_smoke_root(runs_root: str | Path) -> Path:
         "schema_version": SMOKE_SCHEMA_VERSION,
         "kind": "orca_auto_smoke_results",
     }
-    root_fd = os.open(validated_root, _directory_open_flags())
+    root_fd = os.open(validated_root, directory_open_flags())
     root_identity = _directory_identity(root_fd)
     smoke_fd: int | None = None
     try:
@@ -496,7 +496,7 @@ def prepare_smoke_root(runs_root: str | Path) -> Path:
                     raise ValueError(f"Smoke results root must not be a symlink: {smoke_root}")
                 smoke_fd = os.open(
                     SMOKE_RESULTS_DIRNAME,
-                    _directory_open_flags(),
+                    directory_open_flags(),
                     dir_fd=root_fd,
                 )
             except ValueError:
@@ -505,7 +505,7 @@ def prepare_smoke_root(runs_root: str | Path) -> Path:
                 raise ValueError(
                     f"Smoke results root is unavailable or unsafe: {smoke_root}"
                 ) from exc
-            smoke_identity = _validate_owned_directory(smoke_fd, label="Smoke results root")
+            smoke_identity = validate_owned_directory(smoke_fd, label="Smoke results root")
             if created:
                 _atomic_write_json_at(
                     smoke_fd,
@@ -515,7 +515,7 @@ def prepare_smoke_root(runs_root: str | Path) -> Path:
             owner = _bounded_json_mapping_at(smoke_fd, SMOKE_OWNER_FILENAME)
             if owner != owner_payload:
                 raise ValueError(f"Refusing to adopt unowned smoke results directory: {smoke_root}")
-            _assert_named_directory_identity(
+            assert_named_directory_identity(
                 root_fd,
                 SMOKE_RESULTS_DIRNAME,
                 smoke_identity,
@@ -582,19 +582,19 @@ def source_identity(repo_root: Path) -> dict[str, Any]:
     return identity
 
 
-def _create_pinned_batch_directory(
+def create_pinned_batch_directory(
     smoke_root: Path,
     *,
     profile: str,
     repo_root: Path,
-) -> _PinnedBatchDirectory:
+) -> PinnedBatchDirectory:
     smoke_root = smoke_root.expanduser()
-    smoke_fd = os.open(smoke_root, _directory_open_flags())
+    smoke_fd = os.open(smoke_root, directory_open_flags())
     batches_fd: int | None = None
     batch_fd: int | None = None
     cases_fd: int | None = None
     try:
-        smoke_identity = _validate_owned_directory(smoke_fd, label="Smoke results root")
+        smoke_identity = validate_owned_directory(smoke_fd, label="Smoke results root")
         if _bounded_json_mapping_at(smoke_fd, SMOKE_OWNER_FILENAME) != {
             "schema_version": SMOKE_SCHEMA_VERSION,
             "kind": "orca_auto_smoke_results",
@@ -605,15 +605,15 @@ def _create_pinned_batch_directory(
             os.fsync(smoke_fd)
         except FileExistsError:
             pass
-        batches_fd = os.open("batches", _directory_open_flags(), dir_fd=smoke_fd)
-        batches_identity = _validate_owned_directory(batches_fd, label="Batches root")
+        batches_fd = os.open("batches", directory_open_flags(), dir_fd=smoke_fd)
+        batches_identity = validate_owned_directory(batches_fd, label="Batches root")
         identity = source_identity(repo_root)
         _assert_path_directory_identity(
             smoke_root,
             smoke_identity,
             label="Smoke results root",
         )
-        _assert_named_directory_identity(
+        assert_named_directory_identity(
             smoke_fd,
             "batches",
             batches_identity,
@@ -639,8 +639,8 @@ def _create_pinned_batch_directory(
     try:
         os.mkdir(batch_id, mode=0o700, dir_fd=batches_fd)
         os.fsync(batches_fd)
-        batch_fd = os.open(batch_id, _directory_open_flags(), dir_fd=batches_fd)
-        batch_identity = _validate_owned_directory(batch_fd, label="Smoke batch directory")
+        batch_fd = os.open(batch_id, directory_open_flags(), dir_fd=batches_fd)
+        batch_identity = validate_owned_directory(batch_fd, label="Smoke batch directory")
     except BaseException:
         os.close(batches_fd)
         os.close(smoke_fd)
@@ -671,7 +671,7 @@ def _create_pinned_batch_directory(
     }
     try:
         _atomic_write_json_at(batch_fd, SMOKE_BATCH_FILENAME, manifest)
-        pinned = _PinnedBatchDirectory(
+        pinned = PinnedBatchDirectory(
             smoke_root=smoke_root,
             batch_dir=batch_dir,
             manifest=manifest,
@@ -694,57 +694,24 @@ def _create_pinned_batch_directory(
         raise
 
 
-def create_batch_directory(
-    smoke_root: Path,
-    *,
-    profile: str,
-    repo_root: Path,
-) -> tuple[Path, dict[str, Any]]:
-    pinned = _create_pinned_batch_directory(
-        smoke_root,
-        profile=profile,
-        repo_root=repo_root,
-    )
-    try:
-        return pinned.batch_dir, pinned.manifest
-    finally:
-        pinned.close()
-
-
 def write_batch_manifest(
     batch_dir: Path,
     manifest: Mapping[str, Any],
     *,
-    directory_fd: int | None = None,
+    directory_fd: int,
 ) -> Path:
-    path = batch_dir / SMOKE_BATCH_FILENAME
-    owned_fd = directory_fd is None
-    if directory_fd is None:
-        directory_fd = os.open(batch_dir, _directory_open_flags())
-    try:
-        _atomic_write_json_at(directory_fd, SMOKE_BATCH_FILENAME, manifest)
-    finally:
-        if owned_fd:
-            os.close(directory_fd)
-    return path
+    _atomic_write_json_at(directory_fd, SMOKE_BATCH_FILENAME, manifest)
+    return batch_dir / SMOKE_BATCH_FILENAME
 
 
 def write_case_manifest(
     case_dir: Path,
     manifest: Mapping[str, Any],
     *,
-    directory_fd: int | None = None,
+    directory_fd: int,
 ) -> Path:
-    path = case_dir / SMOKE_CASE_FILENAME
-    owned_fd = directory_fd is None
-    if directory_fd is None:
-        directory_fd = os.open(case_dir, _directory_open_flags())
-    try:
-        _atomic_write_json_at(directory_fd, SMOKE_CASE_FILENAME, manifest)
-    finally:
-        if owned_fd:
-            os.close(directory_fd)
-    return path
+    _atomic_write_json_at(directory_fd, SMOKE_CASE_FILENAME, manifest)
+    return case_dir / SMOKE_CASE_FILENAME
 
 
 def _read_scanned_regular_file(
@@ -814,15 +781,15 @@ def _scan_regular_files_at(
                 continue
             if stat.S_ISDIR(opened.st_mode):
                 try:
-                    child_fd = os.open(name, _directory_open_flags(), dir_fd=current_fd)
+                    child_fd = os.open(name, directory_open_flags(), dir_fd=current_fd)
                 except OSError as exc:
                     raise ValueError("smoke runtime directory could not be opened safely") from exc
                 try:
                     child_identity = _directory_identity(child_fd)
-                    if child_identity != _DirectoryIdentity(opened.st_dev, opened.st_ino):
+                    if child_identity != DirectoryIdentity(opened.st_dev, opened.st_ino):
                         raise ValueError("smoke runtime directory identity changed")
                     walk(child_fd, (*relative_parts, name), depth + 1)
-                    _assert_named_directory_identity(
+                    assert_named_directory_identity(
                         current_fd,
                         name,
                         child_identity,
@@ -881,22 +848,15 @@ def _scan_regular_files_at(
 
 
 def _scan_runtime(
-    runtime_dir: Path,
+    runtime_fd: int,
     *,
     payload_names: frozenset[str],
-    directory_fd: int | None = None,
 ) -> list[_ScannedRegularFile]:
-    owned_fd = directory_fd is None
-    if directory_fd is None:
-        directory_fd = os.open(runtime_dir, _directory_open_flags())
-    else:
-        directory_fd = os.dup(directory_fd)
-        owned_fd = True
+    duplicated = os.dup(runtime_fd)
     try:
-        return _scan_regular_files_at(directory_fd, payload_names=payload_names)
+        return _scan_regular_files_at(duplicated, payload_names=payload_names)
     finally:
-        if owned_fd:
-            os.close(directory_fd)
+        os.close(duplicated)
 
 
 def _artifact_counts_from_scan(
@@ -909,16 +869,6 @@ def _artifact_counts_from_scan(
         if record.name in counts:
             counts[record.name] += 1
     return counts
-
-
-def artifact_counts(
-    runtime_dir: Path,
-    required_names: Iterable[str],
-    *,
-    directory_fd: int | None = None,
-) -> dict[str, int]:
-    files = _scan_runtime(runtime_dir, payload_names=frozenset(), directory_fd=directory_fd)
-    return _artifact_counts_from_scan(files, required_names)
 
 
 def _normalized_state_status(payload: Mapping[str, Any]) -> tuple[str, str]:
@@ -998,21 +948,6 @@ def _observe_terminal_from_scan(
     }
 
 
-def observe_terminal(
-    runtime_dir: Path,
-    *,
-    surface: str,
-    directory_fd: int | None = None,
-) -> dict[str, Any]:
-    target_name = "workflow.json" if surface == "workflow" else "job_state.json"
-    files = _scan_runtime(
-        runtime_dir,
-        payload_names=frozenset({target_name}),
-        directory_fd=directory_fd,
-    )
-    return _observe_terminal_from_scan(files, surface=surface)
-
-
 def build_case_manifest(
     *,
     scenario: SmokeScenario,
@@ -1022,14 +957,10 @@ def build_case_manifest(
     pytest_result: Mapping[str, Any],
     started_at: str,
     finished_at: str,
-    runtime_fd: int | None = None,
+    runtime_fd: int,
 ) -> dict[str, Any]:
     target_name = "workflow.json" if scenario.surface == "workflow" else "job_state.json"
-    files = _scan_runtime(
-        runtime_dir,
-        payload_names=frozenset({target_name}),
-        directory_fd=runtime_fd,
-    )
+    files = _scan_runtime(runtime_fd, payload_names=frozenset({target_name}))
     observed = _observe_terminal_from_scan(files, surface=scenario.surface)
     counts = _artifact_counts_from_scan(files, scenario.required_artifacts)
     missing_artifacts = sorted(name for name, count in counts.items() if count < 1)
@@ -1137,10 +1068,7 @@ __all__ = [
     "SMOKE_BATCH_FILENAME",
     "SMOKE_CASE_FILENAME",
     "SMOKE_SCHEMA_VERSION",
-    "artifact_counts",
     "build_case_manifest",
-    "create_batch_directory",
-    "observe_terminal",
     "prepare_smoke_root",
     "rebuild_smoke_index",
     "source_identity",
