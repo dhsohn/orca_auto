@@ -10,6 +10,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- The bot's remote-admission policy (server-owned resource caps, atom-count
+  ceilings, the CREST cost policy, and the ORCA file-reference confinement
+  walker) moved out of `flow/bot/application.py` into a dedicated
+  `flow/bot/remote_admission` module of plain functions. A new test pins the
+  bot's directive-key tables against the execution scanner's file-reference
+  key sets, so a key added to `orca/input_blocks.py` without a matching
+  remote-admission decision (validate or forbid) fails CI instead of silently
+  opening a remote confinement gap. Behavior is unchanged.
+
 - The Telegram delivery stack (API client, config, network, logging,
   transport, and HTML format helpers) moved from `core/notifications` into
   `core/messaging`, removing the one import cycle between the two packages;

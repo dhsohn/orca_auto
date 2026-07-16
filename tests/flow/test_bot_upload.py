@@ -20,7 +20,7 @@ from orca_auto.core.messaging.interactive import (
     IncomingAction,
     IncomingUpload,
 )
-from orca_auto.flow.bot import ActionRegistry, BotApplication, BotSettings
+from orca_auto.flow.bot import ActionRegistry, BotApplication, BotSettings, remote_admission
 from orca_auto.flow.bot.application import SubmissionReceipt
 
 ADDRESS = ConversationAddress(provider="discord", channel_id="100")
@@ -879,7 +879,7 @@ def test_standalone_orca_resource_caps_cover_spaced_percent_syntax(
     )
 
     with pytest.raises(ValueError, match="server limit"):
-        BotApplication._validate_orca_resource_limits(
+        remote_admission.validate_orca_resource_limits(
             job_dir,
             max_cores=4,
             max_memory_gb=8,
@@ -1026,7 +1026,7 @@ def test_standalone_orca_allows_existing_nested_file_references(tmp_path: Path) 
         encoding="utf-8",
     )
 
-    BotApplication._validate_orca_resource_limits(
+    remote_admission.validate_orca_resource_limits(
         job_dir,
         max_cores=4,
         max_memory_gb=8,
@@ -1041,7 +1041,7 @@ def test_standalone_orca_allows_builtin_gcpmethod(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    BotApplication._validate_orca_resource_limits(
+    remote_admission.validate_orca_resource_limits(
         job_dir,
         max_cores=4,
         max_memory_gb=8,
@@ -1169,10 +1169,10 @@ def test_uploaded_xyz_remote_atom_cap_boundary(
     )
 
     if accepted:
-        assert BotApplication._validate_remote_xyz_atom_limits(job_dir) == atom_count
+        assert remote_admission.validate_remote_xyz_atom_limits(job_dir) == atom_count
     else:
         with pytest.raises(ValueError, match="atom-count limit of 200"):
-            BotApplication._validate_remote_xyz_atom_limits(job_dir)
+            remote_admission.validate_remote_xyz_atom_limits(job_dir)
 
 
 @pytest.mark.parametrize(("atom_count", "accepted"), [(200, True), (201, False)])
@@ -1185,10 +1185,10 @@ def test_uploaded_orca_inline_remote_atom_cap_boundary(
     lines = ["! SP", "* xyz 0 1", *("H 0 0 0" for _ in range(atom_count)), "*"]
 
     if accepted:
-        BotApplication._validate_remote_orca_inline_atom_limits(inp_path, lines)
+        remote_admission.validate_remote_orca_inline_atom_limits(inp_path, lines)
     else:
         with pytest.raises(ValueError, match="remote atom-count limit of 200"):
-            BotApplication._validate_remote_orca_inline_atom_limits(inp_path, lines)
+            remote_admission.validate_remote_orca_inline_atom_limits(inp_path, lines)
 
 
 @pytest.mark.parametrize(
@@ -1220,7 +1220,7 @@ def test_uploaded_orca_rejects_unbounded_geometry_formats(
     inp_path = tmp_path / "unsupported.inp"
 
     with pytest.raises(ValueError, match="unsupported|invalid"):
-        BotApplication._validate_remote_orca_inline_atom_limits(inp_path, lines)
+        remote_admission.validate_remote_orca_inline_atom_limits(inp_path, lines)
 
 
 @pytest.mark.parametrize(
@@ -1246,7 +1246,7 @@ def test_uploaded_orca_rejects_remote_unbounded_auxiliary_formats(
     (job_dir / "aux.dat").write_text("aux", encoding="utf-8")
 
     with pytest.raises(ValueError, match="remote-disabled"):
-        BotApplication._validate_orca_file_references(job_dir, inp_path, lines)
+        remote_admission.validate_orca_file_references(job_dir, inp_path, lines)
 
 
 def test_remote_workflow_policy_injects_server_owned_mdlen(tmp_path: Path) -> None:
@@ -1257,9 +1257,9 @@ def test_remote_workflow_policy_injects_server_owned_mdlen(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    BotApplication._apply_remote_workflow_crest_policy(job_dir, atom_count=50)
+    remote_admission.apply_remote_workflow_crest_policy(job_dir, atom_count=50)
 
-    manifest = BotApplication._uploaded_flow_manifest(job_dir)
+    manifest = remote_admission.uploaded_flow_manifest(job_dir)
     assert manifest["crest"] == {"gfn": 2, "mdlen": 5.0}
 
 
@@ -1271,7 +1271,7 @@ def test_remote_workflow_policy_rejects_non_json_yaml_scalar(tmp_path: Path) -> 
     flow_path.write_text(original, encoding="utf-8")
 
     with pytest.raises(ValueError, match="JSON-compatible"):
-        BotApplication._apply_remote_workflow_crest_policy(job_dir, atom_count=10)
+        remote_admission.apply_remote_workflow_crest_policy(job_dir, atom_count=10)
 
     assert flow_path.read_text(encoding="utf-8") == original
 
@@ -1290,11 +1290,11 @@ def test_remote_crest_atom_step_work_boundary(
     )
 
     if accepted:
-        BotApplication._apply_remote_workflow_crest_policy(job_dir, atom_count=atom_count)
-        assert BotApplication._uploaded_flow_manifest(job_dir)["crest"]["mdlen"] == 5.0
+        remote_admission.apply_remote_workflow_crest_policy(job_dir, atom_count=atom_count)
+        assert remote_admission.uploaded_flow_manifest(job_dir)["crest"]["mdlen"] == 5.0
     else:
         with pytest.raises(ValueError, match="remote work-unit ceiling"):
-            BotApplication._apply_remote_workflow_crest_policy(job_dir, atom_count=atom_count)
+            remote_admission.apply_remote_workflow_crest_policy(job_dir, atom_count=atom_count)
 
 
 @pytest.mark.parametrize(
