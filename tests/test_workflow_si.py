@@ -2204,3 +2204,38 @@ def test_features_off_are_byte_identical_to_baseline(tmp_path: Path) -> None:
     assert "## Interaction energies" not in md
     assert "RMSD representatives" not in md
     assert render_interaction_energy_csv(data) is None
+
+
+def test_multi_route_line_selected_input_stays_provenance_verified(tmp_path: Path) -> None:
+    # Regression: selected-input routes are compared against the output echo
+    # after dropping every "!" (the shared conformer_selection rule). An input
+    # that splits its route across two "!" lines used to be downgraded to
+    # unverified provenance on the SI side and silently dropped from SP
+    # pairing, populations, RMSD dedup, and interaction energies.
+    stage_dir = _stage_dir(
+        tmp_path,
+        "conf_multi",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.001,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    (stage_dir / "job.inp").write_text(
+        "! B3LYP def2-SVP Opt\n! Freq\n* xyz 0 1\nC 0 0 0\n*\n", encoding="utf-8"
+    )
+    out = stage_dir / "job.out"
+    out.write_text(
+        out.read_text(encoding="utf-8").replace(
+            "|  1> ! B3LYP def2-SVP Opt Freq",
+            "|  1> ! B3LYP def2-SVP Opt\n|  2> ! Freq",
+        ),
+        encoding="utf-8",
+    )
+
+    data = collect_workflow_si_data(_payload([_orca_stage("conf_multi", stage_dir)]))
+
+    assert [entry.stage_id for entry in data.entries] == ["conf_multi"]
+    block = data.entries[0].block
+    assert block.result.electronic_state_verified
+    assert not any("provenance" in warning for warning in block.warnings)
