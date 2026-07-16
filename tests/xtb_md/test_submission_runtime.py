@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,17 +18,22 @@ from orca_auto.core.config.engines import load_xtb_md_config
 from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.core.queue import (
     QUEUE_RECORD_SYNC_ABORTED,
+    QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
+    QUEUE_RECORD_SYNC_REPAIR_PENDING,
     QueueStatus,
     dequeue_entry_if_pending,
     list_queue,
     mark_completed,
     queue_entry_is_claimable,
+    queue_record_sync_metadata,
     request_cancel,
 )
+from orca_auto.core.queue import enqueue_publication as core_enqueue_publication
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.processes import worker_pid_file_path
+from orca_auto.core.queue.store import mutate_entries
 from orca_auto.flow import activity
 from orca_auto.xtb_md import execution, queue_runtime
 from orca_auto.xtb_md import submission as xtb_md_submission
@@ -480,7 +486,7 @@ def test_cancellation_racing_queued_record_publication_wins_terminally(
         yield
 
     monkeypatch.setattr(
-        xtb_md_submission,
+        core_enqueue_publication,
         "queue_record_publication_lock",
         cancel_before_publisher_lock,
     )
@@ -531,7 +537,7 @@ def test_cancelled_submission_publisher_does_not_overwrite_immediate_replacement
         yield
 
     monkeypatch.setattr(
-        xtb_md_submission,
+        core_enqueue_publication,
         "queue_record_publication_lock",
         cancel_then_resubmit,
     )
@@ -615,22 +621,162 @@ def test_submission_publication_rejects_job_directory_symlink_rebinding(
         yield
 
     monkeypatch.setattr(
-        xtb_md_submission,
+        core_enqueue_publication,
         "queue_record_publication_lock",
         move_before_publisher_lock,
     )
 
     result = _submit(case)
 
-    assert result["status"] == "failed"
-    assert result["reason"] == "submission_publication_failed"
-    assert "missing, replaced, or contains a symlink" in result["stderr"]
-    terminal = _entry(case, result["queue_id"])
-    assert terminal.status == QueueStatus.FAILED
+    # The rebinding is caught by the publish guard: the row stays durably
+    # queued but unpublished (REPAIR_PENDING), and the worker repair pass
+    # keeps refusing to publish into the rebound directory, so the row can
+    # never be claimed and nothing is ever written through the symlink.
+    assert result["status"] == "queued"
+    assert result["publication"] == "deferred"
+    assert any("missing, replaced, or contains a symlink" in w for w in result["warnings"])
+    parked = _entry(case, result["queue_id"])
+    assert parked.status == QueueStatus.PENDING
+    assert parked.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
+    assert queue_entry_is_claimable(parked) is False
+    cfg = load_xtb_md_config(str(case.config_path))
+    assert queue_runtime._repair_queued_publication(cfg, case.runs_root, parked) is False
+    still_parked = _entry(case, result["queue_id"])
+    assert still_parked.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
+    assert queue_entry_is_claimable(still_parked) is False
     assert not (moved_job_dir / "job_state.json").exists()
     assert not (moved_job_dir / "job_report.json").exists()
     assert not (moved_job_dir / "job_report.md").exists()
     assert not (moved_job_dir / ".orca_auto_xtb_md_executions").exists()
+
+
+def test_publication_failure_defers_to_worker_repair_roundtrip(
+    runtime_case_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = runtime_case_factory()
+
+    def fail_publish(_cfg: Any, _entry: Any) -> None:
+        raise OSError("queued artifact write failed transiently")
+
+    monkeypatch.setattr(xtb_md_submission, "publish_queued_record", fail_publish)
+
+    result = _submit(case)
+
+    assert result["status"] == "queued"
+    assert result["publication"] == "deferred"
+    assert any("worker repair will publish" in w for w in result["warnings"])
+    parked = _entry(case, result["queue_id"])
+    assert parked.status == QueueStatus.PENDING
+    assert parked.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
+    assert queue_entry_is_claimable(parked) is False
+    assert not (case.job_dir / "job_state.json").exists()
+
+    # The worker's pre-claim repair pass (queue_runtime binds the real
+    # publisher, unaffected by the submission-module patch) publishes the
+    # queued record and completes the lease.
+    cfg = load_xtb_md_config(str(case.config_path))
+    assert queue_runtime._repair_queued_publication(cfg, case.runs_root, parked) is True
+    repaired = _entry(case, result["queue_id"])
+    assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+    assert queue_entry_is_claimable(repaired) is True
+    state = json.loads((case.job_dir / "job_state.json").read_text(encoding="utf-8"))
+    assert state["status"]["state"] == "queued"
+    assert state["job"]["queue_id"] == repaired.queue_id
+
+
+def test_enqueue_result_lost_after_commit_recovers_to_repair_pending(
+    runtime_case_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = runtime_case_factory()
+    real_enqueue = core_enqueue_publication.enqueue
+
+    def commit_then_lose(*args: Any, **kwargs: Any) -> Any:
+        real_enqueue(*args, **kwargs)
+        raise OSError("durability barrier failed after the enqueue committed")
+
+    monkeypatch.setattr(core_enqueue_publication, "enqueue", commit_then_lose)
+    monkeypatch.setattr(
+        xtb_md_submission,
+        "publish_queued_record",
+        lambda *_args, **_kwargs: pytest.fail(
+            "a recovered enqueue must defer publication to worker repair"
+        ),
+    )
+
+    result = _submit(case)
+
+    # The strict recovery matched the exact committed row (token is necessary
+    # but not sufficient) and parked it for the worker repair pass instead of
+    # publishing after an unknown failure.
+    assert result["status"] == "queued"
+    assert result["publication"] == "deferred"
+    assert any("parked for worker repair" in w for w in result["warnings"])
+    parked = _entry(case, result["queue_id"])
+    assert parked.status == QueueStatus.PENDING
+    assert parked.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
+    assert queue_entry_is_claimable(parked) is False
+    snapshot_namespace = parked.metadata["execution_snapshot"]["snapshot_namespace"]
+    assert (case.job_dir / ".orca_auto_input_snapshots" / snapshot_namespace).is_dir()
+
+    cfg = load_xtb_md_config(str(case.config_path))
+    assert queue_runtime._repair_queued_publication(cfg, case.runs_root, parked) is True
+    repaired = _entry(case, result["queue_id"])
+    assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+    assert queue_entry_is_claimable(repaired) is True
+
+
+def test_publication_complete_shortcircuit_requires_own_token(
+    runtime_case_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = runtime_case_factory()
+
+    @contextmanager
+    def foreign_complete_before_publisher_lock(root: Path, queue_id: str):
+        def fence(entries: list[Any]) -> tuple[None, bool]:
+            for index, current in enumerate(entries):
+                if current.queue_id != queue_id:
+                    continue
+                metadata = dict(current.metadata)
+                metadata.update(
+                    queue_record_sync_metadata(
+                        QUEUE_RECORD_SYNC_COMPLETE,
+                        token="foreign-lease-token",
+                        owner_pid=0,
+                    )
+                )
+                entries[index] = replace(current, metadata=metadata)
+                return None, True
+            return None, False
+
+        mutate_entries(root, fence)
+        yield
+
+    monkeypatch.setattr(
+        core_enqueue_publication,
+        "queue_record_publication_lock",
+        foreign_complete_before_publisher_lock,
+    )
+    monkeypatch.setattr(
+        xtb_md_submission,
+        "publish_queued_record",
+        lambda *_args, **_kwargs: pytest.fail(
+            "a COMPLETE lease owned by another publisher must not be republished"
+        ),
+    )
+
+    result = _submit(case)
+
+    # A COMPLETE written by a different lease is ownership loss, never this
+    # publisher's own success: the submitter neither publishes over it nor
+    # claims it as published.
+    assert result["status"] == "queued"
+    assert result["publication"] == "deferred"
+    assert any("ownership changed" in w for w in result["warnings"])
+    current = _entry(case, result["queue_id"])
+    assert current.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
 
 
 def test_worker_rejects_moved_job_rebound_outside_runs_root_without_writes(
