@@ -95,10 +95,10 @@ def _unique_run_dir_workflow_id(
     workflow_root: str | Path,
     workflow_type: str,
 ) -> str:
+    # Workspace creation is atomic and rejects any pre-existing directory, so a
+    # scaffold that already sits directly under workflow_root must still get a
+    # fresh workspace name instead of reusing its own.
     workflow_root_path = Path(workflow_root).expanduser().resolve()
-    if workflow_dir.parent == workflow_root_path and not (workflow_dir / "workflow.json").exists():
-        return workflow_dir.name
-
     preferred = _preferred_run_dir_workflow_id(workflow_dir, workflow_type=workflow_type)
     candidate = preferred
     suffix = 2
@@ -267,7 +267,7 @@ def cmd_run_dir(args: Any) -> int:
             )
 
         payload = _create_run_dir_workflow(args, workflow_dir)
-    except ValueError as exc:
+    except (ValueError, FileExistsError) as exc:
         _workflow_output.emit_error(exc)
         return 1
 

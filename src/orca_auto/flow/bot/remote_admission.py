@@ -207,7 +207,19 @@ def apply_remote_workflow_crest_policy(job_dir: Path, *, atom_count: int) -> Non
         crest = dict(raw_crest)
     else:
         raise ValueError("flow.yaml crest must be a mapping")
+    from orca_auto.core.engine_runner import validated_solvent_option
     from orca_auto.flow.engines.crest.runner import default_timestep_fs
+
+    # Reject malformed or non-allowlisted solvent requests at ingress instead
+    # of letting them fail (closed) only at engine command construction. The
+    # xtb block feeds the reaction path-search stages through the same
+    # allowlist.
+    validated_solvent_option(crest)
+    raw_xtb = manifest.get("xtb")
+    if raw_xtb is not None:
+        if not isinstance(raw_xtb, dict):
+            raise ValueError("flow.yaml xtb must be a mapping")
+        validated_solvent_option(raw_xtb)
 
     timestep_fs = default_timestep_fs(crest.get("gfn"))
     estimated_steps = math.ceil(

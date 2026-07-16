@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -834,6 +835,70 @@ def test_confirm_rejects_remote_crest_solvent_shell_token(tmp_path: Path) -> Non
     assert not (tmp_path / "solvent_injection").exists()
 
 
+def test_confirm_rejects_remote_xtb_solvent_shell_token(tmp_path: Path) -> None:
+    archive = _make_zip(
+        tmp_path / "xtb_solvent_injection.zip",
+        {
+            "xtb_solvent_injection/flow.yaml": (
+                b"workflow_type: reaction_ts_search\n"
+                b"xtb:\n"
+                b"  solvent_model: gbsa\n"
+                b'  solvent: "water;touch"\n'
+            ),
+            "xtb_solvent_injection/reactant.xyz": b"2\nH2\nH 0 0 0\nH 0 0 0.7\n",
+            "xtb_solvent_injection/product.xyz": b"2\nH2\nH 0 0 0\nH 0 0 0.8\n",
+        },
+    )
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    upload = _stage(app, archive, "xtb_solvent_injection.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+        message_id="1",
+    )
+
+    status = app.dispatch_action(action, messenger=messenger)
+
+    assert status == "run-submission-failed"
+    assert not (tmp_path / "xtb_solvent_injection").exists()
+
+
+def test_confirm_submits_workflow_upload_through_real_creation_path(tmp_path: Path) -> None:
+    """Regression: uploads publish directly under runs_root, so the real
+    (unmocked) workflow creation path must mint a fresh prefixed workspace
+    instead of colliding with the published run-dir."""
+
+    archive = _make_zip(
+        tmp_path / "conf_case.zip",
+        {
+            "conf_case/flow.yaml": b"workflow_type: conformer_screening\n",
+            "conf_case/input.xyz": b"2\nH2\nH 0 0 0\nH 0 0 0.7\n",
+        },
+    )
+    app = _app(tmp_path)
+    messenger = FakeMessenger()
+    upload = _stage(app, archive, "conf_case.zip")
+    app.dispatch_upload(upload, messenger=messenger)
+    action = IncomingAction(
+        address=ADDRESS,
+        actor=ACTOR,
+        action_id=_confirm_action_id(messenger.replies[-1]),
+        ack_token="tok",
+        message_id="1",
+    )
+
+    status = app.dispatch_action(action, messenger=messenger)
+
+    assert status == "run-submitted"
+    assert "wf_conformer_screening_conf_case" in messenger.replies[-1].text
+    workspace_dir = tmp_path / "wf_conformer_screening_conf_case"
+    assert (workspace_dir / "workflow.json").is_file()
+
+
 def test_confirm_rejects_standalone_orca_resources_above_server_cap(tmp_path: Path) -> None:
     archive = _make_zip(
         tmp_path / "oversized.zip",
@@ -1396,11 +1461,7 @@ def test_workflow_submission_forces_runs_root_and_trusted_resource_limits(
         captured["workflow_root"] = args.workflow_root
         captured["max_cores"] = args.max_cores
         captured["max_memory_gb"] = args.max_memory_gb
-        payload: dict[str, object] = {"workflow_id": submitted_dir.name}
-        (submitted_dir / "workflow.json").write_text(
-            '{"workflow_id": "flow_job"}', encoding="utf-8"
-        )
-        return payload
+        return {"workflow_id": submitted_dir.name}
 
     monkeypatch.setattr(workflow_run_dir, "_create_run_dir_workflow", _fake_create)
 
@@ -1414,12 +1475,29 @@ def test_workflow_submission_forces_runs_root_and_trusted_resource_limits(
     }
 
 
-def test_workflow_postcommit_exception_returns_committed_receipt(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def _write_workspace_payload(
+    workspace_dir: Path,
+    workflow_id: str,
+    input_xyz: Path,
+    *,
+    requested_at: str | None = None,
 ) -> None:
-    from orca_auto.flow.cli import run_dir as workflow_run_dir
+    from datetime import UTC, datetime
 
+    workspace_dir.mkdir(parents=True)
+    (workspace_dir / "workflow.json").write_text(
+        json.dumps(
+            {
+                "workflow_id": workflow_id,
+                "requested_at": requested_at or datetime.now(UTC).isoformat(),
+                "metadata": {"source_inputs": [str(input_xyz)]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _workflow_job_dir(tmp_path: Path) -> Path:
     job_dir = tmp_path / "flow_job"
     job_dir.mkdir()
     (job_dir / "flow.yaml").write_text(
@@ -1427,22 +1505,122 @@ def test_workflow_postcommit_exception_returns_committed_receipt(
         encoding="utf-8",
     )
     (job_dir / "input.xyz").write_text("1\n\nH 0 0 0\n", encoding="utf-8")
-    app = _app(tmp_path)
+    return job_dir
 
-    def _raise_after_persist(args: Any, submitted_dir: Path) -> dict[str, object]:
-        del args
-        (submitted_dir / "workflow.json").write_text(
-            '{"workflow_id": "flow_job"}', encoding="utf-8"
-        )
+
+def test_workflow_postcommit_exception_returns_committed_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A registry-sync failure after the durable workflow.json write must be
+    classified as committed. This drives the real factory so the probe is
+    checked against the production payload shape."""
+
+    import dataclasses
+
+    from orca_auto.flow import orchestration as flow_orchestration
+
+    job_dir = _workflow_job_dir(tmp_path)
+    app = _app(tmp_path)
+    real_deps = flow_orchestration._workflow_factory_deps()
+
+    def _raise_registry_sync(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("registry sync failed")
 
-    monkeypatch.setattr(workflow_run_dir, "_create_run_dir_workflow", _raise_after_persist)
+    monkeypatch.setattr(
+        flow_orchestration,
+        "_workflow_factory_deps",
+        lambda: dataclasses.replace(real_deps, sync_workflow_registry_fn=_raise_registry_sync),
+    )
 
     receipt = app._submit_extracted_run_dir(job_dir, run_dir_kind="workflow")
 
     assert receipt.committed is True
-    assert receipt.submission_id == "flow_job"
+    assert receipt.submission_id == "wf_conformer_screening_flow_job"
     assert "registry sync failed" in receipt.detail
+    workspace_dir = tmp_path / "wf_conformer_screening_flow_job"
+    assert (workspace_dir / "workflow.json").is_file()
+
+
+def test_workflow_precommit_exception_returns_failed_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.flow.cli import run_dir as workflow_run_dir
+
+    job_dir = _workflow_job_dir(tmp_path)
+    app = _app(tmp_path)
+
+    def _raise_before_persist(args: Any, submitted_dir: Path) -> dict[str, object]:
+        del args, submitted_dir
+        raise RuntimeError("exploded before any durable write")
+
+    monkeypatch.setattr(workflow_run_dir, "_create_run_dir_workflow", _raise_before_persist)
+
+    receipt = app._submit_extracted_run_dir(job_dir, run_dir_kind="workflow")
+
+    assert receipt.committed is False
+    assert "exploded before any durable write" in receipt.detail
+
+
+def test_workflow_exception_with_two_matching_workspaces_is_uncertain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.flow.cli import run_dir as workflow_run_dir
+
+    job_dir = _workflow_job_dir(tmp_path)
+    app = _app(tmp_path)
+
+    def _raise_after_double_persist(args: Any, submitted_dir: Path) -> dict[str, object]:
+        del args
+        for workflow_id in (
+            "wf_conformer_screening_flow_job",
+            "wf_conformer_screening_flow_job_02",
+        ):
+            _write_workspace_payload(
+                tmp_path / workflow_id,
+                workflow_id,
+                submitted_dir / "input.xyz",
+            )
+        raise RuntimeError("registry sync failed")
+
+    monkeypatch.setattr(workflow_run_dir, "_create_run_dir_workflow", _raise_after_double_persist)
+
+    receipt = app._submit_extracted_run_dir(job_dir, run_dir_kind="workflow")
+
+    assert receipt.committed is None
+
+
+def test_workflow_precommit_exception_ignores_stale_matching_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A workflow left over from an earlier occupant of the same published
+    path (old requested_at) must not be claimed as this submission's commit:
+    the pre-commit failure stays a definite failure."""
+
+    from orca_auto.flow.cli import run_dir as workflow_run_dir
+
+    job_dir = _workflow_job_dir(tmp_path)
+    app = _app(tmp_path)
+    _write_workspace_payload(
+        tmp_path / "wf_conformer_screening_flow_job",
+        "wf_conformer_screening_flow_job",
+        job_dir / "input.xyz",
+        requested_at="2020-01-01T00:00:00+00:00",
+    )
+
+    def _raise_before_persist(args: Any, submitted_dir: Path) -> dict[str, object]:
+        del args, submitted_dir
+        raise RuntimeError("exploded before any durable write")
+
+    monkeypatch.setattr(workflow_run_dir, "_create_run_dir_workflow", _raise_before_persist)
+
+    receipt = app._submit_extracted_run_dir(job_dir, run_dir_kind="workflow")
+
+    assert receipt.committed is False
+    assert "exploded before any durable write" in receipt.detail
 
 
 def test_dismiss_discards_staged_archive(tmp_path: Path) -> None:

@@ -22,6 +22,7 @@ from orca_auto.flow.orchestration.workflow_builders import (
     _merge_manifest_defaults,
     _persist_workflow,
     _persistence_context,
+    _resolved_source_inputs,
     _validate_reaction_atom_sequence,
     _workflow_workspace,
 )
@@ -60,6 +61,7 @@ def create_reaction_ts_search_workflow_impl(
             request=template_build.request,
             stages=template_build.stages,
             creation_context=context,
+            source_inputs=_resolved_source_inputs(request.reactant_xyz, request.product_xyz),
         )
     except BaseException:
         _cleanup_reserved_workflow_workspace(workspace)
@@ -85,6 +87,7 @@ def create_conformer_screening_workflow_impl(
             request=template_build.request,
             stages=template_build.stages,
             creation_context=context,
+            source_inputs=_resolved_source_inputs(request.input_xyz),
         )
     except BaseException:
         _cleanup_reserved_workflow_workspace(workspace)
@@ -110,6 +113,7 @@ def create_scan_ts_search_workflow_impl(
             request=template_build.request,
             stages=template_build.stages,
             creation_context=context,
+            source_inputs=_resolved_source_inputs(request.input_xyz),
         )
     except BaseException:
         _cleanup_reserved_workflow_workspace(workspace)

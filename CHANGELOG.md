@@ -10,6 +10,36 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `orca_auto run-dir` works again for a scaffold placed directly under
+  `workflow_root` (e.g. `orca_auto run-dir ~/orca_runs/rxn_001`). The CLI
+  used to reuse such a scaffold's own directory name as the workflow id,
+  which the hardened atomic workspace creation (0.2.0) always rejects with
+  `FileExistsError: workflow already exists`. The scaffold now materializes
+  into a fresh prefixed workspace (`wf_reaction_ts_<name>`,
+  `wf_conformer_screening_<name>`, or `wf_scan_ts_<name>`, where `<name>` is
+  the sanitized lowercased directory name, with a numeric suffix on
+  collision) exactly like scaffolds elsewhere, and the scaffold
+  directory itself is left untouched as input material. Bot workflow
+  uploads publish the extracted archive directly under `runs_root` before
+  submitting, so they hit the same collision and had been failing since
+  0.2.0 as well; they submit again now, with the published upload kept as
+  input material next to the new workspace.
+
+- Uploaded workflows with a malformed or non-allowlisted
+  `solvent`/`solvent_model` pair in the `crest:` or `xtb:` block are
+  rejected at remote admission (upload confirm time) using the same
+  validator the CREST/xTB runners apply at command construction, instead of
+  enqueuing and failing only when the job builds its command line.
+
+- Workflow payloads record the pre-copy source input paths as
+  `metadata.source_inputs` provenance, and the bot's post-exception workflow
+  commit probe and publication reconcile sweep use it to locate the durable
+  workflow a published upload produced (the in-place `workflow.json` layout
+  is still honored for historical workspaces). Previously they only looked
+  inside the published upload directory, so a failure after the durable
+  write — or a crash before the commit mark — would report a created
+  workflow as failed and invite a duplicate resubmission.
+
 - Queue dispatch order no longer depends on the wall clock. Same-priority
   pending entries are dequeued in queue-file row order (the true arrival
   order — rows are only appended under the queue lock) instead of by their

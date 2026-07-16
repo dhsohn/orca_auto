@@ -10,6 +10,7 @@ import secrets
 import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -60,6 +61,7 @@ from orca_auto.core.messaging.interactive import (
     InteractiveMessenger,
 )
 from orca_auto.core.statuses import QUEUE_ACTIVE_STATUSES
+from orca_auto.core.utils import parse_iso_utc
 from orca_auto.core.utils.lock import file_lock
 
 from .._orca_stage_materialization import safe_name
@@ -92,6 +94,9 @@ _UPLOAD_EXTRACT_DIRNAME = ".extract"
 _UPLOAD_PUBLISH_LOCK_NAME = ".upload-publish.lock"
 _UPLOAD_PUBLISH_MARKER = ".orca-auto-upload"
 _UPLOAD_ACTION_TTL_SECONDS = 5 * 60.0
+# Tolerated wall-clock regression (observed on WSL2) when bounding the
+# workflow commit probe's requested_at freshness check.
+_WORKFLOW_COMMIT_CLOCK_SLACK = timedelta(minutes=10)
 _UPLOAD_ACTION_PREFIX = "act_"
 # Largest activity table (chars) rendered inside a Discord embed description
 # (limit 4096, minus room for the code fence). Larger tables fall back to the
@@ -651,7 +656,10 @@ class BotApplication:
 
                 engine = str(session.verification.get("engine") or "")
                 if engine == "workflow" or (published_dir / "workflow.json").is_file():
-                    committed, workflow_id = self._workflow_commit(published_dir)
+                    committed, workflow_id = self._workflow_commit(
+                        published_dir,
+                        not_before=session.created_at - _WORKFLOW_COMMIT_CLOCK_SLACK,
+                    )
                     if committed is True and workflow_id:
                         store.mark_committed(upload_id, workflow_id=workflow_id)
                         _safe_unlink(marker)
@@ -1401,23 +1409,98 @@ class BotApplication:
 
         return self._submission_outcome(published_dir, receipt)
 
-    @staticmethod
-    def _workflow_commit(job_dir: Path) -> tuple[bool | None, str | None]:
-        """Inspect the durable workflow file after a submission exception."""
+    def _workflow_commit(
+        self,
+        job_dir: Path,
+        *,
+        not_before: datetime | None,
+    ) -> tuple[bool | None, str | None]:
+        """Locate the durable workflow created from one published run-dir.
 
-        workflow_file = job_dir / "workflow.json"
+        Workflow workspaces are minted under runs_root with fresh prefixed
+        names, so the durable evidence binding a workflow to this published
+        dir is the ``metadata.source_inputs`` provenance each workspace
+        payload records at creation — not a workflow.json inside the
+        published dir (that in-place layout is still honored first for
+        historical workspaces). ``not_before`` bounds the candidate set by
+        ``requested_at`` so a stale workflow from an earlier occupant of the
+        same published path can never be claimed as this submission's
+        commit. Returns (True, id) on exactly one clean match, (False,
+        None) when absence is provable, and (None, None) when the commit
+        outcome cannot be classified safely.
+        """
+
+        if (job_dir / "workflow.json").exists():
+            in_place = self._read_workflow_identity(job_dir)
+            return (True, in_place) if in_place else (None, None)
+        runs_root = self._runs_root()
+        if runs_root is None:
+            return None, None
+        try:
+            job_target = job_dir.expanduser().resolve()
+            candidates = [item for item in runs_root.iterdir() if item.is_dir()]
+        except OSError:
+            return None, None
+        matches: list[str] = []
+        unreadable = False
+        for candidate in candidates:
+            if candidate == job_target:
+                continue
+            workflow_file = candidate / "workflow.json"
+            if not workflow_file.exists():
+                continue
+            try:
+                payload = json.loads(workflow_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                unreadable = True
+                LOGGER.warning("workflow_commit_probe_unreadable_payload: %s", workflow_file)
+                continue
+            if not isinstance(payload, dict):
+                unreadable = True
+                LOGGER.warning("workflow_commit_probe_unreadable_payload: %s", workflow_file)
+                continue
+            if not_before is not None:
+                requested_at = parse_iso_utc(payload.get("requested_at"))
+                if requested_at is None:
+                    unreadable = True
+                    LOGGER.warning("workflow_commit_probe_unreadable_payload: %s", workflow_file)
+                    continue
+                if requested_at < not_before:
+                    continue
+            metadata = payload.get("metadata")
+            source_inputs = metadata.get("source_inputs") if isinstance(metadata, dict) else None
+            if not isinstance(source_inputs, list):
+                continue
+            for raw_source in source_inputs:
+                raw = str(raw_source or "").strip()
+                if not raw:
+                    continue
+                if Path(os.path.normpath(raw)).is_relative_to(job_target):
+                    workflow_id = str(payload.get("workflow_id") or "").strip()
+                    if not workflow_id:
+                        return None, None
+                    matches.append(workflow_id)
+                    break
+        if len(matches) == 1:
+            return True, matches[0]
+        if matches:
+            return None, None
+        return (None, None) if unreadable else (False, None)
+
+    @staticmethod
+    def _read_workflow_identity(workspace_dir: Path) -> str | None:
+        """Return the workflow id of an in-place workspace, if one exists."""
+
+        workflow_file = workspace_dir / "workflow.json"
         if not workflow_file.exists():
-            return False, None
+            return None
         try:
             payload = json.loads(workflow_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return None, None
+            return None
         if not isinstance(payload, dict):
-            return None, None
-        workflow_id = str(payload.get("workflow_id") or "").strip()
-        if not workflow_id:
-            return None, None
-        return True, workflow_id
+            return None
+        return str(payload.get("workflow_id") or "").strip() or None
 
     @staticmethod
     def _orca_entries_for_run_dir(job_dir: Path, runs_root: Path) -> dict[str, Any]:
@@ -1549,12 +1632,13 @@ class BotApplication:
     ) -> SubmissionReceipt:
         from orca_auto.flow.cli.run_dir import _create_run_dir_workflow
 
+        submission_started = datetime.now(UTC) - _WORKFLOW_COMMIT_CLOCK_SLACK
         try:
             payload = _create_run_dir_workflow(args, job_dir)
         except Exception as exc:  # noqa: BLE001 - inspect persistence before classifying
             detail = self._exception_detail(exc)
             LOGGER.warning("upload_submit_workflow_failed: %s", detail, exc_info=True)
-            committed, workflow_id = self._workflow_commit(job_dir)
+            committed, workflow_id = self._workflow_commit(job_dir, not_before=submission_started)
             return SubmissionReceipt(committed, workflow_id, detail, "workflow")
 
         workflow_id = str(payload.get("workflow_id") or "").strip()

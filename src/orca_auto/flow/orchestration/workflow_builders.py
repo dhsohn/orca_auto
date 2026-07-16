@@ -116,12 +116,24 @@ def _copy_input_impl(source: str, target: Path) -> str:
     return str(target.resolve())
 
 
+def _resolved_source_inputs(*values: str | None) -> tuple[str, ...]:
+    """Resolve the pre-copy source input paths recorded for provenance."""
+
+    resolved: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            resolved.append(str(Path(text).expanduser().resolve()))
+    return tuple(resolved)
+
+
 def _persist_workflow(
     *,
     persistence_context: WorkflowPersistenceContext,
     request: WorkflowTemplateRequest,
     stages: list[WorkflowStagePayload],
     creation_context: WorkflowCreationContext,
+    source_inputs: tuple[str, ...],
 ) -> WorkflowPlanPayload:
     plan = WorkflowPlan(
         workflow_id=persistence_context.workflow_id,
@@ -135,6 +147,9 @@ def _persist_workflow(
         metadata={
             "request": request.to_dict(),
             "workspace_dir": str(persistence_context.workspace_dir),
+            # The pre-copy source paths bind this workspace to the directory
+            # it was materialized from (submission commit classification).
+            "source_inputs": list(source_inputs),
         },
     )
     payload = plan.to_dict()

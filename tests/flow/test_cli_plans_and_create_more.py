@@ -299,31 +299,17 @@ def test_run_dir_rejects_interaction_features_on_unsupported_template(tmp_path: 
         )
 
 
-def test_cmd_run_dir_reuses_direct_child_workflow_directory_when_already_under_workflow_root(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    workflow_root = tmp_path / "workflow_root"
-    workflow_dir = workflow_root / "rxn_case"
+def _reaction_scaffold(workflow_dir: Path) -> None:
     workflow_dir.mkdir(parents=True)
     (workflow_dir / "reactant.xyz").write_text(
         "2\nreactant\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8"
     )
     (workflow_dir / "product.xyz").write_text("2\nproduct\nH 0 0 0\nH 0 0 0.80\n", encoding="utf-8")
     (workflow_dir / "flow.yaml").write_text("workflow_type: reaction_ts_search\n", encoding="utf-8")
-    captured: dict[str, Any] = {}
 
-    monkeypatch.setattr(
-        cli_common, "_discover_workflow_root", lambda explicit: str(workflow_root.resolve())
-    )
-    monkeypatch.setattr(
-        cli_run_dir,
-        "create_reaction_ts_search_workflow",
-        lambda **kwargs: captured.update(kwargs) or _create_payload("reaction_ts_search"),
-    )
 
-    args = SimpleNamespace(
+def _run_dir_args(workflow_dir: Path) -> SimpleNamespace:
+    return SimpleNamespace(
         workflow_dir=str(workflow_dir),
         workflow_type=None,
         workflow_root=None,
@@ -343,9 +329,60 @@ def test_cmd_run_dir_reuses_direct_child_workflow_directory_when_already_under_w
         json=False,
     )
 
-    assert cli_run_dir.cmd_run_dir(args) == 0
+
+def test_cmd_run_dir_mints_fresh_prefixed_id_for_direct_child_scaffold(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workflow_root = tmp_path / "workflow_root"
+    workflow_dir = workflow_root / "rxn_case"
+    _reaction_scaffold(workflow_dir)
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        cli_common, "_discover_workflow_root", lambda explicit: str(workflow_root.resolve())
+    )
+    monkeypatch.setattr(
+        cli_run_dir,
+        "create_reaction_ts_search_workflow",
+        lambda **kwargs: captured.update(kwargs) or _create_payload("reaction_ts_search"),
+    )
+
+    assert cli_run_dir.cmd_run_dir(_run_dir_args(workflow_dir)) == 0
     assert "workflow_id: wf_create_reaction_ts_search" in capsys.readouterr().out
-    assert captured["workflow_id"] == "rxn_case"
+    # Reusing the scaffold's own name would collide with the scaffold directory
+    # inside workspace creation, which rejects any pre-existing path.
+    assert captured["workflow_id"] == "wf_reaction_ts_rxn_case"
+
+
+def test_cmd_run_dir_materializes_scaffold_directly_under_workflow_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Regression: the real creation path must succeed for a scaffold that
+    already sits under workflow_root (no mocked workflow factory)."""
+
+    workflow_root = tmp_path / "workflow_root"
+    workflow_dir = workflow_root / "rxn_case"
+    _reaction_scaffold(workflow_dir)
+
+    monkeypatch.setattr(
+        cli_common, "_discover_workflow_root", lambda explicit: str(workflow_root.resolve())
+    )
+
+    assert cli_run_dir.cmd_run_dir(_run_dir_args(workflow_dir)) == 0
+    assert "workflow_id: wf_reaction_ts_rxn_case" in capsys.readouterr().out
+
+    workspace_dir = workflow_root / "wf_reaction_ts_rxn_case"
+    assert (workspace_dir / "workflow.json").is_file()
+    # The scaffold stays untouched as user-owned input material.
+    assert sorted(item.name for item in workflow_dir.iterdir()) == [
+        "flow.yaml",
+        "product.xyz",
+        "reactant.xyz",
+    ]
 
 
 def test_cmd_run_dir_rejects_parenthesized_workflow_name_before_creation(
