@@ -359,7 +359,9 @@ def manifest_scalar_text(manifest: dict[str, Any], key: str) -> str | None:
     return text or None
 
 
-def append_solvent_option(command: list[str], manifest: dict[str, Any]) -> None:
+def validated_solvent_option(manifest: dict[str, Any]) -> tuple[str, str] | None:
+    """Validate the solvent_model/solvent pair; return it, or None when unset."""
+
     solvent_model = str(manifest.get("solvent_model", "")).strip().lower()
     solvent = str(manifest.get("solvent", "")).strip().lower()
     if solvent_model and solvent_model not in {"gbsa", "alpb"}:
@@ -371,6 +373,14 @@ def append_solvent_option(command: list[str], manifest: dict[str, Any]) -> None:
     if solvent and solvent not in _XTB_SOLVENTS:
         raise ValueError("Manifest field 'solvent' must be one documented xTB solvent name.")
     if solvent:
+        return solvent_model, solvent
+    return None
+
+
+def append_solvent_option(command: list[str], manifest: dict[str, Any]) -> None:
+    option = validated_solvent_option(manifest)
+    if option is not None:
+        solvent_model, solvent = option
         command.extend([f"--{solvent_model}", solvent])
 
 
@@ -383,5 +393,6 @@ __all__ = [
     "resolve_configured_executable",
     "resource_actual_dict",
     "validate_executable_file",
+    "validated_solvent_option",
     "verify_executable_identity",
 ]

@@ -291,6 +291,7 @@ def test_persist_workflow_writes_payload_and_syncs_registry(tmp_path: Path) -> N
             write_workflow_payload_fn=write_payload,
             sync_workflow_registry_fn=sync_registry,
         ),
+        source_inputs=("/inputs/mol.xyz",),
     )
 
     assert payload["metadata"]["request"]["parameters"] == {"crest_mode": "standard"}
@@ -347,6 +348,7 @@ def test_public_run_dir_guard_aborts_workflow_before_first_durable_write(
                 write_workflow_payload_fn=lambda _workspace, payload: writes.append(payload),
                 sync_workflow_registry_fn=lambda _root, _workspace, payload: syncs.append(payload),
             ),
+            source_inputs=("/inputs/mol.xyz",),
         )
 
     assert stages == ["workflow durable payload pre-commit"]
@@ -405,6 +407,7 @@ def test_public_run_dir_guard_removes_workflow_payload_after_post_commit_rejecti
                 write_workflow_payload_fn=write_payload,
                 sync_workflow_registry_fn=lambda _root, _workspace, payload: syncs.append(payload),
             ),
+            source_inputs=("/inputs/mol.xyz",),
         )
 
     assert stages == [
@@ -466,6 +469,7 @@ def test_persist_workflow_writes_and_syncs_under_creation_lock(
             write_workflow_payload_fn=write_payload,
             sync_workflow_registry_fn=sync_registry,
         ),
+        source_inputs=("/inputs/mol.xyz",),
     )
 
     assert events == ["write", "sync"]
@@ -518,6 +522,7 @@ def test_persist_workflow_rechecks_existing_payload_under_creation_lock(
             write_workflow_payload_fn=lambda _workspace_dir, _payload: events.append("write"),
             sync_workflow_registry_fn=lambda _root, _workspace_dir, _payload: events.append("sync"),
         ),
+        source_inputs=("/inputs/mol.xyz",),
     )
 
     assert events == ["write", "sync"]
