@@ -43,12 +43,12 @@ _MAX_OPEN_COMPONENT_CHARS = 64
 _MAX_PORTABLE_FILENAME_CHARS = 40
 _MAX_CASE_SLUG_CHARS = 16
 _MAX_OPEN_RELATIVE_CHARS = 128
-_PROJECTION_SCHEMA_VERSION = 2
+# Version 3: the hidden_harness_alias disposition, the alias_target_* columns,
+# the hidden_harness_alias_count aggregate, and H-numbered artifact ids are gone.
+_PROJECTION_SCHEMA_VERSION = 3
 
 _DISPOSITION_REVIEW = "review"
 _DISPOSITION_BLOCKED = "blocked"
-_DISPOSITION_HIDDEN_HARNESS_ALIAS = "hidden_harness_alias"
-_PYTEST_CURRENT_SUFFIX = "current"
 
 _WINDOWS_RESERVED_NAMES = {
     "aux",
@@ -130,7 +130,6 @@ class ReviewPacketResult:
     artifact_manifest_path: Path
     artifact_count: int
     openable_count: int
-    hidden_harness_alias_count: int
 
 
 @dataclass(frozen=True)
@@ -145,17 +144,6 @@ class _SourceIdentity:
 class _DirectoryIdentity:
     device: int
     inode: int
-
-
-@dataclass(frozen=True)
-class _HarnessAliasIdentity:
-    link_device: int
-    link_inode: int
-    link_size_bytes: int
-    link_modified_ns: int
-    target_text: str
-    target_batch_path: str
-    target_directory: _DirectoryIdentity
 
 
 @dataclass(frozen=True)
@@ -178,7 +166,6 @@ class _Artifact:
     linkable: bool
     source_identity: _SourceIdentity | None
     disposition: str = _DISPOSITION_REVIEW
-    harness_alias: _HarnessAliasIdentity | None = None
     issue: str | None = None
     artifact_id: str = ""
     open_path: str | None = None
@@ -223,9 +210,8 @@ def generate_review_packet(
     ``case_dir`` is interpreted relative to ``batch_dir`` and ``runtime_dir`` is
     interpreted relative to that case (default: ``runtime``).  Unsafe or missing
     case paths are rendered as review issues and are never traversed.  A symlink
-    encountered below a valid runtime is not followed.  Recognised top-level
-    pytest ``*current`` convenience aliases are summarized separately; every
-    other symlink remains a visible blocked artifact.
+    encountered below a valid runtime is not followed and remains a visible
+    blocked artifact.
     """
 
     if batch_root_fd is None:
@@ -257,7 +243,7 @@ def generate_review_packet(
         cases = _normalise_case_manifests(batch_manifest, case_manifests)
         _assert_batch_namespace_identity(display_root, root_identity)
         budget = _Budget()
-        reviews = [_build_case_review(display_root, root_fd, case, budget) for case in cases]
+        reviews = [_build_case_review(root_fd, case, budget) for case in cases]
         _assert_batch_namespace_identity(display_root, root_identity)
         artifact_count = sum(len(case.artifacts) for case in reviews)
 
@@ -270,10 +256,6 @@ def generate_review_packet(
         )
         generation = publication.generation
         openable_count = publication.openable_count
-        hidden_harness_alias_count = _disposition_count(
-            reviews,
-            _DISPOSITION_HIDDEN_HARNESS_ALIAS,
-        )
         blocked_count = _disposition_count(reviews, _DISPOSITION_BLOCKED)
         artifact_manifest_relative = Path("review") / generation / "artifacts.json"
         summary = _render_summary(
@@ -281,7 +263,6 @@ def generate_review_packet(
             reviews,
             artifact_count,
             openable_count,
-            hidden_harness_alias_count,
             blocked_count,
         )
         index = _render_index(
@@ -289,7 +270,6 @@ def generate_review_packet(
             reviews,
             artifact_count,
             openable_count,
-            hidden_harness_alias_count,
             blocked_count,
         )
 
@@ -318,7 +298,6 @@ def generate_review_packet(
         artifact_manifest_path=display_root / artifact_manifest_relative,
         artifact_count=artifact_count,
         openable_count=openable_count,
-        hidden_harness_alias_count=hidden_harness_alias_count,
     )
 
 
@@ -872,14 +851,6 @@ def _projection_manifest(
                     "open_path": artifact.open_path,
                     "kind": artifact.kind,
                     "disposition": artifact.disposition,
-                    "alias_target_source_path": (
-                        artifact.harness_alias.target_batch_path
-                        if artifact.harness_alias is not None
-                        else None
-                    ),
-                    "alias_target_followed": (
-                        False if artifact.harness_alias is not None else None
-                    ),
                     "size_bytes": artifact.size_bytes,
                     "source_sha256": artifact.sha256,
                     "review_sha256": artifact.review_sha256,
@@ -902,9 +873,6 @@ def _projection_manifest(
         "runtime_source_of_truth": True,
         "artifact_count": len(records),
         "openable_count": sum(record["open_path"] is not None for record in records),
-        "hidden_harness_alias_count": sum(
-            record["disposition"] == _DISPOSITION_HIDDEN_HARNESS_ALIAS for record in records
-        ),
         "blocked_count": sum(record["disposition"] == _DISPOSITION_BLOCKED for record in records),
         "artifacts": records,
     }
@@ -928,58 +896,6 @@ def _verify_source_artifact(root_fd: int, artifact: _Artifact) -> None:
         os.close(source_fd)
     if size_bytes != identity.size_bytes or digest != expected_digest:
         raise ReviewPacketError("projected artifact source digest changed before publication")
-
-
-def _verify_hidden_harness_alias(root_fd: int, artifact: _Artifact) -> None:
-    alias = artifact.harness_alias
-    if (
-        artifact.disposition != _DISPOSITION_HIDDEN_HARNESS_ALIAS
-        or alias is None
-        or artifact.open_path is not None
-    ):
-        raise ReviewPacketError("hidden harness alias provenance is incomplete")
-    alias_parts = _relative_parts(artifact.batch_path, "harness alias source path")
-    target_parts = _relative_parts(alias.target_batch_path, "harness alias target path")
-    if alias_parts[:-1] != target_parts[:-1]:
-        raise ReviewPacketError("hidden harness alias target is not a sibling")
-    try:
-        parent_fd = _open_relative_directory(root_fd, alias_parts[:-1])
-    except OSError as exc:
-        raise ReviewPacketError("hidden harness alias changed before publication") from exc
-    target_fd: int | None = None
-    try:
-        link_before = os.stat(alias_parts[-1], dir_fd=parent_fd, follow_symlinks=False)
-        target_text_before = os.readlink(alias_parts[-1], dir_fd=parent_fd)
-        target_fd = os.open(target_parts[-1], _directory_open_flags(), dir_fd=parent_fd)
-        target_opened = os.fstat(target_fd)
-        target_before = os.stat(target_parts[-1], dir_fd=parent_fd, follow_symlinks=False)
-        link_after = os.stat(alias_parts[-1], dir_fd=parent_fd, follow_symlinks=False)
-        target_text_after = os.readlink(alias_parts[-1], dir_fd=parent_fd)
-        target_after = os.stat(target_parts[-1], dir_fd=parent_fd, follow_symlinks=False)
-    except OSError as exc:
-        raise ReviewPacketError("hidden harness alias changed before publication") from exc
-    finally:
-        if target_fd is not None:
-            os.close(target_fd)
-        os.close(parent_fd)
-    link_snapshots = (link_before, link_after)
-    target_snapshots = (target_opened, target_before, target_after)
-    if any(
-        not stat.S_ISLNK(link.st_mode)
-        or link.st_dev != alias.link_device
-        or link.st_ino != alias.link_inode
-        or link.st_size != alias.link_size_bytes
-        or link.st_mtime_ns != alias.link_modified_ns
-        for link in link_snapshots
-    ) or any(
-        not stat.S_ISDIR(target.st_mode)
-        or target.st_dev != alias.target_directory.device
-        or target.st_ino != alias.target_directory.inode
-        for target in target_snapshots
-    ):
-        raise ReviewPacketError("hidden harness alias changed before publication")
-    if target_text_before != alias.target_text or target_text_after != alias.target_text:
-        raise ReviewPacketError("hidden harness alias changed before publication")
 
 
 def _verify_projection_file(
@@ -1058,9 +974,6 @@ def _verify_review_projection(
         copies: list[tuple[str, int, str]] = []
         for case in reviews:
             for artifact in case.artifacts:
-                if artifact.disposition == _DISPOSITION_HIDDEN_HARNESS_ALIAS:
-                    _verify_hidden_harness_alias(root_fd, artifact)
-                    continue
                 if artifact.open_path is None:
                     continue
                 if artifact.review_sha256 is None or artifact.size_bytes is None:
@@ -1119,16 +1032,7 @@ def _materialize_review_projection(
             case_fd = _open_or_create_directory(open_fd, case_component)
             updated: list[_Artifact] = []
             try:
-                visible_index = 0
-                hidden_alias_index = 0
-                for artifact in case.artifacts:
-                    if artifact.disposition == _DISPOSITION_HIDDEN_HARNESS_ALIAS:
-                        hidden_alias_index += 1
-                        artifact_id = f"C{case_index:02d}-H{hidden_alias_index:04d}"
-                        updated.append(replace(artifact, artifact_id=artifact_id))
-                        continue
-                    visible_index += 1
-                    artifact_index = visible_index
+                for artifact_index, artifact in enumerate(case.artifacts, start=1):
                     artifact_id = f"C{case_index:02d}-A{artifact_index:04d}"
                     artifact = replace(artifact, artifact_id=artifact_id)
                     if not artifact.linkable or artifact.source_identity is None:
@@ -1285,7 +1189,6 @@ def _materialize_review_projection(
 
 
 def _build_case_review(
-    batch_root: Path,
     root_fd: int,
     manifest: Mapping[str, object],
     budget: _Budget,
@@ -1325,7 +1228,6 @@ def _build_case_review(
     try:
         _walk_runtime(
             runtime_fd,
-            batch_root=batch_root,
             runtime_relative=(),
             batch_prefix=(*case_parts, *runtime_parts),
             depth=0,
@@ -1409,69 +1311,9 @@ def _open_relative_directory(root_fd: int, parts: tuple[str, ...]) -> int:
     return current_fd
 
 
-def _is_pytest_current_shortcut(
-    directory_fd: int,
-    name: str,
-    *,
-    batch_root: Path,
-    runtime_parent: tuple[str, ...],
-    batch_parts: tuple[str, ...],
-    opened: os.stat_result,
-) -> _HarnessAliasIdentity | None:
-    """Recognise pytest's top-level latest-temp-directory convenience alias.
-
-    The link itself is never followed.  Classification requires a ``*current``
-    name directly below ``runtime/pytest``, a sibling numbered directory with
-    the matching pytest stem, and a link text that points lexically to that
-    sibling.  Lookalike or escaping links remain ordinary visible blocks.
-    """
-
-    if runtime_parent != ("pytest",) or not name.endswith(_PYTEST_CURRENT_SUFFIX):
-        return None
-    stem = name[: -len(_PYTEST_CURRENT_SUFFIX)]
-    if re.fullmatch(r"test_[A-Za-z0-9_]{0,25}", stem) is None:
-        return None
-    try:
-        target_text = os.readlink(name, dir_fd=directory_fd)
-    except OSError:
-        return None
-    target = PurePosixPath(target_text)
-    target_name = target.name
-    if re.fullmatch(re.escape(stem) + r"(?:0|[1-9][0-9]*)", target_name) is None:
-        return None
-    expected_target = PurePosixPath(batch_root.as_posix(), *batch_parts[:-1], target_name)
-    if not target.is_absolute() or target_text != expected_target.as_posix():
-        return None
-    try:
-        sibling = os.stat(target_name, dir_fd=directory_fd, follow_symlinks=False)
-        link_after = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-        target_after = os.readlink(name, dir_fd=directory_fd)
-    except OSError:
-        return None
-    if (
-        not stat.S_ISDIR(sibling.st_mode)
-        or not stat.S_ISLNK(link_after.st_mode)
-        or (link_after.st_dev, link_after.st_ino) != (opened.st_dev, opened.st_ino)
-        or link_after.st_size != opened.st_size
-        or link_after.st_mtime_ns != opened.st_mtime_ns
-        or target_after != target_text
-    ):
-        return None
-    return _HarnessAliasIdentity(
-        link_device=opened.st_dev,
-        link_inode=opened.st_ino,
-        link_size_bytes=opened.st_size,
-        link_modified_ns=opened.st_mtime_ns,
-        target_text=target_text,
-        target_batch_path=PurePosixPath(*batch_parts[:-1], target_name).as_posix(),
-        target_directory=_DirectoryIdentity(device=sibling.st_dev, inode=sibling.st_ino),
-    )
-
-
 def _walk_runtime(
     directory_fd: int,
     *,
-    batch_root: Path,
     runtime_relative: tuple[str, ...],
     batch_prefix: tuple[str, ...],
     depth: int,
@@ -1541,27 +1383,6 @@ def _walk_runtime(
             continue
 
         if stat.S_ISLNK(opened.st_mode):
-            harness_alias = _is_pytest_current_shortcut(
-                directory_fd,
-                name,
-                batch_root=batch_root,
-                runtime_parent=runtime_relative,
-                batch_parts=batch_parts,
-                opened=opened,
-            )
-            if harness_alias is not None:
-                review.artifacts.append(
-                    _blocked_artifact(
-                        relative_parts,
-                        batch_parts,
-                        "pytest current shortcut hidden (target not followed)",
-                        kind="pytest harness shortcut",
-                        disposition=_DISPOSITION_HIDDEN_HARNESS_ALIAS,
-                        preview_note="harness shortcut hidden",
-                        harness_alias=harness_alias,
-                    )
-                )
-                continue
             review.artifacts.append(
                 _blocked_artifact(relative_parts, batch_parts, "symlink blocked (target not read)")
             )
@@ -1584,7 +1405,6 @@ def _walk_runtime(
             try:
                 _walk_runtime(
                     child_fd,
-                    batch_root=batch_root,
                     runtime_relative=relative_parts,
                     batch_prefix=batch_prefix,
                     depth=depth + 1,
@@ -1616,24 +1436,18 @@ def _blocked_artifact(
     runtime_parts: tuple[str, ...],
     batch_parts: tuple[str, ...],
     issue: str,
-    *,
-    kind: str = "blocked",
-    disposition: str = _DISPOSITION_BLOCKED,
-    preview_note: str = "not opened",
-    harness_alias: _HarnessAliasIdentity | None = None,
 ) -> _Artifact:
     return _Artifact(
         runtime_path=PurePosixPath(*runtime_parts).as_posix(),
         batch_path=PurePosixPath(*batch_parts).as_posix(),
-        kind=kind,
+        kind="blocked",
         size_bytes=None,
         sha256=None,
         preview=None,
-        preview_note=preview_note,
+        preview_note="not opened",
         linkable=False,
         source_identity=None,
-        disposition=disposition,
-        harness_alias=harness_alias,
+        disposition=_DISPOSITION_BLOCKED,
         issue=issue,
     )
 
@@ -1902,32 +1716,11 @@ def _disposition_count(cases: Sequence[_CaseReview], disposition: str) -> int:
     return sum(artifact.disposition == disposition for case in cases for artifact in case.artifacts)
 
 
-def _visible_artifacts(case: _CaseReview) -> list[_Artifact]:
-    return [
-        artifact
-        for artifact in case.artifacts
-        if artifact.disposition != _DISPOSITION_HIDDEN_HARNESS_ALIAS
-    ]
-
-
-def _hidden_harness_note(count: int) -> str:
-    if count == 1:
-        return (
-            '1 pytest "current" alias is not shown as an artifact. It points to a numbered '
-            "pytest directory that remains in the retained runtime tree."
-        )
-    return (
-        f'{count} pytest "current" aliases are not shown as artifacts. They point to numbered '
-        "pytest directories that remain in the retained runtime tree."
-    )
-
-
 def _render_summary(
     manifest: Mapping[str, object],
     cases: list[_CaseReview],
     artifact_count: int,
     openable_count: int,
-    hidden_harness_alias_count: int,
     blocked_count: int,
 ) -> str:
     artifact_manifest = _projection_manifest_batch_path(cases)
@@ -1947,8 +1740,7 @@ def _render_summary(
             f"- Cases: `{len(cases)}`",
             f"- Discovered entries: `{artifact_count}`",
             f"- Files to review: `{openable_count}`",
-            f"- Pytest aliases (not artifacts): `{hidden_harness_alias_count}`",
-            f"- Other blocked entries: `{blocked_count}`",
+            f"- Blocked entries: `{blocked_count}`",
             "",
             "Expected simulation failures count as smoke PASS only when the declared verdict says so. "
             "Expected, observed, and verdict are shown separately.",
@@ -1984,17 +1776,11 @@ def _render_summary(
         )
         for issue in case.issues:
             lines.append(f"- Review issue: {_md_text(issue)}")
-        hidden_count = sum(
-            artifact.disposition == _DISPOSITION_HIDDEN_HARNESS_ALIAS for artifact in case.artifacts
-        )
-        if hidden_count:
-            lines.append(f"- Test harness: {_md_text(_hidden_harness_note(hidden_count))}")
         lines.extend(["", "### Artifacts", ""])
-        visible_artifacts = _visible_artifacts(case)
-        if not visible_artifacts:
+        if not case.artifacts:
             lines.append("No reviewable runtime artifacts were discovered.")
             continue
-        for artifact in visible_artifacts:
+        for artifact in case.artifacts:
             details = [artifact.kind]
             if artifact.size_bytes is not None:
                 details.append(_format_size(artifact.size_bytes))
@@ -2021,7 +1807,6 @@ def _render_index(
     cases: list[_CaseReview],
     artifact_count: int,
     openable_count: int,
-    hidden_harness_alias_count: int,
     blocked_count: int,
 ) -> str:
     batch_metadata = "".join(
@@ -2036,9 +1821,7 @@ def _render_index(
         f'<div class="metric"><span>Cases</span><strong>{len(cases)}</strong></div>'
         f'<div class="metric"><span>Entries found</span><strong>{artifact_count}</strong></div>'
         f'<div class="metric"><span>Files to review</span><strong>{openable_count}</strong></div>'
-        '<div class="metric"><span>Pytest aliases (not artifacts)</span>'
-        f"<strong>{hidden_harness_alias_count}</strong></div>"
-        f'<div class="metric"><span>Other blocked entries</span><strong>{blocked_count}</strong></div>'
+        f'<div class="metric"><span>Blocked entries</span><strong>{blocked_count}</strong></div>'
     )
     case_sections = "\n".join(
         _render_case_html(case, index=index) for index, case in enumerate(cases, start=1)
@@ -2067,7 +1850,6 @@ main {{ width:min(1180px,calc(100% - 32px)); margin:32px auto 72px; }}
 .badge {{ display:inline-block; border:1px solid currentColor; border-radius:999px; padding:3px 10px; font-size:12px; font-weight:700; text-transform:uppercase; }} .pass {{ color:var(--good); }} .fail {{ color:var(--bad); }} .warn {{ color:var(--warn); }} .neutral {{ color:var(--muted); }}
 .contract {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; margin:18px 0; }} .contract div {{ background:var(--code); border-radius:9px; padding:10px 12px; overflow-wrap:anywhere; }} .contract span {{ display:block; color:var(--muted); font-size:12px; }}
 .issues {{ border-left:4px solid var(--warn); background:color-mix(in srgb,var(--warn) 8%,transparent); padding:10px 14px; }} .issues li {{ margin:4px 0; }}
-.harness-note {{ border-left:4px solid var(--muted); background:var(--code); color:var(--muted); padding:10px 14px; margin:12px 0; }}
 .artifact {{ margin-top:12px; padding:15px; box-shadow:none; }} .artifact-head {{ display:flex; align-items:center; justify-content:space-between; gap:12px; }} .artifact-title {{ min-width:0; }} .artifact-title code {{ overflow-wrap:anywhere; }}
 .meta {{ color:var(--muted); font-size:13px; margin-top:4px; overflow-wrap:anywhere; }} a.open {{ color:var(--accent); border:1px solid currentColor; border-radius:8px; padding:6px 10px; text-decoration:none; white-space:nowrap; }} a.open:hover {{ text-decoration:underline; }}
 .provenance {{ margin-top:10px; }} .provenance div {{ margin-top:7px; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }}
@@ -2094,17 +1876,7 @@ def _render_case_html(case: _CaseReview, *, index: int) -> str:
     if case.issues:
         issue_items = "".join(f"<li>{html.escape(issue)}</li>" for issue in case.issues)
         issues = f'<div class="issues"><strong>Review issues</strong><ul>{issue_items}</ul></div>'
-    hidden_count = sum(
-        artifact.disposition == _DISPOSITION_HIDDEN_HARNESS_ALIAS for artifact in case.artifacts
-    )
-    harness_note = ""
-    if hidden_count:
-        harness_note = (
-            '<div class="harness-note"><strong>Test harness:</strong> '
-            + html.escape(_hidden_harness_note(hidden_count))
-            + "</div>"
-        )
-    artifacts = "".join(_render_artifact_html(artifact) for artifact in _visible_artifacts(case))
+    artifacts = "".join(_render_artifact_html(artifact) for artifact in case.artifacts)
     if not artifacts:
         artifacts = '<p class="muted">No reviewable runtime artifacts were discovered.</p>'
     return f"""<section class="case" id="case-{index}">
@@ -2117,7 +1889,7 @@ def _render_case_html(case: _CaseReview, *, index: int) -> str:
 </div>
 <details class="provenance"><summary>Case provenance</summary><div><strong>Runtime source:</strong> <code>{html.escape(case.runtime_path)}</code></div></details>
 {issues}
-{harness_note}
+
 <h3>Artifacts</h3>
 {artifacts}
 </section>"""

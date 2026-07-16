@@ -10,6 +10,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- The smoke runner now removes pytest's transient `*current` convenience
+  symlinks after each scenario instead of rewriting them to durable targets,
+  and the review packet's dedicated hidden-alias pipeline is gone: the
+  `hidden_harness_alias_count` fields, the `alias_target_*` provenance
+  columns, and the `H`-numbered artifact ids no longer appear in
+  `batch.json`/`artifacts.json`. The numbered pytest directories keep the
+  real artifacts; any symlink that still appears in a runtime (for example in
+  batches recorded before this change) is listed as an ordinary blocked
+  entry and is never followed.
 - The smoke review packet and manifests publish through one shared
   staging-and-rename write. The hardlink backup/rollback layers, the repeated
   post-publication re-verification passes, and the staging-substitution

@@ -38,7 +38,7 @@ def _runtime(batch_dir: Path) -> Path:
 def _projection_records(result: ReviewPacketResult) -> list[dict[str, object]]:
     manifest_path = result.artifact_manifest_path
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["runtime_source_of_truth"] is True
     assert payload["artifact_count"] == len(payload["artifacts"])
     return payload["artifacts"]
@@ -85,7 +85,6 @@ def test_generate_review_packet_links_artifacts_and_escapes_all_previews(tmp_pat
     assert result.artifact_manifest_path.is_file()
     assert result.artifact_count == 6
     assert result.openable_count == 6
-    assert result.hidden_harness_alias_count == 0
 
     index = result.index_path.read_text(encoding="utf-8")
     summary = result.summary_path.read_text(encoding="utf-8")
@@ -478,7 +477,6 @@ def test_symlinks_are_listed_but_never_followed_or_linked(tmp_path: Path) -> Non
 
     index = result.index_path.read_text(encoding="utf-8")
     assert result.artifact_count == 3
-    assert result.hidden_harness_alias_count == 0
     assert "OUTSIDE-SYMLINK-SECRET" not in index
     assert "NESTED-OUTSIDE-SECRET" not in index
     assert "symlink blocked (target not read)" in index
@@ -500,24 +498,25 @@ def test_symlinks_are_listed_but_never_followed_or_linked(tmp_path: Path) -> Non
     )
 
 
-def test_pytest_current_shortcut_is_summarized_without_an_artifact_card(
+def test_pytest_current_alias_from_an_old_batch_is_a_blocked_symlink(
     tmp_path: Path,
 ) -> None:
+    # The runner unlinks pytest convenience aliases after each scenario, so a
+    # surviving alias only appears when reviewing a batch produced before the
+    # unlink existed. It is shown as an ordinary blocked symlink; the numbered
+    # target directory keeps its real artifacts.
     runtime = _runtime(tmp_path)
     pytest_root = runtime / "pytest"
     numbered = pytest_root / "test_retained_case0"
     numbered.mkdir(parents=True)
-    report = numbered / "job_report.html"
-    report.write_text("<h1>complete</h1>", encoding="utf-8")
-    state = numbered / "job_state.json"
-    state.write_text('{"status":"completed"}', encoding="utf-8")
+    (numbered / "job_report.html").write_text("<h1>complete</h1>", encoding="utf-8")
+    (numbered / "job_state.json").write_text('{"status":"completed"}', encoding="utf-8")
     alias = pytest_root / "test_retained_casecurrent"
     alias.symlink_to(numbered, target_is_directory=True)
 
     result = generate_review_packet(tmp_path, {"cases": [_case_manifest()]})
 
     index = result.index_path.read_text(encoding="utf-8")
-    summary = result.summary_path.read_text(encoding="utf-8")
     payload = json.loads(result.artifact_manifest_path.read_text(encoding="utf-8"))
     records = payload["artifacts"]
     report_record = _record_for(records, "/pytest/test_retained_case0/job_report.html")
@@ -526,28 +525,16 @@ def test_pytest_current_shortcut_is_summarized_without_an_artifact_card(
 
     assert result.artifact_count == 3
     assert result.openable_count == 2
-    assert result.hidden_harness_alias_count == 1
-    assert payload["hidden_harness_alias_count"] == 1
-    assert payload["blocked_count"] == 0
-    assert report_record["artifact_id"] == "C01-A0001"
+    assert payload["blocked_count"] == 1
+    assert "hidden_harness_alias_count" not in payload
     assert report_record["open_path"] is not None
-    assert state_record["artifact_id"] == "C01-A0002"
     assert state_record["open_path"] is not None
-    assert alias_record["artifact_id"] == "C01-H0001"
-    assert alias_record["disposition"] == "hidden_harness_alias"
+    assert alias_record["disposition"] == "blocked"
     assert alias_record["open_path"] is None
-    alias_target = alias_record["alias_target_source_path"]
-    assert isinstance(alias_target, str)
-    assert alias_target.endswith("/pytest/test_retained_case0")
-    assert alias_record["alias_target_followed"] is False
-    assert alias_record["issue"] == "pytest current shortcut hidden (target not followed)"
-    assert alias.name not in index
-    assert alias.name not in summary
-    assert "symlink blocked (target not read)" not in index
-    assert "Pytest aliases (not artifacts)</span><strong>1</strong>" in index
-    assert "Other blocked entries</span><strong>0</strong>" in index
-    assert "pytest &quot;current&quot; alias is not shown as an artifact" in index
-    assert 'pytest "current" alias is not shown as an artifact' in summary
+    assert "alias_target_source_path" not in alias_record
+    assert alias_record["issue"] == "symlink blocked (target not read)"
+    assert "Blocked entries</span><strong>1</strong>" in index
+    assert alias.name in index
 
 
 def test_pytest_current_lookalike_with_external_target_remains_visible_blocked(
@@ -569,7 +556,6 @@ def test_pytest_current_lookalike_with_external_target_remains_visible_blocked(
         _projection_records(result),
         "/pytest/test_retained_casecurrent",
     )
-    assert result.hidden_harness_alias_count == 0
     assert alias_record["artifact_id"] == "C01-A0001"
     assert alias_record["disposition"] == "blocked"
     assert alias_record["open_path"] is None
@@ -592,72 +578,9 @@ def test_relative_pytest_current_lookalike_remains_visible_blocked(tmp_path: Pat
         _projection_records(result),
         "/pytest/test_retained_casecurrent",
     )
-    assert result.hidden_harness_alias_count == 0
     assert alias_record["disposition"] == "blocked"
     assert alias.name in index
     assert "symlink blocked (target not read)" in index
-
-
-def test_hidden_pytest_current_shortcut_is_reverified_before_index_publication(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = _runtime(tmp_path)
-    pytest_root = runtime / "pytest"
-    numbered = pytest_root / "test_retained_case0"
-    numbered.mkdir(parents=True)
-    (numbered / "job_report.json").write_text("{}", encoding="utf-8")
-    alias = pytest_root / "test_retained_casecurrent"
-    alias.symlink_to(numbered, target_is_directory=True)
-    initial = generate_review_packet(tmp_path, {"cases": [_case_manifest()]})
-    summary_before = initial.summary_path.read_bytes()
-    index_before = initial.index_path.read_bytes()
-    verify_alias = smoke_review._verify_hidden_harness_alias
-    verification_count = 0
-    raced_readlink_count = 0
-
-    def replace_alias_before_second_verification(
-        root_fd: int,
-        artifact: smoke_review._Artifact,
-    ) -> None:
-        nonlocal raced_readlink_count, verification_count
-        verification_count += 1
-        if verification_count != 1:
-            verify_alias(root_fd, artifact)
-            return
-
-        readlink = smoke_review.os.readlink
-
-        def replace_alias_after_first_readlink(
-            path: str,
-            *,
-            dir_fd: int | None = None,
-        ) -> str:
-            nonlocal raced_readlink_count
-            target = readlink(path, dir_fd=dir_fd)
-            raced_readlink_count += 1
-            if raced_readlink_count == 1:
-                alias.unlink()
-                alias.symlink_to(tmp_path.parent, target_is_directory=True)
-            return target
-
-        with monkeypatch.context() as race:
-            race.setattr(smoke_review.os, "readlink", replace_alias_after_first_readlink)
-            verify_alias(root_fd, artifact)
-
-    monkeypatch.setattr(
-        smoke_review,
-        "_verify_hidden_harness_alias",
-        replace_alias_before_second_verification,
-    )
-
-    with pytest.raises(ReviewPacketError, match="hidden harness alias changed"):
-        generate_review_packet(tmp_path, {"cases": [_case_manifest()]})
-
-    assert verification_count == 1
-    assert raced_readlink_count == 2
-    assert (tmp_path / "summary.md").read_bytes() == summary_before
-    assert (tmp_path / "review" / "index.html").read_bytes() == index_before
 
 
 def test_hardlinks_are_listed_but_external_content_is_not_read_or_linked(

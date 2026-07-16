@@ -148,13 +148,13 @@ def test_run_smoke_suite_keeps_expected_terminal_separate_from_verdict(
     assert result.review.summary_path.is_file()
     assert result.review.artifact_manifest_path.is_file()
     assert result.review.openable_count > 0
-    assert result.review.hidden_harness_alias_count == 1
+    # The pytest convenience aliases are unlinked after the run: the retained
+    # runtime keeps only real artifacts, so nothing is hidden from review.
+    pytest_dir = result.batch_manifest_path.parent / case["case_dir"] / "runtime" / "pytest"
+    assert not [entry for entry in pytest_dir.iterdir() if entry.name.endswith("current")]
     assert manifest["review_packet"]["artifacts"].endswith("/artifacts.json")
     assert manifest["review_packet"]["openable_count"] == result.review.openable_count
-    assert (
-        manifest["review_packet"]["hidden_harness_alias_count"]
-        == result.review.hidden_harness_alias_count
-    )
+    assert "hidden_harness_alias_count" not in manifest["review_packet"]
     assert (runs_root / ".orca_auto_smoke" / "index.json").is_file()
 
 
