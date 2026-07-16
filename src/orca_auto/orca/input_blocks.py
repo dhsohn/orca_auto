@@ -708,7 +708,9 @@ def scan_orca_file_references(
     and rewrites the auxiliary references; it passes ``include_geometry=False``
     because the ``* xyzfile`` geometry line is rewritten separately). Both
     consumers must see the same reference set, or an input accepted at
-    execution time silently loses references on restart.
+    execution time silently loses references on restart. The geometry
+    reference always counts toward ``MAX_ORCA_INPUT_REFERENCES`` — filtering
+    it out of the returned set must not loosen the cap.
 
     Raises ``ValueError`` for unsupported auxiliary/external-program
     directives, malformed references, and more than
@@ -729,19 +731,19 @@ def scan_orca_file_references(
         if len(tokens) >= 5 and tokens[0].value == "*" and tokens[1].value.lower() == "xyzfile":
             value_token = tokens[4]
             # Always mark the filename so the second pass never misreads it as
-            # a directive (e.g. a geometry file named ``progress.xyz``), even
-            # when the caller does not consume geometry references.
+            # a directive (e.g. a geometry file named ``progress.xyz``), and
+            # always collect the reference so the cap below counts it even for
+            # callers that filter geometry out of the returned set.
             reference_value_indices.add(4)
-            if include_geometry:
-                references.append(
-                    OrcaFileReference(
-                        line_index=line_index,
-                        value=value_token.value,
-                        start=value_token.start,
-                        end=value_token.end,
-                        kind="geometry",
-                    )
+            references.append(
+                OrcaFileReference(
+                    line_index=line_index,
+                    value=value_token.value,
+                    start=value_token.start,
+                    end=value_token.end,
+                    kind="geometry",
                 )
+            )
         for token_index, token in enumerate(tokens):
             if token.quoted:
                 continue
@@ -830,4 +832,6 @@ def scan_orca_file_references(
         raise ValueError(
             f"ORCA input has more than {MAX_ORCA_INPUT_REFERENCES} external file references"
         )
+    if not include_geometry:
+        return [reference for reference in references if reference.kind != "geometry"]
     return references
