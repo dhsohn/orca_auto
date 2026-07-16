@@ -77,8 +77,7 @@ src/orca_auto/
     ├── templates.py     # 워크플로우 템플릿 레지스트리
     ├── manifest.py      # flow.yaml 파싱
     ├── registry/        # 워크플로우 레지스트리 + 저널
-    ├── bot/             # provider-neutral bot 애플리케이션 + gateway adapter
-    └── telegram/        # 레거시 호환 Telegram facade/전송 헬퍼
+    └── bot/             # provider-neutral bot 애플리케이션 + gateway adapter
 ```
 
 ### 임포트 규칙 (DEVELOPMENT.md 기준)

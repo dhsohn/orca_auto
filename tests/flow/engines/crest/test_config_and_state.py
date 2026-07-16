@@ -159,7 +159,7 @@ def test_load_config_reads_and_normalizes_all_sections(
     assert cfg.messenger.telegram == cfg.telegram
 
 
-def test_load_config_dual_reads_legacy_top_level_telegram(tmp_path: Path) -> None:
+def test_load_config_rejects_legacy_top_level_telegram(tmp_path: Path) -> None:
     workflow_root = tmp_path / "workflow_root"
     workflow_root.mkdir()
     config_path = _write_config(
@@ -172,11 +172,8 @@ def test_load_config_dual_reads_legacy_top_level_telegram(tmp_path: Path) -> Non
         """,
     )
 
-    cfg = config_mod.load_crest_config(str(config_path))
-
-    assert cfg.telegram.bot_token == "legacy-token"
-    assert cfg.telegram.chat_id == "legacy-chat"
-    assert cfg.messenger.telegram == cfg.telegram
+    with pytest.raises(ValueError, match="messenger.telegram"):
+        config_mod.load_crest_config(str(config_path))
 
 
 def test_load_config_no_longer_supports_top_level_runtime_and_paths_shape(tmp_path: Path) -> None:
@@ -218,7 +215,6 @@ def test_load_config_applies_defaults_for_missing_and_legacy_optional_sections(
         scheduler:
           max_active_simulations: 1
         behavior: invalid
-        telegram: []
         """,
     )
 

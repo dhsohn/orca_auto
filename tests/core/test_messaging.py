@@ -413,17 +413,18 @@ def test_messenger_config_rejects_malformed_sections(raw: object, expected: str)
         messenger_config_from_mapping(raw)
 
 
-def test_messenger_config_file_dual_reads_legacy_with_nested_precedence(
+def test_messenger_config_file_rejects_legacy_top_level_telegram(
     tmp_path: Path,
 ) -> None:
+    # The legacy top-level block is no longer read: loading fails closed with a
+    # migration hint, whether or not the canonical nested block is present.
     config_path = tmp_path / "orca_auto.yaml"
     config_path.write_text(
         "telegram:\n  bot_token: legacy-token\n  chat_id: legacy-chat\n",
         encoding="utf-8",
     )
-    legacy = load_messenger_config_from_file(config_path)
-    assert legacy.telegram.bot_token == "legacy-token"
-    assert legacy.telegram.chat_id == "legacy-chat"
+    with pytest.raises(ValueError, match="messenger.telegram"):
+        load_messenger_config_from_file(config_path)
 
     config_path.write_text(
         "\n".join(
@@ -437,6 +438,13 @@ def test_messenger_config_file_dual_reads_legacy_with_nested_precedence(
             ]
         )
         + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="no longer supported"):
+        load_messenger_config_from_file(config_path)
+
+    config_path.write_text(
+        "messenger:\n  telegram:\n    chat_id: nested-chat\n",
         encoding="utf-8",
     )
     nested = load_messenger_config_from_file(config_path)

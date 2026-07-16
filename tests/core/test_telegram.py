@@ -447,9 +447,8 @@ def test_escape_helpers_and_config_loader(tmp_path: Path) -> None:
         "telegram:\n  bot_token: legacy-token\n  chat_id: legacy-chat\n",
         encoding="utf-8",
     )
-    legacy = telegram_config_mod.load_telegram_config_from_file(config_path)
-    assert legacy.bot_token == "legacy-token"
-    assert legacy.chat_id == "legacy-chat"
+    with pytest.raises(ValueError, match="messenger.telegram"):
+        telegram_config_mod.load_telegram_config_from_file(config_path)
 
     config_path.write_text(
         "\n".join(
@@ -463,6 +462,13 @@ def test_escape_helpers_and_config_loader(tmp_path: Path) -> None:
             ]
         )
         + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="no longer supported"):
+        telegram_config_mod.load_telegram_config_from_file(config_path)
+
+    config_path.write_text(
+        "messenger:\n  telegram:\n    chat_id: nested-chat\n",
         encoding="utf-8",
     )
     nested = telegram_config_mod.load_telegram_config_from_file(config_path)

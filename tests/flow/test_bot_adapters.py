@@ -1229,3 +1229,36 @@ def test_runner_rejects_unknown_provider(monkeypatch: pytest.MonkeyPatch) -> Non
 
     with pytest.raises(ValueError, match="unsupported messenger provider"):
         runner.run_bot(provider="matrix")
+
+
+def test_provider_api_call_constructs_transport_client(monkeypatch) -> None:
+    # The provider-local wrapper owns the transport wiring since the legacy
+    # bot_api facade was retired: token, poll-timeout math, and logger must
+    # reach the core client unchanged.
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, *, token: str, timeout: int, logger: object) -> None:
+            captured["token"] = token
+            captured["timeout"] = timeout
+            captured["logger"] = logger
+
+        def api_call(
+            self, method: str, payload: dict | None = None, *, timeout: int | None = None
+        ) -> dict:
+            captured["method"] = method
+            captured["payload"] = payload
+            captured["call_timeout"] = timeout
+            return {"ok": True}
+
+    monkeypatch.setattr(telegram_provider, "TelegramApiClient", FakeClient)
+
+    result = telegram_provider.api_call("tok", "getMe", {"a": 1})
+
+    assert result == {"ok": True}
+    assert captured["token"] == "tok"
+    assert captured["timeout"] == telegram_provider.POLL_TIMEOUT_SECONDS + 5
+    assert captured["call_timeout"] == telegram_provider.POLL_TIMEOUT_SECONDS + 5
+    assert captured["logger"] is telegram_provider.LOGGER
+    assert captured["method"] == "getMe"
+    assert captured["payload"] == {"a": 1}

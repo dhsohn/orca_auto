@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import warnings
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -225,36 +224,24 @@ def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
 
 
 def messenger_mapping_from_root(raw: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return the canonical ``messenger`` mapping with legacy Telegram support.
+    """Return the canonical ``messenger`` mapping.
 
-    ``messenger.telegram`` is authoritative whenever that key is present.  The
-    legacy top-level ``telegram`` value is copied only when the nested key is
-    absent; the two mappings are deliberately never merged field-by-field.  In
-    particular, an explicitly empty nested mapping must not be repopulated with
-    credentials from the legacy location.
+    ``messenger.telegram`` is the only supported location. A leftover top-level
+    ``telegram`` block fails closed with a migration hint instead of being
+    silently ignored, which would silently disable notifications.
     """
     root = raw if isinstance(raw, Mapping) else {}
+    if "telegram" in root:
+        raise ValueError(
+            "Top-level 'telegram' config is no longer supported; "
+            "move the block to 'messenger.telegram'."
+        )
     messenger_raw = root.get("messenger")
     if messenger_raw is None:
-        messenger: dict[str, Any] = {}
-    elif isinstance(messenger_raw, Mapping):
-        messenger = dict(messenger_raw)
-    else:
-        raise ValueError("messenger section must be a mapping when configured.")
-
-    if "telegram" not in messenger and "telegram" in root:
-        warnings.warn(
-            "Top-level 'telegram' config is deprecated; move it to 'messenger.telegram'.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        legacy_telegram = root.get("telegram")
-        # Historical loaders treated a non-mapping legacy value as disabled.
-        # Preserve that read behavior during the migration window, while the
-        # new canonical nested section remains strict.
-        if legacy_telegram is None or isinstance(legacy_telegram, Mapping):
-            messenger["telegram"] = legacy_telegram
-    return messenger
+        return {}
+    if isinstance(messenger_raw, Mapping):
+        return dict(messenger_raw)
+    raise ValueError("messenger section must be a mapping when configured.")
 
 
 def config_with_canonical_messenger(raw: Mapping[str, Any]) -> dict[str, Any]:

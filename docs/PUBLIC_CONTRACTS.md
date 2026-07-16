@@ -163,11 +163,9 @@ Stable behavior:
 
 Migration note:
 
-- During the current compatibility window, readers accept both the legacy top-level
-  `telegram:` block and canonical `messenger.telegram`. If both are present, the nested
-  `messenger.telegram` values take precedence.
-- New configuration, generated examples, and tooling write `messenger.telegram`; do not add
-  new top-level `telegram:` blocks. Discord has no legacy alias: use the nested
+- The legacy top-level `telegram:` block is no longer read. Configuration
+  loading fails with a pointed error when one is present; move the block to
+  `messenger.telegram`. Discord has no legacy alias: use the nested
   `messenger.discord` bot fields.
 
 ## Queue And Activity Contract
