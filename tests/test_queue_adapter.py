@@ -727,7 +727,7 @@ class TestQueueStore(unittest.TestCase):
     def test_lookup_entry_missing(self) -> None:
         self.assertIsNone(self._find_entry("q_nonexistent"))
 
-    # -- priority tie-breaking by enqueued_at ---------------------------
+    # -- priority tie-breaking by arrival (queue-file row) order --------
 
     def test_fifo_on_same_priority(self) -> None:
         e1 = enqueue(self.root, str(self.root / "first"))
