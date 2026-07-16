@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import os
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -25,9 +28,19 @@ from orca_auto.core.engines.queue_worker import (
     build_runtime_engine_queue_worker,
 )
 from orca_auto.core.queue import (
+    QUEUE_RECORD_SYNC_COMPLETE,
+    QUEUE_RECORD_SYNC_PREPARING,
+    QUEUE_RECORD_SYNC_REPAIR_PENDING,
+    QUEUE_RECORD_SYNC_REPAIRING,
+    QUEUE_RECORD_SYNC_TOKEN_KEY,
+    QueueStatus,
     list_queue,
     mark_cancelled,
     mark_failed,
+    queue_record_publication_lock,
+    queue_record_sync_is_stale,
+    queue_record_sync_metadata,
+    queue_record_sync_state,
 )
 from orca_auto.core.queue.generation import queue_entries_same_generation
 from orca_auto.core.queue.internal_engine import (
@@ -36,16 +49,22 @@ from orca_auto.core.queue.internal_engine import (
     InternalEngineSpec,
     entry_matches_engine_identity,
 )
+from orca_auto.core.queue.store import mutate_entries
 from orca_auto.core.queue.worker import (
     config_path_for_worker,
     resolve_admission_root,
     start_background_process,
     terminate_process_group,
 )
+from orca_auto.core.utils.coercion import normalize_text
+from orca_auto.core.utils.persistence import timestamped_token
 
 from .engine import ENGINE_DEFINITION, build_worker_child_command
 from .job_locations import runtime_roots_for_cfg
 from .records import build_job_artifact, persist_failed_job, persist_job_artifact
+from .submission import publish_queued_record
+
+logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 5
 WORKER_SHUTDOWN_GRACE_SECONDS = 15.0
@@ -217,6 +236,235 @@ def _reconcile_worker_state(worker: Any) -> None:
             )
 
 
+_REPAIRABLE_SYNC_STATES = frozenset(
+    {
+        QUEUE_RECORD_SYNC_PREPARING,
+        QUEUE_RECORD_SYNC_REPAIR_PENDING,
+        QUEUE_RECORD_SYNC_REPAIRING,
+    }
+)
+
+
+def _mark_repair_pending(queue_root: Path, entry: Any, *, expected_token: str) -> None:
+    """Fence a possibly-committed repair lease back to the explicit repair queue."""
+
+    def park(entries: list[Any]) -> tuple[None, bool]:
+        for index, current in enumerate(entries):
+            if current.queue_id != entry.queue_id:
+                continue
+            if (
+                current.status != QueueStatus.PENDING
+                or queue_record_sync_state(current) != QUEUE_RECORD_SYNC_REPAIRING
+                or normalize_text(current.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY))
+                != expected_token
+            ):
+                return None, False
+            metadata = dict(current.metadata)
+            metadata.update(
+                queue_record_sync_metadata(
+                    QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                    token=expected_token,
+                    owner_pid=0,
+                )
+            )
+            entries[index] = replace(current, metadata=metadata)
+            return None, True
+        return None, False
+
+    try:
+        mutate_entries(queue_root, park)
+    except BaseException:  # noqa: BLE001 - never mask the original failure
+        logger.warning(
+            "failed to park xTB-MD queued record as repair pending: queue_id=%s",
+            getattr(entry, "queue_id", ""),
+            exc_info=True,
+        )
+
+
+def _repair_queued_publication(cfg: Any, queue_root: Path, entry: Any) -> bool:
+    """Re-publish one committed xTB-MD row whose queued record never landed.
+
+    Claims the row under the publication lock with a fresh token (the lock,
+    not a live PID in the row, is the authoritative ownership proof), writes
+    the queued job artifact, and marks the sync lease COMPLETE. Any failure
+    parks the row as REPAIR_PENDING so it stays unclaimable rather than
+    running without its published record.
+    """
+    repair_token = timestamped_token("record_sync", token_bytes=16)
+
+    def claim(entries: list[Any]) -> tuple[tuple[str, Any | None], bool]:
+        for index, current in enumerate(entries):
+            if current.queue_id != entry.queue_id:
+                continue
+            if not queue_entries_same_generation(current, entry):
+                return ("identity_changed", current), False
+            if current.cancel_requested:
+                return ("cancelled", current), False
+            sync_state = queue_record_sync_state(current)
+            if sync_state == QUEUE_RECORD_SYNC_COMPLETE:
+                return ("complete", current), False
+            if current.status != QueueStatus.PENDING:
+                return ("terminal", current), False
+            if sync_state not in _REPAIRABLE_SYNC_STATES:
+                return ("invalid_state", current), False
+            metadata = dict(current.metadata)
+            metadata.update(
+                queue_record_sync_metadata(
+                    QUEUE_RECORD_SYNC_REPAIRING,
+                    token=repair_token,
+                    owner_pid=os.getpid(),
+                )
+            )
+            updated = replace(current, metadata=metadata)
+            entries[index] = updated
+            return ("claimed", updated), True
+        return ("missing", None), False
+
+    def complete(entries: list[Any]) -> tuple[None, bool]:
+        for index, row in enumerate(entries):
+            if row.queue_id != entry.queue_id:
+                continue
+            # The COMPLETE transition belongs to this repair lease only: any
+            # other sync state or token here (for example a cancel fence
+            # written concurrently) must never be overwritten.
+            if (
+                row.status != QueueStatus.PENDING
+                or row.cancel_requested
+                or queue_record_sync_state(row) != QUEUE_RECORD_SYNC_REPAIRING
+                or normalize_text(row.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY)) != repair_token
+            ):
+                raise RuntimeError(
+                    "xTB-MD queued record repair lost publication ownership: "
+                    f"queue_id={entry.queue_id}"
+                )
+            metadata = dict(row.metadata)
+            metadata.update(
+                queue_record_sync_metadata(
+                    QUEUE_RECORD_SYNC_COMPLETE,
+                    token=repair_token,
+                    owner_pid=0,
+                )
+            )
+            entries[index] = replace(row, metadata=metadata)
+            return None, True
+        raise RuntimeError(f"xTB-MD queue entry disappeared during repair: {entry.queue_id}")
+
+    claimed = False
+    try:
+        # One lock acquisition covers claim, publication, and completion, so no
+        # cancel fence or foreign publication can interleave between them.
+        with queue_record_publication_lock(queue_root, entry.queue_id):
+            outcome, current = mutate_entries(queue_root, claim)
+            if outcome != "claimed":
+                if outcome == "invalid_state":
+                    logger.error(
+                        "Cannot repair xTB-MD queue publication with invalid state %r: queue_id=%s",
+                        queue_record_sync_state(current),
+                        entry.queue_id,
+                    )
+                    return False
+                if outcome == "identity_changed":
+                    logger.warning(
+                        "xTB-MD queued record repair refused a changed queue generation: "
+                        "queue_id=%s",
+                        entry.queue_id,
+                    )
+                    return False
+                # complete / cancelled / terminal / missing: nothing left to repair.
+                return True
+            claimed = True
+            publish_queued_record(cfg, current)
+            mutate_entries(queue_root, complete)
+    except BaseException as exc:  # noqa: BLE001
+        # Even a failed claim may have committed before its durability barrier
+        # reported failure; park the lease so the row cannot strand in
+        # REPAIRING (the park CAS is token-gated, so it never touches a row
+        # this repair does not own).
+        _mark_repair_pending(queue_root, entry, expected_token=repair_token)
+        if not isinstance(exc, Exception):
+            raise
+        logger.warning(
+            "xTB-MD queued record repair %s: queue_id=%s",
+            "failed" if claimed else "claim failed",
+            entry.queue_id,
+            exc_info=True,
+        )
+        return False
+    logger.info("repaired xTB-MD queued record publication: queue_id=%s", entry.queue_id)
+    return True
+
+
+def _repair_xtb_md_queue_publications(worker: Any) -> bool:
+    """Repair every xTB-MD row whose enqueue committed but publication did not.
+
+    A publisher killed between the durable enqueue commit and the queued-record
+    publication leaves a PREPARING lease that eventually goes stale and would
+    otherwise be claimed and run without any published record. Fresh
+    PREPARING/REPAIRING leases with a live owner are left alone: they are not
+    claimable, and the live publisher keeps ownership.
+    """
+    repaired_all = True
+    for queue_root, entry in queue_entries_with_roots(worker.cfg):
+        if not entry_matches_engine_identity(entry, "xtb_md"):
+            continue
+        if entry.status != QueueStatus.PENDING or entry.cancel_requested:
+            continue
+        sync_state = queue_record_sync_state(entry)
+        if not sync_state or sync_state == QUEUE_RECORD_SYNC_COMPLETE:
+            continue
+        if sync_state not in _REPAIRABLE_SYNC_STATES:
+            logger.error(
+                "Cannot repair xTB-MD queue publication with invalid state %r: queue_id=%s",
+                sync_state,
+                entry.queue_id,
+            )
+            repaired_all = False
+            continue
+        if sync_state != QUEUE_RECORD_SYNC_REPAIR_PENDING and not queue_record_sync_is_stale(entry):
+            # A live publisher still owns this lease; the row is unclaimable
+            # until the lease goes stale, so there is nothing to repair yet.
+            continue
+        raw_job_dir = normalize_text(entry.metadata.get("job_dir"))
+        try:
+            job_dir_contained = bool(raw_job_dir) and (
+                Path(raw_job_dir)
+                .expanduser()
+                .resolve()
+                .is_relative_to(queue_root.expanduser().resolve())
+            )
+        except (OSError, RuntimeError):
+            job_dir_contained = False
+        if not job_dir_contained:
+            logger.error(
+                "Cannot repair xTB-MD publication outside its queue root: queue_id=%s job_dir=%s",
+                entry.queue_id,
+                raw_job_dir,
+            )
+            repaired_all = False
+            continue
+        try:
+            repaired = _repair_queued_publication(worker.cfg, queue_root, entry)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "xTB-MD queued record repair raised: queue_id=%s",
+                entry.queue_id,
+                exc_info=True,
+            )
+            repaired = False
+        if not repaired:
+            repaired_all = False
+    return repaired_all
+
+
+def _publication_repair_gate(worker: Any) -> tuple[str, Any | None] | None:
+    if not _repair_xtb_md_queue_publications(worker):
+        logger.warning(
+            "xTB-MD queue admission paused: a queued-record publication could not be repaired"
+        )
+        return ("blocked", None)
+    return None
+
+
 def _forbidden_requeue(*_args: Any, **_kwargs: Any) -> None:
     raise RuntimeError("xTB-MD retry/requeue is not supported")
 
@@ -287,6 +535,7 @@ def QueueWorker(
         admission_root=resolve_admission_root(cfg),
         finalize_child_exit=_finalize_child_exit,
         reconcile_orphaned_running=_reconcile_worker_state,
+        reserve_gate=_publication_repair_gate,
         normalize_max_concurrent=True,
         worker_builder=build_engine_queue_worker,
     )

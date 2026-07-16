@@ -315,7 +315,8 @@ def _build_submission(
         raise
 
 
-def _publish_queued_record(cfg: Any, entry: QueueEntry) -> None:
+def publish_queued_record(cfg: Any, entry: QueueEntry) -> None:
+    """Publish the queued job artifact for one committed queue row."""
     payload = build_job_artifact(
         entry,
         status="queued",
@@ -494,7 +495,7 @@ def _enqueue_submission(
             ):
                 raise RuntimeError("xTB-MD queued-record publication ownership was revoked")
             entry = current
-            _publish_queued_record(cfg, entry)
+            publish_queued_record(cfg, entry)
             updated = update_metadata(
                 queue_root,
                 entry.queue_id,

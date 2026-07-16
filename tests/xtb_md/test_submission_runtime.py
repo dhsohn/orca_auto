@@ -247,7 +247,7 @@ def test_xtb_md_compensation_failure_fences_row_without_publication(
         pytest.fail("guard-origin compensation failure must not publish a queued record")
 
     monkeypatch.setattr(queue_store, "save_entries", fail_compensation_before_replace)
-    monkeypatch.setattr(xtb_md_submission, "_publish_queued_record", reject_publication)
+    monkeypatch.setattr(xtb_md_submission, "publish_queued_record", reject_publication)
 
     with use_run_dir_publication_guard(reject_after_commit):
         result = _submit(case)
@@ -486,7 +486,7 @@ def test_cancellation_racing_queued_record_publication_wins_terminally(
     )
     monkeypatch.setattr(
         xtb_md_submission,
-        "_publish_queued_record",
+        "publish_queued_record",
         lambda *_args, **_kwargs: pytest.fail("cancelled publication must not write queued state"),
     )
 
