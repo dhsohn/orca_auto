@@ -24,9 +24,9 @@ from typing import Any
 
 from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE, WORKFLOW_REPORT_HTML_FILE
 from orca_auto.core.utils.persistence import atomic_write_text
+from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.report.attempts import duration_text
 from orca_auto.orca.report.render import (
-    KCAL_PER_HARTREE,
     ReportPage,
     metric_card,
     render_page,

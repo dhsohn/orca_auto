@@ -339,10 +339,6 @@ class DiscordConfig:
         return bool(self.bot_token.strip() and self.default_channel_id)
 
     @property
-    def notification_enabled(self) -> bool:
-        return self.bot_notification_enabled
-
-    @property
     def interaction_channel_ids(self) -> tuple[str, ...]:
         if self.default_channel_id and self.default_channel_id not in self.channel_ids:
             return (*self.channel_ids, self.default_channel_id)
@@ -351,12 +347,6 @@ class DiscordConfig:
     @property
     def interactive_enabled(self) -> bool:
         return bool(self.bot_token.strip() and self.channel_ids and self.allowed_user_ids)
-
-    @property
-    def enabled(self) -> bool:
-        """Backward-compatible alias for outbound notification readiness."""
-
-        return self.notification_enabled
 
 
 def discord_config_from_mapping(raw: object) -> DiscordConfig:
@@ -408,10 +398,11 @@ class MessengerConfig:
 
     @property
     def enabled(self) -> bool:
+        """Whether the selected provider can deliver outbound notifications."""
         if self.normalized_provider == "telegram":
             return self.telegram.enabled
         if self.normalized_provider == "discord":
-            return self.discord.enabled
+            return self.discord.bot_notification_enabled
         return False
 
 

@@ -1622,13 +1622,9 @@ class BotApplication:
             crest = dict(raw_crest)
         else:
             raise ValueError("flow.yaml crest must be a mapping")
-        normalized_gfn = str(crest.get("gfn") or "").strip().lower()
-        if normalized_gfn in {"ff", "gfnff"}:
-            timestep_fs = 1.5
-        elif normalized_gfn in {"2//ff", "gfn2//gfnff"}:
-            timestep_fs = 2.0
-        else:
-            timestep_fs = 5.0
+        from orca_auto.flow.engines.crest.runner import default_timestep_fs
+
+        timestep_fs = default_timestep_fs(crest.get("gfn"))
         estimated_steps = math.ceil(
             ((_REMOTE_CREST_MDLEN_PS * 1000.0) / timestep_fs) * _REMOTE_CREST_MAX_TRAJECTORIES
         )

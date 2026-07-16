@@ -11,6 +11,7 @@ from typing import Any
 
 from ..input_blocks import file_route_lines
 from ..orca_opt_progress import OptProgress, parse_opt_progress
+from ..parser import KCAL_PER_HARTREE
 from ..parser.io import read_orca_text
 from .attempts import (
     AttemptReportRow,
@@ -24,7 +25,6 @@ from .attempts import (
 )
 from .frequencies import ModeSummary, find_frequency_analysis, mode_section_html, mode_summaries
 from .render import (
-    KCAL_PER_HARTREE,
     ChartSeries,
     ReportComponent,
     ReportPage,

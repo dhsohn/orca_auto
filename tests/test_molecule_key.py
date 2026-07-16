@@ -150,3 +150,27 @@ class TestResolveMoleculeKey(unittest.TestCase):
             inp = d / "rxn.inp"
             inp.write_text("! Opt\n")
             self.assertEqual(resolve_molecule_key(inp).key, "TS1_acetone")
+
+
+class TestParseXyzFileFailsClosed(unittest.TestCase):
+    # A silently skipped or missing atom line would yield a plausible but
+    # wrong Hill formula; the parser must yield no atoms instead so the
+    # molecule key falls back to honest directory-name provenance.
+
+    def test_truncated_file_returns_no_atoms(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            xyz = Path(td) / "mol.xyz"
+            xyz.write_text("3\ncomment\nO 0.0 0.0 0.0\nH 0.0 0.0 1.0\n")
+            self.assertEqual(_parse_xyz_file(xyz), [])
+
+    def test_invalid_count_header_returns_no_atoms(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            xyz = Path(td) / "mol.xyz"
+            xyz.write_text("not-a-count\ncomment\nO 0.0 0.0 0.0\n")
+            self.assertEqual(_parse_xyz_file(xyz), [])
+
+    def test_corrupt_atom_line_returns_no_atoms(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            xyz = Path(td) / "mol.xyz"
+            xyz.write_text("2\ncomment\nO 0.0 0.0 0.0\n???GARBAGE\n")
+            self.assertEqual(_parse_xyz_file(xyz), [])

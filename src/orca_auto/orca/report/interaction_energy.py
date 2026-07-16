@@ -19,7 +19,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from orca_auto.orca.report.render import KCAL_PER_HARTREE
+from orca_auto.orca.parser import KCAL_PER_HARTREE
 
 _ELEMENT_SYMBOLS = (
     "H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe "
@@ -147,7 +147,6 @@ class InteractionEnergyResult:
     orca_version: str = ""
     input_line: str = ""
     parent_stage_id: str = ""
-    ghost_counterpoise_applied: bool = False
 
     @property
     def resolved(self) -> bool:
@@ -213,7 +212,6 @@ def compute_interaction_energy(
     orca_version: str = "",
     input_line: str = "",
     parent_stage_id: str = "",
-    ghost_counterpoise_applied: bool = False,
 ) -> InteractionEnergyResult:
     """Combine the complex and fragment single-point energies into ΔE_int.
 
@@ -235,7 +233,6 @@ def compute_interaction_energy(
         orca_version,
         input_line,
         parent_stage_id,
-        ghost_counterpoise_applied,
     )
     if hard_blocker:
         return InteractionEnergyResult(

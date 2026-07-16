@@ -86,6 +86,14 @@ migration.
   Restart also now fails closed at rematerialization time on unsupported
   auxiliary/external-program directives and on more than 128 references
   (previously such hand-edited inputs restarted and only failed at re-run).
+- Molecule keys no longer derive a plausible-but-wrong Hill formula from a
+  truncated or corrupt XYZ geometry: an unreadable header, a missing atom
+  line, or an unparseable atom line now falls back to the directory-name key
+  instead of silently skipping lines. Interaction-energy assembly likewise
+  treats absent or corrupt fragment electronic-state metadata as a blocker
+  instead of defaulting it to the expected value, and corrupt request
+  charge/multiplicity values now fail the feature closed instead of being
+  silently read as 0/1.
 
 ## [0.2.1] - 2026-07-14
 

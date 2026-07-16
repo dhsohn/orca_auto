@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..input_blocks import file_route_lines
-from ..parser import OptProgress, parse_opt_progress
+from ..parser import KCAL_PER_HARTREE, OptProgress, parse_opt_progress
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,
@@ -20,7 +20,6 @@ from .attempts import (
 )
 from .frequencies import ModeSummary, find_frequency_analysis, mode_section_html, mode_summaries
 from .render import (
-    KCAL_PER_HARTREE,
     ChartSeries,
     ReportComponent,
     ReportPage,
