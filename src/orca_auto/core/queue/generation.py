@@ -7,7 +7,7 @@ from typing import Any
 
 from .types import QueueEntry
 
-VISIBLE_GENERATION_NAME_RE = re.compile(r"\Ageneration-\d{8}-\d{6}-[0-9a-f]{8}\Z")
+VISIBLE_GENERATION_NAME_RE = re.compile(r"\A\d{8}-\d{6}-[0-9a-f]{8}\Z", re.ASCII)
 
 
 def is_visible_generation_name(value: str) -> bool:

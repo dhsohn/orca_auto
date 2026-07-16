@@ -251,11 +251,14 @@ Shared behavior:
 ORCA-specific notes:
 
 - Chooses the latest `*.inp` at submission, then creates a visible
-  `generation-YYYYMMDD-HHMMSS-<8-hex>/` directly inside the submitted job
+  `YYYYMMDD-HHMMSS-<8-hex>/` directly inside the submitted job
   directory. The bound input keeps the selected `.inp` basename, supported
   referenced files keep their source basenames, and raw ORCA outputs are
   written at that same level. Editing a source after successful submission does
-  not change the queued calculation.
+  not change the queued calculation. The `YYYYMMDD-HHMMSS-<8-hex>` name shape
+  is reserved for these generations: a directory named this way anywhere under
+  `runs_root` is excluded from production scans and rejected as a `run-dir`
+  target, so avoid it for your own directories.
 - A fully closed job directory can be submitted again without `--force`; each
   submission creates a new sibling generation. A pending/running/retrying/
   cancel-pending row or an incomplete terminal replay still blocks another
@@ -574,7 +577,7 @@ There is no public direct-execution mode for new work. `run-dir` is the durable 
   `.orca_auto_input_snapshots/`; each namespace is unique and reserved
   exclusively. A public task id alone is not the snapshot-ownership key.
 - A new ORCA submission instead creates exactly one visible direct child named
-  `generation-YYYYMMDD-HHMMSS-<8-hex>/` in the job directory. Its bound `.inp`
+  `YYYYMMDD-HHMMSS-<8-hex>/` in the job directory. Its bound `.inp`
   keeps the source basename. Confined XYZ, GBW, Hessian, point-charge, IRC, and
   NEB dependencies also keep their source basenames, with no `.inputs/` layer.
   ORCA raw outputs are written beside those inputs. New ORCA submissions do not
@@ -940,7 +943,7 @@ TS8(NEB-TS)/
 ├── job_state.json
 ├── job_report.json
 ├── run.lock
-└── generation-20260714-224054-959479f2/
+└── 20260714-224054-959479f2/
     ├── nebts.inp
     ├── input.xyz
     ├── output.xyz

@@ -245,7 +245,7 @@ are internal implementation state and must not be edited by clients.
 xTB-MD/xTB/CREST queue artifacts carry an internal immutable-generation fingerprint,
 and new xTB-MD/xTB/CREST/ORCA rows carry a submit-time execution snapshot. New
 ORCA rows use snapshot schema 2 and one visible direct child named
-`generation-YYYYMMDD-HHMMSS-<8-hex>/`; they do not create an ORCA
+`YYYYMMDD-HHMMSS-<8-hex>/`; they do not create an ORCA
 `.orca_auto_input_snapshots/`, `.orca_auto_orca_executions/`, or nested
 `.inputs/` tree. The bound selected `.inp` and dependencies preserve their
 source basenames. Different referenced source paths with one basename always
@@ -330,7 +330,11 @@ artifacts for completed, failed, cancelled, and skipped jobs:
   coordinates) or for IRC routes (summary-only validation block, no coordinates)
 
 Every new submission owns one visible
-`generation-YYYYMMDD-HHMMSS-<8-hex>/` direct child. That directory contains the
+`YYYYMMDD-HHMMSS-<8-hex>/` direct child. The name shape is reserved: any
+directory named as an ASCII date, time, and 8 lowercase hex digits in that
+form is treated as an execution generation at every depth under `runs_root`,
+excluded from production scans, and rejected as a `run-dir` submission
+target — do not use this shape for your own directories. That directory contains the
 bound `.inp` under the exact source basename, supported dependencies under their
 exact source basenames, raw ORCA outputs, and generation-local mirrors of
 `job_state.json` and `job_report.json`. Root JSON files are the latest public

@@ -156,7 +156,7 @@ src/orca_auto/
 - **큐 generation은 제출 시점에 실행 입력을 바인딩합니다.** 단독 xTB-MD와 워크플로우
   xTB/CREST는 콘텐츠 주소형 입력 snapshot을 제출마다 배타적으로 예약한 고유
   namespace에 만듭니다. ORCA는 제출한 작업 디렉터리 바로 아래에 visible
-  `generation-YYYYMMDD-HHMMSS-<8자리 hex>/`를 만들고 선택한 `.inp`와 의존성의
+  `YYYYMMDD-HHMMSS-<8자리 hex>/`를 만들고 선택한 `.inp`와 의존성의
   basename을 유지한 채 confined flat 복사본으로 참조를 다시 씁니다. Raw 출력도
   그와 나란히 쓰며, 새 ORCA generation에는 숨은 실행 parent나 중첩 `.inputs/`가
   없습니다. 워커는 변경 가능한 소스 파일을 실행 계약으로 다시 읽지 않고 입력 및

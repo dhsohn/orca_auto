@@ -146,7 +146,7 @@ class TestState(unittest.TestCase):
     def test_public_state_and_report_are_mirrored_into_visible_generation(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)
-            generation = reaction / "generation-20260714-224054-959479f2"
+            generation = reaction / "20260714-224054-959479f2"
             generation.mkdir()
             inp = generation / "nebts.inp"
             inp.write_text("! NEB-TS\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
@@ -185,7 +185,7 @@ class TestState(unittest.TestCase):
     def test_replaced_visible_generation_never_receives_state_or_report(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)
-            generation = reaction / "generation-20260714-224054-959479f2"
+            generation = reaction / "20260714-224054-959479f2"
             generation.mkdir()
             inp = generation / "nebts.inp"
             inp.write_text("! NEB-TS\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")

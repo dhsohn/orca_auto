@@ -327,7 +327,7 @@ def _file_identity(path: Path) -> dict[str, Any]:
 
 def _new_generation_name() -> str:
     local_timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-    return f"generation-{local_timestamp}-{secrets.token_hex(4)}"
+    return f"{local_timestamp}-{secrets.token_hex(4)}"
 
 
 def orca_execution_provenance(snapshot: Mapping[str, Any]) -> dict[str, Any]:

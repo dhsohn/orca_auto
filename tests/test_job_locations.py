@@ -603,8 +603,8 @@ def test_load_orca_contract_payload_reads_exact_historical_visible_generation(
 ) -> None:
     allowed_root = tmp_path / "runs"
     job_dir = allowed_root / "TS8(NEB-TS)"
-    first_generation = job_dir / "generation-20260714-224054-11111111"
-    second_generation = job_dir / "generation-20260714-224155-22222222"
+    first_generation = job_dir / "20260714-224054-11111111"
+    second_generation = job_dir / "20260714-224155-22222222"
     first_generation.mkdir(parents=True)
     second_generation.mkdir()
     first_inp, first_out = _write_generation_payloads(
@@ -698,7 +698,7 @@ def test_pending_visible_generation_never_treats_staged_neb_xyz_as_optimized(
 ) -> None:
     allowed_root = tmp_path / "runs"
     job_dir = allowed_root / "TS8(NEB-TS)"
-    generation = job_dir / "generation-20260714-224054-959479f2"
+    generation = job_dir / "20260714-224054-959479f2"
     generation.mkdir(parents=True)
     selected_inp = generation / "nebts.inp"
     selected_inp.write_text(
@@ -753,7 +753,7 @@ def test_same_stem_xyz_becomes_optimized_only_after_attempt_mutates_it(
 ) -> None:
     allowed_root = tmp_path / "runs"
     job_dir = allowed_root / "opt"
-    generation = job_dir / "generation-20260714-224054-11111111"
+    generation = job_dir / "20260714-224054-11111111"
     generation.mkdir(parents=True)
     source_xyz = job_dir / "h2.xyz"
     source_xyz.write_text("2\nsource\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
@@ -831,7 +831,7 @@ def test_queue_absent_visible_generation_uses_provenance_and_rejects_unowned_rep
 ) -> None:
     allowed_root = tmp_path / "runs"
     job_dir = allowed_root / "neb"
-    generation = job_dir / "generation-20260714-224054-22222222"
+    generation = job_dir / "20260714-224054-22222222"
     generation.mkdir(parents=True)
     selected_inp = generation / "nebts.inp"
     selected_inp.write_text("! NEB-TS\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
@@ -912,8 +912,8 @@ def test_queue_snapshot_rejects_generation_payload_with_other_provenance(
 ) -> None:
     allowed_root = tmp_path / "runs"
     job_dir = allowed_root / "cross-generation"
-    first_generation = job_dir / "generation-20260714-224054-33333333"
-    second_generation = job_dir / "generation-20260714-224155-44444444"
+    first_generation = job_dir / "20260714-224054-33333333"
+    second_generation = job_dir / "20260714-224155-44444444"
     first_generation.mkdir(parents=True)
     second_generation.mkdir()
     first_inp, _first_out = _write_generation_payloads(
@@ -976,7 +976,7 @@ def test_visible_generation_rejects_out_of_generation_output_hints(
 ) -> None:
     allowed_root = tmp_path / "runs"
     job_dir = allowed_root / "output-escape"
-    generation = job_dir / "generation-20260714-224054-55555555"
+    generation = job_dir / "20260714-224054-55555555"
     generation.mkdir(parents=True)
     selected_inp, _generation_out = _write_generation_payloads(
         job_dir=job_dir,
@@ -1043,7 +1043,7 @@ def test_load_orca_contract_payload_validates_learned_run_id_from_running_genera
 ) -> None:
     allowed_root = tmp_path / "runs"
     job_dir = allowed_root / "rxn_live_generation"
-    generation = job_dir / "generation-20260715-010203-33333333"
+    generation = job_dir / "20260715-010203-33333333"
     generation.mkdir(parents=True)
     selected_inp = generation / "live.inp"
     selected_inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
@@ -1198,7 +1198,7 @@ def test_load_orca_contract_payload_rejects_unverified_historical_generation(
 ) -> None:
     allowed_root = tmp_path / "runs"
     job_dir = allowed_root / "rxn_historical_tamper"
-    generation = job_dir / "generation-20260714-224054-33333333"
+    generation = job_dir / "20260714-224054-33333333"
     generation.mkdir(parents=True)
     selected_inp, out = _write_generation_payloads(
         job_dir=job_dir,
@@ -1208,7 +1208,7 @@ def test_load_orca_contract_payload_rejects_unverified_historical_generation(
     )
     snapshot = _execution_snapshot_locator(job_dir, generation)
     if tamper == "execution_escape":
-        outside = tmp_path / "generation-20260714-224054-44444444"
+        outside = tmp_path / "20260714-224054-44444444"
         outside.mkdir()
         snapshot["generation_name"] = outside.name
         snapshot["execution_dir"] = str(outside)

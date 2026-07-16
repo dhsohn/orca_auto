@@ -237,7 +237,7 @@ fence marker는 내부 구현 상태이므로 client가 편집하면 안 됩니�
 xTB-MD/xTB/CREST 큐 산출물에는 내부 immutable-generation fingerprint가 기록되고, 새
 xTB-MD/xTB/CREST/ORCA 행에는 제출 시점 execution snapshot이 들어갑니다. 새 ORCA
 행은 snapshot schema 2와 직접 하위 visible
-`generation-YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 사용하고 ORCA용
+`YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 사용하고 ORCA용
 `.orca_auto_input_snapshots/`, `.orca_auto_orca_executions/`, 중첩 `.inputs/`를 만들지
 않습니다. 바인딩한 선택 `.inp`와 의존성은 소스 basename을 유지합니다. 서로 다른
 소스 경로가 같은 basename을 쓰면 바이트가 같아도 제출을 fail-closed합니다.
@@ -315,8 +315,11 @@ path, SHA-256, byte size, modification time을 바인딩합니다.
   좌표를 담은 복사-붙여넣기용 Supporting Information 블록), IRC route에는 좌표
   없는 요약 전용 validation 블록
 
-각 새 제출은 직접 하위 visible `generation-YYYYMMDD-HHMMSS-<8자리 hex>/`
-하나를 소유합니다. 그 디렉터리에는 소스 basename을 정확히 유지한 바인딩 `.inp`, 지원하는
+각 새 제출은 직접 하위 visible `YYYYMMDD-HHMMSS-<8자리 hex>/`
+하나를 소유합니다. 이 이름 형태는 예약되어 있습니다: ASCII 날짜·시각·소문자
+8자리 hex를 이 형식으로 조합한 이름의 디렉터리는 `runs_root` 아래 어느 깊이에
+있든 실행 generation으로 간주되어 production scan에서 제외되고 `run-dir` 제출
+대상으로 거부되므로, 직접 만드는 디렉터리에는 이 형태를 쓰지 마십시오. 그 디렉터리에는 소스 basename을 정확히 유지한 바인딩 `.inp`, 지원하는
 의존성, raw ORCA 출력, generation 로컬 `job_state.json`과 `job_report.json` mirror가
 들어갑니다. 루트 JSON은 최신 공개 요약이므로 더 새로운 sibling을 가리키도록 갱신될 수
 있고, generation JSON은 자신이 설명하는 generation의 기록을 보존합니다. 루트에

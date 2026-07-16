@@ -169,7 +169,7 @@ def test_public_state_discovers_its_selected_visible_generation_without_indexing
 ) -> None:
     kb_dir = tmp_path / "orca_runs"
     run_dir = kb_dir / "job_visible_generation"
-    generation_dir = run_dir / "generation-20260715-010203-0123abcd"
+    generation_dir = run_dir / "20260715-010203-0123abcd"
     generation_dir.mkdir(parents=True)
 
     selected_inp = generation_dir / "calc.inp"
@@ -207,7 +207,7 @@ def test_visible_generation_deletion_does_not_fall_back_to_stale_root_output(
 ) -> None:
     kb_dir = tmp_path / "orca_runs"
     run_dir = kb_dir / "deleted-generation"
-    generation_dir = run_dir / "generation-20260715-010203-0123abcd"
+    generation_dir = run_dir / "20260715-010203-0123abcd"
     generation_dir.mkdir(parents=True)
     selected_inp = generation_dir / "calc.inp"
     selected_inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
@@ -232,7 +232,7 @@ def test_visible_generation_aba_replacement_does_not_discover_replacement_or_roo
 ) -> None:
     kb_dir = tmp_path / "orca_runs"
     run_dir = kb_dir / "replaced-generation"
-    generation_dir = run_dir / "generation-20260715-010203-0123abcd"
+    generation_dir = run_dir / "20260715-010203-0123abcd"
     generation_dir.mkdir(parents=True)
     selected_inp = generation_dir / "calc.inp"
     selected_inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
@@ -279,7 +279,7 @@ def test_visible_generation_discovery_rejects_symlink_escapes(tmp_path: Path) ->
 
     linked_generation_job = kb_dir / "linked-generation"
     linked_generation_job.mkdir(parents=True)
-    linked_generation = linked_generation_job / "generation-20260715-010203-0123abcd"
+    linked_generation = linked_generation_job / "20260715-010203-0123abcd"
     linked_generation.symlink_to(outside, target_is_directory=True)
     (linked_generation_job / "old.out").write_text("stale root", encoding="utf-8")
     _write_orca_state(
@@ -293,7 +293,7 @@ def test_visible_generation_discovery_rejects_symlink_escapes(tmp_path: Path) ->
     )
 
     linked_input_job = kb_dir / "linked-input"
-    linked_input_generation = linked_input_job / "generation-20260715-010204-0123abcd"
+    linked_input_generation = linked_input_job / "20260715-010204-0123abcd"
     linked_input_generation.mkdir(parents=True)
     linked_input = linked_input_generation / "calc.inp"
     linked_input.symlink_to(outside_inp)
@@ -310,7 +310,7 @@ def test_visible_generation_discovery_rejects_symlink_escapes(tmp_path: Path) ->
     )
 
     linked_output_job = kb_dir / "linked-output"
-    linked_output_generation = linked_output_job / "generation-20260715-010205-0123abcd"
+    linked_output_generation = linked_output_job / "20260715-010205-0123abcd"
     linked_output_generation.mkdir(parents=True)
     linked_output_inp = linked_output_generation / "calc.inp"
     linked_output_inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
@@ -335,7 +335,7 @@ def test_visible_generation_discovery_preserves_a_safe_runs_root_symlink(
     physical_runs = tmp_path / "physical-runs"
     linked_runs = tmp_path / "linked-runs"
     run_dir = physical_runs / "job"
-    generation_dir = run_dir / "generation-20260715-010203-0123abcd"
+    generation_dir = run_dir / "20260715-010203-0123abcd"
     generation_dir.mkdir(parents=True)
     linked_runs.symlink_to(physical_runs, target_is_directory=True)
 
@@ -364,7 +364,7 @@ def test_visible_generation_exception_requires_an_exact_direct_child(tmp_path: P
     kb_dir = tmp_path / "orca_runs"
 
     sibling_owner = kb_dir / "sibling-owner"
-    sibling_generation = sibling_owner / "generation-20260715-010203-0123abcd"
+    sibling_generation = sibling_owner / "20260715-010203-0123abcd"
     sibling_generation.mkdir(parents=True)
     sibling_inp = sibling_generation / "calc.inp"
     sibling_inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
@@ -380,7 +380,7 @@ def test_visible_generation_exception_requires_an_exact_direct_child(tmp_path: P
     )
 
     nested_job = kb_dir / "nested"
-    nested_generation = nested_job / "archive" / "generation-20260715-010204-0123abcd"
+    nested_generation = nested_job / "archive" / "20260715-010204-0123abcd"
     nested_generation.mkdir(parents=True)
     nested_inp = nested_generation / "calc.inp"
     nested_inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
@@ -394,7 +394,7 @@ def test_visible_generation_exception_requires_an_exact_direct_child(tmp_path: P
     )
 
     malformed_job = kb_dir / "malformed"
-    malformed_generation = malformed_job / "generation-20260715-010205-0123ABCd"
+    malformed_generation = malformed_job / "20260715-010205-0123ABCd"
     malformed_generation.mkdir(parents=True)
     malformed_inp = malformed_generation / "calc.inp"
     malformed_inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
@@ -416,10 +416,7 @@ def test_visible_generation_exception_requires_an_exact_direct_child(tmp_path: P
 def test_legacy_hidden_execution_state_remains_discoverable(tmp_path: Path) -> None:
     kb_dir = tmp_path / "orca_runs"
     execution_dir = (
-        kb_dir
-        / "legacy-job"
-        / ".orca_auto_orca_executions"
-        / "generation-0123456789abcdef0123456789abcdef"
+        kb_dir / "legacy-job" / ".orca_auto_orca_executions" / "0123456789abcdef0123456789abcdef"
     )
     execution_dir.mkdir(parents=True)
     legacy_out = execution_dir / "calc.out"

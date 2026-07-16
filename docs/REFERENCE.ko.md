@@ -255,10 +255,13 @@ worker_pid: 12345
 ORCA 고유 노트:
 
 - 제출할 때 최신 `*.inp`를 선택한 뒤 제출한 작업 디렉터리 바로 아래에 눈에 보이는
-  `generation-YYYYMMDD-HHMMSS-<8자리 hex>/`를 만듭니다. 실제 실행 입력은 선택한
+  `YYYYMMDD-HHMMSS-<8자리 hex>/`를 만듭니다. 실제 실행 입력은 선택한
   `.inp`의 basename을, 지원하는 참조 파일은 각 소스 basename을 그대로 유지하며 raw
   ORCA 출력도 같은 단계에 기록합니다. 제출 성공 뒤 원본을 편집해도 큐에 들어간 계산은
-  바뀌지 않습니다.
+  바뀌지 않습니다. `YYYYMMDD-HHMMSS-<8자리 hex>` 이름 형태는 generation용으로
+  예약되어 있어, `runs_root` 아래 어디에 있든 이 형식의 디렉터리는 production
+  scan에서 제외되고 `run-dir` 대상으로 거부되므로 직접 만드는 디렉터리에는 쓰지
+  마십시오.
 - 완전히 닫힌 작업 디렉터리는 `--force` 없이 다시 제출할 수 있고 제출마다 새 sibling
   generation을 만듭니다. 같은 작업 디렉터리에 pending/running/retrying/cancel-pending 행이나
   미완료 terminal replay가 남아 있으면 새 generation을 차단합니다. `--force`도 이 안전
@@ -539,7 +542,7 @@ ORCA 고유 노트:
   예약한 고유 private 디렉터리를 사용하며 공개 task id만으로 snapshot 소유권을 정하지
   않습니다.
 - 새 ORCA 제출은 작업 디렉터리 바로 아래에
-  `generation-YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 눈에 보이게 만듭니다. 실제 실행
+  `YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 눈에 보이게 만듭니다. 실제 실행
   `.inp`는 소스 basename을 유지합니다. 가둬 복사한 XYZ, GBW, Hessian, point-charge, IRC,
   NEB 의존성도 소스 basename을 유지하고 `.inputs/` 단계는 없습니다. ORCA raw 출력은 이
   입력들과 나란히 기록합니다. 새 ORCA 제출은 `.orca_auto_orca_executions/`나 ORCA용
@@ -879,7 +882,7 @@ TS8(NEB-TS)/
 ├── job_state.json
 ├── job_report.json
 ├── run.lock
-└── generation-20260714-224054-959479f2/
+└── 20260714-224054-959479f2/
     ├── nebts.inp
     ├── input.xyz
     ├── output.xyz

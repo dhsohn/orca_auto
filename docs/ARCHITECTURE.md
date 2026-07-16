@@ -157,7 +157,7 @@ Key properties:
 - **A queue generation binds its executable inputs at submission.** Standalone
   xTB-MD and workflow xTB/CREST use content-addressed input snapshots in an
   exclusively reserved, unique namespace for each submission. ORCA creates a
-  visible `generation-YYYYMMDD-HHMMSS-<8-hex>/` directly under the submitted job
+  visible `YYYYMMDD-HHMMSS-<8-hex>/` directly under the submitted job
   directory, preserves the selected `.inp` and dependency basenames, rewrites
   supported file references to those confined flat copies, and writes raw
   outputs beside them. New ORCA generations have no hidden execution parent or
