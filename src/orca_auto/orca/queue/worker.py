@@ -14,6 +14,7 @@ import stat
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
@@ -228,6 +229,39 @@ class _TerminalReplayWorkItem:
     @property
     def key(self) -> tuple[str, str]:
         return (str(self.queue_root), self.queue_id)
+
+
+@dataclass
+class _OrcaWorkerReplayState:
+    """The worker's terminal-replay bookkeeping, in one typed place.
+
+    ``_after_orca_worker_init`` attaches one instance per worker;
+    ``_replay_state`` is the only accessor. ``reconcile_statuses`` stays
+    ``None`` until the first reconcile pass seeds the startup cursor, so a
+    terminal row first seen after startup is treated as closed history rather
+    than a fresh active-to-terminal transition.
+    """
+
+    pending_replays: dict[tuple[str, str], _TerminalReplayWorkItem] = dataclass_field(
+        default_factory=dict
+    )
+    reconcile_statuses: dict[tuple[str, str], str] | None = None
+    blocked_marker_keys: set[tuple[str, str]] = dataclass_field(default_factory=set)
+    generation_owners: dict[str, tuple[str, str]] = dataclass_field(default_factory=dict)
+    generation_owner_active: dict[str, bool] = dataclass_field(default_factory=dict)
+
+
+def _replay_state(worker: Any) -> _OrcaWorkerReplayState:
+    state = getattr(worker, "engine_state", None)
+    if not isinstance(state, _OrcaWorkerReplayState):
+        state = _OrcaWorkerReplayState()
+        worker.engine_state = state
+    return state
+
+
+def _job_pending_replay_item(job: Any) -> _TerminalReplayWorkItem | None:
+    item = getattr(job, "_orca_terminal_replay_item", None)
+    return item if isinstance(item, _TerminalReplayWorkItem) else None
 
 
 def _default_config_path() -> str:
@@ -730,13 +764,10 @@ def _worker_config_with_effective_concurrency(
 
 
 def _terminal_replay_blocks_new_generation(worker: Any) -> bool:
-    pending_replays = getattr(worker, "_orca_pending_terminal_replays", None)
-    if isinstance(pending_replays, dict) and any(
-        isinstance(item, _TerminalReplayWorkItem) for item in pending_replays.values()
-    ):
+    if _replay_state(worker).pending_replays:
         return True
     for _queue_id, job in worker._running_jobs():
-        if isinstance(getattr(job, "_orca_terminal_replay_item", None), _TerminalReplayWorkItem):
+        if _job_pending_replay_item(job) is not None:
             return True
         if bool(getattr(job, _TERMINAL_FINALIZE_RETRY_ATTR, False)):
             return True
@@ -877,8 +908,8 @@ def _finalize_finished_job(worker: Any, queue_id: str, job: _RunningJob, *, rc: 
     # completed job in ``_running`` so the worker retries the whole finalization.
     job.__dict__[_TERMINAL_FINALIZE_RETRY_ATTR] = True
     recover_slot_engine_process(worker.admission_root, job.admission_token)
-    pending_item = getattr(job, "_orca_terminal_replay_item", None)
-    if isinstance(pending_item, _TerminalReplayWorkItem):
+    pending_item = _job_pending_replay_item(job)
+    if pending_item is not None:
         release_slot_after_finalize = False
         try:
             _strictly_finish_terminal_replay(worker, job, pending_item)
@@ -1293,8 +1324,9 @@ def _reconcile_orphaned_running(worker: Any) -> None:
         (str(Path(root).expanduser().resolve()), queue_entry_id(entry)): entry
         for root, entry in before_entries
     }
-    previous_statuses = getattr(worker, "_orca_reconcile_statuses", None)
-    if not isinstance(previous_statuses, dict):
+    replay_state = _replay_state(worker)
+    previous_statuses = replay_state.reconcile_statuses
+    if previous_statuses is None:
         # Process startup has no observed status edge.  Treat the first queue
         # snapshot as the replay cursor instead of inventing RUNNING origins for
         # historical terminal rows.  A terminal row that really has unfinished
@@ -1319,26 +1351,8 @@ def _reconcile_orphaned_running(worker: Any) -> None:
     # terminal side effects idempotently so job-location records and one-shot
     # notifications are not lost with the parent process.
     after_entries = queue_entries_with_roots(worker.cfg)
-    pending_replays = getattr(worker, "_orca_pending_terminal_replays", None)
-    if not isinstance(pending_replays, dict):
-        pending_replays = {}
-    pending_replays = {
-        key: item
-        for key, item in pending_replays.items()
-        if isinstance(key, tuple) and isinstance(item, _TerminalReplayWorkItem)
-    }
-    raw_blocked_markers: object = getattr(worker, "_orca_invalid_terminal_replay_markers", set())
-    previously_blocked_markers: set[tuple[str, str]] = (
-        {
-            key
-            for key in raw_blocked_markers
-            if isinstance(key, tuple)
-            and len(key) == 2
-            and all(isinstance(part, str) for part in key)
-        }
-        if isinstance(raw_blocked_markers, set)
-        else set()
-    )
+    pending_replays = dict(replay_state.pending_replays)
+    previously_blocked_markers = replay_state.blocked_marker_keys
     blocked_marker_keys: set[tuple[str, str]] = set()
     for queue_root, entry in after_entries:
         if _normalized_entry_status(entry) not in _TERMINAL_QUEUE_STATUSES:
@@ -1375,7 +1389,7 @@ def _reconcile_orphaned_running(worker: Any) -> None:
             and existing_item.reaction_key == durable_item.reaction_key
         ):
             pending_replays[key] = durable_item
-    worker._orca_invalid_terminal_replay_markers = blocked_marker_keys
+    replay_state.blocked_marker_keys = blocked_marker_keys
 
     superseded_replay_keys: set[tuple[str, str]] = set()
     for key, item in list(pending_replays.items()):
@@ -1453,19 +1467,15 @@ def _reconcile_orphaned_running(worker: Any) -> None:
             )
         )
 
-    previous_owners = getattr(worker, "_orca_generation_owners", None)
-    if not isinstance(previous_owners, dict):
-        previous_owners = {}
-    previous_owner_active = getattr(worker, "_orca_generation_owner_active", None)
-    if not isinstance(previous_owner_active, dict):
-        previous_owner_active = {}
+    previous_owners = replay_state.generation_owners
+    previous_owner_active = replay_state.generation_owner_active
     latest_generation_by_reaction: dict[str, tuple[str, str]] = {}
     latest_owner_active: dict[str, bool] = {}
     for reaction_key, rows in generation_rows.items():
         previous_owner = previous_owners.get(reaction_key)
         selected_owner = _select_generation_owner(
             rows,
-            previous_owner=previous_owner if isinstance(previous_owner, tuple) else None,
+            previous_owner=previous_owner,
             previous_owner_was_active=bool(previous_owner_active.get(reaction_key, False)),
             artifacts=_load_artifact_generation(reaction_key),
         )
@@ -1474,9 +1484,8 @@ def _reconcile_orphaned_running(worker: Any) -> None:
         latest_generation_by_reaction[reaction_key] = selected_owner
         selected_row = next(row for row in rows if row.owner == selected_owner)
         latest_owner_active[reaction_key] = selected_row.active
-    worker._orca_generation_owners = latest_generation_by_reaction
-    worker._orca_generation_owner_active = latest_owner_active
-    worker._orca_generation_seen_keys = current_generation_keys
+    replay_state.generation_owners = latest_generation_by_reaction
+    replay_state.generation_owner_active = latest_owner_active
 
     after_statuses: dict[tuple[str, str], str] = {}
     for queue_root, entry in after_entries:
@@ -1629,8 +1638,8 @@ def _reconcile_orphaned_running(worker: Any) -> None:
         else:
             pending_replays.pop(key, None)
 
-    worker._orca_pending_terminal_replays = pending_replays
-    worker._orca_reconcile_statuses = after_statuses
+    replay_state.pending_replays = pending_replays
+    replay_state.reconcile_statuses = after_statuses
 
 
 def _reconcile_worker_state(worker: Any) -> None:
@@ -1677,21 +1686,20 @@ def _queue_worker_hooks() -> Any:
 
 def _after_orca_worker_init(worker: EngineQueueWorker) -> None:
     worker.admission_limit = _worker_admission_limit(worker.cfg, worker.max_concurrent)
-    reserve_next_entry = worker._reserve_next_entry
+    worker.engine_state = _OrcaWorkerReplayState()
 
-    def reserve_next_after_terminal_replay() -> tuple[str, Any | None]:
-        if _terminal_replay_blocks_new_generation(worker):
-            logger.warning("Queue admission paused until durable ORCA terminal replay completes")
-            return "blocked", None
-        if not _repair_orca_queue_publications(worker):
-            logger.warning("Queue admission paused until ORCA queued publication repair succeeds")
-            return "blocked", None
-        return reserve_next_entry()
 
+def _orca_reserve_gate(worker: EngineQueueWorker) -> tuple[str, Any | None] | None:
     # A failed terminal side effect retains its completed job and durable marker.
     # Gate admission itself (not merely slot release): max_concurrent > 1 and
     # multi-root queues could otherwise start a forced successor in another slot.
-    worker.__dict__["_reserve_next_entry"] = reserve_next_after_terminal_replay
+    if _terminal_replay_blocks_new_generation(worker):
+        logger.warning("Queue admission paused until durable ORCA terminal replay completes")
+        return "blocked", None
+    if not _repair_orca_queue_publications(worker):
+        logger.warning("Queue admission paused until ORCA queued publication repair succeeds")
+        return "blocked", None
+    return None
 
 
 def _before_orca_worker_run(worker: EngineQueueWorker) -> None:
@@ -2133,12 +2141,9 @@ def QueueWorker(
         finalize_finished_job=_finalize_finished_job,
         reconcile_orphaned_running=_reconcile_orphaned_running,
         check_cancel_requests=_check_orca_cancel_requests,
+        reserve_gate=_orca_reserve_gate,
         normalize_max_concurrent=True,
         worker_builder=build_engine_queue_worker,
-    )
-    _runtime_helpers.install_worker_runtime_methods(
-        worker,
-        cancel_running_job_fn=_cancel_orca_running_job,
     )
     return worker
 
