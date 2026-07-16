@@ -38,7 +38,9 @@ from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue.engine.execution import coerce_resource_request
 from orca_auto.core.queue.internal_engine import (
     InternalEngineQueueModule,
+    InternalEngineQueueWorkerFacadeBindings,
     InternalEngineSpec,
+    build_late_bound_internal_engine_queue_worker_deps,
     entry_matches_engine_identity,
 )
 from orca_auto.core.queue.lifecycle import (
@@ -160,10 +162,6 @@ from .terminal_replay import (
 from .terminal_replay import (
     terminal_status_from_run_state as _terminal_status_from_run_state,
 )
-from .worker_deps import (
-    OrcaQueueWorkerFacadeBindings,
-    build_late_bound_orca_runtime_facade_deps,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -249,8 +247,8 @@ def _mark_recovery_pending_entry(*_args: Any, **_kwargs: Any) -> None:
 
 
 def _runtime_facade_deps() -> Any:
-    return build_late_bound_orca_runtime_facade_deps(
-        OrcaQueueWorkerFacadeBindings(
+    return build_late_bound_internal_engine_queue_worker_deps(
+        InternalEngineQueueWorkerFacadeBindings(
             release_slot=lambda: release_slot,
             reserve_slot=lambda: _reserve_orca_worker_slot,
             start_background_process=lambda: start_background_process,

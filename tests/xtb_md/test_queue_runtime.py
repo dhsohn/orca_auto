@@ -304,14 +304,13 @@ def test_queue_definition_claims_only_complete_xtb_md_identity(tmp_path: Path) -
 
 
 def test_retry_callback_is_a_fail_closed_tripwire() -> None:
-    callbacks = queue_runtime._callbacks()
+    deps = queue_runtime._deps()
 
     with pytest.raises(RuntimeError, match="retry/requeue is not supported"):
-        callbacks.requeue_running_entry(Path("/tmp/queue"), "queue-1")
+        deps.requeue_running_entry(Path("/tmp/queue"), "queue-1")
 
     assert (
-        queue_runtime._queue_module.facade.deps.requeue_running_entry
-        is callbacks.requeue_running_entry
+        queue_runtime._queue_module.facade.deps.requeue_running_entry is deps.requeue_running_entry
     )
 
 

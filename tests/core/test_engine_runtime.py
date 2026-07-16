@@ -16,8 +16,6 @@ from orca_auto.core.queue.internal_engine import (
 from orca_auto.core.queue.internal_engine.worker_deps import (
     InternalEngineQueueWorkerDeps,
     InternalEngineQueueWorkerFacadeBindings,
-    InternalEngineQueueWorkerFacadeCallbacks,
-    build_internal_engine_queue_worker_deps,
     build_late_bound_internal_engine_queue_worker_deps,
 )
 from orca_auto.core.queue.worker.execution_dependencies import (
@@ -297,7 +295,9 @@ def test_late_bound_internal_engine_queue_worker_deps_use_current_callbacks(
     ]
 
 
-def test_internal_engine_queue_worker_deps_builder_maps_callbacks(tmp_path: Path) -> None:
+def test_internal_engine_queue_worker_deps_defaults_and_direct_construction(
+    tmp_path: Path,
+) -> None:
     calls: list[str] = []
 
     def record(name: str, result: Any = None) -> Any:
@@ -308,28 +308,26 @@ def test_internal_engine_queue_worker_deps_builder_maps_callbacks(tmp_path: Path
         return _call
 
     time_module = SimpleNamespace(sleep=lambda _seconds: None)
-    deps = build_internal_engine_queue_worker_deps(
-        InternalEngineQueueWorkerFacadeCallbacks(
-            release_slot=record("release", "released"),
-            reserve_slot=record("reserve", "reserved"),
-            start_background_process=record("start_process", "process"),
-            build_worker_child_command=record("build_command", ["worker"]),
-            config_path_for_worker=record("config_path", "/tmp/config.yaml"),
-            activate_reserved_slot=record("activate", object()),
-            terminate_process=record("terminate"),
-            mark_failed=record("mark_failed"),
-            handle_worker_start_error=record("start_error"),
-            finalize_completed_job=record("completed"),
-            finalize_child_exit=record("child_exit"),
-            reconcile_worker_state=record("reconcile_worker"),
-            list_queue=record("list_queue", []),
-            list_slots=record("list_slots", []),
-            reconcile_stale_slots=record("stale_slots"),
-            mark_cancelled=record("cancelled"),
-            requeue_running_entry=record("requeue"),
-            start_background_job_process=record("start_job", "job-process"),
-            find_queue_entry=record("find_entry", "entry"),
-        ),
+    deps = InternalEngineQueueWorkerDeps(
+        release_slot=record("release", "released"),
+        reserve_slot=record("reserve", "reserved"),
+        start_background_process=record("start_process", "process"),
+        build_worker_child_command=record("build_command", ["worker"]),
+        config_path_for_worker=record("config_path", "/tmp/config.yaml"),
+        activate_reserved_slot=record("activate", object()),
+        terminate_process=record("terminate"),
+        mark_failed=record("mark_failed"),
+        handle_worker_start_error=record("start_error"),
+        finalize_completed_job=record("completed"),
+        finalize_child_exit=record("child_exit"),
+        reconcile_worker_state=record("reconcile_worker"),
+        list_queue=record("list_queue", []),
+        list_slots=record("list_slots", []),
+        reconcile_stale_slots=record("stale_slots"),
+        mark_cancelled=record("cancelled"),
+        requeue_running_entry=record("requeue"),
+        start_background_job_process_fn=record("start_job", "job-process"),
+        find_queue_entry=record("find_entry", "entry"),
         time_module=time_module,
     )
 
@@ -913,34 +911,32 @@ def test_internal_engine_queue_module_preserves_worker_facade_contract(
         )
     )
     entry = _internal_entry("xtb", "queue-1")
-    deps = build_internal_engine_queue_worker_deps(
-        InternalEngineQueueWorkerFacadeCallbacks(
-            release_slot=record("release_slot"),
-            reserve_slot=record("reserve_slot", "slot-1"),
-            start_background_process=record("start_background_process", "process"),
-            build_worker_child_command=record("build_worker_child_command", ["worker"]),
-            config_path_for_worker=record("config_path_for_worker", "/tmp/config.yaml"),
-            default_config_path=record("default_config_path", "/tmp/default.yaml"),
-            activate_reserved_slot=record("activate_reserved_slot", object()),
-            terminate_process=record("terminate_process"),
-            mark_failed=record("mark_failed"),
-            handle_worker_start_error=record("handle_worker_start_error"),
-            finalize_completed_job=record("finalize_completed_job"),
-            finalize_child_exit=record("finalize_child_exit"),
-            reconcile_worker_state=record("reconcile_worker_state"),
-            list_queue=record("list_queue", []),
-            list_slots=record("list_slots", []),
-            reconcile_stale_slots=record("reconcile_stale_slots"),
-            reconcile_orphaned_child_queue_entries=record("reconcile_orphaned"),
-            mark_cancelled=record("mark_cancelled"),
-            requeue_running_entry=record("requeue_running_entry"),
-            mark_recovery_pending=record("mark_recovery_pending"),
-            try_reserve_admission_slot=record("try_reserve_admission_slot", "slot-override"),
-            start_background_job_process=record("start_background_job_process", "started"),
-            load_config=record("load_config", cfg),
-            read_worker_pid=record("read_worker_pid", None),
-            worker_class=record("QueueWorker", SimpleNamespace(run=lambda: 0)),
-        ),
+    deps = InternalEngineQueueWorkerDeps(
+        release_slot=record("release_slot"),
+        reserve_slot=record("reserve_slot", "slot-1"),
+        start_background_process=record("start_background_process", "process"),
+        build_worker_child_command=record("build_worker_child_command", ["worker"]),
+        config_path_for_worker=record("config_path_for_worker", "/tmp/config.yaml"),
+        default_config_path=record("default_config_path", "/tmp/default.yaml"),
+        activate_reserved_slot=record("activate_reserved_slot", object()),
+        terminate_process=record("terminate_process"),
+        mark_failed=record("mark_failed"),
+        handle_worker_start_error=record("handle_worker_start_error"),
+        finalize_completed_job=record("finalize_completed_job"),
+        finalize_child_exit=record("finalize_child_exit"),
+        reconcile_worker_state=record("reconcile_worker_state"),
+        list_queue=record("list_queue", []),
+        list_slots=record("list_slots", []),
+        reconcile_stale_slots=record("reconcile_stale_slots"),
+        reconcile_orphaned_child_queue_entries=record("reconcile_orphaned"),
+        mark_cancelled=record("mark_cancelled"),
+        requeue_running_entry=record("requeue_running_entry"),
+        mark_recovery_pending=record("mark_recovery_pending"),
+        try_reserve_admission_slot=record("try_reserve_admission_slot", "slot-override"),
+        start_background_job_process_fn=record("start_background_job_process", "started"),
+        load_config=record("load_config", cfg),
+        read_worker_pid=record("read_worker_pid", None),
+        worker_class=record("QueueWorker", SimpleNamespace(run=lambda: 0)),
         time_module=SimpleNamespace(sleep=lambda _seconds: None),
     )
     spec = InternalEngineSpec(

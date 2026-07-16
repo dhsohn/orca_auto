@@ -7,11 +7,10 @@ from typing import Any
 from orca_auto.core.queue.child.process import reconcile_orphaned_child_queue_entries
 from orca_auto.core.queue.internal_engine import (
     InternalEngineQueueRuntime,
+    InternalEngineQueueWorkerDeps,
     InternalEngineQueueWorkerFacade,
     InternalEngineQueueWorkerFacadeBindings,
-    InternalEngineQueueWorkerFacadeCallbacks,
     InternalEngineSpec,
-    build_internal_engine_queue_worker_deps,
     build_late_bound_internal_engine_queue_worker_deps,
 )
 from orca_auto.core.queue.types import QueueStatus
@@ -57,9 +56,9 @@ def _facade_deps(*, time_module: Any | None = None, **overrides: Any) -> Any:
         "requeue_running_entry": lambda *_args, **_kwargs: None,
     }
     callback_values.update(overrides)
-    return build_internal_engine_queue_worker_deps(
-        InternalEngineQueueWorkerFacadeCallbacks(**callback_values),
+    return InternalEngineQueueWorkerDeps(
         time_module=time_module or SimpleNamespace(sleep=lambda _seconds: None),
+        **callback_values,
     )
 
 
