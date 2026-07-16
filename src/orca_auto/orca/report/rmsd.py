@@ -36,7 +36,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from orca_auto.orca.report.render import KCAL_PER_HARTREE
+from orca_auto.orca.parser import KCAL_PER_HARTREE
 
 # An atom row as parsed by the ORCA output reader: (element, x, y, z).
 AtomRow = tuple[str, float, float, float]

@@ -385,7 +385,7 @@ def test_messenger_config_from_mapping() -> None:
     )
     assert cfg.normalized_provider == "discord"
     assert cfg.discord.bot_token == "token"
-    assert cfg.discord.enabled
+    assert cfg.discord.bot_notification_enabled
 
     telegram = messenger_config_from_mapping(
         {"telegram": {"bot_token": "token", "chat_id": "chat"}}
@@ -394,7 +394,7 @@ def test_messenger_config_from_mapping() -> None:
 
     empty = messenger_config_from_mapping(None)
     assert empty.normalized_provider == "telegram"
-    assert not empty.discord.enabled
+    assert not empty.discord.bot_notification_enabled
 
     with pytest.raises(ValueError, match="messenger.provider"):
         messenger_config_from_mapping({"provider": "disocrd"})

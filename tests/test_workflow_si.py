@@ -2239,3 +2239,19 @@ def test_multi_route_line_selected_input_stays_provenance_verified(tmp_path: Pat
     block = data.entries[0].block
     assert block.result.electronic_state_verified
     assert not any("provenance" in warning for warning in block.warnings)
+
+
+def test_interaction_energy_fails_closed_when_fragment_state_metadata_is_missing(
+    tmp_path: Path,
+) -> None:
+    # Absent electronic-state metadata used to default to the expected value
+    # and pass the gate; it must be a blocker instead.
+    payload = _interaction_payload(tmp_path)
+    fragment = next(stage for stage in payload["stages"] if stage["stage_id"] == "ie_f0")
+    fragment["metadata"] = dict(fragment["metadata"])
+    del fragment["metadata"]["fragment_charge"]
+
+    result = collect_workflow_si_data(payload).interaction_energies[0]
+
+    assert not result.resolved
+    assert "electronic-state metadata differs or is missing" in result.note

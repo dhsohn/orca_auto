@@ -353,9 +353,7 @@ def test_discord_config_parses_bot_and_authorization_settings() -> None:
     assert config.allowed_user_ids == ("444", "555")
     assert config.interaction_channel_ids == ("111", "222", "333")
     assert config.bot_notification_enabled
-    assert config.notification_enabled
     assert config.interactive_enabled
-    assert config.enabled
 
 
 def test_discord_config_uploads_default_disabled() -> None:
@@ -389,11 +387,10 @@ def test_discord_config_capabilities_are_independent_and_fail_closed() -> None:
         allowed_user_ids=("222",),
     )
     assert interactive.interactive_enabled
-    assert not interactive.notification_enabled
-    assert not interactive.enabled
+    assert not interactive.bot_notification_enabled
 
     incomplete = DiscordConfig(bot_token="token")
-    assert not incomplete.notification_enabled
+    assert not incomplete.bot_notification_enabled
     assert not incomplete.interactive_enabled
 
     no_operators = DiscordConfig(bot_token="token", channel_ids=("111",))
@@ -404,7 +401,7 @@ def test_discord_config_capabilities_are_independent_and_fail_closed() -> None:
         default_channel_id="111",
         allowed_user_ids=("222",),
     )
-    assert default_only.notification_enabled
+    assert default_only.bot_notification_enabled
     assert not default_only.interactive_enabled
 
 

@@ -52,11 +52,13 @@ from .patterns import (
 # ---------------------------------------------------------------------------
 
 HARTREE_TO_EV = 27.211386245988
-HARTREE_TO_KCALMOL = 627.5094740631
+# The one Hartree -> kcal/mol conversion factor. Report renderers and the
+# workflow SI import this; do not re-declare it elsewhere.
+KCAL_PER_HARTREE = 627.5094740631
 
 __all__ = [
     "HARTREE_TO_EV",
-    "HARTREE_TO_KCALMOL",
+    "KCAL_PER_HARTREE",
     "AtomRow",
     "OptProgress",
     "OptStep",
@@ -183,7 +185,7 @@ def _populate_energy(result: OrcaResult, text: str) -> None:
     energy = float(energy_matches[-1])
     result.energy_hartree = energy
     result.energy_ev = energy * HARTREE_TO_EV
-    result.energy_kcalmol = energy * HARTREE_TO_KCALMOL
+    result.energy_kcalmol = energy * KCAL_PER_HARTREE
 
 
 def _populate_convergence(result: OrcaResult, text: str) -> None:

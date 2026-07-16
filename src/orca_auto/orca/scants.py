@@ -19,13 +19,13 @@ from .input_blocks import (
     replace_geometry_with_xyzfile,
     route_line_indices,
 )
+from .parser import KCAL_PER_HARTREE
 from .resource_directives import clamp_maxcore_to_budget
 
 SCANTS_ROUTE_RE = re.compile(r"\bSCANTS\b", re.IGNORECASE)
 # Interior scan-profile maxima below this prominence are endpoint/vdW noise, not
 # a barrier a reverse ScanTS could locate.
 SCANTS_BARRIER_NOISE_KCAL = 0.5
-_KCAL_PER_HARTREE = 627.5094740631
 _FLOAT_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?")
 _GEOM_SCAN_START_RE = re.compile(r"^\s*scan\s*$", re.IGNORECASE)
 _GEOM_END_RE = re.compile(r"^\s*end\s*$", re.IGNORECASE)
@@ -126,7 +126,7 @@ def scan_profile_interior_barrier_kcal(energies: Sequence[float]) -> float | Non
         prominence = min(energies[idx] - prefix_min, energies[idx] - suffix_min[idx + 1])
         best = max(best, prominence)
         prefix_min = min(prefix_min, energies[idx])
-    return best * _KCAL_PER_HARTREE
+    return best * KCAL_PER_HARTREE
 
 
 def _peak_prominence_kcal(energies: Sequence[float], peak: int) -> float:
@@ -143,7 +143,7 @@ def _peak_prominence_kcal(energies: Sequence[float], peak: int) -> float:
     while idx < len(energies) and energies[idx] <= energies[peak]:
         right_min = min(right_min, energies[idx])
         idx += 1
-    return min(energies[peak] - left_min, energies[peak] - right_min) * _KCAL_PER_HARTREE
+    return min(energies[peak] - left_min, energies[peak] - right_min) * KCAL_PER_HARTREE
 
 
 def scan_profile_interior_maxima(

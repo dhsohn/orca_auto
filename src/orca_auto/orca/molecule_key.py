@@ -77,30 +77,50 @@ def _parse_formula_from_inp(inp_path: Path) -> str | None:
 
 
 def _parse_inline_xyz(lines: list[str], start: int) -> list[str]:
+    # A silently skipped line would yield a plausible but wrong formula, so a
+    # non-atom line inside the geometry block fails closed to "no formula"
+    # (the caller then falls back to the directory-name key).
     atoms: list[str] = []
     for i in range(start, len(lines)):
         stripped = lines[i].strip()
         if stripped == "*":
             break
+        if not stripped:
+            continue
         m = ATOM_LINE_RE.match(stripped)
-        if m:
-            atoms.append(m.group(1))
+        if m is None:
+            logger.warning("Unparseable inline geometry line for molecule key")
+            return []
+        atoms.append(m.group(1))
     return atoms
 
 
 def _parse_xyz_file(xyz_path: Path) -> list[str]:
-    atoms: list[str] = []
     try:
         lines = xyz_path.read_text(encoding="utf-8", errors="ignore").splitlines()
     except OSError:
         logger.warning("Cannot read xyz file: %s", xyz_path)
-        return atoms
+        return []
 
-    # Standard XYZ format: line 1 = atom count, line 2 = comment, line 3+ = atoms
-    for line in lines[2:]:
+    # Standard XYZ format: line 1 = atom count, line 2 = comment, line 3+ =
+    # exactly that many atom lines. A truncated or corrupt file must yield no
+    # formula rather than a plausible subset of the real one.
+    try:
+        declared = int(lines[0].strip())
+    except (IndexError, ValueError):
+        logger.warning("Invalid XYZ atom-count header for molecule key: %s", xyz_path)
+        return []
+    atom_lines = lines[2 : 2 + declared]
+    if declared <= 0 or len(atom_lines) != declared:
+        logger.warning("XYZ file is truncated for molecule key: %s", xyz_path)
+        return []
+    atoms: list[str] = []
+    for line in atom_lines:
         m = ATOM_LINE_RE.match(line.strip())
-        if m:
-            atoms.append(m.group(1))
+        if m is None:
+            logger.warning("Unparseable XYZ atom line for molecule key: %s", xyz_path)
+            return []
+        atoms.append(m.group(1))
     return atoms
 
 

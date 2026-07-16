@@ -36,6 +36,7 @@ from orca_auto.core.artifacts import (
     WORKFLOW_SI_MD_FILE,
 )
 from orca_auto.core.utils.persistence import atomic_write_text
+from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.report.interaction_energy import (
     InteractionEnergyResult,
     InteractionFragmentEnergy,
@@ -43,7 +44,7 @@ from orca_auto.orca.report.interaction_energy import (
     validate_fragment_electronic_states,
     validate_fragment_partition,
 )
-from orca_auto.orca.report.render import KCAL_PER_HARTREE, R_KCAL_PER_MOL_K
+from orca_auto.orca.report.render import R_KCAL_PER_MOL_K
 from orca_auto.orca.report.rmsd import RmsdGroup
 from orca_auto.orca.report.si import (
     SiBlock,
@@ -70,6 +71,7 @@ from ..manifest import (
     normalize_interaction_energy_block,
     normalize_rmsd_dedup_block,
     optional_positive_float,
+    require_int,
     validate_conformer_postprocessing_template,
     validate_interaction_energy_state_balance,
 )
@@ -518,6 +520,22 @@ def _meta_int(value: Any, default: int) -> int:
         return default
 
 
+def _meta_int_or_none(value: Any) -> int | None:
+    """Strict metadata read: absent or non-integer is ``None``, never a guess.
+
+    Mirrors ``require_int``: booleans and non-integer floats are corrupt
+    metadata, not integers.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _dedup_minima(
     stationary: list[WorkflowSiEntry],
     cfg: Mapping[str, Any],
@@ -600,8 +618,10 @@ def _interaction_energy_results(
     expected_fragments = cfg.get("fragments")
     if not isinstance(expected_fragments, list):
         return ()
-    complex_charge = _meta_int(parameters.get("charge"), 0)
-    complex_multiplicity = _meta_int(parameters.get("multiplicity"), 1)
+    complex_charge = require_int(parameters.get("charge", 0), field="charge")
+    complex_multiplicity = require_int(
+        parameters.get("multiplicity", 1), field="multiplicity", minimum=1
+    )
     eligible = [
         entry
         for entry in stationary
@@ -723,12 +743,15 @@ def _interaction_energy_results(
                     blockers.append(
                         f"fragment {index} atom-index metadata differs from the request"
                     )
+                # Absent or corrupt metadata must never pass by defaulting to the
+                # expected value: the gate exists to catch exactly that drift.
                 if (
-                    _meta_int(meta.get("fragment_charge"), expected_charge) != expected_charge
-                    or _meta_int(meta.get("fragment_multiplicity"), expected_multiplicity)
-                    != expected_multiplicity
+                    _meta_int_or_none(meta.get("fragment_charge")) != expected_charge
+                    or _meta_int_or_none(meta.get("fragment_multiplicity")) != expected_multiplicity
                 ):
-                    blockers.append(f"fragment {index} electronic-state metadata differs")
+                    blockers.append(
+                        f"fragment {index} electronic-state metadata differs or is missing"
+                    )
                 block, reason = _completed_interaction_block(stage)
                 if block is None:
                     blockers.append(f"fragment {index} single point unavailable: {reason}")
@@ -805,7 +828,6 @@ def _interaction_energy_results(
                 orca_version=provenance[3],
                 input_line=(complex_block.result.input_line if complex_block is not None else ""),
                 parent_stage_id=parent,
-                ghost_counterpoise_applied=False,
             )
         )
     return tuple(results)
@@ -1650,7 +1672,9 @@ def render_interaction_energy_csv(data: WorkflowSiData) -> str | None:
                     _spreadsheet_safe_text(result.solvation),
                     _spreadsheet_safe_text(result.orca_version),
                     _spreadsheet_safe_text(result.input_line),
-                    "true" if result.ghost_counterpoise_applied else "false",
+                    # Counterpoise is not implemented; the provenance column is a
+                    # constant so downstream readers need not special-case it.
+                    "false",
                     _spreadsheet_safe_text(fragment.label),
                     _spreadsheet_safe_text(fragment.stage_id),
                     _spreadsheet_safe_text(";".join(str(index) for index in fragment.atom_indices)),
@@ -1890,11 +1914,17 @@ def write_workflow_si(
         normalized_interaction = normalize_interaction_energy_block(
             parameters.get("interaction_energy")
         )
-        validate_interaction_energy_state_balance(
-            normalized_interaction,
-            complex_charge=_meta_int(parameters.get("charge"), 0),
-            complex_multiplicity=_meta_int(parameters.get("multiplicity"), 1),
-        )
+        # Evaluate the strict charge/multiplicity reads only when the feature is
+        # configured: corrupt request parameters must fail the interaction
+        # feature closed, not block the whole SI of an unrelated workflow.
+        if normalized_interaction is not None:
+            validate_interaction_energy_state_balance(
+                normalized_interaction,
+                complex_charge=require_int(parameters.get("charge", 0), field="charge"),
+                complex_multiplicity=require_int(
+                    parameters.get("multiplicity", 1), field="multiplicity", minimum=1
+                ),
+            )
         normalized_rmsd = normalize_rmsd_dedup_block(parameters.get("rmsd_dedup"))
         validate_conformer_postprocessing_template(
             payload.get("template_name"),

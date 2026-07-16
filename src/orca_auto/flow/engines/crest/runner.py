@@ -297,7 +297,7 @@ def _validate_md_step_count(
         if tstep is not None:
             raise ValueError("CREST tstep requires an explicit mdlen for work-budget admission")
         step_count = math.ceil(
-            (_CREST_MAX_AUTOMATIC_MDLEN_FS / _default_timestep_fs(gfn)) * trajectory_count
+            (_CREST_MAX_AUTOMATIC_MDLEN_FS / default_timestep_fs(gfn)) * trajectory_count
         )
         if step_count > min(_CREST_NATIVE_INT_MAX, max_steps):
             raise ValueError(
@@ -305,14 +305,7 @@ def _validate_md_step_count(
                 f"{min(_CREST_NATIVE_INT_MAX, max_steps)} MD steps"
             )
         return step_count
-    normalized_gfn = str(gfn or "").strip().lower()
-    if normalized_gfn in {"ff", "gfnff"}:
-        default_tstep_fs = _CREST_GFN_FF_DEFAULT_TSTEP_FS
-    elif normalized_gfn in {"2//ff", "gfn2//gfnff"}:
-        default_tstep_fs = _CREST_COMPOSITE_DEFAULT_TSTEP_FS
-    else:
-        default_tstep_fs = _CREST_GFN_XTB_DEFAULT_TSTEP_FS
-    step_fs = float(tstep) if tstep is not None else default_tstep_fs
+    step_fs = float(tstep) if tstep is not None else default_timestep_fs(gfn)
     raw_step_count = (float(mdlen) / step_fs) * 1000.0 * trajectory_count
     if not math.isfinite(raw_step_count):
         raise ValueError(
@@ -328,7 +321,13 @@ def _validate_md_step_count(
     return step_count
 
 
-def _default_timestep_fs(gfn: Any) -> float:
+def default_timestep_fs(gfn: Any) -> float:
+    """The scientific default MD timestep for one CREST GFN level.
+
+    This mapping is safety-relevant physics and must stay the single source
+    for admission work-budget estimation (including the remote-ingress bot)
+    and CREST command construction alike.
+    """
     normalized_gfn = str(gfn or "").strip().lower()
     if normalized_gfn in {"ff", "gfnff"}:
         return _CREST_GFN_FF_DEFAULT_TSTEP_FS
@@ -345,13 +344,7 @@ def _append_crest_sampling_options(
 ) -> None:
     mdlen = _resolve_mdlen(manifest)
     wscal = _crest_positive_real(manifest, "wscal")
-    normalized_gfn = str(manifest.get("gfn") or "").strip().lower()
-    if normalized_gfn in {"ff", "gfnff"}:
-        scientific_tstep_max = _CREST_GFN_FF_DEFAULT_TSTEP_FS
-    elif normalized_gfn in {"2//ff", "gfn2//gfnff"}:
-        scientific_tstep_max = _CREST_COMPOSITE_DEFAULT_TSTEP_FS
-    else:
-        scientific_tstep_max = _CREST_GFN_XTB_DEFAULT_TSTEP_FS
+    scientific_tstep_max = default_timestep_fs(manifest.get("gfn"))
     shake = _crest_int(manifest, "shake")
     if shake == 1:
         scientific_tstep_max = min(scientific_tstep_max, 2.0)
