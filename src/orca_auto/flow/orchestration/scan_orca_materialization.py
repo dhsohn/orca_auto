@@ -442,7 +442,11 @@ def _advance_forward(
         )
         return True
 
-    max_extensions = int(parameters.get("max_scan_extensions", 1) or 0)
+    max_extensions = strict_int(
+        required_stage_budget(parameters, "max_scan_extensions"),
+        field="max_scan_extensions",
+        minimum=0,
+    )
     extensions_used = len(forward_scans) - 1
     if extensions_used < max_extensions:
         previous_spec = _scan_spec(latest)

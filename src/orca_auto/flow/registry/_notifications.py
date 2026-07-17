@@ -365,6 +365,10 @@ def journal_event_message(event: dict[str, Any], workflow_root: str | Path) -> M
         "worker_stopped",
         "worker_interrupted",
         "worker_lock_error",
+        # Worker-cycle events carry a session but no workflow id; the generic
+        # renderer would show "Workflow: -" and drop their only identifier.
+        "worker_cycle_started",
+        "worker_cycle_finished",
     }:
         return worker_lifecycle_event_message(context)
     return default_journal_event_message(context)

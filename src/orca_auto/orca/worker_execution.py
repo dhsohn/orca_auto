@@ -39,7 +39,7 @@ from orca_auto.core.utils.persistence import timestamped_token
 
 from .attempt.reporting import build_final_result
 from .commands.run_inp import _cmd_run_inp_execute
-from .commands.run_inp_execution import recover_crashed_state
+from .commands.run_inp_execution import existing_completed_out, recover_crashed_state
 from .commands.run_inp_submission import _mark_orca_snapshot_owned
 from .config import load_config
 from .execution_binding import (
@@ -138,6 +138,21 @@ def _canonical_admission_app_name(value: str | None) -> str | None:
     return text
 
 
+def _completed_out_or_none(bound_selected: Path) -> dict[str, Any] | None:
+    try:
+        return existing_completed_out(bound_selected)
+    except Exception:  # noqa: BLE001
+        # The output in a crashed generation is exactly the file most likely
+        # to be truncated or actively racing; a probe failure must degrade to
+        # the recovery path, never abort the claim.
+        logger.debug(
+            "completed-output probe failed for %s; continuing with recovery",
+            bound_selected,
+            exc_info=True,
+        )
+        return None
+
+
 def _queue_entry_by_id(queue_root: Path, queue_id: str) -> Any | None:
     return find_queue_entry_by_id(
         queue_root,
@@ -184,6 +199,17 @@ def _build_execution_context(
     max_retries = metadata.get("max_retries")
     if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
         raise ValueError("Queued ORCA entry has an invalid retry budget")
+    # A generation whose bound input already has a completed, analyzer-verified
+    # output legitimately carries runtime files: allow them so the run's
+    # completed-adoption path can claim the finished result instead of dying
+    # on the pristine check (the crash landed after ORCA finished but before
+    # the queue row turned terminal).
+    selected_inp_path = Path(selected_inp) if selected_inp else None
+    completed_adoption = bool(
+        selected_inp_path is not None
+        and selected_inp_path.is_file()
+        and _completed_out_or_none(selected_inp_path) is not None
+    )
     verified_selected, orca_executable = verify_orca_execution_snapshot(
         reaction_dir,
         snapshot,
@@ -192,6 +218,7 @@ def _build_execution_context(
         expected_selected_input_xyz=selected_input_xyz,
         expected_resource_request=resource_request,
         expected_max_retries=max_retries,
+        allow_runtime_outputs=completed_adoption,
     )
     return OrcaWorkerExecutionContext(
         entry=entry,
@@ -353,6 +380,14 @@ def _maybe_rebind_recovery_generation(
         return entry
     if not orca_execution_started_evidence(reaction_dir, snapshot):
         return entry
+    bound_selected_text = str(metadata.get("selected_inp") or "").strip()
+    if bound_selected_text:
+        bound_selected = Path(bound_selected_text)
+        if bound_selected.is_file() and _completed_out_or_none(bound_selected) is not None:
+            # ORCA finished before the crash reached the queue row. Keep the
+            # generation: the ordinary claim path adopts the completed output
+            # instead of re-running the whole calculation in a rebind.
+            return entry
     if get_cancel_requested(queue_root, str(entry.queue_id), expected_entry=entry):
         # Honor the pending cancellation through the requeue chokepoint (which
         # turns a cancel-requested running row terminal) instead of letting the

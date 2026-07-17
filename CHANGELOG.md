@@ -8,6 +8,36 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- Post-merge review findings from the recent change series, batched:
+  - A claim whose crashed generation already holds a completed,
+    analyzer-verified output is no longer rebound into a fresh generation
+    (which re-ran the whole calculation); the claim-time verification admits
+    the finished generation's runtime files and the ordinary
+    completed-adoption path claims the result.
+  - Crash-recovery checkpoint seeding considers every attempt stem (base,
+    `retryNN`, `resume`) and seeds the newest-written intact `.gbw`, so a
+    crash during a generated retry or resume attempt no longer seeds a stale
+    first-attempt checkpoint or misses the only one.
+  - A generation-shaped directory name alone no longer grants workflow
+    engine paths: the parent must be a scaffold or the workspace must carry
+    its committed `workflow.json` (which also keeps a workspace addressable
+    after the scaffold's mutable `flow.yaml` is removed).
+  - `worker_cycle_started`/`worker_cycle_finished` notifications (opt-in via
+    `ORCA_AUTO_FLOW_NOTIFY_EVENT_TYPES`) render through the worker-lifecycle
+    template again instead of a generic card that dropped the session id.
+  - A scan-TS payload stripped of `max_scan_extensions` fails closed instead
+    of silently regrowing a default extension budget, matching the required
+    stage-budget contract.
+  - xTB-MD terminal artifact publication revalidates the snapshot-recorded
+    job directory identity before each write again, closing the
+    directory-swap window between the state and report writes.
+  - Same-second execution generations order by actual recency (directory
+    mtime breaks the timestamp tie) instead of by random hex suffix, so
+    direct-directory readers no longer pick a stale generation as newest
+    after a rapid resubmission.
+
 ### Added
 
 - Crash recovery seeds the SCF checkpoint alongside the geometry: when the

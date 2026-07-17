@@ -494,6 +494,43 @@ def recovery_checkpoint_private_name(source_selected: Path) -> str:
     return f"{source_selected.stem}.moinp.gbw"
 
 
+def recovery_checkpoint_source_names(
+    source_selected: Path,
+    *,
+    effective_retry_count: int,
+) -> list[str]:
+    """Attempt checkpoint basenames, oldest attempt first.
+
+    A crash can land while ORCA is running a generated retry or resume input,
+    whose orbitals live under that attempt's stem (for example
+    ``<stem>.retry01.gbw``), not the submission stem.
+    """
+
+    attempts = [source_selected]
+    for retry_number in range(1, effective_retry_count + 1):
+        attempts.append(retry_input_path(source_selected, retry_number))
+    attempts.extend(resume_checkpoint_input_path(attempt) for attempt in list(attempts))
+    names: list[str] = []
+    for attempt in attempts:
+        name = attempt.with_suffix(".gbw").name
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _is_recovery_checkpoint_source_name(name: str, *, source_selected: Path) -> bool:
+    """Whether *name* is an attempt checkpoint basename for this submission.
+
+    Mirrors the shapes produced by ``recovery_checkpoint_source_names``
+    (base, ``retryNN``, and ``resume`` stems) without re-deriving the retry
+    budget from any file, so claim-time verification stays a function of the
+    pinned snapshot alone.
+    """
+
+    stem = re.escape(source_selected.stem)
+    return re.fullmatch(rf"{stem}(?:\.retry\d{{2}})?(?:\.resume)?\.gbw", name) is not None
+
+
 def _validated_recovery_checkpoint(
     *,
     job_dir: Path,
@@ -501,32 +538,46 @@ def _validated_recovery_checkpoint(
     source_selected: Path,
     scanned_dependencies: Sequence[Path],
     estimated_source_bytes: int,
+    effective_retry_count: int,
 ) -> Path | None:
     """Return the frozen runtime checkpoint to seed from, or None to skip.
 
-    Skipping (absent, empty, over the snapshot byte budgets, or a basename
-    collision with a scanned dependency) degrades to geometry-only recovery;
-    it never fails the rebind. A symlinked or otherwise non-regular candidate
-    still fails closed via the confinement check.
+    Considers every attempt stem (base, retries, resumes) and picks the
+    newest-written intact candidate. Skipping (absent, empty, over the
+    snapshot byte budgets, or a basename collision with a scanned dependency)
+    degrades to geometry-only recovery; it never fails the rebind. A
+    symlinked or otherwise non-regular candidate still fails closed via the
+    confinement check.
     """
 
-    candidate = seed_dir / source_selected.with_suffix(".gbw").name
-    if not candidate.exists() and not candidate.is_symlink():
-        return None
-    checkpoint = require_confined_regular_file(
-        job_dir,
-        candidate,
-        label="ORCA recovery checkpoint",
+    best: tuple[int, int, Path] | None = None
+    source_names = recovery_checkpoint_source_names(
+        source_selected,
+        effective_retry_count=effective_retry_count,
     )
-    size = checkpoint.stat().st_size
-    if size == 0 or size > MAX_INPUT_SNAPSHOT_BYTES:
-        return None
-    if estimated_source_bytes + size > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
+    for rank, name in enumerate(source_names):
+        candidate = seed_dir / name
+        if not candidate.exists() and not candidate.is_symlink():
+            continue
+        checkpoint = require_confined_regular_file(
+            job_dir,
+            candidate,
+            label="ORCA recovery checkpoint",
+        )
+        size = checkpoint.stat().st_size
+        if size == 0 or size > MAX_INPUT_SNAPSHOT_BYTES:
+            continue
+        if estimated_source_bytes + size > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
+            continue
+        key = (checkpoint.stat().st_mtime_ns, rank)
+        if best is None or key > (best[0], best[1]):
+            best = (key[0], key[1], checkpoint)
+    if best is None:
         return None
     private_name = recovery_checkpoint_private_name(source_selected)
     if any(dependency.name == private_name for dependency in scanned_dependencies):
         return None
-    return checkpoint
+    return best[2]
 
 
 def orca_execution_started_evidence(job_dir: str | Path, snapshot: Any) -> bool:
@@ -722,6 +773,7 @@ def build_orca_execution_snapshot(
                 source_selected=source_selected,
                 scanned_dependencies=dependencies,
                 estimated_source_bytes=estimated_source_bytes,
+                effective_retry_count=effective_retry_count,
             )
 
         bound_dependencies: list[tuple[Path, Path, bool, str | None]] = []
@@ -1148,13 +1200,19 @@ def verify_orca_execution_snapshot(
                 label=f"private dependency {role!r}",
             )
         if role == recovery_checkpoint_role:
-            # The seeded checkpoint is the one sanctioned rename: the crashed
-            # generation's runtime `<stem>.gbw` materialized under the
-            # `%moinp`-safe `<stem>.moinp.gbw` name.
+            # The seeded checkpoint is the one sanctioned rename: a crashed
+            # generation's runtime attempt checkpoint (base, retry, or resume
+            # stem) materialized under the `%moinp`-safe `<stem>.moinp.gbw`
+            # name. The source name is provenance validated purely by shape —
+            # content is hash-pinned above — so verification never depends on
+            # re-reading a mutable file to rebuild the attempt ladder.
             selected_source_name = Path(source_selected)
             if (
                 private_path.parent != execution_dir
-                or source_path.name != selected_source_name.with_suffix(".gbw").name
+                or not _is_recovery_checkpoint_source_name(
+                    source_path.name,
+                    source_selected=selected_source_name,
+                )
                 or private_path.name != recovery_checkpoint_private_name(selected_source_name)
             ):
                 raise ValueError(

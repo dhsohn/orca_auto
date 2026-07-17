@@ -164,10 +164,13 @@ def persist_job_artifact(cfg: Any, entry: Any, payload: dict[str, Any]) -> None:
             raise ValueError("xTB-MD queue job directory changed after submission")
         return path
 
+    # Revalidate the snapshot-recorded directory identity before every write:
+    # the artifact writers resolve their target afresh, so a directory swapped
+    # in after one write must not receive the remaining artifacts.
+    write_state(validated_job_dir(), payload)
+    write_report_json(validated_job_dir(), payload)
+    write_report_md_lines(validated_job_dir(), build_engine_report_markdown(payload))
     job_dir = validated_job_dir()
-    write_state(job_dir, payload)
-    write_report_json(job_dir, payload)
-    write_report_md_lines(job_dir, build_engine_report_markdown(payload))
     resources = resource_request_from_entry(entry)
     state = payload.get("status")
     status = str(state.get("state") or "") if isinstance(state, Mapping) else ""

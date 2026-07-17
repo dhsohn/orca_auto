@@ -217,8 +217,20 @@ def workflow_workspace_internal_engine_paths_from_path(
     for workspace_depth in (1, 2):
         if len(parts) <= workspace_depth:
             continue
-        if workspace_depth == 2 and not is_visible_generation_name(parts[1]):
-            continue
+        if workspace_depth == 2:
+            if not is_visible_generation_name(parts[1]):
+                continue
+            # A generation-shaped name alone must not grant workflow paths:
+            # standalone ORCA execution generations share the name shape. The
+            # parent must be a scaffold, or the workspace must already carry
+            # its committed manifest (which also covers a scaffold whose
+            # mutable flow.yaml was removed after submission).
+            scaffold_dir = workspaces_root / parts[0]
+            workspace_dir = scaffold_dir / parts[1]
+            if not directory_is_workflow_scaffold(scaffold_dir) and not (
+                (workspace_dir / WORKFLOW_FILE_NAME).is_file()
+            ):
+                continue
         for stage_dirname in stage_dirnames:
             if parts[workspace_depth] == stage_dirname:
                 return workflow_workspace_internal_engine_paths(
