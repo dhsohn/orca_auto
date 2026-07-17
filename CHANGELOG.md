@@ -62,6 +62,31 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- The reaction TS handoff materializes the xTB seed Hessian as
+  `<inp stem>.inhess.hess` instead of `<inp stem>.hess`. The old name is what
+  ORCA itself writes under a `Freq` route, so the execution-snapshot binding
+  rejected every OptTS+Freq candidate submission with
+  `ORCA referenced input basename conflicts with a generation runtime/output
+  file` and a workflow whose xTB phase succeeded still failed with
+  `ts_candidate_limit_exhausted` before any ORCA job ran. This is a forward
+  fix: ORCA stages are not re-materialized on restart, so a workspace whose
+  candidate directories were written before this fix still carries the old
+  `InHessName "<stem>.hess"` input and must be re-run as a fresh workflow
+  rather than restarted.
+- A rejected workflow ORCA queue submission now records why: the failure
+  reason lands in the stage metadata (`reason`), the trimmed stderr in
+  `submission_error_detail`, and both flow into the stage summary and the
+  `workflow_stage_failed` journal event instead of leaving a bare
+  `submission_failed` with no cause anywhere. The candidate-exhaustion
+  workflow error message also distinguishes candidates whose submission was
+  rejected before execution from candidates that ran without verifying a
+  transition state.
+- `queue list` shows workflow rows under the directory the user submitted:
+  the scaffold name (for example `TS8_wf`) for scaffolded workspaces, whose
+  generation directory name doubles as the workflow id and used to repeat the
+  ID column verbatim. Stage-derived labels (reaction keys, candidate paths)
+  stay in the Detail column.
+
 - The xTB/CREST phase summary notification now derives its outcome, severity,
   and per-stage results from the same canonical aggregation as the workflow
   journal (`phase_snapshot`), instead of a private bucketing that ignored the

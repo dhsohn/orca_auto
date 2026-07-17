@@ -16,7 +16,6 @@ _ORCA_SELECTED_INP_HINTS = (
     ("opt", "Opt"),
     ("freq", "Freq"),
 )
-_GENERIC_WORKFLOW_LABELS = frozenset({"input", "input_xyz", "molecule"})
 
 
 def queue_table_now() -> datetime:
@@ -197,15 +196,16 @@ def queue_name_text(item: dict[str, Any]) -> str:
     metadata = metadata if isinstance(metadata, dict) else {}
 
     if kind == "workflow":
-        workspace_name = queue_metadata_path_name(metadata, ("workspace_dir", "workflow_file"))
-        if workspace_name and (
-            not label or queue_looks_like_path(label) or label.lower() in _GENERIC_WORKFLOW_LABELS
-        ):
+        # The submitted directory is the stable user-facing name: the scaffold
+        # for scaffolded workflows, the workspace itself otherwise. Stage
+        # labels (reaction keys, candidate paths) belong to Detail, not Name.
+        workspace_name = normalize_text(
+            metadata.get("workspace_display_name")
+        ) or queue_metadata_path_name(metadata, ("workspace_dir", "workflow_file"))
+        if workspace_name:
             return workspace_name
         if label and not queue_looks_like_path(label):
             return label
-        if workspace_name:
-            return workspace_name
         return activity_id
 
     if label and not queue_looks_like_path(label):

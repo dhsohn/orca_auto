@@ -117,11 +117,42 @@ def test_materialize_orca_stage_writes_inhess_block(tmp_path: Path) -> None:
     materialized = materialize_orca_stage_from_request(request)
     reaction_dir = Path(materialized.reaction_dir)
     inp_text = (reaction_dir / "ts_guess.inp").read_text(encoding="utf-8")
-    assert inhess_geom_block("ts_guess.hess") in inp_text
-    assert (reaction_dir / "ts_guess.hess").exists()
+    assert inhess_geom_block("ts_guess.inhess.hess") in inp_text
+    assert (reaction_dir / "ts_guess.inhess.hess").exists()
+    # `<inp stem>.hess` is what ORCA itself writes under a Freq route; the
+    # execution-snapshot binding rejects referenced inputs with that name.
+    assert not (reaction_dir / "ts_guess.hess").exists()
     source_payload = (reaction_dir / "source_candidate.json").read_text(encoding="utf-8")
     assert "hessian_handoff" in source_payload
     assert "hess_path" in source_payload
+
+
+def test_materialized_inhess_survives_freq_snapshot_binding(tmp_path: Path) -> None:
+    """The reaction handoff shape must pass the ORCA execution-snapshot gate.
+
+    Regression for the run where every OptTS+Freq candidate submission was
+    rejected with `ORCA referenced input basename conflicts with a generation
+    runtime/output file: ts_guess.hess`.
+    """
+    from orca_auto.orca.execution_binding import build_orca_execution_snapshot
+
+    hessian, _ = _write_pair(tmp_path)
+    request = _materialization_request(tmp_path, inhess_source_path=str(hessian))
+    materialized = materialize_orca_stage_from_request(request)
+    reaction_dir = Path(materialized.reaction_dir)
+    executable = tmp_path / "orca"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    snapshot = build_orca_execution_snapshot(
+        reaction_dir,
+        Path(materialized.selected_inp),
+        selected_input_xyz=materialized.selected_xyz,
+        resource_request={"max_cores": 4, "max_memory_gb": 8},
+        max_retries=2,
+        orca_executable=executable,
+    )
+    dependency_names = {Path(path).name for path in snapshot["dependency_paths"]}
+    assert "ts_guess.inhess.hess" in dependency_names
 
 
 def test_materialize_orca_stage_falls_back_without_hessian(tmp_path: Path) -> None:
@@ -132,7 +163,7 @@ def test_materialize_orca_stage_falls_back_without_hessian(tmp_path: Path) -> No
     reaction_dir = Path(materialized.reaction_dir)
     inp_text = (reaction_dir / "ts_guess.inp").read_text(encoding="utf-8")
     assert "InHess" not in inp_text
-    assert not (reaction_dir / "ts_guess.hess").exists()
+    assert not (reaction_dir / "ts_guess.inhess.hess").exists()
     source_payload = (reaction_dir / "source_candidate.json").read_text(encoding="utf-8")
     assert "hessian_handoff" in source_payload
     assert "error" in source_payload

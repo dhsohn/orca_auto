@@ -42,6 +42,7 @@ _STALE_STAGE_METADATA_KEYS = frozenset(
         "run_id",
         QUEUE_SUBMISSION_INTENT_KEY,
         "state_status",
+        "submission_error_detail",
         "submission_status",
         "submitted_at",
     }

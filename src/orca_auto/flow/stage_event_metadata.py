@@ -26,6 +26,7 @@ def stage_event_metadata(stage: dict[str, Any]) -> dict[str, Any]:
         "selected_input_xyz",
         "selected_inp",
         "submission_status",
+        "submission_error_detail",
         "run_id",
         "latest_known_path",
         "optimized_xyz_path",

@@ -71,6 +71,7 @@ class _SubmissionBucketNames:
 
 _STATUS = _SubmissionStatusNames()
 _BUCKET = _SubmissionBucketNames()
+_SUBMISSION_ERROR_DETAIL_LIMIT = 1000
 _DEFERRED_SUBMISSION_STATUSES = SUBMISSION_DEFERRED_STATUSES
 _SUBMITTED_TASK_STATUSES = SUBMISSION_SUBMITTED_TASK_STATUSES
 _SUBMITTED_STAGE_STATUSES = SUBMISSION_SUBMITTED_STAGE_STATUSES
@@ -273,7 +274,11 @@ def submitted_stage_transition(
                 "submission_status": _STATUS.submitted,
                 "submitted_at": submitted_at,
             },
-            metadata_removals=("submission_deferred_reason", "last_submission_attempt_at"),
+            metadata_removals=(
+                "submission_deferred_reason",
+                "last_submission_attempt_at",
+                "submission_error_detail",
+            ),
         ),
     )
 
@@ -320,27 +325,38 @@ def failed_submission_transition(
     submitted_at: str,
     returncode: int,
 ) -> RecordedStageTransition:
+    failure_reason = str(submission_record.get("reason", "")).strip() or "queue_submission_failed"
+    failure_detail = (
+        str(submission_record.get("stderr", "")).strip()
+        or str(submission_record.get("stdout", "")).strip()
+    )[:_SUBMISSION_ERROR_DETAIL_LIMIT]
+    metadata_updates = {
+        "submission_status": _STATUS.submission_failed,
+        "submitted_at": submitted_at,
+        "reason": failure_reason,
+    }
+    if failure_detail:
+        metadata_updates["submission_error_detail"] = failure_detail
     return RecordedStageTransition(
         bucket=_BUCKET.failed,
         detail={
             "stage_id": stage_id,
             "returncode": returncode,
+            "reason": failure_reason,
             "stderr": str(submission_record.get("stderr", "")).strip(),
             "stdout": str(submission_record.get("stdout", "")).strip(),
         },
         stage_result={
             "stage_id": stage_id,
             "status": _STATUS.submission_failed,
+            "reason": failure_reason,
             "queue_id": stdout_payload.get("queue_id", ""),
             "returncode": returncode,
         },
         mutation=SUBMISSION_RESULT.mutation(
             task_status=_STATUS.submission_failed,
             stage_status=_STATUS.submission_failed,
-            metadata_updates={
-                "submission_status": _STATUS.submission_failed,
-                "submitted_at": submitted_at,
-            },
+            metadata_updates=metadata_updates,
             metadata_removals=("submission_deferred_reason", "last_submission_attempt_at"),
         ),
     )
