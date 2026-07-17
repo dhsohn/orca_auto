@@ -672,7 +672,15 @@ def test_append_reaction_xtb_stages_fails_when_completed_crest_has_no_geometry(
                 "task": {"engine": "crest"},
             },
         ],
-        "metadata": {"request": {"parameters": {}}},
+        "metadata": {
+            "request": {
+                "parameters": {
+                    "max_crest_candidates": 2,
+                    "max_xtb_stages": 1,
+                    "max_xtb_handoff_retries": 2,
+                }
+            }
+        },
     }
     deps = orchestration_deps(
         overrides={
@@ -726,6 +734,7 @@ def test_append_reaction_xtb_stages_filters_endpoint_pairs(
                 "parameters": {
                     "max_crest_candidates": 2,
                     "max_xtb_stages": 1,
+                    "max_xtb_handoff_retries": 2,
                     "endpoint_pairing": {
                         "enabled": True,
                         "comparison_atoms": [1, 2, 3],
@@ -846,6 +855,7 @@ def test_append_reaction_xtb_stages_can_exclude_moving_atoms(
                 "parameters": {
                     "max_crest_candidates": 2,
                     "max_xtb_stages": 1,
+                    "max_xtb_handoff_retries": 2,
                     "endpoint_pairing": {
                         "enabled": True,
                         "moving_atoms": [4],
@@ -1692,3 +1702,17 @@ def test_append_crest_orca_stages_materializes_twenty_orca_children(
     assert len(orca_stages) == 20
     assert orca_stages[0]["stage_id"] == "orca_conformer_01"
     assert orca_stages[-1]["stage_id"] == "orca_conformer_20"
+
+
+def test_reaction_materialization_requires_persisted_stage_budgets() -> None:
+    """Creation always persists the stage budgets; a payload missing one is
+    corrupt or hand-edited and must fail closed instead of receiving a
+    guessed default."""
+
+    from orca_auto.flow.orchestration.support import required_stage_budget as _required_param
+
+    assert _required_param({"max_xtb_stages": 9}, "max_xtb_stages") == 9
+    with pytest.raises(ValueError, match="missing parameters.max_xtb_stages"):
+        _required_param({"max_crest_candidates": 2}, "max_xtb_stages")
+    with pytest.raises(ValueError, match="missing parameters.max_crest_candidates"):
+        _required_param({}, "max_crest_candidates")

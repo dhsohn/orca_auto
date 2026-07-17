@@ -10,6 +10,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Workflow stage materialization reads the persisted stage budgets
+  (`max_crest_candidates`, `max_xtb_stages`, `max_xtb_handoff_retries`,
+  and `max_orca_stages` across the reaction, conformer, and scan
+  pipelines) as required payload parameters instead of silently
+  substituting defaults. Creation always records them, so a payload
+  missing one is corrupt or hand-edited and now fails closed with an
+  explicit error rather than expanding a stored workflow by a guessed
+  amount.
+
 - `reaction_ts_search` now expands all reactant × product CREST pairs by
   default: `max_xtb_stages` defaults to 9 (was 3), matching the default
   `max_crest_candidates: 3` per endpoint, so a default run explores every

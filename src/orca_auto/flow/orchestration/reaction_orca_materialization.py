@@ -23,7 +23,10 @@ from orca_auto.flow.orchestration.stage_views import (
     _request_params,
     _stage_views,
 )
-from orca_auto.flow.orchestration.support import select_valid_ts_guess_inputs
+from orca_auto.flow.orchestration.support import (
+    required_stage_budget,
+    select_valid_ts_guess_inputs,
+)
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 from orca_auto.flow.workflow._phases import phase_finished
 
@@ -311,7 +314,11 @@ def _reaction_orca_stage_plan(
     ordered_candidates = _unique_ordered_candidates(candidate_pool)
     existing = _engine_stages(o, payload, "orca")
     unattempted_candidates = _remaining_orca_candidates(o, existing, ordered_candidates)
-    max_stage_count = max(0, int(params.get("max_orca_stages", 3) or 3))
+    max_stage_count = strict_int(
+        required_stage_budget(params, "max_orca_stages"),
+        field="max_orca_stages",
+        minimum=1,
+    )
     available_slots = max(0, max_stage_count - len(existing))
     remaining_candidates = unattempted_candidates[:available_slots]
     omitted_candidate_count = len(unattempted_candidates) - len(remaining_candidates)

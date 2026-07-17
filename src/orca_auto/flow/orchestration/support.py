@@ -60,6 +60,22 @@ def load_config_root_impl(
         return None
 
 
+def required_stage_budget(params: dict[str, Any], key: str) -> Any:
+    """Fail closed when a persisted stage budget is missing.
+
+    Creation always records the stage budgets in the durable payload; a
+    payload without one is corrupt or hand-edited, and guessing a budget
+    would silently change how far a stored workflow expands.
+    """
+
+    value = params.get(key)
+    if value is None:
+        raise ValueError(
+            f"workflow payload is missing parameters.{key}; refusing to guess a stage budget"
+        )
+    return value
+
+
 def stage_metadata_impl(stage: dict[str, Any]) -> dict[str, Any]:
     return workflow_stage_metadata(stage)
 
