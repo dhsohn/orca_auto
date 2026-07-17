@@ -19,6 +19,7 @@ from orca_auto.flow.orchestration.stage_views import (
     _engine_stages,
     _request_params,
 )
+from orca_auto.flow.orchestration.support import required_stage_budget
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 
 _CONFORMER_ORCA_STAGE_DIRNAME = "02_orca"
@@ -89,7 +90,11 @@ def _crest_orca_stage_plan(
     candidates = o.engines.select_crest_downstream_inputs(
         crest_contract,
         policy=o.contracts.CrestDownstreamPolicy.build(
-            max_candidates=int(params.get("max_orca_stages", 3) or 3)
+            max_candidates=strict_int(
+                required_stage_budget(params, "max_orca_stages"),
+                field="max_orca_stages",
+                minimum=1,
+            )
         ),
     )
     return _CrestOrcaStagePlan(

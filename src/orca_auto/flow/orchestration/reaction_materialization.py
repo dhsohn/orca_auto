@@ -20,6 +20,7 @@ from orca_auto.flow.orchestration.stage_views import (
     _engine_stages,
     _request_params,
 )
+from orca_auto.flow.orchestration.support import required_stage_budget
 
 
 @dataclass(frozen=True)
@@ -135,7 +136,7 @@ def _reaction_xtb_stage_plan(
     reactant_contract, product_contract = contracts
     params = _request_params(o, payload)
     max_crest_candidates = require_crest_candidate_count(
-        params.get("max_crest_candidates", 3),
+        required_stage_budget(params, "max_crest_candidates"),
     )
     reactant_inputs = o.engines.select_crest_downstream_inputs(
         reactant_contract,
@@ -153,11 +154,8 @@ def _reaction_xtb_stage_plan(
     if missing_roles:
         _record_crest_handoff_failure(payload, missing_roles=missing_roles)
         return None
-    # Creation always persists the explicit value; this fallback fires only
-    # for legacy/hand-edited payloads missing the key and stays at the old
-    # default so an upgrade never retroactively grows a stored workflow.
     max_xtb_stages = strict_int(
-        params.get("max_xtb_stages", 3),
+        required_stage_budget(params, "max_xtb_stages"),
         field="max_xtb_stages",
         minimum=1,
     )
@@ -226,7 +224,7 @@ def append_reaction_xtb_stages_impl(
             max_cores=int(plan.params.get("max_cores", 8) or 8),
             max_memory_gb=int(plan.params.get("max_memory_gb", 32) or 32),
             max_handoff_retries=strict_int(
-                plan.params.get("max_xtb_handoff_retries", 2),
+                required_stage_budget(plan.params, "max_xtb_handoff_retries"),
                 field="max_xtb_handoff_retries",
                 minimum=0,
             ),

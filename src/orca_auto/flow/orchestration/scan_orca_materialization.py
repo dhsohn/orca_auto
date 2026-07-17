@@ -37,6 +37,7 @@ from orca_auto.flow._orca_stage_materialization import build_materialized_orca_s
 from orca_auto.flow.contracts import WorkflowStageInput
 from orca_auto.flow.orchestration.charge_spin import strict_int
 from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
+from orca_auto.flow.orchestration.support import required_stage_budget
 from orca_auto.flow.orchestration.template_builders import scan_geom_block
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 from orca_auto.orca.scants import (
@@ -421,7 +422,11 @@ def _advance_forward(
     if _stage_status(latest) != "completed":
         return False
     threshold_kcal = float(parameters.get("barrier_threshold_kcal", 0.5) or 0.5)
-    max_candidates = int(parameters.get("max_orca_stages", 5) or 5)
+    max_candidates = strict_int(
+        required_stage_budget(parameters, "max_orca_stages"),
+        field="max_orca_stages",
+        minimum=1,
+    )
     candidates, point_count = _combined_maximum_candidates(
         forward_scans,
         threshold_kcal=threshold_kcal,
@@ -515,7 +520,11 @@ def _advance_reverse(
     reverse_optts = _optts_stages(payload, direction="reverse")
     if not reverse_optts:
         threshold_kcal = float(parameters.get("barrier_threshold_kcal", 0.5) or 0.5)
-        max_candidates = int(parameters.get("max_orca_stages", 5) or 5)
+        max_candidates = strict_int(
+            required_stage_budget(parameters, "max_orca_stages"),
+            field="max_orca_stages",
+            minimum=1,
+        )
         candidates, point_count = _combined_maximum_candidates(
             reverse_scans,
             threshold_kcal=threshold_kcal,
