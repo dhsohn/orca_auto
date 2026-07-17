@@ -383,7 +383,7 @@ def test_orca_execution_snapshot_creates_sequential_sibling_generations(
             "20260714-224055-deadbeef",
         )
     )
-    monkeypatch.setattr(binding, "_new_generation_name", lambda: next(generation_names))
+    monkeypatch.setattr(binding, "new_visible_generation_name", lambda: next(generation_names))
     job_dir, selected, first, resources = _snapshot(tmp_path)
     second = build_orca_execution_snapshot(
         job_dir,

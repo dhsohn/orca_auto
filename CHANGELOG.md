@@ -8,6 +8,30 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Changed
+
+- Workflow workspaces now use the same layout as standalone ORCA executions:
+  `run-dir` on a scaffold creates a timestamped generation directory
+  (`YYYYMMDD-HHMMSS-<8hex>`) inside the scaffold itself, and that generation
+  name is the workflow id shown by `queue list` and accepted by
+  `queue cancel` and restart. Re-running `run-dir` on the same scaffold
+  starts a fresh sibling generation. The previous layout (a
+  `wf_<type>_<name>` workspace created next to the scaffold directly under
+  `workflow_root`) and its prefix-derived ids are gone; workflow scaffolds
+  must now sit directly under the configured `runs_root`, matching where
+  the generated workspaces are discovered. Bot workflow uploads publish
+  the extracted scaffold under `runs_root` and materialize the generation
+  inside it, so a published upload directory now contains its own results
+  and the bot's post-exception commit probe reduces to checking for a
+  generation child (the `metadata.source_inputs` scan and its
+  `requested_at` freshness bound are gone). Workspace discovery (registry
+  reindex/listing, runtime scans, workflow summaries) recognizes both
+  scaffold-nested generations and direct root children (direct API
+  submissions without a scaffold); dot-directories such as the upload
+  staging area are never scanned. The reserved-generation submission guard
+  now distinguishes workflow workspaces (which carry `workflow.json`) from
+  ORCA execution generations, which stay reserved.
+
 ### Fixed
 
 - `orca_auto run-dir` works again for a scaffold placed directly under

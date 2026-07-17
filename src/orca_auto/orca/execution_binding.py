@@ -5,7 +5,6 @@ import io
 import re
 import secrets
 from collections.abc import Mapping
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +27,10 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     discard_snapshot_intent,
     discard_snapshot_intent_if_generations_absent,
 )
-from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.core.queue.generation import (
+    is_visible_generation_name,
+    new_visible_generation_name,
+)
 from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory
 
 from .completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
@@ -325,11 +327,6 @@ def _file_identity(path: Path) -> dict[str, Any]:
     }
 
 
-def _new_generation_name() -> str:
-    local_timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-    return f"{local_timestamp}-{secrets.token_hex(4)}"
-
-
 def orca_execution_provenance(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     """Return the durable execution identity attached to ORCA run artifacts."""
 
@@ -362,7 +359,7 @@ def _reserve_execution_generation(
     job_status = job_dir.stat()
     job_identity = (int(job_status.st_dev), int(job_status.st_ino))
     for _attempt in range(32):
-        generation_name = _new_generation_name()
+        generation_name = new_visible_generation_name()
         execution_dir = job_dir / generation_name
         try:
             create_snapshot_intent(

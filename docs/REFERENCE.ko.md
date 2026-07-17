@@ -186,7 +186,7 @@ orca:
   실행 경로
 - 내부 xTB/CREST 런타임은 각 워크플로우 범위로 한정됩니다.
 - 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은 오직
-  `<runs_root>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`, `03_orca`) 아래에만 저장됩니다.
+  `<runs_root>/<스캐폴드>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`, `03_orca`) 아래에만 저장됩니다.
 - `orca.paths.orca_executable`: ORCA 실행 경로
 
 참고:
@@ -229,7 +229,7 @@ orca_auto init
 ```bash
 cd <repo_root>
 orca_auto run-dir '/absolute/path/to/orca_runs/Int1_DMSO'
-orca_auto run-dir '/absolute/path/to/workflow_inputs/reaction_case'
+orca_auto run-dir '/absolute/path/to/orca_runs/reaction_case'
 orca_auto run-dir '/absolute/path/to/runs/water_md'
 ```
 
@@ -303,7 +303,12 @@ ORCA 고유 노트:
   아티팩트 경로를 일치시키기 위해 기존 워크플로우 디렉터리의 이름을 바꾸지 말고 새
   이름으로 새 워크플로우를 생성하세요.
 - `run-dir`는 대상 디렉터리에 `flow.yaml`이 있을 때만 워크플로우를 구체화합니다.
-- 대상에 이미 `workflow.json`이 있고 워크플로우가 실패했다면, `run-dir`는 새 워크플로우를
+- 각 실행은 제출한 스캐폴드 안에 타임스탬프 generation 디렉터리
+  (`YYYYMMDD-HHMMSS-<8자리 hex>`)를 만듭니다 — 단독 ORCA 실행과 같은 배치이며,
+  그 generation 이름이 `queue list`에 표시되고 `queue cancel`이 받는 워크플로우
+  ID입니다. 같은 스캐폴드에 `run-dir`를 다시 실행하면 이전 것 옆에 새 generation이
+  시작됩니다. 스캐폴드는 설정된 `runs_root` 바로 아래에 있어야 합니다.
+- 대상에 이미 `workflow.json`이 있다면(generation 디렉터리), `run-dir`는 새 워크플로우를
   만드는 대신 기존 작업공간에서 실패/취소된 단계를 다시 시작합니다.
 - 디렉터리가 원시 ORCA `*.inp` 파일과 스캐폴드 스타일 파일명을 섞어 두었지만
   `flow.yaml`은 포함하지 않으면, `run-dir`는 ORCA 직접 제출을 선호합니다.

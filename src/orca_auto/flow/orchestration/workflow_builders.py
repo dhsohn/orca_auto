@@ -11,9 +11,11 @@ from orca_auto.core.commands.run_dir import assert_run_dir_publication_allowed
 from orca_auto.core.engine_process import atomic_write_confined_bytes, ensure_confined_directory
 from orca_auto.core.paths.workflow import (
     WORKFLOW_FILE_NAME,
+    directory_is_workflow_scaffold,
     validate_workflow_id_path_segment,
 )
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
+from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.publication import current_process_start_token, process_start_token
 from orca_auto.core.utils import atomic_write_json
 from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory, load_json_mapping_file
@@ -181,26 +183,64 @@ def _persist_workflow(
     return payload
 
 
+def _resolved_workspace_parent(
+    workspace_parent: str | Path | None,
+    *,
+    workflow_root_path: Path,
+) -> Path:
+    """Validate the directory a new generation workspace is minted inside.
+
+    Workspaces mirror the standalone ORCA layout: a submitted scaffold
+    directory (a direct child of workflow_root) holds one generation
+    directory per run. Direct API submissions without a scaffold mint the
+    generation directly under workflow_root.
+    """
+
+    if workspace_parent is None:
+        return workflow_root_path
+    parent = Path(workspace_parent).expanduser().resolve()
+    if parent == workflow_root_path:
+        return parent
+    if parent.parent != workflow_root_path:
+        raise ValueError(
+            "workflow scaffold must be a direct child of workflow_root "
+            f"({workflow_root_path}); got: {parent}"
+        )
+    if not parent.is_dir() or parent.is_symlink():
+        raise ValueError(f"workflow scaffold is not a directory: {parent}")
+    if (parent / WORKFLOW_FILE_NAME).exists():
+        raise ValueError(f"workflow scaffold is already a workflow workspace: {parent}")
+    if not directory_is_workflow_scaffold(parent):
+        # Discovery and restart identify scaffold-hosted workspaces by the
+        # scaffold manifest; a parent without one would strand the workspace.
+        raise ValueError(f"workflow scaffold has no flow.yaml manifest: {parent}")
+    return parent
+
+
 def _workflow_workspace(
     *,
     workflow_id: str | None,
     workflow_root: str | Path,
-    default_id_prefix: str,
+    workspace_parent: str | Path | None,
     context: WorkflowCreationContext,
 ) -> _WorkflowWorkspace:
-    raw_workflow_id = str(workflow_id or "").strip() or context.workflow_id_factory(
-        default_id_prefix
-    )
+    raw_workflow_id = str(workflow_id or "").strip() or context.workflow_id_factory()
     resolved_workflow_id = _validate_workflow_id_path_segment(raw_workflow_id)
     workflow_root_path = Path(workflow_root).expanduser().resolve()
-    workspace_dir = (workflow_root_path / resolved_workflow_id).resolve()
+    durable_mkdir(workflow_root_path, parents=True, exist_ok=True)
+    parent_dir = _resolved_workspace_parent(workspace_parent, workflow_root_path=workflow_root_path)
+    if parent_dir != workflow_root_path and not is_visible_generation_name(resolved_workflow_id):
+        raise ValueError(
+            "a workflow workspace inside a scaffold must use a generation name "
+            f"(YYYYMMDD-HHMMSS-<8hex>); got: {resolved_workflow_id!r}"
+        )
+    workspace_dir = (parent_dir / resolved_workflow_id).resolve()
     try:
         workspace_dir.relative_to(workflow_root_path)
     except ValueError as exc:
         raise ValueError(
             f"workflow_id must resolve under workflow_root: {resolved_workflow_id!r}"
         ) from exc
-    durable_mkdir(workflow_root_path, parents=True, exist_ok=True)
     with acquire_workflow_create_lock(workflow_root_path):
         if workspace_dir.exists() and not (workspace_dir / WORKFLOW_FILE_NAME).exists():
             marker = load_json_mapping_file(workspace_dir / _CREATION_MARKER) or {}
@@ -214,11 +254,9 @@ def _workflow_workspace(
             )
             if marker and not owner_is_current and not workspace_dir.is_symlink():
                 shutil.rmtree(workspace_dir)
-                fsync_directory(workflow_root_path)
+                fsync_directory(parent_dir)
         _ensure_new_workflow_workspace(workspace_dir)
-        staging_dir = workflow_root_path / (
-            f".{resolved_workflow_id}.creating-{secrets.token_hex(12)}"
-        )
+        staging_dir = parent_dir / (f".{resolved_workflow_id}.creating-{secrets.token_hex(12)}")
         try:
             durable_mkdir(staging_dir, mode=0o700, exist_ok=False)
             atomic_write_json(
@@ -232,14 +270,14 @@ def _workflow_workspace(
                 indent=2,
             )
             staging_dir.rename(workspace_dir)
-            fsync_directory(workflow_root_path)
+            fsync_directory(parent_dir)
         except BaseException:
             if staging_dir.exists():
                 shutil.rmtree(staging_dir, ignore_errors=True)
-                fsync_directory(workflow_root_path)
+                fsync_directory(parent_dir)
             elif workspace_dir.exists() and not (workspace_dir / WORKFLOW_FILE_NAME).exists():
                 shutil.rmtree(workspace_dir, ignore_errors=True)
-                fsync_directory(workflow_root_path)
+                fsync_directory(parent_dir)
             raise
     return _WorkflowWorkspace(
         workflow_id=resolved_workflow_id,
@@ -261,7 +299,7 @@ def _cleanup_reserved_workflow_workspace(workspace: _WorkflowWorkspace) -> None:
     resolved_path = path.expanduser().resolve()
     if resolved_path.is_relative_to(resolved_root) and resolved_path != resolved_root:
         shutil.rmtree(resolved_path, ignore_errors=True)
-        fsync_directory(resolved_root)
+        fsync_directory(resolved_path.parent)
 
 
 def _validate_reaction_atom_sequence(

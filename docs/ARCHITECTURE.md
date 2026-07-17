@@ -351,8 +351,10 @@ into internal xTB/CREST stages and then batch ORCA child jobs.
 | `conformer_screening`  | `conformer_search` | Conformer generation + screening     |
 
 A workflow is materialized from a `flow.yaml` manifest (`flow/manifest.py`) in
-the submitted directory. `scaffold` writes a starter `flow.yaml` plus the
-standard XYZ filenames.
+the submitted directory: each run mints a timestamped generation workspace
+(`YYYYMMDD-HHMMSS-<8hex>`, also the workflow id) inside the scaffold, matching
+the standalone ORCA execution layout. `scaffold` writes a starter `flow.yaml`
+plus the standard XYZ filenames.
 
 Manifest admission is bounded before materialization: the shared loader caps a
 job manifest at 1 MiB, 32 YAML aliases, 10,000 parsed/expanded nodes, and 64

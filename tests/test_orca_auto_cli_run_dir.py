@@ -473,8 +473,8 @@ def test_cli_run_dir_rejects_workflow_namespace_replacement_before_payload_commi
 ) -> None:
     workflow_root = tmp_path / "workflow_root"
     workflow_root.mkdir()
-    input_dir = tmp_path / "workflow_input"
-    moved_input = tmp_path / "workflow_input_moved"
+    input_dir = workflow_root / "workflow_input"
+    moved_input = workflow_root / "workflow_input_moved"
     input_dir.mkdir()
     flow_payload = "\n".join(
         (
@@ -541,7 +541,11 @@ def test_cli_run_dir_rejects_workflow_namespace_replacement_before_payload_commi
     assert (moved_input / "input.xyz").read_text(encoding="utf-8") == original_xyz
     assert (input_dir / "input.xyz").read_text(encoding="utf-8") == replacement_xyz
     assert not (workflow_root / "workflow_registry.json").exists()
-    assert {path.name for path in workflow_root.iterdir()} <= {".workflow_create.lock"}
+    assert {path.name for path in workflow_root.iterdir()} <= {
+        ".workflow_create.lock",
+        "workflow_input",
+        "workflow_input_moved",
+    }
 
 
 def test_cmd_run_dir_rejects_alias_retarget_after_gate(

@@ -156,7 +156,7 @@ def _create_reaction_workflow_smoke_case(
         orca_executable=fake_orca,
     )
 
-    input_dir = smoke_workspace.root / "reaction_success_input"
+    input_dir = smoke_workspace.root / "workflow_root" / "reaction_success_input"
     reactant_xyz = input_dir / "reactant.xyz"
     product_xyz = input_dir / "product.xyz"
     _write_xyz(reactant_xyz, comment="reaction reactant", bond=0.74)
@@ -183,7 +183,8 @@ def _create_reaction_workflow_smoke_case(
     created = submit_public_workflow(input_dir, smoke_workspace.config_path, capsys)
     workflow_id = str(created["workflow_id"])
     workspace_dir = Path(created["metadata"]["workspace_dir"])
-    workflow_root = workspace_dir.parent
+    # The workspace is a generation directory inside the submitted scaffold.
+    workflow_root = smoke_workspace.root / "workflow_root"
     return ReactionWorkflowSmokeCase(
         workflow_root=workflow_root,
         workflow_id=workflow_id,
@@ -504,7 +505,7 @@ def test_reaction_ts_workflow_terminalizes_failed_xtb_handoff(
         encoding="utf-8",
     )
 
-    input_dir = smoke_workspace.root / "reaction_missing_ts_input"
+    input_dir = smoke_workspace.root / "workflow_root" / "reaction_missing_ts_input"
     _write_xyz(input_dir / "reactant.xyz", comment="missing ts reactant", bond=0.74)
     _write_xyz(input_dir / "product.xyz", comment="missing ts product", bond=0.82)
     (input_dir / "flow.yaml").write_text(

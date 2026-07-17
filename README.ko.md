@@ -203,12 +203,11 @@ trajectory/checkpoint 증거를 fail-closed합니다.
 orca_auto init
 
 # 도움이 될 때 원시 입력 스캐폴드 생성
-orca_auto scaffold ts_search '/home/user/workflow_inputs/rxn_001'
-orca_auto scaffold conformer_search '/home/user/workflow_inputs/conf_001'
+orca_auto scaffold ts_search '/home/user/orca_runs/rxn_001'
+orca_auto scaffold conformer_search '/home/user/orca_runs/conf_001'
 
 # 작업 제출
 orca_auto run-dir '/home/user/orca_runs/sample_rxn'
-orca_auto run-dir '/home/user/workflow_inputs/reaction_case'
 orca_auto run-dir '/home/user/runs/water_md'
 
 # 조회 및 유지보수

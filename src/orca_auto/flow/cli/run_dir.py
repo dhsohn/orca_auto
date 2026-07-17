@@ -4,7 +4,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.paths.workflow import validate_workflow_id_path_segment
+from orca_auto.core.paths.workflow import (
+    validate_workflow_id_path_segment,
+    workflow_root_for_workspace,
+)
 from orca_auto.core.utils.coercion import normalize_text
 
 from ..orchestration import (
@@ -66,53 +69,11 @@ _CONFORMER_RUN_DIR_WORKFLOW_SPEC = _RunDirWorkflowCreationSpec(
 )
 
 
-def _safe_workflow_name(value: Any, *, fallback: str) -> str:
-    cleaned = "".join(
-        ch if ch.isalnum() or ch in {"_", "-", "."} else "_" for ch in normalize_text(value)
-    )
-    cleaned = cleaned.strip("._-").lower()
-    return cleaned or fallback
-
-
-_RUN_DIR_WORKFLOW_ID_PREFIXES = {
-    "reaction_ts_search": "wf_reaction_ts",
-    "conformer_screening": "wf_conformer_screening",
-    "scan_ts_search": "wf_scan_ts",
-}
-
-
-def _preferred_run_dir_workflow_id(workflow_dir: Path, *, workflow_type: str) -> str:
-    stem = _safe_workflow_name(workflow_dir.name, fallback="workflow")
-    prefix = _RUN_DIR_WORKFLOW_ID_PREFIXES.get(workflow_type, "wf_conformer_screening")
-    if stem.startswith(prefix):
-        return stem
-    return f"{prefix}_{stem}"
-
-
-def _unique_run_dir_workflow_id(
-    workflow_dir: Path,
-    *,
-    workflow_root: str | Path,
-    workflow_type: str,
-) -> str:
-    # Workspace creation is atomic and rejects any pre-existing directory, so a
-    # scaffold that already sits directly under workflow_root must still get a
-    # fresh workspace name instead of reusing its own.
-    workflow_root_path = Path(workflow_root).expanduser().resolve()
-    preferred = _preferred_run_dir_workflow_id(workflow_dir, workflow_type=workflow_type)
-    candidate = preferred
-    suffix = 2
-    while (workflow_root_path / candidate).exists():
-        candidate = f"{preferred}_{suffix:02d}"
-        suffix += 1
-    return candidate
-
-
 def _workflow_root_for_existing_run_dir(args: Any, workflow_dir: Path) -> Path:
     raw_root = normalize_text(getattr(args, "workflow_root", None))
     if raw_root:
         return Path(raw_root).expanduser().resolve()
-    return workflow_dir.parent
+    return workflow_root_for_workspace(workflow_dir)
 
 
 def _update_present_kwargs(kwargs: dict[str, Any], values: dict[str, Any]) -> None:
@@ -159,6 +120,11 @@ def _run_dir_workflow_kwargs(
 ) -> dict[str, Any]:
     workflow_kwargs = _run_dir_required_input_kwargs(config, spec)
     workflow_root = _run_dir_options._resolve_required_workflow_root(args, config.manifest)
+    if config.workflow_dir == Path(workflow_root).expanduser().resolve():
+        raise ValueError(
+            "run-dir workflow scaffold cannot be the workflow_root itself; "
+            "create the scaffold as a subdirectory of workflow_root"
+        )
     options, common_kwargs = _run_dir_options._resolve_run_dir_workflow_option_bundle(
         args,
         config.manifest,
@@ -171,11 +137,9 @@ def _run_dir_workflow_kwargs(
 
     workflow_kwargs.update(
         {
-            "workflow_id": _unique_run_dir_workflow_id(
-                config.workflow_dir,
-                workflow_root=workflow_root,
-                workflow_type=config.workflow_type,
-            ),
+            # The workflow id is a fresh generation name minted by the
+            # factory; the scaffold hosts the generation workspace inside it.
+            "scaffold_dir": str(config.workflow_dir),
             **common_kwargs,
         }
     )

@@ -10,6 +10,7 @@ from orca_auto.core.paths.workflow import (
     WORKFLOW_STAGE_DIRNAME_ALIASES,
     WORKFLOW_STAGE_DIRNAMES,
     iter_workflow_runtime_workspaces,
+    iter_workflow_workspace_candidate_dirs,
     workflow_root_dir,
     workflow_stage_dirnames_for_engine,
     workflow_workspace_internal_engine_paths,
@@ -66,6 +67,16 @@ def resolve_workflow_workspace(*, target: str, workflow_root: str | Path | None 
         parent = _workflow_parent_dir(candidate)
         if parent.is_dir():
             return parent
+
+    # A bare workflow id names a generation workspace nested inside its
+    # scaffold directory; find it by workspace name.
+    matches = [
+        workspace for workspace in iter_workflow_workspaces(root) if workspace.name == raw_target
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError(f"workflow target is ambiguous across workspaces: {target}")
     raise FileNotFoundError(f"workflow not found: {target}")
 
 
@@ -114,7 +125,9 @@ def iter_workflow_workspaces(workflow_root: str | Path) -> list[Path]:
     if not root.exists():
         return []
     candidates = [
-        item for item in root.iterdir() if item.is_dir() and (item / WORKFLOW_FILE_NAME).exists()
+        item
+        for item in iter_workflow_workspace_candidate_dirs(root)
+        if (item / WORKFLOW_FILE_NAME).exists()
     ]
     return sorted(candidates, key=lambda item: item.name, reverse=True)
 

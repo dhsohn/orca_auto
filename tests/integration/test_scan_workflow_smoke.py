@@ -36,7 +36,7 @@ def _public_scan_case(
     fake_orca = smoke_workspace.root / "bin" / f"fake_orca_scan_{scan_profile}"
     write_fake_orca(fake_orca, scan_profile=scan_profile)
     configure_fake_orca(smoke_workspace.config_path, fake_orca)
-    input_dir = smoke_workspace.root / f"scan_{scan_profile}_input"
+    input_dir = smoke_workspace.root / "workflow_root" / f"scan_{scan_profile}_input"
     write_h2(input_dir / "input.xyz", comment=f"scan {scan_profile}")
     (input_dir / "flow.yaml").write_text(
         "\n".join(

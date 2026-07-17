@@ -5,7 +5,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
-from orca_auto.core.utils import now_utc_iso, timestamped_token
+from orca_auto.core.queue.generation import new_visible_generation_name
+from orca_auto.core.utils import now_utc_iso
 from orca_auto.flow.endpoint_pairing import (
     EndpointPairingPolicy,
     validate_endpoint_pairing_atom_budget,
@@ -45,7 +46,7 @@ from orca_auto.orca.report.interaction_energy import (
 @dataclass(frozen=True)
 class WorkflowFactoryDeps:
     normalize_text: Callable[[Any], str]
-    workflow_id_factory: Callable[[str], str] = timestamped_token
+    workflow_id_factory: Callable[[], str] = new_visible_generation_name
     copy_input_fn: Callable[[str, Path], str] = _copy_input_impl
     now_utc_iso_fn: Callable[[], str] = now_utc_iso
     new_crest_stage_fn: NewCrestStageFactory = new_crest_stage_impl

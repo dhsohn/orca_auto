@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.utils import normalize_text, now_utc_iso, timestamped_token
+from orca_auto.core.queue.generation import new_visible_generation_name
+from orca_auto.core.utils import normalize_text, now_utc_iso
 from orca_auto.flow.registry import sync_workflow_registry
 from orca_auto.flow.state import write_workflow_payload
 from orca_auto.flow.xyz_utils import load_xyz_atom_sequence
@@ -33,7 +34,7 @@ from .workflow_builders import _copy_input_impl
 def _workflow_factory_deps() -> WorkflowFactoryDeps:
     return WorkflowFactoryDeps(
         normalize_text=normalize_text,
-        workflow_id_factory=timestamped_token,
+        workflow_id_factory=new_visible_generation_name,
         copy_input_fn=_copy_input_impl,
         now_utc_iso_fn=now_utc_iso,
         new_crest_stage_fn=new_crest_stage_impl,
@@ -67,6 +68,7 @@ def create_reaction_ts_search_workflow(
     product_xyz: str,
     workflow_root: str | Path,
     workflow_id: str | None = None,
+    scaffold_dir: str | Path | None = None,
     crest_mode: str = "standard",
     priority: int = 10,
     max_cores: int = 8,
@@ -90,6 +92,7 @@ def create_reaction_ts_search_workflow(
             product_xyz=product_xyz,
             workflow_root=workflow_root,
             workflow_id=workflow_id,
+            scaffold_dir=scaffold_dir,
             crest_mode=crest_mode,
             priority=priority,
             max_cores=max_cores,
@@ -125,6 +128,7 @@ def create_scan_ts_search_workflow(
     scan_coordinate: str,
     workflow_root: str | Path,
     workflow_id: str | None = None,
+    scaffold_dir: str | Path | None = None,
     priority: int = 10,
     max_cores: int = 8,
     max_memory_gb: int = 32,
@@ -142,6 +146,7 @@ def create_scan_ts_search_workflow(
             scan_coordinate=scan_coordinate,
             workflow_root=workflow_root,
             workflow_id=workflow_id,
+            scaffold_dir=scaffold_dir,
             priority=priority,
             max_cores=max_cores,
             max_memory_gb=max_memory_gb,
@@ -161,6 +166,7 @@ def create_conformer_screening_workflow(
     input_xyz: str,
     workflow_root: str | Path,
     workflow_id: str | None = None,
+    scaffold_dir: str | Path | None = None,
     crest_mode: str = "standard",
     priority: int = 10,
     max_cores: int = 8,
@@ -179,6 +185,7 @@ def create_conformer_screening_workflow(
             input_xyz=input_xyz,
             workflow_root=workflow_root,
             workflow_id=workflow_id,
+            scaffold_dir=scaffold_dir,
             crest_mode=crest_mode,
             priority=priority,
             max_cores=max_cores,

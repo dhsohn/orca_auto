@@ -39,7 +39,7 @@ def create_reaction_ts_search_workflow_impl(
     workspace = _workflow_workspace(
         workflow_id=request.workflow_id,
         workflow_root=request.workflow_root,
-        default_id_prefix="wf_reaction_ts",
+        workspace_parent=request.scaffold_dir,
         context=context,
     )
     try:
@@ -76,7 +76,7 @@ def create_conformer_screening_workflow_impl(
     workspace = _workflow_workspace(
         workflow_id=request.workflow_id,
         workflow_root=request.workflow_root,
-        default_id_prefix="wf_conformer_screening",
+        workspace_parent=request.scaffold_dir,
         context=context,
     )
     try:
@@ -102,7 +102,7 @@ def create_scan_ts_search_workflow_impl(
     workspace = _workflow_workspace(
         workflow_id=request.workflow_id,
         workflow_root=request.workflow_root,
-        default_id_prefix="wf_scan_ts",
+        workspace_parent=request.scaffold_dir,
         context=context,
     )
     try:

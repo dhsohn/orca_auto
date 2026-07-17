@@ -273,7 +273,7 @@ def _public_conformer_case(
     fake_orca = smoke_workspace.root / "bin" / f"fake_orca_{orca_mode}"
     write_fake_orca(fake_orca, mode=orca_mode)
     configure_fake_orca(smoke_workspace.config_path, fake_orca)
-    input_dir = smoke_workspace.root / f"conformer_{orca_mode}_input"
+    input_dir = smoke_workspace.root / "workflow_root" / f"conformer_{orca_mode}_input"
     write_h2(input_dir / "input.xyz", comment=f"conformer {orca_mode}")
     (input_dir / "flow.yaml").write_text(
         "\n".join(

@@ -36,7 +36,7 @@ def _workflow_context(
     sync_workflow_registry_fn: Any | None = None,
 ) -> WorkflowCreationContext:
     return WorkflowCreationContext(
-        workflow_id_factory=workflow_id_factory or (lambda prefix: f"{prefix}_generated"),
+        workflow_id_factory=workflow_id_factory or (lambda: "wf_demo_generated"),
         copy_input_fn=copy_input_fn or (lambda source, target: str(target)),
         now_utc_iso_fn=lambda: "2026-05-29T00:00:00+00:00",
         new_crest_stage_fn=lambda **_kwargs: cast(Any, {}),
@@ -63,7 +63,7 @@ def test_workflow_workspace_generates_id_and_requested_at(tmp_path: Path) -> Non
     workspace = _workflow_workspace(
         workflow_id="   ",
         workflow_root=tmp_path / "workflows",
-        default_id_prefix="wf_demo",
+        workspace_parent=None,
         context=_workflow_context(),
     )
 
@@ -92,7 +92,7 @@ def test_workflow_workspace_rejects_unsafe_workflow_id(
         _workflow_workspace(
             workflow_id=workflow_id,
             workflow_root=tmp_path / "workflows",
-            default_id_prefix="wf_demo",
+            workspace_parent=None,
             context=_workflow_context(),
         )
 
@@ -102,8 +102,8 @@ def test_workflow_workspace_rejects_unsafe_generated_workflow_id(tmp_path: Path)
         _workflow_workspace(
             workflow_id=None,
             workflow_root=tmp_path / "workflows",
-            default_id_prefix="wf_demo",
-            context=_workflow_context(workflow_id_factory=lambda _prefix: "../generated"),
+            workspace_parent=None,
+            context=_workflow_context(workflow_id_factory=lambda: "../generated"),
         )
 
 
@@ -116,7 +116,7 @@ def test_workflow_workspace_rejects_parenthesized_workflow_id(
         _workflow_workspace(
             workflow_id=workflow_id,
             workflow_root=tmp_path / "workflows",
-            default_id_prefix="wf_demo",
+            workspace_parent=None,
             context=_workflow_context(),
         )
 
@@ -133,7 +133,7 @@ def test_workflow_workspace_rejects_existing_workflow_payload(tmp_path: Path) ->
         _workflow_workspace(
             workflow_id="wf_existing",
             workflow_root=tmp_path / "workflows",
-            default_id_prefix="wf_demo",
+            workspace_parent=None,
             context=_workflow_context(),
         )
 
@@ -146,7 +146,7 @@ def test_workflow_workspace_rejects_existing_scaffold_without_payload(tmp_path: 
         _workflow_workspace(
             workflow_id="rxn.case-01",
             workflow_root=tmp_path / "workflows",
-            default_id_prefix="wf_demo",
+            workspace_parent=None,
             context=_workflow_context(),
         )
 
@@ -164,7 +164,7 @@ def test_workflow_workspace_reclaims_stale_owned_reservation(tmp_path: Path) -> 
     workspace = _workflow_workspace(
         workflow_id="wf_stale",
         workflow_root=workflow_root,
-        default_id_prefix="wf_demo",
+        workspace_parent=None,
         context=_workflow_context(),
     )
 
@@ -178,7 +178,7 @@ def test_workflow_workspace_rejects_second_live_reservation(tmp_path: Path) -> N
     _workflow_workspace(
         workflow_id="wf_live",
         workflow_root=workflow_root,
-        default_id_prefix="wf_demo",
+        workspace_parent=None,
         context=_workflow_context(),
     )
 
@@ -186,7 +186,7 @@ def test_workflow_workspace_rejects_second_live_reservation(tmp_path: Path) -> N
         _workflow_workspace(
             workflow_id="wf_live",
             workflow_root=workflow_root,
-            default_id_prefix="wf_demo",
+            workspace_parent=None,
             context=_workflow_context(),
         )
 
@@ -210,7 +210,7 @@ def test_workflow_workspace_cleans_staging_when_durable_mkdir_fails(
         _workflow_workspace(
             workflow_id="wf_fsync",
             workflow_root=workflow_root,
-            default_id_prefix="wf_demo",
+            workspace_parent=None,
             context=_workflow_context(),
         )
 

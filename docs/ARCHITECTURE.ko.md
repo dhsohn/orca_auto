@@ -337,8 +337,10 @@ ORCA가 다운스트림에 노출하는 필드("계약 동결")는
 | `conformer_screening`  | `conformer_search` | 컨포머 생성 + 스크리닝               |
 
 워크플로우는 제출된 디렉터리의 `flow.yaml` 매니페스트(`flow/manifest.py`)로부터
-구체화(materialize)됩니다. `scaffold`는 시작용 `flow.yaml`과 표준 XYZ 파일명을
-작성합니다.
+구체화(materialize)됩니다. 실행마다 스캐폴드 안에 타임스탬프 generation
+워크스페이스(`YYYYMMDD-HHMMSS-<8hex>`, 워크플로우 ID이기도 함)를 만들며, 이는
+단독 ORCA 실행과 같은 배치입니다. `scaffold`는 시작용 `flow.yaml`과 표준 XYZ
+파일명을 작성합니다.
 
 구체화 전에 manifest admission을 제한합니다. 공용 loader는 작업 manifest 하나를 1 MiB,
 YAML alias 32개, 파싱/확장 node 10,000개, 중첩 64단계로 제한하고 순환/재귀 graph를

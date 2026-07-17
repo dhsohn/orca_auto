@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import secrets
+from datetime import datetime
 from typing import Any
 
 from .types import QueueEntry
@@ -14,6 +16,17 @@ def is_visible_generation_name(value: str) -> bool:
     """Return whether *value* is an exact user-visible execution generation name."""
 
     return bool(VISIBLE_GENERATION_NAME_RE.fullmatch(str(value)))
+
+
+def new_visible_generation_name() -> str:
+    """Mint a fresh user-visible generation name (`YYYYMMDD-HHMMSS-<8hex>`).
+
+    The one shared factory behind ORCA execution generations and workflow
+    workspace generations, so both always match VISIBLE_GENERATION_NAME_RE.
+    """
+
+    local_timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    return f"{local_timestamp}-{secrets.token_hex(4)}"
 
 
 # Metadata is generation identity by default. Only server-owned lifecycle/result
@@ -75,6 +88,7 @@ __all__ = [
     "VISIBLE_GENERATION_NAME_RE",
     "immutable_generation_metadata",
     "is_visible_generation_name",
+    "new_visible_generation_name",
     "queue_entries_same_generation",
     "queue_entry_generation_token",
 ]

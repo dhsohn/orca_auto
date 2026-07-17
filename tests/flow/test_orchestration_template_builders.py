@@ -38,7 +38,7 @@ def _context(stage_calls: list[dict[str, Any]]) -> WorkflowCreationContext:
         )
 
     return WorkflowCreationContext(
-        workflow_id_factory=lambda prefix: f"{prefix}_generated",
+        workflow_id_factory=lambda: "wf_demo_generated",
         copy_input_fn=lambda source, target: str(target),
         now_utc_iso_fn=lambda: "2026-05-29T00:00:00+00:00",
         new_crest_stage_fn=new_crest_stage,
