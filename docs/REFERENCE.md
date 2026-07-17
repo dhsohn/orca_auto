@@ -181,7 +181,7 @@ Field descriptions:
 - `workflow.paths.xtb_executable`: xTB executable path used by standalone xTB-MD and workflow-managed internal stages
 - `workflow.paths.crest_executable`: CREST executable path used by workflow-managed internal stages
 - Internal xTB/CREST runtimes are scoped to each workflow
-- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under `<runs_root>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`)
+- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under the generation workspace `<runs_root>/<scaffold>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`)
 - `orca.paths.orca_executable`: ORCA executable path
 
 Notes:
@@ -225,7 +225,7 @@ Behavior:
 ```bash
 cd <repo_root>
 orca_auto run-dir '/absolute/path/to/orca_runs/Int1_DMSO'
-orca_auto run-dir '/absolute/path/to/workflow_inputs/reaction_case'
+orca_auto run-dir '/absolute/path/to/orca_runs/reaction_case'
 orca_auto run-dir '/absolute/path/to/runs/water_md'
 ```
 
@@ -304,7 +304,13 @@ Workflow notes:
   existing workflow directory; create a new workflow under the new name so the
   persisted ID and artifact paths stay consistent.
 - `run-dir` materializes a workflow only when `flow.yaml` is present in the target directory
-- If the target already contains `workflow.json` and the workflow failed, `run-dir` restarts failed/cancelled stages in that existing workspace instead of creating a new workflow
+- Each run creates a timestamped generation directory (`YYYYMMDD-HHMMSS-<8hex>`)
+  inside the submitted scaffold — the same layout standalone ORCA executions
+  use — and that generation name is the workflow id shown by `queue list` and
+  accepted by `queue cancel`. Re-running `run-dir` on the same scaffold starts
+  a fresh generation next to the previous ones. The scaffold must sit directly
+  under the configured `runs_root`.
+- If the target already contains `workflow.json` (a generation directory), `run-dir` restarts failed/cancelled stages in that existing workspace instead of creating a new workflow
 - If a directory mixes raw ORCA `*.inp` files with scaffold-style filenames but does not include `flow.yaml`, `run-dir` prefers ORCA direct submission
 - reaction-path and conformer workflows create and submit xTB/CREST stages internally
 - `reaction_ts_search` orders the selected reactant × product CREST pairs

@@ -6,7 +6,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
+from orca_auto.core.paths.workflow import (
+    validate_workflow_workspace_identity,
+    workflow_root_for_workspace,
+)
 from orca_auto.core.statuses import STATUS_CANCELLED
 from orca_auto.core.utils import normalize_text as _normalize_text
 
@@ -98,12 +101,9 @@ def _restart_paths(
     workflow_root: str | Path | None,
 ) -> tuple[Path, Path]:
     workspace = Path(workspace_dir).expanduser().resolve()
-    root = (
-        Path(workflow_root).expanduser().resolve()
-        if workflow_root is not None
-        else workspace.parent
-    )
-    return workspace, root
+    if workflow_root is not None:
+        return workspace, Path(workflow_root).expanduser().resolve()
+    return workspace, workflow_root_for_workspace(workspace)
 
 
 def _validate_restart_request(

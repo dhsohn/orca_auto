@@ -202,12 +202,11 @@ User-facing submission, inspection, and maintenance commands use `orca_auto ...`
 orca_auto init
 
 # create raw input scaffolds when they help
-orca_auto scaffold ts_search '/home/user/workflow_inputs/rxn_001'
-orca_auto scaffold conformer_search '/home/user/workflow_inputs/conf_001'
+orca_auto scaffold ts_search '/home/user/orca_runs/rxn_001'
+orca_auto scaffold conformer_search '/home/user/orca_runs/conf_001'
 
 # submit work
 orca_auto run-dir '/home/user/orca_runs/sample_rxn'
-orca_auto run-dir '/home/user/workflow_inputs/reaction_case'
 orca_auto run-dir '/home/user/runs/water_md'
 
 # inspect and maintain

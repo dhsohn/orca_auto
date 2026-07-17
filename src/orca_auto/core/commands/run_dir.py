@@ -13,9 +13,9 @@ from orca_auto.core.paths import (
     is_path_in_reserved_smoke_tree,
     validate_job_dir,
 )
+from orca_auto.core.paths.smoke import relative_reaches_reserved_generation
 from orca_auto.core.paths.workflow import workflow_workspace_internal_engine_paths_from_path
 from orca_auto.core.queue.generation import (
-    is_visible_generation_name,
     queue_entry_generation_token,
 )
 from orca_auto.core.queue.priority import normalize_queue_priority
@@ -73,16 +73,14 @@ def validate_production_run_dir_target(
             "run-dir target is inside the reserved smoke-results subtree: "
             f"{reserved_root}. Smoke cases must use their case-local runs_root configuration."
         )
+    resolved_root = Path(runs_root).expanduser().resolve()
     try:
-        relative = (
-            Path(raw_job_dir)
-            .expanduser()
-            .resolve()
-            .relative_to(Path(runs_root).expanduser().resolve())
-        )
+        relative = Path(raw_job_dir).expanduser().resolve().relative_to(resolved_root)
     except (OSError, RuntimeError, ValueError):
         return
-    if any(is_visible_generation_name(component) for component in relative.parts):
+    # Workflow workspaces share the generation name shape but are valid
+    # run-dir targets (restart); ORCA execution generations are not.
+    if relative_reaches_reserved_generation(resolved_root, relative):
         raise ValueError(
             "run-dir target is inside an ORCA execution generation; submit its public parent "
             f"job directory instead: {raw_job_dir}"

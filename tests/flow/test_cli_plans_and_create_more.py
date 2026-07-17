@@ -94,7 +94,7 @@ def test_cmd_run_dir_reads_manifest_for_reaction_workflow(
     assert captured == {
         "reactant_xyz": str((workflow_dir / "reactant.xyz").resolve()),
         "product_xyz": str((workflow_dir / "product.xyz").resolve()),
-        "workflow_id": "wf_reaction_ts_reaction_job",
+        "scaffold_dir": str(workflow_dir.resolve()),
         "workflow_root": "/tmp/workflow_root",
         "crest_mode": "standard",
         "priority": 10,
@@ -176,7 +176,7 @@ def test_cmd_run_dir_reads_manifest_for_conformer_workflow(
     assert payload["workflow_id"] == "wf_create_conformer_screening"
     assert captured == {
         "input_xyz": str((workflow_dir / "input.xyz").resolve()),
-        "workflow_id": "wf_conformer_screening_conformer_job",
+        "scaffold_dir": str(workflow_dir.resolve()),
         "workflow_root": str(workflow_root.resolve()),
         "crest_mode": "nci",
         "priority": 7,
@@ -330,7 +330,7 @@ def _run_dir_args(workflow_dir: Path) -> SimpleNamespace:
     )
 
 
-def test_cmd_run_dir_mints_fresh_prefixed_id_for_direct_child_scaffold(
+def test_cmd_run_dir_passes_scaffold_dir_for_generation_workspace(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -351,18 +351,21 @@ def test_cmd_run_dir_mints_fresh_prefixed_id_for_direct_child_scaffold(
 
     assert cli_run_dir.cmd_run_dir(_run_dir_args(workflow_dir)) == 0
     assert "workflow_id: wf_create_reaction_ts_search" in capsys.readouterr().out
-    # Reusing the scaffold's own name would collide with the scaffold directory
-    # inside workspace creation, which rejects any pre-existing path.
-    assert captured["workflow_id"] == "wf_reaction_ts_rxn_case"
+    # The scaffold hosts the generation workspace; the id is factory-minted.
+    assert captured["scaffold_dir"] == str(workflow_dir.resolve())
+    assert "workflow_id" not in captured
 
 
-def test_cmd_run_dir_materializes_scaffold_directly_under_workflow_root(
+def test_cmd_run_dir_materializes_generation_workspace_inside_scaffold(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Regression: the real creation path must succeed for a scaffold that
-    already sits under workflow_root (no mocked workflow factory)."""
+    """Regression: the real creation path must mint a generation workspace
+    inside the submitted scaffold (no mocked workflow factory), mirroring
+    standalone ORCA executions."""
+
+    from orca_auto.core.queue.generation import is_visible_generation_name
 
     workflow_root = tmp_path / "workflow_root"
     workflow_dir = workflow_root / "rxn_case"
@@ -373,16 +376,32 @@ def test_cmd_run_dir_materializes_scaffold_directly_under_workflow_root(
     )
 
     assert cli_run_dir.cmd_run_dir(_run_dir_args(workflow_dir)) == 0
-    assert "workflow_id: wf_reaction_ts_rxn_case" in capsys.readouterr().out
+    stdout = capsys.readouterr().out
 
-    workspace_dir = workflow_root / "wf_reaction_ts_rxn_case"
+    generations = [
+        item
+        for item in workflow_dir.iterdir()
+        if item.is_dir() and is_visible_generation_name(item.name)
+    ]
+    assert len(generations) == 1
+    workspace_dir = generations[0]
     assert (workspace_dir / "workflow.json").is_file()
-    # The scaffold stays untouched as user-owned input material.
-    assert sorted(item.name for item in workflow_dir.iterdir()) == [
+    assert f"workflow_id: {workspace_dir.name}" in stdout
+    # The scaffold inputs stay untouched next to the generation workspace.
+    assert sorted(item.name for item in workflow_dir.iterdir() if item.is_file()) == [
         "flow.yaml",
         "product.xyz",
         "reactant.xyz",
     ]
+
+    # A second run mints a sibling generation instead of failing.
+    assert cli_run_dir.cmd_run_dir(_run_dir_args(workflow_dir)) == 0
+    generations_after = [
+        item
+        for item in workflow_dir.iterdir()
+        if item.is_dir() and is_visible_generation_name(item.name)
+    ]
+    assert len(generations_after) == 2
 
 
 def test_cmd_run_dir_rejects_parenthesized_workflow_name_before_creation(

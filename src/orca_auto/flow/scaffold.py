@@ -279,7 +279,9 @@ def _readme(root: Path, workflow_type: str) -> str:
             f"This directory was created for `orca_auto scaffold {shortcut_name} {root_text}`.",
             "",
             *lines,
-            "- Then materialize it with `orca_auto run-dir <path>`.",
+            "- Then materialize it with `orca_auto run-dir <path>`. Each run creates a "
+            "timestamped generation directory in this folder (like standalone ORCA jobs) "
+            "holding that run's workflow state and results.",
             "",
         ]
     )

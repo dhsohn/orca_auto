@@ -956,7 +956,7 @@ def test_upsert_rejects_unvalidated_direct_workspace_identity(
     registry_store._save_records(tmp_path, [expected])
     tampered = replace(expected, workflow_id="wf_tampered", status="cancelled")
 
-    with pytest.raises(ValueError, match="does not match direct workspace name"):
+    with pytest.raises(ValueError, match="does not match workspace name"):
         registry.upsert_workflow_registry_record(tmp_path, tampered)
 
     assert registry.list_workflow_registry(tmp_path, reindex_if_missing=False) == [expected]

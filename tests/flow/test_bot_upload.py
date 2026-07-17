@@ -21,6 +21,7 @@ from orca_auto.core.messaging.interactive import (
     IncomingAction,
     IncomingUpload,
 )
+from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.flow.bot import ActionRegistry, BotApplication, BotSettings, remote_admission
 from orca_auto.flow.bot.application import SubmissionReceipt
 
@@ -894,9 +895,16 @@ def test_confirm_submits_workflow_upload_through_real_creation_path(tmp_path: Pa
     status = app.dispatch_action(action, messenger=messenger)
 
     assert status == "run-submitted"
-    assert "wf_conformer_screening_conf_case" in messenger.replies[-1].text
-    workspace_dir = tmp_path / "wf_conformer_screening_conf_case"
+    published_dir = tmp_path / "conf_case"
+    generations = [
+        item
+        for item in published_dir.iterdir()
+        if item.is_dir() and is_visible_generation_name(item.name)
+    ]
+    assert len(generations) == 1
+    workspace_dir = generations[0]
     assert (workspace_dir / "workflow.json").is_file()
+    assert workspace_dir.name in messenger.replies[-1].text
 
 
 def test_confirm_rejects_standalone_orca_resources_above_server_cap(tmp_path: Path) -> None:
@@ -1497,6 +1505,10 @@ def _write_workspace_payload(
     )
 
 
+def _fresh_generation_names(count: int) -> list[str]:
+    return [f"20260717-08000{index}-{index:08x}" for index in range(count)]
+
+
 def _workflow_job_dir(tmp_path: Path) -> Path:
     job_dir = tmp_path / "flow_job"
     job_dir.mkdir()
@@ -1536,9 +1548,15 @@ def test_workflow_postcommit_exception_returns_committed_receipt(
     receipt = app._submit_extracted_run_dir(job_dir, run_dir_kind="workflow")
 
     assert receipt.committed is True
-    assert receipt.submission_id == "wf_conformer_screening_flow_job"
     assert "registry sync failed" in receipt.detail
-    workspace_dir = tmp_path / "wf_conformer_screening_flow_job"
+    generations = [
+        item
+        for item in job_dir.iterdir()
+        if item.is_dir() and is_visible_generation_name(item.name)
+    ]
+    assert len(generations) == 1
+    workspace_dir = generations[0]
+    assert receipt.submission_id == workspace_dir.name
     assert (workspace_dir / "workflow.json").is_file()
 
 
@@ -1574,12 +1592,9 @@ def test_workflow_exception_with_two_matching_workspaces_is_uncertain(
 
     def _raise_after_double_persist(args: Any, submitted_dir: Path) -> dict[str, object]:
         del args
-        for workflow_id in (
-            "wf_conformer_screening_flow_job",
-            "wf_conformer_screening_flow_job_02",
-        ):
+        for workflow_id in _fresh_generation_names(2):
             _write_workspace_payload(
-                tmp_path / workflow_id,
+                submitted_dir / workflow_id,
                 workflow_id,
                 submitted_dir / "input.xyz",
             )
@@ -1592,23 +1607,22 @@ def test_workflow_exception_with_two_matching_workspaces_is_uncertain(
     assert receipt.committed is None
 
 
-def test_workflow_precommit_exception_ignores_stale_matching_workspace(
+def test_workflow_precommit_exception_ignores_unrelated_root_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A workflow left over from an earlier occupant of the same published
-    path (old requested_at) must not be claimed as this submission's commit:
-    the pre-commit failure stays a definite failure."""
+    """A workspace elsewhere under runs_root must never be claimed as this
+    submission's commit: only a generation inside the published dir counts,
+    so the pre-commit failure stays a definite failure."""
 
     from orca_auto.flow.cli import run_dir as workflow_run_dir
 
     job_dir = _workflow_job_dir(tmp_path)
     app = _app(tmp_path)
     _write_workspace_payload(
-        tmp_path / "wf_conformer_screening_flow_job",
-        "wf_conformer_screening_flow_job",
+        tmp_path / _fresh_generation_names(1)[0],
+        _fresh_generation_names(1)[0],
         job_dir / "input.xyz",
-        requested_at="2020-01-01T00:00:00+00:00",
     )
 
     def _raise_before_persist(args: Any, submitted_dir: Path) -> dict[str, object]:

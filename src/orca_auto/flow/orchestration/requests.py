@@ -30,6 +30,7 @@ class ReactionTsSearchWorkflowRequest:
     endpoint_pairing: dict[str, Any] | None = None
     source_job_id: str = ""
     source_job_type: str = ""
+    scaffold_dir: str | Path | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ class ConformerScreeningWorkflowRequest:
     boltzmann_temperature_k: float | None = None
     interaction_energy: dict[str, Any] | None = None
     rmsd_dedup: dict[str, Any] | None = None
+    scaffold_dir: str | Path | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,7 @@ class ScanTsSearchWorkflowRequest:
     barrier_threshold_kcal: float = 0.5
     charge: int = 0
     multiplicity: int = 1
+    scaffold_dir: str | Path | None = None
 
 
 class NewCrestStageFactory(Protocol):
@@ -88,7 +91,7 @@ class NewCrestStageFactory(Protocol):
 
 @dataclass(frozen=True)
 class WorkflowCreationContext:
-    workflow_id_factory: Callable[[str], str]
+    workflow_id_factory: Callable[[], str]
     copy_input_fn: Callable[[str, Path], str]
     now_utc_iso_fn: Callable[[], str]
     new_crest_stage_fn: NewCrestStageFactory

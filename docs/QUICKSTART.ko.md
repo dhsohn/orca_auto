@@ -52,7 +52,6 @@ orca_auto service restart
 
 ```bash
 orca_auto run-dir '/home/user/orca_runs/sample_rxn'
-orca_auto run-dir '/home/user/workflow_inputs/reaction_case'
 ```
 
 `run-dir`는 작업을 내구성 있게 큐에 넣습니다. 큐 제출이 성공한 뒤 터미널을 닫아도

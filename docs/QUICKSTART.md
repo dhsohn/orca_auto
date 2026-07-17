@@ -50,7 +50,6 @@ it restarts the queue worker.
 
 ```bash
 orca_auto run-dir '/home/user/orca_runs/sample_rxn'
-orca_auto run-dir '/home/user/workflow_inputs/reaction_case'
 ```
 
 `run-dir` queues work durably. Closing the terminal after a successful queue

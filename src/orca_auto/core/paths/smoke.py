@@ -4,6 +4,7 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
+from orca_auto.core.paths.workflow import directory_is_workflow_scaffold
 from orca_auto.core.queue.generation import is_visible_generation_name
 
 SMOKE_RESULTS_DIRNAME = ".orca_auto_smoke"
@@ -57,11 +58,32 @@ def _relative_is_reserved(relative: Path | None) -> bool:
     )
 
 
-def _relative_is_visible_generation(relative: Path | None) -> bool:
-    return bool(
-        relative is not None
-        and any(is_visible_generation_name(component) for component in relative.parts)
-    )
+def relative_reaches_reserved_generation(root: Path, relative: Path | None) -> bool:
+    """True when *relative* (under *root*) crosses an ORCA execution generation.
+
+    Workflow workspaces share the generation name shape but carry a
+    ``workflow.json`` and sit either directly under root (direct API
+    submissions) or inside a scaffold (``flow.yaml``); those are legitimate
+    scan/submission surfaces. Every other generation-named component —
+    including execution generations inside standalone ORCA job dirs or
+    inside a workspace's stage job dirs — stays reserved, even if a
+    ``workflow.json`` file was planted there.
+    """
+
+    if relative is None:
+        return False
+    current = root
+    for component in relative.parts:
+        parent = current
+        current = current / component
+        if not is_visible_generation_name(component):
+            continue
+        is_workspace = (current / "workflow.json").is_file() and (
+            parent == root or directory_is_workflow_scaffold(parent)
+        )
+        if not is_workspace:
+            return True
+    return False
 
 
 def is_path_in_reserved_smoke_tree(path: str | Path, runs_root: str | Path) -> bool:
@@ -112,11 +134,13 @@ def should_exclude_from_production_runs_scan(
         lexical_root = _lexical_absolute(runs_root, label="runs_root")
         lexical_path = _lexical_absolute(path, label="path")
         lexical_relative = _relative_if_inside(lexical_path, lexical_root)
-        if _relative_is_visible_generation(lexical_relative):
+        if relative_reaches_reserved_generation(lexical_root, lexical_relative):
             return True
         resolved_root = _resolved(lexical_root, label="runs_root")
         resolved_path = _resolved(lexical_path, label="path")
-        return _relative_is_visible_generation(_relative_if_inside(resolved_path, resolved_root))
+        return relative_reaches_reserved_generation(
+            resolved_root, _relative_if_inside(resolved_path, resolved_root)
+        )
     except ValueError:
         return True
 
@@ -166,5 +190,6 @@ __all__ = [
     "SMOKE_RESULTS_DIRNAME",
     "iter_production_runs_artifacts",
     "is_path_in_reserved_smoke_tree",
+    "relative_reaches_reserved_generation",
     "should_exclude_from_production_runs_scan",
 ]

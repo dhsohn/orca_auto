@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from orca_auto.core.engine_catalog import engine_catalog, find_engine_catalog_entry
+from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.utils import coerce_list, coerce_mapping, normalize_text
 
 WORKFLOW_FILE_NAME = "workflow.json"
@@ -68,8 +69,88 @@ def validate_workflow_workspace_identity(
     return validate_workflow_id_path_segment(persisted_id)
 
 
+WORKFLOW_SCAFFOLD_MANIFEST_NAME = "flow.yaml"
+
+
 def workflow_root_dir(workflow_root: str | Path) -> Path:
     return Path(workflow_root).expanduser().resolve()
+
+
+def directory_is_workflow_scaffold(path: Path) -> bool:
+    """Whether *path* is a workflow scaffold (carries a ``flow.yaml``)."""
+
+    return (path / WORKFLOW_SCAFFOLD_MANIFEST_NAME).is_file()
+
+
+def workflow_root_for_workspace(workspace_dir: str | Path) -> Path:
+    """Derive the workflow root a workspace belongs to, without config.
+
+    A generation workspace minted inside a scaffold (identified by the
+    scaffold's ``flow.yaml``) belongs to the scaffold's parent; a direct
+    root child (direct API submissions, which also mint generation names)
+    belongs to its own parent.
+    """
+
+    workspace = Path(workspace_dir).expanduser().resolve()
+    parent = workspace.parent
+    if is_visible_generation_name(workspace.name) and directory_is_workflow_scaffold(parent):
+        return parent.parent
+    return parent
+
+
+def is_workflow_workspace_location(workspace_dir: Path, workflow_root: Path) -> bool:
+    """Whether *workspace_dir* is a trusted workspace location under *root*.
+
+    Valid locations are a direct child of root (direct API submissions) or a
+    generation-named directory inside a direct-child scaffold. The scaffold
+    requirement (``flow.yaml``) keeps ORCA execution generations inside
+    standalone job dirs — attacker-influenced output surfaces — from ever
+    being trusted as workflow workspaces.
+    """
+
+    if workspace_dir.parent == workflow_root:
+        return True
+    parent = workspace_dir.parent
+    return (
+        parent.parent == workflow_root
+        and not parent.name.startswith(".")
+        and is_visible_generation_name(workspace_dir.name)
+        and directory_is_workflow_scaffold(parent)
+    )
+
+
+def iter_workflow_workspace_candidate_dirs(workflow_root: str | Path) -> list[Path]:
+    """Directories under *root* that may hold a workflow workspace.
+
+    A workspace is a generation directory (``YYYYMMDD-HHMMSS-<8hex>``) inside
+    a submitted scaffold — ``root/<scaffold>/<generation>`` — or, for direct
+    API submissions without a scaffold directory, a direct child of root.
+    Dot-directories (upload staging, creation staging, locks) are never
+    scanned, and nothing below a workspace itself is.
+    """
+
+    root = workflow_root_dir(workflow_root)
+    if not root.exists():
+        return []
+    candidates: list[Path] = []
+    for item in root.iterdir():
+        if not item.is_dir() or item.is_symlink() or item.name.startswith("."):
+            continue
+        candidates.append(item)
+        if (item / WORKFLOW_FILE_NAME).exists():
+            continue
+        # Only scaffolds host generation workspaces; standalone ORCA job dirs
+        # (whose execution generations share the name shape) are never scanned.
+        if not directory_is_workflow_scaffold(item):
+            continue
+        try:
+            children = sorted(item.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.is_dir() and not child.is_symlink() and is_visible_generation_name(child.name):
+                candidates.append(child)
+    return candidates
 
 
 def workflow_workspace_internal_engine_paths(
@@ -130,16 +211,21 @@ def workflow_workspace_internal_engine_paths_from_path(
         return None
 
     parts = relative.parts
-    if len(parts) < 2:
-        return None
-
-    for stage_dirname in workflow_stage_dirnames_for_engine(engine_text):
-        if parts[1] == stage_dirname:
-            return workflow_workspace_internal_engine_paths(
-                workspaces_root / parts[0],
-                engine=engine_text,
-                stage_dirname=stage_dirname,
-            )
+    stage_dirnames = workflow_stage_dirnames_for_engine(engine_text)
+    # A workspace is either a direct child of root (direct API submissions)
+    # or a generation directory inside a scaffold: root/<scaffold>/<gen>.
+    for workspace_depth in (1, 2):
+        if len(parts) <= workspace_depth:
+            continue
+        if workspace_depth == 2 and not is_visible_generation_name(parts[1]):
+            continue
+        for stage_dirname in stage_dirnames:
+            if parts[workspace_depth] == stage_dirname:
+                return workflow_workspace_internal_engine_paths(
+                    workspaces_root.joinpath(*parts[:workspace_depth]),
+                    engine=engine_text,
+                    stage_dirname=stage_dirname,
+                )
     return None
 
 
@@ -194,9 +280,7 @@ def iter_workflow_runtime_workspaces(
 
     engine_text = normalize_text(engine).lower()
     candidates: list[Path] = []
-    for item in root.iterdir():
-        if not item.is_dir():
-            continue
+    for item in iter_workflow_workspace_candidate_dirs(root):
         if (item / WORKFLOW_FILE_NAME).exists() and not engine_text:
             candidates.append(item)
             continue
@@ -227,12 +311,17 @@ def iter_workflow_runtime_workspaces(
 __all__ = [
     "WORKFLOW_FILE_NAME",
     "WORKFLOW_STAGE_DIRNAME_ALIASES",
+    "WORKFLOW_SCAFFOLD_MANIFEST_NAME",
     "WORKFLOW_STAGE_DIRNAMES",
+    "directory_is_workflow_scaffold",
+    "is_workflow_workspace_location",
     "iter_workflow_runtime_workspaces",
+    "iter_workflow_workspace_candidate_dirs",
     "path_is_inside_workflow_workspace",
     "validate_workflow_id_path_segment",
     "validate_workflow_workspace_identity",
     "workflow_root_dir",
+    "workflow_root_for_workspace",
     "workflow_stage_dirnames_for_engine",
     "workflow_workspace_internal_engine_paths",
     "workflow_workspace_internal_engine_paths_from_path",

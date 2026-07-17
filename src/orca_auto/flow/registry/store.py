@@ -6,7 +6,11 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
+from orca_auto.core.paths.workflow import (
+    is_workflow_workspace_location,
+    iter_workflow_workspace_candidate_dirs,
+    validate_workflow_workspace_identity,
+)
 from orca_auto.core.utils import (
     atomic_write_json,
     file_lock,
@@ -309,19 +313,22 @@ def upsert_workflow_registry_record(
         record_workspace = Path(record.workspace_dir).expanduser().resolve()
     except OSError:
         record_workspace = None
+    record_workspace_trusted = record_workspace is not None and is_workflow_workspace_location(
+        record_workspace, resolved_root
+    )
     if (
         record_workspace is not None
-        and record_workspace.parent == resolved_root
+        and record_workspace_trusted
         and record_workspace.name != record.workflow_id
     ):
         raise ValueError(
-            f"workflow registry id {record.workflow_id!r} does not match direct workspace "
+            f"workflow registry id {record.workflow_id!r} does not match workspace "
             f"name {record_workspace.name!r}"
         )
     trusted_workspace_key = (
         str(record_workspace)
         if record_workspace is not None
-        and record_workspace.parent == resolved_root
+        and record_workspace_trusted
         and record_workspace.name == record.workflow_id
         else ""
     )
@@ -408,10 +415,8 @@ def list_workflow_registry(
     path = _registry_path(resolved_root)
     published_creation_markers = [
         workspace / _WORKFLOW_CREATION_MARKER
-        for workspace in resolved_root.iterdir()
-        if not workspace.is_symlink()
-        and workspace.is_dir()
-        and (workspace / "workflow.json").is_file()
+        for workspace in iter_workflow_workspace_candidate_dirs(resolved_root)
+        if (workspace / "workflow.json").is_file()
         and (workspace / _WORKFLOW_CREATION_MARKER).is_file()
     ]
     if published_creation_markers:
@@ -536,11 +541,12 @@ def clear_terminal_workflow_registry(
         except OSError:
             continue
         # Registry state is not trusted to choose arbitrary lock-file targets.
-        # Workflow workspaces are direct root children named by workflow_id;
-        # resolving first also rejects a child symlink that escapes the root.
+        # Workflow workspaces are direct root children or generation dirs in a
+        # direct-child scaffold, named by workflow_id; resolving first also
+        # rejects a child symlink that escapes the root.
         if (
             workspace is None
-            or workspace.parent != resolved_root
+            or not is_workflow_workspace_location(workspace, resolved_root)
             or workspace.name != candidate.workflow_id
         ):
             continue
