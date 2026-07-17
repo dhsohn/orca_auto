@@ -5,18 +5,15 @@ from typing import Any
 
 from orca_auto.core.messaging import Severity
 from orca_auto.core.notifications import engines as engine_facade
-from orca_auto.core.notifications.engine_jobs import (
-    build_engine_job_notifications,
-    build_engine_notification_module,
-)
+from orca_auto.core.notifications.engine_jobs import build_engine_job_notifications
 
 
 def _send_ok(_cfg: Any, _lines: list[str], _severity: Severity) -> bool:
     return True
 
 
-def test_engine_notification_module_builds_delivery_contract() -> None:
-    notifications = build_engine_notification_module(
+def test_engine_job_notifications_builds_delivery_contract() -> None:
+    notifications = build_engine_job_notifications(
         label="xTB",
         engine="xtb",
         selected_field_name="selected_xyz",
@@ -26,7 +23,9 @@ def test_engine_notification_module_builds_delivery_contract() -> None:
     )
 
     assert notifications.delivery.notifier is notifications.notifier
-    assert notifications.detail_fields({"mode": "nci", "ignored": "x"}) == [("mode", "nci")]
+    assert notifications.delivery.detail_fields({"mode": "nci", "ignored": "x"}) == [
+        ("mode", "nci")
+    ]
 
 
 def test_engine_job_notifications_builds_request_contract() -> None:
