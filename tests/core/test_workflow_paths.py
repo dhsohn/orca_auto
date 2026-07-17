@@ -35,6 +35,9 @@ def test_workflow_paths_from_path_accepts_scaffold_nested_generation(tmp_path: P
         workflow_root / "rxn_case" / "20260717-090000-0a1b2c3d" / "03_orca" / "01_ts_guess"
     )
     reaction_dir.mkdir(parents=True)
+    # A generation-shaped name alone does not authorize workflow paths; the
+    # scaffold manifest (or the workspace's committed workflow.json) does.
+    (workflow_root / "rxn_case" / "flow.yaml").write_text("template: x\n", encoding="utf-8")
 
     paths = workflow_workspace_internal_engine_paths_from_path(
         reaction_dir,

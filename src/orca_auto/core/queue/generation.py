@@ -36,7 +36,20 @@ def visible_generation_children(job_dir: Path) -> tuple[Path, ...]:
         for entry in entries
         if is_visible_generation_name(entry.name) and entry.is_dir() and not entry.is_symlink()
     ]
-    return tuple(sorted(children, key=lambda entry: entry.name, reverse=True))
+
+    def _recency_key(entry: Path) -> tuple[str, int, str]:
+        # Generation names carry only second-resolution timestamps followed by
+        # random hex, so the name alone cannot order two generations minted in
+        # the same second. Break the tie with the directory's own mtime (the
+        # newer generation is created — and written — after the older one
+        # stopped changing), keeping the full name as a stable last resort.
+        try:
+            mtime_ns = entry.stat().st_mtime_ns
+        except OSError:
+            mtime_ns = 0
+        return (entry.name[:15], mtime_ns, entry.name)
+
+    return tuple(sorted(children, key=_recency_key, reverse=True))
 
 
 def new_visible_generation_name() -> str:

@@ -126,6 +126,20 @@ def test_candidate_cap_respects_max_orca_stages(tmp_path: Path) -> None:
     assert [stage["stage_id"] for stage in payload["stages"][1:]] == ["orca_optts_freq_01"]
 
 
+def test_missing_scan_extension_budget_fails_closed(tmp_path: Path) -> None:
+    # The persisted stage budgets are a required contract: a payload whose
+    # max_scan_extensions was stripped must not silently regrow a default.
+    payload = _create_workflow(tmp_path)
+    workspace = tmp_path / "root" / "wf_scan_ts_test"
+    scan_stage = payload["stages"][0]
+    scan_stage["status"] = "completed"
+    _write_scan_results(scan_stage, [-100.0, -100.1, -100.2, -100.3])
+    del payload["metadata"]["request"]["parameters"]["max_scan_extensions"]
+
+    with pytest.raises(ValueError, match="max_scan_extensions"):
+        append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+
+
 def test_barrierless_scan_records_no_barrier_error_without_extensions(tmp_path: Path) -> None:
     payload = _create_workflow(tmp_path, max_scan_extensions=0)
     workspace = tmp_path / "root" / "wf_scan_ts_test"
