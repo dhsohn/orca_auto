@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +18,7 @@ from orca_auto.core.messaging import (
     text,
     title_heading,
 )
+from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED
 from orca_auto.core.utils import (
     coerce_list as _coerce_sequence,
 )
@@ -35,21 +35,9 @@ from orca_auto.core.utils import (
     safe_int as _safe_int,
 )
 
-from .status import workflow_status_is_terminal
+from ._phases import phase_snapshot
 
 LOGGER = logging.getLogger(__name__)
-_ACTIVE_STATUSES = frozenset(
-    {"planned", "queued", "running", "submitted", "cancel_requested", "retrying"}
-)
-
-
-@dataclass(frozen=True)
-class _PhaseSummary:
-    engine: str
-    state_key: str
-    stages: list[dict[str, Any]]
-    counts: dict[str, int]
-    stage_buckets: dict[int, str]
 
 
 @dataclass(frozen=True)
@@ -71,74 +59,15 @@ def _phase_notification_state(payload: dict[str, Any]) -> dict[str, Any]:
     return metadata["phase_notifications"]
 
 
-def _stage_engine(stage: dict[str, Any]) -> str:
-    return _normalize_text(_coerce_mapping(stage.get("task")).get("engine")).lower()
-
-
-def _stage_metadata(stage: dict[str, Any]) -> dict[str, Any]:
-    return _coerce_mapping(stage.get("metadata"))
-
-
-def _stage_task_payload(stage: dict[str, Any]) -> dict[str, Any]:
-    task = _coerce_mapping(stage.get("task"))
-    return _coerce_mapping(task.get("payload"))
-
-
-def _stage_is_terminal(
-    stage: dict[str, Any],
-    *,
-    stage_failure_is_recoverable_fn: Callable[[dict[str, Any]], bool] | None,
-) -> bool:
-    status = _normalize_text(stage.get("status")).lower()
-    task_status = _normalize_text(_coerce_mapping(stage.get("task")).get("status")).lower()
-    if status in _ACTIVE_STATUSES or task_status in _ACTIVE_STATUSES:
-        return False
-    if stage_failure_is_recoverable_fn is not None and stage_failure_is_recoverable_fn(stage):
-        return True
-    return workflow_status_is_terminal(status) or workflow_status_is_terminal(task_status)
-
-
-def _terminal_phase_stages(
-    payload: dict[str, Any],
-    *,
-    phase_engine: str,
-    stage_failure_is_recoverable_fn: Callable[[dict[str, Any]], bool] | None,
-) -> list[dict[str, Any]] | None:
-    stages = [
-        stage
-        for stage in payload.get("stages", [])
-        if isinstance(stage, dict) and _stage_engine(stage) == phase_engine
-    ]
-    if not stages:
-        return None
-    if not all(
-        _stage_is_terminal(stage, stage_failure_is_recoverable_fn=stage_failure_is_recoverable_fn)
-        for stage in stages
-    ):
-        return None
+def _raw_stages_by_id(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    stages: dict[str, dict[str, Any]] = {}
+    for stage in payload.get("stages", []):
+        if not isinstance(stage, dict):
+            continue
+        stage_id = _normalize_text(stage.get("stage_id"))
+        if stage_id and stage_id not in stages:
+            stages[stage_id] = stage
     return stages
-
-
-def _stage_result_bucket(
-    stage: dict[str, Any],
-    *,
-    phase_engine: str,
-    stage_failure_is_recoverable_fn: Callable[[dict[str, Any]], bool] | None,
-) -> str:
-    status = _normalize_text(stage.get("status")).lower()
-    metadata = _stage_metadata(stage)
-    if stage_failure_is_recoverable_fn is not None and stage_failure_is_recoverable_fn(stage):
-        return "completed"
-    if (
-        phase_engine == "xtb"
-        and _normalize_text(metadata.get("reaction_handoff_status")).lower() == "ready"
-    ):
-        return "completed"
-    if status == "completed":
-        return "completed"
-    if status == "cancelled":
-        return "cancelled"
-    return "failed"
 
 
 def _count_output_artifacts(stage: dict[str, Any]) -> int:
@@ -148,7 +77,7 @@ def _count_output_artifacts(stage: dict[str, Any]) -> int:
 
 
 def _xtb_candidate_count(stage: dict[str, Any]) -> int:
-    metadata = _stage_metadata(stage)
+    metadata = _coerce_mapping(stage.get("metadata"))
     attempts = [
         item for item in _coerce_sequence(metadata.get("xtb_attempts")) if isinstance(item, dict)
     ]
@@ -162,58 +91,44 @@ def _phase_label(phase_engine: str) -> str:
     return {"crest": "CREST", "xtb": "xTB"}.get(phase_engine, phase_engine.upper())
 
 
-def _phase_outcome(counts: dict[str, int]) -> str:
-    failed = counts.get("failed", 0)
-    cancelled = counts.get("cancelled", 0)
-    completed = counts.get("completed", 0)
-    if failed and completed:
-        return "mixed"
-    if failed:
-        return "failed"
-    if cancelled and completed:
-        return "mixed"
-    if cancelled:
-        return "cancelled"
-    if completed:
-        return "completed"
-    return "unknown"
-
-
 def _phase_stage_row(
-    stage: dict[str, Any],
+    snapshot_row: dict[str, str],
+    raw_stage: dict[str, Any],
     *,
     phase_engine: str,
-    bucket: str,
 ) -> _PhaseStageRow:
-    stage_id = _normalize_text(stage.get("stage_id")) or "stage"
-    status = _normalize_text(stage.get("status")).lower() or "unknown"
-    task_payload = _stage_task_payload(stage)
-    metadata = _stage_metadata(stage)
+    stage_label = (
+        _normalize_text(snapshot_row.get("label"))
+        or _normalize_text(snapshot_row.get("stage_id"))
+        or "stage"
+    )
+    status = _normalize_text(snapshot_row.get("status")).lower() or "unknown"
+    result = _normalize_text(snapshot_row.get("result")).lower() or STATUS_FAILED
     if phase_engine == "crest":
-        role = _normalize_text(task_payload.get("input_role")) or stage_id
         return _PhaseStageRow(
-            stage_label=role,
-            result=bucket,
+            stage_label=stage_label,
+            result=result,
             metrics=(
                 ("Status", status),
-                ("Retained conformers", _count_output_artifacts(stage)),
+                ("Retained conformers", _count_output_artifacts(raw_stage)),
             ),
         )
     if phase_engine == "xtb":
-        reaction_key = _normalize_text(task_payload.get("reaction_key")) or stage_id
-        handoff_status = _normalize_text(metadata.get("reaction_handoff_status")).lower() or "none"
+        handoff_status = (
+            _normalize_text(snapshot_row.get("reaction_handoff_status")).lower() or "none"
+        )
         return _PhaseStageRow(
-            stage_label=reaction_key,
-            result=bucket,
+            stage_label=stage_label,
+            result=result,
             metrics=(
                 ("Status", status),
                 ("Handoff", handoff_status),
-                ("Candidates", _xtb_candidate_count(stage)),
+                ("Candidates", _xtb_candidate_count(raw_stage)),
             ),
         )
     return _PhaseStageRow(
-        stage_label=stage_id,
-        result=bucket,
+        stage_label=stage_label,
+        result=result,
         metrics=(("Status", status),),
     )
 
@@ -259,53 +174,63 @@ def _notes_group(extra_lines: list[str] | None) -> Group | None:
     return group(*items, heading=(bold("Notes"),))
 
 
+def _result_count(snapshot: dict[str, Any], result: str) -> int:
+    return _safe_int(_coerce_mapping(snapshot.get("result_counts")).get(result), default=0)
+
+
 def _overview_fields(
     *,
     payload: dict[str, Any],
     phase_engine: str,
-    stages: list[dict[str, Any]],
-    counts: dict[str, int],
+    snapshot: dict[str, Any],
 ) -> list[Any]:
     workflow_id = _normalize_text(payload.get("workflow_id")) or "-"
     template_name = _normalize_text(payload.get("template_name")) or "-"
     fields = [
         field_row("Workflow", code(workflow_id), inline=True),
         field_row("Template", code(template_name), inline=True),
-        field_row("Outcome", code(_phase_outcome(counts)), inline=True),
+        field_row("Outcome", code(_normalize_text(snapshot.get("outcome")) or "-"), inline=True),
         field_row(
             "Stages",
-            code(len(stages)),
+            code(_safe_int(snapshot.get("stage_count"), default=0)),
             raw("  completed="),
-            code(counts["completed"]),
+            code(_result_count(snapshot, STATUS_COMPLETED)),
             raw("  failed="),
-            code(counts["failed"]),
+            code(_result_count(snapshot, STATUS_FAILED)),
             raw("  cancelled="),
-            code(counts["cancelled"]),
+            code(_result_count(snapshot, STATUS_CANCELLED)),
         ),
     ]
     if phase_engine == "xtb":
         ready_count = sum(
             1
-            for stage in stages
-            if _normalize_text(_stage_metadata(stage).get("reaction_handoff_status")).lower()
-            == "ready"
+            for row in snapshot.get("stage_statuses", [])
+            if _normalize_text(row.get("reaction_handoff_status")).lower() == "ready"
         )
         fields.append(field_row("Ready for ORCA", code(ready_count), inline=True))
     return fields
+
+
+def _summary_severity(snapshot: dict[str, Any]) -> Any:
+    outcome = _normalize_text(snapshot.get("outcome")).lower()
+    return {
+        STATUS_COMPLETED: "success",
+        STATUS_FAILED: "error",
+        "mixed": "warning",
+        STATUS_CANCELLED: "warning",
+    }.get(outcome, "info")
 
 
 def _build_phase_summary_message(
     *,
     payload: dict[str, Any],
     phase_engine: str,
-    stages: list[dict[str, Any]],
-    counts: dict[str, int],
-    stage_buckets: dict[int, str],
+    snapshot: dict[str, Any],
     extra_lines: list[str] | None,
 ) -> Message:
     title = f"{_phase_label(phase_engine)} phase summary"
     overview = group(
-        *_overview_fields(payload=payload, phase_engine=phase_engine, stages=stages, counts=counts),
+        *_overview_fields(payload=payload, phase_engine=phase_engine, snapshot=snapshot),
         heading=title_heading(title),
     )
     groups: list[Group] = [overview]
@@ -314,74 +239,24 @@ def _build_phase_summary_message(
     if notes is not None:
         groups.append(notes)
 
+    raw_stages = _raw_stages_by_id(payload)
     stage_rows = [
         _phase_stage_row(
-            stage, phase_engine=phase_engine, bucket=stage_buckets.get(id(stage), "failed")
+            row,
+            raw_stages.get(_normalize_text(row.get("stage_id")), {}),
+            phase_engine=phase_engine,
         )
-        for stage in stages
+        for row in snapshot.get("stage_statuses", [])
     ]
     for index, row in enumerate(stage_rows):
         heading = (bold("Stage details"),) if index == 0 else ()
         groups.append(group(*_stage_row_lines(row), heading=heading))
 
     return Message(
-        title=title, severity=_summary_severity(counts), groups=tuple(groups), author="orca_auto"
-    )
-
-
-def _summary_severity(counts: dict[str, int]) -> Any:
-    outcome = _phase_outcome(counts)
-    return {
-        "completed": "success",
-        "failed": "error",
-        "mixed": "warning",
-        "cancelled": "warning",
-    }.get(outcome, "info")
-
-
-def _phase_summary_counts(
-    stages: list[dict[str, Any]],
-    *,
-    phase_engine: str,
-    stage_failure_is_recoverable_fn: Callable[[dict[str, Any]], bool] | None,
-) -> tuple[dict[str, int], dict[int, str]]:
-    counts = {"completed": 0, "failed": 0, "cancelled": 0}
-    stage_buckets: dict[int, str] = {}
-    for stage in stages:
-        bucket = _stage_result_bucket(
-            stage,
-            phase_engine=phase_engine,
-            stage_failure_is_recoverable_fn=stage_failure_is_recoverable_fn,
-        )
-        counts[bucket] += 1
-        stage_buckets[id(stage)] = bucket
-    return counts, stage_buckets
-
-
-def _phase_summary(
-    payload: dict[str, Any],
-    *,
-    phase_engine: str,
-    stage_failure_is_recoverable_fn: Callable[[dict[str, Any]], bool] | None,
-) -> _PhaseSummary | None:
-    stages = _terminal_phase_stages(
-        payload,
-        phase_engine=phase_engine,
-        stage_failure_is_recoverable_fn=stage_failure_is_recoverable_fn,
-    )
-    if not stages:
-        return None
-    counts, stage_buckets = _phase_summary_counts(
-        stages,
-        phase_engine=phase_engine,
-        stage_failure_is_recoverable_fn=stage_failure_is_recoverable_fn,
-    )
-    return _PhaseSummary(
-        engine=phase_engine,
-        state_key=f"{phase_engine}_summary",
-        stages=stages,
-        counts=counts,
-        stage_buckets=stage_buckets,
+        title=title,
+        severity=_summary_severity(snapshot),
+        groups=tuple(groups),
+        author="orca_auto",
     )
 
 
@@ -411,31 +286,26 @@ def maybe_notify_workflow_phase_summary(
     payload: dict[str, Any],
     config_path: str | None,
     phase_engine: str,
-    stage_failure_is_recoverable_fn: Callable[[dict[str, Any]], bool] | None = None,
     extra_lines: list[str] | None = None,
 ) -> bool:
     normalized_engine = _normalize_text(phase_engine).lower()
     if normalized_engine not in {"crest", "xtb"}:
         return False
 
-    summary = _phase_summary(
-        payload,
-        phase_engine=normalized_engine,
-        stage_failure_is_recoverable_fn=stage_failure_is_recoverable_fn,
-    )
-    if summary is None:
+    snapshot = phase_snapshot(payload.get("stages", []), engine=normalized_engine)
+    stage_count = _safe_int(snapshot.get("stage_count"), default=0)
+    if not stage_count or not snapshot.get("finished"):
         return False
 
     notification_state = _phase_notification_state(payload)
-    if _phase_summary_already_sent(notification_state, state_key=summary.state_key):
+    state_key = f"{normalized_engine}_summary"
+    if _phase_summary_already_sent(notification_state, state_key=state_key):
         return False
 
     message = _build_phase_summary_message(
         payload=payload,
-        phase_engine=summary.engine,
-        stages=summary.stages,
-        counts=summary.counts,
-        stage_buckets=summary.stage_buckets,
+        phase_engine=normalized_engine,
+        snapshot=snapshot,
         extra_lines=extra_lines,
     )
     try:
@@ -463,8 +333,8 @@ def maybe_notify_workflow_phase_summary(
 
     _mark_phase_summary_sent(
         notification_state,
-        state_key=summary.state_key,
-        stage_count=len(summary.stages),
+        state_key=state_key,
+        stage_count=stage_count,
     )
     return True
 
