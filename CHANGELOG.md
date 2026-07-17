@@ -10,6 +10,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- `reaction_ts_search` now expands all reactant × product CREST pairs by
+  default: `max_xtb_stages` defaults to 9 (was 3), matching the default
+  `max_crest_candidates: 3` per endpoint, so a default run explores every
+  3×3 conformer pairing instead of silently stopping at the top three. The
+  remote upload ceiling for `max_xtb_stages` rises from 8 to 9 to admit
+  the new default; `max_orca_stages` (OptTS children) stays at 3. The
+  `ts_search` scaffold template now writes the cap explicitly and its
+  comment explains the pair-expansion limit.
+
 - Workflow Discord/Telegram notifications show the workspace `Directory`
   (the generation directory inside its scaffold) on every workflow-scoped
   event — status changes, stage transitions, handoffs, phase summaries, and

@@ -101,7 +101,7 @@ def test_cmd_run_dir_reads_manifest_for_reaction_workflow(
         "max_cores": 8,
         "max_memory_gb": 32,
         "max_crest_candidates": 3,
-        "max_xtb_stages": 3,
+        "max_xtb_stages": 9,
         "max_orca_stages": 3,
         "orca_route_line": "! r2scan-3c OptTS Freq TightSCF",
         "charge": 0,

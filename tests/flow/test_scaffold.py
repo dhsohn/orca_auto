@@ -33,7 +33,9 @@ def test_cmd_scaffold_creates_reaction_workflow_scaffold(
     assert manifest["workflow_type"] == "reaction_ts_search"
     assert manifest["crest_mode"] == "standard"
     assert manifest["max_crest_candidates"] == 3
-    assert "max_xtb_stages" not in manifest
+    # The template writes the pair-expansion cap explicitly so a default
+    # scaffold explores every 3x3 conformer pairing.
+    assert manifest["max_xtb_stages"] == 9
     assert "max_orca_stages" not in manifest
     assert "workflow_type: reaction_ts_search" in output
     assert "crest_mode: standard" in output

@@ -28,7 +28,7 @@ from ..xyz_utils import validated_xyz_atom_count
 _REMOTE_WORKFLOW_COUNT_LIMITS = {
     "max_orca_stages": 20,
     "max_crest_candidates": 8,
-    "max_xtb_stages": 8,
+    "max_xtb_stages": 9,
     "max_candidates": 20,
     "max_scan_extensions": 4,
     "max_xtb_handoff_retries": 4,
