@@ -8,7 +8,9 @@ from orca_auto.core.messaging import render_telegram
 from orca_auto.flow.registry import _notifications as notifications
 from orca_auto.flow.workflow._phases import WORKFLOW_PHASE_FINISHED_EVENT
 
-_ROOT = "/tmp/wfroot"
+# A root that can never exist keeps the Directory resolution
+# deterministic for the fixture events (rendered as '-').
+_ROOT = "/nonexistent/orca-auto-test-wfroot"
 
 
 def _event(**overrides: Any) -> dict[str, Any]:
@@ -39,7 +41,7 @@ def test_status_changed_render() -> None:
         "<b>Workflow</b>: <code>wf1</code>\n"
         "<b>Template</b>: <code>tmpl</code>\n"
         "<b>Status</b>: <code>queued</code> → <code>running</code>\n"
-        "<b>Worker session</b>: <code>sess&lt;1&gt;</code>"
+        "<b>Directory</b>: <code>-</code>"
     )
 
 
@@ -50,7 +52,7 @@ def test_advance_failed_render() -> None:
         "<b>Workflow</b>: <code>wf1</code>\n"
         "<b>Template</b>: <code>tmpl</code>\n"
         "<b>Reason</b>: <code>because</code>\n"
-        "<b>Worker session</b>: <code>sess&lt;1&gt;</code>"
+        "<b>Directory</b>: <code>-</code>"
     )
 
 
@@ -98,7 +100,7 @@ def test_worker_lifecycle_render() -> None:
     assert _render(_event(event_type="worker_started")) == (
         "orca_auto\n"
         "<b>Worker started</b>\n"
-        "<b>Workflow root</b>: <code>/tmp/wfroot</code>\n"
+        "<b>Workflow root</b>: <code>/nonexistent/orca-auto-test-wfroot</code>\n"
         "<b>Worker session</b>: <code>sess&lt;1&gt;</code>\n"
         "<b>Reason</b>: <code>because</code>"
     )
@@ -153,3 +155,27 @@ def test_should_suppress_stage_notification() -> None:
     assert notifications.should_suppress_stage_notification(suppressed) is True
     kept = _event(event_type="workflow_status_changed", metadata={"engine": "crest"})
     assert notifications.should_suppress_stage_notification(kept) is False
+
+
+def test_workflow_event_renders_workspace_directory(tmp_path) -> None:
+    """Workflow-scoped notifications show the workspace directory (the
+    generation inside its scaffold), mirroring standalone ORCA's Directory
+    field, instead of the worker session token."""
+
+    scaffold = tmp_path / "rxn_case"
+    workspace = scaffold / "20260717-104500-0a1b2c3d"
+    workspace.mkdir(parents=True)
+    (scaffold / "flow.yaml").write_text("workflow_type: reaction_ts_search\n", encoding="utf-8")
+    (workspace / "workflow.json").write_text(
+        '{"workflow_id": "20260717-104500-0a1b2c3d"}', encoding="utf-8"
+    )
+
+    rendered = render_telegram(
+        notifications.journal_event_message(
+            _event(event_type="workflow_status_changed", workflow_id=workspace.name),
+            tmp_path,
+        )
+    )
+
+    assert f"<b>Directory</b>: <code>{workspace}</code>" in rendered
+    assert "Worker session" not in rendered

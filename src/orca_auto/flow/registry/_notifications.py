@@ -22,6 +22,7 @@ from orca_auto.core.messaging import (
 from orca_auto.core.utils import coerce_mapping, normalize_text
 
 from ..workflow._phases import SUPPRESSED_STAGE_NOTIFICATION_ENGINES, WORKFLOW_PHASE_FINISHED_EVENT
+from ..workflow.store import resolve_workflow_workspace
 
 DEFAULT_NOTIFICATION_EVENT_TYPES = frozenset(
     {
@@ -180,12 +181,25 @@ def messenger_channel_from_env() -> MessageChannel | None:
     return None
 
 
+def _workspace_directory_text(workflow_id: str, workflow_root: str | Path) -> str:
+    """Resolve the workspace directory a notification refers to, or ``-``."""
+
+    if not workflow_id or workflow_id == "-":
+        return "-"
+    try:
+        return str(resolve_workflow_workspace(target=workflow_id, workflow_root=workflow_root))
+    except (FileNotFoundError, ValueError, OSError, RuntimeError):
+        return "-"
+
+
 def journal_event_context(event: dict[str, Any], workflow_root: str | Path) -> dict[str, str]:
     event_type = normalize_text(event.get("event_type"))
     metadata = coerce_mapping(event.get("metadata"))
+    workflow_id = normalize_text(event.get("workflow_id")) or "-"
     return {
         "event_type": event_type,
-        "workflow_id": normalize_text(event.get("workflow_id")) or "-",
+        "workflow_id": workflow_id,
+        "directory": _workspace_directory_text(workflow_id, workflow_root),
         "template_name": normalize_text(event.get("template_name")) or "-",
         "status": normalize_text(event.get("status")) or "-",
         "previous_status": normalize_text(event.get("previous_status")) or "-",
@@ -222,7 +236,7 @@ def workflow_status_event_message(context: dict[str, str]) -> Message:
         field_row("Workflow", code(context["workflow_id"]), inline=True),
         field_row("Template", code(context["template_name"]), inline=True),
         field_row("Status", *_transition_spans(context["previous_status"], context["status"])),
-        field_row("Worker session", code(context["session"])),
+        field_row("Directory", code(context["directory"])),
     )
 
 
@@ -232,7 +246,7 @@ def workflow_advance_failed_event_message(context: dict[str, str]) -> Message:
         field_row("Workflow", code(context["workflow_id"]), inline=True),
         field_row("Template", code(context["template_name"]), inline=True),
         field_row("Reason", code(context["reason"])),
-        field_row("Worker session", code(context["session"])),
+        field_row("Directory", code(context["directory"])),
     )
 
 
@@ -247,7 +261,7 @@ def stage_status_event_message(context: dict[str, str]) -> Message:
             "Stage status",
             *_transition_spans(context["previous_stage_status"], context["stage_status"]),
         ),
-        field_row("Worker session", code(context["session"])),
+        field_row("Directory", code(context["directory"])),
     ]
     if context["reason"] and context["reason"] != "-":
         fields.append(field_row("Reason", code(context["reason"])))
@@ -271,7 +285,7 @@ def stage_handoff_event_message(context: dict[str, str]) -> Message:
                 context["previous_reaction_handoff_status"], context["reaction_handoff_status"]
             ),
         ),
-        field_row("Worker session", code(context["session"])),
+        field_row("Directory", code(context["directory"])),
     ]
     if context["reason"] and context["reason"] != "-":
         fields.append(field_row("Reason", code(context["reason"])))
@@ -293,7 +307,7 @@ def default_journal_event_message(context: dict[str, str]) -> Message:
         field_row("Event", code(context["event_type"])),
         field_row("Workflow", code(context["workflow_id"])),
         field_row("Status", code(context["status"])),
-        field_row("Worker session", code(context["session"])),
+        field_row("Directory", code(context["directory"])),
     )
 
 
@@ -318,7 +332,7 @@ def _phase_finished_event_message(
             "Stage status counts", code(format_count_mapping(metadata.get("stage_status_counts")))
         ),
         field_row("Stage statuses", code(format_stage_statuses(metadata.get("stage_statuses")))),
-        field_row("Worker session", code(context["session"])),
+        field_row("Directory", code(context["directory"])),
     ]
     handoff_counts = format_count_mapping(metadata.get("reaction_handoff_status_counts"))
     if handoff_counts != "-":
