@@ -37,12 +37,18 @@ from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory
 from .completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from .input_blocks import (
     GEOM_HEADER_RE,
+    MOINP_RE,
     OrcaFileReference,
+    active_orca_directive_text,
+    ensure_route_keywords,
     orca_route_line,
+    orca_route_tokens,
     quote_orca_path,
     scan_orca_file_references,
+    set_moinp,
     unquoted_orca_path,
     validate_supported_xyz_geometry_syntax,
+    validate_unambiguous_orca_directives,
 )
 from .job_type import FREQ_RE
 from .resource_directives import resource_request_from_lines
@@ -473,6 +479,56 @@ def _validated_recovery_seed(
     return seed
 
 
+def _input_requests_moread(lines: list[str]) -> bool:
+    if any(MOINP_RE.match(active_orca_directive_text(line)) for line in lines):
+        return True
+    for line in lines:
+        if orca_route_line(line) is None:
+            continue
+        if any(token.value.upper() == "MOREAD" for token in orca_route_tokens(line)):
+            return True
+    return False
+
+
+def recovery_checkpoint_private_name(source_selected: Path) -> str:
+    return f"{source_selected.stem}.moinp.gbw"
+
+
+def _validated_recovery_checkpoint(
+    *,
+    job_dir: Path,
+    seed_dir: Path,
+    source_selected: Path,
+    scanned_dependencies: Sequence[Path],
+    estimated_source_bytes: int,
+) -> Path | None:
+    """Return the frozen runtime checkpoint to seed from, or None to skip.
+
+    Skipping (absent, empty, over the snapshot byte budgets, or a basename
+    collision with a scanned dependency) degrades to geometry-only recovery;
+    it never fails the rebind. A symlinked or otherwise non-regular candidate
+    still fails closed via the confinement check.
+    """
+
+    candidate = seed_dir / source_selected.with_suffix(".gbw").name
+    if not candidate.exists() and not candidate.is_symlink():
+        return None
+    checkpoint = require_confined_regular_file(
+        job_dir,
+        candidate,
+        label="ORCA recovery checkpoint",
+    )
+    size = checkpoint.stat().st_size
+    if size == 0 or size > MAX_INPUT_SNAPSHOT_BYTES:
+        return None
+    if estimated_source_bytes + size > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
+        return None
+    private_name = recovery_checkpoint_private_name(source_selected)
+    if any(dependency.name == private_name for dependency in scanned_dependencies):
+        return None
+    return checkpoint
+
+
 def orca_execution_started_evidence(job_dir: str | Path, snapshot: Any) -> bool:
     """Report whether a queued generation shows evidence of started execution.
 
@@ -648,7 +704,27 @@ def build_orca_execution_snapshot(
             job_dir=resolved_job_dir,
         )
 
-        bound_dependencies: list[tuple[Path, Path, bool]] = []
+        recovery_checkpoint_source: Path | None = None
+        if recovery_seed_dir is not None and not _input_requests_moread(lines):
+            # Count dependencies twice: once for the materialized copies and
+            # once more as a conservative bound on inline-geometry expansion
+            # of the bound input, so a checkpoint near the aggregate cap is
+            # skipped gracefully instead of failing the rebind after the
+            # generation is already materialized.
+            estimated_source_bytes = (
+                consumed_bytes
+                + 2 * sum(dependency.stat().st_size for dependency in dependencies)
+                + 2 * len(selected_payload)
+            )
+            recovery_checkpoint_source = _validated_recovery_checkpoint(
+                job_dir=resolved_job_dir,
+                seed_dir=recovery_seed_dir,
+                source_selected=source_selected,
+                scanned_dependencies=dependencies,
+                estimated_source_bytes=estimated_source_bytes,
+            )
+
+        bound_dependencies: list[tuple[Path, Path, bool, str | None]] = []
         for dependency in dependencies:
             inline_same_stem_xyz = (
                 same_stem_xyz_is_output
@@ -683,6 +759,16 @@ def build_orca_execution_snapshot(
                     dependency,
                     seed_source if seed_source is not None else dependency,
                     inline_same_stem_xyz,
+                    None,
+                )
+            )
+        if recovery_checkpoint_source is not None:
+            bound_dependencies.append(
+                (
+                    recovery_checkpoint_source,
+                    recovery_checkpoint_source,
+                    False,
+                    recovery_checkpoint_private_name(source_selected),
                 )
             )
         # Roles must follow the canonical order of the *stored* source paths:
@@ -698,9 +784,14 @@ def build_orca_execution_snapshot(
         runtime_mutable_input_roles: list[str] = []
         inline_geometry_atoms: dict[Path, list[str]] = {}
         dependency_paths: list[str] = []
-        for index, (dependency, effective_source, inline_same_stem_xyz) in enumerate(
-            bound_dependencies
-        ):
+        recovery_checkpoint_role = ""
+        recovery_checkpoint_private: Path | None = None
+        for index, (
+            dependency,
+            effective_source,
+            inline_same_stem_xyz,
+            private_override,
+        ) in enumerate(bound_dependencies):
             role = f"dependency_{index:06d}"
             descriptor, dependency_payload, consumed_bytes = _source_with_budget(
                 effective_source,
@@ -730,9 +821,13 @@ def build_orca_execution_snapshot(
                         dependency_payload,
                         max_atoms=geometry_limit,
                     )
-            target = _private_input_path(
-                execution_dir,
-                source=dependency,
+            target = (
+                execution_dir / private_override
+                if private_override is not None
+                else _private_input_path(
+                    execution_dir,
+                    source=dependency,
+                )
             )
             if target.name == source_selected.name:
                 raise ValueError(
@@ -751,6 +846,9 @@ def build_orca_execution_snapshot(
             materialized_inputs[role] = _file_identity(target)
             if inline_same_stem_xyz:
                 runtime_mutable_input_roles.append(role)
+            if private_override is not None:
+                recovery_checkpoint_role = role
+                recovery_checkpoint_private = target.resolve()
             dependency_paths.append(str(effective_source))
 
         bound_payload = _rewrite_bound_input(
@@ -762,6 +860,15 @@ def build_orca_execution_snapshot(
             execution_dir=execution_dir,
             inline_geometry_atoms=inline_geometry_atoms,
         )
+        if recovery_checkpoint_private is not None:
+            bound_lines = bound_payload.decode("utf-8").splitlines()
+            ensure_route_keywords(bound_lines, ["MORead"])
+            set_moinp(bound_lines, recovery_checkpoint_private, execution_dir)
+            validate_unambiguous_orca_directives(
+                bound_lines,
+                label="ORCA recovery bound input",
+            )
+            bound_payload = ("\n".join(bound_lines).rstrip() + "\n").encode("utf-8")
         if consumed_bytes + len(bound_payload) > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
             raise ValueError("ORCA submission inputs exceed the aggregate snapshot size limit")
         bound_selected = execution_dir / source_selected.name
@@ -804,6 +911,7 @@ def build_orca_execution_snapshot(
                 "previous_generation_name": str(recovery_from.get("generation_name") or ""),
                 "previous_execution_dir": str(recovery_seed_dir),
                 "seeded_roles": seeded_roles,
+                "checkpoint_role": recovery_checkpoint_role,
             }
         return snapshot
     except BaseException:
@@ -971,6 +1079,17 @@ def verify_orca_execution_snapshot(
     mutable_roles = set(runtime_mutable_input_roles)
     if not mutable_roles.issubset(expected_dependency_roles):
         raise ValueError("Queued ORCA execution snapshot has invalid mutable input roles")
+    recovery_block = snapshot.get("recovery")
+    recovery_checkpoint_role = (
+        str(recovery_block.get("checkpoint_role") or "")
+        if isinstance(recovery_block, Mapping)
+        else ""
+    )
+    if recovery_checkpoint_role and (
+        recovery_checkpoint_role not in expected_dependency_roles
+        or recovery_checkpoint_role in mutable_roles
+    ):
+        raise ValueError("Queued ORCA recovery checkpoint role is invalid")
 
     source_selected = str(snapshot.get("source_selected_inp") or "").strip()
     if source_selected != str(expected_source_selected_inp):
@@ -1028,7 +1147,20 @@ def verify_orca_execution_snapshot(
                 root=execution_dir,
                 label=f"private dependency {role!r}",
             )
-        if private_path.parent != execution_dir or private_path.name != source_path.name:
+        if role == recovery_checkpoint_role:
+            # The seeded checkpoint is the one sanctioned rename: the crashed
+            # generation's runtime `<stem>.gbw` materialized under the
+            # `%moinp`-safe `<stem>.moinp.gbw` name.
+            selected_source_name = Path(source_selected)
+            if (
+                private_path.parent != execution_dir
+                or source_path.name != selected_source_name.with_suffix(".gbw").name
+                or private_path.name != recovery_checkpoint_private_name(selected_source_name)
+            ):
+                raise ValueError(
+                    f"Queued ORCA recovery checkpoint {role!r} violates its rename contract"
+                )
+        elif private_path.parent != execution_dir or private_path.name != source_path.name:
             raise ValueError(
                 f"Queued ORCA dependency {role!r} does not preserve its source basename"
             )
@@ -1069,6 +1201,11 @@ def verify_orca_execution_snapshot(
         configured_max_retries=expected_max_retries,
     )
     for role, _descriptor, source_path in verified_dependencies:
+        if role == recovery_checkpoint_role:
+            # The checkpoint's source deliberately carries the runtime-owned
+            # `<stem>.gbw` name inside the frozen crashed generation; its
+            # naming is enforced by the rename contract above instead.
+            continue
         _validate_dependency_basename(
             source_path,
             source_selected_path,

@@ -8,6 +8,23 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Added
+
+- Crash recovery seeds the SCF checkpoint alongside the geometry: when the
+  crashed generation holds a non-empty runtime `<stem>.gbw` within the
+  snapshot byte budgets and the submitted input does not already direct its
+  own orbital chain (`MORead`/`%moinp`), the replacement generation
+  materializes it as `<stem>.moinp.gbw` and the bound input gains `MORead`
+  plus `%moinp "<stem>.moinp.gbw"`, so a recovered run restarts from the
+  last written orbitals instead of reconverging from scratch. The rename is
+  the one sanctioned basename mapping and is enforced fail-closed by the
+  claim-time verification via the `recovery.checkpoint_role` provenance
+  field; an absent, empty, or over-budget checkpoint degrades to
+  geometry-only recovery. A checkpoint truncated by the crash itself cannot
+  be detected up front (the gbw format carries no integrity marker here); if
+  ORCA then rejects it, the run fails visibly with the MORead error in its
+  output rather than silently restarting from scratch.
+
 ### Fixed
 
 - A queued ORCA job interrupted by a host or worker crash resumes again
