@@ -271,6 +271,24 @@ def _maybe_record_reaction_orca_candidates_exhausted(
         return
     stage_id = str(plan.existing_stages[0].get("stage_id") or "")
     limit_exhausted = plan.omitted_candidate_count > 0
+    stage_count = len(plan.existing_stages)
+    rejected_count = sum(
+        1
+        for stage in plan.existing_stages
+        if str(stage.get("status") or "").strip().lower() == "submission_failed"
+    )
+    if rejected_count == stage_count:
+        outcome_clause = (
+            f"all {stage_count} candidate submission(s) were rejected before execution "
+            "(see each stage's submission_error_detail)"
+        )
+    elif rejected_count:
+        outcome_clause = (
+            f"{rejected_count} of {stage_count} candidate submission(s) were rejected before "
+            "execution and none of the attempted candidates verified a transition state"
+        )
+    else:
+        outcome_clause = "none of the attempted candidates verified a transition state"
     _record_workflow_error(
         payload,
         scope="reaction_ts_search_orca_candidate_exhausted",
@@ -278,10 +296,10 @@ def _maybe_record_reaction_orca_candidates_exhausted(
         reason="ts_candidate_limit_exhausted" if limit_exhausted else "ts_candidates_exhausted",
         message=(
             f"The max_orca_stages={plan.max_stage_count} reaction-candidate limit was exhausted; "
-            f"{plan.omitted_candidate_count} additional candidate(s) were not submitted and none "
-            "of the attempted candidates verified a transition state."
+            f"{plan.omitted_candidate_count} additional candidate(s) were not submitted and "
+            f"{outcome_clause}."
             if limit_exhausted
-            else "All reaction TS candidates were attempted; none verified a transition state."
+            else f"All reaction TS candidates reached terminal states; {outcome_clause}."
         ),
     )
 

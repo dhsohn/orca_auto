@@ -1436,8 +1436,76 @@ def test_append_reaction_orca_stages_fails_workflow_when_all_orca_candidates_fai
         "scope": "reaction_ts_search_orca_candidate_exhausted",
         "stage_id": "orca_optts_freq_01",
         "reason": "ts_candidates_exhausted",
-        "message": "All reaction TS candidates were attempted; none verified a transition state.",
+        "message": (
+            "All reaction TS candidates reached terminal states; none of the attempted "
+            "candidates verified a transition state."
+        ),
     }
+
+
+def test_append_reaction_orca_stages_records_submission_rejections_in_exhaustion_error(
+    tmp_path: Path,
+) -> None:
+    """Candidates rejected at queue submission must not read as 'attempted'."""
+    candidate = _candidate(
+        "/tmp/candidate_01.xyz",
+        source_job_id="xtb_job_02",
+        source_job_type="path_search",
+        reaction_key="rxn_02",
+        rank=1,
+        kind="ts_guess",
+        score=-10.0,
+    )
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_reaction_submission_rejected",
+        "metadata": {"request": {"parameters": {"max_orca_stages": 1}}},
+        "stages": [
+            {
+                "stage_id": "xtb_path_search_01",
+                "status": "completed",
+                "metadata": {},
+                "task": {"engine": "xtb", "payload": {"job_dir": "/tmp/xtb_job_02"}},
+            },
+            {
+                "stage_id": "orca_optts_freq_01",
+                "status": "submission_failed",
+                "metadata": {"reason": "invalid_submission_input"},
+                "task": {
+                    "engine": "orca",
+                    "metadata": {"source_candidate_path": candidate.artifact_path},
+                },
+            },
+        ],
+    }
+    contract = SimpleNamespace(
+        job_id="xtb_job_02",
+        job_type="path_search",
+        candidate_details=(),
+        selected_candidate_paths=(),
+    )
+    deps = orchestration_deps(
+        overrides={
+            "_load_config_root": lambda path, **kwargs: (
+                tmp_path / ("xtb" if "xtb" in str(path) else "orca")
+            ),
+            "load_xtb_artifact_contract": lambda **kwargs: contract,
+            "select_xtb_downstream_inputs": lambda *args, **kwargs: (candidate,),
+        }
+    )
+
+    created = append_reaction_orca_stages_impl(
+        payload,
+        workspace_dir=tmp_path,
+        xtb_config="/tmp/xtb.yaml",
+        orca_config="/tmp/orca.yaml",
+        deps=deps,
+    )
+
+    assert created is False
+    workflow_error = payload["metadata"]["workflow_error"]
+    assert workflow_error["reason"] == "ts_candidates_exhausted"
+    assert "rejected before execution" in workflow_error["message"]
+    assert "submission_error_detail" in workflow_error["message"]
 
 
 def test_append_reaction_orca_stages_materializes_under_workflow_orca_stage_root(

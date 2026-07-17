@@ -45,7 +45,7 @@ def test_queue_name_uses_workflow_workspace_for_generic_input_label() -> None:
     )
 
 
-def test_queue_name_keeps_meaningful_workflow_label() -> None:
+def test_queue_name_prefers_workspace_over_stage_label() -> None:
     assert (
         rendering._queue_name_text(
             {
@@ -54,6 +54,39 @@ def test_queue_name_keeps_meaningful_workflow_label() -> None:
                 "status": "running",
                 "label": "reaction-case",
                 "metadata": {"workspace_dir": "/tmp/workflow_runs/wf_001"},
+            }
+        )
+        == "wf_001"
+    )
+
+
+def test_queue_name_uses_workspace_display_name_for_generation_workspaces() -> None:
+    assert (
+        rendering._queue_name_text(
+            {
+                "activity_id": "20260717-153816-966c453a",
+                "kind": "workflow",
+                "status": "running",
+                "label": "reactant_to_product",
+                "metadata": {
+                    "workspace_dir": "/tmp/orca_runs/TS8_wf/20260717-153816-966c453a",
+                    "workspace_display_name": "TS8_wf",
+                },
+            }
+        )
+        == "TS8_wf"
+    )
+
+
+def test_queue_name_falls_back_to_label_without_workspace() -> None:
+    assert (
+        rendering._queue_name_text(
+            {
+                "activity_id": "wf_002",
+                "kind": "workflow",
+                "status": "running",
+                "label": "reaction-case",
+                "metadata": {},
             }
         )
         == "reaction-case"

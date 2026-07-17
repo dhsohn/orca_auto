@@ -10,7 +10,9 @@ from typing import Any
 import pytest
 
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.core.utils import normalize_text
 from orca_auto.flow.submitters import orca as orca_submitter
+from orca_auto.flow.submitters.orca_submission import record_submission_outcome
 from orca_auto.orca import config as orca_config
 from orca_auto.orca.commands import run_inp as run_inp_cmd
 from orca_auto.orca.queue import adapter as queue_adapter
@@ -1571,3 +1573,75 @@ def test_cancel_workflow_adopts_exact_cancelled_row_after_payload_write_crash(
     assert final_stage["status"] == "cancelled"
     assert final_stage["task"]["status"] == "cancelled"
     assert final_stage["task"]["cancel_result"]["status"] == "cancelled"
+
+
+def test_record_submission_outcome_persists_failure_reason_and_detail() -> None:
+    """A rejected queue submission must leave its reason on the stage.
+
+    Regression for the reaction_ts_search run whose three OptTS submissions
+    were rejected by the execution-snapshot basename gate with no reason
+    recorded anywhere: stage metadata, journal events, and logs all stayed
+    silent.
+    """
+    stage: dict[str, Any] = {"stage_id": "orca_optts_freq_01"}
+    task: dict[str, Any] = {}
+    stage_metadata: dict[str, Any] = {}
+    submission_record: dict[str, Any] = {
+        "status": "failed",
+        "reason": "invalid_submission_input",
+        "returncode": 1,
+        "stderr": (
+            "ORCA referenced input basename conflicts with a generation "
+            "runtime/output file: ts_guess.hess\n"
+        ),
+        "stdout": "",
+        "parsed_stdout": {},
+    }
+
+    bucket, detail, stage_result = record_submission_outcome(
+        stage=stage,
+        task=task,
+        stage_metadata=stage_metadata,
+        reaction_dir="/tmp/rxn",
+        submission_record=submission_record,
+        now_utc_iso=lambda: "2026-07-17T00:00:00+00:00",
+        normalize_text=normalize_text,
+    )
+
+    assert bucket == "failed"
+    assert stage["status"] == "submission_failed"
+    assert task["status"] == "submission_failed"
+    assert stage_metadata["reason"] == "invalid_submission_input"
+    assert "ts_guess.hess" in stage_metadata["submission_error_detail"]
+    assert stage_result["reason"] == "invalid_submission_input"
+    assert detail["reason"] == "invalid_submission_input"
+
+
+def test_record_submission_outcome_clears_stale_failure_detail_on_submit() -> None:
+    stage: dict[str, Any] = {"stage_id": "orca_optts_freq_01"}
+    task: dict[str, Any] = {}
+    stage_metadata: dict[str, Any] = {
+        "submission_error_detail": "old failure detail",
+        "submission_deferred_reason": "submission_conflict",
+    }
+    submission_record: dict[str, Any] = {
+        "status": "submitted",
+        "returncode": 0,
+        "stdout": "status: queued\nqueue_id: q_new\n",
+        "stderr": "",
+        "parsed_stdout": {"status": "queued", "queue_id": "q_new"},
+    }
+
+    bucket, _detail, _stage_result = record_submission_outcome(
+        stage=stage,
+        task=task,
+        stage_metadata=stage_metadata,
+        reaction_dir="/tmp/rxn",
+        submission_record=submission_record,
+        now_utc_iso=lambda: "2026-07-17T00:00:00+00:00",
+        normalize_text=normalize_text,
+    )
+
+    assert bucket == "submitted"
+    assert "submission_error_detail" not in stage_metadata
+    assert "submission_deferred_reason" not in stage_metadata

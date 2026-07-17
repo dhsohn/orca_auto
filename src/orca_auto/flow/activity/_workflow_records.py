@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.utils import normalize_text
 
 from ._list_deps import ActivityListDeps
@@ -56,6 +57,31 @@ def _workflow_record_label(
     )
 
 
+def _workspace_display_name(workspace_dir: str, *, workflow_root: Path) -> str:
+    """Human-facing workspace name for queue views.
+
+    Generation-named workspaces carry the workflow id as their directory name,
+    so a workspace inside a scaffold displays the scaffold directory (the name
+    the user submitted, e.g. ``TS8_wf``). Direct-API workspaces sitting right
+    under the workflow root keep their generation name — there is no scaffold
+    to show.
+    """
+    if not workspace_dir:
+        return ""
+    workspace = Path(workspace_dir)
+    name = workspace.name
+    if not is_visible_generation_name(name):
+        return name
+    parent = workspace.parent
+    try:
+        parent_is_root = parent == workflow_root or parent.resolve() == workflow_root
+    except OSError:
+        parent_is_root = parent == workflow_root
+    if not parent_is_root and parent.name:
+        return parent.name
+    return name
+
+
 def _workflow_record_aliases(
     record: Any, workflow_id: str, deps: ActivityListDeps
 ) -> tuple[str, ...]:
@@ -74,6 +100,7 @@ def _workflow_activity_record(
     record: Any,
     *,
     summary: dict[str, Any],
+    workflow_root: Path,
     deps: ActivityListDeps,
 ) -> ActivityRecord:
     workflow_id = normalize_text(record.workflow_id)
@@ -101,6 +128,10 @@ def _workflow_activity_record(
             "template_name": normalize_text(record.template_name),
             "request_parameters": deps._coerce_mapping(summary.get("request_parameters")),
             "workspace_dir": normalize_text(record.workspace_dir),
+            "workspace_display_name": _workspace_display_name(
+                normalize_text(record.workspace_dir),
+                workflow_root=workflow_root,
+            ),
             "workflow_file": normalize_text(record.workflow_file),
             "stage_count": int(record.stage_count),
             "reaction_key": normalize_text(record.reaction_key),
@@ -138,6 +169,7 @@ def workflow_records(
             _workflow_activity_record(
                 record,
                 summary=summary_by_id.get(workflow_id, {}),
+                workflow_root=root,
                 deps=deps,
             )
         )
@@ -149,6 +181,7 @@ __all__ = [
     "_workflow_record_aliases",
     "_workflow_record_label",
     "_workflow_summary_by_id",
+    "_workspace_display_name",
     "workflow_elapsed_metadata",
     "workflow_records",
 ]

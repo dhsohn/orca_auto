@@ -429,12 +429,17 @@ def _materialize_inhess_file(
     reaction_dir: Path,
     target_xyz: Path,
 ) -> tuple[Path | None, dict[str, Any]]:
-    """Convert the candidate's xTB Hessian into <inp stem>.hess, best-effort."""
+    """Convert the candidate's xTB Hessian into <inp stem>.inhess.hess, best-effort.
+
+    The basename must stay clear of `<inp stem>.hess`: with a Freq route ORCA
+    writes that name itself, so the execution-snapshot binding rejects it as a
+    runtime-owned output.
+    """
     source_text = normalize_text(request.inhess_source_path)
     if not source_text:
         return None, {}
     source_path = Path(source_text).expanduser()
-    target_hess = reaction_dir / f"{Path(request.inp_filename).stem}.hess"
+    target_hess = reaction_dir / f"{Path(request.inp_filename).stem}.inhess.hess"
     try:
         hessian_payload: bytes | None = None
         if request.inhess_source_identity is not None:

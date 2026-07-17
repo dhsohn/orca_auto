@@ -1046,6 +1046,29 @@ def test_list_activities_autodiscovers_defaults_when_no_args(monkeypatch) -> Non
     assert captured["orca_config"] == "/tmp/orca_auto.yaml"
 
 
+def test_workspace_display_name_prefers_scaffold_for_generation_workspaces() -> None:
+    from orca_auto.flow.activity._workflow_records import _workspace_display_name
+
+    root = Path("/tmp/orca_runs")
+    assert (
+        _workspace_display_name(
+            "/tmp/orca_runs/TS8_wf/20260717-153816-966c453a", workflow_root=root
+        )
+        == "TS8_wf"
+    )
+    # Direct-API workspaces sit right under the workflow root: no scaffold to show.
+    assert (
+        _workspace_display_name("/tmp/orca_runs/20260717-153816-966c453a", workflow_root=root)
+        == "20260717-153816-966c453a"
+    )
+    # Legacy non-generation workspace names display as themselves.
+    assert (
+        _workspace_display_name("/tmp/orca_runs/wf_reaction_ts8", workflow_root=root)
+        == "wf_reaction_ts8"
+    )
+    assert _workspace_display_name("", workflow_root=root) == ""
+
+
 def test_cancel_activity_autodiscovers_defaults(monkeypatch) -> None:
     monkeypatch.setattr(
         _activity_sources, "discover_workflow_root", lambda workflow_root: "/tmp/workflow_root"
