@@ -54,6 +54,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
     run start, artifact persistence, run polling) remain.
   - The `authorized_operator` action audience, which had no production
     issuer. All interactive bot actions are originator-bound.
+  - The `EngineNotificationModule` layer between `EngineJobNotifications`
+    and `EngineNotificationDelivery`, along with its consumer-less
+    keyword `notify_finished` variant. `build_engine_job_notifications`
+    keeps its signature and the xTB/CREST notification entry points are
+    unchanged.
 
 ### Changed
 
