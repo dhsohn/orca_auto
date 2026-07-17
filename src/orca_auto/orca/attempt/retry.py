@@ -9,10 +9,9 @@ from typing import Any
 from ..inp_rewriter import (
     prepare_checkpoint_restart_input,
     prepare_scants_scan_retry_input,
-    rewrite_for_retry,
 )
 from ..out_analyzer import OutAnalysis
-from ..retry_policy import resume_checkpoint_input_path, retry_recipe_name_for_input
+from ..retry_policy import resume_checkpoint_input_path
 from ..scants import (
     highest_scants_surface_point,
     input_uses_scants,
@@ -153,7 +152,6 @@ def _output_has_scants_actual_surface_maximum(ctx: RetryAttemptRequest) -> bool:
 def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
     next_retry_number = ctx.retries_used + 1
     next_inp = ctx.retry_inp_path(ctx.selected_inp, next_retry_number)
-    patch_step = retry_recipe_name_for_input(ctx.selected_inp, next_retry_number)
     try:
         uses_scants = input_uses_scants(ctx.current_inp) or input_uses_scants(ctx.selected_inp)
         prepared_scants, patch_actions = _prepare_scants_optts_fallback(ctx, next_inp=next_inp)
@@ -182,12 +180,11 @@ def prepare_retry_attempt(ctx: RetryAttemptRequest) -> int | None:
         if prepared_scants is None:
             if uses_scants:
                 raise ScantsRetryStop("scants_recipes_exhausted")
-            patch_actions = rewrite_for_retry(
-                source_inp=ctx.current_inp,
-                target_inp=next_inp,
-                step=patch_step,
-                max_memory_gb=ctx.max_memory_gb_per_task(),
-            )
+            # Non-ScanTS inputs carry no automatic rewrite recipe. This branch
+            # is reachable only for resumed runs whose persisted state grants a
+            # retry budget the current policy would not; fail the run instead
+            # of rerunning the identical input.
+            raise RuntimeError("no_retry_rewrite_available")
     except ScantsRetryStop as stop:
         reason = str(stop)
         _extend_current_patch_actions(ctx.state, [f"scants_retry_stopped:{reason}"])

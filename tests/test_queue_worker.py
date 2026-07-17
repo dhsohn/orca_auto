@@ -46,7 +46,7 @@ from orca_auto.core.statuses import (
     STATUS_FAILED,
     STATUS_RUNNING,
 )
-from orca_auto.orca.config import AppConfig, RuntimeConfig, TelegramConfig
+from orca_auto.orca.config import AppConfig, RetryRuntimeConfig, TelegramConfig
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue.adapter import (
     DuplicateEntryError,
@@ -429,7 +429,7 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
             "orca_terminal_replay": replay_marker,
         },
     )
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     if existing_cursor:
         queue_worker_mod._replay_state(worker).reconcile_statuses = {
@@ -504,7 +504,7 @@ def test_repeated_worker_startup_preserves_historical_failed_queue_bytes(
     queue_file = tmp_path / "queue.json"
     queue_bytes = queue_file.read_bytes()
     queue_mtime_ns = queue_file.stat().st_mtime_ns
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
 
     def current_entries(_cfg: AppConfig) -> list[tuple[Path, QueueEntry]]:
         return [(tmp_path, list_queue(tmp_path)[0])]
@@ -617,7 +617,7 @@ def test_terminal_writer_marker_replays_once_after_fresh_worker_restart(
     [terminal] = list_queue(tmp_path)
     assert terminal.status.value == expected_status
     assert queue_worker_mod._terminal_replay_marker_from_entry(terminal) is not None
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
 
     def current_entries(_cfg: AppConfig) -> list[tuple[Path, QueueEntry]]:
         return [(tmp_path, current) for current in list_queue(tmp_path)]
@@ -801,7 +801,7 @@ def test_repair_blocked_terminal_never_uses_observed_active_edge(
         _terminal_replay_entry(tmp_path, QueueStatus.FAILED),
         metadata=metadata,
     )
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -858,7 +858,7 @@ def test_terminal_replay_retries_failed_notification_until_marker_is_durable(
     (tmp_path / "rxn").mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
     cfg = AppConfig(
-        runtime=RuntimeConfig(allowed_root=str(tmp_path)),
+        runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)),
         telegram=TelegramConfig(bot_token="token", chat_id="chat"),
     )
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
@@ -893,7 +893,7 @@ def test_terminal_replay_uses_selected_discord_provider_for_durability(
     (tmp_path / "rxn").mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
     cfg = AppConfig(
-        runtime=RuntimeConfig(allowed_root=str(tmp_path)),
+        runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)),
         messenger=MessengerConfig(
             provider="discord",
             discord=DiscordConfig(bot_token="secret-token", default_channel_id="123"),
@@ -930,7 +930,7 @@ def test_terminal_replay_retries_when_job_record_artifacts_are_not_ready(
 ) -> None:
     (tmp_path / "rxn").mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -953,7 +953,7 @@ def test_terminal_replay_finalizes_cancelled_state_before_side_effects(tmp_path:
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -995,7 +995,7 @@ def test_terminal_replay_corrects_cancelled_queue_to_existing_completed_state(
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -1030,7 +1030,7 @@ def test_terminal_replay_observes_pending_to_cancelled_transition(tmp_path: Path
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
     pending = _terminal_replay_entry(tmp_path, QueueStatus.PENDING)
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -1088,7 +1088,7 @@ def test_terminal_replay_skips_superseded_cancelled_generation(tmp_path: Path) -
     current_state["job_id"] = "task-b"
     current_state["status"] = STATUS_RUNNING
     save_state(reaction_dir, current_state)
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     entries = [
         (old_queue_root, old_cancelled),
@@ -1176,7 +1176,7 @@ def test_terminal_owner_switches_from_terminal_owner_to_seen_active_generation(
     owner_b = (str(root_b.resolve()), failed_b.queue_id)
     reaction_key = str(reaction_dir.resolve())
     entries = [(root_a, active_a), (root_b, failed_b)]
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     queue_worker_mod._replay_state(worker).generation_owners = {reaction_key: owner_b}
     queue_worker_mod._replay_state(worker).generation_owner_active = {reaction_key: True}
@@ -1248,7 +1248,7 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
         encoding="utf-8",
     )
     entries = [(old_root, old_cancelled), (new_root, new_cancelled)]
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     queue_worker_mod._replay_state(worker).reconcile_statuses = {
         (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
@@ -1320,7 +1320,7 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
         enqueued_at="",
     )
     entries = [(root_a, cancelled_a), (root_b, cancelled_b)]
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     queue_worker_mod._replay_state(worker).reconcile_statuses = {
         (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
@@ -1369,7 +1369,7 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
     reaction_dir.mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
     entries = [(tmp_path, entry)]
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     queue_worker_mod._replay_state(worker).reconcile_statuses = {
         (str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING
@@ -1428,7 +1428,7 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
     reaction_dir.mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
     entries = [(tmp_path, entry)]
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     queue_worker_mod._replay_state(worker).reconcile_statuses = {
         (str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING
@@ -1502,7 +1502,7 @@ def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remain
         status=STATUS_COMPLETED,
         final_result={"status": STATUS_COMPLETED, "reason": "old-generation"},
     )
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -1558,7 +1558,7 @@ def test_prepared_terminal_replay_is_dropped_when_entry_state_is_superseded(
     current = new_state(reaction_dir, reaction_dir / "current.inp", max_retries=0)
     current["job_id"] = cancelled.task_id
     save_state(reaction_dir, current)
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -1631,7 +1631,7 @@ def test_durable_terminal_replay_drops_old_finalizer_after_newer_terminal_state(
         status=STATUS_COMPLETED,
         final_result={"status": STATUS_COMPLETED, "reason": "normal_termination"},
     )
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -1673,7 +1673,7 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
     )
     old_entries = [(old_root, old_cancelled)]
     new_entries = [(new_root, new_running)]
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     queue_worker_mod._replay_state(worker).reconcile_statuses = {
         (str(old_root.resolve()), old_cancelled.queue_id): STATUS_RUNNING
@@ -2026,7 +2026,7 @@ def test_terminal_upsert_filters_previous_generation_report(tmp_path: Path) -> N
         ),
         encoding="utf-8",
     )
-    cfg = AppConfig(runtime=RuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
 
     with patch.object(queue_worker_mod, "upsert_job_record") as upsert:
         assert queue_worker_mod._upsert_terminal_job_record(
@@ -2954,7 +2954,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_upsert_terminal: MagicMock,
     ) -> None:
         cfg = AppConfig(
-            runtime=RuntimeConfig(allowed_root=str(self.root)),
+            runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
             telegram=TelegramConfig(bot_token="token", chat_id="chat"),
         )
         worker = QueueWorker(cfg, str(self.root / "config.yaml"), max_concurrent=2)
@@ -3003,7 +3003,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_notify: MagicMock,
     ) -> None:
         cfg = AppConfig(
-            runtime=RuntimeConfig(allowed_root=str(self.root)),
+            runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
             telegram=TelegramConfig(bot_token="token", chat_id="chat"),
         )
         rxn = self.root / "mol_terminal_already_marked"
@@ -3025,7 +3025,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_notify: MagicMock,
     ) -> None:
         cfg = AppConfig(
-            runtime=RuntimeConfig(allowed_root=str(self.root)),
+            runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
             telegram=TelegramConfig(bot_token="token", chat_id="chat"),
         )
         rxn = self.root / "mol_terminal_stale_generation"

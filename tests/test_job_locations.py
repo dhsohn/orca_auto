@@ -15,7 +15,7 @@ from orca_auto.core.queue.engine.input_snapshot import (
     bind_direct_generation_owner,
     require_direct_generation_owner,
 )
-from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RuntimeConfig
+from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.execution_binding import orca_execution_provenance
 from orca_auto.orca.job_locations import _contracts as _job_location_contracts
 from orca_auto.orca.job_locations import _records as _job_location_records
@@ -94,7 +94,7 @@ def _make_cfg(root: Path) -> AppConfig:
     fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_orca.chmod(0o755)
     return AppConfig(
-        runtime=RuntimeConfig(
+        runtime=RetryRuntimeConfig(
             allowed_root=str(root / "runs"),
         ),
         paths=PathsConfig(orca_executable=str(fake_orca)),

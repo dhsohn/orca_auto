@@ -1199,7 +1199,7 @@ def _install_real_orca_workflow_queue(
     fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_orca.chmod(0o755)
     cfg = orca_config.AppConfig(
-        runtime=orca_config.RuntimeConfig(allowed_root=str(allowed_root)),
+        runtime=orca_config.RetryRuntimeConfig(allowed_root=str(allowed_root)),
         paths=orca_config.PathsConfig(orca_executable=str(fake_orca)),
         resources=orca_config.CommonResourceConfig(
             max_cores_per_task=2,

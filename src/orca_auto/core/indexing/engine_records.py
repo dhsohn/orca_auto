@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from .location import JobLocationRecord
@@ -16,22 +16,6 @@ class EngineLocationSpec:
     payload_kind_key: str
     payload_kind_default: str
     molecule_key_name: str
-
-
-@dataclass(frozen=True)
-class EngineLocationRecordRequest:
-    existing: JobLocationRecord | None
-    job_id: str
-    status: str
-    job_dir: Path
-    payload_kind: str
-    selected_input_xyz: str
-    molecule_key: str = ""
-    resource_request: dict[str, int] | None = None
-    resource_actual: dict[str, int] | None = None
-
-    def with_existing(self, existing: JobLocationRecord | None) -> EngineLocationRecordRequest:
-        return replace(self, existing=existing)
 
 
 def resource_dict(max_cores: int, max_memory_gb: int) -> dict[str, int]:
@@ -165,7 +149,6 @@ def build_engine_job_location_record(
 
 
 __all__ = [
-    "EngineLocationRecordRequest",
     "EngineLocationSpec",
     "build_engine_job_location_record",
     "build_job_location_record",

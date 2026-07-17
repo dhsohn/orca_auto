@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from orca_auto.core.paths import validate_configured_executable_path
 
@@ -22,7 +22,6 @@ from .files import (
 from .schema import (
     CommonResourceConfig,
     CommonRuntimeConfig,
-    EmptyBehaviorConfig,
     MessengerConfig,
     TelegramConfig,
     reconcile_legacy_telegram_alias,
@@ -68,7 +67,6 @@ from .schema import (
 )
 
 CONFIG_ENV_VAR = ORCA_AUTO_CONFIG_ENV_VAR
-_AppConfigT = TypeVar("_AppConfigT")
 
 
 @dataclass(frozen=True)
@@ -77,15 +75,11 @@ class WorkflowEnginePathsConfig:
     crest_executable: str = ""
 
 
-WorkflowEngineBehaviorConfig = EmptyBehaviorConfig
-
-
 @dataclass(frozen=True)
 class WorkflowEngineAppConfig:
     runtime: CommonRuntimeConfig
     workflow_root: str = ""
     paths: WorkflowEnginePathsConfig = field(default_factory=WorkflowEnginePathsConfig)
-    behavior: WorkflowEngineBehaviorConfig = field(default_factory=WorkflowEngineBehaviorConfig)
     resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     messenger: MessengerConfig = field(default_factory=MessengerConfig)
@@ -318,10 +312,7 @@ def load_workflow_engine_config(
     executable_key: str,
     executable_display_name: str,
     additional_executables: tuple[tuple[str, str], ...] = (),
-    paths_cls: Callable[..., Any],
-    behavior_cls: Callable[..., Any],
-    app_config_cls: Callable[..., _AppConfigT],
-) -> _AppConfigT:
+) -> WorkflowEngineAppConfig:
     path = Path(config_path or default_config_path_fn()).expanduser().resolve()
     raw = _load_config_mapping(path)
     validate_shared_config_sections(raw)
@@ -347,11 +338,10 @@ def load_workflow_engine_config(
         )
     messenger = messenger_config_from_mapping(messenger_raw)
 
-    return app_config_cls(
+    return WorkflowEngineAppConfig(
         runtime=_runtime_config_from_scheduler(scheduler_raw, workflow_root),
         workflow_root=workflow_root,
-        paths=paths_cls(**executable_values),
-        behavior=behavior_cls(),
+        paths=WorkflowEnginePathsConfig(**executable_values),
         resources=_resource_config(resources_raw),
         telegram=messenger.telegram,
         messenger=messenger,
@@ -364,9 +354,6 @@ def load_xtb_config(config_path: str | None = None) -> WorkflowEngineAppConfig:
         default_config_path_fn=default_shared_config_path,
         executable_key="xtb_executable",
         executable_display_name="xTB",
-        paths_cls=WorkflowEnginePathsConfig,
-        behavior_cls=WorkflowEngineBehaviorConfig,
-        app_config_cls=WorkflowEngineAppConfig,
     )
 
 
@@ -403,7 +390,6 @@ def load_xtb_md_config(config_path: str | None = None) -> WorkflowEngineAppConfi
         ),
         workflow_root="",
         paths=WorkflowEnginePathsConfig(xtb_executable=xtb_executable),
-        behavior=WorkflowEngineBehaviorConfig(),
         resources=_resource_config(resources_raw),
         telegram=messenger.telegram,
         messenger=messenger,
@@ -417,7 +403,4 @@ def load_crest_config(config_path: str | None = None) -> WorkflowEngineAppConfig
         executable_key="crest_executable",
         executable_display_name="CREST",
         additional_executables=(("xtb_executable", "xTB"),),
-        paths_cls=WorkflowEnginePathsConfig,
-        behavior_cls=WorkflowEngineBehaviorConfig,
-        app_config_cls=WorkflowEngineAppConfig,
     )

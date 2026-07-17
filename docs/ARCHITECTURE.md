@@ -64,7 +64,7 @@ src/orca_auto/
 │   ├── attempt/         # Attempt engine, retry, resume, reporting
 │   ├── parser/          # ORCA output parsing
 │   ├── state*.py        # Per-job state machine + persistence
-│   └── ...              # retry recipes, completion rules, indexing
+│   └── ...              # retry policy, completion rules, indexing
 │
 ├── xtb_md/              # Standalone xTB-MD manifest, runner, validation, state
 │
@@ -292,7 +292,7 @@ logic. Notable pieces:
   `output_status.py`, `completion_rules.py`): determines completion by mode —
   TS mode (`OptTS`/`NEB-TS`, requires exactly one imaginary frequency, plus an
   IRC marker when the route has `IRC`) vs Opt mode (normal termination).
-- **Calculation-type retry policy** (`retry_policy.py`, `retry_recipes.py`):
+- **Calculation-type retry policy** (`retry_policy.py`):
   retry counts and rewrites are fixed by ORCA route type, not by the raw user
   retry count. Generic `TightSCF`/`SlowConv` escalation is not applied. Generic
   `Opt`/`Opt+Freq`/`Freq`/single-point routes do not get automatic retries;

@@ -1,6 +1,6 @@
 """Provider-neutral interactive bot application."""
 
-from .action_registry import ActionAudience, ActionRegistry, ActionStore
+from .action_registry import ActionRegistry, ActionStore
 from .application import (
     BotApplication,
     BotApplicationDeps,
@@ -12,7 +12,6 @@ from .settings import BotSettings, settings_from_config
 
 __all__ = [
     "ActionRegistry",
-    "ActionAudience",
     "ActionStore",
     "BotApplication",
     "BotApplicationDeps",

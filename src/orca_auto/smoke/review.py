@@ -409,8 +409,6 @@ class _ProjectionPlanEntry:
 class _ProjectionPublication:
     generation: str
     openable_count: int
-    identity: DirectoryIdentity
-    manifest_text: str
 
 
 class _HtmlReferenceParser(HTMLParser):
@@ -875,128 +873,6 @@ def _projection_manifest(
     }
 
 
-def _verify_source_artifact(root_fd: int, artifact: _Artifact) -> None:
-    expected_digest = artifact.sha256
-    identity = artifact.source_identity
-    if expected_digest is None or identity is None:
-        raise ReviewPacketError("projected artifact source provenance is incomplete")
-    try:
-        source_fd = _open_artifact_source(root_fd, artifact)
-    except _ProjectionUnavailable as exc:
-        raise ReviewPacketError("projected artifact source changed before publication") from exc
-    try:
-        digest, size_bytes = _digest_file(source_fd)
-        _assert_source_unchanged(source_fd, identity)
-    except _ProjectionUnavailable as exc:
-        raise ReviewPacketError("projected artifact source changed before publication") from exc
-    finally:
-        os.close(source_fd)
-    if size_bytes != identity.size_bytes or digest != expected_digest:
-        raise ReviewPacketError("projected artifact source digest changed before publication")
-
-
-def _verify_projection_file(
-    generation_fd: int,
-    parts: tuple[str, ...],
-    *,
-    expected_size: int,
-    expected_digest: str,
-) -> None:
-    if not parts or not all(_windows_safe_component(part) for part in parts):
-        raise ReviewPacketError("published review projection path is unsafe")
-    try:
-        parent_fd = _open_relative_directory(generation_fd, parts[:-1])
-        try:
-            file_fd = os.open(parts[-1], file_open_flags(), dir_fd=parent_fd)
-        finally:
-            os.close(parent_fd)
-    except OSError as exc:
-        raise ReviewPacketError("published review projection file is unavailable") from exc
-    try:
-        before = os.fstat(file_fd)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-            raise ReviewPacketError("published review projection file is unsafe")
-        digest, size_bytes = _digest_file(file_fd)
-        after = os.fstat(file_fd)
-        if (
-            after.st_dev != before.st_dev
-            or after.st_ino != before.st_ino
-            or after.st_size != before.st_size
-            or after.st_mtime_ns != before.st_mtime_ns
-            or after.st_nlink != 1
-        ):
-            raise ReviewPacketError("published review projection file changed during verification")
-        if size_bytes != expected_size or before.st_size != expected_size:
-            raise ReviewPacketError("published review projection file size is invalid")
-        if digest != expected_digest:
-            raise ReviewPacketError("published review projection file digest is invalid")
-    finally:
-        os.close(file_fd)
-
-
-def _generation_open_parts(open_path: str, generation: str) -> tuple[str, ...]:
-    parts = _relative_parts(open_path, "review open path")
-    if len(parts) < 3 or parts[:2] != ("review", generation):
-        raise ReviewPacketError("review open path does not belong to its generation")
-    return parts[2:]
-
-
-def _verify_review_projection(
-    root_fd: int,
-    review_fd: int,
-    reviews: Sequence[_CaseReview],
-    *,
-    publication: _ProjectionPublication,
-) -> None:
-    generation_fd = _open_named_directory_identity(
-        review_fd,
-        publication.generation,
-        publication.identity,
-    )
-    try:
-        manifest_bytes = publication.manifest_text.encode("utf-8")
-        _verify_projection_file(
-            generation_fd,
-            ("artifacts.json",),
-            expected_size=len(manifest_bytes),
-            expected_digest=hashlib.sha256(manifest_bytes).hexdigest(),
-        )
-        artifacts_by_path = {
-            artifact.batch_path: artifact
-            for case in reviews
-            for artifact in case.artifacts
-            if artifact.source_identity is not None
-        }
-        sources: dict[str, _Artifact] = {}
-        copies: list[tuple[str, int, str]] = []
-        for case in reviews:
-            for artifact in case.artifacts:
-                if artifact.open_path is None:
-                    continue
-                if artifact.review_sha256 is None or artifact.size_bytes is None:
-                    raise ReviewPacketError("published review artifact provenance is incomplete")
-                sources[artifact.batch_path] = artifact
-                copies.append((artifact.open_path, artifact.size_bytes, artifact.review_sha256))
-                for dependency in artifact.dependencies:
-                    source_artifact = artifacts_by_path.get(dependency.source_path)
-                    if source_artifact is None:
-                        raise ReviewPacketError("review dependency source provenance is missing")
-                    sources[dependency.source_path] = source_artifact
-                    copies.append((dependency.open_path, dependency.size_bytes, dependency.sha256))
-
-        for artifact in sources.values():
-            _verify_source_artifact(root_fd, artifact)
-        for open_path, size_bytes, digest in copies:
-            _verify_projection_file(
-                generation_fd,
-                _generation_open_parts(open_path, publication.generation),
-                expected_size=size_bytes,
-                expected_digest=digest,
-            )
-    finally:
-        os.close(generation_fd)
-
-
 def _materialize_review_projection(
     root_fd: int,
     review_fd: int,
@@ -1159,14 +1035,6 @@ def _materialize_review_projection(
         publication = _ProjectionPublication(
             generation=generation,
             openable_count=openable_count,
-            identity=staging_identity,
-            manifest_text=manifest_text,
-        )
-        _verify_review_projection(
-            root_fd,
-            review_fd,
-            reviews,
-            publication=publication,
         )
         committed = True
         return publication

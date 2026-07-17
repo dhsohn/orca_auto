@@ -18,12 +18,12 @@ from orca_auto.orca.commands._helpers import (
     default_config_path,
     finalize_batch_apply,
 )
-from orca_auto.orca.config import AppConfig, PathsConfig, RuntimeConfig
+from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig
 
 
 def _cfg(allowed_root: Path, *, workflow_root: Path | None = None) -> AppConfig:
     return AppConfig(
-        runtime=RuntimeConfig(
+        runtime=RetryRuntimeConfig(
             allowed_root=str(allowed_root),
             default_max_retries=3,
         ),

@@ -17,7 +17,7 @@ from orca_auto.orca.admission_env import (
     ADMISSION_TOKEN_ENV_VAR,
 )
 from orca_auto.orca.commands.run_inp import _cmd_run_inp_execute
-from orca_auto.orca.config import AppConfig, PathsConfig, RuntimeConfig
+from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.state import load_state, state_path
 
 
@@ -27,7 +27,7 @@ def _make_cfg(tmp: str) -> AppConfig:
     fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_orca.chmod(0o755)
     cfg = AppConfig(
-        runtime=RuntimeConfig(allowed_root=tmp),
+        runtime=RetryRuntimeConfig(allowed_root=tmp),
         paths=PathsConfig(orca_executable=str(fake_orca)),
     )
     cfg.runtime.max_concurrent = 1

@@ -10,9 +10,6 @@ from orca_auto.core.config.engines import (
     WorkflowEngineAppConfig as AppConfig,
 )
 from orca_auto.core.config.engines import (
-    WorkflowEngineBehaviorConfig as BehaviorConfig,
-)
-from orca_auto.core.config.engines import (
     WorkflowEnginePathsConfig as PathsConfig,
 )
 from orca_auto.core.config.schema import CommonResourceConfig, CommonRuntimeConfig, TelegramConfig
@@ -40,7 +37,6 @@ def _cfg(tmp_path: Path) -> AppConfig:
             crest_executable="/opt/crest",
             xtb_executable=str(xtb_executable),
         ),
-        behavior=BehaviorConfig(),
         resources=CommonResourceConfig(max_cores_per_task=6, max_memory_gb_per_task=14),
         telegram=TelegramConfig(),
     )

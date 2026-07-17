@@ -20,9 +20,6 @@ from ._models import (
     JobRuntimeContext,
     OrcaContractPayloadContext,
 )
-from ._models import (
-    OrcaContractResolvedFields as _OrcaContractResolvedFields,
-)
 from ._records import list_job_location_records, resolve_record_job_dir
 from ._utils import (
     QUEUE_FILE_NAME,
@@ -244,27 +241,6 @@ def _runtime_paths(
     )
 
 
-def _orca_contract_resolved_fields(
-    *,
-    runtime: JobRuntimeContext,
-    payloads: _contract_payload.RuntimePayloads,
-    current_dir: Path | None,
-    artifact_dir: Path | None,
-    target: str,
-    run_id: str,
-    deps: _JobLocationDeps,
-) -> _OrcaContractResolvedFields:
-    return _contract_context.resolved_contract_fields(
-        runtime=runtime,
-        payloads=payloads,
-        current_dir=current_dir,
-        artifact_dir=artifact_dir,
-        target=target,
-        run_id=run_id,
-        deps=deps,
-    )
-
-
 def _orca_contract_payload_context(
     index_root: str | Path,
     target: str,
@@ -288,7 +264,6 @@ def _orca_contract_payload_context(
         run_id=run_id,
         reaction_dir=reaction_dir,
         deps=deps,
-        resolved_fields_fn=_orca_contract_resolved_fields,
     )
 
 

@@ -15,8 +15,8 @@ from typing import Any
 from orca_auto.core.config.files import validated_runs_root_text
 from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
-from orca_auto.core.utils.lock import file_lock, file_lock_at
-from orca_auto.core.utils.persistence import atomic_write_json, now_utc_iso
+from orca_auto.core.utils.lock import file_lock_at
+from orca_auto.core.utils.persistence import now_utc_iso
 from orca_auto.smoke._dirfd import (
     DirectoryIdentity,
     PinnedReadError,
@@ -71,10 +71,6 @@ class PinnedBatchDirectory:
     batches_identity: DirectoryIdentity
     batch_identity: DirectoryIdentity
     cases_identity: DirectoryIdentity
-
-    @property
-    def smoke_access_path(self) -> Path:
-        return Path("/proc") / "self" / "fd" / str(self.smoke_root_fd)
 
     @property
     def batch_access_path(self) -> Path:
@@ -135,18 +131,6 @@ class PinnedCaseDirectory:
     runtime_identity: DirectoryIdentity
     harness_identity: DirectoryIdentity
     pytest_identity: DirectoryIdentity
-
-    @property
-    def case_access_path(self) -> Path:
-        return Path("/proc") / str(os.getpid()) / "fd" / str(self.case_fd)
-
-    @property
-    def runtime_access_path(self) -> Path:
-        return Path("/proc") / str(os.getpid()) / "fd" / str(self.runtime_fd)
-
-    @property
-    def harness_access_path(self) -> Path:
-        return Path("/proc") / str(os.getpid()) / "fd" / str(self.harness_fd)
 
     @property
     def pytest_access_path(self) -> Path:
@@ -619,9 +603,9 @@ def write_batch_manifest(
     manifest: Mapping[str, Any],
     *,
     directory_fd: int,
-) -> Path:
+) -> None:
+    del batch_dir  # kept for call-site symmetry with the fd it pins
     _atomic_write_json_at(directory_fd, SMOKE_BATCH_FILENAME, manifest)
-    return batch_dir / SMOKE_BATCH_FILENAME
 
 
 def write_case_manifest(
@@ -629,9 +613,9 @@ def write_case_manifest(
     manifest: Mapping[str, Any],
     *,
     directory_fd: int,
-) -> Path:
+) -> None:
+    del case_dir  # kept for call-site symmetry with the fd it pins
     _atomic_write_json_at(directory_fd, SMOKE_CASE_FILENAME, manifest)
-    return case_dir / SMOKE_CASE_FILENAME
 
 
 def _read_scanned_regular_file(
@@ -895,43 +879,33 @@ def build_case_manifest(
 def rebuild_smoke_index(
     smoke_root: Path,
     *,
-    smoke_root_fd: int | None = None,
-    batches_fd: int | None = None,
+    smoke_root_fd: int,
+    batches_fd: int,
 ) -> Path:
-    batches_root = (
-        Path("/proc") / "self" / "fd" / str(batches_fd)
-        if batches_fd is not None
-        else smoke_root / "batches"
-    )
+    batches_root = Path("/proc") / "self" / "fd" / str(batches_fd)
     rows: list[dict[str, Any]] = []
-    lock_context = (
-        file_lock_at(
-            smoke_root_fd,
-            "index.lock",
-            display_path=smoke_root / "index.lock",
-        )
-        if smoke_root_fd is not None
-        else file_lock(smoke_root / "index.lock")
-    )
-    with lock_context:
-        if batches_fd is not None or (batches_root.is_dir() and not batches_root.is_symlink()):
-            for candidate in batches_root.iterdir():
-                if not candidate.is_dir() or candidate.is_symlink():
-                    continue
-                manifest = _bounded_json_mapping(candidate / SMOKE_BATCH_FILENAME)
-                if manifest is None:
-                    continue
-                rows.append(
-                    {
-                        "batch_id": str(manifest.get("batch_id") or candidate.name),
-                        "profile": str(manifest.get("profile") or ""),
-                        "status": str(manifest.get("status") or "unknown"),
-                        "review_status": str(manifest.get("review_status") or "unreviewed"),
-                        "started_at": manifest.get("started_at"),
-                        "finished_at": manifest.get("finished_at"),
-                        "path": f"batches/{candidate.name}",
-                    }
-                )
+    with file_lock_at(
+        smoke_root_fd,
+        "index.lock",
+        display_path=smoke_root / "index.lock",
+    ):
+        for candidate in batches_root.iterdir():
+            if not candidate.is_dir() or candidate.is_symlink():
+                continue
+            manifest = _bounded_json_mapping(candidate / SMOKE_BATCH_FILENAME)
+            if manifest is None:
+                continue
+            rows.append(
+                {
+                    "batch_id": str(manifest.get("batch_id") or candidate.name),
+                    "profile": str(manifest.get("profile") or ""),
+                    "status": str(manifest.get("status") or "unknown"),
+                    "review_status": str(manifest.get("review_status") or "unreviewed"),
+                    "started_at": manifest.get("started_at"),
+                    "finished_at": manifest.get("finished_at"),
+                    "path": f"batches/{candidate.name}",
+                }
+            )
         rows.sort(key=lambda row: str(row.get("started_at") or ""), reverse=True)
         path = smoke_root / SMOKE_INDEX_FILENAME
         payload = {
@@ -939,10 +913,7 @@ def rebuild_smoke_index(
             "generated_at": now_utc_iso(),
             "batches": rows,
         }
-        if smoke_root_fd is None:
-            atomic_write_json(path, payload, ensure_ascii=False)
-        else:
-            _atomic_write_json_at(smoke_root_fd, SMOKE_INDEX_FILENAME, payload)
+        _atomic_write_json_at(smoke_root_fd, SMOKE_INDEX_FILENAME, payload)
     return path
 
 

@@ -178,7 +178,6 @@ def payload_context_from_runtime(
     run_id: str,
     reaction_dir: str,
     deps: Any,
-    resolved_fields_fn: Any | None = None,
 ) -> OrcaContractPayloadContext:
     payloads = _contract_payload.runtime_payloads(runtime)
     resolved_target = "" if runtime.selector_miss else target
@@ -190,8 +189,7 @@ def payload_context_from_runtime(
         deps=deps,
     )
     artifact_dir = None if runtime.generation_invalid else runtime.artifact_dir or current_dir
-    field_resolver = resolved_fields_fn or resolved_contract_fields
-    resolved = field_resolver(
+    resolved = resolved_contract_fields(
         runtime=runtime,
         payloads=payloads,
         current_dir=current_dir,

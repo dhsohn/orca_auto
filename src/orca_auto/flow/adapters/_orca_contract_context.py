@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.orca.job_locations._generation import current_generation_payloads
 
 
@@ -85,9 +86,9 @@ def explicit_queue_entry(
     deps: Any,
 ) -> dict[str, Any] | None:
     if not (
-        deps.normalize_text_fn(request.queue_id)
-        or deps.normalize_text_fn(request.run_id)
-        or deps.normalize_text_fn(request.reaction_dir)
+        normalize_text(request.queue_id)
+        or normalize_text(request.run_id)
+        or normalize_text(request.reaction_dir)
     ):
         return None
     return deps.find_queue_entry_fn(
@@ -132,10 +133,10 @@ def load_context_payloads(context: LoaderContext, deps: Any) -> None:
 def resolve_run_id(request: LoadRequest, context: LoaderContext, deps: Any) -> str:
     queue = context.queue_entry or {}
     return (
-        deps.normalize_text_fn(request.run_id)
-        or deps.normalize_text_fn(context.state.get("run_id"))
-        or deps.normalize_text_fn(context.report.get("run_id"))
-        or deps.normalize_text_fn(deps.queue_entry_metadata_value_fn(queue, "run_id"))
+        normalize_text(request.run_id)
+        or normalize_text(context.state.get("run_id"))
+        or normalize_text(context.report.get("run_id"))
+        or normalize_text(deps.queue_entry_metadata_value_fn(queue, "run_id"))
     )
 
 

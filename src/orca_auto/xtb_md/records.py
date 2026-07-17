@@ -166,14 +166,11 @@ def persist_job_artifact(cfg: Any, entry: Any, payload: dict[str, Any]) -> None:
 
     job_dir = validated_job_dir()
     write_state(job_dir, payload)
-    job_dir = validated_job_dir()
     write_report_json(job_dir, payload)
-    job_dir = validated_job_dir()
     write_report_md_lines(job_dir, build_engine_report_markdown(payload))
     resources = resource_request_from_entry(entry)
     state = payload.get("status")
     status = str(state.get("state") or "") if isinstance(state, Mapping) else ""
-    job_dir = validated_job_dir()
     job_locations.upsert_job_record(
         cfg,
         job_id=str(getattr(entry, "task_id", "") or ""),

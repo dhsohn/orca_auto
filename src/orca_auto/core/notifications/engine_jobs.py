@@ -9,7 +9,7 @@ from typing import Any
 from ._engine_delivery import EngineLineSender
 from ._engine_rendering import EngineEventField
 from .engine_delivery import EngineNotificationDelivery
-from .engine_notifier import EngineNotifier, build_engine_notifier
+from .engine_notifier import EngineNotifier
 from .engine_requests import (
     EngineJobFinishedRequest,
     EngineJobLifecycleRequest,
@@ -106,7 +106,7 @@ def build_engine_notification_module(
     send_fn: EngineLineSender,
 ) -> EngineNotificationModule:
     return EngineNotificationModule(
-        notifier=build_engine_notifier(label=label, engine=engine, send_fn=send_fn),
+        notifier=EngineNotifier(label=label, engine=engine, send_fn=send_fn),
         selected_field_name=selected_field_name,
         detail_field_names=detail_field_names,
         terminal_count_field=terminal_count_field,

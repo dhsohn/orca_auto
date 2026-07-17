@@ -119,9 +119,7 @@ def test_recover_missing_retry_input_success_creates_patch_actions_and_saves_sta
     rewrite_mock.assert_called_once_with(
         source_inp=source_inp.resolve(),
         target_inp=current_inp,
-        step="no_route_rewrite",
         max_memory_gb=None,
-        allow_no_effective_change=True,
     )
     assert state["attempts"][-1]["patch_actions"] == [
         "resume_recreated_missing_input:calc.retry01.inp",

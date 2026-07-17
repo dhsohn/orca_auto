@@ -26,10 +26,6 @@ from .resource_directives import (
     prepare_submission_resource_request,
     read_resource_request_from_input,
 )
-from .retry_policy import RetryRecipeName
-from .retry_recipes import (
-    apply_retry_recipe as _apply_retry_recipe,
-)
 from .scants import (
     apply_scants_optts_resume_rewrite,
     apply_scants_relaxed_scan_resume_rewrite,
@@ -56,37 +52,17 @@ __all__ = [
 def rewrite_for_retry(
     source_inp: Path,
     target_inp: Path,
-    step: RetryRecipeName,
     *,
     max_memory_gb: int | None = None,
-    allow_no_effective_change: bool = False,
 ) -> list[str]:
     lines = source_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
     actions: list[str] = []
 
-    actions.extend(_apply_retry_recipe(lines, step))
-
     if max_memory_gb is not None and clamp_maxcore_to_budget(lines, max_memory_gb=max_memory_gb):
         actions.append("maxcore_clamped_to_budget")
 
-    if not allow_no_effective_change and not _has_effective_retry_change(actions):
-        raise RuntimeError("no_retry_rewrite_available")
-
     atomic_write_text(target_inp, "\n".join(lines).rstrip() + "\n")
     return actions
-
-
-def _has_effective_retry_change(actions: list[str]) -> bool:
-    return any(
-        action.startswith("checkpoint_restart_from_")
-        or action.startswith("geometry_restart_from_")
-        or action.startswith("geom_hessian")
-        or action.startswith("route_add_tightscf")
-        or action.startswith("scf_maxiter")
-        or action.startswith("route_add_looseopt")
-        or action.startswith("maxcore_increased")
-        for action in actions
-    )
 
 
 def prepare_checkpoint_restart_input(

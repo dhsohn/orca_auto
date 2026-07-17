@@ -1,14 +1,8 @@
 from __future__ import annotations
 
-from functools import partial
 from pathlib import Path
 
-from orca_auto.core.utils.coercion import (
-    coerce_int_mapping,
-    normalize_bool,
-    normalize_text,
-    safe_int,
-)
+from orca_auto.core.utils.coercion import coerce_int_mapping
 
 from ..contracts.orca import OrcaArtifactContract
 from . import _orca_contract_status as _contract_status
@@ -25,9 +19,6 @@ from ._orca_contract_assembly import (
 def _contract_loader_deps() -> OrcaContractLoaderDeps:
     return OrcaContractLoaderDeps(
         path_type=Path,
-        normalize_text_fn=normalize_text,
-        normalize_bool_fn=normalize_bool,
-        safe_int_fn=safe_int,
         tracked_runtime_context_fn=_orca_tracking.tracked_runtime_context_impl,
         tracked_artifact_context_fn=_orca_tracking.tracked_artifact_context_impl,
         find_queue_entry_fn=_local_lookup.find_queue_entry_impl,
@@ -35,22 +26,14 @@ def _contract_loader_deps() -> OrcaContractLoaderDeps:
         resolve_candidate_path_fn=_path_helpers.resolve_candidate_path_impl,
         direct_dir_target_fn=_path_helpers.direct_dir_target_impl,
         load_json_dict_fn=_local_lookup.load_json_dict_impl,
-        status_from_payloads_fn=partial(
-            _contract_status.status_from_payloads_impl,
-            normalize_text_fn=normalize_text,
-            normalize_bool_fn=normalize_bool,
-        ),
+        status_from_payloads_fn=_contract_status.status_from_payloads_impl,
         resolve_artifact_path_fn=_path_helpers.resolve_artifact_path_impl,
         derive_selected_input_xyz_fn=_path_helpers.derive_selected_input_xyz_impl,
         prefer_orca_optimized_xyz_fn=_path_helpers.prefer_orca_optimized_xyz_impl,
         coerce_resource_dict_fn=coerce_int_mapping,
-        attempt_count_fn=partial(_contract_status.attempt_count_impl, safe_int_fn=safe_int),
-        max_retries_fn=partial(_contract_status.max_retries_impl, safe_int_fn=safe_int),
-        coerce_attempts_fn=partial(
-            _contract_status.coerce_attempts_impl,
-            normalize_text_fn=normalize_text,
-            safe_int_fn=safe_int,
-        ),
+        attempt_count_fn=_contract_status.attempt_count_impl,
+        max_retries_fn=_contract_status.max_retries_impl,
+        coerce_attempts_fn=_contract_status.coerce_attempts_impl,
         final_result_payload_fn=_contract_status.final_result_payload_impl,
         contract_cls=OrcaArtifactContract,
     )
