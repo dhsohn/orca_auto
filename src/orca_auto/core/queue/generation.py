@@ -5,6 +5,7 @@ import json
 import re
 import secrets
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from .types import QueueEntry
@@ -16,6 +17,26 @@ def is_visible_generation_name(value: str) -> bool:
     """Return whether *value* is an exact user-visible execution generation name."""
 
     return bool(VISIBLE_GENERATION_NAME_RE.fullmatch(str(value)))
+
+
+def visible_generation_children(job_dir: Path) -> tuple[Path, ...]:
+    """Direct generation-named child directories of *job_dir*, newest first.
+
+    Generation names embed a local timestamp, so the reverse lexicographic
+    order is the creation order. Symlinked children are excluded so readers
+    cannot be steered outside the job directory.
+    """
+
+    try:
+        entries = list(job_dir.iterdir())
+    except OSError:
+        return ()
+    children = [
+        entry
+        for entry in entries
+        if is_visible_generation_name(entry.name) and entry.is_dir() and not entry.is_symlink()
+    ]
+    return tuple(sorted(children, key=lambda entry: entry.name, reverse=True))
 
 
 def new_visible_generation_name() -> str:
@@ -91,4 +112,5 @@ __all__ = [
     "new_visible_generation_name",
     "queue_entries_same_generation",
     "queue_entry_generation_token",
+    "visible_generation_children",
 ]

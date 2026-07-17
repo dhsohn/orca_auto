@@ -179,13 +179,14 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     generation_state = load_state(generation_dir)
     assert generation_state == state
 
-    report = load_report_json(reaction_dir)
+    report = load_report_json(generation_dir)
     assert report is not None
     assert report["status"]["state"] == "completed"
-    assert report_json_path(reaction_dir).exists()
-    assert load_report_json(generation_dir) == report
-    assert report_md_path(reaction_dir).exists()
-    report_html = reaction_dir / RUN_REPORT_HTML_FILE
+    assert report_json_path(generation_dir).exists()
+    assert not report_json_path(reaction_dir).exists()
+    assert report_md_path(generation_dir).exists()
+    assert not report_md_path(reaction_dir).exists()
+    report_html = generation_dir / RUN_REPORT_HTML_FILE
     assert report_html.exists()
     report_html_text = report_html.read_text(encoding="utf-8")
     assert "completed" in report_html_text
@@ -193,12 +194,13 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert "r2scan-3c" not in report_html_text
     assert '<td class="ok">completed' in report_html_text
     assert "AnalyzerStatus.COMPLETED" not in report_html_text
-    report_markdown = report_md_path(reaction_dir).read_text(encoding="utf-8")
+    report_markdown = report_md_path(generation_dir).read_text(encoding="utf-8")
     assert "Status: `completed`" in report_markdown
     assert "AnalyzerStatus." not in report_markdown
     assert "<AnalyzerStatus" not in report_markdown
-    si_block = reaction_dir / SI_BLOCK_MD_FILE
+    si_block = generation_dir / SI_BLOCK_MD_FILE
     assert si_block.exists()
+    assert not (reaction_dir / SI_BLOCK_MD_FILE).exists()
     si_text = si_block.read_text(encoding="utf-8")
     assert "E(el)" in si_text
     assert "-1.100000 Eh" in si_text
@@ -267,10 +269,10 @@ def test_orca_queue_worker_reuses_job_directory_without_overwriting_prior_genera
     assert second_state["run_id"] != first_state["run_id"]
     assert second_report["job"]["id"] != first_report["job"]["id"]
     assert load_state(reaction_dir) == second_state
-    assert load_report_json(reaction_dir) == second_report
+    assert load_report_json(reaction_dir) is None
 
 
-def test_orca_worker_preflight_failure_publishes_generation_and_root_reports(
+def test_orca_worker_preflight_failure_publishes_generation_reports(
     tmp_path: Path,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
@@ -313,13 +315,12 @@ def test_orca_worker_preflight_failure_publishes_generation_and_root_reports(
     assert not counter_path.exists()
     root_state = load_state(reaction_dir)
     generation_state = load_state(generation)
-    root_report = load_report_json(reaction_dir)
     generation_report = load_report_json(generation)
     assert root_state is not None and root_state["status"] == "failed"
     assert generation_state == root_state
-    assert root_report is not None and root_report["status"]["state"] == "failed"
-    assert generation_report == root_report
-    assert root_report["job"]["id"] == entry.task_id
+    assert generation_report is not None and generation_report["status"]["state"] == "failed"
+    assert load_report_json(reaction_dir) is None
+    assert generation_report["job"]["id"] == entry.task_id
 
 
 def test_orca_worker_generation_replacement_never_receives_synthetic_artifacts(
@@ -438,17 +439,20 @@ def test_orca_queue_worker_rejects_return_code_zero_without_normal_marker(
     assert state["final_result"]["reason"] == "run_incomplete"
     assert state["final_result"]["last_out_path"] == str(out_path.resolve())
 
-    report = load_report_json(reaction_dir)
+    generation_dir = Path(execution_snapshot["execution_dir"])
+    report = load_report_json(generation_dir)
     assert report is not None
     assert report["status"]["state"] == "failed"
     assert report["status"]["reason"] == "run_incomplete"
-    assert report_json_path(reaction_dir).exists()
-    assert report_md_path(reaction_dir).exists()
-    report_html = reaction_dir / RUN_REPORT_HTML_FILE
+    assert report_json_path(generation_dir).exists()
+    assert report_md_path(generation_dir).exists()
+    assert not report_json_path(reaction_dir).exists()
+    report_html = generation_dir / RUN_REPORT_HTML_FILE
     assert report_html.exists()
     report_html_text = report_html.read_text(encoding="utf-8")
     assert "retry_limit_reached" not in report_html_text
     assert "run_incomplete" in report_html_text
+    assert not (generation_dir / SI_BLOCK_MD_FILE).exists()
     assert not (reaction_dir / SI_BLOCK_MD_FILE).exists()
 
 
@@ -536,24 +540,27 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     assert state["final_result"]["reason"] == "normal_termination"
     assert state["final_result"]["last_out_path"] == str(out_path.resolve())
 
-    report = load_report_json(reaction_dir)
+    generation_dir = Path(execution_snapshot["execution_dir"])
+    report = load_report_json(generation_dir)
     assert report is not None
     assert report["status"]["state"] == "completed"
-    assert report_json_path(reaction_dir).is_file()
-    assert report_md_path(reaction_dir).is_file()
+    assert report_json_path(generation_dir).is_file()
+    assert report_md_path(generation_dir).is_file()
+    assert not report_json_path(reaction_dir).exists()
+    assert not report_md_path(reaction_dir).exists()
     energy_text = f"{parsed.energy_hartree:.6f}"
-    report_html = (reaction_dir / RUN_REPORT_HTML_FILE).read_text(encoding="utf-8")
+    report_html = (generation_dir / RUN_REPORT_HTML_FILE).read_text(encoding="utf-8")
     assert "SP report" in report_html
     assert energy_text in report_html
     assert parsed.orca_version in report_html
     assert '<td class="ok">completed' in report_html
-    si_text = (reaction_dir / SI_BLOCK_MD_FILE).read_text(encoding="utf-8")
+    si_text = (generation_dir / SI_BLOCK_MD_FILE).read_text(encoding="utf-8")
     assert "E(el)" in si_text
     assert energy_text in si_text
     assert "H2" in si_text
     assert "HF STO-3G SP TightSCF" in si_text
     assert parsed.orca_version in si_text
-    report_markdown = report_md_path(reaction_dir).read_text(encoding="utf-8")
+    report_markdown = report_md_path(generation_dir).read_text(encoding="utf-8")
     assert "Status: `completed`" in report_markdown
     assert "AnalyzerStatus." not in report_markdown
     assert "<AnalyzerStatus" not in report_markdown

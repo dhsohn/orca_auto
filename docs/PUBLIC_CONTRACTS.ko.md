@@ -304,27 +304,37 @@ path, SHA-256, byte size, modification time을 바인딩합니다.
 
 ## ORCA 작업 산출물 계약
 
-제출한 ORCA 작업 루트는 `run.lock`을 두고 완료, 실패, 취소, 스킵된 작업의 최신
-공개 산출물을 노출합니다:
+제출한 ORCA 작업 루트는 사용자 입력, 조정용 lock 파일, 제출당 하나의 visible
+실행 generation을 둡니다. 작업 리포트는 그 리포트를 만든 generation 안에
+있습니다:
 
-- `job_state.json`
-- `job_report.json`
-- `job_report.md`
-- 적용 가능한 리포트 렌더러가 있을 때 `job_report.html`
-- 정류점으로 끝나는 완료 작업에는 `si_block.md` (route, 에너지, 열화학, Nimag,
-  좌표를 담은 복사-붙여넣기용 Supporting Information 블록), IRC route에는 좌표
-  없는 요약 전용 validation 블록
+- `<generation>/job_state.json`
+- `<generation>/job_report.json`
+- `<generation>/job_report.md`
+- 적용 가능한 리포트 렌더러가 있을 때 `<generation>/job_report.html`
+- 정류점으로 끝나는 완료 작업에는 `<generation>/si_block.md` (route, 에너지,
+  열화학, Nimag, 좌표를 담은 복사-붙여넣기용 Supporting Information 블록),
+  IRC route에는 좌표 없는 요약 전용 validation 블록
+
+실행 중에는 루트에 live `job_state.json`이 함께 존재합니다(terminal 정리 시
+제거). 리포트 이관 이전에 실행됐거나 generation 바인딩 전에 거부된 작업은
+루트에 리포트를 유지합니다 — reader는 루트를 legacy fallback으로 취급하고,
+같은 디렉터리의 다음 실행이 generation 리포트를 발행할 때 남은 루트 사본을
+제거합니다. terminal 실행의 루트 state가 정리된 뒤에는 job-locations 색인의
+처음부터 재구축이 그 실행을 재발견하지 못합니다: generation 디렉터리는 의도적으로
+production scan에서 제외되고 재구축은 upsert 전용이므로, 살아있는 색인은 기록을
+유지하지만 색인을 잃은 뒤의 재구축은 정리된 실행에 대해 lossy합니다.
 
 각 새 제출은 직접 하위 visible `YYYYMMDD-HHMMSS-<8자리 hex>/`
 하나를 소유합니다. 이 이름 형태는 예약되어 있습니다: ASCII 날짜·시각·소문자
 8자리 hex를 이 형식으로 조합한 이름의 디렉터리는 `runs_root` 아래 어느 깊이에
 있든 실행 generation으로 간주되어 production scan에서 제외되고 `run-dir` 제출
 대상으로 거부되므로, 직접 만드는 디렉터리에는 이 형태를 쓰지 마십시오. 그 디렉터리에는 소스 basename을 정확히 유지한 바인딩 `.inp`, 지원하는
-의존성, raw ORCA 출력, generation 로컬 `job_state.json`과 `job_report.json` mirror가
-들어갑니다. 루트 JSON은 최신 공개 요약이므로 더 새로운 sibling을 가리키도록 갱신될 수
-있고, generation JSON은 자신이 설명하는 generation의 기록을 보존합니다. 루트에
-`run.lock` 파일이 존재한다는 사실만으로 현재 advisory lock이 소유된다고 판정할 수는
-없습니다.
+의존성, raw ORCA 출력, 그리고 그 generation의 `job_state.json`,
+`job_report.json`, `job_report.md`(적용 시 `job_report.html`·`si_block.md`)가
+들어갑니다. generation 파일은 자신이 설명하는 generation의 기록을 보존합니다.
+루트에 `run.lock` 파일이 존재한다는 사실만으로 현재 advisory lock이 소유된다고
+판정할 수는 없습니다.
 
 `job_state.json`과 `job_report.json`은 정규화된 엔진 산출물 형태를 사용합니다:
 

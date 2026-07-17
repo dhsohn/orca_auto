@@ -9,6 +9,7 @@ from tests.integration.smoke_support import (
     assert_workflow_publications,
     configure_fake_orca,
     orca_job_directories,
+    orca_job_generation_dir,
     pump_workflow,
     submit_public_workflow,
     write_fake_orca,
@@ -93,7 +94,9 @@ def test_scan_ts_workflow_completes_fake_orca_lifecycle(
         job_dirs[1], expected_status="completed", expect_si=True
     )
     assert optts_state["engine_payload"]["final_result"]["reason"] == "ts_criteria_met"
-    optts_report = (job_dirs[1] / "job_report.html").read_text(encoding="utf-8")
+    optts_report = (orca_job_generation_dir(optts_state) / "job_report.html").read_text(
+        encoding="utf-8"
+    )
     assert "Frequency values were parsed" in optts_report
     assert "No frequency calculation found" not in optts_report
     assert len(list_queue(workflow_root)) == 2

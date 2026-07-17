@@ -856,8 +856,9 @@ Opt 모드 완료:
 
 ## 11) 출력 파일
 
-제출한 ORCA 작업 디렉터리에는 사용자가 작성한 입력, `run.lock`, 최신 공개
-상태/리포트가 남습니다:
+제출한 ORCA 작업 디렉터리에는 사용자가 작성한 입력, `run.lock`, 제출당 하나의
+visible 실행 generation이 남습니다. 각 generation이 그 실행의 상태/리포트를
+보관합니다:
 
 - `job_state.json`
 - `job_report.json`
@@ -884,8 +885,6 @@ TS8(NEB-TS)/
 ├── input.xyz
 ├── output.xyz
 ├── guessTS.xyz
-├── job_state.json
-├── job_report.json
 ├── run.lock
 └── 20260714-224054-959479f2/
     ├── nebts.inp
@@ -896,18 +895,22 @@ TS8(NEB-TS)/
     ├── nebts.gbw
     ├── nebts.NEB.log
     ├── job_state.json
-    └── job_report.json
+    ├── job_report.json
+    ├── job_report.md
+    └── job_report.html
 ```
 
 이 예시는 모든 파일을 나열한 것이 아닙니다. 내부 동기화 파일인 `.orca.process.lock`은
 generation과/또는 작업 루트에, `.job_state.mutation.lock`은 작업 루트에 남을 수 있습니다.
-ORCA 프로세스 기록이 활성인 동안에는 해당 generation에 `orca.process.json`이 존재합니다.
+ORCA 프로세스 기록이 활성인 동안에는 해당 generation에 `orca.process.json`이 존재하고,
+작업 루트에는 terminal 정리로 제거되기 전까지 live `job_state.json`이 존재합니다.
 
 generation의 실제 실행 `.inp`는 선택한 소스의 basename을 정확히 유지하므로 ORCA
 출력 stem에 `.run`이나 `.bound`를 더하지 않습니다. 참조 입력도 원래
-basename을 유지합니다. generation의 `job_state.json`과 `job_report.json`은 그
-generation 기록을 mirror하고, 작업 루트의 복사본은 최신 공개 요약으로서 나중에
-생긴 sibling generation에 의해 갱신됩니다. `run.lock`은 작업 루트에 남으며, 파일이
+basename을 유지합니다. 각 generation의 `job_state.json`과 리포트는 자신이 설명하는
+실행의 기록을 보존합니다. 리포트 이관 이전에 실행된 작업은 루트에 리포트 사본을
+유지하며(legacy fallback), 같은 디렉터리의 다음 실행이 generation 리포트를 발행할
+때 남은 루트 사본을 제거합니다. `run.lock`은 작업 루트에 남으며, 파일이
 존재한다는 사실만으로 현재 프로세스가 lock을 소유한다고 판정할 수는 없습니다.
 
 주요 `job_state.json` 필드:

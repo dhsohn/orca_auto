@@ -8,6 +8,26 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Changed
+
+- Standalone ORCA job reports (`job_report.md`, `job_report.json`,
+  `job_report.html`, `si_block.md`) are written inside the execution
+  generation that produced them instead of the job root, so a submitted job
+  directory keeps only the user inputs, the coordination lock files
+  (`.job_state.mutation.lock`, `.orca.process.lock`, `run.lock` — these stay
+  at the root to serialize same-directory resubmissions), the live
+  `job_state.json` while a run is active, and one generation per submission.
+  Jobs without a bound generation (legacy states, submissions rejected before
+  binding) keep the job-root reports as a fallback; readers check the
+  generation first and fall back to the root, and the next run in a reused
+  directory removes stale pre-relocation root copies when it publishes its
+  generation reports.
+- A workflow ORCA stage that is resubmitted after a `submission_failed`
+  attempt clears the stale failure `reason` (alongside
+  `submission_error_detail`) once the new submission succeeds, so a stage
+  that later completes no longer reports the superseded rejection in the
+  final workflow report.
+
 ### Removed
 
 - Internal over-engineering residue identified by the 2026-07-17 audit

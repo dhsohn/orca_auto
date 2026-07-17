@@ -24,6 +24,7 @@ from tests.integration.smoke_support import (
     assert_workflow_report,
     configure_fake_orca,
     orca_job_directories,
+    orca_job_generation_dir,
     pump_workflow,
     submit_public_workflow,
 )
@@ -465,8 +466,12 @@ def test_reaction_ts_workflow_executes_fake_crest_xtb_and_orca_full_lifecycle(
     _assert_reaction_workflow_persisted(case, payload)
     job_dirs = orca_job_directories(payload)
     assert len(job_dirs) == 1
-    assert_orca_job_publications(job_dirs[0], expected_status="completed", expect_si=True)
-    job_report = (job_dirs[0] / "job_report.html").read_text(encoding="utf-8")
+    orca_state = assert_orca_job_publications(
+        job_dirs[0], expected_status="completed", expect_si=True
+    )
+    job_report = (orca_job_generation_dir(orca_state) / "job_report.html").read_text(
+        encoding="utf-8"
+    )
     assert "Frequency values were parsed" in job_report
     assert "No frequency calculation found" not in job_report
     assert_workflow_publications(case.workspace_dir, payload)

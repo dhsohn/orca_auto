@@ -44,8 +44,6 @@ def runtime_paths(
 ) -> dict[str, str]:
     state_path = current_dir / state_file_name if current_dir is not None else None
     report_json_path = current_dir / report_json_name if current_dir is not None else None
-    markdown_dir = report_md_dir if report_md_dir is not None else current_dir
-    report_md_path = markdown_dir / report_md_name if markdown_dir is not None else None
     visible_state_path = (
         _runtime_payload_path_for_generation(state_path, current_dir, queue_entry)
         if include_state
@@ -56,11 +54,22 @@ def runtime_paths(
         if include_report
         else None
     )
-    visible_report_md_path = (
-        _report_markdown_path_for_generation(report_md_path, markdown_dir, queue_entry)
-        if visible_report_json_path is not None
-        else None
-    )
+    # The report markdown lives next to the report JSON (the execution
+    # generation); the extra report_md_dir is only the legacy fallback for
+    # jobs whose reports predate the relocation and still sit at the job root.
+    visible_report_md_path = None
+    if visible_report_json_path is not None:
+        markdown_candidates = [current_dir]
+        if report_md_dir is not None and report_md_dir != current_dir:
+            markdown_candidates.append(report_md_dir)
+        for markdown_dir in markdown_candidates:
+            visible_report_md_path = _report_markdown_path_for_generation(
+                markdown_dir / report_md_name if markdown_dir is not None else None,
+                markdown_dir,
+                queue_entry,
+            )
+            if visible_report_md_path is not None:
+                break
     return {
         "run_state_path": str(visible_state_path) if visible_state_path is not None else "",
         "report_json_path": (

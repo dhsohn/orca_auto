@@ -915,8 +915,9 @@ Principles:
 
 ## 11) Output Files
 
-The submitted ORCA job directory keeps the user-authored inputs, `run.lock`, and
-the latest public summaries/reports:
+The submitted ORCA job directory keeps the user-authored inputs, `run.lock`,
+and one visible execution generation per submission. Each generation holds
+that run's state and reports:
 
 - `job_state.json`
 - `job_report.json`
@@ -946,8 +947,6 @@ TS8(NEB-TS)/
 ├── input.xyz
 ├── output.xyz
 ├── guessTS.xyz
-├── job_state.json
-├── job_report.json
 ├── run.lock
 └── 20260714-224054-959479f2/
     ├── nebts.inp
@@ -958,21 +957,26 @@ TS8(NEB-TS)/
     ├── nebts.gbw
     ├── nebts.NEB.log
     ├── job_state.json
-    └── job_report.json
+    ├── job_report.json
+    ├── job_report.md
+    └── job_report.html
 ```
 
 This example is not an exhaustive file listing. Internal synchronization files
 may also remain: `.orca.process.lock` in the generation and/or job root and
 `.job_state.mutation.lock` at the job root. While an ORCA process record is
-active, `orca.process.json` is present in its generation.
+active, `orca.process.json` is present in its generation, and the job root
+carries the live `job_state.json` until terminal cleanup removes it.
 
 The generation's bound `.inp` has the exact selected source basename, so ORCA
 uses the expected output stem rather than adding `.run` or `.bound`. Referenced
-inputs likewise retain their original basenames. `job_state.json` and
-`job_report.json` in the generation mirror that generation's record; the copies
-at the job root are the latest public summary and are updated by later sibling
-generations. `run.lock` stays at the job root; the mere presence of its file is
-not proof that a process currently owns the lock.
+inputs likewise retain their original basenames. Each generation's
+`job_state.json` and reports retain the record for the run they describe. Jobs
+whose runs predate the report relocation still keep report copies at the job
+root; readers treat those as a legacy fallback, and the next run in the same
+directory removes them when it publishes its generation reports. `run.lock`
+stays at the job root; the mere presence of its file is not proof that a
+process currently owns the lock.
 
 Important `job_state.json` fields:
 

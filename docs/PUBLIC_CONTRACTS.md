@@ -318,16 +318,30 @@ validated outputs to path, SHA-256, byte size, and modification time.
 
 ## ORCA Job Artifact Contract
 
-The submitted ORCA job root keeps `run.lock` and exposes the latest public
-artifacts for completed, failed, cancelled, and skipped jobs:
+The submitted ORCA job root keeps the user inputs, the coordination lock
+files, and one visible execution generation per submission. Job reports live
+inside the generation that produced them:
 
-- `job_state.json`
-- `job_report.json`
-- `job_report.md`
-- `job_report.html` when a report renderer applies
-- `si_block.md` for completed jobs ending on a stationary point (a copy-paste
-  Supporting Information block: route, energies, thermochemistry, Nimag,
-  coordinates) or for IRC routes (summary-only validation block, no coordinates)
+- `<generation>/job_state.json`
+- `<generation>/job_report.json`
+- `<generation>/job_report.md`
+- `<generation>/job_report.html` when a report renderer applies
+- `<generation>/si_block.md` for completed jobs ending on a stationary point
+  (a copy-paste Supporting Information block: route, energies,
+  thermochemistry, Nimag, coordinates) or for IRC routes (summary-only
+  validation block, no coordinates)
+
+During a run the root additionally carries the live `job_state.json` (removed
+by terminal cleanup once the run is cleared). Jobs whose runs predate the
+report relocation, or that never bound an execution generation (for example a
+submission rejected before binding), keep their reports at the job root;
+readers treat the root as the legacy fallback, and the next run in the same
+directory removes the stale root copies when it publishes its generation
+reports. Once a terminal run's root state has been cleaned, a from-scratch
+job-locations index rebuild no longer rediscovers that run: generation
+directories are deliberately excluded from production scans, and the rebuild
+is upsert-only, so the live index keeps its record but a rebuild after losing
+the index is lossy for cleaned runs.
 
 Every new submission owns one visible
 `YYYYMMDD-HHMMSS-<8-hex>/` direct child. The name shape is reserved: any
@@ -336,10 +350,10 @@ form is treated as an execution generation at every depth under `runs_root`,
 excluded from production scans, and rejected as a `run-dir` submission
 target — do not use this shape for your own directories. That directory contains the
 bound `.inp` under the exact source basename, supported dependencies under their
-exact source basenames, raw ORCA outputs, and generation-local mirrors of
-`job_state.json` and `job_report.json`. Root JSON files are the latest public
-summary and may advance to a newer sibling; generation JSON files retain the
-record for the generation they describe. The existence of the root `run.lock`
+exact source basenames, raw ORCA outputs, and the generation's
+`job_state.json`, `job_report.json`, `job_report.md`, and (when applicable)
+`job_report.html` and `si_block.md`. Generation files retain the record for
+the generation they describe. The existence of the root `run.lock`
 file alone does not mean its advisory lock is currently owned.
 
 `job_state.json` and `job_report.json` use the normalized engine artifact shape:
