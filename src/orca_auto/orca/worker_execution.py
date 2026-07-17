@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import logging
 import subprocess
 from argparse import Namespace
 from collections.abc import Callable
@@ -18,6 +19,12 @@ from orca_auto.core.engines.worker_child import (
 )
 from orca_auto.core.queue.child.execution import find_queue_entry_by_id
 from orca_auto.core.queue.engine import execution as _engine_execution
+from orca_auto.core.queue.engine.snapshot_intent import (
+    SNAPSHOT_INTENT_STATE_CREATING,
+    SNAPSHOT_INTENT_STATE_ENQUEUEING,
+    SNAPSHOT_INTENT_TOKEN_KEY,
+    transition_snapshot_intent,
+)
 from orca_auto.core.queue.internal_engine import (
     InternalEngineSpec,
     entry_matches_engine_identity,
@@ -28,11 +35,21 @@ from orca_auto.core.queue.worker import (
     resolve_admission_root,
 )
 from orca_auto.core.queue.worker.execution_dependencies import run_worker_child_entrypoint
+from orca_auto.core.utils.persistence import timestamped_token
 
 from .attempt.reporting import build_final_result
 from .commands.run_inp import _cmd_run_inp_execute
+from .commands.run_inp_execution import recover_crashed_state
+from .commands.run_inp_submission import _mark_orca_snapshot_owned
 from .config import load_config
-from .execution_binding import orca_execution_provenance, verify_orca_execution_snapshot
+from .execution_binding import (
+    build_orca_execution_snapshot,
+    cleanup_unowned_orca_execution_snapshot,
+    orca_execution_provenance,
+    orca_execution_snapshot_generation_dir,
+    orca_execution_started_evidence,
+    verify_orca_execution_snapshot,
+)
 from .orca_runner import OrcaRunner, WorkerShutdownInterrupt
 from .queue.adapter import (
     get_cancel_requested,
@@ -42,9 +59,17 @@ from .queue.adapter import (
     queue_entry_reaction_dir,
     queue_entry_task_id,
     requeue_running_entry,
+    update_metadata,
 )
+from .resource_directives import prepare_submission_resource_request
+from .runtime.run_lock import acquire_run_lock
 from .state import finalize_state, load_state
 from .statuses import AnalyzerStatus
+
+logger = logging.getLogger(__name__)
+
+RECOVERY_REBIND_LIMIT = 3
+RECOVERY_REBIND_COUNT_METADATA_KEY = "recovery_rebind_count"
 
 BackgroundRunJobProcess = subprocess.Popen
 WORKER_JOB_MODULE = WORKER_CHILD_MODULE
@@ -294,6 +319,167 @@ def _run_orca_job_for_entry(
         raise WorkerShutdownRequested(context) from exc
 
 
+def _maybe_rebind_recovery_generation(
+    entry: Any,
+    *,
+    queue_root: Path,
+    cfg_factory: Callable[[], Any],
+) -> Any:
+    """Move a crash-interrupted claim into a fresh generation before execution.
+
+    A generation that shows started-execution evidence is never reused: the
+    crashed generation stays frozen as that attempt's record and a replacement
+    generation is materialized through the ordinary submission machinery,
+    seeded from the frozen runtime geometry. Rebinds are bounded by a durable
+    per-row counter that is consumed before any new generation exists, so a
+    crash loop can never mint generations indefinitely.
+
+    Runs where the worker child fixes its canonical queue entry, so every
+    later actor (cancel checks, shutdown requeue, terminal marking) holds the
+    post-rebind publication generation.
+    """
+
+    if not entry_status_is_running(entry):
+        return entry
+    metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+    snapshot = metadata.get("execution_snapshot")
+    if not isinstance(snapshot, dict):
+        return entry
+    reaction_dir = Path(queue_entry_reaction_dir(entry)).expanduser().resolve()
+    try:
+        orca_execution_snapshot_generation_dir(reaction_dir, snapshot)
+    except ValueError:
+        # Let the ordinary context builder surface its canonical error.
+        return entry
+    if not orca_execution_started_evidence(reaction_dir, snapshot):
+        return entry
+    if get_cancel_requested(queue_root, str(entry.queue_id), expected_entry=entry):
+        # Honor the pending cancellation through the requeue chokepoint (which
+        # turns a cancel-requested running row terminal) instead of letting the
+        # strict claim-time verification misreport the crashed generation as a
+        # corrupt failure.
+        requeue_running_entry(
+            queue_root,
+            str(entry.queue_id),
+            expected_entry=entry,
+        )
+        refreshed = _queue_entry_by_id(queue_root, str(entry.queue_id))
+        return refreshed if refreshed is not None else entry
+    raw_count = metadata.get(RECOVERY_REBIND_COUNT_METADATA_KEY, 0)
+    count = (
+        raw_count
+        if isinstance(raw_count, int) and not isinstance(raw_count, bool) and raw_count >= 0
+        else RECOVERY_REBIND_LIMIT
+    )
+    if count >= RECOVERY_REBIND_LIMIT:
+        raise ValueError(
+            "ORCA crash recovery limit reached for this submission "
+            f"({count}/{RECOVERY_REBIND_LIMIT}); resubmit the job to continue"
+        )
+    if not update_metadata(
+        queue_root,
+        str(entry.queue_id),
+        {RECOVERY_REBIND_COUNT_METADATA_KEY: count + 1},
+        expected_entry=entry,
+    ):
+        raise ValueError("ORCA crash recovery could not reserve its rebind budget on the queue row")
+    claimed = _queue_entry_by_id(queue_root, str(entry.queue_id))
+    claimed_metadata = getattr(claimed, "metadata", None)
+    if (
+        claimed is None
+        or not isinstance(claimed_metadata, dict)
+        or claimed_metadata.get(RECOVERY_REBIND_COUNT_METADATA_KEY) != count + 1
+    ):
+        raise ValueError("ORCA crash recovery lost its rebind budget reservation")
+
+    cfg = cfg_factory()
+    source_selected = str(metadata.get("source_selected_inp") or "").strip()
+    if not source_selected:
+        raise ValueError("ORCA crash recovery requires the submission source input path")
+    max_retries = metadata.get("max_retries")
+    if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
+        raise ValueError("ORCA crash recovery found an invalid retry budget on the queue row")
+    recorded_request = metadata.get("resource_request")
+    with acquire_run_lock(reaction_dir):
+        recover_crashed_state(reaction_dir, logger=logger)
+        prepared = prepare_submission_resource_request(
+            Path(source_selected),
+            default_max_cores=int(cfg.resources.max_cores_per_task),
+            default_max_memory_gb=int(cfg.resources.max_memory_gb_per_task),
+        )
+        if not isinstance(recorded_request, dict) or dict(prepared.resource_request) != dict(
+            recorded_request
+        ):
+            raise ValueError("ORCA crash recovery resource request diverged from the queued row")
+        new_snapshot = build_orca_execution_snapshot(
+            reaction_dir,
+            Path(source_selected),
+            selected_input_xyz=str(metadata.get("selected_input_xyz") or ""),
+            resource_request=prepared.resource_request,
+            max_retries=max_retries,
+            orca_executable=cfg.paths.orca_executable,
+            queue_root=queue_root,
+            snapshot_intent_token=timestamped_token("snapshot_intent", token_bytes=16),
+            normalized_selected_payload=prepared.normalized_payload,
+            source_selected_sha256=prepared.source_sha256,
+            recovery_from=snapshot,
+        )
+    intent_token = str(new_snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or "")
+    try:
+        transition_snapshot_intent(
+            queue_root,
+            intent_token,
+            target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
+            expected_states={SNAPSHOT_INTENT_STATE_CREATING},
+        )
+        if not update_metadata(
+            queue_root,
+            str(entry.queue_id),
+            {
+                "execution_snapshot": new_snapshot,
+                "selected_inp": str(new_snapshot.get("selected_inp") or ""),
+            },
+            expected_entry=claimed,
+        ):
+            raise ValueError("ORCA crash recovery could not publish its replacement generation")
+    except BaseException:
+        cleanup_unowned_orca_execution_snapshot(reaction_dir, new_snapshot)
+        raise
+    marker_warning = _mark_orca_snapshot_owned(queue_root, intent_token)
+    updated = _queue_entry_by_id(queue_root, str(entry.queue_id))
+    updated_metadata = getattr(updated, "metadata", None)
+    updated_snapshot = (
+        updated_metadata.get("execution_snapshot") if isinstance(updated_metadata, dict) else None
+    )
+    if not isinstance(updated_snapshot, dict) or str(
+        updated_snapshot.get("generation_name") or ""
+    ) != str(new_snapshot.get("generation_name") or ""):
+        raise ValueError("ORCA crash recovery lost its replacement queue row")
+    logger.warning(
+        "Recovered crashed ORCA job %s into replacement generation %s (rebind %d/%d)%s",
+        str(entry.queue_id),
+        str(new_snapshot.get("generation_name") or ""),
+        count + 1,
+        RECOVERY_REBIND_LIMIT,
+        f"; {marker_warning}" if marker_warning else "",
+    )
+    return updated
+
+
+def _recovering_queue_entry_by_id(config_path: str) -> Callable[[Path, str], Any | None]:
+    def find(queue_root: Path, queue_id: str) -> Any | None:
+        entry = _queue_entry_by_id(queue_root, queue_id)
+        if entry is None or not entry_matches_engine_identity(entry, "orca"):
+            return entry
+        return _maybe_rebind_recovery_generation(
+            entry,
+            queue_root=Path(queue_root),
+            cfg_factory=lambda: load_config(config_path),
+        )
+
+    return find
+
+
 def _worker_execution_spec(
     *,
     worker_config_path: str,
@@ -371,7 +557,7 @@ def run_worker_child_job(
         queue_id=queue_id,
         admission_token=admission_token,
         load_config_fn=load_config,
-        find_queue_entry_fn=_queue_entry_by_id,
+        find_queue_entry_fn=_recovering_queue_entry_by_id(config_path),
         admission_root_fn=resolve_admission_root,
         release_slot_fn=release_slot,
         install_shutdown_signal_handlers_fn=install_shutdown_signal_handlers,

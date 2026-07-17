@@ -8,6 +8,33 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- A queued ORCA job interrupted by a host or worker crash resumes again
+  instead of failing at reclaim with `Queued ORCA private dependency ...
+  snapshot is corrupt`. The strict claim-time snapshot verification treated
+  the runtime-updated same-stem geometry of a started run as corruption, so
+  the first worker restart after a crash terminally failed the job (and its
+  workflow). Recovery now materializes a fresh execution generation through
+  the ordinary submission machinery — seeded from the crashed generation's
+  last written geometry when it is intact, falling back to the submitted
+  geometry when it is absent or truncated — swaps the queue row to the
+  replacement atomically before execution, and leaves the crashed generation
+  frozen as that attempt's record. Rebinds never consume the scientific
+  retry budget and are bounded by a durable per-row recovery counter
+  (`recovery_rebind_count`, limit 3) that is reserved before any new
+  generation exists; at the limit the claim fails closed with an explicit
+  `recovery limit` reason. The replacement snapshot records a `recovery`
+  provenance block naming the crashed generation and every seeded input, and
+  a claim with a pending cancellation is turned terminal through the ordinary
+  cancel chokepoint instead of misreporting the crashed generation as
+  corrupt. Dependency roles are assigned in the canonical order of the
+  stored source paths (a recovery seed lives inside the previous
+  generation, which sorts differently than the submission source it
+  replaces). Engine-internal surfaces added:
+  `build_orca_execution_snapshot(..., recovery_from=...)` and
+  `orca_execution_started_evidence()`.
+
 ### Changed
 
 - Standalone ORCA job reports (`job_report.md`, `job_report.json`,

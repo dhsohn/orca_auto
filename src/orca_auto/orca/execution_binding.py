@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import re
 import secrets
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -401,6 +402,119 @@ def _reserve_execution_generation(
     raise FileExistsError("Could not reserve a unique visible ORCA generation directory")
 
 
+def _recovery_seed_plan(
+    job_dir: Path,
+    recovery_from: Mapping[str, Any],
+) -> tuple[Path, str, set[str]]:
+    """Validate a crashed snapshot and plan seeding from its frozen generation."""
+
+    seed_dir = orca_execution_snapshot_generation_dir(job_dir, recovery_from)
+    raw_sources = recovery_from.get("source_inputs")
+    raw_selected = raw_sources.get("selected_source") if isinstance(raw_sources, Mapping) else None
+    if not isinstance(raw_selected, Mapping):
+        raise ValueError("ORCA recovery snapshot has no selected source descriptor")
+    selected_sha256 = str(raw_selected.get("sha256") or "").strip().lower()
+    if len(selected_sha256) != 64:
+        raise ValueError("ORCA recovery snapshot has no selected source digest")
+    mutable_roles = recovery_from.get("runtime_mutable_input_roles")
+    materialized = recovery_from.get("materialized_inputs")
+    seed_basenames: set[str] = set()
+    if isinstance(mutable_roles, Sequence) and isinstance(materialized, Mapping):
+        for role in mutable_roles:
+            identity = materialized.get(role)
+            if not isinstance(identity, Mapping):
+                continue
+            name = Path(str(identity.get("path") or "")).name
+            if name:
+                seed_basenames.add(name)
+    return seed_dir, selected_sha256, seed_basenames
+
+
+def _validated_recovery_seed(
+    *,
+    job_dir: Path,
+    seed_dir: Path,
+    basename: str,
+    pristine_source: Path,
+    max_atoms: int,
+) -> Path | None:
+    """Return the frozen runtime geometry to seed from, or None to use the source.
+
+    A crash can leave the runtime geometry absent, empty, or truncated
+    mid-write; those fall back to the pristine submission geometry. A seed
+    that parses but changes the submitted atom count is evidence of
+    substitution, not of a crash, and fails closed.
+    """
+
+    candidate = seed_dir / basename
+    if not candidate.exists() and not candidate.is_symlink():
+        return None
+    seed = require_confined_regular_file(
+        job_dir,
+        candidate,
+        label="ORCA recovery seed geometry",
+    )
+    payload = read_stable_regular_file(seed, max_bytes=MAX_INPUT_SNAPSHOT_BYTES)
+    if not payload.strip():
+        return None
+    try:
+        seed_atoms = _xyz_atom_lines(seed, payload, max_atoms=max_atoms)
+    except ValueError:
+        return None
+    pristine_payload = read_stable_regular_file(
+        pristine_source,
+        max_bytes=MAX_INPUT_SNAPSHOT_BYTES,
+    )
+    pristine_atoms = _xyz_atom_lines(pristine_source, pristine_payload, max_atoms=max_atoms)
+    if len(seed_atoms) != len(pristine_atoms):
+        raise ValueError(
+            f"ORCA recovery seed geometry does not preserve the submitted atom count: {basename}"
+        )
+    return seed
+
+
+def orca_execution_started_evidence(job_dir: str | Path, snapshot: Any) -> bool:
+    """Report whether a queued generation shows evidence of started execution.
+
+    Evidence is structural and content-independent: any directory entry beyond
+    the materialized snapshot files, or a registered runtime-mutable input
+    whose bytes moved. An unreadable mutable input counts as evidence so a
+    crashed run never silently reuses its generation.
+    """
+
+    if not isinstance(snapshot, Mapping):
+        raise ValueError("ORCA execution snapshot must be an object")
+    resolved_job_dir = Path(job_dir).expanduser().resolve()
+    execution_dir = orca_execution_snapshot_generation_dir(resolved_job_dir, snapshot)
+    expected_names = {Path(str(snapshot.get("selected_inp") or "")).name}
+    materialized = snapshot.get("materialized_inputs")
+    if isinstance(materialized, Mapping):
+        for identity in materialized.values():
+            if isinstance(identity, Mapping):
+                name = Path(str(identity.get("path") or "")).name
+                if name:
+                    expected_names.add(name)
+    expected_names.discard("")
+    with os.scandir(execution_dir) as entries:
+        for entry in entries:
+            if entry.name not in expected_names:
+                return True
+    mutable_roles = snapshot.get("runtime_mutable_input_roles")
+    if isinstance(mutable_roles, Sequence) and isinstance(materialized, Mapping):
+        for role in mutable_roles:
+            identity = materialized.get(role)
+            if not isinstance(identity, Mapping):
+                continue
+            path = Path(str(identity.get("path") or ""))
+            try:
+                current = _file_identity(path)
+            except (OSError, ValueError):
+                return True
+            if current != dict(identity):
+                return True
+    return False
+
+
 def build_orca_execution_snapshot(
     job_dir: str | Path,
     selected_inp: str | Path,
@@ -413,8 +527,15 @@ def build_orca_execution_snapshot(
     snapshot_intent_token: str | None = None,
     normalized_selected_payload: bytes | None = None,
     source_selected_sha256: str | None = None,
+    recovery_from: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create one visible, immutable ORCA execution generation."""
+    """Create one visible, immutable ORCA execution generation.
+
+    With ``recovery_from`` (the crashed submission's snapshot), runtime-mutable
+    geometry inputs are seeded from that frozen generation so the replacement
+    generation resumes from the last written geometry while every integrity
+    check stays byte-exact.
+    """
 
     if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
         raise ValueError("ORCA execution snapshot retry budget must be a nonnegative integer")
@@ -438,6 +559,16 @@ def build_orca_execution_snapshot(
     if source_selected.suffix.lower() != ".inp":
         raise ValueError(f"ORCA selected input must be an .inp file: {source_selected}")
 
+    recovery_seed_dir: Path | None = None
+    recovery_selected_sha256 = ""
+    recovery_seed_basenames: set[str] = set()
+    if recovery_from is not None:
+        recovery_seed_dir, recovery_selected_sha256, recovery_seed_basenames = _recovery_seed_plan(
+            resolved_job_dir,
+            recovery_from,
+        )
+    seeded_roles: dict[str, dict[str, Any]] = {}
+
     resolved_queue_root = Path(queue_root or resolved_job_dir).expanduser().resolve()
     resolved_intent_token = snapshot_intent_token or f"snapshot-{secrets.token_hex(16)}"
     generation_name, execution_dir, generation_identity = _reserve_execution_generation(
@@ -458,6 +589,10 @@ def build_orca_execution_snapshot(
             and str(selected_descriptor.get("sha256") or "") != source_selected_sha256
         ):
             raise ValueError("ORCA selected input changed while submission resources were prepared")
+        if recovery_from is not None and (
+            str(selected_descriptor.get("sha256") or "").strip().lower() != recovery_selected_sha256
+        ):
+            raise ValueError("ORCA recovery source input changed since the crashed submission")
         try:
             selected_text = (
                 normalized_selected_payload
@@ -513,13 +648,8 @@ def build_orca_execution_snapshot(
             job_dir=resolved_job_dir,
         )
 
-        private_paths: dict[Path, Path] = {}
-        materialized_inputs: dict[str, dict[str, Any]] = {}
-        runtime_mutable_input_roles: list[str] = []
-        inline_geometry_atoms: dict[Path, list[str]] = {}
-        dependency_paths: list[str] = []
-        for index, dependency in enumerate(dependencies):
-            role = f"dependency_{index:06d}"
+        bound_dependencies: list[tuple[Path, Path, bool]] = []
+        for dependency in dependencies:
             inline_same_stem_xyz = (
                 same_stem_xyz_is_output
                 and dependency.name == source_selected.with_suffix(".xyz").name
@@ -533,12 +663,57 @@ def build_orca_execution_snapshot(
                 same_stem_xyz_is_output=same_stem_xyz_is_output,
                 inline_same_stem_xyz=inline_same_stem_xyz,
             )
+            seed_source: Path | None = None
+            if (
+                recovery_seed_dir is not None
+                and inline_same_stem_xyz
+                and dependency.name in recovery_seed_basenames
+            ):
+                seed_source = _validated_recovery_seed(
+                    job_dir=resolved_job_dir,
+                    seed_dir=recovery_seed_dir,
+                    basename=dependency.name,
+                    pristine_source=dependency,
+                    max_atoms=(
+                        MAX_HESSIAN_ADMISSION_ATOMS if hessian_requested else MAX_ADMISSION_ATOMS
+                    ),
+                )
+            bound_dependencies.append(
+                (
+                    dependency,
+                    seed_source if seed_source is not None else dependency,
+                    inline_same_stem_xyz,
+                )
+            )
+        # Roles must follow the canonical order of the *stored* source paths:
+        # the claim-time verifier re-sorts dependency_paths, and a recovery
+        # seed living inside the previous generation sorts differently than
+        # the submission source it replaces.
+        bound_dependencies.sort(
+            key=lambda item: item[1].relative_to(resolved_job_dir).as_posix(),
+        )
+
+        private_paths: dict[Path, Path] = {}
+        materialized_inputs: dict[str, dict[str, Any]] = {}
+        runtime_mutable_input_roles: list[str] = []
+        inline_geometry_atoms: dict[Path, list[str]] = {}
+        dependency_paths: list[str] = []
+        for index, (dependency, effective_source, inline_same_stem_xyz) in enumerate(
+            bound_dependencies
+        ):
+            role = f"dependency_{index:06d}"
             descriptor, dependency_payload, consumed_bytes = _source_with_budget(
-                dependency,
+                effective_source,
                 role=role,
                 consumed_bytes=consumed_bytes,
             )
             source_inputs[role] = descriptor
+            if effective_source is not dependency:
+                seeded_roles[role] = {
+                    "path": str(descriptor.get("source_path") or ""),
+                    "sha256": str(descriptor.get("sha256") or ""),
+                    "size_bytes": int(descriptor.get("size_bytes") or 0),
+                }
             if dependency in geometry_dependencies:
                 geometry_limit = (
                     MAX_HESSIAN_ADMISSION_ATOMS if hessian_requested else MAX_ADMISSION_ATOMS
@@ -576,7 +751,7 @@ def build_orca_execution_snapshot(
             materialized_inputs[role] = _file_identity(target)
             if inline_same_stem_xyz:
                 runtime_mutable_input_roles.append(role)
-            dependency_paths.append(str(dependency))
+            dependency_paths.append(str(effective_source))
 
         bound_payload = _rewrite_bound_input(
             lines,
@@ -598,7 +773,7 @@ def build_orca_execution_snapshot(
         )
         bound_identity = _file_identity(bound_selected)
         executable = _engine_runner.executable_identity(orca_executable)
-        return {
+        snapshot: dict[str, Any] = {
             "version": ORCA_EXECUTION_SNAPSHOT_VERSION,
             "job_dir_identity": {
                 "device": int(job_dir_stat.st_dev),
@@ -624,6 +799,13 @@ def build_orca_execution_snapshot(
             "max_retries": int(max_retries),
             "executable_identities": {"orca": executable},
         }
+        if recovery_from is not None:
+            snapshot["recovery"] = {
+                "previous_generation_name": str(recovery_from.get("generation_name") or ""),
+                "previous_execution_dir": str(recovery_seed_dir),
+                "seeded_roles": seeded_roles,
+            }
+        return snapshot
     except BaseException:
         try:
             cleanup_unowned_direct_generation_directory(
@@ -993,5 +1175,6 @@ __all__ = [
     "cleanup_unowned_orca_execution_snapshot",
     "orca_execution_provenance",
     "orca_execution_snapshot_generation_dir",
+    "orca_execution_started_evidence",
     "verify_orca_execution_snapshot",
 ]
