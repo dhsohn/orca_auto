@@ -19,7 +19,7 @@ class ReactionTsSearchWorkflowRequest:
     max_cores: int = 8
     max_memory_gb: int = 32
     max_crest_candidates: int = 3
-    max_xtb_stages: int = 3
+    max_xtb_stages: int = 9
     max_xtb_handoff_retries: int = 2
     max_orca_stages: int = 3
     orca_route_line: str = "! r2scan-3c OptTS Freq TightSCF"

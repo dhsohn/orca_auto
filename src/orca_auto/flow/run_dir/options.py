@@ -376,7 +376,7 @@ def _resolve_run_dir_workflow_options(
     default_orca_route_line: str,
     default_max_orca_stages: int,
     default_max_crest_candidates: int = 3,
-    default_max_xtb_stages: int = 3,
+    default_max_xtb_stages: int = 9,
     workflow_root: str | None = None,
     workflow_type: str = "",
 ) -> RunDirWorkflowOptions:
@@ -416,7 +416,7 @@ def _resolve_run_dir_workflow_option_bundle(
     default_orca_route_line: str,
     default_max_orca_stages: int,
     default_max_crest_candidates: int = 3,
-    default_max_xtb_stages: int = 3,
+    default_max_xtb_stages: int = 9,
     workflow_root: str | None = None,
     workflow_type: str = "",
 ) -> tuple[RunDirWorkflowOptions, dict[str, Any]]:
