@@ -368,8 +368,20 @@ def _normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any])
     )
 
 
-def write_report_json(reaction_dir: Path, report_payload: dict[str, Any]) -> Path:
-    path = report_json_path(reaction_dir)
+def _unlink_stale_root_report(reaction_dir: Path, file_name: str) -> None:
+    """Drop a pre-relocation root copy so it cannot shadow the generation report."""
+    try:
+        (reaction_dir / file_name).unlink(missing_ok=True)
+    except OSError:
+        logger.debug("stale root report cleanup failed: %s", reaction_dir / file_name)
+
+
+def write_report_json(
+    reaction_dir: Path,
+    report_payload: dict[str, Any],
+    *,
+    generation_target: tuple[Path, tuple[int, int]] | None = None,
+) -> Path:
     if int(report_payload.get("schema_version", 0) or 0) == 1:
         payload = report_payload
     else:
@@ -386,35 +398,52 @@ def write_report_json(reaction_dir: Path, report_payload: dict[str, Any]) -> Pat
             "final_result": cast(RunFinalResult | None, report_payload.get("final_result")),
         }
         payload = _normalized_payload_from_state(reaction_dir, state)
-    generation_target = _visible_generation_artifact_dir(reaction_dir, payload)
+    if generation_target is None:
+        generation_target = _visible_generation_artifact_dir(reaction_dir, payload)
     if generation_target is not None:
-        _write_generation_json(
-            generation_target,
-            report_json_path(generation_target[0]),
-            payload,
-        )
+        path = report_json_path(generation_target[0])
+        _write_generation_json(generation_target, path, payload)
+        _unlink_stale_root_report(reaction_dir, REPORT_JSON_NAME)
+        return path
+    path = report_json_path(reaction_dir)
     atomic_write_json(path, payload, ensure_ascii=True, indent=2)
     return path
 
 
-def write_report_md(reaction_dir: Path, markdown: str) -> Path:
+def write_report_md(
+    reaction_dir: Path,
+    markdown: str,
+    *,
+    generation_target: tuple[Path, tuple[int, int]] | None = None,
+) -> Path:
+    if generation_target is not None:
+        path = report_md_path(generation_target[0])
+        _write_generation_bytes(generation_target, path, markdown.encode("utf-8"))
+        _unlink_stale_root_report(reaction_dir, REPORT_MD_NAME)
+        return path
     path = report_md_path(reaction_dir)
     _atomic_write_text(path, markdown)
     return path
 
 
 def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str, str]:
-    """Write the Markdown body before publishing JSON as the report commit marker."""
+    """Write the Markdown body before publishing JSON as the report commit marker.
+
+    Reports live inside the verified execution generation; the job root is only
+    a fallback for runs without a bound generation (legacy states, submissions
+    that failed before binding).
+    """
 
     report_payload = _normalized_payload_from_state(reaction_dir, state)
+    generation_target = _visible_generation_artifact_dir(reaction_dir, report_payload)
     markdown = "\n".join(build_engine_report_markdown(report_payload))
-    md_path = write_report_md(reaction_dir, markdown)
-    json_path = write_report_json(reaction_dir, report_payload)
+    md_path = write_report_md(reaction_dir, markdown, generation_target=generation_target)
+    json_path = write_report_json(reaction_dir, report_payload, generation_target=generation_target)
     reports = {"report_json": str(json_path), "report_md": str(md_path)}
-    html_path = write_job_html_report(reaction_dir, state)
+    html_path = write_job_html_report(reaction_dir, state, generation_target=generation_target)
     if html_path is not None:
         reports["report_html"] = str(html_path)
-    si_path = write_si_block(reaction_dir, state)
+    si_path = write_si_block(reaction_dir, state, generation_target=generation_target)
     if si_path is not None:
         reports["si_block"] = str(si_path)
     return reports

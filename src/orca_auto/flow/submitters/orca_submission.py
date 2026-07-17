@@ -277,6 +277,10 @@ def submitted_stage_transition(
             metadata_removals=(
                 "submission_deferred_reason",
                 "last_submission_attempt_at",
+                # A successful submission supersedes the previous attempt's
+                # failure; a stale reason would otherwise outrank live status
+                # fields in the final workflow report.
+                "reason",
                 "submission_error_detail",
             ),
         ),

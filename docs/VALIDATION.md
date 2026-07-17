@@ -160,8 +160,8 @@ an ordinary blocked entry and is never followed.
 
 The short projection preserves the confined local `href`/`src` closure needed
 by generated reports. For example, a `workflow_report.html` copy carries its
-relative `03_orca/01_ts_guess/job_report.html` target in the same artifact
-bundle, so the child report still opens offline. External URLs are left as
+relative `03_orca/01_ts_guess/<generation>/job_report.html` target in the same
+artifact bundle, so the child report still opens offline. External URLs are left as
 external references. Absolute, escaping, malformed, symlinked, hard-linked, or
 otherwise unsafe local targets block that report copy rather than falling back
 to the original long path. Per-file, aggregate-byte, entry, digest, or path

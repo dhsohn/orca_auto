@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE, WORKFLOW_REPORT_HTML_FILE
+from orca_auto.core.queue.generation import visible_generation_children
 from orca_auto.core.utils.persistence import atomic_write_text
 from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.parser.patterns import (
@@ -265,10 +266,13 @@ def _stage_job_dirs(stage: Mapping[str, Any]) -> tuple[Path, ...]:
 
 def _stage_job_report(stage: Mapping[str, Any]) -> tuple[Path | None, dict[str, Any] | None]:
     for job_dir in _stage_job_dirs(stage):
-        report_path = job_dir / "job_report.json"
-        report = _load_json(report_path)
-        if report is not None and _stage_report_identity_matches(stage, report):
-            return report_path, report
+        # ORCA stages keep their report inside the execution generation; the
+        # job-dir root only carries pre-relocation legacy reports.
+        for candidate_dir in (job_dir, *visible_generation_children(job_dir)):
+            report_path = candidate_dir / "job_report.json"
+            report = _load_json(report_path)
+            if report is not None and _stage_report_identity_matches(stage, report):
+                return report_path, report
     return None, None
 
 
@@ -645,8 +649,10 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
         energy = _orca_report_output_energy(output_dir, report_payload)
 
     report_href: str | None = None
-    if output_dir is not None and report_json_path is not None:
-        job_report_html = output_dir / RUN_REPORT_HTML_FILE
+    if report_json_path is not None:
+        # The HTML report is co-located with the report JSON (both live in the
+        # execution generation; pre-relocation jobs keep them at the job root).
+        job_report_html = report_json_path.parent / RUN_REPORT_HTML_FILE
         if job_report_html.exists():
             try:
                 report_href = os.path.relpath(job_report_html, workspace_dir)

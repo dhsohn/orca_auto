@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.artifacts import SI_BLOCK_MD_FILE
+from orca_auto.core.engine_process import atomic_write_confined_bytes
 from orca_auto.core.utils.persistence import atomic_write_text
 
 from ..completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
@@ -244,29 +245,57 @@ def si_block_path(reaction_dir: Path) -> Path:
     return reaction_dir / SI_BLOCK_MD_FILE
 
 
-def write_si_block(reaction_dir: Path, state: Mapping[str, Any]) -> Path | None:
+def write_si_block(
+    reaction_dir: Path,
+    state: Mapping[str, Any],
+    *,
+    generation_target: tuple[Path, tuple[int, int]] | None = None,
+) -> Path | None:
     """Write ``si_block.md``; ``None`` when the job has no SI block.
 
-    Mirrors ``write_job_html_report``: a job type without a block removes any
-    stale file from a reused reaction dir, while an unexpected error leaves
-    the last valid block in place.
+    Mirrors ``write_job_html_report``: with a verified ``generation_target``
+    the block lands inside the execution generation (removing any root copy);
+    a job type without a block removes any stale file from a reused reaction
+    dir, while an unexpected error leaves the last valid block in place.
     """
-    path = si_block_path(reaction_dir)
+    target_dir = generation_target[0] if generation_target is not None else reaction_dir
+    path = si_block_path(target_dir)
+    root_path = si_block_path(reaction_dir)
+
+    def _publish(markdown: str) -> None:
+        if generation_target is not None:
+            atomic_write_confined_bytes(
+                generation_target[0],
+                path,
+                markdown.encode("utf-8"),
+                label="ORCA generation artifact",
+                mode=0o600,
+                expected_parent_identity=generation_target[1],
+            )
+            root_path.unlink(missing_ok=True)
+        else:
+            atomic_write_text(path, markdown)
+
+    def _remove_stale() -> None:
+        path.unlink(missing_ok=True)
+        if generation_target is not None:
+            root_path.unlink(missing_ok=True)
+
     try:
         selected_raw = str(state.get("selected_inp") or "").strip()
         if selected_raw and input_uses_irc(Path(selected_raw)):
             irc_block = collect_irc_si_block(reaction_dir, state)
             if irc_block is None:
-                path.unlink(missing_ok=True)
+                _remove_stale()
                 return None
-            atomic_write_text(path, render_irc_si_block_md(irc_block))
+            _publish(render_irc_si_block_md(irc_block))
             return path
 
         block = collect_si_block(reaction_dir, state)
         if block is None:
-            path.unlink(missing_ok=True)
+            _remove_stale()
             return None
-        atomic_write_text(path, render_si_block_md(block))
+        _publish(render_si_block_md(block))
         return path
     except Exception:  # noqa: BLE001
         logger.warning("SI block generation failed for %s", reaction_dir, exc_info=True)

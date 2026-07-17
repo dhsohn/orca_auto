@@ -177,10 +177,55 @@ class TestState(unittest.TestCase):
             save_state(reaction, state)
             write_report_files(reaction, state)
 
+            # State stays mirrored (root is the live copy until terminal
+            # cleanup); reports live only inside the generation.
             self.assertEqual(load_state(generation), load_state(reaction))
-            self.assertEqual(load_report_json(generation), load_report_json(reaction))
+            self.assertIsNotNone(load_report_json(generation))
+            self.assertIsNone(load_report_json(reaction))
+            self.assertTrue((generation / "job_report.md").is_file())
+            self.assertFalse((reaction / "job_report.md").exists())
             self.assertFalse((reaction / ".orca_auto_orca_executions").exists())
             self.assertFalse((reaction / ".orca_auto_input_snapshots").exists())
+
+    def test_generation_report_replaces_stale_root_copies(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            generation = reaction / "20260714-224054-959479f2"
+            generation.mkdir()
+            inp = generation / "nebts.inp"
+            inp.write_text("! NEB-TS\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+            state = new_state(reaction, inp, max_retries=0)
+            generation_status = generation.stat()
+            reaction_status = reaction.stat()
+            owner_token = "state-mirror-owner-token-0002"
+            bind_direct_generation_owner(
+                reaction,
+                namespace=generation.name,
+                expected_job_identity=(reaction_status.st_dev, reaction_status.st_ino),
+                expected_generation_identity=(
+                    generation_status.st_dev,
+                    generation_status.st_ino,
+                ),
+                owner_token=owner_token,
+            )
+            state["execution_provenance"] = {
+                "execution_dir": str(generation),
+                "execution_dir_identity": {
+                    "device": generation_status.st_dev,
+                    "inode": generation_status.st_ino,
+                },
+                "generation_owner_token": owner_token,
+                "bound_selected_identity": executable_identity(inp),
+            }
+            (reaction / "job_report.json").write_text("{}", encoding="utf-8")
+            (reaction / "job_report.md").write_text("stale", encoding="utf-8")
+
+            write_report_files(reaction, state)
+
+            self.assertFalse((reaction / "job_report.json").exists())
+            self.assertFalse((reaction / "job_report.md").exists())
+            self.assertTrue((generation / "job_report.json").is_file())
+            self.assertTrue((generation / "job_report.md").is_file())
 
     def test_replaced_visible_generation_never_receives_state_or_report(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -368,9 +413,16 @@ class TestState(unittest.TestCase):
             events: list[str] = []
             original_write_report_md = state_module.write_report_md
 
-            def write_markdown(target_dir: Path, markdown: str) -> Path:
+            def write_markdown(
+                target_dir: Path,
+                markdown: str,
+                *,
+                generation_target: tuple[Path, tuple[int, int]] | None = None,
+            ) -> Path:
                 events.append("markdown")
-                return original_write_report_md(target_dir, markdown)
+                return original_write_report_md(
+                    target_dir, markdown, generation_target=generation_target
+                )
 
             def fail_json(*_args: object, **_kwargs: object) -> Path:
                 events.append("json")

@@ -238,20 +238,31 @@ def assert_orca_job_publications(
     reason = str(status.get("reason") or "").strip()
     assert job_id and reason
 
-    report_html = (job_dir / "job_report.html").read_text(encoding="utf-8")
+    # Reports live inside the execution generation; the job root only keeps
+    # the live state (and pre-relocation legacy report copies).
+    engine_payload = state.get("engine_payload")
+    assert isinstance(engine_payload, dict)
+    provenance = engine_payload.get("execution_provenance")
+    assert isinstance(provenance, dict)
+    generation_dir = Path(str(provenance.get("execution_dir") or "").strip())
+    assert generation_dir.is_dir()
+
+    report_html = (generation_dir / "job_report.html").read_text(encoding="utf-8")
     assert len(report_html) > 500
     assert job_id in report_html
     assert f">{expected_status}<" in report_html
     assert reason in report_html
     assert "AnalyzerStatus." not in report_html
+    assert not (job_dir / "job_report.html").exists()
 
-    report_markdown = (job_dir / "job_report.md").read_text(encoding="utf-8")
+    report_markdown = (generation_dir / "job_report.md").read_text(encoding="utf-8")
     assert len(report_markdown) > 200
     assert f"Status: `{expected_status}`" in report_markdown
     assert "AnalyzerStatus." not in report_markdown
     assert "<AnalyzerStatus" not in report_markdown
+    assert not (job_dir / "job_report.md").exists()
 
-    si_path = job_dir / "si_block.md"
+    si_path = generation_dir / "si_block.md"
     if expect_si:
         si_markdown = si_path.read_text(encoding="utf-8")
         assert len(si_markdown) > 100
@@ -259,7 +270,18 @@ def assert_orca_job_publications(
         assert "-1.100000 Eh" in si_markdown
     else:
         assert not si_path.exists()
+    assert not (job_dir / "si_block.md").exists()
     return state
+
+
+def orca_job_generation_dir(state: dict[str, Any]) -> Path:
+    engine_payload = state.get("engine_payload")
+    assert isinstance(engine_payload, dict)
+    provenance = engine_payload.get("execution_provenance")
+    assert isinstance(provenance, dict)
+    generation_dir = Path(str(provenance.get("execution_dir") or "").strip())
+    assert generation_dir.is_dir()
+    return generation_dir
 
 
 def orca_job_directories(payload: dict[str, Any]) -> list[Path]:

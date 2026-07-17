@@ -1618,9 +1618,17 @@ def test_record_submission_outcome_persists_failure_reason_and_detail() -> None:
 
 
 def test_record_submission_outcome_clears_stale_failure_detail_on_submit() -> None:
+    """A successful resubmission must clear the previous failure's traces.
+
+    Without this a stage retried after `submission_failed` stays tagged with
+    e.g. `reason: invalid_submission_input` through queued/running/completed,
+    and the final workflow report surfaces the stale reason because stage
+    metadata outranks the live submission result there.
+    """
     stage: dict[str, Any] = {"stage_id": "orca_optts_freq_01"}
     task: dict[str, Any] = {}
     stage_metadata: dict[str, Any] = {
+        "reason": "invalid_submission_input",
         "submission_error_detail": "old failure detail",
         "submission_deferred_reason": "submission_conflict",
     }
@@ -1643,5 +1651,6 @@ def test_record_submission_outcome_clears_stale_failure_detail_on_submit() -> No
     )
 
     assert bucket == "submitted"
+    assert "reason" not in stage_metadata
     assert "submission_error_detail" not in stage_metadata
     assert "submission_deferred_reason" not in stage_metadata

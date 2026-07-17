@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.queue.generation import visible_generation_children
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.orca.job_locations._generation import current_generation_payloads
 
@@ -116,11 +117,27 @@ def set_current_dir(
     )
 
 
+def _payload_candidate_dirs(current_dir: Path) -> tuple[Path, ...]:
+    """The job dir itself, then its execution generations newest-first.
+
+    Terminal ORCA jobs keep state and reports inside the generation (the root
+    state is cleaned and reports are generation-only), so a direct-dir load
+    must look one level down when the root has no payload.
+    """
+    return (current_dir, *visible_generation_children(current_dir))
+
+
 def load_context_payloads(context: LoaderContext, deps: Any) -> None:
     if not context.state and context.current_dir is not None:
-        context.state = deps.load_json_dict_fn(context.current_dir / "job_state.json")
+        for candidate in _payload_candidate_dirs(context.current_dir):
+            context.state = deps.load_json_dict_fn(candidate / "job_state.json")
+            if context.state:
+                break
     if not context.report and context.current_dir is not None:
-        context.report = deps.load_json_dict_fn(context.current_dir / "job_report.json")
+        for candidate in _payload_candidate_dirs(context.current_dir):
+            context.report = deps.load_json_dict_fn(candidate / "job_report.json")
+            if context.report:
+                break
     context.state = _flatten_orca_engine_payload(context.state)
     context.report = _flatten_orca_engine_payload(context.report)
     context.state, context.report = current_generation_payloads(
