@@ -662,11 +662,10 @@ def test_prepare_retry_attempt_appends_retry_patch_actions_to_existing_provenanc
 
     monkeypatch.setattr(
         "orca_auto.orca.attempt.retry.prepare_scants_scan_retry_input",
-        lambda **_kwargs: (None, []),
-    )
-    monkeypatch.setattr(
-        "orca_auto.orca.attempt.retry.rewrite_for_retry",
-        lambda **_kwargs: ["retry_tightscf_added", "retry_slowconv_added"],
+        lambda *, source_inp, target_inp, retry_number, max_memory_gb: (
+            target_inp,
+            ["retry_tightscf_added", "retry_slowconv_added"],
+        ),
     )
 
     state = new_state(tmp_path, selected_inp, max_retries=1)

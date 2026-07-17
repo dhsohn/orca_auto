@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
 from orca_auto.core.artifacts import (
     JOB_REPORT_JSON_FILE,
     JOB_REPORT_MD_FILE,
@@ -34,21 +31,12 @@ load_state = _EXPORTS.load_state
 load_report_json = _EXPORTS.load_report_json
 
 
-def write_artifacts(job_dir: Path, payload: dict[str, Any]) -> None:
-    from orca_auto.core.engines.artifacts import build_engine_report_markdown
-
-    write_state(job_dir, payload)
-    write_report_json(job_dir, payload)
-    write_report_md_lines(job_dir, build_engine_report_markdown(payload))
-
-
 __all__ = [
     "REPORT_JSON_FILE_NAME",
     "REPORT_MD_FILE_NAME",
     "STATE_FILE_NAME",
     "load_report_json",
     "load_state",
-    "write_artifacts",
     "write_report_json",
     "write_report_md_lines",
     "write_state",

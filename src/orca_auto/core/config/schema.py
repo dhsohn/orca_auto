@@ -154,8 +154,7 @@ def normalize_max_concurrent(value: Any, default: int = 4) -> int:
     return max(1, as_int(value, default))
 
 
-def normalize_admission_limit(value: Any, max_concurrent: int) -> int | None:
-    del max_concurrent
+def normalize_admission_limit(value: Any) -> int | None:
     if value is None:
         return None
     if value == "":
@@ -213,21 +212,13 @@ class RetryRuntimeConfig(RuntimeAdmissionMixin):
         )
         if not self.admission_root and self.allowed_root:
             self.admission_root = self.allowed_root
-        self.admission_limit = normalize_admission_limit(
-            self.admission_limit,
-            self.max_concurrent,
-        )
+        self.admission_limit = normalize_admission_limit(self.admission_limit)
 
 
 @dataclass(frozen=True)
 class CommonResourceConfig:
     max_cores_per_task: int = 8
     max_memory_gb_per_task: int = 32
-
-
-@dataclass(frozen=True)
-class EmptyBehaviorConfig:
-    pass
 
 
 @dataclass(frozen=True)

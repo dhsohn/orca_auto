@@ -22,7 +22,6 @@ ActionKind = Literal[
     "run_dismiss",
 ]
 ResolutionStatus = Literal["ok", "unknown", "expired", "wrong_address", "wrong_actor"]
-ActionAudience = Literal["originator_only", "authorized_operator"]
 
 _ACTION_ID_PREFIX = "oa:"
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
@@ -36,7 +35,6 @@ class RegisteredAction:
     target: str
     address: ConversationAddress
     actor_id: str
-    audience: ActionAudience
     expires_at: float
     group_id: str
 
@@ -57,7 +55,6 @@ class ActionStore(Protocol):
         *,
         address: ConversationAddress,
         actor: Actor,
-        audience: ActionAudience = "originator_only",
     ) -> tuple[str, ...]: ...
 
     def consume(
@@ -133,14 +130,11 @@ class ActionRegistry:
         *,
         address: ConversationAddress,
         actor: Actor,
-        audience: ActionAudience = "originator_only",
     ) -> tuple[str, ...]:
         """Register related actions and return provider-safe opaque ids."""
 
         if not specs:
             return ()
-        if audience not in ("originator_only", "authorized_operator"):
-            raise ValueError(f"unsupported action audience: {audience!r}")
         now = self._clock()
         with self._lock:
             self._purge_expired(now)
@@ -161,7 +155,6 @@ class ActionRegistry:
                     target=target,
                     address=address,
                     actor_id=actor_id,
-                    audience=audience,
                     expires_at=expires_at,
                     group_id=group_id,
                 )
@@ -174,13 +167,11 @@ class ActionRegistry:
         target: str = "",
         address: ConversationAddress,
         actor: Actor,
-        audience: ActionAudience = "originator_only",
     ) -> str:
         return self.issue_group(
             ((kind, target),),
             address=address,
             actor=actor,
-            audience=audience,
         )[0]
 
     def consume(
@@ -204,7 +195,7 @@ class ActionRegistry:
                 return ActionResolution("unknown")
             if action.address != address:
                 return ActionResolution("wrong_address")
-            if action.audience == "originator_only" and action.actor_id != actor.user_id.strip():
+            if action.actor_id != actor.user_id.strip():
                 return ActionResolution("wrong_actor")
             self._drop_group(action.group_id)
             return ActionResolution("ok", action)
@@ -218,7 +209,6 @@ class ActionRegistry:
 
 __all__ = [
     "ActionKind",
-    "ActionAudience",
     "ActionRegistry",
     "ActionResolution",
     "ActionStore",

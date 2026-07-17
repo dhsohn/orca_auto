@@ -114,9 +114,7 @@ def _recover_missing_retry_input(request: MissingRetryInputRecoveryRequest) -> t
     patch_actions = rewrite_for_retry(
         source_inp=source_inp,
         target_inp=request.current_inp,
-        step="no_route_rewrite",
         max_memory_gb=request.state.get("max_memory_gb_per_task"),
-        allow_no_effective_change=True,
     )
     actions = _ensure_patch_actions_list(last_attempt)
     actions.append(f"resume_recreated_missing_input:{request.current_inp.name}")

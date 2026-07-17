@@ -203,16 +203,6 @@ def _safe_int_default(value: Any, *, default: int = 0) -> int:
     return safe_int(value, default=default)
 
 
-def _normalize_text_override(overrides: Mapping[str, Any] | None = None) -> Any:
-    return _override(overrides, "_normalize_text", _normalize_text_default)
-
-
-def _stage_metadata_override(overrides: Mapping[str, Any] | None = None) -> Any:
-    from orca_auto.flow.orchestration.support import stage_metadata_impl
-
-    return _override(overrides, "_stage_metadata", stage_metadata_impl)
-
-
 def _stage_failure_is_recoverable_override(
     overrides: Mapping[str, Any] | None = None,
 ) -> Any:
@@ -235,7 +225,7 @@ def _workflow_sync_only_default(
 
     return workflow_sync_only_impl(
         payload,
-        normalize_text_fn=_normalize_text_override(overrides),
+        normalize_text_fn=_normalize_text_default,
     )
 
 
@@ -249,7 +239,7 @@ def _workflow_has_active_children_default(
 
     return workflow_has_active_children_impl(
         payload,
-        normalize_text_fn=_normalize_text_override(overrides),
+        normalize_text_fn=_normalize_text_default,
         workflow_has_active_downstream_fn=workflow_has_active_downstream,
     )
 
@@ -260,11 +250,12 @@ def _stage_failure_is_recoverable_default(
     overrides: Mapping[str, Any] | None = None,
 ) -> bool:
     from orca_auto.flow.orchestration.lifecycle import stage_failure_is_recoverable_impl
+    from orca_auto.flow.orchestration.support import stage_metadata_impl
 
     return stage_failure_is_recoverable_impl(
         stage,
-        normalize_text_fn=_normalize_text_override(overrides),
-        stage_metadata_fn=_stage_metadata_override(overrides),
+        normalize_text_fn=_normalize_text_default,
+        stage_metadata_fn=stage_metadata_impl,
     )
 
 
@@ -281,13 +272,13 @@ def _recompute_workflow_status_default(
     def effective_stage_status(stage: dict[str, Any]) -> str:
         return effective_stage_status_impl(
             stage,
-            normalize_text_fn=_normalize_text_override(overrides),
+            normalize_text_fn=_normalize_text_default,
             stage_failure_is_recoverable_fn=_stage_failure_is_recoverable_override(overrides),
         )
 
     return recompute_workflow_status_impl(
         payload,
-        normalize_text_fn=_normalize_text_override(overrides),
+        normalize_text_fn=_normalize_text_default,
         effective_stage_status_fn=effective_stage_status,
     )
 
@@ -303,7 +294,7 @@ def _persist_workflow_progress_default(
     from orca_auto.flow.registry import sync_workflow_registry
     from orca_auto.flow.state import write_workflow_payload
 
-    normalize = _normalize_text_override(overrides)
+    normalize = _normalize_text_default
     if not sync_only:
         status = normalize(payload.get("status")).lower()
         if status not in {
@@ -668,7 +659,6 @@ __all__ = [
     "_deps_provider",
     "_maybe_notify_workflow_phase_summary_default",
     "_normalize_text_default",
-    "_normalize_text_override",
     "_override",
     "_persist_workflow_progress_default",
     "_recompute_workflow_status_default",
@@ -678,7 +668,6 @@ __all__ = [
     "_stage_failure_is_recoverable_default",
     "_stage_failure_is_recoverable_override",
     "_stage_materialization_defaults",
-    "_stage_metadata_override",
     "_stage_runtime_defaults",
     "_stage_support_defaults",
     "_stage_workflow_defaults",

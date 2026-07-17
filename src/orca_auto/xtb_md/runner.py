@@ -388,7 +388,6 @@ def run_xtb_md_attempt(
         )
         active_dir = _private_execution_dir(job_dir, str(getattr(entry, "task_id", "") or ""))
         execution_dir = str(active_dir)
-        validate_execution_snapshot_job_dir(cfg.runtime.allowed_root, execution_snapshot)
         manifest, resources, executable, runtime_environment = _validate_snapshot(
             cfg,
             job_dir,

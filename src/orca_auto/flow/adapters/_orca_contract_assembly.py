@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_APP_NAME
+from orca_auto.core.utils.coercion import normalize_bool, normalize_text, safe_int
 from orca_auto.orca.job_locations import _contract_payload as _canonical_payload
 
 from . import _orca_contract_context as _contract_context
@@ -13,20 +14,11 @@ from ._orca_contract_status import StatusPayload
 
 ContractPayload = dict[str, Any]
 StatusTuple = tuple[str, str, str, str]
-NormalizeTextFn = Callable[[Any], str]
-NormalizeBoolFn = Callable[[Any], bool]
-
-
-class SafeIntFn(Protocol):
-    def __call__(self, value: Any, *, default: int = 0) -> int: ...
 
 
 @dataclass(frozen=True)
 class OrcaContractLoaderDeps:
     path_type: type[Path]
-    normalize_text_fn: NormalizeTextFn
-    normalize_bool_fn: NormalizeBoolFn
-    safe_int_fn: SafeIntFn
     tracked_runtime_context_fn: Callable[
         ...,
         tuple[
@@ -93,10 +85,10 @@ class _ContractPayloadDeps:
         self._deps = deps
 
     def normalize_text(self, value: Any) -> str:
-        return self._deps.normalize_text_fn(value)
+        return normalize_text(value)
 
     def normalize_bool(self, value: Any) -> bool:
-        return self._deps.normalize_bool_fn(value)
+        return normalize_bool(value)
 
     def _runtime_paths(
         self,
@@ -174,28 +166,26 @@ def _contract_from_payload(
 ) -> Any:
     final_result = payload.get("final_result")
     return deps.contract_cls(
-        run_id=deps.normalize_text_fn(payload.get("run_id")),
-        status=deps.normalize_text_fn(payload.get("status")) or "unknown",
-        reason=deps.normalize_text_fn(payload.get("reason")),
-        state_status=deps.normalize_text_fn(payload.get("state_status")),
-        reaction_dir=deps.normalize_text_fn(payload.get("reaction_dir") or request.reaction_dir),
-        latest_known_path=deps.normalize_text_fn(
-            payload.get("latest_known_path") or request.target
-        ),
-        optimized_xyz_path=deps.normalize_text_fn(payload.get("optimized_xyz_path")),
-        queue_id=deps.normalize_text_fn(payload.get("queue_id") or request.queue_id),
-        queue_status=deps.normalize_text_fn(payload.get("queue_status")).lower(),
-        cancel_requested=deps.normalize_bool_fn(payload.get("cancel_requested")),
-        selected_inp=deps.normalize_text_fn(payload.get("selected_inp")),
-        selected_input_xyz=deps.normalize_text_fn(payload.get("selected_input_xyz")),
-        analyzer_status=deps.normalize_text_fn(payload.get("analyzer_status")),
-        completed_at=deps.normalize_text_fn(payload.get("completed_at")),
-        last_out_path=deps.normalize_text_fn(payload.get("last_out_path")),
-        run_state_path=deps.normalize_text_fn(payload.get("run_state_path")),
-        report_json_path=deps.normalize_text_fn(payload.get("report_json_path")),
-        report_md_path=deps.normalize_text_fn(payload.get("report_md_path")),
-        attempt_count=deps.safe_int_fn(payload.get("attempt_count"), default=0),
-        max_retries=deps.safe_int_fn(payload.get("max_retries"), default=0),
+        run_id=normalize_text(payload.get("run_id")),
+        status=normalize_text(payload.get("status")) or "unknown",
+        reason=normalize_text(payload.get("reason")),
+        state_status=normalize_text(payload.get("state_status")),
+        reaction_dir=normalize_text(payload.get("reaction_dir") or request.reaction_dir),
+        latest_known_path=normalize_text(payload.get("latest_known_path") or request.target),
+        optimized_xyz_path=normalize_text(payload.get("optimized_xyz_path")),
+        queue_id=normalize_text(payload.get("queue_id") or request.queue_id),
+        queue_status=normalize_text(payload.get("queue_status")).lower(),
+        cancel_requested=normalize_bool(payload.get("cancel_requested")),
+        selected_inp=normalize_text(payload.get("selected_inp")),
+        selected_input_xyz=normalize_text(payload.get("selected_input_xyz")),
+        analyzer_status=normalize_text(payload.get("analyzer_status")),
+        completed_at=normalize_text(payload.get("completed_at")),
+        last_out_path=normalize_text(payload.get("last_out_path")),
+        run_state_path=normalize_text(payload.get("run_state_path")),
+        report_json_path=normalize_text(payload.get("report_json_path")),
+        report_md_path=normalize_text(payload.get("report_md_path")),
+        attempt_count=safe_int(payload.get("attempt_count"), default=0),
+        max_retries=safe_int(payload.get("max_retries"), default=0),
         attempts=_payload_attempts(payload),
         final_result=dict(final_result) if isinstance(final_result, dict) else {},
         resource_request=deps.coerce_resource_dict_fn(payload.get("resource_request")),
@@ -247,13 +237,13 @@ def _payload_from_context(
     resource_request, resource_actual = _resource_payloads(context, deps)
     _ensure_orca_record(context.tracked_record)
     queue = dict(context.queue_entry or {})
-    if not deps.normalize_text_fn(queue.get("queue_id")) and request.queue_id:
+    if not normalize_text(queue.get("queue_id")) and request.queue_id:
         queue["queue_id"] = request.queue_id
     payload_context = _ContractPayloadContext(
         resolved_run_id=context.resolved_run_id,
         status=status.status,
         reason=status.reason,
-        state_status=deps.normalize_text_fn(context.state.get("status")).lower(),
+        state_status=normalize_text(context.state.get("status")).lower(),
         reaction_dir=request.reaction_dir,
         current_dir=context.current_dir,
         latest_known_path=latest_known_path,
@@ -281,7 +271,7 @@ def _latest_known_path(
     deps: OrcaContractLoaderDeps,
 ) -> str:
     record_path = (
-        deps.normalize_text_fn(context.tracked_record.latest_known_path)
+        normalize_text(context.tracked_record.latest_known_path)
         if context.tracked_record is not None
         else ""
     )
@@ -289,7 +279,7 @@ def _latest_known_path(
         return record_path
     if context.current_dir is not None:
         return str(context.current_dir)
-    return deps.normalize_text_fn(request.target)
+    return normalize_text(request.target)
 
 
 def _contract_status(
@@ -300,7 +290,7 @@ def _contract_status(
         state=context.state,
         report=context.report,
     )
-    tracked_status = deps.normalize_text_fn(
+    tracked_status = normalize_text(
         context.tracked_record.status if context.tracked_record is not None else ""
     ).lower()
     if status == "unknown" and tracked_status:
@@ -316,7 +306,7 @@ def _artifact_paths(
     selected_inp = deps.resolve_artifact_path_fn(
         _selected_input_source(context, deps), context.current_dir
     )
-    if Path(deps.normalize_text_fn(selected_inp)).suffix.lower() != ".inp":
+    if Path(normalize_text(selected_inp)).suffix.lower() != ".inp":
         selected_inp = ""
     last_out_path = deps.resolve_artifact_path_fn(_last_out_source(context), context.current_dir)
     selected_input_xyz = deps.resolve_artifact_path_fn(
@@ -342,7 +332,7 @@ def _selected_input_source(
     record_selected_inp = (
         context.tracked_record.selected_input_xyz if context.tracked_record is not None else ""
     )
-    if Path(deps.normalize_text_fn(record_selected_inp)).suffix.lower() != ".inp":
+    if Path(normalize_text(record_selected_inp)).suffix.lower() != ".inp":
         record_selected_inp = ""
     return (
         deps.queue_entry_metadata_value_fn(context.queue_entry, "selected_inp")
@@ -363,7 +353,7 @@ def _selected_xyz_source(
         context.tracked_record.selected_input_xyz if context.tracked_record is not None else "",
     )
     for candidate in candidates:
-        if Path(deps.normalize_text_fn(candidate)).suffix.lower() == ".xyz":
+        if Path(normalize_text(candidate)).suffix.lower() == ".xyz":
             return candidate
     return ""
 

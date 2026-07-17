@@ -518,22 +518,6 @@ def test_wrong_actor_does_not_consume_confirmation() -> None:
     assert fixture.cancelled == ["run-1"]
 
 
-def test_authorized_operator_action_audience_is_not_bound_to_originator() -> None:
-    registry = ActionRegistry(token_factory=lambda: "operator-action")
-    action_id = registry.issue(
-        "list_refresh",
-        address=ADDRESS,
-        actor=Actor(user_id="", label="scheduled-notification"),
-        audience="authorized_operator",
-    )
-
-    resolution = registry.consume(action_id, address=ADDRESS, actor=OTHER_ACTOR)
-
-    assert resolution.status == "ok"
-    assert resolution.action is not None
-    assert resolution.action.audience == "authorized_operator"
-
-
 def test_registry_is_bounded_and_evicts_complete_action_groups() -> None:
     tokens = iter(("a", "b", "c", "d", "e", "f"))
     registry = ActionRegistry(max_entries=2, token_factory=lambda: next(tokens))

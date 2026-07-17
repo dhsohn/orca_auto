@@ -181,9 +181,7 @@ class TestInpRewriter(unittest.TestCase):
                 "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
                 encoding="utf-8",
             )
-            actions = rewrite_for_retry(
-                src, dst, step="no_route_rewrite", max_memory_gb=32, allow_no_effective_change=True
-            )
+            actions = rewrite_for_retry(src, dst, max_memory_gb=32)
             text = dst.read_text(encoding="utf-8")
         # 32 GB across 8 cores -> 4096 MB per-core ceiling.
         self.assertIn("%maxcore 4096", text)
@@ -262,22 +260,10 @@ class TestInpRewriter(unittest.TestCase):
                 "! Opt\n%pal\n  nprocs 8\nend\n%maxcore 2000\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
                 encoding="utf-8",
             )
-            actions = rewrite_for_retry(
-                src, dst, step="no_route_rewrite", max_memory_gb=32, allow_no_effective_change=True
-            )
+            actions = rewrite_for_retry(src, dst, max_memory_gb=32)
             text = dst.read_text(encoding="utf-8")
         self.assertIn("%maxcore 2000", text)
         self.assertNotIn("maxcore_clamped_to_budget", actions)
-
-    def test_rewrite_for_retry_raises_when_no_effective_change(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            src = root / "rxn.inp"
-            dst = root / "rxn.retry01.inp"
-            src.write_text(BASE_INP, encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "no_retry_rewrite_available"):
-                rewrite_for_retry(src, dst, step="no_route_rewrite")
-        self.assertFalse(dst.exists())
 
     def test_find_block_range_does_not_mutate_lines(self) -> None:
         """find_block_range must not append 'end' to the shared lines list.

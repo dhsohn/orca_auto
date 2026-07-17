@@ -8,6 +8,53 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Removed
+
+- Internal over-engineering residue identified by the 2026-07-17 audit
+  (no public CLI, config, or artifact contract changes):
+  - The inert ORCA retry-recipe scaffolding: `retry_recipes.py` (a no-op
+    since the recipe ladder was retired), `RetryRecipeName`,
+    `RetryPolicy.recipes`, and the unreachable generic non-ScanTS retry
+    rewrite branch. Non-ScanTS inputs that reach the retry path through a
+    resumed state's persisted budget still fail closed with
+    `no_retry_rewrite_available`.
+  - The five-layer forwarding stack behind the shared engine job-location
+    exports (`EngineLocationRoots`/`Store`/`Artifacts`/`Service`/`Module`
+    and the supplier-injected API builder). The three engine consumers keep
+    the same `build_store_backed_engine_job_location_exports` entry point,
+    now returning one `EngineJobLocations` object with identical behavior,
+    including call-time store-function lookup for monkeypatching.
+  - Six request-carrier dataclass round-trips in `orca/attempt/reporting.py`
+    (public function names and signatures unchanged).
+  - Pure-coercion dependency injection: the triplicated `SafeIntFn`
+    protocol and the `safe_int`/`normalize_text`/`normalize_bool` `*_fn`
+    plumbing in the ORCA contract adapters, plus the never-overridden
+    `_normalize_text`/`_stage_metadata` orchestration override hooks.
+  - The empty `behavior` config section (`EmptyBehaviorConfig`,
+    `BehaviorConfig`) and the constant `paths_cls`/`behavior_cls`/
+    `app_config_cls` injection seam in the shared engine config loader;
+    `orca.config` now uses `RetryRuntimeConfig` directly instead of the
+    `CommonRuntimeConfig`/`RuntimeConfig` alias pair.
+  - Assorted dead surfaces: the unused `xtb_md.state.write_artifacts`
+    helper, four unused smoke procfs access-path properties, the
+    path-based fallback half of `rebuild_smoke_index`, argument-preserving
+    submitter lambdas, `(*args, **kwargs)` protocol ceremony in the queue
+    worker deps, the trivial `build_engine_notifier` factory, the dead
+    `max_concurrent` parameter of `normalize_admission_limit`, and the
+    redundant CI `systemd-units` job (the same test already runs in all
+    three matrix legs).
+  - The post-publication re-verification pass of the smoke review packet
+    (`_verify_review_projection` and helpers). Copy-time no-follow,
+    identity-pinning, size, and SHA-256 checks remain; the packet records
+    copy-time provenance, and sources that mutate after their copy no
+    longer abort publication of the already-consistent projection.
+  - The doubled directory-chain walk and duplicated per-write revalidation
+    in the xTB-MD path-identity guard. Each walk keeps its per-component
+    before/opened/after TOCTOU checks; boundary validations (submission,
+    run start, artifact persistence, run polling) remain.
+  - The `authorized_operator` action audience, which had no production
+    issuer. All interactive bot actions are originator-bound.
+
 ### Changed
 
 - Workflow stage materialization reads the persisted stage budgets

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from orca_auto.orca.commands.run_inp import cmd_run_inp, submit_reaction_dir_to_queue
-from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RuntimeConfig
+from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.queue.adapter import enqueue, list_queue, queue_entry_metadata
 
 
@@ -17,7 +17,7 @@ def _make_cfg(tmp: str, *, max_cores: int = 8, max_memory_gb: int = 32) -> AppCo
     fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_orca.chmod(0o755)
     cfg = AppConfig(
-        runtime=RuntimeConfig(allowed_root=tmp),
+        runtime=RetryRuntimeConfig(allowed_root=tmp),
         paths=PathsConfig(orca_executable=str(fake_orca)),
         resources=CommonResourceConfig(
             max_cores_per_task=max_cores,

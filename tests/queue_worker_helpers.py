@@ -3,13 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from orca_auto.orca.attempt.reporting import build_final_result
-from orca_auto.orca.config import AppConfig, RuntimeConfig
+from orca_auto.orca.config import AppConfig, RetryRuntimeConfig
 from orca_auto.orca.state import finalize_state, new_state
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
 
 
 def make_queue_worker_cfg(tmp: str) -> AppConfig:
-    return AppConfig(runtime=RuntimeConfig(allowed_root=tmp))
+    return AppConfig(runtime=RetryRuntimeConfig(allowed_root=tmp))
 
 
 def write_completed_run_state(reaction_dir: Path) -> None:

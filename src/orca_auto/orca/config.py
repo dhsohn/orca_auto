@@ -64,30 +64,15 @@ def _placeholder_settings_error(path: Path, placeholder_keys: list[str]) -> Valu
 
 
 @dataclass
-class CommonRuntimeConfig(RetryRuntimeConfig):
-    # max retry count, not total execution count
-    pass
-
-
-RuntimeConfig = CommonRuntimeConfig
-
-
-@dataclass
 class PathsConfig:
     orca_executable: str = ""
 
 
 @dataclass
-class BehaviorConfig:
-    pass
-
-
-@dataclass
 class AppConfig:
-    runtime: CommonRuntimeConfig = field(default_factory=CommonRuntimeConfig)
+    runtime: RetryRuntimeConfig = field(default_factory=RetryRuntimeConfig)
     workflow_root: str = ""
     paths: PathsConfig = field(default_factory=PathsConfig)
-    behavior: BehaviorConfig = field(default_factory=BehaviorConfig)
     resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     messenger: MessengerConfig = field(default_factory=MessengerConfig)
@@ -153,7 +138,7 @@ def _scheduler_runtime_settings(
     scheduler_enabled = bool(scheduler_raw)
     settings = _config_engines.scheduler_runtime_settings(
         scheduler_raw,
-        default_max_active=RuntimeConfig.max_concurrent,
+        default_max_active=RetryRuntimeConfig.max_concurrent,
         default_admission_root=default_shared_admission_root(runs_root),
         admission_limit_enabled=scheduler_enabled,
         reject_nonpositive=True,
@@ -187,7 +172,7 @@ def load_config(config_path: str) -> AppConfig:
     orca_executable = _required_config_paths(path, runs_root, paths_raw)
     default_max_retries = _config_engines.as_int(
         runtime_raw.get("default_max_retries"),
-        RuntimeConfig.default_max_retries,
+        RetryRuntimeConfig.default_max_retries,
     )
     max_concurrent, admission_root, admission_limit = _scheduler_runtime_settings(
         scheduler_raw,
@@ -196,7 +181,7 @@ def load_config(config_path: str) -> AppConfig:
     messenger_cfg = messenger_config_from_mapping(messenger_raw)
 
     cfg = AppConfig(
-        runtime=CommonRuntimeConfig(
+        runtime=RetryRuntimeConfig(
             allowed_root=runs_root,
             default_max_retries=max(0, default_max_retries),
             max_concurrent=max_concurrent,
@@ -207,7 +192,6 @@ def load_config(config_path: str) -> AppConfig:
         paths=PathsConfig(
             orca_executable=orca_executable,
         ),
-        behavior=BehaviorConfig(),
         resources=_config_engines.resource_config_from_mapping(resources_raw),
         telegram=messenger_cfg.telegram,
         messenger=messenger_cfg,

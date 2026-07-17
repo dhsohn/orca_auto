@@ -10,7 +10,6 @@ from orca_auto.orca.orca_runner import WorkerShutdownInterrupt
 from orca_auto.orca.retry_policy import (
     effective_max_retries,
     retry_policy_for_input,
-    retry_recipe_name_for_input,
 )
 from orca_auto.orca.state import load_state, new_state
 
@@ -631,20 +630,6 @@ class TestRetryPolicy(unittest.TestCase):
             self.assertEqual(retry_policy_for_input(freq).name, "freq")
             self.assertEqual(effective_max_retries(freq, configured_max_retries=8), 0)
             self.assertEqual(effective_max_retries(scants, configured_max_retries=0), 0)
-
-    def test_policy_recipes_keep_generic_hardening_off_non_scants_routes(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            opt = root / "opt.inp"
-            opt.write_text("! Opt B3LYP def2-SVP\n", encoding="utf-8")
-            optts = root / "optts.inp"
-            optts.write_text("! OptTS B3LYP def2-SVP Freq\n", encoding="utf-8")
-            scants = root / "scants.inp"
-            scants.write_text("! ScanTS B3LYP def2-SVP Freq\n", encoding="utf-8")
-
-            self.assertEqual(retry_recipe_name_for_input(scants, 2), "scants_retry")
-            self.assertEqual(retry_recipe_name_for_input(opt, 1), "no_route_rewrite")
-            self.assertEqual(retry_recipe_name_for_input(optts, 1), "no_route_rewrite")
 
     def test_policy_reads_split_simple_route_lines(self) -> None:
         with tempfile.TemporaryDirectory() as td:

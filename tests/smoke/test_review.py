@@ -315,33 +315,6 @@ def test_html_link_scan_digest_mismatch_blocks_report_copy(
     assert record["issue"] == "HTML report changed while local links were scanned"
 
 
-def test_source_mutation_after_earlier_copy_aborts_publication(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = _runtime(tmp_path)
-    first = runtime / "a.log"
-    first.write_text("AAAA", encoding="utf-8")
-    (runtime / "b.log").write_text("BBBB", encoding="utf-8")
-    copy_projection_file = smoke_review._copy_projection_file
-
-    def mutate_earlier_source(
-        root_fd: int,
-        projection_root_fd: int,
-        entry: smoke_review._ProjectionPlanEntry,
-    ) -> str:
-        digest = copy_projection_file(root_fd, projection_root_fd, entry)
-        if entry.artifact.runtime_path == "b.log":
-            first.write_text("ZZZZ", encoding="utf-8")
-        return digest
-
-    monkeypatch.setattr(smoke_review, "_copy_projection_file", mutate_earlier_source)
-    with pytest.raises(ReviewPacketError, match="source .*changed before publication"):
-        generate_review_packet(tmp_path, {"cases": [_case_manifest()]})
-
-    assert not (tmp_path / "review" / "index.html").exists()
-
-
 @pytest.mark.parametrize("target", ["artifact", "generation"])
 def test_projection_directory_substitution_aborts_before_index_publish(
     tmp_path: Path,

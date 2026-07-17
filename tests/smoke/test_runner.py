@@ -199,7 +199,7 @@ def test_review_failure_and_final_manifest_failure_never_leave_passed_index_row(
     original_write = runner.write_batch_manifest
     writes = 0
 
-    def fail_final_write(*args: Any, **kwargs: Any) -> Path:
+    def fail_final_write(*args: Any, **kwargs: Any) -> None:
         nonlocal writes
         writes += 1
         if writes == 2:

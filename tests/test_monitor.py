@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from orca_auto.core.messaging import render_telegram
-from orca_auto.orca.config import AppConfig, PathsConfig, RuntimeConfig, TelegramConfig
+from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig, TelegramConfig
 from orca_auto.orca.dft.monitor import MonitorResult, ParseFailure, ScanReport
 from orca_auto.orca.notifications import (
     _monitor_dft_groups,
@@ -132,7 +132,7 @@ class TestRunMonitor:
         from orca_auto.orca.commands.monitor import _run_monitor
 
         cfg = AppConfig(
-            runtime=RuntimeConfig(allowed_root="/tmp/missing"),
+            runtime=RetryRuntimeConfig(allowed_root="/tmp/missing"),
             paths=PathsConfig(orca_executable="/usr/bin/orca"),
             telegram=TelegramConfig(),
         )
@@ -143,7 +143,7 @@ class TestRunMonitor:
         from orca_auto.orca.commands.monitor import _run_monitor
 
         cfg = AppConfig(
-            runtime=RuntimeConfig(allowed_root="/tmp/definitely_missing_monitor_root"),
+            runtime=RetryRuntimeConfig(allowed_root="/tmp/definitely_missing_monitor_root"),
             paths=PathsConfig(orca_executable="/usr/bin/orca"),
             telegram=TelegramConfig(bot_token="fake", chat_id="123"),
         )
@@ -170,7 +170,7 @@ class TestRunMonitor:
             from orca_auto.orca.commands.monitor import _run_monitor
 
             cfg = AppConfig(
-                runtime=RuntimeConfig(allowed_root=str(allowed)),
+                runtime=RetryRuntimeConfig(allowed_root=str(allowed)),
                 paths=PathsConfig(orca_executable="/usr/bin/orca"),
                 telegram=TelegramConfig(bot_token="fake", chat_id="123"),
             )
@@ -199,7 +199,7 @@ class TestRunMonitor:
             from orca_auto.orca.commands.monitor import _run_monitor
 
             cfg = AppConfig(
-                runtime=RuntimeConfig(allowed_root=str(allowed)),
+                runtime=RetryRuntimeConfig(allowed_root=str(allowed)),
                 paths=PathsConfig(orca_executable="/usr/bin/orca"),
                 telegram=TelegramConfig(bot_token="fake", chat_id="123"),
             )
@@ -229,7 +229,7 @@ class TestRunMonitor:
             from orca_auto.orca.commands.monitor import _run_monitor
 
             cfg = AppConfig(
-                runtime=RuntimeConfig(allowed_root=str(allowed)),
+                runtime=RetryRuntimeConfig(allowed_root=str(allowed)),
                 paths=PathsConfig(orca_executable="/usr/bin/orca"),
                 telegram=TelegramConfig(bot_token="fake", chat_id="123"),
             )
@@ -258,7 +258,7 @@ class TestRunMonitor:
             from orca_auto.orca.commands.monitor import _run_monitor
 
             cfg = AppConfig(
-                runtime=RuntimeConfig(allowed_root=str(allowed)),
+                runtime=RetryRuntimeConfig(allowed_root=str(allowed)),
                 paths=PathsConfig(orca_executable="/usr/bin/orca"),
                 telegram=TelegramConfig(bot_token="fake", chat_id="123"),
             )

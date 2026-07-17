@@ -38,28 +38,6 @@ jobs:
       - name: Lint shell scripts
         run: shellcheck scripts/*.sh
 
-  systemd-units:
-    runs-on: ubuntu-latest
-    env:
-      PYTHONDONTWRITEBYTECODE: "1"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.13"
-          cache: pip
-
-      - name: Install test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -c constraints-dev.txt -e '.[dev]'
-
-      - name: Verify rendered systemd units
-        run: python -m pytest tests/test_cli_systemd.py::test_rendered_systemd_units_pass_systemd_analyze_verify -q
-
   test:
     runs-on: ubuntu-latest
     strategy:

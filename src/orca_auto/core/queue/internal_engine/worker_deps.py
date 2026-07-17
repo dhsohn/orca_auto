@@ -25,10 +25,11 @@ WorkerPidReader = Callable[[Path], int | None]
 WorkerProcessStartedHook = Callable[[Any, Path, Any, Any, str], bool]
 ShutdownRunningJob = Callable[[Any, str, Any], Any]
 BeforeShutdownAll = Callable[[Any, int], Any]
-
-
-class SlotReserver(Protocol):
-    def __call__(self, *args: Any, **kwargs: Any) -> str | None: ...
+SlotReserver = Callable[..., str | None]
+OrphanedChildQueueReconciler = Callable[..., Any]
+RunningEntryRequeuer = Callable[..., Any]
+RecoveryPendingMarker = Callable[..., Any]
+WorkerFactory = Callable[..., Any]
 
 
 class WorkerChildCommandBuilder(Protocol):
@@ -74,22 +75,6 @@ class BackgroundJobProcessStarter(Protocol):
         admission_root: str | Path,
         admission_token: str,
     ) -> Any: ...
-
-
-class OrphanedChildQueueReconciler(Protocol):
-    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
-
-
-class RunningEntryRequeuer(Protocol):
-    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
-
-
-class RecoveryPendingMarker(Protocol):
-    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
-
-
-class WorkerFactory(Protocol):
-    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 def _noop_callback(*_args: Any, **_kwargs: Any) -> None:

@@ -34,7 +34,7 @@ from .engine_jobs import (
     build_engine_job_notifications,
     build_engine_notification_module,
 )
-from .engine_notifier import EngineNotifier, build_engine_notifier
+from .engine_notifier import EngineNotifier
 from .engine_requests import (
     EngineJobFinishedRequest,
     EngineJobLifecycleRequest,
@@ -61,7 +61,6 @@ __all__ = [
     "EngineNotifier",
     "build_engine_job_notifications",
     "build_engine_notification_module",
-    "build_engine_notifier",
     "build_telegram_transport",
     "channel_line_sender",
     "event_lines",

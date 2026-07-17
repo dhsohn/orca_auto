@@ -9,11 +9,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from orca_auto.orca.commands.queue import cmd_queue_worker
-from orca_auto.orca.config import AppConfig, RuntimeConfig
+from orca_auto.orca.config import AppConfig, RetryRuntimeConfig
 
 
 def _make_cfg(tmp: str) -> AppConfig:
-    return AppConfig(runtime=RuntimeConfig(allowed_root=tmp))
+    return AppConfig(runtime=RetryRuntimeConfig(allowed_root=tmp))
 
 
 def _make_args(tmp: str, **overrides):

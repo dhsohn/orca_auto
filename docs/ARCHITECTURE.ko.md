@@ -281,7 +281,7 @@ false-success marker 부재가 모두 필요합니다. 공개 상태/리포트�
   `completion_rules.py`): 모드별로 완료를 판정합니다 — TS 모드(`OptTS`/`NEB-TS`,
   허수 진동수 정확히 1개 필요, 경로에 `IRC`가 있으면 IRC 마커도 필요) vs Opt
   모드(정상 종료).
-- **계산 종류별 재시도 정책**(`retry_policy.py`, `retry_recipes.py`): 재시도
+- **계산 종류별 재시도 정책**(`retry_policy.py`): 재시도
   횟수와 rewrite는 사용자가 입력한 숫자를 그대로 따르지 않고 ORCA route 종류별
   고정 정책을 따릅니다. 일반 `TightSCF`/`SlowConv` 에스컬레이션은 적용하지
   않습니다. 일반 `Opt`/`Opt+Freq`/`Freq`/single-point route는 자동 재시도하지

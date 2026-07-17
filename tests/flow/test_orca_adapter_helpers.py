@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core.utils.coercion import normalize_bool, normalize_text, safe_int
 from orca_auto.flow.adapters import _orca_contract_status, _orca_local_lookup, _orca_path_helpers
 
 
@@ -80,8 +79,6 @@ def test_status_from_payloads_covers_priority_order(
             queue_entry=queue_entry,
             state=state,
             report=report,
-            normalize_text_fn=normalize_text,
-            normalize_bool_fn=normalize_bool,
         )
         == expected
     )
@@ -104,8 +101,6 @@ def test_status_ignores_terminal_payload_from_previous_queue_generation() -> Non
             "status": "failed",
             "final_result": old_final,
         },
-        normalize_text_fn=normalize_text,
-        normalize_bool_fn=normalize_bool,
     )
 
     assert status == ("queued", "", "", "")
@@ -128,8 +123,6 @@ def test_status_accepts_matching_terminal_payload_before_queue_finalization() ->
             "final_result": final,
         },
         report={},
-        normalize_text_fn=normalize_text,
-        normalize_bool_fn=normalize_bool,
     )
 
     assert status == (
@@ -229,15 +222,10 @@ def test_attempt_helpers_prefer_report_values_and_coerce_attempt_rows() -> None:
         "max_retries": "7",
     }
 
-    attempts = _orca_contract_status.coerce_attempts_impl(
-        state,
-        report,
-        normalize_text_fn=normalize_text,
-        safe_int_fn=safe_int,
-    )
+    attempts = _orca_contract_status.coerce_attempts_impl(state, report)
 
-    assert _orca_contract_status.attempt_count_impl(state, report, safe_int_fn=safe_int) == 3
-    assert _orca_contract_status.max_retries_impl(state, report, safe_int_fn=safe_int) == 7
+    assert _orca_contract_status.attempt_count_impl(state, report) == 3
+    assert _orca_contract_status.max_retries_impl(state, report) == 7
     assert attempts == (
         {
             "index": 2,
@@ -264,8 +252,6 @@ def test_attempt_helpers_preserve_mapping_markers() -> None:
     attempts = _orca_contract_status.coerce_attempts_impl(
         {"attempts": [{"index": 1, "markers": markers}]},
         {},
-        normalize_text_fn=normalize_text,
-        safe_int_fn=safe_int,
     )
 
     assert attempts[0]["markers"] == markers

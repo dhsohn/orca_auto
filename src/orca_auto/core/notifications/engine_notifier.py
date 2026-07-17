@@ -38,16 +38,6 @@ class EngineNotifier:
         )
 
 
-def build_engine_notifier(
-    *,
-    label: str,
-    engine: str,
-    send_fn: EngineLineSender,
-) -> EngineNotifier:
-    return EngineNotifier(label=label, engine=engine, send_fn=send_fn)
-
-
 __all__ = [
     "EngineNotifier",
-    "build_engine_notifier",
 ]

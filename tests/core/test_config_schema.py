@@ -221,24 +221,23 @@ def test_normalize_max_concurrent(value: object, default: int, expected: int) ->
 
 
 @pytest.mark.parametrize(
-    ("value", "max_concurrent", "expected"),
+    ("value", "expected"),
     [
-        (None, 4, None),
-        ("2", 4, 2),
+        (None, None),
+        ("2", 2),
     ],
 )
 def test_normalize_admission_limit(
     value: object,
-    max_concurrent: int,
     expected: int | None,
 ) -> None:
-    assert normalize_admission_limit(value, max_concurrent) == expected
+    assert normalize_admission_limit(value) == expected
 
 
 @pytest.mark.parametrize("value", ["0", "bad", -1, True])
 def test_normalize_admission_limit_rejects_invalid_explicit_values(value: object) -> None:
     with pytest.raises(ValueError, match="admission_limit must be an integer >= 1"):
-        normalize_admission_limit(value, 4)
+        normalize_admission_limit(value)
 
 
 @pytest.mark.parametrize(

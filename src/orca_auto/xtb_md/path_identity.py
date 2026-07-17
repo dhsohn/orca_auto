@@ -57,7 +57,7 @@ def _same_named_directory(
         raise ValueError(f"xTB-MD directory changed while its identity was inspected: {path}")
 
 
-def _inspect_directory_chain_once(path: Path) -> list[dict[str, Any]]:
+def _inspect_directory_chain(path: Path) -> list[dict[str, Any]]:
     flags = _directory_flags()
     descriptor = os.open("/", flags)
     current = Path("/")
@@ -94,14 +94,6 @@ def _inspect_directory_chain_once(path: Path) -> list[dict[str, Any]]:
         return rows
     finally:
         os.close(descriptor)
-
-
-def _inspect_directory_chain(path: Path) -> list[dict[str, Any]]:
-    first = _inspect_directory_chain_once(path)
-    second = _inspect_directory_chain_once(path)
-    if first != second:
-        raise ValueError(f"xTB-MD directory changed while its identity was inspected: {path}")
-    return first
 
 
 def _row_for_path(rows: list[dict[str, Any]], path: Path) -> dict[str, Any]:
@@ -170,12 +162,6 @@ def validate_execution_snapshot_job_dir(
     current_ancestry = _inspect_directory_chain(expected_job_dir)
     if current_ancestry != [dict(row) for row in expected_ancestry]:
         raise ValueError("xTB-MD job directory ancestry changed after submission")
-    if _row_for_path(current_ancestry, expected_runs_root) != dict(
-        raw_identity.get("runs_root") or {}
-    ):
-        raise ValueError("xTB-MD runs_root identity changed after submission")
-    if _row_for_path(current_ancestry, expected_job_dir) != dict(raw_identity.get("job_dir") or {}):
-        raise ValueError("xTB-MD job directory identity changed after submission")
     return expected_job_dir
 
 
