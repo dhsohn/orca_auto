@@ -10,6 +10,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Workflow Discord/Telegram notifications show the workspace `Directory`
+  (the generation directory inside its scaffold) on every workflow-scoped
+  event — status changes, stage transitions, handoffs, phase summaries, and
+  advance failures — mirroring the standalone ORCA `Directory` field. The
+  `Worker session` token (an operational identifier that changes on every
+  worker restart) no longer appears there; it remains on worker lifecycle
+  events and in the durable workflow journal.
+
 - Workflow workspaces now use the same layout as standalone ORCA executions:
   `run-dir` on a scaffold creates a timestamped generation directory
   (`YYYYMMDD-HHMMSS-<8hex>`) inside the scaffold itself, and that generation

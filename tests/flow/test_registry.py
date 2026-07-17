@@ -100,7 +100,7 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "<b>Advance failed</b>",
                 "<b>Workflow</b>: <code>wf_2</code>",
                 "<b>Reason</b>: <code>boom</code>",
-                "<b>Worker session</b>: <code>session-2</code>",
+                "<b>Directory</b>: <code>-</code>",
             ],
         ),
         (
@@ -157,7 +157,7 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
             },
             [
                 "<b>Worker started</b>",
-                "<b>Workflow root</b>: <code>/tmp/root_3</code>",
+                "<b>Workflow root</b>: <code>/nonexistent/orca-auto-test-root_3</code>",
                 "<b>Reason</b>: <code>started</code>",
             ],
         ),
@@ -219,7 +219,9 @@ def test_journal_event_message_formats_supported_event_types(
     event: dict[str, Any],
     expected_lines: list[str],
 ) -> None:
-    message = render_telegram(registry_notifications.journal_event_message(event, "/tmp/root_3"))
+    message = render_telegram(
+        registry_notifications.journal_event_message(event, "/nonexistent/orca-auto-test-root_3")
+    )
 
     assert message.startswith("orca_auto\n" + expected_lines[0])
     for line in expected_lines:
