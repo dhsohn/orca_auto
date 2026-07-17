@@ -60,6 +60,23 @@ in [docs/RELEASE.md](docs/RELEASE.md).
     keeps its signature and the xTB/CREST notification entry points are
     unchanged.
 
+### Fixed
+
+- The xTB/CREST phase summary notification now derives its outcome, severity,
+  and per-stage results from the same canonical aggregation as the workflow
+  journal (`phase_snapshot`), instead of a private bucketing that ignored the
+  reaction handoff verdict. A phase whose stages all completed at the process
+  level but whose ORCA handoffs were all refused (for example nine xTB path
+  searches with `xtb_ts_guess_missing`) now reports `Outcome: failed` with
+  error severity instead of `completed` with success severity. The handoff
+  verdict outranks the raw stage status in both directions: a stage whose
+  handoff reached `ready` counts as completed even if a later attempt failed,
+  and a stage whose handoff was refused counts as failed even though the
+  engine exited cleanly. Rows whose stage and task statuses disagree, or that
+  rest in an unsettled state, now classify fail-closed as failed instead of
+  contributing an optimistic `mixed`/`completed` reading, and the summary is
+  sent only once every stage *and* task status of the phase is terminal.
+
 ### Changed
 
 - Workflow stage materialization reads the persisted stage budgets

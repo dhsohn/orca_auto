@@ -357,17 +357,24 @@ def test_phase_transition_event_payloads_emit_phase_finished_summaries() -> None
             "label": "reactant",
             "status": "completed",
             "task_status": "completed",
+            "result": "completed",
         },
         {
             "stage_id": "crest_product_01",
             "label": "product",
             "status": "completed",
             "task_status": "completed",
+            "result": "completed",
         },
     ]
     assert events[1]["metadata"]["phase"] == "xtb"
     assert events[1]["metadata"]["reaction_handoff_status_counts"] == {"failed": 1, "ready": 1}
     assert events[1]["metadata"]["failure_reasons"] == ["xtb_ts_guess_missing"]
+    assert [row["result"] for row in events[1]["metadata"]["stage_statuses"]] == [
+        "completed",
+        "failed",
+    ]
+    assert events[1]["status"] == "mixed"
 
 
 @pytest.mark.parametrize(

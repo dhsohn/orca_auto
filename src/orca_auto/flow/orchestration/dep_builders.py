@@ -327,7 +327,6 @@ def _maybe_notify_workflow_phase_summary_default(
         payload=payload,
         config_path=config_path,
         phase_engine=phase_engine,
-        stage_failure_is_recoverable_fn=_stage_failure_is_recoverable_override(overrides),
         extra_lines=extra_lines,
     )
 

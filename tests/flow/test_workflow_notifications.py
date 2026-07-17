@@ -139,6 +139,97 @@ def test_maybe_notify_workflow_phase_summary_sends_xtb_ready_counts(monkeypatch:
     assert "<b>Candidates</b>: <code>0</code>" in rendered
 
 
+def test_maybe_notify_workflow_phase_summary_reports_exhausted_handoffs_as_failed(
+    monkeypatch: Any,
+) -> None:
+    """Stages whose jobs completed but whose ORCA handoff was refused are failures.
+
+    Mirrors the observed reaction_ts_search shape where every xTB path search
+    exited 0 (stage/task status "completed") while no stage produced a usable
+    ts_guess, so the workflow itself terminal-failed.
+    """
+    channel = _RecordingChannel()
+    _patch_channel(monkeypatch, channel)
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_xtb_handoff_exhausted",
+        "template_name": "reaction_ts_search",
+        "metadata": {},
+        "stages": [
+            {
+                "stage_id": f"xtb_path_search_{index:02d}",
+                "status": "completed",
+                "task": {
+                    "engine": "xtb",
+                    "status": "completed",
+                    "payload": {"reaction_key": f"rxn_{index:02d}"},
+                },
+                "metadata": {
+                    "reaction_handoff_status": "failed",
+                    "reaction_handoff_reason": "xtb_ts_guess_missing",
+                    "xtb_attempts": [{"attempt_number": 2, "candidate_count": 0}],
+                },
+                "output_artifacts": [],
+            }
+            for index in range(1, 10)
+        ],
+    }
+
+    assert workflow_notifications.maybe_notify_workflow_phase_summary(
+        payload=payload, config_path="cfg", phase_engine="xtb"
+    )
+
+    assert len(channel.messages) == 1
+    message = channel.messages[0]
+    assert message.severity == "error"
+    rendered = render_telegram(message)
+    assert "<b>Outcome</b>: <code>failed</code>" in rendered
+    assert "completed=<code>0</code>" in rendered
+    assert "failed=<code>9</code>" in rendered
+    assert "<b>Ready for ORCA</b>: <code>0</code>" in rendered
+    assert rendered.count("<b>Result</b>: <code>failed</code>") == 9
+
+
+def test_maybe_notify_workflow_phase_summary_treats_handoff_ready_failure_as_completed(
+    monkeypatch: Any,
+) -> None:
+    """A failed retry after a successful handoff must not mask the delivered result."""
+    channel = _RecordingChannel()
+    _patch_channel(monkeypatch, channel)
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_xtb_recoverable",
+        "template_name": "reaction_ts_search",
+        "metadata": {},
+        "stages": [
+            {
+                "stage_id": "xtb_path_search_01",
+                "status": "failed",
+                "task": {
+                    "engine": "xtb",
+                    "status": "failed",
+                    "payload": {"reaction_key": "rxn_01"},
+                },
+                "metadata": {
+                    "reaction_handoff_status": "ready",
+                    "xtb_attempts": [{"attempt_number": 1, "candidate_count": 2}],
+                },
+                "output_artifacts": [],
+            },
+        ],
+    }
+
+    assert workflow_notifications.maybe_notify_workflow_phase_summary(
+        payload=payload, config_path="cfg", phase_engine="xtb"
+    )
+
+    assert len(channel.messages) == 1
+    message = channel.messages[0]
+    assert message.severity == "success"
+    rendered = render_telegram(message)
+    assert "<b>Outcome</b>: <code>completed</code>" in rendered
+    assert "<b>Result</b>: <code>completed</code>" in rendered
+    assert "<b>Ready for ORCA</b>: <code>1</code>" in rendered
+
+
 def test_maybe_notify_workflow_phase_summary_skips_when_channel_disabled(monkeypatch: Any) -> None:
     channel = _RecordingChannel(enabled=False)
     _patch_channel(monkeypatch, channel)
