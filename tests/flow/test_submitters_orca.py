@@ -14,7 +14,7 @@ from orca_auto.core.utils import normalize_text
 from orca_auto.flow.submitters import orca as orca_submitter
 from orca_auto.flow.submitters.orca_submission import record_submission_outcome
 from orca_auto.orca import config as orca_config
-from orca_auto.orca.commands import run_inp as run_inp_cmd
+from orca_auto.orca import submission as submission_mod
 from orca_auto.orca.queue import adapter as queue_adapter
 from tests.flow.factories import install_orca_timestamps, install_orca_workflow_io
 
@@ -94,7 +94,7 @@ def test_submit_reaction_dir_uses_direct_submission_api(
         )
 
     monkeypatch.setattr(
-        run_inp_cmd,
+        submission_mod,
         "submit_reaction_dir_to_queue",
         fake_submit_reaction_dir_to_queue,
     )
@@ -150,7 +150,7 @@ def test_submit_reaction_dir_reports_resolution_conflict_and_submission_failures
 ) -> None:
     reaction_dir = tmp_path / "rxn_input"
     monkeypatch.setattr(
-        run_inp_cmd,
+        submission_mod,
         "submit_reaction_dir_to_queue",
         lambda _args: SimpleNamespace(
             status="failed",
@@ -178,7 +178,7 @@ def test_submit_reaction_dir_reports_resolution_conflict_and_submission_failures
         allowed_root=tmp_path,
     )
     monkeypatch.setattr(
-        run_inp_cmd,
+        submission_mod,
         "submit_reaction_dir_to_queue",
         lambda _args: SimpleNamespace(
             status="failed",
@@ -204,7 +204,7 @@ def test_submit_reaction_dir_reports_resolution_conflict_and_submission_failures
         raise RuntimeError("queue boom")
 
     monkeypatch.setattr(
-        run_inp_cmd,
+        submission_mod,
         "submit_reaction_dir_to_queue",
         raise_submission_error,
     )
@@ -1209,13 +1209,13 @@ def _install_real_orca_workflow_queue(
         ),
     )
     monkeypatch.setattr(orca_config, "load_config", lambda _config_path: cfg)
-    monkeypatch.setattr(run_inp_cmd, "load_config", lambda _config_path: cfg)
+    monkeypatch.setattr(submission_mod, "load_config", lambda _config_path: cfg)
     monkeypatch.setattr(
-        run_inp_cmd,
+        submission_mod,
         "notify_queue_enqueued_event",
         lambda *_args, **_kwargs: True,
     )
-    monkeypatch.setattr("orca_auto.orca.queue.worker.read_worker_pid", lambda _root: None)
+    monkeypatch.setattr(submission_mod, "read_worker_pid", lambda _root: None)
     return cfg, allowed_root, reaction_dir
 
 

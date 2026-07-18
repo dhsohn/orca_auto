@@ -277,15 +277,14 @@ def _make_flow_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
 
 
 def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
-    from orca_auto.orca.commands import run_inp
-    from orca_auto.orca.commands import run_inp_submission as orca_submission
+    from orca_auto.orca import submission as orca_submission
     from orca_auto.orca.config import (
         AppConfig,
         CommonResourceConfig,
         PathsConfig,
         RetryRuntimeConfig,
     )
-    from orca_auto.orca.queue import worker as orca_queue_worker
+    from orca_auto.orca.queue import publication_repair
 
     root = tmp_path / "orca"
     root.mkdir()
@@ -316,9 +315,9 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
         notifications.append("sent")
         return True
 
-    monkeypatch.setattr(run_inp, "load_config", lambda _path: cfg)
-    monkeypatch.setattr(run_inp, "notify_queue_enqueued_event", count_notification)
-    monkeypatch.setattr("orca_auto.orca.queue.worker.read_worker_pid", lambda _root: None)
+    monkeypatch.setattr(orca_submission, "load_config", lambda _path: cfg)
+    monkeypatch.setattr(orca_submission, "notify_queue_enqueued_event", count_notification)
+    monkeypatch.setattr(orca_submission, "read_worker_pid", lambda _root: None)
     monkeypatch.setattr(orca_submission, "upsert_queued_job_record", controllable_upsert)
     args = SimpleNamespace(
         config=str(root / "orca_auto.yaml"),
@@ -328,7 +327,7 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
     )
 
     def submit() -> Outcome:
-        result = run_inp.submit_reaction_dir_to_queue(args)
+        result = orca_submission.submit_reaction_dir_to_queue(args)
         queued = result.queued_result
         detail = str(result.stderr or "")
         if queued is not None and queued.worker_info.detail:
@@ -344,7 +343,7 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
         name="orca",
         queue_root=root,
         submit=submit,
-        repair=lambda entry: orca_queue_worker._repair_orca_queue_publication(cfg, root, entry),
+        repair=lambda entry: publication_repair.repair_queue_publication(cfg, root, entry),
         # Both the submit-side and the repair-side publication upsert the
         # tracking record, which materializes the job-locations index.
         record_published=lambda: (root / "job_locations.json").exists(),

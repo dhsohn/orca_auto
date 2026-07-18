@@ -57,7 +57,16 @@ src/orca_auto/
 │   └── utils/           # 락, 영속화, 프로세스 추적, 형 변환
 │
 ├── orca/                # 정규 ORCA 구현 (단일 진실 공급원)
-│   ├── commands/        # init, run_inp, queue, monitor
+│   ├── commands/        # 얇은 CLI adapter: init, run_inp, queue, monitor
+│   ├── submission.py    # 내구성 run-dir 제출과 publication
+│   ├── run_context.py   # 제출/실행 대상 해석
+│   ├── execution.py     # 락으로 보호된 ORCA 실행과 복구
+│   ├── queue/
+│   │   ├── worker.py    # 부모 워커 조립 전용
+│   │   ├── replay.py    # reconciliation과 내구성 terminal replay
+│   │   ├── cancellation.py
+│   │   ├── publication_repair.py
+│   │   └── worker_tracking.py
 │   ├── runtime/         # 실행 락
 │   ├── engine.py        # ORCA EngineDefinition 배선
 │   ├── attempt/         # 시도 엔진, 재시도, 재개, 리포팅
@@ -98,6 +107,10 @@ src/orca_auto/
 엔진 배선은 지연 문자열 모듈 경로(`core/engines/registry.py`,
 `core/queue/worker/admission.py`)로만 계층을 넘습니다 — 의도된 플러그인
 심(seam)이며, 임포트 그래프에 일부러 드러나지 않습니다.
+
+ORCA 내부에서도 의존성은 안쪽을 향합니다. `commands`는 도메인 모듈을 호출할 수 있지만,
+제출·실행·worker-child·queue 정책은 `orca.commands`를 임포트하면 안 됩니다. 이 경계는
+import-linter 계약으로 보호합니다.
 
 ---
 
@@ -207,6 +220,10 @@ predicate, 큐 항목 조회를 한 곳에서 설치합니다. 네 엔진 모두
 crash-generation rebind, 재시도, publication repair, 내구성 engine-process 복구, 취소,
 terminal replay는 ORCA 소유 정책으로 유지됩니다. 이 canonical owner 주위에 엔진 로컬
 또는 범용 전달 facade를 다시 만들지 않습니다.
+
+ORCA 부모 `queue.worker`는 정책 소유자가 아니라 composition root입니다. 공용 엔진
+런타임을 `publication_repair`, `cancellation`, `replay`, `worker_tracking`에 연결하며,
+각 정책 변경은 해당 소유 모듈에 둡니다.
 
 `core/engines/registry.py`는 모듈을 임포트하고 `ENGINE_DEFINITION`을 읽어 엔진
 id를 `EngineDefinition`으로 해석합니다. 이 레지스트리가 엔진 id → 모듈 매핑을

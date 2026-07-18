@@ -159,6 +159,18 @@ source_modules = ["orca_auto.core.messaging"]
 forbidden_modules = ["orca_auto.core.notifications"]
 
 [[tool.importlinter.contracts]]
+name = "ORCA domain and worker policy never import CLI commands"
+type = "forbidden"
+source_modules = [
+    "orca_auto.orca.execution",
+    "orca_auto.orca.run_context",
+    "orca_auto.orca.submission",
+    "orca_auto.orca.worker_execution",
+    "orca_auto.orca.queue",
+]
+forbidden_modules = ["orca_auto.orca.commands"]
+
+[[tool.importlinter.contracts]]
 name = "Standalone xtb_md is independent from ORCA"
 type = "independence"
 modules = [

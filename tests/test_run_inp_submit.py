@@ -6,9 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from orca_auto.orca.commands.run_inp import cmd_run_inp, submit_reaction_dir_to_queue
+from orca_auto.orca.commands.run_inp import cmd_run_inp
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.queue.adapter import enqueue, list_queue, queue_entry_metadata
+from orca_auto.orca.submission import submit_reaction_dir_to_queue
 
 
 def _make_cfg(tmp: str, *, max_cores: int = 8, max_memory_gb: int = 32) -> AppConfig:
@@ -49,11 +50,9 @@ def _make_args(root: Path, reaction_dir: Path, **overrides) -> SimpleNamespace:
 
 class TestRunInpSubmit(unittest.TestCase):
     @patch("orca_auto.orca.commands.run_inp._emit_queued_submission")
-    @patch("orca_auto.orca.commands.run_inp.submit_reaction_dir_to_queue")
-    @patch("orca_auto.orca.commands.run_inp._cmd_run_inp_execute", return_value=0)
+    @patch("orca_auto.orca.commands.run_inp.submission.submit_reaction_dir_to_queue")
     def test_submit_always_enqueues_without_attempting_direct_execution(
         self,
-        mock_execute: MagicMock,
         mock_submit_to_queue: MagicMock,
         _mock_emit_queued: MagicMock,
     ) -> None:
@@ -75,15 +74,12 @@ class TestRunInpSubmit(unittest.TestCase):
             rc = cmd_run_inp(_make_args(root, reaction_dir))
 
         self.assertEqual(rc, 0)
-        mock_execute.assert_not_called()
         mock_submit_to_queue.assert_called_once()
 
-    @patch("orca_auto.orca.commands.run_inp.load_config")
-    @patch("orca_auto.orca.commands.run_inp._run_inp_submission.create_queued_submission")
-    @patch("orca_auto.orca.commands.run_inp._cmd_run_inp_execute", return_value=0)
+    @patch("orca_auto.orca.submission.load_config")
+    @patch("orca_auto.orca.submission.create_queued_submission")
     def test_submit_rejects_when_active_queue_entry_exists_for_same_reaction_dir(
         self,
-        mock_execute: MagicMock,
         mock_create_queued_submission: MagicMock,
         mock_load_config: MagicMock,
     ) -> None:
@@ -97,15 +93,12 @@ class TestRunInpSubmit(unittest.TestCase):
             rc = cmd_run_inp(_make_args(root, reaction_dir))
 
         self.assertEqual(rc, 1)
-        mock_execute.assert_not_called()
         mock_create_queued_submission.assert_not_called()
 
-    @patch("orca_auto.orca.commands.run_inp.load_config")
-    @patch("orca_auto.orca.commands.run_inp._run_inp_submission.create_queued_submission")
-    @patch("orca_auto.orca.commands.run_inp._cmd_run_inp_execute", return_value=0)
+    @patch("orca_auto.orca.submission.load_config")
+    @patch("orca_auto.orca.submission.create_queued_submission")
     def test_submit_rejects_when_same_reaction_dir_is_already_running_directly(
         self,
-        mock_execute: MagicMock,
         mock_create_queued_submission: MagicMock,
         mock_load_config: MagicMock,
     ) -> None:
@@ -122,15 +115,12 @@ class TestRunInpSubmit(unittest.TestCase):
             rc = cmd_run_inp(_make_args(root, reaction_dir))
 
         self.assertEqual(rc, 1)
-        mock_execute.assert_not_called()
         mock_create_queued_submission.assert_not_called()
 
     @patch("orca_auto.orca.commands.run_inp._emit_queued_submission")
-    @patch("orca_auto.orca.commands.run_inp.submit_reaction_dir_to_queue")
-    @patch("orca_auto.orca.commands.run_inp._cmd_run_inp_execute", return_value=0)
+    @patch("orca_auto.orca.commands.run_inp.submission.submit_reaction_dir_to_queue")
     def test_submit_queues_completed_output_for_worker_reconciliation(
         self,
-        mock_execute: MagicMock,
         mock_submit_to_queue: MagicMock,
         _mock_emit_queued: MagicMock,
     ) -> None:
@@ -155,12 +145,11 @@ class TestRunInpSubmit(unittest.TestCase):
             rc = cmd_run_inp(_make_args(root, reaction_dir))
 
         self.assertEqual(rc, 0)
-        mock_execute.assert_not_called()
         mock_submit_to_queue.assert_called_once()
 
-    @patch("orca_auto.orca.commands.run_inp.load_config")
-    @patch("orca_auto.orca.commands.run_inp.notify_queue_enqueued_event", return_value=True)
-    @patch("orca_auto.orca.queue.worker.read_worker_pid", return_value=None)
+    @patch("orca_auto.orca.submission.load_config")
+    @patch("orca_auto.orca.submission.notify_queue_enqueued_event", return_value=True)
+    @patch("orca_auto.orca.submission.read_worker_pid", return_value=None)
     def test_submit_reaction_dir_to_queue_reports_inactive_worker_without_autostart(
         self,
         mock_read_worker_pid: MagicMock,
@@ -233,9 +222,9 @@ class TestRunInpSubmit(unittest.TestCase):
             mock_read_worker_pid.assert_called_once()
             mock_notify_queue.assert_called_once()
 
-    @patch("orca_auto.orca.commands.run_inp.load_config")
-    @patch("orca_auto.orca.commands.run_inp.notify_queue_enqueued_event", return_value=True)
-    @patch("orca_auto.orca.queue.worker.read_worker_pid", return_value=4321)
+    @patch("orca_auto.orca.submission.load_config")
+    @patch("orca_auto.orca.submission.notify_queue_enqueued_event", return_value=True)
+    @patch("orca_auto.orca.submission.read_worker_pid", return_value=4321)
     def test_submit_reaction_dir_to_queue_reports_running_worker_pid(
         self,
         mock_read_worker_pid: MagicMock,
@@ -264,9 +253,9 @@ class TestRunInpSubmit(unittest.TestCase):
             mock_read_worker_pid.assert_called_once()
             mock_notify_queue.assert_called_once()
 
-    @patch("orca_auto.orca.commands.run_inp.load_config")
-    @patch("orca_auto.orca.commands.run_inp.notify_queue_enqueued_event", return_value=True)
-    @patch("orca_auto.orca.queue.worker.read_worker_pid", return_value=None)
+    @patch("orca_auto.orca.submission.load_config")
+    @patch("orca_auto.orca.submission.notify_queue_enqueued_event", return_value=True)
+    @patch("orca_auto.orca.submission.read_worker_pid", return_value=None)
     def test_submit_reaction_dir_to_queue_separates_inp_and_xyzfile_artifacts(
         self,
         _mock_read_worker_pid: MagicMock,
@@ -307,11 +296,11 @@ class TestRunInpSubmit(unittest.TestCase):
             tracking_records = json.loads((root / "job_locations.json").read_text(encoding="utf-8"))
             self.assertEqual(tracking_records[0]["selected_input_xyz"], xyz_path)
 
-    @patch("orca_auto.orca.commands.run_inp.load_config")
-    @patch("orca_auto.orca.commands.run_inp.notify_queue_enqueued_event", return_value=True)
-    @patch("orca_auto.orca.queue.worker.read_worker_pid", return_value=None)
+    @patch("orca_auto.orca.submission.load_config")
+    @patch("orca_auto.orca.submission.notify_queue_enqueued_event", return_value=True)
+    @patch("orca_auto.orca.submission.read_worker_pid", return_value=None)
     @patch(
-        "orca_auto.orca.commands.run_inp._run_inp_submission.upsert_queued_job_record",
+        "orca_auto.orca.submission.upsert_queued_job_record",
         side_effect=RuntimeError("index write failed"),
     )
     def test_submit_reaction_dir_to_queue_succeeds_when_tracking_side_effect_fails(
@@ -343,9 +332,9 @@ class TestRunInpSubmit(unittest.TestCase):
             mock_read_worker_pid.assert_called_once()
             mock_notify_queue.assert_called_once()
 
-    @patch("orca_auto.orca.commands.run_inp.load_config")
-    @patch("orca_auto.orca.commands.run_inp.notify_queue_enqueued_event", return_value=True)
-    @patch("orca_auto.orca.queue.worker.read_worker_pid", return_value=None)
+    @patch("orca_auto.orca.submission.load_config")
+    @patch("orca_auto.orca.submission.notify_queue_enqueued_event", return_value=True)
+    @patch("orca_auto.orca.submission.read_worker_pid", return_value=None)
     def test_submit_reaction_dir_to_queue_reads_metadata_from_input_even_when_flags_are_present(
         self,
         mock_read_worker_pid: MagicMock,

@@ -8,6 +8,7 @@ from orca_auto.orca.commands import _helpers as command_helpers
 from orca_auto.orca.commands import monitor
 from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig, TelegramConfig
 from orca_auto.orca.dft.monitor import MonitorResult, ScanReport
+from orca_auto.orca.execution import _emit
 
 
 def _cfg(allowed_root: Path, *, telegram_enabled: bool = True) -> AppConfig:
@@ -55,7 +56,7 @@ def test_human_bytes_and_emit_cover_formatting_and_selected_keys(capsys) -> None
     assert command_helpers._human_bytes(2048) == "2.0 KB"
     assert command_helpers._human_bytes(1024**4) == "1.0 TB"
 
-    command_helpers._emit(
+    _emit(
         {
             "status": "completed",
             "reaction_dir": "/tmp/rxn",

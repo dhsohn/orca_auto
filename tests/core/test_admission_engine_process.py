@@ -18,7 +18,7 @@ from orca_auto.core.queue.engine.child import (
     ChildWorkerEntrypointJob,
     await_parent_admission_handoff,
 )
-from orca_auto.orca.commands import run_inp_execution
+from orca_auto.orca import execution as run_inp_execution
 from orca_auto.orca.orca_process import (
     OrcaProcessRecordCorruptError,
     OrcaProcessRecoveryError,
@@ -811,26 +811,36 @@ def test_parent_handoff_waits_until_slot_owner_matches_child(
     assert sleeps == [0.01]
 
 
-def test_unsafe_legacy_recovery_error_is_not_converted_to_exit_code(tmp_path: Path) -> None:
+def test_unsafe_legacy_recovery_error_is_not_converted_to_exit_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     released: list[tuple[Path, str | None]] = []
     context = SimpleNamespace(
         selected_inp=tmp_path / "job.inp",
         admission_root=tmp_path,
         reservation_token="slot",
     )
-    deps = SimpleNamespace(
-        execution=SimpleNamespace(
-            _resolve_execution_context=lambda *_args, **_kwargs: context,
-            _execute_locked_run=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                OrcaProcessRecordCorruptError("unsafe recovery")
-            ),
-            _release_reservation_if_needed=lambda root, token: released.append((root, token)),
+    monkeypatch.setattr(
+        run_inp_execution,
+        "resolve_execution_context",
+        lambda *_args, **_kwargs: context,
+    )
+    monkeypatch.setattr(
+        run_inp_execution,
+        "execute_locked_run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OrcaProcessRecordCorruptError("unsafe recovery")
         ),
-        statuses=SimpleNamespace(AdmissionLimitReachedError=RuntimeError),
+    )
+    monkeypatch.setattr(
+        run_inp_execution,
+        "_release_reservation_if_needed",
+        lambda root, token: released.append((root, token)),
     )
 
     with pytest.raises(OrcaProcessRecoveryError, match="unsafe recovery"):
-        run_inp_execution.cmd_run_inp_execute(
+        run_inp_execution.execute_orca_run(
             SimpleNamespace(),
             runner_cls=OrcaRunner,
             cfg=None,
@@ -839,7 +849,6 @@ def test_unsafe_legacy_recovery_error_is_not_converted_to_exit_code(tmp_path: Pa
             reservation_token=None,
             admission_app_name=None,
             admission_task_id=None,
-            deps=deps,
             logger=logging.getLogger("test.unsafe_legacy_recovery"),
         )
 

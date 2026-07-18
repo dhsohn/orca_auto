@@ -142,7 +142,7 @@ def test_postcommit_notification_exception_returns_queue_receipt_and_preserves_d
     monkeypatch: pytest.MonkeyPatch,
     error_type: type[Exception],
 ) -> None:
-    from orca_auto.orca.commands import run_inp
+    from orca_auto.orca import submission
 
     config = _write_config(tmp_path)
     runs = tmp_path / "runs"
@@ -158,7 +158,7 @@ def test_postcommit_notification_exception_returns_queue_receipt_and_preserves_d
         del args, kwargs
         raise error_type("notification transport failed")
 
-    monkeypatch.setattr(run_inp, "notify_queue_enqueued_event", _raise_after_enqueue)
+    monkeypatch.setattr(submission, "notify_queue_enqueued_event", _raise_after_enqueue)
 
     receipt = app._submit_extracted_run_dir(job_dir, run_dir_kind="orca")
 

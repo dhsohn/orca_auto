@@ -11,14 +11,14 @@ from unittest.mock import patch
 import orca_auto.orca.commands._helpers as command_helpers
 from orca_auto.orca.commands._helpers import (
     CONFIG_ENV_VAR,
-    _emit,
     _human_bytes,
-    _validate_reaction_dir,
     _validate_root_scan_dir,
     default_config_path,
     finalize_batch_apply,
 )
 from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig
+from orca_auto.orca.execution import _emit
+from orca_auto.orca.run_context import _validate_reaction_dir
 
 
 def _cfg(allowed_root: Path, *, workflow_root: Path | None = None) -> AppConfig:

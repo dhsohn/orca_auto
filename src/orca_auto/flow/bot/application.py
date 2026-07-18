@@ -1487,8 +1487,8 @@ class BotApplication:
         runs_root: Path,
         args: _UploadRunDirSubmissionArgs,
     ) -> SubmissionReceipt:
-        from orca_auto.orca.commands.run_inp import submit_reaction_dir_to_queue
         from orca_auto.orca.queue import adapter as queue_adapter
+        from orca_auto.orca.submission import submit_reaction_dir_to_queue
 
         try:
             before_ids: set[str] | None = set(self._orca_entries_for_run_dir(job_dir, runs_root))

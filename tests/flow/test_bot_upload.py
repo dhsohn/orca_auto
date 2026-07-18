@@ -1135,8 +1135,8 @@ def test_empty_queue_reconciliation_is_cleanup_safe_only_for_precommit_target_fa
     failure_reason: str,
     expected_commit: bool | None,
 ) -> None:
-    from orca_auto.orca.commands import run_inp
-    from orca_auto.orca.commands.run_inp_submission import DirectQueueSubmission
+    from orca_auto.orca import submission
+    from orca_auto.orca.submission import DirectQueueSubmission
 
     job_dir = tmp_path / "submission_boundary"
     job_dir.mkdir()
@@ -1146,7 +1146,7 @@ def test_empty_queue_reconciliation_is_cleanup_safe_only_for_precommit_target_fa
     )
     app = _app(tmp_path)
     monkeypatch.setattr(
-        run_inp,
+        submission,
         "submit_reaction_dir_to_queue",
         lambda args: DirectQueueSubmission(
             status="failed",

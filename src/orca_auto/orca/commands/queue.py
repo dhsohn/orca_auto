@@ -7,8 +7,8 @@ import logging
 from typing import Any
 
 from ..config import load_config
-from ..engine import ENGINE_DEFINITION
-from ..queue.worker import QueueWorker, read_worker_pid
+from ..engine import ENGINE_DEFINITION, read_worker_pid
+from ..queue.worker import QueueWorker
 
 logger = logging.getLogger(__name__)
 _ENGINE_RUNTIME = ENGINE_DEFINITION.build_queue_runtime()

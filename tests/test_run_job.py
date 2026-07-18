@@ -54,7 +54,7 @@ def _bound_orca_metadata(
     }
 
 
-@patch("orca_auto.orca.worker_execution._cmd_run_inp_execute", return_value=7)
+@patch("orca_auto.orca.worker_execution.execute_orca_run", return_value=7)
 def test_execute_run_job_builds_run_inp_execution_request(
     mock_execute: MagicMock,
     tmp_path: Path,

@@ -155,6 +155,8 @@ scenario는 public submission/worker 경로를 통과해야 하며 기대 종료
 - 단독 xTB-MD는 `orca_auto.xtb_md` 아래에 있고 `core`만 임포트합니다. 워크플로우
   xTB 실행 의미를 재사용하지 않습니다.
 - 최상위 별칭 패키지, 콘솔 스크립트 별칭, 대체 런타임 리더는 코드베이스에서 배제하세요.
+- `orca_auto.orca.commands`는 adapter 계층으로 유지하세요. 도메인 실행·제출·worker-child·
+  queue 모듈은 이 패키지를 임포트하면 안 됩니다.
 
 ## 엔진 워커
 
@@ -169,6 +171,11 @@ publication fencing, live child-PID reconciliation은 명시적인 xTB 정책으
 재시도, crash-generation 복구, publication, terminal replay, 상태/리포트 정책은
 `orca_auto.orca` 내부에 유지합니다. canonical 런타임이 이미 소유한 연산을 전달만 하는
 모듈은 새로 만들지 마세요.
+
+`orca_auto.orca.queue.worker`는 부모 워커 composition root로 유지하세요. queued-publication
+repair는 `queue.publication_repair`, 취소는 `queue.cancellation`, terminal
+reconciliation/replay는 `queue.replay`, 작업 인덱스/알림 추적은
+`queue.worker_tracking`이 소유합니다.
 
 단독 xTB-MD는 공용 `run-dir`와 queue/activity 표면만 노출합니다. 단일 시도,
 no-retry/no-resume 계약은 `orca_auto.xtb_md`에 두고, 직접 실행 CLI를 만들거나 그

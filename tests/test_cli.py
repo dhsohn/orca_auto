@@ -19,12 +19,13 @@ from orca_auto.orca.cli_logging import (
 from orca_auto.orca.cli_logging import (
     remove_managed_handlers as _remove_managed_handlers,
 )
-from orca_auto.orca.commands._helpers import CONFIG_ENV_VAR, _emit, default_config_path
-from orca_auto.orca.commands.run_inp import (
-    _cmd_run_inp_execute,
-    _existing_completed_out,
-    _retry_inp_path,
-    _select_latest_inp,
+from orca_auto.orca.commands._helpers import CONFIG_ENV_VAR, default_config_path
+from orca_auto.orca.execution import (
+    _emit,
+    execute_orca_run,
+    existing_completed_out,
+    retry_inp_path,
+    select_latest_inp,
 )
 from orca_auto.orca.orca_runner import RunResult, WorkerShutdownInterrupt
 from orca_auto.orca.state import load_state, save_state, state_path
@@ -90,7 +91,7 @@ class TestCli(unittest.TestCase):
             state="reserved",
         )
         self.assertIsNotNone(token)
-        return _cmd_run_inp_execute(
+        return execute_orca_run(
             Namespace(
                 config=str(config),
                 reaction_dir=str(reaction_dir),
@@ -122,7 +123,7 @@ class TestCli(unittest.TestCase):
             base.write_text("! Opt\n", encoding="utf-8")
             time.sleep(0.01)
             retry.write_text("! Opt\n", encoding="utf-8")
-            selected = _select_latest_inp(reaction)
+            selected = select_latest_inp(reaction)
         self.assertEqual(selected.name, "rxn.inp")
 
     def test_select_latest_inp_warns_when_multiple_base_inputs_exist(self) -> None:
@@ -135,17 +136,17 @@ class TestCli(unittest.TestCase):
             newer.write_text("! Opt\n", encoding="utf-8")
 
             with self.assertLogs(
-                "orca_auto.orca.commands.run_inp_execution",
+                "orca_auto.orca.execution",
                 level="WARNING",
             ) as logs:
-                selected = _select_latest_inp(reaction)
+                selected = select_latest_inp(reaction)
 
         self.assertEqual(selected.name, "b.inp")
         self.assertIn("Multiple ORCA .inp candidates", "\n".join(logs.output))
 
     def test_retry_inp_path_uses_canonical_base_stem(self) -> None:
         retry_base = Path("/tmp/rxn.retry03.inp")
-        retry_next = _retry_inp_path(retry_base, 1)
+        retry_next = retry_inp_path(retry_base, 1)
         self.assertEqual(retry_next.name, "rxn.retry01.inp")
 
     def test_existing_completed_out_ignores_stale_output_older_than_selected_input(self) -> None:
@@ -158,7 +159,7 @@ class TestCli(unittest.TestCase):
             os.utime(out, ns=(1_000_000_000, 1_000_000_000))
             os.utime(inp, ns=(2_000_000_000, 2_000_000_000))
 
-            done = _existing_completed_out(inp)
+            done = existing_completed_out(inp)
 
         self.assertIsNone(done)
 
@@ -368,7 +369,7 @@ class TestCli(unittest.TestCase):
             )
             config = self._write_config(root, root / "orca_runs")
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run") as run_mock:
+            with patch("orca_auto.orca.execution.OrcaRunner.run") as run_mock:
                 rc = main(["run-dir", "--config", str(config), str(reaction)])
             self.assertFalse(run_mock.called)
         self.assertEqual(rc, 0)
@@ -439,7 +440,7 @@ class TestCli(unittest.TestCase):
             }
             save_state(reaction, state)
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run") as run_mock:
+            with patch("orca_auto.orca.execution.OrcaRunner.run") as run_mock:
                 rc = main(["run-dir", "--config", str(config), str(reaction)])
             self.assertFalse(run_mock.called)
             saved = _loaded_state(reaction)
@@ -461,7 +462,7 @@ class TestCli(unittest.TestCase):
             def _fake_run(_self, inp_path: Path) -> RunResult:
                 raise WorkerShutdownInterrupt
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run", new=_fake_run):
+            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
                 with self.assertRaises(WorkerShutdownInterrupt):
                     self._run_internal_execute(config, reaction)
             saved = _loaded_state(reaction)
@@ -491,7 +492,7 @@ class TestCli(unittest.TestCase):
                 )
                 return RunResult(out_path=str(out), return_code=55)
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run", new=_fake_run):
+            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
                 rc = self._run_internal_execute(config, reaction)
 
             state = _loaded_state(reaction)
@@ -503,7 +504,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(state["max_retries"], 0)
         self.assertEqual(len(state["attempts"]), 1)
 
-    @patch("orca_auto.orca.commands.run_inp.notify_retry_event", return_value=True)
+    @patch("orca_auto.orca.execution.notify_retry_event", return_value=True)
     def test_standalone_optts_retry_flow_does_not_send_telegram_notification(
         self, mock_notify: MagicMock
     ) -> None:
@@ -526,7 +527,7 @@ class TestCli(unittest.TestCase):
                 out.write_text("SCF NOT CONVERGED AFTER 300 CYCLES\n", encoding="utf-8")
                 return RunResult(out_path=str(out), return_code=1)
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run", new=_fake_run):
+            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
                 rc = self._run_internal_execute(config, reaction)
 
         self.assertEqual(rc, 1)
@@ -549,7 +550,7 @@ class TestCli(unittest.TestCase):
                 out.write_text("COULD NOT WRITE TO DISK\n", encoding="utf-8")
                 return RunResult(out_path=str(out), return_code=99)
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run", new=_fake_run):
+            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
                 rc = self._run_internal_execute(config, reaction)
             state = _loaded_state(reaction)
             retry01_exists = (reaction / "rxn.retry01.inp").exists()
@@ -596,7 +597,7 @@ class TestCli(unittest.TestCase):
                 out.write_text("COULD NOT WRITE TO DISK\n", encoding="utf-8")
                 return RunResult(out_path=str(out), return_code=99)
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run", new=_fake_run):
+            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
                 rc = self._run_internal_execute(config, reaction)
             state = _loaded_state(reaction)
 
@@ -670,7 +671,7 @@ class TestCli(unittest.TestCase):
             }
             save_state(reaction, state)
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run") as run_mock:
+            with patch("orca_auto.orca.execution.OrcaRunner.run") as run_mock:
                 rc = self._run_internal_execute(config, reaction)
             self.assertFalse(run_mock.called)
             saved = _loaded_state(reaction)
@@ -735,7 +736,7 @@ class TestCli(unittest.TestCase):
                 out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
                 return RunResult(out_path=str(out), return_code=0)
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run", new=_fake_run):
+            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
                 rc = self._run_internal_execute(config, reaction)
             saved = _loaded_state(reaction)
 
@@ -786,7 +787,7 @@ class TestCli(unittest.TestCase):
                 out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
                 return RunResult(out_path=str(out), return_code=0)
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run", new=_fake_run):
+            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
                 rc = self._run_internal_execute(config, reaction)
             saved = _loaded_state(reaction)
             retry_exists = (reaction / "rxn.retry01.inp").exists()
@@ -848,7 +849,7 @@ class TestCli(unittest.TestCase):
                 out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
                 return RunResult(out_path=str(out), return_code=0)
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run", new=_fake_run):
+            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
                 rc = self._run_internal_execute(config, reaction)
             saved = _loaded_state(reaction)
             retry_exists = (reaction / "rxn.retry01.inp").exists()
@@ -897,7 +898,7 @@ class TestCli(unittest.TestCase):
             }
             save_state(reaction, state)
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run") as run_mock:
+            with patch("orca_auto.orca.execution.OrcaRunner.run") as run_mock:
                 rc = self._run_internal_execute(config, reaction)
             self.assertFalse(run_mock.called)
             saved = _loaded_state(reaction)
@@ -921,7 +922,7 @@ class TestCli(unittest.TestCase):
             def _fake_run(_self, inp_path: Path) -> RunResult:
                 raise KeyboardInterrupt
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run", new=_fake_run):
+            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
                 rc = self._run_internal_execute(config, reaction)
             saved = _loaded_state(reaction)
 
@@ -944,7 +945,7 @@ class TestCli(unittest.TestCase):
             def _fake_run(_self, inp_path: Path) -> RunResult:
                 raise RuntimeError("runner exploded")
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run", new=_fake_run):
+            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
                 rc = self._run_internal_execute(config, reaction)
             saved = _loaded_state(reaction)
 

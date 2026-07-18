@@ -58,7 +58,16 @@ src/orca_auto/
 │   └── utils/           # Locks, persistence, process tracking, coercion
 │
 ├── orca/                # Canonical ORCA implementation (source of truth)
-│   ├── commands/        # init, run_inp, queue, monitor
+│   ├── commands/        # Thin CLI adapters: init, run_inp, queue, monitor
+│   ├── submission.py    # Durable run-dir submission and publication
+│   ├── run_context.py   # Submission/execution target resolution
+│   ├── execution.py     # Locked ORCA execution and recovery
+│   ├── queue/
+│   │   ├── worker.py    # Parent-worker composition only
+│   │   ├── replay.py    # Reconciliation and durable terminal replay
+│   │   ├── cancellation.py
+│   │   ├── publication_repair.py
+│   │   └── worker_tracking.py
 │   ├── runtime/         # Run locks
 │   ├── engine.py        # ORCA EngineDefinition wiring
 │   ├── attempt/         # Attempt engine, retry, resume, reporting
@@ -98,6 +107,10 @@ import `orca` and `core`; `orca` and `xtb_md` may import only `core`; `core`
 imports none of those domain packages. Engine wiring crosses layers exclusively through lazy string module
 paths (`core/engines/registry.py`, `core/queue/worker/admission.py`) — the
 deliberate plugin seam, invisible to the import graph on purpose.
+
+Within ORCA, dependencies also point inward: `commands` may call the domain
+modules, but submission, execution, worker-child, and queue policy must never
+import `orca.commands`. The import-linter contract protects this boundary.
 
 ---
 
@@ -211,6 +224,10 @@ Crash-generation rebind, retry, publication repair, durable engine-process
 recovery, cancellation, and terminal replay remain ORCA-owned policies. Do not
 reintroduce an engine-local or generic forwarding facade around these canonical
 owners.
+
+ORCA's parent `queue.worker` is a composition root, not a policy owner. It wires
+the shared engine runtime to `publication_repair`, `cancellation`, `replay`, and
+`worker_tracking`; changes to those policies belong in their owning modules.
 
 `core/engines/registry.py` resolves an engine id to its `EngineDefinition` by
 importing the module and reading `ENGINE_DEFINITION`. This registry is the only

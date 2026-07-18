@@ -159,6 +159,8 @@ implementation-coupled tests. Treat it as an audit report, not a failure gate.
   must not reuse workflow xTB execution semantics
 - Keep top-level alias packages, console-script aliases, and alternate runtime
   readers out of the codebase
+- Keep `orca_auto.orca.commands` as an adapter layer. Domain execution,
+  submission, worker-child, and queue modules must not import it.
 
 ## Engine Workers
 
@@ -174,6 +176,11 @@ live child-PID reconciliation as explicit xTB policy. Keep retry,
 crash-generation recovery, publication, terminal replay, and state/report
 policy inside `orca_auto.orca`. Do not add a forwarding module when the
 canonical runtime already owns the operation.
+
+Keep `orca_auto.orca.queue.worker` as the parent-worker composition root.
+Queued-publication repair belongs to `queue.publication_repair`, cancellation
+to `queue.cancellation`, terminal reconciliation/replay to `queue.replay`, and
+job-index/notification tracking to `queue.worker_tracking`.
 
 Standalone xTB-MD exposes only the shared `run-dir` and queue/activity surface.
 Keep its single-attempt, no-retry/no-resume contract in `orca_auto.xtb_md`; do

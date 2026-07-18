@@ -9,8 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from orca_auto.core.admission import reserve_slot
-from orca_auto.orca.commands.run_inp import _cmd_run_inp_execute
 from orca_auto.orca.completion_rules import CompletionMode
+from orca_auto.orca.execution import execute_orca_run
 from orca_auto.orca.orca_runner import RunResult
 from orca_auto.orca.out_analyzer import analyze_output
 from orca_auto.orca.state import load_state, save_state
@@ -183,7 +183,7 @@ class TestCrashRecovery(unittest.TestCase):
                 out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
                 return RunResult(out_path=str(out), return_code=0)
 
-            with patch("orca_auto.orca.commands.run_inp.OrcaRunner.run", new=_fake_run):
+            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
                 token = reserve_slot(
                     reaction.parent / ".admission",
                     1,
@@ -191,7 +191,7 @@ class TestCrashRecovery(unittest.TestCase):
                     source="queue_worker",
                     state="reserved",
                 )
-                rc = _cmd_run_inp_execute(
+                rc = execute_orca_run(
                     type(
                         "Args",
                         (),

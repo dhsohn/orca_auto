@@ -41,10 +41,8 @@ from orca_auto.core.queue.worker import (
 from orca_auto.core.utils.persistence import timestamped_token
 
 from .attempt.reporting import build_final_result
-from .commands.run_inp import _cmd_run_inp_execute
-from .commands.run_inp_execution import existing_completed_out, recover_crashed_state
-from .commands.run_inp_submission import _mark_orca_snapshot_owned
 from .config import load_config
+from .execution import execute_orca_run, existing_completed_out, recover_crashed_state
 from .execution_binding import (
     build_orca_execution_snapshot,
     cleanup_unowned_orca_execution_snapshot,
@@ -68,6 +66,7 @@ from .resource_directives import prepare_submission_resource_request
 from .runtime.run_lock import acquire_run_lock
 from .state import finalize_state, load_state
 from .statuses import AnalyzerStatus
+from .submission import mark_orca_snapshot_owned
 
 logger = logging.getLogger(__name__)
 
@@ -476,7 +475,7 @@ def _maybe_rebind_recovery_generation(
     except BaseException:
         cleanup_unowned_orca_execution_snapshot(reaction_dir, new_snapshot)
         raise
-    marker_warning = _mark_orca_snapshot_owned(queue_root, intent_token)
+    marker_warning = mark_orca_snapshot_owned(queue_root, intent_token)
     updated = _queue_entry_by_id(queue_root, str(entry.queue_id))
     updated_metadata = getattr(updated, "metadata", None)
     updated_snapshot = (
@@ -622,7 +621,7 @@ def execute_run_job(
     execution_provenance: dict[str, Any] | None = None,
     runner_cls: type[OrcaRunner] = OrcaRunner,
 ) -> int:
-    return _cmd_run_inp_execute(
+    return execute_orca_run(
         Namespace(
             config=config_path,
             reaction_dir=reaction_dir,
