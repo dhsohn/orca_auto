@@ -47,11 +47,15 @@ class EngineQueueRuntime:
     accept_entry_fn: Callable[[Any], bool] | None = None
     queue_entry_by_id_fn: Callable[[str | Path, str], Any | None] | None = None
 
-    def _queue_runtime(self) -> QueueRuntime:
+    def _queue_runtime(
+        self,
+        *,
+        list_queue_fn: Callable[[str | Path], list[Any]] | None = None,
+    ) -> QueueRuntime:
         return QueueRuntime(
             load_config_fn=self.load_config,
             runtime_roots_for_cfg_fn=self.runtime_roots_for_cfg,
-            list_queue_fn=self.list_queue,
+            list_queue_fn=list_queue_fn or self.list_queue,
             dequeue_next_fn=self.dequeue_next,
             dequeue_next_across_roots_fn=self.dequeue_next_across_roots,
             dequeue_entry_if_pending_fn=self.dequeue_entry_if_pending,
@@ -61,8 +65,13 @@ class EngineQueueRuntime:
     def queue_roots(self, cfg: Any) -> tuple[Path, ...]:
         return self._queue_runtime().queue_roots(cfg)
 
-    def queue_entries_with_roots(self, cfg: Any) -> list[tuple[Path, Any]]:
-        return self._queue_runtime().queue_entries_with_roots(cfg)
+    def queue_entries_with_roots(
+        self,
+        cfg: Any,
+        *,
+        list_queue_fn: Callable[[str | Path], list[Any]] | None = None,
+    ) -> list[tuple[Path, Any]]:
+        return self._queue_runtime(list_queue_fn=list_queue_fn).queue_entries_with_roots(cfg)
 
     def dequeue_next_entry(self, cfg: Any) -> tuple[Path, Any] | None:
         return self._queue_runtime().dequeue_next_entry(cfg)
@@ -273,8 +282,10 @@ class EngineQueueRuntime:
         mark_cancelled_fn: Callable[..., Any],
         requeue_running_entry_fn: Callable[..., Any],
         mark_recovery_pending_fn: Callable[..., Any],
+        list_queue_fn: Callable[[str | Path], list[Any]] | None = None,
     ) -> None:
         """Recover admission records and reconcile this engine's orphaned rows."""
+        queue_lister = list_queue_fn or self.list_queue
         recover_orphaned_engine_slots(admission_root, strict=False)
         _queue_lifecycle.reconcile_orphaned_running_with_policy(
             cfg,
@@ -282,7 +293,7 @@ class EngineQueueRuntime:
             admission_root=admission_root,
             queue_roots_fn=self.queue_roots,
             list_queue_fn=lambda root: [
-                entry for entry in self.list_queue(root) if self.accepts_entry(entry)
+                entry for entry in queue_lister(root) if self.accepts_entry(entry)
             ],
             list_slots_fn=list_slots_fn,
             reconcile_stale_slots_fn=reconcile_stale_slots_fn,

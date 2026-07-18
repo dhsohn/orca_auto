@@ -200,6 +200,13 @@ source_modules = ["orca_auto.flow.engines.crest"]
 forbidden_modules = ["orca_auto.core.queue.internal_engine"]
 allow_indirect_imports = true
 
+[[tool.importlinter.contracts]]
+name = "Workflow xTB uses the canonical engine runtime"
+type = "forbidden"
+source_modules = ["orca_auto.flow.engines.xtb"]
+forbidden_modules = ["orca_auto.core.queue.internal_engine"]
+allow_indirect_imports = true
+
 [tool.coverage.run]
 source = ["src/orca_auto"]
 

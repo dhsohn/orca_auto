@@ -164,10 +164,12 @@ xTB-MD, xTB, CREST, ORCA는 모두 공통 엔진 런타임을 통해 실행됩�
 사용합니다.
 
 이전을 마친 부모 런타임은 `EngineDefinition.build_queue_runtime()`으로 만들고 canonical
-`core.queue.engine`의 어드미션, 자식, 라이프사이클, 훅 계약을 직접 사용하세요. 단독
-xTB-MD와 CREST는 `core.queue.internal_engine`을 임포트하면 안 되며 import-linter 계약이
-두 완료 경계를 강제합니다. canonical 런타임이 이미 소유한 연산을 전달만 하는 엔진 로컬
-모듈은 새로 만들지 마세요. 남은 엔진을 이전한 뒤 임시 공유 패키지를 제거합니다.
+`core.queue.engine`의 어드미션, 자식, 라이프사이클, 훅 계약을 직접 사용하세요.
+단독 xTB-MD, CREST, workflow xTB는 `core.queue.internal_engine`을 임포트하면 안 되며
+import-linter 계약이 완료된 경계를 강제합니다. workflow-root 탐색, publication fencing,
+live child-PID reconciliation은 명시적인 xTB 정책으로 유지하세요. canonical 런타임이
+이미 소유한 연산을 전달만 하는 엔진 로컬 모듈은 새로 만들지 마세요. 남은 엔진을
+이전한 뒤 임시 공유 패키지를 제거합니다.
 
 단독 xTB-MD는 공용 `run-dir`와 queue/activity 표면만 노출합니다. 단일 시도,
 no-retry/no-resume 계약은 `orca_auto.xtb_md`에 두고, 직접 실행 CLI를 만들거나 그

@@ -203,9 +203,11 @@ predicate, 큐 항목 조회를 한 곳에서 설치합니다. 단독 xTB-MD는 
 
 `EngineDefinition.build_queue_runtime()`은 canonical 부모 워커 런타임 팩토리입니다.
 선언된 큐 함수, 완전한 엔진 정체성 필터, 엔트리 조회, PID 파일 이름을 한곳에서
-결합합니다. CREST는 큐 탐색, 어드미션, 자식 실행, 종료/재대기, 고아 복구에 이
-런타임을 직접 사용하고, 자식 진입점은 `core.queue.engine.child`를 직접 사용합니다.
-`core.queue.internal_engine`은 아직 이 이전을 마치지 않은 엔진 경로만을 위한 과도기적
+결합합니다. CREST와 workflow xTB는 큐 탐색, 어드미션, 자식 실행, 종료/재대기, 고아
+복구에 이 런타임을 직접 사용하고, 자식 진입점은 `core.queue.engine.child`를 직접
+사용합니다. workflow-aware runtime-root resolver는 엔진 정의가 명시적으로 소유하고,
+publication repair와 live child-PID slot 보호는 xTB 정책으로 유지됩니다.
+`core.queue.internal_engine`은 아직 이전을 마치지 않은 엔진 경로만을 위한 과도기적
 구현 세부사항으로 남습니다.
 
 `core/engines/registry.py`는 모듈을 임포트하고 `ENGINE_DEFINITION`을 읽어 엔진

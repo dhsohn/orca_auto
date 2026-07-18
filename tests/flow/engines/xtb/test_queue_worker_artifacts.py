@@ -314,8 +314,8 @@ def test_run_worker_job_uses_dependency_config_and_admission_groups(
         return 0
 
     monkeypatch.setattr(
-        worker_exec._worker_child,
-        "run_worker_child_job",
+        worker_exec,
+        "run_engine_worker_child_job",
         fake_run_worker_child_job,
     )
 

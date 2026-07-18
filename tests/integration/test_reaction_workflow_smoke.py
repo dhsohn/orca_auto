@@ -15,6 +15,7 @@ from orca_auto.flow.adapters.xtb import load_xtb_artifact_contract
 from orca_auto.flow.engines.crest import queue_runtime as crest_queue_cmd
 from orca_auto.flow.engines.crest.engine import ENGINE_DEFINITION as CREST_ENGINE_DEFINITION
 from orca_auto.flow.engines.xtb import queue_runtime as xtb_queue_cmd
+from orca_auto.flow.engines.xtb.engine import ENGINE_DEFINITION as XTB_ENGINE_DEFINITION
 from orca_auto.flow.orchestration import advance_workflow
 from orca_auto.flow.registry import sync_workflow_registry
 from orca_auto.flow.state import load_workflow_payload, resolve_workflow_workspace, workflow_summary
@@ -296,7 +297,7 @@ def _process_reaction_xtb_queue(case: ReactionWorkflowSmokeCase, smoke_workspace
     assert list_slots(smoke_workspace.admission_root) == []
     assert not worker_pid_file_path(
         case.xtb_root,
-        xtb_queue_cmd.WORKER_PID_FILE,
+        XTB_ENGINE_DEFINITION.worker_pid_file_name,
     ).exists()
 
 

@@ -206,11 +206,14 @@ Each engine package exposes an `ENGINE_DEFINITION` constant:
 
 `EngineDefinition.build_queue_runtime()` is the canonical parent-worker runtime
 factory. It binds the declared queue functions, complete engine-identity filter,
-entry lookup, and PID-file name in one place. CREST uses that runtime directly
-for queue discovery, admission, child launch, shutdown/requeue, and orphan
-reconciliation; its child entrypoint uses `core.queue.engine.child` directly.
-`core.queue.internal_engine` remains a transitional implementation detail only
-for engine paths that have not yet completed this migration.
+entry lookup, and PID-file name in one place. CREST and workflow xTB use that
+runtime directly for queue discovery, admission, child launch,
+shutdown/requeue, and orphan reconciliation; their child entrypoints use
+`core.queue.engine.child` directly. The xTB engine definition explicitly owns
+the workflow-aware runtime-root resolver, while publication repair and live
+child-PID slot protection remain xTB policies. `core.queue.internal_engine`
+remains a transitional implementation detail only for engine paths that have
+not yet completed this migration.
 
 `core/engines/registry.py` resolves an engine id to its `EngineDefinition` by
 importing the module and reading `ENGINE_DEFINITION`. This registry is the only

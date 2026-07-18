@@ -11,6 +11,7 @@ from typing import Any
 from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.admission import activate_reserved_slot, release_slot
 from orca_auto.core.config.engines import load_xtb_config as load_config
+from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.engines.worker_child import (
     WORKER_CHILD_MODULE,
     build_worker_child_command_for_engine,
@@ -27,14 +28,14 @@ from orca_auto.core.queue import (
     mark_failed,
     requeue_running_entry,
 )
+from orca_auto.core.queue.child.execution import install_shutdown_request_handlers
 from orca_auto.core.queue.engine import execution as _engine_execution
-from orca_auto.core.queue.engine.input_snapshot import verify_input_snapshots
-from orca_auto.core.queue.internal_engine import (
-    InternalEngineSpec,
-    create_worker_shutdown_exception_type,
-    entry_matches_engine_identity,
-    entry_status_is_running,
+from orca_auto.core.queue.engine.child import (
+    WorkerChildRunSpec,
+    run_engine_worker_child_job,
 )
+from orca_auto.core.queue.engine.input_snapshot import verify_input_snapshots
+from orca_auto.core.queue.lifecycle import entry_status_is_running
 from orca_auto.core.queue.worker import execution_dependencies as _worker_dependencies
 from orca_auto.core.queue.worker import (
     install_shutdown_signal_handlers,
@@ -97,23 +98,21 @@ from orca_auto.flow.engines.xtb.worker_terminal import (
 
 WORKER_JOB_MODULE = WORKER_CHILD_MODULE
 CANCEL_CHECK_INTERVAL_SECONDS = 1
-WorkerShutdownRequested = create_worker_shutdown_exception_type(__name__)
-_ENGINE_SPEC = InternalEngineSpec(
-    engine="xtb",
-    worker_job_module="orca_auto.flow.engines.xtb.execution",
-    include_admission_root=False,
-)
 build_worker_child_command = build_worker_child_command_for_engine("xtb")
 
 
-_worker_child = _ENGINE_SPEC.worker_child_module_facade(
-    WorkerShutdownRequested,
+class WorkerShutdownRequested(RuntimeError):
+    def __init__(self, context: Any):
+        super().__init__("worker_shutdown")
+        self.context = context
+
+
+_WORKER_CHILD_RUN_SPEC = WorkerChildRunSpec(
+    shutdown_exception_type=WorkerShutdownRequested,
     entry_ready_fn=lambda entry: (
         entry_status_is_running(entry) and entry_matches_engine_identity(entry, "xtb")
     ),
-    build_worker_child_command=build_worker_child_command,
 )
-_WORKER_CHILD = _worker_child.worker_child
 
 
 WorkerConfigDependencies = _worker_dependencies.WorkerConfigDependencies
@@ -861,29 +860,41 @@ def run_worker_job(
     await_parent_admission_handoff_fn: Callable[[Any, str], bool] | None = None,
 ) -> int:
     deps = dependencies or default_worker_execution_dependencies()
-    return _worker_dependencies.run_worker_child_entrypoint_with_dependencies(
-        _worker_child,
-        config_path=config_path,
-        queue_root=queue_root,
-        queue_id=queue_id,
-        admission_token=admission_token,
-        admission_root_fn=resolve_admission_root,
-        install_shutdown_signal_handlers_fn=install_shutdown_signal_handlers,
-        process_dequeued_entry_fn=process_dequeued_entry,
-        dependencies=deps,
-        requeue_running_entry_fn=requeue_running_entry,
-        mark_recovery_pending_context_fn=_mark_recovery_pending_context,
-        await_parent_admission_handoff_fn=await_parent_admission_handoff_fn,
-    )
+    worker_child_kwargs: dict[str, Any] = {
+        "spec": _WORKER_CHILD_RUN_SPEC,
+        "config_path": config_path,
+        "queue_root": queue_root,
+        "queue_id": queue_id,
+        "admission_token": admission_token,
+        "load_config_fn": deps.config.load_config,
+        "find_queue_entry_fn": deps.config.queue_entry_by_id,
+        "admission_root_fn": resolve_admission_root,
+        "release_slot_fn": deps.admission.release_slot,
+        "install_signal_handlers_fn": lambda controller: install_shutdown_request_handlers(
+            controller,
+            install_signal_handlers_fn=install_shutdown_signal_handlers,
+        ),
+        "process_dequeued_entry_fn": process_dequeued_entry,
+        "dependencies_fn": lambda: deps,
+        "requeue_running_entry_fn": requeue_running_entry,
+        "mark_recovery_pending_context_fn": _mark_recovery_pending_context,
+    }
+    if await_parent_admission_handoff_fn is not None:
+        worker_child_kwargs["await_parent_admission_handoff_fn"] = await_parent_admission_handoff_fn
+    return run_engine_worker_child_job(**worker_child_kwargs)
 
 
 def build_worker_job_parser() -> argparse.ArgumentParser:
-    return _worker_child.build_parser()
+    parser = argparse.ArgumentParser(prog="python -m orca_auto.flow.engines.xtb.execution")
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--queue-root", required=True)
+    parser.add_argument("--queue-id", required=True)
+    parser.add_argument("--admission-token", default=None)
+    return parser
 
 
 run_worker_child_job = run_worker_job
 build_parser = build_worker_job_parser
-shutdown_signal_handler_installer = _WORKER_CHILD.shutdown_signal_handler_installer
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -921,7 +932,6 @@ __all__ = [
     "process_dequeued_entry",
     "run_worker_child_job",
     "run_worker_job",
-    "shutdown_signal_handler_installer",
     "WorkerShutdownRequested",
     "WORKER_JOB_MODULE",
 ]

@@ -169,11 +169,12 @@ packages should expose an `EngineDefinition`; parent workers use
 
 Build migrated parent runtimes with `EngineDefinition.build_queue_runtime()` and
 use the canonical `core.queue.engine` admission, child, lifecycle, and hook
-contracts directly. Standalone xTB-MD and CREST must not import
-`core.queue.internal_engine`; import-linter contracts enforce both completed
-cutovers. Do not add an engine-local forwarding module when the canonical
-runtime already owns the operation. Migrate the remaining engines before
-removing the temporary shared package.
+contracts directly. Standalone xTB-MD, CREST, and workflow xTB must not import
+`core.queue.internal_engine`; import-linter contracts enforce these completed
+cutovers. Keep workflow-root discovery, publication fencing, and live child-PID
+reconciliation as explicit xTB policy. Do not add an engine-local forwarding
+module when the canonical runtime already owns the operation. Migrate the
+remaining engine before removing the temporary shared package.
 
 Standalone xTB-MD exposes only the shared `run-dir` and queue/activity surface.
 Keep its single-attempt, no-retry/no-resume contract in `orca_auto.xtb_md`; do
