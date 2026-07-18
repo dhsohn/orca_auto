@@ -6,7 +6,7 @@ import signal
 import subprocess
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from orca_auto.cli_errors import emit_error
@@ -21,8 +21,11 @@ from orca_auto.cli_worker_specs import (
 )
 
 _WORKER_POLL_INTERVAL_SECONDS = 1.0
+_WORKER_START_STAGGER_SECONDS = 2.0
 _WORKER_STARTUP_FAILURE_WINDOW_SECONDS = 5.0
 _WORKER_MAX_STARTUP_FAILURES = 2
+_WORKER_RESTART_WINDOW_SECONDS = 300.0
+_WORKER_MAX_RESTARTS_IN_WINDOW = 3
 LOGGER = logging.getLogger(__name__)
 
 
@@ -32,6 +35,7 @@ class _SupervisedWorker:
     process: subprocess.Popen[Any]
     started_at_monotonic: float
     startup_failure_count: int = 0
+    restart_timestamps: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -71,7 +75,15 @@ def _spawn_supervised_worker(spec: WorkerSpec, *, restart: bool = False) -> _Sup
     print(f"{action} worker[{spec.app}]: {command_text}")
     return _SupervisedWorker(
         spec=spec,
-        process=subprocess.Popen(spec.argv, cwd=spec.cwd, env=spec.env),
+        # A worker must not share the supervisor's process group. Otherwise a
+        # worker-side group signal can terminate the supervisor and all of its
+        # siblings, causing systemd to restart the entire worker set at once.
+        process=subprocess.Popen(
+            spec.argv,
+            cwd=spec.cwd,
+            env=spec.env,
+            start_new_session=True,
+        ),
         started_at_monotonic=time.monotonic(),
     )
 
@@ -140,8 +152,22 @@ def _restart_or_stop_worker(
         print(f"worker[{spec.app}] completed cleanly; stopping supervisor.")
         return 0
 
+    restart_cutoff = current_time - _WORKER_RESTART_WINDOW_SECONDS
+    managed.restart_timestamps[:] = [
+        timestamp for timestamp in managed.restart_timestamps if timestamp >= restart_cutoff
+    ]
+    managed.restart_timestamps.append(current_time)
+    if len(managed.restart_timestamps) >= _WORKER_MAX_RESTARTS_IN_WINDOW:
+        print(
+            f"worker[{spec.app}] exited repeatedly within "
+            f"{int(_WORKER_RESTART_WINDOW_SECONDS)} seconds; "
+            "stopping supervisor to avoid a restart loop."
+        )
+        return returncode if returncode > 0 else 1
+
     restarted = _spawn_supervised_worker(spec, restart=True)
     restarted.startup_failure_count = managed.startup_failure_count
+    restarted.restart_timestamps = list(managed.restart_timestamps)
     processes[index] = restarted
     return None
 
@@ -193,7 +219,11 @@ def _terminate_supervised_workers(processes: Sequence[_SupervisedWorker]) -> Non
         _terminate_process(managed.process)
 
 
-def _run_worker_supervisor(specs: Sequence[WorkerSpec]) -> int:
+def _run_worker_supervisor(
+    specs: Sequence[WorkerSpec],
+    *,
+    startup_stagger_seconds: float = _WORKER_START_STAGGER_SECONDS,
+) -> int:
     if not specs:
         emit_error("no workers selected")
         return 1
@@ -202,8 +232,12 @@ def _run_worker_supervisor(specs: Sequence[WorkerSpec]) -> int:
     shutdown = _SupervisorShutdown()
     previous_handlers = _install_supervisor_signal_handlers(shutdown)
     try:
-        for spec in specs:
+        for index, spec in enumerate(specs):
             processes.append(_spawn_supervised_worker(spec))
+            if index + 1 < len(specs) and startup_stagger_seconds > 0:
+                time.sleep(startup_stagger_seconds)
+                if shutdown.requested:
+                    break
         return _supervise_worker_processes(processes, shutdown)
     finally:
         _terminate_supervised_workers(processes)

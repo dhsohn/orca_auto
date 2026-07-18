@@ -659,6 +659,8 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 - `service status`는 runtime target, queue worker, bot 상태를 보고합니다.
 - `service restart`는 runtime target이 활성화되어 있으면 그것을 재시작하고, 아니면 큐
   워커를 재시작합니다.
+- 큐 워커 감독자가 정상 종료되면 중단 상태를 유지합니다. 실패 재시작은 자식 감독자와
+  systemd 양쪽에서 제한된 backoff를 사용합니다.
 
 ## 비계약
 

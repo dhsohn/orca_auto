@@ -2,6 +2,8 @@
 Description=orca_auto unified queue workers for %i
 After=local-fs.target
 PartOf=orca_auto-runtime@%i.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -19,8 +21,8 @@ ProtectHome=read-only
 UMask=0077
 KillMode=control-group
 TimeoutStopSec=30
-Restart=always
-RestartSec=5
+Restart=on-failure
+RestartSec=30
 
 [Install]
 WantedBy=multi-user.target

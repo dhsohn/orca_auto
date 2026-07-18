@@ -73,6 +73,17 @@ Common assumptions:
   retry/report behavior
 - The same service also starts workflow supervision and the internal CREST/xTB workers under the shared `runs_root`
 
+Worker safety policy:
+
+- supervised workers run in separate process sessions and initial starts are
+  staggered by two seconds;
+- a worker that exits three times within five minutes stops the unified
+  supervisor instead of entering an unbounded child restart loop;
+- engine workers' idle full-state reconciliation runs at most once per minute,
+  independently of the short queue poll;
+- the systemd unit uses `Restart=on-failure` with a 30-second delay and permits
+  at most three unit starts in five minutes.
+
 Install the unified engine worker:
 
 ```bash

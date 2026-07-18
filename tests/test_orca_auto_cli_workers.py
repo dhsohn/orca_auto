@@ -340,6 +340,61 @@ def test_cmd_queue_worker_reports_existing_orca_auto_orca_worker_conflict(
     assert "Stop the existing queue-worker service before starting another worker." in out
 
 
+def test_spawn_supervised_worker_starts_each_worker_in_a_new_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _FakeWorkerProcess([None])
+    popen_kwargs: dict[str, Any] = {}
+
+    def _fake_popen(*args: Any, **kwargs: Any) -> _FakeWorkerProcess:
+        del args
+        popen_kwargs.update(kwargs)
+        return process
+
+    monkeypatch.setattr(unified_cli.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(unified_cli.time, "monotonic", lambda: 42.0)
+
+    managed = unified_cli._spawn_supervised_worker(
+        unified_cli.WorkerSpec(app="orca", argv=("orca", "worker"))
+    )
+
+    assert managed.process is process
+    assert managed.started_at_monotonic == 42.0
+    assert popen_kwargs["start_new_session"] is True
+
+
+def test_run_worker_supervisor_staggers_initial_worker_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    processes = [_FakeWorkerProcess([None]), _FakeWorkerProcess([None])]
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr(
+        unified_cli.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: processes.pop(0),
+    )
+    monkeypatch.setattr(unified_cli.signal, "getsignal", lambda _sig: None)
+    monkeypatch.setattr(unified_cli.signal, "signal", lambda _sig, _handler: None)
+    monkeypatch.setattr(unified_cli.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(
+        unified_cli,
+        "_supervise_worker_processes",
+        lambda _processes, _shutdown: 0,
+    )
+
+    result = unified_cli._run_worker_supervisor(
+        [
+            unified_cli.WorkerSpec(app="workflow", argv=("workflow", "worker")),
+            unified_cli.WorkerSpec(app="orca", argv=("orca", "worker")),
+        ],
+        startup_stagger_seconds=2.0,
+    )
+
+    assert result == 0
+    assert sleep_calls == [2.0]
+
+
 def test_run_worker_supervisor_keeps_siblings_running_after_clean_exit(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -379,7 +434,8 @@ def test_run_worker_supervisor_keeps_siblings_running_after_clean_exit(
         [
             unified_cli.WorkerSpec(app="workflow", argv=("workflow", "worker")),
             unified_cli.WorkerSpec(app="orca", argv=("orca", "worker")),
-        ]
+        ],
+        startup_stagger_seconds=0,
     )
 
     assert result == 0
@@ -429,7 +485,8 @@ def test_run_worker_supervisor_stops_after_finite_workflow_clean_exit(
                 restart_on_clean_exit=False,
             ),
             unified_cli.WorkerSpec(app="orca", argv=("orca", "worker")),
-        ]
+        ],
+        startup_stagger_seconds=0,
     )
 
     assert result == 0
@@ -481,7 +538,8 @@ def test_run_worker_supervisor_restarts_workers_after_failure(
         [
             unified_cli.WorkerSpec(app="workflow", argv=("workflow", "worker")),
             unified_cli.WorkerSpec(app="orca", argv=("orca", "worker")),
-        ]
+        ],
+        startup_stagger_seconds=0,
     )
 
     assert result == 0
@@ -531,7 +589,8 @@ def test_run_worker_supervisor_stops_after_repeated_startup_failures(
         [
             unified_cli.WorkerSpec(app="workflow", argv=("workflow", "worker")),
             unified_cli.WorkerSpec(app="orca", argv=("orca", "worker")),
-        ]
+        ],
+        startup_stagger_seconds=0,
     )
 
     assert result == 2
@@ -547,6 +606,37 @@ def test_run_worker_supervisor_stops_after_repeated_startup_failures(
         in out
     )
     assert "restarting worker[workflow]: workflow worker" in out
+
+
+def test_restart_or_stop_worker_stops_repeated_non_startup_exits(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    spec = unified_cli.WorkerSpec(app="orca", argv=("orca", "worker"))
+    managed = unified_cli._SupervisedWorker(
+        spec=spec,
+        process=cast(Any, _FakeWorkerProcess([2])),
+        started_at_monotonic=0.0,
+        restart_timestamps=[10.0, 150.0],
+    )
+    processes = [managed]
+    monkeypatch.setattr(
+        unified_cli,
+        "_spawn_supervised_worker",
+        lambda *_args, **_kwargs: pytest.fail("restart circuit must open before spawning"),
+    )
+
+    result = unified_cli._restart_or_stop_worker(
+        processes,
+        index=0,
+        managed=managed,
+        returncode=2,
+        current_time=299.0,
+    )
+
+    assert result == 2
+    assert processes == [managed]
+    assert "exited repeatedly within 300 seconds" in capsys.readouterr().out
 
 
 def test_cmd_queue_worker_json_outputs_commands(

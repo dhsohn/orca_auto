@@ -27,6 +27,7 @@ from .signals import install_shutdown_signal_handlers as _install_shutdown_signa
 
 logger = logging.getLogger(__name__)
 _SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS = 300.0
+_WORKER_STATE_RECONCILE_INTERVAL_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -78,20 +79,34 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
         self.deps = deps
 
     def _before_run(self) -> None:
+        self._reconcile_worker_state_now()
+
+    def _reconcile_worker_state_now(self) -> None:
         self._reconcile_worker_state()
+        self.__dict__["_worker_state_last_reconcile_monotonic"] = time.monotonic()
+
+    def _reconcile_worker_state_if_due(self) -> None:
+        now = time.monotonic()
+        last_reconcile = self.__dict__.get("_worker_state_last_reconcile_monotonic")
+        if (
+            last_reconcile is None
+            or now - float(last_reconcile) >= _WORKER_STATE_RECONCILE_INTERVAL_SECONDS
+        ):
+            self._reconcile_worker_state_now()
 
     def _sleep(self) -> None:
         # A replacement parent may initially observe a live child from the
-        # previous parent and correctly skip it. Reconcile every poll cycle so
-        # that, once that child exits (or is killed), its queue entry/engine
-        # record is recovered without waiting for another daemon restart.
+        # previous parent and correctly skip it. Periodically reconcile so that,
+        # once that child exits (or is killed), its queue entry/engine record is
+        # recovered without repeatedly scanning every runtime root on each
+        # short queue-poll cycle.
         # Do not race a completed in-memory job whose finalization is being
         # retained for retry after an error.
         completed_retry_pending = any(
             self._poll_job(job) is not None for _queue_id, job in self._running_jobs()
         )
         if not completed_retry_pending:
-            self._reconcile_worker_state()
+            self._reconcile_worker_state_if_due()
         super()._sleep()
 
     def run_once(

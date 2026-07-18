@@ -720,6 +720,8 @@ Stable behavior:
 - `service status` reports the runtime target, queue worker, and bot status.
 - `service restart` restarts the runtime target when enabled; otherwise it
   restarts the queue worker.
+- A clean queue-worker supervisor exit remains stopped. Failure restarts use
+  bounded backoff at both the child-supervisor and systemd layers.
 
 ## Non-Contracts
 

@@ -103,6 +103,10 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
     assert "UMask=0077" in worker_content
     assert "KillMode=control-group" in worker_content
     assert "TimeoutStopSec=30" in worker_content
+    assert "StartLimitIntervalSec=300" in worker_content
+    assert "StartLimitBurst=3" in worker_content
+    assert "Restart=on-failure" in worker_content
+    assert "RestartSec=30" in worker_content
     assert (
         "ReadWritePaths="
         f"{repo.resolve(strict=False) / 'admission'} "

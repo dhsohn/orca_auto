@@ -211,6 +211,14 @@ def terminate_process_group(
     ):
         return True
 
+    pid = getattr(proc, "pid", None)
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1:
+        logger.warning(
+            "Refusing to signal process group with invalid pgid=%r",
+            pid,
+        )
+        return False
+
     signal_safety = _group_signal_is_safe(
         proc,
         pid_exists_fn=active_deps.pid_exists or _pid_exists,
@@ -227,7 +235,7 @@ def terminate_process_group(
     try:
         if active_killpg is None:
             raise ProcessLookupError
-        active_killpg(proc.pid, active_sigterm)
+        active_killpg(pid, active_sigterm)
     except (ProcessLookupError, PermissionError, OSError):
         try:
             proc.terminate()
@@ -258,7 +266,7 @@ def terminate_process_group(
     try:
         if active_killpg is None:
             raise ProcessLookupError
-        active_killpg(proc.pid, active_sigkill)
+        active_killpg(pid, active_sigkill)
     except (ProcessLookupError, PermissionError, OSError):
         try:
             proc.kill()
@@ -271,7 +279,7 @@ def terminate_process_group(
         deps=active_deps,
     )
     if not terminated:
-        logger.debug("process group did not exit after kill timeout: pgid=%s", proc.pid)
+        logger.debug("process group did not exit after kill timeout: pgid=%s", pid)
     return terminated
 
 

@@ -565,6 +565,16 @@ units. If the selected provider lacks interactive bot settings, only the queue w
 enabled; rerun after completing them to enable the full target. On WSL, `systemd`
 must be enabled in `/etc/wsl.conf`.
 
+The unified supervisor starts each worker in its own process session and spaces
+initial starts by two seconds, preventing a worker-side group signal or startup
+reconciliation burst from affecting every sibling at once. A daemon worker that
+exits three times within five minutes opens the supervisor circuit instead of
+restarting forever. Each engine queue worker still reconciles durable state at
+startup, but idle full-state reconciliation is limited to once per minute while
+the light queue/status poll remains at its normal interval. The service retries failures
+after 30 seconds and permits at most three unit starts per five-minute window;
+clean supervisor exits are not restarted.
+
 ---
 
 ## 12. CLI Surface
