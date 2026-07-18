@@ -30,7 +30,7 @@ ENGINE_DEFINITION = build_queue_engine_definition(
     worker_pid_file_name="queue_worker.pid",
     job_finished=notify_run_finished_event,
 )
-build_worker_child_command = ENGINE_DEFINITION.build_worker_child_command
+build_worker_child_command = ENGINE_DEFINITION.runner_callbacks.build_worker_child_command
 
 
 __all__ = ["ENGINE_DEFINITION", "build_worker_child_command"]

@@ -114,12 +114,12 @@ _WORKER_CHILD_RUN_SPEC = WorkerChildRunSpec(
 
 WorkerConfigDependencies = _worker_dependencies.WorkerConfigDependencies
 WorkerAdmissionDependencies = _worker_dependencies.WorkerAdmissionDependencies
-WorkerTimingDependencies = _engine_execution.InternalWorkerTimingDependencies
-WorkerQueueDependencies = _engine_execution.InternalWorkerQueueDependencies
+WorkerTimingDependencies = _engine_execution.EngineWorkerTimingDependencies
+WorkerQueueDependencies = _engine_execution.EngineWorkerQueueDependencies
 
 
 @dataclass(frozen=True)
-class WorkerRunnerDependencies(_engine_execution.InternalWorkerProcessDependencies):
+class WorkerRunnerDependencies(_engine_execution.EngineWorkerProcessDependencies):
     start_crest_job: Callable[..., Any]
     finalize_crest_job: Callable[..., CrestRunResult]
 
@@ -528,9 +528,9 @@ def _run_crest_job_for_entry(
             **launch_kwargs,
         )
 
-    return _engine_execution.run_internal_worker_process_job(
+    return _engine_execution.run_engine_worker_process_job(
         context,
-        options=_engine_execution.InternalWorkerOptions(
+        options=_engine_execution.EngineWorkerOptions(
             should_cancel=_engine_execution.queue_cancel_callback(
                 queue_deps,
                 queue_root,
@@ -630,8 +630,8 @@ def _worker_execution_spec(
     *,
     molecule_key_resolver: Callable[[Any, Path, Path], str],
     dependencies: WorkerExecutionDependencies,
-) -> _engine_execution.InternalEngineWorkerExecutionSpec:
-    return _engine_execution.build_internal_engine_worker_execution_spec(
+) -> _engine_execution.EngineWorkerExecutionSpec:
+    return _engine_execution.build_engine_worker_execution_spec(
         build_context=lambda cfg_obj, entry_obj: _build_execution_context(
             cfg_obj,
             entry_obj,
@@ -675,8 +675,8 @@ def build_worker_adapter(
     *,
     molecule_key_resolver: Callable[[Any, Path, Path], str],
     dependencies: WorkerExecutionDependencies,
-) -> _engine_execution.InternalEngineWorkerAdapter:
-    return _engine_execution.build_internal_engine_worker_adapter_from_spec(
+) -> _engine_execution.EngineWorkerAdapter:
+    return _engine_execution.build_engine_worker_adapter_from_spec(
         _worker_execution_spec(
             molecule_key_resolver=molecule_key_resolver,
             dependencies=dependencies,
@@ -697,7 +697,7 @@ def _run_worker_entry_lifecycle(
     worker_job_pid: int | None = None,
     emit_output: bool = False,
 ) -> WorkerExecutionOutcome:
-    return _engine_execution.run_internal_engine_worker_entry_with_spec_factory_options(
+    return _engine_execution.run_engine_worker_entry_with_spec_factory_options(
         cfg,
         entry,
         queue_root=queue_root,

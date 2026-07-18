@@ -8,8 +8,8 @@ from orca_auto.core.engine_catalog import (
     find_engine_catalog_entry_by_source_id,
     get_engine_catalog_entry,
 )
+from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue.generation import queue_entries_same_generation
-from orca_auto.core.queue.internal_engine import entry_matches_engine_identity
 from orca_auto.core.utils import normalize_text
 
 from ..orchestration import cancel_materialized_workflow

@@ -180,20 +180,18 @@ child-process management, terminal side effects, and orphan recovery uniform.
 bundles everything the shared runtime needs for an engine:
 
 - `load_config` — engine config loader
-- `run_worker_child_job` — the child job runner
-- `queue_worker_module` / `build_worker_child_command` — parent-worker wiring
-- `runtime_roots_for_cfg`, `queue_functions` — queue discovery
+- `queue_worker_module` — parent-worker entrypoint
+- `queue_functions` — runtime roots, queue operations, entry lookup, and PID-file name
+- `runner_callbacks` — child runner and child-command builder
 - `artifact_adapter` — build/load payloads + report markdown
 - `notification_hooks` — started / finished / retry callbacks
-- `context_builder`, `runner_callbacks` — DI seams for execution
+- `context_builder` — DI seams for execution
 
 `EngineDefinition.build_queue_runtime()` is the canonical bridge from that
 declaration to `EngineQueueRuntime`: it installs the engine's queue functions,
 PID-file name, exact identity predicate, and queue-entry lookup in one place.
-Standalone xTB-MD uses this runtime directly. It does not route through the
-older `core.queue.internal_engine` module/facade/resolver stack; that package
-remains only for engines that have not yet completed their independent
-migration.
+All four engines use this runtime directly. The former
+`core.queue.internal_engine` module/facade/resolver stack has been removed.
 
 Each engine package exposes an `ENGINE_DEFINITION` constant:
 
@@ -204,17 +202,15 @@ Each engine package exposes an `ENGINE_DEFINITION` constant:
 | xtb    | `orca_auto.flow.engines.xtb.engine`     |
 | crest  | `orca_auto.flow.engines.crest.engine`   |
 
-`EngineDefinition.build_queue_runtime()` is the canonical parent-worker runtime
-factory. It binds the declared queue functions, complete engine-identity filter,
-entry lookup, and PID-file name in one place. CREST, workflow xTB, and ORCA use
-that runtime directly for queue discovery, admission, child launch, PID
-handling, shutdown/requeue, and orphan reconciliation; their child entrypoints
-use `core.queue.engine.child` directly. The xTB engine definition explicitly
-owns the workflow-aware runtime-root resolver, while publication repair and
-live child-PID slot protection remain xTB policies. Crash-generation rebind,
-retry, publication repair, durable engine-process recovery, cancellation, and
-terminal replay remain ORCA-owned policies. `core.queue.internal_engine` is a
-transitional implementation detail pending the final consumer cleanup.
+The shared parent-worker lifecycle lives under `core.queue.engine`; common
+worker execution dependencies live in `core.queue.engine.worker_execution`,
+and child entrypoints use `core.queue.engine.child` directly. The xTB engine
+definition explicitly owns the workflow-aware runtime-root resolver, while
+publication repair and live child-PID slot protection remain xTB policies.
+Crash-generation rebind, retry, publication repair, durable engine-process
+recovery, cancellation, and terminal replay remain ORCA-owned policies. Do not
+reintroduce an engine-local or generic forwarding facade around these canonical
+owners.
 
 `core/engines/registry.py` resolves an engine id to its `EngineDefinition` by
 importing the module and reading `ENGINE_DEFINITION`. This registry is the only

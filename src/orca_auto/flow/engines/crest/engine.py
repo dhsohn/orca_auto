@@ -25,7 +25,7 @@ ENGINE_DEFINITION = build_queue_engine_definition(
     job_started=notify_crest_job_started,
     job_finished=notify_crest_job_finished,
 )
-build_worker_child_command = ENGINE_DEFINITION.build_worker_child_command
+build_worker_child_command = ENGINE_DEFINITION.runner_callbacks.build_worker_child_command
 
 
 __all__ = ["ENGINE_DEFINITION", "build_worker_child_command"]

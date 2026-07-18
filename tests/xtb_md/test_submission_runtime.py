@@ -970,7 +970,7 @@ def test_fake_xtb_md_nvt_nve_smoke(
     assert list_slots(case.admission_root) == []
     assert not worker_pid_file_path(
         case.runs_root,
-        ENGINE_DEFINITION.worker_pid_file_name,
+        ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
     ).exists()
 
     execution_dir = Path(completed.metadata["execution_dir"])

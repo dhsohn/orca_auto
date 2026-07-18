@@ -179,18 +179,17 @@ src/orca_auto/
 묶는 frozen 데이터클래스 `EngineDefinition`을 정의합니다:
 
 - `load_config` — 엔진 설정 로더
-- `run_worker_child_job` — 자식 작업 러너
-- `queue_worker_module` / `build_worker_child_command` — 부모 워커 배선
-- `runtime_roots_for_cfg`, `queue_functions` — 큐 탐색
+- `queue_worker_module` — 부모 워커 진입점
+- `queue_functions` — runtime root, 큐 연산, 엔트리 조회, PID 파일 이름
+- `runner_callbacks` — 자식 러너와 자식 명령 빌더
 - `artifact_adapter` — 페이로드 빌드/로드 + 리포트 마크다운
 - `notification_hooks` — started / finished / retry 콜백
-- `context_builder`, `runner_callbacks` — 실행을 위한 DI 이음새
+- `context_builder` — 실행을 위한 DI 이음새
 
 `EngineDefinition.build_queue_runtime()`은 이 선언을 `EngineQueueRuntime`으로
 연결하는 canonical 경계입니다. 엔진의 큐 함수, PID 파일 이름, 정확한 identity
-predicate, 큐 항목 조회를 한 곳에서 설치합니다. 단독 xTB-MD는 이 런타임을 직접
-사용하며 기존 `core.queue.internal_engine`의 module/facade/resolver 스택을 거치지
-않습니다. 그 패키지는 아직 독립 이전을 마치지 않은 엔진에만 남아 있습니다.
+predicate, 큐 항목 조회를 한 곳에서 설치합니다. 네 엔진 모두 이 런타임을 직접
+사용하며 이전 `core.queue.internal_engine` module/facade/resolver 스택은 제거했습니다.
 
 각 엔진 패키지는 `ENGINE_DEFINITION` 상수를 노출합니다:
 
@@ -201,15 +200,13 @@ predicate, 큐 항목 조회를 한 곳에서 설치합니다. 단독 xTB-MD는 
 | xtb    | `orca_auto.flow.engines.xtb.engine`     |
 | crest  | `orca_auto.flow.engines.crest.engine`   |
 
-`EngineDefinition.build_queue_runtime()`은 canonical 부모 워커 런타임 팩토리입니다.
-선언된 큐 함수, 완전한 엔진 정체성 필터, 엔트리 조회, PID 파일 이름을 한곳에서
-결합합니다. CREST, workflow xTB, ORCA는 큐 탐색, 어드미션, 자식 실행, PID 처리,
-종료/재대기, 고아 복구에 이 런타임을 직접 사용하고, 자식 진입점은
-`core.queue.engine.child`를 직접 사용합니다. workflow-aware runtime-root resolver는
-엔진 정의가 명시적으로 소유하고 publication repair와 live child-PID slot 보호는 xTB
-정책으로 유지됩니다. crash-generation rebind, 재시도, publication repair, 내구성
-engine-process 복구, 취소, terminal replay는 ORCA 소유 정책으로 유지됩니다.
-`core.queue.internal_engine`은 최종 소비자 정리 전의 과도기적 구현 세부사항입니다.
+공용 부모 워커 라이프사이클은 `core.queue.engine`에, 공통 워커 실행 의존성은
+`core.queue.engine.worker_execution`에 두며 자식 진입점은 `core.queue.engine.child`를
+직접 사용합니다. workflow-aware runtime-root resolver는 엔진 정의가 명시적으로
+소유하고 publication repair와 live child-PID slot 보호는 xTB 정책으로 유지됩니다.
+crash-generation rebind, 재시도, publication repair, 내구성 engine-process 복구, 취소,
+terminal replay는 ORCA 소유 정책으로 유지됩니다. 이 canonical owner 주위에 엔진 로컬
+또는 범용 전달 facade를 다시 만들지 않습니다.
 
 `core/engines/registry.py`는 모듈을 임포트하고 `ENGINE_DEFINITION`을 읽어 엔진
 id를 `EngineDefinition`으로 해석합니다. 이 레지스트리가 엔진 id → 모듈 매핑을

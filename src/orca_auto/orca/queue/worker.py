@@ -2013,7 +2013,7 @@ def QueueWorker(
         max_concurrent=max_concurrent,
         deps=_queue_worker_deps(),
         hooks=_queue_worker_hooks(),
-        worker_pid_file_name=ENGINE_DEFINITION.worker_pid_file_name,
+        worker_pid_file_name=ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
         admission_root=_admission_root_for_cfg(worker_cfg),
         after_init=_after_orca_worker_init,
         before_run=_before_orca_worker_run,

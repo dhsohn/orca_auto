@@ -156,25 +156,19 @@ scenario는 public submission/worker 경로를 통과해야 하며 기대 종료
   xTB 실행 의미를 재사용하지 않습니다.
 - 최상위 별칭 패키지, 콘솔 스크립트 별칭, 대체 런타임 리더는 코드베이스에서 배제하세요.
 
-## 내부 엔진 워커
+## 엔진 워커
 
 xTB-MD, xTB, CREST, ORCA는 모두 공통 엔진 런타임을 통해 실행됩니다. 엔진 로컬 패키지는
 `EngineDefinition`을 노출해야 하며, 부모 워커는 `EngineQueueWorker`를 사용하고, 자식은
 `python -m orca_auto.core.engines.worker_child --engine <orca|xtb_md|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`을
 사용합니다.
-부모 워커 인프라는 `EngineDefinition.build_queue_runtime()`에서 구성하고 직접 자식
-진입점은 `core.queue.engine.child`를 사용하세요. ORCA는
-`core.queue.internal_engine`을 임포트하지 않아야 하며, 재시도, crash-generation
-복구, publication, terminal replay, 상태/리포트 정책은 `orca_auto.orca` 내부에
-유지합니다.
-
-이전을 마친 부모 런타임은 `EngineDefinition.build_queue_runtime()`으로 만들고 canonical
-`core.queue.engine`의 어드미션, 자식, 라이프사이클, 훅 계약을 직접 사용하세요.
-단독 xTB-MD, CREST, workflow xTB는 `core.queue.internal_engine`을 임포트하면 안 되며
-import-linter 계약이 완료된 경계를 강제합니다. workflow-root 탐색, publication fencing,
-live child-PID reconciliation은 명시적인 xTB 정책으로 유지하세요. canonical 런타임이
-이미 소유한 연산을 전달만 하는 엔진 로컬 모듈은 새로 만들지 마세요. 남은 엔진을
-이전한 뒤 임시 공유 패키지를 제거합니다.
+부모 워커 인프라는 `EngineDefinition.build_queue_runtime()`에서 구성하고 canonical
+`core.queue.engine`의 어드미션, 자식, 라이프사이클, 워커 실행, 훅 계약을 직접
+사용하세요. 이전 범용 internal-engine facade는 제거했습니다. workflow-root 탐색,
+publication fencing, live child-PID reconciliation은 명시적인 xTB 정책으로 유지하세요.
+재시도, crash-generation 복구, publication, terminal replay, 상태/리포트 정책은
+`orca_auto.orca` 내부에 유지합니다. canonical 런타임이 이미 소유한 연산을 전달만 하는
+모듈은 새로 만들지 마세요.
 
 단독 xTB-MD는 공용 `run-dir`와 queue/activity 표면만 노출합니다. 단일 시도,
 no-retry/no-resume 계약은 `orca_auto.xtb_md`에 두고, 직접 실행 CLI를 만들거나 그

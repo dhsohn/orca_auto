@@ -11,8 +11,8 @@ from orca_auto.flow.engines.xtb.engine import ENGINE_DEFINITION as XTB_ENGINE_DE
 
 
 def test_workflow_engine_workers_use_distinct_pid_files(tmp_path: Path) -> None:
-    crest_worker_pid_file = CREST_ENGINE_DEFINITION.worker_pid_file_name
-    xtb_worker_pid_file = XTB_ENGINE_DEFINITION.worker_pid_file_name
+    crest_worker_pid_file = CREST_ENGINE_DEFINITION.queue_functions.worker_pid_file_name
+    xtb_worker_pid_file = XTB_ENGINE_DEFINITION.queue_functions.worker_pid_file_name
     assert crest_worker_pid_file != xtb_worker_pid_file
 
     write_worker_pid_file(tmp_path, crest_worker_pid_file)

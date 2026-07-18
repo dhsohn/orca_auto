@@ -160,25 +160,20 @@ implementation-coupled tests. Treat it as an audit report, not a failure gate.
 - Keep top-level alias packages, console-script aliases, and alternate runtime
   readers out of the codebase
 
-## Internal Engine Workers
+## Engine Workers
 
 xTB-MD, xTB, CREST, and ORCA all execute through the common engine runtime. Engine-local
 packages should expose an `EngineDefinition`; parent workers use
 `EngineQueueWorker`, and children use
 `python -m orca_auto.core.engines.worker_child --engine <orca|xtb_md|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`.
 Build parent-worker infrastructure from `EngineDefinition.build_queue_runtime()`
-and use `core.queue.engine.child` for direct child entrypoints. ORCA must not
-import `core.queue.internal_engine`; keep its retry, crash-generation recovery,
-publication, terminal replay, and state/report policy inside `orca_auto.orca`.
-
-Build migrated parent runtimes with `EngineDefinition.build_queue_runtime()` and
-use the canonical `core.queue.engine` admission, child, lifecycle, and hook
-contracts directly. Standalone xTB-MD, CREST, and workflow xTB must not import
-`core.queue.internal_engine`; import-linter contracts enforce these completed
-cutovers. Keep workflow-root discovery, publication fencing, and live child-PID
-reconciliation as explicit xTB policy. Do not add an engine-local forwarding
-module when the canonical runtime already owns the operation. Migrate the
-remaining engine before removing the temporary shared package.
+and use the canonical `core.queue.engine` admission, child, lifecycle, worker
+execution, and hook contracts directly. The former generic internal-engine
+facade no longer exists. Keep workflow-root discovery, publication fencing, and
+live child-PID reconciliation as explicit xTB policy. Keep retry,
+crash-generation recovery, publication, terminal replay, and state/report
+policy inside `orca_auto.orca`. Do not add a forwarding module when the
+canonical runtime already owns the operation.
 
 Standalone xTB-MD exposes only the shared `run-dir` and queue/activity surface.
 Keep its single-attempt, no-retry/no-resume contract in `orca_auto.xtb_md`; do

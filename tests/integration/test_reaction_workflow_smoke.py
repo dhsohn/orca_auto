@@ -254,7 +254,7 @@ def _process_reaction_crest_queue(case: ReactionWorkflowSmokeCase, smoke_workspa
     assert list_slots(smoke_workspace.admission_root) == []
     assert not worker_pid_file_path(
         case.crest_root,
-        CREST_ENGINE_DEFINITION.worker_pid_file_name,
+        CREST_ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
     ).exists()
 
 
@@ -299,7 +299,7 @@ def _process_reaction_xtb_queue(case: ReactionWorkflowSmokeCase, smoke_workspace
     assert list_slots(smoke_workspace.admission_root) == []
     assert not worker_pid_file_path(
         case.xtb_root,
-        XTB_ENGINE_DEFINITION.worker_pid_file_name,
+        XTB_ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
     ).exists()
 
 
@@ -388,7 +388,7 @@ def _process_reaction_orca_queue(case: ReactionWorkflowSmokeCase) -> None:
     assert list_slots(smoke_workspace_path(case) / "admission") == []
     assert not worker_pid_file_path(
         case.orca_queue_root,
-        ORCA_ENGINE_DEFINITION.worker_pid_file_name,
+        ORCA_ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
     ).exists()
 
 

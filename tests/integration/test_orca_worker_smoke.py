@@ -155,7 +155,7 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert list_slots(admission_root) == []
     assert not worker_pid_file_path(
         allowed_root,
-        ENGINE_DEFINITION.worker_pid_file_name,
+        ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
     ).exists()
 
     execution_snapshot = completed.metadata["execution_snapshot"]
@@ -421,7 +421,7 @@ def test_orca_queue_worker_rejects_return_code_zero_without_normal_marker(
     assert list_slots(admission_root) == []
     assert not worker_pid_file_path(
         allowed_root,
-        ENGINE_DEFINITION.worker_pid_file_name,
+        ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
     ).exists()
 
     execution_snapshot = failed.metadata["execution_snapshot"]
@@ -510,7 +510,7 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     assert list_slots(admission_root) == []
     assert not worker_pid_file_path(
         allowed_root,
-        ENGINE_DEFINITION.worker_pid_file_name,
+        ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
     ).exists()
 
     execution_snapshot = completed.metadata["execution_snapshot"]

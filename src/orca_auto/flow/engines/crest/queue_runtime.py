@@ -711,7 +711,7 @@ def QueueWorker(
         max_concurrent=max_concurrent,
         deps=_queue_worker_deps(),
         hooks=_queue_worker_hooks(),
-        worker_pid_file_name=ENGINE_DEFINITION.worker_pid_file_name,
+        worker_pid_file_name=ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
         admission_root=_admission_root_for_cfg(cfg),
         after_init=_after_crest_worker_init,
         finalize_child_exit=_finalize_child_exit,

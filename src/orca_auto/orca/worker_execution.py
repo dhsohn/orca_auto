@@ -238,7 +238,7 @@ def _run_orca_job_for_entry(
     cfg: Any,
     context: OrcaWorkerExecutionContext,
     _queue_root: Path,
-    _options: _engine_execution.InternalWorkerOptions,
+    _options: _engine_execution.EngineWorkerOptions,
 ) -> int:
     execution_provenance = orca_execution_provenance(context.execution_snapshot)
 
@@ -515,8 +515,8 @@ def _worker_execution_spec(
     *,
     worker_config_path: str,
     admission_token: str | None,
-) -> _engine_execution.InternalEngineWorkerExecutionSpec:
-    return _engine_execution.build_internal_engine_worker_execution_spec(
+) -> _engine_execution.EngineWorkerExecutionSpec:
+    return _engine_execution.build_engine_worker_execution_spec(
         build_context=lambda cfg_obj, entry_obj: _build_execution_context(
             cfg_obj,
             entry_obj,
@@ -552,7 +552,7 @@ def process_dequeued_entry(
     del dependencies, prepare_running_job, register_running_job
     if queue_root is None:
         raise ValueError("queue_root is required for ORCA worker execution")
-    return _engine_execution.run_internal_engine_worker_entry_with_spec_factory_options(
+    return _engine_execution.run_engine_worker_entry_with_spec_factory_options(
         cfg,
         entry,
         queue_root=queue_root,

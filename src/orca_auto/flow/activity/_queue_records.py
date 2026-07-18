@@ -8,8 +8,8 @@ from orca_auto.core.engine_catalog import (
     find_engine_catalog_entry,
     get_engine_catalog_entry,
 )
+from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.paths.workflow import workflow_stage_dirnames_for_engine
-from orca_auto.core.queue.internal_engine import entry_matches_engine_identity
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.utils import normalize_text
 

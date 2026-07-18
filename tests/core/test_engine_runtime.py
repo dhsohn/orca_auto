@@ -10,18 +10,12 @@ from orca_auto.core.engines import (
     entry_matches_engine_identity,
     own_engine_accept_entry,
 )
-from orca_auto.core.engines.definitions import EngineDefinition, EngineQueueFunctions
+from orca_auto.core.engines.definitions import (
+    EngineDefinition,
+    EngineQueueFunctions,
+    EngineRunnerCallbacks,
+)
 from orca_auto.core.queue.engine.runtime import EngineQueueRuntime
-from orca_auto.core.queue.internal_engine import (
-    InternalEngineQueueModule,
-    InternalEngineQueueRuntime,
-    InternalEngineSpec,
-)
-from orca_auto.core.queue.internal_engine.worker_deps import (
-    InternalEngineQueueWorkerDeps,
-    InternalEngineQueueWorkerFacadeBindings,
-    build_late_bound_internal_engine_queue_worker_deps,
-)
 from orca_auto.core.queue.worker.execution_dependencies import (
     WorkerAdmissionDependencies,
     WorkerConfigDependencies,
@@ -104,36 +98,6 @@ def test_engine_identity_rejects_conflicting_present_labels() -> None:
     )
 
 
-def test_internal_engine_runtime_lists_only_exact_identity_rows(tmp_path: Path) -> None:
-    queue_root = tmp_path / "queue"
-    queue_root.mkdir()
-    own_entry = SimpleNamespace(
-        queue_id="q-own",
-        app_name="orca_auto_xtb",
-        task_id="xtb-1",
-        task_kind="xtb_sp",
-        engine="xtb",
-        metadata={"job_type": "sp"},
-    )
-    foreign_entry = SimpleNamespace(
-        queue_id="q-foreign",
-        app_name="orca_auto_crest",
-        task_id="crest-1",
-        task_kind="crest_conformer_search",
-        engine="crest",
-    )
-    unlabeled_entry = SimpleNamespace(queue_id="q-legacy")
-    runtime = InternalEngineQueueRuntime.create(
-        spec=InternalEngineSpec(engine="xtb", worker_pid_file_name="xtb_worker.pid"),
-        load_config=lambda value: value,
-        runtime_roots_for_cfg=lambda _cfg: (queue_root,),
-        list_queue=lambda _root: [foreign_entry, unlabeled_entry, own_entry],
-        dequeue_next=lambda _root: own_entry,
-    )
-
-    assert runtime.queue_entries_with_roots(SimpleNamespace()) == [(queue_root, own_entry)]
-
-
 def test_engine_queue_runtime_combines_roots_entries_and_next_entry(
     tmp_path: Path,
 ) -> None:
@@ -198,10 +162,7 @@ def test_engine_definition_builds_canonical_runtime_from_queue_contract(
     definition = EngineDefinition(
         engine="demo",
         load_config=lambda path: path,
-        run_worker_child_job=lambda **_kwargs: 0,
         queue_worker_module="orca_auto.core.engines.queue_worker",
-        worker_pid_file_name="definition.pid",
-        build_worker_child_command=lambda **_kwargs: ["worker"],
         queue_functions=EngineQueueFunctions(
             runtime_roots_for_cfg=lambda _cfg: (queue_root,),
             list_queue=lambda _root: [foreign_entry, own_entry],
@@ -209,6 +170,10 @@ def test_engine_definition_builds_canonical_runtime_from_queue_contract(
             dequeue_entry_if_pending=lambda _root, _queue_id, **_kwargs: own_entry,
             queue_entry_by_id=queue_entry_by_id,
             worker_pid_file_name="queue-contract.pid",
+        ),
+        runner_callbacks=EngineRunnerCallbacks(
+            run_worker_child_job=lambda **_kwargs: 0,
+            build_worker_child_command=lambda **_kwargs: ["worker"],
         ),
     )
 
@@ -225,17 +190,23 @@ def test_engine_definition_builds_canonical_runtime_from_queue_contract(
     ]
 
 
-def test_engine_definition_requires_queue_contract_for_runtime() -> None:
+def test_engine_definition_requires_worker_pid_in_queue_contract() -> None:
     definition = EngineDefinition(
         engine="demo",
         load_config=lambda path: path,
-        run_worker_child_job=lambda **_kwargs: 0,
         queue_worker_module="orca_auto.core.engines.queue_worker",
-        worker_pid_file_name="definition.pid",
-        build_worker_child_command=lambda **_kwargs: ["worker"],
+        queue_functions=EngineQueueFunctions(
+            runtime_roots_for_cfg=lambda _cfg: (),
+            list_queue=lambda _root: [],
+            dequeue_next=lambda _root: None,
+        ),
+        runner_callbacks=EngineRunnerCallbacks(
+            run_worker_child_job=lambda **_kwargs: 0,
+            build_worker_child_command=lambda **_kwargs: ["worker"],
+        ),
     )
 
-    with pytest.raises(ValueError, match="queue_functions is required"):
+    with pytest.raises(ValueError, match="worker_pid_file_name is required"):
         definition.build_queue_runtime()
 
 
@@ -300,116 +271,6 @@ def test_engine_queue_runtime_builds_child_worker_deps(tmp_path: Path) -> None:
             "admission_token": "slot-1",
         }
     ]
-
-
-def test_late_bound_internal_engine_queue_worker_deps_use_current_callbacks(
-    tmp_path: Path,
-) -> None:
-    calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
-
-    def record(name: str, result: Any = None) -> Any:
-        def _call(*args: Any, **kwargs: Any) -> Any:
-            calls.append((name, args, kwargs))
-            return result
-
-        return _call
-
-    release_slot_fn: Any = record("initial_release", "initial")
-    bindings = InternalEngineQueueWorkerFacadeBindings(
-        release_slot=lambda: release_slot_fn,
-        reserve_slot=lambda: record("reserve", "slot-1"),
-        start_background_process=lambda: record("start_background_process", "process"),
-        build_worker_child_command=lambda: record(
-            "build_worker_child_command",
-            ["worker"],
-        ),
-        activate_reserved_slot=lambda: record("activate_reserved_slot", object()),
-        terminate_process=lambda: record("terminate_process"),
-        mark_failed=lambda: record("mark_failed"),
-        handle_worker_start_error=lambda: record("handle_worker_start_error"),
-        finalize_completed_job=lambda: record("finalize_completed_job"),
-        finalize_child_exit=lambda: record("finalize_child_exit"),
-        reconcile_worker_state=lambda: record("reconcile_worker_state"),
-        list_queue=lambda: record("list_queue", []),
-        list_slots=lambda: record("list_slots", []),
-        reconcile_stale_slots=lambda: record("reconcile_stale_slots"),
-        mark_cancelled=lambda: record("mark_cancelled"),
-        requeue_running_entry=lambda: record("requeue_running_entry"),
-        default_config_path=lambda: record("default_config_path", "/tmp/default.yaml"),
-        find_queue_entry=lambda: record("find_queue_entry", "entry"),
-    )
-
-    deps = build_late_bound_internal_engine_queue_worker_deps(
-        bindings,
-        time_module=SimpleNamespace(sleep=lambda _seconds: None),
-    )
-    release_slot_fn = record("updated_release", "released")
-
-    assert deps.release_slot(tmp_path, "slot-1") == "released"
-    assert deps.default_config_path() == "/tmp/default.yaml"
-    assert deps.find_queue_entry is not None
-    assert deps.find_queue_entry(tmp_path, "queue-1") == "entry"
-    assert calls == [
-        ("updated_release", (tmp_path, "slot-1"), {}),
-        ("default_config_path", (), {}),
-        ("find_queue_entry", (tmp_path, "queue-1"), {}),
-    ]
-
-
-def test_internal_engine_queue_worker_deps_defaults_and_direct_construction(
-    tmp_path: Path,
-) -> None:
-    calls: list[str] = []
-
-    def record(name: str, result: Any = None) -> Any:
-        def _call(*_args: Any, **_kwargs: Any) -> Any:
-            calls.append(name)
-            return result
-
-        return _call
-
-    time_module = SimpleNamespace(sleep=lambda _seconds: None)
-    deps = InternalEngineQueueWorkerDeps(
-        release_slot=record("release", "released"),
-        reserve_slot=record("reserve", "reserved"),
-        start_background_process=record("start_process", "process"),
-        build_worker_child_command=record("build_command", ["worker"]),
-        config_path_for_worker=record("config_path", "/tmp/config.yaml"),
-        activate_reserved_slot=record("activate", object()),
-        terminate_process=record("terminate"),
-        mark_failed=record("mark_failed"),
-        handle_worker_start_error=record("start_error"),
-        finalize_completed_job=record("completed"),
-        finalize_child_exit=record("child_exit"),
-        reconcile_worker_state=record("reconcile_worker"),
-        list_queue=record("list_queue", []),
-        list_slots=record("list_slots", []),
-        reconcile_stale_slots=record("stale_slots"),
-        mark_cancelled=record("cancelled"),
-        requeue_running_entry=record("requeue"),
-        start_background_job_process_fn=record("start_job", "job-process"),
-        find_queue_entry=record("find_entry", "entry"),
-        time_module=time_module,
-    )
-
-    assert deps.time_module is time_module
-    assert deps.release_slot(tmp_path, "slot-1") == "released"
-    assert deps.default_config_path() == ""
-    assert deps.reconcile_orphaned_child_queue_entries("root") is None
-    assert deps.start_background_job_process_fn is not None
-    assert (
-        deps.start_background_job_process_fn(
-            config_path="/tmp/config.yaml",
-            queue_root=tmp_path,
-            entry=SimpleNamespace(queue_id="queue-1"),
-            admission_root=tmp_path,
-            admission_token="slot-1",
-        )
-        == "job-process"
-    )
-    assert deps.find_queue_entry is not None
-    assert deps.find_queue_entry(tmp_path, "queue-1") == "entry"
-    assert calls == ["release", "start_job", "find_entry"]
 
 
 def test_worker_process_dependency_callbacks_from_attrs_maps_common_callbacks() -> None:
@@ -949,286 +810,3 @@ def test_engine_queue_runtime_pidfile_command_reports_existing_worker(
 
     assert result == 1
     assert reports == [12345]
-
-
-def test_internal_engine_queue_module_preserves_worker_facade_contract(
-    tmp_path: Path,
-) -> None:
-    calls: list[tuple[str, Any]] = []
-
-    def record(name: str, result: Any = None) -> Any:
-        def _call(*args: Any, **kwargs: Any) -> Any:
-            calls.append((name, {"args": args, "kwargs": kwargs}))
-            return result
-
-        return _call
-
-    cfg = SimpleNamespace(
-        runtime=SimpleNamespace(
-            allowed_root=str(tmp_path),
-            admission_root=str(tmp_path / "admission"),
-            admission_limit=1,
-            max_concurrent=1,
-        )
-    )
-    entry = _internal_entry("xtb", "queue-1")
-    deps = InternalEngineQueueWorkerDeps(
-        release_slot=record("release_slot"),
-        reserve_slot=record("reserve_slot", "slot-1"),
-        start_background_process=record("start_background_process", "process"),
-        build_worker_child_command=record("build_worker_child_command", ["worker"]),
-        config_path_for_worker=record("config_path_for_worker", "/tmp/config.yaml"),
-        default_config_path=record("default_config_path", "/tmp/default.yaml"),
-        activate_reserved_slot=record("activate_reserved_slot", object()),
-        terminate_process=record("terminate_process"),
-        mark_failed=record("mark_failed"),
-        handle_worker_start_error=record("handle_worker_start_error"),
-        finalize_completed_job=record("finalize_completed_job"),
-        finalize_child_exit=record("finalize_child_exit"),
-        reconcile_worker_state=record("reconcile_worker_state"),
-        list_queue=record("list_queue", []),
-        list_slots=record("list_slots", []),
-        reconcile_stale_slots=record("reconcile_stale_slots"),
-        reconcile_orphaned_child_queue_entries=record("reconcile_orphaned"),
-        mark_cancelled=record("mark_cancelled"),
-        requeue_running_entry=record("requeue_running_entry"),
-        mark_recovery_pending=record("mark_recovery_pending"),
-        try_reserve_admission_slot=record("try_reserve_admission_slot", "slot-override"),
-        start_background_job_process_fn=record("start_background_job_process", "started"),
-        load_config=record("load_config", cfg),
-        read_worker_pid=record("read_worker_pid", None),
-        worker_class=record("QueueWorker", SimpleNamespace(run=lambda: 0)),
-        time_module=SimpleNamespace(sleep=lambda _seconds: None),
-    )
-    spec = InternalEngineSpec(
-        engine="xtb",
-        worker_job_module="orca_auto.flow.engines.xtb.execution",
-        worker_pid_file_name="engine_worker.pid",
-    )
-    module = InternalEngineQueueModule.create(
-        spec=spec,
-        load_config=lambda _config: cfg,
-        runtime_roots_for_cfg=lambda _cfg: (tmp_path,),
-        list_queue=lambda _root: [entry],
-        dequeue_next=lambda _root: entry,
-        poll_interval_seconds=5,
-        shutdown_grace_seconds=1.0,
-        deps=deps,
-    )
-
-    assert module.queue_worker_deps().dequeue_next_entry(cfg) == (tmp_path, entry)
-    assert module.queue_worker_hooks() is not None
-    assert module.try_reserve_admission_slot(cfg) == "slot-1"
-    assert (
-        module.start_background_job_process(
-            config_path="/tmp/config.yaml",
-            queue_root=tmp_path,
-            entry=entry,
-            admission_root=tmp_path / "admission",
-            admission_token="slot-1",
-        )
-        == "process"
-    )
-    assert module.config_path_for_worker(SimpleNamespace(config="/tmp/config.yaml")) == (
-        "/tmp/config.yaml"
-    )
-
-    override_cfg = SimpleNamespace(
-        runtime=SimpleNamespace(allowed_root=str(tmp_path), max_concurrent=3)
-    )
-    worker_calls: list[Any] = []
-
-    class OverrideWorker:
-        def __init__(self, cfg_obj: Any, config_path: str, **kwargs: Any) -> None:
-            worker_calls.append((cfg_obj, config_path, kwargs))
-
-        def run(self) -> int:
-            worker_calls.append("run")
-            return 5
-
-    assert (
-        module.run_pidfile_worker_command(
-            SimpleNamespace(config="/tmp/override.yaml"),
-            config_path_fn=lambda args: str(args.config),
-            load_config_fn=lambda _config_path: override_cfg,
-            read_worker_pid_fn=lambda _allowed_root: None,
-            max_concurrent_fn=lambda cfg_obj: cfg_obj.runtime.max_concurrent,
-            worker_factory=OverrideWorker,
-        )
-        == 5
-    )
-    assert worker_calls == [
-        (override_cfg, "/tmp/override.yaml", {"max_concurrent": 3}),
-        "run",
-    ]
-
-    assert any(name == "reserve_slot" for name, _payload in calls)
-    assert any(name == "start_background_process" for name, _payload in calls)
-
-
-def test_internal_engine_queue_module_create_from_definition_uses_queue_contract(
-    tmp_path: Path,
-) -> None:
-    queue_root = tmp_path / "queue-root"
-    queue_root.mkdir()
-    entry = _internal_entry("demo", "queue-1")
-    cfg = SimpleNamespace(
-        runtime=SimpleNamespace(
-            allowed_root=str(tmp_path),
-            admission_root=str(tmp_path / "admission"),
-            admission_limit=1,
-            max_concurrent=1,
-        )
-    )
-    started_commands: list[list[str]] = []
-
-    def start_background_process(command: list[str]) -> str:
-        started_commands.append(command)
-        return "process"
-
-    definition = EngineDefinition(
-        engine="demo",
-        load_config=lambda config_path: cfg if config_path == "/tmp/config.yaml" else None,
-        run_worker_child_job=lambda **_kwargs: 0,
-        queue_worker_module="orca_auto.core.engines.queue_worker",
-        worker_pid_file_name="definition_worker.pid",
-        build_worker_child_command=lambda **_kwargs: ["unused"],
-        queue_functions=EngineQueueFunctions(
-            runtime_roots_for_cfg=lambda _cfg: (queue_root,),
-            list_queue=lambda root: [entry] if Path(root) == queue_root else [],
-            dequeue_next=lambda root: entry if Path(root) == queue_root else None,
-            worker_pid_file_name="queue_functions_worker.pid",
-        ),
-    )
-    deps = InternalEngineQueueWorkerDeps(
-        time_module=SimpleNamespace(sleep=lambda _seconds: None),
-        release_slot=lambda _root, _token: None,
-        reserve_slot=lambda *_args, **_kwargs: "slot-1",
-        start_background_process=start_background_process,
-        build_worker_child_command=lambda **kwargs: ["worker", kwargs["queue_id"]],
-        config_path_for_worker=lambda args, *, default_config_path_fn: (
-            args.config or default_config_path_fn()
-        ),
-        default_config_path=lambda: "/tmp/default.yaml",
-        activate_reserved_slot=lambda *_args, **_kwargs: object(),
-        terminate_process=lambda _process: True,
-        mark_failed=lambda *_args, **_kwargs: None,
-        handle_worker_start_error=lambda *_args, **_kwargs: None,
-        finalize_completed_job=lambda *_args, **_kwargs: None,
-        finalize_child_exit=lambda *_args, **_kwargs: None,
-        reconcile_worker_state=lambda _worker: None,
-        list_queue=lambda _root: [entry],
-        list_slots=lambda _root: [],
-        reconcile_stale_slots=lambda _root: None,
-        reconcile_orphaned_child_queue_entries=lambda *_args, **_kwargs: None,
-        mark_cancelled=lambda *_args, **_kwargs: None,
-        requeue_running_entry=lambda *_args, **_kwargs: None,
-        mark_recovery_pending=lambda *_args, **_kwargs: None,
-    )
-
-    module = InternalEngineQueueModule.create_from_definition(
-        definition=definition,
-        spec=InternalEngineSpec(
-            engine="demo",
-            worker_job_module="orca_auto.demo.worker_execution",
-            worker_pid_file_name="spec_worker.pid",
-        ),
-        poll_interval_seconds=5,
-        shutdown_grace_seconds=1.0,
-        deps=deps,
-    )
-
-    assert module.runtime.runtime.worker_pid_file_name == "queue_functions_worker.pid"
-    assert module.queue_roots(cfg) == (queue_root,)
-    assert module.dequeue_next_entry(cfg) == (queue_root, entry)
-    assert module.try_reserve_admission_slot(cfg) == "slot-1"
-    assert (
-        module.start_background_job_process(
-            config_path="/tmp/config.yaml",
-            queue_root=queue_root,
-            entry=entry,
-            admission_root=tmp_path / "admission",
-            admission_token="slot-1",
-        )
-        == "process"
-    )
-    assert started_commands == [["worker", "queue-1"]]
-    assert module.config_path_for_worker(SimpleNamespace(config="")) == "/tmp/default.yaml"
-
-
-def test_internal_engine_queue_module_create_from_definition_accepts_queue_overrides(
-    tmp_path: Path,
-) -> None:
-    default_root = tmp_path / "default-root"
-    override_root = tmp_path / "override-root"
-    default_root.mkdir()
-    override_root.mkdir()
-    default_entry = _internal_entry("demo", "default")
-    override_entry = _internal_entry("demo", "override")
-    cfg = SimpleNamespace(
-        runtime=SimpleNamespace(
-            allowed_root=str(tmp_path),
-            admission_root=str(tmp_path / "admission"),
-            admission_limit=1,
-            max_concurrent=1,
-        )
-    )
-    definition = EngineDefinition(
-        engine="demo",
-        load_config=lambda _config_path: cfg,
-        run_worker_child_job=lambda **_kwargs: 0,
-        queue_worker_module="orca_auto.core.engines.queue_worker",
-        worker_pid_file_name="definition_worker.pid",
-        build_worker_child_command=lambda **_kwargs: ["worker"],
-        queue_functions=EngineQueueFunctions(
-            runtime_roots_for_cfg=lambda _cfg: (default_root,),
-            list_queue=lambda _root: [default_entry],
-            dequeue_next=lambda _root: default_entry,
-            worker_pid_file_name="queue_functions_worker.pid",
-        ),
-    )
-    deps = InternalEngineQueueWorkerDeps(
-        time_module=SimpleNamespace(sleep=lambda _seconds: None),
-        release_slot=lambda _root, _token: None,
-        reserve_slot=lambda *_args, **_kwargs: "slot-1",
-        start_background_process=lambda _command: "process",
-        build_worker_child_command=lambda **_kwargs: ["worker"],
-        config_path_for_worker=lambda args, *, default_config_path_fn: (
-            args.config or default_config_path_fn()
-        ),
-        default_config_path=lambda: "/tmp/default.yaml",
-        activate_reserved_slot=lambda *_args, **_kwargs: object(),
-        terminate_process=lambda _process: True,
-        mark_failed=lambda *_args, **_kwargs: None,
-        handle_worker_start_error=lambda *_args, **_kwargs: None,
-        finalize_completed_job=lambda *_args, **_kwargs: None,
-        finalize_child_exit=lambda *_args, **_kwargs: None,
-        reconcile_worker_state=lambda _worker: None,
-        list_queue=lambda _root: [override_entry],
-        list_slots=lambda _root: [],
-        reconcile_stale_slots=lambda _root: None,
-        reconcile_orphaned_child_queue_entries=lambda *_args, **_kwargs: None,
-        mark_cancelled=lambda *_args, **_kwargs: None,
-        requeue_running_entry=lambda *_args, **_kwargs: None,
-        mark_recovery_pending=lambda *_args, **_kwargs: None,
-    )
-
-    module = InternalEngineQueueModule.create_from_definition(
-        definition=definition,
-        spec=InternalEngineSpec(
-            engine="demo",
-            worker_job_module="orca_auto.demo.worker_execution",
-            worker_pid_file_name="spec_worker.pid",
-        ),
-        poll_interval_seconds=5,
-        shutdown_grace_seconds=1.0,
-        deps=deps,
-        runtime_roots_for_cfg=lambda _cfg: (override_root,),
-        list_queue=lambda _root: [override_entry],
-        dequeue_next=lambda _root: override_entry,
-    )
-
-    assert module.runtime.runtime.worker_pid_file_name == "queue_functions_worker.pid"
-    assert module.queue_roots(cfg) == (override_root,)
-    assert module.queue_entries_with_roots(cfg) == [(override_root, override_entry)]
-    assert module.dequeue_next_entry(cfg) == (override_root, override_entry)

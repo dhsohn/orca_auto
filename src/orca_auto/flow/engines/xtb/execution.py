@@ -117,8 +117,8 @@ _WORKER_CHILD_RUN_SPEC = WorkerChildRunSpec(
 
 WorkerConfigDependencies = _worker_dependencies.WorkerConfigDependencies
 WorkerAdmissionDependencies = _worker_dependencies.WorkerAdmissionDependencies
-WorkerTimingDependencies = _engine_execution.InternalWorkerTimingDependencies
-WorkerQueueDependencies = _engine_execution.InternalWorkerQueueDependencies
+WorkerTimingDependencies = _engine_execution.EngineWorkerTimingDependencies
+WorkerQueueDependencies = _engine_execution.EngineWorkerQueueDependencies
 
 
 @dataclass(frozen=True)
@@ -147,7 +147,7 @@ class WorkerTrackingDependencies:
 
 
 @dataclass(frozen=True)
-class WorkerRunnerDependencies(_engine_execution.InternalWorkerProcessDependencies):
+class WorkerRunnerDependencies(_engine_execution.EngineWorkerProcessDependencies):
     run_xtb_ranking_job: Callable[..., Any]
     start_xtb_job: Callable[..., Any]
     finalize_xtb_job: Callable[..., Any]
@@ -460,7 +460,7 @@ def _run_xtb_job_for_entry(
     register_running_job: Callable[[Any | None], None] | None,
 ) -> Any:
     runner_deps = dependencies.runner
-    options = _engine_execution.InternalWorkerOptions(
+    options = _engine_execution.EngineWorkerOptions(
         should_cancel=should_cancel,
         shutdown_requested=shutdown_requested,
         register_running_job=register_running_job,
@@ -502,7 +502,7 @@ def _run_xtb_job_for_entry(
                 **launch_kwargs,
             )
 
-        result = _engine_execution.run_internal_worker_process_job(
+        result = _engine_execution.run_engine_worker_process_job(
             context,
             options=options,
             process_deps=runner_deps,
@@ -708,8 +708,8 @@ def _worker_execution_spec(
         [Path, _XtbExecutionContext],
         Callable[[], bool] | None,
     ],
-) -> _engine_execution.InternalEngineWorkerExecutionSpec:
-    return _engine_execution.build_internal_engine_worker_execution_spec(
+) -> _engine_execution.EngineWorkerExecutionSpec:
+    return _engine_execution.build_engine_worker_execution_spec(
         build_context=lambda cfg_obj, entry_obj: _build_execution_context(
             cfg_obj,
             entry_obj,
@@ -752,8 +752,8 @@ def build_worker_adapter(
         [Path, _XtbExecutionContext],
         Callable[[], bool] | None,
     ],
-) -> _engine_execution.InternalEngineWorkerAdapter:
-    return _engine_execution.build_internal_engine_worker_adapter_from_spec(
+) -> _engine_execution.EngineWorkerAdapter:
+    return _engine_execution.build_engine_worker_adapter_from_spec(
         _worker_execution_spec(
             dependencies=dependencies,
             should_cancel_factory=should_cancel_factory,
@@ -777,7 +777,7 @@ def _run_worker_entry_lifecycle(
     worker_job_pid: int | None = None,
     emit_output: bool = False,
 ) -> Any:
-    return _engine_execution.run_internal_engine_worker_entry_with_spec_factory_options(
+    return _engine_execution.run_engine_worker_entry_with_spec_factory_options(
         cfg,
         entry,
         queue_root=queue_root,

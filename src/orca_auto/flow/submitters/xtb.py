@@ -4,7 +4,7 @@ from typing import Any
 
 from orca_auto.core import queue as _queue_store
 from orca_auto.core.commands import queue as _queue_commands
-from orca_auto.core.queue.internal_engine import own_engine_accept_entry
+from orca_auto.core.engines import own_engine_accept_entry
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.engines.xtb import queue_runtime as _queue_runtime
 from orca_auto.flow.engines.xtb import submission as _submission

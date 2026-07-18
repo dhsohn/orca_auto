@@ -58,13 +58,9 @@ class EngineCancellationHooks:
 class EngineDefinition:
     engine: str
     load_config: Callable[[str], Any]
-    run_worker_child_job: Callable[..., int]
     queue_worker_module: str
-    worker_pid_file_name: str
-    build_worker_child_command: Callable[..., list[str]]
-    runtime_roots_for_cfg: Callable[[Any], tuple[Path, ...]] | None = None
-    queue_functions: EngineQueueFunctions | None = None
-    runner_callbacks: EngineRunnerCallbacks | None = None
+    queue_functions: EngineQueueFunctions
+    runner_callbacks: EngineRunnerCallbacks
     context_builder: EngineContextBuilder | None = None
     artifact_adapter: EngineArtifactAdapter | None = None
     notification_hooks: EngineNotificationHooks | None = None
@@ -76,11 +72,7 @@ class EngineDefinition:
         from orca_auto.core.queue.engine.runtime import EngineQueueRuntime
 
         queue_functions = self.queue_functions
-        if queue_functions is None:
-            raise ValueError(
-                "EngineDefinition.queue_functions is required for queue runtime support"
-            )
-        worker_pid_file_name = queue_functions.worker_pid_file_name or self.worker_pid_file_name
+        worker_pid_file_name = queue_functions.worker_pid_file_name
         if not worker_pid_file_name:
             raise ValueError("worker_pid_file_name is required for queue runtime support")
         return EngineQueueRuntime(
@@ -109,13 +101,8 @@ class EngineDefinition:
         queue_id: str,
         admission_token: str | None = None,
     ) -> int:
-        runner = (
-            self.runner_callbacks.run_worker_child_job
-            if self.runner_callbacks is not None
-            else self.run_worker_child_job
-        )
         return int(
-            runner(
+            self.runner_callbacks.run_worker_child_job(
                 config_path=config_path,
                 queue_root=queue_root,
                 queue_id=queue_id,
