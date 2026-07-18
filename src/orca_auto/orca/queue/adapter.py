@@ -9,8 +9,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
+from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue import store as _queue_store
-from orca_auto.core.queue.internal_engine import entry_matches_engine_identity
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_KEY,

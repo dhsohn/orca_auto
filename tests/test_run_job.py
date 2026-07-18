@@ -103,6 +103,26 @@ def test_build_worker_child_command_uses_queue_identity(tmp_path: Path) -> None:
     assert "--admission-root" not in command
 
 
+def test_orca_worker_child_spec_requires_running_complete_identity() -> None:
+    ready = worker_job._WORKER_CHILD_RUN_SPEC.entry_ready_fn
+    assert ready is not None
+    base = {
+        "queue_id": "queue-1",
+        "app_name": "orca_auto_orca",
+        "task_id": "task-1",
+        "task_kind": "orca_run_inp",
+        "engine": "orca",
+        "status": QueueStatus.RUNNING,
+        "metadata": {},
+    }
+
+    assert ready(SimpleNamespace(**base))
+    assert not ready(SimpleNamespace(**{**base, "status": QueueStatus.PENDING}))
+    assert not ready(SimpleNamespace(**{**base, "engine": "xtb"}))
+    assert not ready(SimpleNamespace(**{**base, "task_kind": "orca_unknown"}))
+    assert not ready(SimpleNamespace(**{**base, "queue_id": ""}))
+
+
 def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -19,6 +19,8 @@ from orca_auto.flow.engines.xtb.engine import ENGINE_DEFINITION as XTB_ENGINE_DE
 from orca_auto.flow.orchestration import advance_workflow
 from orca_auto.flow.registry import sync_workflow_registry
 from orca_auto.flow.state import load_workflow_payload, resolve_workflow_workspace, workflow_summary
+from orca_auto.orca.config import load_config as load_orca_config
+from orca_auto.orca.engine import ENGINE_DEFINITION as ORCA_ENGINE_DEFINITION
 from orca_auto.orca.queue import worker as orca_queue_cmd
 from tests.integration.smoke_support import (
     assert_orca_job_publications,
@@ -374,7 +376,7 @@ def _submit_reaction_orca_stage(
 
 
 def _process_reaction_orca_queue(case: ReactionWorkflowSmokeCase) -> None:
-    cfg = orca_queue_cmd.load_config(str(case.config_path))
+    cfg = load_orca_config(str(case.config_path))
     worker = orca_queue_cmd.QueueWorker(
         cfg,
         str(case.config_path),
@@ -386,7 +388,7 @@ def _process_reaction_orca_queue(case: ReactionWorkflowSmokeCase) -> None:
     assert list_slots(smoke_workspace_path(case) / "admission") == []
     assert not worker_pid_file_path(
         case.orca_queue_root,
-        orca_queue_cmd.WORKER_PID_FILE,
+        ORCA_ENGINE_DEFINITION.worker_pid_file_name,
     ).exists()
 
 

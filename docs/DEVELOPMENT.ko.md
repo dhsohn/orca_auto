@@ -162,6 +162,11 @@ xTB-MD, xTB, CREST, ORCA는 모두 공통 엔진 런타임을 통해 실행됩�
 `EngineDefinition`을 노출해야 하며, 부모 워커는 `EngineQueueWorker`를 사용하고, 자식은
 `python -m orca_auto.core.engines.worker_child --engine <orca|xtb_md|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`을
 사용합니다.
+부모 워커 인프라는 `EngineDefinition.build_queue_runtime()`에서 구성하고 직접 자식
+진입점은 `core.queue.engine.child`를 사용하세요. ORCA는
+`core.queue.internal_engine`을 임포트하지 않아야 하며, 재시도, crash-generation
+복구, publication, terminal replay, 상태/리포트 정책은 `orca_auto.orca` 내부에
+유지합니다.
 
 이전을 마친 부모 런타임은 `EngineDefinition.build_queue_runtime()`으로 만들고 canonical
 `core.queue.engine`의 어드미션, 자식, 라이프사이클, 훅 계약을 직접 사용하세요.

@@ -29,6 +29,7 @@ from orca_auto.core.admission import (
 )
 from orca_auto.core.config.schema import resolved_admission_limit
 from orca_auto.core.engine_catalog import get_engine_catalog_entry
+from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.engines.queue_worker import (
     EngineQueueWorker,
     build_engine_queue_worker,
@@ -37,15 +38,9 @@ from orca_auto.core.engines.queue_worker import (
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue.engine.execution import coerce_resource_request
 from orca_auto.core.queue.enqueue_publication import repair_enqueue_publication
-from orca_auto.core.queue.internal_engine import (
-    InternalEngineQueueModule,
-    InternalEngineQueueWorkerFacadeBindings,
-    InternalEngineSpec,
-    build_late_bound_internal_engine_queue_worker_deps,
-    entry_matches_engine_identity,
-)
 from orca_auto.core.queue.lifecycle import (
     EngineQueueProcessLifecycleHooks,
+    attach_started_process_metadata,
     cancel_running_process_job,
     mark_terminal_process_queue_entry_with_result,
 )
@@ -81,7 +76,6 @@ from orca_auto.core.statuses import (
     STATUS_RUNNING,
 )
 from orca_auto.orca.worker_execution import (
-    WORKER_JOB_MODULE,
     BackgroundRunJobProcess,
     build_worker_child_command,
 )
@@ -93,7 +87,7 @@ from ..attempt.reporting import (
     last_out_path_from_state,
     mark_finished_notification_sent,
 )
-from ..config import AppConfig, load_config
+from ..config import AppConfig
 from ..engine import ENGINE_DEFINITION
 from ..execution_binding import orca_execution_provenance
 from ..inp_rewriter import read_resource_request_from_input
@@ -169,14 +163,7 @@ DEFAULT_MAX_CONCURRENT = 4
 POLL_INTERVAL_SECONDS = 5
 WORKER_SHUTDOWN_GRACE_SECONDS = 10.0
 
-# PID file for the daemon
-WORKER_PID_FILE = "queue_worker.pid"
-_ENGINE_SPEC = InternalEngineSpec(
-    engine="orca",
-    worker_job_module=WORKER_JOB_MODULE,
-    worker_pid_file_name=WORKER_PID_FILE,
-)
-_ENGINE_ADMISSION = _ENGINE_SPEC.admission()
+_ENGINE_RUNTIME = ENGINE_DEFINITION.build_queue_runtime()
 
 _ACTIVE_QUEUE_STATUSES = frozenset({"pending", "running"})
 _TERMINAL_QUEUE_STATUSES = frozenset({STATUS_COMPLETED, STATUS_CANCELLED, STATUS_FAILED})
@@ -267,77 +254,33 @@ def _default_config_path() -> str:
     return ""
 
 
-def config_path_for_worker(args: Any, *, default_config_path_fn: Any) -> str:
-    return str(getattr(args, "config", "") or default_config_path_fn())
-
-
 def _list_queue_for_runtime(root: str | Path) -> list[QueueEntry]:
     return list_queue(Path(root))
 
 
-def _mark_recovery_pending_entry(*_args: Any, **_kwargs: Any) -> None:
-    return None
-
-
-def _runtime_facade_deps() -> Any:
-    return build_late_bound_internal_engine_queue_worker_deps(
-        InternalEngineQueueWorkerFacadeBindings(
-            release_slot=lambda: release_slot,
-            reserve_slot=lambda: _reserve_orca_worker_slot,
-            start_background_process=lambda: start_background_process,
-            build_worker_child_command=lambda: build_worker_child_command,
-            config_path_for_worker=lambda: config_path_for_worker,
-            default_config_path=lambda: _default_config_path,
-            activate_reserved_slot=lambda: activate_reserved_slot,
-            terminate_process=lambda: _terminate_process,
-            mark_failed=lambda: mark_failed,
-            handle_worker_start_error=lambda: _handle_worker_start_error,
-            finalize_completed_job=lambda: _finalize_completed_job,
-            finalize_child_exit=lambda: _finalize_child_exit,
-            reconcile_worker_state=lambda: _reconcile_worker_state,
-            list_queue=lambda: _list_queue_for_runtime,
-            list_slots=lambda: list_slots,
-            reconcile_stale_slots=lambda: reconcile_stale_slots,
-            mark_cancelled=lambda: mark_cancelled,
-            requeue_running_entry=lambda: requeue_running_entry,
-            mark_recovery_pending=lambda: _mark_recovery_pending_entry,
-            try_reserve_admission_slot=lambda: _try_reserve_admission_slot,
-            start_background_job_process=lambda: _start_background_job_process,
-            load_config=lambda: load_config,
-            read_worker_pid=lambda: read_worker_pid,
-            worker_class=lambda: QueueWorker,
-            on_worker_process_started=lambda: _on_worker_process_started,
-            shutdown_running_job=lambda: _shutdown_running_job,
-            before_shutdown_all=lambda: _before_shutdown_all,
-        ),
-        time_module=time,
-    )
-
-
-_queue_module = InternalEngineQueueModule.create_from_definition(
-    definition=ENGINE_DEFINITION,
-    spec=_ENGINE_SPEC,
-    poll_interval_seconds=POLL_INTERVAL_SECONDS,
-    shutdown_grace_seconds=WORKER_SHUTDOWN_GRACE_SECONDS,
-    deps=_runtime_facade_deps(),
-)
-_engine_runtime = _queue_module.runtime
-
-
 def queue_roots(cfg: AppConfig) -> tuple[Path, ...]:
-    return _queue_module.queue_roots(cfg)
+    return _ENGINE_RUNTIME.queue_roots(cfg)
 
 
 def queue_entries_with_roots(cfg: AppConfig) -> list[tuple[Path, Any]]:
-    return _queue_module.queue_entries_with_roots(cfg)
+    return _ENGINE_RUNTIME.queue_entries_with_roots(
+        cfg,
+        list_queue_fn=_list_queue_for_runtime,
+    )
 
 
 def _queue_worker_deps() -> Any:
-    return _queue_module.queue_worker_deps()
+    return _ENGINE_RUNTIME.child_worker_deps(
+        poll_interval_seconds=POLL_INTERVAL_SECONDS,
+        time_module=time,
+        release_slot_fn=lambda root, token: release_slot(root, token),
+        start_background_job_process_fn=lambda **kwargs: _start_background_job_process(**kwargs),
+        try_reserve_admission_slot_fn=lambda cfg: _try_reserve_admission_slot(cfg),
+    )
 
 
 def _admission_root_for_cfg(cfg: AppConfig) -> str:
-    return _queue_module.admission_root(cfg)
+    return _ENGINE_RUNTIME.admission_root(cfg)
 
 
 def _reserve_orca_worker_slot(root: str | Path, limit: int, **kwargs: Any) -> str | None:
@@ -354,7 +297,11 @@ def _reserve_orca_worker_slot(root: str | Path, limit: int, **kwargs: Any) -> st
 
 
 def _try_reserve_admission_slot(cfg: AppConfig) -> str | None:
-    admission_token = _queue_module.try_reserve_admission_slot(cfg)
+    admission_token = _ENGINE_RUNTIME.reserve_admission_slot(
+        cfg,
+        engine="orca",
+        reserve_slot_fn=_reserve_orca_worker_slot,
+    )
     if admission_token is None:
         logger.debug(
             "Queue worker admission paused: admission slots are full (admission_limit=%d)",
@@ -813,10 +760,10 @@ def _on_worker_process_started(
     process: BackgroundRunJobProcess,
     admission_token: str,
 ) -> bool:
-    return _ENGINE_ADMISSION.attach_started_process_metadata(
-        worker=worker,
-        queue_root=queue_root,
-        entry=entry,
+    return attach_started_process_metadata(
+        worker,
+        queue_root,
+        entry,
         process=process,
         admission_token=admission_token,
         hooks=_orca_worker_lifecycle_hooks(),
@@ -1603,7 +1550,21 @@ def _before_shutdown_all(_worker: Any, running_count: int) -> None:
 
 
 def _queue_worker_hooks() -> Any:
-    return _queue_module.queue_worker_hooks()
+    return _ENGINE_RUNTIME.child_worker_hooks(
+        engine="orca",
+        handle_worker_start_error_fn=_handle_worker_start_error,
+        finalize_completed_job_fn=_finalize_completed_job,
+        finalize_child_exit_fn=_finalize_child_exit,
+        reconcile_worker_state_fn=_reconcile_worker_state,
+        activate_reserved_slot_fn=lambda *args, **kwargs: activate_reserved_slot(*args, **kwargs),
+        terminate_process_fn=lambda process: _terminate_process(process),
+        mark_failed_fn=lambda *args, **kwargs: mark_failed(*args, **kwargs),
+        shutdown_grace_seconds=WORKER_SHUTDOWN_GRACE_SECONDS,
+        sleep_fn=lambda seconds: time.sleep(seconds),
+        on_worker_process_started_fn=_on_worker_process_started,
+        shutdown_running_job_fn=_shutdown_running_job,
+        before_shutdown_all_fn=_before_shutdown_all,
+    )
 
 
 def _after_orca_worker_init(worker: EngineQueueWorker) -> None:
@@ -2052,7 +2013,7 @@ def QueueWorker(
         max_concurrent=max_concurrent,
         deps=_queue_worker_deps(),
         hooks=_queue_worker_hooks(),
-        worker_pid_file_name=WORKER_PID_FILE,
+        worker_pid_file_name=ENGINE_DEFINITION.worker_pid_file_name,
         admission_root=_admission_root_for_cfg(worker_cfg),
         after_init=_after_orca_worker_init,
         before_run=_before_orca_worker_run,
@@ -2072,4 +2033,4 @@ def QueueWorker(
 
 def read_worker_pid(allowed_root: Path) -> int | None:
     """Read the worker PID file. Returns None if not found or stale."""
-    return _queue_module.read_worker_pid(allowed_root)
+    return _ENGINE_RUNTIME.read_worker_pid(allowed_root)

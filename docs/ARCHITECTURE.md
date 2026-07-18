@@ -206,14 +206,15 @@ Each engine package exposes an `ENGINE_DEFINITION` constant:
 
 `EngineDefinition.build_queue_runtime()` is the canonical parent-worker runtime
 factory. It binds the declared queue functions, complete engine-identity filter,
-entry lookup, and PID-file name in one place. CREST and workflow xTB use that
-runtime directly for queue discovery, admission, child launch,
-shutdown/requeue, and orphan reconciliation; their child entrypoints use
-`core.queue.engine.child` directly. The xTB engine definition explicitly owns
-the workflow-aware runtime-root resolver, while publication repair and live
-child-PID slot protection remain xTB policies. `core.queue.internal_engine`
-remains a transitional implementation detail only for engine paths that have
-not yet completed this migration.
+entry lookup, and PID-file name in one place. CREST, workflow xTB, and ORCA use
+that runtime directly for queue discovery, admission, child launch, PID
+handling, shutdown/requeue, and orphan reconciliation; their child entrypoints
+use `core.queue.engine.child` directly. The xTB engine definition explicitly
+owns the workflow-aware runtime-root resolver, while publication repair and
+live child-PID slot protection remain xTB policies. Crash-generation rebind,
+retry, publication repair, durable engine-process recovery, cancellation, and
+terminal replay remain ORCA-owned policies. `core.queue.internal_engine` is a
+transitional implementation detail pending the final consumer cleanup.
 
 `core/engines/registry.py` resolves an engine id to its `EngineDefinition` by
 importing the module and reading `ENGINE_DEFINITION`. This registry is the only
@@ -235,7 +236,8 @@ python -m orca_auto.core.engines.worker_child \
 The parent worker (`EngineQueueWorker`) reserves an admission slot, spawns this
 child, and finalizes the terminal queue result after the child exits. ORCA keeps
 its richer domain behavior (state machine, retry, reports) inside
-`orca_auto.orca`, but the *lifecycle scaffolding* around it is shared.
+`orca_auto.orca`, while its worker-child entrypoint uses the canonical
+`core.queue.engine.child` contract directly.
 
 For standalone xTB-MD, `xtb_md/queue_runtime.py` assembles worker dependencies
 and lifecycle hooks directly from the runtime built by `ENGINE_DEFINITION`.

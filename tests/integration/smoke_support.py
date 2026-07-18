@@ -19,6 +19,7 @@ from orca_auto.flow.runtime import (
     workflow_needs_terminal_sync,
 )
 from orca_auto.flow.state import load_workflow_payload, workflow_has_active_downstream
+from orca_auto.orca.config import load_config as load_orca_config
 from orca_auto.orca.queue import worker as orca_queue_worker
 
 
@@ -135,7 +136,7 @@ def pump_workflow(
         max_concurrent=1,
     )
     orca_worker = orca_queue_worker.QueueWorker(
-        orca_queue_worker.load_config(str(config_path)),
+        load_orca_config(str(config_path)),
         str(config_path),
         max_concurrent=1,
     )

@@ -166,6 +166,10 @@ xTB-MD, xTB, CREST, and ORCA all execute through the common engine runtime. Engi
 packages should expose an `EngineDefinition`; parent workers use
 `EngineQueueWorker`, and children use
 `python -m orca_auto.core.engines.worker_child --engine <orca|xtb_md|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`.
+Build parent-worker infrastructure from `EngineDefinition.build_queue_runtime()`
+and use `core.queue.engine.child` for direct child entrypoints. ORCA must not
+import `core.queue.internal_engine`; keep its retry, crash-generation recovery,
+publication, terminal replay, and state/report policy inside `orca_auto.orca`.
 
 Build migrated parent runtimes with `EngineDefinition.build_queue_runtime()` and
 use the canonical `core.queue.engine` admission, child, lifecycle, and hook

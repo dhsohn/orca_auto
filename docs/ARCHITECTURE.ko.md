@@ -203,12 +203,13 @@ predicate, 큐 항목 조회를 한 곳에서 설치합니다. 단독 xTB-MD는 
 
 `EngineDefinition.build_queue_runtime()`은 canonical 부모 워커 런타임 팩토리입니다.
 선언된 큐 함수, 완전한 엔진 정체성 필터, 엔트리 조회, PID 파일 이름을 한곳에서
-결합합니다. CREST와 workflow xTB는 큐 탐색, 어드미션, 자식 실행, 종료/재대기, 고아
-복구에 이 런타임을 직접 사용하고, 자식 진입점은 `core.queue.engine.child`를 직접
-사용합니다. workflow-aware runtime-root resolver는 엔진 정의가 명시적으로 소유하고,
-publication repair와 live child-PID slot 보호는 xTB 정책으로 유지됩니다.
-`core.queue.internal_engine`은 아직 이전을 마치지 않은 엔진 경로만을 위한 과도기적
-구현 세부사항으로 남습니다.
+결합합니다. CREST, workflow xTB, ORCA는 큐 탐색, 어드미션, 자식 실행, PID 처리,
+종료/재대기, 고아 복구에 이 런타임을 직접 사용하고, 자식 진입점은
+`core.queue.engine.child`를 직접 사용합니다. workflow-aware runtime-root resolver는
+엔진 정의가 명시적으로 소유하고 publication repair와 live child-PID slot 보호는 xTB
+정책으로 유지됩니다. crash-generation rebind, 재시도, publication repair, 내구성
+engine-process 복구, 취소, terminal replay는 ORCA 소유 정책으로 유지됩니다.
+`core.queue.internal_engine`은 최종 소비자 정리 전의 과도기적 구현 세부사항입니다.
 
 `core/engines/registry.py`는 모듈을 임포트하고 `ENGINE_DEFINITION`을 읽어 엔진
 id를 `EngineDefinition`으로 해석합니다. 이 레지스트리가 엔진 id → 모듈 매핑을
@@ -229,8 +230,8 @@ python -m orca_auto.core.engines.worker_child \
 
 부모 워커(`EngineQueueWorker`)는 어드미션 슬롯을 예약하고 이 자식을 생성하며,
 자식이 종료된 후 최종 큐 결과를 확정합니다. ORCA는 더 풍부한 도메인 동작(상태
-머신, 재시도, 리포트)을 `orca_auto.orca` 내부에 유지하지만, 그 주위의
-*라이프사이클 골격*은 공유됩니다.
+머신, 재시도, 리포트)을 `orca_auto.orca` 내부에 유지하며, 워커 자식 진입점은
+canonical `core.queue.engine.child` 계약을 직접 사용합니다.
 
 단독 xTB-MD의 `xtb_md/queue_runtime.py`는 `ENGINE_DEFINITION`이 만든 런타임에서
 워커 의존성과 라이프사이클 훅을 직접 조립합니다. publication-repair gate와 엄격한
