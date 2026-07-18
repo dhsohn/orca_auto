@@ -2,17 +2,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from orca_auto.core.queue.priority import normalize_queue_priority
+from orca_auto.core.utils import mapping_or_empty
+from orca_auto.flow.contracts import CrestDownstreamPolicy
+from orca_auto.flow.endpoint_pairing import EndpointPairingPolicy
 from orca_auto.flow.manifest import require_crest_candidate_count
 from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin, strict_int
-from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
-from orca_auto.flow.orchestration.deps import (
-    orchestration_context as _orchestration_context,
-)
 from orca_auto.flow.orchestration.reaction_orca_materialization import (
     append_reaction_orca_stages_impl as append_reaction_orca_stages_impl,
+)
+from orca_auto.flow.orchestration.services import (
+    OrchestrationServices,
+    resolve_orchestration_services,
+)
+from orca_auto.flow.orchestration.stage_builders import new_xtb_stage_impl
+from orca_auto.flow.orchestration.stage_runtime.crest import (
+    completed_crest_roles_impl,
+    completed_crest_stage_impl,
 )
 from orca_auto.flow.orchestration.stage_views import (
     WorkflowStageView,
@@ -30,16 +38,15 @@ class _ReactionXtbStagePlan:
     pairing_enabled: bool
 
 
-def _xtb_manifest_with_charge_spin(o: Any, params: dict[str, Any]) -> dict[str, Any] | None:
+def _xtb_manifest_with_charge_spin(params: dict[str, Any]) -> dict[str, Any] | None:
     return manifest_with_charge_spin(
         charge=params.get("charge"),
         multiplicity=params.get("multiplicity"),
-        manifest_overrides=o.stages.support._coerce_mapping(params.get("xtb_job_manifest")),
+        manifest_overrides=mapping_or_empty(params.get("xtb_job_manifest")),
     )
 
 
 def _record_endpoint_pairing_summary(
-    o: Any,
     payload: dict[str, Any],
     pairing_policy: Any,
     *,
@@ -57,7 +64,7 @@ def _record_endpoint_pairing_summary(
         "selected_pair_count": selected_pair_count,
     }
     if selected_pair_count:
-        _clear_workflow_error_scope(o, payload_metadata, {"reaction_ts_search_endpoint_pairing"})
+        _clear_workflow_error_scope(payload_metadata, {"reaction_ts_search_endpoint_pairing"})
 
 
 def _record_endpoint_pairing_failure(payload: dict[str, Any]) -> None:
@@ -92,19 +99,19 @@ def _record_crest_handoff_failure(
 
 
 def _completed_reaction_crest_contracts(
-    o: Any,
+    services: OrchestrationServices,
     payload: dict[str, Any],
     *,
     crest_config: str | None,
 ) -> tuple[Any, Any] | None:
-    roles = o.stages.runtime._completed_crest_roles(payload)
+    roles = completed_crest_roles_impl(payload)
     if set(roles.keys()) != {"reactant", "product"}:
         return None
-    reactant_contract = o.stages.runtime._completed_crest_stage(
-        roles["reactant"], crest_config=crest_config
+    reactant_contract = completed_crest_stage_impl(
+        roles["reactant"], crest_config=crest_config, services=services
     )
-    product_contract = o.stages.runtime._completed_crest_stage(
-        roles["product"], crest_config=crest_config
+    product_contract = completed_crest_stage_impl(
+        roles["product"], crest_config=crest_config, services=services
     )
     missing_roles = tuple(
         role
@@ -121,30 +128,30 @@ def _completed_reaction_crest_contracts(
 
 
 def _reaction_xtb_stage_plan(
-    o: Any,
+    services: OrchestrationServices,
     payload: dict[str, Any],
     *,
     crest_config: str | None,
 ) -> _ReactionXtbStagePlan | None:
     contracts = _completed_reaction_crest_contracts(
-        o,
+        services,
         payload,
         crest_config=crest_config,
     )
     if contracts is None:
         return None
     reactant_contract, product_contract = contracts
-    params = _request_params(o, payload)
+    params = _request_params(payload)
     max_crest_candidates = require_crest_candidate_count(
         required_stage_budget(params, "max_crest_candidates"),
     )
-    reactant_inputs = o.engines.select_crest_downstream_inputs(
+    reactant_inputs = services.engines.select_crest_downstream_inputs(
         reactant_contract,
-        policy=o.contracts.CrestDownstreamPolicy.build(max_candidates=max_crest_candidates),
+        policy=CrestDownstreamPolicy.build(max_candidates=max_crest_candidates),
     )
-    product_inputs = o.engines.select_crest_downstream_inputs(
+    product_inputs = services.engines.select_crest_downstream_inputs(
         product_contract,
-        policy=o.contracts.CrestDownstreamPolicy.build(max_candidates=max_crest_candidates),
+        policy=CrestDownstreamPolicy.build(max_candidates=max_crest_candidates),
     )
     missing_roles = tuple(
         role
@@ -159,7 +166,7 @@ def _reaction_xtb_stage_plan(
         field="max_xtb_stages",
         minimum=1,
     )
-    pairing_policy = o.contracts.EndpointPairingPolicy.from_raw(
+    pairing_policy = EndpointPairingPolicy.from_raw(
         params.get("endpoint_pairing"),
         default_max_pairs=max_xtb_stages,
     )
@@ -172,7 +179,7 @@ def _reaction_xtb_stage_plan(
         ),
     )
     endpoint_pairs = tuple(
-        o.engines.select_endpoint_pairs(
+        services.engines.select_endpoint_pairs(
             reactant_inputs,
             product_inputs,
             policy=pairing_policy,
@@ -180,7 +187,6 @@ def _reaction_xtb_stage_plan(
     )
     candidate_pair_count = len(reactant_inputs) * len(product_inputs)
     _record_endpoint_pairing_summary(
-        o,
         payload,
         pairing_policy,
         candidate_pair_count=candidate_pair_count,
@@ -201,20 +207,20 @@ def append_reaction_xtb_stages_impl(
     *,
     workspace_dir: Path,
     crest_config: str | None,
-    deps: OrchestrationDeps | None = None,
+    services: OrchestrationServices | None = None,
 ) -> bool:
-    o = _orchestration_context(deps)
-    if _engine_stages(o, payload, "xtb"):
+    resolved = resolve_orchestration_services(services)
+    if _engine_stages(payload, "xtb"):
         return False
     del workspace_dir
-    plan = _reaction_xtb_stage_plan(o, payload, crest_config=crest_config)
+    plan = _reaction_xtb_stage_plan(resolved, payload, crest_config=crest_config)
     if plan is None:
         return False
 
     created = 0
     for endpoint_pair in plan.endpoint_pairs:
         created += 1
-        stage = o.stages.builders._new_xtb_stage(
+        stage = new_xtb_stage_impl(
             workflow_id=str(payload.get("workflow_id", "")),
             stage_id=f"xtb_path_search_{created:02d}",
             reaction_key=f"{payload.get('reaction_key', 'reaction')}_{created:02d}",
@@ -228,14 +234,14 @@ def append_reaction_xtb_stages_impl(
                 field="max_xtb_handoff_retries",
                 minimum=0,
             ),
-            manifest_overrides=_xtb_manifest_with_charge_spin(o, plan.params),
+            manifest_overrides=_xtb_manifest_with_charge_spin(plan.params),
         )
         if plan.pairing_enabled:
             pairing_metadata = dict(endpoint_pair.metadata)
-            stage_view = WorkflowStageView(stage)
-            stage_metadata = stage_view.metadata(o)
+            stage_view = WorkflowStageView(cast(dict[str, Any], stage))
+            stage_metadata = stage_view.metadata()
             stage_metadata["endpoint_pairing"] = pairing_metadata
             if stage_view.has_task:
-                stage_view.task.metadata(o)["endpoint_pairing"] = pairing_metadata
+                stage_view.task.metadata()["endpoint_pairing"] = pairing_metadata
         payload.setdefault("stages", []).append(stage)
     return created > 0

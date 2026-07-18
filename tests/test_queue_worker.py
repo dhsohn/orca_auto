@@ -47,7 +47,12 @@ from orca_auto.core.statuses import (
     STATUS_RUNNING,
 )
 from orca_auto.orca.config import AppConfig, RetryRuntimeConfig, TelegramConfig
+from orca_auto.orca.engine import read_worker_pid
+from orca_auto.orca.queue import cancellation as cancellation_mod
+from orca_auto.orca.queue import publication_repair as publication_mod
+from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue import worker as queue_worker_mod
+from orca_auto.orca.queue import worker_tracking as worker_tracking_mod
 from orca_auto.orca.queue.adapter import (
     DuplicateEntryError,
     cancel,
@@ -59,6 +64,10 @@ from orca_auto.orca.queue.adapter import (
     queue_entry_reaction_dir,
     requeue_running_entry,
 )
+from orca_auto.orca.queue.replay import (
+    record_cancelled_run_state as _record_cancelled_run_state,
+)
+from orca_auto.orca.queue.replay import record_failed_run_state as _record_failed_run_state
 from orca_auto.orca.queue.terminal_replay import (
     TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
     terminal_replay_marker,
@@ -66,13 +75,14 @@ from orca_auto.orca.queue.terminal_replay import (
 from orca_auto.orca.queue.worker import (
     DEFAULT_MAX_CONCURRENT,
     QueueWorker,
-    _get_run_id_from_state,
-    _notify_terminal_job_from_state,
-    _record_cancelled_run_state,
-    _record_failed_run_state,
     _RunningJob,
     _terminate_process,
-    read_worker_pid,
+)
+from orca_auto.orca.queue.worker_tracking import (
+    get_run_id_from_state as _get_run_id_from_state,
+)
+from orca_auto.orca.queue.worker_tracking import (
+    notify_terminal_job_from_state as _notify_terminal_job_from_state,
 )
 from orca_auto.orca.state import (
     finalize_state,
@@ -96,31 +106,16 @@ def _command_arg(command: list[str], flag: str) -> str:
     return command[command.index(flag) + 1]
 
 
-def test_tracking_callbacks_use_current_queue_worker_symbols() -> None:
-    def notify_run_finished_event(*args: object, **kwargs: object) -> bool:
-        return True
-
-    with patch(
-        "orca_auto.orca.queue.worker.notify_run_finished_event",
-        new=notify_run_finished_event,
-    ):
-        callbacks = queue_worker_mod._tracking_callbacks()
-
-    assert callbacks.notify_run_finished_event is notify_run_finished_event
-    assert callbacks.upsert_job_record is queue_worker_mod.upsert_job_record
-    assert callbacks.queue_entry_task_id is queue_worker_mod.queue_entry_task_id
-
-
-def test_lifecycle_callbacks_use_current_queue_worker_symbols() -> None:
+def test_lifecycle_callbacks_use_replay_module_symbols() -> None:
     def terminate_process(proc: object) -> bool:
         del proc
         return True
 
-    with patch("orca_auto.orca.queue.worker._terminate_process", new=terminate_process):
-        callbacks = queue_worker_mod._lifecycle_callbacks()
+    with patch.object(replay_mod, "terminate_process", new=terminate_process):
+        callbacks = replay_mod.lifecycle_callbacks()
 
     assert callbacks.terminate_process is terminate_process
-    assert callbacks.requeue_running_entry is queue_worker_mod._requeue_running_expected
+    assert callbacks.requeue_running_entry is replay_mod._requeue_running_expected
     assert callbacks.on_completed is None
 
 
@@ -147,11 +142,11 @@ def test_orca_worker_repairs_queued_publication_before_claim(tmp_path: Path) -> 
     upserts: list[str] = []
 
     with patch.object(
-        queue_worker_mod,
-        "_upsert_queued_job_record",
+        publication_mod,
+        "upsert_queued_job_record",
         side_effect=lambda _cfg, current: upserts.append(current.task_id),
     ):
-        assert queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, entry) is True
+        assert publication_mod.repair_queue_publication(cfg, tmp_path, entry) is True
 
     [repaired] = list_queue(tmp_path)
     assert upserts == ["task-repair"]
@@ -175,11 +170,11 @@ def test_orca_worker_keeps_failed_publication_repair_unclaimable(tmp_path: Path)
     )
 
     with patch.object(
-        queue_worker_mod,
-        "_upsert_queued_job_record",
+        publication_mod,
+        "upsert_queued_job_record",
         side_effect=OSError("index unavailable"),
     ):
-        assert queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, entry) is False
+        assert publication_mod.repair_queue_publication(cfg, tmp_path, entry) is False
 
     [pending] = list_queue(tmp_path)
     assert pending.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
@@ -204,8 +199,8 @@ def test_orca_publication_repair_ignores_foreign_engine_row(tmp_path: Path) -> N
         },
     )
 
-    with patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert:
-        assert queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, foreign)
+    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
+        assert publication_mod.repair_queue_publication(cfg, tmp_path, foreign)
 
     upsert.assert_not_called()
     [unchanged] = list_queue_core(tmp_path)
@@ -228,8 +223,8 @@ def test_orca_publication_repair_reclaims_abandoned_live_pid_lease(tmp_path: Pat
         },
     )
 
-    with patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert:
-        assert queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, entry)
+    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
+        assert publication_mod.repair_queue_publication(cfg, tmp_path, entry)
 
     upsert.assert_called_once()
     [repaired] = list_queue(tmp_path)
@@ -267,8 +262,8 @@ def test_orca_publication_repair_fences_crash_row_after_job_moves_to_smoke_tree(
     reaction_dir.rename(reserved_dir)
     reaction_dir.symlink_to(reserved_dir, target_is_directory=True)
 
-    with patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert:
-        assert queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, entry)
+    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
+        assert publication_mod.repair_queue_publication(cfg, tmp_path, entry)
 
     upsert.assert_not_called()
     [fenced] = list_queue(tmp_path)
@@ -310,8 +305,8 @@ def test_orca_publication_repair_rejects_invalid_marker_after_lock_reload(
         is not None
     )
 
-    with patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert:
-        assert not queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, entry)
+    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
+        assert not publication_mod.repair_queue_publication(cfg, tmp_path, entry)
 
     upsert.assert_not_called()
 
@@ -331,8 +326,8 @@ def test_orca_publication_repair_ignores_malformed_terminal_history(tmp_path: Pa
         },
     )
 
-    with patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert:
-        assert queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, terminal)
+    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
+        assert publication_mod.repair_queue_publication(cfg, tmp_path, terminal)
 
     upsert.assert_not_called()
 
@@ -356,8 +351,8 @@ def test_orca_publication_repair_validates_every_selected_input_path(tmp_path: P
         },
     )
 
-    with patch.object(queue_worker_mod, "_upsert_queued_job_record") as upsert:
-        assert not queue_worker_mod._repair_orca_queue_publication(cfg, tmp_path, entry)
+    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
+        assert not publication_mod.repair_queue_publication(cfg, tmp_path, entry)
 
     upsert.assert_not_called()
 
@@ -375,7 +370,7 @@ def _terminal_replay_entry(tmp_path: Path, status: QueueStatus) -> QueueEntry:
 
 
 def _reconcile_statuses(worker: object) -> dict[tuple[str, str], str]:
-    statuses = queue_worker_mod._replay_state(worker).reconcile_statuses
+    statuses = replay_mod.get_replay_state(worker).reconcile_statuses
     assert statuses is not None
     return statuses
 
@@ -388,25 +383,25 @@ def _run_terminal_replay(
     previous_status: str | None = None,
 ) -> None:
     if previous_status is not None:
-        state = queue_worker_mod._replay_state(worker)
+        state = replay_mod.get_replay_state(worker)
         statuses = dict(state.reconcile_statuses or {})
         statuses[(str(tmp_path.resolve()), entry.queue_id)] = previous_status
         state.reconcile_statuses = statuses
     with (
-        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(replay_mod, "recover_orphaned_engine_slots"),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "queue_entries_with_roots",
             return_value=[(tmp_path, entry)],
         ),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
+        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
     ):
-        queue_worker_mod._reconcile_orphaned_running(worker)
+        replay_mod.reconcile_worker_state(worker)
 
 
 @pytest.mark.parametrize(
@@ -432,47 +427,47 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
     cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     if existing_cursor:
-        queue_worker_mod._replay_state(worker).reconcile_statuses = {
+        replay_mod.get_replay_state(worker).reconcile_statuses = {
             (str(tmp_path.resolve()), "other-queue"): STATUS_RUNNING
         }
 
     with (
-        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(replay_mod, "recover_orphaned_engine_slots"),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "queue_entries_with_roots",
             return_value=[(tmp_path, entry)],
         ),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
+        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
         patch.object(
-            queue_worker_mod,
-            "_record_failed_run_state",
+            replay_mod,
+            "record_failed_run_state",
             return_value=("run-rewritten", STATUS_FAILED),
         ) as record_failed,
         patch.object(
-            queue_worker_mod,
-            "_record_cancelled_run_state",
+            replay_mod,
+            "record_cancelled_run_state",
             return_value=("run-rewritten", STATUS_CANCELLED),
         ) as record_cancelled,
-        patch.object(queue_worker_mod, "update_terminal", return_value=True) as update,
+        patch.object(replay_mod, "update_terminal", return_value=True) as update,
         patch.object(
-            queue_worker_mod,
-            "_upsert_terminal_job_record",
+            worker_tracking_mod,
+            "upsert_terminal_job_record",
             return_value=True,
         ) as upsert,
         patch.object(
-            queue_worker_mod,
-            "_notify_terminal_job_from_state",
+            worker_tracking_mod,
+            "notify_terminal_job_from_state",
             return_value=False,
         ) as notify,
-        patch.object(queue_worker_mod, "_clear_terminal_replay_marker") as clear_marker,
+        patch.object(replay_mod, "_clear_terminal_replay_marker") as clear_marker,
     ):
-        queue_worker_mod._reconcile_orphaned_running(worker)
+        replay_mod.reconcile_worker_state(worker)
 
     record_failed.assert_not_called()
     record_cancelled.assert_not_called()
@@ -482,7 +477,7 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
     clear_marker.assert_not_called()
     key = (str(tmp_path.resolve()), entry.queue_id)
     assert _reconcile_statuses(worker)[key] == terminal_status.value
-    assert queue_worker_mod._replay_state(worker).pending_replays == {}
+    assert replay_mod.get_replay_state(worker).pending_replays == {}
 
 
 def test_repeated_worker_startup_preserves_historical_failed_queue_bytes(
@@ -510,42 +505,42 @@ def test_repeated_worker_startup_preserves_historical_failed_queue_bytes(
         return [(tmp_path, list_queue(tmp_path)[0])]
 
     with (
-        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(replay_mod, "recover_orphaned_engine_slots"),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "queue_entries_with_roots",
             side_effect=current_entries,
         ),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
+        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
         patch.object(
-            queue_worker_mod,
-            "_record_failed_run_state",
-            wraps=queue_worker_mod._record_failed_run_state,
+            replay_mod,
+            "record_failed_run_state",
+            wraps=replay_mod.record_failed_run_state,
         ) as record_failed,
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "update_terminal",
-            wraps=queue_worker_mod.update_terminal,
+            wraps=replay_mod.update_terminal,
         ) as update,
         patch.object(
-            queue_worker_mod,
-            "_upsert_terminal_job_record",
+            worker_tracking_mod,
+            "upsert_terminal_job_record",
             return_value=True,
         ) as upsert,
         patch.object(
-            queue_worker_mod,
-            "_notify_terminal_job_from_state",
+            worker_tracking_mod,
+            "notify_terminal_job_from_state",
             return_value=False,
         ) as notify,
     ):
         for _restart in range(2):
             worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-            queue_worker_mod._reconcile_orphaned_running(worker)
+            replay_mod.reconcile_worker_state(worker)
 
     record_failed.assert_not_called()
     update.assert_not_called()
@@ -607,7 +602,7 @@ def test_terminal_writer_marker_replays_once_after_fresh_worker_restart(
                 )
             else:
                 assert (
-                    queue_worker_mod.reconcile_orphaned_running_entries(
+                    replay_mod.reconcile_orphaned_running_entries(
                         tmp_path,
                         ignore_worker_pid=True,
                     )
@@ -616,43 +611,43 @@ def test_terminal_writer_marker_replays_once_after_fresh_worker_restart(
 
     [terminal] = list_queue(tmp_path)
     assert terminal.status.value == expected_status
-    assert queue_worker_mod._terminal_replay_marker_from_entry(terminal) is not None
+    assert replay_mod.terminal_replay_marker_from_entry(terminal) is not None
     cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
 
     def current_entries(_cfg: AppConfig) -> list[tuple[Path, QueueEntry]]:
         return [(tmp_path, current) for current in list_queue(tmp_path)]
 
     with (
-        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(replay_mod, "recover_orphaned_engine_slots"),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "queue_entries_with_roots",
             side_effect=current_entries,
         ),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
+        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
         patch.object(
-            queue_worker_mod,
-            "_upsert_terminal_job_record",
+            worker_tracking_mod,
+            "upsert_terminal_job_record",
             return_value=True,
         ) as upsert,
         patch.object(
-            queue_worker_mod,
-            "_notify_terminal_job_from_state",
+            worker_tracking_mod,
+            "notify_terminal_job_from_state",
             return_value=False,
         ) as notify,
     ):
-        queue_worker_mod._reconcile_orphaned_running(MagicMock(cfg=cfg, admission_root=tmp_path))
-        queue_worker_mod._reconcile_orphaned_running(MagicMock(cfg=cfg, admission_root=tmp_path))
+        replay_mod.reconcile_worker_state(MagicMock(cfg=cfg, admission_root=tmp_path))
+        replay_mod.reconcile_worker_state(MagicMock(cfg=cfg, admission_root=tmp_path))
 
     upsert.assert_called_once()
     notify.assert_called_once()
     [closed] = list_queue(tmp_path)
-    assert queue_worker_mod._terminal_replay_marker_from_entry(closed) is None
+    assert replay_mod.terminal_replay_marker_from_entry(closed) is None
     state = load_state(reaction_dir)
     assert state is not None
     assert state["job_id"] == entry.task_id
@@ -676,7 +671,7 @@ def test_terminal_replay_marker_rejects_malformed_version(bad_version: object) -
         },
     )
 
-    assert queue_worker_mod._terminal_replay_marker_from_entry(entry) is None
+    assert replay_mod.terminal_replay_marker_from_entry(entry) is None
 
 
 @pytest.mark.parametrize("bad_observed_state", [None, [], {}, {"present": "yes"}])
@@ -700,7 +695,7 @@ def test_terminal_replay_marker_rejects_malformed_state_fingerprint(
         },
     )
 
-    assert queue_worker_mod._terminal_replay_marker_from_entry(entry) is None
+    assert replay_mod.terminal_replay_marker_from_entry(entry) is None
 
 
 @pytest.mark.parametrize(
@@ -741,7 +736,7 @@ def test_terminal_replay_marker_rejects_unbound_identity_or_nonterminal_status(
         },
     )
 
-    assert queue_worker_mod._terminal_replay_marker_from_entry(entry) is None
+    assert replay_mod.terminal_replay_marker_from_entry(entry) is None
 
 
 def test_terminal_replay_marker_allows_durable_status_correction() -> None:
@@ -773,7 +768,7 @@ def test_terminal_replay_marker_allows_durable_status_correction() -> None:
         },
     )
 
-    assert queue_worker_mod._terminal_replay_marker_from_entry(entry) is not None
+    assert replay_mod.terminal_replay_marker_from_entry(entry) is not None
 
 
 @pytest.mark.parametrize("blocked_kind", ["fence_only", "malformed", "conflict"])
@@ -805,11 +800,11 @@ def test_repair_blocked_terminal_never_uses_observed_active_edge(
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
-        patch.object(queue_worker_mod, "_record_failed_run_state") as record_failed,
-        patch.object(queue_worker_mod, "update_terminal") as update,
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record") as upsert,
-        patch.object(queue_worker_mod, "_notify_terminal_job_from_state") as notify,
-        patch.object(queue_worker_mod, "_clear_terminal_replay_marker") as clear_marker,
+        patch.object(replay_mod, "record_failed_run_state") as record_failed,
+        patch.object(replay_mod, "update_terminal") as update,
+        patch.object(worker_tracking_mod, "upsert_terminal_job_record") as upsert,
+        patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
+        patch.object(replay_mod, "_clear_terminal_replay_marker") as clear_marker,
     ):
         _run_terminal_replay(
             worker,
@@ -825,11 +820,11 @@ def test_repair_blocked_terminal_never_uses_observed_active_edge(
     clear_marker.assert_not_called()
     key = (str(tmp_path.resolve()), entry.queue_id)
     assert _reconcile_statuses(worker)[key] == STATUS_FAILED
-    assert queue_worker_mod._replay_state(worker).pending_replays == {}
+    assert replay_mod.get_replay_state(worker).pending_replays == {}
 
 
 def test_terminal_replay_with_empty_reaction_dir_never_resolves_workspace() -> None:
-    item = queue_worker_mod._TerminalReplayWorkItem(
+    item = replay_mod.TerminalReplayWorkItem(
         queue_root=Path("/tmp/queue"),
         queue_id="queue-empty-reaction",
         reaction_dir="",
@@ -841,15 +836,15 @@ def test_terminal_replay_with_empty_reaction_dir_never_resolves_workspace() -> N
     )
 
     with (
-        patch.object(queue_worker_mod, "_record_failed_run_state") as record_failed,
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record") as upsert,
+        patch.object(replay_mod, "record_failed_run_state") as record_failed,
+        patch.object(worker_tracking_mod, "upsert_terminal_job_record") as upsert,
         pytest.raises(RuntimeError, match="no reaction directory"),
     ):
-        queue_worker_mod._prepare_terminal_replay_work_item(item)
+        replay_mod._prepare_terminal_replay_work_item(item)
 
     record_failed.assert_not_called()
     upsert.assert_not_called()
-    assert queue_worker_mod._pending_replay_state_is_superseded(item)
+    assert replay_mod._pending_replay_state_is_superseded(item)
 
 
 def test_terminal_replay_retries_failed_notification_until_marker_is_durable(
@@ -868,11 +863,11 @@ def test_terminal_replay_retries_failed_notification_until_marker_is_durable(
     }
 
     with (
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
+        patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
         patch.object(
-            queue_worker_mod, "_notify_terminal_job_from_state", return_value=False
+            worker_tracking_mod, "notify_terminal_job_from_state", return_value=False
         ) as notify,
-        patch.object(queue_worker_mod, "load_state", return_value=state),
+        patch.object(replay_mod, "load_state", return_value=state),
     ):
         _run_terminal_replay(
             worker,
@@ -906,11 +901,11 @@ def test_terminal_replay_uses_selected_discord_provider_for_durability(
     }
 
     with (
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
+        patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
         patch.object(
-            queue_worker_mod, "_notify_terminal_job_from_state", return_value=False
+            worker_tracking_mod, "notify_terminal_job_from_state", return_value=False
         ) as notify,
-        patch.object(queue_worker_mod, "load_state", return_value=state),
+        patch.object(replay_mod, "load_state", return_value=state),
     ):
         _run_terminal_replay(
             worker,
@@ -934,8 +929,8 @@ def test_terminal_replay_retries_when_job_record_artifacts_are_not_ready(
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=False),
-        patch.object(queue_worker_mod, "_notify_terminal_job_from_state") as notify,
+        patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=False),
+        patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
     ):
         _run_terminal_replay(
             worker,
@@ -958,13 +953,13 @@ def test_terminal_replay_finalizes_cancelled_state_before_side_effects(tmp_path:
 
     with (
         patch.object(
-            queue_worker_mod,
-            "_record_cancelled_run_state",
+            replay_mod,
+            "record_cancelled_run_state",
             return_value=("run-cancelled", STATUS_CANCELLED),
         ) as record_cancelled,
-        patch.object(queue_worker_mod, "update_terminal", return_value=True) as update_terminal,
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
-        patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
+        patch.object(replay_mod, "update_terminal", return_value=True) as update_terminal,
+        patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
+        patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
     ):
         _run_terminal_replay(
             worker,
@@ -1000,13 +995,13 @@ def test_terminal_replay_corrects_cancelled_queue_to_existing_completed_state(
 
     with (
         patch.object(
-            queue_worker_mod,
-            "_record_cancelled_run_state",
+            replay_mod,
+            "record_cancelled_run_state",
             return_value=("run-completed", STATUS_COMPLETED),
         ),
-        patch.object(queue_worker_mod, "update_terminal", return_value=True) as update_terminal,
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
-        patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
+        patch.object(replay_mod, "update_terminal", return_value=True) as update_terminal,
+        patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
+        patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
     ):
         _run_terminal_replay(
             worker,
@@ -1034,9 +1029,11 @@ def test_terminal_replay_observes_pending_to_cancelled_transition(tmp_path: Path
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True) as upsert,
-        patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
-        patch.object(queue_worker_mod, "update_terminal", return_value=True),
+        patch.object(
+            worker_tracking_mod, "upsert_terminal_job_record", return_value=True
+        ) as upsert,
+        patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
+        patch.object(replay_mod, "update_terminal", return_value=True),
     ):
         _run_terminal_replay(worker, tmp_path, pending)
         upsert.assert_not_called()
@@ -1096,22 +1093,22 @@ def test_terminal_replay_skips_superseded_cancelled_generation(tmp_path: Path) -
     ]
 
     with (
-        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(replay_mod, "recover_orphaned_engine_slots"),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "queue_entries_with_roots",
             return_value=entries,
         ),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record") as upsert,
-        patch.object(queue_worker_mod, "_notify_terminal_job_from_state") as notify,
+        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
+        patch.object(worker_tracking_mod, "upsert_terminal_job_record") as upsert,
+        patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
     ):
-        queue_worker_mod._reconcile_orphaned_running(worker)
+        replay_mod.reconcile_worker_state(worker)
         upsert.assert_not_called()
         notify.assert_not_called()
 
@@ -1129,7 +1126,7 @@ def test_terminal_replay_skips_superseded_cancelled_generation(tmp_path: Path) -
             current_queue_root,
             replace(current_running, status=QueueStatus.COMPLETED),
         )
-        queue_worker_mod._reconcile_orphaned_running(worker)
+        replay_mod.reconcile_worker_state(worker)
 
     written = load_state(reaction_dir)
     assert written is not None
@@ -1178,34 +1175,34 @@ def test_terminal_owner_switches_from_terminal_owner_to_seen_active_generation(
     entries = [(root_a, active_a), (root_b, failed_b)]
     cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    queue_worker_mod._replay_state(worker).generation_owners = {reaction_key: owner_b}
-    queue_worker_mod._replay_state(worker).generation_owner_active = {reaction_key: True}
-    queue_worker_mod._replay_state(worker).reconcile_statuses = {
+    replay_mod.get_replay_state(worker).generation_owners = {reaction_key: owner_b}
+    replay_mod.get_replay_state(worker).generation_owner_active = {reaction_key: True}
+    replay_mod.get_replay_state(worker).reconcile_statuses = {
         owner_a: STATUS_RUNNING,
         owner_b: STATUS_RUNNING,
     }
 
     with (
-        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(replay_mod, "recover_orphaned_engine_slots"),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "queue_entries_with_roots",
             return_value=entries,
         ),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
-        patch.object(queue_worker_mod, "_record_failed_run_state") as record_failed,
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record") as upsert,
-        patch.object(queue_worker_mod, "_notify_terminal_job_from_state") as notify,
+        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
+        patch.object(replay_mod, "record_failed_run_state") as record_failed,
+        patch.object(worker_tracking_mod, "upsert_terminal_job_record") as upsert,
+        patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
     ):
-        queue_worker_mod._reconcile_orphaned_running(worker)
+        replay_mod.reconcile_worker_state(worker)
 
-    assert queue_worker_mod._replay_state(worker).generation_owners[reaction_key] == owner_a
-    assert queue_worker_mod._replay_state(worker).generation_owner_active[reaction_key] is True
+    assert replay_mod.get_replay_state(worker).generation_owners[reaction_key] == owner_a
+    assert replay_mod.get_replay_state(worker).generation_owner_active[reaction_key] is True
     record_failed.assert_not_called()
     upsert.assert_not_called()
     notify.assert_not_called()
@@ -1250,33 +1247,33 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
     entries = [(old_root, old_cancelled), (new_root, new_cancelled)]
     cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    queue_worker_mod._replay_state(worker).reconcile_statuses = {
+    replay_mod.get_replay_state(worker).reconcile_statuses = {
         (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
     }
 
     with (
-        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(replay_mod, "recover_orphaned_engine_slots"),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "queue_entries_with_roots",
             return_value=entries,
         ),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
+        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
         patch.object(
-            queue_worker_mod,
-            "_record_cancelled_run_state",
-            wraps=queue_worker_mod._record_cancelled_run_state,
+            replay_mod,
+            "record_cancelled_run_state",
+            wraps=replay_mod.record_cancelled_run_state,
         ) as record_cancelled,
-        patch.object(queue_worker_mod, "update_terminal", return_value=True),
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
-        patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
+        patch.object(replay_mod, "update_terminal", return_value=True),
+        patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
+        patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
     ):
-        queue_worker_mod._reconcile_orphaned_running(worker)
+        replay_mod.reconcile_worker_state(worker)
 
     written = load_state(reaction_dir)
     assert written is not None
@@ -1288,7 +1285,7 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
     assert record_cancelled.call_args.kwargs["selected_inp"] == ""
     assert record_cancelled.call_args.kwargs["observed_state"] is not None
     reaction_key = str(reaction_dir.resolve())
-    assert queue_worker_mod._replay_state(worker).generation_owners[reaction_key] == (
+    assert replay_mod.get_replay_state(worker).generation_owners[reaction_key] == (
         str(new_root.resolve()),
         new_cancelled.queue_id,
     )
@@ -1322,40 +1319,40 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
     entries = [(root_a, cancelled_a), (root_b, cancelled_b)]
     cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    queue_worker_mod._replay_state(worker).reconcile_statuses = {
+    replay_mod.get_replay_state(worker).reconcile_statuses = {
         (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
     }
 
     with (
-        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(replay_mod, "recover_orphaned_engine_slots"),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "queue_entries_with_roots",
             return_value=entries,
         ),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
+        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
         patch.object(
-            queue_worker_mod,
-            "_record_cancelled_run_state",
-            wraps=queue_worker_mod._record_cancelled_run_state,
+            replay_mod,
+            "record_cancelled_run_state",
+            wraps=replay_mod.record_cancelled_run_state,
         ) as record_cancelled,
-        patch.object(queue_worker_mod, "update_terminal", return_value=True),
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
-        patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
+        patch.object(replay_mod, "update_terminal", return_value=True),
+        patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
+        patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
     ):
-        queue_worker_mod._reconcile_orphaned_running(worker)
+        replay_mod.reconcile_worker_state(worker)
         record_cancelled.assert_not_called()
         assert all(status == STATUS_RUNNING for status in _reconcile_statuses(worker).values())
 
         state = new_state(reaction_dir, reaction_dir / "b.inp", max_retries=0)
         state["job_id"] = cancelled_b.task_id
         save_state(reaction_dir, state)
-        queue_worker_mod._reconcile_orphaned_running(worker)
+        replay_mod.reconcile_worker_state(worker)
 
     record_cancelled.assert_called_once()
     assert record_cancelled.call_args.args == (reaction_dir.resolve(),)
@@ -1371,45 +1368,45 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
     entries = [(tmp_path, entry)]
     cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    queue_worker_mod._replay_state(worker).reconcile_statuses = {
+    replay_mod.get_replay_state(worker).reconcile_statuses = {
         (str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING
     }
 
     with (
-        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(replay_mod, "recover_orphaned_engine_slots"),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "queue_entries_with_roots",
             side_effect=[entries, entries, [], []],
         ),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
+        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
         patch.object(
-            queue_worker_mod,
-            "_record_cancelled_run_state",
+            replay_mod,
+            "record_cancelled_run_state",
             return_value=("run-cancelled", STATUS_CANCELLED),
         ),
-        patch.object(queue_worker_mod, "update_terminal", return_value=False) as update,
+        patch.object(replay_mod, "update_terminal", return_value=False) as update,
         patch.object(
-            queue_worker_mod,
-            "_upsert_terminal_job_record",
+            worker_tracking_mod,
+            "upsert_terminal_job_record",
             side_effect=[False, True],
         ) as upsert,
         patch.object(
-            queue_worker_mod,
-            "_notify_terminal_job_from_state",
+            worker_tracking_mod,
+            "notify_terminal_job_from_state",
             return_value=False,
         ) as notify,
     ):
-        queue_worker_mod._reconcile_orphaned_running(worker)
-        pending = queue_worker_mod._replay_state(worker).pending_replays
+        replay_mod.reconcile_worker_state(worker)
+        pending = replay_mod.get_replay_state(worker).pending_replays
         assert len(pending) == 1
 
-        queue_worker_mod._reconcile_orphaned_running(worker)
+        replay_mod.reconcile_worker_state(worker)
 
     update.assert_called_once()
     assert upsert.call_count == 2
@@ -1418,7 +1415,7 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
         str(reaction_dir),
         expected_job_id=entry.task_id,
     )
-    assert queue_worker_mod._replay_state(worker).pending_replays == {}
+    assert replay_mod.get_replay_state(worker).pending_replays == {}
 
 
 def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
@@ -1430,46 +1427,46 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
     entries = [(tmp_path, entry)]
     cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    queue_worker_mod._replay_state(worker).reconcile_statuses = {
+    replay_mod.get_replay_state(worker).reconcile_statuses = {
         (str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING
     }
 
     with (
-        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(replay_mod, "recover_orphaned_engine_slots"),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "queue_entries_with_roots",
             side_effect=[entries, entries, [], []],
         ),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
+        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
         patch.object(
-            queue_worker_mod,
-            "_record_cancelled_run_state",
+            replay_mod,
+            "record_cancelled_run_state",
             side_effect=[OSError("state write failed"), ("run-cancelled", STATUS_CANCELLED)],
         ) as record_cancelled,
-        patch.object(queue_worker_mod, "update_terminal") as update,
+        patch.object(replay_mod, "update_terminal") as update,
         patch.object(
-            queue_worker_mod,
-            "_upsert_terminal_job_record",
+            worker_tracking_mod,
+            "upsert_terminal_job_record",
             return_value=True,
         ) as upsert,
         patch.object(
-            queue_worker_mod,
-            "_notify_terminal_job_from_state",
+            worker_tracking_mod,
+            "notify_terminal_job_from_state",
             return_value=False,
         ) as notify,
     ):
-        queue_worker_mod._reconcile_orphaned_running(worker)
-        pending = queue_worker_mod._replay_state(worker).pending_replays
+        replay_mod.reconcile_worker_state(worker)
+        pending = replay_mod.get_replay_state(worker).pending_replays
         assert len(pending) == 1
         assert not next(iter(pending.values())).state_prepared
 
-        queue_worker_mod._reconcile_orphaned_running(worker)
+        replay_mod.reconcile_worker_state(worker)
 
     assert record_cancelled.call_count == 2
     update.assert_not_called()
@@ -1484,7 +1481,7 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
         str(reaction_dir),
         expected_job_id=entry.task_id,
     )
-    assert queue_worker_mod._replay_state(worker).pending_replays == {}
+    assert replay_mod.get_replay_state(worker).pending_replays == {}
 
 
 def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remains(
@@ -1507,21 +1504,23 @@ def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remain
 
     with (
         patch.object(
-            queue_worker_mod,
-            "_record_cancelled_run_state",
+            replay_mod,
+            "record_cancelled_run_state",
             side_effect=[OSError("state write failed"), ("run-current", STATUS_CANCELLED)],
         ) as record_cancelled,
-        patch.object(queue_worker_mod, "update_terminal", return_value=True),
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True) as upsert,
+        patch.object(replay_mod, "update_terminal", return_value=True),
         patch.object(
-            queue_worker_mod,
-            "_notify_terminal_job_from_state",
+            worker_tracking_mod, "upsert_terminal_job_record", return_value=True
+        ) as upsert,
+        patch.object(
+            worker_tracking_mod,
+            "notify_terminal_job_from_state",
             return_value=False,
         ) as notify,
     ):
         _run_terminal_replay(worker, tmp_path, running)
         _run_terminal_replay(worker, tmp_path, cancelled)
-        pending = queue_worker_mod._replay_state(worker).pending_replays
+        pending = replay_mod.get_replay_state(worker).pending_replays
         assert len(pending) == 1
         assert not next(iter(pending.values())).state_prepared
 
@@ -1539,10 +1538,8 @@ def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remain
         str(reaction_dir),
         expected_job_id=cancelled.task_id,
     )
-    assert queue_worker_mod._replay_state(worker).pending_replays == {}
-    assert queue_worker_mod._replay_state(worker).generation_owners[
-        str(reaction_dir.resolve())
-    ] == (
+    assert replay_mod.get_replay_state(worker).pending_replays == {}
+    assert replay_mod.get_replay_state(worker).generation_owners[str(reaction_dir.resolve())] == (
         str(tmp_path.resolve()),
         cancelled.queue_id,
     )
@@ -1563,17 +1560,19 @@ def test_prepared_terminal_replay_is_dropped_when_entry_state_is_superseded(
 
     with (
         patch.object(
-            queue_worker_mod,
-            "_record_cancelled_run_state",
-            wraps=queue_worker_mod._record_cancelled_run_state,
+            replay_mod,
+            "record_cancelled_run_state",
+            wraps=replay_mod.record_cancelled_run_state,
         ) as record_cancelled,
-        patch.object(queue_worker_mod, "update_terminal", return_value=True),
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=False) as upsert,
-        patch.object(queue_worker_mod, "_notify_terminal_job_from_state") as notify,
+        patch.object(replay_mod, "update_terminal", return_value=True),
+        patch.object(
+            worker_tracking_mod, "upsert_terminal_job_record", return_value=False
+        ) as upsert,
+        patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
     ):
         _run_terminal_replay(worker, tmp_path, running)
         _run_terminal_replay(worker, tmp_path, cancelled)
-        pending = queue_worker_mod._replay_state(worker).pending_replays
+        pending = replay_mod.get_replay_state(worker).pending_replays
         assert len(pending) == 1
         assert next(iter(pending.values())).state_prepared
 
@@ -1586,7 +1585,7 @@ def test_prepared_terminal_replay_is_dropped_when_entry_state_is_superseded(
     record_cancelled.assert_called_once()
     upsert.assert_called_once()
     notify.assert_not_called()
-    assert queue_worker_mod._replay_state(worker).pending_replays == {}
+    assert replay_mod.get_replay_state(worker).pending_replays == {}
     key = (str(tmp_path.resolve()), cancelled.queue_id)
     assert _reconcile_statuses(worker)[key] == STATUS_CANCELLED
     written = load_state(reaction_dir)
@@ -1635,16 +1634,16 @@ def test_durable_terminal_replay_drops_old_finalizer_after_newer_terminal_state(
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
-        patch.object(queue_worker_mod, "_record_cancelled_run_state") as record_cancelled,
-        patch.object(queue_worker_mod, "_upsert_terminal_job_record") as upsert,
-        patch.object(queue_worker_mod, "_notify_terminal_job_from_state") as notify,
+        patch.object(replay_mod, "record_cancelled_run_state") as record_cancelled,
+        patch.object(worker_tracking_mod, "upsert_terminal_job_record") as upsert,
+        patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
     ):
         _run_terminal_replay(worker, tmp_path, old_entry)
 
     record_cancelled.assert_not_called()
     upsert.assert_not_called()
     notify.assert_not_called()
-    assert queue_worker_mod._replay_state(worker).pending_replays == {}
+    assert replay_mod.get_replay_state(worker).pending_replays == {}
     written = load_state(reaction_dir)
     assert written is not None
     assert written["job_id"] == "task-b"
@@ -1675,48 +1674,46 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
     new_entries = [(new_root, new_running)]
     cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    queue_worker_mod._replay_state(worker).reconcile_statuses = {
+    replay_mod.get_replay_state(worker).reconcile_statuses = {
         (str(old_root.resolve()), old_cancelled.queue_id): STATUS_RUNNING
     }
 
     with (
-        patch.object(queue_worker_mod, "recover_orphaned_engine_slots"),
+        patch.object(replay_mod, "recover_orphaned_engine_slots"),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "queue_entries_with_roots",
             side_effect=[old_entries, old_entries, new_entries, new_entries],
         ),
         patch.object(
-            queue_worker_mod,
+            replay_mod,
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(queue_worker_mod._lifecycle_helpers, "reconcile_orphaned_running"),
+        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
         patch.object(
-            queue_worker_mod,
-            "_record_cancelled_run_state",
+            replay_mod,
+            "record_cancelled_run_state",
             return_value=("run-old", STATUS_CANCELLED),
         ) as record_cancelled,
-        patch.object(queue_worker_mod, "update_terminal", return_value=False),
+        patch.object(replay_mod, "update_terminal", return_value=False),
         patch.object(
-            queue_worker_mod,
-            "_upsert_terminal_job_record",
+            worker_tracking_mod,
+            "upsert_terminal_job_record",
             return_value=False,
         ) as upsert,
-        patch.object(queue_worker_mod, "_notify_terminal_job_from_state") as notify,
+        patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
     ):
-        queue_worker_mod._reconcile_orphaned_running(worker)
-        assert len(queue_worker_mod._replay_state(worker).pending_replays) == 1
+        replay_mod.reconcile_worker_state(worker)
+        assert len(replay_mod.get_replay_state(worker).pending_replays) == 1
 
-        queue_worker_mod._reconcile_orphaned_running(worker)
+        replay_mod.reconcile_worker_state(worker)
 
     record_cancelled.assert_called_once()
     upsert.assert_called_once()
     notify.assert_not_called()
-    assert queue_worker_mod._replay_state(worker).pending_replays == {}
-    assert queue_worker_mod._replay_state(worker).generation_owners[
-        str(reaction_dir.resolve())
-    ] == (
+    assert replay_mod.get_replay_state(worker).pending_replays == {}
+    assert replay_mod.get_replay_state(worker).generation_owners[str(reaction_dir.resolve())] == (
         str(new_root.resolve()),
         new_running.queue_id,
     )
@@ -1825,7 +1822,7 @@ def test_terminal_state_helper_cannot_write_while_current_run_lock_is_held(
     save_state(tmp_path, state)
     before = state_path(tmp_path).read_bytes()
 
-    with queue_worker_mod.acquire_run_lock(tmp_path):
+    with replay_mod.acquire_run_lock(tmp_path):
         with pytest.raises(RuntimeError, match="already running"):
             _record_failed_run_state(
                 tmp_path,
@@ -1846,7 +1843,7 @@ def test_terminal_state_cas_rejects_changed_terminal_fingerprint(tmp_path: Path)
         status=STATUS_CANCELLED,
         final_result={"status": STATUS_CANCELLED, "reason": "cancel_requested"},
     )
-    observed = queue_worker_mod._load_state_generation_fingerprint(tmp_path)
+    observed = replay_mod.load_state_generation_fingerprint(tmp_path)
 
     state_b = new_state(tmp_path, tmp_path / "b.inp", max_retries=0)
     state_b["job_id"] = "task-b"
@@ -1876,14 +1873,14 @@ def test_terminal_state_cas_rejects_changed_terminal_fingerprint(tmp_path: Path)
 def test_terminal_replay_keeps_marker_when_state_identity_is_unreadable(
     tmp_path: Path,
 ) -> None:
-    observed = queue_worker_mod._StateGenerationFingerprint(
+    observed = replay_mod.StateGenerationFingerprint(
         present=True,
         readable=True,
         job_id="task-old",
         run_id="run-old",
         terminal_status=STATUS_COMPLETED,
     )
-    item = queue_worker_mod._TerminalReplayWorkItem(
+    item = replay_mod.TerminalReplayWorkItem(
         queue_root=tmp_path,
         queue_id="queue-unreadable",
         reaction_dir=str(tmp_path),
@@ -1896,46 +1893,46 @@ def test_terminal_replay_keeps_marker_when_state_identity_is_unreadable(
     )
 
     with patch.object(
-        queue_worker_mod,
-        "_load_state_generation_fingerprint",
-        return_value=queue_worker_mod._StateGenerationFingerprint(
+        replay_mod,
+        "load_state_generation_fingerprint",
+        return_value=replay_mod.StateGenerationFingerprint(
             present=True,
             readable=False,
         ),
     ):
-        assert not queue_worker_mod._pending_replay_state_is_superseded(item)
+        assert not replay_mod._pending_replay_state_is_superseded(item)
 
     unreadable_observed = replace(
         item,
-        observed_state=queue_worker_mod._StateGenerationFingerprint(
+        observed_state=replay_mod.StateGenerationFingerprint(
             present=True,
             readable=False,
         ),
     )
     with patch.object(
-        queue_worker_mod,
-        "_load_state_generation_fingerprint",
-        return_value=queue_worker_mod._StateGenerationFingerprint(
+        replay_mod,
+        "load_state_generation_fingerprint",
+        return_value=replay_mod.StateGenerationFingerprint(
             present=True,
             readable=True,
             job_id="task-other",
             run_id="run-other",
         ),
     ):
-        assert not queue_worker_mod._pending_replay_state_is_superseded(unreadable_observed)
+        assert not replay_mod._pending_replay_state_is_superseded(unreadable_observed)
 
 
 def test_terminal_state_cas_rejects_same_task_new_run_id(tmp_path: Path) -> None:
     first = new_state(tmp_path, tmp_path / "same.inp", max_retries=0)
     first["job_id"] = "task-same"
     save_state(tmp_path, first)
-    observed = queue_worker_mod._load_state_generation_fingerprint(tmp_path)
+    observed = replay_mod.load_state_generation_fingerprint(tmp_path)
 
     second = new_state(tmp_path, tmp_path / "same.inp", max_retries=0)
     second["job_id"] = "task-same"
     save_state(tmp_path, second)
     before = state_path(tmp_path).read_bytes()
-    item = queue_worker_mod._TerminalReplayWorkItem(
+    item = replay_mod.TerminalReplayWorkItem(
         queue_root=tmp_path,
         queue_id="queue-same-task",
         reaction_dir=str(tmp_path),
@@ -1947,7 +1944,7 @@ def test_terminal_state_cas_rejects_same_task_new_run_id(tmp_path: Path) -> None
         observed_state=observed,
     )
 
-    assert queue_worker_mod._pending_replay_state_is_superseded(item)
+    assert replay_mod._pending_replay_state_is_superseded(item)
     with pytest.raises(RuntimeError, match="newer run"):
         _record_failed_run_state(
             tmp_path,
@@ -1974,14 +1971,14 @@ def test_terminal_state_cas_rejects_expected_task_run_after_different_observatio
         status=STATUS_COMPLETED,
         final_result={"status": STATUS_COMPLETED, "reason": "normal_termination"},
     )
-    observed = queue_worker_mod._load_state_generation_fingerprint(tmp_path)
+    observed = replay_mod.load_state_generation_fingerprint(tmp_path)
 
     current = new_state(tmp_path, tmp_path / "current.inp", max_retries=0)
     current["job_id"] = "task-b"
     current["status"] = STATUS_RUNNING
     save_state(tmp_path, current)
     before = state_path(tmp_path).read_bytes()
-    item = queue_worker_mod._TerminalReplayWorkItem(
+    item = replay_mod.TerminalReplayWorkItem(
         queue_root=tmp_path,
         queue_id="queue-task-b",
         reaction_dir=str(tmp_path),
@@ -1993,9 +1990,9 @@ def test_terminal_state_cas_rejects_expected_task_run_after_different_observatio
         observed_state=observed,
     )
 
-    assert queue_worker_mod._pending_replay_state_is_superseded(item)
+    assert replay_mod._pending_replay_state_is_superseded(item)
     with pytest.raises(RuntimeError, match="new run for the expected task"):
-        queue_worker_mod._prepare_terminal_replay_work_item(item)
+        replay_mod._prepare_terminal_replay_work_item(item)
 
     assert state_path(tmp_path).read_bytes() == before
     written = load_state(tmp_path)
@@ -2028,8 +2025,8 @@ def test_terminal_upsert_filters_previous_generation_report(tmp_path: Path) -> N
     )
     cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
 
-    with patch.object(queue_worker_mod, "upsert_job_record") as upsert:
-        assert queue_worker_mod._upsert_terminal_job_record(
+    with patch.object(worker_tracking_mod, "upsert_job_record") as upsert:
+        assert worker_tracking_mod.upsert_terminal_job_record(
             cfg,
             str(reaction_dir),
             fallback_job_id="task-b",
@@ -2318,9 +2315,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(_command_arg(command, "--admission-token"), token or "")
         self.assertNotIn("--reaction-dir", command)
 
-    @patch("orca_auto.orca.queue.worker.upsert_job_record")
+    @patch("orca_auto.orca.queue.worker_tracking.upsert_job_record")
     @patch(
-        "orca_auto.orca.queue.worker.resolve_job_metadata",
+        "orca_auto.orca.queue.worker_tracking.resolve_job_metadata",
         side_effect=AssertionError("should use queue metadata"),
     )
     @patch("orca_auto.orca.queue.worker.start_background_process")
@@ -2400,7 +2397,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(active_slot_count(self.root), 0)
 
     @patch(
-        "orca_auto.orca.queue.worker.update_slot_metadata",
+        "orca_auto.orca.queue.replay.update_slot_metadata",
         side_effect=RuntimeError("metadata store down"),
     )
     @patch("orca_auto.orca.queue.worker.start_background_process")
@@ -2502,17 +2499,17 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         with (
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "recover_slot_engine_process",
                 side_effect=[RuntimeError("engine recovery failed"), True],
             ) as recover,
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "mark_terminal_process_queue_entry_with_result",
-                wraps=queue_worker_mod.mark_terminal_process_queue_entry_with_result,
+                wraps=replay_mod.mark_terminal_process_queue_entry_with_result,
             ) as mark_terminal,
-            patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
-            patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
+            patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
+            patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
         ):
             self.worker._check_completed_jobs()
             self.assertIn(entry.queue_id, self.worker._running)
@@ -2561,10 +2558,10 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
 
         with (
-            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
             patch.object(
-                queue_worker_mod,
-                "_record_failed_run_state",
+                replay_mod,
+                "record_failed_run_state",
                 side_effect=OSError("state write failed"),
             ),
             patch.object(self.worker, "_release_admission_slot") as release,
@@ -2587,10 +2584,10 @@ class TestQueueWorkerMethods(unittest.TestCase):
             max_concurrent=2,
         )
         with (
-            patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
+            patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
             patch.object(
-                queue_worker_mod,
-                "_notify_terminal_job_from_state",
+                worker_tracking_mod,
+                "notify_terminal_job_from_state",
                 return_value=False,
             ),
         ):
@@ -2630,13 +2627,13 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.worker._running[entry.queue_id] = job
 
         with (
-            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
             patch.object(
-                queue_worker_mod,
-                "_upsert_terminal_job_record",
+                worker_tracking_mod,
+                "upsert_terminal_job_record",
                 side_effect=[False, True],
             ) as upsert,
-            patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
+            patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
         ):
             self.worker._check_completed_jobs()
 
@@ -2710,7 +2707,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             events.append("recover")
             return True
 
-        real_mark = queue_worker_mod.mark_terminal_process_queue_entry_with_result
+        real_mark = replay_mod.mark_terminal_process_queue_entry_with_result
 
         def mark(*args: Any, **kwargs: Any) -> TerminalProcessQueueMarkResult:
             current = get_slot(self.root, token or "")
@@ -2727,14 +2724,14 @@ class TestQueueWorkerMethods(unittest.TestCase):
             release_slot(self.root, current_token)
 
         with (
-            patch.object(queue_worker_mod, "recover_slot_engine_process", side_effect=recover),
+            patch.object(replay_mod, "recover_slot_engine_process", side_effect=recover),
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "mark_terminal_process_queue_entry_with_result",
                 side_effect=mark,
             ),
-            patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
-            patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
+            patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
+            patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
             patch.object(
                 self.worker,
                 "_release_admission_slot",
@@ -2787,36 +2784,36 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         with (
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "recover_slot_engine_process",
                 side_effect=lambda *_args: events.append("recover"),
             ),
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "mark_terminal_process_queue_entry_with_result",
                 side_effect=mark,
             ),
             patch.object(
-                queue_worker_mod,
-                "_record_failed_run_state",
+                replay_mod,
+                "record_failed_run_state",
             ) as record_failed,
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "update_terminal",
             ) as update,
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "_run_terminal_replay_side_effects",
                 side_effect=lambda *_args, **_kwargs: events.append("side-effects"),
             ) as side_effects,
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "_clear_terminal_replay_marker_or_confirm_absent",
                 side_effect=lambda *_args: events.append("clear"),
             ),
             patch.object(
-                queue_worker_mod,
-                "_queue_entry_by_id",
+                replay_mod,
+                "queue_entry_by_id",
                 return_value=None,
             ),
             patch.object(
@@ -2847,7 +2844,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             )
         )
         self.assertTrue(
-            queue_worker_mod.update_queue_metadata(
+            replay_mod.update_queue_metadata(
                 self.root,
                 entry.queue_id,
                 {"orca_terminal_replay": None},
@@ -2863,8 +2860,8 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
 
         with (
-            patch.object(queue_worker_mod, "recover_slot_engine_process"),
-            patch.object(queue_worker_mod, "_record_failed_run_state") as record_failed,
+            patch.object(replay_mod, "recover_slot_engine_process"),
+            patch.object(replay_mod, "record_failed_run_state") as record_failed,
             patch.object(self.worker, "_release_admission_slot") as release,
         ):
             self.worker._finalize_finished_job(entry.queue_id, job, rc=1)
@@ -2892,25 +2889,25 @@ class TestQueueWorkerMethods(unittest.TestCase):
             task_id="task-moved",
         )
         with (
-            patch.object(queue_worker_mod, "recover_slot_engine_process") as recover,
+            patch.object(replay_mod, "recover_slot_engine_process") as recover,
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "mark_terminal_process_queue_entry_with_result",
                 return_value=result,
             ),
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "_run_terminal_replay_side_effects",
             ) as side_effects,
             patch.object(self.worker, "_release_admission_slot") as release,
         ):
-            queue_worker_mod._finalize_child_exit(self.worker, job, rc=1)
+            replay_mod.finalize_child_exit(self.worker, job, rc=1)
 
         recover.assert_called_once_with(self.worker.admission_root, job.admission_token)
         side_effects.assert_not_called()
         release.assert_called_once_with(job.admission_token)
 
-    @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
+    @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
     def test_finalize_finished_job_marks_completed_and_releases_slot(
         self,
         mock_upsert_terminal: MagicMock,
@@ -2946,8 +2943,8 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_upsert_terminal.assert_called_once()
         self.assertEqual(active_slot_count(self.root), 0)
 
-    @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
-    @patch("orca_auto.orca.queue.worker.notify_run_finished_event", return_value=True)
+    @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
+    @patch("orca_auto.orca.queue.worker_tracking.notify_run_finished_event", return_value=True)
     def test_finalize_finished_job_sends_parent_terminal_notification_when_unmarked(
         self,
         mock_notify: MagicMock,
@@ -2997,7 +2994,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             final_result["finished_notification_sent_at"],
         )
 
-    @patch("orca_auto.orca.queue.worker.notify_run_finished_event", return_value=True)
+    @patch("orca_auto.orca.queue.worker_tracking.notify_run_finished_event", return_value=True)
     def test_terminal_notification_skips_when_state_already_marked(
         self,
         mock_notify: MagicMock,
@@ -3019,7 +3016,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertFalse(_notify_terminal_job_from_state(cfg, str(rxn)))
         mock_notify.assert_not_called()
 
-    @patch("orca_auto.orca.queue.worker.notify_run_finished_event", return_value=True)
+    @patch("orca_auto.orca.queue.worker_tracking.notify_run_finished_event", return_value=True)
     def test_terminal_notification_rejects_previous_generation_state(
         self,
         mock_notify: MagicMock,
@@ -3041,7 +3038,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
         mock_notify.assert_not_called()
 
-    @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
+    @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
     def test_finalize_finished_job_marks_failed_run(
         self,
         mock_upsert_terminal: MagicMock,
@@ -3119,7 +3116,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.worker.cfg.telegram = TelegramConfig(bot_token="token", chat_id="chat")
 
         with patch.object(
-            queue_worker_mod,
+            worker_tracking_mod,
             "notify_run_finished_event",
             return_value=True,
         ) as notify:
@@ -3152,7 +3149,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         reconcile_statuses = _reconcile_statuses(self.worker)
         self.assertEqual(reconcile_statuses[key], "failed")
 
-    @patch("orca_auto.orca.queue.worker._upsert_terminal_job_record")
+    @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
     def test_finalize_finished_job_marks_cancelled_when_cancel_requested(
         self,
         mock_upsert_terminal: MagicMock,
@@ -3208,8 +3205,8 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(len(self.worker._running), 1)
 
     @patch(
-        "orca_auto.orca.queue.worker.mark_cancelled",
-        wraps=queue_worker_mod.mark_cancelled,
+        "orca_auto.orca.queue.replay.mark_cancelled",
+        wraps=replay_mod.mark_cancelled,
     )
     def test_check_cancel_requests(self, mock_mark_cancelled: MagicMock) -> None:
         rxn = self.root / "mol_cancel"
@@ -3232,7 +3229,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process.poll.return_value = 0
             return True
 
-        with patch("orca_auto.orca.queue.worker._terminate_process", side_effect=terminate):
+        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate):
             self.worker._check_cancel_requests()
         self.assertNotIn(entry.queue_id, self.worker._running)
         mock_mark_cancelled.assert_called_once()
@@ -3242,7 +3239,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(cancelled.status, QueueStatus.CANCELLED)
         self.assertIsNone(cancelled.metadata.get("orca_terminal_replay"))
 
-    @patch("orca_auto.orca.queue.worker.mark_cancelled", return_value=True)
+    @patch("orca_auto.orca.queue.replay.mark_cancelled", return_value=True)
     def test_check_cancel_requests_retains_live_job_when_termination_fails(
         self,
         mock_mark_cancelled: MagicMock,
@@ -3261,13 +3258,13 @@ class TestQueueWorkerMethods(unittest.TestCase):
             admission_token="slot_cancel_live",
         )
 
-        with patch("orca_auto.orca.queue.worker._terminate_process", return_value=False):
+        with patch("orca_auto.orca.queue.replay.terminate_process", return_value=False):
             self.worker._check_cancel_requests()
 
         self.assertIn(entry.queue_id, self.worker._running)
         mock_mark_cancelled.assert_not_called()
 
-    @patch("orca_auto.orca.queue.worker.mark_cancelled", return_value=True)
+    @patch("orca_auto.orca.queue.replay.mark_cancelled", return_value=True)
     def test_check_cancel_requests_ignores_replacement_generation(
         self,
         mock_mark_cancelled: MagicMock,
@@ -3293,7 +3290,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             task_id="task-a",
         )
 
-        with patch("orca_auto.orca.queue.worker._terminate_process") as terminate:
+        with patch("orca_auto.orca.queue.replay.terminate_process") as terminate:
             self.worker._check_cancel_requests()
 
         terminate.assert_not_called()
@@ -3377,19 +3374,19 @@ class TestQueueWorkerMethods(unittest.TestCase):
             release_slot(self.root, token_to_release)
 
         with (
-            patch.object(queue_worker_mod, "_terminate_process", side_effect=terminate),
+            patch.object(replay_mod, "terminate_process", side_effect=terminate),
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "recover_slot_engine_process",
                 side_effect=lambda *_args: events.append("recover"),
             ),
             patch.object(
-                queue_worker_mod,
+                cancellation_mod,
                 "cancel_running_process_job",
-                wraps=queue_worker_mod.cancel_running_process_job,
+                wraps=cancellation_mod.cancel_running_process_job,
             ) as cancel_core,
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "_run_terminal_replay_side_effects",
                 side_effect=finalize,
             ) as finalize_cancelled,
@@ -3400,7 +3397,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             ),
         ):
             self.assertTrue(
-                queue_worker_mod._cancel_orca_running_job(
+                cancellation_mod.cancel_running_job(
                     self.worker,
                     entry.queue_id,
                     job,
@@ -3445,21 +3442,19 @@ class TestQueueWorkerMethods(unittest.TestCase):
             return True
 
         with (
-            patch.object(queue_worker_mod, "_terminate_process", side_effect=terminate),
-            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
-            patch.object(queue_worker_mod, "mark_cancelled", return_value=False),
-            patch.object(queue_worker_mod, "_finalize_cancelled_run") as finalize_cancelled,
+            patch.object(replay_mod, "terminate_process", side_effect=terminate),
+            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(replay_mod, "mark_cancelled", return_value=False),
             patch.object(self.worker, "_release_admission_slot") as release,
         ):
             self.assertFalse(
-                queue_worker_mod._cancel_orca_running_job(
+                cancellation_mod.cancel_running_job(
                     self.worker,
                     entry.queue_id,
                     job,
                 )
             )
 
-        finalize_cancelled.assert_not_called()
         release.assert_not_called()
         self.assertEqual(active_slot_count(self.root), 1)
         [still_running] = list_queue(self.root)
@@ -3495,9 +3490,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
             return True
 
         with (
-            patch.object(queue_worker_mod, "_terminate_process", side_effect=terminate),
-            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
-            patch.object(queue_worker_mod, "mark_cancelled", return_value=False),
+            patch.object(replay_mod, "terminate_process", side_effect=terminate),
+            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(replay_mod, "mark_cancelled", return_value=False),
         ):
             self.worker._check_cancel_requests()
             self.assertIn(entry.queue_id, self.worker._running)
@@ -3535,26 +3530,26 @@ class TestQueueWorkerMethods(unittest.TestCase):
             admission_token=token or "",
             task_id=entry.task_id,
         )
-        real_mark_cancelled = queue_worker_mod.mark_cancelled
+        real_mark_cancelled = replay_mod.mark_cancelled
 
         def terminalize_then_report_false(*args: Any, **kwargs: Any) -> bool:
             self.assertTrue(real_mark_cancelled(*args, **kwargs))
             return False
 
         with (
-            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "mark_cancelled",
                 side_effect=terminalize_then_report_false,
             ),
             patch.object(
-                queue_worker_mod,
-                "_record_cancelled_run_state",
-                wraps=queue_worker_mod._record_cancelled_run_state,
+                replay_mod,
+                "record_cancelled_run_state",
+                wraps=replay_mod.record_cancelled_run_state,
             ) as record_state,
-            patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
-            patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
+            patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
+            patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
         ):
             self.worker._check_completed_jobs()
 
@@ -3588,7 +3583,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             admission_token=token or "",
             task_id=entry.task_id,
         )
-        real_mark_cancelled = queue_worker_mod.mark_cancelled
+        real_mark_cancelled = replay_mod.mark_cancelled
         mark_attempts = 0
 
         def terminate(current: MagicMock) -> bool:
@@ -3603,11 +3598,11 @@ class TestQueueWorkerMethods(unittest.TestCase):
             return real_mark_cancelled(*args, **kwargs)
 
         with (
-            patch.object(queue_worker_mod, "_terminate_process", side_effect=terminate),
-            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
-            patch.object(queue_worker_mod, "mark_cancelled", side_effect=flaky_mark_cancelled),
-            patch.object(queue_worker_mod, "_upsert_terminal_job_record", return_value=True),
-            patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
+            patch.object(replay_mod, "terminate_process", side_effect=terminate),
+            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(replay_mod, "mark_cancelled", side_effect=flaky_mark_cancelled),
+            patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
+            patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
         ):
             self.worker._check_cancel_requests()
             self.assertIn(entry.queue_id, self.worker._running)
@@ -3648,7 +3643,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             task_id=entry.task_id,
         )
         self.worker._running[entry.queue_id] = job
-        real_record_cancelled = queue_worker_mod._record_cancelled_run_state
+        real_record_cancelled = replay_mod.record_cancelled_run_state
         record_attempts = 0
         released: list[str] = []
 
@@ -3668,21 +3663,21 @@ class TestQueueWorkerMethods(unittest.TestCase):
             release_slot(self.root, current_token)
 
         with (
-            patch.object(queue_worker_mod, "_terminate_process", side_effect=terminate),
-            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(replay_mod, "terminate_process", side_effect=terminate),
+            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
             patch.object(
-                queue_worker_mod,
-                "_record_cancelled_run_state",
+                replay_mod,
+                "record_cancelled_run_state",
                 side_effect=record_cancelled,
             ),
             patch.object(
-                queue_worker_mod,
-                "_upsert_terminal_job_record",
+                worker_tracking_mod,
+                "upsert_terminal_job_record",
                 return_value=True,
             ) as upsert,
             patch.object(
-                queue_worker_mod,
-                "_notify_terminal_job_from_state",
+                worker_tracking_mod,
+                "notify_terminal_job_from_state",
                 return_value=False,
             ) as notify,
             patch.object(
@@ -3692,7 +3687,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             ),
         ):
             self.assertFalse(
-                queue_worker_mod._cancel_orca_running_job(
+                cancellation_mod.cancel_running_job(
                     self.worker,
                     entry.queue_id,
                     job,
@@ -3751,14 +3746,14 @@ class TestQueueWorkerMethods(unittest.TestCase):
             return True
 
         with (
-            patch.object(queue_worker_mod, "_terminate_process", side_effect=terminate),
-            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(replay_mod, "terminate_process", side_effect=terminate),
+            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
             patch.object(
-                queue_worker_mod,
-                "_upsert_terminal_job_record",
+                worker_tracking_mod,
+                "upsert_terminal_job_record",
                 side_effect=[False, True],
             ) as upsert,
-            patch.object(queue_worker_mod, "_notify_terminal_job_from_state", return_value=False),
+            patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
         ):
             self.worker._check_cancel_requests()
 
@@ -3810,18 +3805,17 @@ class TestQueueWorkerMethods(unittest.TestCase):
             return True
 
         with (
-            patch.object(queue_worker_mod, "_terminate_process", side_effect=terminate),
+            patch.object(replay_mod, "terminate_process", side_effect=terminate),
             patch.object(
-                queue_worker_mod,
+                replay_mod,
                 "recover_slot_engine_process",
                 side_effect=RuntimeError("engine recovery failed"),
             ),
-            patch.object(queue_worker_mod, "mark_cancelled") as mark_cancelled_entry,
-            patch.object(queue_worker_mod, "_finalize_cancelled_run") as finalize_cancelled,
+            patch.object(replay_mod, "mark_cancelled") as mark_cancelled_entry,
             patch.object(self.worker, "_release_admission_slot") as release,
         ):
             self.assertFalse(
-                queue_worker_mod._cancel_orca_running_job(
+                cancellation_mod.cancel_running_job(
                     self.worker,
                     entry.queue_id,
                     job,
@@ -3829,7 +3823,6 @@ class TestQueueWorkerMethods(unittest.TestCase):
             )
 
         mark_cancelled_entry.assert_not_called()
-        finalize_cancelled.assert_not_called()
         release.assert_not_called()
         self.assertEqual(active_slot_count(self.root), 1)
         [still_running] = list_queue(self.root)
@@ -3839,7 +3832,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.worker._shutdown_all()
         self.assertEqual(len(self.worker._running), 0)
 
-    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
+    @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
     def test_shutdown_all_with_running(self, mock_requeue: MagicMock) -> None:
         rxn = self.root / "mol_shut"
         rxn.mkdir()
@@ -3854,7 +3847,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process=mock_proc,
             admission_token="slot_shutdown",
         )
-        with patch("orca_auto.orca.queue.worker._terminate_process", return_value=True):
+        with patch("orca_auto.orca.queue.replay.terminate_process", return_value=True):
             self.worker._shutdown_all()
         self.assertEqual(len(self.worker._running), 0)
         mock_requeue.assert_called_once()
@@ -3891,10 +3884,10 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         with (
             patch(
-                "orca_auto.orca.queue.worker._terminate_process",
+                "orca_auto.orca.queue.replay.terminate_process",
                 side_effect=terminate_process,
             ),
-            patch("orca_auto.orca.queue.worker.requeue_running_entry") as mock_requeue,
+            patch("orca_auto.orca.queue.replay.requeue_running_entry") as mock_requeue,
         ):
             self.worker._shutdown_all()
 
@@ -3906,97 +3899,6 @@ class TestQueueWorkerMethods(unittest.TestCase):
         assert written is not None
         assert written["final_result"] is not None
         self.assertEqual(written["final_result"]["status"], "cancelled")
-
-    def test_finalize_cancelled_run_reconciles_completed_outcome(self) -> None:
-        # A run that completed in the instant before the cancel landed must not be
-        # mislabeled "cancelled": the queue entry is reconciled to the real terminal
-        # outcome recorded in the run state so entry, snapshot, and notify agree.
-        rxn = self.root / "mol_done"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-        # Mirror cancel_running_process_job, which marks the entry cancelled first.
-        self.assertTrue(mark_cancelled(self.root, entry.queue_id))
-
-        state = new_state(rxn, rxn / "job.inp", max_retries=3)
-        state["job_id"] = entry.task_id
-        finalize_state(
-            rxn,
-            state,
-            status="completed",
-            final_result={
-                "status": "completed",
-                "analyzer_status": "completed",
-                "reason": "normal_termination",
-                "completed_at": "t",
-                "last_out_path": None,
-            },
-        )
-
-        job = _RunningJob(
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=MagicMock(),
-            admission_token="slot_done",
-        )
-        queue_worker_mod._finalize_cancelled_run(self.worker, job)
-
-        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
-        self.assertEqual(queue_entries[entry.queue_id].status.value, "completed")
-        written = load_state(rxn)
-        assert written is not None
-        assert written["final_result"] is not None
-        self.assertEqual(written["final_result"]["status"], "completed")
-
-    def test_finalize_cancelled_run_rejects_previous_task_terminal_state(self) -> None:
-        rxn = self.root / "mol_force_cancel"
-        rxn.mkdir()
-        selected_inp = rxn / "task-b.inp"
-        selected_inp.write_text("! SP\n", encoding="utf-8")
-        entry = enqueue(
-            self.root,
-            str(rxn),
-            force=True,
-            task_id="task-b",
-            metadata={"selected_inp": str(selected_inp)},
-        )
-        dequeue_next(self.root)
-        self.assertTrue(mark_cancelled(self.root, entry.queue_id))
-
-        previous = new_state(rxn, rxn / "task-a.inp", max_retries=3)
-        previous["job_id"] = "task-a"
-        previous_run_id = previous["run_id"]
-        finalize_state(
-            rxn,
-            previous,
-            status=STATUS_COMPLETED,
-            final_result={
-                "status": STATUS_COMPLETED,
-                "analyzer_status": STATUS_COMPLETED,
-                "reason": "normal_termination",
-                "completed_at": "t",
-                "last_out_path": None,
-            },
-        )
-
-        job = _RunningJob(
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=MagicMock(),
-            admission_token="slot_force_cancel",
-            task_id="task-b",
-        )
-        queue_worker_mod._finalize_cancelled_run(self.worker, job)
-
-        terminal = {item.queue_id: item for item in list_queue(self.root)}[entry.queue_id]
-        self.assertEqual(terminal.status, QueueStatus.CANCELLED)
-        written = load_state(rxn)
-        assert written is not None
-        self.assertEqual(written["job_id"], "task-b")
-        self.assertEqual(written["selected_inp"], str(selected_inp))
-        self.assertNotEqual(written["run_id"], previous_run_id)
-        assert written["final_result"] is not None
-        self.assertEqual(written["final_result"]["status"], STATUS_CANCELLED)
 
     @patch("orca_auto.core.queue.worker.signal.signal")
     @patch("orca_auto.orca.queue.worker.time.sleep", side_effect=KeyboardInterrupt)

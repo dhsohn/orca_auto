@@ -7,10 +7,11 @@ import logging
 from typing import Any
 
 from ..config import load_config
-from ..queue import worker as _queue_worker_runtime
-from ..queue.worker import QueueWorker, read_worker_pid
+from ..engine import ENGINE_DEFINITION, read_worker_pid
+from ..queue.worker import QueueWorker
 
 logger = logging.getLogger(__name__)
+_ENGINE_RUNTIME = ENGINE_DEFINITION.build_queue_runtime()
 
 
 # -- Subcommands ----------------------------------------------------------
@@ -23,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_queue_worker(args: Any) -> int:
-    return _queue_worker_runtime._queue_module.run_pidfile_worker_command(
+    return _ENGINE_RUNTIME.run_pidfile_worker_command(
         args,
         load_config_fn=load_config,
         config_path_fn=lambda worker_args: str(worker_args.config),

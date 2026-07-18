@@ -22,6 +22,24 @@ reverse fails the build. Cross-layer engine wiring goes through the lazy
 string module registries (`core/engines/registry.py`,
 `core/queue/worker/admission.py`) instead of imports.
 
+Within workflow orchestration, inject only the outer persistence, engine,
+clock, and event boundaries through `OrchestrationServices`. Import internal
+stage, materialization, and lifecycle operations directly. Tests must reject
+unknown outer-service overrides and patch the owning module when isolating an
+internal operation.
+
+Bot wiring and workflow SI have narrower enforced directions:
+
+- `flow.bot.runner` and provider adapters are composition roots. The command
+  `BotApplication` does not directly own `core.ingest`, while
+  `UploadApplication` must not import command routing, providers, or the runner.
+  Both applications may use the provider-neutral `interaction_delivery` helper.
+- `flow.workflow.si.__init__` is the supported SI facade. Internally, dependencies
+  follow the allowed order publication → collection → rendering → science →
+  evidence → models. Layers may be skipped, but reverse imports fail
+  import-linter. Publication is the only file-writing SI owner; rendering stays
+  text-only.
+
 ## Current Package Layout
 
 ```text
@@ -153,13 +171,31 @@ implementation-coupled tests. Treat it as an audit report, not a failure gate.
   must not reuse workflow xTB execution semantics
 - Keep top-level alias packages, console-script aliases, and alternate runtime
   readers out of the codebase
+- Keep `orca_auto.orca.commands` as an adapter layer. Domain execution,
+  submission, worker-child, and queue modules must not import it.
+- Keep bot upload persistence below runner/provider composition, and keep SI
+  evidence/science/rendering free of publication imports. These directions are
+  enforced in `pyproject.toml`; do not bypass them with a forwarding module.
 
-## Internal Engine Workers
+## Engine Workers
 
 xTB-MD, xTB, CREST, and ORCA all execute through the common engine runtime. Engine-local
 packages should expose an `EngineDefinition`; parent workers use
 `EngineQueueWorker`, and children use
 `python -m orca_auto.core.engines.worker_child --engine <orca|xtb_md|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`.
+Build parent-worker infrastructure from `EngineDefinition.build_queue_runtime()`
+and use the canonical `core.queue.engine` admission, child, lifecycle, worker
+execution, and hook contracts directly. The former generic internal-engine
+facade no longer exists. Keep workflow-root discovery, publication fencing, and
+live child-PID reconciliation as explicit xTB policy. Keep retry,
+crash-generation recovery, publication, terminal replay, and state/report
+policy inside `orca_auto.orca`. Do not add a forwarding module when the
+canonical runtime already owns the operation.
+
+Keep `orca_auto.orca.queue.worker` as the parent-worker composition root.
+Queued-publication repair belongs to `queue.publication_repair`, cancellation
+to `queue.cancellation`, terminal reconciliation/replay to `queue.replay`, and
+job-index/notification tracking to `queue.worker_tracking`.
 
 Standalone xTB-MD exposes only the shared `run-dir` and queue/activity surface.
 Keep its single-attempt, no-retry/no-resume contract in `orca_auto.xtb_md`; do

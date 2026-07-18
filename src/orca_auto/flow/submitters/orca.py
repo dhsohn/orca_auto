@@ -279,9 +279,9 @@ def _submit_request(
 
 
 def _submit_reaction_dir_to_queue(args: Namespace) -> Any:
-    from orca_auto.orca.commands import run_inp as _run_inp
+    from orca_auto.orca import submission
 
-    return _run_inp.submit_reaction_dir_to_queue(args)
+    return submission.submit_reaction_dir_to_queue(args)
 
 
 def _submission_reaction_dir(submission: Any, default_reaction_dir: str) -> str:
@@ -337,9 +337,9 @@ def recover_exact_reaction_dir_submission(
 ) -> dict[str, Any] | None:
     """Adopt the exact ORCA row created by a replayed workflow submission."""
     del max_cores, max_memory_gb, repo_root
-    from orca_auto.orca.commands.run_inp_context import WorkerStatusInfo
     from orca_auto.orca.config import load_config
     from orca_auto.orca.queue import adapter as queue_adapter
+    from orca_auto.orca.run_context import WorkerStatusInfo
 
     request = _submit_request(
         reaction_dir=reaction_dir,

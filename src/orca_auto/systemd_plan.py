@@ -247,6 +247,10 @@ def _systemctl_transition_commands(
     disable_command.append(opposite_unit)
     commands.append(tuple(disable_command))
     if not no_start:
+        # An explicit install transition is an operator-requested recovery.
+        # Clear the worker's start-limit counter so the bounded automatic
+        # restart policy cannot block that request inside its five-minute window.
+        commands.append(("systemctl", "reset-failed", _worker_unit_for_user(target_user)))
         # `restart` also starts an inactive unit. Unlike `enable --now`, it
         # reliably reloads code and reapplies the runtime target's Wants= graph
         # when the requested mode was already active.

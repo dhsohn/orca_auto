@@ -33,6 +33,7 @@ from .definitions import (
     EngineQueueFunctions,
     EngineRunnerCallbacks,
 )
+from .identity import entry_matches_engine_identity, own_engine_accept_entry
 from .registry import get_engine_definition, known_engine_ids
 
 if TYPE_CHECKING:
@@ -94,8 +95,10 @@ __all__ = [
     "build_queue_entry_by_id",
     "build_worker_child_command",
     "build_worker_child_command_for_engine",
+    "entry_matches_engine_identity",
     "get_engine_definition",
     "known_engine_ids",
     "load_engine_artifact_payload",
+    "own_engine_accept_entry",
     "run_engine_worker_child_job",
 ]

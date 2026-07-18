@@ -11,6 +11,7 @@ from orca_auto.core.commands.run_dir import (
     SUPPRESS_QUEUED_NOTIFICATION_CONTEXT_KEY,
     EngineRunDirSubmission,
 )
+from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue import (
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
@@ -43,7 +44,6 @@ from orca_auto.core.queue.enqueue_publication import (
     repair_enqueue_publication_outcome,
     run_enqueue_publication,
 )
-from orca_auto.core.queue.internal_engine.runtime import entry_matches_engine_identity
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.store import mutate_entries, reject_active_task_duplicate
 from orca_auto.core.statuses import (

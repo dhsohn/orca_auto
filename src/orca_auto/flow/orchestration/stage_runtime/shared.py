@@ -16,11 +16,14 @@ from orca_auto.core.statuses import (
     SUBMISSION_DEFERRED_STATUSES,
 )
 from orca_auto.core.utils import normalize_bool as _shared_normalize_bool
-from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
-from orca_auto.flow.orchestration.deps import (
-    orchestration_context as _orchestration_context,
+from orca_auto.core.utils import normalize_text
+from orca_auto.flow.contracts.workflow import workflow_stage_metadata, workflow_task_payload_dict
+from orca_auto.flow.orchestration.services import (
+    OrchestrationServices,
+    resolve_orchestration_services,
 )
 from orca_auto.flow.orchestration.stage_views import WorkflowStageView, WorkflowTaskView
+from orca_auto.flow.orchestration.support import load_config_root_impl, submission_target_impl
 from orca_auto.flow.state import (
     workflow_stage_dirnames_for_engine,
 )
@@ -37,7 +40,7 @@ def _stage_id_for_log(stage: dict[str, Any] | None) -> str:
 
 @dataclass(frozen=True)
 class EngineStageSyncContext:
-    o: OrchestrationDeps
+    services: OrchestrationServices
     stage: dict[str, Any]
     task: dict[str, Any]
     task_payload: dict[str, Any]
@@ -48,9 +51,9 @@ class EngineStageSyncContext:
 
     def should_submit(self, *, submit_ready: bool, config_path: str | None) -> bool:
         return (
-            self.o.stages.support._normalize_text(self.task.get("status")) == STATUS_PLANNED
+            normalize_text(self.task.get("status")) == STATUS_PLANNED
             and submit_ready
-            and bool(self.o.stages.support._normalize_text(config_path))
+            and bool(normalize_text(config_path))
         )
 
     def set_submission_result(self, submission: dict[str, Any]) -> None:
@@ -64,20 +67,20 @@ def _engine_stage_sync_context(
     stage: dict[str, Any],
     *,
     engine: str,
-    deps: OrchestrationDeps | None = None,
+    services: OrchestrationServices | None = None,
 ) -> EngineStageSyncContext | None:
-    o = _orchestration_context(deps)
+    resolved = resolve_orchestration_services(services)
     task = stage.get("task")
-    if not isinstance(task, dict) or o.stages.support._normalize_text(task.get("engine")) != engine:
+    if not isinstance(task, dict) or normalize_text(task.get("engine")) != engine:
         return None
     stage_view = WorkflowStageView(stage)
     task_view = stage_view.task
     return EngineStageSyncContext(
-        o=o,
+        services=resolved,
         stage=stage,
         task=task,
-        task_payload=o.stages.support._task_payload_dict(task),
-        stage_metadata=o.stages.support._stage_metadata(stage),
+        task_payload=workflow_task_payload_dict(task),
+        stage_metadata=workflow_stage_metadata(stage),
         engine=engine,
         stage_view=stage_view,
         task_view=task_view,
@@ -190,7 +193,7 @@ def _apply_contract_status(stage: dict[str, Any], task: dict[str, Any], status: 
 
 
 def _engine_job_dir_contract_lookup(
-    o: Any,
+    services: OrchestrationServices,
     stage: dict[str, Any],
     task_payload: dict[str, Any],
     *,
@@ -198,13 +201,13 @@ def _engine_job_dir_contract_lookup(
     config_path: str | None,
     engine: str,
 ) -> tuple[str, Path] | None:
-    job_dir_target = o.stages.support._normalize_text(task_payload.get("job_dir"))
+    job_dir_target = normalize_text(task_payload.get("job_dir"))
     index_root = (
         runtime_paths["allowed_root"]
-        or o.stages.support._load_config_root(config_path, engine=engine)
+        or load_config_root_impl(config_path, engine=engine, services=services)
         or Path(job_dir_target or ".").resolve().parent
     )
-    target = job_dir_target or o.stages.support._submission_target(stage)
+    target = job_dir_target or submission_target_impl(stage)
     if not target:
         return None
     return target, index_root
@@ -240,17 +243,15 @@ def append_unique_artifact_impl(
     path: str,
     selected: bool = False,
     metadata: dict[str, Any] | None = None,
-    deps: OrchestrationDeps | None = None,
 ) -> None:
-    o = _orchestration_context(deps)
-    path_text = o.stages.support._normalize_text(path)
+    path_text = normalize_text(path)
     if not path_text:
         return
-    key = (o.stages.support._normalize_text(kind), path_text)
+    key = (normalize_text(kind), path_text)
     seen = {
         (
-            o.stages.support._normalize_text(item.get("kind")),
-            o.stages.support._normalize_text(item.get("path")),
+            normalize_text(item.get("kind")),
+            normalize_text(item.get("path")),
         )
         for item in rows
         if isinstance(item, dict)
@@ -259,7 +260,7 @@ def append_unique_artifact_impl(
         return
     rows.append(
         {
-            "kind": o.stages.support._normalize_text(kind) or "artifact",
+            "kind": normalize_text(kind) or "artifact",
             "path": path_text,
             "selected": bool(selected),
             "metadata": dict(metadata or {}),

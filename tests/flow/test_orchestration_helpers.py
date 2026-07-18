@@ -7,7 +7,6 @@ import pytest
 
 from orca_auto.flow.contracts import WorkflowStageInput
 from orca_auto.flow.contracts.xtb import XtbArtifactContract, XtbCandidateArtifact
-from orca_auto.flow.orchestration.deps import orchestration_deps
 from orca_auto.flow.orchestration.lifecycle import (
     downstream_terminal_result_impl,
     effective_stage_status_impl,
@@ -56,6 +55,7 @@ from orca_auto.flow.orchestration.support import (
 from orca_auto.flow.orchestration.support import (
     submission_target_impl as _submission_target,
 )
+from tests.flow.orchestration_services import orchestration_services
 
 
 def _normalize_text(value: Any) -> str:
@@ -76,6 +76,11 @@ def _workflow_has_active_children(
         normalize_text_fn=_normalize_text,
         workflow_has_active_downstream_fn=lambda current_payload: active_downstream,
     )
+
+
+def test_orchestration_services_reject_unknown_override() -> None:
+    with pytest.raises(TypeError, match="unknown orchestration service override"):
+        orchestration_services(overrides={"_sync_crest_stage": lambda stage, **kwargs: None})
 
 
 def test_load_contract_or_none_returns_none_for_missing_contract() -> None:
@@ -246,21 +251,21 @@ def test_submission_target_and_config_roots_follow_precedence() -> None:
     )
     assert _submission_target({}) == ""
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
             "engine_runtime_paths": lambda path, **kwargs: {
                 "allowed_root": Path("/tmp/allowed"),
             }
         }
     )
-    assert _load_config_root("/tmp/config.yaml", deps=deps) == Path("/tmp/allowed")
+    assert _load_config_root("/tmp/config.yaml", services=deps) == Path("/tmp/allowed")
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
             "engine_runtime_paths": lambda path, **kwargs: (_ for _ in ()).throw(ValueError("bad"))
         }
     )
-    assert _load_config_root("/tmp/config.yaml", deps=deps) is None
+    assert _load_config_root("/tmp/config.yaml", services=deps) is None
     assert _load_config_root(None) is None
 
 
@@ -288,14 +293,14 @@ def test_xtb_handoff_status_and_ts_guess_error_cover_ready_and_failure() -> None
     )
     contract = _empty_xtb_contract()
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
             "select_xtb_downstream_inputs": lambda contract, policy, require_geometry: (
                 ready_input,
             )
         }
     )
-    ready = _xtb_handoff_status(contract, deps=deps)
+    ready = _xtb_handoff_status(contract, services=deps)
     assert ready == {
         "status": "ready",
         "reason": "",
@@ -304,10 +309,10 @@ def test_xtb_handoff_status_and_ts_guess_error_cover_ready_and_failure() -> None
     }
 
     missing_contract = _empty_xtb_contract()
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={"select_xtb_downstream_inputs": lambda contract, policy, require_geometry: ()}
     )
-    assert _xtb_handoff_status(missing_contract, deps=deps) == {
+    assert _xtb_handoff_status(missing_contract, services=deps) == {
         "status": "failed",
         "reason": "xtb_ts_guess_missing",
         "message": "xTB path_search did not produce a ts_guess candidate (xtbpath_ts.xyz); refusing ORCA handoff.",
@@ -325,7 +330,7 @@ def test_xtb_handoff_status_and_ts_guess_error_cover_ready_and_failure() -> None
             XtbCandidateArtifact(rank=1, kind="ts_guess", path="/tmp/xtbpath_ts.xyz"),
         ),
     )
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
             "choose_orca_geometry_frame": lambda path, candidate_kind: (
                 "",
@@ -333,7 +338,7 @@ def test_xtb_handoff_status_and_ts_guess_error_cover_ready_and_failure() -> None
             )
         }
     )
-    assert _reaction_ts_guess_error(invalid_contract, deps=deps) == {
+    assert _reaction_ts_guess_error(invalid_contract, services=deps) == {
         "reason": "xtb_ts_guess_not_single_geometry",
         "message": "xTB produced xtbpath_ts.xyz but it is not a single-geometry TS guess; refusing ORCA handoff.",
     }
@@ -454,14 +459,16 @@ def test_completed_role_and_contract_helpers_use_expected_targets() -> None:
         "task": {"payload": {"job_dir": "/tmp/crest_job"}},
         "metadata": {"queue_id": "q_ignore"},
     }
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
-            "_load_config_root": lambda path, **kwargs: Path("/tmp/crest_allowed"),
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": Path("/tmp/crest_allowed")
+            },
             "load_crest_artifact_contract": fake_load_crest_artifact_contract,
         }
     )
     assert (
-        _completed_crest_stage(crest_stage, crest_config="/tmp/crest.yaml", deps=deps)
+        _completed_crest_stage(crest_stage, crest_config="/tmp/crest.yaml", services=deps)
         == "crest_contract"
     )
     assert crest_calls == [
@@ -481,14 +488,16 @@ def test_completed_role_and_contract_helpers_use_expected_targets() -> None:
             "enqueue_payload": {"reaction_dir": "/tmp/enqueue_dir"},
         },
     }
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
-            "_load_config_root": lambda path, **kwargs: Path("/tmp/orca_allowed"),
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": Path("/tmp/orca_allowed")
+            },
             "load_orca_artifact_contract": fake_load_orca_artifact_contract,
         }
     )
     assert (
-        _completed_orca_stage(orca_stage, orca_config="/tmp/orca.yaml", deps=deps)
+        _completed_orca_stage(orca_stage, orca_config="/tmp/orca.yaml", services=deps)
         == "orca_contract"
     )
     assert orca_calls == [

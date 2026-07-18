@@ -6,7 +6,8 @@ from typing import Any
 
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.statuses import STATUS_COMPLETED, STATUS_FAILED, status_in
-from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
+from orca_auto.core.utils import normalize_text, safe_int
+from orca_auto.flow.orchestration.services import OrchestrationServices
 from orca_auto.flow.orchestration.stage_runtime.shared import (
     EngineStageSyncContext,
     _apply_contract_status,
@@ -17,7 +18,10 @@ from orca_auto.flow.orchestration.stage_runtime.shared import (
 )
 from orca_auto.flow.orchestration.stage_runtime.xtb_handoff import (
     _empty_xtb_handoff,
+    xtb_handoff_status_impl,
 )
+from orca_auto.flow.orchestration.stage_runtime.xtb_path_jobs import write_xtb_path_job_impl
+from orca_auto.flow.orchestration.stage_runtime.xtb_retry import xtb_path_retry_limit_impl
 from orca_auto.flow.orchestration.stage_runtime.xtb_submission import (
     _apply_xtb_submission_result,
     _record_xtb_submission_attempt,
@@ -36,7 +40,7 @@ class _XtbHandoffRetryDecision:
 
 
 def _load_xtb_contract(
-    o: Any,
+    services: OrchestrationServices,
     stage: dict[str, Any],
     task_payload: dict[str, Any],
     *,
@@ -44,7 +48,7 @@ def _load_xtb_contract(
     xtb_config: str | None,
 ) -> Any | None:
     lookup = _engine_job_dir_contract_lookup(
-        o,
+        services,
         stage,
         task_payload,
         runtime_paths=xtb_runtime_paths,
@@ -55,7 +59,7 @@ def _load_xtb_contract(
         return None
     target, index_root = lookup
     return _load_contract_or_none(
-        o.engines.load_xtb_artifact_contract,
+        services.engines.load_xtb_artifact_contract,
         engine="xtb",
         target=target,
         stage=stage,
@@ -64,7 +68,7 @@ def _load_xtb_contract(
 
 
 def _apply_xtb_contract(
-    o: Any,
+    services: OrchestrationServices,
     stage_view: WorkflowStageView,
     task_view: WorkflowTaskView,
     contract: Any,
@@ -77,8 +81,8 @@ def _apply_xtb_contract(
 
     current_attempt = stage_view.xtb_current_attempt_number()
     handoff = (
-        o.stages.runtime._xtb_handoff_status(contract)
-        if task_view.kind(o) == "path_search"
+        xtb_handoff_status_impl(contract, services=services)
+        if task_view.kind() == "path_search"
         else _empty_xtb_handoff()
     )
     stage_view.update_xtb_attempt_record(
@@ -94,9 +98,7 @@ def _apply_xtb_contract(
             "handoff_status": handoff["status"],
             "handoff_reason": handoff["reason"],
             "handoff_message": handoff["message"],
-            "completed_at": o.stages.support._normalize_text(
-                contract.analysis_summary.get("completed_at")
-            ),
+            "completed_at": normalize_text(contract.analysis_summary.get("completed_at")),
         },
     )
     stage_view.set_reaction_handoff(handoff)
@@ -104,7 +106,6 @@ def _apply_xtb_contract(
 
 
 def _xtb_handoff_retry_candidate(
-    o: Any,
     stage_view: WorkflowStageView,
     task_view: WorkflowTaskView,
     handoff: dict[str, str],
@@ -114,27 +115,23 @@ def _xtb_handoff_retry_candidate(
 ) -> bool:
     return (
         submit_ready
-        and bool(o.stages.support._normalize_text(xtb_config))
-        and task_view.kind(o) == "path_search"
+        and bool(normalize_text(xtb_config))
+        and task_view.kind() == "path_search"
         and handoff["status"] == STATUS_FAILED
         and status_in(stage_view.raw.get("status"), {STATUS_COMPLETED, STATUS_FAILED})
     )
 
 
 def _xtb_handoff_retry_budget(
-    o: Any,
     stage: dict[str, Any],
     stage_metadata: dict[str, Any],
 ) -> tuple[int, int]:
-    retries_used = o.stages.support._safe_int(
-        stage_metadata.get("xtb_handoff_retries_used"), default=0
-    )
-    retry_limit = o.stages.runtime._xtb_path_retry_limit(stage)
+    retries_used = safe_int(stage_metadata.get("xtb_handoff_retries_used"), default=0)
+    retry_limit = xtb_path_retry_limit_impl(stage)
     return retries_used, retry_limit
 
 
 def _xtb_handoff_retry_decision(
-    o: Any,
     stage_view: WorkflowStageView,
     task_view: WorkflowTaskView,
     handoff: dict[str, str],
@@ -143,7 +140,6 @@ def _xtb_handoff_retry_decision(
     submit_ready: bool,
 ) -> _XtbHandoffRetryDecision:
     if not _xtb_handoff_retry_candidate(
-        o,
         stage_view,
         task_view,
         handoff,
@@ -153,9 +149,8 @@ def _xtb_handoff_retry_decision(
         return _XtbHandoffRetryDecision(False, 0, 0, 0)
 
     retries_used, retry_limit = _xtb_handoff_retry_budget(
-        o,
         stage_view.raw,
-        stage_view.metadata(None),
+        stage_view.metadata(),
     )
     return _XtbHandoffRetryDecision(
         retries_used < retry_limit,
@@ -166,7 +161,7 @@ def _xtb_handoff_retry_decision(
 
 
 def _submit_xtb_handoff_retry(
-    o: Any,
+    services: OrchestrationServices,
     stage_view: WorkflowStageView,
     task_view: WorkflowTaskView,
     handoff: dict[str, str],
@@ -178,7 +173,7 @@ def _submit_xtb_handoff_retry(
 ) -> dict[str, Any]:
     stage = stage_view.raw
     task = task_view.raw
-    retry_job_dir = o.stages.runtime._write_xtb_path_job(
+    retry_job_dir = write_xtb_path_job_impl(
         stage,
         xtb_allowed_root=xtb_runtime_paths["allowed_root"],
         workflow_id=workflow_id,
@@ -186,15 +181,14 @@ def _submit_xtb_handoff_retry(
     )
     task_view.update_payload({"job_dir": retry_job_dir})
     task_view.update_enqueue_payload({"job_dir": retry_job_dir})
-    submission = o.engines.submit_xtb_job_dir(
+    submission = services.engines.submit_xtb_job_dir(
         job_dir=retry_job_dir,
         priority=normalize_queue_priority(task["enqueue_payload"].get("priority")),
         config_path=str(xtb_config),
     )
-    submission["submitted_at"] = o.persistence.now_utc_iso()
+    submission["submitted_at"] = services.clock.now_utc_iso()
     task_view.set_submission_result(submission)
     _record_xtb_submission_attempt(
-        o,
         stage,
         submission,
         attempt_number=attempt_number,
@@ -219,7 +213,7 @@ def _apply_xtb_handoff_retry_submission(
         deferred_handoff_status="waiting_for_slot",
         active_handoff_status="retrying",
     )
-    job_dir = str(task_view.payload(None).get("job_dir") or "").strip()
+    job_dir = str(task_view.payload().get("job_dir") or "").strip()
     if job_dir:
         stage_metadata["latest_known_path"] = job_dir
     job_id = str(submission.get("job_id") or "").strip()
@@ -237,7 +231,7 @@ def _apply_xtb_handoff_retry_submission(
 
 
 def _maybe_retry_xtb_handoff(
-    o: Any,
+    services: OrchestrationServices,
     stage_view: WorkflowStageView,
     task_view: WorkflowTaskView,
     handoff: dict[str, str],
@@ -247,9 +241,8 @@ def _maybe_retry_xtb_handoff(
     submit_ready: bool,
     workflow_id: str,
 ) -> bool:
-    stage_metadata = stage_view.metadata(None)
+    stage_metadata = stage_view.metadata()
     decision = _xtb_handoff_retry_decision(
-        o,
         stage_view,
         task_view,
         handoff,
@@ -260,7 +253,7 @@ def _maybe_retry_xtb_handoff(
         return False
 
     submission = _submit_xtb_handoff_retry(
-        o,
+        services,
         stage_view,
         task_view,
         handoff,
@@ -307,7 +300,7 @@ def _submit_xtb_stage_if_needed(
     if not context.should_submit(submit_ready=submit_ready, config_path=xtb_config):
         return True
     return _submit_xtb_stage(
-        context.o,
+        context.services,
         context.stage,
         context.task,
         context.stage_metadata,
@@ -324,7 +317,7 @@ def _load_and_apply_xtb_contract(
     xtb_config: str | None,
 ) -> tuple[Any, dict[str, str]] | None:
     contract = _load_xtb_contract(
-        context.o,
+        context.services,
         context.stage,
         context.task_payload,
         xtb_runtime_paths=xtb_runtime_paths,
@@ -333,7 +326,7 @@ def _load_and_apply_xtb_contract(
     if contract is None:
         return None
     handoff = _apply_xtb_contract(
-        context.o,
+        context.services,
         context.stage_view,
         context.task_view,
         contract,
@@ -346,7 +339,6 @@ def _materialize_xtb_stage_result(
     contract: Any,
 ) -> None:
     retries_used, retry_limit = _xtb_handoff_retry_budget(
-        context.o,
         context.stage,
         context.stage_metadata,
     )
@@ -364,12 +356,11 @@ def sync_xtb_stage_impl(
     submit_ready: bool,
     workflow_id: str,
     workspace_dir: Path,
-    deps: OrchestrationDeps | None = None,
+    services: OrchestrationServices | None = None,
 ) -> None:
-    context = _engine_stage_sync_context(stage, engine="xtb", deps=deps)
+    context = _engine_stage_sync_context(stage, engine="xtb", services=services)
     if context is None:
         return
-    o = context.o
     xtb_runtime_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="xtb")
     submission_applied = _submit_xtb_stage_if_needed(
         context,
@@ -391,7 +382,7 @@ def sync_xtb_stage_impl(
         return
     contract, handoff = contract_result
     if _maybe_retry_xtb_handoff(
-        o,
+        context.services,
         context.stage_view,
         context.task_view,
         handoff,

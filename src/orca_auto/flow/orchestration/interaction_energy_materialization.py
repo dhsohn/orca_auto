@@ -53,7 +53,6 @@ from orca_auto.flow.manifest import (
     require_int,
     validate_interaction_energy_state_balance,
 )
-from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 from orca_auto.flow.xyz_utils import write_fragment_xyz
 from orca_auto.orca.report.interaction_energy import (
@@ -330,9 +329,7 @@ def append_interaction_energy_stages_impl(
     payload: dict[str, Any],
     *,
     workspace_dir: Path,
-    deps: OrchestrationDeps | None = None,
 ) -> bool:
-    del deps
     if _text(payload.get("template_name")) != "conformer_screening":
         return False
     params = _request_parameters(payload)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from orca_auto.core.commands.run_dir import (
     active_run_dir_pinned_target,
@@ -32,16 +32,20 @@ from orca_auto.core.queue.store import QueueAfterCommitError
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import timestamped_token
 
-from ..execution_binding import (
+from .config import load_config
+from .engine import read_worker_pid
+from .execution import active_direct_run_error, select_latest_inp
+from .execution_binding import (
     build_orca_execution_snapshot,
     cleanup_unowned_orca_execution_snapshot,
 )
-from ..input_artifacts import selected_input_artifacts
-from ..retry_policy import effective_max_retries
-
-if TYPE_CHECKING:
-    from ..types import QueueEnqueuedNotification
-    from .run_inp_context import WorkerStatusInfo
+from .inp_rewriter import prepare_submission_resource_request, read_resource_request_from_input
+from .input_artifacts import selected_input_artifacts
+from .notifications import notify_queue_enqueued_event
+from .queue import adapter as queue_adapter
+from .retry_policy import effective_max_retries
+from .run_context import WorkerStatusInfo, resolve_submission_context
+from .types import QueueEnqueuedNotification
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +71,7 @@ def _snapshot_cleanup_job_dir(reaction_dir: Path, snapshot: Any) -> Path:
     raise ValueError("ORCA cleanup target no longer matches the execution snapshot")
 
 
-def _mark_orca_snapshot_owned(
+def mark_orca_snapshot_owned(
     intent_root: Path,
     intent_token: str,
 ) -> str | None:
@@ -116,8 +120,7 @@ class _QueuedRecordPartiallyPublished(RuntimeError):
     """The queued record is incomplete; raising parks the lease for worker repair."""
 
 
-def active_queue_entry(allowed_root: Path, reaction_dir: Path, *, deps: Any) -> QueueEntry | None:
-    queue_adapter = deps.submission.queue_adapter
+def active_queue_entry(allowed_root: Path, reaction_dir: Path) -> QueueEntry | None:
     helper = getattr(queue_adapter, "get_active_entry_for_reaction_dir", None)
     if callable(helper):
         return helper(allowed_root, str(reaction_dir))
@@ -137,62 +140,25 @@ def active_queue_entry(allowed_root: Path, reaction_dir: Path, *, deps: Any) -> 
 def find_submission_conflict(
     allowed_root: Path,
     reaction_dir: Path,
-    *,
-    deps: Any,
 ) -> str | None:
-    active_entry = active_queue_entry(allowed_root, reaction_dir, deps=deps)
-    queue_adapter = deps.submission.queue_adapter
+    active_entry = active_queue_entry(allowed_root, reaction_dir)
     if active_entry is not None:
         return (
             "Job directory already queued: "
             f"{reaction_dir} (queue_id={queue_adapter.queue_entry_id(active_entry)}, "
             f"status={queue_adapter.queue_entry_status(active_entry)})"
         )
-    return deps.submission.active_direct_run_error(reaction_dir)
-
-
-def emit_queued_submission(
-    reaction_dir: Path,
-    entry: QueueEntry,
-    *,
-    worker_status: str | None,
-    worker_pid: int | None,
-    worker_log: str | Path | None,
-    worker_detail: str | None = None,
-    deps: Any,
-) -> None:
-    queue_adapter = deps.submission.queue_adapter
-    print("status: queued")
-    print(f"job_dir: {reaction_dir}")
-    print(f"queue_id: {queue_adapter.queue_entry_id(entry)}")
-    task_id = queue_adapter.queue_entry_task_id(entry)
-    if task_id:
-        print(f"job_id: {task_id}")
-    print(f"priority: {queue_adapter.queue_entry_priority(entry)}")
-    if queue_adapter.queue_entry_force(entry):
-        print("force: true")
-    if worker_status:
-        print(f"worker: {worker_status}")
-    if worker_pid is not None:
-        print(f"worker_pid: {worker_pid}")
-    if worker_log:
-        print(f"worker_log: {worker_log}")
-    if worker_detail:
-        print(f"worker_detail: {worker_detail}")
+    return active_direct_run_error(reaction_dir, logger=logger)
 
 
 def worker_status_for_submission(allowed_root: Path) -> WorkerStatusInfo:
-    from ..queue.worker import read_worker_pid
-    from .run_inp_context import WorkerStatusInfo
-
     pid = read_worker_pid(allowed_root)
     if pid is None:
         return WorkerStatusInfo(status="inactive")
     return WorkerStatusInfo(status="running", pid=pid)
 
 
-def queue_entry_worker_log(entry: Any, *, deps: Any) -> Any | None:
-    queue_adapter = deps.submission.queue_adapter
+def queue_entry_worker_log(entry: Any) -> Any | None:
     metadata_fn = getattr(queue_adapter, "queue_entry_metadata", None)
     if not callable(metadata_fn):
         return None
@@ -209,8 +175,6 @@ def worker_status_with_log_file(
     worker_info: WorkerStatusInfo,
     worker_log: Any | None,
 ) -> WorkerStatusInfo:
-    from .run_inp_context import WorkerStatusInfo
-
     return WorkerStatusInfo(
         status=worker_info.status,
         pid=worker_info.pid,
@@ -219,13 +183,12 @@ def worker_status_with_log_file(
     )
 
 
-def build_queue_enqueued_notification(entry: Any, *, deps: Any) -> QueueEnqueuedNotification:
-    submission = deps.submission
+def build_queue_enqueued_notification(entry: Any) -> QueueEnqueuedNotification:
     return {
-        "queue_id": submission.queue_adapter.queue_entry_id(entry),
-        "reaction_dir": submission.queue_adapter.queue_entry_reaction_dir(entry),
-        "priority": submission.queue_adapter.queue_entry_priority(entry),
-        "force": submission.queue_adapter.queue_entry_force(entry),
+        "queue_id": queue_adapter.queue_entry_id(entry),
+        "reaction_dir": queue_adapter.queue_entry_reaction_dir(entry),
+        "priority": queue_adapter.queue_entry_priority(entry),
+        "force": queue_adapter.queue_entry_force(entry),
         "enqueued_at": getattr(entry, "enqueued_at", ""),
     }
 
@@ -234,13 +197,11 @@ def resource_request_from_selected_inp(
     cfg: Any,
     selected_inp: Path | None,
     *,
-    deps: Any,
     logger: logging.Logger,
 ) -> dict[str, int]:
     prepared = prepared_resource_input_from_selected_inp(
         cfg,
         selected_inp,
-        deps=deps,
         logger=logger,
     )
     return dict(prepared.resource_request)
@@ -250,12 +211,11 @@ def prepared_resource_input_from_selected_inp(
     cfg: Any,
     selected_inp: Path | None,
     *,
-    deps: Any,
     logger: logging.Logger,
 ) -> Any:
     if selected_inp is None:
         raise ValueError("No .inp file selected for ORCA queue submission.")
-    prepared = deps.submission.prepare_submission_resource_request(
+    prepared = prepare_submission_resource_request(
         selected_inp,
         default_max_cores=int(cfg.resources.max_cores_per_task),
         default_max_memory_gb=int(cfg.resources.max_memory_gb_per_task),
@@ -284,16 +244,14 @@ def build_queue_metadata(
     reaction_dir: Path,
     selected_inp: Path | None,
     args: Any | None = None,
-    deps: Any,
 ) -> dict[str, Any]:
-    from ..job_locations import resolve_job_metadata
+    from .job_locations import resolve_job_metadata
 
     artifacts = selected_input_artifacts(selected_inp)
     job_type, molecule_key = resolve_job_metadata(artifacts.selected_inp, reaction_dir)
     prepared_input = prepared_resource_input_from_selected_inp(
         cfg,
         selected_inp,
-        deps=deps,
         logger=logger,
     )
     requested = dict(prepared_input.resource_request)
@@ -341,9 +299,8 @@ def upsert_queued_job_record(
     selected_inp: Path | None,
     job_id: str,
     queue_metadata: dict[str, Any] | None = None,
-    deps: Any,
 ) -> None:
-    from ..job_locations import resolve_job_metadata, upsert_job_record
+    from .job_locations import resolve_job_metadata, upsert_job_record
 
     artifacts = selected_input_artifacts(selected_inp)
     selected_input = artifacts.selected_input_path
@@ -361,9 +318,9 @@ def upsert_queued_job_record(
     if not isinstance(requested, dict):
         requested = {}
     if not requested and selected_inp is not None and selected_inp.exists():
-        requested = deps.submission.read_resource_request_from_input(selected_inp)
+        requested = read_resource_request_from_input(selected_inp)
     if not requested and selected_inp is not None and selected_inp.exists():
-        requested = resource_request_from_selected_inp(cfg, selected_inp, deps=deps, logger=logger)
+        requested = resource_request_from_selected_inp(cfg, selected_inp, logger=logger)
     actual = metadata.get("resource_actual")
     if not isinstance(actual, dict):
         actual = dict(requested)
@@ -387,7 +344,6 @@ def record_queued_job_side_effect(
     selected_inp: Path | None,
     job_id: str,
     queue_metadata: dict[str, Any],
-    deps: Any,
 ) -> str | None:
     try:
         upsert_queued_job_record(
@@ -396,7 +352,6 @@ def record_queued_job_side_effect(
             selected_inp=selected_inp,
             job_id=job_id,
             queue_metadata=queue_metadata,
-            deps=deps,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -415,8 +370,6 @@ def worker_status_with_detail(
     worker_info: WorkerStatusInfo,
     detail: str | None,
 ) -> WorkerStatusInfo:
-    from .run_inp_context import WorkerStatusInfo
-
     if not detail:
         return worker_info
     worker_detail = worker_info.detail
@@ -438,15 +391,11 @@ def create_queued_submission(
     reaction_dir: Path,
     *,
     selected_inp: Path | None = None,
-    deps: Any,
 ) -> QueuedSubmissionResult:
-    from ..queue import adapter as queue_adapter
-
-    submission = deps.submission
     allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
     if selected_inp is None:
         try:
-            selected_inp = submission.select_latest_inp(reaction_dir)
+            selected_inp = select_latest_inp(reaction_dir)
         except ValueError:
             selected_inp = None
     warn_ignored_resource_override_flags(args, logger=logger)
@@ -458,7 +407,6 @@ def create_queued_submission(
         reaction_dir=reaction_dir,
         selected_inp=selected_inp,
         args=args,
-        deps=deps,
     )
     task_id = timestamped_token("orca", token_bytes=16)
     execution_snapshot = queue_metadata.get("execution_snapshot")
@@ -509,7 +457,6 @@ def create_queued_submission(
                 selected_inp=selected_inp,
                 job_id=str(current_task_id),
                 queue_metadata=queue_metadata,
-                deps=deps,
             )
         notification_result = QueuedSubmissionResult(
             entry=current,
@@ -518,7 +465,7 @@ def create_queued_submission(
             queue_metadata=queue_metadata,
             worker_info=_publication_worker_placeholder(),
         )
-        if not notify_queued_submission(cfg, notification_result, deps=deps):
+        if not notify_queued_submission(cfg, notification_result):
             detail_warnings.append(
                 "queued notification delivery failed; state/index recorded and "
                 "notification was not retried (at-most-once delivery)"
@@ -579,7 +526,7 @@ def create_queued_submission(
     )
     outcome = run_enqueue_publication(spec)
     entry = outcome.entry
-    marker_warning = _mark_orca_snapshot_owned(intent_root, intent_token)
+    marker_warning = mark_orca_snapshot_owned(intent_root, intent_token)
     if outcome.cancelled:
         raise QueuePublicationCancelledError(
             f"ORCA queue entry was cancelled before publication: {entry.queue_id}"
@@ -587,7 +534,7 @@ def create_queued_submission(
 
     worker_info = worker_status_with_log_file(
         worker_status_for_submission(allowed_root),
-        queue_entry_worker_log(entry, deps=deps),
+        queue_entry_worker_log(entry),
     )
     worker_info = worker_status_with_detail(worker_info, marker_warning)
     for warning in detail_warnings:
@@ -606,28 +553,28 @@ def create_queued_submission(
 def notify_queued_submission(
     cfg: Any,
     result: QueuedSubmissionResult,
-    *,
-    deps: Any,
 ) -> bool:
-    notification = build_queue_enqueued_notification(result.entry, deps=deps)
+    notification = build_queue_enqueued_notification(result.entry)
     channel = build_channel(cfg.messenger)
-    delivered = bool(deps.notifications.notify_queue_enqueued_event(channel, notification))
+    delivered = bool(notify_queue_enqueued_event(channel, notification))
     # A disabled channel is an intentional no-op, not a failed delivery.
     return delivered or not channel.enabled
 
 
 def _publication_worker_placeholder() -> WorkerStatusInfo:
-    from .run_inp_context import WorkerStatusInfo
-
     return WorkerStatusInfo(status="unknown")
 
 
 def submit_reaction_dir_to_queue(
     args: Any,
-    *,
-    deps: Any,
 ) -> DirectQueueSubmission:
-    context = deps.submission.resolve_submission_context(args)
+    context = resolve_submission_context(
+        args,
+        cfg=None,
+        load_config_fn=load_config,
+        select_latest_inp_fn=select_latest_inp,
+        logger=logger,
+    )
     if context is None:
         return DirectQueueSubmission(
             status="failed",
@@ -638,7 +585,6 @@ def submit_reaction_dir_to_queue(
     conflict_error = find_submission_conflict(
         context.allowed_root,
         context.reaction_dir,
-        deps=deps,
     )
     if conflict_error is not None:
         return DirectQueueSubmission(
@@ -649,14 +595,13 @@ def submit_reaction_dir_to_queue(
         )
 
     try:
-        from ..queue.adapter import DuplicateEntryError
+        from .queue.adapter import DuplicateEntryError
 
         queued = create_queued_submission(
             context.cfg,
             args,
             context.reaction_dir,
             selected_inp=context.selected_inp,
-            deps=deps,
         )
     except DuplicateEntryError as exc:
         return DirectQueueSubmission(
@@ -695,34 +640,3 @@ def submit_reaction_dir_to_queue(
             context=context,
         )
     return DirectQueueSubmission(status="submitted", context=context, queued_result=queued)
-
-
-def cmd_run_inp_submit(
-    args: Any,
-    *,
-    runner_cls: type[Any],
-    deps: Any,
-    logger: logging.Logger,
-) -> int:
-    del runner_cls
-    submission = deps.submission.submit_reaction_dir_to_queue(args)
-    if submission.status != "submitted":
-        if submission.stderr:
-            logger.error("%s", submission.stderr.rstrip())
-        return 1
-
-    result = submission.queued_result
-    context = submission.context
-    if result is None or context is None:
-        logger.error("ORCA queue submission did not return a queued result.")
-        return 1
-    worker_info = result.worker_info
-    deps.submission.emit_queued_submission(
-        context.reaction_dir,
-        result.entry,
-        worker_status=worker_info.status,
-        worker_pid=worker_info.pid,
-        worker_log=worker_info.log_file,
-        worker_detail=worker_info.detail,
-    )
-    return 0

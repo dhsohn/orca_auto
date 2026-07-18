@@ -10,7 +10,7 @@ from orca_auto.core.engine_catalog import (
     get_engine_catalog_entry,
     workflow_stage_engine_entries,
 )
-from orca_auto.core.queue.internal_engine import own_engine_accept_entry
+from orca_auto.core.engines import own_engine_accept_entry
 from orca_auto.core.utils import normalize_text
 
 from ._model import ActivitySourceRequest, ResolvedActivitySources

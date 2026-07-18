@@ -12,13 +12,13 @@ from orca_auto.core.app_ids import (
     ORCA_AUTO_ORCA_SOURCE,
     ORCA_AUTO_REPO_ROOT_ENV_VAR,
 )
+from orca_auto.core.engines import own_engine_accept_entry
 from orca_auto.core.queue import (
     dequeue_entry_if_pending,
     enqueue,
     list_queue,
     mark_completed,
 )
-from orca_auto.core.queue.internal_engine import own_engine_accept_entry
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.flow import activity
 from orca_auto.flow.activity import _cancel as _activity_cancel

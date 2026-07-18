@@ -15,15 +15,17 @@ from orca_auto.core.statuses import (
     is_stage_cancellable_status,
     is_stage_terminal_status,
 )
+from orca_auto.core.utils import normalize_text
 from orca_auto.flow.engine_options import WorkflowEngineOptions
-from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
-from orca_auto.flow.orchestration.deps import (
-    orchestration_context as _orchestration_context,
+from orca_auto.flow.orchestration.services import (
+    OrchestrationServices,
+    resolve_orchestration_services,
 )
 from orca_auto.flow.orchestration.stage_views import WorkflowPayloadView, WorkflowStageView
+from orca_auto.flow.orchestration.support import submission_target_impl
 
 _CancelTargetHandler = Callable[
-    [OrchestrationDeps, str, WorkflowEngineOptions],
+    [OrchestrationServices, str, WorkflowEngineOptions],
     dict[str, Any],
 ]
 
@@ -76,36 +78,36 @@ def _missing_engine_config_cancel_result() -> dict[str, Any]:
 
 
 def _cancel_crest_target(
-    deps: OrchestrationDeps,
+    services: OrchestrationServices,
     target: str,
     config: WorkflowEngineOptions,
 ) -> dict[str, Any]:
-    config_path = deps.stages.support._normalize_text(config.crest.config)
+    config_path = normalize_text(config.crest.config)
     if not config_path:
         return _missing_engine_config_cancel_result()
-    return deps.engines.crest_cancel_target(target=target, config_path=config_path)
+    return services.engines.crest_cancel_target(target=target, config_path=config_path)
 
 
 def _cancel_xtb_target(
-    deps: OrchestrationDeps,
+    services: OrchestrationServices,
     target: str,
     config: WorkflowEngineOptions,
 ) -> dict[str, Any]:
-    config_path = deps.stages.support._normalize_text(config.xtb.config)
+    config_path = normalize_text(config.xtb.config)
     if not config_path:
         return _missing_engine_config_cancel_result()
-    return deps.engines.xtb_cancel_target(target=target, config_path=config_path)
+    return services.engines.xtb_cancel_target(target=target, config_path=config_path)
 
 
 def _cancel_orca_target(
-    deps: OrchestrationDeps,
+    services: OrchestrationServices,
     target: str,
     config: WorkflowEngineOptions,
 ) -> dict[str, Any]:
-    config_path = deps.stages.support._normalize_text(config.orca.config)
+    config_path = normalize_text(config.orca.config)
     if not config_path:
         return _missing_engine_config_cancel_result()
-    return deps.engines.orca_cancel_target(
+    return services.engines.orca_cancel_target(
         target=target,
         config_path=config_path,
         repo_root=config.orca.repo_root,
@@ -121,7 +123,7 @@ _CANCEL_TARGET_HANDLERS: dict[str, _CancelTargetHandler] = {
 
 def _cancel_engine_target(
     *,
-    deps: OrchestrationDeps,
+    services: OrchestrationServices,
     engine: str,
     target: str,
     config: WorkflowEngineOptions,
@@ -129,30 +131,34 @@ def _cancel_engine_target(
     handler = _CANCEL_TARGET_HANDLERS.get(engine)
     if handler is None:
         return _missing_engine_config_cancel_result()
-    return handler(deps, target, config)
+    return handler(services, target, config)
 
 
 def _cancel_stage_activity(
     stage: dict[str, Any],
     *,
     config: WorkflowEngineOptions,
-    deps: OrchestrationDeps | None = None,
+    services: OrchestrationServices | None = None,
 ) -> dict[str, Any]:
-    return _cancel_stage_activity_outcome(stage, config=config, deps=deps).to_payload()
+    return _cancel_stage_activity_outcome(
+        stage,
+        config=config,
+        services=services,
+    ).to_payload()
 
 
 def _cancel_stage_activity_outcome(
     stage: dict[str, Any],
     *,
     config: WorkflowEngineOptions,
-    deps: OrchestrationDeps | None = None,
+    services: OrchestrationServices | None = None,
 ) -> _StageCancelOutcome:
-    o = _orchestration_context(deps)
+    resolved = resolve_orchestration_services(services)
     stage_view = WorkflowStageView.from_raw(stage)
     if stage_view is None or not stage_view.has_task:
         return _StageCancelOutcome.skipped("missing_task")
 
-    status = stage_view.status_pair(o)
+    status = stage_view.status_pair()
     if status.any_status(STATUS_CANCEL_REQUESTED):
         return _StageCancelOutcome.skipped("cancel_requested")
     if status.any_matches(is_stage_terminal_status):
@@ -160,14 +166,14 @@ def _cancel_stage_activity_outcome(
     if not status.any_matches(is_stage_cancellable_status):
         return _StageCancelOutcome.skipped("not_cancellable")
 
-    engine = stage_view.task_engine(o)
-    cancel_target = o.stages.support._submission_target(stage)
+    engine = stage_view.task_engine()
+    cancel_target = submission_target_impl(stage)
     if not cancel_target:
         stage_view.set_status_pair(stage_status=STATUS_CANCELLED, task_status=STATUS_CANCELLED)
         return _StageCancelOutcome(status=STATUS_CANCELLED, mode="local")
 
     result = _cancel_engine_target(
-        deps=o,
+        services=resolved,
         engine=engine,
         target=cancel_target,
         config=config,
@@ -177,26 +183,24 @@ def _cancel_stage_activity_outcome(
     if is_cancel_ack_status(result.get("status")):
         stage_view.set_status_pair(stage_status=result["status"], task_status=result["status"])
         return _StageCancelOutcome(status=result["status"])
-    return _StageCancelOutcome.failed(
-        o.stages.support._normalize_text(result.get("reason")) or STATUS_CANCEL_FAILED
-    )
+    return _StageCancelOutcome.failed(normalize_text(result.get("reason")) or STATUS_CANCEL_FAILED)
 
 
 def _cancel_active_workflow_stages(
     payload: dict[str, Any],
     *,
     config: WorkflowEngineOptions,
-    deps: OrchestrationDeps | None = None,
+    services: OrchestrationServices | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    o = _orchestration_context(deps)
+    resolved = resolve_orchestration_services(services)
     cancelled: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
 
     for stage_view in WorkflowPayloadView(payload).stage_views:
         outcome = _StageCancelOutcome.from_payload(
-            o.advance._cancel_stage_activity(stage_view.raw, config=config)
+            _cancel_stage_activity(stage_view.raw, config=config, services=resolved)
         )
-        stage_id = stage_view.stage_id(o)
+        stage_id = stage_view.stage_id()
         if outcome.acknowledged:
             cancelled.append(outcome.cancelled_record(stage_id))
             continue
@@ -218,18 +222,21 @@ def cancel_materialized_workflow(
     orca_config: str | None = None,
     orca_repo_root: str | None = None,
     engine_options: WorkflowEngineOptions | None = None,
-    deps: OrchestrationDeps | None = None,
+    services: OrchestrationServices | None = None,
 ) -> dict[str, Any]:
-    o = _orchestration_context(deps)
+    resolved = resolve_orchestration_services(services)
     workflow_root_path = Path(workflow_root).expanduser().resolve()
-    workspace_dir = o.persistence.resolve_workflow_workspace(
+    workspace_dir = resolved.persistence.resolve_workflow_workspace(
         target=target,
         workflow_root=workflow_root_path,
     )
     try:
-        lock_context = o.persistence.acquire_workflow_lock(workspace_dir, timeout_seconds=5.0)
+        lock_context = resolved.persistence.acquire_workflow_lock(
+            workspace_dir,
+            timeout_seconds=5.0,
+        )
         with lock_context:
-            payload = o.persistence.load_workflow_payload(workspace_dir)
+            payload = resolved.persistence.load_workflow_payload(workspace_dir)
             identity_error = ""
             try:
                 validate_workflow_workspace_identity(
@@ -247,7 +254,7 @@ def cancel_materialized_workflow(
                     "scope": "workflow_identity_validation",
                     "reason": identity_error,
                     "message": identity_error,
-                    "detected_at": o.persistence.now_utc_iso(),
+                    "detected_at": resolved.clock.now_utc_iso(),
                 }
             else:
                 metadata = payload.get("metadata")
@@ -266,7 +273,11 @@ def cancel_materialized_workflow(
                 orca_config=orca_config,
                 orca_repo_root=orca_repo_root,
             )
-            cancellation = o.advance._cancel_active_workflow_stages(payload, config=config)
+            cancellation = _cancel_active_workflow_stages(
+                payload,
+                config=config,
+                services=resolved,
+            )
             cancelled = cancellation["cancelled"]
             failed = cancellation["failed"]
 
@@ -281,8 +292,12 @@ def cancel_materialized_workflow(
                     if failed
                     else STATUS_CANCELLED
                 )
-            o.persistence.write_workflow_payload(workspace_dir, payload)
-            o.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
+            resolved.persistence.write_workflow_payload(workspace_dir, payload)
+            resolved.persistence.sync_workflow_registry(
+                workflow_root_path,
+                workspace_dir,
+                payload,
+            )
             return {
                 "workflow_id": (
                     workspace_dir.name

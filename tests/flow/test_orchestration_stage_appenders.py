@@ -14,12 +14,17 @@ from orca_auto.flow.endpoint_pairing import (
     EndpointPairingPolicy,
     select_endpoint_pairs,
 )
-from orca_auto.flow.orchestration.deps import orchestration_deps
+from orca_auto.flow.orchestration import (
+    crest_orca_materialization,
+    reaction_materialization,
+    reaction_orca_materialization,
+)
 from orca_auto.flow.orchestration.materialization import (
     append_crest_orca_stages_impl,
     append_reaction_orca_stages_impl,
     append_reaction_xtb_stages_impl,
 )
+from tests.flow.orchestration_services import orchestration_services
 
 
 def _candidate(
@@ -465,6 +470,7 @@ def test_endpoint_pairing_accepts_supported_disabled_mapping_modes(mode: str) ->
 def test_append_reaction_xtb_stages_caps_cartesian_product(
     tmp_path: Path,
     max_handoff_retries: int,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_reaction_01",
@@ -542,13 +548,17 @@ def test_append_reaction_xtb_stages_caps_cartesian_product(
             policy=policy,
         )
 
-    deps = orchestration_deps(
+    monkeypatch.setattr(
+        reaction_materialization,
+        "completed_crest_stage_impl",
+        lambda stage, **kwargs: (
+            "reactant_contract"
+            if stage["metadata"]["input_role"] == "reactant"
+            else "product_contract"
+        ),
+    )
+    deps = orchestration_services(
         overrides={
-            "_completed_crest_stage": lambda stage, **kwargs: (
-                "reactant_contract"
-                if stage["metadata"]["input_role"] == "reactant"
-                else "product_contract"
-            ),
             "select_crest_downstream_inputs": lambda contract, policy: (
                 reactant_inputs if contract == "reactant_contract" else product_inputs
             ),
@@ -560,7 +570,7 @@ def test_append_reaction_xtb_stages_caps_cartesian_product(
         payload,
         workspace_dir=tmp_path,
         crest_config="/tmp/crest.yaml",
-        deps=deps,
+        services=deps,
     )
 
     xtb_stages = [
@@ -600,6 +610,7 @@ def test_append_reaction_xtb_stages_revalidates_durable_candidate_caps(
     tmp_path: Path,
     field: str,
     value: object,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_reaction_invalid_cap",
@@ -635,9 +646,13 @@ def test_append_reaction_xtb_stages_revalidates_durable_candidate_caps(
         rank=1,
         kind="conformer",
     )
-    deps = orchestration_deps(
+    monkeypatch.setattr(
+        reaction_materialization,
+        "completed_crest_stage_impl",
+        lambda stage, **kwargs: stage["metadata"]["input_role"],
+    )
+    deps = orchestration_services(
         overrides={
-            "_completed_crest_stage": lambda stage, **kwargs: stage["metadata"]["input_role"],
             "select_crest_downstream_inputs": lambda contract, policy: (candidate,),
         }
     )
@@ -647,12 +662,13 @@ def test_append_reaction_xtb_stages_revalidates_durable_candidate_caps(
             payload,
             workspace_dir=tmp_path,
             crest_config="/tmp/crest.yaml",
-            deps=deps,
+            services=deps,
         )
 
 
 def test_append_reaction_xtb_stages_fails_when_completed_crest_has_no_geometry(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_empty_crest",
@@ -682,9 +698,13 @@ def test_append_reaction_xtb_stages_fails_when_completed_crest_has_no_geometry(
             }
         },
     }
-    deps = orchestration_deps(
+    monkeypatch.setattr(
+        reaction_materialization,
+        "completed_crest_stage_impl",
+        lambda stage, **kwargs: stage["metadata"]["input_role"],
+    )
+    deps = orchestration_services(
         overrides={
-            "_completed_crest_stage": lambda stage, **kwargs: stage["metadata"]["input_role"],
             "select_crest_downstream_inputs": lambda contract, policy: (
                 ()
                 if contract == "reactant"
@@ -703,7 +723,7 @@ def test_append_reaction_xtb_stages_fails_when_completed_crest_has_no_geometry(
     )
 
     created = append_reaction_xtb_stages_impl(
-        payload, workspace_dir=tmp_path, crest_config="/tmp/crest.yaml", deps=deps
+        payload, workspace_dir=tmp_path, crest_config="/tmp/crest.yaml", services=deps
     )
 
     assert created is False
@@ -712,6 +732,7 @@ def test_append_reaction_xtb_stages_fails_when_completed_crest_has_no_geometry(
 
 def test_append_reaction_xtb_stages_filters_endpoint_pairs(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_reaction_pairing",
@@ -797,13 +818,17 @@ def test_append_reaction_xtb_stages_filters_endpoint_pairs(
         ),
     ]
 
-    deps = orchestration_deps(
+    monkeypatch.setattr(
+        reaction_materialization,
+        "completed_crest_stage_impl",
+        lambda stage, **kwargs: (
+            "reactant_contract"
+            if stage["metadata"]["input_role"] == "reactant"
+            else "product_contract"
+        ),
+    )
+    deps = orchestration_services(
         overrides={
-            "_completed_crest_stage": lambda stage, **kwargs: (
-                "reactant_contract"
-                if stage["metadata"]["input_role"] == "reactant"
-                else "product_contract"
-            ),
             "select_crest_downstream_inputs": lambda contract, policy: (
                 reactant_inputs if contract == "reactant_contract" else product_inputs
             ),
@@ -814,7 +839,7 @@ def test_append_reaction_xtb_stages_filters_endpoint_pairs(
         payload,
         workspace_dir=tmp_path,
         crest_config="/tmp/crest.yaml",
-        deps=deps,
+        services=deps,
     )
 
     xtb_stages = [
@@ -833,6 +858,7 @@ def test_append_reaction_xtb_stages_filters_endpoint_pairs(
 
 def test_append_reaction_xtb_stages_can_exclude_moving_atoms(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_reaction_pairing_exclude",
@@ -918,13 +944,17 @@ def test_append_reaction_xtb_stages_can_exclude_moving_atoms(
         ),
     ]
 
-    deps = orchestration_deps(
+    monkeypatch.setattr(
+        reaction_materialization,
+        "completed_crest_stage_impl",
+        lambda stage, **kwargs: (
+            "reactant_contract"
+            if stage["metadata"]["input_role"] == "reactant"
+            else "product_contract"
+        ),
+    )
+    deps = orchestration_services(
         overrides={
-            "_completed_crest_stage": lambda stage, **kwargs: (
-                "reactant_contract"
-                if stage["metadata"]["input_role"] == "reactant"
-                else "product_contract"
-            ),
             "select_crest_downstream_inputs": lambda contract, policy: (
                 reactant_inputs if contract == "reactant_contract" else product_inputs
             ),
@@ -935,7 +965,7 @@ def test_append_reaction_xtb_stages_can_exclude_moving_atoms(
         payload,
         workspace_dir=tmp_path,
         crest_config="/tmp/crest.yaml",
-        deps=deps,
+        services=deps,
     )
 
     xtb_stages = [
@@ -979,19 +1009,13 @@ def test_append_reaction_xtb_stages_waits_for_latest_product_crest_stage(
         "metadata": {"request": {"parameters": {"max_crest_candidates": 2}}},
     }
 
-    deps = orchestration_deps(
-        overrides={
-            "_completed_crest_stage": lambda *args, **kwargs: (_ for _ in ()).throw(
-                AssertionError("xTB stage creation should wait for the newest product CREST stage")
-            )
-        }
-    )
+    deps = orchestration_services()
 
     created = append_reaction_xtb_stages_impl(
         payload,
         workspace_dir=tmp_path,
         crest_config="/tmp/crest.yaml",
-        deps=deps,
+        services=deps,
     )
 
     assert created is False
@@ -1000,6 +1024,7 @@ def test_append_reaction_xtb_stages_waits_for_latest_product_crest_stage(
 
 def test_append_reaction_orca_stages_sets_xtb_handoff_workflow_error_when_no_candidate_survives(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_reaction_02",
@@ -1023,17 +1048,21 @@ def test_append_reaction_orca_stages_sets_xtb_handoff_workflow_error_when_no_can
         selected_candidate_paths=(),
     )
 
-    deps = orchestration_deps(
+    monkeypatch.setattr(
+        reaction_orca_materialization,
+        "reaction_ts_guess_error_impl",
+        lambda current_contract, **kwargs: {
+            "reason": "xtb_ts_guess_missing",
+            "message": "missing ts guess",
+        },
+    )
+    deps = orchestration_services(
         overrides={
-            "_load_config_root": lambda path, **kwargs: (
-                tmp_path / ("xtb" if "xtb" in str(path) else "orca")
-            ),
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": tmp_path / str(kwargs.get("engine") or "orca")
+            },
             "load_xtb_artifact_contract": lambda **kwargs: contract,
             "select_xtb_downstream_inputs": lambda *args, **kwargs: (),
-            "_reaction_ts_guess_error": lambda current_contract: {
-                "reason": "xtb_ts_guess_missing",
-                "message": "missing ts guess",
-            },
         }
     )
 
@@ -1042,7 +1071,7 @@ def test_append_reaction_orca_stages_sets_xtb_handoff_workflow_error_when_no_can
         workspace_dir=tmp_path,
         xtb_config="/tmp/xtb.yaml",
         orca_config="/tmp/orca.yaml",
-        deps=deps,
+        services=deps,
     )
 
     xtb_stage = payload["stages"][0]
@@ -1091,7 +1120,7 @@ def test_append_reaction_orca_stages_fails_workflow_when_all_xtb_stages_failed(
         workspace_dir=tmp_path,
         xtb_config="/tmp/xtb.yaml",
         orca_config="/tmp/orca.yaml",
-        deps=orchestration_deps(),
+        services=orchestration_services(),
     )
 
     assert created is False
@@ -1123,11 +1152,11 @@ def test_append_reaction_orca_stages_waits_when_xtb_contract_is_missing(
         ],
     }
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
-            "_load_config_root": lambda path, **kwargs: (
-                tmp_path / ("xtb" if "xtb" in str(path) else "orca")
-            ),
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": tmp_path / str(kwargs.get("engine") or "orca")
+            },
             "load_xtb_artifact_contract": lambda **kwargs: (_ for _ in ()).throw(
                 FileNotFoundError("xTB artifact files not found")
             ),
@@ -1139,7 +1168,7 @@ def test_append_reaction_orca_stages_waits_when_xtb_contract_is_missing(
         workspace_dir=tmp_path,
         xtb_config="/tmp/xtb.yaml",
         orca_config="/tmp/orca.yaml",
-        deps=deps,
+        services=deps,
     )
 
     assert created is False
@@ -1166,11 +1195,11 @@ def test_append_reaction_orca_stages_propagates_corrupt_xtb_contract(
         ],
     }
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
-            "_load_config_root": lambda path, **kwargs: (
-                tmp_path / ("xtb" if "xtb" in str(path) else "orca")
-            ),
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": tmp_path / str(kwargs.get("engine") or "orca")
+            },
             "load_xtb_artifact_contract": lambda **kwargs: (_ for _ in ()).throw(
                 ValueError("corrupt xTB artifact payload")
             ),
@@ -1183,7 +1212,7 @@ def test_append_reaction_orca_stages_propagates_corrupt_xtb_contract(
             workspace_dir=tmp_path,
             xtb_config="/tmp/xtb.yaml",
             orca_config="/tmp/orca.yaml",
-            deps=deps,
+            services=deps,
         )
 
 
@@ -1216,7 +1245,7 @@ def test_append_reaction_orca_stages_waits_for_all_xtb_children_to_finish(
         ],
     }
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
             "load_xtb_artifact_contract": lambda **kwargs: (_ for _ in ()).throw(
                 AssertionError("ORCA batching should wait for terminal xTB phases")
@@ -1229,7 +1258,7 @@ def test_append_reaction_orca_stages_waits_for_all_xtb_children_to_finish(
         workspace_dir=tmp_path,
         xtb_config="/tmp/xtb.yaml",
         orca_config="/tmp/orca.yaml",
-        deps=deps,
+        services=deps,
     )
 
     assert created is False
@@ -1308,11 +1337,11 @@ def test_append_reaction_orca_stages_appends_unattempted_candidate_without_mutat
         selected_candidate_paths=(),
     )
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
-            "_load_config_root": lambda path, **kwargs: (
-                tmp_path / ("xtb" if "xtb" in str(path) else "orca")
-            ),
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": tmp_path / str(kwargs.get("engine") or "orca")
+            },
             "load_xtb_artifact_contract": lambda **kwargs: contract,
             "select_xtb_downstream_inputs": lambda *args, **kwargs: (
                 first_candidate,
@@ -1329,7 +1358,7 @@ def test_append_reaction_orca_stages_appends_unattempted_candidate_without_mutat
         workspace_dir=tmp_path,
         xtb_config="/tmp/xtb.yaml",
         orca_config="/tmp/orca.yaml",
-        deps=deps,
+        services=deps,
     )
 
     latest_existing = payload["stages"][1]
@@ -1409,11 +1438,11 @@ def test_append_reaction_orca_stages_fails_workflow_when_all_orca_candidates_fai
         candidate_details=(),
         selected_candidate_paths=(),
     )
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
-            "_load_config_root": lambda path, **kwargs: (
-                tmp_path / ("xtb" if "xtb" in str(path) else "orca")
-            ),
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": tmp_path / str(kwargs.get("engine") or "orca")
+            },
             "load_xtb_artifact_contract": lambda **kwargs: contract,
             "select_xtb_downstream_inputs": lambda *args, **kwargs: (
                 first_candidate,
@@ -1427,7 +1456,7 @@ def test_append_reaction_orca_stages_fails_workflow_when_all_orca_candidates_fai
         workspace_dir=tmp_path,
         xtb_config="/tmp/xtb.yaml",
         orca_config="/tmp/orca.yaml",
-        deps=deps,
+        services=deps,
     )
 
     assert created is False
@@ -1483,11 +1512,11 @@ def test_append_reaction_orca_stages_records_submission_rejections_in_exhaustion
         candidate_details=(),
         selected_candidate_paths=(),
     )
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
-            "_load_config_root": lambda path, **kwargs: (
-                tmp_path / ("xtb" if "xtb" in str(path) else "orca")
-            ),
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": tmp_path / str(kwargs.get("engine") or "orca")
+            },
             "load_xtb_artifact_contract": lambda **kwargs: contract,
             "select_xtb_downstream_inputs": lambda *args, **kwargs: (candidate,),
         }
@@ -1498,7 +1527,7 @@ def test_append_reaction_orca_stages_records_submission_rejections_in_exhaustion
         workspace_dir=tmp_path,
         xtb_config="/tmp/xtb.yaml",
         orca_config="/tmp/orca.yaml",
-        deps=deps,
+        services=deps,
     )
 
     assert created is False
@@ -1549,9 +1578,11 @@ def test_append_reaction_orca_stages_materializes_under_workflow_orca_stage_root
         build_calls.append(kwargs)
         return _orca_stage_result(**kwargs)
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
-            "_load_config_root": lambda path, **kwargs: tmp_path / "orca_allowed",
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": tmp_path / "orca_allowed"
+            },
             "load_xtb_artifact_contract": lambda **kwargs: contract,
             "select_xtb_downstream_inputs": lambda *args, **kwargs: (candidate,),
             "build_materialized_orca_stage": fake_build_materialized_orca_stage,
@@ -1563,7 +1594,7 @@ def test_append_reaction_orca_stages_materializes_under_workflow_orca_stage_root
         workspace_dir=tmp_path / "wf_reaction_local",
         xtb_config="/tmp/xtb.yaml",
         orca_config="/tmp/orca.yaml",
-        deps=deps,
+        services=deps,
     )
 
     assert created is True
@@ -1573,6 +1604,7 @@ def test_append_reaction_orca_stages_materializes_under_workflow_orca_stage_root
 
 def test_append_crest_orca_stages_materializes_orca_stages_from_completed_crest(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     crest_candidate = _candidate(
         "/tmp/crest_conformer.xyz",
@@ -1602,10 +1634,16 @@ def test_append_crest_orca_stages_materializes_orca_stages_from_completed_crest(
         build_calls.append(kwargs)
         return _orca_stage_result(**kwargs)
 
-    deps = orchestration_deps(
+    monkeypatch.setattr(
+        crest_orca_materialization,
+        "completed_crest_stage_impl",
+        lambda stage, **kwargs: "crest_contract",
+    )
+    deps = orchestration_services(
         overrides={
-            "_completed_crest_stage": lambda stage, **kwargs: "crest_contract",
-            "_load_config_root": lambda path, **kwargs: tmp_path / "orca_allowed",
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": tmp_path / "orca_allowed"
+            },
             "select_crest_downstream_inputs": lambda contract, policy: (crest_candidate,),
             "build_materialized_orca_stage": fake_build_materialized_orca_stage,
         }
@@ -1619,7 +1657,7 @@ def test_append_crest_orca_stages_materializes_orca_stages_from_completed_crest(
         stage_id_prefix="orca_conformer",
         xyz_filename="conformer_guess.xyz",
         inp_filename="conformer_opt.inp",
-        deps=deps,
+        services=deps,
     )
 
     assert created is True
@@ -1668,7 +1706,7 @@ def test_append_crest_orca_stages_fails_workflow_when_all_conformers_fail(
         stage_id_prefix="orca_conformer",
         xyz_filename="conformer_guess.xyz",
         inp_filename="conformer_opt.inp",
-        deps=orchestration_deps(),
+        services=orchestration_services(),
     )
 
     assert created is False
@@ -1683,6 +1721,7 @@ def test_append_crest_orca_stages_fails_workflow_when_all_conformers_fail(
 
 def test_append_crest_orca_stages_fails_when_completed_crest_has_no_geometry(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_conf_empty_crest",
@@ -1694,10 +1733,14 @@ def test_append_crest_orca_stages_fails_when_completed_crest_has_no_geometry(
             {"stage_id": "crest_stage_01", "status": "completed", "task": {"engine": "crest"}}
         ],
     }
-    deps = orchestration_deps(
+    monkeypatch.setattr(
+        crest_orca_materialization,
+        "completed_crest_stage_impl",
+        lambda stage, **kwargs: "crest_contract",
+    )
+    deps = orchestration_services(
         overrides={
-            "_completed_crest_stage": lambda stage, **kwargs: "crest_contract",
-            "_load_config_root": lambda path, **kwargs: tmp_path,
+            "engine_runtime_paths": lambda path, **kwargs: {"allowed_root": tmp_path},
             "select_crest_downstream_inputs": lambda contract, policy: (),
         }
     )
@@ -1710,7 +1753,7 @@ def test_append_crest_orca_stages_fails_when_completed_crest_has_no_geometry(
         stage_id_prefix="orca_conformer",
         xyz_filename="conformer.xyz",
         inp_filename="conformer.inp",
-        deps=deps,
+        services=deps,
     )
 
     assert created is False
@@ -1719,6 +1762,7 @@ def test_append_crest_orca_stages_fails_when_completed_crest_has_no_geometry(
 
 def test_append_crest_orca_stages_materializes_twenty_orca_children(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     crest_candidates = tuple(
         _candidate(
@@ -1743,10 +1787,16 @@ def test_append_crest_orca_stages_materializes_twenty_orca_children(
         ],
     }
 
-    deps = orchestration_deps(
+    monkeypatch.setattr(
+        crest_orca_materialization,
+        "completed_crest_stage_impl",
+        lambda stage, **kwargs: "crest_contract",
+    )
+    deps = orchestration_services(
         overrides={
-            "_completed_crest_stage": lambda stage, **kwargs: "crest_contract",
-            "_load_config_root": lambda path, **kwargs: tmp_path / "orca_allowed",
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": tmp_path / "orca_allowed"
+            },
             "select_crest_downstream_inputs": lambda contract, policy: crest_candidates,
             "build_materialized_orca_stage": _orca_stage_result,
         }
@@ -1760,7 +1810,7 @@ def test_append_crest_orca_stages_materializes_twenty_orca_children(
         stage_id_prefix="orca_conformer",
         xyz_filename="conformer_guess.xyz",
         inp_filename="conformer_opt.inp",
-        deps=deps,
+        services=deps,
     )
 
     orca_stages = [

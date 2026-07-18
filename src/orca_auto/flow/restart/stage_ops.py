@@ -76,15 +76,15 @@ def _stage_task(stage: dict[str, Any]) -> dict[str, Any]:
 
 
 def _stage_metadata(stage: dict[str, Any]) -> dict[str, Any]:
-    return WorkflowStageView(stage).metadata(None)
+    return WorkflowStageView(stage).metadata()
 
 
 def _task_metadata(task: dict[str, Any]) -> dict[str, Any]:
-    return WorkflowTaskView(task).metadata(None)
+    return WorkflowTaskView(task).metadata()
 
 
 def _task_payload(task: dict[str, Any]) -> dict[str, Any]:
-    return WorkflowTaskView(task).payload(None)
+    return WorkflowTaskView(task).payload()
 
 
 def _task_engine(task: dict[str, Any]) -> str:

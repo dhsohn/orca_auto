@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+from orca_auto.core.engines import own_engine_accept_entry
 from orca_auto.core.queue import (
     dequeue_next,
     enqueue,
@@ -17,7 +18,6 @@ from orca_auto.core.queue import (
 )
 from orca_auto.core.queue.engine.artifacts import matching_terminal_artifacts_for_entry
 from orca_auto.core.queue.generation import queue_entry_generation_token
-from orca_auto.core.queue.internal_engine import own_engine_accept_entry
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
@@ -944,7 +944,6 @@ def test_process_one_returns_idle_and_releases_reserved_slot(
     released: list[tuple[object, object]] = []
 
     monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda _cfg: "slot-1")
-    monkeypatch.setattr(queue_cmd, "dequeue_next", lambda _root, **_kw: None)
     monkeypatch.setattr(
         queue_cmd, "release_slot", lambda root, token: released.append((str(root), token))
     )
@@ -997,7 +996,6 @@ def test_queue_worker_starts_up_to_max_concurrent_children(
 
     monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda _cfg: next(slots))
     monkeypatch.setattr(queue_cmd, "list_queue", lambda _root: entries)
-    monkeypatch.setattr(queue_cmd, "dequeue_next", lambda _root, **_kw: next(dequeued))
     monkeypatch.setattr(queue_cmd, "activate_reserved_slot", lambda *args, **kwargs: object())
     real_deps = queue_cmd._queue_worker_deps()
     monkeypatch.setattr(
@@ -1199,7 +1197,6 @@ def test_queue_worker_run_once_waits_for_child_completion_and_prints_summary(
     monkeypatch.setattr(queue_cmd, "reconcile_stale_slots", lambda _root: 0)
     monkeypatch.setattr(queue_cmd, "list_queue", lambda _root: [entry])
     monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda _cfg: "slot-1")
-    monkeypatch.setattr(queue_cmd, "dequeue_next", lambda _root, **_kw: entry)
     monkeypatch.setattr(queue_cmd, "activate_reserved_slot", lambda *args, **kwargs: object())
     real_deps = queue_cmd._queue_worker_deps()
     monkeypatch.setattr(
@@ -1295,6 +1292,57 @@ def test_queue_worker_reconcile_worker_state_requeues_stale_running_entries(
     assert state["status"]["state"] == "queued"
     assert state["status"]["reason"] == "crashed_recovery"
     assert state["recovery"]["pending"] is True
+
+
+def test_queue_worker_reconcile_preserves_running_entry_with_live_child_pid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "job-live"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("3\ncandidate\nH 0 0 0\n", encoding="utf-8")
+    entry = _make_entry(job_dir, selected_xyz, status="running")
+    state_mod.write_state(
+        job_dir,
+        artifact_payload(
+            engine="xtb",
+            job_id="job-1",
+            job_dir=str(job_dir),
+            status="running",
+            primary_path=str(selected_xyz),
+            selected_xyz_path=str(selected_xyz),
+            engine_payload={
+                "job_type": "path_search",
+                "reaction_key": "rxn-1",
+            },
+        )
+        | {"process": {"worker_pid": 4242}},
+    )
+    requeued: list[tuple[Path, str]] = []
+
+    monkeypatch.setattr(queue_cmd, "reconcile_stale_slots", lambda _root: 0)
+    monkeypatch.setattr(queue_cmd, "list_queue", lambda _root: [entry])
+    monkeypatch.setattr(queue_cmd, "_pid_is_alive", lambda pid: pid == 4242)
+    monkeypatch.setattr(
+        queue_cmd,
+        "requeue_running_entry",
+        lambda root, queue_id, **_kwargs: _append_and_return(
+            requeued,
+            (root, queue_id),
+            entry,
+        ),
+    )
+
+    worker = queue_cmd.QueueWorker(cfg, config_path="/tmp/cfg.yaml")
+    worker._reconcile_worker_state()
+
+    assert requeued == []
+    state = state_mod.load_state(job_dir)
+    assert state is not None
+    assert state["status"]["state"] == "running"
 
 
 def test_cmd_queue_worker_constructs_xtb_worker_without_organize_flags(

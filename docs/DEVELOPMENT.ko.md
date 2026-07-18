@@ -24,6 +24,22 @@ import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 문자열 모듈 레지스트리(`core/engines/registry.py`,
 `core/queue/worker/admission.py`)를 사용합니다.
 
+워크플로우 오케스트레이션 내부에서는 `OrchestrationServices`를 통해 영속화, 엔진,
+시계, 이벤트의 외부 경계만 주입합니다. 내부 stage, materialization, lifecycle 동작은
+직접 import합니다. 테스트는 알 수 없는 외부 서비스 override를 거부해야 하며, 내부
+동작을 격리할 때는 그 동작을 소유한 모듈을 patch해야 합니다.
+
+봇 배선과 workflow SI에는 더 좁은 강제 방향이 있습니다.
+
+- `flow.bot.runner`와 provider adapter가 composition root입니다. command
+  `BotApplication`은 `core.ingest`를 직접 소유하지 않고, `UploadApplication`은 command
+  routing, provider, runner를 import하면 안 됩니다. 두 application은 provider-neutral
+  `interaction_delivery` helper를 사용할 수 있습니다.
+- `flow.workflow.si.__init__`이 지원되는 SI facade입니다. 내부 의존성의 허용 순서는
+  publication → collection → rendering → science → evidence → models입니다. 중간 layer를
+  건너뛸 수 있지만 역방향 import는 import-linter가 실패시킵니다. publication만 SI 파일을
+  쓰며 rendering은 text 생성만 담당합니다.
+
 ## 현재 패키지 레이아웃
 
 ```text
@@ -150,13 +166,30 @@ scenario는 public submission/worker 경로를 통과해야 하며 기대 종료
 - 단독 xTB-MD는 `orca_auto.xtb_md` 아래에 있고 `core`만 임포트합니다. 워크플로우
   xTB 실행 의미를 재사용하지 않습니다.
 - 최상위 별칭 패키지, 콘솔 스크립트 별칭, 대체 런타임 리더는 코드베이스에서 배제하세요.
+- `orca_auto.orca.commands`는 adapter 계층으로 유지하세요. 도메인 실행·제출·worker-child·
+  queue 모듈은 이 패키지를 임포트하면 안 됩니다.
+- 봇 upload 영속성은 runner/provider composition 아래에 두고, SI evidence/science/rendering은
+  publication을 import하지 않게 유지하세요. 이 방향은 `pyproject.toml`이 강제하므로 전달용
+  module로 우회하지 마세요.
 
-## 내부 엔진 워커
+## 엔진 워커
 
 xTB-MD, xTB, CREST, ORCA는 모두 공통 엔진 런타임을 통해 실행됩니다. 엔진 로컬 패키지는
 `EngineDefinition`을 노출해야 하며, 부모 워커는 `EngineQueueWorker`를 사용하고, 자식은
 `python -m orca_auto.core.engines.worker_child --engine <orca|xtb_md|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`을
 사용합니다.
+부모 워커 인프라는 `EngineDefinition.build_queue_runtime()`에서 구성하고 canonical
+`core.queue.engine`의 어드미션, 자식, 라이프사이클, 워커 실행, 훅 계약을 직접
+사용하세요. 이전 범용 internal-engine facade는 제거했습니다. workflow-root 탐색,
+publication fencing, live child-PID reconciliation은 명시적인 xTB 정책으로 유지하세요.
+재시도, crash-generation 복구, publication, terminal replay, 상태/리포트 정책은
+`orca_auto.orca` 내부에 유지합니다. canonical 런타임이 이미 소유한 연산을 전달만 하는
+모듈은 새로 만들지 마세요.
+
+`orca_auto.orca.queue.worker`는 부모 워커 composition root로 유지하세요. queued-publication
+repair는 `queue.publication_repair`, 취소는 `queue.cancellation`, terminal
+reconciliation/replay는 `queue.replay`, 작업 인덱스/알림 추적은
+`queue.worker_tracking`이 소유합니다.
 
 단독 xTB-MD는 공용 `run-dir`와 queue/activity 표면만 노출합니다. 단일 시도,
 no-retry/no-resume 계약은 `orca_auto.xtb_md`에 두고, 직접 실행 CLI를 만들거나 그

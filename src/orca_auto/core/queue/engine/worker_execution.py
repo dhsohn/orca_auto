@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
-from .cancellable import run_cancellable_engine_process
-from .engine.lifecycle import EngineWorkerLifecycle, run_engine_worker_lifecycle
+from ..cancellable import run_cancellable_engine_process
+from .lifecycle import EngineWorkerLifecycle, run_engine_worker_lifecycle
 
 DependencyT = TypeVar("DependencyT", covariant=True)
 
@@ -33,12 +33,12 @@ class CancellableJobFinalizer(Protocol):
 
 
 @dataclass(frozen=True)
-class InternalWorkerTimingDependencies:
+class EngineWorkerTimingDependencies:
     now_utc_iso: NowUtcIso
 
 
 @dataclass(frozen=True)
-class InternalWorkerQueueDependencies:
+class EngineWorkerQueueDependencies:
     get_cancel_requested: CancelRequested
     mark_completed: QueueStatusMarker
     mark_cancelled: QueueStatusMarker
@@ -46,14 +46,14 @@ class InternalWorkerQueueDependencies:
 
 
 @dataclass(frozen=True)
-class InternalWorkerProcessDependencies:
+class EngineWorkerProcessDependencies:
     terminate_process: ProcessTerminator
     wait_for_cancellable_process: CancellableProcessWaiter
     sleep: SleepFn
     cancel_check_interval_seconds: float
 
 
-def build_internal_worker_timing_dependencies(
+def build_engine_worker_timing_dependencies(
     dependencies_type: DependencyBuilder[DependencyT],
     *,
     now_utc_iso: NowUtcIso,
@@ -61,7 +61,7 @@ def build_internal_worker_timing_dependencies(
     return dependencies_type(now_utc_iso=now_utc_iso)
 
 
-def build_internal_worker_queue_dependencies(
+def build_engine_worker_queue_dependencies(
     dependencies_type: DependencyBuilder[DependencyT],
     *,
     get_cancel_requested: CancelRequested,
@@ -77,7 +77,7 @@ def build_internal_worker_queue_dependencies(
     )
 
 
-def build_internal_worker_default_factories(
+def build_engine_worker_default_factories(
     *,
     timing_dependencies_type: DependencyBuilder[Any],
     queue_dependencies_type: DependencyBuilder[Any],
@@ -89,11 +89,11 @@ def build_internal_worker_default_factories(
     mark_failed: QueueStatusMarker,
 ) -> dict[str, DependencyFactory]:
     return {
-        "timing": lambda: build_internal_worker_timing_dependencies(
+        "timing": lambda: build_engine_worker_timing_dependencies(
             timing_dependencies_type,
             now_utc_iso=now_utc_iso,
         ),
-        "queue": lambda: build_internal_worker_queue_dependencies(
+        "queue": lambda: build_engine_worker_queue_dependencies(
             queue_dependencies_type,
             get_cancel_requested=get_cancel_requested,
             mark_completed=mark_completed,
@@ -104,7 +104,7 @@ def build_internal_worker_default_factories(
     }
 
 
-def build_internal_worker_process_default_factories(
+def build_engine_worker_process_default_factories(
     *,
     timing_dependencies_type: DependencyBuilder[Any],
     queue_dependencies_type: DependencyBuilder[Any],
@@ -121,7 +121,7 @@ def build_internal_worker_process_default_factories(
     **engine_runner_dependencies: Any,
 ) -> dict[str, DependencyFactory]:
     def runner_factory() -> Any:
-        return build_internal_worker_process_dependencies(
+        return build_engine_worker_process_dependencies(
             runner_dependencies_type,
             terminate_process=terminate_process,
             wait_for_cancellable_process=wait_for_cancellable_process,
@@ -130,7 +130,7 @@ def build_internal_worker_process_default_factories(
             **engine_runner_dependencies,
         )
 
-    return build_internal_worker_default_factories(
+    return build_engine_worker_default_factories(
         timing_dependencies_type=timing_dependencies_type,
         queue_dependencies_type=queue_dependencies_type,
         runner_factory=runner_factory,
@@ -142,7 +142,7 @@ def build_internal_worker_process_default_factories(
     )
 
 
-def build_internal_worker_process_dependencies(
+def build_engine_worker_process_dependencies(
     dependencies_type: DependencyBuilder[DependencyT],
     *,
     terminate_process: ProcessTerminator,
@@ -161,7 +161,7 @@ def build_internal_worker_process_dependencies(
 
 
 @dataclass(frozen=True)
-class InternalWorkerOptions:
+class EngineWorkerOptions:
     should_cancel: Callable[[], bool] | None = None
     shutdown_requested: Callable[[], bool] | None = None
     prepare_running_job: Callable[[], None] | None = None
@@ -171,16 +171,16 @@ class InternalWorkerOptions:
 
 
 EngineContextBuilder = Callable[[Any, Any], Any]
-EngineMarkRunning = Callable[[Any, Any, InternalWorkerOptions], None]
-EngineJobRunner = Callable[[Any, Any, Path, InternalWorkerOptions], Any]
-EngineEntryFinalizer = Callable[[Any, Any, Any, Path, InternalWorkerOptions], Any]
+EngineMarkRunning = Callable[[Any, Any, EngineWorkerOptions], None]
+EngineJobRunner = Callable[[Any, Any, Path, EngineWorkerOptions], Any]
+EngineEntryFinalizer = Callable[[Any, Any, Any, Path, EngineWorkerOptions], Any]
 EngineOutcomeBuilder = Callable[[Any, Any, Any], Any]
-EngineShutdownChecker = Callable[[Any, InternalWorkerOptions], None]
-EngineWorkerExecutionSpecFactory = Callable[[], "InternalEngineWorkerExecutionSpec"]
+EngineShutdownChecker = Callable[[Any, EngineWorkerOptions], None]
+EngineWorkerExecutionSpecFactory = Callable[[], "EngineWorkerExecutionSpec"]
 
 
 @dataclass(frozen=True)
-class InternalEngineWorkerAdapter:
+class EngineWorkerAdapter:
     build_context: EngineContextBuilder
     mark_running: EngineMarkRunning
     run_job: EngineJobRunner
@@ -190,7 +190,7 @@ class InternalEngineWorkerAdapter:
 
 
 @dataclass(frozen=True)
-class InternalEngineWorkerHooks:
+class EngineWorkerHooks:
     build_context: EngineContextBuilder
     mark_running: EngineMarkRunning
     run_job: EngineJobRunner
@@ -200,7 +200,7 @@ class InternalEngineWorkerHooks:
 
 
 @dataclass(frozen=True)
-class InternalEngineWorkerExecutionSpec:
+class EngineWorkerExecutionSpec:
     build_context: EngineContextBuilder
     mark_running: EngineMarkRunning
     run_job: EngineJobRunner
@@ -208,8 +208,8 @@ class InternalEngineWorkerExecutionSpec:
     shutdown_exception_type: type[BaseException]
     build_outcome: EngineOutcomeBuilder = lambda _context, _result, finalized: finalized
 
-    def hooks(self) -> InternalEngineWorkerHooks:
-        return InternalEngineWorkerHooks(
+    def hooks(self) -> EngineWorkerHooks:
+        return EngineWorkerHooks(
             build_context=self.build_context,
             mark_running=self.mark_running,
             run_job=self.run_job,
@@ -219,7 +219,7 @@ class InternalEngineWorkerExecutionSpec:
         )
 
 
-def build_internal_engine_worker_execution_spec(
+def build_engine_worker_execution_spec(
     *,
     build_context: EngineContextBuilder,
     mark_running: EngineMarkRunning,
@@ -227,8 +227,8 @@ def build_internal_engine_worker_execution_spec(
     finalize_entry: EngineEntryFinalizer,
     shutdown_exception_type: type[BaseException],
     build_outcome: EngineOutcomeBuilder = lambda _context, _result, finalized: finalized,
-) -> InternalEngineWorkerExecutionSpec:
-    return InternalEngineWorkerExecutionSpec(
+) -> EngineWorkerExecutionSpec:
+    return EngineWorkerExecutionSpec(
         build_context=build_context,
         mark_running=mark_running,
         run_job=run_job,
@@ -238,7 +238,7 @@ def build_internal_engine_worker_execution_spec(
     )
 
 
-def build_internal_engine_worker_adapter(
+def build_engine_worker_adapter(
     *,
     build_context: EngineContextBuilder,
     mark_running: EngineMarkRunning,
@@ -246,8 +246,8 @@ def build_internal_engine_worker_adapter(
     finalize_entry: EngineEntryFinalizer,
     shutdown_exception_type: type[BaseException],
     build_outcome: EngineOutcomeBuilder = lambda _context, _result, finalized: finalized,
-) -> InternalEngineWorkerAdapter:
-    return InternalEngineWorkerAdapter(
+) -> EngineWorkerAdapter:
+    return EngineWorkerAdapter(
         build_context=build_context,
         mark_running=mark_running,
         check_shutdown=lambda context, options: raise_if_shutdown_requested(
@@ -261,10 +261,10 @@ def build_internal_engine_worker_adapter(
     )
 
 
-def build_internal_engine_worker_adapter_from_hooks(
-    hooks: InternalEngineWorkerHooks,
-) -> InternalEngineWorkerAdapter:
-    return build_internal_engine_worker_adapter(
+def build_engine_worker_adapter_from_hooks(
+    hooks: EngineWorkerHooks,
+) -> EngineWorkerAdapter:
+    return build_engine_worker_adapter(
         build_context=hooks.build_context,
         mark_running=hooks.mark_running,
         run_job=hooks.run_job,
@@ -274,15 +274,15 @@ def build_internal_engine_worker_adapter_from_hooks(
     )
 
 
-def build_internal_engine_worker_adapter_from_spec(
-    spec: InternalEngineWorkerExecutionSpec,
-) -> InternalEngineWorkerAdapter:
-    return build_internal_engine_worker_adapter_from_hooks(spec.hooks())
+def build_engine_worker_adapter_from_spec(
+    spec: EngineWorkerExecutionSpec,
+) -> EngineWorkerAdapter:
+    return build_engine_worker_adapter_from_hooks(spec.hooks())
 
 
 def raise_if_shutdown_requested(
     context: Any,
-    options: InternalWorkerOptions,
+    options: EngineWorkerOptions,
     *,
     shutdown_exception_type: type[BaseException],
 ) -> None:
@@ -298,13 +298,13 @@ def raise_if_shutdown_callback_requested(
 ) -> None:
     raise_if_shutdown_requested(
         context,
-        InternalWorkerOptions(shutdown_requested=shutdown_requested),
+        EngineWorkerOptions(shutdown_requested=shutdown_requested),
         shutdown_exception_type=shutdown_exception_type,
     )
 
 
 def queue_cancel_requested(
-    queue_deps: InternalWorkerQueueDependencies,
+    queue_deps: EngineWorkerQueueDependencies,
     queue_root: str | Path,
     entry: Any,
 ) -> bool:
@@ -317,22 +317,22 @@ def queue_cancel_requested(
 
 
 def queue_cancel_callback(
-    queue_deps: InternalWorkerQueueDependencies,
+    queue_deps: EngineWorkerQueueDependencies,
     queue_root: str | Path,
     entry: Any,
 ) -> Callable[[], bool]:
     return lambda: queue_cancel_requested(queue_deps, queue_root, entry)
 
 
-def run_internal_engine_worker_entry(
+def run_engine_worker_entry_with_adapter(
     cfg: Any,
     entry: Any,
     *,
     queue_root: Path | None,
-    adapter: InternalEngineWorkerAdapter,
-    options: InternalWorkerOptions | None = None,
+    adapter: EngineWorkerAdapter,
+    options: EngineWorkerOptions | None = None,
 ) -> Any:
-    active_options = options or InternalWorkerOptions()
+    active_options = options or EngineWorkerOptions()
     check_shutdown = adapter.check_shutdown
     return run_engine_worker_lifecycle(
         cfg,
@@ -370,46 +370,46 @@ def run_internal_engine_worker_entry(
     )
 
 
-def run_internal_engine_worker_entry_with_hooks(
+def run_engine_worker_entry_with_hooks(
     cfg: Any,
     entry: Any,
     *,
     queue_root: Path | None,
-    hooks: InternalEngineWorkerHooks,
-    options: InternalWorkerOptions | None = None,
+    hooks: EngineWorkerHooks,
+    options: EngineWorkerOptions | None = None,
 ) -> Any:
-    return run_internal_engine_worker_entry(
+    return run_engine_worker_entry_with_adapter(
         cfg,
         entry,
         queue_root=queue_root,
-        adapter=build_internal_engine_worker_adapter_from_hooks(hooks),
+        adapter=build_engine_worker_adapter_from_hooks(hooks),
         options=options,
     )
 
 
-def run_internal_engine_worker_entry_with_spec(
+def run_engine_worker_entry_with_spec(
     cfg: Any,
     entry: Any,
     *,
     queue_root: Path | None,
-    spec: InternalEngineWorkerExecutionSpec,
-    options: InternalWorkerOptions | None = None,
+    spec: EngineWorkerExecutionSpec,
+    options: EngineWorkerOptions | None = None,
 ) -> Any:
-    return run_internal_engine_worker_entry(
+    return run_engine_worker_entry_with_adapter(
         cfg,
         entry,
         queue_root=queue_root,
-        adapter=build_internal_engine_worker_adapter_from_spec(spec),
+        adapter=build_engine_worker_adapter_from_spec(spec),
         options=options,
     )
 
 
-def run_internal_engine_worker_entry_with_spec_options(
+def run_engine_worker_entry_with_spec_options(
     cfg: Any,
     entry: Any,
     *,
     queue_root: Path | None,
-    spec: InternalEngineWorkerExecutionSpec,
+    spec: EngineWorkerExecutionSpec,
     should_cancel: Callable[[], bool] | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
     prepare_running_job: Callable[[], None] | None = None,
@@ -417,12 +417,12 @@ def run_internal_engine_worker_entry_with_spec_options(
     worker_job_pid: int | None = None,
     emit_output: bool = False,
 ) -> Any:
-    return run_internal_engine_worker_entry_with_spec(
+    return run_engine_worker_entry_with_spec(
         cfg,
         entry,
         queue_root=queue_root,
         spec=spec,
-        options=InternalWorkerOptions(
+        options=EngineWorkerOptions(
             should_cancel=should_cancel,
             shutdown_requested=shutdown_requested,
             prepare_running_job=prepare_running_job,
@@ -433,7 +433,7 @@ def run_internal_engine_worker_entry_with_spec_options(
     )
 
 
-def run_internal_engine_worker_entry_with_spec_factory_options(
+def run_engine_worker_entry_with_spec_factory_options(
     cfg: Any,
     entry: Any,
     *,
@@ -446,7 +446,7 @@ def run_internal_engine_worker_entry_with_spec_factory_options(
     worker_job_pid: int | None = None,
     emit_output: bool = False,
 ) -> Any:
-    return run_internal_engine_worker_entry_with_spec_options(
+    return run_engine_worker_entry_with_spec_options(
         cfg,
         entry,
         queue_root=queue_root,
@@ -460,10 +460,10 @@ def run_internal_engine_worker_entry_with_spec_factory_options(
     )
 
 
-def run_internal_cancellable_engine_process(
+def run_cancellable_engine_worker_process(
     context: Any,
     *,
-    options: InternalWorkerOptions,
+    options: EngineWorkerOptions,
     shutdown_exception_type: type[BaseException],
     start_job: StartJob,
     finalize_job: CancellableJobFinalizer,
@@ -497,11 +497,11 @@ def run_internal_cancellable_engine_process(
     )
 
 
-def run_internal_worker_process_job(
+def run_engine_worker_process_job(
     context: Any,
     *,
-    options: InternalWorkerOptions,
-    process_deps: InternalWorkerProcessDependencies,
+    options: EngineWorkerOptions,
+    process_deps: EngineWorkerProcessDependencies,
     shutdown_exception_type: type[BaseException],
     start_job: StartJob,
     finalize_job: CancellableJobFinalizer,
@@ -509,7 +509,7 @@ def run_internal_worker_process_job(
     check_cancel_before_poll: bool = False,
     should_reraise_exception: Callable[[Exception], bool] | None = None,
 ) -> Any:
-    return run_internal_cancellable_engine_process(
+    return run_cancellable_engine_worker_process(
         context,
         options=options,
         shutdown_exception_type=shutdown_exception_type,
@@ -526,32 +526,32 @@ def run_internal_worker_process_job(
 
 
 __all__ = [
-    "InternalEngineWorkerAdapter",
-    "InternalEngineWorkerExecutionSpec",
+    "EngineWorkerAdapter",
+    "EngineWorkerExecutionSpec",
     "EngineWorkerExecutionSpecFactory",
-    "InternalEngineWorkerHooks",
-    "InternalWorkerProcessDependencies",
-    "InternalWorkerQueueDependencies",
-    "InternalWorkerTimingDependencies",
-    "InternalWorkerOptions",
-    "build_internal_worker_default_factories",
-    "build_internal_worker_process_default_factories",
-    "build_internal_worker_process_dependencies",
-    "build_internal_worker_queue_dependencies",
-    "build_internal_worker_timing_dependencies",
-    "build_internal_engine_worker_execution_spec",
-    "build_internal_engine_worker_adapter",
-    "build_internal_engine_worker_adapter_from_spec",
-    "build_internal_engine_worker_adapter_from_hooks",
+    "EngineWorkerHooks",
+    "EngineWorkerProcessDependencies",
+    "EngineWorkerQueueDependencies",
+    "EngineWorkerTimingDependencies",
+    "EngineWorkerOptions",
+    "build_engine_worker_default_factories",
+    "build_engine_worker_process_default_factories",
+    "build_engine_worker_process_dependencies",
+    "build_engine_worker_queue_dependencies",
+    "build_engine_worker_timing_dependencies",
+    "build_engine_worker_execution_spec",
+    "build_engine_worker_adapter",
+    "build_engine_worker_adapter_from_spec",
+    "build_engine_worker_adapter_from_hooks",
     "queue_cancel_callback",
     "queue_cancel_requested",
     "raise_if_shutdown_callback_requested",
     "raise_if_shutdown_requested",
-    "run_internal_cancellable_engine_process",
-    "run_internal_engine_worker_entry",
-    "run_internal_engine_worker_entry_with_spec",
-    "run_internal_engine_worker_entry_with_spec_factory_options",
-    "run_internal_engine_worker_entry_with_spec_options",
-    "run_internal_engine_worker_entry_with_hooks",
-    "run_internal_worker_process_job",
+    "run_cancellable_engine_worker_process",
+    "run_engine_worker_entry_with_adapter",
+    "run_engine_worker_entry_with_spec",
+    "run_engine_worker_entry_with_spec_factory_options",
+    "run_engine_worker_entry_with_spec_options",
+    "run_engine_worker_entry_with_hooks",
+    "run_engine_worker_process_job",
 ]

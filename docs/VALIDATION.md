@@ -21,7 +21,8 @@ The GitHub Actions workflow runs multiple independent checks:
 - Rendered systemd unit verification.
 - Python 3.11, 3.12, and 3.13 checks through `scripts/check.sh`.
 - Ruff, Ruff format check, mypy, and coverage-gated pytest.
-- Wheel smoke check that verifies typed-package metadata.
+- Wheel smoke check that requires the packaged Python-module inventory to
+  exactly match `src/orca_auto` and verifies the single root typing marker.
 
 The pytest suite exercises ORCA and standalone xTB-MD logic with unit tests,
 sanitized fixtures, and fake-engine integration paths. These checks cover durable queue behavior,

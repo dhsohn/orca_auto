@@ -159,6 +159,18 @@ source_modules = ["orca_auto.core.messaging"]
 forbidden_modules = ["orca_auto.core.notifications"]
 
 [[tool.importlinter.contracts]]
+name = "ORCA domain and worker policy never import CLI commands"
+type = "forbidden"
+source_modules = [
+    "orca_auto.orca.execution",
+    "orca_auto.orca.run_context",
+    "orca_auto.orca.submission",
+    "orca_auto.orca.worker_execution",
+    "orca_auto.orca.queue",
+]
+forbidden_modules = ["orca_auto.orca.commands"]
+
+[[tool.importlinter.contracts]]
 name = "Standalone xtb_md is independent from ORCA"
 type = "independence"
 modules = [
@@ -172,6 +184,48 @@ type = "independence"
 modules = [
     "orca_auto.xtb_md",
     "orca_auto.flow",
+]
+
+[[tool.importlinter.contracts]]
+name = "Workflow stage views stay below orchestration wiring"
+type = "forbidden"
+source_modules = [
+    "orca_auto.flow.orchestration.stage_view_mutators",
+    "orca_auto.flow.orchestration.stage_views",
+]
+forbidden_modules = [
+    "orca_auto.flow.orchestration.advance",
+    "orca_auto.flow.orchestration.advance_phases",
+    "orca_auto.flow.orchestration.services",
+]
+
+[[tool.importlinter.contracts]]
+name = "Bot command application never owns durable upload storage"
+type = "forbidden"
+source_modules = ["orca_auto.flow.bot.application"]
+forbidden_modules = ["orca_auto.core.ingest"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Durable upload application stays below bot composition"
+type = "forbidden"
+source_modules = ["orca_auto.flow.bot.upload_application"]
+forbidden_modules = [
+    "orca_auto.flow.bot.application",
+    "orca_auto.flow.bot.providers",
+    "orca_auto.flow.bot.runner",
+]
+
+[[tool.importlinter.contracts]]
+name = "Workflow SI dependencies point toward evidence and models"
+type = "layers"
+layers = [
+    "orca_auto.flow.workflow.si.publication",
+    "orca_auto.flow.workflow.si.collection",
+    "orca_auto.flow.workflow.si.rendering",
+    "orca_auto.flow.workflow.si.science",
+    "orca_auto.flow.workflow.si.evidence",
+    "orca_auto.flow.workflow.si.models",
 ]
 
 [tool.coverage.run]

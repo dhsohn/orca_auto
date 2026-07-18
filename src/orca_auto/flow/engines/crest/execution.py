@@ -15,6 +15,7 @@ from typing import Any
 from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.admission import activate_reserved_slot, release_slot
 from orca_auto.core.config.engines import load_crest_config as load_config
+from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.engines.worker_child import (
     WORKER_CHILD_MODULE,
     build_worker_child_command_for_engine,
@@ -36,17 +37,17 @@ from orca_auto.core.queue import (
     mark_failed,
     requeue_running_entry,
 )
+from orca_auto.core.queue.child.execution import install_shutdown_request_handlers
 from orca_auto.core.queue.engine import execution as _engine_execution
+from orca_auto.core.queue.engine.child import (
+    WorkerChildRunSpec,
+    run_engine_worker_child_job,
+)
 from orca_auto.core.queue.engine.input_snapshot import (
     read_stable_regular_file,
     verify_input_snapshots,
 )
-from orca_auto.core.queue.internal_engine import (
-    InternalEngineSpec,
-    create_worker_shutdown_exception_type,
-    entry_matches_engine_identity,
-    entry_status_is_running,
-)
+from orca_auto.core.queue.lifecycle import entry_status_is_running
 from orca_auto.core.queue.worker import execution_dependencies as _worker_dependencies
 from orca_auto.core.queue.worker import (
     install_shutdown_signal_handlers,
@@ -94,34 +95,31 @@ state_matches_job = _queue_artifacts.state_matches_job
 write_report_json = _queue_artifacts.write_report_json
 write_report_md_lines = _queue_artifacts.write_report_md_lines
 write_state = _queue_artifacts.write_state
-WorkerShutdownRequested = create_worker_shutdown_exception_type(__name__)
-_ENGINE_SPEC = InternalEngineSpec(
-    engine="crest",
-    worker_job_module="orca_auto.flow.engines.crest.execution",
-    include_admission_root=False,
-)
 build_worker_child_command = build_worker_child_command_for_engine("crest")
 
 
-_worker_child = _ENGINE_SPEC.worker_child_module_facade(
-    WorkerShutdownRequested,
+class WorkerShutdownRequested(RuntimeError):
+    def __init__(self, context: Any):
+        super().__init__("worker_shutdown")
+        self.context = context
+
+
+_WORKER_CHILD_RUN_SPEC = WorkerChildRunSpec(
+    shutdown_exception_type=WorkerShutdownRequested,
     entry_ready_fn=lambda entry: (
         entry_status_is_running(entry) and entry_matches_engine_identity(entry, "crest")
     ),
-    process_dequeued_entry_kwargs_fn=lambda: {"molecule_key_resolver": _molecule_key},
-    build_worker_child_command=build_worker_child_command,
 )
-_WORKER_CHILD = _worker_child.worker_child
 
 
 WorkerConfigDependencies = _worker_dependencies.WorkerConfigDependencies
 WorkerAdmissionDependencies = _worker_dependencies.WorkerAdmissionDependencies
-WorkerTimingDependencies = _engine_execution.InternalWorkerTimingDependencies
-WorkerQueueDependencies = _engine_execution.InternalWorkerQueueDependencies
+WorkerTimingDependencies = _engine_execution.EngineWorkerTimingDependencies
+WorkerQueueDependencies = _engine_execution.EngineWorkerQueueDependencies
 
 
 @dataclass(frozen=True)
-class WorkerRunnerDependencies(_engine_execution.InternalWorkerProcessDependencies):
+class WorkerRunnerDependencies(_engine_execution.EngineWorkerProcessDependencies):
     start_crest_job: Callable[..., Any]
     finalize_crest_job: Callable[..., CrestRunResult]
 
@@ -530,9 +528,9 @@ def _run_crest_job_for_entry(
             **launch_kwargs,
         )
 
-    return _engine_execution.run_internal_worker_process_job(
+    return _engine_execution.run_engine_worker_process_job(
         context,
-        options=_engine_execution.InternalWorkerOptions(
+        options=_engine_execution.EngineWorkerOptions(
             should_cancel=_engine_execution.queue_cancel_callback(
                 queue_deps,
                 queue_root,
@@ -632,8 +630,8 @@ def _worker_execution_spec(
     *,
     molecule_key_resolver: Callable[[Any, Path, Path], str],
     dependencies: WorkerExecutionDependencies,
-) -> _engine_execution.InternalEngineWorkerExecutionSpec:
-    return _engine_execution.build_internal_engine_worker_execution_spec(
+) -> _engine_execution.EngineWorkerExecutionSpec:
+    return _engine_execution.build_engine_worker_execution_spec(
         build_context=lambda cfg_obj, entry_obj: _build_execution_context(
             cfg_obj,
             entry_obj,
@@ -677,8 +675,8 @@ def build_worker_adapter(
     *,
     molecule_key_resolver: Callable[[Any, Path, Path], str],
     dependencies: WorkerExecutionDependencies,
-) -> _engine_execution.InternalEngineWorkerAdapter:
-    return _engine_execution.build_internal_engine_worker_adapter_from_spec(
+) -> _engine_execution.EngineWorkerAdapter:
+    return _engine_execution.build_engine_worker_adapter_from_spec(
         _worker_execution_spec(
             molecule_key_resolver=molecule_key_resolver,
             dependencies=dependencies,
@@ -699,7 +697,7 @@ def _run_worker_entry_lifecycle(
     worker_job_pid: int | None = None,
     emit_output: bool = False,
 ) -> WorkerExecutionOutcome:
-    return _engine_execution.run_internal_engine_worker_entry_with_spec_factory_options(
+    return _engine_execution.run_engine_worker_entry_with_spec_factory_options(
         cfg,
         entry,
         queue_root=queue_root,
@@ -783,26 +781,35 @@ def run_worker_child_job(
     dependencies: WorkerExecutionDependencies | None = None,
 ) -> int:
     deps = dependencies or default_worker_execution_dependencies()
-    return _worker_dependencies.run_worker_child_entrypoint_with_dependencies(
-        _worker_child,
+    return run_engine_worker_child_job(
+        spec=_WORKER_CHILD_RUN_SPEC,
         config_path=config_path,
         queue_root=queue_root,
         queue_id=queue_id,
         admission_token=admission_token,
+        load_config_fn=deps.config.load_config,
+        find_queue_entry_fn=deps.config.queue_entry_by_id,
         admission_root_fn=_admission_root_for_cfg,
-        install_shutdown_signal_handlers_fn=install_shutdown_signal_handlers,
+        release_slot_fn=deps.admission.release_slot,
+        install_signal_handlers_fn=lambda controller: install_shutdown_request_handlers(
+            controller,
+            install_signal_handlers_fn=install_shutdown_signal_handlers,
+        ),
         process_dequeued_entry_fn=process_dequeued_entry,
-        dependencies=deps,
+        dependencies_fn=lambda: deps,
         requeue_running_entry_fn=requeue_running_entry,
         mark_recovery_pending_context_fn=_mark_recovery_pending_context,
+        process_dequeued_entry_kwargs={"molecule_key_resolver": _molecule_key},
     )
 
 
 def build_parser() -> argparse.ArgumentParser:
-    return _worker_child.build_parser()
-
-
-shutdown_signal_handler_installer = _WORKER_CHILD.shutdown_signal_handler_installer
+    parser = argparse.ArgumentParser(prog="python -m orca_auto.flow.engines.crest.execution")
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--queue-root", required=True)
+    parser.add_argument("--queue-id", required=True)
+    parser.add_argument("--admission-token", default=None)
+    return parser
 
 
 def main(argv: list[str] | None = None) -> int:

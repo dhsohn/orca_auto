@@ -6,6 +6,7 @@ import json
 import shutil
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +23,8 @@ from orca_auto.core.messaging.interactive import (
     IncomingUpload,
 )
 from orca_auto.core.queue.generation import is_visible_generation_name
-from orca_auto.flow.bot import ActionRegistry, BotApplication, BotSettings, remote_admission
-from orca_auto.flow.bot.application import SubmissionReceipt
+from orca_auto.flow.bot import BotApplication, BotSettings, UploadApplication, remote_admission
+from orca_auto.flow.bot.upload_application import SubmissionReceipt
 
 ADDRESS = ConversationAddress(provider="discord", channel_id="100")
 ACTOR = Actor(user_id="42", label="chemist")
@@ -64,7 +65,7 @@ class FailingMessenger(FakeMessenger):
         return SendResult(sent=False, error="transport failed", provider=self.provider)
 
 
-def _app(tmp_path: Path, *, enabled: bool = True) -> BotApplication:
+def _app(tmp_path: Path, *, enabled: bool = True) -> UploadApplication:
     settings = BotSettings(
         workflow_root=str(tmp_path),
         crest_config=None,
@@ -73,9 +74,8 @@ def _app(tmp_path: Path, *, enabled: bool = True) -> BotApplication:
         orca_repo_root=None,
         runs_root=str(tmp_path),
     )
-    return BotApplication(
+    return UploadApplication(
         settings=settings,
-        actions=ActionRegistry(),
         upload_policy=UploadPolicy(enabled=enabled),
     )
 
@@ -87,16 +87,14 @@ def _make_zip(path: Path, entries: dict[str, bytes]) -> Path:
     return path
 
 
-def _stage(app: BotApplication, archive: Path, filename: str) -> IncomingUpload:
-    if app.upload_policy is None or not app.upload_policy.enabled:
-        staged = app.stage_upload_path(filename)
-        shutil.copy(archive, staged)
+def _stage(app: UploadApplication, archive: Path, filename: str) -> IncomingUpload:
+    if not app.upload_policy.enabled:
         return IncomingUpload(
             address=ADDRESS,
             actor=ACTOR,
             filename=filename,
-            size=staged.stat().st_size,
-            archive_path=str(staged),
+            size=archive.stat().st_size,
+            archive_path=str(archive),
         )
     attachment_id = f"attachment:{filename}"
     reservation = app.reserve_upload(
@@ -190,8 +188,10 @@ def test_upload_disabled_is_refused(tmp_path: Path) -> None:
 
     assert status == "upload-disabled"
     assert "disabled" in messenger.replies[-1].text
-    # Refused uploads leave nothing staged.
-    assert not Path(upload.archive_path).exists()
+    # The application never deletes an unreserved, non-store-owned source path.
+    assert Path(upload.archive_path).is_file()
+    assert app.upload_sessions is not None
+    assert app.upload_sessions.list_sessions() == ()
 
 
 def test_disabled_upload_never_unlinks_an_unowned_caller_path(tmp_path: Path) -> None:
@@ -209,6 +209,90 @@ def test_disabled_upload_never_unlinks_an_unowned_caller_path(tmp_path: Path) ->
 
     assert app.dispatch_upload(upload, messenger=messenger) == "upload-disabled"
     assert unowned.read_text(encoding="utf-8") == "important"
+
+
+def test_disabled_upload_never_discards_a_foreign_reserved_session(tmp_path: Path) -> None:
+    enabled = _app(tmp_path)
+    reservation = enabled.reserve_upload(
+        address=ADDRESS,
+        actor=ACTOR,
+        message_id="owner-message",
+        attachment_ids=("owner-attachment",),
+        expected_bytes=1,
+    )
+    disabled = UploadApplication(
+        settings=enabled.settings,
+        upload_policy=UploadPolicy(enabled=False),
+        upload_sessions=enabled.upload_sessions,
+    )
+    foreign = IncomingUpload(
+        address=ADDRESS,
+        actor=Actor(user_id="other", label="other"),
+        filename="foreign.zip",
+        size=0,
+        archive_path=str(tmp_path / "foreign.zip"),
+        message_id="foreign-message",
+        attachment_id="foreign-attachment",
+        upload_id=reservation.session.upload_id,
+    )
+
+    assert disabled.dispatch_upload(foreign, messenger=FakeMessenger()) == "upload-disabled"
+    assert enabled.upload_sessions is not None
+    preserved = enabled.upload_sessions.get(reservation.session.upload_id)
+    assert preserved.state is UploadState.RECEIVING
+    assert preserved.archive_path.parent.is_dir()
+
+
+@pytest.mark.parametrize("missing_field", ["upload_id", "message_id", "attachment_id"])
+def test_enabled_upload_requires_every_reserved_identity(
+    tmp_path: Path,
+    missing_field: str,
+) -> None:
+    archive = _make_zip(tmp_path / "bound.zip", {"bound/job.inp": b"x"})
+    app = _app(tmp_path)
+    upload = _stage(app, archive, "bound.zip")
+    if missing_field == "upload_id":
+        upload = replace(upload, upload_id=None)
+    elif missing_field == "message_id":
+        upload = replace(upload, message_id=None)
+    else:
+        assert missing_field == "attachment_id"
+        upload = replace(upload, attachment_id=None)
+
+    assert app.dispatch_upload(upload, messenger=FakeMessenger()) == "upload-rejected"
+    assert app.upload_sessions is not None
+    sessions = app.upload_sessions.list_sessions()
+    assert len(sessions) == 1
+    assert sessions[0].state is UploadState.RECEIVING
+
+
+def test_enabled_upload_requires_provider_finalize_before_dispatch(tmp_path: Path) -> None:
+    archive = _make_zip(tmp_path / "unfinalized.zip", {"job.inp": b"x"})
+    app = _app(tmp_path)
+    reservation = app.reserve_upload(
+        address=ADDRESS,
+        actor=ACTOR,
+        message_id="message:unfinalized.zip",
+        attachment_ids=("attachment:unfinalized.zip",),
+        expected_bytes=archive.stat().st_size,
+    )
+    shutil.copy(archive, reservation.session.archive_path)
+    upload = IncomingUpload(
+        address=ADDRESS,
+        actor=ACTOR,
+        filename="unfinalized.zip",
+        size=archive.stat().st_size,
+        archive_path=str(reservation.session.archive_path),
+        message_id=reservation.session.message_id,
+        attachment_id="attachment:unfinalized.zip",
+        upload_id=reservation.session.upload_id,
+    )
+
+    assert app.dispatch_upload(upload, messenger=FakeMessenger()) == "upload-rejected"
+    assert app.upload_sessions is not None
+    preserved = app.upload_sessions.get(reservation.session.upload_id)
+    assert preserved.state is UploadState.RECEIVING
+    assert preserved.actual_bytes is None
 
 
 def test_upload_rejects_runtime_reserved_published_name(tmp_path: Path) -> None:
@@ -259,7 +343,8 @@ def test_confirm_extracts_and_submits(tmp_path: Path, monkeypatch: pytest.Monkey
     action = IncomingAction(
         address=ADDRESS, actor=ACTOR, action_id=confirm_id, ack_token="tok", message_id="1"
     )
-    status = app.dispatch_action(action, messenger=messenger)
+    commands = BotApplication(settings=app.settings, uploads=app)
+    status = commands.dispatch_action(action, messenger=messenger)
 
     assert status == "run-submitted"
     assert submitted == [tmp_path / "mol42"]
@@ -333,7 +418,7 @@ def test_two_same_named_uploads_publish_without_deleting_each_other(
     )
 
     def submit(action_id: str) -> str:
-        return app.dispatch_action(
+        status = app.dispatch_action(
             IncomingAction(
                 address=ADDRESS,
                 actor=ACTOR,
@@ -342,6 +427,8 @@ def test_two_same_named_uploads_publish_without_deleting_each_other(
             ),
             messenger=messenger,
         )
+        assert status is not None
+        return status
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         statuses = list(pool.map(submit, (first_action, second_action)))
@@ -502,7 +589,7 @@ def test_publish_rename_success_then_error_is_never_downgraded_to_failed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from orca_auto.flow.bot import application as application_module
+    from orca_auto.flow.bot import upload_application as application_module
 
     archive = _make_zip(tmp_path / "rename_race.zip", {"rename_race/job.inp": b"x"})
     app = _app(tmp_path)
@@ -1135,8 +1222,8 @@ def test_empty_queue_reconciliation_is_cleanup_safe_only_for_precommit_target_fa
     failure_reason: str,
     expected_commit: bool | None,
 ) -> None:
-    from orca_auto.orca.commands import run_inp
-    from orca_auto.orca.commands.run_inp_submission import DirectQueueSubmission
+    from orca_auto.orca import submission
+    from orca_auto.orca.submission import DirectQueueSubmission
 
     job_dir = tmp_path / "submission_boundary"
     job_dir.mkdir()
@@ -1146,7 +1233,7 @@ def test_empty_queue_reconciliation_is_cleanup_safe_only_for_precommit_target_fa
     )
     app = _app(tmp_path)
     monkeypatch.setattr(
-        run_inp,
+        submission,
         "submit_reaction_dir_to_queue",
         lambda args: DirectQueueSubmission(
             status="failed",
@@ -1452,7 +1539,7 @@ def test_workflow_submission_forces_runs_root_and_trusted_resource_limits(
         encoding="utf-8",
     )
     (job_dir / "input.xyz").write_text("1\n\nH 0 0 0\n", encoding="utf-8")
-    app = BotApplication(
+    app = UploadApplication(
         settings=BotSettings(
             workflow_root=str(tmp_path / "different_workflow_root"),
             crest_config=None,
@@ -1678,7 +1765,8 @@ def test_confirm_after_staged_archive_gone(tmp_path: Path) -> None:
 def test_run_command_usage_without_attachment(tmp_path: Path) -> None:
     from orca_auto.core.messaging.interactive import IncomingCommand
 
-    app = _app(tmp_path)
+    uploads = _app(tmp_path)
+    app = BotApplication(settings=uploads.settings, uploads=uploads)
     messenger = FakeMessenger()
     command = IncomingCommand(address=ADDRESS, actor=ACTOR, command="run", args="")
 
@@ -1691,7 +1779,8 @@ def test_run_command_usage_without_attachment(tmp_path: Path) -> None:
 def test_disabled_discord_help_does_not_advertise_upload_command(tmp_path: Path) -> None:
     from orca_auto.core.messaging.interactive import IncomingCommand
 
-    app = _app(tmp_path, enabled=False)
+    uploads = _app(tmp_path, enabled=False)
+    app = BotApplication(settings=uploads.settings, uploads=uploads)
     messenger = FakeMessenger()
     command = IncomingCommand(address=ADDRESS, actor=ACTOR, command="help")
 
@@ -1704,7 +1793,8 @@ def test_disabled_discord_help_does_not_advertise_upload_command(tmp_path: Path)
 def test_telegram_run_command_is_not_advertised_or_accepted(tmp_path: Path) -> None:
     from orca_auto.core.messaging.interactive import IncomingCommand
 
-    app = _app(tmp_path)
+    uploads = _app(tmp_path)
+    app = BotApplication(settings=uploads.settings, uploads=uploads)
     messenger = FakeMessenger()
     messenger.provider = "telegram"
     address = ConversationAddress(provider="telegram", channel_id="100")

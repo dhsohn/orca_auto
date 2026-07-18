@@ -111,8 +111,8 @@ class IncomingUpload:
 
     Durable adapters reserve and finalize ``upload_id`` before constructing this
     value; ``archive_path`` is then the fixed store-owned path for that session.
-    ``None`` remains accepted only for compatibility with older local callers,
-    which the application adopts into a durable session before inspection.
+    Enabled upload dispatch requires the exact message, attachment, and upload
+    identities recorded by that reservation.
     """
 
     address: ConversationAddress

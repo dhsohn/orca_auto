@@ -15,13 +15,13 @@ from orca_auto.core.queue.engine.snapshot_intent import (
 )
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.orca import worker_execution as worker_job
-from orca_auto.orca.commands.run_inp_submission import _mark_orca_snapshot_owned
 from orca_auto.orca.execution_binding import (
     build_orca_execution_snapshot,
     orca_execution_started_evidence,
     verify_orca_execution_snapshot,
 )
 from orca_auto.orca.queue.adapter import dequeue_next, enqueue, list_queue
+from orca_auto.orca.submission import mark_orca_snapshot_owned
 
 _PRISTINE_XYZ = "2\nH2\nH 0 0 0\nH 0 0 0.74\n"
 _CRASHED_XYZ = "2\noptimizing\nH 0 0 0\nH 0 0 0.80\n"
@@ -499,7 +499,7 @@ def _claimed_mutable_entry(tmp_path: Path) -> tuple[Path, Any, dict[str, Any], P
         target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
         expected_states={SNAPSHOT_INTENT_STATE_CREATING},
     )
-    assert _mark_orca_snapshot_owned(queue_root, snapshot[SNAPSHOT_INTENT_TOKEN_KEY]) is None
+    assert mark_orca_snapshot_owned(queue_root, snapshot[SNAPSHOT_INTENT_TOKEN_KEY]) is None
     metadata = {
         "reaction_dir": str(job_dir),
         "force": True,
@@ -706,7 +706,7 @@ def test_rebind_keeps_a_completed_generation_for_adoption(tmp_path: Path) -> Non
         target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
         expected_states={SNAPSHOT_INTENT_STATE_CREATING},
     )
-    assert _mark_orca_snapshot_owned(queue_root, snapshot[SNAPSHOT_INTENT_TOKEN_KEY]) is None
+    assert mark_orca_snapshot_owned(queue_root, snapshot[SNAPSHOT_INTENT_TOKEN_KEY]) is None
     metadata = {
         "reaction_dir": str(job_dir),
         "force": True,

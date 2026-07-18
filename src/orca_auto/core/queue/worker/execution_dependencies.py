@@ -8,11 +8,11 @@ from typing import Any
 from ..child import entrypoint as _child_entrypoint
 from ..child.execution import build_queue_entry_lookup as _build_queue_entry_lookup
 from ..dependencies import build_dependency_container
-from ..internal_worker import (
-    build_internal_worker_process_default_factories,
-    build_internal_worker_process_dependencies,
-    build_internal_worker_queue_dependencies,
-    build_internal_worker_timing_dependencies,
+from ..engine.worker_execution import (
+    build_engine_worker_process_default_factories,
+    build_engine_worker_process_dependencies,
+    build_engine_worker_queue_dependencies,
+    build_engine_worker_timing_dependencies,
 )
 
 DependencyFactory = Callable[[], Any]
@@ -196,7 +196,7 @@ def build_worker_process_default_factories(
     return {
         "config": config_factory,
         "admission": admission_factory,
-        **build_internal_worker_process_default_factories(
+        **build_engine_worker_process_default_factories(
             timing_dependencies_type=timing_dependencies_type,
             queue_dependencies_type=queue_dependencies_type,
             runner_dependencies_type=runner_dependencies_type,
@@ -252,18 +252,18 @@ def build_worker_process_dependency_groups(
     cancel_check_interval_seconds: float,
 ) -> dict[str, Any]:
     return {
-        "timing": build_internal_worker_timing_dependencies(
+        "timing": build_engine_worker_timing_dependencies(
             timing_dependencies_type,
             now_utc_iso=callbacks.now_utc_iso,
         ),
-        "queue": build_internal_worker_queue_dependencies(
+        "queue": build_engine_worker_queue_dependencies(
             queue_dependencies_type,
             get_cancel_requested=callbacks.get_cancel_requested,
             mark_completed=callbacks.mark_completed,
             mark_cancelled=callbacks.mark_cancelled,
             mark_failed=callbacks.mark_failed,
         ),
-        "runner": build_internal_worker_process_dependencies(
+        "runner": build_engine_worker_process_dependencies(
             runner_dependencies_type,
             terminate_process=callbacks.terminate_process,
             wait_for_cancellable_process=callbacks.wait_for_cancellable_process,

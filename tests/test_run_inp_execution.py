@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from orca_auto.orca.commands import run_inp_execution
+from orca_auto.orca import execution as run_inp_execution
+from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.state import load_state, save_state
 
 
@@ -106,6 +108,7 @@ def test_recover_crashed_state_reaps_orphan_for_interrupted_failed_state(
 
 def test_execute_locked_run_recovers_inside_the_run_lock(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # The crash/orphan recovery must run AFTER the run lock is held and BEFORE
     # the run executes, so a concurrent invocation's freshly started ORCA can
@@ -131,7 +134,8 @@ def test_execute_locked_run_recovers_inside_the_run_lock(
         finally:
             events.append("admission_exit")
 
-    def fake_recover(_reaction_dir: Path) -> bool:
+    def fake_recover(_reaction_dir: Path, *, logger: logging.Logger) -> bool:
+        del logger
         events.append("recover")
         return False
 
@@ -139,32 +143,34 @@ def test_execute_locked_run_recovers_inside_the_run_lock(
         events.append("run")
         return 0
 
-    execution = SimpleNamespace(
-        acquire_run_lock=fake_run_lock,
-        _recover_crashed_state=fake_recover,
-        _admission_context=fake_admission,
-        load_or_create_state=lambda *_a, **_k: ({"status": "created"}, False),
-        _to_resolved_local=lambda value: value,
-        save_state=lambda *_a, **_k: None,
-        _run_with_state=fake_run_with_state,
+    monkeypatch.setattr(run_inp_execution, "acquire_run_lock", fake_run_lock)
+    monkeypatch.setattr(run_inp_execution, "recover_crashed_state", fake_recover)
+    monkeypatch.setattr(run_inp_execution, "_admission_context", fake_admission)
+    monkeypatch.setattr(
+        run_inp_execution,
+        "load_or_create_state",
+        lambda *_a, **_k: ({"status": "created"}, False),
     )
-    deps = SimpleNamespace(execution=execution)
-    context = SimpleNamespace(
-        reaction_dir=tmp_path / "rxn",
-        selected_inp=tmp_path / "rxn.inp",
-        admission_root=None,
-        reservation_token=None,
-        admission_app_name=None,
-        admission_task_id="",
-        max_retries=2,
-        cfg=None,
+    monkeypatch.setattr(run_inp_execution, "save_state", lambda *_a, **_k: None)
+    monkeypatch.setattr(run_inp_execution, "run_with_state", fake_run_with_state)
+    context = cast(
+        RunExecutionContext,
+        SimpleNamespace(
+            reaction_dir=tmp_path / "rxn",
+            selected_inp=tmp_path / "rxn.inp",
+            admission_root=None,
+            reservation_token=None,
+            admission_app_name=None,
+            admission_task_id="",
+            max_retries=2,
+            cfg=None,
+        ),
     )
 
     exit_code = run_inp_execution.execute_locked_run(
         SimpleNamespace(force=True),
         context,
         runner_cls=object,
-        deps=deps,
     )
 
     assert exit_code == 0
@@ -180,6 +186,7 @@ def test_execute_locked_run_recovers_inside_the_run_lock(
 
 def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Existing-output replay must retain the queue generation's task ID."""
     from contextlib import contextmanager
@@ -199,31 +206,6 @@ def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
     def fake_admission(**_kwargs: object):
         yield
 
-    def existing_completed_exit(
-        *,
-        reaction_dir: Path,
-        selected_inp: Path,
-        admission_root: Path,
-        reservation_token: str | None,
-        max_retries: int,
-        admission_task_id: str | None,
-    ) -> int | None:
-        return run_inp_execution.existing_completed_exit(
-            reaction_dir=reaction_dir,
-            selected_inp=selected_inp,
-            admission_root=admission_root,
-            reservation_token=reservation_token,
-            max_retries=max_retries,
-            admission_task_id=admission_task_id,
-            deps=SimpleNamespace(
-                execution=execution,
-                statuses=SimpleNamespace(
-                    RunStatus=SimpleNamespace(COMPLETED="completed"),
-                    AnalyzerStatus=SimpleNamespace(COMPLETED="completed"),
-                ),
-            ),
-        )
-
     def exit_with_result(
         _reaction_dir: Path,
         current_state: dict[str, object],
@@ -233,34 +215,47 @@ def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
         finalized_states.append(dict(current_state))
         return 0
 
-    execution = SimpleNamespace(
-        acquire_run_lock=fake_run_lock,
-        _recover_crashed_state=lambda _reaction_dir: False,
-        _admission_context=fake_admission,
-        _existing_completed_exit=existing_completed_exit,
-        _existing_completed_out=lambda _selected_inp: {"out_path": reaction_dir / "rxn.out"},
-        load_or_create_state=lambda *_args, **_kwargs: (state, False),
-        save_state=lambda _reaction_dir, current_state: saved_states.append(dict(current_state)),
-        _exit_with_result=exit_with_result,
-        _emit=lambda *_args, **_kwargs: None,
-        _to_resolved_local=lambda value: value,
+    monkeypatch.setattr(run_inp_execution, "acquire_run_lock", fake_run_lock)
+    monkeypatch.setattr(
+        run_inp_execution,
+        "recover_crashed_state",
+        lambda _reaction_dir, *, logger: False,
     )
-    context = SimpleNamespace(
-        reaction_dir=reaction_dir,
-        selected_inp=selected_inp,
-        admission_root=tmp_path,
-        reservation_token=None,
-        admission_app_name=None,
-        admission_task_id="queue-task-id",
-        max_retries=2,
-        cfg=None,
+    monkeypatch.setattr(run_inp_execution, "_admission_context", fake_admission)
+    monkeypatch.setattr(
+        run_inp_execution,
+        "existing_completed_out",
+        lambda _selected_inp: {"out_path": reaction_dir / "rxn.out"},
+    )
+    monkeypatch.setattr(
+        run_inp_execution,
+        "load_or_create_state",
+        lambda *_args, **_kwargs: (state, False),
+    )
+    monkeypatch.setattr(
+        run_inp_execution,
+        "save_state",
+        lambda _reaction_dir, current_state: saved_states.append(dict(current_state)),
+    )
+    monkeypatch.setattr(run_inp_execution, "_exit_with_result", exit_with_result)
+    context = cast(
+        RunExecutionContext,
+        SimpleNamespace(
+            reaction_dir=reaction_dir,
+            selected_inp=selected_inp,
+            admission_root=tmp_path,
+            reservation_token=None,
+            admission_app_name=None,
+            admission_task_id="queue-task-id",
+            max_retries=2,
+            cfg=None,
+        ),
     )
 
     exit_code = run_inp_execution.execute_locked_run(
         SimpleNamespace(force=False),
         context,
         runner_cls=object,
-        deps=SimpleNamespace(execution=execution),
     )
 
     assert exit_code == 0
@@ -286,7 +281,8 @@ def test_execute_locked_run_completes_recovery_prepare_after_safe_failure(
         finally:
             events.append("lock_exit")
 
-    def fail_recovery(_reaction_dir: Path) -> None:
+    def fail_recovery(_reaction_dir: Path, *, logger: logging.Logger) -> None:
+        del logger
         events.append("recover")
         raise ValueError("corrupt job state")
 
@@ -309,19 +305,20 @@ def test_execute_locked_run_completes_recovery_prepare_after_safe_failure(
         "complete_slot_engine_process",
         complete,
     )
-    execution = SimpleNamespace(
-        acquire_run_lock=fake_run_lock,
-        _recover_crashed_state=fail_recovery,
-    )
-    context = SimpleNamespace(
-        reaction_dir=tmp_path / "rxn",
-        selected_inp=tmp_path / "rxn.inp",
-        admission_root=tmp_path,
-        reservation_token="slot",
-        admission_app_name=None,
-        admission_task_id="",
-        max_retries=2,
-        cfg=None,
+    monkeypatch.setattr(run_inp_execution, "acquire_run_lock", fake_run_lock)
+    monkeypatch.setattr(run_inp_execution, "recover_crashed_state", fail_recovery)
+    context = cast(
+        RunExecutionContext,
+        SimpleNamespace(
+            reaction_dir=tmp_path / "rxn",
+            selected_inp=tmp_path / "rxn.inp",
+            admission_root=tmp_path,
+            reservation_token="slot",
+            admission_app_name=None,
+            admission_task_id="",
+            max_retries=2,
+            cfg=None,
+        ),
     )
 
     with pytest.raises(ValueError, match="corrupt job state"):
@@ -329,7 +326,6 @@ def test_execute_locked_run_completes_recovery_prepare_after_safe_failure(
             SimpleNamespace(force=True),
             context,
             runner_cls=object,
-            deps=SimpleNamespace(execution=execution),
         )
 
     assert events == ["lock_enter", "prepare", "recover", "complete", "lock_exit"]
@@ -353,7 +349,8 @@ def test_execute_locked_run_keeps_recovery_prepare_for_process_recovery_failure(
         finally:
             events.append("lock_exit")
 
-    def fail_recovery(_reaction_dir: Path) -> None:
+    def fail_recovery(_reaction_dir: Path, *, logger: logging.Logger) -> None:
+        del logger
         events.append("recover")
         raise run_inp_execution.OrcaProcessRecoveryError("ambiguous process")
 
@@ -376,19 +373,20 @@ def test_execute_locked_run_keeps_recovery_prepare_for_process_recovery_failure(
         "complete_slot_engine_process",
         complete,
     )
-    execution = SimpleNamespace(
-        acquire_run_lock=fake_run_lock,
-        _recover_crashed_state=fail_recovery,
-    )
-    context = SimpleNamespace(
-        reaction_dir=tmp_path / "rxn",
-        selected_inp=tmp_path / "rxn.inp",
-        admission_root=tmp_path,
-        reservation_token="slot",
-        admission_app_name=None,
-        admission_task_id="",
-        max_retries=2,
-        cfg=None,
+    monkeypatch.setattr(run_inp_execution, "acquire_run_lock", fake_run_lock)
+    monkeypatch.setattr(run_inp_execution, "recover_crashed_state", fail_recovery)
+    context = cast(
+        RunExecutionContext,
+        SimpleNamespace(
+            reaction_dir=tmp_path / "rxn",
+            selected_inp=tmp_path / "rxn.inp",
+            admission_root=tmp_path,
+            reservation_token="slot",
+            admission_app_name=None,
+            admission_task_id="",
+            max_retries=2,
+            cfg=None,
+        ),
     )
 
     with pytest.raises(run_inp_execution.OrcaProcessRecoveryError, match="ambiguous process"):
@@ -396,7 +394,6 @@ def test_execute_locked_run_keeps_recovery_prepare_for_process_recovery_failure(
             SimpleNamespace(force=True),
             context,
             runner_cls=object,
-            deps=SimpleNamespace(execution=execution),
         )
 
     assert events == ["lock_enter", "prepare", "recover", "lock_exit"]

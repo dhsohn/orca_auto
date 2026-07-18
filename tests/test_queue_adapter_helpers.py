@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
+from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue import store as queue_store
-from orca_auto.core.queue.internal_engine import entry_matches_engine_identity
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import entries as queue_entries

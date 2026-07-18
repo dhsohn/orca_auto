@@ -9,6 +9,7 @@ from orca_auto.core.engines import (
     build_lazy_worker_child_runner,
     build_queue_engine_definition,
     build_queue_entry_by_id,
+    own_engine_accept_entry,
 )
 from orca_auto.core.queue import (
     QUEUE_RECORD_SYNC_COMPLETE,
@@ -17,7 +18,6 @@ from orca_auto.core.queue import (
     list_queue,
     queue_record_sync_state,
 )
-from orca_auto.core.queue.internal_engine import own_engine_accept_entry
 
 from .records import build_job_artifact, persist_job_artifact
 
@@ -87,7 +87,7 @@ ENGINE_DEFINITION = build_queue_engine_definition(
     worker_pid_file_name="xtb_md_queue_worker.pid",
     before_pending_cancel=_persist_pending_cancelled_job,
 )
-build_worker_child_command = ENGINE_DEFINITION.build_worker_child_command
+build_worker_child_command = ENGINE_DEFINITION.runner_callbacks.build_worker_child_command
 
 
 __all__ = ["ENGINE_DEFINITION", "build_worker_child_command"]

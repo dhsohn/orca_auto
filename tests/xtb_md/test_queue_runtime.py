@@ -304,17 +304,6 @@ def test_queue_definition_claims_only_complete_xtb_md_identity(tmp_path: Path) -
     assert statuses[malformed.queue_id] == QueueStatus.PENDING
 
 
-def test_retry_callback_is_a_fail_closed_tripwire() -> None:
-    deps = queue_runtime._deps()
-
-    with pytest.raises(RuntimeError, match="retry/requeue is not supported"):
-        deps.requeue_running_entry(Path("/tmp/queue"), "queue-1")
-
-    assert (
-        queue_runtime._queue_module.facade.deps.requeue_running_entry is deps.requeue_running_entry
-    )
-
-
 def test_parser_worker_child_command_and_worker_wiring(tmp_path: Path) -> None:
     config_path = tmp_path / "orca_auto.yaml"
     parsed = queue_runtime.build_parser().parse_args(["--config", str(config_path)])

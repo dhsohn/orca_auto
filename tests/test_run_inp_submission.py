@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-import orca_auto.orca.commands.run_inp_submission as submission_mod
+import orca_auto.orca.submission as submission_mod
 from orca_auto.core.commands.run_dir import use_run_dir_publication_guard
 from orca_auto.core.queue import enqueue_publication as core_enqueue_publication
 from orca_auto.core.queue import store as queue_store
@@ -23,22 +23,10 @@ from orca_auto.core.queue.publication import (
     queue_entry_is_claimable,
 )
 from orca_auto.core.queue.types import QueueStatus
-from orca_auto.orca.commands import run_inp
+from orca_auto.orca import submission as run_inp
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.queue import adapter as queue_adapter
-from orca_auto.orca.queue import worker as orca_queue_worker
-
-
-def _deps(context: Any) -> SimpleNamespace:
-    return SimpleNamespace(
-        submission=SimpleNamespace(
-            resolve_submission_context=lambda _args: context,
-            queue_adapter=SimpleNamespace(
-                get_active_entry_for_reaction_dir=lambda _root, _reaction_dir: None,
-            ),
-            active_direct_run_error=lambda _reaction_dir: None,
-        )
-    )
+from orca_auto.orca.queue import publication_repair
 
 
 def test_submit_without_selectable_inp_fails_cleanly(
@@ -56,9 +44,13 @@ def test_submit_without_selectable_inp_fails_cleanly(
     def raise_value_error(*_args: Any, **_kwargs: Any) -> Any:
         raise ValueError("No .inp file selected for ORCA queue submission.")
 
+    monkeypatch.setattr(
+        submission_mod, "resolve_submission_context", lambda *_args, **_kwargs: context
+    )
+    monkeypatch.setattr(submission_mod, "find_submission_conflict", lambda *_args: None)
     monkeypatch.setattr(submission_mod, "create_queued_submission", raise_value_error)
 
-    result = submission_mod.submit_reaction_dir_to_queue(SimpleNamespace(), deps=_deps(context))
+    result = submission_mod.submit_reaction_dir_to_queue(SimpleNamespace())
 
     assert result.status == "failed"
     assert result.reason == "invalid_submission_input"
@@ -82,7 +74,7 @@ def _real_submission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[P
     )
     monkeypatch.setattr(run_inp, "load_config", lambda _path: cfg)
     monkeypatch.setattr(run_inp, "notify_queue_enqueued_event", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr("orca_auto.orca.queue.worker.read_worker_pid", lambda _root: None)
+    monkeypatch.setattr(run_inp, "read_worker_pid", lambda _root: None)
     args = SimpleNamespace(
         config=str(tmp_path / "orca_auto.yaml"),
         reaction_dir=str(reaction_dir),
@@ -120,7 +112,7 @@ def test_enqueue_save_after_commit_recovers_exact_row_and_submits(
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
 
     cfg = run_inp.load_config("")
-    assert orca_queue_worker._repair_orca_queue_publication(cfg, tmp_path, entry)
+    assert publication_repair.repair_queue_publication(cfg, tmp_path, entry)
     [repaired] = queue_adapter.list_queue(tmp_path)
     assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
 
@@ -477,7 +469,7 @@ def test_duplicate_error_after_commit_is_recovered_as_same_submission(
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
 
     cfg = run_inp.load_config("")
-    assert orca_queue_worker._repair_orca_queue_publication(cfg, tmp_path, entry)
+    assert publication_repair.repair_queue_publication(cfg, tmp_path, entry)
     [repaired] = queue_adapter.list_queue(tmp_path)
     assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
 

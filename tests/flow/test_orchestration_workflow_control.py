@@ -9,8 +9,8 @@ import pytest
 import yaml
 
 import orca_auto.flow.orchestration.advance as advance_module
+import orca_auto.flow.orchestration.advance_phases as advance_phases_module
 from orca_auto.flow import orchestration
-from orca_auto.flow.orchestration.deps import orchestration_deps
 from orca_auto.flow.orchestration.stage_runtime.crest import ensure_crest_job_dir_impl
 from orca_auto.flow.orchestration.stage_runtime.xtb_inputs import (
     _materialize_xtb_override_xcontrol,
@@ -21,6 +21,7 @@ from orca_auto.flow.orchestration.stage_runtime.xtb_retry import (
     xtb_path_retry_limit_impl,
     xtb_retry_recipe_impl,
 )
+from tests.flow.orchestration_services import orchestration_services
 
 
 def _write_xyz_ensemble(path: Path, comments: tuple[str, ...]) -> None:
@@ -39,12 +40,22 @@ def _write_xyz_ensemble(path: Path, comments: tuple[str, ...]) -> None:
 
 
 def _si_publication_test_deps(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     payload: dict[str, Any],
     *,
     sync_workflow_registry: Any | None = None,
 ) -> Any:
-    return orchestration_deps(
+    _patch_advance_operations(
+        monkeypatch,
+        append_crest_orca_stages_impl=lambda current_payload, **kwargs: False,
+        append_interaction_energy_stages_impl=lambda current_payload, **kwargs: False,
+        _recompute_workflow_status=lambda current_payload: str(
+            current_payload.get("status", "running")
+        ),
+        workflow_has_active_children_impl=lambda current_payload, **kwargs: False,
+    )
+    return orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: (
                 tmp_path / str(payload["workflow_id"])
@@ -52,18 +63,36 @@ def _si_publication_test_deps(
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-07-12T12:00:00+00:00",
-            "_append_conformer_orca_stages": lambda current_payload, **kwargs: False,
-            "_append_interaction_energy_stages": lambda current_payload, **kwargs: False,
-            "_maybe_notify_workflow_phase_summary": lambda *args, **kwargs: None,
-            "_recompute_workflow_status": lambda current_payload: str(
-                current_payload.get("status", "running")
-            ),
-            "_workflow_has_active_children": lambda current_payload: False,
+            "notify_phase_summary": lambda *args, **kwargs: None,
             "write_workflow_payload": lambda workspace_dir, current_payload: None,
             "sync_workflow_registry": sync_workflow_registry
             or (lambda workflow_root, workspace_dir, current_payload: None),
         }
     )
+
+
+def _patch_advance_operations(
+    monkeypatch: pytest.MonkeyPatch,
+    **operations: Any,
+) -> None:
+    allowed = {
+        "_cancel_active_workflow_stages",
+        "_recompute_workflow_status",
+        "append_crest_orca_stages_impl",
+        "append_interaction_energy_stages_impl",
+        "append_reaction_orca_stages_impl",
+        "append_reaction_xtb_stages_impl",
+        "clear_reaction_xtb_handoff_error_if_recovering_impl",
+        "sync_crest_stage_impl",
+        "sync_orca_stage_impl",
+        "sync_xtb_stage_impl",
+        "workflow_has_active_children_impl",
+    }
+    unknown = sorted(set(operations) - allowed)
+    if unknown:
+        raise TypeError(f"unknown advance operation override(s): {', '.join(unknown)}")
+    for name, operation in operations.items():
+        monkeypatch.setattr(advance_phases_module, name, operation)
 
 
 def test_nonterminal_si_publication_honors_backoff_without_resetting_attempts(
@@ -86,14 +115,14 @@ def test_nonterminal_si_publication_honors_backoff_without_resetting_attempts(
 
     monkeypatch.setattr(advance_module, "write_workflow_si", fail_writer)
     monkeypatch.setattr(advance_module, "write_workflow_html_report", lambda *args: None)
-    deps = _si_publication_test_deps(tmp_path, payload)
+    deps = _si_publication_test_deps(monkeypatch, tmp_path, payload)
 
-    orchestration.advance_workflow(target="wf_si_backoff", workflow_root=tmp_path, deps=deps)
+    orchestration.advance_workflow(target="wf_si_backoff", workflow_root=tmp_path, services=deps)
     assert payload["metadata"]["si_publish_attempts"] == 1
     assert payload["metadata"]["si_publish_pending"] is True
     retry_at = payload["metadata"]["si_publish_next_retry_at"]
 
-    orchestration.advance_workflow(target="wf_si_backoff", workflow_root=tmp_path, deps=deps)
+    orchestration.advance_workflow(target="wf_si_backoff", workflow_root=tmp_path, services=deps)
     assert writer_calls == 1
     assert payload["metadata"]["si_publish_attempts"] == 1
     assert payload["metadata"]["si_publish_next_retry_at"] == retry_at
@@ -119,12 +148,12 @@ def test_permanent_si_publication_error_blocks_without_automatic_retry(
 
     monkeypatch.setattr(advance_module, "write_workflow_si", blocked_writer)
     monkeypatch.setattr(advance_module, "write_workflow_html_report", lambda *args: None)
-    deps = _si_publication_test_deps(tmp_path, payload)
-    orchestration.advance_workflow(target="wf_si_block", workflow_root=tmp_path, deps=deps)
+    deps = _si_publication_test_deps(monkeypatch, tmp_path, payload)
+    orchestration.advance_workflow(target="wf_si_block", workflow_root=tmp_path, services=deps)
     assert payload["metadata"]["si_publish_blocked"] is True
     assert payload["metadata"]["si_publish_pending"] is False
 
-    orchestration.advance_workflow(target="wf_si_block", workflow_root=tmp_path, deps=deps)
+    orchestration.advance_workflow(target="wf_si_block", workflow_root=tmp_path, services=deps)
     assert writer_calls == 1
     assert payload["metadata"]["si_publish_blocked"] is True
 
@@ -152,6 +181,7 @@ def test_registry_checkpoint_failure_does_not_consume_si_writer_attempt(
     monkeypatch.setattr(advance_module, "write_workflow_si", writer)
     monkeypatch.setattr(advance_module, "write_workflow_html_report", lambda *args: None)
     deps = _si_publication_test_deps(
+        monkeypatch,
         tmp_path,
         payload,
         sync_workflow_registry=fail_registry,
@@ -160,7 +190,7 @@ def test_registry_checkpoint_failure_does_not_consume_si_writer_attempt(
         orchestration.advance_workflow(
             target="wf_si_registry_failure",
             workflow_root=tmp_path,
-            deps=deps,
+            services=deps,
         )
     assert writer_calls == 0
     assert "si_publish_attempts" not in payload["metadata"]
@@ -437,6 +467,7 @@ def test_job_dir_writers_apply_manifest_overrides(tmp_path: Path) -> None:
 
 
 def test_advance_workflow_reaction_ts_search_runs_append_sequence_and_sets_child_sync_metadata(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     payload: dict[str, Any] = {
@@ -505,7 +536,18 @@ def test_advance_workflow_reaction_ts_search_runs_append_sequence_and_sets_child
     ) -> None:
         synced.append(deepcopy(current_payload))
 
-    deps = orchestration_deps(
+    _patch_advance_operations(
+        monkeypatch,
+        sync_crest_stage_impl=fake_sync_crest_stage,
+        append_reaction_xtb_stages_impl=fake_append_reaction_xtb_stages,
+        sync_xtb_stage_impl=fake_sync_xtb_stage,
+        clear_reaction_xtb_handoff_error_if_recovering_impl=fake_clear,
+        append_reaction_orca_stages_impl=fake_append_reaction_orca_stages,
+        sync_orca_stage_impl=fake_sync_orca_stage,
+        _recompute_workflow_status=lambda current_payload: "failed",
+        workflow_has_active_children_impl=lambda current_payload, **kwargs: True,
+    )
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: (
                 tmp_path / str(payload["workflow_id"])
@@ -513,14 +555,6 @@ def test_advance_workflow_reaction_ts_search_runs_append_sequence_and_sets_child
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-19T12:00:00+00:00",
-            "_sync_crest_stage": fake_sync_crest_stage,
-            "_append_reaction_xtb_stages": fake_append_reaction_xtb_stages,
-            "_sync_xtb_stage": fake_sync_xtb_stage,
-            "_clear_reaction_xtb_handoff_error_if_recovering": fake_clear,
-            "_append_reaction_orca_stages": fake_append_reaction_orca_stages,
-            "_sync_orca_stage": fake_sync_orca_stage,
-            "_recompute_workflow_status": lambda current_payload: "failed",
-            "_workflow_has_active_children": lambda current_payload: True,
             "write_workflow_payload": fake_write_workflow_payload,
             "sync_workflow_registry": fake_sync_workflow_registry,
         }
@@ -530,7 +564,7 @@ def test_advance_workflow_reaction_ts_search_runs_append_sequence_and_sets_child
         target="wf_reaction_01",
         workflow_root=tmp_path,
         submit_ready=True,
-        deps=deps,
+        services=deps,
     )
 
     assert result["status"] == "failed"
@@ -555,6 +589,7 @@ def test_advance_workflow_reaction_ts_search_runs_append_sequence_and_sets_child
 
 
 def test_advance_workflow_quarantines_renamed_legacy_workflow_before_submission(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "TS8_wf"
@@ -581,13 +616,13 @@ def test_advance_workflow_quarantines_renamed_legacy_workflow_before_submission(
         sync_calls.append(kwargs)
         assert kwargs["submit_ready"] is False
 
-    deps = orchestration_deps(
+    _patch_advance_operations(monkeypatch, sync_crest_stage_impl=sync_without_submission)
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: workspace,
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-07-10T06:00:00+00:00",
-            "_sync_crest_stage": sync_without_submission,
             "write_workflow_payload": lambda workspace_dir, current: written.append(
                 deepcopy(current)
             ),
@@ -601,7 +636,7 @@ def test_advance_workflow_quarantines_renamed_legacy_workflow_before_submission(
         target=str(workspace),
         workflow_root=tmp_path,
         submit_ready=True,
-        deps=deps,
+        services=deps,
     )
 
     assert result is payload
@@ -631,6 +666,7 @@ def test_advance_workflow_quarantines_renamed_legacy_workflow_before_submission(
 
 
 def test_identity_quarantine_allows_active_child_to_drain_across_sync_cycles(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "TS8_wf"
@@ -674,14 +710,17 @@ def test_identity_quarantine_allows_active_child_to_drain_across_sync_cycles(
             }
         return {"cancelled": [], "failed": []}
 
-    deps = orchestration_deps(
+    _patch_advance_operations(
+        monkeypatch,
+        sync_crest_stage_impl=sync_crest_stage,
+        _cancel_active_workflow_stages=cancel_active_stages,
+    )
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: workspace,
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-07-10T06:00:00+00:00",
-            "_sync_crest_stage": sync_crest_stage,
-            "_cancel_active_workflow_stages": cancel_active_stages,
             "write_workflow_payload": lambda workspace_dir, current: None,
             "sync_workflow_registry": lambda root, workspace_dir, current: None,
         }
@@ -691,14 +730,14 @@ def test_identity_quarantine_allows_active_child_to_drain_across_sync_cycles(
         target=str(workspace),
         workflow_root=tmp_path,
         submit_ready=True,
-        deps=deps,
+        services=deps,
     )
     first_snapshot = deepcopy(first)
     second = orchestration.advance_workflow(
         target=str(workspace),
         workflow_root=tmp_path,
         submit_ready=True,
-        deps=deps,
+        services=deps,
     )
 
     assert first_snapshot["status"] == "failed"
@@ -713,6 +752,7 @@ def test_identity_quarantine_allows_active_child_to_drain_across_sync_cycles(
 
 
 def test_advance_workflow_checkpoints_completed_crest_before_xtb_materialization(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     payload: dict[str, Any] = {
@@ -752,7 +792,18 @@ def test_advance_workflow_checkpoints_completed_crest_before_xtb_materialization
         )
         return True
 
-    deps = orchestration_deps(
+    _patch_advance_operations(
+        monkeypatch,
+        sync_crest_stage_impl=fake_sync_crest_stage,
+        append_reaction_xtb_stages_impl=fake_append_reaction_xtb_stages,
+        sync_xtb_stage_impl=lambda stage, **kwargs: None,
+        clear_reaction_xtb_handoff_error_if_recovering_impl=lambda current_payload: None,
+        append_reaction_orca_stages_impl=lambda current_payload, **kwargs: False,
+        sync_orca_stage_impl=lambda stage, **kwargs: None,
+        _recompute_workflow_status=lambda current_payload: "running",
+        workflow_has_active_children_impl=lambda current_payload, **kwargs: False,
+    )
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: (
                 tmp_path / str(payload["workflow_id"])
@@ -760,14 +811,6 @@ def test_advance_workflow_checkpoints_completed_crest_before_xtb_materialization
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-24T06:00:00+00:00",
-            "_sync_crest_stage": fake_sync_crest_stage,
-            "_append_reaction_xtb_stages": fake_append_reaction_xtb_stages,
-            "_sync_xtb_stage": lambda stage, **kwargs: None,
-            "_clear_reaction_xtb_handoff_error_if_recovering": lambda current_payload: None,
-            "_append_reaction_orca_stages": lambda current_payload, **kwargs: False,
-            "_sync_orca_stage": lambda stage, **kwargs: None,
-            "_recompute_workflow_status": lambda current_payload: "running",
-            "_workflow_has_active_children": lambda current_payload: False,
             "write_workflow_payload": lambda workspace_dir, current_payload: writes.append(
                 deepcopy(current_payload)
             ),
@@ -779,7 +822,7 @@ def test_advance_workflow_checkpoints_completed_crest_before_xtb_materialization
         target="wf_reaction_checkpoint",
         workflow_root=tmp_path,
         submit_ready=True,
-        deps=deps,
+        services=deps,
     )
 
     assert len(writes) >= 3
@@ -792,6 +835,7 @@ def test_advance_workflow_checkpoints_completed_crest_before_xtb_materialization
 
 
 def test_advance_workflow_reaction_ts_search_waits_for_all_xtb_children_before_queueing_orca(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     payload: dict[str, Any] = {
@@ -828,7 +872,18 @@ def test_advance_workflow_reaction_ts_search_waits_for_all_xtb_children_before_q
         if isinstance(task, dict) and str(task.get("engine", "")) == "orca":
             calls.append(("sync_orca", str(stage.get("stage_id", ""))))
 
-    deps = orchestration_deps(
+    _patch_advance_operations(
+        monkeypatch,
+        sync_crest_stage_impl=lambda stage, **kwargs: None,
+        append_reaction_xtb_stages_impl=lambda current_payload, **kwargs: False,
+        sync_xtb_stage_impl=fake_sync_xtb_stage,
+        clear_reaction_xtb_handoff_error_if_recovering_impl=lambda current_payload: None,
+        append_reaction_orca_stages_impl=fake_append_reaction_orca_stages,
+        sync_orca_stage_impl=fake_sync_orca_stage,
+        _recompute_workflow_status=lambda current_payload: "running",
+        workflow_has_active_children_impl=lambda current_payload, **kwargs: True,
+    )
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: (
                 tmp_path / str(payload["workflow_id"])
@@ -836,14 +891,6 @@ def test_advance_workflow_reaction_ts_search_waits_for_all_xtb_children_before_q
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-22T09:00:00+00:00",
-            "_sync_crest_stage": lambda stage, **kwargs: None,
-            "_append_reaction_xtb_stages": lambda current_payload, **kwargs: False,
-            "_sync_xtb_stage": fake_sync_xtb_stage,
-            "_clear_reaction_xtb_handoff_error_if_recovering": lambda current_payload: None,
-            "_append_reaction_orca_stages": fake_append_reaction_orca_stages,
-            "_sync_orca_stage": fake_sync_orca_stage,
-            "_recompute_workflow_status": lambda current_payload: "running",
-            "_workflow_has_active_children": lambda current_payload: True,
             "write_workflow_payload": lambda workspace_dir, current_payload: None,
             "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
         }
@@ -853,7 +900,7 @@ def test_advance_workflow_reaction_ts_search_waits_for_all_xtb_children_before_q
         target="wf_reaction_incremental",
         workflow_root=tmp_path,
         submit_ready=True,
-        deps=deps,
+        services=deps,
     )
 
     assert result["status"] == "running"
@@ -866,6 +913,7 @@ def test_advance_workflow_reaction_ts_search_waits_for_all_xtb_children_before_q
 
 
 def test_advance_workflow_records_reaction_orca_exhaustion_after_sync_failure(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     payload: dict[str, Any] = {
@@ -916,7 +964,16 @@ def test_advance_workflow_records_reaction_orca_exhaustion_after_sync_failure(
             stage["status"] = "failed"
             task["status"] = "failed"
 
-    deps = orchestration_deps(
+    _patch_advance_operations(
+        monkeypatch,
+        sync_crest_stage_impl=lambda stage, **kwargs: None,
+        append_reaction_xtb_stages_impl=lambda current_payload, **kwargs: False,
+        sync_xtb_stage_impl=lambda stage, **kwargs: None,
+        clear_reaction_xtb_handoff_error_if_recovering_impl=lambda current_payload: None,
+        append_reaction_orca_stages_impl=fake_append_reaction_orca_stages,
+        sync_orca_stage_impl=fake_sync_orca_stage,
+    )
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: (
                 tmp_path / str(payload["workflow_id"])
@@ -924,12 +981,6 @@ def test_advance_workflow_records_reaction_orca_exhaustion_after_sync_failure(
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-22T10:00:00+00:00",
-            "_sync_crest_stage": lambda stage, **kwargs: None,
-            "_append_reaction_xtb_stages": lambda current_payload, **kwargs: False,
-            "_sync_xtb_stage": lambda stage, **kwargs: None,
-            "_clear_reaction_xtb_handoff_error_if_recovering": lambda current_payload: None,
-            "_append_reaction_orca_stages": fake_append_reaction_orca_stages,
-            "_sync_orca_stage": fake_sync_orca_stage,
             "write_workflow_payload": lambda workspace_dir, current_payload: None,
             "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
         }
@@ -939,7 +990,7 @@ def test_advance_workflow_records_reaction_orca_exhaustion_after_sync_failure(
         target="wf_reaction_orca_exhausts_during_sync",
         workflow_root=tmp_path,
         submit_ready=True,
-        deps=deps,
+        services=deps,
     )
 
     assert append_calls == 2
@@ -950,6 +1001,7 @@ def test_advance_workflow_records_reaction_orca_exhaustion_after_sync_failure(
 
 
 def test_advance_workflow_conformer_screening_queues_twenty_orca_children_after_crest_completion(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     payload: dict[str, Any] = {
@@ -984,7 +1036,17 @@ def test_advance_workflow_conformer_screening_queues_twenty_orca_children_after_
         if str((stage.get("task") or {}).get("engine", "")) == "orca":
             synced_orca_stage_ids.append(str(stage.get("stage_id", "")))
 
-    deps = orchestration_deps(
+    _patch_advance_operations(
+        monkeypatch,
+        sync_crest_stage_impl=lambda stage, **kwargs: None,
+        sync_xtb_stage_impl=lambda stage, **kwargs: None,
+        clear_reaction_xtb_handoff_error_if_recovering_impl=lambda current_payload: None,
+        append_crest_orca_stages_impl=fake_append_crest_orca_stages,
+        sync_orca_stage_impl=fake_sync_orca_stage,
+        _recompute_workflow_status=lambda current_payload: "running",
+        workflow_has_active_children_impl=lambda current_payload, **kwargs: True,
+    )
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: (
                 tmp_path / str(payload["workflow_id"])
@@ -992,13 +1054,6 @@ def test_advance_workflow_conformer_screening_queues_twenty_orca_children_after_
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-22T11:00:00+00:00",
-            "_sync_crest_stage": lambda stage, **kwargs: None,
-            "_sync_xtb_stage": lambda stage, **kwargs: None,
-            "_clear_reaction_xtb_handoff_error_if_recovering": lambda current_payload: None,
-            "_append_crest_orca_stages": fake_append_crest_orca_stages,
-            "_sync_orca_stage": fake_sync_orca_stage,
-            "_recompute_workflow_status": lambda current_payload: "running",
-            "_workflow_has_active_children": lambda current_payload: True,
             "write_workflow_payload": lambda workspace_dir, current_payload: None,
             "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
         }
@@ -1008,7 +1063,7 @@ def test_advance_workflow_conformer_screening_queues_twenty_orca_children_after_
         target="wf_conformer_incremental",
         workflow_root=tmp_path,
         submit_ready=True,
-        deps=deps,
+        services=deps,
     )
 
     assert result["status"] == "running"
@@ -1018,6 +1073,7 @@ def test_advance_workflow_conformer_screening_queues_twenty_orca_children_after_
 
 
 def test_advance_workflow_records_conformer_orca_exhaustion_after_sync_failure(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     payload: dict[str, Any] = {
@@ -1066,7 +1122,15 @@ def test_advance_workflow_records_conformer_orca_exhaustion_after_sync_failure(
             stage["status"] = "failed"
             task["status"] = "failed"
 
-    deps = orchestration_deps(
+    _patch_advance_operations(
+        monkeypatch,
+        sync_crest_stage_impl=lambda stage, **kwargs: None,
+        sync_xtb_stage_impl=lambda stage, **kwargs: None,
+        clear_reaction_xtb_handoff_error_if_recovering_impl=lambda current_payload: None,
+        append_crest_orca_stages_impl=fake_append_crest_orca_stages,
+        sync_orca_stage_impl=fake_sync_orca_stage,
+    )
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: (
                 tmp_path / str(payload["workflow_id"])
@@ -1074,11 +1138,6 @@ def test_advance_workflow_records_conformer_orca_exhaustion_after_sync_failure(
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-22T10:30:00+00:00",
-            "_sync_crest_stage": lambda stage, **kwargs: None,
-            "_sync_xtb_stage": lambda stage, **kwargs: None,
-            "_clear_reaction_xtb_handoff_error_if_recovering": lambda current_payload: None,
-            "_append_crest_orca_stages": fake_append_crest_orca_stages,
-            "_sync_orca_stage": fake_sync_orca_stage,
             "write_workflow_payload": lambda workspace_dir, current_payload: None,
             "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
         }
@@ -1088,7 +1147,7 @@ def test_advance_workflow_records_conformer_orca_exhaustion_after_sync_failure(
         target="wf_conformer_orca_exhausts_during_sync",
         workflow_root=tmp_path,
         submit_ready=True,
-        deps=deps,
+        services=deps,
     )
 
     assert append_calls == 2
@@ -1099,6 +1158,7 @@ def test_advance_workflow_records_conformer_orca_exhaustion_after_sync_failure(
 
 
 def test_advance_workflow_reopens_completed_conformer_pending_orca_handoff(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     payload: dict[str, Any] = {
@@ -1130,7 +1190,15 @@ def test_advance_workflow_reopens_completed_conformer_pending_orca_handoff(
         )
         return True
 
-    deps = orchestration_deps(
+    _patch_advance_operations(
+        monkeypatch,
+        sync_crest_stage_impl=lambda stage, **kwargs: None,
+        sync_xtb_stage_impl=lambda stage, **kwargs: None,
+        clear_reaction_xtb_handoff_error_if_recovering_impl=lambda current_payload: None,
+        append_crest_orca_stages_impl=fake_append_crest_orca_stages,
+        sync_orca_stage_impl=lambda stage, **kwargs: None,
+    )
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: (
                 tmp_path / str(payload["workflow_id"])
@@ -1138,11 +1206,6 @@ def test_advance_workflow_reopens_completed_conformer_pending_orca_handoff(
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-22T12:00:00+00:00",
-            "_sync_crest_stage": lambda stage, **kwargs: None,
-            "_sync_xtb_stage": lambda stage, **kwargs: None,
-            "_clear_reaction_xtb_handoff_error_if_recovering": lambda current_payload: None,
-            "_append_crest_orca_stages": fake_append_crest_orca_stages,
-            "_sync_orca_stage": lambda stage, **kwargs: None,
             "write_workflow_payload": lambda workspace_dir, current_payload: None,
             "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
         }
@@ -1152,7 +1215,7 @@ def test_advance_workflow_reopens_completed_conformer_pending_orca_handoff(
         target="wf_conformer_reopen",
         workflow_root=tmp_path,
         submit_ready=True,
-        deps=deps,
+        services=deps,
     )
 
     assert append_calls == 1
@@ -1165,6 +1228,7 @@ def test_advance_workflow_reopens_completed_conformer_pending_orca_handoff(
 
 
 def test_advance_workflow_auto_cancels_active_siblings_after_failure(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     payload: dict[str, Any] = {
@@ -1199,7 +1263,16 @@ def test_advance_workflow_auto_cancels_active_siblings_after_failure(
         crest_cancel_calls.append(dict(kwargs))
         return {"status": "cancel_requested", "queue_id": kwargs["target"]}
 
-    deps = orchestration_deps(
+    _patch_advance_operations(
+        monkeypatch,
+        sync_crest_stage_impl=lambda stage, **kwargs: None,
+        append_reaction_xtb_stages_impl=lambda current_payload, **kwargs: False,
+        sync_xtb_stage_impl=lambda stage, **kwargs: None,
+        clear_reaction_xtb_handoff_error_if_recovering_impl=lambda current_payload: None,
+        append_reaction_orca_stages_impl=lambda current_payload, **kwargs: False,
+        sync_orca_stage_impl=lambda stage, **kwargs: None,
+    )
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: (
                 tmp_path / str(payload["workflow_id"])
@@ -1207,12 +1280,6 @@ def test_advance_workflow_auto_cancels_active_siblings_after_failure(
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-24T01:00:00+00:00",
-            "_sync_crest_stage": lambda stage, **kwargs: None,
-            "_append_reaction_xtb_stages": lambda current_payload, **kwargs: False,
-            "_sync_xtb_stage": lambda stage, **kwargs: None,
-            "_clear_reaction_xtb_handoff_error_if_recovering": lambda current_payload: None,
-            "_append_reaction_orca_stages": lambda current_payload, **kwargs: False,
-            "_sync_orca_stage": lambda stage, **kwargs: None,
             "crest_cancel_target": fake_crest_cancel_target,
             "write_workflow_payload": lambda workspace_dir, current_payload: None,
             "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
@@ -1224,7 +1291,7 @@ def test_advance_workflow_auto_cancels_active_siblings_after_failure(
         workflow_root=tmp_path,
         crest_config="crest.yaml",
         submit_ready=True,
-        deps=deps,
+        services=deps,
     )
 
     assert result["status"] == "failed"
@@ -1244,6 +1311,7 @@ def test_advance_workflow_auto_cancels_active_siblings_after_failure(
 
 
 def test_advance_workflow_auto_cancels_active_children_for_submission_failed_status(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     payload: dict[str, Any] = {
@@ -1272,7 +1340,14 @@ def test_advance_workflow_auto_cancels_active_children_for_submission_failed_sta
         crest_cancel_calls.append(dict(kwargs))
         return {"status": "cancel_requested", "queue_id": kwargs["target"]}
 
-    deps = orchestration_deps(
+    _patch_advance_operations(
+        monkeypatch,
+        sync_crest_stage_impl=lambda stage, **kwargs: None,
+        sync_xtb_stage_impl=lambda stage, **kwargs: None,
+        clear_reaction_xtb_handoff_error_if_recovering_impl=lambda current_payload: None,
+        sync_orca_stage_impl=lambda stage, **kwargs: None,
+    )
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: (
                 tmp_path / str(payload["workflow_id"])
@@ -1280,10 +1355,6 @@ def test_advance_workflow_auto_cancels_active_children_for_submission_failed_sta
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "now_utc_iso": lambda: "2026-04-24T01:00:00+00:00",
-            "_sync_crest_stage": lambda stage, **kwargs: None,
-            "_sync_xtb_stage": lambda stage, **kwargs: None,
-            "_clear_reaction_xtb_handoff_error_if_recovering": lambda current_payload: None,
-            "_sync_orca_stage": lambda stage, **kwargs: None,
             "crest_cancel_target": fake_crest_cancel_target,
             "write_workflow_payload": lambda workspace_dir, current_payload: None,
             "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
@@ -1295,7 +1366,7 @@ def test_advance_workflow_auto_cancels_active_children_for_submission_failed_sta
         workflow_root=tmp_path,
         crest_config="crest.yaml",
         submit_ready=True,
-        deps=deps,
+        services=deps,
     )
 
     assert result["status"] == "submission_failed"

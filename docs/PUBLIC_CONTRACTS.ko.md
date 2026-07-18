@@ -657,8 +657,10 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 - 선택된 Telegram/Discord 봇은 인터랙티브 설정이 완성되었을 때만 활성화되며,
   그렇지 않으면 worker-only로 남습니다.
 - `service status`는 runtime target, queue worker, bot 상태를 보고합니다.
-- `service restart`는 runtime target이 활성화되어 있으면 그것을 재시작하고, 아니면 큐
-  워커를 재시작합니다.
+- `service restart`는 큐 워커의 start-limit 실패 상태를 지운 뒤 runtime target이
+  활성화되어 있으면 그것을 재시작하고, 아니면 큐 워커를 재시작합니다.
+- 큐 워커 감독자가 정상 종료되면 중단 상태를 유지합니다. 자식 감독자는 제한된 재시작
+  circuit을 열고, systemd는 제한된 지연 재시작을 적용합니다.
 
 ## 비계약
 

@@ -403,7 +403,7 @@ def rematerialize_orca_restart_input(
         return False
     stage_view = WorkflowStageView(stage)
     task_view = stage_view.ensure_task()
-    payload = task_view.payload(None)
+    payload = task_view.payload()
     enqueue_payload = task_view.enqueue_payload()
     previous_dir, previous_inp, previous_xyz = _selected_input_paths(
         payload,

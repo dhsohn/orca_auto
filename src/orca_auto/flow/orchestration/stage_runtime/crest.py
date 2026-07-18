@@ -8,7 +8,11 @@ import yaml
 from orca_auto.core.engine_process import atomic_write_confined_bytes, ensure_confined_directory
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.queue.priority import normalize_queue_priority
-from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
+from orca_auto.core.utils import normalize_text, safe_int
+from orca_auto.flow.orchestration.services import (
+    OrchestrationServices,
+    resolve_orchestration_services,
+)
 from orca_auto.flow.orchestration.stage_runtime.shared import (
     _apply_contract_status,
     _apply_submission_result,
@@ -16,7 +20,6 @@ from orca_auto.flow.orchestration.stage_runtime.shared import (
     _engine_stage_sync_context,
     _load_contract_or_none,
     _manifest_override_mapping,
-    _orchestration_context,
     _workflow_internal_runs_root,
 )
 from orca_auto.flow.orchestration.stage_views import (
@@ -24,6 +27,7 @@ from orca_auto.flow.orchestration.stage_views import (
     WorkflowStageView,
     WorkflowTaskView,
 )
+from orca_auto.flow.orchestration.support import load_config_root_impl, submission_target_impl
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 
 
@@ -32,17 +36,15 @@ def ensure_crest_job_dir_impl(
     *,
     crest_allowed_root: Path,
     workflow_id: str,
-    deps: OrchestrationDeps | None = None,
 ) -> str:
     del workflow_id
-    o = _orchestration_context(deps)
     stage_view = WorkflowStageView(stage)
     task_view = stage_view.task
-    payload = task_view.payload(o)
-    existing = o.stages.support._normalize_text(payload.get("job_dir"))
+    payload = task_view.payload()
+    existing = normalize_text(payload.get("job_dir"))
     if existing:
         return existing
-    stage_id = stage_view.stage_id(o)
+    stage_id = stage_view.stage_id()
     job_dir = crest_allowed_root / stage_id
     ensure_confined_directory(crest_allowed_root, job_dir, label="CREST stage job directory")
     input_target = job_dir / "input.xyz"
@@ -55,7 +57,7 @@ def ensure_crest_job_dir_impl(
     overrides = _manifest_override_mapping(payload.get("job_manifest_overrides"))
     task_resource_request = task_view.resource_request()
     manifest_payload: dict[str, Any] = {
-        "mode": o.stages.support._normalize_text(payload.get("mode")) or "standard",
+        "mode": normalize_text(payload.get("mode")) or "standard",
         "speed": "quick",
         "gfn": 2,
     }
@@ -64,10 +66,8 @@ def ensure_crest_job_dir_impl(
             continue
         manifest_payload[key] = value
     manifest_payload["resources"] = {
-        "max_cores": o.stages.support._safe_int(task_resource_request.get("max_cores"), default=8),
-        "max_memory_gb": o.stages.support._safe_int(
-            task_resource_request.get("max_memory_gb"), default=32
-        ),
+        "max_cores": safe_int(task_resource_request.get("max_cores"), default=8),
+        "max_memory_gb": safe_int(task_resource_request.get("max_memory_gb"), default=32),
     }
     manifest_payload["input_xyz"] = "input.xyz"
     atomic_write_confined_bytes(
@@ -81,7 +81,7 @@ def ensure_crest_job_dir_impl(
 
 
 def _submit_crest_stage(
-    o: Any,
+    services: OrchestrationServices,
     stage: dict[str, Any],
     task: dict[str, Any],
     *,
@@ -90,20 +90,20 @@ def _submit_crest_stage(
     workflow_id: str,
 ) -> bool:
     task_view = WorkflowTaskView(task)
-    job_dir = o.stages.runtime._ensure_crest_job_dir(
+    job_dir = ensure_crest_job_dir_impl(
         stage,
         crest_allowed_root=crest_runtime_paths["allowed_root"],
         workflow_id=workflow_id,
     )
     enqueue_payload = task_view.enqueue_payload()
-    submission = o.engines.submit_crest_job_dir(
+    submission = services.engines.submit_crest_job_dir(
         job_dir=job_dir,
         priority=normalize_queue_priority(enqueue_payload.get("priority")),
         config_path=str(crest_config),
     )
-    submission["submitted_at"] = o.persistence.now_utc_iso()
+    submission["submitted_at"] = services.clock.now_utc_iso()
     task_view.set_submission_result(submission)
-    stage_metadata = WorkflowStageView(stage).metadata(None)
+    stage_metadata = WorkflowStageView(stage).metadata()
     return _apply_submission_result(
         stage=stage,
         task=task,
@@ -114,16 +114,16 @@ def _submit_crest_stage(
 
 
 def _load_crest_contract(
-    o: Any,
+    services: OrchestrationServices,
     stage: dict[str, Any],
     task: dict[str, Any],
     *,
     crest_runtime_paths: dict[str, Path],
     crest_config: str | None,
 ) -> Any | None:
-    payload = WorkflowTaskView(task).payload(o)
+    payload = WorkflowTaskView(task).payload()
     lookup = _engine_job_dir_contract_lookup(
-        o,
+        services,
         stage,
         payload,
         runtime_paths=crest_runtime_paths,
@@ -134,7 +134,7 @@ def _load_crest_contract(
         return None
     target, index_root = lookup
     return _load_contract_or_none(
-        o.engines.load_crest_artifact_contract,
+        services.engines.load_crest_artifact_contract,
         engine="crest",
         target=target,
         stage=stage,
@@ -161,17 +161,17 @@ def sync_crest_stage_impl(
     submit_ready: bool,
     workflow_id: str,
     workspace_dir: Path,
-    deps: OrchestrationDeps | None = None,
+    services: OrchestrationServices | None = None,
 ) -> None:
-    context = _engine_stage_sync_context(stage, engine="crest", deps=deps)
+    context = _engine_stage_sync_context(stage, engine="crest", services=services)
     if context is None:
         return
-    o = context.o
+    resolved = context.services
     task = context.task
     crest_runtime_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="crest")
     if context.should_submit(submit_ready=submit_ready, config_path=crest_config):
         submission_applied = _submit_crest_stage(
-            o,
+            resolved,
             stage,
             task,
             crest_runtime_paths=crest_runtime_paths,
@@ -185,7 +185,7 @@ def sync_crest_stage_impl(
             # cancellation becomes terminal.
             return
     contract = _load_crest_contract(
-        o,
+        resolved,
         stage,
         task,
         crest_runtime_paths=crest_runtime_paths,
@@ -195,25 +195,22 @@ def sync_crest_stage_impl(
         _apply_crest_contract(stage, task, contract)
 
 
-def completed_crest_roles_impl(
-    payload: dict[str, Any], *, deps: OrchestrationDeps | None = None
-) -> dict[str, dict[str, Any]]:
-    o = _orchestration_context(deps)
+def completed_crest_roles_impl(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     latest_by_role: dict[str, dict[str, Any]] = {}
     for stage_view in WorkflowPayloadView(payload).stage_views:
         task_view = stage_view.existing_task
-        if task_view is None or task_view.engine(o) != "crest":
+        if task_view is None or task_view.engine() != "crest":
             continue
         task_payload = task_view.existing_payload()
         stage_metadata = stage_view.existing_metadata() or {}
-        role = o.stages.support._normalize_text(stage_metadata.get("input_role")).lower()
+        role = normalize_text(stage_metadata.get("input_role")).lower()
         if not role and isinstance(task_payload, dict):
-            role = o.stages.support._normalize_text(task_payload.get("input_role")).lower()
+            role = normalize_text(task_payload.get("input_role")).lower()
         if role:
             latest_by_role[role] = stage_view.raw
     rows: dict[str, dict[str, Any]] = {}
     for role, stage in latest_by_role.items():
-        status = WorkflowStageView(stage).status_pair_with(o.stages.support._normalize_text)
+        status = WorkflowStageView(stage).status_pair_with(normalize_text)
         if status.stage == "completed" and status.task in {"", "completed"}:
             rows[role] = stage
     return rows
@@ -223,28 +220,28 @@ def completed_crest_stage_impl(
     stage: dict[str, Any],
     *,
     crest_config: str | None,
-    deps: OrchestrationDeps | None = None,
+    services: OrchestrationServices | None = None,
 ) -> Any | None:
-    o = _orchestration_context(deps)
+    resolved = resolve_orchestration_services(services)
     task_view = WorkflowStageView(stage).existing_task
     if task_view is None:
         return None
-    payload = task_view.payload(o)
-    job_dir_target = o.stages.support._normalize_text(payload.get("job_dir"))
+    payload = task_view.payload()
+    job_dir_target = normalize_text(payload.get("job_dir"))
     index_root = (
         _workflow_internal_runs_root(job_dir_target, engine="crest")
-        or o.stages.support._load_config_root(crest_config, engine="crest")
+        or load_config_root_impl(crest_config, engine="crest", services=resolved)
         or (
             Path(job_dir_target).expanduser().resolve().parent
             if job_dir_target
             else Path(".").resolve().parent
         )
     )
-    target = job_dir_target or o.stages.support._submission_target(stage)
+    target = job_dir_target or submission_target_impl(stage)
     if not target:
         return None
     return _load_contract_or_none(
-        o.engines.load_crest_artifact_contract,
+        resolved.engines.load_crest_artifact_contract,
         engine="crest",
         target=target,
         stage=stage,

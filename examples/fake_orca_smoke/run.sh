@@ -75,7 +75,7 @@ config_path.write_text(
                 },
                 "paths": {"orca_executable": str(fake_orca)},
             },
-            "telegram": {"bot_token": "", "chat_id": ""},
+            "messenger": {"telegram": {"bot_token": "", "chat_id": ""}},
         },
         indent=2,
     ),
@@ -124,7 +124,17 @@ state = load_state(reaction_dir)
 if state is None or state.get("status") != "completed":
     raise SystemExit(f"job_state.json did not complete: {state}")
 
-report = load_report_json(reaction_dir)
+execution_snapshot = completed[0].metadata.get("execution_snapshot")
+if not isinstance(execution_snapshot, dict):
+    raise SystemExit(f"completed queue entry has no execution snapshot: {completed[0].metadata}")
+execution_dir_text = execution_snapshot.get("execution_dir")
+if not isinstance(execution_dir_text, str) or not execution_dir_text.strip():
+    raise SystemExit(f"execution snapshot has no execution_dir: {execution_snapshot}")
+execution_dir = Path(execution_dir_text).resolve()
+if execution_dir.parent != reaction_dir.resolve() or not execution_dir.is_dir():
+    raise SystemExit(f"execution directory escaped the submitted run-dir: {execution_dir}")
+
+report = load_report_json(execution_dir)
 if report is None or report.get("status", {}).get("state") != "completed":
     raise SystemExit(f"job_report.json did not complete: {report}")
 
@@ -147,5 +157,5 @@ if "****ORCA TERMINATED NORMALLY****" not in out_path.read_text(encoding="utf-8"
 print("fake ORCA smoke passed")
 print(f"workdir: {workdir}")
 print(f"state: {reaction_dir / 'job_state.json'}")
-print(f"report: {reaction_dir / 'job_report.json'}")
+print(f"report: {execution_dir / 'job_report.json'}")
 PY

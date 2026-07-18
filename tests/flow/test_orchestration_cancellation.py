@@ -8,8 +8,8 @@ from typing import Any
 import pytest
 
 from orca_auto.flow import orchestration, registry, runtime
-from orca_auto.flow.orchestration.deps import orchestration_deps
 from orca_auto.flow.registry import store as registry_store
+from tests.flow.orchestration_services import orchestration_services
 
 
 def _write_xyz_ensemble(path: Path, comments: tuple[str, ...]) -> None:
@@ -65,7 +65,7 @@ def test_cancel_materialized_workflow_mixes_local_remote_and_failed_cancellation
         ],
     }
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "wf_cancel_01",
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
@@ -88,7 +88,7 @@ def test_cancel_materialized_workflow_mixes_local_remote_and_failed_cancellation
         workflow_root=tmp_path,
         crest_config="/tmp/crest.yaml",
         orca_config="/tmp/orca.yaml",
-        deps=deps,
+        services=deps,
     )
 
     assert result["status"] == "cancel_requested"
@@ -122,7 +122,7 @@ def test_cancel_materialized_workflow_reports_cancelled_when_no_remote_request_p
         ],
     }
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "wf_cancel_02",
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
@@ -135,7 +135,7 @@ def test_cancel_materialized_workflow_reports_cancelled_when_no_remote_request_p
     result = orchestration.cancel_materialized_workflow(
         target="wf_cancel_02",
         workflow_root=tmp_path,
-        deps=deps,
+        services=deps,
     )
 
     assert result["status"] == "cancelled"
@@ -159,7 +159,7 @@ def test_cancel_materialized_workflow_reports_cancel_failed_when_stage_cancellat
         ],
     }
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: (
                 tmp_path / "wf_failed_cancel"
@@ -179,7 +179,7 @@ def test_cancel_materialized_workflow_reports_cancel_failed_when_stage_cancellat
         target="wf_failed_cancel",
         workflow_root=tmp_path,
         orca_config="/tmp/orca.yaml",
-        deps=deps,
+        services=deps,
     )
 
     assert result["status"] == "cancel_failed"
@@ -195,7 +195,7 @@ def test_cancel_materialized_workflow_reports_busy_lock_timeout(
     def fake_acquire_workflow_lock(workspace_dir, timeout_seconds=5.0):
         raise TimeoutError("Timed out acquiring lock")
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
             "resolve_workflow_workspace": lambda target, workflow_root: tmp_path / "workspace",
             "acquire_workflow_lock": fake_acquire_workflow_lock,
@@ -208,7 +208,7 @@ def test_cancel_materialized_workflow_reports_busy_lock_timeout(
         orchestration.cancel_materialized_workflow(
             target="wf_busy",
             workflow_root=tmp_path,
-            deps=deps,
+            services=deps,
         )
 
 

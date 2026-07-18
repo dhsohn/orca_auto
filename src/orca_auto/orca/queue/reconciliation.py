@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue.internal_engine import entry_matches_engine_identity
+from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import load_json_mapping_file
 

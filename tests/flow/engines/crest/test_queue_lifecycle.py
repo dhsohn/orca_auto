@@ -4,8 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from orca_auto.core.queue.internal_engine import InternalEngineSpec
 from orca_auto.core.queue.types import QueueStatus
+from orca_auto.flow.engines.crest.engine import ENGINE_DEFINITION
 
 
 def _append_and_return(items: Any, value: Any, result: Any) -> Any:
@@ -14,7 +14,7 @@ def _append_and_return(items: Any, value: Any, result: Any) -> Any:
 
 
 queue_lifecycle = SimpleNamespace(
-    finalize_child_exit=InternalEngineSpec(engine="crest").lifecycle().finalize_child_exit,
+    finalize_child_exit=ENGINE_DEFINITION.build_queue_runtime().finalize_child_exit,
 )
 
 

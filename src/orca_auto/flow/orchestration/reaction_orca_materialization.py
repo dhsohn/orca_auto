@@ -6,14 +6,18 @@ from typing import TYPE_CHECKING, Any
 
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.statuses import is_failed_status, is_queue_active_status
+from orca_auto.core.utils import normalize_text
+from orca_auto.flow.contracts import WorkflowStageInput
+from orca_auto.flow.contracts.workflow import workflow_stage_metadata, workflow_task_payload_dict
 from orca_auto.flow.orchestration.charge_spin import strict_int
-from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
-from orca_auto.flow.orchestration.deps import (
-    orchestration_context as _orchestration_context,
-)
+from orca_auto.flow.orchestration.lifecycle import stage_failure_is_recoverable_impl
 from orca_auto.flow.orchestration.scan_orca_materialization import (
     _all_terminal_none_verified,
     _record_workflow_error,
+)
+from orca_auto.flow.orchestration.services import (
+    OrchestrationServices,
+    resolve_orchestration_services,
 )
 from orca_auto.flow.orchestration.stage_views import (
     WorkflowStageView,
@@ -24,8 +28,12 @@ from orca_auto.flow.orchestration.stage_views import (
     _stage_views,
 )
 from orca_auto.flow.orchestration.support import (
+    load_config_root_impl,
+    reaction_orca_source_candidate_path_impl,
+    reaction_ts_guess_error_impl,
     required_stage_budget,
     select_valid_ts_guess_inputs,
+    submission_target_impl,
 )
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 from orca_auto.flow.workflow._phases import phase_finished
@@ -48,58 +56,67 @@ class _ReactionOrcaStagePlan:
     handoff_errors: list[dict[str, str]]
 
 
-def _completed_or_recoverable_xtb_stages(o: Any, payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _completed_or_recoverable_xtb_stages(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         view.raw
-        for view in _engine_stage_views(o, payload, "xtb")
-        if view.status(o) == "completed"
-        or o.stages.workflow._stage_failure_is_recoverable(view.raw)
+        for view in _engine_stage_views(payload, "xtb")
+        if view.status() == "completed"
+        or stage_failure_is_recoverable_impl(
+            view.raw,
+            normalize_text_fn=normalize_text,
+            stage_metadata_fn=workflow_stage_metadata,
+        )
     ]
 
 
 def _load_xtb_contract_for_stage(
-    o: Any, xtb_stage: dict[str, Any], *, xtb_allowed_root: Path
+    services: OrchestrationServices,
+    xtb_stage: dict[str, Any],
+    *,
+    xtb_allowed_root: Path,
 ) -> XtbArtifactContract | None:
     view = WorkflowStageView.from_raw(xtb_stage)
     if view is None or not view.task.raw:
         return None
-    payload_dict = o.stages.support._task_payload_dict(view.task.raw)
-    target = o.stages.support._normalize_text(
-        payload_dict.get("job_dir")
-    ) or o.stages.support._submission_target(xtb_stage)
+    payload_dict = workflow_task_payload_dict(view.task.raw)
+    target = normalize_text(payload_dict.get("job_dir")) or submission_target_impl(xtb_stage)
     if not target:
         return None
     try:
-        return o.engines.load_xtb_artifact_contract(xtb_index_root=xtb_allowed_root, target=target)
+        return services.engines.load_xtb_artifact_contract(
+            xtb_index_root=xtb_allowed_root,
+            target=target,
+        )
     except FileNotFoundError:
         return None
 
 
 def _record_xtb_handoff_error(
-    o: Any, xtb_stage: dict[str, Any], contract: XtbArtifactContract
+    services: OrchestrationServices,
+    xtb_stage: dict[str, Any],
+    contract: XtbArtifactContract,
 ) -> dict[str, str]:
-    stage_metadata = o.stages.support._stage_metadata(xtb_stage)
-    error = o.stages.support._reaction_ts_guess_error(contract)
+    stage_metadata = workflow_stage_metadata(xtb_stage)
+    error = reaction_ts_guess_error_impl(contract, services=services)
     stage_metadata["reaction_handoff_status"] = "failed"
     stage_metadata["reaction_handoff_reason"] = error["reason"]
     stage_metadata["reaction_handoff_message"] = error["message"]
     return {
-        "stage_id": WorkflowStageView(xtb_stage).stage_id(o),
-        "job_id": o.stages.support._normalize_text(contract.job_id),
+        "stage_id": WorkflowStageView(xtb_stage).stage_id(),
+        "job_id": normalize_text(contract.job_id),
         "reason": error["reason"],
         "message": error["message"],
     }
 
 
-def _mark_xtb_handoff_ready(o: Any, xtb_stage: dict[str, Any]) -> None:
-    stage_metadata = o.stages.support._stage_metadata(xtb_stage)
+def _mark_xtb_handoff_ready(xtb_stage: dict[str, Any]) -> None:
+    stage_metadata = workflow_stage_metadata(xtb_stage)
     stage_metadata.pop("reaction_handoff_reason", None)
     stage_metadata.pop("reaction_handoff_message", None)
     stage_metadata["reaction_handoff_status"] = "ready"
 
 
 def _reaction_orca_candidate_pool_rows(
-    o: Any,
     xtb_stage: dict[str, Any],
     contract: XtbArtifactContract,
     inputs: list[Any],
@@ -107,22 +124,22 @@ def _reaction_orca_candidate_pool_rows(
 ) -> list[tuple[int, int, str, Any]]:
     rows: list[tuple[int, int, str, Any]] = []
     for candidate in inputs:
-        candidate_path = o.stages.support._normalize_text(candidate.artifact_path)
+        candidate_path = normalize_text(candidate.artifact_path)
         if not candidate_path:
             continue
         candidate_metadata = {
             **dict(candidate.metadata),
-            "xtb_stage_id": WorkflowStageView(xtb_stage).stage_id(o),
+            "xtb_stage_id": WorkflowStageView(xtb_stage).stage_id(),
             "xtb_stage_order": int(stage_order),
-            "xtb_source_job_id": o.stages.support._normalize_text(contract.job_id),
-            "xtb_source_job_type": o.stages.support._normalize_text(contract.job_type),
+            "xtb_source_job_id": normalize_text(contract.job_id),
+            "xtb_source_job_type": normalize_text(contract.job_type),
         }
         rows.append(
             (
                 int(stage_order),
                 candidate.rank if candidate.rank > 0 else 10_000,
                 candidate_path,
-                o.contracts.WorkflowStageInput(
+                WorkflowStageInput(
                     source_job_id=candidate.source_job_id,
                     source_job_type=candidate.source_job_type,
                     reaction_key=candidate.reaction_key,
@@ -140,7 +157,7 @@ def _reaction_orca_candidate_pool_rows(
 
 
 def _collect_reaction_orca_candidates(
-    o: Any,
+    services: OrchestrationServices,
     xtb_stages: list[dict[str, Any]],
     *,
     xtb_allowed_root: Path,
@@ -148,18 +165,20 @@ def _collect_reaction_orca_candidates(
     candidate_pool: list[tuple[int, int, str, Any]] = []
     handoff_errors: list[dict[str, str]] = []
     for xtb_stage_index, xtb_stage in enumerate(xtb_stages, start=1):
-        contract = _load_xtb_contract_for_stage(o, xtb_stage, xtb_allowed_root=xtb_allowed_root)
+        contract = _load_xtb_contract_for_stage(
+            services,
+            xtb_stage,
+            xtb_allowed_root=xtb_allowed_root,
+        )
         if contract is None:
             continue
-        valid_inputs = select_valid_ts_guess_inputs(o, contract)
+        valid_inputs = select_valid_ts_guess_inputs(services, contract)
         if not valid_inputs:
-            handoff_errors.append(_record_xtb_handoff_error(o, xtb_stage, contract))
+            handoff_errors.append(_record_xtb_handoff_error(services, xtb_stage, contract))
             continue
-        _mark_xtb_handoff_ready(o, xtb_stage)
+        _mark_xtb_handoff_ready(xtb_stage)
         candidate_pool.extend(
-            _reaction_orca_candidate_pool_rows(
-                o, xtb_stage, contract, valid_inputs, xtb_stage_index
-            )
+            _reaction_orca_candidate_pool_rows(xtb_stage, contract, valid_inputs, xtb_stage_index)
         )
     return candidate_pool, handoff_errors
 
@@ -176,26 +195,26 @@ def _unique_ordered_candidates(candidate_pool: list[tuple[int, int, str, Any]]) 
     return ordered_candidates
 
 
-def _has_pending_xtb_stage(o: Any, payload: dict[str, Any]) -> bool:
+def _has_pending_xtb_stage(payload: dict[str, Any]) -> bool:
     return any(
-        view.task_engine(o) == "xtb"
-        and (is_queue_active_status(view.status(o)) or is_queue_active_status(view.task_status(o)))
+        view.task_engine() == "xtb"
+        and (is_queue_active_status(view.status()) or is_queue_active_status(view.task_status()))
         for view in _stage_views(payload)
     )
 
 
 def _remaining_orca_candidates(
-    o: Any, existing: list[dict[str, Any]], ordered_candidates: list[Any]
+    existing: list[dict[str, Any]], ordered_candidates: list[Any]
 ) -> list[Any]:
     attempted_paths = {
-        o.stages.support._reaction_orca_source_candidate_path(stage)
+        reaction_orca_source_candidate_path_impl(stage)
         for stage in existing
-        if o.stages.support._reaction_orca_source_candidate_path(stage)
+        if reaction_orca_source_candidate_path_impl(stage)
     }
     return [
         candidate
         for candidate in ordered_candidates
-        if o.stages.support._normalize_text(candidate.artifact_path) not in attempted_paths
+        if normalize_text(candidate.artifact_path) not in attempted_paths
     ]
 
 
@@ -219,7 +238,7 @@ def _record_reaction_handoff_failure(
         }
 
 
-def _maybe_record_reaction_xtb_phase_failure(o: Any, payload: dict[str, Any]) -> None:
+def _maybe_record_reaction_xtb_phase_failure(payload: dict[str, Any]) -> None:
     """Fail the workflow when the finished xTB phase yielded no usable stage.
 
     ``append_reaction_orca_stages_impl`` only runs once the xTB phase is finished.
@@ -229,10 +248,10 @@ def _maybe_record_reaction_xtb_phase_failure(o: Any, payload: dict[str, Any]) ->
     must be recorded as a workflow failure. Without this, every-stage-terminal is
     reported COMPLETED by recompute_workflow_status.
     """
-    if _completed_or_recoverable_xtb_stages(o, payload):
+    if _completed_or_recoverable_xtb_stages(payload):
         return
-    views = _engine_stage_views(o, payload, "xtb")
-    failed = next((view for view in views if is_failed_status(view.status(o))), None)
+    views = _engine_stage_views(payload, "xtb")
+    failed = next((view for view in views if is_failed_status(view.status())), None)
     if failed is None:
         return
     payload_metadata = payload.setdefault("metadata", {})
@@ -246,7 +265,7 @@ def _maybe_record_reaction_xtb_phase_failure(o: Any, payload: dict[str, Any]) ->
         "reason": "reaction_ts_search_xtb_phase_failed",
         "message": "All xTB path search stages failed; no TS guess was produced.",
     }
-    stage_id = o.stages.support._normalize_text(failed.raw.get("stage_id"))
+    stage_id = normalize_text(failed.raw.get("stage_id"))
     if stage_id:
         workflow_error["stage_id"] = stage_id
     payload_metadata["workflow_error"] = workflow_error
@@ -305,33 +324,33 @@ def _maybe_record_reaction_orca_candidates_exhausted(
 
 
 def _reaction_orca_stage_plan(
-    o: Any,
+    services: OrchestrationServices,
     payload: dict[str, Any],
     *,
     workspace_dir: Path,
     xtb_config: str | None,
     orca_config: str | None,
 ) -> _ReactionOrcaStagePlan | None:
-    xtb_stages = _completed_or_recoverable_xtb_stages(o, payload)
+    xtb_stages = _completed_or_recoverable_xtb_stages(payload)
     if not xtb_stages:
         return None
-    xtb_allowed_root = o.stages.support._load_config_root(xtb_config, engine="xtb")
+    xtb_allowed_root = load_config_root_impl(xtb_config, engine="xtb", services=services)
     if xtb_allowed_root is None:
         return None
-    if o.stages.support._load_config_root(orca_config, engine="orca") is None:
+    if load_config_root_impl(orca_config, engine="orca", services=services) is None:
         return None
     orca_runtime_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="orca")
-    params = _request_params(o, payload)
+    params = _request_params(payload)
     payload_metadata_raw = payload.setdefault("metadata", {})
     payload_metadata = payload_metadata_raw if isinstance(payload_metadata_raw, dict) else {}
     candidate_pool, handoff_errors = _collect_reaction_orca_candidates(
-        o,
+        services,
         xtb_stages,
         xtb_allowed_root=xtb_allowed_root,
     )
     ordered_candidates = _unique_ordered_candidates(candidate_pool)
-    existing = _engine_stages(o, payload, "orca")
-    unattempted_candidates = _remaining_orca_candidates(o, existing, ordered_candidates)
+    existing = _engine_stages(payload, "orca")
+    unattempted_candidates = _remaining_orca_candidates(existing, ordered_candidates)
     max_stage_count = strict_int(
         required_stage_budget(params, "max_orca_stages"),
         field="max_orca_stages",
@@ -349,34 +368,35 @@ def _reaction_orca_stage_plan(
         existing_stages=existing,
         max_stage_count=max_stage_count,
         omitted_candidate_count=omitted_candidate_count,
-        has_pending_xtb=_has_pending_xtb_stage(o, payload),
+        has_pending_xtb=_has_pending_xtb_stage(payload),
         handoff_errors=handoff_errors,
     )
 
 
-def _clear_reaction_orca_handoff_errors(o: Any, payload_metadata: dict[str, Any]) -> None:
+def _clear_reaction_orca_handoff_errors(payload_metadata: dict[str, Any]) -> None:
     if not isinstance(payload_metadata.get("workflow_error"), dict):
         return
     _clear_workflow_error_scope(
-        o,
         payload_metadata,
         {"reaction_ts_search_xtb_handoff", "reaction_ts_search_orca_candidate_exhausted"},
     )
 
 
 def _build_reaction_orca_stage(
-    o: Any,
+    services: OrchestrationServices,
     payload: dict[str, Any],
     plan: _ReactionOrcaStagePlan,
     *,
     candidate: Any,
     next_index: int,
 ) -> dict[str, Any]:
-    return o.engines.build_materialized_orca_stage(
+    return services.engines.build_materialized_orca_stage(
         workflow_id=str(payload.get("workflow_id", "")),
         template_name="reaction_ts_search",
         stage_id=f"orca_optts_freq_{next_index:02d}",
-        stage_key=f"{next_index:02d}_{o.engines.safe_name(candidate.kind, fallback='candidate')}",
+        stage_key=(
+            f"{next_index:02d}_{services.engines.safe_name(candidate.kind, fallback='candidate')}"
+        ),
         stage_root_name="",
         workspace_dir=plan.orca_allowed_root,
         input_artifact_kind="xtb_candidate",
@@ -397,14 +417,13 @@ def _build_reaction_orca_stage(
 
 
 def _annotate_reaction_orca_stage(
-    o: Any,
     stage: dict[str, Any],
     plan: _ReactionOrcaStagePlan,
     *,
     next_index: int,
     offset: int,
 ) -> None:
-    stage_metadata = o.stages.support._stage_metadata(stage)
+    stage_metadata = workflow_stage_metadata(stage)
     stage_metadata["reaction_candidate_attempt_index"] = next_index
     stage_metadata["reaction_candidate_pool_size"] = len(plan.ordered_candidates)
     stage_metadata["reaction_candidate_limit"] = plan.max_stage_count
@@ -416,7 +435,7 @@ def _annotate_reaction_orca_stage(
 
 
 def _append_reaction_orca_candidate_stage(
-    o: Any,
+    services: OrchestrationServices,
     payload: dict[str, Any],
     plan: _ReactionOrcaStagePlan,
     *,
@@ -425,14 +444,13 @@ def _append_reaction_orca_candidate_stage(
     offset: int,
 ) -> None:
     stage = _build_reaction_orca_stage(
-        o,
+        services,
         payload,
         plan,
         candidate=candidate,
         next_index=next_index,
     )
     _annotate_reaction_orca_stage(
-        o,
         stage,
         plan,
         next_index=next_index,
@@ -442,7 +460,7 @@ def _append_reaction_orca_candidate_stage(
 
 
 def _append_reaction_orca_candidate_stages(
-    o: Any,
+    services: OrchestrationServices,
     payload: dict[str, Any],
     plan: _ReactionOrcaStagePlan,
 ) -> int:
@@ -450,7 +468,7 @@ def _append_reaction_orca_candidate_stages(
     starting_index = len(plan.existing_stages)
     for offset, candidate in enumerate(plan.remaining_candidates, start=1):
         _append_reaction_orca_candidate_stage(
-            o,
+            services,
             payload,
             plan,
             candidate=candidate,
@@ -467,20 +485,20 @@ def append_reaction_orca_stages_impl(
     workspace_dir: Path,
     xtb_config: str | None,
     orca_config: str | None,
-    deps: OrchestrationDeps | None = None,
+    services: OrchestrationServices | None = None,
 ) -> bool:
-    o = _orchestration_context(deps)
+    resolved = resolve_orchestration_services(services)
     if not phase_finished(payload.get("stages", []), engine="xtb"):
         return False
     plan = _reaction_orca_stage_plan(
-        o,
+        resolved,
         payload,
         workspace_dir=workspace_dir,
         xtb_config=xtb_config,
         orca_config=orca_config,
     )
     if plan is None:
-        _maybe_record_reaction_xtb_phase_failure(o, payload)
+        _maybe_record_reaction_xtb_phase_failure(payload)
         return False
 
     if not plan.remaining_candidates:
@@ -493,8 +511,8 @@ def append_reaction_orca_stages_impl(
         _maybe_record_reaction_orca_candidates_exhausted(payload, plan)
         return False
 
-    _clear_reaction_orca_handoff_errors(o, plan.payload_metadata)
-    created = _append_reaction_orca_candidate_stages(o, payload, plan)
+    _clear_reaction_orca_handoff_errors(plan.payload_metadata)
+    created = _append_reaction_orca_candidate_stages(resolved, payload, plan)
     return created > 0
 
 

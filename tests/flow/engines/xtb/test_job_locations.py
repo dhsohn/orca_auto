@@ -10,6 +10,7 @@ from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 from orca_auto.core.indexing import JobLocationRecord, get_job_location, upsert_job_location
 from orca_auto.core.indexing import engine_job_locations as shared_job_locations
 from orca_auto.core.indexing.engines import resource_dict
+from orca_auto.flow.engines.xtb.engine import ENGINE_DEFINITION
 from orca_auto.flow.engines.xtb.job_locations import (
     build_job_location_record,
     normalize_key,
@@ -91,6 +92,7 @@ def test_runtime_roots_for_cfg_skips_workflows_without_xtb_stages(tmp_path: Path
     roots = job_locations_module.runtime_roots_for_cfg(cfg)
 
     assert roots == ((reaction_workspace / "02_xtb").resolve(),)
+    assert ENGINE_DEFINITION.build_queue_runtime().queue_roots(cfg) == roots
     assert not (conformer_workspace / "02_xtb").exists()
 
 

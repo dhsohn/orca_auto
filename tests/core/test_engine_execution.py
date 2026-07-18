@@ -144,7 +144,7 @@ def test_run_engine_worker_lifecycle_stops_on_shutdown_after_mark_running(
     assert calls == ["build", "check", "mark", "check"]
 
 
-def test_run_internal_engine_worker_entry_passes_worker_options(
+def test_run_engine_worker_entry_with_adapter_passes_worker_options(
     tmp_path: Path,
 ) -> None:
     cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
@@ -169,7 +169,7 @@ def test_run_internal_engine_worker_entry_passes_worker_options(
         calls.append(("outcome", result))
         return finalized
 
-    adapter = engine_execution.InternalEngineWorkerAdapter(
+    adapter = engine_execution.EngineWorkerAdapter(
         build_context=lambda cfg_obj, entry_obj: SimpleNamespace(
             cfg=cfg_obj,
             entry=entry_obj,
@@ -183,12 +183,12 @@ def test_run_internal_engine_worker_entry_passes_worker_options(
         build_outcome=build_outcome,
     )
 
-    outcome = engine_execution.run_internal_engine_worker_entry(
+    outcome = engine_execution.run_engine_worker_entry_with_adapter(
         cfg,
         entry,
         queue_root=tmp_path / "queue",
         adapter=adapter,
-        options=engine_execution.InternalWorkerOptions(
+        options=engine_execution.EngineWorkerOptions(
             worker_job_pid=4242,
             emit_output=True,
         ),
@@ -205,7 +205,7 @@ def test_run_internal_engine_worker_entry_passes_worker_options(
     ]
 
 
-def test_build_internal_engine_worker_adapter_installs_shutdown_check(tmp_path: Path) -> None:
+def test_build_engine_worker_adapter_installs_shutdown_check(tmp_path: Path) -> None:
     class ShutdownRequested(RuntimeError):
         def __init__(self, context: Any) -> None:
             super().__init__("shutdown")
@@ -214,7 +214,7 @@ def test_build_internal_engine_worker_adapter_installs_shutdown_check(tmp_path: 
     cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
     entry = SimpleNamespace(queue_id="q-1")
     context = SimpleNamespace(entry=entry)
-    adapter = engine_execution.build_internal_engine_worker_adapter(
+    adapter = engine_execution.build_engine_worker_adapter(
         build_context=lambda _cfg, _entry: context,
         mark_running=lambda *_args: None,
         run_job=lambda *_args: "result",
@@ -223,12 +223,12 @@ def test_build_internal_engine_worker_adapter_installs_shutdown_check(tmp_path: 
     )
 
     try:
-        engine_execution.run_internal_engine_worker_entry(
+        engine_execution.run_engine_worker_entry_with_adapter(
             cfg,
             entry,
             queue_root=tmp_path / "queue",
             adapter=adapter,
-            options=engine_execution.InternalWorkerOptions(
+            options=engine_execution.EngineWorkerOptions(
                 shutdown_requested=lambda: True,
             ),
         )
@@ -238,7 +238,7 @@ def test_build_internal_engine_worker_adapter_installs_shutdown_check(tmp_path: 
         raise AssertionError("expected shutdown")
 
 
-def test_run_internal_engine_worker_entry_with_hooks_builds_adapter(tmp_path: Path) -> None:
+def test_run_engine_worker_entry_with_hooks_builds_adapter(tmp_path: Path) -> None:
     cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
     entry = SimpleNamespace(queue_id="q-1")
     calls: list[tuple[str, Any]] = []
@@ -261,7 +261,7 @@ def test_run_internal_engine_worker_entry_with_hooks_builds_adapter(tmp_path: Pa
         calls.append(("outcome", result))
         return finalized
 
-    hooks = engine_execution.InternalEngineWorkerHooks(
+    hooks = engine_execution.EngineWorkerHooks(
         build_context=lambda cfg_obj, entry_obj: SimpleNamespace(
             cfg=cfg_obj,
             entry=entry_obj,
@@ -273,12 +273,12 @@ def test_run_internal_engine_worker_entry_with_hooks_builds_adapter(tmp_path: Pa
         shutdown_exception_type=RuntimeError,
     )
 
-    outcome = engine_execution.run_internal_engine_worker_entry_with_hooks(
+    outcome = engine_execution.run_engine_worker_entry_with_hooks(
         cfg,
         entry,
         queue_root=tmp_path / "queue",
         hooks=hooks,
-        options=engine_execution.InternalWorkerOptions(emit_output=True),
+        options=engine_execution.EngineWorkerOptions(emit_output=True),
     )
 
     assert outcome == "finalized"
@@ -290,7 +290,7 @@ def test_run_internal_engine_worker_entry_with_hooks_builds_adapter(tmp_path: Pa
     ]
 
 
-def test_run_internal_engine_worker_entry_with_spec_builds_adapter(tmp_path: Path) -> None:
+def test_run_engine_worker_entry_with_spec_builds_adapter(tmp_path: Path) -> None:
     cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
     entry = SimpleNamespace(queue_id="q-1")
     calls: list[tuple[str, Any]] = []
@@ -299,7 +299,7 @@ def test_run_internal_engine_worker_entry_with_spec_builds_adapter(tmp_path: Pat
         _cfg: Any,
         _context: Any,
         queue_root: Path,
-        _options: engine_execution.InternalWorkerOptions,
+        _options: engine_execution.EngineWorkerOptions,
     ) -> str:
         calls.append(("run", queue_root))
         return "result"
@@ -309,7 +309,7 @@ def test_run_internal_engine_worker_entry_with_spec_builds_adapter(tmp_path: Pat
         _context: Any,
         result: str,
         _queue_root: Path,
-        options: engine_execution.InternalWorkerOptions,
+        options: engine_execution.EngineWorkerOptions,
     ) -> str:
         calls.append(("finalize", options.emit_output))
         return f"{result}:finalized"
@@ -318,7 +318,7 @@ def test_run_internal_engine_worker_entry_with_spec_builds_adapter(tmp_path: Pat
         calls.append(("outcome", result))
         return finalized
 
-    spec = engine_execution.InternalEngineWorkerExecutionSpec(
+    spec = engine_execution.EngineWorkerExecutionSpec(
         build_context=lambda cfg_obj, entry_obj: SimpleNamespace(
             cfg=cfg_obj,
             entry=entry_obj,
@@ -330,12 +330,12 @@ def test_run_internal_engine_worker_entry_with_spec_builds_adapter(tmp_path: Pat
         shutdown_exception_type=RuntimeError,
     )
 
-    outcome = engine_execution.run_internal_engine_worker_entry_with_spec(
+    outcome = engine_execution.run_engine_worker_entry_with_spec(
         cfg,
         entry,
         queue_root=tmp_path / "queue",
         spec=spec,
-        options=engine_execution.InternalWorkerOptions(
+        options=engine_execution.EngineWorkerOptions(
             worker_job_pid=101,
             emit_output=True,
         ),
@@ -350,7 +350,7 @@ def test_run_internal_engine_worker_entry_with_spec_builds_adapter(tmp_path: Pat
     ]
 
 
-def test_run_internal_engine_worker_entry_with_spec_options_builds_options(
+def test_run_engine_worker_entry_with_spec_options_builds_options(
     tmp_path: Path,
 ) -> None:
     cfg = object()
@@ -361,7 +361,7 @@ def test_run_internal_engine_worker_entry_with_spec_options_builds_options(
     def register_running_job(process: object | None) -> None:
         calls.append(("register", process))
 
-    spec = engine_execution.InternalEngineWorkerExecutionSpec(
+    spec = engine_execution.EngineWorkerExecutionSpec(
         build_context=lambda _cfg, current_entry: SimpleNamespace(entry=current_entry),
         mark_running=lambda _cfg, _context, options: calls.append(("mark", options.worker_job_pid)),
         run_job=lambda _cfg, _context, _queue_root, options: (
@@ -384,7 +384,7 @@ def test_run_internal_engine_worker_entry_with_spec_options_builds_options(
         shutdown_exception_type=RuntimeError,
     )
 
-    outcome = engine_execution.run_internal_engine_worker_entry_with_spec_options(
+    outcome = engine_execution.run_engine_worker_entry_with_spec_options(
         cfg,
         entry,
         queue_root=tmp_path / "queue",
@@ -404,16 +404,16 @@ def test_run_internal_engine_worker_entry_with_spec_options_builds_options(
     assert calls == [("mark", 101), ("register", running_process)]
 
 
-def test_run_internal_engine_worker_entry_with_spec_factory_options_builds_once(
+def test_run_engine_worker_entry_with_spec_factory_options_builds_once(
     tmp_path: Path,
 ) -> None:
     cfg = object()
     entry = SimpleNamespace(queue_id="q-1")
     calls: list[str] = []
 
-    def build_spec() -> engine_execution.InternalEngineWorkerExecutionSpec:
+    def build_spec() -> engine_execution.EngineWorkerExecutionSpec:
         calls.append("build")
-        return engine_execution.InternalEngineWorkerExecutionSpec(
+        return engine_execution.EngineWorkerExecutionSpec(
             build_context=lambda _cfg, current_entry: SimpleNamespace(entry=current_entry),
             mark_running=lambda *_args: calls.append("mark"),
             run_job=lambda *_args: "result",
@@ -421,7 +421,7 @@ def test_run_internal_engine_worker_entry_with_spec_factory_options_builds_once(
             shutdown_exception_type=RuntimeError,
         )
 
-    outcome = engine_execution.run_internal_engine_worker_entry_with_spec_factory_options(
+    outcome = engine_execution.run_engine_worker_entry_with_spec_factory_options(
         cfg,
         entry,
         queue_root=tmp_path / "queue",
@@ -444,7 +444,7 @@ def test_raise_if_shutdown_requested_uses_engine_context() -> None:
     try:
         engine_execution.raise_if_shutdown_requested(
             context,
-            engine_execution.InternalWorkerOptions(shutdown_requested=lambda: True),
+            engine_execution.EngineWorkerOptions(shutdown_requested=lambda: True),
             shutdown_exception_type=ShutdownRequested,
         )
     except ShutdownRequested as exc:
@@ -482,7 +482,7 @@ def test_queue_cancel_callback_uses_normalized_queue_root_and_entry_id() -> None
         calls.append((root, queue_id, kwargs))
         return True
 
-    queue_deps = engine_execution.InternalWorkerQueueDependencies(
+    queue_deps = engine_execution.EngineWorkerQueueDependencies(
         get_cancel_requested=get_cancel_requested,
         mark_completed=lambda *args, **kwargs: None,
         mark_cancelled=lambda *args, **kwargs: None,
@@ -768,7 +768,7 @@ def test_require_path_within_roots_rejects_symlink_escape(tmp_path: Path) -> Non
         )
 
 
-def test_run_internal_worker_process_job_uses_process_dependency_group() -> None:
+def test_run_engine_worker_process_job_uses_process_dependency_group() -> None:
     running = SimpleNamespace(process=SimpleNamespace(pid=123))
     registered: list[Any | None] = []
     wait_kwargs: list[dict[str, Any]] = []
@@ -778,16 +778,16 @@ def test_run_internal_worker_process_job_uses_process_dependency_group() -> None
         wait_kwargs.append(kwargs)
         return "done"
 
-    process_deps = engine_execution.InternalWorkerProcessDependencies(
+    process_deps = engine_execution.EngineWorkerProcessDependencies(
         terminate_process=lambda _proc: True,
         wait_for_cancellable_process=wait_for_cancellable_process,
         sleep=lambda _seconds: None,
         cancel_check_interval_seconds=0.75,
     )
 
-    result = engine_execution.run_internal_worker_process_job(
+    result = engine_execution.run_engine_worker_process_job(
         SimpleNamespace(job_dir="/tmp/job"),
-        options=engine_execution.InternalWorkerOptions(
+        options=engine_execution.EngineWorkerOptions(
             should_cancel=lambda: False,
             register_running_job=registered.append,
         ),
@@ -805,19 +805,19 @@ def test_run_internal_worker_process_job_uses_process_dependency_group() -> None
     assert wait_kwargs[0]["check_cancel_before_poll"] is True
 
 
-def test_build_internal_worker_dependency_groups_preserve_extra_fields() -> None:
-    timing = engine_execution.build_internal_worker_timing_dependencies(
+def test_build_engine_worker_dependency_groups_preserve_extra_fields() -> None:
+    timing = engine_execution.build_engine_worker_timing_dependencies(
         SimpleNamespace,
         now_utc_iso=lambda: "now",
     )
-    queue = engine_execution.build_internal_worker_queue_dependencies(
+    queue = engine_execution.build_engine_worker_queue_dependencies(
         SimpleNamespace,
         get_cancel_requested=lambda _root, _queue_id: True,
         mark_completed=lambda *_args, **_kwargs: None,
         mark_cancelled=lambda *_args, **_kwargs: None,
         mark_failed=lambda *_args, **_kwargs: None,
     )
-    process = engine_execution.build_internal_worker_process_dependencies(
+    process = engine_execution.build_engine_worker_process_dependencies(
         SimpleNamespace,
         terminate_process=lambda _proc: True,
         wait_for_cancellable_process=lambda *_args, **_kwargs: "done",

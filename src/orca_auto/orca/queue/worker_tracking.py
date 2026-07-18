@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.messaging import build_channel
+from orca_auto.core.queue.engine.execution import coerce_resource_request
 from orca_auto.core.statuses import (
     STATUS_QUEUED,
     STATUS_RUNNING,
@@ -14,29 +13,26 @@ from orca_auto.core.statuses import (
     normalize_status,
 )
 
+from ..attempt.reporting import (
+    build_run_finished_notification,
+    finished_notification_already_sent,
+    mark_finished_notification_sent,
+)
 from ..config import AppConfig
+from ..inp_rewriter import read_resource_request_from_input
+from ..input_artifacts import selected_input_artifacts
+from ..job_locations import (
+    load_report_json,
+    record_from_artifacts,
+    resolve_job_metadata,
+    resource_dict,
+    upsert_job_record,
+)
+from ..notifications import notify_run_finished_event
+from ..state import load_state
+from .entries import queue_entry_metadata, queue_entry_reaction_dir, queue_entry_task_id
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class OrcaQueueWorkerTrackingCallbacks:
-    build_run_finished_notification: Callable[..., Any]
-    coerce_resource_request: Callable[[Any], dict[str, int] | None]
-    finished_notification_already_sent: Callable[[Any], bool]
-    load_report_json: Callable[[Path], Any]
-    load_state: Callable[[Path], Any]
-    mark_finished_notification_sent: Callable[..., Any]
-    notify_run_finished_event: Callable[..., bool]
-    queue_entry_metadata: Callable[[Any], dict[str, Any]]
-    queue_entry_reaction_dir: Callable[[Any], str]
-    queue_entry_task_id: Callable[[Any], str | None]
-    read_resource_request_from_input: Callable[[Path], dict[str, int]]
-    record_from_artifacts: Callable[..., Any]
-    resolve_job_metadata: Callable[[str, Path], tuple[str, str]]
-    resource_dict: Callable[[Any, Any], dict[str, int]]
-    selected_input_artifacts: Callable[[str], Any]
-    upsert_job_record: Callable[..., Any]
 
 
 def payload_job_id(payload: Any) -> str:
@@ -56,10 +52,9 @@ def get_run_id_from_state(
     reaction_dir: str,
     *,
     expected_job_id: str | None = None,
-    callbacks: OrcaQueueWorkerTrackingCallbacks,
 ) -> str | None:
     """Try to read run_id from the reaction_dir's job_state.json."""
-    state = callbacks.load_state(Path(reaction_dir))
+    state = load_state(Path(reaction_dir))
     if state and payload_matches_expected_job_id(state, expected_job_id):
         return state.get("run_id")
     return None
@@ -68,20 +63,17 @@ def get_run_id_from_state(
 def upsert_running_job_record(
     cfg: AppConfig,
     entry: Any,
-    *,
-    callbacks: OrcaQueueWorkerTrackingCallbacks,
 ) -> None:
-    task_id = callbacks.queue_entry_task_id(entry)
+    task_id = queue_entry_task_id(entry)
     if not task_id:
         return
-    reaction_dir = Path(callbacks.queue_entry_reaction_dir(entry)).expanduser().resolve()
+    reaction_dir = Path(queue_entry_reaction_dir(entry)).expanduser().resolve()
     selected_input, job_type, molecule_key, requested, actual = tracking_metadata_from_queue_entry(
         cfg,
         entry,
         reaction_dir=reaction_dir,
-        callbacks=callbacks,
     )
-    callbacks.upsert_job_record(
+    upsert_job_record(
         cfg,
         job_id=task_id,
         status=STATUS_RUNNING,
@@ -97,20 +89,17 @@ def upsert_running_job_record(
 def upsert_queued_job_record(
     cfg: AppConfig,
     entry: Any,
-    *,
-    callbacks: OrcaQueueWorkerTrackingCallbacks,
 ) -> None:
-    task_id = callbacks.queue_entry_task_id(entry)
+    task_id = queue_entry_task_id(entry)
     if not task_id:
         raise ValueError("ORCA publication repair requires a queue task_id")
-    reaction_dir = Path(callbacks.queue_entry_reaction_dir(entry)).expanduser().resolve()
+    reaction_dir = Path(queue_entry_reaction_dir(entry)).expanduser().resolve()
     selected_input, job_type, molecule_key, requested, actual = tracking_metadata_from_queue_entry(
         cfg,
         entry,
         reaction_dir=reaction_dir,
-        callbacks=callbacks,
     )
-    callbacks.upsert_job_record(
+    upsert_job_record(
         cfg,
         job_id=task_id,
         status=STATUS_QUEUED,
@@ -128,39 +117,38 @@ def tracking_metadata_from_queue_entry(
     entry: Any,
     *,
     reaction_dir: Path,
-    callbacks: OrcaQueueWorkerTrackingCallbacks,
 ) -> tuple[str, str, str, dict[str, int], dict[str, int]]:
-    metadata = callbacks.queue_entry_metadata(entry)
+    metadata = queue_entry_metadata(entry)
     selected_inp = str(metadata.get("selected_inp") or "").strip()
     selected_xyz = str(metadata.get("selected_input_xyz") or "").strip()
     selected_input = str(
         selected_xyz
         or metadata.get("selected_input_path")
-        or callbacks.selected_input_artifacts(selected_inp).selected_input_path
+        or selected_input_artifacts(selected_inp).selected_input_path
     ).strip()
     job_type = str(metadata.get("job_type") or "").strip()
     molecule_key = str(metadata.get("molecule_key") or "").strip()
     if not job_type or not molecule_key:
-        derived_job_type, derived_molecule_key = callbacks.resolve_job_metadata(
+        derived_job_type, derived_molecule_key = resolve_job_metadata(
             selected_inp or selected_input,
             reaction_dir,
         )
         job_type = job_type or derived_job_type
         molecule_key = molecule_key or derived_molecule_key
 
-    requested = callbacks.coerce_resource_request(metadata.get("resource_request"))
+    requested = coerce_resource_request(metadata.get("resource_request"))
     resource_inp = selected_inp or selected_input
     if not requested and resource_inp.lower().endswith(".inp"):
         selected_inp_path = Path(resource_inp).expanduser().resolve()
         if selected_inp_path.exists():
-            requested = callbacks.read_resource_request_from_input(selected_inp_path)
+            requested = read_resource_request_from_input(selected_inp_path)
     if not requested:
-        requested = callbacks.resource_dict(
+        requested = resource_dict(
             cfg.resources.max_cores_per_task,
             cfg.resources.max_memory_gb_per_task,
         )
 
-    actual = callbacks.coerce_resource_request(metadata.get("resource_actual")) or dict(requested)
+    actual = coerce_resource_request(metadata.get("resource_actual")) or dict(requested)
     return selected_input, job_type, molecule_key, requested, actual
 
 
@@ -169,19 +157,26 @@ def upsert_terminal_job_record(
     reaction_dir: str,
     *,
     fallback_job_id: str | None = None,
-    callbacks: OrcaQueueWorkerTrackingCallbacks,
+    expected_job_id: str | None = None,
 ) -> bool:
     job_dir = Path(reaction_dir).expanduser().resolve()
-    state = callbacks.load_state(job_dir)
-    record = callbacks.record_from_artifacts(
+    expected = str(expected_job_id or fallback_job_id or "").strip()
+    state = load_state(job_dir)
+    report = load_report_json(job_dir)
+    if expected:
+        if not payload_matches_expected_job_id(state, expected):
+            state = None
+        if not payload_matches_expected_job_id(report, expected):
+            report = None
+    record = record_from_artifacts(
         job_dir=job_dir,
         state=dict(state) if state is not None else None,
-        report=callbacks.load_report_json(job_dir),
+        report=report,
         fallback_job_id=fallback_job_id or "",
     )
     if record is None or normalize_status(record.status) not in TERMINAL_STATUSES:
         return False
-    callbacks.upsert_job_record(
+    upsert_job_record(
         cfg,
         job_id=record.job_id,
         status=record.status,
@@ -200,14 +195,13 @@ def notify_terminal_job_from_state(
     reaction_dir: str,
     *,
     expected_job_id: str | None = None,
-    callbacks: OrcaQueueWorkerTrackingCallbacks,
 ) -> bool:
     channel = build_channel(cfg.messenger, logger=logger)
     if not channel.enabled:
         return False
 
     job_dir = Path(reaction_dir).expanduser().resolve()
-    state = callbacks.load_state(job_dir)
+    state = load_state(job_dir)
     if not state:
         logger.warning("Skipping terminal messenger notification; state missing for %s", job_dir)
         return False
@@ -220,7 +214,7 @@ def notify_terminal_job_from_state(
             payload_job_id(state),
         )
         return False
-    if callbacks.finished_notification_already_sent(state):
+    if finished_notification_already_sent(state):
         return False
 
     final_result = state.get("final_result")
@@ -234,16 +228,16 @@ def notify_terminal_job_from_state(
     selected_inp_text = str(state.get("selected_inp") or "").strip()
     selected_inp = Path(selected_inp_text) if selected_inp_text else job_dir / "-"
     status = str(final_result.get("status") or state.get("status") or "").strip()
-    notification = callbacks.build_run_finished_notification(
+    notification = build_run_finished_notification(
         reaction_dir=job_dir,
         selected_inp=selected_inp,
         state=state,
         status=status,
         final_result=final_result,
     )
-    sent = callbacks.notify_run_finished_event(channel, notification)
+    sent = notify_run_finished_event(channel, notification)
     if sent:
-        callbacks.mark_finished_notification_sent(job_dir, state)
+        mark_finished_notification_sent(job_dir, state)
         logger.info("Terminal messenger notification sent by queue worker: %s", job_dir)
         return True
 
@@ -252,7 +246,6 @@ def notify_terminal_job_from_state(
 
 
 __all__ = [
-    "OrcaQueueWorkerTrackingCallbacks",
     "get_run_id_from_state",
     "notify_terminal_job_from_state",
     "payload_job_id",

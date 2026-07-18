@@ -153,11 +153,7 @@ def build_queue_engine_definition(
     return EngineDefinition(
         engine=engine_id,
         load_config=load_config,
-        run_worker_child_job=run_worker_child_job,
         queue_worker_module="orca_auto.core.engines.queue_worker",
-        worker_pid_file_name=worker_pid_file_name,
-        build_worker_child_command=worker_child_command,
-        runtime_roots_for_cfg=runtime_roots,
         queue_functions=EngineQueueFunctions(
             runtime_roots_for_cfg=runtime_roots,
             list_queue=queue_lister,

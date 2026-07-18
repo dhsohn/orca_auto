@@ -4,7 +4,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from .identity import own_engine_accept_entry
+
+if TYPE_CHECKING:
+    from orca_auto.core.queue.engine.runtime import EngineQueueRuntime
 
 
 @dataclass(frozen=True)
@@ -53,18 +58,33 @@ class EngineCancellationHooks:
 class EngineDefinition:
     engine: str
     load_config: Callable[[str], Any]
-    run_worker_child_job: Callable[..., int]
     queue_worker_module: str
-    worker_pid_file_name: str
-    build_worker_child_command: Callable[..., list[str]]
-    runtime_roots_for_cfg: Callable[[Any], tuple[Path, ...]] | None = None
-    queue_functions: EngineQueueFunctions | None = None
-    runner_callbacks: EngineRunnerCallbacks | None = None
+    queue_functions: EngineQueueFunctions
+    runner_callbacks: EngineRunnerCallbacks
     context_builder: EngineContextBuilder | None = None
     artifact_adapter: EngineArtifactAdapter | None = None
     notification_hooks: EngineNotificationHooks | None = None
     cancellation_hooks: EngineCancellationHooks | None = None
     queue_worker_runner: Callable[[list[str]], int] | None = None
+
+    def build_queue_runtime(self) -> EngineQueueRuntime:
+        """Build the canonical queue runtime declared by this definition."""
+        from orca_auto.core.queue.engine.runtime import EngineQueueRuntime
+
+        queue_functions = self.queue_functions
+        worker_pid_file_name = queue_functions.worker_pid_file_name
+        if not worker_pid_file_name:
+            raise ValueError("worker_pid_file_name is required for queue runtime support")
+        return EngineQueueRuntime(
+            load_config=self.load_config,
+            runtime_roots_for_cfg=queue_functions.runtime_roots_for_cfg,
+            list_queue=queue_functions.list_queue,
+            dequeue_next=queue_functions.dequeue_next,
+            dequeue_entry_if_pending=queue_functions.dequeue_entry_if_pending,
+            queue_entry_by_id_fn=queue_functions.queue_entry_by_id,
+            worker_pid_file_name=worker_pid_file_name,
+            accept_entry_fn=own_engine_accept_entry(self.engine),
+        )
 
     def queue_worker_main(self, argv: list[str]) -> int:
         if self.queue_worker_runner is not None:
@@ -81,13 +101,8 @@ class EngineDefinition:
         queue_id: str,
         admission_token: str | None = None,
     ) -> int:
-        runner = (
-            self.runner_callbacks.run_worker_child_job
-            if self.runner_callbacks is not None
-            else self.run_worker_child_job
-        )
         return int(
-            runner(
+            self.runner_callbacks.run_worker_child_job(
                 config_path=config_path,
                 queue_root=queue_root,
                 queue_id=queue_id,

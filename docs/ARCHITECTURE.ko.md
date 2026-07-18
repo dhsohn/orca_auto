@@ -57,7 +57,16 @@ src/orca_auto/
 │   └── utils/           # 락, 영속화, 프로세스 추적, 형 변환
 │
 ├── orca/                # 정규 ORCA 구현 (단일 진실 공급원)
-│   ├── commands/        # init, run_inp, queue, monitor
+│   ├── commands/        # 얇은 CLI adapter: init, run_inp, queue, monitor
+│   ├── submission.py    # 내구성 run-dir 제출과 publication
+│   ├── run_context.py   # 제출/실행 대상 해석
+│   ├── execution.py     # 락으로 보호된 ORCA 실행과 복구
+│   ├── queue/
+│   │   ├── worker.py    # 부모 워커 조립 전용
+│   │   ├── replay.py    # reconciliation과 내구성 terminal replay
+│   │   ├── cancellation.py
+│   │   ├── publication_repair.py
+│   │   └── worker_tracking.py
 │   ├── runtime/         # 실행 락
 │   ├── engine.py        # ORCA EngineDefinition 배선
 │   ├── attempt/         # 시도 엔진, 재시도, 재개, 리포팅
@@ -98,6 +107,10 @@ src/orca_auto/
 엔진 배선은 지연 문자열 모듈 경로(`core/engines/registry.py`,
 `core/queue/worker/admission.py`)로만 계층을 넘습니다 — 의도된 플러그인
 심(seam)이며, 임포트 그래프에 일부러 드러나지 않습니다.
+
+ORCA 내부에서도 의존성은 안쪽을 향합니다. `commands`는 도메인 모듈을 호출할 수 있지만,
+제출·실행·worker-child·queue 정책은 `orca.commands`를 임포트하면 안 됩니다. 이 경계는
+import-linter 계약으로 보호합니다.
 
 ---
 
@@ -179,12 +192,17 @@ src/orca_auto/
 묶는 frozen 데이터클래스 `EngineDefinition`을 정의합니다:
 
 - `load_config` — 엔진 설정 로더
-- `run_worker_child_job` — 자식 작업 러너
-- `queue_worker_module` / `build_worker_child_command` — 부모 워커 배선
-- `runtime_roots_for_cfg`, `queue_functions` — 큐 탐색
+- `queue_worker_module` — 부모 워커 진입점
+- `queue_functions` — runtime root, 큐 연산, 엔트리 조회, PID 파일 이름
+- `runner_callbacks` — 자식 러너와 자식 명령 빌더
 - `artifact_adapter` — 페이로드 빌드/로드 + 리포트 마크다운
 - `notification_hooks` — started / finished / retry 콜백
-- `context_builder`, `runner_callbacks` — 실행을 위한 DI 이음새
+- `context_builder` — 실행을 위한 DI 이음새
+
+`EngineDefinition.build_queue_runtime()`은 이 선언을 `EngineQueueRuntime`으로
+연결하는 canonical 경계입니다. 엔진의 큐 함수, PID 파일 이름, 정확한 identity
+predicate, 큐 항목 조회를 한 곳에서 설치합니다. 네 엔진 모두 이 런타임을 직접
+사용하며 이전 `core.queue.internal_engine` module/facade/resolver 스택은 제거했습니다.
 
 각 엔진 패키지는 `ENGINE_DEFINITION` 상수를 노출합니다:
 
@@ -194,6 +212,18 @@ src/orca_auto/
 | xtb_md | `orca_auto.xtb_md.engine`               |
 | xtb    | `orca_auto.flow.engines.xtb.engine`     |
 | crest  | `orca_auto.flow.engines.crest.engine`   |
+
+공용 부모 워커 라이프사이클은 `core.queue.engine`에, 공통 워커 실행 의존성은
+`core.queue.engine.worker_execution`에 두며 자식 진입점은 `core.queue.engine.child`를
+직접 사용합니다. workflow-aware runtime-root resolver는 엔진 정의가 명시적으로
+소유하고 publication repair와 live child-PID slot 보호는 xTB 정책으로 유지됩니다.
+crash-generation rebind, 재시도, publication repair, 내구성 engine-process 복구, 취소,
+terminal replay는 ORCA 소유 정책으로 유지됩니다. 이 canonical owner 주위에 엔진 로컬
+또는 범용 전달 facade를 다시 만들지 않습니다.
+
+ORCA 부모 `queue.worker`는 정책 소유자가 아니라 composition root입니다. 공용 엔진
+런타임을 `publication_repair`, `cancellation`, `replay`, `worker_tracking`에 연결하며,
+각 정책 변경은 해당 소유 모듈에 둡니다.
 
 `core/engines/registry.py`는 모듈을 임포트하고 `ENGINE_DEFINITION`을 읽어 엔진
 id를 `EngineDefinition`으로 해석합니다. 이 레지스트리가 엔진 id → 모듈 매핑을
@@ -214,8 +244,12 @@ python -m orca_auto.core.engines.worker_child \
 
 부모 워커(`EngineQueueWorker`)는 어드미션 슬롯을 예약하고 이 자식을 생성하며,
 자식이 종료된 후 최종 큐 결과를 확정합니다. ORCA는 더 풍부한 도메인 동작(상태
-머신, 재시도, 리포트)을 `orca_auto.orca` 내부에 유지하지만, 그 주위의
-*라이프사이클 골격*은 공유됩니다.
+머신, 재시도, 리포트)을 `orca_auto.orca` 내부에 유지하며, 워커 자식 진입점은
+canonical `core.queue.engine.child` 계약을 직접 사용합니다.
+
+단독 xTB-MD의 `xtb_md/queue_runtime.py`는 `ENGINE_DEFINITION`이 만든 런타임에서
+워커 의존성과 라이프사이클 훅을 직접 조립합니다. publication-repair gate와 엄격한
+단일 시도 종료 정책은 계속 엔진 소유 동작으로 남습니다.
 
 ---
 
@@ -347,6 +381,21 @@ YAML alias 32개, 파싱/확장 node 10,000개, 중첩 64단계로 제한하고 
 거부합니다. 중앙 geometry 상한은 로컬 작업 10,000원자, xTB/ORCA Hessian 생성 작업
 1,000원자, 원격 업로드 작업 200원자입니다.
 
+### Supporting Information 소유권
+
+`flow/workflow/si/`는 외부의 단일 `orca_auto.flow.workflow.si` API를 유지하면서 조립형
+SI 파이프라인을 책임별로 분리합니다. `evidence.py`가 내구성 워크플로우·스테이지 근거를
+읽고, `collection.py`가 이를 `science.py`의 선택·RMSD·interaction-energy·population
+규칙과 조합하며, `rendering.py`는 파일을 쓰지 않고 Markdown/CSV text만 생성합니다.
+`publication.py`는 유일한 workflow SI writer로 파일별 원자 교체, 감지한 쓰기 실패 뒤의
+artifact 정리, interaction CSV ownership marker를 소유합니다. advance 루프가 writer 호출 전
+publication을 checkpoint하고 multi-file 게시 중단 뒤의 내구성 재시도를 소유합니다. 별도의
+수치·artifact 원본을 만들지 않으므로
+`workflow_si.md`, `si_data.csv`, owned interaction CSV 계약은 그대로 유지됩니다.
+import-linter는 publication → collection → rendering → science → evidence → models의 안쪽
+방향을 허용하고(중간 layer 생략 가능) 역방향 import를 거부합니다. package `__init__`은
+외부로 향하는 단일 API facade로 유지됩니다.
+
 ### advance 루프
 
 `flow/orchestration/advance.py`는 오케스트레이션의 심장인
@@ -363,6 +412,20 @@ YAML alias 32개, 파싱/확장 node 10,000개, 중첩 64단계로 제한하고 
 허용하는 만큼 워크플로우를 앞으로 진행시킵니다. 스테이지 런타임 세부는
 `flow/orchestration/stage_runtime/`(엔진별 제출, 입력, 재시도, 동기화, 핸드오프)에
 있습니다.
+
+### 오케스트레이션 의존성 경계
+
+advance 루프는 네 개의 굵은 외부 경계 — 워크플로우 영속화, 엔진 게이트웨이, 시계,
+이벤트 — 를 담은 하나의 `OrchestrationServices` 값을 전달합니다. 내부 stage view,
+materializer, lifecycle 규칙, stage-runtime helper는 범용 service locator를 거치지 않고
+직접 import합니다. 따라서 실행 순서는 `advance_phases.py`에 드러나고, 의존성 객체 하나가
+오케스트레이션 그래프 전체를 다시 만드는 일을 방지합니다.
+
+테스트는 `tests/flow/orchestration_services.py`의 엄격한 helper를 통해 이 네 외부 경계만
+교체합니다. 내부 동작을 격리해야 하는 테스트는 그 동작을 소유한 모듈을 명시적으로
+patch합니다. 알 수 없는 서비스 이름은 즉시 실패하므로 오래된 fake가 실제 운영 코드를
+실행하지 않은 채 조용히 통과할 수 없습니다. import-linter는 stage view가 오케스트레이션
+wiring에 역으로 의존하는 것도 막습니다.
 
 ### 예시: 반응 TS 탐색
 
@@ -427,9 +490,15 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 `flow/bot/application.py`는 provider-neutral `/list`, `/cancel`, `/help` 동작을
 소유합니다. Telegram polling과 Discord gateway adapter가 provider 이벤트를 경계에서
 변환합니다. 파괴적 액션은 raw queue ID 대신 provider·채널·사용자에 묶인 짧고
-만료되며 일회성인 opaque ID를 사용합니다.
+만료되며 일회성인 opaque ID를 사용합니다. `flow/bot/upload_application.py`는 Discord
+`!run`의 내구성 transaction을 별도로 소유합니다. CDN 다운로드 전 예약, archive 검증,
+확인, 원자 게시, downstream queue/workflow commit 조정, restart reconciliation이 이
+경계에 있으며 불확실한 commit은 재시도하거나 삭제하지 않고 보존합니다. 두 application은
+`flow/bot/interaction_delivery.py`의 provider-neutral delivery 동작만 공유합니다.
 워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST 및 반응 경로 xTB 자식
 페이즈는 각각 한 메시지로 요약합니다.
+import-linter는 upload 영속성을 runner/provider composition 아래에 유지하고 command
+application이 `core.ingest`를 직접 소유하지 못하게 합니다.
 
 `ActionStore` port는 일회성 해석과 originator/operator audience 정책을 정의합니다.
 현재 메모리 구현은 명령에 응답해 gateway가 만든 카드만 의도적으로 담당하며, 알림
@@ -486,6 +555,14 @@ token, 채널 ID, operator allowlist가 필요하며, bot token+기본 채널이
 활성화되며, 설정 후 다시 실행하면 전체 타깃이 활성화됩니다. WSL에서는
 `/etc/wsl.conf`에서 `systemd`가 활성화되어 있어야 합니다.
 
+통합 감독자는 각 워커를 별도 프로세스 세션에서 시작하고 최초 시작을 2초씩
+분산합니다. 따라서 워커 쪽 프로세스 그룹 신호나 시작 시 복구 부하가 모든 형제
+워커에 한꺼번에 전파되지 않습니다. 데몬 워커가 5분 안에 세 번 종료되면 무한
+재시작 대신 감독자 회로가 열립니다. 각 엔진 큐 워커는 시작 시 내구 상태를 조정하지만,
+유휴 상태의 전체 상태 조정은 1분에 한 번으로 제한하고 가벼운 큐/상태 poll은 기존
+주기를 유지합니다. 서비스는 실패 후 30초 뒤 재시도하며 5분 동안 unit 시작을 최대
+세 번만 허용하고, 감독자가 정상 종료되면 재시작하지 않습니다.
+
 ---
 
 ## 12. CLI 표면
@@ -514,7 +591,8 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 `.[dev]`를 설치한 뒤 `ruff check`, `ruff format --check`, `mypy`, `lint-imports`, 그리고 커버리지
 게이트가 걸린 pytest 스위트를 실행합니다. CI는 추가로 Gitleaks, ShellCheck,
 렌더링된 systemd 유닛 검증, Python 3.11/3.12/3.13 매트릭스, 휠 타입 메타데이터
-스모크 테스트를 실행합니다.
+스모크 테스트를 실행합니다. 휠 스모크는 패키징된 Python module 목록이 `src/orca_auto`와
+정확히 같고 root `py.typed` marker가 하나뿐인지도 확인합니다.
 
 테스트는 `tests/core/`, `tests/xtb_md/`, `tests/flow/`, `tests/flow/engines/`, `tests/integration/`,
 최상위 ORCA 회귀 테스트로 구성됩니다. 프로젝트는 내부 위임 테스트보다 동작을

@@ -58,7 +58,16 @@ src/orca_auto/
 │   └── utils/           # Locks, persistence, process tracking, coercion
 │
 ├── orca/                # Canonical ORCA implementation (source of truth)
-│   ├── commands/        # init, run_inp, queue, monitor
+│   ├── commands/        # Thin CLI adapters: init, run_inp, queue, monitor
+│   ├── submission.py    # Durable run-dir submission and publication
+│   ├── run_context.py   # Submission/execution target resolution
+│   ├── execution.py     # Locked ORCA execution and recovery
+│   ├── queue/
+│   │   ├── worker.py    # Parent-worker composition only
+│   │   ├── replay.py    # Reconciliation and durable terminal replay
+│   │   ├── cancellation.py
+│   │   ├── publication_repair.py
+│   │   └── worker_tracking.py
 │   ├── runtime/         # Run locks
 │   ├── engine.py        # ORCA EngineDefinition wiring
 │   ├── attempt/         # Attempt engine, retry, resume, reporting
@@ -98,6 +107,10 @@ import `orca` and `core`; `orca` and `xtb_md` may import only `core`; `core`
 imports none of those domain packages. Engine wiring crosses layers exclusively through lazy string module
 paths (`core/engines/registry.py`, `core/queue/worker/admission.py`) — the
 deliberate plugin seam, invisible to the import graph on purpose.
+
+Within ORCA, dependencies also point inward: `commands` may call the domain
+modules, but submission, execution, worker-child, and queue policy must never
+import `orca.commands`. The import-linter contract protects this boundary.
 
 ---
 
@@ -180,12 +193,18 @@ child-process management, terminal side effects, and orphan recovery uniform.
 bundles everything the shared runtime needs for an engine:
 
 - `load_config` — engine config loader
-- `run_worker_child_job` — the child job runner
-- `queue_worker_module` / `build_worker_child_command` — parent-worker wiring
-- `runtime_roots_for_cfg`, `queue_functions` — queue discovery
+- `queue_worker_module` — parent-worker entrypoint
+- `queue_functions` — runtime roots, queue operations, entry lookup, and PID-file name
+- `runner_callbacks` — child runner and child-command builder
 - `artifact_adapter` — build/load payloads + report markdown
 - `notification_hooks` — started / finished / retry callbacks
-- `context_builder`, `runner_callbacks` — DI seams for execution
+- `context_builder` — DI seams for execution
+
+`EngineDefinition.build_queue_runtime()` is the canonical bridge from that
+declaration to `EngineQueueRuntime`: it installs the engine's queue functions,
+PID-file name, exact identity predicate, and queue-entry lookup in one place.
+All four engines use this runtime directly. The former
+`core.queue.internal_engine` module/facade/resolver stack has been removed.
 
 Each engine package exposes an `ENGINE_DEFINITION` constant:
 
@@ -195,6 +214,20 @@ Each engine package exposes an `ENGINE_DEFINITION` constant:
 | xtb_md | `orca_auto.xtb_md.engine`               |
 | xtb    | `orca_auto.flow.engines.xtb.engine`     |
 | crest  | `orca_auto.flow.engines.crest.engine`   |
+
+The shared parent-worker lifecycle lives under `core.queue.engine`; common
+worker execution dependencies live in `core.queue.engine.worker_execution`,
+and child entrypoints use `core.queue.engine.child` directly. The xTB engine
+definition explicitly owns the workflow-aware runtime-root resolver, while
+publication repair and live child-PID slot protection remain xTB policies.
+Crash-generation rebind, retry, publication repair, durable engine-process
+recovery, cancellation, and terminal replay remain ORCA-owned policies. Do not
+reintroduce an engine-local or generic forwarding facade around these canonical
+owners.
+
+ORCA's parent `queue.worker` is a composition root, not a policy owner. It wires
+the shared engine runtime to `publication_repair`, `cancellation`, `replay`, and
+`worker_tracking`; changes to those policies belong in their owning modules.
 
 `core/engines/registry.py` resolves an engine id to its `EngineDefinition` by
 importing the module and reading `ENGINE_DEFINITION`. This registry is the only
@@ -216,7 +249,13 @@ python -m orca_auto.core.engines.worker_child \
 The parent worker (`EngineQueueWorker`) reserves an admission slot, spawns this
 child, and finalizes the terminal queue result after the child exits. ORCA keeps
 its richer domain behavior (state machine, retry, reports) inside
-`orca_auto.orca`, but the *lifecycle scaffolding* around it is shared.
+`orca_auto.orca`, while its worker-child entrypoint uses the canonical
+`core.queue.engine.child` contract directly.
+
+For standalone xTB-MD, `xtb_md/queue_runtime.py` assembles worker dependencies
+and lifecycle hooks directly from the runtime built by `ENGINE_DEFINITION`.
+Its publication-repair gate and strict single-attempt terminal policy remain
+engine-owned behavior.
 
 ---
 
@@ -362,6 +401,22 @@ nesting levels, and rejects cyclic/recursive graphs. Central geometry limits cap
 local work at 10,000 atoms, xTB/ORCA Hessian-producing work at 1,000, and
 remote-upload work at 200.
 
+### Supporting Information ownership
+
+`flow/workflow/si/` preserves one outward `orca_auto.flow.workflow.si` API while
+separating the assembled SI pipeline by responsibility. `evidence.py` reads durable
+workflow/stage evidence, `collection.py` composes it with the selection, RMSD,
+interaction-energy, and population rules in `science.py`, and `rendering.py` produces
+Markdown/CSV text without writing files. `publication.py` is the only workflow SI
+writer and owns per-file atomic replacement, cleanup after caught write failures, and
+interaction-CSV ownership markers. The advance loop checkpoints publication before
+calling the writer and owns durable retry after an interrupted multi-file publication.
+The modules do not introduce a second numerical or artifact source of
+truth; `workflow_si.md`, `si_data.csv`, and the owned interaction CSV retain their
+existing contracts. Import-linter permits the inward order publication → collection →
+rendering → science → evidence → models (layers may be skipped) and rejects reverse
+imports. The package `__init__` remains the single outward API facade.
+
 ### The advance loop
 
 `flow/orchestration/advance.py` exposes `advance_workflow(...)`, the heart of
@@ -378,6 +433,22 @@ This is a **cyclic, idempotent advance**: each cycle moves the workflow as far
 forward as dependencies allow. Stage runtime details live under
 `flow/orchestration/stage_runtime/` (per-engine submission, inputs, retry, sync,
 handoff).
+
+### Orchestration dependency boundaries
+
+The advance loop passes one `OrchestrationServices` value containing four coarse
+outer boundaries: workflow persistence, engine gateways, the clock, and events.
+Internal stage views, materializers, lifecycle rules, and stage-runtime helpers
+use direct imports instead of being routed through a generic service locator.
+This keeps the execution order visible in `advance_phases.py` and prevents one
+dependency object from recreating the whole orchestration graph.
+
+Tests replace only those four outer boundaries through the strict helper in
+`tests/flow/orchestration_services.py`. A test that needs to isolate an internal
+operation patches the owning module explicitly. Unknown service names fail
+immediately, so a stale fake cannot silently stop exercising production code.
+Import-linter also prevents stage views from depending back on orchestration
+wiring.
 
 ### Example: reaction TS search
 
@@ -444,11 +515,15 @@ Each `EngineDefinition` can register `job_started` / `job_finished` / `retry` ho
 behavior. Native Telegram polling and Discord gateway adapters translate provider
 events at the edge. Destructive actions use short, expiring, one-time opaque IDs bound
 to the requesting provider, channel, and actor instead of embedding raw queue IDs in
-button payloads. Discord `!run` additionally reserves a durable upload session before
-the CDN download. Its confirmation action, archive digest, atomic publication path,
-and downstream queue/workflow receipt survive gateway restarts; an indeterminate
-commit is preserved for reconciliation. Workflow alerts keep per-job ORCA messages but summarize
-internal CREST and reaction-path xTB child phases into one message each.
+button payloads. `flow/bot/upload_application.py` separately owns the durable Discord
+`!run` transaction: reservation before the CDN download, archive verification,
+confirmation, atomic publication, downstream queue/workflow commit coordination, and
+restart reconciliation. An indeterminate commit is preserved rather than retried or
+deleted. Both applications share only the provider-neutral delivery operations in
+`flow/bot/interaction_delivery.py`. Workflow alerts keep per-job ORCA messages but
+summarize internal CREST and reaction-path xTB child phases into one message each.
+Import-linter keeps upload persistence below the runner/provider composition and
+prevents the command application from directly taking ownership of `core.ingest`.
 
 The `ActionStore` port defines one-time resolution and originator/operator audience
 policies. Its current in-memory implementation serves list/cancel cards created by
@@ -510,6 +585,16 @@ units. If the selected provider lacks interactive bot settings, only the queue w
 enabled; rerun after completing them to enable the full target. On WSL, `systemd`
 must be enabled in `/etc/wsl.conf`.
 
+The unified supervisor starts each worker in its own process session and spaces
+initial starts by two seconds, preventing a worker-side group signal or startup
+reconciliation burst from affecting every sibling at once. A daemon worker that
+exits three times within five minutes opens the supervisor circuit instead of
+restarting forever. Each engine queue worker still reconciles durable state at
+startup, but idle full-state reconciliation is limited to once per minute while
+the light queue/status poll remains at its normal interval. The service retries failures
+after 30 seconds and permits at most three unit starts per five-minute window;
+clean supervisor exits are not restarted.
+
 ---
 
 ## 12. CLI Surface
@@ -538,7 +623,8 @@ place to add user commands.
 `.venv`, installs `.[dev]`, then runs `ruff check`, `ruff format --check`,
 `mypy`, `lint-imports`, and the coverage-gated pytest suite. CI additionally runs Gitleaks,
 ShellCheck, rendered systemd unit verification, a Python 3.11/3.12/3.13 matrix,
-and a wheel typed-metadata smoke test.
+and a wheel smoke that requires the packaged Python-module inventory to exactly match
+`src/orca_auto` with one root `py.typed` marker.
 
 Tests are organized as `tests/core/`, `tests/xtb_md/`, `tests/flow/`, `tests/flow/engines/`,
 `tests/integration/`, and top-level ORCA regression tests. The project prefers

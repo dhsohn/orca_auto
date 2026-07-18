@@ -18,13 +18,47 @@ from orca_auto.core.artifacts import (
 )
 from orca_auto.flow.manifest import interaction_energy_config_fingerprint
 from orca_auto.flow.workflow.si import (
-    _CSV_COLUMNS,
     collect_workflow_si_data,
     render_interaction_energy_csv,
     render_workflow_si_csv,
     render_workflow_si_md,
     write_workflow_si,
 )
+
+_BASE_SI_CSV_COLUMNS = [
+    "name",
+    "stage_id",
+    "kind",
+    "formula",
+    "charge",
+    "multiplicity",
+    "method",
+    "basis_set",
+    "solvation",
+    "orca_version",
+    "route",
+    "E_Eh",
+    "ZPE_Eh",
+    "H_Eh",
+    "G_Eh",
+    "G_minus_Eel_Eh",
+    "sp_method",
+    "sp_basis_set",
+    "sp_solvation",
+    "sp_orca_version",
+    "sp_route",
+    "E_SP_Eh",
+    "G_composite_Eh",
+    "Nimag",
+    "lowest_freq_cm1",
+    "temperature_K",
+    "warnings",
+    "cluster_key",
+    "rel_E_kcalmol",
+    "rel_G_kcalmol",
+    "boltzmann_T_K",
+    "boltzmann_population",
+]
 
 _COORDS_A = (
     ("C", 0.0, 1.234567, -0.987654),
@@ -591,7 +625,7 @@ def test_write_workflow_si_writes_and_cleans_up(tmp_path: Path) -> None:
 def test_write_workflow_si_removes_pair_when_second_publish_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import orca_auto.flow.workflow.si as si_mod
+    from orca_auto.flow.workflow.si import publication as si_publication
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -601,7 +635,7 @@ def test_write_workflow_si_removes_pair_when_second_publish_fails(
     csv_path.write_text("old csv", encoding="utf-8")
     minimum = _minimum(tmp_path, "conf", energy=-100.0, coords=_COORDS_A)
     payload = _payload([_orca_stage("orca_conf", minimum, label="conf")])
-    real_write = si_mod.atomic_write_text
+    real_write = si_publication.atomic_write_text
     calls = 0
 
     def fail_second(path: Path, text: str) -> None:
@@ -611,9 +645,9 @@ def test_write_workflow_si_removes_pair_when_second_publish_fails(
             raise OSError("second publish failed")
         real_write(path, text)
 
-    monkeypatch.setattr(si_mod, "atomic_write_text", fail_second)
+    monkeypatch.setattr(si_publication, "atomic_write_text", fail_second)
 
-    assert si_mod.write_workflow_si(workspace, payload) is None
+    assert si_publication.write_workflow_si(workspace, payload) is None
     assert not md_path.exists()
     assert not csv_path.exists()
 
@@ -936,7 +970,8 @@ def test_malformed_manifest_does_not_suppress_si(tmp_path: Path) -> None:
 
 
 def test_population_failure_still_writes_valid_si(tmp_path: Path, monkeypatch: Any) -> None:
-    import orca_auto.flow.workflow.si as si_mod
+    from orca_auto.flow.workflow.si import collection as si_collection
+    from orca_auto.flow.workflow.si import science as si_science
 
     minimum = _minimum(tmp_path, "conf", energy=-100.0, coords=_COORDS_A)
     payload = _payload([_orca_stage("orca_conf", minimum, label="conf")])
@@ -944,13 +979,13 @@ def test_population_failure_still_writes_valid_si(tmp_path: Path, monkeypatch: A
     def _boom(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("population bug")
 
-    monkeypatch.setattr(si_mod, "_compute_populations", _boom)
+    monkeypatch.setattr(si_science, "_compute_populations", _boom)
 
-    data = si_mod.collect_workflow_si_data(payload)
+    data = si_collection.collect_workflow_si_data(payload)
 
     assert data.populations == (None,)  # isolated: base rows remain aligned and renderable
     assert "computation failed" in data.population_note
-    rendered = si_mod.render_workflow_si_md(data)
+    rendered = render_workflow_si_md(data)
     assert "## Relative energies" in rendered
     assert "## Structures" in rendered
 
@@ -1811,13 +1846,13 @@ def test_interaction_owner_pending_digest_recovers_after_marker_finalize_crash(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    import orca_auto.flow.workflow.si as si_mod
+    from orca_auto.flow.workflow.si import publication as si_publication
 
     workspace = tmp_path / "ws"
     workspace.mkdir()
     payload = _interaction_payload(tmp_path)
     owner_path = workspace / INTERACTION_ENERGY_CSV_OWNER_FILE
-    real_write = si_mod.atomic_write_text
+    real_write = si_publication.atomic_write_text
     owner_writes = 0
 
     def crash_final_marker(path: Path, text: str) -> None:
@@ -1828,13 +1863,13 @@ def test_interaction_owner_pending_digest_recovers_after_marker_finalize_crash(
                 raise KeyboardInterrupt("simulated process crash")
         real_write(path, text)
 
-    monkeypatch.setattr(si_mod, "atomic_write_text", crash_final_marker)
+    monkeypatch.setattr(si_publication, "atomic_write_text", crash_final_marker)
     with pytest.raises(KeyboardInterrupt):
-        si_mod.write_workflow_si(workspace, payload, raise_on_error=True)
-    monkeypatch.setattr(si_mod, "atomic_write_text", real_write)
+        si_publication.write_workflow_si(workspace, payload, raise_on_error=True)
+    monkeypatch.setattr(si_publication, "atomic_write_text", real_write)
 
-    assert si_mod.write_workflow_si(workspace, payload, raise_on_error=True) is not None
-    assert si_mod._owned_interaction_artifact(
+    assert si_publication.write_workflow_si(workspace, payload, raise_on_error=True) is not None
+    assert si_publication._owned_interaction_artifact(
         workspace / INTERACTION_ENERGY_CSV_FILE,
         owner_path,
         workflow_id="wf_si_test",
@@ -2198,7 +2233,7 @@ def test_features_off_are_byte_identical_to_baseline(tmp_path: Path) -> None:
 
     csv_text = render_workflow_si_csv(data)
     header = csv_text.splitlines()[0].split(",")
-    assert header == _CSV_COLUMNS  # no rmsd_dedup columns appended when off
+    assert header == _BASE_SI_CSV_COLUMNS  # no rmsd_dedup columns appended when off
 
     md = render_workflow_si_md(data)
     assert "## Interaction energies" not in md

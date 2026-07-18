@@ -13,9 +13,10 @@ from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE, SI_BLOCK_MD_FILE
 from orca_auto.core.queue.processes import worker_pid_file_path
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.config import load_config
+from orca_auto.orca.engine import ENGINE_DEFINITION
 from orca_auto.orca.parser import parse_orca_output
 from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
-from orca_auto.orca.queue.worker import WORKER_PID_FILE, QueueWorker
+from orca_auto.orca.queue.worker import QueueWorker
 from orca_auto.orca.state import (
     load_report_json,
     load_state,
@@ -152,7 +153,10 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert completed.status == QueueStatus.COMPLETED
     assert counter_path.read_text(encoding="utf-8") == "1"
     assert list_slots(admission_root) == []
-    assert not worker_pid_file_path(allowed_root, WORKER_PID_FILE).exists()
+    assert not worker_pid_file_path(
+        allowed_root,
+        ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
+    ).exists()
 
     execution_snapshot = completed.metadata["execution_snapshot"]
     bound_input = Path(execution_snapshot["selected_inp"])
@@ -415,7 +419,10 @@ def test_orca_queue_worker_rejects_return_code_zero_without_normal_marker(
     assert failed.status == QueueStatus.FAILED
     assert counter_path.read_text(encoding="utf-8") == "1"
     assert list_slots(admission_root) == []
-    assert not worker_pid_file_path(allowed_root, WORKER_PID_FILE).exists()
+    assert not worker_pid_file_path(
+        allowed_root,
+        ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
+    ).exists()
 
     execution_snapshot = failed.metadata["execution_snapshot"]
     bound_input = Path(execution_snapshot["selected_inp"])
@@ -501,7 +508,10 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     assert completed.queue_id == queued.queue_id
     assert completed.status == QueueStatus.COMPLETED
     assert list_slots(admission_root) == []
-    assert not worker_pid_file_path(allowed_root, WORKER_PID_FILE).exists()
+    assert not worker_pid_file_path(
+        allowed_root,
+        ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
+    ).exists()
 
     execution_snapshot = completed.metadata["execution_snapshot"]
     assert execution_snapshot["dependency_paths"] == [str(geometry.resolve())]

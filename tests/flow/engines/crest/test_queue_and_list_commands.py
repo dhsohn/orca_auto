@@ -111,7 +111,6 @@ def test_process_one_returns_idle_and_releases_reserved_slot(
     released: list[tuple[str, str | None]] = []
 
     monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda cfg_obj: "slot-1")
-    monkeypatch.setattr(queue_cmd, "dequeue_next", lambda root, **_kw: None)
     monkeypatch.setattr(
         queue_cmd, "release_slot", lambda root, token: released.append((root, token))
     )

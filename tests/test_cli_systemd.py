@@ -88,6 +88,7 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
         ("systemctl", "daemon-reload"),
         ("systemctl", "enable", "orca_auto-runtime@alice.target"),
         ("systemctl", "disable", "--now", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
         ("systemctl", "restart", "orca_auto-runtime@alice.target"),
     )
 
@@ -103,6 +104,10 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
     assert "UMask=0077" in worker_content
     assert "KillMode=control-group" in worker_content
     assert "TimeoutStopSec=30" in worker_content
+    assert "StartLimitIntervalSec=300" in worker_content
+    assert "StartLimitBurst=3" in worker_content
+    assert "Restart=on-failure" in worker_content
+    assert "RestartSec=30" in worker_content
     assert (
         "ReadWritePaths="
         f"{repo.resolve(strict=False) / 'admission'} "
@@ -370,6 +375,7 @@ def test_build_systemd_install_plan_worker_only_stops_runtime_then_restarts_work
         ("systemctl", "daemon-reload"),
         ("systemctl", "enable", "orca_auto-queue-worker@alice.service"),
         ("systemctl", "disable", "--now", "orca_auto-runtime@alice.target"),
+        ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
         ("systemctl", "restart", "orca_auto-queue-worker@alice.service"),
     )
 
@@ -428,6 +434,7 @@ def test_cmd_systemd_install_writes_units_and_runs_commands(
         ("systemctl", "daemon-reload"),
         ("systemctl", "enable", "orca_auto-runtime@alice.target"),
         ("systemctl", "disable", "--now", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
         ("systemctl", "restart", "orca_auto-runtime@alice.target"),
     ]
     assert (unit_dir / "orca_auto-queue-worker@.service").exists()
@@ -468,6 +475,7 @@ def test_cmd_systemd_install_dry_run_does_not_write_units(
     assert "enable: orca_auto-queue-worker@alice.service" in captured
     assert "systemctl disable --now orca_auto-runtime@alice.target" in captured
     assert "systemctl enable orca_auto-queue-worker@alice.service" in captured
+    assert "systemctl reset-failed orca_auto-queue-worker@alice.service" in captured
     assert "systemctl restart orca_auto-queue-worker@alice.service" in captured
 
 
@@ -873,7 +881,10 @@ def test_cmd_service_restart_prefers_runtime_when_enabled(capsys: Any) -> None:
     )
 
     assert result == 0
-    assert commands[-1] == ("systemctl", "restart", "orca_auto-runtime@alice.target")
+    assert commands[-2:] == [
+        ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "restart", "orca_auto-runtime@alice.target"),
+    ]
     assert "Restarting orca_auto-runtime@alice.target" in capsys.readouterr().out
 
 
@@ -906,7 +917,10 @@ def test_cmd_service_restart_falls_back_to_worker_when_runtime_is_disabled() -> 
     )
 
     assert result == 0
-    assert commands[-1] == ("systemctl", "restart", "orca_auto-queue-worker@alice.service")
+    assert commands[-2:] == [
+        ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "restart", "orca_auto-queue-worker@alice.service"),
+    ]
 
 
 def test_cmd_service_restart_uses_sudo_for_non_root_user() -> None:
@@ -931,7 +945,37 @@ def test_cmd_service_restart_uses_sudo_for_non_root_user() -> None:
     )
 
     assert result == 0
-    assert commands == [("sudo", "systemctl", "restart", "orca_auto-runtime@alice.target")]
+    assert commands == [
+        ("sudo", "systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+        ("sudo", "systemctl", "restart", "orca_auto-runtime@alice.target"),
+    ]
+
+
+def test_cmd_service_restart_stops_when_reset_failed_cannot_clear_start_limit() -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def _fake_run(argv: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
+        del check
+        commands.append(tuple(argv))
+        return subprocess.CompletedProcess(argv, 5)
+
+    result = cli_systemd_status.cmd_service_restart(
+        Namespace(target_user=None),
+        deps=cli_systemd_status.ServiceCliDeps(
+            default_service_user=lambda: "alice",
+            restart_unit_for_user=lambda target_user, run: (
+                f"orca_auto-runtime@{target_user}.target"
+            ),
+            is_root=lambda: True,
+            run=_fake_run,
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+        ),
+    )
+
+    assert result == 5
+    assert commands == [
+        ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+    ]
 
 
 def _single_unit_plan(

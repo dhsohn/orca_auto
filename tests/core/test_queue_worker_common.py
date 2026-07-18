@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -794,6 +795,39 @@ def test_hooked_pidfile_child_worker_runs_engine_hooks(
     assert snapshot_reconcile_calls == [(tmp_path,)]
 
 
+def test_child_process_worker_throttles_idle_state_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [0.0]
+    reconcile_calls: list[float] = []
+    sleep_calls: list[float] = []
+
+    class _Worker(worker_process_helpers.ChildProcessQueueWorker):
+        def _reconcile_worker_state(self) -> None:
+            reconcile_calls.append(now[0])
+
+    monkeypatch.setattr(worker_process_helpers.time, "monotonic", lambda: now[0])
+    worker = _Worker(
+        _cfg(),
+        config_path="/tmp/config.yaml",
+        deps=SimpleNamespace(
+            poll_interval_seconds=5.0,
+            time=SimpleNamespace(sleep=lambda seconds: sleep_calls.append(seconds)),
+            admission_root=lambda _cfg: "/tmp/admission",
+        ),
+    )
+
+    worker._before_run()
+    worker._sleep()
+    now[0] = 59.0
+    worker._sleep()
+    now[0] = 60.0
+    worker._sleep()
+
+    assert reconcile_calls == [0.0, 60.0]
+    assert sleep_calls == [5.0, 5.0, 5.0]
+
+
 def test_shutdown_all_reaps_finished_job_before_requeuing(tmp_path: Path) -> None:
     # A child that finished during the final poll interval must be reaped through
     # the normal completion path at shutdown, not force-terminated and requeued
@@ -1161,6 +1195,25 @@ def test_queue_worker_loop_survives_finalize_error_and_logs(
 
 def test_terminate_process_group_handles_finished_process() -> None:
     assert worker_common.terminate_process_group(SimpleNamespace(poll=lambda: 0))
+
+
+def test_terminate_process_group_rejects_invalid_active_process_group_id() -> None:
+    proc = MagicMock()
+    proc.pid = MagicMock(name="invalid_pid")
+    proc.poll.return_value = None
+    killpg, killpg_calls = recording_killpg()
+
+    assert not worker_common.terminate_process_group(
+        proc,
+        killpg_fn=killpg,
+        deps=process_helpers.ProcessGroupTerminationDeps(
+            process_group_exists=lambda _pgid: True,
+        ),
+    )
+
+    assert killpg_calls == []
+    proc.terminate.assert_not_called()
+    proc.kill.assert_not_called()
 
 
 def test_terminate_process_group_does_not_signal_reused_reaped_pid() -> None:

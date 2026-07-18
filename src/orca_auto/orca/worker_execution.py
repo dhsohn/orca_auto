@@ -13,35 +13,36 @@ from typing import Any
 from orca_auto.core.admission import release_slot
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_APP_NAME
 from orca_auto.core.engine_process import require_confined_regular_file
+from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.engines.worker_child import (
     WORKER_CHILD_MODULE,
     build_worker_child_command_for_engine,
 )
-from orca_auto.core.queue.child.execution import find_queue_entry_by_id
+from orca_auto.core.queue.child.execution import (
+    find_queue_entry_by_id,
+    install_shutdown_request_handlers,
+)
 from orca_auto.core.queue.engine import execution as _engine_execution
+from orca_auto.core.queue.engine.child import (
+    WorkerChildRunSpec,
+    run_engine_worker_child_job,
+)
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_STATE_CREATING,
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
     SNAPSHOT_INTENT_TOKEN_KEY,
     transition_snapshot_intent,
 )
-from orca_auto.core.queue.internal_engine import (
-    InternalEngineSpec,
-    entry_matches_engine_identity,
-    entry_status_is_running,
-)
+from orca_auto.core.queue.lifecycle import entry_status_is_running
 from orca_auto.core.queue.worker import (
     install_shutdown_signal_handlers,
     resolve_admission_root,
 )
-from orca_auto.core.queue.worker.execution_dependencies import run_worker_child_entrypoint
 from orca_auto.core.utils.persistence import timestamped_token
 
 from .attempt.reporting import build_final_result
-from .commands.run_inp import _cmd_run_inp_execute
-from .commands.run_inp_execution import existing_completed_out, recover_crashed_state
-from .commands.run_inp_submission import _mark_orca_snapshot_owned
 from .config import load_config
+from .execution import execute_orca_run, existing_completed_out, recover_crashed_state
 from .execution_binding import (
     build_orca_execution_snapshot,
     cleanup_unowned_orca_execution_snapshot,
@@ -65,6 +66,7 @@ from .resource_directives import prepare_submission_resource_request
 from .runtime.run_lock import acquire_run_lock
 from .state import finalize_state, load_state
 from .statuses import AnalyzerStatus
+from .submission import mark_orca_snapshot_owned
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +75,6 @@ RECOVERY_REBIND_COUNT_METADATA_KEY = "recovery_rebind_count"
 
 BackgroundRunJobProcess = subprocess.Popen
 WORKER_JOB_MODULE = WORKER_CHILD_MODULE
-_ENGINE_SPEC = InternalEngineSpec(
-    engine="orca",
-    worker_job_module=WORKER_CHILD_MODULE,
-    include_admission_root=False,
-)
 
 
 class WorkerShutdownRequested(RuntimeError):
@@ -118,15 +115,13 @@ def _orca_worker_outcome_exit_code(outcome: OrcaWorkerExecutionOutcome) -> int:
 build_worker_child_command = build_worker_child_command_for_engine("orca")
 
 
-_worker_child = _ENGINE_SPEC.worker_child_module_facade(
-    WorkerShutdownRequested,
+_WORKER_CHILD_RUN_SPEC = WorkerChildRunSpec(
+    shutdown_exception_type=WorkerShutdownRequested,
     entry_ready_fn=lambda entry: (
         entry_status_is_running(entry) and entry_matches_engine_identity(entry, "orca")
     ),
     outcome_exit_code_fn=_orca_worker_outcome_exit_code,
-    build_worker_child_command=build_worker_child_command,
 )
-_WORKER_CHILD = _worker_child.worker_child
 
 
 def _canonical_admission_app_name(value: str | None) -> str | None:
@@ -242,7 +237,7 @@ def _run_orca_job_for_entry(
     cfg: Any,
     context: OrcaWorkerExecutionContext,
     _queue_root: Path,
-    _options: _engine_execution.InternalWorkerOptions,
+    _options: _engine_execution.EngineWorkerOptions,
 ) -> int:
     execution_provenance = orca_execution_provenance(context.execution_snapshot)
 
@@ -480,7 +475,7 @@ def _maybe_rebind_recovery_generation(
     except BaseException:
         cleanup_unowned_orca_execution_snapshot(reaction_dir, new_snapshot)
         raise
-    marker_warning = _mark_orca_snapshot_owned(queue_root, intent_token)
+    marker_warning = mark_orca_snapshot_owned(queue_root, intent_token)
     updated = _queue_entry_by_id(queue_root, str(entry.queue_id))
     updated_metadata = getattr(updated, "metadata", None)
     updated_snapshot = (
@@ -519,8 +514,8 @@ def _worker_execution_spec(
     *,
     worker_config_path: str,
     admission_token: str | None,
-) -> _engine_execution.InternalEngineWorkerExecutionSpec:
-    return _engine_execution.build_internal_engine_worker_execution_spec(
+) -> _engine_execution.EngineWorkerExecutionSpec:
+    return _engine_execution.build_engine_worker_execution_spec(
         build_context=lambda cfg_obj, entry_obj: _build_execution_context(
             cfg_obj,
             entry_obj,
@@ -556,7 +551,7 @@ def process_dequeued_entry(
     del dependencies, prepare_running_job, register_running_job
     if queue_root is None:
         raise ValueError("queue_root is required for ORCA worker execution")
-    return _engine_execution.run_internal_engine_worker_entry_with_spec_factory_options(
+    return _engine_execution.run_engine_worker_entry_with_spec_factory_options(
         cfg,
         entry,
         queue_root=queue_root,
@@ -585,27 +580,32 @@ def run_worker_child_job(
     admission_token: str | None = None,
     await_parent_admission_handoff_fn: Callable[[Any, str], bool] | None = None,
 ) -> int:
-    return run_worker_child_entrypoint(
-        _worker_child,
-        config_path=config_path,
-        queue_root=queue_root,
-        queue_id=queue_id,
-        admission_token=admission_token,
-        load_config_fn=load_config,
-        find_queue_entry_fn=_recovering_queue_entry_by_id(config_path),
-        admission_root_fn=resolve_admission_root,
-        release_slot_fn=release_slot,
-        install_shutdown_signal_handlers_fn=install_shutdown_signal_handlers,
-        process_dequeued_entry_fn=process_dequeued_entry,
-        dependencies_fn=lambda: None,
-        requeue_running_entry_fn=requeue_running_entry,
-        mark_recovery_pending_context_fn=_mark_recovery_pending_context,
-        process_dequeued_entry_kwargs={
+    worker_child_kwargs: dict[str, Any] = {
+        "spec": _WORKER_CHILD_RUN_SPEC,
+        "config_path": config_path,
+        "queue_root": queue_root,
+        "queue_id": queue_id,
+        "admission_token": admission_token,
+        "load_config_fn": load_config,
+        "find_queue_entry_fn": _recovering_queue_entry_by_id(config_path),
+        "admission_root_fn": resolve_admission_root,
+        "release_slot_fn": release_slot,
+        "install_signal_handlers_fn": lambda controller: install_shutdown_request_handlers(
+            controller,
+            install_signal_handlers_fn=install_shutdown_signal_handlers,
+        ),
+        "process_dequeued_entry_fn": process_dequeued_entry,
+        "dependencies_fn": lambda: None,
+        "requeue_running_entry_fn": requeue_running_entry,
+        "mark_recovery_pending_context_fn": _mark_recovery_pending_context,
+        "process_dequeued_entry_kwargs": {
             "worker_config_path": config_path,
             "admission_token": admission_token,
         },
-        await_parent_admission_handoff_fn=await_parent_admission_handoff_fn,
-    )
+    }
+    if await_parent_admission_handoff_fn is not None:
+        worker_child_kwargs["await_parent_admission_handoff_fn"] = await_parent_admission_handoff_fn
+    return run_engine_worker_child_job(**worker_child_kwargs)
 
 
 def execute_run_job(
@@ -621,7 +621,7 @@ def execute_run_job(
     execution_provenance: dict[str, Any] | None = None,
     runner_cls: type[OrcaRunner] = OrcaRunner,
 ) -> int:
-    return _cmd_run_inp_execute(
+    return execute_orca_run(
         Namespace(
             config=config_path,
             reaction_dir=reaction_dir,
