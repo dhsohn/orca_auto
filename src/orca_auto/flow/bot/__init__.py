@@ -4,11 +4,9 @@ from .action_registry import ActionRegistry, ActionStore
 from .application import (
     BotApplication,
     BotApplicationDeps,
-    dispatch_action,
-    dispatch_command,
-    dispatch_upload,
 )
 from .settings import BotSettings, settings_from_config
+from .upload_application import UploadApplication
 
 __all__ = [
     "ActionRegistry",
@@ -16,8 +14,6 @@ __all__ = [
     "BotApplication",
     "BotApplicationDeps",
     "BotSettings",
-    "dispatch_action",
-    "dispatch_command",
-    "dispatch_upload",
+    "UploadApplication",
     "settings_from_config",
 ]

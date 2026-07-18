@@ -29,6 +29,17 @@ import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 직접 import합니다. 테스트는 알 수 없는 외부 서비스 override를 거부해야 하며, 내부
 동작을 격리할 때는 그 동작을 소유한 모듈을 patch해야 합니다.
 
+봇 배선과 workflow SI에는 더 좁은 강제 방향이 있습니다.
+
+- `flow.bot.runner`와 provider adapter가 composition root입니다. command
+  `BotApplication`은 `core.ingest`를 직접 소유하지 않고, `UploadApplication`은 command
+  routing, provider, runner를 import하면 안 됩니다. 두 application은 provider-neutral
+  `interaction_delivery` helper를 사용할 수 있습니다.
+- `flow.workflow.si.__init__`이 지원되는 SI facade입니다. 내부 의존성의 허용 순서는
+  publication → collection → rendering → science → evidence → models입니다. 중간 layer를
+  건너뛸 수 있지만 역방향 import는 import-linter가 실패시킵니다. publication만 SI 파일을
+  쓰며 rendering은 text 생성만 담당합니다.
+
 ## 현재 패키지 레이아웃
 
 ```text
@@ -157,6 +168,9 @@ scenario는 public submission/worker 경로를 통과해야 하며 기대 종료
 - 최상위 별칭 패키지, 콘솔 스크립트 별칭, 대체 런타임 리더는 코드베이스에서 배제하세요.
 - `orca_auto.orca.commands`는 adapter 계층으로 유지하세요. 도메인 실행·제출·worker-child·
   queue 모듈은 이 패키지를 임포트하면 안 됩니다.
+- 봇 upload 영속성은 runner/provider composition 아래에 두고, SI evidence/science/rendering은
+  publication을 import하지 않게 유지하세요. 이 방향은 `pyproject.toml`이 강제하므로 전달용
+  module로 우회하지 마세요.
 
 ## 엔진 워커
 

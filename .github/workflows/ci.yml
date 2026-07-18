@@ -63,14 +63,4 @@ jobs:
       - name: Package smoke
         run: |
           python -m pip wheel . --no-deps -w /tmp/orca_auto-wheel-smoke
-          python - <<'PY'
-          from pathlib import Path
-          from zipfile import ZipFile
-
-          wheels = sorted(Path("/tmp/orca_auto-wheel-smoke").glob("orca_auto-*.whl"))
-          assert len(wheels) == 1, wheels
-          with ZipFile(wheels[0]) as wheel:
-              names = set(wheel.namelist())
-          assert "orca_auto/py.typed" in names
-          assert "orca_auto/core/py.typed" not in names
-          PY
+          python scripts/check_wheel_contents.py /tmp/orca_auto-wheel-smoke/orca_auto-*.whl

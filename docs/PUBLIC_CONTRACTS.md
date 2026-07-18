@@ -718,10 +718,10 @@ Stable behavior:
 - The selected Telegram/Discord bot is enabled only when its interactive config is complete;
   otherwise the install remains worker-only.
 - `service status` reports the runtime target, queue worker, and bot status.
-- `service restart` restarts the runtime target when enabled; otherwise it
-  restarts the queue worker.
-- A clean queue-worker supervisor exit remains stopped. Failure restarts use
-  bounded backoff at both the child-supervisor and systemd layers.
+- `service restart` clears the queue worker's start-limit failure state, then
+  restarts the runtime target when enabled; otherwise it restarts the queue worker.
+- A clean queue-worker supervisor exit remains stopped. The child supervisor
+  opens a bounded restart circuit, and systemd applies a bounded delayed restart.
 
 ## Non-Contracts
 

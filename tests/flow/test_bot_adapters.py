@@ -852,6 +852,10 @@ def test_discord_gateway_reserves_before_download_without_redispatching_confirma
     reserve_count = 0
 
     class Application:
+        @property
+        def uploads(self) -> Application:
+            return self
+
         def reserve_upload(self, **kwargs: object) -> object:
             nonlocal reserve_count
             events.append("reserve")
@@ -986,6 +990,8 @@ def test_discord_gateway_enforces_bot_user_and_channel_allowlists(
     component_type = object()
 
     class Application:
+        uploads = SimpleNamespace()
+
         def dispatch_command(self, incoming: IncomingCommand, *, messenger: object) -> None:
             del messenger
             commands.append(incoming)
@@ -1104,6 +1110,8 @@ def test_discord_reconnect_keeps_the_same_interaction_bridge(
     messengers: list[object] = []
 
     class Application:
+        uploads = SimpleNamespace()
+
         def dispatch_command(self, _incoming: IncomingCommand, *, messenger: object) -> None:
             messengers.append(messenger)
 
@@ -1195,8 +1203,9 @@ def test_runner_selects_configured_or_explicit_provider(
         return 11
 
     def run_discord(_application: BotApplication, adapter: object) -> int:
-        assert _application.upload_policy == config.discord.uploads
-        assert _application.upload_sessions is not None
+        assert _application.uploads is not None
+        assert _application.uploads.upload_policy == config.discord.uploads
+        assert _application.uploads.upload_sessions is not None
         calls.append(("discord", adapter))
         return 12
 

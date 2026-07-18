@@ -18,8 +18,6 @@ ActionKind = Literal[
     "cancel_dismiss",
     "list_refresh",
     "list_clear",
-    "run_confirm",
-    "run_dismiss",
 ]
 ResolutionStatus = Literal["ok", "unknown", "expired", "wrong_address", "wrong_actor"]
 

@@ -51,7 +51,8 @@ Create a release-prep issue and branch from `origin/main`, then verify:
 - [ ] Any behavior changes have tests and a clear migration note if needed.
 - [ ] `bash scripts/check.sh` passes.
 - [ ] `bash examples/fake_orca_smoke/run.sh` passes.
-- [ ] A wheel can be built and inspected for `orca_auto/py.typed`.
+- [ ] A wheel can be built with a Python-module inventory exactly matching
+      `src/orca_auto` and one root `orca_auto/py.typed` marker.
 - [ ] If ORCA runtime semantics changed, at least one manual real-ORCA
       acceptance check is recorded in the PR.
 - [ ] The PR body records Motivation, Changes, and Verification.
@@ -61,8 +62,15 @@ Suggested local commands:
 ```bash
 bash scripts/check.sh
 bash examples/fake_orca_smoke/run.sh
-python -m pip wheel . --no-deps -w /tmp/orca_auto-wheel-smoke
+wheel_dir="$(mktemp -d)"
+python -m pip wheel . --no-deps -w "$wheel_dir"
+python scripts/check_wheel_contents.py "$wheel_dir"/orca_auto-*.whl
 ```
+
+Run the wheel commands from a fresh checkout or worktree. Setuptools can reuse an
+ignored local `build/` directory; the content checker fails closed if that adds a
+deleted/stale module or omits a current source module. Do not tag a wheel until the
+inventory check passes from a clean source tree.
 
 ## Tagging
 

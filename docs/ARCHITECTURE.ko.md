@@ -381,6 +381,21 @@ YAML alias 32개, 파싱/확장 node 10,000개, 중첩 64단계로 제한하고 
 거부합니다. 중앙 geometry 상한은 로컬 작업 10,000원자, xTB/ORCA Hessian 생성 작업
 1,000원자, 원격 업로드 작업 200원자입니다.
 
+### Supporting Information 소유권
+
+`flow/workflow/si/`는 외부의 단일 `orca_auto.flow.workflow.si` API를 유지하면서 조립형
+SI 파이프라인을 책임별로 분리합니다. `evidence.py`가 내구성 워크플로우·스테이지 근거를
+읽고, `collection.py`가 이를 `science.py`의 선택·RMSD·interaction-energy·population
+규칙과 조합하며, `rendering.py`는 파일을 쓰지 않고 Markdown/CSV text만 생성합니다.
+`publication.py`는 유일한 workflow SI writer로 파일별 원자 교체, 감지한 쓰기 실패 뒤의
+artifact 정리, interaction CSV ownership marker를 소유합니다. advance 루프가 writer 호출 전
+publication을 checkpoint하고 multi-file 게시 중단 뒤의 내구성 재시도를 소유합니다. 별도의
+수치·artifact 원본을 만들지 않으므로
+`workflow_si.md`, `si_data.csv`, owned interaction CSV 계약은 그대로 유지됩니다.
+import-linter는 publication → collection → rendering → science → evidence → models의 안쪽
+방향을 허용하고(중간 layer 생략 가능) 역방향 import를 거부합니다. package `__init__`은
+외부로 향하는 단일 API facade로 유지됩니다.
+
 ### advance 루프
 
 `flow/orchestration/advance.py`는 오케스트레이션의 심장인
@@ -475,9 +490,15 @@ orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 �
 `flow/bot/application.py`는 provider-neutral `/list`, `/cancel`, `/help` 동작을
 소유합니다. Telegram polling과 Discord gateway adapter가 provider 이벤트를 경계에서
 변환합니다. 파괴적 액션은 raw queue ID 대신 provider·채널·사용자에 묶인 짧고
-만료되며 일회성인 opaque ID를 사용합니다.
+만료되며 일회성인 opaque ID를 사용합니다. `flow/bot/upload_application.py`는 Discord
+`!run`의 내구성 transaction을 별도로 소유합니다. CDN 다운로드 전 예약, archive 검증,
+확인, 원자 게시, downstream queue/workflow commit 조정, restart reconciliation이 이
+경계에 있으며 불확실한 commit은 재시도하거나 삭제하지 않고 보존합니다. 두 application은
+`flow/bot/interaction_delivery.py`의 provider-neutral delivery 동작만 공유합니다.
 워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST 및 반응 경로 xTB 자식
 페이즈는 각각 한 메시지로 요약합니다.
+import-linter는 upload 영속성을 runner/provider composition 아래에 유지하고 command
+application이 `core.ingest`를 직접 소유하지 못하게 합니다.
 
 `ActionStore` port는 일회성 해석과 originator/operator audience 정책을 정의합니다.
 현재 메모리 구현은 명령에 응답해 gateway가 만든 카드만 의도적으로 담당하며, 알림
@@ -570,7 +591,8 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 `.[dev]`를 설치한 뒤 `ruff check`, `ruff format --check`, `mypy`, `lint-imports`, 그리고 커버리지
 게이트가 걸린 pytest 스위트를 실행합니다. CI는 추가로 Gitleaks, ShellCheck,
 렌더링된 systemd 유닛 검증, Python 3.11/3.12/3.13 매트릭스, 휠 타입 메타데이터
-스모크 테스트를 실행합니다.
+스모크 테스트를 실행합니다. 휠 스모크는 패키징된 Python module 목록이 `src/orca_auto`와
+정확히 같고 root `py.typed` marker가 하나뿐인지도 확인합니다.
 
 테스트는 `tests/core/`, `tests/xtb_md/`, `tests/flow/`, `tests/flow/engines/`, `tests/integration/`,
 최상위 ORCA 회귀 테스트로 구성됩니다. 프로젝트는 내부 위임 테스트보다 동작을

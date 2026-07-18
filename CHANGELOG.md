@@ -8,6 +8,19 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Changed
+
+- Simplified runtime ownership by replacing workflow service locators and
+  engine forwarding facades with canonical orchestration, engine, queue, and
+  ORCA-domain owners. Bot command/upload handling and workflow SI collection,
+  science, rendering, and publication now have explicit module boundaries while
+  retaining their public CLI and artifact contracts.
+- Hardened unified worker supervision: workers start in separate sessions with
+  staggered initial launches, repeated exits open bounded supervisor and systemd
+  circuits, idle full-state reconciliation is throttled, and an explicit service
+  restart or install transition clears the worker start-limit state before
+  restarting it.
+
 ### Fixed
 
 - Post-merge review findings from the recent change series, batched:

@@ -564,6 +564,9 @@ def run_discord_bot(application: BotApplication, config: DiscordConfig) -> int:
             "messenger.discord.bot_token, allowed_user_ids, and at least one channel_ids "
             "entry are required"
         )
+    uploads = application.uploads
+    if uploads is None:
+        raise ValueError("Discord bot requires a configured upload application")
 
     import discord
 
@@ -599,7 +602,7 @@ def run_discord_bot(application: BotApplication, config: DiscordConfig) -> int:
     def _dispatch_upload(incoming: IncomingUpload) -> None:
         if messenger is None:
             return
-        application.dispatch_upload(incoming, messenger=messenger)
+        uploads.dispatch_upload(incoming, messenger=messenger)
 
     async def _submit(channel_id: str, callback: Any, incoming: Any) -> str:
         if not admission.acquire(channel_id):
@@ -619,7 +622,7 @@ def run_discord_bot(application: BotApplication, config: DiscordConfig) -> int:
             try:
                 await asyncio.get_running_loop().run_in_executor(
                     executor,
-                    application.sweep_upload_sessions,
+                    uploads.sweep_upload_sessions,
                 )
             except asyncio.CancelledError:
                 raise
@@ -653,7 +656,7 @@ def run_discord_bot(application: BotApplication, config: DiscordConfig) -> int:
         try:
             await asyncio.get_running_loop().run_in_executor(
                 executor,
-                application.abandon_upload,
+                uploads.abandon_upload,
                 upload_id,
                 reason,
             )
@@ -703,7 +706,7 @@ def run_discord_bot(application: BotApplication, config: DiscordConfig) -> int:
         try:
             address = ConversationAddress(PROVIDER, channel_id)
             reserve = functools.partial(
-                application.reserve_upload,
+                uploads.reserve_upload,
                 address=address,
                 actor=actor,
                 message_id=message_id,
@@ -757,7 +760,7 @@ def run_discord_bot(application: BotApplication, config: DiscordConfig) -> int:
                         )
                     session = await asyncio.get_running_loop().run_in_executor(
                         executor,
-                        application.finalize_upload,
+                        uploads.finalize_upload,
                         upload_id,
                     )
                 except asyncio.CancelledError:

@@ -12,6 +12,7 @@ from orca_auto.core.messaging import load_required_messenger_config_from_file
 
 from .application import BotApplication
 from .settings import settings_from_config
+from .upload_application import UploadApplication
 
 LOGGER = logging.getLogger(__name__)
 
@@ -30,9 +31,13 @@ def run_bot(*, config_path: str | None = None, provider: str | None = None) -> i
     if selected == "discord":
         from .providers.discord import run_discord_bot
 
-        application = BotApplication(
+        uploads = UploadApplication(
             settings,
             upload_policy=messenger_config.discord.uploads,
+        )
+        application = BotApplication(
+            settings,
+            uploads=uploads,
         )
         return run_discord_bot(application, messenger_config.discord)
     raise ValueError(f"unsupported messenger provider: {selected!r}")

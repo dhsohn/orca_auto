@@ -22,7 +22,7 @@ from orca_auto.core.messaging.interactive import (
     IncomingAction,
     IncomingUpload,
 )
-from orca_auto.flow.bot import BotApplication, settings_from_config
+from orca_auto.flow.bot import UploadApplication, settings_from_config
 
 ADDRESS = ConversationAddress(provider="discord", channel_id="100")
 ACTOR = Actor(user_id="42", label="operator")
@@ -99,19 +99,29 @@ def test_uploaded_orca_run_dir_enqueues_under_its_name(tmp_path: Path) -> None:
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("water_opt/water_opt.inp", _WATER_INP)
 
-    app = BotApplication(
+    app = UploadApplication(
         settings=settings_from_config(str(config)),
         upload_policy=UploadPolicy(enabled=True),
     )
 
-    staged = app.stage_upload_path("water_opt.zip")
-    staged.write_bytes(archive.read_bytes())
+    reservation = app.reserve_upload(
+        address=ADDRESS,
+        actor=ACTOR,
+        message_id="message:water_opt.zip",
+        attachment_ids=("attachment:water_opt.zip",),
+        expected_bytes=archive.stat().st_size,
+    )
+    reservation.session.archive_path.write_bytes(archive.read_bytes())
+    session = app.finalize_upload(reservation.session.upload_id)
     upload = IncomingUpload(
         address=ADDRESS,
         actor=ACTOR,
         filename="water_opt.zip",
-        size=staged.stat().st_size,
-        archive_path=str(staged),
+        size=session.actual_bytes or 0,
+        archive_path=str(session.archive_path),
+        message_id=session.message_id,
+        attachment_id="attachment:water_opt.zip",
+        upload_id=session.upload_id,
     )
 
     messenger = _Messenger()
@@ -149,7 +159,7 @@ def test_postcommit_notification_exception_returns_queue_receipt_and_preserves_d
     job_dir = runs / "postcommit"
     job_dir.mkdir()
     (job_dir / "postcommit.inp").write_text(_WATER_INP, encoding="utf-8")
-    app = BotApplication(
+    app = UploadApplication(
         settings=settings_from_config(str(config)),
         upload_policy=UploadPolicy(enabled=True),
     )
@@ -177,7 +187,7 @@ def test_existing_queue_entry_reconciles_as_committed_receipt(tmp_path: Path) ->
     job_dir = runs / "idempotent"
     job_dir.mkdir()
     (job_dir / "idempotent.inp").write_text(_WATER_INP, encoding="utf-8")
-    app = BotApplication(
+    app = UploadApplication(
         settings=settings_from_config(str(config)),
         upload_policy=UploadPolicy(enabled=True),
     )

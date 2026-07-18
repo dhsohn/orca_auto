@@ -251,6 +251,16 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceCliDeps | None
         emit_error(exc)
         return 1
 
+    worker_unit = _worker_unit_for_user(target_user)
+    print(f"Resetting worker failure state for {worker_unit}")
+    rc = _run_command(
+        ("systemctl", "reset-failed", worker_unit),
+        use_sudo=use_sudo,
+        run=run,
+    )
+    if rc != 0:
+        return rc
+
     print(f"Restarting {unit}")
     rc = _run_command(("systemctl", "restart", unit), use_sudo=use_sudo, run=run)
     if rc == 0:

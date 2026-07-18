@@ -28,6 +28,18 @@ stage, materialization, and lifecycle operations directly. Tests must reject
 unknown outer-service overrides and patch the owning module when isolating an
 internal operation.
 
+Bot wiring and workflow SI have narrower enforced directions:
+
+- `flow.bot.runner` and provider adapters are composition roots. The command
+  `BotApplication` does not directly own `core.ingest`, while
+  `UploadApplication` must not import command routing, providers, or the runner.
+  Both applications may use the provider-neutral `interaction_delivery` helper.
+- `flow.workflow.si.__init__` is the supported SI facade. Internally, dependencies
+  follow the allowed order publication → collection → rendering → science →
+  evidence → models. Layers may be skipped, but reverse imports fail
+  import-linter. Publication is the only file-writing SI owner; rendering stays
+  text-only.
+
 ## Current Package Layout
 
 ```text
@@ -161,6 +173,9 @@ implementation-coupled tests. Treat it as an audit report, not a failure gate.
   readers out of the codebase
 - Keep `orca_auto.orca.commands` as an adapter layer. Domain execution,
   submission, worker-child, and queue modules must not import it.
+- Keep bot upload persistence below runner/provider composition, and keep SI
+  evidence/science/rendering free of publication imports. These directions are
+  enforced in `pyproject.toml`; do not bypass them with a forwarding module.
 
 ## Engine Workers
 

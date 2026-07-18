@@ -41,7 +41,8 @@ Current intended semantics:
 - Background execution is managed by externally supervised queue workers
 - The ORCA worker starts queue children by queue identity
   (`--queue-root/--queue-id`), then the child resolves the current queue entry
-  and runs through the shared `InternalEngineWorkerAdapter` lifecycle
+  and runs through the shared `core.queue.engine.worker_execution.EngineWorkerAdapter`
+  lifecycle
 - ORCA state, retry, report, and notification behavior remain ORCA-domain
   behavior; parent queue finalization still records the terminal queue result
   after the child exits

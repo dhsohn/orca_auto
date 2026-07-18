@@ -401,6 +401,22 @@ nesting levels, and rejects cyclic/recursive graphs. Central geometry limits cap
 local work at 10,000 atoms, xTB/ORCA Hessian-producing work at 1,000, and
 remote-upload work at 200.
 
+### Supporting Information ownership
+
+`flow/workflow/si/` preserves one outward `orca_auto.flow.workflow.si` API while
+separating the assembled SI pipeline by responsibility. `evidence.py` reads durable
+workflow/stage evidence, `collection.py` composes it with the selection, RMSD,
+interaction-energy, and population rules in `science.py`, and `rendering.py` produces
+Markdown/CSV text without writing files. `publication.py` is the only workflow SI
+writer and owns per-file atomic replacement, cleanup after caught write failures, and
+interaction-CSV ownership markers. The advance loop checkpoints publication before
+calling the writer and owns durable retry after an interrupted multi-file publication.
+The modules do not introduce a second numerical or artifact source of
+truth; `workflow_si.md`, `si_data.csv`, and the owned interaction CSV retain their
+existing contracts. Import-linter permits the inward order publication → collection →
+rendering → science → evidence → models (layers may be skipped) and rejects reverse
+imports. The package `__init__` remains the single outward API facade.
+
 ### The advance loop
 
 `flow/orchestration/advance.py` exposes `advance_workflow(...)`, the heart of
@@ -499,11 +515,15 @@ Each `EngineDefinition` can register `job_started` / `job_finished` / `retry` ho
 behavior. Native Telegram polling and Discord gateway adapters translate provider
 events at the edge. Destructive actions use short, expiring, one-time opaque IDs bound
 to the requesting provider, channel, and actor instead of embedding raw queue IDs in
-button payloads. Discord `!run` additionally reserves a durable upload session before
-the CDN download. Its confirmation action, archive digest, atomic publication path,
-and downstream queue/workflow receipt survive gateway restarts; an indeterminate
-commit is preserved for reconciliation. Workflow alerts keep per-job ORCA messages but summarize
-internal CREST and reaction-path xTB child phases into one message each.
+button payloads. `flow/bot/upload_application.py` separately owns the durable Discord
+`!run` transaction: reservation before the CDN download, archive verification,
+confirmation, atomic publication, downstream queue/workflow commit coordination, and
+restart reconciliation. An indeterminate commit is preserved rather than retried or
+deleted. Both applications share only the provider-neutral delivery operations in
+`flow/bot/interaction_delivery.py`. Workflow alerts keep per-job ORCA messages but
+summarize internal CREST and reaction-path xTB child phases into one message each.
+Import-linter keeps upload persistence below the runner/provider composition and
+prevents the command application from directly taking ownership of `core.ingest`.
 
 The `ActionStore` port defines one-time resolution and originator/operator audience
 policies. Its current in-memory implementation serves list/cancel cards created by
@@ -603,7 +623,8 @@ place to add user commands.
 `.venv`, installs `.[dev]`, then runs `ruff check`, `ruff format --check`,
 `mypy`, `lint-imports`, and the coverage-gated pytest suite. CI additionally runs Gitleaks,
 ShellCheck, rendered systemd unit verification, a Python 3.11/3.12/3.13 matrix,
-and a wheel typed-metadata smoke test.
+and a wheel smoke that requires the packaged Python-module inventory to exactly match
+`src/orca_auto` with one root `py.typed` marker.
 
 Tests are organized as `tests/core/`, `tests/xtb_md/`, `tests/flow/`, `tests/flow/engines/`,
 `tests/integration/`, and top-level ORCA regression tests. The project prefers
