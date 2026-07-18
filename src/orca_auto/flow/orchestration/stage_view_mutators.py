@@ -18,7 +18,7 @@ class WorkflowTaskOrcaMutationMixin:
         contract: Any,
         normalize_text: Callable[[Any], str],
     ) -> None:
-        payload = self.payload(None)
+        payload = self.payload()
         fields = {
             "selected_inp": contract.selected_inp or normalize_text(payload.get("selected_inp")),
         }
@@ -90,7 +90,7 @@ class WorkflowStageOrcaMutationMixin:
         contract: Any,
         normalize_text: Callable[[Any], str],
     ) -> None:
-        metadata = self.metadata(None)
+        metadata = self.metadata()
         self.update_metadata(
             {
                 "queue_id": contract.queue_id or normalize_text(metadata.get("queue_id")),
@@ -116,7 +116,7 @@ class WorkflowStageOrcaMutationMixin:
         task_view: Any,
         normalize_text: Callable[[Any], str],
     ) -> None:
-        metadata = self.metadata(None)
+        metadata = self.metadata()
         if contract.state_status in {"running", "retrying"}:
             metadata["orca_current_attempt_number"] = max(0, contract.attempt_count)
         elif contract.attempts:
@@ -206,7 +206,7 @@ class WorkflowStageXtbMutationMixin:
         self.update_metadata(fields)
 
     def xtb_attempt_rows(self: Any) -> list[dict[str, Any]]:
-        metadata = self.metadata(None)
+        metadata = self.metadata()
         attempts = metadata.get("xtb_attempts")
         if isinstance(attempts, list):
             filtered = [item for item in attempts if isinstance(item, dict)]
@@ -268,7 +268,7 @@ class WorkflowStageXtbMutationMixin:
         )
 
     def xtb_current_attempt_number(self: Any) -> int:
-        metadata = self.metadata(None)
+        metadata = self.metadata()
         current = _safe_int(metadata.get("xtb_active_attempt_number"), default=-1)
         if current >= 0:
             return current
@@ -280,7 +280,7 @@ class WorkflowStageXtbMutationMixin:
     def set_reaction_handoff(self: Any, handoff: dict[str, str]) -> None:
         if not handoff.get("status"):
             return
-        metadata = self.metadata(None)
+        metadata = self.metadata()
         metadata["reaction_handoff_status"] = handoff["status"]
         for source_key, metadata_key in (
             ("reason", "reaction_handoff_reason"),

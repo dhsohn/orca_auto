@@ -7,12 +7,14 @@ from typing import Any, cast
 
 import pytest
 
-from orca_auto.flow.orchestration.deps import orchestration_deps
+from orca_auto.flow.orchestration.stage_runtime import crest as crest_runtime
+from orca_auto.flow.orchestration.stage_runtime import xtb_path_jobs
 from orca_auto.flow.orchestration.stage_runtime.crest import (
     ensure_crest_job_dir_impl,
     sync_crest_stage_impl,
 )
 from orca_auto.flow.orchestration.stage_runtime.xtb_path_jobs import ensure_xtb_job_dir_impl
+from tests.flow.orchestration_services import orchestration_services
 
 
 def test_ensure_crest_job_dir_copies_input_and_populates_manifest(tmp_path: Path) -> None:
@@ -60,6 +62,7 @@ def test_ensure_crest_job_dir_copies_input_and_populates_manifest(tmp_path: Path
 
 def test_ensure_xtb_job_dir_returns_existing_or_generated_job_dir(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     existing_stage = {
         "task": {
@@ -92,14 +95,13 @@ def test_ensure_xtb_job_dir_returns_existing_or_generated_job_dir(
         calls.append((workflow_id, attempt_number))
         return "/tmp/generated_xtb_job"
 
-    deps = orchestration_deps(overrides={"_write_xtb_path_job": fake_write_xtb_path_job})
+    monkeypatch.setattr(xtb_path_jobs, "write_xtb_path_job_impl", fake_write_xtb_path_job)
 
     assert (
         ensure_xtb_job_dir_impl(
             delegated_stage,
             xtb_allowed_root=tmp_path / "xtb_allowed",
             workflow_id="wf_generated",
-            deps=deps,
         )
         == "/tmp/generated_xtb_job"
     )
@@ -131,6 +133,7 @@ def test_sync_crest_stage_ignores_non_dict_task_and_non_crest_engine(tmp_path: P
 
 def test_sync_crest_stage_submits_and_materializes_retained_conformers(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     contract = SimpleNamespace(
         status="completed",
@@ -155,12 +158,11 @@ def test_sync_crest_stage_submits_and_materializes_retained_conformers(
         },
     }
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
-            "_load_config_root": lambda path, **kwargs: tmp_path / "crest_allowed",
-            "_ensure_crest_job_dir": lambda stage, **kwargs: str(
-                tmp_path / "crest_allowed" / "wf_01" / "job_01"
-            ),
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": tmp_path / "crest_allowed"
+            },
             "submit_crest_job_dir": lambda **kwargs: {
                 "status": "submitted",
                 "queue_id": "q_crest_01",
@@ -170,6 +172,11 @@ def test_sync_crest_stage_submits_and_materializes_retained_conformers(
             "load_crest_artifact_contract": lambda **kwargs: contract,
         }
     )
+    monkeypatch.setattr(
+        crest_runtime,
+        "ensure_crest_job_dir_impl",
+        lambda stage, **kwargs: str(tmp_path / "crest_allowed" / "wf_01" / "job_01"),
+    )
 
     sync_crest_stage_impl(
         stage,
@@ -177,7 +184,7 @@ def test_sync_crest_stage_submits_and_materializes_retained_conformers(
         submit_ready=True,
         workflow_id="wf_01",
         workspace_dir=tmp_path / "workspace" / "wf_01",
-        deps=deps,
+        services=deps,
     )
 
     task = cast(dict[str, Any], stage["task"])
@@ -253,9 +260,8 @@ def test_sync_crest_stage_retries_after_cancel_deferred_without_applying_old_con
             "enqueue_payload": {"priority": 8},
         },
     }
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
-            "_ensure_crest_job_dir": lambda *_args, **_kwargs: str(job_dir),
             "submit_crest_job_dir": lambda **_kwargs: next(submissions),
             "load_crest_artifact_contract": load_contract,
             "now_utc_iso": lambda: "2026-07-10T00:00:00+00:00",
@@ -268,7 +274,7 @@ def test_sync_crest_stage_retries_after_cancel_deferred_without_applying_old_con
         submit_ready=True,
         workflow_id="wf_restart",
         workspace_dir=tmp_path / "workspace",
-        deps=deps,
+        services=deps,
     )
 
     assert stage["status"] == "planned"
@@ -282,7 +288,7 @@ def test_sync_crest_stage_retries_after_cancel_deferred_without_applying_old_con
         submit_ready=True,
         workflow_id="wf_restart",
         workspace_dir=tmp_path / "workspace",
-        deps=deps,
+        services=deps,
     )
 
     assert contract_calls == 1
@@ -336,9 +342,11 @@ def test_sync_crest_stage_returns_cleanly_when_contract_lookup_is_missing(
         },
     }
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
-            "_load_config_root": lambda path, **kwargs: tmp_path / "crest_allowed",
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": tmp_path / "crest_allowed"
+            },
             "load_crest_artifact_contract": lambda **kwargs: (_ for _ in ()).throw(
                 FileNotFoundError("not materialized yet")
             ),
@@ -352,7 +360,7 @@ def test_sync_crest_stage_returns_cleanly_when_contract_lookup_is_missing(
         submit_ready=False,
         workflow_id="wf_03",
         workspace_dir=tmp_path / "workspace" / "wf_03",
-        deps=deps,
+        services=deps,
     )
 
     assert stage["status"] == "submitted"
@@ -383,9 +391,11 @@ def test_sync_crest_stage_propagates_corrupt_contract_lookup_errors(
         },
     }
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
-            "_load_config_root": lambda path, **kwargs: tmp_path / "crest_allowed",
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": tmp_path / "crest_allowed"
+            },
             "load_crest_artifact_contract": lambda **kwargs: (_ for _ in ()).throw(
                 RuntimeError("corrupt crest contract")
             ),
@@ -399,5 +409,5 @@ def test_sync_crest_stage_propagates_corrupt_contract_lookup_errors(
             submit_ready=False,
             workflow_id="wf_04",
             workspace_dir=tmp_path / "workspace" / "wf_04",
-            deps=deps,
+            services=deps,
         )

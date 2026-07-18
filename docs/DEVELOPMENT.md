@@ -22,6 +22,12 @@ reverse fails the build. Cross-layer engine wiring goes through the lazy
 string module registries (`core/engines/registry.py`,
 `core/queue/worker/admission.py`) instead of imports.
 
+Within workflow orchestration, inject only the outer persistence, engine,
+clock, and event boundaries through `OrchestrationServices`. Import internal
+stage, materialization, and lifecycle operations directly. Tests must reject
+unknown outer-service overrides and patch the owning module when isolating an
+internal operation.
+
 ## Current Package Layout
 
 ```text

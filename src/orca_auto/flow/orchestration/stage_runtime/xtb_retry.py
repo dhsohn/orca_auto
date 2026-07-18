@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
-from orca_auto.flow.orchestration.stage_runtime.shared import _orchestration_context
+from orca_auto.core.utils import mapping_or_empty, safe_int
+from orca_auto.flow.contracts.workflow import workflow_task_payload_dict
 from orca_auto.flow.orchestration.stage_views import WorkflowStageView
 
 
@@ -12,9 +12,7 @@ def xtb_attempt_record_impl(
     stage: dict[str, Any],
     *,
     attempt_number: int,
-    deps: OrchestrationDeps | None = None,
 ) -> dict[str, Any]:
-    del deps
     return WorkflowStageView(stage).xtb_attempt_record(attempt_number)
 
 
@@ -68,28 +66,22 @@ def xtb_retry_recipe_impl(attempt_number: int) -> dict[str, Any]:
     }
 
 
-def xtb_path_retry_limit_impl(
-    stage: dict[str, Any], *, deps: OrchestrationDeps | None = None
-) -> int:
-    o = _orchestration_context(deps)
+def xtb_path_retry_limit_impl(stage: dict[str, Any]) -> int:
     task = stage.get("task")
     if not isinstance(task, dict):
         return 2
-    payload = o.stages.support._task_payload_dict(task)
-    metadata = o.stages.support._coerce_mapping(task.get("metadata"))
+    payload = workflow_task_payload_dict(task)
+    metadata = mapping_or_empty(task.get("metadata"))
     return max(
         0,
-        o.stages.support._safe_int(
+        safe_int(
             payload.get("max_handoff_retries", metadata.get("max_handoff_retries", 2)),
             default=2,
         ),
     )
 
 
-def xtb_current_attempt_number_impl(
-    stage: dict[str, Any], *, deps: OrchestrationDeps | None = None
-) -> int:
-    del deps
+def xtb_current_attempt_number_impl(stage: dict[str, Any]) -> int:
     return WorkflowStageView(stage).xtb_current_attempt_number()
 
 

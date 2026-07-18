@@ -379,6 +379,22 @@ forward as dependencies allow. Stage runtime details live under
 `flow/orchestration/stage_runtime/` (per-engine submission, inputs, retry, sync,
 handoff).
 
+### Orchestration dependency boundaries
+
+The advance loop passes one `OrchestrationServices` value containing four coarse
+outer boundaries: workflow persistence, engine gateways, the clock, and events.
+Internal stage views, materializers, lifecycle rules, and stage-runtime helpers
+use direct imports instead of being routed through a generic service locator.
+This keeps the execution order visible in `advance_phases.py` and prevents one
+dependency object from recreating the whole orchestration graph.
+
+Tests replace only those four outer boundaries through the strict helper in
+`tests/flow/orchestration_services.py`. A test that needs to isolate an internal
+operation patches the owning module explicitly. Unknown service names fail
+immediately, so a stale fake cannot silently stop exercising production code.
+Import-linter also prevents stage views from depending back on orchestration
+wiring.
+
 ### Example: reaction TS search
 
 `reaction_ts_search` orders selected reactant×product CREST pairs

@@ -24,6 +24,11 @@ import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 문자열 모듈 레지스트리(`core/engines/registry.py`,
 `core/queue/worker/admission.py`)를 사용합니다.
 
+워크플로우 오케스트레이션 내부에서는 `OrchestrationServices`를 통해 영속화, 엔진,
+시계, 이벤트의 외부 경계만 주입합니다. 내부 stage, materialization, lifecycle 동작은
+직접 import합니다. 테스트는 알 수 없는 외부 서비스 override를 거부해야 하며, 내부
+동작을 격리할 때는 그 동작을 소유한 모듈을 patch해야 합니다.
+
 ## 현재 패키지 레이아웃
 
 ```text

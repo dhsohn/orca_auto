@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
-from orca_auto.core.utils import parse_iso_utc
+from orca_auto.core.utils import normalize_text, parse_iso_utc
 from orca_auto.flow.engine_options import WorkflowEngineOptions
 from orca_auto.flow.orchestration.advance_phases import (
     AdvanceContext as _AdvanceContext,
@@ -16,9 +16,10 @@ from orca_auto.flow.orchestration.advance_phases import (
     _finalize_advanced_workflow,
     _run_advance_phase,
 )
-from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
-from orca_auto.flow.orchestration.deps import (
-    orchestration_context as _orchestration_context,
+from orca_auto.flow.orchestration.lifecycle import workflow_sync_only_impl
+from orca_auto.flow.orchestration.services import (
+    OrchestrationServices,
+    resolve_orchestration_services,
 )
 from orca_auto.flow.orchestration.workflow_cancellation import (
     cancel_materialized_workflow,
@@ -47,7 +48,7 @@ def _validate_or_quarantine_workflow_identity(
     *,
     workspace_dir: Path,
     workflow_root_path: Path,
-    deps: OrchestrationDeps,
+    services: OrchestrationServices,
 ) -> str:
     metadata = _workflow_metadata(payload)
     workflow_error = metadata.get("workflow_error")
@@ -86,10 +87,10 @@ def _validate_or_quarantine_workflow_identity(
             "scope": "workflow_identity_validation",
             "reason": reason,
             "message": reason,
-            "detected_at": deps.persistence.now_utc_iso(),
+            "detected_at": services.clock.now_utc_iso(),
         }
-        deps.persistence.write_workflow_payload(workspace_dir, payload)
-        deps.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
+        services.persistence.write_workflow_payload(workspace_dir, payload)
+        services.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
         write_workflow_html_report(workspace_dir, payload)
         # Persist the quarantine before any child sync, then continue in
         # sync-only mode. This blocks new submissions while allowing the
@@ -107,9 +108,9 @@ def advance_workflow(
     orca_repo_root: str | None = None,
     engine_options: WorkflowEngineOptions | None = None,
     submit_ready: bool = True,
-    deps: OrchestrationDeps | None = None,
+    services: OrchestrationServices | None = None,
 ) -> dict[str, Any]:
-    o = _orchestration_context(deps)
+    resolved = resolve_orchestration_services(services)
     workflow_root_path = Path(workflow_root).expanduser().resolve()
     config = engine_options or WorkflowEngineOptions.from_values(
         crest_config=crest_config,
@@ -117,25 +118,25 @@ def advance_workflow(
         orca_config=orca_config,
         orca_repo_root=orca_repo_root,
     )
-    workspace_dir = o.persistence.resolve_workflow_workspace(
+    workspace_dir = resolved.persistence.resolve_workflow_workspace(
         target=target,
         workflow_root=workflow_root_path,
     )
-    with o.persistence.acquire_workflow_lock(workspace_dir):
-        payload = o.persistence.load_workflow_payload(workspace_dir)
+    with resolved.persistence.acquire_workflow_lock(workspace_dir):
+        payload = resolved.persistence.load_workflow_payload(workspace_dir)
         workflow_id = _validate_or_quarantine_workflow_identity(
             payload,
             workspace_dir=workspace_dir,
             workflow_root_path=workflow_root_path,
-            deps=o,
+            services=resolved,
         )
-        sync_only = o.stages.workflow._workflow_sync_only(payload)
+        sync_only = workflow_sync_only_impl(payload, normalize_text_fn=normalize_text)
         context = _AdvanceContext(
-            deps=o,
+            services=resolved,
             workflow_root_path=workflow_root_path,
             workspace_dir=workspace_dir,
             workflow_id=workflow_id,
-            template_name=o.stages.support._normalize_text(payload.get("template_name")),
+            template_name=normalize_text(payload.get("template_name")),
             sync_only=sync_only,
             submit_ready=bool(submit_ready) and not sync_only,
         )
@@ -150,15 +151,19 @@ def advance_workflow(
             previous_attempts = max(0, int(metadata.get("si_publish_attempts", 0)))
         except (TypeError, ValueError):
             previous_attempts = 0
-        now = parse_iso_utc(o.persistence.now_utc_iso())
+        now = parse_iso_utc(resolved.clock.now_utc_iso())
         retry_at = parse_iso_utc(metadata.get("si_publish_next_retry_at"))
         if was_blocked or (
             was_pending and retry_at is not None and now is not None and retry_at > now
         ):
             # Engine reconciliation may continue, but a blocked/not-yet-due SI
             # publication is not retried by ordinary worker cycles.
-            o.persistence.write_workflow_payload(workspace_dir, payload)
-            o.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
+            resolved.persistence.write_workflow_payload(workspace_dir, payload)
+            resolved.persistence.sync_workflow_registry(
+                workflow_root_path,
+                workspace_dir,
+                payload,
+            )
             write_workflow_html_report(workspace_dir, payload)
             return payload
         attempts = previous_attempts + 1
@@ -166,20 +171,24 @@ def advance_workflow(
         metadata["si_publish_pending"] = True
         metadata["si_publish_generation"] = generation
         metadata.pop("si_publish_next_retry_at", None)
-        o.persistence.write_workflow_payload(workspace_dir, payload)
-        o.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
+        resolved.persistence.write_workflow_payload(workspace_dir, payload)
+        resolved.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
         write_workflow_html_report(workspace_dir, payload)
         # Count the SI writer attempt in authoritative workflow.json only after
         # registry discoverability is checkpointed. Registry lag/failure must
         # not consume the writer's crash budget.
         metadata["si_publish_attempts"] = attempts
-        o.persistence.write_workflow_payload(workspace_dir, payload)
+        resolved.persistence.write_workflow_payload(workspace_dir, payload)
         if attempts > _SI_PUBLISH_MAX_ATTEMPTS:
             metadata["si_publish_pending"] = False
             metadata["si_publish_blocked"] = True
             metadata["si_publish_error"] = "SI publication attempt budget exhausted"
-            o.persistence.write_workflow_payload(workspace_dir, payload)
-            o.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
+            resolved.persistence.write_workflow_payload(workspace_dir, payload)
+            resolved.persistence.sync_workflow_registry(
+                workflow_root_path,
+                workspace_dir,
+                payload,
+            )
             write_workflow_html_report(workspace_dir, payload)
             return payload
         try:
@@ -212,8 +221,8 @@ def advance_workflow(
         # Commit publication reconciliation independently from engine state. If
         # this write is ambiguous, the first checkpoint still says pending and a
         # terminal worker cycle retries the idempotent publication.
-        o.persistence.write_workflow_payload(workspace_dir, payload)
-        o.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
+        resolved.persistence.write_workflow_payload(workspace_dir, payload)
+        resolved.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
         write_workflow_html_report(workspace_dir, payload)
         return payload
 

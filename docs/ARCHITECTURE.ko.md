@@ -364,6 +364,20 @@ YAML alias 32개, 파싱/확장 node 10,000개, 중첩 64단계로 제한하고 
 `flow/orchestration/stage_runtime/`(엔진별 제출, 입력, 재시도, 동기화, 핸드오프)에
 있습니다.
 
+### 오케스트레이션 의존성 경계
+
+advance 루프는 네 개의 굵은 외부 경계 — 워크플로우 영속화, 엔진 게이트웨이, 시계,
+이벤트 — 를 담은 하나의 `OrchestrationServices` 값을 전달합니다. 내부 stage view,
+materializer, lifecycle 규칙, stage-runtime helper는 범용 service locator를 거치지 않고
+직접 import합니다. 따라서 실행 순서는 `advance_phases.py`에 드러나고, 의존성 객체 하나가
+오케스트레이션 그래프 전체를 다시 만드는 일을 방지합니다.
+
+테스트는 `tests/flow/orchestration_services.py`의 엄격한 helper를 통해 이 네 외부 경계만
+교체합니다. 내부 동작을 격리해야 하는 테스트는 그 동작을 소유한 모듈을 명시적으로
+patch합니다. 알 수 없는 서비스 이름은 즉시 실패하므로 오래된 fake가 실제 운영 코드를
+실행하지 않은 채 조용히 통과할 수 없습니다. import-linter는 stage view가 오케스트레이션
+wiring에 역으로 의존하는 것도 막습니다.
+
 ### 예시: 반응 TS 탐색
 
 `reaction_ts_search`는 선택된 반응물×생성물 CREST 쌍을 결정론적으로 정렬하고 설정된

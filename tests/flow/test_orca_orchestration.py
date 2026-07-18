@@ -3,8 +3,8 @@ from __future__ import annotations
 from unittest.mock import Mock
 
 from orca_auto.flow.contracts import OrcaArtifactContract
-from orca_auto.flow.orchestration.deps import orchestration_deps
 from orca_auto.flow.orchestration.stage_runtime.orca import sync_orca_stage_impl
+from tests.flow.orchestration_services import orchestration_services
 
 
 def test_sync_orca_stage_applies_contract_state_metadata_and_artifacts() -> None:
@@ -68,13 +68,13 @@ def test_sync_orca_stage_applies_contract_state_metadata_and_artifacts() -> None
     )
 
     mock_load = Mock(return_value=contract)
-    deps = orchestration_deps(overrides={"load_orca_artifact_contract": mock_load})
+    deps = orchestration_services(overrides={"load_orca_artifact_contract": mock_load})
     sync_orca_stage_impl(
         stage,
         orca_config=None,
         orca_repo_root=None,
         submit_ready=False,
-        deps=deps,
+        services=deps,
     )
 
     assert isinstance(stage["task"], dict)
@@ -146,7 +146,7 @@ def test_sync_orca_stage_leaves_submission_conflict_planned() -> None:
             "parsed_stdout": {},
         }
 
-    deps = orchestration_deps(
+    deps = orchestration_services(
         overrides={
             "submit_reaction_dir": fake_submit_reaction_dir,
             "load_orca_artifact_contract": Mock(return_value=None),
@@ -158,7 +158,7 @@ def test_sync_orca_stage_leaves_submission_conflict_planned() -> None:
         orca_config="/tmp/orca.yaml",
         orca_repo_root=None,
         submit_ready=True,
-        deps=deps,
+        services=deps,
     )
 
     assert isinstance(stage["task"], dict)

@@ -36,7 +36,6 @@ from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.flow._orca_stage_materialization import build_materialized_orca_stage
 from orca_auto.flow.contracts import WorkflowStageInput
 from orca_auto.flow.orchestration.charge_spin import strict_int
-from orca_auto.flow.orchestration.dep_types import OrchestrationDeps
 from orca_auto.flow.orchestration.support import required_stage_budget
 from orca_auto.flow.orchestration.template_builders import scan_geom_block
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
@@ -570,9 +569,7 @@ def append_scan_optts_stages_impl(
     payload: dict[str, Any],
     *,
     workspace_dir: Path,
-    deps: OrchestrationDeps | None = None,
 ) -> bool:
-    del deps
     forward_scans = _scan_stages(payload, direction="forward")
     if not forward_scans:
         return False
