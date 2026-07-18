@@ -5,8 +5,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.admission import (
+    get_slot,
+    recover_orphaned_engine_slots,
+    recover_slot_engine_process,
+)
 from orca_auto.core.commands.queue import QueueRuntime, run_pidfile_queue_worker_command
 
+from .. import lifecycle as _queue_lifecycle
 from ..dependencies import ChildQueueWorkerDeps
 from ..worker import (
     PidFileChildProcessQueueWorkerHooks,
@@ -216,6 +222,74 @@ class EngineQueueRuntime:
             start_background_process_fn=start_background_process_fn,
             build_worker_child_command_fn=build_worker_child_command_fn,
             include_admission_root=include_admission_root,
+        )
+
+    def finalize_child_exit(
+        self,
+        cfg: Any,
+        job: Any,
+        *,
+        rc: int,
+        shutdown_requested: bool,
+        admission_root: str | Path | None = None,
+        find_queue_entry_fn: Callable[[Any, str], Any | None],
+        mark_cancelled_fn: Callable[..., Any],
+        requeue_running_entry_fn: Callable[..., Any],
+        mark_failed_fn: Callable[..., Any],
+        mark_recovery_pending_fn: Callable[..., Any],
+        release_admission_slot_fn: Callable[[str], Any],
+    ) -> None:
+        """Finalize a managed engine child without releasing a live engine process."""
+        if admission_root is not None:
+            slot = get_slot(admission_root, job.admission_token)
+            if slot is not None:
+                recover_slot_engine_process(admission_root, job.admission_token)
+        _queue_lifecycle.finalize_child_exit_with_policy(
+            cfg,
+            job,
+            policy=_queue_lifecycle.ChildExitPolicy(
+                shutdown_requested=shutdown_requested,
+                fail_unexpected_exit=True,
+                use_entry_fallback=False,
+                recovery_entry_fn=lambda _current, current_job: current_job.entry,
+            ),
+            find_queue_entry_fn=find_queue_entry_fn,
+            mark_cancelled_fn=mark_cancelled_fn,
+            requeue_running_entry_fn=requeue_running_entry_fn,
+            mark_recovery_pending_fn=mark_recovery_pending_fn,
+            release_admission_slot_fn=release_admission_slot_fn,
+            mark_failed_fn=mark_failed_fn,
+            rc=rc,
+        )
+
+    def reconcile_orphaned_running(
+        self,
+        cfg: Any,
+        *,
+        admission_root: Any,
+        list_slots_fn: Callable[[Any], list[Any]],
+        reconcile_stale_slots_fn: Callable[[Any], Any],
+        reconcile_orphaned_child_queue_entries_fn: Callable[..., Any],
+        mark_cancelled_fn: Callable[..., Any],
+        requeue_running_entry_fn: Callable[..., Any],
+        mark_recovery_pending_fn: Callable[..., Any],
+    ) -> None:
+        """Recover admission records and reconcile this engine's orphaned rows."""
+        recover_orphaned_engine_slots(admission_root, strict=False)
+        _queue_lifecycle.reconcile_orphaned_running_with_policy(
+            cfg,
+            policy=_queue_lifecycle.OrphanedRunningPolicy(),
+            admission_root=admission_root,
+            queue_roots_fn=self.queue_roots,
+            list_queue_fn=lambda root: [
+                entry for entry in self.list_queue(root) if self.accepts_entry(entry)
+            ],
+            list_slots_fn=list_slots_fn,
+            reconcile_stale_slots_fn=reconcile_stale_slots_fn,
+            reconcile_orphaned_child_queue_entries_fn=(reconcile_orphaned_child_queue_entries_fn),
+            mark_cancelled_fn=mark_cancelled_fn,
+            requeue_running_entry_fn=requeue_running_entry_fn,
+            mark_recovery_pending_fn=mark_recovery_pending_fn,
         )
 
     def run_pidfile_worker_command(

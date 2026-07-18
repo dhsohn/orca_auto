@@ -11,10 +11,10 @@ import pytest
 from orca_auto.core.config import CommonResourceConfig, CommonRuntimeConfig
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 from orca_auto.core.engine_runner import engine_runtime_identity
+from orca_auto.core.engines import own_engine_accept_entry
 from orca_auto.core.indexing import get_job_location, list_job_locations
 from orca_auto.core.queue import dequeue_next, enqueue, list_queue, mark_cancelled, request_cancel
 from orca_auto.core.queue.generation import queue_entry_generation_token
-from orca_auto.core.queue.internal_engine import own_engine_accept_entry
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,

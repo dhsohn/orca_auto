@@ -19,6 +19,7 @@ from orca_auto.core.config.engines import (
 from orca_auto.core.config.engines import (
     load_crest_config as load_config,
 )
+from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.engines.queue_worker import (
     EngineQueueWorker,
     build_engine_queue_worker,
@@ -31,28 +32,18 @@ from orca_auto.core.notifications.engines import (
     notify_crest_job_started as notify_job_started,
 )
 from orca_auto.core.queue import (
-    dequeue_next,
+    execution as _queue_execution,
+)
+from orca_auto.core.queue import (
     get_cancel_requested,
-    list_queue,
     mark_cancelled,
     mark_completed,
     mark_failed,
     requeue_running_entry,
 )
-from orca_auto.core.queue import (
-    execution as _queue_execution,
-)
 from orca_auto.core.queue.engine import artifacts as _engine_artifacts
+from orca_auto.core.queue.engine.admission import mark_worker_start_error
 from orca_auto.core.queue.generation import queue_entry_generation_token
-from orca_auto.core.queue.internal_engine import (
-    InternalEngineQueueModule,
-    InternalEngineQueueWorkerDeps,
-    InternalEngineQueueWorkerFacadeBindings,
-    InternalEngineSpec,
-    build_late_bound_internal_engine_queue_worker_deps,
-    entry_matches_engine_identity,
-    own_engine_accept_entry,
-)
 from orca_auto.core.queue.worker import (
     BackgroundRunningJob as _RunningJob,
 )
@@ -71,7 +62,6 @@ from orca_auto.flow.engines.crest.execution import (
     build_worker_child_command,
 )
 
-from . import queue_admission as _queue_admission
 from .engine import ENGINE_DEFINITION
 from .job_locations import (
     list_job_records_for_cfg,
@@ -97,74 +87,34 @@ from .submission import _record_queued as _record_queued_submission
 # Keep queue_runtime.subprocess available for tests/callers that patch Popen.
 _SUBPROCESS_MODULE = subprocess
 POLL_INTERVAL_SECONDS = 5
-WORKER_PID_FILE = "crest_queue_worker.pid"
 WORKER_SHUTDOWN_GRACE_SECONDS = 10.0
 TERMINAL_REPAIR_SCAN_INTERVAL_SECONDS = 300.0
-_ENGINE_SPEC = InternalEngineSpec(
-    engine="crest",
-    worker_job_module="orca_auto.flow.engines.crest.execution",
-    worker_pid_file_name=WORKER_PID_FILE,
-)
+_ENGINE_RUNTIME = ENGINE_DEFINITION.build_queue_runtime()
 
 
 def _queue_worker_deps() -> Any:
-    return _queue_module.queue_worker_deps()
-
-
-def _runtime_facade_deps() -> InternalEngineQueueWorkerDeps:
-    return build_late_bound_internal_engine_queue_worker_deps(
-        InternalEngineQueueWorkerFacadeBindings(
-            release_slot=lambda: release_slot,
-            reserve_slot=lambda: reserve_slot,
-            start_background_process=lambda: start_background_process,
-            build_worker_child_command=lambda: build_worker_child_command,
-            config_path_for_worker=lambda: config_path_for_worker,
-            default_config_path=lambda: default_config_path,
-            activate_reserved_slot=lambda: activate_reserved_slot,
-            terminate_process=lambda: _terminate_process,
-            mark_failed=lambda: mark_failed,
-            handle_worker_start_error=lambda: _handle_worker_start_error,
-            finalize_completed_job=lambda: _finalize_completed_job,
-            finalize_child_exit=lambda: _finalize_child_exit,
-            reconcile_worker_state=lambda: _reconcile_worker_state,
-            list_queue=lambda: list_queue,
-            list_slots=lambda: list_slots,
-            reconcile_stale_slots=lambda: reconcile_stale_slots,
-            reconcile_orphaned_child_queue_entries=lambda: reconcile_orphaned_child_queue_entries,
-            mark_cancelled=lambda: mark_cancelled,
-            requeue_running_entry=lambda: requeue_running_entry,
-            mark_recovery_pending=lambda: _mark_recovery_pending_entry,
-            try_reserve_admission_slot=lambda: _try_reserve_admission_slot,
-            start_background_job_process=lambda: _start_background_job_process,
-            find_queue_entry=lambda: _find_queue_entry,
-            load_config=lambda: load_config,
-            read_worker_pid=lambda: read_worker_pid,
-            worker_class=lambda: QueueWorker,
-        ),
+    return _ENGINE_RUNTIME.child_worker_deps(
+        poll_interval_seconds=POLL_INTERVAL_SECONDS,
         time_module=time,
+        release_slot_fn=lambda root, token: release_slot(root, token),
+        start_background_job_process_fn=lambda **kwargs: _start_background_job_process(**kwargs),
+        try_reserve_admission_slot_fn=lambda cfg: _try_reserve_admission_slot(cfg),
     )
 
 
-_queue_module = InternalEngineQueueModule.create_from_definition(
-    definition=ENGINE_DEFINITION,
-    spec=_ENGINE_SPEC,
-    poll_interval_seconds=POLL_INTERVAL_SECONDS,
-    shutdown_grace_seconds=WORKER_SHUTDOWN_GRACE_SECONDS,
-    deps=_runtime_facade_deps(),
-    list_queue=lambda root: list_queue(root),
-    dequeue_next=lambda root: dequeue_next(root, accept_entry_fn=own_engine_accept_entry("crest")),
-)
-_engine_runtime = _queue_module.runtime
-
-queue_roots = _queue_module.queue_roots
-queue_entries_with_roots = _queue_module.queue_entries_with_roots
-_find_queue_entry = _queue_module.queue_entry_by_id
-dequeue_next_entry = _queue_module.dequeue_next_entry
-_admission_root_for_cfg = _queue_module.admission_root
+queue_roots = _ENGINE_RUNTIME.queue_roots
+queue_entries_with_roots = _ENGINE_RUNTIME.queue_entries_with_roots
+_find_queue_entry = _ENGINE_RUNTIME.queue_entry_by_id
+dequeue_next_entry = _ENGINE_RUNTIME.dequeue_next_entry
+_admission_root_for_cfg = _ENGINE_RUNTIME.admission_root
 
 
 def _try_reserve_admission_slot(cfg: Any) -> str | None:
-    return _queue_module.try_reserve_admission_slot(cfg)
+    return _ENGINE_RUNTIME.reserve_admission_slot(
+        cfg,
+        engine="crest",
+        reserve_slot_fn=reserve_slot,
+    )
 
 
 def _worker_execution_callbacks() -> CrestQueueRuntimeWorkerExecutionCallbacks:
@@ -194,7 +144,7 @@ def _worker_dependencies() -> Any:
     )
 
 
-read_worker_pid = _queue_module.read_worker_pid
+read_worker_pid = _ENGINE_RUNTIME.read_worker_pid
 
 
 def _start_background_job_process(
@@ -205,21 +155,33 @@ def _start_background_job_process(
     admission_root: str | Path,
     admission_token: str,
 ) -> Any:
-    return _queue_module.start_background_job_process(
+    return _ENGINE_RUNTIME.start_child_process(
         config_path=config_path,
         queue_root=queue_root,
         entry=entry,
         admission_root=admission_root,
         admission_token=admission_token,
+        start_background_process_fn=start_background_process,
+        build_worker_child_command_fn=build_worker_child_command,
+        include_admission_root=False,
     )
 
 
 def _config_path_for_worker(args: Any) -> str:
-    return _queue_module.config_path_for_worker(args)
+    return config_path_for_worker(args, default_config_path_fn=default_config_path)
 
 
 def _reconcile_orphaned_running(worker: Any) -> None:
-    _queue_module.reconcile_orphaned_running(worker)
+    _ENGINE_RUNTIME.reconcile_orphaned_running(
+        worker.cfg,
+        admission_root=worker.admission_root,
+        list_slots_fn=list_slots,
+        reconcile_stale_slots_fn=reconcile_stale_slots,
+        reconcile_orphaned_child_queue_entries_fn=reconcile_orphaned_child_queue_entries,
+        mark_cancelled_fn=mark_cancelled,
+        requeue_running_entry_fn=requeue_running_entry,
+        mark_recovery_pending_fn=_mark_recovery_pending_entry,
+    )
 
 
 def _artifact_value(
@@ -689,7 +651,7 @@ def _handle_worker_start_error(
     admission_token: str,
     exc: OSError,
 ) -> None:
-    _queue_admission.mark_worker_start_error(
+    mark_worker_start_error(
         queue_root=queue_root,
         entry=entry,
         admission_token=admission_token,
@@ -705,11 +667,34 @@ def _finalize_completed_job(worker: Any, _queue_id: str, job: Any, rc: int) -> N
 
 def _finalize_child_exit(worker: Any, job: _RunningJob, *, rc: int) -> None:
     _adopt_terminal_artifacts(worker.cfg, job.queue_root, job.entry)
-    _queue_module.finalize_child_exit(worker, job, rc=rc)
+    _ENGINE_RUNTIME.finalize_child_exit(
+        worker.cfg,
+        job,
+        rc=rc,
+        shutdown_requested=worker._shutdown_requested,
+        admission_root=getattr(worker, "admission_root", None),
+        find_queue_entry_fn=_find_queue_entry,
+        mark_cancelled_fn=mark_cancelled,
+        requeue_running_entry_fn=requeue_running_entry,
+        mark_failed_fn=mark_failed,
+        mark_recovery_pending_fn=_mark_recovery_pending_entry,
+        release_admission_slot_fn=worker._release_admission_slot,
+    )
 
 
 def _queue_worker_hooks() -> Any:
-    return _queue_module.queue_worker_hooks()
+    return _ENGINE_RUNTIME.child_worker_hooks(
+        engine="crest",
+        handle_worker_start_error_fn=_handle_worker_start_error,
+        finalize_completed_job_fn=_finalize_completed_job,
+        finalize_child_exit_fn=_finalize_child_exit,
+        reconcile_worker_state_fn=_reconcile_worker_state,
+        activate_reserved_slot_fn=lambda *args, **kwargs: activate_reserved_slot(*args, **kwargs),
+        terminate_process_fn=lambda process: _terminate_process(process),
+        mark_failed_fn=lambda *args, **kwargs: mark_failed(*args, **kwargs),
+        shutdown_grace_seconds=WORKER_SHUTDOWN_GRACE_SECONDS,
+        sleep_fn=lambda seconds: time.sleep(seconds),
+    )
 
 
 def QueueWorker(
@@ -726,7 +711,7 @@ def QueueWorker(
         max_concurrent=max_concurrent,
         deps=_queue_worker_deps(),
         hooks=_queue_worker_hooks(),
-        worker_pid_file_name=WORKER_PID_FILE,
+        worker_pid_file_name=ENGINE_DEFINITION.worker_pid_file_name,
         admission_root=_admission_root_for_cfg(cfg),
         after_init=_after_crest_worker_init,
         finalize_child_exit=_finalize_child_exit,
@@ -737,10 +722,12 @@ def QueueWorker(
 
 
 def cmd_queue_worker(args: Any) -> int:
-    return _queue_module.run_pidfile_worker_command(
+    return _ENGINE_RUNTIME.run_pidfile_worker_command(
         args,
         config_path_fn=_config_path_for_worker,
-        config_path_keyword=False,
+        load_config_fn=load_config,
+        read_worker_pid_fn=read_worker_pid,
+        worker_factory=QueueWorker,
     )
 
 
