@@ -163,6 +163,11 @@ xTB-MD, xTB, CREST, ORCA는 모두 공통 엔진 런타임을 통해 실행됩�
 `python -m orca_auto.core.engines.worker_child --engine <orca|xtb_md|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`을
 사용합니다.
 
+엔진 로컬 런타임 facade를 추가하지 말고 `EngineDefinition.build_queue_runtime()`에서
+큐 런타임을 만드세요. 단독 xTB-MD는
+`orca_auto.core.queue.internal_engine`을 임포트할 수 없으며 import-linter가 완료된
+cutover를 강제합니다. 남은 엔진은 각각 독립 이전한 뒤 임시 공유 패키지를 제거합니다.
+
 단독 xTB-MD는 공용 `run-dir`와 queue/activity 표면만 노출합니다. 단일 시도,
 no-retry/no-resume 계약은 `orca_auto.xtb_md`에 두고, 직접 실행 CLI를 만들거나 그
 패키지에서 ORCA/workflow 패키지를 임포트하지 마세요.

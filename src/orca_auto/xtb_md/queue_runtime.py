@@ -20,6 +20,7 @@ from orca_auto.core.config.engines import (
     default_shared_config_path as default_config_path,
 )
 from orca_auto.core.config.engines import load_xtb_md_config as load_config
+from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.engines.queue_worker import (
     EngineQueueWorker,
     build_engine_queue_worker,
@@ -40,14 +41,7 @@ from orca_auto.core.queue.enqueue_publication import (
     repair_enqueue_publication,
 )
 from orca_auto.core.queue.generation import queue_entries_same_generation
-from orca_auto.core.queue.internal_engine import (
-    InternalEngineQueueModule,
-    InternalEngineQueueWorkerDeps,
-    InternalEngineSpec,
-    entry_matches_engine_identity,
-)
 from orca_auto.core.queue.worker import (
-    config_path_for_worker,
     resolve_admission_root,
     start_background_process,
     terminate_process_group,
@@ -63,12 +57,7 @@ logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 5
 WORKER_SHUTDOWN_GRACE_SECONDS = 15.0
-WORKER_PID_FILE = "xtb_md_queue_worker.pid"
-_ENGINE_SPEC = InternalEngineSpec(
-    engine="xtb_md",
-    worker_job_module="orca_auto.xtb_md.execution",
-    worker_pid_file_name=WORKER_PID_FILE,
-)
+_ENGINE_RUNTIME = ENGINE_DEFINITION.build_queue_runtime()
 
 
 def _find_entry(queue_root: Path, queue_id: str) -> Any | None:
@@ -313,10 +302,6 @@ def _publication_repair_gate(worker: Any) -> tuple[str, Any | None] | None:
     return None
 
 
-def _forbidden_requeue(*_args: Any, **_kwargs: Any) -> None:
-    raise RuntimeError("xTB-MD retry/requeue is not supported")
-
-
 def _activate_slot(
     admission_root: str | Path,
     admission_token: str,
@@ -325,44 +310,62 @@ def _activate_slot(
     return activate_reserved_slot(admission_root, admission_token, **metadata)
 
 
-def _deps() -> InternalEngineQueueWorkerDeps:
-    return InternalEngineQueueWorkerDeps(
-        time_module=time,
-        release_slot=release_slot,
-        reserve_slot=reserve_slot,
-        start_background_process=start_background_process,
-        build_worker_child_command=build_worker_child_command,
-        config_path_for_worker=config_path_for_worker,
-        default_config_path=default_config_path,
-        activate_reserved_slot=_activate_slot,
-        terminate_process=terminate_process_group,
-        mark_failed=lambda root, queue_id, **kwargs: mark_failed(root, queue_id, **kwargs),
-        handle_worker_start_error=_handle_worker_start_error,
-        finalize_completed_job=_finalize_completed_job,
-        finalize_child_exit=_finalize_child_exit,
-        reconcile_worker_state=_reconcile_worker_state,
-        list_queue=list_queue,
-        list_slots=list_slots,
-        reconcile_stale_slots=reconcile_stale_slots,
-        mark_cancelled=lambda root, queue_id, **kwargs: mark_cancelled(root, queue_id, **kwargs),
-        requeue_running_entry=_forbidden_requeue,
-        find_queue_entry=_find_entry,
-        load_config=load_config,
+def _try_reserve_admission_slot(cfg: Any) -> str | None:
+    return _ENGINE_RUNTIME.reserve_admission_slot(
+        cfg,
+        engine=ENGINE_DEFINITION.engine,
+        reserve_slot_fn=reserve_slot,
     )
 
 
-_queue_module = InternalEngineQueueModule.create_from_definition(
-    definition=ENGINE_DEFINITION,
-    spec=_ENGINE_SPEC,
-    poll_interval_seconds=POLL_INTERVAL_SECONDS,
-    shutdown_grace_seconds=WORKER_SHUTDOWN_GRACE_SECONDS,
-    deps=_deps(),
-    runtime_roots_for_cfg=runtime_roots_for_cfg,
-)
+def _start_background_job_process(
+    *,
+    config_path: str,
+    queue_root: Path,
+    entry: Any,
+    admission_root: str | Path,
+    admission_token: str,
+) -> Any:
+    return _ENGINE_RUNTIME.start_child_process(
+        config_path=config_path,
+        queue_root=queue_root,
+        entry=entry,
+        admission_root=admission_root,
+        admission_token=admission_token,
+        start_background_process_fn=start_background_process,
+        build_worker_child_command_fn=build_worker_child_command,
+        include_admission_root=False,
+    )
 
-queue_roots = _queue_module.queue_roots
-queue_entries_with_roots = _queue_module.queue_entries_with_roots
-dequeue_next_entry = _queue_module.dequeue_next_entry
+
+def _queue_worker_deps() -> Any:
+    return _ENGINE_RUNTIME.child_worker_deps(
+        poll_interval_seconds=POLL_INTERVAL_SECONDS,
+        time_module=time,
+        release_slot_fn=release_slot,
+        start_background_job_process_fn=_start_background_job_process,
+        try_reserve_admission_slot_fn=_try_reserve_admission_slot,
+    )
+
+
+def _queue_worker_hooks() -> Any:
+    return _ENGINE_RUNTIME.child_worker_hooks(
+        engine=ENGINE_DEFINITION.engine,
+        handle_worker_start_error_fn=_handle_worker_start_error,
+        finalize_completed_job_fn=_finalize_completed_job,
+        finalize_child_exit_fn=_finalize_child_exit,
+        reconcile_worker_state_fn=_reconcile_worker_state,
+        activate_reserved_slot_fn=_activate_slot,
+        terminate_process_fn=terminate_process_group,
+        mark_failed_fn=lambda root, queue_id, **kwargs: mark_failed(root, queue_id, **kwargs),
+        shutdown_grace_seconds=WORKER_SHUTDOWN_GRACE_SECONDS,
+        sleep_fn=time.sleep,
+    )
+
+
+queue_roots = _ENGINE_RUNTIME.queue_roots
+queue_entries_with_roots = _ENGINE_RUNTIME.queue_entries_with_roots
+dequeue_next_entry = _ENGINE_RUNTIME.dequeue_next_entry
 
 
 def QueueWorker(
@@ -375,11 +378,11 @@ def QueueWorker(
         cfg,
         config_path=config_path,
         default_config_path=default_config_path,
-        engine="xtb_md",
+        engine=ENGINE_DEFINITION.engine,
         max_concurrent=max_concurrent,
-        deps=_queue_module.queue_worker_deps(),
-        hooks=_queue_module.queue_worker_hooks(),
-        worker_pid_file_name=WORKER_PID_FILE,
+        deps=_queue_worker_deps(),
+        hooks=_queue_worker_hooks(),
+        worker_pid_file_name=_ENGINE_RUNTIME.worker_pid_file_name,
         admission_root=resolve_admission_root(cfg),
         finalize_child_exit=_finalize_child_exit,
         reconcile_orphaned_running=_reconcile_worker_state,
@@ -390,11 +393,11 @@ def QueueWorker(
 
 
 def cmd_queue_worker(args: Any) -> int:
-    return _queue_module.run_pidfile_worker_command(
+    return _ENGINE_RUNTIME.run_pidfile_worker_command(
         args,
         config_path_fn=lambda parsed: str(parsed.config),
         load_config_fn=load_config,
-        read_worker_pid_fn=_queue_module.read_worker_pid,
+        read_worker_pid_fn=_ENGINE_RUNTIME.read_worker_pid,
         worker_factory=lambda cfg, config_path, **kwargs: QueueWorker(
             cfg,
             config_path,

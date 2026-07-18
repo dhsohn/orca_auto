@@ -186,6 +186,12 @@ src/orca_auto/
 - `notification_hooks` — started / finished / retry 콜백
 - `context_builder`, `runner_callbacks` — 실행을 위한 DI 이음새
 
+`EngineDefinition.build_queue_runtime()`은 이 선언을 `EngineQueueRuntime`으로
+연결하는 canonical 경계입니다. 엔진의 큐 함수, PID 파일 이름, 정확한 identity
+predicate, 큐 항목 조회를 한 곳에서 설치합니다. 단독 xTB-MD는 이 런타임을 직접
+사용하며 기존 `core.queue.internal_engine`의 module/facade/resolver 스택을 거치지
+않습니다. 그 패키지는 아직 독립 이전을 마치지 않은 엔진에만 남아 있습니다.
+
 각 엔진 패키지는 `ENGINE_DEFINITION` 상수를 노출합니다:
 
 | 엔진   | 모듈                                    |
@@ -216,6 +222,10 @@ python -m orca_auto.core.engines.worker_child \
 자식이 종료된 후 최종 큐 결과를 확정합니다. ORCA는 더 풍부한 도메인 동작(상태
 머신, 재시도, 리포트)을 `orca_auto.orca` 내부에 유지하지만, 그 주위의
 *라이프사이클 골격*은 공유됩니다.
+
+단독 xTB-MD의 `xtb_md/queue_runtime.py`는 `ENGINE_DEFINITION`이 만든 런타임에서
+워커 의존성과 라이프사이클 훅을 직접 조립합니다. publication-repair gate와 엄격한
+단일 시도 종료 정책은 계속 엔진 소유 동작으로 남습니다.
 
 ---
 

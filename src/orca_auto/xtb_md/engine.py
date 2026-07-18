@@ -9,6 +9,7 @@ from orca_auto.core.engines import (
     build_lazy_worker_child_runner,
     build_queue_engine_definition,
     build_queue_entry_by_id,
+    own_engine_accept_entry,
 )
 from orca_auto.core.queue import (
     QUEUE_RECORD_SYNC_COMPLETE,
@@ -17,7 +18,6 @@ from orca_auto.core.queue import (
     list_queue,
     queue_record_sync_state,
 )
-from orca_auto.core.queue.internal_engine import own_engine_accept_entry
 
 from .records import build_job_artifact, persist_job_artifact
 

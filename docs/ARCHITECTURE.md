@@ -187,6 +187,14 @@ bundles everything the shared runtime needs for an engine:
 - `notification_hooks` — started / finished / retry callbacks
 - `context_builder`, `runner_callbacks` — DI seams for execution
 
+`EngineDefinition.build_queue_runtime()` is the canonical bridge from that
+declaration to `EngineQueueRuntime`: it installs the engine's queue functions,
+PID-file name, exact identity predicate, and queue-entry lookup in one place.
+Standalone xTB-MD uses this runtime directly. It does not route through the
+older `core.queue.internal_engine` module/facade/resolver stack; that package
+remains only for engines that have not yet completed their independent
+migration.
+
 Each engine package exposes an `ENGINE_DEFINITION` constant:
 
 | Engine | Module                                  |
@@ -217,6 +225,11 @@ The parent worker (`EngineQueueWorker`) reserves an admission slot, spawns this
 child, and finalizes the terminal queue result after the child exits. ORCA keeps
 its richer domain behavior (state machine, retry, reports) inside
 `orca_auto.orca`, but the *lifecycle scaffolding* around it is shared.
+
+For standalone xTB-MD, `xtb_md/queue_runtime.py` assembles worker dependencies
+and lifecycle hooks directly from the runtime built by `ENGINE_DEFINITION`.
+Its publication-repair gate and strict single-attempt terminal policy remain
+engine-owned behavior.
 
 ---
 

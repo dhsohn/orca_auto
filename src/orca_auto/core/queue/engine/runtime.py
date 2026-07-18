@@ -39,6 +39,7 @@ class EngineQueueRuntime:
     dequeue_next_across_roots: Callable[..., tuple[Path, Any] | None] = dequeue_next_across_roots
     dequeue_entry_if_pending: Callable[..., Any | None] | None = None
     accept_entry_fn: Callable[[Any], bool] | None = None
+    queue_entry_by_id_fn: Callable[[str | Path, str], Any | None] | None = None
 
     def _queue_runtime(self) -> QueueRuntime:
         return QueueRuntime(
@@ -61,14 +62,20 @@ class EngineQueueRuntime:
         return self._queue_runtime().dequeue_next_entry(cfg)
 
     def queue_entry_by_id(self, queue_root: Path | str, queue_id: str) -> Any | None:
-        entry = _queue_entry_by_id(
-            queue_root,
-            queue_id,
-            list_queue_fn=self.list_queue,
-        )
-        if entry is not None and self.accept_entry_fn is not None:
-            return entry if self.accept_entry_fn(entry) else None
+        if self.queue_entry_by_id_fn is not None:
+            entry = self.queue_entry_by_id_fn(queue_root, queue_id)
+        else:
+            entry = _queue_entry_by_id(
+                queue_root,
+                queue_id,
+                list_queue_fn=self.list_queue,
+            )
+        if entry is not None and not self.accepts_entry(entry):
+            return None
         return entry
+
+    def accepts_entry(self, entry: Any) -> bool:
+        return bool(self.accept_entry_fn is None or self.accept_entry_fn(entry))
 
     def admission_root(self, cfg: Any) -> str:
         return resolve_admission_root(cfg)

@@ -37,6 +37,7 @@ from orca_auto.core.queue.store import mutate_entries
 from orca_auto.flow import activity
 from orca_auto.xtb_md import execution, queue_runtime
 from orca_auto.xtb_md import submission as xtb_md_submission
+from orca_auto.xtb_md.engine import ENGINE_DEFINITION
 from orca_auto.xtb_md.job_locations import list_job_records_for_cfg
 from orca_auto.xtb_md.runner import run_xtb_md_attempt
 from orca_auto.xtb_md.submission import APP_NAME, submit_job_dir
@@ -967,7 +968,10 @@ def test_fake_xtb_md_nvt_nve_smoke(
     assert completed.metadata["retry_supported"] is False
     assert completed.metadata["resume_supported"] is False
     assert list_slots(case.admission_root) == []
-    assert not worker_pid_file_path(case.runs_root, queue_runtime.WORKER_PID_FILE).exists()
+    assert not worker_pid_file_path(
+        case.runs_root,
+        ENGINE_DEFINITION.worker_pid_file_name,
+    ).exists()
 
     execution_dir = Path(completed.metadata["execution_dir"])
     assert execution_dir.parent == (case.job_dir / ".orca_auto_xtb_md_executions").resolve()

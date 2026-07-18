@@ -187,6 +187,12 @@ forbidden_modules = [
     "orca_auto.flow.orchestration.services",
 ]
 
+[[tool.importlinter.contracts]]
+name = "Standalone xtb_md uses the canonical engine runtime"
+type = "forbidden"
+source_modules = ["orca_auto.xtb_md"]
+forbidden_modules = ["orca_auto.core.queue.internal_engine"]
+
 [tool.coverage.run]
 source = ["src/orca_auto"]
 

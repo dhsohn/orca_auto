@@ -7,6 +7,10 @@ from typing import Any
 
 from orca_auto.core.admission import get_slot
 from orca_auto.core.config.engines import load_xtb_md_config
+from orca_auto.core.engines import (
+    entry_matches_engine_identity,
+    own_engine_accept_entry,
+)
 from orca_auto.core.queue import (
     get_cancel_requested,
     list_queue,
@@ -16,11 +20,7 @@ from orca_auto.core.queue import (
     update_metadata,
 )
 from orca_auto.core.queue.child.execution import ChildWorkerShutdownController
-from orca_auto.core.queue.internal_engine import (
-    entry_matches_engine_identity,
-    entry_status_is_running,
-    own_engine_accept_entry,
-)
+from orca_auto.core.queue.lifecycle import entry_status_is_running
 from orca_auto.core.queue.worker import (
     install_shutdown_signal_handlers,
     resolve_admission_root,
