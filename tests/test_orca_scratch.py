@@ -83,6 +83,55 @@ def test_scratch_publishes_surviving_results_once_and_omits_tmp(
     assert not workspace.path.exists()
 
 
+def test_scratch_can_pin_immutable_input_separately_from_publication_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    durable = tmp_path / "durable"
+    snapshots = durable / ".snapshots"
+    snapshots.mkdir(parents=True)
+    manifest_snapshot = snapshots / "manifest.json"
+    manifest_snapshot.write_text('{"job_type":"opt"}\n', encoding="utf-8")
+    mutable_manifest = durable / "xtb_job.yaml"
+    mutable_manifest.write_text("job_type: opt\n", encoding="utf-8")
+
+    workspace = OrcaScratchWorkspace.create(
+        policy,
+        manifest_snapshot,
+        durable_output_dir=durable,
+    )
+    mutable_manifest.unlink()
+    (workspace.path / "xtbopt.xyz").write_text("1\nresult\nH 0 0 0\n", encoding="utf-8")
+
+    publication = workspace.publish()
+
+    assert [path.name for path in publication.paths] == ["xtbopt.xyz"]
+    assert (durable / "xtbopt.xyz").is_file()
+    assert manifest_snapshot.is_file()
+    workspace.cleanup()
+
+
+def test_scratch_rejects_input_outside_separate_publication_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    snapshot_dir = tmp_path / "snapshots"
+    output_dir = tmp_path / "durable"
+    snapshot_dir.mkdir()
+    output_dir.mkdir()
+    manifest_snapshot = snapshot_dir / "manifest.json"
+    manifest_snapshot.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(OrcaScratchError, match="inside its publication directory"):
+        OrcaScratchWorkspace.create(
+            policy,
+            manifest_snapshot,
+            durable_output_dir=output_dir,
+        )
+
+
 def test_scratch_rejects_changed_staged_input(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

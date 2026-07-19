@@ -827,7 +827,7 @@ def start_xtb_job(
         scratch_workspace = create_engine_scratch_workspace(
             cfg,
             job_dir=job_dir,
-            manifest_filename=MANIFEST_FILE_NAME,
+            manifest_path=Path(resolved_manifest_path),
             max_memory_gb=resource_request["max_memory_gb"],
             publish_name=lambda name: _publish_xtb_scratch_name(resolved_job_type, name),
         )

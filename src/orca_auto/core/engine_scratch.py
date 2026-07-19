@@ -173,9 +173,12 @@ def scratch_provenance_from_exception(exc: BaseException) -> dict[str, Any]:
 class EngineScratchWorkspace:
     policy: EngineScratchPolicy
     durable_input: Path
+    durable_output_dir: Path
     path: Path
     scratch_input: Path
     staged_inputs: dict[str, _StagedInput] = field(default_factory=dict)
+    input_dir_fd: int = -1
+    input_dir_identity: tuple[int, int] = (-1, -1)
     durable_dir_fd: int = -1
     durable_dir_identity: tuple[int, int] = (-1, -1)
     scratch_root_identity: tuple[int, int] = (-1, -1)
@@ -190,6 +193,7 @@ class EngineScratchWorkspace:
         policy: EngineScratchPolicy,
         durable_input: Path,
         *,
+        durable_output_dir: Path | None = None,
         expected_durable_dir_identity: tuple[int, int] | None = None,
     ) -> EngineScratchWorkspace:
         durable = require_confined_regular_file(
@@ -197,10 +201,16 @@ class EngineScratchWorkspace:
             durable_input,
             label="ORCA durable scratch input",
         )
+        output_dir = Path(durable_output_dir or durable.parent).expanduser().resolve()
+        if not durable.is_relative_to(output_dir):
+            raise OrcaScratchError(
+                "ORCA durable scratch input must stay inside its publication directory"
+            )
         root = _prepare_scratch_root(policy)
         root_status = root.stat()
         root_identity = (int(root_status.st_dev), int(root_status.st_ino))
         workspace = root / f"{SCRATCH_WORKSPACE_PREFIX}{os.getpid()}-{secrets.token_hex(8)}"
+        input_dir_fd = -1
         durable_dir_fd = -1
         workspace_dir_fd = -1
         workspace_identity = (-1, -1)
@@ -221,20 +231,24 @@ class EngineScratchWorkspace:
                     root_identity,
                     label="ORCA scratch root",
                 )
-                durable_dir_fd, durable_dir_identity = _open_pinned_directory(
+                input_dir_fd, input_dir_identity = _open_pinned_directory(
                     durable.parent,
-                    label="ORCA durable generation",
-                    expected_identity=expected_durable_dir_identity,
+                    label="ORCA durable scratch input directory",
                 )
                 try:
+                    durable_dir_fd, durable_dir_identity = _open_pinned_directory(
+                        output_dir,
+                        label="ORCA durable generation",
+                        expected_identity=expected_durable_dir_identity,
+                    )
                     _recover_incomplete_publication(
                         durable_dir_fd,
-                        durable.parent,
+                        output_dir,
                         durable_dir_identity,
                     )
                     _assert_scratch_root_available(root, root_fd)
                     captured_inputs = _capture_input_closure(
-                        durable_dir_fd,
+                        input_dir_fd,
                         durable.parent,
                         durable.name,
                         dependency_names_from_primary=policy.dependency_names_from_primary,
@@ -271,7 +285,7 @@ class EngineScratchWorkspace:
                     )
                     _write_workspace_manifest(
                         workspace,
-                        durable.parent,
+                        output_dir,
                         workspace_dir_fd=workspace_dir_fd,
                     )
                     staged = _stage_input_closure(
@@ -300,9 +314,12 @@ class EngineScratchWorkspace:
                     return cls(
                         policy=policy,
                         durable_input=durable,
+                        durable_output_dir=output_dir,
                         path=workspace,
                         scratch_input=workspace / durable.name,
                         staged_inputs=staged,
+                        input_dir_fd=input_dir_fd,
+                        input_dir_identity=input_dir_identity,
                         durable_dir_fd=durable_dir_fd,
                         durable_dir_identity=durable_dir_identity,
                         scratch_root_identity=root_identity,
@@ -310,6 +327,8 @@ class EngineScratchWorkspace:
                         workspace_dir_fd=workspace_dir_fd,
                     )
                 except BaseException:
+                    if input_dir_fd >= 0:
+                        os.close(input_dir_fd)
                     if durable_dir_fd >= 0:
                         os.close(durable_dir_fd)
                     if workspace_dir_fd >= 0:
@@ -340,12 +359,18 @@ class EngineScratchWorkspace:
         )
         _require_directory_path_identity(
             self.durable_input.parent,
+            self.input_dir_fd,
+            self.input_dir_identity,
+            label="ORCA durable scratch input directory",
+        )
+        _require_directory_path_identity(
+            self.durable_output_dir,
             self.durable_dir_fd,
             self.durable_dir_identity,
             label="ORCA durable generation",
         )
         _verify_staged_sources_unchanged(
-            self.durable_dir_fd,
+            self.input_dir_fd,
             self.durable_input.parent,
             self.staged_inputs,
         )
@@ -353,7 +378,7 @@ class EngineScratchWorkspace:
             self.path,
             self.workspace_dir_fd,
             self.workspace_identity,
-            self.durable_input.parent,
+            self.durable_output_dir,
             self.durable_dir_fd,
             self.durable_dir_identity,
             self.scratch_input.stem,
@@ -390,16 +415,24 @@ class EngineScratchWorkspace:
     def close(self) -> None:
         if self._closed:
             return
+        if self.input_dir_fd >= 0:
+            os.close(self.input_dir_fd)
         if self.durable_dir_fd >= 0:
             os.close(self.durable_dir_fd)
         if self.workspace_dir_fd >= 0:
             os.close(self.workspace_dir_fd)
+        self.input_dir_fd = -1
         self.durable_dir_fd = -1
         self.workspace_dir_fd = -1
         self._closed = True
 
     def _require_open(self) -> None:
-        if self._closed or self.durable_dir_fd < 0 or self.workspace_dir_fd < 0:
+        if (
+            self._closed
+            or self.input_dir_fd < 0
+            or self.durable_dir_fd < 0
+            or self.workspace_dir_fd < 0
+        ):
             raise OrcaScratchError("ORCA scratch workspace is already closed")
 
 

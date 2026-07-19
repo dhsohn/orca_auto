@@ -16,7 +16,7 @@ def create_engine_scratch_workspace(
     cfg: Any,
     *,
     job_dir: Path,
-    manifest_filename: str,
+    manifest_path: Path,
     max_memory_gb: int,
     publish_name: Callable[[str], bool],
 ) -> EngineScratchWorkspace | None:
@@ -30,7 +30,8 @@ def create_engine_scratch_workspace(
             max_task_memory_bytes=int(max_memory_gb) * 1024**3,
             publish_name=publish_name,
         ),
-        job_dir / manifest_filename,
+        manifest_path,
+        durable_output_dir=job_dir,
     )
 
 
