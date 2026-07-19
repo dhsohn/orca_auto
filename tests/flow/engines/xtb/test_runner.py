@@ -22,6 +22,7 @@ from orca_auto.flow.engines.xtb.ranking_selection import (
     rank_usable_candidates,
     usable_ranking_candidates,
 )
+from tests.execution_snapshot_helpers import stage_execution_snapshot
 from tests.flow.engines.xtb.factories import (
     CandidateSpDeps,
     FakeCandidateProcess,
@@ -1134,6 +1135,22 @@ def test_xtb_ram_scratch_publishes_only_canonical_outputs(
     job_dir = tmp_path / "job"
     selected_xyz = _write_xyz(job_dir / "input.xyz")
     (job_dir / "xtb_job.yaml").write_text("job_type: opt\n", encoding="utf-8")
+    runtime_identity = runner_mod._engine_runner.engine_runtime_identity(job_dir)
+    selected_xyz, execution_snapshot = stage_execution_snapshot(
+        job_dir,
+        selected_xyz,
+        engine="xtb",
+        manifest={"job_type": "opt", "_orca_auto_runtime_identity": runtime_identity},
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        identity={
+            "job_type": "opt",
+            "reaction_key": "rxn-1",
+            "secondary_input_xyz": "",
+            "input_summary": {"input_xyz": str(selected_xyz)},
+            "runtime_identity": runtime_identity,
+        },
+    )
+    (job_dir / "xtb_job.yaml").unlink()
     popen_cwd: list[Path] = []
 
     class _FakeProcess:
@@ -1169,11 +1186,17 @@ def test_xtb_ram_scratch_publishes_only_canonical_outputs(
     monkeypatch.setattr(runner_mod, "_build_command", lambda *args, **kwargs: ["xtb"])
     monkeypatch.setattr(runner_mod.subprocess, "Popen", fake_popen)
 
-    running = runner_mod.start_xtb_job(cfg, job_dir=job_dir, selected_input_xyz=selected_xyz)
+    running = runner_mod.start_xtb_job(
+        cfg,
+        job_dir=job_dir,
+        selected_input_xyz=selected_xyz,
+        execution_snapshot=execution_snapshot,
+    )
     result = runner_mod.finalize_xtb_job(running)
 
     assert len(popen_cwd) == 1
     assert popen_cwd[0].is_relative_to(scratch_root)
+    assert not (job_dir / "xtb_job.yaml").exists()
     assert (job_dir / "xtbopt.xyz").is_file()
     assert (job_dir / ".xtboptok").is_file()
     assert (job_dir / "xtb.stdout.log").is_file()

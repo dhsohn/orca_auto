@@ -673,7 +673,7 @@ def start_crest_job(
         scratch_workspace = create_engine_scratch_workspace(
             cfg,
             job_dir=job_dir,
-            manifest_filename=MANIFEST_FILE_NAME,
+            manifest_path=Path(resolved_manifest_path),
             max_memory_gb=resource_request["max_memory_gb"],
             publish_name=_CREST_SCRATCH_PUBLICATION_NAMES.__contains__,
         )

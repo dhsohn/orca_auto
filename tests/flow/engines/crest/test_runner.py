@@ -25,6 +25,7 @@ from orca_auto.flow.engines.crest.runner import (
     finalize_crest_job,
     start_crest_job,
 )
+from tests.execution_snapshot_helpers import stage_execution_snapshot
 
 
 def _cfg(tmp_path: Path) -> AppConfig:
@@ -347,6 +348,20 @@ def test_crest_ram_scratch_publishes_retained_ensemble_and_omits_work_tree(
         "mode: standard\nresources:\n  max_cores: 1\n  max_memory_gb: 1\n",
         encoding="utf-8",
     )
+    runtime_identity = runner_mod._engine_runner.engine_runtime_identity(job_dir)
+    selected_xyz, execution_snapshot = stage_execution_snapshot(
+        job_dir,
+        selected_xyz,
+        engine="crest",
+        manifest={"mode": "standard", "_orca_auto_runtime_identity": runtime_identity},
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        identity={
+            "mode": "standard",
+            "molecule_key": "scratch-test",
+            "runtime_identity": runtime_identity,
+        },
+    )
+    (job_dir / MANIFEST_FILE_NAME).unlink()
     popen_cwd: list[Path] = []
 
     class _FakeProcess:
@@ -368,11 +383,17 @@ def test_crest_ram_scratch_publishes_retained_ensemble_and_omits_work_tree(
     monkeypatch.setattr(runner_mod, "_resolve_crest_executable", lambda _cfg: "/opt/crest")
     monkeypatch.setattr(runner_mod.subprocess, "Popen", fake_popen)
 
-    running = start_crest_job(cfg, job_dir=job_dir, selected_xyz=selected_xyz)
+    running = start_crest_job(
+        cfg,
+        job_dir=job_dir,
+        selected_xyz=selected_xyz,
+        execution_snapshot=execution_snapshot,
+    )
     result = finalize_crest_job(running)
 
     assert len(popen_cwd) == 1
     assert popen_cwd[0].is_relative_to(scratch_root)
+    assert not (job_dir / MANIFEST_FILE_NAME).exists()
     assert (job_dir / "crest_conformers.xyz").is_file()
     assert (job_dir / "crest.stdout.log").is_file()
     assert not (job_dir / "METADYN").exists()
