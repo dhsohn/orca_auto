@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -10,7 +11,8 @@ from typing import Any, cast
 import pytest
 import yaml
 
-from orca_auto.core import engine_runner
+from orca_auto.core import engine_runner, engine_scratch
+from orca_auto.core.config import ScratchConfig
 from orca_auto.core.config.engines import (
     WorkflowEngineAppConfig as AppConfig,
 )
@@ -1116,6 +1118,70 @@ def test_start_xtb_job_passes_expected_subprocess_options(
     assert callable(kwargs["preexec_fn"])
     running.stdout_handle.close()
     running.stderr_handle.close()
+
+
+def test_xtb_ram_scratch_publishes_only_canonical_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shm = tmp_path / "shm"
+    shm.mkdir()
+    scratch_root = shm / "orca_auto"
+    cfg = replace(
+        _cfg(tmp_path),
+        scratch=ScratchConfig(root=str(scratch_root), min_free_gb=1),
+    )
+    job_dir = tmp_path / "job"
+    selected_xyz = _write_xyz(job_dir / "input.xyz")
+    (job_dir / "xtb_job.yaml").write_text("job_type: opt\n", encoding="utf-8")
+    popen_cwd: list[Path] = []
+
+    class _FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def fake_popen(*args: Any, **kwargs: Any) -> _FakeProcess:
+        del args
+        cwd = Path(kwargs["cwd"])
+        popen_cwd.append(cwd)
+        (cwd / "xtbopt.xyz").write_bytes(selected_xyz.read_bytes())
+        (cwd / ".xtboptok").write_text("", encoding="utf-8")
+        (cwd / "large-intermediate.tmp").write_bytes(b"temporary")
+        return _FakeProcess()
+
+    monkeypatch.setattr(engine_scratch, "_SCRATCH_ROOT_PARENT", shm)
+    monkeypatch.setattr(engine_scratch, "_linux_available_memory_bytes", lambda: 2**63)
+    monkeypatch.setattr(
+        runner_mod,
+        "load_job_manifest",
+        lambda _path: {"job_type": "opt", "resources": {"max_cores": 1, "max_memory_gb": 1}},
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "resolve_job_inputs",
+        lambda _job_dir, _manifest: {
+            "job_type": "opt",
+            "reaction_key": "rxn-1",
+            "secondary_input_xyz": None,
+            "input_summary": {"input_xyz": str(selected_xyz)},
+        },
+    )
+    monkeypatch.setattr(runner_mod, "_build_command", lambda *args, **kwargs: ["xtb"])
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", fake_popen)
+
+    running = runner_mod.start_xtb_job(cfg, job_dir=job_dir, selected_input_xyz=selected_xyz)
+    result = runner_mod.finalize_xtb_job(running)
+
+    assert len(popen_cwd) == 1
+    assert popen_cwd[0].is_relative_to(scratch_root)
+    assert (job_dir / "xtbopt.xyz").is_file()
+    assert (job_dir / ".xtboptok").is_file()
+    assert (job_dir / "xtb.stdout.log").is_file()
+    assert not (job_dir / "large-intermediate.tmp").exists()
+    assert result.status == "completed"
+    assert result.scratch_provenance["used"] is True
+    assert "large-intermediate.tmp" in result.scratch_provenance["omitted_transient_files"]
+    assert not any(path.name.startswith("attempt-") for path in scratch_root.iterdir())
 
 
 def test_stale_xtb_output_fsync_failure_blocks_launch_preparation(

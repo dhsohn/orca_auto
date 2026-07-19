@@ -346,6 +346,13 @@ logic. Notable pieces:
   execution-snapshot provenance. Launch is rejected unless current
   `MemAvailable` can cover the configured task-memory limit, all free space in
   the scratch tmpfs, and the configured host reserve.
+  The scratch workspace and journal implementation is owned by
+  `core.engine_scratch`; ORCA contributes only its flat input-dependency parser.
+  Workflow xTB/CREST use the same private workspace and transaction but keep
+  their immutable input snapshots durable and absolute. xTB publishes its
+  canonical job-type result set and logs; CREST publishes named retained
+  ensembles and logs. Large engine work trees are omitted and removed after the
+  committed publication. CREST's own `--scratch` copier remains disabled.
   A one-byte launch gate starts in the final process group first. The worker
   durably records that PID/PGID before releasing the gate to `exec` ORCA, so a
   hard parent failure before registration cannot leave an unowned calculation.
@@ -605,7 +612,8 @@ the public CLI. Units live under `systemd/`:
 
 | Unit                                  | Role                                            |
 |---------------------------------------|-------------------------------------------------|
-| `orca_auto-queue-worker@.service`     | Supervises ORCA/xTB-MD plus workflow + internal xTB/CREST workers |
+| `orca_auto-queue-worker@.service`     | Supervises the ORCA worker only                 |
+| `orca_auto-workflow-worker@.service`  | Opt-in workflow + internal xTB/CREST workers    |
 | `orca_auto-bot@.service`              | Selected provider-neutral messenger bot        |
 | `orca_auto-runtime@.target`           | Starts both together                            |
 
@@ -614,7 +622,7 @@ units. If the selected provider lacks interactive bot settings, only the queue w
 enabled; rerun after completing them to enable the full target. On WSL, `systemd`
 must be enabled in `/etc/wsl.conf`.
 
-The unified supervisor starts each worker in its own process session and spaces
+The selected supervisor starts each worker in its own process session and spaces
 initial starts by two seconds, preventing a worker-side group signal or startup
 reconciliation burst from affecting every sibling at once. A daemon worker that
 exits three times within five minutes opens the supervisor circuit instead of

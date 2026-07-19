@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
+from orca_auto.core import engine_scratch
+from orca_auto.core.config import ScratchConfig
 from orca_auto.core.config.engines import (
     WorkflowEngineAppConfig as AppConfig,
 )
@@ -323,6 +326,60 @@ def test_start_crest_job_passes_expected_subprocess_options(
 
     running.stdout_handle.close()
     running.stderr_handle.close()
+
+
+def test_crest_ram_scratch_publishes_retained_ensemble_and_omits_work_tree(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    shm = tmp_path / "shm"
+    shm.mkdir()
+    scratch_root = shm / "orca_auto"
+    cfg = replace(
+        _cfg(tmp_path),
+        scratch=ScratchConfig(root=str(scratch_root), min_free_gb=1),
+    )
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "molecule.xyz"
+    _write_xyz(selected_xyz, ("conf_a",))
+    (job_dir / MANIFEST_FILE_NAME).write_text(
+        "mode: standard\nresources:\n  max_cores: 1\n  max_memory_gb: 1\n",
+        encoding="utf-8",
+    )
+    popen_cwd: list[Path] = []
+
+    class _FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def fake_popen(*args: Any, **kwargs: Any) -> _FakeProcess:
+        del args
+        cwd = Path(kwargs["cwd"])
+        popen_cwd.append(cwd)
+        (cwd / "crest_conformers.xyz").write_bytes(selected_xyz.read_bytes())
+        work_tree = cwd / "METADYN"
+        work_tree.mkdir()
+        (work_tree / "trajectory.xyz").write_bytes(b"temporary")
+        return _FakeProcess()
+
+    monkeypatch.setattr(engine_scratch, "_SCRATCH_ROOT_PARENT", shm)
+    monkeypatch.setattr(engine_scratch, "_linux_available_memory_bytes", lambda: 2**63)
+    monkeypatch.setattr(runner_mod, "_resolve_crest_executable", lambda _cfg: "/opt/crest")
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", fake_popen)
+
+    running = start_crest_job(cfg, job_dir=job_dir, selected_xyz=selected_xyz)
+    result = finalize_crest_job(running)
+
+    assert len(popen_cwd) == 1
+    assert popen_cwd[0].is_relative_to(scratch_root)
+    assert (job_dir / "crest_conformers.xyz").is_file()
+    assert (job_dir / "crest.stdout.log").is_file()
+    assert not (job_dir / "METADYN").exists()
+    assert result.status == "completed"
+    assert result.scratch_provenance["used"] is True
+    assert "METADYN" in result.scratch_provenance["omitted_transient_files"]
+    assert not any(path.name.startswith("attempt-") for path in scratch_root.iterdir())
 
 
 def test_stale_crest_output_fsync_failure_blocks_launch_preparation(

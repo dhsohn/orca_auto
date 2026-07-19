@@ -175,8 +175,8 @@ Field descriptions:
   workspaces; completed runs stay here under their submitted directory names
 - `orca.runtime.default_max_retries`: `0` disables ORCA retries; positive values
   enable the calculation-type retry policy
-- `orca.runtime.scratch_root`: optional dedicated directory below `/dev/shm` for
-  private per-attempt ORCA working directories
+- `orca.runtime.scratch_root`: optional shared dedicated directory below
+  `/dev/shm` for private per-attempt ORCA and workflow xTB/CREST working directories
 - `orca.runtime.scratch_min_free_gb`: positive tmpfs free-space launch guard;
   defaults to `8` when RAM scratch is enabled
 - `scheduler.max_active_simulations`: Shared total active-run cap across ORCA, standalone xTB-MD, internal xTB stages, and internal CREST stages
@@ -217,6 +217,14 @@ Notes:
   accepted calculation. Completed-attempt details are stored in
   `scratch_provenance`; committed publication from an exception or worker
   shutdown is stored in the run-level `scratch_publications` list.
+- Workflow-managed xTB and CREST run with their process working directory,
+  stdout/stderr logs, and engine intermediate files in the same private tmpfs
+  workspace. Their immutable input snapshots remain absolute, read-only durable
+  inputs. At process exit, xTB publishes only the canonical result set for its
+  job type plus stdout/stderr; CREST publishes its validated named ensemble
+  candidates plus stdout/stderr. Engine work trees and transient files are
+  recorded as omitted provenance and removed with the workspace. This does not
+  use CREST's native `--scratch` option.
 - Windows-style paths such as `C:\...`, `C:/...`, and `/mnt/c/...` are not supported in config
 - Configured executable paths for ORCA, xTB, and CREST must be absolute Linux
   paths to existing executable files and must not end in `.exe`. If
@@ -817,15 +825,16 @@ only. Public CLI commands do not start those services directly.
 
 Behavior:
 
-- `orca_auto-queue-worker@.service` supervises ORCA and standalone xTB-MD by default
-- The same worker service also starts workflow supervision plus the internal CREST and xTB workers under the shared `runs_root`
+- `orca_auto-queue-worker@.service` supervises ORCA only
+- `orca_auto-workflow-worker@.service` is opt-in and supervises workflow plus
+  the internal CREST/xTB workers; standalone xTB-MD also requires an explicit worker
 - ORCA, xTB-MD, xTB, and CREST share the same admission cap; xTB-MD also obeys its subcap. ORCA reserves a slot in
   the parent worker, attaches queue identity metadata after the child starts,
   and lets the ORCA child activate/release that reservation during execution.
 - `orca_auto-bot@.service` runs `orca_auto.flow.bot.runner`, which selects the configured
   Telegram or Discord gateway from `orca_auto.yaml`
 - Workflow messenger alerts keep per-job ORCA messages, but summarize internal CREST and reaction-path xTB child phases in one message each after those phases finish
-- `orca_auto-runtime@.target` starts both services together
+- `orca_auto-runtime@.target` starts the ORCA worker and bot together
 
 ## 8) WSL systemd Setup
 
@@ -868,8 +877,10 @@ Assumptions of the unified runtime templates:
 
 If your paths differ, edit the copied unit before enabling it.
 
-The unified queue-worker service supervises ORCA and also starts workflow
-supervision plus the internal CREST and xTB workers. The shared
+The default queue-worker service supervises ORCA only. A configured workflow
+root does not implicitly start any workflow or internal-engine worker. Start
+`orca_auto-workflow-worker@<user>.service` explicitly when workflow supervision
+and its internal CREST/xTB workers are needed. The shared
 `scheduler.max_active_simulations` setting still limits the combined number of
 active simulations across ORCA and workflow-managed internal engine stages.
 
@@ -877,7 +888,8 @@ If the selected provider is incomplete, `orca_auto systemd install` enables
 `orca_auto-queue-worker@$(whoami)` directly. Run the same command again after
 completing bot configuration to enable the full runtime target.
 
-Workflow supervision belongs to `orca_auto-queue-worker@.service`.
+Workflow supervision belongs to the opt-in
+`orca_auto-workflow-worker@.service` unit.
 
 ## 9) Completion Determination Rules
 

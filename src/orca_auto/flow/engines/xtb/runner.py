@@ -27,6 +27,10 @@ from orca_auto.core.engine_process import (
     recreate_confined_directory,
     start_logged_process,
 )
+from orca_auto.core.engine_scratch import (
+    EngineScratchWorkspace,
+    scratch_publication_provenance,
+)
 from orca_auto.core.queue.engine import execution as _engine_execution
 from orca_auto.core.queue.engine.input_snapshot import (
     read_stable_regular_file,
@@ -35,6 +39,10 @@ from orca_auto.core.queue.engine.input_snapshot import (
 from orca_auto.core.queue.processes import terminate_process_group
 from orca_auto.core.utils import fsync_directory, now_utc_iso
 from orca_auto.core.utils import process as process_utils
+from orca_auto.flow.engines.scratch import (
+    create_engine_scratch_workspace,
+    publish_engine_scratch_workspace,
+)
 from orca_auto.flow.hessian_utils import parse_xtb_hessian
 
 from . import runner_ranking as _runner_ranking
@@ -60,6 +68,16 @@ _STALE_OUTPUT_NAMES_BY_JOB_TYPE: dict[str, tuple[str, ...]] = {
 }
 
 
+def _publish_xtb_scratch_name(job_type: str, name: str) -> bool:
+    if name in {"xtb.stdout.log", "xtb.stderr.log"}:
+        return True
+    if name in _STALE_OUTPUT_NAMES_BY_JOB_TYPE.get(job_type, ()):
+        return True
+    if job_type == "path_search" and name.startswith("xtbpath") and name.endswith(".xyz"):
+        return True
+    return False
+
+
 @dataclass(frozen=True)
 class XtbRunResult:
     status: str
@@ -82,6 +100,7 @@ class XtbRunResult:
     resource_request: dict[str, int]
     resource_actual: dict[str, int]
     output_identities: dict[str, dict[str, Any]] = field(default_factory=dict)
+    scratch_provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -101,6 +120,8 @@ class XtbRunningJob:
     resource_request: dict[str, int]
     resource_actual: dict[str, int]
     job_dir: str
+    durable_job_dir: str = ""
+    scratch_workspace: EngineScratchWorkspace | None = None
     manifest_snapshot: dict[str, Any] = field(default_factory=dict)
     execution_snapshot: dict[str, Any] = field(default_factory=dict)
 
@@ -785,10 +806,6 @@ def start_xtb_job(
         resource_request=resource_request,
     )
 
-    stdout_log = job_dir / "xtb.stdout.log"
-    stderr_log = job_dir / "xtb.stderr.log"
-    resolved_stdout_log = str(stdout_log.resolve())
-    resolved_stderr_log = str(stderr_log.resolve())
     resolved_selected_input = str(selected_input_xyz.resolve())
     resolved_manifest_path = str(
         execution_snapshot.get("manifest_path")
@@ -799,8 +816,7 @@ def start_xtb_job(
     resolved_job_type = str(inputs["job_type"])
     resolved_reaction_key = str(inputs["reaction_key"])
     resolved_input_summary = dict(inputs["input_summary"])
-    if before_popen is not None:
-        before_popen()
+    scratch_workspace: EngineScratchWorkspace | None = None
     try:
         _clear_stale_xtb_outputs(
             job_dir,
@@ -808,9 +824,23 @@ def start_xtb_job(
             selected_input_xyz=selected_input_xyz,
             secondary_input_xyz=secondary_input_xyz,
         )
+        scratch_workspace = create_engine_scratch_workspace(
+            cfg,
+            job_dir=job_dir,
+            manifest_filename=MANIFEST_FILE_NAME,
+            max_memory_gb=resource_request["max_memory_gb"],
+            publish_name=lambda name: _publish_xtb_scratch_name(resolved_job_type, name),
+        )
+        execution_dir = scratch_workspace.path if scratch_workspace is not None else job_dir
+        stdout_log = execution_dir / "xtb.stdout.log"
+        stderr_log = execution_dir / "xtb.stderr.log"
+        resolved_stdout_log = str(stdout_log.resolve())
+        resolved_stderr_log = str(stderr_log.resolve())
+        if before_popen is not None:
+            before_popen()
         launched = start_logged_process(
             command,
-            cwd=job_dir,
+            cwd=execution_dir,
             stdout_log=stdout_log,
             stderr_log=stderr_log,
             max_cores=resource_request["max_cores"],
@@ -825,8 +855,12 @@ def start_xtb_job(
             ),
         )
     except Exception:
-        if on_launch_aborted is not None:
-            on_launch_aborted()
+        try:
+            if scratch_workspace is not None:
+                publish_engine_scratch_workspace(scratch_workspace, logger=LOGGER)
+        finally:
+            if on_launch_aborted is not None:
+                on_launch_aborted()
         raise
     try:
         return XtbRunningJob(
@@ -842,7 +876,9 @@ def start_xtb_job(
             reaction_key=resolved_reaction_key,
             input_summary=resolved_input_summary,
             manifest_path=resolved_manifest_path,
-            job_dir=resolved_job_dir,
+            job_dir=str(execution_dir.resolve()),
+            durable_job_dir=resolved_job_dir,
+            scratch_workspace=scratch_workspace,
             resource_request=resource_request,
             resource_actual=resource_actual,
             manifest_snapshot=dict(manifest),
@@ -850,8 +886,12 @@ def start_xtb_job(
         )
     except BaseException:
         cleanup_failed_logged_process_start(launched)
-        if on_launch_aborted is not None:
-            on_launch_aborted()
+        try:
+            if scratch_workspace is not None:
+                publish_engine_scratch_workspace(scratch_workspace, logger=LOGGER)
+        finally:
+            if on_launch_aborted is not None:
+                on_launch_aborted()
         raise
 
 
@@ -872,6 +912,19 @@ def finalize_xtb_job(
     if exit_code is None:
         exit_code = running.process.wait()
     finished_at = now_utc_iso()
+
+    scratch_provenance: dict[str, Any] = {}
+    if running.scratch_workspace is not None:
+        publication = publish_engine_scratch_workspace(
+            running.scratch_workspace,
+            logger=LOGGER,
+        )
+        scratch_provenance = scratch_publication_provenance(publication)
+        durable_job_dir = Path(running.durable_job_dir)
+        running.job_dir = str(durable_job_dir)
+        running.stdout_log = str((durable_job_dir / Path(running.stdout_log).name).resolve())
+        running.stderr_log = str((durable_job_dir / Path(running.stderr_log).name).resolve())
+        running.scratch_workspace = None
 
     status = forced_status if forced_status is not None else _status_from_exit_code(exit_code)
     reason = forced_reason if forced_reason is not None else _reason_from_exit_code(exit_code)
@@ -976,6 +1029,7 @@ def finalize_xtb_job(
         resource_request=running.resource_request,
         resource_actual=running.resource_actual,
         output_identities=output_identities,
+        scratch_provenance=scratch_provenance,
     )
 
 

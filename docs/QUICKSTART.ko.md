@@ -36,6 +36,12 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 
 선택된 Telegram 또는 Discord provider의 인터랙티브 bot 설정이 완전하면 orca_auto는
 전체 런타임 타깃을 활성화합니다. 그렇지 않으면 큐 워커만 활성화합니다.
+설치되는 기본 큐 워커는 ORCA 전용입니다. workflow 제출을 실행하려면 queueing 전후에
+opt-in workflow unit을 시작하세요:
+
+```bash
+sudo systemctl start "orca_auto-workflow-worker@$(whoami)"
+```
 
 ## 4) 서비스 확인 또는 재시작
 

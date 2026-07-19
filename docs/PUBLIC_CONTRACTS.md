@@ -168,6 +168,11 @@ Stable behavior:
   in `scratch_provenance`; committed output from an interrupted/exception path
   is recorded in `scratch_publications`, never in immutable execution-snapshot
   provenance.
+  Workflow xTB/CREST use the same configured root and one-workspace admission.
+  They keep immutable input snapshots durable, execute in tmpfs, and
+  transactionally publish only their canonical result/evidence allowlists;
+  omitted work trees and transient entries are recorded in
+  `scratch_provenance`. CREST's native `--scratch` option remains unused.
   Root/workspace and generation directories are descriptor-pinned. A launch
   gate may `exec` ORCA only after its PID/PGID process record is durable; EOF
   before release exits without starting ORCA.
@@ -724,6 +729,7 @@ Supported unit filenames:
 
 - `systemd/orca_auto-runtime@.target`
 - `systemd/orca_auto-queue-worker@.service`
+- `systemd/orca_auto-workflow-worker@.service`
 - `systemd/orca_auto-bot@.service`
 
 Supported operator commands:
@@ -735,9 +741,16 @@ Supported operator commands:
 Stable behavior:
 
 - The installer enables the queue worker.
+- The queue-worker unit and an unqualified `queue worker` start ORCA only;
+  configuring `runs_root` does not implicitly start workflow, xTB, CREST, or
+  xTB-MD workers.
+- The workflow unit is installed but opt-in. Starting it explicitly runs the
+  workflow supervisor and its internal xTB/CREST workers.
 - The selected Telegram/Discord bot is enabled only when its interactive config is complete;
   otherwise the install remains worker-only.
-- `service status` reports the runtime target, queue worker, and bot status.
+- `service status` reports the runtime target, ORCA queue worker, opt-in workflow
+  worker, and bot status. The opt-in worker is informational and is not required
+  for worker-only or full-runtime health.
 - `service restart` clears the queue worker's start-limit failure state, then
   restarts the runtime target when enabled; otherwise it restarts the queue worker.
 - A clean queue-worker supervisor exit remains stopped. The child supervisor

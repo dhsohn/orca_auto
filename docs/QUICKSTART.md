@@ -34,6 +34,12 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 
 If the selected Telegram or Discord provider has complete interactive bot settings,
 orca_auto enables the full runtime target. Otherwise it enables only the queue worker.
+The installed default queue worker is ORCA-only. For a workflow submission,
+start the opt-in workflow unit before or after queueing it:
+
+```bash
+sudo systemctl start "orca_auto-workflow-worker@$(whoami)"
+```
 
 ## 4) Check Or Restart Services
 

@@ -257,6 +257,10 @@ orca_auto service restart
 `sudo systemctl daemon-reload`를 실행하세요. 전체 런타임 설정은
 [systemd/README.ko.md](systemd/README.ko.md)를 참고하세요.
 
+기본 queue-worker 서비스는 ORCA만 시작합니다. workflow root가 설정돼 있어도
+workflow/xTB/CREST 워커를 자동 시작하지 않으며, workflow 실행이 필요할 때
+`orca_auto-workflow-worker@$(whoami)`를 명시적으로 시작합니다.
+
 ## 런타임 노트
 
 - `run-dir`는 작업을 내구성 있게 큐에 넣고, 실제 실행은 워커가 수행합니다.

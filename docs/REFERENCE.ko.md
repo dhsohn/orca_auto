@@ -177,8 +177,8 @@ orca:
   완료된 실행은 제출 당시 디렉터리 이름 그대로 이곳에 남습니다
 - `orca.runtime.default_max_retries`: `0`이면 ORCA 재시도 비활성화, 양수면
   계산 종류별 재시도 정책 활성화
-- `orca.runtime.scratch_root`: private attempt별 ORCA 작업 디렉터리에 사용하는
-  `/dev/shm` 아래의 선택적 전용 경로
+- `orca.runtime.scratch_root`: private attempt별 ORCA 및 workflow xTB/CREST 작업
+  디렉터리가 공유하는 `/dev/shm` 아래의 선택적 전용 경로
 - `orca.runtime.scratch_min_free_gb`: RAM scratch를 활성화했을 때 적용하는 양의 tmpfs
   여유 공간 시작 gate. 기본값은 `8`
 - `scheduler.max_active_simulations`: ORCA, 단독 xTB-MD, 내부 xTB 단계, 내부 CREST 단계 전반에 걸친
@@ -218,6 +218,12 @@ orca:
   막지는 못하므로 shared scheduler 상한을 보수적으로 유지하고, `/dev/shm`은 허용할 최대 계산에
   맞춰야 합니다. 완료 attempt의 게시 상세는 `scratch_provenance`에, exception 또는 worker
   shutdown 뒤 commit된 게시 근거는 run-level `scratch_publications` 목록에 기록합니다.
+- workflow가 관리하는 xTB와 CREST는 process 작업 디렉터리, stdout/stderr log, 엔진
+  중간 파일을 같은 private tmpfs workspace에 둡니다. 변경 불가능한 입력 snapshot은
+  durable 절대 경로로 유지합니다. process 종료 시 xTB는 job type별 canonical 결과와
+  log만, CREST는 named ensemble 후보와 log만 transaction으로 게시합니다. 엔진 work
+  tree와 transient 파일은 생략 provenance에 기록한 뒤 workspace와 함께 제거합니다.
+  이 경로는 CREST 자체의 `--scratch` 옵션을 사용하지 않습니다.
 - `C:\...`, `C:/...`, `/mnt/c/...` 같은 Windows 스타일 경로는 설정에서 지원되지
   않습니다.
 - ORCA, xTB, CREST의 설정된 실행 경로는 실제 존재하는 실행 파일을 가리키는 절대 Linux
@@ -755,9 +761,9 @@ opt-in 검사입니다. 정확한 명령과 한계는 [VALIDATION.md](VALIDATION
 
 동작:
 
-- `orca_auto-queue-worker@.service`는 기본적으로 ORCA와 단독 xTB-MD를 감독합니다.
-- 같은 워커 서비스가 공유 `runs_root` 아래에서 워크플로우 감독과 내부 CREST·xTB
-  워커도 시작합니다.
+- `orca_auto-queue-worker@.service`는 ORCA만 감독합니다.
+- `orca_auto-workflow-worker@.service`는 opt-in이며 workflow와 내부 CREST·xTB 워커를
+  감독합니다. 단독 xTB-MD도 명시적인 별도 워커가 필요합니다.
 - ORCA, xTB-MD, xTB, CREST는 동일한 admission 상한을 공유하며 xTB-MD에는 부분 상한도
   적용됩니다. ORCA는 부모 워커에서 슬롯을
   예약하고, 자식이 시작된 뒤 큐 정체성 메타데이터를 붙이며, ORCA 자식이 실행 중에 그
@@ -766,7 +772,7 @@ opt-in 검사입니다. 정확한 명령과 한계는 [VALIDATION.md](VALIDATION
   `orca_auto.yaml`에서 선택된 Telegram 또는 Discord gateway를 시작합니다.
 - 워크플로우 메신저 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST와 반응 경로 xTB
   자식 단계는 해당 단계가 끝난 뒤 각각 한 메시지로 요약합니다.
-- `orca_auto-runtime@.target`은 두 서비스를 함께 시작합니다.
+- `orca_auto-runtime@.target`은 ORCA 워커와 bot을 함께 시작합니다.
 
 ## 8) WSL systemd 설정
 
@@ -809,15 +815,17 @@ Discord 인터랙티브 bot 설정을 완성하세요.
 
 경로가 다르면, 활성화하기 전에 복사된 유닛을 편집하세요.
 
-통합 큐 워커 서비스는 ORCA를 감독하면서 워크플로우 감독과 내부 CREST·xTB 워커도
-시작합니다. 공유 `scheduler.max_active_simulations` 설정은 여전히 ORCA와 워크플로우가
+기본 큐 워커 서비스는 ORCA만 감독합니다. workflow root가 설정돼 있어도 workflow나
+내부 엔진 워커를 암묵적으로 시작하지 않습니다. workflow 감독과 내부 CREST·xTB
+워커가 필요할 때 `orca_auto-workflow-worker@<user>.service`를 명시적으로 시작합니다.
+공유 `scheduler.max_active_simulations` 설정은 여전히 ORCA와 워크플로우가
 관리하는 내부 엔진 단계 전반의 활성 시뮬레이션 결합 수를 제한합니다.
 
 선택된 provider 설정이 완전하지 않으면
 `orca_auto systemd install`은 `orca_auto-queue-worker@$(whoami)`를 직접 활성화합니다.
 bot 설정을 완성한 뒤 같은 명령을 다시 실행하면 전체 런타임 타깃이 활성화됩니다.
 
-워크플로우 감독은 `orca_auto-queue-worker@.service`에 속합니다.
+워크플로우 감독은 opt-in `orca_auto-workflow-worker@.service` unit에 속합니다.
 
 ## 9) 완료 판정 규칙
 

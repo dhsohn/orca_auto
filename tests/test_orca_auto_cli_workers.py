@@ -89,7 +89,7 @@ class _FakeTime:
         self.current += seconds
 
 
-def test_build_worker_specs_defaults_to_engine_workers(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_worker_specs_defaults_to_orca_only(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         worker_specs, "_discover_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
     )
@@ -110,15 +110,14 @@ def test_build_worker_specs_defaults_to_engine_workers(monkeypatch: pytest.Monke
         SimpleNamespace(app=None, workflow_root=None, orca_auto_config=None)
     )
 
-    assert [spec.app for spec in specs] == ["orca", "xtb_md"]
+    assert [spec.app for spec in specs] == ["orca"]
     assert str(specs[0].argv[2]) == "orca_auto.core.engines.queue_worker"
     assert specs[0].argv[-2:] == ("--engine", "orca")
-    assert specs[1].argv[-2:] == ("--engine", "xtb_md")
     assert specs[0].env is not None
     assert specs[0].env == {}
 
 
-def test_build_worker_specs_defaults_to_all_workers_when_workflow_root_is_configured(
+def test_build_worker_specs_does_not_infer_workflow_workers_from_configured_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -144,25 +143,9 @@ def test_build_worker_specs_defaults_to_all_workers_when_workflow_root_is_config
         SimpleNamespace(app=None, workflow_root=None, orca_auto_config=None)
     )
 
-    assert [spec.app for spec in specs] == [
-        "orca",
-        "xtb_md",
-        "crest",
-        "xtb",
-        "workflow",
-    ]
-    assert str(specs[1].argv[2]) == "orca_auto.core.engines.queue_worker"
-    assert str(specs[2].argv[2]) == "orca_auto.core.engines.queue_worker"
-    assert str(specs[3].argv[2]) == "orca_auto.core.engines.queue_worker"
-    assert specs[1].argv[-2:] == ("--engine", "xtb_md")
-    assert specs[2].argv[-2:] == ("--engine", "crest")
-    assert specs[3].argv[-2:] == ("--engine", "xtb")
-    assert specs[-1].argv[1:3] == (
-        "-m",
-        "orca_auto.flow.cli.workflow",
-    )
-    assert "--workflow-root" in specs[-1].argv
-    assert "/tmp/workflows" in specs[-1].argv
+    assert [spec.app for spec in specs] == ["orca"]
+    assert str(specs[0].argv[2]) == "orca_auto.core.engines.queue_worker"
+    assert specs[0].argv[-2:] == ("--engine", "orca")
 
 
 def test_build_worker_specs_requires_workflow_root(monkeypatch: pytest.MonkeyPatch) -> None:

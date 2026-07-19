@@ -11,6 +11,7 @@ from .files import (
     ORCA_AUTO_CONFIG_ENV_VAR,
     default_config_path_from_repo_root,
     default_shared_admission_root,
+    engine_config_mapping,
     load_required_yaml_mapping,
     mapping_section,
     messenger_mapping_from_root,
@@ -65,6 +66,7 @@ from .schema import (
 from .schema import (
     telegram_config_from_mapping as telegram_config_from_mapping,
 )
+from .scratch import ScratchConfig, scratch_config_from_runtime_mapping
 
 CONFIG_ENV_VAR = ORCA_AUTO_CONFIG_ENV_VAR
 
@@ -81,6 +83,7 @@ class WorkflowEngineAppConfig:
     workflow_root: str = ""
     paths: WorkflowEnginePathsConfig = field(default_factory=WorkflowEnginePathsConfig)
     resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
+    scratch: ScratchConfig = field(default_factory=ScratchConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     messenger: MessengerConfig = field(default_factory=MessengerConfig)
 
@@ -323,6 +326,7 @@ def load_workflow_engine_config(
     resources_raw = mapping_section(raw, "resources")
     messenger_raw = messenger_mapping_from_root(raw)
     workflow_root = _required_workflow_root(raw, path)
+    orca_runtime_raw = mapping_section(engine_config_mapping(raw, "orca"), "runtime")
     executable_values = {
         executable_key: _validate_workflow_engine_executable(
             as_str(workflow_paths_raw.get(executable_key)),
@@ -343,6 +347,7 @@ def load_workflow_engine_config(
         workflow_root=workflow_root,
         paths=WorkflowEnginePathsConfig(**executable_values),
         resources=_resource_config(resources_raw),
+        scratch=scratch_config_from_runtime_mapping(orca_runtime_raw),
         telegram=messenger.telegram,
         messenger=messenger,
     )

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.orca import scratch as scratch_mod
+from orca_auto.core import engine_scratch as scratch_mod
 from orca_auto.orca.scratch import (
     OrcaScratchError,
     OrcaScratchPolicy,
@@ -57,6 +57,8 @@ def test_scratch_publishes_surviving_results_once_and_omits_tmp(
     (workspace.path / "sp.property.txt").write_text("properties\n")
     (workspace.path / "sp.EIJ.tmp").write_bytes(b"x" * 4096)
     (workspace.path / "sp.cpscfdata.tmp.7").write_bytes(b"y" * 2048)
+    (workspace.path / "orca.process.json").write_text("{}\n", encoding="utf-8")
+    (workspace.path / ".orca.process.lock").write_text("", encoding="utf-8")
 
     publication = workspace.publish()
 
@@ -74,6 +76,8 @@ def test_scratch_publishes_surviving_results_once_and_omits_tmp(
     assert selected.with_name("input.xyz").read_bytes() == original_geometry
     assert selected.with_suffix(".gbw").read_bytes() == b"checkpoint"
     assert not selected.with_name("sp.EIJ.tmp").exists()
+    assert not selected.with_name("orca.process.json").exists()
+    assert not selected.with_name(".orca.process.lock").exists()
 
     workspace.cleanup()
     assert not workspace.path.exists()
@@ -328,8 +332,8 @@ def test_input_capture_is_not_rebound_between_preflight_and_staging(
     original = selected.read_bytes()
     original_size = scratch_mod._input_closure_size_bytes
 
-    def replace_after_capture(selected_name, captured_inputs):
-        size = original_size(selected_name, captured_inputs)
+    def replace_after_capture(selected_name, captured_inputs, **kwargs):
+        size = original_size(selected_name, captured_inputs, **kwargs)
         selected.write_text("! replaced after capture\n", encoding="utf-8")
         return size
 

@@ -160,6 +160,10 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   여유 공간, `scratch_min_free_gb` host reserve 합계를 감당해야 시작합니다. 완료 attempt의 게시
   메타데이터는 `scratch_provenance`에, commit 뒤 중단/exception 경로의 게시 근거는
   `scratch_publications`에 기록하며 고정 execution-snapshot provenance에는 넣지 않습니다.
+  workflow xTB/CREST도 같은 설정 root와 단일-workspace admission을 사용합니다. 변경 불가능한
+  입력 snapshot은 durable하게 유지하고 tmpfs에서 실행한 뒤 canonical 결과/evidence allowlist만
+  transaction으로 게시합니다. 생략한 work tree와 transient 항목은 `scratch_provenance`에
+  기록하며 CREST 자체의 `--scratch` 옵션은 계속 사용하지 않습니다.
   root/workspace와 generation directory는 descriptor로 고정합니다. launch gate는 자신의 PID/PGID
   process record가 durable해진 뒤에만 ORCA를 `exec`할 수 있고, release 전 EOF면 ORCA를 시작하지
   않고 종료합니다.
@@ -661,6 +665,7 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 
 - `systemd/orca_auto-runtime@.target`
 - `systemd/orca_auto-queue-worker@.service`
+- `systemd/orca_auto-workflow-worker@.service`
 - `systemd/orca_auto-bot@.service`
 
 지원되는 운영자 명령:
@@ -672,9 +677,15 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 안정 동작:
 
 - installer는 큐 워커를 활성화합니다.
+- queue-worker unit과 인자 없는 `queue worker`는 ORCA만 시작합니다. `runs_root` 설정만으로
+  workflow, xTB, CREST, xTB-MD 워커를 암묵적으로 시작하지 않습니다.
+- workflow unit은 설치만 되고 opt-in입니다. 명시적으로 시작하면 workflow 감독자와 내부
+  xTB/CREST 워커를 실행합니다.
 - 선택된 Telegram/Discord 봇은 인터랙티브 설정이 완성되었을 때만 활성화되며,
   그렇지 않으면 worker-only로 남습니다.
-- `service status`는 runtime target, queue worker, bot 상태를 보고합니다.
+- `service status`는 runtime target, ORCA queue worker, opt-in workflow worker,
+  bot 상태를 보고합니다. opt-in worker는 정보용이며 worker-only 또는 full-runtime
+  health의 필수 조건이 아닙니다.
 - `service restart`는 큐 워커의 start-limit 실패 상태를 지운 뒤 runtime target이
   활성화되어 있으면 그것을 재시작하고, 아니면 큐 워커를 재시작합니다.
 - 큐 워커 감독자가 정상 종료되면 중단 상태를 유지합니다. 자식 감독자는 제한된 재시작

@@ -36,7 +36,7 @@ _ENGINE_WORKER_MODULES = {
     entry.engine_id: entry.worker_module for entry in _SUPERVISED_ENGINE_ENTRIES
 }
 _KNOWN_WORKER_APPS = (*_ENGINE_APPS, "workflow")
-_DEFAULT_WORKER_APPS = _ENGINE_APPS
+_DEFAULT_WORKER_APPS = ("orca",)
 
 
 @dataclass(frozen=True)
@@ -207,7 +207,6 @@ def _add_workflow_worker_spec(
     specs: list[WorkerSpec],
     *,
     apps: Sequence[str],
-    explicit_app_selection: bool,
     workflow_root: str | None,
     config_path: str | None,
     args: argparse.Namespace,
@@ -215,8 +214,7 @@ def _add_workflow_worker_spec(
     if "workflow" in apps and not workflow_root:
         raise ValueError("workflow worker requires runs_root in orca_auto.yaml")
 
-    should_add_workflow = "workflow" in apps or (not explicit_app_selection and bool(workflow_root))
-    if should_add_workflow and workflow_root:
+    if "workflow" in apps and workflow_root:
         specs.append(
             _workflow_worker_spec(workflow_root=workflow_root, config_path=config_path, args=args)
         )
@@ -230,10 +228,9 @@ def _add_workflow_worker_spec(
 def _build_worker_specs(args: Any) -> list[WorkerSpec]:
     explicit_apps = list(getattr(args, "app", None) or [])
     apps = _selected_worker_apps(explicit_apps)
-    explicit_app_selection = bool(explicit_apps)
     config_path = _discover_shared_config_path(_effective_shared_config_text(args))
     workflow_root = _workflow_root_for_args(args)
-    workflow_enabled = "workflow" in apps or (not explicit_app_selection and bool(workflow_root))
+    workflow_enabled = "workflow" in apps
     engine_apps = _worker_engine_apps(apps, workflow_enabled=workflow_enabled)
     _validate_engine_worker_config(engine_apps, config_path)
 
@@ -241,7 +238,6 @@ def _build_worker_specs(args: Any) -> list[WorkerSpec]:
     _add_workflow_worker_spec(
         specs,
         apps=apps,
-        explicit_app_selection=explicit_app_selection,
         workflow_root=workflow_root,
         config_path=config_path,
         args=args,
