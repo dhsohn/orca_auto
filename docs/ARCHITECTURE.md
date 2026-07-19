@@ -324,6 +324,33 @@ logic. Notable pieces:
   invisible filesystem owner token binds state/report publication, historical
   lookup, cleanup, and DFT discovery to the originally submitted directory
   rather than only its reusable pathname or inode number.
+- **Optional RAM scratch with durable publication:** when
+  `orca.runtime.scratch_root` is configured, an attempt stages only its bound
+  flat, basename-relative input closure into a private `/dev/shm` workspace.
+  Input bytes are captured once before capacity admission, and root/workspace
+  directory descriptors remain pinned through execution and publication; ORCA
+  enters the workspace through the pinned descriptor rather than reopening its
+  pathname.
+  A scratch-root lock admits exactly one workspace, and unresolved or stale
+  workspaces are preserved and block new launches until an operator inspects
+  them or the tmpfs is reset. The ORCA process record,
+  queue, run state, and locks remain in the durable generation. After the
+  process tree exits, surviving regular files are staged and committed back to
+  the inode-pinned generation as one journaled file-set transaction; a partial
+  replacement rolls the old set back. Runtime state names are reserved, while
+  `*.tmp`/`*.tmp.*` files are discarded. Unknown non-temporary outputs are
+  retained instead of using a lossy scientific-artifact allowlist. Staged
+  inputs are immutable. Completed attempts record `scratch_provenance`; an
+  exception or worker shutdown after a committed publication records the same
+  evidence in `scratch_publications`, separately from immutable
+  execution-snapshot provenance. Launch is rejected unless current
+  `MemAvailable` can cover the configured task-memory limit, all free space in
+  the scratch tmpfs, and the configured host reserve.
+  A one-byte launch gate starts in the final process group first. The worker
+  durably records that PID/PGID before releasing the gate to `exec` ORCA, so a
+  hard parent failure before registration cannot leave an unowned calculation.
+  A worker/host crash can lose unpublished tmpfs checkpoints; the ordinary
+  durable recovery path then resumes from evidence that was already published.
 - **Attempt engine** (`attempt/engine.py`, `attempt/retry.py`,
   `attempt/resume.py`): runs an attempt, parses output, classifies the result,
   and decides whether to retry.
@@ -474,8 +501,10 @@ part of the public CLI surface; users submit them through workflow `run-dir`.
 
 ## 8. Persistence & State Files
 
-orca_auto is disk-backed throughout. Concurrency safety comes from file locks
-(`core/utils/lock.py`) around every mutation. The main on-disk artifacts:
+orca_auto keeps all scheduling, ownership, and public artifacts disk-backed.
+Optional ORCA tmpfs scratch is an execution workspace, never a state source.
+Concurrency safety comes from file locks (`core/utils/lock.py`) around every
+durable mutation. The main on-disk artifacts:
 
 | File                        | Owner            | Purpose                                  |
 |-----------------------------|------------------|------------------------------------------|

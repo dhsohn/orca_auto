@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,7 @@ def _write_fake_orca(
     counter_path: Path,
     *,
     normal_termination: bool = True,
+    scratch_artifacts: bool = False,
 ) -> None:
     lines = [
         "#!/usr/bin/env python3",
@@ -59,6 +62,14 @@ def _write_fake_orca(
         "print('THE OPTIMIZATION HAS CONVERGED')",
         "print('TOTAL RUN TIME: 0 days 0 hours 0 minutes 1 seconds')",
     ]
+    if scratch_artifacts:
+        lines.extend(
+            [
+                "print(f'Fake ORCA cwd {Path.cwd()}')",
+                "inp.with_suffix('.gbw').write_bytes(b'checkpoint')",
+                "inp.with_name(inp.stem + '.EIJ.tmp').write_bytes(b'transient')",
+            ]
+        )
     if normal_termination:
         lines.append("print('****ORCA TERMINATED NORMALLY****')")
     lines.extend(["raise SystemExit(0)", ""])
@@ -72,7 +83,16 @@ def _write_orca_worker_config(
     allowed_root: Path,
     admission_root: Path,
     orca_executable: Path,
+    scratch_root: Path | None = None,
 ) -> None:
+    runtime: dict[str, object] = {"default_max_retries": 0}
+    if scratch_root is not None:
+        runtime.update(
+            {
+                "scratch_root": str(scratch_root),
+                "scratch_min_free_gb": 1,
+            }
+        )
     path.write_text(
         json.dumps(
             {
@@ -86,9 +106,7 @@ def _write_orca_worker_config(
                     "max_memory_gb_per_task": 1,
                 },
                 "orca": {
-                    "runtime": {
-                        "default_max_retries": 0,
-                    },
+                    "runtime": runtime,
                     "paths": {"orca_executable": str(orca_executable)},
                 },
                 "messenger": {
@@ -210,6 +228,66 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert "-1.100000 Eh" in si_text
     assert "! Opt" in si_text
     assert "r2scan-3c" not in si_text
+
+
+def test_orca_queue_worker_runs_fake_orca_in_dev_shm_and_publishes_attempt(
+    tmp_path: Path,
+) -> None:
+    shm = Path("/dev/shm")
+    if not shm.is_dir() or shutil.disk_usage(shm).free < 2 * 1024**3:
+        pytest.skip("requires at least 2 GiB free in /dev/shm")
+    scratch_root = Path(tempfile.mkdtemp(prefix="orca-auto-test-", dir=shm))
+    try:
+        allowed_root = tmp_path / "orca_runs"
+        admission_root = tmp_path / "admission"
+        bin_dir = tmp_path / "bin"
+        reaction_dir = allowed_root / "project_a" / "ram_scratch"
+        for path in (allowed_root, admission_root, bin_dir, reaction_dir):
+            path.mkdir(parents=True, exist_ok=True)
+
+        counter_path = tmp_path / "fake_orca_counter.txt"
+        fake_orca = bin_dir / "fake_orca.py"
+        _write_fake_orca(fake_orca, counter_path, scratch_artifacts=True)
+        config_path = tmp_path / "orca_auto.yaml"
+        _write_orca_worker_config(
+            config_path,
+            allowed_root=allowed_root,
+            admission_root=admission_root,
+            orca_executable=fake_orca,
+            scratch_root=scratch_root,
+        )
+        selected_inp = reaction_dir / "rxn.inp"
+        selected_inp.write_text(
+            "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+            encoding="utf-8",
+        )
+
+        assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
+        worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+        worker.poll_interval_seconds = 0.05
+        assert worker.run_once(idle_message=None, blocked_message=None) == 0
+
+        completed = _queue_entry_for_reaction(allowed_root, reaction_dir)
+        assert completed.status == QueueStatus.COMPLETED
+        generation_dir = Path(completed.metadata["execution_snapshot"]["execution_dir"])
+        out_path = generation_dir / "rxn.out"
+        assert f"Fake ORCA cwd {scratch_root}/attempt-" in out_path.read_text(encoding="utf-8")
+        assert (generation_dir / "rxn.gbw").read_bytes() == b"checkpoint"
+        assert not (generation_dir / "rxn.EIJ.tmp").exists()
+        state = load_state(generation_dir)
+        assert state is not None
+        assert state["execution_provenance"]["source_selected_inp"] == str(selected_inp.resolve())
+        assert state["attempts"][0]["scratch_provenance"] == {
+            "used": True,
+            "filesystem": "tmpfs",
+            "publication_status": "committed",
+            "published_files": ["rxn.gbw", "rxn.out"],
+            "omitted_transient_files": ["rxn.EIJ.tmp"],
+            "omitted_transient_bytes": len(b"transient"),
+        }
+        assert not any(path.name.startswith("attempt-") for path in scratch_root.iterdir())
+    finally:
+        shutil.rmtree(scratch_root, ignore_errors=True)
 
 
 def test_orca_queue_worker_reuses_job_directory_without_overwriting_prior_generation(

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from orca_auto.orca.attempt.engine import run_attempts
 from orca_auto.orca.orca_runner import WorkerShutdownInterrupt
@@ -11,6 +12,7 @@ from orca_auto.orca.retry_policy import (
     effective_max_retries,
     retry_policy_for_input,
 )
+from orca_auto.orca.scratch import ScratchPublication, attach_scratch_provenance_to_exception
 from orca_auto.orca.state import load_state, new_state
 
 
@@ -22,6 +24,38 @@ class _InterruptRunner:
 class _WorkerShutdownRunner:
     def run(self, _inp_path: Path):
         raise WorkerShutdownInterrupt
+
+
+class _WorkerShutdownWithScratchRunner:
+    def run(self, inp_path: Path):
+        exc = WorkerShutdownInterrupt()
+        attach_scratch_provenance_to_exception(
+            exc,
+            ScratchPublication(
+                paths=(inp_path.with_suffix(".gbw"), inp_path.with_suffix(".out")),
+                omitted_transient_files=(f"{inp_path.stem}.EIJ.tmp",),
+                omitted_transient_bytes=128,
+            ),
+        )
+        raise exc
+
+
+class _PublishedSuccessRunner:
+    def run(self, inp_path: Path):
+        out_path = inp_path.with_suffix(".out")
+        out_path.write_text("published output\n", encoding="utf-8")
+        return SimpleNamespace(
+            out_path=str(out_path),
+            return_code=0,
+            scratch_provenance={
+                "used": True,
+                "filesystem": "tmpfs",
+                "publication_status": "committed",
+                "published_files": [inp_path.with_suffix(".gbw").name, out_path.name],
+                "omitted_transient_files": [],
+                "omitted_transient_bytes": 0,
+            },
+        )
 
 
 class _RetryThenSuccessRunner:
@@ -246,6 +280,73 @@ class TestAttemptEngine(unittest.TestCase):
         self.assertIsNone(saved["final_result"])
         self.assertEqual(saved["status"], "running")
         self.assertEqual(emitted_payloads, [])
+
+    def test_worker_shutdown_persists_committed_scratch_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction_dir = Path(td)
+            selected_inp = reaction_dir / "rxn.inp"
+            selected_inp.write_text("! SP\n", encoding="utf-8")
+            state = new_state(reaction_dir, selected_inp, max_retries=0)
+
+            with self.assertRaises(WorkerShutdownInterrupt):
+                run_attempts(
+                    reaction_dir,
+                    selected_inp,
+                    state,
+                    resumed=False,
+                    runner=_WorkerShutdownWithScratchRunner(),
+                    max_retries=0,
+                    retry_inp_path=_retry_inp_path,
+                    to_resolved_local=lambda raw: Path(raw),
+                    emit=lambda _payload: None,
+                )
+
+            saved = load_state(reaction_dir)
+
+        assert saved is not None
+        self.assertEqual(saved["attempts"], [])
+        self.assertIsNone(saved["final_result"])
+        publication = saved["scratch_publications"][0]
+        self.assertEqual(publication["attempt_index"], 1)
+        self.assertEqual(publication["outcome"], "worker_shutdown")
+        self.assertEqual(
+            publication["publication"]["published_files"],
+            ["rxn.gbw", "rxn.out"],
+        )
+
+    def test_analyzer_exception_persists_committed_scratch_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction_dir = Path(td)
+            selected_inp = reaction_dir / "rxn.inp"
+            selected_inp.write_text("! SP\n", encoding="utf-8")
+            state = new_state(reaction_dir, selected_inp, max_retries=0)
+
+            with patch(
+                "orca_auto.orca.attempt.engine.analyze_output",
+                side_effect=RuntimeError("injected analyzer failure"),
+            ):
+                rc = run_attempts(
+                    reaction_dir,
+                    selected_inp,
+                    state,
+                    resumed=False,
+                    runner=_PublishedSuccessRunner(),
+                    max_retries=0,
+                    retry_inp_path=_retry_inp_path,
+                    to_resolved_local=lambda raw: Path(raw),
+                    emit=lambda _payload: None,
+                )
+
+            saved = load_state(reaction_dir)
+
+        assert saved is not None
+        self.assertEqual(rc, 1)
+        self.assertEqual(saved["attempts"], [])
+        self.assertEqual(saved["scratch_publications"][0]["outcome"], "exception")
+        assert saved["final_result"] is not None
+        self.assertEqual(
+            saved["final_result"]["last_out_path"], str(selected_inp.with_suffix(".out"))
+        )
 
     def test_zero_retry_overbudget_state_preserves_last_analyzer_reason(self) -> None:
         with tempfile.TemporaryDirectory() as td:

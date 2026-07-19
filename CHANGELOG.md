@@ -10,6 +10,19 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Added optional ORCA RAM-backed attempt workspaces below `/dev/shm`. Bound
+  inputs are staged privately, durable queue/state/process ownership stays on
+  disk, and surviving non-temporary outputs are copied once into the visible
+  generation after the process tree exits; ORCA `*.tmp` files are not persisted.
+  A root lock admits one scratch attempt, and tmpfs free-space plus host-memory
+  headroom checks run before launch. Generation identity is inode-pinned;
+  journaled file-set publication rolls partial replacement back, reserves
+  runtime-state names, and preserves unresolved workspaces fail-closed.
+  Completed attempts and interrupted committed publications record distinct
+  scratch evidence without altering immutable execution-snapshot provenance.
+  Root/workspace descriptor pinning prevents pathname substitution, captured
+  input payloads close preflight-to-staging races, and a durable PID/PGID launch
+  gate prevents an ORCA process from starting before ownership is recorded.
 - Simplified runtime ownership by replacing workflow service locators and
   engine forwarding facades with canonical orchestration, engine, queue, and
   ORCA-domain owners. Bot command/upload handling and workflow SI collection,

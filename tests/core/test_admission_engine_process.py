@@ -765,7 +765,10 @@ def test_orca_popen_failure_clears_only_unambiguous_pending_launch(
     expected_state: str,
 ) -> None:
     token = _reserve_managed(tmp_path, monkeypatch)
-    runner = OrcaRunner("/opt/orca/orca")
+    executable = tmp_path / "fake-orca"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    runner = OrcaRunner(str(executable))
     runner.set_running_job_registrar(
         admission.build_slot_engine_process_registrar(tmp_path, token),
         prepare=admission.build_slot_engine_process_preparer(tmp_path, token),

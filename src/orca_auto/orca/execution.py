@@ -35,6 +35,7 @@ from .out_analyzer import analyze_output
 from .retry_policy import retry_input_path
 from .run_context import RunExecutionContext, resolve_execution_context
 from .runtime.run_lock import LOCK_FILE_NAME, acquire_run_lock
+from .scratch import OrcaScratchPolicy
 from .state import load_state, save_state
 from .state_machine import RESUMABLE_RUN_STATUSES, load_or_create_state
 from .statuses import AnalyzerStatus, RunStatus
@@ -323,6 +324,17 @@ def run_with_state(
 ) -> int:
     notify_started, notify_finished, notify_retry = notification_callbacks(cfg)
     runner = runner_cls(cfg.paths.orca_executable)
+    if cfg.scratch.enabled:
+        set_scratch_policy = getattr(runner, "set_scratch_policy", None)
+        if not callable(set_scratch_policy):
+            raise TypeError("Configured ORCA runner does not support RAM scratch execution")
+        set_scratch_policy(
+            OrcaScratchPolicy(
+                root=Path(cfg.scratch.root),
+                min_free_bytes=int(cfg.scratch.min_free_gb) * 1024**3,
+                max_task_memory_bytes=int(cfg.resources.max_memory_gb_per_task) * 1024**3,
+            )
+        )
     if admission_root is not None and reservation_token:
         set_registrar = getattr(runner, "set_running_job_registrar", None)
         if callable(set_registrar):

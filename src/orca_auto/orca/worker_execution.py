@@ -40,7 +40,7 @@ from orca_auto.core.queue.worker import (
 )
 from orca_auto.core.utils.persistence import timestamped_token
 
-from .attempt.reporting import build_final_result
+from .attempt.reporting import build_final_result, last_out_path_from_state
 from .config import load_config
 from .execution import execute_orca_run, existing_completed_out, recover_crashed_state
 from .execution_binding import (
@@ -64,6 +64,10 @@ from .queue.adapter import (
 )
 from .resource_directives import prepare_submission_resource_request
 from .runtime.run_lock import acquire_run_lock
+from .scratch import (
+    attach_scratch_provenance_mapping_to_exception,
+    scratch_provenance_from_exception,
+)
 from .state import finalize_state, load_state
 from .statuses import AnalyzerStatus
 from .submission import mark_orca_snapshot_owned
@@ -256,38 +260,55 @@ def _run_orca_job_for_entry(
             self.set_executable_identity(
                 context.execution_snapshot["executable_identities"]["orca"]
             )
+            self.set_durable_directory_identity(
+                context.execution_snapshot["execution_dir_identity"]
+            )
             self.set_shutdown_requested(stop_requested)
 
         def run(self, inp_path: Path) -> Any:
+            current_input = require_confined_regular_file(
+                Path(context.execution_snapshot["execution_dir"]),
+                inp_path,
+                label="ORCA queued execution input",
+            )
+            if (
+                current_input.parent != Path(context.execution_snapshot["execution_dir"]).resolve()
+                or current_input.suffix.lower() != ".inp"
+            ):
+                raise ValueError("ORCA queued execution input must be a private .inp file")
+            verify_orca_execution_snapshot(
+                context.reaction_dir,
+                context.execution_snapshot,
+                expected_selected_inp=context.selected_inp,
+                expected_source_selected_inp=context.source_selected_inp,
+                expected_selected_input_xyz=context.selected_input_xyz,
+                expected_resource_request=context.resource_request,
+                expected_max_retries=context.max_retries,
+                allow_runtime_outputs=self._runtime_outputs_started,
+            )
             try:
-                current_input = require_confined_regular_file(
-                    Path(context.execution_snapshot["execution_dir"]),
-                    inp_path,
-                    label="ORCA queued execution input",
-                )
-                if (
-                    current_input.parent
-                    != Path(context.execution_snapshot["execution_dir"]).resolve()
-                    or current_input.suffix.lower() != ".inp"
-                ):
-                    raise ValueError("ORCA queued execution input must be a private .inp file")
-                verify_orca_execution_snapshot(
-                    context.reaction_dir,
-                    context.execution_snapshot,
-                    expected_selected_inp=context.selected_inp,
-                    expected_source_selected_inp=context.source_selected_inp,
-                    expected_selected_input_xyz=context.selected_input_xyz,
-                    expected_resource_request=context.resource_request,
-                    expected_max_retries=context.max_retries,
-                    allow_runtime_outputs=self._runtime_outputs_started,
-                )
+                result = super().run(inp_path)
+            except BaseException as run_exc:
+                self._runtime_outputs_started = True
                 try:
-                    result = super().run(inp_path)
-                    result.execution_provenance = dict(execution_provenance)
-                    return result
-                finally:
-                    self._runtime_outputs_started = True
-            finally:
+                    verify_orca_execution_snapshot(
+                        context.reaction_dir,
+                        context.execution_snapshot,
+                        expected_selected_inp=context.selected_inp,
+                        expected_source_selected_inp=context.source_selected_inp,
+                        expected_selected_input_xyz=context.selected_input_xyz,
+                        expected_resource_request=context.resource_request,
+                        expected_max_retries=context.max_retries,
+                        allow_runtime_outputs=True,
+                    )
+                except BaseException as verify_exc:
+                    provenance = scratch_provenance_from_exception(run_exc)
+                    if provenance:
+                        attach_scratch_provenance_mapping_to_exception(verify_exc, provenance)
+                    raise
+                raise
+            self._runtime_outputs_started = True
+            try:
                 verify_orca_execution_snapshot(
                     context.reaction_dir,
                     context.execution_snapshot,
@@ -296,8 +317,18 @@ def _run_orca_job_for_entry(
                     expected_selected_input_xyz=context.selected_input_xyz,
                     expected_resource_request=context.resource_request,
                     expected_max_retries=context.max_retries,
-                    allow_runtime_outputs=self._runtime_outputs_started,
+                    allow_runtime_outputs=True,
                 )
+            except BaseException as verify_exc:
+                result_provenance = getattr(result, "scratch_provenance", None)
+                if isinstance(result_provenance, dict) and result_provenance:
+                    attach_scratch_provenance_mapping_to_exception(
+                        verify_exc,
+                        result_provenance,
+                    )
+                raise
+            result.execution_provenance = dict(execution_provenance)
+            return result
 
     bound_cfg = copy.copy(cfg)
     bound_cfg.runtime = copy.copy(cfg.runtime)
@@ -330,7 +361,7 @@ def _run_orca_job_for_entry(
                     status="cancelled",
                     analyzer_status=AnalyzerStatus.INCOMPLETE,
                     reason="cancel_requested",
-                    last_out_path=None,
+                    last_out_path=last_out_path_from_state(state),
                 )
                 finalize_state(
                     Path(context.reaction_dir),

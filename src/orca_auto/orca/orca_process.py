@@ -97,8 +97,9 @@ def write_orca_process_record(
     inp_path: Path,
     out_path: Path,
     pid: int,
+    record_dir: Path | None = None,
 ) -> dict[str, Any]:
-    reaction_dir = inp_path.parent
+    reaction_dir = record_dir if record_dir is not None else inp_path.parent
     pid_value = int(pid)
     boot_id = process_utils.linux_boot_id(proc_root=Path("/proc"))
     payload: dict[str, Any] = {

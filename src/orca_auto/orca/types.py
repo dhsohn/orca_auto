@@ -18,6 +18,15 @@ class AttemptRecord(TypedDict, total=False):
     input_identity: dict[str, Any]
     executable_identity: dict[str, Any]
     output_identity: dict[str, Any]
+    scratch_provenance: dict[str, Any]
+
+
+class ScratchPublicationRecord(TypedDict, total=False):
+    attempt_index: int
+    inp_path: str
+    outcome: str
+    published_at: str
+    publication: dict[str, Any]
 
 
 class RunFinalResult(TypedDict, total=False):
@@ -45,6 +54,7 @@ class RunState(TypedDict, total=False):
     started_at: str
     updated_at: str
     attempts: list[AttemptRecord]
+    scratch_publications: list[ScratchPublicationRecord]
     final_result: RunFinalResult | None
 
 

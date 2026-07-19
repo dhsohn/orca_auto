@@ -128,6 +128,66 @@ class TestConfigValidation(unittest.TestCase):
             self.assertEqual(cfg.runtime.allowed_root, str(allowed))
             self.assertEqual(cfg.paths.orca_executable, str(fake_orca))
 
+    def test_orca_ram_scratch_settings_load(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            allowed = root / "orca_runs"
+            allowed.mkdir()
+            fake_orca = _write_fake_executable(root / "orca")
+            cfg_path = _write_orca_config(
+                root / "orca_auto.yaml",
+                {
+                    "runs_root": str(allowed),
+                    "paths": {"orca_executable": str(fake_orca)},
+                    "runtime": {
+                        "scratch_root": "/dev/shm/orca_auto",
+                        "scratch_min_free_gb": 8,
+                    },
+                },
+            )
+
+            cfg = load_config(str(cfg_path))
+
+            self.assertTrue(cfg.scratch.enabled)
+            self.assertEqual(cfg.scratch.root, "/dev/shm/orca_auto")
+            self.assertEqual(cfg.scratch.min_free_gb, 8)
+
+    def test_orca_scratch_root_must_be_below_dev_shm(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            allowed = root / "orca_runs"
+            allowed.mkdir()
+            fake_orca = _write_fake_executable(root / "orca")
+            cfg_path = _write_orca_config(
+                root / "orca_auto.yaml",
+                {
+                    "runs_root": str(allowed),
+                    "paths": {"orca_executable": str(fake_orca)},
+                    "runtime": {"scratch_root": str(root / "scratch")},
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "below /dev/shm"):
+                load_config(str(cfg_path))
+
+    def test_orca_scratch_minimum_requires_scratch_root(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            allowed = root / "orca_runs"
+            allowed.mkdir()
+            fake_orca = _write_fake_executable(root / "orca")
+            cfg_path = _write_orca_config(
+                root / "orca_auto.yaml",
+                {
+                    "runs_root": str(allowed),
+                    "paths": {"orca_executable": str(fake_orca)},
+                    "runtime": {"scratch_min_free_gb": 8},
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "requires.*scratch_root"):
+                load_config(str(cfg_path))
+
     def test_telegram_delivery_settings_are_loaded(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

@@ -131,6 +131,8 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `messenger.discord.max_attempts`
 - `messenger.discord.retry_backoff_seconds`
 - `orca.runtime.default_max_retries`
+- `orca.runtime.scratch_root`
+- `orca.runtime.scratch_min_free_gb`
 - `orca.paths.orca_executable`
 
 안정 동작:
@@ -148,6 +150,22 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `orca.runtime.default_max_retries: 0`은 ORCA 재시도를 비활성화합니다.
 - 양수 `default_max_retries`는 ORCA route 종류별 cap을 따르는 계산 종류별 재시도 정책을
   활성화합니다.
+- `orca.runtime.scratch_root`를 설정하면 `/dev/shm` 아래의 전용 디렉터리여야 하고,
+  `scratch_min_free_gb`는 양의 정수여야 합니다. ORCA는 한 번에 하나의 private tmpfs attempt만
+  실행하고 `*.tmp`/`*.tmp.*`를 제외한 남은 일반 파일을 inode로 고정한 durable visible
+  generation에 저널 기반 transaction으로 게시합니다. runtime state artifact 이름은 게시할 수
+  없습니다. staging dependency는 basename-relative이고 byte-identical 상태를 유지해야 하며,
+  선택 working copy에는 누락된 마지막 줄바꿈만 추가할 수 있습니다. 해석할 수 없는 scratch
+  workspace가 있으면 fail-closed합니다. 현재 host 가용 메모리가 설정된 task memory 상한, tmpfs
+  여유 공간, `scratch_min_free_gb` host reserve 합계를 감당해야 시작합니다. 완료 attempt의 게시
+  메타데이터는 `scratch_provenance`에, commit 뒤 중단/exception 경로의 게시 근거는
+  `scratch_publications`에 기록하며 고정 execution-snapshot provenance에는 넣지 않습니다.
+  root/workspace와 generation directory는 descriptor로 고정합니다. launch gate는 자신의 PID/PGID
+  process record가 durable해진 뒤에만 ORCA를 `exec`할 수 있고, release 전 EOF면 ORCA를 시작하지
+  않고 종료합니다.
+  queue, state, process ownership은
+  계속 durable합니다. host 또는 WSL 종료 전에
+  게시되지 않은 scratch output은 recovery 계약이 아닙니다.
 - 발신 Telegram 전송에는 `messenger.provider: telegram`과 비어 있지 않은
   `messenger.telegram.bot_token`, `messenger.telegram.chat_id` 값이 필요합니다.
 - 정식 Discord 전송에는 `messenger.discord.bot_token`과 `default_channel_id`를

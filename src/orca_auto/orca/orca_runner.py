@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import logging
 import os
 import signal
+import stat
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -30,6 +32,13 @@ from .orca_process import (
     orca_process_record_snapshot_from_exception,
     process_group_is_alive,
     write_orca_process_record,
+)
+from .scratch import (
+    OrcaScratchPolicy,
+    OrcaScratchWorkspace,
+    ScratchPublication,
+    attach_scratch_provenance_to_exception,
+    scratch_publication_provenance,
 )
 
 logger = logging.getLogger(__name__)
@@ -145,6 +154,7 @@ class RunResult:
     executable_identity: dict[str, Any] = field(default_factory=dict)
     output_identity: dict[str, Any] = field(default_factory=dict)
     execution_provenance: dict[str, Any] = field(default_factory=dict)
+    scratch_provenance: dict[str, Any] = field(default_factory=dict)
 
 
 class OrcaRunner:
@@ -154,6 +164,8 @@ class OrcaRunner:
         self._register_running_job: Callable[[Any | None], None] | None = None
         self._shutdown_requested: Callable[[], bool] | None = None
         self._bound_executable_identity: dict[str, Any] = {}
+        self._bound_durable_directory_identity: tuple[int, int] | None = None
+        self._scratch_policy: OrcaScratchPolicy | None = None
 
     def set_running_job_registrar(
         self,
@@ -169,6 +181,69 @@ class OrcaRunner:
 
     def set_executable_identity(self, identity: dict[str, Any]) -> None:
         self._bound_executable_identity = dict(identity)
+
+    def set_scratch_policy(self, policy: OrcaScratchPolicy) -> None:
+        self._scratch_policy = policy
+
+    def set_durable_directory_identity(self, identity: dict[str, Any]) -> None:
+        device = identity.get("device")
+        inode = identity.get("inode")
+        if type(device) is not int or device < 0 or type(inode) is not int or inode <= 0:
+            raise ValueError("ORCA durable directory identity is invalid")
+        self._bound_durable_directory_identity = (device, inode)
+
+    def _open_pinned_executable(self) -> tuple[int, dict[str, Any]]:
+        path = Path(self.orca_executable).expanduser().resolve()
+        # A pathname can be replaced after snapshot verification.  Open
+        # non-blocking so a substituted FIFO cannot stall the worker before
+        # fstat() rejects it as a non-regular executable.
+        flags = os.O_RDONLY | os.O_NONBLOCK
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path, flags)
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode):
+                raise ValueError(f"ORCA executable is not a regular file: {path}")
+            digest = hashlib.sha256()
+            while chunk := os.read(descriptor, 1024 * 1024):
+                digest.update(chunk)
+            after = os.fstat(descriptor)
+            if (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+            ) != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            ):
+                raise ValueError(f"ORCA executable changed while it was pinned: {path}")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            observed = {
+                "path": str(path),
+                "sha256": digest.hexdigest(),
+                "size_bytes": int(after.st_size),
+            }
+            if self._bound_executable_identity and observed != self._bound_executable_identity:
+                raise ValueError("ORCA executable no longer matches its queued identity")
+            return descriptor, observed
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    @staticmethod
+    def _cleanup_published_workspace(workspace: OrcaScratchWorkspace) -> None:
+        try:
+            workspace.cleanup()
+        except BaseException:  # noqa: BLE001
+            logger.exception(
+                "Published ORCA scratch workspace could not be removed; "
+                "future scratch runs will remain fail-closed until it is inspected: %s",
+                workspace.path,
+            )
 
     def _terminate_subprocess_tree(self, proc: subprocess.Popen) -> bool:
         """Terminate the ORCA process group; True only when it is confirmed gone."""
@@ -212,6 +287,20 @@ class OrcaRunner:
             logger.warning("Could not append the ORCA interruption notice", exc_info=True)
 
     @staticmethod
+    def _open_output_log_at(directory_fd: int, name: str) -> Any:
+        flags = os.O_WRONLY | os.O_CREAT
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(name, flags, 0o600, dir_fd=directory_fd)
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
+            os.close(descriptor)
+            raise ValueError(f"ORCA output must be a private regular file: {name}")
+        os.ftruncate(descriptor, 0)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        return os.fdopen(descriptor, "w", encoding="utf-8")
+
+    @staticmethod
     def _ensure_trailing_newline(path: Path) -> None:
         """Ensure a trailing newline so ORCA's Fortran parser reads the last line correctly."""
         data = path.read_bytes()
@@ -224,12 +313,76 @@ class OrcaRunner:
             )
 
     def run(self, inp_path: Path) -> RunResult:
-        inp = require_confined_regular_file(
+        durable_input = require_confined_regular_file(
             inp_path.parent,
             inp_path,
             label="ORCA selected input",
         )
-        self._ensure_trailing_newline(inp)
+        if self._scratch_policy is None:
+            return self._run_in_place(
+                durable_input,
+                process_record_dir=durable_input.parent,
+            )
+        workspace = OrcaScratchWorkspace.create(
+            self._scratch_policy,
+            durable_input,
+            expected_durable_dir_identity=self._bound_durable_directory_identity,
+        )
+        publication: ScratchPublication | None = None
+        try:
+            try:
+                result = self._run_in_place(
+                    workspace.scratch_input,
+                    process_record_dir=durable_input.parent,
+                    working_directory_fd=workspace.workspace_dir_fd,
+                )
+            except BaseException as exc:
+                publication = workspace.publish()
+                attach_scratch_provenance_to_exception(exc, publication)
+                raise
+            publication = workspace.publish()
+            durable_out = durable_input.parent / Path(result.out_path).name
+            result.out_path = str(durable_out)
+            result.input_identity = executable_identity(durable_input)
+            result.output_identity = confined_output_identity(durable_input.parent, durable_out)
+            result.scratch_provenance = scratch_publication_provenance(publication)
+            return result
+        except BaseException as exc:
+            if publication is None:
+                logger.error(
+                    "Retaining unpublished ORCA scratch workspace for recovery: %s",
+                    workspace.path,
+                )
+            else:
+                attach_scratch_provenance_to_exception(exc, publication)
+            raise
+        finally:
+            if publication is not None:
+                self._cleanup_published_workspace(workspace)
+            workspace.close()
+
+    def _run_in_place(
+        self,
+        inp_path: Path,
+        *,
+        process_record_dir: Path,
+        working_directory_fd: int | None = None,
+    ) -> RunResult:
+        if working_directory_fd is None:
+            inp = require_confined_regular_file(
+                inp_path.parent,
+                inp_path,
+                label="ORCA selected input",
+            )
+        else:
+            working_directory = Path("/proc/self/fd") / str(working_directory_fd)
+            secure_input = working_directory / inp_path.name
+            details = os.stat(inp_path.name, dir_fd=working_directory_fd, follow_symlinks=False)
+            if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
+                raise ValueError(f"ORCA selected input is unsafe: {inp_path.name}")
+            inp = secure_input
+        if working_directory_fd is None:
+            self._ensure_trailing_newline(inp)
         out = inp.with_suffix(".out")
         cwd = str(inp.parent)
 
@@ -239,7 +392,12 @@ class OrcaRunner:
         logger.info("Running ORCA: %s in %s", command, cwd)
 
         return_code = 1
-        with open_confined_log(inp.parent, out, label="ORCA output") as handle:
+        output_handle = (
+            open_confined_log(inp.parent, out, label="ORCA output")
+            if working_directory_fd is None
+            else self._open_output_log_at(working_directory_fd, out.name)
+        )
+        with output_handle as handle:
             with ShutdownSignalGuard() as shutdown_guard:
 
                 def _raise_if_shutdown_requested() -> None:
@@ -254,19 +412,39 @@ class OrcaRunner:
                 proc: subprocess.Popen | None = None
                 admission_registered = False
                 process_start_attempted = False
+                process_record: dict[str, object] | None = None
                 try:
                     if self._prepare_running_job is not None:
                         self._prepare_running_job()
                     _raise_if_shutdown_requested()
                     process_start_attempted = True
-                    proc = subprocess.Popen(
-                        command,
-                        cwd=cwd,
-                        stdout=handle,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        start_new_session=True,
-                    )
+                    executable_fd, observed_executable_identity = self._open_pinned_executable()
+                    if not bound_executable_identity:
+                        bound_executable_identity = observed_executable_identity
+                    launch_command = [
+                        "/proc/self/exe",
+                        "-m",
+                        "orca_auto.orca.launch_gate",
+                        self.orca_executable,
+                        str(executable_fd),
+                        inp.name,
+                    ]
+                    popen_kwargs: dict[str, Any] = {
+                        "cwd": cwd,
+                        "stdin": subprocess.PIPE,
+                        "stdout": handle,
+                        "stderr": subprocess.STDOUT,
+                        "text": True,
+                        "start_new_session": True,
+                    }
+                    inherited_fds = [executable_fd]
+                    if working_directory_fd is not None:
+                        inherited_fds.append(working_directory_fd)
+                    popen_kwargs["pass_fds"] = tuple(inherited_fds)
+                    try:
+                        proc = subprocess.Popen(launch_command, **popen_kwargs)
+                    finally:
+                        os.close(executable_fd)
                     if self._register_running_job is not None:
                         self._register_running_job(SimpleNamespace(process=proc))
                         admission_registered = True
@@ -274,7 +452,13 @@ class OrcaRunner:
                         inp_path=inp,
                         out_path=out,
                         pid=proc.pid,
+                        record_dir=process_record_dir,
                     )
+                    if proc.stdin is None:
+                        raise RuntimeError("ORCA launch gate has no release pipe")
+                    proc.stdin.write("1")
+                    proc.stdin.flush()
+                    proc.stdin.close()
                 except BaseException as exc:
                     if proc is None:
                         if (
@@ -304,10 +488,22 @@ class OrcaRunner:
                     failed_record = orca_process_record_snapshot_from_exception(exc)
                     if failed_record is not None:
                         clear_orca_process_record_snapshot(
-                            inp.parent,
+                            process_record_dir,
                             failed_record,
                             pid=proc.pid,
                         )
+                    if process_record is not None and terminated and process_exited:
+                        try:
+                            self._clear_process_record_if_group_gone(
+                                process_record_dir,
+                                proc,
+                                process_record,
+                            )
+                        except Exception as record_clear_exc:  # noqa: BLE001
+                            cleanup_error = cleanup_error or ProcessCleanupError(
+                                "Failed to clear ORCA process record after launch-gate cleanup"
+                            )
+                            cleanup_error.__cause__ = record_clear_exc
                     if self._register_running_job is not None:
                         try:
                             self._register_running_job(None)
@@ -372,7 +568,11 @@ class OrcaRunner:
                 finally:
                     # The state-only handlers remain installed through bookkeeping,
                     # so neither repeated SIGTERM nor Ctrl-C can strand ownership.
-                    self._clear_process_record_if_group_gone(inp.parent, proc, process_record)
+                    self._clear_process_record_if_group_gone(
+                        process_record_dir,
+                        proc,
+                        process_record,
+                    )
                     if admission_registered and self._register_running_job is not None:
                         self._register_running_job(None)
             # A signal received during normal process-tree/bookkeeping cleanup is
@@ -381,7 +581,11 @@ class OrcaRunner:
             _raise_if_shutdown_requested()
         if executable_identity(inp) != input_identity:
             raise RuntimeError(f"ORCA execution input changed while it was running: {inp}")
-        output_identity = confined_output_identity(inp.parent, out)
+        output_identity = (
+            confined_output_identity(inp.parent, out)
+            if working_directory_fd is None
+            else executable_identity(out)
+        )
         return RunResult(
             out_path=str(out),
             return_code=return_code,

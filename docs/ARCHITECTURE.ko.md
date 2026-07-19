@@ -309,6 +309,27 @@ false-success marker 부재가 모두 필요합니다. 공개 상태/리포트�
   덮어쓰지 않고 새 sibling generation을 만들 수 있습니다. 보이지 않는 filesystem
   owner token은 상태/리포트 게시, 이력 조회, cleanup, DFT discovery를 재사용 가능한
   경로나 inode 번호만이 아니라 실제 제출 때 만든 디렉터리에 바인딩합니다.
+- **선택적 RAM scratch와 durable 게시:** `orca.runtime.scratch_root`를 설정하면 attempt는
+  바인딩된 flat basename-relative input closure만 private `/dev/shm` workspace에 staging합니다.
+  input byte는 용량 admission 전에 한 번만 capture하고 root/workspace directory descriptor는
+  실행과 게시가 끝날 때까지 고정합니다. ORCA는 pathname을 다시 여는 대신 고정 descriptor를 통해
+  workspace에 진입합니다.
+  scratch-root lock은 workspace를 정확히 하나만 허용하고, 해석할 수 없거나 stale인 workspace는
+  운영자가 검사하거나 tmpfs를 초기화할 때까지 보존하면서 새 시작을 막습니다. ORCA process record,
+  queue, run state, lock은 durable generation에 유지합니다. process tree가 종료되면 남은 일반
+  파일을 staging한 다음 inode로 고정한 generation에 저널 기반 단일 file-set transaction으로
+  commit하며, 일부 교체만 성공하면 기존 세트로 rollback합니다. runtime state 이름은 예약하고
+  `*.tmp`/`*.tmp.*`는 폐기합니다. 과학 artifact를 손실할 수 있는 고정 allowlist 대신 알 수 없는
+  non-temporary output도 보존합니다. staging input은 변경 불가능합니다. 완료 attempt는
+  `scratch_provenance`에, commit 후 exception이나 worker shutdown은 `scratch_publications`에 게시
+  근거를 기록하며 고정 execution-snapshot provenance와 분리합니다. 현재 `MemAvailable`이 설정된
+  task memory 상한, scratch tmpfs의 전체 여유 공간, 설정한 host reserve 합계를 감당하지 못하면
+  시작을 거부합니다. worker/host crash는 아직 게시하지 않은
+  tmpfs checkpoint를 잃을 수 있으며, 이때 기존 durable recovery가
+  이미 게시된 근거부터 재개합니다.
+  최종 process group에는 one-byte launch gate를 먼저 시작합니다. worker가 해당 PID/PGID를 durable
+  record에 확정한 뒤에만 gate가 ORCA를 `exec`하므로, 등록 전 parent hard failure가 소유권 없는
+  계산을 남기지 않습니다.
 - **시도 엔진**(`attempt/engine.py`, `attempt/retry.py`, `attempt/resume.py`):
   시도를 실행하고 출력을 파싱·분류한 뒤 재시도 여부를 결정합니다.
 - **출력 분석**(`parser/`, `out_analyzer.py`, `output_status.py`,
@@ -450,8 +471,9 @@ stage 상한까지 배치합니다.
 
 ## 8. 영속화 & 상태 파일
 
-orca_auto는 전반적으로 디스크 기반입니다. 동시성 안전성은 모든 변경 주위의 파일
-락(`core/utils/lock.py`)에서 옵니다. 주요 디스크 아티팩트:
+orca_auto는 scheduling, ownership, 공개 artifact를 모두 디스크 기반으로 유지합니다.
+선택적 ORCA tmpfs scratch는 실행 workspace일 뿐 상태 원본이 아닙니다. 동시성 안전성은
+모든 durable 변경 주위의 파일 락(`core/utils/lock.py`)에서 옵니다. 주요 디스크 아티팩트:
 
 | 파일                        | 소유자           | 목적                                     |
 |-----------------------------|------------------|------------------------------------------|

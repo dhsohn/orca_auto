@@ -29,16 +29,37 @@ def analyzer_status_text(status: AnalyzerStatus | str) -> str:
 
 
 def last_out_path_from_state(state: Mapping[str, Any]) -> str | None:
+    best_index = -1
+    best_path: str | None = None
     attempts = state.get("attempts")
-    if not isinstance(attempts, list) or not attempts:
-        return None
-    last = attempts[-1]
-    if not isinstance(last, dict):
-        return None
-    out_path = last.get("out_path")
-    if isinstance(out_path, str) and out_path.strip():
-        return out_path
-    return None
+    if isinstance(attempts, list):
+        for position, attempt in enumerate(attempts, start=1):
+            if not isinstance(attempt, Mapping):
+                continue
+            out_path = attempt.get("out_path")
+            if isinstance(out_path, str) and out_path.strip():
+                raw_index = attempt.get("index")
+                index = raw_index if type(raw_index) is int and raw_index > 0 else position
+                if index >= best_index:
+                    best_index = index
+                    best_path = out_path
+    publications = state.get("scratch_publications")
+    if isinstance(publications, list):
+        for publication_record in publications:
+            if not isinstance(publication_record, Mapping):
+                continue
+            inp_path = publication_record.get("inp_path")
+            publication = publication_record.get("publication")
+            if isinstance(inp_path, str) and isinstance(publication, Mapping):
+                published_files = publication.get("published_files")
+                expected_name = Path(inp_path).with_suffix(".out").name
+                if isinstance(published_files, list) and expected_name in published_files:
+                    raw_index = publication_record.get("attempt_index")
+                    index = raw_index if type(raw_index) is int and raw_index > 0 else 0
+                    if index >= best_index:
+                        best_index = index
+                        best_path = str(Path(inp_path).with_suffix(".out"))
+    return best_path
 
 
 def build_final_result(

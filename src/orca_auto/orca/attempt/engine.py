@@ -14,6 +14,10 @@ from ..completion_rules import detect_completion_mode
 from ..orca_runner import WorkerShutdownInterrupt
 from ..out_analyzer import OutAnalysis, analyze_output
 from ..retry_policy import effective_max_retries
+from ..scratch import (
+    attach_scratch_provenance_mapping_to_exception,
+    scratch_provenance_from_exception,
+)
 from ..state import now_utc_iso, save_state
 from ..state_machine import decide_attempt_outcome
 from ..statuses import AnalyzerStatus, RunStatus
@@ -120,49 +124,57 @@ def _run_and_record_attempt(
 ) -> tuple[Path, OutAnalysis]:
     logger.info("Attempt %d starting: %s", execution_index, current_inp)
     run_result = runner.run(current_inp)
-    out_path = Path(run_result.out_path)
+    scratch_provenance = getattr(run_result, "scratch_provenance", None)
+    try:
+        out_path = Path(run_result.out_path)
 
-    runner_output_identity = getattr(run_result, "output_identity", None)
-    if isinstance(runner_output_identity, dict) and runner_output_identity:
-        verify_confined_output_identity(
-            reaction_dir,
-            runner_output_identity,
-            path_override=out_path,
-        )
-    output_identity_before = confined_output_identity(reaction_dir, out_path)
+        runner_output_identity = getattr(run_result, "output_identity", None)
+        if isinstance(runner_output_identity, dict) and runner_output_identity:
+            verify_confined_output_identity(
+                reaction_dir,
+                runner_output_identity,
+                path_override=out_path,
+            )
+        output_identity_before = confined_output_identity(reaction_dir, out_path)
 
-    mode = detect_completion_mode(current_inp)
-    analysis = analyze_output(out_path, mode)
-    output_identity = confined_output_identity(reaction_dir, out_path)
-    if output_identity != output_identity_before:
-        raise RuntimeError(f"ORCA output changed while it was analyzed: {out_path}")
-    attempt: AttemptRecord = {
-        "index": execution_index,
-        "inp_path": str(current_inp),
-        "out_path": str(out_path),
-        "return_code": run_result.return_code,
-        "analyzer_status": analysis.status,
-        "analyzer_reason": analysis.reason,
-        "markers": dict(analysis.markers),
-        "patch_actions": list(patch_actions or []),
-        "started_at": started_at,
-        "ended_at": now_utc_iso(),
-    }
-    command = getattr(run_result, "command", ())
-    if isinstance(command, (list, tuple)) and all(isinstance(part, str) for part in command):
-        attempt["command"] = list(command)
-    input_identity = getattr(run_result, "input_identity", None)
-    if isinstance(input_identity, dict):
-        attempt["input_identity"] = dict(input_identity)
-    executable_identity = getattr(run_result, "executable_identity", None)
-    if isinstance(executable_identity, dict):
-        attempt["executable_identity"] = dict(executable_identity)
-    attempt["output_identity"] = output_identity
-    execution_provenance = getattr(run_result, "execution_provenance", None)
-    if isinstance(execution_provenance, dict) and execution_provenance:
-        state["execution_provenance"] = dict(execution_provenance)
-    state["attempts"].append(attempt)
-    save_state(reaction_dir, state)
+        mode = detect_completion_mode(current_inp)
+        analysis = analyze_output(out_path, mode)
+        output_identity = confined_output_identity(reaction_dir, out_path)
+        if output_identity != output_identity_before:
+            raise RuntimeError(f"ORCA output changed while it was analyzed: {out_path}")
+        attempt: AttemptRecord = {
+            "index": execution_index,
+            "inp_path": str(current_inp),
+            "out_path": str(out_path),
+            "return_code": run_result.return_code,
+            "analyzer_status": analysis.status,
+            "analyzer_reason": analysis.reason,
+            "markers": dict(analysis.markers),
+            "patch_actions": list(patch_actions or []),
+            "started_at": started_at,
+            "ended_at": now_utc_iso(),
+        }
+        command = getattr(run_result, "command", ())
+        if isinstance(command, (list, tuple)) and all(isinstance(part, str) for part in command):
+            attempt["command"] = list(command)
+        input_identity = getattr(run_result, "input_identity", None)
+        if isinstance(input_identity, dict):
+            attempt["input_identity"] = dict(input_identity)
+        executable_identity = getattr(run_result, "executable_identity", None)
+        if isinstance(executable_identity, dict):
+            attempt["executable_identity"] = dict(executable_identity)
+        if isinstance(scratch_provenance, dict) and scratch_provenance:
+            attempt["scratch_provenance"] = dict(scratch_provenance)
+        attempt["output_identity"] = output_identity
+        execution_provenance = getattr(run_result, "execution_provenance", None)
+        if isinstance(execution_provenance, dict) and execution_provenance:
+            state["execution_provenance"] = dict(execution_provenance)
+        state["attempts"].append(attempt)
+        save_state(reaction_dir, state)
+    except BaseException as exc:
+        if isinstance(scratch_provenance, dict) and scratch_provenance:
+            attach_scratch_provenance_mapping_to_exception(exc, scratch_provenance)
+        raise
 
     logger.info(
         "Attempt %d finished: return_code=%d, status=%s",
@@ -262,6 +274,7 @@ def _finish_attempt_exception(
     current_inp: Path,
     exc: BaseException,
 ) -> int:
+    published_out = _last_out_path_from_state(ctx.state)
     if isinstance(exc, KeyboardInterrupt):
         logger.warning("Interrupted by user during attempt %d", loop.execution_index)
         return _finish_attempt(
@@ -269,7 +282,7 @@ def _finish_attempt_exception(
             status=RunStatus.FAILED,
             analyzer_status=AnalyzerStatus.INCOMPLETE,
             reason="interrupted_by_user",
-            last_out_path=str(current_inp.with_suffix(".out")),
+            last_out_path=published_out,
             exit_code=130,
         )
 
@@ -279,10 +292,34 @@ def _finish_attempt_exception(
         status=RunStatus.FAILED,
         analyzer_status=AnalyzerStatus.INCOMPLETE,
         reason="runner_exception",
-        last_out_path=str(current_inp.with_suffix(".out")),
+        last_out_path=published_out,
         exit_code=1,
         extra={"runner_error": str(exc)},
     )
+
+
+def _record_exception_scratch_publication(
+    ctx: AttemptRunContext,
+    loop: AttemptLoopState,
+    current_inp: Path,
+    exc: BaseException,
+    *,
+    outcome: str,
+) -> None:
+    provenance = scratch_provenance_from_exception(exc)
+    if not provenance:
+        return
+    publications = ctx.state.setdefault("scratch_publications", [])
+    publications.append(
+        {
+            "attempt_index": loop.execution_index,
+            "inp_path": str(current_inp),
+            "outcome": outcome,
+            "published_at": now_utc_iso(),
+            "publication": provenance,
+        }
+    )
+    save_state(ctx.reaction_dir, ctx.state)
 
 
 def _mark_and_notify_attempt_started(
@@ -370,10 +407,24 @@ def _run_attempt_step(
             runner=ctx.runner,
             patch_actions=step.patch_actions,
         )
-    except WorkerShutdownInterrupt:
+    except WorkerShutdownInterrupt as exc:
+        _record_exception_scratch_publication(
+            ctx,
+            loop,
+            step.current_inp,
+            exc,
+            outcome="worker_shutdown",
+        )
         logger.warning("Interrupted by worker shutdown during attempt %d", loop.execution_index)
         raise
     except (KeyboardInterrupt, Exception) as exc:  # noqa: BLE001
+        _record_exception_scratch_publication(
+            ctx,
+            loop,
+            step.current_inp,
+            exc,
+            outcome="exception",
+        )
         return None, _finish_attempt_exception(ctx, loop, step.current_inp, exc)
     return (
         RecordedAttemptResult(
