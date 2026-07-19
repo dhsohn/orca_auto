@@ -186,6 +186,16 @@ output, and 10,000 output files. A successful job writes `job_state.json`,
 tree and validated `xtb.trj`, `mdrestart`, `xtbmdok`, and logs are retained under
 `.orca_auto_xtb_md_executions/<job_id>/`.
 
+When `orca.runtime.scratch_root` is configured, standalone xTB-MD keeps that
+durable generation and its queue/report state on disk but runs the xTB process
+from a private tmpfs workspace. The generated geometry and `md.inp` are staged
+read-only; after the process exits, only `xtb.trj`, `mdrestart`, `xtbmdok`, and
+stdout/stderr are transactionally published into the durable generation before
+terminal validation. Other engine work files are omitted and removed with the
+workspace. Successful, rejected false-success, cancellation, and shutdown
+results record `scratch_provenance`; an unresolved publication is retained and
+blocks another scratch launch instead of silently falling back to SSD.
+
 Standalone xTB-MD currently accepts exactly xTB 6.7.1, which was the latest
 stable release when this contract was added. This is not a claim that the
 upstream release is issue-free: exit code 0 and `xtbmdok` are insufficient on

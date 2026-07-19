@@ -57,6 +57,8 @@ class RealEngineAdmission:
     root: Path
     global_limit: int
     xtb_md_limit: int | None = None
+    scratch_root: Path | None = None
+    scratch_min_free_gb: int | None = None
 
 
 @dataclass(frozen=True)
@@ -566,11 +568,26 @@ def _run_scenario(
     )
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-    for variable in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PYTEST_DEBUG_TEMPROOT"):
+    for variable in (
+        "PYTEST_ADDOPTS",
+        "PYTEST_PLUGINS",
+        "PYTEST_DEBUG_TEMPROOT",
+        "XTB_MD_REAL_SCRATCH_ROOT",
+        "XTB_MD_REAL_SCRATCH_MIN_FREE_GB",
+    ):
         environment.pop(variable, None)
     environment["ORCA_AUTO_SMOKE_PYTEST_TMP_PATH"] = str(pinned_case.pytest_access_path)
     environment["ORCA_AUTO_SMOKE_PYTEST_TMP_DEVICE"] = str(pinned_case.pytest_identity.device)
     environment["ORCA_AUTO_SMOKE_PYTEST_TMP_INODE"] = str(pinned_case.pytest_identity.inode)
+    if (
+        scenario.profile == "real-xtb"
+        and real_engine_admission is not None
+        and real_engine_admission.scratch_root is not None
+    ):
+        environment["XTB_MD_REAL_SCRATCH_ROOT"] = str(real_engine_admission.scratch_root)
+        environment["XTB_MD_REAL_SCRATCH_MIN_FREE_GB"] = str(
+            real_engine_admission.scratch_min_free_gb or 8
+        )
 
     try:
         pinned_case.assert_namespace_identity()

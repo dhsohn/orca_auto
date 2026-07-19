@@ -219,6 +219,10 @@ a production admission lease while the real-engine scenario runs. Unavailable
 capacity, an unset/non-executable `XTB_MD_REAL_EXECUTABLE`, or a skipped test is
 not reported as success. The retained NVT/NVE outputs must still be reviewed;
 passing the adapter contract is not a claim of chemically meaningful dynamics.
+When the shared config enables `orca.runtime.scratch_root`, the harness discards
+any inherited scratch override and passes only that validated root/minimum to
+the case-local xTB-MD config. The acceptance then requires a private tmpfs CWD,
+committed `scratch_provenance`, the canonical durable allowlist, and cleanup.
 
 ## Opt-in real-ORCA smoke
 
@@ -302,6 +306,12 @@ Fake-engine checks must cover strict manifest admission, immutable snapshots,
 NVT/NVE command generation, cancellation/process-group termination, no
 retry/resume, resource/output/time ceilings, and rejection of return-code-zero
 false success, stale, truncated, wrong-atom, or non-finite artifacts.
+When RAM scratch is enabled, they must also prove that the actual process CWD
+and geometry/control arguments are inside the private scratch workspace while
+the reported command and execution identity stay durable; only the two logs,
+trajectory, checkpoint, and success marker may be published. Test committed
+cleanup after success, false-success, and shutdown, plus fail-closed retention
+after durable-input mutation or publication failure.
 
 Changes to the standalone MD invocation or terminal validator also require a
 small sanitized real-xTB NVT and NVE acceptance. Record the exact xTB version
@@ -309,7 +319,10 @@ and executable identity, manifest, generated `$md` input, queue terminal state,
 `xtbmdok`, trajectory frame/atom counts, `mdrestart` validation, and output
 identities. The supported adapter version is currently xTB 6.7.1; describe it as
 the latest stable version selected for this adapter, not as issue-free. Confirm
-that a fixture containing a known false-success marker fails closed.
+that a fixture containing a known false-success marker fails closed. With RAM
+scratch configured, also record the live process CWD, committed
+`scratch_provenance`, durable allowlist, workspace cleanup, and absence of an
+automatic SSD fallback.
 
 ## Fixture and artifact policy
 

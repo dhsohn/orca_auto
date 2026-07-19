@@ -14,6 +14,7 @@ Loader = Callable[[str], Any]
 
 _SHARED_CONFIG_LOADERS: tuple[tuple[str, Loader], ...] = (
     ("orca", load_orca_config),
+    ("xtb-md", load_xtb_md_config),
     ("xtb", load_xtb_config),
     ("crest", load_crest_config),
 )

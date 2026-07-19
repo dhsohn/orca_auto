@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -437,6 +438,31 @@ class EngineScratchWorkspace:
 
 
 OrcaScratchWorkspace = EngineScratchWorkspace
+
+
+def publish_engine_scratch_workspace(
+    workspace: EngineScratchWorkspace,
+    *,
+    logger: logging.Logger,
+) -> ScratchPublication:
+    """Publish once, clean a committed workspace, and retain unresolved work."""
+
+    try:
+        publication = workspace.publish()
+    except BaseException:
+        workspace.close()
+        raise
+    try:
+        workspace.cleanup()
+    except BaseException:  # noqa: BLE001
+        logger.exception(
+            "Published engine scratch workspace could not be removed; future scratch runs "
+            "will remain fail-closed until it is inspected: %s",
+            workspace.path,
+        )
+    finally:
+        workspace.close()
+    return publication
 
 
 def is_transient_orca_scratch_file(name: str) -> bool:
@@ -1497,6 +1523,7 @@ __all__ = [
     "attach_scratch_provenance_mapping_to_exception",
     "attach_scratch_provenance_to_exception",
     "is_transient_orca_scratch_file",
+    "publish_engine_scratch_workspace",
     "scratch_provenance_from_exception",
     "scratch_publication_provenance",
 ]

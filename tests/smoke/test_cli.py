@@ -66,6 +66,10 @@ def test_real_profile_uses_matching_production_root_and_admission_limits(
                 "  max_active_simulations: 3",
                 "  max_active_xtb_md: 1",
                 f"  admission_root: {admission_root}",
+                "orca:",
+                "  runtime:",
+                "    scratch_root: /dev/shm/orca_auto",
+                "    scratch_min_free_gb: 7",
                 "",
             ]
         ),
@@ -84,6 +88,8 @@ def test_real_profile_uses_matching_production_root_and_admission_limits(
     assert admission.root == admission_root.resolve()
     assert admission.global_limit == 3
     assert admission.xtb_md_limit == 1
+    assert admission.scratch_root == Path("/dev/shm/orca_auto")
+    assert admission.scratch_min_free_gb == 7
 
 
 def test_real_profile_uses_production_global_default_when_scheduler_key_is_missing(
@@ -163,6 +169,8 @@ def test_real_orca_profile_uses_global_admission_without_xtb_subcap(tmp_path: Pa
     assert admission.root == admission_root.resolve()
     assert admission.global_limit == 2
     assert admission.xtb_md_limit is None
+    assert admission.scratch_root is None
+    assert admission.scratch_min_free_gb is None
 
 
 def test_parser_accepts_real_orca_profile() -> None:

@@ -188,6 +188,14 @@ trajectory frame 100,000개, wall time 86,400초, 보존 출력 1 GiB, 출력 �
 불변 실행 트리와 검증된 `xtb.trj`, `mdrestart`, `xtbmdok`, 로그는
 `.orca_auto_xtb_md_executions/<job_id>/` 아래에 보존합니다.
 
+`orca.runtime.scratch_root`를 설정하면 단독 xTB-MD는 durable generation과 큐/리포트
+상태는 디스크에 유지하되 실제 xTB 프로세스는 private tmpfs workspace에서 실행합니다.
+생성한 geometry와 `md.inp`는 read-only로 staging하고, 프로세스 종료 뒤 `xtb.trj`,
+`mdrestart`, `xtbmdok`, stdout/stderr만 durable generation에 transaction으로 게시한 다음
+종료 검증합니다. 그 밖의 엔진 work 파일은 생략하고 workspace와 함께 제거합니다. 성공,
+false-success 거부, 취소, worker 종료 결과에는 `scratch_provenance`가 남습니다. 게시를
+확정할 수 없으면 SSD로 조용히 fallback하지 않고 workspace를 보존해 다음 scratch 시작을 막습니다.
+
 단독 xTB-MD는 현재 이 계약을 추가할 때 최신 안정판이던 xTB 6.7.1만 받습니다. 이는 해당
 upstream release에 이슈가 없다는 뜻이 아닙니다. 종료 코드 0과 `xtbmdok`만으로는 성공이
 아니며, adapter는 `MD is unstable, emergency exit`,
