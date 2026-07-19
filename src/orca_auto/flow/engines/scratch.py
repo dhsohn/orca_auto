@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -8,7 +7,7 @@ from typing import Any
 from orca_auto.core.engine_scratch import (
     EngineScratchPolicy,
     EngineScratchWorkspace,
-    ScratchPublication,
+    publish_engine_scratch_workspace,
 )
 
 
@@ -33,29 +32,6 @@ def create_engine_scratch_workspace(
         manifest_path,
         durable_output_dir=job_dir,
     )
-
-
-def publish_engine_scratch_workspace(
-    workspace: EngineScratchWorkspace,
-    *,
-    logger: logging.Logger,
-) -> ScratchPublication:
-    try:
-        publication = workspace.publish()
-    except BaseException:
-        workspace.close()
-        raise
-    try:
-        workspace.cleanup()
-    except BaseException:  # noqa: BLE001
-        logger.exception(
-            "Published engine scratch workspace could not be removed; future scratch runs "
-            "will remain fail-closed until it is inspected: %s",
-            workspace.path,
-        )
-    finally:
-        workspace.close()
-    return publication
 
 
 __all__ = ["create_engine_scratch_workspace", "publish_engine_scratch_workspace"]

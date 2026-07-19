@@ -177,7 +177,7 @@ orca:
   완료된 실행은 제출 당시 디렉터리 이름 그대로 이곳에 남습니다
 - `orca.runtime.default_max_retries`: `0`이면 ORCA 재시도 비활성화, 양수면
   계산 종류별 재시도 정책 활성화
-- `orca.runtime.scratch_root`: private attempt별 ORCA 및 workflow xTB/CREST 작업
+- `orca.runtime.scratch_root`: private attempt별 ORCA, 단독 xTB-MD 및 workflow xTB/CREST 작업
   디렉터리가 공유하는 `/dev/shm` 아래의 선택적 전용 경로
 - `orca.runtime.scratch_min_free_gb`: RAM scratch를 활성화했을 때 적용하는 양의 tmpfs
   여유 공간 시작 gate. 기본값은 `8`
@@ -224,6 +224,15 @@ orca:
   log만, CREST는 named ensemble 후보와 log만 transaction으로 게시합니다. 엔진 work
   tree와 transient 파일은 생략 provenance에 기록한 뒤 workspace와 함께 제거합니다.
   이 경로는 CREST 자체의 `--scratch` 옵션을 사용하지 않습니다.
+- 단독 xTB-MD도 같은 단일-workspace scratch admission을 사용합니다. 불변 generated
+  geometry, `md.inp`, attempt identity, 큐/상태, 리포트 소유권은
+  `.orca_auto_xtb_md_executions/<job_id>/`에 두고 실제 xTB command는 tmpfs의 staging된
+  geometry/control 경로를 읽습니다. 종료 뒤 `xtb.stdout.log`, `xtb.stderr.log`, `xtb.trj`,
+  `mdrestart`, `xtbmdok`만 transaction으로 게시하고 durable generation에서 검증합니다. 전체
+  크기, 파일 수, log, trajectory, checkpoint, marker 크기 상한은 게시 전에 적용하며 위반
+  파일은 durable storage로 복사하지 않고 tmpfs에 보존합니다.
+  false-success, 취소, worker 종료도 commit된 canonical 근거와 `scratch_provenance`를
+  보존합니다. 미확정 게시는 뒤이은 scratch 시작을 막으며 retry/resume을 허용하지 않습니다.
 - `C:\...`, `C:/...`, `/mnt/c/...` 같은 Windows 스타일 경로는 설정에서 지원되지
   않습니다.
 - ORCA, xTB, CREST의 설정된 실행 경로는 실제 존재하는 실행 파일을 가리키는 절대 Linux
@@ -639,6 +648,12 @@ ORCA 고유 노트:
 - 작업 루트에는 `job_state.json`, `job_report.json`, `job_report.md`가 생깁니다. 불변
   generated input, 로그, `xtb.trj`, `mdrestart`, `xtbmdok`와 종료 content identity는
   `.orca_auto_xtb_md_executions/<job_id>/` 아래에 보존합니다.
+- `orca.runtime.scratch_root`를 설정하면 실제 xTB process는 private tmpfs workspace에서
+  실행합니다. 두 log, trajectory, checkpoint, success marker만 같은 durable generation에
+  commit한 뒤 종료 검증하고 다른 엔진 work 파일은 생략합니다. 종료
+  `engine_payload.scratch_provenance`는 one-attempt/no-retry/no-resume 계약을 바꾸지 않으면서
+  commit 또는 미확정 게시 상태를 기록합니다. 출력 상한은 게시 전에 검사하므로 과대 artifact가
+  durable storage를 먼저 소비하지 않습니다.
 
 ### 7.3 `queue cancel`
 

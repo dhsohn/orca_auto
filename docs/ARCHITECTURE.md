@@ -303,6 +303,17 @@ submitted atom/step budget, bounded output, and no known xTB false-success
 marker. The public state/report files are written at the job root; immutable
 raw outputs remain in the private execution tree for audit.
 
+When shared RAM scratch is enabled, the private execution tree remains the
+durable identity and publication target. Its generated geometry, `md.inp`,
+attempt token, queue metadata, and public command stay bound to that generation,
+while the actual xTB command uses staged input paths and a private tmpfs CWD.
+After process-group exit, the common `core.engine_scratch` transaction publishes
+only `xtb.trj`, `mdrestart`, `xtbmdok`, and stdout/stderr. Terminal validation
+then runs against those newly published durable files, so false-success evidence
+is retained but cannot become completion. Committed publication is cleaned and
+recorded in `scratch_provenance`; identity drift or an unresolved transaction
+retains the workspace and blocks later scratch launches.
+
 ---
 
 ## 6. ORCA Engine Internals
@@ -348,9 +359,10 @@ logic. Notable pieces:
   the scratch tmpfs, and the configured host reserve.
   The scratch workspace and journal implementation is owned by
   `core.engine_scratch`; ORCA contributes only its flat input-dependency parser.
-  Workflow xTB/CREST use the same private workspace and transaction but keep
+  Standalone xTB-MD and workflow xTB/CREST use the same private workspace and transaction but keep
   their immutable input snapshots durable and absolute. xTB publishes its
-  canonical job-type result set and logs; CREST publishes named retained
+  canonical job-type result set and logs; standalone xTB-MD publishes only its
+  trajectory, checkpoint, success marker, and logs; CREST publishes named retained
   ensembles and logs. Large engine work trees are omitted and removed after the
   committed publication. CREST's own `--scratch` copier remains disabled.
   A one-byte launch gate starts in the final process group first. The worker

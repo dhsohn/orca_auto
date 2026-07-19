@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import resource
 import stat
@@ -20,6 +21,13 @@ from orca_auto.core.engine_process import (
     ensure_confined_directory,
     start_logged_process,
 )
+from orca_auto.core.engine_scratch import (
+    EngineScratchPolicy,
+    EngineScratchWorkspace,
+    ScratchPublication,
+    publish_engine_scratch_workspace,
+    scratch_publication_provenance,
+)
 from orca_auto.core.queue.cancellable import retain_process_ownership_until_exit
 from orca_auto.core.queue.engine.input_snapshot import (
     read_stable_regular_file,
@@ -31,7 +39,6 @@ from orca_auto.core.utils import process as process_utils
 from orca_auto.core.utils.persistence import fsync_directory
 
 from .artifacts import (
-    AttemptIdentity,
     XtbMdArtifactError,
     capture_attempt_identity,
     validate_terminal_artifacts,
@@ -53,6 +60,16 @@ _MD_INPUT_NAME = "md.inp"
 _POLL_SECONDS = 0.25
 _MAX_LOG_BYTES = 64 * 1024 * 1024
 _MAX_CHECKPOINT_BYTES = 64 * 1024 * 1024
+_SCRATCH_PUBLISH_NAMES = frozenset(
+    {
+        _STDOUT_NAME,
+        _STDERR_NAME,
+        "xtb.trj",
+        "mdrestart",
+        "xtbmdok",
+    }
+)
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -68,8 +85,19 @@ class XtbMdRunResult:
     engine_payload: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class _XtbMdProcessResult:
+    forced_status: str
+    forced_reason: str
+    exit_code: int | None
+    started_at: str
+    finished_at: str
+
+
 def _safe_reason(prefix: str, value: Any) -> str:
     text = " ".join(str(value).split())[:500]
+    if prefix == "EngineScratchError":
+        text = text.replace("ORCA", "engine")
     return f"{prefix}:{text}" if text else prefix
 
 
@@ -115,6 +143,61 @@ def _directory_usage(root: Path) -> tuple[int, int]:
                 if total_files > MAX_XTB_MD_OUTPUT_FILES:
                     raise ValueError("xTB-MD output exceeds the server file-count limit")
     return total_bytes, total_files
+
+
+def _scratch_output_policy_reason(root: Path) -> str:
+    try:
+        output_bytes, _output_files = _directory_usage(root)
+    except ValueError as exc:
+        return _safe_reason("output_policy_violation", exc)
+    if output_bytes > MAX_XTB_MD_OUTPUT_BYTES:
+        return "output_size_limit_exceeded"
+    for name, limit in (
+        (_STDOUT_NAME, _MAX_LOG_BYTES),
+        (_STDERR_NAME, _MAX_LOG_BYTES),
+        ("xtb.trj", MAX_XTB_MD_OUTPUT_BYTES),
+        ("mdrestart", _MAX_CHECKPOINT_BYTES),
+        ("xtbmdok", 1),
+    ):
+        candidate = root / name
+        try:
+            status = candidate.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        if status.st_size > limit:
+            return f"output_policy_violation:{name}_size_limit_exceeded"
+    return ""
+
+
+def _xtb_md_scratch_dependencies(_primary_payload: bytes) -> tuple[str, ...]:
+    return (_MD_INPUT_NAME,)
+
+
+def _publish_xtb_md_scratch_name(name: str) -> bool:
+    return name in _SCRATCH_PUBLISH_NAMES
+
+
+def _create_scratch_workspace(
+    cfg: Any,
+    *,
+    execution_dir: Path,
+    input_xyz: Path,
+    max_memory_gb: int,
+) -> EngineScratchWorkspace | None:
+    scratch = getattr(cfg, "scratch", None)
+    if scratch is None or not bool(getattr(scratch, "enabled", False)):
+        return None
+    return EngineScratchWorkspace.create(
+        EngineScratchPolicy(
+            root=Path(str(scratch.root)),
+            min_free_bytes=int(scratch.min_free_gb) * 1024**3,
+            max_task_memory_bytes=max_memory_gb * 1024**3,
+            dependency_names_from_primary=_xtb_md_scratch_dependencies,
+            publish_name=_publish_xtb_md_scratch_name,
+        ),
+        input_xyz,
+        durable_output_dir=execution_dir,
+    )
 
 
 def _validate_snapshot(
@@ -230,21 +313,22 @@ def _stop_process(process: Any) -> None:
 
 def _run_process(
     *,
-    command: tuple[str, ...],
-    execution_dir: Path,
+    process_command: tuple[str, ...],
+    reported_command: tuple[str, ...],
+    process_dir: Path,
+    durable_execution_dir: Path,
     manifest: XtbMdManifest,
     resources: dict[str, int],
     runtime_environment: Mapping[str, str],
-    attempt: AttemptIdentity,
     admission_root: str | Path,
     admission_token: str,
     should_cancel: Callable[[], bool],
     shutdown_requested: Callable[[], bool],
     validate_job_dir: Callable[[], Path],
     on_started: Callable[[str, str, tuple[str, ...]], None] | None,
-) -> XtbMdRunResult:
-    stdout_log = execution_dir / _STDOUT_NAME
-    stderr_log = execution_dir / _STDERR_NAME
+) -> _XtbMdProcessResult:
+    stdout_log = process_dir / _STDOUT_NAME
+    stderr_log = process_dir / _STDERR_NAME
     preparer = build_slot_engine_process_preparer(admission_root, admission_token)
     registrar = build_slot_engine_process_registrar(admission_root, admission_token)
     launched: Any | None = None
@@ -258,8 +342,8 @@ def _run_process(
         preparer()
         prepared = True
         launched = start_logged_process(
-            command,
-            cwd=execution_dir,
+            process_command,
+            cwd=process_dir,
             stdout_log=stdout_log,
             stderr_log=stderr_log,
             max_cores=resources["max_cores"],
@@ -275,7 +359,11 @@ def _run_process(
         )
         registrar(launched)
         if on_started is not None:
-            on_started(str(execution_dir), launched.started_at, command)
+            on_started(
+                str(durable_execution_dir),
+                launched.started_at,
+                reported_command,
+            )
         while True:
             try:
                 validate_job_dir()
@@ -299,15 +387,9 @@ def _run_process(
                 forced_status = "failed"
                 forced_reason = "walltime_limit_exceeded"
             else:
-                try:
-                    output_bytes, _files = _directory_usage(execution_dir)
-                except ValueError as exc:
+                forced_reason = _scratch_output_policy_reason(process_dir)
+                if forced_reason:
                     forced_status = "failed"
-                    forced_reason = _safe_reason("output_policy_violation", exc)
-                else:
-                    if output_bytes > MAX_XTB_MD_OUTPUT_BYTES:
-                        forced_status = "failed"
-                        forced_reason = "output_size_limit_exceeded"
             if forced_status:
                 _stop_process(launched.process)
                 exit_code = launched.process.poll()
@@ -324,48 +406,18 @@ def _run_process(
 
     finished_at = now_utc_iso()
     started_at = launched.started_at if launched is not None else ""
-    if forced_status:
-        return XtbMdRunResult(
-            status=forced_status,
-            reason=forced_reason,
-            exit_code=exit_code,
-            execution_dir=str(execution_dir),
-            started_at=started_at,
-            finished_at=finished_at,
-            command=command,
-        )
-    validate_job_dir()
-    output_bytes, output_files = _directory_usage(execution_dir)
-    if output_bytes > MAX_XTB_MD_OUTPUT_BYTES:
-        raise XtbMdArtifactError("xTB-MD final output exceeds the server byte limit")
-    validate_job_dir()
-    terminal = validate_terminal_artifacts(
-        attempt,
-        manifest=manifest,
-        exit_code=int(exit_code if exit_code is not None else -1),
-        stdout_log=stdout_log,
-        stderr_log=stderr_log,
-        max_log_bytes=_MAX_LOG_BYTES,
-        max_trajectory_bytes=MAX_XTB_MD_OUTPUT_BYTES,
-        max_checkpoint_bytes=_MAX_CHECKPOINT_BYTES,
-    )
-    return XtbMdRunResult(
-        status="completed",
-        reason="completed",
+    if not forced_status:
+        validate_job_dir()
+    final_policy_reason = _scratch_output_policy_reason(process_dir)
+    if final_policy_reason:
+        forced_status = "failed"
+        forced_reason = final_policy_reason
+    return _XtbMdProcessResult(
+        forced_status=forced_status,
+        forced_reason=forced_reason,
         exit_code=exit_code,
-        execution_dir=str(execution_dir),
         started_at=started_at,
         finished_at=finished_at,
-        command=command,
-        artifacts=terminal.output_identities,
-        engine_payload={
-            "completed_steps": terminal.completed_steps,
-            "trajectory_frames": terminal.frame_count,
-            "atom_count": terminal.atom_count,
-            "output_bytes": output_bytes,
-            "output_files": output_files,
-            "checkpoint_is_diagnostic_only": True,
-        },
     )
 
 
@@ -381,6 +433,13 @@ def run_xtb_md_attempt(
     on_started: Callable[[str, str, tuple[str, ...]], None] | None = None,
 ) -> XtbMdRunResult:
     execution_dir = ""
+    reported_command: tuple[str, ...] = ()
+    process_result: _XtbMdProcessResult | None = None
+    scratch_workspace: EngineScratchWorkspace | None = None
+    scratch_publication: ScratchPublication | None = None
+    scratch_publication_attempted = False
+    scratch_provenance: dict[str, Any] = {}
+    engine_payload: dict[str, Any] = {}
     try:
         job_dir = validate_execution_snapshot_job_dir(
             cfg.runtime.allowed_root,
@@ -394,7 +453,7 @@ def run_xtb_md_attempt(
             execution_snapshot,
             execution_dir=active_dir,
         )
-        command = build_xtb_md_command(
+        reported_command = build_xtb_md_command(
             executable=executable,
             input_xyz=manifest.input_xyz,
             md_input=active_dir / _MD_INPUT_NAME,
@@ -402,13 +461,30 @@ def run_xtb_md_attempt(
             max_cores=resources["max_cores"],
         )
         attempt = capture_attempt_identity(active_dir)
-        return _run_process(
-            command=command,
+        scratch_workspace = _create_scratch_workspace(
+            cfg,
             execution_dir=active_dir,
+            input_xyz=manifest.input_xyz,
+            max_memory_gb=resources["max_memory_gb"],
+        )
+        process_dir = scratch_workspace.path if scratch_workspace is not None else active_dir
+        process_command = reported_command
+        if scratch_workspace is not None:
+            process_command = build_xtb_md_command(
+                executable=executable,
+                input_xyz=scratch_workspace.scratch_input,
+                md_input=scratch_workspace.path / _MD_INPUT_NAME,
+                manifest=manifest,
+                max_cores=resources["max_cores"],
+            )
+        process_result = _run_process(
+            process_command=process_command,
+            reported_command=reported_command,
+            process_dir=process_dir,
+            durable_execution_dir=active_dir,
             manifest=manifest,
             resources=resources,
             runtime_environment=runtime_environment,
-            attempt=attempt,
             admission_root=admission_root,
             admission_token=admission_token,
             should_cancel=should_cancel,
@@ -419,14 +495,121 @@ def run_xtb_md_attempt(
             ),
             on_started=on_started,
         )
-    except Exception as exc:  # noqa: BLE001
+        if scratch_workspace is not None:
+            if process_result.forced_reason.startswith(
+                ("job_directory_identity_changed:", "output_policy_", "output_size_")
+            ):
+                scratch_provenance = {
+                    "used": True,
+                    "filesystem": "tmpfs",
+                    "publication_status": "unresolved",
+                }
+            else:
+                scratch_publication_attempted = True
+                scratch_publication = publish_engine_scratch_workspace(
+                    scratch_workspace,
+                    logger=LOGGER,
+                )
+                scratch_provenance = scratch_publication_provenance(scratch_publication)
+
+        if process_result.forced_status:
+            engine_payload = (
+                {"scratch_provenance": scratch_provenance} if scratch_provenance else {}
+            )
+            return XtbMdRunResult(
+                status=process_result.forced_status,
+                reason=process_result.forced_reason,
+                exit_code=process_result.exit_code,
+                execution_dir=execution_dir,
+                started_at=process_result.started_at,
+                finished_at=process_result.finished_at,
+                command=reported_command,
+                engine_payload=engine_payload,
+            )
+
+        validate_execution_snapshot_job_dir(cfg.runtime.allowed_root, execution_snapshot)
+        output_bytes, output_files = _directory_usage(active_dir)
+        if output_bytes > MAX_XTB_MD_OUTPUT_BYTES:
+            raise XtbMdArtifactError("xTB-MD final output exceeds the server byte limit")
+        terminal = validate_terminal_artifacts(
+            attempt,
+            manifest=manifest,
+            exit_code=int(process_result.exit_code if process_result.exit_code is not None else -1),
+            stdout_log=active_dir / _STDOUT_NAME,
+            stderr_log=active_dir / _STDERR_NAME,
+            max_log_bytes=_MAX_LOG_BYTES,
+            max_trajectory_bytes=MAX_XTB_MD_OUTPUT_BYTES,
+            max_checkpoint_bytes=_MAX_CHECKPOINT_BYTES,
+        )
+        engine_payload = {
+            "completed_steps": terminal.completed_steps,
+            "trajectory_frames": terminal.frame_count,
+            "atom_count": terminal.atom_count,
+            "output_bytes": output_bytes,
+            "output_files": output_files,
+            "checkpoint_is_diagnostic_only": True,
+        }
+        if scratch_provenance:
+            engine_payload["scratch_provenance"] = scratch_provenance
+        return XtbMdRunResult(
+            status="completed",
+            reason="completed",
+            exit_code=process_result.exit_code,
+            execution_dir=execution_dir,
+            started_at=process_result.started_at,
+            finished_at=process_result.finished_at,
+            command=reported_command,
+            artifacts=terminal.output_identities,
+            engine_payload=engine_payload,
+        )
+    except BaseException as caught:  # noqa: BLE001
+        error = caught
+        if scratch_workspace is not None and not scratch_publication_attempted:
+            scratch_publication_attempted = True
+            try:
+                scratch_publication = publish_engine_scratch_workspace(
+                    scratch_workspace,
+                    logger=LOGGER,
+                )
+            except BaseException as publication_error:  # noqa: BLE001
+                error = publication_error
+                scratch_provenance = {
+                    "used": True,
+                    "filesystem": "tmpfs",
+                    "publication_status": "unresolved",
+                }
+            else:
+                scratch_provenance = scratch_publication_provenance(scratch_publication)
+        elif (
+            scratch_workspace is not None
+            and scratch_publication_attempted
+            and scratch_publication is None
+        ):
+            scratch_provenance = {
+                "used": True,
+                "filesystem": "tmpfs",
+                "publication_status": "unresolved",
+            }
+        if not isinstance(error, Exception):
+            if error is caught:
+                raise
+            raise error from caught
+        engine_payload = {"scratch_provenance": scratch_provenance} if scratch_provenance else {}
         return XtbMdRunResult(
             status="failed",
-            reason=_safe_reason(f"{exc.__class__.__name__}", exc),
-            exit_code=None,
+            reason=_safe_reason(f"{error.__class__.__name__}", error),
+            exit_code=process_result.exit_code if process_result is not None else None,
             execution_dir=execution_dir,
-            finished_at=now_utc_iso(),
+            started_at=process_result.started_at if process_result is not None else "",
+            finished_at=(
+                process_result.finished_at if process_result is not None else now_utc_iso()
+            ),
+            command=reported_command,
+            engine_payload=engine_payload,
         )
+    finally:
+        if scratch_workspace is not None:
+            scratch_workspace.close()
 
 
 __all__ = ["XtbMdRunResult", "run_xtb_md_attempt"]

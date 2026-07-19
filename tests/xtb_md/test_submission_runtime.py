@@ -12,9 +12,11 @@ import yaml
 
 from orca_auto import cli_handlers as cli_run_dir
 from orca_auto.cli import main as cli_main
+from orca_auto.core import engine_scratch as scratch_mod
 from orca_auto.core.admission import get_slot, list_slots, release_slot, reserve_slot
 from orca_auto.core.commands.run_dir import use_run_dir_publication_guard
 from orca_auto.core.config.engines import load_xtb_md_config
+from orca_auto.core.config.scratch import ScratchConfig
 from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.core.queue import (
     QUEUE_RECORD_SYNC_ABORTED,
@@ -36,6 +38,7 @@ from orca_auto.core.queue.processes import worker_pid_file_path
 from orca_auto.core.queue.store import mutate_entries
 from orca_auto.flow import activity
 from orca_auto.xtb_md import execution, queue_runtime
+from orca_auto.xtb_md import runner as xtb_md_runner
 from orca_auto.xtb_md import submission as xtb_md_submission
 from orca_auto.xtb_md.engine import ENGINE_DEFINITION
 from orca_auto.xtb_md.job_locations import list_job_records_for_cfg
@@ -108,6 +111,22 @@ def _run_claimed_entry(
         queue_id=entry.queue_id,
         admission_token=admission_token,
     )
+
+
+def _scratch_enabled_config(
+    case: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Any, Path]:
+    fake_shm = case.root / "shm"
+    fake_shm.mkdir()
+    scratch_root = fake_shm / "orca_auto"
+    monkeypatch.setattr(scratch_mod, "_SCRATCH_ROOT_PARENT", fake_shm)
+    monkeypatch.setattr(scratch_mod, "_linux_available_memory_bytes", lambda: 2**63)
+    cfg = replace(
+        load_xtb_md_config(str(case.config_path)),
+        scratch=ScratchConfig(root=str(scratch_root), min_free_gb=1),
+    )
+    return cfg, scratch_root
 
 
 def test_submission_pins_exact_stable_xtb_version_and_cleans_rejected_generation(
@@ -867,8 +886,11 @@ def test_execution_uses_immutable_snapshot_after_source_mutation_and_cannot_retr
     assert [path.name for path in execution_dir.parent.iterdir()] == [completed.task_id]
 
 
+@pytest.mark.parametrize("scratch_enabled", [False, True], ids=["durable", "scratch"])
 def test_runner_rejects_job_directory_rebinding_during_engine_execution(
     runtime_case_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    scratch_enabled: bool,
 ) -> None:
     case = runtime_case_factory(mode="slow")
     submitted = _submit(case)
@@ -884,8 +906,13 @@ def test_runner_rejects_job_directory_rebinding_during_engine_execution(
         case.job_dir.rename(moved_job_dir)
         case.job_dir.symlink_to(moved_job_dir, target_is_directory=True)
 
+    cfg = load_xtb_md_config(str(case.config_path))
+    scratch_root: Path | None = None
+    if scratch_enabled:
+        cfg, scratch_root = _scratch_enabled_config(case, monkeypatch)
+
     result = run_xtb_md_attempt(
-        load_xtb_md_config(str(case.config_path)),
+        cfg,
         queued,
         execution_snapshot=queued.metadata["execution_snapshot"],
         admission_root=case.admission_root,
@@ -899,6 +926,11 @@ def test_runner_rejects_job_directory_rebinding_during_engine_execution(
     assert result.reason.startswith("job_directory_identity_changed:")
     assert "missing, replaced, or contains a symlink" in result.reason
     assert result.artifacts == {}
+    if scratch_enabled:
+        assert result.engine_payload["scratch_provenance"]["publication_status"] == "unresolved"
+        assert scratch_root is not None
+        attempts = [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")]
+        assert len(attempts) == 1
     idle = get_slot(case.admission_root, token)
     assert idle is not None and idle.engine_process_state == "idle"
     assert release_slot(case.admission_root, token) is True
@@ -931,6 +963,345 @@ def test_runner_rejects_tampered_snapshot_before_engine_launch(runtime_case_fact
     assert execution_dir.is_dir()
     assert not (execution_dir / "xtb.stdout.log").exists()
     assert not (execution_dir / "xtbmdok").exists()
+
+
+def test_runner_executes_in_scratch_and_publishes_only_canonical_outputs(
+    runtime_case_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = runtime_case_factory(mode="success")
+    submitted = _submit(case)
+    queued = _entry(case, submitted["queue_id"])
+    token = _reserve_managed_slot(case, queued)
+    cfg, scratch_root = _scratch_enabled_config(case, monkeypatch)
+    observed: dict[str, Any] = {}
+    reported: dict[str, Any] = {}
+    original_start = xtb_md_runner.start_logged_process
+
+    def observe_start(*args: Any, **kwargs: Any) -> Any:
+        observed["command"] = tuple(args[0])
+        observed["cwd"] = Path(kwargs["cwd"])
+        launched = original_start(*args, **kwargs)
+        (observed["cwd"] / "charges").write_bytes(b"x" * 4096)
+        return launched
+
+    def observe_running(
+        execution_dir: str,
+        started_at: str,
+        command: tuple[str, ...],
+    ) -> None:
+        reported.update(
+            execution_dir=execution_dir,
+            started_at=started_at,
+            command=command,
+        )
+
+    monkeypatch.setattr(xtb_md_runner, "start_logged_process", observe_start)
+    result = run_xtb_md_attempt(
+        cfg,
+        queued,
+        execution_snapshot=queued.metadata["execution_snapshot"],
+        admission_root=case.admission_root,
+        admission_token=token,
+        should_cancel=lambda: False,
+        shutdown_requested=lambda: False,
+        on_started=observe_running,
+    )
+
+    assert release_slot(case.admission_root, token) is True
+    assert result.status == "completed"
+    execution_dir = Path(result.execution_dir)
+    process_dir = observed["cwd"]
+    assert process_dir.parent == scratch_root
+    assert not process_dir.exists()
+    assert Path(observed["command"][1]).parent == process_dir
+    assert Path(observed["command"][3]).parent == process_dir
+    assert reported["execution_dir"] == str(execution_dir)
+    assert Path(reported["command"][1]).parent == execution_dir
+    assert Path(reported["command"][3]).parent == execution_dir
+    assert result.command == reported["command"]
+    assert {path.name for path in execution_dir.iterdir()} == {
+        ".orca_auto_xtb_md_attempt",
+        ".orca_auto_runtime_home",
+        "water.xyz",
+        "md.inp",
+        "xtb.stdout.log",
+        "xtb.stderr.log",
+        "xtb.trj",
+        "mdrestart",
+        "xtbmdok",
+    }
+    assert all(
+        Path(identity["path"]).parent == execution_dir for identity in result.artifacts.values()
+    )
+    provenance = result.engine_payload["scratch_provenance"]
+    assert provenance["used"] is True
+    assert provenance["filesystem"] == "tmpfs"
+    assert provenance["publication_status"] == "committed"
+    assert set(provenance["published_files"]) == {
+        "xtb.stdout.log",
+        "xtb.stderr.log",
+        "xtb.trj",
+        "mdrestart",
+        "xtbmdok",
+    }
+    assert provenance["omitted_transient_files"] == ["charges"]
+    assert provenance["omitted_transient_bytes"] == 4096
+    assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
+
+
+def test_scratch_false_success_is_published_then_rejected(
+    runtime_case_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = runtime_case_factory(mode="false_success")
+    submitted = _submit(case)
+    queued = _entry(case, submitted["queue_id"])
+    token = _reserve_managed_slot(case, queued)
+    cfg, scratch_root = _scratch_enabled_config(case, monkeypatch)
+
+    result = run_xtb_md_attempt(
+        cfg,
+        queued,
+        execution_snapshot=queued.metadata["execution_snapshot"],
+        admission_root=case.admission_root,
+        admission_token=token,
+        should_cancel=lambda: False,
+        shutdown_requested=lambda: False,
+    )
+
+    assert release_slot(case.admission_root, token) is True
+    assert result.status == "failed"
+    assert "fatal marker" in result.reason
+    assert result.artifacts == {}
+    execution_dir = Path(result.execution_dir)
+    assert "MD is unstable, emergency exit" in (execution_dir / "xtb.stdout.log").read_text(
+        encoding="utf-8"
+    )
+    assert (execution_dir / "xtb.trj").is_file()
+    assert result.engine_payload["scratch_provenance"]["publication_status"] == "committed"
+    assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
+
+
+def test_scratch_shutdown_publishes_logs_and_cleans_workspace(
+    runtime_case_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = runtime_case_factory(mode="slow")
+    submitted = _submit(case)
+    queued = _entry(case, submitted["queue_id"])
+    token = _reserve_managed_slot(case, queued)
+    cfg, scratch_root = _scratch_enabled_config(case, monkeypatch)
+
+    result = run_xtb_md_attempt(
+        cfg,
+        queued,
+        execution_snapshot=queued.metadata["execution_snapshot"],
+        admission_root=case.admission_root,
+        admission_token=token,
+        should_cancel=lambda: False,
+        shutdown_requested=lambda: True,
+    )
+
+    assert release_slot(case.admission_root, token) is True
+    assert result.status == "failed"
+    assert result.reason == "worker_shutdown_no_retry"
+    assert result.engine_payload["scratch_provenance"]["publication_status"] == "committed"
+    execution_dir = Path(result.execution_dir)
+    assert (execution_dir / "xtb.stdout.log").is_file()
+    assert (execution_dir / "xtb.stderr.log").is_file()
+    assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
+
+
+def test_scratch_cancellation_publishes_logs_and_stays_terminal(
+    runtime_case_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = runtime_case_factory(mode="slow")
+    submitted = _submit(case)
+    queued = _entry(case, submitted["queue_id"])
+    token = _reserve_managed_slot(case, queued)
+    cfg, scratch_root = _scratch_enabled_config(case, monkeypatch)
+
+    result = run_xtb_md_attempt(
+        cfg,
+        queued,
+        execution_snapshot=queued.metadata["execution_snapshot"],
+        admission_root=case.admission_root,
+        admission_token=token,
+        should_cancel=lambda: True,
+        shutdown_requested=lambda: False,
+    )
+
+    assert release_slot(case.admission_root, token) is True
+    assert result.status == "cancelled"
+    assert result.reason == "cancel_requested"
+    assert result.engine_payload["scratch_provenance"]["publication_status"] == "committed"
+    execution_dir = Path(result.execution_dir)
+    assert (execution_dir / "xtb.stdout.log").is_file()
+    assert (execution_dir / "xtb.stderr.log").is_file()
+    assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
+
+
+def test_scratch_cancellation_never_publishes_an_oversized_log(
+    runtime_case_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = runtime_case_factory(mode="slow")
+    submitted = _submit(case)
+    queued = _entry(case, submitted["queue_id"])
+    token = _reserve_managed_slot(case, queued)
+    cfg, scratch_root = _scratch_enabled_config(case, monkeypatch)
+    original_start = xtb_md_runner.start_logged_process
+
+    def start_with_oversized_log(*args: Any, **kwargs: Any) -> Any:
+        launched = original_start(*args, **kwargs)
+        Path(kwargs["stdout_log"]).write_bytes(b"oversized")
+        return launched
+
+    monkeypatch.setattr(xtb_md_runner, "_MAX_LOG_BYTES", 8)
+    monkeypatch.setattr(xtb_md_runner, "start_logged_process", start_with_oversized_log)
+
+    result = run_xtb_md_attempt(
+        cfg,
+        queued,
+        execution_snapshot=queued.metadata["execution_snapshot"],
+        admission_root=case.admission_root,
+        admission_token=token,
+        should_cancel=lambda: True,
+        shutdown_requested=lambda: False,
+    )
+
+    assert release_slot(case.admission_root, token) is True
+    assert result.status == "failed"
+    assert result.reason == "output_policy_violation:xtb.stdout.log_size_limit_exceeded"
+    assert result.engine_payload["scratch_provenance"] == {
+        "used": True,
+        "filesystem": "tmpfs",
+        "publication_status": "unresolved",
+    }
+    attempts = [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")]
+    assert len(attempts) == 1
+    assert (attempts[0] / "xtb.stdout.log").stat().st_size > 8
+    assert not (Path(result.execution_dir) / "xtb.stdout.log").exists()
+
+
+def test_scratch_input_mutation_fails_closed_and_retains_unresolved_workspace(
+    runtime_case_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = runtime_case_factory(mode="success")
+    submitted = _submit(case)
+    queued = _entry(case, submitted["queue_id"])
+    token = _reserve_managed_slot(case, queued)
+    cfg, scratch_root = _scratch_enabled_config(case, monkeypatch)
+
+    def mutate_durable_input(
+        execution_dir: str,
+        _started_at: str,
+        _command: tuple[str, ...],
+    ) -> None:
+        geometry = Path(execution_dir) / "water.xyz"
+        geometry.chmod(0o600)
+        geometry.write_text("3\nchanged\nO 0 0 0\nH 0 0 1\nH 0 1 0\n", encoding="utf-8")
+
+    result = run_xtb_md_attempt(
+        cfg,
+        queued,
+        execution_snapshot=queued.metadata["execution_snapshot"],
+        admission_root=case.admission_root,
+        admission_token=token,
+        should_cancel=lambda: False,
+        shutdown_requested=lambda: False,
+        on_started=mutate_durable_input,
+    )
+
+    assert release_slot(case.admission_root, token) is True
+    assert result.status == "failed"
+    assert "Durable engine input changed during scratch run" in result.reason
+    assert result.engine_payload["scratch_provenance"] == {
+        "used": True,
+        "filesystem": "tmpfs",
+        "publication_status": "unresolved",
+    }
+    attempts = [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")]
+    assert len(attempts) == 1
+    assert (attempts[0] / "xtb.trj").is_file()
+    assert not (Path(result.execution_dir) / "xtb.trj").exists()
+
+
+def test_scratch_oversized_log_is_not_published_to_durable_storage(
+    runtime_case_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = runtime_case_factory(mode="success")
+    submitted = _submit(case)
+    queued = _entry(case, submitted["queue_id"])
+    token = _reserve_managed_slot(case, queued)
+    cfg, scratch_root = _scratch_enabled_config(case, monkeypatch)
+    monkeypatch.setattr(xtb_md_runner, "_MAX_LOG_BYTES", 8)
+
+    result = run_xtb_md_attempt(
+        cfg,
+        queued,
+        execution_snapshot=queued.metadata["execution_snapshot"],
+        admission_root=case.admission_root,
+        admission_token=token,
+        should_cancel=lambda: False,
+        shutdown_requested=lambda: False,
+    )
+
+    assert release_slot(case.admission_root, token) is True
+    assert result.status == "failed"
+    assert result.reason == "output_policy_violation:xtb.stdout.log_size_limit_exceeded"
+    assert result.engine_payload["scratch_provenance"] == {
+        "used": True,
+        "filesystem": "tmpfs",
+        "publication_status": "unresolved",
+    }
+    attempts = [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")]
+    assert len(attempts) == 1
+    assert (attempts[0] / "xtb.stdout.log").stat().st_size > 8
+    execution_dir = Path(result.execution_dir)
+    assert not (execution_dir / "xtb.stdout.log").exists()
+    assert not (execution_dir / "xtb.trj").exists()
+
+
+def test_scratch_headroom_failure_never_falls_back_to_durable_execution(
+    runtime_case_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = runtime_case_factory(mode="success")
+    submitted = _submit(case)
+    queued = _entry(case, submitted["queue_id"])
+    token = _reserve_managed_slot(case, queued)
+    cfg, scratch_root = _scratch_enabled_config(case, monkeypatch)
+    monkeypatch.setattr(scratch_mod, "_linux_available_memory_bytes", lambda: 1)
+    monkeypatch.setattr(
+        xtb_md_runner,
+        "start_logged_process",
+        lambda *_args, **_kwargs: pytest.fail("xTB must not start after scratch admission fails"),
+    )
+
+    result = run_xtb_md_attempt(
+        cfg,
+        queued,
+        execution_snapshot=queued.metadata["execution_snapshot"],
+        admission_root=case.admission_root,
+        admission_token=token,
+        should_cancel=lambda: False,
+        shutdown_requested=lambda: False,
+    )
+
+    assert release_slot(case.admission_root, token) is True
+    assert result.status == "failed"
+    assert result.reason.startswith(
+        "EngineScratchError:engine scratch cannot guarantee RAM headroom"
+    )
+    execution_dir = Path(result.execution_dir)
+    assert execution_dir.is_dir()
+    assert not (execution_dir / "xtb.stdout.log").exists()
+    assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
 
 
 @pytest.mark.parametrize("ensemble", ["nvt", "nve"], ids=["nvt", "nve"])
@@ -1145,14 +1516,36 @@ def test_real_xtb_671_two_step_acceptance_when_configured(
 
     case = runtime_case_factory(
         mode="success",
-        manifest_payload={**valid_manifest_payload, "ensemble": ensemble},
+        manifest_payload={
+            **valid_manifest_payload,
+            "ensemble": ensemble,
+            "resources": {"max_cores": 1, "max_memory_gb": 2},
+        },
     )
     config = yaml.safe_load(case.config_path.read_text(encoding="utf-8"))
     config["workflow"]["paths"]["xtb_executable"] = str(executable)
+    scratch_root_text = os.environ.get("XTB_MD_REAL_SCRATCH_ROOT", "").strip()
+    if scratch_root_text:
+        scratch_min_free_gb = int(os.environ.get("XTB_MD_REAL_SCRATCH_MIN_FREE_GB", "8").strip())
+        config.setdefault("orca", {}).setdefault("runtime", {}).update(
+            {
+                "scratch_root": scratch_root_text,
+                "scratch_min_free_gb": scratch_min_free_gb,
+            }
+        )
     case.config_path.write_text(
         yaml.safe_dump(config, sort_keys=False),
         encoding="utf-8",
     )
+    observed_process: dict[str, Any] = {}
+    original_start = xtb_md_runner.start_logged_process
+
+    def observe_start(*args: Any, **kwargs: Any) -> Any:
+        observed_process["command"] = tuple(args[0])
+        observed_process["cwd"] = Path(kwargs["cwd"])
+        return original_start(*args, **kwargs)
+
+    monkeypatch.setattr(xtb_md_runner, "start_logged_process", observe_start)
     submitted = _submit_via_public_cli(case, capsys)
     assert submitted["status"] == "queued", submitted
     queued = _entry(case, submitted["queue_id"])
@@ -1169,3 +1562,26 @@ def test_real_xtb_671_two_step_acceptance_when_configured(
     assert state["engine_payload"]["ensemble"] == ensemble
     assert state["engine_payload"]["completed_steps"] == 2
     assert state["engine_payload"]["trajectory_frames"] == 2
+    assert state["resources"]["request"] == {"max_cores": 1, "max_memory_gb": 2}
+    if scratch_root_text:
+        process_dir = observed_process["cwd"]
+        scratch_root = Path(scratch_root_text).resolve()
+        assert process_dir.parent == scratch_root
+        assert Path(observed_process["command"][1]).parent == process_dir
+        assert Path(observed_process["command"][3]).parent == process_dir
+        assert not process_dir.exists()
+        provenance = state["engine_payload"]["scratch_provenance"]
+        assert provenance["publication_status"] == "committed"
+        assert set(provenance["published_files"]) == {
+            "xtb.stdout.log",
+            "xtb.stderr.log",
+            "xtb.trj",
+            "mdrestart",
+            "xtbmdok",
+        }
+        assert {"charges", "wbo", "xtbtopo.mol"}.issubset(provenance["omitted_transient_files"])
+        execution_dir = Path(completed.metadata["execution_dir"])
+        assert not any(
+            (execution_dir / name).exists() for name in ("charges", "wbo", "xtbtopo.mol")
+        )
+        assert not any(path.name.startswith("attempt-") for path in scratch_root.iterdir())

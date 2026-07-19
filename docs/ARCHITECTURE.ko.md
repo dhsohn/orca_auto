@@ -291,6 +291,15 @@ budget에 맞는 완전하고 유한한 `xtb.trj`와 `mdrestart`, 제한 안의 
 false-success marker 부재가 모두 필요합니다. 공개 상태/리포트는 작업 루트에 기록하고,
 불변 raw output은 감사를 위해 private 실행 트리에 보존합니다.
 
+공유 RAM scratch를 켜도 private 실행 트리는 durable 정체성과 게시 대상입니다. 생성한
+geometry, `md.inp`, attempt token, 큐 메타데이터, 공개 command는 그 generation에
+바인딩하고, 실제 xTB command만 staging한 입력 경로와 private tmpfs CWD를 사용합니다.
+프로세스 그룹 종료 뒤 공통 `core.engine_scratch` transaction이 `xtb.trj`, `mdrestart`,
+`xtbmdok`, stdout/stderr만 게시합니다. 그 다음 새 durable 파일을 종료 검증하므로
+false-success 근거는 보존되어도 완료로 바뀔 수 없습니다. 확정한 게시는 cleanup하고
+`scratch_provenance`에 기록하며, identity drift나 미확정 transaction은 workspace를
+보존하고 뒤이은 scratch 시작을 막습니다.
+
 ---
 
 ## 6. ORCA 엔진 내부
@@ -328,9 +337,10 @@ false-success marker 부재가 모두 필요합니다. 공개 상태/리포트�
   tmpfs checkpoint를 잃을 수 있으며, 이때 기존 durable recovery가
   이미 게시된 근거부터 재개합니다.
   scratch workspace와 journal 구현의 단일 소유자는 `core.engine_scratch`이고 ORCA는
-  flat input dependency parser만 제공합니다. workflow xTB/CREST도 같은 private
+  flat input dependency parser만 제공합니다. 단독 xTB-MD와 workflow xTB/CREST도 같은 private
   workspace와 transaction을 사용하되 변경 불가능한 입력 snapshot은 durable 절대
-  경로로 유지합니다. xTB는 job type별 canonical 결과와 log를, CREST는 named retained
+  경로로 유지합니다. xTB는 job type별 canonical 결과와 log를, 단독 xTB-MD는 trajectory,
+  checkpoint, success marker, log만, CREST는 named retained
   ensemble과 log를 게시하며 큰 엔진 work tree는 commit 뒤 제거합니다. CREST 자체의
   `--scratch` copier는 계속 사용하지 않습니다.
   최종 process group에는 one-byte launch gate를 먼저 시작합니다. worker가 해당 PID/PGID를 durable

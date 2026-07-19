@@ -176,7 +176,8 @@ Field descriptions:
 - `orca.runtime.default_max_retries`: `0` disables ORCA retries; positive values
   enable the calculation-type retry policy
 - `orca.runtime.scratch_root`: optional shared dedicated directory below
-  `/dev/shm` for private per-attempt ORCA and workflow xTB/CREST working directories
+  `/dev/shm` for private per-attempt ORCA, standalone xTB-MD, and workflow
+  xTB/CREST working directories
 - `orca.runtime.scratch_min_free_gb`: positive tmpfs free-space launch guard;
   defaults to `8` when RAM scratch is enabled
 - `scheduler.max_active_simulations`: Shared total active-run cap across ORCA, standalone xTB-MD, internal xTB stages, and internal CREST stages
@@ -225,6 +226,17 @@ Notes:
   candidates plus stdout/stderr. Engine work trees and transient files are
   recorded as omitted provenance and removed with the workspace. This does not
   use CREST's native `--scratch` option.
+- Standalone xTB-MD uses the same one-workspace scratch admission. Its immutable
+  generated geometry, `md.inp`, attempt identity, queue/state, and report
+  ownership stay in `.orca_auto_xtb_md_executions/<job_id>/`; the actual xTB
+  command reads staged geometry/control paths in tmpfs. After exit, only
+  `xtb.stdout.log`, `xtb.stderr.log`, `xtb.trj`, `mdrestart`, and `xtbmdok` are
+  transactionally published, then validated from the durable generation. Total,
+  file-count, log, trajectory, checkpoint, and marker size limits are enforced
+  before publication; a violation is retained in tmpfs rather than copied out.
+  False-success, cancellation, and shutdown retain any committed canonical
+  evidence and record `scratch_provenance`. Unresolved publication blocks later
+  scratch starts and does not permit retry or resume.
 - Windows-style paths such as `C:\...`, `C:/...`, and `/mnt/c/...` are not supported in config
 - Configured executable paths for ORCA, xTB, and CREST must be absolute Linux
   paths to existing executable files and must not end in `.exe`. If
@@ -694,6 +706,14 @@ There is no public direct-execution mode for new work. `run-dir` is the durable 
   The immutable generated input, logs, `xtb.trj`, `mdrestart`, and `xtbmdok`
   are retained under `.orca_auto_xtb_md_executions/<job_id>/` with content
   identities in the terminal report.
+- With `orca.runtime.scratch_root`, the actual xTB process runs in a private
+  tmpfs workspace. Only the two logs, trajectory, checkpoint, and success marker
+  are committed back to that same durable generation before terminal
+  validation; other engine work files are omitted. Terminal
+  `engine_payload.scratch_provenance` records committed or unresolved
+  publication without changing the one-attempt/no-retry/no-resume contract.
+  Output limits are checked before publication so oversized artifacts do not
+  consume durable storage first.
 
 ### 7.3 `queue cancel`
 

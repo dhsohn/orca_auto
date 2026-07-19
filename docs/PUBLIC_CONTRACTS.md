@@ -168,8 +168,8 @@ Stable behavior:
   in `scratch_provenance`; committed output from an interrupted/exception path
   is recorded in `scratch_publications`, never in immutable execution-snapshot
   provenance.
-  Workflow xTB/CREST use the same configured root and one-workspace admission.
-  They keep immutable input snapshots durable, execute in tmpfs, and
+  Standalone xTB-MD and workflow xTB/CREST use the same configured root and
+  one-workspace admission. They keep immutable input snapshots durable, execute in tmpfs, and
   transactionally publish only their canonical result/evidence allowlists;
   omitted work trees and transient entries are recorded in
   `scratch_provenance`. CREST's native `--scratch` option remains unused.
@@ -340,6 +340,20 @@ Standalone xTB-MD writes these public artifacts at the job root:
 The immutable generated input, logs, `xtb.trj`, `mdrestart`, and `xtbmdok` are
 retained under `.orca_auto_xtb_md_executions/<job_id>/`. Terminal JSON binds
 validated outputs to path, SHA-256, byte size, and modification time.
+
+If `orca.runtime.scratch_root` is configured, the immutable generated geometry,
+`md.inp`, attempt identity, queue/state, and report ownership remain durable.
+The xTB process working directory and actual geometry/control paths are private
+tmpfs paths. After process exit, one journaled transaction publishes only
+`xtb.stdout.log`, `xtb.stderr.log`, `xtb.trj`, `mdrestart`, and `xtbmdok` to the
+same durable execution generation; terminal validation happens only after that
+commit. Total/file-count and canonical per-file size limits are checked in
+tmpfs before publication, so an oversized fast-exit log or result is retained
+unresolved instead of copied to durable storage. Non-canonical work files are
+omitted. A committed publication is reported in
+`engine_payload.scratch_provenance` even when false-success validation rejects
+completion or cancellation/worker shutdown ends the job.
+An unresolved publication remains fail-closed and is not a retry/resume contract.
 
 ## ORCA Job Artifact Contract
 

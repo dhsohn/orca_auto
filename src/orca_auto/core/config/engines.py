@@ -372,6 +372,7 @@ def load_xtb_md_config(config_path: str | None = None) -> WorkflowEngineAppConfi
     workflow_paths_raw = mapping_section(workflow_raw, "paths")
     resources_raw = mapping_section(raw, "resources")
     messenger_raw = messenger_mapping_from_root(raw)
+    orca_runtime_raw = mapping_section(engine_config_mapping(raw, "orca"), "runtime")
     runs_root = _required_workflow_root(raw, path)
     xtb_executable = _validate_workflow_engine_executable(
         as_str(workflow_paths_raw.get("xtb_executable")),
@@ -396,6 +397,7 @@ def load_xtb_md_config(config_path: str | None = None) -> WorkflowEngineAppConfi
         workflow_root="",
         paths=WorkflowEnginePathsConfig(xtb_executable=xtb_executable),
         resources=_resource_config(resources_raw),
+        scratch=scratch_config_from_runtime_mapping(orca_runtime_raw),
         telegram=messenger.telegram,
         messenger=messenger,
     )

@@ -481,6 +481,79 @@ def test_real_engine_case_holds_and_releases_production_admission_slot(
     assert list_slots(admission_root) == []
 
 
+def test_real_xtb_case_receives_configured_scratch_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    runs_root = tmp_path / "runs"
+    admission_root = tmp_path / "admission"
+    scratch_root = tmp_path / "pretend-shm" / "orca_auto"
+    monkeypatch.setenv("XTB_MD_REAL_SCRATCH_ROOT", "/dev/shm/stale-root")
+    monkeypatch.setenv("XTB_MD_REAL_SCRATCH_MIN_FREE_GB", "99")
+    _write_tiny_repo(
+        repo_root,
+        status="completed",
+        pytest_body=f"""    import os
+    assert os.environ["XTB_MD_REAL_SCRATCH_ROOT"] == {str(scratch_root)!r}
+    assert os.environ["XTB_MD_REAL_SCRATCH_MIN_FREE_GB"] == "7"
+""",
+    )
+    real_scenario = _scenario(expected_status="completed", profile="real-xtb")
+    monkeypatch.setattr(runner, "scenarios_for_profile", lambda _profile: (real_scenario,))
+
+    result = runner.run_smoke_suite(
+        repo_root=repo_root,
+        runs_root=runs_root,
+        profile="real-xtb",
+        real_engine_admission=runner.RealEngineAdmission(
+            root=admission_root,
+            global_limit=1,
+            xtb_md_limit=1,
+            scratch_root=scratch_root,
+            scratch_min_free_gb=7,
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert list_slots(admission_root) == []
+
+
+def test_real_xtb_case_drops_stale_scratch_environment_when_config_is_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    runs_root = tmp_path / "runs"
+    admission_root = tmp_path / "admission"
+    _write_tiny_repo(
+        repo_root,
+        status="completed",
+        pytest_body="""    import os
+    assert "XTB_MD_REAL_SCRATCH_ROOT" not in os.environ
+    assert "XTB_MD_REAL_SCRATCH_MIN_FREE_GB" not in os.environ
+""",
+    )
+    real_scenario = _scenario(expected_status="completed", profile="real-xtb")
+    monkeypatch.setattr(runner, "scenarios_for_profile", lambda _profile: (real_scenario,))
+    monkeypatch.setenv("XTB_MD_REAL_SCRATCH_ROOT", "/dev/shm/stale-root")
+    monkeypatch.setenv("XTB_MD_REAL_SCRATCH_MIN_FREE_GB", "99")
+
+    result = runner.run_smoke_suite(
+        repo_root=repo_root,
+        runs_root=runs_root,
+        profile="real-xtb",
+        real_engine_admission=runner.RealEngineAdmission(
+            root=admission_root,
+            global_limit=1,
+            xtb_md_limit=1,
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert list_slots(admission_root) == []
+
+
 def test_real_orca_admission_uses_orca_app_without_xtb_subcap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

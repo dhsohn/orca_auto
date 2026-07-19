@@ -160,7 +160,7 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   여유 공간, `scratch_min_free_gb` host reserve 합계를 감당해야 시작합니다. 완료 attempt의 게시
   메타데이터는 `scratch_provenance`에, commit 뒤 중단/exception 경로의 게시 근거는
   `scratch_publications`에 기록하며 고정 execution-snapshot provenance에는 넣지 않습니다.
-  workflow xTB/CREST도 같은 설정 root와 단일-workspace admission을 사용합니다. 변경 불가능한
+  단독 xTB-MD와 workflow xTB/CREST도 같은 설정 root와 단일-workspace admission을 사용합니다. 변경 불가능한
   입력 snapshot은 durable하게 유지하고 tmpfs에서 실행한 뒤 canonical 결과/evidence allowlist만
   transaction으로 게시합니다. 생략한 work tree와 transient 항목은 `scratch_provenance`에
   기록하며 CREST 자체의 `--scratch` 옵션은 계속 사용하지 않습니다.
@@ -323,6 +323,17 @@ marker를 거부합니다.
 불변 generated input, 로그, `xtb.trj`, `mdrestart`, `xtbmdok`는
 `.orca_auto_xtb_md_executions/<job_id>/` 아래에 보존합니다. 종료 JSON은 검증된 출력에
 path, SHA-256, byte size, modification time을 바인딩합니다.
+
+`orca.runtime.scratch_root`를 설정해도 불변 generated geometry, `md.inp`, attempt identity,
+큐/상태, 리포트 소유권은 durable하게 유지합니다. 실제 xTB process 작업 디렉터리와
+geometry/control 경로만 private tmpfs를 사용합니다. 프로세스 종료 뒤 하나의 저널 기반
+transaction이 `xtb.stdout.log`, `xtb.stderr.log`, `xtb.trj`, `mdrestart`, `xtbmdok`만 같은
+durable execution generation에 게시하고, 그 commit 뒤에만 종료 검증합니다. canonical이 아닌
+work 파일은 생략합니다. 전체 크기/파일 수와 canonical 파일별 크기 상한은 게시 전 tmpfs에서
+검사하므로 빠르게 종료하면서 만든 과대 log나 결과를 durable storage로 복사하지 않고 미확정
+상태로 보존합니다. false-success 검증이 완료를 거부하거나 취소/worker 종료로 작업이 끝나도
+commit된 게시는 `engine_payload.scratch_provenance`에 기록합니다. 확정할 수 없는 게시는
+fail-closed 상태로 남으며 retry/resume 계약이 아닙니다.
 
 ## ORCA 작업 산출물 계약
 

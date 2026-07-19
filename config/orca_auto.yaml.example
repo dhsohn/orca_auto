@@ -120,10 +120,12 @@ orca:
     # Retry count after the initial attempt.
     # Example: 2 means "1 initial run + up to 2 retries" = 3 total attempts.
     default_max_retries: 2
-    # Shared RAM-backed working root for ORCA and workflow-managed xTB/CREST.
+    # Shared RAM-backed working root for ORCA, standalone xTB-MD, and
+    # workflow-managed xTB/CREST.
     # Exactly one private attempt runs below /dev/shm. ORCA transactionally
-    # publishes surviving non-*.tmp artifacts; xTB/CREST publish their canonical
-    # result/evidence files and omit engine work trees and transient files.
+    # publishes surviving non-*.tmp artifacts; standalone xTB-MD and workflow
+    # xTB/CREST publish their canonical result/evidence allowlists and omit
+    # engine work trees and transient files.
     # Host/WSL loss still loses all unpublished scratch progress. An unresolved
     # workspace blocks new launches until it is inspected or tmpfs is reset.
     # scratch_root: /dev/shm/orca_auto
