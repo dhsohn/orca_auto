@@ -86,7 +86,6 @@ Stable behavior:
   workflow id, queue id, run id, or path aliases.
 - `queue list --json`, `queue cancel --json`, and `service status --json` are
   the script-friendly surfaces.
-- `queue list --watch` is human-oriented and does not support `--json`.
 - `smoke` is a source-checkout developer command. With no options it runs the
   fake profile and uses the discovered shared config's `runs_root`; missing
   repository tests, Git metadata, or `runs_root` fails closed.

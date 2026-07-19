@@ -101,6 +101,14 @@ def test_build_parser_parses_unified_queue_commands() -> None:
     assert cancel_args.func is cli_queue.cmd_queue_cancel
 
 
+@pytest.mark.parametrize("removed_args", [["--watch"], ["--interval", "1"]])
+def test_build_parser_rejects_removed_queue_watch_options(removed_args: list[str]) -> None:
+    parser = unified_cli.build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["queue", "list", *removed_args])
+
+
 def test_build_parser_parses_unified_run_dir_commands() -> None:
     parser = unified_cli.build_parser()
 

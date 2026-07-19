@@ -369,6 +369,30 @@ def test_reconcile_stale_slots_removes_dead_entries_and_keeps_live_ones(
     ]
 
 
+def test_read_active_slot_count_does_not_prune_or_rewrite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_deterministic_liveness(monkeypatch, live_pids={4242})
+    store._save_slots(
+        tmp_path,
+        [
+            store.AdmissionSlot(
+                token="dead",
+                owner_pid=2222,
+                process_start_ticks=222,
+                source="queue",
+                acquired_at="2026-04-19T00:00:00+00:00",
+            )
+        ],
+    )
+    path = tmp_path / store.ADMISSION_FILE_NAME
+    before = path.read_bytes()
+
+    assert store.read_active_slot_count(tmp_path) == 0
+    assert path.read_bytes() == before
+
+
 def test_reserve_slot_honors_capacity_limit_and_raise_variant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
