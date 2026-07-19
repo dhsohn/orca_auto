@@ -14,8 +14,6 @@ run-directory path recorded by a caller.
 
 from __future__ import annotations
 
-import errno
-import fcntl
 import hashlib
 import json
 import math
@@ -24,14 +22,14 @@ import re
 import secrets
 import shutil
 import stat
-import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 
+from orca_auto.core.utils.lock import tmpfs_file_lock
 from orca_auto.core.utils.persistence import atomic_write_json
 
 UPLOAD_SESSIONS_FILE_NAME = "upload_sessions.json"
@@ -401,70 +399,23 @@ class UploadSessionStore:
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
-        """Take the store lock without ever following a lock-file symlink."""
+        """Serialize durable session mutations through the shared tmpfs lock protocol."""
 
-        deadline = time.monotonic() + self.lock_timeout_seconds
-        flags = os.O_RDWR | os.O_CREAT
-        if hasattr(os, "O_CLOEXEC"):
-            flags |= os.O_CLOEXEC
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-
-        fd: int | None = None
-        while fd is None:
-            candidate: int | None = None
+        with ExitStack() as stack:
             try:
-                candidate = os.open(self.lock_path, flags, 0o600)
-                opened = os.fstat(candidate)
-                if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
-                    raise UploadSessionStoreCorruptError(
-                        f"upload session lock is not a private regular file: {self.lock_path}"
+                stack.enter_context(
+                    tmpfs_file_lock(
+                        self.lock_path,
+                        timeout_seconds=self.lock_timeout_seconds,
                     )
-                try:
-                    fcntl.flock(candidate, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError(f"Timed out acquiring lock: {self.lock_path}") from None
-                    os.close(candidate)
-                    candidate = None
-                    time.sleep(0.05)
-                    continue
-
-                # If a non-cooperating process replaced the path between open
-                # and flock, this inode is no longer the globally named lock.
-                named = self.lock_path.lstat()
-                if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
-                    fcntl.flock(candidate, fcntl.LOCK_UN)
-                    os.close(candidate)
-                    candidate = None
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError(f"Timed out acquiring lock: {self.lock_path}")
-                    continue
-                fd = candidate
-            except UploadSessionStoreCorruptError:
-                if candidate is not None:
-                    os.close(candidate)
+                )
+            except TimeoutError:
                 raise
-            except OSError as exc:
-                if candidate is not None:
-                    os.close(candidate)
-                if exc.errno == errno.ENOENT and time.monotonic() < deadline:
-                    time.sleep(0.01)
-                    continue
+            except (OSError, ValueError) as exc:
                 raise UploadSessionStoreCorruptError(
                     f"upload session lock cannot be opened safely: {self.lock_path}"
                 ) from exc
-
-        try:
-            os.ftruncate(fd, 0)
-            metadata = f"pid={os.getpid()}\nacquired_at={self._now().isoformat()}\n".encode("ascii")
-            os.write(fd, metadata)
-            os.fsync(fd)
             yield
-        finally:
-            with suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
 
     def _session_dir(self, upload_id: str) -> Path:
         if not _UPLOAD_ID_RE.fullmatch(upload_id):

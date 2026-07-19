@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from orca_auto.core.engines.artifacts import (
     EngineArtifactInput,
@@ -116,6 +116,23 @@ class EngineStateAccess:
 
     def load_report_json(self, job_dir: Path) -> dict[str, Any] | None:
         return self.files.load_report_json(job_dir)
+
+
+class StateArtifactAccess(Protocol):
+    def write_state(self, job_dir: Path, payload: dict[str, Any]) -> Path: ...
+
+    def load_state(self, job_dir: Path) -> dict[str, Any] | None: ...
+
+
+@dataclass(frozen=True)
+class EngineStateOnlyAccess:
+    state_file_name: str
+
+    def write_state(self, job_dir: Path, payload: dict[str, Any]) -> Path:
+        return write_json_artifact(job_dir, self.state_file_name, payload)
+
+    def load_state(self, job_dir: Path) -> dict[str, Any] | None:
+        return load_json_mapping_artifact(job_dir, self.state_file_name)
 
 
 def create_engine_state_access(
@@ -369,7 +386,7 @@ def recovery_pending_payload(
 
 @dataclass(frozen=True)
 class EngineRecoveryPendingWriter:
-    access: EngineStateAccess
+    access: StateArtifactAccess
     manifest_filename: str
     # The engine this writer serves; recorded in recovery payloads whenever the
     # existing state does not already name one.
@@ -454,6 +471,20 @@ class EngineStateModuleSpec:
     engine: str = ""
 
 
+@dataclass(frozen=True)
+class EngineStateOnlyModuleExports:
+    recovery_pending: EngineRecoveryPendingWriter
+    write_state: Callable[[Path, dict[str, Any]], Path]
+    load_state: Callable[[Path], dict[str, Any] | None]
+
+
+@dataclass(frozen=True)
+class EngineStateOnlyModuleSpec:
+    state_file_name: str
+    manifest_file_name: str
+    engine: str = ""
+
+
 def engine_state_module_exports(bindings: EngineStateBindings) -> EngineStateModuleExports:
     access = bindings.access
     return EngineStateModuleExports(
@@ -484,4 +515,23 @@ def create_engine_state_module_exports(
             engine=spec.engine,
             now_fn=now_fn,
         )
+    )
+
+
+def create_engine_state_only_module_exports(
+    spec: EngineStateOnlyModuleSpec,
+    *,
+    now_fn: Callable[[], str] = now_utc_iso,
+) -> EngineStateOnlyModuleExports:
+    access = EngineStateOnlyAccess(state_file_name=spec.state_file_name)
+    recovery_pending = EngineRecoveryPendingWriter(
+        access=access,
+        manifest_filename=spec.manifest_file_name,
+        engine=spec.engine,
+        now_fn=now_fn,
+    )
+    return EngineStateOnlyModuleExports(
+        recovery_pending=recovery_pending,
+        write_state=access.write_state,
+        load_state=access.load_state,
     )

@@ -224,6 +224,8 @@ orca_auto queue list --engine orca
 orca_auto queue list --engine xtb_md
 orca_auto queue list clear      # prune completed/failed/cancelled
 orca_auto queue cancel <target>
+orca_auto queue compact <completed-workflow>          # dry-run plan
+orca_auto queue compact <completed-workflow> --apply  # apply reviewed plan
 orca_auto service status
 orca_auto service restart
 orca_auto scan-notify
@@ -239,6 +241,29 @@ output keeps its stable plain layout (`FORCE_COLOR` can explicitly add ANSI). `-
 remains machine-readable JSON and ANSI-free, while messenger output stays plain; this
 resource-view change alters neither output contract. On a real terminal,
 `NO_COLOR` and `--no-color` remove ANSI painting without disabling the live CPU/RAM view.
+
+`queue compact` is a completed-workflow maintenance command. It is a dry run
+unless `--apply` is explicit; use `--json` for a stable machine-readable plan.
+Only the exact `job_report.json` and `job_report.md` leaves of canonical
+workflow-internal xTB/CREST child directories can be removed. The command never
+uses those reports as state evidence: a report-only child is unsupported
+and must be resubmitted. Completion is revalidated from `workflow.json`, final
+child synchronization, SI publication generations when present, exactly one
+registry row or cleared marker, and exact `job_state.json` plus queue/index
+identities before any removal.
+
+All ORCA and standalone xTB-MD reports remain public artifacts. Workflow
+payloads/reports/manifests, registry/journal/cleared-marker state, SI and
+interaction-energy outputs, every job/queue/index/admission/snapshot record,
+scientific outputs, logs, geometries, provenance, and all lock/process/PID
+files are preserved.
+This online command never deletes old disk advisory lock files; a separate
+offline lock-maintenance operation is not implemented. Apply removes each
+verified leaf independently. If it is interrupted, run the dry run again and
+apply the remaining plan; the operation is idempotent and creates no compaction
+receipt, journal, or state file. A blocked partial apply reports the exact paths
+and bytes already removed while keeping `applied` false.
+
 The selected bot mirrors the same application surface
 (Telegram `/list`; Discord `!list`, with matching cancel/help commands) and uses
 provider-native buttons. Discord can optionally accept a compressed run-dir

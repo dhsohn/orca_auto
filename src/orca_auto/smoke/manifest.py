@@ -15,7 +15,7 @@ from typing import Any
 from orca_auto.core.config.files import validated_runs_root_text
 from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
-from orca_auto.core.utils.lock import file_lock_at
+from orca_auto.core.utils.lock import tmpfs_file_lock_at
 from orca_auto.core.utils.persistence import now_utc_iso
 from orca_auto.smoke._dirfd import (
     DirectoryIdentity,
@@ -378,7 +378,7 @@ def prepare_smoke_root(runs_root: str | Path) -> Path:
     root_identity = _directory_identity(root_fd)
     smoke_fd: int | None = None
     try:
-        with file_lock_at(
+        with tmpfs_file_lock_at(
             root_fd,
             _SMOKE_INIT_LOCK_FILENAME,
             display_path=validated_root / _SMOKE_INIT_LOCK_FILENAME,
@@ -884,7 +884,7 @@ def rebuild_smoke_index(
 ) -> Path:
     batches_root = Path("/proc") / "self" / "fd" / str(batches_fd)
     rows: list[dict[str, Any]] = []
-    with file_lock_at(
+    with tmpfs_file_lock_at(
         smoke_root_fd,
         "index.lock",
         display_path=smoke_root / "index.lock",

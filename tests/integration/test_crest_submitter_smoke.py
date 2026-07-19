@@ -63,17 +63,17 @@ def test_crest_submitter_roundtrip_smoke(
     assert artifact_dir.exists()
     assert not (crest_job / "organized_ref.json").exists()
     assert (artifact_dir / "job_state.json").exists()
-    assert (artifact_dir / "job_report.json").exists()
-    assert (artifact_dir / "job_report.md").exists()
+    assert not (artifact_dir / "job_report.json").exists()
+    assert not (artifact_dir / "job_report.md").exists()
     assert (artifact_dir / "crest_conformers.xyz").exists()
     assert (artifact_dir / "crest_best.xyz").exists()
 
-    report_payload = json.loads((artifact_dir / "job_report.json").read_text(encoding="utf-8"))
-    assert _status(report_payload)["state"] == "completed"
-    assert _engine_payload(report_payload)["mode"] == "standard"
-    assert _engine_payload(report_payload)["retained_conformer_count"] == 2
+    state_payload = json.loads((artifact_dir / "job_state.json").read_text(encoding="utf-8"))
+    assert _status(state_payload)["state"] == "completed"
+    assert _engine_payload(state_payload)["mode"] == "standard"
+    assert _engine_payload(state_payload)["retained_conformer_count"] == 2
     assert [
-        Path(path).name for path in _engine_payload(report_payload)["retained_conformer_paths"]
+        Path(path).name for path in _engine_payload(state_payload)["retained_conformer_paths"]
     ] == ["crest_conformers.xyz", "crest_best.xyz"]
 
     contract = load_crest_artifact_contract(

@@ -334,11 +334,11 @@ def _reaction_orca_stage_plan(
     xtb_stages = _completed_or_recoverable_xtb_stages(payload)
     if not xtb_stages:
         return None
-    xtb_allowed_root = load_config_root_impl(xtb_config, engine="xtb", services=services)
-    if xtb_allowed_root is None:
+    if load_config_root_impl(xtb_config, engine="xtb", services=services) is None:
         return None
     if load_config_root_impl(orca_config, engine="orca", services=services) is None:
         return None
+    xtb_runtime_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="xtb")
     orca_runtime_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="orca")
     params = _request_params(payload)
     payload_metadata_raw = payload.setdefault("metadata", {})
@@ -346,7 +346,7 @@ def _reaction_orca_stage_plan(
     candidate_pool, handoff_errors = _collect_reaction_orca_candidates(
         services,
         xtb_stages,
-        xtb_allowed_root=xtb_allowed_root,
+        xtb_allowed_root=xtb_runtime_paths["allowed_root"],
     )
     ordered_candidates = _unique_ordered_candidates(candidate_pool)
     existing = _engine_stages(payload, "orca")

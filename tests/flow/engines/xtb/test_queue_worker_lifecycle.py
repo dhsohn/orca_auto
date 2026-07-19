@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,7 +17,7 @@ from orca_auto.core.queue import (
     mark_completed,
     request_cancel,
 )
-from orca_auto.core.queue.engine.artifacts import matching_terminal_artifacts_for_entry
+from orca_auto.core.queue.engine.artifacts import matching_terminal_state_for_entry
 from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
@@ -44,6 +45,13 @@ def _append_and_return(items: Any, value: Any, result: Any) -> Any:
 
 def _dequeued_running_entry(entry: SimpleNamespace) -> SimpleNamespace:
     return SimpleNamespace(**{**vars(entry), "status": SimpleNamespace(value="running")})
+
+
+def _write_removed_report(job_dir: Path, payload: dict[str, Any]) -> None:
+    (job_dir / "job_report.json").write_text(
+        json.dumps(payload, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def test_worker_adopts_terminal_artifact_with_guarded_index_update(
@@ -84,6 +92,7 @@ def test_worker_adopts_terminal_artifact_with_guarded_index_update(
             job_dir=str(job_dir),
             status="completed",
             reason="completed",
+            exit_code=0,
             primary_path=str(selected_xyz),
             selected_xyz_path=str(selected_xyz),
             updated_at="2026-04-20T00:00:01Z",
@@ -153,6 +162,8 @@ def test_terminal_adoption_finalizes_racing_cancel_consistently(
             generation=queue_entry_generation_token(current_claim),
             job_dir=str(job_dir),
             status="completed",
+            reason="completed",
+            exit_code=0,
             primary_path=str(selected_xyz),
             updated_at="2026-04-20T00:00:01Z",
             engine_payload={
@@ -173,14 +184,10 @@ def test_terminal_adoption_finalizes_racing_cancel_consistently(
     assert cancelled.cancel_requested is False
     assert [row["status"] for row in upserts] == ["cancelled"]
     persisted_state = state_mod.load_state(job_dir)
-    persisted_report = state_mod.load_report_json(job_dir)
     assert persisted_state is not None
-    assert persisted_report is not None
     assert persisted_state["status"]["state"] == "cancelled"
-    assert persisted_report["status"]["state"] == "cancelled"
-    assert "Status: `cancelled`" in (job_dir / state_mod.REPORT_MD_FILE_NAME).read_text(
-        encoding="utf-8"
-    )
+    assert not (job_dir / "job_report.json").exists()
+    assert not (job_dir / "job_report.md").exists()
 
 
 def test_worker_repairs_own_publication_and_ignores_foreign_rows(
@@ -282,7 +289,7 @@ def test_terminal_adoption_rejects_foreign_artifact_identity(
     assert upserts == []
 
 
-def test_terminal_adoption_uses_exact_state_when_report_is_stale(tmp_path: Path) -> None:
+def test_terminal_adoption_uses_exact_state_and_ignores_removed_report(tmp_path: Path) -> None:
     cfg = _make_cfg(tmp_path)
     queue_root = Path(cfg.runtime.allowed_root)
     job_dir = queue_root / "stale-report"
@@ -316,13 +323,14 @@ def test_terminal_adoption_uses_exact_state_when_report_is_stale(tmp_path: Path)
             generation=queue_entry_generation_token(current_claim),
             job_dir=str(job_dir),
             status="completed",
-            reason="current_completed",
+            reason="completed",
+            exit_code=0,
             primary_path=str(selected_xyz),
             updated_at="2026-07-13T02:00:00+00:00",
             engine_payload={"job_type": "opt", "reaction_key": "current", "input_summary": {}},
         ),
     )
-    state_mod.write_report_json(
+    _write_removed_report(
         job_dir,
         artifact_payload(
             engine="xtb",
@@ -345,20 +353,19 @@ def test_terminal_adoption_uses_exact_state_when_report_is_stale(tmp_path: Path)
 
 
 @pytest.mark.parametrize(
-    ("report_updated_at", "expected_adopted"),
+    "report_updated_at",
     [
-        ("", False),
-        ("not-a-timestamp", False),
-        ("2026-07-13T01:59:59+00:00", False),
-        ("2026-07-13T02:00:00+00:00", True),
-        ("2026-07-13T02:00:01+00:00", True),
+        "",
+        "not-a-timestamp",
+        "2026-07-13T01:59:59+00:00",
+        "2026-07-13T02:00:00+00:00",
+        "2026-07-13T02:00:01+00:00",
     ],
 )
-def test_report_only_terminal_adoption_requires_timestamp_during_current_claim(
+def test_report_only_terminal_is_not_supported(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     report_updated_at: str,
-    expected_adopted: bool,
 ) -> None:
     cfg = _make_cfg(tmp_path)
     queue_root = Path(cfg.runtime.allowed_root)
@@ -382,7 +389,7 @@ def test_report_only_terminal_adoption_requires_timestamp_during_current_claim(
     running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
     assert running is not None
     current_claim = replace(running, started_at="2026-07-13T02:00:00+00:00")
-    state_mod.write_report_json(
+    _write_removed_report(
         job_dir,
         artifact_payload(
             engine="xtb",
@@ -406,17 +413,17 @@ def test_report_only_terminal_adoption_requires_timestamp_during_current_claim(
     upserts: list[dict[str, object]] = []
     monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
 
-    assert queue_cmd._adopt_terminal_artifacts(cfg, queue_root, current_claim) is expected_adopted
+    assert not queue_cmd._adopt_terminal_artifacts(cfg, queue_root, current_claim)
     [persisted] = list_queue(queue_root)
-    assert persisted.status.value == ("completed" if expected_adopted else "running")
-    assert bool(upserts) is expected_adopted
+    assert persisted.status.value == "running"
+    assert upserts == []
 
 
 @pytest.mark.parametrize(
     "report_updated_at",
     ["2026-07-13T01:00:00+00:00", "2026-07-13T02:00:00+00:00", ""],
 )
-def test_terminal_adoption_uses_state_when_report_is_not_provably_newer(
+def test_terminal_adoption_ignores_removed_report_timestamp(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     report_updated_at: str,
@@ -459,13 +466,14 @@ def test_terminal_adoption_uses_state_when_report_is_not_provably_newer(
         artifact_payload(
             **common_fields,
             job_dir=str(job_dir),
-            reason="current_completed",
+            reason="completed",
+            exit_code=0,
             primary_path=str(current_xyz),
             updated_at="2026-07-13T02:00:00+00:00",
             engine_payload={"job_type": "opt", "reaction_key": "current", "input_summary": {}},
         ),
     )
-    state_mod.write_report_json(
+    _write_removed_report(
         job_dir,
         artifact_payload(
             **common_fields,
@@ -483,15 +491,14 @@ def test_terminal_adoption_uses_state_when_report_is_not_provably_newer(
     assert upserts[0]["job_type"] == "opt"
     assert upserts[0]["reaction_key"] == "current"
     repaired_state = state_mod.load_state(job_dir)
-    repaired_report = state_mod.load_report_json(job_dir)
-    assert repaired_state is not None and repaired_report is not None
+    assert repaired_state is not None
     assert repaired_state["input"]["primary_path"] == str(current_xyz)
-    assert repaired_report["input"]["primary_path"] == str(current_xyz)
-    assert repaired_report["engine_payload"]["job_type"] == "opt"
-    assert repaired_report["status"]["reason"] == "completed"
+    removed_report = json.loads((job_dir / "job_report.json").read_text(encoding="utf-8"))
+    assert removed_report["input"]["primary_path"] == str(stale_xyz)
+    assert not (job_dir / "job_report.md").exists()
 
 
-def test_terminal_adoption_uses_provably_newer_same_status_report(
+def test_newer_removed_report_cannot_override_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -533,13 +540,14 @@ def test_terminal_adoption_uses_provably_newer_same_status_report(
         artifact_payload(
             **common_fields,
             job_dir=str(job_dir),
-            reason="stale_completed",
+            reason="completed",
+            exit_code=0,
             primary_path=str(stale_xyz),
             updated_at="2026-07-13T01:00:00+00:00",
             engine_payload={"job_type": "sp", "reaction_key": "stale", "input_summary": {}},
         ),
     )
-    state_mod.write_report_json(
+    _write_removed_report(
         job_dir,
         artifact_payload(
             **common_fields,
@@ -552,13 +560,11 @@ def test_terminal_adoption_uses_provably_newer_same_status_report(
     upserts: list[dict[str, object]] = []
     monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
 
-    assert queue_cmd._adopt_terminal_artifacts(cfg, queue_root, current_claim)
-    assert upserts[0]["selected_input_xyz"] == str(current_xyz)
-    assert upserts[0]["job_type"] == "opt"
-    assert upserts[0]["reaction_key"] == "current"
+    assert not queue_cmd._adopt_terminal_artifacts(cfg, queue_root, current_claim)
+    assert upserts == []
 
 
-def test_terminal_adoption_rebuilds_foreign_state_from_exact_report(
+def test_exact_removed_report_does_not_rebuild_foreign_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -598,7 +604,7 @@ def test_terminal_adoption_rebuilds_foreign_state_from_exact_report(
             engine_payload={"job_type": "opt", "reaction_key": "foreign"},
         ),
     )
-    state_mod.write_report_json(
+    _write_removed_report(
         job_dir,
         artifact_payload(
             engine="xtb",
@@ -614,22 +620,18 @@ def test_terminal_adoption_rebuilds_foreign_state_from_exact_report(
             engine_payload={"job_type": "opt", "reaction_key": "current", "input_summary": {}},
         ),
     )
-    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda *_args, **_kwargs: None)
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
 
-    assert queue_cmd._adopt_terminal_artifacts(cfg, queue_root, running)
+    assert not queue_cmd._adopt_terminal_artifacts(cfg, queue_root, running)
     state = state_mod.load_state(job_dir)
-    report = state_mod.load_report_json(job_dir)
-    assert state is not None and report is not None
-    assert state["job"]["id"] == pending.task_id
-    assert state["job"]["queue_id"] == pending.queue_id
-    assert report["job"]["id"] == pending.task_id
-    assert state["status"]["state"] == report["status"]["state"] == "completed"
-    assert "Status: `completed`" in (job_dir / state_mod.REPORT_MD_FILE_NAME).read_text(
-        encoding="utf-8"
-    )
+    assert state is not None
+    assert state["job"]["id"] == "foreign-job"
+    assert state["job"]["queue_id"] == "foreign-queue"
+    assert upserts == []
 
 
-def test_same_timestamp_terminal_pair_preserves_report_command(tmp_path: Path) -> None:
+def test_terminal_state_repair_preserves_command(tmp_path: Path) -> None:
     cfg = _make_cfg(tmp_path)
     queue_root = Path(cfg.runtime.allowed_root)
     job_dir = queue_root / "same-timestamp-command"
@@ -672,20 +674,19 @@ def test_same_timestamp_terminal_pair_preserves_report_command(tmp_path: Path) -
     }
     state_mod.write_state(
         job_dir,
-        artifact_payload(**common, job_dir=str(job_dir), engine_payload=engine_payload),
-    )
-    state_mod.write_report_json(
-        job_dir,
         artifact_payload(
             **common,
+            job_dir=str(job_dir),
             engine_payload={**engine_payload, "command": ["xtb", str(selected_xyz), "--opt"]},
         ),
     )
 
     assert queue_cmd._adopt_terminal_artifacts(cfg, queue_root, current_claim)
-    report = state_mod.load_report_json(job_dir)
-    assert report is not None
-    assert report["engine_payload"]["command"] == ["xtb", str(selected_xyz), "--opt"]
+    state = state_mod.load_state(job_dir)
+    assert state is not None
+    assert state["engine_payload"]["command"] == ["xtb", str(selected_xyz), "--opt"]
+    assert not (job_dir / "job_report.json").exists()
+    assert not (job_dir / "job_report.md").exists()
 
 
 def test_failed_terminal_repair_preserves_zero_exit_code(tmp_path: Path) -> None:
@@ -735,13 +736,15 @@ def test_failed_terminal_repair_preserves_zero_exit_code(tmp_path: Path) -> None
     )
 
     assert queue_cmd._adopt_terminal_artifacts(cfg, queue_root, current_claim)
-    report = state_mod.load_report_json(job_dir)
-    assert report is not None
-    assert report["status"] == {
+    state = state_mod.load_state(job_dir)
+    assert state is not None
+    assert state["status"] == {
         "state": "failed",
         "reason": "scientific_validation_failed",
         "exit_code": 0,
     }
+    assert not (job_dir / "job_report.json").exists()
+    assert not (job_dir / "job_report.md").exists()
 
 
 def test_terminal_without_exact_artifacts_records_repair_blocker(tmp_path: Path) -> None:
@@ -772,53 +775,10 @@ def test_terminal_without_exact_artifacts_records_repair_blocker(tmp_path: Path)
     assert not queue_cmd._adopt_terminal_artifacts(cfg, queue_root, terminal)
     [persisted] = list_queue(queue_root)
     assert persisted.status.value == "completed"
-    assert (
-        persisted.metadata["terminal_repair_blocked_reason"] == "terminal_artifacts_unrecoverable"
-    )
+    assert persisted.metadata["terminal_repair_blocked_reason"] == "terminal_state_unrecoverable"
 
 
-def test_terminal_artifact_pair_older_than_current_claim_is_rejected(tmp_path: Path) -> None:
-    job_dir = tmp_path / "older-terminal-pair"
-    job_dir.mkdir()
-    selected_xyz = job_dir / "input.xyz"
-    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
-    entry = _make_entry(
-        job_dir,
-        selected_xyz,
-        queue_id="older-pair-queue",
-        job_id="older-pair-job",
-        status="running",
-    )
-    entry.started_at = "2026-07-13T03:00:00+00:00"
-    common_fields: dict[str, Any] = {
-        "engine": "xtb",
-        "job_id": entry.task_id,
-        "queue_id": entry.queue_id,
-        "app_name": entry.app_name,
-        "task_id": entry.task_id,
-        "job_dir": str(job_dir),
-        "status": "completed",
-        "primary_path": str(selected_xyz),
-    }
-
-    matched = matching_terminal_artifacts_for_entry(
-        state=artifact_payload(
-            **common_fields,
-            updated_at="2026-07-13T01:00:00+00:00",
-        ),
-        report=artifact_payload(
-            **common_fields,
-            updated_at="2026-07-13T02:00:00+00:00",
-        ),
-        entry=cast(QueueEntry, entry),
-        engine="xtb",
-        job_dir=job_dir,
-    )
-
-    assert matched is None
-
-
-def test_terminal_state_only_older_than_current_claim_is_rejected(tmp_path: Path) -> None:
+def test_terminal_state_older_than_current_claim_is_rejected(tmp_path: Path) -> None:
     job_dir = tmp_path / "older-terminal-state"
     job_dir.mkdir()
     selected_xyz = job_dir / "input.xyz"
@@ -831,21 +791,23 @@ def test_terminal_state_only_older_than_current_claim_is_rejected(tmp_path: Path
         status="running",
     )
     entry.started_at = "2026-07-13T03:00:00+00:00"
-    state = artifact_payload(
-        engine="xtb",
-        job_id=entry.task_id,
-        queue_id=entry.queue_id,
-        app_name=entry.app_name,
-        task_id=entry.task_id,
-        job_dir=str(job_dir),
-        status="completed",
-        primary_path=str(selected_xyz),
-        updated_at="2026-07-13T02:00:00+00:00",
-    )
+    common_fields: dict[str, Any] = {
+        "engine": "xtb",
+        "job_id": entry.task_id,
+        "queue_id": entry.queue_id,
+        "app_name": entry.app_name,
+        "task_id": entry.task_id,
+        "generation": queue_entry_generation_token(cast(QueueEntry, entry)),
+        "job_dir": str(job_dir),
+        "status": "completed",
+        "primary_path": str(selected_xyz),
+    }
 
-    matched = matching_terminal_artifacts_for_entry(
-        state=state,
-        report={},
+    matched = matching_terminal_state_for_entry(
+        state=artifact_payload(
+            **common_fields,
+            updated_at="2026-07-13T01:00:00+00:00",
+        ),
         entry=cast(QueueEntry, entry),
         engine="xtb",
         job_dir=job_dir,
@@ -854,7 +816,46 @@ def test_terminal_state_only_older_than_current_claim_is_rejected(tmp_path: Path
     assert matched is None
 
 
-def test_terminal_adoption_rejects_report_older_than_exact_running_state(
+def test_completed_state_with_nonzero_exit_is_not_terminal_evidence(tmp_path: Path) -> None:
+    job_dir = tmp_path / "invalid-completed-state"
+    job_dir.mkdir()
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    entry = _make_entry(
+        job_dir,
+        selected_xyz,
+        queue_id="invalid-completed-queue",
+        job_id="invalid-completed-job",
+        status="running",
+    )
+    entry.started_at = "2026-07-13T01:00:00+00:00"
+    state = artifact_payload(
+        engine="xtb",
+        job_id=entry.task_id,
+        queue_id=entry.queue_id,
+        app_name=entry.app_name,
+        task_id=entry.task_id,
+        generation=queue_entry_generation_token(cast(QueueEntry, entry)),
+        job_dir=str(job_dir),
+        status="completed",
+        reason="completed",
+        exit_code=1,
+        primary_path=str(selected_xyz),
+        updated_at="2026-07-13T02:00:00+00:00",
+    )
+
+    assert (
+        matching_terminal_state_for_entry(
+            state=state,
+            entry=cast(QueueEntry, entry),
+            engine="xtb",
+            job_dir=job_dir,
+        )
+        is None
+    )
+
+
+def test_running_state_is_not_completed_by_removed_report(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -897,7 +898,7 @@ def test_terminal_adoption_rejects_report_older_than_exact_running_state(
             reason="current_attempt",
         ),
     )
-    state_mod.write_report_json(
+    _write_removed_report(
         job_dir,
         artifact_payload(
             **common_fields,
@@ -1437,10 +1438,6 @@ def test_terminal_reconcile_repairs_partial_cancelled_artifacts(
             reason="cancel_requested",
         ),
     )
-    state_mod.write_report_json(
-        job_dir,
-        artifact_payload(**common_fields, status="completed", reason="completed"),
-    )
     upserts: list[dict[str, object]] = []
     monkeypatch.setattr(
         queue_cmd,
@@ -1461,20 +1458,18 @@ def test_terminal_reconcile_repairs_partial_cancelled_artifacts(
     queue_cmd._sync_terminal_running_entries(worker)
 
     state = state_mod.load_state(job_dir)
-    report = state_mod.load_report_json(job_dir)
-    assert state is not None and report is not None
-    assert state["status"]["state"] == report["status"]["state"] == "cancelled"
+    assert state is not None
+    assert state["status"]["state"] == "cancelled"
     assert state["engine_payload"]["job_type"] == "opt"
-    assert report["engine_payload"]["reaction_key"] == "partial"
+    assert state["engine_payload"]["reaction_key"] == "partial"
     assert list_queue(queue_root)[0].metadata["reaction_key"] == "partial"
     assert upserts[-1]["status"] == "cancelled"
 
     queue_cmd._sync_terminal_running_entries(worker)
 
     assert len(upserts) == 1
-    assert "Status: `cancelled`" in (job_dir / state_mod.REPORT_MD_FILE_NAME).read_text(
-        encoding="utf-8"
-    )
+    assert not (job_dir / "job_report.json").exists()
+    assert not (job_dir / "job_report.md").exists()
 
 
 def test_terminal_reconcile_finalizes_direct_pending_cancel(
@@ -1540,14 +1535,16 @@ def test_terminal_reconcile_finalizes_direct_pending_cancel(
 
     [persisted] = list_queue(queue_root)
     state = state_mod.load_state(job_dir)
-    report = state_mod.load_report_json(job_dir)
     assert persisted.status.value == "cancelled"
     assert persisted.cancel_requested is False
     assert persisted.error == "cancel_requested"
-    assert state is not None and report is not None
-    assert state["status"]["state"] == report["status"]["state"] == "cancelled"
-    assert upserts[-1]["status"] == "cancelled"
+    assert state is not None
+    assert state["status"]["state"] == "queued"
+    assert persisted.metadata["terminal_repair_blocked_reason"] == "terminal_state_unrecoverable"
+    assert upserts == []
+    assert not (job_dir / "job_report.json").exists()
+    assert not (job_dir / "job_report.md").exists()
 
     queue_cmd._sync_terminal_running_entries(worker)
 
-    assert len(upserts) == 1
+    assert upserts == []

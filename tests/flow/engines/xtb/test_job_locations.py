@@ -19,7 +19,6 @@ from orca_auto.flow.engines.xtb.job_locations import (
     resolve_latest_job_dir,
     upsert_job_record,
 )
-from orca_auto.flow.engines.xtb.state import write_report_json, write_state
 from orca_auto.flow.state import write_workflow_payload
 
 
@@ -290,50 +289,7 @@ def test_resolve_latest_job_dir_returns_none_when_indexed_candidates_are_unusabl
     assert resolve_latest_job_dir(index_root, "job-404") is None
 
 
-def test_load_job_artifacts_reads_files_for_resolved_job(tmp_path: Path) -> None:
-    index_root = tmp_path / "allowed"
-    job_dir = tmp_path / "runs" / "job-200"
-    index_root.mkdir()
-    job_dir.mkdir(parents=True)
-
-    selected_xyz = _write_xyz(job_dir / "sample.xyz")
-    state_payload = {
-        "job_id": "job-200",
-        "status": "running",
-        "selected_input_xyz": str(selected_xyz.resolve()),
-    }
-    report_payload = {
-        "job_id": "job-200",
-        "status": "completed",
-        "reaction_key": "sample",
-    }
-    write_state(job_dir, state_payload)
-    write_report_json(job_dir, report_payload)
-    upsert_job_location(
-        index_root,
-        JobLocationRecord(
-            job_id="job-200",
-            app_name="orca_auto_xtb",
-            job_type="xtb_sp",
-            status="completed",
-            original_run_dir=str(job_dir.resolve()),
-            molecule_key="sample",
-            selected_input_xyz=str(selected_xyz.resolve()),
-            latest_known_path=str(job_dir.resolve()),
-            resource_request={},
-            resource_actual={},
-        ),
-    )
-
-    resolved_job_dir, state, report = job_locations_module.load_job_artifacts(index_root, "job-200")
-
-    assert resolved_job_dir == job_dir.resolve()
-    assert state == state_payload
-    assert report == report_payload
-    assert job_locations_module.load_job_artifacts(index_root, "missing") == (None, None, None)
-
-
-def test_record_from_artifacts_merges_sources_and_existing_values(tmp_path: Path) -> None:
+def test_record_from_artifacts_merges_state_and_existing_values(tmp_path: Path) -> None:
     job_dir = tmp_path / "runs" / "job-300"
     selected_xyz = _write_xyz(tmp_path / "inputs" / "Fancy Name.xyz")
     job_dir.mkdir(parents=True)
@@ -352,8 +308,9 @@ def test_record_from_artifacts_merges_sources_and_existing_values(tmp_path: Path
 
     record = record_from_artifacts(
         job_dir=job_dir,
-        state={"job_id": "job-300", "status": "completed"},
-        report={
+        state={
+            "job_id": "job-300",
+            "status": "completed",
             "job_type": "opt",
             "original_run_dir": str(job_dir.resolve()),
             "resource_request": {"max_cores": "8", "max_memory_gb": "16"},
@@ -380,7 +337,6 @@ def test_record_from_artifacts_returns_none_without_job_id(tmp_path: Path) -> No
         record_from_artifacts(
             job_dir=tmp_path / "job-without-id",
             state={},
-            report={},
             existing=None,
         )
         is None
@@ -398,10 +354,10 @@ def test_record_from_artifacts_defaults_invalid_resources_without_existing(
         state={
             "job_id": "job-301",
             "status": "queued",
+            "selected_input_xyz": str(selected_xyz.resolve()),
             "resource_request": "invalid",
             "resource_actual": "invalid",
         },
-        report={"selected_input_xyz": str(selected_xyz.resolve())},
         existing=None,
     )
 

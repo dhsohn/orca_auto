@@ -78,7 +78,7 @@ def test_write_running_state_records_worker_job_pid(tmp_path: Path) -> None:
     assert payload["engine_payload"]["job_type"] == "path_search"
 
 
-def test_write_execution_artifacts_writes_terminal_state_and_report(tmp_path: Path) -> None:
+def test_write_execution_artifacts_writes_only_terminal_state(tmp_path: Path) -> None:
     job_dir = tmp_path / "job-1"
     job_dir.mkdir()
     selected_xyz = job_dir / "input.xyz"
@@ -89,12 +89,13 @@ def test_write_execution_artifacts_writes_terminal_state_and_report(tmp_path: Pa
     worker_terminal.write_execution_artifacts(entry, result)
 
     state = state_mod.load_state(job_dir)
-    report = state_mod.load_report_json(job_dir)
     assert state is not None
-    assert report is not None
     assert state["status"]["state"] == "completed"
-    assert report["status"]["reason"] == "xtb_ok"
-    assert report["engine_payload"]["selected_candidate_paths"] == [str(selected_xyz)]
+    assert state["status"]["reason"] == "xtb_ok"
+    assert state["engine_payload"]["selected_candidate_paths"] == [str(selected_xyz)]
+    assert state["engine_payload"]["command"] == ["xtb", str(selected_xyz)]
+    assert not (job_dir / "job_report.json").exists()
+    assert not (job_dir / "job_report.md").exists()
 
 
 def test_finalize_execution_result_syncs_terminal_side_effects(

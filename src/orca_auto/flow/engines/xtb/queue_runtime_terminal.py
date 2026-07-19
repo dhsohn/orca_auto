@@ -23,7 +23,6 @@ class XtbQueueRuntimeTerminalCallbacks:
     queue_entries_with_roots: Callable[[Any], list[tuple[Path, Any]]]
     list_slots: Callable[[str | Path], list[Any]]
     load_state: Callable[..., Any]
-    load_report_json: Callable[..., Any]
     mark_completed: Callable[..., Any]
     mark_cancelled: Callable[..., Any]
     mark_failed: Callable[..., Any]
@@ -44,7 +43,6 @@ def load_terminal_summary(
         rc=rc,
         job_dir_fn=callbacks.job_dir,
         load_state_fn=callbacks.load_state,
-        load_report_json_fn=callbacks.load_report_json,
         queue_entry_by_id_fn=callbacks.queue_entry_by_id,
     )
 

@@ -92,8 +92,6 @@ WORKER_JOB_MODULE = WORKER_CHILD_MODULE
 is_recovery_pending = _queue_artifacts.is_recovery_pending
 load_state = _queue_artifacts.load_state
 state_matches_job = _queue_artifacts.state_matches_job
-write_report_json = _queue_artifacts.write_report_json
-write_report_md_lines = _queue_artifacts.write_report_md_lines
 write_state = _queue_artifacts.write_state
 build_worker_child_command = build_worker_child_command_for_engine("crest")
 
@@ -317,8 +315,6 @@ def _write_execution_artifacts(entry: Any, result: CrestRunResult) -> None:
         load_state_fn=load_state,
         state_matches_job_fn=state_matches_job,
         write_state_fn=write_state,
-        write_report_json_fn=write_report_json,
-        write_report_md_lines_fn=write_report_md_lines,
     )
 
 

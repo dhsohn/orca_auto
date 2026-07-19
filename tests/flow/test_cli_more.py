@@ -77,7 +77,7 @@ def test_cmd_workflow_worker_handles_negative_cycles_and_lock_timeout(monkeypatc
         raise TimeoutError("already running")
         yield
 
-    monkeypatch.setattr(cli_workflow, "file_lock", raising_lock)
+    monkeypatch.setattr(cli_workflow, "tmpfs_file_lock", raising_lock)
     monkeypatch.setattr(
         cli_workflow, "workflow_worker_lock_path", lambda workflow_root: Path("/tmp/worker.lock")
     )
@@ -99,7 +99,7 @@ def test_cmd_workflow_worker_handles_negative_cycles_and_lock_timeout(monkeypatc
 
     assert result == 1
     assert "worker_lock_error: already running" in capsys.readouterr().err
-    assert writes[-1]["status"] == "lock_error"
+    assert writes == []
     assert events[-1]["event_type"] == "worker_lock_error"
 
 
@@ -111,7 +111,7 @@ def test_cmd_workflow_worker_single_cycle_and_keyboard_interrupt(monkeypatch, ca
     def fake_lock(*args: Any, **kwargs: Any):
         yield
 
-    monkeypatch.setattr(cli_workflow, "file_lock", fake_lock)
+    monkeypatch.setattr(cli_workflow, "tmpfs_file_lock", fake_lock)
     monkeypatch.setattr(
         cli_workflow, "workflow_worker_lock_path", lambda workflow_root: Path("/tmp/worker.lock")
     )
@@ -164,6 +164,9 @@ def test_cmd_workflow_worker_single_cycle_and_keyboard_interrupt(monkeypatch, ca
     assert cli_workflow.cmd_workflow_worker(args) == 0
     stdout = capsys.readouterr().out
     assert "worker_session_id=wf_worker_02" in stdout
+    assert [item["status"] for item in writes] == ["running", "running", "stopped"]
+    assert writes[1]["minimum_heartbeat_interval_seconds"] == 30.0
+    assert writes[1]["last_cycle_started_at"] == "2026-04-19T17:30:00+00:00"
     assert writes[-1]["status"] == "stopped"
     assert writes[-1]["metadata"]["stop_reason"] == "max_cycles_reached"
     assert events[0]["event_type"] == "worker_started"

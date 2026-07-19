@@ -5,7 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from ..utils.lock import file_lock
+from ..utils.lock import tmpfs_file_lock
 from ..utils.persistence import atomic_write_json, coerce_int, resolve_root_path
 from .location import JobLocationRecord
 from .text import normalize_index_text as _normalize_text
@@ -115,7 +115,7 @@ def _record_paths(record: JobLocationRecord) -> list[Path]:
 
 def list_job_locations(root: str | Path) -> list[JobLocationRecord]:
     resolved_root = resolve_root_path(root)
-    with file_lock(_lock_path(resolved_root)):
+    with tmpfs_file_lock(_lock_path(resolved_root)):
         return _load_records(resolved_root)
 
 
@@ -124,7 +124,7 @@ def get_job_location(root: str | Path, job_id: str) -> JobLocationRecord | None:
     if not target:
         return None
     resolved_root = resolve_root_path(root)
-    with file_lock(_lock_path(resolved_root)):
+    with tmpfs_file_lock(_lock_path(resolved_root)):
         for record in _load_records(resolved_root):
             if record.job_id == target:
                 return record
@@ -133,7 +133,7 @@ def get_job_location(root: str | Path, job_id: str) -> JobLocationRecord | None:
 
 def upsert_job_location(root: str | Path, record: JobLocationRecord) -> JobLocationRecord:
     resolved_root = resolve_root_path(root)
-    with file_lock(_lock_path(resolved_root)):
+    with tmpfs_file_lock(_lock_path(resolved_root)):
         records = _load_records(resolved_root)
         replacement = JobLocationRecord(
             job_id=_normalize_text(record.job_id),
@@ -169,7 +169,7 @@ def resolve_job_location(root: str | Path, lookup_target: str) -> JobLocationRec
     resolved_root = resolve_root_path(root)
     candidate_path = _resolve_candidate_path(target)
 
-    with file_lock(_lock_path(resolved_root)):
+    with tmpfs_file_lock(_lock_path(resolved_root)):
         records = _load_records(resolved_root)
 
     for record in records:

@@ -37,7 +37,7 @@ def _install_deterministic_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     token_counter = count(1)
     time_counter = count(1)
 
-    monkeypatch.setattr(store, "file_lock", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(store, "tmpfs_file_lock", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(
         store, "timestamped_token", lambda prefix: f"{prefix}_{next(token_counter):04d}"
     )
@@ -944,7 +944,7 @@ def test_dequeue_next_keeps_fifo_when_the_clock_steps_backwards(
     # first arrival ~3s later than the second, and the old enqueued_at sort
     # key dispatched the second arrival first
     # (tests/test_queue_worker.py::TestFillSlots flake, 2026-07-16).
-    monkeypatch.setattr(store, "file_lock", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(store, "tmpfs_file_lock", lambda *_args, **_kwargs: nullcontext())
     stamps = iter(
         [
             "2026-07-16T14:18:22.500000+00:00",  # first enqueue, skewed ahead

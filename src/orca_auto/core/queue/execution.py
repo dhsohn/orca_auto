@@ -100,23 +100,37 @@ def mark_terminal_status(
     )
 
 
-def write_result_artifacts(
-    job_dir_text: str,
+def mark_terminal_repair_blocked(
+    queue_root: str | Path,
+    entry: Any,
     *,
-    state_payload: dict[str, Any],
-    report_payload: dict[str, Any],
-    report_lines: list[str],
-    write_state_fn: Callable[[Path, dict[str, Any]], Any],
-    write_report_json_fn: Callable[[Path, dict[str, Any]], Any],
-    write_report_md_lines_fn: Callable[[Path, list[str]], Any],
-) -> None:
-    if not job_dir_text.strip():
-        return
-
-    job_dir = Path(job_dir_text).expanduser().resolve()
-    write_state_fn(job_dir, state_payload)
-    write_report_json_fn(job_dir, report_payload)
-    write_report_md_lines_fn(job_dir, report_lines)
+    durable_status: str,
+    mark_completed_fn: Callable[..., Any],
+    mark_cancelled_fn: Callable[..., Any],
+    mark_failed_fn: Callable[..., Any],
+    blocked_reason: str = "terminal_state_unrecoverable",
+) -> Any:
+    normalized_status = str(durable_status).strip().lower()
+    if normalized_status == "completed":
+        reason = "completed"
+    elif normalized_status == "cancelled":
+        reason = "cancel_requested"
+    elif normalized_status == "failed":
+        reason = str(getattr(entry, "error", "") or blocked_reason).strip()
+    else:
+        raise ValueError(f"Terminal repair blocker requires terminal status: {durable_status}")
+    return mark_terminal_status(
+        queue_root,
+        entry.queue_id,
+        status=normalized_status,
+        reason=reason,
+        metadata_update={"terminal_repair_blocked_reason": blocked_reason},
+        mark_completed_fn=mark_completed_fn,
+        mark_cancelled_fn=mark_cancelled_fn,
+        mark_failed_fn=mark_failed_fn,
+        expected_entry=entry,
+        expected_task_id=str(entry.task_id),
+    )
 
 
 def wait_for_cancellable_process(

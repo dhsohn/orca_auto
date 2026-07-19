@@ -104,6 +104,28 @@ def test_prepare_smoke_root_serializes_owner_marker_publication(
         second_root = second.result(timeout=10)
 
     assert first_root == second_root == runs_root / ".orca_auto_smoke"
+    assert not (runs_root / smoke_manifest._SMOKE_INIT_LOCK_FILENAME).exists()
+
+
+def test_rebuild_smoke_index_uses_pinned_tmpfs_lock_without_disk_leaf(tmp_path: Path) -> None:
+    smoke_root = prepare_smoke_root(tmp_path / "runs")
+    batches_root = smoke_root / "batches"
+    batches_root.mkdir()
+    smoke_root_fd = os.open(smoke_root, smoke_manifest.directory_open_flags())
+    batches_fd = os.open(batches_root, smoke_manifest.directory_open_flags())
+    try:
+        index_path = smoke_manifest.rebuild_smoke_index(
+            smoke_root,
+            smoke_root_fd=smoke_root_fd,
+            batches_fd=batches_fd,
+        )
+    finally:
+        os.close(batches_fd)
+        os.close(smoke_root_fd)
+
+    assert index_path == smoke_root / smoke_manifest.SMOKE_INDEX_FILENAME
+    assert index_path.is_file()
+    assert not (smoke_root / "index.lock").exists()
 
 
 def test_prepare_smoke_root_rejects_writable_forged_owner_directory(tmp_path: Path) -> None:

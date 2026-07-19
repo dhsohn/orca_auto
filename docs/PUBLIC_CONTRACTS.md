@@ -66,6 +66,7 @@ Supported commands:
 - `orca_auto queue list`
 - `orca_auto queue list clear`
 - `orca_auto queue cancel <target>`
+- `orca_auto queue compact <completed-workflow>`
 - `orca_auto service status`
 - `orca_auto service restart`
 - `orca_auto systemd install --user <name> --repo <path>`
@@ -84,8 +85,10 @@ Stable behavior:
   and `--force` does not bypass that barrier.
 - `queue cancel` accepts the visible activity id plus known aliases such as
   workflow id, queue id, run id, or path aliases.
-- `queue list --json`, `queue cancel --json`, and `service status --json` are
-  the script-friendly surfaces.
+- `queue list --json`, `queue cancel --json`, `queue compact --json`, and
+  `service status --json` are the script-friendly surfaces.
+- `queue compact` is dry-run by default. It mutates a verified completed
+  workflow only when `--apply` is explicit.
 - `queue list --watch` is human-oriented and does not support `--json`.
 - `smoke` is a source-checkout developer command. With no options it runs the
   fake profile and uses the discovered shared config's `runs_root`; missing
@@ -250,9 +253,50 @@ The `metadata` mapping is intentionally extensible. Scripts may use known keys
 such as `queue_id`, `task_id`, `task_kind`, `run_id`, `workflow_id`,
 `reaction_dir`, `job_dir`, `allowed_root`, `priority`, `template_name`, and
 `workspace_dir`, but should tolerate missing or additional keys. A terminal row
-whose same-generation state/report pair cannot be reconstructed is exposed as
-`repair_blocked` activity with `repair_blocked_reason` and `queue_error`
-metadata instead of being retried indefinitely.
+whose required same-generation terminal evidence cannot be reconstructed is
+exposed as `repair_blocked` activity with `repair_blocked_reason` and
+`queue_error` metadata instead of being retried indefinitely.
+
+### Completed Workflow Compaction Contract
+
+`orca_auto queue compact <target>` accepts one completed workflow id or its
+canonical workspace path under the configured workflow root (`runs_root` in the
+shared configuration). Dry-run is the default and must precede an intentional
+`--apply`. Eligible dry-run and
+successful apply return 0; blocked/ineligible results and apply requests that
+do not set `applied` return 1.
+
+The stable JSON result keys are `workflow_id`, `workspace_dir`, `eligible`,
+`blocked`, `applied`, `would_remove`, `would_remove_bytes`, `removed`,
+`removed_bytes`, `preserved`, and `reasons`. Each plan row carries
+`relative_path`, `size`, `engine`, `stage_id`, and `job_id`. A blocked partial
+apply reports paths and bytes already removed, keeps `applied` false, and leaves
+remaining work fail-closed.
+
+Eligibility requires exact completed workflow, stage, task, final-child-sync,
+registry-or-cleared-marker, canonical internal `job_state.json`, and completed
+queue-or-index evidence. Pending/active/cancellation/recovery/replay/admission or
+snapshot state blocks the operation. SI publication generations may both be
+absent; when present they must match exactly. Reports are not lifecycle
+evidence. A report-only child is unsupported and must be resubmitted; there is
+no report or Markdown compatibility reader or fallback.
+
+The only removable names are exact `job_report.json` and `job_report.md` leaves
+of canonical workflow-internal xTB/CREST children. All other data is preserved:
+ORCA and standalone xTB-MD public reports; `workflow.json`,
+`workflow_report.html`, `flow.yaml`; registry, journal, and cleared-marker
+state; SI Markdown/CSV and interaction energies; every canonical job state,
+queue, index, admission, snapshot input/intent, process and PID record;
+scientific outputs, logs, geometries, provenance, data and HTML; and every lock
+file, including `run.lock` and old disk advisory locks. This online command
+never deletes old disk lock files; no separate offline lock cleanup is
+implemented.
+
+Apply rechecks the workflow gates under the standard mutation locks and
+revalidates each exact leaf immediately before unlinking it. Each leaf deletion
+is independent and idempotent. If apply is interrupted or blocked after a
+partial deletion, rerun the dry run and apply the remaining plan. Compaction
+creates no receipt, journal, or state file.
 
 An ORCA row that is already terminal when a worker first observes it is treated
 as closed history. Starting or restarting the worker does not regenerate that
@@ -306,10 +350,15 @@ hooks that are not explicitly snapshot-bound are unsupported and fail closed.
 
 New xTB/CREST terminal artifacts bind retained outputs to SHA-256 and byte-size
 identities. Downstream readers verify the current file against that terminal
-identity. A completed legacy artifact without an identity can be read only after
-the reader computes and marks an `identity_backfilled_from_legacy_artifact`
-identity; this proves the bytes seen at read time, not the bytes that existed at
-the historical terminal transition.
+identity. Completed artifacts without a terminal identity are unsupported and
+fail closed; they must be resubmitted. Readers do not backfill an identity from
+the bytes observed later, and do not remap stale artifact paths by basename.
+
+Workflow-internal xTB and CREST jobs use `job_state.json` as their only terminal
+metadata artifact. They do not create `job_report.json` or `job_report.md`, and
+adapters, indexing, repair, and workflow diagnostics do not read those files.
+Report-only jobs are unsupported and must be resubmitted. This does not
+change the separate ORCA or standalone xTB-MD report contracts below.
 
 ## Standalone xTB-MD Job Contract
 
@@ -357,8 +406,10 @@ An unresolved publication remains fail-closed and is not a retry/resume contract
 
 ## ORCA Job Artifact Contract
 
-The submitted ORCA job root keeps the user inputs, the coordination lock
-files, and one visible execution generation per submission. Job reports live
+The submitted ORCA job root keeps the user inputs, the durable `run.lock`
+ownership marker, and one visible execution generation per submission. Pure
+advisory coordination locks live in the private tmpfs lock namespace rather
+than the job tree. Job reports live
 inside the generation that produced them:
 
 - `<generation>/job_state.json`
@@ -394,6 +445,46 @@ exact source basenames, raw ORCA outputs, and the generation's
 `job_report.html` and `si_block.md`. Generation files retain the record for
 the generation they describe. The existence of the root `run.lock`
 file alone does not mean its advisory lock is currently owned.
+
+Queue, admission, index, workflow, registry, snapshot-intent, upload, worker
+singleton, process-record mutation, and job-state mutation flocks also use the
+owner-private `/dev/shm/orca_auto-locks-<uid>` namespace. Their logical path is
+hashed without a build, repository, or boot identifier, then mapped into a
+fixed, versioned pool of 4096 stripe files shared by pathname and
+directory-inode identities. A collision between unrelated identities causes
+conservative serialization, not a loss of mutual exclusion. Nested acquisition
+is reentrant only for ownership in the same thread; other threads and
+processes remain externally serialized, and a fork child drops inherited
+reentrancy state and lock descriptors before acquiring independently. Stripe
+files are never unlinked while the protocol is in use, and the current protocol
+creates at most 4096 files per owner namespace. Lock setup fails closed without
+creating a disk lock. Durable JSON/PID/process ownership state is unchanged.
+Deploy this transition only after draining every old-build
+`orca_auto` process: all queue/workflow workers, the bot, direct CLI and
+maintenance commands, and upload handling. Old disk-lock holders and new
+tmpfs-lock holders do not exclude each other. Standard `systemd install` and
+`service restart` snapshot every managed unit, stop the active ones, and verify
+the graph is non-running before an install writes or reloads units, then start and verify the selected runtime graph and restore
+the workflow unit only when it was previously active. A failure after that
+drain leaves the graph stopped instead of reviving old processes. A per-user,
+EUID-independent, non-persistent Linux abstract `AF_UNIX` socket lock serializes
+each non-dry-run install or restart from mode query and drain through
+start/restore within one Linux network namespace; lock timeout and noncanonical
+`systemctl` return-code/state pairs fail closed. Supported mutation callers,
+including WSL/native host shells and the supplied systemd units, must share that
+network namespace when controlling the same host systemd. Container or separate
+network namespace access to host systemd is unsupported. Abstract names are
+permissionless and require a trusted-local-user or single-user administrative
+boundary. An untrusted local user can pre-bind the name for a fail-closed
+availability denial, but timeout precedes mutation and cannot cause a
+split-build graph or data damage. No file-lock fallback is provided.
+`--no-start` and `--no-enable` are offline-only maintenance installs: before writing any
+unit, they require every managed unit to report a known non-running state and
+perform no live stop/start. Active/transitional states or query errors block the write.
+Boot-mode changes disable the opposite
+mode before enabling the selected mode. In-place code sync requires the drain
+before checkout mutation. Manual/foreground processes remain an explicit
+operator preflight.
 
 `job_state.json` and `job_report.json` use the normalized engine artifact shape:
 
@@ -706,7 +797,12 @@ Workflow runtime artifacts:
   Missing, non-finite, non-positive, or inconsistent data cause populations to
   be omitted rather than fabricated at an assumed temperature.
 - `workflow_registry.json` and `workflow_registry.journal.jsonl` support
-  cross-workflow listing and event history.
+  cross-workflow listing and semantic event history. Idle polling-cycle
+  start/finish rows are not emitted. Bounded recent reads are newest-first by
+  the registry-lock append/commit order, not by a later wall-clock sort, and do
+  not scan the full journal. `workflow_worker_state.json` is an advisory worker
+  snapshot coalesced on semantic changes and a bounded heartbeat; durable
+  workflow/queue state and the worker singleton lock remain authoritative.
 - xTB/CREST terminal output identities are verified before downstream parsing.
   A single output XYZ handed to a downstream stage has a 512 MiB
   materialization cap; larger output ensembles fail closed rather than being

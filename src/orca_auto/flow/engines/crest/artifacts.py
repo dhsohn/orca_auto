@@ -10,8 +10,6 @@ from orca_auto.flow.engines.crest.state import (
     is_recovery_pending,
     load_state,
     state_matches_job,
-    write_report_json,
-    write_report_md_lines,
     write_state,
 )
 
@@ -79,28 +77,6 @@ def matching_result_state(
     )
 
 
-def report_lines(entry: Any, result: CrestRunResult) -> list[str]:
-    lines = _engine_execution.terminal_report_lines(
-        entry,
-        result,
-        title="orca_auto CREST Report",
-        selected_input_label="Selected XYZ",
-        selected_input_xyz=result.selected_input_xyz,
-        engine_lines=[
-            f"- Mode: `{result.mode}`",
-            f"- Molecule Key: `{_engine_execution.entry_metadata_text(entry, 'molecule_key') or '-'}`",
-        ],
-        detail_lines=[
-            f"- Retained Conformers: `{result.retained_conformer_count}`",
-        ],
-    )
-    if result.retained_conformer_paths:
-        lines.append("- Retained Files:")
-        for path in result.retained_conformer_paths:
-            lines.append(f"  - `{path}`")
-    return lines
-
-
 def write_execution_artifacts(
     entry: Any,
     result: CrestRunResult,
@@ -108,8 +84,6 @@ def write_execution_artifacts(
     load_state_fn: Any = load_state,
     state_matches_job_fn: Any = state_matches_job,
     write_state_fn: Any = write_state,
-    write_report_json_fn: Any = write_report_json,
-    write_report_md_lines_fn: Any = write_report_md_lines,
 ) -> None:
     job_dir_text = _engine_execution.entry_metadata_text(entry, "job_dir")
     if not job_dir_text:
@@ -131,12 +105,7 @@ def write_execution_artifacts(
         previous_state=base_state,
         resumed=bool(base_state.get("resumed", False)),
         artifact_fields=_result_artifact_fields(entry, result),
-        report_lines=report_lines(entry, result),
-        writers=_engine_execution.TerminalArtifactWriters(
-            write_state=write_state_fn,
-            write_report_json=write_report_json_fn,
-            write_report_md_lines=write_report_md_lines_fn,
-        ),
+        write_state_fn=write_state_fn,
     )
 
 

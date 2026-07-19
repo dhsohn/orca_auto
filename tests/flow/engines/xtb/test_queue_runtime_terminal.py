@@ -31,7 +31,6 @@ def _callbacks(**overrides: Any) -> queue_runtime_terminal.XtbQueueRuntimeTermin
         "queue_entries_with_roots": lambda _cfg: [],
         "list_slots": lambda _root: ["slot"],
         "load_state": lambda _job_dir: None,
-        "load_report_json": lambda _job_dir: None,
         "mark_completed": lambda *_args, **_kwargs: None,
         "mark_cancelled": lambda *_args, **_kwargs: None,
         "mark_failed": lambda *_args, **_kwargs: None,
@@ -58,6 +57,7 @@ def test_load_terminal_summary_uses_callbacks(tmp_path: Path) -> None:
     assert result[2]["rc"] == 3
     assert result[2]["job_dir_fn"](entry) == tmp_path / "job"
     assert result[2]["queue_entry_by_id_fn"]("root", "queue-1") is None
+    assert "load_report_json_fn" not in result[2]
 
 
 def test_finalize_execution_result_uses_callbacks(tmp_path: Path) -> None:

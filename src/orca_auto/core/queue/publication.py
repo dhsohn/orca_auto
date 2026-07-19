@@ -8,7 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from ..utils.lock import file_lock
+from ..utils.lock import tmpfs_file_lock
 from ..utils.persistence import parse_iso_utc, resolve_root_path
 
 QUEUE_RECORD_SYNC_KEY = "_orca_auto_queued_record_sync"
@@ -161,7 +161,7 @@ def queue_record_publication_lock(
     Callers may acquire the queue lock while holding this lock, but must never
     wait for this lock while still holding the queue lock.
     """
-    with file_lock(
+    with tmpfs_file_lock(
         _publication_lock_path(root, queue_id),
         timeout_seconds=timeout_seconds,
     ):

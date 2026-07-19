@@ -5,26 +5,18 @@ from typing import Any
 
 from orca_auto.core.artifacts import (
     CREST_JOB_MANIFEST_FILE,
-    JOB_REPORT_JSON_FILE,
-    JOB_REPORT_MD_FILE,
     JOB_STATE_FILE,
 )
 from orca_auto.core.state import engine as _engine_state
 from orca_auto.core.utils import now_utc_iso
 
 STATE_FILE_NAME = JOB_STATE_FILE
-REPORT_JSON_FILE_NAME = JOB_REPORT_JSON_FILE
-REPORT_MD_FILE_NAME = JOB_REPORT_MD_FILE
 RECOVERY_PENDING_REASONS = _engine_state.RECOVERY_PENDING_REASONS
-_STATE_EXPORTS = _engine_state.create_engine_state_module_exports(
-    _engine_state.EngineStateModuleSpec(
+_STATE_EXPORTS = _engine_state.create_engine_state_only_module_exports(
+    _engine_state.EngineStateOnlyModuleSpec(
         state_file_name=STATE_FILE_NAME,
-        report_json_file_name=REPORT_JSON_FILE_NAME,
-        report_md_file_name=REPORT_MD_FILE_NAME,
         manifest_file_name=CREST_JOB_MANIFEST_FILE,
         engine="crest",
-        report_title="orca_auto CREST Report",
-        selected_input_label="Selected XYZ",
     ),
     now_fn=lambda: now_utc_iso(),
 )
@@ -34,22 +26,7 @@ _RECOVERY_RETAINED_FIELDS = _engine_state.RecoveryRetainedFieldsSpec(
     list_fields=("retained_conformer_paths",),
 )
 write_state = _STATE_EXPORTS.write_state
-write_report_json = _STATE_EXPORTS.write_report_json
-write_report_md_lines = _STATE_EXPORTS.write_report_md_lines
 load_state = _STATE_EXPORTS.load_state
-load_report_json = _STATE_EXPORTS.load_report_json
-
-
-def write_report_md(
-    job_dir: Path, *, job_id: str, status: str, reason: str, selected_xyz: str
-) -> Path:
-    return _STATE_EXPORTS.write_report_md(
-        job_dir,
-        job_id=job_id,
-        status=status,
-        reason=reason,
-        selected_input=selected_xyz,
-    )
 
 
 def state_matches_job(

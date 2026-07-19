@@ -12,7 +12,7 @@ from orca_auto.flow.engines.xtb import artifacts as _queue_artifacts
 from orca_auto.flow.engines.xtb import terminal as _queue_terminal
 from orca_auto.flow.engines.xtb.job_locations import upsert_job_record
 from orca_auto.flow.engines.xtb.runner import XtbRunResult
-from orca_auto.flow.engines.xtb.state import write_report_json, write_report_md_lines, write_state
+from orca_auto.flow.engines.xtb.state import write_state
 from orca_auto.flow.engines.xtb.worker_context import (
     input_summary as _input_summary,
 )
@@ -73,8 +73,6 @@ def write_execution_artifacts(
         resumed=resumed,
         coerce_mapping_fn=_queue_execution.coerce_mapping,
         write_state_fn=write_state,
-        write_report_json_fn=write_report_json,
-        write_report_md_lines_fn=write_report_md_lines,
     )
 
 

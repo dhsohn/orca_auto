@@ -87,11 +87,7 @@ from .runner import (
     start_xtb_job,
 )
 from .state import (
-    REPORT_MD_FILE_NAME,
-    load_report_json,
     load_state,
-    write_report_json,
-    write_report_md_lines,
     write_state,
 )
 from .submission import _record_queued as _record_queued_submission
@@ -204,7 +200,6 @@ def _runtime_terminal_callbacks() -> _runtime_terminal.XtbQueueRuntimeTerminalCa
         queue_entries_with_roots=queue_entries_with_roots,
         list_slots=list_slots,
         load_state=load_state,
-        load_report_json=load_report_json,
         mark_completed=mark_completed,
         mark_cancelled=mark_cancelled,
         mark_failed=mark_failed,
@@ -432,7 +427,6 @@ def _terminal_entry_needs_repair(
     except (KeyError, OSError, RuntimeError, TypeError, ValueError):
         return False
     state = load_state(job_dir) or {}
-    report = load_report_json(job_dir) or {}
     expected_reason = (
         "completed"
         if status == "completed"
@@ -442,21 +436,14 @@ def _terminal_entry_needs_repair(
             else str(getattr(entry, "error", "") or "worker_failed").strip()
         )
     )
-    if not _engine_artifacts.terminal_artifact_pair_is_consistent(
+    if not _engine_artifacts.terminal_state_is_consistent(
         state=state,
-        report=report,
         entry=entry,
         engine="xtb",
         job_dir=job_dir,
         expected_status=status,
         expected_reason=expected_reason,
     ):
-        return True
-    try:
-        markdown_lines = (job_dir / REPORT_MD_FILE_NAME).read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return True
-    if markdown_lines != _engine_artifacts.build_engine_report_markdown(report):
         return True
     entry_metadata = getattr(entry, "metadata", {})
     if not isinstance(entry_metadata, dict):
@@ -485,15 +472,14 @@ def _terminal_entry_needs_repair(
             and str(artifact_input.get("selected_xyz_path") or "")
             != _ranking_expected_selected_output(
                 state,
-                report,
                 input_summary=input_summary,
                 status=status,
                 queued_selected_path=selected_input,
             )
         )
-        or str(_artifact_value(state, report, "job_type", "")) != job_type
-        or str(_artifact_value(state, report, "reaction_key", "")) != reaction_key
-        or _artifact_value(state, report, "input_summary", None) != input_summary
+        or str(_artifact_value(state, "job_type", "")) != job_type
+        or str(_artifact_value(state, "reaction_key", "")) != reaction_key
+        or _artifact_value(state, "input_summary", None) != input_summary
         or artifact_resources.get("request") != resource_request
     ):
         return True
@@ -516,7 +502,6 @@ def _terminal_entry_needs_repair(
 
 def _artifact_value(
     state: dict[str, Any],
-    report: dict[str, Any],
     key: str,
     default: Any = None,
 ) -> Any:
@@ -525,15 +510,11 @@ def _artifact_value(
     state_engine_payload = state.get("engine_payload")
     if isinstance(state_engine_payload, dict) and key in state_engine_payload:
         return state_engine_payload[key]
-    engine_payload = report.get("engine_payload")
-    if isinstance(engine_payload, dict) and key in engine_payload:
-        return engine_payload[key]
     return default
 
 
 def _ranking_expected_selected_output(
     state: dict[str, Any],
-    report: dict[str, Any],
     *,
     input_summary: dict[str, Any],
     status: str,
@@ -542,8 +523,8 @@ def _ranking_expected_selected_output(
     if status != "completed":
         return queued_selected_path
     candidate_paths = input_summary.get("candidate_paths")
-    selected_candidates = _artifact_value(state, report, "selected_candidate_paths", None)
-    analysis_summary = _artifact_value(state, report, "analysis_summary", None)
+    selected_candidates = _artifact_value(state, "selected_candidate_paths", None)
+    analysis_summary = _artifact_value(state, "analysis_summary", None)
     if (
         isinstance(candidate_paths, list)
         and isinstance(selected_candidates, list)
@@ -559,13 +540,12 @@ def _ranking_expected_selected_output(
     return ""
 
 
-def _terminal_reason(state: dict[str, Any], report: dict[str, Any]) -> str:
-    for payload in (state, report):
-        status_payload = payload.get("status")
-        if isinstance(status_payload, dict):
-            reason = str(status_payload.get("reason") or "").strip()
-            if reason:
-                return reason
+def _terminal_reason(state: dict[str, Any]) -> str:
+    status_payload = state.get("status")
+    if isinstance(status_payload, dict):
+        reason = str(status_payload.get("reason") or "").strip()
+        if reason:
+            return reason
     return "terminal_artifact_replay"
 
 
@@ -580,65 +560,44 @@ def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
     if not job_dir.is_relative_to(resolved_queue_root):
         return False
     raw_state = load_state(job_dir) or {}
-    raw_report = load_report_json(job_dir) or {}
-    matched = _engine_artifacts.matching_terminal_artifacts_for_entry(
+    matched = _engine_artifacts.matching_terminal_state_for_entry(
         state=raw_state,
-        report=raw_report,
         entry=entry,
         engine="xtb",
         job_dir=job_dir,
     )
     durable_status = str(getattr(getattr(entry, "status", None), "value", "")).strip().lower()
     if matched is not None:
-        state = matched.state
-        report = matched.report
-    elif durable_status in TERMINAL_STATUSES:
-        exact_state = _engine_artifacts.exact_artifact_envelope_for_entry(
-            raw_state,
-            entry=entry,
-            engine="xtb",
-            job_dir=job_dir,
-            require_job_dir=True,
-            require_generation=True,
+        state = matched
+        matched_status_payload = state.get("status")
+        matched_status = (
+            str(matched_status_payload.get("state") or "").strip().lower()
+            if isinstance(matched_status_payload, dict)
+            else ""
         )
-        exact_report = _engine_artifacts.exact_artifact_envelope_for_entry(
-            raw_report,
-            entry=entry,
-            engine="xtb",
-            job_dir=job_dir,
-            require_job_dir=False,
-            require_generation=True,
-        )
-        state = exact_state
-        report = {} if exact_state else exact_report
-        if not state and not report:
-            terminal_reason = (
-                "completed"
-                if durable_status == "completed"
-                else (
-                    "cancel_requested"
-                    if durable_status == "cancelled"
-                    else str(getattr(entry, "error", "") or "terminal_artifacts_unrecoverable")
-                )
-            )
-            _queue_execution.mark_terminal_status(
+        if durable_status in TERMINAL_STATUSES and matched_status != durable_status:
+            _queue_execution.mark_terminal_repair_blocked(
                 queue_root,
-                entry.queue_id,
-                status=durable_status,
-                reason=terminal_reason,
-                metadata_update={
-                    "terminal_repair_blocked_reason": "terminal_artifacts_unrecoverable"
-                },
+                entry,
+                durable_status=durable_status,
                 mark_completed_fn=mark_completed,
                 mark_cancelled_fn=mark_cancelled,
                 mark_failed_fn=mark_failed,
-                expected_entry=entry,
-                expected_task_id=str(entry.task_id),
             )
             return False
+    elif durable_status in TERMINAL_STATUSES:
+        _queue_execution.mark_terminal_repair_blocked(
+            queue_root,
+            entry,
+            durable_status=durable_status,
+            mark_completed_fn=mark_completed,
+            mark_cancelled_fn=mark_cancelled,
+            mark_failed_fn=mark_failed,
+        )
+        return False
     else:
         return False
-    record = record_from_artifacts(job_dir=job_dir, state=state, report=report)
+    record = record_from_artifacts(job_dir=job_dir, state=state)
     if (
         record is None
         or (record.status not in TERMINAL_STATUSES and durable_status not in TERMINAL_STATUSES)
@@ -662,10 +621,8 @@ def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
     if not artifact_selected_input_path.is_relative_to(job_dir):
         return False
 
-    artifact_job_type = str(
-        _artifact_value(state, report, "job_type", "path_search") or "path_search"
-    )
-    artifact_reaction_key = str(_artifact_value(state, report, "reaction_key", record.molecule_key))
+    artifact_job_type = str(_artifact_value(state, "job_type", "path_search") or "path_search")
+    artifact_reaction_key = str(_artifact_value(state, "reaction_key", record.molecule_key))
     job_type = str(entry_metadata.get("job_type") or "").strip()
     reaction_key = str(entry_metadata.get("reaction_key") or "").strip()
     queue_resource_request = entry_metadata.get("resource_request")
@@ -676,11 +633,10 @@ def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
         input_summary = {}
     if not job_type or not reaction_key:
         return False
-    artifact_input_summary = _artifact_value(state, report, "input_summary", None)
+    artifact_input_summary = _artifact_value(state, "input_summary", None)
     expected_ranking_selected = (
         _ranking_expected_selected_output(
             state,
-            report,
             input_summary=input_summary,
             status=record.status,
             queued_selected_path=str(selected_input_path),
@@ -742,11 +698,7 @@ def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
             resource_actual=record.resource_actual,
         )
 
-    authoritative_payload = (
-        report
-        if isinstance(report.get("engine_payload"), dict) and "command" in report["engine_payload"]
-        else (state or report)
-    )
+    authoritative_payload = state
 
     def persist_terminal(status: str, reason: str) -> None:
         source_status = authoritative_payload.get("status")
@@ -776,7 +728,7 @@ def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
                 )
                 else None
             )
-        payloads = _engine_artifacts.canonical_terminal_artifact_payloads(
+        payload = _engine_artifacts.canonical_terminal_state_payload(
             authoritative_payload,
             job_dir=job_dir,
             status=status,
@@ -785,42 +737,36 @@ def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
             generation=queue_entry_generation_token(entry),
             updated_at=now_utc_iso(),
         )
-        for payload in (payloads.state, payloads.report):
-            input_payload = payload.get("input")
-            if not isinstance(input_payload, dict):
-                input_payload = {}
-                payload["input"] = input_payload
-            canonical_selected_input = (
-                Path(expected_ranking_selected)
-                if job_type == "ranking" and expected_ranking_selected and status == "completed"
-                else selected_input_path
-            )
-            input_payload.update(
-                {
-                    "primary_path": str(canonical_selected_input),
-                    "selected_xyz_path": str(canonical_selected_input),
-                }
-            )
-            engine_payload = payload.get("engine_payload")
-            if not isinstance(engine_payload, dict):
-                engine_payload = {}
-                payload["engine_payload"] = engine_payload
-            engine_payload.update({"job_type": job_type, "reaction_key": reaction_key})
-            engine_payload["input_summary"] = dict(input_summary)
-            resources = payload.get("resources")
-            if not isinstance(resources, dict):
-                resources = {}
-                payload["resources"] = resources
-            resources["request"] = dict(queue_resource_request)
-        write_state(job_dir, payloads.state)
-        write_report_json(job_dir, payloads.report)
-        write_report_md_lines(
-            job_dir,
-            _engine_artifacts.build_engine_report_markdown(payloads.report),
+        input_payload = payload.get("input")
+        if not isinstance(input_payload, dict):
+            input_payload = {}
+            payload["input"] = input_payload
+        canonical_selected_input = (
+            Path(expected_ranking_selected)
+            if job_type == "ranking" and expected_ranking_selected and status == "completed"
+            else selected_input_path
         )
+        input_payload.update(
+            {
+                "primary_path": str(canonical_selected_input),
+                "selected_xyz_path": str(canonical_selected_input),
+            }
+        )
+        engine_payload = payload.get("engine_payload")
+        if not isinstance(engine_payload, dict):
+            engine_payload = {}
+            payload["engine_payload"] = engine_payload
+        engine_payload.update({"job_type": job_type, "reaction_key": reaction_key})
+        engine_payload["input_summary"] = dict(input_summary)
+        resources = payload.get("resources")
+        if not isinstance(resources, dict):
+            resources = {}
+            payload["resources"] = resources
+        resources["request"] = dict(queue_resource_request)
+        write_state(job_dir, payload)
         upsert_status(status)
 
-    terminal_reason = _terminal_reason(state, report)
+    terminal_reason = _terminal_reason(state)
     target_status = durable_status if durable_status in TERMINAL_STATUSES else record.status
     if target_status == "completed":
         target_reason = "completed"
@@ -838,9 +784,7 @@ def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
         entry.queue_id,
         status=target_status,
         reason=target_reason,
-        metadata_update={
-            "candidate_count": int(_artifact_value(state, report, "candidate_count", 0) or 0)
-        },
+        metadata_update={"candidate_count": int(_artifact_value(state, "candidate_count", 0) or 0)},
         mark_completed_fn=mark_completed,
         mark_cancelled_fn=mark_cancelled,
         mark_failed_fn=mark_failed,

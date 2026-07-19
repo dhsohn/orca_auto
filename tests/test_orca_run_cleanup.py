@@ -352,6 +352,64 @@ def test_cleanup_serializes_atomic_state_publish_after_final_identity_check(
     assert current_state["status"] == "running"
 
 
+def test_cleanup_and_renamed_state_writer_share_pinned_directory_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed_root = tmp_path / "runs"
+    reaction_dir = allowed_root / "job"
+    renamed_dir = allowed_root / "job-renamed"
+    _write_state(reaction_dir, run_id="run-terminal", status="completed")
+    identity_checked = threading.Event()
+    writer_started = threading.Event()
+    writer_finished = threading.Event()
+    writer_errors: list[BaseException] = []
+    original_is_current = run_cleanup._snapshot_state_is_current
+
+    def _publish_after_rename() -> None:
+        try:
+            assert identity_checked.wait(timeout=5)
+            writer_started.set()
+            _write_state(renamed_dir, run_id="run-running", status="running")
+        except BaseException as exc:  # noqa: BLE001
+            writer_errors.append(exc)
+        finally:
+            writer_finished.set()
+
+    writer = threading.Thread(target=_publish_after_rename)
+    writer.start()
+
+    def _checked_then_rename(
+        snapshot: RunSnapshot,
+        directory_fd: int,
+    ) -> bool:
+        is_current = original_is_current(snapshot, directory_fd)
+        reaction_dir.rename(renamed_dir)
+        identity_checked.set()
+        assert writer_started.wait(timeout=5)
+        assert not writer_finished.wait(timeout=0.2)
+        return is_current
+
+    monkeypatch.setattr(
+        run_cleanup,
+        "_snapshot_state_is_current",
+        _checked_then_rename,
+    )
+    try:
+        assert run_cleanup.clear_terminal_run_states(allowed_root) == 1
+    finally:
+        writer.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert writer_finished.is_set()
+    assert writer_errors == []
+    assert not reaction_dir.exists()
+    current_state = load_state(renamed_dir)
+    assert current_state is not None
+    assert current_state["run_id"] == "run-running"
+    assert current_state["status"] == "running"
+
+
 def test_clear_terminal_entries_reports_queue_and_run_state_counts(tmp_path: Path) -> None:
     allowed_root = tmp_path / "orca_runs"
     allowed_root.mkdir()

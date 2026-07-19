@@ -135,7 +135,6 @@ class _WorkflowCycle:
     requested_submit_ready: bool
     cycle_submit_ready: bool
     admission_blocked: bool
-    lease_expires_at: str
 
 
 @dataclass(frozen=True)

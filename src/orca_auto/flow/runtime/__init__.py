@@ -14,7 +14,6 @@ from ..registry import (
     append_workflow_journal_event,
     list_workflow_registry,
     reindex_workflow_registry,
-    write_workflow_worker_state,
 )
 from ..stage_transition_events import (
     append_phase_transition_events,
@@ -353,9 +352,6 @@ def _start_workflow_cycle(
         now_utc_iso_fn=now_utc_iso,
         timestamped_token_fn=timestamped_token,
         workflow_submission_has_capacity_fn=cycle_submission_has_capacity,
-        write_workflow_worker_state_fn=write_workflow_worker_state,
-        append_workflow_journal_event_fn=append_workflow_journal_event,
-        workflow_lease_expires_at_fn=workflow_lease_expires_at,
     )
 
 
@@ -415,22 +411,8 @@ def _advance_workflow_records(
     )
 
 
-def _finish_workflow_cycle(
-    *,
-    cycle: _WorkflowCycle,
-    discovered_count: int,
-    progress: _WorkflowCycleProgress,
-    interval_seconds: float | None,
-) -> str:
-    return finish_workflow_cycle(
-        cycle=cycle,
-        discovered_count=discovered_count,
-        progress=progress,
-        interval_seconds=interval_seconds,
-        now_utc_iso_fn=now_utc_iso,
-        write_workflow_worker_state_fn=write_workflow_worker_state,
-        append_workflow_journal_event_fn=append_workflow_journal_event,
-    )
+def _finish_workflow_cycle() -> str:
+    return finish_workflow_cycle(now_utc_iso_fn=now_utc_iso)
 
 
 def _workflow_registry_records(context: WorkflowRuntimeContext) -> list[Any]:
@@ -506,12 +488,7 @@ def _advance_workflow_registry_request(
         records=records,
         options=request.options,
     )
-    cycle_finished_at = _finish_workflow_cycle(
-        cycle=cycle,
-        discovered_count=len(records),
-        progress=progress,
-        interval_seconds=request.interval_seconds,
-    )
+    cycle_finished_at = _finish_workflow_cycle()
     return _workflow_registry_cycle_payload(
         context=runtime_context,
         request=request,
@@ -528,5 +505,6 @@ __all__ = [
     "WORKFLOW_WORKER_LOCK_NAME",
     "WorkflowRuntimeContext",
     "advance_workflow_registry_once",
+    "workflow_lease_expires_at",
     "workflow_worker_lock_path",
 ]

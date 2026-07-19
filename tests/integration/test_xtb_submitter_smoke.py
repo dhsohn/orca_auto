@@ -63,16 +63,16 @@ def test_xtb_submitter_roundtrip_smoke(
     assert artifact_dir.exists()
     assert not (xtb_opt_job / "organized_ref.json").exists()
     assert (artifact_dir / "job_state.json").exists()
-    assert (artifact_dir / "job_report.json").exists()
-    assert (artifact_dir / "job_report.md").exists()
+    assert not (artifact_dir / "job_report.json").exists()
+    assert not (artifact_dir / "job_report.md").exists()
     assert (artifact_dir / "xtbopt.xyz").exists()
     assert (artifact_dir / "xtbout.json").exists()
 
-    report_payload = json.loads((artifact_dir / "job_report.json").read_text(encoding="utf-8"))
-    assert _status(report_payload)["state"] == "completed"
-    assert _engine_payload(report_payload)["job_type"] == "opt"
-    assert _engine_payload(report_payload)["candidate_count"] == 1
-    assert _engine_payload(report_payload)["analysis_summary"]["optimization_ok"] is True
+    state_payload = json.loads((artifact_dir / "job_state.json").read_text(encoding="utf-8"))
+    assert _status(state_payload)["state"] == "completed"
+    assert _engine_payload(state_payload)["job_type"] == "opt"
+    assert _engine_payload(state_payload)["candidate_count"] == 1
+    assert _engine_payload(state_payload)["analysis_summary"]["optimization_ok"] is True
 
     contract = load_xtb_artifact_contract(
         xtb_index_root=smoke_workspace.xtb_allowed_root,

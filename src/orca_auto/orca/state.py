@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -27,7 +28,7 @@ from orca_auto.core.engines.artifacts import (
 )
 from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
 from orca_auto.core.queue.generation import is_visible_generation_name
-from orca_auto.core.utils.lock import file_lock
+from orca_auto.core.utils.lock import tmpfs_file_lock_at
 from orca_auto.core.utils.persistence import (
     atomic_write_json,
     durable_mkdir,
@@ -275,20 +276,44 @@ def write_state(reaction_dir: Path, state: Mapping[str, Any]) -> Path:
     path = state_path(reaction_dir)
     durable_mkdir(reaction_dir, parents=True, exist_ok=True)
     payload = _normalized_payload_from_state(reaction_dir, state_payload)
-    with file_lock(reaction_dir / STATE_MUTATION_LOCK_FILE_NAME):
-        generation_target = _visible_generation_artifact_dir(reaction_dir, state_payload)
-        if generation_target is not None:
-            _write_generation_json(
-                generation_target,
-                state_path(generation_target[0]),
-                payload,
-            )
-        atomic_write_json(
-            path,
-            payload,
-            ensure_ascii=True,
-            indent=2,
+    directory_fd = os.open(
+        reaction_dir,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+    )
+    try:
+        directory_status = os.fstat(directory_fd)
+        directory_identity = (
+            int(directory_status.st_dev),
+            int(directory_status.st_ino),
         )
+        with tmpfs_file_lock_at(
+            directory_fd,
+            STATE_MUTATION_LOCK_FILE_NAME,
+            display_path=reaction_dir / STATE_MUTATION_LOCK_FILE_NAME,
+        ):
+            generation_target = _visible_generation_artifact_dir(reaction_dir, state_payload)
+            if generation_target is not None:
+                _write_generation_json(
+                    generation_target,
+                    state_path(generation_target[0]),
+                    payload,
+                )
+            atomic_write_confined_bytes(
+                reaction_dir,
+                path,
+                json.dumps(
+                    payload,
+                    ensure_ascii=True,
+                    indent=2,
+                    sort_keys=False,
+                    allow_nan=False,
+                ).encode("utf-8"),
+                label="ORCA state",
+                mode=0o600,
+                expected_parent_identity=directory_identity,
+            )
+    finally:
+        os.close(directory_fd)
     if isinstance(state, dict):
         state["updated_at"] = state_payload["updated_at"]
     logger.debug("State saved: %s", path)

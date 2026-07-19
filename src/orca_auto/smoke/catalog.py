@@ -111,8 +111,6 @@ _FAKE_SCENARIOS: tuple[SmokeScenario, ...] = (
         required_artifacts=(
             "workflow.json",
             "workflow_report.html",
-            "job_report.json",
-            "job_report.md",
         ),
     ),
     SmokeScenario(

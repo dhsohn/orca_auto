@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import textwrap
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -29,9 +27,6 @@ from tests.engine_artifact_helpers import (
 from tests.engine_artifact_helpers import (
     resources as _resources,
 )
-
-JsonWriter = Callable[[Path, dict[str, Any]], Path]
-JsonLoader = Callable[[Path], dict[str, Any] | None]
 
 
 def _write_config(path: Path, contents: str) -> Path:
@@ -313,100 +308,32 @@ def test_load_config_rejects_invalid_runs_root_before_resolving(
         config_mod.load_xtb_config(str(config_path))
 
 
-@pytest.mark.parametrize(
-    ("writer", "loader", "filename"),
-    [
-        pytest.param(
-            state_mod.write_state,
-            state_mod.load_state,
-            state_mod.STATE_FILE_NAME,
-            id="state",
-        ),
-        pytest.param(
-            state_mod.write_report_json,
-            state_mod.load_report_json,
-            state_mod.REPORT_JSON_FILE_NAME,
-            id="report-json",
-        ),
-    ],
-)
-def test_json_state_helpers_round_trip(
-    tmp_path: Path,
-    writer: JsonWriter,
-    loader: JsonLoader,
-    filename: str,
-) -> None:
+def test_json_state_helpers_round_trip(tmp_path: Path) -> None:
     job_dir = tmp_path / "job"
     payload = {"status": "running", "attempt": 1}
 
-    path = writer(job_dir, payload)
+    path = state_mod.write_state(job_dir, payload)
 
-    assert path == job_dir / filename
+    assert path == job_dir / state_mod.STATE_FILE_NAME
     assert path.exists()
     assert json.loads(path.read_text(encoding="utf-8")) == payload
-    assert loader(job_dir) == payload
+    assert state_mod.load_state(job_dir) == payload
 
 
-@pytest.mark.parametrize(
-    ("loader", "filename"),
-    [
-        pytest.param(state_mod.load_state, state_mod.STATE_FILE_NAME, id="state"),
-        pytest.param(state_mod.load_report_json, state_mod.REPORT_JSON_FILE_NAME, id="report-json"),
-    ],
-)
 def test_json_state_helpers_return_none_for_missing_invalid_and_non_object_payloads(
     tmp_path: Path,
-    loader: JsonLoader,
-    filename: str,
 ) -> None:
     job_dir = tmp_path / "job"
 
-    assert loader(job_dir) is None
+    assert state_mod.load_state(job_dir) is None
 
     job_dir.mkdir()
-    (job_dir / filename).write_text("{invalid json", encoding="utf-8")
-    assert loader(job_dir) is None
+    state_path = job_dir / state_mod.STATE_FILE_NAME
+    state_path.write_text("{invalid json", encoding="utf-8")
+    assert state_mod.load_state(job_dir) is None
 
-    (job_dir / filename).write_text('["not", "an", "object"]', encoding="utf-8")
-    assert loader(job_dir) is None
-
-
-def test_write_report_md_writes_expected_markdown(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job_dir = tmp_path / "job"
-    job_dir.mkdir()
-    monkeypatch.setattr(state_mod, "now_utc_iso", lambda: "2026-04-19T00:00:00+00:00")
-
-    path = state_mod.write_report_md(
-        job_dir,
-        job_id="crest-123",
-        status="completed",
-        reason="ok",
-        selected_xyz="/tmp/input.xyz",
-    )
-
-    assert path == job_dir / state_mod.REPORT_MD_FILE_NAME
-    assert path.read_text(encoding="utf-8") == (
-        "# orca_auto CREST Report\n"
-        "\n"
-        "- Job ID: `crest-123`\n"
-        "- Status: `completed`\n"
-        "- Reason: `ok`\n"
-        "- Selected XYZ: `/tmp/input.xyz`\n"
-        "- Updated At: `2026-04-19T00:00:00+00:00`\n"
-    )
-
-
-def test_write_report_md_lines_writes_lines_with_trailing_newline(tmp_path: Path) -> None:
-    job_dir = tmp_path / "job"
-    job_dir.mkdir()
-
-    path = state_mod.write_report_md_lines(job_dir, ["# Custom Report", "", "- Item: `value`"])
-
-    assert path == job_dir / state_mod.REPORT_MD_FILE_NAME
-    assert path.read_text(encoding="utf-8") == "# Custom Report\n\n- Item: `value`\n"
+    state_path.write_text('["not", "an", "object"]', encoding="utf-8")
+    assert state_mod.load_state(job_dir) is None
 
 
 def test_mark_recovery_pending_preserves_crest_schema_fields(

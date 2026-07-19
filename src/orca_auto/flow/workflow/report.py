@@ -45,6 +45,10 @@ _MAX_ORCA_ENERGY_CANDIDATES = 8
 _ORCA_ENERGY_READ_CHUNK_BYTES = 64 * 1024
 _FAILED_STAGE_STATUSES = frozenset({"failed", "cancel_failed", "submission_failed"})
 _DIAGNOSTIC_STAGE_STATUSES = frozenset({*_FAILED_STAGE_STATUSES, "cancelled"})
+_INTERNAL_STAGE_ENGINES = {
+    "crest_stage": "crest",
+    "xtb_stage": "xtb",
+}
 
 
 @dataclass(frozen=True)
@@ -265,9 +269,25 @@ def _stage_job_dirs(stage: Mapping[str, Any]) -> tuple[Path, ...]:
 
 
 def _stage_job_report(stage: Mapping[str, Any]) -> tuple[Path | None, dict[str, Any] | None]:
+    task_engine = _text(_stage_task(stage).get("engine")).lower()
+    internal_engine = _INTERNAL_STAGE_ENGINES.get(_text(stage.get("stage_kind")).lower())
+    if internal_engine is not None:
+        if task_engine != internal_engine:
+            return None, None
+        for job_dir in _stage_job_dirs(stage):
+            state_path = job_dir / "job_state.json"
+            state = _load_json(state_path)
+            if (
+                state is not None
+                and _text(state.get("engine")).lower() == internal_engine
+                and _stage_report_identity_matches(stage, state)
+            ):
+                return state_path, state
+        return None, None
+    if task_engine in _INTERNAL_STAGE_ENGINES.values():
+        return None, None
     for job_dir in _stage_job_dirs(stage):
-        # ORCA stages keep their report inside the execution generation; the
-        # job-dir root only carries pre-relocation legacy reports.
+        # ORCA reports live in execution generations.
         for candidate_dir in (job_dir, *visible_generation_children(job_dir)):
             report_path = candidate_dir / "job_report.json"
             report = _load_json(report_path)
@@ -401,7 +421,12 @@ def _stage_diagnostic(
         if explanation:
             details_path = stdout_path
     if details_path is None and job_dir is not None:
-        for name in ("job_report.html", "job_report.md", "job_report.json"):
+        artifact_names = (
+            ("job_state.json",)
+            if engine in {"xtb", "crest"}
+            else ("job_report.html", "job_report.md", "job_report.json")
+        )
+        for name in artifact_names:
             candidate = job_dir / name
             if candidate.exists():
                 details_path = candidate

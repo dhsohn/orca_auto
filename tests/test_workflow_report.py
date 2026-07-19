@@ -343,9 +343,10 @@ def test_failed_crest_topology_change_is_explained_in_workflow_report(
 ) -> None:
     job_dir = tmp_path / "01_crest" / "crest_reactant_01"
     job_dir.mkdir(parents=True)
-    (job_dir / "job_report.json").write_text(
+    (job_dir / "job_state.json").write_text(
         json.dumps(
             {
+                "engine": "crest",
                 "job": {"id": "crest-current"},
                 "status": {
                     "state": "failed",
@@ -463,6 +464,126 @@ def test_restarted_stage_does_not_show_stale_failure_report(tmp_path: Path) -> N
     assert "changed molecular topology" not in text
 
 
+@pytest.mark.parametrize(
+    ("engine", "stage_kind", "stage_parent"),
+    (("xtb", "xtb_stage", "02_xtb"), ("crest", "crest_stage", "01_crest")),
+)
+def test_internal_stage_does_not_fall_back_to_report(
+    tmp_path: Path,
+    engine: str,
+    stage_kind: str,
+    stage_parent: str,
+) -> None:
+    child_job_id = f"{engine}-current"
+    job_dir = tmp_path / stage_parent / f"{engine}_report_only"
+    job_dir.mkdir(parents=True)
+    (job_dir / "job_report.json").write_text(
+        json.dumps(
+            {
+                "job": {"id": child_job_id},
+                "status": {"state": "failed", "reason": "retired_report_reason"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": f"{engine}_report_only",
+                "stage_kind": stage_kind,
+                "status": "failed",
+                "task": {"engine": engine, "status": "failed", "payload": {}},
+                "metadata": {
+                    "child_job_id": child_job_id,
+                    "latest_known_path": str(job_dir),
+                },
+            }
+        ],
+    )
+    payload["status"] = "failed"
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.failure_rows[0].reason == ""
+    assert data.failure_rows[0].details_href is None
+
+
+@pytest.mark.parametrize("task_engine", ("", "orca"))
+def test_internal_stage_kind_never_falls_back_when_task_engine_is_invalid(
+    tmp_path: Path,
+    task_engine: str,
+) -> None:
+    job_dir = tmp_path / "02_xtb" / "xtb_invalid_task_engine"
+    job_dir.mkdir(parents=True)
+    (job_dir / "job_report.json").write_text(
+        json.dumps(
+            {
+                "job": {"id": "xtb-current"},
+                "status": {"state": "failed", "reason": "retired_report_reason"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "xtb_invalid_task_engine",
+                "stage_kind": "xtb_stage",
+                "status": "failed",
+                "task": {"engine": task_engine, "status": "failed", "payload": {}},
+                "metadata": {
+                    "child_job_id": "xtb-current",
+                    "latest_known_path": str(job_dir),
+                },
+            }
+        ],
+    )
+    payload["status"] = "failed"
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.failure_rows[0].reason == ""
+    assert data.failure_rows[0].details_href is None
+
+
+def test_internal_stage_rejects_foreign_engine_state(tmp_path: Path) -> None:
+    job_dir = tmp_path / "02_xtb" / "xtb_foreign_state"
+    job_dir.mkdir(parents=True)
+    (job_dir / "job_state.json").write_text(
+        json.dumps(
+            {
+                "engine": "crest",
+                "job": {"id": "xtb-current"},
+                "status": {"state": "failed", "reason": "foreign_engine_reason"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "xtb_foreign_state",
+                "stage_kind": "xtb_stage",
+                "status": "failed",
+                "task": {"engine": "xtb", "status": "failed", "payload": {}},
+                "metadata": {
+                    "child_job_id": "xtb-current",
+                    "latest_known_path": str(job_dir),
+                },
+            }
+        ],
+    )
+    payload["status"] = "failed"
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.failure_rows[0].reason == ""
+    assert data.failure_rows[0].details_href is None
+
+
 def test_failed_stage_without_current_identity_does_not_use_old_report(tmp_path: Path) -> None:
     job_dir = tmp_path / "03_orca" / "orca_submission_failed"
     job_dir.mkdir(parents=True)
@@ -506,9 +627,10 @@ def test_xtb_retry_prefers_refreshed_latest_path_over_original_task_job_dir(
 ) -> None:
     old_job_dir = tmp_path / "02_xtb" / "xtb_old_attempt"
     old_job_dir.mkdir(parents=True)
-    (old_job_dir / "job_report.json").write_text(
+    (old_job_dir / "job_state.json").write_text(
         json.dumps(
             {
+                "engine": "xtb",
                 "job": {"id": "xtb-current"},
                 "status": {"state": "failed", "reason": "old_xtb_failure"},
             }
@@ -517,9 +639,10 @@ def test_xtb_retry_prefers_refreshed_latest_path_over_original_task_job_dir(
     )
     current_job_dir = tmp_path / "02_xtb" / "xtb_retry_attempt"
     current_job_dir.mkdir(parents=True)
-    (current_job_dir / "job_report.json").write_text(
+    (current_job_dir / "job_state.json").write_text(
         json.dumps(
             {
+                "engine": "xtb",
                 "job": {"id": "xtb-current", "queue_id": "xtb-q-current"},
                 "status": {"state": "failed", "reason": "current_xtb_failure"},
             }
@@ -552,17 +675,18 @@ def test_xtb_retry_prefers_refreshed_latest_path_over_original_task_job_dir(
     data = collect_workflow_report_data(tmp_path, payload)
 
     assert data.failure_rows[0].reason == "current_xtb_failure"
-    assert data.failure_rows[0].details_href == "02_xtb/xtb_retry_attempt/job_report.json"
+    assert data.failure_rows[0].details_href == "02_xtb/xtb_retry_attempt/job_state.json"
 
 
-def test_stage_report_prefers_latest_path_over_original_task_job_dir(
+def test_stage_state_prefers_latest_path_over_original_task_job_dir(
     tmp_path: Path,
 ) -> None:
     stale_job_dir = tmp_path / "01_crest" / "crest_stale"
     stale_job_dir.mkdir(parents=True)
-    (stale_job_dir / "job_report.json").write_text(
+    (stale_job_dir / "job_state.json").write_text(
         json.dumps(
             {
+                "engine": "crest",
                 "job": {"id": "crest-current"},
                 "status": {"state": "failed", "reason": "stale_crest_failure"},
             }
@@ -571,9 +695,10 @@ def test_stage_report_prefers_latest_path_over_original_task_job_dir(
     )
     current_job_dir = tmp_path / "01_crest" / "crest_current"
     current_job_dir.mkdir(parents=True)
-    (current_job_dir / "job_report.json").write_text(
+    (current_job_dir / "job_state.json").write_text(
         json.dumps(
             {
+                "engine": "crest",
                 "job": {"id": "crest-current"},
                 "status": {"state": "failed", "reason": "current_crest_failure"},
             }
@@ -604,7 +729,7 @@ def test_stage_report_prefers_latest_path_over_original_task_job_dir(
     data = collect_workflow_report_data(tmp_path, payload)
 
     assert data.failure_rows[0].reason == "current_crest_failure"
-    assert data.failure_rows[0].details_href == "01_crest/crest_current/job_report.json"
+    assert data.failure_rows[0].details_href == "01_crest/crest_current/job_state.json"
 
 
 def test_orca_run_identity_allows_current_report_diagnostic(tmp_path: Path) -> None:

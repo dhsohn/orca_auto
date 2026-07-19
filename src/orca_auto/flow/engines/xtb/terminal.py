@@ -57,18 +57,15 @@ def print_terminal_summary(summary: TerminalSummary) -> None:
     print(f"reason: {summary.reason}")
 
 
-def terminal_status(
-    state: dict[str, Any], report: dict[str, Any], refreshed: Any, rc: int | None
-) -> str:
+def terminal_status(state: dict[str, Any], refreshed: Any, rc: int | None) -> str:
     state = _flatten_engine_payload(state)
-    report = _flatten_engine_payload(report)
     queue_status_value = (
         getattr(getattr(refreshed, "status", None), "value", None)
         if refreshed is not None
         else None
     )
     queue_status = str(queue_status_value).strip().lower()
-    status = str(report.get("status") or state.get("status") or queue_status).strip().lower()
+    status = str(state.get("status") or queue_status).strip().lower()
     if not status:
         return "completed" if rc == 0 else "failed"
     if status not in {"completed", "failed", "cancelled"} and rc is not None:
@@ -78,17 +75,13 @@ def terminal_status(
 
 def terminal_reason(
     state: dict[str, Any],
-    report: dict[str, Any],
     refreshed: Any,
     *,
     status: str,
     rc: int | None,
 ) -> str:
     state = _flatten_engine_payload(state)
-    report = _flatten_engine_payload(report)
-    reason = str(
-        report.get("reason") or state.get("reason") or getattr(refreshed, "error", "")
-    ).strip()
+    reason = str(state.get("reason") or getattr(refreshed, "error", "")).strip()
     if reason:
         return reason
     if status == "completed":
@@ -100,15 +93,10 @@ def terminal_reason(
     return "unknown"
 
 
-def terminal_metadata_update(
-    state: dict[str, Any], report: dict[str, Any], entry: Any
-) -> dict[str, Any]:
+def terminal_metadata_update(state: dict[str, Any], entry: Any) -> dict[str, Any]:
     state = _flatten_engine_payload(state)
-    report = _flatten_engine_payload(report)
     metadata_update: dict[str, Any] = {}
-    candidate_count_raw = report.get("candidate_count")
-    if candidate_count_raw is None:
-        candidate_count_raw = state.get("candidate_count")
+    candidate_count_raw = state.get("candidate_count")
     if candidate_count_raw is not None:
         with suppress(TypeError, ValueError):
             metadata_update["candidate_count"] = int(candidate_count_raw)
@@ -139,22 +127,20 @@ def load_terminal_summary(
     rc: int | None = None,
     job_dir_fn: Callable[[Any], Path],
     load_state_fn: Callable[[Path], dict[str, Any] | None],
-    load_report_json_fn: Callable[[Path], dict[str, Any] | None],
     queue_entry_by_id_fn: Callable[[Path, str], Any | None],
 ) -> TerminalSummary:
     job_dir = job_dir_fn(entry)
     state = load_state_fn(job_dir) or {}
-    report = load_report_json_fn(job_dir) or {}
     refreshed = queue_entry_by_id_fn(queue_root, entry.queue_id)
 
-    status = terminal_status(state, report, refreshed, rc)
-    reason = terminal_reason(state, report, refreshed, status=status, rc=rc)
+    status = terminal_status(state, refreshed, rc)
+    reason = terminal_reason(state, refreshed, status=status, rc=rc)
     return TerminalSummary(
         queue_id=entry.queue_id,
         job_id=entry.task_id,
         status=status,
         reason=reason,
-        metadata_update=terminal_metadata_update(state, report, entry),
+        metadata_update=terminal_metadata_update(state, entry),
     )
 
 

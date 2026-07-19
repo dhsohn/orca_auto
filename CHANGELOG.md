@@ -10,6 +10,57 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Pure advisory queue, admission, index, workflow, registry, snapshot-intent,
+  upload, worker-singleton, process-record, and state-mutation locks now live in
+  the private `/dev/shm/orca_auto-locks-<uid>` namespace. Durable JSON, PID,
+  process records, snapshot intents, and `run.lock` stay on disk. Lock setup
+  fails closed without a disk fallback; deployments must drain every old-build
+  `orca_auto` process, including all queue/workflow workers, the bot, direct CLI
+  and maintenance commands, and upload handling. Standard systemd install and
+  service restart operations now snapshot the workflow unit and stop and verify
+  every managed unit inactive before an install writes or reloads units. They
+  then start and verify the selected runtime graph and restore only a previously
+  active workflow; later failures leave the graph stopped instead of reviving
+  old processes. A per-user, EUID-independent, non-persistent Linux abstract
+  `AF_UNIX` socket lock serializes non-dry-run install and restart operations
+  within one Linux network namespace from mode query and drain through start
+  and restore; lock timeout and noncanonical `systemctl` return-code/state pairs
+  fail closed. WSL/native host callers and supplied systemd units must share
+  that network namespace when controlling the same host systemd; container or
+  separate-netns host-systemd callers are unsupported. Permissionless abstract
+  names require a trusted-local-user or single-user administrative boundary:
+  pre-binding can cause fail-closed availability denial, but timeout precedes
+  mutation and cannot cause split-build or data damage. No file-lock fallback
+  is provided. Offline
+  `--no-start` and `--no-enable` installs instead require
+  every managed unit to be exactly inactive before writing any unit and never
+  stop or start services. `--no-start` also validates the runtime config before
+  changing boot selection. Boot-mode changes disable the opposite mode before
+  enabling the selected mode. In-place code sync requires a pre-sync drain.
+  Foreground/manual processes remain an operator preflight requirement.
+  SHA-256 logical identities now map to a fixed, versioned 4096-stripe pool.
+  Collisions serialize unrelated
+  mutations conservatively, preserving mutual exclusion while bounding the
+  never-unlinked tmpfs files created by the current protocol to 4096 per owner
+  namespace. Same-thread nested collisions reuse the held stripe instead of
+  self-timing out; other threads and processes remain externally serialized,
+  and fork children discard inherited reentrancy state and lock descriptors.
+- Workflow-internal xTB and CREST jobs now use `job_state.json` as their only
+  terminal metadata artifact. They no longer write or read `job_report.json`
+  or `job_report.md`; report-only jobs, completed outputs without terminal
+  identities, and stale artifact paths that require basename remapping are
+  unsupported and must be resubmitted. ORCA and standalone xTB-MD report
+  contracts are unchanged.
+- Added `queue compact` for exact completed-workflow maintenance. It defaults
+  to dry-run and requires `--apply`, removes only obsolete
+  workflow-internal xTB/CREST `job_report.json`/`job_report.md` leaves, and
+  never reads them as lifecycle evidence. Exact state/queue/index/registry and
+  publication gates and the standard mutation locks protect the operation.
+  Each leaf is removed independently, so an interrupted apply continues by
+  rerunning the idempotent command; it creates no compaction receipt, journal,
+  or state file. Partial removal is reported. All public reports, science and
+  control-plane state, and lock files remain preserved; online old disk-lock
+  deletion is not implemented.
 - Added optional ORCA RAM-backed attempt workspaces below `/dev/shm`. Bound
   inputs are staged privately, durable queue/state/process ownership stays on
   disk, and surviving non-temporary outputs are copied once into the visible

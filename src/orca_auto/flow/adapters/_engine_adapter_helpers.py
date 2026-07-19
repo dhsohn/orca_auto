@@ -13,7 +13,6 @@ from orca_auto.core.indexing import JobLocationRecord
 class LoadedArtifactFiles:
     job_dir: Path
     record: JobLocationRecord | None
-    report: dict[str, Any]
     state: dict[str, Any]
     payload: dict[str, Any]
 
@@ -185,15 +184,20 @@ def load_artifact_files(
     job_dir: Path,
     record: JobLocationRecord | None,
     load_json_dict_fn: Callable[[Path], dict[str, Any]],
-    report_filename: str,
     state_filename: str,
     missing_label: str,
-    select_payload_fn: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None,
+    expected_engine: str,
+    expected_app_name: str,
 ) -> LoadedArtifactFiles:
-    report = load_json_dict_fn(job_dir / report_filename)
     state = load_json_dict_fn(job_dir / state_filename)
-    payload = select_payload_fn(report, state) if select_payload_fn is not None else report or state
-    payload = flatten_engine_artifact_payload(payload)
+    validate_state_artifact_envelope(
+        state,
+        job_dir=job_dir,
+        expected_engine=expected_engine,
+        expected_app_name=expected_app_name,
+        label=missing_label,
+    )
+    payload = flatten_engine_artifact_payload(state)
     if not payload:
         raise FileNotFoundError(
             f"{missing_label} artifact files not found in job directory: {job_dir}"
@@ -201,31 +205,45 @@ def load_artifact_files(
     return LoadedArtifactFiles(
         job_dir=job_dir,
         record=record,
-        report=report,
         state=state,
         payload=payload,
     )
 
 
-def select_active_artifact_payload(
-    report: dict[str, Any],
+def validate_state_artifact_envelope(
     state: dict[str, Any],
     *,
-    active_statuses: set[str] | frozenset[str],
-) -> dict[str, Any]:
-    state_payload = flatten_engine_artifact_payload(state)
-    report_payload = flatten_engine_artifact_payload(report)
-    state_status = normalize_text(state_payload.get("status")).lower()
-    if state and state_status in active_statuses:
-        return state
-
-    for identity_key in ("job_id", "queue_id", "task_id"):
-        report_identity = normalize_text(report_payload.get(identity_key))
-        state_identity = normalize_text(state_payload.get(identity_key))
-        if state and report_identity and state_identity and report_identity != state_identity:
-            return state
-
-    return report or state
+    job_dir: Path,
+    expected_engine: str,
+    expected_app_name: str,
+    label: str,
+) -> None:
+    if not state:
+        return
+    if int(state.get("schema_version", 0) or 0) != 1:
+        raise ValueError(f"{label} state schema_version must be 1")
+    if normalize_text(state.get("engine")).lower() != expected_engine.lower():
+        raise ValueError(f"{label} state engine does not match {expected_engine}")
+    job = state.get("job")
+    if not isinstance(job, dict):
+        raise ValueError(f"{label} state job identity is missing")
+    job_id = normalize_text(job.get("id"))
+    task_id = normalize_text(job.get("task_id"))
+    if not job_id or task_id != job_id:
+        raise ValueError(f"{label} state job id/task id identity is invalid")
+    if normalize_text(job.get("app_name")) != expected_app_name:
+        raise ValueError(f"{label} state app_name does not match {expected_app_name}")
+    if not normalize_text(job.get("queue_id")) or not normalize_text(job.get("generation")):
+        raise ValueError(f"{label} state queue generation identity is missing")
+    state_job_dir = normalize_text(job.get("dir"))
+    if not state_job_dir:
+        raise ValueError(f"{label} state job directory identity is missing")
+    try:
+        resolved_state_job_dir = Path(state_job_dir).expanduser().resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"{label} state job directory identity is invalid") from exc
+    if resolved_state_job_dir != job_dir.expanduser().resolve():
+        raise ValueError(f"{label} state job directory does not match its indexed directory")
 
 
 def flatten_engine_artifact_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -273,7 +291,12 @@ def validate_record_app(
     *,
     label: str,
 ) -> None:
-    if record is not None and record.app_name and record.app_name != expected_app_name:
+    if record is None:
+        raise ValueError(f"{label} index record is missing")
+    record_app_name = normalize_text(record.app_name)
+    if not record_app_name:
+        raise ValueError(f"{label} index record app_name is missing")
+    if record_app_name != expected_app_name:
         raise ValueError(
             f"Expected {expected_app_name} index record for {label}, got: {record.app_name}"
         )
@@ -286,17 +309,21 @@ def validate_record_artifact_identity(
     label: str,
 ) -> None:
     if record is None:
-        return
+        raise ValueError(f"{label} index record is missing")
     record_job_id = normalize_text(record.job_id)
     payload_job_id = normalize_text(payload.get("job_id"))
-    if record_job_id and payload_job_id != record_job_id:
+    if not record_job_id:
+        raise ValueError(f"{label} index record job_id is missing")
+    if payload_job_id != record_job_id:
         raise ValueError(
             f"{label} artifact job_id does not match its index record: "
             f"{payload_job_id or '<missing>'} != {record_job_id}"
         )
     record_status = normalize_text(record.status).lower()
     payload_status = normalize_text(payload.get("status")).lower()
-    if record_status and payload_status != record_status:
+    if not record_status:
+        raise ValueError(f"{label} index record status is missing")
+    if payload_status != record_status:
         raise ValueError(
             f"{label} artifact status does not match its terminal index record: "
             f"{payload_status or '<missing>'} != {record_status}"
@@ -353,7 +380,6 @@ def resolve_artifact_path(
         candidates.append(raw_path)
     else:
         candidates.extend(root / raw_path for root in resolved_roots)
-    candidates.extend(root / raw_path.name for root in resolved_roots)
 
     for candidate in candidates:
         try:
@@ -373,12 +399,11 @@ def load_contract_artifact_bundle(
     target: str,
     resolve_job_location_fn: Callable[[Path, str], JobLocationRecord | None],
     load_json_dict_fn: Callable[[Path], dict[str, Any]],
-    report_filename: str,
     state_filename: str,
     missing_label: str,
+    expected_engine: str,
     expected_app_name: str,
     coerce_resource_dict_fn: Callable[[Any], dict[str, int]],
-    select_payload_fn: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None,
     path_factory: Callable[[str], Any] = Path,
 ) -> ContractArtifactBundle:
     resolved_index_root = Path(index_root).expanduser().resolve()
@@ -390,16 +415,18 @@ def load_contract_artifact_bundle(
         missing_label=missing_label,
         path_factory=path_factory,
     )
+    if record is None:
+        raise FileNotFoundError(f"{missing_label} job index record not found for target: {target}")
+    validate_record_app(record, expected_app_name, label=missing_label)
     loaded = load_artifact_files(
         job_dir=job_dir,
         record=record,
         load_json_dict_fn=load_json_dict_fn,
-        report_filename=report_filename,
         state_filename=state_filename,
         missing_label=missing_label,
-        select_payload_fn=select_payload_fn,
+        expected_engine=expected_engine,
+        expected_app_name=expected_app_name,
     )
-    validate_record_app(record, expected_app_name, label=missing_label)
     validate_record_artifact_identity(record, loaded.payload, label=missing_label)
     resource_request = coerce_resource_dict_fn(
         loaded.payload.get("resource_request")

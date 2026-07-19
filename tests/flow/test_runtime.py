@@ -62,9 +62,6 @@ def _capture_worker_side_effects(
 
     monkeypatch.setattr(runtime, "now_utc_iso", lambda: next(timestamps))
 
-    def fake_write_workflow_worker_state(root: Path, **kwargs: Any) -> None:
-        state_calls.append({"root": root, **kwargs})
-
     def fake_append_workflow_journal_event(root: Path, **kwargs: Any) -> None:
         journal_calls.append({"root": root, **kwargs})
 
@@ -76,7 +73,6 @@ def _capture_worker_side_effects(
         registry_calls["reindex"] += 1
         return list(records)
 
-    monkeypatch.setattr(runtime, "write_workflow_worker_state", fake_write_workflow_worker_state)
     monkeypatch.setattr(
         runtime, "append_workflow_journal_event", fake_append_workflow_journal_event
     )
@@ -1459,17 +1455,8 @@ def test_advance_workflow_registry_once_skips_terminal_workflow_without_sync(
     ]
     assert sync_checks == ["/tmp/wf_terminal_skip"]
     assert registry_calls == {"list": 1, "reindex": 0}
-    assert [call["status"] for call in state_calls] == ["running", "idle"]
-    assert state_calls[-1]["metadata"] == {
-        "discovered_count": 1,
-        "advanced_count": 0,
-        "skipped_count": 1,
-        "failed_count": 0,
-    }
-    assert [call["event_type"] for call in journal_calls] == [
-        "worker_cycle_started",
-        "worker_cycle_finished",
-    ]
+    assert state_calls == []
+    assert journal_calls == []
 
 
 def test_advance_workflow_registry_once_runs_terminal_child_sync_when_needed(
@@ -1526,18 +1513,9 @@ def test_advance_workflow_registry_once_runs_terminal_child_sync_when_needed(
             "stage_count": 2,
         }
     ]
-    assert state_calls[-1]["metadata"] == {
-        "discovered_count": 1,
-        "advanced_count": 1,
-        "skipped_count": 0,
-        "failed_count": 0,
-    }
-    assert [call["event_type"] for call in journal_calls] == [
-        "worker_cycle_started",
-        "workflow_status_changed",
-        "worker_cycle_finished",
-    ]
-    assert journal_calls[1]["reason"] == "terminal_child_sync"
+    assert state_calls == []
+    assert [call["event_type"] for call in journal_calls] == ["workflow_status_changed"]
+    assert journal_calls[0]["reason"] == "terminal_child_sync"
 
 
 def test_advance_workflow_registry_once_advances_non_terminal_workflow(
@@ -1599,11 +1577,7 @@ def test_advance_workflow_registry_once_advances_non_terminal_workflow(
             "stage_count": 3,
         }
     ]
-    assert [call["event_type"] for call in journal_calls] == [
-        "worker_cycle_started",
-        "workflow_status_changed",
-        "worker_cycle_finished",
-    ]
+    assert [call["event_type"] for call in journal_calls] == ["workflow_status_changed"]
 
 
 def test_registry_worker_falls_back_to_workflow_id_when_workspace_path_is_stale(
@@ -1827,10 +1801,8 @@ def test_advance_workflow_registry_once_defers_submission_when_admission_full(
     assert result["submit_ready"] is False
     assert result["requested_submit_ready"] is True
     assert result["admission_blocked"] is True
-    assert state_calls[0]["submit_ready"] is False
-    assert state_calls[0]["metadata"] == {"admission_blocked": True}
-    assert state_calls[-1]["metadata"]["admission_blocked"] is True
-    assert journal_calls[0]["metadata"]["admission_blocked"] is True
+    assert state_calls == []
+    assert all(call["event_type"] != "worker_cycle_started" for call in journal_calls)
 
 
 def test_advance_workflow_registry_once_defers_submission_when_admission_check_errors(
@@ -1898,10 +1870,8 @@ def test_advance_workflow_registry_once_defers_submission_when_admission_check_e
     assert result["submit_ready"] is False
     assert result["requested_submit_ready"] is True
     assert result["admission_blocked"] is True
-    assert state_calls[0]["submit_ready"] is False
-    assert state_calls[0]["metadata"] == {"admission_blocked": True}
-    assert state_calls[-1]["metadata"]["admission_blocked"] is True
-    assert journal_calls[0]["metadata"]["admission_blocked"] is True
+    assert state_calls == []
+    assert all(call["event_type"] != "worker_cycle_started" for call in journal_calls)
 
 
 def test_advance_workflow_registry_once_appends_stage_transition_events(
@@ -1979,17 +1949,15 @@ def test_advance_workflow_registry_once_appends_stage_transition_events(
     )
 
     assert [call["event_type"] for call in journal_calls] == [
-        "worker_cycle_started",
         "workflow_status_changed",
         "workflow_phase_finished",
         "workflow_stage_submitted",
         "workflow_stage_handoff_ready",
-        "worker_cycle_finished",
     ]
-    assert journal_calls[2]["metadata"]["phase"] == "xtb"
-    assert journal_calls[3]["metadata"]["stage_id"] == "crest_1"
-    assert journal_calls[4]["status"] == "ready"
-    assert journal_calls[4]["metadata"]["stage_id"] == "xtb_1"
+    assert journal_calls[1]["metadata"]["phase"] == "xtb"
+    assert journal_calls[2]["metadata"]["stage_id"] == "crest_1"
+    assert journal_calls[3]["status"] == "ready"
+    assert journal_calls[3]["metadata"]["stage_id"] == "xtb_1"
 
 
 def test_advance_workflow_registry_once_records_non_terminal_advance_failure(
@@ -2040,18 +2008,9 @@ def test_advance_workflow_registry_once_records_non_terminal_advance_failure(
             "stage_count": 4,
         }
     ]
-    assert state_calls[-1]["metadata"] == {
-        "discovered_count": 1,
-        "advanced_count": 0,
-        "skipped_count": 0,
-        "failed_count": 1,
-    }
-    assert [call["event_type"] for call in journal_calls] == [
-        "worker_cycle_started",
-        "workflow_advance_failed",
-        "worker_cycle_finished",
-    ]
-    assert journal_calls[1]["reason"] == "boom"
+    assert state_calls == []
+    assert [call["event_type"] for call in journal_calls] == ["workflow_advance_failed"]
+    assert journal_calls[0]["reason"] == "boom"
 
 
 def test_advance_workflow_registry_once_records_terminal_child_sync_failure(
@@ -2096,9 +2055,5 @@ def test_advance_workflow_registry_once_records_terminal_child_sync_failure(
             "stage_count": 3,
         }
     ]
-    assert [call["event_type"] for call in journal_calls] == [
-        "worker_cycle_started",
-        "workflow_advance_failed",
-        "worker_cycle_finished",
-    ]
-    assert journal_calls[1]["reason"] == "terminal_child_sync_failed: sync broke"
+    assert [call["event_type"] for call in journal_calls] == ["workflow_advance_failed"]
+    assert journal_calls[0]["reason"] == "terminal_child_sync_failed: sync broke"

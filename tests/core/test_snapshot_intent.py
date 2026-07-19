@@ -487,7 +487,7 @@ def test_reconcile_keeps_queue_lock_through_owner_decision(
 
 
 def test_busy_maintenance_root_does_not_block_other_roots(tmp_path: Path) -> None:
-    from orca_auto.core.utils.lock import file_lock
+    from orca_auto.core.utils.lock import tmpfs_file_lock
 
     busy_root = tmp_path / "busy"
     ready_root = tmp_path / "ready"
@@ -507,13 +507,33 @@ def test_busy_maintenance_root_does_not_block_other_roots(tmp_path: Path) -> Non
         )
         _create_generation(generation)
 
-    with file_lock(busy_root / ".orca_auto_snapshot_intents.lock"):
+    lock_held = Event()
+    release_lock = Event()
+    holder_errors: list[BaseException] = []
+
+    def hold_busy_maintenance_lock() -> None:
+        try:
+            with tmpfs_file_lock(busy_root / ".orca_auto_snapshot_intents.lock"):
+                lock_held.set()
+                release_lock.wait(timeout=5)
+        except BaseException as exc:  # noqa: BLE001
+            holder_errors.append(exc)
+
+    holder = Thread(target=hold_busy_maintenance_lock)
+    holder.start()
+    try:
+        assert lock_held.wait(timeout=2)
         removed = reconcile_orphaned_snapshot_generations(
             [busy_root, ready_root],
             list_queue_fn=lambda _root: [],
             owner_is_alive_fn=lambda _marker: False,
         )
+    finally:
+        release_lock.set()
+        holder.join(timeout=2)
 
+    assert not holder.is_alive()
+    assert holder_errors == []
     assert removed == 1
     assert busy_generation.is_dir()
     assert not ready_generation.exists()
