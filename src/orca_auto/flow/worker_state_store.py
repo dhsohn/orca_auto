@@ -7,8 +7,8 @@ from typing import Any
 
 from orca_auto.core.utils import (
     atomic_write_json,
-    file_lock,
     now_utc_iso,
+    parse_iso_utc,
 )
 from orca_auto.core.utils import (
     coerce_mapping as _coerce_mapping,
@@ -16,6 +16,7 @@ from orca_auto.core.utils import (
 from orca_auto.core.utils import (
     normalize_text as _normalize_text,
 )
+from orca_auto.core.utils.lock import tmpfs_file_lock
 
 from .registry.store import (
     WorkflowRegistryCorruptError,
@@ -24,6 +25,14 @@ from .registry.store import (
 )
 
 WORKFLOW_WORKER_STATE_FILE_NAME = "workflow_worker_state.json"
+_VOLATILE_HEARTBEAT_FIELDS = frozenset(
+    {
+        "last_heartbeat_at",
+        "last_cycle_started_at",
+        "last_cycle_finished_at",
+        "lease_expires_at",
+    }
+)
 
 
 def workflow_worker_state_path(workflow_root: str | Path) -> Path:
@@ -54,6 +63,7 @@ def write_workflow_worker_state(
     interval_seconds: float | None = None,
     submit_ready: bool | None = None,
     metadata: dict[str, Any] | None = None,
+    minimum_heartbeat_interval_seconds: float = 0.0,
 ) -> dict[str, Any]:
     resolved_root = Path(workflow_root).expanduser().resolve()
     resolved_root.mkdir(parents=True, exist_ok=True)
@@ -73,8 +83,26 @@ def write_workflow_worker_state(
         "submit_ready": submit_ready,
         "metadata": _coerce_mapping(metadata),
     }
-    with file_lock(_registry_lock_path(resolved_root)):
-        load_workflow_worker_state(resolved_root)
+    with tmpfs_file_lock(_registry_lock_path(resolved_root)):
+        existing = load_workflow_worker_state(resolved_root)
+        interval = max(0.0, float(minimum_heartbeat_interval_seconds or 0.0))
+        semantic_existing = {
+            key: value for key, value in existing.items() if key not in _VOLATILE_HEARTBEAT_FIELDS
+        }
+        semantic_payload = {
+            key: value for key, value in payload.items() if key not in _VOLATILE_HEARTBEAT_FIELDS
+        }
+        previous_heartbeat = parse_iso_utc(existing.get("last_heartbeat_at"))
+        requested_heartbeat = parse_iso_utc(payload.get("last_heartbeat_at"))
+        heartbeat_due = (
+            interval <= 0.0
+            or previous_heartbeat is None
+            or requested_heartbeat is None
+            or requested_heartbeat < previous_heartbeat
+            or (requested_heartbeat - previous_heartbeat).total_seconds() >= interval
+        )
+        if existing and semantic_existing == semantic_payload and not heartbeat_due:
+            return existing
         atomic_write_json(
             workflow_worker_state_path(resolved_root), payload, ensure_ascii=True, indent=2
         )

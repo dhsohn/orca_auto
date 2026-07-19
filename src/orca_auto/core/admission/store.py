@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from ..utils import process as process_utils
-from ..utils.lock import file_lock
+from ..utils.lock import tmpfs_file_lock
 from ..utils.persistence import (
     now_utc_iso,
     resolve_root_path,
@@ -356,7 +356,7 @@ def _metadata_updated_slot(
 @contextmanager
 def admission_lock(root: str | Path) -> Iterator[None]:
     resolved_root = resolve_root_path(root)
-    with file_lock(_lock_path(resolved_root)):
+    with tmpfs_file_lock(_lock_path(resolved_root)):
         yield
 
 

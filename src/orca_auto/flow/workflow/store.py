@@ -18,11 +18,11 @@ from orca_auto.core.paths.workflow import (
 )
 from orca_auto.core.utils import (
     atomic_write_json,
-    file_lock,
 )
 from orca_auto.core.utils import (
     normalize_text as _normalize_text,
 )
+from orca_auto.core.utils.lock import tmpfs_file_lock
 from orca_auto.flow.contracts.workflow import coerce_workflow_plan_payload
 
 WORKFLOW_LOCK_NAME = "workflow.lock"
@@ -94,13 +94,13 @@ def workflow_create_lock_path(workflow_root: str | Path) -> Path:
 
 @contextmanager
 def acquire_workflow_lock(workspace_dir: str | Path, *, timeout_seconds: float = 10.0):
-    with file_lock(workflow_lock_path(workspace_dir), timeout_seconds=timeout_seconds):
+    with tmpfs_file_lock(workflow_lock_path(workspace_dir), timeout_seconds=timeout_seconds):
         yield
 
 
 @contextmanager
 def acquire_workflow_create_lock(workflow_root: str | Path, *, timeout_seconds: float = 10.0):
-    with file_lock(workflow_create_lock_path(workflow_root), timeout_seconds=timeout_seconds):
+    with tmpfs_file_lock(workflow_create_lock_path(workflow_root), timeout_seconds=timeout_seconds):
         yield
 
 

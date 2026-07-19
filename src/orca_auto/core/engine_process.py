@@ -173,6 +173,61 @@ def read_confined_text(
         return handle.read()
 
 
+def read_confined_tail_lines(
+    root: Path,
+    path: Path,
+    *,
+    label: str,
+    max_lines: int,
+    max_bytes: int = 8 * 1024 * 1024,
+) -> list[str]:
+    """Read a bounded suffix of a confined ASCII-compatible line log."""
+
+    if max_lines <= 0:
+        return []
+    if max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
+    resolved_root = root.expanduser().resolve()
+    parent = path.parent
+    if parent.is_symlink() or not parent.expanduser().resolve().is_relative_to(resolved_root):
+        raise ValueError(f"{label} must stay inside its root: {path}")
+    directory_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        directory_flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    directory_fd = os.open(parent, directory_flags)
+    try:
+        file_flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            file_flags |= os.O_NOFOLLOW
+        descriptor = os.open(path.name, file_flags, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    file_status = os.fstat(descriptor)
+    if not stat.S_ISREG(file_status.st_mode) or file_status.st_nlink != 1:
+        os.close(descriptor)
+        raise ValueError(f"{label} must be a single-link regular file: {path}")
+    start = max(0, int(file_status.st_size) - max_bytes)
+    try:
+        os.lseek(descriptor, start, os.SEEK_SET)
+        chunks: list[bytes] = []
+        remaining = int(file_status.st_size) - start
+        while remaining > 0:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    finally:
+        os.close(descriptor)
+    payload = b"".join(chunks)
+    if start > 0:
+        separator = payload.find(b"\n")
+        payload = b"" if separator < 0 else payload[separator + 1 :]
+    return payload.decode("utf-8").splitlines()[-max_lines:]
+
+
 def atomic_write_confined_bytes(
     root: Path,
     path: Path,
@@ -310,6 +365,7 @@ __all__ = [
     "ensure_confined_directory",
     "open_confined_log",
     "recreate_confined_directory",
+    "read_confined_tail_lines",
     "read_confined_text",
     "require_confined_regular_file",
     "start_logged_process",

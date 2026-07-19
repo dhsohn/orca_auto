@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from orca_auto.core.artifacts import JOB_REPORT_JSON_FILE, JOB_REPORT_MD_FILE
 from orca_auto.core.indexing import get_job_location
 from orca_auto.core.queue import (
     QUEUE_RECORD_SYNC_COMPLETE,
@@ -19,7 +20,7 @@ from orca_auto.core.queue import (
 from orca_auto.flow.engines.crest import queue_runtime as queue_cmd
 from orca_auto.flow.engines.crest import submission as crest_submission
 from orca_auto.flow.engines.crest.runner import CrestRunResult
-from orca_auto.flow.engines.crest.state import load_report_json, load_state
+from orca_auto.flow.engines.crest.state import load_state
 from orca_auto.flow.submitters import crest as crest_submitter
 from tests.engine_artifact_helpers import (
     engine_payload as _engine_payload,
@@ -364,12 +365,11 @@ def test_cli_end_to_end_smoke_path_submission_worker_and_index(
     assert queue_entries[0].status.value == "completed"
 
     state = load_state(job_dir)
-    report = load_report_json(job_dir)
     assert state is not None
-    assert report is not None
     assert _status(state)["state"] == "completed"
-    assert _status(report)["state"] == "completed"
-    assert _engine_payload(report)["retained_conformer_count"] == 1
+    assert _engine_payload(state)["retained_conformer_count"] == 1
+    assert not (job_dir / JOB_REPORT_JSON_FILE).exists()
+    assert not (job_dir / JOB_REPORT_MD_FILE).exists()
 
     record = get_job_location(allowed_root, "crest-e2e-001")
     assert record is not None

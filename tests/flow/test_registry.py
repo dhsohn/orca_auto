@@ -1291,7 +1291,7 @@ def test_append_workflow_journal_event_writes_jsonl_and_returns_event(
     assert notifications[2]["event"]["reason"] == "xtb_ts_guess_ready"
 
 
-def test_list_workflow_journal_sorts_descending_and_applies_limit(
+def test_list_workflow_journal_uses_append_commit_order_and_applies_bounded_limit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1323,15 +1323,21 @@ def test_list_workflow_journal_sorts_descending_and_applies_limit(
                         "event_type": "b",
                     }
                 ),
+                "{truncated",
             ]
         ),
         encoding="utf-8",
     )
     _patch_file_locks(monkeypatch)
+    monkeypatch.setattr(
+        workflow_journal,
+        "read_confined_text",
+        lambda *args, **kwargs: pytest.fail("bounded journal reads must not load the full file"),
+    )
 
     result = registry.list_workflow_journal(tmp_path, limit=2)
 
-    assert [item["event_id"] for item in result] == ["evt_3", "evt_2"]
+    assert [item["event_id"] for item in result] == ["evt_2", "evt_3"]
 
 
 def test_write_and_load_workflow_worker_state_round_trip(
@@ -1370,6 +1376,85 @@ def test_write_and_load_workflow_worker_state_round_trip(
         "metadata": {"cycle": 1},
     }
     assert loaded == written
+
+
+def test_workflow_worker_state_coalesces_unchanged_heartbeat_until_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    monkeypatch.setattr(worker_state_store.os, "getpid", lambda: 4242)
+    monkeypatch.setattr(worker_state_store.socket, "gethostname", lambda: "host-1")
+    real_atomic_write_json = worker_state_store.atomic_write_json
+    writes: list[dict[str, Any]] = []
+
+    def tracked_atomic_write_json(path: Path, payload: dict[str, Any], **kwargs: Any) -> None:
+        writes.append(dict(payload))
+        real_atomic_write_json(path, payload, **kwargs)
+
+    monkeypatch.setattr(worker_state_store, "atomic_write_json", tracked_atomic_write_json)
+    common: dict[str, Any] = {
+        "worker_session_id": "session-42",
+        "status": "running",
+        "workflow_root_path": tmp_path,
+        "interval_seconds": 30.0,
+        "submit_ready": True,
+        "metadata": {"discovered_count": 1, "failed_count": 0},
+        "minimum_heartbeat_interval_seconds": 60.0,
+    }
+
+    first = registry.write_workflow_worker_state(
+        tmp_path,
+        **common,
+        last_heartbeat_at="2026-04-19T02:00:00+00:00",
+        lease_expires_at="2026-04-19T02:01:00+00:00",
+    )
+    coalesced = registry.write_workflow_worker_state(
+        tmp_path,
+        **common,
+        last_cycle_finished_at="2026-04-19T02:00:30+00:00",
+        last_heartbeat_at="2026-04-19T02:00:30+00:00",
+        lease_expires_at="2026-04-19T02:01:30+00:00",
+    )
+    due = registry.write_workflow_worker_state(
+        tmp_path,
+        **common,
+        last_cycle_finished_at="2026-04-19T02:01:00+00:00",
+        last_heartbeat_at="2026-04-19T02:01:00+00:00",
+        lease_expires_at="2026-04-19T02:02:00+00:00",
+    )
+
+    assert len(writes) == 2
+    assert coalesced == first
+    assert due["last_heartbeat_at"] == "2026-04-19T02:01:00+00:00"
+
+
+def test_workflow_worker_state_writes_semantic_change_before_heartbeat_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    monkeypatch.setattr(worker_state_store.os, "getpid", lambda: 4242)
+    monkeypatch.setattr(worker_state_store.socket, "gethostname", lambda: "host-1")
+    registry.write_workflow_worker_state(
+        tmp_path,
+        worker_session_id="session-42",
+        status="running",
+        last_heartbeat_at="2026-04-19T02:00:00+00:00",
+        metadata={"failed_count": 0},
+    )
+
+    changed = registry.write_workflow_worker_state(
+        tmp_path,
+        worker_session_id="session-42",
+        status="running",
+        last_heartbeat_at="2026-04-19T02:00:10+00:00",
+        metadata={"failed_count": 1},
+        minimum_heartbeat_interval_seconds=60.0,
+    )
+
+    assert changed["last_heartbeat_at"] == "2026-04-19T02:00:10+00:00"
+    assert registry.load_workflow_worker_state(tmp_path)["metadata"] == {"failed_count": 1}
 
 
 @pytest.mark.parametrize("state_payload", ["{invalid", json.dumps(["bad"])])

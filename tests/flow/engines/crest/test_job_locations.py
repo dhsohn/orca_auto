@@ -10,14 +10,12 @@ from orca_auto.core.indexing import JobLocationRecord, get_job_location, upsert_
 from orca_auto.core.indexing import engine_job_locations as shared_job_locations
 from orca_auto.flow.engines.crest.job_locations import (
     build_job_location_record,
-    load_job_artifacts,
     molecule_key_from_selected_xyz,
     normalize_molecule_key,
     record_from_artifacts,
     resolve_latest_job_dir,
     upsert_job_record,
 )
-from orca_auto.flow.engines.crest.state import write_report_json, write_state
 
 
 def _make_cfg(tmp_path: Path) -> tuple[AppConfig, Path]:
@@ -228,51 +226,6 @@ def test_resolve_latest_job_dir_returns_none_when_indexed_candidates_are_unusabl
     assert resolve_latest_job_dir(index_root, "job-404") is None
 
 
-def test_load_job_artifacts_reads_files_for_resolved_job(tmp_path: Path) -> None:
-    index_root = tmp_path / "allowed"
-    job_dir = tmp_path / "organized" / "sample" / "job-200"
-    original_dir = tmp_path / "runs" / "job-200"
-    index_root.mkdir()
-    job_dir.mkdir(parents=True)
-    original_dir.mkdir(parents=True)
-
-    selected_xyz = _write_xyz(job_dir / "sample.xyz")
-    state_payload = {
-        "job_id": "job-200",
-        "status": "running",
-        "selected_input_xyz": str(selected_xyz.resolve()),
-    }
-    report_payload = {
-        "job_id": "job-200",
-        "status": "completed",
-        "selected_input_xyz": str(selected_xyz.resolve()),
-    }
-    write_state(job_dir, state_payload)
-    write_report_json(job_dir, report_payload)
-    upsert_job_location(
-        index_root,
-        JobLocationRecord(
-            job_id="job-200",
-            app_name="orca_auto_crest",
-            job_type="crest_standard_conformer_search",
-            status="completed",
-            original_run_dir=str(original_dir.resolve()),
-            molecule_key="sample",
-            selected_input_xyz=str(selected_xyz.resolve()),
-            latest_known_path=str(job_dir.resolve()),
-            resource_request={},
-            resource_actual={},
-        ),
-    )
-
-    resolved_job_dir, state, report = load_job_artifacts(index_root, "job-200")
-
-    assert resolved_job_dir == job_dir.resolve()
-    assert state == state_payload
-    assert report == report_payload
-    assert load_job_artifacts(index_root, "missing") == (None, None, None)
-
-
 def test_record_from_artifacts_merges_sources_and_existing_values(tmp_path: Path) -> None:
     job_dir = tmp_path / "runs" / "job-300"
     selected_xyz = _write_xyz(tmp_path / "inputs" / "Fancy Name.xyz")
@@ -292,8 +245,9 @@ def test_record_from_artifacts_merges_sources_and_existing_values(tmp_path: Path
 
     record = record_from_artifacts(
         job_dir=job_dir,
-        state={"job_id": "job-300", "status": "completed"},
-        report={
+        state={
+            "job_id": "job-300",
+            "status": "completed",
             "mode": "nci",
             "original_run_dir": str(job_dir.resolve()),
             "selected_input_xyz": str(selected_xyz.resolve()),
@@ -319,7 +273,6 @@ def test_record_from_artifacts_returns_none_without_job_id(tmp_path: Path) -> No
         record_from_artifacts(
             job_dir=tmp_path / "job-without-id",
             state={},
-            report={},
             existing=None,
         )
         is None
@@ -338,8 +291,8 @@ def test_record_from_artifacts_defaults_invalid_resource_request_without_existin
             "job_id": "job-301",
             "status": "queued",
             "resource_request": "invalid",
+            "selected_input_xyz": str(selected_xyz.resolve()),
         },
-        report={"selected_input_xyz": str(selected_xyz.resolve())},
         existing=None,
     )
 

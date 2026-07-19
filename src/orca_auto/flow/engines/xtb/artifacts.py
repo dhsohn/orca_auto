@@ -82,40 +82,6 @@ def _running_artifact_fields(
     )
 
 
-def report_lines(entry: Any, result: XtbRunResult) -> list[str]:
-    lines = _engine_execution.terminal_report_lines(
-        entry,
-        result,
-        title="orca_auto xTB Report",
-        selected_input_label="Selected Input XYZ",
-        selected_input_xyz=result.selected_input_xyz,
-        engine_lines=[
-            f"- Job Type: `{result.job_type}`",
-            f"- Reaction Key: `{result.reaction_key}`",
-        ],
-        detail_lines=[
-            f"- Candidate Count: `{result.candidate_count}`",
-            f"- Input Summary: `{result.input_summary}`",
-        ],
-    )
-    if result.selected_candidate_paths:
-        lines.append("- Selected Candidate Paths:")
-        for path in result.selected_candidate_paths:
-            lines.append(f"  - `{path}`")
-    if result.job_type == "ranking" and result.analysis_summary:
-        if result.analysis_summary.get("best_candidate_path"):
-            lines.append(
-                f"- Best Candidate Path: `{result.analysis_summary.get('best_candidate_path')}`"
-            )
-        if result.analysis_summary.get("best_total_energy") is not None:
-            lines.append(
-                f"- Best Total Energy: `{result.analysis_summary.get('best_total_energy')}`"
-            )
-    if result.analysis_summary:
-        lines.append(f"- Analysis Summary: `{result.analysis_summary}`")
-    return lines
-
-
 def write_execution_artifacts(
     entry: Any,
     result: XtbRunResult,
@@ -124,19 +90,12 @@ def write_execution_artifacts(
     resumed: bool = False,
     coerce_mapping_fn: Callable[[Any], dict[str, Any]] | None = None,
     write_state_fn: Callable[..., Any] | None = None,
-    write_report_json_fn: Callable[..., Any] | None = None,
-    write_report_md_lines_fn: Callable[..., Any] | None = None,
 ) -> None:
     job_dir_text = _engine_execution.entry_metadata_text(entry, "job_dir")
     if not job_dir_text:
         return
     coerce_mapping = coerce_mapping_fn or _queue_execution.coerce_mapping
     write_state = _required_dependency(write_state_fn, "write_state_fn")
-    write_report_json = _required_dependency(write_report_json_fn, "write_report_json_fn")
-    write_report_md_lines = _required_dependency(
-        write_report_md_lines_fn,
-        "write_report_md_lines_fn",
-    )
 
     base_state = coerce_mapping(previous_state)
     _engine_execution.write_terminal_engine_artifacts(
@@ -146,12 +105,7 @@ def write_execution_artifacts(
         previous_state=base_state,
         resumed=resumed,
         artifact_fields=_result_artifact_fields(entry, result),
-        report_lines=report_lines(entry, result),
-        writers=_engine_execution.TerminalArtifactWriters(
-            write_state=write_state,
-            write_report_json=write_report_json,
-            write_report_md_lines=write_report_md_lines,
-        ),
+        write_state_fn=write_state,
     )
 
 

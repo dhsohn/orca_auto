@@ -43,7 +43,7 @@ from orca_auto.core.messaging.interactive import (
     InteractiveMessenger,
 )
 from orca_auto.core.queue.generation import is_visible_generation_name
-from orca_auto.core.utils.lock import file_lock
+from orca_auto.core.utils.lock import tmpfs_file_lock
 
 from .._orca_stage_materialization import safe_name
 from . import remote_admission
@@ -560,7 +560,7 @@ class UploadApplication:
             os.close(extracted_fd)
 
         lock_timeout = store.lock_timeout_seconds
-        with file_lock(
+        with tmpfs_file_lock(
             resolved_root / _UPLOAD_PUBLISH_LOCK_NAME,
             timeout_seconds=lock_timeout,
         ):

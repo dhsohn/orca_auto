@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -17,10 +16,6 @@ from ..contracts.xtb import (
 )
 from ..xyz_utils import has_xyz_geometry
 from . import _engine_adapter_helpers as _adapter_helpers
-
-_ACTIVE_PAYLOAD_STATUSES = frozenset(
-    {"queued", "running", "submitted", "cancel_requested", "retrying"}
-)
 
 
 def _job_type_from_record(record: JobLocationRecord | None, fallback: str) -> str:
@@ -53,14 +48,9 @@ def _load_candidate_details(
                 raise ValueError(f"xTB candidate artifact escapes job_dir: {detail.path}")
             identity = detail.metadata.get("output_identity")
             if require_identity and not isinstance(identity, dict):
-                identity = _engine_runner.confined_output_identity(artifact_roots[0], resolved)
-                detail = replace(
-                    detail,
-                    metadata={
-                        **detail.metadata,
-                        "output_identity": identity,
-                        "identity_backfilled_from_legacy_artifact": True,
-                    },
+                raise ValueError(
+                    "completed xTB candidate artifact is missing its output identity: "
+                    f"{detail.path}"
                 )
             if isinstance(identity, dict):
                 verified = _engine_runner.verify_confined_output_identity(
@@ -134,15 +124,11 @@ def load_xtb_artifact_contract(*, xtb_index_root: str | Path, target: str) -> Xt
         target=target,
         resolve_job_location_fn=resolve_job_location,
         load_json_dict_fn=_adapter_helpers.load_json_dict,
-        report_filename="job_report.json",
         state_filename="job_state.json",
         missing_label="xTB",
+        expected_engine="xtb",
         expected_app_name="orca_auto_xtb",
         coerce_resource_dict_fn=coerce_int_mapping,
-        select_payload_fn=partial(
-            _adapter_helpers.select_active_artifact_payload,
-            active_statuses=_ACTIVE_PAYLOAD_STATUSES,
-        ),
     )
     fields = _adapter_helpers.ContractFieldReader(bundle)
     payload = fields.payload
@@ -166,6 +152,16 @@ def load_xtb_artifact_contract(*, xtb_index_root: str | Path, target: str) -> Xt
     selected_candidate_paths = selected_candidate_paths or tuple(
         item.path for item in candidate_details if item.selected
     )
+    if status == "completed":
+        detailed_paths = {item.path for item in candidate_details}
+        missing_identity_paths = [
+            path for path in selected_candidate_paths if path not in detailed_paths
+        ]
+        if missing_identity_paths:
+            raise ValueError(
+                "completed xTB selected candidate is missing identity-bearing detail: "
+                f"{missing_identity_paths[0]}"
+            )
 
     job_type = _adapter_helpers.first_normalized_text(
         payload.get("job_type"),

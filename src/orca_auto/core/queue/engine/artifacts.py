@@ -18,18 +18,11 @@ from orca_auto.core.engines.artifacts import (
     EngineArtifactStatus,
     EngineArtifactTimestamps,
     build_engine_artifact_payload,
-    build_engine_report_markdown,
 )
 from orca_auto.core.queue import execution as _queue_execution
 from orca_auto.core.queue.generation import queue_entry_generation_token
 
 from ..types import QueueEntry
-
-
-@dataclass(frozen=True)
-class TerminalArtifactPayloads:
-    state: dict[str, Any]
-    report: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -44,13 +37,6 @@ class EngineArtifactFields:
 
     def detail_payload(self) -> dict[str, Any]:
         return dict(self.detail_fields or {})
-
-
-@dataclass(frozen=True)
-class TerminalArtifactWriters:
-    write_state: Callable[..., Any]
-    write_report_json: Callable[..., Any]
-    write_report_md_lines: Callable[..., Any]
 
 
 def sanitized_execution_provenance(entry: Any) -> dict[str, Any]:
@@ -155,7 +141,7 @@ def exact_artifact_envelope_for_entry(
     return dict(payload)
 
 
-def canonical_terminal_artifact_payloads(
+def canonical_terminal_state_payload(
     payload: Mapping[str, Any],
     *,
     job_dir: Path,
@@ -164,52 +150,45 @@ def canonical_terminal_artifact_payloads(
     exit_code: int | None,
     generation: str,
     updated_at: str,
-) -> TerminalArtifactPayloads:
-    """Rebuild both terminal envelopes from one exact-generation source."""
+) -> dict[str, Any]:
+    """Rebuild the authoritative terminal state for one exact queue generation."""
 
-    def canonical_payload(*, state: bool) -> dict[str, Any]:
-        canonical = copy.deepcopy(dict(payload))
-        job = canonical.get("job")
-        if not isinstance(job, dict):
-            job = {}
-            canonical["job"] = job
-        job["dir"] = str(job_dir) if state else ""
-        job["generation"] = generation
-        status_payload = canonical.get("status")
-        if not isinstance(status_payload, dict):
-            status_payload = {}
-            canonical["status"] = status_payload
-        status_payload.update(
-            {
-                "state": status,
-                "reason": reason,
-                "exit_code": exit_code,
-            }
-        )
-        timestamps = canonical.get("timestamps")
-        if not isinstance(timestamps, dict):
-            timestamps = {}
-            canonical["timestamps"] = timestamps
-        timestamps.update({"updated_at": updated_at, "finished_at": updated_at})
-        return canonical
-
-    return TerminalArtifactPayloads(
-        state=canonical_payload(state=True),
-        report=canonical_payload(state=False),
+    canonical = copy.deepcopy(dict(payload))
+    job = canonical.get("job")
+    if not isinstance(job, dict):
+        job = {}
+        canonical["job"] = job
+    job["dir"] = str(job_dir)
+    job["generation"] = generation
+    status_payload = canonical.get("status")
+    if not isinstance(status_payload, dict):
+        status_payload = {}
+        canonical["status"] = status_payload
+    status_payload.update(
+        {
+            "state": status,
+            "reason": reason,
+            "exit_code": exit_code,
+        }
     )
+    timestamps = canonical.get("timestamps")
+    if not isinstance(timestamps, dict):
+        timestamps = {}
+        canonical["timestamps"] = timestamps
+    timestamps.update({"updated_at": updated_at, "finished_at": updated_at})
+    return canonical
 
 
-def terminal_artifact_pair_is_consistent(
+def terminal_state_is_consistent(
     *,
     state: Mapping[str, Any],
-    report: Mapping[str, Any],
     entry: QueueEntry,
     engine: str,
     job_dir: Path,
     expected_status: str,
     expected_reason: str,
 ) -> bool:
-    """Check that both envelopes are exact, terminal, and semantically equal."""
+    """Check that state is exact-generation terminal evidence for the queue row."""
 
     exact_state = exact_artifact_envelope_for_entry(
         state,
@@ -219,62 +198,34 @@ def terminal_artifact_pair_is_consistent(
         require_job_dir=True,
         require_generation=True,
     )
-    exact_report = exact_artifact_envelope_for_entry(
-        report,
-        entry=entry,
-        engine=engine,
-        job_dir=job_dir,
-        require_job_dir=False,
-        require_generation=True,
-    )
-    if not exact_state or not exact_report:
+    if not exact_state:
         return False
-
-    def normalized(payload: Mapping[str, Any]) -> dict[str, Any]:
-        value = copy.deepcopy(dict(payload))
-        job = value.get("job")
-        if isinstance(job, dict):
-            job["dir"] = ""
-        engine_payload = value.get("engine_payload")
-        if isinstance(engine_payload, dict):
-            engine_payload.pop("command", None)
-        return value
-
     state_status = exact_state.get("status")
-    report_status = exact_report.get("status")
-    if not isinstance(state_status, Mapping) or not isinstance(report_status, Mapping):
+    if not isinstance(state_status, Mapping):
         return False
     normalized_expected = str(expected_status).strip().lower()
-    if (
-        str(state_status.get("state") or "").strip().lower() != normalized_expected
-        or str(report_status.get("state") or "").strip().lower() != normalized_expected
-    ):
+    if str(state_status.get("state") or "").strip().lower() != normalized_expected:
         return False
     exit_code = state_status.get("exit_code")
     reason = str(state_status.get("reason") or "").strip()
     normalized_reason = str(expected_reason).strip()
-    if normalized_expected == "completed" and (exit_code != 0 or reason != "completed"):
-        return False
-    if normalized_expected == "failed" and type(exit_code) is not int:
-        return False
-    if normalized_expected == "cancelled" and (
-        (exit_code is not None and type(exit_code) is not int) or reason != "cancel_requested"
-    ):
-        return False
-    if normalized_expected == "failed" and reason != normalized_reason:
-        return False
-    return normalized(exact_state) == normalized(exact_report)
+    if normalized_expected == "completed":
+        return exit_code == 0 and reason == "completed"
+    if normalized_expected == "failed":
+        return bool(normalized_reason) and type(exit_code) is int and reason == normalized_reason
+    if normalized_expected == "cancelled":
+        return (exit_code is None or type(exit_code) is int) and reason == "cancel_requested"
+    return False
 
 
-def matching_terminal_artifacts_for_entry(
+def matching_terminal_state_for_entry(
     *,
     state: Mapping[str, Any],
-    report: Mapping[str, Any],
     entry: QueueEntry,
     engine: str,
     job_dir: Path,
-) -> TerminalArtifactPayloads | None:
-    """Select only terminal envelopes that name this exact queue generation."""
+) -> dict[str, Any] | None:
+    """Select terminal state only when it proves this exact queue generation."""
 
     expected_engine = str(engine).strip().lower()
     expected_job_dir = job_dir.expanduser().resolve()
@@ -317,63 +268,27 @@ def matching_terminal_artifacts_for_entry(
         engine=expected_engine,
         job_dir=expected_job_dir,
         require_job_dir=True,
+        require_generation=True,
     )
-    if exact_state:
-        state_status = terminal_status(exact_state)
-        if not state_status:
-            # Every execution writes its running state before it can write a
-            # terminal report. Therefore an exact malformed or nonterminal
-            # state is newer than (or makes ambiguous) a same-generation
-            # terminal report left by an earlier attempt, and must fence it.
-            return None
-    matched_state = exact_state
-    report_envelope = exact_artifact_envelope_for_entry(
-        report,
+    if not exact_state:
+        return None
+    state_status = terminal_status(exact_state)
+    state_status_payload = exact_state.get("status")
+    state_reason = (
+        str(state_status_payload.get("reason") or "").strip()
+        if isinstance(state_status_payload, Mapping)
+        else ""
+    )
+    if not state_status or not terminal_state_is_consistent(
+        state=exact_state,
         entry=entry,
         engine=expected_engine,
         job_dir=expected_job_dir,
-        require_job_dir=False,
-    )
-    matched_report = report_envelope if terminal_status(report_envelope) else {}
-    if matched_state and matched_report:
-        state_status = terminal_status(matched_state)
-        report_status = terminal_status(matched_report)
-        if state_status != report_status:
-            matched_report = {}
-        else:
-            state_timestamp = trusted_timestamp(matched_state)
-            report_timestamp = trusted_timestamp(matched_report)
-            if (
-                state_timestamp is None
-                or report_timestamp is None
-                or report_timestamp <= state_timestamp
-            ):
-                state_status_payload = matched_state.get("status")
-                expected_reason = (
-                    str(state_status_payload.get("reason") or "").strip()
-                    if isinstance(state_status_payload, Mapping)
-                    else ""
-                )
-                if not terminal_artifact_pair_is_consistent(
-                    state=matched_state,
-                    report=matched_report,
-                    entry=entry,
-                    engine=expected_engine,
-                    job_dir=expected_job_dir,
-                    expected_status=state_status,
-                    expected_reason=expected_reason,
-                ):
-                    # Retain a same-timestamp report only when the complete
-                    # exact-generation pair agrees. This preserves report-only
-                    # command provenance without letting an older report
-                    # override state input/resource identity.
-                    matched_report = {}
-            else:
-                matched_state = {}
-    if not matched_state and not matched_report:
+        expected_status=state_status,
+        expected_reason=state_reason,
+    ):
         return None
-    selected_terminal = matched_report or matched_state
-    terminal_timestamp = trusted_timestamp(selected_terminal)
+    terminal_timestamp = trusted_timestamp(exact_state)
     claim_started_at = trusted_datetime(getattr(entry, "started_at", ""))
     if (
         terminal_timestamp is None
@@ -384,27 +299,7 @@ def matching_terminal_artifacts_for_entry(
         # claim. Otherwise state/report may both belong to an earlier attempt
         # that was left in the reused job directory before the current claim.
         return None
-    return TerminalArtifactPayloads(state=matched_state, report=matched_report)
-
-
-def terminal_artifacts_match_entry(
-    *,
-    state: Mapping[str, Any],
-    report: Mapping[str, Any],
-    entry: QueueEntry,
-    engine: str,
-    job_dir: Path,
-) -> bool:
-    return (
-        matching_terminal_artifacts_for_entry(
-            state=state,
-            report=report,
-            entry=entry,
-            engine=engine,
-            job_dir=job_dir,
-        )
-        is not None
-    )
+    return exact_state
 
 
 def is_resumed_state(
@@ -626,111 +521,6 @@ def build_terminal_state_payload(
     )
 
 
-def build_terminal_report_payload(
-    entry: QueueEntry,
-    result: Any,
-    *,
-    selected_input_xyz: str,
-    previous_state: dict[str, Any] | None,
-    resumed: bool,
-    engine_fields: dict[str, Any] | None = None,
-    detail_fields: dict[str, Any] | None = None,
-    engine: str = "",
-) -> dict[str, Any]:
-    payload = build_terminal_state_payload(
-        entry,
-        result,
-        job_dir_text="",
-        selected_input_xyz=selected_input_xyz,
-        previous_state=previous_state,
-        resumed=resumed,
-        engine_fields=engine_fields,
-        detail_fields={
-            **dict(detail_fields or {}),
-            "command": list(result.command),
-        },
-        engine=engine,
-    )
-    payload["job"]["dir"] = ""
-    return payload
-
-
-def build_terminal_artifact_payloads(
-    entry: QueueEntry,
-    result: Any,
-    *,
-    job_dir_text: str,
-    selected_input_xyz: str,
-    previous_state: dict[str, Any] | None,
-    resumed: bool,
-    engine_fields: dict[str, Any] | None = None,
-    detail_fields: dict[str, Any] | None = None,
-    engine: str = "",
-) -> TerminalArtifactPayloads:
-    return TerminalArtifactPayloads(
-        state=build_terminal_state_payload(
-            entry,
-            result,
-            job_dir_text=job_dir_text,
-            selected_input_xyz=selected_input_xyz,
-            previous_state=previous_state,
-            resumed=resumed,
-            engine_fields=engine_fields,
-            detail_fields={
-                **dict(detail_fields or {}),
-                "command": list(result.command),
-            },
-            engine=engine,
-        ),
-        report=build_terminal_report_payload(
-            entry,
-            result,
-            selected_input_xyz=selected_input_xyz,
-            previous_state=previous_state,
-            resumed=resumed,
-            engine_fields=engine_fields,
-            detail_fields=detail_fields,
-            engine=engine,
-        ),
-    )
-
-
-def write_terminal_execution_artifacts(
-    entry: QueueEntry,
-    result: Any,
-    *,
-    job_dir_text: str,
-    selected_input_xyz: str,
-    previous_state: dict[str, Any] | None,
-    resumed: bool,
-    engine_fields: dict[str, Any] | None,
-    detail_fields: dict[str, Any] | None,
-    report_lines: list[str],
-    write_state_fn: Callable[..., Any],
-    write_report_json_fn: Callable[..., Any],
-    write_report_md_lines_fn: Callable[..., Any],
-) -> None:
-    write_terminal_engine_artifacts(
-        entry,
-        result,
-        job_dir_text=job_dir_text,
-        previous_state=previous_state,
-        resumed=resumed,
-        artifact_fields=EngineArtifactFields(
-            selected_input_xyz=selected_input_xyz,
-            engine=str((engine_fields or {}).get("_engine", "")),
-            engine_fields=engine_fields,
-            detail_fields=detail_fields,
-        ),
-        report_lines=report_lines,
-        writers=TerminalArtifactWriters(
-            write_state=write_state_fn,
-            write_report_json=write_report_json_fn,
-            write_report_md_lines=write_report_md_lines_fn,
-        ),
-    )
-
-
 def write_terminal_engine_artifacts(
     entry: QueueEntry,
     result: Any,
@@ -739,12 +529,11 @@ def write_terminal_engine_artifacts(
     previous_state: dict[str, Any] | None,
     resumed: bool,
     artifact_fields: EngineArtifactFields,
-    report_lines: list[str],
-    writers: TerminalArtifactWriters,
+    write_state_fn: Callable[..., Any],
 ) -> None:
     if not job_dir_text:
         return
-    payloads = build_terminal_artifact_payloads(
+    state = build_terminal_state_payload(
         entry,
         result,
         job_dir_text=job_dir_text,
@@ -755,44 +544,12 @@ def write_terminal_engine_artifacts(
         engine_fields=artifact_fields.engine_payload(),
         detail_fields=artifact_fields.detail_payload(),
     )
-    report_lines = build_engine_report_markdown(payloads.report)
-    _queue_execution.write_result_artifacts(
-        job_dir_text,
-        state_payload=payloads.state,
-        report_payload=payloads.report,
-        report_lines=report_lines,
-        write_state_fn=writers.write_state,
-        write_report_json_fn=writers.write_report_json,
-        write_report_md_lines_fn=writers.write_report_md_lines,
-    )
-
-
-def terminal_report_lines(
-    entry: QueueEntry,
-    result: Any,
-    *,
-    title: str,
-    selected_input_label: str,
-    selected_input_xyz: str,
-    engine_lines: list[str] | None = None,
-    detail_lines: list[str] | None = None,
-) -> list[str]:
-    return [
-        f"# {title}",
-        "",
-        f"- Job ID: `{entry.task_id}`",
-        f"- Queue ID: `{entry.queue_id}`",
-        f"- Status: `{result.status}`",
-        f"- Reason: `{result.reason}`",
-        *list(engine_lines or []),
-        f"- {selected_input_label}: `{Path(selected_input_xyz).name}`",
-        f"- Exit Code: `{result.exit_code}`",
-        *list(detail_lines or []),
-        f"- Resource Request: `{result.resource_request}`",
-        f"- Resource Actual: `{result.resource_actual}`",
-        f"- Stdout Log: `{result.stdout_log}`",
-        f"- Stderr Log: `{result.stderr_log}`",
-    ]
+    engine_payload = state.get("engine_payload")
+    if not isinstance(engine_payload, dict):
+        engine_payload = {}
+        state["engine_payload"] = engine_payload
+    engine_payload["command"] = list(result.command)
+    write_state_fn(Path(job_dir_text).expanduser().resolve(), state)
 
 
 def build_terminal_result(
@@ -858,20 +615,16 @@ def build_terminal_result_from_context(
 
 __all__ = [
     "EngineArtifactFields",
-    "TerminalArtifactPayloads",
-    "TerminalArtifactWriters",
+    "canonical_terminal_state_payload",
     "build_running_state_payload",
-    "build_terminal_artifact_payloads",
-    "build_terminal_report_payload",
     "build_terminal_result",
     "build_terminal_result_from_context",
     "build_terminal_state_payload",
     "default_engine_resource_caps",
     "default_entry_resource_request",
     "is_resumed_state",
-    "terminal_report_lines",
+    "terminal_state_is_consistent",
     "write_running_engine_state_artifact",
     "write_running_state_artifact",
     "write_terminal_engine_artifacts",
-    "write_terminal_execution_artifacts",
 ]

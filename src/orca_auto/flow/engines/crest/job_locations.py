@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from orca_auto.core.indexing import engines as _engine_locations
 from orca_auto.core.indexing.engine_job_locations import (
     build_store_backed_engine_job_location_exports,
 )
 
-from .state import load_report_json, load_state
+from .state import load_state
 
 
 def job_type_for_mode(mode: str) -> str:
@@ -42,7 +43,7 @@ _LOCATION_EXPORTS = build_store_backed_engine_job_location_exports(
         molecule_key_name="molecule_key",
     ),
     load_state_fn=load_state,
-    load_report_json_fn=load_report_json,
+    load_report_json_fn=None,
     payload_kind_kwarg="mode",
     molecule_key_kwarg="molecule_key",
     default_payload_kind_kwarg="default_mode",
@@ -56,6 +57,12 @@ resolve_job_location_for_cfg = _LOCATION_EXPORTS.resolve_job_location_for_cfg
 build_job_location_record = _LOCATION_EXPORTS.build_job_location_record
 upsert_job_record = _LOCATION_EXPORTS.upsert_job_record
 resolve_latest_job_dir = _LOCATION_EXPORTS.resolve_latest_job_dir
-load_job_artifacts = _LOCATION_EXPORTS.load_job_artifacts
-load_job_artifacts_for_cfg = _LOCATION_EXPORTS.load_job_artifacts_for_cfg
-record_from_artifacts = _LOCATION_EXPORTS.record_from_artifacts
+
+
+def record_from_artifacts(*, job_dir: Path, state: dict[str, Any], **kwargs: Any) -> Any:
+    return _LOCATION_EXPORTS.record_from_artifacts(
+        job_dir=job_dir,
+        state=state,
+        report=None,
+        **kwargs,
+    )

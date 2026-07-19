@@ -3,6 +3,7 @@ import os
 import re
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -142,6 +143,42 @@ class TestState(unittest.TestCase):
 
             tmp_files = list(reaction.glob("*.tmp.*"))
             self.assertEqual(tmp_files, [])
+
+    def test_write_state_fails_closed_when_pinned_reaction_directory_is_replaced(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            reaction = root / "reaction"
+            displaced = root / "reaction-displaced"
+            reaction.mkdir()
+            inp = reaction / "rxn.inp"
+            inp.write_text("! Opt\n", encoding="utf-8")
+            state = new_state(reaction, inp, max_retries=1)
+            original_identity = (reaction.stat().st_dev, reaction.stat().st_ino)
+
+            @contextmanager
+            def _replace_after_pin(
+                directory_fd: int,
+                lock_name: str,
+                *,
+                display_path: Path | None = None,
+                timeout_seconds: float = 10.0,
+            ):
+                del lock_name, display_path, timeout_seconds
+                pinned = os.fstat(directory_fd)
+                self.assertEqual((pinned.st_dev, pinned.st_ino), original_identity)
+                reaction.rename(displaced)
+                reaction.mkdir()
+                yield
+
+            with (
+                patch.object(state_module, "tmpfs_file_lock_at", _replace_after_pin),
+                self.assertRaisesRegex(ValueError, "parent directory identity changed"),
+            ):
+                write_state(reaction, state)
+
+            self.assertFalse((reaction / "job_state.json").exists())
+            self.assertFalse((displaced / "job_state.json").exists())
+            self.assertEqual(list(reaction.glob(".job_state.json.*.tmp")), [])
 
     def test_public_state_and_report_are_mirrored_into_visible_generation(self) -> None:
         with tempfile.TemporaryDirectory() as td:

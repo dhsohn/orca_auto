@@ -34,7 +34,7 @@ class EngineJobLocations:
     engine: str
     spec: EngineLocationSpec
     load_state_fn: Callable[[Path], dict[str, Any] | None]
-    load_report_json_fn: Callable[[Path], dict[str, Any] | None]
+    load_report_json_fn: Callable[[Path], dict[str, Any] | None] | None
     payload_kind_kwarg: str
     molecule_key_kwarg: str
     default_payload_kind_kwarg: str
@@ -156,7 +156,7 @@ def build_store_backed_engine_job_location_exports(
     engine: str,
     spec: EngineLocationSpec,
     load_state_fn: Callable[[Path], dict[str, Any] | None],
-    load_report_json_fn: Callable[[Path], dict[str, Any] | None],
+    load_report_json_fn: Callable[[Path], dict[str, Any] | None] | None,
     payload_kind_kwarg: str,
     molecule_key_kwarg: str,
     default_payload_kind_kwarg: str,

@@ -166,7 +166,7 @@ def test_load_config_applies_defaults_for_missing_and_legacy_optional_sections(
     assert cfg.telegram.chat_id == ""
 
 
-def test_state_helpers_write_and_load_round_trip(
+def test_state_helper_writes_only_canonical_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -175,45 +175,25 @@ def test_state_helpers_write_and_load_round_trip(
     monkeypatch.setattr(state_mod, "now_utc_iso", lambda: "2026-04-20T00:00:00Z")
 
     state_path = state_mod.write_state(job_dir, {"status": "queued"})
-    report_json_path = state_mod.write_report_json(job_dir, {"status": "completed"})
-    report_md_path = state_mod.write_report_md(
-        job_dir,
-        job_id="job-001",
-        status="completed",
-        reason="xtb_ok",
-        selected_input="input.xyz",
-    )
-    report_lines_path = state_mod.write_report_md_lines(job_dir, ["# heading", "", "- done"])
 
     assert state_path == job_dir / state_mod.STATE_FILE_NAME
-    assert report_json_path == job_dir / state_mod.REPORT_JSON_FILE_NAME
-    assert report_md_path == job_dir / state_mod.REPORT_MD_FILE_NAME
-    assert report_lines_path == job_dir / state_mod.REPORT_MD_FILE_NAME
     assert state_mod.load_state(job_dir) == {"status": "queued"}
-    assert state_mod.load_report_json(job_dir) == {"status": "completed"}
-    assert (job_dir / state_mod.REPORT_MD_FILE_NAME).read_text(
-        encoding="utf-8"
-    ) == "# heading\n\n- done\n"
+    assert not (job_dir / "job_report.json").exists()
+    assert not (job_dir / "job_report.md").exists()
 
 
-def test_state_loaders_return_none_for_missing_invalid_and_non_mapping_payloads(
+def test_state_loader_returns_none_for_missing_invalid_and_non_mapping_payloads(
     tmp_path: Path,
 ) -> None:
     job_dir = tmp_path / "job-002"
     job_dir.mkdir()
 
     assert state_mod.load_state(job_dir) is None
-    assert state_mod.load_report_json(job_dir) is None
-
-    for filename, loader in (
-        (state_mod.STATE_FILE_NAME, state_mod.load_state),
-        (state_mod.REPORT_JSON_FILE_NAME, state_mod.load_report_json),
-    ):
-        path = job_dir / filename
-        path.write_text("{invalid-json", encoding="utf-8")
-        assert loader(job_dir) is None
-        path.write_text(json.dumps(["not", "a", "mapping"]), encoding="utf-8")
-        assert loader(job_dir) is None
+    path = job_dir / state_mod.STATE_FILE_NAME
+    path.write_text("{invalid-json", encoding="utf-8")
+    assert state_mod.load_state(job_dir) is None
+    path.write_text(json.dumps(["not", "a", "mapping"]), encoding="utf-8")
+    assert state_mod.load_state(job_dir) is None
 
 
 def test_mark_recovery_pending_preserves_xtb_schema_fields(

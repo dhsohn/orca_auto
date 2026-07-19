@@ -44,6 +44,78 @@ a separate bot token, at least one inbound command channel, and an operator user
 the bot is not fully configured, the installer selects the queue worker only. Rerun the
 command after completing bot configuration to enable the full runtime target.
 
+By default, both `orca_auto systemd install` and `orca_auto service restart`
+replace the supervised build through a fail-closed drain gate. They snapshot
+the managed unit states, stop only units that are active, and verify that all
+four are non-running before
+writing any unit file. Only then does install write the units, reload systemd,
+disable the opposite boot mode, enable the selected mode, and start and verify
+the selected runtime. Full mode requires the runtime target, queue worker, and
+bot to become active; worker-only mode requires the queue worker. The workflow
+unit is restarted and verified only when it was active before the drain. A
+snapshot, stop, or non-running check failure aborts before any unit write. A fresh
+install with no loaded units proceeds without a stop/reset command. A later
+write, reload, boot-selection, start, or restore failure never restarts the old
+processes; the command stops any partial new graph and leaves all managed units
+stopped for an explicit repair and rerun.
+
+Every non-dry-run install apply, `service restart`, and direct runtime
+replacement for the same target user shares one EUID-independent,
+non-persistent Linux abstract `AF_UNIX` socket lock within the same Linux
+network namespace. The versioned target-user hash is held before restart mode
+queries or drain and released by closing the socket only after start/restore
+completes, so concurrent commands cannot observe an old mode and later start it
+over a newer selection. Nested direct replacement reuses the same-thread
+socket; other threads, processes, and caller EUIDs in that network namespace
+serialize. A lock timeout aborts with exit status 1 before systemd mutation.
+Dry-run and plan construction do not acquire the lock. Restart selection uses the
+runtime target: exact active or enabled selects full mode, otherwise exact inactive/failed
+plus disabled selects worker-only. Matching text with any other exit status fails closed.
+
+All supported mutation callers—including WSL/native host shells and the
+provided systemd units—must run in the same Linux network namespace when they
+control the same host systemd. Controlling host systemd from a container or
+separate network namespace is unsupported. Abstract socket names are
+permissionless, so this feature requires a trusted-local-user or single-user
+administrative boundary: an untrusted local user can pre-bind the name and
+cause a fail-closed availability denial. The timeout occurs before mutation, so
+such preemption cannot create a split-build graph or data damage. No file-lock
+fallback is provided for this limitation.
+
+`systemd install --no-start` changes only the boot selection, while
+`--no-enable` only writes the units and reloads systemd; neither stops or starts
+services. These maintenance modes are offline-only: before writing any unit
+file, the installer requires the runtime target, queue worker, bot, and workflow
+worker to each report a known non-running state (`inactive`, `failed`, or absent).
+An active, transitional, or unqueryable unit aborts before any write. Boot-mode changes disable
+the opposite mode before enabling the selected mode, so a later enable failure
+cannot leave both modes enabled. `--no-start` validates the complete runtime
+configuration before changing the boot selection. `--no-enable` may stage units
+without a complete config because it does not select a boot mode.
+
+The gate covers systemd units only. Before installing or restarting a changed
+build, stop and drain every old-build foreground/manual `orca_auto` process as
+well: queue and workflow workers, the bot, direct CLI commands, maintenance
+commands, and upload handling. Verify that no old calculation or process
+ownership remains before loading the new build.
+
+An in-place checkout update happens before the new CLI can run, so it needs an
+earlier drain than the install command itself. For an in-place deployment:
+
+1. Using the old checkout, record whether the workflow unit is active.
+2. Stop the runtime target, queue worker, bot, and workflow worker, and require
+   every unit to report exactly `inactive`.
+3. Only after that verification, update the checkout or installed package.
+4. Run `orca_auto systemd install` from the new build.
+5. If the workflow unit was active in step 1, start and verify it explicitly;
+   the new installer sees the already stopped unit and cannot infer that prior
+   state.
+
+Alternatively, stage the new build in a separate immutable release directory
+and run its installer while the old release is still intact; the pre-write
+drain then preserves and restores the workflow snapshot automatically. Never
+sync new code into a checkout still used by an old supervised process.
+
 Monitor the combined runtime target:
 
 ```bash

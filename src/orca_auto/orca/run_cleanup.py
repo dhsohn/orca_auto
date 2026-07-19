@@ -8,7 +8,7 @@ from pathlib import Path
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.statuses import STATUS_CANCELLED
-from orca_auto.core.utils.lock import file_lock_at
+from orca_auto.core.utils.lock import tmpfs_file_lock_at
 from orca_auto.core.utils.process_tracking import active_run_lock_pid
 
 from .queue.adapter import (
@@ -244,7 +244,7 @@ def clear_terminal_run_states(allowed_root: Path) -> int:
                 reaction_dir = _resolved_path_text(str(snapshot.reaction_dir))
                 if _queue_generation_blocks_state_cleanup(allowed_root, reaction_dir):
                     continue
-                with file_lock_at(
+                with tmpfs_file_lock_at(
                     directory_fd,
                     STATE_MUTATION_LOCK_FILE_NAME,
                     display_path=snapshot.reaction_dir / STATE_MUTATION_LOCK_FILE_NAME,

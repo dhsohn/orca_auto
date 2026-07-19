@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -12,10 +11,6 @@ from ..contracts.crest import CrestArtifactContract, CrestDownstreamPolicy, to_w
 from ..contracts.xtb import WorkflowStageInput
 from . import _engine_adapter_helpers as _adapter_helpers
 
-_ACTIVE_PAYLOAD_STATUSES = frozenset(
-    {"queued", "running", "submitted", "cancel_requested", "retrying"}
-)
-
 
 def load_crest_artifact_contract(
     *, crest_index_root: str | Path, target: str
@@ -25,15 +20,11 @@ def load_crest_artifact_contract(
         target=target,
         resolve_job_location_fn=resolve_job_location,
         load_json_dict_fn=_adapter_helpers.load_json_dict,
-        report_filename="job_report.json",
         state_filename="job_state.json",
         missing_label="CREST",
+        expected_engine="crest",
         expected_app_name="orca_auto_crest",
         coerce_resource_dict_fn=coerce_int_mapping,
-        select_payload_fn=partial(
-            _adapter_helpers.select_active_artifact_payload,
-            active_statuses=_ACTIVE_PAYLOAD_STATUSES,
-        ),
     )
     fields = _adapter_helpers.ContractFieldReader(bundle)
     payload = fields.payload
@@ -75,11 +66,9 @@ def load_crest_artifact_contract(
     if status == "completed":
         for path in retained_paths:
             if path not in output_identities:
-                output_identities[path] = _engine_runner.confined_output_identity(
-                    fields.job_dir,
-                    path,
+                raise ValueError(
+                    f"completed CREST retained artifact is missing its output identity: {path}"
                 )
-                output_identities[path]["identity_backfilled_from_legacy_artifact"] = True
     latest_known_path = bundle.latest_known_path
 
     return CrestArtifactContract(

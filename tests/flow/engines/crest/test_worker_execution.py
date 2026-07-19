@@ -10,10 +10,11 @@ from typing import Any, cast
 
 import pytest
 
+from orca_auto.core.artifacts import JOB_REPORT_JSON_FILE, JOB_REPORT_MD_FILE
 from orca_auto.flow.engines.crest import execution as worker_execution
 from orca_auto.flow.engines.crest import terminal as crest_terminal
 from orca_auto.flow.engines.crest.runner import CrestRunResult
-from orca_auto.flow.engines.crest.state import REPORT_MD_FILE_NAME, load_report_json, load_state
+from orca_auto.flow.engines.crest.state import load_state
 from tests.engine_artifact_helpers import (
     artifact_payload,
 )
@@ -337,21 +338,11 @@ def test_write_execution_artifacts_returns_early_without_job_dir(
         "write_state",
         lambda *args, **kwargs: pytest.fail("unexpected state write"),
     )
-    monkeypatch.setattr(
-        worker_execution,
-        "write_report_json",
-        lambda *args, **kwargs: pytest.fail("unexpected report json write"),
-    )
-    monkeypatch.setattr(
-        worker_execution,
-        "write_report_md_lines",
-        lambda *args, **kwargs: pytest.fail("unexpected report md write"),
-    )
 
     worker_execution._write_execution_artifacts(entry, result)
 
 
-def test_write_execution_artifacts_writes_retained_paths_to_state_and_report(
+def test_write_execution_artifacts_writes_retained_paths_to_state_only(
     tmp_path: Path,
 ) -> None:
     job_dir = tmp_path / "job"
@@ -369,25 +360,17 @@ def test_write_execution_artifacts_writes_retained_paths_to_state_and_report(
     worker_execution._write_execution_artifacts(entry, result)
 
     state_payload = load_state(job_dir)
-    report_payload = load_report_json(job_dir)
     assert state_payload is not None
-    assert report_payload is not None
     assert _status(state_payload)["state"] == "completed"
     assert _engine_payload(state_payload)["retained_conformer_count"] == 2
     assert _engine_payload(state_payload)["retained_conformer_paths"] == list(
         result.retained_conformer_paths
     )
-    assert _job(report_payload)["queue_id"] == entry.queue_id
-    assert _engine_payload(report_payload)["molecule_key"] == "mol-42"
-    assert _engine_payload(report_payload)["retained_conformer_paths"] == list(
-        result.retained_conformer_paths
-    )
-
-    report_md = (job_dir / REPORT_MD_FILE_NAME).read_text(encoding="utf-8")
-    assert "Selected XYZ" in report_md
-    assert "retained_conformer_paths" in report_md
-    for path in result.retained_conformer_paths:
-        assert path in report_md
+    assert _job(state_payload)["queue_id"] == entry.queue_id
+    assert _engine_payload(state_payload)["molecule_key"] == "mol-42"
+    assert _engine_payload(state_payload)["command"] == list(result.command)
+    assert not (job_dir / JOB_REPORT_JSON_FILE).exists()
+    assert not (job_dir / JOB_REPORT_MD_FILE).exists()
 
 
 def test_write_running_state_returns_early_without_job_dir(

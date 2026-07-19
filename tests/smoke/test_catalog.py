@@ -25,6 +25,16 @@ def test_all_profile_includes_fake_and_both_real_engine_lanes() -> None:
     assert profiles == {"fake", "real-orca", "real-xtb"}
 
 
+def test_failed_internal_xtb_handoff_does_not_require_removed_reports() -> None:
+    scenario = next(
+        item
+        for item in scenarios_for_profile("fake")
+        if item.scenario_id == "reaction_ts_search_failure"
+    )
+
+    assert scenario.required_artifacts == ("workflow.json", "workflow_report.html")
+
+
 def test_unknown_profile_lists_real_orca_choice() -> None:
     with pytest.raises(ValueError, match="real-orca"):
         scenarios_for_profile("unknown")

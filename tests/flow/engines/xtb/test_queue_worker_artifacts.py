@@ -39,21 +39,11 @@ def test_write_execution_artifacts_skips_without_job_dir(
         "write_state",
         lambda *args, **kwargs: pytest.fail("write_state should not run"),
     )
-    monkeypatch.setattr(
-        worker_terminal_mod,
-        "write_report_json",
-        lambda *args, **kwargs: pytest.fail("write_report_json should not run"),
-    )
-    monkeypatch.setattr(
-        worker_terminal_mod,
-        "write_report_md_lines",
-        lambda *args, **kwargs: pytest.fail("write_report_md_lines should not run"),
-    )
 
     queue_cmd._write_execution_artifacts(entry, result)
 
 
-def test_write_execution_artifacts_includes_ranking_summary_lines(tmp_path: Path) -> None:
+def test_write_execution_artifacts_includes_ranking_summary_in_state(tmp_path: Path) -> None:
     job_dir = tmp_path / "ranking-job"
     job_dir.mkdir()
     selected_xyz = job_dir / "candidate.xyz"
@@ -96,13 +86,15 @@ def test_write_execution_artifacts_includes_ranking_summary_lines(tmp_path: Path
 
     queue_cmd._write_execution_artifacts(entry, result)
 
-    report = state_mod.load_report_json(job_dir)
-    assert report is not None
-    assert report["engine_payload"]["analysis_summary"] == {
+    state = state_mod.load_state(job_dir)
+    assert state is not None
+    assert state["engine_payload"]["analysis_summary"] == {
         "candidate_paths": [str(selected_xyz.resolve())],
         "best_candidate_path": str(selected_xyz.resolve()),
         "best_total_energy": -12.34,
     }
+    assert not (job_dir / "job_report.json").exists()
+    assert not (job_dir / "job_report.md").exists()
 
 
 def test_write_running_state_skips_without_job_dir(
@@ -353,12 +345,6 @@ def test_terminal_summary_helpers_cover_status_reason_and_metadata(
             "status": {},
             "engine_payload": {"candidate_count": "bad"},
         },
-        load_report_json_fn=lambda _job_dir: {
-            "schema_version": 1,
-            "engine": "xtb",
-            "status": {},
-            "engine_payload": {"job_type": "ranking"},
-        },
         queue_entry_by_id_fn=lambda _root, _queue_id: SimpleNamespace(
             status=SimpleNamespace(value="cancelled"),
             error="",
@@ -372,13 +358,14 @@ def test_terminal_summary_helpers_cover_status_reason_and_metadata(
         reason="cancel_requested",
         metadata_update={},
     )
-    assert terminal_mod.terminal_status({}, {}, None, 0) == "completed"
-    assert terminal_mod.terminal_status({}, {}, None, 1) == "failed"
-    assert terminal_mod.terminal_status({}, {"status": "running"}, None, 1) == "failed"
-    assert terminal_mod.terminal_reason({}, {}, None, status="completed", rc=None) == "completed"
+    assert terminal_mod.terminal_status({}, None, 0) == "completed"
+    assert terminal_mod.terminal_status({}, None, 1) == "failed"
     assert (
-        terminal_mod.terminal_reason({}, {}, None, status="failed", rc=17) == "worker_exit_code_17"
+        terminal_mod.terminal_status({"schema_version": 1, "status": {"state": "running"}}, None, 1)
+        == "failed"
     )
+    assert terminal_mod.terminal_reason({}, None, status="completed", rc=None) == "completed"
+    assert terminal_mod.terminal_reason({}, None, status="failed", rc=17) == "worker_exit_code_17"
 
     terminal_mod.print_terminal_summary(summary)
     output = capsys.readouterr().out

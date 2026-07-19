@@ -17,9 +17,9 @@ def _no_lock(*_args: Any, **_kwargs: Any) -> Iterator[None]:
 
 
 def patch_file_locks(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(registry_store, "file_lock", _no_lock)
-    monkeypatch.setattr(workflow_journal, "file_lock", _no_lock)
-    monkeypatch.setattr(worker_state_store, "file_lock", _no_lock)
+    monkeypatch.setattr(registry_store, "tmpfs_file_lock", _no_lock)
+    monkeypatch.setattr(workflow_journal, "tmpfs_file_lock", _no_lock)
+    monkeypatch.setattr(worker_state_store, "tmpfs_file_lock", _no_lock)
 
 
 def patch_now_utc_iso(

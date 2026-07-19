@@ -27,8 +27,6 @@ def write_execution_artifacts(
     load_state_fn: Callable[..., Any],
     state_matches_job_fn: Callable[..., Any],
     write_state_fn: Callable[..., Any],
-    write_report_json_fn: Callable[..., Any],
-    write_report_md_lines_fn: Callable[..., Any],
 ) -> None:
     _queue_artifacts.write_execution_artifacts(
         entry,
@@ -36,8 +34,6 @@ def write_execution_artifacts(
         load_state_fn=load_state_fn,
         state_matches_job_fn=state_matches_job_fn,
         write_state_fn=write_state_fn,
-        write_report_json_fn=write_report_json_fn,
-        write_report_md_lines_fn=write_report_md_lines_fn,
     )
 
 

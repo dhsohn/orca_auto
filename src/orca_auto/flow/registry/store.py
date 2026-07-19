@@ -13,7 +13,6 @@ from orca_auto.core.paths.workflow import (
 )
 from orca_auto.core.utils import (
     atomic_write_json,
-    file_lock,
     fsync_directory,
     now_utc_iso,
 )
@@ -26,6 +25,7 @@ from orca_auto.core.utils import (
 from orca_auto.core.utils import (
     safe_int as _safe_int,
 )
+from orca_auto.core.utils.lock import tmpfs_file_lock
 
 from ..state import (
     acquire_workflow_lock,
@@ -332,7 +332,7 @@ def upsert_workflow_registry_record(
         and record_workspace.name == record.workflow_id
         else ""
     )
-    with file_lock(_registry_lock_path(resolved_root)):
+    with tmpfs_file_lock(_registry_lock_path(resolved_root)):
         cleared_markers = _load_cleared_markers(resolved_root)
         records = _load_records(resolved_root)
         is_clearable_terminal = _record_is_clearable_terminal(record)
@@ -384,7 +384,7 @@ def reindex_workflow_registry(workflow_root: str | Path) -> list[WorkflowRegistr
             continue
         records.append(record)
     records.sort(key=lambda item: (item.requested_at, item.workflow_id), reverse=True)
-    with file_lock(_registry_lock_path(root)):
+    with tmpfs_file_lock(_registry_lock_path(root)):
         _load_records(root)
         cleared_markers = _load_cleared_markers(root)
         markers_changed = False
@@ -434,7 +434,7 @@ def list_workflow_registry(
             else:
                 fsync_directory(marker.parent)
         return repaired_records
-    with file_lock(_registry_lock_path(resolved_root)):
+    with tmpfs_file_lock(_registry_lock_path(resolved_root)):
         if path.exists():
             return _load_records(resolved_root)
     records: list[WorkflowRegistryRecord] = []
@@ -465,7 +465,7 @@ def clear_terminal_workflow_registry(
     # Snapshot under the registry lock, then release it before attempting any
     # workflow lock. All mutators use workflow -> registry lock order; reversing
     # that order here would deadlock with advance/restart/cancellation.
-    with file_lock(_registry_lock_path(resolved_root)):
+    with tmpfs_file_lock(_registry_lock_path(resolved_root)):
         candidates = [
             record
             for record in _load_records(resolved_root)
@@ -475,7 +475,7 @@ def clear_terminal_workflow_registry(
     def remove_if_still_clearable(
         candidate: WorkflowRegistryRecord, *, require_missing_payload: bool = False
     ) -> bool:
-        with file_lock(_registry_lock_path(resolved_root)):
+        with tmpfs_file_lock(_registry_lock_path(resolved_root)):
             records = _load_records(resolved_root)
             matches = [record for record in records if record.workflow_id == candidate.workflow_id]
             if len(matches) != 1:
@@ -551,10 +551,9 @@ def clear_terminal_workflow_registry(
         ):
             continue
         if not (workspace / "workflow.json").is_file():
-            # Do not acquire the normal lock for a missing workspace: file_lock
-            # would create its directory/lock file. Recheck absence while serializing
-            # against registry writers; a later active/pending upsert removes
-            # the cleared marker and safely resurrects the record.
+            # There is no authoritative workflow payload to fence. Recheck absence
+            # while serializing against registry writers; a later active/pending
+            # upsert removes the cleared marker and safely resurrects the record.
             removed_count += int(remove_if_still_clearable(candidate, require_missing_payload=True))
             continue
         try:

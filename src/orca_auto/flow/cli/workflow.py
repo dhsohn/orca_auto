@@ -11,15 +11,20 @@ from orca_auto.cli_common import (
 )
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config.files import config_env_value
-from orca_auto.core.utils import file_lock, now_utc_iso, timestamped_token
+from orca_auto.core.utils import now_utc_iso, timestamped_token
 from orca_auto.core.utils.coercion import normalize_text
+from orca_auto.core.utils.lock import tmpfs_file_lock
 
 from ..engine_options import WorkflowEngineOptions
 from ..registry import (
     append_workflow_journal_event,
     write_workflow_worker_state,
 )
-from ..runtime import advance_workflow_registry_once, workflow_worker_lock_path
+from ..runtime import (
+    advance_workflow_registry_once,
+    workflow_lease_expires_at,
+    workflow_worker_lock_path,
+)
 from . import workflow_output as _workflow_output
 from .worker_options import WorkflowWorkerOptionConfig, add_workflow_worker_cli_options
 
@@ -146,13 +151,39 @@ def _record_workflow_worker_started(options: _WorkflowWorkerOptions) -> None:
     started_at = now_utc_iso()
     _write_workflow_worker_status(
         options,
-        status="starting",
+        status="running",
         last_heartbeat_at=started_at,
+        lease_expires_at=workflow_lease_expires_at(options.lease_seconds),
     )
     _append_workflow_worker_event(
         options,
         event_type="worker_started",
         metadata={"started_at": started_at, "service_mode": options.service_mode},
+    )
+
+
+def _record_workflow_worker_heartbeat(
+    options: _WorkflowWorkerOptions,
+    payload: dict[str, Any],
+) -> None:
+    cycle_finished_at = normalize_text(payload.get("cycle_finished_at")) or now_utc_iso()
+    metadata = {
+        "discovered_count": int(payload.get("discovered_count", 0) or 0),
+        "advanced_count": int(payload.get("advanced_count", 0) or 0),
+        "skipped_count": int(payload.get("skipped_count", 0) or 0),
+        "failed_count": int(payload.get("failed_count", 0) or 0),
+    }
+    if bool(payload.get("admission_blocked")):
+        metadata["admission_blocked"] = True
+    _write_workflow_worker_status(
+        options,
+        status="running",
+        last_cycle_started_at=normalize_text(payload.get("cycle_started_at")),
+        last_cycle_finished_at=cycle_finished_at,
+        last_heartbeat_at=cycle_finished_at,
+        lease_expires_at=workflow_lease_expires_at(options.lease_seconds),
+        metadata=metadata,
+        minimum_heartbeat_interval_seconds=min(60.0, max(1.0, options.lease_seconds / 2.0)),
     )
 
 
@@ -213,16 +244,6 @@ def _record_workflow_worker_lock_error(
     error: TimeoutError,
 ) -> None:
     stopped_at = now_utc_iso()
-    _write_workflow_worker_status(
-        options,
-        status="lock_error",
-        last_heartbeat_at=stopped_at,
-        metadata={
-            "stop_reason": "worker_lock_error",
-            "error": str(error),
-            "service_mode": options.service_mode,
-        },
-    )
     _append_workflow_worker_event(
         options,
         event_type="worker_lock_error",
@@ -234,7 +255,7 @@ def _record_workflow_worker_lock_error(
 def _run_workflow_worker_loop(options: _WorkflowWorkerOptions) -> int:
     cycle_count = 0
     try:
-        with file_lock(
+        with tmpfs_file_lock(
             workflow_worker_lock_path(options.workflow_root),
             timeout_seconds=options.lock_timeout_seconds,
         ):
@@ -245,6 +266,7 @@ def _run_workflow_worker_loop(options: _WorkflowWorkerOptions) -> int:
                     options,
                     cycle_count=cycle_count,
                 )
+                _record_workflow_worker_heartbeat(options, payload)
                 _emit_worker_payload(
                     payload,
                     json_mode=options.json_mode,

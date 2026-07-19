@@ -85,6 +85,32 @@ def _add_queue_cancel_parser(
     cancel_parser.set_defaults(func=cli_queue.cmd_queue_cancel)
 
 
+def _add_queue_compact_parser(
+    queue_subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    compact_parser = queue_subparsers.add_parser(
+        "compact",
+        help="Compact disposable artifacts from one completed workflow.",
+    )
+    compact_parser.add_argument(
+        "target",
+        help="Completed workflow id or workspace path under the configured workflow root",
+    )
+    compact_parser.add_argument(
+        "--orca_auto-config",
+        "--config",
+        dest="orca_auto_config",
+        help="Path to shared orca_auto.yaml",
+    )
+    compact_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply the compaction plan; without this flag the command is a dry run",
+    )
+    add_json_argument(compact_parser)
+    compact_parser.set_defaults(func=cli_queue.cmd_queue_compact)
+
+
 def _add_queue_worker_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--app",
@@ -126,6 +152,7 @@ def add_queue_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     queue_subparsers = queue_parser.add_subparsers(dest="queue_command", required=True)
     _add_queue_list_parser(queue_subparsers)
     _add_queue_cancel_parser(queue_subparsers)
+    _add_queue_compact_parser(queue_subparsers)
     _add_queue_worker_parser(queue_subparsers)
 
 

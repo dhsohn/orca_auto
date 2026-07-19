@@ -8,12 +8,20 @@ from typing import Any, cast
 
 import pytest
 
+from orca_auto.core.artifacts import JOB_REPORT_JSON_FILE, JOB_REPORT_MD_FILE
 from orca_auto.core.config import CommonResourceConfig, CommonRuntimeConfig
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 from orca_auto.core.engine_runner import engine_runtime_identity
 from orca_auto.core.engines import own_engine_accept_entry
 from orca_auto.core.indexing import get_job_location, list_job_locations
-from orca_auto.core.queue import dequeue_next, enqueue, list_queue, mark_cancelled, request_cancel
+from orca_auto.core.queue import (
+    dequeue_next,
+    enqueue,
+    list_queue,
+    mark_cancelled,
+    mark_completed,
+    request_cancel,
+)
 from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
@@ -25,12 +33,8 @@ from orca_auto.core.queue.types import QueueStatus
 from orca_auto.flow.engines.crest import queue_runtime as queue_cmd
 from orca_auto.flow.engines.crest.runner import CrestRunResult
 from orca_auto.flow.engines.crest.state import (
-    REPORT_JSON_FILE_NAME,
-    REPORT_MD_FILE_NAME,
     STATE_FILE_NAME,
-    load_report_json,
     load_state,
-    write_report_json,
     write_state,
 )
 from tests.engine_artifact_helpers import artifact_payload
@@ -263,19 +267,17 @@ def test_terminal_adoption_finalizes_racing_cancel_consistently(
     assert cancelled.cancel_requested is False
     assert [row["status"] for row in upserts] == ["cancelled"]
     persisted_state = load_state(job.job_dir)
-    persisted_report = load_report_json(job.job_dir)
     assert persisted_state is not None
-    assert persisted_report is not None
     assert persisted_state["status"]["state"] == "cancelled"
-    assert persisted_report["status"]["state"] == "cancelled"
-    assert "Status: `cancelled`" in (job.job_dir / REPORT_MD_FILE_NAME).read_text(encoding="utf-8")
+    assert not (job.job_dir / JOB_REPORT_JSON_FILE).exists()
+    assert not (job.job_dir / JOB_REPORT_MD_FILE).exists()
 
 
-def test_worker_rejects_report_older_than_exact_running_state(
+def test_worker_rejects_nonterminal_exact_state(
     queue_env: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    job = _enqueue_job(queue_env, task_id="running-state-stale-report", molecule_key="mol")
+    job = _enqueue_job(queue_env, task_id="running-state", molecule_key="mol")
     running = dequeue_next(queue_env.allowed_root)
     assert running is not None
     common_fields: dict[str, Any] = {
@@ -296,14 +298,6 @@ def test_worker_rejects_report_older_than_exact_running_state(
             reason="current_attempt",
         ),
     )
-    write_report_json(
-        job.job_dir,
-        artifact_payload(
-            **common_fields,
-            status="completed",
-            reason="stale_attempt",
-        ),
-    )
     upserts: list[dict[str, object]] = []
     monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
 
@@ -317,7 +311,7 @@ def test_worker_rejects_report_older_than_exact_running_state(
     assert upserts == []
 
 
-def test_worker_rejects_report_when_exact_state_status_is_malformed(
+def test_worker_rejects_malformed_exact_state_status(
     queue_env: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -341,12 +335,43 @@ def test_worker_rejects_report_when_exact_state_status_is_malformed(
     )
     malformed_state["status"] = None
     write_state(job.job_dir, malformed_state)
-    write_report_json(
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+
+    assert not queue_cmd._adopt_terminal_artifacts(
+        queue_env.cfg,
+        queue_env.allowed_root,
+        running,
+    )
+    [unchanged] = list_queue(queue_env.allowed_root)
+    assert unchanged.status == QueueStatus.RUNNING
+    assert upserts == []
+
+
+def test_worker_rejects_completed_state_with_nonzero_exit(
+    queue_env: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _enqueue_job(queue_env, task_id="invalid-completed-state", molecule_key="mol")
+    running = dequeue_next(queue_env.allowed_root)
+    assert running is not None
+    running = replace(running, started_at="2026-07-13T01:00:00+00:00")
+    write_state(
         job.job_dir,
         artifact_payload(
-            **common_fields,
+            engine="crest",
+            job_id=running.task_id,
+            queue_id=running.queue_id,
+            app_name=running.app_name,
+            task_id=running.task_id,
+            generation=queue_entry_generation_token(running),
+            job_dir=str(job.job_dir),
             status="completed",
-            reason="stale_attempt",
+            reason="completed",
+            exit_code=1,
+            primary_path=str(job.selected_xyz),
+            updated_at="2026-07-13T02:00:00+00:00",
+            engine_payload={"mode": "standard", "molecule_key": "mol"},
         ),
     )
     upserts: list[dict[str, object]] = []
@@ -362,11 +387,57 @@ def test_worker_rejects_report_when_exact_state_status_is_malformed(
     assert upserts == []
 
 
-def test_terminal_adoption_rebuilds_foreign_state_from_exact_report(
+def test_durable_completed_row_does_not_promote_running_state(
     queue_env: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    job = _enqueue_job(queue_env, task_id="crest-current-report", molecule_key="mol")
+    job = _enqueue_job(queue_env, task_id="terminal-running-state", molecule_key="mol")
+    running = dequeue_next(queue_env.allowed_root)
+    assert running is not None
+    write_state(
+        job.job_dir,
+        artifact_payload(
+            engine="crest",
+            job_id=running.task_id,
+            queue_id=running.queue_id,
+            app_name=running.app_name,
+            task_id=running.task_id,
+            generation=queue_entry_generation_token(running),
+            job_dir=str(job.job_dir),
+            status="running",
+            reason="",
+            primary_path=str(job.selected_xyz),
+            updated_at="2999-07-13T02:00:00+00:00",
+            engine_payload={"mode": "standard", "molecule_key": "mol"},
+        ),
+    )
+    terminal = mark_completed(
+        queue_env.allowed_root,
+        running.queue_id,
+        expected_entry=running,
+    )
+    assert terminal is not None
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
+
+    assert not queue_cmd._adopt_terminal_artifacts(
+        queue_env.cfg,
+        queue_env.allowed_root,
+        terminal,
+    )
+    [persisted] = list_queue(queue_env.allowed_root)
+    state = load_state(job.job_dir)
+    assert persisted.status == QueueStatus.COMPLETED
+    assert persisted.metadata["terminal_repair_blocked_reason"] == "terminal_state_unrecoverable"
+    assert state is not None and state["status"]["state"] == "running"
+    assert upserts == []
+
+
+def test_terminal_adoption_rejects_foreign_state(
+    queue_env: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _enqueue_job(queue_env, task_id="crest-foreign-state", molecule_key="mol")
     running = dequeue_next(queue_env.allowed_root)
     assert running is not None
     write_state(
@@ -384,38 +455,19 @@ def test_terminal_adoption_rebuilds_foreign_state_from_exact_report(
             engine_payload={"mode": "standard", "molecule_key": "foreign"},
         ),
     )
-    write_report_json(
-        job.job_dir,
-        artifact_payload(
-            engine="crest",
-            job_id=running.task_id,
-            queue_id=running.queue_id,
-            app_name=running.app_name,
-            task_id=running.task_id,
-            generation=queue_entry_generation_token(running),
-            status="completed",
-            reason="current_completed",
-            primary_path=str(job.selected_xyz),
-            resource_request={"max_cores": 4, "max_memory_gb": 16},
-            updated_at="2999-01-01T00:00:01+00:00",
-            engine_payload={"mode": "standard", "molecule_key": "mol"},
-        ),
-    )
-    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda *_args, **_kwargs: None)
+    upserts: list[dict[str, object]] = []
+    monkeypatch.setattr(queue_cmd, "upsert_job_record", lambda _cfg, **kw: upserts.append(kw))
 
-    assert queue_cmd._adopt_terminal_artifacts(
+    assert not queue_cmd._adopt_terminal_artifacts(
         queue_env.cfg,
         queue_env.allowed_root,
         running,
     )
     state = load_state(job.job_dir)
-    report = load_report_json(job.job_dir)
-    assert state is not None and report is not None
-    assert state["job"]["id"] == running.task_id
-    assert state["job"]["queue_id"] == running.queue_id
-    assert report["job"]["id"] == running.task_id
-    assert state["status"]["state"] == report["status"]["state"] == "completed"
-    assert "Status: `completed`" in (job.job_dir / REPORT_MD_FILE_NAME).read_text(encoding="utf-8")
+    assert state is not None
+    assert state["job"]["id"] == "foreign-job"
+    assert [entry.status for entry in list_queue(queue_env.allowed_root)] == [QueueStatus.RUNNING]
+    assert upserts == []
 
 
 def test_worker_repairs_crest_publication_before_claim(
@@ -536,19 +588,13 @@ def test_process_one_completed_updates_queue_artifacts_index_without_organizing(
     assert _status(state_payload)["reason"] == "ok"
     assert _engine_payload(state_payload)["molecule_key"] == "selected_input"
     assert _engine_payload(state_payload)["retained_conformer_count"] == 2
-
-    report_payload = _read_json(job.job_dir / REPORT_JSON_FILE_NAME)
-    assert _status(report_payload)["state"] == "completed"
-    assert _status(report_payload)["reason"] == "ok"
-    assert _engine_payload(report_payload)["mode"] == "nci"
-    assert _artifacts(report_payload)["manifest_path"] == str(manifest_path.resolve())
-    assert _engine_payload(report_payload)["retained_conformer_paths"] == list(
+    assert _engine_payload(state_payload)["mode"] == "nci"
+    assert _artifacts(state_payload)["manifest_path"] == str(manifest_path.resolve())
+    assert _engine_payload(state_payload)["retained_conformer_paths"] == list(
         completed_result.retained_conformer_paths
     )
-
-    report_md = (job.job_dir / REPORT_MD_FILE_NAME).read_text(encoding="utf-8")
-    assert "Queue ID" in report_md
-    assert "crest_conformers.xyz" in report_md
+    assert not (job.job_dir / JOB_REPORT_JSON_FILE).exists()
+    assert not (job.job_dir / JOB_REPORT_MD_FILE).exists()
 
     records = list_job_locations(queue_env.allowed_root)
     assert len(records) == 1
@@ -608,18 +654,16 @@ def test_process_one_runner_failure_marks_failed_and_writes_failure_artifacts(
     assert _status(state_payload)["reason"] == "runner_error:boom"
     assert _engine_payload(state_payload)["molecule_key"] == "fixed-key"
     assert _resources(state_payload)["request"] == {"max_cores": 4, "max_memory_gb": 16}
-
-    report_payload = _read_json(job.job_dir / REPORT_JSON_FILE_NAME)
-    assert _status(report_payload)["state"] == "failed"
-    assert _status(report_payload)["reason"] == "runner_error:boom"
-    assert _engine_payload(report_payload)["command"] == []
-    assert _artifacts(report_payload)["manifest_path"] == str(manifest_path.resolve())
-    assert _artifacts(report_payload)["stdout_log"] == str(
+    assert _engine_payload(state_payload)["command"] == []
+    assert _artifacts(state_payload)["manifest_path"] == str(manifest_path.resolve())
+    assert _artifacts(state_payload)["stdout_log"] == str(
         (job.job_dir / "crest.stdout.log").resolve()
     )
-    assert _artifacts(report_payload)["stderr_log"] == str(
+    assert _artifacts(state_payload)["stderr_log"] == str(
         (job.job_dir / "crest.stderr.log").resolve()
     )
+    assert not (job.job_dir / JOB_REPORT_JSON_FILE).exists()
+    assert not (job.job_dir / JOB_REPORT_MD_FILE).exists()
 
     record = get_job_location(queue_env.allowed_root, "job-failed")
     assert record is not None
@@ -701,11 +745,9 @@ def test_process_one_cancel_requested_terminates_and_marks_cancelled(
     state_payload = _read_json(job.job_dir / STATE_FILE_NAME)
     assert _status(state_payload)["state"] == "cancelled"
     assert _status(state_payload)["reason"] == "cancel_requested"
-
-    report_payload = _read_json(job.job_dir / REPORT_JSON_FILE_NAME)
-    assert _status(report_payload)["state"] == "cancelled"
-    assert _status(report_payload)["reason"] == "cancel_requested"
-    assert _status(report_payload)["exit_code"] == 143
+    assert _status(state_payload)["exit_code"] == 143
+    assert not (job.job_dir / JOB_REPORT_JSON_FILE).exists()
+    assert not (job.job_dir / JOB_REPORT_MD_FILE).exists()
 
     record = get_job_location(queue_env.allowed_root, "job-cancelled")
     assert record is not None
@@ -884,7 +926,7 @@ def test_queue_worker_reconcile_orphaned_cancel_requested_marks_cancelled(
     assert updated.error == "cancel_requested"
 
 
-def test_terminal_reconcile_repairs_partial_cancelled_artifacts(
+def test_terminal_reconcile_repairs_cancelled_index_from_state_only(
     queue_env: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -918,10 +960,6 @@ def test_terminal_reconcile_repairs_partial_cancelled_artifacts(
             reason="cancel_requested",
         ),
     )
-    write_report_json(
-        job.job_dir,
-        artifact_payload(**common_fields, status="completed", reason="completed"),
-    )
     upserts: list[dict[str, object]] = []
     monkeypatch.setattr(
         queue_cmd,
@@ -933,8 +971,8 @@ def test_terminal_reconcile_repairs_partial_cancelled_artifacts(
     queue_cmd._sync_terminal_running_entries(SimpleNamespace(cfg=queue_env.cfg))
 
     state = load_state(job.job_dir)
-    report = load_report_json(job.job_dir)
-    assert state is not None and report is not None
-    assert state["status"]["state"] == report["status"]["state"] == "cancelled"
+    assert state is not None
+    assert state["status"]["state"] == "cancelled"
     assert upserts[-1]["status"] == "cancelled"
-    assert "Status: `cancelled`" in (job.job_dir / REPORT_MD_FILE_NAME).read_text(encoding="utf-8")
+    assert not (job.job_dir / JOB_REPORT_JSON_FILE).exists()
+    assert not (job.job_dir / JOB_REPORT_MD_FILE).exists()
