@@ -363,6 +363,7 @@ def test_crest_ram_scratch_publishes_retained_ensemble_and_omits_work_tree(
     )
     (job_dir / MANIFEST_FILE_NAME).unlink()
     popen_cwd: list[Path] = []
+    popen_home: list[Path] = []
 
     class _FakeProcess:
         def poll(self) -> int:
@@ -372,6 +373,11 @@ def test_crest_ram_scratch_publishes_retained_ensemble_and_omits_work_tree(
         del args
         cwd = Path(kwargs["cwd"])
         popen_cwd.append(cwd)
+        home = Path(kwargs["env"]["HOME"])
+        config_home = Path(kwargs["env"]["XDG_CONFIG_HOME"])
+        popen_home.append(home)
+        home.joinpath("engine-cache").write_text("tmpfs\n", encoding="utf-8")
+        config_home.joinpath("engine.conf").write_text("tmpfs\n", encoding="utf-8")
         (cwd / "crest_conformers.xyz").write_bytes(selected_xyz.read_bytes())
         work_tree = cwd / "METADYN"
         work_tree.mkdir()
@@ -393,10 +399,13 @@ def test_crest_ram_scratch_publishes_retained_ensemble_and_omits_work_tree(
 
     assert len(popen_cwd) == 1
     assert popen_cwd[0].is_relative_to(scratch_root)
+    assert popen_home[0].parent == popen_cwd[0]
     assert not (job_dir / MANIFEST_FILE_NAME).exists()
     assert (job_dir / "crest_conformers.xyz").is_file()
     assert (job_dir / "crest.stdout.log").is_file()
     assert not (job_dir / "METADYN").exists()
+    assert not (job_dir / ".orca_auto_runtime_home" / "engine-cache").exists()
+    assert not (job_dir / ".orca_auto_runtime_home" / ".config" / "engine.conf").exists()
     assert result.status == "completed"
     assert result.scratch_provenance["used"] is True
     assert "METADYN" in result.scratch_provenance["omitted_transient_files"]

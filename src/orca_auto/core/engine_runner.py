@@ -6,10 +6,12 @@ import os
 import re
 import shutil
 import stat
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.config import engines as _config_engines
+from orca_auto.core.engine_scratch import SCRATCH_RUNTIME_HOME_DIR_NAME
 from orca_auto.core.paths import (
     validate_configured_executable_path,
     validate_executable_file,
@@ -295,6 +297,50 @@ def verified_engine_runtime_environment(
         label="engine runtime configuration directory",
     )
     return environment
+
+
+def scratch_engine_runtime_environment(
+    scratch_dir: str | Path,
+    environment: Mapping[str, str],
+) -> dict[str, str]:
+    """Move engine-owned HOME state into one private scratch workspace."""
+
+    allowed_keys = {*_RUNTIME_ENV_KEYS, "HOME", "XDG_CONFIG_HOME", "LC_ALL", "LANG"}
+    if set(environment) - allowed_keys:
+        raise ValueError("Engine runtime environment has unsupported fields")
+    rebased: dict[str, str] = {}
+    for key, value in environment.items():
+        if not isinstance(key, str) or not isinstance(value, str) or "\x00" in value:
+            raise ValueError("Engine runtime environment must contain plain strings")
+        rebased[key] = value
+
+    resolved_scratch_dir = Path(scratch_dir).expanduser().resolve()
+    if not resolved_scratch_dir.is_dir():
+        raise ValueError("Engine scratch workspace must be an existing directory")
+    from orca_auto.core.engine_process import (
+        ensure_confined_directory,
+        recreate_confined_directory,
+    )
+
+    runtime_home = recreate_confined_directory(
+        resolved_scratch_dir,
+        resolved_scratch_dir / SCRATCH_RUNTIME_HOME_DIR_NAME,
+        label="engine scratch runtime home",
+    )
+    runtime_config = ensure_confined_directory(
+        resolved_scratch_dir,
+        runtime_home / ".config",
+        label="engine scratch runtime configuration directory",
+    )
+    runtime_home.chmod(0o700)
+    runtime_config.chmod(0o700)
+    rebased.update(
+        {
+            "HOME": str(runtime_home),
+            "XDG_CONFIG_HOME": str(runtime_config),
+        }
+    )
+    return rebased
 
 
 def resource_actual_dict(resource_request: dict[str, int]) -> dict[str, int]:

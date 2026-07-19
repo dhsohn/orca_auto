@@ -30,6 +30,7 @@ from orca_auto.core.utils.lock import file_lock_at
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
 
 SCRATCH_MANIFEST_FILE_NAME = ".orca_auto_scratch.json"
+SCRATCH_RUNTIME_HOME_DIR_NAME = ".orca_auto_scratch_runtime_home"
 SCRATCH_WORKSPACE_PREFIX = "attempt-"
 _SCRATCH_ROOT_PARENT = Path("/dev/shm")
 _SCRATCH_ROOT_LOCK_FILE_NAME = ".orca_auto_scratch.lock"
@@ -44,6 +45,7 @@ _TRANSIENT_FILE_RE = re.compile(r"(?:^|\.)tmp(?:\.|$)", re.IGNORECASE)
 _SCRATCH_CONTROL_FILE_NAMES = frozenset(
     {
         SCRATCH_MANIFEST_FILE_NAME,
+        SCRATCH_RUNTIME_HOME_DIR_NAME,
         "orca.process.json",
         ".orca.process.lock",
     }
@@ -1516,6 +1518,7 @@ __all__ = [
     "EngineScratchError",
     "EngineScratchPolicy",
     "EngineScratchWorkspace",
+    "SCRATCH_RUNTIME_HOME_DIR_NAME",
     "OrcaScratchError",
     "OrcaScratchPolicy",
     "OrcaScratchWorkspace",

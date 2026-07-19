@@ -981,6 +981,13 @@ def test_runner_executes_in_scratch_and_publishes_only_canonical_outputs(
     def observe_start(*args: Any, **kwargs: Any) -> Any:
         observed["command"] = tuple(args[0])
         observed["cwd"] = Path(kwargs["cwd"])
+        observed["home"] = Path(kwargs["base_env"]["HOME"])
+        observed["xdg_config_home"] = Path(kwargs["base_env"]["XDG_CONFIG_HOME"])
+        observed["home"].joinpath("engine-cache").write_text("tmpfs\n", encoding="utf-8")
+        observed["xdg_config_home"].joinpath("engine.conf").write_text(
+            "tmpfs\n",
+            encoding="utf-8",
+        )
         launched = original_start(*args, **kwargs)
         (observed["cwd"] / "charges").write_bytes(b"x" * 4096)
         return launched
@@ -1013,6 +1020,8 @@ def test_runner_executes_in_scratch_and_publishes_only_canonical_outputs(
     execution_dir = Path(result.execution_dir)
     process_dir = observed["cwd"]
     assert process_dir.parent == scratch_root
+    assert observed["home"].parent == process_dir
+    assert observed["xdg_config_home"].parent == observed["home"]
     assert not process_dir.exists()
     assert Path(observed["command"][1]).parent == process_dir
     assert Path(observed["command"][3]).parent == process_dir
@@ -1034,6 +1043,8 @@ def test_runner_executes_in_scratch_and_publishes_only_canonical_outputs(
     assert all(
         Path(identity["path"]).parent == execution_dir for identity in result.artifacts.values()
     )
+    assert not (execution_dir / ".orca_auto_runtime_home" / "engine-cache").exists()
+    assert not (execution_dir / ".orca_auto_runtime_home" / ".config" / "engine.conf").exists()
     provenance = result.engine_payload["scratch_provenance"]
     assert provenance["used"] is True
     assert provenance["filesystem"] == "tmpfs"
@@ -1048,6 +1059,46 @@ def test_runner_executes_in_scratch_and_publishes_only_canonical_outputs(
     assert provenance["omitted_transient_files"] == ["charges"]
     assert provenance["omitted_transient_bytes"] == 4096
     assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
+
+
+@pytest.mark.parametrize("interrupt_type", [KeyboardInterrupt, SystemExit])
+def test_scratch_publication_failure_preserves_original_base_exception(
+    runtime_case_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    interrupt_type: type[BaseException],
+) -> None:
+    case = runtime_case_factory(mode="success")
+    submitted = _submit(case)
+    queued = _entry(case, submitted["queue_id"])
+    cfg, scratch_root = _scratch_enabled_config(case, monkeypatch)
+
+    def interrupt_run(**_kwargs: Any) -> Any:
+        raise interrupt_type()
+
+    def fail_publication(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError("injected publication failure")
+
+    monkeypatch.setattr(xtb_md_runner, "_run_process", interrupt_run)
+    monkeypatch.setattr(
+        xtb_md_runner,
+        "publish_engine_scratch_workspace",
+        fail_publication,
+    )
+
+    with pytest.raises(interrupt_type) as caught:
+        run_xtb_md_attempt(
+            cfg,
+            queued,
+            execution_snapshot=queued.metadata["execution_snapshot"],
+            admission_root=case.admission_root,
+            admission_token="unused-before-process-launch",
+            should_cancel=lambda: False,
+            shutdown_requested=lambda: False,
+        )
+
+    assert isinstance(caught.value.__cause__, OSError)
+    attempts = [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")]
+    assert len(attempts) == 1
 
 
 def test_scratch_false_success_is_published_then_rejected(
