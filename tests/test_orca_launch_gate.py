@@ -16,6 +16,7 @@ def _run_launch_gate(
     *,
     cwd: Path,
     release: bytes,
+    clean_startup: bool = False,
 ) -> subprocess.CompletedProcess[bytes]:
     gate_path = Path(launch_gate.__file__).resolve()
     gate_fd = os.open(gate_path, os.O_RDONLY | os.O_NONBLOCK)
@@ -31,15 +32,20 @@ def _run_launch_gate(
                 "EXPECTED_EXECUTABLE_INODE": str(executable_details.st_ino),
             }
         )
-        return subprocess.run(
+        command = ["/proc/self/exe"]
+        if clean_startup:
+            command.append("-S")
+        command.extend(
             [
-                "/proc/self/exe",
                 f"/proc/self/fd/{gate_fd}",
                 str(gate_fd),
                 executable_display,
                 str(executable_fd),
                 input_name,
-            ],
+            ]
+        )
+        return subprocess.run(
+            command,
             cwd=cwd,
             input=release,
             env=environment,
@@ -93,6 +99,26 @@ def test_launch_gate_eof_never_starts_engine(tmp_path: Path) -> None:
 
     assert completed.returncode == 125
     assert not sentinel.exists()
+
+
+def test_launch_gate_clean_startup_does_not_import_package_siblings(tmp_path: Path) -> None:
+    executable = tmp_path / "fake_orca"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    executable_fd = executable.open("rb")
+    try:
+        completed = _run_launch_gate(
+            executable_fd.fileno(),
+            str(executable),
+            "job.inp",
+            cwd=tmp_path,
+            release=b"",
+            clean_startup=True,
+        )
+    finally:
+        executable_fd.close()
+
+    assert completed.returncode == 125
 
 
 def test_launch_gate_executes_engine_only_after_release(tmp_path: Path) -> None:

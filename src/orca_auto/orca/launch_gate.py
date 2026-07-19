@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import _signal  # type: ignore[import-not-found]
 import os
-import signal
 import stat
 import sys
 
@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         return exit_code
     signal_number = -exit_code
     try:
-        signal.signal(signal_number, signal.SIG_DFL)
+        _signal.signal(signal_number, _signal.SIG_DFL)
     except (OSError, ValueError):
         pass
     os.kill(os.getpid(), signal_number)
