@@ -468,8 +468,13 @@ def run_xtb_md_attempt(
             max_memory_gb=resources["max_memory_gb"],
         )
         process_dir = scratch_workspace.path if scratch_workspace is not None else active_dir
+        process_environment = runtime_environment
         process_command = reported_command
         if scratch_workspace is not None:
+            process_environment = engine_runner.scratch_engine_runtime_environment(
+                scratch_workspace.path,
+                runtime_environment,
+            )
             process_command = build_xtb_md_command(
                 executable=executable,
                 input_xyz=scratch_workspace.scratch_input,
@@ -484,7 +489,7 @@ def run_xtb_md_attempt(
             durable_execution_dir=active_dir,
             manifest=manifest,
             resources=resources,
-            runtime_environment=runtime_environment,
+            runtime_environment=process_environment,
             admission_root=admission_root,
             admission_token=admission_token,
             should_cancel=should_cancel,
@@ -563,7 +568,7 @@ def run_xtb_md_attempt(
             engine_payload=engine_payload,
         )
     except BaseException as caught:  # noqa: BLE001
-        error = caught
+        publication_error: BaseException | None = None
         if scratch_workspace is not None and not scratch_publication_attempted:
             scratch_publication_attempted = True
             try:
@@ -571,8 +576,8 @@ def run_xtb_md_attempt(
                     scratch_workspace,
                     logger=LOGGER,
                 )
-            except BaseException as publication_error:  # noqa: BLE001
-                error = publication_error
+            except BaseException as caught_publication_error:  # noqa: BLE001
+                publication_error = caught_publication_error
                 scratch_provenance = {
                     "used": True,
                     "filesystem": "tmpfs",
@@ -590,10 +595,13 @@ def run_xtb_md_attempt(
                 "filesystem": "tmpfs",
                 "publication_status": "unresolved",
             }
-        if not isinstance(error, Exception):
-            if error is caught:
-                raise
-            raise error from caught
+        if not isinstance(caught, Exception):
+            if publication_error is not None:
+                raise caught from publication_error
+            raise
+        if publication_error is not None and not isinstance(publication_error, Exception):
+            raise publication_error from caught
+        error = publication_error if publication_error is not None else caught
         engine_payload = {"scratch_provenance": scratch_provenance} if scratch_provenance else {}
         return XtbMdRunResult(
             status="failed",

@@ -678,6 +678,12 @@ def start_crest_job(
             publish_name=_CREST_SCRATCH_PUBLICATION_NAMES.__contains__,
         )
         execution_dir = scratch_workspace.path if scratch_workspace is not None else job_dir
+        process_environment = runtime_environment
+        if scratch_workspace is not None:
+            process_environment = _engine_runner.scratch_engine_runtime_environment(
+                scratch_workspace.path,
+                runtime_environment,
+            )
         stdout_log = execution_dir / "crest.stdout.log"
         stderr_log = execution_dir / "crest.stderr.log"
         resolved_stdout_log = str(stdout_log.resolve())
@@ -690,7 +696,7 @@ def start_crest_job(
             stdout_log=stdout_log,
             stderr_log=stderr_log,
             max_cores=resource_request["max_cores"],
-            base_env=runtime_environment,
+            base_env=process_environment,
             now_utc_iso_fn=now_utc_iso,
             popen_fn=subprocess.Popen,
             stdin_value=subprocess.DEVNULL,

@@ -832,6 +832,12 @@ def start_xtb_job(
             publish_name=lambda name: _publish_xtb_scratch_name(resolved_job_type, name),
         )
         execution_dir = scratch_workspace.path if scratch_workspace is not None else job_dir
+        process_environment = runtime_environment
+        if scratch_workspace is not None:
+            process_environment = _engine_runner.scratch_engine_runtime_environment(
+                scratch_workspace.path,
+                runtime_environment,
+            )
         stdout_log = execution_dir / "xtb.stdout.log"
         stderr_log = execution_dir / "xtb.stderr.log"
         resolved_stdout_log = str(stdout_log.resolve())
@@ -844,7 +850,7 @@ def start_xtb_job(
             stdout_log=stdout_log,
             stderr_log=stderr_log,
             max_cores=resource_request["max_cores"],
-            base_env=runtime_environment,
+            base_env=process_environment,
             now_utc_iso_fn=now_utc_iso,
             popen_fn=subprocess.Popen,
             stdin_value=subprocess.DEVNULL,

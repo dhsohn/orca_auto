@@ -1152,6 +1152,7 @@ def test_xtb_ram_scratch_publishes_only_canonical_outputs(
     )
     (job_dir / "xtb_job.yaml").unlink()
     popen_cwd: list[Path] = []
+    popen_home: list[Path] = []
 
     class _FakeProcess:
         def poll(self) -> int:
@@ -1161,6 +1162,11 @@ def test_xtb_ram_scratch_publishes_only_canonical_outputs(
         del args
         cwd = Path(kwargs["cwd"])
         popen_cwd.append(cwd)
+        home = Path(kwargs["env"]["HOME"])
+        config_home = Path(kwargs["env"]["XDG_CONFIG_HOME"])
+        popen_home.append(home)
+        home.joinpath("engine-cache").write_text("tmpfs\n", encoding="utf-8")
+        config_home.joinpath("engine.conf").write_text("tmpfs\n", encoding="utf-8")
         (cwd / "xtbopt.xyz").write_bytes(selected_xyz.read_bytes())
         (cwd / ".xtboptok").write_text("", encoding="utf-8")
         (cwd / "large-intermediate.tmp").write_bytes(b"temporary")
@@ -1196,11 +1202,14 @@ def test_xtb_ram_scratch_publishes_only_canonical_outputs(
 
     assert len(popen_cwd) == 1
     assert popen_cwd[0].is_relative_to(scratch_root)
+    assert popen_home[0].parent == popen_cwd[0]
     assert not (job_dir / "xtb_job.yaml").exists()
     assert (job_dir / "xtbopt.xyz").is_file()
     assert (job_dir / ".xtboptok").is_file()
     assert (job_dir / "xtb.stdout.log").is_file()
     assert not (job_dir / "large-intermediate.tmp").exists()
+    assert not (job_dir / ".orca_auto_runtime_home" / "engine-cache").exists()
+    assert not (job_dir / ".orca_auto_runtime_home" / ".config" / "engine.conf").exists()
     assert result.status == "completed"
     assert result.scratch_provenance["used"] is True
     assert "large-intermediate.tmp" in result.scratch_provenance["omitted_transient_files"]
