@@ -136,6 +136,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Removed
 
+- Removed `queue list --watch`, its `--interval` option, and the display-only
+  system/per-job CPU, RAM, and load samplers. Ordinary `queue list`, JSON,
+  cancellation, durable admission, execution memory limits, and RAM-scratch
+  headroom checks are unchanged.
 - Internal over-engineering residue identified by the 2026-07-17 audit
   (no public CLI, config, or artifact contract changes):
   - The inert ORCA retry-recipe scaffolding: `retry_recipes.py` (a no-op
@@ -481,11 +485,6 @@ migration.
   lease that was eventually claimed and run without any published record.
   Live publisher leases are left untouched, and a row whose repair fails is
   parked repair-pending and stays unclaimable instead of running.
-- `queue list --watch` now keeps system and per-job CPU/RAM sampling active on a
-  real terminal when `NO_COLOR` or `--no-color` disables ANSI painting; piped,
-  JSON, and messenger output remain unchanged. Per-job CPU counters also retain
-  waited-for child CPU to reduce dropped busy refreshes during short-lived
-  ORCA/xTB/CREST subprocess churn.
 - Restarting the ORCA worker no longer treats historical terminal queue rows as
   fresh active-to-terminal transitions, so stable state/report provenance,
   `run_id`, timestamps, failure reasons, and terminal notifications are preserved;

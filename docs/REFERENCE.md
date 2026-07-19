@@ -745,10 +745,7 @@ with `Status`, `Job ID`, `Detail`, and `Elapsed` columns, where the detail field
 workflow or job intent such as `ts_search(nci)`, `IRC`, or `NEB`. By default, only ORCA child
 jobs are expanded beneath workflow parents; internal xTB/CREST child jobs stay hidden in the
 combined text view to reduce noise, but remain available through `--engine ... --kind job`
-filters and `--json`. The `--watch` view is the exception: any active internal child
-(`running`, `retrying`, or `cancel_requested`) with a live resource sample is shown while it
-consumes an admission slot. Top-level ORCA jobs remain
-top-level entries. The
+filters and `--json`. Top-level ORCA jobs remain top-level entries. The
 `active_simulations` line counts only the currently running
 simulations that consume the shared `scheduler.max_active_simulations` slots.
 
@@ -756,37 +753,17 @@ On an interactive terminal the text view is styled: a summary band replaces the 
 `active_simulations:` line with per-status counts (running, queued, done, failed,
 cancelled), workflow children are drawn with box-drawing tree connectors (`├─`/`└─`)
 instead of plain indentation, and each row carries a status-colored left rail.
-`queue list --watch` shows a spinner and a clock in its banner. These affordances are
-terminal-only: piped text keeps the plain table layout — including the
+These affordances are terminal-only: piped text keeps the plain table layout — including the
 `active_simulations:` line and plain indentation — while `--json` remains machine-readable
-JSON and the messenger `/list` view remains plain. None receives live resource metrics.
-Piped text is ANSI-free unless `FORCE_COLOR` is explicitly set. On a real terminal,
-`NO_COLOR` and `--no-color` keep the released plain table; in `--watch` they disable ANSI
-color painting without disabling live resource observation.
+JSON and the messenger `/list` view remains plain. Piped text is ANSI-free unless
+`FORCE_COLOR` is explicitly set. On a real terminal, `NO_COLOR` and `--no-color` keep the
+released plain table.
 
 The selected bot's list command (Telegram `/list`, Discord `!list`) renders the same table layout and default
 workflow-child visibility policy, except it omits the `ID` column so each row fits on a
 single line on narrow mobile screens. Its actions message offers per-activity cancel
 buttons plus refresh and "clear finished" buttons (the latter equivalent to `/list clear`).
-
-`queue list --watch` continuously refreshes the list until interrupted; `--interval` sets
-the refresh seconds (default 2.0). On an interactive terminal the watch view also draws a
-live system resource line above the table — CPU utilization, RAM used/total, and load
-average with colored block-bar gauges — sampled from Linux `/proc` between refreshes with
-no added dependency. It fails closed: on a host without a readable `/proc` (or for any
-individual field that cannot be read) the line is omitted, and it never appears in piped or
-JSON output. A no-color terminal renders the same values without ANSI color styling. (CPU
-utilization is a delta measurement, so it first appears on the second refresh.) Each running
-job is additionally annotated with its own CPU% and resident
-memory, across every engine (ORCA, internal xTB/CREST, standalone xTB-MD): the usage is
-attributed from the engine PID/PGID the worker records in the durable admission slot —
-validated against its boot id and process start ticks so a recycled id is never
-mis-attributed — and aggregated from `/proc` by process group. CPU accounting includes
-waited-for child time to reduce drops when short-lived engine subprocesses are reaped.
-These live values remain observational approximations: RAM is the sum of current member
-RSS (shared pages can be counted more than once), and the non-atomic `/proc` scan is neither
-a peak nor an allocation limit. `queue list clear` prunes
-completed, failed, and cancelled entries from the unified list.
+`queue list clear` prunes completed, failed, and cancelled entries from the unified list.
 
 ### 7.5 CLI Output and Global Flags
 

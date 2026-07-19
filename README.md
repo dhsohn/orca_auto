@@ -233,12 +233,9 @@ orca_auto bot run              # foreground Telegram/Discord gateway
 `queue list` prints a compact, terminal-width-aware table; workflow children are grouped
 under their parent. On an interactive terminal it adds a styled summary band (per-status
 counts), box-drawing tree connectors for workflow children, and a status-colored left
-rail; the `--watch` view adds a spinner, a clock, a live system CPU/RAM/load gauge, and
-per-running-job CPU/RAM for every engine (sampled from `/proc`, no new dependency). Piped
-output keeps its stable plain layout (`FORCE_COLOR` can explicitly add ANSI). `--json`
-remains machine-readable JSON and ANSI-free, while messenger output stays plain; this
-resource-view change alters neither output contract. On a real terminal,
-`NO_COLOR` and `--no-color` remove ANSI painting without disabling the live CPU/RAM view.
+rail. Piped output keeps its stable plain layout (`FORCE_COLOR` can explicitly add ANSI).
+`--json` remains machine-readable JSON and ANSI-free, while messenger output stays plain.
+On a real terminal, `NO_COLOR` and `--no-color` remove ANSI painting.
 The selected bot mirrors the same application surface
 (Telegram `/list`; Discord `!list`, with matching cancel/help commands) and uses
 provider-native buttons. Discord can optionally accept a compressed run-dir
@@ -248,7 +245,7 @@ and commit receipts are durable and idempotent; an uncertain queue result is pre
 for reconciliation rather than retried or deleted. This is disabled by default and
 gated to allowlisted operators — see the `messenger.discord.uploads` block in
 [config/orca_auto.yaml.example](config/orca_auto.yaml.example). For the full command
-reference — table columns, the `--watch`/`--json`/`--no-color` flags, color and exit
+reference — table columns, the `--json`/`--no-color` flags, color and exit
 behavior, and the messenger bot —
 see [docs/REFERENCE.md](docs/REFERENCE.md) §7.
 

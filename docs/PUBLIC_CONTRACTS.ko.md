@@ -83,7 +83,6 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   대상으로 받을 수 있습니다.
 - 스크립트는 `queue list --json`, `queue cancel --json`, `service status --json`을 사용해야
   합니다.
-- `queue list --watch`는 사람용이며 `--json`과 함께 쓰지 않습니다.
 - `smoke`는 source-checkout 개발자 명령입니다. 옵션 없이 실행하면 fake profile과
   자동 발견한 공유 설정의 `runs_root`를 사용하며, repository tests·Git metadata·
   `runs_root` 중 하나라도 없으면 fail closed합니다.

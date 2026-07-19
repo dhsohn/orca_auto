@@ -37,17 +37,6 @@ def _add_queue_list_parser(
         "--refresh", action="store_true", help="Refresh workflow registry before listing"
     )
     list_parser.add_argument(
-        "--watch",
-        action="store_true",
-        help="Continuously refresh the list until interrupted (Ctrl-C)",
-    )
-    list_parser.add_argument(
-        "--interval",
-        type=float,
-        default=2.0,
-        help="Refresh interval in seconds for --watch (default 2.0)",
-    )
-    list_parser.add_argument(
         "--engine",
         action="append",
         choices=[*known_engine_ids(), "workflow"],
