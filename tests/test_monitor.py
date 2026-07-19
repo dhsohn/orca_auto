@@ -6,8 +6,9 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from orca_auto.core.config import MessengerConfig, TelegramConfig
 from orca_auto.core.messaging import render_telegram
-from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig, TelegramConfig
+from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.dft.monitor import MonitorResult, ParseFailure, ScanReport
 from orca_auto.orca.notifications import (
     _monitor_dft_groups,
@@ -134,7 +135,7 @@ class TestRunMonitor:
         cfg = AppConfig(
             runtime=RetryRuntimeConfig(allowed_root="/tmp/missing"),
             paths=PathsConfig(orca_executable="/usr/bin/orca"),
-            telegram=TelegramConfig(),
+            messenger=MessengerConfig(telegram=TelegramConfig()),
         )
 
         assert _run_monitor(cfg) == 1
@@ -145,7 +146,7 @@ class TestRunMonitor:
         cfg = AppConfig(
             runtime=RetryRuntimeConfig(allowed_root="/tmp/definitely_missing_monitor_root"),
             paths=PathsConfig(orca_executable="/usr/bin/orca"),
-            telegram=TelegramConfig(bot_token="fake", chat_id="123"),
+            messenger=MessengerConfig(telegram=TelegramConfig(bot_token="fake", chat_id="123")),
         )
 
         assert _run_monitor(cfg) == 1
@@ -172,7 +173,7 @@ class TestRunMonitor:
             cfg = AppConfig(
                 runtime=RetryRuntimeConfig(allowed_root=str(allowed)),
                 paths=PathsConfig(orca_executable="/usr/bin/orca"),
-                telegram=TelegramConfig(bot_token="fake", chat_id="123"),
+                messenger=MessengerConfig(telegram=TelegramConfig(bot_token="fake", chat_id="123")),
             )
             result = _run_monitor(cfg)
 
@@ -201,7 +202,7 @@ class TestRunMonitor:
             cfg = AppConfig(
                 runtime=RetryRuntimeConfig(allowed_root=str(allowed)),
                 paths=PathsConfig(orca_executable="/usr/bin/orca"),
-                telegram=TelegramConfig(bot_token="fake", chat_id="123"),
+                messenger=MessengerConfig(telegram=TelegramConfig(bot_token="fake", chat_id="123")),
             )
             result = _run_monitor(cfg)
 
@@ -231,7 +232,7 @@ class TestRunMonitor:
             cfg = AppConfig(
                 runtime=RetryRuntimeConfig(allowed_root=str(allowed)),
                 paths=PathsConfig(orca_executable="/usr/bin/orca"),
-                telegram=TelegramConfig(bot_token="fake", chat_id="123"),
+                messenger=MessengerConfig(telegram=TelegramConfig(bot_token="fake", chat_id="123")),
             )
             result = _run_monitor(cfg)
 
@@ -260,7 +261,7 @@ class TestRunMonitor:
             cfg = AppConfig(
                 runtime=RetryRuntimeConfig(allowed_root=str(allowed)),
                 paths=PathsConfig(orca_executable="/usr/bin/orca"),
-                telegram=TelegramConfig(bot_token="fake", chat_id="123"),
+                messenger=MessengerConfig(telegram=TelegramConfig(bot_token="fake", chat_id="123")),
             )
             result = _run_monitor(cfg)
 

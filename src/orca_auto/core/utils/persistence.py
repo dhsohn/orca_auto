@@ -129,8 +129,7 @@ def fsync_directory(path: str | Path) -> None:
     """Durably publish directory-entry changes when the filesystem supports it."""
 
     flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
+    flags |= os.O_DIRECTORY
 
     try:
         dir_fd = os.open(str(Path(path)), flags)

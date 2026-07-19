@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from orca_auto.core import engine_scratch
-from orca_auto.core.config import ScratchConfig
+from orca_auto.core.config import MessengerConfig, ScratchConfig
 from orca_auto.core.config.engines import (
     WorkflowEngineAppConfig as AppConfig,
 )
@@ -42,7 +42,7 @@ def _cfg(tmp_path: Path) -> AppConfig:
             xtb_executable=str(xtb_executable),
         ),
         resources=CommonResourceConfig(max_cores_per_task=6, max_memory_gb_per_task=14),
-        telegram=TelegramConfig(),
+        messenger=MessengerConfig(telegram=TelegramConfig()),
     )
 
 

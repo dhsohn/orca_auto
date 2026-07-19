@@ -62,17 +62,14 @@ def linux_boot_id(*, proc_root: Path = Path("/proc")) -> str | None:
 
 def _open_proc_pid_directory(pid: int) -> int:
     flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
+    flags |= os.O_DIRECTORY
+    flags |= os.O_CLOEXEC
     return os.open(f"/proc/{pid}", flags)
 
 
 def _read_proc_identity_from_directory_fd(directory_fd: int) -> tuple[int, int, int]:
     flags = os.O_RDONLY
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
+    flags |= os.O_CLOEXEC
     stat_fd = os.open("stat", flags, dir_fd=directory_fd)
     try:
         chunks: list[bytes] = []

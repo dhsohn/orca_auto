@@ -788,75 +788,7 @@ RSS (shared pages can be counted more than once), and the non-atomic `/proc` sca
 a peak nor an allocation limit. `queue list clear` prunes
 completed, failed, and cancelled entries from the unified list.
 
-### 7.5 `queue compact`
-
-Review a dry-run plan first:
-
-```bash
-orca_auto queue compact <completed-workflow>
-orca_auto queue compact <completed-workflow> --json
-```
-
-Apply only the reviewed plan:
-
-```bash
-orca_auto queue compact <completed-workflow> --apply
-```
-
-The target is one completed workflow id or canonical workspace path below the
-configured workflow root (`runs_root` in the shared configuration);
-`--config <path>` selects that configuration.
-The command is a dry run unless `--apply` is explicit. An eligible dry run exits
-0 without changing the workflow. A blocked or ineligible result exits 1. An
-apply request exits 0 only when `applied` is true, including the no-candidate
-case; otherwise it exits 1.
-
-`--json` returns the stable keys `workflow_id`, `workspace_dir`, `eligible`,
-`blocked`, `applied`, `would_remove`, `would_remove_bytes`, `removed`,
-`removed_bytes`, `preserved`, and `reasons`. Each `would_remove` row contains
-`relative_path`, `size`, `engine`, `stage_id`, and `job_id`. A blocked apply can
-report nonempty `removed` and `removed_bytes` when exact candidates were removed
-before a later revalidation failed; the remaining work stays fail-closed.
-
-Eligibility is exact, not inferred from generated reports. The persisted
-workflow must be completed and every stage and task must be terminal; final-child synchronization
-must have a durable completion timestamp; pending, active, cancellation,
-recovery, replay, admission, and snapshot work must be absent. SI publication
-generations may both be absent; if present, the requested and published values
-must match exactly. Exactly one matching completed registry row or cleared
-marker must exist. Every exact-completed internal xTB/CREST child selected for
-compaction, including recorded xTB attempt history, must have canonical matching
-`job_state.json` identity and either its exact completed queue row or exact completed
-index fallback. A state or generation mismatch blocks compaction.
-
-The deletion allowlist contains only the exact `job_report.json` and
-`job_report.md` leaves in those canonical workflow-internal xTB/CREST child
-directories. These files are never lifecycle readers or fallback evidence.
-Report-only children and completed outputs without exact terminal identity are
-unsupported and must be resubmitted. Compaction does not add a compatibility or
-migration reader for them.
-
-The command preserves all other data, including:
-
-- ORCA and standalone xTB-MD public reports;
-- `workflow.json`, `workflow_report.html`, and `flow.yaml`;
-- registry, journal, and cleared-marker state;
-- workflow SI Markdown/CSV and interaction-energy results;
-- every canonical job state, queue, index, admission, snapshot input/intent,
-  process, and PID record;
-- scientific outputs, logs, geometries, provenance, data, and HTML; and
-- every lock file, including `run.lock` and old disk advisory lock files.
-
-This online operation never deletes old disk lock files. A separate offline
-lock cleanup is not implemented.
-
-Apply mode rechecks the workflow gates under the standard mutation locks and
-revalidates each exact leaf immediately before unlinking it. Each leaf deletion
-is independent and idempotent. If apply is interrupted or blocked after a
-partial deletion, rerun the dry run and apply the remaining plan. Compaction
-creates no receipt, journal, or state file.
-
-### 7.6 CLI Output and Global Flags
+### 7.5 CLI Output and Global Flags
 
 - Table output is colorized by status when stdout is a terminal. Color is disabled
   automatically when piped or when `NO_COLOR` is set, and can be forced off with
@@ -879,7 +811,7 @@ creates no receipt, journal, or state file.
   atomically under `runs_root`; uncertain commits are retained and reconciled rather
   than deleted.
 
-### 7.7 `scan-notify`
+### 7.6 `scan-notify`
 
 ```bash
 orca_auto scan-notify
@@ -890,7 +822,7 @@ Behavior:
 - `scan-notify` runs a one-shot scan of the configured ORCA root and sends
   discovery alerts through the active messenger provider, then exits. It is not a live monitor.
 
-### 7.8 `smoke`
+### 7.7 `smoke`
 
 ```bash
 orca_auto smoke
@@ -910,7 +842,7 @@ opt-in with `--profile real-orca` or `--profile real-xtb`, an explicit executabl
 environment variable, and the shared production config; see
 [VALIDATION.md](VALIDATION.md) for the exact commands and limitations.
 
-### 7.9 Long-Running Services
+### 7.8 Long-Running Services
 
 Long-running worker and messenger bot processes are managed through `systemd`
 only. Public CLI commands do not start those services directly.
@@ -1095,21 +1027,11 @@ TS8(NEB-TS)/
     └── job_report.html
 ```
 
-This example is not an exhaustive file listing. New pure advisory synchronization
-files are stored under `/dev/shm/orca_auto-locks-<uid>`, not in the job tree.
-SHA-256 maps pathname and directory-inode identities to a fixed, versioned pool
-of 4096 stripe files in that namespace. Unrelated identities can collide and
-serialize conservatively, but a collision cannot weaken mutual exclusion. The
-same thread reuses an already-held stripe for nested acquisition; other threads
-and processes still serialize on the external flock. A fork child discards
-inherited reentrancy state and lock descriptors before acquiring independently.
-The current protocol never unlinks stripe files while in use and creates at
-most 4096 per owner namespace.
-Old-build `.orca.process.lock` and `.job_state.mutation.lock` files may remain on
-disk but are not read by the new lock protocol. `queue compact` preserves every
-lock file, and no offline old-lock removal command is implemented. While an ORCA process record is active,
-`orca.process.json` is present in its generation, and the job root carries the
-live `job_state.json` until terminal cleanup removes it.
+This example is not an exhaustive file listing. Internal synchronization files
+may also remain: `.orca.process.lock` in the generation and/or job root and
+`.job_state.mutation.lock` at the job root. While an ORCA process record is
+active, `orca.process.json` is present in its generation, and the job root
+carries the live `job_state.json` until terminal cleanup removes it.
 
 The generation's bound `.inp` has the exact selected source basename, so ORCA
 uses the expected output stem rather than adding `.run` or `.bound`. Referenced
@@ -1120,37 +1042,6 @@ root; readers treat those as a legacy fallback, and the next run in the same
 directory removes them when it publishes its generation reports. `run.lock`
 stays at the job root; the mere presence of its file is not proof that a
 process currently owns the lock.
-
-All processes running at one time must use the same lock protocol. Before
-installing this tmpfs-lock build, stop and drain every old-build `orca_auto`
-process: all queue/workflow workers, the bot, direct CLI and maintenance
-commands, and upload handling. Verify that no calculation/process ownership
-remains, then restart from the same build. Standard `orca_auto systemd install`
-and `orca_auto service restart` snapshot all managed units, stop the active
-runtime/queue/bot/workflow units, and verify all four are non-running before an
-install writes or reloads units. They then start and verify the selected runtime
-graph and restore the workflow only if it was active. Any post-drain update or
-start failure leaves the managed graph stopped rather than reviving old
-processes. A per-user, EUID-independent, non-persistent Linux abstract `AF_UNIX`
-socket lock serializes each non-dry-run install or restart from mode query and
-drain through start and restore within one Linux network namespace; lock timeout
-and noncanonical `systemctl` return-code/state pairs fail closed. Supported
-mutation callers, including WSL/native host shells and the supplied systemd
-units, must run in that same network namespace when controlling the same host
-systemd. Container or separate-network-namespace access to host systemd is
-unsupported. Abstract names are permissionless, so a trusted-local-user or
-single-user administrative boundary is required. An untrusted local user can
-pre-bind the name for a fail-closed availability denial, but timeout precedes
-mutation and cannot cause a split-build graph or data damage. No file-lock
-fallback is provided.
-Maintenance installs with `--no-start` or `--no-enable` perform no live
-stop/start; before writing any unit they require all four units to report a known
-non-running state. Active/transitional states or query errors abort
-before the write. Boot selection changes disable the opposite mode before
-enabling the selected mode. An in-place checkout must be drained before code
-sync as documented in `systemd/README.md`. These paths fail closed on systemd
-failures, but cannot discover foreground/manual processes. Never remove the
-tmpfs lock namespace while a service is running.
 
 Important `job_state.json` fields:
 

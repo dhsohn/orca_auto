@@ -77,7 +77,7 @@ def test_cmd_workflow_worker_handles_negative_cycles_and_lock_timeout(monkeypatc
         raise TimeoutError("already running")
         yield
 
-    monkeypatch.setattr(cli_workflow, "tmpfs_file_lock", raising_lock)
+    monkeypatch.setattr(cli_workflow, "file_lock", raising_lock)
     monkeypatch.setattr(
         cli_workflow, "workflow_worker_lock_path", lambda workflow_root: Path("/tmp/worker.lock")
     )
@@ -111,7 +111,7 @@ def test_cmd_workflow_worker_single_cycle_and_keyboard_interrupt(monkeypatch, ca
     def fake_lock(*args: Any, **kwargs: Any):
         yield
 
-    monkeypatch.setattr(cli_workflow, "tmpfs_file_lock", fake_lock)
+    monkeypatch.setattr(cli_workflow, "file_lock", fake_lock)
     monkeypatch.setattr(
         cli_workflow, "workflow_worker_lock_path", lambda workflow_root: Path("/tmp/worker.lock")
     )

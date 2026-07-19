@@ -10,14 +10,14 @@ from ...core.engine_runner import (
     confined_output_identity,
     verify_confined_output_identity,
 )
+from ...core.engine_scratch import (
+    attach_scratch_provenance_mapping_to_exception,
+    scratch_provenance_from_exception,
+)
 from ..completion_rules import detect_completion_mode
 from ..orca_runner import WorkerShutdownInterrupt
 from ..out_analyzer import OutAnalysis, analyze_output
 from ..retry_policy import effective_max_retries
-from ..scratch import (
-    attach_scratch_provenance_mapping_to_exception,
-    scratch_provenance_from_exception,
-)
 from ..state import now_utc_iso, save_state
 from ..state_machine import decide_attempt_outcome
 from ..statuses import AnalyzerStatus, RunStatus

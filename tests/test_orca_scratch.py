@@ -7,12 +7,12 @@ from pathlib import Path
 import pytest
 
 from orca_auto.core import engine_scratch as scratch_mod
-from orca_auto.orca.scratch import (
-    OrcaScratchError,
-    OrcaScratchPolicy,
-    OrcaScratchWorkspace,
-    is_transient_orca_scratch_file,
+from orca_auto.core.engine_scratch import (
+    EngineScratchError,
+    EngineScratchWorkspace,
+    is_transient_scratch_file,
 )
+from orca_auto.orca.scratch import OrcaScratchPolicy
 
 
 def _policy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> OrcaScratchPolicy:
@@ -49,7 +49,7 @@ def test_scratch_publishes_surviving_results_once_and_omits_tmp(
     original_input = selected.read_bytes()
     original_geometry = selected.with_name("input.xyz").read_bytes()
 
-    workspace = OrcaScratchWorkspace.create(policy, selected)
+    workspace = EngineScratchWorkspace.create(policy, selected)
     assert workspace.scratch_input.read_bytes() == original_input
     assert (workspace.path / "input.xyz").read_bytes() == original_geometry
     (workspace.path / "sp.out").write_text("FINAL SINGLE POINT ENERGY -1.0\n")
@@ -96,7 +96,7 @@ def test_scratch_can_pin_immutable_input_separately_from_publication_directory(
     mutable_manifest = durable / "xtb_job.yaml"
     mutable_manifest.write_text("job_type: opt\n", encoding="utf-8")
 
-    workspace = OrcaScratchWorkspace.create(
+    workspace = EngineScratchWorkspace.create(
         policy,
         manifest_snapshot,
         durable_output_dir=durable,
@@ -124,8 +124,8 @@ def test_scratch_rejects_input_outside_separate_publication_directory(
     manifest_snapshot = snapshot_dir / "manifest.json"
     manifest_snapshot.write_text("{}\n", encoding="utf-8")
 
-    with pytest.raises(OrcaScratchError, match="inside its publication directory"):
-        OrcaScratchWorkspace.create(
+    with pytest.raises(EngineScratchError, match="inside its publication directory"):
+        EngineScratchWorkspace.create(
             policy,
             manifest_snapshot,
             durable_output_dir=output_dir,
@@ -138,10 +138,10 @@ def test_scratch_rejects_changed_staged_input(
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
-    workspace = OrcaScratchWorkspace.create(policy, selected)
+    workspace = EngineScratchWorkspace.create(policy, selected)
     (workspace.path / "input.xyz").write_text("1\noptimized\nH 0 0 1\n")
 
-    with pytest.raises(OrcaScratchError, match="modified a staged immutable input"):
+    with pytest.raises(EngineScratchError, match="modified a staged immutable input"):
         workspace.publish()
     assert "input" in selected.with_name("input.xyz").read_text()
     assert workspace.path.exists()
@@ -153,12 +153,12 @@ def test_scratch_refuses_to_publish_when_durable_input_changed(
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
-    workspace = OrcaScratchWorkspace.create(policy, selected)
+    workspace = EngineScratchWorkspace.create(policy, selected)
     selected.write_text("! changed while running\n")
 
-    with pytest.raises(OrcaScratchError, match="changed during scratch run"):
+    with pytest.raises(EngineScratchError, match="changed during scratch run"):
         workspace.publish()
-    with pytest.raises(OrcaScratchError, match="unpublished"):
+    with pytest.raises(EngineScratchError, match="unpublished"):
         workspace.cleanup()
     assert workspace.path.exists()
 
@@ -169,12 +169,12 @@ def test_scratch_refuses_symlink_result_and_retains_workspace(
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
-    workspace = OrcaScratchWorkspace.create(policy, selected)
+    workspace = EngineScratchWorkspace.create(policy, selected)
     outside = tmp_path / "outside"
     outside.write_text("outside")
     (workspace.path / "sp.out").symlink_to(outside)
 
-    with pytest.raises(OrcaScratchError, match="unsupported entry"):
+    with pytest.raises(EngineScratchError, match="unsupported entry"):
         workspace.publish()
     assert workspace.path.exists()
     assert not selected.with_suffix(".out").exists()
@@ -192,8 +192,8 @@ def test_scratch_capacity_guard_removes_unowned_new_workspace(
         lambda _descriptor: 0,
     )
 
-    with pytest.raises(OrcaScratchError, match="insufficient free space"):
-        OrcaScratchWorkspace.create(policy, selected)
+    with pytest.raises(EngineScratchError, match="insufficient free space"):
+        EngineScratchWorkspace.create(policy, selected)
     assert _scratch_attempts(policy.root) == []
 
 
@@ -209,8 +209,8 @@ def test_scratch_memory_headroom_guard_removes_unowned_new_workspace(
         lambda: 1,
     )
 
-    with pytest.raises(OrcaScratchError, match="cannot guarantee RAM headroom"):
-        OrcaScratchWorkspace.create(policy, selected)
+    with pytest.raises(EngineScratchError, match="cannot guarantee RAM headroom"):
+        EngineScratchWorkspace.create(policy, selected)
     assert _scratch_attempts(policy.root) == []
 
 
@@ -235,8 +235,8 @@ def test_stale_workspace_is_preserved_and_blocks_new_attempt(
         )
     )
 
-    with pytest.raises(OrcaScratchError, match="stale workspace"):
-        OrcaScratchWorkspace.create(policy, selected)
+    with pytest.raises(EngineScratchError, match="stale workspace"):
+        EngineScratchWorkspace.create(policy, selected)
 
     assert stale.exists()
 
@@ -268,8 +268,8 @@ def test_invalid_workspace_manifest_is_preserved_and_blocks_new_attempt(
     unresolved.mkdir()
     (unresolved / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).write_text("not json\n")
 
-    with pytest.raises(OrcaScratchError, match="without valid ownership"):
-        OrcaScratchWorkspace.create(policy, selected)
+    with pytest.raises(EngineScratchError, match="without valid ownership"):
+        EngineScratchWorkspace.create(policy, selected)
 
     assert unresolved.exists()
 
@@ -283,8 +283,8 @@ def test_orphaned_durable_publication_entry_is_preserved_and_blocks_launch(
     orphan = selected.parent / f"{scratch_mod._PUBLICATION_BACKUP_PREFIX}orphan"
     orphan.write_bytes(b"unknown prior artifact")
 
-    with pytest.raises(OrcaScratchError, match="unresolved scratch publication entry"):
-        OrcaScratchWorkspace.create(policy, selected)
+    with pytest.raises(EngineScratchError, match="unresolved scratch publication entry"):
+        EngineScratchWorkspace.create(policy, selected)
 
     assert orphan.read_bytes() == b"unknown prior artifact"
 
@@ -316,8 +316,8 @@ def test_journal_names_cannot_escape_generation(
         encoding="utf-8",
     )
 
-    with pytest.raises(OrcaScratchError, match="invalid item"):
-        OrcaScratchWorkspace.create(policy, selected)
+    with pytest.raises(EngineScratchError, match="invalid item"):
+        EngineScratchWorkspace.create(policy, selected)
 
     assert victim.read_text(encoding="utf-8") == "keep\n"
 
@@ -348,8 +348,8 @@ def test_prepared_journal_never_deletes_unverified_target(
         encoding="utf-8",
     )
 
-    with pytest.raises(OrcaScratchError, match="target changed"):
-        OrcaScratchWorkspace.create(policy, selected)
+    with pytest.raises(EngineScratchError, match="target changed"):
+        EngineScratchWorkspace.create(policy, selected)
 
     assert selected.read_bytes() == original
 
@@ -360,14 +360,14 @@ def test_only_one_scratch_attempt_can_exist(
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
-    first = OrcaScratchWorkspace.create(policy, selected)
+    first = EngineScratchWorkspace.create(policy, selected)
 
-    with pytest.raises(OrcaScratchError, match="attempt is active"):
-        OrcaScratchWorkspace.create(policy, selected)
+    with pytest.raises(EngineScratchError, match="attempt is active"):
+        EngineScratchWorkspace.create(policy, selected)
 
     first.publish()
     first.cleanup()
-    second = OrcaScratchWorkspace.create(policy, selected)
+    second = EngineScratchWorkspace.create(policy, selected)
     second.publish()
     second.cleanup()
 
@@ -392,10 +392,10 @@ def test_input_capture_is_not_rebound_between_preflight_and_staging(
         replace_after_capture,
     )
 
-    workspace = OrcaScratchWorkspace.create(policy, selected)
+    workspace = EngineScratchWorkspace.create(policy, selected)
 
     assert workspace.scratch_input.read_bytes() == original
-    with pytest.raises(OrcaScratchError, match="changed during scratch run"):
+    with pytest.raises(EngineScratchError, match="changed during scratch run"):
         workspace.publish()
 
 
@@ -405,7 +405,7 @@ def test_workspace_path_replacement_cannot_publish_forged_results(
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
-    workspace = OrcaScratchWorkspace.create(policy, selected)
+    workspace = EngineScratchWorkspace.create(policy, selected)
     moved = workspace.path.with_name(f"{workspace.path.name}-moved")
     workspace.path.rename(moved)
     workspace.path.mkdir()
@@ -413,7 +413,7 @@ def test_workspace_path_replacement_cannot_publish_forged_results(
         (workspace.path / name).write_bytes((moved / name).read_bytes())
     (workspace.path / "sp.out").write_text("forged\n", encoding="utf-8")
 
-    with pytest.raises(OrcaScratchError, match="workspace pathname identity changed"):
+    with pytest.raises(EngineScratchError, match="workspace pathname identity changed"):
         workspace.publish()
 
     assert not selected.with_suffix(".out").exists()
@@ -428,7 +428,7 @@ def test_generation_path_swap_during_publication_rolls_back_original_set(
     selected = _durable_input(tmp_path)
     original_dir = selected.parent
     moved_dir = tmp_path / "moved-generation"
-    workspace = OrcaScratchWorkspace.create(policy, selected)
+    workspace = EngineScratchWorkspace.create(policy, selected)
     (workspace.path / "sp.out").write_text("new output\n", encoding="utf-8")
 
     original_identity_check = scratch_mod._require_directory_path_identity
@@ -450,7 +450,7 @@ def test_generation_path_swap_during_publication_rolls_back_original_set(
         swap_before_commit_check,
     )
 
-    with pytest.raises(OrcaScratchError, match="pathname identity changed"):
+    with pytest.raises(EngineScratchError, match="pathname identity changed"):
         workspace.publish()
 
     assert not (original_dir / "sp.out").exists()
@@ -467,7 +467,7 @@ def test_multi_file_publication_failure_restores_previous_set(
     selected = _durable_input(tmp_path)
     selected.with_suffix(".gbw").write_bytes(b"old checkpoint")
     selected.with_suffix(".out").write_bytes(b"old output")
-    workspace = OrcaScratchWorkspace.create(policy, selected)
+    workspace = EngineScratchWorkspace.create(policy, selected)
     (workspace.path / "sp.gbw").write_bytes(b"new checkpoint")
     (workspace.path / "sp.out").write_bytes(b"new output")
 
@@ -495,7 +495,7 @@ def test_committed_publication_cleanup_is_retried_without_invalidating_result(
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
     selected.with_suffix(".out").write_bytes(b"old output")
-    workspace = OrcaScratchWorkspace.create(policy, selected)
+    workspace = EngineScratchWorkspace.create(policy, selected)
     (workspace.path / "sp.out").write_bytes(b"new output")
 
     original_unlink = scratch_mod._unlink_at_if_present
@@ -523,7 +523,7 @@ def test_committed_journal_outcome_unknown_is_recovered_as_success(
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
-    workspace = OrcaScratchWorkspace.create(policy, selected)
+    workspace = EngineScratchWorkspace.create(policy, selected)
     (workspace.path / "sp.out").write_bytes(b"new output")
 
     original_write = scratch_mod._atomic_write_json_at
@@ -553,10 +553,10 @@ def test_reserved_runtime_artifact_is_never_published(
     selected = _durable_input(tmp_path)
     state_path = selected.parent / "job_state.json"
     state_path.write_text("durable state\n", encoding="utf-8")
-    workspace = OrcaScratchWorkspace.create(policy, selected)
+    workspace = EngineScratchWorkspace.create(policy, selected)
     (workspace.path / "job_state.json").write_text("scratch state\n", encoding="utf-8")
 
-    with pytest.raises(OrcaScratchError, match="collides with runtime state"):
+    with pytest.raises(EngineScratchError, match="collides with runtime state"):
         workspace.publish()
 
     assert state_path.read_text(encoding="utf-8") == "durable state\n"
@@ -570,7 +570,7 @@ def test_attempt_stem_containing_tmp_does_not_hide_results(
     selected = _durable_input(tmp_path)
     renamed = selected.with_name("molecule.tmp.inp")
     selected.rename(renamed)
-    workspace = OrcaScratchWorkspace.create(policy, renamed)
+    workspace = EngineScratchWorkspace.create(policy, renamed)
     (workspace.path / "molecule.tmp.out").write_text("output\n", encoding="utf-8")
     (workspace.path / "molecule.tmp.gbw").write_bytes(b"checkpoint")
     (workspace.path / "molecule.tmp.EIJ.tmp").write_bytes(b"transient")
@@ -596,4 +596,4 @@ def test_attempt_stem_containing_tmp_does_not_hide_results(
     ],
 )
 def test_transient_orca_scratch_file_classification(name: str, expected: bool) -> None:
-    assert is_transient_orca_scratch_file(name) is expected
+    assert is_transient_scratch_file(name) is expected

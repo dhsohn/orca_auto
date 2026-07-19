@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +9,6 @@ from orca_auto.core.config import (
     CommonResourceConfig,
     MessengerConfig,
     ScratchConfig,
-    TelegramConfig,
     scratch_config_from_runtime_mapping,
 )
 from orca_auto.core.config import engines as _config_engines
@@ -26,7 +25,6 @@ from orca_auto.core.config.files import (
 from orca_auto.core.config.schema import (
     RetryRuntimeConfig,
     messenger_config_from_mapping,
-    reconcile_legacy_telegram_alias,
 )
 
 from .config_validation import _validate_config
@@ -81,31 +79,7 @@ class AppConfig:
     paths: PathsConfig = field(default_factory=PathsConfig)
     resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
     scratch: ScratchConfig = field(default_factory=ScratchConfig)
-    telegram: TelegramConfig = field(default_factory=TelegramConfig)
     messenger: MessengerConfig = field(default_factory=MessengerConfig)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        # ``telegram`` remains a writable compatibility alias for older callers,
-        # but MessengerConfig is the canonical adapter configuration owner. Keep
-        # both directions synchronized so a legacy assignment cannot make the
-        # provider factory observe stale credentials.
-        if name == "telegram" and isinstance(value, TelegramConfig):
-            object.__setattr__(self, name, value)
-            messenger = self.__dict__.get("messenger")
-            if isinstance(messenger, MessengerConfig):
-                object.__setattr__(self, "messenger", replace(messenger, telegram=value))
-            return
-        if name == "messenger" and isinstance(value, MessengerConfig):
-            if "messenger" in self.__dict__:
-                object.__setattr__(self, "messenger", value)
-                object.__setattr__(self, "telegram", value.telegram)
-                return
-            telegram = self.__dict__.get("telegram", TelegramConfig())
-            resolved, alias = reconcile_legacy_telegram_alias(value, telegram)
-            object.__setattr__(self, "messenger", resolved)
-            object.__setattr__(self, "telegram", alias)
-            return
-        object.__setattr__(self, name, value)
 
 
 def _load_raw_config(path: Path) -> dict[str, Any]:
@@ -201,7 +175,6 @@ def load_config(config_path: str) -> AppConfig:
         ),
         resources=_config_engines.resource_config_from_mapping(resources_raw),
         scratch=scratch_config_from_runtime_mapping(runtime_raw),
-        telegram=messenger_cfg.telegram,
         messenger=messenger_cfg,
     )
     placeholder_keys = _placeholder_keys(cfg)

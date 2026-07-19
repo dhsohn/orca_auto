@@ -11,10 +11,7 @@ from typing import Any
 
 from orca_auto import cli_style
 from orca_auto.cli_errors import emit_error
-from orca_auto.cli_systemd_apply import (
-    replace_selected_systemd_runtime,
-    systemd_transition_lock,
-)
+from orca_auto.cli_systemd_apply import _run_command
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.systemd_plan import _is_root
 
@@ -54,12 +51,12 @@ def _single_line_command_output(completed: subprocess.CompletedProcess[Any]) -> 
     return output.splitlines()[0]
 
 
-def _query_systemctl_result(
+def _query_systemctl(
     action: str,
     unit: str,
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
-) -> tuple[int, str]:
+) -> str:
     try:
         completed = run(
             ["systemctl", action, unit],
@@ -69,17 +66,8 @@ def _query_systemctl_result(
             text=True,
         )
     except OSError as exc:
-        return 1, f"error: {exc}"
-    return int(completed.returncode), _single_line_command_output(completed)
-
-
-def _query_systemctl(
-    action: str,
-    unit: str,
-    *,
-    run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
-) -> str:
-    return _query_systemctl_result(action, unit, run=run)[1]
+        return f"error: {exc}"
+    return _single_line_command_output(completed)
 
 
 def collect_service_status(
@@ -196,25 +184,9 @@ def _restart_unit_for_user(
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> str:
     runtime_unit = _runtime_unit_for_user(target_user)
-    runtime_active_result = _query_systemctl_result("is-active", runtime_unit, run=run)
-    runtime_enabled_result = _query_systemctl_result("is-enabled", runtime_unit, run=run)
-
-    for unit, action, result, allowed in (
-        (
-            runtime_unit,
-            "is-active",
-            runtime_active_result,
-            {(0, "active"), (3, "inactive"), (3, "failed")},
-        ),
-        (runtime_unit, "is-enabled", runtime_enabled_result, {(0, "enabled"), (1, "disabled")}),
-    ):
-        if result not in allowed:
-            rc, state = result
-            raise ValueError(
-                f"cannot safely select a restart mode: {action} {unit} returned {state} (exit {rc})"
-            )
-
-    if runtime_active_result[1] == "active" or runtime_enabled_result[1] == "enabled":
+    runtime_active = _query_systemctl("is-active", runtime_unit, run=run)
+    runtime_enabled = _query_systemctl("is-enabled", runtime_unit, run=run)
+    if runtime_active == "active" or runtime_enabled == "enabled":
         return runtime_unit
     return _worker_unit_for_user(target_user)
 
@@ -275,23 +247,25 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceCliDeps | None
 
     target_user = _service_target_user(args, deps)
     try:
-        with systemd_transition_lock(target_user):
-            try:
-                unit = restart_unit_for_user(target_user, run=run)
-            except ValueError as exc:
-                emit_error(exc)
-                return 1
-            rc = replace_selected_systemd_runtime(
-                target_user,
-                unit,
-                use_sudo=use_sudo,
-                run=run,
-            )
-    except (OSError, ValueError) as exc:
-        emit_error(f"could not acquire systemd transition lock for {target_user}: {exc}")
+        unit = restart_unit_for_user(target_user, run=run)
+    except ValueError as exc:
+        emit_error(exc)
         return 1
+
+    worker_unit = _worker_unit_for_user(target_user)
+    print(f"Resetting worker failure state for {worker_unit}")
+    rc = _run_command(
+        ("systemctl", "reset-failed", worker_unit),
+        use_sudo=use_sudo,
+        run=run,
+    )
+    if rc != 0:
+        return rc
+
+    print(f"Restarting {unit}")
+    rc = _run_command(("systemctl", "restart", unit), use_sudo=use_sudo, run=run)
     if rc == 0:
-        print("Safe runtime replacement completed successfully.")
+        print("Restart requested successfully.")
         print("Check status with: orca_auto service status")
     return rc
 

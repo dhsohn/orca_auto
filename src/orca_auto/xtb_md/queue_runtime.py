@@ -235,7 +235,7 @@ def _repair_xtb_md_queue_publications(worker: Any) -> bool:
     """Repair every xTB-MD row whose enqueue committed but publication did not.
 
     A publisher killed between the durable enqueue commit and the queued-record
-    publication leaves a PREPARING lease that eventually goes stale and would
+    publication leaves a stale PREPARING lease that would
     otherwise be claimed and run without any published record. Fresh
     PREPARING/REPAIRING leases with a live owner are left alone: they are not
     claimable, and the live publisher keeps ownership.
@@ -259,7 +259,7 @@ def _repair_xtb_md_queue_publications(worker: Any) -> bool:
             continue
         if sync_state != QUEUE_RECORD_SYNC_REPAIR_PENDING and not queue_record_sync_is_stale(entry):
             # A live publisher still owns this lease; the row is unclaimable
-            # until the lease goes stale, so there is nothing to repair yet.
+            # until its owner exits, so there is nothing to repair yet.
             continue
         raw_job_dir = normalize_text(entry.metadata.get("job_dir"))
         try:

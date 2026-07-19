@@ -16,7 +16,7 @@ from orca_auto.core.utils import (
 from orca_auto.core.utils import (
     normalize_text as _normalize_text,
 )
-from orca_auto.core.utils.lock import tmpfs_file_lock
+from orca_auto.core.utils.lock import file_lock
 
 from .registry.store import (
     WorkflowRegistryCorruptError,
@@ -83,7 +83,7 @@ def write_workflow_worker_state(
         "submit_ready": submit_ready,
         "metadata": _coerce_mapping(metadata),
     }
-    with tmpfs_file_lock(_registry_lock_path(resolved_root)):
+    with file_lock(_registry_lock_path(resolved_root)):
         existing = load_workflow_worker_state(resolved_root)
         interval = max(0.0, float(minimum_heartbeat_interval_seconds or 0.0))
         semantic_existing = {

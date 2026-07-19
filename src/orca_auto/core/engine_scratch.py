@@ -73,9 +73,6 @@ class EngineScratchError(RuntimeError):
     """Raised when a RAM scratch workspace cannot be used or published safely."""
 
 
-OrcaScratchError = EngineScratchError
-
-
 @dataclass(frozen=True)
 class EngineScratchPolicy:
     root: Path
@@ -95,9 +92,6 @@ class EngineScratchPolicy:
         if self.max_task_memory_bytes < 1:
             raise ValueError("Engine task memory limit must be positive")
         object.__setattr__(self, "root", root)
-
-
-OrcaScratchPolicy = EngineScratchPolicy
 
 
 @dataclass(frozen=True)
@@ -135,7 +129,7 @@ class ScratchPublication:
     omitted_transient_bytes: int
 
 
-_EXCEPTION_SCRATCH_PROVENANCE_ATTRIBUTE = "_orca_scratch_provenance"
+_EXCEPTION_SCRATCH_PROVENANCE_ATTRIBUTE = "_engine_scratch_provenance"
 
 
 def scratch_publication_provenance(publication: ScratchPublication) -> dict[str, Any]:
@@ -202,12 +196,12 @@ class EngineScratchWorkspace:
         durable = require_confined_regular_file(
             durable_input.parent,
             durable_input,
-            label="ORCA durable scratch input",
+            label="engine durable scratch input",
         )
         output_dir = Path(durable_output_dir or durable.parent).expanduser().resolve()
         if not durable.is_relative_to(output_dir):
-            raise OrcaScratchError(
-                "ORCA durable scratch input must stay inside its publication directory"
+            raise EngineScratchError(
+                "engine durable scratch input must stay inside its publication directory"
             )
         root = _prepare_scratch_root(policy)
         root_status = root.stat()
@@ -219,7 +213,7 @@ class EngineScratchWorkspace:
         workspace_identity = (-1, -1)
         root_fd, _observed_root_identity = _open_pinned_directory(
             root,
-            label="ORCA scratch root",
+            label="engine scratch root",
             expected_identity=root_identity,
         )
         try:
@@ -232,16 +226,16 @@ class EngineScratchWorkspace:
                     root,
                     root_fd,
                     root_identity,
-                    label="ORCA scratch root",
+                    label="engine scratch root",
                 )
                 input_dir_fd, input_dir_identity = _open_pinned_directory(
                     durable.parent,
-                    label="ORCA durable scratch input directory",
+                    label="engine durable scratch input directory",
                 )
                 try:
                     durable_dir_fd, durable_dir_identity = _open_pinned_directory(
                         output_dir,
-                        label="ORCA durable generation",
+                        label="engine durable generation",
                         expected_identity=expected_durable_dir_identity,
                     )
                     _recover_incomplete_publication(
@@ -263,8 +257,8 @@ class EngineScratchWorkspace:
                     )
                     free_bytes = _filesystem_free_bytes(root_fd)
                     if free_bytes < policy.min_free_bytes + required_bytes:
-                        raise OrcaScratchError(
-                            "ORCA scratch has insufficient free space: "
+                        raise EngineScratchError(
+                            "engine scratch has insufficient free space: "
                             f"free={free_bytes}, required_inputs={required_bytes}, "
                             f"minimum_free={policy.min_free_bytes}"
                         )
@@ -273,8 +267,8 @@ class EngineScratchWorkspace:
                         policy.max_task_memory_bytes + free_bytes + policy.min_free_bytes
                     )
                     if available_memory_bytes < required_memory_bytes:
-                        raise OrcaScratchError(
-                            "ORCA scratch cannot guarantee RAM headroom without swap: "
+                        raise EngineScratchError(
+                            "engine scratch cannot guarantee RAM headroom without swap: "
                             f"available_memory={available_memory_bytes}, "
                             f"task_memory_limit={policy.max_task_memory_bytes}, "
                             f"scratch_free={free_bytes}, host_reserve={policy.min_free_bytes}"
@@ -284,7 +278,7 @@ class EngineScratchWorkspace:
                         root_fd,
                         workspace.name,
                         display_path=workspace,
-                        label="ORCA scratch workspace",
+                        label="engine scratch workspace",
                     )
                     _write_workspace_manifest(
                         workspace,
@@ -299,20 +293,20 @@ class EngineScratchWorkspace:
                         normalize_primary_newline=policy.normalize_primary_newline,
                     )
                     if _filesystem_free_bytes(root_fd) < policy.min_free_bytes:
-                        raise OrcaScratchError(
-                            "ORCA scratch fell below its minimum free-space reserve while staging"
+                        raise EngineScratchError(
+                            "engine scratch fell below its minimum free-space reserve while staging"
                         )
                     _require_directory_path_identity(
                         root,
                         root_fd,
                         root_identity,
-                        label="ORCA scratch root",
+                        label="engine scratch root",
                     )
                     _require_directory_path_identity(
                         workspace,
                         workspace_dir_fd,
                         workspace_identity,
-                        label="ORCA scratch workspace",
+                        label="engine scratch workspace",
                     )
                     return cls(
                         policy=policy,
@@ -344,7 +338,7 @@ class EngineScratchWorkspace:
                                 workspace.name,
                                 workspace_identity,
                             )
-                        except (FileNotFoundError, OrcaScratchError, OSError):
+                        except (FileNotFoundError, EngineScratchError, OSError):
                             pass
                     raise
         finally:
@@ -352,25 +346,25 @@ class EngineScratchWorkspace:
 
     def publish(self) -> ScratchPublication:
         if self._published:
-            raise OrcaScratchError("ORCA scratch workspace was already published")
+            raise EngineScratchError("engine scratch workspace was already published")
         self._require_open()
         _require_directory_path_identity(
             self.path,
             self.workspace_dir_fd,
             self.workspace_identity,
-            label="ORCA scratch workspace",
+            label="engine scratch workspace",
         )
         _require_directory_path_identity(
             self.durable_input.parent,
             self.input_dir_fd,
             self.input_dir_identity,
-            label="ORCA durable scratch input directory",
+            label="engine durable scratch input directory",
         )
         _require_directory_path_identity(
             self.durable_output_dir,
             self.durable_dir_fd,
             self.durable_dir_identity,
-            label="ORCA durable generation",
+            label="engine durable generation",
         )
         _verify_staged_sources_unchanged(
             self.input_dir_fd,
@@ -393,11 +387,11 @@ class EngineScratchWorkspace:
 
     def cleanup(self) -> None:
         if not self._published:
-            raise OrcaScratchError("Refusing to remove unpublished ORCA scratch workspace")
+            raise EngineScratchError("Refusing to remove unpublished engine scratch workspace")
         self._require_open()
         root_fd, _observed_identity = _open_pinned_directory(
             self.policy.root,
-            label="ORCA scratch root",
+            label="engine scratch root",
             expected_identity=self.scratch_root_identity,
         )
         try:
@@ -436,10 +430,7 @@ class EngineScratchWorkspace:
             or self.durable_dir_fd < 0
             or self.workspace_dir_fd < 0
         ):
-            raise OrcaScratchError("ORCA scratch workspace is already closed")
-
-
-OrcaScratchWorkspace = EngineScratchWorkspace
+            raise EngineScratchError("engine scratch workspace is already closed")
 
 
 def publish_engine_scratch_workspace(
@@ -467,7 +458,7 @@ def publish_engine_scratch_workspace(
     return publication
 
 
-def is_transient_orca_scratch_file(name: str) -> bool:
+def is_transient_scratch_file(name: str) -> bool:
     return _TRANSIENT_FILE_RE.search(name) is not None
 
 
@@ -485,18 +476,18 @@ def _linux_available_memory_bytes() -> int:
                 break
     except (OSError, UnicodeError, ValueError):
         pass
-    raise OrcaScratchError("Cannot determine available host memory for ORCA scratch")
+    raise EngineScratchError("Cannot determine available host memory for engine scratch")
 
 
 def _prepare_scratch_root(policy: EngineScratchPolicy) -> Path:
     parent = _SCRATCH_ROOT_PARENT
     if parent.is_symlink() or not parent.is_dir():
-        raise OrcaScratchError("/dev/shm is unavailable or unsafe")
+        raise EngineScratchError("/dev/shm is unavailable or unsafe")
     resolved_parent = parent.resolve()
     if policy.root.parent != resolved_parent and not policy.root.parent.is_relative_to(
         resolved_parent
     ):
-        raise OrcaScratchError("ORCA scratch root escaped /dev/shm")
+        raise EngineScratchError("engine scratch root escaped /dev/shm")
     current = resolved_parent
     for component in policy.root.relative_to(resolved_parent).parts:
         current = current / component
@@ -509,24 +500,25 @@ def _prepare_scratch_root(policy: EngineScratchPolicy) -> Path:
                 pass
             info = current.lstat()
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            raise OrcaScratchError(f"ORCA scratch path component is unsafe: {current}")
+            raise EngineScratchError(f"engine scratch path component is unsafe: {current}")
         if info.st_uid != os.getuid():
-            raise OrcaScratchError(f"ORCA scratch path is not owned by the worker user: {current}")
+            raise EngineScratchError(
+                f"engine scratch path is not owned by the worker user: {current}"
+            )
         if stat.S_IMODE(info.st_mode) & 0o077:
-            raise OrcaScratchError(f"ORCA scratch path is accessible by another user: {current}")
+            raise EngineScratchError(
+                f"engine scratch path is accessible by another user: {current}"
+            )
     if policy.root.stat().st_dev != resolved_parent.stat().st_dev:
-        raise OrcaScratchError("ORCA scratch root is not on the /dev/shm filesystem")
+        raise EngineScratchError("engine scratch root is not on the /dev/shm filesystem")
     return policy.root
 
 
 def _directory_open_flags() -> int:
     flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
+    flags |= os.O_DIRECTORY
+    flags |= os.O_NOFOLLOW
+    flags |= os.O_CLOEXEC
     return flags
 
 
@@ -547,13 +539,13 @@ def _open_pinned_directory_at(
     label: str,
 ) -> tuple[int, tuple[int, int]]:
     if not name or Path(name).name != name or name in {".", ".."}:
-        raise OrcaScratchError(f"{label} has an unsafe basename: {name!r}")
+        raise EngineScratchError(f"{label} has an unsafe basename: {name!r}")
     descriptor = os.open(name, _directory_open_flags(), dir_fd=parent_fd)
     try:
         info = os.fstat(descriptor)
         path_info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         if not stat.S_ISDIR(info.st_mode) or _identity(info) != _identity(path_info):
-            raise OrcaScratchError(f"{label} identity changed: {display_path}")
+            raise EngineScratchError(f"{label} identity changed: {display_path}")
         return descriptor, _identity(info)
     except BaseException:
         os.close(descriptor)
@@ -567,15 +559,15 @@ def _open_pinned_directory(
     expected_identity: tuple[int, int] | None = None,
 ) -> tuple[int, tuple[int, int]]:
     if path.is_symlink():
-        raise OrcaScratchError(f"{label} is a symlink: {path}")
+        raise EngineScratchError(f"{label} is a symlink: {path}")
     descriptor = os.open(path, _directory_open_flags())
     try:
         info = os.fstat(descriptor)
         if not stat.S_ISDIR(info.st_mode):
-            raise OrcaScratchError(f"{label} is not a directory: {path}")
+            raise EngineScratchError(f"{label} is not a directory: {path}")
         observed = _identity(info)
         if expected_identity is not None and observed != expected_identity:
-            raise OrcaScratchError(f"{label} identity changed before scratch launch: {path}")
+            raise EngineScratchError(f"{label} identity changed before scratch launch: {path}")
         _require_directory_path_identity(
             path,
             descriptor,
@@ -599,13 +591,13 @@ def _require_directory_path_identity(
     try:
         path_info = path.stat(follow_symlinks=False)
     except FileNotFoundError as exc:
-        raise OrcaScratchError(f"{label} pathname disappeared: {path}") from exc
+        raise EngineScratchError(f"{label} pathname disappeared: {path}") from exc
     if (
         not stat.S_ISDIR(path_info.st_mode)
         or _identity(descriptor_info) != expected_identity
         or _identity(path_info) != expected_identity
     ):
-        raise OrcaScratchError(f"{label} pathname identity changed: {path}")
+        raise EngineScratchError(f"{label} pathname identity changed: {path}")
 
 
 def _atomic_write_bytes_at(
@@ -616,18 +608,17 @@ def _atomic_write_bytes_at(
     mode: int,
 ) -> None:
     if not name or Path(name).name != name or name in {".", ".."}:
-        raise OrcaScratchError(f"ORCA scratch staging name is unsafe: {name!r}")
+        raise EngineScratchError(f"engine scratch staging name is unsafe: {name!r}")
     temporary_name = f"{_STAGING_TEMP_PREFIX}{secrets.token_hex(16)}.tmp"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_NOFOLLOW
     descriptor = os.open(temporary_name, flags, mode, dir_fd=directory_fd)
     try:
         view = memoryview(payload)
         while view:
             written = os.write(descriptor, view)
             if written <= 0:
-                raise OrcaScratchError(f"Failed to stage ORCA scratch input: {name}")
+                raise EngineScratchError(f"Failed to stage engine scratch input: {name}")
             view = view[written:]
         os.fchmod(descriptor, mode)
         os.fsync(descriptor)
@@ -658,7 +649,7 @@ def _write_workspace_manifest(
     boot_id = process_utils.linux_boot_id(proc_root=Path("/proc"))
     owner_ticks = process_lock.current_process_start_ticks()
     if not boot_id or owner_ticks is None:
-        raise OrcaScratchError("Cannot bind ORCA scratch ownership to this boot and process")
+        raise EngineScratchError("Cannot bind engine scratch ownership to this boot and process")
     payload = {
         "schema_version": 1,
         "owner_pid": os.getpid(),
@@ -702,12 +693,12 @@ def _assert_scratch_root_available(root: Path, root_fd: int) -> None:
         candidate = root / name
         info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
         if not stat.S_ISDIR(info.st_mode):
-            raise OrcaScratchError(f"ORCA scratch root contains an unsafe entry: {candidate}")
+            raise EngineScratchError(f"engine scratch root contains an unsafe entry: {candidate}")
         workspace_fd, _workspace_identity = _open_pinned_directory_at(
             root_fd,
             name,
             display_path=candidate,
-            label="ORCA scratch workspace",
+            label="engine scratch workspace",
         )
         try:
             try:
@@ -724,13 +715,13 @@ def _assert_scratch_root_available(root: Path, root_fd: int) -> None:
         finally:
             os.close(workspace_fd)
         if payload is None or payload.get("schema_version") != 1:
-            raise OrcaScratchError(
-                f"ORCA scratch contains an unresolved workspace without valid ownership: {candidate}"
+            raise EngineScratchError(
+                f"engine scratch contains an unresolved workspace without valid ownership: {candidate}"
             )
         if _manifest_owner_is_live(payload):
-            raise OrcaScratchError(f"Another ORCA scratch attempt is active: {candidate}")
-        raise OrcaScratchError(
-            "ORCA scratch contains a stale workspace with uncertain child ownership; "
+            raise EngineScratchError(f"Another engine scratch attempt is active: {candidate}")
+        raise EngineScratchError(
+            "engine scratch contains a stale workspace with uncertain child ownership; "
             f"preserving it for inspection: {candidate}"
         )
 
@@ -743,23 +734,22 @@ def _read_stable_regular_file_at(
     max_bytes: int = MAX_INPUT_SNAPSHOT_BYTES,
 ) -> tuple[bytes, int]:
     flags = os.O_RDONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_NOFOLLOW
     descriptor = os.open(name, flags, dir_fd=directory_fd)
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-            raise OrcaScratchError(f"ORCA input is not a private regular file: {display_path}")
+            raise EngineScratchError(f"engine input is not a private regular file: {display_path}")
         if before.st_size > max_bytes:
-            raise OrcaScratchError(
-                f"ORCA input exceeds the scratch staging limit ({max_bytes} bytes): {display_path}"
+            raise EngineScratchError(
+                f"engine input exceeds the scratch staging limit ({max_bytes} bytes): {display_path}"
             )
         payload = bytearray()
         while chunk := os.read(descriptor, min(_COPY_CHUNK_BYTES, max_bytes + 1 - len(payload))):
             payload.extend(chunk)
             if len(payload) > max_bytes:
-                raise OrcaScratchError(
-                    f"ORCA input exceeds the scratch staging limit ({max_bytes} bytes): "
+                raise EngineScratchError(
+                    f"engine input exceeds the scratch staging limit ({max_bytes} bytes): "
                     f"{display_path}"
                 )
         after = os.fstat(descriptor)
@@ -774,7 +764,7 @@ def _read_stable_regular_file_at(
             after.st_size,
             after.st_mtime_ns,
         ) or len(payload) != after.st_size:
-            raise OrcaScratchError(f"ORCA input changed while staged: {display_path}")
+            raise EngineScratchError(f"engine input changed while staged: {display_path}")
         return bytes(payload), stat.S_IMODE(after.st_mode)
     finally:
         os.close(descriptor)
@@ -807,12 +797,12 @@ def _capture_input_closure(
     for dependency_name in dependencies:
         raw = Path(str(dependency_name))
         if raw.is_absolute() or raw.name != str(dependency_name) or raw.name in {"", ".", ".."}:
-            raise OrcaScratchError(
+            raise EngineScratchError(
                 "RAM scratch requires input dependencies to use one relative basename: "
                 f"{dependency_name!r}"
             )
         if raw.name in _SCRATCH_CONTROL_FILE_NAMES or raw.name in _DURABLE_RESERVED_FILE_NAMES:
-            raise OrcaScratchError(
+            raise EngineScratchError(
                 f"ORCA RAM scratch dependency collides with runtime state: {raw.name}"
             )
         payload, mode = _read_stable_regular_file_at(
@@ -886,13 +876,12 @@ def _regular_file_sha256_at(
     display_path: Path,
 ) -> tuple[str, int]:
     flags = os.O_RDONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_NOFOLLOW
     descriptor = os.open(name, flags, dir_fd=directory_fd)
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-            raise OrcaScratchError(f"ORCA durable artifact is unsafe: {display_path}")
+            raise EngineScratchError(f"engine durable artifact is unsafe: {display_path}")
         digest = hashlib.sha256()
         size = 0
         while chunk := os.read(descriptor, _COPY_CHUNK_BYTES):
@@ -910,7 +899,7 @@ def _regular_file_sha256_at(
             after.st_size,
             after.st_mtime_ns,
         ) or size != after.st_size:
-            raise OrcaScratchError(f"ORCA durable artifact changed while read: {display_path}")
+            raise EngineScratchError(f"engine durable artifact changed while read: {display_path}")
         return digest.hexdigest(), size
     finally:
         os.close(descriptor)
@@ -928,19 +917,21 @@ def _verify_staged_sources_unchanged(
             display_path=durable_dir / item.name,
         )
         if digest != item.source_sha256 or size != item.source_size_bytes:
-            raise OrcaScratchError(f"Durable ORCA input changed during scratch run: {item.source}")
+            raise EngineScratchError(
+                f"Durable engine input changed during scratch run: {item.source}"
+            )
 
 
 def _validate_publication_target_name(name: str) -> None:
     if not name or Path(name).name != name or name in {".", ".."}:
-        raise OrcaScratchError(f"ORCA scratch artifact has an unsafe basename: {name!r}")
+        raise EngineScratchError(f"engine scratch artifact has an unsafe basename: {name!r}")
     if (
         name in _DURABLE_RESERVED_FILE_NAMES
         or name.startswith(_PUBLICATION_TEMP_PREFIX)
         or name.startswith(_PUBLICATION_BACKUP_PREFIX)
         or name.startswith(_PUBLICATION_META_TEMP_PREFIX)
     ):
-        raise OrcaScratchError(f"ORCA scratch artifact collides with runtime state: {name}")
+        raise EngineScratchError(f"engine scratch artifact collides with runtime state: {name}")
 
 
 def _copy_artifact_to_staging(
@@ -960,22 +951,21 @@ def _copy_artifact_to_staging(
     if target_info is not None and (
         not stat.S_ISREG(target_info.st_mode) or target_info.st_nlink != 1
     ):
-        raise OrcaScratchError(
-            f"Durable ORCA artifact target is unsafe: {durable_dir / target_name}"
+        raise EngineScratchError(
+            f"Durable engine artifact target is unsafe: {durable_dir / target_name}"
         )
     temporary_name = f"{_PUBLICATION_TEMP_PREFIX}{secrets.token_hex(16)}.tmp"
     source_flags = os.O_RDONLY
     destination_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        source_flags |= os.O_NOFOLLOW
-        destination_flags |= os.O_NOFOLLOW
+    source_flags |= os.O_NOFOLLOW
+    destination_flags |= os.O_NOFOLLOW
     source_fd = os.open(source_name, source_flags, dir_fd=workspace_dir_fd)
     destination_fd: int | None = None
     backup_name: str | None = None
     try:
         before = os.fstat(source_fd)
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-            raise OrcaScratchError(f"ORCA scratch artifact is unsafe: {source}")
+            raise EngineScratchError(f"engine scratch artifact is unsafe: {source}")
         destination_fd = os.open(
             temporary_name,
             destination_flags,
@@ -990,7 +980,7 @@ def _copy_artifact_to_staging(
             while view:
                 written = os.write(destination_fd, view)
                 if written <= 0:
-                    raise OrcaScratchError(f"Failed to publish ORCA scratch artifact: {source}")
+                    raise EngineScratchError(f"Failed to publish engine scratch artifact: {source}")
                 view = view[written:]
             copied += len(chunk)
         os.fsync(destination_fd)
@@ -1006,7 +996,7 @@ def _copy_artifact_to_staging(
             after.st_size,
             after.st_mtime_ns,
         ) or copied != after.st_size:
-            raise OrcaScratchError(f"ORCA scratch artifact changed while published: {source}")
+            raise EngineScratchError(f"engine scratch artifact changed while published: {source}")
         os.close(destination_fd)
         destination_fd = None
         if target_info is not None:
@@ -1027,8 +1017,8 @@ def _copy_artifact_to_staging(
             if _identity(linked) != _identity(target_info) or _identity(
                 current_target
             ) != _identity(target_info):
-                raise OrcaScratchError(
-                    f"Durable ORCA artifact target changed while prepared: {durable_dir / target_name}"
+                raise EngineScratchError(
+                    f"Durable engine artifact target changed while prepared: {durable_dir / target_name}"
                 )
         return _PreparedPublication(
             source=source,
@@ -1055,8 +1045,7 @@ def _copy_artifact_to_staging(
 def _atomic_write_json_at(directory_fd: int, name: str, payload: dict[str, Any]) -> None:
     temporary_name = f"{_PUBLICATION_META_TEMP_PREFIX}{secrets.token_hex(16)}.tmp"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_NOFOLLOW
     descriptor = os.open(temporary_name, flags, 0o600, dir_fd=directory_fd)
     try:
         encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode(
@@ -1066,7 +1055,7 @@ def _atomic_write_json_at(directory_fd: int, name: str, payload: dict[str, Any])
         while view:
             written = os.write(descriptor, view)
             if written <= 0:
-                raise OrcaScratchError("Failed to persist ORCA scratch publication journal")
+                raise EngineScratchError("Failed to persist engine scratch publication journal")
             view = view[written:]
         os.fsync(descriptor)
         os.close(descriptor)
@@ -1124,18 +1113,18 @@ def _load_publication_journal(
     try:
         parsed = json.loads(payload.decode("utf-8", errors="strict"))
     except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
-        raise OrcaScratchError("ORCA scratch publication journal is corrupt") from exc
+        raise EngineScratchError("engine scratch publication journal is corrupt") from exc
     if not isinstance(parsed, dict) or parsed.get("schema_version") != 1:
-        raise OrcaScratchError("ORCA scratch publication journal has an invalid schema")
+        raise EngineScratchError("engine scratch publication journal has an invalid schema")
     phase = parsed.get("phase")
     raw_items = parsed.get("items")
     if phase not in {"prepared", "committed"} or not isinstance(raw_items, list):
-        raise OrcaScratchError("ORCA scratch publication journal has invalid state")
+        raise EngineScratchError("engine scratch publication journal has invalid state")
     items: list[_PreparedPublication] = []
     seen_names: set[str] = set()
     for raw in raw_items:
         if not isinstance(raw, dict):
-            raise OrcaScratchError("ORCA scratch publication journal has an invalid item")
+            raise EngineScratchError("engine scratch publication journal has an invalid item")
         temporary_name = raw.get("temporary_name")
         target_name = raw.get("target_name")
         backup_name = raw.get("backup_name")
@@ -1156,13 +1145,13 @@ def _load_publication_journal(
             or type(size_bytes) is not int
             or size_bytes < 0
         ):
-            raise OrcaScratchError("ORCA scratch publication journal has an invalid item")
+            raise EngineScratchError("engine scratch publication journal has an invalid item")
         _validate_publication_target_name(target_name)
         item_names = {temporary_name, target_name}
         if isinstance(backup_name, str):
             item_names.add(backup_name)
         if seen_names.intersection(item_names):
-            raise OrcaScratchError("ORCA scratch publication journal contains duplicate names")
+            raise EngineScratchError("engine scratch publication journal contains duplicate names")
         seen_names.update(item_names)
         items.append(
             _PreparedPublication(
@@ -1190,8 +1179,8 @@ def _assert_no_orphan_publication_files(directory_fd: int) -> None:
             (_PUBLICATION_TEMP_PREFIX, _PUBLICATION_BACKUP_PREFIX, _PUBLICATION_META_TEMP_PREFIX)
         ):
             continue
-        raise OrcaScratchError(
-            f"ORCA durable generation contains an unresolved scratch publication entry: {name}"
+        raise EngineScratchError(
+            f"engine durable generation contains an unresolved scratch publication entry: {name}"
         )
 
 
@@ -1207,7 +1196,7 @@ def _recover_incomplete_publication(
             durable_dir,
             durable_dir_fd,
             durable_dir_identity,
-            label="ORCA durable generation",
+            label="engine durable generation",
         )
     loaded = _load_publication_journal(durable_dir_fd, durable_dir)
     if loaded is None:
@@ -1221,8 +1210,8 @@ def _recover_incomplete_publication(
                 continue
             info = os.stat(item.backup_name, dir_fd=durable_dir_fd, follow_symlinks=False)
             if not stat.S_ISREG(info.st_mode):
-                raise OrcaScratchError(
-                    f"ORCA scratch publication backup is unsafe: {item.backup_name}"
+                raise EngineScratchError(
+                    f"engine scratch publication backup is unsafe: {item.backup_name}"
                 )
         for item in items:
             if item.backup_name is not None:
@@ -1249,8 +1238,8 @@ def _recover_incomplete_publication(
                             display_path=durable_dir / item.target_name,
                         )
                         if digest != item.sha256 or size != item.size_bytes:
-                            raise OrcaScratchError(
-                                "Prepared ORCA scratch publication target changed: "
+                            raise EngineScratchError(
+                                "Prepared engine scratch publication target changed: "
                                 f"{durable_dir / item.target_name}"
                             )
                     os.replace(
@@ -1270,8 +1259,8 @@ def _recover_incomplete_publication(
                     pass
                 else:
                     if digest != item.sha256 or size != item.size_bytes:
-                        raise OrcaScratchError(
-                            "Prepared ORCA scratch publication target changed: "
+                        raise EngineScratchError(
+                            "Prepared engine scratch publication target changed: "
                             f"{durable_dir / item.target_name}"
                         )
                     _unlink_at_if_present(durable_dir_fd, item.target_name)
@@ -1284,8 +1273,8 @@ def _recover_incomplete_publication(
                 display_path=durable_dir / item.target_name,
             )
             if digest != item.sha256 or size != item.size_bytes:
-                raise OrcaScratchError(
-                    f"Committed ORCA scratch artifact changed: {durable_dir / item.target_name}"
+                raise EngineScratchError(
+                    f"Committed engine scratch artifact changed: {durable_dir / item.target_name}"
                 )
         for item in items:
             if item.backup_name is not None:
@@ -1299,7 +1288,7 @@ def _recover_incomplete_publication(
             durable_dir,
             durable_dir_fd,
             durable_dir_identity,
-            label="ORCA durable generation",
+            label="engine durable generation",
         )
     return phase
 
@@ -1308,7 +1297,7 @@ def _scratch_entries(workspace: Path, workspace_dir_fd: int) -> list[str]:
     entries: list[str] = []
     for name in sorted(os.listdir(workspace_dir_fd)):
         if Path(name).name != name:
-            raise OrcaScratchError(f"ORCA scratch produced an unsafe entry name: {name!r}")
+            raise EngineScratchError(f"engine scratch produced an unsafe entry name: {name!r}")
         if name in _SCRATCH_CONTROL_FILE_NAMES:
             continue
         entries.append(name)
@@ -1350,7 +1339,7 @@ def _publish_workspace(
                 )
                 if digest == baseline.staged_sha256 and size == baseline.staged_size_bytes:
                     continue
-                raise OrcaScratchError(
+                raise EngineScratchError(
                     f"ORCA modified a staged immutable input in scratch: {source_name}"
                 )
             source_info = os.stat(
@@ -1363,12 +1352,10 @@ def _publish_workspace(
                 omitted_bytes += int(source_info.st_size)
                 continue
             if not stat.S_ISREG(source_info.st_mode):
-                raise OrcaScratchError(
-                    f"ORCA scratch produced an unsupported entry: {workspace / source_name}"
+                raise EngineScratchError(
+                    f"engine scratch produced an unsupported entry: {workspace / source_name}"
                 )
-            if is_transient_orca_scratch_file(
-                _transient_classification_name(source_name, attempt_stem)
-            ):
+            if is_transient_scratch_file(_transient_classification_name(source_name, attempt_stem)):
                 omitted.append(source_name)
                 omitted_bytes += os.stat(
                     source_name,
@@ -1389,7 +1376,7 @@ def _publish_workspace(
             workspace,
             workspace_dir_fd,
             workspace_identity,
-            label="ORCA scratch workspace",
+            label="engine scratch workspace",
         )
         _atomic_write_json_at(
             durable_dir_fd,
@@ -1409,7 +1396,7 @@ def _publish_workspace(
             durable_dir,
             durable_dir_fd,
             durable_dir_identity,
-            label="ORCA durable generation",
+            label="engine durable generation",
         )
         _atomic_write_json_at(
             durable_dir_fd,
@@ -1435,9 +1422,9 @@ def _publish_workspace(
                     durable_dir,
                     durable_dir_fd,
                     durable_dir_identity,
-                    label="ORCA durable generation",
+                    label="engine durable generation",
                 )
-            except OrcaScratchError:
+            except EngineScratchError:
                 path_identity_safe = False
             try:
                 recovered_phase = _recover_incomplete_publication(
@@ -1447,8 +1434,8 @@ def _publish_workspace(
                     require_path_identity=path_identity_safe,
                 )
             except BaseException as recovery_exc:
-                raise OrcaScratchError(
-                    "ORCA scratch publication failed and its durable transaction "
+                raise EngineScratchError(
+                    "engine scratch publication failed and its durable transaction "
                     "could not be reconciled"
                 ) from recovery_exc
             if path_identity_safe and (commit_durable or recovered_phase == "committed"):
@@ -1474,7 +1461,7 @@ def _remove_owned_workspace(
 ) -> None:
     root_fd, observed_root_identity = _open_pinned_directory(
         root,
-        label="ORCA scratch root",
+        label="engine scratch root",
         expected_identity=root_identity,
     )
     try:
@@ -1491,7 +1478,7 @@ def _remove_owned_workspace_at(
     tombstone_name = f".orca_auto_cleanup.{secrets.token_hex(16)}"
     before = os.stat(workspace_name, dir_fd=root_fd, follow_symlinks=False)
     if not stat.S_ISDIR(before.st_mode) or _identity(before) != workspace_identity:
-        raise OrcaScratchError("ORCA scratch workspace identity changed before cleanup")
+        raise EngineScratchError("engine scratch workspace identity changed before cleanup")
     os.rename(
         workspace_name,
         tombstone_name,
@@ -1509,7 +1496,7 @@ def _remove_owned_workspace_at(
             )
         except OSError:
             pass
-        raise OrcaScratchError("ORCA scratch workspace identity changed during cleanup")
+        raise EngineScratchError("engine scratch workspace identity changed during cleanup")
     shutil.rmtree(tombstone_name, dir_fd=root_fd)
     os.fsync(root_fd)
 
@@ -1519,13 +1506,10 @@ __all__ = [
     "EngineScratchPolicy",
     "EngineScratchWorkspace",
     "SCRATCH_RUNTIME_HOME_DIR_NAME",
-    "OrcaScratchError",
-    "OrcaScratchPolicy",
-    "OrcaScratchWorkspace",
     "ScratchPublication",
     "attach_scratch_provenance_mapping_to_exception",
     "attach_scratch_provenance_to_exception",
-    "is_transient_orca_scratch_file",
+    "is_transient_scratch_file",
     "publish_engine_scratch_workspace",
     "scratch_provenance_from_exception",
     "scratch_publication_provenance",

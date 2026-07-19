@@ -7,7 +7,6 @@ from .schema import (
     TelegramConfig,
     discord_config_from_mapping,
     messenger_config_from_mapping,
-    reconcile_legacy_telegram_alias,
 )
 from .scratch import ScratchConfig, scratch_config_from_runtime_mapping
 
@@ -21,6 +20,5 @@ __all__ = [
     "TelegramConfig",
     "discord_config_from_mapping",
     "messenger_config_from_mapping",
-    "reconcile_legacy_telegram_alias",
     "scratch_config_from_runtime_mapping",
 ]

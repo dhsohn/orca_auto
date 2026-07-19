@@ -495,8 +495,6 @@ def _open_absolute_directory_nofollow(path: Path, flags: int) -> int:
 
 def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[bytes, int] | None:
     """Read at most the bounded tail of one confined, stable regular output."""
-    if not all(hasattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW", "pread")):
-        return None
     root_fd = -1
     parent_fd = -1
     output_fd = -1
@@ -514,8 +512,8 @@ def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[b
         if not stat.S_ISDIR(root_before.st_mode):
             return None
 
-        directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-        directory_flags |= getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        directory_flags = os.O_RDONLY | os.O_CLOEXEC
+        directory_flags |= os.O_DIRECTORY | os.O_NOFOLLOW
         root_fd = _open_absolute_directory_nofollow(root, directory_flags)
         root_opened = os.fstat(root_fd)
         if not stat.S_ISDIR(root_opened.st_mode) or not _same_node(root_before, root_opened):
@@ -530,8 +528,8 @@ def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[b
             if not stat.S_ISDIR(os.fstat(parent_fd).st_mode):
                 return None
 
-        output_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-        output_flags |= getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        output_flags = os.O_RDONLY | os.O_CLOEXEC
+        output_flags |= os.O_NONBLOCK | os.O_NOFOLLOW
         output_fd = os.open(relative.parts[-1], output_flags, dir_fd=parent_fd)
         opened = os.fstat(output_fd)
         named_opened = os.stat(relative.parts[-1], dir_fd=parent_fd, follow_symlinks=False)

@@ -324,9 +324,8 @@ false-success 근거는 보존되어도 완료로 바뀔 수 없습니다. 확�
   실행과 게시가 끝날 때까지 고정합니다. ORCA는 pathname을 다시 여는 대신 고정 descriptor를 통해
   workspace에 진입합니다.
   scratch-root lock은 workspace를 정확히 하나만 허용하고, 해석할 수 없거나 stale인 workspace는
-  운영자가 검사하거나 tmpfs를 초기화할 때까지 보존하면서 새 시작을 막습니다. ORCA process
-  record, queue, run state, 내구성 `run.lock` ownership marker는 durable generation에 유지하고,
-  순수 advisory mutation lock은 별도 tmpfs lock namespace를 사용합니다. process tree가 종료되면 남은 일반
+  운영자가 검사하거나 tmpfs를 초기화할 때까지 보존하면서 새 시작을 막습니다. ORCA process record,
+  queue, run state, lock은 durable generation에 유지합니다. process tree가 종료되면 남은 일반
   파일을 staging한 다음 inode로 고정한 generation에 저널 기반 단일 file-set transaction으로
   commit하며, 일부 교체만 성공하면 기존 세트로 rollback합니다. runtime state 이름은 예약하고
   `*.tmp`/`*.tmp.*`는 폐기합니다. 과학 artifact를 손실할 수 있는 고정 allowlist 대신 알 수 없는
@@ -489,39 +488,13 @@ worker, repair 경로, index, adapter, workflow report가 이 상태를 직접 �
 Markdown report를 만들지 않습니다. report-only 호환 경로는 없고 해당 작업은 다시 제출해야
 합니다.
 
-완료 workflow compaction은 이 state-only 계약 이전의 중복 사본만 다루는 좁은
-maintenance 경계입니다. `workflow.json`에서 canonical 내부 xTB/CREST child만
-파생한 뒤, 관련 mutation lock을 보유한 상태에서 workflow, stage, task, child state,
-queue/index, registry, 최종 child sync, SI, snapshot, recovery 정체성이 모두 정확한
-완료 상태인지 다시 검증합니다. SI generation은 둘 다 없을 수 있지만,
-있다면 요청 generation과 게시 generation이 정확히 같아야 합니다. Report는 이
-lifecycle 검증의 근거로 쓰지 않습니다. 검증된 내부 child 디렉터리의 정확한
-`job_report.json`과 `job_report.md` leaf만 결정론적 제거 계획에 들어갑니다.
-
-Apply mode는 표준 mutation lock 아래에서 workflow gate를 다시 확인하고, 각 정확한
-leaf를 unlink하기 직전에 다시 검증합니다. 파일별 삭제는 서로 독립적이고
-멱등하므로 중단되면 dry run을 다시 실행한 뒤 남은 계획을 적용합니다. Compaction은
-별도 receipt, journal, state 파일을 만들지 않습니다. 이 online 경로는 이전 disk
-advisory lock을 포함해 어떤 lock 파일도 제거하지 않습니다.
-
 ---
 
 ## 8. 영속화 & 상태 파일
 
 orca_auto는 scheduling, ownership, 공개 artifact를 모두 디스크 기반으로 유지합니다.
 선택적 ORCA tmpfs scratch는 실행 workspace일 뿐 상태 원본이 아닙니다. 동시성 안전성은
-모든 durable 변경 주위의 advisory 파일 락(`core/utils/lock.py`)에서 옵니다. 순수 advisory
-flock은 canonical 논리 lock 경로로 key를 만들되 소유자 전용
-`/dev/shm/orca_auto-locks-<uid>` namespace에 저장하며 durable state가 아닙니다. SHA-256은
-pathname 및 directory-inode 논리 identity를 고정된 versioned 4096개 stripe 파일 pool에
-매핑합니다. 서로 무관한 identity가 같은 stripe에 충돌하면 보수적으로 직렬화되므로 동시성은
-낮아질 수 있지만 상호 배제는 약해지지 않습니다. 같은 thread의 중첩 획득이 이미 보유한 stripe에
-도달하면 바깥 ownership을 재사용하지만 다른 thread와 process는 계속 외부 flock에서
-직렬화됩니다. fork child는 독립적으로 획득하기 전에 상속된 재진입 상태와 lock descriptor를
-폐기합니다. protocol 사용 중 stripe 파일을 unlink하지 않으므로 현재 protocol이 owner
-namespace마다 만드는 파일은 최대 4096개입니다. `run.lock`,
-worker PID 파일, queue/admission/index/workflow JSON, snapshot intent, process record 같은
-내구성 ownership marker는 디스크에 유지합니다. 주요 디스크 아티팩트:
+모든 durable 변경 주위의 파일 락(`core/utils/lock.py`)에서 옵니다. 주요 디스크 아티팩트:
 
 | 파일                        | 소유자           | 목적                                     |
 |-----------------------------|------------------|------------------------------------------|
@@ -543,30 +516,6 @@ worker PID 파일, queue/admission/index/workflow JSON, snapshot intent, process
 도래했을 때만 이 advisory snapshot을 다시 씁니다. heartbeat 간격은 최대 60초이며 lease보다
 짧습니다. 최근 이벤트의 bounded 조회는 registry lock으로 직렬화된 append/commit 순서를
 사용해 confined 파일 suffix만 읽고, 명시적 무제한 조회만 전체 이력을 스캔합니다.
-
-서비스가 하나라도 실행 중일 때 tmpfs lock namespace를 제거하면 안 됩니다. 디스크 lock에서
-tmpfs lock으로 바뀌는 배포는 두 방식이 서로 경쟁하지 않으므로 이전 build의 모든 `orca_auto`
-프로세스를 drain한 뒤 새 build를 시작해야 합니다. 여기에는 모든 queue/workflow worker, bot,
-직접 실행한 CLI와 maintenance 명령, upload 처리가 포함됩니다. 표준 `systemd install`과
-`service restart`는 모든 관리 unit 상태를 snapshot하고 install이 unit을 쓰거나 reload하기 전에
-active unit을 중지해 전체 graph가 non-running인지 확인합니다. 그 뒤 선택한 runtime graph를 시작·검증하고 이전에
-active였던 workflow만 복원합니다. drain 뒤 write, boot selection, start, restore가 실패하면 이전
-process를 다시 시작하지 않고 관리 graph를 stopped 상태로 남깁니다.
-사용자별 EUID 독립적, 비영속 Linux abstract `AF_UNIX` socket lock이 동일 Linux network
-namespace 안에서 non-dry-run install/restart의 mode 조회와 drain부터 start/restore까지를
-직렬화하며, timeout과 비정규 `systemctl` 종료 상태/state 조합은 fail-closed합니다. 지원되는
-mutation caller에는 WSL/native host shell과 제공 systemd unit이 포함되며 같은 host systemd를
-제어할 때 동일 network namespace에서 실행되어야 합니다. container나 별도 network namespace에서
-host systemd를 제어하는 호출은 미지원입니다. abstract 이름은 permissionless이므로
-trusted-local-user 또는 single-user 관리 경계가 필요합니다. 신뢰하지 않는 local user의 선점은
-fail-closed availability DoS를 만들 수 있지만 timeout은 mutation 전에 발생해 split-build graph나
-data damage를 만들지 않습니다. 이 제한에 file-lock fallback은 제공하지 않습니다.
-`--no-start` 또는 `--no-enable` maintenance 설치는 이 live transition을 수행하지 않습니다.
-대신 unit을 하나라도 쓰기 전에 네 관리 unit이 모두 알려진 non-running 상태인지
-확인하고 active/transitional 상태나 조회 오류에는 fail-closed합니다. boot selection은 반대 mode를 먼저
-disable한 뒤 선택한 mode를 enable합니다. in-place code sync는 checkout을 바꾸기 전에 같은 exact
-drain이 필요하며 `systemd/README.ko.md` 절차를 따릅니다. foreground/manual 프로세스 종료는
-운영자 preflight 책임으로 남습니다. Lock 준비 실패는 disk fallback 없이 fail-closed합니다.
 
 큐 항목과 추적된 작업 위치 레코드는 각각 동결된 다운스트림 필드 집합을
 노출하므로(REFERENCE.md §11.1 참조), `flow`가 ORCA 내부에 결합하지 않고 결과를

@@ -138,8 +138,7 @@ def capture_attempt_identity(attempt_dir: str | Path) -> AttemptIdentity:
     token = secrets.token_hex(32)
     token_path = resolved / _ATTEMPT_IDENTITY_FILE_NAME
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_NOFOLLOW
     descriptor = os.open(token_path, flags, 0o400)
     try:
         payload = token.encode("ascii")
@@ -183,10 +182,8 @@ def _verify_attempt(attempt: AttemptIdentity) -> Path:
         raise XtbMdArtifactError("xTB-MD attempt directory identity changed")
     token_path = candidate / _ATTEMPT_IDENTITY_FILE_NAME
     flags = os.O_RDONLY
-    if hasattr(os, "O_NONBLOCK"):
-        flags |= os.O_NONBLOCK
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_NONBLOCK
+    flags |= os.O_NOFOLLOW
     token_descriptor = -1
     try:
         token_descriptor = os.open(token_path, flags)
@@ -223,10 +220,8 @@ def _open_fresh_artifact(
     if candidate.parent.resolve() != root or candidate.is_symlink():
         raise XtbMdArtifactError(f"xTB-MD {label} must be a direct regular file in the attempt")
     flags = os.O_RDONLY
-    if hasattr(os, "O_NONBLOCK"):
-        flags |= os.O_NONBLOCK
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_NONBLOCK
+    flags |= os.O_NOFOLLOW
     try:
         descriptor = os.open(candidate, flags)
     except OSError as exc:

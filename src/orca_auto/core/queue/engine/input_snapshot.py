@@ -40,8 +40,6 @@ def canonical_input_snapshot_namespace(namespace: str) -> str:
 
 
 def _directory_open_flags() -> int:
-    if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
-        raise RuntimeError("Safe no-follow directory access is unavailable")
     return os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
 
 
@@ -158,7 +156,7 @@ def bind_direct_generation_owner(
                 generation_fd,
                 _DIRECT_GENERATION_OWNER_XATTR,
                 _direct_generation_owner_payload(owner_token),
-                flags=getattr(os, "XATTR_CREATE", 1),
+                flags=os.XATTR_CREATE,
             )
             os.fsync(generation_fd)
             _verify_direct_generation_owner(generation_fd, owner_token)
@@ -409,10 +407,8 @@ def read_stable_regular_file(
         raise ValueError("Stable file read limit must be positive")
     effective_max_bytes = int(max_bytes)
     flags = os.O_RDONLY
-    if hasattr(os, "O_NONBLOCK"):
-        flags |= os.O_NONBLOCK
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_NONBLOCK
+    flags |= os.O_NOFOLLOW
     try:
         descriptor = os.open(source_path, flags)
     except OSError as exc:

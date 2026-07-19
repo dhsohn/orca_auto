@@ -18,15 +18,10 @@ from tests.engine_artifact_helpers import engine_payload as _engine_payload
 
 
 class TestAttemptReporting(unittest.TestCase):
-    def test_finished_notification_marker_reads_neutral_and_legacy_state(self) -> None:
+    def test_finished_notification_marker_reads_canonical_state(self) -> None:
         self.assertTrue(
             finished_notification_already_sent(
                 {"final_result": {"finished_notification_sent_at": "2026-07-11T00:00:00Z"}}
-            )
-        )
-        self.assertTrue(
-            finished_notification_already_sent(
-                {"final_result": {"telegram_finished_notification_sent_at": "2026-07-10T00:00:00Z"}}
             )
         )
         self.assertFalse(finished_notification_already_sent({"final_result": {}}))
@@ -118,10 +113,6 @@ class TestAttemptReporting(unittest.TestCase):
         self.assertEqual(emitted_payloads[0]["report_md"], str(reaction_dir / "job_report.md"))
         self.assertEqual(_engine_payload(report_json)["final_result"]["status"], "completed")
         self.assertIn("finished_notification_sent_at", saved["final_result"])
-        self.assertEqual(
-            saved["final_result"]["telegram_finished_notification_sent_at"],
-            saved["final_result"]["finished_notification_sent_at"],
-        )
         self.assertIn(
             "finished_notification_sent_at",
             _engine_payload(report_json)["final_result"],

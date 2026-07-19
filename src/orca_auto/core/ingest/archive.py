@@ -556,8 +556,8 @@ def _open_archive_snapshot(
             if before.st_size > max_archive_bytes:
                 _reject(f"archive exceeds {max_archive_bytes} bytes")
 
-            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
-            flags |= getattr(os, "O_NOFOLLOW", 0)
+            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
+            flags |= os.O_NOFOLLOW
             descriptor = os.open(archive_path, flags)
             try:
                 with os.fdopen(descriptor, "rb") as source:
@@ -866,7 +866,7 @@ def _copy_bounded(source: _BinaryReader, sink: BinaryIO, limit: int) -> int:
 def _fsync_tree(root: Path) -> None:
     """Durably flush extracted regular files and every containing directory."""
 
-    file_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    file_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
     for current, _directories, filenames in os.walk(root, topdown=False, followlinks=False):
         current_path = Path(current)
         for filename in filenames:
@@ -884,7 +884,7 @@ def _fsync_tree(root: Path) -> None:
 def _fsync_directory(path: Path, *, strict: bool = False) -> None:
     """Best-effort durability for the atomic publication rename."""
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY
     try:
         descriptor = os.open(path, flags)
     except OSError:

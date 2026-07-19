@@ -28,7 +28,7 @@ from orca_auto.core.engines.artifacts import (
 )
 from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
 from orca_auto.core.queue.generation import is_visible_generation_name
-from orca_auto.core.utils.lock import tmpfs_file_lock_at
+from orca_auto.core.utils.lock import file_lock_at
 from orca_auto.core.utils.persistence import (
     atomic_write_json,
     durable_mkdir,
@@ -286,7 +286,7 @@ def write_state(reaction_dir: Path, state: Mapping[str, Any]) -> Path:
             int(directory_status.st_dev),
             int(directory_status.st_ino),
         )
-        with tmpfs_file_lock_at(
+        with file_lock_at(
             directory_fd,
             STATE_MUTATION_LOCK_FILE_NAME,
             display_path=reaction_dir / STATE_MUTATION_LOCK_FILE_NAME,

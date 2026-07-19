@@ -941,14 +941,14 @@ def test_pidfile_child_worker_run_once_returns_error_when_singleton_lock_held(
     )
     lock_calls: list[tuple[Path, float]] = []
 
-    def locked_tmpfs_file_lock(path: Path, *, timeout_seconds: float) -> object:
+    def locked_file_lock(path: Path, *, timeout_seconds: float) -> object:
         lock_calls.append((path, timeout_seconds))
         raise TimeoutError("held")
 
     monkeypatch.setattr(
         worker_process_helpers,
-        "tmpfs_file_lock",
-        locked_tmpfs_file_lock,
+        "file_lock",
+        locked_file_lock,
     )
 
     assert worker.run_once(idle_message=None, blocked_message=None) == 1

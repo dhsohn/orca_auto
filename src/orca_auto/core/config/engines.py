@@ -24,8 +24,6 @@ from .schema import (
     CommonResourceConfig,
     CommonRuntimeConfig,
     MessengerConfig,
-    TelegramConfig,
-    reconcile_legacy_telegram_alias,
 )
 from .schema import (
     as_bool as as_bool,
@@ -84,13 +82,7 @@ class WorkflowEngineAppConfig:
     paths: WorkflowEnginePathsConfig = field(default_factory=WorkflowEnginePathsConfig)
     resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
     scratch: ScratchConfig = field(default_factory=ScratchConfig)
-    telegram: TelegramConfig = field(default_factory=TelegramConfig)
     messenger: MessengerConfig = field(default_factory=MessengerConfig)
-
-    def __post_init__(self) -> None:
-        messenger, telegram = reconcile_legacy_telegram_alias(self.messenger, self.telegram)
-        object.__setattr__(self, "messenger", messenger)
-        object.__setattr__(self, "telegram", telegram)
 
 
 @dataclass(frozen=True)
@@ -348,7 +340,6 @@ def load_workflow_engine_config(
         paths=WorkflowEnginePathsConfig(**executable_values),
         resources=_resource_config(resources_raw),
         scratch=scratch_config_from_runtime_mapping(orca_runtime_raw),
-        telegram=messenger.telegram,
         messenger=messenger,
     )
 
@@ -398,7 +389,6 @@ def load_xtb_md_config(config_path: str | None = None) -> WorkflowEngineAppConfi
         paths=WorkflowEnginePathsConfig(xtb_executable=xtb_executable),
         resources=_resource_config(resources_raw),
         scratch=scratch_config_from_runtime_mapping(orca_runtime_raw),
-        telegram=messenger.telegram,
         messenger=messenger,
     )
 

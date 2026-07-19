@@ -83,10 +83,8 @@ def resolve_configured_executable(
 def executable_identity(path: str | Path) -> dict[str, Any]:
     resolved = Path(path).expanduser().resolve()
     flags = os.O_RDONLY
-    if hasattr(os, "O_NONBLOCK"):
-        flags |= os.O_NONBLOCK
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_NONBLOCK
+    flags |= os.O_NOFOLLOW
     descriptor = os.open(resolved, flags)
     try:
         before = os.fstat(descriptor)
@@ -135,10 +133,8 @@ def confined_output_identity(root: str | Path, path: str | Path) -> dict[str, An
     if not resolved.is_relative_to(resolved_root):
         raise ValueError(f"Engine output must stay inside its job directory: {candidate}")
     flags = os.O_RDONLY
-    if hasattr(os, "O_NONBLOCK"):
-        flags |= os.O_NONBLOCK
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_NONBLOCK
+    flags |= os.O_NOFOLLOW
     descriptor = os.open(resolved, flags)
     try:
         before = os.fstat(descriptor)

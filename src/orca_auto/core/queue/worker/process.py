@@ -14,7 +14,7 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     reconcile_orphaned_snapshot_generations,
     snapshot_runtime_roots_for_cfg,
 )
-from orca_auto.core.utils.lock import tmpfs_file_lock
+from orca_auto.core.utils.lock import file_lock
 
 from ..processes import (
     remove_worker_pid_file,
@@ -335,7 +335,7 @@ class PidFileChildProcessQueueWorker(QueueWorkerPidFileMixin, ChildProcessQueueW
     def run(self) -> int:
         lock_path = self._lock_file_path()
         try:
-            with tmpfs_file_lock(lock_path, timeout_seconds=self.worker_lock_timeout_seconds):
+            with file_lock(lock_path, timeout_seconds=self.worker_lock_timeout_seconds):
                 return super().run()
         except TimeoutError:
             print(
@@ -352,7 +352,7 @@ class PidFileChildProcessQueueWorker(QueueWorkerPidFileMixin, ChildProcessQueueW
     ) -> int:
         lock_path = self._lock_file_path()
         try:
-            with tmpfs_file_lock(lock_path, timeout_seconds=self.worker_lock_timeout_seconds):
+            with file_lock(lock_path, timeout_seconds=self.worker_lock_timeout_seconds):
                 return super().run_once(
                     idle_message=idle_message,
                     blocked_message=blocked_message,

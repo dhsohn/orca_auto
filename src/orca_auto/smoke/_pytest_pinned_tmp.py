@@ -41,7 +41,7 @@ def pytest_configure(config: pytest.Config) -> None:
     except (KeyError, ValueError) as exc:
         raise pytest.UsageError("pinned smoke pytest directory identity is invalid") from exc
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY
     try:
         descriptor = os.open(raw_path, flags)
     except OSError as exc:

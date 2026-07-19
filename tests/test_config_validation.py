@@ -3,8 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from orca_auto.core.config import MessengerConfig, TelegramConfig
-from orca_auto.orca.config import AppConfig, load_config
+from orca_auto.orca.config import load_config
 
 
 def _orca_config(payload: dict[str, object]) -> dict[str, object]:
@@ -31,19 +30,6 @@ def _write_orca_config(config_path: Path, payload: dict[str, object]) -> Path:
 
 
 class TestConfigValidation(unittest.TestCase):
-    def test_telegram_compatibility_alias_stays_synchronized(self) -> None:
-        cfg = AppConfig()
-        legacy = TelegramConfig(bot_token="legacy-token", chat_id="legacy-chat")
-
-        cfg.telegram = legacy
-
-        self.assertEqual(cfg.messenger.telegram, legacy)
-
-        nested = TelegramConfig(bot_token="nested-token", chat_id="nested-chat")
-        cfg.messenger = MessengerConfig(telegram=nested)
-
-        self.assertEqual(cfg.telegram, nested)
-
     def test_windows_runs_root_raises(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg_path = _write_orca_config(
@@ -153,7 +139,7 @@ class TestConfigValidation(unittest.TestCase):
             self.assertEqual(cfg.scratch.min_free_gb, 8)
 
     def test_orca_scratch_root_must_be_below_dev_shm(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with tempfile.TemporaryDirectory(dir="/tmp") as td:
             root = Path(td)
             allowed = root / "orca_runs"
             allowed.mkdir()
@@ -215,12 +201,12 @@ class TestConfigValidation(unittest.TestCase):
 
             cfg = load_config(str(cfg_path))
 
-            self.assertEqual(cfg.telegram.bot_token, "token")
-            self.assertEqual(cfg.telegram.chat_id, "chat")
-            self.assertEqual(cfg.telegram.timeout_seconds, 3.5)
-            self.assertEqual(cfg.telegram.max_attempts, 4)
-            self.assertEqual(cfg.telegram.retry_backoff_seconds, 0.25)
-            self.assertEqual(cfg.messenger.telegram, cfg.telegram)
+            self.assertEqual(cfg.messenger.telegram.bot_token, "token")
+            self.assertEqual(cfg.messenger.telegram.chat_id, "chat")
+            self.assertEqual(cfg.messenger.telegram.timeout_seconds, 3.5)
+            self.assertEqual(cfg.messenger.telegram.max_attempts, 4)
+            self.assertEqual(cfg.messenger.telegram.retry_backoff_seconds, 0.25)
+            self.assertEqual(cfg.messenger.telegram, cfg.messenger.telegram)
 
     def test_legacy_top_level_telegram_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:

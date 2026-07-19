@@ -21,12 +21,9 @@ def _absolute_path(value: str | Path, *, label: str) -> Path:
 
 def _directory_flags() -> int:
     flags = os.O_RDONLY
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_CLOEXEC
+    flags |= os.O_DIRECTORY
+    flags |= os.O_NOFOLLOW
     return flags
 
 

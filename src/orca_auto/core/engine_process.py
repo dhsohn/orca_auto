@@ -109,19 +109,15 @@ def open_confined_log(
     if not parent.expanduser().resolve().is_relative_to(resolved_cwd):
         raise ValueError(f"Engine {label} must stay inside the job directory: {log_path}")
     directory_flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        directory_flags |= os.O_DIRECTORY
-    if hasattr(os, "O_NOFOLLOW"):
-        directory_flags |= os.O_NOFOLLOW
+    directory_flags |= os.O_DIRECTORY
+    directory_flags |= os.O_NOFOLLOW
     directory_fd = os.open(parent, directory_flags)
     try:
         file_flags = os.O_WRONLY | os.O_CREAT
         if append:
             file_flags |= os.O_APPEND
-        if hasattr(os, "O_NONBLOCK"):
-            file_flags |= os.O_NONBLOCK
-        if hasattr(os, "O_NOFOLLOW"):
-            file_flags |= os.O_NOFOLLOW
+        file_flags |= os.O_NONBLOCK
+        file_flags |= os.O_NOFOLLOW
         descriptor = os.open(log_path.name, file_flags, 0o600, dir_fd=directory_fd)
     finally:
         os.close(directory_fd)
@@ -147,17 +143,13 @@ def read_confined_text(
     if parent.is_symlink() or not parent.expanduser().resolve().is_relative_to(resolved_root):
         raise ValueError(f"{label} must stay inside its root: {path}")
     directory_flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        directory_flags |= os.O_DIRECTORY
-    if hasattr(os, "O_NOFOLLOW"):
-        directory_flags |= os.O_NOFOLLOW
+    directory_flags |= os.O_DIRECTORY
+    directory_flags |= os.O_NOFOLLOW
     directory_fd = os.open(parent, directory_flags)
     try:
         file_flags = os.O_RDONLY
-        if hasattr(os, "O_NONBLOCK"):
-            file_flags |= os.O_NONBLOCK
-        if hasattr(os, "O_NOFOLLOW"):
-            file_flags |= os.O_NOFOLLOW
+        file_flags |= os.O_NONBLOCK
+        file_flags |= os.O_NOFOLLOW
         descriptor = os.open(path.name, file_flags, dir_fd=directory_fd)
     finally:
         os.close(directory_fd)
@@ -192,15 +184,12 @@ def read_confined_tail_lines(
     if parent.is_symlink() or not parent.expanduser().resolve().is_relative_to(resolved_root):
         raise ValueError(f"{label} must stay inside its root: {path}")
     directory_flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        directory_flags |= os.O_DIRECTORY
-    if hasattr(os, "O_NOFOLLOW"):
-        directory_flags |= os.O_NOFOLLOW
+    directory_flags |= os.O_DIRECTORY
+    directory_flags |= os.O_NOFOLLOW
     directory_fd = os.open(parent, directory_flags)
     try:
         file_flags = os.O_RDONLY
-        if hasattr(os, "O_NOFOLLOW"):
-            file_flags |= os.O_NOFOLLOW
+        file_flags |= os.O_NOFOLLOW
         descriptor = os.open(path.name, file_flags, dir_fd=directory_fd)
     finally:
         os.close(directory_fd)
@@ -244,10 +233,8 @@ def atomic_write_confined_bytes(
     if parent.is_symlink() or not parent.expanduser().resolve().is_relative_to(resolved_root):
         raise ValueError(f"{label} must stay inside its engine directory: {path}")
     directory_flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        directory_flags |= os.O_DIRECTORY
-    if hasattr(os, "O_NOFOLLOW"):
-        directory_flags |= os.O_NOFOLLOW
+    directory_flags |= os.O_DIRECTORY
+    directory_flags |= os.O_NOFOLLOW
     directory_fd = os.open(parent, directory_flags)
     parent_status = os.fstat(directory_fd)
     if (
@@ -264,8 +251,7 @@ def atomic_write_confined_bytes(
     descriptor = -1
     try:
         file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        if hasattr(os, "O_NOFOLLOW"):
-            file_flags |= os.O_NOFOLLOW
+        file_flags |= os.O_NOFOLLOW
         descriptor = os.open(temporary_name, file_flags, 0o600, dir_fd=directory_fd)
         view = memoryview(payload)
         while view:

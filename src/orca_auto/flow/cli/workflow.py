@@ -13,7 +13,7 @@ from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config.files import config_env_value
 from orca_auto.core.utils import now_utc_iso, timestamped_token
 from orca_auto.core.utils.coercion import normalize_text
-from orca_auto.core.utils.lock import tmpfs_file_lock
+from orca_auto.core.utils.lock import file_lock
 
 from ..engine_options import WorkflowEngineOptions
 from ..registry import (
@@ -255,7 +255,7 @@ def _record_workflow_worker_lock_error(
 def _run_workflow_worker_loop(options: _WorkflowWorkerOptions) -> int:
     cycle_count = 0
     try:
-        with tmpfs_file_lock(
+        with file_lock(
             workflow_worker_lock_path(options.workflow_root),
             timeout_seconds=options.lock_timeout_seconds,
         ):

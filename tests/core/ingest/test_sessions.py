@@ -569,7 +569,7 @@ def test_state_machine_rejects_out_of_order_publication(tmp_path: Path) -> None:
         store.mark_published(upload_id, published_path=run_dir)
 
 
-def test_legacy_disk_lock_symlink_is_ignored_without_touching_target(tmp_path: Path) -> None:
+def test_lock_symlink_is_rejected_without_touching_target(tmp_path: Path) -> None:
     root = tmp_path / "staging"
     root.mkdir()
     victim = tmp_path / "victim.txt"
@@ -577,52 +577,10 @@ def test_legacy_disk_lock_symlink_is_ignored_without_touching_target(tmp_path: P
     (root / ".upload_sessions.lock").symlink_to(victim)
     store = UploadSessionStore(root, sweep_on_startup=False)
 
-    assert store.list_sessions() == ()
+    with pytest.raises(UploadSessionStoreCorruptError, match="lock"):
+        store.list_sessions()
 
     assert victim.read_text(encoding="utf-8") == "do not truncate"
-
-
-@pytest.mark.parametrize(
-    "lock_error",
-    [
-        OSError("tmpfs unavailable"),
-        ValueError("unsafe tmpfs namespace"),
-    ],
-)
-def test_tmpfs_lock_setup_error_uses_store_corruption_contract(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    lock_error: Exception,
-) -> None:
-    store = UploadSessionStore(tmp_path, sweep_on_startup=False)
-
-    def failing_lock(*_args: object, **_kwargs: object) -> object:
-        raise lock_error
-
-    monkeypatch.setattr("orca_auto.core.ingest.sessions.tmpfs_file_lock", failing_lock)
-
-    with pytest.raises(UploadSessionStoreCorruptError) as exc_info:
-        store.list_sessions()
-
-    assert exc_info.value.__cause__ is lock_error
-
-
-def test_tmpfs_lock_timeout_remains_timeout_error(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    store = UploadSessionStore(tmp_path, sweep_on_startup=False)
-    lock_error = TimeoutError("busy")
-
-    def failing_lock(*_args: object, **_kwargs: object) -> object:
-        raise lock_error
-
-    monkeypatch.setattr("orca_auto.core.ingest.sessions.tmpfs_file_lock", failing_lock)
-
-    with pytest.raises(TimeoutError) as exc_info:
-        store.list_sessions()
-
-    assert exc_info.value is lock_error
 
 
 def test_state_symlink_is_rejected_without_following_target(tmp_path: Path) -> None:
