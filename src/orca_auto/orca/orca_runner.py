@@ -235,6 +235,22 @@ class OrcaRunner:
             raise
 
     @staticmethod
+    def _open_pinned_launch_gate() -> int:
+        path = Path(__file__).resolve().with_name("launch_gate.py")
+        flags = os.O_RDONLY | os.O_NONBLOCK
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path, flags)
+        try:
+            details = os.fstat(descriptor)
+            if not stat.S_ISREG(details.st_mode):
+                raise ValueError(f"ORCA launch gate is not a regular file: {path}")
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    @staticmethod
     def _cleanup_published_workspace(workspace: OrcaScratchWorkspace) -> None:
         try:
             workspace.cleanup()
@@ -421,30 +437,34 @@ class OrcaRunner:
                     executable_fd, observed_executable_identity = self._open_pinned_executable()
                     if not bound_executable_identity:
                         bound_executable_identity = observed_executable_identity
-                    launch_command = [
-                        "/proc/self/exe",
-                        "-m",
-                        "orca_auto.orca.launch_gate",
-                        self.orca_executable,
-                        str(executable_fd),
-                        inp.name,
-                    ]
-                    popen_kwargs: dict[str, Any] = {
-                        "cwd": cwd,
-                        "stdin": subprocess.PIPE,
-                        "stdout": handle,
-                        "stderr": subprocess.STDOUT,
-                        "text": True,
-                        "start_new_session": True,
-                    }
-                    inherited_fds = [executable_fd]
-                    if working_directory_fd is not None:
-                        inherited_fds.append(working_directory_fd)
-                    popen_kwargs["pass_fds"] = tuple(inherited_fds)
+                    launch_gate_fd = -1
                     try:
+                        launch_gate_fd = self._open_pinned_launch_gate()
+                        launch_command = [
+                            "/proc/self/exe",
+                            f"/proc/self/fd/{launch_gate_fd}",
+                            str(launch_gate_fd),
+                            self.orca_executable,
+                            str(executable_fd),
+                            inp.name,
+                        ]
+                        popen_kwargs: dict[str, Any] = {
+                            "cwd": cwd,
+                            "stdin": subprocess.PIPE,
+                            "stdout": handle,
+                            "stderr": subprocess.STDOUT,
+                            "text": True,
+                            "start_new_session": True,
+                        }
+                        inherited_fds = [launch_gate_fd, executable_fd]
+                        if working_directory_fd is not None:
+                            inherited_fds.append(working_directory_fd)
+                        popen_kwargs["pass_fds"] = tuple(inherited_fds)
                         proc = subprocess.Popen(launch_command, **popen_kwargs)
                     finally:
                         os.close(executable_fd)
+                        if launch_gate_fd >= 0:
+                            os.close(launch_gate_fd)
                     if self._register_running_job is not None:
                         self._register_running_job(SimpleNamespace(process=proc))
                         admission_registered = True

@@ -92,13 +92,16 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
 
         args, kwargs = mock_popen.call_args
         command = args[0]
-        self.assertEqual(
-            command[:4],
-            ["/proc/self/exe", "-m", "orca_auto.orca.launch_gate", "/opt/orca/orca"],
-        )
-        self.assertGreaterEqual(int(command[4]), 3)
+        self.assertEqual(command[0], "/proc/self/exe")
+        self.assertTrue(command[1].startswith("/proc/self/fd/"))
+        launch_gate_fd = int(command[1].removeprefix("/proc/self/fd/"))
+        self.assertEqual(int(command[2]), launch_gate_fd)
+        self.assertEqual(command[3], "/opt/orca/orca")
+        executable_fd = int(command[4])
+        self.assertGreaterEqual(executable_fd, 3)
         self.assertEqual(command[5], "test.inp")
-        self.assertIn(int(command[4]), kwargs["pass_fds"])
+        self.assertIn(launch_gate_fd, kwargs["pass_fds"])
+        self.assertIn(executable_fd, kwargs["pass_fds"])
         self.assertEqual(kwargs["stdin"], subprocess.PIPE)
         self.assertTrue(kwargs["start_new_session"])
         self.assertEqual(result.command, ("/opt/orca/orca", "test.inp"))

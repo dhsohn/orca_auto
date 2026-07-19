@@ -275,6 +275,9 @@ def _finish_attempt_exception(
     exc: BaseException,
 ) -> int:
     published_out = _last_out_path_from_state(ctx.state)
+    durable_out = current_inp.with_suffix(".out")
+    if durable_out.is_file() and not durable_out.is_symlink():
+        published_out = str(durable_out)
     if isinstance(exc, KeyboardInterrupt):
         logger.warning("Interrupted by user during attempt %d", loop.execution_index)
         return _finish_attempt(

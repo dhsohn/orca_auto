@@ -21,6 +21,15 @@ class _InterruptRunner:
         raise KeyboardInterrupt
 
 
+class _InPlaceFailureRunner:
+    def __init__(self, exc: BaseException) -> None:
+        self.exc = exc
+
+    def run(self, inp_path: Path):
+        inp_path.with_suffix(".out").write_text("partial output\n", encoding="utf-8")
+        raise self.exc
+
+
 class _WorkerShutdownRunner:
     def run(self, _inp_path: Path):
         raise WorkerShutdownInterrupt
@@ -250,6 +259,116 @@ class TestAttemptEngine(unittest.TestCase):
         self.assertEqual(final_result["reason"], "interrupted_by_user")
         self.assertEqual(saved["status"], "failed")
         self.assertEqual(len(emitted_payloads), 1)
+
+    def test_in_place_failure_preserves_existing_output_path(self) -> None:
+        cases = (
+            (KeyboardInterrupt(), 130, "interrupted_by_user"),
+            (RuntimeError("injected runner failure"), 1, "runner_exception"),
+        )
+        for exc, expected_rc, expected_reason in cases:
+            with self.subTest(reason=expected_reason), tempfile.TemporaryDirectory() as td:
+                reaction_dir = Path(td)
+                selected_inp = reaction_dir / "rxn.inp"
+                selected_inp.write_text("! SP\n", encoding="utf-8")
+                state = new_state(reaction_dir, selected_inp, max_retries=0)
+
+                rc = run_attempts(
+                    reaction_dir,
+                    selected_inp,
+                    state,
+                    resumed=False,
+                    runner=_InPlaceFailureRunner(exc),
+                    max_retries=0,
+                    retry_inp_path=_retry_inp_path,
+                    to_resolved_local=lambda raw: Path(raw),
+                    emit=lambda _payload: None,
+                )
+                saved = load_state(reaction_dir)
+
+                assert saved is not None
+                final_result = saved["final_result"]
+                assert final_result is not None
+                self.assertEqual(rc, expected_rc)
+                self.assertEqual(final_result["reason"], expected_reason)
+                self.assertEqual(saved["attempts"], [])
+                self.assertEqual(saved.get("scratch_publications", []), [])
+                self.assertEqual(
+                    final_result["last_out_path"],
+                    str(selected_inp.with_suffix(".out")),
+                )
+
+    def test_in_place_retry_failure_prefers_current_partial_output(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction_dir = Path(td)
+            selected_inp = reaction_dir / "rxn.inp"
+            selected_inp.write_text("! ScanTS\n", encoding="utf-8")
+            previous_out = selected_inp.with_suffix(".out")
+            previous_out.write_text("previous output\n", encoding="utf-8")
+            retry_inp = _retry_inp_path(selected_inp, 1)
+            retry_inp.write_text("! ScanTS\n", encoding="utf-8")
+            state = new_state(reaction_dir, selected_inp, max_retries=3)
+            state["attempts"].append(
+                {
+                    "index": 1,
+                    "inp_path": str(selected_inp),
+                    "out_path": str(previous_out),
+                    "return_code": 1,
+                    "analyzer_status": "error_scf",
+                    "analyzer_reason": "scf_not_converged",
+                    "markers": {},
+                    "patch_actions": [],
+                    "started_at": "2026-07-19T00:00:00+00:00",
+                    "ended_at": "2026-07-19T00:00:01+00:00",
+                }
+            )
+
+            rc = run_attempts(
+                reaction_dir,
+                selected_inp,
+                state,
+                resumed=False,
+                runner=_InPlaceFailureRunner(RuntimeError("retry failed")),
+                max_retries=3,
+                retry_inp_path=_retry_inp_path,
+                to_resolved_local=lambda raw: Path(raw),
+                emit=lambda _payload: None,
+            )
+            saved = load_state(reaction_dir)
+
+        assert saved is not None
+        final_result = saved["final_result"]
+        assert final_result is not None
+        self.assertEqual(rc, 1)
+        self.assertEqual(final_result["last_out_path"], str(retry_inp.with_suffix(".out")))
+
+    def test_in_place_failure_does_not_report_symlink_output(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction_dir = Path(td)
+            selected_inp = reaction_dir / "rxn.inp"
+            selected_inp.write_text("! SP\n", encoding="utf-8")
+            outside_out = reaction_dir / "outside.out"
+            outside_out.write_text("outside\n", encoding="utf-8")
+            selected_inp.with_suffix(".out").symlink_to(outside_out)
+            state = new_state(reaction_dir, selected_inp, max_retries=0)
+
+            rc = run_attempts(
+                reaction_dir,
+                selected_inp,
+                state,
+                resumed=False,
+                runner=_InterruptRunner(),
+                max_retries=0,
+                retry_inp_path=_retry_inp_path,
+                to_resolved_local=lambda raw: Path(raw),
+                emit=lambda _payload: None,
+            )
+            saved = load_state(reaction_dir)
+
+        assert saved is not None
+        final_result = saved["final_result"]
+        assert final_result is not None
+        self.assertEqual(rc, 130)
+        self.assertIsNone(final_result["last_out_path"])
 
     def test_worker_shutdown_propagates_without_failed_final_result(self) -> None:
         with tempfile.TemporaryDirectory() as td:
