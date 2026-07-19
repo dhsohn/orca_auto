@@ -163,6 +163,8 @@ messenger:
 orca:
   runtime:
     default_max_retries: 2
+    scratch_root: "/dev/shm/orca_auto"
+    scratch_min_free_gb: 8
   paths:
     orca_executable: "/path/to/orca/orca"
 ```
@@ -173,6 +175,10 @@ Field descriptions:
   workspaces; completed runs stay here under their submitted directory names
 - `orca.runtime.default_max_retries`: `0` disables ORCA retries; positive values
   enable the calculation-type retry policy
+- `orca.runtime.scratch_root`: optional dedicated directory below `/dev/shm` for
+  private per-attempt ORCA working directories
+- `orca.runtime.scratch_min_free_gb`: positive tmpfs free-space launch guard;
+  defaults to `8` when RAM scratch is enabled
 - `scheduler.max_active_simulations`: Shared total active-run cap across ORCA, standalone xTB-MD, internal xTB stages, and internal CREST stages
 - `scheduler.max_active_xtb_md`: Positive standalone xTB-MD subcap; defaults to `1`
 - `scheduler.admission_root`: Shared admission root for machine-wide slot
@@ -189,6 +195,28 @@ Notes:
 
 - `default_max_retries=0` disables ORCA retries; any positive value enables the
   calculation-type retry policy, which caps retries by ORCA route type
+- With `scratch_root` configured, ORCA runs against a private input closure in
+  tmpfs. Dependencies must use a single relative basename and remain
+  byte-identical; a missing final newline is added only to the selected working
+  copy. Only one scratch workspace is admitted. After the process tree exits,
+  every surviving regular file except ORCA `*.tmp`/`*.tmp.*` scratch files is
+  committed as a journaled file-set transaction into the inode-pinned durable
+  visible generation. Reserved runtime-state names fail closed. Durable
+  queue/state/process fences remain on disk. An unresolved or stale scratch
+  workspace is preserved and blocks new launches for operator inspection. A host
+  or WSL shutdown loses unpublished in-RAM output and checkpoints, so recovery
+  may restart from the last durable generation rather than the interrupted point.
+  Root/workspace descriptors stay pinned, and ORCA is released from a launch
+  gate only after its process-group identity is durable.
+- `scratch_min_free_gb` is checked before launch but is not a directory quota.
+  Launch also requires Linux `MemAvailable` to cover the configured per-task
+  memory cap, all currently free tmpfs space, and the configured host reserve.
+  This conservative snapshot
+  reduces swap pressure but cannot prevent later system activity or tmpfs swap;
+  keep the shared scheduler cap conservative and size `/dev/shm` for the largest
+  accepted calculation. Completed-attempt details are stored in
+  `scratch_provenance`; committed publication from an exception or worker
+  shutdown is stored in the run-level `scratch_publications` list.
 - Windows-style paths such as `C:\...`, `C:/...`, and `/mnt/c/...` are not supported in config
 - Configured executable paths for ORCA, xTB, and CREST must be absolute Linux
   paths to existing executable files and must not end in `.exe`. If

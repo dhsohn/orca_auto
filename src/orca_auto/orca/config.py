@@ -15,6 +15,7 @@ from orca_auto.core.config.files import (
     messenger_mapping_from_root,
     runs_root_from_mapping,
     validate_shared_config_sections,
+    validated_absolute_linux_path_text,
     validated_runs_root_text,
 )
 from orca_auto.core.config.schema import (
@@ -68,12 +69,23 @@ class PathsConfig:
     orca_executable: str = ""
 
 
+@dataclass(frozen=True)
+class ScratchConfig:
+    root: str = ""
+    min_free_gb: int = 8
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.root)
+
+
 @dataclass
 class AppConfig:
     runtime: RetryRuntimeConfig = field(default_factory=RetryRuntimeConfig)
     workflow_root: str = ""
     paths: PathsConfig = field(default_factory=PathsConfig)
     resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
+    scratch: ScratchConfig = field(default_factory=ScratchConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     messenger: MessengerConfig = field(default_factory=MessengerConfig)
 
@@ -146,6 +158,27 @@ def _scheduler_runtime_settings(
     return settings.max_active, settings.admission_root, settings.admission_limit
 
 
+def _scratch_config(runtime_raw: dict[str, Any]) -> ScratchConfig:
+    root_raw = _config_engines.as_nonempty_str(runtime_raw.get("scratch_root"), "")
+    if not root_raw:
+        if "scratch_min_free_gb" in runtime_raw:
+            raise ValueError("orca.runtime.scratch_min_free_gb requires orca.runtime.scratch_root")
+        return ScratchConfig()
+    root = validated_absolute_linux_path_text(
+        root_raw,
+        field_name="orca.runtime.scratch_root",
+    )
+    resolved = Path(root).expanduser().resolve(strict=False)
+    shm_root = Path("/dev/shm").resolve()
+    if resolved == shm_root or not resolved.is_relative_to(shm_root):
+        raise ValueError("orca.runtime.scratch_root must be a dedicated directory below /dev/shm")
+    min_free_gb = _config_engines.explicit_positive_int(
+        runtime_raw.get("scratch_min_free_gb", ScratchConfig.min_free_gb),
+        field_name="orca.runtime.scratch_min_free_gb",
+    )
+    return ScratchConfig(root=str(resolved), min_free_gb=min_free_gb)
+
+
 def _placeholder_keys(cfg: AppConfig) -> list[str]:
     placeholder_keys: list[str] = []
     if cfg.runtime.allowed_root == _TEMPLATE_ALLOWED_ROOT:
@@ -193,6 +226,7 @@ def load_config(config_path: str) -> AppConfig:
             orca_executable=orca_executable,
         ),
         resources=_config_engines.resource_config_from_mapping(resources_raw),
+        scratch=_scratch_config(runtime_raw),
         telegram=messenger_cfg.telegram,
         messenger=messenger_cfg,
     )

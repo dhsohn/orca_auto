@@ -1,8 +1,10 @@
 import errno
+import os
 import signal
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from collections.abc import Callable
 from pathlib import Path
@@ -10,6 +12,7 @@ from typing import Any
 from unittest.mock import MagicMock, call, patch
 
 from orca_auto.core.queue.cancellable import ProcessCleanupError
+from orca_auto.orca import scratch as scratch_mod
 from orca_auto.orca.orca_process import (
     ORCA_PROCESS_RECORD_FILE_NAME,
     OrcaProcessRecordCorruptError,
@@ -20,6 +23,7 @@ from orca_auto.orca.orca_runner import (
     ShutdownSignalGuard,
     WorkerShutdownInterrupt,
 )
+from orca_auto.orca.scratch import OrcaScratchPolicy, scratch_provenance_from_exception
 
 
 def _installed_signal_handler(
@@ -42,9 +46,38 @@ class OrcaRunnerTestCase(unittest.TestCase):
         )
         ticks_patcher.start()
         self.addCleanup(ticks_patcher.stop)
+        original_open = OrcaRunner._open_pinned_executable
+
+        def open_test_executable(runner: OrcaRunner):
+            if runner.orca_executable == "/opt/orca/orca":
+                descriptor = os.open("/bin/true", os.O_RDONLY)
+                details = os.fstat(descriptor)
+                return descriptor, {
+                    "path": runner.orca_executable,
+                    "sha256": "test-double",
+                    "size_bytes": int(details.st_size),
+                }
+            return original_open(runner)
+
+        executable_patcher = patch.object(
+            OrcaRunner,
+            "_open_pinned_executable",
+            open_test_executable,
+        )
+        executable_patcher.start()
+        self.addCleanup(executable_patcher.stop)
 
 
 class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
+    def test_open_pinned_executable_rejects_fifo_without_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            executable = Path(td) / "fake-orca"
+            os.mkfifo(executable)
+
+            runner = OrcaRunner(str(executable))
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                runner._open_pinned_executable()
+
     @patch("orca_auto.orca.orca_runner.subprocess.Popen")
     def test_command_uses_linux_binary(self, mock_popen: MagicMock) -> None:
         mock_proc = MagicMock()
@@ -59,13 +92,237 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
 
         args, kwargs = mock_popen.call_args
         command = args[0]
-        self.assertEqual(command[0], "/opt/orca/orca")
-        self.assertEqual(command[1], "test.inp")
-        self.assertEqual(len(command), 2)
+        self.assertEqual(command[0], "/proc/self/exe")
+        self.assertTrue(command[1].startswith("/proc/self/fd/"))
+        launch_gate_fd = int(command[1].removeprefix("/proc/self/fd/"))
+        self.assertEqual(int(command[2]), launch_gate_fd)
+        self.assertEqual(command[3], "/opt/orca/orca")
+        executable_fd = int(command[4])
+        self.assertGreaterEqual(executable_fd, 3)
+        self.assertEqual(command[5], "test.inp")
+        self.assertIn(launch_gate_fd, kwargs["pass_fds"])
+        self.assertIn(executable_fd, kwargs["pass_fds"])
+        self.assertEqual(kwargs["stdin"], subprocess.PIPE)
         self.assertTrue(kwargs["start_new_session"])
         self.assertEqual(result.command, ("/opt/orca/orca", "test.inp"))
         self.assertEqual(result.input_identity["path"], str(inp))
         self.assertEqual(result.input_identity["size_bytes"], len(b"! Opt\n"))
+
+    def test_ram_scratch_publishes_results_and_keeps_process_record_durable(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fake_shm = root / "shm"
+            fake_shm.mkdir()
+            durable = root / "durable"
+            durable.mkdir()
+            executable = root / "fake_orca"
+            executable.write_text(
+                "#!/bin/sh\n"
+                "stem=${1%.inp}\n"
+                'printf checkpoint > "$stem.gbw"\n'
+                'printf scratch > "$stem.EIJ.tmp"\n'
+                "printf 'ORCA TERMINATED NORMALLY\\n'\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            inp = durable / "test.inp"
+            inp.write_text("! SP\n", encoding="utf-8")
+
+            runner = OrcaRunner(str(executable))
+            with (
+                patch.object(scratch_mod, "_SCRATCH_ROOT_PARENT", fake_shm),
+                patch.object(
+                    scratch_mod,
+                    "_linux_available_memory_bytes",
+                    return_value=2**63,
+                ),
+            ):
+                runner.set_scratch_policy(
+                    OrcaScratchPolicy(
+                        root=fake_shm / "orca_auto",
+                        min_free_bytes=1,
+                        max_task_memory_bytes=1,
+                    )
+                )
+                result = runner.run(inp)
+
+            self.assertEqual(result.out_path, str(durable / "test.out"))
+            self.assertEqual(result.input_identity["path"], str(inp))
+            self.assertTrue((durable / "test.gbw").is_file())
+            self.assertFalse((durable / "test.EIJ.tmp").exists())
+            self.assertFalse((durable / ORCA_PROCESS_RECORD_FILE_NAME).exists())
+            self.assertTrue(result.scratch_provenance["used"])
+            self.assertEqual(
+                result.scratch_provenance["omitted_transient_files"],
+                ["test.EIJ.tmp"],
+            )
+
+    def test_ram_scratch_normalizes_only_the_private_input_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fake_shm = root / "shm"
+            fake_shm.mkdir()
+            durable = root / "durable"
+            durable.mkdir()
+            executable = root / "fake_orca"
+            executable.write_text(
+                "#!/bin/sh\n"
+                'test "$(tail -c 1 "$1" | wc -l)" -eq 1 || exit 9\n'
+                "printf 'ORCA TERMINATED NORMALLY\\n'\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            inp = durable / "test.inp"
+            inp.write_bytes(b"! SP")
+
+            runner = OrcaRunner(str(executable))
+            with (
+                patch.object(scratch_mod, "_SCRATCH_ROOT_PARENT", fake_shm),
+                patch.object(
+                    scratch_mod,
+                    "_linux_available_memory_bytes",
+                    return_value=2**63,
+                ),
+            ):
+                runner.set_scratch_policy(
+                    OrcaScratchPolicy(
+                        root=fake_shm / "orca_auto",
+                        min_free_bytes=1,
+                        max_task_memory_bytes=1,
+                    )
+                )
+                result = runner.run(inp)
+
+            self.assertEqual(result.return_code, 0)
+            self.assertEqual(inp.read_bytes(), b"! SP")
+            self.assertIn("test.out", result.scratch_provenance["published_files"])
+
+    def test_ram_scratch_publishes_checkpoint_before_shutdown_propagates(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fake_shm = root / "shm"
+            fake_shm.mkdir()
+            durable = root / "durable"
+            durable.mkdir()
+            executable = root / "slow_orca"
+            executable.write_text(
+                "#!/bin/sh\n"
+                "stem=${1%.inp}\n"
+                'printf checkpoint > "$stem.gbw"\n'
+                'printf scratch > "$stem.EIJ.tmp"\n'
+                "sleep 30\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            inp = durable / "test.inp"
+            inp.write_text("! SP\n", encoding="utf-8")
+
+            shutdown_checks = 0
+
+            def shutdown_requested() -> bool:
+                nonlocal shutdown_checks
+                shutdown_checks += 1
+                if shutdown_checks == 1:
+                    return False
+                time.sleep(0.1)
+                return True
+
+            runner = OrcaRunner(str(executable))
+            runner.set_shutdown_requested(shutdown_requested)
+            with (
+                patch.object(scratch_mod, "_SCRATCH_ROOT_PARENT", fake_shm),
+                patch.object(
+                    scratch_mod,
+                    "_linux_available_memory_bytes",
+                    return_value=2**63,
+                ),
+            ):
+                runner.set_scratch_policy(
+                    OrcaScratchPolicy(
+                        root=fake_shm / "orca_auto",
+                        min_free_bytes=1,
+                        max_task_memory_bytes=1,
+                    )
+                )
+                with self.assertRaises(WorkerShutdownInterrupt) as caught:
+                    runner.run(inp)
+
+            self.assertEqual((durable / "test.gbw").read_bytes(), b"checkpoint")
+            self.assertIn("interrupted by worker shutdown", (durable / "test.out").read_text())
+            self.assertFalse((durable / "test.EIJ.tmp").exists())
+            self.assertEqual(
+                scratch_provenance_from_exception(caught.exception)["published_files"],
+                ["test.gbw", "test.out"],
+            )
+            self.assertFalse(
+                any(path.name.startswith("attempt-") for path in (fake_shm / "orca_auto").iterdir())
+            )
+
+    def test_ram_scratch_executes_through_pinned_workspace_after_root_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fake_shm = root / "shm"
+            fake_shm.mkdir()
+            durable = root / "durable"
+            durable.mkdir()
+            executable = root / "fake_orca"
+            executable.write_text(
+                "#!/bin/sh\nprintf 'ORCA TERMINATED NORMALLY\\n'\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            inp = durable / "test.inp"
+            inp.write_text("! SP\n", encoding="utf-8")
+            moved_root = fake_shm / "orca_auto-moved"
+
+            runner = OrcaRunner(str(executable))
+            original_create = scratch_mod.OrcaScratchWorkspace.create
+
+            def replace_root_after_create(*args, **kwargs):
+                workspace = original_create(*args, **kwargs)
+                workspace.policy.root.rename(moved_root)
+                workspace.policy.root.mkdir()
+                replacement = workspace.policy.root / workspace.path.name
+                replacement.mkdir()
+                (replacement / inp.name).write_bytes(inp.read_bytes())
+                return workspace
+
+            with (
+                patch.object(scratch_mod, "_SCRATCH_ROOT_PARENT", fake_shm),
+                patch.object(
+                    scratch_mod,
+                    "_linux_available_memory_bytes",
+                    return_value=2**63,
+                ),
+                patch.object(
+                    scratch_mod.OrcaScratchWorkspace,
+                    "create",
+                    side_effect=replace_root_after_create,
+                ),
+            ):
+                runner.set_scratch_policy(
+                    OrcaScratchPolicy(
+                        root=fake_shm / "orca_auto",
+                        min_free_bytes=1,
+                        max_task_memory_bytes=1,
+                    )
+                )
+                with self.assertRaisesRegex(
+                    scratch_mod.OrcaScratchError,
+                    "workspace pathname identity changed",
+                ):
+                    runner.run(inp)
+
+            moved_workspace = next(
+                path for path in moved_root.iterdir() if path.name.startswith("attempt-")
+            )
+            self.assertIn(
+                "ORCA TERMINATED NORMALLY",
+                (moved_workspace / "test.out").read_text(encoding="utf-8"),
+            )
+            replacement_workspace = fake_shm / "orca_auto" / moved_workspace.name
+            self.assertFalse((replacement_workspace / "test.out").exists())
+            self.assertFalse((durable / "test.out").exists())
 
 
 class TestOrcaRunnerTermination(OrcaRunnerTestCase):
@@ -235,6 +492,30 @@ class TestOrcaRunnerProcessRecordLifecycle(OrcaRunnerTestCase):
 
             terminate.assert_called_once_with(mock_proc)
             self.assertFalse((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
+
+    @patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False)
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_launch_gate_release_failure_clears_durable_process_record(
+        self,
+        mock_popen: MagicMock,
+        _group_alive: MagicMock,
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        mock_proc.poll.return_value = 0
+        mock_proc.stdin.write.side_effect = OSError("release failed")
+        mock_popen.return_value = mock_proc
+        runner = OrcaRunner("/opt/orca/orca")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            inp = root / "test.inp"
+            inp.write_text("! SP\n", encoding="utf-8")
+            with patch.object(runner, "_terminate_subprocess_tree", return_value=True):
+                with self.assertRaisesRegex(OSError, "release failed"):
+                    runner.run(inp)
+
+            self.assertFalse((root / ORCA_PROCESS_RECORD_FILE_NAME).exists())
 
     @patch("orca_auto.orca.orca_runner.subprocess.Popen")
     def test_record_init_cleanup_failure_keeps_marker_until_process_exit(

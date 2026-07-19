@@ -40,6 +40,20 @@ class TestAttemptReporting(unittest.TestCase):
             "/tmp/run.out",
         )
 
+    def test_last_out_path_prefers_newer_interrupted_retry_publication(self) -> None:
+        state = {
+            "attempts": [{"index": 1, "out_path": "/tmp/run.out"}],
+            "scratch_publications": [
+                {
+                    "attempt_index": 2,
+                    "inp_path": "/tmp/run.retry01.inp",
+                    "publication": {"published_files": ["run.retry01.gbw", "run.retry01.out"]},
+                }
+            ],
+        }
+
+        self.assertEqual(last_out_path_from_state(state), "/tmp/run.retry01.out")
+
     def test_build_final_result_keeps_supported_extra_fields_only(self) -> None:
         result = build_final_result(
             status=RunStatus.FAILED,

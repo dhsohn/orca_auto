@@ -150,8 +150,11 @@ def test_run_handles_signal_install_value_error(
     proc.wait.return_value = 0
     mock_popen.return_value = proc
 
-    runner = OrcaRunner("/opt/orca/orca")
     with tempfile.TemporaryDirectory() as td:
+        executable = Path(td) / "fake-orca"
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o755)
+        runner = OrcaRunner(str(executable))
         inp = Path(td) / "test.inp"
         inp.write_text("! Opt\n", encoding="utf-8")
         result = runner.run(inp)
@@ -178,9 +181,12 @@ def test_run_ignores_restore_signal_value_error(
             raise ValueError("restore failed")
         return None
 
-    runner = OrcaRunner("/opt/orca/orca")
     with patch("orca_auto.orca.orca_runner.signal.signal", side_effect=_signal):
         with tempfile.TemporaryDirectory() as td:
+            executable = Path(td) / "fake-orca"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            runner = OrcaRunner(str(executable))
             inp = Path(td) / "test.inp"
             inp.write_text("! Opt\n", encoding="utf-8")
             result = runner.run(inp)

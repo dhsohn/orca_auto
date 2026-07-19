@@ -223,6 +223,7 @@ def _state_from_normalized_payload(payload: dict[str, Any]) -> RunState | None:
         "started_at": _text(timestamps.get("started_at")),
         "updated_at": _text(timestamps.get("updated_at")),
         "attempts": list(engine_payload.get("attempts") or []),
+        "scratch_publications": list(engine_payload.get("scratch_publications") or []),
         "execution_provenance": _dict(engine_payload.get("execution_provenance")),
         "final_result": cast(RunFinalResult | None, engine_payload.get("final_result")),
     }
@@ -260,6 +261,7 @@ def new_state(reaction_dir: Path, selected_inp: Path, max_retries: int) -> RunSt
         "started_at": ts,
         "updated_at": ts,
         "attempts": [],
+        "scratch_publications": [],
         "final_result": None,
     }
 
@@ -313,6 +315,9 @@ def _normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any])
     attempts = state.get("attempts")
     if not isinstance(attempts, list):
         attempts = []
+    scratch_publications = state.get("scratch_publications")
+    if not isinstance(scratch_publications, list):
+        scratch_publications = []
     final_result = state.get("final_result")
     final_result_payload = _dict(final_result)
     selected_inp = _text(state.get("selected_inp"))
@@ -362,6 +367,7 @@ def _normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any])
             "run_id": _text(state.get("run_id")),
             "max_retries": int(state.get("max_retries", 0) or 0),
             "attempts": attempts,
+            "scratch_publications": scratch_publications,
             "execution_provenance": _dict(state.get("execution_provenance")),
             "final_result": final_result,
         },
@@ -395,6 +401,7 @@ def write_report_json(
             "started_at": _text(report_payload.get("started_at")),
             "updated_at": _text(report_payload.get("updated_at")),
             "attempts": list(report_payload.get("attempts") or []),
+            "scratch_publications": list(report_payload.get("scratch_publications") or []),
             "final_result": cast(RunFinalResult | None, report_payload.get("final_result")),
         }
         payload = _normalized_payload_from_state(reaction_dir, state)

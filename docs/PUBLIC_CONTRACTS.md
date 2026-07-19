@@ -134,6 +134,8 @@ Supported configuration paths:
 - `messenger.discord.max_attempts`
 - `messenger.discord.retry_backoff_seconds`
 - `orca.runtime.default_max_retries`
+- `orca.runtime.scratch_root`
+- `orca.runtime.scratch_min_free_gb`
 - `orca.paths.orca_executable`
 
 Stable behavior:
@@ -153,6 +155,24 @@ Stable behavior:
 - `orca.runtime.default_max_retries: 0` disables ORCA retries.
 - A positive `default_max_retries` enables calculation-type retry policy, still
   capped by ORCA route type.
+- `orca.runtime.scratch_root`, when present, must name a dedicated directory
+  below `/dev/shm`; `scratch_min_free_gb` must be a positive integer. ORCA then
+  executes one private tmpfs attempt at a time and publishes surviving regular
+  files other than `*.tmp`/`*.tmp.*` as a journaled transaction to the
+  inode-pinned durable visible generation. Runtime state artifact names cannot
+  be published. Dependencies must be basename-relative and remain
+  byte-identical; the selected working copy may receive only a missing final
+  newline. Unresolved scratch workspaces fail closed. Launch requires current
+  host available memory to cover the configured task-memory cap, free tmpfs,
+  and `scratch_min_free_gb` host reserve. Completed-attempt metadata is recorded
+  in `scratch_provenance`; committed output from an interrupted/exception path
+  is recorded in `scratch_publications`, never in immutable execution-snapshot
+  provenance.
+  Root/workspace and generation directories are descriptor-pinned. A launch
+  gate may `exec` ORCA only after its PID/PGID process record is durable; EOF
+  before release exits without starting ORCA.
+  Queue, state, and process ownership remain durable. Unpublished scratch output
+  is intentionally not a recovery contract across host or WSL shutdown.
 - Outbound Telegram delivery requires `messenger.provider: telegram` and non-empty
   `messenger.telegram.bot_token` and `messenger.telegram.chat_id` values.
 - Canonical Discord delivery uses `messenger.discord.bot_token` plus

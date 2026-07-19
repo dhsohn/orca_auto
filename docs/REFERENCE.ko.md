@@ -165,6 +165,8 @@ messenger:
 orca:
   runtime:
     default_max_retries: 2
+    scratch_root: "/dev/shm/orca_auto"
+    scratch_min_free_gb: 8
   paths:
     orca_executable: "/path/to/orca/orca"
 ```
@@ -175,6 +177,10 @@ orca:
   완료된 실행은 제출 당시 디렉터리 이름 그대로 이곳에 남습니다
 - `orca.runtime.default_max_retries`: `0`이면 ORCA 재시도 비활성화, 양수면
   계산 종류별 재시도 정책 활성화
+- `orca.runtime.scratch_root`: private attempt별 ORCA 작업 디렉터리에 사용하는
+  `/dev/shm` 아래의 선택적 전용 경로
+- `orca.runtime.scratch_min_free_gb`: RAM scratch를 활성화했을 때 적용하는 양의 tmpfs
+  여유 공간 시작 gate. 기본값은 `8`
 - `scheduler.max_active_simulations`: ORCA, 단독 xTB-MD, 내부 xTB 단계, 내부 CREST 단계 전반에 걸친
   공유 활성 실행 총 상한
 - `scheduler.max_active_xtb_md`: 양의 단독 xTB-MD 부분 상한. 생략하면 `1`
@@ -193,6 +199,25 @@ orca:
 
 - `default_max_retries=0`은 ORCA 재시도를 비활성화합니다. 양수 값은 계산 종류별
   재시도 정책을 활성화하며, 실제 재시도 횟수는 ORCA route 종류별 cap을 따릅니다.
+- `scratch_root`를 설정하면 ORCA는 private input closure를 tmpfs에서 실행합니다. dependency는
+  하나의 상대 basename을 사용하고 byte-identical하게 유지해야 하며, 마지막 줄바꿈이 없으면
+  선택된 working copy에만 추가합니다. scratch workspace는 한 번에 하나만 허용합니다. process
+  tree가 끝나면 ORCA `*.tmp`/`*.tmp.*` scratch 파일을 제외하고 남은 모든 일반 파일을 inode로
+  고정한 durable visible generation에 저널 기반 단일 file-set transaction으로 commit합니다.
+  예약한 runtime-state 이름은 fail-closed합니다. durable queue/state/process fence는 계속 디스크에
+  둡니다. 해석할 수 없거나 stale인 scratch workspace는 운영자 검사를 위해 보존하고 새 시작을
+  막습니다. host 또는 WSL이 종료되면 아직 반출하지 않은 RAM output과
+  checkpoint는 사라지므로, recovery는 중단 지점이 아니라 마지막 durable generation부터
+  다시 시작할 수 있습니다.
+  root/workspace descriptor는 계속 고정하며, ORCA는 process-group identity가 durable해진 뒤에만
+  launch gate에서 release됩니다.
+- `scratch_min_free_gb`는 실행 전 gate이지 디렉터리 quota가 아닙니다. 시작 시 Linux
+  `MemAvailable`이 설정된 task memory 상한, 현재 tmpfs 전체 여유 공간, 설정한 host reserve
+  합계를 감당할 수 있어야 합니다. 이 보수적 snapshot은 swap 압력을 줄이지만 이후 system
+  activity나 tmpfs swap 자체를
+  막지는 못하므로 shared scheduler 상한을 보수적으로 유지하고, `/dev/shm`은 허용할 최대 계산에
+  맞춰야 합니다. 완료 attempt의 게시 상세는 `scratch_provenance`에, exception 또는 worker
+  shutdown 뒤 commit된 게시 근거는 run-level `scratch_publications` 목록에 기록합니다.
 - `C:\...`, `C:/...`, `/mnt/c/...` 같은 Windows 스타일 경로는 설정에서 지원되지
   않습니다.
 - ORCA, xTB, CREST의 설정된 실행 경로는 실제 존재하는 실행 파일을 가리키는 절대 Linux

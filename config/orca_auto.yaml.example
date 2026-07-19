@@ -120,6 +120,17 @@ orca:
     # Retry count after the initial attempt.
     # Example: 2 means "1 initial run + up to 2 retries" = 3 total attempts.
     default_max_retries: 2
+    # Optional RAM-backed ORCA working directory. When configured, exactly one
+    # private attempt runs below /dev/shm. Surviving non-*.tmp artifacts are
+    # transactionally committed into the inode-pinned execution generation;
+    # host/WSL loss still loses all unpublished scratch progress. An unresolved
+    # workspace blocks new launches until it is inspected or tmpfs is reset.
+    # scratch_root: /dev/shm/orca_auto
+    # Refuse a new attempt unless this much tmpfs space remains in addition to
+    # its bound input snapshot. Launch also requires current MemAvailable to
+    # cover the per-task memory cap, all remaining tmpfs space, and this reserve.
+    # These are admission guards, not a per-job quota or a no-swap guarantee.
+    # scratch_min_free_gb: 8
   paths:
     # Linux path to the ORCA executable.
     orca_executable: /home/user/opt/orca/orca

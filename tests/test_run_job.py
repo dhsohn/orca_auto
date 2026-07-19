@@ -16,6 +16,7 @@ from orca_auto.orca.execution_binding import (
 )
 from orca_auto.orca.orca_runner import OrcaRunner, WorkerShutdownInterrupt
 from orca_auto.orca.queue.adapter import dequeue_next, enqueue, list_queue
+from orca_auto.orca.scratch import scratch_provenance_from_exception
 from orca_auto.orca.state import load_state, new_state, save_state
 from orca_auto.orca.worker_execution import execute_run_job
 
@@ -208,6 +209,34 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
         run_result.execution_provenance["bound_selected_identity"]
         == entry.metadata["execution_snapshot"]["bound_selected_identity"]
     )
+
+    committed_provenance = {
+        "used": True,
+        "filesystem": "tmpfs",
+        "publication_status": "committed",
+        "published_files": ["job.out"],
+        "omitted_transient_files": [],
+        "omitted_transient_bytes": 0,
+    }
+    with (
+        patch.object(
+            OrcaRunner,
+            "run",
+            return_value=SimpleNamespace(
+                out_path="job.out",
+                return_code=0,
+                scratch_provenance=committed_provenance,
+            ),
+        ),
+        patch.object(
+            worker_job,
+            "verify_orca_execution_snapshot",
+            side_effect=[None, RuntimeError("post-run verification failed")],
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="post-run verification failed") as caught:
+            runner.run(Path(entry.metadata["selected_inp"]))
+    assert scratch_provenance_from_exception(caught.value) == committed_provenance
     assert released == []
 
 
