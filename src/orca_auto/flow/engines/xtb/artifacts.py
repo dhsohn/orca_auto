@@ -39,6 +39,7 @@ def _detail_fields(result: XtbRunResult) -> dict[str, Any]:
         "candidate_details": [dict(item) for item in result.candidate_details],
         "analysis_summary": dict(result.analysis_summary),
         "output_identities": dict(result.output_identities),
+        "scratch_provenance": dict(result.scratch_provenance),
     }
 
 

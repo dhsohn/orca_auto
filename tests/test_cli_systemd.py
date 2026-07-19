@@ -94,6 +94,9 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
 
     unit_by_name = {unit.name: unit for unit in plan.units}
     worker_content = unit_by_name["orca_auto-queue-worker@.service"].content
+    workflow_worker_content = unit_by_name["orca_auto-workflow-worker@.service"].content
+    assert "queue worker --app orca" in worker_content
+    assert "queue worker --app workflow" in workflow_worker_content
     assert f"WorkingDirectory={repo.resolve(strict=False)}" in worker_content
     assert f"Environment=ORCA_AUTO_CONFIG={config_path.resolve(strict=False)}" in worker_content
     assert f"ExecStart={repo.resolve(strict=False)}/.venv/bin/python" in worker_content
@@ -687,6 +690,8 @@ def test_cmd_service_status_prints_compact_systemd_state(capsys: Any) -> None:
         ("is-enabled", "orca_auto-runtime@alice.target"): "enabled",
         ("is-active", "orca_auto-queue-worker@alice.service"): "active",
         ("is-enabled", "orca_auto-queue-worker@alice.service"): "enabled",
+        ("is-active", "orca_auto-workflow-worker@alice.service"): "inactive",
+        ("is-enabled", "orca_auto-workflow-worker@alice.service"): "disabled",
         ("is-active", "orca_auto-bot@alice.service"): "inactive",
         ("is-enabled", "orca_auto-bot@alice.service"): "disabled",
     }
@@ -719,6 +724,8 @@ def test_cmd_service_status_prints_compact_systemd_state(capsys: Any) -> None:
     assert "Enabled" not in output
     assert "worker" in output
     assert "orca_auto-queue-worker@alice.service" in output
+    assert "workflow" in output
+    assert "orca_auto-workflow-worker@alice.service" in output
     assert "inactive" in output
 
 
@@ -808,6 +815,8 @@ def test_cmd_service_status_emits_json(capsys: Any) -> None:
         ("is-enabled", "orca_auto-runtime@alice.target"): "enabled",
         ("is-active", "orca_auto-queue-worker@alice.service"): "failed",
         ("is-enabled", "orca_auto-queue-worker@alice.service"): "enabled",
+        ("is-active", "orca_auto-workflow-worker@alice.service"): "inactive",
+        ("is-enabled", "orca_auto-workflow-worker@alice.service"): "disabled",
         ("is-active", "orca_auto-bot@alice.service"): "inactive",
         ("is-enabled", "orca_auto-bot@alice.service"): "disabled",
     }

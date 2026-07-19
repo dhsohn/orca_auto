@@ -22,6 +22,7 @@ from orca_auto.core.utils.coercion import normalize_text
 
 SYSTEMD_UNIT_NAMES = (
     "orca_auto-queue-worker@.service",
+    "orca_auto-workflow-worker@.service",
     "orca_auto-bot@.service",
     "orca_auto-runtime@.target",
 )

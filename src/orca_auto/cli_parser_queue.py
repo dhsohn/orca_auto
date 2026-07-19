@@ -97,7 +97,10 @@ def _add_queue_worker_options(parser: argparse.ArgumentParser) -> None:
             ),
             "workflow",
         ],
-        help="Worker app to supervise; may be passed more than once",
+        help=(
+            "Worker app to supervise; defaults to ORCA only and may be passed more than once; "
+            "workflow explicitly includes its xTB/CREST workers"
+        ),
     )
     add_workflow_worker_cli_options(
         parser,

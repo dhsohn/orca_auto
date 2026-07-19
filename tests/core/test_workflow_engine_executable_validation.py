@@ -19,6 +19,34 @@ _SHARED_CONFIG_LOADERS: tuple[tuple[str, Loader], ...] = (
 )
 
 
+@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
+def test_shared_engine_loaders_use_orca_runtime_scratch_policy(
+    tmp_path: Path,
+    loader_name: str,
+    loader: Loader,
+) -> None:
+    del loader_name
+    config_path = _write_shared_config(
+        tmp_path,
+        {
+            "orca": {
+                "paths": {
+                    "orca_executable": str(_write_file(tmp_path / "bin" / "orca", executable=True))
+                },
+                "runtime": {
+                    "scratch_root": "/dev/shm/orca_auto",
+                    "scratch_min_free_gb": 7,
+                },
+            }
+        },
+    )
+
+    cfg = loader(str(config_path))
+
+    assert cfg.scratch.root == "/dev/shm/orca_auto"
+    assert cfg.scratch.min_free_gb == 7
+
+
 def _write_config(
     tmp_path: Path,
     *,

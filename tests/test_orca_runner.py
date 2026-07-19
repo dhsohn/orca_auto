@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, call, patch
 
+from orca_auto.core import engine_scratch as scratch_mod
 from orca_auto.core.queue.cancellable import ProcessCleanupError
-from orca_auto.orca import scratch as scratch_mod
 from orca_auto.orca.orca_process import (
     ORCA_PROCESS_RECORD_FILE_NAME,
     OrcaProcessRecordCorruptError,

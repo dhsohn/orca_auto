@@ -327,6 +327,12 @@ false-success marker 부재가 모두 필요합니다. 공개 상태/리포트�
   시작을 거부합니다. worker/host crash는 아직 게시하지 않은
   tmpfs checkpoint를 잃을 수 있으며, 이때 기존 durable recovery가
   이미 게시된 근거부터 재개합니다.
+  scratch workspace와 journal 구현의 단일 소유자는 `core.engine_scratch`이고 ORCA는
+  flat input dependency parser만 제공합니다. workflow xTB/CREST도 같은 private
+  workspace와 transaction을 사용하되 변경 불가능한 입력 snapshot은 durable 절대
+  경로로 유지합니다. xTB는 job type별 canonical 결과와 log를, CREST는 named retained
+  ensemble과 log를 게시하며 큰 엔진 work tree는 commit 뒤 제거합니다. CREST 자체의
+  `--scratch` copier는 계속 사용하지 않습니다.
   최종 process group에는 one-byte launch gate를 먼저 시작합니다. worker가 해당 PID/PGID를 durable
   record에 확정한 뒤에만 gate가 ORCA를 `exec`하므로, 등록 전 parent hard failure가 소유권 없는
   계산을 남기지 않습니다.
@@ -568,7 +574,8 @@ token, 채널 ID, operator allowlist가 필요하며, bot token+기본 채널이
 
 | 유닛                                  | 역할                                            |
 |---------------------------------------|-------------------------------------------------|
-| `orca_auto-queue-worker@.service`     | ORCA/xTB-MD 감독 + 워크플로우/내부 xTB/CREST 워커 시작 |
+| `orca_auto-queue-worker@.service`     | ORCA 워커만 감독                               |
+| `orca_auto-workflow-worker@.service`  | opt-in workflow + 내부 xTB/CREST 워커           |
 | `orca_auto-bot@.service`              | 선택된 provider-neutral messenger 봇            |
 | `orca_auto-runtime@.target`           | 둘을 함께 시작                                  |
 
@@ -577,7 +584,7 @@ token, 채널 ID, operator allowlist가 필요하며, bot token+기본 채널이
 활성화되며, 설정 후 다시 실행하면 전체 타깃이 활성화됩니다. WSL에서는
 `/etc/wsl.conf`에서 `systemd`가 활성화되어 있어야 합니다.
 
-통합 감독자는 각 워커를 별도 프로세스 세션에서 시작하고 최초 시작을 2초씩
+선택한 감독자는 각 워커를 별도 프로세스 세션에서 시작하고 최초 시작을 2초씩
 분산합니다. 따라서 워커 쪽 프로세스 그룹 신호나 시작 시 복구 부하가 모든 형제
 워커에 한꺼번에 전파되지 않습니다. 데몬 워커가 5분 안에 세 번 종료되면 무한
 재시작 대신 감독자 회로가 열립니다. 각 엔진 큐 워커는 시작 시 내구 상태를 조정하지만,

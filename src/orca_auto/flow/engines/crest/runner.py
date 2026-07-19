@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import resource
 import subprocess
@@ -20,12 +21,20 @@ from orca_auto.core.engine_process import (
     cleanup_failed_logged_process_start,
     start_logged_process,
 )
+from orca_auto.core.engine_scratch import (
+    EngineScratchWorkspace,
+    scratch_publication_provenance,
+)
 from orca_auto.core.queue.engine.input_snapshot import (
     read_stable_regular_file,
     verify_input_snapshots,
 )
 from orca_auto.core.utils import fsync_directory, now_utc_iso
 from orca_auto.core.utils import process as process_utils
+from orca_auto.flow.engines.scratch import (
+    create_engine_scratch_workspace,
+    publish_engine_scratch_workspace,
+)
 from orca_auto.flow.xyz_utils import (
     load_output_xyz_frames,
     load_xyz_frames,
@@ -38,11 +47,16 @@ from .job_inputs import (
     load_job_manifest,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 _RETAINED_ENSEMBLE_CANDIDATES = (
     "crest_conformers.xyz",
     "crest_ensemble.xyz",
     "crest_rotamers.xyz",
     "crest_best.xyz",
+)
+_CREST_SCRATCH_PUBLICATION_NAMES = frozenset(
+    (*_RETAINED_ENSEMBLE_CANDIDATES, "crest.stdout.log", "crest.stderr.log")
 )
 _CREST_NATIVE_INT_MAX = (1 << 31) - 1
 _CREST_DEFAULT_MAX_MD_STEPS = 10_000_000
@@ -79,6 +93,7 @@ class CrestRunResult:
     resource_request: dict[str, int]
     resource_actual: dict[str, int]
     output_identities: dict[str, dict[str, Any]] = field(default_factory=dict)
+    scratch_provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -96,6 +111,8 @@ class CrestRunningJob:
     resource_request: dict[str, int]
     resource_actual: dict[str, int]
     job_dir: str
+    durable_job_dir: str = ""
+    scratch_workspace: EngineScratchWorkspace | None = None
     manifest_snapshot: dict[str, Any] = field(default_factory=dict)
     execution_snapshot: dict[str, Any] = field(default_factory=dict)
 
@@ -641,10 +658,6 @@ def start_crest_job(
         resource_request=resource_request,
     )
 
-    stdout_log = job_dir / "crest.stdout.log"
-    stderr_log = job_dir / "crest.stderr.log"
-    resolved_stdout_log = str(stdout_log.resolve())
-    resolved_stderr_log = str(stderr_log.resolve())
     resolved_selected_xyz = str(selected_xyz.resolve())
     resolved_job_dir = str(job_dir.resolve())
     resolved_mode = job_mode(manifest)
@@ -654,13 +667,26 @@ def start_crest_job(
         if execution_snapshot is not None
         else (str(manifest_file.resolve()) if manifest_file.exists() else "")
     )
-    if before_popen is not None:
-        before_popen()
+    scratch_workspace: EngineScratchWorkspace | None = None
     try:
         _clear_stale_crest_outputs(job_dir, selected_input_xyz=selected_xyz)
+        scratch_workspace = create_engine_scratch_workspace(
+            cfg,
+            job_dir=job_dir,
+            manifest_filename=MANIFEST_FILE_NAME,
+            max_memory_gb=resource_request["max_memory_gb"],
+            publish_name=_CREST_SCRATCH_PUBLICATION_NAMES.__contains__,
+        )
+        execution_dir = scratch_workspace.path if scratch_workspace is not None else job_dir
+        stdout_log = execution_dir / "crest.stdout.log"
+        stderr_log = execution_dir / "crest.stderr.log"
+        resolved_stdout_log = str(stdout_log.resolve())
+        resolved_stderr_log = str(stderr_log.resolve())
+        if before_popen is not None:
+            before_popen()
         launched = start_logged_process(
             command,
-            cwd=job_dir,
+            cwd=execution_dir,
             stdout_log=stdout_log,
             stderr_log=stderr_log,
             max_cores=resource_request["max_cores"],
@@ -675,8 +701,12 @@ def start_crest_job(
             ),
         )
     except Exception:
-        if on_launch_aborted is not None:
-            on_launch_aborted()
+        try:
+            if scratch_workspace is not None:
+                publish_engine_scratch_workspace(scratch_workspace, logger=LOGGER)
+        finally:
+            if on_launch_aborted is not None:
+                on_launch_aborted()
         raise
     try:
         return CrestRunningJob(
@@ -690,7 +720,9 @@ def start_crest_job(
             selected_input_xyz=resolved_selected_xyz,
             mode=resolved_mode,
             manifest_path=resolved_manifest_path,
-            job_dir=resolved_job_dir,
+            job_dir=str(execution_dir.resolve()),
+            durable_job_dir=resolved_job_dir,
+            scratch_workspace=scratch_workspace,
             resource_request=resource_request,
             resource_actual=resource_actual,
             manifest_snapshot=dict(manifest),
@@ -698,8 +730,12 @@ def start_crest_job(
         )
     except BaseException:
         cleanup_failed_logged_process_start(launched)
-        if on_launch_aborted is not None:
-            on_launch_aborted()
+        try:
+            if scratch_workspace is not None:
+                publish_engine_scratch_workspace(scratch_workspace, logger=LOGGER)
+        finally:
+            if on_launch_aborted is not None:
+                on_launch_aborted()
         raise
 
 
@@ -719,6 +755,19 @@ def finalize_crest_job(
     exit_code = running.process.poll()
     if exit_code is None:
         exit_code = running.process.wait()
+
+    scratch_provenance: dict[str, Any] = {}
+    if running.scratch_workspace is not None:
+        publication = publish_engine_scratch_workspace(
+            running.scratch_workspace,
+            logger=LOGGER,
+        )
+        scratch_provenance = scratch_publication_provenance(publication)
+        durable_job_dir = Path(running.durable_job_dir)
+        running.job_dir = str(durable_job_dir)
+        running.stdout_log = str((durable_job_dir / Path(running.stdout_log).name).resolve())
+        running.stderr_log = str((durable_job_dir / Path(running.stderr_log).name).resolve())
+        running.scratch_workspace = None
 
     snapshot_valid = True
     if running.execution_snapshot:
@@ -781,4 +830,5 @@ def finalize_crest_job(
         resource_request=running.resource_request,
         resource_actual=running.resource_actual,
         output_identities=output_identities,
+        scratch_provenance=scratch_provenance,
     )

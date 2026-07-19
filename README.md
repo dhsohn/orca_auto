@@ -263,6 +263,10 @@ config, rerun the same command to enable the full runtime target. If you edited 
 `sudo systemctl daemon-reload` before restarting. See
 [systemd/README.md](systemd/README.md) for the full runtime setup.
 
+The default queue-worker service starts ORCA only. A configured workflow root does
+not auto-start workflow/xTB/CREST workers; start
+`orca_auto-workflow-worker@$(whoami)` explicitly when workflow execution is needed.
+
 ## Runtime Notes
 
 - `run-dir` enqueues work durably; workers perform execution.

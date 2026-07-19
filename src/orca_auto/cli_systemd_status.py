@@ -18,6 +18,7 @@ from orca_auto.systemd_plan import _is_root
 SERVICE_UNIT_ORDER = (
     ("runtime", "orca_auto-runtime@{user}.target"),
     ("worker", "orca_auto-queue-worker@{user}.service"),
+    ("workflow", "orca_auto-workflow-worker@{user}.service"),
     ("bot", "orca_auto-bot@{user}.service"),
 )
 
