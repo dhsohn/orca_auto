@@ -29,7 +29,6 @@ class ManagedProcess(Protocol):
 
 @dataclass(frozen=True)
 class ProcessGroupTerminationDeps:
-    killpg: Callable[[int, int], None] | None = None
     process_group_exists: Callable[[int], bool] | None = None
     pid_exists: Callable[[int], bool] | None = None
     monotonic: Callable[[], float] = time.monotonic
@@ -54,10 +53,7 @@ def process_group_exists(
     killpg_fn: Callable[[int, int], None] | None = None,
 ) -> bool:
     """Return whether a POSIX process group exists, failing closed on probe errors."""
-    active_killpg = killpg_fn or getattr(os, "killpg", None)
-    if active_killpg is None:
-        # There is no POSIX process-group concept to verify on this platform.
-        return False
+    active_killpg = os.killpg if killpg_fn is None else killpg_fn
     try:
         active_killpg(int(pgid), 0)
     except ProcessLookupError:
@@ -190,11 +186,7 @@ def terminate_process_group(
     deps: ProcessGroupTerminationDeps | None = None,
 ) -> bool:
     active_deps = deps or ProcessGroupTerminationDeps()
-    active_killpg = killpg_fn
-    if active_killpg is None:
-        active_killpg = active_deps.killpg
-    if active_killpg is None:
-        active_killpg = getattr(os, "killpg", None)
+    active_killpg = os.killpg if killpg_fn is None else killpg_fn
     active_sigterm = active_deps.sigterm if sigterm is None else sigterm
     active_sigkill = active_deps.sigkill if sigkill is None else sigkill
     logger = active_deps.logger
@@ -233,8 +225,6 @@ def terminate_process_group(
         return False
 
     try:
-        if active_killpg is None:
-            raise ProcessLookupError
         active_killpg(pid, active_sigterm)
     except (ProcessLookupError, PermissionError, OSError):
         try:
@@ -264,8 +254,6 @@ def terminate_process_group(
         return False
 
     try:
-        if active_killpg is None:
-            raise ProcessLookupError
         active_killpg(pid, active_sigkill)
     except (ProcessLookupError, PermissionError, OSError):
         try:

@@ -20,7 +20,7 @@ from orca_auto.core.utils import (
     now_utc_iso,
     timestamped_token,
 )
-from orca_auto.core.utils.lock import tmpfs_file_lock
+from orca_auto.core.utils.lock import file_lock
 
 from ..registry import _notifications as _notifications
 from ..registry.store import _registry_lock_path
@@ -103,7 +103,7 @@ def append_workflow_journal_event(
         "previous_reaction_handoff_status": _normalize_text(previous_reaction_handoff_status),
         "metadata": _coerce_mapping(metadata),
     }
-    with tmpfs_file_lock(_registry_lock_path(resolved_root)):
+    with file_lock(_registry_lock_path(resolved_root)):
         path = workflow_journal_path(resolved_root)
         with open_confined_log(
             resolved_root,
@@ -123,7 +123,7 @@ def list_workflow_journal(workflow_root: str | Path, *, limit: int = 50) -> list
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    with tmpfs_file_lock(_registry_lock_path(resolved_root)):
+    with file_lock(_registry_lock_path(resolved_root)):
         if 0 < limit <= 1_000:
             lines = read_confined_tail_lines(
                 resolved_root,

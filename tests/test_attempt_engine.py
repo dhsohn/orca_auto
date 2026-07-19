@@ -6,13 +6,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from orca_auto.core.engine_scratch import (
+    ScratchPublication,
+    attach_scratch_provenance_to_exception,
+)
 from orca_auto.orca.attempt.engine import run_attempts
 from orca_auto.orca.orca_runner import WorkerShutdownInterrupt
 from orca_auto.orca.retry_policy import (
     effective_max_retries,
     retry_policy_for_input,
 )
-from orca_auto.orca.scratch import ScratchPublication, attach_scratch_provenance_to_exception
 from orca_auto.orca.state import load_state, new_state
 
 

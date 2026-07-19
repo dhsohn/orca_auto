@@ -6,7 +6,6 @@ import time
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from orca_auto import activity_rendering as _activity_rendering
@@ -32,18 +31,8 @@ from orca_auto.cli_common import (
 from orca_auto.cli_errors import emit_error
 from orca_auto.core import statuses as _s
 from orca_auto.core.activity_icons import activity_status_icon
-from orca_auto.core.config.files import (
-    load_required_yaml_mapping,
-    mapping_section,
-    runs_root_from_mapping,
-    scheduler_admission_root,
-    validate_shared_config_sections,
-    validated_runs_root_text,
-)
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.activity import cancel_activity, clear_activities, list_activities
-from orca_auto.flow.workflow.compaction import compact_completed_workflow
-from orca_auto.flow.workflow.store import resolve_workflow_workspace
 from orca_auto.job_resource import LiveJobMetricsSampler
 from orca_auto.system_metrics import (
     JobMetrics,
@@ -866,112 +855,6 @@ def cmd_queue_list(args: Any, *, deps: QueueCliDeps | None = None) -> int:
         return _watch_queue_list(args, request, deps=deps)
 
     return _emit_queue_list_once(args, request)
-
-
-def _queue_compaction_roots(args: Any) -> tuple[Path, Path]:
-    config_path = cli_common._discover_shared_config_path(
-        _effective_shared_config_text(args) or None
-    )
-    if not config_path:
-        raise ValueError("Workflow compaction requires --config or a discoverable shared config.")
-    _loaded_path, raw = load_required_yaml_mapping(config_path)
-    validate_shared_config_sections(raw)
-
-    configured_root_text = runs_root_from_mapping(raw)
-    if not configured_root_text:
-        raise ValueError("Workflow compaction requires runs_root in the shared config.")
-    configured_root = Path(validated_runs_root_text(configured_root_text)).expanduser().resolve()
-
-    admission_root = scheduler_admission_root(
-        mapping_section(raw, "scheduler"),
-        default_runs_root=configured_root,
-    )
-    if admission_root is None:
-        raise ValueError("Workflow compaction requires a resolvable scheduler admission root.")
-    return configured_root, admission_root
-
-
-def _compaction_artifact_payload(artifact: Any) -> dict[str, Any]:
-    return {
-        "relative_path": str(artifact.relative_path),
-        "size": int(artifact.size),
-        "engine": str(artifact.engine),
-        "stage_id": str(artifact.stage_id),
-        "job_id": str(artifact.job_id),
-    }
-
-
-def _compaction_payload(result: Any) -> dict[str, Any]:
-    would_remove = [_compaction_artifact_payload(item) for item in result.would_remove]
-    return {
-        "workflow_id": str(result.workflow_id),
-        "workspace_dir": str(result.workspace_dir),
-        "eligible": bool(result.eligible),
-        "blocked": bool(result.blocked),
-        "applied": bool(result.applied),
-        "would_remove": would_remove,
-        "would_remove_bytes": sum(int(item["size"]) for item in would_remove),
-        "removed": [str(path) for path in result.removed],
-        "removed_bytes": int(result.removed_bytes),
-        "preserved": [str(path) for path in result.preserved],
-        "reasons": [str(reason) for reason in result.reasons],
-    }
-
-
-def _print_compaction_items(label: str, items: Sequence[str]) -> None:
-    print(f"{cli_style.label(label + ':')} {len(items)}")
-    for item in items:
-        print(f"  - {item}")
-
-
-def _print_compaction_text(payload: dict[str, Any]) -> None:
-    print(f"{cli_style.label('workflow_id:')} {payload['workflow_id']}")
-    print(f"{cli_style.label('workspace_dir:')} {payload['workspace_dir']}")
-    print(f"{cli_style.label('eligible:')} {'yes' if payload['eligible'] else 'no'}")
-    print(f"{cli_style.label('blocked:')} {'yes' if payload['blocked'] else 'no'}")
-    print(f"{cli_style.label('applied:')} {'yes' if payload['applied'] else 'no'}")
-    print(f"{cli_style.label('would_remove:')} {len(payload['would_remove'])}")
-    for item in payload["would_remove"]:
-        print(f"  - {item['relative_path']} ({item['size']} bytes)")
-    print(f"{cli_style.label('would_remove_bytes:')} {payload['would_remove_bytes']}")
-    _print_compaction_items("removed", payload["removed"])
-    print(f"{cli_style.label('removed_bytes:')} {payload['removed_bytes']}")
-    _print_compaction_items("preserved", payload["preserved"])
-    _print_compaction_items("reasons", payload["reasons"])
-
-
-def cmd_queue_compact(args: Any) -> int:
-    apply_requested = bool(getattr(args, "apply", False))
-    try:
-        workflow_root, admission_root = _queue_compaction_roots(args)
-        workspace_dir = resolve_workflow_workspace(
-            target=str(args.target),
-            workflow_root=workflow_root,
-        )
-        result = compact_completed_workflow(
-            workflow_root,
-            workspace_dir,
-            apply=apply_requested,
-            admission_root=admission_root,
-        )
-    except Exception as exc:  # noqa: BLE001 - CLI boundary must not expose tracebacks.
-        emit_error(
-            exc,
-            hint="Confirm the target is one completed workflow under the configured workflow root.",
-        )
-        return 1
-
-    payload = _compaction_payload(result)
-    if bool(getattr(args, "json", False)):
-        print(json.dumps(payload, ensure_ascii=True, indent=2))
-    else:
-        _print_compaction_text(payload)
-
-    return int(
-        payload["blocked"]
-        or not payload["eligible"]
-        or (apply_requested and not payload["applied"])
-    )
 
 
 def cmd_queue_cancel(args: Any) -> int:

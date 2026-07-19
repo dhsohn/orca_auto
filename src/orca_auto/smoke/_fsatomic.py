@@ -22,8 +22,8 @@ def atomic_write_bytes_at(
     error: type[Exception] = ValueError,
 ) -> None:
     temporary = f".{name}.{token_hex(12)}.tmp"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+    flags |= os.O_NOFOLLOW
     descriptor: int | None = None
     try:
         descriptor = os.open(temporary, flags, mode, dir_fd=directory_fd)

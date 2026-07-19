@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import MagicMock, call, patch
 
 from orca_auto.core import engine_scratch as scratch_mod
+from orca_auto.core.engine_scratch import scratch_provenance_from_exception
 from orca_auto.core.queue.cancellable import ProcessCleanupError
 from orca_auto.orca.orca_process import (
     ORCA_PROCESS_RECORD_FILE_NAME,
@@ -23,7 +24,7 @@ from orca_auto.orca.orca_runner import (
     ShutdownSignalGuard,
     WorkerShutdownInterrupt,
 )
-from orca_auto.orca.scratch import OrcaScratchPolicy, scratch_provenance_from_exception
+from orca_auto.orca.scratch import OrcaScratchPolicy
 
 
 def _installed_signal_handler(
@@ -276,7 +277,7 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
             moved_root = fake_shm / "orca_auto-moved"
 
             runner = OrcaRunner(str(executable))
-            original_create = scratch_mod.OrcaScratchWorkspace.create
+            original_create = scratch_mod.EngineScratchWorkspace.create
 
             def replace_root_after_create(*args, **kwargs):
                 workspace = original_create(*args, **kwargs)
@@ -295,7 +296,7 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
                     return_value=2**63,
                 ),
                 patch.object(
-                    scratch_mod.OrcaScratchWorkspace,
+                    scratch_mod.EngineScratchWorkspace,
                     "create",
                     side_effect=replace_root_after_create,
                 ),
@@ -308,7 +309,7 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
                     )
                 )
                 with self.assertRaisesRegex(
-                    scratch_mod.OrcaScratchError,
+                    scratch_mod.EngineScratchError,
                     "workspace pathname identity changed",
                 ):
                     runner.run(inp)

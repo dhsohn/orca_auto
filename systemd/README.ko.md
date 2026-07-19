@@ -45,67 +45,6 @@ Telegram은 token+chat ID, Discord는 별도 bot token+명령 수신 채널+oper
 bot 설정이 완전하지 않으면 설치 프로그램이 큐 워커만 선택합니다.
 bot 설정을 완성한 뒤 같은 명령을 다시 실행하면 전체 런타임 타깃이 활성화됩니다.
 
-기본적으로 `orca_auto systemd install`과 `orca_auto service restart`는 fail-closed
-drain gate로 감독되는 build를 교체합니다. 먼저 관리 unit 상태를 snapshot하고 active인 unit만
-중지한 다음, unit 파일을 하나라도 쓰기 전에 네 unit이 전부 non-running인지 확인합니다. 그 뒤에만 unit을
-쓰고 systemd를 reload하며, 반대 boot mode를 disable하고 선택한 mode를 enable한 다음 선택한
-runtime을 시작·검증합니다. full mode는 runtime target, queue worker, bot이 모두 active여야
-하며 worker-only mode는 queue worker가 active여야 합니다. workflow unit은 drain 전에
-active였을 때만 다시 시작·검증합니다. snapshot, stop, non-running 확인 실패는 unit 쓰기 전에
-중단합니다. 아직 unit이 없는 최초 설치는 stop/reset 없이 진행합니다. 이후 write, reload, boot selection, start, restore가 실패하면 이전 process를 다시
-시작하지 않습니다. 일부 시작된 새 graph도 중지하고 모든 관리 unit을 stopped 상태로 남겨
-명시적인 수리와 재실행을 요구합니다.
-
-같은 대상 사용자의 모든 non-dry-run install apply, `service restart`, 직접 runtime 교체는 하나의
-동일 Linux network namespace 안에서 EUID 독립적, 비영속 Linux abstract `AF_UNIX` socket lock을
-공유합니다. versioned 대상 사용자 hash를 restart mode 조회나 drain 전에 bind하고 start/restore가
-끝난 뒤 socket을 닫아 해제하므로, 동시 명령이 이전 mode를 조회한 뒤 더 새로운 선택 위에 다시
-시작할 수 없습니다. 같은 thread의 중첩 직접 교체는 바깥 socket을 재사용하고 그 network
-namespace의 다른 thread, process, 호출 EUID는 직렬화됩니다. lock timeout은 systemd 변경 전에
-종료 상태 1로 중단합니다. dry-run과 plan 생성은 lock을 획득하지 않습니다. restart mode는 runtime
-target이 exact active 또는 enabled이면 full을, exact inactive/failed이면서 disabled이면
-worker-only를 선택합니다. 문자열이 맞더라도 다른 종료 상태이면 fail-closed합니다.
-
-지원되는 모든 mutation caller에는 WSL/native host shell과 제공 systemd unit이 포함되며, 같은 host
-systemd를 제어할 때 동일 Linux network namespace에서 실행되어야 합니다. container나 별도
-network namespace에서 host systemd를 제어하는 호출은 미지원입니다. abstract socket 이름은
-permissionless이므로 trusted-local-user 또는 single-user 관리 경계가 필요합니다. 신뢰하지 않는
-로컬 사용자가 이름을 먼저 bind하면 fail-closed availability DoS를 일으킬 수 있습니다. timeout은
-mutation 전에 발생하므로 이 선점은 split-build graph나 data damage를 만들지 않습니다. 이 제한을
-우회하는 file-lock fallback은 제공하지 않습니다.
-
-`systemd install --no-start`는 boot selection만 바꾸고 `--no-enable`은 unit을
-쓴 뒤 systemd만 reload하며, 두 경로 모두 서비스를 중지하거나 시작하지 않습니다. 이
-maintenance mode는 offline 전용입니다. unit 파일을 하나라도 쓰기 전에 runtime target,
-queue worker, bot, workflow worker가 모두 알려진 non-running 상태(`inactive`, `failed`, 또는 absent)인지
-확인합니다. active, transitional 상태이거나 조회할 수 없는 unit이 하나라도 있으면
-쓰기 전에 중단합니다. boot mode를 바꿀 때는 반대 mode를 먼저 disable한 뒤 선택한 mode를
-enable하므로 뒤의 enable 실패가 두 mode를 모두 enabled 상태로 남기지 않습니다.
-`--no-start`는 boot selection을 바꾸기 전에 전체 runtime 설정을 검증합니다. `--no-enable`은
-boot mode를 선택하지 않으므로 완성되지 않은 설정으로도 offline unit staging을 허용합니다.
-
-이 gate는 systemd unit만 다룹니다. 변경된 build를 설치하거나 재시작하기 전에 이전
-build의 모든 foreground/manual `orca_auto` 프로세스도 중지·drain하세요. 여기에는 queue와
-workflow worker, bot, 직접 실행한 CLI 명령, maintenance 명령, upload 처리 프로세스가 모두
-포함됩니다. 새 build를 로드하기 전에 이전 계산/process ownership이 남지 않았는지
-확인해야 합니다.
-
-in-place checkout 갱신은 새 CLI가 실행되기 전에 일어나므로 install 명령보다 앞선 drain이
-필요합니다. in-place 배포는 다음 순서를 따르세요.
-
-1. 이전 checkout으로 workflow unit이 active인지 기록합니다.
-2. runtime target, queue worker, bot, workflow worker를 모두 중지하고 모든 unit이 정확히
-   `inactive`인지 확인합니다.
-3. 확인이 끝난 뒤에만 checkout 또는 설치된 package를 갱신합니다.
-4. 새 build에서 `orca_auto systemd install`을 실행합니다.
-5. 1단계에서 workflow unit이 active였다면 명시적으로 다시 시작해 검증합니다. 새 installer는
-   이미 중지된 unit의 이전 상태를 추론할 수 없습니다.
-
-대안으로 새 build를 별도의 immutable release 디렉터리에 준비한 뒤 이전 release가 온전한
-상태에서 새 installer를 실행할 수 있습니다. 이 경우 pre-write drain이 workflow snapshot을
-자동으로 보존·복원합니다. 이전 감독 process가 사용하는 checkout에 새 코드를 동기화하면 안
-됩니다.
-
 결합 런타임 타깃 모니터링:
 
 ```bash

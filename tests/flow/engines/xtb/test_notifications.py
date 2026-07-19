@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 
-from orca_auto.core.config import CommonRuntimeConfig, TelegramConfig
+from orca_auto.core.config import CommonRuntimeConfig, MessengerConfig, TelegramConfig
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 from orca_auto.core.messaging import (
     Message,
@@ -46,7 +46,7 @@ def _make_cfg(tmp_path: Path, *, enabled: bool = False) -> AppConfig:
         runtime=CommonRuntimeConfig(
             allowed_root=str(allowed_root),
         ),
-        telegram=telegram,
+        messenger=MessengerConfig(telegram=telegram),
     )
 
 

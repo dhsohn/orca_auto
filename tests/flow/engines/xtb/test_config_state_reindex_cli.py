@@ -83,8 +83,8 @@ def test_load_config_parses_defaults_and_normalizes_values(tmp_path: Path) -> No
     assert cfg.paths.xtb_executable == str(fake_xtb.resolve())
     assert cfg.resources.max_cores_per_task == 1
     assert cfg.resources.max_memory_gb_per_task == 1
-    assert cfg.telegram.bot_token == "token"
-    assert cfg.telegram.chat_id == "chat"
+    assert cfg.messenger.telegram.bot_token == "token"
+    assert cfg.messenger.telegram.chat_id == "chat"
 
 
 def test_load_config_reports_missing_file_invalid_payload_and_requires_workflow_root(
@@ -162,8 +162,8 @@ def test_load_config_applies_defaults_for_missing_and_legacy_optional_sections(
     assert cfg.paths.xtb_executable == ""
     assert cfg.resources.max_cores_per_task == 8
     assert cfg.resources.max_memory_gb_per_task == 32
-    assert cfg.telegram.bot_token == ""
-    assert cfg.telegram.chat_id == ""
+    assert cfg.messenger.telegram.bot_token == ""
+    assert cfg.messenger.telegram.chat_id == ""
 
 
 def test_state_helper_writes_only_canonical_state(

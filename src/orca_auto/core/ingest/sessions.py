@@ -29,7 +29,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 
-from orca_auto.core.utils.lock import tmpfs_file_lock
+from orca_auto.core.utils.lock import file_lock
 from orca_auto.core.utils.persistence import atomic_write_json
 
 UPLOAD_SESSIONS_FILE_NAME = "upload_sessions.json"
@@ -399,12 +399,12 @@ class UploadSessionStore:
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
-        """Serialize durable session mutations through the shared tmpfs lock protocol."""
+        """Serialize durable session mutations through the shared disk lock."""
 
         with ExitStack() as stack:
             try:
                 stack.enter_context(
-                    tmpfs_file_lock(
+                    file_lock(
                         self.lock_path,
                         timeout_seconds=self.lock_timeout_seconds,
                     )
@@ -1131,12 +1131,9 @@ class UploadSessionStore:
             directory_fd: int | None = None
             try:
                 directory_flags = os.O_RDONLY
-                if hasattr(os, "O_DIRECTORY"):
-                    directory_flags |= os.O_DIRECTORY
-                if hasattr(os, "O_CLOEXEC"):
-                    directory_flags |= os.O_CLOEXEC
-                if hasattr(os, "O_NOFOLLOW"):
-                    directory_flags |= os.O_NOFOLLOW
+                directory_flags |= os.O_DIRECTORY
+                directory_flags |= os.O_CLOEXEC
+                directory_flags |= os.O_NOFOLLOW
                 directory_fd = os.open(session_dir, directory_flags)
                 opened = os.fstat(directory_fd)
                 named = session_dir.lstat()
@@ -1147,10 +1144,8 @@ class UploadSessionStore:
                     raise UploadSessionError("upload staging directory changed during creation")
 
                 marker_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-                if hasattr(os, "O_CLOEXEC"):
-                    marker_flags |= os.O_CLOEXEC
-                if hasattr(os, "O_NOFOLLOW"):
-                    marker_flags |= os.O_NOFOLLOW
+                marker_flags |= os.O_CLOEXEC
+                marker_flags |= os.O_NOFOLLOW
                 fd = os.open(
                     _OWNERSHIP_FILE_NAME,
                     marker_flags,
@@ -1197,12 +1192,9 @@ class UploadSessionStore:
 
         session_dir = self._session_dir(upload_id)
         directory_flags = os.O_RDONLY
-        if hasattr(os, "O_DIRECTORY"):
-            directory_flags |= os.O_DIRECTORY
-        if hasattr(os, "O_CLOEXEC"):
-            directory_flags |= os.O_CLOEXEC
-        if hasattr(os, "O_NOFOLLOW"):
-            directory_flags |= os.O_NOFOLLOW
+        directory_flags |= os.O_DIRECTORY
+        directory_flags |= os.O_CLOEXEC
+        directory_flags |= os.O_NOFOLLOW
         fd: int | None = None
         try:
             fd = os.open(session_dir, directory_flags)
@@ -1210,10 +1202,8 @@ class UploadSessionStore:
             if not stat.S_ISDIR(opened.st_mode):
                 return None
             marker_flags = os.O_RDONLY
-            if hasattr(os, "O_CLOEXEC"):
-                marker_flags |= os.O_CLOEXEC
-            if hasattr(os, "O_NOFOLLOW"):
-                marker_flags |= os.O_NOFOLLOW
+            marker_flags |= os.O_CLOEXEC
+            marker_flags |= os.O_NOFOLLOW
             marker_fd = os.open(_OWNERSHIP_FILE_NAME, marker_flags, dir_fd=fd)
             with os.fdopen(marker_fd, "rb") as marker:
                 marker_before = os.fstat(marker.fileno())
@@ -1302,17 +1292,12 @@ class UploadSessionStore:
         # that fd.  This prevents an intermediate-directory symlink swap from
         # redirecting the hash to an attacker-selected path.
         directory_flags = os.O_RDONLY
-        if hasattr(os, "O_DIRECTORY"):
-            directory_flags |= os.O_DIRECTORY
-        if hasattr(os, "O_CLOEXEC"):
-            directory_flags |= os.O_CLOEXEC
-        if hasattr(os, "O_NOFOLLOW"):
-            directory_flags |= os.O_NOFOLLOW
+        directory_flags |= os.O_DIRECTORY
+        directory_flags |= os.O_CLOEXEC
+        directory_flags |= os.O_NOFOLLOW
         archive_flags = os.O_RDONLY
-        if hasattr(os, "O_CLOEXEC"):
-            archive_flags |= os.O_CLOEXEC
-        if hasattr(os, "O_NOFOLLOW"):
-            archive_flags |= os.O_NOFOLLOW
+        archive_flags |= os.O_CLOEXEC
+        archive_flags |= os.O_NOFOLLOW
         digest = hashlib.sha256()
         count = 0
         directory_fd: int | None = None
@@ -1456,10 +1441,8 @@ class UploadSessionStore:
 
     def _read_state_text(self) -> str | None:
         flags = os.O_RDONLY
-        if hasattr(os, "O_CLOEXEC"):
-            flags |= os.O_CLOEXEC
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
+        flags |= os.O_CLOEXEC
+        flags |= os.O_NOFOLLOW
         try:
             fd = os.open(self.state_path, flags)
         except FileNotFoundError:

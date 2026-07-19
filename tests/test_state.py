@@ -171,7 +171,7 @@ class TestState(unittest.TestCase):
                 yield
 
             with (
-                patch.object(state_module, "tmpfs_file_lock_at", _replace_after_pin),
+                patch.object(state_module, "file_lock_at", _replace_after_pin),
                 self.assertRaisesRegex(ValueError, "parent directory identity changed"),
             ):
                 write_state(reaction, state)

@@ -12,7 +12,7 @@ from typing import Any
 
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.utils import process as process_utils
-from orca_auto.core.utils.lock import tmpfs_file_lock
+from orca_auto.core.utils.lock import file_lock
 from orca_auto.core.utils.persistence import (
     atomic_write_json,
     durable_mkdir,
@@ -134,10 +134,8 @@ def _intent_path(queue_root: Path, token: str, *, create_dir: bool) -> Path:
 
 def _read_intent(path: Path, *, expected_root: Path) -> dict[str, Any]:
     flags = os.O_RDONLY
-    if hasattr(os, "O_NONBLOCK"):
-        flags |= os.O_NONBLOCK
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_NONBLOCK
+    flags |= os.O_NOFOLLOW
     descriptor = os.open(path, flags)
     try:
         before = os.fstat(descriptor)
@@ -237,7 +235,7 @@ def create_snapshot_intent(
         kind=normalized_kind,
     )
     intent_dir = _intent_dir(resolved_root, create=True)
-    with tmpfs_file_lock(resolved_root / _MUTATION_LOCK_NAME):
+    with file_lock(resolved_root / _MUTATION_LOCK_NAME):
         if len(_bounded_intent_paths(intent_dir)) >= _MAX_PENDING_INTENTS:
             raise RuntimeError(
                 "Snapshot intent backlog reached its safety limit; "
@@ -276,7 +274,7 @@ def bind_snapshot_intent_generation_identities(
     """Pin newly-created visible generations to their exact directory inodes."""
 
     resolved_root = _resolved_queue_root(queue_root)
-    with tmpfs_file_lock(resolved_root / _MUTATION_LOCK_NAME):
+    with file_lock(resolved_root / _MUTATION_LOCK_NAME):
         intent_path = _intent_path(resolved_root, token, create_dir=False)
         marker = _read_intent(intent_path, expected_root=resolved_root)
         if marker["kind"] != "orca_visible_generation":
@@ -324,7 +322,7 @@ def transition_snapshot_intent(
     expected_states: Iterable[str],
 ) -> None:
     resolved_root = _resolved_queue_root(queue_root)
-    with tmpfs_file_lock(resolved_root / _MUTATION_LOCK_NAME):
+    with file_lock(resolved_root / _MUTATION_LOCK_NAME):
         intent_path = _intent_path(resolved_root, token, create_dir=False)
         marker = _read_intent(intent_path, expected_root=resolved_root)
         target = str(target_state).strip().lower()
@@ -352,7 +350,7 @@ def _unlink_intent(intent_path: Path) -> None:
 
 def discard_snapshot_intent(queue_root: str | Path, token: str) -> None:
     resolved_root = _resolved_queue_root(queue_root)
-    with tmpfs_file_lock(resolved_root / _MUTATION_LOCK_NAME):
+    with file_lock(resolved_root / _MUTATION_LOCK_NAME):
         raw_intent_dir = resolved_root / _INTENT_DIR_NAME
         if not raw_intent_dir.exists() and not raw_intent_dir.is_symlink():
             return
@@ -370,7 +368,7 @@ def discard_snapshot_intent_if_generations_absent(
     """Discard an intent only after every declared generation is certainly absent."""
 
     resolved_root = _resolved_queue_root(queue_root)
-    with tmpfs_file_lock(resolved_root / _MUTATION_LOCK_NAME):
+    with file_lock(resolved_root / _MUTATION_LOCK_NAME):
         raw_intent_dir = resolved_root / _INTENT_DIR_NAME
         if not raw_intent_dir.exists() and not raw_intent_dir.is_symlink():
             return True
@@ -409,7 +407,7 @@ def finalize_queued_snapshot_intent(queue_root: str | Path, entry: Any) -> None:
         or Path(intent_root_text).expanduser().resolve() != resolved_root
     ):
         raise ValueError("Queued snapshot intent does not match its queue root")
-    with tmpfs_file_lock(resolved_root / _MUTATION_LOCK_NAME):
+    with file_lock(resolved_root / _MUTATION_LOCK_NAME):
         raw_intent_dir = resolved_root / _INTENT_DIR_NAME
         if not raw_intent_dir.exists() and not raw_intent_dir.is_symlink():
             return
@@ -583,7 +581,7 @@ def reconcile_orphaned_snapshot_generations(
             continue
         resolved_intent_dir = _intent_dir(root, create=False)
         try:
-            with tmpfs_file_lock(root / _MAINTENANCE_LOCK_NAME, timeout_seconds=0.0):
+            with file_lock(root / _MAINTENANCE_LOCK_NAME, timeout_seconds=0.0):
                 if list_queue_fn is None:
                     from orca_auto.core.queue.store import load_entries, queue_lock
 
@@ -592,7 +590,7 @@ def reconcile_orphaned_snapshot_generations(
                     queue_context = nullcontext()
                 with queue_context:
                     entries = load_entries(root) if list_queue_fn is None else list_queue_fn(root)
-                    with tmpfs_file_lock(root / _MUTATION_LOCK_NAME):
+                    with file_lock(root / _MUTATION_LOCK_NAME):
                         for intent_path in _bounded_intent_paths(resolved_intent_dir):
                             try:
                                 marker = _read_intent(intent_path, expected_root=root)

@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
-from ..utils.lock import tmpfs_file_lock
+from ..utils.lock import file_lock
 from ..utils.persistence import (
     now_utc_iso,
     resolve_root_path,
@@ -216,7 +216,7 @@ def reject_active_task_duplicate(
 @contextmanager
 def queue_lock(root: str | Path, *, timeout_seconds: float = 10.0) -> Iterator[None]:
     resolved_root = resolve_root_path(root)
-    with tmpfs_file_lock(_lock_path(resolved_root), timeout_seconds=timeout_seconds):
+    with file_lock(_lock_path(resolved_root), timeout_seconds=timeout_seconds):
         yield
 
 

@@ -330,8 +330,6 @@ def _normalise_case_manifests(
 
 
 def _open_batch_root(batch_dir: Path) -> tuple[Path, int, DirectoryIdentity]:
-    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
-        raise ReviewPacketError("safe no-follow directory access is unavailable on this platform")
     candidate = Path(batch_dir).expanduser()
     try:
         if candidate.is_symlink():
@@ -778,8 +776,8 @@ def _copy_projection_file(
     source_fd = _open_artifact_source(root_fd, entry.artifact)
     destination_fd: int | None = None
     try:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
-        flags |= getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+        flags |= os.O_NOFOLLOW
         destination_fd = os.open(
             entry.destination_parts[-1],
             flags,

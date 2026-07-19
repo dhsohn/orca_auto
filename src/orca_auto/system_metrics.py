@@ -4,11 +4,11 @@ The project keeps a minimal runtime footprint, so rather than depend on
 ``psutil`` this module reads the Linux ``/proc`` pseudo-files directly. It powers
 the live CPU / RAM / load gauges the watch loop draws above the queue table.
 
-Everything fails closed: any missing or malformed file yields ``None`` so callers
-simply omit the resource line on a non-Linux host (no ``/proc``) or when a file
-cannot be read — never a crash and never a fabricated number. CPU utilization is
-a delta measurement, so :class:`SystemMetricsSampler` returns ``cpu_percent=None``
-until it has two samples (the watch loop supplies the second on its next refresh).
+Runtime samples fail closed: any missing or malformed ``/proc`` file yields
+``None`` so callers simply omit the resource line rather than fabricate a number.
+CPU utilization is a delta measurement, so :class:`SystemMetricsSampler` returns
+``cpu_percent=None`` until it has two samples (the watch loop supplies the second
+on its next refresh).
 """
 
 from __future__ import annotations
@@ -24,14 +24,8 @@ _PROC = Path("/proc")
 _SampleIdentityT = TypeVar("_SampleIdentityT", bound=Hashable)
 _MAX_PROC_INTEGER = (1 << 64) - 1
 
-try:
-    _CLK_TCK = os.sysconf("SC_CLK_TCK")
-except (AttributeError, ValueError, OSError):  # pragma: no cover - non-POSIX fallback
-    _CLK_TCK = 100
-try:
-    _PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
-except (AttributeError, ValueError, OSError):  # pragma: no cover - non-POSIX fallback
-    _PAGE_SIZE = 4096
+_CLK_TCK = os.sysconf("SC_CLK_TCK")
+_PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
 
 
 @dataclass(frozen=True)

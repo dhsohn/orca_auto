@@ -25,7 +25,7 @@ from orca_auto.core.admission import (
     reserve_slot,
     set_slot_engine_process,
 )
-from orca_auto.core.config import DiscordConfig, MessengerConfig
+from orca_auto.core.config import DiscordConfig, MessengerConfig, TelegramConfig
 from orca_auto.core.queue.lifecycle import TerminalProcessQueueMarkResult
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
@@ -46,7 +46,7 @@ from orca_auto.core.statuses import (
     STATUS_FAILED,
     STATUS_RUNNING,
 )
-from orca_auto.orca.config import AppConfig, RetryRuntimeConfig, TelegramConfig
+from orca_auto.orca.config import AppConfig, RetryRuntimeConfig
 from orca_auto.orca.engine import read_worker_pid
 from orca_auto.orca.queue import cancellation as cancellation_mod
 from orca_auto.orca.queue import publication_repair as publication_mod
@@ -854,7 +854,7 @@ def test_terminal_replay_retries_failed_notification_until_marker_is_durable(
     entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
     cfg = AppConfig(
         runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)),
-        telegram=TelegramConfig(bot_token="token", chat_id="chat"),
+        messenger=MessengerConfig(telegram=TelegramConfig(bot_token="token", chat_id="chat")),
     )
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     state = {
@@ -2952,7 +2952,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
     ) -> None:
         cfg = AppConfig(
             runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
-            telegram=TelegramConfig(bot_token="token", chat_id="chat"),
+            messenger=MessengerConfig(telegram=TelegramConfig(bot_token="token", chat_id="chat")),
         )
         worker = QueueWorker(cfg, str(self.root / "config.yaml"), max_concurrent=2)
         rxn = self.root / "mol_terminal_notify"
@@ -2989,10 +2989,6 @@ class TestQueueWorkerMethods(unittest.TestCase):
         final_result = saved["final_result"]
         assert final_result is not None
         self.assertIn("finished_notification_sent_at", final_result)
-        self.assertEqual(
-            final_result["telegram_finished_notification_sent_at"],
-            final_result["finished_notification_sent_at"],
-        )
 
     @patch("orca_auto.orca.queue.worker_tracking.notify_run_finished_event", return_value=True)
     def test_terminal_notification_skips_when_state_already_marked(
@@ -3001,7 +2997,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
     ) -> None:
         cfg = AppConfig(
             runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
-            telegram=TelegramConfig(bot_token="token", chat_id="chat"),
+            messenger=MessengerConfig(telegram=TelegramConfig(bot_token="token", chat_id="chat")),
         )
         rxn = self.root / "mol_terminal_already_marked"
         rxn.mkdir()
@@ -3010,7 +3006,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         assert state is not None
         final_result = state["final_result"]
         assert final_result is not None
-        final_result["telegram_finished_notification_sent_at"] = "2026-05-29T12:02:00+00:00"
+        final_result["finished_notification_sent_at"] = "2026-05-29T12:02:00+00:00"
         finalize_state(rxn, state, status="completed", final_result=final_result)
 
         self.assertFalse(_notify_terminal_job_from_state(cfg, str(rxn)))
@@ -3023,7 +3019,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
     ) -> None:
         cfg = AppConfig(
             runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
-            telegram=TelegramConfig(bot_token="token", chat_id="chat"),
+            messenger=MessengerConfig(telegram=TelegramConfig(bot_token="token", chat_id="chat")),
         )
         rxn = self.root / "mol_terminal_stale_generation"
         rxn.mkdir()
@@ -3113,7 +3109,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
             admission_token=token or "",
             task_id=entry.task_id,
         )
-        self.worker.cfg.telegram = TelegramConfig(bot_token="token", chat_id="chat")
+        self.worker.cfg.messenger = MessengerConfig(
+            telegram=TelegramConfig(bot_token="token", chat_id="chat")
+        )
 
         with patch.object(
             worker_tracking_mod,

@@ -48,15 +48,10 @@ class SystemdInstallPlan:
     enabled_unit: str | None
     use_sudo: bool
     warnings: tuple[str, ...]
-    requires_inactive_preflight: bool = False
-    live_transition: bool = False
 
 
 def _is_root() -> bool:
-    geteuid = getattr(os, "geteuid", None)
-    if geteuid is None:
-        return False
-    return int(geteuid()) == 0
+    return os.geteuid() == 0
 
 
 @dataclass(frozen=True)
@@ -226,43 +221,38 @@ def _worker_unit_for_user(target_user: str) -> str:
     return f"orca_auto-queue-worker@{target_user}.service"
 
 
-def _workflow_unit_for_user(target_user: str) -> str:
-    return f"orca_auto-workflow-worker@{target_user}.service"
-
-
-def _bot_unit_for_user(target_user: str) -> str:
-    return f"orca_auto-bot@{target_user}.service"
-
-
-def managed_runtime_units_for_user(target_user: str) -> tuple[str, ...]:
-    """Return every systemd unit that can retain a loaded orca_auto build."""
-
-    return (
-        _runtime_unit_for_user(target_user),
-        _worker_unit_for_user(target_user),
-        _bot_unit_for_user(target_user),
-        _workflow_unit_for_user(target_user),
-    )
-
-
 def _systemctl_transition_commands(
     *,
     target_user: str,
     worker_only: bool,
     enabled_unit: str | None,
+    no_start: bool,
 ) -> tuple[tuple[str, ...], ...]:
     commands: list[tuple[str, ...]] = [("systemctl", "daemon-reload")]
     if enabled_unit is None:
         return tuple(commands)
 
+    # Stage the desired boot unit before touching the currently selected mode.
+    # If enable fails, the existing live service and boot selection remain
+    # intact instead of turning an installation error into an outage.
+    commands.append(("systemctl", "enable", enabled_unit))
     opposite_unit = (
         _runtime_unit_for_user(target_user) if worker_only else _worker_unit_for_user(target_user)
     )
-    # Remove the opposite boot mode first so a partial transition cannot leave
-    # both modes enabled. If the selected enable then fails, neither mode is
-    # enabled and the existing live services remain untouched.
-    commands.append(("systemctl", "disable", opposite_unit))
-    commands.append(("systemctl", "enable", enabled_unit))
+    disable_command = ["systemctl", "disable"]
+    if not no_start:
+        disable_command.append("--now")
+    disable_command.append(opposite_unit)
+    commands.append(tuple(disable_command))
+    if not no_start:
+        # An explicit install transition is an operator-requested recovery.
+        # Clear the worker's start-limit counter so the bounded automatic
+        # restart policy cannot block that request inside its five-minute window.
+        commands.append(("systemctl", "reset-failed", _worker_unit_for_user(target_user)))
+        # `restart` also starts an inactive unit. Unlike `enable --now`, it
+        # reliably reloads code and reapplies the runtime target's Wants= graph
+        # when the requested mode was already active.
+        commands.append(("systemctl", "restart", enabled_unit))
     return tuple(commands)
 
 
@@ -403,13 +393,13 @@ def _collect_warnings(
             warnings.append(bot_warning)
     if no_enable:
         warnings.append(
-            "--no-enable requires every supervised unit to be inactive before writing; "
-            "it leaves the boot selection unchanged and does not stop or start services"
+            "--no-enable leaves the existing boot selection and live services unchanged; "
+            "only unit files are installed and systemd is reloaded"
         )
     elif no_start:
         warnings.append(
-            "--no-start requires every supervised unit to be inactive before writing; "
-            "it updates the boot selection without starting services"
+            "--no-start updates the boot selection without stopping or restarting live "
+            "services; rerun without --no-start to apply the selected mode immediately"
         )
     return tuple(warnings)
 
@@ -439,12 +429,13 @@ def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstal
         worker_only=effective_worker_only,
         no_enable=options.no_enable,
     )
-    if enabled_unit is not None:
+    if enabled_unit is not None and not options.no_start:
         _validate_worker_config(options.config)
     commands = _systemctl_transition_commands(
         target_user=options.target_user,
         worker_only=effective_worker_only,
         enabled_unit=enabled_unit,
+        no_start=options.no_start,
     )
 
     return SystemdInstallPlan(
@@ -466,8 +457,6 @@ def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstal
             no_enable=options.no_enable,
             no_start=options.no_start,
         ),
-        requires_inactive_preflight=options.no_start or options.no_enable,
-        live_transition=enabled_unit is not None and not options.no_start,
     )
 
 
@@ -528,28 +517,6 @@ def _print_plan(plan: SystemdInstallPlan) -> None:
         print(f"  enable: {plan.enabled_unit}")
     else:
         print("  enable: skipped")
-    if plan.requires_inactive_preflight:
-        print("  pre-write inactive preflight (fail closed):")
-        for managed_unit in managed_runtime_units_for_user(plan.target_user):
-            preflight_command = ("systemctl", "is-active", managed_unit)
-            formatted_preflight_command = _format_command(
-                preflight_command,
-                use_sudo=plan.use_sudo,
-            )
-            print(f"    require exit 3/inactive: {formatted_preflight_command}")
-    if plan.live_transition:
-        managed_units = managed_runtime_units_for_user(plan.target_user)
-        workflow_unit = _workflow_unit_for_user(plan.target_user)
-        print("  pre-write live drain (fail closed):")
-        print(
-            "    snapshot: "
-            f"{_format_command(('systemctl', 'is-active', workflow_unit), use_sudo=plan.use_sudo)}"
-        )
-        print(
-            "    stop: "
-            f"{_format_command(('systemctl', 'stop', *managed_units), use_sudo=plan.use_sudo)}"
-        )
-        print("    verify inactive: each managed runtime unit")
     print("  write:")
     for unit in plan.units:
         print(f"    {unit.destination}")
@@ -557,14 +524,6 @@ def _print_plan(plan: SystemdInstallPlan) -> None:
         print("  run:")
         for command in plan.commands:
             print(f"    {_format_command(command, use_sudo=plan.use_sudo)}")
-    if plan.live_transition:
-        workflow_unit = _workflow_unit_for_user(plan.target_user)
-        print("  post-write live start (fail closed):")
-        print(
-            "    start: "
-            f"{_format_command(('systemctl', 'start', plan.enabled_unit or ''), use_sudo=plan.use_sudo)}"
-        )
-        print(f"    restore if previously active: {workflow_unit}")
 
 
 def _print_warnings(plan: SystemdInstallPlan) -> None:
@@ -579,5 +538,4 @@ __all__ = [
     "SystemdInstallOptions",
     "SystemdInstallPlan",
     "build_systemd_install_plan",
-    "managed_runtime_units_for_user",
 ]

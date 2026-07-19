@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 from orca_auto.core.ingest.policy import UploadPolicy, upload_policy_from_mapping
@@ -419,22 +419,3 @@ def messenger_config_from_mapping(raw: object) -> MessengerConfig:
             f"Unsupported messenger.provider {config.provider!r}; expected one of: {supported}."
         )
     return config
-
-
-def reconcile_legacy_telegram_alias(
-    messenger: MessengerConfig,
-    telegram: TelegramConfig,
-) -> tuple[MessengerConfig, TelegramConfig]:
-    """Keep programmatic ``AppConfig.telegram`` construction source-compatible.
-
-    File loaders always construct both values from the canonical messenger block.
-    For older callers that still pass only ``telegram=...``, promote that value
-    into ``messenger.telegram``.  When both carry non-default values, the nested
-    messenger-owned value wins.
-    """
-    default = TelegramConfig()
-    if messenger.telegram == default and telegram != default:
-        messenger = replace(messenger, telegram=telegram)
-    else:
-        telegram = messenger.telegram
-    return messenger, telegram

@@ -16,7 +16,7 @@ from typing import Any, NoReturn
 
 from orca_auto.core.engine_process import read_confined_text
 from orca_auto.core.utils import process as process_utils
-from orca_auto.core.utils.lock import tmpfs_file_lock
+from orca_auto.core.utils.lock import file_lock
 
 
 def parse_lock_info(lock_path: Path) -> dict[str, Any]:
@@ -128,7 +128,7 @@ def _claim_stale_lock(
     """
     recovery_lock = lock_path.with_name(f".{lock_path.name}.recovery")
     try:
-        with tmpfs_file_lock(
+        with file_lock(
             recovery_lock,
             timeout_seconds=_STALE_RECOVERY_FLOCK_TIMEOUT_SECONDS,
         ):

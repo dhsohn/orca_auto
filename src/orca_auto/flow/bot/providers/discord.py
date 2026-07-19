@@ -85,10 +85,8 @@ def _trusted_attachment_url(value: object) -> str:
 
 def _fsync_directory(path: Path) -> None:
     flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_DIRECTORY
+    flags |= os.O_NOFOLLOW
     fd = os.open(path, flags)
     try:
         os.fsync(fd)

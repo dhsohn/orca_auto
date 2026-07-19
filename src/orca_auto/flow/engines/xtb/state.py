@@ -12,22 +12,20 @@ from orca_auto.core.utils import now_utc_iso
 
 STATE_FILE_NAME = JOB_STATE_FILE
 RECOVERY_PENDING_REASONS = _engine_state.RECOVERY_PENDING_REASONS
-_STATE_EXPORTS = _engine_state.create_engine_state_only_module_exports(
-    _engine_state.EngineStateOnlyModuleSpec(
-        state_file_name=STATE_FILE_NAME,
-        manifest_file_name=XTB_JOB_MANIFEST_FILE,
-        engine="xtb",
-    ),
+_STATE_ACCESS = _engine_state.EngineStateOnlyAccess(state_file_name=STATE_FILE_NAME)
+_RECOVERY_PENDING = _engine_state.EngineRecoveryPendingWriter(
+    access=_STATE_ACCESS,
+    manifest_filename=XTB_JOB_MANIFEST_FILE,
+    engine="xtb",
     now_fn=lambda: now_utc_iso(),
 )
-_RECOVERY_PENDING = _STATE_EXPORTS.recovery_pending
 _RECOVERY_RETAINED_FIELDS = _engine_state.RecoveryRetainedFieldsSpec(
     int_fields=("candidate_count",),
     list_fields=("candidate_paths", "selected_candidate_paths", "candidate_details"),
     dict_fields=("analysis_summary",),
 )
-write_state = _STATE_EXPORTS.write_state
-load_state = _STATE_EXPORTS.load_state
+write_state = _STATE_ACCESS.write_state
+load_state = _STATE_ACCESS.load_state
 
 
 def state_matches_job(

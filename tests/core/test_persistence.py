@@ -164,9 +164,7 @@ def test_fsync_parent_dir_opens_fsyncs_and_closes(
 
     def fake_open(target: str | Path, flags: int) -> int:
         events.append(("open", Path(target)))
-        expected_flags = os.O_RDONLY
-        if hasattr(os, "O_DIRECTORY"):
-            expected_flags |= os.O_DIRECTORY
+        expected_flags = os.O_RDONLY | os.O_DIRECTORY
         assert flags == expected_flags
         return 42
 

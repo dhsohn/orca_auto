@@ -4,9 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from orca_auto.core.config import MessengerConfig, TelegramConfig
 from orca_auto.orca.commands import _helpers as command_helpers
 from orca_auto.orca.commands import monitor
-from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig, TelegramConfig
+from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.dft.monitor import MonitorResult, ScanReport
 from orca_auto.orca.execution import _emit
 
@@ -18,7 +19,7 @@ def _cfg(allowed_root: Path, *, telegram_enabled: bool = True) -> AppConfig:
     return AppConfig(
         runtime=RetryRuntimeConfig(allowed_root=str(allowed_root)),
         paths=PathsConfig(orca_executable="/usr/bin/orca"),
-        telegram=telegram,
+        messenger=MessengerConfig(telegram=telegram),
     )
 
 

@@ -12,7 +12,7 @@ from typing import Any
 
 from orca_auto.core.utils import process as process_utils
 from orca_auto.core.utils import process_lock
-from orca_auto.core.utils.lock import tmpfs_file_lock
+from orca_auto.core.utils.lock import file_lock
 from orca_auto.core.utils.persistence import (
     atomic_write_json,
     load_json_mapping_file,
@@ -125,7 +125,7 @@ def write_orca_process_record(
         # only after the just-launched process is confirmed gone; otherwise a
         # later recovery attempt refuses to guess whether this PID is safe to
         # signal.
-        with tmpfs_file_lock(_orca_process_record_lock_path(reaction_dir)):
+        with file_lock(_orca_process_record_lock_path(reaction_dir)):
             _write_orca_process_record_unlocked(
                 orca_process_record_path(reaction_dir),
                 payload,
@@ -140,7 +140,7 @@ def write_orca_process_record(
             record_payload=payload,
         )
     payload["process_start_ticks"] = process_ticks
-    with tmpfs_file_lock(_orca_process_record_lock_path(reaction_dir)):
+    with file_lock(_orca_process_record_lock_path(reaction_dir)):
         _write_orca_process_record_unlocked(
             orca_process_record_path(reaction_dir),
             payload,
@@ -187,7 +187,7 @@ def clear_orca_process_record(
     record_id: str | None | _ExpectationUnset = _EXPECTATION_UNSET,
 ) -> bool:
     """CAS-clear one process record while excluding a replacement writer."""
-    with tmpfs_file_lock(_orca_process_record_lock_path(reaction_dir)):
+    with file_lock(_orca_process_record_lock_path(reaction_dir)):
         return _clear_orca_process_record_unlocked(
             reaction_dir,
             pid=pid,
@@ -524,7 +524,7 @@ def recover_orphaned_orca_process(
     Holding the inner lock across load, identity checks, signalling, and clear
     makes the final pathname unlink an actual compare-and-swap operation.
     """
-    with tmpfs_file_lock(_orca_process_record_lock_path(reaction_dir)):
+    with file_lock(_orca_process_record_lock_path(reaction_dir)):
         return _recover_orphaned_orca_process_unlocked(
             reaction_dir,
             logger=logger,

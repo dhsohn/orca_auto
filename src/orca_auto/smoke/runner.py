@@ -366,8 +366,8 @@ def _create_pinned_harness_file(
     harness_fd: int,
     name: str,
 ) -> tuple[int, tuple[int, int]]:
-    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+    flags |= os.O_NOFOLLOW
     descriptor = os.open(name, flags, 0o600, dir_fd=harness_fd)
     try:
         details = os.fstat(descriptor)

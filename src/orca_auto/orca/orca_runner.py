@@ -19,6 +19,12 @@ from orca_auto.core.engine_process import (
     require_confined_regular_file,
 )
 from orca_auto.core.engine_runner import confined_output_identity, executable_identity
+from orca_auto.core.engine_scratch import (
+    EngineScratchWorkspace,
+    ScratchPublication,
+    attach_scratch_provenance_to_exception,
+    scratch_publication_provenance,
+)
 from orca_auto.core.queue.cancellable import (
     ProcessCleanupError,
     retain_process_ownership_until_exit,
@@ -33,13 +39,7 @@ from .orca_process import (
     process_group_is_alive,
     write_orca_process_record,
 )
-from .scratch import (
-    OrcaScratchPolicy,
-    OrcaScratchWorkspace,
-    ScratchPublication,
-    attach_scratch_provenance_to_exception,
-    scratch_publication_provenance,
-)
+from .scratch import OrcaScratchPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -198,8 +198,7 @@ class OrcaRunner:
         # non-blocking so a substituted FIFO cannot stall the worker before
         # fstat() rejects it as a non-regular executable.
         flags = os.O_RDONLY | os.O_NONBLOCK
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
+        flags |= os.O_NOFOLLOW
         descriptor = os.open(path, flags)
         try:
             before = os.fstat(descriptor)
@@ -238,8 +237,7 @@ class OrcaRunner:
     def _open_pinned_launch_gate() -> int:
         path = Path(__file__).resolve().with_name("launch_gate.py")
         flags = os.O_RDONLY | os.O_NONBLOCK
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
+        flags |= os.O_NOFOLLOW
         descriptor = os.open(path, flags)
         try:
             details = os.fstat(descriptor)
@@ -251,7 +249,7 @@ class OrcaRunner:
             raise
 
     @staticmethod
-    def _cleanup_published_workspace(workspace: OrcaScratchWorkspace) -> None:
+    def _cleanup_published_workspace(workspace: EngineScratchWorkspace) -> None:
         try:
             workspace.cleanup()
         except BaseException:  # noqa: BLE001
@@ -305,8 +303,7 @@ class OrcaRunner:
     @staticmethod
     def _open_output_log_at(directory_fd: int, name: str) -> Any:
         flags = os.O_WRONLY | os.O_CREAT
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
+        flags |= os.O_NOFOLLOW
         descriptor = os.open(name, flags, 0o600, dir_fd=directory_fd)
         details = os.fstat(descriptor)
         if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
@@ -339,7 +336,7 @@ class OrcaRunner:
                 durable_input,
                 process_record_dir=durable_input.parent,
             )
-        workspace = OrcaScratchWorkspace.create(
+        workspace = EngineScratchWorkspace.create(
             self._scratch_policy,
             durable_input,
             expected_durable_dir_identity=self._bound_durable_directory_identity,

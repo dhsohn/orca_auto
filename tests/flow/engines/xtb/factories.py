@@ -5,7 +5,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from orca_auto.core import engine_runner
-from orca_auto.core.config import CommonResourceConfig, CommonRuntimeConfig, TelegramConfig
+from orca_auto.core.config import (
+    CommonResourceConfig,
+    CommonRuntimeConfig,
+    MessengerConfig,
+    TelegramConfig,
+)
 from orca_auto.core.config.engines import (
     WorkflowEngineAppConfig as AppConfig,
 )
@@ -33,7 +38,7 @@ def make_cfg(tmp_path: Path) -> SimpleNamespace:
             admission_limit=2,
         ),
         resources=SimpleNamespace(max_cores_per_task=4, max_memory_gb_per_task=8),
-        telegram=SimpleNamespace(bot_token="", chat_id=""),
+        messenger=SimpleNamespace(telegram=SimpleNamespace(bot_token="", chat_id="")),
         paths=SimpleNamespace(xtb_executable=""),
     )
 
@@ -45,7 +50,7 @@ def make_runner_cfg(tmp_path: Path, *, xtb_executable: str = "") -> AppConfig:
         ),
         paths=PathsConfig(xtb_executable=xtb_executable),
         resources=CommonResourceConfig(max_cores_per_task=4, max_memory_gb_per_task=12),
-        telegram=TelegramConfig(),
+        messenger=MessengerConfig(telegram=TelegramConfig()),
     )
 
 

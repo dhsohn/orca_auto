@@ -8,8 +8,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from ..utils.lock import tmpfs_file_lock
-from ..utils.persistence import parse_iso_utc, resolve_root_path
+from ..utils.lock import file_lock
+from ..utils.persistence import resolve_root_path
 
 QUEUE_RECORD_SYNC_KEY = "_orca_auto_queued_record_sync"
 QUEUE_RECORD_SYNC_UPDATED_AT_KEY = "_orca_auto_queued_record_sync_updated_at"
@@ -24,11 +24,6 @@ QUEUE_RECORD_SYNC_REPAIRING = "repairing"
 QUEUE_RECORD_SYNC_COMPLETE = "complete"
 QUEUE_RECORD_SYNC_ABORTED = "aborted"
 
-# New publishers record a PID plus process-start identity. A matching live
-# owner must never be fenced merely because wall-clock time elapsed: it may be
-# paused inside a slow filesystem or notification call. This timeout is only a
-# compatibility escape hatch for old ownerless transient records.
-QUEUE_RECORD_SYNC_HARD_STALE_SECONDS = 300.0
 QUEUE_RECORD_PUBLICATION_LOCK_TIMEOUT_SECONDS = 300.0
 _QUEUE_RECORD_PUBLICATION_LOCK_DIR = ".queue-publication-locks"
 
@@ -161,68 +156,32 @@ def queue_record_publication_lock(
     Callers may acquire the queue lock while holding this lock, but must never
     wait for this lock while still holding the queue lock.
     """
-    with tmpfs_file_lock(
+    with file_lock(
         _publication_lock_path(root, queue_id),
         timeout_seconds=timeout_seconds,
     ):
         yield
 
 
-def _sync_updated_at(entry: Any) -> datetime | None:
+def queue_record_sync_is_stale(entry: Any) -> bool:
     metadata = getattr(entry, "metadata", {})
-    if isinstance(metadata, dict):
-        updated_at = parse_iso_utc(metadata.get(QUEUE_RECORD_SYNC_UPDATED_AT_KEY))
-        if updated_at is not None:
-            return updated_at
-    return parse_iso_utc(getattr(entry, "enqueued_at", ""))
-
-
-def queue_record_sync_is_stale(
-    entry: Any,
-    *,
-    now: datetime | None = None,
-    hard_stale_seconds: float = QUEUE_RECORD_SYNC_HARD_STALE_SECONDS,
-) -> bool:
-    metadata = getattr(entry, "metadata", {})
-    owner_pid = 0
-    owner_start = ""
-    if isinstance(metadata, dict):
-        try:
-            owner_pid = int(metadata.get(QUEUE_RECORD_SYNC_OWNER_PID_KEY, 0) or 0)
-        except (TypeError, ValueError):
-            owner_pid = 0
-        owner_start = str(metadata.get(QUEUE_RECORD_SYNC_OWNER_START_KEY, "") or "").strip()
-
-    if owner_pid > 0:
-        if not _owner_process_alive(owner_pid):
-            return True
-        current_owner_start = process_start_token(owner_pid)
-        if (
-            owner_start
-            and current_owner_start
-            and not _same_process_start(owner_start, current_owner_start)
-        ):
-            # The numeric PID was reused after the original publisher exited.
-            return True
-        # A matching live owner (or a platform where start identity cannot be
-        # observed) keeps ownership regardless of timestamp age.
+    if not isinstance(metadata, dict):
         return False
-
-    updated_at = _sync_updated_at(entry)
-    if updated_at is None:
-        # Invalid/missing lease metadata must not strand a queue entry forever.
+    try:
+        owner_pid = int(metadata.get(QUEUE_RECORD_SYNC_OWNER_PID_KEY, 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    if owner_pid <= 0:
+        return False
+    if not _owner_process_alive(owner_pid):
         return True
-
-    current = now or datetime.now(UTC)
-    if current.tzinfo is None:
-        current = current.replace(tzinfo=UTC)
-    else:
-        current = current.astimezone(UTC)
-    elapsed_seconds = (current - updated_at).total_seconds()
-    if elapsed_seconds < -hard_stale_seconds:
-        # A wildly future timestamp is invalid rather than an infinite lease.
-        return True
-    return elapsed_seconds >= hard_stale_seconds
+    owner_start = str(metadata.get(QUEUE_RECORD_SYNC_OWNER_START_KEY, "") or "").strip()
+    current_owner_start = process_start_token(owner_pid)
+    return bool(
+        owner_start
+        and current_owner_start
+        and not _same_process_start(owner_start, current_owner_start)
+    )
 
 
 def queue_entry_is_claimable(entry: Any) -> bool:
@@ -240,7 +199,6 @@ __all__ = [
     "QUEUE_RECORD_PUBLICATION_LOCK_TIMEOUT_SECONDS",
     "QUEUE_RECORD_SYNC_ABORTED",
     "QUEUE_RECORD_SYNC_COMPLETE",
-    "QUEUE_RECORD_SYNC_HARD_STALE_SECONDS",
     "QUEUE_RECORD_SYNC_KEY",
     "QUEUE_RECORD_SYNC_OWNER_PID_KEY",
     "QUEUE_RECORD_SYNC_OWNER_START_KEY",

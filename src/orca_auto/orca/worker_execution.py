@@ -13,6 +13,10 @@ from typing import Any
 from orca_auto.core.admission import release_slot
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_APP_NAME
 from orca_auto.core.engine_process import require_confined_regular_file
+from orca_auto.core.engine_scratch import (
+    attach_scratch_provenance_mapping_to_exception,
+    scratch_provenance_from_exception,
+)
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.engines.worker_child import (
     WORKER_CHILD_MODULE,
@@ -64,10 +68,6 @@ from .queue.adapter import (
 )
 from .resource_directives import prepare_submission_resource_request
 from .runtime.run_lock import acquire_run_lock
-from .scratch import (
-    attach_scratch_provenance_mapping_to_exception,
-    scratch_provenance_from_exception,
-)
 from .state import finalize_state, load_state
 from .statuses import AnalyzerStatus
 from .submission import mark_orca_snapshot_owned

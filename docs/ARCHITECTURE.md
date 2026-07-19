@@ -344,9 +344,8 @@ logic. Notable pieces:
   pathname.
   A scratch-root lock admits exactly one workspace, and unresolved or stale
   workspaces are preserved and block new launches until an operator inspects
-  them or the tmpfs is reset. The ORCA process record, queue, run state, and
-  durable `run.lock` ownership marker remain in the durable generation; pure
-  advisory mutation locks use the separate tmpfs lock namespace. After the
+  them or the tmpfs is reset. The ORCA process record,
+  queue, run state, and locks remain in the durable generation. After the
   process tree exits, surviving regular files are staged and committed back to
   the inode-pinned generation as one journaled file-set transaction; a partial
   replacement rolls the old set back. Runtime state names are reserved, while
@@ -522,44 +521,14 @@ The internal workers, repair path, index, adapters, and workflow report consume
 that state directly and create no duplicate JSON or Markdown report. There is
 no report-only compatibility path; report-only jobs require resubmission.
 
-Completed-workflow compaction is a narrow maintenance boundary around obsolete
-copies that predate that state-only contract. It derives canonical internal
-xTB/CREST children only from `workflow.json`, then revalidates exact completed
-workflow, stage, task, child-state, queue/index, registry, final-child-sync, SI,
-snapshot, and recovery identities while holding the corresponding mutation
-locks. SI generations may both be absent; if present, the requested and
-published generations must match exactly. Reports never participate in these
-lifecycle checks. Only exact `job_report.json` and `job_report.md` leaves in the
-verified internal child directories enter the deterministic removal plan.
-
-Apply mode rechecks the workflow gates under the standard mutation locks and
-revalidates each exact leaf immediately before unlinking it. Each leaf deletion
-is independent and idempotent: after an interruption, rerun the dry run and
-apply the remaining plan. Compaction creates no receipt, journal, or state file.
-The online path does not remove any lock file, including obsolete disk advisory
-locks.
-
 ---
 
 ## 8. Persistence & State Files
 
 orca_auto keeps all scheduling, ownership, and public artifacts disk-backed.
 Optional ORCA tmpfs scratch is an execution workspace, never a state source.
-Concurrency safety comes from advisory file locks (`core/utils/lock.py`) around
-every durable mutation. Pure advisory flocks are keyed by the canonical logical
-lock path but stored in the owner-private `/dev/shm/orca_auto-locks-<uid>`
-namespace; they are not durable state. SHA-256 maps both pathname and
-directory-inode logical identities into a fixed, versioned pool of 4096 stripe
-files. Unrelated identities that collide serialize conservatively, which may
-reduce concurrency but cannot weaken mutual exclusion. A same-thread nested
-acquisition of an already-held stripe reuses that outer ownership, while other
-threads and processes still serialize on the external flock. Fork children
-discard inherited reentrancy state and lock descriptors before acquiring
-independently. Stripe files are never unlinked while the protocol is in use, so
-the current protocol creates at most 4096 files per owner namespace. Durable
-ownership markers such as
-`run.lock`, worker PID files, queue/admission/index/workflow JSON, snapshot
-intents, and process records remain on disk. The main on-disk artifacts:
+Concurrency safety comes from file locks (`core/utils/lock.py`) around every
+durable mutation. The main on-disk artifacts:
 
 | File                        | Owner            | Purpose                                  |
 |-----------------------------|------------------|------------------------------------------|
@@ -582,37 +551,6 @@ only when its semantic summary changes or a bounded heartbeat is due (at most
 60 seconds and shorter than the lease). Recent bounded journal reads use the
 registry-lock append/commit order and read only a confined file suffix; an
 explicit unbounded read still scans the complete history.
-
-The tmpfs lock namespace is never removed while any service is running. A
-deployment that changes disk-backed locks to tmpfs locks must drain every
-old-build `orca_auto` process before starting the new build because the two lock
-protocols do not contend with each other. This includes all queue/workflow
-workers, the bot, direct CLI and maintenance commands, and upload handling.
-Standard `systemd install` and `service restart` operations snapshot all managed
-units, stop the active ones, and verify the graph is non-running before an install
-writes or reloads any unit. The selected runtime graph is then started and
-verified, and the workflow is restored only when it was previously active. A
-post-drain write, boot-selection, start, or restore failure leaves the managed
-graph stopped instead of restarting old processes. A per-user, EUID-independent,
-non-persistent Linux abstract `AF_UNIX` socket lock serializes each non-dry-run
-install or restart from mode query and drain through start and restore within
-one Linux network namespace; lock timeout and noncanonical `systemctl`
-return-code/state pairs fail closed. Supported mutation callers, including
-WSL/native host shells and the supplied systemd units, must run in that same
-network namespace when controlling the same host systemd. A container or
-separate-network-namespace caller that controls host systemd is unsupported.
-Because abstract names are permissionless, this requires a trusted-local-user
-or single-user administrative boundary: pre-binding by an untrusted local user
-can cause fail-closed availability denial, but timeout occurs before mutation
-and cannot create a split-build graph or data damage. There is no file-lock
-fallback for this limitation. Maintenance installs with
-`--no-start` or `--no-enable` do not run that live transition; before writing
-any unit they require all four managed units to report a known non-running state
-and fail closed on active/transitional states or query errors. Boot
-selection changes disable the opposite mode before enabling the selected mode.
-An in-place code sync requires the same exact drain before the checkout changes;
-see `systemd/README.md`. Foreground/manual processes remain an operator
-preflight obligation. Lock setup failures fail closed; there is no disk fallback.
 
 The queue entry and tracked job-location record each expose a
 frozen set of downstream fields (see REFERENCE.md §11.1) so that `flow` can

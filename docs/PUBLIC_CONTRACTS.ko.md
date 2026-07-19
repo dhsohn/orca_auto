@@ -63,7 +63,6 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `orca_auto queue list`
 - `orca_auto queue list clear`
 - `orca_auto queue cancel <target>`
-- `orca_auto queue compact <completed-workflow>`
 - `orca_auto service status`
 - `orca_auto service restart`
 - `orca_auto systemd install --user <name> --repo <path>`
@@ -82,10 +81,8 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   없습니다.
 - `queue cancel`은 화면에 보이는 activity id와 workflow id, queue id, run id, 경로 alias를
   대상으로 받을 수 있습니다.
-- 스크립트는 `queue list --json`, `queue cancel --json`, `queue compact --json`,
-  `service status --json`을 사용해야 합니다.
-- `queue compact`는 기본이 dry-run입니다. `--apply`를 명시한 경우에만 검증된
-  완료 workflow를 변경합니다.
+- 스크립트는 `queue list --json`, `queue cancel --json`, `service status --json`을 사용해야
+  합니다.
 - `queue list --watch`는 사람용이며 `--json`과 함께 쓰지 않습니다.
 - `smoke`는 source-checkout 개발자 명령입니다. 옵션 없이 실행하면 fake profile과
   자동 발견한 공유 설정의 `runs_root`를 사용하며, repository tests·Git metadata·
@@ -248,44 +245,6 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 없는 종료 행은 무한히 복구를 반복하지 않고 `repair_blocked` activity로 노출하며,
 `repair_blocked_reason`과 `queue_error` metadata를 제공합니다.
 
-### 완료 workflow compaction 계약
-
-`orca_auto queue compact <target>`은 완료 workflow id 또는 설정된 workflow
-root(공유 설정의 `runs_root`) 아래의 canonical workspace 경로 하나를 받습니다.
-기본은 dry-run이며 의도적인
-`--apply` 전에 계획을 검토해야 합니다. 적격 dry-run과 성공한 apply는 0을,
-차단·부적격 결과와 `applied`를 true로 만들지 못한 apply 요청은 1을 반환합니다.
-
-안정 JSON 결과 키는 `workflow_id`, `workspace_dir`, `eligible`, `blocked`,
-`applied`, `would_remove`, `would_remove_bytes`, `removed`, `removed_bytes`,
-`preserved`, `reasons`입니다. 각 계획 행은 `relative_path`, `size`, `engine`,
-`stage_id`, `job_id`를 포함합니다. 부분 apply 중 차단되면 이미 제거한 경로와
-byte를 보고하고 `applied`는 false로 두며 나머지는 fail-closed로 남깁니다.
-
-적격성은 workflow, stage, task, 최종 child sync, registry 또는 cleared marker,
-canonical 내부 `job_state.json`, completed queue 또는 index 근거가 모두 exact completed
-상태임을 요구합니다. Pending/active/cancellation/recovery/replay/admission 또는
-snapshot 상태가 있으면 차단합니다. SI 게시 generation은 둘 다 없을 수
-있지만 있다면 정확히 일치해야 합니다. Report는 lifecycle 근거가 아닙니다.
-Report-only child는 지원하지 않고 다시 제출해야 하며 report나 Markdown
-호환 reader·fallback은 없습니다.
-
-제거할 수 있는 이름은 canonical workflow 내부 xTB/CREST child의 정확한
-`job_report.json`과 `job_report.md` leaf뿐입니다. 나머지 데이터는 모두
-보존합니다. 여기에는 ORCA·standalone xTB-MD 공개 report,
-`workflow.json`·`workflow_report.html`·`flow.yaml`, registry·journal·cleared marker,
-SI Markdown/CSV·interaction energy, 모든 canonical job state·queue·index·admission·snapshot
-input/intent·process·PID record, 과학 출력·log·geometry·provenance·data·HTML, 그리고
-`run.lock`과 이전 disk advisory lock을 포함한 모든 lock 파일이 포함됩니다.
-이 online 명령은 이전 disk lock 파일을 절대 삭제하지 않으며 별도의 offline
-lock cleanup은 구현되지 않았습니다.
-
-Apply는 표준 mutation lock 아래에서 workflow gate를 다시 확인하고, 각 정확한
-leaf를 unlink하기 직전에 다시 검증합니다. 파일별 삭제는 서로 독립적이고
-멱등합니다. Apply가 중단되거나 일부 삭제 뒤 차단되면 dry run을 다시 실행한 뒤
-남은 계획을 적용합니다. Compaction은 별도 receipt, journal, state 파일을 만들지
-않습니다.
-
 ORCA worker가 처음 관측할 때 이미 종료 상태인 행은 닫힌 이력으로 취급합니다. Worker를
 시작하거나 재시작해도 해당 행의 state/report를 다시 만들거나 `run_id`, `finished_at`,
 `error`를 교체하거나 종료 알림을 재발송하지 않습니다. 종료 side effect는 durable 행에
@@ -382,9 +341,8 @@ fail-closed 상태로 남으며 retry/resume 계약이 아닙니다.
 
 ## ORCA 작업 산출물 계약
 
-제출한 ORCA 작업 루트는 사용자 입력, 내구성 ownership marker인 `run.lock`, 제출당 하나의
-visible 실행 generation을 둡니다. 순수 advisory 조정 lock은 작업 트리가 아니라 private tmpfs
-lock namespace에 있습니다. 작업 리포트는 그 리포트를 만든 generation 안에
+제출한 ORCA 작업 루트는 사용자 입력, 조정용 lock 파일, 제출당 하나의 visible
+실행 generation을 둡니다. 작업 리포트는 그 리포트를 만든 generation 안에
 있습니다:
 
 - `<generation>/job_state.json`
@@ -414,39 +372,6 @@ production scan에서 제외되고 재구축은 upsert 전용이므로, 살아�
 들어갑니다. generation 파일은 자신이 설명하는 generation의 기록을 보존합니다.
 루트에 `run.lock` 파일이 존재한다는 사실만으로 현재 advisory lock이 소유된다고
 판정할 수는 없습니다.
-
-Queue, admission, index, workflow, registry, snapshot-intent, upload, worker singleton,
-process-record mutation, job-state mutation flock도 소유자 전용
-`/dev/shm/orca_auto-locks-<uid>` namespace를 사용합니다. 논리 경로 hash에는 build, repo,
-boot 식별자를 넣지 않고 pathname 및 directory-inode identity 모두를 고정된 versioned 4096개
-stripe 파일 pool에 매핑합니다. 서로 무관한 identity의 충돌은 상호 배제를 잃는 대신 보수적인
-직렬화를 일으킵니다. 재진입은 같은 thread가 중첩해서 이미 보유한 stripe를 획득할 때만 허용하며,
-다른 thread와 process는 외부 flock에서 계속 직렬화됩니다. fork child는 독립 획득 전에 상속된
-재진입 상태와 lock descriptor를 폐기합니다. protocol 사용 중 stripe 파일을 unlink하지 않으며
-현재 protocol은 owner namespace마다 최대 4096개 파일만 만듭니다. lock 준비 실패 시 디스크
-lock을 만들지 않고
-fail-closed합니다. 내구성 JSON/PID/process ownership state는 바뀌지 않습니다. 이전 build의 disk-lock holder와 새
-tmpfs-lock holder는 서로 배제하지 않으므로 이전 build의 모든 `orca_auto` 프로세스를 drain한 뒤
-배포해야 합니다. 여기에는 모든 queue/workflow worker, bot, 직접 실행한 CLI와 maintenance 명령,
-upload 처리가 포함됩니다. 표준 `systemd install`과 `service restart`는 모든 관리 unit 상태를
-snapshot하고 active unit만 중지한 뒤 전체 graph가 non-running인지 확인하며, install이 unit을 쓰거나 reload한 뒤 선택한 runtime graph를
-시작·active 확인하고, 이전에 active였던 workflow unit만 복원합니다. drain 뒤 실패하면 이전
-process를 되살리지 않고 graph를 stopped 상태로 남깁니다. 사용자별 EUID 독립적, 비영속 Linux
-abstract `AF_UNIX` socket lock이 동일 Linux network namespace 안에서 non-dry-run
-install/restart의 mode 조회와 drain부터 start/restore까지를 직렬화하며, timeout과 비정규
-`systemctl` 종료 상태/state 조합은 fail-closed합니다. 지원되는 mutation caller에는 WSL/native
-host shell과 제공 systemd unit이 포함되며 같은 host systemd를 제어할 때 동일 network
-namespace에서 실행되어야 합니다. container나 별도 network namespace에서 host systemd를
-제어하는 호출은 미지원입니다. abstract 이름은 permissionless이므로 trusted-local-user 또는
-single-user 관리 경계가 필요합니다. 신뢰하지 않는 local user의 선점은 fail-closed availability
-DoS를 만들 수 있지만 timeout은 mutation 전에 발생해 split-build graph나 data damage를 만들지
-않습니다. 이 제한에 file-lock fallback은 제공하지 않습니다.
-`--no-start`와 `--no-enable`은 offline
-전용 maintenance 설치입니다. unit을 하나라도 쓰기 전에 모든 관리 unit이 알려진 non-running
-상태인지 확인하고 live stop/start는 수행하지 않습니다. active/transitional 상태나 조회 오류는
-쓰기를 차단합니다. boot mode 변경은 반대 mode를 먼저
-disable한 뒤 선택한 mode를 enable합니다. in-place code sync는 checkout 변경 전에 drain해야
-합니다. manual/foreground 프로세스 종료는 명시적인 운영자 preflight입니다.
 
 `job_state.json`과 `job_report.json`은 정규화된 엔진 산출물 형태를 사용합니다:
 

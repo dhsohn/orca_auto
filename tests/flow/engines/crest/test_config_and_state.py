@@ -148,9 +148,8 @@ def test_load_config_reads_and_normalizes_all_sections(
     assert cfg.paths.crest_executable == str(fake_crest.resolve())
     assert cfg.resources.max_cores_per_task == 12
     assert cfg.resources.max_memory_gb_per_task == 48
-    assert cfg.telegram.bot_token == "token-123"
-    assert cfg.telegram.chat_id == "4567"
-    assert cfg.messenger.telegram == cfg.telegram
+    assert cfg.messenger.telegram.bot_token == "token-123"
+    assert cfg.messenger.telegram.chat_id == "4567"
 
 
 def test_load_config_rejects_legacy_top_level_telegram(tmp_path: Path) -> None:
@@ -221,8 +220,8 @@ def test_load_config_applies_defaults_for_missing_and_legacy_optional_sections(
     assert cfg.paths.crest_executable == ""
     assert cfg.resources.max_cores_per_task == 8
     assert cfg.resources.max_memory_gb_per_task == 32
-    assert cfg.telegram.bot_token == ""
-    assert cfg.telegram.chat_id == ""
+    assert cfg.messenger.telegram.bot_token == ""
+    assert cfg.messenger.telegram.chat_id == ""
 
 
 @pytest.mark.parametrize("value", [0, -1, "bad", True])

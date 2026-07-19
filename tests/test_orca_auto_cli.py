@@ -100,34 +100,6 @@ def test_build_parser_parses_unified_queue_commands() -> None:
     assert cancel_args.target == "xtb-q-1"
     assert cancel_args.func is cli_queue.cmd_queue_cancel
 
-    compact_args = parser.parse_args(["queue", "compact", "workflow-1"])
-    assert compact_args.queue_command == "compact"
-    assert compact_args.target == "workflow-1"
-    assert compact_args.orca_auto_config is None
-    assert compact_args.apply is False
-    assert compact_args.json is False
-    assert compact_args.func is cli_queue.cmd_queue_compact
-
-    apply_args = parser.parse_args(
-        [
-            "queue",
-            "compact",
-            "/tmp/workflows/workflow-1",
-            "--config",
-            "/tmp/orca_auto.yaml",
-            "--apply",
-            "--json",
-        ]
-    )
-    assert apply_args.target == "/tmp/workflows/workflow-1"
-    assert apply_args.orca_auto_config == "/tmp/orca_auto.yaml"
-    assert apply_args.apply is True
-    assert apply_args.json is True
-    assert apply_args.func is cli_queue.cmd_queue_compact
-
-    with pytest.raises(SystemExit):
-        parser.parse_args(["queue", "compact", "workflow-1", "--dry-run"])
-
 
 def test_build_parser_parses_unified_run_dir_commands() -> None:
     parser = unified_cli.build_parser()

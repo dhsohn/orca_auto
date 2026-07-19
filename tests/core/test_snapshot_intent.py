@@ -487,7 +487,7 @@ def test_reconcile_keeps_queue_lock_through_owner_decision(
 
 
 def test_busy_maintenance_root_does_not_block_other_roots(tmp_path: Path) -> None:
-    from orca_auto.core.utils.lock import tmpfs_file_lock
+    from orca_auto.core.utils.lock import file_lock
 
     busy_root = tmp_path / "busy"
     ready_root = tmp_path / "ready"
@@ -513,7 +513,7 @@ def test_busy_maintenance_root_does_not_block_other_roots(tmp_path: Path) -> Non
 
     def hold_busy_maintenance_lock() -> None:
         try:
-            with tmpfs_file_lock(busy_root / ".orca_auto_snapshot_intents.lock"):
+            with file_lock(busy_root / ".orca_auto_snapshot_intents.lock"):
                 lock_held.set()
                 release_lock.wait(timeout=5)
         except BaseException as exc:  # noqa: BLE001
