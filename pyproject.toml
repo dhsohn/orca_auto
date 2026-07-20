@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orca_auto"
-version = "0.2.1"
+version = "0.3.0"
 description = "orca_auto monorepo for ORCA, xTB, CREST, and workflow automation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -145,14 +145,6 @@ layers = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "Layered architecture: standalone xtb_md -> core"
-type = "layers"
-layers = [
-    "orca_auto.xtb_md",
-    "orca_auto.core",
-]
-
-[[tool.importlinter.contracts]]
 name = "Messaging never imports the notification layer"
 type = "forbidden"
 source_modules = ["orca_auto.core.messaging"]
@@ -169,22 +161,6 @@ source_modules = [
     "orca_auto.orca.queue",
 ]
 forbidden_modules = ["orca_auto.orca.commands"]
-
-[[tool.importlinter.contracts]]
-name = "Standalone xtb_md is independent from ORCA"
-type = "independence"
-modules = [
-    "orca_auto.xtb_md",
-    "orca_auto.orca",
-]
-
-[[tool.importlinter.contracts]]
-name = "Standalone xtb_md is independent from workflow orchestration"
-type = "independence"
-modules = [
-    "orca_auto.xtb_md",
-    "orca_auto.flow",
-]
 
 [[tool.importlinter.contracts]]
 name = "Workflow stage views stay below orchestration wiring"

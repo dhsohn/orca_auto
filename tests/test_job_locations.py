@@ -92,9 +92,9 @@ def test_contract_queue_lookup_ignores_partial_and_foreign_rows(
                 },
                 {
                     "queue_id": "q_foreign",
-                    "app_name": "orca_auto_xtb_md",
-                    "engine": "xtb_md",
-                    "task_kind": "xtb_md_run",
+                    "app_name": "orca_auto_crest",
+                    "engine": "crest",
+                    "task_kind": "crest_conformer_search",
                     "task_id": "foreign-task",
                     "status": "completed",
                     "metadata": {"reaction_dir": str(reaction_dir)},

@@ -31,9 +31,7 @@ _MAINTENANCE_LOCK_NAME = ".orca_auto_snapshot_intents.lock"
 _MUTATION_LOCK_NAME = ".orca_auto_snapshot_intents.mutation.lock"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9._-]{16,160}")
 _MANAGED_PARENT_NAMES = frozenset({".orca_auto_input_snapshots", ".orca_auto_orca_executions"})
-_DIRECT_VISIBLE_GENERATION_KINDS = frozenset(
-    {"orca_visible_generation", "xtb_md_visible_generation"}
-)
+_DIRECT_VISIBLE_GENERATION_KINDS = frozenset({"orca_visible_generation"})
 _KINDS = frozenset(
     {
         "input_snapshot_namespace",

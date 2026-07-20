@@ -19,10 +19,10 @@ def test_real_orca_profile_selects_retained_h2_acceptance() -> None:
     assert {"job_report.html", "si_block.md", "h2.out"}.issubset(scenario.required_artifacts)
 
 
-def test_all_profile_includes_fake_and_both_real_engine_lanes() -> None:
+def test_all_profile_includes_fake_and_real_orca_lane() -> None:
     profiles = {scenario.profile for scenario in scenarios_for_profile("all")}
 
-    assert profiles == {"fake", "real-orca", "real-xtb"}
+    assert profiles == {"fake", "real-orca"}
 
 
 def test_failed_internal_xtb_handoff_does_not_require_removed_reports() -> None:

@@ -458,7 +458,7 @@ class OrcaRunner:
                             # single-threaded and N ranks do not each spawn N
                             # BLAS/OMP threads (N^2 oversubscription). The %pal
                             # count in the input keeps ORCA's real parallelism.
-                            # xTB/CREST/xTB-MD already pin threads through the
+                            # xTB/CREST already pin threads through the
                             # shared launcher; ORCA's bespoke launch-gate path
                             # otherwise inherits the worker env unpinned. The env
                             # flows through the gate's execve into ORCA.

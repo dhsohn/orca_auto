@@ -1,7 +1,7 @@
 """One crash-scenario matrix over every enqueue-publication engine adapter.
 
-The three engines (standalone xTB-MD, workflow xtb/crest, ORCA) share the
-core publication driver; their adapters are supposed to stay thin. This
+The two engine adapters (workflow xtb/crest, ORCA) share the core
+publication driver; their adapters are supposed to stay thin. This
 suite drives each REAL adapter entry point through the same crash windows,
 breaking the protocol at the shared layers only — the queue store's
 ``save_entries``, the driver's ``queue_record_publication_lock``, and the
@@ -19,16 +19,13 @@ Known limitations (deliberate; the per-engine suites carry these):
 the structural enforcement covers the publication window (the driver's
 lock binding) — a faithful adapter-local re-implementation of the
 commit-recovery or repair steps would pass on outcomes alone; snapshot
-intent finalization is not observed by any scenario; the xTB-MD repair
-harness calls the per-entry repair directly, bypassing the worker
-sweep's containment gating; and ``set_publish_failing`` only gates the
-submit-side publish for xTB-MD/ORCA (their repairs publish through
-independent bindings).
+intent finalization is not observed by any scenario; and
+``set_publish_failing`` only gates the submit-side publish for ORCA
+(its repair publishes through an independent binding).
 """
 
 from __future__ import annotations
 
-import textwrap
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -37,7 +34,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import yaml
 
 from orca_auto.core.queue import enqueue_publication as core_enqueue_publication
 from orca_auto.core.queue import store as queue_store
@@ -90,129 +86,6 @@ def _single_row(queue_root: Path) -> Any:
 # --------------------------------------------------------------------------
 # Engine harnesses
 # --------------------------------------------------------------------------
-
-
-def _make_xmd_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
-    from orca_auto.core.config.engines import load_xtb_md_config
-    from orca_auto.core.queue.generation import is_visible_generation_name
-    from orca_auto.xtb_md import queue_runtime as xmd_queue_runtime
-    from orca_auto.xtb_md import submission as xmd_submission
-
-    root = tmp_path / "xmd"
-    runs_root = root / "runs"
-    admission_root = root / "admission"
-    bin_dir = root / "bin"
-    job_dir = runs_root / "water-md"
-    for directory in (runs_root, admission_root, bin_dir, job_dir):
-        directory.mkdir(parents=True, exist_ok=True)
-    executable = bin_dir / "xtb"
-    executable.write_text(
-        textwrap.dedent(
-            """
-            #!/bin/sh
-            set -eu
-            if [ "${1:-}" = "--version" ]; then
-                printf '%s\\n' 'xtb version 6.7.1'
-                exit 0
-            fi
-            exit 1
-            """
-        ).lstrip(),
-        encoding="utf-8",
-    )
-    executable.chmod(0o755)
-    config_path = root / "orca_auto.yaml"
-    config_path.write_text(
-        textwrap.dedent(
-            f"""
-            runs_root: {runs_root}
-            scheduler:
-              max_active_simulations: 2
-              max_active_xtb_md: 1
-              admission_root: {admission_root}
-            workflow:
-              paths:
-                xtb_executable: {executable}
-            resources:
-              max_cores_per_task: 2
-              max_memory_gb_per_task: 4
-            """
-        ).lstrip(),
-        encoding="utf-8",
-    )
-    (job_dir / "water.xyz").write_text(
-        "3\nwater\nO 0 0 0\nH 0.75 0 0.5\nH -0.75 0 0.5\n",
-        encoding="utf-8",
-    )
-    (job_dir / "xtb_md_job.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "schema_version": 1,
-                "input_xyz": "water.xyz",
-                "gfn": 2,
-                "ensemble": "nvt",
-                "temperature_k": 298.15,
-                "time_ps": 0.008,
-                "walltime_seconds": 300,
-                "step_fs": 4.0,
-                "dump_fs": 4.0,
-                "resources": {"max_cores": 2, "max_memory_gb": 4},
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-
-    publish_failing = {"value": False}
-    original_publish = xmd_submission.publish_queued_record
-
-    def controllable_publish(cfg: Any, entry: Any) -> None:
-        if publish_failing["value"]:
-            raise OSError("queued artifact write failed")
-        original_publish(cfg, entry)
-
-    monkeypatch.setattr(xmd_submission, "publish_queued_record", controllable_publish)
-
-    def submit() -> Outcome:
-        payload = xmd_submission.submit_job_dir(
-            job_dir=str(job_dir),
-            priority=10,
-            config_path=str(config_path),
-        )
-        status = str(payload.get("status") or "")
-        return Outcome(
-            succeeded=status == "queued",
-            cancelled=status == "cancelled",
-            outcome_unknown=payload.get("reason") == "queue_enqueue_outcome_unknown",
-            detail="; ".join(
-                [str(payload.get("stderr") or ""), *map(str, payload.get("warnings") or [])]
-            ),
-        )
-
-    cfg = load_xtb_md_config(str(config_path))
-
-    def xmd_record_published() -> bool:
-        assert not (job_dir / "job_state.json").exists()
-        return any(
-            (path / "job_state.json").is_file()
-            for path in job_dir.iterdir()
-            if path.is_dir() and is_visible_generation_name(path.name)
-        )
-
-    return Harness(
-        name="xmd",
-        queue_root=runs_root,
-        submit=submit,
-        repair=lambda entry: xmd_queue_runtime._repair_queued_publication(cfg, runs_root, entry),
-        record_published=xmd_record_published,
-        set_publish_failing=lambda value: publish_failing.__setitem__("value", value),
-        # Load-bearing constant: xTB-MD has no queued-notification path today
-        # (nothing to count). If the engine ever gains one, this must become a
-        # real counter or every ==0 assertion below silently stops measuring.
-        notification_count=lambda: 0,
-        expected_notifications_after_clean_submit=0,
-        expected_notifications_after_publish_failure=0,
-    )
 
 
 def _make_flow_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
@@ -367,7 +240,6 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
 
 
 _HARNESS_BUILDERS = {
-    "xmd": _make_xmd_harness,
     "flow": _make_flow_harness,
     "orca": _make_orca_harness,
 }

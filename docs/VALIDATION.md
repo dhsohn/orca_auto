@@ -24,7 +24,7 @@ The GitHub Actions workflow runs multiple independent checks:
 - Wheel smoke check that requires the packaged Python-module inventory to
   exactly match `src/orca_auto` and verifies the single root typing marker.
 
-The pytest suite exercises ORCA and standalone xTB-MD logic with unit tests,
+The pytest suite exercises ORCA logic with unit tests,
 sanitized fixtures, and fake-engine integration paths. These checks cover durable queue behavior,
 state/report writing, parser behavior, retry policy, notification formatting,
 workflow handoff contracts, and CLI surfaces.
@@ -55,7 +55,6 @@ For focused changes, pass pytest selectors through the shared script:
 
 ```bash
 bash scripts/check.sh tests/test_scants_support.py -q
-bash scripts/check.sh tests/xtb_md -q
 bash scripts/check.sh tests/flow -q
 ```
 
@@ -76,8 +75,8 @@ PY
 
 Use the developer smoke runner after each behavioral patch that can affect
 submission, workers, terminal classification, or generated reports. The fake
-profile covers successful and fail-closed cases across standalone ORCA,
-standalone xTB-MD NVT/NVE, and the supported workflows:
+profile covers successful and fail-closed cases across standalone ORCA and the
+supported workflows:
 
 ```bash
 orca_auto smoke
@@ -203,27 +202,6 @@ batches. Monitor disk use and archive or remove an entire reviewed batch only
 under the owned `.orca_auto_smoke/batches/` tree; never delete selected child
 files and leave a partially trusted packet behind.
 
-## Opt-in real-xTB smoke
-
-Changes to xTB-MD invocation or validation should also run the opt-in real-xTB
-profile with the supported xTB 6.7.1 executable:
-
-```bash
-XTB_MD_REAL_EXECUTABLE=/absolute/path/to/xtb \
-  orca_auto smoke --profile real-xtb \
-  --config /absolute/path/to/orca_auto.yaml
-```
-
-The real-xTB profile requires scheduler settings from the shared config and holds
-a production admission lease while the real-engine scenario runs. Unavailable
-capacity, an unset/non-executable `XTB_MD_REAL_EXECUTABLE`, or a skipped test is
-not reported as success. The retained NVT/NVE outputs must still be reviewed;
-passing the adapter contract is not a claim of chemically meaningful dynamics.
-When the shared config enables `orca.runtime.scratch_root`, the harness discards
-any inherited scratch override and passes only that validated root/minimum to
-the case-local xTB-MD config. The acceptance then requires a private tmpfs CWD,
-committed `scratch_provenance`, the canonical durable allowlist, and cleanup.
-
 ## Opt-in real-ORCA smoke
 
 Changes to ORCA process invocation, output parsing, or generated reports should
@@ -326,35 +304,6 @@ At the time of writing, real-engine re-validation is paused: the workstation is
 held for a hardware power/thermal issue that is under separate investigation. The
 public CI and fake-engine suites do not depend on that hardware and continue to
 run.
-
-## Standalone xTB-MD acceptance
-
-Fake-engine checks must cover strict manifest admission, immutable submission
-binding, NVT/NVE command generation, cancellation/process-group termination, no
-retry/resume, resource/output/time ceilings, and rejection of return-code-zero
-false success, stale, truncated, wrong-atom, or non-finite artifacts. They must
-also prove that each accepted submission owns one visible
-`YYYYMMDD-HHMMSS-<8-hex>/` direct child, that bound inputs, state/reports, and
-retained outputs stay in that generation, and that neither a separate hidden
-input/execution tree nor root state/report copies are created. A terminal
-resubmission must preserve the closed generation and create a new sibling.
-When RAM scratch is enabled, they must also prove that the actual process CWD
-and geometry/control arguments are inside the private scratch workspace while
-the reported command and execution identity stay durable; only the two logs,
-trajectory, checkpoint, and success marker may be published. Test committed
-cleanup after success, false-success, and shutdown, plus fail-closed retention
-after durable-input mutation or publication failure.
-
-Changes to the standalone MD invocation or terminal validator also require a
-small sanitized real-xTB NVT and NVE acceptance. Record the exact xTB version
-and executable identity, manifest, generated `$md` input, queue terminal state,
-`xtbmdok`, trajectory frame/atom counts, `mdrestart` validation, and output
-identities. The supported adapter version is currently xTB 6.7.1; describe it as
-the latest stable version selected for this adapter, not as issue-free. Confirm
-that a fixture containing a known false-success marker fails closed. With RAM
-scratch configured, also record the live process CWD, committed
-`scratch_provenance`, durable allowlist, workspace cleanup, and absence of an
-automatic SSD fallback.
 
 ## Fixture and artifact policy
 

@@ -56,9 +56,6 @@ class _SmokeProcessCleanupError(RuntimeError):
 class RealEngineAdmission:
     root: Path
     global_limit: int
-    xtb_md_limit: int | None = None
-    scratch_root: Path | None = None
-    scratch_min_free_gb: int | None = None
 
 
 @dataclass(frozen=True)
@@ -200,7 +197,7 @@ def _reserve_real_engine_slot(
 ) -> tuple[Path, str] | None:
     if scenario.profile == "fake":
         return None
-    if scenario.profile not in {"real-orca", "real-xtb"}:
+    if scenario.profile != "real-orca":
         raise ValueError(f"unsupported real-engine smoke profile: {scenario.profile}")
     if admission is None:
         raise ValueError(
@@ -213,17 +210,7 @@ def _reserve_real_engine_slot(
         "owner_pid": os.getpid(),
         "engine_process_state": "idle",
     }
-    if scenario.profile == "real-xtb":
-        if admission.xtb_md_limit is None:
-            raise ValueError("real-xtb smoke requires the production xTB-MD admission limit")
-        slot_kwargs.update(
-            {
-                "app_name": "orca_auto_xtb_md",
-                "app_limit": admission.xtb_md_limit,
-            }
-        )
-    else:
-        slot_kwargs["app_name"] = "orca_auto_orca"
+    slot_kwargs["app_name"] = "orca_auto_orca"
     token = reserve_slot(
         admission.root,
         admission.global_limit,
@@ -572,22 +559,11 @@ def _run_scenario(
         "PYTEST_ADDOPTS",
         "PYTEST_PLUGINS",
         "PYTEST_DEBUG_TEMPROOT",
-        "XTB_MD_REAL_SCRATCH_ROOT",
-        "XTB_MD_REAL_SCRATCH_MIN_FREE_GB",
     ):
         environment.pop(variable, None)
     environment["ORCA_AUTO_SMOKE_PYTEST_TMP_PATH"] = str(pinned_case.pytest_access_path)
     environment["ORCA_AUTO_SMOKE_PYTEST_TMP_DEVICE"] = str(pinned_case.pytest_identity.device)
     environment["ORCA_AUTO_SMOKE_PYTEST_TMP_INODE"] = str(pinned_case.pytest_identity.inode)
-    if (
-        scenario.profile == "real-xtb"
-        and real_engine_admission is not None
-        and real_engine_admission.scratch_root is not None
-    ):
-        environment["XTB_MD_REAL_SCRATCH_ROOT"] = str(real_engine_admission.scratch_root)
-        environment["XTB_MD_REAL_SCRATCH_MIN_FREE_GB"] = str(
-            real_engine_admission.scratch_min_free_gb or 8
-        )
 
     try:
         pinned_case.assert_namespace_identity()
@@ -738,7 +714,7 @@ def run_smoke_suite(
     scenarios = _selected_scenarios(profile, selected_ids)
     if not scenarios:
         raise ValueError("at least one smoke scenario must be selected")
-    if any(scenario.profile in {"real-orca", "real-xtb"} for scenario in scenarios):
+    if any(scenario.profile == "real-orca" for scenario in scenarios):
         if real_engine_admission is None:
             raise ValueError("real-engine smoke requires the production admission configuration")
 

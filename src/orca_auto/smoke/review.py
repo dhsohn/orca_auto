@@ -121,7 +121,7 @@ _ENGINE_SUFFIXES = {
     ".hess",
     ".property.txt",
 }
-_ENGINE_NAMES = {"mdrestart", "xtbmdok", "xtbtopo.mol", "orca.out", "xtb.out"}
+_ENGINE_NAMES = {"xtbtopo.mol", "orca.out", "xtb.out"}
 _TEXT_SUFFIXES = {".txt", ".yaml", ".yml", ".toml", ".ini", ".cfg"}
 
 _MISSING = object()

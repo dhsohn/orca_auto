@@ -218,7 +218,6 @@ def test_run_dir_help_renders_engine_directives(capsys: pytest.CaptureFixture[st
     assert exc_info.value.code == 0
     rendered = capsys.readouterr().out
     assert "%pal/%maxcore" in rendered
-    assert "standalone xTB-MD" in rendered
 
 
 @pytest.mark.parametrize(

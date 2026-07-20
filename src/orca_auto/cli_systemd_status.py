@@ -19,7 +19,6 @@ SERVICE_UNIT_ORDER = (
     ("runtime", "orca_auto-runtime@{user}.target"),
     ("engines", "orca_auto-engine-workers@{user}.target"),
     ("worker", "orca_auto-queue-worker@{user}.service"),
-    ("xtb_md", "orca_auto-xtb-md-worker@{user}.service"),
     ("workflow", "orca_auto-workflow-worker@{user}.service"),
     ("bot", "orca_auto-bot@{user}.service"),
 )
@@ -199,8 +198,8 @@ def _selected_service_mode(statuses: Sequence[ServiceUnitStatus]) -> str:
 
 def _required_service_labels(mode: str) -> frozenset[str]:
     if mode == "full":
-        return frozenset({"runtime", "engines", "worker", "xtb_md", "bot"})
-    return frozenset({"engines", "worker", "xtb_md"})
+        return frozenset({"runtime", "engines", "worker", "bot"})
+    return frozenset({"engines", "worker"})
 
 
 def _required_services_active(
@@ -232,10 +231,6 @@ def _worker_unit_for_user(target_user: str) -> str:
     return f"orca_auto-queue-worker@{target_user}.service"
 
 
-def _xtb_md_worker_unit_for_user(target_user: str) -> str:
-    return f"orca_auto-xtb-md-worker@{target_user}.service"
-
-
 def _bot_unit_for_user(target_user: str) -> str:
     return f"orca_auto-bot@{target_user}.service"
 
@@ -245,10 +240,7 @@ def _require_current_restart_units(
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> None:
-    required_units = (
-        _engine_workers_unit_for_user(target_user),
-        _xtb_md_worker_unit_for_user(target_user),
-    )
+    required_units = (_engine_workers_unit_for_user(target_user),)
     missing = tuple(
         unit for unit in required_units if _unit_load_state(unit, run=run) == "not-found"
     )
@@ -352,7 +344,6 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceCliDeps | None
 
     reset_units = [
         _worker_unit_for_user(target_user),
-        _xtb_md_worker_unit_for_user(target_user),
     ]
     if unit == _runtime_unit_for_user(target_user):
         reset_units.append(_bot_unit_for_user(target_user))

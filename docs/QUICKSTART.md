@@ -34,7 +34,7 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 
 If the selected Telegram or Discord provider has complete interactive bot settings,
 orca_auto enables the full runtime target. Otherwise it enables the bot-free
-engine-worker target, which starts ORCA and standalone xTB-MD as separate services.
+engine-worker target, which starts only the ORCA service.
 For a workflow submission,
 start the opt-in workflow unit before or after queueing it:
 
@@ -49,8 +49,8 @@ orca_auto service status
 orca_auto service restart
 ```
 
-`service status` shows the runtime and engine-worker targets, both engine services,
-the opt-in workflow service, and the selected messenger bot.
+`service status` shows the runtime and engine-worker targets, the default ORCA
+engine service, the opt-in workflow service, and the selected messenger bot.
 `service restart` restarts the full runtime target when it is enabled; otherwise
 it restarts the engine-worker target.
 

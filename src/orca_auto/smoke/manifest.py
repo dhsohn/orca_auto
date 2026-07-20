@@ -45,7 +45,6 @@ TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 _BATCH_PROFILE_CODES = {
     "fake": "f",
     "real-orca": "ro",
-    "real-xtb": "rx",
     "all": "a",
 }
 _SMOKE_INIT_LOCK_FILENAME = ".orca_auto_smoke.init.lock"

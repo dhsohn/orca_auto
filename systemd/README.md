@@ -9,11 +9,9 @@ This directory is the single home for long-running orca_auto service assets.
 - `orca_auto-runtime@.target`
   - recommended combined runtime target for the default engine workers and selected messenger bot
 - `orca_auto-engine-workers@.target`
-  - default worker-only target for independent ORCA and standalone xTB-MD services
+  - default worker-only target for the ORCA queue worker
 - `orca_auto-queue-worker@.service`
   - ORCA queue worker template
-- `orca_auto-xtb-md-worker@.service`
-  - standalone xTB-MD queue worker template
 - `orca_auto-workflow-worker@.service`
   - explicit workflow supervisor plus internal xTB/CREST workers
 - `orca_auto-bot@.service`
@@ -21,9 +19,8 @@ This directory is the single home for long-running orca_auto service assets.
 
 ## Combined runtime target
 
-Use `orca_auto-runtime@.target` when you want the default ORCA/standalone
-xTB-MD queue workers and the selected Telegram or Discord bot to start together
-at boot.
+Use `orca_auto-runtime@.target` when you want the default ORCA queue worker and
+the selected Telegram or Discord bot to start together at boot.
 
 It pulls in:
 
@@ -111,7 +108,6 @@ Monitor the combined runtime target:
 ```bash
 orca_auto service status
 journalctl -u "orca_auto-queue-worker@$(whoami)" -f
-journalctl -u "orca_auto-xtb-md-worker@$(whoami)" -f
 journalctl -u "orca_auto-bot@$(whoami)" -f
 ```
 
@@ -125,23 +121,20 @@ sudo systemctl stop "orca_auto-runtime@$(whoami).target"
 ## Engine queue workers
 
 Use `orca_auto-engine-workers@.target` as the default worker-only runtime. It
-pulls in two independent services:
+pulls in the ORCA queue worker:
 
 - `orca_auto-queue-worker@.service` runs
   `python -m orca_auto.cli queue worker --app orca`
-- `orca_auto-xtb-md-worker@.service` runs
-  `python -m orca_auto.cli queue worker --app xtb_md`
 
 Common assumptions:
 
 - Repository path is `/home/<user>/orca_auto`
 - Config path is `/home/<user>/orca_auto/config/orca_auto.yaml`
 - Python path is `/home/<user>/orca_auto/.venv/bin/python`
-- The default target runs exactly one ORCA worker and one standalone xTB-MD
-  worker. Each has its own systemd restart circuit, so a failed xTB-MD service
-  cannot stop the ORCA service, and vice versa.
-- Both workers use the shared admission lifecycle while keeping their own retry
-  and report behavior.
+- The default target runs exactly one ORCA worker with its own systemd restart
+  circuit.
+- The worker uses the shared admission lifecycle while keeping its own retry and
+  report behavior.
 - A configured `runs_root` never implicitly starts workflow, internal xTB, or
   CREST workers.
 
@@ -170,7 +163,7 @@ Worker safety policy:
 - `orca_auto service restart` clears the bounded failure state before an
   operator-requested restart.
 
-Install the default ORCA and standalone xTB-MD engine workers:
+Install the default ORCA engine worker:
 
 ```bash
 cd <repo_root>
@@ -186,7 +179,6 @@ Monitor the default engine workers:
 ```bash
 orca_auto service status
 journalctl -u "orca_auto-queue-worker@$(whoami)" -f
-journalctl -u "orca_auto-xtb-md-worker@$(whoami)" -f
 ```
 
 Maintain the default engine workers:
@@ -197,5 +189,5 @@ sudo systemctl stop "orca_auto-engine-workers@$(whoami).target"
 ```
 
 `scheduler.max_active_simulations` in `orca_auto.yaml` still caps the combined
-number of active simulations across ORCA, standalone xTB-MD, internal xTB
-stages, and internal CREST stages.
+number of active simulations across ORCA, internal xTB stages, and internal
+CREST stages.

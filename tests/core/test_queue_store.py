@@ -51,10 +51,10 @@ def _install_deterministic_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_queue_generation_token_tracks_only_immutable_identity() -> None:
     entry = store.QueueEntry(
         queue_id="q-generation",
-        app_name="orca_auto_xtb_md",
-        task_id="xtbmd-task",
-        task_kind="xtb_md",
-        engine="xtb_md",
+        app_name="orca_auto_orca",
+        task_id="orca-task",
+        task_kind="orca_run_inp",
+        engine="orca",
         status=QueueStatus.PENDING,
         enqueued_at="2026-04-19T00:00:00+00:00",
         metadata={
@@ -105,13 +105,13 @@ def test_queue_generation_token_tracks_only_immutable_identity() -> None:
     assert queue_entries_same_generation(terminal, entry)
 
 
-def test_queue_generation_rejects_immutable_xtb_md_metadata_changes() -> None:
+def test_queue_generation_rejects_immutable_metadata_changes() -> None:
     entry = store.QueueEntry(
         queue_id="q-generation",
-        app_name="orca_auto_xtb_md",
-        task_id="xtbmd-task",
-        task_kind="xtb_md",
-        engine="xtb_md",
+        app_name="orca_auto_orca",
+        task_id="orca-task",
+        task_kind="orca_run_inp",
+        engine="orca",
         status=QueueStatus.PENDING,
         enqueued_at="2026-04-19T00:00:00+00:00",
         metadata={

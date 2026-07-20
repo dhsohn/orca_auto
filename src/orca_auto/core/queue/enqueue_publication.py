@@ -1,8 +1,8 @@
 """Shared driver for the durable enqueue-publication protocol.
 
 One committed queue row must always end up with its queued job artifact
-published exactly once, no matter where the publisher crashes. Three engines
-(standalone xTB-MD, workflow xtb/crest, ORCA) grew separate copies of that
+published exactly once, no matter where the publisher crashes. The engines
+(workflow xtb/crest, ORCA) grew separate copies of that
 protocol; this module is the single implementation they converge on. Engine
 differences stay in the :class:`EnqueuePublicationSpec` — commit guards,
 duplicate policy, the publish callback, snapshot-intent finalization, and
