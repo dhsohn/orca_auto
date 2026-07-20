@@ -65,7 +65,7 @@ def test_systemd_telegram_lookup_rejects_malformed_empty_adapter_section(
     config_path = tmp_path / "orca_auto.yaml"
     config_path.write_text("messenger:\n  telegram: ''\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="messenger.telegram section is not a mapping"):
+    with pytest.raises(ValueError, match="messenger.telegram must be a mapping"):
         systemd_plan._telegram_mapping(config_path)
 
 
@@ -88,14 +88,21 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
         ("systemctl", "daemon-reload"),
         ("systemctl", "enable", "orca_auto-runtime@alice.target"),
         ("systemctl", "disable", "--now", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "disable", "--now", "orca_auto-engine-workers@alice.target"),
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-xtb-md-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-bot@alice.service"),
         ("systemctl", "restart", "orca_auto-runtime@alice.target"),
     )
 
     unit_by_name = {unit.name: unit for unit in plan.units}
     worker_content = unit_by_name["orca_auto-queue-worker@.service"].content
+    xtb_md_worker_content = unit_by_name["orca_auto-xtb-md-worker@.service"].content
     workflow_worker_content = unit_by_name["orca_auto-workflow-worker@.service"].content
     assert "queue worker --app orca" in worker_content
+    assert "--app xtb_md" not in worker_content
+    assert "queue worker --app xtb_md" in xtb_md_worker_content
+    assert "--app orca" not in xtb_md_worker_content
     assert "queue worker --app workflow" in workflow_worker_content
     assert f"WorkingDirectory={repo.resolve(strict=False)}" in worker_content
     assert f"Environment=ORCA_AUTO_CONFIG={config_path.resolve(strict=False)}" in worker_content
@@ -118,7 +125,17 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
     ) in worker_content
     bot_content = unit_by_name["orca_auto-bot@.service"].content
     assert "ProtectHome=read-only" in bot_content
+    assert "StartLimitIntervalSec=300" in bot_content
+    assert "StartLimitBurst=3" in bot_content
+    assert "Restart=on-failure" in bot_content
+    assert "RestartSec=30" in bot_content
     assert f"ReadWritePaths={repo.resolve(strict=False) / 'admission'}" in bot_content
+    engine_target = unit_by_name["orca_auto-engine-workers@.target"].content
+    assert "Wants=orca_auto-queue-worker@%i.service" in engine_target
+    assert "Wants=orca_auto-xtb-md-worker@%i.service" in engine_target
+    runtime_target = unit_by_name["orca_auto-runtime@.target"].content
+    assert "Wants=orca_auto-engine-workers@%i.target" in runtime_target
+    assert "Wants=orca_auto-queue-worker@%i.service" not in runtime_target
     assert unit_by_name["orca_auto-runtime@.target"].destination == (
         unit_dir.resolve(strict=False) / "orca_auto-runtime@.target"
     )
@@ -183,7 +200,7 @@ def test_systemd_rejects_orca_scoped_admission_override(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="cannot override the shared top-level scheduler"):
+    with pytest.raises(ValueError, match="Unknown orca config fields: scheduler"):
         systemd_plan.build_systemd_install_plan(
             target_user="alice",
             repo=repo,
@@ -213,7 +230,7 @@ def test_systemd_rejects_non_mapping_orca_scheduler(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="orca.scheduler must be a mapping"):
+    with pytest.raises(ValueError, match="Unknown orca config fields: scheduler"):
         systemd_plan.build_systemd_install_plan(
             target_user="alice",
             repo=repo,
@@ -338,7 +355,7 @@ def test_systemd_read_write_paths_reject_whitespace_from_config(tmp_path: Path) 
         )
 
 
-def test_build_systemd_install_plan_worker_only_enables_worker_service(tmp_path: Path) -> None:
+def test_build_systemd_install_plan_worker_only_enables_engine_target(tmp_path: Path) -> None:
     repo, config_path = _make_repo(tmp_path)
 
     plan = systemd_plan.build_systemd_install_plan(
@@ -351,10 +368,11 @@ def test_build_systemd_install_plan_worker_only_enables_worker_service(tmp_path:
         is_root=lambda: True,
     )
 
-    assert plan.enabled_unit == "orca_auto-queue-worker@alice.service"
+    assert plan.enabled_unit == "orca_auto-engine-workers@alice.target"
     assert plan.commands == (
         ("systemctl", "daemon-reload"),
-        ("systemctl", "enable", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "enable", "orca_auto-engine-workers@alice.target"),
+        ("systemctl", "disable", "orca_auto-queue-worker@alice.service"),
         ("systemctl", "disable", "orca_auto-runtime@alice.target"),
     )
     assert any("--no-start" in warning for warning in plan.warnings)
@@ -376,10 +394,12 @@ def test_build_systemd_install_plan_worker_only_stops_runtime_then_restarts_work
 
     assert plan.commands == (
         ("systemctl", "daemon-reload"),
-        ("systemctl", "enable", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "enable", "orca_auto-engine-workers@alice.target"),
+        ("systemctl", "disable", "--now", "orca_auto-queue-worker@alice.service"),
         ("systemctl", "disable", "--now", "orca_auto-runtime@alice.target"),
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
-        ("systemctl", "restart", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-xtb-md-worker@alice.service"),
+        ("systemctl", "restart", "orca_auto-engine-workers@alice.target"),
     )
 
 
@@ -437,10 +457,15 @@ def test_cmd_systemd_install_writes_units_and_runs_commands(
         ("systemctl", "daemon-reload"),
         ("systemctl", "enable", "orca_auto-runtime@alice.target"),
         ("systemctl", "disable", "--now", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "disable", "--now", "orca_auto-engine-workers@alice.target"),
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-xtb-md-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-bot@alice.service"),
         ("systemctl", "restart", "orca_auto-runtime@alice.target"),
     ]
     assert (unit_dir / "orca_auto-queue-worker@.service").exists()
+    assert (unit_dir / "orca_auto-xtb-md-worker@.service").exists()
+    assert (unit_dir / "orca_auto-engine-workers@.target").exists()
     assert (unit_dir / "orca_auto-runtime@.target").exists()
     captured = capsys.readouterr().out
     assert "installed:" in captured
@@ -475,11 +500,12 @@ def test_cmd_systemd_install_dry_run_does_not_write_units(
     assert not unit_dir.exists()
     captured = capsys.readouterr().out
     assert "systemd install plan:" in captured
-    assert "enable: orca_auto-queue-worker@alice.service" in captured
+    assert "enable: orca_auto-engine-workers@alice.target" in captured
     assert "systemctl disable --now orca_auto-runtime@alice.target" in captured
-    assert "systemctl enable orca_auto-queue-worker@alice.service" in captured
+    assert "systemctl enable orca_auto-engine-workers@alice.target" in captured
     assert "systemctl reset-failed orca_auto-queue-worker@alice.service" in captured
-    assert "systemctl restart orca_auto-queue-worker@alice.service" in captured
+    assert "systemctl reset-failed orca_auto-xtb-md-worker@alice.service" in captured
+    assert "systemctl restart orca_auto-engine-workers@alice.target" in captured
 
 
 def test_full_runtime_warns_when_telegram_is_not_configured(tmp_path: Path) -> None:
@@ -509,7 +535,7 @@ def test_full_runtime_warns_when_telegram_is_not_configured(tmp_path: Path) -> N
         is_root=lambda: True,
     )
 
-    assert plan.enabled_unit == "orca_auto-queue-worker@alice.service"
+    assert plan.enabled_unit == "orca_auto-engine-workers@alice.target"
     assert any("Telegram is not fully configured" in warning for warning in plan.warnings)
 
 
@@ -539,7 +565,7 @@ def test_telegram_group_without_operator_allowlist_stays_worker_only(tmp_path: P
         is_root=lambda: True,
     )
 
-    assert plan.enabled_unit == "orca_auto-queue-worker@alice.service"
+    assert plan.enabled_unit == "orca_auto-engine-workers@alice.target"
     assert any("allowed_user_ids" in warning for warning in plan.warnings)
 
 
@@ -608,7 +634,7 @@ def test_discord_without_operator_allowlist_stays_worker_only(tmp_path: Path) ->
         is_root=lambda: True,
     )
 
-    assert plan.enabled_unit == "orca_auto-queue-worker@alice.service"
+    assert plan.enabled_unit == "orca_auto-engine-workers@alice.target"
     assert any("allowed_user_ids" in warning for warning in plan.warnings)
 
 
@@ -642,7 +668,7 @@ def test_discord_notification_only_stays_worker_only_even_with_telegram_credenti
         is_root=lambda: True,
     )
 
-    assert plan.enabled_unit == "orca_auto-queue-worker@alice.service"
+    assert plan.enabled_unit == "orca_auto-engine-workers@alice.target"
     assert any("interactive bot settings are incomplete" in warning for warning in plan.warnings)
 
 
@@ -688,8 +714,12 @@ def test_cmd_service_status_prints_compact_systemd_state(capsys: Any) -> None:
     states = {
         ("is-active", "orca_auto-runtime@alice.target"): "active",
         ("is-enabled", "orca_auto-runtime@alice.target"): "enabled",
+        ("is-active", "orca_auto-engine-workers@alice.target"): "active",
+        ("is-enabled", "orca_auto-engine-workers@alice.target"): "disabled",
         ("is-active", "orca_auto-queue-worker@alice.service"): "active",
-        ("is-enabled", "orca_auto-queue-worker@alice.service"): "enabled",
+        ("is-enabled", "orca_auto-queue-worker@alice.service"): "disabled",
+        ("is-active", "orca_auto-xtb-md-worker@alice.service"): "active",
+        ("is-enabled", "orca_auto-xtb-md-worker@alice.service"): "disabled",
         ("is-active", "orca_auto-workflow-worker@alice.service"): "inactive",
         ("is-enabled", "orca_auto-workflow-worker@alice.service"): "disabled",
         ("is-active", "orca_auto-bot@alice.service"): "inactive",
@@ -738,10 +768,22 @@ def test_cmd_service_status_worker_only_requires_only_worker(capsys: Any) -> Non
             enabled="disabled",
         ),
         cli_systemd_status.ServiceUnitStatus(
+            label="engines",
+            unit="orca_auto-engine-workers@alice.target",
+            active="active",
+            enabled="enabled",
+        ),
+        cli_systemd_status.ServiceUnitStatus(
             label="worker",
             unit="orca_auto-queue-worker@alice.service",
             active="active",
-            enabled="enabled",
+            enabled="disabled",
+        ),
+        cli_systemd_status.ServiceUnitStatus(
+            label="xtb_md",
+            unit="orca_auto-xtb-md-worker@alice.service",
+            active="active",
+            enabled="disabled",
         ),
         cli_systemd_status.ServiceUnitStatus(
             label="bot",
@@ -765,7 +807,54 @@ def test_cmd_service_status_worker_only_requires_only_worker(capsys: Any) -> Non
     assert payload["mode"] == "worker-only"
     assert payload["ok"] is True
     required = {item["label"] for item in payload["services"] if item["required"]}
-    assert required == {"worker"}
+    assert required == {"engines", "worker", "xtb_md"}
+
+
+def test_cmd_service_status_reports_failed_xtb_md_without_conflating_orca(
+    capsys: Any,
+) -> None:
+    statuses = (
+        cli_systemd_status.ServiceUnitStatus(
+            label="runtime",
+            unit="orca_auto-runtime@alice.target",
+            active="inactive",
+            enabled="disabled",
+        ),
+        cli_systemd_status.ServiceUnitStatus(
+            label="engines",
+            unit="orca_auto-engine-workers@alice.target",
+            active="active",
+            enabled="enabled",
+        ),
+        cli_systemd_status.ServiceUnitStatus(
+            label="worker",
+            unit="orca_auto-queue-worker@alice.service",
+            active="active",
+            enabled="disabled",
+        ),
+        cli_systemd_status.ServiceUnitStatus(
+            label="xtb_md",
+            unit="orca_auto-xtb-md-worker@alice.service",
+            active="failed",
+            enabled="disabled",
+        ),
+    )
+
+    result = cli_systemd_status.cmd_service_status(
+        Namespace(target_user="alice", json=True),
+        deps=cli_systemd_status.ServiceCliDeps(
+            collect_service_status=lambda target_user, run: statuses,
+            run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+        ),
+    )
+
+    assert result == 1
+    payload = json.loads(capsys.readouterr().out)
+    by_label = {item["label"]: item for item in payload["services"]}
+    assert by_label["worker"]["active"] == "active"
+    assert by_label["xtb_md"]["active"] == "failed"
+    assert by_label["worker"]["unit"] != by_label["xtb_md"]["unit"]
 
 
 def test_cmd_service_status_hides_runtime_managed_enabled_noise(
@@ -779,8 +868,20 @@ def test_cmd_service_status_hides_runtime_managed_enabled_noise(
             enabled="enabled",
         ),
         cli_systemd_status.ServiceUnitStatus(
+            label="engines",
+            unit="orca_auto-engine-workers@alice.target",
+            active="active",
+            enabled="disabled",
+        ),
+        cli_systemd_status.ServiceUnitStatus(
             label="worker",
             unit="orca_auto-queue-worker@alice.service",
+            active="active",
+            enabled="disabled",
+        ),
+        cli_systemd_status.ServiceUnitStatus(
+            label="xtb_md",
+            unit="orca_auto-xtb-md-worker@alice.service",
             active="active",
             enabled="disabled",
         ),
@@ -813,8 +914,12 @@ def test_cmd_service_status_emits_json(capsys: Any) -> None:
     states = {
         ("is-active", "orca_auto-runtime@alice.target"): "active",
         ("is-enabled", "orca_auto-runtime@alice.target"): "enabled",
+        ("is-active", "orca_auto-engine-workers@alice.target"): "active",
+        ("is-enabled", "orca_auto-engine-workers@alice.target"): "disabled",
         ("is-active", "orca_auto-queue-worker@alice.service"): "failed",
-        ("is-enabled", "orca_auto-queue-worker@alice.service"): "enabled",
+        ("is-enabled", "orca_auto-queue-worker@alice.service"): "disabled",
+        ("is-active", "orca_auto-xtb-md-worker@alice.service"): "active",
+        ("is-enabled", "orca_auto-xtb-md-worker@alice.service"): "disabled",
         ("is-active", "orca_auto-workflow-worker@alice.service"): "inactive",
         ("is-enabled", "orca_auto-workflow-worker@alice.service"): "disabled",
         ("is-active", "orca_auto-bot@alice.service"): "inactive",
@@ -890,14 +995,16 @@ def test_cmd_service_restart_prefers_runtime_when_enabled(capsys: Any) -> None:
     )
 
     assert result == 0
-    assert commands[-2:] == [
+    assert commands[-4:] == [
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-xtb-md-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-bot@alice.service"),
         ("systemctl", "restart", "orca_auto-runtime@alice.target"),
     ]
     assert "Restarting orca_auto-runtime@alice.target" in capsys.readouterr().out
 
 
-def test_cmd_service_restart_falls_back_to_worker_when_runtime_is_disabled() -> None:
+def test_cmd_service_restart_falls_back_to_engine_target_when_runtime_is_disabled() -> None:
     commands: list[tuple[str, ...]] = []
 
     def _fake_run(
@@ -926,10 +1033,137 @@ def test_cmd_service_restart_falls_back_to_worker_when_runtime_is_disabled() -> 
     )
 
     assert result == 0
-    assert commands[-2:] == [
+    assert commands[-3:] == [
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
-        ("systemctl", "restart", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-xtb-md-worker@alice.service"),
+        ("systemctl", "restart", "orca_auto-engine-workers@alice.target"),
     ]
+
+
+def test_cmd_service_restart_prefers_enabled_engine_target_over_active_runtime() -> None:
+    commands: list[tuple[str, ...]] = []
+    statuses = (
+        cli_systemd_status.ServiceUnitStatus(
+            "runtime", "orca_auto-runtime@alice.target", "active", "disabled"
+        ),
+        cli_systemd_status.ServiceUnitStatus(
+            "engines", "orca_auto-engine-workers@alice.target", "active", "enabled"
+        ),
+        cli_systemd_status.ServiceUnitStatus(
+            "worker", "orca_auto-queue-worker@alice.service", "active", "disabled"
+        ),
+        cli_systemd_status.ServiceUnitStatus(
+            "xtb_md", "orca_auto-xtb-md-worker@alice.service", "active", "disabled"
+        ),
+    )
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        commands.append(tuple(argv))
+        if argv[1] == "show":
+            return subprocess.CompletedProcess(argv, 0, stdout="loaded\n", stderr="")
+        if argv[1] == "is-enabled":
+            state = "enabled" if argv[2] == "orca_auto-engine-workers@alice.target" else "disabled"
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{state}\n", stderr="")
+        if argv[1] == "is-active":
+            return subprocess.CompletedProcess(argv, 0, stdout="active\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    result = cli_systemd_status.cmd_service_restart(
+        Namespace(target_user="alice"),
+        deps=cli_systemd_status.ServiceCliDeps(
+            is_root=lambda: True,
+            run=_fake_run,
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+        ),
+    )
+
+    assert cli_systemd_status._selected_service_mode(statuses) == "worker-only"
+    assert result == 0
+    assert not any(command[1] == "is-active" for command in commands)
+    assert commands[-3:] == [
+        ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-xtb-md-worker@alice.service"),
+        ("systemctl", "restart", "orca_auto-engine-workers@alice.target"),
+    ]
+
+
+def test_cmd_service_restart_uses_active_runtime_only_when_enablement_is_unreadable() -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        commands.append(tuple(argv))
+        if argv[1] == "show":
+            return subprocess.CompletedProcess(argv, 0, stdout="loaded\n", stderr="")
+        if argv[1] == "is-enabled":
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="query failed\n")
+        if argv[1] == "is-active":
+            return subprocess.CompletedProcess(argv, 0, stdout="active\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    result = cli_systemd_status.cmd_service_restart(
+        Namespace(target_user="alice"),
+        deps=cli_systemd_status.ServiceCliDeps(
+            is_root=lambda: True,
+            run=_fake_run,
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+        ),
+    )
+
+    assert result == 0
+    assert commands[-4:] == [
+        ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-xtb-md-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-bot@alice.service"),
+        ("systemctl", "restart", "orca_auto-runtime@alice.target"),
+    ]
+
+
+def test_cmd_service_restart_directs_legacy_install_to_current_installer(
+    capsys: Any,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        commands.append(tuple(argv))
+        if argv[1] == "show":
+            return subprocess.CompletedProcess(argv, 0, stdout="not-found\n", stderr="")
+        pytest.fail(f"legacy detection must stop before state mutation: {argv}")
+
+    result = cli_systemd_status.cmd_service_restart(
+        Namespace(target_user="alice"),
+        deps=cli_systemd_status.ServiceCliDeps(
+            is_root=lambda: True,
+            run=_fake_run,
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+        ),
+    )
+
+    assert result == 1
+    assert all(command[1] == "show" for command in commands)
+    error = capsys.readouterr().err
+    assert "required systemd units are not installed" in error
+    assert "orca_auto systemd install --user alice --repo <repo>" in error
 
 
 def test_cmd_service_restart_uses_sudo_for_non_root_user() -> None:
@@ -956,6 +1190,8 @@ def test_cmd_service_restart_uses_sudo_for_non_root_user() -> None:
     assert result == 0
     assert commands == [
         ("sudo", "systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+        ("sudo", "systemctl", "reset-failed", "orca_auto-xtb-md-worker@alice.service"),
+        ("sudo", "systemctl", "reset-failed", "orca_auto-bot@alice.service"),
         ("sudo", "systemctl", "restart", "orca_auto-runtime@alice.target"),
     ]
 
@@ -984,6 +1220,63 @@ def test_cmd_service_restart_stops_when_reset_failed_cannot_clear_start_limit() 
     assert result == 5
     assert commands == [
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+    ]
+
+
+def test_cmd_service_restart_stops_when_xtb_md_start_limit_cannot_be_cleared() -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def _fake_run(argv: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
+        del check
+        commands.append(tuple(argv))
+        return subprocess.CompletedProcess(argv, 0 if len(commands) == 1 else 5)
+
+    result = cli_systemd_status.cmd_service_restart(
+        Namespace(target_user=None),
+        deps=cli_systemd_status.ServiceCliDeps(
+            default_service_user=lambda: "alice",
+            restart_unit_for_user=lambda target_user, run: (
+                f"orca_auto-runtime@{target_user}.target"
+            ),
+            is_root=lambda: True,
+            run=_fake_run,
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+        ),
+    )
+
+    assert result == 5
+    assert commands == [
+        ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-xtb-md-worker@alice.service"),
+    ]
+
+
+def test_cmd_service_restart_stops_when_bot_start_limit_cannot_be_cleared() -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def _fake_run(argv: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
+        del check
+        commands.append(tuple(argv))
+        return subprocess.CompletedProcess(argv, 0 if len(commands) <= 2 else 5)
+
+    result = cli_systemd_status.cmd_service_restart(
+        Namespace(target_user=None),
+        deps=cli_systemd_status.ServiceCliDeps(
+            default_service_user=lambda: "alice",
+            restart_unit_for_user=lambda target_user, run: (
+                f"orca_auto-runtime@{target_user}.target"
+            ),
+            is_root=lambda: True,
+            run=_fake_run,
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+        ),
+    )
+
+    assert result == 5
+    assert commands == [
+        ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-xtb-md-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-bot@alice.service"),
     ]
 
 

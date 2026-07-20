@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from orca_auto.core.engines.artifacts import (
@@ -165,3 +166,37 @@ def orca_artifact_payload(
         artifacts=payload_artifacts,
         engine_payload=payload_engine,
     )
+
+
+def report_generation_target(job_dir: Path) -> tuple[Path, tuple[int, int]]:
+    generation = job_dir / "20260714-224054-959479f2"
+    generation.mkdir(exist_ok=True)
+    status = generation.stat()
+    return generation, (status.st_dev, status.st_ino)
+
+
+def bind_report_generation(job_dir: Path, state: dict) -> Path:
+    from orca_auto.core.engine_runner import executable_identity
+    from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
+
+    generation, identity = report_generation_target(job_dir)
+    selected = Path(str(state["selected_inp"]))
+    bound = generation / selected.name
+    if not bound.exists():
+        bound.write_bytes(selected.read_bytes())
+    state["selected_inp"] = str(bound)
+    job_status = job_dir.stat()
+    bind_direct_generation_owner(
+        job_dir,
+        namespace=generation.name,
+        expected_job_identity=(job_status.st_dev, job_status.st_ino),
+        expected_generation_identity=identity,
+        owner_token="test-report-owner-token-0001",
+    )
+    state["execution_provenance"] = {
+        "execution_dir": str(generation),
+        "execution_dir_identity": {"device": identity[0], "inode": identity[1]},
+        "generation_owner_token": "test-report-owner-token-0001",
+        "bound_selected_identity": executable_identity(bound),
+    }
+    return generation

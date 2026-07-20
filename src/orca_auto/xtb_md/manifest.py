@@ -13,6 +13,7 @@ import yaml
 from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.config.files import (
     MAX_JOB_MANIFEST_BYTES,
+    UniqueKeySafeLoader,
     _validate_yaml_events,
     _validate_yaml_object_graph,
 )
@@ -70,35 +71,6 @@ _ELEMENT_RE = re.compile(r"[A-Za-z]{1,2}")
 _FINITE_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?")
 _TRAJECTORY_FRAME_OVERHEAD_BYTES = 1024
 _TRAJECTORY_ATOM_ROW_BYTES = 128
-
-
-class _UniqueKeySafeLoader(yaml.SafeLoader):
-    pass
-
-
-def _construct_unique_mapping(
-    loader: _UniqueKeySafeLoader,
-    node: yaml.nodes.MappingNode,
-    deep: bool = False,
-) -> dict[Any, Any]:
-    loader.flatten_mapping(node)
-    mapping: dict[Any, Any] = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        try:
-            duplicate = key in mapping
-        except TypeError as exc:
-            raise ValueError("xTB-MD YAML mapping keys must be hashable scalars") from exc
-        if duplicate:
-            raise ValueError("xTB-MD YAML manifest contains a duplicate mapping key")
-        mapping[key] = loader.construct_object(value_node, deep=deep)
-    return mapping
-
-
-_UniqueKeySafeLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
-    _construct_unique_mapping,
-)
 
 
 @dataclass(frozen=True)
@@ -652,7 +624,7 @@ def load_manifest(
     try:
         text = payload.decode("utf-8", errors="strict")
         _validate_yaml_events(text)
-        parsed = yaml.load(text, Loader=_UniqueKeySafeLoader)
+        parsed = yaml.load(text, Loader=UniqueKeySafeLoader)
         _validate_yaml_object_graph(parsed)
     except UnicodeError as exc:
         raise ValueError("xTB-MD manifest must be UTF-8 text") from exc

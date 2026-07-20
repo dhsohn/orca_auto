@@ -1,6 +1,6 @@
 [Unit]
 Description=orca_auto runtime stack for %i
-Wants=orca_auto-queue-worker@%i.service
+Wants=orca_auto-engine-workers@%i.target
 Wants=orca_auto-bot@%i.service
 After=local-fs.target
 After=network-online.target

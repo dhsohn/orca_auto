@@ -16,6 +16,7 @@ from orca_auto.flow.workflow.report import (
     latest_engrad_energy,
     write_workflow_html_report,
 )
+from tests.engine_artifact_helpers import bind_report_generation
 
 _ENGRAD_TEMPLATE = """#
 # Number of atoms
@@ -39,13 +40,37 @@ def _write_multi_xyz(path: Path, frames: int) -> None:
     path.write_text("".join(blocks), encoding="utf-8")
 
 
+def _write_orca_generation_report(job_dir: Path, report: dict[str, Any]) -> Path:
+    generation, provenance = _orca_generation(job_dir)
+    report["schema_version"] = 1
+    report["engine"] = "orca"
+    report["input"] = {"primary_path": provenance["bound_selected_identity"]["path"]}
+    report["execution_provenance"] = provenance
+    report_path = generation / "job_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return report_path
+
+
+def _orca_generation(job_dir: Path) -> tuple[Path, dict[str, Any]]:
+    selected = job_dir / "current.inp"
+    selected.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    state: dict[str, Any] = {"selected_inp": str(selected)}
+    generation = bind_report_generation(job_dir, state)
+    return generation, state["execution_provenance"]
+
+
 def _orca_stage_dir(root: Path, name: str, *, energy: float, reason: str) -> Path:
-    stage_dir = root / name
-    stage_dir.mkdir(parents=True)
-    (stage_dir / "opt.engrad").write_text(
+    job_dir = root / name
+    job_dir.mkdir(parents=True)
+    generation, provenance = _orca_generation(job_dir)
+    (generation / "opt.engrad").write_text(
         _ENGRAD_TEMPLATE.format(energy=f"{energy:.12f}"), encoding="utf-8"
     )
     report = {
+        "schema_version": 1,
+        "engine": "orca",
+        "input": {"primary_path": provenance["bound_selected_identity"]["path"]},
+        "execution_provenance": provenance,
         "engine_payload": {
             "attempts": [
                 {
@@ -54,19 +79,23 @@ def _orca_stage_dir(root: Path, name: str, *, energy: float, reason: str) -> Pat
                 }
             ],
             "final_result": {"reason": reason},
-        }
+        },
     }
-    (stage_dir / "job_report.json").write_text(json.dumps(report), encoding="utf-8")
-    (stage_dir / "job_report.html").write_text("<html></html>", encoding="utf-8")
-    return stage_dir
+    (generation / "job_report.json").write_text(json.dumps(report), encoding="utf-8")
+    (generation / "job_report.html").write_text("<html></html>", encoding="utf-8")
+    return generation
 
 
 def _orca_stage(stage_id: str, stage_dir: Path, *, status: str, label: str) -> dict[str, Any]:
+    report_path = stage_dir / "job_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["job"] = {"id": stage_id}
+    report_path.write_text(json.dumps(report), encoding="utf-8")
     return {
         "stage_id": stage_id,
         "stage_kind": "orca_stage",
         "status": status,
-        "metadata": {"selected_input_label": label},
+        "metadata": {"selected_input_label": label, "child_job_id": stage_id},
         "output_artifacts": [
             {"kind": "orca_output_dir", "path": str(stage_dir)},
             {"kind": "orca_report_json", "path": str(stage_dir / "job_report.json")},
@@ -154,8 +183,9 @@ def test_collect_ranks_orca_results_and_counts_funnel(tmp_path: Path) -> None:
 
 
 def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: Path) -> None:
-    stage_dir = tmp_path / "orca_from_output"
-    stage_dir.mkdir()
+    job_dir = tmp_path / "orca_from_output"
+    job_dir.mkdir()
+    stage_dir, provenance = _orca_generation(job_dir)
     out_path = stage_dir / "opt.out"
     out_path.write_text(
         "\n".join(
@@ -170,6 +200,11 @@ def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: P
         encoding="utf-8",
     )
     report = {
+        "schema_version": 1,
+        "engine": "orca",
+        "job": {"id": "orca_conformer_01"},
+        "input": {"primary_path": provenance["bound_selected_identity"]["path"]},
+        "execution_provenance": provenance,
         "engine_payload": {
             "attempts": [
                 {
@@ -182,7 +217,7 @@ def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: P
                 "reason": "normal_termination",
                 "last_out_path": str(out_path),
             },
-        }
+        },
     }
     (stage_dir / "job_report.json").write_text(json.dumps(report), encoding="utf-8")
     (stage_dir / "job_report.html").write_text("<html></html>", encoding="utf-8")
@@ -195,6 +230,91 @@ def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: P
 
     assert data.orca_results[0].energy == pytest.approx(-1.1)
     assert data.orca_results[0].rel_kcal == pytest.approx(0.0)
+
+
+def test_completed_orca_stage_rejects_explicit_root_report(tmp_path: Path) -> None:
+    job_dir = tmp_path / "orca_root_explicit"
+    job_dir.mkdir()
+    report_path = job_dir / "job_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "job": {"id": "orca_root_explicit"},
+                "engine_payload": {
+                    "attempts": [{"index": 1}],
+                    "final_result": {"reason": "root_report_reason"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "orca_root_explicit",
+                "stage_kind": "orca_stage",
+                "status": "completed",
+                "metadata": {
+                    "child_job_id": "orca_root_explicit",
+                    "latest_known_path": str(job_dir),
+                    "selected_input_label": "root",
+                },
+                "output_artifacts": [
+                    {"kind": "orca_output_dir", "path": str(job_dir)},
+                    {"kind": "orca_report_json", "path": str(report_path)},
+                ],
+            }
+        ],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.orca_results[0].reason == ""
+    assert data.orca_results[0].attempt_count == 0
+    assert data.orca_results[0].report_href is None
+
+
+def test_completed_orca_stage_rejects_noncanonical_generation_json(tmp_path: Path) -> None:
+    job_dir = tmp_path / "orca_noncanonical_json"
+    job_dir.mkdir()
+    canonical = _write_orca_generation_report(
+        job_dir,
+        {
+            "job": {"id": "orca_noncanonical_json"},
+            "engine_payload": {
+                "attempts": [{"index": 1}],
+                "final_result": {"reason": "wrong_filename_reason"},
+            },
+        },
+    )
+    planted = canonical.with_name("other.json")
+    planted_payload = json.loads(canonical.read_text(encoding="utf-8"))
+    planted_payload["engine_payload"]["final_result"]["reason"] = "planted_reason"
+    planted.write_text(json.dumps(planted_payload), encoding="utf-8")
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "orca_noncanonical_json",
+                "stage_kind": "orca_stage",
+                "status": "completed",
+                "metadata": {
+                    "child_job_id": "orca_noncanonical_json",
+                    "latest_known_path": str(job_dir),
+                },
+                "output_artifacts": [
+                    {"kind": "orca_report_json", "path": str(planted)},
+                ],
+            }
+        ],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    # The planted path is ignored; the verified canonical fallback remains usable.
+    assert data.orca_results[0].reason == "wrong_filename_reason"
+    assert data.orca_results[0].attempt_count == 1
 
 
 def test_orca_output_energy_reads_only_bounded_tail(
@@ -735,15 +855,13 @@ def test_stage_state_prefers_latest_path_over_original_task_job_dir(
 def test_orca_run_identity_allows_current_report_diagnostic(tmp_path: Path) -> None:
     job_dir = tmp_path / "03_orca" / "orca_current"
     job_dir.mkdir(parents=True)
-    (job_dir / "job_report.json").write_text(
-        json.dumps(
-            {
-                "job": {"id": "orca-child"},
-                "status": {"state": "failed", "reason": "runner_exception"},
-                "engine_payload": {"run_id": "run-current"},
-            }
-        ),
-        encoding="utf-8",
+    report_path = _write_orca_generation_report(
+        job_dir,
+        {
+            "job": {"id": "orca-child"},
+            "status": {"state": "failed", "reason": "runner_exception"},
+            "engine_payload": {"run_id": "run-current"},
+        },
     )
     payload = _payload(
         tmp_path,
@@ -765,7 +883,44 @@ def test_orca_run_identity_allows_current_report_diagnostic(tmp_path: Path) -> N
     data = collect_workflow_report_data(tmp_path, payload)
 
     assert data.failure_rows[0].reason == "runner_exception"
-    assert data.failure_rows[0].details_href == "03_orca/orca_current/job_report.json"
+    assert data.failure_rows[0].details_href == os.path.relpath(report_path, tmp_path)
+
+
+def test_orca_current_identity_root_report_is_not_a_diagnostic_source(tmp_path: Path) -> None:
+    job_dir = tmp_path / "03_orca" / "orca_root_report"
+    job_dir.mkdir(parents=True)
+    (job_dir / "job_report.json").write_text(
+        json.dumps(
+            {
+                "job": {"id": "orca-child"},
+                "status": {"state": "failed", "reason": "root_report_reason"},
+                "engine_payload": {"run_id": "run-current"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "orca_root_report",
+                "stage_kind": "orca_stage",
+                "status": "failed",
+                "task": {"engine": "orca", "status": "failed", "payload": {}},
+                "metadata": {
+                    "run_id": "run-current",
+                    "child_job_id": "orca-child",
+                    "latest_known_path": str(job_dir),
+                },
+            }
+        ],
+    )
+    payload["status"] = "failed"
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.failure_rows[0].reason == ""
+    assert data.failure_rows[0].details_href is None
 
 
 def test_workflow_error_message_is_primary_and_escaped(tmp_path: Path) -> None:

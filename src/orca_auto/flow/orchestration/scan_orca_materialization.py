@@ -35,6 +35,7 @@ from orca_auto.core.statuses import (
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.flow._orca_stage_materialization import build_materialized_orca_stage
 from orca_auto.flow.contracts import WorkflowStageInput
+from orca_auto.flow.contracts.workflow import workflow_request_parameters
 from orca_auto.flow.orchestration.charge_spin import strict_int
 from orca_auto.flow.orchestration.support import required_stage_budget
 from orca_auto.flow.orchestration.template_builders import scan_geom_block
@@ -50,7 +51,6 @@ from orca_auto.orca.scants import (
 
 logger = logging.getLogger(__name__)
 
-SCAN_STAGE_ID = "orca_scan_01"
 REVERSE_SCAN_STAGE_ID = "orca_scan_reverse_01"
 _FORWARD_SCAN_STAGE_PREFIX = "orca_scan_"
 _OPTTS_STAGE_PREFIX = "orca_optts_freq_"
@@ -139,17 +139,6 @@ def _all_terminal_none_verified(stages: list[dict[str, Any]]) -> bool:
     return all(is_stage_terminal_status(status) for status in statuses) and not any(
         status == STATUS_COMPLETED for status in statuses
     )
-
-
-def _request_parameters(payload: dict[str, Any]) -> dict[str, Any]:
-    metadata = payload.get("metadata")
-    if not isinstance(metadata, dict):
-        return {}
-    request = metadata.get("request")
-    if not isinstance(request, dict):
-        return {}
-    parameters = request.get("parameters")
-    return parameters if isinstance(parameters, dict) else {}
 
 
 def _scan_out_path(scan_stage: dict[str, Any]) -> Path | None:
@@ -573,7 +562,7 @@ def append_scan_optts_stages_impl(
     forward_scans = _scan_stages(payload, direction="forward")
     if not forward_scans:
         return False
-    parameters = _request_parameters(payload)
+    parameters = workflow_request_parameters(payload)
 
     forward_optts = _optts_stages(payload, direction="forward")
     if not forward_optts:

@@ -104,7 +104,7 @@ def test_submission_admission_root_ignores_invalid_runs_root(tmp_path: Path) -> 
     )
 
 
-def test_submission_admission_root_for_orca_ignores_runtime_admission_setting(
+def test_submission_admission_root_for_orca_rejects_removed_runtime_admission_setting(
     tmp_path: Path,
 ) -> None:
     runtime_root = tmp_path / "runtime-admission"
@@ -122,14 +122,10 @@ def test_submission_admission_root_for_orca_ignores_runtime_admission_setting(
         encoding="utf-8",
     )
 
-    root = runtime_admission._submission_admission_root_from_config(config, engine="orca")
-
-    # The runtime-level admission key is ignored; the default under the runs
-    # root applies instead.
-    assert root == Path("/tmp/runs/.admission")
+    assert runtime_admission._submission_admission_root_from_config(config, engine="orca") is None
 
 
-def test_submission_admission_root_for_orca_uses_scheduler_with_runtime_key_present(
+def test_submission_admission_root_for_orca_rejects_runtime_key_even_with_scheduler(
     tmp_path: Path,
 ) -> None:
     scheduler_root = tmp_path / "scheduler-admission"
@@ -149,13 +145,12 @@ def test_submission_admission_root_for_orca_uses_scheduler_with_runtime_key_pres
         encoding="utf-8",
     )
 
-    assert (
-        runtime_admission._submission_admission_root_from_config(config, engine="orca")
-        == scheduler_root.resolve()
-    )
+    assert runtime_admission._submission_admission_root_from_config(config, engine="orca") is None
 
 
-def test_submission_admission_limit_ignores_orca_runtime_scheduler_keys(tmp_path: Path) -> None:
+def test_submission_admission_limit_rejects_removed_orca_runtime_scheduler_keys(
+    tmp_path: Path,
+) -> None:
     config = tmp_path / "orca_auto.yaml"
     config.write_text(
         "\n".join(

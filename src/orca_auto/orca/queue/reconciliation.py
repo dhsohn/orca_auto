@@ -8,7 +8,6 @@ from typing import Any
 
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.core.utils.persistence import load_json_mapping_file
 
 from ..job_locations._generation import payload_matches_queue_generation
 from ..statuses import RunStatus
@@ -83,74 +82,6 @@ def _artifact_is_known_prior_generation(
         return False
     run_id = _payload_run_id(payload)
     return evidence.has_unidentified_run or not run_id or run_id in evidence.run_ids
-
-
-def _run_id_is_known_prior_generation(
-    run_id: str | None,
-    evidence: _PriorTerminalGenerationEvidence | None,
-) -> bool:
-    if evidence is None:
-        return False
-    normalized = str(run_id or "").strip()
-    return evidence.has_unidentified_run or not normalized or normalized in evidence.run_ids
-
-
-def load_report_payload(
-    reaction_dir: Path,
-    *,
-    report_json_path_fn: Callable[[Path], Path],
-    logger: logging.Logger,
-) -> dict | None:
-    path = report_json_path_fn(reaction_dir)
-    raw = load_json_mapping_file(path)
-    if raw is None and path.exists():
-        logger.warning("Failed to parse run report: %s", path)
-        return None
-    return raw
-
-
-def terminal_report_data(
-    reaction_dir: Path,
-    *,
-    load_report_payload_fn: Callable[[Path], dict | None],
-    queue_entry: QueueEntry | None = None,
-) -> tuple[str, str | None, str | None, str | None] | None:
-    report = load_report_payload_fn(reaction_dir)
-    if report is None:
-        return None
-    if queue_entry is not None and not payload_matches_entry_generation(queue_entry, report):
-        return None
-    if int(report.get("schema_version", 0) or 0) != 1:
-        return None
-
-    status_payload = report.get("status")
-    status_dict = status_payload if isinstance(status_payload, dict) else {}
-    timestamps = report.get("timestamps")
-    timestamps_dict = timestamps if isinstance(timestamps, dict) else {}
-    engine_payload = report.get("engine_payload")
-    engine_dict = engine_payload if isinstance(engine_payload, dict) else {}
-    final_result = engine_dict.get("final_result")
-    final_dict = final_result if isinstance(final_result, dict) else {}
-    status = str(final_dict.get("status") or status_dict.get("state") or "").strip().lower()
-    if status not in {QueueStatus.COMPLETED.value, QueueStatus.FAILED.value}:
-        return None
-
-    run_id_text = str(engine_dict.get("run_id", "")).strip()
-    finished_at_text = str(
-        final_dict.get("completed_at") or timestamps_dict.get("updated_at") or ""
-    ).strip()
-    error_text = None
-    if status == QueueStatus.FAILED.value:
-        reason = str(final_dict.get("reason", "")).strip()
-        if reason:
-            error_text = reason
-
-    return (
-        status,
-        run_id_text or None,
-        finished_at_text or None,
-        error_text,
-    )
 
 
 def apply_terminal_reconciliation(
@@ -282,24 +213,6 @@ def _reconcile_entry(
             deps=deps,
         )
         logger.info("Reconciled orphaned entry %s -> failed", queue_id)
-        return updated
-
-    report_data = deps.terminal_report_data(reaction_dir, queue_entry=entry)
-    if report_data is not None and _run_id_is_known_prior_generation(
-        report_data[1],
-        prior_terminal_evidence,
-    ):
-        report_data = None
-    if report_data is not None:
-        status, run_id, finished_at, error = report_data
-        updated = deps.apply_terminal_reconciliation(
-            entry,
-            status=status,
-            run_id=run_id,
-            finished_at=finished_at,
-            error=error,
-        )
-        logger.info("Reconciled orphaned entry %s -> %s (from job_report)", queue_id, status)
         return updated
 
     if entry.cancel_requested:

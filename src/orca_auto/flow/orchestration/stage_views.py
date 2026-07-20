@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from orca_auto.core.utils import mapping_or_empty, normalize_text
+from orca_auto.core.utils import normalize_text
 from orca_auto.flow.contracts.workflow import workflow_stage_metadata, workflow_task_payload_dict
 from orca_auto.flow.orchestration.stage_view_mutators import (
     WorkflowStageCrestMutationMixin,
@@ -284,12 +284,6 @@ def _engine_stages(payload: dict[str, Any], engine: str) -> list[dict[str, Any]]
 
 def _engine_stage_views(payload: dict[str, Any], engine: str) -> list[WorkflowStageView]:
     return [view for view in _stage_views(payload) if view.task_engine() == engine]
-
-
-def _request_params(payload: dict[str, Any]) -> dict[str, Any]:
-    metadata = mapping_or_empty(payload.get("metadata"))
-    request = mapping_or_empty(metadata.get("request"))
-    return mapping_or_empty(request.get("parameters"))
 
 
 def _clear_workflow_error_scope(payload_metadata: dict[str, Any], scopes: set[str]) -> None:

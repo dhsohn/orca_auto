@@ -85,7 +85,7 @@ def add_service_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
 
     restart_parser = service_subparsers.add_parser(
         "restart",
-        help="Restart the orca_auto runtime or queue worker service.",
+        help="Restart the orca_auto runtime or engine-worker target.",
     )
     restart_parser.set_defaults(func=cmd_service_restart)
 

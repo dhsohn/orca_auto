@@ -7,7 +7,10 @@ from orca_auto.flow.contracts import (
     WorkflowTask,
     WorkflowTemplateRequest,
 )
-from orca_auto.flow.contracts.workflow import coerce_workflow_plan_payload
+from orca_auto.flow.contracts.workflow import (
+    coerce_workflow_plan_payload,
+    workflow_request_parameters,
+)
 
 
 def test_workflow_plan_to_dict_preserves_nested_stage_task_and_artifact_payloads() -> None:
@@ -127,6 +130,17 @@ def test_coerce_workflow_plan_payload_preserves_raw_payload_shape() -> None:
     assert payload == raw
     assert payload["stages"] == raw["stages"]
     assert coerce_workflow_plan_payload(["not", "a", "mapping"]) == {}
+
+
+def test_workflow_request_parameters_reads_only_the_canonical_mapping_path() -> None:
+    parameters = {"max_orca_stages": 3}
+
+    assert (
+        workflow_request_parameters({"metadata": {"request": {"parameters": parameters}}})
+        is parameters
+    )
+    assert workflow_request_parameters({"metadata": {"request": {"parameters": []}}}) == {}
+    assert workflow_request_parameters({"metadata": "invalid"}) == {}
 
 
 def test_workflow_template_request_to_dict_serializes_source_artifacts() -> None:

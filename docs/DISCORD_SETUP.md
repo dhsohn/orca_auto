@@ -155,7 +155,7 @@ Discord bot identity through the REST notification adapter.
 
 Notifications do not yet include action buttons. Adding them later should
 extend the shared card/action application path rather than add Discord-only
-domain logic. Because the queue worker and gateway are separate systemd
+domain logic. Because the engine workers and gateway are separate systemd
 processes, notification-origin actions will also need a durable `ActionStore`
 implementation; the current port has originator/operator audience policies but
 its short-lived in-memory implementation intentionally covers gateway-generated
@@ -169,8 +169,8 @@ command cards only.
   `channel_ids`, `allowed_user_ids`, and channel permission overrides.
 - **Notifications do not arrive:** verify `default_channel_id`, **Send Messages**,
   and **Embed Links** in that channel.
-- **Only the queue worker starts:** rerun `systemd install` after completing the
+- **Only the engine workers start:** rerun `systemd install` after completing the
   bot token, channel, and operator-user configuration; an incomplete bot
-  configuration is intentionally worker-only.
+  configuration intentionally selects the bot-free engine-worker target.
 - **Discord reports an invalid token or privileged-intent close:** reset the
   token if necessary and enable Message Content Intent before restarting.

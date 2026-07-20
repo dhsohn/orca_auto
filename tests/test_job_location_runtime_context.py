@@ -22,7 +22,7 @@ def _record(job_id: str, job_dir: Path, *, original_dir: Path | None = None) -> 
     )
 
 
-def test_matching_tracked_job_dirs_matches_artifacts_and_deduplicates(
+def test_matching_tracked_job_dirs_matches_state_and_deduplicates(
     tmp_path: Path,
 ) -> None:
     organized_dir = tmp_path / "organized"
@@ -39,13 +39,13 @@ def test_matching_tracked_job_dirs_matches_artifacts_and_deduplicates(
         list_job_location_records=lambda _index_root: records,
         resolve_record_job_dir=lambda _record: organized_dir.resolve(),
         load_state=lambda _job_dir: {"job_id": "state-job"},
-        load_report_json=lambda _job_dir: {"run_id": "report-run"},
         resolve_existing_job_dir=lambda value: (
             Path(value).resolve() if value and Path(value).exists() else None
         ),
     )
 
     assert runtime_context.matching_tracked_job_dirs(tmp_path, "", deps=deps) == []
-    assert runtime_context.matching_tracked_job_dirs(tmp_path, "report-run", deps=deps) == [
+    assert runtime_context.matching_tracked_job_dirs(tmp_path, "state-job", deps=deps) == [
         organized_dir.resolve()
     ]
+    assert runtime_context.matching_tracked_job_dirs(tmp_path, "report-run", deps=deps) == []

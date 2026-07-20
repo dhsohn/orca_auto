@@ -10,7 +10,6 @@ from orca_auto.core.ingest.policy import upload_policy_from_mapping
 
 def test_enabled_absent_is_disabled() -> None:
     assert upload_policy_from_mapping({}).enabled is False
-    assert upload_policy_from_mapping(None).enabled is False
 
 
 def test_default_policy_has_bounded_staging_lifecycle() -> None:
@@ -29,10 +28,18 @@ def test_enabled_truthy(value: object) -> None:
     assert upload_policy_from_mapping({"enabled": value}).enabled is True
 
 
-@pytest.mark.parametrize("value", [False, "false", "no", "off", "0", 0, "garbage"])
-def test_enabled_falsy_and_stringy_fail_closed(value: object) -> None:
-    # The key fix: a quoted/typo'd falsy value must NOT enable the feature.
+@pytest.mark.parametrize("value", [False, "false", "no", "off", "0", 0])
+def test_enabled_falsy(value: object) -> None:
     assert upload_policy_from_mapping({"enabled": value}).enabled is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, "", "garbage", 2, -1, 1.0, float("nan"), float("inf"), [], {}],
+)
+def test_enabled_rejects_invalid_explicit_values(value: object) -> None:
+    with pytest.raises(ValueError, match="uploads.enabled must be a boolean"):
+        upload_policy_from_mapping({"enabled": value})
 
 
 def test_allowed_extensions_absent_uses_default() -> None:
@@ -49,21 +56,13 @@ def test_allowed_extensions_normalized() -> None:
     assert policy.allowed_extensions == (".inp", ".xyz", ".yaml")
 
 
-@pytest.mark.parametrize("field", ["max_archive_bytes", "max_entries", "max_file_bytes"])
-def test_size_fields_reject_bool(field: str) -> None:
-    with pytest.raises(ValueError, match="not a boolean"):
-        upload_policy_from_mapping({field: True})
-
-
-@pytest.mark.parametrize("value", [0, -1, "abc"])
-def test_size_fields_reject_invalid(value: object) -> None:
-    with pytest.raises(ValueError):
-        upload_policy_from_mapping({"max_archive_bytes": value})
-
-
 @pytest.mark.parametrize(
     "field",
     (
+        "max_archive_bytes",
+        "max_total_uncompressed_bytes",
+        "max_entries",
+        "max_file_bytes",
         "max_staged_bytes",
         "max_staged_uploads",
         "max_pending_per_actor",
@@ -72,9 +71,35 @@ def test_size_fields_reject_invalid(value: object) -> None:
         "committed_retention_seconds",
     ),
 )
-def test_staging_limits_must_be_positive(field: str) -> None:
-    with pytest.raises(ValueError, match="must be positive"):
-        upload_policy_from_mapping({field: 0})
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        "",
+        True,
+        False,
+        0,
+        -1,
+        "abc",
+        "1.5",
+        "nan",
+        "inf",
+        1.5,
+        float("nan"),
+        float("inf"),
+        [],
+        {},
+    ],
+)
+def test_numeric_limits_reject_invalid_explicit_values(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match=rf"uploads\.{field}"):
+        upload_policy_from_mapping({field: value})
+
+
+@pytest.mark.parametrize("value", [1024, "1024", 1024.0])
+def test_integer_limits_preserve_meaningful_numeric_forms(value: object) -> None:
+    policy = upload_policy_from_mapping({"max_archive_bytes": value})
+    assert policy.max_archive_bytes == 1024
 
 
 def test_staging_byte_quota_must_cover_one_archive() -> None:
@@ -90,3 +115,24 @@ def test_concurrent_downloads_has_an_operational_upper_bound() -> None:
 def test_allowed_extensions_rejects_scalar() -> None:
     with pytest.raises(ValueError, match="list of extensions"):
         upload_policy_from_mapping({"allowed_extensions": "inp"})
+
+
+@pytest.mark.parametrize("value", [None, "", {"inp": True}])
+def test_allowed_extensions_rejects_invalid_explicit_collection(value: object) -> None:
+    with pytest.raises(ValueError, match="list of extensions"):
+        upload_policy_from_mapping({"allowed_extensions": value})
+
+
+@pytest.mark.parametrize("item", [None, "", "   ", 1, False])
+def test_allowed_extensions_rejects_invalid_entries(item: object) -> None:
+    with pytest.raises(ValueError, match="entries must be non-empty strings"):
+        upload_policy_from_mapping({"allowed_extensions": [item]})
+
+
+def test_upload_policy_rejects_non_mapping_and_unknown_fields() -> None:
+    with pytest.raises(ValueError, match="uploads must be a mapping"):
+        upload_policy_from_mapping(None)
+    with pytest.raises(ValueError, match="uploads must be a mapping"):
+        upload_policy_from_mapping("disabled")
+    with pytest.raises(ValueError, match="Unknown uploads config fields: max_entry"):
+        upload_policy_from_mapping({"max_entry": 4})

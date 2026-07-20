@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.indexing import JobLocationRecord
+from orca_auto.core.indexing import JobLocationRecord, resolve_job_location
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.orca.job_locations import (
-    load_job_artifact_context,
     load_job_runtime_context,
     load_orca_contract_payload,
+    resolve_record_job_dir,
 )
-
-LOGGER = logging.getLogger(__name__)
 
 
 def _dict_payload(value: Any) -> dict[str, Any]:
@@ -31,24 +28,12 @@ def tracked_artifact_context_impl(
         target = normalize_text(raw_target)
         if not target:
             continue
-        try:
-            context = load_job_artifact_context(index_root, target)
-        except FileNotFoundError as exc:
-            LOGGER.debug(
-                "orca_artifact_context_load_failed: index_root=%s target=%s error=%s",
-                index_root,
-                target,
-                exc,
-            )
+        record = resolve_job_location(index_root, target)
+        if record is None:
             continue
-        if context.job_dir is None:
-            continue
-        return (
-            context.job_dir,
-            context.record,
-            _dict_payload(context.state),
-            _dict_payload(context.report),
-        )
+        job_dir = resolve_record_job_dir(record)
+        if job_dir is not None:
+            return job_dir, record, {}, {}
     return None, None, {}, {}
 
 
@@ -61,6 +46,7 @@ def tracked_runtime_context_impl(
     reaction_dir: str,
 ) -> (
     tuple[
+        Path | None,
         Path | None,
         JobLocationRecord | None,
         dict[str, Any],
@@ -86,6 +72,7 @@ def tracked_runtime_context_impl(
     artifact = context.artifact
     queue_entry = context.queue_entry
     return (
+        context.artifact_dir,
         artifact.job_dir,
         artifact.record,
         _dict_payload(artifact.state),

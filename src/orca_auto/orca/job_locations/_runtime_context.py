@@ -33,7 +33,6 @@ def matching_tracked_job_dirs(index_root: str | Path, target: str, *, deps: Any)
             list_job_location_records=deps.list_job_location_records,
             resolve_record_job_dir=deps.resolve_record_job_dir,
             load_state=deps.load_state,
-            load_report_json=deps.load_report_json,
             resolve_existing_job_dir=deps.resolve_existing_job_dir,
         ),
     )
@@ -278,6 +277,9 @@ def _payload_selected_input(payload: Any, *, deps: Any) -> str:
 
 
 def _artifact_visible_provenance(artifact: Any) -> tuple[bool, dict[str, Any] | None]:
+    artifact_dir = getattr(artifact, "job_dir", None)
+    if not isinstance(artifact_dir, Path) or not is_visible_generation_name(artifact_dir.name):
+        return False, None
     claims: list[dict[str, Any]] = []
     for payload in (getattr(artifact, "state", None), getattr(artifact, "report", None)):
         provenance = _payload_execution_provenance(payload)
@@ -585,7 +587,19 @@ def _historical_generation_artifact(
     generation = claim.generation
     if generation is None:
         if not claim.required:
-            return artifact, None, False
+            # A root-only legacy state/report has no execution-generation
+            # provenance. Keep the tracked record, but do not consume those
+            # artifacts or expose them as the current run.
+            return (
+                deps._job_artifact_context(
+                    record=artifact.record,
+                    job_dir=artifact.job_dir,
+                    state=None,
+                    report=None,
+                ),
+                None,
+                False,
+            )
         return (
             deps._job_artifact_context(
                 record=artifact.record,

@@ -19,11 +19,14 @@ class ScratchConfig:
 
 
 def scratch_config_from_runtime_mapping(runtime_raw: dict[str, Any]) -> ScratchConfig:
-    root_raw = as_nonempty_str(runtime_raw.get("scratch_root"), "")
-    if not root_raw:
+    if "scratch_root" not in runtime_raw:
         if "scratch_min_free_gb" in runtime_raw:
             raise ValueError("orca.runtime.scratch_min_free_gb requires orca.runtime.scratch_root")
         return ScratchConfig()
+    root_raw = runtime_raw.get("scratch_root")
+    if not isinstance(root_raw, str) or not root_raw.strip():
+        raise ValueError("orca.runtime.scratch_root must be a non-empty string when configured")
+    root_raw = as_nonempty_str(root_raw, "")
     root = validated_absolute_linux_path_text(
         root_raw,
         field_name="orca.runtime.scratch_root",

@@ -9,11 +9,10 @@ from orca_auto.core.admission import AdmissionStoreCorruptError, active_slot_cou
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
     engine_config_mapping,
-    load_yaml_mapping,
+    load_shared_config_mapping,
     mapping_section,
     scheduler_admission_root,
     usable_runs_root_from_mapping,
-    validate_shared_config_sections,
 )
 from orca_auto.core.engine_catalog import (
     engine_catalog,
@@ -44,8 +43,7 @@ def submission_admission_limit_from_config(
     positive_int_fn: Callable[[Any], int | None] = _runtime_common.positive_int,
 ) -> int | None:
     try:
-        _, raw = load_yaml_mapping(config_path)
-        validate_shared_config_sections(raw)
+        _, raw = load_shared_config_mapping(config_path)
     except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
         LOGGER.debug(
             "submission_admission_limit_config_load_failed: config_path=%s error=%s",
@@ -70,8 +68,7 @@ def _submission_admission_root_from_config(
     engine: str | None = None,
 ) -> Path | None:
     try:
-        _, raw = load_yaml_mapping(config_path)
-        validate_shared_config_sections(raw)
+        _, raw = load_shared_config_mapping(config_path)
     except YAML_CONFIG_LOAD_EXCEPTIONS:
         return None
 
@@ -108,8 +105,7 @@ def submission_admission_has_capacity(
     engine_runtime_paths_fn: Callable[..., dict[str, Any]] | None = None,
 ) -> bool | None:
     try:
-        _, raw = load_yaml_mapping(config_path)
-        validate_shared_config_sections(raw)
+        _, raw = load_shared_config_mapping(config_path)
     except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
         LOGGER.debug(
             "submission_admission_capacity_config_load_failed: config_path=%s error=%s",

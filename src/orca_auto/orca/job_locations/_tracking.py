@@ -12,7 +12,6 @@ class TrackedJobDirDeps:
     list_job_location_records: Callable[[str | Path], list[Any]]
     resolve_record_job_dir: Callable[[Any], Path | None]
     load_state: Callable[[Path], Any]
-    load_report_json: Callable[[Path], Any]
     resolve_existing_job_dir: Callable[[Any], Path | None]
 
 
@@ -34,15 +33,11 @@ def matching_tracked_job_dirs(
             continue
 
         state = deps.load_state(job_dir)
-        report = deps.load_report_json(job_dir)
         state = state if isinstance(state, dict) else {}
-        report = report if isinstance(report, dict) else {}
 
         lookup_values = (
             record.job_id,
-            report.get("job_id"),
             state.get("job_id"),
-            report.get("run_id"),
             state.get("run_id"),
         )
         if any(deps.normalize_text(value) == target_text for value in lookup_values):

@@ -395,7 +395,7 @@ class TestQueueStore(unittest.TestCase):
         found = get_active_entry_for_reaction_dir(self.root, str(reaction_dir))
         self.assertIsNone(found)
 
-    def test_reconcile_orphaned_running_entry_from_job_report(self) -> None:
+    def test_reconcile_orphaned_running_ignores_root_report_only(self) -> None:
         reaction_dir = self.root / "mol_done"
         reaction_dir.mkdir()
         entry = enqueue(self.root, str(reaction_dir))
@@ -423,9 +423,9 @@ class TestQueueStore(unittest.TestCase):
         entries = list_queue(self.root)
 
         found = next(item for item in entries if item.queue_id == entry.queue_id)
-        self.assertEqual(found.status, QueueStatus.COMPLETED)
-        self.assertEqual(queue_entry_run_id(found), "run_done_1")
-        self.assertEqual(found.finished_at, "2026-03-10T04:59:59+00:00")
+        self.assertEqual(found.status, QueueStatus.PENDING)
+        self.assertIsNone(queue_entry_run_id(found))
+        self.assertEqual(found.finished_at, "")
 
     def test_reconcile_orphaned_force_entry_ignores_previous_generation_state(self) -> None:
         reaction_dir = self.root / "mol_force_state"

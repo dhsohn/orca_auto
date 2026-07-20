@@ -25,7 +25,6 @@ from typing import Any
 
 from orca_auto.core.artifacts import SI_BLOCK_MD_FILE
 from orca_auto.core.engine_process import atomic_write_confined_bytes
-from orca_auto.core.utils.persistence import atomic_write_text
 
 from ..completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from ..input_blocks import file_route_lines
@@ -249,37 +248,28 @@ def write_si_block(
     reaction_dir: Path,
     state: Mapping[str, Any],
     *,
-    generation_target: tuple[Path, tuple[int, int]] | None = None,
+    generation_target: tuple[Path, tuple[int, int]],
 ) -> Path | None:
     """Write ``si_block.md``; ``None`` when the job has no SI block.
 
-    Mirrors ``write_job_html_report``: with a verified ``generation_target``
-    the block lands inside the execution generation (removing any root copy);
-    a job type without a block removes any stale file from a reused reaction
-    dir, while an unexpected error leaves the last valid block in place.
+    Mirrors ``write_job_html_report``: the block lands inside the verified
+    execution generation; a job type without a block removes any stale file
+    there, while an unexpected error leaves the last valid block in place.
     """
-    target_dir = generation_target[0] if generation_target is not None else reaction_dir
-    path = si_block_path(target_dir)
-    root_path = si_block_path(reaction_dir)
+    path = si_block_path(generation_target[0])
 
     def _publish(markdown: str) -> None:
-        if generation_target is not None:
-            atomic_write_confined_bytes(
-                generation_target[0],
-                path,
-                markdown.encode("utf-8"),
-                label="ORCA generation artifact",
-                mode=0o600,
-                expected_parent_identity=generation_target[1],
-            )
-            root_path.unlink(missing_ok=True)
-        else:
-            atomic_write_text(path, markdown)
+        atomic_write_confined_bytes(
+            generation_target[0],
+            path,
+            markdown.encode("utf-8"),
+            label="ORCA generation artifact",
+            mode=0o600,
+            expected_parent_identity=generation_target[1],
+        )
 
     def _remove_stale() -> None:
         path.unlink(missing_ok=True)
-        if generation_target is not None:
-            root_path.unlink(missing_ok=True)
 
     try:
         selected_raw = str(state.get("selected_inp") or "").strip()

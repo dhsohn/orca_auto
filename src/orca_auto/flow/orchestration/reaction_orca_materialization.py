@@ -8,7 +8,11 @@ from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.statuses import is_failed_status, is_queue_active_status
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.contracts import WorkflowStageInput
-from orca_auto.flow.contracts.workflow import workflow_stage_metadata, workflow_task_payload_dict
+from orca_auto.flow.contracts.workflow import (
+    workflow_request_parameters,
+    workflow_stage_metadata,
+    workflow_task_payload_dict,
+)
 from orca_auto.flow.orchestration.charge_spin import strict_int
 from orca_auto.flow.orchestration.lifecycle import stage_failure_is_recoverable_impl
 from orca_auto.flow.orchestration.scan_orca_materialization import (
@@ -24,7 +28,6 @@ from orca_auto.flow.orchestration.stage_views import (
     _clear_workflow_error_scope,
     _engine_stage_views,
     _engine_stages,
-    _request_params,
     _stage_views,
 )
 from orca_auto.flow.orchestration.support import (
@@ -340,7 +343,7 @@ def _reaction_orca_stage_plan(
         return None
     xtb_runtime_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="xtb")
     orca_runtime_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="orca")
-    params = _request_params(payload)
+    params = workflow_request_parameters(payload)
     payload_metadata_raw = payload.setdefault("metadata", {})
     payload_metadata = payload_metadata_raw if isinstance(payload_metadata_raw, dict) else {}
     candidate_pool, handoff_errors = _collect_reaction_orca_candidates(

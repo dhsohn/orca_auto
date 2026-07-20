@@ -60,9 +60,10 @@ molecular modeling algorithms or post-processing analysis APIs.
 ## xTB and CREST
 
 xTB and CREST remain important for fast pre-screening and conformer-related
-workflow stages. In the current public design they are not standalone public
-orca_auto surfaces. They are internal workflow stages used to prepare or route
-ORCA-centered work while preserving one public CLI and one runtime model.
+workflow stages. Workflow xTB and CREST are internal stages used to prepare or
+route ORCA-centered work. Standalone xTB-MD is also a first-class public engine:
+it accepts its own strict manifest through the same durable `run-dir`, queue,
+admission, and observability model rather than exposing a second runtime.
 
 ## Non-goals
 

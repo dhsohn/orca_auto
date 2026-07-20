@@ -12,7 +12,7 @@ from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.utils.persistence import now_utc_iso
 from orca_auto.core.utils.process_tracking import active_run_lock_pid, read_pid_file
 
-from ..state import load_state, report_json_path
+from ..state import load_state
 from . import reconciliation as _queue_reconciliation
 from .entries import (
     WORKER_PID_FILE_NAME,
@@ -51,26 +51,6 @@ def active_lock_pid(reaction_dir: Path) -> int | None:
 
 def read_worker_pid(allowed_root: Path) -> int | None:
     return read_pid_file(allowed_root / WORKER_PID_FILE_NAME)
-
-
-def load_report_payload(reaction_dir: Path) -> dict | None:
-    return _queue_reconciliation.load_report_payload(
-        reaction_dir,
-        report_json_path_fn=report_json_path,
-        logger=logger,
-    )
-
-
-def terminal_report_data(
-    reaction_dir: Path,
-    *,
-    queue_entry: QueueEntry | None = None,
-) -> tuple[str, str | None, str | None, str | None] | None:
-    return _queue_reconciliation.terminal_report_data(
-        reaction_dir,
-        load_report_payload_fn=load_report_payload,
-        queue_entry=queue_entry,
-    )
 
 
 def apply_terminal_reconciliation(
@@ -112,7 +92,6 @@ class QueueReconciliationDeps:
     load_entries: Any
     read_worker_pid: Any
     save_entries: Any
-    terminal_report_data: Any
 
 
 def queue_reconciliation_deps() -> QueueReconciliationDeps:
@@ -127,7 +106,6 @@ def queue_reconciliation_deps() -> QueueReconciliationDeps:
         load_entries=_load_entries,
         read_worker_pid=read_worker_pid,
         save_entries=_queue_store.save_entries,
-        terminal_report_data=terminal_report_data,
     )
 
 

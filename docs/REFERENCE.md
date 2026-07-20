@@ -74,7 +74,9 @@ Operational consequences:
         ...
   systemd/
     orca_auto-runtime@.target
+    orca_auto-engine-workers@.target
     orca_auto-queue-worker@.service
+    orca_auto-xtb-md-worker@.service
     orca_auto-bot@.service
   scripts/*.sh / *.py
   tests/
@@ -194,6 +196,15 @@ Field descriptions:
 
 Notes:
 
+- Shared config parsing accepts a document with no YAML node (including
+  comments-only) as an empty mapping, but rejects an explicit top-level
+  null/scalar/sequence, an otherwise-empty `---` document, and duplicate keys
+  at any depth.
+- Messenger identity fields are omission-aware and fail closed. Tokens must be
+  strings; Telegram `chat_id` may also be an integer; channel/operator ID lists
+  must contain valid positive IDs. Explicit nulls and wrong scalar/collection
+  shapes are not converted to text or defaults. Empty strings/lists intentionally
+  disable the corresponding capability.
 - `default_max_retries=0` disables ORCA retries; any positive value enables the
   calculation-type retry policy, which caps retries by ORCA route type
 - With `scratch_root` configured, ORCA runs against a private input closure in
@@ -243,10 +254,21 @@ Notes:
   `workflow.paths.xtb_executable` or `workflow.paths.crest_executable` is left
   blank, submission resolves it from PATH and binds that executable identity to
   the queued generation.
-- Explicit `scheduler`, `resources`, `workflow`, and `workflow.paths` values must
-  be mappings. Configured admission roots must be absolute Linux paths, and
-  configured scheduler/resource limits must be positive integers. Malformed
-  execution controls are rejected instead of being replaced with defaults.
+- Only the paths listed in the public config contract are accepted. Unknown,
+  misspelled, and removed keys fail at their containing section; engine-scoped
+  copies of shared scheduler/resource/messenger settings are not aliases.
+  Explicit config sections must be mappings. Configured admission roots must be
+  absolute Linux paths, configured scheduler/resource limits must be positive
+  integers, and `orca.runtime.default_max_retries` must be a non-negative
+  integer. Omitted keys retain their documented defaults; malformed explicit
+  execution-control values are rejected instead of being replaced with
+  defaults.
+- Messenger delivery defaults likewise apply only when a key is omitted.
+  Explicit timeout/backoff values must be finite numbers and `max_attempts`
+  must be an integer; malformed values are rejected, while finite values outside
+  the documented delivery ranges are clamped. Discord upload `enabled` accepts
+  only recognized booleans, its size/count/retention controls require positive
+  integers, and `allowed_extensions` requires a list of non-empty strings.
 
 ## 7) CLI Usage
 
@@ -837,21 +859,25 @@ environment variable, and the shared production config; see
 
 ### 7.8 Long-Running Services
 
-Long-running worker and messenger bot processes are managed through `systemd`
-only. Public CLI commands do not start those services directly.
+Long-running worker and messenger bot processes are managed through `systemd`.
+The public `systemd install` and `service` commands operate on those units rather
+than launching unmanaged worker processes.
 
 Behavior:
 
-- `orca_auto-queue-worker@.service` supervises ORCA only
+- `orca_auto-engine-workers@.target` owns the independent default engine services
+- `orca_auto-queue-worker@.service` supervises one ORCA worker
+- `orca_auto-xtb-md-worker@.service` supervises one standalone xTB-MD worker;
+  either engine service can fail or restart without stopping the other
 - `orca_auto-workflow-worker@.service` is opt-in and supervises workflow plus
-  the internal CREST/xTB workers; standalone xTB-MD also requires an explicit worker
+  the internal CREST/xTB workers
 - ORCA, xTB-MD, xTB, and CREST share the same admission cap; xTB-MD also obeys its subcap. ORCA reserves a slot in
   the parent worker, attaches queue identity metadata after the child starts,
   and lets the ORCA child activate/release that reservation during execution.
 - `orca_auto-bot@.service` runs `orca_auto.flow.bot.runner`, which selects the configured
   Telegram or Discord gateway from `orca_auto.yaml`
 - Workflow messenger alerts keep per-job ORCA messages, but summarize internal CREST and reaction-path xTB child phases in one message each after those phases finish
-- `orca_auto-runtime@.target` starts the ORCA worker and bot together
+- `orca_auto-runtime@.target` starts the engine-worker target and bot together
 
 ## 8) WSL systemd Setup
 
@@ -871,7 +897,9 @@ wsl --shutdown
 This repository includes service assets under `systemd/`:
 
 - [`systemd/orca_auto-runtime@.target`](../systemd/orca_auto-runtime@.target)
+- [`systemd/orca_auto-engine-workers@.target`](../systemd/orca_auto-engine-workers@.target)
 - [`systemd/orca_auto-queue-worker@.service`](../systemd/orca_auto-queue-worker@.service)
+- [`systemd/orca_auto-xtb-md-worker@.service`](../systemd/orca_auto-xtb-md-worker@.service)
 - [`systemd/orca_auto-bot@.service`](../systemd/orca_auto-bot@.service)
 
 Recommended always-on runtime install flow when the selected messenger bot is configured:
@@ -881,6 +909,7 @@ cd <repo_root>
 orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 orca_auto service status
 journalctl -u "orca_auto-queue-worker@$(whoami)" -f
+journalctl -u "orca_auto-xtb-md-worker@$(whoami)" -f
 journalctl -u "orca_auto-bot@$(whoami)" -f
 ```
 
@@ -892,17 +921,20 @@ Assumptions of the unified runtime templates:
 - Repository path: `/home/<user>/orca_auto`
 - Config path: `/home/<user>/orca_auto/config/orca_auto.yaml`
 
-If your paths differ, edit the copied unit before enabling it.
+The installer renders these paths into every unit; pass explicit `--repo` and
+`--config` values when the defaults differ.
 
-The default queue-worker service supervises ORCA only. A configured workflow
-root does not implicitly start any workflow or internal-engine worker. Start
+The default engine-worker target starts separate ORCA and standalone xTB-MD
+services. A configured workflow root does not implicitly start the workflow or
+its internal-engine workers. Start
 `orca_auto-workflow-worker@<user>.service` explicitly when workflow supervision
 and its internal CREST/xTB workers are needed. The shared
 `scheduler.max_active_simulations` setting still limits the combined number of
-active simulations across ORCA and workflow-managed internal engine stages.
+active simulations across ORCA, standalone xTB-MD, and workflow-managed internal
+engine stages.
 
 If the selected provider is incomplete, `orca_auto systemd install` enables
-`orca_auto-queue-worker@$(whoami)` directly. Run the same command again after
+`orca_auto-engine-workers@$(whoami).target` directly. Run the same command again after
 completing bot configuration to enable the full runtime target.
 
 Workflow supervision belongs to the opt-in
@@ -1029,12 +1061,13 @@ carries the live `job_state.json` until terminal cleanup removes it.
 The generation's bound `.inp` has the exact selected source basename, so ORCA
 uses the expected output stem rather than adding `.run` or `.bound`. Referenced
 inputs likewise retain their original basenames. Each generation's
-`job_state.json` and reports retain the record for the run they describe. Jobs
-whose runs predate the report relocation still keep report copies at the job
-root; readers treat those as a legacy fallback, and the next run in the same
-directory removes them when it publishes its generation reports. `run.lock`
-stays at the job root; the mere presence of its file is not proof that a
-process currently owns the lock.
+`job_state.json` and reports retain the record for the run they describe;
+reports exist only inside a verified generation. Pre-relocation root reports
+remain untouched historical files until a one-time provenance-verified
+migration relocates or separately archives them; runtime readers do not use
+them. A run rejected before generation binding has no report, while its state
+and queue record retain the outcome. `run.lock` stays at the job root; the mere
+presence of its file is not proof that a process currently owns the lock.
 
 Important `job_state.json` fields:
 

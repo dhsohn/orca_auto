@@ -14,7 +14,10 @@ from orca_auto.core.utils import (
     normalize_text as _normalize_text,
 )
 from orca_auto.core.utils.coercion import normalize_bool as _shared_normalize_bool
-from orca_auto.flow.contracts.workflow import coerce_workflow_plan_payload
+from orca_auto.flow.contracts.workflow import (
+    coerce_workflow_plan_payload,
+    workflow_request_parameters,
+)
 
 from .store import iter_workflow_workspaces, load_workflow_payload, workflow_file_path
 
@@ -131,8 +134,6 @@ def workflow_summary(
     status_counts, task_status_counts, stage_summaries = _workflow_stage_summary_rows(stages)
 
     metadata = _coerce_mapping(data.get("metadata"))
-    request = _coerce_mapping(metadata.get("request"))
-    request_parameters = _coerce_mapping(request.get("parameters"))
     downstream = _coerce_mapping(metadata.get("downstream_reaction_workflow"))
     precomplex_handoff = _coerce_mapping(metadata.get("precomplex_handoff"))
     parent_workflow = _coerce_mapping(metadata.get("parent_workflow"))
@@ -150,7 +151,7 @@ def workflow_summary(
         "stage_status_counts": status_counts,
         "task_status_counts": task_status_counts,
         "submission_summary": _coerce_mapping(metadata.get("submission_summary")),
-        "request_parameters": request_parameters,
+        "request_parameters": workflow_request_parameters(data),
         "downstream_reaction_workflow": downstream,
         "precomplex_handoff": precomplex_handoff,
         "parent_workflow": parent_workflow,

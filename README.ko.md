@@ -250,8 +250,8 @@ Discord `!list`, 동일한 cancel/help 명령)을 provider-native 버튼으로 �
 
 ## 서비스
 
-장기 실행 서비스(큐 워커와 선택된 messenger 봇)는 오직 `systemd`로만 관리됩니다.
-`orca_auto.yaml` 설정을 마친 뒤, 통합 런타임 타깃을 한 번 활성화하면 `systemd`가 둘 다
+장기 실행 서비스(기본 엔진 워커와 선택된 messenger 봇)는 오직 `systemd`로만 관리됩니다.
+`orca_auto.yaml` 설정을 마친 뒤, 통합 런타임 타깃을 한 번 활성화하면 `systemd`가 이들을
 계속 실행합니다:
 
 ```bash
@@ -261,17 +261,19 @@ orca_auto service status
 orca_auto service restart
 ```
 
-선택된 provider의 인터랙티브 설정이 완전하지 않으면 설치 프로그램은 큐 워커만
-활성화합니다. Telegram은 token+chat ID, Discord는 bot token+명령 수신 채널+operator
+선택된 provider의 인터랙티브 설정이 완전하지 않으면 설치 프로그램은 bot 없이
+engine-worker 타깃을 활성화합니다. Telegram은 token+chat ID, Discord는 bot token+명령 수신 채널+operator
 사용자 ID가 필요합니다.
 설정을 마친 뒤 같은 명령을 다시 실행하면 전체 런타임 타깃이 활성화됩니다.
-`systemd/` 아래 파일을 수정했다면,
-재시작 전에
-`sudo systemctl daemon-reload`를 실행하세요. 전체 런타임 설정은
+checkout을 업데이트했거나 `systemd/` 아래 파일을 수정했다면, 같은 `--user`와
+`--repo` 값으로 `orca_auto systemd install`을 다시 실행하세요. 설치 프로그램이 렌더링한
+유닛을 복사하고 `systemctl daemon-reload`를 실행합니다. daemon-reload만으로는 설치된
+복사본이 갱신되지 않습니다. 전체 런타임 설정은
 [systemd/README.ko.md](systemd/README.ko.md)를 참고하세요.
 
-기본 queue-worker 서비스는 ORCA만 시작합니다. workflow root가 설정돼 있어도
-workflow/xTB/CREST 워커를 자동 시작하지 않으며, workflow 실행이 필요할 때
+기본 engine-worker 타깃은 ORCA와 standalone xTB-MD를 별도 서비스로 시작하므로 한쪽의
+실패나 재시작이 다른 쪽을 중단하지 않습니다. workflow root가 설정돼 있어도 workflow와
+내부 xTB/CREST 워커를 자동 시작하지 않으며, workflow 실행이 필요할 때
 `orca_auto-workflow-worker@$(whoami)`를 명시적으로 시작합니다.
 
 ## 런타임 노트

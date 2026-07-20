@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from orca_auto.core.engine_runner import executable_identity
+from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
 from orca_auto.orca.attempt.reporting import (
     build_final_result,
     exit_with_result,
@@ -72,9 +74,33 @@ class TestAttemptReporting(unittest.TestCase):
     def test_exit_with_result_writes_state_reports_and_finished_notification(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction_dir = Path(td)
-            selected_inp = reaction_dir / "rxn.inp"
+            generation = reaction_dir / "20260714-224054-959479f2"
+            generation.mkdir()
+            selected_inp = generation / "rxn.inp"
             selected_inp.write_text("! Opt\n", encoding="utf-8")
+            generation_status = generation.stat()
+            reaction_status = reaction_dir.stat()
+            owner_token = "attempt-report-owner-token-0001"
+            bind_direct_generation_owner(
+                reaction_dir,
+                namespace=generation.name,
+                expected_job_identity=(reaction_status.st_dev, reaction_status.st_ino),
+                expected_generation_identity=(
+                    generation_status.st_dev,
+                    generation_status.st_ino,
+                ),
+                owner_token=owner_token,
+            )
             state = new_state(reaction_dir, selected_inp, max_retries=2)
+            state["execution_provenance"] = {
+                "execution_dir": str(generation),
+                "execution_dir_identity": {
+                    "device": generation_status.st_dev,
+                    "inode": generation_status.st_ino,
+                },
+                "generation_owner_token": owner_token,
+                "bound_selected_identity": executable_identity(selected_inp),
+            }
             emitted_payloads: list[dict] = []
             finished_notifications: list[RunFinishedNotification] = []
 
@@ -98,7 +124,10 @@ class TestAttemptReporting(unittest.TestCase):
             )
 
             saved = load_state(reaction_dir)
-            report_json = json.loads((reaction_dir / "job_report.json").read_text(encoding="utf-8"))
+            report_json = json.loads((generation / "job_report.json").read_text(encoding="utf-8"))
+            self.assertFalse((reaction_dir / "job_report.json").exists())
+            expected_report_json = str(generation / "job_report.json")
+            expected_report_md = str(generation / "job_report.md")
 
         self.assertEqual(rc, 0)
         assert saved is not None
@@ -109,8 +138,8 @@ class TestAttemptReporting(unittest.TestCase):
         self.assertEqual(len(emitted_payloads), 1)
         self.assertEqual(emitted_payloads[0]["status"], "completed")
         self.assertEqual(emitted_payloads[0]["run_state"], str(reaction_dir / "job_state.json"))
-        self.assertEqual(emitted_payloads[0]["report_json"], str(reaction_dir / "job_report.json"))
-        self.assertEqual(emitted_payloads[0]["report_md"], str(reaction_dir / "job_report.md"))
+        self.assertEqual(emitted_payloads[0]["report_json"], expected_report_json)
+        self.assertEqual(emitted_payloads[0]["report_md"], expected_report_md)
         self.assertEqual(_engine_payload(report_json)["final_result"]["status"], "completed")
         self.assertIn("finished_notification_sent_at", saved["final_result"])
         self.assertIn(

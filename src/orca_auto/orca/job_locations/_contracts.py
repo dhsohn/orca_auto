@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engines import entry_matches_engine_identity
+
 from ..state import (
     REPORT_JSON_NAME,
     REPORT_MD_NAME,
@@ -126,7 +128,11 @@ def _find_queue_entry(
     run_id: str,
     reaction_dir: str,
 ) -> dict[str, Any] | None:
-    entries = load_json_list(index_root / QUEUE_FILE_NAME)
+    entries = [
+        entry
+        for entry in load_json_list(index_root / QUEUE_FILE_NAME)
+        if entry_matches_engine_identity(entry, "orca")
+    ]
     if not entries:
         return None
 
@@ -227,7 +233,6 @@ def _runtime_paths(
     include_state: bool = True,
     include_report: bool = True,
     queue_entry: dict[str, Any] | None = None,
-    report_md_dir: Path | None = None,
 ) -> dict[str, str]:
     return _contract_payload.runtime_paths(
         current_dir,
@@ -237,7 +242,6 @@ def _runtime_paths(
         include_state=include_state,
         include_report=include_report,
         queue_entry=queue_entry,
-        report_md_dir=report_md_dir,
     )
 
 

@@ -14,7 +14,6 @@ from orca_auto.core.queue.metadata import mapping_metadata_value as queue_entry_
 from ._generation import (
     current_generation_payloads,
     payload_matches_queue_generation,
-    queue_has_generation_identity,
 )
 
 _REPORT_MARKDOWN_IDENTITY_PREFIXES = {
@@ -26,7 +25,7 @@ _REPORT_MARKDOWN_IDENTITY_PREFIXES = {
 @dataclass(frozen=True)
 class RuntimePayloads:
     record: Any
-    queue_entry: dict[str, Any]
+    queue_entry: dict[str, Any] | None
     state: dict[str, Any]
     report: dict[str, Any]
 
@@ -40,7 +39,6 @@ def runtime_paths(
     include_state: bool = True,
     include_report: bool = True,
     queue_entry: dict[str, Any] | None = None,
-    report_md_dir: Path | None = None,
 ) -> dict[str, str]:
     state_path = current_dir / state_file_name if current_dir is not None else None
     report_json_path = current_dir / report_json_name if current_dir is not None else None
@@ -54,22 +52,17 @@ def runtime_paths(
         if include_report
         else None
     )
-    # The report markdown lives next to the report JSON (the execution
-    # generation); the extra report_md_dir is only the legacy fallback for
-    # jobs whose reports predate the relocation and still sit at the job root.
-    visible_report_md_path = None
-    if visible_report_json_path is not None:
-        markdown_candidates = [current_dir]
-        if report_md_dir is not None and report_md_dir != current_dir:
-            markdown_candidates.append(report_md_dir)
-        for markdown_dir in markdown_candidates:
-            visible_report_md_path = _report_markdown_path_for_generation(
-                markdown_dir / report_md_name if markdown_dir is not None else None,
-                markdown_dir,
-                queue_entry,
-            )
-            if visible_report_md_path is not None:
-                break
+    # The report markdown lives next to the report JSON in the execution
+    # generation; there is no job-root fallback.
+    visible_report_md_path = (
+        _report_markdown_path_for_generation(
+            current_dir / report_md_name if current_dir is not None else None,
+            current_dir,
+            queue_entry,
+        )
+        if visible_report_json_path is not None
+        else None
+    )
     return {
         "run_state_path": str(visible_state_path) if visible_state_path is not None else "",
         "report_json_path": (
@@ -103,8 +96,6 @@ def _runtime_payload_path_for_generation(
     direct_path = _direct_runtime_file(path, current_dir)
     if direct_path is None:
         return None
-    if not queue_has_generation_identity(queue_entry):
-        return direct_path
     payload = load_engine_artifact_payload(direct_path)
     if payload is None or str(payload.get("engine") or "").strip() != "orca":
         return None
@@ -121,8 +112,6 @@ def _report_markdown_path_for_generation(
     direct_path = _direct_runtime_file(path, current_dir)
     if direct_path is None:
         return None
-    if not queue_has_generation_identity(queue_entry):
-        return direct_path
     try:
         lines = direct_path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError):
@@ -145,10 +134,11 @@ def _report_markdown_path_for_generation(
 
 def runtime_payloads(runtime: Any) -> RuntimePayloads:
     artifact = runtime.artifact
-    queue_entry = dict(runtime.queue_entry) if isinstance(runtime.queue_entry, dict) else {}
+    raw_queue_entry = runtime.queue_entry if isinstance(runtime.queue_entry, dict) else None
+    queue_entry = dict(raw_queue_entry) if raw_queue_entry is not None else None
     state = dict(artifact.state) if isinstance(artifact.state, dict) else {}
     report = dict(artifact.report) if isinstance(artifact.report, dict) else {}
-    state, report = current_generation_payloads(queue_entry, state, report)
+    state, report = current_generation_payloads(raw_queue_entry, state, report)
     return RuntimePayloads(
         record=artifact.record,
         queue_entry=queue_entry,
@@ -160,7 +150,7 @@ def runtime_payloads(runtime: Any) -> RuntimePayloads:
 def runtime_current_dir(
     runtime: Any,
     *,
-    queue_entry: dict[str, Any],
+    queue_entry: dict[str, Any] | None,
     reaction_dir: str,
     deps: Any,
 ) -> Path | None:
@@ -178,7 +168,7 @@ def resolved_run_id(
     run_id: str,
     state: dict[str, Any],
     report: dict[str, Any],
-    queue_entry: dict[str, Any],
+    queue_entry: dict[str, Any] | None,
     deps: Any,
 ) -> str:
     return (
@@ -206,7 +196,7 @@ def latest_known_path(
 def selected_artifact_paths(
     *,
     record: Any,
-    queue_entry: dict[str, Any],
+    queue_entry: dict[str, Any] | None,
     state: dict[str, Any],
     report: dict[str, Any],
     current_dir: Path | None,
@@ -256,7 +246,7 @@ def selected_artifact_paths(
         )
     )
     optimized_xyz_path = ""
-    if optimized_search_allowed:
+    if selected_inp and (state or report) and optimized_search_allowed:
         optimized_current_dir = optimized_search_dir or current_dir
         optimized_latest_path = (
             str(optimized_search_dir) if optimized_search_dir is not None else latest_known_path
@@ -285,7 +275,7 @@ def _payload_execution_provenance(payload: dict[str, Any]) -> dict[str, Any] | N
 
 
 def _generation_optimized_source(
-    queue_entry: dict[str, Any],
+    queue_entry: dict[str, Any] | None,
     state: dict[str, Any],
     report: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str]:
@@ -304,7 +294,7 @@ def _generation_optimized_source(
 
 def _generation_optimized_xyz_policy(
     *,
-    queue_entry: dict[str, Any],
+    queue_entry: dict[str, Any] | None,
     state: dict[str, Any],
     report: dict[str, Any],
     current_dir: Path | None,
@@ -428,7 +418,7 @@ def _payload_selected_xyz(payload: dict[str, Any]) -> Any:
 def _selected_xyz_source(
     *,
     record: Any,
-    queue_entry: dict[str, Any],
+    queue_entry: dict[str, Any] | None,
     state: dict[str, Any],
     report: dict[str, Any],
     deps: Any,
@@ -448,7 +438,7 @@ def _selected_xyz_source(
 def runtime_resources(
     *,
     record: Any,
-    queue_entry: dict[str, Any],
+    queue_entry: dict[str, Any] | None,
     deps: Any,
 ) -> tuple[dict[str, int], dict[str, int]]:
     resource_request = deps.resource_dict_from_any(
@@ -465,7 +455,7 @@ def runtime_resources(
 def resolved_status(
     *,
     record: Any,
-    queue_entry: dict[str, Any],
+    queue_entry: dict[str, Any] | None,
     state: dict[str, Any],
     report: dict[str, Any],
     deps: Any,
@@ -482,6 +472,7 @@ def resolved_status(
 
 
 def orca_contract_payload(ctx: Any, *, deps: Any) -> dict[str, Any]:
+    queue_entry = ctx.queue_entry or {}
     return {
         "run_id": ctx.resolved_run_id,
         "status": ctx.status,
@@ -492,9 +483,9 @@ def orca_contract_payload(ctx: Any, *, deps: Any) -> dict[str, Any]:
         else deps.normalize_text(ctx.reaction_dir),
         "latest_known_path": ctx.latest_known_path,
         "optimized_xyz_path": ctx.optimized_xyz_path,
-        "queue_id": deps.normalize_text(ctx.queue_entry.get("queue_id") or ""),
-        "queue_status": deps.normalize_text(ctx.queue_entry.get("status")).lower(),
-        "cancel_requested": deps.normalize_bool(ctx.queue_entry.get("cancel_requested")),
+        "queue_id": deps.normalize_text(queue_entry.get("queue_id") or ""),
+        "queue_status": deps.normalize_text(queue_entry.get("status")).lower(),
+        "cancel_requested": deps.normalize_bool(queue_entry.get("cancel_requested")),
         "selected_inp": ctx.selected_inp,
         "selected_input_xyz": ctx.selected_input_xyz,
         "analyzer_status": ctx.analyzer_status,
@@ -503,7 +494,6 @@ def orca_contract_payload(ctx: Any, *, deps: Any) -> dict[str, Any]:
         **deps._runtime_paths(
             getattr(ctx, "artifact_dir", ctx.current_dir),
             queue_entry=ctx.queue_entry,
-            report_md_dir=ctx.current_dir,
         ),
         "attempt_count": deps.attempt_count(ctx.state, ctx.report),
         "max_retries": deps.max_retries(ctx.state, ctx.report),

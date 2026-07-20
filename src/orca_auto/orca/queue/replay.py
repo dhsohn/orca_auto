@@ -41,10 +41,8 @@ from ..execution_binding import orca_execution_provenance
 from ..runtime.run_lock import acquire_run_lock
 from ..state import (
     finalize_state,
-    load_report_json,
     load_state,
     new_state,
-    report_json_path,
     state_path,
     write_report_files,
 )
@@ -122,7 +120,6 @@ class ReactionGenerationRow:
 class ArtifactGeneration:
     readable: bool
     state_job_id: str = ""
-    report_job_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -422,25 +419,9 @@ def _load_artifact_generation(reaction_key: str) -> ArtifactGeneration:
         logger.warning("Failing closed on unreadable ORCA state generation: %s", state_file)
         return ArtifactGeneration(readable=False)
 
-    state_job_id = worker_tracking.payload_job_id(state)
-    if state_job_id:
-        # A new generation writes state before it writes a report.  The report can
-        # therefore legitimately still belong to the previous generation.
-        return ArtifactGeneration(readable=True, state_job_id=state_job_id)
-
-    report_file = report_json_path(reaction_dir)
-    report_existed = report_file.exists()
-    try:
-        report = load_report_json(reaction_dir)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to read ORCA report generation for %s: %s", reaction_dir, exc)
-        return ArtifactGeneration(readable=False)
-    if (report_existed or report_file.exists()) and report is None:
-        logger.warning("Failing closed on unreadable ORCA report generation: %s", report_file)
-        return ArtifactGeneration(readable=False)
     return ArtifactGeneration(
         readable=True,
-        report_job_id=worker_tracking.payload_job_id(report),
+        state_job_id=worker_tracking.payload_job_id(state),
     )
 
 
@@ -500,31 +481,10 @@ def _select_generation_owner(
         if selected is not None:
             return selected
 
-    # A report can safely identify a completed generation because that replay
-    # does not synthesize shared state.  Failed/cancelled rows still require
-    # state or transition evidence: their report may be a previous generation's
-    # leftover and selecting it would overwrite an identity-less current state.
-    if artifacts.report_job_id:
-        completed_report_rows = [
-            row
-            for row in rows
-            if row.task_id == artifacts.report_job_id and row.status == STATUS_COMPLETED
-        ]
-        selected = choose(completed_report_rows)
-        if selected is not None:
-            return selected
-
-    # Otherwise report identity is only a conflict check when one generation is
-    # visible.
     if len(rows) == 1:
-        only = rows[0]
-        if artifacts.report_job_id and artifacts.report_job_id != only.task_id:
-            return None
-        return only.owner
+        return rows[0].owner
 
     if len({row.task_id for row in rows}) == 1 and rows[0].task_id:
-        if artifacts.report_job_id and artifacts.report_job_id != rows[0].task_id:
-            return None
         return choose(rows)
     return None
 

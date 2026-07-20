@@ -17,6 +17,7 @@ from orca_auto.core.config.files import (
     scheduler_admission_root,
     secure_config_file_permissions,
     shared_workflow_root_from_config,
+    validate_shared_config_sections,
     validated_runs_root_text,
 )
 
@@ -53,9 +54,10 @@ def test_messenger_mapping_rejects_legacy_top_level_telegram_block() -> None:
     assert config_with_canonical_messenger(canonical)["messenger"] == canonical["messenger"]
 
 
-def test_messenger_mapping_rejects_non_mapping_new_section() -> None:
+@pytest.mark.parametrize("invalid", [None, "telegram", []])
+def test_messenger_mapping_rejects_non_mapping_new_section(invalid: object) -> None:
     with pytest.raises(ValueError, match="messenger section must be a mapping"):
-        messenger_mapping_from_root({"messenger": "telegram"})
+        messenger_mapping_from_root({"messenger": invalid})
 
 
 def test_yaml_parse_error_does_not_expose_secret_source_line(tmp_path: Path) -> None:
@@ -132,7 +134,7 @@ def test_engine_config_mapping_requires_engine_section() -> None:
     assert engine_config_mapping(raw, "orca", inherit_keys=("scheduler",)) == {}
 
 
-def test_engine_config_mapping_merges_matching_partial_scheduler_section() -> None:
+def test_engine_config_mapping_rejects_redundant_engine_scoped_scheduler() -> None:
     raw = {
         "scheduler": {
             "max_active_simulations": 1,
@@ -143,15 +145,46 @@ def test_engine_config_mapping_merges_matching_partial_scheduler_section() -> No
         },
     }
 
-    assert engine_config_mapping(raw, "orca", inherit_keys=("scheduler",)) == {
-        "scheduler": {
-            "max_active_simulations": 1,
-            "admission_root": "/tmp/shared",
-        }
-    }
+    with pytest.raises(ValueError, match="orca.scheduler is not supported"):
+        engine_config_mapping(raw, "orca", inherit_keys=("scheduler",))
 
 
-def test_engine_config_mapping_rejects_scheduler_split_brain() -> None:
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ({"schedulr": {}}, "Unknown top-level config fields: schedulr"),
+        (
+            {"scheduler": {"max_active_simulation": 4}},
+            "Unknown scheduler config fields: max_active_simulation",
+        ),
+        (
+            {"resources": {"max_core_per_task": 8}},
+            "Unknown resources config fields: max_core_per_task",
+        ),
+        ({"workflow": {"root": "/tmp/runs"}}, "Unknown workflow config fields: root"),
+        (
+            {"workflow": {"paths": {"xtb_path": "/tmp/xtb"}}},
+            "Unknown workflow.paths config fields: xtb_path",
+        ),
+        (
+            {"orca": {"runtime": {"max_concurrent": 2}}},
+            "Unknown orca.runtime config fields: max_concurrent",
+        ),
+        (
+            {"orca": {"paths": {"executable": "/tmp/orca"}}},
+            "Unknown orca.paths config fields: executable",
+        ),
+    ],
+)
+def test_shared_config_validation_rejects_unknown_fields(
+    raw: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        validate_shared_config_sections(raw)
+
+
+def test_engine_config_mapping_rejects_engine_scoped_scheduler_split_brain() -> None:
     raw = {
         "scheduler": {
             "max_active_simulations": 1,
@@ -162,7 +195,7 @@ def test_engine_config_mapping_rejects_scheduler_split_brain() -> None:
         },
     }
 
-    with pytest.raises(ValueError, match="cannot override the shared top-level scheduler"):
+    with pytest.raises(ValueError, match="orca.scheduler is not supported"):
         engine_config_mapping(raw, "orca", inherit_keys=("scheduler",))
 
 
@@ -173,7 +206,7 @@ def test_engine_config_mapping_rejects_non_mapping_engine_scheduler(invalid: obj
         "orca": {"scheduler": invalid},
     }
 
-    with pytest.raises(ValueError, match="orca.scheduler must be a mapping"):
+    with pytest.raises(ValueError, match="orca.scheduler is not supported"):
         engine_config_mapping(raw, "orca", inherit_keys=("scheduler",))
 
 
@@ -184,7 +217,7 @@ def test_engine_config_mapping_rejects_non_mapping_engine_resources(invalid: obj
         "orca": {"resources": invalid},
     }
 
-    with pytest.raises(ValueError, match="orca.resources must be a mapping"):
+    with pytest.raises(ValueError, match="orca.resources is not supported"):
         engine_config_mapping(raw, "orca", inherit_keys=("resources",))
 
 
@@ -202,6 +235,81 @@ def test_yaml_mapping_and_section_helpers(tmp_path: Path) -> None:
     invalid_path.write_text("- no\n- mapping\n", encoding="utf-8")
     with pytest.raises(ValueError, match="top-level is not a mapping"):
         load_yaml_mapping(invalid_path)
+
+
+@pytest.mark.parametrize("payload", ["", "  \n\t", "# comment only\n"])
+def test_yaml_mapping_treats_documents_without_a_yaml_node_as_empty_mapping(
+    tmp_path: Path,
+    payload: str,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(payload, encoding="utf-8")
+
+    _path, raw = load_yaml_mapping(config_path)
+
+    assert raw == {}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "null\n",
+        "~\n",
+        "---\n",
+        "---\n# comment\n",
+        '!!null ""\n',
+        '--- !!null ""\n',
+        "false\n",
+        "0\n",
+        "[]\n",
+        "text\n",
+    ],
+)
+def test_yaml_mapping_rejects_explicit_non_mapping_documents(
+    tmp_path: Path,
+    payload: str,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="top-level is not a mapping"):
+        load_yaml_mapping(config_path)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "runs_root: /tmp/one\nruns_root: /tmp/two\n",
+        "scheduler:\n  max_active_simulations: 1\n  max_active_simulations: 2\n",
+    ],
+)
+def test_yaml_mapping_rejects_duplicate_keys_at_every_depth(
+    tmp_path: Path,
+    payload: str,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate mapping key"):
+        load_yaml_mapping(config_path)
+
+
+def test_duplicate_key_error_does_not_expose_secret_values(tmp_path: Path) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    first_secret = "first-super-secret-token"
+    second_secret = "second-super-secret-token"
+    config_path.write_text(
+        f"messenger:\n  telegram:\n    bot_token: {first_secret}\n    bot_token: {second_secret}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as raised:
+        load_yaml_mapping(config_path)
+
+    message = str(raised.value)
+    assert "duplicate mapping key" in message
+    assert first_secret not in message
+    assert second_secret not in message
 
 
 def test_required_yaml_mapping_uses_custom_missing_error(tmp_path: Path) -> None:

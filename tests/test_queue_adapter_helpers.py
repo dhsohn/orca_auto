@@ -17,9 +17,7 @@ from orca_auto.orca.queue.terminal_replay import (
     TERMINAL_REPLAY_METADATA_KEY,
     terminal_replay_marker_from_entry,
 )
-from orca_auto.orca.state import report_json_path
 from orca_auto.orca.statuses import RunStatus
-from tests.engine_artifact_helpers import orca_artifact_payload
 
 
 def _entry(
@@ -156,81 +154,6 @@ def test_enqueue_overwrites_worker_log_metadata_with_safe_queue_log(tmp_path: Pa
 
     metadata = queue_adapter.queue_entry_metadata(entry)
     assert metadata["worker_log"] == str((tmp_path / "logs" / f"{entry.queue_id}.log").resolve())
-
-
-def test_report_payload_and_terminal_report_data_cover_missing_invalid_completed_and_failed(
-    tmp_path: Path,
-) -> None:
-    reaction_dir = tmp_path / "rxn"
-    reaction_dir.mkdir()
-
-    assert queue_orphans.load_report_payload(reaction_dir) is None
-    assert queue_orphans.terminal_report_data(reaction_dir) is None
-
-    report_path = report_json_path(reaction_dir)
-    report_path.write_text("{not-json", encoding="utf-8")
-    assert queue_orphans.load_report_payload(reaction_dir) is None
-
-    report_path.write_text(json.dumps(["bad"]), encoding="utf-8")
-    assert queue_orphans.load_report_payload(reaction_dir) is None
-
-    report_path.write_text(
-        json.dumps(
-            orca_artifact_payload(
-                job_id="run_done",
-                run_id="run_done",
-                reaction_dir=str(reaction_dir),
-                status="completed",
-                final_result={
-                    "status": "completed",
-                    "completed_at": "2026-03-10T04:59:59+00:00",
-                },
-            )
-        ),
-        encoding="utf-8",
-    )
-    assert queue_orphans.terminal_report_data(reaction_dir) == (
-        QueueStatus.COMPLETED.value,
-        "run_done",
-        "2026-03-10T04:59:59+00:00",
-        None,
-    )
-
-    report_path.write_text(
-        json.dumps(
-            orca_artifact_payload(
-                job_id="run_fail",
-                run_id="run_fail",
-                reaction_dir=str(reaction_dir),
-                status="failed",
-                final_result={
-                    "status": "failed",
-                    "completed_at": "2026-03-10T04:58:00+00:00",
-                    "reason": "orca_crash",
-                },
-            )
-        ),
-        encoding="utf-8",
-    )
-    assert queue_orphans.terminal_report_data(reaction_dir) == (
-        QueueStatus.FAILED.value,
-        "run_fail",
-        "2026-03-10T04:58:00+00:00",
-        "orca_crash",
-    )
-
-    report_path.write_text(
-        json.dumps(
-            orca_artifact_payload(
-                job_id="run_live",
-                run_id="run_live",
-                reaction_dir=str(reaction_dir),
-                status="running",
-            )
-        ),
-        encoding="utf-8",
-    )
-    assert queue_orphans.terminal_report_data(reaction_dir) is None
 
 
 def test_apply_terminal_reconciliation_updates_fields_and_clears_completed_error() -> None:
@@ -518,10 +441,6 @@ def test_reconcile_orphaned_running_entries_covers_state_terminal_paths_and_pend
         patch(
             "orca_auto.orca.queue.orphans.load_state",
             side_effect=_load_state,
-        ),
-        patch(
-            "orca_auto.orca.queue.orphans.terminal_report_data",
-            return_value=None,
         ),
     ):
         changed = queue_orphans.reconcile_orphaned_running_entries(root)

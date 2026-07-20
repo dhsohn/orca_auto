@@ -4,7 +4,7 @@
 
 > 이 문서는 [QUICKSTART.md](QUICKSTART.md)(영어판)의 한국어 번역본입니다.
 
-이 가이드는 새로 체크아웃한 저장소에서 감독되는 orca_auto 큐 워커까지 가는
+이 가이드는 새로 체크아웃한 저장소에서 감독되는 orca_auto 엔진 워커까지 가는
 가장 짧은 경로입니다.
 
 ## 1) 설치
@@ -35,8 +35,8 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
 선택된 Telegram 또는 Discord provider의 인터랙티브 bot 설정이 완전하면 orca_auto는
-전체 런타임 타깃을 활성화합니다. 그렇지 않으면 큐 워커만 활성화합니다.
-설치되는 기본 큐 워커는 ORCA 전용입니다. workflow 제출을 실행하려면 queueing 전후에
+전체 런타임 타깃을 활성화합니다. 그렇지 않으면 bot 없는 engine-worker 타깃을 활성화하며,
+이 타깃은 ORCA와 standalone xTB-MD를 별도 서비스로 시작합니다. workflow 제출을 실행하려면 queueing 전후에
 opt-in workflow unit을 시작하세요:
 
 ```bash
@@ -50,8 +50,8 @@ orca_auto service status
 orca_auto service restart
 ```
 
-`service status`는 런타임 타깃, 큐 워커, 선택된 messenger 봇을 보여줍니다. `service restart`는
-전체 런타임 타깃이 활성화되어 있으면 그것을 재시작하고, 그렇지 않으면 큐 워커를
+`service status`는 런타임과 engine-worker 타깃, 두 엔진 서비스, opt-in workflow 서비스,
+선택된 messenger 봇을 보여줍니다. `service restart`는 전체 런타임 타깃이 활성화되어 있으면 그것을 재시작하고, 그렇지 않으면 engine-worker 타깃을
 재시작합니다.
 
 ## 5) 작업 제출

@@ -273,9 +273,9 @@ def test_build_parser_parses_systemd_install_command() -> None:
             "systemd",
             "install",
             "--user",
-            "daehyupsohn",
+            "alice",
             "--repo",
-            "/home/daehyupsohn/orca_auto",
+            "/home/alice/orca_auto",
             "--worker-only",
             "--dry-run",
         ]
@@ -283,8 +283,8 @@ def test_build_parser_parses_systemd_install_command() -> None:
 
     assert args.command == "systemd"
     assert args.systemd_command == "install"
-    assert args.target_user == "daehyupsohn"
-    assert args.repo == "/home/daehyupsohn/orca_auto"
+    assert args.target_user == "alice"
+    assert args.repo == "/home/alice/orca_auto"
     assert args.worker_only is True
     assert args.dry_run is True
     assert args.func is cli_systemd_apply.cmd_systemd_install
@@ -303,6 +303,18 @@ def test_build_parser_parses_service_commands() -> None:
     assert restart_args.command == "service"
     assert restart_args.service_command == "restart"
     assert restart_args.func is cli_systemd_status.cmd_service_restart
+
+
+def test_service_help_describes_engine_worker_restart(capsys: pytest.CaptureFixture[str]) -> None:
+    parser = unified_cli.build_parser()
+
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["service", "--help"])
+
+    assert exc_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "runtime or engine-worker target" in output
+    assert "queue worker service" not in output
 
 
 def test_main_dispatches_unified_queue_list(monkeypatch: pytest.MonkeyPatch) -> None:

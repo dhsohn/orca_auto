@@ -44,6 +44,7 @@ from orca_auto.flow.conformer_selection import (
     unique_single_point_matches,
 )
 from orca_auto.flow.contracts import WorkflowStageInput
+from orca_auto.flow.contracts.workflow import workflow_request_parameters
 from orca_auto.flow.manifest import (
     DEFAULT_INTERACTION_SP_ROUTE_LINE,
     INTERACTION_ENERGY_MAX_FRAGMENTS_CAP,
@@ -94,17 +95,6 @@ def _stage_role(stage: Mapping[str, Any]) -> str:
 def _task_kind(stage: Mapping[str, Any]) -> str:
     task = stage.get("task")
     return _text(task.get("task_kind")) if isinstance(task, Mapping) else ""
-
-
-def _request_parameters(payload: dict[str, Any]) -> dict[str, Any]:
-    metadata = payload.get("metadata")
-    if not isinstance(metadata, dict):
-        return {}
-    request = metadata.get("request")
-    if not isinstance(request, dict):
-        return {}
-    parameters = request.get("parameters")
-    return parameters if isinstance(parameters, dict) else {}
 
 
 def _record_interaction_energy_error(
@@ -332,7 +322,7 @@ def append_interaction_energy_stages_impl(
 ) -> bool:
     if _text(payload.get("template_name")) != "conformer_screening":
         return False
-    params = _request_parameters(payload)
+    params = workflow_request_parameters(payload)
     cfg = params.get("interaction_energy")
     try:
         normalized_cfg = normalize_interaction_energy_block(cfg)

@@ -921,17 +921,6 @@ class UploadSessionStore:
             sessions = self._load_current_locked(now=self._now())
             return tuple(sessions)
 
-    def find_by_idempotency_key(self, key: str) -> UploadSession | None:
-        """Find a durable session by a previously calculated source key."""
-
-        normalized = str(key).strip().lower()
-        with self._locked():
-            sessions = self._load_current_locked(now=self._now())
-            for session in sessions:
-                if session.idempotency_key == normalized:
-                    return session
-        return None
-
     def sweep(self) -> UploadSweepResult:
         """Expire stale work and clean only marker-proven store-owned paths.
 

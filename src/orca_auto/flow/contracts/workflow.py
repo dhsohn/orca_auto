@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any, TypedDict, cast
 
@@ -99,6 +100,19 @@ def workflow_task_payload_dict(task: dict[str, Any]) -> dict[str, Any]:
         payload = {}
         task["payload"] = payload
     return payload
+
+
+def workflow_request_parameters(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the durable workflow request parameters when structurally valid."""
+
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        return {}
+    request = metadata.get("request")
+    if not isinstance(request, dict):
+        return {}
+    parameters = request.get("parameters")
+    return parameters if isinstance(parameters, dict) else {}
 
 
 @dataclass(frozen=True)
@@ -263,4 +277,5 @@ __all__ = [
     "WorkflowTemplateRequest",
     "WorkflowTemplateRequestPayload",
     "coerce_workflow_plan_payload",
+    "workflow_request_parameters",
 ]

@@ -260,9 +260,9 @@ see [docs/REFERENCE.md](docs/REFERENCE.md) §7.
 
 ## Services
 
-Long-running services (the queue worker and selected messenger bot) are managed through `systemd`
-only. After `orca_auto.yaml` is configured, enable the combined runtime target once and
-let `systemd` keep both running:
+Long-running services (the default engine workers and selected messenger bot) are managed through
+`systemd` only. After `orca_auto.yaml` is configured, enable the combined runtime target once and
+let `systemd` keep them running:
 
 ```bash
 cd <repo_root>
@@ -272,15 +272,18 @@ orca_auto service restart
 ```
 
 If the selected provider is not configured for interactive operation, the installer
-enables only the queue worker. Telegram needs a token and chat ID; Discord needs a bot
+enables the engine-worker target without the bot. Telegram needs a token and chat ID; Discord needs a bot
 token, an inbound command channel, and an operator user ID. After completing the provider
-config, rerun the same command to enable the full runtime target. If you edited files under
-`systemd/`, run
-`sudo systemctl daemon-reload` before restarting. See
+config, rerun the same command to enable the full runtime target. After updating the
+checkout or editing files under `systemd/`, rerun `orca_auto systemd install` with the
+same `--user` and `--repo` values. The installer copies the rendered units and runs
+`systemctl daemon-reload`; daemon-reload alone does not update the installed copies. See
 [systemd/README.md](systemd/README.md) for the full runtime setup.
 
-The default queue-worker service starts ORCA only. A configured workflow root does
-not auto-start workflow/xTB/CREST workers; start
+The default engine-worker target starts separate ORCA and standalone xTB-MD
+services, so either service can fail or restart without stopping the other. A
+configured workflow root does not auto-start the workflow or its internal
+xTB/CREST workers; start
 `orca_auto-workflow-worker@$(whoami)` explicitly when workflow execution is needed.
 
 ## Runtime Notes
@@ -311,10 +314,10 @@ not auto-start workflow/xTB/CREST workers; start
   to 1,000 for xTB/ORCA Hessian-producing jobs and 200 for Discord-uploaded work.
 - When retrying or resuming an interrupted ORCA run, orca_auto uses a matching
   non-empty `.gbw` file by generating a restart input with `MORead` and `%moinp`.
-- The ORCA job root keeps `run.lock` and the latest public state/report files.
-  `job_state.json` and `job_report.json` are also mirrored into the visible
-  generation they describe. Standalone xTB-MD instead keeps its state, reports,
-  bound inputs, and retained outputs only in its visible generation.
+- The ORCA job root keeps `run.lock` and the live `job_state.json` until
+  terminal cleanup. Reports and the durable state copy exist only in the
+  verified visible generation they describe. Standalone xTB-MD likewise keeps
+  its state, reports, bound inputs, and retained outputs in its generation.
 - Use the `systemd` assets in [systemd/README.md](systemd/README.md) for unattended WSL or Linux execution.
 
 ## Testing

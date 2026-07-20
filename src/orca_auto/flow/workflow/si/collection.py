@@ -6,6 +6,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
+from orca_auto.flow.contracts.workflow import workflow_request_parameters
 from orca_auto.orca.report.interaction_energy import InteractionEnergyResult
 from orca_auto.orca.report.rmsd import RmsdGroup
 
@@ -23,7 +24,7 @@ from ..report import (
     _xtb_stage_detail,
 )
 from . import science as _science
-from .evidence import _collect_stage_block, _request_parameters, _stage_label
+from .evidence import _collect_stage_block, _stage_label
 from .models import ExcludedStage, WorkflowSiData, WorkflowSiEntry
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ def collect_workflow_si_data(
 ) -> WorkflowSiData:
     template_name = _text(payload.get("template_name"))
     workflow_status = _text(payload.get("status"))
-    parameters = _request_parameters(payload)
+    parameters = workflow_request_parameters(payload)
     try:
         interaction_cfg = normalize_interaction_energy_block(parameters.get("interaction_energy"))
     except ValueError:

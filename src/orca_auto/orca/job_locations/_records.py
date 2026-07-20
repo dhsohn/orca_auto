@@ -26,7 +26,7 @@ from orca_auto.core.utils.persistence import load_json_mapping_file
 from ..config import AppConfig
 from ..job_type import detect_job_type
 from ..molecule_key import resolve_molecule_key
-from ..state import load_report_json, state_path
+from ..state import state_path
 from ._utils import (
     TERMINAL_STATUSES,
     derive_selected_input_xyz,
@@ -202,7 +202,7 @@ def _load_artifact_record_payloads(job_dir: Path) -> _ArtifactRecordPayloads:
     state_data = load_json_mapping_file(state_path(job_dir))
     return _artifact_payloads(
         dict(state_data) if state_data is not None else {},
-        load_report_json(job_dir),
+        {},
     )
 
 
@@ -421,7 +421,7 @@ def collect_reindex_payload(job_dir: Path) -> dict[str, Any] | None:
 
 
 def _job_dir_has_unsafe_reindex_artifact(job_dir: Path, root: Path) -> bool:
-    for filename in ("job_state.json", "job_report.json"):
+    for filename in ("job_state.json",):
         artifact = job_dir / filename
         try:
             present = artifact.exists() or artifact.is_symlink()
@@ -456,7 +456,7 @@ def _safe_reindex_source_identity(
         return None
 
     artifact_rows: list[tuple[str, int, int, int, int] | None] = []
-    for filename in ("job_state.json", "job_report.json"):
+    for filename in ("job_state.json",):
         artifact = job_dir / filename
         try:
             artifact_stat = artifact.lstat()
@@ -514,7 +514,7 @@ def _open_reindex_source(
 def _candidate_reindex_dirs(root: Path) -> set[Path]:
     candidate_dirs: set[Path] = set()
     excluded_dirs: set[Path] = set()
-    for pattern in ("job_state.json", "job_report.json"):
+    for pattern in ("job_state.json",):
         for artifact in iter_production_runs_artifacts(root, pattern):
             job_dir = artifact.parent
             if _job_dir_has_unsafe_reindex_artifact(job_dir, root):

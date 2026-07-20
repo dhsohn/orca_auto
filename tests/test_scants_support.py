@@ -1099,7 +1099,12 @@ def test_zero_distance_refinement_crash_retries_as_optts_from_maximum(
     assert "scants_fallback_to_optts" in actions
     assert "scants_scan_block_removed" in actions
     assert "scants_guess_from_rxn.002.xyz" in actions
-    report_html = (tmp_path / "job_report.html").read_text(encoding="utf-8")
+    # The synthetic attempt harness binds no execution generation, so no report
+    # file is published (fail closed); render the report body directly instead.
+    from orca_auto.orca.report import compose_job_report_html
+
+    report_html = compose_job_report_html(tmp_path, saved)
+    assert report_html is not None
     assert "OptTS fallback (scan maximum)" in report_html
 
 

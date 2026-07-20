@@ -55,9 +55,6 @@ def test_load_config_parses_defaults_and_normalizes_values(tmp_path: Path) -> No
                         "xtb_executable": f" {fake_xtb} ",
                     },
                 },
-                "behavior": {
-                    "auto_organize_on_terminal": "yes",
-                },
                 "resources": {
                     "max_cores_per_task": "1",
                     "max_memory_gb_per_task": "1",
@@ -100,9 +97,7 @@ def test_load_config_reports_missing_file_invalid_payload_and_requires_workflow_
         load_config(str(invalid_path))
 
     missing_workflow_root_path = tmp_path / "missing-workflow-root.yaml"
-    missing_workflow_root_path.write_text(
-        yaml.safe_dump({"xtb": {"runtime": {}}}), encoding="utf-8"
-    )
+    missing_workflow_root_path.write_text("{}\n", encoding="utf-8")
     with pytest.raises(ValueError, match=r"Config is missing runs_root"):
         load_config(str(missing_workflow_root_path))
 
@@ -136,7 +131,7 @@ def test_helper_normalizers_cover_string_and_int_defaults() -> None:
     assert as_int("not-a-number", 7) == 7
 
 
-def test_load_config_applies_defaults_for_missing_and_legacy_optional_sections(
+def test_load_config_applies_defaults_for_missing_optional_sections(
     tmp_path: Path,
 ) -> None:
     workflow_root = tmp_path / "workflow_root"
@@ -144,10 +139,7 @@ def test_load_config_applies_defaults_for_missing_and_legacy_optional_sections(
     config_path = tmp_path / "orca_auto.yaml"
     config_path.write_text(
         yaml.safe_dump(
-            {
-                "runs_root": str(workflow_root),
-                "behavior": [],
-            },
+            {"runs_root": str(workflow_root)},
             sort_keys=False,
         ),
         encoding="utf-8",
@@ -164,6 +156,25 @@ def test_load_config_applies_defaults_for_missing_and_legacy_optional_sections(
     assert cfg.resources.max_memory_gb_per_task == 32
     assert cfg.messenger.telegram.bot_token == ""
     assert cfg.messenger.telegram.chat_id == ""
+
+
+def test_load_config_rejects_removed_behavior_section(tmp_path: Path) -> None:
+    workflow_root = tmp_path / "workflow_root"
+    workflow_root.mkdir()
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "runs_root": str(workflow_root),
+                "behavior": {"auto_organize_on_terminal": True},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unknown top-level config fields: behavior"):
+        load_config(str(config_path))
 
 
 def test_state_helper_writes_only_canonical_state(

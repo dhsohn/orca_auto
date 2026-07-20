@@ -7,6 +7,7 @@ from typing import Any, cast
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.utils import mapping_or_empty
 from orca_auto.flow.contracts import CrestDownstreamPolicy
+from orca_auto.flow.contracts.workflow import workflow_request_parameters
 from orca_auto.flow.endpoint_pairing import EndpointPairingPolicy
 from orca_auto.flow.manifest import require_crest_candidate_count
 from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin, strict_int
@@ -26,7 +27,6 @@ from orca_auto.flow.orchestration.stage_views import (
     WorkflowStageView,
     _clear_workflow_error_scope,
     _engine_stages,
-    _request_params,
 )
 from orca_auto.flow.orchestration.support import required_stage_budget
 
@@ -141,7 +141,7 @@ def _reaction_xtb_stage_plan(
     if contracts is None:
         return None
     reactant_contract, product_contract = contracts
-    params = _request_params(payload)
+    params = workflow_request_parameters(payload)
     max_crest_candidates = require_crest_candidate_count(
         required_stage_budget(params, "max_crest_candidates"),
     )

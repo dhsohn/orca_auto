@@ -21,8 +21,15 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE, WORKFLOW_REPORT_HTML_FILE
-from orca_auto.core.queue.generation import visible_generation_children
+from orca_auto.core.artifacts import (
+    RUN_REPORT_HTML_FILE,
+    RUN_REPORT_JSON_FILE,
+    WORKFLOW_REPORT_HTML_FILE,
+)
+from orca_auto.core.queue.generation import (
+    is_visible_generation_name,
+    visible_generation_children,
+)
 from orca_auto.core.utils.persistence import atomic_write_text
 from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.parser.patterns import (
@@ -36,6 +43,7 @@ from orca_auto.orca.report.render import (
     render_page,
     status_badge_kind,
 )
+from orca_auto.orca.state import load_report_json
 
 logger = logging.getLogger(__name__)
 
@@ -287,13 +295,42 @@ def _stage_job_report(stage: Mapping[str, Any]) -> tuple[Path | None, dict[str, 
     if task_engine in _INTERNAL_STAGE_ENGINES.values():
         return None, None
     for job_dir in _stage_job_dirs(stage):
-        # ORCA reports live in execution generations.
-        for candidate_dir in (job_dir, *visible_generation_children(job_dir)):
+        candidate_dirs = (
+            (job_dir,)
+            if is_visible_generation_name(job_dir.name)
+            else visible_generation_children(job_dir)
+        )
+        for candidate_dir in candidate_dirs:
             report_path = candidate_dir / "job_report.json"
-            report = _load_json(report_path)
-            if report is not None and _stage_report_identity_matches(stage, report):
+            report = _verified_orca_stage_report(stage, report_path)
+            if report is not None:
                 return report_path, report
     return None, None
+
+
+def _verified_orca_stage_report(
+    stage: Mapping[str, Any],
+    report_path: Path | None,
+) -> dict[str, Any] | None:
+    if (
+        report_path is None
+        or not report_path.is_absolute()
+        or report_path.name != RUN_REPORT_JSON_FILE
+        or report_path != report_path.parent / RUN_REPORT_JSON_FILE
+        or not is_visible_generation_name(report_path.parent.name)
+    ):
+        return None
+    if report_path.is_symlink() or not report_path.is_file():
+        return None
+    try:
+        if report_path.resolve(strict=True) != report_path:
+            return None
+    except OSError:
+        return None
+    report = load_report_json(report_path.parent)
+    if report is None or not _stage_report_identity_matches(stage, report):
+        return None
+    return report
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -646,8 +683,8 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
     attempt_count = 0
     imaginary_count: int | None = None
     report_json_path = _stage_artifact_path(stage, "orca_report_json")
-    report_payload = _load_json(report_json_path) if report_json_path is not None else None
-    if _stage_has_diagnostic_status(stage):
+    report_payload = _verified_orca_stage_report(stage, report_json_path)
+    if report_payload is None:
         report_json_path, report_payload = _stage_job_report(stage)
     if report_payload is not None:
         engine_payload = report_payload.get("engine_payload")
@@ -673,8 +710,7 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
 
     report_href: str | None = None
     if report_json_path is not None:
-        # The HTML report is co-located with the report JSON (both live in the
-        # execution generation; pre-relocation jobs keep them at the job root).
+        # The HTML report is co-located with the generation-local report JSON.
         job_report_html = report_json_path.parent / RUN_REPORT_HTML_FILE
         if job_report_html.exists():
             try:

@@ -132,6 +132,18 @@ Supported configuration paths:
 - `messenger.discord.timeout_seconds`
 - `messenger.discord.max_attempts`
 - `messenger.discord.retry_backoff_seconds`
+- `messenger.discord.uploads.enabled`
+- `messenger.discord.uploads.max_archive_bytes`
+- `messenger.discord.uploads.max_total_uncompressed_bytes`
+- `messenger.discord.uploads.max_file_bytes`
+- `messenger.discord.uploads.max_entries`
+- `messenger.discord.uploads.max_staged_bytes`
+- `messenger.discord.uploads.max_staged_uploads`
+- `messenger.discord.uploads.max_pending_per_actor`
+- `messenger.discord.uploads.max_concurrent_downloads`
+- `messenger.discord.uploads.staging_ttl_seconds`
+- `messenger.discord.uploads.committed_retention_seconds`
+- `messenger.discord.uploads.allowed_extensions`
 - `orca.runtime.default_max_retries`
 - `orca.runtime.scratch_root`
 - `orca.runtime.scratch_min_free_gb`
@@ -147,10 +159,21 @@ Stable behavior:
   internal xTB, and internal CREST jobs together.
 - `scheduler.max_active_xtb_md` is a positive standalone xTB-MD subcap and
   defaults to `1` when omitted.
-- Explicit `scheduler`, `resources`, `workflow`, and `workflow.paths` sections
-  must be mappings. `scheduler.admission_root` must be an absolute Linux path,
-  and explicit scheduler/resource limits must be positive integers; malformed
-  execution controls are rejected rather than defaulted.
+- Only the configuration paths listed above are accepted. Unknown, misspelled,
+  and removed keys fail configuration loading at the section where they appear.
+  Explicit `scheduler`, `resources`, `workflow`, `workflow.paths`, `messenger`,
+  `orca`, `orca.runtime`, and `orca.paths` sections must be mappings.
+  `scheduler.admission_root` must be an absolute Linux path; explicit
+  scheduler/resource limits must be positive integers; and explicit
+  `orca.runtime.default_max_retries` must be a non-negative integer. A section
+  or key may be omitted to use its documented default, but a configured
+  execution-control key with a malformed value is rejected rather than
+  defaulted.
+- A YAML document with no node (empty, whitespace-only, or comments-only) is
+  treated as an empty mapping. An explicit YAML null—including an otherwise
+  empty `---` document—scalar, or sequence at the top level is rejected.
+  Duplicate mapping keys are rejected at every nesting depth rather than
+  resolved with last-key-wins.
 - `orca.runtime.default_max_retries: 0` disables ORCA retries.
 - A positive `default_max_retries` enables calculation-type retry policy, still
   capped by ORCA route type.
@@ -182,8 +205,24 @@ Stable behavior:
 - Canonical Discord delivery uses `messenger.discord.bot_token` plus
   `default_channel_id`; `channel_ids` authorizes inbound channels. The interactive gateway
   additionally requires a non-empty `allowed_user_ids` operator allowlist.
-- Both adapters bound delivery timeouts to 0.1–120 seconds, total attempts to 1–10,
-  and configured retry backoff to 0–120 seconds.
+- Explicit bot tokens must be strings. Telegram `chat_id` accepts a string or
+  integer; Discord channel IDs and both operator-ID allowlists accept only their
+  documented positive IDs. Explicit nulls, booleans, collections in scalar
+  fields, scalar allowlists, and invalid list entries are rejected. Empty token
+  and destination strings and empty allowlists remain the intentional way to
+  disable the corresponding capability.
+- Both adapters bound finite delivery timeouts to 0.1–120 seconds, integer total
+  attempts to 1–10, and finite retry backoff to 0–120 seconds. Omission uses the
+  documented defaults and finite values outside those ranges are clamped;
+  explicitly configured booleans, non-numeric values, fractions for attempts,
+  NaN, and infinities are rejected rather than defaulted.
+- Explicit Discord upload policy values are also fail-closed:
+  `enabled` must be a recognized boolean, every size/count/retention field must
+  be a positive integer, and `allowed_extensions` must be a list of non-empty
+  strings. Omitted fields use their documented defaults; malformed explicit
+  values never silently disable uploads or relax a bound.
+  `max_staged_bytes` must be greater than or equal to `max_archive_bytes`, and
+  `max_concurrent_downloads` must not exceed `16`.
 
 Migration note:
 
@@ -191,6 +230,10 @@ Migration note:
   loading fails with a pointed error when one is present; move the block to
   `messenger.telegram`. Discord has no legacy alias: use the nested
   `messenger.discord` bot fields.
+- Removed top-level `behavior`, `runtime`, and `paths` sections; `workflow.root`;
+  and engine-scoped `scheduler`, `resources`, or `messenger` blocks are not
+  compatibility aliases. Use the supported top-level shared sections and
+  `orca.runtime`/`orca.paths` paths above.
 
 ## Queue And Activity Contract
 
@@ -388,16 +431,37 @@ inside the generation that produced them:
   validation block, no coordinates)
 
 During a run the root additionally carries the live `job_state.json` (removed
-by terminal cleanup once the run is cleared). Jobs whose runs predate the
-report relocation, or that never bound an execution generation (for example a
-submission rejected before binding), keep their reports at the job root;
-readers treat the root as the legacy fallback, and the next run in the same
-directory removes the stale root copies when it publishes its generation
-reports. Once a terminal run's root state has been cleaned, a from-scratch
+by terminal cleanup once the run is cleared). Reports are published only into
+a verified execution generation. A run whose generation cannot be verified,
+including a submission rejected before generation binding, gets no report;
+its live state and queue record retain the outcome. Readers resolve reports
+through the verified generation only. Without a queue row, artifact lookup must
+name the exact generation path; a reusable job-root path is not a latest-run
+selector. An existing queue row without `task_id` and `run_id` is not allowed
+to adopt adjacent state or reports. Queue lookup first requires the complete
+canonical ORCA ownership tuple (`app_name`, `engine`, `task_kind`, `queue_id`,
+and `task_id`); partial or foreign rows are ignored even for an exact queue-id
+or reaction-path selector.
+
+Pre-relocation job-root report files are left untouched on disk but are no
+longer runtime inputs. Before removing those files, an operator must perform a
+one-time migration that verifies the report's job/run identity and generation
+provenance and then relocates it to that exact generation. Ambiguous or
+unbound reports must be archived separately rather than attached by path.
+There is no job-root compatibility reader or writer. Once a terminal run's
+root state has been cleaned, a from-scratch
 job-locations index rebuild no longer rediscovers that run: generation
 directories are deliberately excluded from production scans, and the rebuild
 is upsert-only, so the live index keeps its record but a rebuild after losing
 the index is lossy for cleaned runs.
+Job-location matching and rebuilds, queue orphan/replay recovery, and terminal
+record repair use the root state or durable queue/index record, never a root
+report. A root report-only job neither locates a job nor terminalizes a queue
+row. Workflow diagnostic fallback accepts only a direct visible-generation
+report whose generation provenance and stage identity both verify.
+The public ORCA JSON report reader likewise accepts only the canonical
+`<visible-generation>/job_report.json` whose directory owner, inode, bound
+input identity, and payload provenance verify; its raw JSON loader is private.
 
 Every new submission owns one visible
 `YYYYMMDD-HHMMSS-<8-hex>/` direct child. The name shape is reserved: any
@@ -764,7 +828,9 @@ include `scan_profile_no_barrier`, `ts_candidates_exhausted`,
 Supported unit filenames:
 
 - `systemd/orca_auto-runtime@.target`
+- `systemd/orca_auto-engine-workers@.target`
 - `systemd/orca_auto-queue-worker@.service`
+- `systemd/orca_auto-xtb-md-worker@.service`
 - `systemd/orca_auto-workflow-worker@.service`
 - `systemd/orca_auto-bot@.service`
 
@@ -776,20 +842,23 @@ Supported operator commands:
 
 Stable behavior:
 
-- The installer enables the queue worker.
-- The queue-worker unit and an unqualified `queue worker` start ORCA only;
-  configuring `runs_root` does not implicitly start workflow, xTB, CREST, or
-  xTB-MD workers.
+- The installer enables the engine-worker target.
+- The engine-worker target starts separate ORCA and standalone xTB-MD services;
+  either service can fail or restart without stopping the other. An unqualified
+  interactive `queue worker` command remains ORCA-only.
+  Configuring `runs_root` does not implicitly start workflow or its internal
+  xTB/CREST workers.
 - The workflow unit is installed but opt-in. Starting it explicitly runs the
   workflow supervisor and its internal xTB/CREST workers.
 - The selected Telegram/Discord bot is enabled only when its interactive config is complete;
   otherwise the install remains worker-only.
-- `service status` reports the runtime target, ORCA queue worker, opt-in workflow
-  worker, and bot status. The opt-in worker is informational and is not required
-  for worker-only or full-runtime health.
-- `service restart` clears the queue worker's start-limit failure state, then
-  restarts the runtime target when enabled; otherwise it restarts the queue worker.
-- A clean queue-worker supervisor exit remains stopped. The child supervisor
+- `service status` reports the runtime and engine-worker targets, both default
+  engine services, the opt-in workflow worker, and bot status. The opt-in worker
+  is informational and is not required for worker-only or full-runtime health.
+- `service restart` clears both engine services' start-limit failure states and,
+  for the full runtime, the bot's. It restarts the runtime target when enabled;
+  otherwise it restarts the engine-worker target.
+- A clean engine-worker supervisor exit remains stopped. Each child supervisor
   opens a bounded restart circuit, and systemd applies a bounded delayed restart.
 
 ## Non-Contracts

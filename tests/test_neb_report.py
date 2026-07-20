@@ -8,6 +8,7 @@ import pytest
 from orca_auto.orca.report import collect_neb_report_data, write_job_html_report
 from orca_auto.orca.report.neb import NebPathPoint, _path_plot_x
 from orca_auto.orca.report.render import ChartSeries, line_chart_svg
+from tests.engine_artifact_helpers import report_generation_target
 
 _COORDS_BLOCK = """
 ---------------------------------
@@ -318,9 +319,11 @@ def test_neb_ts_report_renders_neb_specific_sections(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
     _write_neb_out(out_path)
 
-    path = write_job_html_report(tmp_path, _state(tmp_path, out_path))
+    path = write_job_html_report(
+        tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
+    )
 
-    assert path == tmp_path / "job_report.html"
+    assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
     assert "NEB-TS report" in text
     assert "NEB-CI path profile" in text
@@ -348,9 +351,11 @@ def test_neb_ts_irc_report_composes_neb_and_irc_sections(tmp_path: Path) -> None
     out_path = tmp_path / "rxn.out"
     _write_neb_irc_out(out_path)
 
-    path = write_job_html_report(tmp_path, _state(tmp_path, out_path))
+    path = write_job_html_report(
+        tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
+    )
 
-    assert path == tmp_path / "job_report.html"
+    assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
     assert "NEB-TS report" in text
     assert "NEB-CI path profile" in text

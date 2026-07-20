@@ -30,7 +30,7 @@ class OrcaContractPayloadContext:
     target: str
     reaction_dir: str
     record: JobLocationRecord | None
-    queue_entry: dict[str, Any]
+    queue_entry: dict[str, Any] | None
     state: dict[str, Any]
     report: dict[str, Any]
     current_dir: Path | None

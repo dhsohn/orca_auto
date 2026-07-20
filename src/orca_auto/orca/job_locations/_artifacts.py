@@ -5,7 +5,7 @@ from typing import Any
 
 from orca_auto.core.indexing import JobLocationRecord, resolve_job_location
 
-from ..state import load_report_json, load_state
+from ..state import load_state
 from ._models import JobArtifactContext
 from ._records import list_job_location_records, resolve_record_job_dir
 from ._tracking import TrackedJobDirDeps
@@ -63,7 +63,6 @@ def matching_tracked_job_dirs(index_root: str | Path, target: str) -> list[Path]
             list_job_location_records=list_job_location_records,
             resolve_record_job_dir=resolve_record_job_dir,
             load_state=load_state,
-            load_report_json=load_report_json,
             resolve_existing_job_dir=resolve_existing_job_dir,
         ),
     )
@@ -112,20 +111,14 @@ def record_for_job_dir(
     return None
 
 
-def first_state_report(
-    candidates: list[Path],
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+def first_state(candidates: list[Path]) -> dict[str, Any] | None:
     state_payload: dict[str, Any] | None = None
-    report_payload: dict[str, Any] | None = None
     for job_dir in candidates:
-        if state_payload is None:
-            state = load_state(job_dir)
-            state_payload = dict(state) if state is not None else None
-        if report_payload is None:
-            report_payload = load_report_json(job_dir)
-        if state_payload is not None and report_payload is not None:
+        state = load_state(job_dir)
+        state_payload = dict(state) if state is not None else None
+        if state_payload is not None:
             break
-    return state_payload, report_payload
+    return state_payload
 
 
 def load_job_artifact_context(
@@ -138,13 +131,13 @@ def load_job_artifact_context(
 
     primary_dir = candidates[0]
     record = record_for_job_dir(index_root, target, primary_dir)
-    state_payload, report_payload = first_state_report(candidates)
+    state_payload = first_state(candidates)
 
     return JobArtifactContext(
         record=record,
         job_dir=primary_dir,
         state=state_payload,
-        report=report_payload,
+        report=None,
     )
 
 

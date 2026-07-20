@@ -11,6 +11,8 @@ from typing import Any, TypedDict
 import yaml
 
 from orca_auto.core.config.files import (
+    YAML_CONFIG_LOAD_EXCEPTIONS,
+    load_shared_config_mapping,
     messenger_mapping_from_root,
     secure_config_file_permissions,
 )
@@ -371,16 +373,9 @@ def _print_init_summary(config_path: Path, values: _PromptedInitValues) -> None:
 
 def _load_existing_messenger_mapping(config_path: Path) -> dict[str, object] | None:
     try:
-        parsed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
+        _, parsed = load_shared_config_mapping(config_path)
+    except YAML_CONFIG_LOAD_EXCEPTIONS:
         print("warning: existing messenger settings could not be read and will be configured again")
-        return None
-    if parsed is None:
-        return None
-    if not isinstance(parsed, Mapping):
-        print(
-            "warning: existing config is not a mapping; messenger settings will be configured again"
-        )
         return None
     try:
         messenger = messenger_mapping_from_root(parsed)

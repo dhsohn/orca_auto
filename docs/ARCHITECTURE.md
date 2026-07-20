@@ -132,12 +132,12 @@ from execution by a durable, on-disk queue.
                                             └─────────────┬────────────┘
                                                           │ (worker polls)
             systemd supervises                            ▼
-  ┌────────────────────────┐            ┌──────────────────────────────┐
-  │ orca_auto-queue-worker  │ ─────────▶ │  Queue worker loop            │
-  │ orca_auto-bot           │            │  core/queue/worker/loop.py    │
-  │ orca_auto-runtime@.target│           └─────────────┬────────────────┘
-  └────────────────────────┘                          │ reserve admission slot
-                                                       │ spawn child by queue id
+  ┌──────────────────────────────┐      ┌──────────────────────────────┐
+  │ engine-workers@.target       │ ───▶ │  Queue worker loop            │
+  │ ├ queue-worker (ORCA)        │      │  core/queue/worker/loop.py    │
+  │ └ xtb-md-worker (standalone) │      └─────────────┬────────────────┘
+  │ runtime@.target + bot        │                    │ reserve admission slot
+  └──────────────────────────────┘                    │ spawn child by queue id
                                                        ▼
                                         ┌──────────────────────────────┐
                                         │  Worker child entrypoint       │
@@ -336,11 +336,10 @@ logic. Notable pieces:
   visible flat generation, and executes only that generation's bound input.
   Two different source paths with the same basename always fail closed, even
   when their contents match.
-- **Generation-local evidence with a root summary:** raw ORCA inputs and outputs
-  remain in their visible generation. Generation-local `job_state.json` and
-  `job_report.json` mirror the exact execution record, while the job-root copies
-  remain the latest public summary and `run.lock` continues to serialize use of
-  the reusable source directory. A fully closed submission can therefore be
+- **Generation-local evidence:** raw ORCA inputs, outputs, durable state, and
+  reports remain in their verified visible generation. The job root carries
+  only the live `job_state.json` until terminal cleanup; `run.lock` continues
+  to serialize use of the reusable source directory. A fully closed submission can therefore be
   followed by a new sibling generation without overwriting old raw files. An
   invisible filesystem owner token binds state/report publication, historical
   lookup, cleanup, and DFT discovery to the originally submitted directory
@@ -439,12 +438,13 @@ into internal xTB/CREST stages and then batch ORCA child jobs.
 
 ### Templates
 
-`flow/templates.py` defines the two workflow templates:
+`flow/templates.py` defines the three workflow templates:
 
 | Template id            | CLI shortcut       | Purpose                              |
 |------------------------|--------------------|--------------------------------------|
 | `reaction_ts_search`   | `ts_search`        | Reactant×product TS search           |
 | `conformer_screening`  | `conformer_search` | Conformer generation + screening     |
+| `scan_ts_search`       | `scan_ts`          | Relaxed-scan TS search               |
 
 A workflow is materialized from a `flow.yaml` manifest (`flow/manifest.py`) in
 the submitted directory: each run mints a timestamped generation workspace
@@ -643,26 +643,30 @@ constructors. Notable rules:
 
 ## 11. Process Supervision (systemd)
 
-Long-running services are managed through `systemd` only — they are not part of
-the public CLI. Units live under `systemd/`:
+Long-running processes are managed through `systemd`. The public service
+commands operate these units instead of launching unmanaged workers. Units live
+under `systemd/`:
 
 | Unit                                  | Role                                            |
 |---------------------------------------|-------------------------------------------------|
-| `orca_auto-queue-worker@.service`     | Supervises the ORCA worker only                 |
+| `orca_auto-engine-workers@.target`    | Starts the two independent default engine units |
+| `orca_auto-queue-worker@.service`     | Supervises the ORCA worker                      |
+| `orca_auto-xtb-md-worker@.service`    | Supervises the standalone xTB-MD worker         |
 | `orca_auto-workflow-worker@.service`  | Opt-in workflow + internal xTB/CREST workers    |
 | `orca_auto-bot@.service`              | Selected provider-neutral messenger bot        |
-| `orca_auto-runtime@.target`           | Starts both together                            |
+| `orca_auto-runtime@.target`           | Starts engine workers and the bot together      |
 
 `orca_auto systemd install --user <user> --repo <repo>` renders and enables the
-units. If the selected provider lacks interactive bot settings, only the queue worker is
-enabled; rerun after completing them to enable the full target. On WSL, `systemd`
+units. If the selected provider lacks interactive bot settings, the bot-free
+engine-worker target is enabled; rerun after completing them to enable the full target. On WSL, `systemd`
 must be enabled in `/etc/wsl.conf`.
 
-The selected supervisor starts each worker in its own process session and spaces
-initial starts by two seconds, preventing a worker-side group signal or startup
-reconciliation burst from affecting every sibling at once. A daemon worker that
-exits three times within five minutes opens the supervisor circuit instead of
-restarting forever. Each engine queue worker still reconciles durable state at
+The default ORCA and standalone xTB-MD workers use separate service supervisors,
+so either service can fail or restart without stopping the other. The opt-in
+workflow supervisor starts each of its workers in a separate process session and
+spaces initial starts by two seconds. A daemon worker that exits three times
+within five minutes opens its supervisor circuit instead of restarting forever.
+Each engine queue worker still reconciles durable state at
 startup, but idle full-state reconciliation is limited to once per minute while
 the light queue/status poll remains at its normal interval. The service retries failures
 after 30 seconds and permits at most three unit starts per five-minute window;
@@ -677,7 +681,7 @@ status-aware colorized table rendering (`terminal_table.py`, `activity_*.py`,
 `cli_style.py`). The public command surface:
 
 - `init` — create/update shared config
-- `scaffold <ts_search|conformer_search> <path>` — write workflow scaffolds
+- `scaffold <ts_search|conformer_search|scan_ts> <path>` — write workflow scaffolds
 - `run-dir <path>` — durable submission (ORCA, standalone xTB-MD, or workflow, auto-routed)
 - `smoke` — source-checkout developer smoke suite and retained review packet
 - `queue list` / `queue cancel` / `queue list clear` — inspect/maintain the queue

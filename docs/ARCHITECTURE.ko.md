@@ -132,12 +132,12 @@ import-linter 계약으로 보호합니다.
                                             └─────────────┬────────────┘
                                                           │ (워커 폴링)
             systemd 감독                                  ▼
-  ┌────────────────────────┐            ┌──────────────────────────────┐
-  │ orca_auto-queue-worker  │ ─────────▶ │  큐 워커 루프                 │
-  │ orca_auto-bot           │            │  core/queue/worker/loop.py    │
-  │ orca_auto-runtime@.target│           └─────────────┬────────────────┘
-  └────────────────────────┘                          │ 어드미션 슬롯 예약
-                                                       │ 큐 id로 자식 생성
+  ┌──────────────────────────────┐      ┌──────────────────────────────┐
+  │ engine-workers@.target       │ ───▶ │  큐 워커 루프                 │
+  │ ├ queue-worker (ORCA)        │      │  core/queue/worker/loop.py    │
+  │ └ xtb-md-worker (단독)       │      └─────────────┬────────────────┘
+  │ runtime@.target + bot        │                    │ 어드미션 슬롯 예약
+  └──────────────────────────────┘                    │ 큐 id로 자식 생성
                                                        ▼
                                         ┌──────────────────────────────┐
                                         │  워커 자식 엔트리포인트         │
@@ -319,10 +319,9 @@ rename 없이 그대로 보존합니다.
   `*.inp`를 선택하고 지원하는 파일 의존성과 함께 visible flat generation에
   snapshot한 뒤 그 generation의 바인딩 입력만 실행합니다. 서로 다른 두 소스 경로의
   basename이 같으면 콘텐츠가 같아도 항상 fail-closed합니다.
-- **generation 로컬 근거와 루트 요약:** raw ORCA 입력/출력은 visible generation에
-  보존합니다. Generation의 `job_state.json`과 `job_report.json`은 해당 실행 기록을
-  mirror하고, 작업 루트의 복사본은 최신 공개 요약으로 남으며 `run.lock`이 재사용하는
-  소스 디렉터리 사용을 직렬화합니다. 완전히 닫힌 제출 뒤에는 기존 raw 파일을
+- **generation 로컬 근거:** raw ORCA 입력/출력, durable state, 리포트는 검증된 visible
+  generation에 보존합니다. 작업 루트에는 terminal cleanup 전까지 live `job_state.json`만
+  함께 존재하며 `run.lock`이 재사용하는 소스 디렉터리 사용을 직렬화합니다. 완전히 닫힌 제출 뒤에는 기존 raw 파일을
   덮어쓰지 않고 새 sibling generation을 만들 수 있습니다. 보이지 않는 filesystem
   owner token은 상태/리포트 게시, 이력 조회, cleanup, DFT discovery를 재사용 가능한
   경로나 inode 번호만이 아니라 실제 제출 때 만든 디렉터리에 바인딩합니다.
@@ -409,12 +408,13 @@ ORCA가 다운스트림에 노출하는 필드("계약 동결")는
 
 ### 템플릿
 
-`flow/templates.py`는 두 가지 워크플로우 템플릿을 정의합니다:
+`flow/templates.py`는 세 가지 워크플로우 템플릿을 정의합니다:
 
 | 템플릿 id              | CLI 단축어         | 목적                                 |
 |------------------------|--------------------|--------------------------------------|
 | `reaction_ts_search`   | `ts_search`        | 반응물×생성물 TS 탐색                |
 | `conformer_screening`  | `conformer_search` | 컨포머 생성 + 스크리닝               |
+| `scan_ts_search`       | `scan_ts`          | relaxed scan 기반 TS 탐색            |
 
 워크플로우는 제출된 디렉터리의 `flow.yaml` 매니페스트(`flow/manifest.py`)로부터
 구체화(materialize)됩니다. 실행마다 스캐폴드 안에 타임스탬프 generation
@@ -600,25 +600,27 @@ token, 채널 ID, operator allowlist가 필요하며, bot token+기본 채널이
 
 ## 11. 프로세스 감독 (systemd)
 
-장기 실행 서비스는 오직 `systemd`로만 관리됩니다 — 공개 CLI의 일부가 아닙니다.
-유닛은 `systemd/` 아래에 있습니다:
+장기 실행 프로세스는 `systemd`로 관리됩니다. 공개 service 명령은 관리되지 않는 워커를
+직접 띄우지 않고 이 unit을 조작합니다. unit은 `systemd/` 아래에 있습니다:
 
 | 유닛                                  | 역할                                            |
 |---------------------------------------|-------------------------------------------------|
-| `orca_auto-queue-worker@.service`     | ORCA 워커만 감독                               |
+| `orca_auto-engine-workers@.target`    | 독립된 기본 엔진 unit 두 개 시작               |
+| `orca_auto-queue-worker@.service`     | ORCA 워커 감독                                  |
+| `orca_auto-xtb-md-worker@.service`    | standalone xTB-MD 워커 감독                    |
 | `orca_auto-workflow-worker@.service`  | opt-in workflow + 내부 xTB/CREST 워커           |
 | `orca_auto-bot@.service`              | 선택된 provider-neutral messenger 봇            |
-| `orca_auto-runtime@.target`           | 둘을 함께 시작                                  |
+| `orca_auto-runtime@.target`           | 엔진 워커와 bot을 함께 시작                    |
 
 `orca_auto systemd install --user <user> --repo <repo>`가 유닛을 렌더링하고
-활성화합니다. 선택된 provider의 인터랙티브 봇 설정이 불완전하면 큐 워커만
-활성화되며, 설정 후 다시 실행하면 전체 타깃이 활성화됩니다. WSL에서는
+활성화합니다. 선택된 provider의 인터랙티브 봇 설정이 불완전하면 bot 없는
+engine-worker 타깃이 활성화되며, 설정 후 다시 실행하면 전체 타깃이 활성화됩니다. WSL에서는
 `/etc/wsl.conf`에서 `systemd`가 활성화되어 있어야 합니다.
 
-선택한 감독자는 각 워커를 별도 프로세스 세션에서 시작하고 최초 시작을 2초씩
-분산합니다. 따라서 워커 쪽 프로세스 그룹 신호나 시작 시 복구 부하가 모든 형제
-워커에 한꺼번에 전파되지 않습니다. 데몬 워커가 5분 안에 세 번 종료되면 무한
-재시작 대신 감독자 회로가 열립니다. 각 엔진 큐 워커는 시작 시 내구 상태를 조정하지만,
+기본 ORCA와 standalone xTB-MD 워커는 서로 다른 서비스 감독자를 사용하므로 한쪽의
+실패나 재시작이 다른 쪽을 중단하지 않습니다. opt-in workflow 감독자는 각 워커를 별도
+프로세스 세션에서 시작하고 최초 시작을 2초씩 분산합니다. 데몬 워커가 5분 안에 세 번
+종료되면 무한 재시작 대신 해당 감독자 회로가 열립니다. 각 엔진 큐 워커는 시작 시 내구 상태를 조정하지만,
 유휴 상태의 전체 상태 조정은 1분에 한 번으로 제한하고 가벼운 큐/상태 poll은 기존
 주기를 유지합니다. 서비스는 실패 후 30초 뒤 재시도하며 5분 동안 unit 시작을 최대
 세 번만 허용하고, 감독자가 정상 종료되면 재시작하지 않습니다.
@@ -632,7 +634,7 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 갖춥니다. 공개 명령 표면:
 
 - `init` — 공유 설정 생성/갱신
-- `scaffold <ts_search|conformer_search> <path>` — 워크플로우 스캐폴드 작성
+- `scaffold <ts_search|conformer_search|scan_ts> <path>` — 워크플로우 스캐폴드 작성
 - `run-dir <path>` — 내구성 제출 (ORCA, 단독 xTB-MD 또는 워크플로우, 자동 라우팅)
 - `smoke` — source-checkout 개발자 스모크 스위트와 보존형 review packet
 - `queue list` / `queue cancel` / `queue list clear` — 큐 점검/유지보수

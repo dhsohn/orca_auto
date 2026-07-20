@@ -12,11 +12,10 @@ from .files import (
     default_config_path_from_repo_root,
     default_shared_admission_root,
     engine_config_mapping,
-    load_required_yaml_mapping,
+    load_required_shared_config_mapping,
     mapping_section,
     messenger_mapping_from_root,
     runs_root_from_mapping,
-    validate_shared_config_sections,
     validated_absolute_linux_path_text,
     validated_runs_root_text,
 )
@@ -193,7 +192,7 @@ def resource_actual_from_request(resource_request: dict[str, int]) -> dict[str, 
 
 
 def _load_config_mapping(path: Path) -> dict[str, Any]:
-    _, raw = load_required_yaml_mapping(
+    _, raw = load_required_shared_config_mapping(
         path,
         missing_error=lambda missing: ValueError(
             "Config file not found: "
@@ -310,7 +309,6 @@ def load_workflow_engine_config(
 ) -> WorkflowEngineAppConfig:
     path = Path(config_path or default_config_path_fn()).expanduser().resolve()
     raw = _load_config_mapping(path)
-    validate_shared_config_sections(raw)
 
     scheduler_raw = mapping_section(raw, "scheduler")
     workflow_raw = mapping_section(raw, "workflow")
@@ -356,7 +354,6 @@ def load_xtb_config(config_path: str | None = None) -> WorkflowEngineAppConfig:
 def load_xtb_md_config(config_path: str | None = None) -> WorkflowEngineAppConfig:
     path = Path(config_path or default_shared_config_path()).expanduser().resolve()
     raw = _load_config_mapping(path)
-    validate_shared_config_sections(raw)
 
     scheduler_raw = mapping_section(raw, "scheduler")
     workflow_raw = mapping_section(raw, "workflow")

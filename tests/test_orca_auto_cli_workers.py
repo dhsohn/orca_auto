@@ -117,6 +117,40 @@ def test_build_worker_specs_defaults_to_orca_only(monkeypatch: pytest.MonkeyPatc
     assert specs[0].env == {}
 
 
+def test_build_worker_specs_runs_each_selected_default_engine_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        worker_specs, "_discover_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
+    )
+
+    def fake_worker_module_command(
+        *,
+        config_path: str,
+        repo_root: str | None,
+        module_name: str,
+        tail_argv: list[str],
+    ) -> tuple[list[str], str | None, dict[str, str] | None]:
+        del repo_root
+        return (["python", "-m", module_name, "--config", config_path, *tail_argv], None, {})
+
+    monkeypatch.setattr(worker_specs, "worker_module_command", fake_worker_module_command)
+
+    specs = worker_specs._build_worker_specs(
+        SimpleNamespace(
+            app=["orca", "xtb_md", "orca"],
+            workflow_root=None,
+            orca_auto_config=None,
+        )
+    )
+
+    assert [spec.app for spec in specs] == ["orca", "xtb_md"]
+    assert [spec.argv[-2:] for spec in specs] == [
+        ("--engine", "orca"),
+        ("--engine", "xtb_md"),
+    ]
+
+
 def test_build_worker_specs_does_not_infer_workflow_workers_from_configured_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

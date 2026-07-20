@@ -74,14 +74,3 @@ def _collect_stage_block(
             warnings=(*block.warnings, warning),
         )
     return replace(block, name=_stage_label(stage)), ""
-
-
-def _request_parameters(payload: Mapping[str, Any]) -> dict[str, Any]:
-    metadata = payload.get("metadata")
-    if not isinstance(metadata, dict):
-        return {}
-    request = metadata.get("request")
-    if not isinstance(request, dict):
-        return {}
-    parameters = request.get("parameters")
-    return parameters if isinstance(parameters, dict) else {}
