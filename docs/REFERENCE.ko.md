@@ -113,7 +113,7 @@ bash scripts/bootstrap_wsl.sh
 - `queue cancel`
 - `run-dir <path>`
 - `init`
-- `scaffold <ts_search|conformer_search>`
+- `scaffold <ts_search|conformer_search|scan_ts>`
 - `scan-notify`
 - `smoke`
 

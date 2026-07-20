@@ -109,6 +109,33 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
         self.assertEqual(result.input_identity["path"], str(inp))
         self.assertEqual(result.input_identity["size_bytes"], len(b"! Opt\n"))
 
+    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
+    def test_launch_pins_thread_env_to_one(self, mock_popen: MagicMock) -> None:
+        # ORCA parallelizes across %pal MPI ranks, so the launch env pins the
+        # OpenMP/BLAS thread count to 1 (each rank single-threaded), matching the
+        # discipline the other engines apply and preventing N^2 oversubscription.
+        mock_proc = MagicMock()
+        mock_proc.wait.return_value = 0
+        mock_popen.return_value = mock_proc
+
+        runner = OrcaRunner("/opt/orca/orca")
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "test.inp"
+            inp.write_text("! Opt\n", encoding="utf-8")
+            runner.run(inp)
+
+        _, kwargs = mock_popen.call_args
+        env = kwargs["env"]
+        for var in (
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+        ):
+            self.assertEqual(env[var], "1")
+        # The rest of the inherited environment is preserved, not replaced.
+        self.assertIn("PATH", env)
+
     def test_ram_scratch_publishes_results_and_keeps_process_record_durable(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

@@ -383,8 +383,12 @@ def _publish_manifest_payload(
     if not manifest.is_file():
         emit_error(f"systemd transaction manifest was not published: {manifest}")
         return 1
-    if hasattr(os, "sync"):
-        os.sync()
+    if plan.use_sudo:
+        # The sudo install/mv left the manifest bytes in cache; the non-sudo path
+        # already fsynced the temp file before the rename. Flush just this file so
+        # recovery can read the published manifest back.
+        with manifest.open("rb") as handle:
+            os.fsync(handle.fileno())
     return 0
 
 
@@ -1128,19 +1132,24 @@ def _commit_transaction(
     transaction_dir = _transaction_dir(plan)
     manifest = transaction_dir / _TRANSACTION_MANIFEST_NAME
     committed = transaction_dir / "committed.json"
-    # Make unit renames and systemctl's enable/disable symlinks durable before
-    # publishing the committed marker. Otherwise a power loss could preserve
-    # the marker while losing part of the installation it claims is complete.
-    try:
-        if hasattr(os, "sync"):
-            os.sync()
-    except OSError as exc:
-        emit_error(f"failed to sync systemd transaction before commit: {exc}")
-        return _CommitResult(published=False, cleaned=False)
+    # Publish the commit marker by renaming manifest.json -> committed.json.
+    # Recovery keys only on manifest.json's presence (committed.json is never
+    # read for completeness), so only the rename's dirent must be durable, which
+    # a targeted directory fsync covers -- not a whole-filesystem sync. On the
+    # ext4 deployment target the ordered journal flushes the pending unit writes
+    # and the systemctl enable/disable symlinks (created by plan.commands after
+    # the prepare-phase fsyncs) at this same commit fsync; on a filesystem
+    # without that shared-journal ordering a torn install stays bounded and
+    # recoverable by re-running this manual installer.
     if plan.use_sudo:
         rc = _run_command(("mv", "--", str(manifest), str(committed)), use_sudo=True, run=run)
         if rc != 0:
             return _CommitResult(published=False, cleaned=False)
+        try:
+            _fsync_directories((transaction_dir,))
+        except OSError as exc:
+            emit_error(f"failed to make systemd commit durable: {exc}")
+            return _CommitResult(published=True, cleaned=False)
     else:
         published = False
         try:
@@ -1154,12 +1163,6 @@ def _commit_transaction(
         except OSError as exc:
             emit_error(f"failed to commit systemd transaction: {exc}")
             return _CommitResult(published=published, cleaned=False)
-    try:
-        if hasattr(os, "sync"):
-            os.sync()
-    except OSError as exc:
-        emit_error(f"failed to sync published systemd transaction: {exc}")
-        return _CommitResult(published=True, cleaned=False)
     return _CommitResult(
         published=True,
         cleaned=_remove_transaction(plan, run=run),

@@ -184,7 +184,7 @@ def test_sp_block_has_no_nimag_and_no_warnings(tmp_path: Path) -> None:
 
 def test_non_stationary_jobs_get_no_block(tmp_path: Path) -> None:
     # Path/dynamics endpoints are not stationary points and must not fall
-    # through to the "sp" classification (Codex #48 P2).
+    # through to the "sp" classification.
     cases = (
         ("scan_job", _SCAN_INP),
         ("neb_job", "! NEB B3LYP def2-SVP\n* xyz 0 1\nC 0 0 0\n*\n"),
@@ -240,7 +240,7 @@ Step     E(Eh)        dE(kcal/mol)  max(|G|)  RMS(G)
 
 def test_scan_functional_optimization_is_a_min_block(tmp_path: Path) -> None:
     # "SCAN" in a route line is the meta-GGA density functional, not a scan
-    # job: an optimization with it must keep its SI block (Codex #48 P2).
+    # job: an optimization with it must keep its SI block.
     reaction_dir, state = _job_dir(
         tmp_path,
         "scan_functional_job",
@@ -309,8 +309,7 @@ def test_write_si_block_removes_stale_file_for_blockless_job(tmp_path: Path) -> 
 
 def test_ts_block_parses_frequencies_from_utf16_output(tmp_path: Path) -> None:
     # ORCA can emit UTF-16 output; the frequency parser must decode it like the
-    # main parser, or an opt+freq TS block loses Nimag and is misclassified
-    # (Codex #48 P2).
+    # main parser, or an opt+freq TS block loses Nimag and is misclassified.
     reaction_dir = tmp_path / "utf16_ts"
     reaction_dir.mkdir()
     inp = reaction_dir / "job.inp"

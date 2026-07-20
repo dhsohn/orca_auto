@@ -17,6 +17,7 @@ from orca_auto.core.engine_process import (
     atomic_write_confined_bytes,
     open_confined_log,
     require_confined_regular_file,
+    thread_limited_env,
 )
 from orca_auto.core.engine_runner import confined_output_identity, executable_identity
 from orca_auto.core.engine_scratch import (
@@ -452,6 +453,16 @@ class OrcaRunner:
                             "stderr": subprocess.STDOUT,
                             "text": True,
                             "start_new_session": True,
+                            # ORCA parallelizes across %pal MPI ranks, not OpenMP,
+                            # so pin the thread env to 1: each rank stays
+                            # single-threaded and N ranks do not each spawn N
+                            # BLAS/OMP threads (N^2 oversubscription). The %pal
+                            # count in the input keeps ORCA's real parallelism.
+                            # xTB/CREST/xTB-MD already pin threads through the
+                            # shared launcher; ORCA's bespoke launch-gate path
+                            # otherwise inherits the worker env unpinned. The env
+                            # flows through the gate's execve into ORCA.
+                            "env": thread_limited_env(dict(os.environ), 1),
                         }
                         inherited_fds = [launch_gate_fd, executable_fd]
                         if working_directory_fd is not None:

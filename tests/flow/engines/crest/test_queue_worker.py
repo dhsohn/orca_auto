@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 
-from orca_auto.core.artifacts import JOB_REPORT_JSON_FILE, JOB_REPORT_MD_FILE
+from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE, RUN_REPORT_MD_FILE
 from orca_auto.core.config import CommonResourceConfig, CommonRuntimeConfig
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 from orca_auto.core.engine_runner import engine_runtime_identity
@@ -269,8 +269,8 @@ def test_terminal_adoption_finalizes_racing_cancel_consistently(
     persisted_state = load_state(job.job_dir)
     assert persisted_state is not None
     assert persisted_state["status"]["state"] == "cancelled"
-    assert not (job.job_dir / JOB_REPORT_JSON_FILE).exists()
-    assert not (job.job_dir / JOB_REPORT_MD_FILE).exists()
+    assert not (job.job_dir / RUN_REPORT_JSON_FILE).exists()
+    assert not (job.job_dir / RUN_REPORT_MD_FILE).exists()
 
 
 def test_worker_rejects_nonterminal_exact_state(
@@ -593,8 +593,8 @@ def test_process_one_completed_updates_queue_artifacts_index_without_organizing(
     assert _engine_payload(state_payload)["retained_conformer_paths"] == list(
         completed_result.retained_conformer_paths
     )
-    assert not (job.job_dir / JOB_REPORT_JSON_FILE).exists()
-    assert not (job.job_dir / JOB_REPORT_MD_FILE).exists()
+    assert not (job.job_dir / RUN_REPORT_JSON_FILE).exists()
+    assert not (job.job_dir / RUN_REPORT_MD_FILE).exists()
 
     records = list_job_locations(queue_env.allowed_root)
     assert len(records) == 1
@@ -662,8 +662,8 @@ def test_process_one_runner_failure_marks_failed_and_writes_failure_artifacts(
     assert _artifacts(state_payload)["stderr_log"] == str(
         (job.job_dir / "crest.stderr.log").resolve()
     )
-    assert not (job.job_dir / JOB_REPORT_JSON_FILE).exists()
-    assert not (job.job_dir / JOB_REPORT_MD_FILE).exists()
+    assert not (job.job_dir / RUN_REPORT_JSON_FILE).exists()
+    assert not (job.job_dir / RUN_REPORT_MD_FILE).exists()
 
     record = get_job_location(queue_env.allowed_root, "job-failed")
     assert record is not None
@@ -746,8 +746,8 @@ def test_process_one_cancel_requested_terminates_and_marks_cancelled(
     assert _status(state_payload)["state"] == "cancelled"
     assert _status(state_payload)["reason"] == "cancel_requested"
     assert _status(state_payload)["exit_code"] == 143
-    assert not (job.job_dir / JOB_REPORT_JSON_FILE).exists()
-    assert not (job.job_dir / JOB_REPORT_MD_FILE).exists()
+    assert not (job.job_dir / RUN_REPORT_JSON_FILE).exists()
+    assert not (job.job_dir / RUN_REPORT_MD_FILE).exists()
 
     record = get_job_location(queue_env.allowed_root, "job-cancelled")
     assert record is not None
@@ -974,5 +974,5 @@ def test_terminal_reconcile_repairs_cancelled_index_from_state_only(
     assert state is not None
     assert state["status"]["state"] == "cancelled"
     assert upserts[-1]["status"] == "cancelled"
-    assert not (job.job_dir / JOB_REPORT_JSON_FILE).exists()
-    assert not (job.job_dir / JOB_REPORT_MD_FILE).exists()
+    assert not (job.job_dir / RUN_REPORT_JSON_FILE).exists()
+    assert not (job.job_dir / RUN_REPORT_MD_FILE).exists()

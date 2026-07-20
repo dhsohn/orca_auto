@@ -385,7 +385,7 @@ def test_single_point_pairs_by_identical_geometry(tmp_path: Path) -> None:
     assert "composite Gibbs energies combine E(SP)" in rendered
     assert "G is the composite" in rendered
     # The composite energy must carry the SP level that produced it, or the SI
-    # documents an unreproducible number (Codex #48 P2).
+    # documents an unreproducible number.
     assert "wB97M-V/def2-TZVPP" in rendered
     assert "! wB97M-V def2-TZVPP" in rendered
 
@@ -466,7 +466,7 @@ def test_workflow_si_never_renders_nonfinite_composite_energy(tmp_path: Path) ->
 def test_composite_table_ranks_by_single_point_energy(tmp_path: Path) -> None:
     # SP and opt-level orderings can disagree; with the composite convention
     # active, E, ΔE, and the ranking must follow E(SP) — otherwise the table
-    # publishes opt-level numbers next to SP-derived G values (Codex #48 P2).
+    # publishes opt-level numbers next to SP-derived G values.
     min_a = _stage_dir(
         tmp_path,
         "min_a",
@@ -511,7 +511,7 @@ def test_composite_table_ranks_by_single_point_energy(tmp_path: Path) -> None:
 def test_opt_only_refinements_use_sp_energies_without_composite(tmp_path: Path) -> None:
     # Opt-only structures (no Freq → no G−E(el)) with SP refinements: E/ΔE and
     # the ranking must still follow E(SP), and neither the table note nor the
-    # methods text may claim composite Gibbs energies (Codex #48 P2).
+    # methods text may claim composite Gibbs energies.
     min_a = _stage_dir(
         tmp_path, "min_a", route="r2SCAN-3c Opt TightSCF", energy=-100.0, coords=_COORDS_A
     )
@@ -552,8 +552,7 @@ def test_opt_only_refinements_use_sp_energies_without_composite(tmp_path: Path) 
 
 def test_opt_only_workflow_does_not_claim_frequency_calculations(tmp_path: Path) -> None:
     # The default conformer-screening route is Opt-only (no Freq): the methods
-    # paragraph must not assert harmonic frequency calculations that never ran
-    # (Codex #48 P2).
+    # paragraph must not assert harmonic frequency calculations that never ran.
     stage_dir = _stage_dir(
         tmp_path,
         "opt_only",

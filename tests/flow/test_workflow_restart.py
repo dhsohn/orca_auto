@@ -1097,7 +1097,7 @@ def test_restart_failed_workflow_reloads_xtb_orca_and_endpoint_manifest_settings
     xtb_overrides = {"gfn": 2, "xcontrol_file": xcontrol_path}
     # Rematerialized stages must carry the electronic state: a restart that
     # replaced the stage overrides with the raw flow.yaml xtb section would
-    # rerun the charged doublet as a neutral singlet (Codex P2 on #55).
+    # rerun the charged doublet as a neutral singlet.
     xtb_stage_overrides = {"charge": -1, "uhf": 1, **xtb_overrides}
 
     assert result["restarted_count"] == 2
@@ -1488,8 +1488,7 @@ def test_restart_applies_electronic_state_change_without_engine_sections(tmp_pat
     # layout needs no crest:/xtb: section) must still reach the engine
     # stages: without the electronic_state gate the presence flags stay
     # False, the old overrides survive, the job dir is not rebuilt, and the
-    # restarted stages rerun the previous neutral/singlet manifest (Codex P2
-    # follow-up on #55).
+    # restarted stages rerun the previous neutral/singlet manifest.
     root = tmp_path / "workflow_runs"
     workspace = root / "wf_charge_only_restart"
     (workspace / "old_crest").mkdir(parents=True)
@@ -1590,7 +1589,7 @@ def test_restart_electronic_state_when_workflow_json_has_no_request_block(
 ) -> None:
     # An older/hand-edited workflow.json may lack metadata.request.parameters.
     # A charge-only flow.yaml must still create the params and inject the
-    # electronic state into rematerialized stages (Codex P2 on #55): otherwise
+    # electronic state into rematerialized stages: otherwise
     # the missing params default to charge 0 / uhf 0 and strip it.
     root = tmp_path / "workflow_runs"
     workspace = root / "wf_no_request_block"

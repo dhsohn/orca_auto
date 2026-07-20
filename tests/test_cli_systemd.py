@@ -2130,7 +2130,7 @@ def test_enabled_runtime_boot_state_removes_persistent_selection_before_restore(
     ]
 
 
-def test_commit_syncs_installation_before_publishing_committed_marker(
+def test_commit_publishes_committed_marker_then_cleans_up(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2153,7 +2153,6 @@ def test_commit_syncs_installation_before_publishing_committed_marker(
         events.append("cleanup")
         return True
 
-    monkeypatch.setattr(cli_systemd_apply.os, "sync", lambda: events.append("sync"))
     monkeypatch.setattr(cli_systemd_apply.os, "replace", recording_replace)
     monkeypatch.setattr(cli_systemd_apply, "_remove_transaction", recording_cleanup)
 
@@ -2162,7 +2161,7 @@ def test_commit_syncs_installation_before_publishing_committed_marker(
         run=lambda argv, check=False: subprocess.CompletedProcess(argv, 0),
     )
     assert result == cli_systemd_apply._CommitResult(published=True, cleaned=True)
-    assert events == ["sync", "publish", "sync", "cleanup"]
+    assert events == ["publish", "cleanup"]
 
 
 def test_unpublished_commit_failure_rolls_back_immediately(
@@ -2183,7 +2182,6 @@ def test_unpublished_commit_failure_rolls_back_immediately(
         real_replace(source, destination)
 
     monkeypatch.setattr(cli_systemd_apply.os, "replace", fail_commit_publish)
-    monkeypatch.setattr(cli_systemd_apply.os, "sync", lambda: None)
 
     assert (
         cli_systemd_apply.apply_systemd_install_plan(
@@ -2203,7 +2201,6 @@ def test_committed_cleanup_failure_keeps_new_state_and_returns_nonzero(
     plan = _single_unit_plan(tmp_path)
     plan.unit_dir.mkdir()
     plan.units[0].destination.write_text("original unit\n", encoding="utf-8")
-    monkeypatch.setattr(cli_systemd_apply.os, "sync", lambda: None)
     monkeypatch.setattr(cli_systemd_apply, "_remove_transaction", lambda plan, run: False)
 
     assert cli_systemd_apply.apply_systemd_install_plan(plan) == 1

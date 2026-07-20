@@ -243,7 +243,13 @@ orca_auto bot run              # 포그라운드 Telegram/Discord gateway
 (`FORCE_COLOR`는 명시적으로 ANSI를 추가할 수 있음), `--json`은 ANSI 없는 machine-readable
 JSON을 유지하고 메신저 출력은 plain을 유지합니다. 실제 터미널에서
 `NO_COLOR`·`--no-color`는 ANSI 색상만 제거합니다. 선택된 봇은 동일한 앱 표면(Telegram `/list`,
-Discord `!list`, 동일한 cancel/help 명령)을 provider-native 버튼으로 제공합니다. 표 컬럼,
+Discord `!list`, 동일한 cancel/help 명령)을 provider-native 버튼으로 제공합니다. Discord는
+선택적으로 `!run`에 첨부된 압축 run-dir(`.zip`/`.tar.gz`)을 받을 수 있습니다. 아카이브는
+`runs_root` 아래로 안전하게 추출되어 명시적 Confirm 버튼을 누른 뒤 큐에 등록됩니다. 업로드
+예약·확인·커밋 영수증은 durable하고 멱등하며, 불확실한 큐 결과는 재시도하거나 삭제하지 않고
+조정을 위해 보존됩니다. 이 기능은 기본적으로 비활성이며 허용 목록에 등록된 운영자에게만 열립니다 —
+[config/orca_auto.yaml.example](config/orca_auto.yaml.example)의 `messenger.discord.uploads`
+블록을 참고하세요. 표 컬럼,
 `--json`/`--no-color` 플래그, 색상·종료 동작, messenger 봇 등 전체 명령
 레퍼런스는
 [docs/REFERENCE.ko.md](docs/REFERENCE.ko.md) §7을 참고하세요.
