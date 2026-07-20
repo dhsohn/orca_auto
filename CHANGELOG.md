@@ -8,6 +8,8 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-21
+
 ### Removed
 
 - Removed the standalone xTB-MD engine (the deliberately narrow public exception
@@ -476,8 +478,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - A fully closed standalone ORCA job directory can be submitted again without
   replacing prior results. Each submission receives a new sibling generation,
   while an active row or incomplete terminal replay still blocks a successor.
-  `job_state.json` and `job_report.json` remain the latest public summaries at
-  the job root and are mirrored into the generation they describe.
+  The live `job_state.json` remains the public summary at the job root, while
+  `job_report.json` is published inside the execution generation it describes
+  (see the report-placement change above).
 - Visible generations retain an invisible filesystem owner token. State/report
   mirroring, historical lookups, cleanup, and DFT discovery verify that token so
   a deleted and recreated same-name directory is not mistaken for the submitted
