@@ -2148,13 +2148,14 @@ def test_commit_syncs_installation_before_publishing_committed_marker(
             events.append("publish")
         real_replace(source, destination)
 
+    def recording_cleanup(plan: systemd_plan.SystemdInstallPlan, run: Any) -> bool:
+        del plan, run
+        events.append("cleanup")
+        return True
+
     monkeypatch.setattr(cli_systemd_apply.os, "sync", lambda: events.append("sync"))
     monkeypatch.setattr(cli_systemd_apply.os, "replace", recording_replace)
-    monkeypatch.setattr(
-        cli_systemd_apply,
-        "_remove_transaction",
-        lambda plan, run: events.append("cleanup") or True,
-    )
+    monkeypatch.setattr(cli_systemd_apply, "_remove_transaction", recording_cleanup)
 
     result = cli_systemd_apply._commit_transaction(
         plan,
