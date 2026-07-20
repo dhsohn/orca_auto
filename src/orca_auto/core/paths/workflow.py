@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from orca_auto.core.engine_catalog import engine_catalog, find_engine_catalog_entry
+from orca_auto.core.engine_catalog import engine_catalog
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.utils import coerce_list, coerce_mapping, normalize_text
 
@@ -162,9 +162,6 @@ def workflow_workspace_internal_engine_paths(
     engine_text = normalize_text(engine).lower()
     if not engine_text:
         raise ValueError("workflow engine is required")
-    catalog_entry = find_engine_catalog_entry(engine_text)
-    if catalog_entry is not None and catalog_entry.workflow_stage_role == "none":
-        raise ValueError(f"engine does not support workflow stages: {engine_text}")
     workspace = Path(workspace_dir).expanduser().resolve()
     stage_name = (
         normalize_text(stage_dirname)
@@ -180,9 +177,6 @@ def workflow_workspace_internal_engine_paths(
 def workflow_stage_dirnames_for_engine(engine: str) -> tuple[str, ...]:
     engine_text = normalize_text(engine).lower()
     if not engine_text:
-        return ()
-    catalog_entry = find_engine_catalog_entry(engine_text)
-    if catalog_entry is not None and catalog_entry.workflow_stage_role == "none":
         return ()
     primary = WORKFLOW_STAGE_DIRNAMES.get(engine_text) or f"stage_{engine_text}"
     aliases = WORKFLOW_STAGE_DIRNAME_ALIASES.get(engine_text, ())

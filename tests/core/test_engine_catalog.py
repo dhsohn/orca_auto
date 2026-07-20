@@ -168,25 +168,18 @@ def test_every_catalog_engine_has_registry_supervision_admission_and_stage_metad
         assert captured[0]["app_name"] == entry.app_id
         assert ("engine_process_state" in captured[0]) is entry.managed_admission
 
-        if entry.workflow_stage_role == "none":
-            assert entry.engine_id not in WORKFLOW_STAGE_DIRNAMES
-            assert workflow_stage_dirnames_for_engine(entry.engine_id) == ()
-            with pytest.raises(ValueError, match="does not support workflow stages"):
-                workflow_workspace_internal_engine_paths(tmp_path, engine=entry.engine_id)
-        else:
-            assert WORKFLOW_STAGE_DIRNAMES[entry.engine_id] == entry.workflow_stage_dirname
-            assert (
-                WORKFLOW_STAGE_DIRNAME_ALIASES.get(entry.engine_id, ())
-                == entry.workflow_stage_aliases
-            )
-            assert workflow_stage_dirnames_for_engine(entry.engine_id) == (
-                entry.workflow_stage_dirname,
-                *entry.workflow_stage_aliases,
-            )
-            assert workflow_workspace_internal_engine_paths(
-                tmp_path,
-                engine=entry.engine_id,
-            )["allowed_root"] == tmp_path / str(entry.workflow_stage_dirname)
+        assert WORKFLOW_STAGE_DIRNAMES[entry.engine_id] == entry.workflow_stage_dirname
+        assert (
+            WORKFLOW_STAGE_DIRNAME_ALIASES.get(entry.engine_id, ()) == entry.workflow_stage_aliases
+        )
+        assert workflow_stage_dirnames_for_engine(entry.engine_id) == (
+            entry.workflow_stage_dirname,
+            *entry.workflow_stage_aliases,
+        )
+        assert workflow_workspace_internal_engine_paths(
+            tmp_path,
+            engine=entry.engine_id,
+        )["allowed_root"] == tmp_path / str(entry.workflow_stage_dirname)
 
 
 def test_orca_worker_reservation_uses_catalog_identity(
