@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Final, Literal
 
 ActivityRole = Literal["engine-queue", "orca-run"]
-WorkflowStageRole = Literal["none", "shared-root", "workflow-stage"]
+WorkflowStageRole = Literal["shared-root", "workflow-stage"]
 SupervisionRole = Literal["default", "with-workflow"]
 
 

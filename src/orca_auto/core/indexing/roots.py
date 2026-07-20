@@ -5,7 +5,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.engine_catalog import find_engine_catalog_entry
 from orca_auto.core.paths.workflow import (
     iter_workflow_runtime_workspaces,
     workflow_stage_dirnames_for_engine,
@@ -38,10 +37,6 @@ def append_unique_root(roots: list[Path], candidate: Path) -> None:
 def runtime_roots_for_cfg(cfg: Any, *, engine: str) -> tuple[Path, ...]:
     roots: list[Path] = []
     append_unique_root(roots, index_root_for_cfg(cfg))
-
-    catalog_entry = find_engine_catalog_entry(engine)
-    if catalog_entry is not None and catalog_entry.workflow_stage_role == "none":
-        return tuple(roots)
 
     workflow_root = normalize_text(getattr(cfg, "workflow_root", ""))
     if not workflow_root:
