@@ -7,6 +7,7 @@ from typing import Any
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.utils import mapping_or_empty, normalize_text
 from orca_auto.flow.contracts import CrestDownstreamPolicy
+from orca_auto.flow.contracts.workflow import workflow_request_parameters
 from orca_auto.flow.orchestration.charge_spin import strict_int
 from orca_auto.flow.orchestration.scan_orca_materialization import (
     _all_terminal_none_verified,
@@ -20,7 +21,6 @@ from orca_auto.flow.orchestration.stage_runtime.crest import completed_crest_sta
 from orca_auto.flow.orchestration.stage_views import (
     _engine_stage_views,
     _engine_stages,
-    _request_params,
 )
 from orca_auto.flow.orchestration.support import load_config_root_impl, required_stage_budget
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
@@ -93,7 +93,7 @@ def _crest_orca_stage_plan(
         engine="orca",
         stage_dirname=_CONFORMER_ORCA_STAGE_DIRNAME,
     )
-    params = _request_params(payload)
+    params = workflow_request_parameters(payload)
     candidates = services.engines.select_crest_downstream_inputs(
         crest_contract,
         policy=CrestDownstreamPolicy.build(

@@ -309,45 +309,6 @@ def enqueue(
     return entry
 
 
-def _publication_identity_matches(
-    entry: QueueEntry,
-    *,
-    reaction_dir: str,
-    task_id: str,
-    task_kind: str,
-    priority: int,
-    force: bool,
-    token: str,
-    sync_state: str,
-    owner_pid: int,
-    owner_start: str,
-) -> bool:
-    metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
-    try:
-        current_owner_pid = int(metadata.get(QUEUE_RECORD_SYNC_OWNER_PID_KEY, 0) or 0)
-        current_priority = int(entry.priority)
-    except (TypeError, ValueError):
-        return False
-    return bool(
-        is_orca_queue_entry(entry)
-        and entry.status == QueueStatus.PENDING
-        and not entry.cancel_requested
-        and normalize_text(entry.app_name) == QUEUE_APP_NAME
-        and normalize_text(entry.task_id) == task_id
-        and normalize_text(entry.task_kind) == task_kind
-        and normalize_text(entry.engine) == QUEUE_ENGINE
-        and current_priority == priority
-        and queue_entry_reaction_dir(entry) == reaction_dir
-        and queue_entry_force(entry) is force
-        and normalize_text(metadata.get(QUEUE_RECORD_SYNC_KEY)).lower() == sync_state
-        and normalize_text(metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY)) == token
-        and current_owner_pid == owner_pid
-        and normalize_text(metadata.get(QUEUE_RECORD_SYNC_OWNER_START_KEY)) == owner_start
-        and terminal_replay_marker_kind(entry) is TerminalReplayMarkerKind.ABSENT
-        and not terminal_replay_is_fence_only(entry)
-    )
-
-
 def queue_entries_same_publication_generation(current: QueueEntry, expected: QueueEntry) -> bool:
     return bool(
         current.queue_id == expected.queue_id

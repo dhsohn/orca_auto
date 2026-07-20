@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from orca_auto.core.engine_catalog import find_engine_catalog_entry
 
 
 def _entry_text(entry: Any, field: str) -> str:
-    return str(getattr(entry, field, "") or "").strip()
+    value = entry.get(field) if isinstance(entry, Mapping) else getattr(entry, field, "")
+    return str(value or "").strip()
 
 
 def entry_matches_engine_identity(entry: Any, engine: str) -> bool:
@@ -24,8 +25,14 @@ def entry_matches_engine_identity(entry: Any, engine: str) -> bool:
         expected_app_name = catalog_entry.app_id
         task_kind_matches = task_kind in catalog_entry.task_kinds
     if expected_engine == "xtb" and catalog_entry is not None:
-        metadata = getattr(entry, "metadata", {})
-        job_type = str(metadata.get("job_type") or "").strip() if isinstance(metadata, dict) else ""
+        metadata = (
+            entry.get("metadata", {})
+            if isinstance(entry, Mapping)
+            else getattr(entry, "metadata", {})
+        )
+        job_type = (
+            str(metadata.get("job_type") or "").strip() if isinstance(metadata, Mapping) else ""
+        )
         task_kind_matches = task_kind_matches and (
             task_kind == f"xtb_{job_type}" and task_kind in catalog_entry.task_kinds
         )

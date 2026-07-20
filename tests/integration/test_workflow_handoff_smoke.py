@@ -44,16 +44,13 @@ def _write_xyz(path: Path) -> None:
     )
 
 
-def _write_orca_config(path: Path, *, allowed_root: Path) -> None:
+def _write_orca_config(path: Path) -> None:
     payload: dict[str, Any] = {}
     if path.exists():
         loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         if isinstance(loaded, dict):
             payload = dict(loaded)
     payload["orca"] = {
-        "runtime": {
-            "allowed_root": str(allowed_root.resolve()),
-        },
         "paths": {
             "orca_executable": "/opt/orca/orca",
         },
@@ -91,14 +88,8 @@ def _create_conformer_workflow_smoke_case(smoke_workspace: Any) -> ConformerWork
     workflow_root = smoke_workspace.root / "workflow_root"
     workflow_root.mkdir(parents=True, exist_ok=True)
 
-    orca_allowed_root = smoke_workspace.root / "orca_runs"
-    orca_allowed_root.mkdir(parents=True, exist_ok=True)
-
     orca_config_path = smoke_workspace.config_path
-    _write_orca_config(
-        orca_config_path,
-        allowed_root=orca_allowed_root,
-    )
+    _write_orca_config(orca_config_path)
 
     input_xyz = smoke_workspace.root / "workflow_inputs" / "input.xyz"
     _write_xyz(input_xyz)

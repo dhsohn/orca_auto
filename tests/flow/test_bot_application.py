@@ -537,32 +537,6 @@ def test_registry_is_bounded_and_evicts_complete_action_groups() -> None:
     assert registry.consume(second[0], address=ADDRESS, actor=ACTOR).status == "ok"
 
 
-def test_settings_and_activity_paths_are_forwarded_to_cancel() -> None:
-    captured: dict[str, Any] = {}
-
-    def cancel(*, target: str, **kwargs: Any) -> dict[str, Any]:
-        captured.update({"target": target, **kwargs})
-        return {"activity_id": target, "status": "cancelled"}
-
-    fixture = ActivityFixture()
-    deps = _deps(fixture)
-    deps = replace(deps, cancel_activity=cancel)
-    application = BotApplication(settings=_settings(), deps=deps)
-    messenger = FakeMessenger()
-    application.dispatch_command(_command("cancel", "run-1"), messenger=messenger)
-    confirm = _find_action(messenger.replies[-1][1], "Yes, cancel")
-    application.dispatch_action(_incoming_action(confirm.action_id), messenger=messenger)
-
-    assert captured == {
-        "target": "run-1",
-        "workflow_root": "/runs",
-        "crest_config": "/config/orca_auto.yaml",
-        "xtb_config": "/config/orca_auto.yaml",
-        "orca_config": "/config/orca_auto.yaml",
-        "orca_repo_root": "/repo",
-    }
-
-
 def test_settings_from_config_resolves_shared_paths_without_provider_credentials() -> None:
     activity_sources = SimpleNamespace(
         discover_shared_config=lambda explicit: explicit or "/shared/orca_auto.yaml",

@@ -50,6 +50,68 @@ def test_executable_validation_rejects_symlink_to_windows_executable(tmp_path: P
         )
 
 
+def test_configured_executable_validation_errors_redact_every_raw_path_category(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "private-executable-secret-directory"
+    directory.mkdir()
+    non_executable = tmp_path / "private-executable-secret-nonexec"
+    non_executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    windows_target = tmp_path / "private-executable-secret.exe"
+    windows_target.write_text("#!/bin/sh\n", encoding="utf-8")
+    windows_target.chmod(0o755)
+    windows_alias = tmp_path / "private-executable-secret-alias"
+    windows_alias.symlink_to(windows_target)
+    cases = (
+        (r"C:\private-executable-secret\tool.exe", "Linux path"),
+        ("private-executable-secret-relative", "absolute Linux path"),
+        (str(tmp_path / "private-executable-secret-missing"), "not found"),
+        (str(tmp_path / "private-executable-secret.exe"), "Windows executable"),
+        (str(directory), "not a file"),
+        (str(non_executable), "not executable"),
+        (str(windows_alias), "must resolve to a Linux ORCA binary"),
+    )
+
+    for raw_path, category in cases:
+        with pytest.raises(ValueError) as captured:
+            validate_configured_executable_path(
+                raw_path,
+                label="orca.paths.orca_executable",
+                display_name="ORCA",
+            )
+
+        message = str(captured.value)
+        assert "orca.paths.orca_executable" in message
+        assert category in message
+        assert "private-executable-secret" not in message
+
+
+def test_configured_executable_validation_redacts_raced_resolution_value_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = tmp_path / "private-raced-resolution-secret"
+
+    def fail_raced_resolution(*_args: object, **_kwargs: object) -> Path:
+        raise ValueError(f"symlink race exposed {candidate}")
+
+    monkeypatch.setattr(
+        "orca_auto.core.paths.validation.validate_executable_file",
+        fail_raced_resolution,
+    )
+
+    with pytest.raises(ValueError) as captured:
+        validate_configured_executable_path(
+            candidate,
+            label="orca.paths.orca_executable",
+            display_name="ORCA",
+        )
+
+    message = str(captured.value)
+    assert message == "orca.paths.orca_executable must resolve to a valid Linux ORCA binary."
+    assert "private-raced-resolution-secret" not in message
+
+
 def test_ensure_directory_success(tmp_path: Path) -> None:
     directory = tmp_path / "input"
     directory.mkdir()

@@ -400,9 +400,13 @@ def test_orca_worker_preflight_failure_publishes_generation_reports(
     generation_report = load_report_json(generation)
     assert root_state is not None and root_state["status"] == "failed"
     assert generation_state == root_state
-    assert generation_report is not None and generation_report["status"]["state"] == "failed"
+    # The report is retained, but its corrupted bound-input provenance makes it
+    # ineligible for the public generation reader.
+    assert generation_report is None
+    raw_generation_report = json.loads(report_json_path(generation).read_text(encoding="utf-8"))
+    assert raw_generation_report["status"]["state"] == "failed"
     assert load_report_json(reaction_dir) is None
-    assert generation_report["job"]["id"] == entry.task_id
+    assert raw_generation_report["job"]["id"] == entry.task_id
 
 
 def test_orca_worker_generation_replacement_never_receives_synthetic_artifacts(
@@ -446,10 +450,10 @@ def test_orca_worker_generation_replacement_never_receives_synthetic_artifacts(
     assert failed.status == QueueStatus.FAILED
     assert not counter_path.exists()
     root_state = load_state(reaction_dir)
-    root_report = load_report_json(reaction_dir)
     assert root_state is not None and root_state["status"] == "failed"
-    assert root_report is not None and root_report["status"]["state"] == "failed"
-    assert root_report["job"]["id"] == entry.task_id
+    # A replaced generation fails verification, so no report is published
+    # anywhere (fail closed); the state still records the failure.
+    assert load_report_json(reaction_dir) is None
     assert {path.name for path in generation.iterdir()} == {"sentinel"}
     assert not (moved_generation / "job_state.json").exists()
     assert not (moved_generation / "job_report.json").exists()

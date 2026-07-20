@@ -204,8 +204,37 @@ def test_engine_runtime_paths_ignores_legacy_root_keys(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="Missing runs_root"):
+    with pytest.raises(ValueError, match="Unknown workflow config fields are not supported"):
         engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (
+            "runs_root: /tmp/runs\nschedulr: {}\n",
+            "Unknown top-level config fields are not supported",
+        ),
+        (
+            "runs_root: /tmp/runs\nscheduler: []\n",
+            "scheduler section must be a mapping",
+        ),
+        (
+            "runs_root: /tmp/runs\nmessenger:\n  discord:\n    channel_ids:\n",
+            "messenger.discord.channel_ids",
+        ),
+    ],
+)
+def test_engine_runtime_paths_validates_complete_shared_config(
+    tmp_path: Path,
+    payload: str,
+    message: str,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        engine_runtime.engine_runtime_paths(str(config_path), engine="xtb")
 
 
 def test_engine_runtime_paths_all_engines_share_the_runs_root(tmp_path: Path) -> None:
@@ -267,12 +296,9 @@ def test_engine_runtime_paths_rejects_engine_scoped_scheduler_override(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="cannot override the shared top-level scheduler"):
-        engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
-
-    # Internal engines still resolve the single shared scheduler section.
-    xtb_paths = engine_runtime.engine_runtime_paths(str(config_path), engine="xtb")
-    assert xtb_paths["admission_root"] == shared_admission.resolve()
+    for engine in (None, "orca", "xtb", "crest"):
+        with pytest.raises(ValueError, match="Unknown orca config fields are not supported"):
+            engine_runtime.engine_runtime_paths(str(config_path), engine=engine)
 
 
 @pytest.mark.parametrize(

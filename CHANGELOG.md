@@ -25,7 +25,8 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   terminal metadata artifact. They no longer write or read `job_report.json`
   or `job_report.md`; report-only jobs, completed outputs without terminal
   identities, and stale artifact paths that require basename remapping are
-  unsupported and must be resubmitted. The ORCA report contract is unchanged.
+  unsupported and must be resubmitted. ORCA reports now follow the
+  generation-only contract described below.
 - Added optional ORCA RAM-backed attempt workspaces below `/dev/shm`. Bound
   inputs are staged privately, durable queue/state/process ownership stays on
   disk, and surviving non-temporary outputs are copied once into the visible
@@ -44,11 +45,33 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   ORCA-domain owners. Bot command/upload handling and workflow SI collection,
   science, rendering, and publication now have explicit module boundaries while
   retaining their public CLI and artifact contracts.
-- Hardened unified worker supervision: workers start in separate sessions with
-  staggered initial launches, repeated exits open bounded supervisor and systemd
-  circuits, idle full-state reconciliation is throttled, and an explicit service
-  restart or install transition clears the worker start-limit state before
-  restarting it.
+- Added a default engine-worker target with independent ORCA and standalone
+  xTB-MD systemd services. A failure or restart circuit in either engine no
+  longer stops the other; worker-only and full-runtime install, status, and
+  restart operations manage both services, while the opt-in workflow worker
+  remains separate. The bot now uses the same bounded systemd restart policy.
+- Reject unknown, misspelled, removed, or malformed execution configuration
+  instead of silently applying defaults. Engine settings now use only the
+  canonical shared scheduler, resource, and messenger sections; omitted keys
+  retain their documented defaults.
+- Publish and consume ORCA reports only inside a provenance-verified execution
+  generation. Pre-relocation job-root reports remain untouched but are no
+  longer runtime inputs, and existing identityless queue rows fail closed
+  instead of adopting adjacent state or reports. Operators who need old report
+  detail must migrate it to the verified generation or archive it separately
+  before removing the root files.
+- Runtime lookup now exposes generation-local `job_report.md` only when the
+  schema-version-1 JSON contains the current byte-length and SHA-256 commit
+  marker. Existing schema-version-1 JSON remains readable, but its uncommitted
+  Markdown path is hidden after upgrade. Committed Markdown is capped at 8 MiB;
+  oversized reports retain JSON without publishing a Markdown path. There is no
+  public migration command:
+  republish only through a controlled tool that invokes the current report
+  writer against verified generation state, or archive the old Markdown outside
+  public runtime lookup.
+- Removed duplicate ORCA status decoding, dead private helpers, and repeated
+  read-only workflow request-parameter traversal; refreshed workflow/systemd
+  documentation, release metadata, and workstation-neutral test fixtures.
 
 ### Fixed
 

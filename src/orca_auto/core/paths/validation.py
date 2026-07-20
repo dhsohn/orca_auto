@@ -56,33 +56,48 @@ def validate_configured_executable_path(
     if not text:
         raise ValueError(f"{label} is required.")
     if is_rejected_windows_path(text):
-        raise ValueError(
-            f"{label} must be a Linux path (Windows paths are not supported): {text!r}"
-        )
+        raise ValueError(f"{label} must be a Linux path (Windows paths are not supported).")
     candidate = Path(text).expanduser()
     if not candidate.is_absolute():
-        raise ValueError(f"{label} must be an absolute Linux path: {text!r}")
+        raise ValueError(f"{label} must be an absolute Linux path.")
     if text.lower().endswith(".exe"):
         raise ValueError(
-            f"{label} must point to Linux {display_name} binary, not Windows executable: {text!r}"
+            f"{label} must point to a Linux {display_name} binary, not a Windows executable."
         )
-    resolved = validate_executable_file(
-        candidate,
-        missing_message=lambda _resolved: (
-            f"{label} not found: {text!r}. "
-            f"Verify the path points to an existing {display_name} binary."
-        ),
-        not_file_message=lambda _resolved: f"{label} is not a file: {text!r}",
-        not_executable_message=lambda _resolved: f"{label} is not executable: {text!r}",
-        access_fn=access_fn,
+    try:
+        candidate.resolve()
+    except (OSError, RuntimeError, ValueError):
+        raise ValueError(f"{label} must resolve to a valid Linux {display_name} binary.") from None
+    missing_error = (
+        f"{label} not found. Verify the path points to an existing {display_name} binary."
     )
+    not_file_error = f"{label} is not a file."
+    not_executable_error = f"{label} is not executable."
+    expected_validation_errors = {
+        missing_error,
+        not_file_error,
+        not_executable_error,
+    }
+    try:
+        resolved = validate_executable_file(
+            candidate,
+            missing_message=missing_error,
+            not_file_message=not_file_error,
+            not_executable_message=not_executable_error,
+            access_fn=access_fn,
+        )
+    except ValueError as exc:
+        if str(exc) in expected_validation_errors:
+            raise
+        raise ValueError(f"{label} must resolve to a valid Linux {display_name} binary.") from None
+    except (OSError, RuntimeError):
+        raise ValueError(f"{label} must resolve to a valid Linux {display_name} binary.") from None
     resolved_text = str(resolved)
     if is_rejected_windows_path(resolved_text):
-        raise ValueError(f"{label} must resolve to a Linux path outside Windows mounts: {text!r}")
+        raise ValueError(f"{label} must resolve to a Linux path outside Windows mounts.")
     if resolved_text.lower().endswith(".exe"):
         raise ValueError(
-            f"{label} must resolve to a Linux {display_name} binary, not a Windows executable: "
-            f"{text!r}"
+            f"{label} must resolve to a Linux {display_name} binary, not a Windows executable."
         )
     return resolved
 

@@ -274,7 +274,7 @@ class TestConfigValidation(unittest.TestCase):
             self.assertEqual(cfg.runtime.allowed_root, str(allowed))
             self.assertEqual(cfg.paths.orca_executable, str(fake_orca.resolve()))
 
-    def test_legacy_root_keys_are_no_longer_read(self) -> None:
+    def test_legacy_root_keys_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -291,9 +291,10 @@ class TestConfigValidation(unittest.TestCase):
                 },
             )
 
-            with self.assertRaises(ValueError) as ctx:
+            with self.assertRaisesRegex(
+                ValueError, "Unknown workflow config fields are not supported"
+            ):
                 load_config(str(cfg_path))
-            self.assertIn("runs_root", str(ctx.exception))
 
     def test_default_max_retries_can_exceed_five(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -349,7 +350,7 @@ class TestConfigValidation(unittest.TestCase):
             self.assertEqual(cfg.runtime.resolved_admission_limit, 6)
             self.assertEqual(cfg.runtime.resolved_admission_root, str(allowed / ".admission"))
 
-    def test_orca_runtime_scheduler_keys_are_ignored_without_warning(self) -> None:
+    def test_removed_orca_runtime_scheduler_keys_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -370,46 +371,10 @@ class TestConfigValidation(unittest.TestCase):
                 },
             )
 
-            with self.assertNoLogs("orca_auto.orca.config", level="WARNING"):
-                cfg = load_config(str(cfg_path))
+            with self.assertRaisesRegex(ValueError, "Unknown orca.runtime config fields"):
+                load_config(str(cfg_path))
 
-            self.assertEqual(cfg.runtime.max_concurrent, 4)
-            self.assertEqual(cfg.runtime.admission_root, str(allowed / ".admission"))
-            self.assertIsNone(cfg.runtime.admission_limit)
-
-    def test_scheduler_settings_ignore_orca_runtime_scheduler_keys(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            allowed = root / "orca_runs"
-            allowed.mkdir()
-            scheduler_admission = root / "scheduler-admission"
-            fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
-
-            cfg_path = _write_orca_config(
-                root / "orca_auto.yaml",
-                {
-                    "runs_root": str(allowed),
-                    "scheduler": {
-                        "max_active_simulations": 7,
-                        "admission_root": str(scheduler_admission),
-                    },
-                    "runtime": {
-                        "max_concurrent": 2,
-                        "admission_root": str(root / "runtime-admission"),
-                        "admission_limit": 2,
-                    },
-                    "paths": {"orca_executable": str(fake_orca)},
-                },
-            )
-
-            with self.assertNoLogs("orca_auto.orca.config", level="WARNING"):
-                cfg = load_config(str(cfg_path))
-            self.assertEqual(cfg.runtime.max_concurrent, 7)
-            self.assertEqual(cfg.runtime.admission_root, str(scheduler_admission))
-            self.assertEqual(cfg.runtime.admission_limit, 7)
-
-    def test_partial_orca_scheduler_override_inherits_shared_limit(self) -> None:
+    def test_engine_scoped_scheduler_is_rejected_even_when_it_matches_shared(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -433,33 +398,8 @@ class TestConfigValidation(unittest.TestCase):
                 },
             )
 
-            cfg = load_config(str(cfg_path))
-
-            self.assertEqual(cfg.runtime.max_concurrent, 1)
-            self.assertEqual(cfg.runtime.resolved_admission_limit, 1)
-            self.assertEqual(cfg.runtime.resolved_admission_root, str(shared_admission))
-
-    def test_non_mapping_orca_scheduler_is_rejected(self) -> None:
-        invalid_values: tuple[object, ...] = (None, "disabled", [])
-        for invalid in invalid_values:
-            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as td:
-                root = Path(td)
-                allowed = root / "orca_runs"
-                allowed.mkdir()
-                fake_orca = root / "orca"
-                _write_fake_executable(fake_orca)
-                cfg_path = _write_orca_config(
-                    root / "orca_auto.yaml",
-                    {
-                        "runs_root": str(allowed),
-                        "scheduler": {"max_active_simulations": 1},
-                        "orca": {"scheduler": invalid},
-                        "paths": {"orca_executable": str(fake_orca)},
-                    },
-                )
-
-                with self.assertRaisesRegex(ValueError, "orca.scheduler must be a mapping"):
-                    load_config(str(cfg_path))
+            with self.assertRaisesRegex(ValueError, "Unknown orca config fields are not supported"):
+                load_config(str(cfg_path))
 
     def test_scheduler_max_active_simulations_rejects_invalid_explicit_values(self) -> None:
         for value in ("bad", 0, -1, True):
@@ -538,7 +478,7 @@ class TestConfigValidation(unittest.TestCase):
             self.assertIn("runs_root", str(ctx.exception))
             self.assertIn("orca.paths.orca_executable", str(ctx.exception))
 
-    def test_stale_organized_root_key_is_silently_ignored(self) -> None:
+    def test_stale_organized_root_key_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -556,8 +496,11 @@ class TestConfigValidation(unittest.TestCase):
                     "paths": {"orca_executable": str(fake_orca)},
                 },
             )
-            cfg = load_config(str(cfg_path))
-            self.assertEqual(cfg.runtime.allowed_root, str(allowed))
+            with self.assertRaisesRegex(
+                ValueError,
+                "Unknown orca.runtime config fields are not supported",
+            ):
+                load_config(str(cfg_path))
 
     def test_nonexistent_orca_executable_raises(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -599,21 +542,23 @@ class TestConfigValidation(unittest.TestCase):
             root = Path(td)
             fake_orca = root / "orca"
             _write_fake_executable(fake_orca)
+            secret_path = root / "private-runs-secret-missing"
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
                 {
-                    "runs_root": str(root / "nonexistent_dir"),
+                    "runs_root": str(secret_path),
                     "paths": {"orca_executable": str(fake_orca)},
                 },
             )
             with self.assertRaises(ValueError) as ctx:
                 load_config(str(cfg_path))
             self.assertIn("runs_root directory not found", str(ctx.exception))
+            self.assertNotIn(str(secret_path), str(ctx.exception))
 
     def test_runs_root_is_file_raises(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            not_a_dir = root / "orca_runs"
+            not_a_dir = root / "private-runs-secret-file"
             not_a_dir.write_text("oops", encoding="utf-8")
             fake_orca = root / "orca"
             _write_fake_executable(fake_orca)
@@ -627,3 +572,4 @@ class TestConfigValidation(unittest.TestCase):
             with self.assertRaises(ValueError) as ctx:
                 load_config(str(cfg_path))
             self.assertIn("is not a directory", str(ctx.exception))
+            self.assertNotIn(str(not_a_dir), str(ctx.exception))

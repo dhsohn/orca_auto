@@ -6,10 +6,23 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.flow.adapters import _orca_contract_status, _orca_local_lookup, _orca_path_helpers
+from orca_auto.flow.adapters import _orca_local_lookup, _orca_path_helpers
+from orca_auto.orca.job_locations import _utils as _canonical_orca_status
 
 
 def _write_json(path: Path, payload: object) -> None:
+    if path.name == "queue.json" and isinstance(payload, list):
+        payload = [
+            {
+                "app_name": "orca_auto_orca",
+                "engine": "orca",
+                "task_kind": "orca_run_inp",
+                **item,
+            }
+            if isinstance(item, dict)
+            else item
+            for item in payload
+        ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
 
@@ -18,15 +31,17 @@ def _write_json(path: Path, payload: object) -> None:
     ("queue_entry", "state", "report", "expected"),
     [
         (
-            {"status": "running"},
-            {"status": "running"},
+            {"task_id": "job_1", "status": "running"},
+            {"job_id": "job_1", "run_id": "run_1", "status": "running"},
             {
+                "job_id": "job_1",
+                "run_id": "run_1",
                 "final_result": {
                     "status": "completed",
                     "analyzer_status": "completed",
                     "reason": "normal_termination",
                     "completed_at": "2026-04-19T00:10:00+00:00",
-                }
+                },
             },
             ("completed", "completed", "normal_termination", "2026-04-19T00:10:00+00:00"),
         ),
@@ -49,19 +64,19 @@ def _write_json(path: Path, payload: object) -> None:
             ("queued", "", "", ""),
         ),
         (
-            {},
-            {"status": "retrying"},
+            {"task_id": "job_1"},
+            {"job_id": "job_1", "run_id": "run_1", "status": "retrying"},
             {},
             ("running", "", "", ""),
         ),
         (
+            {"task_id": "job_1"},
             {},
-            {},
-            {"status": "failed"},
+            {"job_id": "job_1", "run_id": "run_1", "status": "failed"},
             ("failed", "", "", ""),
         ),
         (
-            {},
+            None,
             {},
             {},
             ("unknown", "", "", ""),
@@ -69,19 +84,32 @@ def _write_json(path: Path, payload: object) -> None:
     ],
 )
 def test_status_from_payloads_covers_priority_order(
-    queue_entry: dict[str, object],
+    queue_entry: dict[str, object] | None,
     state: dict[str, object],
     report: dict[str, object],
     expected: tuple[str, str, str, str],
 ) -> None:
     assert (
-        _orca_contract_status.status_from_payloads_impl(
+        _canonical_orca_status.status_from_payloads(
             queue_entry=queue_entry,
             state=state,
             report=report,
         )
         == expected
     )
+
+
+def test_status_rejects_payload_for_identityless_legacy_queue_row() -> None:
+    assert _canonical_orca_status.status_from_payloads(
+        queue_entry={"status": "pending"},
+        state={"job_id": "job_old", "run_id": "run_old", "status": "failed"},
+        report={
+            "job_id": "job_old",
+            "run_id": "run_old",
+            "status": "failed",
+            "final_result": {"status": "failed", "reason": "old_failure"},
+        },
+    ) == ("queued", "", "", "")
 
 
 def test_status_ignores_terminal_payload_from_previous_queue_generation() -> None:
@@ -92,7 +120,7 @@ def test_status_ignores_terminal_payload_from_previous_queue_generation() -> Non
         "completed_at": "2026-04-19T00:10:00+00:00",
     }
 
-    status = _orca_contract_status.status_from_payloads_impl(
+    status = _canonical_orca_status.status_from_payloads(
         queue_entry={"queue_id": "q_new", "task_id": "job_new", "status": "pending"},
         state={"job_id": "job_old", "run_id": "run_old", "status": "failed"},
         report={
@@ -114,7 +142,7 @@ def test_status_accepts_matching_terminal_payload_before_queue_finalization() ->
         "completed_at": "2026-04-19T00:10:00+00:00",
     }
 
-    status = _orca_contract_status.status_from_payloads_impl(
+    status = _canonical_orca_status.status_from_payloads(
         queue_entry={"queue_id": "q_new", "task_id": "job_new", "status": "running"},
         state={
             "job_id": "job_new",
@@ -222,10 +250,10 @@ def test_attempt_helpers_prefer_report_values_and_coerce_attempt_rows() -> None:
         "max_retries": "7",
     }
 
-    attempts = _orca_contract_status.coerce_attempts_impl(state, report)
+    attempts = _canonical_orca_status.coerce_attempts(state, report)
 
-    assert _orca_contract_status.attempt_count_impl(state, report) == 3
-    assert _orca_contract_status.max_retries_impl(state, report) == 7
+    assert _canonical_orca_status.attempt_count(state, report) == 3
+    assert _canonical_orca_status.max_retries(state, report) == 7
     assert attempts == (
         {
             "index": 2,
@@ -249,7 +277,7 @@ def test_attempt_helpers_preserve_mapping_markers() -> None:
         "imaginary_frequency_count": 1,
     }
 
-    attempts = _orca_contract_status.coerce_attempts_impl(
+    attempts = _canonical_orca_status.coerce_attempts(
         {"attempts": [{"index": 1, "markers": markers}]},
         {},
     )
@@ -327,3 +355,58 @@ def test_find_queue_entry_matches_multiple_identifier_types(
 
     assert entry is not None
     assert entry["queue_id"] == expected_queue_id
+
+
+@pytest.mark.parametrize("selector", ("queue_id", "target", "reaction_dir"))
+def test_find_queue_entry_ignores_partial_and_foreign_rows(
+    tmp_path: Path,
+    selector: str,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "shared"
+    reaction_dir.mkdir(parents=True)
+    queue_path = allowed_root / "queue.json"
+    queue_path.write_text(
+        json.dumps(
+            [
+                {
+                    "queue_id": "q_partial",
+                    "app_name": "orca_auto_orca",
+                    "engine": "orca",
+                    "task_kind": "orca_run_inp",
+                    "status": "completed",
+                    "metadata": {"reaction_dir": str(reaction_dir)},
+                },
+                {
+                    "queue_id": "q_foreign",
+                    "app_name": "orca_auto_xtb_md",
+                    "engine": "xtb_md",
+                    "task_kind": "xtb_md_run",
+                    "task_id": "foreign-task",
+                    "status": "completed",
+                    "metadata": {"reaction_dir": str(reaction_dir)},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = "unused"
+    queue_id = ""
+    selected_reaction_dir = ""
+    if selector == "queue_id":
+        queue_id = "q_partial"
+    elif selector == "target":
+        target = "q_foreign"
+    else:
+        selected_reaction_dir = str(reaction_dir)
+
+    assert (
+        _orca_local_lookup.find_queue_entry_impl(
+            allowed_root=allowed_root,
+            target=target,
+            queue_id=queue_id,
+            run_id="",
+            reaction_dir=selected_reaction_dir,
+        )
+        is None
+    )

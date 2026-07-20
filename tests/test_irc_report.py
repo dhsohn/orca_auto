@@ -8,6 +8,7 @@ import pytest
 from orca_auto.orca.report import collect_irc_report_data, write_job_html_report
 from orca_auto.orca.report.irc import parse_irc_output
 from orca_auto.orca.state import write_report_files
+from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
 
 _COORDS_BLOCK = """
 CARTESIAN COORDINATES (ANGSTROEM)
@@ -273,9 +274,11 @@ def test_irc_report_html_renders_path_profile(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
     _write_out(out_path, route="! B3LYP def2-SVP IRC")
 
-    path = write_job_html_report(tmp_path, _state(tmp_path, out_path))
+    path = write_job_html_report(
+        tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
+    )
 
-    assert path == tmp_path / "job_report.html"
+    assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
     assert "IRC report" in text
     assert "IRC path profile" in text
@@ -292,7 +295,9 @@ def test_combined_optts_freq_irc_route_renders_composite_sections(tmp_path: Path
     out_path = tmp_path / "rxn.out"
     _write_out(out_path, route="! OptTS Freq IRC B3LYP def2-SVP", freq=True, opt=True)
 
-    path = write_job_html_report(tmp_path, _state(tmp_path, out_path))
+    path = write_job_html_report(
+        tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
+    )
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -316,7 +321,9 @@ def test_irc_report_with_missing_path_summary_has_fallback(tmp_path: Path) -> No
         irc_block=_IRC_BLOCK.split("IRC PATH SUMMARY", maxsplit=1)[0],
     )
 
-    path = write_job_html_report(tmp_path, _state(tmp_path, out_path))
+    path = write_job_html_report(
+        tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
+    )
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -333,7 +340,9 @@ def test_multiline_route_classifies_ts_correctly(tmp_path: Path) -> None:
 
     assert data is not None
     assert "OptTS" in data.route_line
-    path = write_job_html_report(tmp_path, _state(tmp_path, out_path))
+    path = write_job_html_report(
+        tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
+    )
     assert path is not None
     text = path.read_text(encoding="utf-8")
     assert "TS optimization convergence" in text
@@ -357,11 +366,13 @@ def test_write_report_files_emits_irc_html_and_summary_si(tmp_path: Path) -> Non
     out_path = tmp_path / "rxn.out"
     _write_out(out_path, route="! B3LYP def2-SVP IRC")
 
-    reports = write_report_files(tmp_path, _state(tmp_path, out_path))
+    state = _state(tmp_path, out_path)
+    generation = bind_report_generation(tmp_path, state)
+    reports = write_report_files(tmp_path, state)
 
-    assert reports["report_html"] == str(tmp_path / "job_report.html")
-    assert reports["si_block"] == str(tmp_path / "si_block.md")
-    si_text = (tmp_path / "si_block.md").read_text(encoding="utf-8")
+    assert reports["report_html"] == str(generation / "job_report.html")
+    assert reports["si_block"] == str(generation / "si_block.md")
+    si_text = (generation / "si_block.md").read_text(encoding="utf-8")
     assert "IRC validation summary" in si_text
     assert "Storing full IRC trajectory in: job_IRC_Full_trj.xyz" in si_text
     assert "C      0.000000" not in si_text

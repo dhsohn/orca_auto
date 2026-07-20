@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.indexing import JobLocationIndexError, JobLocationRecord, resolve_job_location
 from orca_auto.core.queue.metadata import (
     mapping_metadata as queue_entry_metadata_impl,
@@ -106,7 +107,11 @@ def find_queue_entry_impl(
 ) -> JsonPayload | None:
     if allowed_root is None:
         return None
-    entries = load_json_list_impl(allowed_root / QUEUE_FILE_NAME)
+    entries = [
+        entry
+        for entry in load_json_list_impl(allowed_root / QUEUE_FILE_NAME)
+        if entry_matches_engine_identity(entry, "orca")
+    ]
     if not entries:
         return None
 

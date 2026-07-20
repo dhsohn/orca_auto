@@ -26,11 +26,9 @@ def _validate_config(cfg: Any) -> None:
         ("orca_executable", cfg.paths.orca_executable),
     ]:
         if is_rejected_windows_path(path_val):
-            raise ValueError(
-                f"{label} must be a Linux path (Windows paths are not supported): {path_val!r}"
-            )
+            raise ValueError(f"{label} must be a Linux path (Windows paths are not supported).")
         if not Path(path_val).is_absolute():
-            raise ValueError(f"{label} must be an absolute Linux path: {path_val!r}")
+            raise ValueError(f"{label} must be an absolute Linux path.")
     validate_configured_executable_path(
         cfg.paths.orca_executable,
         label="orca_executable",
@@ -40,8 +38,7 @@ def _validate_config(cfg: Any) -> None:
     allowed_root = Path(cfg.runtime.allowed_root)
     if not allowed_root.exists():
         raise ValueError(
-            f"runs_root directory not found: {cfg.runtime.allowed_root!r}. "
-            "Create the directory or update the config."
+            "runs_root directory not found. Create the directory or update the config."
         )
     if not allowed_root.is_dir():
-        raise ValueError(f"runs_root is not a directory: {cfg.runtime.allowed_root!r}")
+        raise ValueError("runs_root is not a directory.")

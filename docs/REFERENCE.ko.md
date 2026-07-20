@@ -75,7 +75,9 @@ CLI, 설정, JSON 산출물, 워크플로우, systemd 표면 중 공개 계약�
         ...
   systemd/
     orca_auto-runtime@.target
+    orca_auto-engine-workers@.target
     orca_auto-queue-worker@.service
+    orca_auto-xtb-md-worker@.service
     orca_auto-bot@.service
   scripts/*.sh / *.py
   tests/
@@ -197,6 +199,13 @@ orca:
 
 참고:
 
+- 공유 설정 parser는 YAML node가 없는 문서(주석만 있는 문서 포함)를 빈 mapping으로
+  허용하지만, 내용이 없는 `---` 문서, 명시한 최상위 null/scalar/sequence, 모든 깊이의
+  중복 key는 거부합니다.
+- messenger identity 필드는 생략과 명시값을 구분해 fail-closed합니다. token은 문자열,
+  Telegram `chat_id`는 문자열 또는 정수, channel/operator ID list는 유효한 양의 ID만
+  허용합니다. 명시한 null이나 잘못된 scalar/collection 형태를 문자열 또는 기본값으로
+  바꾸지 않습니다. 빈 문자열/list는 해당 기능을 의도적으로 비활성화합니다.
 - `default_max_retries=0`은 ORCA 재시도를 비활성화합니다. 양수 값은 계산 종류별
   재시도 정책을 활성화하며, 실제 재시도 횟수는 ORCA route 종류별 cap을 따릅니다.
 - `scratch_root`를 설정하면 ORCA는 private input closure를 tmpfs에서 실행합니다. dependency는
@@ -225,9 +234,10 @@ orca:
   tree와 transient 파일은 생략 provenance에 기록한 뒤 workspace와 함께 제거합니다.
   이 경로는 CREST 자체의 `--scratch` 옵션을 사용하지 않습니다.
 - 단독 xTB-MD도 같은 단일-workspace scratch admission을 사용합니다. 불변 generated
-  geometry, `md.inp`, attempt identity, 큐/상태, 리포트 소유권은 visible
-  `YYYYMMDD-HHMMSS-<8자리 hex>/` generation에 두고 실제 xTB command는 tmpfs의 staging된
-  geometry/control 경로를 읽습니다. 종료 뒤 `xtb.stdout.log`, `xtb.stderr.log`, `xtb.trj`,
+  geometry, `md.inp`, attempt identity, 상태, 리포트 소유권은 visible
+  `YYYYMMDD-HHMMSS-<8자리 hex>/` generation에 두고 queue row는 `runs_root` 아래에 둡니다.
+  실제 xTB command는 tmpfs의 staging된 geometry/control 경로를 읽습니다. 종료 뒤
+  `xtb.stdout.log`, `xtb.stderr.log`, `xtb.trj`,
   `mdrestart`, `xtbmdok`만 transaction으로 게시하고 durable generation에서 검증합니다. 전체
   크기, 파일 수, log, trajectory, checkpoint, marker 크기 상한은 게시 전에 적용하며 위반
   파일은 durable storage로 복사하지 않고 tmpfs에 보존합니다.
@@ -239,9 +249,17 @@ orca:
   경로여야 하며 `.exe`로 끝나면 안 됩니다. `workflow.paths.xtb_executable` 또는
   `workflow.paths.crest_executable`을 비워 두면, 제출 시 PATH에서 해석한 실행 파일
   정체성을 해당 큐 generation에 바인딩합니다.
-- 명시한 `scheduler`, `resources`, `workflow`, `workflow.paths` 값은 mapping이어야 합니다.
-  admission 루트는 절대 Linux 경로여야 하고 scheduler/resource 상한은 양의 정수여야 합니다.
-  잘못된 실행 제어 값은 기본값으로 대체하지 않고 거부합니다.
+- 공개 설정 계약에 열거한 경로만 허용합니다. 알 수 없거나 철자가 틀렸거나 제거된
+  키는 해당 section에서 실패하고, 공유 scheduler/resource/messenger 설정의 엔진별
+  복사본은 별칭으로 취급하지 않습니다. 명시한 설정 section은 mapping이어야 합니다.
+  admission 루트는 절대 Linux 경로, scheduler/resource 상한은 양의 정수,
+  `orca.runtime.default_max_retries`는 음이 아닌 정수여야 합니다. 생략한 키는 문서화된
+  기본값을 유지하지만 잘못된 명시적 실행 제어 값은 기본값으로 대체하지 않고 거부합니다.
+- messenger delivery 기본값도 키를 생략했을 때만 적용합니다. 명시한 timeout/backoff는
+  유한한 숫자, `max_attempts`는 정수여야 하며 잘못된 값은 거부합니다. 문서화된 전송
+  범위를 벗어난 유한값은 clamp합니다. Discord upload의 `enabled`는 인식되는 boolean만,
+  크기·개수·보존 제어는 양의 정수만, `allowed_extensions`는 비어 있지 않은 문자열의
+  list만 허용합니다.
 
 ## 7) CLI 사용법
 
@@ -770,14 +788,17 @@ opt-in 검사입니다. 정확한 명령과 한계는 [VALIDATION.md](VALIDATION
 
 ### 7.8 장기 실행 서비스
 
-장기 실행 워커와 messenger 봇 프로세스는 오직 `systemd`로만 관리됩니다. 공개 CLI 명령은
-그 서비스들을 직접 시작하지 않습니다.
+장기 실행 워커와 messenger 봇 프로세스는 `systemd`로 관리됩니다. 공개 `systemd install`과
+`service` 명령은 관리되지 않는 워커 프로세스를 직접 띄우지 않고 해당 unit을 조작합니다.
 
 동작:
 
-- `orca_auto-queue-worker@.service`는 ORCA만 감독합니다.
+- `orca_auto-engine-workers@.target`은 독립된 기본 엔진 서비스를 소유합니다.
+- `orca_auto-queue-worker@.service`는 ORCA 워커 하나를 감독합니다.
+- `orca_auto-xtb-md-worker@.service`는 standalone xTB-MD 워커 하나를 감독하며, 한쪽
+  엔진 서비스의 실패나 재시작이 다른 쪽을 중단하지 않습니다.
 - `orca_auto-workflow-worker@.service`는 opt-in이며 workflow와 내부 CREST·xTB 워커를
-  감독합니다. 단독 xTB-MD도 명시적인 별도 워커가 필요합니다.
+  감독합니다.
 - ORCA, xTB-MD, xTB, CREST는 동일한 admission 상한을 공유하며 xTB-MD에는 부분 상한도
   적용됩니다. ORCA는 부모 워커에서 슬롯을
   예약하고, 자식이 시작된 뒤 큐 정체성 메타데이터를 붙이며, ORCA 자식이 실행 중에 그
@@ -786,7 +807,7 @@ opt-in 검사입니다. 정확한 명령과 한계는 [VALIDATION.md](VALIDATION
   `orca_auto.yaml`에서 선택된 Telegram 또는 Discord gateway를 시작합니다.
 - 워크플로우 메신저 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST와 반응 경로 xTB
   자식 단계는 해당 단계가 끝난 뒤 각각 한 메시지로 요약합니다.
-- `orca_auto-runtime@.target`은 ORCA 워커와 bot을 함께 시작합니다.
+- `orca_auto-runtime@.target`은 engine-worker target과 bot을 함께 시작합니다.
 
 ## 8) WSL systemd 설정
 
@@ -806,7 +827,9 @@ wsl --shutdown
 이 저장소는 `systemd/` 아래 서비스 자산을 포함합니다:
 
 - [`systemd/orca_auto-runtime@.target`](../systemd/orca_auto-runtime@.target)
+- [`systemd/orca_auto-engine-workers@.target`](../systemd/orca_auto-engine-workers@.target)
 - [`systemd/orca_auto-queue-worker@.service`](../systemd/orca_auto-queue-worker@.service)
+- [`systemd/orca_auto-xtb-md-worker@.service`](../systemd/orca_auto-xtb-md-worker@.service)
 - [`systemd/orca_auto-bot@.service`](../systemd/orca_auto-bot@.service)
 
 선택된 messenger 봇이 설정된 경우 권장 상시 가동 런타임 설치 흐름:
@@ -816,6 +839,7 @@ cd <repo_root>
 orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 orca_auto service status
 journalctl -u "orca_auto-queue-worker@$(whoami)" -f
+journalctl -u "orca_auto-xtb-md-worker@$(whoami)" -f
 journalctl -u "orca_auto-bot@$(whoami)" -f
 ```
 
@@ -827,16 +851,18 @@ Discord 인터랙티브 bot 설정을 완성하세요.
 - 저장소 경로: `/home/<user>/orca_auto`
 - 설정 경로: `/home/<user>/orca_auto/config/orca_auto.yaml`
 
-경로가 다르면, 활성화하기 전에 복사된 유닛을 편집하세요.
+기본값과 경로가 다르면 installer에 명시적 `--repo`와 `--config` 값을 넘기세요. installer가
+모든 unit에 해당 경로를 렌더링합니다.
 
-기본 큐 워커 서비스는 ORCA만 감독합니다. workflow root가 설정돼 있어도 workflow나
-내부 엔진 워커를 암묵적으로 시작하지 않습니다. workflow 감독과 내부 CREST·xTB
+기본 engine-worker target은 ORCA와 standalone xTB-MD를 별도 서비스로 시작합니다.
+workflow root가 설정돼 있어도 workflow나 내부 엔진 워커를 암묵적으로 시작하지
+않습니다. workflow 감독과 내부 CREST·xTB
 워커가 필요할 때 `orca_auto-workflow-worker@<user>.service`를 명시적으로 시작합니다.
-공유 `scheduler.max_active_simulations` 설정은 여전히 ORCA와 워크플로우가
-관리하는 내부 엔진 단계 전반의 활성 시뮬레이션 결합 수를 제한합니다.
+공유 `scheduler.max_active_simulations` 설정은 여전히 ORCA, standalone xTB-MD,
+워크플로우가 관리하는 내부 엔진 단계 전반의 활성 시뮬레이션 결합 수를 제한합니다.
 
 선택된 provider 설정이 완전하지 않으면
-`orca_auto systemd install`은 `orca_auto-queue-worker@$(whoami)`를 직접 활성화합니다.
+`orca_auto systemd install`은 `orca_auto-engine-workers@$(whoami).target`을 직접 활성화합니다.
 bot 설정을 완성한 뒤 같은 명령을 다시 실행하면 전체 런타임 타깃이 활성화됩니다.
 
 워크플로우 감독은 opt-in `orca_auto-workflow-worker@.service` unit에 속합니다.
@@ -955,10 +981,12 @@ ORCA 프로세스 기록이 활성인 동안에는 해당 generation에 `orca.pr
 generation의 실제 실행 `.inp`는 선택한 소스의 basename을 정확히 유지하므로 ORCA
 출력 stem에 `.run`이나 `.bound`를 더하지 않습니다. 참조 입력도 원래
 basename을 유지합니다. 각 generation의 `job_state.json`과 리포트는 자신이 설명하는
-실행의 기록을 보존합니다. 리포트 이관 이전에 실행된 작업은 루트에 리포트 사본을
-유지하며(legacy fallback), 같은 디렉터리의 다음 실행이 generation 리포트를 발행할
-때 남은 루트 사본을 제거합니다. `run.lock`은 작업 루트에 남으며, 파일이
-존재한다는 사실만으로 현재 프로세스가 lock을 소유한다고 판정할 수는 없습니다.
+실행의 기록을 보존하며, 리포트는 검증된 generation 안에만 존재합니다. 이관 전 루트
+리포트는 일회성 provenance 검증 migration으로 정확한 generation에 옮기거나 별도
+보관할 때까지 삭제하지 않는 이력 파일이며 runtime reader는 사용하지 않습니다.
+generation 바인딩 전에 거부된 실행은 리포트가 없고 state와 큐 기록이 결과를 보존합니다.
+`run.lock`은 작업 루트에 남으며, 파일이 존재한다는 사실만으로 현재 프로세스가 lock을
+소유한다고 판정할 수는 없습니다.
 
 주요 `job_state.json` 필드:
 

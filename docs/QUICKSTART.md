@@ -2,8 +2,8 @@
 
 **English** | [한국어](QUICKSTART.ko.md)
 
-This guide is the shortest path from a fresh checkout to a supervised
-orca_auto queue worker.
+This guide is the shortest path from a fresh checkout to the supervised
+orca_auto engine workers.
 
 ## 1) Install
 
@@ -33,8 +33,9 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
 If the selected Telegram or Discord provider has complete interactive bot settings,
-orca_auto enables the full runtime target. Otherwise it enables only the queue worker.
-The installed default queue worker is ORCA-only. For a workflow submission,
+orca_auto enables the full runtime target. Otherwise it enables the bot-free
+engine-worker target, which starts ORCA and standalone xTB-MD as separate services.
+For a workflow submission,
 start the opt-in workflow unit before or after queueing it:
 
 ```bash
@@ -48,9 +49,10 @@ orca_auto service status
 orca_auto service restart
 ```
 
-`service status` shows the runtime target, queue worker, and selected messenger bot.
+`service status` shows the runtime and engine-worker targets, both engine services,
+the opt-in workflow service, and the selected messenger bot.
 `service restart` restarts the full runtime target when it is enabled; otherwise
-it restarts the queue worker.
+it restarts the engine-worker target.
 
 ## 5) Submit Work
 

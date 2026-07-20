@@ -357,15 +357,6 @@ def _bounded_json_mapping_at(directory_fd: int, name: str) -> dict[str, Any] | N
     return raw if isinstance(raw, dict) else None
 
 
-def _assert_directory_no_symlink(path: Path, *, label: str) -> Path:
-    resolved = path.expanduser().resolve()
-    if path.is_symlink() or resolved.is_symlink():
-        raise ValueError(f"{label} must not be a symlink: {path}")
-    if resolved.exists() and not resolved.is_dir():
-        raise ValueError(f"{label} must be a directory: {resolved}")
-    return resolved
-
-
 def prepare_smoke_root(runs_root: str | Path) -> Path:
     validated_root = Path(validated_runs_root_text(str(runs_root))).expanduser().resolve()
     validated_root.mkdir(parents=True, exist_ok=True)

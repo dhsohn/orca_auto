@@ -10,10 +10,17 @@ from orca_auto.core.utils.coercion import normalize_bool, normalize_text, safe_i
 from orca_auto.orca.job_locations import _contract_payload as _canonical_payload
 
 from . import _orca_contract_context as _contract_context
-from ._orca_contract_status import StatusPayload
 
 ContractPayload = dict[str, Any]
 StatusTuple = tuple[str, str, str, str]
+
+
+@dataclass(frozen=True)
+class _StatusPayload:
+    status: str
+    analyzer_status: str
+    reason: str
+    completed_at: str
 
 
 @dataclass(frozen=True)
@@ -22,6 +29,7 @@ class OrcaContractLoaderDeps:
     tracked_runtime_context_fn: Callable[
         ...,
         tuple[
+            Path | None,
             Path | None,
             Any,
             ContractPayload,
@@ -66,9 +74,10 @@ class _ContractPayloadContext:
     state_status: str
     reaction_dir: str
     current_dir: Path | None
+    artifact_dir: Path | None
     latest_known_path: str
     optimized_xyz_path: str
-    queue_entry: ContractPayload
+    queue_entry: ContractPayload | None
     selected_inp: str
     selected_input_xyz: str
     analyzer_status: str
@@ -97,7 +106,6 @@ class _ContractPayloadDeps:
         include_state: bool = True,
         include_report: bool = True,
         queue_entry: ContractPayload | None = None,
-        report_md_dir: Path | None = None,
     ) -> dict[str, str]:
         return _canonical_payload.runtime_paths(
             current_dir,
@@ -107,7 +115,6 @@ class _ContractPayloadDeps:
             include_state=include_state,
             include_report=include_report,
             queue_entry=queue_entry,
-            report_md_dir=report_md_dir,
         )
 
     def attempt_count(self, state: ContractPayload, report: ContractPayload) -> int:
@@ -236,9 +243,7 @@ def _payload_from_context(
     paths = _artifact_paths(context, latest_known_path, deps)
     resource_request, resource_actual = _resource_payloads(context, deps)
     _ensure_orca_record(context.tracked_record)
-    queue = dict(context.queue_entry or {})
-    if not normalize_text(queue.get("queue_id")) and request.queue_id:
-        queue["queue_id"] = request.queue_id
+    queue = dict(context.queue_entry) if context.queue_entry is not None else None
     payload_context = _ContractPayloadContext(
         resolved_run_id=context.resolved_run_id,
         status=status.status,
@@ -246,6 +251,7 @@ def _payload_from_context(
         state_status=normalize_text(context.state.get("status")).lower(),
         reaction_dir=request.reaction_dir,
         current_dir=context.current_dir,
+        artifact_dir=context.tracked_artifact_dir,
         latest_known_path=latest_known_path,
         optimized_xyz_path=paths.optimized_xyz_path,
         queue_entry=queue,
@@ -284,7 +290,7 @@ def _latest_known_path(
 
 def _contract_status(
     context: _contract_context.LoaderContext, deps: OrcaContractLoaderDeps
-) -> StatusPayload:
+) -> _StatusPayload:
     status, analyzer_status, reason, completed_at = deps.status_from_payloads_fn(
         queue_entry=context.queue_entry,
         state=context.state,
@@ -295,7 +301,7 @@ def _contract_status(
     ).lower()
     if status == "unknown" and tracked_status:
         status = tracked_status
-    return StatusPayload(status, analyzer_status, reason, completed_at)
+    return _StatusPayload(status, analyzer_status, reason, completed_at)
 
 
 def _artifact_paths(
@@ -315,13 +321,15 @@ def _artifact_paths(
     if not selected_input_xyz.lower().endswith(".xyz"):
         selected_input_xyz = ""
     selected_input_xyz = selected_input_xyz or deps.derive_selected_input_xyz_fn(selected_inp)
-    optimized_xyz_path = deps.prefer_orca_optimized_xyz_fn(
-        selected_inp=selected_inp,
-        selected_input_xyz=selected_input_xyz,
-        current_dir=context.current_dir,
-        latest_known_path=latest_known_path,
-        last_out_path=last_out_path,
-    )
+    optimized_xyz_path = ""
+    if selected_inp and (context.state or context.report):
+        optimized_xyz_path = deps.prefer_orca_optimized_xyz_fn(
+            selected_inp=selected_inp,
+            selected_input_xyz=selected_input_xyz,
+            current_dir=context.tracked_artifact_dir,
+            latest_known_path=latest_known_path,
+            last_out_path=last_out_path,
+        )
     return _ArtifactPaths(selected_inp, selected_input_xyz, optimized_xyz_path, last_out_path)
 
 

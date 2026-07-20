@@ -8,7 +8,6 @@ from pathlib import Path
 from orca_auto.core.utils.persistence import atomic_write_text
 
 from .input_blocks import (
-    GEOM_HEADER_RE,
     MOINP_RE,
     active_orca_directive_text,
     active_orca_line_text,
@@ -436,23 +435,6 @@ def _remove_route_keywords(lines: list[str], keywords: set[str]) -> bool:
         lines[route_idx] = "! " + " ".join(kept)
         changed = True
     return changed
-
-
-def _numbered_xyz_index_from_name(name: str) -> int | None:
-    xyz_match = re.match(r"^.+\.(\d{3})\.xyz$", name, re.IGNORECASE)
-    if xyz_match is None:
-        return None
-    return int(xyz_match.group(1))
-
-
-def _xyzfile_name_from_geometry(lines: list[str]) -> str | None:
-    for line in lines:
-        match = GEOM_HEADER_RE.match(line.strip())
-        if match is None or match.group(1).lower() != "xyzfile":
-            continue
-        raw_ref = (match.group(4) or "").strip().strip('"')
-        return Path(raw_ref).name
-    return None
 
 
 def _scan_endpoint_extension_steps(

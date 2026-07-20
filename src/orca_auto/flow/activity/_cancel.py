@@ -6,7 +6,6 @@ from typing import Any
 from orca_auto.core.engine_catalog import (
     EngineCatalogEntry,
     find_engine_catalog_entry_by_source_id,
-    get_engine_catalog_entry,
 )
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue.generation import queue_entries_same_generation
@@ -75,38 +74,6 @@ def cancel_workflow_activity(
         xtb_config=resolved.xtb_config,
         orca_config=resolved.orca_config,
         orca_repo_root=request.engine_options.orca.repo_root,
-    )
-
-
-def cancel_crest_activity(
-    record: ActivityRecord,
-    resolved: ResolvedActivitySources,
-    request: ActivityCancelRequest,
-    *,
-    deps: Any,
-) -> dict[str, Any]:
-    return cancel_workflow_stage_engine_activity(
-        get_engine_catalog_entry("crest"),
-        record,
-        resolved,
-        request,
-        deps=deps,
-    )
-
-
-def cancel_xtb_activity(
-    record: ActivityRecord,
-    resolved: ResolvedActivitySources,
-    request: ActivityCancelRequest,
-    *,
-    deps: Any,
-) -> dict[str, Any]:
-    return cancel_workflow_stage_engine_activity(
-        get_engine_catalog_entry("xtb"),
-        record,
-        resolved,
-        request,
-        deps=deps,
     )
 
 

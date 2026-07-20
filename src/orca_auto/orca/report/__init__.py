@@ -17,7 +17,6 @@ from typing import Any
 
 from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE
 from orca_auto.core.engine_process import atomic_write_confined_bytes
-from orca_auto.core.utils.persistence import atomic_write_text
 
 from .composer import collect_html_report_parts, compose_job_report_html
 from .frequencies import FrequencyAnalysis, parse_frequency_analysis
@@ -43,41 +42,30 @@ def write_job_html_report(
     reaction_dir: Path,
     state: Mapping[str, Any],
     *,
-    generation_target: tuple[Path, tuple[int, int]] | None = None,
+    generation_target: tuple[Path, tuple[int, int]],
 ) -> Path | None:
     """Write ``job_report.html``; ``None`` when the job type has no HTML report.
 
-    With a verified ``generation_target`` the report lands inside the execution
-    generation and any pre-relocation root copy is removed; without one (legacy
-    states, runs that never bound a generation) the job root keeps the report.
-    When the current job type has no HTML report, any ``job_report.html`` left
-    over from a previous job in a reused reaction dir is removed so downstream
-    links (e.g. the workflow report) cannot surface an obsolete report. The
-    exception path deliberately does NOT remove it: a transient parse error
-    must not destroy the last valid report.
+    The report lands inside the verified execution generation. When the current
+    job type has no HTML report, a stale ``job_report.html`` in that generation
+    is removed so downstream links (e.g. the workflow report) cannot surface an
+    obsolete report. The exception path deliberately does NOT remove it: a
+    transient parse error must not destroy the last valid report.
     """
-    target_dir = generation_target[0] if generation_target is not None else reaction_dir
-    path = target_dir / RUN_REPORT_HTML_FILE
-    root_path = reaction_dir / RUN_REPORT_HTML_FILE
+    path = generation_target[0] / RUN_REPORT_HTML_FILE
     try:
         rendered = _render_job_report(reaction_dir, state)
         if rendered is None:
             path.unlink(missing_ok=True)
-            if generation_target is not None:
-                root_path.unlink(missing_ok=True)
             return None
-        if generation_target is not None:
-            atomic_write_confined_bytes(
-                generation_target[0],
-                path,
-                rendered.encode("utf-8"),
-                label="ORCA generation artifact",
-                mode=0o600,
-                expected_parent_identity=generation_target[1],
-            )
-            root_path.unlink(missing_ok=True)
-        else:
-            atomic_write_text(path, rendered)
+        atomic_write_confined_bytes(
+            generation_target[0],
+            path,
+            rendered.encode("utf-8"),
+            label="ORCA generation artifact",
+            mode=0o600,
+            expected_parent_identity=generation_target[1],
+        )
         return path
     except Exception:  # noqa: BLE001
         logger.warning("Job HTML report generation failed for %s", reaction_dir, exc_info=True)

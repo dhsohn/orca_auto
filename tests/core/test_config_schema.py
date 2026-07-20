@@ -15,6 +15,8 @@ from orca_auto.core.config.schema import (
     as_nonempty_str,
     as_str,
     discord_config_from_mapping,
+    explicit_nonnegative_int,
+    messenger_config_from_mapping,
     normalize_admission_limit,
     normalize_default_max_retries,
     normalize_max_concurrent,
@@ -208,6 +210,17 @@ def test_normalize_default_max_retries(value: object, default: int, expected: in
     assert normalize_default_max_retries(value, default) == expected
 
 
+@pytest.mark.parametrize(("value", "expected"), [(0, 0), ("7", 7), (8.0, 8)])
+def test_explicit_nonnegative_int_accepts_integer_values(value: object, expected: int) -> None:
+    assert explicit_nonnegative_int(value, field_name="retry") == expected
+
+
+@pytest.mark.parametrize("value", [None, "", "bad", -1, True, 1.5])
+def test_explicit_nonnegative_int_rejects_malformed_values(value: object) -> None:
+    with pytest.raises(ValueError, match="retry must be an integer >= 0"):
+        explicit_nonnegative_int(value, field_name="retry")
+
+
 @pytest.mark.parametrize(
     ("value", "default", "expected"),
     [
@@ -298,6 +311,35 @@ def test_telegram_config_rejects_invalid_allowed_user_ids(value: object) -> None
         telegram_config_from_mapping({"allowed_user_ids": value})
 
 
+@pytest.mark.parametrize("value", [None, True, False, 123, 1.5, [], {}])
+def test_telegram_config_rejects_invalid_explicit_bot_tokens(value: object) -> None:
+    with pytest.raises(ValueError, match="messenger.telegram.bot_token must be a string"):
+        telegram_config_from_mapping({"bot_token": value})
+
+
+@pytest.mark.parametrize("value", [None, True, False, 1.5, [], {}])
+def test_telegram_config_rejects_invalid_explicit_chat_ids(value: object) -> None:
+    with pytest.raises(ValueError, match="messenger.telegram.chat_id must be a string or integer"):
+        telegram_config_from_mapping({"chat_id": value})
+
+
+@pytest.mark.parametrize("value", [None, True, 123, 1.5, {}, "123", [None], [1.5]])
+def test_telegram_config_rejects_invalid_explicit_operator_lists(value: object) -> None:
+    with pytest.raises(ValueError, match="messenger.telegram.allowed_user_ids"):
+        telegram_config_from_mapping({"allowed_user_ids": value})
+
+
+def test_telegram_config_preserves_empty_string_disable_and_empty_operator_list() -> None:
+    config = telegram_config_from_mapping(
+        {"bot_token": "  ", "chat_id": "", "allowed_user_ids": []}
+    )
+
+    assert config.bot_token == ""
+    assert config.chat_id == ""
+    assert config.allowed_user_ids == ()
+    assert not config.enabled
+
+
 def test_telegram_config_from_mapping_uses_defaults_for_non_mapping() -> None:
     assert telegram_config_from_mapping(None) == TelegramConfig()
 
@@ -309,20 +351,11 @@ def test_telegram_config_from_mapping_uses_defaults_for_non_mapping() -> None:
         (discord_config_from_mapping, DiscordConfig()),
     ],
 )
-def test_messenger_delivery_settings_bound_nonfinite_and_unbounded_values(
+def test_messenger_delivery_settings_default_only_when_omitted_and_bound_finite_values(
     parser: Any,
     default: TelegramConfig | DiscordConfig,
 ) -> None:
-    nonfinite = parser(
-        {
-            "timeout_seconds": float("inf"),
-            "max_attempts": 1_000_000_000,
-            "retry_backoff_seconds": float("nan"),
-        }
-    )
-    assert nonfinite.timeout_seconds == default.timeout_seconds
-    assert nonfinite.max_attempts == 10
-    assert nonfinite.retry_backoff_seconds == default.retry_backoff_seconds
+    assert parser({}) == default
 
     bounded = parser(
         {
@@ -334,6 +367,47 @@ def test_messenger_delivery_settings_bound_nonfinite_and_unbounded_values(
     assert bounded.timeout_seconds == 120.0
     assert bounded.max_attempts == 10
     assert bounded.retry_backoff_seconds == 120.0
+
+
+@pytest.mark.parametrize(
+    "parser",
+    [telegram_config_from_mapping, discord_config_from_mapping],
+)
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("timeout_seconds", None, "must be a finite number"),
+        ("timeout_seconds", True, "must be a finite number"),
+        ("timeout_seconds", "", "must be a finite number"),
+        ("timeout_seconds", "bad", "must be a finite number"),
+        ("timeout_seconds", "nan", "must be a finite number"),
+        ("timeout_seconds", "inf", "must be a finite number"),
+        ("timeout_seconds", float("nan"), "must be a finite number"),
+        ("timeout_seconds", float("inf"), "must be a finite number"),
+        ("retry_backoff_seconds", None, "must be a finite number"),
+        ("retry_backoff_seconds", False, "must be a finite number"),
+        ("retry_backoff_seconds", "bad", "must be a finite number"),
+        ("retry_backoff_seconds", float("-inf"), "must be a finite number"),
+        ("max_attempts", None, "must be an integer"),
+        ("max_attempts", True, "must be an integer"),
+        ("max_attempts", "", "must be an integer"),
+        ("max_attempts", "bad", "must be an integer"),
+        ("max_attempts", "1.5", "must be an integer"),
+        ("max_attempts", "nan", "must be an integer"),
+        ("max_attempts", "inf", "must be an integer"),
+        ("max_attempts", 1.5, "must be an integer"),
+        ("max_attempts", float("nan"), "must be an integer"),
+        ("max_attempts", float("inf"), "must be an integer"),
+    ],
+)
+def test_messenger_delivery_settings_reject_invalid_explicit_values(
+    parser: Any,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=rf"messenger\..*\.{field} {message}"):
+        parser({field: value})
 
 
 def test_discord_config_parses_bot_and_authorization_settings() -> None:
@@ -377,6 +451,59 @@ def test_discord_config_parses_upload_policy() -> None:
     assert config.uploads.max_entries == 10
     # Extensions are normalized to a leading dot and lowercase.
     assert config.uploads.allowed_extensions == (".inp", ".xyz", ".yaml")
+
+
+@pytest.mark.parametrize(
+    ("parser", "raw", "message"),
+    [
+        (
+            telegram_config_from_mapping,
+            {"bot_tokn": "token"},
+            "Unknown messenger.telegram config fields are not supported",
+        ),
+        (
+            discord_config_from_mapping,
+            {"channe_ids": []},
+            "Unknown messenger.discord config fields are not supported",
+        ),
+        (
+            discord_config_from_mapping,
+            {"uploads": {"max_entry": 4}},
+            "Unknown uploads config fields are not supported",
+        ),
+    ],
+)
+def test_messenger_adapter_config_rejects_unknown_fields(
+    parser: Any,
+    raw: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        parser(raw)
+
+
+@pytest.mark.parametrize(
+    ("parser", "raw"),
+    [
+        (messenger_config_from_mapping, {"provider": "private-provider-value"}),
+        (telegram_config_from_mapping, {"private-unknown-key": "value"}),
+        (discord_config_from_mapping, {"uploads": {"max_entries": "private-limit-value"}}),
+    ],
+)
+def test_messenger_config_validation_errors_do_not_echo_raw_values(
+    parser: Any,
+    raw: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError) as raised:
+        parser(raw)
+
+    assert "private-" not in str(raised.value)
+
+
+@pytest.mark.parametrize("uploads", [None, "disabled", [], False])
+def test_discord_config_rejects_non_mapping_uploads(uploads: object) -> None:
+    with pytest.raises(ValueError, match="uploads must be a mapping"):
+        discord_config_from_mapping({"uploads": uploads})
 
 
 def test_discord_config_capabilities_are_independent_and_fail_closed() -> None:
@@ -457,3 +584,51 @@ def test_discord_interaction_channels_include_default_once() -> None:
 def test_discord_config_rejects_invalid_snowflakes(field: str, value: object) -> None:
     with pytest.raises(ValueError, match=rf"messenger\.discord\.{field}"):
         discord_config_from_mapping({field: value})
+
+
+@pytest.mark.parametrize("value", [None, True, False, 123, 1.5, [], {}])
+def test_discord_config_rejects_invalid_explicit_bot_tokens(value: object) -> None:
+    with pytest.raises(ValueError, match="messenger.discord.bot_token must be a string"):
+        discord_config_from_mapping({"bot_token": value})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("default_channel_id", None),
+        ("default_channel_id", 1.5),
+        ("default_channel_id", []),
+        ("default_channel_id", {}),
+        ("channel_ids", None),
+        ("channel_ids", True),
+        ("channel_ids", 123),
+        ("channel_ids", {}),
+        ("allowed_user_ids", None),
+        ("allowed_user_ids", False),
+        ("allowed_user_ids", 123),
+        ("allowed_user_ids", {}),
+    ],
+)
+def test_discord_config_rejects_invalid_explicit_identity_values(
+    field: str,
+    value: object,
+) -> None:
+    with pytest.raises(ValueError, match=rf"messenger\.discord\.{field}"):
+        discord_config_from_mapping({field: value})
+
+
+def test_discord_config_preserves_empty_string_disable_and_empty_allowlists() -> None:
+    config = discord_config_from_mapping(
+        {
+            "bot_token": "  ",
+            "channel_ids": [],
+            "default_channel_id": "",
+            "allowed_user_ids": [],
+        }
+    )
+
+    assert config.bot_token == ""
+    assert config.channel_ids == ()
+    assert config.default_channel_id == ""
+    assert config.allowed_user_ids == ()
+    assert not config.interactive_enabled

@@ -345,7 +345,7 @@ class TestListQueueEntries(_ListTestBase):
         self.assertIn("ORCA", output)
         self.assertIn("⏳", output)
 
-    def test_list_reconciles_orphaned_running_queue_entry_from_job_report(self) -> None:
+    def test_list_does_not_terminalize_orphaned_entry_from_root_report(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -381,7 +381,8 @@ class TestListQueueEntries(_ListTestBase):
         self.assertEqual(rc, 0)
         output = captured.getvalue()
         self.assertIn(entry.queue_id, output)
-        self.assertIn("✅", output)
+        self.assertIn("⏳", output)
+        self.assertNotIn("✅", output)
         self.assertNotIn("▶", output)
 
 

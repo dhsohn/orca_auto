@@ -156,9 +156,8 @@ Required expectations:
   workstation paths, tokens, chat IDs, or private calculation data.
 - If changing behavior documented in `docs/REFERENCE.md`, update both the
   behavior text and any related examples.
-- Korean translations are maintained on a best-effort basis; when an English
-  public doc changes substantially, note whether the Korean counterpart was
-  updated or left for a follow-up.
+- When an English public document changes user-facing behavior or a supported
+  contract, update its Korean counterpart in the same change.
 
 ## AI assistance disclosure
 

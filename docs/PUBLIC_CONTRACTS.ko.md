@@ -129,6 +129,18 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `messenger.discord.timeout_seconds`
 - `messenger.discord.max_attempts`
 - `messenger.discord.retry_backoff_seconds`
+- `messenger.discord.uploads.enabled`
+- `messenger.discord.uploads.max_archive_bytes`
+- `messenger.discord.uploads.max_total_uncompressed_bytes`
+- `messenger.discord.uploads.max_file_bytes`
+- `messenger.discord.uploads.max_entries`
+- `messenger.discord.uploads.max_staged_bytes`
+- `messenger.discord.uploads.max_staged_uploads`
+- `messenger.discord.uploads.max_pending_per_actor`
+- `messenger.discord.uploads.max_concurrent_downloads`
+- `messenger.discord.uploads.staging_ttl_seconds`
+- `messenger.discord.uploads.committed_retention_seconds`
+- `messenger.discord.uploads.allowed_extensions`
 - `orca.runtime.default_max_retries`
 - `orca.runtime.scratch_root`
 - `orca.runtime.scratch_min_free_gb`
@@ -143,9 +155,18 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `scheduler.max_active_simulations`는 ORCA, 단독 xTB-MD, 내부 xTB, 내부 CREST 작업의
   공통 active 상한입니다.
 - `scheduler.max_active_xtb_md`는 양의 단독 xTB-MD 부분 상한이며 생략하면 `1`입니다.
-- 명시한 `scheduler`, `resources`, `workflow`, `workflow.paths` section은 mapping이어야 합니다.
-  `scheduler.admission_root`는 절대 Linux 경로여야 하고 명시한 scheduler/resource 상한은
-  양의 정수여야 합니다. 잘못된 실행 제어 값은 기본값으로 바꾸지 않고 거부합니다.
+- 위에 열거한 설정 경로만 허용합니다. 알 수 없거나 철자가 틀렸거나 제거된 키는
+  해당 section에서 설정 로딩을 실패시킵니다. 명시한 `scheduler`, `resources`,
+  `workflow`, `workflow.paths`, `messenger`, `orca`, `orca.runtime`, `orca.paths`
+  section은 mapping이어야 합니다. `scheduler.admission_root`는 절대 Linux 경로여야
+  하고 명시한 scheduler/resource 상한은 양의 정수, 명시한
+  `orca.runtime.default_max_retries`는 음이 아닌 정수여야 합니다. section 또는 키를
+  생략하면 문서화된 기본값을 사용하지만, 명시한 실행 제어 키의 잘못된 값은 기본값으로
+  바꾸지 않고 거부합니다.
+- YAML node가 없는 문서(빈 파일, 공백만 있는 파일, 주석만 있는 파일)는 빈 mapping으로
+  취급합니다. 내용이 없는 `---` 문서를 포함해 최상위에 명시한 YAML null, scalar,
+  sequence는 거부합니다. 모든 중첩 깊이에서 중복 mapping key를 last-key-wins로
+  처리하지 않고 거부합니다.
 - `orca.runtime.default_max_retries: 0`은 ORCA 재시도를 비활성화합니다.
 - 양수 `default_max_retries`는 ORCA route 종류별 cap을 따르는 계산 종류별 재시도 정책을
   활성화합니다.
@@ -174,8 +195,20 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - 정식 Discord 전송에는 `messenger.discord.bot_token`과 `default_channel_id`를
   사용하고, `channel_ids`가 명령 수신 채널을 허용합니다. 인터랙티브 gateway에는
   비어 있지 않은 `allowed_user_ids` operator allowlist도 필요합니다.
-- 두 adapter 모두 전송 timeout을 0.1~120초, 총 시도 횟수를 1~10회, 설정된 retry
-  backoff를 0~120초로 제한합니다.
+- 명시한 bot token은 문자열이어야 합니다. Telegram `chat_id`는 문자열 또는 정수,
+  Discord channel ID와 양쪽 operator ID allowlist는 문서화된 양의 ID만 허용합니다.
+  명시한 null·boolean·scalar 필드의 collection·scalar allowlist·잘못된 list entry는
+  거부합니다. 빈 token/destination 문자열과 빈 allowlist는 해당 기능을 의도적으로
+  비활성화하는 기존 방법으로 계속 지원합니다.
+- 두 adapter 모두 유한한 전송 timeout을 0.1~120초, 정수 총 시도 횟수를 1~10회,
+  유한한 retry backoff를 0~120초로 제한합니다. 생략하면 문서화된 기본값을 사용하고
+  범위를 벗어난 유한값은 clamp하지만, 명시한 boolean·숫자가 아닌 값·분수 시도 횟수·
+  NaN·무한대는 기본값으로 바꾸지 않고 거부합니다.
+- 명시한 Discord upload policy 값도 fail-closed입니다. `enabled`는 인식되는 boolean,
+  모든 크기·개수·보존 필드는 양의 정수, `allowed_extensions`는 비어 있지 않은 문자열의
+  list여야 합니다. 생략한 필드는 문서화된 기본값을 사용하지만, 잘못된 명시값이 upload를
+  조용히 비활성화하거나 상한을 완화하지 않습니다. `max_staged_bytes`는
+  `max_archive_bytes` 이상이어야 하고 `max_concurrent_downloads`는 `16` 이하여야 합니다.
 
 마이그레이션 참고:
 
@@ -183,6 +216,9 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   설정 로딩이 명확한 오류로 실패합니다. 블록을 `messenger.telegram`으로
   옮기세요. Discord에는 기존 별칭이 없으므로 중첩된 `messenger.discord` bot
   필드를 사용합니다.
+- 제거된 최상위 `behavior`, `runtime`, `paths` section, `workflow.root`, 엔진별
+  `scheduler`/`resources`/`messenger` 블록은 호환 별칭이 아닙니다. 위의 지원되는
+  최상위 공유 section과 `orca.runtime`/`orca.paths`를 사용하세요.
 
 ## 큐와 activity 계약
 
@@ -365,13 +401,33 @@ fail-closed 상태로 남으며 retry/resume 계약이 아닙니다.
   IRC route에는 좌표 없는 요약 전용 validation 블록
 
 실행 중에는 루트에 live `job_state.json`이 함께 존재합니다(terminal 정리 시
-제거). 리포트 이관 이전에 실행됐거나 generation 바인딩 전에 거부된 작업은
-루트에 리포트를 유지합니다 — reader는 루트를 legacy fallback으로 취급하고,
-같은 디렉터리의 다음 실행이 generation 리포트를 발행할 때 남은 루트 사본을
-제거합니다. terminal 실행의 루트 state가 정리된 뒤에는 job-locations 색인의
+제거). 리포트는 검증된 실행 generation에만 발행합니다. generation을 검증할 수
+없거나 generation 바인딩 전에 제출이 거부된 실행은 리포트를 받지 않으며 live
+state와 큐 기록이 결과를 보존합니다. Reader는 검증된 generation에서만 리포트를
+찾습니다. 큐 행이 없으면 산출물 조회는 정확한 generation 경로를 지정해야 하며,
+재사용하는 작업 루트 경로는 latest-run selector가 아닙니다. `task_id`와 `run_id`가
+모두 없는 기존 큐 행은 인접한 state나 리포트를 자기 산출물로 채택할 수 없습니다. 큐
+조회는 먼저 완전한 ORCA 소유권 튜플(`app_name`, `engine`, `task_kind`, `queue_id`,
+`task_id`)을 요구하며, 부분 행이나 다른 엔진 행은 정확한 queue-id 또는 reaction-path
+selector로 요청해도 무시합니다.
+
+이관 전 작업 루트 리포트 파일은 디스크에서 삭제하지 않지만 runtime 입력으로는
+더 이상 읽지 않습니다. 해당 파일을 제거하기 전에 운영자가 일회성 migration으로
+리포트의 job/run identity와 generation provenance를 검증한 뒤 정확히 그 generation으로
+옮겨야 합니다. 모호하거나 generation에 바인딩되지 않은 리포트는 경로만 보고 연결하지
+말고 별도 보관해야 합니다. 작업 루트 호환 reader/writer는 없습니다. terminal 실행의
+루트 state가 정리된 뒤에는 job-locations 색인의
 처음부터 재구축이 그 실행을 재발견하지 못합니다: generation 디렉터리는 의도적으로
 production scan에서 제외되고 재구축은 upsert 전용이므로, 살아있는 색인은 기록을
 유지하지만 색인을 잃은 뒤의 재구축은 정리된 실행에 대해 lossy합니다.
+작업 위치 matching·재구축, 큐 orphan/replay 복구, 종료 기록 repair는 루트 state나
+영속 queue/index 기록만 사용하고 루트 리포트는 사용하지 않습니다. 루트 리포트만 있는
+작업은 작업 위치를 찾거나 큐 행을 종료 상태로 만들 수 없습니다. 워크플로우 진단 fallback은
+generation provenance와 stage identity가 모두 검증되는 직접 visible-generation 리포트만
+허용합니다.
+공개 ORCA JSON 리포트 reader도 디렉터리 owner·inode·바인딩 입력 identity·payload
+provenance가 검증되는 정규 `<visible-generation>/job_report.json`만 허용하며 raw JSON
+loader는 private입니다.
 
 각 새 제출은 직접 하위 visible `YYYYMMDD-HHMMSS-<8자리 hex>/`
 하나를 소유합니다. 이 이름 형태는 예약되어 있습니다: ASCII 날짜·시각·소문자
@@ -414,6 +470,29 @@ production scan에서 제외되고 재구축은 upsert 전용이므로, 살아�
 - `artifacts.last_out_path`는 알려진 경우 마지막 ORCA 출력 경로입니다.
 - `engine_payload.run_id`, `engine_payload.max_retries`, `engine_payload.attempts`,
   `engine_payload.final_result`는 ORCA 고유 실행 세부 정보입니다.
+
+`artifacts`는 확장 가능한 capability map입니다. 소비자는 알지 못하는 additive key를
+무시해야 하며, 문서화된 path/log key만 경로 문자열로 취급해야 합니다. additive
+capability 값은 구조화된 객체일 수 있습니다. 현재 ORCA report JSON은 다음 형태의
+`artifacts.report_markdown_commit`을 추가합니다:
+
+- `version`: 정수 `1`
+- `size_bytes`: `job_report.md`의 바이트 길이
+- `sha256`: `job_report.md`의 정확한 UTF-8 바이트에 대한 64자리 소문자 SHA-256 digest
+
+report writer는 이 Markdown 바이트를 먼저 게시하고 그 뒤 JSON commit marker를
+게시합니다. runtime reader는 direct single-link Markdown 파일이 안정적이고 정확한
+바이트 길이와 digest가 marker와 일치할 때만 `report_md_path`를 노출합니다. writer와
+reader는 commit되는 Markdown을 모두 8 MiB로 제한합니다. 렌더링이 이보다 크면 JSON은
+계속 읽을 수 있지만 commit된 Markdown 경로는 게시하지 않습니다. 이
+additive capability가 없는 기존 schema-version-1 report JSON도 유효한 JSON이지만,
+commit되지 않은 Markdown 경로는 의도적으로 노출하지 않으며 identity-line 호환
+fallback은 없습니다. migration은 검증된 generation state에서 현재 report writer를
+통해 제어된 방식으로 재게시하여 새로 commit된 Markdown/JSON pair를 만드는
+절차입니다. 기존 report에 digest를 직접 편집해 넣는 방식으로 migration하지
+마십시오. 이 재게시를 수행하는 공개 CLI 명령은 없습니다. 검증된 generation state에
+현재 writer를 적용하는 제어된 도구가 없다면 기존 Markdown은 public runtime lookup
+밖에 보관해야 하며, schema-version-1 JSON은 그와 별개로 계속 읽을 수 있습니다.
 
 `engine_payload.final_result`가 있을 때 포함하는 필드:
 
@@ -694,7 +773,9 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 지원되는 unit 파일 이름:
 
 - `systemd/orca_auto-runtime@.target`
+- `systemd/orca_auto-engine-workers@.target`
 - `systemd/orca_auto-queue-worker@.service`
+- `systemd/orca_auto-xtb-md-worker@.service`
 - `systemd/orca_auto-workflow-worker@.service`
 - `systemd/orca_auto-bot@.service`
 
@@ -706,19 +787,24 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 
 안정 동작:
 
-- installer는 큐 워커를 활성화합니다.
-- queue-worker unit과 인자 없는 `queue worker`는 ORCA만 시작합니다. `runs_root` 설정만으로
-  workflow, xTB, CREST, xTB-MD 워커를 암묵적으로 시작하지 않습니다.
+- worker-only 모드에서는 installer가 engine-worker target을 직접 활성화합니다. 인터랙티브
+  bot 설정이 완전하면 대신 전체 runtime target을 활성화하고, 그 target이 engine-worker
+  target을 끌어들입니다.
+- engine-worker target은 ORCA와 standalone xTB-MD를 별도 서비스로 시작하므로 한쪽의
+  실패나 재시작이 다른 쪽을 중단하지 않습니다. 인자 없는 대화형 `queue worker` 명령은
+  ORCA-only 동작을 유지합니다. `runs_root`
+  설정만으로 workflow나 그 내부 xTB/CREST 워커를 암묵적으로 시작하지 않습니다.
 - workflow unit은 설치만 되고 opt-in입니다. 명시적으로 시작하면 workflow 감독자와 내부
   xTB/CREST 워커를 실행합니다.
 - 선택된 Telegram/Discord 봇은 인터랙티브 설정이 완성되었을 때만 활성화되며,
   그렇지 않으면 worker-only로 남습니다.
-- `service status`는 runtime target, ORCA queue worker, opt-in workflow worker,
-  bot 상태를 보고합니다. opt-in worker는 정보용이며 worker-only 또는 full-runtime
+- `service status`는 runtime과 engine-worker target, 기본 엔진 서비스 둘, opt-in workflow
+  worker, bot 상태를 보고합니다. opt-in worker는 정보용이며 worker-only 또는 full-runtime
   health의 필수 조건이 아닙니다.
-- `service restart`는 큐 워커의 start-limit 실패 상태를 지운 뒤 runtime target이
-  활성화되어 있으면 그것을 재시작하고, 아니면 큐 워커를 재시작합니다.
-- 큐 워커 감독자가 정상 종료되면 중단 상태를 유지합니다. 자식 감독자는 제한된 재시작
+- `service restart`는 두 엔진 서비스의 start-limit 실패 상태와, full runtime에서는 bot의
+  실패 상태도 지웁니다. runtime target이 활성화되어 있으면 그것을 재시작하고, 아니면
+  engine-worker target을 재시작합니다.
+- 엔진 워커 감독자가 정상 종료되면 중단 상태를 유지합니다. 각 자식 감독자는 제한된 재시작
   circuit을 열고, systemd는 제한된 지연 재시작을 적용합니다.
 
 ## 비계약

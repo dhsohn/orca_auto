@@ -1,19 +1,27 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
+from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.artifacts import (
+    MAX_RUN_ARTIFACT_JSON_BYTES,
+    MAX_RUN_REPORT_MD_BYTES,
     RUN_REPORT_JSON_FILE,
+    RUN_REPORT_MD_COMMIT_KEY,
+    RUN_REPORT_MD_COMMIT_VERSION,
     RUN_REPORT_MD_FILE,
     RUN_STATE_FILE,
 )
 from orca_auto.core.engine_process import (
     atomic_write_confined_bytes,
+    read_confined_text,
     require_confined_regular_file,
 )
 from orca_auto.core.engines.artifacts import (
@@ -30,13 +38,12 @@ from orca_auto.core.queue.engine.input_snapshot import require_direct_generation
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.utils.lock import file_lock_at
 from orca_auto.core.utils.persistence import (
-    atomic_write_json,
+    atomic_write_text as _atomic_write_text,
+)
+from orca_auto.core.utils.persistence import (
     durable_mkdir,
     load_json_mapping_file,
     timestamped_token,
-)
-from orca_auto.core.utils.persistence import (
-    atomic_write_text as _atomic_write_text,
 )
 from orca_auto.core.utils.persistence import (
     now_utc_iso as _now_utc_iso,
@@ -239,13 +246,134 @@ def load_state(reaction_dir: Path) -> RunState | None:
     return normalized
 
 
-def load_report_json(reaction_dir: Path) -> dict[str, Any] | None:
-    payload = _load_json_dict(report_json_path(reaction_dir))
-    if payload is None:
+def load_generation_state(
+    generation_dir: Path,
+) -> tuple[dict[str, Any], RunState] | None:
+    """Load a state artifact without following links outside its generation."""
+
+    raw_generation_dir = generation_dir.expanduser()
+    if (
+        not raw_generation_dir.is_absolute()
+        or raw_generation_dir.is_symlink()
+        or not is_visible_generation_name(raw_generation_dir.name)
+    ):
         return None
-    if int(payload.get("schema_version", 0) or 0) != 1:
+    try:
+        resolved_generation_dir = raw_generation_dir.resolve(strict=True)
+        before = resolved_generation_dir.stat()
+        if raw_generation_dir != resolved_generation_dir or not stat.S_ISDIR(before.st_mode):
+            return None
+        payload = json.loads(
+            read_confined_text(
+                resolved_generation_dir,
+                state_path(resolved_generation_dir),
+                label="ORCA generation state",
+                max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
+            )
+        )
+        after = resolved_generation_dir.stat()
+    except (OSError, RuntimeError, TypeError, ValueError):
         return None
-    if _text(payload.get("engine")) != "orca":
+    if not isinstance(payload, dict) or (before.st_dev, before.st_ino) != (
+        after.st_dev,
+        after.st_ino,
+    ):
+        return None
+    normalized = _state_from_normalized_payload(payload)
+    if normalized is None:
+        return None
+    return payload, normalized
+
+
+def load_report_json(generation_dir: Path) -> dict[str, Any] | None:
+    """Load one provenance-verified ORCA report from an exact visible generation."""
+
+    raw_generation_dir = generation_dir.expanduser()
+    if (
+        not raw_generation_dir.is_absolute()
+        or raw_generation_dir.is_symlink()
+        or not is_visible_generation_name(raw_generation_dir.name)
+    ):
+        return None
+    report_path = report_json_path(raw_generation_dir)
+    try:
+        resolved_generation_dir = raw_generation_dir.resolve(strict=True)
+        generation_before = resolved_generation_dir.stat()
+        before = report_path.lstat()
+        payload = json.loads(
+            read_confined_text(
+                resolved_generation_dir,
+                report_path,
+                label="ORCA generation report",
+                max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
+            )
+        )
+    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError):
+        return None
+    if (
+        raw_generation_dir != resolved_generation_dir
+        or not stat.S_ISDIR(generation_before.st_mode)
+        or not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or not isinstance(payload, dict)
+    ):
+        return None
+    try:
+        schema_version = int(payload.get("schema_version", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if schema_version != 1 or _text(payload.get("engine")) != "orca":
+        return None
+    target = _visible_generation_artifact_dir(resolved_generation_dir.parent, payload)
+    if target is None or target[0] != resolved_generation_dir:
+        return None
+    provenance = _execution_provenance(payload)
+    bound_selected_identity = provenance.get("bound_selected_identity")
+    selected_text = _selected_input_text(payload)
+    if not isinstance(bound_selected_identity, Mapping) or not selected_text:
+        return None
+    try:
+        selected = require_confined_regular_file(
+            resolved_generation_dir,
+            Path(selected_text).expanduser(),
+            label="ORCA report selected input",
+        )
+        if _engine_runner.executable_identity(selected) != dict(bound_selected_identity):
+            return None
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
+    try:
+        after = report_path.lstat()
+        generation_details = resolved_generation_dir.stat()
+    except OSError:
+        return None
+    if (
+        (
+            before.st_dev,
+            before.st_ino,
+            before.st_nlink,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        != (
+            after.st_dev,
+            after.st_ino,
+            after.st_nlink,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        or (
+            int(generation_before.st_dev),
+            int(generation_before.st_ino),
+        )
+        != (
+            int(generation_details.st_dev),
+            int(generation_details.st_ino),
+        )
+        or target[1] != (int(generation_details.st_dev), int(generation_details.st_ino))
+    ):
         return None
     return payload
 
@@ -399,20 +527,12 @@ def _normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any])
     )
 
 
-def _unlink_stale_root_report(reaction_dir: Path, file_name: str) -> None:
-    """Drop a pre-relocation root copy so it cannot shadow the generation report."""
-    try:
-        (reaction_dir / file_name).unlink(missing_ok=True)
-    except OSError:
-        logger.debug("stale root report cleanup failed: %s", reaction_dir / file_name)
-
-
 def write_report_json(
     reaction_dir: Path,
     report_payload: dict[str, Any],
     *,
     generation_target: tuple[Path, tuple[int, int]] | None = None,
-) -> Path:
+) -> Path | None:
     if int(report_payload.get("schema_version", 0) or 0) == 1:
         payload = report_payload
     else:
@@ -427,18 +547,19 @@ def write_report_json(
             "updated_at": _text(report_payload.get("updated_at")),
             "attempts": list(report_payload.get("attempts") or []),
             "scratch_publications": list(report_payload.get("scratch_publications") or []),
+            "execution_provenance": _dict(report_payload.get("execution_provenance")),
             "final_result": cast(RunFinalResult | None, report_payload.get("final_result")),
         }
         payload = _normalized_payload_from_state(reaction_dir, state)
     if generation_target is None:
         generation_target = _visible_generation_artifact_dir(reaction_dir, payload)
-    if generation_target is not None:
-        path = report_json_path(generation_target[0])
-        _write_generation_json(generation_target, path, payload)
-        _unlink_stale_root_report(reaction_dir, REPORT_JSON_NAME)
-        return path
-    path = report_json_path(reaction_dir)
-    atomic_write_json(path, payload, ensure_ascii=True, indent=2)
+    if generation_target is None:
+        logger.warning(
+            "report JSON not published: no verified execution generation for %s", reaction_dir
+        )
+        return None
+    path = report_json_path(generation_target[0])
+    _write_generation_json(generation_target, path, payload)
     return path
 
 
@@ -446,32 +567,65 @@ def write_report_md(
     reaction_dir: Path,
     markdown: str,
     *,
-    generation_target: tuple[Path, tuple[int, int]] | None = None,
+    generation_target: tuple[Path, tuple[int, int]],
 ) -> Path:
-    if generation_target is not None:
-        path = report_md_path(generation_target[0])
-        _write_generation_bytes(generation_target, path, markdown.encode("utf-8"))
-        _unlink_stale_root_report(reaction_dir, REPORT_MD_NAME)
-        return path
-    path = report_md_path(reaction_dir)
-    _atomic_write_text(path, markdown)
+    del reaction_dir
+    path = report_md_path(generation_target[0])
+    _write_generation_bytes(generation_target, path, markdown.encode("utf-8"))
     return path
+
+
+def _payload_with_report_markdown_commit(
+    report_payload: Mapping[str, Any],
+    markdown_bytes: bytes,
+) -> dict[str, Any]:
+    committed = dict(report_payload)
+    raw_artifacts = committed.get("artifacts")
+    artifacts = dict(raw_artifacts) if isinstance(raw_artifacts, Mapping) else {}
+    artifacts[RUN_REPORT_MD_COMMIT_KEY] = {
+        "version": RUN_REPORT_MD_COMMIT_VERSION,
+        "sha256": hashlib.sha256(markdown_bytes).hexdigest(),
+        "size_bytes": len(markdown_bytes),
+    }
+    committed["artifacts"] = artifacts
+    return committed
 
 
 def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str, str]:
     """Write the Markdown body before publishing JSON as the report commit marker.
 
-    Reports live inside the verified execution generation; the job root is only
-    a fallback for runs without a bound generation (legacy states, submissions
-    that failed before binding).
+    Reports are published only inside the verified execution generation. A run
+    whose generation cannot be verified gets no report (fail closed, logged);
+    its state and queue record still carry the outcome.
     """
 
     report_payload = _normalized_payload_from_state(reaction_dir, state)
     generation_target = _visible_generation_artifact_dir(reaction_dir, report_payload)
+    if generation_target is None:
+        logger.warning(
+            "job reports not published: no verified execution generation for %s", reaction_dir
+        )
+        return {}
     markdown = "\n".join(build_engine_report_markdown(report_payload))
-    md_path = write_report_md(reaction_dir, markdown, generation_target=generation_target)
-    json_path = write_report_json(reaction_dir, report_payload, generation_target=generation_target)
-    reports = {"report_json": str(json_path), "report_md": str(md_path)}
+    markdown_bytes = markdown.encode("utf-8")
+    reports: dict[str, str] = {}
+    committed_payload = report_payload
+    if len(markdown_bytes) <= MAX_RUN_REPORT_MD_BYTES:
+        md_path = write_report_md(reaction_dir, markdown, generation_target=generation_target)
+        reports["report_md"] = str(md_path)
+        committed_payload = _payload_with_report_markdown_commit(report_payload, markdown_bytes)
+    else:
+        logger.warning(
+            "job report Markdown exceeds the %d-byte publication limit for %s",
+            MAX_RUN_REPORT_MD_BYTES,
+            reaction_dir,
+        )
+    json_path = write_report_json(
+        reaction_dir,
+        committed_payload,
+        generation_target=generation_target,
+    )
+    reports["report_json"] = str(json_path)
     html_path = write_job_html_report(reaction_dir, state, generation_target=generation_target)
     if html_path is not None:
         reports["report_html"] = str(html_path)

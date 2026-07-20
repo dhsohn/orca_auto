@@ -12,6 +12,18 @@ from tests.engine_artifact_helpers import orca_artifact_payload
 
 
 def _write_json(path: Path, payload: object) -> None:
+    if path.name == "queue.json" and isinstance(payload, list):
+        payload = [
+            {
+                "app_name": "orca_auto_orca",
+                "engine": "orca",
+                "task_kind": "orca_run_inp",
+                **item,
+            }
+            if isinstance(item, dict)
+            else item
+            for item in payload
+        ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
 
@@ -177,17 +189,17 @@ def test_tracked_runtime_context_propagates_corrupt_runtime_errors(
         )
 
 
-def test_tracked_artifact_context_propagates_corrupt_context_errors(
+def test_tracked_artifact_context_propagates_corrupt_index_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         _orca_tracking,
-        "load_job_artifact_context",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("corrupt context")),
+        "resolve_job_location",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("corrupt index")),
     )
 
-    with pytest.raises(ValueError, match="corrupt context"):
+    with pytest.raises(ValueError, match="corrupt index"):
         _orca_tracking.tracked_artifact_context_impl(
             index_root=tmp_path / "orca_runs",
             targets=("corrupt_context",),
@@ -279,16 +291,16 @@ def test_load_orca_artifact_contract_uses_tracked_record_job_dir(
     assert contract.status == "completed"
     assert contract.queue_id == ""
     assert contract.queue_status == ""
-    assert contract.run_id == "run_tracked_output"
+    assert contract.run_id == ""
     assert contract.reaction_dir == str(job_dir.resolve())
     assert contract.latest_known_path == str(job_dir.resolve())
-    assert contract.run_state_path == str((job_dir / "job_state.json").resolve())
-    assert contract.report_json_path == str((job_dir / "job_report.json").resolve())
+    assert contract.run_state_path == ""
+    assert contract.report_json_path == ""
     assert contract.selected_inp == str(inp.resolve())
     assert contract.selected_input_xyz == str(xyz.resolve())
 
 
-def test_load_orca_artifact_contract_resolves_selected_input_and_prefers_last_out_xyz(
+def test_load_orca_artifact_contract_ignores_untracked_root_payload(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -335,10 +347,12 @@ def test_load_orca_artifact_contract_resolves_selected_input_and_prefers_last_ou
         orca_allowed_root=allowed_root,
     )
 
-    assert contract.selected_inp == str(inp.resolve())
-    assert contract.selected_input_xyz == str(source_xyz.resolve())
-    assert contract.last_out_path == str(final_out.resolve())
-    assert contract.optimized_xyz_path == str(final_xyz.resolve())
+    assert contract.selected_inp == ""
+    assert contract.selected_input_xyz == ""
+    assert contract.last_out_path == ""
+    assert contract.optimized_xyz_path == ""
+    assert contract.run_state_path == ""
+    assert contract.report_json_path == ""
 
 
 @pytest.mark.parametrize(

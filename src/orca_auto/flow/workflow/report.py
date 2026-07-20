@@ -10,6 +10,7 @@ candidates).
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import logging
@@ -21,8 +22,20 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE, WORKFLOW_REPORT_HTML_FILE
-from orca_auto.core.queue.generation import visible_generation_children
+from orca_auto.core.artifacts import (
+    MAX_RUN_REPORT_MD_BYTES,
+    RUN_REPORT_HTML_FILE,
+    RUN_REPORT_JSON_FILE,
+    RUN_REPORT_MD_COMMIT_KEY,
+    RUN_REPORT_MD_COMMIT_VERSION,
+    RUN_REPORT_MD_FILE,
+    WORKFLOW_REPORT_HTML_FILE,
+)
+from orca_auto.core.engine_process import read_confined_text
+from orca_auto.core.queue.generation import (
+    is_visible_generation_name,
+    visible_generation_children,
+)
 from orca_auto.core.utils.persistence import atomic_write_text
 from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.parser.patterns import (
@@ -36,10 +49,12 @@ from orca_auto.orca.report.render import (
     render_page,
     status_badge_kind,
 )
+from orca_auto.orca.state import load_report_json
 
 logger = logging.getLogger(__name__)
 
 _ENGRAD_ENERGY_MARKER = "current total energy"
+_MAX_ENGRAD_ENERGY_FILE_BYTES = 8 * 1024 * 1024
 _MAX_ORCA_ENERGY_SCAN_BYTES = 256 * 1024
 _MAX_ORCA_ENERGY_CANDIDATES = 8
 _ORCA_ENERGY_READ_CHUNK_BYTES = 64 * 1024
@@ -181,17 +196,31 @@ def count_xyz_frames(path: Path) -> int | None:
 def latest_engrad_energy(directory: Path) -> float | None:
     """Total energy (Eh) from the most recent ``*.engrad`` in ``directory``."""
     try:
-        candidates = sorted(
-            directory.glob("*.engrad"),
-            key=lambda entry: entry.stat().st_mtime,
-            reverse=True,
-        )
-    except OSError:
+        resolved_directory = directory.expanduser().resolve(strict=True)
+        directory_details = directory.lstat()
+        if directory != resolved_directory or not stat.S_ISDIR(directory_details.st_mode):
+            return None
+        candidates: list[tuple[int, Path]] = []
+        for entry in directory.glob("*.engrad"):
+            details = entry.stat(follow_symlinks=False)
+            if (
+                stat.S_ISREG(details.st_mode)
+                and details.st_nlink == 1
+                and details.st_size <= _MAX_ENGRAD_ENERGY_FILE_BYTES
+            ):
+                candidates.append((int(details.st_mtime_ns), entry))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+    except (OSError, RuntimeError):
         return None
-    for candidate in candidates:
+    for _mtime_ns, candidate in candidates:
         try:
-            lines = candidate.read_text(encoding="utf-8", errors="ignore").splitlines()
-        except OSError:
+            lines = read_confined_text(
+                resolved_directory,
+                candidate,
+                label="ORCA gradient energy",
+                max_bytes=_MAX_ENGRAD_ENERGY_FILE_BYTES,
+            ).splitlines()
+        except (OSError, RuntimeError, UnicodeError, ValueError):
             continue
         marker_seen = False
         for line in lines:
@@ -280,20 +309,65 @@ def _stage_job_report(stage: Mapping[str, Any]) -> tuple[Path | None, dict[str, 
             if (
                 state is not None
                 and _text(state.get("engine")).lower() == internal_engine
-                and _stage_report_identity_matches(stage, state)
+                and _stage_report_identity_matches(
+                    stage,
+                    state,
+                    require_job_and_run=False,
+                )
             ):
                 return state_path, state
         return None, None
     if task_engine in _INTERNAL_STAGE_ENGINES.values():
         return None, None
     for job_dir in _stage_job_dirs(stage):
-        # ORCA reports live in execution generations.
-        for candidate_dir in (job_dir, *visible_generation_children(job_dir)):
+        candidate_dirs = (
+            (job_dir,)
+            if is_visible_generation_name(job_dir.name)
+            else visible_generation_children(job_dir)
+        )
+        for candidate_dir in candidate_dirs:
             report_path = candidate_dir / "job_report.json"
-            report = _load_json(report_path)
-            if report is not None and _stage_report_identity_matches(stage, report):
+            report = _verified_orca_stage_report(stage, report_path)
+            if report is not None:
                 return report_path, report
     return None, None
+
+
+def _verified_orca_stage_report(
+    stage: Mapping[str, Any],
+    report_path: Path | None,
+) -> dict[str, Any] | None:
+    if (
+        report_path is None
+        or not report_path.is_absolute()
+        or report_path.name != RUN_REPORT_JSON_FILE
+        or report_path != report_path.parent / RUN_REPORT_JSON_FILE
+        or not is_visible_generation_name(report_path.parent.name)
+    ):
+        return None
+    if report_path.is_symlink() or not report_path.is_file():
+        return None
+    try:
+        if report_path.resolve(strict=True) != report_path:
+            return None
+    except OSError:
+        return None
+    report = load_report_json(report_path.parent)
+    if report is None or not _stage_report_identity_matches(stage, report):
+        return None
+    return report
+
+
+def _resolve_orca_stage_report(
+    stage: Mapping[str, Any],
+) -> tuple[Path | None, dict[str, Any] | None]:
+    """Resolve the canonical verified report for one ORCA workflow stage."""
+
+    report_path = _stage_artifact_path(stage, "orca_report_json")
+    report = _verified_orca_stage_report(stage, report_path)
+    if report is not None:
+        return report_path, report
+    return _stage_job_report(stage)
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -304,7 +378,12 @@ def _identity_values(*values: Any) -> frozenset[str]:
     return frozenset(text for value in values if (text := _text(value)))
 
 
-def _stage_report_identity_matches(stage: Mapping[str, Any], report: Mapping[str, Any]) -> bool:
+def _stage_report_identity_matches(
+    stage: Mapping[str, Any],
+    report: Mapping[str, Any],
+    *,
+    require_job_and_run: bool = True,
+) -> bool:
     metadata = _stage_metadata(stage)
     task = _stage_task(stage)
     task_payload = _stage_task_payload(stage)
@@ -330,10 +409,32 @@ def _stage_report_identity_matches(stage: Mapping[str, Any], report: Mapping[str
         report.get("queue_id"),
         engine_payload.get("queue_id"),
     )
-    return bool(
-        stage_job_ids & report_job_ids
-        or stage_run_ids & report_run_ids
-        or stage_queue_ids & report_queue_ids
+    identity_pairs = (
+        (stage_job_ids, report_job_ids),
+        (stage_run_ids, report_run_ids),
+        (stage_queue_ids, report_queue_ids),
+    )
+    if any(
+        len(stage_values) > 1 or len(report_values) > 1
+        for stage_values, report_values in identity_pairs
+    ):
+        return False
+    if require_job_and_run:
+        required_pairs = identity_pairs[:2]
+        if any(
+            not stage_values or report_values != stage_values
+            for stage_values, report_values in required_pairs
+        ):
+            return False
+        return not (stage_queue_ids and report_queue_ids and report_queue_ids != stage_queue_ids)
+
+    declared_pairs = tuple(
+        (stage_values, report_values)
+        for stage_values, report_values in identity_pairs
+        if stage_values
+    )
+    return bool(declared_pairs) and all(
+        report_values == stage_values for stage_values, report_values in declared_pairs
     )
 
 
@@ -402,10 +503,65 @@ def _relative_href(path: Path, workspace_dir: Path) -> str:
         return str(path)
 
 
+def _direct_single_link_file(path: Path, generation_dir: Path) -> Path | None:
+    try:
+        details = path.stat(follow_symlinks=False)
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if (
+        path.parent != generation_dir
+        or resolved != path
+        or not stat.S_ISREG(details.st_mode)
+        or details.st_nlink != 1
+    ):
+        return None
+    return path
+
+
+def _verified_report_markdown_path(
+    generation_dir: Path,
+    report: Mapping[str, Any],
+) -> Path | None:
+    artifacts = _mapping(report.get("artifacts"))
+    commit = _mapping(artifacts.get(RUN_REPORT_MD_COMMIT_KEY))
+    commit_version = commit.get("version")
+    if (
+        isinstance(commit_version, bool)
+        or not isinstance(commit_version, int)
+        or commit_version != RUN_REPORT_MD_COMMIT_VERSION
+        or isinstance(commit.get("size_bytes"), bool)
+        or not isinstance(commit.get("size_bytes"), int)
+        or not 0 <= commit["size_bytes"] <= MAX_RUN_REPORT_MD_BYTES
+        or not isinstance(commit.get("sha256"), str)
+    ):
+        return None
+    path = _direct_single_link_file(generation_dir / RUN_REPORT_MD_FILE, generation_dir)
+    if path is None:
+        return None
+    try:
+        markdown = read_confined_text(
+            generation_dir,
+            path,
+            label="ORCA workflow report Markdown",
+            max_bytes=MAX_RUN_REPORT_MD_BYTES,
+        ).encode("utf-8")
+    except (OSError, RuntimeError, UnicodeError, ValueError):
+        return None
+    if len(markdown) != commit["size_bytes"]:
+        return None
+    return path if hashlib.sha256(markdown).hexdigest() == commit["sha256"] else None
+
+
 def _stage_diagnostic(
     stage: Mapping[str, Any], workspace_dir: Path, *, include_job_artifacts: bool
 ) -> tuple[str, str, str | None]:
-    report_path, report = _stage_job_report(stage) if include_job_artifacts else (None, None)
+    if not include_job_artifacts:
+        report_path, report = None, None
+    elif _text(stage.get("stage_kind")) == "orca_stage":
+        report_path, report = _resolve_orca_stage_report(stage)
+    else:
+        report_path, report = _stage_job_report(stage)
     reason = _stage_status_reason(stage, report)
     if reason == "completed":
         reason = ""
@@ -420,11 +576,15 @@ def _stage_diagnostic(
         explanation = _crest_topology_change_explanation(_read_log_tail(stdout_path))
         if explanation:
             details_path = stdout_path
+    if engine == "orca" and job_dir is not None and report is not None:
+        details_path = _direct_single_link_file(job_dir / RUN_REPORT_HTML_FILE, job_dir)
+        if details_path is None:
+            details_path = _verified_report_markdown_path(job_dir, report)
+        if details_path is None:
+            details_path = report_path
     if details_path is None and job_dir is not None:
         artifact_names = (
-            ("job_state.json",)
-            if engine in {"xtb", "crest"}
-            else ("job_report.html", "job_report.md", "job_report.json")
+            ("job_state.json",) if engine in {"xtb", "crest"} else (RUN_REPORT_JSON_FILE,)
         )
         for name in artifact_names:
             candidate = job_dir / name
@@ -433,20 +593,6 @@ def _stage_diagnostic(
                 break
     details_href = _relative_href(details_path, workspace_dir) if details_path is not None else None
     return reason, explanation, details_href
-
-
-def _orca_stage_output_dir(stage: Mapping[str, Any]) -> Path | None:
-    for kind in ("orca_output_dir",):
-        path = _stage_artifact_path(stage, kind)
-        if path is not None:
-            return path
-    reaction_dir = _text(_stage_metadata(stage).get("reaction_dir"))
-    if reaction_dir:
-        return Path(reaction_dir)
-    report_json = _stage_artifact_path(stage, "orca_report_json")
-    if report_json is not None:
-        return report_json.parent
-    return None
 
 
 def _same_file_snapshot(left: os.stat_result, right: os.stat_result) -> bool:
@@ -645,10 +791,7 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
     reason = ""
     attempt_count = 0
     imaginary_count: int | None = None
-    report_json_path = _stage_artifact_path(stage, "orca_report_json")
-    report_payload = _load_json(report_json_path) if report_json_path is not None else None
-    if _stage_has_diagnostic_status(stage):
-        report_json_path, report_payload = _stage_job_report(stage)
+    report_json_path, report_payload = _resolve_orca_stage_report(stage)
     if report_payload is not None:
         engine_payload = report_payload.get("engine_payload")
         engine_payload = engine_payload if isinstance(engine_payload, dict) else {}
@@ -666,17 +809,21 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
                 except (TypeError, ValueError):
                     imaginary_count = None
 
-    output_dir = _orca_stage_output_dir(stage)
-    energy = latest_engrad_energy(output_dir) if output_dir is not None else None
-    if energy is None and output_dir is not None and report_payload is not None:
-        energy = _orca_report_output_energy(output_dir, report_payload)
+    energy = None
+    if report_json_path is not None and report_payload is not None:
+        # A reusable job root can retain pre-generation ``*.engrad`` files.
+        # Both energy sources must therefore be confined to the generation
+        # whose report provenance and workflow-stage identity were verified.
+        generation_dir = report_json_path.parent
+        energy = latest_engrad_energy(generation_dir)
+        if energy is None:
+            energy = _orca_report_output_energy(generation_dir, report_payload)
 
     report_href: str | None = None
     if report_json_path is not None:
-        # The HTML report is co-located with the report JSON (both live in the
-        # execution generation; pre-relocation jobs keep them at the job root).
+        # The HTML report is co-located with the generation-local report JSON.
         job_report_html = report_json_path.parent / RUN_REPORT_HTML_FILE
-        if job_report_html.exists():
+        if _direct_single_link_file(job_report_html, report_json_path.parent) is not None:
             try:
                 report_href = os.path.relpath(job_report_html, workspace_dir)
             except ValueError:

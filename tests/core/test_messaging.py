@@ -404,7 +404,9 @@ def test_messenger_config_from_mapping() -> None:
     ("raw", "expected"),
     [
         ("telegram", "messenger config"),
+        ({"telegram": None}, "messenger.telegram"),
         ({"telegram": "token"}, "messenger.telegram"),
+        ({"discord": None}, "messenger.discord"),
         ({"discord": ["bot"]}, "messenger.discord"),
     ],
 )
@@ -461,3 +463,30 @@ def test_required_messenger_config_rejects_missing_and_invalid_files(tmp_path: P
     invalid.write_text("messenger: [\n", encoding="utf-8")
     with pytest.raises(ValueError, match="Invalid YAML syntax"):
         load_required_messenger_config_from_file(invalid)
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ("schedulr: {}\n", "Unknown top-level config fields are not supported"),
+        ("scheduler: []\n", "scheduler section must be a mapping"),
+        (
+            "messenger:\n  telegram:\n    bot_token:\n",
+            "messenger.telegram.bot_token must be a string",
+        ),
+    ],
+)
+def test_messenger_file_loaders_reject_invalid_shared_config_before_selection(
+    tmp_path: Path,
+    payload: str,
+    message: str,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(payload, encoding="utf-8")
+
+    for loader in (
+        load_messenger_config_from_file,
+        load_required_messenger_config_from_file,
+    ):
+        with pytest.raises(ValueError, match=message):
+            loader(config_path)

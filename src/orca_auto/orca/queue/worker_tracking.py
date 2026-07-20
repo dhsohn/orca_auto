@@ -22,7 +22,6 @@ from ..config import AppConfig
 from ..inp_rewriter import read_resource_request_from_input
 from ..input_artifacts import selected_input_artifacts
 from ..job_locations import (
-    load_report_json,
     record_from_artifacts,
     resolve_job_metadata,
     resource_dict,
@@ -162,16 +161,12 @@ def upsert_terminal_job_record(
     job_dir = Path(reaction_dir).expanduser().resolve()
     expected = str(expected_job_id or fallback_job_id or "").strip()
     state = load_state(job_dir)
-    report = load_report_json(job_dir)
-    if expected:
-        if not payload_matches_expected_job_id(state, expected):
-            state = None
-        if not payload_matches_expected_job_id(report, expected):
-            report = None
+    if expected and not payload_matches_expected_job_id(state, expected):
+        state = None
     record = record_from_artifacts(
         job_dir=job_dir,
         state=dict(state) if state is not None else None,
-        report=report,
+        report=None,
         fallback_job_id=fallback_job_id or "",
     )
     if record is None or normalize_status(record.status) not in TERMINAL_STATUSES:

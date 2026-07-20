@@ -3926,7 +3926,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertGreaterEqual(mock_signal.call_count, 2)
 
-    def test_reconcile_orphaned_running_uses_job_report_even_with_worker_pid_file(self) -> None:
+    def test_reconcile_orphaned_running_ignores_root_report_even_with_worker_pid_file(
+        self,
+    ) -> None:
         rxn = self.root / "mol_done"
         rxn.mkdir()
         entry = enqueue(self.root, str(rxn))
@@ -3953,8 +3955,8 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         queue_data = json.loads((self.root / "queue.json").read_text(encoding="utf-8"))
         found = next(item for item in queue_data if item["queue_id"] == entry.queue_id)
-        self.assertEqual(found["status"], "completed")
-        self.assertEqual(found["metadata"]["run_id"], "run_done_1")
+        self.assertEqual(found["status"], "pending")
+        self.assertNotIn("run_id", found["metadata"])
 
 
 class TestFillSlots(unittest.TestCase):

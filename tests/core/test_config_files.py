@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import stat
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from orca_auto.core.config.files import (
     config_with_canonical_messenger,
     engine_config_mapping,
     load_required_yaml_mapping,
+    load_shared_config_mapping,
     load_yaml_mapping,
     mapping_section,
     messenger_mapping_from_root,
@@ -17,8 +19,11 @@ from orca_auto.core.config.files import (
     scheduler_admission_root,
     secure_config_file_permissions,
     shared_workflow_root_from_config,
+    validate_shared_config_sections,
+    validated_absolute_linux_path_text,
     validated_runs_root_text,
 )
+from orca_auto.core.messaging.config_io import load_required_messenger_config_from_file
 
 
 def test_messenger_mapping_rejects_legacy_top_level_telegram_block() -> None:
@@ -53,9 +58,10 @@ def test_messenger_mapping_rejects_legacy_top_level_telegram_block() -> None:
     assert config_with_canonical_messenger(canonical)["messenger"] == canonical["messenger"]
 
 
-def test_messenger_mapping_rejects_non_mapping_new_section() -> None:
+@pytest.mark.parametrize("invalid", [None, "telegram", []])
+def test_messenger_mapping_rejects_non_mapping_new_section(invalid: object) -> None:
     with pytest.raises(ValueError, match="messenger section must be a mapping"):
-        messenger_mapping_from_root({"messenger": "telegram"})
+        messenger_mapping_from_root({"messenger": invalid})
 
 
 def test_yaml_parse_error_does_not_expose_secret_source_line(tmp_path: Path) -> None:
@@ -108,6 +114,38 @@ def test_validated_runs_root_text_rejects_windows_and_relative_values(tmp_path: 
         validated_runs_root_text("./runs")
 
 
+@pytest.mark.parametrize(
+    "field_name",
+    ["runs_root", "scheduler.admission_root", "orca.runtime.scratch_root"],
+)
+@pytest.mark.parametrize(
+    "secret_path",
+    [
+        "private-path-secret",
+        r"C:\private-path-secret",
+        "/tmp/../mnt/c/private-path-secret",
+    ],
+)
+def test_canonical_config_path_errors_do_not_echo_raw_values(
+    field_name: str,
+    secret_path: str,
+) -> None:
+    with pytest.raises(ValueError) as captured:
+        validated_absolute_linux_path_text(secret_path, field_name=field_name)
+
+    message = str(captured.value)
+    assert field_name in message
+    assert "private-path-secret" not in message
+
+
+def test_runs_root_validation_error_does_not_echo_raw_value() -> None:
+    with pytest.raises(ValueError) as captured:
+        validated_runs_root_text("private-runs-root-secret")
+
+    assert "runs_root" in str(captured.value)
+    assert "private-runs-root-secret" not in str(captured.value)
+
+
 def test_shared_workflow_root_from_config_returns_none_for_invalid_runs_root(
     tmp_path: Path,
 ) -> None:
@@ -132,7 +170,7 @@ def test_engine_config_mapping_requires_engine_section() -> None:
     assert engine_config_mapping(raw, "orca", inherit_keys=("scheduler",)) == {}
 
 
-def test_engine_config_mapping_merges_matching_partial_scheduler_section() -> None:
+def test_engine_config_mapping_rejects_redundant_engine_scoped_scheduler() -> None:
     raw = {
         "scheduler": {
             "max_active_simulations": 1,
@@ -143,15 +181,120 @@ def test_engine_config_mapping_merges_matching_partial_scheduler_section() -> No
         },
     }
 
-    assert engine_config_mapping(raw, "orca", inherit_keys=("scheduler",)) == {
-        "scheduler": {
-            "max_active_simulations": 1,
-            "admission_root": "/tmp/shared",
-        }
-    }
+    with pytest.raises(ValueError, match="orca.scheduler is not supported"):
+        engine_config_mapping(raw, "orca", inherit_keys=("scheduler",))
 
 
-def test_engine_config_mapping_rejects_scheduler_split_brain() -> None:
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ({"schedulr": {}}, "Unknown top-level config fields are not supported"),
+        (
+            {"scheduler": {"max_active_simulation": 4}},
+            "Unknown scheduler config fields are not supported",
+        ),
+        (
+            {"resources": {"max_core_per_task": 8}},
+            "Unknown resources config fields are not supported",
+        ),
+        (
+            {"workflow": {"root": "/tmp/runs"}},
+            "Unknown workflow config fields are not supported",
+        ),
+        (
+            {"workflow": {"paths": {"xtb_path": "/tmp/xtb"}}},
+            "Unknown workflow.paths config fields are not supported",
+        ),
+        (
+            {"orca": {"runtime": {"max_concurrent": 2}}},
+            "Unknown orca.runtime config fields are not supported",
+        ),
+        (
+            {"orca": {"paths": {"executable": "/tmp/orca"}}},
+            "Unknown orca.paths config fields are not supported",
+        ),
+    ],
+)
+def test_shared_config_validation_rejects_unknown_fields(
+    raw: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        validate_shared_config_sections(raw)
+
+
+@pytest.mark.parametrize(
+    "loader",
+    [load_shared_config_mapping, load_required_messenger_config_from_file],
+    ids=["shared", "required-messenger"],
+)
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (
+            "resources:\n  max_cores_per_task: invalid\n",
+            "resources.max_cores_per_task must be an integer >= 1",
+        ),
+        (
+            "resources:\n  max_memory_gb_per_task: 0\n",
+            "resources.max_memory_gb_per_task must be an integer >= 1",
+        ),
+        (
+            "scheduler:\n  admission_root: relative/pool\n",
+            "scheduler.admission_root must be an absolute Linux path",
+        ),
+        (
+            "orca:\n  runtime:\n    scratch_min_free_gb: 8\n",
+            "orca.runtime.scratch_min_free_gb requires orca.runtime.scratch_root",
+        ),
+        (
+            "orca:\n  runtime:\n    scratch_root: /tmp/orca-scratch\n",
+            "orca.runtime.scratch_root must be a dedicated directory below /dev/shm",
+        ),
+        (
+            "orca:\n  runtime:\n    scratch_root: /dev/shm/orca-scratch\n"
+            "    scratch_min_free_gb: 0\n",
+            "orca.runtime.scratch_min_free_gb must be an integer >= 1",
+        ),
+    ],
+)
+def test_complete_shared_loaders_reject_malformed_execution_controls(
+    tmp_path: Path,
+    loader: Callable[[str | Path], object],
+    payload: str,
+    message: str,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        loader(config_path)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "misplaced-credential: true\n",
+        "messenger:\n  provider: misplaced-credential\n",
+        "messenger:\n  discord:\n    uploads:\n      max_archive_bytes: misplaced-credential\n",
+        "scheduler:\n  admission_root: misplaced-credential\n",
+        "orca:\n  runtime:\n    scratch_root: misplaced-credential\n",
+    ],
+)
+def test_shared_config_errors_do_not_echo_misplaced_credentials(
+    tmp_path: Path,
+    payload: str,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ValueError) as captured:
+        load_shared_config_mapping(config_path)
+
+    assert "misplaced-credential" not in str(captured.value)
+
+
+def test_engine_config_mapping_rejects_engine_scoped_scheduler_split_brain() -> None:
     raw = {
         "scheduler": {
             "max_active_simulations": 1,
@@ -162,7 +305,7 @@ def test_engine_config_mapping_rejects_scheduler_split_brain() -> None:
         },
     }
 
-    with pytest.raises(ValueError, match="cannot override the shared top-level scheduler"):
+    with pytest.raises(ValueError, match="orca.scheduler is not supported"):
         engine_config_mapping(raw, "orca", inherit_keys=("scheduler",))
 
 
@@ -173,7 +316,7 @@ def test_engine_config_mapping_rejects_non_mapping_engine_scheduler(invalid: obj
         "orca": {"scheduler": invalid},
     }
 
-    with pytest.raises(ValueError, match="orca.scheduler must be a mapping"):
+    with pytest.raises(ValueError, match="orca.scheduler is not supported"):
         engine_config_mapping(raw, "orca", inherit_keys=("scheduler",))
 
 
@@ -184,7 +327,7 @@ def test_engine_config_mapping_rejects_non_mapping_engine_resources(invalid: obj
         "orca": {"resources": invalid},
     }
 
-    with pytest.raises(ValueError, match="orca.resources must be a mapping"):
+    with pytest.raises(ValueError, match="orca.resources is not supported"):
         engine_config_mapping(raw, "orca", inherit_keys=("resources",))
 
 
@@ -202,6 +345,81 @@ def test_yaml_mapping_and_section_helpers(tmp_path: Path) -> None:
     invalid_path.write_text("- no\n- mapping\n", encoding="utf-8")
     with pytest.raises(ValueError, match="top-level is not a mapping"):
         load_yaml_mapping(invalid_path)
+
+
+@pytest.mark.parametrize("payload", ["", "  \n\t", "# comment only\n"])
+def test_yaml_mapping_treats_documents_without_a_yaml_node_as_empty_mapping(
+    tmp_path: Path,
+    payload: str,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(payload, encoding="utf-8")
+
+    _path, raw = load_yaml_mapping(config_path)
+
+    assert raw == {}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "null\n",
+        "~\n",
+        "---\n",
+        "---\n# comment\n",
+        '!!null ""\n',
+        '--- !!null ""\n',
+        "false\n",
+        "0\n",
+        "[]\n",
+        "text\n",
+    ],
+)
+def test_yaml_mapping_rejects_explicit_non_mapping_documents(
+    tmp_path: Path,
+    payload: str,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="top-level is not a mapping"):
+        load_yaml_mapping(config_path)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "runs_root: /tmp/one\nruns_root: /tmp/two\n",
+        "scheduler:\n  max_active_simulations: 1\n  max_active_simulations: 2\n",
+    ],
+)
+def test_yaml_mapping_rejects_duplicate_keys_at_every_depth(
+    tmp_path: Path,
+    payload: str,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate mapping key"):
+        load_yaml_mapping(config_path)
+
+
+def test_duplicate_key_error_does_not_expose_secret_values(tmp_path: Path) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    first_secret = "first-super-secret-token"
+    second_secret = "second-super-secret-token"
+    config_path.write_text(
+        f"messenger:\n  telegram:\n    bot_token: {first_secret}\n    bot_token: {second_secret}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as raised:
+        load_yaml_mapping(config_path)
+
+    message = str(raised.value)
+    assert "duplicate mapping key" in message
+    assert first_secret not in message
+    assert second_secret not in message
 
 
 def test_required_yaml_mapping_uses_custom_missing_error(tmp_path: Path) -> None:

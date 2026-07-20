@@ -10,6 +10,7 @@ import pytest
 from orca_auto.orca.report import write_job_html_report
 from orca_auto.orca.report.sp import collect_sp_report_data
 from orca_auto.orca.state import write_report_files
+from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
 
 
 def _out_text(
@@ -132,9 +133,11 @@ def test_collect_sp_report_parses_energy_and_si_block(tmp_path: Path) -> None:
 def test_sp_report_html_renders_energy_and_embedded_si_block(tmp_path: Path) -> None:
     state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=_out_text())
 
-    path = write_job_html_report(tmp_path, state)
+    path = write_job_html_report(
+        tmp_path, state, generation_target=report_generation_target(tmp_path)
+    )
 
-    assert path == tmp_path / "job_report.html"
+    assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
     assert "SP report" in text
     assert "-1234.567890" in text
@@ -156,7 +159,9 @@ def test_bare_freq_report_includes_vibrational_summary_and_thermo(tmp_path: Path
         out_text=_out_text(route="B3LYP def2-SVP Freq", freq_block=True, thermo=True),
     )
 
-    path = write_job_html_report(tmp_path, state)
+    path = write_job_html_report(
+        tmp_path, state, generation_target=report_generation_target(tmp_path)
+    )
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -171,7 +176,9 @@ def test_bare_freq_report_includes_vibrational_summary_and_thermo(tmp_path: Path
 def test_failed_sp_report_keeps_attempt_chain_without_si_block(tmp_path: Path) -> None:
     state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=_out_text(), status="failed")
 
-    path = write_job_html_report(tmp_path, state)
+    path = write_job_html_report(
+        tmp_path, state, generation_target=report_generation_target(tmp_path)
+    )
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -182,13 +189,14 @@ def test_failed_sp_report_keeps_attempt_chain_without_si_block(tmp_path: Path) -
 
 def test_write_report_files_emits_html_and_si_for_sp(tmp_path: Path) -> None:
     state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=_out_text())
+    generation = bind_report_generation(tmp_path, state)
 
     reports = write_report_files(tmp_path, state)
 
-    assert reports["report_html"] == str(tmp_path / "job_report.html")
-    assert reports["si_block"] == str(tmp_path / "si_block.md")
-    assert (tmp_path / "job_report.html").exists()
-    assert (tmp_path / "si_block.md").exists()
+    assert reports["report_html"] == str(generation / "job_report.html")
+    assert reports["si_block"] == str(generation / "si_block.md")
+    assert (generation / "job_report.html").exists()
+    assert (generation / "si_block.md").exists()
 
 
 def test_vibrational_summary_prefers_the_final_output(tmp_path: Path) -> None:

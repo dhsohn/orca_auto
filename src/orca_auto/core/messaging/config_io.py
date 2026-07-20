@@ -12,9 +12,10 @@ from pathlib import Path
 from orca_auto.core.config import MessengerConfig
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
-    load_required_yaml_mapping,
+    load_required_shared_config_mapping,
     load_yaml_mapping,
     messenger_mapping_from_root,
+    validate_shared_config_sections,
 )
 from orca_auto.core.config.schema import messenger_config_from_mapping
 from orca_auto.core.utils.coercion import normalize_text
@@ -43,6 +44,7 @@ def _load_messenger_config(config_path: str | Path | None) -> MessengerConfig:
             path,
         )
         return MessengerConfig()
+    validate_shared_config_sections(raw)
     return messenger_config_from_mapping(messenger_mapping_from_root(raw))
 
 
@@ -58,7 +60,7 @@ def load_required_messenger_config_from_file(
     text = normalize_text(config_path)
     if not text:
         raise ValueError("orca_auto bot config path could not be resolved")
-    _, raw = load_required_yaml_mapping(
+    _, raw = load_required_shared_config_mapping(
         text,
         missing_error=lambda path: FileNotFoundError(
             f"orca_auto bot config does not exist: {path}"

@@ -11,6 +11,7 @@ from orca_auto.orca.report import (
     write_job_html_report,
 )
 from orca_auto.orca.state import write_report_files
+from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
 
 _FREQ_BLOCK = """
 -----------------------
@@ -262,9 +263,11 @@ def test_write_job_html_report_renders_scants_sections(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
     _write_ts_out(out_path)
 
-    path = write_job_html_report(tmp_path, _state(tmp_path, out_path))
+    path = write_job_html_report(
+        tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
+    )
 
-    assert path == tmp_path / "job_report.html"
+    assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
     assert "ScanTS report" in text
     assert "ts_criteria_met" in text
@@ -298,9 +301,11 @@ def test_relaxed_scan_gets_profile_report_not_opt_report(tmp_path: Path) -> None
     out_path = tmp_path / "rxn.out"
     _write_ts_out(out_path)
 
-    path = write_job_html_report(tmp_path, _state(tmp_path, out_path))
+    path = write_job_html_report(
+        tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
+    )
 
-    assert path == tmp_path / "job_report.html"
+    assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
     assert "Relaxed scan report" in text
     assert "ScanTS" not in text
@@ -327,9 +332,11 @@ def test_scants_irc_report_does_not_treat_scan_cycles_as_ts_refinement(
     out_path = tmp_path / "rxn.out"
     _write_scants_irc_out(out_path)
 
-    path = write_job_html_report(tmp_path, _state(tmp_path, out_path))
+    path = write_job_html_report(
+        tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
+    )
 
-    assert path == tmp_path / "job_report.html"
+    assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
     assert "ScanTS report" in text
     assert "Scan energy profile" in text
@@ -345,11 +352,13 @@ def test_write_report_files_includes_html_for_scants(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
     _write_ts_out(out_path)
 
-    reports = write_report_files(tmp_path, _state(tmp_path, out_path))
+    state = _state(tmp_path, out_path)
+    generation = bind_report_generation(tmp_path, state)
+    reports = write_report_files(tmp_path, state)
 
-    assert reports["report_html"] == str(tmp_path / "job_report.html")
-    assert (tmp_path / "job_report.html").exists()
-    assert (tmp_path / "job_report.md").exists()
+    assert reports["report_html"] == str(generation / "job_report.html")
+    assert (generation / "job_report.html").exists()
+    assert (generation / "job_report.md").exists()
 
 
 def test_write_report_files_skips_html_and_removes_stale_for_md(
@@ -361,12 +370,14 @@ def test_write_report_files_skips_html_and_removes_stale_for_md(
     inp.write_text("! B3LYP def2-SVP MD\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     out_path = tmp_path / "rxn.out"
     _write_ts_out(out_path)
-    # Leftover report from a previous Opt/ScanTS job in this reused reaction dir
+    state = _state(tmp_path, out_path)
+    generation = bind_report_generation(tmp_path, state)
+    # Leftover report from a previous Opt/ScanTS job in this reused generation
     # must not survive, or downstream links would surface an obsolete report.
-    stale = tmp_path / "job_report.html"
+    stale = generation / "job_report.html"
     stale.write_text("<html>old opt report</html>", encoding="utf-8")
 
-    reports = write_report_files(tmp_path, _state(tmp_path, out_path))
+    reports = write_report_files(tmp_path, state)
 
     assert "report_html" not in reports
     assert not stale.exists()

@@ -193,7 +193,7 @@ def test_deep_runtime_features_use_normal_unc_safe_review_paths(tmp_path: Path) 
         assert matches and all(record["open_path"] is not None for record in matches)
 
     normal_unc_batch = (
-        r"\\wsl.localhost\Ubuntu-20.04\home\daehyupsohn\orca_runs"
+        r"\\wsl.localhost\Ubuntu-20.04\home\alice\orca_runs"
         r"\.orca_auto_smoke\batches\20260714-122413-f-abcdef"
     )
     source_unc_lengths = [

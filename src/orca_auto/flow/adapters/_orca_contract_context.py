@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue.generation import visible_generation_children
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.orca.job_locations._generation import current_generation_payloads
 
@@ -70,9 +69,9 @@ def load_context(
 
 
 def context_from_runtime(runtime_context: tuple[Any, ...]) -> LoaderContext:
-    tracked_dir, record, state, report, queue_entry = runtime_context
+    tracked_artifact_dir, tracked_dir, record, state, report, queue_entry = runtime_context
     return LoaderContext(
-        tracked_artifact_dir=tracked_dir,
+        tracked_artifact_dir=tracked_artifact_dir,
         tracked_dir=tracked_dir,
         tracked_record=record,
         state=dict(state),
@@ -107,8 +106,8 @@ def set_current_dir(
     deps: Any,
 ) -> None:
     context.current_dir = (
-        context.tracked_artifact_dir
-        or context.tracked_dir
+        context.tracked_dir
+        or context.tracked_artifact_dir
         or deps.direct_dir_target_fn(request.target)
         or deps.resolve_candidate_path_fn(request.reaction_dir)
         or deps.resolve_candidate_path_fn(
@@ -117,34 +116,18 @@ def set_current_dir(
     )
 
 
-def _payload_candidate_dirs(current_dir: Path) -> tuple[Path, ...]:
-    """The job dir itself, then its execution generations newest-first.
-
-    Terminal ORCA jobs keep state and reports inside the generation (the root
-    state is cleaned and reports are generation-only), so a direct-dir load
-    must look one level down when the root has no payload.
-    """
-    return (current_dir, *visible_generation_children(current_dir))
-
-
 def load_context_payloads(context: LoaderContext, deps: Any) -> None:
-    if not context.state and context.current_dir is not None:
-        for candidate in _payload_candidate_dirs(context.current_dir):
-            context.state = deps.load_json_dict_fn(candidate / "job_state.json")
-            if context.state:
-                break
-    if not context.report and context.current_dir is not None:
-        for candidate in _payload_candidate_dirs(context.current_dir):
-            context.report = deps.load_json_dict_fn(candidate / "job_report.json")
-            if context.report:
-                break
-    context.state = _flatten_orca_engine_payload(context.state)
-    context.report = _flatten_orca_engine_payload(context.report)
-    context.state, context.report = current_generation_payloads(
+    raw_state, raw_report = current_generation_payloads(
         context.queue_entry,
         context.state,
         context.report,
     )
+    # Validate every identity alias while the normalized outer ``job`` and
+    # inner ``engine_payload`` mappings are both still present. Flattening
+    # first would discard a conflicting outer identity when the inner payload
+    # already supplied the same queue-facing ``job_id`` for both artifacts.
+    context.state = _flatten_orca_engine_payload(raw_state)
+    context.report = _flatten_orca_engine_payload(raw_report)
 
 
 def resolve_run_id(request: LoadRequest, context: LoaderContext, deps: Any) -> str:

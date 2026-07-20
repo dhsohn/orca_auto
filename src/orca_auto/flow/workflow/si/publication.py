@@ -16,6 +16,7 @@ from orca_auto.core.artifacts import (
     WORKFLOW_SI_MD_FILE,
 )
 from orca_auto.core.utils.persistence import atomic_write_text
+from orca_auto.flow.contracts.workflow import workflow_request_parameters
 
 from ...manifest import (
     normalize_interaction_energy_block,
@@ -27,7 +28,6 @@ from ...manifest import (
 )
 from ..report import _text
 from .collection import collect_workflow_si_data
-from .evidence import _request_parameters
 from .rendering import (
     render_interaction_energy_csv,
     render_workflow_si_csv,
@@ -41,7 +41,7 @@ def _boltzmann_temperature_override(
     payload: Mapping[str, Any],
 ) -> tuple[float | None, str]:
     """Read the admission-validated override from durable workflow state only."""
-    parameters = _request_parameters(payload)
+    parameters = workflow_request_parameters(payload)
     if "boltzmann_temperature_k" not in parameters:
         return None, ""
     try:
@@ -246,7 +246,7 @@ def write_workflow_si(
     try:
         # Durable corruption is not equivalent to an explicit feature disable.
         # Validate before touching the last known-good publication.
-        parameters = _request_parameters(payload)
+        parameters = workflow_request_parameters(payload)
         normalized_interaction = normalize_interaction_energy_block(
             parameters.get("interaction_energy")
         )

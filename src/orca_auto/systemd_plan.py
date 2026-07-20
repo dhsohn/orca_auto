@@ -12,7 +12,7 @@ from orca_auto.core.config import MessengerConfig, messenger_config_from_mapping
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
     engine_config_mapping,
-    load_yaml_mapping,
+    load_shared_config_mapping,
     mapping_section,
     messenger_mapping_from_root,
     scheduler_admission_root,
@@ -21,7 +21,9 @@ from orca_auto.core.config.files import (
 from orca_auto.core.utils.coercion import normalize_text
 
 SYSTEMD_UNIT_NAMES = (
+    "orca_auto-engine-workers@.target",
     "orca_auto-queue-worker@.service",
+    "orca_auto-xtb-md-worker@.service",
     "orca_auto-workflow-worker@.service",
     "orca_auto-bot@.service",
     "orca_auto-runtime@.target",
@@ -140,7 +142,7 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
     if not config.exists():
         return ()
     try:
-        config_path, raw = load_yaml_mapping(config)
+        config_path, raw = load_shared_config_mapping(config)
     except YAML_CONFIG_LOAD_EXCEPTIONS:
         return ()
 
@@ -209,7 +211,7 @@ def _enabled_unit_for_args(*, target_user: str, worker_only: bool, no_enable: bo
     if no_enable:
         return None
     if worker_only:
-        return f"orca_auto-queue-worker@{target_user}.service"
+        return f"orca_auto-engine-workers@{target_user}.target"
     return f"orca_auto-runtime@{target_user}.target"
 
 
@@ -217,8 +219,20 @@ def _runtime_unit_for_user(target_user: str) -> str:
     return f"orca_auto-runtime@{target_user}.target"
 
 
+def _engine_workers_unit_for_user(target_user: str) -> str:
+    return f"orca_auto-engine-workers@{target_user}.target"
+
+
 def _worker_unit_for_user(target_user: str) -> str:
     return f"orca_auto-queue-worker@{target_user}.service"
+
+
+def _xtb_md_worker_unit_for_user(target_user: str) -> str:
+    return f"orca_auto-xtb-md-worker@{target_user}.service"
+
+
+def _bot_unit_for_user(target_user: str) -> str:
+    return f"orca_auto-bot@{target_user}.service"
 
 
 def _systemctl_transition_commands(
@@ -233,31 +247,53 @@ def _systemctl_transition_commands(
         return tuple(commands)
 
     # Stage the desired boot unit before touching the currently selected mode.
-    # If enable fails, the existing live service and boot selection remain
-    # intact instead of turning an installation error into an outage.
+    # Live services are not stopped until the desired target has restarted
+    # successfully, so an intermediate command failure cannot turn an install
+    # error into a worker outage.
     commands.append(("systemctl", "enable", enabled_unit))
     opposite_unit = (
-        _runtime_unit_for_user(target_user) if worker_only else _worker_unit_for_user(target_user)
+        _runtime_unit_for_user(target_user)
+        if worker_only
+        else _engine_workers_unit_for_user(target_user)
     )
-    disable_command = ["systemctl", "disable"]
-    if not no_start:
-        disable_command.append("--now")
-    disable_command.append(opposite_unit)
-    commands.append(tuple(disable_command))
     if not no_start:
         # An explicit install transition is an operator-requested recovery.
-        # Clear the worker's start-limit counter so the bounded automatic
-        # restart policy cannot block that request inside its five-minute window.
+        # Clear bounded service start-limit counters so they cannot block this
+        # operator-requested recovery inside their five-minute windows.
         commands.append(("systemctl", "reset-failed", _worker_unit_for_user(target_user)))
+        commands.append(("systemctl", "reset-failed", _xtb_md_worker_unit_for_user(target_user)))
+        if not worker_only:
+            commands.append(("systemctl", "reset-failed", _bot_unit_for_user(target_user)))
         # `restart` also starts an inactive unit. Unlike `enable --now`, it
         # reliably reloads code and reapplies the runtime target's Wants= graph
         # when the requested mode was already active.
         commands.append(("systemctl", "restart", enabled_unit))
+        desired_units = [
+            _worker_unit_for_user(target_user),
+            _xtb_md_worker_unit_for_user(target_user),
+        ]
+        if not worker_only:
+            desired_units.append(_bot_unit_for_user(target_user))
+        # Targets use Wants=, so a successful target job does not prove that its
+        # services started. Gate destructive cleanup on the actual runtime units.
+        commands.extend(("systemctl", "is-active", "--quiet", unit) for unit in desired_units)
+    # Older worker-only installs enabled the ORCA service directly. Remove only
+    # its boot selection after the desired target is ready; stopping this shared
+    # service would also stop the freshly restarted runtime.
+    commands.append(("systemctl", "disable", _worker_unit_for_user(target_user)))
+    # The opposite target can share live services with the selected target.
+    # Disable its boot selection without --now so the successful desired restart
+    # remains intact if this final cleanup fails.
+    commands.append(("systemctl", "disable", opposite_unit))
+    if worker_only and not no_start:
+        # The runtime target itself is process-free and may remain active until
+        # reboot; stop only the bot that worker-only mode intentionally excludes.
+        commands.append(("systemctl", "stop", _bot_unit_for_user(target_user)))
     return tuple(commands)
 
 
 def _messenger_mapping(config: Path) -> dict[str, Any]:
-    _, parsed = load_yaml_mapping(
+    _, parsed = load_shared_config_mapping(
         config,
         invalid_message=(
             "could not read messenger settings from {path}: top-level YAML is not a mapping"
@@ -347,10 +383,15 @@ def _validate_worker_config(config: Path) -> None:
     """Run the same config loaders used by supervised engine workers."""
 
     try:
-        from orca_auto.core.config.engines import load_crest_config, load_xtb_config
+        from orca_auto.core.config.engines import (
+            load_crest_config,
+            load_xtb_config,
+            load_xtb_md_config,
+        )
         from orca_auto.orca.config import load_config
 
         load_config(str(config))
+        load_xtb_md_config(str(config))
         load_xtb_config(str(config))
         load_crest_config(str(config))
     except Exception as exc:
@@ -384,7 +425,7 @@ def _collect_warnings(
             bot_warning
             or (
                 "The selected messenger is not configured for interactive bot operation; "
-                "only the queue worker will be enabled"
+                "only the default engine-worker target will be enabled"
             )
         )
     elif not auto_selected_worker_only:
@@ -429,7 +470,7 @@ def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstal
         worker_only=effective_worker_only,
         no_enable=options.no_enable,
     )
-    if enabled_unit is not None and not options.no_start:
+    if enabled_unit is not None:
         _validate_worker_config(options.config)
     commands = _systemctl_transition_commands(
         target_user=options.target_user,

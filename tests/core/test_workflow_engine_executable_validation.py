@@ -93,6 +93,46 @@ def _write_shared_config(tmp_path: Path, override: dict[str, object]) -> Path:
     return config_path
 
 
+@pytest.mark.parametrize(
+    ("loader", "override", "field_name"),
+    [
+        pytest.param(
+            load_xtb_config,
+            {"workflow": {"paths": {"xtb_executable": "misplaced-executable-secret"}}},
+            "workflow.paths.xtb_executable",
+            id="workflow-xtb",
+        ),
+        pytest.param(
+            load_crest_config,
+            {"workflow": {"paths": {"crest_executable": "misplaced-executable-secret"}}},
+            "workflow.paths.crest_executable",
+            id="workflow-crest",
+        ),
+        pytest.param(
+            load_orca_config,
+            {"orca": {"paths": {"orca_executable": "misplaced-executable-secret"}}},
+            "orca_executable",
+            id="orca",
+        ),
+    ],
+)
+def test_configured_executable_errors_do_not_echo_raw_values(
+    tmp_path: Path,
+    loader: Loader,
+    override: dict[str, object],
+    field_name: str,
+) -> None:
+    config_path = _write_shared_config(tmp_path, override)
+
+    with pytest.raises(ValueError) as captured:
+        loader(str(config_path))
+
+    message = str(captured.value)
+    assert field_name in message
+    assert "absolute Linux path" in message
+    assert "misplaced-executable-secret" not in message
+
+
 @pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
 @pytest.mark.parametrize("invalid", [None, "disabled", []])
 @pytest.mark.parametrize(
@@ -105,6 +145,33 @@ def _write_shared_config(tmp_path: Path, override: dict[str, object]) -> Path:
             "workflow.paths",
             "workflow.paths section must be a mapping",
             id="workflow-paths",
+        ),
+        pytest.param("orca", "orca section must be a mapping", id="orca"),
+        pytest.param(
+            "orca.runtime",
+            "orca.runtime section must be a mapping",
+            id="orca-runtime",
+        ),
+        pytest.param(
+            "orca.paths",
+            "orca.paths section must be a mapping",
+            id="orca-paths",
+        ),
+        pytest.param("messenger", "messenger section must be a mapping", id="messenger"),
+        pytest.param(
+            "messenger.telegram",
+            "messenger.telegram must be a mapping",
+            id="messenger-telegram",
+        ),
+        pytest.param(
+            "messenger.discord",
+            "messenger.discord must be a mapping",
+            id="messenger-discord",
+        ),
+        pytest.param(
+            "messenger.discord.uploads",
+            "uploads must be a mapping",
+            id="messenger-discord-uploads",
         ),
     ],
 )
@@ -120,9 +187,226 @@ def test_shared_engine_loaders_reject_non_mapping_execution_sections(
     override: dict[str, object]
     if section_path == "workflow.paths":
         override = {"workflow": {"paths": invalid}}
+    elif section_path == "orca.runtime":
+        override = {"orca": {"runtime": invalid}}
+    elif section_path == "orca.paths":
+        override = {"orca": {"paths": invalid}}
+    elif section_path == "messenger.telegram":
+        override = {"messenger": {"telegram": invalid}}
+    elif section_path == "messenger.discord":
+        override = {"messenger": {"discord": invalid}}
+    elif section_path == "messenger.discord.uploads":
+        override = {"messenger": {"discord": {"uploads": invalid}}}
     else:
         override = {section_path: invalid}
     config_path = _write_shared_config(tmp_path, override)
+
+    with pytest.raises(ValueError, match=message):
+        loader(str(config_path))
+
+
+@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        pytest.param(
+            {"runs_root": None},
+            "runs_root must be a string when configured",
+            id="runs-root-null",
+        ),
+        pytest.param(
+            {"workflow": {"paths": {"xtb_executable": None}}},
+            "workflow.paths.xtb_executable must be a string when configured",
+            id="workflow-executable-null",
+        ),
+        pytest.param(
+            {"orca": {"paths": {"orca_executable": None}}},
+            "orca.paths.orca_executable must be a string when configured",
+            id="orca-executable-null",
+        ),
+    ],
+)
+def test_shared_engine_loaders_reject_null_explicit_paths(
+    tmp_path: Path,
+    loader_name: str,
+    loader: Loader,
+    override: dict[str, object],
+    message: str,
+) -> None:
+    del loader_name
+    config_path = _write_shared_config(tmp_path, override)
+
+    with pytest.raises(ValueError, match=message):
+        loader(str(config_path))
+
+
+@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        pytest.param(
+            {"schedulr": {}},
+            "Unknown top-level config fields are not supported",
+            id="top-level-typo",
+        ),
+        pytest.param(
+            {"scheduler": {"max_active_simulation": 2}},
+            "Unknown scheduler config fields are not supported",
+            id="scheduler-typo",
+        ),
+        pytest.param(
+            {"resources": {"max_core_per_task": 2}},
+            "Unknown resources config fields are not supported",
+            id="resources-typo",
+        ),
+        pytest.param(
+            {"workflow": {"root": "/tmp/runs"}},
+            "Unknown workflow config fields are not supported",
+            id="removed-workflow-root",
+        ),
+        pytest.param(
+            {"workflow": {"paths": {"xtb_path": "/tmp/xtb"}}},
+            "Unknown workflow.paths config fields are not supported",
+            id="workflow-path-typo",
+        ),
+        pytest.param(
+            {"orca": {"scheduler": {"max_active_simulations": 2}}},
+            "Unknown orca config fields are not supported",
+            id="engine-scoped-scheduler",
+        ),
+        pytest.param(
+            {"orca": {"runtime": {"max_concurrent": 2}}},
+            "Unknown orca.runtime config fields are not supported",
+            id="removed-runtime-key",
+        ),
+        pytest.param(
+            {"messenger": {"provder": "telegram"}},
+            "Unknown messenger config fields are not supported",
+            id="messenger-typo",
+        ),
+        pytest.param(
+            {"messenger": {"discord": {"channe_ids": []}}},
+            "Unknown messenger.discord config fields are not supported",
+            id="discord-typo",
+        ),
+    ],
+)
+def test_shared_engine_loaders_reject_unknown_config_fields(
+    tmp_path: Path,
+    loader_name: str,
+    loader: Loader,
+    override: dict[str, object],
+    message: str,
+) -> None:
+    del loader_name
+    config_path = _write_shared_config(tmp_path, override)
+
+    with pytest.raises(ValueError, match=message):
+        loader(str(config_path))
+
+
+@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
+@pytest.mark.parametrize("invalid", [None, "", "bad", -1, True, 1.5])
+def test_shared_engine_loaders_reject_invalid_explicit_orca_retry_limit(
+    tmp_path: Path,
+    loader_name: str,
+    loader: Loader,
+    invalid: object,
+) -> None:
+    del loader_name
+    config_path = _write_shared_config(
+        tmp_path,
+        {"orca": {"runtime": {"default_max_retries": invalid}}},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="orca.runtime.default_max_retries must be an integer >= 0",
+    ):
+        loader(str(config_path))
+
+
+@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
+@pytest.mark.parametrize("invalid", [None, "", 1, True])
+def test_shared_engine_loaders_reject_invalid_explicit_scratch_root(
+    tmp_path: Path,
+    loader_name: str,
+    loader: Loader,
+    invalid: object,
+) -> None:
+    del loader_name
+    config_path = _write_shared_config(
+        tmp_path,
+        {"orca": {"runtime": {"scratch_root": invalid}}},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="orca.runtime.scratch_root must be a non-empty string",
+    ):
+        loader(str(config_path))
+
+
+@pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
+@pytest.mark.parametrize(
+    ("messenger", "message"),
+    [
+        pytest.param(
+            {"telegram": {"timeout_seconds": "bad"}},
+            "messenger.telegram.timeout_seconds must be a finite number",
+            id="telegram-delivery",
+        ),
+        pytest.param(
+            {"discord": {"max_attempts": True}},
+            "messenger.discord.max_attempts must be an integer",
+            id="discord-delivery-bool",
+        ),
+        pytest.param(
+            {"discord": {"uploads": {"enabled": "sometimes"}}},
+            "uploads.enabled must be a boolean",
+            id="upload-enabled",
+        ),
+        pytest.param(
+            {"discord": {"uploads": {"max_entries": None}}},
+            "uploads.max_entries must be an integer",
+            id="upload-limit-null",
+        ),
+        pytest.param(
+            {"discord": {"uploads": {"allowed_extensions": [1]}}},
+            "uploads.allowed_extensions entries must be non-empty strings",
+            id="upload-extensions",
+        ),
+        pytest.param(
+            {"telegram": {"bot_token": None}},
+            "messenger.telegram.bot_token must be a string",
+            id="telegram-token-null",
+        ),
+        pytest.param(
+            {"telegram": {"allowed_user_ids": None}},
+            "messenger.telegram.allowed_user_ids",
+            id="telegram-operators-null",
+        ),
+        pytest.param(
+            {"discord": {"bot_token": True}},
+            "messenger.discord.bot_token must be a string",
+            id="discord-token-bool",
+        ),
+        pytest.param(
+            {"discord": {"channel_ids": None}},
+            "messenger.discord.channel_ids",
+            id="discord-channels-null",
+        ),
+    ],
+)
+def test_shared_engine_loaders_reject_invalid_explicit_messenger_values(
+    tmp_path: Path,
+    loader_name: str,
+    loader: Loader,
+    messenger: dict[str, object],
+    message: str,
+) -> None:
+    del loader_name
+    config_path = _write_shared_config(tmp_path, {"messenger": messenger})
 
     with pytest.raises(ValueError, match=message):
         loader(str(config_path))
@@ -186,6 +470,12 @@ def test_orca_loader_rejects_runs_root_that_canonicalizes_to_windows_mount(
             "max_active_simulations",
             "scheduler.max_active_simulations must be an integer >= 1",
             id="max-active-simulations",
+        ),
+        pytest.param(
+            "scheduler",
+            "max_active_xtb_md",
+            "scheduler.max_active_xtb_md must be an integer >= 1",
+            id="max-active-xtb-md",
         ),
         pytest.param(
             "resources",

@@ -5,7 +5,7 @@ from typing import Any
 
 from orca_auto.core.config.files import (
     engine_config_mapping,
-    load_yaml_mapping,
+    load_shared_config_mapping,
     mapping_section,
     runs_root_from_mapping,
     scheduler_admission_root,
@@ -15,7 +15,7 @@ from orca_auto.core.engine_catalog import find_engine_catalog_entry
 
 
 def _load_engine_config(config_path: str) -> tuple[Path, dict[str, Any]]:
-    return load_yaml_mapping(
+    return load_shared_config_mapping(
         config_path,
         invalid_message="Invalid engine config file: {path}",
     )

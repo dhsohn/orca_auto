@@ -9,11 +9,23 @@ from tests.engine_artifact_helpers import orca_artifact_payload
 
 
 def _write_json(path: Path, payload: object) -> None:
+    if path.name == "queue.json" and isinstance(payload, list):
+        payload = [
+            {
+                "app_name": "orca_auto_orca",
+                "engine": "orca",
+                "task_kind": "orca_run_inp",
+                **item,
+            }
+            if isinstance(item, dict)
+            else item
+            for item in payload
+        ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
-def test_load_orca_artifact_contract_prefers_tracking_record_by_job_id(tmp_path: Path) -> None:
+def test_load_orca_artifact_contract_ignores_root_only_tracking_artifacts(tmp_path: Path) -> None:
     allowed_root = tmp_path / "orca_runs"
     job_dir = allowed_root / "rxn_hist_1"
     job_dir.mkdir(parents=True)
@@ -81,12 +93,14 @@ def test_load_orca_artifact_contract_prefers_tracking_record_by_job_id(tmp_path:
     )
 
     assert contract.status == "completed"
-    assert contract.run_id == "run_hist_1"
+    assert contract.run_id == ""
     assert contract.reaction_dir == str(job_dir.resolve())
     assert contract.latest_known_path == str(job_dir.resolve())
     assert contract.selected_inp == str(inp.resolve())
     assert contract.selected_input_xyz == str(xyz.resolve())
-    assert contract.last_out_path == str(out.resolve())
+    assert contract.last_out_path == ""
+    assert contract.run_state_path == ""
+    assert contract.report_json_path == ""
 
 
 def test_load_orca_artifact_contract_matches_queue_task_id(tmp_path: Path) -> None:
@@ -284,7 +298,7 @@ def test_load_orca_artifact_contract_ignores_previous_force_restart_artifacts(
         assert contract.report_md_path == ""
 
 
-def test_load_orca_artifact_contract_publishes_matching_generation_paths_in_both_loaders(
+def test_load_orca_artifact_contract_rejects_root_report_paths_in_both_loaders(
     tmp_path: Path,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
@@ -342,12 +356,15 @@ def test_load_orca_artifact_contract_publishes_matching_generation_paths_in_both
         )
 
     for contract in (canonical_contract, fallback_contract):
-        assert contract.run_state_path == str(state_file.resolve())
-        assert contract.report_json_path == str(report_json.resolve())
-        assert contract.report_md_path == str(report_md.resolve())
+        assert contract.run_state_path == ""
+        assert contract.report_json_path == ""
+        assert contract.report_md_path == ""
+    assert state_file.is_file()
+    assert report_json.is_file()
+    assert report_md.is_file()
 
 
-def test_load_orca_artifact_contract_resolves_run_id_via_orca_tracking_without_records_jsonl(
+def test_load_orca_artifact_contract_does_not_resolve_run_id_from_root_report(
     tmp_path: Path,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
@@ -416,13 +433,15 @@ def test_load_orca_artifact_contract_resolves_run_id_via_orca_tracking_without_r
         orca_allowed_root=allowed_root,
     )
 
-    assert contract.run_id == "run_hist_2"
+    assert contract.run_id == ""
+    assert contract.run_state_path == ""
+    assert contract.report_json_path == ""
     assert contract.status == "completed"
     assert contract.reaction_dir == str(job_dir.resolve())
     assert contract.latest_known_path == str(job_dir.resolve())
     assert contract.selected_inp == str(inp.resolve())
     assert contract.selected_input_xyz == str(xyz.resolve())
-    assert contract.last_out_path == str(out.resolve())
+    assert contract.last_out_path == ""
 
 
 def test_load_orca_artifact_contract_prefers_orca_contract_payload_helper(tmp_path: Path) -> None:

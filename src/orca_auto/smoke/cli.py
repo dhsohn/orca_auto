@@ -10,10 +10,9 @@ from orca_auto.cli_parser_commands import add_smoke_arguments
 from orca_auto.core.config.engines import load_xtb_md_config
 from orca_auto.core.config.files import (
     discover_shared_config_path,
-    load_yaml_mapping,
+    load_shared_config_mapping,
     runs_root_from_mapping,
     scheduler_admission_root,
-    validate_shared_config_sections,
     validated_runs_root_text,
 )
 
@@ -76,7 +75,7 @@ def _resolve_roots(
     )
     raw: dict[str, Any] = {}
     if config_path is not None:
-        _, raw = load_yaml_mapping(config_path)
+        _, raw = load_shared_config_mapping(config_path)
 
     config_root_text = runs_root_from_mapping(raw)
     root_text = runs_root_argument.strip() or config_root_text
@@ -91,7 +90,6 @@ def _resolve_roots(
         return runs_root, None
     if config_path is None:
         raise ValueError("real engine smoke requires --config or a discoverable shared config")
-    validate_shared_config_sections(raw)
     if not config_root_text:
         raise ValueError("real engine smoke requires runs_root in the shared config")
     configured_runs_root = Path(validated_runs_root_text(config_root_text)).expanduser().resolve()

@@ -16,14 +16,14 @@ from orca_auto.core.config.files import (
     config_with_canonical_messenger,
     default_shared_admission_root,
     engine_config_mapping,
-    load_required_yaml_mapping,
+    load_required_shared_config_mapping,
     messenger_mapping_from_root,
     runs_root_from_mapping,
-    validate_shared_config_sections,
     validated_runs_root_text,
 )
 from orca_auto.core.config.schema import (
     RetryRuntimeConfig,
+    explicit_nonnegative_int,
     messenger_config_from_mapping,
 )
 
@@ -83,7 +83,7 @@ class AppConfig:
 
 
 def _load_raw_config(path: Path) -> dict[str, Any]:
-    _, parsed = load_required_yaml_mapping(
+    _, parsed = load_required_shared_config_mapping(
         path,
         missing_error=_missing_config_error,
         invalid_message="Config file is invalid: {path}",
@@ -139,7 +139,6 @@ def _placeholder_keys(cfg: AppConfig) -> list[str]:
 def load_config(config_path: str) -> AppConfig:
     path = Path(config_path).expanduser().resolve()
     raw = _load_raw_config(path)
-    validate_shared_config_sections(raw)
     runs_root_raw = _config_engines.as_nonempty_str(runs_root_from_mapping(raw), "")
     runs_root = validated_runs_root_text(runs_root_raw) if runs_root_raw else ""
     raw = config_with_canonical_messenger(raw)
@@ -151,9 +150,13 @@ def load_config(config_path: str) -> AppConfig:
     resources_raw = _section_mapping(raw, "resources")
 
     orca_executable = _required_config_paths(path, runs_root, paths_raw)
-    default_max_retries = _config_engines.as_int(
-        runtime_raw.get("default_max_retries"),
-        RetryRuntimeConfig.default_max_retries,
+    default_max_retries = (
+        explicit_nonnegative_int(
+            runtime_raw.get("default_max_retries"),
+            field_name="orca.runtime.default_max_retries",
+        )
+        if "default_max_retries" in runtime_raw
+        else RetryRuntimeConfig.default_max_retries
     )
     max_concurrent, admission_root, admission_limit = _scheduler_runtime_settings(
         scheduler_raw,
@@ -164,7 +167,7 @@ def load_config(config_path: str) -> AppConfig:
     cfg = AppConfig(
         runtime=RetryRuntimeConfig(
             allowed_root=runs_root,
-            default_max_retries=max(0, default_max_retries),
+            default_max_retries=default_max_retries,
             max_concurrent=max_concurrent,
             admission_root=admission_root,
             admission_limit=admission_limit,

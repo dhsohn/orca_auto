@@ -137,7 +137,14 @@ def read_confined_text(
     *,
     label: str,
     max_links: int = 1,
+    max_bytes: int | None = None,
 ) -> str:
+    """Read stable UTF-8 text through pinned parent and file descriptors."""
+
+    if max_links < 1:
+        raise ValueError("max_links must be positive")
+    if max_bytes is not None and max_bytes < 1:
+        raise ValueError("max_bytes must be positive")
     resolved_root = root.expanduser().resolve()
     parent = path.parent
     if parent.is_symlink() or not parent.expanduser().resolve().is_relative_to(resolved_root):
@@ -146,23 +153,82 @@ def read_confined_text(
     directory_flags |= os.O_DIRECTORY
     directory_flags |= os.O_NOFOLLOW
     directory_fd = os.open(parent, directory_flags)
+    descriptor = -1
     try:
+        opened_parent = os.fstat(directory_fd)
         file_flags = os.O_RDONLY
         file_flags |= os.O_NONBLOCK
         file_flags |= os.O_NOFOLLOW
         descriptor = os.open(path.name, file_flags, dir_fd=directory_fd)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink < 1 or before.st_nlink > max_links:
+            raise ValueError(f"{label} must be a single-link regular file: {path}")
+        if max_bytes is not None and before.st_size > max_bytes:
+            raise ValueError(f"{label} exceeds its read limit: {path}")
+        chunks: list[bytes] = []
+        total_bytes = 0
+        while True:
+            read_size = 1024 * 1024
+            if max_bytes is not None:
+                read_size = min(read_size, max_bytes - total_bytes + 1)
+            chunk = os.read(descriptor, read_size)
+            if not chunk:
+                break
+            total_bytes += len(chunk)
+            if max_bytes is not None and total_bytes > max_bytes:
+                raise ValueError(f"{label} exceeds its read limit: {path}")
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        visible_file = os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+        visible_parent = os.stat(parent, follow_symlinks=False)
+        file_identity = (
+            int(before.st_dev),
+            int(before.st_ino),
+            int(before.st_mode),
+            int(before.st_size),
+            int(before.st_mtime_ns),
+        )
+        if file_identity != (
+            int(after.st_dev),
+            int(after.st_ino),
+            int(after.st_mode),
+            int(after.st_size),
+            int(after.st_mtime_ns),
+        ) or file_identity != (
+            int(visible_file.st_dev),
+            int(visible_file.st_ino),
+            int(visible_file.st_mode),
+            int(visible_file.st_size),
+            int(visible_file.st_mtime_ns),
+        ):
+            raise ValueError(f"{label} changed while it was read: {path}")
+        for details in (after, visible_file):
+            if (
+                not stat.S_ISREG(details.st_mode)
+                or details.st_nlink < 1
+                or details.st_nlink > max_links
+            ):
+                raise ValueError(f"{label} must be a single-link regular file: {path}")
+        if max_links == 1 and not (
+            before.st_ctime_ns == after.st_ctime_ns == visible_file.st_ctime_ns
+        ):
+            raise ValueError(f"{label} changed while it was read: {path}")
+        if (
+            int(opened_parent.st_dev),
+            int(opened_parent.st_ino),
+        ) != (
+            int(visible_parent.st_dev),
+            int(visible_parent.st_ino),
+        ):
+            raise ValueError(f"{label} parent directory changed while it was read: {parent}")
+        payload = b"".join(chunks)
+        if len(payload) != after.st_size:
+            raise ValueError(f"{label} changed while it was read: {path}")
     finally:
+        if descriptor >= 0:
+            os.close(descriptor)
         os.close(directory_fd)
-    file_status = os.fstat(descriptor)
-    if (
-        not stat.S_ISREG(file_status.st_mode)
-        or file_status.st_nlink < 1
-        or file_status.st_nlink > max_links
-    ):
-        os.close(descriptor)
-        raise ValueError(f"{label} must be a single-link regular file: {path}")
-    with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-        return handle.read()
+    return payload.decode("utf-8", errors="strict")
 
 
 def read_confined_tail_lines(

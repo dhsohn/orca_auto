@@ -97,6 +97,20 @@ def test_engine_identity_rejects_conflicting_present_labels() -> None:
         "crest",
     )
 
+    canonical_orca_mapping = {
+        "queue_id": "q-orca",
+        "app_name": "orca_auto_orca",
+        "task_id": "orca-1",
+        "task_kind": "orca_run_inp",
+        "engine": "orca",
+        "metadata": {},
+    }
+    assert entry_matches_engine_identity(canonical_orca_mapping, "orca")
+    for missing_field in ("app_name", "task_id", "task_kind", "engine"):
+        partial = dict(canonical_orca_mapping)
+        partial.pop(missing_field)
+        assert not entry_matches_engine_identity(partial, "orca")
+
 
 def test_engine_queue_runtime_combines_roots_entries_and_next_entry(
     tmp_path: Path,

@@ -7,6 +7,7 @@ import pytest
 
 from orca_auto.orca.report import collect_opt_report_data, write_job_html_report
 from orca_auto.orca.statuses import AnalyzerStatus
+from tests.engine_artifact_helpers import report_generation_target
 
 _OPT_CYCLES_BLOCK = """
                 *** Geometry Optimization Cycle   1 ***
@@ -182,9 +183,13 @@ def test_opt_report_html_renders_convergence_chart(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
     _write_opt_out(out_path)
 
-    path = write_job_html_report(tmp_path, _state(tmp_path, out_path, reason="normal_termination"))
+    path = write_job_html_report(
+        tmp_path,
+        _state(tmp_path, out_path, reason="normal_termination"),
+        generation_target=report_generation_target(tmp_path),
+    )
 
-    assert path == tmp_path / "job_report.html"
+    assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
     assert "Opt report" in text
     assert "Optimization convergence" in text
@@ -201,7 +206,9 @@ def test_attempt_table_normalizes_live_analyzer_status_enum(tmp_path: Path) -> N
     state = _state(tmp_path, out_path, reason="normal_termination")
     state["attempts"][0]["analyzer_status"] = AnalyzerStatus.COMPLETED
 
-    path = write_job_html_report(tmp_path, state)
+    path = write_job_html_report(
+        tmp_path, state, generation_target=report_generation_target(tmp_path)
+    )
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -217,7 +224,11 @@ def test_frequency_without_mode_vectors_is_not_reported_as_missing_calculation(
     frequency_only = _FREQ_TS_BLOCK.split("------------\nNORMAL MODES", maxsplit=1)[0]
     _write_opt_out(out_path, freq_block=frequency_only)
 
-    path = write_job_html_report(tmp_path, _state(tmp_path, out_path, reason="ts_criteria_met"))
+    path = write_job_html_report(
+        tmp_path,
+        _state(tmp_path, out_path, reason="ts_criteria_met"),
+        generation_target=report_generation_target(tmp_path),
+    )
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -231,7 +242,11 @@ def test_optts_report_summarizes_imaginary_mode(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
     _write_opt_out(out_path, freq_block=_FREQ_TS_BLOCK)
 
-    path = write_job_html_report(tmp_path, _state(tmp_path, out_path, reason="ts_criteria_met"))
+    path = write_job_html_report(
+        tmp_path,
+        _state(tmp_path, out_path, reason="ts_criteria_met"),
+        generation_target=report_generation_target(tmp_path),
+    )
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
@@ -248,7 +263,11 @@ def test_opt_report_flags_unexpected_imaginary_mode(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
     _write_opt_out(out_path, freq_block=_FREQ_TS_BLOCK)
 
-    path = write_job_html_report(tmp_path, _state(tmp_path, out_path, reason="normal_termination"))
+    path = write_job_html_report(
+        tmp_path,
+        _state(tmp_path, out_path, reason="normal_termination"),
+        generation_target=report_generation_target(tmp_path),
+    )
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
