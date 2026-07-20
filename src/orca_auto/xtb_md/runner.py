@@ -16,11 +16,7 @@ from orca_auto.core.admission import (
     build_slot_engine_process_preparer,
     build_slot_engine_process_registrar,
 )
-from orca_auto.core.engine_process import (
-    atomic_write_confined_bytes,
-    ensure_confined_directory,
-    start_logged_process,
-)
+from orca_auto.core.engine_process import start_logged_process
 from orca_auto.core.engine_scratch import (
     EngineScratchPolicy,
     EngineScratchWorkspace,
@@ -29,14 +25,10 @@ from orca_auto.core.engine_scratch import (
     scratch_publication_provenance,
 )
 from orca_auto.core.queue.cancellable import retain_process_ownership_until_exit
-from orca_auto.core.queue.engine.input_snapshot import (
-    read_stable_regular_file,
-    verify_input_snapshots,
-)
+from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.queue.processes import terminate_process_group
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.core.utils import process as process_utils
-from orca_auto.core.utils.persistence import fsync_directory
 
 from .artifacts import (
     XtbMdArtifactError,
@@ -44,16 +36,17 @@ from .artifacts import (
     validate_terminal_artifacts,
 )
 from .command import build_xtb_md_command
+from .generation import validate_xtb_md_generation
+from .input_builder import build_md_input
 from .limits import (
     MAX_XTB_MD_OUTPUT_BYTES,
     MAX_XTB_MD_OUTPUT_FILES,
     manifest_limits_for_config,
 )
-from .manifest import XtbMdManifest, parse_manifest
+from .manifest import MANIFEST_FILE_NAME, XtbMdManifest, load_manifest
 from .path_identity import validate_execution_snapshot_job_dir
 from .version import probe_xtb_version
 
-_EXECUTION_PARENT = ".orca_auto_xtb_md_executions"
 _STDOUT_NAME = "xtb.stdout.log"
 _STDERR_NAME = "xtb.stderr.log"
 _MD_INPUT_NAME = "md.inp"
@@ -99,27 +92,6 @@ def _safe_reason(prefix: str, value: Any) -> str:
     if prefix == "EngineScratchError":
         text = text.replace("ORCA", "engine")
     return f"{prefix}:{text}" if text else prefix
-
-
-def _private_execution_dir(job_dir: Path, task_id: str) -> Path:
-    if not task_id or any(
-        character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
-        for character in task_id
-    ):
-        raise ValueError("xTB-MD task identity is not a safe execution-directory name")
-    parent = ensure_confined_directory(
-        job_dir,
-        job_dir / _EXECUTION_PARENT,
-        label="xTB-MD execution parent",
-    )
-    execution_dir = parent / task_id
-    if execution_dir.exists() or execution_dir.is_symlink():
-        raise ValueError(
-            "xTB-MD execution generation already exists; a submitted generation cannot retry"
-        )
-    execution_dir.mkdir(mode=0o700, exist_ok=False)
-    fsync_directory(parent)
-    return execution_dir.resolve()
 
 
 def _directory_usage(root: Path) -> tuple[int, int]:
@@ -183,6 +155,7 @@ def _create_scratch_workspace(
     execution_dir: Path,
     input_xyz: Path,
     max_memory_gb: int,
+    expected_execution_dir_identity: tuple[int, int],
 ) -> EngineScratchWorkspace | None:
     scratch = getattr(cfg, "scratch", None)
     if scratch is None or not bool(getattr(scratch, "enabled", False)):
@@ -197,6 +170,7 @@ def _create_scratch_workspace(
         ),
         input_xyz,
         durable_output_dir=execution_dir,
+        expected_durable_dir_identity=expected_execution_dir_identity,
     )
 
 
@@ -207,7 +181,7 @@ def _validate_snapshot(
     *,
     execution_dir: Path,
 ) -> tuple[XtbMdManifest, dict[str, int], str, dict[str, str]]:
-    if execution_snapshot.get("version") != 1:
+    if execution_snapshot.get("version") != 2:
         raise ValueError("xTB-MD execution snapshot has an unsupported version")
     if execution_snapshot.get("attempt_limit") != 1:
         raise ValueError("xTB-MD execution snapshot does not enforce one attempt")
@@ -215,9 +189,6 @@ def _validate_snapshot(
         raise ValueError("xTB-MD execution snapshot unexpectedly enables retry")
     if execution_snapshot.get("resume_supported") is not False:
         raise ValueError("xTB-MD execution snapshot unexpectedly enables resume")
-    if validate_execution_snapshot_job_dir(cfg.runtime.allowed_root, execution_snapshot) != job_dir:
-        raise ValueError("xTB-MD execution snapshot job directory changed")
-
     descriptors = execution_snapshot.get("input_snapshots")
     if not isinstance(descriptors, Mapping) or set(descriptors) != {
         "geometry",
@@ -225,36 +196,60 @@ def _validate_snapshot(
         "md_input",
     }:
         raise ValueError("xTB-MD execution snapshot input set is invalid")
-    verified = verify_input_snapshots(job_dir, descriptors)
+    verified: dict[str, Path] = {}
+    for role, raw_descriptor in descriptors.items():
+        if not isinstance(raw_descriptor, Mapping) or raw_descriptor.get("role") != role:
+            raise ValueError(f"xTB-MD execution snapshot {role} descriptor is invalid")
+        verified[role] = engine_runner.verify_confined_output_identity(
+            execution_dir,
+            {
+                "path": raw_descriptor.get("snapshot_path"),
+                "sha256": raw_descriptor.get("sha256"),
+                "size_bytes": raw_descriptor.get("size_bytes"),
+            },
+        )
     raw_manifest = execution_snapshot.get("manifest")
     if not isinstance(raw_manifest, Mapping):
         raise ValueError("xTB-MD execution snapshot has no canonical manifest")
     input_name = str(raw_manifest.get("input_xyz") or "")
     if not input_name or Path(input_name).name != input_name:
         raise ValueError("xTB-MD snapshot input name is invalid")
-    input_path = execution_dir / input_name
-    md_input_path = execution_dir / _MD_INPUT_NAME
-    atomic_write_confined_bytes(
+    expected_paths = {
+        "geometry": (execution_dir / input_name).resolve(),
+        "manifest": (execution_dir / MANIFEST_FILE_NAME).resolve(),
+        "md_input": (execution_dir / _MD_INPUT_NAME).resolve(),
+    }
+    if verified != expected_paths:
+        raise ValueError("xTB-MD execution snapshot input paths are invalid")
+    for key, role in (
+        ("selected_input_xyz", "geometry"),
+        ("manifest_path", "manifest"),
+        ("md_input_path", "md_input"),
+    ):
+        if str(execution_snapshot.get(key) or "") != str(verified[role]):
+            raise ValueError(f"xTB-MD execution snapshot {key} changed")
+
+    expected_sources = {
+        "geometry": str(job_dir / input_name),
+        "manifest": str(job_dir / MANIFEST_FILE_NAME),
+        "md_input": str(job_dir / MANIFEST_FILE_NAME),
+    }
+    for role, expected_source in expected_sources.items():
+        if str(descriptors[role].get("source_path") or "") != expected_source:
+            raise ValueError(f"xTB-MD execution snapshot {role} source path changed")
+
+    manifest = load_manifest(
         execution_dir,
-        input_path,
-        read_stable_regular_file(verified["geometry"], require_single_link=True),
-        label="xTB-MD geometry",
-        mode=0o400,
-    )
-    atomic_write_confined_bytes(
-        execution_dir,
-        md_input_path,
-        read_stable_regular_file(verified["md_input"], require_single_link=True),
-        label="xTB-MD control input",
-        mode=0o400,
-    )
-    manifest = parse_manifest(
-        raw_manifest,
-        job_dir=execution_dir,
         limits=manifest_limits_for_config(cfg),
     )
     if manifest.public_dict() != dict(raw_manifest):
         raise ValueError("xTB-MD canonical manifest changed after snapshot validation")
+    expected_md_input = build_md_input(manifest).encode("utf-8")
+    if (
+        read_stable_regular_file(verified["md_input"], require_single_link=True)
+        != expected_md_input
+    ):
+        raise ValueError("xTB-MD generated control input changed after submission")
 
     raw_resources = execution_snapshot.get("resource_request")
     if not isinstance(raw_resources, Mapping):
@@ -441,12 +436,12 @@ def run_xtb_md_attempt(
     scratch_provenance: dict[str, Any] = {}
     engine_payload: dict[str, Any] = {}
     try:
-        job_dir = validate_execution_snapshot_job_dir(
-            cfg.runtime.allowed_root,
-            execution_snapshot,
-        )
-        active_dir = _private_execution_dir(job_dir, str(getattr(entry, "task_id", "") or ""))
+        active_dir = validate_xtb_md_generation(cfg.runtime.allowed_root, execution_snapshot)
+        job_dir = active_dir.parent
+        active_status = active_dir.stat()
+        execution_dir_identity = (int(active_status.st_dev), int(active_status.st_ino))
         execution_dir = str(active_dir)
+
         manifest, resources, executable, runtime_environment = _validate_snapshot(
             cfg,
             job_dir,
@@ -466,6 +461,7 @@ def run_xtb_md_attempt(
             execution_dir=active_dir,
             input_xyz=manifest.input_xyz,
             max_memory_gb=resources["max_memory_gb"],
+            expected_execution_dir_identity=execution_dir_identity,
         )
         process_dir = scratch_workspace.path if scratch_workspace is not None else active_dir
         process_environment = runtime_environment
@@ -532,10 +528,10 @@ def run_xtb_md_attempt(
                 engine_payload=engine_payload,
             )
 
-        validate_execution_snapshot_job_dir(cfg.runtime.allowed_root, execution_snapshot)
         output_bytes, output_files = _directory_usage(active_dir)
         if output_bytes > MAX_XTB_MD_OUTPUT_BYTES:
             raise XtbMdArtifactError("xTB-MD final output exceeds the server byte limit")
+        validate_xtb_md_generation(cfg.runtime.allowed_root, execution_snapshot)
         terminal = validate_terminal_artifacts(
             attempt,
             manifest=manifest,

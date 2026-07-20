@@ -18,7 +18,7 @@ from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.utils import now_utc_iso
 
 from . import job_locations
-from .path_identity import validate_execution_snapshot_job_dir
+from .generation import validate_xtb_md_generation
 from .state import write_report_json, write_report_md_lines, write_state
 
 
@@ -157,20 +157,13 @@ def persist_job_artifact(cfg: Any, entry: Any, payload: dict[str, Any]) -> None:
     from orca_auto.core.engines.artifacts import build_engine_report_markdown
 
     snapshot = execution_snapshot(entry)
-
-    def validated_job_dir() -> Path:
-        path = validate_execution_snapshot_job_dir(cfg.runtime.allowed_root, snapshot)
-        if path != job_dir_from_entry(entry):
-            raise ValueError("xTB-MD queue job directory changed after submission")
-        return path
-
-    # Revalidate the snapshot-recorded directory identity before every write:
-    # the artifact writers resolve their target afresh, so a directory swapped
-    # in after one write must not receive the remaining artifacts.
-    write_state(validated_job_dir(), payload)
-    write_report_json(validated_job_dir(), payload)
-    write_report_md_lines(validated_job_dir(), build_engine_report_markdown(payload))
-    job_dir = validated_job_dir()
+    artifact_dir = validate_xtb_md_generation(cfg.runtime.allowed_root, snapshot)
+    job_dir = artifact_dir.parent
+    if job_dir != job_dir_from_entry(entry):
+        raise ValueError("xTB-MD queue job directory changed after submission")
+    write_state(artifact_dir, payload)
+    write_report_json(artifact_dir, payload)
+    write_report_md_lines(artifact_dir, build_engine_report_markdown(payload))
     resources = resource_request_from_entry(entry)
     state = payload.get("status")
     status = str(state.get("state") or "") if isinstance(state, Mapping) else ""
@@ -179,6 +172,7 @@ def persist_job_artifact(cfg: Any, entry: Any, payload: dict[str, Any]) -> None:
         job_id=str(getattr(entry, "task_id", "") or ""),
         status=status,
         job_dir=job_dir,
+        artifact_dir=artifact_dir,
         ensemble=ensemble_from_entry(entry),
         selected_input_xyz=selected_input_from_entry(entry),
         molecule_key=str(_metadata(entry).get("molecule_key") or ""),

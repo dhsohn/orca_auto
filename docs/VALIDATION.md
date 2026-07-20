@@ -302,10 +302,15 @@ justifies them.
 
 ## Standalone xTB-MD acceptance
 
-Fake-engine checks must cover strict manifest admission, immutable snapshots,
-NVT/NVE command generation, cancellation/process-group termination, no
+Fake-engine checks must cover strict manifest admission, immutable submission
+binding, NVT/NVE command generation, cancellation/process-group termination, no
 retry/resume, resource/output/time ceilings, and rejection of return-code-zero
-false success, stale, truncated, wrong-atom, or non-finite artifacts.
+false success, stale, truncated, wrong-atom, or non-finite artifacts. They must
+also prove that each accepted submission owns one visible
+`YYYYMMDD-HHMMSS-<8-hex>/` direct child, that bound inputs, state/reports, and
+retained outputs stay in that generation, and that neither a separate hidden
+input/execution tree nor root state/report copies are created. A terminal
+resubmission must preserve the closed generation and create a new sibling.
 When RAM scratch is enabled, they must also prove that the actual process CWD
 and geometry/control arguments are inside the private scratch workspace while
 the reported command and execution identity stay durable; only the two logs,

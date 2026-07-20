@@ -214,3 +214,26 @@ def test_resolve_job_location_matches_canonicalized_path(tmp_path: Path) -> None
     upsert_job_location(tmp_path, record)
 
     assert resolve_job_location(tmp_path, str(real_dir)) == record
+
+
+def test_resolve_job_location_path_alias_selects_newest_generation(tmp_path: Path) -> None:
+    job_dir = tmp_path / "runs" / "water-md"
+    first_generation = job_dir / "20260720-113000-11111111"
+    second_generation = job_dir / "20260720-113100-22222222"
+    second_generation.mkdir(parents=True)
+    first_generation.mkdir()
+    first = _record(
+        "xtbmd-first",
+        original_run_dir=str(job_dir),
+        latest_known_path=str(first_generation),
+    )
+    second = _record(
+        "xtbmd-second",
+        original_run_dir=str(job_dir),
+        latest_known_path=str(second_generation),
+    )
+    upsert_job_location(tmp_path, first)
+    upsert_job_location(tmp_path, second)
+
+    assert resolve_job_location(tmp_path, str(job_dir)) == second
+    assert resolve_job_location(tmp_path, first.job_id) == first

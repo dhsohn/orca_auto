@@ -94,6 +94,7 @@ def _single_row(queue_root: Path) -> Any:
 
 def _make_xmd_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
     from orca_auto.core.config.engines import load_xtb_md_config
+    from orca_auto.core.queue.generation import is_visible_generation_name
     from orca_auto.xtb_md import queue_runtime as xmd_queue_runtime
     from orca_auto.xtb_md import submission as xmd_submission
 
@@ -189,12 +190,21 @@ def _make_xmd_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harnes
         )
 
     cfg = load_xtb_md_config(str(config_path))
+
+    def xmd_record_published() -> bool:
+        assert not (job_dir / "job_state.json").exists()
+        return any(
+            (path / "job_state.json").is_file()
+            for path in job_dir.iterdir()
+            if path.is_dir() and is_visible_generation_name(path.name)
+        )
+
     return Harness(
         name="xmd",
         queue_root=runs_root,
         submit=submit,
         repair=lambda entry: xmd_queue_runtime._repair_queued_publication(cfg, runs_root, entry),
-        record_published=lambda: (job_dir / "job_state.json").exists(),
+        record_published=xmd_record_published,
         set_publish_failing=lambda value: publish_failing.__setitem__("value", value),
         # Load-bearing constant: xTB-MD has no queued-notification path today
         # (nothing to count). If the engine ever gains one, this must become a

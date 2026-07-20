@@ -62,8 +62,11 @@ def test_queue_generation_token_tracks_only_immutable_identity() -> None:
             "resource_request": {"max_cores": 2, "max_memory_gb": 4},
             "resource_actual": {"max_cores": 2, "max_memory_gb": 4},
             "execution_snapshot": {
-                "snapshot_namespace": "snapshot-generation",
-                "selected_input_xyz": "/runs/water-md/snapshot/input.xyz",
+                "version": 2,
+                "generation_name": "20260419-000000-a1b2c3d4",
+                "execution_dir": "/runs/water-md/20260419-000000-a1b2c3d4",
+                "execution_dir_identity": {"device": 11, "inode": 22},
+                "selected_input_xyz": "/runs/water-md/20260419-000000-a1b2c3d4/input.xyz",
             },
             "retry_supported": False,
             "resume_supported": False,
@@ -77,7 +80,7 @@ def test_queue_generation_token_tracks_only_immutable_identity() -> None:
         started_at="2026-04-19T00:01:00+00:00",
         metadata={
             **entry.metadata,
-            "execution_dir": "/runs/water-md/.orca_auto_xtb_md_executions/xtbmd-task",
+            "execution_dir": "/runs/water-md/20260419-000000-a1b2c3d4",
             "attempt": 1,
         },
     )
@@ -116,8 +119,11 @@ def test_queue_generation_rejects_immutable_xtb_md_metadata_changes() -> None:
             "resource_request": {"max_cores": 2, "max_memory_gb": 4},
             "resource_actual": {"max_cores": 2, "max_memory_gb": 4},
             "execution_snapshot": {
-                "snapshot_namespace": "snapshot-generation",
-                "selected_input_xyz": "/runs/water-md/snapshot/input.xyz",
+                "version": 2,
+                "generation_name": "20260419-000000-a1b2c3d4",
+                "execution_dir": "/runs/water-md/20260419-000000-a1b2c3d4",
+                "execution_dir_identity": {"device": 11, "inode": 22},
+                "selected_input_xyz": "/runs/water-md/20260419-000000-a1b2c3d4/input.xyz",
             },
             "retry_supported": False,
             "resume_supported": False,
@@ -145,8 +151,11 @@ def test_queue_generation_rejects_immutable_xtb_md_metadata_changes() -> None:
             metadata={
                 **entry.metadata,
                 "execution_snapshot": {
-                    "snapshot_namespace": "snapshot-replacement",
-                    "selected_input_xyz": "/runs/replacement/input.xyz",
+                    "version": 2,
+                    "generation_name": "20260419-000001-deadbeef",
+                    "execution_dir": "/runs/water-md/20260419-000001-deadbeef",
+                    "execution_dir_identity": {"device": 11, "inode": 33},
+                    "selected_input_xyz": "/runs/water-md/20260419-000001-deadbeef/input.xyz",
                 },
             },
         ),
