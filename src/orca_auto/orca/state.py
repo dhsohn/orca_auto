@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -10,12 +11,17 @@ from typing import Any, cast
 
 from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.artifacts import (
+    MAX_RUN_ARTIFACT_JSON_BYTES,
+    MAX_RUN_REPORT_MD_BYTES,
     RUN_REPORT_JSON_FILE,
+    RUN_REPORT_MD_COMMIT_KEY,
+    RUN_REPORT_MD_COMMIT_VERSION,
     RUN_REPORT_MD_FILE,
     RUN_STATE_FILE,
 )
 from orca_auto.core.engine_process import (
     atomic_write_confined_bytes,
+    read_confined_text,
     require_confined_regular_file,
 )
 from orca_auto.core.engines.artifacts import (
@@ -240,15 +246,43 @@ def load_state(reaction_dir: Path) -> RunState | None:
     return normalized
 
 
-def _load_report_json_unchecked(artifact_dir: Path) -> dict[str, Any] | None:
-    payload = _load_json_dict(report_json_path(artifact_dir))
-    if payload is None:
+def load_generation_state(
+    generation_dir: Path,
+) -> tuple[dict[str, Any], RunState] | None:
+    """Load a state artifact without following links outside its generation."""
+
+    raw_generation_dir = generation_dir.expanduser()
+    if (
+        not raw_generation_dir.is_absolute()
+        or raw_generation_dir.is_symlink()
+        or not is_visible_generation_name(raw_generation_dir.name)
+    ):
         return None
-    if int(payload.get("schema_version", 0) or 0) != 1:
+    try:
+        resolved_generation_dir = raw_generation_dir.resolve(strict=True)
+        before = resolved_generation_dir.stat()
+        if raw_generation_dir != resolved_generation_dir or not stat.S_ISDIR(before.st_mode):
+            return None
+        payload = json.loads(
+            read_confined_text(
+                resolved_generation_dir,
+                state_path(resolved_generation_dir),
+                label="ORCA generation state",
+                max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
+            )
+        )
+        after = resolved_generation_dir.stat()
+    except (OSError, RuntimeError, TypeError, ValueError):
         return None
-    if _text(payload.get("engine")) != "orca":
+    if not isinstance(payload, dict) or (before.st_dev, before.st_ino) != (
+        after.st_dev,
+        after.st_ino,
+    ):
         return None
-    return payload
+    normalized = _state_from_normalized_payload(payload)
+    if normalized is None:
+        return None
+    return payload, normalized
 
 
 def load_report_json(generation_dir: Path) -> dict[str, Any] | None:
@@ -264,17 +298,31 @@ def load_report_json(generation_dir: Path) -> dict[str, Any] | None:
     report_path = report_json_path(raw_generation_dir)
     try:
         resolved_generation_dir = raw_generation_dir.resolve(strict=True)
+        generation_before = resolved_generation_dir.stat()
         before = report_path.lstat()
-    except OSError:
+        payload = json.loads(
+            read_confined_text(
+                resolved_generation_dir,
+                report_path,
+                label="ORCA generation report",
+                max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
+            )
+        )
+    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError):
         return None
     if (
         raw_generation_dir != resolved_generation_dir
-        or not resolved_generation_dir.is_dir()
+        or not stat.S_ISDIR(generation_before.st_mode)
         or not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or not isinstance(payload, dict)
     ):
         return None
-    payload = _load_report_json_unchecked(resolved_generation_dir)
-    if payload is None:
+    try:
+        schema_version = int(payload.get("schema_version", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if schema_version != 1 or _text(payload.get("engine")) != "orca":
         return None
     target = _visible_generation_artifact_dir(resolved_generation_dir.parent, payload)
     if target is None or target[0] != resolved_generation_dir:
@@ -299,12 +347,33 @@ def load_report_json(generation_dir: Path) -> dict[str, Any] | None:
         generation_details = resolved_generation_dir.stat()
     except OSError:
         return None
-    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mtime_ns,
-    ) or target[1] != (int(generation_details.st_dev), int(generation_details.st_ino)):
+    if (
+        (
+            before.st_dev,
+            before.st_ino,
+            before.st_nlink,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        != (
+            after.st_dev,
+            after.st_ino,
+            after.st_nlink,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        or (
+            int(generation_before.st_dev),
+            int(generation_before.st_ino),
+        )
+        != (
+            int(generation_details.st_dev),
+            int(generation_details.st_ino),
+        )
+        or target[1] != (int(generation_details.st_dev), int(generation_details.st_ino))
+    ):
         return None
     return payload
 
@@ -506,6 +575,22 @@ def write_report_md(
     return path
 
 
+def _payload_with_report_markdown_commit(
+    report_payload: Mapping[str, Any],
+    markdown_bytes: bytes,
+) -> dict[str, Any]:
+    committed = dict(report_payload)
+    raw_artifacts = committed.get("artifacts")
+    artifacts = dict(raw_artifacts) if isinstance(raw_artifacts, Mapping) else {}
+    artifacts[RUN_REPORT_MD_COMMIT_KEY] = {
+        "version": RUN_REPORT_MD_COMMIT_VERSION,
+        "sha256": hashlib.sha256(markdown_bytes).hexdigest(),
+        "size_bytes": len(markdown_bytes),
+    }
+    committed["artifacts"] = artifacts
+    return committed
+
+
 def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str, str]:
     """Write the Markdown body before publishing JSON as the report commit marker.
 
@@ -522,9 +607,25 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
         )
         return {}
     markdown = "\n".join(build_engine_report_markdown(report_payload))
-    md_path = write_report_md(reaction_dir, markdown, generation_target=generation_target)
-    json_path = write_report_json(reaction_dir, report_payload, generation_target=generation_target)
-    reports = {"report_json": str(json_path), "report_md": str(md_path)}
+    markdown_bytes = markdown.encode("utf-8")
+    reports: dict[str, str] = {}
+    committed_payload = report_payload
+    if len(markdown_bytes) <= MAX_RUN_REPORT_MD_BYTES:
+        md_path = write_report_md(reaction_dir, markdown, generation_target=generation_target)
+        reports["report_md"] = str(md_path)
+        committed_payload = _payload_with_report_markdown_commit(report_payload, markdown_bytes)
+    else:
+        logger.warning(
+            "job report Markdown exceeds the %d-byte publication limit for %s",
+            MAX_RUN_REPORT_MD_BYTES,
+            reaction_dir,
+        )
+    json_path = write_report_json(
+        reaction_dir,
+        committed_payload,
+        generation_target=generation_target,
+    )
+    reports["report_json"] = str(json_path)
     html_path = write_job_html_report(reaction_dir, state, generation_target=generation_target)
     if html_path is not None:
         reports["report_html"] = str(html_path)

@@ -84,19 +84,19 @@ def _positive_int(value: Any, *, field_name: str) -> int:
     # ``bool`` is an ``int`` subclass; ``int(True) == 1`` would silently accept
     # ``max_archive_bytes: true`` as a 1-byte limit. Reject it explicitly.
     if isinstance(value, bool):
-        raise ValueError(f"{field_name} must be an integer, not a boolean. got={value!r}")
+        raise ValueError(f"{field_name} must be an integer, not a boolean.")
     if isinstance(value, int):
         parsed = value
     elif isinstance(value, float):
         if not math.isfinite(value) or not value.is_integer():
-            raise ValueError(f"{field_name} must be an integer. got={value!r}")
+            raise ValueError(f"{field_name} must be an integer.")
         parsed = int(value)
     elif isinstance(value, str) and _ASCII_INTEGER_PATTERN.fullmatch(value.strip()):
         parsed = int(value.strip())
     else:
-        raise ValueError(f"{field_name} must be an integer. got={value!r}")
+        raise ValueError(f"{field_name} must be an integer.")
     if parsed <= 0:
-        raise ValueError(f"{field_name} must be positive. got={parsed}")
+        raise ValueError(f"{field_name} must be positive.")
     return parsed
 
 
@@ -144,9 +144,8 @@ def upload_policy_from_mapping(raw: object) -> UploadPolicy:
         data = raw
     else:
         raise ValueError("uploads must be a mapping when configured")
-    unknown = sorted(str(key) for key in data if key not in UPLOAD_POLICY_CONFIG_FIELDS)
-    if unknown:
-        raise ValueError(f"Unknown uploads config fields: {', '.join(unknown)}.")
+    if any(key not in UPLOAD_POLICY_CONFIG_FIELDS for key in data):
+        raise ValueError("Unknown uploads config fields are not supported.")
 
     def positive_int_field(key: str, default: int) -> int:
         if key not in data:

@@ -134,5 +134,5 @@ def test_upload_policy_rejects_non_mapping_and_unknown_fields() -> None:
         upload_policy_from_mapping(None)
     with pytest.raises(ValueError, match="uploads must be a mapping"):
         upload_policy_from_mapping("disabled")
-    with pytest.raises(ValueError, match="Unknown uploads config fields: max_entry"):
+    with pytest.raises(ValueError, match="Unknown uploads config fields are not supported"):
         upload_policy_from_mapping({"max_entry": 4})

@@ -509,6 +509,32 @@ Stable top-level expectations:
   `engine_payload.attempts`, and `engine_payload.final_result` carry the
   ORCA-specific run details.
 
+`artifacts` is an extensible capability map. Consumers must ignore unknown
+additive keys and must treat only documented path/log keys as path strings;
+an additive capability value may be a structured object. Current ORCA report
+JSON adds `artifacts.report_markdown_commit` with this shape:
+
+- `version`: integer `1`
+- `size_bytes`: the byte length of `job_report.md`
+- `sha256`: the 64-character lowercase SHA-256 digest of the exact UTF-8 bytes
+  of `job_report.md`
+
+The report writer publishes those Markdown bytes before publishing the JSON
+commit marker. Runtime readers expose `report_md_path` only when the direct,
+single-link Markdown file is stable and its exact byte length and digest match
+that marker. The writer and reader both cap committed Markdown at 8 MiB; an
+oversized rendering leaves the JSON readable but publishes no committed
+Markdown path. Existing schema-version-1 report JSON without this additive
+capability remains valid JSON, but its uncommitted Markdown path is deliberately
+not exposed; there is no identity-line compatibility fallback. Migration is a
+controlled republication from the verified generation state through the current
+report writer, which writes a newly committed Markdown/JSON pair. Do not migrate
+by hand-editing a digest into an existing report. There is no public CLI command
+that performs this republication. If an operator does not have a controlled tool
+that calls the current writer against verified generation state, the old Markdown
+must remain archived outside public runtime lookup; its schema-version-1 JSON
+remains readable independently.
+
 `engine_payload.final_result`, when present, contains:
 
 - `status`
@@ -842,7 +868,9 @@ Supported operator commands:
 
 Stable behavior:
 
-- The installer enables the engine-worker target.
+- In worker-only mode the installer enables the engine-worker target directly.
+  With complete interactive bot configuration it instead enables the full
+  runtime target, which pulls in the engine-worker target.
 - The engine-worker target starts separate ORCA and standalone xTB-MD services;
   either service can fail or restart without stopping the other. An unqualified
   interactive `queue worker` command remains ORCA-only.

@@ -471,6 +471,29 @@ loader는 private입니다.
 - `engine_payload.run_id`, `engine_payload.max_retries`, `engine_payload.attempts`,
   `engine_payload.final_result`는 ORCA 고유 실행 세부 정보입니다.
 
+`artifacts`는 확장 가능한 capability map입니다. 소비자는 알지 못하는 additive key를
+무시해야 하며, 문서화된 path/log key만 경로 문자열로 취급해야 합니다. additive
+capability 값은 구조화된 객체일 수 있습니다. 현재 ORCA report JSON은 다음 형태의
+`artifacts.report_markdown_commit`을 추가합니다:
+
+- `version`: 정수 `1`
+- `size_bytes`: `job_report.md`의 바이트 길이
+- `sha256`: `job_report.md`의 정확한 UTF-8 바이트에 대한 64자리 소문자 SHA-256 digest
+
+report writer는 이 Markdown 바이트를 먼저 게시하고 그 뒤 JSON commit marker를
+게시합니다. runtime reader는 direct single-link Markdown 파일이 안정적이고 정확한
+바이트 길이와 digest가 marker와 일치할 때만 `report_md_path`를 노출합니다. writer와
+reader는 commit되는 Markdown을 모두 8 MiB로 제한합니다. 렌더링이 이보다 크면 JSON은
+계속 읽을 수 있지만 commit된 Markdown 경로는 게시하지 않습니다. 이
+additive capability가 없는 기존 schema-version-1 report JSON도 유효한 JSON이지만,
+commit되지 않은 Markdown 경로는 의도적으로 노출하지 않으며 identity-line 호환
+fallback은 없습니다. migration은 검증된 generation state에서 현재 report writer를
+통해 제어된 방식으로 재게시하여 새로 commit된 Markdown/JSON pair를 만드는
+절차입니다. 기존 report에 digest를 직접 편집해 넣는 방식으로 migration하지
+마십시오. 이 재게시를 수행하는 공개 CLI 명령은 없습니다. 검증된 generation state에
+현재 writer를 적용하는 제어된 도구가 없다면 기존 Markdown은 public runtime lookup
+밖에 보관해야 하며, schema-version-1 JSON은 그와 별개로 계속 읽을 수 있습니다.
+
 `engine_payload.final_result`가 있을 때 포함하는 필드:
 
 - `status`
@@ -764,7 +787,9 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 
 안정 동작:
 
-- installer는 engine-worker target을 활성화합니다.
+- worker-only 모드에서는 installer가 engine-worker target을 직접 활성화합니다. 인터랙티브
+  bot 설정이 완전하면 대신 전체 runtime target을 활성화하고, 그 target이 engine-worker
+  target을 끌어들입니다.
 - engine-worker target은 ORCA와 standalone xTB-MD를 별도 서비스로 시작하므로 한쪽의
   실패나 재시작이 다른 쪽을 중단하지 않습니다. 인자 없는 대화형 `queue worker` 명령은
   ORCA-only 동작을 유지합니다. `runs_root`

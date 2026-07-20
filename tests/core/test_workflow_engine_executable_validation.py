@@ -93,6 +93,46 @@ def _write_shared_config(tmp_path: Path, override: dict[str, object]) -> Path:
     return config_path
 
 
+@pytest.mark.parametrize(
+    ("loader", "override", "field_name"),
+    [
+        pytest.param(
+            load_xtb_config,
+            {"workflow": {"paths": {"xtb_executable": "misplaced-executable-secret"}}},
+            "workflow.paths.xtb_executable",
+            id="workflow-xtb",
+        ),
+        pytest.param(
+            load_crest_config,
+            {"workflow": {"paths": {"crest_executable": "misplaced-executable-secret"}}},
+            "workflow.paths.crest_executable",
+            id="workflow-crest",
+        ),
+        pytest.param(
+            load_orca_config,
+            {"orca": {"paths": {"orca_executable": "misplaced-executable-secret"}}},
+            "orca_executable",
+            id="orca",
+        ),
+    ],
+)
+def test_configured_executable_errors_do_not_echo_raw_values(
+    tmp_path: Path,
+    loader: Loader,
+    override: dict[str, object],
+    field_name: str,
+) -> None:
+    config_path = _write_shared_config(tmp_path, override)
+
+    with pytest.raises(ValueError) as captured:
+        loader(str(config_path))
+
+    message = str(captured.value)
+    assert field_name in message
+    assert "absolute Linux path" in message
+    assert "misplaced-executable-secret" not in message
+
+
 @pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
 @pytest.mark.parametrize("invalid", [None, "disabled", []])
 @pytest.mark.parametrize(
@@ -206,47 +246,47 @@ def test_shared_engine_loaders_reject_null_explicit_paths(
     [
         pytest.param(
             {"schedulr": {}},
-            "Unknown top-level config fields: schedulr",
+            "Unknown top-level config fields are not supported",
             id="top-level-typo",
         ),
         pytest.param(
             {"scheduler": {"max_active_simulation": 2}},
-            "Unknown scheduler config fields: max_active_simulation",
+            "Unknown scheduler config fields are not supported",
             id="scheduler-typo",
         ),
         pytest.param(
             {"resources": {"max_core_per_task": 2}},
-            "Unknown resources config fields: max_core_per_task",
+            "Unknown resources config fields are not supported",
             id="resources-typo",
         ),
         pytest.param(
             {"workflow": {"root": "/tmp/runs"}},
-            "Unknown workflow config fields: root",
+            "Unknown workflow config fields are not supported",
             id="removed-workflow-root",
         ),
         pytest.param(
             {"workflow": {"paths": {"xtb_path": "/tmp/xtb"}}},
-            "Unknown workflow.paths config fields: xtb_path",
+            "Unknown workflow.paths config fields are not supported",
             id="workflow-path-typo",
         ),
         pytest.param(
             {"orca": {"scheduler": {"max_active_simulations": 2}}},
-            "Unknown orca config fields: scheduler",
+            "Unknown orca config fields are not supported",
             id="engine-scoped-scheduler",
         ),
         pytest.param(
             {"orca": {"runtime": {"max_concurrent": 2}}},
-            "Unknown orca.runtime config fields: max_concurrent",
+            "Unknown orca.runtime config fields are not supported",
             id="removed-runtime-key",
         ),
         pytest.param(
             {"messenger": {"provder": "telegram"}},
-            "Unknown messenger config fields: provder",
+            "Unknown messenger config fields are not supported",
             id="messenger-typo",
         ),
         pytest.param(
             {"messenger": {"discord": {"channe_ids": []}}},
-            "Unknown messenger.discord config fields: channe_ids",
+            "Unknown messenger.discord config fields are not supported",
             id="discord-typo",
         ),
     ],

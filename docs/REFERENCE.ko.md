@@ -234,9 +234,10 @@ orca:
   tree와 transient 파일은 생략 provenance에 기록한 뒤 workspace와 함께 제거합니다.
   이 경로는 CREST 자체의 `--scratch` 옵션을 사용하지 않습니다.
 - 단독 xTB-MD도 같은 단일-workspace scratch admission을 사용합니다. 불변 generated
-  geometry, `md.inp`, attempt identity, 큐/상태, 리포트 소유권은 visible
-  `YYYYMMDD-HHMMSS-<8자리 hex>/` generation에 두고 실제 xTB command는 tmpfs의 staging된
-  geometry/control 경로를 읽습니다. 종료 뒤 `xtb.stdout.log`, `xtb.stderr.log`, `xtb.trj`,
+  geometry, `md.inp`, attempt identity, 상태, 리포트 소유권은 visible
+  `YYYYMMDD-HHMMSS-<8자리 hex>/` generation에 두고 queue row는 `runs_root` 아래에 둡니다.
+  실제 xTB command는 tmpfs의 staging된 geometry/control 경로를 읽습니다. 종료 뒤
+  `xtb.stdout.log`, `xtb.stderr.log`, `xtb.trj`,
   `mdrestart`, `xtbmdok`만 transaction으로 게시하고 durable generation에서 검증합니다. 전체
   크기, 파일 수, log, trajectory, checkpoint, marker 크기 상한은 게시 전에 적용하며 위반
   파일은 durable storage로 복사하지 않고 tmpfs에 보존합니다.

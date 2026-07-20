@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from orca_auto.core.artifacts import (
     WORKFLOW_SI_CSV_FILE,
     WORKFLOW_SI_MD_FILE,
 )
+from orca_auto.core.engine_runner import confined_output_identity, executable_identity
 from orca_auto.flow.manifest import interaction_energy_config_fingerprint
 from orca_auto.flow.workflow.si import (
     collect_workflow_si_data,
@@ -24,6 +26,8 @@ from orca_auto.flow.workflow.si import (
     render_workflow_si_md,
     write_workflow_si,
 )
+from orca_auto.flow.workflow.si import evidence as si_evidence
+from tests.engine_artifact_helpers import bind_report_generation
 
 _BASE_SI_CSV_COLUMNS = [
     "name",
@@ -163,11 +167,14 @@ def _stage_dir(
     charge: int = 0,
     multiplicity: int = 1,
 ) -> Path:
-    stage_dir = root / name
-    stage_dir.mkdir(parents=True)
-    inp = stage_dir / "job.inp"
+    job_dir = root / name
+    job_dir.mkdir(parents=True)
+    inp = job_dir / "job.inp"
     inp.write_text(f"! {route}\n* xyz {charge} {multiplicity}\nC 0 0 0\n*\n", encoding="utf-8")
-    out = stage_dir / "job.out"
+    binding_state: dict[str, Any] = {"selected_inp": str(inp)}
+    generation = bind_report_generation(job_dir, binding_state)
+    bound_inp = Path(binding_state["selected_inp"])
+    out = generation / "job.out"
     out.write_text(
         _out_text(
             route=route,
@@ -183,33 +190,61 @@ def _stage_dir(
         ),
         encoding="utf-8",
     )
+    output_identity = confined_output_identity(generation, out)
     state = {
         "schema_version": 1,
         "engine": "orca",
-        "job": {"id": name, "dir": str(stage_dir)},
+        "job": {"id": name, "dir": str(job_dir)},
         "status": {"state": "completed"},
-        "input": {"primary_path": str(inp)},
+        "input": {"primary_path": str(bound_inp)},
         "timestamps": {"started_at": "2026-07-05T01:00:00+00:00", "updated_at": ""},
         "engine_payload": {
             "run_id": "run_test",
             "max_retries": 0,
-            "attempts": [{"index": 1, "out_path": str(out)}],
+            "attempts": [
+                {
+                    "index": 1,
+                    "out_path": str(out),
+                    "output_identity": output_identity,
+                }
+            ],
+            "execution_provenance": binding_state["execution_provenance"],
             "final_result": {"last_out_path": str(out)},
         },
+        "execution_provenance": binding_state["execution_provenance"],
     }
-    (stage_dir / "job_state.json").write_text(json.dumps(state), encoding="utf-8")
-    return stage_dir
+    (generation / "job_state.json").write_text(json.dumps(state), encoding="utf-8")
+    (generation / "job_report.json").write_text(json.dumps(state), encoding="utf-8")
+    return generation
 
 
 def _orca_stage(
     stage_id: str, stage_dir: Path, *, status: str = "completed", label: str = ""
 ) -> dict[str, Any]:
+    report_path = stage_dir / "job_report.json"
+    if stage_id:
+        for artifact_name in ("job_state.json", "job_report.json"):
+            artifact_path = stage_dir / artifact_name
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            payload["job"]["id"] = stage_id
+            if "task_id" in payload["job"]:
+                payload["job"]["task_id"] = stage_id
+            artifact_path.write_text(json.dumps(payload), encoding="utf-8")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    run_id = str(report.get("engine_payload", {}).get("run_id", ""))
     return {
         "stage_id": stage_id,
         "stage_kind": "orca_stage",
         "status": status,
-        "metadata": {"selected_input_label": label or stage_id},
-        "output_artifacts": [{"kind": "orca_output_dir", "path": str(stage_dir)}],
+        "metadata": {
+            "selected_input_label": label or stage_id,
+            "child_job_id": stage_id,
+            "run_id": run_id,
+        },
+        "output_artifacts": [
+            {"kind": "orca_output_dir", "path": str(stage_dir)},
+            {"kind": "orca_report_json", "path": str(report_path)},
+        ],
     }
 
 
@@ -398,6 +433,7 @@ def test_single_point_pair_requires_explicit_electronic_state_provenance(tmp_pat
         ),
         encoding="utf-8",
     )
+    _refresh_output_identity(single_point)
 
     data = collect_workflow_si_data(
         _payload([_orca_stage("min", minimum), _orca_stage("sp", single_point)])
@@ -578,6 +614,324 @@ def test_failed_and_scan_stages_are_excluded_with_reasons(tmp_path: Path) -> Non
     assert "100.00" not in population_section
 
 
+def test_workflow_si_discovers_verified_generation_without_report_artifact(
+    tmp_path: Path,
+) -> None:
+    generation = _stage_dir(
+        tmp_path,
+        "discovered",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    stage = _orca_stage("orca_discovered", generation, label="discovered")
+    stage["metadata"]["latest_known_path"] = str(generation.parent)
+    stage["output_artifacts"] = [
+        artifact for artifact in stage["output_artifacts"] if artifact["kind"] != "orca_report_json"
+    ]
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert [entry.stage_id for entry in data.entries] == ["orca_discovered"]
+    assert data.excluded == ()
+
+
+@pytest.mark.parametrize("dimension", ("job", "run", "queue"))
+def test_workflow_si_rejects_state_report_identity_conflict(
+    tmp_path: Path,
+    dimension: str,
+) -> None:
+    generation = _stage_dir(
+        tmp_path,
+        f"identity_{dimension}",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    stage = _orca_stage(f"orca_identity_{dimension}", generation)
+    state_path = generation / "job_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    if dimension == "job":
+        state["job"]["id"] = "foreign_job"
+    elif dimension == "run":
+        state["engine_payload"]["run_id"] = "foreign_run"
+    else:
+        state["job"]["queue_id"] = "foreign_queue"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert data.entries == ()
+    assert data.excluded[0].reason == "job state identity differs from verified report"
+
+
+def test_workflow_si_rejects_foreign_state_provenance(tmp_path: Path) -> None:
+    generation = _stage_dir(
+        tmp_path,
+        "foreign_provenance",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    stage = _orca_stage("orca_foreign_provenance", generation)
+    state_path = generation / "job_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    for provenance in (
+        state["execution_provenance"],
+        state["engine_payload"]["execution_provenance"],
+    ):
+        provenance["generation_owner_token"] = "foreign-owner-token"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert data.entries == ()
+    assert data.excluded[0].reason == (
+        "job state execution provenance differs from verified report"
+    )
+
+
+def test_workflow_si_rejects_state_selected_input_conflict(tmp_path: Path) -> None:
+    generation = _stage_dir(
+        tmp_path,
+        "foreign_selected_input",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    stage = _orca_stage("orca_foreign_selected_input", generation)
+    foreign_input = generation / "foreign.inp"
+    foreign_input.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    state_path = generation / "job_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["input"]["primary_path"] = str(foreign_input)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert data.entries == ()
+    assert data.excluded[0].reason == "job state selected input differs from verified report"
+
+
+def test_workflow_si_rejects_output_outside_verified_generation(tmp_path: Path) -> None:
+    generation = _stage_dir(
+        tmp_path,
+        "foreign_output",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    stage = _orca_stage("orca_foreign_output", generation)
+    foreign_out = tmp_path / "foreign.out"
+    foreign_out.write_text((generation / "job.out").read_text(encoding="utf-8"), encoding="utf-8")
+    state_path = generation / "job_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["engine_payload"]["attempts"][0]["out_path"] = str(foreign_out)
+    state["engine_payload"]["final_result"]["last_out_path"] = str(foreign_out)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert data.entries == ()
+    assert data.excluded[0].reason == "job state terminal output differs from verified report"
+
+
+def test_workflow_si_rejects_replaced_terminal_output(tmp_path: Path) -> None:
+    generation = _stage_dir(
+        tmp_path,
+        "replaced_output",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    stage = _orca_stage("orca_replaced_output", generation)
+    out = generation / "job.out"
+    out.write_text(out.read_text(encoding="utf-8") + "\npost-run replacement\n", encoding="utf-8")
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert data.entries == ()
+    assert data.excluded[0].reason == ("job output no longer matches its terminal content identity")
+
+
+def test_workflow_si_rejects_state_report_output_identity_mismatch(tmp_path: Path) -> None:
+    generation = _stage_dir(
+        tmp_path,
+        "output_identity_mismatch",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    stage = _orca_stage("orca_output_identity_mismatch", generation)
+    state_path = generation / "job_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["engine_payload"]["attempts"][0]["output_identity"]["sha256"] = "0" * 64
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert data.entries == ()
+    assert data.excluded[0].reason == "job output content identity differs from verified report"
+
+
+def test_workflow_si_rechecks_terminal_output_after_parsing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = _stage_dir(
+        tmp_path,
+        "output_parse_race",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    stage = _orca_stage("orca_output_parse_race", generation)
+    out = generation / "job.out"
+    original_collect = si_evidence.collect_si_block
+
+    def replace_after_parse(reaction_dir: Path, state: dict[str, Any]) -> Any:
+        block = original_collect(reaction_dir, state)
+        out.write_text(out.read_text(encoding="utf-8") + "\nraced replacement\n", encoding="utf-8")
+        return block
+
+    monkeypatch.setattr(si_evidence, "collect_si_block", replace_after_parse)
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert data.entries == ()
+    assert data.excluded[0].reason == ("job output no longer matches its terminal content identity")
+
+
+def test_workflow_si_rechecks_bound_input_after_parsing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = _stage_dir(
+        tmp_path,
+        "input_parse_race",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    stage = _orca_stage("orca_input_parse_race", generation)
+    selected = generation / "job.inp"
+    original_collect = si_evidence.collect_si_block
+
+    def replace_after_parse(reaction_dir: Path, state: dict[str, Any]) -> Any:
+        block = original_collect(reaction_dir, state)
+        selected.write_text(
+            selected.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8"
+        )
+        return block
+
+    monkeypatch.setattr(si_evidence, "collect_si_block", replace_after_parse)
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert data.entries == ()
+    assert data.excluded[0].reason == "selected input is not a provenance-bound generation file"
+
+
+def test_workflow_si_rechecks_generation_owner_after_parsing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = _stage_dir(
+        tmp_path,
+        "owner_parse_race",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    stage = _orca_stage("orca_owner_parse_race", generation)
+    original_collect = si_evidence.collect_si_block
+
+    def remove_owner_after_parse(reaction_dir: Path, state: dict[str, Any]) -> Any:
+        block = original_collect(reaction_dir, state)
+        os.removexattr(generation, "user.orca_auto.generation_owner")
+        return block
+
+    monkeypatch.setattr(si_evidence, "collect_si_block", remove_owner_after_parse)
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert data.entries == ()
+    assert data.excluded[0].reason == "verified report provenance does not identify its generation"
+
+
+def test_workflow_si_redacts_private_paths_from_parse_errors(tmp_path: Path) -> None:
+    generation = _stage_dir(
+        tmp_path,
+        "private_path_parse_error",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    stage = _orca_stage("orca_private_path_parse_error", generation)
+    (generation / "job.out").write_text("ORCA TERMINATED NORMALLY\n", encoding="utf-8")
+    _refresh_output_identity(generation)
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert data.entries == ()
+    assert data.excluded[0].reason == "job evidence could not be parsed into a complete SI block"
+    rendered = render_workflow_si_md(data)
+    assert str(generation) not in rendered
+
+
+@pytest.mark.parametrize("artifact_name", ("job_state.json", "job.out"))
+def test_workflow_si_rejects_symlinked_generation_evidence(
+    tmp_path: Path,
+    artifact_name: str,
+) -> None:
+    generation = _stage_dir(
+        tmp_path,
+        f"symlink_{artifact_name.replace('.', '_')}",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    stage = _orca_stage(f"orca_symlink_{artifact_name}", generation)
+    artifact = generation / artifact_name
+    real_artifact = artifact.with_name(f"{artifact.name}.real")
+    artifact.rename(real_artifact)
+    artifact.symlink_to(real_artifact.name)
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert data.entries == ()
+    if artifact_name == "job_state.json":
+        assert data.excluded[0].reason == "no job state found"
+    else:
+        assert data.excluded[0].reason == (
+            "job output no longer matches its terminal content identity"
+        )
+
+
 def test_nonfinite_parsed_thermochemistry_is_excluded_from_workflow_si(tmp_path: Path) -> None:
     minimum = _minimum(tmp_path, "overflow", energy=-100.0, coords=_COORDS_A)
     out_path = minimum / "job.out"
@@ -588,6 +942,7 @@ def test_nonfinite_parsed_thermochemistry_is_excluded_from_workflow_si(tmp_path:
         ),
         encoding="utf-8",
     )
+    _refresh_output_identity(minimum)
 
     data = collect_workflow_si_data(_payload([_orca_stage("overflow", minimum, label="overflow")]))
 
@@ -993,8 +1348,13 @@ def test_population_failure_still_writes_valid_si(tmp_path: Path, monkeypatch: A
 def test_duplicate_stage_id_does_not_cross_map_populations(tmp_path: Path) -> None:
     lo = _minimum(tmp_path, "lo", energy=-100.010, coords=_COORDS_A)
     hi = _minimum(tmp_path, "hi", energy=-100.000, coords=_COORDS_B)
-    # Both stages share an empty stage_id — previously the population map key.
-    payload = _payload([_orca_stage("", lo, label="lo"), _orca_stage("", hi, label="hi")])
+    # Both valid stages share a stage_id — previously the population map key.
+    payload = _payload(
+        [
+            _orca_stage("duplicate", lo, label="lo"),
+            _orca_stage("duplicate", hi, label="hi"),
+        ]
+    )
 
     data = collect_workflow_si_data(payload)
 
@@ -1176,6 +1536,7 @@ def test_boltzmann_omits_missing_required_provenance(tmp_path: Path) -> None:
             if "Program Version" not in line
         ]
         out_path.write_text("\n".join(lines), encoding="utf-8")
+        _refresh_output_identity(stage_dir)
 
     data = collect_workflow_si_data(
         _payload([_orca_stage("a", a, label="a"), _orca_stage("b", b, label="b")])
@@ -1217,6 +1578,7 @@ def test_boltzmann_never_merges_members_with_missing_echoed_state(tmp_path: Path
             if "* xyz " not in line
         ]
         out_path.write_text("\n".join(lines), encoding="utf-8")
+        _refresh_output_identity(stage_dir)
 
     data = collect_workflow_si_data(
         _payload([_orca_stage("a", a, label="a"), _orca_stage("b", b, label="b")])
@@ -1419,13 +1781,52 @@ def _interaction_stage(
                 "fragment_multiplicity": fragment_multiplicity,
             }
         )
+    artifacts = [{"kind": "orca_output_dir", "path": str(stage_dir)}]
+    report_path = stage_dir / "job_report.json"
+    if report_path.is_file():
+        for artifact_name in ("job_state.json", "job_report.json"):
+            artifact_path = stage_dir / artifact_name
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            payload["job"]["id"] = stage_id
+            if "task_id" in payload["job"]:
+                payload["job"]["task_id"] = stage_id
+            artifact_path.write_text(json.dumps(payload), encoding="utf-8")
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        metadata["child_job_id"] = stage_id
+        metadata["run_id"] = str(report.get("engine_payload", {}).get("run_id", ""))
+        artifacts.append({"kind": "orca_report_json", "path": str(report_path)})
     return {
         "stage_id": stage_id,
         "stage_kind": "orca_stage",
         "status": status,
         "metadata": metadata,
-        "output_artifacts": [{"kind": "orca_output_dir", "path": str(stage_dir)}],
+        "output_artifacts": artifacts,
     }
+
+
+def _refresh_bound_input_identity(generation: Path) -> None:
+    """Rebind an intentionally edited test input as an immutable fixture."""
+
+    selected = generation / "job.inp"
+    identity = executable_identity(selected)
+    for name in ("job_state.json", "job_report.json"):
+        path = generation / name
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["execution_provenance"]["bound_selected_identity"] = identity
+        payload["engine_payload"]["execution_provenance"]["bound_selected_identity"] = identity
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _refresh_output_identity(generation: Path) -> None:
+    """Rebind an intentionally edited test output as terminal evidence."""
+
+    out = generation / "job.out"
+    identity = confined_output_identity(generation, out)
+    for name in ("job_state.json", "job_report.json"):
+        path = generation / name
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["engine_payload"]["attempts"][0]["output_identity"] = identity
+        path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _params_payload(
@@ -1637,6 +2038,8 @@ def test_interaction_energy_rejects_mixed_executed_routes(tmp_path: Path) -> Non
         inp_path.read_text(encoding="utf-8").replace(_SP_ROUTE, "HF STO-3G"),
         encoding="utf-8",
     )
+    _refresh_bound_input_identity(stage_dir)
+    _refresh_output_identity(stage_dir)
     result = collect_workflow_si_data(payload).interaction_energies[0]
     assert not result.resolved
     assert "levels differ" in result.note
@@ -1653,6 +2056,7 @@ def test_interaction_energy_rejects_selected_input_output_route_mismatch(
         inp_path.read_text(encoding="utf-8").replace(_SP_ROUTE, "HF STO-3G"),
         encoding="utf-8",
     )
+    _refresh_bound_input_identity(stage_dir)
     result = collect_workflow_si_data(payload).interaction_energies[0]
     assert not result.resolved
     assert "selected-input route/electronic state" in result.note
@@ -2259,6 +2663,7 @@ def test_multi_route_line_selected_input_stays_provenance_verified(tmp_path: Pat
     (stage_dir / "job.inp").write_text(
         "! B3LYP def2-SVP Opt\n! Freq\n* xyz 0 1\nC 0 0 0\n*\n", encoding="utf-8"
     )
+    _refresh_bound_input_identity(stage_dir)
     out = stage_dir / "job.out"
     out.write_text(
         out.read_text(encoding="utf-8").replace(
@@ -2267,6 +2672,7 @@ def test_multi_route_line_selected_input_stays_provenance_verified(tmp_path: Pat
         ),
         encoding="utf-8",
     )
+    _refresh_output_identity(stage_dir)
 
     data = collect_workflow_si_data(_payload([_orca_stage("conf_multi", stage_dir)]))
 

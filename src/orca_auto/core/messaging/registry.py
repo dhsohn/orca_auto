@@ -50,10 +50,9 @@ def build_channel(
     and messages through a different adapter.
     """
     provider = messenger.normalized_provider
-    try:
-        builder = _CHANNEL_BUILDERS[provider]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported messenger provider: {provider!r}.") from exc
+    builder = _CHANNEL_BUILDERS.get(provider)
+    if builder is None:
+        raise ValueError("Unsupported messenger provider.") from None
     return builder(messenger, logger)
 
 

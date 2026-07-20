@@ -16,6 +16,7 @@ from orca_auto.core.config.schema import (
     as_str,
     discord_config_from_mapping,
     explicit_nonnegative_int,
+    messenger_config_from_mapping,
     normalize_admission_limit,
     normalize_default_max_retries,
     normalize_max_concurrent,
@@ -458,17 +459,17 @@ def test_discord_config_parses_upload_policy() -> None:
         (
             telegram_config_from_mapping,
             {"bot_tokn": "token"},
-            "Unknown messenger.telegram config fields: bot_tokn",
+            "Unknown messenger.telegram config fields are not supported",
         ),
         (
             discord_config_from_mapping,
             {"channe_ids": []},
-            "Unknown messenger.discord config fields: channe_ids",
+            "Unknown messenger.discord config fields are not supported",
         ),
         (
             discord_config_from_mapping,
             {"uploads": {"max_entry": 4}},
-            "Unknown uploads config fields: max_entry",
+            "Unknown uploads config fields are not supported",
         ),
     ],
 )
@@ -479,6 +480,24 @@ def test_messenger_adapter_config_rejects_unknown_fields(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         parser(raw)
+
+
+@pytest.mark.parametrize(
+    ("parser", "raw"),
+    [
+        (messenger_config_from_mapping, {"provider": "private-provider-value"}),
+        (telegram_config_from_mapping, {"private-unknown-key": "value"}),
+        (discord_config_from_mapping, {"uploads": {"max_entries": "private-limit-value"}}),
+    ],
+)
+def test_messenger_config_validation_errors_do_not_echo_raw_values(
+    parser: Any,
+    raw: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError) as raised:
+        parser(raw)
+
+    assert "private-" not in str(raised.value)
 
 
 @pytest.mark.parametrize("uploads", [None, "disabled", [], False])

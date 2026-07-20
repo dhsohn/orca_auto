@@ -204,14 +204,17 @@ def test_engine_runtime_paths_ignores_legacy_root_keys(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="Unknown workflow config fields: root"):
+    with pytest.raises(ValueError, match="Unknown workflow config fields are not supported"):
         engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
 
 
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
-        ("runs_root: /tmp/runs\nschedulr: {}\n", "Unknown top-level config fields: schedulr"),
+        (
+            "runs_root: /tmp/runs\nschedulr: {}\n",
+            "Unknown top-level config fields are not supported",
+        ),
         (
             "runs_root: /tmp/runs\nscheduler: []\n",
             "scheduler section must be a mapping",
@@ -294,7 +297,7 @@ def test_engine_runtime_paths_rejects_engine_scoped_scheduler_override(
     )
 
     for engine in (None, "orca", "xtb", "crest"):
-        with pytest.raises(ValueError, match="Unknown orca config fields: scheduler"):
+        with pytest.raises(ValueError, match="Unknown orca config fields are not supported"):
             engine_runtime.engine_runtime_paths(str(config_path), engine=engine)
 
 

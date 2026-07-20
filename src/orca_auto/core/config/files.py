@@ -280,9 +280,11 @@ def _reject_unknown_config_fields(
     allowed: frozenset[str],
     section: str,
 ) -> None:
-    unknown = sorted(str(key) for key in raw if key not in allowed)
-    if unknown:
-        raise ValueError(f"Unknown {section} config fields: {', '.join(unknown)}.")
+    if any(key not in allowed for key in raw):
+        # A malformed mapping key can itself be a misplaced credential. Keep
+        # validation errors safe for CLI and journal output by naming only the
+        # public section, never the raw key.
+        raise ValueError(f"Unknown {section} config fields are not supported.")
 
 
 def _validate_optional_text_field(
@@ -319,12 +321,23 @@ def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
                 scheduler.get(key),
                 field_name=f"scheduler.{key}",
             )
+    if "admission_root" in scheduler:
+        validated_absolute_linux_path_text(
+            normalize_text(scheduler.get("admission_root")),
+            field_name="scheduler.admission_root",
+        )
     resources = _configured_mapping_section(raw, "resources")
     _reject_unknown_config_fields(
         resources,
         allowed=_RESOURCE_CONFIG_FIELDS,
         section="resources",
     )
+    for key in _RESOURCE_CONFIG_FIELDS:
+        if key in resources:
+            explicit_positive_int(
+                resources.get(key),
+                field_name=f"resources.{key}",
+            )
     workflow = _configured_mapping_section(raw, "workflow")
     _reject_unknown_config_fields(
         workflow,
@@ -361,11 +374,12 @@ def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
             orca_runtime.get("default_max_retries"),
             field_name="orca.runtime.default_max_retries",
         )
-    if "scratch_root" in orca_runtime and (
-        not isinstance(orca_runtime.get("scratch_root"), str)
-        or not str(orca_runtime.get("scratch_root")).strip()
-    ):
-        raise ValueError("orca.runtime.scratch_root must be a non-empty string when configured")
+    # Import lazily because the canonical scratch validator imports the path
+    # validation helpers from this module. Reusing it here keeps shared/bot and
+    # engine loaders on one scratch-root and reserve contract.
+    from .scratch import scratch_config_from_runtime_mapping
+
+    scratch_config_from_runtime_mapping(orca_runtime)
     orca_paths = _configured_mapping_section(orca, "paths", field_name="orca.paths")
     _reject_unknown_config_fields(
         orca_paths,
@@ -505,16 +519,15 @@ def validated_absolute_linux_path_text(path_text: str, *, field_name: str) -> st
     """Reject Windows-style and non-absolute paths before resolution."""
 
     if is_rejected_windows_path(path_text):
-        raise ValueError(
-            f"{field_name} must be a Linux path (Windows paths are not supported): {path_text!r}"
-        )
+        raise ValueError(f"{field_name} must be a Linux path (Windows paths are not supported).")
     if not Path(path_text).is_absolute():
-        raise ValueError(f"{field_name} must be an absolute Linux path: {path_text!r}")
-    resolved = str(Path(path_text).expanduser().resolve())
+        raise ValueError(f"{field_name} must be an absolute Linux path.")
+    try:
+        resolved = str(Path(path_text).expanduser().resolve())
+    except (OSError, RuntimeError, ValueError):
+        raise ValueError(f"{field_name} must resolve to a valid absolute Linux path.") from None
     if is_rejected_windows_path(resolved):
-        raise ValueError(
-            f"{field_name} must resolve to a Linux path outside Windows mounts: {path_text!r}"
-        )
+        raise ValueError(f"{field_name} must resolve to a Linux path outside Windows mounts.")
     return resolved
 
 

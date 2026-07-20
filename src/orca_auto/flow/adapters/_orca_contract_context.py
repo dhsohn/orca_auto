@@ -117,13 +117,17 @@ def set_current_dir(
 
 
 def load_context_payloads(context: LoaderContext, deps: Any) -> None:
-    context.state = _flatten_orca_engine_payload(context.state)
-    context.report = _flatten_orca_engine_payload(context.report)
-    context.state, context.report = current_generation_payloads(
+    raw_state, raw_report = current_generation_payloads(
         context.queue_entry,
         context.state,
         context.report,
     )
+    # Validate every identity alias while the normalized outer ``job`` and
+    # inner ``engine_payload`` mappings are both still present. Flattening
+    # first would discard a conflicting outer identity when the inner payload
+    # already supplied the same queue-facing ``job_id`` for both artifacts.
+    context.state = _flatten_orca_engine_payload(raw_state)
+    context.report = _flatten_orca_engine_payload(raw_report)
 
 
 def resolve_run_id(request: LoadRequest, context: LoaderContext, deps: Any) -> str:

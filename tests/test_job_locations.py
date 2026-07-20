@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,12 @@ from unittest.mock import patch
 
 import pytest
 
+from orca_auto.core import engine_process as _engine_process
+from orca_auto.core.artifacts import (
+    MAX_RUN_REPORT_MD_BYTES,
+    RUN_REPORT_MD_COMMIT_KEY,
+    RUN_REPORT_MD_COMMIT_VERSION,
+)
 from orca_auto.core.engine_runner import executable_identity
 from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.core.queue.engine.input_snapshot import (
@@ -295,6 +302,50 @@ def _write_generation_payloads(
     _write_json(state_path(generation_dir), payload)
     _write_json(report_json_path(generation_dir), payload)
     return selected_inp, out
+
+
+def _report_markdown_commit(markdown_bytes: bytes) -> dict[str, object]:
+    return {
+        "version": RUN_REPORT_MD_COMMIT_VERSION,
+        "sha256": hashlib.sha256(markdown_bytes).hexdigest(),
+        "size_bytes": len(markdown_bytes),
+    }
+
+
+def _bind_report_markdown_commit(generation_dir: Path, markdown_bytes: bytes) -> None:
+    payload = json.loads(report_json_path(generation_dir).read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    raw_artifacts = payload.get("artifacts")
+    artifacts = dict(raw_artifacts) if isinstance(raw_artifacts, dict) else {}
+    artifacts[RUN_REPORT_MD_COMMIT_KEY] = _report_markdown_commit(markdown_bytes)
+    payload["artifacts"] = artifacts
+    _write_json(report_json_path(generation_dir), payload)
+
+
+def _write_committed_report_markdown(generation_dir: Path, markdown_bytes: bytes) -> Path:
+    markdown_path = generation_dir / "job_report.md"
+    markdown_path.write_bytes(markdown_bytes)
+    _bind_report_markdown_commit(generation_dir, markdown_bytes)
+    return markdown_path
+
+
+def _verified_queue_absent_report_generation(tmp_path: Path) -> tuple[Path, Path, Path]:
+    allowed_root = tmp_path / "runs"
+    job_dir = allowed_root / "verified-report"
+    generation = job_dir / "20260714-224054-98989898"
+    generation.mkdir(parents=True)
+    _write_generation_payloads(
+        job_dir=job_dir,
+        generation_dir=generation,
+        job_id="job_verified_report",
+        run_id="run_verified_report",
+    )
+    _execution_snapshot_locator(job_dir, generation)
+    markdown_path = _write_committed_report_markdown(
+        generation,
+        b"# Verified generation report\n",
+    )
+    return allowed_root, generation, markdown_path
 
 
 def test_upsert_job_record_writes_allowed_root_index_and_resolves_latest_dir() -> None:
@@ -1004,13 +1055,37 @@ def test_queue_absent_visible_generation_uses_provenance_and_rejects_unowned_rep
         _write_json(report_json_path(generation), payload)
 
     publish(provenance)
+    report_md = _write_committed_report_markdown(
+        generation,
+        b"# Verified generation report\n",
+    )
     valid = load_orca_contract_payload(allowed_root, str(generation))
+    from orca_auto.flow.adapters.orca import load_orca_artifact_contract
+
+    with patch(
+        "orca_auto.flow.adapters.orca._orca_tracking.load_orca_contract_payload_impl",
+        return_value=None,
+    ):
+        fallback = load_orca_artifact_contract(
+            target=str(generation),
+            orca_allowed_root=allowed_root,
+        )
 
     assert valid["status"] == "completed"
     assert valid["selected_inp"] == str(selected_inp.resolve())
     assert valid["optimized_xyz_path"] == str(calculated_xyz.resolve())
     assert valid["run_state_path"] == str(state_path(generation).resolve())
     assert valid["report_json_path"] == str(report_json_path(generation).resolve())
+    assert valid["report_md_path"] == str(report_md.resolve())
+    assert fallback.run_state_path == str(state_path(generation).resolve())
+    assert fallback.report_json_path == str(report_json_path(generation).resolve())
+    assert fallback.report_md_path == str(report_md.resolve())
+
+    report_json_path(generation).unlink()
+    without_report_commit = load_orca_contract_payload(allowed_root, str(generation))
+    assert without_report_commit["report_json_path"] == ""
+    assert without_report_commit["report_md_path"] == ""
+    publish(provenance)
 
     moved_generation = job_dir / "moved-original-generation"
     generation.rename(moved_generation)
@@ -1025,12 +1100,177 @@ def test_queue_absent_visible_generation_uses_provenance_and_rejects_unowned_rep
     publish(provenance)
 
     replacement = load_orca_contract_payload(allowed_root, str(generation))
+    replacement_paths = _job_location_contracts._runtime_paths(
+        generation,
+        queue_entry=None,
+    )
 
     assert replacement["status"] == "unknown"
     assert replacement["reason"] == "queue_generation_verification_failed"
     assert replacement["selected_inp"] == ""
     assert replacement["optimized_xyz_path"] == ""
     assert replacement["last_out_path"] == ""
+    assert replacement_paths == {
+        "run_state_path": "",
+        "report_json_path": "",
+        "report_md_path": "",
+    }
+
+
+@pytest.mark.parametrize("unsafe_kind", ["hardlink", "binary", "symlink", "oversized"])
+def test_verified_report_markdown_rejects_unsafe_files(
+    tmp_path: Path,
+    unsafe_kind: str,
+) -> None:
+    allowed_root, generation, report_md = _verified_queue_absent_report_generation(tmp_path)
+    if unsafe_kind == "binary":
+        markdown_bytes = b"\xff\xfeinvalid UTF-8"
+        report_md.write_bytes(markdown_bytes)
+    elif unsafe_kind == "oversized":
+        markdown_bytes = b"x" * (MAX_RUN_REPORT_MD_BYTES + 1)
+        report_md.write_bytes(markdown_bytes)
+    else:
+        markdown_bytes = b"# Externally linked report\n"
+        outside = tmp_path / f"outside-{unsafe_kind}.md"
+        outside.write_bytes(markdown_bytes)
+        report_md.unlink()
+        if unsafe_kind == "hardlink":
+            os.link(outside, report_md)
+        else:
+            report_md.symlink_to(outside)
+    _bind_report_markdown_commit(generation, markdown_bytes)
+
+    payload = load_orca_contract_payload(allowed_root, str(generation))
+
+    assert payload["report_json_path"] == str(report_json_path(generation).resolve())
+    assert payload["report_md_path"] == ""
+
+
+def test_verified_report_markdown_rejects_replacement_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed_root, generation, report_md = _verified_queue_absent_report_generation(tmp_path)
+    markdown_bytes = report_md.read_bytes()
+    original_inode = report_md.stat().st_ino
+    replacement = generation / "replacement-report.md"
+    replacement.write_bytes(markdown_bytes)
+    original_read = _engine_process.os.read
+    replaced = False
+
+    def replacing_read(descriptor: int, size: int) -> bytes:
+        nonlocal replaced
+        chunk = original_read(descriptor, size)
+        if not replaced and chunk and os.fstat(descriptor).st_ino == original_inode:
+            replacement.replace(report_md)
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(_engine_process.os, "read", replacing_read)
+
+    payload = load_orca_contract_payload(allowed_root, str(generation))
+
+    assert replaced
+    assert payload["run_state_path"] == ""
+    assert payload["report_json_path"] == ""
+    assert payload["report_md_path"] == ""
+
+
+def test_runtime_paths_reject_report_replacement_during_markdown_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _allowed_root, generation, report_md = _verified_queue_absent_report_generation(tmp_path)
+    report_file = report_json_path(generation)
+    replacement = generation / "replacement-report.json"
+    replacement.write_bytes(report_file.read_bytes())
+    markdown_inode = report_md.stat().st_ino
+    original_read = _engine_process.os.read
+    replaced = False
+
+    def replacing_read(descriptor: int, size: int) -> bytes:
+        nonlocal replaced
+        chunk = original_read(descriptor, size)
+        if not replaced and chunk and os.fstat(descriptor).st_ino == markdown_inode:
+            replacement.replace(report_file)
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(_engine_process.os, "read", replacing_read)
+
+    paths = _job_location_contracts._runtime_paths(generation, queue_entry=None)
+
+    assert replaced
+    assert paths == {
+        "run_state_path": "",
+        "report_json_path": "",
+        "report_md_path": "",
+    }
+
+
+def test_verified_report_markdown_rejects_uncommitted_rewrite(tmp_path: Path) -> None:
+    allowed_root, generation, report_md = _verified_queue_absent_report_generation(tmp_path)
+    report_md.write_text("# New report before JSON commit\n", encoding="utf-8")
+
+    payload = load_orca_contract_payload(allowed_root, str(generation))
+
+    assert payload["report_json_path"] == str(report_json_path(generation).resolve())
+    assert payload["report_md_path"] == ""
+
+
+def test_runtime_paths_reject_mismatched_disk_payload_generations(tmp_path: Path) -> None:
+    _allowed_root, generation, _report_md = _verified_queue_absent_report_generation(tmp_path)
+    report_payload = json.loads(report_json_path(generation).read_text(encoding="utf-8"))
+    assert isinstance(report_payload, dict)
+    report_job = report_payload["job"]
+    report_engine_payload = report_payload["engine_payload"]
+    assert isinstance(report_job, dict)
+    assert isinstance(report_engine_payload, dict)
+    report_job["id"] = "job_other"
+    report_job["task_id"] = "job_other"
+    report_engine_payload["run_id"] = "run_other"
+    _write_json(report_json_path(generation), report_payload)
+
+    paths = _job_location_contracts._runtime_paths(generation, queue_entry=None)
+
+    assert paths == {
+        "run_state_path": "",
+        "report_json_path": "",
+        "report_md_path": "",
+    }
+
+
+def test_runtime_paths_reject_replacement_between_payload_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _allowed_root, generation, _report_md = _verified_queue_absent_report_generation(tmp_path)
+    state_file = state_path(generation)
+    report_file = report_json_path(generation)
+    replacement = generation / "replacement-state.json"
+    replacement.write_bytes(state_file.read_bytes())
+    report_inode = report_file.stat().st_ino
+    original_read = _engine_process.os.read
+    replaced = False
+
+    def replacing_read(descriptor: int, size: int) -> bytes:
+        nonlocal replaced
+        chunk = original_read(descriptor, size)
+        if not replaced and chunk and os.fstat(descriptor).st_ino == report_inode:
+            replacement.replace(state_file)
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(_engine_process.os, "read", replacing_read)
+
+    paths = _job_location_contracts._runtime_paths(generation, queue_entry=None)
+
+    assert replaced
+    assert paths == {
+        "run_state_path": "",
+        "report_json_path": "",
+        "report_md_path": "",
+    }
 
 
 def test_queue_snapshot_rejects_generation_payload_with_other_provenance(

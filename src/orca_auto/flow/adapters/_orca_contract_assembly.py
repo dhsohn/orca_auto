@@ -77,7 +77,7 @@ class _ContractPayloadContext:
     artifact_dir: Path | None
     latest_known_path: str
     optimized_xyz_path: str
-    queue_entry: ContractPayload
+    queue_entry: ContractPayload | None
     selected_inp: str
     selected_input_xyz: str
     analyzer_status: str
@@ -243,9 +243,7 @@ def _payload_from_context(
     paths = _artifact_paths(context, latest_known_path, deps)
     resource_request, resource_actual = _resource_payloads(context, deps)
     _ensure_orca_record(context.tracked_record)
-    queue = dict(context.queue_entry or {})
-    if not normalize_text(queue.get("queue_id")) and request.queue_id:
-        queue["queue_id"] = request.queue_id
+    queue = dict(context.queue_entry) if context.queue_entry is not None else None
     payload_context = _ContractPayloadContext(
         resolved_run_id=context.resolved_run_id,
         status=status.status,

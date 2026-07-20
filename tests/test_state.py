@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -7,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+from orca_auto.core.artifacts import RUN_REPORT_MD_COMMIT_KEY, RUN_REPORT_MD_COMMIT_VERSION
 from orca_auto.core.engine_runner import executable_identity
 from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
 from orca_auto.orca import state as state_module
@@ -53,6 +55,59 @@ def _bind_generation(reaction: Path, *, token: str) -> tuple[Path, dict]:
 
 
 class TestState(unittest.TestCase):
+    def test_generation_state_read_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            generation = Path(td) / "20260714-224054-959479f2"
+            generation.mkdir()
+            (generation / "job_state.json").write_text("{}" * 8, encoding="utf-8")
+
+            with patch.object(state_module, "MAX_RUN_ARTIFACT_JSON_BYTES", 8):
+                self.assertIsNone(state_module.load_generation_state(generation))
+
+    def test_generation_report_read_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            generation, provenance = _bind_generation(reaction, token="bounded-report-token-0001")
+            state = new_state(reaction, generation / "nebts.inp", max_retries=0)
+            state["execution_provenance"] = provenance
+            report_path = write_report_json(reaction, dict(state))
+            assert report_path is not None
+
+            with patch.object(
+                state_module,
+                "MAX_RUN_ARTIFACT_JSON_BYTES",
+                report_path.stat().st_size - 1,
+            ):
+                self.assertIsNone(load_report_json(generation))
+
+    def test_generation_report_rejects_swap_after_confined_read(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            generation, provenance = _bind_generation(reaction, token="swapped-report-token-0001")
+            state = new_state(reaction, generation / "nebts.inp", max_retries=0)
+            state["execution_provenance"] = provenance
+            report_path = write_report_json(reaction, dict(state))
+            assert report_path is not None
+            original_target = state_module._visible_generation_artifact_dir
+
+            def replace_after_read(
+                reaction_dir: Path,
+                payload: dict,
+            ) -> tuple[Path, tuple[int, int]] | None:
+                target = original_target(reaction_dir, payload)
+                report_path.write_text(
+                    report_path.read_text(encoding="utf-8") + "\n",
+                    encoding="utf-8",
+                )
+                return target
+
+            with patch.object(
+                state_module,
+                "_visible_generation_artifact_dir",
+                side_effect=replace_after_read,
+            ):
+                self.assertIsNone(load_report_json(generation))
+
     def test_recover_stale_lock_with_dead_pid(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)
@@ -455,6 +510,29 @@ class TestState(unittest.TestCase):
             self.assertIn("attempts", md)
             self.assertIn("final_result", md)
             self.assertIn("normal_termination", md)
+            markdown_bytes = md.encode("utf-8")
+            self.assertEqual(
+                report["artifacts"][RUN_REPORT_MD_COMMIT_KEY],
+                {
+                    "version": RUN_REPORT_MD_COMMIT_VERSION,
+                    "sha256": hashlib.sha256(markdown_bytes).hexdigest(),
+                    "size_bytes": len(markdown_bytes),
+                },
+            )
+
+    def test_write_report_files_omits_oversized_markdown_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            generation, provenance = _bind_generation(reaction, token="state-mdlimit-token-0001")
+            state = new_state(reaction, generation / "nebts.inp", max_retries=0)
+            state["execution_provenance"] = provenance
+
+            with patch.object(state_module, "MAX_RUN_REPORT_MD_BYTES", 1):
+                reports = write_report_files(reaction, state)
+
+            self.assertNotIn("report_md", reports)
+            report = json.loads(Path(reports["report_json"]).read_text(encoding="utf-8"))
+            self.assertNotIn(RUN_REPORT_MD_COMMIT_KEY, report["artifacts"])
 
     def test_write_report_files_does_not_publish_json_when_markdown_write_fails(self) -> None:
         with tempfile.TemporaryDirectory() as td:

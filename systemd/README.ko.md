@@ -54,6 +54,53 @@ checkout을 업데이트했거나 이 디렉터리의 유닛 템플릿을 수정
 `/etc/systemd/system` 아래에 렌더링된 복사본으로 존재하므로,
 `systemctl daemon-reload`만으로는 템플릿 변경이나 새 유닛이 복사되지 않습니다.
 
+### 트랜잭션 복구
+
+설치 프로그램은 각 업데이트를
+`/etc/systemd/system/.orca_auto-install-transaction`(또는 선택한
+`--unit-dir` 아래)에 staging합니다. 같은 `--user`와 unit directory를 사용하는 다음
+실행은 다른 checkout에서 시작했더라도 이 공유 트랜잭션을 확인합니다.
+
+- `owner.json`은 진행 중인 트랜잭션을 boot ID, PID, 프로세스 시작 시각에 결합합니다.
+  소유자가 아직 살아 있거나, 파일이 잘못됐거나 누락됐거나, 소유자를 확인할 수 없으면
+  설치 프로그램은 유닛을 바꾸거나 서비스를 중지하지 않고 상태 1로 종료합니다. 다시
+  실행하기 전에 소유자 불확실성을 먼저 해소하세요.
+- `manifest.json`은 rollback/recovery 자료가 아직 대기 중임을 뜻합니다. `backup/`과
+  manifest를 포함한 트랜잭션 디렉터리 전체를 보존하세요. 이전 소유자가 사라졌음을
+  확인한 뒤 같은 user와 unit directory로 다시 실행하세요. 자동 복구는 boot ID가
+  달라졌거나 PID가 재사용된 경우처럼 기록된 소유자가 stale임을 검증할 수 있을 때만
+  진행하며, 프로세스를 관찰할 수 없으면 계속 fail-closed합니다. 안전하게 분류할 수
+  있는 트랜잭션은 이전 유닛 파일, 부팅 선택, 정확한 활성 컴포넌트 집합을 복원합니다.
+  `restart_pending` 단계가 모호하면 외부에서 시작했을 수도 있는 서비스를 중지하지 않고
+  자료를 그대로 보존합니다.
+- `committed.json`은 새 설치의 commit은 끝났지만 트랜잭션 정리가 실패했음을 뜻합니다.
+  새 유닛이 계속 authoritative 상태이며, 정리 문제를 드러내기 위해 설치 프로그램은 상태
+  1로 종료합니다. 이를 rollback으로 해석하거나 marker를 이전 manifest로 바꾸지 마세요.
+
+수동 정리 전에 보존된 JSON을 읽고, 거기에 기록된 유닛 파일·enablement·활성 상태를
+확인하세요. 재실행을 통과시키기 위해 대기 중인 manifest나 backup을 삭제하지 마세요.
+
+`manifest.json`이 `restart_pending`이라고 기록한 경우에만, 운영자가 기록된 target,
+`systemctl show ... --property=ActiveState`, journal을 확인해 기록된 restart 명령이 실제로
+실행됐는지 판단해야 합니다. 그런 다음 같은 repository에서 같은 user와 unit directory로
+다음 두 resolution 중 정확히 하나를 붙여 설치 프로그램을 다시 실행하세요:
+
+```bash
+orca_auto systemd install --user "<same-user>" --repo "<same-repo>" \
+  --unit-dir "<same-unit-dir>" --resolve-pending-restart applied
+# restart 명령이 실행되지 않았음이 확실할 때만 다음을 사용합니다:
+orca_auto systemd install --user "<same-user>" --repo "<same-repo>" \
+  --unit-dir "<same-unit-dir>" --resolve-pending-restart not-applied
+```
+
+`applied`는 restart가 실행됐다고 durable하게 기록하므로, rollback은 설치 전에 비활성이던
+target을 중지한 뒤 정확한 snapshot을 복원할 수 있습니다. `not-applied`는 restart가 없었다고
+기록하므로, recovery는 새 시작을 설치 프로그램의 동작으로 간주하지 않고 원래 활성 집합을
+검증합니다. 값을 잘못 선택하면 살아 있는 service를 중지하거나 상태를 잘못 분류할 수
+있습니다. 이 옵션은 살아 있거나 확인할 수 없는 owner를 무시하지 않으며, transaction이
+없거나 `restart_pending` 단계가 아니면 실패합니다. 이 검사를 우회하려고 manifest를 직접
+편집하거나 삭제하지 마세요.
+
 결합 런타임 타깃 모니터링:
 
 ```bash
@@ -110,8 +157,10 @@ xTB/CREST 엔진 워커로 확장됩니다. 이 unit은 설치되지만 기본 r
 - 한 워커가 5분 안에 세 번 종료되면 자식 무한 재시작 대신 해당 감독자를
   중단합니다.
 - 엔진 워커의 유휴 전체 상태 조정은 짧은 큐 poll과 별개로 1분에 최대 한 번 실행합니다.
-- queue-worker, workflow-worker, bot unit은 `Restart=on-failure`, 30초 지연을 사용하고
-  5분 동안 unit 시작을 최대 세 번만 허용합니다.
+- queue-worker와 workflow-worker unit은 `Restart=on-failure`를 사용합니다. bot은
+  provider가 예외 없이 뜻밖에 반환해도 비활성 상태로 남지 않도록
+  `Restart=always`를 사용합니다. 세 unit 모두 30초 간격으로 재시작하며 5분 동안
+  unit 시작을 최대 세 번만 허용합니다.
 - `orca_auto service restart`는 운영자가 요청한 재시작 전에 제한된 실패 상태를
   초기화합니다.
 

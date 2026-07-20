@@ -468,7 +468,7 @@ def test_required_messenger_config_rejects_missing_and_invalid_files(tmp_path: P
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
-        ("schedulr: {}\n", "Unknown top-level config fields: schedulr"),
+        ("schedulr: {}\n", "Unknown top-level config fields are not supported"),
         ("scheduler: []\n", "scheduler section must be a mapping"),
         (
             "messenger:\n  telegram:\n    bot_token:\n",

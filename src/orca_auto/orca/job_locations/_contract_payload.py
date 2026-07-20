@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core import engine_runner as _engine_runner
-from orca_auto.core.engines.artifacts import load_engine_artifact_payload
+from orca_auto.core.artifacts import (
+    MAX_RUN_ARTIFACT_JSON_BYTES,
+    MAX_RUN_REPORT_MD_BYTES,
+    RUN_REPORT_MD_COMMIT_KEY,
+    RUN_REPORT_MD_COMMIT_VERSION,
+)
+from orca_auto.core.engine_process import read_confined_text
+from orca_auto.core.engines.artifacts import ENGINE_ARTIFACT_SCHEMA_VERSION
 from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
 from orca_auto.core.queue.engine.snapshot_intent import SNAPSHOT_INTENT_TOKEN_KEY
 from orca_auto.core.queue.generation import is_visible_generation_name
@@ -13,13 +23,9 @@ from orca_auto.core.queue.metadata import mapping_metadata_value as queue_entry_
 
 from ._generation import (
     current_generation_payloads,
+    payload_generation_provenance,
     payload_matches_queue_generation,
 )
-
-_REPORT_MARKDOWN_IDENTITY_PREFIXES = {
-    "- Job ID: `": "job_id",
-    "- run_id: `": "run_id",
-}
 
 
 @dataclass(frozen=True)
@@ -28,6 +34,28 @@ class RuntimePayloads:
     queue_entry: dict[str, Any] | None
     state: dict[str, Any]
     report: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _DirectRuntimeFile:
+    path: Path
+    identity: tuple[int, int, int, int, int, int, int]
+
+
+@dataclass(frozen=True)
+class _VerifiedRuntimePayload:
+    file: _DirectRuntimeFile
+    payload: dict[str, Any]
+
+    @property
+    def path(self) -> Path:
+        return self.file.path
+
+
+@dataclass(frozen=True)
+class _VerifiedReportMarkdown:
+    file: _DirectRuntimeFile | None = None
+    drifted: bool = False
 
 
 def runtime_paths(
@@ -42,26 +70,58 @@ def runtime_paths(
 ) -> dict[str, str]:
     state_path = current_dir / state_file_name if current_dir is not None else None
     report_json_path = current_dir / report_json_name if current_dir is not None else None
-    visible_state_path = (
-        _runtime_payload_path_for_generation(state_path, current_dir, queue_entry)
+    visible_state = (
+        _runtime_payload_for_generation(state_path, current_dir, queue_entry)
         if include_state
         else None
     )
-    visible_report_json_path = (
-        _runtime_payload_path_for_generation(report_json_path, current_dir, queue_entry)
+    visible_report = (
+        _runtime_payload_for_generation(report_json_path, current_dir, queue_entry)
         if include_report
         else None
     )
-    # The report markdown lives next to the report JSON in the execution
-    # generation; there is no job-root fallback.
-    visible_report_md_path = (
+    current_state, current_report = current_generation_payloads(
+        queue_entry,
+        visible_state.payload if visible_state is not None else {},
+        visible_report.payload if visible_report is not None else {},
+    )
+    if visible_state is not None and not current_state:
+        visible_state = None
+    if visible_report is not None and not current_report:
+        visible_report = None
+    visible_payloads = tuple(
+        payload for payload in (visible_state, visible_report) if payload is not None
+    )
+    if any(
+        _direct_runtime_file(payload.path, current_dir) != payload.file
+        for payload in visible_payloads
+    ):
+        visible_state = None
+        visible_report = None
+    # Report JSON binds the exact Markdown bytes committed before it. Only
+    # expose a stable direct file whose digest matches that verified binding.
+    visible_report_md = (
         _report_markdown_path_for_generation(
             current_dir / report_md_name if current_dir is not None else None,
             current_dir,
-            queue_entry,
+            visible_report.payload,
         )
-        if visible_report_json_path is not None
-        else None
+        if visible_report is not None
+        else _VerifiedReportMarkdown()
+    )
+    final_files = tuple(
+        payload.file for payload in (visible_state, visible_report) if payload is not None
+    ) + ((visible_report_md.file,) if visible_report_md.file is not None else ())
+    if visible_report_md.drifted or any(
+        _direct_runtime_file(file.path, current_dir) != file for file in final_files
+    ):
+        visible_state = None
+        visible_report = None
+        visible_report_md = _VerifiedReportMarkdown()
+    visible_state_path = visible_state.path if visible_state is not None else None
+    visible_report_json_path = visible_report.path if visible_report is not None else None
+    visible_report_md_path = (
+        visible_report_md.file.path if visible_report_md.file is not None else None
     )
     return {
         "run_state_path": str(visible_state_path) if visible_state_path is not None else "",
@@ -74,62 +134,184 @@ def runtime_paths(
     }
 
 
-def _direct_runtime_file(path: Path | None, current_dir: Path | None) -> Path | None:
+def _direct_runtime_file(
+    path: Path | None,
+    current_dir: Path | None,
+) -> _DirectRuntimeFile | None:
     if path is None or current_dir is None:
         return None
     try:
-        if path.is_symlink() or not path.is_file():
+        before = path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
             return None
         resolved_path = path.resolve()
         if resolved_path.parent != current_dir.resolve():
             return None
+        after = path.stat(follow_symlinks=False)
     except (OSError, RuntimeError):
         return None
-    return resolved_path
+    before_identity = (
+        int(before.st_dev),
+        int(before.st_ino),
+        int(before.st_mode),
+        int(before.st_nlink),
+        int(before.st_size),
+        int(before.st_mtime_ns),
+        int(before.st_ctime_ns),
+    )
+    after_identity = (
+        int(after.st_dev),
+        int(after.st_ino),
+        int(after.st_mode),
+        int(after.st_nlink),
+        int(after.st_size),
+        int(after.st_mtime_ns),
+        int(after.st_ctime_ns),
+    )
+    if before_identity != after_identity:
+        return None
+    return _DirectRuntimeFile(path=resolved_path, identity=before_identity)
 
 
-def _runtime_payload_path_for_generation(
+def _runtime_payload_for_generation(
     path: Path | None,
     current_dir: Path | None,
     queue_entry: dict[str, Any] | None,
-) -> Path | None:
-    direct_path = _direct_runtime_file(path, current_dir)
-    if direct_path is None:
+) -> _VerifiedRuntimePayload | None:
+    if path is None or current_dir is None:
         return None
-    payload = load_engine_artifact_payload(direct_path)
-    if payload is None or str(payload.get("engine") or "").strip() != "orca":
+    direct_file = _direct_runtime_file(path, current_dir)
+    if direct_file is None:
+        return None
+    try:
+        raw_payload = json.loads(
+            read_confined_text(
+                current_dir,
+                path,
+                label="ORCA generation runtime payload",
+                max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
+            )
+        )
+        if not isinstance(raw_payload, dict):
+            return None
+        payload = raw_payload
+        schema_version = int(payload.get("schema_version", -1))
+    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError):
+        return None
+    if (
+        schema_version != ENGINE_ARTIFACT_SCHEMA_VERSION
+        or str(payload.get("engine") or "").strip() != "orca"
+    ):
         return None
     if not payload_matches_queue_generation(queue_entry, payload):
         return None
-    return direct_path if _direct_runtime_file(path, current_dir) == direct_path else None
+    if not _payload_provenance_matches_generation(payload, current_dir):
+        return None
+    if _direct_runtime_file(path, current_dir) != direct_file:
+        return None
+    return _VerifiedRuntimePayload(file=direct_file, payload=payload)
+
+
+def _payload_provenance_matches_generation(
+    payload: dict[str, Any],
+    generation_dir: Path,
+) -> bool:
+    provenance = payload_generation_provenance(payload)
+    if provenance is None:
+        return False
+    raw_identity = provenance.get("execution_dir_identity")
+    if not isinstance(raw_identity, dict):
+        return False
+    raw_dir = Path(str(provenance.get("execution_dir") or "")).expanduser()
+    owner_token = str(provenance.get("generation_owner_token") or "").strip()
+    try:
+        resolved_dir = raw_dir.resolve(strict=True)
+        expected_dir = generation_dir.expanduser().resolve(strict=True)
+        generation_status = raw_dir.lstat()
+        job_dir = resolved_dir.parent
+        job_status = job_dir.stat()
+        device = int(raw_identity.get("device", -1))
+        inode = int(raw_identity.get("inode", -1))
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+    if (
+        not raw_dir.is_absolute()
+        or raw_dir != resolved_dir
+        or resolved_dir != expected_dir
+        or raw_dir.is_symlink()
+        or not is_visible_generation_name(resolved_dir.name)
+        or not owner_token
+        or (int(generation_status.st_dev), int(generation_status.st_ino)) != (device, inode)
+    ):
+        return False
+    try:
+        require_direct_generation_owner(
+            job_dir,
+            namespace=resolved_dir.name,
+            expected_job_identity=(int(job_status.st_dev), int(job_status.st_ino)),
+            expected_generation_identity=(device, inode),
+            owner_token=owner_token,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _report_markdown_commit(payload: dict[str, Any]) -> tuple[int, str] | None:
+    raw_artifacts = payload.get("artifacts")
+    artifacts = raw_artifacts if isinstance(raw_artifacts, dict) else {}
+    raw_commit = artifacts.get(RUN_REPORT_MD_COMMIT_KEY)
+    commit = raw_commit if isinstance(raw_commit, dict) else {}
+    version = commit.get("version")
+    size_bytes = commit.get("size_bytes")
+    digest = commit.get("sha256")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != RUN_REPORT_MD_COMMIT_VERSION
+        or isinstance(size_bytes, bool)
+        or not isinstance(size_bytes, int)
+        or size_bytes < 0
+        or size_bytes > MAX_RUN_REPORT_MD_BYTES
+        or not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        return None
+    return size_bytes, digest
 
 
 def _report_markdown_path_for_generation(
     path: Path | None,
     current_dir: Path | None,
-    queue_entry: dict[str, Any] | None,
-) -> Path | None:
-    direct_path = _direct_runtime_file(path, current_dir)
-    if direct_path is None:
-        return None
+    report_payload: dict[str, Any],
+) -> _VerifiedReportMarkdown:
+    commit = _report_markdown_commit(report_payload)
+    if path is None or current_dir is None or commit is None:
+        return _VerifiedReportMarkdown()
+    direct_file = _direct_runtime_file(path, current_dir)
+    if direct_file is None:
+        return _VerifiedReportMarkdown()
     try:
-        lines = direct_path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError):
-        return None
-    identity: dict[str, str] = {}
-    for line in lines:
-        stripped = line.strip()
-        for prefix, key in _REPORT_MARKDOWN_IDENTITY_PREFIXES.items():
-            if not stripped.startswith(prefix) or not stripped.endswith("`"):
-                continue
-            value = stripped[len(prefix) : -1].strip()
-            existing = identity.get(key)
-            if existing is not None and existing != value:
-                return None
-            identity[key] = value
-    if not identity or not payload_matches_queue_generation(queue_entry, identity):
-        return None
-    return direct_path if _direct_runtime_file(path, current_dir) == direct_path else None
+        markdown = read_confined_text(
+            current_dir,
+            path,
+            label="ORCA generation report Markdown",
+            max_bytes=MAX_RUN_REPORT_MD_BYTES,
+        )
+    except (OSError, RuntimeError, UnicodeError, ValueError):
+        return _VerifiedReportMarkdown(
+            drifted=_direct_runtime_file(path, current_dir) != direct_file
+        )
+    if _direct_runtime_file(path, current_dir) != direct_file:
+        return _VerifiedReportMarkdown(drifted=True)
+    markdown_bytes = markdown.encode("utf-8")
+    expected_size, expected_digest = commit
+    if len(markdown_bytes) != expected_size:
+        return _VerifiedReportMarkdown()
+    if hashlib.sha256(markdown_bytes).hexdigest() != expected_digest:
+        return _VerifiedReportMarkdown()
+    return _VerifiedReportMarkdown(file=direct_file)
 
 
 def runtime_payloads(runtime: Any) -> RuntimePayloads:
@@ -263,15 +445,7 @@ def selected_artifact_paths(
 
 
 def _payload_execution_provenance(payload: dict[str, Any]) -> dict[str, Any] | None:
-    provenance = payload.get("execution_provenance")
-    if isinstance(provenance, dict):
-        return provenance
-    engine_payload = payload.get("engine_payload")
-    if isinstance(engine_payload, dict):
-        provenance = engine_payload.get("execution_provenance")
-        if isinstance(provenance, dict):
-            return provenance
-    return None
+    return payload_generation_provenance(payload)
 
 
 def _generation_optimized_source(

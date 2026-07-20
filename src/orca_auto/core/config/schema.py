@@ -586,9 +586,7 @@ def messenger_config_from_mapping(raw: object) -> MessengerConfig:
     )
     if config.normalized_provider not in SUPPORTED_MESSENGER_PROVIDERS:
         supported = ", ".join(sorted(SUPPORTED_MESSENGER_PROVIDERS))
-        raise ValueError(
-            f"Unsupported messenger.provider {config.provider!r}; expected one of: {supported}."
-        )
+        raise ValueError(f"Unsupported messenger.provider; expected one of: {supported}.")
     return config
 
 
@@ -598,6 +596,5 @@ def _reject_unknown_config_fields(
     allowed: set[str],
     section: str,
 ) -> None:
-    unknown = sorted(str(key) for key in raw if key not in allowed)
-    if unknown:
-        raise ValueError(f"Unknown {section} config fields: {', '.join(unknown)}.")
+    if any(key not in allowed for key in raw):
+        raise ValueError(f"Unknown {section} config fields are not supported.")

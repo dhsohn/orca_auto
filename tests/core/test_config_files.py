@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import stat
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from orca_auto.core.config.files import (
     config_with_canonical_messenger,
     engine_config_mapping,
     load_required_yaml_mapping,
+    load_shared_config_mapping,
     load_yaml_mapping,
     mapping_section,
     messenger_mapping_from_root,
@@ -18,8 +20,10 @@ from orca_auto.core.config.files import (
     secure_config_file_permissions,
     shared_workflow_root_from_config,
     validate_shared_config_sections,
+    validated_absolute_linux_path_text,
     validated_runs_root_text,
 )
+from orca_auto.core.messaging.config_io import load_required_messenger_config_from_file
 
 
 def test_messenger_mapping_rejects_legacy_top_level_telegram_block() -> None:
@@ -110,6 +114,38 @@ def test_validated_runs_root_text_rejects_windows_and_relative_values(tmp_path: 
         validated_runs_root_text("./runs")
 
 
+@pytest.mark.parametrize(
+    "field_name",
+    ["runs_root", "scheduler.admission_root", "orca.runtime.scratch_root"],
+)
+@pytest.mark.parametrize(
+    "secret_path",
+    [
+        "private-path-secret",
+        r"C:\private-path-secret",
+        "/tmp/../mnt/c/private-path-secret",
+    ],
+)
+def test_canonical_config_path_errors_do_not_echo_raw_values(
+    field_name: str,
+    secret_path: str,
+) -> None:
+    with pytest.raises(ValueError) as captured:
+        validated_absolute_linux_path_text(secret_path, field_name=field_name)
+
+    message = str(captured.value)
+    assert field_name in message
+    assert "private-path-secret" not in message
+
+
+def test_runs_root_validation_error_does_not_echo_raw_value() -> None:
+    with pytest.raises(ValueError) as captured:
+        validated_runs_root_text("private-runs-root-secret")
+
+    assert "runs_root" in str(captured.value)
+    assert "private-runs-root-secret" not in str(captured.value)
+
+
 def test_shared_workflow_root_from_config_returns_none_for_invalid_runs_root(
     tmp_path: Path,
 ) -> None:
@@ -152,27 +188,30 @@ def test_engine_config_mapping_rejects_redundant_engine_scoped_scheduler() -> No
 @pytest.mark.parametrize(
     ("raw", "message"),
     [
-        ({"schedulr": {}}, "Unknown top-level config fields: schedulr"),
+        ({"schedulr": {}}, "Unknown top-level config fields are not supported"),
         (
             {"scheduler": {"max_active_simulation": 4}},
-            "Unknown scheduler config fields: max_active_simulation",
+            "Unknown scheduler config fields are not supported",
         ),
         (
             {"resources": {"max_core_per_task": 8}},
-            "Unknown resources config fields: max_core_per_task",
+            "Unknown resources config fields are not supported",
         ),
-        ({"workflow": {"root": "/tmp/runs"}}, "Unknown workflow config fields: root"),
+        (
+            {"workflow": {"root": "/tmp/runs"}},
+            "Unknown workflow config fields are not supported",
+        ),
         (
             {"workflow": {"paths": {"xtb_path": "/tmp/xtb"}}},
-            "Unknown workflow.paths config fields: xtb_path",
+            "Unknown workflow.paths config fields are not supported",
         ),
         (
             {"orca": {"runtime": {"max_concurrent": 2}}},
-            "Unknown orca.runtime config fields: max_concurrent",
+            "Unknown orca.runtime config fields are not supported",
         ),
         (
             {"orca": {"paths": {"executable": "/tmp/orca"}}},
-            "Unknown orca.paths config fields: executable",
+            "Unknown orca.paths config fields are not supported",
         ),
     ],
 )
@@ -182,6 +221,77 @@ def test_shared_config_validation_rejects_unknown_fields(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         validate_shared_config_sections(raw)
+
+
+@pytest.mark.parametrize(
+    "loader",
+    [load_shared_config_mapping, load_required_messenger_config_from_file],
+    ids=["shared", "required-messenger"],
+)
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (
+            "resources:\n  max_cores_per_task: invalid\n",
+            "resources.max_cores_per_task must be an integer >= 1",
+        ),
+        (
+            "resources:\n  max_memory_gb_per_task: 0\n",
+            "resources.max_memory_gb_per_task must be an integer >= 1",
+        ),
+        (
+            "scheduler:\n  admission_root: relative/pool\n",
+            "scheduler.admission_root must be an absolute Linux path",
+        ),
+        (
+            "orca:\n  runtime:\n    scratch_min_free_gb: 8\n",
+            "orca.runtime.scratch_min_free_gb requires orca.runtime.scratch_root",
+        ),
+        (
+            "orca:\n  runtime:\n    scratch_root: /tmp/orca-scratch\n",
+            "orca.runtime.scratch_root must be a dedicated directory below /dev/shm",
+        ),
+        (
+            "orca:\n  runtime:\n    scratch_root: /dev/shm/orca-scratch\n"
+            "    scratch_min_free_gb: 0\n",
+            "orca.runtime.scratch_min_free_gb must be an integer >= 1",
+        ),
+    ],
+)
+def test_complete_shared_loaders_reject_malformed_execution_controls(
+    tmp_path: Path,
+    loader: Callable[[str | Path], object],
+    payload: str,
+    message: str,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        loader(config_path)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "misplaced-credential: true\n",
+        "messenger:\n  provider: misplaced-credential\n",
+        "messenger:\n  discord:\n    uploads:\n      max_archive_bytes: misplaced-credential\n",
+        "scheduler:\n  admission_root: misplaced-credential\n",
+        "orca:\n  runtime:\n    scratch_root: misplaced-credential\n",
+    ],
+)
+def test_shared_config_errors_do_not_echo_misplaced_credentials(
+    tmp_path: Path,
+    payload: str,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ValueError) as captured:
+        load_shared_config_mapping(config_path)
+
+    assert "misplaced-credential" not in str(captured.value)
 
 
 def test_engine_config_mapping_rejects_engine_scoped_scheduler_split_brain() -> None:

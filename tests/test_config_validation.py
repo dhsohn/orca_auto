@@ -291,7 +291,9 @@ class TestConfigValidation(unittest.TestCase):
                 },
             )
 
-            with self.assertRaisesRegex(ValueError, "Unknown workflow config fields: root"):
+            with self.assertRaisesRegex(
+                ValueError, "Unknown workflow config fields are not supported"
+            ):
                 load_config(str(cfg_path))
 
     def test_default_max_retries_can_exceed_five(self) -> None:
@@ -396,7 +398,7 @@ class TestConfigValidation(unittest.TestCase):
                 },
             )
 
-            with self.assertRaisesRegex(ValueError, "Unknown orca config fields: scheduler"):
+            with self.assertRaisesRegex(ValueError, "Unknown orca config fields are not supported"):
                 load_config(str(cfg_path))
 
     def test_scheduler_max_active_simulations_rejects_invalid_explicit_values(self) -> None:
@@ -496,7 +498,7 @@ class TestConfigValidation(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 ValueError,
-                "Unknown orca.runtime config fields: organized_root",
+                "Unknown orca.runtime config fields are not supported",
             ):
                 load_config(str(cfg_path))
 
@@ -540,21 +542,23 @@ class TestConfigValidation(unittest.TestCase):
             root = Path(td)
             fake_orca = root / "orca"
             _write_fake_executable(fake_orca)
+            secret_path = root / "private-runs-secret-missing"
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
                 {
-                    "runs_root": str(root / "nonexistent_dir"),
+                    "runs_root": str(secret_path),
                     "paths": {"orca_executable": str(fake_orca)},
                 },
             )
             with self.assertRaises(ValueError) as ctx:
                 load_config(str(cfg_path))
             self.assertIn("runs_root directory not found", str(ctx.exception))
+            self.assertNotIn(str(secret_path), str(ctx.exception))
 
     def test_runs_root_is_file_raises(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            not_a_dir = root / "orca_runs"
+            not_a_dir = root / "private-runs-secret-file"
             not_a_dir.write_text("oops", encoding="utf-8")
             fake_orca = root / "orca"
             _write_fake_executable(fake_orca)
@@ -568,3 +572,4 @@ class TestConfigValidation(unittest.TestCase):
             with self.assertRaises(ValueError) as ctx:
                 load_config(str(cfg_path))
             self.assertIn("is not a directory", str(ctx.exception))
+            self.assertNotIn(str(not_a_dir), str(ctx.exception))

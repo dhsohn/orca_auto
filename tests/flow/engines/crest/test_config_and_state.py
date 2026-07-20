@@ -233,7 +233,7 @@ def test_load_config_rejects_removed_behavior_section(tmp_path: Path) -> None:
         """,
     )
 
-    with pytest.raises(ValueError, match="Unknown top-level config fields: behavior"):
+    with pytest.raises(ValueError, match="Unknown top-level config fields are not supported"):
         config_mod.load_crest_config(str(config_path))
 
 

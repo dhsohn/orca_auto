@@ -60,6 +60,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   instead of adopting adjacent state or reports. Operators who need old report
   detail must migrate it to the verified generation or archive it separately
   before removing the root files.
+- Runtime lookup now exposes generation-local `job_report.md` only when the
+  schema-version-1 JSON contains the current byte-length and SHA-256 commit
+  marker. Existing schema-version-1 JSON remains readable, but its uncommitted
+  Markdown path is hidden after upgrade. Committed Markdown is capped at 8 MiB;
+  oversized reports retain JSON without publishing a Markdown path. There is no
+  public migration command:
+  republish only through a controlled tool that invokes the current report
+  writer against verified generation state, or archive the old Markdown outside
+  public runtime lookup.
 - Removed duplicate ORCA status decoding, dead private helpers, and repeated
   read-only workflow request-parameter traversal; refreshed workflow/systemd
   documentation, release metadata, and workstation-neutral test fixtures.

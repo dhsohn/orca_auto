@@ -173,7 +173,7 @@ def test_load_config_rejects_removed_behavior_section(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="Unknown top-level config fields: behavior"):
+    with pytest.raises(ValueError, match="Unknown top-level config fields are not supported"):
         load_config(str(config_path))
 
 
