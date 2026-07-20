@@ -113,7 +113,7 @@ commands:
 - `queue cancel`
 - `run-dir <path>`
 - `init`
-- `scaffold <ts_search|conformer_search>`
+- `scaffold <ts_search|conformer_search|scan_ts>`
 - `scan-notify`
 - `smoke`
 Activate `.venv` first, or call `.venv/bin/orca_auto ...` directly.
