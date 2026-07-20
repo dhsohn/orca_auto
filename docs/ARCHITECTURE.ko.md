@@ -166,14 +166,15 @@ import-linter 계약으로 보호합니다.
   큐 항목을 해석합니다. 레거시 ORCA `--reaction-dir` 직접 모드는 지원되지
   않습니다. `reaction_dir` 필드는 다운스트림 계약으로서 큐 항목에 그대로
   보존됩니다.
-- **큐 generation은 제출 시점에 실행 입력을 바인딩합니다.** 단독 xTB-MD와 워크플로우
-  xTB/CREST는 콘텐츠 주소형 입력 snapshot을 제출마다 배타적으로 예약한 고유
-  namespace에 만듭니다. ORCA는 제출한 작업 디렉터리 바로 아래에 visible
-  `YYYYMMDD-HHMMSS-<8자리 hex>/`를 만들고 선택한 `.inp`와 의존성의
-  basename을 유지한 채 confined flat 복사본으로 참조를 다시 씁니다. Raw 출력도
-  그와 나란히 쓰며, 새 ORCA generation에는 숨은 실행 parent나 중첩 `.inputs/`가
-  없습니다. 워커는 변경 가능한 소스 파일을 실행 계약으로 다시 읽지 않고 입력 및
-  실행 파일의 콘텐츠 정체성을 검증합니다.
+- **큐 generation은 제출 시점에 실행 입력을 바인딩합니다.** 단독 xTB-MD는 제출한 작업
+  디렉터리 바로 아래에 visible `YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 만들고,
+  바인딩한 `xtb_md_job.yaml`, 소스 basename을 유지한 geometry, 생성한 `md.inp`, 상태,
+  리포트, 보존 출력을 모두 그 안에 둡니다. 워크플로우 xTB와 CREST는 콘텐츠 주소형 입력 snapshot을 제출마다
+  배타적으로 예약한 고유 namespace에 만듭니다. ORCA도 제출한 작업 디렉터리 바로 아래에
+  visible generation을 만들고 선택한 `.inp`와 의존성의 basename을 유지한 채 confined flat
+  복사본으로 참조를 다시 씁니다. Raw 출력도 그와 나란히 쓰며, 새 ORCA와 단독 xTB-MD
+  generation에는 숨은 실행 parent나 중첩 입력 단계가 없습니다. 워커는 변경 가능한 소스
+  파일을 실행 계약으로 다시 읽지 않고 입력 및 실행 파일의 콘텐츠 정체성을 검증합니다.
 - **워커가 실행 중이 아니면 작업은 대기 상태로 남습니다** — 워커가 돌아올 때까지
   `queue.json`에 보관됩니다. `status: queued` 이후 제출 터미널을 닫아도
   안전합니다.
@@ -280,18 +281,20 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
 ### 단독 xTB-MD 경계
 
 `orca_auto.xtb_md`는 공용 `core` 인프라에만 의존하며 ORCA나 `flow`에는 의존하지
-않습니다. 제출 시 엄격한 `xtb_md_job.yaml`, XYZ 구조 하나, 생성한 정규 `$md` 입력,
-xTB 실행 파일/버전 정체성을 snapshot합니다. 워커는
-`.orca_auto_xtb_md_executions/<job_id>/`에서 fresh attempt를 정확히 한 번 실행합니다.
-재시도, checkpoint 재개, workflow handoff는 없습니다. 취소는 프로세스 그룹을 종료하고,
-worker 종료/crash/orphan 복구는 재시도 없는 종료 결과를 기록합니다.
+않습니다. 제출 시 작업 루트 아래에 visible `YYYYMMDD-HHMMSS-<8자리 hex>/`
+generation 하나를 만들고, 엄격한 `xtb_md_job.yaml` 복사본, 소스 basename을 유지한 XYZ 구조,
+생성한 정규 `md.inp`, xTB 실행 파일/버전 정체성을 그 generation에 바인딩합니다. 워커는
+그 generation에서 fresh attempt를 정확히 한 번 실행합니다. 재시도, checkpoint 재개,
+workflow handoff는 없습니다. 취소는 프로세스 그룹을 종료하고, worker 종료/crash/orphan
+복구는 재시도 없는 종료 결과를 기록합니다.
 
 종료 코드 0만으로는 성공이 아닙니다. 종료 검증에는 fresh `xtbmdok`, 제출한 원자/step
 budget에 맞는 완전하고 유한한 `xtb.trj`와 `mdrestart`, 제한 안의 출력, 알려진 xTB
-false-success marker 부재가 모두 필요합니다. 공개 상태/리포트는 작업 루트에 기록하고,
-불변 raw output은 감사를 위해 private 실행 트리에 보존합니다.
+false-success marker 부재가 모두 필요합니다. 상태, 리포트, 바인딩 입력, 불변 raw output은
+모두 자신이 설명하는 visible generation에 보존하고, 재사용하는 작업 루트에는 최신
+상태/리포트 mirror를 두지 않습니다.
 
-공유 RAM scratch를 켜도 private 실행 트리는 durable 정체성과 게시 대상입니다. 생성한
+공유 RAM scratch를 켜도 visible generation은 durable 정체성과 게시 대상입니다. 생성한
 geometry, `md.inp`, attempt token, 큐 메타데이터, 공개 command는 그 generation에
 바인딩하고, 실제 xTB command만 staging한 입력 경로와 private tmpfs CWD를 사용합니다.
 프로세스 그룹 종료 뒤 공통 `core.engine_scratch` transaction이 `xtb.trj`, `mdrestart`,
@@ -299,6 +302,11 @@ geometry, `md.inp`, attempt token, 큐 메타데이터, 공개 command는 그 ge
 false-success 근거는 보존되어도 완료로 바뀔 수 없습니다. 확정한 게시는 cleanup하고
 `scratch_provenance`에 기록하며, identity drift나 미확정 transaction은 workspace를
 보존하고 뒤이은 scratch 시작을 막습니다.
+
+배포는 구형 행을 in-place로 migration하는 방식이 아니라 한 번에 전환합니다. 이전 빌드의
+pending/running xTB-MD 행을 drain하고 미완료 terminal replay와 snapshot intent를 끝내거나,
+취소/clear한 뒤 업그레이드 후 다시 제출합니다. 기존 terminal 숨은 이력은 migration이나
+rename 없이 그대로 보존합니다.
 
 ---
 
@@ -338,8 +346,9 @@ false-success 근거는 보존되어도 완료로 바뀔 수 없습니다. 확�
   이미 게시된 근거부터 재개합니다.
   scratch workspace와 journal 구현의 단일 소유자는 `core.engine_scratch`이고 ORCA는
   flat input dependency parser만 제공합니다. 단독 xTB-MD와 workflow xTB/CREST도 같은 private
-  workspace와 transaction을 사용하되 변경 불가능한 입력 snapshot은 durable 절대
-  경로로 유지합니다. xTB는 job type별 canonical 결과와 log를, 단독 xTB-MD는 trajectory,
+  workspace와 transaction을 사용합니다. 단독 MD 입력은 visible generation에 durable하게
+  두고, workflow xTB/CREST 입력 snapshot은 durable 절대 경로로 유지합니다. xTB는 job
+  type별 canonical 결과와 log를, 단독 xTB-MD는 trajectory,
   checkpoint, success marker, log만, CREST는 named retained
   ensemble과 log를 게시하며 큰 엔진 work tree는 commit 뒤 제거합니다. CREST 자체의
   `--scratch` copier는 계속 사용하지 않습니다.
@@ -502,7 +511,7 @@ orca_auto는 scheduling, ownership, 공개 artifact를 모두 디스크 기반�
 | 어드미션 슬롯 파일          | core/admission   | 활성 동시성 슬롯 (머신 전역)            |
 | `job_state.json`            | orca (state)     | 작업별 시도 + 상태                       |
 | `job_report.json` / `.md`   | orca (reporting) | 사람/기계용 완료 리포트                  |
-| `.orca_auto_xtb_md_executions/<job_id>/` | xtb_md | 불변 MD 실행 출력                 |
+| `<xTB-MD 작업>/<visible generation>/` | xtb_md | 바인딩 MD 입력, 상태/리포트, 출력     |
 | 작업 위치 인덱스 (JSONL)    | core/indexing    | 각 작업 출력의 현재 위치                 |
 | `workflow.json`             | flow             | 내구성 워크플로우 페이로드               |
 | `workflow_report.html`      | flow (report)    | 실시간 갱신 워크플로우 시각 요약         |

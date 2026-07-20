@@ -268,8 +268,11 @@ are internal implementation state and must not be edited by clients.
 
 xTB-MD/xTB/CREST queue artifacts carry an internal immutable-generation fingerprint,
 and new xTB-MD/xTB/CREST/ORCA rows carry a submit-time execution snapshot. New
-ORCA rows use snapshot schema 2 and one visible direct child named
-`YYYYMMDD-HHMMSS-<8-hex>/`; they do not create an ORCA
+standalone xTB-MD rows and new ORCA rows each own one visible direct child named
+`YYYYMMDD-HHMMSS-<8-hex>/`. New standalone xTB-MD rows keep the bound
+`xtb_md_job.yaml`, geometry basename, generated `md.inp`, state, reports, and
+retained outputs together in that generation. They do not create a separate private input or execution tree.
+New ORCA rows use snapshot schema 2 and do not create an ORCA
 `.orca_auto_input_snapshots/`, `.orca_auto_orca_executions/`, or nested
 `.inputs/` tree. The bound selected `.inp` and dependencies preserve their
 source basenames. Different referenced source paths with one basename always
@@ -292,8 +295,15 @@ intent, or cancel/clear affected work and resubmit it under the new build.
 In-place adoption or migration is not supported. Existing terminal hidden ORCA
 generations remain untouched as historical artifacts. Unverifiable artifacts
 fail closed instead of being attached to a newer generation.
-xTB-MD/xTB/CREST snapshots use a unique namespace that is exclusively reserved for the
-submission, rather than using the public task id alone as snapshot ownership.
+Before deploying the standalone xTB-MD visible-generation format, operators
+must likewise drain old-build pending/running xTB-MD rows and finish their
+incomplete terminal replay and snapshot intents, or cancel/clear and resubmit
+them under the new build. Old-format rows are not adopted in place. Existing
+terminal xTB-MD hidden input/execution history is left untouched and is not
+migrated or renamed.
+Workflow-internal xTB/CREST snapshots use a unique namespace that is exclusively
+reserved for the submission, rather than using the public task id alone as
+snapshot ownership.
 Generation directories are preceded by an internal durable intent under the
 owning queue root. Workers reconcile only bounded, dead-owner intents against raw
 queue rows and retire the intent before starting a reserved child; cleanup retains
@@ -335,15 +345,18 @@ the adapter also requires fresh, finite, atom-consistent `xtb.trj` and
 `mdrestart` evidence within the submitted budgets and rejects known
 false-success markers.
 
-Standalone xTB-MD writes these public artifacts at the job root:
+Standalone xTB-MD creates exactly one visible
+`YYYYMMDD-HHMMSS-<8-hex>/` generation directly under the job root for each
+accepted submission. These public artifacts live in that generation:
 
 - `job_state.json`
 - `job_report.json`
 - `job_report.md`
 
-The immutable generated input, logs, `xtb.trj`, `mdrestart`, and `xtbmdok` are
-retained under `.orca_auto_xtb_md_executions/<job_id>/`. Terminal JSON binds
-validated outputs to path, SHA-256, byte size, and modification time.
+The bound geometry keeps its source basename. It, the bound `xtb_md_job.yaml`,
+generated `md.inp`, logs, `xtb.trj`, `mdrestart`, and `xtbmdok` live beside the
+state and reports in the same generation. The job root has no latest-copy state/report writer. Terminal
+JSON binds validated outputs to path, SHA-256, byte size, and modification time.
 
 If `orca.runtime.scratch_root` is configured, the immutable generated geometry,
 `md.inp`, attempt identity, queue/state, and report ownership remain durable.

@@ -10,12 +10,22 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- New standalone xTB-MD submissions now create one visible
+  `YYYYMMDD-HHMMSS-<8-hex>` generation directly under the submitted job root.
+  The bound `xtb_md_job.yaml`, geometry basename, generated `md.inp`, state,
+  reports, retained raw evidence, and validated output identities live together
+  in that generation;
+  new submissions no longer create separate hidden input/execution trees or
+  latest-copy state/reports at the job root. Before deploying this format,
+  drain old-build pending/running xTB-MD rows and finish incomplete terminal
+  replay and snapshot intents, or cancel/clear and resubmit them after the
+  upgrade. Old-format rows are not adopted in place, while existing terminal
+  hidden history remains untouched without migration or rename.
 - Workflow-internal xTB and CREST jobs now use `job_state.json` as their only
   terminal metadata artifact. They no longer write or read `job_report.json`
   or `job_report.md`; report-only jobs, completed outputs without terminal
   identities, and stale artifact paths that require basename remapping are
-  unsupported and must be resubmitted. ORCA and standalone xTB-MD report
-  contracts are unchanged.
+  unsupported and must be resubmitted. The ORCA report contract is unchanged.
 - Added optional ORCA RAM-backed attempt workspaces below `/dev/shm`. Bound
   inputs are staged privately, durable queue/state/process ownership stays on
   disk, and surviving non-temporary outputs are copied once into the visible

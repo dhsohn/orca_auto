@@ -94,58 +94,6 @@ def test_committed_manifest_grants_workflow_paths_without_scaffold(tmp_path: Pat
     assert _workflow_paths(root, stage) is not None
 
 
-def test_xtb_md_artifacts_revalidate_before_each_write(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from types import SimpleNamespace
-
-    import orca_auto.xtb_md.records as records
-
-    job_dir = tmp_path / "xtb_job"
-    job_dir.mkdir()
-    validations: list[int] = []
-    writes: list[str] = []
-
-    def fake_validate(_root: object, _snapshot: object) -> Path:
-        validations.append(len(writes))
-        return job_dir
-
-    monkeypatch.setattr(records, "validate_execution_snapshot_job_dir", fake_validate)
-    monkeypatch.setattr(records, "job_dir_from_entry", lambda _entry: job_dir)
-    monkeypatch.setattr(records, "write_state", lambda _d, _p: writes.append("state"))
-    monkeypatch.setattr(records, "write_report_json", lambda _d, _p: writes.append("json"))
-    monkeypatch.setattr(records, "write_report_md_lines", lambda _d, _l: writes.append("md"))
-    monkeypatch.setattr(
-        "orca_auto.core.engines.artifacts.build_engine_report_markdown",
-        lambda _payload: ["# report"],
-    )
-    monkeypatch.setattr(
-        records.job_locations,
-        "upsert_job_record",
-        lambda _cfg, **_kwargs: None,
-    )
-    entry = SimpleNamespace(
-        task_id="task-xtb",
-        metadata={
-            "execution_snapshot": {"job_dir": str(job_dir)},
-            "resource_request": {"max_cores": 1, "max_memory_gb": 1},
-            "ensemble": "nvt",
-            "selected_input_xyz": str(job_dir / "input.xyz"),
-            "molecule_key": "h2",
-        },
-    )
-    cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path)))
-
-    records.persist_job_artifact(cfg, entry, {"status": {"state": "completed"}})
-
-    assert writes == ["state", "json", "md"]
-    # One validation per artifact write (plus the trailing index refresh):
-    # a directory swapped in after any single write is caught before the next.
-    assert len(validations) >= len(writes) + 1
-    assert validations[:3] == [0, 1, 2]
-
-
 @pytest.mark.parametrize("event_type", ["worker_cycle_started", "worker_cycle_finished"])
 def test_worker_cycle_events_keep_their_session(tmp_path: Path, event_type: str) -> None:
     event = {

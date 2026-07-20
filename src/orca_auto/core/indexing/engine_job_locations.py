@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +94,12 @@ class EngineJobLocations:
         root = self.index_root_for_path(cfg, kwargs["job_dir"])
         existing = get_job_location(root, kwargs["job_id"])
         record = self.build_job_location_record(**{**kwargs, "existing": existing})
+        artifact_dir = kwargs.get("artifact_dir")
+        if artifact_dir is not None:
+            record = replace(
+                record,
+                latest_known_path=str(Path(artifact_dir).expanduser().resolve()),
+            )
         return upsert_job_location(root, record)
 
     def resolve_latest_job_dir(self, index_root: str | Path, target: str) -> Path | None:

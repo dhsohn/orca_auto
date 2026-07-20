@@ -33,7 +33,7 @@ from orca_auto.core.queue import (
 )
 from orca_auto.core.queue import enqueue_publication as core_enqueue_publication
 from orca_auto.core.queue import store as queue_store
-from orca_auto.core.queue.generation import queue_entry_generation_token
+from orca_auto.core.queue.generation import is_visible_generation_name, queue_entry_generation_token
 from orca_auto.core.queue.processes import worker_pid_file_path
 from orca_auto.core.queue.store import mutate_entries
 from orca_auto.flow import activity
@@ -44,6 +44,32 @@ from orca_auto.xtb_md.engine import ENGINE_DEFINITION
 from orca_auto.xtb_md.job_locations import list_job_records_for_cfg
 from orca_auto.xtb_md.runner import run_xtb_md_attempt
 from orca_auto.xtb_md.submission import APP_NAME, submit_job_dir
+
+_JOB_ARTIFACT_NAMES = ("job_state.json", "job_report.json", "job_report.md")
+
+
+def _generation_dir(entry: Any) -> Path:
+    snapshot = entry.metadata["execution_snapshot"]
+    assert snapshot["version"] == 2
+    generation_dir = Path(snapshot["execution_dir"])
+    assert generation_dir.name == snapshot["generation_name"]
+    assert is_visible_generation_name(generation_dir.name)
+    return generation_dir
+
+
+def _visible_generations(job_dir: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in job_dir.iterdir()
+        if path.is_dir() and is_visible_generation_name(path.name)
+    )
+
+
+def _assert_no_root_artifacts(job_dir: Path) -> None:
+    for artifact_name in _JOB_ARTIFACT_NAMES:
+        assert not (job_dir / artifact_name).exists()
+    assert not (job_dir / ".orca_auto_input_snapshots").exists()
+    assert not (job_dir / ".orca_auto_xtb_md_executions").exists()
 
 
 def _submit(case: Any, *, priority: int = 10) -> dict[str, Any]:
@@ -137,11 +163,32 @@ def test_submission_pins_exact_stable_xtb_version_and_cleans_rejected_generation
 
     assert accepted["status"] == "queued"
     accepted_entry = _entry(accepted_case, accepted["queue_id"])
-    assert accepted_entry.metadata["execution_snapshot"]["xtb_version"] == {
+    accepted_snapshot = accepted_entry.metadata["execution_snapshot"]
+    assert accepted_snapshot["xtb_version"] == {
         "version": "6.7.1",
         "release_tag": "v6.7.1",
         "archive_sha256": "62a8d18778286e815292ee53d76ce447daf460a4dea3782c0f25cbac7019b5df",
     }
+    accepted_generation = _generation_dir(accepted_entry)
+    assert accepted_generation.parent == accepted_case.job_dir.resolve()
+    assert Path(accepted_snapshot["selected_input_xyz"]) == accepted_generation / "water.xyz"
+    assert Path(accepted_snapshot["manifest_path"]) == accepted_generation / "xtb_md_job.yaml"
+    assert Path(accepted_snapshot["md_input_path"]) == accepted_generation / "md.inp"
+    assert {path.name for path in accepted_generation.iterdir()} == {
+        "job_report.json",
+        "job_report.md",
+        "job_state.json",
+        "md.inp",
+        "water.xyz",
+        "xtb_md_job.yaml",
+    }
+    for input_name in ("water.xyz", "xtb_md_job.yaml", "md.inp"):
+        assert (accepted_generation / input_name).stat().st_mode & 0o777 == 0o400
+    for artifact_name in ("job_state.json", "job_report.json"):
+        payload = json.loads((accepted_generation / artifact_name).read_text(encoding="utf-8"))
+        assert payload["status"]["state"] == "queued"
+        assert payload["artifacts"]["execution_dir"] == str(accepted_generation)
+    _assert_no_root_artifacts(accepted_case.job_dir)
 
     rejected_case = runtime_case_factory(version="6.7.2")
     rejected = _submit(rejected_case)
@@ -151,8 +198,8 @@ def test_submission_pins_exact_stable_xtb_version_and_cleans_rejected_generation
     assert "supports stable xTB version 6.7.1" in rejected["stderr"]
     assert "reports 6.7.2" in rejected["stderr"]
     assert list_queue(rejected_case.runs_root) == []
-    snapshot_root = rejected_case.job_dir / ".orca_auto_input_snapshots"
-    assert not snapshot_root.exists() or list(snapshot_root.iterdir()) == []
+    assert _visible_generations(rejected_case.job_dir) == []
+    _assert_no_root_artifacts(rejected_case.job_dir)
 
 
 def test_public_run_dir_guard_aborts_xtb_md_before_durable_queue_commit(
@@ -175,10 +222,8 @@ def test_public_run_dir_guard_aborts_xtb_md_before_durable_queue_commit(
     assert not (case.runs_root / "queue.json").exists()
     assert not (case.runs_root / "job_locations.json").exists()
     assert list_job_records_for_cfg(load_xtb_md_config(str(case.config_path))) == []
-    for artifact_name in ("job_state.json", "job_report.json", "job_report.md"):
-        assert not (case.job_dir / artifact_name).exists()
-    snapshot_root = case.job_dir / ".orca_auto_input_snapshots"
-    assert not snapshot_root.exists() or list(snapshot_root.iterdir()) == []
+    assert _visible_generations(case.job_dir) == []
+    _assert_no_root_artifacts(case.job_dir)
 
 
 @pytest.mark.parametrize(
@@ -224,10 +269,8 @@ def test_public_run_dir_guard_compensates_xtb_md_post_commit_rejection(
     assert list_queue(case.runs_root) == []
     assert not (case.runs_root / "job_locations.json").exists()
     assert list_job_records_for_cfg(load_xtb_md_config(str(case.config_path))) == []
-    for artifact_name in ("job_state.json", "job_report.json", "job_report.md"):
-        assert not (case.job_dir / artifact_name).exists()
-    snapshot_root = case.job_dir / ".orca_auto_input_snapshots"
-    assert not snapshot_root.exists() or list(snapshot_root.iterdir()) == []
+    assert _visible_generations(case.job_dir) == []
+    _assert_no_root_artifacts(case.job_dir)
 
 
 @pytest.mark.parametrize(
@@ -296,10 +339,11 @@ def test_xtb_md_compensation_failure_fences_row_without_publication(
     assert queue_entry_is_claimable(entry) is False
     assert not (case.runs_root / "job_locations.json").exists()
     assert list_job_records_for_cfg(load_xtb_md_config(str(case.config_path))) == []
-    for artifact_name in ("job_state.json", "job_report.json", "job_report.md"):
-        assert not (case.job_dir / artifact_name).exists()
-    snapshot_namespace = entry.metadata["execution_snapshot"]["snapshot_namespace"]
-    assert (case.job_dir / ".orca_auto_input_snapshots" / snapshot_namespace).is_dir()
+    generation_dir = _generation_dir(entry)
+    assert generation_dir.is_dir()
+    for artifact_name in _JOB_ARTIFACT_NAMES:
+        assert not (generation_dir / artifact_name).exists()
+    _assert_no_root_artifacts(case.job_dir)
 
 
 def test_public_cli_rechecks_before_first_xtb_md_target_mutation(
@@ -344,7 +388,8 @@ def test_public_cli_rechecks_before_first_xtb_md_target_mutation(
     assert (reserved_job / "xtb_md_job.yaml").read_bytes() == manifest_payload
     assert (reserved_job / "water.xyz").read_bytes() == geometry_payload
     assert list_queue(case.runs_root) == []
-    assert not (reserved_job / ".orca_auto_input_snapshots").exists()
+    assert _visible_generations(reserved_job) == []
+    _assert_no_root_artifacts(reserved_job)
 
 
 def test_public_cli_compensates_xtb_md_snapshot_after_precommit_relocation(
@@ -386,9 +431,8 @@ def test_public_cli_compensates_xtb_md_snapshot_after_precommit_relocation(
     assert gate_count == 5
     assert list_queue(case.runs_root) == []
     assert not (case.runs_root / "job_locations.json").exists()
-    assert not (reserved_job / ".orca_auto_input_snapshots").exists()
-    for artifact_name in ("job_state.json", "job_report.json", "job_report.md"):
-        assert not (reserved_job / artifact_name).exists()
+    assert _visible_generations(reserved_job) == []
+    _assert_no_root_artifacts(reserved_job)
 
 
 def test_public_cli_rejects_xtb_md_namespace_replacement_after_preflight(
@@ -440,7 +484,8 @@ def test_public_cli_rejects_xtb_md_namespace_replacement_after_preflight(
     assert (moved_original / "water.xyz").read_text(encoding="utf-8") == original_geometry
     assert (normal_job / "water.xyz").read_text(encoding="utf-8") == replacement_geometry
     for job_dir in (moved_original, normal_job):
-        assert not (job_dir / ".orca_auto_input_snapshots").exists()
+        assert _visible_generations(job_dir) == []
+        _assert_no_root_artifacts(job_dir)
 
 
 def test_active_job_directory_duplicate_is_rejected_but_terminal_allows_new_generation(
@@ -457,10 +502,8 @@ def test_active_job_directory_duplicate_is_rejected_but_terminal_allows_new_gene
     entries = list_queue(case.runs_root)
     assert len(entries) == 1
     assert entries[0].status == QueueStatus.PENDING
-    snapshot_root = case.job_dir / ".orca_auto_input_snapshots"
-    assert {path.name for path in snapshot_root.iterdir()} == {
-        entries[0].metadata["execution_snapshot"]["snapshot_namespace"]
-    }
+    first_generation = _generation_dir(entries[0])
+    assert _visible_generations(case.job_dir) == [first_generation]
 
     terminal = mark_completed(
         case.runs_root,
@@ -469,6 +512,9 @@ def test_active_job_directory_duplicate_is_rejected_but_terminal_allows_new_gene
         expected_task_id=entries[0].task_id,
     )
     assert terminal is not None and terminal.status == QueueStatus.COMPLETED
+    first_generation_bytes = {
+        path.name: path.read_bytes() for path in first_generation.iterdir() if path.is_file()
+    }
 
     second = _submit(case, priority=5)
     assert second["status"] == "queued"
@@ -479,14 +525,13 @@ def test_active_job_directory_duplicate_is_rejected_but_terminal_allows_new_gene
         QueueStatus.COMPLETED,
         QueueStatus.PENDING,
     ]
-    namespaces = {
-        entry.metadata["execution_snapshot"]["snapshot_namespace"] for entry in generations
-    }
-    assert len(namespaces) == 2
-    assert all(
-        (case.job_dir / ".orca_auto_input_snapshots" / namespace).is_dir()
-        for namespace in namespaces
-    )
+    generation_dirs = {_generation_dir(entry) for entry in generations}
+    assert len(generation_dirs) == 2
+    assert set(_visible_generations(case.job_dir)) == generation_dirs
+    assert {
+        path.name: path.read_bytes() for path in first_generation.iterdir() if path.is_file()
+    } == first_generation_bytes
+    _assert_no_root_artifacts(case.job_dir)
 
 
 def test_cancellation_racing_queued_record_publication_wins_terminally(
@@ -523,12 +568,14 @@ def test_cancellation_racing_queued_record_publication_wins_terminally(
     terminal = _entry(case, result["queue_id"])
     assert terminal.status == QueueStatus.CANCELLED
     assert terminal.metadata["_orca_auto_queued_record_sync"] == "aborted"
-    state = json.loads((case.job_dir / "job_state.json").read_text(encoding="utf-8"))
+    generation_dir = _generation_dir(terminal)
+    state = json.loads((generation_dir / "job_state.json").read_text(encoding="utf-8"))
     assert state["status"] == {
         "state": "cancelled",
         "reason": "cancel_requested",
         "exit_code": None,
     }
+    _assert_no_root_artifacts(case.job_dir)
 
 
 def test_cancelled_submission_publisher_does_not_overwrite_immediate_replacement(
@@ -571,13 +618,20 @@ def test_cancelled_submission_publisher_does_not_overwrite_immediate_replacement
     assert replacement.status == QueueStatus.PENDING
     assert replacement.task_id != old_entry.task_id
     replacement_generation = queue_entry_generation_token(replacement)
-    state = json.loads((case.job_dir / "job_state.json").read_text(encoding="utf-8"))
-    report = json.loads((case.job_dir / "job_report.json").read_text(encoding="utf-8"))
+    replacement_dir = _generation_dir(replacement)
+    state = json.loads((replacement_dir / "job_state.json").read_text(encoding="utf-8"))
+    report = json.loads((replacement_dir / "job_report.json").read_text(encoding="utf-8"))
     for artifact in (state, report):
         assert artifact["status"]["state"] == "queued"
         assert artifact["job"]["id"] == replacement.task_id
         assert artifact["job"]["queue_id"] == replacement.queue_id
         assert artifact["job"]["generation"] == replacement_generation
+    old_generation_dir = _generation_dir(old_entry)
+    old_state = json.loads((old_generation_dir / "job_state.json").read_text(encoding="utf-8"))
+    assert old_state["status"]["state"] == "cancelled"
+    assert old_state["job"]["queue_id"] == old_entry.queue_id
+    assert set(_visible_generations(case.job_dir)) == {old_generation_dir, replacement_dir}
+    _assert_no_root_artifacts(case.job_dir)
 
 
 def test_activity_pending_cancel_publishes_exact_generation_state_report_and_index(
@@ -601,8 +655,9 @@ def test_activity_pending_cancel_publishes_exact_generation_state_report_and_ind
     assert terminal.task_id == queued.task_id
     assert queue_entry_generation_token(terminal) == expected_generation
 
-    state = json.loads((case.job_dir / "job_state.json").read_text(encoding="utf-8"))
-    report = json.loads((case.job_dir / "job_report.json").read_text(encoding="utf-8"))
+    generation_dir = _generation_dir(terminal)
+    state = json.loads((generation_dir / "job_state.json").read_text(encoding="utf-8"))
+    report = json.loads((generation_dir / "job_report.json").read_text(encoding="utf-8"))
     for artifact in (state, report):
         assert artifact["status"] == {
             "state": "cancelled",
@@ -624,7 +679,9 @@ def test_activity_pending_cancel_publishes_exact_generation_state_report_and_ind
     assert index_root == case.runs_root.resolve()
     assert record.status == "cancelled"
     assert record.app_name == "orca_auto_xtb_md"
-    assert Path(record.latest_known_path) == case.job_dir.resolve()
+    assert record.original_run_dir == str(case.job_dir.resolve())
+    assert Path(record.latest_known_path) == generation_dir.resolve()
+    _assert_no_root_artifacts(case.job_dir)
 
 
 def test_submission_publication_rejects_job_directory_symlink_rebinding(
@@ -664,10 +721,10 @@ def test_submission_publication_rejects_job_directory_symlink_rebinding(
     still_parked = _entry(case, result["queue_id"])
     assert still_parked.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
     assert queue_entry_is_claimable(still_parked) is False
-    assert not (moved_job_dir / "job_state.json").exists()
-    assert not (moved_job_dir / "job_report.json").exists()
-    assert not (moved_job_dir / "job_report.md").exists()
-    assert not (moved_job_dir / ".orca_auto_xtb_md_executions").exists()
+    [moved_generation] = _visible_generations(moved_job_dir)
+    for artifact_name in _JOB_ARTIFACT_NAMES:
+        assert not (moved_generation / artifact_name).exists()
+    _assert_no_root_artifacts(moved_job_dir)
 
 
 def test_publication_failure_defers_to_worker_repair_roundtrip(
@@ -690,7 +747,9 @@ def test_publication_failure_defers_to_worker_repair_roundtrip(
     assert parked.status == QueueStatus.PENDING
     assert parked.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
     assert queue_entry_is_claimable(parked) is False
-    assert not (case.job_dir / "job_state.json").exists()
+    generation_dir = _generation_dir(parked)
+    assert not (generation_dir / "job_state.json").exists()
+    _assert_no_root_artifacts(case.job_dir)
 
     # The worker's pre-claim repair pass (queue_runtime binds the real
     # publisher, unaffected by the submission-module patch) publishes the
@@ -700,7 +759,7 @@ def test_publication_failure_defers_to_worker_repair_roundtrip(
     repaired = _entry(case, result["queue_id"])
     assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
     assert queue_entry_is_claimable(repaired) is True
-    state = json.loads((case.job_dir / "job_state.json").read_text(encoding="utf-8"))
+    state = json.loads((generation_dir / "job_state.json").read_text(encoding="utf-8"))
     assert state["status"]["state"] == "queued"
     assert state["job"]["queue_id"] == repaired.queue_id
 
@@ -737,8 +796,9 @@ def test_enqueue_result_lost_after_commit_recovers_to_repair_pending(
     assert parked.status == QueueStatus.PENDING
     assert parked.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
     assert queue_entry_is_claimable(parked) is False
-    snapshot_namespace = parked.metadata["execution_snapshot"]["snapshot_namespace"]
-    assert (case.job_dir / ".orca_auto_input_snapshots" / snapshot_namespace).is_dir()
+    generation_dir = _generation_dir(parked)
+    assert generation_dir.is_dir()
+    _assert_no_root_artifacts(case.job_dir)
 
     cfg = load_xtb_md_config(str(case.config_path))
     assert queue_runtime._repair_queued_publication(cfg, case.runs_root, parked) is True
@@ -806,8 +866,8 @@ def test_worker_rejects_moved_job_rebound_outside_runs_root_without_writes(
     case = runtime_case_factory(mode="success")
     submitted = _submit(case)
     queued = _entry(case, submitted["queue_id"])
-    artifact_names = ("job_state.json", "job_report.json", "job_report.md")
-    queued_artifacts = {name: (case.job_dir / name).read_bytes() for name in artifact_names}
+    generation_dir = _generation_dir(queued)
+    queued_artifacts = {name: (generation_dir / name).read_bytes() for name in _JOB_ARTIFACT_NAMES}
     moved_job_dir = case.root / "moved-water-md"
     case.job_dir.rename(moved_job_dir)
     case.job_dir.symlink_to(moved_job_dir, target_is_directory=True)
@@ -821,12 +881,13 @@ def test_worker_rejects_moved_job_rebound_outside_runs_root_without_writes(
     failed = _entry(case, submitted["queue_id"])
     assert failed.status == QueueStatus.FAILED
     assert "missing, replaced, or contains a symlink" in failed.error
-    assert not (moved_job_dir / ".orca_auto_xtb_md_executions").exists()
+    moved_generation_dir = moved_job_dir / generation_dir.name
     assert {
-        name: (moved_job_dir / name).read_bytes() for name in artifact_names
+        name: (moved_generation_dir / name).read_bytes() for name in _JOB_ARTIFACT_NAMES
     } == queued_artifacts
-    state = json.loads((moved_job_dir / "job_state.json").read_text(encoding="utf-8"))
+    state = json.loads((moved_generation_dir / "job_state.json").read_text(encoding="utf-8"))
     assert state["status"]["state"] == "queued"
+    _assert_no_root_artifacts(moved_job_dir)
 
 
 def test_execution_uses_immutable_snapshot_after_source_mutation_and_cannot_retry(
@@ -837,7 +898,7 @@ def test_execution_uses_immutable_snapshot_after_source_mutation_and_cannot_retr
     submitted = _submit(case, priority=2)
     queued = _entry(case, submitted["queue_id"])
     snapshot = queued.metadata["execution_snapshot"]
-    geometry_snapshot = Path(snapshot["input_snapshots"]["geometry"]["snapshot_path"])
+    geometry_snapshot = Path(snapshot["selected_input_xyz"])
     geometry_payload = geometry_snapshot.read_bytes()
 
     (case.job_dir / "water.xyz").write_text("source changed after submit\n", encoding="utf-8")
@@ -848,6 +909,17 @@ def test_execution_uses_immutable_snapshot_after_source_mutation_and_cannot_retr
     claimed = dequeue_entry_if_pending(case.runs_root, queued.queue_id, expected_entry=queued)
     assert claimed is not None and claimed.status == QueueStatus.RUNNING
     token = _reserve_managed_slot(case, claimed)
+    observed_launch: dict[str, Any] = {}
+    original_start = xtb_md_runner.start_logged_process
+
+    def observe_start(*args: Any, **kwargs: Any) -> Any:
+        observed_launch.update(
+            command=tuple(args[0]),
+            cwd=Path(kwargs["cwd"]),
+        )
+        return original_start(*args, **kwargs)
+
+    monkeypatch.setattr(xtb_md_runner, "start_logged_process", observe_start)
 
     assert _run_claimed_entry(case, claimed, token, monkeypatch) == 0
     idle = get_slot(case.admission_root, token)
@@ -857,10 +929,14 @@ def test_execution_uses_immutable_snapshot_after_source_mutation_and_cannot_retr
     completed = _entry(case, submitted["queue_id"])
     assert completed.status == QueueStatus.COMPLETED
     execution_dir = Path(completed.metadata["execution_dir"])
-    assert execution_dir.parent == (case.job_dir / ".orca_auto_xtb_md_executions").resolve()
+    assert execution_dir == _generation_dir(completed)
+    assert execution_dir.parent == case.job_dir.resolve()
+    assert observed_launch["cwd"] == execution_dir
+    assert Path(observed_launch["command"][1]).parent == execution_dir
+    assert Path(observed_launch["command"][3]).parent == execution_dir
     assert (execution_dir / "water.xyz").read_bytes() == geometry_payload
     assert geometry_snapshot.read_bytes() == geometry_payload
-    state = json.loads((case.job_dir / "job_state.json").read_text(encoding="utf-8"))
+    state = json.loads((execution_dir / "job_state.json").read_text(encoding="utf-8"))
     assert state["status"]["state"] == "completed"
     assert state["engine"] == "xtb_md"
     assert state["engine_payload"]["attempt"] == 1
@@ -868,7 +944,7 @@ def test_execution_uses_immutable_snapshot_after_source_mutation_and_cannot_retr
     assert state["engine_payload"]["retry_supported"] is False
     assert state["engine_payload"]["resume_supported"] is False
     assert state["job"]["generation"] == queue_entry_generation_token(completed)
-    report = json.loads((case.job_dir / "job_report.json").read_text(encoding="utf-8"))
+    report = json.loads((execution_dir / "job_report.json").read_text(encoding="utf-8"))
     assert report["job"]["generation"] == queue_entry_generation_token(completed)
 
     repeated = run_xtb_md_attempt(
@@ -881,9 +957,9 @@ def test_execution_uses_immutable_snapshot_after_source_mutation_and_cannot_retr
         shutdown_requested=lambda: False,
     )
     assert repeated.status == "failed"
-    assert "generation already exists" in repeated.reason
-    assert "cannot retry" in repeated.reason
-    assert [path.name for path in execution_dir.parent.iterdir()] == [completed.task_id]
+    assert "attempt identity already exists" in repeated.reason
+    assert _visible_generations(case.job_dir) == [execution_dir]
+    _assert_no_root_artifacts(case.job_dir)
 
 
 @pytest.mark.parametrize("scratch_enabled", [False, True], ids=["durable", "scratch"])
@@ -941,7 +1017,7 @@ def test_runner_rejects_tampered_snapshot_before_engine_launch(runtime_case_fact
     submitted = _submit(case)
     queued = _entry(case, submitted["queue_id"])
     snapshot = queued.metadata["execution_snapshot"]
-    geometry_snapshot = Path(snapshot["input_snapshots"]["geometry"]["snapshot_path"])
+    geometry_snapshot = Path(snapshot["selected_input_xyz"])
     tampered_payload = bytearray(geometry_snapshot.read_bytes())
     tampered_payload[-2] = ord("6") if tampered_payload[-2] != ord("6") else ord("7")
     geometry_snapshot.chmod(0o600)
@@ -958,11 +1034,73 @@ def test_runner_rejects_tampered_snapshot_before_engine_launch(runtime_case_fact
     )
 
     assert result.status == "failed"
-    assert "failed digest verification" in result.reason
+    assert "no longer matches its terminal content identity" in result.reason
     execution_dir = Path(result.execution_dir)
+    assert execution_dir == _generation_dir(queued)
     assert execution_dir.is_dir()
     assert not (execution_dir / "xtb.stdout.log").exists()
     assert not (execution_dir / "xtbmdok").exists()
+
+
+def test_runner_rejects_replaced_visible_generation_without_writes(
+    runtime_case_factory,
+) -> None:
+    case = runtime_case_factory(mode="success")
+    submitted = _submit(case)
+    queued = _entry(case, submitted["queue_id"])
+    generation_dir = _generation_dir(queued)
+    original_bytes = {
+        path.name: path.read_bytes() for path in generation_dir.iterdir() if path.is_file()
+    }
+    moved_generation = case.job_dir / "moved-generation"
+    generation_dir.rename(moved_generation)
+    generation_dir.mkdir()
+
+    result = run_xtb_md_attempt(
+        load_xtb_md_config(str(case.config_path)),
+        queued,
+        execution_snapshot=queued.metadata["execution_snapshot"],
+        admission_root=case.admission_root,
+        admission_token="not-used-before-validation",
+        should_cancel=lambda: False,
+        shutdown_requested=lambda: False,
+    )
+
+    assert result.status == "failed"
+    assert "generation directory identity changed" in result.reason
+    assert list(generation_dir.iterdir()) == []
+    assert {
+        path.name: path.read_bytes() for path in moved_generation.iterdir() if path.is_file()
+    } == original_bytes
+    _assert_no_root_artifacts(case.job_dir)
+
+
+def test_runner_rejects_legacy_v1_snapshot_without_compatibility(
+    runtime_case_factory,
+) -> None:
+    case = runtime_case_factory(mode="success")
+    submitted = _submit(case)
+    queued = _entry(case, submitted["queue_id"])
+    generation_dir = _generation_dir(queued)
+    before = {path.name: path.read_bytes() for path in generation_dir.iterdir() if path.is_file()}
+    legacy_snapshot = {**queued.metadata["execution_snapshot"], "version": 1}
+
+    result = run_xtb_md_attempt(
+        load_xtb_md_config(str(case.config_path)),
+        queued,
+        execution_snapshot=legacy_snapshot,
+        admission_root=case.admission_root,
+        admission_token="not-used-before-validation",
+        should_cancel=lambda: False,
+        shutdown_requested=lambda: False,
+    )
+
+    assert result.status == "failed"
+    assert "unsupported version" in result.reason
+    assert {
+        path.name: path.read_bytes() for path in generation_dir.iterdir() if path.is_file()
+    } == before
+    _assert_no_root_artifacts(case.job_dir)
 
 
 def test_runner_executes_in_scratch_and_publishes_only_canonical_outputs(
@@ -1032,8 +1170,12 @@ def test_runner_executes_in_scratch_and_publishes_only_canonical_outputs(
     assert {path.name for path in execution_dir.iterdir()} == {
         ".orca_auto_xtb_md_attempt",
         ".orca_auto_runtime_home",
-        "water.xyz",
+        "job_report.json",
+        "job_report.md",
+        "job_state.json",
         "md.inp",
+        "water.xyz",
+        "xtb_md_job.yaml",
         "xtb.stdout.log",
         "xtb.stderr.log",
         "xtb.trj",
@@ -1396,7 +1538,8 @@ def test_fake_xtb_md_nvt_nve_smoke(
     ).exists()
 
     execution_dir = Path(completed.metadata["execution_dir"])
-    assert execution_dir.parent == (case.job_dir / ".orca_auto_xtb_md_executions").resolve()
+    assert execution_dir == _generation_dir(completed)
+    assert execution_dir.parent == case.job_dir.resolve()
     md_input = (execution_dir / "md.inp").read_text(encoding="utf-8")
     assert f"nvt={'true' if ensemble == 'nvt' else 'false'}" in md_input
     assert "restart=false" in md_input
@@ -1424,8 +1567,8 @@ def test_fake_xtb_md_nvt_nve_smoke(
     )
 
     generation = queue_entry_generation_token(completed)
-    state = json.loads((case.job_dir / "job_state.json").read_text(encoding="utf-8"))
-    report = json.loads((case.job_dir / "job_report.json").read_text(encoding="utf-8"))
+    state = json.loads((execution_dir / "job_state.json").read_text(encoding="utf-8"))
+    report = json.loads((execution_dir / "job_report.json").read_text(encoding="utf-8"))
     for artifact in (state, report):
         assert artifact["schema_version"] == 1
         assert artifact["engine"] == "xtb_md"
@@ -1442,9 +1585,10 @@ def test_fake_xtb_md_nvt_nve_smoke(
         assert artifact["engine_payload"]["trajectory_frames"] == 2
         assert artifact["engine_payload"]["atom_count"] == 3
         assert "--norestart" in artifact["engine_payload"]["command"]
-    report_md = (case.job_dir / "job_report.md").read_text(encoding="utf-8")
+    report_md = (execution_dir / "job_report.md").read_text(encoding="utf-8")
     assert "Status: `completed`" in report_md
     assert f"ensemble: `{ensemble}`" in report_md
+    _assert_no_root_artifacts(case.job_dir)
 
 
 def test_false_success_is_terminal_failure_not_completion(
@@ -1473,24 +1617,26 @@ def test_false_success_is_terminal_failure_not_completion(
     assert failed.metadata["retry_supported"] is False
     assert failed.metadata["resume_supported"] is False
     execution_dir = Path(failed.metadata["execution_dir"])
-    assert execution_dir.parent == (case.job_dir / ".orca_auto_xtb_md_executions").resolve()
+    assert execution_dir == _generation_dir(failed)
+    assert execution_dir.parent == case.job_dir.resolve()
     assert (execution_dir / "xtb.trj").exists()
     assert (execution_dir / "mdrestart").exists()
     assert (execution_dir / "xtbmdok").exists()
     stdout_log = (execution_dir / "xtb.stdout.log").read_text(encoding="utf-8")
     assert "MD is unstable, emergency exit" in stdout_log
-    state = json.loads((case.job_dir / "job_state.json").read_text(encoding="utf-8"))
+    state = json.loads((execution_dir / "job_state.json").read_text(encoding="utf-8"))
     assert state["status"]["state"] == "failed"
     assert "fatal marker" in state["status"]["reason"]
     assert state["job"]["generation"] == queue_entry_generation_token(failed)
     assert state["engine_payload"]["retry_supported"] is False
     assert state["engine_payload"]["resume_supported"] is False
-    report = json.loads((case.job_dir / "job_report.json").read_text(encoding="utf-8"))
+    report = json.loads((execution_dir / "job_report.json").read_text(encoding="utf-8"))
     assert report["status"] == state["status"]
     assert report["job"]["generation"] == state["job"]["generation"]
-    report_md = (case.job_dir / "job_report.md").read_text(encoding="utf-8")
+    report_md = (execution_dir / "job_report.md").read_text(encoding="utf-8")
     assert "Status: `failed`" in report_md
     assert "fatal marker" in report_md
+    _assert_no_root_artifacts(case.job_dir)
 
 
 def test_running_cancellation_is_terminal_and_does_not_retry(
@@ -1520,9 +1666,11 @@ def test_running_cancellation_is_terminal_and_does_not_retry(
     assert cancelled.metadata["attempt"] == 1
     assert cancelled.metadata["retry_supported"] is False
     assert cancelled.metadata["resume_supported"] is False
-    state = json.loads((case.job_dir / "job_state.json").read_text(encoding="utf-8"))
+    generation_dir = _generation_dir(cancelled)
+    state = json.loads((generation_dir / "job_state.json").read_text(encoding="utf-8"))
     assert state["status"]["state"] == "cancelled"
     assert state["engine_payload"]["max_attempts"] == 1
+    _assert_no_root_artifacts(case.job_dir)
 
 
 def test_shutdown_terminates_engine_and_fails_without_retry(runtime_case_factory) -> None:
@@ -1547,7 +1695,8 @@ def test_shutdown_terminates_engine_and_fails_without_retry(runtime_case_factory
     idle = get_slot(case.admission_root, token)
     assert idle is not None and idle.engine_process_state == "idle"
     assert release_slot(case.admission_root, token) is True
-    assert list((case.job_dir / ".orca_auto_xtb_md_executions").iterdir())
+    assert _visible_generations(case.job_dir) == [_generation_dir(queued)]
+    _assert_no_root_artifacts(case.job_dir)
 
 
 @pytest.mark.parametrize("ensemble", ["nvt", "nve"])
@@ -1608,7 +1757,8 @@ def test_real_xtb_671_two_step_acceptance_when_configured(
     assert release_slot(case.admission_root, token) is True
     completed = _entry(case, submitted["queue_id"])
     assert completed.status == QueueStatus.COMPLETED
-    state = json.loads((case.job_dir / "job_state.json").read_text(encoding="utf-8"))
+    generation_dir = _generation_dir(completed)
+    state = json.loads((generation_dir / "job_state.json").read_text(encoding="utf-8"))
     assert state["status"]["state"] == "completed"
     assert state["engine_payload"]["ensemble"] == ensemble
     assert state["engine_payload"]["completed_steps"] == 2
@@ -1636,3 +1786,4 @@ def test_real_xtb_671_two_step_acceptance_when_configured(
             (execution_dir / name).exists() for name in ("charges", "wbo", "xtbtopo.mol")
         )
         assert not any(path.name.startswith("attempt-") for path in scratch_root.iterdir())
+    _assert_no_root_artifacts(case.job_dir)

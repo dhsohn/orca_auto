@@ -179,7 +179,10 @@ def resolve_job_location(root: str | Path, lookup_target: str) -> JobLocationRec
     if candidate_path is None:
         return None
 
-    for record in records:
+    # Multiple immutable generations may share one submitted job directory.
+    # Records are appended in submission order, so a path alias must select the
+    # newest matching job while an exact job id above remains historical.
+    for record in reversed(records):
         if candidate_path in _record_paths(record):
             return record
     return None

@@ -168,14 +168,17 @@ Key properties:
   supported. The `reaction_dir` field is still preserved in the queue entry as
   the downstream contract.
 - **A queue generation binds its executable inputs at submission.** Standalone
-  xTB-MD and workflow xTB/CREST use content-addressed input snapshots in an
-  exclusively reserved, unique namespace for each submission. ORCA creates a
-  visible `YYYYMMDD-HHMMSS-<8-hex>/` directly under the submitted job
-  directory, preserves the selected `.inp` and dependency basenames, rewrites
-  supported file references to those confined flat copies, and writes raw
-  outputs beside them. New ORCA generations have no hidden execution parent or
-  nested `.inputs/`. Workers verify input and executable content identities
-  instead of re-reading mutable source files as the execution contract.
+  xTB-MD creates one visible `YYYYMMDD-HHMMSS-<8-hex>/` directly under the
+  submitted job directory and keeps its bound `xtb_md_job.yaml`, geometry
+  basename, generated `md.inp`, state, reports, and retained outputs together
+  there. Workflow xTB and CREST keep content-addressed input snapshots in an
+  exclusively reserved, unique namespace for each submission. ORCA likewise creates a visible
+  generation directly under the submitted job directory, preserves the
+  selected `.inp` and dependency basenames, rewrites supported file references
+  to those confined flat copies, and writes raw outputs beside them. New ORCA
+  and standalone xTB-MD generations have no hidden execution parent or nested
+  input layer. Workers verify input and executable content identities instead
+  of re-reading mutable source files as the execution contract.
 - **If no worker is running, work stays pending** in `queue.json` until a worker
   returns. Closing the submission terminal after `status: queued` is safe.
 
@@ -290,21 +293,23 @@ currently consume a shared slot.
 ### Standalone xTB-MD boundary
 
 `orca_auto.xtb_md` depends on shared `core` infrastructure but not on ORCA or
-`flow`. Submission snapshots the strict `xtb_md_job.yaml`, its one XYZ geometry,
-the generated canonical `$md` input, and the xTB executable/version identity.
-The worker executes exactly one fresh attempt in
-`.orca_auto_xtb_md_executions/<job_id>/`; retry, checkpoint resume, and workflow
-handoff are deliberately absent. Cancellation terminates the process group, and
-worker shutdown/crash/orphan recovery records a terminal non-retry result.
+`flow`. Submission creates one visible `YYYYMMDD-HHMMSS-<8-hex>/` generation
+under the job root and binds a copy of the strict `xtb_md_job.yaml`, its one XYZ
+geometry under the source basename, the generated canonical `md.inp`, and the
+xTB executable/version identity to it. The worker executes exactly one fresh
+attempt in that generation; retry, checkpoint resume, and workflow handoff are
+deliberately absent. Cancellation terminates the process group, and worker
+shutdown/crash/orphan recovery records a terminal non-retry result.
 
 Exit code 0 is only one piece of evidence. Terminal validation also requires a
 fresh `xtbmdok`, complete finite `xtb.trj` and `mdrestart` artifacts bound to the
 submitted atom/step budget, bounded output, and no known xTB false-success
-marker. The public state/report files are written at the job root; immutable
-raw outputs remain in the private execution tree for audit.
+marker. State, reports, bound inputs, and immutable raw outputs all remain in
+the visible generation that they describe; the reusable job root has no latest
+state/report mirror.
 
-When shared RAM scratch is enabled, the private execution tree remains the
-durable identity and publication target. Its generated geometry, `md.inp`,
+When shared RAM scratch is enabled, the visible generation remains the durable
+identity and publication target. Its generated geometry, `md.inp`,
 attempt token, queue metadata, and public command stay bound to that generation,
 while the actual xTB command uses staged input paths and a private tmpfs CWD.
 After process-group exit, the common `core.engine_scratch` transaction publishes
@@ -313,6 +318,11 @@ then runs against those newly published durable files, so false-success evidence
 is retained but cannot become completion. Committed publication is cleaned and
 recorded in `scratch_provenance`; identity drift or an unresolved transaction
 retains the workspace and blocks later scratch launches.
+
+Deployment is a cutover rather than an in-place row migration. Drain old-build
+pending/running xTB-MD rows and finish incomplete terminal replay and snapshot
+intents, or cancel/clear and resubmit them after the upgrade. Existing terminal
+hidden history remains untouched without migration or rename.
 
 ---
 
@@ -359,8 +369,9 @@ logic. Notable pieces:
   the scratch tmpfs, and the configured host reserve.
   The scratch workspace and journal implementation is owned by
   `core.engine_scratch`; ORCA contributes only its flat input-dependency parser.
-  Standalone xTB-MD and workflow xTB/CREST use the same private workspace and transaction but keep
-  their immutable input snapshots durable and absolute. xTB publishes its
+  Standalone xTB-MD and workflow xTB/CREST use the same private workspace and
+  transaction. The standalone MD inputs stay durable in its visible generation;
+  workflow xTB/CREST input snapshots stay durable and absolute. xTB publishes its
   canonical job-type result set and logs; standalone xTB-MD publishes only its
   trajectory, checkpoint, success marker, and logs; CREST publishes named retained
   ensembles and logs. Large engine work trees are omitted and removed after the
@@ -536,7 +547,7 @@ durable mutation. The main on-disk artifacts:
 | admission slot file         | core/admission   | Active concurrency slots (machine-wide)  |
 | `job_state.json`            | orca (state)     | Per-job attempts + status                |
 | `job_report.json` / `.md`   | orca (reporting) | Human/machine completion report          |
-| `.orca_auto_xtb_md_executions/<job_id>/` | xtb_md | Immutable MD execution outputs       |
+| `<xTB-MD job>/<visible generation>/` | xtb_md | Bound MD inputs, state/reports, and outputs |
 | job-location index (JSONL)  | core/indexing    | Where each job's outputs currently live  |
 | `workflow.json`             | flow             | Durable workflow payload                 |
 | `workflow_report.html`      | flow (report)    | Live visual workflow summary             |

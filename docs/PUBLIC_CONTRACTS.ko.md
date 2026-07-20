@@ -256,9 +256,12 @@ replay하지 않고 오류를 기록하며, clear와 강제 후속 제출을 막
 fence marker는 내부 구현 상태이므로 client가 편집하면 안 됩니다.
 
 xTB-MD/xTB/CREST 큐 산출물에는 내부 immutable-generation fingerprint가 기록되고, 새
-xTB-MD/xTB/CREST/ORCA 행에는 제출 시점 execution snapshot이 들어갑니다. 새 ORCA
-행은 snapshot schema 2와 직접 하위 visible
-`YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 사용하고 ORCA용
+xTB-MD/xTB/CREST/ORCA 행에는 제출 시점 execution snapshot이 들어갑니다. 새 단독
+xTB-MD 행과 ORCA 행은 각각 직접 하위 visible
+`YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 소유합니다. 새 단독 xTB-MD 행은 바인딩한
+`xtb_md_job.yaml`, 소스 basename을 유지한 geometry, 생성한 `md.inp`, 상태, 리포트,
+보존 출력을 모두 그 generation에 두며 별도 private 입력/실행 트리를 만들지 않습니다. 새 ORCA 행은 snapshot
+schema 2를 사용하고 ORCA용
 `.orca_auto_input_snapshots/`, `.orca_auto_orca_executions/`, 중첩 `.inputs/`를 만들지
 않습니다. 바인딩한 선택 `.inp`와 의존성은 소스 basename을 유지합니다. 서로 다른
 소스 경로가 같은 basename을 쓰면 바이트가 같아도 제출을 fail-closed합니다.
@@ -279,8 +282,13 @@ fail-closed합니다.
 새 빌드에서 다시 제출하세요. In-place adoption이나 migration은 지원하지 않습니다. 기존
 terminal 숨은 ORCA generation은 이력 산출물로 제자리에 보존합니다. 검증할 수 없는 산출물은
 새 generation에 연결하지 않고 fail-closed합니다.
-xTB-MD/xTB/CREST snapshot은 공개 task id만으로 소유권을 정하지 않고 제출마다 배타적으로 예약한
-고유 namespace를 사용합니다.
+단독 xTB-MD visible-generation 형식을 배포하기 전에도 이전 빌드의 pending/running xTB-MD
+행을 모두 drain하고 미완료 terminal replay와 snapshot intent를 끝내야 합니다. 또는 영향받는
+작업을 취소/clear한 뒤 새 빌드에서 다시 제출하세요. 구형 행은 in-place로 채택하지 않습니다.
+기존 terminal xTB-MD 숨은 입력/실행 이력은 제자리에 두며 migration하거나 이름을 바꾸지
+않습니다.
+워크플로우 내부 xTB/CREST snapshot은 공개 task id만으로 소유권을 정하지 않고 제출마다
+배타적으로 예약한 고유 namespace를 사용합니다.
 Generation 디렉터리를 만들기 전에 소유 queue root에 내부 durable intent를 기록합니다.
 Worker는 bounded intent만 raw queue 행 및 생성자 생존 여부와 대조해 보수적으로 복구하고,
 예약된 child를 시작하기 전에 intent를 종료합니다. Generation 제거가 불확실하면 intent를
@@ -317,15 +325,19 @@ adapter는 현재 xTB 6.7.1만 받습니다. 이는 호환성 pin이지 issue-fr
 finite, 원자 수가 일치하는 `xtb.trj`와 `mdrestart` 증거도 요구하고 알려진 false-success
 marker를 거부합니다.
 
-단독 xTB-MD는 작업 루트에 다음 공개 산출물을 씁니다:
+단독 xTB-MD는 허용된 제출마다 작업 루트 바로 아래에 visible
+`YYYYMMDD-HHMMSS-<8자리 hex>/` generation 하나를 정확히 만듭니다. 다음 공개 산출물은
+그 generation에 둡니다:
 
 - `job_state.json`
 - `job_report.json`
 - `job_report.md`
 
-불변 generated input, 로그, `xtb.trj`, `mdrestart`, `xtbmdok`는
-`.orca_auto_xtb_md_executions/<job_id>/` 아래에 보존합니다. 종료 JSON은 검증된 출력에
-path, SHA-256, byte size, modification time을 바인딩합니다.
+바인딩한 geometry는 소스 basename을 유지합니다. 그 geometry와 바인딩한
+`xtb_md_job.yaml`, 생성한 `md.inp`, 로그,
+`xtb.trj`, `mdrestart`, `xtbmdok`는 상태/리포트와 같은 generation에 둡니다. 작업 루트에는
+최신 상태/리포트 복사본 writer가 없습니다. 종료 JSON은 검증된 출력에 path, SHA-256,
+byte size, modification time을 바인딩합니다.
 
 `orca.runtime.scratch_root`를 설정해도 불변 generated geometry, `md.inp`, attempt identity,
 큐/상태, 리포트 소유권은 durable하게 유지합니다. 실제 xTB process 작업 디렉터리와

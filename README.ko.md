@@ -184,17 +184,25 @@ metadynamics를 노출하지 않습니다. 고정 `$samerand` 시퀀스를 쓰�
 
 서버 소유 상한은 원자 10,000개, MD 999,999 step, 100,000,000 atom-step,
 trajectory frame 100,000개, wall time 86,400초, 보존 출력 1 GiB, 출력 파일 10,000개입니다.
-성공한 작업은 루트에 `job_state.json`, `job_report.json`, `job_report.md`를 씁니다.
-불변 실행 트리와 검증된 `xtb.trj`, `mdrestart`, `xtbmdok`, 로그는
-`.orca_auto_xtb_md_executions/<job_id>/` 아래에 보존합니다.
+허용된 제출마다 작업 디렉터리 바로 아래에 visible
+`YYYYMMDD-HHMMSS-<8자리 hex>/` generation 하나를 만듭니다. 바인딩한 geometry는 소스
+basename을 유지합니다. 바인딩한 `xtb_md_job.yaml` 복사본, 그 geometry, 생성한 `md.inp`,
+상태와 리포트 파일, 검증한 `xtb.trj`, `mdrestart`, `xtbmdok`, 로그는 모두 그
+generation에 둡니다. 작업 루트에는 최신 상태나 리포트 복사본을 두지 않습니다.
 
-`orca.runtime.scratch_root`를 설정하면 단독 xTB-MD는 durable generation과 큐/리포트
-상태는 디스크에 유지하되 실제 xTB 프로세스는 private tmpfs workspace에서 실행합니다.
+`orca.runtime.scratch_root`를 설정하면 단독 xTB-MD는 durable generation과 상태/리포트는
+디스크에, 큐 행은 `runs_root` 아래에 유지하되 실제 xTB 프로세스는 private tmpfs
+workspace에서 실행합니다.
 생성한 geometry와 `md.inp`는 read-only로 staging하고, 프로세스 종료 뒤 `xtb.trj`,
 `mdrestart`, `xtbmdok`, stdout/stderr만 durable generation에 transaction으로 게시한 다음
 종료 검증합니다. 그 밖의 엔진 work 파일은 생략하고 workspace와 함께 제거합니다. 성공,
 false-success 거부, 취소, worker 종료 결과에는 `scratch_provenance`가 남습니다. 게시를
 확정할 수 없으면 SSD로 조용히 fallback하지 않고 workspace를 보존해 다음 scratch 시작을 막습니다.
+
+구형 빌드 위에 이 visible-generation 형식을 배포하기 전에는 이전 빌드의 pending/running
+xTB-MD 행을 모두 drain하거나 취소/clear하고, 미완료 terminal replay와 snapshot intent를
+끝내세요. 취소한 작업은 업그레이드 뒤 다시 제출합니다. 구형 행은 in-place로 채택하지 않으며,
+기존 terminal 숨은 이력은 제자리에 두고 migration, rename, delete하지 않습니다.
 
 단독 xTB-MD는 현재 이 계약을 추가할 때 최신 안정판이던 xTB 6.7.1만 받습니다. 이는 해당
 upstream release에 이슈가 없다는 뜻이 아닙니다. 종료 코드 0과 `xtbmdok`만으로는 성공이
@@ -293,7 +301,8 @@ workflow/xTB/CREST 워커를 자동 시작하지 않으며, workflow 실행이 �
   `.gbw` 파일을 사용해 `MORead`와 `%moinp`가 포함된 재시작 입력을 생성합니다.
 - ORCA 작업 루트에는 `run.lock`과 최신 공개 상태/리포트 파일이 남습니다.
   `job_state.json`과 `job_report.json`은 해당 실행을 설명하는 visible generation에도
-  mirror됩니다. 단독 xTB-MD의 산출물 배치는 기존과 같습니다.
+  mirror됩니다. 단독 xTB-MD는 상태, 리포트, 바인딩 입력, 보존 출력을 visible
+  generation에만 둡니다.
 - 무인 WSL 또는 Linux 실행을 위해서는 [systemd/README.ko.md](systemd/README.ko.md)의
   `systemd` 자산을 사용하세요.
 

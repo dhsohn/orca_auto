@@ -227,9 +227,9 @@ Notes:
   recorded as omitted provenance and removed with the workspace. This does not
   use CREST's native `--scratch` option.
 - Standalone xTB-MD uses the same one-workspace scratch admission. Its immutable
-  generated geometry, `md.inp`, attempt identity, queue/state, and report
-  ownership stay in `.orca_auto_xtb_md_executions/<job_id>/`; the actual xTB
-  command reads staged geometry/control paths in tmpfs. After exit, only
+  generated geometry, `md.inp`, attempt identity, state, and report ownership
+  stay in its visible `YYYYMMDD-HHMMSS-<8-hex>/` generation; the queue row stays
+  under `runs_root`. The actual xTB command reads staged geometry/control paths in tmpfs. After exit, only
   `xtb.stdout.log`, `xtb.stderr.log`, `xtb.trj`, `mdrestart`, and `xtbmdok` are
   transactionally published, then validated from the durable generation. Total,
   file-count, log, trajectory, checkpoint, and marker size limits are enforced
@@ -628,9 +628,16 @@ There is no public direct-execution mode for new work. `run-dir` is the durable 
   bound input at 256 MiB; ORCA accepts at most 128 file-reference directives.
   CREST has the per-file limit but no separate aggregate limit. A downstream
   output XYZ materialization is bounded at 512 MiB.
-- xTB/CREST snapshots keep their private per-submission directories under
-  `.orca_auto_input_snapshots/`; each namespace is unique and reserved
-  exclusively. A public task id alone is not the snapshot-ownership key.
+- Workflow-internal xTB/CREST snapshots keep their private per-submission
+  directories under `.orca_auto_input_snapshots/`; each namespace is unique and
+  reserved exclusively. A public task id alone is not the snapshot-ownership key.
+- A new standalone xTB-MD submission creates exactly one visible direct child
+  named `YYYYMMDD-HHMMSS-<8-hex>/` in the job directory. Its bound geometry
+  keeps the source basename, and the bound `xtb_md_job.yaml`, generated
+  `md.inp`, state, reports, retained raw evidence, and output content identities
+  stay together in that generation.
+  New standalone xTB-MD submissions do not create separate hidden input or
+  execution trees, and the job root has no latest-copy state/report writer.
 - A new ORCA submission instead creates exactly one visible direct child named
   `YYYYMMDD-HHMMSS-<8-hex>/` in the job directory. Its bound `.inp`
   keeps the source basename. Confined XYZ, GBW, Hessian, point-charge, IRC, and
@@ -659,7 +666,14 @@ There is no public direct-execution mode for new work. `run-dir` is the durable 
   after the upgrade. Old-format rows are not adopted in place. Existing
   terminal `.orca_auto_orca_executions/` and ORCA
   `.orca_auto_input_snapshots/` history stays where it is; the upgrade does not
-  migrate or rename it. The xTB/CREST snapshot layout is unchanged.
+  migrate or rename it. The workflow-internal xTB/CREST snapshot layout is
+  unchanged.
+- Before deploying the standalone xTB-MD visible-generation format, drain all
+  old-build pending/running xTB-MD rows and finish every incomplete terminal
+  replay and snapshot intent. Alternatively cancel/clear affected work and
+  resubmit it after the upgrade. Old-format rows are not adopted in place.
+  Existing terminal xTB-MD hidden input/execution history stays where it is;
+  the upgrade does not migrate, rename, or delete it.
 - New xTB/CREST terminal outputs carry content identities that are verified
   before downstream parsing. Completed outputs without a terminal identity are
   unsupported and fail closed; resubmit them. Readers do not hash later bytes
@@ -706,10 +720,12 @@ There is no public direct-execution mode for new work. `run-dir` is the durable 
   markers such as `MD is unstable, emergency exit` and
   `but still taking it as converged!`, or incomplete/non-finite trajectory and
   checkpoint evidence, fail the job closed.
-- `job_state.json`, `job_report.json`, and `job_report.md` live at the job root.
-  The immutable generated input, logs, `xtb.trj`, `mdrestart`, and `xtbmdok`
-  are retained under `.orca_auto_xtb_md_executions/<job_id>/` with content
-  identities in the terminal report.
+- Each accepted submission creates one visible `YYYYMMDD-HHMMSS-<8-hex>/`
+  generation directly under the job root. `job_state.json`, `job_report.json`,
+  and `job_report.md` live there, with no latest-copy writer at the job root.
+  The bound geometry keeps its source basename; the bound `xtb_md_job.yaml`,
+  generated `md.inp`, logs, `xtb.trj`, `mdrestart`, and `xtbmdok` live beside
+  the reports with content identities in the terminal JSON.
 - With `orca.runtime.scratch_root`, the actual xTB process runs in a private
   tmpfs workspace. Only the two logs, trajectory, checkpoint, and success marker
   are committed back to that same durable generation before terminal

@@ -31,7 +31,16 @@ _MAINTENANCE_LOCK_NAME = ".orca_auto_snapshot_intents.lock"
 _MUTATION_LOCK_NAME = ".orca_auto_snapshot_intents.mutation.lock"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9._-]{16,160}")
 _MANAGED_PARENT_NAMES = frozenset({".orca_auto_input_snapshots", ".orca_auto_orca_executions"})
-_KINDS = frozenset({"input_snapshot_namespace", "orca_execution_pair", "orca_visible_generation"})
+_DIRECT_VISIBLE_GENERATION_KINDS = frozenset(
+    {"orca_visible_generation", "xtb_md_visible_generation"}
+)
+_KINDS = frozenset(
+    {
+        "input_snapshot_namespace",
+        "orca_execution_pair",
+        *_DIRECT_VISIBLE_GENERATION_KINDS,
+    }
+)
 _MAX_INTENT_BYTES = 32 * 1024
 _MAX_PENDING_INTENTS = 1024
 _MAX_INTENT_DIRECTORY_ENTRIES = 2 * _MAX_PENDING_INTENTS
@@ -92,14 +101,13 @@ def _validated_generation_paths(
         resolved = raw_path.resolve()
         inside_queue = resolved.is_relative_to(queue_root)
         managed_hidden_generation = resolved.parent.name in _MANAGED_PARENT_NAMES
+        direct_visible_generation = kind in _DIRECT_VISIBLE_GENERATION_KINDS
         managed_visible_generation = bool(
-            kind == "orca_visible_generation"
-            and inside_queue
-            and is_visible_generation_name(resolved.name)
+            direct_visible_generation and inside_queue and is_visible_generation_name(resolved.name)
         )
         if not inside_queue or (
             not managed_visible_generation
-            and (kind == "orca_visible_generation" or not managed_hidden_generation)
+            and (direct_visible_generation or not managed_hidden_generation)
         ):
             raise ValueError(f"Snapshot generation escapes its queue root: {raw_path}")
         if require_existing:
@@ -271,16 +279,16 @@ def bind_snapshot_intent_generation_identities(
     queue_root: str | Path,
     token: str,
 ) -> None:
-    """Pin newly-created visible generations to their exact directory inodes."""
+    """Pin newly-created direct visible generations to their exact directory inodes."""
 
     resolved_root = _resolved_queue_root(queue_root)
     with file_lock(resolved_root / _MUTATION_LOCK_NAME):
         intent_path = _intent_path(resolved_root, token, create_dir=False)
         marker = _read_intent(intent_path, expected_root=resolved_root)
-        if marker["kind"] != "orca_visible_generation":
-            raise ValueError("Only visible ORCA generations require directory identity binding")
+        if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS:
+            raise ValueError("Only direct visible generations require directory identity binding")
         if marker["state"] != SNAPSHOT_INTENT_STATE_CREATING:
-            raise ValueError("Visible ORCA generation identities must be bound while creating")
+            raise ValueError("Direct visible generation identities must be bound while creating")
         identities: dict[str, dict[str, int]] = {}
         from .input_snapshot import bind_direct_generation_owner
 
@@ -288,7 +296,7 @@ def bind_snapshot_intent_generation_identities(
             resolved_root,
             marker["generation_paths"],
             require_existing=True,
-            kind="orca_visible_generation",
+            kind=str(marker["kind"]),
         ):
             details = generation_path.stat()
             identities[str(generation_path)] = {
@@ -422,12 +430,12 @@ def finalize_queued_snapshot_intent(queue_root: str | Path, entry: Any) -> None:
             require_existing=True,
             kind=str(marker["kind"]),
         )
-        if marker["kind"] == "orca_visible_generation":
+        if marker["kind"] in _DIRECT_VISIBLE_GENERATION_KINDS:
             identities = marker.get("generation_identities")
             if not isinstance(identities, Mapping) or set(identities) != set(
                 marker["generation_paths"]
             ):
-                raise ValueError("Visible ORCA snapshot intent has no bound directory identity")
+                raise ValueError("Visible snapshot intent has no bound directory identity")
             for generation_path in marker["generation_paths"]:
                 details = Path(generation_path).stat()
                 identity = identities[generation_path]
@@ -435,7 +443,7 @@ def finalize_queued_snapshot_intent(queue_root: str | Path, entry: Any) -> None:
                     int(identity["device"]),
                     int(identity["inode"]),
                 ):
-                    raise ValueError("Visible ORCA generation directory identity changed")
+                    raise ValueError("Visible generation directory identity changed")
             execution_dir_text = str(snapshot.get("execution_dir") or "").strip()
             snapshot_identity = snapshot.get("execution_dir_identity")
             if (
@@ -443,7 +451,7 @@ def finalize_queued_snapshot_intent(queue_root: str | Path, entry: Any) -> None:
                 or not execution_dir_text
                 or not isinstance(snapshot_identity, Mapping)
             ):
-                raise ValueError("Queued ORCA snapshot has no visible generation identity")
+                raise ValueError("Queued snapshot has no visible generation identity")
             raw_execution_dir = Path(execution_dir_text).expanduser()
             execution_dir = raw_execution_dir.resolve()
             if (
@@ -451,15 +459,15 @@ def finalize_queued_snapshot_intent(queue_root: str | Path, entry: Any) -> None:
                 or raw_execution_dir.is_symlink()
                 or raw_execution_dir != execution_dir
             ):
-                raise ValueError("Queued ORCA snapshot has an invalid visible generation path")
+                raise ValueError("Queued snapshot has an invalid visible generation path")
             if marker["generation_paths"] != [str(execution_dir)]:
-                raise ValueError("Queued ORCA snapshot intent names another generation")
+                raise ValueError("Queued snapshot intent names another generation")
             marker_identity = identities[str(execution_dir)]
             if (
                 int(snapshot_identity.get("device", -1)),
                 int(snapshot_identity.get("inode", -1)),
             ) != (int(marker_identity["device"]), int(marker_identity["inode"])):
-                raise ValueError("Queued ORCA snapshot intent identity does not match metadata")
+                raise ValueError("Queued snapshot intent identity does not match metadata")
         _unlink_intent(intent_path)
 
 
@@ -533,23 +541,23 @@ def _remove_generation(
         require_existing=True,
         kind=kind,
     )[0]
-    if kind == "orca_visible_generation":
+    if kind in _DIRECT_VISIBLE_GENERATION_KINDS:
         if not isinstance(expected_identity, Mapping):
-            raise ValueError("Visible ORCA generation has no bound directory identity")
+            raise ValueError("Visible generation has no bound directory identity")
         details = validated.stat()
         generation_identity = (
             int(expected_identity.get("device", -1)),
             int(expected_identity.get("inode", -1)),
         )
         if (int(details.st_dev), int(details.st_ino)) != generation_identity:
-            raise ValueError("Visible ORCA generation directory identity changed")
+            raise ValueError("Visible generation directory identity changed")
         parent_details = validated.parent.stat()
         from .input_snapshot import cleanup_unowned_direct_generation_directory
 
         cleanup_unowned_direct_generation_directory(
             validated.parent,
             namespace=validated.name,
-            label="ORCA execution snapshot",
+            label="Visible execution snapshot",
             expected_job_identity=(int(parent_details.st_dev), int(parent_details.st_ino)),
             expected_generation_identity=generation_identity,
             expected_owner_token=owner_token,
@@ -608,7 +616,7 @@ def reconcile_orphaned_snapshot_generations(
                                 continue
                             try:
                                 identities = marker.get("generation_identities")
-                                if marker["kind"] == "orca_visible_generation" and (
+                                if marker["kind"] in _DIRECT_VISIBLE_GENERATION_KINDS and (
                                     not isinstance(identities, Mapping)
                                     or set(identities) != set(marker["generation_paths"])
                                 ):

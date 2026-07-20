@@ -90,13 +90,14 @@ def test_reconcile_removes_dead_orca_generation_pair(tmp_path: Path) -> None:
     assert not input_generation.exists()
 
 
-def test_reconcile_removes_bound_dead_visible_orca_generation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("kind", ["orca_visible_generation", "xtb_md_visible_generation"])
+def test_reconcile_removes_bound_dead_visible_generation(tmp_path: Path, kind: str) -> None:
     generation = _visible_generation_path(tmp_path)
     token = "snapshot-intent-visible-generation"
     create_snapshot_intent(
         tmp_path,
         token=token,
-        kind="orca_visible_generation",
+        kind=kind,
         generation_paths=[generation],
     )
     _create_generation(generation)
@@ -113,8 +114,10 @@ def test_reconcile_removes_bound_dead_visible_orca_generation(tmp_path: Path) ->
     assert not _intent_path(tmp_path, token).exists()
 
 
+@pytest.mark.parametrize("kind", ["orca_visible_generation", "xtb_md_visible_generation"])
 def test_visible_generation_rejects_invalid_name_and_outside_path(
     tmp_path: Path,
+    kind: str,
 ) -> None:
     invalid_name = _visible_generation_path(tmp_path, "generation-0001")
     outside = tmp_path.parent / "outside-job" / "20260714-224054-959479f2"
@@ -127,13 +130,15 @@ def test_visible_generation_rejects_invalid_name_and_outside_path(
             create_snapshot_intent(
                 tmp_path,
                 token=token,
-                kind="orca_visible_generation",
+                kind=kind,
                 generation_paths=[generation],
             )
 
 
+@pytest.mark.parametrize("kind", ["orca_visible_generation", "xtb_md_visible_generation"])
 def test_reconcile_refuses_to_delete_substituted_visible_generation(
     tmp_path: Path,
+    kind: str,
 ) -> None:
     generation = _visible_generation_path(tmp_path)
     original_generation = generation.with_name(f"{generation.name}-original")
@@ -141,7 +146,7 @@ def test_reconcile_refuses_to_delete_substituted_visible_generation(
     create_snapshot_intent(
         tmp_path,
         token=token,
-        kind="orca_visible_generation",
+        kind=kind,
         generation_paths=[generation],
     )
     _create_generation(generation)
@@ -161,15 +166,17 @@ def test_reconcile_refuses_to_delete_substituted_visible_generation(
     assert _intent_path(tmp_path, token).is_file()
 
 
+@pytest.mark.parametrize("kind", ["orca_visible_generation", "xtb_md_visible_generation"])
 def test_dead_creator_with_unbound_visible_generation_retires_intent_only(
     tmp_path: Path,
+    kind: str,
 ) -> None:
     generation = _visible_generation_path(tmp_path)
     token = "snapshot-intent-visible-unbound"
     create_snapshot_intent(
         tmp_path,
         token=token,
-        kind="orca_visible_generation",
+        kind=kind,
         generation_paths=[generation],
     )
     _create_generation(generation)
@@ -185,15 +192,17 @@ def test_dead_creator_with_unbound_visible_generation_retires_intent_only(
     assert not _intent_path(tmp_path, token).exists()
 
 
+@pytest.mark.parametrize("kind", ["orca_visible_generation", "xtb_md_visible_generation"])
 def test_visible_generation_finalize_requires_matching_queue_snapshot_identity(
     tmp_path: Path,
+    kind: str,
 ) -> None:
     generation = _visible_generation_path(tmp_path)
     token = "snapshot-intent-visible-finalize"
     create_snapshot_intent(
         tmp_path,
         token=token,
-        kind="orca_visible_generation",
+        kind=kind,
         generation_paths=[generation],
     )
     _create_generation(generation)

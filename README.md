@@ -181,20 +181,29 @@ orphaned generation fails terminally instead of being requeued.
 
 Server-owned ceilings are 10,000 atoms, 999,999 MD steps, 100,000,000
 atom-steps, 100,000 trajectory frames, 86,400 seconds wall time, 1 GiB retained
-output, and 10,000 output files. A successful job writes `job_state.json`,
-`job_report.json`, and `job_report.md` at the job root. Its immutable execution
-tree and validated `xtb.trj`, `mdrestart`, `xtbmdok`, and logs are retained under
-`.orca_auto_xtb_md_executions/<job_id>/`.
+output, and 10,000 output files. Each accepted submission creates one visible
+`YYYYMMDD-HHMMSS-<8-hex>/` generation directly under the job directory. A bound
+copy of `xtb_md_job.yaml`, the geometry under its source basename, generated
+`md.inp`, state and report files, validated `xtb.trj`, `mdrestart`,
+`xtbmdok`, and logs all live in that generation. The job root does not carry a
+latest-copy state or report.
 
 When `orca.runtime.scratch_root` is configured, standalone xTB-MD keeps that
-durable generation and its queue/report state on disk but runs the xTB process
-from a private tmpfs workspace. The generated geometry and `md.inp` are staged
+durable generation and its state/reports on disk, with the queue row remaining
+under `runs_root`, but runs the xTB process from a private tmpfs workspace. The
+generated geometry and `md.inp` are staged
 read-only; after the process exits, only `xtb.trj`, `mdrestart`, `xtbmdok`, and
 stdout/stderr are transactionally published into the durable generation before
 terminal validation. Other engine work files are omitted and removed with the
 workspace. Successful, rejected false-success, cancellation, and shutdown
 results record `scratch_provenance`; an unresolved publication is retained and
 blocks another scratch launch instead of silently falling back to SSD.
+
+Before deploying this visible-generation format over an older build, drain or
+cancel/clear every old-build pending/running xTB-MD row and finish incomplete
+terminal replay and snapshot intents; resubmit cancelled work after the
+upgrade. Old-format rows are not adopted in place. Existing terminal hidden
+history remains where it is and is not migrated, renamed, or deleted.
 
 Standalone xTB-MD currently accepts exactly xTB 6.7.1, which was the latest
 stable release when this contract was added. This is not a claim that the
@@ -304,8 +313,8 @@ not auto-start workflow/xTB/CREST workers; start
   non-empty `.gbw` file by generating a restart input with `MORead` and `%moinp`.
 - The ORCA job root keeps `run.lock` and the latest public state/report files.
   `job_state.json` and `job_report.json` are also mirrored into the visible
-  generation they describe. Standalone xTB-MD keeps its existing artifact
-  layout.
+  generation they describe. Standalone xTB-MD instead keeps its state, reports,
+  bound inputs, and retained outputs only in its visible generation.
 - Use the `systemd` assets in [systemd/README.md](systemd/README.md) for unattended WSL or Linux execution.
 
 ## Testing
