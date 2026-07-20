@@ -7,23 +7,56 @@ contributors may reasonably depend on. It is intentionally narrower than the
 full implementation: internal modules, private helper functions, and runtime
 plumbing may change when the documented behavior stays intact.
 
-orca_auto is still in the 0.x series. Breaking changes can happen, but changes
-to the contracts below should be deliberate, tested, documented, and called out
-in [CHANGELOG.md](../CHANGELOG.md).
+orca_auto is in the 0.x series, and this document is intentionally two-tiered.
 
 ## Compatibility Level
 
-- Existing documented commands, config keys, artifact names, and status strings
-  should not be renamed or removed casually.
-- Additive JSON fields are allowed. Consumers should ignore unknown fields.
-- Human-oriented Markdown, HTML, and terminal table formatting may change
-  without a migration path; use `--json` or JSON artifacts for scripts.
-- Internal worker entrypoints and Python helper modules are not a stable public
-  API unless this document or [docs/REFERENCE.md](REFERENCE.md) says otherwise.
-- Real ORCA behavior that cannot be proven in public CI should be recorded as
-  manual acceptance evidence, following [docs/VALIDATION.md](VALIDATION.md).
+Only the **Stable Core** below is a committed contract. Everything else
+documented here is **Experimental**: accurate for the current release and safe
+to use, but it may change or be removed without a migration path as the tool
+narrows toward 1.0. Script against the Stable Core (and `--json` or JSON
+artifacts); treat the rest as convenience that can move.
+
+### Stable Core
+
+The committed, 1.0-track surface is exactly:
+
+- `orca_auto run-dir <path>` and its queue-first submission semantics: a
+  successful new submission enqueues durably and returns `status: queued`, and
+  closing the submitting terminal afterward is safe.
+- `orca_auto queue list` and `orca_auto queue cancel <target>`, including their
+  `--json` output.
+- Queue-first execution with cancellation and crash/orphan recovery.
+- The `runs_root` config key.
+- Absolute Linux ORCA / xTB / CREST executable paths.
+- The shared concurrency limit `scheduler.max_active_simulations`.
+- `job_state.json` and `job_report.json` as durable machine artifacts — their
+  presence and their top-level job-identity and status fields.
+
+Any command, key, artifact, filename, field, or behavior documented below that
+is not in this list is Experimental. Experimental re-scopes only the public
+API — a surface's naming, shape, and presence. It does not relax the fail-closed
+validation, durability, and recovery behavior that the implementation applies
+regardless of a surface's tier.
+
+### Rules for both tiers
+
+- Additive JSON fields are allowed; consumers should ignore unknown fields.
+- Human-oriented Markdown, HTML, and terminal formatting may change without a
+  migration path; use `--json` or the Stable Core JSON artifacts for scripts.
+- Internal worker entrypoints and Python helper modules are not a public API
+  unless this document or [docs/REFERENCE.md](REFERENCE.md) says otherwise.
+- Changes to the Stable Core are deliberate, tested, documented, and called out
+  in [CHANGELOG.md](../CHANGELOG.md). Experimental surfaces may change without
+  that ceremony.
+- Real ORCA behavior that cannot be proven in public CI is recorded as manual
+  acceptance evidence, following [docs/VALIDATION.md](VALIDATION.md).
 
 ## Runtime Contract
+
+**Stability:** the absolute-Linux executable-path requirement is Stable Core. The
+other runtime assumptions here describe the supported environment; they are not
+part of the enumerated Stable Core and may evolve with the platform.
 
 Supported runtime assumptions:
 
@@ -52,6 +85,10 @@ Unsupported path and process assumptions:
 
 ## Public CLI Contract
 
+**Stability:** `run-dir`, `queue list`, and `queue cancel` (with `--json`) are
+Stable Core. Every other command here — `init`, `scaffold`, `queue list clear`,
+`service`, `systemd install`, `scan-notify` — is Experimental.
+
 The public user/operator CLI is `orca_auto ...`.
 
 Supported commands:
@@ -69,7 +106,7 @@ Supported commands:
 - `orca_auto systemd install --user <name> --repo <path>`
 - `orca_auto scan-notify`
 
-Stable behavior:
+Behavior:
 
 - `run-dir` is queue-first. New work is enqueued durably and executed later by a
   supervised worker.
@@ -92,6 +129,10 @@ Non-contract CLI surfaces:
   the supported operator interface unless documented in the reference.
 
 ## Config Contract
+
+**Stability:** `runs_root`, the ORCA/xTB/CREST executable paths, and
+`scheduler.max_active_simulations` are Stable Core. Every other key here — and
+the discovery order — is Experimental.
 
 Config discovery order:
 
@@ -139,7 +180,7 @@ Supported configuration paths:
 - `orca.runtime.scratch_min_free_gb`
 - `orca.paths.orca_executable`
 
-Stable behavior:
+Behavior:
 
 - `runs_root` is the single runs root: standalone ORCA jobs and workflow
   workspaces both live under it.
@@ -224,6 +265,10 @@ Migration note:
   `orca.runtime`/`orca.paths` paths above.
 
 ## Queue And Activity Contract
+
+**Stability:** the queue-first execution, cancellation, and crash/orphan
+recovery semantics are Stable Core. The specific queue/activity fields, status
+strings, ids, aliases, and JSON shapes described here are Experimental.
 
 The durable per-engine queue file is named `queue.json`. It is an implementation
 file, but the queue lifecycle and visible activity fields are public behavior.
@@ -349,6 +394,11 @@ change the separate ORCA report contract below.
 
 ## ORCA Job Artifact Contract
 
+**Stability:** the existence of `job_state.json` and `job_report.json` as
+durable machine artifacts, with their top-level job-identity and status fields,
+is Stable Core. Every other artifact, filename, nested field, layout, and
+`reason` string here is Experimental.
+
 The submitted ORCA job root keeps the user inputs, the coordination lock
 files, and one visible execution generation per submission. Job reports live
 inside the generation that produced them:
@@ -422,7 +472,7 @@ file alone does not mean its advisory lock is currently owned.
 - `artifacts`
 - `engine_payload`
 
-Stable top-level expectations:
+Top-level expectations:
 
 - `schema_version` is `1` for the current normalized artifact schema.
 - `engine` is `orca` for ORCA job artifacts.
@@ -511,6 +561,10 @@ and its analyzer reason is preserved as the final reason. `retry_limit_reached`
 is reserved for exhaustion of a positive retry budget.
 
 ## Workflow Contract
+
+**Stability:** Experimental in its entirety. The workflow registry, journal,
+JSON fields, SI filenames, and report formats may change or be removed without a
+migration path.
 
 Workflow input manifests are named `flow.yaml`.
 
@@ -783,6 +837,9 @@ include `scan_profile_no_barrier`, `ts_candidates_exhausted`,
 
 ## Systemd Contract
 
+**Stability:** Experimental. The exact unit filenames, install behavior, and
+`service` commands may change without a migration path.
+
 Supported unit filenames:
 
 - `systemd/orca_auto-runtime@.target`
@@ -797,7 +854,7 @@ Supported operator commands:
 - `orca_auto service status`
 - `orca_auto service restart`
 
-Stable behavior:
+Behavior:
 
 - In worker-only mode the installer enables the engine-worker target directly.
   With complete interactive bot configuration it instead enables the full
@@ -821,7 +878,8 @@ Stable behavior:
 
 ## Non-Contracts
 
-These are intentionally outside the stable public surface:
+These are outside both tiers — not documented behavior at all, and never safe to
+depend on:
 
 - Private Python functions and modules, including helper modules under
   `src/orca_auto`.

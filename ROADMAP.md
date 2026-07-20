@@ -27,21 +27,23 @@ expectations belong in [docs/VALIDATION.md](docs/VALIDATION.md).
 ## Current Public Contracts
 
 The canonical contract list lives in
-[docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md). These are the surfaces
-that should change cautiously and with tests, docs, and release notes:
+[docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md), which is two-tiered: a small
+committed **Stable Core** and a larger **Experimental** surface that is
+documented but may change or be removed without a migration path before 1.0.
 
-- CLI commands: `orca_auto init`, `orca_auto run-dir`, `orca_auto queue ...`,
-  `orca_auto scaffold ...`, `orca_auto service ...`, and `orca_auto scan-notify`.
-- Configuration keys under `scheduler`, `workflow`, `messenger`, and `orca`.
-- Queue behavior: durable submission, cancellation, worker ownership, terminal
-  queue state, and shared admission-slot accounting.
-- ORCA job artifacts: `job_state.json`, `job_report.json`, `job_report.md`, and
-  `job_report.html`.
-- Workflow artifacts: `flow.yaml`, workflow registry/journal state, staged
-  engine workspaces, and `workflow_report.html`.
-- Runtime supervision assets under `systemd/`.
-- Retry and classification reason strings exposed through reports, queue output,
-  or issue triage.
+The Stable Core — the only surface that changes cautiously, with tests, docs, and
+release notes — is:
+
+- `orca_auto run-dir` (queue-first submission), `orca_auto queue list`, and
+  `orca_auto queue cancel`, including their `--json` output.
+- Queue-first execution with cancellation and crash/orphan recovery.
+- `runs_root`, the ORCA/xTB/CREST executable paths, and the shared concurrency
+  limit `scheduler.max_active_simulations`.
+- `job_state.json` and `job_report.json` as durable machine artifacts.
+
+Everything else that PUBLIC_CONTRACTS documents — the other CLI commands, other
+config keys, queue field/status details, other artifacts and reason strings, the
+workflow contract, and the `systemd/` assets — is Experimental.
 
 ## 0.1.x: Initial Public Surface (Released)
 
