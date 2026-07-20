@@ -628,7 +628,6 @@ status-aware colorized table rendering (`terminal_table.py`, `activity_*.py`,
 - `init` — create/update shared config
 - `scaffold <ts_search|conformer_search|scan_ts> <path>` — write workflow scaffolds
 - `run-dir <path>` — durable submission (ORCA or workflow, auto-routed)
-- `smoke` — source-checkout developer smoke suite and retained review packet
 - `queue list` / `queue cancel` / `queue list clear` — inspect/maintain the queue
 - `service status` / `service restart` — runtime status (via systemd)
 - `scan-notify` — one-shot discovery scan + active-messenger alerts

@@ -8,6 +8,17 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the `orca_auto smoke` CLI command and the `orca_auto.smoke` package
+  behind it, retiring the retained smoke-review harness and its packets. This is
+  a public-contract change.
+- Removed the `python -m orca_auto.smoke` and `scripts/smoke.sh` entrypoints;
+  there is no longer a supported way to run the smoke harness.
+- Removed the reserved `<runs_root>/.orca_auto_smoke` runs-root namespace. That
+  name is no longer created or special-cased in submission, discovery,
+  reindexing, snapshots, or cleanup.
+
 ## [0.3.0] - 2026-07-21
 
 ### Removed

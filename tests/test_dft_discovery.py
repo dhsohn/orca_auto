@@ -7,7 +7,6 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.core.queue.engine.input_snapshot import (
     bind_direct_generation_owner,
     require_direct_generation_owner,
@@ -476,27 +475,6 @@ def test_workflow_workspace_jobs_are_excluded(tmp_path: Path) -> None:
     targets = discover_orca_targets(kb_dir, max_bytes=1024 * 1024)
 
     assert [str(t.path) for t in targets] == [str(standalone / "calc.out")]
-
-
-def test_smoke_tree_is_excluded_from_production_dft_discovery_but_not_case_root(
-    tmp_path: Path,
-) -> None:
-    kb_dir = tmp_path / "runs"
-    standalone = kb_dir / "standalone"
-    case_runs_root = kb_dir / SMOKE_RESULTS_DIRNAME / "batch" / "case" / "runtime" / "runs"
-    smoke_job = case_runs_root / "smoke-job"
-
-    for run_dir, output in ((standalone, "production"), (smoke_job, "smoke")):
-        run_dir.mkdir(parents=True)
-        (run_dir / "calc.out").write_text(output, encoding="utf-8")
-        _write_orca_state(run_dir, status="completed")
-
-    assert [target.path for target in discover_orca_targets(kb_dir, max_bytes=1024)] == [
-        standalone / "calc.out"
-    ]
-    assert [target.path for target in discover_orca_targets(case_runs_root, max_bytes=1024)] == [
-        smoke_job / "calc.out"
-    ]
 
 
 def test_dft_discovery_skips_state_and_output_symlinks_that_escape_runs_root(

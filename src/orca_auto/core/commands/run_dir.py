@@ -8,12 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.config.files import load_bounded_yaml_data
-from orca_auto.core.paths import (
-    SMOKE_RESULTS_DIRNAME,
-    is_path_in_reserved_smoke_tree,
-    validate_job_dir,
-)
-from orca_auto.core.paths.smoke import relative_reaches_reserved_generation
+from orca_auto.core.paths import validate_job_dir
+from orca_auto.core.paths.reserved import relative_reaches_reserved_generation
 from orca_auto.core.paths.workflow import workflow_workspace_internal_engine_paths_from_path
 from orca_auto.core.queue.generation import (
     queue_entry_generation_token,
@@ -65,14 +61,8 @@ def validate_production_run_dir_target(
     raw_job_dir: str | Path,
     runs_root: str | Path,
 ) -> None:
-    """Reject public submission of the production root's smoke artifacts."""
+    """Reject public submission of a nested ORCA execution generation."""
 
-    if is_path_in_reserved_smoke_tree(raw_job_dir, runs_root):
-        reserved_root = Path(runs_root).expanduser() / SMOKE_RESULTS_DIRNAME
-        raise ValueError(
-            "run-dir target is inside the reserved smoke-results subtree: "
-            f"{reserved_root}. Smoke cases must use their case-local runs_root configuration."
-        )
     resolved_root = Path(runs_root).expanduser().resolve()
     try:
         relative = Path(raw_job_dir).expanduser().resolve().relative_to(resolved_root)

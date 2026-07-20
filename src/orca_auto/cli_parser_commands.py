@@ -99,53 +99,9 @@ def add_monitor_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     monitor_parser.set_defaults(func=cli_handlers.cmd_orca_monitor)
 
 
-def add_smoke_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--profile",
-        choices=("fake", "real-orca", "all"),
-        default="fake",
-        help="Smoke profile to run (default: fake)",
-    )
-    parser.add_argument(
-        "--scenario",
-        action="append",
-        default=[],
-        help="Run one scenario id; may be passed more than once",
-    )
-    parser.add_argument(
-        "--runs-root",
-        default="",
-        help="Override runs_root; real profiles require it to match the shared config",
-    )
-    parser.add_argument(
-        "--orca_auto-config",
-        "--config",
-        dest="config",
-        default="",
-        help="Path to shared orca_auto.yaml (auto-discovered by default)",
-    )
-    parser.add_argument("--repo-root", default="", help=argparse.SUPPRESS)
-
-
-def add_smoke_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    smoke_parser = subparsers.add_parser(
-        "smoke",
-        help="Run retained developer smoke tests and build a review packet.",
-        description=(
-            "Run retained ORCA/xTB/workflow smoke scenarios from the source checkout "
-            "backing this orca_auto command. The default fake profile uses the shared "
-            "config's runs_root."
-        ),
-    )
-    add_smoke_arguments(smoke_parser)
-    smoke_parser.set_defaults(func=cli_handlers.cmd_smoke)
-
-
 __all__ = [
     "add_init_parser",
     "add_monitor_parser",
     "add_run_dir_parser",
     "add_scaffold_parser",
-    "add_smoke_arguments",
-    "add_smoke_parser",
 ]

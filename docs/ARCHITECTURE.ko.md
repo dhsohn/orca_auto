@@ -588,7 +588,6 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 - `init` — 공유 설정 생성/갱신
 - `scaffold <ts_search|conformer_search|scan_ts> <path>` — 워크플로우 스캐폴드 작성
 - `run-dir <path>` — 내구성 제출 (ORCA 또는 워크플로우, 자동 라우팅)
-- `smoke` — source-checkout 개발자 스모크 스위트와 보존형 review packet
 - `queue list` / `queue cancel` / `queue list clear` — 큐 점검/유지보수
 - `service status` / `service restart` — 런타임 상태 (systemd 경유)
 - `scan-notify` — 일회성 탐색 스캔 + 활성 메신저 알림

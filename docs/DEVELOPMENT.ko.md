@@ -49,7 +49,6 @@ import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 │       │   └── engines/
 │       │       ├── xtb/
 │       │       └── crest/
-│       ├── smoke/
 │       └── orca/
 ├── tests/
 │   ├── core/
@@ -68,7 +67,6 @@ import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 - `orca_auto init`
 - `orca_auto scaffold <ts_search|conformer_search> <path>`
 - `orca_auto scan-notify`
-- `orca_auto smoke`
 
 장기 실행 서비스는 공개 CLI 표면의 일부가 아닙니다. 사용자는 오직 `systemd/` 유닛을
 통해서만 이를 실행해야 합니다.
@@ -109,21 +107,9 @@ from orca_auto.core.indexing import get_job_location
 make test
 bash scripts/check.sh tests/flow -q
 bash scripts/check.sh tests/integration -q
-orca_auto smoke
 make structural-tests
 bash scripts/clean_artifacts.sh
 ```
-
-`orca_auto smoke`는 개발자용 보존 테스트 하네스의 공개 source-checkout 명령입니다.
-기본 fake profile은 공유 설정을 자동으로 찾고 그 `runs_root`를 사용합니다. 각 catalog
-scenario를 독립 case runtime에서 실행하고, machine-readable batch/case manifest와
-`summary.md`, 오프라인 HTML artifact review packet을
-`<runs_root>/.orca_auto_smoke/` 아래에 만듭니다. packet의 기본 링크는 짧은
-`review/g-*/open/` 경로의 bounded byte copy이며, generation-local `artifacts.json`이 전체
-runtime 원본 경로와 source/copy SHA-256 provenance를 보존합니다. 병렬 worktree 하나를
-정확히 고정해야 하면 그 checkout의 `scripts/smoke.sh` wrapper를 사용하세요. 새 smoke
-scenario는 public submission/worker 경로를 통과해야 하며 기대 종료 상태와 필수 artifact를
-모두 선언해야 합니다.
 
 ## 품질 게이트
 
