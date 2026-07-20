@@ -1283,13 +1283,17 @@ def test_terminate_process_group_falls_back_to_proc_methods() -> None:
         sigkill=9,
         deps=process_helpers.ProcessGroupTerminationDeps(
             process_group_exists=lambda _pgid: True,
+            monotonic=lambda: 0.0,
         ),
     )
 
     assert killpg_calls == [(123, 15), (123, 9)]
     assert proc.terminate_calls == 1
     assert proc.kill_calls == 1
-    assert proc.wait_calls == pytest.approx([1, 2], rel=1e-4)
+    # A fixed clock makes the remaining-timeout computation deterministic, so the
+    # two waits use exactly the graceful and kill timeouts instead of depending
+    # on wall-clock elapsed between reading the deadline and the remaining time.
+    assert proc.wait_calls == [1, 2]
 
 
 def test_terminate_process_group_returns_true_after_forced_exit() -> None:
