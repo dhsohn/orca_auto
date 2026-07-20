@@ -185,7 +185,7 @@ def cmd_run_dir(args: Any) -> int:
 
     try:
         # Open first, then check, classify, and synchronously submit through the
-        # same fd-backed inode. Namespace replacement cannot swap in smoke data.
+        # same fd-backed inode. Namespace replacement cannot swap in a reserved target.
         with _pinned_run_dir_target(raw_target) as pinned_target:
             try:
                 if runs_root:
@@ -245,9 +245,3 @@ def cmd_orca_monitor(args: argparse.Namespace) -> int:
     _configure_orca_logging(args)
     args.config = _engine_config_for_command(args)
     return int(_cmd_orca_monitor(args))
-
-
-def cmd_smoke(args: argparse.Namespace) -> int:
-    from orca_auto.smoke.cli import cmd_smoke as _cmd_smoke
-
-    return int(_cmd_smoke(args))

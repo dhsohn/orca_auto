@@ -4,7 +4,7 @@ orca_auto validation is split into two honest layers:
 
 1. CI and fake-engine checks that can run publicly without licensed chemistry
    binaries.
-2. Opt-in retained smoke and manual acceptance checks that use a real
+2. Opt-in manual acceptance checks that use a real
    ORCA/xTB/CREST deployment when a change depends on engine runtime semantics.
 
 This split is intentional. The public test suite should prove the queue,
@@ -71,161 +71,6 @@ print('issue templates parse')
 PY
 ```
 
-## Retained smoke batches and review packets
-
-Use the developer smoke runner after each behavioral patch that can affect
-submission, workers, terminal classification, or generated reports. The fake
-profile covers successful and fail-closed cases across standalone ORCA and the
-supported workflows:
-
-```bash
-orca_auto smoke
-```
-
-The command runs the default fake profile from the source checkout backing the
-installed `orca_auto` command. It discovers the shared config and uses its
-`runs_root`. The resolved runs root must be outside the repository worktree;
-this keeps the retained batch itself from changing the source identity recorded
-for the run.
-
-Use an explicit isolated root or non-default shared config only when needed:
-
-```bash
-orca_auto smoke --runs-root /absolute/path/to/runs
-orca_auto smoke --config /absolute/path/to/orca_auto.yaml
-```
-
-The retained `scripts/smoke.sh` wrapper accepts the same options but pins the
-checkout containing the script. Use it for CI or when several editable
-worktrees exist. A wheel-only installation without repository tests fails
-closed instead of pretending to run this source smoke suite.
-
-The runner creates one owned reserved tree and never mixes its retained jobs
-with production activity:
-
-```text
-<runs_root>/.orca_auto_smoke/
-├── index.json
-└── batches/<batch_id>/
-    ├── batch.json
-    ├── summary.md
-    ├── review/
-    │   ├── index.html
-    │   └── g-<generation>/
-    │       ├── artifacts.json
-    │       └── open/
-    │           └── cNN-<case>/
-    │               └── aNNNN/
-    │                   ├── <short-artifact-name>
-    │                   └── ... confined HTML-linked child reports ...
-    └── cases/<scenario_id>/
-        ├── case.json
-        └── runtime/
-            ├── _smoke_harness/
-            │   ├── harness.stdout.log
-            │   ├── harness.stderr.log
-            │   └── pytest.xml
-            └── pytest/... retained job/workflow trees and raw engine output ...
-```
-
-`batch.json` records complete source identities at batch start and finish plus
-the aggregate result. The identity covers the git head, the tracked working
-tree diff digest, and the status digest (untracked files reach it through
-their names; their content is deliberately outside the provenance scope). A
-source change or an unavailable identity fails the batch rather than attaching
-a false provenance claim. Each `case.json` keeps the expected terminal state,
-observed terminal state, and harness verdict as separate fields. Consequently,
-a negative simulation that is expected to
-end in `failed` can correctly produce a passing smoke verdict. A skipped or
-failed pytest scenario, an unexpected terminal state, or a missing required
-artifact still fails the case and the batch.
-
-The runtime tree remains the artifact source of truth. `summary.md` provides a
-compact manifest, while the offline `review/index.html` gives primary Open links
-to bounded, Windows-friendly byte copies under one generation-specific short-path
-generation. These copies are separate regular files, not hardlinks: creating or
-opening them does not change the runtime inode or link count. The generation's
-`artifacts.json` records each full runtime source path, short open path, size,
-source SHA-256, copy SHA-256, issue, and HTML dependency mapping. The generator
-revalidates every copied source and destination before publishing `index.html`
-as the packet commit marker.
-
-Pytest also creates a top-level `pytest/*current` symlink that merely points to
-its latest numbered temporary directory. The runner removes those transient
-convenience aliases after each scenario, so the retained runtime keeps only
-the numbered directories with the real artifacts, listed normally subject to
-the same bounded traversal rules. Any symlink that does survive in a runtime —
-including aliases from batches produced before the removal — stays visible as
-an ordinary blocked entry and is never followed.
-
-The short projection preserves the confined local `href`/`src` closure needed
-by generated reports. For example, a `workflow_report.html` copy carries its
-relative `03_orca/01_ts_guess/<generation>/job_report.html` target in the same
-artifact bundle, so the child report still opens offline. External URLs are left as
-external references. Absolute, escaping, malformed, symlinked, hard-linked, or
-otherwise unsafe local targets block that report copy rather than falling back
-to the original long path. Per-file, aggregate-byte, entry, digest, or path
-limits likewise leave a visible `not opened`/review issue. All originals remain
-in the runtime tree for provenance inspection.
-
-Short review paths are ASCII and capped relative to the batch so ordinary WSL
-UNC paths stay practical with the documented `runs_root`; an arbitrarily long
-custom root cannot be made Windows-safe by the packet alone. Do not edit review
-copies: inspect them, then fix the producer and rerun the smoke batch. Editing a
-copy would invalidate its recorded digest. Bounded, escaped previews are for
-orientation only and do not certify scientific meaning.
-
-Use this human-review rule:
-
-- When a smoke scenario or output contract is introduced, open at least one
-  example of every distinct artifact type it generates, including reports such
-  as `job_report.html`, `si_block.md`, and `workflow_report.html`.
-- On later patches, inspect every failed or unexpected case and every artifact
-  type changed by the patch. Repeated child artifacts with the same role and
-  matching available content digest can be sampled; all originals remain
-  available when a deeper comparison is needed.
-
-The fake scenarios generate their case-local configs with empty messenger
-credentials. The shared config is used to resolve roots and is not copied into
-the review packet. Preview redaction is only defense in depth: use sanitized
-inputs, never put credentials or private research data in smoke artifacts, and
-inspect raw files before sharing a batch.
-
-The top-level `.orca_auto_smoke` name is reserved relative to the configured
-production `runs_root`. Production `run-dir` submission rejects targets in that
-tree, and production discovery, reindexing, and terminal-state cleanup prune
-it. Each scenario uses a nested case-local runs root, so its own queue and
-artifact discovery still exercise the normal product path.
-
-Retention is intentional: production queue cleanup does not delete these
-batches. Monitor disk use and archive or remove an entire reviewed batch only
-under the owned `.orca_auto_smoke/batches/` tree; never delete selected child
-files and leave a partially trusted packet behind.
-
-## Opt-in real-ORCA smoke
-
-Changes to ORCA process invocation, output parsing, or generated reports should
-also run the opt-in real-ORCA profile with an explicitly selected executable:
-
-```bash
-ORCA_REAL_EXECUTABLE=/absolute/path/to/orca \
-  orca_auto smoke --profile real-orca \
-  --config /absolute/path/to/orca_auto.yaml
-```
-
-This profile submits a sanitized H2 HF/STO-3G single point through public
-`run-dir`, executes one supervised ORCA worker lifecycle, and retains the raw
-`h2.out`, terminal state, job reports, and SI block in its review packet. The
-shared config must supply the matching production `runs_root` and scheduler
-admission settings; the runner holds an `orca_auto_orca` production admission
-lease until the supervised scenario process tree exits. Unavailable capacity,
-an unset/non-executable `ORCA_REAL_EXECUTABLE`, or a skipped test is not success.
-
-Passing this lane proves only that the selected binary can execute this small
-serial input and that orca_auto can classify and render its observed output. It
-does not validate multicore OpenMPI behavior, optimization/frequency semantics,
-site scheduler integration, or chemical suitability for a research system.
-
 ## Executable fake ORCA smoke
 
 The fake ORCA smoke exercises the public CLI submission path and a queue worker
@@ -245,11 +90,11 @@ changes that do not require true ORCA numerical behavior.
 
 ## Additional manual real-ORCA acceptance
 
-The retained real-ORCA profile is deliberately one tiny serial single point.
 Real ORCA/OpenMPI compatibility and calculation-specific output interpretation
-remain explicit maintenance acceptance steps; a passing fake batch is not
-real-ORCA validation, and a passing H2 batch is not evidence for calculation
-types it did not execute.
+remain explicit maintenance acceptance steps that only a real ORCA binary can
+satisfy. A passing fake-engine check (the executable fake ORCA smoke above)
+exercises the queue and reporting plumbing only; it is not real-ORCA validation,
+and one tiny single point is not evidence for calculation types it did not run.
 
 Use a real ORCA acceptance check when a PR changes one of these areas:
 

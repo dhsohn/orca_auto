@@ -155,7 +155,7 @@ def _open_stable_reaction_dir(
         ):
             raise OSError("reaction directory changed while it was opened")
         if should_exclude_from_production_runs_scan(reaction_dir, allowed_root):
-            raise OSError("reaction directory crossed the production smoke boundary")
+            raise OSError("reaction directory is inside a reserved or unsafe scan tree")
     except OSError:
         os.close(directory_fd)
         return None

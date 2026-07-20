@@ -1,6 +1,4 @@
-from .smoke import (
-    SMOKE_RESULTS_DIRNAME,
-    is_path_in_reserved_smoke_tree,
+from .reserved import (
     iter_production_runs_artifacts,
     should_exclude_from_production_runs_scan,
 )
@@ -33,7 +31,6 @@ from .workflow import (
 )
 
 __all__ = [
-    "SMOKE_RESULTS_DIRNAME",
     "WORKFLOW_FILE_NAME",
     "WORKFLOW_STAGE_DIRNAME_ALIASES",
     "WORKFLOW_STAGE_DIRNAMES",
@@ -43,7 +40,6 @@ __all__ = [
     "iter_production_runs_artifacts",
     "iter_workflow_runtime_workspaces",
     "is_rejected_windows_path",
-    "is_path_in_reserved_smoke_tree",
     "path_is_inside_workflow_workspace",
     "is_subpath",
     "recent_file_candidates",

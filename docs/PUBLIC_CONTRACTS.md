@@ -68,7 +68,6 @@ Supported commands:
 - `orca_auto service restart`
 - `orca_auto systemd install --user <name> --repo <path>`
 - `orca_auto scan-notify`
-- `orca_auto smoke`
 
 Stable behavior:
 
@@ -84,9 +83,6 @@ Stable behavior:
   workflow id, queue id, run id, or path aliases.
 - `queue list --json`, `queue cancel --json`, and `service status --json` are
   the script-friendly surfaces.
-- `smoke` is a source-checkout developer command. With no options it runs the
-  fake profile and uses the discovered shared config's `runs_root`; missing
-  repository tests, Git metadata, or `runs_root` fails closed.
 
 Non-contract CLI surfaces:
 
@@ -94,9 +90,6 @@ Non-contract CLI surfaces:
   Users should normally manage long-running workers through `systemd`.
 - Hidden `systemd install` flags exist for tests and maintenance; they are not
   the supported operator interface unless documented in the reference.
-- `python -m orca_auto.smoke` and `scripts/smoke.sh` are maintenance
-  entrypoints; the shell wrapper pins its checkout, while user-facing
-  documentation uses `orca_auto smoke`.
 
 ## Config Contract
 

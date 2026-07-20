@@ -31,7 +31,6 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
-    QUEUE_RECORD_SYNC_PREPARING,
     QUEUE_RECORD_SYNC_REPAIR_PENDING,
     queue_record_sync_metadata,
 )
@@ -231,50 +230,6 @@ def test_orca_publication_repair_reclaims_abandoned_live_pid_lease(tmp_path: Pat
     assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
 
 
-def test_orca_publication_repair_fences_crash_row_after_job_moves_to_smoke_tree(
-    tmp_path: Path,
-) -> None:
-    cfg = _make_cfg(str(tmp_path))
-    reaction_dir = tmp_path / "rxn"
-    reaction_dir.mkdir()
-    original_status = reaction_dir.stat()
-    entry = enqueue(
-        tmp_path,
-        str(reaction_dir),
-        task_id="task-crashed-publisher",
-        metadata={
-            "reaction_dir": str(reaction_dir),
-            "execution_snapshot": {
-                "job_dir_identity": {
-                    "device": int(original_status.st_dev),
-                    "inode": int(original_status.st_ino),
-                }
-            },
-            **queue_record_sync_metadata(
-                QUEUE_RECORD_SYNC_PREPARING,
-                token="crashed-publication-token",
-                owner_pid=999_999,
-            ),
-        },
-    )
-    reserved_dir = tmp_path / ".orca_auto_smoke" / "batches" / "batch" / "rxn"
-    reserved_dir.parent.mkdir(parents=True)
-    reaction_dir.rename(reserved_dir)
-    reaction_dir.symlink_to(reserved_dir, target_is_directory=True)
-
-    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
-        assert publication_mod.repair_queue_publication(cfg, tmp_path, entry)
-
-    upsert.assert_not_called()
-    [fenced] = list_queue(tmp_path)
-    assert fenced.status == QueueStatus.FAILED
-    assert fenced.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_ABORTED
-    assert fenced.metadata[TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY] is True
-    assert fenced.metadata.get("orca_terminal_replay") is None
-    assert fenced.error == ("queue_publication_job_dir_invalid:reaction_dir_reserved_or_unsafe")
-    assert dequeue_next(tmp_path) is None
-
-
 @pytest.mark.parametrize("changed_state", ["future_v2_marker", QUEUE_RECORD_SYNC_ABORTED])
 def test_orca_publication_repair_rejects_invalid_marker_after_lock_reload(
     tmp_path: Path,
@@ -355,6 +310,54 @@ def test_orca_publication_repair_validates_every_selected_input_path(tmp_path: P
         assert not publication_mod.repair_queue_publication(cfg, tmp_path, entry)
 
     upsert.assert_not_called()
+
+
+def test_orca_publication_repair_fences_crash_row_with_reserved_reaction_dir(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_cfg(str(tmp_path))
+    reaction_dir = tmp_path / "rxn"
+    reaction_dir.mkdir()
+    original_status = reaction_dir.stat()
+    entry = enqueue(
+        tmp_path,
+        str(reaction_dir),
+        task_id="task-crashed-publisher",
+        metadata={
+            "reaction_dir": str(reaction_dir),
+            "execution_snapshot": {
+                "job_dir_identity": {
+                    "device": int(original_status.st_dev),
+                    "inode": int(original_status.st_ino),
+                }
+            },
+            **queue_record_sync_metadata(
+                "preparing",
+                token="crashed-publication-token",
+                owner_pid=999_999,
+            ),
+        },
+    )
+    # The bound reaction directory keeps its inode but is moved into a reserved
+    # ORCA execution generation under the queue root and replaced by a symlink.
+    # The production scan filter must fence the crash row rather than re-publish
+    # a reserved/unsafe target into the queued index.
+    generation_dir = tmp_path / "job" / "20260714-224054-959479f2"
+    generation_dir.parent.mkdir(parents=True)
+    reaction_dir.rename(generation_dir)
+    reaction_dir.symlink_to(generation_dir, target_is_directory=True)
+
+    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
+        assert publication_mod.repair_queue_publication(cfg, tmp_path, entry)
+
+    upsert.assert_not_called()
+    [fenced] = list_queue(tmp_path)
+    assert fenced.status == QueueStatus.FAILED
+    assert fenced.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_ABORTED
+    assert fenced.metadata[TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY] is True
+    assert fenced.metadata.get("orca_terminal_replay") is None
+    assert fenced.error == "queue_publication_job_dir_invalid:reaction_dir_reserved_or_unsafe"
+    assert dequeue_next(tmp_path) is None
 
 
 def _terminal_replay_entry(tmp_path: Path, status: QueueStatus) -> QueueEntry:

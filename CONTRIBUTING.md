@@ -89,12 +89,7 @@ For a narrower loop:
 ```bash
 bash scripts/check.sh tests/test_scants_support.py -q
 bash scripts/check.sh tests/flow -q
-orca_auto smoke
 ```
-
-`orca_auto smoke` runs the retained fake profile from the source checkout backing
-the installed command and uses the shared config's `runs_root`. In parallel
-worktrees, use that checkout's `scripts/smoke.sh` wrapper to pin the source tree.
 
 The fake ORCA example smoke is intentionally runnable without a licensed ORCA
 binary:

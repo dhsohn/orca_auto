@@ -16,7 +16,6 @@ from orca_auto import (
 )
 from orca_auto import cli_handlers as cli_monitor
 from orca_auto import cli_handlers as cli_run_dir
-from orca_auto.smoke import cli as smoke_cli
 
 
 @pytest.fixture(autouse=True)
@@ -164,49 +163,6 @@ def test_build_parser_parses_unified_run_dir_commands() -> None:
     assert workflow_args.max_memory_gb == 48
     assert workflow_args.json is True
     assert workflow_args.func is cli_run_dir.cmd_run_dir
-
-
-def test_build_parser_parses_smoke_with_simple_fake_defaults() -> None:
-    parser = unified_cli.build_parser()
-
-    args = parser.parse_args(["smoke"])
-    advanced = parser.parse_args(
-        [
-            "smoke",
-            "--profile",
-            "real-orca",
-            "--scenario",
-            "orca_real_h2_single_point",
-            "--config",
-            "/tmp/orca_auto.yaml",
-        ]
-    )
-
-    assert args.command == "smoke"
-    assert args.profile == "fake"
-    assert args.scenario == []
-    assert args.runs_root == ""
-    assert args.config == ""
-    assert args.func is cli_run_dir.cmd_smoke
-
-    assert advanced.profile == "real-orca"
-    assert advanced.scenario == ["orca_real_h2_single_point"]
-    assert advanced.config == "/tmp/orca_auto.yaml"
-    assert advanced.func is cli_run_dir.cmd_smoke
-
-
-def test_smoke_help_describes_simple_default(capsys: pytest.CaptureFixture[str]) -> None:
-    parser = unified_cli.build_parser()
-
-    with pytest.raises(SystemExit) as exc_info:
-        parser.parse_args(["smoke", "--help"])
-
-    assert exc_info.value.code == 0
-    rendered = capsys.readouterr().out
-    assert "default: fake" in rendered
-    assert "auto-discovered by" in rendered
-    assert "default" in rendered
-    assert "source checkout" in rendered
 
 
 def test_run_dir_help_renders_engine_directives(capsys: pytest.CaptureFixture[str]) -> None:
@@ -365,24 +321,6 @@ def test_main_dispatches_unified_queue_cancel(monkeypatch: pytest.MonkeyPatch) -
     assert seen[0].queue_command == "cancel"
     assert seen[0].target == "crest-q-1"
     assert seen[0].json is True
-
-
-def test_main_dispatches_unified_smoke_command(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: list[SimpleNamespace] = []
-
-    def fake_cmd(args: SimpleNamespace) -> int:
-        seen.append(args)
-        return 19
-
-    monkeypatch.setattr(smoke_cli, "cmd_smoke", fake_cmd)
-
-    result = unified_cli.main(["smoke", "--scenario", "orca_opt_success"])
-
-    assert result == 19
-    assert len(seen) == 1
-    assert seen[0].command == "smoke"
-    assert seen[0].profile == "fake"
-    assert seen[0].scenario == ["orca_opt_success"]
 
 
 @pytest.mark.parametrize(

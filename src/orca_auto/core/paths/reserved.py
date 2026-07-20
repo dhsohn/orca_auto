@@ -7,8 +7,6 @@ from pathlib import Path
 from orca_auto.core.paths.workflow import directory_is_workflow_scaffold
 from orca_auto.core.queue.generation import is_visible_generation_name
 
-SMOKE_RESULTS_DIRNAME = ".orca_auto_smoke"
-
 
 def _lexical_absolute(path: str | Path, *, label: str) -> Path:
     text = str(path).strip()
@@ -52,12 +50,6 @@ def _relative_if_inside(path: Path, root: Path) -> Path | None:
         return None
 
 
-def _relative_is_reserved(relative: Path | None) -> bool:
-    return bool(
-        relative is not None and relative.parts and relative.parts[0] == SMOKE_RESULTS_DIRNAME
-    )
-
-
 def relative_reaches_reserved_generation(root: Path, relative: Path | None) -> bool:
     """True when *relative* (under *root*) crosses an ORCA execution generation.
 
@@ -86,51 +78,13 @@ def relative_reaches_reserved_generation(root: Path, relative: Path | None) -> b
     return False
 
 
-def is_path_in_reserved_smoke_tree(path: str | Path, runs_root: str | Path) -> bool:
-    """Return whether *path* belongs to ``<runs_root>/.orca_auto_smoke``.
-
-    The reservation is relative to the supplied runs root.  A smoke case can
-    therefore use its own nested runs root without excluding its jobs from its
-    own queue, discovery, and indexing surfaces.
-
-    Both lexical and symlink-resolved paths are checked.  A lexical path under
-    the runs root that resolves outside it is rejected with ``ValueError`` so
-    production discovery callers can fail closed instead of following an
-    escaping symlink.
-    """
-
-    lexical_root = _lexical_absolute(runs_root, label="runs_root")
-    lexical_path = _lexical_absolute(path, label="path")
-    lexical_relative = _relative_if_inside(lexical_path, lexical_root)
-
-    # Keep the reserved lexical namespace closed even when the directory is a
-    # symlink to a location outside runs_root.
-    if _relative_is_reserved(lexical_relative):
-        return True
-
-    resolved_root = _resolved(lexical_root, label="runs_root")
-    resolved_path = _resolved(lexical_path, label="path")
-    resolved_relative = _relative_if_inside(resolved_path, resolved_root)
-    if _relative_is_reserved(resolved_relative):
-        return True
-
-    if lexical_relative is not None and resolved_relative is None:
-        raise ValueError(
-            "Path escapes runs_root through a symlink: "
-            f"path={lexical_path} runs_root={lexical_root}"
-        )
-    return False
-
-
 def should_exclude_from_production_runs_scan(
     path: str | Path,
     runs_root: str | Path,
 ) -> bool:
-    """Fail-closed production scan filter for reserved or unsafe paths."""
+    """Fail-closed production scan filter for unsafe or reserved-generation paths."""
 
     try:
-        if is_path_in_reserved_smoke_tree(path, runs_root):
-            return True
         lexical_root = _lexical_absolute(runs_root, label="runs_root")
         lexical_path = _lexical_absolute(path, label="path")
         lexical_relative = _relative_if_inside(lexical_path, lexical_root)
@@ -138,9 +92,13 @@ def should_exclude_from_production_runs_scan(
             return True
         resolved_root = _resolved(lexical_root, label="runs_root")
         resolved_path = _resolved(lexical_path, label="path")
-        return relative_reaches_reserved_generation(
-            resolved_root, _relative_if_inside(resolved_path, resolved_root)
-        )
+        resolved_relative = _relative_if_inside(resolved_path, resolved_root)
+        # A path that is lexically under runs_root but resolves outside it is
+        # escaping through a symlink; fail closed rather than scan it as a
+        # production artifact.
+        if lexical_relative is not None and resolved_relative is None:
+            return True
+        return relative_reaches_reserved_generation(resolved_root, resolved_relative)
     except ValueError:
         return True
 
@@ -149,7 +107,7 @@ def iter_production_runs_artifacts(
     runs_root: str | Path,
     filename: str,
 ) -> Iterator[Path]:
-    """Yield named artifacts while pruning the reserved smoke subtree.
+    """Yield named artifacts while pruning reserved execution-generation subtrees.
 
     Top-level symlink directories are not traversed.  Matching symlink files
     are passed through the fail-closed path filter before they can be opened by
@@ -173,8 +131,6 @@ def iter_production_runs_artifacts(
         return
 
     for child in children:
-        if child.name == SMOKE_RESULTS_DIRNAME:
-            continue
         try:
             if child.is_symlink() or not child.is_dir():
                 continue
@@ -187,9 +143,7 @@ def iter_production_runs_artifacts(
 
 
 __all__ = [
-    "SMOKE_RESULTS_DIRNAME",
     "iter_production_runs_artifacts",
-    "is_path_in_reserved_smoke_tree",
     "relative_reaches_reserved_generation",
     "should_exclude_from_production_runs_scan",
 ]

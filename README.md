@@ -56,8 +56,8 @@ Config keys, path rules, and the config search order →
 ## Services, testing, and full docs
 
 - Supervised runtime (`systemd`, WSL/Linux) → [systemd/README.md](systemd/README.md)
-- `make test` runs ruff, mypy, import-linter, and the coverage-gated pytest suite;
-  `orca_auto smoke` runs a fake-engine batch. Real-engine ORCA runs and validation
+- `make test` runs ruff, mypy, import-linter, and the coverage-gated pytest suite.
+  Real-engine ORCA runs and validation
   boundaries are recorded in → [docs/VALIDATION.md](docs/VALIDATION.md)
 - Docs index: [ARCHITECTURE](docs/ARCHITECTURE.md) · [REFERENCE](docs/REFERENCE.md) ·
   [PUBLIC_CONTRACTS](docs/PUBLIC_CONTRACTS.md) · [RELATED_WORK](docs/RELATED_WORK.md) ·

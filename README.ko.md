@@ -71,8 +71,8 @@ README는 의도적으로 짧게 유지합니다.
 ## 서비스·테스트·전체 문서
 
 - 감독 런타임(`systemd`, WSL/Linux) → [systemd/README.ko.md](systemd/README.ko.md)
-- `make test`는 ruff·mypy·import-linter·커버리지 게이트 pytest를 실행하고,
-  `orca_auto smoke`는 fake-engine 배치를 실행합니다. 실엔진 ORCA 실행 기록과 검증 경계는
+- `make test`는 ruff·mypy·import-linter·커버리지 게이트 pytest를 실행합니다.
+  실엔진 ORCA 실행 기록과 검증 경계는
   → [docs/VALIDATION.md](docs/VALIDATION.md)
 - 문서 색인: [ARCHITECTURE](docs/ARCHITECTURE.ko.md) · [REFERENCE](docs/REFERENCE.ko.md) ·
   [PUBLIC_CONTRACTS](docs/PUBLIC_CONTRACTS.ko.md) · [DEVELOPMENT](docs/DEVELOPMENT.ko.md) ·

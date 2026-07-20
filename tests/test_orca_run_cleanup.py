@@ -4,12 +4,10 @@ import json
 import os
 import threading
 from pathlib import Path
-from typing import Any
 from unittest.mock import patch
 
 import pytest
 
-from orca_auto.core.paths import SMOKE_RESULTS_DIRNAME
 from orca_auto.orca import run_cleanup, run_snapshot
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
@@ -118,24 +116,6 @@ def test_clear_terminal_run_states_clears_tracked_and_untracked_terminal_states(
     assert state_path(running_dir).exists()
 
 
-def test_clear_terminal_run_states_leaves_production_smoke_tree_owned_by_case_root(
-    tmp_path: Path,
-) -> None:
-    allowed_root = tmp_path / "runs"
-    case_runs_root = (
-        allowed_root / SMOKE_RESULTS_DIRNAME / "batch-1" / "case-1" / "runtime" / "runs"
-    )
-    smoke_job = case_runs_root / "smoke-job"
-    allowed_root.mkdir()
-    _write_state(smoke_job, run_id="run_smoke", status="completed")
-
-    assert run_cleanup.clear_terminal_run_states(allowed_root) == 0
-    assert state_path(smoke_job).exists()
-
-    assert run_cleanup.clear_terminal_run_states(case_runs_root) == 1
-    assert not state_path(smoke_job).exists()
-
-
 def test_clear_terminal_run_states_skips_missing_files_and_warns_on_unlink_error(
     tmp_path: Path,
 ) -> None:
@@ -191,88 +171,6 @@ def test_clear_terminal_run_states_skips_missing_files_and_warns_on_unlink_error
     assert failed_state.exists()
     assert not success_state.exists()
     assert running_state.exists()
-
-
-def test_clear_terminal_run_states_revalidates_directory_after_snapshot_collection(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    allowed_root = tmp_path / "runs"
-    normal_job = allowed_root / "normal"
-    original_job = allowed_root / "normal-original"
-    smoke_job = allowed_root / SMOKE_RESULTS_DIRNAME / "batch" / "smoke"
-    _write_state(normal_job, run_id="run-normal", status="completed")
-    _write_state(smoke_job, run_id="run-smoke", status="completed")
-    original_collect = run_cleanup.collect_run_snapshots
-
-    def _collect_then_replace(root: Path) -> list[RunSnapshot]:
-        snapshots = original_collect(root)
-        normal_job.rename(original_job)
-        normal_job.symlink_to(smoke_job, target_is_directory=True)
-        return snapshots
-
-    monkeypatch.setattr(run_cleanup, "collect_run_snapshots", _collect_then_replace)
-
-    assert run_cleanup.clear_terminal_run_states(allowed_root) == 0
-    assert state_path(original_job).exists()
-    assert state_path(smoke_job).exists()
-
-
-def test_clear_terminal_run_states_rejects_real_smoke_directory_replacement(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    allowed_root = tmp_path / "runs"
-    normal_job = allowed_root / "normal"
-    original_job = allowed_root / "normal-original"
-    smoke_job = allowed_root / SMOKE_RESULTS_DIRNAME / "batch" / "smoke"
-    _write_state(normal_job, run_id="run-normal", status="completed")
-    _write_state(smoke_job, run_id="run-smoke", status="completed")
-    original_collect = run_cleanup.collect_run_snapshots
-
-    def _collect_then_replace(root: Path) -> list[RunSnapshot]:
-        snapshots = original_collect(root)
-        normal_job.rename(original_job)
-        smoke_job.rename(normal_job)
-        return snapshots
-
-    monkeypatch.setattr(run_cleanup, "collect_run_snapshots", _collect_then_replace)
-
-    assert run_cleanup.clear_terminal_run_states(allowed_root) == 0
-    assert state_path(original_job).exists()
-    assert state_path(normal_job).exists()
-
-
-def test_cleanup_snapshot_reads_state_from_discovered_directory_inode(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    allowed_root = tmp_path / "runs"
-    normal_job = allowed_root / "normal"
-    temporary_job = allowed_root / "normal-temporary"
-    smoke_job = allowed_root / SMOKE_RESULTS_DIRNAME / "batch" / "smoke"
-    _write_state(normal_job, run_id="run-normal", status="running")
-    _write_state(smoke_job, run_id="run-smoke", status="completed")
-    original_load_json = run_snapshot.load_json_mapping_file
-
-    def _swap_only_while_state_is_read(state_file: Path) -> dict[str, Any] | None:
-        normal_job.rename(temporary_job)
-        smoke_job.rename(normal_job)
-        try:
-            return original_load_json(state_file)
-        finally:
-            normal_job.rename(smoke_job)
-            temporary_job.rename(normal_job)
-
-    monkeypatch.setattr(
-        run_snapshot,
-        "load_json_mapping_file",
-        _swap_only_while_state_is_read,
-    )
-
-    assert run_cleanup.clear_terminal_run_states(allowed_root) == 0
-    assert state_path(normal_job).exists()
-    assert state_path(smoke_job).exists()
 
 
 def test_clear_terminal_run_states_preserves_new_atomic_state_generation(
