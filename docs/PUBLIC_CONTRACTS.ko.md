@@ -8,23 +8,50 @@
 구현 전체를 고정하려는 문서가 아닙니다. 내부 모듈, private helper, 런타임 배선은
 문서화된 동작이 유지되는 한 바뀔 수 있습니다.
 
-orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지되지는 않지만, 아래 계약을
-바꾸는 변경은 의도적이어야 하며 테스트, 문서, [CHANGELOG.md](../CHANGELOG.md)에
-반영되어야 합니다.
+orca_auto는 0.x 시리즈이며, 이 문서는 의도적으로 2계층입니다.
 
 ## 호환성 수준
 
-- 문서화된 명령, 설정 키, 산출물 이름, 상태 문자열은 가볍게 이름을 바꾸거나 제거하지
-  않습니다.
+아래 **Stable Core**만 고정된 계약입니다. 이 문서의 나머지는 전부 **Experimental**입니다 —
+현재 릴리스 기준으로는 정확하고 사용해도 되지만, 1.0으로 좁혀 가는 과정에서 migration
+path 없이 바뀌거나 제거될 수 있습니다. 스크립트는 Stable Core(및 `--json`·JSON 산출물)에
+의존하고, 나머지는 이동할 수 있는 편의로 취급하세요.
+
+### Stable Core
+
+고정된 1.0-track 표면은 정확히 다음입니다.
+
+- `orca_auto run-dir <path>`와 그 queue-first 제출 의미: 새 제출이 성공하면 내구성 있게
+  큐에 들어가 `status: queued`를 반환하고, 이후 제출 터미널을 닫아도 안전합니다.
+- `orca_auto queue list`와 `orca_auto queue cancel <target>` — `--json` 출력 포함.
+- queue-first 실행과 취소, crash/orphan 복구.
+- `runs_root` 설정 키.
+- 절대 Linux ORCA / xTB / CREST 실행 경로.
+- shared concurrency 한도 `scheduler.max_active_simulations`.
+- durable machine 산출물로서의 `job_state.json`·`job_report.json` — 그 존재와 top-level
+  job 정체성·상태 필드.
+
+아래에 문서화된 명령·키·산출물·파일명·필드·동작 중 이 목록에 없는 것은 전부
+Experimental입니다. Experimental은 공개 API — 표면의 이름·형태·존재 — 만 재규정합니다.
+구현이 계층과 무관하게 적용하는 fail-closed 검증·내구성·복구 동작은 이 라벨로 약해지지
+않습니다.
+
+### 두 계층 공통 규칙
+
 - JSON 필드 추가는 허용됩니다. 소비자는 알 수 없는 필드를 무시해야 합니다.
-- Markdown, HTML, 터미널 표는 사람을 위한 출력입니다. 스크립트는 `--json` 또는 JSON
-  산출물을 사용해야 합니다.
+- 사람을 위한 Markdown·HTML·터미널 출력은 migration path 없이 바뀔 수 있습니다. 스크립트는
+  `--json` 또는 Stable Core JSON 산출물을 사용하세요.
 - 내부 워커 진입점과 Python helper 모듈은 이 문서나 [docs/REFERENCE.ko.md](REFERENCE.ko.md)에
-  명시되지 않는 한 안정 공개 API가 아닙니다.
-- 공개 CI로 증명할 수 없는 실제 ORCA 동작은 [VALIDATION.md](VALIDATION.md)에
-  맞춰 수동 acceptance 근거를 남깁니다.
+  명시되지 않는 한 공개 API가 아닙니다.
+- Stable Core 변경은 의도적이어야 하며 테스트·문서·[CHANGELOG.md](../CHANGELOG.md)에
+  반영됩니다. Experimental 표면은 그 절차 없이 바뀔 수 있습니다.
+- 공개 CI로 증명할 수 없는 실제 ORCA 동작은 [VALIDATION.md](VALIDATION.md)에 맞춰 수동
+  acceptance 근거를 남깁니다.
 
 ## 런타임 계약
+
+**안정성:** 절대-Linux 실행 경로 요구는 Stable Core입니다. 이 섹션의 다른 런타임 가정은
+지원 환경을 설명하며, 열거된 Stable Core에 포함되지 않고 플랫폼에 따라 바뀔 수 있습니다.
 
 지원되는 런타임 가정:
 
@@ -50,6 +77,10 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 
 ## 공개 CLI 계약
 
+**안정성:** `run-dir`·`queue list`·`queue cancel`(및 `--json`)은 Stable Core입니다. 그 외
+명령 — `init`·`scaffold`·`queue list clear`·`service`·`systemd install`·`scan-notify` — 은
+Experimental입니다.
+
 사용자/운영자 대상 공개 CLI는 `orca_auto ...`입니다.
 
 지원되는 명령:
@@ -67,7 +98,7 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `orca_auto systemd install --user <name> --repo <path>`
 - `orca_auto scan-notify`
 
-안정 동작:
+동작:
 
 - `run-dir`는 queue-first입니다. 새 작업은 내구성 있게 큐에 들어가고, 감독되는 워커가
   나중에 실행합니다.
@@ -90,6 +121,9 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   지원되는 운영자 인터페이스가 아닙니다.
 
 ## 설정 계약
+
+**안정성:** `runs_root`·ORCA/xTB/CREST 실행 경로·`scheduler.max_active_simulations`은 Stable
+Core입니다. 그 외 키와 검색 순서는 Experimental입니다.
 
 설정 검색 순서:
 
@@ -137,7 +171,7 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `orca.runtime.scratch_min_free_gb`
 - `orca.paths.orca_executable`
 
-안정 동작:
+동작:
 
 - `runs_root`는 단일 runs 루트입니다. 단독 ORCA 작업과 워크플로우 워크스페이스가
   모두 그 아래에 존재합니다.
@@ -211,6 +245,9 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   최상위 공유 section과 `orca.runtime`/`orca.paths`를 사용하세요.
 
 ## 큐와 activity 계약
+
+**안정성:** queue-first 실행·취소·crash/orphan 복구 의미는 Stable Core입니다. 여기 설명된
+구체적인 큐/activity 필드·상태 문자열·id·alias·JSON 형태는 Experimental입니다.
 
 엔진별 내구성 큐 파일 이름은 `queue.json`입니다. 파일 자체는 구현 파일이지만, 큐
 라이프사이클과 화면에 보이는 activity 필드는 공개 동작입니다.
@@ -326,6 +363,10 @@ diagnostic도 이 파일을 읽지 않습니다. report-only 작업은 지원하
 
 ## ORCA 작업 산출물 계약
 
+**안정성:** durable machine 산출물로서의 `job_state.json`·`job_report.json`의 존재와 그
+top-level job 정체성·상태 필드는 Stable Core입니다. 그 외 모든 산출물·파일명·중첩 필드·
+레이아웃·`reason` 문자열은 Experimental입니다.
+
 제출한 ORCA 작업 루트는 사용자 입력, 조정용 lock 파일, 제출당 하나의 visible
 실행 generation을 둡니다. 작업 리포트는 그 리포트를 만든 generation 안에
 있습니다:
@@ -392,7 +433,7 @@ loader는 private입니다.
 - `artifacts`
 - `engine_payload`
 
-안정 기대값:
+기대값:
 
 - 현재 정규화된 산출물 스키마의 `schema_version`은 `1`입니다.
 - ORCA 작업 산출물의 `engine`은 `orca`입니다.
@@ -474,6 +515,9 @@ ORCA analyzer 상태:
 보존합니다. `retry_limit_reached`는 양수 retry budget을 소진한 경우에만 사용합니다.
 
 ## 워크플로우 계약
+
+**안정성:** 전체가 Experimental입니다. 워크플로우 registry·journal·JSON 필드·SI 파일명·
+리포트 형식은 migration path 없이 바뀌거나 제거될 수 있습니다.
 
 워크플로우 입력 manifest 이름은 `flow.yaml`입니다.
 
@@ -708,6 +752,9 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 
 ## systemd 계약
 
+**안정성:** Experimental입니다. 정확한 unit 파일명·설치 동작·`service` 명령은 migration path
+없이 바뀔 수 있습니다.
+
 지원되는 unit 파일 이름:
 
 - `systemd/orca_auto-runtime@.target`
@@ -722,7 +769,7 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 - `orca_auto service status`
 - `orca_auto service restart`
 
-안정 동작:
+동작:
 
 - worker-only 모드에서는 installer가 engine-worker target을 직접 활성화합니다. 인터랙티브
   bot 설정이 완전하면 대신 전체 runtime target을 활성화하고, 그 target이 engine-worker
@@ -745,7 +792,7 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 
 ## 비계약
 
-다음은 의도적으로 안정 공개 표면 밖에 둡니다:
+다음은 두 계층 모두의 밖입니다 — 문서화된 동작이 아예 아니며, 절대 의존해서는 안 됩니다:
 
 - `src/orca_auto` 아래 private Python 함수와 helper 모듈.
 - 내부 worker child 명령줄.
