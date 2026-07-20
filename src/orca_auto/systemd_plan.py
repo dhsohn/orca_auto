@@ -23,7 +23,6 @@ from orca_auto.core.utils.coercion import normalize_text
 SYSTEMD_UNIT_NAMES = (
     "orca_auto-engine-workers@.target",
     "orca_auto-queue-worker@.service",
-    "orca_auto-xtb-md-worker@.service",
     "orca_auto-workflow-worker@.service",
     "orca_auto-bot@.service",
     "orca_auto-runtime@.target",
@@ -227,10 +226,6 @@ def _worker_unit_for_user(target_user: str) -> str:
     return f"orca_auto-queue-worker@{target_user}.service"
 
 
-def _xtb_md_worker_unit_for_user(target_user: str) -> str:
-    return f"orca_auto-xtb-md-worker@{target_user}.service"
-
-
 def _bot_unit_for_user(target_user: str) -> str:
     return f"orca_auto-bot@{target_user}.service"
 
@@ -261,7 +256,6 @@ def _systemctl_transition_commands(
         # Clear bounded service start-limit counters so they cannot block this
         # operator-requested recovery inside their five-minute windows.
         commands.append(("systemctl", "reset-failed", _worker_unit_for_user(target_user)))
-        commands.append(("systemctl", "reset-failed", _xtb_md_worker_unit_for_user(target_user)))
         if not worker_only:
             commands.append(("systemctl", "reset-failed", _bot_unit_for_user(target_user)))
         # `restart` also starts an inactive unit. Unlike `enable --now`, it
@@ -270,7 +264,6 @@ def _systemctl_transition_commands(
         commands.append(("systemctl", "restart", enabled_unit))
         desired_units = [
             _worker_unit_for_user(target_user),
-            _xtb_md_worker_unit_for_user(target_user),
         ]
         if not worker_only:
             desired_units.append(_bot_unit_for_user(target_user))
@@ -386,12 +379,10 @@ def _validate_worker_config(config: Path) -> None:
         from orca_auto.core.config.engines import (
             load_crest_config,
             load_xtb_config,
-            load_xtb_md_config,
         )
         from orca_auto.orca.config import load_config
 
         load_config(str(config))
-        load_xtb_md_config(str(config))
         load_xtb_config(str(config))
         load_crest_config(str(config))
     except Exception as exc:

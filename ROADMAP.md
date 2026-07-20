@@ -18,7 +18,6 @@ expectations belong in [docs/VALIDATION.md](docs/VALIDATION.md).
 - Prefer fail-closed recovery over broad automatic reruns that can waste compute
   or hide unsafe chemistry.
 - Keep general xTB and CREST calculations as internal workflow-stage engines.
-  Standalone xTB-MD is the deliberately narrow public exception.
 - Make public CI honest: fake-engine tests should prove project contracts, while
   real ORCA acceptance should be recorded separately when runtime semantics
   depend on licensed or site-specific binaries.
@@ -40,8 +39,6 @@ that should change cautiously and with tests, docs, and release notes:
   `job_report.html`.
 - Workflow artifacts: `flow.yaml`, workflow registry/journal state, staged
   engine workspaces, and `workflow_report.html`.
-- Standalone xTB-MD artifacts: strict `xtb_md_job.yaml`, immutable execution
-  snapshots, terminal trajectory/checkpoint validation, state, and reports.
 - Runtime supervision assets under `systemd/`.
 - Retry and classification reason strings exposed through reports, queue output,
   or issue triage.
@@ -89,6 +86,10 @@ The remainder of the 0.2 series should make the public surface easier to depend 
   and human operators.
 - Consider packaging small sanitized parser fixtures that cover important ORCA
   failure markers without committing large or private output files.
+
+The 0.3.0 release removes the standalone xTB-MD public engine, narrowing the
+supported public surface back to standalone ORCA plus the internal workflow xTB
+and CREST stages.
 
 ## Toward 1.0: Stability Readiness
 

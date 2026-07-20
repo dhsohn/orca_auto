@@ -1,7 +1,6 @@
 [Unit]
 Description=orca_auto default engine workers for %i
 Wants=orca_auto-queue-worker@%i.service
-Wants=orca_auto-xtb-md-worker@%i.service
 After=local-fs.target
 PartOf=orca_auto-runtime@%i.target
 

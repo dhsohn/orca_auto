@@ -14,7 +14,7 @@
 
 ## 1. orca_auto란
 
-orca_auto는 ORCA와 단독 xTB 분자동역학(xTB-MD)을 위한 **큐 우선(queue-first)
+orca_auto는 ORCA를 위한 **큐 우선(queue-first)
 실행기**이자, Linux 및 WSL 환경에서 다단계 계산화학 작업을 위한 **워크플로우
 오케스트레이터**입니다.
 
@@ -28,8 +28,7 @@ execution)** 입니다:
 - 작업별 상태와 리포트는 계산 디렉터리 옆 디스크에 기록됩니다.
 
 ORCA는 가장 풍부한 재시도/리포팅/모니터링 표면을 가진 공개 1급 엔진입니다.
-**xTB-MD**는 엄격한 단일 시도 계약을 가진 독립 1급 standalone 엔진입니다. 일반
-**xTB**와 **CREST** 계산은 독립 공개 명령이 아니라 **워크플로우 스테이지**로
+일반 **xTB**와 **CREST** 계산은 독립 공개 명령이 아니라 **워크플로우 스테이지**로
 내부적으로만 사용됩니다.
 
 ---
@@ -74,8 +73,6 @@ src/orca_auto/
 │   ├── state*.py        # 작업별 상태 머신 + 영속화
 │   └── ...              # 재시도 레시피, 완료 규칙, 인덱싱
 │
-├── xtb_md/              # 단독 xTB-MD manifest, 러너, 검증, 상태
-│
 └── flow/                # 워크플로우 오케스트레이션 패키지
     ├── orchestration/   # advance_workflow 루프, 페이즈, 스테이지 런타임
     ├── engines/
@@ -92,7 +89,6 @@ src/orca_auto/
 ### 임포트 규칙 (DEVELOPMENT.md 기준)
 
 - ORCA 구현: `orca_auto.orca.*`
-- 단독 xTB-MD 구현: `orca_auto.xtb_md.*`
 - 공용 인프라: `orca_auto.core.*`
 - 워크플로우 오케스트레이션: `orca_auto.flow.*`
 - 내부 엔진: `orca_auto.flow.engines.xtb.*`, `orca_auto.flow.engines.crest.*`
@@ -102,7 +98,7 @@ src/orca_auto/
 
 계층은 방향성이 있으며 import-linter(`lint-imports`, `pyproject.toml`에 설정,
 `scripts/check.sh`와 CI가 실행)로 강제됩니다: `flow`는 `orca`와 `core`를
-임포트할 수 있고, `orca`와 `xtb_md`는 `core`만, `core`는 이 도메인 패키지 중
+임포트할 수 있고, `orca`는 `core`만, `core`는 이 도메인 패키지 중
 어느 것도 임포트하지 않습니다.
 엔진 배선은 지연 문자열 모듈 경로(`core/engines/registry.py`,
 `core/queue/worker/admission.py`)로만 계층을 넘습니다 — 의도된 플러그인
@@ -134,15 +130,15 @@ import-linter 계약으로 보호합니다.
             systemd 감독                                  ▼
   ┌──────────────────────────────┐      ┌──────────────────────────────┐
   │ engine-workers@.target       │ ───▶ │  큐 워커 루프                 │
-  │ ├ queue-worker (ORCA)        │      │  core/queue/worker/loop.py    │
-  │ └ xtb-md-worker (단독)       │      └─────────────┬────────────────┘
-  │ runtime@.target + bot        │                    │ 어드미션 슬롯 예약
-  └──────────────────────────────┘                    │ 큐 id로 자식 생성
+  │ └ queue-worker (ORCA)        │      │  core/queue/worker/loop.py    │
+  │ runtime@.target + bot        │      └─────────────┬────────────────┘
+  └──────────────────────────────┘                    │ 어드미션 슬롯 예약
+                                                       │ 큐 id로 자식 생성
                                                        ▼
                                         ┌──────────────────────────────┐
                                         │  워커 자식 엔트리포인트         │
                                         │  core/engines/worker_child.py  │
-                                        │  --engine <orca|xtb_md|xtb|crest>│
+                                        │  --engine <orca|xtb|crest>     │
                                         │  --queue-root --queue-id       │
                                         │  --admission-token             │
                                         └─────────────┬────────────────┘
@@ -157,8 +153,8 @@ import-linter 계약으로 보호합니다.
 
 핵심 속성:
 
-- **`run-dir`가 유일한 내구성 제출 경로입니다.** 대상 디렉터리를 점검하여 ORCA,
-  단독 xTB-MD 또는 워크플로우 처리로 라우팅하고, 설정된 루트에 대해 검증하며, 중복 활성
+- **`run-dir`가 유일한 내구성 제출 경로입니다.** 대상 디렉터리를 점검하여 ORCA
+  또는 워크플로우 처리로 라우팅하고, 설정된 루트에 대해 검증하며, 중복 활성
   항목을 거부하고, 큐 항목을 기록한 뒤 `status: queued`를 반환합니다. 새 작업에
   대한 공개 직접 실행 모드는 없습니다.
 - **워커는 큐 신원(queue identity)으로 실행합니다.** 워커는 `--queue-root/
@@ -166,13 +162,10 @@ import-linter 계약으로 보호합니다.
   큐 항목을 해석합니다. 레거시 ORCA `--reaction-dir` 직접 모드는 지원되지
   않습니다. `reaction_dir` 필드는 다운스트림 계약으로서 큐 항목에 그대로
   보존됩니다.
-- **큐 generation은 제출 시점에 실행 입력을 바인딩합니다.** 단독 xTB-MD는 제출한 작업
-  디렉터리 바로 아래에 visible `YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 만들고,
-  바인딩한 `xtb_md_job.yaml`, 소스 basename을 유지한 geometry, 생성한 `md.inp`, 상태,
-  리포트, 보존 출력을 모두 그 안에 둡니다. 워크플로우 xTB와 CREST는 콘텐츠 주소형 입력 snapshot을 제출마다
-  배타적으로 예약한 고유 namespace에 만듭니다. ORCA도 제출한 작업 디렉터리 바로 아래에
+- **큐 generation은 제출 시점에 실행 입력을 바인딩합니다.** 워크플로우 xTB와 CREST는 콘텐츠 주소형 입력 snapshot을 제출마다
+  배타적으로 예약한 고유 namespace에 만듭니다. ORCA는 제출한 작업 디렉터리 바로 아래에
   visible generation을 만들고 선택한 `.inp`와 의존성의 basename을 유지한 채 confined flat
-  복사본으로 참조를 다시 씁니다. Raw 출력도 그와 나란히 쓰며, 새 ORCA와 단독 xTB-MD
+  복사본으로 참조를 다시 씁니다. Raw 출력도 그와 나란히 쓰며, 새 ORCA
   generation에는 숨은 실행 parent나 중첩 입력 단계가 없습니다. 워커는 변경 가능한 소스
   파일을 실행 계약으로 다시 읽지 않고 입력 및 실행 파일의 콘텐츠 정체성을 검증합니다.
 - **워커가 실행 중이 아니면 작업은 대기 상태로 남습니다** — 워커가 돌아올 때까지
@@ -183,7 +176,7 @@ import-linter 계약으로 보호합니다.
 
 ## 4. 공용 엔진 추상화
 
-가장 중요한 아키텍처 요소는 **ORCA, xTB-MD, xTB, CREST가 모두 하나의 공용 엔진 런타임을
+가장 중요한 아키텍처 요소는 **ORCA, xTB, CREST가 모두 하나의 공용 엔진 런타임을
 통해 실행된다**는 점입니다. 이것이 어드미션, 자식 프로세스 관리, 종료 부수효과,
 고아(orphan) 복구를 균일하게 유지합니다.
 
@@ -202,7 +195,7 @@ import-linter 계약으로 보호합니다.
 
 `EngineDefinition.build_queue_runtime()`은 이 선언을 `EngineQueueRuntime`으로
 연결하는 canonical 경계입니다. 엔진의 큐 함수, PID 파일 이름, 정확한 identity
-predicate, 큐 항목 조회를 한 곳에서 설치합니다. 네 엔진 모두 이 런타임을 직접
+predicate, 큐 항목 조회를 한 곳에서 설치합니다. 모든 엔진이 이 런타임을 직접
 사용하며 이전 `core.queue.internal_engine` module/facade/resolver 스택은 제거했습니다.
 
 각 엔진 패키지는 `ENGINE_DEFINITION` 상수를 노출합니다:
@@ -210,7 +203,6 @@ predicate, 큐 항목 조회를 한 곳에서 설치합니다. 네 엔진 모두
 | 엔진   | 모듈                                    |
 |--------|-----------------------------------------|
 | orca   | `orca_auto.orca.engine`                 |
-| xtb_md | `orca_auto.xtb_md.engine`               |
 | xtb    | `orca_auto.flow.engines.xtb.engine`     |
 | crest  | `orca_auto.flow.engines.crest.engine`   |
 
@@ -236,7 +228,7 @@ id를 `EngineDefinition`으로 해석합니다. 이 레지스트리가 엔진 id
 
 ```bash
 python -m orca_auto.core.engines.worker_child \
-  --engine <orca|xtb_md|xtb|crest> \
+  --engine <orca|xtb|crest> \
   --config <path> \
   --queue-root <path> \
   --queue-id <id> \
@@ -248,20 +240,15 @@ python -m orca_auto.core.engines.worker_child \
 머신, 재시도, 리포트)을 `orca_auto.orca` 내부에 유지하며, 워커 자식 진입점은
 canonical `core.queue.engine.child` 계약을 직접 사용합니다.
 
-단독 xTB-MD의 `xtb_md/queue_runtime.py`는 `ENGINE_DEFINITION`이 만든 런타임에서
-워커 의존성과 라이프사이클 훅을 직접 조립합니다. publication-repair gate와 엄격한
-단일 시도 종료 정책은 계속 엔진 소유 동작으로 남습니다.
-
 ---
 
 ## 5. 어드미션 제어 (공유 동시성 상한)
 
-`core/admission/`은 머신 전역 동시성 제한을 구현하여 ORCA, 단독 xTB-MD, 모든 내부
+`core/admission/`은 머신 전역 동시성 제한을 구현하여 ORCA와 모든 내부
 워크플로우 스테이지가 단일 공유 슬롯 풀을 두고 경쟁하도록 합니다.
 
-- 상한은 `scheduler.max_active_simulations`입니다. 이는 **ORCA, 단독 xTB-MD, 내부 xTB
-  스테이지, 내부 CREST 스테이지에 걸쳐 공유됩니다.** 동일한 락 안에서 양의 단독
-  xTB-MD 부분 상한 `scheduler.max_active_xtb_md`(기본 `1`)도 검사합니다.
+- 상한은 `scheduler.max_active_simulations`입니다. 이는 **ORCA, 내부 xTB
+  스테이지, 내부 CREST 스테이지에 걸쳐 공유됩니다.**
 - 슬롯은 공유 `admission_root`(기본값은 `<runs_root>/.admission`) 아래 어드미션
   파일에 레코드로 영속화되며, 파일 락(`admission_lock`)으로 보호됩니다.
 - `AdmissionStore`(`store.py`)는 하나의 어드미션 루트에 대한 영속화 파사드입니다.
@@ -277,36 +264,6 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
 
 이것이 `queue list`의 `active_simulations` 줄이 현재 공유 슬롯을 소비하는 실행만
 세는 이유입니다.
-
-### 단독 xTB-MD 경계
-
-`orca_auto.xtb_md`는 공용 `core` 인프라에만 의존하며 ORCA나 `flow`에는 의존하지
-않습니다. 제출 시 작업 루트 아래에 visible `YYYYMMDD-HHMMSS-<8자리 hex>/`
-generation 하나를 만들고, 엄격한 `xtb_md_job.yaml` 복사본, 소스 basename을 유지한 XYZ 구조,
-생성한 정규 `md.inp`, xTB 실행 파일/버전 정체성을 그 generation에 바인딩합니다. 워커는
-그 generation에서 fresh attempt를 정확히 한 번 실행합니다. 재시도, checkpoint 재개,
-workflow handoff는 없습니다. 취소는 프로세스 그룹을 종료하고, worker 종료/crash/orphan
-복구는 재시도 없는 종료 결과를 기록합니다.
-
-종료 코드 0만으로는 성공이 아닙니다. 종료 검증에는 fresh `xtbmdok`, 제출한 원자/step
-budget에 맞는 완전하고 유한한 `xtb.trj`와 `mdrestart`, 제한 안의 출력, 알려진 xTB
-false-success marker 부재가 모두 필요합니다. 상태, 리포트, 바인딩 입력, 불변 raw output은
-모두 자신이 설명하는 visible generation에 보존하고, 재사용하는 작업 루트에는 최신
-상태/리포트 mirror를 두지 않습니다.
-
-공유 RAM scratch를 켜도 visible generation은 durable 정체성과 게시 대상입니다. 생성한
-geometry, `md.inp`, attempt token, 큐 메타데이터, 공개 command는 그 generation에
-바인딩하고, 실제 xTB command만 staging한 입력 경로와 private tmpfs CWD를 사용합니다.
-프로세스 그룹 종료 뒤 공통 `core.engine_scratch` transaction이 `xtb.trj`, `mdrestart`,
-`xtbmdok`, stdout/stderr만 게시합니다. 그 다음 새 durable 파일을 종료 검증하므로
-false-success 근거는 보존되어도 완료로 바뀔 수 없습니다. 확정한 게시는 cleanup하고
-`scratch_provenance`에 기록하며, identity drift나 미확정 transaction은 workspace를
-보존하고 뒤이은 scratch 시작을 막습니다.
-
-배포는 구형 행을 in-place로 migration하는 방식이 아니라 한 번에 전환합니다. 이전 빌드의
-pending/running xTB-MD 행을 drain하고 미완료 terminal replay와 snapshot intent를 끝내거나,
-취소/clear한 뒤 업그레이드 후 다시 제출합니다. 기존 terminal 숨은 이력은 migration이나
-rename 없이 그대로 보존합니다.
 
 ---
 
@@ -344,11 +301,9 @@ rename 없이 그대로 보존합니다.
   tmpfs checkpoint를 잃을 수 있으며, 이때 기존 durable recovery가
   이미 게시된 근거부터 재개합니다.
   scratch workspace와 journal 구현의 단일 소유자는 `core.engine_scratch`이고 ORCA는
-  flat input dependency parser만 제공합니다. 단독 xTB-MD와 workflow xTB/CREST도 같은 private
-  workspace와 transaction을 사용합니다. 단독 MD 입력은 visible generation에 durable하게
-  두고, workflow xTB/CREST 입력 snapshot은 durable 절대 경로로 유지합니다. xTB는 job
-  type별 canonical 결과와 log를, 단독 xTB-MD는 trajectory,
-  checkpoint, success marker, log만, CREST는 named retained
+  flat input dependency parser만 제공합니다. workflow xTB/CREST도 같은 private
+  workspace와 transaction을 사용하며, 그 입력 snapshot은 durable 절대 경로로 유지합니다. xTB는 job
+  type별 canonical 결과와 log를, CREST는 named retained
   ensemble과 log를 게시하며 큰 엔진 work tree는 commit 뒤 제거합니다. CREST 자체의
   `--scratch` copier는 계속 사용하지 않습니다.
   최종 process group에는 one-byte launch gate를 먼저 시작합니다. worker가 해당 PID/PGID를 durable
@@ -511,7 +466,6 @@ orca_auto는 scheduling, ownership, 공개 artifact를 모두 디스크 기반�
 | 어드미션 슬롯 파일          | core/admission   | 활성 동시성 슬롯 (머신 전역)            |
 | `job_state.json`            | orca (state)     | 작업별 시도 + 상태                       |
 | `job_report.json` / `.md`   | orca (reporting) | 사람/기계용 완료 리포트                  |
-| `<xTB-MD 작업>/<visible generation>/` | xtb_md | 바인딩 MD 입력, 상태/리포트, 출력     |
 | 작업 위치 인덱스 (JSONL)    | core/indexing    | 각 작업 출력의 현재 위치                 |
 | `workflow.json`             | flow             | 내구성 워크플로우 페이로드               |
 | `workflow_report.html`      | flow (report)    | 실시간 갱신 워크플로우 시각 요약         |
@@ -588,9 +542,8 @@ token, 채널 ID, operator allowlist가 필요하며, bot token+기본 채널이
   파일 경로, `.exe` 바이너리는 거부됩니다. 설정된 ORCA/xTB/CREST 실행 파일은
   존재하는 실행 가능한 절대 Linux 경로여야 합니다.
 - `scheduler.max_active_simulations`는 공유 어드미션 상한입니다.
-- `scheduler.max_active_xtb_md`는 단독 xTB-MD 부분 상한이며 기본값은 `1`입니다.
 - `scheduler.admission_root`는 공유 슬롯 조정 루트입니다.
-- `runs_root`는 단독 ORCA/xTB-MD 작업, 워크플로우 워크스페이스, 내부 엔진 실행이 모두
+- `runs_root`는 단독 ORCA 작업, 워크플로우 워크스페이스, 내부 엔진 실행이 모두
   사용하는 단일 runs 루트입니다.
 - `default_max_retries: 0`은 ORCA 재시도를 비활성화합니다. 양수 값은 계산
   종류별 재시도 정책을 활성화하며, 실제 route별 cap은 `job_state.json`/큐 metadata에
@@ -605,9 +558,8 @@ token, 채널 ID, operator allowlist가 필요하며, bot token+기본 채널이
 
 | 유닛                                  | 역할                                            |
 |---------------------------------------|-------------------------------------------------|
-| `orca_auto-engine-workers@.target`    | 독립된 기본 엔진 unit 두 개 시작               |
+| `orca_auto-engine-workers@.target`    | 기본 엔진 워커 unit 시작                        |
 | `orca_auto-queue-worker@.service`     | ORCA 워커 감독                                  |
-| `orca_auto-xtb-md-worker@.service`    | standalone xTB-MD 워커 감독                    |
 | `orca_auto-workflow-worker@.service`  | opt-in workflow + 내부 xTB/CREST 워커           |
 | `orca_auto-bot@.service`              | 선택된 provider-neutral messenger 봇            |
 | `orca_auto-runtime@.target`           | 엔진 워커와 bot을 함께 시작                    |
@@ -617,8 +569,8 @@ token, 채널 ID, operator allowlist가 필요하며, bot token+기본 채널이
 engine-worker 타깃이 활성화되며, 설정 후 다시 실행하면 전체 타깃이 활성화됩니다. WSL에서는
 `/etc/wsl.conf`에서 `systemd`가 활성화되어 있어야 합니다.
 
-기본 ORCA와 standalone xTB-MD 워커는 서로 다른 서비스 감독자를 사용하므로 한쪽의
-실패나 재시작이 다른 쪽을 중단하지 않습니다. opt-in workflow 감독자는 각 워커를 별도
+기본 ORCA 워커는 자체 서비스 감독자로 실행되어 opt-in workflow 감독자와 독립적으로
+실패하거나 재시작할 수 있습니다. opt-in workflow 감독자는 각 워커를 별도
 프로세스 세션에서 시작하고 최초 시작을 2초씩 분산합니다. 데몬 워커가 5분 안에 세 번
 종료되면 무한 재시작 대신 해당 감독자 회로가 열립니다. 각 엔진 큐 워커는 시작 시 내구 상태를 조정하지만,
 유휴 상태의 전체 상태 조정은 1분에 한 번으로 제한하고 가벼운 큐/상태 poll은 기존
@@ -635,7 +587,7 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 
 - `init` — 공유 설정 생성/갱신
 - `scaffold <ts_search|conformer_search|scan_ts> <path>` — 워크플로우 스캐폴드 작성
-- `run-dir <path>` — 내구성 제출 (ORCA, 단독 xTB-MD 또는 워크플로우, 자동 라우팅)
+- `run-dir <path>` — 내구성 제출 (ORCA 또는 워크플로우, 자동 라우팅)
 - `smoke` — source-checkout 개발자 스모크 스위트와 보존형 review packet
 - `queue list` / `queue cancel` / `queue list clear` — 큐 점검/유지보수
 - `service status` / `service restart` — 런타임 상태 (systemd 경유)
@@ -656,7 +608,7 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 스모크 테스트를 실행합니다. 휠 스모크는 패키징된 Python module 목록이 `src/orca_auto`와
 정확히 같고 root `py.typed` marker가 하나뿐인지도 확인합니다.
 
-테스트는 `tests/core/`, `tests/xtb_md/`, `tests/flow/`, `tests/flow/engines/`, `tests/integration/`,
+테스트는 `tests/core/`, `tests/flow/`, `tests/flow/engines/`, `tests/integration/`,
 최상위 ORCA 회귀 테스트로 구성됩니다. 프로젝트는 내부 위임 테스트보다 동작을
 검증하는 테스트(페이로드, 영속 파일, CLI 출력, 상태 전이)를 선호합니다.
 
@@ -667,7 +619,7 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 - **내구성 있는 제출, 감독된 실행** — 큐가 항상 진실 공급원이며, 워커는 작업
   사이에 재시작 가능하고 무상태입니다.
 - **하나의 엔진 런타임, 여러 엔진** — `EngineDefinition` + 통합 자식 엔트리포인트가
-  ORCA의 풍부한 도메인 동작을 보존하면서 ORCA/xTB-MD/xTB/CREST 라이프사이클을 균일하게
+  ORCA의 풍부한 도메인 동작을 보존하면서 ORCA/xTB/CREST 라이프사이클을 균일하게
   유지합니다.
 - **공유 어드미션 상한** — 단일 머신 전역 슬롯 풀이 모든 엔진에 걸친 총 동시성을
   제한합니다.

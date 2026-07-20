@@ -25,7 +25,7 @@ from .store import get_job_location, list_job_locations, resolve_job_location, u
 class EngineJobLocations:
     """Store-backed job-location API shared by the engine packages.
 
-    CREST, xTB, and xTB-MD bind these methods to module-level names. Store
+    CREST and xTB bind these methods to module-level names. Store
     functions are resolved as globals of this module at call time, so tests
     can monkeypatch e.g. ``engine_job_locations.resolve_job_location`` and the
     already-built engine exports observe the patched function.

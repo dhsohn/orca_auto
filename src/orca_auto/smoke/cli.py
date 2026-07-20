@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.cli_parser_commands import add_smoke_arguments
-from orca_auto.core.config.engines import load_xtb_md_config
 from orca_auto.core.config.files import (
     discover_shared_config_path,
     load_shared_config_mapping,
@@ -99,18 +98,6 @@ def _resolve_roots(
     admission_root = scheduler_admission_root(scheduler, default_runs_root=runs_root)
     if admission_root is None:
         raise ValueError("real engine smoke requires a resolvable scheduler admission root")
-    configured_xtb_md_limit = _positive_int(
-        scheduler.get("max_active_xtb_md"),
-        field="scheduler.max_active_xtb_md",
-        default=1,
-    )
-    scratch_root: Path | None = None
-    scratch_min_free_gb: int | None = None
-    if profile in {"real-xtb", "all"}:
-        xtb_md_config = load_xtb_md_config(str(config_path))
-        if xtb_md_config.scratch.enabled:
-            scratch_root = Path(xtb_md_config.scratch.root)
-            scratch_min_free_gb = xtb_md_config.scratch.min_free_gb
     admission = RealEngineAdmission(
         root=admission_root,
         global_limit=_positive_int(
@@ -118,9 +105,6 @@ def _resolve_roots(
             field="scheduler.max_active_simulations",
             default=4,
         ),
-        xtb_md_limit=(configured_xtb_md_limit if profile in {"real-xtb", "all"} else None),
-        scratch_root=scratch_root,
-        scratch_min_free_gb=scratch_min_free_gb,
     )
     return runs_root, admission
 

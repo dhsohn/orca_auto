@@ -450,7 +450,7 @@ def test_run_smoke_suite_rejects_runs_root_inside_repository_before_writing(
     assert (repo_root / ".orca_auto_smoke").exists() is False
 
 
-@pytest.mark.parametrize("real_profile", ["real-orca", "real-xtb"])
+@pytest.mark.parametrize("real_profile", ["real-orca"])
 def test_real_engine_case_holds_and_releases_production_admission_slot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -473,80 +473,6 @@ def test_real_engine_case_holds_and_releases_production_admission_slot(
         real_engine_admission=runner.RealEngineAdmission(
             root=admission_root,
             global_limit=1,
-            xtb_md_limit=1,
-        ),
-    )
-
-    assert result.exit_code == 0
-    assert list_slots(admission_root) == []
-
-
-def test_real_xtb_case_receives_configured_scratch_environment(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repo_root = tmp_path / "repo"
-    runs_root = tmp_path / "runs"
-    admission_root = tmp_path / "admission"
-    scratch_root = tmp_path / "pretend-shm" / "orca_auto"
-    monkeypatch.setenv("XTB_MD_REAL_SCRATCH_ROOT", "/dev/shm/stale-root")
-    monkeypatch.setenv("XTB_MD_REAL_SCRATCH_MIN_FREE_GB", "99")
-    _write_tiny_repo(
-        repo_root,
-        status="completed",
-        pytest_body=f"""    import os
-    assert os.environ["XTB_MD_REAL_SCRATCH_ROOT"] == {str(scratch_root)!r}
-    assert os.environ["XTB_MD_REAL_SCRATCH_MIN_FREE_GB"] == "7"
-""",
-    )
-    real_scenario = _scenario(expected_status="completed", profile="real-xtb")
-    monkeypatch.setattr(runner, "scenarios_for_profile", lambda _profile: (real_scenario,))
-
-    result = runner.run_smoke_suite(
-        repo_root=repo_root,
-        runs_root=runs_root,
-        profile="real-xtb",
-        real_engine_admission=runner.RealEngineAdmission(
-            root=admission_root,
-            global_limit=1,
-            xtb_md_limit=1,
-            scratch_root=scratch_root,
-            scratch_min_free_gb=7,
-        ),
-    )
-
-    assert result.exit_code == 0
-    assert list_slots(admission_root) == []
-
-
-def test_real_xtb_case_drops_stale_scratch_environment_when_config_is_disabled(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repo_root = tmp_path / "repo"
-    runs_root = tmp_path / "runs"
-    admission_root = tmp_path / "admission"
-    _write_tiny_repo(
-        repo_root,
-        status="completed",
-        pytest_body="""    import os
-    assert "XTB_MD_REAL_SCRATCH_ROOT" not in os.environ
-    assert "XTB_MD_REAL_SCRATCH_MIN_FREE_GB" not in os.environ
-""",
-    )
-    real_scenario = _scenario(expected_status="completed", profile="real-xtb")
-    monkeypatch.setattr(runner, "scenarios_for_profile", lambda _profile: (real_scenario,))
-    monkeypatch.setenv("XTB_MD_REAL_SCRATCH_ROOT", "/dev/shm/stale-root")
-    monkeypatch.setenv("XTB_MD_REAL_SCRATCH_MIN_FREE_GB", "99")
-
-    result = runner.run_smoke_suite(
-        repo_root=repo_root,
-        runs_root=runs_root,
-        profile="real-xtb",
-        real_engine_admission=runner.RealEngineAdmission(
-            root=admission_root,
-            global_limit=1,
-            xtb_md_limit=1,
         ),
     )
 
@@ -568,7 +494,6 @@ def test_real_orca_admission_uses_orca_app_without_xtb_subcap(
     admission = runner.RealEngineAdmission(
         root=tmp_path / "admission",
         global_limit=3,
-        xtb_md_limit=1,
     )
     scenario = _scenario(expected_status="completed", profile="real-orca")
 
@@ -627,20 +552,19 @@ def test_real_engine_case_binds_slot_to_supervisor_before_execution(
     assert release.is_file(), "test release gate timed out"
 """,
     )
-    real_scenario = _scenario(expected_status="completed", profile="real-xtb")
+    real_scenario = _scenario(expected_status="completed", profile="real-orca")
     monkeypatch.setattr(runner, "scenarios_for_profile", lambda _profile: (real_scenario,))
 
     admission = runner.RealEngineAdmission(
         root=admission_root,
         global_limit=1,
-        xtb_md_limit=1,
     )
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(
             runner.run_smoke_suite,
             repo_root=repo_root,
             runs_root=runs_root,
-            profile="real-xtb",
+            profile="real-orca",
             real_engine_admission=admission,
         )
         try:
@@ -734,7 +658,7 @@ while True:
     )
     real_scenario = _scenario(
         expected_status="completed",
-        profile="real-xtb",
+        profile="real-orca",
         timeout_seconds=0.5,
     )
     monkeypatch.setattr(runner, "scenarios_for_profile", lambda _profile: (real_scenario,))
@@ -757,14 +681,13 @@ while True:
     admission = runner.RealEngineAdmission(
         root=admission_root,
         global_limit=1,
-        xtb_md_limit=1,
     )
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(
             runner.run_smoke_suite,
             repo_root=repo_root,
             runs_root=runs_root,
-            profile="real-xtb",
+            profile="real-orca",
             real_engine_admission=admission,
         )
 
@@ -869,14 +792,13 @@ def test_real_engine_supervisor_crash_retains_pending_admission_slot(
     )
     scenario = _scenario(
         expected_status="completed",
-        profile="real-xtb",
+        profile="real-orca",
         timeout_seconds=30,
     )
     monkeypatch.setattr(runner, "scenarios_for_profile", lambda _profile: (scenario,))
     admission = runner.RealEngineAdmission(
         root=admission_root,
         global_limit=1,
-        xtb_md_limit=1,
     )
 
     retained_token = ""
@@ -886,7 +808,7 @@ def test_real_engine_supervisor_crash_retains_pending_admission_slot(
             runner.run_smoke_suite,
             repo_root=repo_root,
             runs_root=runs_root,
-            profile="real-xtb",
+            profile="real-orca",
             real_engine_admission=admission,
         )
         try:
@@ -938,7 +860,7 @@ def test_real_engine_interrupt_retains_slot_when_cleanup_is_unconfirmed(
     batch_dir = tmp_path / "batch"
     admission_root = tmp_path / "admission"
     batch_dir.mkdir()
-    scenario = _scenario(expected_status="completed", profile="real-xtb")
+    scenario = _scenario(expected_status="completed", profile="real-orca")
 
     class InterruptedProcess:
         returncode = None
@@ -977,7 +899,6 @@ def test_real_engine_interrupt_retains_slot_when_cleanup_is_unconfirmed(
         real_engine_admission=runner.RealEngineAdmission(
             root=admission_root,
             global_limit=1,
-            xtb_md_limit=1,
         ),
     )
 
@@ -1006,7 +927,7 @@ def test_real_engine_startup_failure_resets_pending_slot_before_release(
     runs_root = tmp_path / "runs"
     admission_root = tmp_path / "admission"
     _write_tiny_repo(repo_root, status="completed")
-    real_scenario = _scenario(expected_status="completed", profile="real-xtb")
+    real_scenario = _scenario(expected_status="completed", profile="real-orca")
     monkeypatch.setattr(runner, "scenarios_for_profile", lambda _profile: (real_scenario,))
 
     original_update_slot_metadata = runner.update_slot_metadata
@@ -1037,11 +958,10 @@ def test_real_engine_startup_failure_resets_pending_slot_before_release(
     result = runner.run_smoke_suite(
         repo_root=repo_root,
         runs_root=runs_root,
-        profile="real-xtb",
+        profile="real-orca",
         real_engine_admission=runner.RealEngineAdmission(
             root=admission_root,
             global_limit=1,
-            xtb_md_limit=1,
         ),
     )
 
@@ -1070,7 +990,7 @@ def test_real_engine_case_terminates_child_when_admission_rebind_fails(
     Path({str(executed_path)!r}).touch()
 """,
     )
-    real_scenario = _scenario(expected_status="completed", profile="real-xtb")
+    real_scenario = _scenario(expected_status="completed", profile="real-orca")
     monkeypatch.setattr(runner, "scenarios_for_profile", lambda _profile: (real_scenario,))
     monkeypatch.setattr(
         runner,
@@ -1081,11 +1001,10 @@ def test_real_engine_case_terminates_child_when_admission_rebind_fails(
     result = runner.run_smoke_suite(
         repo_root=repo_root,
         runs_root=runs_root,
-        profile="real-xtb",
+        profile="real-orca",
         real_engine_admission=runner.RealEngineAdmission(
             root=admission_root,
             global_limit=1,
-            xtb_md_limit=1,
         ),
     )
 
@@ -1105,7 +1024,7 @@ def test_real_engine_case_fails_closed_when_production_admission_is_full(
     runs_root = tmp_path / "runs"
     admission_root = tmp_path / "admission"
     _write_tiny_repo(repo_root, status="completed")
-    real_scenario = _scenario(expected_status="completed", profile="real-xtb")
+    real_scenario = _scenario(expected_status="completed", profile="real-orca")
     monkeypatch.setattr(runner, "scenarios_for_profile", lambda _profile: (real_scenario,))
     occupied = reserve_slot(
         admission_root,
@@ -1118,11 +1037,10 @@ def test_real_engine_case_fails_closed_when_production_admission_is_full(
     result = runner.run_smoke_suite(
         repo_root=repo_root,
         runs_root=runs_root,
-        profile="real-xtb",
+        profile="real-orca",
         real_engine_admission=runner.RealEngineAdmission(
             root=admission_root,
             global_limit=1,
-            xtb_md_limit=1,
         ),
     )
 

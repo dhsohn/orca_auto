@@ -38,8 +38,7 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   부여하지만 공유 라이브러리와 외부 파라미터 내용은 큐 generation 안으로 복사하지
   않습니다. 따라서 같은 UID로 실행되는 신뢰할 수 없는 프로세스는 격리 경계 밖입니다.
 - 실행 파일 콘텐츠 정체성은 일반적인 엔진 버전 호환성 검사와 다릅니다. ORCA와
-  워크플로우 xTB/CREST 버전은 운영자가 qualification합니다. 단독 xTB-MD adapter만
-  예외로, 큐에 넣기 전에 version을 probe해 현재 stable xTB 6.7.1만 받습니다.
+  워크플로우 xTB/CREST 버전은 운영자가 qualification합니다.
 
 지원하지 않는 가정:
 
@@ -111,7 +110,6 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 - `resources.max_cores_per_task`
 - `resources.max_memory_gb_per_task`
 - `scheduler.max_active_simulations`
-- `scheduler.max_active_xtb_md`
 - `scheduler.admission_root`
 - `workflow.paths.xtb_executable`
 - `workflow.paths.crest_executable`
@@ -148,13 +146,12 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 
 안정 동작:
 
-- `runs_root`는 단일 runs 루트입니다. 단독 ORCA/xTB-MD 작업과 워크플로우 워크스페이스가
+- `runs_root`는 단일 runs 루트입니다. 단독 ORCA 작업과 워크플로우 워크스페이스가
   모두 그 아래에 존재합니다.
 - `scheduler.admission_root`를 따로 설정하지 않으면 admission 디렉터리는
   `<runs_root>/.admission`입니다.
-- `scheduler.max_active_simulations`는 ORCA, 단독 xTB-MD, 내부 xTB, 내부 CREST 작업의
+- `scheduler.max_active_simulations`는 ORCA, 내부 xTB, 내부 CREST 작업의
   공통 active 상한입니다.
-- `scheduler.max_active_xtb_md`는 양의 단독 xTB-MD 부분 상한이며 생략하면 `1`입니다.
 - 위에 열거한 설정 경로만 허용합니다. 알 수 없거나 철자가 틀렸거나 제거된 키는
   해당 section에서 설정 로딩을 실패시킵니다. 명시한 `scheduler`, `resources`,
   `workflow`, `workflow.paths`, `messenger`, `orca`, `orca.runtime`, `orca.paths`
@@ -180,7 +177,7 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
   여유 공간, `scratch_min_free_gb` host reserve 합계를 감당해야 시작합니다. 완료 attempt의 게시
   메타데이터는 `scratch_provenance`에, commit 뒤 중단/exception 경로의 게시 근거는
   `scratch_publications`에 기록하며 고정 execution-snapshot provenance에는 넣지 않습니다.
-  단독 xTB-MD와 workflow xTB/CREST도 같은 설정 root와 단일-workspace admission을 사용합니다. 변경 불가능한
+  workflow xTB/CREST도 같은 설정 root와 단일-workspace admission을 사용합니다. 변경 불가능한
   입력 snapshot은 durable하게 유지하고 tmpfs에서 실행한 뒤 canonical 결과/evidence allowlist만
   transaction으로 게시합니다. 생략한 work tree와 transient 항목은 `scratch_provenance`에
   기록하며 CREST 자체의 `--scratch` 옵션은 계속 사용하지 않습니다.
@@ -263,7 +260,7 @@ orca_auto는 아직 0.x 시리즈입니다. 깨지는 변경이 완전히 금지
 
 - `activity_id`
 - `kind` (`job` 또는 `workflow`)
-- `engine` (`orca`, `xtb_md`, `xtb`, `crest`, `workflow`)
+- `engine` (`orca`, `xtb`, `crest`, `workflow`)
 - `status`
 - `label`
 - `source`
@@ -291,15 +288,11 @@ cleanup은 queue generation과 run state를 모두 보존합니다. 유효하지
 replay하지 않고 오류를 기록하며, clear와 강제 후속 제출을 막은 채 보수적으로 보존합니다. Replay와
 fence marker는 내부 구현 상태이므로 client가 편집하면 안 됩니다.
 
-xTB-MD/xTB/CREST 큐 산출물에는 내부 immutable-generation fingerprint가 기록되고, 새
-xTB-MD/xTB/CREST/ORCA 행에는 제출 시점 execution snapshot이 들어갑니다. 새 단독
-xTB-MD 행과 ORCA 행은 각각 직접 하위 visible
-`YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 소유합니다. 새 단독 xTB-MD 행은 바인딩한
-`xtb_md_job.yaml`, 소스 basename을 유지한 geometry, 생성한 `md.inp`, 상태, 리포트,
-보존 출력을 모두 그 generation에 두며 별도 private 입력/실행 트리를 만들지 않습니다. 새 ORCA 행은 snapshot
-schema 2를 사용하고 ORCA용
-`.orca_auto_input_snapshots/`, `.orca_auto_orca_executions/`, 중첩 `.inputs/`를 만들지
-않습니다. 바인딩한 선택 `.inp`와 의존성은 소스 basename을 유지합니다. 서로 다른
+xTB/CREST 큐 산출물에는 내부 immutable-generation fingerprint가 기록되고, 새
+xTB/CREST/ORCA 행에는 제출 시점 execution snapshot이 들어갑니다. 새 ORCA 행은 직접
+하위 visible `YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 소유하고 snapshot schema 2를
+사용하며 ORCA용 `.orca_auto_input_snapshots/`, `.orca_auto_orca_executions/`, 중첩
+`.inputs/`를 만들지 않습니다. 바인딩한 선택 `.inp`와 의존성은 소스 basename을 유지합니다. 서로 다른
 소스 경로가 같은 basename을 쓰면 바이트가 같아도 제출을 fail-closed합니다.
 Basename이 다르고 ORCA가 그 이름을 출력으로
 만들지 않는 route라면 선택 입력과 stem을 공유해도 됩니다. SP `h2.inp`는
@@ -318,11 +311,6 @@ fail-closed합니다.
 새 빌드에서 다시 제출하세요. In-place adoption이나 migration은 지원하지 않습니다. 기존
 terminal 숨은 ORCA generation은 이력 산출물로 제자리에 보존합니다. 검증할 수 없는 산출물은
 새 generation에 연결하지 않고 fail-closed합니다.
-단독 xTB-MD visible-generation 형식을 배포하기 전에도 이전 빌드의 pending/running xTB-MD
-행을 모두 drain하고 미완료 terminal replay와 snapshot intent를 끝내야 합니다. 또는 영향받는
-작업을 취소/clear한 뒤 새 빌드에서 다시 제출하세요. 구형 행은 in-place로 채택하지 않습니다.
-기존 terminal xTB-MD 숨은 입력/실행 이력은 제자리에 두며 migration하거나 이름을 바꾸지
-않습니다.
 워크플로우 내부 xTB/CREST snapshot은 공개 task id만으로 소유권을 정하지 않고 제출마다
 배타적으로 예약한 고유 namespace를 사용합니다.
 Generation 디렉터리를 만들기 전에 소유 queue root에 내부 durable intent를 기록합니다.
@@ -341,50 +329,7 @@ backfill하지 않고 오래된 산출물 경로를 basename으로 remap하지�
 워크플로우 내부 xTB와 CREST 작업은 `job_state.json`만 종료 metadata 산출물로 사용합니다.
 `job_report.json`이나 `job_report.md`를 만들지 않으며 adapter, index, repair, workflow
 diagnostic도 이 파일을 읽지 않습니다. report-only 작업은 지원하지 않고 다시 제출해야
-합니다. 아래의 별도 ORCA 및 standalone xTB-MD report 계약은 바뀌지 않습니다.
-
-## 단독 xTB-MD 작업 계약
-
-공개 입력 marker는 `runs_root` 아래 디렉터리의 `xtb_md_job.yaml`입니다. Strict schema
-version 1이며 필수 필드는 `schema_version`, `input_xyz`, `gfn`, `ensemble`,
-`temperature_k`, `time_ps`, `walltime_seconds`, `step_fs`, `dump_fs`입니다. 알 수 없는
-필드는 거부하고 NVT/NVE만 지원합니다. 검증되는 선택 필드와 정확한 서버 소유 상한은
-[REFERENCE.ko.md](REFERENCE.ko.md) §7.2를 따릅니다.
-
-제출마다 fresh generation 하나를 정확히 한 번 시도합니다. 워크플로우, 자동 retry,
-checkpoint resume, 임의 seed, `--omd`, raw xcontrol, constraint, metadynamics 계약은
-없습니다. 취소는 종료 상태이며 서비스 중단/crash/orphan 복구가 attempt를 조용히 다시
-큐에 넣으면 안 됩니다.
-
-adapter는 현재 xTB 6.7.1만 받습니다. 이는 호환성 pin이지 issue-free 주장인 것은
-아닙니다. 종료 코드 0과 `xtbmdok`만으로 성공을 증명하지 않으며, 제출 budget 안의 fresh,
-finite, 원자 수가 일치하는 `xtb.trj`와 `mdrestart` 증거도 요구하고 알려진 false-success
-marker를 거부합니다.
-
-단독 xTB-MD는 허용된 제출마다 작업 루트 바로 아래에 visible
-`YYYYMMDD-HHMMSS-<8자리 hex>/` generation 하나를 정확히 만듭니다. 다음 공개 산출물은
-그 generation에 둡니다:
-
-- `job_state.json`
-- `job_report.json`
-- `job_report.md`
-
-바인딩한 geometry는 소스 basename을 유지합니다. 그 geometry와 바인딩한
-`xtb_md_job.yaml`, 생성한 `md.inp`, 로그,
-`xtb.trj`, `mdrestart`, `xtbmdok`는 상태/리포트와 같은 generation에 둡니다. 작업 루트에는
-최신 상태/리포트 복사본 writer가 없습니다. 종료 JSON은 검증된 출력에 path, SHA-256,
-byte size, modification time을 바인딩합니다.
-
-`orca.runtime.scratch_root`를 설정해도 불변 generated geometry, `md.inp`, attempt identity,
-큐/상태, 리포트 소유권은 durable하게 유지합니다. 실제 xTB process 작업 디렉터리와
-geometry/control 경로만 private tmpfs를 사용합니다. 프로세스 종료 뒤 하나의 저널 기반
-transaction이 `xtb.stdout.log`, `xtb.stderr.log`, `xtb.trj`, `mdrestart`, `xtbmdok`만 같은
-durable execution generation에 게시하고, 그 commit 뒤에만 종료 검증합니다. canonical이 아닌
-work 파일은 생략합니다. 전체 크기/파일 수와 canonical 파일별 크기 상한은 게시 전 tmpfs에서
-검사하므로 빠르게 종료하면서 만든 과대 log나 결과를 durable storage로 복사하지 않고 미확정
-상태로 보존합니다. false-success 검증이 완료를 거부하거나 취소/worker 종료로 작업이 끝나도
-commit된 게시는 `engine_payload.scratch_provenance`에 기록합니다. 확정할 수 없는 게시는
-fail-closed 상태로 남으며 retry/resume 계약이 아닙니다.
+합니다. 아래의 별도 ORCA report 계약은 바뀌지 않습니다.
 
 ## ORCA 작업 산출물 계약
 
@@ -775,7 +720,6 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 - `systemd/orca_auto-runtime@.target`
 - `systemd/orca_auto-engine-workers@.target`
 - `systemd/orca_auto-queue-worker@.service`
-- `systemd/orca_auto-xtb-md-worker@.service`
 - `systemd/orca_auto-workflow-worker@.service`
 - `systemd/orca_auto-bot@.service`
 
@@ -790,18 +734,17 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 - worker-only 모드에서는 installer가 engine-worker target을 직접 활성화합니다. 인터랙티브
   bot 설정이 완전하면 대신 전체 runtime target을 활성화하고, 그 target이 engine-worker
   target을 끌어들입니다.
-- engine-worker target은 ORCA와 standalone xTB-MD를 별도 서비스로 시작하므로 한쪽의
-  실패나 재시작이 다른 쪽을 중단하지 않습니다. 인자 없는 대화형 `queue worker` 명령은
+- engine-worker target은 ORCA 엔진 서비스를 시작합니다. 인자 없는 대화형 `queue worker` 명령은
   ORCA-only 동작을 유지합니다. `runs_root`
   설정만으로 workflow나 그 내부 xTB/CREST 워커를 암묵적으로 시작하지 않습니다.
 - workflow unit은 설치만 되고 opt-in입니다. 명시적으로 시작하면 workflow 감독자와 내부
   xTB/CREST 워커를 실행합니다.
 - 선택된 Telegram/Discord 봇은 인터랙티브 설정이 완성되었을 때만 활성화되며,
   그렇지 않으면 worker-only로 남습니다.
-- `service status`는 runtime과 engine-worker target, 기본 엔진 서비스 둘, opt-in workflow
+- `service status`는 runtime과 engine-worker target, 기본 ORCA 엔진 서비스, opt-in workflow
   worker, bot 상태를 보고합니다. opt-in worker는 정보용이며 worker-only 또는 full-runtime
   health의 필수 조건이 아닙니다.
-- `service restart`는 두 엔진 서비스의 start-limit 실패 상태와, full runtime에서는 bot의
+- `service restart`는 ORCA 엔진 서비스의 start-limit 실패 상태와, full runtime에서는 bot의
   실패 상태도 지웁니다. runtime target이 활성화되어 있으면 그것을 재시작하고, 아니면
   engine-worker target을 재시작합니다.
 - 엔진 워커 감독자가 정상 종료되면 중단 상태를 유지합니다. 각 자식 감독자는 제한된 재시작

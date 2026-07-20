@@ -31,17 +31,17 @@ def _add_workflow_scaffold_shortcut(
 def add_run_dir_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     run_dir_parser = subparsers.add_parser(
         "run-dir",
-        help="Submit an ORCA, standalone xTB-MD, or workflow input directory.",
+        help="Submit an ORCA or workflow input directory.",
     )
     add_engine_config_argument(run_dir_parser)
     add_orca_logging_arguments(run_dir_parser)
-    run_dir_parser.add_argument("path", help="ORCA, standalone xTB-MD, or workflow input directory")
+    run_dir_parser.add_argument("path", help="ORCA or workflow input directory")
     run_dir_parser.add_argument(
         "--force",
         action="store_true",
         help=(
             "Force ORCA re-run, or allow restarting an existing workflow workspace outside "
-            "failed status (not supported for xTB-MD)"
+            "failed status"
         ),
     )
     run_dir_parser.add_argument(
@@ -102,7 +102,7 @@ def add_monitor_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
 def add_smoke_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--profile",
-        choices=("fake", "real-orca", "real-xtb", "all"),
+        choices=("fake", "real-orca", "all"),
         default="fake",
         help="Smoke profile to run (default: fake)",
     )

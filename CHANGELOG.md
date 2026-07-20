@@ -8,19 +8,23 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the standalone xTB-MD engine (the deliberately narrow public exception
+  introduced in 0.2.0). This deletes the `xtb_md_job.yaml` manifest contract, the
+  `--engine`/`--app xtb_md` CLI values, the `scheduler.max_active_xtb_md` config
+  key, the `orca_auto-xtb-md-worker@.service` unit, and the `xtb_md`
+  queue/activity engine value. General xTB and CREST remain available as internal
+  workflow stages, and ORCA remains the standalone engine. Existing terminal
+  xTB-MD run directories are left in place as historical artifacts. Before
+  upgrading, drain any pending/running xtb_md queue rows, remove
+  `scheduler.max_active_xtb_md` from `orca_auto.yaml`, and, if the
+  `orca_auto-xtb-md-worker@<user>.service` unit was installed, disable and
+  remove it (`systemctl disable --now orca_auto-xtb-md-worker@<user>.service`,
+  then `systemctl daemon-reload`).
+
 ### Changed
 
-- New standalone xTB-MD submissions now create one visible
-  `YYYYMMDD-HHMMSS-<8-hex>` generation directly under the submitted job root.
-  The bound `xtb_md_job.yaml`, geometry basename, generated `md.inp`, state,
-  reports, retained raw evidence, and validated output identities live together
-  in that generation;
-  new submissions no longer create separate hidden input/execution trees or
-  latest-copy state/reports at the job root. Before deploying this format,
-  drain old-build pending/running xTB-MD rows and finish incomplete terminal
-  replay and snapshot intents, or cancel/clear and resubmit them after the
-  upgrade. Old-format rows are not adopted in place, while existing terminal
-  hidden history remains untouched without migration or rename.
 - Workflow-internal xTB and CREST jobs now use `job_state.json` as their only
   terminal metadata artifact. They no longer write or read `job_report.json`
   or `job_report.md`; report-only jobs, completed outputs without terminal
@@ -45,11 +49,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   ORCA-domain owners. Bot command/upload handling and workflow SI collection,
   science, rendering, and publication now have explicit module boundaries while
   retaining their public CLI and artifact contracts.
-- Added a default engine-worker target with independent ORCA and standalone
-  xTB-MD systemd services. A failure or restart circuit in either engine no
-  longer stops the other; worker-only and full-runtime install, status, and
-  restart operations manage both services, while the opt-in workflow worker
-  remains separate. The bot now uses the same bounded systemd restart policy.
+- Added a default engine-worker target for the ORCA queue-worker systemd
+  service. Worker-only and full-runtime install, status, and restart operations
+  manage it, while the opt-in workflow worker remains separate. The bot now uses
+  the same bounded systemd restart policy.
 - Reject unknown, misspelled, removed, or malformed execution configuration
   instead of silently applying defaults. Engine settings now use only the
   canonical shared scheduler, resource, and messenger sections; omitted keys
@@ -95,9 +98,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   - A scan-TS payload stripped of `max_scan_extensions` fails closed instead
     of silently regrowing a default extension budget, matching the required
     stage-budget contract.
-  - xTB-MD terminal artifact publication revalidates the snapshot-recorded
-    job directory identity before each write again, closing the
-    directory-swap window between the state and report writes.
   - Same-second execution generations order by actual recency (directory
     mtime breaks the timestamp tie) instead of by random hex suffix, so
     direct-directory readers no longer pick a stale generation as newest
@@ -198,9 +198,8 @@ in [docs/RELEASE.md](docs/RELEASE.md).
     `app_config_cls` injection seam in the shared engine config loader;
     `orca.config` now uses `RetryRuntimeConfig` directly instead of the
     `CommonRuntimeConfig`/`RuntimeConfig` alias pair.
-  - Assorted dead surfaces: the unused `xtb_md.state.write_artifacts`
-    helper, four unused smoke procfs access-path properties, the
-    path-based fallback half of `rebuild_smoke_index`, argument-preserving
+  - Assorted dead surfaces: four unused smoke procfs access-path properties,
+    the path-based fallback half of `rebuild_smoke_index`, argument-preserving
     submitter lambdas, `(*args, **kwargs)` protocol ceremony in the queue
     worker deps, the trivial `build_engine_notifier` factory, the dead
     `max_concurrent` parameter of `normalize_admission_limit`, and the
@@ -211,10 +210,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
     identity-pinning, size, and SHA-256 checks remain; the packet records
     copy-time provenance, and sources that mutate after their copy no
     longer abort publication of the already-consistent projection.
-  - The doubled directory-chain walk and duplicated per-write revalidation
-    in the xTB-MD path-identity guard. Each walk keeps its per-component
-    before/opened/after TOCTOU checks; boundary validations (submission,
-    run start, artifact persistence, run polling) remain.
   - The `authorized_operator` action audience, which had no production
     issuer. All interactive bot actions are originator-bound.
   - The `EngineNotificationModule` layer between `EngineJobNotifications`
@@ -413,8 +408,8 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   at-most-once delivery); a recovery scan failure is reported as a failed
   submission with the row already parked, never as success.
 - The durable enqueue-publication protocol now has a single shared driver in
-  the core queue package; standalone xTB-MD submission is the first engine on
-  it. Behavior converges on the safest of the three previous copies: a failed
+  the core queue package. Behavior converges on the safest of the previous
+  per-engine copies: a failed
   queued-record publication parks the row as `repair_pending` for the
   worker's pre-claim repair pass instead of terminally failing the job (the
   old `submission_publication_failed` result is gone — the submission reports
@@ -511,13 +506,6 @@ migration.
 
 ### Fixed
 
-- The xTB-MD queue worker now repairs committed submissions whose queued
-  record was never published before it will claim any work, matching the
-  repair pass the other engines already had. Previously a submitter killed
-  between the durable enqueue commit and the record publication left a stale
-  lease that was eventually claimed and run without any published record.
-  Live publisher leases are left untouched, and a row whose repair fails is
-  parked repair-pending and stays unclaimable instead of running.
 - Restarting the ORCA worker no longer treats historical terminal queue rows as
   fresh active-to-terminal transitions, so stable state/report provenance,
   `run_id`, timestamps, failure reasons, and terminal notifications are preserved;

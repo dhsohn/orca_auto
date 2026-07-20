@@ -15,9 +15,8 @@ and [REFERENCE.md](REFERENCE.md). For package and import conventions see
 
 ## 1. What orca_auto Is
 
-orca_auto is a **queue-first executor** for ORCA and standalone xTB molecular
-dynamics (xTB-MD), and a **workflow orchestrator** for multi-stage
-computational chemistry runs on Linux and WSL.
+orca_auto is a **queue-first executor** for ORCA and a **workflow orchestrator**
+for multi-stage computational chemistry runs on Linux and WSL.
 
 The core design principle is **durable submission, supervised execution**:
 
@@ -29,8 +28,7 @@ The core design principle is **durable submission, supervised execution**:
   calculation.
 
 ORCA is the public, first-class engine with the richest retry/reporting/monitor
-surface. **xTB-MD** is an independent first-class standalone engine with a
-strict single-attempt contract. General **xTB** and **CREST** calculations remain
+surface. General **xTB** and **CREST** calculations remain
 internal **workflow stages** rather than standalone public commands.
 
 ---
@@ -75,8 +73,6 @@ src/orca_auto/
 │   ├── state*.py        # Per-job state machine + persistence
 │   └── ...              # retry policy, completion rules, indexing
 │
-├── xtb_md/              # Standalone xTB-MD manifest, runner, validation, state
-│
 └── flow/                # Workflow orchestration package
     ├── orchestration/   # advance_workflow loop, phases, stage runtime
     ├── engines/
@@ -93,7 +89,6 @@ src/orca_auto/
 ### Import rules (from DEVELOPMENT.md)
 
 - ORCA implementation: `orca_auto.orca.*`
-- Standalone xTB-MD implementation: `orca_auto.xtb_md.*`
 - Shared infrastructure: `orca_auto.core.*`
 - Workflow orchestration: `orca_auto.flow.*`
 - Internal engines: `orca_auto.flow.engines.xtb.*`, `orca_auto.flow.engines.crest.*`
@@ -103,7 +98,7 @@ There are no top-level alias packages or alternate runtime shims.
 
 Layering is directional and enforced by import-linter (`lint-imports`,
 configured in `pyproject.toml`, run by `scripts/check.sh` and CI): `flow` may
-import `orca` and `core`; `orca` and `xtb_md` may import only `core`; `core`
+import `orca` and `core`; `orca` may import only `core`; `core`
 imports none of those domain packages. Engine wiring crosses layers exclusively through lazy string module
 paths (`core/engines/registry.py`, `core/queue/worker/admission.py`) — the
 deliberate plugin seam, invisible to the import graph on purpose.
@@ -134,15 +129,15 @@ from execution by a durable, on-disk queue.
             systemd supervises                            ▼
   ┌──────────────────────────────┐      ┌──────────────────────────────┐
   │ engine-workers@.target       │ ───▶ │  Queue worker loop            │
-  │ ├ queue-worker (ORCA)        │      │  core/queue/worker/loop.py    │
-  │ └ xtb-md-worker (standalone) │      └─────────────┬────────────────┘
-  │ runtime@.target + bot        │                    │ reserve admission slot
-  └──────────────────────────────┘                    │ spawn child by queue id
+  │ └ queue-worker (ORCA)        │      │  core/queue/worker/loop.py    │
+  │ runtime@.target + bot        │      └─────────────┬────────────────┘
+  └──────────────────────────────┘                    │ reserve admission slot
+                                                       │ spawn child by queue id
                                                        ▼
                                         ┌──────────────────────────────┐
                                         │  Worker child entrypoint       │
                                         │  core/engines/worker_child.py  │
-                                        │  --engine <orca|xtb_md|xtb|crest>│
+                                        │  --engine <orca|xtb|crest>     │
                                         │  --queue-root --queue-id       │
                                         │  --admission-token             │
                                         └─────────────┬────────────────┘
@@ -158,7 +153,7 @@ from execution by a durable, on-disk queue.
 Key properties:
 
 - **`run-dir` is the only durable submission path.** It inspects the target
-  directory, routes it to ORCA, standalone xTB-MD, or workflow handling, validates against the
+  directory, routes it to ORCA or workflow handling, validates against the
   configured roots, rejects duplicate active entries, writes the queue entry,
   and returns `status: queued`. There is no public direct-execution mode for new
   work.
@@ -167,16 +162,13 @@ Key properties:
   current queue entry itself. The legacy ORCA `--reaction-dir` direct mode is not
   supported. The `reaction_dir` field is still preserved in the queue entry as
   the downstream contract.
-- **A queue generation binds its executable inputs at submission.** Standalone
-  xTB-MD creates one visible `YYYYMMDD-HHMMSS-<8-hex>/` directly under the
-  submitted job directory and keeps its bound `xtb_md_job.yaml`, geometry
-  basename, generated `md.inp`, state, reports, and retained outputs together
-  there. Workflow xTB and CREST keep content-addressed input snapshots in an
-  exclusively reserved, unique namespace for each submission. ORCA likewise creates a visible
+- **A queue generation binds its executable inputs at submission.** Workflow xTB
+  and CREST keep content-addressed input snapshots in an exclusively reserved,
+  unique namespace for each submission. ORCA creates a visible
   generation directly under the submitted job directory, preserves the
   selected `.inp` and dependency basenames, rewrites supported file references
   to those confined flat copies, and writes raw outputs beside them. New ORCA
-  and standalone xTB-MD generations have no hidden execution parent or nested
+  generations have no hidden execution parent or nested
   input layer. Workers verify input and executable content identities instead
   of re-reading mutable source files as the execution contract.
 - **If no worker is running, work stays pending** in `queue.json` until a worker
@@ -186,7 +178,7 @@ Key properties:
 
 ## 4. The Shared Engine Abstraction
 
-The single most important architectural piece is that **ORCA, xTB-MD, xTB, and
+The single most important architectural piece is that **ORCA, xTB, and
 CREST all execute through one common engine runtime.** This is what keeps admission,
 child-process management, terminal side effects, and orphan recovery uniform.
 
@@ -206,7 +198,7 @@ bundles everything the shared runtime needs for an engine:
 `EngineDefinition.build_queue_runtime()` is the canonical bridge from that
 declaration to `EngineQueueRuntime`: it installs the engine's queue functions,
 PID-file name, exact identity predicate, and queue-entry lookup in one place.
-All four engines use this runtime directly. The former
+All engines use this runtime directly. The former
 `core.queue.internal_engine` module/facade/resolver stack has been removed.
 
 Each engine package exposes an `ENGINE_DEFINITION` constant:
@@ -214,7 +206,6 @@ Each engine package exposes an `ENGINE_DEFINITION` constant:
 | Engine | Module                                  |
 |--------|-----------------------------------------|
 | orca   | `orca_auto.orca.engine`                 |
-| xtb_md | `orca_auto.xtb_md.engine`               |
 | xtb    | `orca_auto.flow.engines.xtb.engine`     |
 | crest  | `orca_auto.flow.engines.crest.engine`   |
 
@@ -242,7 +233,7 @@ All engine work runs through one entrypoint:
 
 ```bash
 python -m orca_auto.core.engines.worker_child \
-  --engine <orca|xtb_md|xtb|crest> \
+  --engine <orca|xtb|crest> \
   --config <path> \
   --queue-root <path> \
   --queue-id <id> \
@@ -255,22 +246,15 @@ its richer domain behavior (state machine, retry, reports) inside
 `orca_auto.orca`, while its worker-child entrypoint uses the canonical
 `core.queue.engine.child` contract directly.
 
-For standalone xTB-MD, `xtb_md/queue_runtime.py` assembles worker dependencies
-and lifecycle hooks directly from the runtime built by `ENGINE_DEFINITION`.
-Its publication-repair gate and strict single-attempt terminal policy remain
-engine-owned behavior.
-
 ---
 
 ## 5. Admission Control (Shared Concurrency Cap)
 
-`core/admission/` implements machine-wide concurrency limiting so that ORCA,
-standalone xTB-MD, and all internal workflow stages compete for one shared pool.
+`core/admission/` implements machine-wide concurrency limiting so that ORCA
+and all internal workflow stages compete for one shared pool.
 
 - The cap is `scheduler.max_active_simulations`. It is **shared across ORCA,
-  standalone xTB-MD, internal xTB stages, and internal CREST stages.** A second
-  same-lock check applies the positive standalone xTB-MD subcap
-  `scheduler.max_active_xtb_md` (default `1`).
+  internal xTB stages, and internal CREST stages.**
 - Slots are persisted as records in an admission file under a shared
   `admission_root` (defaults to `<runs_root>/.admission`), guarded by a file
   lock (`admission_lock`).
@@ -289,40 +273,6 @@ standalone xTB-MD, and all internal workflow stages compete for one shared pool.
 
 This is why the `active_simulations` line in `queue list` counts only runs that
 currently consume a shared slot.
-
-### Standalone xTB-MD boundary
-
-`orca_auto.xtb_md` depends on shared `core` infrastructure but not on ORCA or
-`flow`. Submission creates one visible `YYYYMMDD-HHMMSS-<8-hex>/` generation
-under the job root and binds a copy of the strict `xtb_md_job.yaml`, its one XYZ
-geometry under the source basename, the generated canonical `md.inp`, and the
-xTB executable/version identity to it. The worker executes exactly one fresh
-attempt in that generation; retry, checkpoint resume, and workflow handoff are
-deliberately absent. Cancellation terminates the process group, and worker
-shutdown/crash/orphan recovery records a terminal non-retry result.
-
-Exit code 0 is only one piece of evidence. Terminal validation also requires a
-fresh `xtbmdok`, complete finite `xtb.trj` and `mdrestart` artifacts bound to the
-submitted atom/step budget, bounded output, and no known xTB false-success
-marker. State, reports, bound inputs, and immutable raw outputs all remain in
-the visible generation that they describe; the reusable job root has no latest
-state/report mirror.
-
-When shared RAM scratch is enabled, the visible generation remains the durable
-identity and publication target. Its generated geometry, `md.inp`,
-attempt token, queue metadata, and public command stay bound to that generation,
-while the actual xTB command uses staged input paths and a private tmpfs CWD.
-After process-group exit, the common `core.engine_scratch` transaction publishes
-only `xtb.trj`, `mdrestart`, `xtbmdok`, and stdout/stderr. Terminal validation
-then runs against those newly published durable files, so false-success evidence
-is retained but cannot become completion. Committed publication is cleaned and
-recorded in `scratch_provenance`; identity drift or an unresolved transaction
-retains the workspace and blocks later scratch launches.
-
-Deployment is a cutover rather than an in-place row migration. Drain old-build
-pending/running xTB-MD rows and finish incomplete terminal replay and snapshot
-intents, or cancel/clear and resubmit them after the upgrade. Existing terminal
-hidden history remains untouched without migration or rename.
 
 ---
 
@@ -368,11 +318,9 @@ logic. Notable pieces:
   the scratch tmpfs, and the configured host reserve.
   The scratch workspace and journal implementation is owned by
   `core.engine_scratch`; ORCA contributes only its flat input-dependency parser.
-  Standalone xTB-MD and workflow xTB/CREST use the same private workspace and
-  transaction. The standalone MD inputs stay durable in its visible generation;
-  workflow xTB/CREST input snapshots stay durable and absolute. xTB publishes its
-  canonical job-type result set and logs; standalone xTB-MD publishes only its
-  trajectory, checkpoint, success marker, and logs; CREST publishes named retained
+  Workflow xTB/CREST uses the same private workspace and transaction, and its
+  input snapshots stay durable and absolute. xTB publishes its
+  canonical job-type result set and logs; CREST publishes named retained
   ensembles and logs. Large engine work trees are omitted and removed after the
   committed publication. CREST's own `--scratch` copier remains disabled.
   A one-byte launch gate starts in the final process group first. The worker
@@ -547,7 +495,6 @@ durable mutation. The main on-disk artifacts:
 | admission slot file         | core/admission   | Active concurrency slots (machine-wide)  |
 | `job_state.json`            | orca (state)     | Per-job attempts + status                |
 | `job_report.json` / `.md`   | orca (reporting) | Human/machine completion report          |
-| `<xTB-MD job>/<visible generation>/` | xtb_md | Bound MD inputs, state/reports, and outputs |
 | job-location index (JSONL)  | core/indexing    | Where each job's outputs currently live  |
 | `workflow.json`             | flow             | Durable workflow payload                 |
 | `workflow_report.html`      | flow (report)    | Live visual workflow summary             |
@@ -629,11 +576,10 @@ constructors. Notable rules:
   executable paths, and `.exe` binaries are rejected. Configured ORCA/xTB/CREST
   executables must be absolute Linux paths to existing executable files.
 - `scheduler.max_active_simulations` is the shared admission cap.
-- `scheduler.max_active_xtb_md` is the standalone xTB-MD subcap and defaults to `1`.
 - `scheduler.admission_root` is the shared slot-coordination root.
 - Divergent engine-scoped scheduler values are rejected so every worker
   observes the same admission root and limit.
-- `runs_root` is the single runs root for standalone ORCA/xTB-MD jobs,
+- `runs_root` is the single runs root for standalone ORCA jobs,
   workflow workspaces, and internal-engine runs.
 - `default_max_retries: 0` disables ORCA retries; any positive value enables the
   calculation-type retry policy, whose per-route caps are recorded in
@@ -649,9 +595,8 @@ under `systemd/`:
 
 | Unit                                  | Role                                            |
 |---------------------------------------|-------------------------------------------------|
-| `orca_auto-engine-workers@.target`    | Starts the two independent default engine units |
+| `orca_auto-engine-workers@.target`    | Starts the default engine worker unit           |
 | `orca_auto-queue-worker@.service`     | Supervises the ORCA worker                      |
-| `orca_auto-xtb-md-worker@.service`    | Supervises the standalone xTB-MD worker         |
 | `orca_auto-workflow-worker@.service`  | Opt-in workflow + internal xTB/CREST workers    |
 | `orca_auto-bot@.service`              | Selected provider-neutral messenger bot        |
 | `orca_auto-runtime@.target`           | Starts engine workers and the bot together      |
@@ -661,8 +606,8 @@ units. If the selected provider lacks interactive bot settings, the bot-free
 engine-worker target is enabled; rerun after completing them to enable the full target. On WSL, `systemd`
 must be enabled in `/etc/wsl.conf`.
 
-The default ORCA and standalone xTB-MD workers use separate service supervisors,
-so either service can fail or restart without stopping the other. The opt-in
+The default ORCA worker runs under its own service supervisor, so it can fail or
+restart independently of the opt-in workflow supervisor. The opt-in
 workflow supervisor starts each of its workers in a separate process session and
 spaces initial starts by two seconds. A daemon worker that exits three times
 within five minutes opens its supervisor circuit instead of restarting forever.
@@ -682,7 +627,7 @@ status-aware colorized table rendering (`terminal_table.py`, `activity_*.py`,
 
 - `init` — create/update shared config
 - `scaffold <ts_search|conformer_search|scan_ts> <path>` — write workflow scaffolds
-- `run-dir <path>` — durable submission (ORCA, standalone xTB-MD, or workflow, auto-routed)
+- `run-dir <path>` — durable submission (ORCA or workflow, auto-routed)
 - `smoke` — source-checkout developer smoke suite and retained review packet
 - `queue list` / `queue cancel` / `queue list clear` — inspect/maintain the queue
 - `service status` / `service restart` — runtime status (via systemd)
@@ -703,7 +648,7 @@ ShellCheck, rendered systemd unit verification, a Python 3.11/3.12/3.13 matrix,
 and a wheel smoke that requires the packaged Python-module inventory to exactly match
 `src/orca_auto` with one root `py.typed` marker.
 
-Tests are organized as `tests/core/`, `tests/xtb_md/`, `tests/flow/`, `tests/flow/engines/`,
+Tests are organized as `tests/core/`, `tests/flow/`, `tests/flow/engines/`,
 `tests/integration/`, and top-level ORCA regression tests. The project prefers
 behavior-asserting tests (payloads, persisted files, CLI output, state
 transitions) over internal delegation tests.
@@ -715,7 +660,7 @@ transitions) over internal delegation tests.
 - **Durable submission, supervised execution** — the queue is always the source
   of truth; workers are restartable and stateless between jobs.
 - **One engine runtime, many engines** — `EngineDefinition` + the unified child
-  entrypoint keep ORCA/xTB-MD/xTB/CREST lifecycles uniform while preserving ORCA's
+  entrypoint keep ORCA/xTB/CREST lifecycles uniform while preserving ORCA's
   richer domain behavior.
 - **Shared admission cap** — a single machine-wide slot pool bounds total
   concurrency across every engine.

@@ -11,8 +11,8 @@
 
 > 이 문서는 [README.md](README.md)(영어판)의 한국어 번역본입니다.
 
-orca_auto는 Linux/WSL에서 **단독 ORCA, 단독 xTB 분자동역학(xTB-MD),
-CREST→xTB→ORCA 워크플로우**를 다루는 큐 우선(queue-first) 러너입니다. 작업을
+orca_auto는 Linux/WSL에서 **단독 ORCA, CREST→xTB→ORCA 워크플로우**를 다루는
+큐 우선(queue-first) 러너입니다. 작업을
 내구성 있게 제출하고, 감독되는 `systemd` 워커 아래에서 실행하며, 작업별 상태·복구·
 리포트를 기록합니다 — 어느 계산이 실패했고 다음에 무엇이 안전한지 항상 알 수 있습니다.
 
@@ -51,7 +51,6 @@ orca_auto queue list --engine orca
 | 기능 | 용도 | 상세 |
 |---|---|---|
 | **단독 ORCA** | 단일 ORCA 작업의 내구성 제출/복구, 전이상태 탐색 | [REFERENCE](docs/REFERENCE.ko.md) |
-| **단독 xTB-MD** | 시작 구조 하나로 GFN-xTB NVT/NVE 분자동역학 | [REFERENCE](docs/REFERENCE.ko.md) |
 | **워크플로우** | CREST→xTB→ORCA 형태 이성질체 / 반응 파이프라인 | [ARCHITECTURE](docs/ARCHITECTURE.ko.md) |
 | **메신저** | 원격 제출·조회 + 알림 (Telegram 또는 Discord) | [DISCORD_SETUP](docs/DISCORD_SETUP.ko.md) |
 

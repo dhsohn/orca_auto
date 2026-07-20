@@ -9,8 +9,8 @@
 
 **English** | [한국어](README.ko.md)
 
-orca_auto is a queue-first runner for **standalone ORCA, standalone xTB molecular
-dynamics, and CREST→xTB→ORCA workflows** on Linux/WSL. It submits work durably,
+orca_auto is a queue-first runner for **standalone ORCA and CREST→xTB→ORCA
+workflows** on Linux/WSL. It submits work durably,
 runs it under supervised `systemd` workers, and records per-job state, recovery,
 and reports — so you always know which calculation failed and what is safe to do next.
 
@@ -50,7 +50,6 @@ Config keys, path rules, and the config search order →
 | Capability | Use it for | Details |
 |---|---|---|
 | **standalone ORCA** | durable submit/recovery of single ORCA jobs, TS searches | [REFERENCE](docs/REFERENCE.md) |
-| **standalone xTB-MD** | GFN-xTB NVT/NVE molecular dynamics from one geometry | [REFERENCE](docs/REFERENCE.md) |
 | **workflow** | CREST→xTB→ORCA conformer / reaction pipelines | [ARCHITECTURE](docs/ARCHITECTURE.md) |
 | **messenger** | remote submit/inspect + notifications (Telegram or Discord) | [DISCORD_SETUP](docs/DISCORD_SETUP.md) |
 

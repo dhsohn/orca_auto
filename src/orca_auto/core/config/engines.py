@@ -351,45 +351,6 @@ def load_xtb_config(config_path: str | None = None) -> WorkflowEngineAppConfig:
     )
 
 
-def load_xtb_md_config(config_path: str | None = None) -> WorkflowEngineAppConfig:
-    path = Path(config_path or default_shared_config_path()).expanduser().resolve()
-    raw = _load_config_mapping(path)
-
-    scheduler_raw = mapping_section(raw, "scheduler")
-    workflow_raw = mapping_section(raw, "workflow")
-    workflow_paths_raw = mapping_section(workflow_raw, "paths")
-    resources_raw = mapping_section(raw, "resources")
-    messenger_raw = messenger_mapping_from_root(raw)
-    orca_runtime_raw = mapping_section(engine_config_mapping(raw, "orca"), "runtime")
-    runs_root = _required_workflow_root(raw, path)
-    xtb_executable = _validate_workflow_engine_executable(
-        as_str(workflow_paths_raw.get("xtb_executable")),
-        executable_key="xtb_executable",
-        display_name="xTB",
-    )
-    if "max_active_xtb_md" in scheduler_raw:
-        engine_admission_limit = explicit_positive_int(
-            scheduler_raw.get("max_active_xtb_md"),
-            field_name="scheduler.max_active_xtb_md",
-        )
-    else:
-        engine_admission_limit = 1
-    messenger = messenger_config_from_mapping(messenger_raw)
-
-    return WorkflowEngineAppConfig(
-        runtime=_runtime_config_from_scheduler(
-            scheduler_raw,
-            runs_root,
-            engine_admission_limit=engine_admission_limit,
-        ),
-        workflow_root="",
-        paths=WorkflowEnginePathsConfig(xtb_executable=xtb_executable),
-        resources=_resource_config(resources_raw),
-        scratch=scratch_config_from_runtime_mapping(orca_runtime_raw),
-        messenger=messenger,
-    )
-
-
 def load_crest_config(config_path: str | None = None) -> WorkflowEngineAppConfig:
     return load_workflow_engine_config(
         config_path,

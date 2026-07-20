@@ -138,16 +138,15 @@ def test_build_worker_specs_runs_each_selected_default_engine_once(
 
     specs = worker_specs._build_worker_specs(
         SimpleNamespace(
-            app=["orca", "xtb_md", "orca"],
+            app=["orca", "orca"],
             workflow_root=None,
             orca_auto_config=None,
         )
     )
 
-    assert [spec.app for spec in specs] == ["orca", "xtb_md"]
+    assert [spec.app for spec in specs] == ["orca"]
     assert [spec.argv[-2:] for spec in specs] == [
         ("--engine", "orca"),
-        ("--engine", "xtb_md"),
     ]
 
 

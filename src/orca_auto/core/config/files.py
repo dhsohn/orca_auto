@@ -26,9 +26,7 @@ MAX_JOB_MANIFEST_DEPTH = 64
 _ROOT_CONFIG_FIELDS = frozenset(
     {"messenger", "orca", "resources", "runs_root", "scheduler", "workflow"}
 )
-_SCHEDULER_CONFIG_FIELDS = frozenset(
-    {"admission_root", "max_active_simulations", "max_active_xtb_md"}
-)
+_SCHEDULER_CONFIG_FIELDS = frozenset({"admission_root", "max_active_simulations"})
 _RESOURCE_CONFIG_FIELDS = frozenset({"max_cores_per_task", "max_memory_gb_per_task"})
 _WORKFLOW_CONFIG_FIELDS = frozenset({"paths"})
 _WORKFLOW_PATH_CONFIG_FIELDS = frozenset({"crest_executable", "xtb_executable"})
@@ -315,12 +313,11 @@ def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
         allowed=_SCHEDULER_CONFIG_FIELDS,
         section="scheduler",
     )
-    for key in ("max_active_simulations", "max_active_xtb_md"):
-        if key in scheduler:
-            explicit_positive_int(
-                scheduler.get(key),
-                field_name=f"scheduler.{key}",
-            )
+    if "max_active_simulations" in scheduler:
+        explicit_positive_int(
+            scheduler.get("max_active_simulations"),
+            field_name="scheduler.max_active_simulations",
+        )
     if "admission_root" in scheduler:
         validated_absolute_linux_path_text(
             normalize_text(scheduler.get("admission_root")),

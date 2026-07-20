@@ -40,9 +40,7 @@ Supported runtime assumptions:
   Untrusted processes under the same UID are therefore outside the isolation
   boundary.
 - Executable content identity is not generally an engine-version compatibility
-  check. ORCA and workflow xTB/CREST versions remain operator-qualified. The
-  standalone xTB-MD adapter is the exception: it probes and currently accepts
-  exactly stable xTB 6.7.1 before queueing.
+  check. ORCA and workflow xTB/CREST versions remain operator-qualified.
 
 Unsupported path and process assumptions:
 
@@ -114,7 +112,6 @@ Supported configuration paths:
 - `resources.max_cores_per_task`
 - `resources.max_memory_gb_per_task`
 - `scheduler.max_active_simulations`
-- `scheduler.max_active_xtb_md`
 - `scheduler.admission_root`
 - `workflow.paths.xtb_executable`
 - `workflow.paths.crest_executable`
@@ -151,14 +148,12 @@ Supported configuration paths:
 
 Stable behavior:
 
-- `runs_root` is the single runs root: standalone ORCA/xTB-MD jobs and workflow
+- `runs_root` is the single runs root: standalone ORCA jobs and workflow
   workspaces both live under it.
 - The shared admission directory defaults to `<runs_root>/.admission` unless
   `scheduler.admission_root` is set.
-- `scheduler.max_active_simulations` caps active ORCA, standalone xTB-MD,
-  internal xTB, and internal CREST jobs together.
-- `scheduler.max_active_xtb_md` is a positive standalone xTB-MD subcap and
-  defaults to `1` when omitted.
+- `scheduler.max_active_simulations` caps active ORCA, internal xTB, and
+  internal CREST jobs together.
 - Only the configuration paths listed above are accepted. Unknown, misspelled,
   and removed keys fail configuration loading at the section where they appear.
   Explicit `scheduler`, `resources`, `workflow`, `workflow.paths`, `messenger`,
@@ -190,7 +185,7 @@ Stable behavior:
   in `scratch_provenance`; committed output from an interrupted/exception path
   is recorded in `scratch_publications`, never in immutable execution-snapshot
   provenance.
-  Standalone xTB-MD and workflow xTB/CREST use the same configured root and
+  Workflow xTB/CREST use the same configured root and
   one-workspace admission. They keep immutable input snapshots durable, execute in tmpfs, and
   transactionally publish only their canonical result/evidence allowlists;
   omitted work trees and transient entries are recorded in
@@ -278,7 +273,7 @@ Each activity item contains:
 
 - `activity_id`
 - `kind` (`job` or `workflow`)
-- `engine` (`orca`, `xtb_md`, `xtb`, `crest`, or `workflow`)
+- `engine` (`orca`, `xtb`, `crest`, or `workflow`)
 - `status`
 - `label`
 - `source`
@@ -309,13 +304,10 @@ state. Invalid or unsupported markers fail closed: they are logged and retained
 as clear/forced-successor barriers rather than replayed. Replay and fence markers
 are internal implementation state and must not be edited by clients.
 
-xTB-MD/xTB/CREST queue artifacts carry an internal immutable-generation fingerprint,
-and new xTB-MD/xTB/CREST/ORCA rows carry a submit-time execution snapshot. New
-standalone xTB-MD rows and new ORCA rows each own one visible direct child named
-`YYYYMMDD-HHMMSS-<8-hex>/`. New standalone xTB-MD rows keep the bound
-`xtb_md_job.yaml`, geometry basename, generated `md.inp`, state, reports, and
-retained outputs together in that generation. They do not create a separate private input or execution tree.
-New ORCA rows use snapshot schema 2 and do not create an ORCA
+xTB/CREST queue artifacts carry an internal immutable-generation fingerprint,
+and new xTB/CREST/ORCA rows carry a submit-time execution snapshot. New
+ORCA rows own one visible direct child named `YYYYMMDD-HHMMSS-<8-hex>/`, use
+snapshot schema 2, and do not create an ORCA
 `.orca_auto_input_snapshots/`, `.orca_auto_orca_executions/`, or nested
 `.inputs/` tree. The bound selected `.inp` and dependencies preserve their
 source basenames. Different referenced source paths with one basename always
@@ -338,12 +330,6 @@ intent, or cancel/clear affected work and resubmit it under the new build.
 In-place adoption or migration is not supported. Existing terminal hidden ORCA
 generations remain untouched as historical artifacts. Unverifiable artifacts
 fail closed instead of being attached to a newer generation.
-Before deploying the standalone xTB-MD visible-generation format, operators
-must likewise drain old-build pending/running xTB-MD rows and finish their
-incomplete terminal replay and snapshot intents, or cancel/clear and resubmit
-them under the new build. Old-format rows are not adopted in place. Existing
-terminal xTB-MD hidden input/execution history is left untouched and is not
-migrated or renamed.
 Workflow-internal xTB/CREST snapshots use a unique namespace that is exclusively
 reserved for the submission, rather than using the public task id alone as
 snapshot ownership.
@@ -366,54 +352,7 @@ Workflow-internal xTB and CREST jobs use `job_state.json` as their only terminal
 metadata artifact. They do not create `job_report.json` or `job_report.md`, and
 adapters, indexing, repair, and workflow diagnostics do not read those files.
 Report-only jobs are unsupported and must be resubmitted. This does not
-change the separate ORCA or standalone xTB-MD report contracts below.
-
-## Standalone xTB-MD Job Contract
-
-The public input marker is `xtb_md_job.yaml` in a directory under `runs_root`.
-It is strict schema version 1. Required fields are `schema_version`, `input_xyz`,
-`gfn`, `ensemble`, `temperature_k`, `time_ps`, `walltime_seconds`, `step_fs`, and
-`dump_fs`; unknown fields are rejected. NVT and NVE are the only ensembles.
-See [REFERENCE.md](REFERENCE.md) §7.2 for validated optional fields and exact
-server-owned limits.
-
-Each submission is one fresh generation and one attempt. There is no workflow,
-automatic retry, checkpoint resume, arbitrary seed, `--omd`, raw xcontrol,
-constraint, or metadynamics contract. Cancellation is terminal; service
-interruption, crash, or orphan recovery must not silently requeue the attempt.
-
-The adapter currently accepts exactly xTB 6.7.1. This is a compatibility pin,
-not an issue-free claim. Return code 0 and `xtbmdok` alone do not prove success:
-the adapter also requires fresh, finite, atom-consistent `xtb.trj` and
-`mdrestart` evidence within the submitted budgets and rejects known
-false-success markers.
-
-Standalone xTB-MD creates exactly one visible
-`YYYYMMDD-HHMMSS-<8-hex>/` generation directly under the job root for each
-accepted submission. These public artifacts live in that generation:
-
-- `job_state.json`
-- `job_report.json`
-- `job_report.md`
-
-The bound geometry keeps its source basename. It, the bound `xtb_md_job.yaml`,
-generated `md.inp`, logs, `xtb.trj`, `mdrestart`, and `xtbmdok` live beside the
-state and reports in the same generation. The job root has no latest-copy state/report writer. Terminal
-JSON binds validated outputs to path, SHA-256, byte size, and modification time.
-
-If `orca.runtime.scratch_root` is configured, the immutable generated geometry,
-`md.inp`, attempt identity, queue/state, and report ownership remain durable.
-The xTB process working directory and actual geometry/control paths are private
-tmpfs paths. After process exit, one journaled transaction publishes only
-`xtb.stdout.log`, `xtb.stderr.log`, `xtb.trj`, `mdrestart`, and `xtbmdok` to the
-same durable execution generation; terminal validation happens only after that
-commit. Total/file-count and canonical per-file size limits are checked in
-tmpfs before publication, so an oversized fast-exit log or result is retained
-unresolved instead of copied to durable storage. Non-canonical work files are
-omitted. A committed publication is reported in
-`engine_payload.scratch_provenance` even when false-success validation rejects
-completion or cancellation/worker shutdown ends the job.
-An unresolved publication remains fail-closed and is not a retry/resume contract.
+change the separate ORCA report contract below.
 
 ## ORCA Job Artifact Contract
 
@@ -856,7 +795,6 @@ Supported unit filenames:
 - `systemd/orca_auto-runtime@.target`
 - `systemd/orca_auto-engine-workers@.target`
 - `systemd/orca_auto-queue-worker@.service`
-- `systemd/orca_auto-xtb-md-worker@.service`
 - `systemd/orca_auto-workflow-worker@.service`
 - `systemd/orca_auto-bot@.service`
 
@@ -871,8 +809,7 @@ Stable behavior:
 - In worker-only mode the installer enables the engine-worker target directly.
   With complete interactive bot configuration it instead enables the full
   runtime target, which pulls in the engine-worker target.
-- The engine-worker target starts separate ORCA and standalone xTB-MD services;
-  either service can fail or restart without stopping the other. An unqualified
+- The engine-worker target starts the ORCA engine service. An unqualified
   interactive `queue worker` command remains ORCA-only.
   Configuring `runs_root` does not implicitly start workflow or its internal
   xTB/CREST workers.
@@ -880,10 +817,10 @@ Stable behavior:
   workflow supervisor and its internal xTB/CREST workers.
 - The selected Telegram/Discord bot is enabled only when its interactive config is complete;
   otherwise the install remains worker-only.
-- `service status` reports the runtime and engine-worker targets, both default
-  engine services, the opt-in workflow worker, and bot status. The opt-in worker
+- `service status` reports the runtime and engine-worker targets, the default
+  ORCA engine service, the opt-in workflow worker, and bot status. The opt-in worker
   is informational and is not required for worker-only or full-runtime health.
-- `service restart` clears both engine services' start-limit failure states and,
+- `service restart` clears the ORCA engine service's start-limit failure state and,
   for the full runtime, the bot's. It restarts the runtime target when enabled;
   otherwise it restarts the engine-worker target.
 - A clean engine-worker supervisor exit remains stopped. Each child supervisor

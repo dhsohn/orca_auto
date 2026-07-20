@@ -11,11 +11,9 @@
 - `orca_auto-runtime@.target`
   - 기본 엔진 워커와 선택된 messenger 봇을 위한 권장 결합 런타임 타깃
 - `orca_auto-engine-workers@.target`
-  - 서로 독립적인 ORCA와 standalone xTB-MD 서비스를 위한 기본 worker-only 타깃
+  - ORCA 큐 워커를 위한 기본 worker-only 타깃
 - `orca_auto-queue-worker@.service`
   - ORCA 큐 워커 템플릿
-- `orca_auto-xtb-md-worker@.service`
-  - standalone xTB-MD 큐 워커 템플릿
 - `orca_auto-workflow-worker@.service`
   - 명시적으로 시작하는 workflow 감독자와 내부 xTB/CREST 워커
 - `orca_auto-bot@.service`
@@ -23,8 +21,8 @@
 
 ## 결합 런타임 타깃
 
-부팅 시 기본 ORCA/standalone xTB-MD 큐 워커와 선택된 Telegram 또는 Discord 봇을
-함께 시작하려면 `orca_auto-runtime@.target`을 사용하세요.
+부팅 시 기본 ORCA 큐 워커와 선택된 Telegram 또는 Discord 봇을 함께 시작하려면
+`orca_auto-runtime@.target`을 사용하세요.
 
 이 타깃은 다음을 끌어들입니다:
 
@@ -106,7 +104,6 @@ target을 중지한 뒤 정확한 snapshot을 복원할 수 있습니다. `not-a
 ```bash
 orca_auto service status
 journalctl -u "orca_auto-queue-worker@$(whoami)" -f
-journalctl -u "orca_auto-xtb-md-worker@$(whoami)" -f
 journalctl -u "orca_auto-bot@$(whoami)" -f
 ```
 
@@ -120,22 +117,18 @@ sudo systemctl stop "orca_auto-runtime@$(whoami).target"
 ## 엔진 큐 워커
 
 기본 worker-only 런타임으로 `orca_auto-engine-workers@.target`을 사용하세요. 이 타깃은
-서로 독립된 두 서비스를 끌어들입니다:
+ORCA 큐 워커를 끌어들입니다:
 
 - `orca_auto-queue-worker@.service`는
   `python -m orca_auto.cli queue worker --app orca`를 실행합니다.
-- `orca_auto-xtb-md-worker@.service`는
-  `python -m orca_auto.cli queue worker --app xtb_md`를 실행합니다.
 
 공통 가정:
 
 - 저장소 경로는 `/home/<user>/orca_auto`
 - 설정 경로는 `/home/<user>/orca_auto/config/orca_auto.yaml`
 - Python 경로는 `/home/<user>/orca_auto/.venv/bin/python`
-- 기본 타깃은 ORCA 워커 하나와 standalone xTB-MD 워커 하나만 실행합니다. 각 서비스는
-  독립된 systemd 재시작 회로를 가지므로 xTB-MD 서비스 실패가 ORCA 서비스를 중단하거나
-  그 반대가 되는 일이 없습니다.
-- 두 워커 모두 공유 admission 라이프사이클을 사용하면서 각자의 재시도·리포트 동작을
+- 기본 타깃은 자체 systemd 재시작 회로를 가진 ORCA 워커 하나만 실행합니다.
+- 이 워커는 공유 admission 라이프사이클을 사용하면서 자체 재시도·리포트 동작을
   유지합니다.
 - `runs_root`가 설정돼 있어도 workflow, 내부 xTB, CREST 워커를 암묵적으로 시작하지
   않습니다.
@@ -164,7 +157,7 @@ xTB/CREST 엔진 워커로 확장됩니다. 이 unit은 설치되지만 기본 r
 - `orca_auto service restart`는 운영자가 요청한 재시작 전에 제한된 실패 상태를
   초기화합니다.
 
-기본 ORCA와 standalone xTB-MD 엔진 워커 설치:
+기본 ORCA 엔진 워커 설치:
 
 ```bash
 cd <repo_root>
@@ -180,7 +173,6 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```bash
 orca_auto service status
 journalctl -u "orca_auto-queue-worker@$(whoami)" -f
-journalctl -u "orca_auto-xtb-md-worker@$(whoami)" -f
 ```
 
 기본 엔진 워커 유지보수:
@@ -190,5 +182,5 @@ orca_auto service restart
 sudo systemctl stop "orca_auto-engine-workers@$(whoami).target"
 ```
 
-`orca_auto.yaml`의 `scheduler.max_active_simulations`는 여전히 ORCA, standalone xTB-MD,
-내부 xTB 단계, 내부 CREST 단계 전반에 걸친 활성 시뮬레이션 결합 수를 제한합니다.
+`orca_auto.yaml`의 `scheduler.max_active_simulations`는 여전히 ORCA, 내부 xTB 단계,
+내부 CREST 단계 전반에 걸친 활성 시뮬레이션 결합 수를 제한합니다.
