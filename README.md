@@ -53,10 +53,6 @@ Config keys, path rules, and the config search order →
 | **workflow** | CREST→xTB→ORCA conformer / reaction pipelines | [ARCHITECTURE](docs/ARCHITECTURE.md) |
 | **messenger** | remote submit/inspect + notifications (Telegram or Discord) | [DISCORD_SETUP](docs/DISCORD_SETUP.md) |
 
-Each capability's exact contracts — resource ceilings, generation-directory
-layout, scratch semantics, and engine version pins — live in
-[docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md). The README stays short on purpose.
-
 ## Services, testing, and full docs
 
 - Supervised runtime (`systemd`, WSL/Linux) → [systemd/README.md](systemd/README.md)
