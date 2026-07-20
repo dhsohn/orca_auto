@@ -300,6 +300,33 @@ Use small, non-confidential systems. Prefer sanitized or public fixtures, and do
 not commit proprietary structures or large raw outputs unless a separate issue
 justifies them.
 
+## Recorded real-engine runs
+
+These are real-engine runs performed on the maintainer workstation (Linux/WSL2).
+They are a maintenance record for the runtime and recovery contracts, not a
+benchmark claim or evidence of chemical validity, and they use small
+non-confidential systems.
+
+ORCA 6.1.1:
+
+- H2 single point followed by a cooldown Freq/CP-SCF pass, 1 core: both stages
+  passed with clean terminal states and no leftover queue, process, or admission
+  rows afterward.
+- A small reaction-intermediate single point:
+  - direct (worker-off) 1 core `26m46s`, 2 core `14m34s`;
+  - the same input under the supervised worker at 2 cores completed in `14m59s`
+    (`+2.8%` over the direct run) with energy and SCF values identical to the
+    direct run and zero restart, retry, or duplicate events;
+  - the same input with RAM scratch at 4 cores completed in `9m19s` (`1.675x`
+    over the 2-core run), with the total energy within `8.1e-9` Eh.
+- Idle five-worker supervisor with no calculation queued: steady CPU near `1.55%`
+  of one core and about `160-165 MB` resident, with no fan spin-up.
+
+At the time of writing, real-engine re-validation is paused: the workstation is
+held for a hardware power/thermal issue that is under separate investigation. The
+public CI and fake-engine suites do not depend on that hardware and continue to
+run.
+
 ## Standalone xTB-MD acceptance
 
 Fake-engine checks must cover strict manifest admission, immutable submission
