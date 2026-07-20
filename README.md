@@ -57,16 +57,6 @@ Each capability's exact contracts — resource ceilings, generation-directory
 layout, scratch semantics, and engine version pins — live in
 [docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md). The README stays short on purpose.
 
-## Why not a shell loop?
-
-The durable path exists to prevent specific, real failures:
-
-- an **uncertain commit** is preserved for reconciliation, never guessed as success or failure
-- an **interrupted / orphaned generation fails terminally** instead of silently re-queuing or double-running
-- a **basename collision** in submitted inputs is rejected before it runs the wrong file
-- xTB **false-success markers** (`emergency exit`, `taking it as converged`) fail closed — exit 0 alone is never trusted
-- everything lands under one `runs_root` with a visible per-generation record of state and reports
-
 ## Services, testing, and full docs
 
 - Supervised runtime (`systemd`, WSL/Linux) → [systemd/README.md](systemd/README.md)
