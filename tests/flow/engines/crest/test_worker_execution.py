@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import pytest
 
-from orca_auto.core.artifacts import JOB_REPORT_JSON_FILE, JOB_REPORT_MD_FILE
+from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE, RUN_REPORT_MD_FILE
 from orca_auto.flow.engines.crest import execution as worker_execution
 from orca_auto.flow.engines.crest import terminal as crest_terminal
 from orca_auto.flow.engines.crest.runner import CrestRunResult
@@ -369,8 +369,8 @@ def test_write_execution_artifacts_writes_retained_paths_to_state_only(
     assert _job(state_payload)["queue_id"] == entry.queue_id
     assert _engine_payload(state_payload)["molecule_key"] == "mol-42"
     assert _engine_payload(state_payload)["command"] == list(result.command)
-    assert not (job_dir / JOB_REPORT_JSON_FILE).exists()
-    assert not (job_dir / JOB_REPORT_MD_FILE).exists()
+    assert not (job_dir / RUN_REPORT_JSON_FILE).exists()
+    assert not (job_dir / RUN_REPORT_MD_FILE).exists()
 
 
 def test_write_running_state_returns_early_without_job_dir(

@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 from orca_auto.core.artifacts import (
-    JOB_REPORT_JSON_FILE,
-    JOB_REPORT_MD_FILE,
-    JOB_STATE_FILE,
+    RUN_REPORT_JSON_FILE,
+    RUN_REPORT_MD_FILE,
+    RUN_STATE_FILE,
 )
 from orca_auto.core.state import engine as _engine_state
 
-STATE_FILE_NAME = JOB_STATE_FILE
-REPORT_JSON_FILE_NAME = JOB_REPORT_JSON_FILE
-REPORT_MD_FILE_NAME = JOB_REPORT_MD_FILE
+STATE_FILE_NAME = RUN_STATE_FILE
+REPORT_JSON_FILE_NAME = RUN_REPORT_JSON_FILE
+REPORT_MD_FILE_NAME = RUN_REPORT_MD_FILE
 
 _STATE_ACCESS = _engine_state.EngineStateAccess(
     files=_engine_state.EngineStateFiles(

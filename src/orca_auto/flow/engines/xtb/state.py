@@ -4,13 +4,13 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.artifacts import (
-    JOB_STATE_FILE,
+    RUN_STATE_FILE,
     XTB_JOB_MANIFEST_FILE,
 )
 from orca_auto.core.state import engine as _engine_state
 from orca_auto.core.utils import now_utc_iso
 
-STATE_FILE_NAME = JOB_STATE_FILE
+STATE_FILE_NAME = RUN_STATE_FILE
 RECOVERY_PENDING_REASONS = _engine_state.RECOVERY_PENDING_REASONS
 _STATE_ACCESS = _engine_state.EngineStateOnlyAccess(state_file_name=STATE_FILE_NAME)
 _RECOVERY_PENDING = _engine_state.EngineRecoveryPendingWriter(
