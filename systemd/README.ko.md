@@ -9,32 +9,29 @@
 ## 포함된 유닛
 
 - `orca_auto-runtime@.target`
-  - 기본 엔진 워커와 선택된 messenger 봇을 위한 권장 결합 런타임 타깃
+  - 기본 엔진 워커를 감독하는 권장 런타임 타깃
 - `orca_auto-engine-workers@.target`
   - ORCA 큐 워커를 위한 기본 worker-only 타깃
 - `orca_auto-queue-worker@.service`
   - ORCA 큐 워커 템플릿
 - `orca_auto-workflow-worker@.service`
   - 명시적으로 시작하는 workflow 감독자와 내부 xTB/CREST 워커
-- `orca_auto-bot@.service`
-  - provider-neutral Telegram/Discord 봇 템플릿
 
-## 결합 런타임 타깃
+## 런타임 타깃
 
-부팅 시 기본 ORCA 큐 워커와 선택된 Telegram 또는 Discord 봇을 함께 시작하려면
-`orca_auto-runtime@.target`을 사용하세요.
+권장 런타임 타깃으로 `orca_auto-runtime@.target`을 사용하세요. 이 타깃은 부팅 시
+기본 ORCA 큐 워커를 감독합니다. 아웃바운드 알림은 엔진 워커가 직접 fire-and-forget
+방식으로 전송하므로 별도의 bot 서비스가 없습니다.
 
 이 타깃은 다음을 끌어들입니다:
 
 - `orca_auto-engine-workers@.target`
-- `orca_auto-bot@.service`
 
-결합 런타임 타깃을 활성화하기 전에:
+런타임 타깃을 활성화하기 전에:
 
-- `orca_auto.yaml`에서 선택된 provider의 인터랙티브 credential을 완성하세요.
 - `chmod 600 config/orca_auto.yaml`로 로컬 설정 권한을 제한하세요.
 
-결합 런타임 타깃 설치:
+런타임 타깃 설치:
 
 ```bash
 cd <repo_root>
@@ -42,10 +39,8 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
 설치 프로그램은 저장소 경로로 유닛 파일을 렌더링해 `/etc/systemd/system`에 쓰고,
-`systemctl daemon-reload`를 실행한 뒤, 현재 설정에 맞는 런타임을 활성화/시작합니다.
-Telegram은 token+chat ID, Discord는 별도 bot token+명령 수신 채널+operator 사용자 ID가 필요합니다.
-bot 설정이 완전하지 않으면 설치 프로그램이 bot 없는 engine-worker 타깃을 선택합니다.
-bot 설정을 완성한 뒤 같은 명령을 다시 실행하면 전체 런타임 타깃이 활성화됩니다.
+`systemctl daemon-reload`를 실행한 뒤, 런타임 타깃(또는 `--worker-only`를 쓰면
+engine-worker 타깃)을 활성화/시작합니다.
 
 checkout을 업데이트했거나 이 디렉터리의 유닛 템플릿을 수정했다면, 같은 `--user`와
 `--repo` 값으로 설치 프로그램을 다시 실행하세요. 설치된 유닛은
@@ -99,15 +94,14 @@ target을 중지한 뒤 정확한 snapshot을 복원할 수 있습니다. `not-a
 없거나 `restart_pending` 단계가 아니면 실패합니다. 이 검사를 우회하려고 manifest를 직접
 편집하거나 삭제하지 마세요.
 
-결합 런타임 타깃 모니터링:
+런타임 타깃 모니터링:
 
 ```bash
 orca_auto service status
 journalctl -u "orca_auto-queue-worker@$(whoami)" -f
-journalctl -u "orca_auto-bot@$(whoami)" -f
 ```
 
-결합 런타임 타깃 유지보수:
+런타임 타깃 유지보수:
 
 ```bash
 orca_auto service restart
@@ -150,10 +144,8 @@ xTB/CREST 엔진 워커로 확장됩니다. 이 unit은 설치되지만 기본 r
 - 한 워커가 5분 안에 세 번 종료되면 자식 무한 재시작 대신 해당 감독자를
   중단합니다.
 - 엔진 워커의 유휴 전체 상태 조정은 짧은 큐 poll과 별개로 1분에 최대 한 번 실행합니다.
-- queue-worker와 workflow-worker unit은 `Restart=on-failure`를 사용합니다. bot은
-  provider가 예외 없이 뜻밖에 반환해도 비활성 상태로 남지 않도록
-  `Restart=always`를 사용합니다. 세 unit 모두 30초 간격으로 재시작하며 5분 동안
-  unit 시작을 최대 세 번만 허용합니다.
+- queue-worker와 workflow-worker unit은 `Restart=on-failure`를 사용하며, 두 unit
+  모두 30초 간격으로 재시작하고 5분 동안 unit 시작을 최대 세 번만 허용합니다.
 - `orca_auto service restart`는 운영자가 요청한 재시작 전에 제한된 실패 상태를
   초기화합니다.
 
@@ -164,9 +156,8 @@ cd <repo_root>
 orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
-인터랙티브 봇을 systemd로 관리하고 싶지 않거나 선택된 provider 설정이 완전하지
-않을 때는 worker-only 타깃을 사용하세요. bot 설정이 완전하지 않으면 설치
-프로그램이 자동으로 그 모드를 선택합니다.
+런타임 타깃 대신 `orca_auto-engine-workers@.target`을 직접 활성화하려면
+`--worker-only`와 함께 worker-only 타깃을 사용하세요.
 
 기본 엔진 워커 모니터링:
 

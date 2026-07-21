@@ -25,7 +25,7 @@ from orca_auto.core.admission import (
     reserve_slot,
     set_slot_engine_process,
 )
-from orca_auto.core.config import DiscordConfig, MessengerConfig, TelegramConfig
+from orca_auto.core.config import DiscordConfig, MessengerConfig
 from orca_auto.core.queue.lifecycle import TerminalProcessQueueMarkResult
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
@@ -857,7 +857,9 @@ def test_terminal_replay_retries_failed_notification_until_marker_is_durable(
     entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
     cfg = AppConfig(
         runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)),
-        messenger=MessengerConfig(telegram=TelegramConfig(bot_token="token", chat_id="chat")),
+        messenger=MessengerConfig(
+            discord=DiscordConfig(bot_token="token", default_channel_id="123")
+        ),
     )
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     state = {
@@ -2955,7 +2957,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
     ) -> None:
         cfg = AppConfig(
             runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
-            messenger=MessengerConfig(telegram=TelegramConfig(bot_token="token", chat_id="chat")),
+            messenger=MessengerConfig(
+                discord=DiscordConfig(bot_token="token", default_channel_id="123")
+            ),
         )
         worker = QueueWorker(cfg, str(self.root / "config.yaml"), max_concurrent=2)
         rxn = self.root / "mol_terminal_notify"
@@ -3000,7 +3004,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
     ) -> None:
         cfg = AppConfig(
             runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
-            messenger=MessengerConfig(telegram=TelegramConfig(bot_token="token", chat_id="chat")),
+            messenger=MessengerConfig(
+                discord=DiscordConfig(bot_token="token", default_channel_id="123")
+            ),
         )
         rxn = self.root / "mol_terminal_already_marked"
         rxn.mkdir()
@@ -3022,7 +3028,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
     ) -> None:
         cfg = AppConfig(
             runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
-            messenger=MessengerConfig(telegram=TelegramConfig(bot_token="token", chat_id="chat")),
+            messenger=MessengerConfig(
+                discord=DiscordConfig(bot_token="token", default_channel_id="123")
+            ),
         )
         rxn = self.root / "mol_terminal_stale_generation"
         rxn.mkdir()
@@ -3113,7 +3121,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             task_id=entry.task_id,
         )
         self.worker.cfg.messenger = MessengerConfig(
-            telegram=TelegramConfig(bot_token="token", chat_id="chat")
+            discord=DiscordConfig(bot_token="token", default_channel_id="123")
         )
 
         with patch.object(

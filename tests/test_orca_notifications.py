@@ -1,29 +1,24 @@
 """ORCA lifecycle notification tests.
 
-The Telegram renders are asserted exactly against the current golden HTML.
-``notify_*`` delivery is exercised through a fake :class:`MessageChannel`.
+Message-builder metadata (title/severity) and ``notify_*`` delivery are
+exercised through a fake :class:`MessageChannel`, plus a Discord end-to-end.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Literal
 
-from orca_auto.core.messaging import Message, SendResult, render_telegram
+from orca_auto.core.messaging import Message, SendResult
 from orca_auto.orca.dft.monitor import MonitorResult, ScanReport
 from orca_auto.orca.notifications import (
     _status_icon,
     has_monitor_updates,
-    monitor_message,
     notify_monitor_report,
     notify_queue_enqueued_event,
     notify_retry_event,
     notify_run_finished_event,
     notify_run_started_event,
-    queue_enqueued_message,
-    retry_message,
     run_finished_message,
-    run_started_message,
 )
 from orca_auto.orca.types import (
     QueueEnqueuedNotification,
@@ -120,92 +115,6 @@ def _sample_report() -> ScanReport:
     )
 
 
-# --------------------------------------------------------------------------- #
-# Current golden Telegram renders
-# --------------------------------------------------------------------------- #
-_GOLDEN_STARTED = (
-    "orca_auto\n"
-    "<b>ORCA started</b>\n"
-    "<b>Job</b>: rxn&lt;demo&gt;\n"
-    "<b>Attempt</b>: #1 (<code>running</code>)\n"
-    "<b>Input</b>: <code>rxn.inp</code>\n"
-    "<b>Max retries</b>: 2\n"
-    "<b>Directory</b>: <code>/tmp/rxn&lt;demo&gt;</code>"
-)
-
-_GOLDEN_RETRY = (
-    "orca_auto\n"
-    "<b>ORCA retry</b>\n"
-    "<b>Job</b>: rxn&lt;demo&gt;\n"
-    "<b>Attempt</b>: 1 failed; retry 1/2 is starting\n"
-    "<b>Reason</b>: <code>error_scf</code> (scf_not_converged)\n"
-    "<b>Failed input</b>: <code>rxn.inp</code>\n"
-    "<b>Restart input</b>: <code>rxn.retry01.inp</code>\n"
-    "<b>Applied patches</b>: TightSCF + SlowConv, geometry restart from rxn.xyz\n"
-    "<b>Directory</b>: <code>/tmp/rxn&lt;demo&gt;</code>"
-)
-
-_GOLDEN_FINISHED = (
-    "orca_auto\n"
-    "<b>ORCA completed</b>\n"
-    "<b>Job</b>: rxn&lt;demo&gt;\n"
-    "<b>Result</b>: <code>completed</code>\n"
-    "<b>Attempts</b>: 2\n"
-    "<b>Reason</b>: <code>normal_termination</code>\n"
-    "<b>Analyzer</b>: <code>completed</code>\n"
-    "<b>Output</b>: <code>rxn.retry01.out</code>\n"
-    "<b>Directory</b>: <code>/tmp/rxn&lt;demo&gt;</code>"
-)
-
-_GOLDEN_QUEUED = (
-    "orca_auto\n"
-    "<b>ORCA queued</b>\n"
-    "<b>Job</b>: rxn&lt;demo&gt;\n"
-    "<b>Queue ID</b>: <code>q&lt;1&gt;</code>\n"
-    "<b>Priority</b>: 5\n"
-    "<b>Mode</b>: force re-enqueue\n"
-    "<b>Directory</b>: <code>/tmp/rxn&lt;demo&gt;</code>"
-)
-
-_GOLDEN_MONITOR = (
-    "orca_auto\n"
-    "⚙️ <b>scan-notify</b>  <code>2026-03-10 12:00 UTC</code>\n\n" + "─" * 28 + "\n\n"
-    "\U0001f50d <b>Scope</b>\n"
-    "Filesystem discovery only. Use run-dir alerts for immediate lifecycle events.\n\n"
-    "\U0001f9ea <b>New Calculations Detected</b>  (2)\n\n"
-    "✅ <b>CH4</b>  [OPT]\n"
-    "   \U0001f9ec B3LYP/def2-SVP\n"
-    "   ⚡ E = -40.5 Eh\n"
-    "   \U0001f4c2 <code>orca_outputs/opt/CH4/calc.out</code>\n\n"
-    "❌ <b>C6H6</b>  [OPT+FREQ]\n"
-    "   \U0001f9ec PBE0/def2-TZVP\n"
-    "   ⚡ E = -232.1 Eh\n"
-    "   \U0001f4c2 <code>orca_outputs/opt/C6H6/calc.out</code>\n"
-    "   ⚠️ NOT CONVERGED"
-)
-
-
-def test_run_started_render_matches_golden() -> None:
-    assert render_telegram(run_started_message(_started_event())) == _GOLDEN_STARTED
-
-
-def test_run_started_resumed_render() -> None:
-    event = _started_event()
-    event["resumed"] = True
-    event["status"] = ""
-    rendered = render_telegram(run_started_message(event))
-    assert "<b>ORCA resumed</b>" in rendered
-    assert "<b>Mode</b>: resumed run" in rendered
-
-
-def test_retry_render_matches_golden() -> None:
-    assert render_telegram(retry_message(_retry_event())) == _GOLDEN_RETRY
-
-
-def test_run_finished_render_matches_golden() -> None:
-    assert render_telegram(run_finished_message(_finished_event())) == _GOLDEN_FINISHED
-
-
 def test_run_finished_cancelled_title_and_severity() -> None:
     event = _finished_event()
     event["status"] = "cancelled"
@@ -213,18 +122,6 @@ def test_run_finished_cancelled_title_and_severity() -> None:
     message = run_finished_message(event)
     assert message.title == "ORCA cancelled"
     assert message.severity == "warning"
-
-
-def test_queue_enqueued_render_matches_golden() -> None:
-    assert render_telegram(queue_enqueued_message(_queued_event())) == _GOLDEN_QUEUED
-
-
-def test_monitor_render_matches_golden() -> None:
-    report = _sample_report()
-    rendered = render_telegram(
-        monitor_message(report, now=datetime(2026, 3, 10, 12, 0, tzinfo=UTC))
-    )
-    assert rendered == _GOLDEN_MONITOR
 
 
 # --------------------------------------------------------------------------- #

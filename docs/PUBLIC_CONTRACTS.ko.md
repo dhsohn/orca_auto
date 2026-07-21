@@ -140,32 +140,12 @@ Core입니다. 그 외 키와 검색 순서는 Experimental입니다.
 - `scheduler.admission_root`
 - `workflow.paths.xtb_executable`
 - `workflow.paths.crest_executable`
-- `messenger.provider` (`telegram` 또는 `discord`)
-- `messenger.telegram.bot_token`
-- `messenger.telegram.chat_id`
-- `messenger.telegram.allowed_user_ids`
-- `messenger.telegram.timeout_seconds`
-- `messenger.telegram.max_attempts`
-- `messenger.telegram.retry_backoff_seconds`
+- `messenger.provider` (`discord`)
 - `messenger.discord.bot_token`
-- `messenger.discord.channel_ids`
 - `messenger.discord.default_channel_id`
-- `messenger.discord.allowed_user_ids`
 - `messenger.discord.timeout_seconds`
 - `messenger.discord.max_attempts`
 - `messenger.discord.retry_backoff_seconds`
-- `messenger.discord.uploads.enabled`
-- `messenger.discord.uploads.max_archive_bytes`
-- `messenger.discord.uploads.max_total_uncompressed_bytes`
-- `messenger.discord.uploads.max_file_bytes`
-- `messenger.discord.uploads.max_entries`
-- `messenger.discord.uploads.max_staged_bytes`
-- `messenger.discord.uploads.max_staged_uploads`
-- `messenger.discord.uploads.max_pending_per_actor`
-- `messenger.discord.uploads.max_concurrent_downloads`
-- `messenger.discord.uploads.staging_ttl_seconds`
-- `messenger.discord.uploads.committed_retention_seconds`
-- `messenger.discord.uploads.allowed_extensions`
 - `orca.runtime.default_max_retries`
 - `orca.runtime.scratch_root`
 - `orca.runtime.scratch_min_free_gb`
@@ -214,32 +194,23 @@ Core입니다. 그 외 키와 검색 순서는 Experimental입니다.
   queue, state, process ownership은
   계속 durable합니다. host 또는 WSL 종료 전에
   게시되지 않은 scratch output은 recovery 계약이 아닙니다.
-- 발신 Telegram 전송에는 `messenger.provider: telegram`과 비어 있지 않은
-  `messenger.telegram.bot_token`, `messenger.telegram.chat_id` 값이 필요합니다.
-- 정식 Discord 전송에는 `messenger.discord.bot_token`과 `default_channel_id`를
-  사용하고, `channel_ids`가 명령 수신 채널을 허용합니다. 인터랙티브 gateway에는
-  비어 있지 않은 `allowed_user_ids` operator allowlist도 필요합니다.
-- 명시한 bot token은 문자열이어야 합니다. Telegram `chat_id`는 문자열 또는 정수,
-  Discord channel ID와 양쪽 operator ID allowlist는 문서화된 양의 ID만 허용합니다.
-  명시한 null·boolean·scalar 필드의 collection·scalar allowlist·잘못된 list entry는
-  거부합니다. 빈 token/destination 문자열과 빈 allowlist는 해당 기능을 의도적으로
-  비활성화하는 기존 방법으로 계속 지원합니다.
-- 두 adapter 모두 유한한 전송 timeout을 0.1~120초, 정수 총 시도 횟수를 1~10회,
+- 발신 Discord 전송에는 `messenger.provider: discord`와 비어 있지 않은
+  `messenger.discord.bot_token`, `messenger.discord.default_channel_id` 값이
+  필요합니다. 알림은 단방향이며 수신 명령 표면은 없습니다.
+- 명시한 bot token은 문자열, `default_channel_id`는 문서화된 양의 Discord ID여야
+  합니다. 이 scalar 필드의 명시한 null·boolean·collection은 거부합니다. 빈
+  token/destination 문자열은 발신 전송을 의도적으로 비활성화하는 기존 방법으로 계속
+  지원합니다.
+- Discord adapter는 유한한 전송 timeout을 0.1~120초, 정수 총 시도 횟수를 1~10회,
   유한한 retry backoff를 0~120초로 제한합니다. 생략하면 문서화된 기본값을 사용하고
   범위를 벗어난 유한값은 clamp하지만, 명시한 boolean·숫자가 아닌 값·분수 시도 횟수·
   NaN·무한대는 기본값으로 바꾸지 않고 거부합니다.
-- 명시한 Discord upload policy 값도 fail-closed입니다. `enabled`는 인식되는 boolean,
-  모든 크기·개수·보존 필드는 양의 정수, `allowed_extensions`는 비어 있지 않은 문자열의
-  list여야 합니다. 생략한 필드는 문서화된 기본값을 사용하지만, 잘못된 명시값이 upload를
-  조용히 비활성화하거나 상한을 완화하지 않습니다. `max_staged_bytes`는
-  `max_archive_bytes` 이상이어야 하고 `max_concurrent_downloads`는 `16` 이하여야 합니다.
 
 마이그레이션 참고:
 
-- 기존 최상위 `telegram:` 블록은 더 이상 읽지 않습니다. 해당 블록이 있으면
-  설정 로딩이 명확한 오류로 실패합니다. 블록을 `messenger.telegram`으로
-  옮기세요. Discord에는 기존 별칭이 없으므로 중첩된 `messenger.discord` bot
-  필드를 사용합니다.
+- Telegram 메시징은 더 이상 지원하지 않습니다. 기존 최상위 `telegram:` 블록이나
+  `messenger.telegram` 블록이 있으면 설정 로딩이 명확한 오류로 실패하므로, 제거하고
+  중첩된 `messenger.discord` bot 필드를 사용하세요.
 - 제거된 최상위 `behavior`, `runtime`, `paths` section, `workflow.root`, 엔진별
   `scheduler`/`resources`/`messenger` 블록은 호환 별칭이 아닙니다. 위의 지원되는
   최상위 공유 section과 `orca.runtime`/`orca.paths`를 사용하세요.
@@ -583,8 +554,7 @@ ORCA analyzer 상태:
 문자가 포함된 route 또는 label은 admission에서 거부합니다. fragment label은 최대 80자입니다.
 활성 interaction-energy 블록은 fragment 2–8개를 요구하고 각 multiplicity는 `[1, 100]`
 정수여야 하며, `sp_route_line`은 순수 single-point 계산만 기술해야 합니다. fragment 인덱스는
-모든 입력 원자를 gap 없이 정적으로 완전 분할해야 합니다. 원격 workflow 업로드에서는 서버가
-소유하는 `interaction_energy.priority`를 설정할 수 없습니다.
+모든 입력 원자를 gap 없이 정적으로 완전 분할해야 합니다.
 예전 xTB `namespace` 옵션은 정규 artifact 계약에 포함되지 않습니다. 없거나 빈 호환 필드는
 무해하지만 비어 있지 않은 값은 거부되므로 다시 제출하기 전에 제거해야 합니다.
 
@@ -600,17 +570,13 @@ downstream geometry를 중복시킬 수 없습니다. 뒤쪽의 유효한 retain
 워크플로우 artifact가 아닙니다.
 
 로컬 geometry admission 상한은 10,000원자입니다. xTB Hessian 작업과 ORCA
-frequency/Hessian 생성 입력에는 더 엄격한 1,000원자 상한을 적용합니다. 원격 Discord
-workflow 및 ORCA 업로드 상한은 200원자입니다.
+frequency/Hessian 생성 입력에는 더 엄격한 1,000원자 상한을 적용합니다.
 
 신뢰된 로컬 CREST 작업에서 명시적 `mdlen`의 기본 aggregate `max_md_steps` budget은
 10,000,000입니다. `mdlen`을 생략하면 CREST 자동 길이의 최악 조건을 14,000,000-step 기본
 budget으로 admission합니다. 따라서 표준 non-quick trajectory 배수에서는 GFN-FF와
 `gfn2//gfnff`에 명시적으로 제한한 `mdlen` 또는 high-cost 승인을 동반한 더 큰 명시적 step
 budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-step 상한도 적용합니다.
-원격 workflow ingress는 서버 소유
-`mdlen: 5.0` ps를 주입하고 50,000,000 atom-step을 넘는 작업을 거부하며, 업로드 manifest는
-CREST runtime/cost 제어를 재정의할 수 없습니다.
 
 워크플로우 런타임 산출물:
 
@@ -691,8 +657,8 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 - 인접 owner marker는 생성 CSV를 hash한 workflow identity에 연결하고 current/pending content
   digest를 기록합니다. digest-bound 소유권 로직은 create, replace, delete 도중 중단돼도 안전하게
   복구합니다. marker가 없거나 foreign/malformed이거나 digest가 다르면 덮어쓰기·삭제 권한이
-  없으며, 사용자가 수정한 내용은 보존하고 소유권을 해제합니다. 업로드 archive는 두 생성
-  파일을 포함할 수 없습니다. 소유권 충돌은 last-good base SI를 교체하기 전에 검사합니다.
+  없으며, 사용자가 수정한 내용은 보존하고 소유권을 해제합니다. 소유권 충돌은 last-good
+  base SI를 교체하기 전에 검사합니다.
 - restart는 interaction SP route, fragment별 전자상태, interaction별 자원, generation
   fingerprint를 보존합니다. fan-out 뒤에는 interaction 설정과 RMSD grouping 설정을 바꿀 수
   없고, interaction fan-out이 남아 있는 동안 원래 primary stage를 다시 여는 것도 거부합니다.
@@ -761,7 +727,6 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 - `systemd/orca_auto-engine-workers@.target`
 - `systemd/orca_auto-queue-worker@.service`
 - `systemd/orca_auto-workflow-worker@.service`
-- `systemd/orca_auto-bot@.service`
 
 지원되는 운영자 명령:
 
@@ -771,22 +736,18 @@ CREST runtime/cost 제어를 재정의할 수 없습니다.
 
 동작:
 
-- worker-only 모드에서는 installer가 engine-worker target을 직접 활성화합니다. 인터랙티브
-  bot 설정이 완전하면 대신 전체 runtime target을 활성화하고, 그 target이 engine-worker
-  target을 끌어들입니다.
+- installer는 engine-worker target을 활성화합니다. runtime target은 engine-worker
+  target까지 끌어들이는 superset입니다.
 - engine-worker target은 ORCA 엔진 서비스를 시작합니다. 인자 없는 대화형 `queue worker` 명령은
   ORCA-only 동작을 유지합니다. `runs_root`
   설정만으로 workflow나 그 내부 xTB/CREST 워커를 암묵적으로 시작하지 않습니다.
 - workflow unit은 설치만 되고 opt-in입니다. 명시적으로 시작하면 workflow 감독자와 내부
   xTB/CREST 워커를 실행합니다.
-- 선택된 Telegram/Discord 봇은 인터랙티브 설정이 완성되었을 때만 활성화되며,
-  그렇지 않으면 worker-only로 남습니다.
 - `service status`는 runtime과 engine-worker target, 기본 ORCA 엔진 서비스, opt-in workflow
-  worker, bot 상태를 보고합니다. opt-in worker는 정보용이며 worker-only 또는 full-runtime
+  worker를 보고합니다. opt-in worker는 정보용이며 worker-only 또는 full-runtime
   health의 필수 조건이 아닙니다.
-- `service restart`는 ORCA 엔진 서비스의 start-limit 실패 상태와, full runtime에서는 bot의
-  실패 상태도 지웁니다. runtime target이 활성화되어 있으면 그것을 재시작하고, 아니면
-  engine-worker target을 재시작합니다.
+- `service restart`는 ORCA 엔진 서비스의 start-limit 실패 상태를 지웁니다. runtime target이
+  활성화되어 있으면 그것을 재시작하고, 아니면 engine-worker target을 재시작합니다.
 - 엔진 워커 감독자가 정상 종료되면 중단 상태를 유지합니다. 각 자식 감독자는 제한된 재시작
   circuit을 열고, systemd는 제한된 지연 재시작을 적용합니다.
 

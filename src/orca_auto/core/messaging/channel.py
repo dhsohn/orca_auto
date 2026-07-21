@@ -32,9 +32,9 @@ def send_ok(result: SendResult, *, skipped_ok: bool = False) -> bool:
 class MessageChannel(Protocol):
     """A destination that renders and delivers :class:`Message` notifications.
 
-    Implementations own their own native rendering and transport (Telegram HTML
-    over the Bot API, Discord embeds over the Bot API, …). Callers build a
-    provider-neutral :class:`Message` and never see the wire format.
+    Implementations own their own native rendering and transport (Discord embeds
+    over the Bot API). Callers build a provider-neutral :class:`Message` and
+    never see the wire format.
     """
 
     @property

@@ -1,2 +1,2 @@
-"""Event-level notification logic; the Telegram delivery stack lives in
+"""Event-level notification logic; the messenger delivery stack lives in
 ``orca_auto.core.messaging``."""

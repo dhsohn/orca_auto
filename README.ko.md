@@ -52,7 +52,7 @@ orca_auto queue list --engine orca
 |---|---|---|
 | **단독 ORCA** | 단일 ORCA 작업의 내구성 제출/복구, 전이상태 탐색 | [REFERENCE](docs/REFERENCE.ko.md) |
 | **워크플로우** | CREST→xTB→ORCA 형태 이성질체 / 반응 파이프라인 | [ARCHITECTURE](docs/ARCHITECTURE.ko.md) |
-| **메신저** | 원격 제출·조회 + 알림 (Telegram 또는 Discord) | [DISCORD_SETUP](docs/DISCORD_SETUP.ko.md) |
+| **메신저** | 단방향 Discord 작업/워크플로우 알림 | [DISCORD_SETUP](docs/DISCORD_SETUP.ko.md) |
 
 각 기능의 정확한 계약 — 자원 상한, generation 디렉터리 레이아웃, scratch 의미론, 엔진
 버전 핀 — 은 [docs/PUBLIC_CONTRACTS.ko.md](docs/PUBLIC_CONTRACTS.ko.md)에 있습니다.

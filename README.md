@@ -51,7 +51,7 @@ Config keys, path rules, and the config search order →
 |---|---|---|
 | **standalone ORCA** | durable submit/recovery of single ORCA jobs, TS searches | [REFERENCE](docs/REFERENCE.md) |
 | **workflow** | CREST→xTB→ORCA conformer / reaction pipelines | [ARCHITECTURE](docs/ARCHITECTURE.md) |
-| **messenger** | remote submit/inspect + notifications (Telegram or Discord) | [DISCORD_SETUP](docs/DISCORD_SETUP.md) |
+| **messenger** | one-way Discord job/workflow notifications | [DISCORD_SETUP](docs/DISCORD_SETUP.md) |
 
 ## Services, testing, and full docs
 

@@ -49,7 +49,7 @@ def _final_result(state: RunState) -> RunFinalResult:
 
 class TestCli(unittest.TestCase):
     def _write_config(
-        self, root: Path, allowed_root: Path, *, telegram_enabled: bool = False
+        self, root: Path, allowed_root: Path, *, messenger_enabled: bool = False
     ) -> Path:
         fake_orca = root / "fake_orca"
         fake_orca.touch()
@@ -63,12 +63,12 @@ class TestCli(unittest.TestCase):
                 "paths": {"orca_executable": str(fake_orca)},
             },
         }
-        if telegram_enabled:
+        if messenger_enabled:
             payload["messenger"] = {
-                "provider": "telegram",
-                "telegram": {
+                "provider": "discord",
+                "discord": {
                     "bot_token": "123:ABC",
-                    "chat_id": "999",
+                    "default_channel_id": "999",
                 },
             }
         config = root / "orca_auto.yaml"
@@ -505,7 +505,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(len(state["attempts"]), 1)
 
     @patch("orca_auto.orca.execution.notify_retry_event", return_value=True)
-    def test_standalone_optts_retry_flow_does_not_send_telegram_notification(
+    def test_standalone_optts_retry_flow_does_not_send_notification(
         self, mock_notify: MagicMock
     ) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -517,7 +517,7 @@ class TestCli(unittest.TestCase):
                 "! OptTS B3LYP def2-SVP Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
                 encoding="utf-8",
             )
-            config = self._write_config(root, root / "orca_runs", telegram_enabled=True)
+            config = self._write_config(root, root / "orca_runs", messenger_enabled=True)
 
             calls = {"n": 0}
 

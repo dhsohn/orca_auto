@@ -8,13 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.cli_common import _repo_root
-from orca_auto.core.config import MessengerConfig, messenger_config_from_mapping
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
     engine_config_mapping,
     load_shared_config_mapping,
     mapping_section,
-    messenger_mapping_from_root,
     scheduler_admission_root,
     usable_runs_root_from_mapping,
 )
@@ -24,7 +22,6 @@ SYSTEMD_UNIT_NAMES = (
     "orca_auto-engine-workers@.target",
     "orca_auto-queue-worker@.service",
     "orca_auto-workflow-worker@.service",
-    "orca_auto-bot@.service",
     "orca_auto-runtime@.target",
 )
 
@@ -226,10 +223,6 @@ def _worker_unit_for_user(target_user: str) -> str:
     return f"orca_auto-queue-worker@{target_user}.service"
 
 
-def _bot_unit_for_user(target_user: str) -> str:
-    return f"orca_auto-bot@{target_user}.service"
-
-
 def _systemctl_transition_commands(
     *,
     target_user: str,
@@ -256,8 +249,6 @@ def _systemctl_transition_commands(
         # Clear bounded service start-limit counters so they cannot block this
         # operator-requested recovery inside their five-minute windows.
         commands.append(("systemctl", "reset-failed", _worker_unit_for_user(target_user)))
-        if not worker_only:
-            commands.append(("systemctl", "reset-failed", _bot_unit_for_user(target_user)))
         # `restart` also starts an inactive unit. Unlike `enable --now`, it
         # reliably reloads code and reapplies the runtime target's Wants= graph
         # when the requested mode was already active.
@@ -265,8 +256,6 @@ def _systemctl_transition_commands(
         desired_units = [
             _worker_unit_for_user(target_user),
         ]
-        if not worker_only:
-            desired_units.append(_bot_unit_for_user(target_user))
         # Targets use Wants=, so a successful target job does not prove that its
         # services started. Gate destructive cleanup on the actual runtime units.
         commands.extend(("systemctl", "is-active", "--quiet", unit) for unit in desired_units)
@@ -278,98 +267,7 @@ def _systemctl_transition_commands(
     # Disable its boot selection without --now so the successful desired restart
     # remains intact if this final cleanup fails.
     commands.append(("systemctl", "disable", opposite_unit))
-    if worker_only and not no_start:
-        # The runtime target itself is process-free and may remain active until
-        # reboot; stop only the bot that worker-only mode intentionally excludes.
-        commands.append(("systemctl", "stop", _bot_unit_for_user(target_user)))
     return tuple(commands)
-
-
-def _messenger_mapping(config: Path) -> dict[str, Any]:
-    _, parsed = load_shared_config_mapping(
-        config,
-        invalid_message=(
-            "could not read messenger settings from {path}: top-level YAML is not a mapping"
-        ),
-    )
-    try:
-        return messenger_mapping_from_root(parsed)
-    except ValueError as exc:
-        raise ValueError(f"could not read messenger settings from {config}: {exc}") from exc
-
-
-def _telegram_mapping(config: Path) -> dict[str, Any]:
-    messenger = _messenger_mapping(config)
-    telegram_raw = messenger.get("telegram")
-    if telegram_raw is None:
-        return {}
-    if not isinstance(telegram_raw, dict):
-        raise ValueError(
-            f"could not read Telegram settings from {config}: "
-            "messenger.telegram section is not a mapping"
-        )
-    return telegram_raw
-
-
-def _selected_messenger_config(config: Path) -> MessengerConfig:
-    return messenger_config_from_mapping(_messenger_mapping(config))
-
-
-def _bot_runtime_warning(config: Path, *, worker_only: bool) -> str | None:
-    if worker_only or not config.exists():
-        return None
-    try:
-        messenger = _selected_messenger_config(config)
-    except ValueError as exc:
-        return str(exc)
-    except YAML_CONFIG_LOAD_EXCEPTIONS:
-        return f"could not read messenger settings from {config}: invalid configuration"
-    provider = messenger.normalized_provider
-    configured = (
-        messenger.telegram.interactive_enabled
-        if provider == "telegram"
-        else messenger.discord.interactive_enabled
-    )
-    if not configured:
-        if provider == "discord":
-            return (
-                "Discord interactive bot settings are incomplete; configure "
-                "messenger.discord.bot_token, allowed_user_ids, and at least one "
-                "channel_ids entry to run the interactive bot"
-            )
-        if provider == "telegram":
-            if messenger.telegram.enabled:
-                return (
-                    "Telegram interactive polling requires a numeric messenger.telegram.chat_id; "
-                    "group chats also require messenger.telegram.allowed_user_ids"
-                )
-            return (
-                "Telegram is not fully configured; set messenger.telegram.bot_token and "
-                "messenger.telegram.chat_id to run the interactive bot"
-            )
-        return (
-            f"full runtime target includes the {provider} bot, but its interactive "
-            "credentials or channel allowlist are incomplete; use --worker-only until ready"
-        )
-    return None
-
-
-def _bot_configured(config: Path) -> bool:
-    if not config.exists():
-        return False
-    try:
-        messenger = _selected_messenger_config(config)
-    except YAML_CONFIG_LOAD_EXCEPTIONS:
-        return False
-    if messenger.normalized_provider == "telegram":
-        return messenger.telegram.interactive_enabled
-    return messenger.discord.interactive_enabled
-
-
-def _auto_worker_only(config: Path, *, worker_only: bool, no_enable: bool) -> bool:
-    if worker_only or no_enable:
-        return worker_only
-    return not _bot_configured(config)
 
 
 def _validate_worker_config(config: Path) -> None:
@@ -393,8 +291,6 @@ def _collect_warnings(
     repo: Path,
     config: Path,
     *,
-    worker_only: bool,
-    auto_selected_worker_only: bool,
     no_enable: bool,
     no_start: bool,
 ) -> tuple[str, ...]:
@@ -410,19 +306,6 @@ def _collect_warnings(
         )
     if not config.exists():
         warnings.append(f"config file does not exist yet: {config}")
-    if auto_selected_worker_only and not worker_only:
-        bot_warning = _bot_runtime_warning(config, worker_only=False)
-        warnings.append(
-            bot_warning
-            or (
-                "The selected messenger is not configured for interactive bot operation; "
-                "only the default engine-worker target will be enabled"
-            )
-        )
-    elif not auto_selected_worker_only:
-        bot_warning = _bot_runtime_warning(config, worker_only=worker_only)
-        if bot_warning:
-            warnings.append(bot_warning)
     if no_enable:
         warnings.append(
             "--no-enable leaves the existing boot selection and live services unchanged; "
@@ -451,11 +334,7 @@ def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstal
         for name in SYSTEMD_UNIT_NAMES
     )
 
-    effective_worker_only = _auto_worker_only(
-        options.config,
-        worker_only=options.worker_only,
-        no_enable=options.no_enable,
-    )
+    effective_worker_only = options.worker_only
     enabled_unit = _enabled_unit_for_args(
         target_user=options.target_user,
         worker_only=effective_worker_only,
@@ -484,8 +363,6 @@ def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstal
         warnings=_collect_warnings(
             options.repo,
             options.config,
-            worker_only=options.worker_only,
-            auto_selected_worker_only=effective_worker_only,
             no_enable=options.no_enable,
             no_start=options.no_start,
         ),

@@ -6,13 +6,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
-from orca_auto.core.ingest.policy import UploadPolicy, upload_policy_from_mapping
 from orca_auto.core.utils.coercion import normalize_bool, normalize_text, safe_float, safe_int
 
 _RuntimeAdmissionConfigT = TypeVar("_RuntimeAdmissionConfigT", bound="RuntimeAdmissionMixin")
 _CONFIG_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _CONFIG_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
-SUPPORTED_MESSENGER_PROVIDERS = frozenset({"discord", "telegram"})
+SUPPORTED_MESSENGER_PROVIDERS = frozenset({"discord"})
 MIN_MESSENGER_TIMEOUT_SECONDS = 0.1
 MAX_MESSENGER_TIMEOUT_SECONDS = 120.0
 MAX_MESSENGER_ATTEMPTS = 10
@@ -124,23 +123,6 @@ def _discord_snowflake_tuple(value: object, *, field_name: str) -> tuple[str, ..
         if snowflake not in seen:
             seen.add(snowflake)
             result.append(snowflake)
-    return tuple(result)
-
-
-def _telegram_user_id_tuple(value: object, *, field_name: str) -> tuple[str, ...]:
-    if isinstance(value, (str, bytes, bytearray, Mapping)) or not isinstance(value, Sequence):
-        raise ValueError(f"{field_name} must be a list of positive ASCII Telegram user ids.")
-    result: list[str] = []
-    seen: set[str] = set()
-    for item in value:
-        user_id = _positive_ascii_id(
-            item,
-            field_name=field_name,
-            id_kind="Telegram user id",
-        )
-        if user_id not in seen:
-            seen.add(user_id)
-            result.append(user_id)
     return tuple(result)
 
 
@@ -265,133 +247,6 @@ class CommonResourceConfig:
 
 
 @dataclass(frozen=True)
-class TelegramConfig:
-    bot_token: str = field(default="", repr=False)
-    chat_id: str = field(default="", repr=False)
-    timeout_seconds: float = 5.0
-    max_attempts: int = 2
-    retry_backoff_seconds: float = 0.5
-    allowed_user_ids: tuple[str, ...] = field(default=(), repr=False)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "bot_token",
-            _optional_identity_text(
-                self.bot_token,
-                field_name="messenger.telegram.bot_token",
-            ),
-        )
-        object.__setattr__(
-            self,
-            "chat_id",
-            _optional_identity_text(
-                self.chat_id,
-                field_name="messenger.telegram.chat_id",
-                allow_integer=True,
-            ),
-        )
-        object.__setattr__(
-            self,
-            "allowed_user_ids",
-            _telegram_user_id_tuple(
-                self.allowed_user_ids,
-                field_name="messenger.telegram.allowed_user_ids",
-            ),
-        )
-
-    @property
-    def enabled(self) -> bool:
-        """Backward-compatible alias for outbound notification readiness."""
-
-        return bool(str(self.bot_token).strip() and str(self.chat_id).strip())
-
-    @property
-    def interactive_enabled(self) -> bool:
-        if not self.enabled:
-            return False
-        chat_id = str(self.chat_id).strip()
-        numeric_chat = (
-            chat_id.isascii() and chat_id.removeprefix("-").isdigit() and int(chat_id) != 0
-        )
-        if not numeric_chat:
-            return False
-        private_chat = not chat_id.startswith("-")
-        return private_chat or bool(self.allowed_user_ids)
-
-
-def telegram_config_from_mapping(raw: object) -> TelegramConfig:
-    telegram_raw = raw if isinstance(raw, Mapping) else {}
-    _reject_unknown_config_fields(
-        telegram_raw,
-        allowed={
-            "allowed_user_ids",
-            "bot_token",
-            "chat_id",
-            "max_attempts",
-            "retry_backoff_seconds",
-            "timeout_seconds",
-        },
-        section="messenger.telegram",
-    )
-    return TelegramConfig(
-        bot_token=(
-            _optional_identity_text(
-                telegram_raw.get("bot_token"),
-                field_name="messenger.telegram.bot_token",
-            )
-            if "bot_token" in telegram_raw
-            else ""
-        ),
-        chat_id=(
-            _optional_identity_text(
-                telegram_raw.get("chat_id"),
-                field_name="messenger.telegram.chat_id",
-                allow_integer=True,
-            )
-            if "chat_id" in telegram_raw
-            else ""
-        ),
-        timeout_seconds=(
-            _bounded_delivery_float(
-                telegram_raw.get("timeout_seconds"),
-                field_name="messenger.telegram.timeout_seconds",
-                minimum=MIN_MESSENGER_TIMEOUT_SECONDS,
-                maximum=MAX_MESSENGER_TIMEOUT_SECONDS,
-            )
-            if "timeout_seconds" in telegram_raw
-            else TelegramConfig.timeout_seconds
-        ),
-        max_attempts=(
-            _bounded_delivery_attempts(
-                telegram_raw.get("max_attempts"),
-                field_name="messenger.telegram.max_attempts",
-            )
-            if "max_attempts" in telegram_raw
-            else TelegramConfig.max_attempts
-        ),
-        retry_backoff_seconds=(
-            _bounded_delivery_float(
-                telegram_raw.get("retry_backoff_seconds"),
-                field_name="messenger.telegram.retry_backoff_seconds",
-                minimum=0.0,
-                maximum=MAX_MESSENGER_RETRY_BACKOFF_SECONDS,
-            )
-            if "retry_backoff_seconds" in telegram_raw
-            else TelegramConfig.retry_backoff_seconds
-        ),
-        allowed_user_ids=(
-            _telegram_user_id_tuple(
-                telegram_raw.get("allowed_user_ids"),
-                field_name="messenger.telegram.allowed_user_ids",
-            )
-            if "allowed_user_ids" in telegram_raw
-            else ()
-        ),
-    )
-
-
-@dataclass(frozen=True)
 class DiscordConfig:
     timeout_seconds: float = 5.0
     max_attempts: int = 2
@@ -400,7 +255,6 @@ class DiscordConfig:
     channel_ids: tuple[str, ...] = field(default=(), repr=False)
     default_channel_id: str = field(default="", repr=False)
     allowed_user_ids: tuple[str, ...] = field(default=(), repr=False)
-    uploads: UploadPolicy = field(default_factory=UploadPolicy)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -463,7 +317,6 @@ def discord_config_from_mapping(raw: object) -> DiscordConfig:
             "max_attempts",
             "retry_backoff_seconds",
             "timeout_seconds",
-            "uploads",
         },
         section="messenger.discord",
     )
@@ -528,11 +381,6 @@ def discord_config_from_mapping(raw: object) -> DiscordConfig:
             if "retry_backoff_seconds" in discord_raw
             else DiscordConfig.retry_backoff_seconds
         ),
-        uploads=(
-            upload_policy_from_mapping(discord_raw.get("uploads"))
-            if "uploads" in discord_raw
-            else UploadPolicy()
-        ),
     )
 
 
@@ -540,19 +388,16 @@ def discord_config_from_mapping(raw: object) -> DiscordConfig:
 class MessengerConfig:
     """Select the active outbound messenger and own all adapter configuration."""
 
-    provider: str = "telegram"
-    telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    provider: str = "discord"
     discord: DiscordConfig = field(default_factory=DiscordConfig)
 
     @property
     def normalized_provider(self) -> str:
-        return self.provider.strip().lower() or "telegram"
+        return self.provider.strip().lower() or "discord"
 
     @property
     def enabled(self) -> bool:
         """Whether the selected provider can deliver outbound notifications."""
-        if self.normalized_provider == "telegram":
-            return self.telegram.enabled
         if self.normalized_provider == "discord":
             return self.discord.bot_notification_enabled
         return False
@@ -567,10 +412,10 @@ def messenger_config_from_mapping(raw: object) -> MessengerConfig:
         raise ValueError("messenger config must be a mapping when configured.")
     _reject_unknown_config_fields(
         messenger_raw,
-        allowed={"discord", "provider", "telegram"},
+        allowed={"discord", "provider"},
         section="messenger",
     )
-    for adapter in ("telegram", "discord"):
+    for adapter in ("discord",):
         adapter_raw = messenger_raw.get(adapter)
         if adapter in messenger_raw and not isinstance(adapter_raw, Mapping):
             raise ValueError(f"messenger.{adapter} must be a mapping when configured.")
@@ -580,8 +425,7 @@ def messenger_config_from_mapping(raw: object) -> MessengerConfig:
     ):
         raise ValueError("messenger.provider must be a non-empty string when configured.")
     config = MessengerConfig(
-        provider=as_str(messenger_raw.get("provider"), "telegram") or "telegram",
-        telegram=telegram_config_from_mapping(messenger_raw.get("telegram")),
+        provider=as_str(messenger_raw.get("provider"), "discord") or "discord",
         discord=discord_config_from_mapping(messenger_raw.get("discord")),
     )
     if config.normalized_provider not in SUPPORTED_MESSENGER_PROVIDERS:

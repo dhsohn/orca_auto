@@ -24,8 +24,8 @@ source .venv/bin/activate
 orca_auto init
 ```
 
-ORCA, xTB, CREST, 실행 디렉터리에는 절대 Linux 경로를 사용하세요. Telegram 알림을
-원한다면 init 중에 `messenger.telegram.bot_token`과 `messenger.telegram.chat_id`를
+ORCA, xTB, CREST, 실행 디렉터리에는 절대 Linux 경로를 사용하세요. Discord 알림을
+원한다면 init 중에 `messenger.discord.bot_token`과 `messenger.discord.default_channel_id`를
 설정하거나, 이후에 `config/orca_auto.yaml`을 편집하세요.
 
 ## 3) 런타임 서비스 설치
@@ -34,9 +34,8 @@ ORCA, xTB, CREST, 실행 디렉터리에는 절대 Linux 경로를 사용하세�
 orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
-선택된 Telegram 또는 Discord provider의 인터랙티브 bot 설정이 완전하면 orca_auto는
-전체 런타임 타깃을 활성화합니다. 그렇지 않으면 bot 없는 engine-worker 타깃을 활성화하며,
-이 타깃은 ORCA 서비스만 시작합니다. workflow 제출을 실행하려면 queueing 전후에
+이 명령은 런타임 타깃을 활성화하며, 런타임 타깃은 ORCA 엔진 서비스를 시작합니다.
+workflow 제출을 실행하려면 queueing 전후에
 opt-in workflow unit을 시작하세요:
 
 ```bash
@@ -50,9 +49,8 @@ orca_auto service status
 orca_auto service restart
 ```
 
-`service status`는 런타임과 engine-worker 타깃, 기본 ORCA 엔진 서비스, opt-in workflow 서비스,
-선택된 messenger 봇을 보여줍니다. `service restart`는 전체 런타임 타깃이 활성화되어 있으면 그것을 재시작하고, 그렇지 않으면 engine-worker 타깃을
-재시작합니다.
+`service status`는 런타임과 engine-worker 타깃, 기본 ORCA 엔진 서비스, opt-in workflow 서비스를
+보여줍니다. `service restart`는 런타임 타깃을 재시작합니다.
 
 ## 5) 작업 제출
 

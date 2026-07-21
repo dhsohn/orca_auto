@@ -30,7 +30,7 @@ artifacts when available:
 - `job_state.json`, `job_report.json`, and queue entry snippets;
 - retry attempt number and generated retry input name, if applicable.
 
-Remove messenger bot tokens, chat/channel IDs, private paths, proprietary structures, and
+Remove messenger bot tokens, channel IDs, private paths, proprietary structures, and
 private research data before posting.
 
 ## Scope boundaries

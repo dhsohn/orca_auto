@@ -5,9 +5,10 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.config import CommonRuntimeConfig, MessengerConfig, TelegramConfig
+from orca_auto.core.config import CommonRuntimeConfig, DiscordConfig, MessengerConfig
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
-from orca_auto.core.messaging import Message, SendResult, render_discord_embed, render_telegram
+from orca_auto.core.messaging import Message, SendResult, render_discord_embed
+from orca_auto.core.messaging.richtext import Line
 from orca_auto.core.notifications import _engine_transport
 from orca_auto.core.notifications import engines as notifications
 
@@ -18,9 +19,28 @@ def _cfg(tmp_path: Path) -> AppConfig:
             allowed_root=str(tmp_path / "allowed"),
         ),
         messenger=MessengerConfig(
-            telegram=TelegramConfig(bot_token="bot-token", chat_id="chat-id")
+            discord=DiscordConfig(bot_token="bot-token", default_channel_id="123")
         ),
     )
+
+
+def _plain(message: Message) -> str:
+    """Reconstruct the plain-text body of an engine (raw-span) notification.
+
+    Engine job notifications carry pre-formatted plain-text lines, so the
+    Doc-model title/heading and each raw line span map back to the exact text
+    the Discord embed derives its title (line 0) and description (lines 1+) from.
+    """
+    parts: list[str] = []
+    if message.author:
+        parts.append(message.author)
+    for group in message.groups:
+        if group.heading:
+            parts.append("".join(span.text for span in group.heading))
+        for item in group.items:
+            if isinstance(item, Line):
+                parts.append("".join(span.text for span in item.spans))
+    return "\n".join(parts)
 
 
 def _patch_transport(
@@ -40,7 +60,7 @@ def _patch_transport(
 
         def send(self, message: Message, *, silent: bool = False) -> SendResult:
             documents.append(message)
-            messages.append(render_telegram(message))
+            messages.append(_plain(message))
             return SendResult(sent=sent, skipped=skipped)
 
     def fake_build(messenger: Any) -> FakeChannel:

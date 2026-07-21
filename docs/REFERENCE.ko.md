@@ -76,7 +76,6 @@ CLI, 설정, JSON 산출물, 워크플로우, systemd 표면 중 공개 계약�
     orca_auto-runtime@.target
     orca_auto-engine-workers@.target
     orca_auto-queue-worker@.service
-    orca_auto-bot@.service
   scripts/*.sh / *.py
   tests/
     integration/
@@ -146,19 +145,13 @@ workflow:
     crest_executable: "/path/to/crest"
 
 messenger:
-  provider: telegram  # telegram | discord
-  telegram:
+  provider: discord
+  discord:
     bot_token: ""
-    chat_id: ""
-    allowed_user_ids: ["234567890123456789"]
+    default_channel_id: "123456789012345678"
     timeout_seconds: 5.0
     max_attempts: 2
     retry_backoff_seconds: 0.5
-  discord:
-    bot_token: ""
-    channel_ids: ["123456789012345678"]
-    default_channel_id: "123456789012345678"
-    allowed_user_ids: []
 
 orca:
   runtime:
@@ -197,10 +190,10 @@ orca:
 - 공유 설정 parser는 YAML node가 없는 문서(주석만 있는 문서 포함)를 빈 mapping으로
   허용하지만, 내용이 없는 `---` 문서, 명시한 최상위 null/scalar/sequence, 모든 깊이의
   중복 key는 거부합니다.
-- messenger identity 필드는 생략과 명시값을 구분해 fail-closed합니다. token은 문자열,
-  Telegram `chat_id`는 문자열 또는 정수, channel/operator ID list는 유효한 양의 ID만
-  허용합니다. 명시한 null이나 잘못된 scalar/collection 형태를 문자열 또는 기본값으로
-  바꾸지 않습니다. 빈 문자열/list는 해당 기능을 의도적으로 비활성화합니다.
+- messenger identity 필드는 생략과 명시값을 구분해 fail-closed합니다. bot token은
+  문자열이어야 하고 Discord channel ID는 유효한 양의 snowflake ID여야 합니다. 명시한
+  null이나 잘못된 scalar/collection 형태를 문자열 또는 기본값으로 바꾸지 않습니다.
+  빈 문자열은 전송을 의도적으로 비활성화합니다.
 - `default_max_retries=0`은 ORCA 재시도를 비활성화합니다. 양수 값은 계산 종류별
   재시도 정책을 활성화하며, 실제 재시도 횟수는 ORCA route 종류별 cap을 따릅니다.
 - `scratch_root`를 설정하면 ORCA는 private input closure를 tmpfs에서 실행합니다. dependency는
@@ -242,9 +235,7 @@ orca:
   기본값을 유지하지만 잘못된 명시적 실행 제어 값은 기본값으로 대체하지 않고 거부합니다.
 - messenger delivery 기본값도 키를 생략했을 때만 적용합니다. 명시한 timeout/backoff는
   유한한 숫자, `max_attempts`는 정수여야 하며 잘못된 값은 거부합니다. 문서화된 전송
-  범위를 벗어난 유한값은 clamp합니다. Discord upload의 `enabled`는 인식되는 boolean만,
-  크기·개수·보존 제어는 양의 정수만, `allowed_extensions`는 비어 있지 않은 문자열의
-  list만 허용합니다.
+  범위를 벗어난 유한값은 clamp합니다.
 
 ## 7) CLI 사용법
 
@@ -332,8 +323,8 @@ ORCA 고유 노트:
   지시어처럼 선후순위가 모호한 입력을 거부합니다. 정규화 전 자원 reader는 모든 활성값
   중 최댓값을 사용하므로 뒤쪽 중복값으로 더 큰 요청을 숨길 수 없습니다.
 - snapshot에 바인딩하지 않는 외부 ORCA include/program hook(예: `ExtOpt`/`Prog*`,
-  fragment/QM2 method file, `XTBINPUTSTRING`, `GCP(FILE)`)은 지원하지 않으며 로컬·원격
-  실행 전에 거부합니다.
+  fragment/QM2 method file, `XTBINPUTSTRING`, `GCP(FILE)`)은 지원하지 않으며 실행
+  전에 거부합니다.
 - 재시도 입력과 재개된 워커-종료 입력은, 원본 입력에 일치하는 비어 있지 않은 `.gbw`
   체크포인트가 있을 때 `MORead`와 `%moinp`를 추가합니다. 재개 입력은 `*.resume.inp`로
   작성되므로 원본 사용자 입력은 변경되지 않습니다.
@@ -468,8 +459,6 @@ ORCA 고유 노트:
   marker를 사용합니다. digest-bound 소유권 로직은 중단된 create, replace, delete를 복구합니다.
   foreign/malformed/missing marker 또는 digest 불일치는 덮어쓰기·삭제를 허가하지 않으며 사용자
   수정 내용은 보존합니다. last-good base SI를 교체하기 전에 소유권을 preflight합니다.
-  업로드 archive는 CSV나 marker를 포함할 수 없고, 원격 업로드는
-  서버 소유 `interaction_energy.priority`를 설정할 수 없습니다.
 - restart는 interaction route, fragment별 state/resource, generation fingerprint를 보존합니다.
   fan-out 뒤에는 interaction 및 RMSD grouping 설정을 바꿀 수 없고 해당 fan-out이 남아 있는
   동안 원래 primary stage도 다시 열 수 없습니다. 기능을 끄면 interaction stage를 retire합니다.
@@ -515,8 +504,7 @@ ORCA 고유 노트:
   원소만 포함하고 전자 수가 0 이상이어야 하며, UHF 비짝전자 수가 범위 안에 있고 전자 수와
   parity가 맞아야 합니다.
 - 로컬 geometry 입력은 10,000원자로 제한합니다. xTB Hessian 작업과 ORCA
-  frequency/Hessian 생성 입력은 1,000원자 상한을 사용합니다. Discord로 업로드한 workflow
-  XYZ 및 standalone ORCA geometry에는 원격 200원자 상한을 적용합니다.
+  frequency/Hessian 생성 입력은 1,000원자 상한을 사용합니다.
 - CREST 종료 코드가 0이어도 보존 출력에 엄격히 유효하고 유한한 XYZ frame이 하나 이상
   있어야 성공으로 인정합니다. 유효한 named retained ensemble을 모두 보존하므로 뒤쪽
   rotamer 출력에만 있는 geometry도 후보로 남고, 파일 사이에서 겹치는 geometry만 downstream
@@ -563,14 +551,6 @@ ORCA 고유 노트:
 - xTB ranking은 기본적으로 후보 평가를 최대 100개 허용합니다. 로컬 반응 워크플로우 manifest는 native
   후보 상한 1,000 안에서 `xtb.max_ranking_evaluations`를 정할 수 있고, 100보다 큰 값은
   `xtb.allow_high_cost_ranking: true`도 필요합니다.
-- Discord로 업로드한 워크플로우는 `crest.mdlen`, `crest.len`, `crest.tstep`,
-  `crest.allow_high_tstep`, `crest.mddump`, `crest.max_md_steps`,
-  `crest.allow_high_cost_md`, `crest.max_dump_frames`, `crest.allow_high_volume_md`,
-  `xtb.max_ranking_evaluations`, `xtb.allow_high_cost_ranking`을 설정할 수 없습니다. 이 비용과
-  출력 용량 budget은 원격 ingress에서 서버가 소유합니다. 신뢰된 로컬 `run-dir`
-  워크플로우만 위의 검증된 제어를 사용할 수 있습니다. 원격 workflow ingress는
-  `crest.mdlen: 5.0` ps를 주입하고 예상 CREST 작업이 50,000,000 atom-step을 넘으면
-  요청을 거부합니다.
 - `scaffold ts_search`와 `scaffold conformer_search`는 기본적으로 `crest_mode: standard`로
   `flow.yaml`을 작성합니다. 필요할 때 `nci`로 변경하세요.
 
@@ -655,14 +635,10 @@ ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 자식 작업은 잡음을 
 자식은 들여쓰기 대신 박스 드로잉 트리 커넥터(`├─`/`└─`)로 그려지며, 각 행에 상태색
 좌측 레일이 붙습니다. 이 연출은 터미널 전용입니다. 파이프 텍스트는
 `active_simulations:` 줄과 plain 들여쓰기를
-포함한 기존 표 레이아웃을 유지합니다. `--json`은 machine-readable JSON을, 메신저 `/list`는
-plain 뷰를 유지합니다. 파이프 텍스트는 `FORCE_COLOR`를 명시하지 않으면 ANSI가 없습니다.
+포함한 기존 표 레이아웃을 유지합니다. `--json`은 machine-readable JSON을 유지합니다.
+파이프 텍스트는 `FORCE_COLOR`를 명시하지 않으면 ANSI가 없습니다.
 실제 터미널에서 `NO_COLOR`·`--no-color`는 기존 plain 표를 유지합니다.
 
-선택된 봇의 list 명령(Telegram `/list`, Discord `!list`)은 동일한 표 레이아웃과 기본 워크플로우-자식 가시성
-정책을 렌더링하되, 좁은 모바일 화면에서 각 행이 한 줄에 맞도록 `ID` 컬럼만 생략합니다.
-그 액션 메시지는 활동별 취소 버튼과 새로고침·"완료 정리" 버튼(후자는 `/list clear`와
-동등)을 제공합니다.
 `queue list clear`는 통합 목록에서 완료/실패/취소 항목을 정리합니다.
 
 ### 7.5 CLI 출력 및 전역 플래그
@@ -674,18 +650,6 @@ plain 뷰를 유지합니다. 파이프 텍스트는 `FORCE_COLOR`를 명시하�
 - `orca_auto --version`은 설치된 버전을 출력하고, 명령 없이 `orca_auto`를 실행하면
   도움말이 표시됩니다. 오류와 복구 힌트는 stderr로 출력됩니다.
 - `orca_auto service status --json`은 스크립팅을 위한 기계 판독용 출력을 내보냅니다.
-- messenger 봇은 provider-native 버튼 확인 후 취소하는 명령(Telegram `/cancel`, Discord `!cancel`)을 지원합니다.
-  `/list` 액션 메시지의 취소 버튼도 그 확인 단계를 거칩니다. 공통 카드가 Discord의
-  5-row 제한에 맞도록 취소 가능한 활동은 최대 4개를 표시하며, 취소나 정리를 실행하면 목록이 자동으로
-  새로고침됩니다.
-- `messenger.discord.uploads.enabled`가 true이면 allowlist에 든 Discord 운영자가 `!run`에
-  `.zip` 또는 `.tar.gz` run-directory 하나를 첨부할 수 있습니다. 검사 전에 admission 및
-  실제 download byte에 상한을 적용합니다. 루트에는 `flow.yaml` 하나 또는 소문자 `*.inp`
-  하나만 있어야 하고, 서버 소유 경로·리소스 상한과 §7.2에 나열한 모든 CREST
-  실행/trajectory budget 및 xTB ranking 비용 제어를 재정의할 수 없습니다. 내구성
-  Queue/Discard 액션은
-  원본 메시지·첨부·채널·행위자에 바인딩됩니다. 압축 해제 결과는 `runs_root` 아래에
-  원자적으로 게시하며, 결과가 불확실한 commit은 삭제하지 않고 보존·조정합니다.
 
 ### 7.6 `scan-notify`
 
@@ -695,12 +659,12 @@ orca_auto scan-notify
 
 동작:
 
-- `scan-notify`는 설정된 ORCA 루트를 일회성으로 스캔해 활성 메신저 provider로 발견
+- `scan-notify`는 설정된 ORCA 루트를 일회성으로 스캔해 설정된 Discord 채널로 발견
   알림을 보낸 뒤 종료합니다. 실시간 모니터가 아닙니다.
 
 ### 7.7 장기 실행 서비스
 
-장기 실행 워커와 messenger 봇 프로세스는 `systemd`로 관리됩니다. 공개 `systemd install`과
+장기 실행 워커 프로세스는 `systemd`로 관리됩니다. 공개 `systemd install`과
 `service` 명령은 관리되지 않는 워커 프로세스를 직접 띄우지 않고 해당 unit을 조작합니다.
 
 동작:
@@ -712,11 +676,9 @@ orca_auto scan-notify
 - ORCA, xTB, CREST는 동일한 admission 상한을 공유합니다. ORCA는 부모 워커에서 슬롯을
   예약하고, 자식이 시작된 뒤 큐 정체성 메타데이터를 붙이며, ORCA 자식이 실행 중에 그
   예약을 활성화/해제하도록 합니다.
-- `orca_auto-bot@.service`는 `orca_auto.flow.bot.runner`를 실행하고,
-  `orca_auto.yaml`에서 선택된 Telegram 또는 Discord gateway를 시작합니다.
-- 워크플로우 메신저 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST와 반응 경로 xTB
+- 워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST와 반응 경로 xTB
   자식 단계는 해당 단계가 끝난 뒤 각각 한 메시지로 요약합니다.
-- `orca_auto-runtime@.target`은 engine-worker target과 bot을 함께 시작합니다.
+- `orca_auto-runtime@.target`은 engine-worker target을 시작합니다.
 
 ## 8) WSL systemd 설정
 
@@ -738,20 +700,15 @@ wsl --shutdown
 - [`systemd/orca_auto-runtime@.target`](../systemd/orca_auto-runtime@.target)
 - [`systemd/orca_auto-engine-workers@.target`](../systemd/orca_auto-engine-workers@.target)
 - [`systemd/orca_auto-queue-worker@.service`](../systemd/orca_auto-queue-worker@.service)
-- [`systemd/orca_auto-bot@.service`](../systemd/orca_auto-bot@.service)
 
-선택된 messenger 봇이 설정된 경우 권장 상시 가동 런타임 설치 흐름:
+권장 상시 가동 런타임 설치 흐름:
 
 ```bash
 cd <repo_root>
 orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 orca_auto service status
 journalctl -u "orca_auto-queue-worker@$(whoami)" -f
-journalctl -u "orca_auto-bot@$(whoami)" -f
 ```
-
-결합 런타임 타깃을 활성화하기 전에 `orca_auto.yaml`에서 선택된 Telegram 또는
-Discord 인터랙티브 bot 설정을 완성하세요.
 
 통합 런타임 템플릿의 가정:
 
@@ -767,10 +724,6 @@ workflow root가 설정돼 있어도 workflow나 내부 엔진 워커를 암묵�
 워커가 필요할 때 `orca_auto-workflow-worker@<user>.service`를 명시적으로 시작합니다.
 공유 `scheduler.max_active_simulations` 설정은 여전히 ORCA와
 워크플로우가 관리하는 내부 엔진 단계 전반의 활성 시뮬레이션 결합 수를 제한합니다.
-
-선택된 provider 설정이 완전하지 않으면
-`orca_auto systemd install`은 `orca_auto-engine-workers@$(whoami).target`을 직접 활성화합니다.
-bot 설정을 완성한 뒤 같은 명령을 다시 실행하면 전체 런타임 타깃이 활성화됩니다.
 
 워크플로우 감독은 opt-in `orca_auto-workflow-worker@.service` unit에 속합니다.
 

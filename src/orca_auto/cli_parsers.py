@@ -5,7 +5,6 @@ from typing import cast
 
 from orca_auto._version import package_version
 from orca_auto.cli_argparse import OrcaAutoArgumentParser
-from orca_auto.cli_parser_bot import add_bot_parser
 from orca_auto.cli_parser_commands import (
     add_init_parser,
     add_monitor_parser,
@@ -62,7 +61,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_monitor_parser(subparsers)
     add_systemd_parser(subparsers)
     add_service_parser(subparsers)
-    add_bot_parser(subparsers)
     return parser
 
 

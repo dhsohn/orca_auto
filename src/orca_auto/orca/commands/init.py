@@ -174,20 +174,6 @@ def _prompt_max_active_simulations() -> int:
     return _prompt_int("max_active_simulations", default="4", minimum=1)
 
 
-def _prompt_telegram_config() -> dict[str, str]:
-    if not _prompt_yes_no("Configure Telegram notifications now?", default=False):
-        return {"bot_token": "", "chat_id": ""}
-
-    while True:
-        bot_token = _prompt_secret_text("Telegram bot token")
-        chat_id = _prompt_text("Telegram chat id")
-        if bot_token and chat_id:
-            return {"bot_token": bot_token, "chat_id": chat_id}
-        print(
-            "Both Telegram bot token and chat id are required, or choose not to configure Telegram."
-        )
-
-
 def _comma_separated_ids(raw: str) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
@@ -226,19 +212,8 @@ def _prompt_discord_config() -> dict[str, object]:
         )
 
 
-def _prompt_messenger_provider(*, default: str = "telegram") -> str:
-    while True:
-        provider = _prompt_text("Messenger provider (telegram/discord)", default).lower()
-        if provider in {"telegram", "discord"}:
-            return provider
-        print("Messenger provider must be 'telegram' or 'discord'.")
-
-
 def _prompt_messenger_config() -> dict[str, object]:
-    provider = _prompt_messenger_provider()
-    if provider == "discord":
-        return {"provider": provider, "discord": _prompt_discord_config()}
-    return {"provider": provider, "telegram": _prompt_telegram_config()}
+    return {"provider": "discord", "discord": _prompt_discord_config()}
 
 
 def _prompt_runs_root() -> str:
@@ -319,7 +294,7 @@ def _prompt_init_values(
         default=True,
     ):
         messenger = dict(existing_messenger)
-        print(f"Preserving existing messenger settings ({messenger.get('provider', 'telegram')}).")
+        print(f"Preserving existing messenger settings ({messenger.get('provider', 'discord')}).")
     else:
         messenger = _prompt_messenger_config()
     return _PromptedInitValues(
@@ -368,7 +343,7 @@ def _print_init_summary(config_path: Path, values: _PromptedInitValues) -> None:
     print(f"  max_active_simulations: {values.max_active_simulations}")
     print(f"  xtb_executable: {values.xtb_runtime['executable']}")
     print(f"  crest_executable: {values.crest_runtime['executable']}")
-    print(f"  messenger_provider: {values.messenger.get('provider', 'telegram')}")
+    print(f"  messenger_provider: {values.messenger.get('provider', 'discord')}")
 
 
 def _load_existing_messenger_mapping(config_path: Path) -> dict[str, object] | None:
@@ -388,9 +363,7 @@ def _load_existing_messenger_mapping(config_path: Path) -> dict[str, object] | N
     preserved: dict[str, object] = dict(messenger)
     provider = str(preserved.get("provider", "") or "").strip().lower()
     if not provider:
-        provider = (
-            "discord" if "discord" in preserved and "telegram" not in preserved else "telegram"
-        )
+        provider = "discord"
     preserved["provider"] = provider
     return preserved
 

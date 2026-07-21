@@ -5,22 +5,41 @@ from typing import cast
 
 import pytest
 
-from orca_auto.core.config import CommonRuntimeConfig, MessengerConfig, TelegramConfig
+from orca_auto.core.config import CommonRuntimeConfig, DiscordConfig, MessengerConfig
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 from orca_auto.core.messaging import (
     Message,
-    TelegramSendResult,
+    SendResult,
     render_discord_embed,
-    render_telegram,
 )
+from orca_auto.core.messaging.richtext import Line
 from orca_auto.core.notifications import _engine_transport
 from orca_auto.core.notifications import engines as notifications
 
 
-class _FakeTransport:
-    """Records the rendered body of each Doc-model message sent to the channel."""
+def _plain(message: Message) -> str:
+    """Reconstruct the plain-text body of an engine (raw-span) notification.
 
-    def __init__(self, result: TelegramSendResult) -> None:
+    Engine job notifications carry pre-formatted plain-text lines, so the
+    Doc-model title/heading and each raw line span map back to the exact text
+    the Discord embed derives its title (line 0) and description (lines 1+) from.
+    """
+    parts: list[str] = []
+    if message.author:
+        parts.append(message.author)
+    for group in message.groups:
+        if group.heading:
+            parts.append("".join(span.text for span in group.heading))
+        for item in group.items:
+            if isinstance(item, Line):
+                parts.append("".join(span.text for span in item.spans))
+    return "\n".join(parts)
+
+
+class _FakeTransport:
+    """Records the plain-text body of each Doc-model message sent to the channel."""
+
+    def __init__(self, result: SendResult) -> None:
         self.result = result
         self.messages: list[str] = []
         self.documents: list[Message] = []
@@ -29,28 +48,28 @@ class _FakeTransport:
     def enabled(self) -> bool:
         return True
 
-    def send(self, message: Message, *, silent: bool = False) -> TelegramSendResult:
+    def send(self, message: Message, *, silent: bool = False) -> SendResult:
         self.documents.append(message)
-        self.messages.append(render_telegram(message))
+        self.messages.append(_plain(message))
         return self.result
 
 
 def _make_cfg(tmp_path: Path, *, enabled: bool = False) -> AppConfig:
     allowed_root = tmp_path / "allowed"
     allowed_root.mkdir()
-    telegram = TelegramConfig(
+    discord = DiscordConfig(
         bot_token="token" if enabled else "",
-        chat_id="chat" if enabled else "",
+        default_channel_id="123" if enabled else "",
     )
     return AppConfig(
         runtime=CommonRuntimeConfig(
             allowed_root=str(allowed_root),
         ),
-        messenger=MessengerConfig(telegram=telegram),
+        messenger=MessengerConfig(discord=discord),
     )
 
 
-def test_send_returns_true_when_real_transport_skips_disabled_telegram(tmp_path: Path) -> None:
+def test_send_returns_true_when_real_transport_skips_disabled_messenger(tmp_path: Path) -> None:
     cfg = _make_cfg(tmp_path, enabled=False)
 
     assert notifications.send_lines(cfg, ["line 1", "line 2"])
@@ -59,15 +78,15 @@ def test_send_returns_true_when_real_transport_skips_disabled_telegram(tmp_path:
 @pytest.mark.parametrize(
     ("result", "expected"),
     [
-        (TelegramSendResult(sent=True), True),
-        (TelegramSendResult(sent=False, skipped=True), True),
-        (TelegramSendResult(sent=False, skipped=False, error="boom"), False),
+        (SendResult(sent=True), True),
+        (SendResult(sent=False, skipped=True), True),
+        (SendResult(sent=False, skipped=False, error="boom"), False),
     ],
 )
 def test_send_joins_lines_and_maps_transport_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    result: TelegramSendResult,
+    result: SendResult,
     expected: bool,
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
@@ -85,7 +104,7 @@ def test_notify_job_queued_and_started_render_expected_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
-    transport = _FakeTransport(TelegramSendResult(sent=True))
+    transport = _FakeTransport(SendResult(sent=True))
     monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger: transport)
     job_dir = tmp_path / "job-001"
     selected_xyz = tmp_path / "inputs" / "reactant.xyz"
@@ -140,7 +159,7 @@ def test_notify_job_terminal_includes_extra_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
-    transport = _FakeTransport(TelegramSendResult(sent=True))
+    transport = _FakeTransport(SendResult(sent=True))
     monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger: transport)
 
     assert notifications.notify_xtb_job_terminal(
@@ -195,7 +214,7 @@ def test_notify_job_finished_maps_headlines_and_optional_fields(
     embed_title: str,
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
-    transport = _FakeTransport(TelegramSendResult(sent=True))
+    transport = _FakeTransport(SendResult(sent=True))
     monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger: transport)
     resource_request: dict[str, int] | None = None
     resource_actual: dict[str, int] | None = None
@@ -241,7 +260,7 @@ def test_notify_job_terminal_uses_status_for_severity_not_headline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
-    transport = _FakeTransport(TelegramSendResult(sent=True))
+    transport = _FakeTransport(SendResult(sent=True))
     monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger: transport)
 
     assert notifications.notify_xtb_job_terminal(
@@ -270,7 +289,7 @@ def test_workflow_child_notifications_are_suppressed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = _make_cfg(tmp_path, enabled=True)
-    transport = _FakeTransport(TelegramSendResult(sent=True))
+    transport = _FakeTransport(SendResult(sent=True))
     monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger: transport)
     workflow_job_dirs = [
         tmp_path / "wf-1" / "02_xtb" / "job-004",

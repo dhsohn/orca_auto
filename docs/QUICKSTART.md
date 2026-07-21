@@ -23,8 +23,8 @@ orca_auto init
 ```
 
 Use absolute Linux paths for ORCA, xTB, CREST, and run directories. If you want
-Telegram notifications, set `messenger.telegram.bot_token` and
-`messenger.telegram.chat_id` during init or edit `config/orca_auto.yaml` afterward.
+Discord notifications, set `messenger.discord.bot_token` and
+`messenger.discord.default_channel_id` during init or edit `config/orca_auto.yaml` afterward.
 
 ## 3) Install The Runtime Service
 
@@ -32,9 +32,7 @@ Telegram notifications, set `messenger.telegram.bot_token` and
 orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
-If the selected Telegram or Discord provider has complete interactive bot settings,
-orca_auto enables the full runtime target. Otherwise it enables the bot-free
-engine-worker target, which starts only the ORCA service.
+This enables the runtime target, which starts the ORCA engine service.
 For a workflow submission,
 start the opt-in workflow unit before or after queueing it:
 
@@ -50,9 +48,8 @@ orca_auto service restart
 ```
 
 `service status` shows the runtime and engine-worker targets, the default ORCA
-engine service, the opt-in workflow service, and the selected messenger bot.
-`service restart` restarts the full runtime target when it is enabled; otherwise
-it restarts the engine-worker target.
+engine service, and the opt-in workflow service.
+`service restart` restarts the runtime target.
 
 ## 5) Submit Work
 

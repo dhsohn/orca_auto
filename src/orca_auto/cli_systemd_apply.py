@@ -182,7 +182,6 @@ def _active_component_candidates(plan: SystemdInstallPlan) -> tuple[str, ...]:
         f"orca_auto-runtime@{user}.target",
         f"orca_auto-engine-workers@{user}.target",
         f"orca_auto-queue-worker@{user}.service",
-        f"orca_auto-bot@{user}.service",
     )
 
 

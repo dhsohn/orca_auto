@@ -130,9 +130,9 @@ def test_load_config_reads_and_normalizes_all_sections(
           max_cores_per_task: "12"
           max_memory_gb_per_task: "48"
         messenger:
-          telegram:
+          discord:
             bot_token: " token-123 "
-            chat_id: " 4567 "
+            default_channel_id: " 4567 "
         """,
     )
     monkeypatch.setattr(config_mod, "default_shared_config_path", lambda: str(config_path))
@@ -146,8 +146,8 @@ def test_load_config_reads_and_normalizes_all_sections(
     assert cfg.paths.crest_executable == str(fake_crest.resolve())
     assert cfg.resources.max_cores_per_task == 12
     assert cfg.resources.max_memory_gb_per_task == 48
-    assert cfg.messenger.telegram.bot_token == "token-123"
-    assert cfg.messenger.telegram.chat_id == "4567"
+    assert cfg.messenger.discord.bot_token == "token-123"
+    assert cfg.messenger.discord.default_channel_id == "4567"
 
 
 def test_load_config_rejects_legacy_top_level_telegram(tmp_path: Path) -> None:
@@ -163,7 +163,7 @@ def test_load_config_rejects_legacy_top_level_telegram(tmp_path: Path) -> None:
         """,
     )
 
-    with pytest.raises(ValueError, match="messenger.telegram"):
+    with pytest.raises(ValueError, match="no longer supported"):
         config_mod.load_crest_config(str(config_path))
 
 
@@ -184,9 +184,9 @@ def test_load_config_no_longer_supports_top_level_runtime_and_paths_shape(tmp_pa
           max_cores_per_task: "12"
           max_memory_gb_per_task: "48"
         messenger:
-          telegram:
+          discord:
             bot_token: " token-123 "
-            chat_id: " 4567 "
+            default_channel_id: " 4567 "
         """,
     )
 
@@ -217,8 +217,8 @@ def test_load_config_applies_defaults_for_missing_optional_sections(
     assert cfg.paths.crest_executable == ""
     assert cfg.resources.max_cores_per_task == 8
     assert cfg.resources.max_memory_gb_per_task == 32
-    assert cfg.messenger.telegram.bot_token == ""
-    assert cfg.messenger.telegram.chat_id == ""
+    assert cfg.messenger.discord.bot_token == ""
+    assert cfg.messenger.discord.default_channel_id == ""
 
 
 def test_load_config_rejects_removed_behavior_section(tmp_path: Path) -> None:

@@ -18,6 +18,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - Removed the reserved `<runs_root>/.orca_auto_smoke` runs-root namespace. That
   name is no longer created or special-cased in submission, discovery,
   reindexing, snapshots, or cleanup.
+- Reduced the messenger to a one-way Discord outbound notifier. These were
+  Experimental surfaces:
+  - Removed the Telegram messenger provider; `messenger.provider` now accepts
+    only `discord`.
+  - Removed the interactive bot command/action framework, the `orca_auto bot`
+    CLI, and the `orca_auto-bot@.service` systemd unit.
+  - Removed the remote Discord archive-upload ingestion
+    (`messenger.discord.uploads`); run directories can no longer be submitted
+    over Discord.
+  - Dropped the `discord.py` dependency.
 
 ## [0.3.0] - 2026-07-21
 

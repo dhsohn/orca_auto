@@ -1,12 +1,5 @@
 from __future__ import annotations
 
-from orca_auto.core.messaging.telegram_format import (
-    split_telegram_message as split_telegram_message,
-)
-from orca_auto.core.messaging.telegram_transport import (
-    build_telegram_transport,
-)
-
 from ._engine_delivery import (
     is_workflow_child as is_workflow_child,
 )
@@ -57,7 +50,6 @@ __all__ = [
     "EngineJobTerminalRequest",
     "EngineNotifier",
     "build_engine_job_notifications",
-    "build_telegram_transport",
     "channel_line_sender",
     "event_lines",
     "is_workflow_child",
@@ -75,6 +67,5 @@ __all__ = [
     "send_lifecycle_event",
     "send_lines",
     "send_terminal_event",
-    "split_telegram_message",
     "terminal_headline",
 ]

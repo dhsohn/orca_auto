@@ -37,9 +37,9 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
                 "scheduler:",
                 f"  admission_root: {repo / 'admission'}",
                 "messenger:",
-                "  telegram:",
+                "  discord:",
                 "    bot_token: token",
-                "    chat_id: '123'",
+                "    default_channel_id: '123'",
                 "orca:",
                 "  paths:",
                 f"    orca_executable: {orca_executable}",
@@ -49,47 +49,6 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     return repo, config_path
-
-
-def _write_runtime_messenger_config(
-    repo: Path,
-    config_path: Path,
-    messenger_lines: list[str],
-) -> None:
-    config_path.write_text(
-        "\n".join(
-            [
-                f"runs_root: {repo / 'orca_runs'}",
-                *messenger_lines,
-                "orca:",
-                "  paths:",
-                f"    orca_executable: {repo / 'orca'}",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-
-def test_systemd_telegram_lookup_rejects_legacy_top_level(tmp_path: Path) -> None:
-    config_path = tmp_path / "orca_auto.yaml"
-    config_path.write_text(
-        "telegram:\n  bot_token: legacy-token\n  chat_id: legacy-chat\n",
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="messenger.telegram"):
-        systemd_plan._telegram_mapping(config_path)
-
-
-def test_systemd_telegram_lookup_rejects_malformed_empty_adapter_section(
-    tmp_path: Path,
-) -> None:
-    config_path = tmp_path / "orca_auto.yaml"
-    config_path.write_text("messenger:\n  telegram: ''\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="messenger.telegram must be a mapping"):
-        systemd_plan._telegram_mapping(config_path)
 
 
 def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path) -> None:
@@ -111,10 +70,8 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
         ("systemctl", "daemon-reload"),
         ("systemctl", "enable", "orca_auto-runtime@alice.target"),
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
-        ("systemctl", "reset-failed", "orca_auto-bot@alice.service"),
         ("systemctl", "restart", "orca_auto-runtime@alice.target"),
         ("systemctl", "is-active", "--quiet", "orca_auto-queue-worker@alice.service"),
-        ("systemctl", "is-active", "--quiet", "orca_auto-bot@alice.service"),
         ("systemctl", "disable", "orca_auto-queue-worker@alice.service"),
         ("systemctl", "disable", "orca_auto-engine-workers@alice.target"),
     )
@@ -145,13 +102,6 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
         f"{repo.resolve(strict=False) / 'admission'} "
         f"{repo.resolve(strict=False) / 'orca_runs'}"
     ) in worker_content
-    bot_content = unit_by_name["orca_auto-bot@.service"].content
-    assert "ProtectHome=read-only" in bot_content
-    assert "StartLimitIntervalSec=300" in bot_content
-    assert "StartLimitBurst=3" in bot_content
-    assert "Restart=always" in bot_content
-    assert "RestartSec=30" in bot_content
-    assert f"ReadWritePaths={repo.resolve(strict=False) / 'admission'}" in bot_content
     engine_target = unit_by_name["orca_auto-engine-workers@.target"].content
     assert "Wants=orca_auto-queue-worker@%i.service" in engine_target
     assert "Wants=orca_auto-xtb-md-worker@%i.service" not in engine_target
@@ -172,9 +122,9 @@ def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
             [
                 f"runs_root: {repo / 'workflow_runs'}",
                 "messenger:",
-                "  telegram:",
+                "  discord:",
                 "    bot_token: token",
-                "    chat_id: '123'",
+                "    default_channel_id: '123'",
             ]
         )
         + "\n",
@@ -213,9 +163,9 @@ def test_systemd_rejects_orca_scoped_admission_override(
                 "  scheduler:",
                 f"    admission_root: {repo / 'orca_admission'}",
                 "messenger:",
-                "  telegram:",
+                "  discord:",
                 "    bot_token: token",
-                "    chat_id: '123'",
+                "    default_channel_id: '123'",
             ]
         )
         + "\n",
@@ -243,9 +193,9 @@ def test_systemd_rejects_non_mapping_orca_scheduler(tmp_path: Path) -> None:
                 "orca:",
                 "  scheduler: disabled",
                 "messenger:",
-                "  telegram:",
+                "  discord:",
                 "    bot_token: token",
-                "    chat_id: '123'",
+                "    default_channel_id: '123'",
             ]
         )
         + "\n",
@@ -269,9 +219,9 @@ def test_systemd_read_write_paths_omit_invalid_runs_root(tmp_path: Path) -> None
             [
                 "runs_root: './runs'",
                 "messenger:",
-                "  telegram:",
+                "  discord:",
                 "    bot_token: token",
-                "    chat_id: '123'",
+                "    default_channel_id: '123'",
             ]
         )
         + "\n",
@@ -358,9 +308,9 @@ def test_systemd_read_write_paths_reject_whitespace_from_config(tmp_path: Path) 
                 "scheduler:",
                 f"  admission_root: {repo / 'admission'}",
                 "messenger:",
-                "  telegram:",
+                "  discord:",
                 "    bot_token: token",
-                "    chat_id: '123'",
+                "    default_channel_id: '123'",
             ]
         )
         + "\n",
@@ -422,7 +372,6 @@ def test_build_systemd_install_plan_worker_only_stops_runtime_then_restarts_work
         ("systemctl", "is-active", "--quiet", "orca_auto-queue-worker@alice.service"),
         ("systemctl", "disable", "orca_auto-queue-worker@alice.service"),
         ("systemctl", "disable", "orca_auto-runtime@alice.target"),
-        ("systemctl", "stop", "orca_auto-bot@alice.service"),
     )
 
 
@@ -479,7 +428,7 @@ def test_cmd_systemd_install_writes_units_and_runs_commands(
     assert set(unit for unit, state in runner.active.items() if state == "active") == set(
         runner.active
     )
-    assert sum(command[1] == "show" for command in runner.commands) == 4
+    assert sum(command[1] == "show" for command in runner.commands) == 3
     assert (unit_dir / "orca_auto-queue-worker@.service").exists()
     assert not (unit_dir / "orca_auto-xtb-md-worker@.service").exists()
     assert (unit_dir / "orca_auto-engine-workers@.target").exists()
@@ -519,7 +468,6 @@ def test_cmd_systemd_install_dry_run_does_not_write_units(
     assert "systemd install plan:" in captured
     assert "enable: orca_auto-engine-workers@alice.target" in captured
     assert "systemctl disable orca_auto-runtime@alice.target" in captured
-    assert "systemctl stop orca_auto-bot@alice.service" in captured
     assert "systemctl enable orca_auto-engine-workers@alice.target" in captured
     assert "systemctl reset-failed orca_auto-queue-worker@alice.service" in captured
     assert "systemctl restart orca_auto-engine-workers@alice.target" in captured
@@ -554,162 +502,6 @@ def test_cmd_systemd_install_rejects_pending_resolution_in_dry_run(
     )
     assert not unit_dir.exists()
     assert "cannot be used with --dry-run" in capsys.readouterr().err
-
-
-def test_full_runtime_warns_when_telegram_is_not_configured(tmp_path: Path) -> None:
-    repo, config_path = _make_repo(tmp_path)
-    config_path.write_text(
-        "\n".join(
-            [
-                f"runs_root: {repo / 'orca_runs'}",
-                "messenger:",
-                "  telegram:",
-                "    bot_token: ''",
-                "    chat_id: ''",
-                "orca:",
-                "  paths:",
-                f"    orca_executable: {repo / 'orca'}",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    plan = systemd_plan.build_systemd_install_plan(
-        target_user="alice",
-        repo=repo,
-        config=config_path,
-        unit_dir=tmp_path / "units",
-        is_root=lambda: True,
-    )
-
-    assert plan.enabled_unit == "orca_auto-engine-workers@alice.target"
-    assert any("Telegram is not fully configured" in warning for warning in plan.warnings)
-
-
-def test_telegram_group_without_operator_allowlist_stays_worker_only(tmp_path: Path) -> None:
-    repo, config_path = _make_repo(tmp_path)
-    _write_runtime_messenger_config(
-        repo,
-        config_path,
-        [
-            "messenger:",
-            "  provider: telegram",
-            "  telegram:",
-            "    bot_token: token",
-            "    chat_id: '-100123'",
-            "    allowed_user_ids: []",
-        ],
-    )
-
-    plan = systemd_plan.build_systemd_install_plan(
-        target_user="alice",
-        repo=repo,
-        config=config_path,
-        unit_dir=tmp_path / "units",
-        no_start=True,
-        is_root=lambda: True,
-    )
-
-    assert plan.enabled_unit == "orca_auto-engine-workers@alice.target"
-    assert any("allowed_user_ids" in warning for warning in plan.warnings)
-
-
-def test_discord_bot_credentials_enable_full_runtime_with_neutral_entrypoint(
-    tmp_path: Path,
-) -> None:
-    repo, config_path = _make_repo(tmp_path)
-    _write_runtime_messenger_config(
-        repo,
-        config_path,
-        [
-            "messenger:",
-            "  provider: discord",
-            "  discord:",
-            "    bot_token: token",
-            "    channel_ids:",
-            "      - '100'",
-            "    default_channel_id: '200'",
-            "    allowed_user_ids:",
-            "      - '7'",
-        ],
-    )
-
-    plan = systemd_plan.build_systemd_install_plan(
-        target_user="alice",
-        repo=repo,
-        config=config_path,
-        unit_dir=tmp_path / "units",
-        no_start=True,
-        is_root=lambda: True,
-    )
-
-    assert plan.enabled_unit == "orca_auto-runtime@alice.target"
-    bot_unit = next(unit for unit in plan.units if unit.name == "orca_auto-bot@.service")
-    assert "-m orca_auto.flow.bot.runner" in bot_unit.content
-    assert "orca_auto.flow.telegram.bot" not in bot_unit.content
-    assert not any("notification-only" in warning for warning in plan.warnings)
-
-
-def test_discord_without_operator_allowlist_stays_worker_only(tmp_path: Path) -> None:
-    repo, config_path = _make_repo(tmp_path)
-    _write_runtime_messenger_config(
-        repo,
-        config_path,
-        [
-            "messenger:",
-            "  provider: discord",
-            "  discord:",
-            "    bot_token: token",
-            "    channel_ids: ['100']",
-            "    default_channel_id: '200'",
-            "    allowed_user_ids: []",
-        ],
-    )
-
-    plan = systemd_plan.build_systemd_install_plan(
-        target_user="alice",
-        repo=repo,
-        config=config_path,
-        unit_dir=tmp_path / "units",
-        no_start=True,
-        is_root=lambda: True,
-    )
-
-    assert plan.enabled_unit == "orca_auto-engine-workers@alice.target"
-    assert any("allowed_user_ids" in warning for warning in plan.warnings)
-
-
-def test_discord_notification_only_stays_worker_only_even_with_telegram_credentials(
-    tmp_path: Path,
-) -> None:
-    repo, config_path = _make_repo(tmp_path)
-    _write_runtime_messenger_config(
-        repo,
-        config_path,
-        [
-            "messenger:",
-            "  provider: discord",
-            "  telegram:",
-            "    bot_token: telegram-token",
-            "    chat_id: telegram-chat",
-            "  discord:",
-            "    bot_token: discord-token",
-            '    default_channel_id: "123456789012345678"',
-        ],
-    )
-
-    plan = systemd_plan.build_systemd_install_plan(
-        target_user="alice",
-        repo=repo,
-        config=config_path,
-        unit_dir=tmp_path / "units",
-        no_start=True,
-        is_root=lambda: True,
-    )
-
-    assert plan.enabled_unit == "orca_auto-engine-workers@alice.target"
-    assert any("interactive bot settings are incomplete" in warning for warning in plan.warnings)
 
 
 @pytest.mark.parametrize("content", [None, "messenger: [\n"])
@@ -775,8 +567,6 @@ def test_cmd_service_status_prints_compact_systemd_state(capsys: Any) -> None:
         ("is-enabled", "orca_auto-queue-worker@alice.service"): "disabled",
         ("is-active", "orca_auto-workflow-worker@alice.service"): "inactive",
         ("is-enabled", "orca_auto-workflow-worker@alice.service"): "disabled",
-        ("is-active", "orca_auto-bot@alice.service"): "inactive",
-        ("is-enabled", "orca_auto-bot@alice.service"): "disabled",
     }
 
     def _fake_run(
@@ -799,7 +589,7 @@ def test_cmd_service_status_prints_compact_systemd_state(capsys: Any) -> None:
         ),
     )
 
-    assert result == 1
+    assert result == 0
     output = capsys.readouterr().out
     assert "orca_auto service status for alice (full):" in output
     assert "Active" in output
@@ -987,9 +777,8 @@ def test_cmd_service_restart_prefers_runtime_when_enabled(capsys: Any) -> None:
     )
 
     assert result == 0
-    assert commands[-3:] == [
+    assert commands[-2:] == [
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
-        ("systemctl", "reset-failed", "orca_auto-bot@alice.service"),
         ("systemctl", "restart", "orca_auto-runtime@alice.target"),
     ]
     assert "Restarting orca_auto-runtime@alice.target" in capsys.readouterr().out
@@ -1110,9 +899,8 @@ def test_cmd_service_restart_uses_active_runtime_only_when_enablement_is_unreada
     )
 
     assert result == 0
-    assert commands[-3:] == [
+    assert commands[-2:] == [
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
-        ("systemctl", "reset-failed", "orca_auto-bot@alice.service"),
         ("systemctl", "restart", "orca_auto-runtime@alice.target"),
     ]
 
@@ -1175,7 +963,6 @@ def test_cmd_service_restart_uses_sudo_for_non_root_user() -> None:
     assert result == 0
     assert commands == [
         ("sudo", "systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
-        ("sudo", "systemctl", "reset-failed", "orca_auto-bot@alice.service"),
         ("sudo", "systemctl", "restart", "orca_auto-runtime@alice.target"),
     ]
 
@@ -1204,34 +991,6 @@ def test_cmd_service_restart_stops_when_reset_failed_cannot_clear_start_limit() 
     assert result == 5
     assert commands == [
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
-    ]
-
-
-def test_cmd_service_restart_stops_when_bot_start_limit_cannot_be_cleared() -> None:
-    commands: list[tuple[str, ...]] = []
-
-    def _fake_run(argv: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
-        del check
-        commands.append(tuple(argv))
-        return subprocess.CompletedProcess(argv, 0 if len(commands) <= 1 else 5)
-
-    result = cli_systemd_status.cmd_service_restart(
-        Namespace(target_user=None),
-        deps=cli_systemd_status.ServiceCliDeps(
-            default_service_user=lambda: "alice",
-            restart_unit_for_user=lambda target_user, run: (
-                f"orca_auto-runtime@{target_user}.target"
-            ),
-            is_root=lambda: True,
-            run=_fake_run,
-            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-        ),
-    )
-
-    assert result == 5
-    assert commands == [
-        ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
-        ("systemctl", "reset-failed", "orca_auto-bot@alice.service"),
     ]
 
 
@@ -1288,7 +1047,6 @@ class _FakeSudoSystemd:
             f"orca_auto-runtime@{user}.target": "inactive",
             f"orca_auto-engine-workers@{user}.target": "inactive",
             f"orca_auto-queue-worker@{user}.service": "inactive",
-            f"orca_auto-bot@{user}.service": "inactive",
         }
         self.active.update(active or {})
         self.failures = failures or {}
@@ -1343,7 +1101,6 @@ class _FakeSudoSystemd:
             if unit.startswith("orca_auto-runtime@"):
                 self.active["orca_auto-engine-workers@alice.target"] = "inactive"
                 self.active["orca_auto-queue-worker@alice.service"] = "inactive"
-                self.active["orca_auto-bot@alice.service"] = "inactive"
             elif unit.startswith("orca_auto-engine-workers@"):
                 self.active["orca_auto-queue-worker@alice.service"] = "inactive"
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
@@ -1355,7 +1112,6 @@ class _FakeSudoSystemd:
             if unit.startswith("orca_auto-runtime@"):
                 self.active["orca_auto-engine-workers@alice.target"] = "active"
                 self.active["orca_auto-queue-worker@alice.service"] = "active"
-                self.active["orca_auto-bot@alice.service"] = "active"
             elif unit.startswith("orca_auto-engine-workers@"):
                 self.active["orca_auto-queue-worker@alice.service"] = "active"
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
@@ -2250,7 +2006,7 @@ def test_rollback_restores_arbitrary_target_and_leaf_set_exactly(tmp_path: Path)
     plan.units[0].destination.write_text("original unit\n", encoding="utf-8")
     expected = (
         "orca_auto-runtime@alice.target",
-        "orca_auto-bot@alice.service",
+        "orca_auto-queue-worker@alice.service",
     )
     _write_interrupted_systemd_transaction(
         plan,
@@ -2300,7 +2056,6 @@ def test_ambiguous_restart_phase_preserves_transaction_without_stopping_services
                 "orca_auto-runtime@alice.target",
                 "orca_auto-engine-workers@alice.target",
                 "orca_auto-queue-worker@alice.service",
-                "orca_auto-bot@alice.service",
             ),
             {"runtime_phase": cli_systemd_apply._RUNTIME_PHASE_RESTART_SUCCEEDED},
             id="applied",

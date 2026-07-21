@@ -9,8 +9,8 @@ from html import unescape
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.messaging import escape_html
 from orca_auto.core.paths import is_subpath
+from orca_auto.core.utils.html import escape_html
 from orca_auto.orca.parser.patterns import (
     FINAL_SINGLE_POINT_ENERGY_RE,
     final_single_point_energy_value,

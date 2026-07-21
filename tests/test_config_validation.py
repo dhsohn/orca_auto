@@ -174,7 +174,7 @@ class TestConfigValidation(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "requires.*scratch_root"):
                 load_config(str(cfg_path))
 
-    def test_telegram_delivery_settings_are_loaded(self) -> None:
+    def test_discord_delivery_settings_are_loaded(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -188,9 +188,9 @@ class TestConfigValidation(unittest.TestCase):
                     "runs_root": str(allowed),
                     "paths": {"orca_executable": str(fake_orca)},
                     "messenger": {
-                        "telegram": {
+                        "discord": {
                             "bot_token": "token",
-                            "chat_id": "chat",
+                            "default_channel_id": "123",
                             "timeout_seconds": 3.5,
                             "max_attempts": 4,
                             "retry_backoff_seconds": 0.25,
@@ -201,12 +201,11 @@ class TestConfigValidation(unittest.TestCase):
 
             cfg = load_config(str(cfg_path))
 
-            self.assertEqual(cfg.messenger.telegram.bot_token, "token")
-            self.assertEqual(cfg.messenger.telegram.chat_id, "chat")
-            self.assertEqual(cfg.messenger.telegram.timeout_seconds, 3.5)
-            self.assertEqual(cfg.messenger.telegram.max_attempts, 4)
-            self.assertEqual(cfg.messenger.telegram.retry_backoff_seconds, 0.25)
-            self.assertEqual(cfg.messenger.telegram, cfg.messenger.telegram)
+            self.assertEqual(cfg.messenger.discord.bot_token, "token")
+            self.assertEqual(cfg.messenger.discord.default_channel_id, "123")
+            self.assertEqual(cfg.messenger.discord.timeout_seconds, 3.5)
+            self.assertEqual(cfg.messenger.discord.max_attempts, 4)
+            self.assertEqual(cfg.messenger.discord.retry_backoff_seconds, 0.25)
 
     def test_legacy_top_level_telegram_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -228,7 +227,7 @@ class TestConfigValidation(unittest.TestCase):
                 },
             )
 
-            with self.assertRaisesRegex(ValueError, "messenger.telegram"):
+            with self.assertRaisesRegex(ValueError, "no longer supported"):
                 load_config(str(cfg_path))
 
     def test_unknown_messenger_provider_is_rejected(self) -> None:

@@ -14,16 +14,8 @@ from orca_auto.core.config import MessengerConfig
 
 from .channel import MessageChannel
 from .discord_bot import DiscordBotChannel
-from .telegram_channel import TelegramChannel
 
 ChannelBuilder = Callable[[MessengerConfig, logging.Logger | None], MessageChannel]
-
-
-def _build_telegram(
-    messenger: MessengerConfig,
-    logger: logging.Logger | None,
-) -> MessageChannel:
-    return TelegramChannel(messenger.telegram, logger=logger)
 
 
 def _build_discord(
@@ -34,7 +26,6 @@ def _build_discord(
 
 
 _CHANNEL_BUILDERS: dict[str, ChannelBuilder] = {
-    "telegram": _build_telegram,
     "discord": _build_discord,
 }
 
