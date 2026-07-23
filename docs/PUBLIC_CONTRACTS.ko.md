@@ -208,9 +208,10 @@ Core입니다. 그 외 키와 검색 순서는 Experimental입니다.
 
 마이그레이션 참고:
 
-- Telegram 메시징은 더 이상 지원하지 않습니다. 기존 최상위 `telegram:` 블록이나
-  `messenger.telegram` 블록이 있으면 설정 로딩이 명확한 오류로 실패하므로, 제거하고
-  중첩된 `messenger.discord` bot 필드를 사용하세요.
+- Telegram 메시징은 더 이상 지원하지 않습니다. 남아 있는 최상위 `telegram:` 블록은 명확한
+  오류로 설정 로딩에 실패하고, 중첩된 `messenger.telegram` 블록은 알 수 없는 `messenger`
+  필드로 실패합니다. 둘 중 무엇이든 제거하고 중첩된 `messenger.discord` bot 필드를
+  사용하세요.
 - 제거된 최상위 `behavior`, `runtime`, `paths` section, `workflow.root`, 엔진별
   `scheduler`/`resources`/`messenger` 블록은 호환 별칭이 아닙니다. 위의 지원되는
   최상위 공유 section과 `orca.runtime`/`orca.paths`를 사용하세요.
@@ -736,8 +737,9 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
 
 동작:
 
-- installer는 engine-worker target을 활성화합니다. runtime target은 engine-worker
-  target까지 끌어들이는 superset입니다.
+- full-runtime 설치는 runtime target을, worker-only 설치는 engine-worker target을
+  활성화합니다. 현재 runtime target은 engine-worker target만 끌어들이므로 두 방식이
+  시작하는 unit 집합은 동일합니다.
 - engine-worker target은 ORCA 엔진 서비스를 시작합니다. 인자 없는 대화형 `queue worker` 명령은
   ORCA-only 동작을 유지합니다. `runs_root`
   설정만으로 workflow나 그 내부 xTB/CREST 워커를 암묵적으로 시작하지 않습니다.

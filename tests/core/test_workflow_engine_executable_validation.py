@@ -347,9 +347,14 @@ def test_shared_engine_loaders_reject_invalid_explicit_scratch_root(
             id="discord-token-bool",
         ),
         pytest.param(
-            {"discord": {"channel_ids": None}},
-            "messenger.discord.channel_ids",
-            id="discord-channels-null",
+            {"discord": {"default_channel_id": None}},
+            "messenger.discord.default_channel_id",
+            id="discord-default-channel-null",
+        ),
+        pytest.param(
+            {"discord": {"channel_ids": []}},
+            "Unknown messenger.discord config fields are not supported",
+            id="discord-interactive-key-removed",
         ),
     ],
 )

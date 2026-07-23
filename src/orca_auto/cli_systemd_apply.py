@@ -61,6 +61,14 @@ _RECOVERABLE_SYSTEMD_UNIT_NAMES_V1 = frozenset(
         "orca_auto-runtime@.target",
     }
 )
+# Append-only, for the same reason: an older manifest-v1 installer could record
+# a retired unit in its active-component snapshot. Recovery accepts those names
+# so a legacy manifest stays rollback-able; the retired units are never started,
+# stopped, or verified, because they are absent from the current unit set.
+_RECOVERABLE_ACTIVE_COMPONENT_TEMPLATES_V1 = (
+    "orca_auto-xtb-md-worker@{user}.service",
+    "orca_auto-bot@{user}.service",
+)
 
 
 @dataclass(frozen=True)
@@ -182,6 +190,13 @@ def _active_component_candidates(plan: SystemdInstallPlan) -> tuple[str, ...]:
         f"orca_auto-runtime@{user}.target",
         f"orca_auto-engine-workers@{user}.target",
         f"orca_auto-queue-worker@{user}.service",
+    )
+
+
+def _recoverable_active_components(plan: SystemdInstallPlan) -> frozenset[str]:
+    user = plan.target_user
+    return frozenset(_active_component_candidates(plan)).union(
+        template.format(user=user) for template in _RECOVERABLE_ACTIVE_COMPONENT_TEMPLATES_V1
     )
 
 
@@ -690,13 +705,18 @@ def _load_transaction(
         seen_boot.add(unit)
         boot.append(_BootSelection(unit=unit, state=state))
     safe_active_components = _active_component_candidates(plan)
+    recoverable_active_components = _recoverable_active_components(plan)
     raw_active_components = payload.get("active_components")
     if raw_active_components is not None and not isinstance(raw_active_components, list):
         raise OSError(f"pending systemd transaction has invalid active components: {manifest}")
     active_components_list: list[str] = []
     seen_active: set[str] = set()
     for unit in raw_active_components or ():
-        if not isinstance(unit, str) or unit in seen_active or unit not in safe_active_components:
+        if (
+            not isinstance(unit, str)
+            or unit in seen_active
+            or unit not in recoverable_active_components
+        ):
             raise OSError(f"pending systemd transaction has unsafe active components: {manifest}")
         seen_active.add(unit)
         active_components_list.append(unit)

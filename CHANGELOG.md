@@ -29,6 +29,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
     over Discord.
   - Dropped the `discord.py` dependency.
 
+  Before upgrading, remove `messenger.telegram`, any top-level `telegram:`
+  block, and `messenger.discord.uploads` from `orca_auto.yaml`; those keys now
+  fail configuration loading. After upgrading, rerun
+  `orca_auto systemd install --user <name> --repo <path>` to rewrite the runtime
+  target, and, if the `orca_auto-bot@<user>.service` unit was installed, remove
+  it by hand (`systemctl disable --now orca_auto-bot@<user>.service`,
+  `rm /etc/systemd/system/orca_auto-bot@.service`, then
+  `systemctl daemon-reload`). The installer no longer renders that unit, and a
+  stale runtime target would otherwise pull in a unit whose `ExecStart` is gone.
+
 ## [0.3.0] - 2026-07-21
 
 ### Removed

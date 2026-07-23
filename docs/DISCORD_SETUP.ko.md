@@ -33,7 +33,8 @@ Discord에서 **사용자 설정 → 고급 → 개발자 모드**를 켠 뒤 �
 실제로 사용하는 `orca_auto.yaml`(보통 `config/orca_auto.yaml`)을 수정합니다.
 
 `orca_auto init`을 다시 실행해도 됩니다. 기존 messenger 설정을 유지할지 물으면
-**아니요**를 선택한 뒤 `discord`를 선택하세요.
+**아니요**를 선택한 뒤 안내에 따라 Discord bot 값을 입력하세요. provider는 항상
+`discord`이므로 provider를 고르는 질문은 없습니다.
 
 ```yaml
 messenger:

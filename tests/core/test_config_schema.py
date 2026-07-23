@@ -316,23 +316,17 @@ def test_messenger_delivery_settings_reject_invalid_explicit_values(
         parser({field: value})
 
 
-def test_discord_config_parses_bot_and_authorization_settings() -> None:
+def test_discord_config_parses_bot_notification_settings() -> None:
     config = discord_config_from_mapping(
         {
             "bot_token": " bot-token ",
-            "channel_ids": [111, "222", "111"],
             "default_channel_id": 333,
-            "allowed_user_ids": ["444", 555, "444"],
         }
     )
 
     assert config.bot_token == "bot-token"
-    assert config.channel_ids == ("111", "222")
     assert config.default_channel_id == "333"
-    assert config.allowed_user_ids == ("444", "555")
-    assert config.interaction_channel_ids == ("111", "222", "333")
     assert config.bot_notification_enabled
-    assert config.interactive_enabled
 
 
 @pytest.mark.parametrize(
@@ -341,6 +335,16 @@ def test_discord_config_parses_bot_and_authorization_settings() -> None:
         (
             discord_config_from_mapping,
             {"channe_ids": []},
+            "Unknown messenger.discord config fields are not supported",
+        ),
+        (
+            discord_config_from_mapping,
+            {"channel_ids": []},
+            "Unknown messenger.discord config fields are not supported",
+        ),
+        (
+            discord_config_from_mapping,
+            {"allowed_user_ids": []},
             "Unknown messenger.discord config fields are not supported",
         ),
     ],
@@ -358,7 +362,7 @@ def test_messenger_adapter_config_rejects_unknown_fields(
     ("parser", "raw"),
     [
         (messenger_config_from_mapping, {"provider": "private-provider-value"}),
-        (discord_config_from_mapping, {"channel_ids": ["private-bad-channel"]}),
+        (discord_config_from_mapping, {"default_channel_id": "private-bad-channel"}),
     ],
 )
 def test_messenger_config_validation_errors_do_not_echo_raw_values(
@@ -371,55 +375,27 @@ def test_messenger_config_validation_errors_do_not_echo_raw_values(
     assert "private-" not in str(raised.value)
 
 
-def test_discord_config_capabilities_are_independent_and_fail_closed() -> None:
-    interactive = DiscordConfig(
-        bot_token="token",
-        channel_ids=("111",),
-        allowed_user_ids=("222",),
-    )
-    assert interactive.interactive_enabled
-    assert not interactive.bot_notification_enabled
+def test_discord_bot_notification_fails_closed_on_incomplete_settings() -> None:
+    token_only = DiscordConfig(bot_token="token")
+    assert not token_only.bot_notification_enabled
 
-    incomplete = DiscordConfig(bot_token="token")
-    assert not incomplete.bot_notification_enabled
-    assert not incomplete.interactive_enabled
+    channel_only = DiscordConfig(default_channel_id="111")
+    assert not channel_only.bot_notification_enabled
 
-    no_operators = DiscordConfig(bot_token="token", channel_ids=("111",))
-    assert not no_operators.interactive_enabled
-
-    default_only = DiscordConfig(
-        bot_token="token",
-        default_channel_id="111",
-        allowed_user_ids=("222",),
-    )
-    assert default_only.bot_notification_enabled
-    assert not default_only.interactive_enabled
+    complete = DiscordConfig(bot_token="token", default_channel_id="111")
+    assert complete.bot_notification_enabled
 
 
 def test_messenger_config_repr_redacts_credentials() -> None:
     discord = repr(
         DiscordConfig(
             bot_token="discord-secret",
-            channel_ids=("456",),
             default_channel_id="789",
-            allowed_user_ids=("10",),
         )
     )
 
     assert "discord-secret" not in discord
-    assert "('456',)" not in discord
     assert "789" not in discord
-    assert "('10',)" not in discord
-
-
-def test_discord_interaction_channels_include_default_once() -> None:
-    config = DiscordConfig(
-        bot_token="token",
-        channel_ids=("111", "222"),
-        default_channel_id="222",
-    )
-
-    assert config.interaction_channel_ids == ("111", "222")
 
 
 @pytest.mark.parametrize(
@@ -431,9 +407,6 @@ def test_discord_interaction_channels_include_default_once() -> None:
         ("default_channel_id", "１２３"),
         ("default_channel_id", True),
         ("default_channel_id", str(1 << 64)),
-        ("channel_ids", ["abc"]),
-        ("channel_ids", "111,222"),
-        ("allowed_user_ids", [False]),
     ],
 )
 def test_discord_config_rejects_invalid_snowflakes(field: str, value: object) -> None:
@@ -454,14 +427,6 @@ def test_discord_config_rejects_invalid_explicit_bot_tokens(value: object) -> No
         ("default_channel_id", 1.5),
         ("default_channel_id", []),
         ("default_channel_id", {}),
-        ("channel_ids", None),
-        ("channel_ids", True),
-        ("channel_ids", 123),
-        ("channel_ids", {}),
-        ("allowed_user_ids", None),
-        ("allowed_user_ids", False),
-        ("allowed_user_ids", 123),
-        ("allowed_user_ids", {}),
     ],
 )
 def test_discord_config_rejects_invalid_explicit_identity_values(
@@ -472,18 +437,14 @@ def test_discord_config_rejects_invalid_explicit_identity_values(
         discord_config_from_mapping({field: value})
 
 
-def test_discord_config_preserves_empty_string_disable_and_empty_allowlists() -> None:
+def test_discord_config_preserves_empty_string_disable() -> None:
     config = discord_config_from_mapping(
         {
             "bot_token": "  ",
-            "channel_ids": [],
             "default_channel_id": "",
-            "allowed_user_ids": [],
         }
     )
 
     assert config.bot_token == ""
-    assert config.channel_ids == ()
     assert config.default_channel_id == ""
-    assert config.allowed_user_ids == ()
-    assert not config.interactive_enabled
+    assert not config.bot_notification_enabled

@@ -174,42 +174,27 @@ def _prompt_max_active_simulations() -> int:
     return _prompt_int("max_active_simulations", default="4", minimum=1)
 
 
-def _comma_separated_ids(raw: str) -> list[str]:
-    return [part.strip() for part in raw.split(",") if part.strip()]
-
-
 def _prompt_discord_config() -> dict[str, object]:
     empty: dict[str, object] = {
         "bot_token": "",
-        "channel_ids": [],
         "default_channel_id": "",
-        "allowed_user_ids": [],
     }
-    if not _prompt_yes_no("Configure the Discord bot now?", default=False):
+    if not _prompt_yes_no("Configure Discord notifications now?", default=False):
         return empty
 
     while True:
         raw: dict[str, object] = {
             "bot_token": _prompt_secret_text("Discord bot token"),
-            "channel_ids": _comma_separated_ids(
-                _prompt_text("Discord inbound channel ids (comma-separated)")
-            ),
             "default_channel_id": _prompt_text("Discord default notification channel id"),
-            "allowed_user_ids": _comma_separated_ids(
-                _prompt_text("Discord operator user ids (comma-separated)")
-            ),
         }
         try:
             config = discord_config_from_mapping(raw)
         except ValueError as exc:
-            print(f"Invalid Discord bot configuration: {exc}")
+            print(f"Invalid Discord notification configuration: {exc}")
             continue
-        if config.bot_notification_enabled and config.channel_ids and config.allowed_user_ids:
+        if config.bot_notification_enabled:
             return raw
-        print(
-            "Discord bot token, an inbound channel id, a default channel id, and at least "
-            "one operator user id are required."
-        )
+        print("A Discord bot token and a default notification channel id are required.")
 
 
 def _prompt_messenger_config() -> dict[str, object]:

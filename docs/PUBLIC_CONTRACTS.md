@@ -225,8 +225,9 @@ Behavior:
 Migration note:
 
 - Telegram messaging is no longer supported. A leftover top-level `telegram:`
-  block, or a `messenger.telegram` block, fails configuration loading with a
-  pointed error; remove it and use the nested `messenger.discord` bot fields.
+  block fails configuration loading with a pointed error; a nested
+  `messenger.telegram` block fails as an unknown `messenger` field. Remove
+  either one and use the nested `messenger.discord` bot fields.
 - Removed top-level `behavior`, `runtime`, and `paths` sections; `workflow.root`;
   and engine-scoped `scheduler`, `resources`, or `messenger` blocks are not
   compatibility aliases. Use the supported top-level shared sections and
@@ -818,8 +819,9 @@ Supported operator commands:
 
 Behavior:
 
-- The installer enables the engine-worker target. The runtime target is a
-  superset that also pulls in the engine-worker target.
+- A full-runtime install enables the runtime target; a worker-only install
+  enables the engine-worker target instead. The runtime target currently pulls
+  in only the engine-worker target, so both modes start the same unit set.
 - The engine-worker target starts the ORCA engine service. An unqualified
   interactive `queue worker` command remains ORCA-only.
   Configuring `runs_root` does not implicitly start workflow or its internal

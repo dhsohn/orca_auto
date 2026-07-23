@@ -124,9 +124,7 @@ def test_prompt_discord_config_covers_skip_and_retry(capsys) -> None:
     with patch("orca_auto.orca.commands.init._prompt_yes_no", return_value=False):
         assert init._prompt_discord_config() == {
             "bot_token": "",
-            "channel_ids": [],
             "default_channel_id": "",
-            "allowed_user_ids": [],
         }
 
     with (
@@ -137,14 +135,12 @@ def test_prompt_discord_config_covers_skip_and_retry(capsys) -> None:
         ),
         patch(
             "orca_auto.orca.commands.init._prompt_text",
-            side_effect=["123", "456", "", "123", "456", "789"],
+            side_effect=["456", "456"],
         ),
     ):
         assert init._prompt_discord_config() == {
             "bot_token": "bot-token",
-            "channel_ids": ["123"],
             "default_channel_id": "456",
-            "allowed_user_ids": ["789"],
         }
 
     assert "Discord bot token" in capsys.readouterr().out
@@ -420,9 +416,7 @@ def test_prompt_init_values_can_replace_existing_messenger() -> None:
         "provider": "discord",
         "discord": {
             "bot_token": "token",
-            "channel_ids": ["100"],
             "default_channel_id": "200",
-            "allowed_user_ids": ["7"],
         },
     }
     with (

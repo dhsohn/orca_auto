@@ -75,7 +75,7 @@ config_path.write_text(
                 },
                 "paths": {"orca_executable": str(fake_orca)},
             },
-            "messenger": {"telegram": {"bot_token": "", "chat_id": ""}},
+            "messenger": {"discord": {"bot_token": "", "default_channel_id": ""}},
         },
         indent=2,
     ),

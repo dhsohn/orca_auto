@@ -3,6 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
+from orca_auto.core.config.schema import messenger_config_from_mapping
 from orca_auto.orca.config import load_config
 
 
@@ -432,6 +435,14 @@ class TestConfigValidation(unittest.TestCase):
                 load_config(str(cfg_path))
             self.assertIn("Config file not found", str(ctx.exception))
             self.assertIn("orca_auto.yaml.example", str(ctx.exception))
+
+    def test_shipped_example_config_messenger_matches_current_schema(self) -> None:
+        """bootstrap copies this template verbatim, so it must stay loadable."""
+        example = Path(__file__).resolve().parents[1] / "config" / "orca_auto.yaml.example"
+        raw = yaml.safe_load(example.read_text(encoding="utf-8"))
+        assert isinstance(raw, dict)
+        messenger = messenger_config_from_mapping(raw.get("messenger"))
+        self.assertEqual(messenger.normalized_provider, "discord")
 
     def test_missing_required_paths_raise_with_explicit_path_hint(self) -> None:
         with tempfile.TemporaryDirectory() as td:

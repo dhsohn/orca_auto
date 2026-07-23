@@ -10,7 +10,7 @@ Span construction bakes the value-vs-literal distinction in at build time so eac
 renderer can preserve the intended text semantics:
 
 * :func:`text`, :func:`bold`, :func:`code` normalise their value with
-  ``str(value).strip()`` — matching the old ``escape_html`` / ``html_code``.
+  ``str(value).strip()``.
 * :func:`raw` keeps the string verbatim (significant leading whitespace, e.g.
   indented monitor rows) and is only HTML-escaped, never stripped.
 """

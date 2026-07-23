@@ -37,7 +37,8 @@ shows where the control is.
 Edit the active `orca_auto.yaml` (normally `config/orca_auto.yaml`):
 
 You can also rerun `orca_auto init`; when it asks whether to keep the existing
-messenger settings, answer **No**, then select `discord`.
+messenger settings, answer **No** and enter the Discord bot values it prompts
+for. The provider is always `discord`, so there is no provider prompt.
 
 ```yaml
 messenger:

@@ -623,10 +623,10 @@ def test_cmd_service_status_worker_only_requires_only_worker(capsys: Any) -> Non
             enabled="disabled",
         ),
         cli_systemd_status.ServiceUnitStatus(
-            label="bot",
-            unit="orca_auto-bot@alice.service",
-            active="not-found",
-            enabled="not-found",
+            label="workflow",
+            unit="orca_auto-workflow-worker@alice.service",
+            active="inactive",
+            enabled="disabled",
         ),
     )
 
@@ -670,8 +670,8 @@ def test_cmd_service_status_hides_runtime_managed_enabled_noise(
             enabled="disabled",
         ),
         cli_systemd_status.ServiceUnitStatus(
-            label="bot",
-            unit="orca_auto-bot@alice.service",
+            label="workflow",
+            unit="orca_auto-workflow-worker@alice.service",
             active="active",
             enabled="disabled",
         ),
@@ -1723,6 +1723,37 @@ def test_recovery_accepts_historical_unit_absent_from_current_plan(tmp_path: Pat
     assert historical_unit.destination.read_text(encoding="utf-8") == "historical original\n"
 
 
+def test_recovery_accepts_retired_active_component_from_legacy_manifest(tmp_path: Path) -> None:
+    plan = _single_unit_plan(tmp_path)
+    plan.unit_dir.mkdir()
+    plan.units[0].destination.write_text("original unit\n", encoding="utf-8")
+    retired = "orca_auto-bot@alice.service"
+    _write_interrupted_systemd_transaction(
+        plan,
+        active_components=(
+            "orca_auto-runtime@alice.target",
+            "orca_auto-queue-worker@alice.service",
+            retired,
+        ),
+        runtime_phase=cli_systemd_apply._RUNTIME_PHASE_RESTART_SUCCEEDED,
+        started_owner="orca_auto-runtime@alice.target",
+    )
+    runner = _FakeSudoSystemd(
+        plan.unit_dir,
+        active={unit: "active" for unit in cli_systemd_apply._active_component_candidates(plan)},
+    )
+
+    assert cli_systemd_apply._recover_pending_transaction(plan, run=runner)
+    assert plan.units[0].destination.read_text(encoding="utf-8") == "original unit\n"
+    # The retired unit is accepted so the rollback can run, but it is never
+    # started, stopped, or queried: it is not part of the current unit set.
+    assert all(retired not in command for command in runner.commands)
+    assert {unit for unit, state in runner.active.items() if state == "active"} == {
+        "orca_auto-runtime@alice.target",
+        "orca_auto-queue-worker@alice.service",
+    }
+
+
 def test_masked_boot_state_is_restored_after_original_unit_files(tmp_path: Path) -> None:
     plan = _single_unit_plan(tmp_path)
     plan.unit_dir.mkdir()
@@ -2439,41 +2470,45 @@ def test_cmd_service_status_returns_failure_when_any_unit_failed(capsys: Any) ->
     assert "failed" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("unhealthy_label", ["runtime", "engines", "worker"])
 @pytest.mark.parametrize("unhealthy_state", ["inactive", "not-found", "error: dbus down"])
 def test_cmd_service_status_full_mode_rejects_any_non_active_required_unit(
+    unhealthy_label: str,
     unhealthy_state: str,
 ) -> None:
-    statuses = (
-        cli_systemd_status.ServiceUnitStatus(
-            label="runtime",
-            unit="orca_auto-runtime@alice.target",
-            active="active",
-            enabled="enabled",
-        ),
-        cli_systemd_status.ServiceUnitStatus(
-            label="worker",
-            unit="orca_auto-queue-worker@alice.service",
-            active="active",
-            enabled="disabled",
-        ),
-        cli_systemd_status.ServiceUnitStatus(
-            label="bot",
-            unit="orca_auto-bot@alice.service",
-            active=unhealthy_state,
-            enabled="disabled",
-        ),
+    installed_units = (
+        ("runtime", "orca_auto-runtime@alice.target", "enabled"),
+        ("engines", "orca_auto-engine-workers@alice.target", "disabled"),
+        ("worker", "orca_auto-queue-worker@alice.service", "disabled"),
+        ("workflow", "orca_auto-workflow-worker@alice.service", "disabled"),
     )
 
-    result = cli_systemd_status.cmd_service_status(
-        Namespace(target_user="alice", json=True),
-        deps=cli_systemd_status.ServiceCliDeps(
-            collect_service_status=lambda target_user, run: statuses,
-            run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
-            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
-        ),
-    )
+    def _statuses(unhealthy: str | None) -> tuple[cli_systemd_status.ServiceUnitStatus, ...]:
+        return tuple(
+            cli_systemd_status.ServiceUnitStatus(
+                label=label,
+                unit=unit,
+                active=unhealthy_state if label == unhealthy else "active",
+                enabled=enabled,
+            )
+            for label, unit, enabled in installed_units
+        )
 
-    assert result == 1
+    def _exit_code(statuses: tuple[cli_systemd_status.ServiceUnitStatus, ...]) -> int:
+        return cli_systemd_status.cmd_service_status(
+            Namespace(target_user="alice", json=True),
+            deps=cli_systemd_status.ServiceCliDeps(
+                collect_service_status=lambda target_user, run: statuses,
+                run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
+                which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+            ),
+        )
+
+    # Baseline first: the healthy full-mode unit set must pass, so the rejection
+    # below is caused by the unhealthy required unit rather than by a status
+    # tuple that no longer matches the installed units.
+    assert _exit_code(_statuses(None)) == 0
+    assert _exit_code(_statuses(unhealthy_label)) == 1
 
 
 def test_cmd_service_restart_requires_sudo_for_non_root_user(capsys: Any) -> None:

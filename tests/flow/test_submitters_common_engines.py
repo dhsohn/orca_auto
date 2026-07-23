@@ -220,8 +220,8 @@ def test_engine_runtime_paths_ignores_legacy_root_keys(tmp_path: Path) -> None:
             "scheduler section must be a mapping",
         ),
         (
-            "runs_root: /tmp/runs\nmessenger:\n  discord:\n    channel_ids:\n",
-            "messenger.discord.channel_ids",
+            "runs_root: /tmp/runs\nmessenger:\n  discord:\n    default_channel_id:\n",
+            "messenger.discord.default_channel_id",
         ),
     ],
 )
