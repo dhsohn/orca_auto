@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orca_auto.core.config import MessengerConfig, TelegramConfig
+from orca_auto.core.config import DiscordConfig, MessengerConfig
 from orca_auto.orca.commands import _helpers as command_helpers
 from orca_auto.orca.commands import monitor
 from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig
@@ -12,14 +12,16 @@ from orca_auto.orca.dft.monitor import MonitorResult, ScanReport
 from orca_auto.orca.execution import _emit
 
 
-def _cfg(allowed_root: Path, *, telegram_enabled: bool = True) -> AppConfig:
-    telegram = (
-        TelegramConfig(bot_token="token", chat_id="1234") if telegram_enabled else TelegramConfig()
+def _cfg(allowed_root: Path, *, notifier_enabled: bool = True) -> AppConfig:
+    discord = (
+        DiscordConfig(bot_token="token", default_channel_id="1234")
+        if notifier_enabled
+        else DiscordConfig()
     )
     return AppConfig(
         runtime=RetryRuntimeConfig(allowed_root=str(allowed_root)),
         paths=PathsConfig(orca_executable="/usr/bin/orca"),
-        messenger=MessengerConfig(telegram=telegram),
+        messenger=MessengerConfig(discord=discord),
     )
 
 
@@ -73,18 +75,18 @@ def test_human_bytes_and_emit_cover_formatting_and_selected_keys(capsys) -> None
     assert "ignored" not in output
 
 
-def test_run_monitor_fails_without_telegram_or_allowed_root(tmp_path: Path) -> None:
-    disabled_cfg = _cfg(tmp_path / "runs_disabled", telegram_enabled=False)
+def test_run_monitor_fails_without_messenger_or_allowed_root(tmp_path: Path) -> None:
+    disabled_cfg = _cfg(tmp_path / "runs_disabled", notifier_enabled=False)
     assert monitor._run_monitor(disabled_cfg) == 1
 
-    missing_root_cfg = _cfg(tmp_path / "missing", telegram_enabled=True)
+    missing_root_cfg = _cfg(tmp_path / "missing", notifier_enabled=True)
     assert monitor._run_monitor(missing_root_cfg) == 1
 
 
 def test_run_monitor_returns_one_when_notification_fails(tmp_path: Path) -> None:
     allowed_root = tmp_path / "orca_runs"
     allowed_root.mkdir()
-    cfg = _cfg(allowed_root, telegram_enabled=True)
+    cfg = _cfg(allowed_root, notifier_enabled=True)
     fake_monitor = SimpleNamespace(
         scan=lambda: ScanReport(new_results=[MonitorResult()], scanned_files=1)
     )
@@ -110,7 +112,7 @@ def test_run_monitor_returns_one_when_notification_fails(tmp_path: Path) -> None
 
 
 def test_cmd_monitor_returns_status_for_loaded_config(tmp_path: Path) -> None:
-    cfg = _cfg(tmp_path / "orca_runs", telegram_enabled=True)
+    cfg = _cfg(tmp_path / "orca_runs", notifier_enabled=True)
     args = SimpleNamespace(config="config.yml")
 
     with (

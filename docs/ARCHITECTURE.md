@@ -49,8 +49,8 @@ src/orca_auto/
 │   ├── indexing/        # Job-location index (where each job's outputs live)
 │   ├── state/           # Shared engine state helpers
 │   ├── config/          # Config schema + loading
-│   ├── messaging/       # Neutral Doc/port + Telegram/Discord adapters
-│   ├── notifications/   # Low-level Telegram transport + engine hooks
+│   ├── messaging/       # Neutral Doc/port + Discord notification adapter
+│   ├── notifications/   # Engine notification hooks + delivery
 │   ├── commands/        # Shared run-dir / queue command logic
 │   ├── paths/           # Path validation + workflow path resolution
 │   └── utils/           # Locks, persistence, process tracking, coercion
@@ -82,8 +82,7 @@ src/orca_auto/
     ├── submitters/      # ORCA / internal-engine submission builders
     ├── templates.py     # Workflow template registry
     ├── manifest.py      # flow.yaml parsing
-    ├── registry/        # Workflow registry + journal
-    └── bot/             # Provider-neutral bot application + gateway adapters
+    └── registry/        # Workflow registry + journal
 ```
 
 ### Import rules (from DEVELOPMENT.md)
@@ -130,7 +129,7 @@ from execution by a durable, on-disk queue.
   ┌──────────────────────────────┐      ┌──────────────────────────────┐
   │ engine-workers@.target       │ ───▶ │  Queue worker loop            │
   │ └ queue-worker (ORCA)        │      │  core/queue/worker/loop.py    │
-  │ runtime@.target + bot        │      └─────────────┬────────────────┘
+  │ runtime@.target              │      └─────────────┬────────────────┘
   └──────────────────────────────┘                    │ reserve admission slot
                                                        │ spawn child by queue id
                                                        ▼
@@ -403,8 +402,7 @@ plus the standard XYZ filenames.
 Manifest admission is bounded before materialization: the shared loader caps a
 job manifest at 1 MiB, 32 YAML aliases, 10,000 parsed/expanded nodes, and 64
 nesting levels, and rejects cyclic/recursive graphs. Central geometry limits cap
-local work at 10,000 atoms, xTB/ORCA Hessian-producing work at 1,000, and
-remote-upload work at 200.
+local work at 10,000 atoms and xTB/ORCA Hessian-producing work at 1,000.
 
 ### Supporting Information ownership
 
@@ -518,45 +516,27 @@ consume ORCA results without coupling to ORCA internals.
 
 ## 9. Notifications
 
-`core/messaging/` owns two provider-neutral capability boundaries: immutable semantic
-`Message` documents plus the notification `MessageChannel`, and normalized
-command/action models plus `InteractiveMessenger`. Domain notifiers construct documents
-without wire markup, while the interactive application receives only normalized values.
-`MessengerConfig` owns both adapter configs and rejects unknown providers.
+orca_auto delivers one-way outbound notifications only: it posts job and workflow
+alerts to Discord and never consumes inbound commands.
 
-`core/notifications/` retains the low-level Telegram Bot API transport reused by
-`TelegramChannel`, plus the engine notification hook layer (`engine_notifier.py`,
-`engine_delivery.py`). `DiscordBotChannel` sends bot-authenticated notifications;
-its shared HTTP retry/backoff helpers live in `discord_http.py`.
-Each `EngineDefinition` can register `job_started` / `job_finished` / `retry` hooks.
+`core/messaging/` owns a provider-neutral capability boundary: immutable semantic
+`Message` documents (`richtext.py`) plus the notification `MessageChannel`
+(`channel.py`). Domain notifiers construct documents without wire markup;
+`build_channel` (`registry.py`) resolves the configured channel and fails closed on
+unsupported providers. `MessengerConfig` owns the adapter config and rejects unknown
+providers.
 
-`flow/bot/application.py` owns provider-neutral `/list`, `/cancel`, and `/help`
-behavior. Native Telegram polling and Discord gateway adapters translate provider
-events at the edge. Destructive actions use short, expiring, one-time opaque IDs bound
-to the requesting provider, channel, and actor instead of embedding raw queue IDs in
-button payloads. `flow/bot/upload_application.py` separately owns the durable Discord
-`!run` transaction: reservation before the CDN download, archive verification,
-confirmation, atomic publication, downstream queue/workflow commit coordination, and
-restart reconciliation. An indeterminate commit is preserved rather than retried or
-deleted. Both applications share only the provider-neutral delivery operations in
-`flow/bot/interaction_delivery.py`. Workflow alerts keep per-job ORCA messages but
+`DiscordBotChannel` (`discord_bot.py`) renders each `Message` into a Discord embed
+(`render_discord.py`) and delivers it over the bot-authenticated Discord API; its
+shared HTTP retry/backoff helpers live in `discord_http.py`.
+
+`core/notifications/` holds the engine notification hook layer (`engine_notifier.py`,
+`engine_delivery.py`). Each `EngineDefinition` can register `job_started` /
+`job_finished` / `retry` hooks. Workflow alerts keep per-job ORCA messages but
 summarize internal CREST and reaction-path xTB child phases into one message each.
-Import-linter keeps upload persistence below the runner/provider composition and
-prevents the command application from directly taking ownership of `core.ingest`.
 
-The `ActionStore` port defines one-time resolution and originator/operator audience
-policies. Its current in-memory implementation serves list/cancel cards created by
-the gateway in response to commands. Execution-authorizing upload confirmations use
-the separate durable upload-session store so a restart cannot lose identity,
-single-consumer, or commit-state guarantees. Notification messages do not yet carry actions.
-When notification-origin controls are added, the worker-side sender and gateway must
-share a durable `ActionStore` implementation so bindings survive the process boundary;
-that extension belongs behind the same neutral card/action contracts.
-
-The selected adapter is enabled only when its credentials are complete. Telegram
-requires `messenger.telegram.bot_token` plus `chat_id`. Interactive Discord requires
-`bot_token`, channel IDs, and an operator allowlist; bot token + default channel is also the canonical
-notification path.
+The channel is enabled only when its credentials are complete: Discord requires
+`messenger.discord.bot_token` plus `messenger.discord.default_channel_id`.
 
 ---
 
@@ -569,7 +549,7 @@ Config is a single YAML file resolved in this order:
 3. `~/orca_auto/config/orca_auto.yaml`
 
 `core/config/schema.py` defines the typed config dataclasses (e.g.
-`RetryRuntimeConfig`, `CommonResourceConfig`, `TelegramConfig`) with normalizing
+`RetryRuntimeConfig`, `CommonResourceConfig`, `MessengerConfig`) with normalizing
 constructors. Notable rules:
 
 - **Linux paths only.** Windows drive paths, `/mnt/<drive>/...`, relative
@@ -598,13 +578,10 @@ under `systemd/`:
 | `orca_auto-engine-workers@.target`    | Starts the default engine worker unit           |
 | `orca_auto-queue-worker@.service`     | Supervises the ORCA worker                      |
 | `orca_auto-workflow-worker@.service`  | Opt-in workflow + internal xTB/CREST workers    |
-| `orca_auto-bot@.service`              | Selected provider-neutral messenger bot        |
-| `orca_auto-runtime@.target`           | Starts engine workers and the bot together      |
+| `orca_auto-runtime@.target`           | Starts the engine workers                        |
 
 `orca_auto systemd install --user <user> --repo <repo>` renders and enables the
-units. If the selected provider lacks interactive bot settings, the bot-free
-engine-worker target is enabled; rerun after completing them to enable the full target. On WSL, `systemd`
-must be enabled in `/etc/wsl.conf`.
+units. On WSL, `systemd` must be enabled in `/etc/wsl.conf`.
 
 The default ORCA worker runs under its own service supervisor, so it can fail or
 restart independently of the opt-in workflow supervisor. The opt-in

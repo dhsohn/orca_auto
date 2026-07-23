@@ -20,7 +20,6 @@ SERVICE_UNIT_ORDER = (
     ("engines", "orca_auto-engine-workers@{user}.target"),
     ("worker", "orca_auto-queue-worker@{user}.service"),
     ("workflow", "orca_auto-workflow-worker@{user}.service"),
-    ("bot", "orca_auto-bot@{user}.service"),
 )
 _ENABLED_UNIT_FILE_STATES = frozenset({"enabled", "enabled-runtime"})
 _READABLE_UNIT_FILE_STATES = frozenset(
@@ -198,7 +197,7 @@ def _selected_service_mode(statuses: Sequence[ServiceUnitStatus]) -> str:
 
 def _required_service_labels(mode: str) -> frozenset[str]:
     if mode == "full":
-        return frozenset({"runtime", "engines", "worker", "bot"})
+        return frozenset({"runtime", "engines", "worker"})
     return frozenset({"engines", "worker"})
 
 
@@ -229,10 +228,6 @@ def _engine_workers_unit_for_user(target_user: str) -> str:
 
 def _worker_unit_for_user(target_user: str) -> str:
     return f"orca_auto-queue-worker@{target_user}.service"
-
-
-def _bot_unit_for_user(target_user: str) -> str:
-    return f"orca_auto-bot@{target_user}.service"
 
 
 def _require_current_restart_units(
@@ -345,8 +340,6 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceCliDeps | None
     reset_units = [
         _worker_unit_for_user(target_user),
     ]
-    if unit == _runtime_unit_for_user(target_user):
-        reset_units.append(_bot_unit_for_user(target_user))
     for reset_unit in reset_units:
         print(f"Resetting service failure state for {reset_unit}")
         rc = _run_command(

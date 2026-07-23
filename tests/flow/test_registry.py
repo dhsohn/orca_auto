@@ -10,8 +10,7 @@ import pytest
 from orca_auto.core.messaging import (
     DiscordBotChannel,
     SendResult,
-    TelegramChannel,
-    render_telegram,
+    render_discord_embed,
 )
 from orca_auto.flow import registry, worker_state_store
 from orca_auto.flow.registry import _notifications as registry_notifications
@@ -82,10 +81,10 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "worker_session_id": "session-1",
             },
             [
-                "<b>Status changed</b>",
-                "<b>Workflow</b>: <code>wf_1</code>",
-                "<b>Template</b>: <code>reaction_ts_search</code>",
-                "<b>Status</b>: <code>planned</code> → <code>running</code>",
+                "Status changed",
+                "Workflow: `wf_1`",
+                "Template: `reaction_ts_search`",
+                "Status: `planned` → `running`",
             ],
         ),
         (
@@ -97,10 +96,10 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "worker_session_id": "session-2",
             },
             [
-                "<b>Advance failed</b>",
-                "<b>Workflow</b>: <code>wf_2</code>",
-                "<b>Reason</b>: <code>boom</code>",
-                "<b>Directory</b>: <code>-</code>",
+                "❌ Advance failed",
+                "Workflow: `wf_2`",
+                "Reason: `boom`",
+                "Directory: `-`",
             ],
         ),
         (
@@ -118,11 +117,11 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "worker_session_id": "session-stage",
             },
             [
-                "<b>Stage submitted</b>",
-                "<b>Workflow</b>: <code>wf_stage</code>",
-                "<b>Stage</b>: <code>xtb_path_search_01</code>",
-                "<b>Task</b>: <code>xtb/path_search</code>",
-                "<b>Stage status</b>: <code>planned</code> → <code>queued</code>",
+                "Stage submitted",
+                "Workflow: `wf_stage`",
+                "Stage: `xtb_path_search_01`",
+                "Task: `xtb/path_search`",
+                "Stage status: `planned` → `queued`",
             ],
         ),
         (
@@ -140,13 +139,13 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "worker_session_id": "session-handoff",
             },
             [
-                "<b>Handoff ready</b>",
-                "<b>Workflow</b>: <code>wf_stage</code>",
-                "<b>Stage</b>: <code>xtb_path_search_01</code>",
-                "<b>Task</b>: <code>xtb/path_search</code>",
-                "<b>Stage status</b>: <code>completed</code>",
-                "<b>Reaction handoff</b>: <code>queued</code> → <code>ready</code>",
-                "<b>Reason</b>: <code>xtb_ts_guess_ready</code>",
+                "✅ Handoff ready",
+                "Workflow: `wf_stage`",
+                "Stage: `xtb_path_search_01`",
+                "Task: `xtb/path_search`",
+                "Stage status: `completed`",
+                "Reaction handoff: `queued` → `ready`",
+                "Reason: `xtb_ts_guess_ready`",
             ],
         ),
         (
@@ -156,9 +155,9 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "worker_session_id": "session-1",
             },
             [
-                "<b>Worker started</b>",
-                "<b>Workflow root</b>: <code>/nonexistent/orca-auto-test-root_3</code>",
-                "<b>Reason</b>: <code>started</code>",
+                "Worker started",
+                "Workflow root: `/nonexistent/orca-auto-test-root_3`",
+                "Reason: `started`",
             ],
         ),
         (
@@ -187,14 +186,14 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 },
             },
             [
-                "<b>Phase finished</b>",
-                "<b>Workflow</b>: <code>wf_phase</code>",
-                "<b>Phase</b>: <code>xTB</code>",
-                "<b>Phase outcome</b>: <code>mixed</code>",
-                "<b>Stage status counts</b>: <code>completed:2</code>",
-                "<b>Stage statuses</b>: <code>rxn_01:completed,rxn_02:failed</code>",
-                "<b>Reaction handoff counts</b>: <code>failed:1,ready:1</code>",
-                "<b>Failure reasons</b>: <code>xtb_ts_guess_missing</code>",
+                "Phase finished",
+                "Workflow: `wf_phase`",
+                "Phase: `xTB`",
+                "Phase outcome: `mixed`",
+                "Stage status counts: `completed:2`",
+                "Stage statuses: `rxn_01:completed,rxn_02:failed`",
+                "Reaction handoff counts: `failed:1,ready:1`",
+                "Failure reasons: `xtb_ts_guess_missing`",
             ],
         ),
         (
@@ -207,10 +206,10 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
                 "worker_session_id": "session-1",
             },
             [
-                "<b>Workflow event</b>",
-                "<b>Event</b>: <code>custom_event</code>",
-                "<b>Workflow</b>: <code>wf_4</code>",
-                "<b>Status</b>: <code>queued</code>",
+                "Workflow event",
+                "Event: `custom_event`",
+                "Workflow: `wf_4`",
+                "Status: `queued`",
             ],
         ),
     ],
@@ -219,13 +218,27 @@ def test_journal_event_message_formats_supported_event_types(
     event: dict[str, Any],
     expected_lines: list[str],
 ) -> None:
-    message = render_telegram(
+    embed = render_discord_embed(
         registry_notifications.journal_event_message(event, "/nonexistent/orca-auto-test-root_3")
     )
 
-    assert message.startswith("orca_auto\n" + expected_lines[0])
-    for line in expected_lines:
-        assert line in message
+    # The event identity renders as the embed author; the first expected entry is
+    # the embed title (severity glyph included), the rest are "Field: `value`"
+    # fragments assembled into a searchable haystack.
+    haystack_parts = [embed.get("title", "")]
+    author = embed.get("author")
+    if author:
+        haystack_parts.append(author["name"])
+    for item in embed.get("fields", []):
+        haystack_parts.append(f"{item['name']}: {item['value']}")
+    if embed.get("description"):
+        haystack_parts.append(embed["description"])
+    haystack = "\n".join(haystack_parts)
+
+    assert embed["title"] == expected_lines[0]
+    assert embed["author"] == {"name": "orca_auto"}
+    for line in expected_lines[1:]:
+        assert line in haystack
 
 
 def test_notification_configuration_helpers_cover_default_override_and_transport(
@@ -261,37 +274,6 @@ def test_notification_configuration_helpers_cover_default_override_and_transport
     monkeypatch.setenv("ORCA_AUTO_FLOW_NOTIFY_DISABLED", "0")
     assert registry_notifications.journal_notification_enabled("custom_event") is True
     assert registry_notifications.messenger_channel_from_env() is None
-
-
-def test_messenger_channel_from_env_uses_orca_auto_config_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    config_path = tmp_path / "orca_auto.yaml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "messenger:",
-                "  telegram:",
-                "    bot_token: config-token",
-                "    chat_id: config-chat",
-                "    timeout_seconds: 7.5",
-                "    max_attempts: 3",
-                "    retry_backoff_seconds: 0.25",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("ORCA_AUTO_CONFIG", str(config_path))
-
-    channel = registry_notifications.messenger_channel_from_env()
-    assert isinstance(channel, TelegramChannel)
-    assert channel.config.bot_token == "config-token"
-    assert channel.config.chat_id == "config-chat"
-    assert channel.config.timeout_seconds == 7.5
-    assert channel.config.max_attempts == 3
-    assert channel.config.retry_backoff_seconds == 0.25
 
 
 def test_messenger_channel_from_env_uses_config_provider(
@@ -398,8 +380,16 @@ def test_maybe_notify_journal_event_sends_message_and_swallows_channel_errors(
     )
 
     assert len(sent_messages) == 2
-    assert "<b>Workflow</b>: <code>wf_notify</code>" in render_telegram(sent_messages[0])
-    assert "<b>Phase</b>: <code>xTB</code>" in render_telegram(sent_messages[1])
+    status_fields = {
+        item["name"]: item["value"]
+        for item in render_discord_embed(sent_messages[0]).get("fields", [])
+    }
+    phase_fields = {
+        item["name"]: item["value"]
+        for item in render_discord_embed(sent_messages[1]).get("fields", [])
+    }
+    assert status_fields["Workflow"] == "`wf_notify`"
+    assert phase_fields["Phase"] == "`xTB`"
 
     monkeypatch.setattr(
         registry_notifications, "messenger_channel_from_env", lambda: FakeChannel(fail=True)

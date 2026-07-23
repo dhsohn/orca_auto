@@ -110,9 +110,9 @@ def _write_orca_worker_config(
                     "paths": {"orca_executable": str(orca_executable)},
                 },
                 "messenger": {
-                    "telegram": {
+                    "discord": {
                         "bot_token": "",
-                        "chat_id": "",
+                        "default_channel_id": "",
                     },
                 },
             }

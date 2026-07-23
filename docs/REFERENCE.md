@@ -74,7 +74,6 @@ Operational consequences:
     orca_auto-runtime@.target
     orca_auto-engine-workers@.target
     orca_auto-queue-worker@.service
-    orca_auto-bot@.service
   scripts/*.sh / *.py
   tests/
     integration/
@@ -143,19 +142,13 @@ workflow:
     crest_executable: "/path/to/crest"
 
 messenger:
-  provider: telegram  # telegram | discord
-  telegram:
+  provider: discord
+  discord:
     bot_token: ""
-    chat_id: ""
-    allowed_user_ids: ["234567890123456789"]
+    default_channel_id: "123456789012345678"
     timeout_seconds: 5.0
     max_attempts: 2
     retry_backoff_seconds: 0.5
-  discord:
-    bot_token: ""
-    channel_ids: ["123456789012345678"]
-    default_channel_id: "123456789012345678"
-    allowed_user_ids: []
 
 orca:
   runtime:
@@ -194,11 +187,10 @@ Notes:
   comments-only) as an empty mapping, but rejects an explicit top-level
   null/scalar/sequence, an otherwise-empty `---` document, and duplicate keys
   at any depth.
-- Messenger identity fields are omission-aware and fail closed. Tokens must be
-  strings; Telegram `chat_id` may also be an integer; channel/operator ID lists
-  must contain valid positive IDs. Explicit nulls and wrong scalar/collection
-  shapes are not converted to text or defaults. Empty strings/lists intentionally
-  disable the corresponding capability.
+- Messenger identity fields are omission-aware and fail closed. The bot token
+  must be a string and the Discord channel ID must be a valid positive snowflake
+  ID. Explicit nulls and wrong scalar/collection shapes are not converted to text
+  or defaults. Empty strings intentionally disable delivery.
 - `default_max_retries=0` disables ORCA retries; any positive value enables the
   calculation-type retry policy, which caps retries by ORCA route type
 - With `scratch_root` configured, ORCA runs against a private input closure in
@@ -249,9 +241,7 @@ Notes:
 - Messenger delivery defaults likewise apply only when a key is omitted.
   Explicit timeout/backoff values must be finite numbers and `max_attempts`
   must be an integer; malformed values are rejected, while finite values outside
-  the documented delivery ranges are clamped. Discord upload `enabled` accepts
-  only recognized booleans, its size/count/retention controls require positive
-  integers, and `allowed_extensions` requires a list of non-empty strings.
+  the documented delivery ranges are clamped.
 
 ## 7) CLI Usage
 
@@ -346,7 +336,7 @@ ORCA-specific notes:
   value before normalization so a later duplicate cannot hide a larger request.
 - External ORCA include/program hooks that are not snapshot-bound (for example
   `ExtOpt`/`Prog*`, fragment/QM2 method files, `XTBINPUTSTRING`, and `GCP(FILE)`)
-  are unsupported and rejected before local or remote execution.
+  are unsupported and rejected before execution.
 - Retry inputs and resumed worker-shutdown inputs add `MORead` plus `%moinp`
   when the source input has a matching non-empty `.gbw` checkpoint. Resumed
   inputs are written as `*.resume.inp` so the original user input is not mutated.
@@ -499,8 +489,7 @@ Workflow notes:
   recovers interrupted creates, replacements, and deletes. Foreign, malformed, missing,
   or digest-mismatched ownership never authorizes overwrite/deletion; user-edited
   content is preserved. Ownership is preflighted before replacing last-good base
-  SI files. Uploaded archives cannot supply the CSV or marker, and
-  remote uploads cannot set server-owned `interaction_energy.priority`.
+  SI files.
 - Restart preserves the interaction route, per-fragment state/resources, and
   generation fingerprint. Interaction and RMSD grouping settings are immutable
   after fan-out, and an original primary stage cannot be reopened while that
@@ -553,8 +542,7 @@ Workflow notes:
   most 86, leave a nonnegative electron count, and use a UHF unpaired-electron
   count in range with electron-count-compatible parity.
 - Local geometry inputs are limited to 10,000 atoms. xTB Hessian jobs and ORCA
-  frequency/Hessian-producing inputs use a 1,000-atom limit. Discord-uploaded
-  workflow XYZ and standalone ORCA geometries use the remote 200-atom limit.
+  frequency/Hessian-producing inputs use a 1,000-atom limit.
 - CREST exit code 0 is accepted only when a retained output contains at least
   one strictly valid, finite XYZ frame. Every valid named retained ensemble is
   preserved: geometries found only in later rotamer outputs remain candidates,
@@ -612,15 +600,6 @@ Workflow notes:
   reaction-workflow manifests may set `xtb.max_ranking_evaluations` up to the native candidate
   cap of 1,000; values above 100 also require
   `xtb.allow_high_cost_ranking: true`.
-- Discord-uploaded workflows may not set `crest.mdlen`, `crest.len`,
-  `crest.tstep`, `crest.allow_high_tstep`, `crest.mddump`,
-  `crest.max_md_steps`, `crest.allow_high_cost_md`,
-  `crest.max_dump_frames`, `crest.allow_high_volume_md`,
-  `xtb.max_ranking_evaluations`, or `xtb.allow_high_cost_ranking`. These cost
-  and output-volume budgets are server-owned for remote ingress; trusted local
-  `run-dir` workflows may use the validated controls above. Remote workflow
-  ingress injects `crest.mdlen: 5.0` ps and rejects the request when its estimated
-  CREST work exceeds 50,000,000 atom-steps.
 - `scaffold ts_search` and `scaffold conformer_search` write `flow.yaml` with `crest_mode: standard` by default; change it to `nci` when needed
 
 There is no public direct-execution mode for new work. `run-dir` is the durable submission path.
@@ -711,14 +690,10 @@ cancelled), workflow children are drawn with box-drawing tree connectors (`├�
 instead of plain indentation, and each row carries a status-colored left rail.
 These affordances are terminal-only: piped text keeps the plain table layout — including the
 `active_simulations:` line and plain indentation — while `--json` remains machine-readable
-JSON and the messenger `/list` view remains plain. Piped text is ANSI-free unless
+JSON. Piped text is ANSI-free unless
 `FORCE_COLOR` is explicitly set. On a real terminal, `NO_COLOR` and `--no-color` keep the
 released plain table.
 
-The selected bot's list command (Telegram `/list`, Discord `!list`) renders the same table layout and default
-workflow-child visibility policy, except it omits the `ID` column so each row fits on a
-single line on narrow mobile screens. Its actions message offers per-activity cancel
-buttons plus refresh and "clear finished" buttons (the latter equivalent to `/list clear`).
 `queue list clear` prunes completed, failed, and cancelled entries from the unified list.
 
 ### 7.5 CLI Output and Global Flags
@@ -730,19 +705,6 @@ buttons plus refresh and "clear finished" buttons (the latter equivalent to `/li
 - `orca_auto --version` prints the installed version, and running `orca_auto` with no
   command prints help. Errors and recovery hints are written to stderr.
 - `orca_auto service status --json` emits machine-readable output for scripting.
-- The messenger bot supports cancel (`/cancel` on Telegram, `!cancel` on Discord) with confirmation via native buttons before
-  cancelling. In the `/list` actions message the cancel button still routes through that
-  confirmation step. At most four cancellable activities are shown so the shared card fits
-  Discord's five-row component limit; executing a cancel or clear auto-refreshes the list.
-- When `messenger.discord.uploads.enabled` is true, an allowlisted Discord operator
-  can attach one `.zip` or `.tar.gz` run-directory to `!run`. Admission and actual
-  download bytes are bounded before inspection. Exactly one root `flow.yaml` or
-  lower-case `*.inp` is required, server-owned paths and resource ceilings cannot be
-  overridden; uploaded workflows also reject every CREST runtime/trajectory budget
-  and xTB ranking-cost control listed in §7.2. The durable Queue/Discard action is bound to
-  the originating message, attachment, channel, and actor. Extraction is published
-  atomically under `runs_root`; uncertain commits are retained and reconciled rather
-  than deleted.
 
 ### 7.6 `scan-notify`
 
@@ -753,11 +715,11 @@ orca_auto scan-notify
 Behavior:
 
 - `scan-notify` runs a one-shot scan of the configured ORCA root and sends
-  discovery alerts through the active messenger provider, then exits. It is not a live monitor.
+  discovery alerts to the configured Discord channel, then exits. It is not a live monitor.
 
 ### 7.7 Long-Running Services
 
-Long-running worker and messenger bot processes are managed through `systemd`.
+Long-running worker processes are managed through `systemd`.
 The public `systemd install` and `service` commands operate on those units rather
 than launching unmanaged worker processes.
 
@@ -770,10 +732,8 @@ Behavior:
 - ORCA, xTB, and CREST share the same admission cap. ORCA reserves a slot in
   the parent worker, attaches queue identity metadata after the child starts,
   and lets the ORCA child activate/release that reservation during execution.
-- `orca_auto-bot@.service` runs `orca_auto.flow.bot.runner`, which selects the configured
-  Telegram or Discord gateway from `orca_auto.yaml`
-- Workflow messenger alerts keep per-job ORCA messages, but summarize internal CREST and reaction-path xTB child phases in one message each after those phases finish
-- `orca_auto-runtime@.target` starts the engine-worker target and bot together
+- Workflow notification alerts keep per-job ORCA messages, but summarize internal CREST and reaction-path xTB child phases in one message each after those phases finish
+- `orca_auto-runtime@.target` starts the engine-worker target
 
 ## 8) WSL systemd Setup
 
@@ -795,20 +755,15 @@ This repository includes service assets under `systemd/`:
 - [`systemd/orca_auto-runtime@.target`](../systemd/orca_auto-runtime@.target)
 - [`systemd/orca_auto-engine-workers@.target`](../systemd/orca_auto-engine-workers@.target)
 - [`systemd/orca_auto-queue-worker@.service`](../systemd/orca_auto-queue-worker@.service)
-- [`systemd/orca_auto-bot@.service`](../systemd/orca_auto-bot@.service)
 
-Recommended always-on runtime install flow when the selected messenger bot is configured:
+Recommended always-on runtime install flow:
 
 ```bash
 cd <repo_root>
 orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 orca_auto service status
 journalctl -u "orca_auto-queue-worker@$(whoami)" -f
-journalctl -u "orca_auto-bot@$(whoami)" -f
 ```
-
-Before enabling the combined runtime target, complete the selected Telegram or Discord
-interactive bot settings in `orca_auto.yaml`.
 
 Assumptions of the unified runtime templates:
 
@@ -826,10 +781,6 @@ and its internal CREST/xTB workers are needed. The shared
 `scheduler.max_active_simulations` setting still limits the combined number of
 active simulations across ORCA and workflow-managed internal
 engine stages.
-
-If the selected provider is incomplete, `orca_auto systemd install` enables
-`orca_auto-engine-workers@$(whoami).target` directly. Run the same command again after
-completing bot configuration to enable the full runtime target.
 
 Workflow supervision belongs to the opt-in
 `orca_auto-workflow-worker@.service` unit.

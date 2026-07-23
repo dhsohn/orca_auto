@@ -3,8 +3,7 @@
 The project intentionally keeps a single runtime dependency (PyYAML), so this
 module hand-rolls the small amount of ANSI handling the CLI needs: TTY
 detection, ``NO_COLOR``/``FORCE_COLOR``/``--no-color`` support, and a couple of
-``paint`` helpers. Telegram output stays plain text and never routes through
-here.
+``paint`` helpers. Messenger output never routes through here.
 """
 
 from __future__ import annotations

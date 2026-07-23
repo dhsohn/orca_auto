@@ -4,23 +4,19 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from collections.abc import Iterable
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from orca_auto.core.config import (
     DiscordConfig,
     MessengerConfig,
-    TelegramConfig,
     messenger_config_from_mapping,
 )
 from orca_auto.core.messaging import (
     DiscordBotChannel,
     Message,
     Severity,
-    TelegramChannel,
     bold,
     build_channel,
     code,
@@ -32,12 +28,9 @@ from orca_auto.core.messaging import (
     load_required_messenger_config_from_file,
     raw,
     render_discord_embed,
-    render_telegram,
     text,
     title_heading,
 )
-from orca_auto.core.messaging import telegram_channel as telegram_mod
-from orca_auto.core.messaging.render_telegram import render_telegram_chunks
 from orca_auto.core.notifications._engine_transport import _lines_message
 
 
@@ -49,7 +42,6 @@ blocked = [
     name for name in (
         'orca_auto.core.messaging.discord_bot',
         'orca_auto.core.messaging.discord_http',
-        'orca_auto.core.messaging.telegram_channel',
     )
     if name in sys.modules
 ]
@@ -63,83 +55,6 @@ if blocked:
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
-
-
-# --------------------------------------------------------------------------- #
-# Telegram rendering (byte-level)
-# --------------------------------------------------------------------------- #
-def test_render_telegram_reproduces_label_value_html() -> None:
-    message = Message(
-        title="orca_auto ORCA Started",
-        groups=(
-            group(
-                field_row("Job", text("rxn/step1")),
-                field_row("Attempt", raw("#3 ("), code("running"), raw(")")),
-                field_row("Input", code("job.inp")),
-                heading=title_heading("orca_auto ORCA Started"),
-            ),
-        ),
-    )
-    assert render_telegram(message) == (
-        "<b>orca_auto ORCA Started</b>\n"
-        "<b>Job</b>: rxn/step1\n"
-        "<b>Attempt</b>: #3 (<code>running</code>)\n"
-        "<b>Input</b>: <code>job.inp</code>"
-    )
-
-
-def test_render_telegram_escapes_html_special_chars() -> None:
-    message = Message(
-        title="t",
-        groups=(group(field_row("K", text("a<b>&c")), heading=title_heading("t")),),
-    )
-    assert render_telegram(message) == "<b>t</b>\n<b>K</b>: a&lt;b&gt;&amp;c"
-
-
-def test_render_telegram_joins_groups_with_blank_line() -> None:
-    message = Message(
-        title="T",
-        groups=(
-            group(field_row("A", text("1")), heading=title_heading("T")),
-            group(line(raw("second paragraph")), heading=(bold("Section"),)),
-        ),
-    )
-    assert render_telegram(message) == ("<b>T</b>\n<b>A</b>: 1\n\n<b>Section</b>\nsecond paragraph")
-
-
-def test_raw_preserves_leading_whitespace_but_text_strips() -> None:
-    message = Message(
-        title="t",
-        groups=(group(line(raw("   indented"), text("  padded  ")), heading=()),),
-    )
-    # raw keeps the leading spaces; text() strips its value like escape_html did.
-    assert render_telegram(message) == "<b>t</b>\n   indentedpadded"
-
-
-def test_render_telegram_uses_semantic_title_without_caller_heading() -> None:
-    assert render_telegram(Message(title="Only title")) == "<b>Only title</b>"
-
-
-def test_render_telegram_chunks_keep_tags_atomic_and_plain_fallback_independent() -> None:
-    chunks = render_telegram_chunks(
-        Message(
-            title="Long",
-            groups=(group(line(code("<" * 5000)), heading=title_heading("Long")),),
-        )
-    )
-
-    assert len(chunks) > 1
-    assert all(len(chunk.html) <= 4096 for chunk in chunks)
-    assert all(chunk.html.count("<code>") == chunk.html.count("</code>") for chunk in chunks)
-    assert "".join(chunk.plain for chunk in chunks) == "Long\n" + ("<" * 5000)
-    assert all("<code>" not in chunk.plain for chunk in chunks)
-
-
-def test_render_telegram_chunks_rejects_limit_too_small_for_escaped_span() -> None:
-    message = Message(title="", groups=(group(line(code("&"))),))
-
-    with pytest.raises(ValueError, match="cannot fit one escaped character"):
-        render_telegram_chunks(message, limit=14)
 
 
 # --------------------------------------------------------------------------- #
@@ -184,7 +99,6 @@ def test_render_discord_embed_routes_lines_and_headings_to_description() -> None
 def test_engine_line_message_uses_native_discord_title_without_description_duplication() -> None:
     message = _lines_message(["Job queued", "job_id: one"])
 
-    assert render_telegram(message) == "orca_auto\nJob queued\njob_id: one"
     assert render_discord_embed(message) == {
         "title": "Job queued",
         "color": 0x3498DB,
@@ -291,7 +205,7 @@ def test_engine_terminal_presentation_uses_structured_status_and_fails_closed() 
     assert embed["author"] == {"name": "orca_auto"}
 
 
-def test_code_block_renders_fenced_on_discord_and_pre_on_telegram() -> None:
+def test_code_block_renders_fenced_on_discord() -> None:
     message = Message(
         title="Activities",
         author="orca_auto",
@@ -300,9 +214,6 @@ def test_code_block_renders_fenced_on_discord_and_pre_on_telegram() -> None:
     embed = render_discord_embed(message)
     assert embed["description"] == "```\nStatus  Name\nrun     rxn1\n```"
     assert embed["author"] == {"name": "orca_auto"}
-    assert render_telegram(message) == (
-        "orca_auto\n<b>Activities</b>\n<pre>Status  Name\nrun     rxn1</pre>"
-    )
 
 
 def test_code_block_uses_a_longer_fence_when_content_contains_backticks() -> None:
@@ -313,58 +224,9 @@ def test_code_block_uses_a_longer_fence_when_content_contains_backticks() -> Non
 
 
 # --------------------------------------------------------------------------- #
-# Telegram channel
-# --------------------------------------------------------------------------- #
-def test_telegram_channel_disabled_is_skipped() -> None:
-    result = TelegramChannel(TelegramConfig()).send(Message(title="x"))
-    assert result.skipped and not result.sent
-
-
-def test_telegram_channel_sends_rendered_html(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_send(
-        config: object,
-        chunks: Iterable[tuple[str, str]],
-        **kwargs: object,
-    ) -> SimpleNamespace:
-        captured["chunks"] = list(chunks)
-        captured["parse_mode"] = kwargs.get("parse_mode")
-        captured["silent"] = kwargs.get("silent")
-        return SimpleNamespace(
-            sent=True,
-            skipped=False,
-            error="",
-            message_ids=("42",),
-            sent_count=1,
-            total_count=1,
-        )
-
-    monkeypatch.setattr(telegram_mod, "send_rendered_telegram_chunks", fake_send)
-    channel = TelegramChannel(TelegramConfig(bot_token="1:A", chat_id="9"))
-    result = channel.send(
-        Message(
-            title="Hi", groups=(group(field_row("K", text("v")), heading=title_heading("Hi")),)
-        ),
-        silent=True,
-    )
-    assert result.sent
-    assert result.provider == "telegram"
-    assert result.message_id == "42"
-    assert result.message_ids == ("42",)
-    assert captured["chunks"] == [("<b>Hi</b>\n<b>K</b>: v", "Hi\nK: v")]
-    assert captured["parse_mode"] == "HTML"
-    assert captured["silent"] is True
-
-
-# --------------------------------------------------------------------------- #
 # Registry / config
 # --------------------------------------------------------------------------- #
 def test_build_channel_selects_provider() -> None:
-    telegram = TelegramConfig(bot_token="1:A", chat_id="9")
-    assert isinstance(
-        build_channel(MessengerConfig(provider="telegram", telegram=telegram)), TelegramChannel
-    )
     discord = build_channel(
         MessengerConfig(
             provider="discord",
@@ -373,7 +235,7 @@ def test_build_channel_selects_provider() -> None:
     )
     assert isinstance(discord, DiscordBotChannel)
     with pytest.raises(ValueError, match="Unsupported messenger provider"):
-        build_channel(MessengerConfig(provider="bogus", telegram=telegram))
+        build_channel(MessengerConfig(provider="bogus"))
 
 
 def test_messenger_config_from_mapping() -> None:
@@ -387,13 +249,8 @@ def test_messenger_config_from_mapping() -> None:
     assert cfg.discord.bot_token == "token"
     assert cfg.discord.bot_notification_enabled
 
-    telegram = messenger_config_from_mapping(
-        {"telegram": {"bot_token": "token", "chat_id": "chat"}}
-    )
-    assert telegram.telegram.enabled
-
     empty = messenger_config_from_mapping(None)
-    assert empty.normalized_provider == "telegram"
+    assert empty.normalized_provider == "discord"
     assert not empty.discord.bot_notification_enabled
 
     with pytest.raises(ValueError, match="messenger.provider"):
@@ -403,9 +260,7 @@ def test_messenger_config_from_mapping() -> None:
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("telegram", "messenger config"),
-        ({"telegram": None}, "messenger.telegram"),
-        ({"telegram": "token"}, "messenger.telegram"),
+        ("discord", "messenger config"),
         ({"discord": None}, "messenger.discord"),
         ({"discord": ["bot"]}, "messenger.discord"),
     ],
@@ -415,43 +270,26 @@ def test_messenger_config_rejects_malformed_sections(raw: object, expected: str)
         messenger_config_from_mapping(raw)
 
 
-def test_messenger_config_file_rejects_legacy_top_level_telegram(
+def test_messenger_config_file_rejects_leftover_telegram_block(
     tmp_path: Path,
 ) -> None:
-    # The legacy top-level block is no longer read: loading fails closed with a
-    # migration hint, whether or not the canonical nested block is present.
+    # Telegram is no longer supported: a leftover top-level block fails closed
+    # with a migration hint rather than silently disabling notifications.
     config_path = tmp_path / "orca_auto.yaml"
     config_path.write_text(
         "telegram:\n  bot_token: legacy-token\n  chat_id: legacy-chat\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="messenger.telegram"):
-        load_messenger_config_from_file(config_path)
-
-    config_path.write_text(
-        "\n".join(
-            [
-                "telegram:",
-                "  bot_token: legacy-token",
-                "  chat_id: legacy-chat",
-                "messenger:",
-                "  telegram:",
-                "    chat_id: nested-chat",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
     with pytest.raises(ValueError, match="no longer supported"):
         load_messenger_config_from_file(config_path)
 
+    # A nested messenger.telegram block is likewise rejected as an unknown field.
     config_path.write_text(
         "messenger:\n  telegram:\n    chat_id: nested-chat\n",
         encoding="utf-8",
     )
-    nested = load_messenger_config_from_file(config_path)
-    assert nested.telegram.bot_token == ""
-    assert nested.telegram.chat_id == "nested-chat"
+    with pytest.raises(ValueError, match="Unknown messenger config fields"):
+        load_messenger_config_from_file(config_path)
 
 
 def test_required_messenger_config_rejects_missing_and_invalid_files(tmp_path: Path) -> None:
@@ -471,8 +309,8 @@ def test_required_messenger_config_rejects_missing_and_invalid_files(tmp_path: P
         ("schedulr: {}\n", "Unknown top-level config fields are not supported"),
         ("scheduler: []\n", "scheduler section must be a mapping"),
         (
-            "messenger:\n  telegram:\n    bot_token:\n",
-            "messenger.telegram.bot_token must be a string",
+            "messenger:\n  discord:\n    bot_token: []\n",
+            "messenger.discord.bot_token must be a string",
         ),
     ],
 )

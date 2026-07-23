@@ -5,8 +5,8 @@ Builders turn a lifecycle event into a messenger-neutral
 through a :class:`~orca_auto.core.messaging.MessageChannel` resolved from config.
 Each per-messenger renderer owns the native markup, so switching the active
 messenger changes only where the message goes, not what these builders emit.
-The identity is carried on ``Message.author`` (the Discord embed author line /
-a leading Telegram line), keeping it out of the title.
+The identity is carried on ``Message.author`` (the Discord embed author line),
+keeping it out of the title.
 """
 
 from __future__ import annotations

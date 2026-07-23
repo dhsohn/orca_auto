@@ -15,7 +15,7 @@ from orca_auto.core.config.engines import (
 from orca_auto.core.config.engines import (
     WorkflowEnginePathsConfig as PathsConfig,
 )
-from orca_auto.core.config.schema import CommonResourceConfig, CommonRuntimeConfig, TelegramConfig
+from orca_auto.core.config.schema import CommonResourceConfig, CommonRuntimeConfig
 from orca_auto.flow.engines.crest import runner as runner_mod
 from orca_auto.flow.engines.crest.job_inputs import MANIFEST_FILE_NAME
 from orca_auto.flow.engines.crest.runner import (
@@ -42,7 +42,7 @@ def _cfg(tmp_path: Path) -> AppConfig:
             xtb_executable=str(xtb_executable),
         ),
         resources=CommonResourceConfig(max_cores_per_task=6, max_memory_gb_per_task=14),
-        messenger=MessengerConfig(telegram=TelegramConfig()),
+        messenger=MessengerConfig(),
     )
 
 

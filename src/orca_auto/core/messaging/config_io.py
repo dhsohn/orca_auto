@@ -1,7 +1,8 @@
 """Resolve a :class:`MessageChannel` from a config file on disk.
 
 The ``messenger:`` block selects the provider and owns all adapter settings.
-A leftover top-level ``telegram:`` block fails closed with a migration hint.
+A leftover top-level ``telegram:`` block fails closed because Telegram is no
+longer supported.
 """
 
 from __future__ import annotations

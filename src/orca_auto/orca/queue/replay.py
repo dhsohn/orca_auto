@@ -1129,7 +1129,7 @@ def record_cancelled_run_state(
 
     A cancelled run is stopped by a signal and never writes its own terminal
     result, so the run state lingers as ``running``. That leaves a stale run
-    snapshot in the activity list and starves the terminal Telegram notification
+    snapshot in the activity list and starves the terminal notification
     (which requires ``final_result``). Persist a cancelled outcome here.
 
     Returns ``(run_id, terminal_status)``: the run_id when known (so the queue

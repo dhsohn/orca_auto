@@ -21,9 +21,9 @@ def test_prompt_text_returns_value_or_default() -> None:
 
 def test_prompt_secret_text_uses_hidden_input() -> None:
     with patch("orca_auto.orca.commands.init.getpass.getpass", return_value="  token  ") as prompt:
-        assert init._prompt_secret_text("Telegram bot token") == "token"
+        assert init._prompt_secret_text("Discord bot token") == "token"
 
-    prompt.assert_called_once_with("Telegram bot token: ")
+    prompt.assert_called_once_with("Discord bot token: ")
 
 
 def test_prompt_yes_no_handles_defaults_and_reprompts(capsys) -> None:
@@ -120,30 +120,11 @@ def test_prompt_default_max_retries_and_max_active_simulations_validate(capsys) 
     assert "max_active_simulations must be an integer >= 1." in output
 
 
-def test_prompt_telegram_config_covers_skip_and_retry(capsys) -> None:
-    with patch("orca_auto.orca.commands.init._prompt_yes_no", return_value=False):
-        assert init._prompt_telegram_config() == {"bot_token": "", "chat_id": ""}
-
-    with (
-        patch("orca_auto.orca.commands.init._prompt_yes_no", return_value=True),
-        patch(
-            "orca_auto.orca.commands.init._prompt_secret_text",
-            side_effect=["token-only", "token"],
-        ),
-        patch("orca_auto.orca.commands.init._prompt_text", side_effect=["", "123"]),
-    ):
-        assert init._prompt_telegram_config() == {"bot_token": "token", "chat_id": "123"}
-
-    assert "Both Telegram bot token and chat id are required" in capsys.readouterr().out
-
-
 def test_prompt_discord_config_covers_skip_and_retry(capsys) -> None:
     with patch("orca_auto.orca.commands.init._prompt_yes_no", return_value=False):
         assert init._prompt_discord_config() == {
             "bot_token": "",
-            "channel_ids": [],
             "default_channel_id": "",
-            "allowed_user_ids": [],
         }
 
     with (
@@ -154,43 +135,26 @@ def test_prompt_discord_config_covers_skip_and_retry(capsys) -> None:
         ),
         patch(
             "orca_auto.orca.commands.init._prompt_text",
-            side_effect=["123", "456", "", "123", "456", "789"],
+            side_effect=["456", "456"],
         ),
     ):
         assert init._prompt_discord_config() == {
             "bot_token": "bot-token",
-            "channel_ids": ["123"],
             "default_channel_id": "456",
-            "allowed_user_ids": ["789"],
         }
 
     assert "Discord bot token" in capsys.readouterr().out
 
 
-def test_prompt_messenger_config_selects_provider_and_adapter(capsys) -> None:
+def test_prompt_messenger_config_uses_discord_adapter() -> None:
     with patch(
-        "orca_auto.orca.commands.init._prompt_text",
-        side_effect=["matrix", "discord"],
-    ):
-        assert init._prompt_messenger_provider() == "discord"
-    assert "must be 'telegram' or 'discord'" in capsys.readouterr().out
-
-    with (
-        patch(
-            "orca_auto.orca.commands.init._prompt_messenger_provider",
-            return_value="discord",
-        ),
-        patch(
-            "orca_auto.orca.commands.init._prompt_discord_config",
-            return_value={"bot_token": "bot-token", "default_channel_id": "123"},
-        ),
-        patch("orca_auto.orca.commands.init._prompt_telegram_config") as telegram_prompt,
+        "orca_auto.orca.commands.init._prompt_discord_config",
+        return_value={"bot_token": "bot-token", "default_channel_id": "123"},
     ):
         assert init._prompt_messenger_config() == {
             "provider": "discord",
             "discord": {"bot_token": "bot-token", "default_channel_id": "123"},
         }
-    telegram_prompt.assert_not_called()
 
 
 def test_write_config_adds_generated_header(tmp_path: Path) -> None:
@@ -295,8 +259,8 @@ def test_cmd_init_handles_write_or_load_failure(tmp_path: Path, capsys) -> None:
         patch(
             "orca_auto.orca.commands.init._prompt_messenger_config",
             return_value={
-                "provider": "telegram",
-                "telegram": {"bot_token": "", "chat_id": ""},
+                "provider": "discord",
+                "discord": {"bot_token": "", "default_channel_id": ""},
             },
         ),
         patch(
@@ -342,8 +306,8 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
         patch(
             "orca_auto.orca.commands.init._prompt_messenger_config",
             return_value={
-                "provider": "telegram",
-                "telegram": {"bot_token": "token", "chat_id": "123"},
+                "provider": "discord",
+                "discord": {"bot_token": "token", "default_channel_id": "123"},
             },
         ),
         patch(
@@ -360,7 +324,7 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
     assert "xtb_executable" in output
     assert "crest_executable" in output
     assert "max_active_simulations: 4" in output
-    assert "messenger_provider: telegram" in output
+    assert "messenger_provider: discord" in output
     assert yaml.safe_load(config_path.read_text(encoding="utf-8").split("\n", 1)[1]) == {
         "runs_root": str(orca_allowed_root),
         "resources": {
@@ -377,8 +341,8 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
             },
         },
         "messenger": {
-            "provider": "telegram",
-            "telegram": {"bot_token": "token", "chat_id": "123"},
+            "provider": "discord",
+            "discord": {"bot_token": "token", "default_channel_id": "123"},
         },
         "orca": {
             "runtime": {
@@ -452,9 +416,7 @@ def test_prompt_init_values_can_replace_existing_messenger() -> None:
         "provider": "discord",
         "discord": {
             "bot_token": "token",
-            "channel_ids": ["100"],
             "default_channel_id": "200",
-            "allowed_user_ids": ["7"],
         },
     }
     with (
@@ -485,7 +447,7 @@ def test_prompt_init_values_can_replace_existing_messenger() -> None:
         ),
     ):
         values = init._prompt_init_values(
-            existing_messenger={"provider": "telegram", "telegram": {"bot_token": "old"}}
+            existing_messenger={"provider": "discord", "discord": {"bot_token": "old"}}
         )
 
     assert values.messenger == replacement

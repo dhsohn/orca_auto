@@ -18,6 +18,26 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - Removed the reserved `<runs_root>/.orca_auto_smoke` runs-root namespace. That
   name is no longer created or special-cased in submission, discovery,
   reindexing, snapshots, or cleanup.
+- Reduced the messenger to a one-way Discord outbound notifier. These were
+  Experimental surfaces:
+  - Removed the Telegram messenger provider; `messenger.provider` now accepts
+    only `discord`.
+  - Removed the interactive bot command/action framework, the `orca_auto bot`
+    CLI, and the `orca_auto-bot@.service` systemd unit.
+  - Removed the remote Discord archive-upload ingestion
+    (`messenger.discord.uploads`); run directories can no longer be submitted
+    over Discord.
+  - Dropped the `discord.py` dependency.
+
+  Before upgrading, remove `messenger.telegram`, any top-level `telegram:`
+  block, and `messenger.discord.uploads` from `orca_auto.yaml`; those keys now
+  fail configuration loading. After upgrading, rerun
+  `orca_auto systemd install --user <name> --repo <path>` to rewrite the runtime
+  target, and, if the `orca_auto-bot@<user>.service` unit was installed, remove
+  it by hand (`systemctl disable --now orca_auto-bot@<user>.service`,
+  `rm /etc/systemd/system/orca_auto-bot@.service`, then
+  `systemctl daemon-reload`). The installer no longer renders that unit, and a
+  stale runtime target would otherwise pull in a unit whose `ExecStart` is gone.
 
 ## [0.3.0] - 2026-07-21
 

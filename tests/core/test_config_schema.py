@@ -8,7 +8,6 @@ from orca_auto.core.config.schema import (
     CommonRuntimeConfig,
     DiscordConfig,
     RetryRuntimeConfig,
-    TelegramConfig,
     as_bool,
     as_float,
     as_int,
@@ -21,7 +20,6 @@ from orca_auto.core.config.schema import (
     normalize_default_max_retries,
     normalize_max_concurrent,
     positive_int,
-    telegram_config_from_mapping,
 )
 
 
@@ -254,106 +252,14 @@ def test_normalize_admission_limit_rejects_invalid_explicit_values(value: object
 
 
 @pytest.mark.parametrize(
-    ("bot_token", "chat_id", "expected"),
-    [
-        ("", "", False),
-        ("token", "", False),
-        ("", "chat", False),
-        ("   ", "chat", False),
-        ("token", "   ", False),
-        ("token", "chat", True),
-    ],
-)
-def test_telegram_config_enabled(bot_token: str, chat_id: str, expected: bool) -> None:
-    config = TelegramConfig(bot_token=bot_token, chat_id=chat_id)
-
-    assert config.enabled is expected
-
-
-def test_telegram_interactive_readiness_distinguishes_private_and_group_chats() -> None:
-    assert TelegramConfig(bot_token="token", chat_id="123").interactive_enabled
-    assert not TelegramConfig(bot_token="token", chat_id="-100123").interactive_enabled
-    assert TelegramConfig(
-        bot_token="token",
-        chat_id="-100123",
-        allowed_user_ids=("7",),
-    ).interactive_enabled
-    assert not TelegramConfig(
-        bot_token="token",
-        chat_id="@announcement",
-        allowed_user_ids=("7",),
-    ).interactive_enabled
-
-
-def test_telegram_config_from_mapping_normalizes_delivery_settings() -> None:
-    config = telegram_config_from_mapping(
-        {
-            "bot_token": " token ",
-            "chat_id": 1234,
-            "timeout_seconds": "0",
-            "max_attempts": "0",
-            "retry_backoff_seconds": "-2",
-            "allowed_user_ids": [123, "456", "123"],
-        }
-    )
-
-    assert config.bot_token == "token"
-    assert config.chat_id == "1234"
-    assert config.timeout_seconds == 0.1
-    assert config.max_attempts == 1
-    assert config.retry_backoff_seconds == 0.0
-    assert config.allowed_user_ids == ("123", "456")
-
-
-@pytest.mark.parametrize("value", [[False], ["0"], ["-1"], ["１２３"], "123,456"])
-def test_telegram_config_rejects_invalid_allowed_user_ids(value: object) -> None:
-    with pytest.raises(ValueError, match="messenger.telegram.allowed_user_ids"):
-        telegram_config_from_mapping({"allowed_user_ids": value})
-
-
-@pytest.mark.parametrize("value", [None, True, False, 123, 1.5, [], {}])
-def test_telegram_config_rejects_invalid_explicit_bot_tokens(value: object) -> None:
-    with pytest.raises(ValueError, match="messenger.telegram.bot_token must be a string"):
-        telegram_config_from_mapping({"bot_token": value})
-
-
-@pytest.mark.parametrize("value", [None, True, False, 1.5, [], {}])
-def test_telegram_config_rejects_invalid_explicit_chat_ids(value: object) -> None:
-    with pytest.raises(ValueError, match="messenger.telegram.chat_id must be a string or integer"):
-        telegram_config_from_mapping({"chat_id": value})
-
-
-@pytest.mark.parametrize("value", [None, True, 123, 1.5, {}, "123", [None], [1.5]])
-def test_telegram_config_rejects_invalid_explicit_operator_lists(value: object) -> None:
-    with pytest.raises(ValueError, match="messenger.telegram.allowed_user_ids"):
-        telegram_config_from_mapping({"allowed_user_ids": value})
-
-
-def test_telegram_config_preserves_empty_string_disable_and_empty_operator_list() -> None:
-    config = telegram_config_from_mapping(
-        {"bot_token": "  ", "chat_id": "", "allowed_user_ids": []}
-    )
-
-    assert config.bot_token == ""
-    assert config.chat_id == ""
-    assert config.allowed_user_ids == ()
-    assert not config.enabled
-
-
-def test_telegram_config_from_mapping_uses_defaults_for_non_mapping() -> None:
-    assert telegram_config_from_mapping(None) == TelegramConfig()
-
-
-@pytest.mark.parametrize(
     ("parser", "default"),
     [
-        (telegram_config_from_mapping, TelegramConfig()),
         (discord_config_from_mapping, DiscordConfig()),
     ],
 )
 def test_messenger_delivery_settings_default_only_when_omitted_and_bound_finite_values(
     parser: Any,
-    default: TelegramConfig | DiscordConfig,
+    default: DiscordConfig,
 ) -> None:
     assert parser({}) == default
 
@@ -371,7 +277,7 @@ def test_messenger_delivery_settings_default_only_when_omitted_and_bound_finite_
 
 @pytest.mark.parametrize(
     "parser",
-    [telegram_config_from_mapping, discord_config_from_mapping],
+    [discord_config_from_mapping],
 )
 @pytest.mark.parametrize(
     ("field", "value", "message"),
@@ -410,57 +316,22 @@ def test_messenger_delivery_settings_reject_invalid_explicit_values(
         parser({field: value})
 
 
-def test_discord_config_parses_bot_and_authorization_settings() -> None:
+def test_discord_config_parses_bot_notification_settings() -> None:
     config = discord_config_from_mapping(
         {
             "bot_token": " bot-token ",
-            "channel_ids": [111, "222", "111"],
             "default_channel_id": 333,
-            "allowed_user_ids": ["444", 555, "444"],
         }
     )
 
     assert config.bot_token == "bot-token"
-    assert config.channel_ids == ("111", "222")
     assert config.default_channel_id == "333"
-    assert config.allowed_user_ids == ("444", "555")
-    assert config.interaction_channel_ids == ("111", "222", "333")
     assert config.bot_notification_enabled
-    assert config.interactive_enabled
-
-
-def test_discord_config_uploads_default_disabled() -> None:
-    config = discord_config_from_mapping({"bot_token": "t"})
-    assert config.uploads.enabled is False
-
-
-def test_discord_config_parses_upload_policy() -> None:
-    config = discord_config_from_mapping(
-        {
-            "uploads": {
-                "enabled": True,
-                "max_archive_bytes": 1024,
-                "max_entries": 10,
-                "allowed_extensions": ["inp", ".XYZ", "yaml"],
-            }
-        }
-    )
-
-    assert config.uploads.enabled is True
-    assert config.uploads.max_archive_bytes == 1024
-    assert config.uploads.max_entries == 10
-    # Extensions are normalized to a leading dot and lowercase.
-    assert config.uploads.allowed_extensions == (".inp", ".xyz", ".yaml")
 
 
 @pytest.mark.parametrize(
     ("parser", "raw", "message"),
     [
-        (
-            telegram_config_from_mapping,
-            {"bot_tokn": "token"},
-            "Unknown messenger.telegram config fields are not supported",
-        ),
         (
             discord_config_from_mapping,
             {"channe_ids": []},
@@ -468,8 +339,13 @@ def test_discord_config_parses_upload_policy() -> None:
         ),
         (
             discord_config_from_mapping,
-            {"uploads": {"max_entry": 4}},
-            "Unknown uploads config fields are not supported",
+            {"channel_ids": []},
+            "Unknown messenger.discord config fields are not supported",
+        ),
+        (
+            discord_config_from_mapping,
+            {"allowed_user_ids": []},
+            "Unknown messenger.discord config fields are not supported",
         ),
     ],
 )
@@ -486,8 +362,7 @@ def test_messenger_adapter_config_rejects_unknown_fields(
     ("parser", "raw"),
     [
         (messenger_config_from_mapping, {"provider": "private-provider-value"}),
-        (telegram_config_from_mapping, {"private-unknown-key": "value"}),
-        (discord_config_from_mapping, {"uploads": {"max_entries": "private-limit-value"}}),
+        (discord_config_from_mapping, {"default_channel_id": "private-bad-channel"}),
     ],
 )
 def test_messenger_config_validation_errors_do_not_echo_raw_values(
@@ -500,71 +375,27 @@ def test_messenger_config_validation_errors_do_not_echo_raw_values(
     assert "private-" not in str(raised.value)
 
 
-@pytest.mark.parametrize("uploads", [None, "disabled", [], False])
-def test_discord_config_rejects_non_mapping_uploads(uploads: object) -> None:
-    with pytest.raises(ValueError, match="uploads must be a mapping"):
-        discord_config_from_mapping({"uploads": uploads})
+def test_discord_bot_notification_fails_closed_on_incomplete_settings() -> None:
+    token_only = DiscordConfig(bot_token="token")
+    assert not token_only.bot_notification_enabled
 
+    channel_only = DiscordConfig(default_channel_id="111")
+    assert not channel_only.bot_notification_enabled
 
-def test_discord_config_capabilities_are_independent_and_fail_closed() -> None:
-    interactive = DiscordConfig(
-        bot_token="token",
-        channel_ids=("111",),
-        allowed_user_ids=("222",),
-    )
-    assert interactive.interactive_enabled
-    assert not interactive.bot_notification_enabled
-
-    incomplete = DiscordConfig(bot_token="token")
-    assert not incomplete.bot_notification_enabled
-    assert not incomplete.interactive_enabled
-
-    no_operators = DiscordConfig(bot_token="token", channel_ids=("111",))
-    assert not no_operators.interactive_enabled
-
-    default_only = DiscordConfig(
-        bot_token="token",
-        default_channel_id="111",
-        allowed_user_ids=("222",),
-    )
-    assert default_only.bot_notification_enabled
-    assert not default_only.interactive_enabled
+    complete = DiscordConfig(bot_token="token", default_channel_id="111")
+    assert complete.bot_notification_enabled
 
 
 def test_messenger_config_repr_redacts_credentials() -> None:
-    telegram = repr(
-        TelegramConfig(
-            bot_token="telegram-secret",
-            chat_id="123",
-            allowed_user_ids=("7",),
-        )
-    )
     discord = repr(
         DiscordConfig(
             bot_token="discord-secret",
-            channel_ids=("456",),
             default_channel_id="789",
-            allowed_user_ids=("10",),
         )
     )
 
-    assert "telegram-secret" not in telegram
-    assert "123" not in telegram
-    assert "('7',)" not in telegram
     assert "discord-secret" not in discord
-    assert "('456',)" not in discord
     assert "789" not in discord
-    assert "('10',)" not in discord
-
-
-def test_discord_interaction_channels_include_default_once() -> None:
-    config = DiscordConfig(
-        bot_token="token",
-        channel_ids=("111", "222"),
-        default_channel_id="222",
-    )
-
-    assert config.interaction_channel_ids == ("111", "222")
 
 
 @pytest.mark.parametrize(
@@ -576,9 +407,6 @@ def test_discord_interaction_channels_include_default_once() -> None:
         ("default_channel_id", "１２３"),
         ("default_channel_id", True),
         ("default_channel_id", str(1 << 64)),
-        ("channel_ids", ["abc"]),
-        ("channel_ids", "111,222"),
-        ("allowed_user_ids", [False]),
     ],
 )
 def test_discord_config_rejects_invalid_snowflakes(field: str, value: object) -> None:
@@ -599,14 +427,6 @@ def test_discord_config_rejects_invalid_explicit_bot_tokens(value: object) -> No
         ("default_channel_id", 1.5),
         ("default_channel_id", []),
         ("default_channel_id", {}),
-        ("channel_ids", None),
-        ("channel_ids", True),
-        ("channel_ids", 123),
-        ("channel_ids", {}),
-        ("allowed_user_ids", None),
-        ("allowed_user_ids", False),
-        ("allowed_user_ids", 123),
-        ("allowed_user_ids", {}),
     ],
 )
 def test_discord_config_rejects_invalid_explicit_identity_values(
@@ -617,18 +437,14 @@ def test_discord_config_rejects_invalid_explicit_identity_values(
         discord_config_from_mapping({field: value})
 
 
-def test_discord_config_preserves_empty_string_disable_and_empty_allowlists() -> None:
+def test_discord_config_preserves_empty_string_disable() -> None:
     config = discord_config_from_mapping(
         {
             "bot_token": "  ",
-            "channel_ids": [],
             "default_channel_id": "",
-            "allowed_user_ids": [],
         }
     )
 
     assert config.bot_token == ""
-    assert config.channel_ids == ()
     assert config.default_channel_id == ""
-    assert config.allowed_user_ids == ()
-    assert not config.interactive_enabled
+    assert not config.bot_notification_enabled

@@ -158,19 +158,9 @@ def test_configured_executable_errors_do_not_echo_raw_values(
         ),
         pytest.param("messenger", "messenger section must be a mapping", id="messenger"),
         pytest.param(
-            "messenger.telegram",
-            "messenger.telegram must be a mapping",
-            id="messenger-telegram",
-        ),
-        pytest.param(
             "messenger.discord",
             "messenger.discord must be a mapping",
             id="messenger-discord",
-        ),
-        pytest.param(
-            "messenger.discord.uploads",
-            "uploads must be a mapping",
-            id="messenger-discord-uploads",
         ),
     ],
 )
@@ -190,12 +180,8 @@ def test_shared_engine_loaders_reject_non_mapping_execution_sections(
         override = {"orca": {"runtime": invalid}}
     elif section_path == "orca.paths":
         override = {"orca": {"paths": invalid}}
-    elif section_path == "messenger.telegram":
-        override = {"messenger": {"telegram": invalid}}
     elif section_path == "messenger.discord":
         override = {"messenger": {"discord": invalid}}
-    elif section_path == "messenger.discord.uploads":
-        override = {"messenger": {"discord": {"uploads": invalid}}}
     else:
         override = {section_path: invalid}
     config_path = _write_shared_config(tmp_path, override)
@@ -279,7 +265,7 @@ def test_shared_engine_loaders_reject_null_explicit_paths(
             id="removed-runtime-key",
         ),
         pytest.param(
-            {"messenger": {"provder": "telegram"}},
+            {"messenger": {"provder": "discord"}},
             "Unknown messenger config fields are not supported",
             id="messenger-typo",
         ),
@@ -351,39 +337,9 @@ def test_shared_engine_loaders_reject_invalid_explicit_scratch_root(
     ("messenger", "message"),
     [
         pytest.param(
-            {"telegram": {"timeout_seconds": "bad"}},
-            "messenger.telegram.timeout_seconds must be a finite number",
-            id="telegram-delivery",
-        ),
-        pytest.param(
             {"discord": {"max_attempts": True}},
             "messenger.discord.max_attempts must be an integer",
             id="discord-delivery-bool",
-        ),
-        pytest.param(
-            {"discord": {"uploads": {"enabled": "sometimes"}}},
-            "uploads.enabled must be a boolean",
-            id="upload-enabled",
-        ),
-        pytest.param(
-            {"discord": {"uploads": {"max_entries": None}}},
-            "uploads.max_entries must be an integer",
-            id="upload-limit-null",
-        ),
-        pytest.param(
-            {"discord": {"uploads": {"allowed_extensions": [1]}}},
-            "uploads.allowed_extensions entries must be non-empty strings",
-            id="upload-extensions",
-        ),
-        pytest.param(
-            {"telegram": {"bot_token": None}},
-            "messenger.telegram.bot_token must be a string",
-            id="telegram-token-null",
-        ),
-        pytest.param(
-            {"telegram": {"allowed_user_ids": None}},
-            "messenger.telegram.allowed_user_ids",
-            id="telegram-operators-null",
         ),
         pytest.param(
             {"discord": {"bot_token": True}},
@@ -391,9 +347,14 @@ def test_shared_engine_loaders_reject_invalid_explicit_scratch_root(
             id="discord-token-bool",
         ),
         pytest.param(
-            {"discord": {"channel_ids": None}},
-            "messenger.discord.channel_ids",
-            id="discord-channels-null",
+            {"discord": {"default_channel_id": None}},
+            "messenger.discord.default_channel_id",
+            id="discord-default-channel-null",
+        ),
+        pytest.param(
+            {"discord": {"channel_ids": []}},
+            "Unknown messenger.discord config fields are not supported",
+            id="discord-interactive-key-removed",
         ),
     ],
 )

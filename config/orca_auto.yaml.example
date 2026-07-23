@@ -49,76 +49,28 @@ workflow:
   # e.g. <runs_root>/<workflow_id>/01_crest, .../02_xtb, .../03_orca.
   # Fixed admission guardrails are not config knobs: YAML job manifests are at
   # most 1 MiB/32 aliases/10,000 nodes/64 levels with cyclic/recursive graphs
-  # rejected; geometries are capped at 10,000 atoms locally, 1,000 for xTB/ORCA
-  # Hessian-producing jobs, and 200 for remote uploads.
+  # rejected; geometries are capped at 10,000 atoms locally and 1,000 for
+  # xTB/ORCA Hessian-producing jobs.
 
 messenger:
   # Selects where outbound run/queue/monitor notifications are delivered.
-  # `telegram` (default) and `discord` both support outbound notifications and
-  # interactive /list, /cancel, and /help commands through the same bot app.
-  provider: telegram  # telegram | discord
-  # Tokens are strings; Telegram chat_id may also be an integer. ID allowlists
-  # must be lists of positive IDs. Explicit null/bool/wrong collection shapes
-  # are rejected; blank strings and empty lists intentionally disable features.
-  telegram:
-    # Telegram credentials. Used by the interactive bot and, when
-    # `provider` is `telegram`, by outbound notifications. Leave blank to
-    # disable the Telegram bot and Telegram notifications.
-    bot_token: ""
-    chat_id: ""
-    # Required for group chats; private chats are implicitly single-user.
-    allowed_user_ids: []
-    # Each Telegram API call waits up to this many seconds before retry/fail.
-    timeout_seconds: 5.0
-    # Retry transient Telegram send failures this many times total.
-    max_attempts: 2
-    # Pause between retry attempts for transient Telegram failures.
-    retry_backoff_seconds: 0.5
+  # `discord` is the only supported provider. Delivery is one-way: orca_auto
+  # sends notifications and never accepts inbound commands.
+  provider: discord  # discord
+  # Tokens and channel IDs are strings. Explicit null/bool/wrong collection
+  # shapes are rejected; blank strings intentionally disable notifications.
   discord:
     # Use a separate Discord application/bot for orca_auto. The bot token plus
-    # default channel sends notifications; channel_ids authorizes ordinary
-    # inbound commands. The default-only channel still accepts this bot's
-    # component-button interactions.
+    # the default channel deliver outbound notifications. Leave either blank to
+    # disable Discord notifications.
     bot_token: ""
-    channel_ids: []
     default_channel_id: ""
-    # Required operator allowlist for interactive controls. Keeping this empty
-    # leaves Discord notifications enabled but fails the gateway closed.
-    allowed_user_ids: []
+    # Each Discord API call waits up to this many seconds before retry/fail.
     timeout_seconds: 5.0
+    # Retry transient Discord send failures this many times total.
     max_attempts: 2
+    # Pause between retry attempts for transient Discord failures.
     retry_backoff_seconds: 0.5
-    # Optional: accept a compressed run-dir (.zip/.tar.gz) from an operator with
-    # the `!run` command and submit it to the queue. DISABLED by default: it
-    # turns the bot into an execution ingress, so only enable it for a trusted,
-    # allowlisted operator. The archive is safe-extracted under `runs_root`
-    # (path-traversal, symlink, and decompression-bomb guards always apply), and
-    # queueing waits for an explicit Confirm button. Results are not sent back;
-    # view them over your own remote access.
-    uploads:
-      # Explicit values are type-checked: enabled must be a recognized boolean,
-      # numeric limits must be positive integers, and malformed values are not
-      # replaced by defaults.
-      enabled: false
-      # Reserve this declared size before download, then enforce the same limit
-      # again against the bytes actually streamed from Discord's trusted CDN.
-      max_archive_bytes: 26214400        # 25 MiB
-      # Decompression-bomb guards: total expanded size and per-file size.
-      max_total_uncompressed_bytes: 209715200  # 200 MiB
-      max_file_bytes: 104857600          # 100 MiB
-      max_entries: 4000
-      # Durable staging quota and lifecycle. A reservation is taken before the
-      # Discord CDN download starts, bounding concurrent count and bytes.
-      max_staged_bytes: 536870912        # 512 MiB across pending uploads
-      max_staged_uploads: 32
-      max_pending_per_actor: 4
-      max_concurrent_downloads: 4
-      staging_ttl_seconds: 3600          # unconfirmed/failed upload retention
-      committed_retention_seconds: 86400 # idempotency receipt retention
-      # Only these file types are written to disk. Extend for unusual run-dir
-      # contents; entries must be non-empty strings, a leading dot is optional,
-      # and matching is case-insensitive.
-      allowed_extensions: [inp, xyz, yaml, yml, json, txt, gbw, hess, pc]
 
 orca:
   runtime:

@@ -120,7 +120,7 @@ def fit_queue_widths(widths: dict[str, int], *, max_total: int | None) -> dict[s
 
 
 def queue_table_columns(*, include_id: bool) -> list[str]:
-    # ``id`` is dropped for narrow surfaces (e.g. the Telegram ``/list``) where a
+    # ``id`` is dropped for narrow surfaces where a
     # full activity id would wrap each row onto a second line.
     return ["status", "name", "detail"] + (["id"] if include_id else []) + ["elapsed"]
 

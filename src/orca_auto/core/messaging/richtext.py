@@ -2,15 +2,15 @@
 
 Domain notifiers build a :class:`Message` describing *what* to say (a title, a
 severity, and a sequence of labelled fields / free-form lines). Per-messenger
-renderers (:mod:`.render_telegram`, :mod:`.render_discord`) turn it into the
-native markup. This keeps HTML / Markdown out of the domain code so the active
-messenger can be swapped without touching any notifier.
+renderers (:mod:`.render_discord`) turn it into the native markup. This keeps
+HTML / Markdown out of the domain code so the active messenger can be swapped
+without touching any notifier.
 
 Span construction bakes the value-vs-literal distinction in at build time so each
 renderer can preserve the intended text semantics:
 
 * :func:`text`, :func:`bold`, :func:`code` normalise their value with
-  ``str(value).strip()`` — matching the old ``escape_html`` / ``html_code``.
+  ``str(value).strip()``.
 * :func:`raw` keeps the string verbatim (significant leading whitespace, e.g.
   indented monitor rows) and is only HTML-escaped, never stripped.
 """
@@ -55,7 +55,7 @@ def code(value: object) -> Span:
 def code_block(value: object) -> Span:
     """A preformatted block, kept verbatim (newlines/whitespace preserved).
 
-    Renders as a fenced code block on Discord and a ``<pre>`` block on Telegram.
+    Renders as a fenced code block on Discord.
     Use it for tables and other monospace content; put it in its own
     :func:`line` so it stands alone.
     """
@@ -67,9 +67,7 @@ class Field:
     """A ``label: value`` row. Maps to an embed field on Discord.
 
     ``inline`` is a Discord layout hint: inline fields sit side by side (up to
-    three per row) instead of each spanning the full width. The Telegram
-    renderer ignores it — every field is still one ``label: value`` line — so
-    setting it never changes the Telegram output.
+    three per row) instead of each spanning the full width.
     """
 
     label: str
@@ -103,15 +101,14 @@ class Group:
 class Message:
     """A complete notification.
 
-    ``title`` is the semantic headline (Discord embed title / Telegram bold
-    first line). Renderers own its native representation. Existing builders may
+    ``title`` is the semantic headline (Discord embed title). Renderers own its
+    native representation. Existing builders may
     still include the same bold title in a decorated first line; renderers
     detect that form and avoid duplicating it.
 
     ``author`` is an optional sender identity shown above the title: the embed
-    author line on Discord, a leading plain line on Telegram (which has no author
-    slot). It lets a builder drop a redundant "orca_auto …" prefix from the title
-    and surface the identity as chrome instead.
+    author line on Discord. It lets a builder drop a redundant "orca_auto …"
+    prefix from the title and surface the identity as chrome instead.
     """
 
     title: str

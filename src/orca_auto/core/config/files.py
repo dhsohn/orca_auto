@@ -298,7 +298,7 @@ def _validate_optional_text_field(
 def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
     """Validate the complete public shared-config shape before any defaults apply."""
 
-    # Preserve the pointed migration error for the removed top-level Telegram block.
+    # Fail closed on a leftover top-level Telegram block before any other validation.
     messenger_raw = messenger_mapping_from_root(raw)
     _reject_unknown_config_fields(
         raw,
@@ -423,15 +423,16 @@ def load_required_shared_config_mapping(
 def messenger_mapping_from_root(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     """Return the canonical ``messenger`` mapping.
 
-    ``messenger.telegram`` is the only supported location. A leftover top-level
-    ``telegram`` block fails closed with a migration hint instead of being
-    silently ignored, which would silently disable notifications.
+    ``messenger`` is the only supported location. A leftover top-level
+    ``telegram`` block fails closed because Telegram is no longer supported,
+    instead of being silently ignored, which would silently disable
+    notifications.
     """
     root = raw if isinstance(raw, Mapping) else {}
     if "telegram" in root:
         raise ValueError(
-            "Top-level 'telegram' config is no longer supported; "
-            "move the block to 'messenger.telegram'."
+            "Telegram messaging is no longer supported; "
+            "remove the top-level 'telegram' config block."
         )
     if "messenger" not in root:
         return {}

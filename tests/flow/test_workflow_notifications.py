@@ -4,7 +4,8 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.messaging import Message, SendResult, render_telegram
+from orca_auto.core.messaging import Message, SendResult, render_discord_embed
+from orca_auto.core.messaging.richtext import Field
 from orca_auto.flow.workflow import notifications as workflow_notifications
 
 
@@ -26,6 +27,21 @@ def _patch_channel(monkeypatch: Any, channel: _RecordingChannel) -> None:
     monkeypatch.setattr(
         workflow_notifications, "build_channel_from_config_path", lambda *_a, **_k: channel
     )
+
+
+def _fields(message: Message) -> dict[str, str]:
+    embed = render_discord_embed(message)
+    return {item["name"]: item["value"] for item in embed.get("fields", [])}
+
+
+def _description(message: Message) -> str:
+    return render_discord_embed(message).get("description", "")
+
+
+def _field_labels(message: Message) -> list[str]:
+    return [
+        item.label for group in message.groups for item in group.items if isinstance(item, Field)
+    ]
 
 
 def test_maybe_notify_workflow_phase_summary_sends_crest_summary_once(monkeypatch: Any) -> None:
@@ -68,14 +84,17 @@ def test_maybe_notify_workflow_phase_summary_sends_crest_summary_once(monkeypatc
         payload=payload, config_path="cfg", phase_engine="crest"
     )
     assert len(channel.messages) == 1
-    rendered = render_telegram(channel.messages[0])
-    assert rendered.startswith("orca_auto\n")
-    assert "<b>CREST phase summary</b>" in rendered
-    assert "<b>Stages</b>: <code>2</code>" in rendered
-    assert "<b>Stage</b>: reactant" in rendered
-    assert "<b>Retained conformers</b>: <code>2</code>" in rendered
-    assert "<b>Stage</b>: product" in rendered
-    assert "<b>Retained conformers</b>: <code>0</code>" in rendered
+    message = channel.messages[0]
+    embed = render_discord_embed(message)
+    fields = _fields(message)
+    description = _description(message)
+    assert embed["author"] == {"name": "orca_auto"}
+    assert "CREST phase summary" in embed["title"]
+    assert fields["Stages"].startswith("`2`")
+    assert "**Stage**: reactant" in description
+    assert "**Retained conformers**: `2`" in description
+    assert "**Stage**: product" in description
+    assert "**Retained conformers**: `0`" in description
     assert payload["metadata"]["phase_notifications"]["crest_summary"]["sent_at"]
 
 
@@ -126,17 +145,20 @@ def test_maybe_notify_workflow_phase_summary_sends_xtb_ready_counts(monkeypatch:
     )
 
     assert len(channel.messages) == 1
-    rendered = render_telegram(channel.messages[0])
-    assert "<b>xTB phase summary</b>" in rendered
-    assert "wf_&lt;xtb&gt;_1" in rendered
-    assert "<b>Ready for ORCA</b>: <code>1</code>" in rendered
-    assert "<b>planned_orca_stages</b>: <code>1</code>" in rendered
-    assert "<b>Stage</b>: rxn_&lt;01&gt;" in rendered
-    assert "<b>Handoff</b>: <code>ready</code>" in rendered
-    assert "<b>Candidates</b>: <code>3</code>" in rendered
-    assert "<b>Stage</b>: rxn_02" in rendered
-    assert "<b>Handoff</b>: <code>failed</code>" in rendered
-    assert "<b>Candidates</b>: <code>0</code>" in rendered
+    message = channel.messages[0]
+    embed = render_discord_embed(message)
+    fields = _fields(message)
+    description = _description(message)
+    assert "xTB phase summary" in embed["title"]
+    assert fields["Workflow"] == "`wf_<xtb>_1`"
+    assert fields["Ready for ORCA"] == "`1`"
+    assert fields["planned_orca_stages"] == "`1`"
+    assert r"**Stage**: rxn\_\<01\>" in description
+    assert "**Handoff**: `ready`" in description
+    assert "**Candidates**: `3`" in description
+    assert r"**Stage**: rxn\_02" in description
+    assert "**Handoff**: `failed`" in description
+    assert "**Candidates**: `0`" in description
 
 
 def test_maybe_notify_workflow_phase_summary_reports_exhausted_handoffs_as_failed(
@@ -181,12 +203,13 @@ def test_maybe_notify_workflow_phase_summary_reports_exhausted_handoffs_as_faile
     assert len(channel.messages) == 1
     message = channel.messages[0]
     assert message.severity == "error"
-    rendered = render_telegram(message)
-    assert "<b>Outcome</b>: <code>failed</code>" in rendered
-    assert "completed=<code>0</code>" in rendered
-    assert "failed=<code>9</code>" in rendered
-    assert "<b>Ready for ORCA</b>: <code>0</code>" in rendered
-    assert rendered.count("<b>Result</b>: <code>failed</code>") == 9
+    fields = _fields(message)
+    description = _description(message)
+    assert fields["Outcome"] == "`failed`"
+    assert "completed=`0`" in fields["Stages"]
+    assert "failed=`9`" in fields["Stages"]
+    assert fields["Ready for ORCA"] == "`0`"
+    assert description.count("**Result**: `failed`") == 9
 
 
 def test_maybe_notify_workflow_phase_summary_treats_handoff_ready_failure_as_completed(
@@ -224,10 +247,11 @@ def test_maybe_notify_workflow_phase_summary_treats_handoff_ready_failure_as_com
     assert len(channel.messages) == 1
     message = channel.messages[0]
     assert message.severity == "success"
-    rendered = render_telegram(message)
-    assert "<b>Outcome</b>: <code>completed</code>" in rendered
-    assert "<b>Result</b>: <code>completed</code>" in rendered
-    assert "<b>Ready for ORCA</b>: <code>1</code>" in rendered
+    fields = _fields(message)
+    description = _description(message)
+    assert fields["Outcome"] == "`completed`"
+    assert "**Result**: `completed`" in description
+    assert fields["Ready for ORCA"] == "`1`"
 
 
 def test_maybe_notify_workflow_phase_summary_skips_when_channel_disabled(monkeypatch: Any) -> None:
@@ -291,10 +315,11 @@ def test_maybe_notify_workflow_phase_summary_includes_all_notes(monkeypatch: Any
     )
 
     assert len(channel.messages) == 1
-    rendered = render_telegram(channel.messages[0])
-    # All 120 notes are present; the Telegram channel is responsible for chunking.
-    assert "<b>note_0</b>:" in rendered
-    assert "<b>note_119</b>:" in rendered
+    labels = _field_labels(channel.messages[0])
+    # All 120 notes are present in the built message; the channel is responsible
+    # for chunking or truncating at delivery time.
+    assert "note_0" in labels
+    assert "note_119" in labels
 
 
 @pytest.mark.parametrize("failure_site", ["factory", "send"])

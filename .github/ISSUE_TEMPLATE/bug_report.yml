@@ -64,7 +64,7 @@ body:
     attributes:
       label: Safety checks
       options:
-        - label: I removed Telegram tokens, chat IDs, credentials, private paths, and proprietary calculation data.
+        - label: I removed bot tokens, channel IDs, credentials, private paths, and proprietary calculation data.
           required: true
         - label: I checked existing issues and did not find a duplicate.
           required: true

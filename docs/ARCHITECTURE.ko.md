@@ -49,8 +49,8 @@ src/orca_auto/
 │   ├── indexing/        # 작업 위치 인덱스 (각 작업의 출력 위치)
 │   ├── state/           # 공용 엔진 상태 헬퍼
 │   ├── config/          # 설정 스키마 + 로딩
-│   ├── messaging/       # 중립 Doc/port + Telegram/Discord adapter
-│   ├── notifications/   # 저수준 Telegram 전송 + 엔진 알림 훅
+│   ├── messaging/       # 중립 Doc/port + Discord 알림 adapter
+│   ├── notifications/   # 엔진 알림 훅 + 전송
 │   ├── commands/        # 공용 run-dir / queue 명령 로직
 │   ├── paths/           # 경로 검증 + 워크플로우 경로 해석
 │   └── utils/           # 락, 영속화, 프로세스 추적, 형 변환
@@ -82,8 +82,7 @@ src/orca_auto/
     ├── submitters/      # ORCA / 내부 엔진 제출 빌더
     ├── templates.py     # 워크플로우 템플릿 레지스트리
     ├── manifest.py      # flow.yaml 파싱
-    ├── registry/        # 워크플로우 레지스트리 + 저널
-    └── bot/             # provider-neutral bot 애플리케이션 + gateway adapter
+    └── registry/        # 워크플로우 레지스트리 + 저널
 ```
 
 ### 임포트 규칙 (DEVELOPMENT.md 기준)
@@ -131,7 +130,7 @@ import-linter 계약으로 보호합니다.
   ┌──────────────────────────────┐      ┌──────────────────────────────┐
   │ engine-workers@.target       │ ───▶ │  큐 워커 루프                 │
   │ └ queue-worker (ORCA)        │      │  core/queue/worker/loop.py    │
-  │ runtime@.target + bot        │      └─────────────┬────────────────┘
+  │ runtime@.target              │      └─────────────┬────────────────┘
   └──────────────────────────────┘                    │ 어드미션 슬롯 예약
                                                        │ 큐 id로 자식 생성
                                                        ▼
@@ -380,7 +379,7 @@ ORCA가 다운스트림에 노출하는 필드("계약 동결")는
 구체화 전에 manifest admission을 제한합니다. 공용 loader는 작업 manifest 하나를 1 MiB,
 YAML alias 32개, 파싱/확장 node 10,000개, 중첩 64단계로 제한하고 순환/재귀 graph를
 거부합니다. 중앙 geometry 상한은 로컬 작업 10,000원자, xTB/ORCA Hessian 생성 작업
-1,000원자, 원격 업로드 작업 200원자입니다.
+1,000원자입니다.
 
 ### Supporting Information 소유권
 
@@ -488,41 +487,26 @@ orca_auto는 scheduling, ownership, 공개 artifact를 모두 디스크 기반�
 
 ## 9. 알림
 
-`core/messaging/`은 두 provider-neutral capability 경계를 소유합니다. 불변 semantic
-`Message` 문서와 알림 `MessageChannel`, 정규화된 command/action 모델과
-`InteractiveMessenger`가 여기에 있습니다. 도메인 notifier는 wire markup을 선택하지
-않고 인터랙티브 앱은 정규화된 값만 받습니다. `MessengerConfig`는 unknown provider를
-거부합니다.
+orca_auto는 단방향 발신 알림만 전송합니다. 작업 및 워크플로우 알림을 Discord로
+게시하며 수신 명령은 소비하지 않습니다.
 
-`core/notifications/`는 `TelegramChannel`이 재사용하는 저수준 Telegram Bot API 전송과
-엔진 알림 훅 계층(`engine_notifier.py`, `engine_delivery.py`)을 유지합니다.
-`DiscordBotChannel`이 bot 인증 알림을 발신하며, 공유 HTTP 재시도/백오프 헬퍼는
-`discord_http.py`에 있습니다. 각 `EngineDefinition`은
-`job_started` / `job_finished` / `retry` 훅을 등록할 수 있습니다.
+`core/messaging/`은 provider-neutral capability 경계를 소유합니다. 불변 semantic
+`Message` 문서(`richtext.py`)와 알림 `MessageChannel`(`channel.py`)이 여기에 있습니다.
+도메인 notifier는 wire markup 없이 문서를 구성하고, `build_channel`(`registry.py`)이
+설정된 채널을 해석하며 지원하지 않는 provider는 fail-closed로 처리합니다.
+`MessengerConfig`는 adapter 설정을 소유하고 unknown provider를 거부합니다.
 
-`flow/bot/application.py`는 provider-neutral `/list`, `/cancel`, `/help` 동작을
-소유합니다. Telegram polling과 Discord gateway adapter가 provider 이벤트를 경계에서
-변환합니다. 파괴적 액션은 raw queue ID 대신 provider·채널·사용자에 묶인 짧고
-만료되며 일회성인 opaque ID를 사용합니다. `flow/bot/upload_application.py`는 Discord
-`!run`의 내구성 transaction을 별도로 소유합니다. CDN 다운로드 전 예약, archive 검증,
-확인, 원자 게시, downstream queue/workflow commit 조정, restart reconciliation이 이
-경계에 있으며 불확실한 commit은 재시도하거나 삭제하지 않고 보존합니다. 두 application은
-`flow/bot/interaction_delivery.py`의 provider-neutral delivery 동작만 공유합니다.
-워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST 및 반응 경로 xTB 자식
-페이즈는 각각 한 메시지로 요약합니다.
-import-linter는 upload 영속성을 runner/provider composition 아래에 유지하고 command
-application이 `core.ingest`를 직접 소유하지 못하게 합니다.
+`DiscordBotChannel`(`discord_bot.py`)은 각 `Message`를 Discord embed(`render_discord.py`)로
+렌더링해 bot 인증 Discord API로 전송하며, 공유 HTTP 재시도/백오프 헬퍼는
+`discord_http.py`에 있습니다.
 
-`ActionStore` port는 일회성 해석과 originator/operator audience 정책을 정의합니다.
-현재 메모리 구현은 명령에 응답해 gateway가 만든 카드만 의도적으로 담당하며, 알림
-메시지는 아직 액션을 포함하지 않습니다. 알림에서 시작되는 제어를 추가할 때는 worker
-발신자와 gateway가 내구성 있는 `ActionStore` 구현을 공유해 binding이 프로세스 경계를
-넘어 유지되도록 해야 합니다. 이 확장도 동일한 중립 card/action 계약 뒤에 둡니다.
+`core/notifications/`는 엔진 알림 훅 계층(`engine_notifier.py`, `engine_delivery.py`)을
+유지합니다. 각 `EngineDefinition`은 `job_started` / `job_finished` / `retry` 훅을 등록할
+수 있습니다. 워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST 및 반응 경로
+xTB 자식 페이즈는 각각 한 메시지로 요약합니다.
 
-선택된 adapter는 해당 credential이 완전할 때만 활성화됩니다. Telegram에는
-`messenger.telegram.bot_token`과 `chat_id`가 필요합니다. 인터랙티브 Discord에는 bot
-token, 채널 ID, operator allowlist가 필요하며, bot token+기본 채널이 정식 알림
-경로입니다.
+채널은 해당 credential이 완전할 때만 활성화됩니다. Discord에는
+`messenger.discord.bot_token`과 `messenger.discord.default_channel_id`가 필요합니다.
 
 ---
 
@@ -535,7 +519,7 @@ token, 채널 ID, operator allowlist가 필요하며, bot token+기본 채널이
 3. `~/orca_auto/config/orca_auto.yaml`
 
 `core/config/schema.py`는 정규화 생성자를 갖춘 타입 설정 데이터클래스(예:
-`RetryRuntimeConfig`, `CommonResourceConfig`, `TelegramConfig`)를 정의합니다.
+`RetryRuntimeConfig`, `CommonResourceConfig`, `MessengerConfig`)를 정의합니다.
 주요 규칙:
 
 - **Linux 경로만 허용.** Windows 드라이브 경로, `/mnt/<drive>/...`, 상대 실행
@@ -561,13 +545,10 @@ token, 채널 ID, operator allowlist가 필요하며, bot token+기본 채널이
 | `orca_auto-engine-workers@.target`    | 기본 엔진 워커 unit 시작                        |
 | `orca_auto-queue-worker@.service`     | ORCA 워커 감독                                  |
 | `orca_auto-workflow-worker@.service`  | opt-in workflow + 내부 xTB/CREST 워커           |
-| `orca_auto-bot@.service`              | 선택된 provider-neutral messenger 봇            |
-| `orca_auto-runtime@.target`           | 엔진 워커와 bot을 함께 시작                    |
+| `orca_auto-runtime@.target`           | 엔진 워커 시작                                  |
 
 `orca_auto systemd install --user <user> --repo <repo>`가 유닛을 렌더링하고
-활성화합니다. 선택된 provider의 인터랙티브 봇 설정이 불완전하면 bot 없는
-engine-worker 타깃이 활성화되며, 설정 후 다시 실행하면 전체 타깃이 활성화됩니다. WSL에서는
-`/etc/wsl.conf`에서 `systemd`가 활성화되어 있어야 합니다.
+활성화합니다. WSL에서는 `/etc/wsl.conf`에서 `systemd`가 활성화되어 있어야 합니다.
 
 기본 ORCA 워커는 자체 서비스 감독자로 실행되어 opt-in workflow 감독자와 독립적으로
 실패하거나 재시작할 수 있습니다. opt-in workflow 감독자는 각 워커를 별도

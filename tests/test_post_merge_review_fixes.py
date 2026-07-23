@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core.messaging import render_telegram
+from orca_auto.core.messaging import render_discord_embed
 from orca_auto.core.paths.workflow import (
     WORKFLOW_FILE_NAME,
     WORKFLOW_SCAFFOLD_MANIFEST_NAME,
@@ -102,6 +102,6 @@ def test_worker_cycle_events_keep_their_session(tmp_path: Path, event_type: str)
         "metadata": {"cycle_started_at": "2026-07-17T10:00:00+00:00"},
     }
 
-    rendered = render_telegram(journal_event_message(event, tmp_path))
+    rendered = str(render_discord_embed(journal_event_message(event, tmp_path)))
 
     assert "wf_worker_20260717_074850_deadbeef" in rendered

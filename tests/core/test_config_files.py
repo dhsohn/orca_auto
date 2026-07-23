@@ -33,7 +33,7 @@ def test_messenger_mapping_rejects_legacy_top_level_telegram_block() -> None:
     legacy = {
         "telegram": {"bot_token": "legacy-token", "chat_id": "legacy-chat"},
     }
-    with pytest.raises(ValueError, match="messenger.telegram"):
+    with pytest.raises(ValueError, match="no longer supported"):
         messenger_mapping_from_root(legacy)
     with pytest.raises(ValueError, match="no longer supported"):
         messenger_mapping_from_root(
@@ -50,8 +50,8 @@ def test_messenger_mapping_rejects_legacy_top_level_telegram_block() -> None:
 
     canonical = {
         "messenger": {
-            "provider": "telegram",
-            "telegram": {"chat_id": "nested-chat"},
+            "provider": "discord",
+            "discord": {"default_channel_id": "123"},
         },
     }
     assert messenger_mapping_from_root(canonical) == canonical["messenger"]
@@ -68,7 +68,7 @@ def test_yaml_parse_error_does_not_expose_secret_source_line(tmp_path: Path) -> 
     config_path = tmp_path / "orca_auto.yaml"
     secret = "123456:super-secret-token"
     config_path.write_text(
-        f'messenger:\n  telegram:\n    bot_token: "{secret}\n',
+        f'messenger:\n  discord:\n    bot_token: "{secret}\n',
         encoding="utf-8",
     )
 
@@ -409,7 +409,7 @@ def test_duplicate_key_error_does_not_expose_secret_values(tmp_path: Path) -> No
     first_secret = "first-super-secret-token"
     second_secret = "second-super-secret-token"
     config_path.write_text(
-        f"messenger:\n  telegram:\n    bot_token: {first_secret}\n    bot_token: {second_secret}\n",
+        f"messenger:\n  discord:\n    bot_token: {first_secret}\n    bot_token: {second_secret}\n",
         encoding="utf-8",
     )
 
@@ -450,7 +450,7 @@ def test_configured_path_and_admission_root_helpers(tmp_path: Path) -> None:
 
 def test_secure_config_file_permissions_sets_owner_only_mode(tmp_path: Path) -> None:
     config_path = tmp_path / "orca_auto.yaml"
-    config_path.write_text("messenger:\n  telegram:\n    bot_token: token\n", encoding="utf-8")
+    config_path.write_text("messenger:\n  discord:\n    bot_token: token\n", encoding="utf-8")
     config_path.chmod(0o644)
 
     secure_config_file_permissions(config_path)

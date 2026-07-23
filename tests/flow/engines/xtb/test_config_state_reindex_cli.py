@@ -60,9 +60,9 @@ def test_load_config_parses_defaults_and_normalizes_values(tmp_path: Path) -> No
                     "max_memory_gb_per_task": "1",
                 },
                 "messenger": {
-                    "telegram": {
+                    "discord": {
                         "bot_token": " token ",
-                        "chat_id": " chat ",
+                        "default_channel_id": " 123 ",
                     },
                 },
             },
@@ -80,8 +80,8 @@ def test_load_config_parses_defaults_and_normalizes_values(tmp_path: Path) -> No
     assert cfg.paths.xtb_executable == str(fake_xtb.resolve())
     assert cfg.resources.max_cores_per_task == 1
     assert cfg.resources.max_memory_gb_per_task == 1
-    assert cfg.messenger.telegram.bot_token == "token"
-    assert cfg.messenger.telegram.chat_id == "chat"
+    assert cfg.messenger.discord.bot_token == "token"
+    assert cfg.messenger.discord.default_channel_id == "123"
 
 
 def test_load_config_reports_missing_file_invalid_payload_and_requires_workflow_root(
@@ -154,8 +154,8 @@ def test_load_config_applies_defaults_for_missing_optional_sections(
     assert cfg.paths.xtb_executable == ""
     assert cfg.resources.max_cores_per_task == 8
     assert cfg.resources.max_memory_gb_per_task == 32
-    assert cfg.messenger.telegram.bot_token == ""
-    assert cfg.messenger.telegram.chat_id == ""
+    assert cfg.messenger.discord.bot_token == ""
+    assert cfg.messenger.discord.default_channel_id == ""
 
 
 def test_load_config_rejects_removed_behavior_section(tmp_path: Path) -> None:

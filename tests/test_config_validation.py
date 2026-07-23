@@ -3,6 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
+from orca_auto.core.config.schema import messenger_config_from_mapping
 from orca_auto.orca.config import load_config
 
 
@@ -174,7 +177,7 @@ class TestConfigValidation(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "requires.*scratch_root"):
                 load_config(str(cfg_path))
 
-    def test_telegram_delivery_settings_are_loaded(self) -> None:
+    def test_discord_delivery_settings_are_loaded(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -188,9 +191,9 @@ class TestConfigValidation(unittest.TestCase):
                     "runs_root": str(allowed),
                     "paths": {"orca_executable": str(fake_orca)},
                     "messenger": {
-                        "telegram": {
+                        "discord": {
                             "bot_token": "token",
-                            "chat_id": "chat",
+                            "default_channel_id": "123",
                             "timeout_seconds": 3.5,
                             "max_attempts": 4,
                             "retry_backoff_seconds": 0.25,
@@ -201,12 +204,11 @@ class TestConfigValidation(unittest.TestCase):
 
             cfg = load_config(str(cfg_path))
 
-            self.assertEqual(cfg.messenger.telegram.bot_token, "token")
-            self.assertEqual(cfg.messenger.telegram.chat_id, "chat")
-            self.assertEqual(cfg.messenger.telegram.timeout_seconds, 3.5)
-            self.assertEqual(cfg.messenger.telegram.max_attempts, 4)
-            self.assertEqual(cfg.messenger.telegram.retry_backoff_seconds, 0.25)
-            self.assertEqual(cfg.messenger.telegram, cfg.messenger.telegram)
+            self.assertEqual(cfg.messenger.discord.bot_token, "token")
+            self.assertEqual(cfg.messenger.discord.default_channel_id, "123")
+            self.assertEqual(cfg.messenger.discord.timeout_seconds, 3.5)
+            self.assertEqual(cfg.messenger.discord.max_attempts, 4)
+            self.assertEqual(cfg.messenger.discord.retry_backoff_seconds, 0.25)
 
     def test_legacy_top_level_telegram_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -228,7 +230,7 @@ class TestConfigValidation(unittest.TestCase):
                 },
             )
 
-            with self.assertRaisesRegex(ValueError, "messenger.telegram"):
+            with self.assertRaisesRegex(ValueError, "no longer supported"):
                 load_config(str(cfg_path))
 
     def test_unknown_messenger_provider_is_rejected(self) -> None:
@@ -433,6 +435,14 @@ class TestConfigValidation(unittest.TestCase):
                 load_config(str(cfg_path))
             self.assertIn("Config file not found", str(ctx.exception))
             self.assertIn("orca_auto.yaml.example", str(ctx.exception))
+
+    def test_shipped_example_config_messenger_matches_current_schema(self) -> None:
+        """bootstrap copies this template verbatim, so it must stay loadable."""
+        example = Path(__file__).resolve().parents[1] / "config" / "orca_auto.yaml.example"
+        raw = yaml.safe_load(example.read_text(encoding="utf-8"))
+        assert isinstance(raw, dict)
+        messenger = messenger_config_from_mapping(raw.get("messenger"))
+        self.assertEqual(messenger.normalized_provider, "discord")
 
     def test_missing_required_paths_raise_with_explicit_path_hint(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -4,7 +4,6 @@ from .schema import (
     DiscordConfig,
     MessengerConfig,
     RetryRuntimeConfig,
-    TelegramConfig,
     discord_config_from_mapping,
     messenger_config_from_mapping,
 )
@@ -17,7 +16,6 @@ __all__ = [
     "MessengerConfig",
     "RetryRuntimeConfig",
     "ScratchConfig",
-    "TelegramConfig",
     "discord_config_from_mapping",
     "messenger_config_from_mapping",
     "scratch_config_from_runtime_mapping",

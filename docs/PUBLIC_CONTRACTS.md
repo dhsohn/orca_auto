@@ -149,32 +149,12 @@ Supported configuration paths:
 - `scheduler.admission_root`
 - `workflow.paths.xtb_executable`
 - `workflow.paths.crest_executable`
-- `messenger.provider` (`telegram` or `discord`)
-- `messenger.telegram.bot_token`
-- `messenger.telegram.chat_id`
-- `messenger.telegram.allowed_user_ids`
-- `messenger.telegram.timeout_seconds`
-- `messenger.telegram.max_attempts`
-- `messenger.telegram.retry_backoff_seconds`
+- `messenger.provider` (`discord`)
 - `messenger.discord.bot_token`
-- `messenger.discord.channel_ids`
 - `messenger.discord.default_channel_id`
-- `messenger.discord.allowed_user_ids`
 - `messenger.discord.timeout_seconds`
 - `messenger.discord.max_attempts`
 - `messenger.discord.retry_backoff_seconds`
-- `messenger.discord.uploads.enabled`
-- `messenger.discord.uploads.max_archive_bytes`
-- `messenger.discord.uploads.max_total_uncompressed_bytes`
-- `messenger.discord.uploads.max_file_bytes`
-- `messenger.discord.uploads.max_entries`
-- `messenger.discord.uploads.max_staged_bytes`
-- `messenger.discord.uploads.max_staged_uploads`
-- `messenger.discord.uploads.max_pending_per_actor`
-- `messenger.discord.uploads.max_concurrent_downloads`
-- `messenger.discord.uploads.staging_ttl_seconds`
-- `messenger.discord.uploads.committed_retention_seconds`
-- `messenger.discord.uploads.allowed_extensions`
 - `orca.runtime.default_max_retries`
 - `orca.runtime.scratch_root`
 - `orca.runtime.scratch_min_free_gb`
@@ -229,36 +209,25 @@ Behavior:
   before release exits without starting ORCA.
   Queue, state, and process ownership remain durable. Unpublished scratch output
   is intentionally not a recovery contract across host or WSL shutdown.
-- Outbound Telegram delivery requires `messenger.provider: telegram` and non-empty
-  `messenger.telegram.bot_token` and `messenger.telegram.chat_id` values.
-- Canonical Discord delivery uses `messenger.discord.bot_token` plus
-  `default_channel_id`; `channel_ids` authorizes inbound channels. The interactive gateway
-  additionally requires a non-empty `allowed_user_ids` operator allowlist.
-- Explicit bot tokens must be strings. Telegram `chat_id` accepts a string or
-  integer; Discord channel IDs and both operator-ID allowlists accept only their
-  documented positive IDs. Explicit nulls, booleans, collections in scalar
-  fields, scalar allowlists, and invalid list entries are rejected. Empty token
-  and destination strings and empty allowlists remain the intentional way to
-  disable the corresponding capability.
-- Both adapters bound finite delivery timeouts to 0.1–120 seconds, integer total
-  attempts to 1–10, and finite retry backoff to 0–120 seconds. Omission uses the
-  documented defaults and finite values outside those ranges are clamped;
+- Outbound Discord delivery uses `messenger.provider: discord` plus non-empty
+  `messenger.discord.bot_token` and `messenger.discord.default_channel_id`
+  values. Notifications are one-way; there is no inbound command surface.
+- The explicit bot token must be a string and `default_channel_id` a documented
+  positive Discord ID. Explicit nulls, booleans, and collections in those scalar
+  fields are rejected. Empty token and destination strings remain the
+  intentional way to disable outbound delivery.
+- The Discord adapter bounds finite delivery timeouts to 0.1–120 seconds, integer
+  total attempts to 1–10, and finite retry backoff to 0–120 seconds. Omission uses
+  the documented defaults and finite values outside those ranges are clamped;
   explicitly configured booleans, non-numeric values, fractions for attempts,
   NaN, and infinities are rejected rather than defaulted.
-- Explicit Discord upload policy values are also fail-closed:
-  `enabled` must be a recognized boolean, every size/count/retention field must
-  be a positive integer, and `allowed_extensions` must be a list of non-empty
-  strings. Omitted fields use their documented defaults; malformed explicit
-  values never silently disable uploads or relax a bound.
-  `max_staged_bytes` must be greater than or equal to `max_archive_bytes`, and
-  `max_concurrent_downloads` must not exceed `16`.
 
 Migration note:
 
-- The legacy top-level `telegram:` block is no longer read. Configuration
-  loading fails with a pointed error when one is present; move the block to
-  `messenger.telegram`. Discord has no legacy alias: use the nested
-  `messenger.discord` bot fields.
+- Telegram messaging is no longer supported. A leftover top-level `telegram:`
+  block fails configuration loading with a pointed error; a nested
+  `messenger.telegram` block fails as an unknown `messenger` field. Remove
+  either one and use the nested `messenger.discord` bot fields.
 - Removed top-level `behavior`, `runtime`, and `paths` sections; `workflow.root`;
   and engine-scoped `scheduler`, `resources`, or `messenger` blocks are not
   compatibility aliases. Use the supported top-level shared sections and
@@ -634,8 +603,7 @@ multiline/control/non-printable route or label text are rejected at admission.
 Fragment labels are at most 80 characters. An enabled interaction-energy block
 requires 2–8 fragments; each multiplicity is an integer in `[1, 100]`, and
 `sp_route_line` must describe a pure single-point calculation. Fragment indices
-must be a static, gap-free, disjoint partition of every input atom. Remote
-workflow uploads may not set the server-owned `interaction_energy.priority`.
+must be a static, gap-free, disjoint partition of every input atom.
 The former xTB `namespace` option is not part of the canonical artifact
 contract: an absent or empty compatibility field is harmless, but a non-empty
 value is rejected and must be removed before resubmission.
@@ -654,8 +622,7 @@ files remain candidates. Non-finite coordinates or xTB energies are not valid
 workflow artifacts.
 
 Local geometry admission is capped at 10,000 atoms. xTB Hessian jobs and ORCA
-frequency/Hessian-producing inputs use the stricter 1,000-atom cap. Remote
-Discord workflow and ORCA uploads use a 200-atom cap.
+frequency/Hessian-producing inputs use the stricter 1,000-atom cap.
 
 For trusted local CREST work, an explicit `mdlen` uses a default aggregate
 `max_md_steps` budget of 10,000,000. If `mdlen` is omitted, admission evaluates
@@ -663,9 +630,7 @@ CREST's automatic-length worst case with a 14,000,000-step default budget;
 under the standard non-quick trajectory multiplicity, GFN-FF and `gfn2//gfnff`
 therefore require an explicit bounded `mdlen` or an explicit higher step budget
 with its high-cost acknowledgement. Every local CREST job is also capped at
-50,000,000,000 atom-steps. Remote workflow ingress
-injects the server-owned `mdlen: 5.0` ps and rejects work above 50,000,000
-atom-steps; uploaded manifests cannot override the CREST runtime/cost controls.
+50,000,000,000 atom-steps.
 
 Workflow runtime artifacts:
 
@@ -767,7 +732,6 @@ Workflow runtime artifacts:
   foreign, malformed, or digest-mismatched marker never authorizes overwrite or
   deletion; user-modified content is preserved and released from ownership.
   Ownership conflicts are preflighted before replacing the last-good base SI.
-  Uploaded archives may not supply either generated file.
 - A restart preserves the interaction SP route, per-fragment electronic state,
   interaction-specific resources, and generation fingerprint. Interaction and
   RMSD grouping settings are immutable after fan-out; reopening an original
@@ -846,7 +810,6 @@ Supported unit filenames:
 - `systemd/orca_auto-engine-workers@.target`
 - `systemd/orca_auto-queue-worker@.service`
 - `systemd/orca_auto-workflow-worker@.service`
-- `systemd/orca_auto-bot@.service`
 
 Supported operator commands:
 
@@ -856,23 +819,21 @@ Supported operator commands:
 
 Behavior:
 
-- In worker-only mode the installer enables the engine-worker target directly.
-  With complete interactive bot configuration it instead enables the full
-  runtime target, which pulls in the engine-worker target.
+- A full-runtime install enables the runtime target; a worker-only install
+  enables the engine-worker target instead. The runtime target currently pulls
+  in only the engine-worker target, so both modes start the same unit set.
 - The engine-worker target starts the ORCA engine service. An unqualified
   interactive `queue worker` command remains ORCA-only.
   Configuring `runs_root` does not implicitly start workflow or its internal
   xTB/CREST workers.
 - The workflow unit is installed but opt-in. Starting it explicitly runs the
   workflow supervisor and its internal xTB/CREST workers.
-- The selected Telegram/Discord bot is enabled only when its interactive config is complete;
-  otherwise the install remains worker-only.
 - `service status` reports the runtime and engine-worker targets, the default
-  ORCA engine service, the opt-in workflow worker, and bot status. The opt-in worker
+  ORCA engine service, and the opt-in workflow worker. The opt-in worker
   is informational and is not required for worker-only or full-runtime health.
-- `service restart` clears the ORCA engine service's start-limit failure state and,
-  for the full runtime, the bot's. It restarts the runtime target when enabled;
-  otherwise it restarts the engine-worker target.
+- `service restart` clears the ORCA engine service's start-limit failure state.
+  It restarts the runtime target when enabled; otherwise it restarts the
+  engine-worker target.
 - A clean engine-worker supervisor exit remains stopped. Each child supervisor
   opens a bounded restart circuit, and systemd applies a bounded delayed restart.
 

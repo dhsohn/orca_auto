@@ -60,9 +60,6 @@ from .schema import (
 from .schema import (
     resolved_admission_limit as resolved_admission_limit,
 )
-from .schema import (
-    telegram_config_from_mapping as telegram_config_from_mapping,
-)
 from .scratch import ScratchConfig, scratch_config_from_runtime_mapping
 
 CONFIG_ENV_VAR = ORCA_AUTO_CONFIG_ENV_VAR
