@@ -14,11 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.artifacts import (
-    INTERACTION_ENERGY_CSV_FILE,
-    INTERACTION_ENERGY_CSV_OWNER_FILE,
     RUN_REPORT_HTML_FILE,
     RUN_REPORT_JSON_FILE,
-    RUN_REPORT_MD_FILE,
     RUN_STATE_FILE,
     SI_BLOCK_MD_FILE,
 )
@@ -54,11 +51,8 @@ _DURABLE_RESERVED_FILE_NAMES = frozenset(
     {
         RUN_STATE_FILE,
         RUN_REPORT_JSON_FILE,
-        RUN_REPORT_MD_FILE,
         RUN_REPORT_HTML_FILE,
         SI_BLOCK_MD_FILE,
-        INTERACTION_ENERGY_CSV_FILE,
-        INTERACTION_ENERGY_CSV_OWNER_FILE,
         "orca.process.json",
         ".orca.process.lock",
         RUN_LOCK_FILE_NAME,

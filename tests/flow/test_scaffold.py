@@ -97,7 +97,7 @@ def test_cmd_scaffold_is_idempotent_for_conformer_workflow(
     assert "`gfn: ff`, `noreftopo: true`, `notopo: true`, or `nocbonds: true`" in readme
     assert "Sampling knobs" in readme
     assert "SI Boltzmann populations" in readme
-    assert "interaction_energy.csv" in readme
+    assert "SI interaction-energy section" in readme
     assert "rmsd_dedup" in readme
     capsys.readouterr()
 

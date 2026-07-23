@@ -64,7 +64,6 @@ def test_xtb_submitter_roundtrip_smoke(
     assert not (xtb_opt_job / "organized_ref.json").exists()
     assert (artifact_dir / "job_state.json").exists()
     assert not (artifact_dir / "job_report.json").exists()
-    assert not (artifact_dir / "job_report.md").exists()
     assert (artifact_dir / "xtbopt.xyz").exists()
     assert (artifact_dir / "xtbout.json").exists()
 

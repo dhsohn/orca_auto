@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import json
 import textwrap
 from pathlib import Path
@@ -203,21 +202,13 @@ def assert_workflow_publications(workspace_dir: Path, payload: dict[str, Any]) -
     report_html = assert_workflow_report(workspace_dir, payload)
 
     si_path = workspace_dir / "workflow_si.md"
-    csv_path = workspace_dir / "si_data.csv"
     si_markdown = si_path.read_text(encoding="utf-8")
     assert len(si_markdown) > 100
     assert workflow_id in si_markdown
     assert template_name in si_markdown
 
-    with csv_path.open(encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        fieldnames = set(reader.fieldnames or ())
-        rows = list(reader)
-    assert {"name", "stage_id", "kind", "E_Eh", "warnings"}.issubset(fieldnames)
     if status == "completed":
-        assert rows
-        assert all(row["name"] and row["stage_id"] and row["kind"] for row in rows)
-        assert any(row["E_Eh"] == "-1.1" for row in rows)
+        assert "-1.100000" in si_markdown
         assert "-1.100000" in report_html
         assert "+0.00" in report_html
         assert "provenance missing or inconsistent" not in si_markdown
@@ -255,13 +246,6 @@ def assert_orca_job_publications(
     assert reason in report_html
     assert "AnalyzerStatus." not in report_html
     assert not (job_dir / "job_report.html").exists()
-
-    report_markdown = (generation_dir / "job_report.md").read_text(encoding="utf-8")
-    assert len(report_markdown) > 200
-    assert f"Status: `{expected_status}`" in report_markdown
-    assert "AnalyzerStatus." not in report_markdown
-    assert "<AnalyzerStatus" not in report_markdown
-    assert not (job_dir / "job_report.md").exists()
 
     si_path = generation_dir / "si_block.md"
     if expect_si:

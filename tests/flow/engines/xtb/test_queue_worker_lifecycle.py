@@ -187,7 +187,6 @@ def test_terminal_adoption_finalizes_racing_cancel_consistently(
     assert persisted_state is not None
     assert persisted_state["status"]["state"] == "cancelled"
     assert not (job_dir / "job_report.json").exists()
-    assert not (job_dir / "job_report.md").exists()
 
 
 def test_worker_repairs_own_publication_and_ignores_foreign_rows(
@@ -495,7 +494,6 @@ def test_terminal_adoption_ignores_removed_report_timestamp(
     assert repaired_state["input"]["primary_path"] == str(current_xyz)
     removed_report = json.loads((job_dir / "job_report.json").read_text(encoding="utf-8"))
     assert removed_report["input"]["primary_path"] == str(stale_xyz)
-    assert not (job_dir / "job_report.md").exists()
 
 
 def test_newer_removed_report_cannot_override_state(
@@ -686,7 +684,6 @@ def test_terminal_state_repair_preserves_command(tmp_path: Path) -> None:
     assert state is not None
     assert state["engine_payload"]["command"] == ["xtb", str(selected_xyz), "--opt"]
     assert not (job_dir / "job_report.json").exists()
-    assert not (job_dir / "job_report.md").exists()
 
 
 def test_failed_terminal_repair_preserves_zero_exit_code(tmp_path: Path) -> None:
@@ -744,7 +741,6 @@ def test_failed_terminal_repair_preserves_zero_exit_code(tmp_path: Path) -> None
         "exit_code": 0,
     }
     assert not (job_dir / "job_report.json").exists()
-    assert not (job_dir / "job_report.md").exists()
 
 
 def test_terminal_without_exact_artifacts_records_repair_blocker(tmp_path: Path) -> None:
@@ -1469,7 +1465,6 @@ def test_terminal_reconcile_repairs_partial_cancelled_artifacts(
 
     assert len(upserts) == 1
     assert not (job_dir / "job_report.json").exists()
-    assert not (job_dir / "job_report.md").exists()
 
 
 def test_terminal_reconcile_finalizes_direct_pending_cancel(
@@ -1543,7 +1538,6 @@ def test_terminal_reconcile_finalizes_direct_pending_cancel(
     assert persisted.metadata["terminal_repair_blocked_reason"] == "terminal_state_unrecoverable"
     assert upserts == []
     assert not (job_dir / "job_report.json").exists()
-    assert not (job_dir / "job_report.md").exists()
 
     queue_cmd._sync_terminal_running_entries(worker)
 

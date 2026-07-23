@@ -10,7 +10,6 @@ candidates).
 
 from __future__ import annotations
 
-import hashlib
 import html
 import json
 import logging
@@ -23,12 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.artifacts import (
-    MAX_RUN_REPORT_MD_BYTES,
     RUN_REPORT_HTML_FILE,
     RUN_REPORT_JSON_FILE,
-    RUN_REPORT_MD_COMMIT_KEY,
-    RUN_REPORT_MD_COMMIT_VERSION,
-    RUN_REPORT_MD_FILE,
     WORKFLOW_REPORT_HTML_FILE,
 )
 from orca_auto.core.engine_process import read_confined_text
@@ -519,40 +514,6 @@ def _direct_single_link_file(path: Path, generation_dir: Path) -> Path | None:
     return path
 
 
-def _verified_report_markdown_path(
-    generation_dir: Path,
-    report: Mapping[str, Any],
-) -> Path | None:
-    artifacts = _mapping(report.get("artifacts"))
-    commit = _mapping(artifacts.get(RUN_REPORT_MD_COMMIT_KEY))
-    commit_version = commit.get("version")
-    if (
-        isinstance(commit_version, bool)
-        or not isinstance(commit_version, int)
-        or commit_version != RUN_REPORT_MD_COMMIT_VERSION
-        or isinstance(commit.get("size_bytes"), bool)
-        or not isinstance(commit.get("size_bytes"), int)
-        or not 0 <= commit["size_bytes"] <= MAX_RUN_REPORT_MD_BYTES
-        or not isinstance(commit.get("sha256"), str)
-    ):
-        return None
-    path = _direct_single_link_file(generation_dir / RUN_REPORT_MD_FILE, generation_dir)
-    if path is None:
-        return None
-    try:
-        markdown = read_confined_text(
-            generation_dir,
-            path,
-            label="ORCA workflow report Markdown",
-            max_bytes=MAX_RUN_REPORT_MD_BYTES,
-        ).encode("utf-8")
-    except (OSError, RuntimeError, UnicodeError, ValueError):
-        return None
-    if len(markdown) != commit["size_bytes"]:
-        return None
-    return path if hashlib.sha256(markdown).hexdigest() == commit["sha256"] else None
-
-
 def _stage_diagnostic(
     stage: Mapping[str, Any], workspace_dir: Path, *, include_job_artifacts: bool
 ) -> tuple[str, str, str | None]:
@@ -578,8 +539,6 @@ def _stage_diagnostic(
             details_path = stdout_path
     if engine == "orca" and job_dir is not None and report is not None:
         details_path = _direct_single_link_file(job_dir / RUN_REPORT_HTML_FILE, job_dir)
-        if details_path is None:
-            details_path = _verified_report_markdown_path(job_dir, report)
         if details_path is None:
             details_path = report_path
     if details_path is None and job_dir is not None:

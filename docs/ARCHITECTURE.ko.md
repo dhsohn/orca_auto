@@ -188,7 +188,7 @@ import-linter 계약으로 보호합니다.
 - `queue_worker_module` — 부모 워커 진입점
 - `queue_functions` — runtime root, 큐 연산, 엔트리 조회, PID 파일 이름
 - `runner_callbacks` — 자식 러너와 자식 명령 빌더
-- `artifact_adapter` — 페이로드 빌드/로드 + 리포트 마크다운
+- `artifact_adapter` — 페이로드 빌드/로드
 - `notification_hooks` — started / finished / retry 콜백
 - `context_builder` — 실행을 위한 DI 이음새
 
@@ -334,7 +334,7 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   있으면 `MORead` + `%moinp`로 재시작 입력을 생성합니다. 재개된 입력은
   `*.resume.inp`로 기록되어 사용자 입력이 변경되지 않습니다.
 - **상태 & 리포트:** `state.py`/`state_machine.py`가 `job_state.json`을
-  영속화하고, 완료 시 `job_report.json`과 `job_report.md`를 작성합니다. Opt,
+  영속화하고, 완료 시 `job_report.json`을 작성합니다. Opt,
   OptTS, NEB-TS, ScanTS, IRC, relaxed scan 작업은 추가로
   `job_report.html`(`report/`)을 생성합니다 — `report/composer.py`가 공통
   페이지 틀과 계산 component를 조합해 만드는 단일 파일 시각 리포트입니다. 여기에는
@@ -386,12 +386,12 @@ YAML alias 32개, 파싱/확장 node 10,000개, 중첩 64단계로 제한하고 
 `flow/workflow/si/`는 외부의 단일 `orca_auto.flow.workflow.si` API를 유지하면서 조립형
 SI 파이프라인을 책임별로 분리합니다. `evidence.py`가 내구성 워크플로우·스테이지 근거를
 읽고, `collection.py`가 이를 `science.py`의 선택·RMSD·interaction-energy·population
-규칙과 조합하며, `rendering.py`는 파일을 쓰지 않고 Markdown/CSV text만 생성합니다.
-`publication.py`는 유일한 workflow SI writer로 파일별 원자 교체, 감지한 쓰기 실패 뒤의
-artifact 정리, interaction CSV ownership marker를 소유합니다. advance 루프가 writer 호출 전
-publication을 checkpoint하고 multi-file 게시 중단 뒤의 내구성 재시도를 소유합니다. 별도의
+규칙과 조합하며, `rendering.py`는 파일을 쓰지 않고 Markdown text만 생성합니다.
+`publication.py`는 유일한 workflow SI writer로 원자 교체와 stale 파일 정리를
+소유합니다. advance 루프가 writer 호출 전
+publication을 checkpoint하고 게시 중단 뒤의 내구성 재시도를 소유합니다. 별도의
 수치·artifact 원본을 만들지 않으므로
-`workflow_si.md`, `si_data.csv`, owned interaction CSV 계약은 그대로 유지됩니다.
+`workflow_si.md` 계약은 그대로 유지됩니다.
 import-linter는 publication → collection → rendering → science → evidence → models의 안쪽
 방향을 허용하고(중간 layer 생략 가능) 역방향 import를 거부합니다. package `__init__`은
 외부로 향하는 단일 API facade로 유지됩니다.
@@ -464,12 +464,12 @@ orca_auto는 scheduling, ownership, 공개 artifact를 모두 디스크 기반�
 | `queue.json`                | core/queue       | 엔진별 내구성 큐 (진실 공급원)          |
 | 어드미션 슬롯 파일          | core/admission   | 활성 동시성 슬롯 (머신 전역)            |
 | `job_state.json`            | orca (state)     | 작업별 시도 + 상태                       |
-| `job_report.json` / `.md`   | orca (reporting) | 사람/기계용 완료 리포트                  |
+| `job_report.json` / `.html` | orca (reporting) | 기계/사람용 완료 리포트                  |
 | 작업 위치 인덱스 (JSONL)    | core/indexing    | 각 작업 출력의 현재 위치                 |
 | `workflow.json`             | flow             | 내구성 워크플로우 페이로드               |
 | `workflow_report.html`      | flow (report)    | 실시간 갱신 워크플로우 시각 요약         |
 | `si_block.md`               | orca (report/si) | 구조별 SI 블록 (논문용)                  |
-| `workflow_si.md` / `si_data.csv` | flow (si)   | 워크플로우 SI 조립본 + 기계가독 데이터   |
+| `workflow_si.md`            | flow (si)        | 워크플로우 SI 조립본 (논문용)            |
 | 워크플로우 레지스트리 + 저널| flow/registry    | 워크플로우 간 목록 + 이벤트 이력         |
 
 워크플로우 저널은 의미 있는 workflow/stage 전이와 worker lifecycle 경계만 기록하며,

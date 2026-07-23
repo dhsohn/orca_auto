@@ -39,7 +39,6 @@ def test_sync_orca_stage_applies_contract_state_metadata_and_artifacts() -> None
         last_out_path="/tmp/rxn_done/rxn.out",
         run_state_path="/tmp/rxn_done/job_state.json",
         report_json_path="/tmp/rxn_done/job_report.json",
-        report_md_path="/tmp/rxn_done/job_report.md",
         attempt_count=2,
         max_retries=3,
         attempts=(
@@ -116,7 +115,6 @@ def test_sync_orca_stage_applies_contract_state_metadata_and_artifacts() -> None
         "orca_last_out",
         "orca_run_state",
         "orca_report_json",
-        "orca_report_md",
         "orca_output_dir",
     }
     mock_load.assert_called_once()

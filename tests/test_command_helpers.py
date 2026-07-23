@@ -168,7 +168,7 @@ class TestHelperUtilities(unittest.TestCase):
             "selected_inp": "rxn.inp",
             "attempt_count": 2,
             "reason": "normal_termination",
-            "report_md": "/tmp/report.md",
+            "report_json": "/tmp/report.json",
             "ignored": "value",
         }
 
@@ -179,7 +179,7 @@ class TestHelperUtilities(unittest.TestCase):
         output = captured.getvalue()
         self.assertIn("status: completed", output)
         self.assertIn("job_dir: /tmp/rxn", output)
-        self.assertIn("report_md: /tmp/report.md", output)
+        self.assertIn("report_json: /tmp/report.json", output)
         self.assertNotIn("ignored", output)
 
 

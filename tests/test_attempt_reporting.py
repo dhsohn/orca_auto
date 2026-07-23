@@ -127,7 +127,6 @@ class TestAttemptReporting(unittest.TestCase):
             report_json = json.loads((generation / "job_report.json").read_text(encoding="utf-8"))
             self.assertFalse((reaction_dir / "job_report.json").exists())
             expected_report_json = str(generation / "job_report.json")
-            expected_report_md = str(generation / "job_report.md")
 
         self.assertEqual(rc, 0)
         assert saved is not None
@@ -139,7 +138,6 @@ class TestAttemptReporting(unittest.TestCase):
         self.assertEqual(emitted_payloads[0]["status"], "completed")
         self.assertEqual(emitted_payloads[0]["run_state"], str(reaction_dir / "job_state.json"))
         self.assertEqual(emitted_payloads[0]["report_json"], expected_report_json)
-        self.assertEqual(emitted_payloads[0]["report_md"], expected_report_md)
         self.assertEqual(_engine_payload(report_json)["final_result"]["status"], "completed")
         self.assertIn("finished_notification_sent_at", saved["final_result"])
         self.assertIn(

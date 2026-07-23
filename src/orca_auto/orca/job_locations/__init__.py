@@ -21,7 +21,6 @@ from ..job_type import detect_job_type
 from ..molecule_key import resolve_molecule_key
 from ..state import (
     REPORT_JSON_NAME,
-    REPORT_MD_NAME,
     STATE_FILE_NAME,
     load_report_json,
     load_state,
@@ -59,7 +58,6 @@ __all__ = [
     "INDEX_DIR_NAME",
     "QUEUE_FILE_NAME",
     "REPORT_JSON_NAME",
-    "REPORT_MD_NAME",
     "STATE_FILE_NAME",
     "JobArtifactContext",
     "JobLocationRecord",

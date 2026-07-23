@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import stat
 from dataclasses import dataclass
@@ -8,12 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core import engine_runner as _engine_runner
-from orca_auto.core.artifacts import (
-    MAX_RUN_ARTIFACT_JSON_BYTES,
-    MAX_RUN_REPORT_MD_BYTES,
-    RUN_REPORT_MD_COMMIT_KEY,
-    RUN_REPORT_MD_COMMIT_VERSION,
-)
+from orca_auto.core.artifacts import MAX_RUN_ARTIFACT_JSON_BYTES
 from orca_auto.core.engine_process import read_confined_text
 from orca_auto.core.engines.artifacts import ENGINE_ARTIFACT_SCHEMA_VERSION
 from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
@@ -52,18 +46,11 @@ class _VerifiedRuntimePayload:
         return self.file.path
 
 
-@dataclass(frozen=True)
-class _VerifiedReportMarkdown:
-    file: _DirectRuntimeFile | None = None
-    drifted: bool = False
-
-
 def runtime_paths(
     current_dir: Path | None,
     *,
     state_file_name: str,
     report_json_name: str,
-    report_md_name: str,
     include_state: bool = True,
     include_report: bool = True,
     queue_entry: dict[str, Any] | None = None,
@@ -98,38 +85,12 @@ def runtime_paths(
     ):
         visible_state = None
         visible_report = None
-    # Report JSON binds the exact Markdown bytes committed before it. Only
-    # expose a stable direct file whose digest matches that verified binding.
-    visible_report_md = (
-        _report_markdown_path_for_generation(
-            current_dir / report_md_name if current_dir is not None else None,
-            current_dir,
-            visible_report.payload,
-        )
-        if visible_report is not None
-        else _VerifiedReportMarkdown()
-    )
-    final_files = tuple(
-        payload.file for payload in (visible_state, visible_report) if payload is not None
-    ) + ((visible_report_md.file,) if visible_report_md.file is not None else ())
-    if visible_report_md.drifted or any(
-        _direct_runtime_file(file.path, current_dir) != file for file in final_files
-    ):
-        visible_state = None
-        visible_report = None
-        visible_report_md = _VerifiedReportMarkdown()
     visible_state_path = visible_state.path if visible_state is not None else None
     visible_report_json_path = visible_report.path if visible_report is not None else None
-    visible_report_md_path = (
-        visible_report_md.file.path if visible_report_md.file is not None else None
-    )
     return {
         "run_state_path": str(visible_state_path) if visible_state_path is not None else "",
         "report_json_path": (
             str(visible_report_json_path) if visible_report_json_path is not None else ""
-        ),
-        "report_md_path": (
-            str(visible_report_md_path) if visible_report_md_path is not None else ""
         ),
     }
 
@@ -255,63 +216,6 @@ def _payload_provenance_matches_generation(
     except (OSError, RuntimeError, TypeError, ValueError):
         return False
     return True
-
-
-def _report_markdown_commit(payload: dict[str, Any]) -> tuple[int, str] | None:
-    raw_artifacts = payload.get("artifacts")
-    artifacts = raw_artifacts if isinstance(raw_artifacts, dict) else {}
-    raw_commit = artifacts.get(RUN_REPORT_MD_COMMIT_KEY)
-    commit = raw_commit if isinstance(raw_commit, dict) else {}
-    version = commit.get("version")
-    size_bytes = commit.get("size_bytes")
-    digest = commit.get("sha256")
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != RUN_REPORT_MD_COMMIT_VERSION
-        or isinstance(size_bytes, bool)
-        or not isinstance(size_bytes, int)
-        or size_bytes < 0
-        or size_bytes > MAX_RUN_REPORT_MD_BYTES
-        or not isinstance(digest, str)
-        or len(digest) != 64
-        or any(character not in "0123456789abcdef" for character in digest)
-    ):
-        return None
-    return size_bytes, digest
-
-
-def _report_markdown_path_for_generation(
-    path: Path | None,
-    current_dir: Path | None,
-    report_payload: dict[str, Any],
-) -> _VerifiedReportMarkdown:
-    commit = _report_markdown_commit(report_payload)
-    if path is None or current_dir is None or commit is None:
-        return _VerifiedReportMarkdown()
-    direct_file = _direct_runtime_file(path, current_dir)
-    if direct_file is None:
-        return _VerifiedReportMarkdown()
-    try:
-        markdown = read_confined_text(
-            current_dir,
-            path,
-            label="ORCA generation report Markdown",
-            max_bytes=MAX_RUN_REPORT_MD_BYTES,
-        )
-    except (OSError, RuntimeError, UnicodeError, ValueError):
-        return _VerifiedReportMarkdown(
-            drifted=_direct_runtime_file(path, current_dir) != direct_file
-        )
-    if _direct_runtime_file(path, current_dir) != direct_file:
-        return _VerifiedReportMarkdown(drifted=True)
-    markdown_bytes = markdown.encode("utf-8")
-    expected_size, expected_digest = commit
-    if len(markdown_bytes) != expected_size:
-        return _VerifiedReportMarkdown()
-    if hashlib.sha256(markdown_bytes).hexdigest() != expected_digest:
-        return _VerifiedReportMarkdown()
-    return _VerifiedReportMarkdown(file=direct_file)
 
 
 def runtime_payloads(runtime: Any) -> RuntimePayloads:

@@ -329,7 +329,7 @@ reader는 현재 파일을 그 종료 정체성과 대조합니다. 종료 정�
 backfill하지 않고 오래된 산출물 경로를 basename으로 remap하지도 않습니다.
 
 워크플로우 내부 xTB와 CREST 작업은 `job_state.json`만 종료 metadata 산출물로 사용합니다.
-`job_report.json`이나 `job_report.md`를 만들지 않으며 adapter, index, repair, workflow
+`job_report.json`을 만들지 않으며 adapter, index, repair, workflow
 diagnostic도 이 파일을 읽지 않습니다. report-only 작업은 지원하지 않고 다시 제출해야
 합니다. 아래의 별도 ORCA report 계약은 바뀌지 않습니다.
 
@@ -345,7 +345,6 @@ top-level job 정체성·상태 필드는 Stable Core입니다. 그 외 모든 �
 
 - `<generation>/job_state.json`
 - `<generation>/job_report.json`
-- `<generation>/job_report.md`
 - 적용 가능한 리포트 렌더러가 있을 때 `<generation>/job_report.html`
 - 정류점으로 끝나는 완료 작업에는 `<generation>/si_block.md` (route, 에너지,
   열화학, Nimag, 좌표를 담은 복사-붙여넣기용 Supporting Information 블록),
@@ -386,7 +385,7 @@ loader는 private입니다.
 있든 실행 generation으로 간주되어 production scan에서 제외되고 `run-dir` 제출
 대상으로 거부되므로, 직접 만드는 디렉터리에는 이 형태를 쓰지 마십시오. 그 디렉터리에는 소스 basename을 정확히 유지한 바인딩 `.inp`, 지원하는
 의존성, raw ORCA 출력, 그리고 그 generation의 `job_state.json`,
-`job_report.json`, `job_report.md`(적용 시 `job_report.html`·`si_block.md`)가
+`job_report.json`(적용 시 `job_report.html`·`si_block.md`)이
 들어갑니다. generation 파일은 자신이 설명하는 generation의 기록을 보존합니다.
 루트에 `run.lock` 파일이 존재한다는 사실만으로 현재 advisory lock이 소유된다고
 판정할 수는 없습니다.
@@ -424,26 +423,7 @@ loader는 private입니다.
 
 `artifacts`는 확장 가능한 capability map입니다. 소비자는 알지 못하는 additive key를
 무시해야 하며, 문서화된 path/log key만 경로 문자열로 취급해야 합니다. additive
-capability 값은 구조화된 객체일 수 있습니다. 현재 ORCA report JSON은 다음 형태의
-`artifacts.report_markdown_commit`을 추가합니다:
-
-- `version`: 정수 `1`
-- `size_bytes`: `job_report.md`의 바이트 길이
-- `sha256`: `job_report.md`의 정확한 UTF-8 바이트에 대한 64자리 소문자 SHA-256 digest
-
-report writer는 이 Markdown 바이트를 먼저 게시하고 그 뒤 JSON commit marker를
-게시합니다. runtime reader는 direct single-link Markdown 파일이 안정적이고 정확한
-바이트 길이와 digest가 marker와 일치할 때만 `report_md_path`를 노출합니다. writer와
-reader는 commit되는 Markdown을 모두 8 MiB로 제한합니다. 렌더링이 이보다 크면 JSON은
-계속 읽을 수 있지만 commit된 Markdown 경로는 게시하지 않습니다. 이
-additive capability가 없는 기존 schema-version-1 report JSON도 유효한 JSON이지만,
-commit되지 않은 Markdown 경로는 의도적으로 노출하지 않으며 identity-line 호환
-fallback은 없습니다. migration은 검증된 generation state에서 현재 report writer를
-통해 제어된 방식으로 재게시하여 새로 commit된 Markdown/JSON pair를 만드는
-절차입니다. 기존 report에 digest를 직접 편집해 넣는 방식으로 migration하지
-마십시오. 이 재게시를 수행하는 공개 CLI 명령은 없습니다. 검증된 generation state에
-현재 writer를 적용하는 제어된 도구가 없다면 기존 Markdown은 public runtime lookup
-밖에 보관해야 하며, schema-version-1 JSON은 그와 별개로 계속 읽을 수 있습니다.
+capability 값은 구조화된 객체일 수 있습니다.
 
 `engine_payload.final_result`가 있을 때 포함하는 필드:
 
@@ -583,9 +563,9 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
 
 - `workflow.json`은 내구성 워크플로우 payload입니다.
 - `workflow_report.html`은 워크플로우 advance 때 다시 쓰이는 사람용 요약입니다.
-- `workflow_si.md`와 `si_data.csv`는 ORCA stage가 있는 워크플로우에서 advance 때
-  다시 쓰입니다: 논문 SI용 조립본(계산 세부사항, 상대 에너지, 구조별 블록)과
-  기계가독 companion입니다. `conformer_screening` population은 워크플로우가 종료
+- `workflow_si.md`는 ORCA stage가 있는 워크플로우에서 advance 때
+  다시 쓰입니다: 논문 SI용 조립본(계산 세부사항, 상대 에너지, 구조별
+  블록)입니다. `conformer_screening` population은 워크플로우가 종료
   `completed` 상태이고 ensemble 전체가 완전할 때만 냅니다. route상 minimum으로 분류된
   모든 구조가 최적화 수렴하고 완전한 3N 진동 스펙트럼에서 `Nimag = 0`이어야 하며,
   유한한 전자/Gibbs 에너지와 유한한 양의 thermochemistry 온도를 가져야 합니다.
@@ -606,14 +586,8 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
 - Population은 `formula|charge|multiplicity` 그룹별로 독립 정규화합니다. 이 키는 연결성
   정체성이 아니라 화학량론적 proxy입니다. 보존된 minimum마다 통계 가중치 1을 쓰며,
   대칭성/축퇴도 보정을 하지 않습니다. `rmsd_dedup`이 켜지면 대표 선택 전에 전체 pre-dedup
-  ensemble의 완전성과 provenance를 검사합니다. `degeneracy`는 workflow 중복 수이며 통계/
-  대칭 가중치가 아닙니다. `si_data.csv`는 `warnings`
-  뒤에 5개 컬럼(`cluster_key`, `rel_E_kcalmol`, `rel_G_kcalmol`, `boltzmann_T_K`,
-  `boltzmann_population`)을 append하며 기존 컬럼의 이름·순서·인덱스는 그대로입니다.
-  Markdown은 population을 백분율로 표시하지만 `boltzmann_population`은 `[0, 1]` 범위의
-  분율입니다. CSV의 `rel_E_kcalmol`과 `rel_G_kcalmol`은 공통 에너지 규약 아래 해당
-  population 그룹의 최저 E와 G를 각각 기준으로 한 그룹 로컬 상대값이며, 그룹 전체를
-  가로지르는 전역 기준값이 아닙니다.
+  ensemble의 완전성과 provenance를 검사합니다. degeneracy는 workflow 중복 수이며 통계/
+  대칭 가중치가 아닙니다. Markdown은 population을 백분율로 표시합니다.
 - `rmsd_dedup`은 기본적으로 모든 원자를 비교하며 수렴한 minimum을 대상으로 합니다. 알려진
   `Nimag`가 0이 아니면 제외하지만 frequency 결과가 없는 Opt-only 후보는 허용합니다. 후보의
   선택 원자 원소 서열, formula, charge, multiplicity와
@@ -625,8 +599,7 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
   최적 정렬이 전역 reflection을 선호하는 nondegenerate 쌍은 분리합니다. 그래도 이는 기하/에너지
   heuristic이므로 가까운 서로 다른 minimum, 특히 국소 입체화학 variant를 병합할 수 있습니다.
   `heavy_atoms_only: true`는 H/D/T를 무시해 그 위험을 키웁니다. 그룹을 화학적으로 동일하다고
-  보기 전에 `merged_stage_ids`를 검토해야 합니다. 활성화 시에만 `si_data.csv`에
-  `rmsd_group`, `degeneracy`, `merged_stage_ids`를 append합니다.
+  보기 전에 병합된 그룹을 검토해야 합니다.
 - `interaction_energy`는 `conformer_screening`에서만 지원하며 complex 전체를 겹침 없이 완전
   분할하는 fragment 2–8개를 요구합니다. fragment 전하 합은 complex 전하와 같아야 하고,
   fragment multiplicity들은 일반화된 각운동량 spin-coupling manifold에서 complex
@@ -645,21 +618,9 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
   route 및 전자상태가 일치해야 하고, 실제 method, basis, solvation, ORCA version, 최적화
   complex 기하, 인덱스별 fragment subset, 공통 에너지 규약도 모두 같아야 합니다. 결측·중복·
   실행 중·stale generation·혼합 수준·잘못된 상태/기하·비유한 자료는 부분합을 쓰지 않고
-  ΔE_int을 생략합니다.
-- `interaction_energy.csv`는 기능이 활성화되고 보고할 행이 있을 때만 존재합니다. 23개 컬럼은
-  `parent_stage_id`, `complex_stage_id`, `complex_label`, `complex_charge`,
-  `complex_multiplicity`, `complex_formula`, `E_complex_Eh`, `method`, `basis_set`,
-  `solvation`, `orca_version`, `route_line`, `ghost_counterpoise_applied`, `fragment_label`,
-  `fragment_stage_id`, `fragment_atom_indices`, `fragment_formula`, `fragment_charge`,
-  `fragment_multiplicity`, `E_fragment_Eh`, `dE_int_Eh`, `dE_int_kcalmol`, `note`입니다.
-  `ghost_counterpoise_applied=false`는 별도 Boys–Bernardi ghost-atom counterpoise 계산을 하지
-  않았다는 뜻이며, r2SCAN-3c gCP 같은 method 내재 보정이 없다는 뜻은 아닙니다. spreadsheet
-  formula로 해석될 수 있는 선행 문자는 안전하게 중화합니다.
-- 인접 owner marker는 생성 CSV를 hash한 workflow identity에 연결하고 current/pending content
-  digest를 기록합니다. digest-bound 소유권 로직은 create, replace, delete 도중 중단돼도 안전하게
-  복구합니다. marker가 없거나 foreign/malformed이거나 digest가 다르면 덮어쓰기·삭제 권한이
-  없으며, 사용자가 수정한 내용은 보존하고 소유권을 해제합니다. 소유권 충돌은 last-good
-  base SI를 교체하기 전에 검사합니다.
+  ΔE_int을 생략합니다. 보고 가능한 결과는 `workflow_si.md`의 interaction-energy 섹션에
+  들어갑니다. 별도 Boys–Bernardi ghost-atom counterpoise 계산은 하지 않으며, 이는
+  r2SCAN-3c gCP 같은 method 내재 보정이 없다는 뜻은 아닙니다.
 - restart는 interaction SP route, fragment별 전자상태, interaction별 자원, generation
   fingerprint를 보존합니다. fan-out 뒤에는 interaction 설정과 RMSD grouping 설정을 바꿀 수
   없고, interaction fan-out이 남아 있는 동안 원래 primary stage를 다시 여는 것도 거부합니다.

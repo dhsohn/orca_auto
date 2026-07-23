@@ -59,7 +59,6 @@ def test_load_orca_artifact_contract_short_circuits_on_tracked_payload(
         "last_out_path": f" {tmp_path / 'outputs' / 'run_payload_1' / 'rxn.out'} ",
         "run_state_path": f" {tmp_path / 'outputs' / 'run_payload_1' / 'job_state.json'} ",
         "report_json_path": f" {tmp_path / 'outputs' / 'run_payload_1' / 'job_report.json'} ",
-        "report_md_path": f" {tmp_path / 'outputs' / 'run_payload_1' / 'job_report.md'} ",
         "attempt_count": "2",
         "max_retries": "3",
         "attempts": [{"attempt_number": 1, "analyzer_status": "completed"}, "skip"],

@@ -39,7 +39,6 @@ class EngineContextBuilder:
 class EngineArtifactAdapter:
     build_payload: Callable[..., dict[str, Any]]
     load_payload: Callable[..., dict[str, Any] | None]
-    build_report_markdown: Callable[..., list[str]]
 
 
 @dataclass(frozen=True)

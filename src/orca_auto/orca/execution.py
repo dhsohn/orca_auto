@@ -99,7 +99,6 @@ def _emit(payload: dict[str, Any]) -> None:
         ("reason", "reason"),
         ("run_state", "run_state"),
         ("report_json", "report_json"),
-        ("report_md", "report_md"),
     ]
     emitted_labels: set[str] = set()
     for key, label in fields:

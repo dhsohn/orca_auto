@@ -95,7 +95,6 @@ def test_write_execution_artifacts_writes_only_terminal_state(tmp_path: Path) ->
     assert state["engine_payload"]["selected_candidate_paths"] == [str(selected_xyz)]
     assert state["engine_payload"]["command"] == ["xtb", str(selected_xyz)]
     assert not (job_dir / "job_report.json").exists()
-    assert not (job_dir / "job_report.md").exists()
 
 
 def test_finalize_execution_result_syncs_terminal_side_effects(

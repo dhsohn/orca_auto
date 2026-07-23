@@ -8,7 +8,6 @@ from orca_auto.core.engines import entry_matches_engine_identity
 
 from ..state import (
     REPORT_JSON_NAME,
-    REPORT_MD_NAME,
     STATE_FILE_NAME,
     load_report_json,
     load_state,
@@ -238,7 +237,6 @@ def _runtime_paths(
         current_dir,
         state_file_name=STATE_FILE_NAME,
         report_json_name=REPORT_JSON_NAME,
-        report_md_name=REPORT_MD_NAME,
         include_state=include_state,
         include_report=include_report,
         queue_entry=queue_entry,

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,7 +7,6 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.artifacts import RUN_REPORT_MD_COMMIT_KEY
 from orca_auto.flow.workflow import report as workflow_report
 from orca_auto.flow.workflow.report import (
     _energy_axis_ticks,
@@ -1119,12 +1117,8 @@ def test_orca_stage_report_requires_declared_job_identity(tmp_path: Path) -> Non
     assert data.orca_results[0].report_href is None
 
 
-@pytest.mark.parametrize("markdown_kind", ("regular", "symlink", "hardlink"))
-def test_orca_diagnostic_does_not_expose_uncommitted_markdown(
-    tmp_path: Path,
-    markdown_kind: str,
-) -> None:
-    job_dir = tmp_path / "03_orca" / f"orca_uncommitted_{markdown_kind}"
+def test_orca_diagnostic_falls_back_to_report_json_without_html(tmp_path: Path) -> None:
+    job_dir = tmp_path / "03_orca" / "orca_json_fallback"
     job_dir.mkdir(parents=True)
     report_path = _write_orca_generation_report(
         job_dir,
@@ -1134,15 +1128,6 @@ def test_orca_diagnostic_does_not_expose_uncommitted_markdown(
             "engine_payload": {"run_id": "run-current"},
         },
     )
-    markdown = report_path.parent / "job_report.md"
-    outside = tmp_path / f"outside-{markdown_kind}.md"
-    outside.write_text("# Uncommitted report\n", encoding="utf-8")
-    if markdown_kind == "regular":
-        markdown.write_bytes(outside.read_bytes())
-    elif markdown_kind == "symlink":
-        markdown.symlink_to(outside)
-    else:
-        os.link(outside, markdown)
     payload = _payload(
         tmp_path,
         [
@@ -1164,29 +1149,6 @@ def test_orca_diagnostic_does_not_expose_uncommitted_markdown(
     data = collect_workflow_report_data(tmp_path, payload)
 
     assert data.failure_rows[0].details_href == os.path.relpath(report_path, tmp_path)
-
-
-@pytest.mark.parametrize("invalid_version", (True, 1.0))
-def test_workflow_report_rejects_noninteger_markdown_commit_version(
-    tmp_path: Path,
-    invalid_version: object,
-) -> None:
-    generation = tmp_path / "generation"
-    generation.mkdir()
-    markdown = generation / "job_report.md"
-    markdown_bytes = b"# Report\n"
-    markdown.write_bytes(markdown_bytes)
-    report = {
-        "artifacts": {
-            RUN_REPORT_MD_COMMIT_KEY: {
-                "version": invalid_version,
-                "sha256": hashlib.sha256(markdown_bytes).hexdigest(),
-                "size_bytes": len(markdown_bytes),
-            }
-        }
-    }
-
-    assert workflow_report._verified_report_markdown_path(generation, report) is None
 
 
 def test_orca_current_identity_root_report_is_not_a_diagnostic_source(tmp_path: Path) -> None:

@@ -94,7 +94,6 @@ def test_write_execution_artifacts_includes_ranking_summary_in_state(tmp_path: P
         "best_total_energy": -12.34,
     }
     assert not (job_dir / "job_report.json").exists()
-    assert not (job_dir / "job_report.md").exists()
 
 
 def test_write_running_state_skips_without_job_dir(

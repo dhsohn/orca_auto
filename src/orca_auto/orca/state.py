@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -12,11 +11,7 @@ from typing import Any, cast
 from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.artifacts import (
     MAX_RUN_ARTIFACT_JSON_BYTES,
-    MAX_RUN_REPORT_MD_BYTES,
     RUN_REPORT_JSON_FILE,
-    RUN_REPORT_MD_COMMIT_KEY,
-    RUN_REPORT_MD_COMMIT_VERSION,
-    RUN_REPORT_MD_FILE,
     RUN_STATE_FILE,
 )
 from orca_auto.core.engine_process import (
@@ -32,7 +27,6 @@ from orca_auto.core.engines.artifacts import (
     EngineArtifactStatus,
     EngineArtifactTimestamps,
     build_engine_artifact_payload,
-    build_engine_report_markdown,
 )
 from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
 from orca_auto.core.queue.generation import is_visible_generation_name
@@ -59,7 +53,6 @@ logger = logging.getLogger(__name__)
 STATE_FILE_NAME = RUN_STATE_FILE
 STATE_MUTATION_LOCK_FILE_NAME = ".job_state.mutation.lock"
 REPORT_JSON_NAME = RUN_REPORT_JSON_FILE
-REPORT_MD_NAME = RUN_REPORT_MD_FILE
 
 
 def now_utc_iso() -> str:
@@ -72,10 +65,6 @@ def state_path(reaction_dir: Path) -> Path:
 
 def report_json_path(reaction_dir: Path) -> Path:
     return reaction_dir / REPORT_JSON_NAME
-
-
-def report_md_path(reaction_dir: Path) -> Path:
-    return reaction_dir / REPORT_MD_NAME
 
 
 def _load_json_dict(path: Path) -> dict[str, Any] | None:
@@ -563,36 +552,8 @@ def write_report_json(
     return path
 
 
-def write_report_md(
-    reaction_dir: Path,
-    markdown: str,
-    *,
-    generation_target: tuple[Path, tuple[int, int]],
-) -> Path:
-    del reaction_dir
-    path = report_md_path(generation_target[0])
-    _write_generation_bytes(generation_target, path, markdown.encode("utf-8"))
-    return path
-
-
-def _payload_with_report_markdown_commit(
-    report_payload: Mapping[str, Any],
-    markdown_bytes: bytes,
-) -> dict[str, Any]:
-    committed = dict(report_payload)
-    raw_artifacts = committed.get("artifacts")
-    artifacts = dict(raw_artifacts) if isinstance(raw_artifacts, Mapping) else {}
-    artifacts[RUN_REPORT_MD_COMMIT_KEY] = {
-        "version": RUN_REPORT_MD_COMMIT_VERSION,
-        "sha256": hashlib.sha256(markdown_bytes).hexdigest(),
-        "size_bytes": len(markdown_bytes),
-    }
-    committed["artifacts"] = artifacts
-    return committed
-
-
 def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str, str]:
-    """Write the Markdown body before publishing JSON as the report commit marker.
+    """Write the machine (JSON) and human (HTML, SI block) job reports.
 
     Reports are published only inside the verified execution generation. A run
     whose generation cannot be verified gets no report (fail closed, logged);
@@ -606,23 +567,10 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
             "job reports not published: no verified execution generation for %s", reaction_dir
         )
         return {}
-    markdown = "\n".join(build_engine_report_markdown(report_payload))
-    markdown_bytes = markdown.encode("utf-8")
     reports: dict[str, str] = {}
-    committed_payload = report_payload
-    if len(markdown_bytes) <= MAX_RUN_REPORT_MD_BYTES:
-        md_path = write_report_md(reaction_dir, markdown, generation_target=generation_target)
-        reports["report_md"] = str(md_path)
-        committed_payload = _payload_with_report_markdown_commit(report_payload, markdown_bytes)
-    else:
-        logger.warning(
-            "job report Markdown exceeds the %d-byte publication limit for %s",
-            MAX_RUN_REPORT_MD_BYTES,
-            reaction_dir,
-        )
     json_path = write_report_json(
         reaction_dir,
-        committed_payload,
+        report_payload,
         generation_target=generation_target,
     )
     reports["report_json"] = str(json_path)

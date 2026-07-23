@@ -190,7 +190,6 @@ def test_state_helper_writes_only_canonical_state(
     assert state_path == job_dir / state_mod.STATE_FILE_NAME
     assert state_mod.load_state(job_dir) == {"status": "queued"}
     assert not (job_dir / "job_report.json").exists()
-    assert not (job_dir / "job_report.md").exists()
 
 
 def test_state_loader_returns_none_for_missing_invalid_and_non_mapping_payloads(

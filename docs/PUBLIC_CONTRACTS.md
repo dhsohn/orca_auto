@@ -356,7 +356,7 @@ fail closed; they must be resubmitted. Readers do not backfill an identity from
 the bytes observed later, and do not remap stale artifact paths by basename.
 
 Workflow-internal xTB and CREST jobs use `job_state.json` as their only terminal
-metadata artifact. They do not create `job_report.json` or `job_report.md`, and
+metadata artifact. They do not create `job_report.json`, and
 adapters, indexing, repair, and workflow diagnostics do not read those files.
 Report-only jobs are unsupported and must be resubmitted. This does not
 change the separate ORCA report contract below.
@@ -374,7 +374,6 @@ inside the generation that produced them:
 
 - `<generation>/job_state.json`
 - `<generation>/job_report.json`
-- `<generation>/job_report.md`
 - `<generation>/job_report.html` when a report renderer applies
 - `<generation>/si_block.md` for completed jobs ending on a stationary point
   (a copy-paste Supporting Information block: route, energies,
@@ -422,7 +421,7 @@ excluded from production scans, and rejected as a `run-dir` submission
 target — do not use this shape for your own directories. That directory contains the
 bound `.inp` under the exact source basename, supported dependencies under their
 exact source basenames, raw ORCA outputs, and the generation's
-`job_state.json`, `job_report.json`, `job_report.md`, and (when applicable)
+`job_state.json`, `job_report.json`, and (when applicable)
 `job_report.html` and `si_block.md`. Generation files retain the record for
 the generation they describe. The existence of the root `run.lock`
 file alone does not mean its advisory lock is currently owned.
@@ -462,29 +461,7 @@ Top-level expectations:
 
 `artifacts` is an extensible capability map. Consumers must ignore unknown
 additive keys and must treat only documented path/log keys as path strings;
-an additive capability value may be a structured object. Current ORCA report
-JSON adds `artifacts.report_markdown_commit` with this shape:
-
-- `version`: integer `1`
-- `size_bytes`: the byte length of `job_report.md`
-- `sha256`: the 64-character lowercase SHA-256 digest of the exact UTF-8 bytes
-  of `job_report.md`
-
-The report writer publishes those Markdown bytes before publishing the JSON
-commit marker. Runtime readers expose `report_md_path` only when the direct,
-single-link Markdown file is stable and its exact byte length and digest match
-that marker. The writer and reader both cap committed Markdown at 8 MiB; an
-oversized rendering leaves the JSON readable but publishes no committed
-Markdown path. Existing schema-version-1 report JSON without this additive
-capability remains valid JSON, but its uncommitted Markdown path is deliberately
-not exposed; there is no identity-line compatibility fallback. Migration is a
-controlled republication from the verified generation state through the current
-report writer, which writes a newly committed Markdown/JSON pair. Do not migrate
-by hand-editing a digest into an existing report. There is no public CLI command
-that performs this republication. If an operator does not have a controlled tool
-that calls the current writer against verified generation state, the old Markdown
-must remain archived outside public runtime lookup; its schema-version-1 JSON
-remains readable independently.
+an additive capability value may be a structured object.
 
 `engine_payload.final_result`, when present, contains:
 
@@ -637,10 +614,10 @@ Workflow runtime artifacts:
 - `workflow.json` is the durable workflow payload.
 - `workflow_report.html` is rewritten on workflow advances as a human-facing
   summary.
-- `workflow_si.md` and `si_data.csv` are rewritten on workflow advances when
+- `workflow_si.md` is rewritten on workflow advances when
   the workflow has ORCA stages: a paper-ready Supporting Information assembly
-  (computational details, relative energies, per-structure blocks) and its
-  machine-readable companion. A `conformer_screening` population set is emitted
+  (computational details, relative energies, per-structure blocks).
+  A `conformer_screening` population set is emitted
   only after the workflow is terminal and complete and every route-classified
   minimum is converged and has a complete 3N vibrational spectrum with
   `Nimag = 0`, finite electronic/Gibbs energies, and a finite positive
@@ -664,16 +641,9 @@ Workflow runtime artifacts:
   connectivity identity: every retained minimum has statistical weight one, and
   no symmetry/degeneracy correction is applied. When `rmsd_dedup` is enabled,
   completeness and provenance are checked against the full pre-dedup ensemble
-  before representatives are selected. The reported `degeneracy` is a workflow
+  before representatives are selected. The reported degeneracy is a workflow
   duplicate count and is not a statistical/symmetry weight.
-  `si_data.csv` appends five columns after `warnings` (`cluster_key`,
-  `rel_E_kcalmol`, `rel_G_kcalmol`, `boltzmann_T_K`,
-  `boltzmann_population`); the existing columns keep their names, order, and
-  index. Markdown renders population as percent, while
-  `boltzmann_population` is the fraction in `[0, 1]`. CSV `rel_E_kcalmol` and
-  `rel_G_kcalmol` are relative to the lowest E and G within that row's
-  population group under the shared convention, not global cross-group
-  baselines.
+  Markdown renders population as percent.
 - `rmsd_dedup` compares all atoms by default and considers converged minima;
   a known nonzero `Nimag` excludes a candidate, while Opt-only candidates with
   no frequency result remain eligible. Candidates must have the same
@@ -688,9 +658,7 @@ Workflow runtime artifacts:
   nearby distinct minima,
   especially local stereochemical variants, can still merge. Setting
   `heavy_atoms_only: true` increases that risk by ignoring H/D/T. Review
-  `merged_stage_ids` before treating groups as chemically identical. When
-  enabled, `si_data.csv` appends `rmsd_group`, `degeneracy`, and
-  `merged_stage_ids`; when disabled, those columns are absent.
+  merged groups before treating them as chemically identical.
 - `interaction_energy` is available only for `conformer_screening`. It requires
   2–8 fragments whose indices form one disjoint, exhaustive partition of the
   optimized complex. Fragment charges must sum to the complex charge. Their
@@ -714,24 +682,10 @@ Workflow runtime artifacts:
   method, basis, solvation, ORCA version, optimized complex geometry, indexed
   geometry subsets, and the shared energy convention must also agree. Missing,
   duplicate, running, stale-generation, mixed-level, wrong-state, wrong-geometry,
-  or non-finite input omits ΔE_int rather than using a partial sum.
-- `interaction_energy.csv` is present only for an enabled feature with reportable
-  rows. Its 23 columns are `parent_stage_id`, `complex_stage_id`, `complex_label`,
-  `complex_charge`, `complex_multiplicity`, `complex_formula`, `E_complex_Eh`,
-  `method`, `basis_set`, `solvation`, `orca_version`, `route_line`,
-  `ghost_counterpoise_applied`, `fragment_label`, `fragment_stage_id`,
-  `fragment_atom_indices`, `fragment_formula`, `fragment_charge`,
-  `fragment_multiplicity`, `E_fragment_Eh`, `dE_int_Eh`, `dE_int_kcalmol`, and
-  `note`. `ghost_counterpoise_applied=false` means no separate Boys–Bernardi
-  ghost-atom counterpoise calculation was run; it does not deny a method's
-  inherent correction such as r2SCAN-3c gCP. Formula-leading text is neutralized
-  for spreadsheet safety.
-- The adjacent owner marker binds the generated CSV to a hashed workflow identity
-  and records current/pending content digests. Digest-bound ownership logic
-  recovers safely from interrupted create, replace, or delete operations. A missing,
-  foreign, malformed, or digest-mismatched marker never authorizes overwrite or
-  deletion; user-modified content is preserved and released from ownership.
-  Ownership conflicts are preflighted before replacing the last-good base SI.
+  or non-finite input omits ΔE_int rather than using a partial sum. Reportable
+  results land in the `workflow_si.md` interaction-energy section. No separate
+  Boys–Bernardi ghost-atom counterpoise calculation is run; that does not deny
+  a method's inherent correction such as r2SCAN-3c gCP.
 - A restart preserves the interaction SP route, per-fragment electronic state,
   interaction-specific resources, and generation fingerprint. Interaction and
   RMSD grouping settings are immutable after fan-out; reopening an original

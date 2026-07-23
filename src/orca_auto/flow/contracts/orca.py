@@ -23,7 +23,6 @@ class OrcaArtifactContract:
     last_out_path: str = ""
     run_state_path: str = ""
     report_json_path: str = ""
-    report_md_path: str = ""
     attempt_count: int = 0
     max_retries: int = 0
     attempts: tuple[dict[str, Any], ...] = ()
@@ -50,7 +49,6 @@ class OrcaArtifactContract:
             "last_out_path": self.last_out_path,
             "run_state_path": self.run_state_path,
             "report_json_path": self.report_json_path,
-            "report_md_path": self.report_md_path,
             "attempt_count": self.attempt_count,
             "max_retries": self.max_retries,
             "attempts": [dict(item) for item in self.attempts],

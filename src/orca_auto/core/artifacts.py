@@ -2,18 +2,11 @@ from __future__ import annotations
 
 RUN_STATE_FILE = "job_state.json"
 RUN_REPORT_JSON_FILE = "job_report.json"
-RUN_REPORT_MD_FILE = "job_report.md"
 RUN_REPORT_HTML_FILE = "job_report.html"
-RUN_REPORT_MD_COMMIT_KEY = "report_markdown_commit"
-RUN_REPORT_MD_COMMIT_VERSION = 1
 MAX_RUN_ARTIFACT_JSON_BYTES = 64 * 1024 * 1024
-MAX_RUN_REPORT_MD_BYTES = 8 * 1024 * 1024
 WORKFLOW_REPORT_HTML_FILE = "workflow_report.html"
 SI_BLOCK_MD_FILE = "si_block.md"
 WORKFLOW_SI_MD_FILE = "workflow_si.md"
-WORKFLOW_SI_CSV_FILE = "si_data.csv"
-INTERACTION_ENERGY_CSV_FILE = "interaction_energy.csv"
-INTERACTION_ENERGY_CSV_OWNER_FILE = ".interaction_energy.csv.orca_auto-owner"
 QUEUE_FILE = "queue.json"
 RECORDS_JSONL_FILE = "records.jsonl"
 WORKFLOW_FILE = "workflow.json"
@@ -24,22 +17,15 @@ CREST_JOB_MANIFEST_FILE = "crest_job.yaml"
 __all__ = [
     "CREST_JOB_MANIFEST_FILE",
     "FLOW_MANIFEST_FILE",
-    "INTERACTION_ENERGY_CSV_FILE",
-    "INTERACTION_ENERGY_CSV_OWNER_FILE",
     "MAX_RUN_ARTIFACT_JSON_BYTES",
-    "MAX_RUN_REPORT_MD_BYTES",
     "QUEUE_FILE",
     "RECORDS_JSONL_FILE",
     "RUN_REPORT_HTML_FILE",
     "RUN_REPORT_JSON_FILE",
-    "RUN_REPORT_MD_COMMIT_KEY",
-    "RUN_REPORT_MD_COMMIT_VERSION",
-    "RUN_REPORT_MD_FILE",
     "RUN_STATE_FILE",
     "SI_BLOCK_MD_FILE",
     "WORKFLOW_FILE",
     "WORKFLOW_REPORT_HTML_FILE",
-    "WORKFLOW_SI_CSV_FILE",
     "WORKFLOW_SI_MD_FILE",
     "XTB_JOB_MANIFEST_FILE",
 ]

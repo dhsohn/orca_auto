@@ -15,7 +15,6 @@ from orca_auto.core.engines.artifacts import (
     EngineArtifactStatus,
     EngineArtifactTimestamps,
     build_engine_artifact_payload,
-    build_engine_report_markdown,
     load_engine_artifact_payload,
 )
 
@@ -142,7 +141,7 @@ def test_engine_artifact_payload_preserves_engine_payload(
     assert payload["engine_payload"] == engine_payload
 
 
-def test_engine_artifact_payload_unwraps_nested_string_enums_for_markdown() -> None:
+def test_engine_artifact_payload_unwraps_nested_string_enums() -> None:
     payload = build_engine_artifact_payload(
         engine="orca",
         job=EngineArtifactJob(id="job-1", queue_id="queue-1", dir="/tmp/job"),
@@ -151,10 +150,7 @@ def test_engine_artifact_payload_unwraps_nested_string_enums_for_markdown() -> N
     )
 
     assert payload["engine_payload"]["attempts"][0]["analyzer_status"] == "completed"
-    markdown = "\n".join(build_engine_report_markdown(payload))
-    assert "'analyzer_status': 'completed'" in markdown
-    assert "_StringStatus" not in markdown
-    assert "<_StringStatus" not in markdown
+    assert type(payload["engine_payload"]["attempts"][0]["analyzer_status"]) is str
 
 
 def test_engine_artifact_loader_rejects_invalid_or_unknown_payloads(tmp_path: Path) -> None:
