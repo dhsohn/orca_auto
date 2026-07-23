@@ -49,7 +49,7 @@ def test_wheel_inventory_rejects_stale_module(tmp_path: Path) -> None:
 
 def test_wheel_inventory_rejects_missing_module(tmp_path: Path) -> None:
     source_files = _source_python_files()
-    missing = "orca_auto/flow/workflow/si/models.py"
+    missing = "orca_auto/flow/workflow/si/collection.py"
     wheel = _write_wheel(
         tmp_path / "missing.whl",
         (source_files - {missing}) | {"orca_auto/py.typed"},
@@ -73,7 +73,7 @@ def test_wheel_inventory_rejects_nested_typing_marker(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "duplicate_entry",
-    ["orca_auto/flow/workflow/si/models.py", "orca_auto/py.typed"],
+    ["orca_auto/flow/workflow/si/collection.py", "orca_auto/py.typed"],
 )
 def test_wheel_inventory_rejects_duplicate_package_entries(
     tmp_path: Path,

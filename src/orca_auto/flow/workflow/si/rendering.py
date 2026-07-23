@@ -12,8 +12,13 @@ from orca_auto.orca.report.si import SiBlock, render_si_block_md
 
 from ...conformer_selection import finite
 from ..report import _text
-from .models import PopulationRow, WorkflowSiData, WorkflowSiEntry
-from .science import _POP_NO_GIBBS_NOTE, _energy_convention
+from .collection import (
+    _POP_NO_GIBBS_NOTE,
+    PopulationRow,
+    WorkflowSiData,
+    WorkflowSiEntry,
+    _energy_convention,
+)
 
 # ---------------------------------------------------------------------------
 # Methods paragraph

@@ -19,14 +19,14 @@ from orca_auto.core.artifacts import (
 )
 from orca_auto.core.engine_runner import confined_output_identity, executable_identity
 from orca_auto.flow.manifest import interaction_energy_config_fingerprint
-from orca_auto.flow.workflow.si import (
-    collect_workflow_si_data,
+from orca_auto.flow.workflow.si import collection as si_evidence
+from orca_auto.flow.workflow.si.collection import collect_workflow_si_data
+from orca_auto.flow.workflow.si.publication import write_workflow_si
+from orca_auto.flow.workflow.si.rendering import (
     render_interaction_energy_csv,
     render_workflow_si_csv,
     render_workflow_si_md,
-    write_workflow_si,
 )
-from orca_auto.flow.workflow.si import evidence as si_evidence
 from tests.engine_artifact_helpers import bind_report_generation
 
 _BASE_SI_CSV_COLUMNS = [
@@ -1325,7 +1325,7 @@ def test_malformed_manifest_does_not_suppress_si(tmp_path: Path) -> None:
 
 def test_population_failure_still_writes_valid_si(tmp_path: Path, monkeypatch: Any) -> None:
     from orca_auto.flow.workflow.si import collection as si_collection
-    from orca_auto.flow.workflow.si import science as si_science
+    from orca_auto.flow.workflow.si import collection as si_science
 
     minimum = _minimum(tmp_path, "conf", energy=-100.0, coords=_COORDS_A)
     payload = _payload([_orca_stage("orca_conf", minimum, label="conf")])
