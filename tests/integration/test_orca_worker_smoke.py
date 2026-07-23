@@ -23,7 +23,6 @@ from orca_auto.orca.state import (
     load_report_json,
     load_state,
     report_json_path,
-    report_md_path,
 )
 
 
@@ -206,8 +205,6 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert report["status"]["state"] == "completed"
     assert report_json_path(generation_dir).exists()
     assert not report_json_path(reaction_dir).exists()
-    assert report_md_path(generation_dir).exists()
-    assert not report_md_path(reaction_dir).exists()
     report_html = generation_dir / RUN_REPORT_HTML_FILE
     assert report_html.exists()
     report_html_text = report_html.read_text(encoding="utf-8")
@@ -216,10 +213,6 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert "r2scan-3c" not in report_html_text
     assert '<td class="ok">completed' in report_html_text
     assert "AnalyzerStatus.COMPLETED" not in report_html_text
-    report_markdown = report_md_path(generation_dir).read_text(encoding="utf-8")
-    assert "Status: `completed`" in report_markdown
-    assert "AnalyzerStatus." not in report_markdown
-    assert "<AnalyzerStatus" not in report_markdown
     si_block = generation_dir / SI_BLOCK_MD_FILE
     assert si_block.exists()
     assert not (reaction_dir / SI_BLOCK_MD_FILE).exists()
@@ -534,7 +527,6 @@ def test_orca_queue_worker_rejects_return_code_zero_without_normal_marker(
     assert report["status"]["state"] == "failed"
     assert report["status"]["reason"] == "run_incomplete"
     assert report_json_path(generation_dir).exists()
-    assert report_md_path(generation_dir).exists()
     assert not report_json_path(reaction_dir).exists()
     report_html = generation_dir / RUN_REPORT_HTML_FILE
     assert report_html.exists()
@@ -637,9 +629,7 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     assert report is not None
     assert report["status"]["state"] == "completed"
     assert report_json_path(generation_dir).is_file()
-    assert report_md_path(generation_dir).is_file()
     assert not report_json_path(reaction_dir).exists()
-    assert not report_md_path(reaction_dir).exists()
     energy_text = f"{parsed.energy_hartree:.6f}"
     report_html = (generation_dir / RUN_REPORT_HTML_FILE).read_text(encoding="utf-8")
     assert "SP report" in report_html
@@ -652,7 +642,3 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     assert "H2" in si_text
     assert "HF STO-3G SP TightSCF" in si_text
     assert parsed.orca_version in si_text
-    report_markdown = report_md_path(generation_dir).read_text(encoding="utf-8")
-    assert "Status: `completed`" in report_markdown
-    assert "AnalyzerStatus." not in report_markdown
-    assert "<AnalyzerStatus" not in report_markdown

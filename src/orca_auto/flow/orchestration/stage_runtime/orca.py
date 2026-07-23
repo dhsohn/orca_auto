@@ -147,11 +147,6 @@ def _orca_output_artifact_specs(contract: Any) -> tuple[dict[str, Any], ...]:
             "metadata": {"status": contract.status},
         },
         {
-            "kind": "orca_report_md",
-            "path": contract.report_md_path,
-            "metadata": {"status": contract.status},
-        },
-        {
             "kind": "orca_output_dir",
             "path": contract.latest_known_path,
             "selected": contract.status in {"completed", "failed", "cancelled"},

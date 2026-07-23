@@ -386,7 +386,7 @@ Workflow notes:
   Failed workflows also show a top-level explanation and a failed-stage table
   sourced from `workflow_error`, engine job reports, and recognized CREST
   safety-termination diagnostics.
-- Workflows with ORCA stages also rewrite `workflow_si.md` and `si_data.csv`
+- Workflows with ORCA stages also rewrite `workflow_si.md`
   on every advance: a paper-ready Supporting Information assembly with a
   computational-details paragraph generated from the routes and ORCA versions
   that actually ran, the CREST → xTB → ORCA funnel provenance, a relative
@@ -424,12 +424,7 @@ Workflow notes:
   jobs did not use; SI reads the durable request rather than a subsequently
   edited source `flow.yaml`. Missing, non-finite, non-positive, or inconsistent
   data cause populations to be omitted with a note rather than fabricated.
-- `si_data.csv` appends `cluster_key`, `rel_E_kcalmol`, `rel_G_kcalmol`,
-  `boltzmann_T_K`, and `boltzmann_population` after its existing columns.
-  Markdown renders population as a percentage; `boltzmann_population` is the
-  corresponding fraction in `[0, 1]`. CSV `rel_E_kcalmol` and
-  `rel_G_kcalmol` use the lowest E and G inside that row's population group as
-  their local baselines under the shared convention.
+  Markdown renders population as a percentage.
 - `conformer_screening` accepts an optional `rmsd_dedup:` block that groups
   optimized minima and keeps the lowest-energy representative. Converged
   candidates are eligible when `Nimag` is absent or zero; a known nonzero value
@@ -443,10 +438,9 @@ Workflow notes:
   prefers a global reflection is retained separately. This is still a heuristic
   and can merge nearby distinct or local stereochemical minima. All atoms are compared by
   default; `heavy_atoms_only: true` ignores H/D/T and increases that risk. Inspect
-  `merged_stage_ids` before treating members as chemically identical. Only when
-  enabled, `si_data.csv` appends `rmsd_group`, `degeneracy`, and
-  `merged_stage_ids`; population completeness is checked before dedup, and
-  `degeneracy` is a workflow duplicate count, not a statistical/symmetry weight.
+  merged groups before treating members as chemically identical. Population
+  completeness is checked before dedup, and the reported degeneracy is a
+  workflow duplicate count, not a statistical/symmetry weight.
 - `conformer_screening` accepts an optional `interaction_energy:` block that
   reports ΔE_int = E(complex) − Σ E(fragment_i). It requires 2–8 fragments with
   safe single-line labels and integer multiplicities in `[1, 100]`.
@@ -473,23 +467,10 @@ Workflow notes:
   output route/state, executed method/basis/solvation/ORCA version, optimized
   complex geometry, indexed fragment subsets, and energy convention must match.
   Missing, duplicate, running, stale, mixed, wrong-state/wrong-geometry, or
-  non-finite data omits ΔE_int rather than using a partial sum.
-- `interaction_energy.csv` has one row per complex/fragment pair and these 23
-  columns: `parent_stage_id`, `complex_stage_id`, `complex_label`,
-  `complex_charge`, `complex_multiplicity`, `complex_formula`, `E_complex_Eh`,
-  `method`, `basis_set`, `solvation`, `orca_version`, `route_line`,
-  `ghost_counterpoise_applied`, `fragment_label`, `fragment_stage_id`,
-  `fragment_atom_indices`, `fragment_formula`, `fragment_charge`,
-  `fragment_multiplicity`, `E_fragment_Eh`, `dE_int_Eh`, `dE_int_kcalmol`, and
-  `note`. `ghost_counterpoise_applied=false` means no separate Boys–Bernardi
-  ghost-atom calculation was run; method-inherent corrections such as r2SCAN-3c
-  gCP are unaffected. Spreadsheet-formula-leading text is neutralized.
-- The generated CSV uses an adjacent v2 owner marker with a hashed workflow
-  identity and current/pending content digests. Digest-bound ownership logic
-  recovers interrupted creates, replacements, and deletes. Foreign, malformed, missing,
-  or digest-mismatched ownership never authorizes overwrite/deletion; user-edited
-  content is preserved. Ownership is preflighted before replacing last-good base
-  SI files.
+  non-finite data omits ΔE_int rather than using a partial sum. Reportable
+  results land in the `workflow_si.md` interaction-energy section. No separate
+  Boys–Bernardi ghost-atom calculation is run; method-inherent corrections such
+  as r2SCAN-3c gCP are unaffected.
 - Restart preserves the interaction route, per-fragment state/resources, and
   generation fingerprint. Interaction and RMSD grouping settings are immutable
   after fan-out, and an original primary stage cannot be reopened while that
@@ -651,7 +632,7 @@ There is no public direct-execution mode for new work. `run-dir` is the durable 
 - Internal xTB/CREST terminal metadata is state-only: `job_state.json` contains
   status, command/provenance, resource use, retained-output identities, and
   engine-specific result fields. These jobs do not write or read
-  `job_report.json`/`job_report.md`; report-only jobs are unsupported and must
+  `job_report.json`; report-only jobs are unsupported and must
   be resubmitted. An unrecoverable exact-generation state is exposed as
   `repair_blocked` instead of being reconstructed from a report.
 
@@ -856,7 +837,6 @@ that run's state and reports:
 
 - `job_state.json`
 - `job_report.json`
-- `job_report.md`
 - `job_report.html` (Opt, OptTS, NEB-TS, ScanTS, IRC, and relaxed-scan jobs):
   self-contained visual report assembled from common page chrome plus
   calculation components. Depending on the parsed route/output it may include
@@ -893,7 +873,6 @@ TS8(NEB-TS)/
     ├── nebts.NEB.log
     ├── job_state.json
     ├── job_report.json
-    ├── job_report.md
     └── job_report.html
 ```
 
@@ -1010,7 +989,6 @@ least these fields:
 - `last_out_path`
 - `run_state_path`
 - `report_json_path`
-- `report_md_path`
 - `attempt_count`
 - `max_retries`
 - `attempts`
@@ -1034,7 +1012,7 @@ Compatibility note:
 3. Confirm `status: queued`
 4. Close the submission terminal if desired
 5. Monitor with `list` or `journalctl`
-6. Review `job_report.md` after completion
+6. Review `job_report.html` (or `job_report.json`) after completion
 7. To rerun a fully closed standalone ORCA directory, submit it again; a new
    sibling generation is created without `--force`
 

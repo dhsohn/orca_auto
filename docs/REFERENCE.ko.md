@@ -373,7 +373,7 @@ ORCA 고유 노트:
   시각 요약입니다. 실패한 워크플로우에는 `workflow_error`, 엔진 작업 리포트, 식별
   가능한 CREST 안전 종료 진단에서 가져온 최상위 실패 설명과 실패 스테이지 표도
   표시합니다.
-- ORCA stage가 있는 워크플로우는 advance마다 `workflow_si.md`와 `si_data.csv`도
+- ORCA stage가 있는 워크플로우는 advance마다 `workflow_si.md`도
   다시 씁니다: 실제 실행된 route와 ORCA 버전에서 생성한 계산 세부사항 문단,
   CREST → xTB → ORCA 깔때기 provenance, 상대 에너지 테이블(ΔE/ΔG), 완료된
   구조별 SI 블록을 담은 논문 SI용 조립본입니다. single-point 스테이지는 지오메트리가
@@ -404,12 +404,7 @@ ORCA 고유 노트:
   0.01 K 이내로 일치해야 합니다. 주파수 작업이 쓰지 않은 온도의 열화학 값을 만들 수는
   없습니다. SI는 이후 수정된 원본 `flow.yaml`이 아니라 내구성 요청을 읽습니다. 자료가
   없거나 유한하지 않거나 양수가 아니거나 서로 불일치하면 지어내지 않고 note와 함께
-  population을 생략합니다.
-- `si_data.csv`는 기존 컬럼 뒤에 `cluster_key`, `rel_E_kcalmol`, `rel_G_kcalmol`,
-  `boltzmann_T_K`, `boltzmann_population`을 append합니다. Markdown은 population을
-  백분율로 표시하지만 `boltzmann_population`은 `[0, 1]` 범위의 대응 분율입니다. CSV의
-  `rel_E_kcalmol`과 `rel_G_kcalmol`은 공통 규약 아래 해당 population 그룹의 최저 E와
-  G를 각각 기준으로 한 그룹 로컬 상대값입니다.
+  population을 생략합니다. Markdown은 population을 백분율로 표시합니다.
 - `conformer_screening`은 최적화된 minima를 그룹화하고 최저에너지 대표를 보존하는 선택적
   `rmsd_dedup:` 블록을 받습니다. 수렴한 후보는 `Nimag`가 없거나 0이면 허용하고, 알려진
   nonzero 값이면 제외합니다. 선택 원자 원소 서열, formula/전자상태, exact 최적화
@@ -420,9 +415,8 @@ ORCA 고유 노트:
   정렬이 전역 reflection을 선호하는 nondegenerate 쌍은 분리합니다. 그래도 heuristic이므로 가까운 서로
   다른 minimum이나 국소 입체화학 variant를 병합할 수 있습니다. 기본은 모든 원자를 비교하고,
   `heavy_atoms_only: true`는 H/D/T를 무시해 위험을 키웁니다. 구성원을 화학적으로 동일하다고
-  보기 전에 `merged_stage_ids`를 검토하세요. 활성화된 경우에만 `si_data.csv`가
-  `rmsd_group`, `degeneracy`, `merged_stage_ids`를 append합니다. Population 완전성은 dedup 전에
-  검사하며 `degeneracy`는 통계/대칭 가중치가 아니라 workflow 중복 수입니다.
+  보기 전에 병합된 그룹을 검토하세요. Population 완전성은 dedup 전에
+  검사하며 degeneracy는 통계/대칭 가중치가 아니라 workflow 중복 수입니다.
 - `conformer_screening`은 ΔE_int = E(complex) − Σ E(fragment_i)를 보고하는 선택적
   `interaction_energy:` 블록을 받습니다. 안전한 한 줄 label과 `[1, 100]` 정수 multiplicity를
   가진 fragment 2–8개가 필요합니다. `{atom_indices(0-based), charge, multiplicity, label}`은
@@ -445,20 +439,9 @@ ORCA 고유 노트:
   fragment SP 정확히 1개를 요구합니다. 선택 입력과 파싱 출력의 route/state, 실제
   method/basis/solvation/ORCA version, 최적화 complex 기하, 인덱스별 fragment subset, 에너지
   규약이 모두 같아야 합니다. 결측·중복·실행 중·stale·혼합·잘못된 상태/기하·비유한 자료는
-  부분합을 쓰지 않고 ΔE_int을 생략합니다.
-- `interaction_energy.csv`는 complex/fragment 쌍마다 한 행이며 23개 컬럼은
-  `parent_stage_id`, `complex_stage_id`, `complex_label`, `complex_charge`,
-  `complex_multiplicity`, `complex_formula`, `E_complex_Eh`, `method`, `basis_set`,
-  `solvation`, `orca_version`, `route_line`, `ghost_counterpoise_applied`, `fragment_label`,
-  `fragment_stage_id`, `fragment_atom_indices`, `fragment_formula`, `fragment_charge`,
-  `fragment_multiplicity`, `E_fragment_Eh`, `dE_int_Eh`, `dE_int_kcalmol`, `note`입니다.
-  `ghost_counterpoise_applied=false`는 별도 Boys–Bernardi ghost-atom 계산을 하지 않았다는
-  뜻이며 r2SCAN-3c gCP 같은 method 내재 보정에는 영향을 주지 않습니다. spreadsheet formula
-  선행 문자는 중화합니다.
-- 생성 CSV는 hash한 workflow identity와 current/pending content digest를 가진 인접 v2 owner
-  marker를 사용합니다. digest-bound 소유권 로직은 중단된 create, replace, delete를 복구합니다.
-  foreign/malformed/missing marker 또는 digest 불일치는 덮어쓰기·삭제를 허가하지 않으며 사용자
-  수정 내용은 보존합니다. last-good base SI를 교체하기 전에 소유권을 preflight합니다.
+  부분합을 쓰지 않고 ΔE_int을 생략합니다. 보고 가능한 결과는 `workflow_si.md`의
+  interaction-energy 섹션에 들어갑니다. 별도 Boys–Bernardi ghost-atom 계산은 하지 않으며
+  r2SCAN-3c gCP 같은 method 내재 보정에는 영향을 주지 않습니다.
 - restart는 interaction route, fragment별 state/resource, generation fingerprint를 보존합니다.
   fan-out 뒤에는 interaction 및 RMSD grouping 설정을 바꿀 수 없고 해당 fan-out이 남아 있는
   동안 원래 primary stage도 다시 열 수 없습니다. 기능을 끄면 interaction stage를 retire합니다.
@@ -598,7 +581,7 @@ ORCA 고유 노트:
   않습니다.
 - 내부 xTB/CREST 종료 metadata는 state-only입니다. `job_state.json`이 상태,
   command/provenance, 자원 사용량, 보존 출력 정체성, 엔진별 결과 필드를 모두 담습니다.
-  `job_report.json`/`job_report.md`를 쓰거나 읽지 않으며 report-only 작업은 지원하지 않고
+  `job_report.json`을 쓰거나 읽지 않으며 report-only 작업은 지원하지 않고
   다시 제출해야 합니다. exact-generation state를 복구할 수 없으면 report에서 재구성하지 않고
   activity에 `repair_blocked`로 표시합니다.
 
@@ -795,7 +778,6 @@ visible 실행 generation이 남습니다. 각 generation이 그 실행의 상�
 
 - `job_state.json`
 - `job_report.json`
-- `job_report.md`
 - `job_report.html` (Opt, OptTS, NEB-TS, ScanTS, IRC, relaxed scan 작업): 공통
   페이지 틀과 계산 component를 조합한 단일 파일 시각 리포트입니다. 파싱된
   route/output에 따라 scan 에너지 프로파일(ScanTS 및 일반 relaxed scan —
@@ -829,7 +811,6 @@ TS8(NEB-TS)/
     ├── nebts.NEB.log
     ├── job_state.json
     ├── job_report.json
-    ├── job_report.md
     └── job_report.html
 ```
 
@@ -942,7 +923,6 @@ ORCA 핸드오프 계약은 `orca_auto.flow` 같은 다운스트림 도구에 �
 - `last_out_path`
 - `run_state_path`
 - `report_json_path`
-- `report_md_path`
 - `attempt_count`
 - `max_retries`
 - `attempts`
@@ -966,7 +946,7 @@ ORCA 핸드오프 계약은 `orca_auto.flow` 같은 다운스트림 도구에 �
 3. `status: queued`를 확인합니다.
 4. 원한다면 제출 터미널을 닫습니다.
 5. `list` 또는 `journalctl`로 모니터링합니다.
-6. 완료 후 `job_report.md`를 검토합니다.
+6. 완료 후 `job_report.html`(또는 `job_report.json`)을 검토합니다.
 7. 완전히 닫힌 standalone ORCA 디렉터리를 재실행하려면 그냥 다시 제출합니다.
    `--force` 없이 새 sibling generation이 생깁니다.
 

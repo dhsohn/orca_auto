@@ -1103,7 +1103,7 @@ def collect_workflow_si_data(
     # Interaction-energy fragment/complex single points are internal inputs, not
     # SI structures: they carry a ``role`` starting ``interaction_`` and must be
     # pulled out BEFORE any min/ts/sp classification so they can never leak into
-    # the relative-energy table, the structures list, or si_data.csv, nor be
+    # the relative-energy table or the structures list, nor be
     # folded into a stationary structure by ``_pair_single_points``.
     interaction_raw_stages: list[Mapping[str, Any]] = []
 

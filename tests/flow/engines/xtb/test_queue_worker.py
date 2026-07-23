@@ -144,7 +144,6 @@ def test_execute_queue_entry_processes_completed_job(
     assert state["status"]["reason"] == "xtb_ok"
     assert state["engine_payload"]["selected_candidate_paths"] == [str(selected_xyz.resolve())]
     assert not (job_dir / "job_report.json").exists()
-    assert not (job_dir / "job_report.md").exists()
 
 
 def test_execute_queue_entry_marks_runner_errors_failed(
@@ -204,7 +203,6 @@ def test_execute_queue_entry_marks_runner_errors_failed(
     assert state["status"]["state"] == "failed"
     assert state["status"]["reason"] == "runner_error:boom"
     assert not (job_dir / "job_report.json").exists()
-    assert not (job_dir / "job_report.md").exists()
 
 
 def test_execute_queue_entry_cancels_running_job(
@@ -300,7 +298,6 @@ def test_execute_queue_entry_cancels_running_job(
     assert state["status"]["state"] == "cancelled"
     assert state["status"]["reason"] == "cancel_requested"
     assert not (job_dir / "job_report.json").exists()
-    assert not (job_dir / "job_report.md").exists()
 
 
 def test_execute_queue_entry_cancels_before_start_and_updates_terminal_metadata(
@@ -391,7 +388,6 @@ def test_execute_queue_entry_cancels_before_start_and_updates_terminal_metadata(
     assert state["status"]["reason"] == "cancel_requested"
     assert state["engine_payload"]["candidate_count"] == 0
     assert not (job_dir / "job_report.json").exists()
-    assert not (job_dir / "job_report.md").exists()
 
 
 def test_process_dequeued_entry_uses_queue_cancel_callback(

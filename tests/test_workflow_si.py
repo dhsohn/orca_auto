@@ -1,8 +1,7 @@
-"""Workflow SI assembly (workflow_si.md + si_data.csv) tests."""
+"""Workflow SI assembly (workflow_si.md) tests."""
 
 from __future__ import annotations
 
-import csv
 import json
 import os
 from dataclasses import replace
@@ -11,58 +10,14 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.artifacts import (
-    INTERACTION_ENERGY_CSV_FILE,
-    INTERACTION_ENERGY_CSV_OWNER_FILE,
-    WORKFLOW_SI_CSV_FILE,
-    WORKFLOW_SI_MD_FILE,
-)
+from orca_auto.core.artifacts import WORKFLOW_SI_MD_FILE
 from orca_auto.core.engine_runner import confined_output_identity, executable_identity
 from orca_auto.flow.manifest import interaction_energy_config_fingerprint
 from orca_auto.flow.workflow.si import collection as si_evidence
 from orca_auto.flow.workflow.si.collection import collect_workflow_si_data
 from orca_auto.flow.workflow.si.publication import write_workflow_si
-from orca_auto.flow.workflow.si.rendering import (
-    render_interaction_energy_csv,
-    render_workflow_si_csv,
-    render_workflow_si_md,
-)
+from orca_auto.flow.workflow.si.rendering import render_workflow_si_md
 from tests.engine_artifact_helpers import bind_report_generation
-
-_BASE_SI_CSV_COLUMNS = [
-    "name",
-    "stage_id",
-    "kind",
-    "formula",
-    "charge",
-    "multiplicity",
-    "method",
-    "basis_set",
-    "solvation",
-    "orca_version",
-    "route",
-    "E_Eh",
-    "ZPE_Eh",
-    "H_Eh",
-    "G_Eh",
-    "G_minus_Eel_Eh",
-    "sp_method",
-    "sp_basis_set",
-    "sp_solvation",
-    "sp_orca_version",
-    "sp_route",
-    "E_SP_Eh",
-    "G_composite_Eh",
-    "Nimag",
-    "lowest_freq_cm1",
-    "temperature_K",
-    "warnings",
-    "cluster_key",
-    "rel_E_kcalmol",
-    "rel_G_kcalmol",
-    "boltzmann_T_K",
-    "boltzmann_population",
-]
 
 _COORDS_A = (
     ("C", 0.0, 1.234567, -0.987654),
@@ -328,12 +283,6 @@ def test_workflow_si_ranks_structures_and_reports_funnel(tmp_path: Path) -> None
     # ΔE between the two conformers: 0.004 Eh ≈ +2.51 kcal/mol
     assert "+2.51" in rendered
 
-    csv_text = render_workflow_si_csv(data)
-    csv_lines = csv_text.strip().splitlines()
-    assert len(csv_lines) == 3
-    assert csv_lines[0].startswith("name,stage_id,kind")
-    assert csv_lines[1].startswith("conf_02,")
-
 
 def test_single_point_pairs_by_identical_geometry(tmp_path: Path) -> None:
     opt_dir = _stage_dir(
@@ -388,10 +337,6 @@ def test_single_point_pairs_by_identical_geometry(tmp_path: Path) -> None:
     # documents an unreproducible number.
     assert "wB97M-V/def2-TZVPP" in rendered
     assert "! wB97M-V def2-TZVPP" in rendered
-
-    csv_text = render_workflow_si_csv(data)
-    # The stationary row carries the paired SP's method/basis/version/route.
-    assert "wB97M-V,def2-TZVPP,,6.0.1,wB97M-V def2-TZVPP" in csv_text
 
 
 def test_single_point_pair_includes_exact_geometry_tolerance_boundary(tmp_path: Path) -> None:
@@ -968,15 +913,13 @@ def test_write_workflow_si_writes_and_cleans_up(tmp_path: Path) -> None:
     payload = _payload([_orca_stage("orca_only", stage_dir, label="only")])
     md_path = write_workflow_si(workspace, payload)
     assert md_path is not None and md_path.exists()
-    assert (workspace / WORKFLOW_SI_CSV_FILE).exists()
 
-    # A workflow without ORCA stages removes stale SI files.
+    # A workflow without ORCA stages removes the stale SI file.
     assert write_workflow_si(workspace, _payload([])) is None
     assert not (workspace / WORKFLOW_SI_MD_FILE).exists()
-    assert not (workspace / WORKFLOW_SI_CSV_FILE).exists()
 
 
-def test_write_workflow_si_removes_pair_when_second_publish_fails(
+def test_write_workflow_si_keeps_last_good_file_when_publish_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from orca_auto.flow.workflow.si import publication as si_publication
@@ -984,26 +927,17 @@ def test_write_workflow_si_removes_pair_when_second_publish_fails(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     md_path = workspace / WORKFLOW_SI_MD_FILE
-    csv_path = workspace / WORKFLOW_SI_CSV_FILE
     md_path.write_text("old md", encoding="utf-8")
-    csv_path.write_text("old csv", encoding="utf-8")
     minimum = _minimum(tmp_path, "conf", energy=-100.0, coords=_COORDS_A)
     payload = _payload([_orca_stage("orca_conf", minimum, label="conf")])
-    real_write = si_publication.atomic_write_text
-    calls = 0
 
-    def fail_second(path: Path, text: str) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise OSError("second publish failed")
-        real_write(path, text)
+    def fail_write(path: Path, text: str) -> None:
+        raise OSError("publish failed")
 
-    monkeypatch.setattr(si_publication, "atomic_write_text", fail_second)
+    monkeypatch.setattr(si_publication, "atomic_write_text", fail_write)
 
     assert si_publication.write_workflow_si(workspace, payload) is None
-    assert not md_path.exists()
-    assert not csv_path.exists()
+    assert md_path.read_text(encoding="utf-8") == "old md"
 
 
 # ---------------------------------------------------------------------------
@@ -1242,9 +1176,6 @@ def test_opt_only_workflow_reports_no_populations(tmp_path: Path) -> None:
     assert "## Boltzmann populations" in rendered  # minima exist, so the section shows...
     assert "no complete set" in rendered  # ...a fail-closed note, not numbers
 
-    rows = list(csv.reader(render_workflow_si_csv(data).splitlines()))
-    assert rows[1][-5:] == ["", "", "", "", ""]  # blank population cells
-
 
 def test_boltzmann_temperature_override_and_disagreement(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
@@ -1365,64 +1296,6 @@ def test_duplicate_stage_id_does_not_cross_map_populations(tmp_path: Path) -> No
     assert lo_row.population > hi_row.population
     populated = [p for p in data.populations if p is not None]
     assert sum(p.population or 0.0 for p in populated) == pytest.approx(1.0)
-
-
-def test_si_csv_appends_population_columns_without_touching_the_schema(tmp_path: Path) -> None:
-    minimum = _minimum(tmp_path, "conf", energy=-100.0, coords=_COORDS_A)
-    data = collect_workflow_si_data(_payload([_orca_stage("orca_conf", minimum, label="conf")]))
-
-    fields = render_workflow_si_csv(data).splitlines()[0].split(",")
-
-    assert fields[:27] == [
-        "name",
-        "stage_id",
-        "kind",
-        "formula",
-        "charge",
-        "multiplicity",
-        "method",
-        "basis_set",
-        "solvation",
-        "orca_version",
-        "route",
-        "E_Eh",
-        "ZPE_Eh",
-        "H_Eh",
-        "G_Eh",
-        "G_minus_Eel_Eh",
-        "sp_method",
-        "sp_basis_set",
-        "sp_solvation",
-        "sp_orca_version",
-        "sp_route",
-        "E_SP_Eh",
-        "G_composite_Eh",
-        "Nimag",
-        "lowest_freq_cm1",
-        "temperature_K",
-        "warnings",
-    ]
-    assert fields[27:] == [
-        "cluster_key",
-        "rel_E_kcalmol",
-        "rel_G_kcalmol",
-        "boltzmann_T_K",
-        "boltzmann_population",
-    ]
-
-
-def test_misaligned_population_rows_cannot_drop_base_csv_entries(tmp_path: Path) -> None:
-    lo = _minimum(tmp_path, "lo", energy=-100.01, coords=_COORDS_A)
-    hi = _minimum(tmp_path, "hi", energy=-100.00, coords=_COORDS_B)
-    data = collect_workflow_si_data(
-        _payload([_orca_stage("lo", lo, label="lo"), _orca_stage("hi", hi, label="hi")])
-    )
-    broken = replace(data, populations=(data.populations[0],))
-
-    rows = list(csv.DictReader(render_workflow_si_csv(broken).splitlines()))
-
-    assert {row["name"] for row in rows} == {"lo", "hi"}
-    assert all(row["boltzmann_population"] == "" for row in rows)
 
 
 def test_boltzmann_uses_composite_gibbs_when_every_member_is_refined(tmp_path: Path) -> None:
@@ -1659,25 +1532,6 @@ def test_single_point_pair_rejects_one_sp_for_duplicate_stationary_geometries(
     assert [entry.block.name for entry in data.extra_blocks] == ["sp"]
 
 
-def test_si_csv_populated_row_carries_population_values(tmp_path: Path) -> None:
-    lo = _minimum(tmp_path, "conf_lo", energy=-100.010, coords=_COORDS_A)
-    hi = _minimum(tmp_path, "conf_hi", energy=-100.000, coords=_COORDS_B)
-    data = collect_workflow_si_data(
-        _payload([_orca_stage("olo", lo, label="conf_lo"), _orca_stage("ohi", hi, label="conf_hi")])
-    )
-
-    rows = list(csv.DictReader(render_workflow_si_csv(data).splitlines()))
-    lo_row = next(row for row in rows if row["name"] == "conf_lo")
-
-    assert lo_row["cluster_key"].endswith("|0|1")
-    assert float(lo_row["boltzmann_T_K"]) == pytest.approx(298.15)
-    assert float(lo_row["rel_G_kcalmol"]) == pytest.approx(0.0)  # conf_lo is the min-G member
-    # The column is a fraction in [0, 1], not a percentage.
-    assert float(lo_row["boltzmann_population"]) > 0.99
-    total = sum(float(row["boltzmann_population"]) for row in rows if row["boltzmann_population"])
-    assert total == pytest.approx(1.0)
-
-
 def test_boltzmann_omitted_when_parsed_temperatures_disagree(tmp_path: Path) -> None:
     a = _minimum(tmp_path, "a", energy=-100.010, coords=_COORDS_A, temp=298.15)
     b = _minimum(tmp_path, "b", energy=-100.000, coords=_COORDS_B, temp=298.60)
@@ -1718,8 +1572,6 @@ def test_boltzmann_omits_incomplete_minimum_set(tmp_path: Path) -> None:
 
 
 def test_boltzmann_override_ignores_minimum_without_parsed_temperature(tmp_path: Path) -> None:
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
     # A minimum with a Gibbs energy but no parsed THERMOCHEMISTRY-AT temperature.
     no_temp = _stage_dir(
         tmp_path,
@@ -1731,18 +1583,14 @@ def test_boltzmann_override_ignores_minimum_without_parsed_temperature(tmp_path:
         thermo=True,
         thermo_header=False,
     )
-    payload = _payload(
-        [_orca_stage("ont", no_temp, label="no_temp")],
+
+    data = collect_workflow_si_data(
+        _payload([_orca_stage("ont", no_temp, label="no_temp")]),
         boltzmann_temperature_k=298.15,
     )
 
-    write_workflow_si(workspace, payload)
-
-    csv_rows = list(
-        csv.DictReader((workspace / WORKFLOW_SI_CSV_FILE).read_text(encoding="utf-8").splitlines())
-    )
     # An unverified temperature must not be Boltzmann-weighted at the override value.
-    assert csv_rows[0]["boltzmann_population"] == ""
+    assert all(row is None or row.population is None for row in data.populations)
 
 
 # ---------------------------------------------------------------------------
@@ -1918,10 +1766,6 @@ def test_interaction_stages_never_leak_into_the_structure_path(tmp_path: Path) -
     assert structure_ids == {"orca_conf_01"}
     assert "ie_complex" not in structure_ids
     assert "ie_f0" not in structure_ids and "ie_f1" not in structure_ids
-    # And never rendered as an SI structure row.
-    csv_text = render_workflow_si_csv(data)
-    rows = list(csv.DictReader(csv_text.splitlines()))
-    assert {row["stage_id"] for row in rows} == {"orca_conf_01"}
 
 
 def test_interaction_energy_is_computed_and_rendered(tmp_path: Path) -> None:
@@ -1935,16 +1779,6 @@ def test_interaction_energy_is_computed_and_rendered(tmp_path: Path) -> None:
     md = render_workflow_si_md(data)
     assert "## Interaction energies" in md
     assert "conf1 (orca_conf_01)" in md
-
-    interaction_csv = render_interaction_energy_csv(data)
-    assert interaction_csv is not None
-    ie_rows = list(csv.DictReader(interaction_csv.splitlines()))
-    assert {row["fragment_label"] for row in ie_rows} == {"host", "guest"}
-    assert all(row["parent_stage_id"] == "orca_conf_01" for row in ie_rows)
-    assert all(row["complex_stage_id"] == "ie_complex" for row in ie_rows)
-    assert all(row["ghost_counterpoise_applied"] == "false" for row in ie_rows)
-    assert {row["fragment_atom_indices"] for row in ie_rows} == {"0", "1"}
-    assert all(row["route_line"] == _SP_ROUTE for row in ie_rows)
     assert "Interaction-energy single points were performed" in md
     assert "No separate Boys–Bernardi ghost-atom counterpoise" in md
     assert "r2SCAN-3c gCP" in md
@@ -2093,192 +1927,6 @@ def test_hidden_default_rmsd_grouping_does_not_report_intentional_nonrepresentat
     assert [result.parent_stage_id for result in data.interaction_energies] == ["orca_conf_01"]
 
 
-def test_write_workflow_si_emits_interaction_csv(tmp_path: Path) -> None:
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    write_workflow_si(workspace, _interaction_payload(tmp_path))
-    assert (workspace / INTERACTION_ENERGY_CSV_FILE).is_file()
-    assert (workspace / INTERACTION_ENERGY_CSV_OWNER_FILE).is_file()
-
-
-def test_feature_off_preserves_unowned_interaction_csv(tmp_path: Path) -> None:
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    sentinel = workspace / INTERACTION_ENERGY_CSV_FILE
-    sentinel.write_text("USER RESEARCH DATA\n", encoding="utf-8")
-    stage = _stage_dir(tmp_path, "conf", route=_OPT_ROUTE, energy=-100.0, coords=_COORDS_A)
-    write_workflow_si(workspace, _payload([_orca_stage("conf", stage)]))
-    assert sentinel.read_text(encoding="utf-8") == "USER RESEARCH DATA\n"
-
-
-def test_unowned_interaction_conflict_preserves_last_good_base_si(tmp_path: Path) -> None:
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    base_stage = _stage_dir(
-        tmp_path, "base_conf", route=_OPT_ROUTE, energy=-80.0, coords=_IE_COORDS
-    )
-    write_workflow_si(
-        workspace,
-        _payload([_orca_stage("base_conf", base_stage)]),
-        raise_on_error=True,
-    )
-    md_path = workspace / WORKFLOW_SI_MD_FILE
-    csv_path = workspace / WORKFLOW_SI_CSV_FILE
-    before_md = md_path.read_bytes()
-    before_csv = csv_path.read_bytes()
-    sentinel = workspace / INTERACTION_ENERGY_CSV_FILE
-    sentinel.write_text("USER RESEARCH DATA\n", encoding="utf-8")
-
-    with pytest.raises(FileExistsError, match="refusing to overwrite unowned"):
-        write_workflow_si(workspace, _interaction_payload(tmp_path), raise_on_error=True)
-
-    assert md_path.read_bytes() == before_md
-    assert csv_path.read_bytes() == before_csv
-    assert sentinel.read_text(encoding="utf-8") == "USER RESEARCH DATA\n"
-
-
-def test_enabled_feature_refuses_to_overwrite_unowned_interaction_csv(tmp_path: Path) -> None:
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    sentinel = workspace / INTERACTION_ENERGY_CSV_FILE
-    sentinel.write_text("USER RESEARCH DATA\n", encoding="utf-8")
-    assert write_workflow_si(workspace, _interaction_payload(tmp_path)) is None
-    assert sentinel.read_text(encoding="utf-8") == "USER RESEARCH DATA\n"
-    assert not (workspace / INTERACTION_ENERGY_CSV_OWNER_FILE).exists()
-
-
-def test_disabling_feature_removes_only_owned_interaction_csv(tmp_path: Path) -> None:
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    payload = _interaction_payload(tmp_path)
-    write_workflow_si(workspace, payload)
-    payload["metadata"]["request"]["parameters"].pop("interaction_energy")
-    write_workflow_si(workspace, payload)
-    assert not (workspace / INTERACTION_ENERGY_CSV_FILE).exists()
-    assert not (workspace / INTERACTION_ENERGY_CSV_OWNER_FILE).exists()
-
-
-def test_interaction_csv_neutralizes_formula_leading_labels(tmp_path: Path) -> None:
-    data = collect_workflow_si_data(_interaction_payload(tmp_path))
-    first = data.interaction_energies[0].fragments[0]
-    hardened = replace(
-        data,
-        interaction_energies=(
-            replace(
-                data.interaction_energies[0],
-                fragments=(replace(first, label='=HYPERLINK("https://invalid")'),),
-            ),
-        ),
-    )
-    csv_text = render_interaction_energy_csv(hardened)
-    assert csv_text is not None
-    rows = list(csv.DictReader(csv_text.splitlines()))
-    assert rows[0]["fragment_label"].startswith("'=")
-
-
-def test_interaction_csv_neutralizes_every_durable_text_field(tmp_path: Path) -> None:
-    data = collect_workflow_si_data(_interaction_payload(tmp_path))
-    result = data.interaction_energies[0]
-    fragment = result.fragments[0]
-    formula = '=HYPERLINK("https://invalid")'
-    hardened = replace(
-        data,
-        interaction_energies=(
-            replace(
-                result,
-                parent_stage_id=formula,
-                complex_stage_id=formula,
-                complex_label=formula,
-                complex_formula=formula,
-                method=formula,
-                basis_set=formula,
-                solvation=formula,
-                orca_version=formula,
-                input_line=formula,
-                note=formula,
-                fragments=(replace(fragment, label=formula, stage_id=formula, formula=formula),),
-            ),
-        ),
-    )
-    csv_text = render_interaction_energy_csv(hardened)
-    assert csv_text is not None
-    row = next(csv.DictReader(csv_text.splitlines()))
-    for column in (
-        "parent_stage_id",
-        "complex_stage_id",
-        "complex_label",
-        "complex_formula",
-        "method",
-        "basis_set",
-        "solvation",
-        "orca_version",
-        "route_line",
-        "fragment_label",
-        "fragment_stage_id",
-        "fragment_formula",
-        "note",
-    ):
-        assert row[column].startswith("'=")
-
-
-def test_modified_or_marker_only_interaction_csv_is_never_overwritten(tmp_path: Path) -> None:
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    payload = _interaction_payload(tmp_path)
-    write_workflow_si(workspace, payload)
-    interaction_path = workspace / INTERACTION_ENERGY_CSV_FILE
-    owner_path = workspace / INTERACTION_ENERGY_CSV_OWNER_FILE
-
-    interaction_path.write_text("USER MODIFIED DATA\n", encoding="utf-8")
-    assert write_workflow_si(workspace, payload) is None
-    assert interaction_path.read_text(encoding="utf-8") == "USER MODIFIED DATA\n"
-    assert not owner_path.exists()
-
-    interaction_path.unlink()
-    write_workflow_si(workspace, payload)
-    interaction_path.unlink()
-    assert write_workflow_si(workspace, payload, raise_on_error=True) is not None
-    assert interaction_path.exists()
-    interaction_path.unlink()
-    interaction_path.write_text("USER NEW DATA\n", encoding="utf-8")
-    assert write_workflow_si(workspace, payload) is None
-    assert interaction_path.read_text(encoding="utf-8") == "USER NEW DATA\n"
-
-
-def test_interaction_owner_pending_digest_recovers_after_marker_finalize_crash(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    from orca_auto.flow.workflow.si import publication as si_publication
-
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    payload = _interaction_payload(tmp_path)
-    owner_path = workspace / INTERACTION_ENERGY_CSV_OWNER_FILE
-    real_write = si_publication.atomic_write_text
-    owner_writes = 0
-
-    def crash_final_marker(path: Path, text: str) -> None:
-        nonlocal owner_writes
-        if path == owner_path:
-            owner_writes += 1
-            if owner_writes == 2:
-                raise KeyboardInterrupt("simulated process crash")
-        real_write(path, text)
-
-    monkeypatch.setattr(si_publication, "atomic_write_text", crash_final_marker)
-    with pytest.raises(KeyboardInterrupt):
-        si_publication.write_workflow_si(workspace, payload, raise_on_error=True)
-    monkeypatch.setattr(si_publication, "atomic_write_text", real_write)
-
-    assert si_publication.write_workflow_si(workspace, payload, raise_on_error=True) is not None
-    assert si_publication._owned_interaction_artifact(
-        workspace / INTERACTION_ENERGY_CSV_FILE,
-        owner_path,
-        workflow_id="wf_si_test",
-    )
-
-
 def test_invalid_durable_interaction_config_preserves_last_good_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -2286,12 +1934,12 @@ def test_invalid_durable_interaction_config_preserves_last_good_artifacts(
     workspace.mkdir()
     payload = _interaction_payload(tmp_path)
     write_workflow_si(workspace, payload, raise_on_error=True)
-    interaction_path = workspace / INTERACTION_ENERGY_CSV_FILE
-    before = interaction_path.read_bytes()
+    md_path = workspace / WORKFLOW_SI_MD_FILE
+    before = md_path.read_bytes()
     payload["metadata"]["request"]["parameters"]["interaction_energy"]["typo"] = True
     with pytest.raises(ValueError, match="unknown key"):
         write_workflow_si(workspace, payload, raise_on_error=True)
-    assert interaction_path.read_bytes() == before
+    assert md_path.read_bytes() == before
 
 
 def test_unsupported_template_feature_preserves_last_good_artifacts(tmp_path: Path) -> None:
@@ -2299,14 +1947,14 @@ def test_unsupported_template_feature_preserves_last_good_artifacts(tmp_path: Pa
     workspace.mkdir()
     payload = _interaction_payload(tmp_path)
     write_workflow_si(workspace, payload, raise_on_error=True)
-    interaction_path = workspace / INTERACTION_ENERGY_CSV_FILE
-    before = interaction_path.read_bytes()
+    md_path = workspace / WORKFLOW_SI_MD_FILE
+    before = md_path.read_bytes()
     payload["template_name"] = "reaction_ts_search"
 
     with pytest.raises(ValueError, match="supported only for conformer_screening"):
         write_workflow_si(workspace, payload, raise_on_error=True)
 
-    assert interaction_path.read_bytes() == before
+    assert md_path.read_bytes() == before
 
 
 def test_corrupt_interaction_stage_metadata_preserves_last_good_artifacts(
@@ -2316,28 +1964,15 @@ def test_corrupt_interaction_stage_metadata_preserves_last_good_artifacts(
     workspace.mkdir()
     payload = _interaction_payload(tmp_path)
     write_workflow_si(workspace, payload, raise_on_error=True)
-    interaction_path = workspace / INTERACTION_ENERGY_CSV_FILE
-    before = interaction_path.read_bytes()
+    md_path = workspace / WORKFLOW_SI_MD_FILE
+    before = md_path.read_bytes()
     fragment = next(stage for stage in payload["stages"] if stage["stage_id"] == "ie_f0")
     fragment["metadata"]["fragment_atom_indices"] = 0
 
     with pytest.raises(TypeError):
         write_workflow_si(workspace, payload, raise_on_error=True)
 
-    assert interaction_path.read_bytes() == before
-
-
-def test_lost_parent_removes_owned_stale_interaction_csv(tmp_path: Path) -> None:
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    payload = _interaction_payload(tmp_path)
-    write_workflow_si(workspace, payload, raise_on_error=True)
-    payload["stages"] = [
-        stage for stage in payload["stages"] if stage["stage_id"] != "orca_conf_01"
-    ]
-    assert write_workflow_si(workspace, payload, raise_on_error=True) is None
-    assert not (workspace / INTERACTION_ENERGY_CSV_FILE).exists()
-    assert not (workspace / INTERACTION_ENERGY_CSV_OWNER_FILE).exists()
+    assert md_path.read_bytes() == before
 
 
 def test_strict_no_orca_cleanup_propagates_unlink_failure(
@@ -2383,12 +2018,11 @@ def test_rmsd_dedup_collapses_degenerate_minima(tmp_path: Path) -> None:
     # Both are identical NO geometries within 1 kcal/mol → one representative kept.
     assert [entry.block.name for entry in data.entries] == ["keep"]
     assert data.rmsd_dedup_enabled
-    csv_text = render_workflow_si_csv(data)
-    header = csv_text.splitlines()[0].split(",")
-    assert header[-3:] == ["rmsd_group", "degeneracy", "merged_stage_ids"]
-    row = next(csv.DictReader(csv_text.splitlines()))
-    assert row["degeneracy"] == "2"
-    assert row["merged_stage_ids"] == "orca_conf_drop"
+    lookup = data.rmsd_group_for(data.entries[0].stage_id)
+    assert lookup is not None
+    _index, group = lookup
+    assert group.degeneracy == 2
+    assert list(group.merged_stage_ids) == ["orca_conf_drop"]
     assert "RMSD representatives" in render_workflow_si_md(data)
 
 
@@ -2479,9 +2113,11 @@ def test_single_minimum_rmsd_metadata_reports_singleton_group(tmp_path: Path) ->
             rmsd_dedup={"enabled": True},
         )
     )
-    row = next(csv.DictReader(render_workflow_si_csv(data).splitlines()))
-    assert row["rmsd_group"] == "1"
-    assert row["degeneracy"] == "1"
+    lookup = data.rmsd_group_for(data.entries[0].stage_id)
+    assert lookup is not None
+    index, group = lookup
+    assert index == 1
+    assert group.degeneracy == 1
 
 
 def test_rmsd_dedup_uses_the_uniform_single_point_energy_convention(tmp_path: Path) -> None:
@@ -2634,14 +2270,9 @@ def test_features_off_are_byte_identical_to_baseline(tmp_path: Path) -> None:
     payload = _payload([_orca_stage("orca_conf_01", stage, label="conf1")])
     data = collect_workflow_si_data(payload)
 
-    csv_text = render_workflow_si_csv(data)
-    header = csv_text.splitlines()[0].split(",")
-    assert header == _BASE_SI_CSV_COLUMNS  # no rmsd_dedup columns appended when off
-
     md = render_workflow_si_md(data)
     assert "## Interaction energies" not in md
     assert "RMSD representatives" not in md
-    assert render_interaction_energy_csv(data) is None
 
 
 def test_multi_route_line_selected_input_stays_provenance_verified(tmp_path: Path) -> None:

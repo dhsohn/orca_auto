@@ -14,7 +14,6 @@ from .artifacts import (
     EngineArtifactStatus,
     EngineArtifactTimestamps,
     build_engine_artifact_payload,
-    build_engine_report_markdown,
     load_engine_artifact_payload,
 )
 from .definition_builder import (
@@ -87,7 +86,6 @@ __all__ = [
     "EngineRunnerCallbacks",
     "EngineWorkerChild",
     "build_engine_artifact_payload",
-    "build_engine_report_markdown",
     "build_engine_runtime_roots",
     "build_lazy_queue_worker_runner",
     "build_lazy_worker_child_runner",

@@ -10,7 +10,6 @@ from orca_auto.core.queue.child.execution import build_queue_entry_lookup
 
 from .artifacts import (
     build_engine_artifact_payload,
-    build_engine_report_markdown,
     load_engine_artifact_payload,
 )
 from .definitions import (
@@ -169,7 +168,6 @@ def build_queue_engine_definition(
         artifact_adapter=EngineArtifactAdapter(
             build_payload=build_engine_artifact_payload,
             load_payload=load_engine_artifact_payload,
-            build_report_markdown=build_engine_report_markdown,
         ),
         notification_hooks=EngineNotificationHooks(
             job_started=job_started,

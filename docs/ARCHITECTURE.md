@@ -190,7 +190,7 @@ bundles everything the shared runtime needs for an engine:
 - `queue_worker_module` — parent-worker entrypoint
 - `queue_functions` — runtime roots, queue operations, entry lookup, and PID-file name
 - `runner_callbacks` — child runner and child-command builder
-- `artifact_adapter` — build/load payloads + report markdown
+- `artifact_adapter` — build/load payloads
 - `notification_hooks` — started / finished / retry callbacks
 - `context_builder` — DI seams for execution
 
@@ -357,7 +357,7 @@ logic. Notable pieces:
   `MORead` + `%moinp` when a matching non-empty `.gbw` checkpoint exists; resumed
   inputs are written as `*.resume.inp` so user input is never mutated.
 - **State & reports:** `state.py`/`state_machine.py` persist `job_state.json`;
-  completion writes `job_report.json` and `job_report.md`; Opt, OptTS, NEB-TS,
+  completion writes `job_report.json`; Opt, OptTS, NEB-TS,
   ScanTS, IRC, and relaxed-scan jobs also get `job_report.html` (`report/`), a
   self-contained visual report assembled by `report/composer.py` from common
   page chrome plus calculation components — scan energy profile (ScanTS and
@@ -410,13 +410,13 @@ local work at 10,000 atoms and xTB/ORCA Hessian-producing work at 1,000.
 separating the assembled SI pipeline by responsibility. `evidence.py` reads durable
 workflow/stage evidence, `collection.py` composes it with the selection, RMSD,
 interaction-energy, and population rules in `science.py`, and `rendering.py` produces
-Markdown/CSV text without writing files. `publication.py` is the only workflow SI
-writer and owns per-file atomic replacement, cleanup after caught write failures, and
-interaction-CSV ownership markers. The advance loop checkpoints publication before
-calling the writer and owns durable retry after an interrupted multi-file publication.
+Markdown text without writing files. `publication.py` is the only workflow SI
+writer and owns atomic replacement and stale-file cleanup.
+The advance loop checkpoints publication before
+calling the writer and owns durable retry after an interrupted publication.
 The modules do not introduce a second numerical or artifact source of
-truth; `workflow_si.md`, `si_data.csv`, and the owned interaction CSV retain their
-existing contracts. Import-linter permits the inward order publication → collection →
+truth; `workflow_si.md` retains its
+existing contract. Import-linter permits the inward order publication → collection →
 rendering → science → evidence → models (layers may be skipped) and rejects reverse
 imports. The package `__init__` remains the single outward API facade.
 
@@ -492,12 +492,12 @@ durable mutation. The main on-disk artifacts:
 | `queue.json`                | core/queue       | Durable per-engine queue (source of truth)|
 | admission slot file         | core/admission   | Active concurrency slots (machine-wide)  |
 | `job_state.json`            | orca (state)     | Per-job attempts + status                |
-| `job_report.json` / `.md`   | orca (reporting) | Human/machine completion report          |
+| `job_report.json` / `.html` | orca (reporting) | Machine/human completion report          |
 | job-location index (JSONL)  | core/indexing    | Where each job's outputs currently live  |
 | `workflow.json`             | flow             | Durable workflow payload                 |
 | `workflow_report.html`      | flow (report)    | Live visual workflow summary             |
 | `si_block.md`               | orca (report/si) | Per-structure SI block (paper-ready)     |
-| `workflow_si.md` / `si_data.csv` | flow (si)   | Assembled workflow SI + machine-readable data |
+| `workflow_si.md`            | flow (si)        | Assembled workflow SI (paper-ready)      |
 | workflow registry + journal | flow/registry    | Cross-workflow listing + event history   |
 
 The workflow journal records semantic workflow/stage transitions and worker

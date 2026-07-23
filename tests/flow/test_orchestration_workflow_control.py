@@ -144,7 +144,7 @@ def test_permanent_si_publication_error_blocks_without_automatic_retry(
     def blocked_writer(*args: Any, **kwargs: Any) -> None:
         nonlocal writer_calls
         writer_calls += 1
-        raise FileExistsError("unowned interaction_energy.csv")
+        raise FileExistsError("unowned workflow SI artifact")
 
     monkeypatch.setattr(advance_module, "write_workflow_si", blocked_writer)
     monkeypatch.setattr(advance_module, "write_workflow_html_report", lambda *args: None)

@@ -414,7 +414,7 @@ def _sync_completed_orca_stage(
         for artifact in orca_stage.get("output_artifacts", [])
         if isinstance(artifact, dict)
     }
-    assert {"orca_run_state", "orca_report_json", "orca_report_md"} <= artifact_kinds
+    assert {"orca_run_state", "orca_report_json"} <= artifact_kinds
     queue_entries = list_queue(case.orca_queue_root)
     assert len(queue_entries) == 1
     assert _queue_status(queue_entries[0]) == "completed"
@@ -560,4 +560,3 @@ def test_reaction_ts_workflow_terminalizes_failed_xtb_handoff(
     assert len(list_queue(workspace_dir / "02_xtb")) == 3
     assert_workflow_report(workspace_dir, payload)
     assert not (workspace_dir / "workflow_si.md").exists()
-    assert not (workspace_dir / "si_data.csv").exists()

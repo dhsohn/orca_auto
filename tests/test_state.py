@@ -1,4 +1,3 @@
-import hashlib
 import json
 import os
 import re
@@ -8,7 +7,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from orca_auto.core.artifacts import RUN_REPORT_MD_COMMIT_KEY, RUN_REPORT_MD_COMMIT_VERSION
 from orca_auto.core.engine_runner import executable_identity
 from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
 from orca_auto.orca import state as state_module
@@ -22,7 +20,6 @@ from orca_auto.orca.state import (
     save_state,
     write_report_files,
     write_report_json,
-    write_report_md,
     write_state,
 )
 
@@ -220,7 +217,6 @@ class TestState(unittest.TestCase):
 
             write_report_files(reaction, state)
             self.assertTrue((generation / "job_report.json").exists())
-            self.assertTrue((generation / "job_report.md").exists())
             self.assertFalse((reaction / "job_report.json").exists())
 
             self.assertEqual(list(reaction.glob("*.tmp.*")), [])
@@ -237,7 +233,6 @@ class TestState(unittest.TestCase):
 
             self.assertEqual(reports, {})
             self.assertFalse((reaction / "job_report.json").exists())
-            self.assertFalse((reaction / "job_report.md").exists())
 
     def test_write_state_fails_closed_when_pinned_reaction_directory_is_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -314,8 +309,6 @@ class TestState(unittest.TestCase):
             self.assertEqual(load_state(generation), load_state(reaction))
             self.assertIsNotNone(load_report_json(generation))
             self.assertIsNone(load_report_json(reaction))
-            self.assertTrue((generation / "job_report.md").is_file())
-            self.assertFalse((reaction / "job_report.md").exists())
             self.assertFalse((reaction / ".orca_auto_orca_executions").exists())
             self.assertFalse((reaction / ".orca_auto_input_snapshots").exists())
 
@@ -350,16 +343,13 @@ class TestState(unittest.TestCase):
                 "bound_selected_identity": executable_identity(inp),
             }
             (reaction / "job_report.json").write_text("{}", encoding="utf-8")
-            (reaction / "job_report.md").write_text("stale", encoding="utf-8")
 
             write_report_files(reaction, state)
 
             # Pre-relocation root copies are left for the one-time operational
             # migration; the writer publishes only into the generation.
             self.assertTrue((reaction / "job_report.json").exists())
-            self.assertTrue((reaction / "job_report.md").exists())
             self.assertTrue((generation / "job_report.json").is_file())
-            self.assertTrue((generation / "job_report.md").is_file())
 
     def test_replaced_visible_generation_never_receives_state_or_report(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -426,29 +416,15 @@ class TestState(unittest.TestCase):
                 "execution_provenance": provenance,
                 "final_result": None,
             }
-            markdown = "# ORCA Run Report\n"
-            generation_status = generation.stat()
-            generation_target = (
-                generation,
-                (generation_status.st_dev, generation_status.st_ino),
-            )
-
             self.assertEqual(
                 write_report_json(reaction, report_payload),
                 state_module.report_json_path(generation),
-            )
-            self.assertEqual(
-                write_report_md(reaction, markdown, generation_target=generation_target),
-                state_module.report_md_path(generation),
             )
             written_report = load_report_json(generation)
             assert written_report is not None
             self.assertEqual(written_report["engine"], "orca")
             self.assertEqual(written_report["engine_payload"]["run_id"], state["run_id"])
             self.assertEqual(written_report["status"]["state"], "created")
-            self.assertEqual(
-                state_module.report_md_path(generation).read_text(encoding="utf-8"), markdown
-            )
 
     def test_write_report_files_json_fields(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -491,7 +467,6 @@ class TestState(unittest.TestCase):
             }
             result = write_report_files(reaction, state)
             report_json_path = Path(result["report_json"])
-            report_md_path = Path(result["report_md"])
 
             report = json.loads(report_json_path.read_text(encoding="utf-8"))
             self.assertEqual(report["status"]["state"], "completed")
@@ -503,110 +478,6 @@ class TestState(unittest.TestCase):
                 state["execution_provenance"],
             )
             self.assertIsNotNone(report["engine_payload"]["final_result"])
-
-            md = report_md_path.read_text(encoding="utf-8")
-            self.assertIn("# orca_auto ORCA Job Report", md)
-            self.assertIn("## Engine Payload", md)
-            self.assertIn("attempts", md)
-            self.assertIn("final_result", md)
-            self.assertIn("normal_termination", md)
-            markdown_bytes = md.encode("utf-8")
-            self.assertEqual(
-                report["artifacts"][RUN_REPORT_MD_COMMIT_KEY],
-                {
-                    "version": RUN_REPORT_MD_COMMIT_VERSION,
-                    "sha256": hashlib.sha256(markdown_bytes).hexdigest(),
-                    "size_bytes": len(markdown_bytes),
-                },
-            )
-
-    def test_write_report_files_omits_oversized_markdown_commit(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            reaction = Path(td)
-            generation, provenance = _bind_generation(reaction, token="state-mdlimit-token-0001")
-            state = new_state(reaction, generation / "nebts.inp", max_retries=0)
-            state["execution_provenance"] = provenance
-
-            with patch.object(state_module, "MAX_RUN_REPORT_MD_BYTES", 1):
-                reports = write_report_files(reaction, state)
-
-            self.assertNotIn("report_md", reports)
-            report = json.loads(Path(reports["report_json"]).read_text(encoding="utf-8"))
-            self.assertNotIn(RUN_REPORT_MD_COMMIT_KEY, report["artifacts"])
-
-    def test_write_report_files_does_not_publish_json_when_markdown_write_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            reaction = Path(td)
-            generation, provenance = _bind_generation(reaction, token="state-mdfail-token-0001")
-            inp = generation / "nebts.inp"
-            state = new_state(reaction, inp, max_retries=0)
-            state["execution_provenance"] = provenance
-            report_json = state_module.report_json_path(generation)
-            report_json.write_text('{"generation": "old"}\n', encoding="utf-8")
-
-            with (
-                patch.object(
-                    state_module,
-                    "write_report_md",
-                    side_effect=OSError("markdown write failed"),
-                ),
-                patch.object(
-                    state_module,
-                    "write_report_json",
-                    wraps=state_module.write_report_json,
-                ) as json_write,
-            ):
-                with self.assertRaisesRegex(OSError, "markdown write failed"):
-                    write_report_files(reaction, state)
-
-            json_write.assert_not_called()
-            self.assertEqual(
-                report_json.read_text(encoding="utf-8"),
-                '{"generation": "old"}\n',
-            )
-
-    def test_write_report_files_publishes_json_after_markdown(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            reaction = Path(td)
-            generation, provenance = _bind_generation(reaction, token="state-order-token-0001")
-            inp = generation / "nebts.inp"
-            state = new_state(reaction, inp, max_retries=0)
-            state["execution_provenance"] = provenance
-            report_json = state_module.report_json_path(generation)
-            report_md = state_module.report_md_path(generation)
-            report_json.write_text('{"generation": "old"}\n', encoding="utf-8")
-            report_md.write_text("# Old report\n", encoding="utf-8")
-            events: list[str] = []
-            original_write_report_md = state_module.write_report_md
-
-            def write_markdown(
-                target_dir: Path,
-                markdown: str,
-                *,
-                generation_target: tuple[Path, tuple[int, int]],
-            ) -> Path:
-                events.append("markdown")
-                return original_write_report_md(
-                    target_dir, markdown, generation_target=generation_target
-                )
-
-            def fail_json(*_args: object, **_kwargs: object) -> Path:
-                events.append("json")
-                raise OSError("json write failed")
-
-            with (
-                patch.object(state_module, "write_report_md", side_effect=write_markdown),
-                patch.object(state_module, "write_report_json", side_effect=fail_json),
-            ):
-                with self.assertRaisesRegex(OSError, "json write failed"):
-                    write_report_files(reaction, state)
-
-            self.assertEqual(events, ["markdown", "json"])
-            self.assertIn("# orca_auto ORCA Job Report", report_md.read_text(encoding="utf-8"))
-            self.assertEqual(
-                report_json.read_text(encoding="utf-8"),
-                '{"generation": "old"}\n',
-            )
 
     def test_load_report_json_returns_none_for_missing_invalid_and_non_dict(self) -> None:
         with tempfile.TemporaryDirectory() as td:

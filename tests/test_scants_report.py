@@ -358,7 +358,6 @@ def test_write_report_files_includes_html_for_scants(tmp_path: Path) -> None:
 
     assert reports["report_html"] == str(generation / "job_report.html")
     assert (generation / "job_report.html").exists()
-    assert (generation / "job_report.md").exists()
 
 
 def test_write_report_files_skips_html_and_removes_stale_for_md(

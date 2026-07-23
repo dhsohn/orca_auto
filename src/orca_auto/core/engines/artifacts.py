@@ -176,41 +176,6 @@ def build_engine_artifact_payload(
     return payload
 
 
-def build_engine_report_markdown(payload: Mapping[str, Any]) -> list[str]:
-    job = dict(payload.get("job") or {})
-    status = dict(payload.get("status") or {})
-    input_payload = dict(payload.get("input") or {})
-    timestamps = dict(payload.get("timestamps") or {})
-    resources = dict(payload.get("resources") or {})
-    lines = [
-        f"# orca_auto {str(payload.get('engine', '')).upper()} Job Report",
-        "",
-        f"- Schema Version: `{payload.get('schema_version', '')}`",
-        f"- Engine: `{payload.get('engine', '')}`",
-        f"- Job ID: `{job.get('id', '')}`",
-        f"- Queue ID: `{job.get('queue_id', '')}`",
-        f"- Status: `{status.get('state', '')}`",
-        f"- Reason: `{status.get('reason', '')}`",
-        f"- Exit Code: `{status.get('exit_code', '')}`",
-        f"- Job Dir: `{job.get('dir', '')}`",
-        f"- Primary Input: `{input_payload.get('primary_path', '')}`",
-        f"- Selected XYZ: `{input_payload.get('selected_xyz_path', '')}`",
-        f"- Started At: `{timestamps.get('started_at', '')}`",
-        f"- Finished At: `{timestamps.get('finished_at', '')}`",
-        f"- Resource Request: `{resources.get('request', {})}`",
-        f"- Resource Actual: `{resources.get('actual', {})}`",
-        "",
-    ]
-    engine_payload = payload.get("engine_payload")
-    if isinstance(engine_payload, Mapping) and engine_payload:
-        lines.append("## Engine Payload")
-        lines.append("")
-        for key in sorted(engine_payload):
-            lines.append(f"- {key}: `{engine_payload[key]}`")
-        lines.append("")
-    return lines
-
-
 def load_engine_artifact_payload(path: Path) -> dict[str, Any] | None:
     payload = load_json_mapping_file(path)
     if payload is None:
@@ -225,7 +190,6 @@ def load_engine_artifact_payload(path: Path) -> dict[str, Any] | None:
 class EngineArtifactSchema:
     schema_version = ENGINE_ARTIFACT_SCHEMA_VERSION
     build_payload = staticmethod(build_engine_artifact_payload)
-    build_report_markdown = staticmethod(build_engine_report_markdown)
     load_payload = staticmethod(load_engine_artifact_payload)
 
 
@@ -240,6 +204,5 @@ __all__ = [
     "EngineArtifactStatus",
     "EngineArtifactTimestamps",
     "build_engine_artifact_payload",
-    "build_engine_report_markdown",
     "load_engine_artifact_payload",
 ]

@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE, RUN_REPORT_MD_FILE
+from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE
 from orca_auto.core.indexing import get_job_location
 from orca_auto.core.queue import (
     QUEUE_RECORD_SYNC_COMPLETE,
@@ -369,7 +369,6 @@ def test_cli_end_to_end_smoke_path_submission_worker_and_index(
     assert _status(state)["state"] == "completed"
     assert _engine_payload(state)["retained_conformer_count"] == 1
     assert not (job_dir / RUN_REPORT_JSON_FILE).exists()
-    assert not (job_dir / RUN_REPORT_MD_FILE).exists()
 
     record = get_job_location(allowed_root, "crest-e2e-001")
     assert record is not None

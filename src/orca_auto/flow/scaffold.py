@@ -249,17 +249,17 @@ def _readme(root: Path, workflow_type: str) -> str:
             "Nimag=0, and finite E/G/T; the durable `boltzmann_temperature_k` pin must be finite, "
             "positive, and within 0.01 K of every parsed temperature.",
             "- Enable `rmsd_dedup:` to collapse DFT-degenerate minima to one representative "
-            "(duplicate count in `si_data.csv`); merging needs convergence, no known imaginary "
-            "mode, exact provenance, low proper RMSD/max displacement, and a small energy gap. "
-            "Detected global reflections stay distinct, but this is still a heuristic, "
-            "so inspect `merged_stage_ids`; heavy-atom mode increases the risk of an over-merge.",
+            "(duplicate count noted in `workflow_si.md`); merging needs convergence, no known "
+            "imaginary mode, exact provenance, low proper RMSD/max displacement, and a small "
+            "energy gap. Detected global reflections stay distinct, but this is still a "
+            "heuristic; heavy-atom mode increases the risk of an over-merge.",
             "- Enable `interaction_energy:` for dE_int = E(complex) - sum E(fragment). Fragments "
             "must number 2-8, partition every atom, conserve charge, have electron-count-compatible "
             "multiplicities, and spin-couple to the "
             "complex. The complex and fragments are fresh pure single points at `sp_route_line`; "
             "only RMSD representatives are computed. No separate ghost-atom counterpoise is run "
             "(method-inherent corrections such as gCP may remain). "
-            "Results land in `interaction_energy.csv` and the SI interaction-energy section.",
+            "Results land in the SI interaction-energy section of `workflow_si.md`.",
         ]
     elif workflow_type == SCAN_TS_SEARCH_TEMPLATE_ID:
         lines = [

@@ -253,7 +253,6 @@ def test_load_orca_artifact_contract_ignores_previous_force_restart_artifacts(
     )
     _write_json(reaction_dir / "job_state.json", old_payload)
     _write_json(reaction_dir / "job_report.json", old_payload)
-    (reaction_dir / "job_report.md").write_text("# Old generation\n", encoding="utf-8")
     _write_json(
         allowed_root / "queue.json",
         [
@@ -295,7 +294,6 @@ def test_load_orca_artifact_contract_ignores_previous_force_restart_artifacts(
         assert contract.final_result == {}
         assert contract.run_state_path == ""
         assert contract.report_json_path == ""
-        assert contract.report_md_path == ""
 
 
 def test_load_orca_artifact_contract_rejects_root_report_paths_in_both_loaders(
@@ -315,13 +313,8 @@ def test_load_orca_artifact_contract_rejects_root_report_paths_in_both_loaders(
     )
     state_file = reaction_dir / "job_state.json"
     report_json = reaction_dir / "job_report.json"
-    report_md = reaction_dir / "job_report.md"
     _write_json(state_file, current_payload)
     _write_json(report_json, current_payload)
-    report_md.write_text(
-        "# Report\n- Job ID: `job_new`\n- run_id: `run_new`\n",
-        encoding="utf-8",
-    )
     _write_json(
         allowed_root / "queue.json",
         [
@@ -358,10 +351,8 @@ def test_load_orca_artifact_contract_rejects_root_report_paths_in_both_loaders(
     for contract in (canonical_contract, fallback_contract):
         assert contract.run_state_path == ""
         assert contract.report_json_path == ""
-        assert contract.report_md_path == ""
     assert state_file.is_file()
     assert report_json.is_file()
-    assert report_md.is_file()
 
 
 def test_load_orca_artifact_contract_does_not_resolve_run_id_from_root_report(
@@ -472,9 +463,6 @@ def test_load_orca_artifact_contract_prefers_orca_contract_payload_helper(tmp_pa
             ),
             "report_json_path": str(
                 (tmp_path / "outputs" / "run_helper_1" / "job_report.json").resolve()
-            ),
-            "report_md_path": str(
-                (tmp_path / "outputs" / "run_helper_1" / "job_report.md").resolve()
             ),
             "attempt_count": 2,
             "max_retries": 3,
