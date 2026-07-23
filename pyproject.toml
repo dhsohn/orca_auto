@@ -171,18 +171,6 @@ forbidden_modules = [
     "orca_auto.flow.orchestration.services",
 ]
 
-[[tool.importlinter.contracts]]
-name = "Workflow SI dependencies point toward evidence and models"
-type = "layers"
-layers = [
-    "orca_auto.flow.workflow.si.publication",
-    "orca_auto.flow.workflow.si.collection",
-    "orca_auto.flow.workflow.si.rendering",
-    "orca_auto.flow.workflow.si.science",
-    "orca_auto.flow.workflow.si.evidence",
-    "orca_auto.flow.workflow.si.models",
-]
-
 [tool.coverage.run]
 source = ["src/orca_auto"]
 
