@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -16,8 +16,13 @@ from orca_auto.core.admission import (
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue.lifecycle import (
     EngineQueueProcessLifecycleHooks,
+    EngineQueueProcessReconcileHooks,
+    EngineQueueProcessShutdownHooks,
+    EngineQueueTerminalSideEffectHooks,
     attach_started_process_metadata,
     mark_terminal_process_queue_entry_with_result,
+    reconcile_orphaned_process_entries,
+    shutdown_running_process_job,
 )
 from orca_auto.core.queue.lifecycle import job_queue_root as _lifecycle_job_queue_root
 from orca_auto.core.queue.types import QueueEntry
@@ -48,7 +53,7 @@ from ..state import (
 )
 from ..statuses import AnalyzerStatus
 from ..types import RunState
-from . import worker_lifecycle, worker_tracking
+from . import worker_tracking
 from .adapter import (
     get_cancel_requested,
     list_queue,
@@ -242,32 +247,46 @@ def _requeue_running_expected(queue_root: Any, queue_id: str, **kwargs: Any) -> 
     )
 
 
-def lifecycle_callbacks() -> worker_lifecycle.OrcaQueueWorkerLifecycleCallbacks:
-    return worker_lifecycle.OrcaQueueWorkerLifecycleCallbacks(
-        queue_entry_id=queue_entry_id,
-        queue_entry_app_name=queue_entry_app_name,
-        queue_entry_task_id=queue_entry_task_id,
-        update_slot_metadata=update_slot_metadata,
-        terminate_process=terminate_process,
-        mark_failed=_mark_failed_expected,
-        upsert_running_job_record=worker_tracking.upsert_running_job_record,
-        get_run_id_from_state=worker_tracking.get_run_id_from_state,
-        get_cancel_requested=_cancel_requested_expected,
-        mark_cancelled=_mark_cancelled_expected,
-        mark_completed=_mark_completed_expected,
-        upsert_terminal_job_record=worker_tracking.upsert_terminal_job_record,
-        notify_terminal_job_from_state=worker_tracking.notify_terminal_job_from_state,
-        find_queue_entry=queue_entry_by_id,
-        on_completed=None,
-        queue_roots=queue_roots,
-        reconcile_stale_slots=reconcile_stale_slots,
-        reconcile_orphaned_running_entries=reconcile_orphaned_running_entries,
-        requeue_running_entry=_requeue_running_expected,
+def orca_worker_lifecycle_hooks() -> EngineQueueProcessLifecycleHooks:
+    return EngineQueueProcessLifecycleHooks(
+        queue_entry_id_fn=queue_entry_id,
+        queue_entry_app_name_fn=queue_entry_app_name,
+        queue_entry_task_id_fn=queue_entry_task_id,
+        update_slot_metadata_fn=update_slot_metadata,
+        terminate_process_fn=terminate_process,
+        mark_failed_fn=_mark_failed_expected,
+        upsert_running_job_record_fn=worker_tracking.upsert_running_job_record,
+        get_run_id_from_state_fn=worker_tracking.get_run_id_from_state,
+        get_cancel_requested_fn=_cancel_requested_expected,
+        mark_cancelled_fn=_mark_cancelled_expected,
+        mark_completed_fn=_mark_completed_expected,
+        upsert_terminal_job_record_fn=worker_tracking.upsert_terminal_job_record,
+        notify_terminal_job_from_state_fn=worker_tracking.notify_terminal_job_from_state,
+        find_queue_entry_fn=queue_entry_by_id,
+        on_completed_fn=None,
+        terminal_side_effect_hooks=EngineQueueTerminalSideEffectHooks(
+            upsert_terminal_job_record_fn=worker_tracking.upsert_terminal_job_record,
+            notify_terminal_job_from_state_fn=worker_tracking.notify_terminal_job_from_state,
+        ),
     )
 
 
-def orca_worker_lifecycle_hooks() -> EngineQueueProcessLifecycleHooks:
-    return worker_lifecycle.build_orca_worker_lifecycle_hooks(lifecycle_callbacks())
+def shutdown_running_job(
+    worker: Any,
+    queue_id: str,
+    job: Any,
+    *,
+    terminate_process_fn: Callable[[Any], Any],
+) -> None:
+    shutdown_running_process_job(
+        worker,
+        queue_id,
+        job,
+        hooks=EngineQueueProcessShutdownHooks(
+            terminate_process_fn=terminate_process_fn,
+            requeue_running_entry_fn=_requeue_running_expected,
+        ),
+    )
 
 
 def job_queue_root(worker: Any, job: Any) -> Path:
@@ -711,11 +730,18 @@ def _reconcile_orphaned_running(worker: Any) -> None:
         worker.admission_root,
         list_slots_fn=list_slots,
     )
-    worker_lifecycle.reconcile_orphaned_running(
+    reconcile_orphaned_process_entries(
         worker,
-        callbacks=lifecycle_callbacks(),
-        protected_queue_keys=protected_queue_keys,
-        protected_queue_ids=protected_queue_ids,
+        hooks=EngineQueueProcessReconcileHooks(
+            queue_roots_fn=queue_roots,
+            reconcile_stale_slots_fn=reconcile_stale_slots,
+            reconcile_orphaned_running_entries_fn=reconcile_orphaned_running_entries,
+            reconcile_orphaned_running_entries_kwargs={
+                "ignore_worker_pid": True,
+                "protected_queue_keys": protected_queue_keys,
+                "protected_queue_ids": protected_queue_ids,
+            },
+        ),
     )
     # Reconciliation can terminalize a job whose original parent died, and an
     # old child can also honor cancellation directly. Replay the normal
@@ -1240,7 +1266,7 @@ __all__ = [
     "handle_worker_start_error",
     "job_pending_replay_item",
     "job_queue_root",
-    "lifecycle_callbacks",
+    "shutdown_running_job",
     "new_terminal_replay_work_item",
     "normalized_entry_status",
     "on_worker_process_started",
