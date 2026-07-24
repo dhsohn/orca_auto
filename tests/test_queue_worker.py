@@ -105,19 +105,6 @@ def _command_arg(command: list[str], flag: str) -> str:
     return command[command.index(flag) + 1]
 
 
-def test_lifecycle_callbacks_use_replay_module_symbols() -> None:
-    def terminate_process(proc: object) -> bool:
-        del proc
-        return True
-
-    with patch.object(replay_mod, "terminate_process", new=terminate_process):
-        callbacks = replay_mod.lifecycle_callbacks()
-
-    assert callbacks.terminate_process is terminate_process
-    assert callbacks.requeue_running_entry is replay_mod._requeue_running_expected
-    assert callbacks.on_completed is None
-
-
 def test_orca_worker_repairs_queued_publication_before_claim(tmp_path: Path) -> None:
     cfg = _make_cfg(str(tmp_path))
     metadata = {
@@ -402,7 +389,7 @@ def _run_terminal_replay(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
+        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
     ):
         replay_mod.reconcile_worker_state(worker)
 
@@ -446,7 +433,7 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
+        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
         patch.object(
             replay_mod,
             "record_failed_run_state",
@@ -519,7 +506,7 @@ def test_repeated_worker_startup_preserves_historical_failed_queue_bytes(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
+        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
         patch.object(
             replay_mod,
             "record_failed_run_state",
@@ -632,7 +619,7 @@ def test_terminal_writer_marker_replays_once_after_fresh_worker_restart(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
+        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
         patch.object(
             worker_tracking_mod,
             "upsert_terminal_job_record",
@@ -1109,7 +1096,7 @@ def test_terminal_replay_skips_superseded_cancelled_generation(tmp_path: Path) -
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
+        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
         patch.object(worker_tracking_mod, "upsert_terminal_job_record") as upsert,
         patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
     ):
@@ -1199,7 +1186,7 @@ def test_terminal_owner_switches_from_terminal_owner_to_seen_active_generation(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
+        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
         patch.object(replay_mod, "record_failed_run_state") as record_failed,
         patch.object(worker_tracking_mod, "upsert_terminal_job_record") as upsert,
         patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
@@ -1268,7 +1255,7 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
+        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
         patch.object(
             replay_mod,
             "record_cancelled_run_state",
@@ -1340,7 +1327,7 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
+        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
         patch.object(
             replay_mod,
             "record_cancelled_run_state",
@@ -1389,7 +1376,7 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
+        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
         patch.object(
             replay_mod,
             "record_cancelled_run_state",
@@ -1448,7 +1435,7 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
+        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
         patch.object(
             replay_mod,
             "record_cancelled_run_state",
@@ -1695,7 +1682,7 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod.worker_lifecycle, "reconcile_orphaned_running"),
+        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
         patch.object(
             replay_mod,
             "record_cancelled_run_state",

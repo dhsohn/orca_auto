@@ -71,6 +71,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Flattened the remaining single-implementation queue-worker indirection:
+  orphan reconciliation now lives in one module with direct calls, the
+  worker-lifecycle hook mapping layer is gone (replay builds the core hooks
+  directly), and the file-lock helper lost its grouped-options wrapper.
+  Reconciliation decisions, lock semantics, and log/error messages are
+  unchanged.
 - Replaced the single-implementation dependency-injection plumbing in the ORCA
   job-location loaders and the workflow ORCA adapter with direct imports. The
   loaded payloads, contracts, and error behavior are unchanged; the modules

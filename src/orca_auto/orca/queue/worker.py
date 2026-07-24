@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import logging
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +32,7 @@ from orca_auto.orca.worker_execution import (
 
 from ..config import AppConfig
 from ..engine import ENGINE_DEFINITION, ENGINE_RUNTIME
-from . import cancellation, publication_repair, replay, worker_lifecycle, worker_runtime
+from . import cancellation, publication_repair, replay, worker_runtime
 from .adapter import (
     get_cancel_requested,
     list_queue,
@@ -172,19 +171,18 @@ def _shutdown_running_job(worker: Any, queue_id: str, job: Any) -> None:
         # stale "running" run state lingers.
         cancellation.cancel_running_job(worker, queue_id, job)
         return
-    callbacks = replay.lifecycle_callbacks()
 
     def terminate_child_and_recover(process: Any) -> bool:
-        terminated = callbacks.terminate_process(process)
+        terminated = replay.terminate_process(process)
         if terminated is True and process.poll() is not None:
             recover_slot_engine_process(worker.admission_root, job.admission_token)
         return terminated
 
-    worker_lifecycle.shutdown_running_job(
+    replay.shutdown_running_job(
         worker,
         queue_id,
         job,
-        callbacks=replace(callbacks, terminate_process=terminate_child_and_recover),
+        terminate_process_fn=terminate_child_and_recover,
     )
 
 
