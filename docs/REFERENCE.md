@@ -74,6 +74,7 @@ Operational consequences:
     orca_auto-runtime@.target
     orca_auto-engine-workers@.target
     orca_auto-queue-worker@.service
+    orca_auto-workflow-worker@.service
   scripts/*.sh / *.py
   tests/
     integration/
@@ -657,7 +658,7 @@ orca_auto queue list --engine xtb
 
 `queue list` shows workflow and engine activity in one view, but workflow child simulations
 are rendered underneath their parent workflow with indentation. The text view prints a table
-with `Status`, `Job ID`, `Detail`, and `Elapsed` columns, where the detail field surfaces
+with `Status`, `Name`, `Detail`, `ID`, and `Elapsed` columns, where the detail field surfaces
 workflow or job intent such as `ts_search(nci)`, `IRC`, or `NEB`. By default, only ORCA child
 jobs are expanded beneath workflow parents; internal xTB/CREST child jobs stay hidden in the
 combined text view to reduce noise, but remain available through `--engine ... --kind job`
@@ -736,6 +737,7 @@ This repository includes service assets under `systemd/`:
 - [`systemd/orca_auto-runtime@.target`](../systemd/orca_auto-runtime@.target)
 - [`systemd/orca_auto-engine-workers@.target`](../systemd/orca_auto-engine-workers@.target)
 - [`systemd/orca_auto-queue-worker@.service`](../systemd/orca_auto-queue-worker@.service)
+- [`systemd/orca_auto-workflow-worker@.service`](../systemd/orca_auto-workflow-worker@.service)
 
 Recommended always-on runtime install flow:
 

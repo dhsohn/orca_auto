@@ -20,7 +20,6 @@ from orca_auto.orca.queue.adapter import (
     enqueue,
     get_active_entry_for_reaction_dir,
     get_cancel_requested,
-    has_pending_entries,
     list_queue,
     mark_completed,
     mark_failed,
@@ -358,18 +357,6 @@ class TestQueueStore(unittest.TestCase):
         dequeue_next(self.root)
         running = [entry for entry in list_queue(self.root) if entry.status == QueueStatus.RUNNING]
         self.assertEqual(len(running), 2)
-
-    def test_has_pending_entries_false_when_empty(self) -> None:
-        self.assertFalse(has_pending_entries(self.root))
-
-    def test_has_pending_entries_true_when_pending_exists(self) -> None:
-        enqueue(self.root, str(self.root / "pending"))
-        self.assertTrue(has_pending_entries(self.root))
-
-    def test_has_pending_entries_false_when_only_running_exists(self) -> None:
-        enqueue(self.root, str(self.root / "running_only"))
-        dequeue_next(self.root)
-        self.assertFalse(has_pending_entries(self.root))
 
     def test_get_active_entry_for_reaction_dir_returns_pending(self) -> None:
         reaction_dir = self.root / "pending_lookup"

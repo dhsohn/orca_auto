@@ -24,7 +24,6 @@ from .channel import SendResult
 from .discord_http import (
     _DEFAULT_RETRY_BACKOFF_SECONDS,
     _MAX_TOTAL_RETRY_DELAY_SECONDS,
-    _SUPPRESS_NOTIFICATIONS,
     _bounded_attempts,
     _bounded_timeout,
     _close_http_error,
@@ -52,7 +51,7 @@ class DiscordBotChannel:
     def enabled(self) -> bool:
         return self.config.bot_notification_enabled
 
-    def _payload(self, message: Message, *, silent: bool) -> dict[str, object]:
+    def _payload(self, message: Message) -> dict[str, object]:
         payload: dict[str, object] = {
             "embeds": [render_discord_embed(message)],
             "allowed_mentions": {"parse": []},
@@ -63,8 +62,6 @@ class DiscordBotChannel:
             "nonce": secrets.token_hex(12),
             "enforce_nonce": True,
         }
-        if silent:
-            payload["flags"] = _SUPPRESS_NOTIFICATIONS
         return payload
 
     def _post_once(self, data: bytes) -> SendResult:
@@ -98,9 +95,6 @@ class DiscordBotChannel:
                 sent=True,
                 provider="discord",
                 message_id=message_id,
-                message_ids=(message_id,),
-                sent_count=1,
-                total_count=1,
             )
 
     def _post_attempt(self, data: bytes) -> tuple[SendResult, bool, float | None]:
@@ -139,7 +133,7 @@ class DiscordBotChannel:
                 None,
             )
 
-    def send(self, message: Message, *, silent: bool = False) -> SendResult:
+    def send(self, message: Message) -> SendResult:
         if not self.enabled:
             return SendResult(
                 sent=False,
@@ -149,7 +143,7 @@ class DiscordBotChannel:
             )
 
         data = json.dumps(
-            self._payload(message, silent=silent),
+            self._payload(message),
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")

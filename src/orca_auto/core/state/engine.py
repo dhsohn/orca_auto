@@ -16,7 +16,6 @@ from orca_auto.core.engines.artifacts import (
 )
 from orca_auto.core.utils import (
     atomic_write_json,
-    atomic_write_text,
     load_json_mapping_file,
     mapping_or_empty,
     normalize_text,
@@ -43,79 +42,8 @@ def write_json_artifact(job_dir: Path, filename: str, payload: dict[str, Any]) -
     return path
 
 
-def write_text_artifact(job_dir: Path, filename: str, lines: list[str]) -> Path:
-    path = job_dir / filename
-    atomic_write_text(path, "\n".join(lines) + "\n")
-    return path
-
-
 def load_json_mapping_artifact(job_dir: Path, filename: str) -> dict[str, Any] | None:
     return load_json_mapping_file(job_dir / filename)
-
-
-@dataclass(frozen=True)
-class EngineStateFiles:
-    state_file_name: str
-    report_json_file_name: str
-    report_md_file_name: str
-
-    def write_state(self, job_dir: Path, payload: dict[str, Any]) -> Path:
-        return write_json_artifact(job_dir, self.state_file_name, payload)
-
-    def write_report_json(self, job_dir: Path, payload: dict[str, Any]) -> Path:
-        return write_json_artifact(job_dir, self.report_json_file_name, payload)
-
-    def write_report_md_lines(self, job_dir: Path, lines: list[str]) -> Path:
-        return write_text_artifact(job_dir, self.report_md_file_name, lines)
-
-    def load_state(self, job_dir: Path) -> dict[str, Any] | None:
-        return load_json_mapping_artifact(job_dir, self.state_file_name)
-
-    def load_report_json(self, job_dir: Path) -> dict[str, Any] | None:
-        return load_json_mapping_artifact(job_dir, self.report_json_file_name)
-
-
-@dataclass(frozen=True)
-class EngineStateAccess:
-    files: EngineStateFiles
-    report_title: str
-    selected_input_label: str
-    now_fn: Callable[[], str] = now_utc_iso
-
-    def write_state(self, job_dir: Path, payload: dict[str, Any]) -> Path:
-        return self.files.write_state(job_dir, payload)
-
-    def write_report_json(self, job_dir: Path, payload: dict[str, Any]) -> Path:
-        return self.files.write_report_json(job_dir, payload)
-
-    def write_report_md(
-        self,
-        job_dir: Path,
-        *,
-        job_id: str,
-        status: str,
-        reason: str,
-        selected_input: str,
-    ) -> Path:
-        lines = [
-            f"# {self.report_title}",
-            "",
-            f"- Job ID: `{job_id}`",
-            f"- Status: `{status}`",
-            f"- Reason: `{reason}`",
-            f"- {self.selected_input_label}: `{selected_input}`",
-            f"- Updated At: `{self.now_fn()}`",
-        ]
-        return self.files.write_report_md_lines(job_dir, lines)
-
-    def write_report_md_lines(self, job_dir: Path, lines: list[str]) -> Path:
-        return self.files.write_report_md_lines(job_dir, lines)
-
-    def load_state(self, job_dir: Path) -> dict[str, Any] | None:
-        return self.files.load_state(job_dir)
-
-    def load_report_json(self, job_dir: Path) -> dict[str, Any] | None:
-        return self.files.load_report_json(job_dir)
 
 
 class StateArtifactAccess(Protocol):

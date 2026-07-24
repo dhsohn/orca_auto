@@ -154,48 +154,6 @@ def test_notify_job_queued_and_started_render_expected_fields(
     ]
 
 
-def test_notify_job_terminal_includes_extra_lines(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cfg = _make_cfg(tmp_path, enabled=True)
-    transport = _FakeTransport(SendResult(sent=True))
-    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger: transport)
-
-    assert notifications.notify_xtb_job_terminal(
-        cfg,
-        headline="Job failed",
-        job_id="job-002",
-        queue_id="queue-002",
-        status="failed",
-        reason="xtb_error",
-        job_type="sp",
-        reaction_key="rxn-2",
-        job_dir=tmp_path / "job-002",
-        selected_xyz=tmp_path / "inputs" / "candidate.xyz",
-        candidate_count=3,
-        extra_lines=["resource_actual: {'max_cores': 4}"],
-    )
-
-    assert transport.messages == [
-        "\n".join(
-            [
-                "orca_auto\n[xTB] Job failed",
-                "job_id: job-002",
-                "queue_id: queue-002",
-                "status: failed",
-                "reason: xtb_error",
-                "job_type: sp",
-                "reaction_key: rxn-2",
-                "job_dir: job-002",
-                "selected_input_xyz: candidate.xyz",
-                "candidate_count: 3",
-                "resource_actual: {'max_cores': 4}",
-            ]
-        )
-    ]
-
-
 @pytest.mark.parametrize(
     ("status", "headline", "severity", "embed_title"),
     [
@@ -253,35 +211,6 @@ def test_notify_job_finished_maps_headlines_and_optional_fields(
     else:
         assert "resource_request: " not in message
         assert "resource_actual: " not in message
-
-
-def test_notify_job_terminal_uses_status_for_severity_not_headline(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cfg = _make_cfg(tmp_path, enabled=True)
-    transport = _FakeTransport(SendResult(sent=True))
-    monkeypatch.setattr(_engine_transport, "build_channel", lambda _messenger: transport)
-
-    assert notifications.notify_xtb_job_terminal(
-        cfg,
-        headline="Job finished",
-        job_id="job-mismatch",
-        queue_id="queue-mismatch",
-        status="running",
-        reason="unexpected_non_terminal_status",
-        job_type="opt",
-        reaction_key="rxn-mismatch",
-        job_dir=tmp_path / "job-mismatch",
-        selected_xyz=tmp_path / "inputs" / "optimized.xyz",
-        candidate_count=0,
-    )
-
-    document = transport.documents[-1]
-    assert document.severity == "info"
-    embed = render_discord_embed(document)
-    assert embed["title"] == "[xTB] Job finished"
-    assert embed["color"] == 0x3498DB
 
 
 def test_workflow_child_notifications_are_suppressed(

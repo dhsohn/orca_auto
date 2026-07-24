@@ -1,4 +1,4 @@
-"""Integration tests: realistic ORCA outputs → parser → DFT index pipeline.
+"""Integration tests: realistic ORCA outputs → parser and monitor.
 
 Each fixture mirrors the structure of a real ORCA .out file with representative
 sections (input line, coordinates, energy, convergence, frequencies, thermo,
@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.orca.dft.index import DFTIndex
 from orca_auto.orca.dft.monitor import DFTMonitor
 from orca_auto.orca.parser import parse_orca_output
 from tests.engine_artifact_helpers import orca_artifact_payload
@@ -491,7 +490,7 @@ class TestParserRealisticOutputs:
 
 
 # ---------------------------------------------------------------------------
-# Full pipeline: parse → index → query
+# Monitor end-to-end over realistic outputs
 # ---------------------------------------------------------------------------
 
 
@@ -515,125 +514,28 @@ def _write_fixture(kb_dir: Path, name: str, content: str, status: str = "complet
     return job_dir
 
 
-class TestParserIndexPipeline:
-    """End-to-end: write realistic outputs → index → query/stats."""
+def test_monitor_detects_new_completed_calculation(tmp_path: Path) -> None:
+    """DFTMonitor detects a newly completed calculation after baseline."""
+    import os
 
-    def test_index_multiple_calculations_and_query(self, tmp_path: Path) -> None:
-        kb = tmp_path / "orca_runs"
-        _write_fixture(kb, "formaldehyde", _B3LYP_OPT_FREQ_COMPLETED)
-        _write_fixture(kb, "ammonia", _DLPNO_SP_COMPLETED)
-        _write_fixture(kb, "ts_sn2", _TS_OPT_WITH_IMAGINARY)
-        _write_fixture(kb, "ethane_fail", _OPT_NOT_CONVERGED, status="failed")
+    kb = tmp_path / "orca_runs"
+    _write_fixture(kb, "job1", _B3LYP_OPT_FREQ_COMPLETED)
 
-        index = DFTIndex()
-        index.initialize(str(tmp_path / "dft.db"))
+    state_file = str(tmp_path / "state.json")
+    monitor = DFTMonitor([str(kb)], state_file=state_file)
 
-        result = index.index_calculations([str(kb)])
-        assert result["indexed"] == 4
-        assert result["failed"] == 0
-        assert result["total"] == 4
+    # Baseline scan
+    r1 = monitor.scan()
+    assert r1.baseline_seeded is True
+    assert r1.new_results == []
 
-        # Query by method
-        b3lyp = index.query({"method": "B3LYP"})
-        assert len(b3lyp) == 2  # formaldehyde + ts_sn2
+    # Simulate a completed calculation appearing
+    job2 = _write_fixture(kb, "job2", _DLPNO_SP_COMPLETED)
+    out_path = job2 / "calc.out"
+    mtime = os.path.getmtime(out_path)
+    os.utime(out_path, (mtime + 10, mtime + 10))
 
-        # Query by formula
-        ch2o = index.search_by_formula("CH2O")
-        assert len(ch2o) == 1
-        assert ch2o[0]["energy_hartree"] == pytest.approx(-113.867432100)
-
-        # Lowest energy
-        lowest = index.get_lowest_energy(limit=2)
-        assert len(lowest) == 2
-        assert lowest[0]["energy_hartree"] < lowest[1]["energy_hartree"]
-
-        # Stats
-        stats = index.get_stats()
-        assert stats["total"] == 4
-        assert stats["by_status"].get("completed", 0) >= 2
-        assert stats["by_status"].get("failed", 0) >= 1
-
-        # Converged filter
-        converged = index.query({"opt_converged": True})
-        assert len(converged) == 2  # formaldehyde + ts_sn2
-
-        not_converged = index.query({"opt_converged": False})
-        assert len(not_converged) == 1  # ethane_fail
-
-        # Imaginary freq filter
-        with_imag = index.query({"has_imaginary_freq": True})
-        assert len(with_imag) == 1
-        assert with_imag[0]["formula"] == "CH4Cl"
-
-        index.close()
-
-    def test_incremental_reindex_skips_unchanged(self, tmp_path: Path) -> None:
-        kb = tmp_path / "orca_runs"
-        _write_fixture(kb, "job1", _B3LYP_OPT_FREQ_COMPLETED)
-
-        index = DFTIndex()
-        index.initialize(str(tmp_path / "dft.db"))
-
-        r1 = index.index_calculations([str(kb)])
-        assert r1["indexed"] == 1
-
-        # Add a second job, re-index
-        _write_fixture(kb, "job2", _DLPNO_SP_COMPLETED)
-        r2 = index.index_calculations([str(kb)])
-        assert r2["indexed"] == 1  # only new job
-        assert r2["skipped"] == 1  # unchanged job
-        assert r2["total"] == 2
-
-        index.close()
-
-    def test_monitor_detects_new_completed_calculation(self, tmp_path: Path) -> None:
-        """DFTMonitor detects a newly completed calculation after baseline."""
-        import os
-
-        kb = tmp_path / "orca_runs"
-        _write_fixture(kb, "job1", _B3LYP_OPT_FREQ_COMPLETED)
-
-        index = DFTIndex()
-        index.initialize(str(tmp_path / "dft.db"))
-        state_file = str(tmp_path / "state.json")
-
-        monitor = DFTMonitor(index, [str(kb)], state_file=state_file)
-
-        # Baseline scan
-        r1 = monitor.scan()
-        assert r1.baseline_seeded is True
-        assert r1.new_results == []
-
-        # Simulate a completed calculation appearing
-        job2 = _write_fixture(kb, "job2", _DLPNO_SP_COMPLETED)
-        out_path = job2 / "calc.out"
-        mtime = os.path.getmtime(out_path)
-        os.utime(out_path, (mtime + 10, mtime + 10))
-
-        r2 = monitor.scan()
-        assert len(r2.new_results) == 1
-        assert r2.new_results[0].status == "completed"
-        assert r2.new_results[0].formula == "H3N"
-
-        # Verify it was indexed
-        results = index.query({"formula": "H3N"})
-        assert len(results) == 1
-
-        index.close()
-
-    def test_comparison_query_across_methods(self, tmp_path: Path) -> None:
-        """Test get_for_comparison with formula filter."""
-        kb = tmp_path / "orca_runs"
-        _write_fixture(kb, "opt_freq", _B3LYP_OPT_FREQ_COMPLETED)
-        _write_fixture(kb, "ts", _TS_OPT_WITH_IMAGINARY)
-
-        index = DFTIndex()
-        index.initialize(str(tmp_path / "dft.db"))
-        index.index_calculations([str(kb)])
-
-        # Compare all B3LYP results sorted by energy
-        b3lyp = index.get_for_comparison(method="B3LYP")
-        assert len(b3lyp) == 2
-        assert b3lyp[0]["energy_hartree"] <= b3lyp[1]["energy_hartree"]
-
-        index.close()
+    r2 = monitor.scan()
+    assert len(r2.new_results) == 1
+    assert r2.new_results[0].status == "completed"
+    assert r2.new_results[0].formula == "H3N"

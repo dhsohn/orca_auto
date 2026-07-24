@@ -368,7 +368,7 @@ logic. Notable pieces:
   `si_block.md` (`report/si.py`), a copy-paste Supporting Information block
   with energies, thermochemistry, Nimag, and coordinates; IRC routes get a
   summary-only validation block without coordinates.
-- **Index:** `dft_index*.py` and `core/indexing` maintain a JSONL
+- **Index:** `job_locations/` and `core/indexing` maintain a JSONL
   job-location index for discovery.
 
 The fields ORCA exposes downstream (the "contract freeze") are documented in
@@ -620,7 +620,7 @@ place to add user commands.
 `scripts/check.sh` is the shared local + CI entrypoint: it creates/repairs
 `.venv`, installs `.[dev]`, then runs `ruff check`, `ruff format --check`,
 `mypy`, `lint-imports`, and the coverage-gated pytest suite. CI additionally runs Gitleaks,
-ShellCheck, rendered systemd unit verification, a Python 3.11/3.12/3.13 matrix,
+ShellCheck, a Python 3.11/3.12/3.13 matrix,
 and a wheel smoke that requires the packaged Python-module inventory to exactly match
 `src/orca_auto` with one root `py.typed` marker.
 

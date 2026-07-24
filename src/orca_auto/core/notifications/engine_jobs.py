@@ -11,11 +11,9 @@ from .engine_notifier import EngineNotifier
 from .engine_requests import (
     EngineJobFinishedRequest,
     EngineJobLifecycleRequest,
-    EngineJobTerminalRequest,
 )
 from .engine_validation import (
     _optional_int_dict,
-    _optional_lines,
     _required_int,
     _required_path,
     _required_str,
@@ -51,20 +49,6 @@ class EngineNotificationRequestFactory:
             job_dir=_required_path(values, "job_dir"),
             selected_xyz=_required_path(values, "selected_xyz"),
             detail_values=self.detail_values(values),
-        )
-
-    def terminal_request(self, values: Mapping[str, object]) -> EngineJobTerminalRequest:
-        return EngineJobTerminalRequest(
-            headline=_required_str(values, "headline"),
-            job_id=_required_str(values, "job_id"),
-            queue_id=_required_str(values, "queue_id"),
-            status=_required_str(values, "status"),
-            reason=_required_str(values, "reason"),
-            job_dir=_required_path(values, "job_dir"),
-            selected_xyz=_required_path(values, "selected_xyz"),
-            count_value=_required_int(values, self.terminal_count_param),
-            detail_values=self.detail_values(values),
-            extra_lines=_optional_lines(values, "extra_lines"),
         )
 
     def finished_request(self, values: Mapping[str, object]) -> EngineJobFinishedRequest:
@@ -118,9 +102,6 @@ class EngineJobNotifications:
             cfg,
             self.request_factory.lifecycle_request(values, "Job started"),
         )
-
-    def notify_job_terminal(self, cfg: Any, **values: object) -> bool:
-        return self.delivery.deliver_terminal(cfg, self.request_factory.terminal_request(values))
 
     def notify_job_finished(self, cfg: Any, **values: object) -> bool:
         return self.delivery.deliver_finished(cfg, self.request_factory.finished_request(values))

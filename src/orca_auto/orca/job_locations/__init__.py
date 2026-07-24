@@ -36,7 +36,6 @@ from ._contracts import (
 )
 from ._records import (
     build_job_location_record,
-    collect_reindex_payload,
     index_root_for_cfg,
     is_terminal_status,
     job_type_identifier,
@@ -44,7 +43,6 @@ from ._records import (
     molecule_key_from_selected_inp,
     normalize_molecule_key,
     record_from_artifacts,
-    reindex_job_locations,
     resolve_job_metadata,
     resolve_record_job_dir,
     resource_dict,
@@ -63,7 +61,6 @@ __all__ = [
     "JobLocationRecord",
     "JobRuntimeContext",
     "build_job_location_record",
-    "collect_reindex_payload",
     "detect_job_type",
     "first_existing_named_file",
     "get_job_location",
@@ -83,7 +80,6 @@ __all__ = [
     "normalize_molecule_key",
     "record_from_artifacts",
     "recent_file_candidates",
-    "reindex_job_locations",
     "resolve_molecule_key",
     "resolved_path_text",
     "resolve_job_location",

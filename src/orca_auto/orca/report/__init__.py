@@ -24,12 +24,11 @@ from .irc import (
     IrcReportData,
     collect_irc_report_data,
     input_uses_irc,
-    render_irc_report_html,
 )
-from .neb import NebReportData, collect_neb_report_data, render_neb_report_html
-from .opt import OptReportData, collect_opt_report_data, render_opt_report_html
-from .scants import ScantsReportData, collect_scants_report_data, render_scants_report_html
-from .sp import SpReportData, collect_sp_report_data, render_sp_report_html
+from .neb import NebReportData, collect_neb_report_data
+from .opt import OptReportData, collect_opt_report_data
+from .scants import ScantsReportData, collect_scants_report_data
+from .sp import SpReportData, collect_sp_report_data
 
 logger = logging.getLogger(__name__)
 
@@ -88,10 +87,5 @@ __all__ = [
     "compose_job_report_html",
     "input_uses_irc",
     "parse_frequency_analysis",
-    "render_irc_report_html",
-    "render_neb_report_html",
-    "render_opt_report_html",
-    "render_scants_report_html",
-    "render_sp_report_html",
     "write_job_html_report",
 ]

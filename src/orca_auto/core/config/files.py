@@ -459,7 +459,7 @@ def engine_config_mapping(
     raw: dict[str, Any],
     engine: str,
     *,
-    inherit_keys: Iterable[str] = ("behavior", "resources", "messenger"),
+    inherit_keys: Iterable[str] = ("resources", "messenger"),
 ) -> dict[str, Any]:
     if engine not in raw:
         return {}

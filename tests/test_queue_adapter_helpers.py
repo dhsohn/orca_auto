@@ -773,24 +773,6 @@ def test_mark_cancelled_requeue_cancel_and_update_terminal_cover_missing_and_wro
     assert queue_adapter.update_terminal(root, "q_terminal", QueueStatus.RUNNING.value) is False
 
 
-def test_running_state_helper_cannot_bypass_terminal_marker_writer(tmp_path: Path) -> None:
-    root = tmp_path / "queue_root"
-    root.mkdir()
-    running = _entry("q_running", str(root / "running"), QueueStatus.RUNNING.value)
-    _save_entries(root, [running])
-
-    assert (
-        queue_adapter.update_running_entry_state(
-            root,
-            running.queue_id,
-            status=QueueStatus.FAILED.value,
-            finished_at="now",
-        )
-        is False
-    )
-    assert queue_adapter.list_queue(root) == [running]
-
-
 def test_orca_adapter_mutations_never_change_foreign_engine_rows(tmp_path: Path) -> None:
     root = tmp_path / "shared_queue"
     root.mkdir()

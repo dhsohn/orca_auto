@@ -182,54 +182,11 @@ def _slot_owner_alive(slot: AdmissionSlot) -> bool:
     return False
 
 
-def _normalize_work_dir_set(work_dirs: set[str] | None) -> set[str]:
-    normalized: set[str] = set()
-    for work_dir in work_dirs or set():
-        resolved = _normalize_work_dir(work_dir)
-        if resolved:
-            normalized.add(resolved)
-    return normalized
-
-
-def _counted_slots(
-    slots: list[AdmissionSlot],
-    *,
-    exclude_work_dirs: set[str],
-) -> tuple[list[AdmissionSlot], set[str]]:
-    counted: list[AdmissionSlot] = []
-    represented_work_dirs: set[str] = set()
-    for slot in slots:
-        if slot.work_dir and slot.work_dir in exclude_work_dirs:
-            continue
-        counted.append(slot)
-        if slot.work_dir:
-            represented_work_dirs.add(slot.work_dir)
-    return counted, represented_work_dirs
-
-
 def _reservation_limit_reached(
-    resolved_root: Path,
     slots: list[AdmissionSlot],
     request: AdmissionReservationRequest,
 ) -> bool:
-    app_limit = request.app_limit
-    app_name = request.app_name.strip()
-    if app_limit is not None:
-        if type(app_limit) is not int or app_limit <= 0:
-            raise ValueError("Admission app limit must be a positive integer")
-        if not app_name:
-            raise ValueError("Admission app name is required when an app limit is configured")
-
-    excluded = _normalize_work_dir_set(request.exclude_work_dirs)
-    counted, represented_work_dirs = _counted_slots(slots, exclude_work_dirs=excluded)
-    extra_active_count = (
-        request.extra_active_count_fn(resolved_root, represented_work_dirs, excluded)
-        if request.extra_active_count_fn is not None
-        else 0
-    )
-    if len(counted) + extra_active_count >= max(1, int(request.limit)):
-        return True
-    return app_limit is not None and sum(slot.app_name == app_name for slot in counted) >= app_limit
+    return len(slots) >= max(1, int(request.limit))
 
 
 def _slot_from_reservation_request(
@@ -501,7 +458,6 @@ def reserve_slot(
     *,
     source: str,
     app_name: str = "",
-    app_limit: int | None = None,
     task_id: str = "",
     workflow_id: str = "",
     state: str = "active",
@@ -509,8 +465,6 @@ def reserve_slot(
     queue_id: str = "",
     owner_pid: int | None = None,
     engine_process_state: str = "",
-    exclude_work_dirs: set[str] | None = None,
-    extra_active_count_fn: Callable[[Path, set[str], set[str]], int] | None = None,
 ) -> str | None:
     return reserve_slot_from_request(
         root,
@@ -518,7 +472,6 @@ def reserve_slot(
             limit=limit,
             source=source,
             app_name=app_name,
-            app_limit=app_limit,
             task_id=task_id,
             workflow_id=workflow_id,
             state=state,
@@ -526,8 +479,6 @@ def reserve_slot(
             queue_id=queue_id,
             owner_pid=owner_pid,
             engine_process_state=engine_process_state,
-            exclude_work_dirs=exclude_work_dirs,
-            extra_active_count_fn=extra_active_count_fn,
         ),
     )
 
@@ -539,7 +490,7 @@ def reserve_slot_from_request(
     store = AdmissionStore.for_root(root)
 
     def reserve(slots: list[AdmissionSlot]) -> tuple[str | None, bool]:
-        if _reservation_limit_reached(store.root, slots, request):
+        if _reservation_limit_reached(slots, request):
             return None, True
         occupied_tokens = {slot.token for slot in slots}
         token = ""
@@ -558,44 +509,6 @@ def reserve_slot_from_request(
         return slot.token, True
 
     return store.mutate_live_slots(reserve)
-
-
-def reserve_slot_or_raise(
-    root: str | Path,
-    limit: int,
-    *,
-    source: str,
-    app_name: str = "",
-    app_limit: int | None = None,
-    task_id: str = "",
-    workflow_id: str = "",
-    state: str = "active",
-    work_dir: str | Path = "",
-    queue_id: str = "",
-    owner_pid: int | None = None,
-    engine_process_state: str = "",
-    exclude_work_dirs: set[str] | None = None,
-    extra_active_count_fn: Callable[[Path, set[str], set[str]], int] | None = None,
-) -> str:
-    token = reserve_slot(
-        root,
-        limit,
-        source=source,
-        app_name=app_name,
-        app_limit=app_limit,
-        task_id=task_id,
-        workflow_id=workflow_id,
-        state=state,
-        work_dir=work_dir,
-        queue_id=queue_id,
-        owner_pid=owner_pid,
-        engine_process_state=engine_process_state,
-        exclude_work_dirs=exclude_work_dirs,
-        extra_active_count_fn=extra_active_count_fn,
-    )
-    if token is None:
-        raise AdmissionLimitReachedError(f"Admission limit reached (limit={max(1, int(limit))})")
-    return token
 
 
 def activate_reserved_slot(

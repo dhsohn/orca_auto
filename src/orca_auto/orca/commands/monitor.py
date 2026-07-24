@@ -8,7 +8,6 @@ from typing import Any
 from orca_auto.core.messaging import build_channel
 
 from ..config import AppConfig, load_config
-from ..dft.index import DFTIndex
 from ..dft.monitor import DFTMonitor
 from ..notifications import has_monitor_updates, notify_monitor_report
 from ._helpers import _to_resolved_local
@@ -16,7 +15,6 @@ from ._helpers import _to_resolved_local
 logger = logging.getLogger(__name__)
 
 _STATE_FILE = ".dft_monitor_state.json"
-_DFT_DB = "dft.db"
 
 
 def _run_monitor(cfg: AppConfig) -> int:
@@ -31,11 +29,7 @@ def _run_monitor(cfg: AppConfig) -> int:
         return 1
 
     state_file = str(allowed_root / _STATE_FILE)
-    db_path = str(allowed_root / _DFT_DB)
-    dft_index = DFTIndex()
-    dft_index.initialize(db_path)
     monitor = DFTMonitor(
-        dft_index=dft_index,
         kb_dirs=[str(allowed_root)],
         state_file=state_file,
     )

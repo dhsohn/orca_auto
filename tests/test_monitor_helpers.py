@@ -92,7 +92,6 @@ def test_run_monitor_returns_one_when_notification_fails(tmp_path: Path) -> None
     )
 
     with (
-        patch("orca_auto.orca.commands.monitor.DFTIndex") as index_cls,
         patch(
             "orca_auto.orca.commands.monitor.DFTMonitor",
             return_value=fake_monitor,
@@ -107,8 +106,6 @@ def test_run_monitor_returns_one_when_notification_fails(tmp_path: Path) -> None
         ),
     ):
         assert monitor._run_monitor(cfg) == 1
-
-    index_cls.return_value.initialize.assert_called_once_with(str(allowed_root / "dft.db"))
 
 
 def test_cmd_monitor_returns_status_for_loaded_config(tmp_path: Path) -> None:

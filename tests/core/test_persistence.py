@@ -54,18 +54,6 @@ def test_coerce_int(value: Any, default: int, expected: int) -> None:
 
 
 @pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        ("12", 12),
-        ("oops", None),
-        (None, None),
-    ],
-)
-def test_coerce_optional_int(value: Any, expected: int | None) -> None:
-    assert persistence.coerce_optional_int(value) == expected
-
-
-@pytest.mark.parametrize(
     ("value", "default", "expected"),
     [
         (True, False, True),

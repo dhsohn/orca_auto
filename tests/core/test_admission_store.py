@@ -294,17 +294,6 @@ def test_slot_owner_alive_handles_non_positive_pid_and_missing_process_start_tic
     )
 
 
-def test_reserve_slot_or_raise_returns_token_when_capacity_is_available(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _patch_deterministic_liveness(monkeypatch)
-
-    token = store.reserve_slot_or_raise(tmp_path, 1, source="queue-1")
-
-    assert token == "slot_fixed"
-    assert store.active_slot_count(tmp_path) == 1
-
-
 def test_activate_reserved_slot_returns_none_when_token_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -393,7 +382,7 @@ def test_read_active_slot_count_does_not_prune_or_rewrite(
     assert path.read_bytes() == before
 
 
-def test_reserve_slot_honors_capacity_limit_and_raise_variant(
+def test_reserve_slot_honors_capacity_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _patch_deterministic_liveness(monkeypatch)
@@ -405,112 +394,8 @@ def test_reserve_slot_honors_capacity_limit_and_raise_variant(
     assert second is None
     assert store.active_slot_count(tmp_path) == 1
     monkeypatch.setattr(store, "timestamped_token", lambda prefix: f"{prefix}_second")
-    assert store.reserve_slot_or_raise(tmp_path, 2, source="queue-4") == "slot_second"
-    with pytest.raises(store.AdmissionLimitReachedError):
-        store.reserve_slot_or_raise(tmp_path, 1, source="queue-3")
-
-
-def test_reserve_slot_honors_same_app_limit_while_allowing_other_apps(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_deterministic_liveness(monkeypatch)
-    tokens = iter(("slot_app_a", "slot_app_b"))
-    monkeypatch.setattr(store, "timestamped_token", lambda _prefix: next(tokens))
-
-    first = store.reserve_slot_or_raise(
-        tmp_path,
-        3,
-        source="queue-a",
-        app_name="app-a",
-        app_limit=1,
-    )
-    with pytest.raises(store.AdmissionLimitReachedError):
-        store.reserve_slot_or_raise(
-            tmp_path,
-            3,
-            source="queue-a-2",
-            app_name="app-a",
-            app_limit=1,
-        )
-    second = store.reserve_slot(
-        tmp_path,
-        3,
-        source="queue-b",
-        app_name="app-b",
-        app_limit=1,
-    )
-
-    assert (first, second) == ("slot_app_a", "slot_app_b")
-    assert [slot.app_name for slot in store.list_all_slots(tmp_path)] == ["app-a", "app-b"]
-
-
-def test_reserve_slot_global_limit_still_applies_across_apps(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_deterministic_liveness(monkeypatch)
-    tokens = iter(("slot_app_a", "slot_app_b"))
-    monkeypatch.setattr(store, "timestamped_token", lambda _prefix: next(tokens))
-
-    assert (
-        store.reserve_slot(
-            tmp_path,
-            2,
-            source="queue-a",
-            app_name="app-a",
-            app_limit=5,
-        )
-        == "slot_app_a"
-    )
-    assert (
-        store.reserve_slot(
-            tmp_path,
-            2,
-            source="queue-b",
-            app_name="app-b",
-            app_limit=5,
-        )
-        == "slot_app_b"
-    )
-    assert (
-        store.reserve_slot(
-            tmp_path,
-            2,
-            source="queue-c",
-            app_name="app-c",
-            app_limit=5,
-        )
-        is None
-    )
-
-
-@pytest.mark.parametrize("app_limit", [0, -1, True])
-def test_reserve_slot_rejects_invalid_app_limit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    app_limit: int,
-) -> None:
-    _patch_deterministic_liveness(monkeypatch)
-
-    with pytest.raises(ValueError, match="app limit must be a positive integer"):
-        store.reserve_slot(
-            tmp_path,
-            2,
-            source="queue-a",
-            app_name="app-a",
-            app_limit=app_limit,
-        )
-
-
-def test_reserve_slot_requires_app_name_for_app_limit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_deterministic_liveness(monkeypatch)
-
-    with pytest.raises(ValueError, match="app name is required"):
-        store.reserve_slot(tmp_path, 2, source="queue-a", app_limit=1)
+    assert store.reserve_slot(tmp_path, 2, source="queue-4") == "slot_second"
+    assert store.reserve_slot(tmp_path, 1, source="queue-3") is None
 
 
 def test_reserve_slot_retries_collision_and_mutates_only_selected_owner(

@@ -171,49 +171,9 @@ def attach_started_process_metadata(
     return True
 
 
-def finalize_start_error_as_terminal_result(
-    cfg: Any,
-    *,
-    queue_root: Path,
-    entry: Any,
-    admission_token: str,
-    exc: OSError,
-    release_admission_slot_fn: Callable[[str], Any],
-    build_terminal_result_fn: Callable[..., Any],
-    finalize_execution_result_fn: Callable[..., Any],
-    job_dir_fn: Callable[[Any], Path],
-    selected_xyz_fn: Callable[[Any], Path],
-    job_type_fn: Callable[[Any], str],
-    reaction_key_fn: Callable[[Any, Path], str],
-    input_summary_fn: Callable[[Any], dict[str, Any]],
-    entry_resource_request_fn: Callable[[Any, Any], dict[str, int]],
-) -> None:
-    release_admission_slot_fn(admission_token)
-    job_dir = job_dir_fn(entry)
-    failure = build_terminal_result_fn(
-        entry,
-        job_dir=job_dir,
-        selected_xyz=selected_xyz_fn(entry),
-        job_type=job_type_fn(entry),
-        reaction_key=reaction_key_fn(entry, job_dir),
-        input_summary=input_summary_fn(entry),
-        resource_request=entry_resource_request_fn(cfg, entry),
-        status="failed",
-        reason=f"worker_start_error:{exc}",
-    )
-    finalize_execution_result_fn(
-        cfg,
-        queue_root=queue_root,
-        entry=entry,
-        result=failure,
-        emit_output=True,
-    )
-
-
 __all__ = [
     "attach_started_process",
     "attach_started_process_metadata",
-    "finalize_start_error_as_terminal_result",
     "mark_worker_start_error",
     "queue_entry_work_dir",
     "reserve_engine_admission_slot",

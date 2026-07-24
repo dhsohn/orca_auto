@@ -10,6 +10,19 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Removed
 
+- Removed the write-only DFT SQLite index (`dft.db`). The `scan-notify` monitor
+  keeps its own change-detection state file and its notifications are
+  unchanged; nothing read the database, so it is no longer created or updated.
+- Removed dead internal surfaces with no remaining callers: the ORCA
+  job-location reindex chain, the five standalone per-job-type HTML page
+  renderers superseded by the report composer, unused queue-adapter and
+  admission entry points (`reserve_slot_or_raise`, per-app admission limits,
+  work-dir exclusion hooks), the unused messenger `silent`/multi-message
+  result fields and `code_block` span, the unreachable engine terminal
+  notification entry points, and assorted dead helpers in `core.state`,
+  `core.queue`, and `core.config`. None of these were reachable from the CLI,
+  the workers, or the documented contracts.
+
 - Removed the `orca_auto smoke` CLI command and the `orca_auto.smoke` package
   behind it, retiring the retained smoke-review harness and its packets. This is
   a public-contract change.

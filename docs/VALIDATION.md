@@ -18,7 +18,6 @@ The GitHub Actions workflow runs multiple independent checks:
 
 - Gitleaks secret scanning.
 - ShellCheck for repository shell scripts.
-- Rendered systemd unit verification.
 - Python 3.11, 3.12, and 3.13 checks through `scripts/check.sh`.
 - Ruff, Ruff format check, mypy, and coverage-gated pytest.
 - Wheel smoke check that requires the packaged Python-module inventory to

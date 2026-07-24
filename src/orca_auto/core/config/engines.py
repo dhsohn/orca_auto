@@ -206,7 +206,6 @@ def scheduler_runtime_settings(
     default_max_active: int,
     default_admission_root: str,
     admission_limit_enabled: bool,
-    reject_nonpositive: bool = False,
 ) -> SchedulerRuntimeSettings:
     if "max_active_simulations" in scheduler_raw:
         raw_max_active = explicit_positive_int(
@@ -215,8 +214,6 @@ def scheduler_runtime_settings(
         )
     else:
         raw_max_active = default_max_active
-    if reject_nonpositive and raw_max_active < 1:
-        raise ValueError("scheduler.max_active_simulations must be an integer >= 1.")
     max_active = max(1, raw_max_active)
     if "admission_root" in scheduler_raw:
         admission_root = validated_absolute_linux_path_text(
@@ -242,8 +239,6 @@ def _required_workflow_root(raw: dict[str, Any], path: Path) -> str:
 def _runtime_config_from_scheduler(
     scheduler_raw: dict[str, Any],
     workflow_root: str,
-    *,
-    engine_admission_limit: int | None = None,
 ) -> CommonRuntimeConfig:
     scheduler = scheduler_runtime_settings(
         scheduler_raw,
@@ -256,7 +251,6 @@ def _runtime_config_from_scheduler(
         max_concurrent=scheduler.max_active,
         admission_root=scheduler.admission_root,
         admission_limit=scheduler.admission_limit,
-        engine_admission_limit=engine_admission_limit,
     )
 
 
@@ -273,10 +267,6 @@ def resource_config_from_mapping(resources_raw: dict[str, Any]) -> CommonResourc
         max_cores_per_task=configured_positive_int("max_cores_per_task", 8),
         max_memory_gb_per_task=configured_positive_int("max_memory_gb_per_task", 32),
     )
-
-
-def _resource_config(resources_raw: dict[str, Any]) -> CommonResourceConfig:
-    return resource_config_from_mapping(resources_raw)
 
 
 def _validate_workflow_engine_executable(
@@ -333,7 +323,7 @@ def load_workflow_engine_config(
         runtime=_runtime_config_from_scheduler(scheduler_raw, workflow_root),
         workflow_root=workflow_root,
         paths=WorkflowEnginePathsConfig(**executable_values),
-        resources=_resource_config(resources_raw),
+        resources=resource_config_from_mapping(resources_raw),
         scratch=scratch_config_from_runtime_mapping(orca_runtime_raw),
         messenger=messenger,
     )

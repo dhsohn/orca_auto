@@ -513,20 +513,6 @@ def reserve_input_snapshot_namespace(job_dir: str | Path, namespace: str) -> Pat
     return namespace_dir.resolve()
 
 
-def input_snapshot_namespace_dir(job_dir: str | Path, namespace: str) -> Path:
-    """Return one existing, confined snapshot generation namespace."""
-
-    resolved_job_dir = Path(job_dir).expanduser().resolve()
-    snapshot_root = _ensure_snapshot_root(resolved_job_dir)
-    namespace_dir = snapshot_root / canonical_input_snapshot_namespace(namespace)
-    if namespace_dir.is_symlink():
-        raise ValueError(f"Input snapshot namespace must not be a symlink: {namespace_dir}")
-    resolved_namespace = namespace_dir.resolve()
-    if not namespace_dir.is_dir() or resolved_namespace.parent != snapshot_root.resolve():
-        raise ValueError(f"Input snapshot namespace is not a confined directory: {namespace_dir}")
-    return resolved_namespace
-
-
 def snapshot_input_file(
     job_dir: str | Path,
     source: str | Path,
@@ -721,7 +707,6 @@ __all__ = [
     "canonical_input_snapshot_namespace",
     "cleanup_unowned_direct_generation_directory",
     "cleanup_unowned_input_snapshot_namespace",
-    "input_snapshot_namespace_dir",
     "read_stable_regular_file",
     "reserve_input_snapshot_namespace",
     "snapshot_input_file",

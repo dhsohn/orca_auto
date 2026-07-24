@@ -150,23 +150,6 @@ def test_load_config_reads_and_normalizes_all_sections(
     assert cfg.messenger.discord.default_channel_id == "4567"
 
 
-def test_load_config_rejects_legacy_top_level_telegram(tmp_path: Path) -> None:
-    workflow_root = tmp_path / "workflow_root"
-    workflow_root.mkdir()
-    config_path = _write_config(
-        tmp_path / "orca_auto.yaml",
-        f"""
-        runs_root: {workflow_root}
-        telegram:
-          bot_token: legacy-token
-          chat_id: legacy-chat
-        """,
-    )
-
-    with pytest.raises(ValueError, match="no longer supported"):
-        config_mod.load_crest_config(str(config_path))
-
-
 def test_load_config_no_longer_supports_top_level_runtime_and_paths_shape(tmp_path: Path) -> None:
     config_path = _write_config(
         tmp_path / "orca_auto.yaml",
@@ -219,22 +202,6 @@ def test_load_config_applies_defaults_for_missing_optional_sections(
     assert cfg.resources.max_memory_gb_per_task == 32
     assert cfg.messenger.discord.bot_token == ""
     assert cfg.messenger.discord.default_channel_id == ""
-
-
-def test_load_config_rejects_removed_behavior_section(tmp_path: Path) -> None:
-    workflow_root = tmp_path / "workflow_root"
-    workflow_root.mkdir()
-    config_path = _write_config(
-        tmp_path / "orca_auto.yaml",
-        f"""
-        runs_root: {workflow_root}
-        behavior:
-          auto_organize_on_terminal: yes
-        """,
-    )
-
-    with pytest.raises(ValueError, match="Unknown top-level config fields are not supported"):
-        config_mod.load_crest_config(str(config_path))
 
 
 @pytest.mark.parametrize("value", [0, -1, "bad", True])

@@ -16,7 +16,6 @@ _XTB_JOB_NOTIFICATIONS = build_engine_job_notifications(
 
 notify_xtb_job_queued = _XTB_JOB_NOTIFICATIONS.notify_job_queued
 notify_xtb_job_started = _XTB_JOB_NOTIFICATIONS.notify_job_started
-notify_xtb_job_terminal = _XTB_JOB_NOTIFICATIONS.notify_job_terminal
 notify_xtb_job_finished = _XTB_JOB_NOTIFICATIONS.notify_job_finished
 
 _CREST_JOB_NOTIFICATIONS = build_engine_job_notifications(
@@ -30,7 +29,6 @@ _CREST_JOB_NOTIFICATIONS = build_engine_job_notifications(
 
 notify_crest_job_queued = _CREST_JOB_NOTIFICATIONS.notify_job_queued
 notify_crest_job_started = _CREST_JOB_NOTIFICATIONS.notify_job_started
-notify_crest_job_terminal = _CREST_JOB_NOTIFICATIONS.notify_job_terminal
 notify_crest_job_finished = _CREST_JOB_NOTIFICATIONS.notify_job_finished
 
 
@@ -41,9 +39,7 @@ __all__ = [
     "notify_crest_job_finished",
     "notify_crest_job_queued",
     "notify_crest_job_started",
-    "notify_crest_job_terminal",
     "notify_xtb_job_finished",
     "notify_xtb_job_queued",
     "notify_xtb_job_started",
-    "notify_xtb_job_terminal",
 ]

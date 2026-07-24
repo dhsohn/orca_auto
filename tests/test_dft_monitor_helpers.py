@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -186,7 +186,7 @@ def test_scan_warns_for_missing_kb_dir(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monitor = DFTMonitor(MagicMock(), [str(tmp_path / "missing-kb")])
+    monitor = DFTMonitor([str(tmp_path / "missing-kb")])
     monitor._baseline_seeded = True
 
     with caplog.at_level(logging.WARNING):
@@ -199,8 +199,7 @@ def test_scan_warns_for_missing_kb_dir(
 
 def test_scan_records_parse_failure_for_changed_target(tmp_path: Path) -> None:
     out_file = _write_output(tmp_path, "a/b/c/calc.out")
-    index = MagicMock()
-    monitor = DFTMonitor(index, [str(tmp_path)])
+    monitor = DFTMonitor([str(tmp_path)])
     monitor._baseline_seeded = True
 
     with patch(
@@ -216,13 +215,11 @@ def test_scan_records_parse_failure_for_changed_target(tmp_path: Path) -> None:
     assert report.failures[0].error == "boom"
     assert report.failures[0].error_type == "ValueError"
     assert report.failures[0].path == _short_path(_canonical_path_key(out_file))
-    index.upsert_single.assert_not_called()
 
 
 def test_scan_skips_targets_with_missing_file_signature(tmp_path: Path) -> None:
     missing_file = tmp_path / "missing.out"
-    index = MagicMock()
-    monitor = DFTMonitor(index, [str(tmp_path)])
+    monitor = DFTMonitor([str(tmp_path)])
     monitor._baseline_seeded = True
 
     with patch(
@@ -238,13 +235,11 @@ def test_scan_skips_targets_with_missing_file_signature(tmp_path: Path) -> None:
     assert report.new_results == []
     assert report.failures == []
     parse_mock.assert_not_called()
-    index.upsert_single.assert_not_called()
 
 
 def test_scan_suppresses_duplicate_canonical_target_after_parse_failure(tmp_path: Path) -> None:
     out_file = _write_output(tmp_path, "dupe/calc.out")
-    index = MagicMock()
-    monitor = DFTMonitor(index, [str(tmp_path)])
+    monitor = DFTMonitor([str(tmp_path)])
     monitor._baseline_seeded = True
 
     with patch(
@@ -261,13 +256,11 @@ def test_scan_suppresses_duplicate_canonical_target_after_parse_failure(tmp_path
 
     assert len(report.failures) == 1
     assert parse_mock.call_count == 1
-    index.upsert_single.assert_not_called()
 
 
-def test_scan_running_result_updates_cache_without_upsert(tmp_path: Path) -> None:
+def test_scan_running_result_updates_cache(tmp_path: Path) -> None:
     out_file = _write_output(tmp_path, "running.out")
-    index = MagicMock()
-    monitor = DFTMonitor(index, [str(tmp_path)])
+    monitor = DFTMonitor([str(tmp_path)])
     monitor._baseline_seeded = True
 
     with patch(
@@ -292,14 +285,11 @@ def test_scan_running_result_updates_cache_without_upsert(tmp_path: Path) -> Non
     assert report.new_results[0].status == "running"
     assert report.new_results[0].note == " (NOT CONVERGED, imaginary freq)"
     assert monitor._last_seen[canonical] == _signature(out_file, "running")
-    index.upsert_single.assert_not_called()
 
 
 def test_scan_failed_run_state_overrides_completed_parser_status(tmp_path: Path) -> None:
     out_file = _write_output(tmp_path, "failed/calc.out")
-    index = MagicMock()
-    index.upsert_single.return_value = True
-    monitor = DFTMonitor(index, [str(tmp_path)])
+    monitor = DFTMonitor([str(tmp_path)])
     monitor._baseline_seeded = True
 
     with patch(
@@ -319,14 +309,11 @@ def test_scan_failed_run_state_overrides_completed_parser_status(tmp_path: Path)
 
     assert len(report.new_results) == 1
     assert report.new_results[0].status == "failed"
-    index.upsert_single.assert_called_once_with(str(out_file), status_override="failed")
 
 
 def test_scan_detects_run_state_only_transition_without_file_change(tmp_path: Path) -> None:
     out_file = _write_output(tmp_path, "transition/calc.out")
-    index = MagicMock()
-    index.upsert_single.return_value = True
-    monitor = DFTMonitor(index, [str(tmp_path)])
+    monitor = DFTMonitor([str(tmp_path)])
     monitor._baseline_seeded = True
 
     with patch(
@@ -346,7 +333,6 @@ def test_scan_detects_run_state_only_transition_without_file_change(tmp_path: Pa
 
     assert len(running_report.new_results) == 1
     assert running_report.new_results[0].status == "running"
-    index.upsert_single.assert_not_called()
 
     with patch(
         "orca_auto.orca.dft.monitor.discover_orca_targets",
@@ -365,14 +351,12 @@ def test_scan_detects_run_state_only_transition_without_file_change(tmp_path: Pa
 
     assert len(failed_report.new_results) == 1
     assert failed_report.new_results[0].status == "failed"
-    index.upsert_single.assert_called_once_with(str(out_file), status_override="failed")
 
 
 def test_scan_seeds_baseline_without_parsing_on_first_run(tmp_path: Path) -> None:
     out_file = _write_output(tmp_path, "baseline/calc.out")
     state_file = tmp_path / "automation" / "state.json"
-    index = MagicMock()
-    monitor = DFTMonitor(index, [str(tmp_path)], state_file=str(state_file))
+    monitor = DFTMonitor([str(tmp_path)], state_file=str(state_file))
 
     with patch(
         "orca_auto.orca.dft.monitor.discover_orca_targets",
@@ -389,7 +373,6 @@ def test_scan_seeds_baseline_without_parsing_on_first_run(tmp_path: Path) -> Non
     assert report.scanned_files == 1
     assert monitor._last_seen[canonical] == _signature(out_file, "completed")
     parse_mock.assert_not_called()
-    index.upsert_single.assert_not_called()
     save_mock.assert_called_once_with(str(state_file), monitor._last_seen)
 
 
@@ -398,8 +381,7 @@ def test_scan_removes_stale_paths_and_saves_state(tmp_path: Path) -> None:
     live_canonical = _canonical_path_key(out_file)
     stale_canonical = str(tmp_path / "stale" / "old.out")
     state_file = tmp_path / "automation" / "state.json"
-    index = MagicMock()
-    monitor = DFTMonitor(index, [str(tmp_path)], state_file=str(state_file))
+    monitor = DFTMonitor([str(tmp_path)], state_file=str(state_file))
     monitor._baseline_seeded = True
     monitor._last_seen = {
         live_canonical: _signature(out_file, "completed"),
@@ -420,26 +402,3 @@ def test_scan_removes_stale_paths_and_saves_state(tmp_path: Path) -> None:
     assert stale_canonical not in monitor._last_seen
     parse_mock.assert_not_called()
     save_mock.assert_called_once_with(str(state_file), monitor._last_seen)
-
-
-def test_scan_skips_completed_result_when_upsert_fails(tmp_path: Path) -> None:
-    out_file = _write_output(tmp_path, "failed-upsert/calc.out")
-    index = MagicMock()
-    index.upsert_single.return_value = False
-    monitor = DFTMonitor(index, [str(tmp_path)])
-    monitor._baseline_seeded = True
-
-    with patch(
-        "orca_auto.orca.dft.monitor.discover_orca_targets",
-        return_value=[
-            DiscoveredTarget(path=out_file, run_state_status="completed"),
-        ],
-    ):
-        with patch(
-            "orca_auto.orca.dft.monitor.parse_orca_output", return_value=_parsed_result(out_file)
-        ):
-            report = monitor.scan()
-
-    assert report.new_results == []
-    assert _canonical_path_key(out_file) not in monitor._last_seen
-    index.upsert_single.assert_called_once_with(str(out_file), status_override="completed")

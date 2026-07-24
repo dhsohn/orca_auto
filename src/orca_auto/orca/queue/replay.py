@@ -99,10 +99,6 @@ def terminate_process(process: Any) -> bool:
     return terminate_process_group(process)
 
 
-class TerminalReplaySupersededError(RuntimeError):
-    pass
-
-
 @dataclass(frozen=True)
 class ReactionGenerationRow:
     owner: tuple[str, str]
@@ -1035,7 +1031,7 @@ def _load_state_for_terminal_generation(
     if state is None:
         current_fingerprint = StateGenerationFingerprint(present=False, readable=True)
         if observed_state is not None and current_fingerprint != observed_state:
-            raise TerminalReplaySupersededError(
+            raise RuntimeError(
                 "ORCA terminal replay state disappeared after its queue mark: "
                 f"job_dir={job_dir} expected_job_id={expected_job_id}"
             )
@@ -1053,7 +1049,7 @@ def _load_state_for_terminal_generation(
             and observed_state.job_id != expected_job_id
             and existing_terminal_status is None
         ):
-            raise TerminalReplaySupersededError(
+            raise RuntimeError(
                 "ORCA terminal replay observed a new run for the expected task "
                 "after marking a different state generation: "
                 f"job_dir={job_dir} expected_job_id={expected_job_id} "
@@ -1067,7 +1063,7 @@ def _load_state_for_terminal_generation(
             and str(state.get("run_id") or "").strip()
             and str(state.get("run_id") or "").strip() != observed_state.run_id
         ):
-            raise TerminalReplaySupersededError(
+            raise RuntimeError(
                 "ORCA terminal replay observed a newer run for the same task: "
                 f"job_dir={job_dir} expected_job_id={expected_job_id}"
             )
@@ -1082,13 +1078,13 @@ def _load_state_for_terminal_generation(
             terminal_status=existing_terminal_status or "",
         )
         if current_fingerprint != observed_state:
-            raise TerminalReplaySupersededError(
+            raise RuntimeError(
                 "ORCA terminal replay was superseded by another state generation: "
                 f"job_dir={job_dir} expected_job_id={expected_job_id} "
                 f"state_job_id={state_job_id or '<missing>'}"
             )
         if state_job_id and state_job_id != expected_job_id and not existing_terminal_status:
-            raise TerminalReplaySupersededError(
+            raise RuntimeError(
                 "ORCA terminal replay observed another active state generation: "
                 f"job_dir={job_dir} expected_job_id={expected_job_id} "
                 f"state_job_id={state_job_id}"
@@ -1239,7 +1235,6 @@ def record_failed_run_state(
 __all__ = [
     "OrcaWorkerReplayState",
     "RunningJob",
-    "TerminalReplaySupersededError",
     "finalize_child_exit",
     "finalize_completed_job",
     "handle_worker_start_error",
