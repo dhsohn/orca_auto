@@ -9,7 +9,6 @@ from orca_auto.core.config import CommonRuntimeConfig, DiscordConfig, MessengerC
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 from orca_auto.core.messaging import Message, SendResult, render_discord_embed
 from orca_auto.core.messaging.richtext import Line
-from orca_auto.core.notifications import _engine_transport
 from orca_auto.core.notifications import engines as notifications
 
 
@@ -67,7 +66,7 @@ def _patch_transport(
         build_calls.append(messenger)
         return FakeChannel()
 
-    monkeypatch.setattr(_engine_transport, "build_channel", fake_build)
+    monkeypatch.setattr(notifications, "build_channel", fake_build)
     return build_calls, messages, documents
 
 
