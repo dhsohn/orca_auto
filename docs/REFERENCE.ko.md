@@ -115,11 +115,8 @@ bash scripts/bootstrap_wsl.sh
 
 설정 파일: `<project_root>/config/orca_auto.yaml`
 
-검색 순서:
-
-1. `ORCA_AUTO_CONFIG`
-2. `<project_root>/config/orca_auto.yaml`
-3. `~/orca_auto/config/orca_auto.yaml`
+설정 탐색 순서는 [설정 계약](PUBLIC_CONTRACTS.ko.md#설정-계약)에
+명세되어 있습니다.
 
 ```yaml
 runs_root: "/path/to/orca_runs"
