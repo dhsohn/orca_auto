@@ -113,11 +113,8 @@ Add `--config <path>` only when you want to override default config discovery.
 
 Configuration file: `<project_root>/config/orca_auto.yaml`
 
-Search order:
-
-1. `ORCA_AUTO_CONFIG`
-2. `<project_root>/config/orca_auto.yaml`
-3. `~/orca_auto/config/orca_auto.yaml`
+The config discovery order is specified in the
+[Config Contract](PUBLIC_CONTRACTS.md#config-contract).
 
 ```yaml
 runs_root: "/path/to/orca_runs"
