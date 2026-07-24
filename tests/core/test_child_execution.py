@@ -5,7 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from orca_auto.core.queue.child import entrypoint as child_entrypoint
 from orca_auto.core.queue.child import execution as child_execution
 
 
@@ -58,8 +57,8 @@ def test_build_queue_entry_lookup_reuses_lister_and_optional_path_coercion(
     assert seen_roots == [tmp_path]
 
 
-def test_load_child_queue_job_resolves_paths_and_entry(tmp_path: Path) -> None:
-    cfg = SimpleNamespace(name="cfg")
+def test_load_child_worker_entrypoint_job_resolves_paths_and_entry(tmp_path: Path) -> None:
+    cfg = SimpleNamespace(name="cfg", admission_root=tmp_path / "admission")
     entry = SimpleNamespace(queue_id="q-wanted", status="running")
     seen_roots: list[Path] = []
 
@@ -67,114 +66,58 @@ def test_load_child_queue_job_resolves_paths_and_entry(tmp_path: Path) -> None:
         seen_roots.append(root)
         return entry
 
-    job = child_execution.load_child_queue_job(
+    job = child_execution.load_child_worker_entrypoint_job(
         config_path="/tmp/orca_auto.yaml",
         queue_root=tmp_path / "queue",
         queue_id="q-wanted",
         load_config_fn=lambda _path: cfg,
         find_queue_entry_fn=find_entry,
+        admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
         entry_ready_fn=lambda item: item.status == "running",
     )
 
-    assert job == child_execution.ChildQueueJob(
-        cfg=cfg,
-        queue_root=(tmp_path / "queue").resolve(),
-        entry=entry,
-    )
+    assert job is not None
+    assert job.cfg is cfg
+    assert job.queue_root == (tmp_path / "queue").resolve()
+    assert job.entry is entry
+    assert job.admission_root() == tmp_path / "admission"
     assert seen_roots == [(tmp_path / "queue").resolve()]
 
 
-def test_load_child_queue_job_releases_admission_when_entry_is_missing(tmp_path: Path) -> None:
+def test_load_child_worker_entrypoint_job_returns_none_when_entry_is_missing(
+    tmp_path: Path,
+) -> None:
     cfg = SimpleNamespace(admission_root=tmp_path / "admission")
-    released: list[tuple[Path, str]] = []
 
-    job = child_execution.load_child_queue_job(
+    job = child_execution.load_child_worker_entrypoint_job(
         config_path="/tmp/orca_auto.yaml",
         queue_root=tmp_path / "queue",
         queue_id="missing",
         load_config_fn=lambda _path: cfg,
         find_queue_entry_fn=lambda _root, _queue_id: None,
-        admission_token="slot-1",
         admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
-        release_slot_fn=lambda root, token: released.append((Path(root), token)),
     )
 
     assert job is None
-    assert released == []
 
 
-def test_child_admission_token_activation_and_release_are_conditional(tmp_path: Path) -> None:
-    calls: list[tuple[str, str]] = []
-
-    assert (
-        child_execution.activate_child_admission_token(
-            tmp_path,
-            None,
-            work_dir=tmp_path / "work",
-            queue_id="q-1",
-            source="source",
-            activate_reserved_slot_fn=lambda *_args, **_kwargs: calls.append(("activate", "none")),
-        )
-        is True
-    )
-    assert calls == []
-
-    assert (
-        child_execution.activate_child_admission_token(
-            tmp_path,
-            "token",
-            work_dir=tmp_path / "work",
-            queue_id="q-1",
-            source="source",
-            activate_reserved_slot_fn=lambda *_args, **_kwargs: "slot",
-        )
-        is True
-    )
-    assert (
-        child_execution.activate_child_admission_token(
-            tmp_path,
-            "token",
-            work_dir=tmp_path / "work",
-            queue_id="q-1",
-            source="source",
-            activate_reserved_slot_fn=lambda *_args, **_kwargs: None,
-        )
-        is False
-    )
-
-    child_execution.release_child_admission_token(
-        tmp_path,
-        None,
-        release_slot_fn=lambda *_args: calls.append(("release", "none")),
-    )
-    assert calls == []
-
-    child_execution.release_child_admission_token(
-        tmp_path,
-        "token",
-        release_slot_fn=lambda _root, token: calls.append(("release", token)),
-    )
-    assert calls == [("release", "token")]
-
-
-def test_child_worker_admission_scope_releases_on_exit(tmp_path: Path) -> None:
+def test_load_child_worker_entrypoint_job_returns_none_when_entry_is_not_ready(
+    tmp_path: Path,
+) -> None:
     cfg = SimpleNamespace(admission_root=tmp_path / "admission")
-    job = child_entrypoint.ChildWorkerEntrypointJob(
-        cfg=cfg,
+    entry = SimpleNamespace(queue_id="q-wanted", status="pending")
+
+    job = child_execution.load_child_worker_entrypoint_job(
+        config_path="/tmp/orca_auto.yaml",
         queue_root=tmp_path / "queue",
-        entry=SimpleNamespace(queue_id="q-1"),
-        _admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
+        queue_id="q-wanted",
+        load_config_fn=lambda _path: cfg,
+        find_queue_entry_fn=lambda _root, _queue_id: entry,
+        admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
+        entry_ready_fn=lambda item: item.status == "running",
     )
-    released: list[tuple[Path, str]] = []
 
-    with child_entrypoint.child_worker_admission_scope(
-        job,
-        "slot-1",
-        release_slot_fn=lambda root, token: released.append((Path(root), token)),
-    ):
-        assert released == []
-
-    assert released == []
+    assert job is None
 
 
 def test_install_shutdown_request_handlers_wires_controller() -> None:

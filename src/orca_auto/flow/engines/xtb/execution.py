@@ -267,8 +267,6 @@ def _worker_execution_default_factories() -> dict[str, Callable[[], Any]]:
             _worker_process_factory_callbacks(),
             config_factory=_default_config_dependencies,
             admission_factory=_default_admission_dependencies,
-            timing_dependencies_type=WorkerTimingDependencies,
-            queue_dependencies_type=WorkerQueueDependencies,
             runner_dependencies_type=WorkerRunnerDependencies,
             cancel_check_interval_seconds=CANCEL_CHECK_INTERVAL_SECONDS,
         ),
@@ -745,22 +743,6 @@ def _worker_execution_spec(
     )
 
 
-def build_worker_adapter(
-    *,
-    dependencies: WorkerExecutionDependencies,
-    should_cancel_factory: Callable[
-        [Path, _XtbExecutionContext],
-        Callable[[], bool] | None,
-    ],
-) -> _engine_execution.EngineWorkerAdapter:
-    return _engine_execution.build_engine_worker_adapter_from_spec(
-        _worker_execution_spec(
-            dependencies=dependencies,
-            should_cancel_factory=should_cancel_factory,
-        )
-    )
-
-
 def _run_worker_entry_lifecycle(
     cfg: Any,
     entry: Any,
@@ -869,7 +851,6 @@ def run_worker_job(
         "load_config_fn": deps.config.load_config,
         "find_queue_entry_fn": deps.config.queue_entry_by_id,
         "admission_root_fn": resolve_admission_root,
-        "release_slot_fn": deps.admission.release_slot,
         "install_signal_handlers_fn": lambda controller: install_shutdown_request_handlers(
             controller,
             install_signal_handlers_fn=install_shutdown_signal_handlers,
@@ -909,7 +890,6 @@ def main(argv: list[str] | None = None) -> int:
 
 __all__ = [
     "build_worker_child_command",
-    "build_worker_adapter",
     "build_worker_execution_dependencies",
     "build_worker_execution_dependencies_from_groups",
     "build_parser",

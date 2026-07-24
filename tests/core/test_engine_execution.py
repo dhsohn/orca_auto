@@ -144,68 +144,9 @@ def test_run_engine_worker_lifecycle_stops_on_shutdown_after_mark_running(
     assert calls == ["build", "check", "mark", "check"]
 
 
-def test_run_engine_worker_entry_with_adapter_passes_worker_options(
+def test_run_engine_worker_entry_with_spec_raises_shutdown_with_context(
     tmp_path: Path,
 ) -> None:
-    cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
-    entry = SimpleNamespace(queue_id="q-1")
-    calls: list[tuple[str, Any]] = []
-
-    def run_job(_cfg: Any, _context: Any, queue_root: Path, _options: Any) -> str:
-        calls.append(("run", queue_root))
-        return "result"
-
-    def finalize_entry(
-        _cfg: Any,
-        _context: Any,
-        _result: str,
-        _queue_root: Path,
-        options: Any,
-    ) -> str:
-        calls.append(("finalize", options.emit_output))
-        return "finalized"
-
-    def build_outcome(_context: Any, result: str, finalized: str) -> str:
-        calls.append(("outcome", result))
-        return finalized
-
-    adapter = engine_execution.EngineWorkerAdapter(
-        build_context=lambda cfg_obj, entry_obj: SimpleNamespace(
-            cfg=cfg_obj,
-            entry=entry_obj,
-        ),
-        check_shutdown=lambda context, options: calls.append(("check", options.worker_job_pid)),
-        mark_running=lambda cfg_obj, context, options: calls.append(
-            ("mark", options.worker_job_pid)
-        ),
-        run_job=run_job,
-        finalize_entry=finalize_entry,
-        build_outcome=build_outcome,
-    )
-
-    outcome = engine_execution.run_engine_worker_entry_with_adapter(
-        cfg,
-        entry,
-        queue_root=tmp_path / "queue",
-        adapter=adapter,
-        options=engine_execution.EngineWorkerOptions(
-            worker_job_pid=4242,
-            emit_output=True,
-        ),
-    )
-
-    assert outcome == "finalized"
-    assert calls == [
-        ("check", 4242),
-        ("mark", 4242),
-        ("check", 4242),
-        ("run", tmp_path / "queue"),
-        ("finalize", True),
-        ("outcome", "result"),
-    ]
-
-
-def test_build_engine_worker_adapter_installs_shutdown_check(tmp_path: Path) -> None:
     class ShutdownRequested(RuntimeError):
         def __init__(self, context: Any) -> None:
             super().__init__("shutdown")
@@ -214,7 +155,7 @@ def test_build_engine_worker_adapter_installs_shutdown_check(tmp_path: Path) -> 
     cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
     entry = SimpleNamespace(queue_id="q-1")
     context = SimpleNamespace(entry=entry)
-    adapter = engine_execution.build_engine_worker_adapter(
+    spec = engine_execution.EngineWorkerExecutionSpec(
         build_context=lambda _cfg, _entry: context,
         mark_running=lambda *_args: None,
         run_job=lambda *_args: "result",
@@ -223,11 +164,11 @@ def test_build_engine_worker_adapter_installs_shutdown_check(tmp_path: Path) -> 
     )
 
     try:
-        engine_execution.run_engine_worker_entry_with_adapter(
+        engine_execution.run_engine_worker_entry_with_spec(
             cfg,
             entry,
             queue_root=tmp_path / "queue",
-            adapter=adapter,
+            spec=spec,
             options=engine_execution.EngineWorkerOptions(
                 shutdown_requested=lambda: True,
             ),
@@ -238,59 +179,7 @@ def test_build_engine_worker_adapter_installs_shutdown_check(tmp_path: Path) -> 
         raise AssertionError("expected shutdown")
 
 
-def test_run_engine_worker_entry_with_hooks_builds_adapter(tmp_path: Path) -> None:
-    cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
-    entry = SimpleNamespace(queue_id="q-1")
-    calls: list[tuple[str, Any]] = []
-
-    def run_job(_cfg: Any, _context: Any, queue_root: Path, _options: Any) -> str:
-        calls.append(("run", queue_root))
-        return "result"
-
-    def finalize_entry(
-        _cfg: Any,
-        _context: Any,
-        result: str,
-        _queue_root: Path,
-        _options: Any,
-    ) -> str:
-        calls.append(("finalize", result))
-        return "finalized"
-
-    def build_outcome(_context: Any, result: str, finalized: str) -> str:
-        calls.append(("outcome", result))
-        return finalized
-
-    hooks = engine_execution.EngineWorkerHooks(
-        build_context=lambda cfg_obj, entry_obj: SimpleNamespace(
-            cfg=cfg_obj,
-            entry=entry_obj,
-        ),
-        mark_running=lambda _cfg, _context, options: calls.append(("mark", options.emit_output)),
-        run_job=run_job,
-        finalize_entry=finalize_entry,
-        build_outcome=build_outcome,
-        shutdown_exception_type=RuntimeError,
-    )
-
-    outcome = engine_execution.run_engine_worker_entry_with_hooks(
-        cfg,
-        entry,
-        queue_root=tmp_path / "queue",
-        hooks=hooks,
-        options=engine_execution.EngineWorkerOptions(emit_output=True),
-    )
-
-    assert outcome == "finalized"
-    assert calls == [
-        ("mark", True),
-        ("run", tmp_path / "queue"),
-        ("finalize", "result"),
-        ("outcome", "result"),
-    ]
-
-
-def test_run_engine_worker_entry_with_spec_builds_adapter(tmp_path: Path) -> None:
+def test_run_engine_worker_entry_with_spec_runs_lifecycle(tmp_path: Path) -> None:
     cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
     entry = SimpleNamespace(queue_id="q-1")
     calls: list[tuple[str, Any]] = []
@@ -350,7 +239,7 @@ def test_run_engine_worker_entry_with_spec_builds_adapter(tmp_path: Path) -> Non
     ]
 
 
-def test_run_engine_worker_entry_with_spec_options_builds_options(
+def test_run_engine_worker_entry_with_spec_factory_options_builds_options(
     tmp_path: Path,
 ) -> None:
     cfg = object()
@@ -384,11 +273,11 @@ def test_run_engine_worker_entry_with_spec_options_builds_options(
         shutdown_exception_type=RuntimeError,
     )
 
-    outcome = engine_execution.run_engine_worker_entry_with_spec_options(
+    outcome = engine_execution.run_engine_worker_entry_with_spec_factory_options(
         cfg,
         entry,
         queue_root=tmp_path / "queue",
-        spec=spec,
+        spec_factory=lambda: spec,
         should_cancel=lambda: True,
         shutdown_requested=lambda: False,
         register_running_job=register_running_job,
@@ -805,26 +694,24 @@ def test_run_engine_worker_process_job_uses_process_dependency_group() -> None:
     assert wait_kwargs[0]["check_cancel_before_poll"] is True
 
 
-def test_build_engine_worker_dependency_groups_preserve_extra_fields() -> None:
-    timing = engine_execution.build_engine_worker_timing_dependencies(
-        SimpleNamespace,
-        now_utc_iso=lambda: "now",
-    )
-    queue = engine_execution.build_engine_worker_queue_dependencies(
-        SimpleNamespace,
-        get_cancel_requested=lambda _root, _queue_id: True,
-        mark_completed=lambda *_args, **_kwargs: None,
-        mark_cancelled=lambda *_args, **_kwargs: None,
-        mark_failed=lambda *_args, **_kwargs: None,
-    )
-    process = engine_execution.build_engine_worker_process_dependencies(
-        SimpleNamespace,
+def test_build_engine_worker_dependency_factories_preserve_extra_fields() -> None:
+    factories = engine_execution.build_engine_worker_process_default_factories(
+        runner_dependencies_type=SimpleNamespace,
         terminate_process=lambda _proc: True,
         wait_for_cancellable_process=lambda *_args, **_kwargs: "done",
         sleep=lambda _seconds: None,
         cancel_check_interval_seconds=0.5,
+        now_utc_iso=lambda: "now",
+        get_cancel_requested=lambda _root, _queue_id: True,
+        mark_completed=lambda *_args, **_kwargs: None,
+        mark_cancelled=lambda *_args, **_kwargs: None,
+        mark_failed=lambda *_args, **_kwargs: None,
         engine="xtb",
     )
+
+    timing = factories["timing"]()
+    queue = factories["queue"]()
+    process = factories["runner"]()
 
     assert timing.now_utc_iso() == "now"
     assert queue.get_cancel_requested("/tmp/queue", "queue-1") is True

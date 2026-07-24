@@ -148,16 +148,10 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
         metadata=_bound_orca_metadata(tmp_path, reaction_dir),
     )
     calls: dict[str, Any] = {}
-    released: list[tuple[str, str]] = []
 
     monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     monkeypatch.setattr(worker_job, "_queue_entry_by_id", lambda _root, _queue_id: entry)
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _callback: None)
-    monkeypatch.setattr(
-        worker_job,
-        "release_slot",
-        lambda root, token: released.append((str(root), token)),
-    )
 
     def fake_execute_run_job(*args: Any, **kwargs: Any) -> int:
         calls["args"] = args
@@ -237,7 +231,6 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
         with pytest.raises(RuntimeError, match="post-run verification failed") as caught:
             runner.run(Path(entry.metadata["selected_inp"]))
     assert scratch_provenance_from_exception(caught.value) == committed_provenance
-    assert released == []
 
 
 def test_orca_worker_rejects_snapshotless_persisted_generation(tmp_path: Path) -> None:
@@ -347,15 +340,9 @@ def test_run_worker_child_job_finds_real_queue_entry_and_releases_slot(
         )
     )
     calls: dict[str, Any] = {}
-    released: list[tuple[str, str]] = []
 
     monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _callback: None)
-    monkeypatch.setattr(
-        worker_job,
-        "release_slot",
-        lambda root, token: released.append((str(root), token)),
-    )
 
     def fake_execute_run_job(*args: Any, **kwargs: Any) -> int:
         calls["args"] = args
@@ -379,7 +366,6 @@ def test_run_worker_child_job_finds_real_queue_entry_and_releases_slot(
     assert calls["kwargs"]["admission_app_name"] == "orca_auto_orca"
     assert calls["kwargs"]["admission_task_id"] == "task-real"
     assert calls["kwargs"]["selected_inp"] == entry.metadata["selected_inp"]
-    assert released == []
 
 
 def test_run_worker_child_job_requeues_on_worker_shutdown(
@@ -407,15 +393,9 @@ def test_run_worker_child_job_requeues_on_worker_shutdown(
             max_concurrent=1,
         )
     )
-    released: list[tuple[str, str]] = []
 
     monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _callback: None)
-    monkeypatch.setattr(
-        worker_job,
-        "release_slot",
-        lambda root, token: released.append((str(root), token)),
-    )
     monkeypatch.setattr(
         worker_job,
         "execute_run_job",
@@ -431,7 +411,6 @@ def test_run_worker_child_job_requeues_on_worker_shutdown(
     )
 
     assert rc == 0
-    assert released == []
     [updated] = list_queue(queue_root)
     assert updated.queue_id == entry.queue_id
     assert updated.status == QueueStatus.PENDING
@@ -452,7 +431,6 @@ def test_run_worker_child_job_releases_slot_when_entry_not_running(
             max_concurrent=1,
         )
     )
-    released: list[tuple[str, str]] = []
 
     monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     monkeypatch.setattr(
@@ -470,11 +448,6 @@ def test_run_worker_child_job_releases_slot_when_entry_not_running(
     )
     monkeypatch.setattr(
         worker_job,
-        "release_slot",
-        lambda root, token: released.append((str(root), token)),
-    )
-    monkeypatch.setattr(
-        worker_job,
         "execute_run_job",
         lambda *_args, **_kwargs: pytest.fail("entry should not execute"),
     )
@@ -488,7 +461,6 @@ def test_run_worker_child_job_releases_slot_when_entry_not_running(
     )
 
     assert rc == 1
-    assert released == []
 
 
 @patch("orca_auto.orca.worker_execution.run_worker_child_job", return_value=6)

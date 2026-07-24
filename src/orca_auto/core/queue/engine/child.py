@@ -13,11 +13,9 @@ from orca_auto.core.admission import (
     get_slot,
 )
 
-from ..child import entrypoint as _child_entrypoint
-from ..child.entrypoint import ChildWorkerEntrypointJob
-from ..child.execution import ChildWorkerShutdownController
+from ..child import execution as _child_execution
+from ..child.execution import ChildWorkerEntrypointJob, ChildWorkerShutdownController
 from ..child.process import requeue_result_is_cancelled
-from ..worker import build_background_worker_command
 
 
 def await_parent_admission_handoff(
@@ -39,12 +37,6 @@ def await_parent_admission_handoff(
         if monotonic_fn() >= deadline:
             return False
         sleep_fn(0.01)
-
-
-@dataclass(frozen=True)
-class WorkerChildCommandSpec:
-    worker_job_module: str
-    include_admission_root: bool = True
 
 
 def _shutdown_exception_context(exc: BaseException) -> Any:
@@ -138,124 +130,6 @@ class _EngineChildJobRunner:
         return 0
 
 
-def build_engine_worker_child_command(
-    *,
-    spec: WorkerChildCommandSpec,
-    config_path: str,
-    queue_root: str | Path,
-    queue_id: str,
-    admission_root: str | Path | None = None,
-    admission_token: str | None = None,
-) -> list[str]:
-    return build_background_worker_command(
-        config_path=config_path,
-        queue_root=Path(queue_root),
-        queue_id=queue_id,
-        worker_job_module=spec.worker_job_module,
-        admission_root=admission_root,
-        admission_token=admission_token,
-        include_admission_root=spec.include_admission_root,
-    )
-
-
-def activate_child_worker_admission(
-    job: ChildWorkerEntrypointJob,
-    admission_token: str | None,
-    *,
-    work_dir: str | Path,
-    queue_id: str,
-    source: str,
-    activate_reserved_slot_fn: Callable[..., Any],
-) -> bool:
-    return _child_entrypoint.activate_child_worker_admission(
-        job,
-        admission_token,
-        work_dir=work_dir,
-        queue_id=queue_id,
-        source=source,
-        activate_reserved_slot_fn=activate_reserved_slot_fn,
-    )
-
-
-def load_engine_child_job(
-    *,
-    config_path: str,
-    queue_root: str | Path,
-    queue_id: str,
-    load_config_fn: Callable[[str], Any],
-    find_queue_entry_fn: Callable[[Path, str], Any | None],
-    admission_root_fn: Callable[[Any], str | Path],
-    release_slot_fn: Callable[[str | Path, str], Any],
-    admission_token: str | None = None,
-    entry_ready_fn: Callable[[Any], bool] | None = None,
-) -> ChildWorkerEntrypointJob | None:
-    return _child_entrypoint.load_child_worker_entrypoint_job(
-        config_path=config_path,
-        queue_root=queue_root,
-        queue_id=queue_id,
-        load_config_fn=load_config_fn,
-        find_queue_entry_fn=find_queue_entry_fn,
-        entry_ready_fn=entry_ready_fn,
-        admission_token=admission_token,
-        admission_root_fn=admission_root_fn,
-        release_slot_fn=release_slot_fn,
-    )
-
-
-def run_child_job_with_admission_scope(
-    job: ChildWorkerEntrypointJob,
-    admission_token: str | None,
-    *,
-    release_slot_fn: Callable[[str | Path, str], Any],
-    run_job_fn: Callable[[ChildWorkerEntrypointJob], int],
-) -> int:
-    with _child_entrypoint.child_worker_admission_scope(
-        job,
-        admission_token,
-        release_slot_fn=release_slot_fn,
-    ):
-        return run_job_fn(job)
-
-
-def run_loaded_engine_child_job(
-    *,
-    config_path: str,
-    queue_root: str | Path,
-    queue_id: str,
-    load_config_fn: Callable[[str], Any],
-    find_queue_entry_fn: Callable[[Path, str], Any | None],
-    admission_root_fn: Callable[[Any], str | Path],
-    release_slot_fn: Callable[[str | Path, str], Any],
-    run_job_fn: Callable[[ChildWorkerEntrypointJob], int],
-    admission_token: str | None = None,
-    entry_ready_fn: Callable[[Any], bool] | None = None,
-    prepare_job_fn: Callable[[ChildWorkerEntrypointJob], bool] | None = None,
-    missing_exit_code: int = 1,
-    prepare_failed_exit_code: int = 1,
-) -> int:
-    job = load_engine_child_job(
-        config_path=config_path,
-        queue_root=queue_root,
-        queue_id=queue_id,
-        load_config_fn=load_config_fn,
-        find_queue_entry_fn=find_queue_entry_fn,
-        entry_ready_fn=entry_ready_fn,
-        admission_token=admission_token,
-        admission_root_fn=admission_root_fn,
-        release_slot_fn=release_slot_fn,
-    )
-    if job is None:
-        return missing_exit_code
-    if prepare_job_fn is not None and not prepare_job_fn(job):
-        return prepare_failed_exit_code
-    return run_child_job_with_admission_scope(
-        job,
-        admission_token,
-        release_slot_fn=release_slot_fn,
-        run_job_fn=run_job_fn,
-    )
-
-
 def run_engine_worker_child_job(
     *,
     spec: WorkerChildRunSpec,
@@ -265,7 +139,6 @@ def run_engine_worker_child_job(
     load_config_fn: Callable[[str], Any],
     find_queue_entry_fn: Callable[[Path, str], Any | None],
     admission_root_fn: Callable[[Any], str | Path],
-    release_slot_fn: Callable[[str | Path, str], Any],
     install_signal_handlers_fn: Callable[[ChildWorkerShutdownController], Any],
     process_dequeued_entry_fn: Callable[..., Any],
     dependencies_fn: Callable[[], Any],
@@ -289,36 +162,29 @@ def run_engine_worker_child_job(
         process_kwargs=dict(process_dequeued_entry_kwargs or {}),
         admission_token=admission_token,
     )
-
-    def prepare_loaded_job(_job: ChildWorkerEntrypointJob) -> bool:
-        if admission_token and not await_parent_admission_handoff_fn(_job, admission_token):
-            return False
-        install_signal_handlers_fn(controller)
-        return True
-
-    return run_loaded_engine_child_job(
+    job = _child_execution.load_child_worker_entrypoint_job(
         config_path=config_path,
         queue_root=queue_root,
         queue_id=queue_id,
         load_config_fn=load_config_fn,
         find_queue_entry_fn=find_queue_entry_fn,
-        entry_ready_fn=spec.entry_ready_fn,
         admission_root_fn=admission_root_fn,
-        release_slot_fn=release_slot_fn,
-        admission_token=admission_token,
-        prepare_job_fn=prepare_loaded_job,
-        run_job_fn=runner.run,
+        entry_ready_fn=spec.entry_ready_fn,
     )
+    if job is None:
+        return 1
+    if admission_token and not await_parent_admission_handoff_fn(job, admission_token):
+        return 1
+    install_signal_handlers_fn(controller)
+    # The child never releases the admission slot itself, even when it is torn
+    # down by an asynchronous BaseException between Popen and the publication
+    # of the active identity: the parent owns final release, and dropping the
+    # only capacity fence here would break the parent recovery path.
+    return runner.run(job)
 
 
 __all__ = [
-    "WorkerChildCommandSpec",
     "WorkerChildRunSpec",
-    "activate_child_worker_admission",
     "await_parent_admission_handoff",
-    "build_engine_worker_child_command",
-    "load_engine_child_job",
-    "run_child_job_with_admission_scope",
     "run_engine_worker_child_job",
-    "run_loaded_engine_child_job",
 ]
