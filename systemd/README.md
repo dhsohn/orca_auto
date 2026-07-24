@@ -46,57 +46,13 @@ rerun the installer with the same `--user` and `--repo` values. The installed
 units are rendered copies under `/etc/systemd/system`; `systemctl daemon-reload`
 alone does not copy template changes or install newly added units.
 
-### Transaction recovery
+### Failed installs
 
-The installer stages each update in
-`/etc/systemd/system/.orca_auto-install-transaction` (or under the selected
-`--unit-dir`). A later invocation for the same `--user` and unit directory sees
-that shared transaction even when it is run from a different checkout.
-
-- `owner.json` binds an in-progress transaction to a boot ID, PID, and process
-  start time. If that owner is still live, malformed, missing, or cannot be
-  verified, the installer exits with status 1 without changing units or
-  stopping services. Resolve the owner uncertainty before retrying.
-- `manifest.json` means rollback/recovery data is still pending. Keep the whole
-  transaction directory, including `backup/` and the manifest. Rerun with the
-  same user and unit directory after the prior owner is known to be gone. The
-  automatic path proceeds only when the recorded owner is verifiably stale,
-  such as after a boot-ID change or PID reuse; an unobservable process remains
-  fail-closed. A safely classified transaction restores the previous unit
-  files, boot selection, and exact active component set. An ambiguous
-  `restart_pending` phase is deliberately preserved and does not stop a
-  possibly external start.
-- `committed.json` means the new installation was committed but transaction
-  cleanup failed. The new units remain authoritative and the installer exits
-  with status 1 so the cleanup problem is visible; do not treat this as a
-  rollback or replace the marker with an older manifest.
-
-Before any manual cleanup, inspect the preserved JSON and verify the unit files,
-enablement, and active states it describes. Do not delete a pending manifest or
-its backups merely to make a rerun proceed.
-
-If and only if `manifest.json` says `restart_pending`, an operator must inspect
-the recorded target, `systemctl show ... --property=ActiveState`, and its journal
-to decide whether the recorded restart command ran. Then rerun the installer
-from the same repository, with the same user and unit directory, using exactly
-one resolution:
-
-```bash
-orca_auto systemd install --user "<same-user>" --repo "<same-repo>" \
-  --unit-dir "<same-unit-dir>" --resolve-pending-restart applied
-# or, only when the restart command definitely did not run:
-orca_auto systemd install --user "<same-user>" --repo "<same-repo>" \
-  --unit-dir "<same-unit-dir>" --resolve-pending-restart not-applied
-```
-
-`applied` durably records that the restart ran, so rollback may stop a target
-that was inactive before the install and then restore the exact snapshot.
-`not-applied` records that no restart occurred, so recovery does not attribute a
-new start to the installer and verifies the original active set. Choosing the
-wrong value can stop or misclassify a live service. The option does not override
-a live or unverifiable owner, and it fails when the transaction is absent or is
-not in `restart_pending`; never edit or delete the manifest to bypass those
-checks.
+The installer writes each rendered unit file into place and then runs the
+`systemctl` transition commands in order. If a command fails, the installer
+stops with that command's exit status; the new unit files are already in place
+and no rollback is attempted. Fix the reported failure and rerun the installer
+with the same `--user` and `--repo` values — every step is idempotent.
 
 Monitor the runtime target:
 

@@ -244,22 +244,7 @@ def test_build_parser_parses_systemd_install_command() -> None:
     assert args.repo == "/home/alice/orca_auto"
     assert args.worker_only is True
     assert args.dry_run is True
-    assert args.resolve_pending_restart is None
     assert args.func is cli_systemd_apply.cmd_systemd_install
-
-    resolution_args = parser.parse_args(
-        [
-            "systemd",
-            "install",
-            "--user",
-            "alice",
-            "--repo",
-            "/home/alice/orca_auto",
-            "--resolve-pending-restart",
-            "not-applied",
-        ]
-    )
-    assert resolution_args.resolve_pending_restart == "not-applied"
 
 
 def test_build_parser_parses_service_commands() -> None:

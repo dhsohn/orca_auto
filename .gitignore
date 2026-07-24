@@ -44,5 +44,4 @@ config/*.yml
 *.pid
 .bot.pid
 .cron_*.lock
-.orca_auto-systemd-install.lock
 .dft_progress_eta_state.json
