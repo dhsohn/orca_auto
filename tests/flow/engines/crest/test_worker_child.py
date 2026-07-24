@@ -76,7 +76,6 @@ def test_run_worker_child_job_wires_canonical_child_runtime(
     assert captured["spec"] is worker_child._WORKER_CHILD_RUN_SPEC
     assert captured["load_config_fn"]("ignored") is cfg
     assert captured["find_queue_entry_fn"](tmp_path, "queue-1") is entry
-    assert captured["release_slot_fn"] is dependencies.admission.release_slot
     assert captured["dependencies_fn"]() is dependencies
     assert captured["process_dequeued_entry_fn"] is worker_child.process_dequeued_entry
     assert captured["process_dequeued_entry_kwargs"] == {

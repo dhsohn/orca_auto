@@ -44,7 +44,7 @@ CLI, 설정, JSON 산출물, 워크플로우, systemd 표면 중 공개 계약�
 - 백그라운드 실행은 외부에서 감독되는 큐 워커가 관리합니다.
 - ORCA 워커는 큐 정체성(`--queue-root/--queue-id`)으로 큐 자식을 시작하고, 그 자식이
   현재 큐 항목을 해석한 뒤 공유
-  `core.queue.engine.worker_execution.EngineWorkerAdapter` 라이프사이클을 통해 실행합니다.
+  `core.queue.engine.worker_execution.EngineWorkerExecutionSpec` 라이프사이클을 통해 실행합니다.
 - ORCA 상태, 재시도, 리포트, 알림 동작은 ORCA 도메인 동작으로 남아 있습니다.
   자식이 종료된 뒤에도 부모 큐 종료 처리가 최종 큐 결과를 기록합니다.
 - WSL에서는 권장 감독자가 `systemd`입니다.

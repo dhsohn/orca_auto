@@ -65,8 +65,6 @@ def build_queue_runtime_worker_execution_dependencies(
 ) -> _worker_execution.WorkerExecutionDependencies:
     process_groups = build_worker_process_dependency_groups(
         callbacks.process_callbacks,
-        timing_dependencies_type=_worker_execution.WorkerTimingDependencies,
-        queue_dependencies_type=_worker_execution.WorkerQueueDependencies,
         runner_dependencies_type=_worker_execution.WorkerRunnerDependencies,
         cancel_check_interval_seconds=cancel_check_interval_seconds,
     )

@@ -212,8 +212,6 @@ def _worker_execution_default_factories() -> dict[str, Callable[[], Any]]:
             _worker_process_factory_callbacks(),
             config_factory=_default_config_dependencies,
             admission_factory=_default_admission_dependencies,
-            timing_dependencies_type=WorkerTimingDependencies,
-            queue_dependencies_type=WorkerQueueDependencies,
             runner_dependencies_type=WorkerRunnerDependencies,
             cancel_check_interval_seconds=CANCEL_CHECK_INTERVAL_SECONDS,
         ),
@@ -667,19 +665,6 @@ def _worker_execution_spec(
     )
 
 
-def build_worker_adapter(
-    *,
-    molecule_key_resolver: Callable[[Any, Path, Path], str],
-    dependencies: WorkerExecutionDependencies,
-) -> _engine_execution.EngineWorkerAdapter:
-    return _engine_execution.build_engine_worker_adapter_from_spec(
-        _worker_execution_spec(
-            molecule_key_resolver=molecule_key_resolver,
-            dependencies=dependencies,
-        )
-    )
-
-
 def _run_worker_entry_lifecycle(
     cfg: Any,
     entry: Any,
@@ -786,7 +771,6 @@ def run_worker_child_job(
         load_config_fn=deps.config.load_config,
         find_queue_entry_fn=deps.config.queue_entry_by_id,
         admission_root_fn=_admission_root_for_cfg,
-        release_slot_fn=deps.admission.release_slot,
         install_signal_handlers_fn=lambda controller: install_shutdown_request_handlers(
             controller,
             install_signal_handlers_fn=install_shutdown_signal_handlers,

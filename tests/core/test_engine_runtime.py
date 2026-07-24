@@ -17,14 +17,10 @@ from orca_auto.core.engines.definitions import (
 )
 from orca_auto.core.queue.engine.runtime import EngineQueueRuntime
 from orca_auto.core.queue.worker.execution_dependencies import (
-    WorkerAdmissionDependencies,
-    WorkerConfigDependencies,
     WorkerProcessDependencyCallbacks,
     build_worker_process_default_factories_from_callbacks,
     build_worker_process_dependency_callbacks,
     build_worker_process_dependency_groups,
-    run_worker_child_entrypoint,
-    run_worker_child_entrypoint_with_dependencies,
     worker_process_dependency_callback_kwargs,
     worker_process_dependency_callbacks_from_attrs,
 )
@@ -351,8 +347,6 @@ def test_worker_process_dependency_groups_maps_callback_groups() -> None:
 
     groups = build_worker_process_dependency_groups(
         callbacks,
-        timing_dependencies_type=SimpleNamespace,
-        queue_dependencies_type=SimpleNamespace,
         runner_dependencies_type=SimpleNamespace,
         cancel_check_interval_seconds=6,
     )
@@ -389,8 +383,6 @@ def test_worker_process_default_factories_from_callbacks_maps_common_groups() ->
         callbacks,
         config_factory=lambda: "config",
         admission_factory=lambda: "admission",
-        timing_dependencies_type=SimpleNamespace,
-        queue_dependencies_type=SimpleNamespace,
         runner_dependencies_type=SimpleNamespace,
         cancel_check_interval_seconds=8,
     )
@@ -403,100 +395,6 @@ def test_worker_process_default_factories_from_callbacks_maps_common_groups() ->
     assert runner.cancel_check_interval_seconds == 8
     assert runner.run_demo_job is callbacks.engine_runner_dependencies["run_demo_job"]
     assert calls == ["failed"]
-
-
-def test_run_worker_child_entrypoint_wires_common_child_kwargs(tmp_path: Path) -> None:
-    calls: dict[str, Any] = {}
-    installer_token = object()
-
-    class WorkerChild:
-        @staticmethod
-        def shutdown_signal_handler_installer(install_fn: Any) -> Any:
-            calls["install_fn"] = install_fn
-            return installer_token
-
-        @staticmethod
-        def run_worker_child_job(**kwargs: Any) -> int:
-            calls["kwargs"] = kwargs
-            return 9
-
-    process_kwargs = {"worker_config_path": "/tmp/config.yaml"}
-
-    rc = run_worker_child_entrypoint(
-        WorkerChild(),
-        config_path="/tmp/config.yaml",
-        queue_root=tmp_path / "queue",
-        queue_id="queue-1",
-        admission_token="slot-1",
-        load_config_fn=lambda path: path,
-        find_queue_entry_fn=lambda _root, _queue_id: None,
-        admission_root_fn=lambda _cfg: "/tmp/admission",
-        release_slot_fn=lambda *_args: None,
-        install_shutdown_signal_handlers_fn=lambda *_args: None,
-        process_dequeued_entry_fn=lambda *_args, **_kwargs: None,
-        dependencies_fn=lambda: object(),
-        requeue_running_entry_fn=lambda *_args: None,
-        mark_recovery_pending_context_fn=lambda *_args, **_kwargs: None,
-        process_dequeued_entry_kwargs=process_kwargs,
-    )
-
-    assert rc == 9
-    assert calls["kwargs"]["install_signal_handlers_fn"] is installer_token
-    assert calls["kwargs"]["queue_id"] == "queue-1"
-    assert calls["kwargs"]["process_dequeued_entry_kwargs"] is process_kwargs
-
-
-def test_run_worker_child_entrypoint_with_dependencies_wires_config_and_admission(
-    tmp_path: Path,
-) -> None:
-    calls: dict[str, Any] = {}
-    cfg = SimpleNamespace(name="cfg")
-    entry = SimpleNamespace(queue_id="queue-1")
-    released: list[tuple[str, str]] = []
-    installer_token = object()
-    dependencies = SimpleNamespace(
-        config=WorkerConfigDependencies(
-            load_config=lambda path: cfg if path == "/tmp/config.yaml" else None,
-            queue_entry_by_id=lambda _root, _queue_id: entry,
-        ),
-        admission=WorkerAdmissionDependencies(
-            activate_reserved_slot=lambda *_args, **_kwargs: object(),
-            release_slot=lambda root, token: released.append((str(root), token)),
-        ),
-    )
-
-    class WorkerChild:
-        @staticmethod
-        def shutdown_signal_handler_installer(install_fn: Any) -> Any:
-            calls["install_fn"] = install_fn
-            return installer_token
-
-        @staticmethod
-        def run_worker_child_job(**kwargs: Any) -> int:
-            calls["kwargs"] = kwargs
-            assert kwargs["load_config_fn"]("/tmp/config.yaml") is cfg
-            assert kwargs["find_queue_entry_fn"](tmp_path / "queue", "queue-1") is entry
-            kwargs["release_slot_fn"]("/tmp/admission", "slot-1")
-            assert kwargs["dependencies_fn"]() is dependencies
-            return 7
-
-    rc = run_worker_child_entrypoint_with_dependencies(
-        WorkerChild(),
-        config_path="/tmp/config.yaml",
-        queue_root=tmp_path / "queue",
-        queue_id="queue-1",
-        admission_token="slot-1",
-        dependencies=dependencies,
-        admission_root_fn=lambda _cfg: "/tmp/admission",
-        install_shutdown_signal_handlers_fn=lambda *_args: None,
-        process_dequeued_entry_fn=lambda *_args, **_kwargs: None,
-        requeue_running_entry_fn=lambda *_args: None,
-        mark_recovery_pending_context_fn=lambda *_args, **_kwargs: None,
-    )
-
-    assert rc == 7
-    assert calls["kwargs"]["install_signal_handlers_fn"] is installer_token
-    assert released == [("/tmp/admission", "slot-1")]
 
 
 def test_engine_queue_runtime_reserves_admission_slot(tmp_path: Path) -> None:

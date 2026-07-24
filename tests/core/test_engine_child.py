@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.queue.child.entrypoint import ChildWorkerEntrypointJob
 from orca_auto.core.queue.engine import child as engine_child
 from orca_auto.core.queue.engine import execution as engine_execution
 from orca_auto.core.queue.engine.runtime import EngineQueueRuntime
@@ -23,60 +22,6 @@ class _WorkerShutdownRequested(RuntimeError):
         self.context = context
 
 
-def test_build_engine_worker_child_command_supports_admission_root_modes(
-    tmp_path: Path,
-) -> None:
-    with_root = engine_child.WorkerChildCommandSpec("orca_auto.demo.worker_execution")
-    without_root = engine_child.WorkerChildCommandSpec(
-        "orca_auto.demo_no_root.worker_execution",
-        include_admission_root=False,
-    )
-
-    with_root_command = engine_child.build_engine_worker_child_command(
-        spec=with_root,
-        config_path="/tmp/orca_auto.yaml",
-        queue_root=tmp_path / "queue",
-        queue_id="queue-1",
-        admission_root="/tmp/admission",
-        admission_token="slot-1",
-    )
-    without_root_command = engine_child.build_engine_worker_child_command(
-        spec=without_root,
-        config_path="/tmp/orca_auto.yaml",
-        queue_root=tmp_path / "queue",
-        queue_id="queue-2",
-        admission_token="slot-2",
-    )
-
-    assert "--admission-root" in with_root_command
-    assert "/tmp/admission" in with_root_command
-    assert "--admission-root" not in without_root_command
-    assert "--admission-token" in without_root_command
-
-
-def test_run_child_job_with_admission_scope_releases_and_returns_status(
-    tmp_path: Path,
-) -> None:
-    cfg = SimpleNamespace(admission_root=tmp_path / "admission")
-    job = ChildWorkerEntrypointJob(
-        cfg=cfg,
-        queue_root=tmp_path / "queue",
-        entry=SimpleNamespace(queue_id="queue-1"),
-        _admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
-    )
-    released: list[tuple[Path, str]] = []
-
-    result = engine_child.run_child_job_with_admission_scope(
-        job,
-        "slot-1",
-        release_slot_fn=lambda root, token: released.append((Path(root), token)),
-        run_job_fn=lambda loaded_job: 7 if loaded_job is job else 1,
-    )
-
-    assert result == 7
-    assert released == []
-
-
 def test_run_engine_worker_child_job_processes_entry_with_extra_kwargs(
     tmp_path: Path,
 ) -> None:
@@ -85,7 +30,6 @@ def test_run_engine_worker_child_job_processes_entry_with_extra_kwargs(
     dependencies = object()
     resolver = object()
     installed: list[Any] = []
-    released: list[tuple[Path, str]] = []
     processed: list[dict[str, Any]] = []
 
     rc = engine_child.run_engine_worker_child_job(
@@ -101,7 +45,6 @@ def test_run_engine_worker_child_job_processes_entry_with_extra_kwargs(
         load_config_fn=lambda _path: cfg,
         find_queue_entry_fn=lambda _root, _queue_id: entry,
         admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
-        release_slot_fn=lambda root, token: released.append((Path(root), token)),
         install_signal_handlers_fn=lambda controller: installed.append(controller),
         process_dequeued_entry_fn=lambda *args, **kwargs: processed.append(
             {"args": args, "kwargs": kwargs}
@@ -114,7 +57,6 @@ def test_run_engine_worker_child_job_processes_entry_with_extra_kwargs(
 
     assert rc == 0
     assert len(installed) == 1
-    assert released == []
     assert processed[0]["args"] == (cfg, entry)
     assert processed[0]["kwargs"]["queue_root"] == (tmp_path / "queue").resolve()
     assert processed[0]["kwargs"]["molecule_key_resolver"] is resolver
@@ -125,7 +67,6 @@ def test_run_engine_worker_child_job_processes_entry_with_extra_kwargs(
 def test_run_engine_worker_child_job_can_map_outcome_to_exit_code(tmp_path: Path) -> None:
     cfg = SimpleNamespace(admission_root=tmp_path / "admission")
     entry = SimpleNamespace(queue_id="queue-1", task_id="task-1", status="running")
-    released: list[tuple[Path, str]] = []
 
     rc = engine_child.run_engine_worker_child_job(
         spec=engine_child.WorkerChildRunSpec(
@@ -141,7 +82,6 @@ def test_run_engine_worker_child_job_can_map_outcome_to_exit_code(tmp_path: Path
         load_config_fn=lambda _path: cfg,
         find_queue_entry_fn=lambda _root, _queue_id: entry,
         admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
-        release_slot_fn=lambda root, token: released.append((Path(root), token)),
         install_signal_handlers_fn=lambda _controller: None,
         process_dequeued_entry_fn=lambda *_args, **_kwargs: SimpleNamespace(exit_code=7),
         dependencies_fn=lambda: object(),
@@ -150,7 +90,6 @@ def test_run_engine_worker_child_job_can_map_outcome_to_exit_code(tmp_path: Path
     )
 
     assert rc == 7
-    assert released == []
 
 
 def test_cleanup_failure_keeps_child_and_parent_admission_until_engine_exit(
@@ -205,7 +144,6 @@ def test_cleanup_failure_keeps_child_and_parent_admission_until_engine_exit(
             load_config_fn=lambda _path: cfg,
             find_queue_entry_fn=lambda _root, _queue_id: entry,
             admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
-            release_slot_fn=lambda _root, _token: events.append("child_release"),
             install_signal_handlers_fn=lambda _controller: None,
             process_dequeued_entry_fn=process_entry,
             dependencies_fn=lambda: object(),
@@ -215,7 +153,6 @@ def test_cleanup_failure_keeps_child_and_parent_admission_until_engine_exit(
 
     assert "terminal_result" not in events
     assert "failure_result" not in events
-    assert "child_release" not in events
 
     parent_job = SimpleNamespace(
         queue_root=tmp_path / "queue",
@@ -255,7 +192,6 @@ def test_run_engine_worker_child_job_requeues_and_marks_recovery_on_shutdown(
     context = SimpleNamespace(job_dir=tmp_path / "job")
     requeued: list[tuple[Path, str]] = []
     recovery: list[tuple[Any, Any, str]] = []
-    released: list[tuple[Path, str]] = []
 
     def raise_shutdown(*_args: Any, **_kwargs: Any) -> None:
         raise _WorkerShutdownRequested(context)
@@ -273,7 +209,6 @@ def test_run_engine_worker_child_job_requeues_and_marks_recovery_on_shutdown(
         load_config_fn=lambda _path: cfg,
         find_queue_entry_fn=lambda _root, _queue_id: entry,
         admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
-        release_slot_fn=lambda root, token: released.append((Path(root), token)),
         install_signal_handlers_fn=lambda _controller: None,
         process_dequeued_entry_fn=raise_shutdown,
         dependencies_fn=lambda: object(),
@@ -290,7 +225,6 @@ def test_run_engine_worker_child_job_requeues_and_marks_recovery_on_shutdown(
     assert rc == 0
     assert requeued == [((tmp_path / "queue").resolve(), "queue-1")]
     assert recovery == [(cfg, context, "worker_shutdown")]
-    assert released == []
 
 
 def test_run_engine_worker_child_job_skips_recovery_when_requeue_cancels(
@@ -301,7 +235,6 @@ def test_run_engine_worker_child_job_skips_recovery_when_requeue_cancels(
     context = SimpleNamespace(job_dir=tmp_path / "job")
     requeued: list[tuple[Path, str]] = []
     recovery: list[tuple[Any, Any, str]] = []
-    released: list[tuple[Path, str]] = []
 
     def raise_shutdown(*_args: Any, **_kwargs: Any) -> None:
         raise _WorkerShutdownRequested(context)
@@ -323,7 +256,6 @@ def test_run_engine_worker_child_job_skips_recovery_when_requeue_cancels(
         load_config_fn=lambda _path: cfg,
         find_queue_entry_fn=lambda _root, _queue_id: entry,
         admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
-        release_slot_fn=lambda root, token: released.append((Path(root), token)),
         install_signal_handlers_fn=lambda _controller: None,
         process_dequeued_entry_fn=raise_shutdown,
         dependencies_fn=lambda: object(),
@@ -336,4 +268,3 @@ def test_run_engine_worker_child_job_skips_recovery_when_requeue_cancels(
     assert rc == 0
     assert requeued == [((tmp_path / "queue").resolve(), "queue-1")]
     assert recovery == []
-    assert released == []

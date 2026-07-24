@@ -624,7 +624,6 @@ def test_worker_child_runs_the_replacement_generation(
 
     monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _cb: None)
-    monkeypatch.setattr(worker_job, "release_slot", lambda _root, _token: None)
 
     def fake_execute_run_job(*args: Any, **kwargs: Any) -> int:
         calls["kwargs"] = kwargs

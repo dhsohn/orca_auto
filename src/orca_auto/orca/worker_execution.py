@@ -10,7 +10,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.admission import release_slot
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_APP_NAME
 from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.engine_scratch import (
@@ -620,7 +619,6 @@ def run_worker_child_job(
         "load_config_fn": load_config,
         "find_queue_entry_fn": _recovering_queue_entry_by_id(config_path),
         "admission_root_fn": resolve_admission_root,
-        "release_slot_fn": release_slot,
         "install_signal_handlers_fn": lambda controller: install_shutdown_request_handlers(
             controller,
             install_signal_handlers_fn=install_shutdown_signal_handlers,

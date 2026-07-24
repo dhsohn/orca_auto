@@ -18,10 +18,14 @@ class ChildWorkerShutdownController:
 
 
 @dataclass(frozen=True)
-class ChildQueueJob:
+class ChildWorkerEntrypointJob:
     cfg: Any
     queue_root: Path
     entry: Any
+    _admission_root_fn: Callable[[Any], str | Path]
+
+    def admission_root(self) -> str | Path:
+        return self._admission_root_fn(self.cfg)
 
 
 def find_queue_entry_by_id(
@@ -52,18 +56,16 @@ def build_queue_entry_lookup(
     return queue_entry_by_id
 
 
-def load_child_queue_job(
+def load_child_worker_entrypoint_job(
     *,
     config_path: str,
     queue_root: str | Path,
     queue_id: str,
     load_config_fn: Callable[[str], Any],
     find_queue_entry_fn: Callable[[Path, str], Any | None],
+    admission_root_fn: Callable[[Any], str | Path],
     entry_ready_fn: Callable[[Any], bool] | None = None,
-    admission_token: str | None = None,
-    admission_root_fn: Callable[[Any], str | Path] | None = None,
-    release_slot_fn: Callable[[str | Path, str], Any] | None = None,
-) -> ChildQueueJob | None:
+) -> ChildWorkerEntrypointJob | None:
     cfg = load_config_fn(config_path)
     resolved_queue_root = Path(queue_root).expanduser().resolve()
     entry = find_queue_entry_fn(resolved_queue_root, queue_id)
@@ -73,38 +75,12 @@ def load_child_queue_job(
         # already spawned this child observe its exit and finalize atomically;
         # after a parent crash, normal stale-owner reconciliation removes it.
         return None
-    return ChildQueueJob(cfg=cfg, queue_root=resolved_queue_root, entry=entry)
-
-
-def activate_child_admission_token(
-    admission_root: str | Path,
-    admission_token: str | None,
-    *,
-    work_dir: str | Path,
-    queue_id: str,
-    source: str | None,
-    activate_reserved_slot_fn: Callable[..., Any],
-) -> bool:
-    if not admission_token:
-        return True
-    metadata: dict[str, Any] = {
-        "work_dir": work_dir,
-        "queue_id": queue_id,
-    }
-    if source is not None:
-        metadata["source"] = source
-    activated = activate_reserved_slot_fn(admission_root, admission_token, **metadata)
-    return activated is not None
-
-
-def release_child_admission_token(
-    admission_root: str | Path,
-    admission_token: str | None,
-    *,
-    release_slot_fn: Callable[[str | Path, str], Any],
-) -> None:
-    if admission_token:
-        release_slot_fn(admission_root, admission_token)
+    return ChildWorkerEntrypointJob(
+        cfg=cfg,
+        queue_root=resolved_queue_root,
+        entry=entry,
+        _admission_root_fn=admission_root_fn,
+    )
 
 
 def install_shutdown_request_handlers(
@@ -116,12 +92,10 @@ def install_shutdown_request_handlers(
 
 
 __all__ = [
-    "ChildQueueJob",
+    "ChildWorkerEntrypointJob",
     "ChildWorkerShutdownController",
-    "activate_child_admission_token",
     "build_queue_entry_lookup",
     "find_queue_entry_by_id",
     "install_shutdown_request_handlers",
-    "load_child_queue_job",
-    "release_child_admission_token",
+    "load_child_worker_entrypoint_job",
 ]

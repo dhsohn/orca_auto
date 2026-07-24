@@ -300,7 +300,6 @@ def test_run_worker_job_uses_dependency_config_and_admission_groups(
         captured.update(kwargs)
         assert kwargs["load_config_fn"]("/tmp/orca_auto.yaml") is cfg
         assert kwargs["find_queue_entry_fn"](tmp_path / "queue", "queue-1") is entry
-        kwargs["release_slot_fn"]("/tmp/admission", "slot-1")
         assert kwargs["dependencies_fn"]() is deps
         return 0
 
@@ -320,7 +319,6 @@ def test_run_worker_job_uses_dependency_config_and_admission_groups(
 
     assert rc == 0
     assert captured["queue_id"] == "queue-1"
-    assert released == [("/tmp/admission", "slot-1")]
 
 
 def test_terminal_summary_helpers_cover_status_reason_and_metadata(
