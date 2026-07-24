@@ -5,7 +5,7 @@
 오케스트레이션 계층에 대한 개념 모델이 필요한 개발자와 운영자를 대상으로 합니다.
 
 작업 단위의 사용법은 [README.md](../README.md), [QUICKSTART.md](QUICKSTART.md),
-[REFERENCE.md](REFERENCE.md)를 참고하세요. 패키지/임포트 규칙은
+[REFERENCE.ko.md](REFERENCE.ko.md)를 참고하세요. 패키지/임포트 규칙은
 [DEVELOPMENT.md](DEVELOPMENT.md)에 있습니다.
 
 > 이 문서는 [ARCHITECTURE.md](ARCHITECTURE.md)(영어판)의 한국어 번역본입니다.
@@ -349,7 +349,7 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   인덱스를 유지합니다.
 
 ORCA가 다운스트림에 노출하는 필드("계약 동결")는
-[REFERENCE.md](REFERENCE.md) §11.1에 문서화되어 있습니다 —
+[REFERENCE.ko.md](REFERENCE.ko.md) §11.1에 문서화되어 있습니다 —
 `reaction_dir`는 ORCA 큐 및 다운스트림 계약 필드로 남습니다.
 
 ---
@@ -480,7 +480,7 @@ orca_auto는 scheduling, ownership, 공개 artifact를 모두 디스크 기반�
 사용해 confined 파일 suffix만 읽고, 명시적 무제한 조회만 전체 이력을 스캔합니다.
 
 큐 항목과 추적된 작업 위치 레코드는 각각 동결된 다운스트림 필드 집합을
-노출하므로(REFERENCE.md §11.1 참조), `flow`가 ORCA 내부에 결합하지 않고 결과를
+노출하므로(REFERENCE.ko.md §11.1 참조), `flow`가 ORCA 내부에 결합하지 않고 결과를
 소비할 수 있습니다.
 
 ---

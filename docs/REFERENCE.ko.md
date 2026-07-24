@@ -86,11 +86,10 @@ CLI, 설정, JSON 산출물, 워크플로우, systemd 표면 중 공개 계약�
 
 ## 4) 필요한 환경
 
-- Linux (WSL2 또는 네이티브 Linux)
 - `/opt/orca/orca` 같은 ORCA Linux 바이너리 경로 접근
 - OpenMPI와 BLAS/LAPACK 같은 ORCA 런타임 의존성
-- Python 3.11 이상
-- Linux 파일시스템 상의 입력 루트
+- 지원 플랫폼, Python 버전, 경로 요구사항은
+  [런타임 계약](PUBLIC_CONTRACTS.ko.md#런타임-계약)을 참고하세요.
 
 ## 5) 설치 및 초기 설정
 
@@ -105,18 +104,11 @@ bash scripts/bootstrap_wsl.sh
 - Python 의존성과 저장소 자체를 `.venv`에 설치합니다.
 - `config/orca_auto.yaml`이 없으면 생성합니다.
 
-이 레퍼런스는 공개 명령에 대해 `orca_auto ...`로 표준화합니다:
-
-- `queue list`
-- `queue cancel`
-- `run-dir <path>`
-- `init`
-- `scaffold <ts_search|conformer_search|scan_ts>`
-- `scan-notify`
+이 레퍼런스는 공개 명령에 대해 `orca_auto ...`로 표준화합니다. 지원되는 명령
+목록과 기본 설정 탐색 순서는 [공개 CLI 계약](PUBLIC_CONTRACTS.ko.md#공개-cli-계약)과
+[설정 계약](PUBLIC_CONTRACTS.ko.md#설정-계약)을 참고하세요.
 
 먼저 `.venv`를 활성화하거나, `.venv/bin/orca_auto ...`를 직접 호출하세요.
-기본적으로 설정은 `ORCA_AUTO_CONFIG`, 그다음 `<repo_root>/config/orca_auto.yaml`,
-그다음 `~/orca_auto/config/orca_auto.yaml` 순으로 해석됩니다.
 기본 설정 탐색을 재정의하려는 경우에만 `--config <path>`를 추가하세요.
 
 ## 6) 설정 파일
@@ -188,64 +180,23 @@ orca:
 
 참고:
 
-- 공유 설정 parser는 YAML node가 없는 문서(주석만 있는 문서 포함)를 빈 mapping으로
-  허용하지만, 내용이 없는 `---` 문서, 명시한 최상위 null/scalar/sequence, 모든 깊이의
-  중복 key는 거부합니다.
-- messenger identity 필드는 생략과 명시값을 구분해 fail-closed합니다. bot token은
-  문자열이어야 하고 Discord channel ID는 유효한 양의 snowflake ID여야 합니다. 명시한
-  null이나 잘못된 scalar/collection 형태를 문자열 또는 기본값으로 바꾸지 않습니다.
-  빈 문자열은 전송을 의도적으로 비활성화합니다.
-- `default_max_retries=0`은 ORCA 재시도를 비활성화합니다. 양수 값은 계산 종류별
-  재시도 정책을 활성화하며, 실제 재시도 횟수는 ORCA route 종류별 cap을 따릅니다.
-- `scratch_root`를 설정하면 ORCA는 private input closure를 tmpfs에서 실행합니다. dependency는
-  하나의 상대 basename을 사용하고 byte-identical하게 유지해야 하며, 마지막 줄바꿈이 없으면
-  선택된 working copy에만 추가합니다. scratch workspace는 한 번에 하나만 허용합니다. process
-  tree가 끝나면 ORCA `*.tmp`/`*.tmp.*` scratch 파일을 제외하고 남은 모든 일반 파일을 inode로
-  고정한 durable visible generation에 저널 기반 단일 file-set transaction으로 commit합니다.
-  예약한 runtime-state 이름은 fail-closed합니다. durable queue/state/process fence는 계속 디스크에
-  둡니다. 해석할 수 없거나 stale인 scratch workspace는 운영자 검사를 위해 보존하고 새 시작을
-  막습니다. host 또는 WSL이 종료되면 아직 반출하지 않은 RAM output과
-  checkpoint는 사라지므로, recovery는 중단 지점이 아니라 마지막 durable generation부터
-  다시 시작할 수 있습니다.
-  root/workspace descriptor는 계속 고정하며, ORCA는 process-group identity가 durable해진 뒤에만
-  launch gate에서 release됩니다.
-- `scratch_min_free_gb`는 실행 전 gate이지 디렉터리 quota가 아닙니다. 시작 시 Linux
-  `MemAvailable`이 설정된 task memory 상한, 현재 tmpfs 전체 여유 공간, 설정한 host reserve
-  합계를 감당할 수 있어야 합니다. 이 보수적 snapshot은 swap 압력을 줄이지만 이후 system
-  activity나 tmpfs swap 자체를
-  막지는 못하므로 shared scheduler 상한을 보수적으로 유지하고, `/dev/shm`은 허용할 최대 계산에
-  맞춰야 합니다. 완료 attempt의 게시 상세는 `scratch_provenance`에, exception 또는 worker
-  shutdown 뒤 commit된 게시 근거는 run-level `scratch_publications` 목록에 기록합니다.
-- workflow가 관리하는 xTB와 CREST는 process 작업 디렉터리, stdout/stderr log, 엔진
-  중간 파일을 같은 private tmpfs workspace에 둡니다. 변경 불가능한 입력 snapshot은
-  durable 절대 경로로 유지합니다. process 종료 시 xTB는 job type별 canonical 결과와
-  log만, CREST는 named ensemble 후보와 log만 transaction으로 게시합니다. 엔진 work
-  tree와 transient 파일은 생략 provenance에 기록한 뒤 workspace와 함께 제거합니다.
-  이 경로는 CREST 자체의 `--scratch` 옵션을 사용하지 않습니다.
-- `C:\...`, `C:/...`, `/mnt/c/...` 같은 Windows 스타일 경로는 설정에서 지원되지
-  않습니다.
-- ORCA, xTB, CREST의 설정된 실행 경로는 실제 존재하는 실행 파일을 가리키는 절대 Linux
-  경로여야 하며 `.exe`로 끝나면 안 됩니다. `workflow.paths.xtb_executable` 또는
-  `workflow.paths.crest_executable`을 비워 두면, 제출 시 PATH에서 해석한 실행 파일
-  정체성을 해당 큐 generation에 바인딩합니다.
-- 공개 설정 계약에 열거한 경로만 허용합니다. 알 수 없거나 철자가 틀렸거나 제거된
-  키는 해당 section에서 실패하고, 공유 scheduler/resource/messenger 설정의 엔진별
-  복사본은 별칭으로 취급하지 않습니다. 명시한 설정 section은 mapping이어야 합니다.
-  admission 루트는 절대 Linux 경로, scheduler/resource 상한은 양의 정수,
-  `orca.runtime.default_max_retries`는 음이 아닌 정수여야 합니다. 생략한 키는 문서화된
-  기본값을 유지하지만 잘못된 명시적 실행 제어 값은 기본값으로 대체하지 않고 거부합니다.
-- messenger delivery 기본값도 키를 생략했을 때만 적용합니다. 명시한 timeout/backoff는
-  유한한 숫자, `max_attempts`는 정수여야 하며 잘못된 값은 거부합니다. 문서화된 전송
-  범위를 벗어난 유한값은 clamp합니다.
+- 설정 파싱과 검증 동작 — YAML 문서/중복 key 규칙, messenger identity와 전송값
+  clamp, tmpfs scratch closure 동작, `MemAvailable` 시작 gate, 알 수 없는 키의
+  fail-closed 검증, Windows 경로/실행 파일 경로 거부 규칙 — 은
+  [설정 계약](PUBLIC_CONTRACTS.ko.md#설정-계약)에 명세되어 있습니다.
+- RAM scratch를 활성화했다면 shared scheduler 상한을 보수적으로 유지하고
+  `/dev/shm`을 허용할 최대 계산에 맞추세요. 보수적인 시작 시점 메모리 snapshot은
+  swap 압력을 줄이지만 이후 system activity나 tmpfs swap 자체를 막지는 못하며,
+  `scratch_min_free_gb`는 시작 gate이지 디렉터리 quota가 아닙니다.
+- `workflow.paths.xtb_executable` 또는 `workflow.paths.crest_executable`을 비워
+  두면, 제출 시 PATH에서 해석한 실행 파일 정체성을 해당 큐 generation에
+  바인딩합니다.
 
 ## 7) CLI 사용법
 
 모든 공개 큐, 제출, 스캐폴드, 정리 명령은 `orca_auto ...`로 문서화해야 합니다.
-
-공개 명령 표면:
-
-- ORCA 공개 명령은 `orca_auto ...`로 노출됩니다.
-- 일반 xTB와 CREST 작업은 워크플로우 내부에만 둡니다.
+지원되는 공개 명령 표면은 [공개 CLI 계약](PUBLIC_CONTRACTS.ko.md#공개-cli-계약)에
+열거되어 있습니다. 일반 xTB와 CREST 작업은 워크플로우 내부에만 둡니다.
 
 ### 7.1 `init`
 
@@ -287,54 +238,28 @@ worker_pid: 12345
 
 ORCA 고유 노트:
 
-- 제출할 때 최신 `*.inp`를 선택한 뒤 제출한 작업 디렉터리 바로 아래에 눈에 보이는
-  `YYYYMMDD-HHMMSS-<8자리 hex>/`를 만듭니다. 실제 실행 입력은 선택한
-  `.inp`의 basename을, 지원하는 참조 파일은 각 소스 basename을 그대로 유지하며 raw
-  ORCA 출력도 같은 단계에 기록합니다. 제출 성공 뒤 원본을 편집해도 큐에 들어간 계산은
-  바뀌지 않습니다. `YYYYMMDD-HHMMSS-<8자리 hex>` 이름 형태는 generation용으로
-  예약되어 있어, `runs_root` 아래 어디에 있든 이 형식의 디렉터리는 production
-  scan에서 제외되고 `run-dir` 대상으로 거부되므로 직접 만드는 디렉터리에는 쓰지
-  마십시오.
-- 완전히 닫힌 작업 디렉터리는 `--force` 없이 다시 제출할 수 있고 제출마다 새 sibling
-  generation을 만듭니다. 같은 작업 디렉터리에 pending/running/retrying/cancel-pending 행이나
-  미완료 terminal replay가 남아 있으면 새 generation을 차단합니다. `--force`도 이 안전
-  차단을 우회하지 않습니다.
-- 하나의 입력이 서로 다른 소스 경로에 있는 같은 basename의 파일들을 참조하면, 바이트가
-  완전히 같아도 제출을 fail-closed합니다. 같은 canonical 소스 경로를 반복해서 참조하는
-  경우는 의존성 하나로 유지하며 basename 충돌로 보지 않습니다. ORCA가 해당
-  의존성 이름을 출력으로 만들지 않는 route에서는 선택 입력과 stem만 같아도 됩니다.
-  예를 들어 SP `h2.inp`는 `h2.xyz`를 참조할 수 있고 두 exact basename을 그대로
-  유지합니다. Opt, OptTS, ScanTS, NEB, IRC에서는 같은 stem의 XYZ가 보통 ORCA
-  출력입니다. 단 하나의 예외로, 주 `* xyzfile` geometry만 같은 stem을 쓰는 경우에는
-  좌표를 바인딩한 `.inp` 안에 inline하고 exact XYZ basename도 그대로 보이며 ORCA가
-  실행 중 그 파일을 제자리에서 갱신할 수 있습니다. 같은 stem의 보조 NEB Product/TS
-  파일은 계속 거부합니다. 주파수를 생성하는 route는 `<stem>.hess`를, 모든 route는
-  `<stem>.out`과 `<stem>.gbw`를 예약합니다. 선택 `.inp` basename과 generation 자체가
-  소유하는 `job_state.json`, `job_report.json`, `orca.process.json`,
-  `.orca.process.lock`도 의존성 basename으로 쓰면 제출 단계에서 거부합니다. `%base`와
-  NEB restart-GBW basename 제어 같은 출력 base override는 ORCA가 generation 밖에 쓰지
-  못하도록 지원하지 않고 fail-closed합니다.
+- visible generation 이름 규칙과 예약된 `YYYYMMDD-HHMMSS-<8자리 hex>` 이름 형태,
+  재제출/`--force` 차단, 의존성 basename 충돌·예약 이름 규칙, 모호한 중복
+  `%pal`/`nprocs`/`%maxcore`/`%moinp`/`PALn` 지시어 거부, snapshot에 바인딩하지
+  않는 외부 include/program hook 거부는
+  [큐와 activity 계약](PUBLIC_CONTRACTS.ko.md#큐와-activity-계약)에 명세되어
+  있습니다.
 - 큐 워커는 직접 `reaction_dir` 명령줄을 전달하는 대신 큐 id로 실행합니다. 큐 항목은
   여전히 `reaction_dir`를 저장하며, 다운스트림 ORCA/워크플로우 계약은 그 필드를 계속
   사용해야 합니다.
 - 단독 ORCA 자원 메타데이터는 선택된 입력의 `%pal` 및 `%maxcore` 지시어에서 오며,
   그 지시어가 없을 때만 설정 기본값이 주입됩니다. 공유 `--max-cores`와
-  `--max-memory-gb` 플래그는 단독 ORCA 입력 지시어를 재정의하지 않습니다.
-- ORCA admission은 중복 `%pal`/`nprocs`, `%maxcore`, `%moinp` 또는 route `PALn`
-  지시어처럼 선후순위가 모호한 입력을 거부합니다. 정규화 전 자원 reader는 모든 활성값
-  중 최댓값을 사용하므로 뒤쪽 중복값으로 더 큰 요청을 숨길 수 없습니다.
-- snapshot에 바인딩하지 않는 외부 ORCA include/program hook(예: `ExtOpt`/`Prog*`,
-  fragment/QM2 method file, `XTBINPUTSTRING`, `GCP(FILE)`)은 지원하지 않으며 실행
-  전에 거부합니다.
+  `--max-memory-gb` 플래그는 단독 ORCA 입력 지시어를 재정의하지 않습니다. 정규화 전
+  자원 reader는 모든 활성값 중 최댓값을 사용하므로 뒤쪽 중복값으로 더 큰 요청을
+  숨길 수 없습니다.
 - 재시도 입력과 재개된 워커-종료 입력은, 원본 입력에 일치하는 비어 있지 않은 `.gbw`
   체크포인트가 있을 때 `MORead`와 `%moinp`를 추가합니다. 재개 입력은 `*.resume.inp`로
   작성되므로 원본 사용자 입력은 변경되지 않습니다.
 
 워크플로우 노트:
 
-- 워크플로우 디렉터리 이름/ID에는 `(` 또는 `)`를 사용할 수 없습니다. 저장된 ID와
-  아티팩트 경로를 일치시키기 위해 기존 워크플로우 디렉터리의 이름을 바꾸지 말고 새
-  이름으로 새 워크플로우를 생성하세요.
+- 워크플로우 이름/ID 제약(`(`·`)` 금지, 기존 워크플로우 디렉터리 이름 변경 금지)은
+  [워크플로우 계약](PUBLIC_CONTRACTS.ko.md#워크플로우-계약)에 명세되어 있습니다.
 - `run-dir`는 대상 디렉터리에 `flow.yaml`이 있을 때만 워크플로우를 구체화합니다.
 - 각 실행은 제출한 스캐폴드 안에 타임스탬프 generation 디렉터리
   (`YYYYMMDD-HHMMSS-<8자리 hex>`)를 만듭니다 — 단독 ORCA 실행과 같은 배치이며,
@@ -399,73 +324,25 @@ ORCA 고유 노트:
 - Population은 `formula|charge|multiplicity` 그룹별로 독립 정규화합니다. 이 키는 연결성
   정체성이 아니라 화학량론적 proxy입니다. 보존된 minimum마다 통계 가중치 1을 쓰며
   대칭성/축퇴도 보정을 하지 않습니다. 선택적 post-DFT dedup은 전체 ensemble을 먼저
-  검증하고 그 중복 수를 통계 가중치로 쓰지 않습니다. 선택적
-  `boltzmann_temperature_k`가 고정하지 않으면 파싱된 thermochemistry 온도를 사용합니다.
-  이 키는 유한한 양수여야 하고 admission 때 내구성 요청에 저장되며, 파싱된 모든 온도와
-  0.01 K 이내로 일치해야 합니다. 주파수 작업이 쓰지 않은 온도의 열화학 값을 만들 수는
-  없습니다. SI는 이후 수정된 원본 `flow.yaml`이 아니라 내구성 요청을 읽습니다. 자료가
-  없거나 유한하지 않거나 양수가 아니거나 서로 불일치하면 지어내지 않고 note와 함께
-  population을 생략합니다. Markdown은 population을 백분율로 표시합니다.
+  검증하고 그 중복 수를 통계 가중치로 쓰지 않습니다. Population 온도와 선택적
+  `boltzmann_temperature_k` pin(admission 검증, 내구성 요청 저장, 0.01 K 일치 규칙)은
+  [워크플로우 계약](PUBLIC_CONTRACTS.ko.md#워크플로우-계약)에 명세되어 있습니다.
 - `conformer_screening`은 최적화된 minima를 그룹화하고 최저에너지 대표를 보존하는 선택적
-  `rmsd_dedup:` 블록을 받습니다. 수렴한 후보는 `Nimag`가 없거나 0이면 허용하고, 알려진
-  nonzero 값이면 제외합니다. 선택 원자 원소 서열, formula/전자상태, exact 최적화
-  provenance가 같은 후보만 비교합니다. proper-rotation RMSD와
-  정렬 뒤 원자별 최대 변위가 모두 `rmsd_threshold_angstrom`(기본 0.25)보다 작고 유효 에너지
-  차도 `energy_window_kcal`(기본 0.1)보다 작아야 합니다. 완전하고 균일한 exact-provenance
-  SP refinement가 있으면 그 에너지를, 아니면 최적화 에너지를 사용합니다. 제한 없는 최적
-  정렬이 전역 reflection을 선호하는 nondegenerate 쌍은 분리합니다. 그래도 heuristic이므로 가까운 서로
-  다른 minimum이나 국소 입체화학 variant를 병합할 수 있습니다. 기본은 모든 원자를 비교하고,
-  `heavy_atoms_only: true`는 H/D/T를 무시해 위험을 키웁니다. 구성원을 화학적으로 동일하다고
-  보기 전에 병합된 그룹을 검토하세요. Population 완전성은 dedup 전에
-  검사하며 degeneracy는 통계/대칭 가중치가 아니라 workflow 중복 수입니다.
+  `rmsd_dedup:` 블록을 받습니다. 자격 조건, 임계값, provenance, heuristic 위험 규칙은
+  [워크플로우 계약](PUBLIC_CONTRACTS.ko.md#워크플로우-계약)에 명세되어 있습니다.
 - `conformer_screening`은 ΔE_int = E(complex) − Σ E(fragment_i)를 보고하는 선택적
-  `interaction_energy:` 블록을 받습니다. 안전한 한 줄 label과 `[1, 100]` 정수 multiplicity를
-  가진 fragment 2–8개가 필요합니다. `{atom_indices(0-based), charge, multiplicity, label}`은
-  모든 입력 원자를 정적으로 겹침 없이 완전 분할해야 합니다. fragment 전하 합은 complex
-  전하와 같고, spin들은 일반화된 각운동량 coupling manifold에서 complex multiplicity로
-  결합할 수 있어야 합니다. 원자에서 계산한 각 `N_e = ΣZ − charge`는 0 이상이고
-  `multiplicity − 1`은 `N_e` 이하이면서 같은 parity여야 합니다.
-  `sp_route_line`(기본 `! r2scan-3c TightSCF`)은 순수 single-point
-  route여야 하며 optimization, frequency, gradient, IRC, MD, NEB, GOAT, scan directive는
-  거부합니다.
-- complex와 각 fragment는 complex 최적화 기하에서 fresh single point를 실행합니다. fan-out은
-  terminal ensemble의 유효한 최적화 minimum 중 RMSD 대표만 대상으로 하며, partial-success
-  ensemble은 완료·수렴한 후보에서 알려진 saddle을 제외한 subset을 사용할 수 있습니다.
-  대표 에너지 규약도 같은 eligible set에서 정하므로 unusable/saddle member가 parent를 바꾸지
-  못합니다.
-  공개 dedup 보고가 꺼져도
-  all-atom 기본 grouping이 fan-out을 제한하지만 SI 구조 표는 dedup하지 않습니다. interaction
-  generation fingerprint에는 이 RMSD 설정도 포함됩니다.
-- 확정 결과는 현재 generation의 completed complex SP 정확히 1개와 예상 index별 completed
-  fragment SP 정확히 1개를 요구합니다. 선택 입력과 파싱 출력의 route/state, 실제
-  method/basis/solvation/ORCA version, 최적화 complex 기하, 인덱스별 fragment subset, 에너지
-  규약이 모두 같아야 합니다. 결측·중복·실행 중·stale·혼합·잘못된 상태/기하·비유한 자료는
-  부분합을 쓰지 않고 ΔE_int을 생략합니다. 보고 가능한 결과는 `workflow_si.md`의
-  interaction-energy 섹션에 들어갑니다. 별도 Boys–Bernardi ghost-atom 계산은 하지 않으며
-  r2SCAN-3c gCP 같은 method 내재 보정에는 영향을 주지 않습니다.
-- restart는 interaction route, fragment별 state/resource, generation fingerprint를 보존합니다.
-  fan-out 뒤에는 interaction 및 RMSD grouping 설정을 바꿀 수 없고 해당 fan-out이 남아 있는
-  동안 원래 primary stage도 다시 열 수 없습니다. 기능을 끄면 interaction stage를 retire합니다.
-  활성 config를 받기 전 복사된 durable input XYZ로 완전 partition과 fragment 전자상태를
-  다시 검증합니다.
-- SI publish는 workflow/registry metadata에 pending, attempt count, next-retry time, blocked,
-  generation, error를 저장합니다. SI writer의 일시적 실패는 30/60/120/240초 지수 backoff로
-  재시도하고 5번째 실패 뒤 block합니다. 결정적 충돌은 즉시 block합니다. writer 전
-  workflow/registry/report checkpoint 실패는 이 writer budget을 소모하지 않으며, 저장된 pending
-  marker는 인프라 복구를 위해 즉시 due로 남습니다. Registry clear는 workflow→registry lock
-  순서로 authoritative identity/status를 다시 확인하므로 publication pending·blocked,
-  final-child-sync pending, identity quarantine, authoritative active record는 stale로 지우지
-  않습니다. 격리된 durable ID는 payload에 증거로 보존하고 registry는 신뢰할 수 있는 workspace
-  이름을 유일 key로 사용하면서 관측 ID를 metadata에 기록합니다. 원인을 고친 뒤
-  `orca_auto run-dir <workflow_dir> --force`로 blocked publication을 다시 arm하세요.
+  `interaction_energy:` 블록을 받습니다. complex와 각 fragment는 complex 최적화
+  기하에서 fresh single point를 실행하며, `sp_route_line`의 기본값은
+  `! r2scan-3c TightSCF`입니다. fragment 분할/spin 검증, fan-out 자격, 결과 확정과
+  restart 규칙, SI publish checkpoint/재시도/재arm 동작은
+  [워크플로우 계약](PUBLIC_CONTRACTS.ko.md#워크플로우-계약)에 명세되어 있습니다.
 - 워크플로우 디렉터리를 제출하기 전에 `orca_auto.yaml`에 `runs_root`를 설정하세요
   (또는 `flow.yaml`에 `workflow_root`/`workflow.root`를 설정).
 - 공개 워크플로우 `run-dir`는 `flow.yaml` 또는 `scaffold`가 작성한 표준 파일명에서
   워크플로우 유형과 XYZ 입력을 읽습니다. 워크플로우 자원 재정의로는 `--max-cores`와
   `--max-memory-gb`만 받습니다.
-- `flow.yaml`과 내부 엔진 YAML 작업 manifest는 1 MiB 이하의 single-link regular UTF-8
-  파일이어야 합니다. bounded loader는 alias 사용 32개, 파싱/확장 node 10,000개, 중첩
-  64단계까지만 허용하며 재귀/순환 alias 또는 object graph는 fail-closed합니다.
+- `flow.yaml`/엔진 manifest YAML loader 제한(파일 크기, alias, node, 중첩 한도)은
+  [워크플로우 계약](PUBLIC_CONTRACTS.ko.md#워크플로우-계약)에 명세되어 있습니다.
 - 매니페스트 제어 입력 경로(`reactant_xyz`, `product_xyz`, `input_xyz`,
   `xtb.xcontrol_file`)는 기본적으로 제출된 워크플로우 디렉터리의 신뢰 경계를 따릅니다.
   상대 경로는 `workflow_dir`에서 해석되고, 절대 경로나 `..` 탈출은 여전히 그 디렉터리
@@ -482,13 +359,10 @@ ORCA 고유 노트:
   오래된 restart 파일이 새 generation을 조용히 바꿀 수 없습니다.
 - CREST 토폴로지 재정의는 `flow.yaml`의 `crest:` 아래에 둘 수 있으며, `gfn: ff`,
   `no_preopt: true`, `noreftopo: true`, `notopo: true`, `nocbonds: true`를 포함합니다.
-- 워크플로우 수준 `orca.charge`와 `orca.multiplicity`가 모든 CREST, xTB, ORCA stage의
-  전자 상태를 정의합니다. 엔진별 `charge`/`uhf`가 같은 상태를 반복하는 것은 허용하지만,
-  충돌하거나 잘못된 값은 거부합니다. 선택한 xTB/CREST 입력은 원자번호 86 이하의 알려진
-  원소만 포함하고 전자 수가 0 이상이어야 하며, UHF 비짝전자 수가 범위 안에 있고 전자 수와
-  parity가 맞아야 합니다.
-- 로컬 geometry 입력은 10,000원자로 제한합니다. xTB Hessian 작업과 ORCA
-  frequency/Hessian 생성 입력은 1,000원자 상한을 사용합니다.
+- 워크플로우 수준 `orca.charge`/`orca.multiplicity`의 전자 상태 권위, 원소/전자
+  수/UHF parity 검증, 10,000원자(Hessian/frequency 입력은 1,000원자) admission
+  상한은 [워크플로우 계약](PUBLIC_CONTRACTS.ko.md#워크플로우-계약)에 명세되어
+  있습니다.
 - CREST 종료 코드가 0이어도 보존 출력에 엄격히 유효하고 유한한 XYZ frame이 하나 이상
   있어야 성공으로 인정합니다. 유효한 named retained ensemble을 모두 보존하므로 뒤쪽
   rotamer 출력에만 있는 geometry도 후보로 남고, 파일 사이에서 겹치는 geometry만 downstream
@@ -512,15 +386,16 @@ ORCA 고유 노트:
   override가 없으면 `tstep`은 GFN-xTB에서 5.0 fs, GFN-FF에서 1.5 fs,
   `gfn2//gfnff`에서 2.0 fs 이하여야 하며 `shake: 1`이면 상한이 2.0 fs로 더 좁아집니다.
   `allow_high_tstep: true`는 native 0.001~2500 fs 범위를 허용하지만 work budget을 우회하지
-  않습니다. `mddump`는 `1..2147483647` 범위의 정수입니다. `mdlen`을 명시했을 때 기본
-  `max_md_steps`는 CREST의 예상 trajectory/restart/rotamer 배수를 합한 10,000,000
-  step입니다. 이 배수는 `nci` 또는
+  않습니다. `mddump`는 `1..2147483647` 범위의 정수입니다.
+  기본 aggregate `max_md_steps` budget, GFN-FF/`gfn2//gfnff`에 요구되는 제한된
+  `mdlen` 또는 `allow_high_cost_md: true`를 동반한 더 큰 명시적 budget, 절대
+  50,000,000,000 atom-step 상한은
+  [워크플로우 계약](PUBLIC_CONTRACTS.ko.md#워크플로우-계약)에 명세되어 있습니다.
+  budget은 CREST의 예상 trajectory/restart/rotamer 배수를 셉니다. 이 배수는 `nci` 또는
   quick 모드에서 base 6, 그 밖에는 14이고, 여기에 `mquick`이면 restart 1, 아니면 5를 곱한
-  뒤 `nci`, quick 모드 또는 `norotmd`이면 rotamer 1, 아니면 2를 곱합니다. 더 큰 상한은 native
-  integer 한도 안에서 `allow_high_cost_md: true`를 함께 써야 합니다. `mdlen`이 없으면 CREST의
-  자동 2.5~500 ps 범위를 최악 조건인 500 ps와 기본 14,000,000-step budget으로 admission합니다.
-  표준 GFN-xTB 기본값은 이 범위에 들어옵니다. 표준 non-quick trajectory 배수에서 GFN-FF와
-  `gfn2//gfnff`는 이 budget을 넘으므로 제한한 `mdlen`을 명시하거나 더 큰 `max_md_steps`와
+  뒤 `nci`, quick 모드 또는 `norotmd`이면 rotamer 1, 아니면 2를 곱합니다. `mdlen`이
+  없으면 CREST의 자동 2.5~500 ps 범위를 최악 조건인 500 ps로 admission하며, 표준
+  GFN-xTB 기본값은 이 범위에 들어옵니다. 더 큰 step 상한은 native integer 한도 안에서
   `allow_high_cost_md: true`를 함께 써야 합니다. 기본
   `max_dump_frames`는 aggregate simulated time을 `mddump`로 나눈 예상 frame 100,000개이며
   더 크게 지정하려면
@@ -529,9 +404,7 @@ ORCA 고유 노트:
   (`1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off`)만 받으며 `cross`와 `nocross`는
   상호배제입니다. `cross: true`는 CREST 3.0.2의 기본 GC crossing을 유지하되 job type을
   깨뜨리는 불필요한 `--cross` 플래그를 내지 않고, `nocross: true`만 `--nocross`를 냅니다.
-  잘못된 값은 CREST에 전달하지 않고 작업을 fail-closed로 실패시킵니다. step 상한과 별개로
-  원자 수와 예상 aggregate MD step의 곱은 로컬 절대 상한 50,000,000,000 atom-step을 넘을 수
-  없습니다.
+  잘못된 값은 CREST에 전달하지 않고 작업을 fail-closed로 실패시킵니다.
 - xTB ranking은 기본적으로 후보 평가를 최대 100개 허용합니다. 로컬 반응 워크플로우 manifest는 native
   후보 상한 1,000 안에서 `xtb.max_ranking_evaluations`를 정할 수 있고, 100보다 큰 값은
   `xtb.allow_high_cost_ranking: true`도 필요합니다.
@@ -548,43 +421,20 @@ ORCA 고유 노트:
   제한하며, ORCA 입력의 파일 참조 지시어는 최대 128개입니다. CREST는 파일별 상한만
   있고 별도 aggregate 상한은 없습니다. downstream 출력 XYZ materialization 상한은
   512 MiB입니다.
-- 워크플로우 내부 xTB/CREST snapshot은 계속 `.orca_auto_input_snapshots/` 아래에서
-  제출마다 배타적으로 예약한 고유 private 디렉터리를 사용하며 공개 task id만으로 snapshot
-  소유권을 정하지 않습니다.
-- 새 ORCA 제출은 작업 디렉터리 바로 아래에
-  `YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 눈에 보이게 만듭니다. 실제 실행
-  `.inp`는 소스 basename을 유지합니다. 가둬 복사한 XYZ, GBW, Hessian, point-charge, IRC,
-  NEB 의존성도 소스 basename을 유지하고 `.inputs/` 단계는 없습니다. ORCA raw 출력은 이
-  입력들과 나란히 기록합니다. 새 ORCA 제출은 `.orca_auto_orca_executions/`나 ORCA용
-  `.orca_auto_input_snapshots/`를 만들지 않습니다. 감사용 provenance는 계속 source path,
-  executed path, SHA-256, byte size를 기록하므로 읽기 쉬운 이름이 콘텐츠 정체성 검증을
-  약화하지 않습니다.
+- visible generation 배치와 provenance 기록, snapshot namespace, ORCA
+  visible-generation 형식의 업그레이드 drain 요구, xTB/CREST 종료 정체성과
+  state-only metadata 규칙은
+  [큐와 activity 계약](PUBLIC_CONTRACTS.ko.md#큐와-activity-계약)에 명세되어
+  있습니다. 엔진 신뢰/격리 경계(캡처된 환경, qualification한 배포본, 같은 UID
+  프로세스)는 [런타임 계약](PUBLIC_CONTRACTS.ko.md#런타임-계약)에 명세되어 있습니다.
 - snapshot과 generation 트리는 큐 replay, retry, reconciliation, 감사에 필요하도록
   보존합니다. 독립적인 snapshot GC 명령은 없습니다. pending, running, retrying,
   cancel-pending 또는 복구 가능한 terminal 행이 사용하는 generation은 편집하거나
   삭제하면 안 됩니다. 어떤 큐나 복구 레코드도 더는 참조하지 않음을 확인한 뒤 의도적으로
   퇴역시키는 작업/워크플로우와 함께만 회수하세요.
-- xTB/CREST는 작업별 clean `HOME`/`XDG_CONFIG_HOME`과 캡처된 `PATH`,
-  `LD_LIBRARY_PATH`, `XTBPATH`, `XTBHOME`을 사용합니다. 실행 전후로 실행 파일 경로,
-  SHA-256, 크기를 검증합니다. 공유 라이브러리, `XTBPATH`, `XTBHOME`을 통해 도달하는 내용은
-  snapshot하지 않으며 엔진 semantic version도 자동 probe하지 않습니다. 작업 수명 동안
-  qualification한 정확한 배포본과 외부 파라미터를 변경하지 말고 worker UID의 다른 프로세스를
-  적대적 격리 tenant로 간주하지 마세요.
-- ORCA visible-generation 형식을 배포하기 전에는 이전 빌드의 pending/active ORCA 행을
-  모두 drain하고 미완료 terminal replay와 snapshot intent를 끝내세요. 또는 영향받는 작업을
-  취소/clear한 뒤 업그레이드 후 다시 제출하세요. 구형 행은 in-place로 채택하지 않습니다.
-  기존 terminal `.orca_auto_orca_executions/`와 ORCA용
-  `.orca_auto_input_snapshots/` 이력은 제자리에 보존하며 업그레이드가 옮기거나 이름을
-  바꾸지 않습니다. 워크플로우 내부 xTB/CREST snapshot 배치는 바뀌지 않습니다.
-- 새 xTB/CREST 종료 출력은 downstream 파싱 전에 검증하는 콘텐츠 정체성을 가집니다. 완료된
-  출력에 종료 정체성이 없으면 지원하지 않고 fail-closed하므로 다시 제출해야 합니다. Reader는
-  나중에 본 바이트를 hash해 identity를 backfill하거나 오래된 경로를 basename으로 remap하지
-  않습니다.
-- 내부 xTB/CREST 종료 metadata는 state-only입니다. `job_state.json`이 상태,
-  command/provenance, 자원 사용량, 보존 출력 정체성, 엔진별 결과 필드를 모두 담습니다.
-  `job_report.json`을 쓰거나 읽지 않으며 report-only 작업은 지원하지 않고
-  다시 제출해야 합니다. exact-generation state를 복구할 수 없으면 report에서 재구성하지 않고
-  activity에 `repair_blocked`로 표시합니다.
+- xTB/CREST는 추가로 작업별 clean `HOME`/`XDG_CONFIG_HOME`으로 실행되며, 내부
+  state-only `job_state.json`이 상태, command/provenance, 자원 사용량, 보존 출력
+  정체성, 엔진별 결과 필드를 담습니다.
 
 ### 7.3 `queue cancel`
 
@@ -593,8 +443,9 @@ orca_auto queue cancel q_20260403_151220_ab12cd
 orca_auto queue cancel /absolute/path/to/orca_runs/Int1_DMSO
 ```
 
-`queue cancel`은 워크플로우 전체 취소를 위한 워크플로우 id와, 개별 작업을 위한 큐 id,
-run id, 알려진 경로 별칭을 받습니다.
+`queue cancel`에 워크플로우 id를 주면 워크플로우 전체를 취소합니다. 받을 수 있는
+전체 대상과 별칭 목록은 [공개 CLI 계약](PUBLIC_CONTRACTS.ko.md#공개-cli-계약)에
+명세되어 있습니다.
 
 ### 7.4 `queue list`
 
@@ -653,16 +504,14 @@ orca_auto scan-notify
 
 동작:
 
-- `orca_auto-engine-workers@.target`은 기본 엔진 서비스를 소유합니다.
-- `orca_auto-queue-worker@.service`는 ORCA 워커 하나를 감독합니다.
-- `orca_auto-workflow-worker@.service`는 opt-in이며 workflow와 내부 CREST·xTB 워커를
-  감독합니다.
+- target/서비스 소유 구조 — 어느 target이 어느 unit을 시작하는지, opt-in workflow
+  worker — 는 [systemd 계약](PUBLIC_CONTRACTS.ko.md#systemd-계약)에 명세되어
+  있습니다.
 - ORCA, xTB, CREST는 동일한 admission 상한을 공유합니다. ORCA는 부모 워커에서 슬롯을
   예약하고, 자식이 시작된 뒤 큐 정체성 메타데이터를 붙이며, ORCA 자식이 실행 중에 그
   예약을 활성화/해제하도록 합니다.
 - 워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST와 반응 경로 xTB
   자식 단계는 해당 단계가 끝난 뒤 각각 한 메시지로 요약합니다.
-- `orca_auto-runtime@.target`은 engine-worker target을 시작합니다.
 
 ## 8) WSL systemd 설정
 
@@ -731,19 +580,9 @@ Opt 모드 완료:
 
 ## 10) 실패 분류 및 자동 복구
 
-대표 상태:
-
-- `completed`
-- `error_scf`
-- `error_scfgrad_abort`
-- `error_multiplicity_impossible`
-- `error_disk_io`
-- `error_memory`
-- `error_geometry` (예: ORCA zero-distance geometry collapse)
-- `geom_not_converged`
-- `ts_not_found`
-- `incomplete`
-- `unknown_failure`
+대표 상태는 [ORCA 작업 산출물 계약](PUBLIC_CONTRACTS.ko.md#orca-작업-산출물-계약)에
+열거된 ORCA analyzer 상태입니다(예: `error_geometry`는 ORCA zero-distance geometry
+collapse를 포함합니다).
 
 재시도 정책:
 
@@ -822,28 +661,23 @@ ORCA 프로세스 기록이 활성인 동안에는 해당 generation에 `orca.pr
 작업 루트에는 terminal 정리로 제거되기 전까지 live `job_state.json`이 존재합니다.
 
 generation의 실제 실행 `.inp`는 선택한 소스의 basename을 정확히 유지하므로 ORCA
-출력 stem에 `.run`이나 `.bound`를 더하지 않습니다. 참조 입력도 원래
-basename을 유지합니다. 각 generation의 `job_state.json`과 리포트는 자신이 설명하는
-실행의 기록을 보존하며, 리포트는 검증된 generation 안에만 존재합니다. 이관 전 루트
-리포트는 일회성 provenance 검증 migration으로 정확한 generation에 옮기거나 별도
-보관할 때까지 삭제하지 않는 이력 파일이며 runtime reader는 사용하지 않습니다.
-generation 바인딩 전에 거부된 실행은 리포트가 없고 state와 큐 기록이 결과를 보존합니다.
+출력 stem에 `.run`이나 `.bound`를 더하지 않습니다. 리포트 배치와 검증 규칙 —
+리포트는 검증된 generation 안에만 존재하고, 이관 전 루트 리포트는 일회성
+provenance 검증 migration 전까지 보존되는 이력 파일이며, generation 바인딩 전에
+거부된 실행은 리포트가 없다는 것 — 은
+[ORCA 작업 산출물 계약](PUBLIC_CONTRACTS.ko.md#orca-작업-산출물-계약)에 명세되어
+있습니다.
 `run.lock`은 작업 루트에 남으며, 파일이 존재한다는 사실만으로 현재 프로세스가 lock을
 소유한다고 판정할 수는 없습니다.
 
-주요 `job_state.json` 필드:
+`job_state.json`과 `job_report.json`은
+[ORCA 작업 산출물 계약](PUBLIC_CONTRACTS.ko.md#orca-작업-산출물-계약)에 기술된
+정규화된 중첩 엔진 산출물 스키마(`schema_version` 1)를 사용합니다. 작업 정체성은
+`job` 아래에, 상태는 `status.state`/`status.reason`에, ORCA 고유 실행 세부
+정보(`run_id`, `max_retries`, `attempts`, `final_result`)는 `engine_payload`
+아래에 있습니다.
 
-- `job_id`
-- `run_id`
-- `reaction_dir`
-- `selected_inp`
-- `execution_provenance`
-- `max_retries`
-- `status`
-- `attempts[]`
-- `final_result`
-
-주요 `attempts[]` 필드:
+주요 `engine_payload.attempts[]` 필드:
 
 - `index`
 - `inp_path`
@@ -860,23 +694,10 @@ generation 바인딩 전에 거부된 실행은 리포트가 없고 state와 큐
 - `started_at`
 - `ended_at`
 
-주요 `job_report.json` 필드:
-
-- `job_id`
-- `run_id`
-- `reaction_dir`
-- `selected_inp`
-- `status`
-- `attempt_count`
-- `max_retries`
-- `attempts[]`
-- `final_result`
-
-snapshot에 바인딩된 작업에서 `selected_inp`/attempt `inp_path`는 visible generation
-안에서 실제 실행한 정확한 바인딩 입력을 가리킵니다.
-`execution_provenance.source_selected_inp`는 제출 때 선택한 사용자용 소스를 기록하고,
-바인딩/구체화한 identity 및 attempt identity 레코드는 path, SHA-256, byte size를
-보존합니다.
+snapshot에 바인딩된 작업에서 primary 입력과 attempt `inp_path` 레코드는 visible
+generation 안에서 실제 실행한 정확한 바인딩 입력을 가리킵니다. ORCA execution
+provenance는 제출 때 선택한 사용자용 소스 입력을 기록하고, 바인딩/구체화한
+identity 및 attempt identity 레코드는 path, SHA-256, byte size를 보존합니다.
 
 ## 11.1) 다운스트림 계약 동결
 
