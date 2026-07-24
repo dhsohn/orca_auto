@@ -55,10 +55,6 @@ def coerce_int(value: Any, *, default: int = 0) -> int:
     return _safe_int(value, default=default)
 
 
-def coerce_optional_int(value: Any) -> int | None:
-    return _safe_int(value, default=None)
-
-
 def coerce_bool(value: Any, *, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value

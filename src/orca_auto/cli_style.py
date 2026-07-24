@@ -103,10 +103,6 @@ def sgr(*codes: str) -> str:
     return "\033[" + ";".join(codes) + "m"
 
 
-# Public alias so callers can append a reset after a raw :func:`sgr` opener.
-RESET = _RESET
-
-
 def label(text: str, *, stream: IO[str] | None = None) -> str:
     """Dim a field label (e.g. ``workflow_id:``) for key/value output."""
 
@@ -121,18 +117,6 @@ def status_text(status: object, *, stream: IO[str] | None = None) -> str:
     return paint(text, color, stream=stream) if color else text
 
 
-def clear_screen(*, force: bool = False) -> None:
-    """Clear and home a terminal independently of ANSI color painting.
-
-    ``force`` is for callers that have already verified a real terminal. Cursor
-    control is not color, so a no-color live view can still refresh in place.
-    """
-
-    if force or color_enabled():
-        sys.stdout.write("\033[2J\033[3J\033[H")
-        sys.stdout.flush()
-
-
 __all__ = [
     "BLUE",
     "BOLD",
@@ -141,14 +125,11 @@ __all__ = [
     "GREEN",
     "MAGENTA",
     "RED",
-    "RESET",
     "YELLOW",
-    "clear_screen",
     "color_enabled",
     "label",
     "paint",
     "set_color_override",
-    "sgr",
     "status_color",
     "status_text",
 ]

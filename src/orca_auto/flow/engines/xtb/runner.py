@@ -6,7 +6,6 @@ import json
 import logging
 import resource
 import subprocess
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -387,42 +386,6 @@ def _run_candidate_sp_job(
             "executed_input_size_bytes": len(bound_candidate_payload),
         },
     )
-
-
-def _wait_for_candidate_sp_result(
-    running: Any,
-    *,
-    should_cancel: Callable[[], bool] | None,
-    on_cancel: Callable[[subprocess.Popen[str]], bool] | None,
-    sleep_fn: Callable[[float], None] = time.sleep,
-    poll_interval_seconds: float = 1.0,
-) -> XtbRunResult:
-    process = getattr(running, "process", None)
-    if process is None:
-        return finalize_xtb_job(running)
-    return _engine_execution.run_cancellable_engine_process(
-        start_job=lambda: running,
-        finalize_job=finalize_xtb_job,
-        terminate_process=on_cancel or terminate_process_group,
-        build_failure_result=lambda exc: exc,
-        should_cancel=should_cancel,
-        sleep=sleep_fn,
-        poll_interval_seconds=poll_interval_seconds,
-        check_cancel_before_poll=True,
-        should_reraise_exception=lambda _exc: True,
-    )
-
-
-def _request_candidate_process_stop(
-    process: subprocess.Popen[str],
-    *,
-    on_cancel: Callable[[subprocess.Popen[str]], bool] | None,
-) -> bool:
-    if process.poll() is not None:
-        return True
-    if on_cancel is not None:
-        return on_cancel(process)
-    return terminate_process_group(process)
 
 
 TS_HESSIAN_DIR_NAME = "ts_hess"

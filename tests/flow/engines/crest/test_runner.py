@@ -21,8 +21,8 @@ from orca_auto.flow.engines.crest.job_inputs import MANIFEST_FILE_NAME
 from orca_auto.flow.engines.crest.runner import (
     CrestRunningJob,
     _build_command,
-    _count_xyz_structures,
     finalize_crest_job,
+    load_output_xyz_frames,
     start_crest_job,
 )
 from tests.execution_snapshot_helpers import stage_execution_snapshot
@@ -486,7 +486,7 @@ def test_finalize_crest_job_rejects_missing_or_invalid_retained_ensemble(
     if retained_payload is not None:
         retained = job_dir / "crest_conformers.xyz"
         retained.write_text(retained_payload, encoding="utf-8")
-        assert _count_xyz_structures(retained) == 0
+        assert load_output_xyz_frames(retained) == ()
     stdout_path = job_dir / "crest.stdout.log"
     stderr_path = job_dir / "crest.stderr.log"
     process = MagicMock()

@@ -165,10 +165,8 @@ class TestRunMonitor:
 
     @patch("orca_auto.orca.commands.monitor.notify_monitor_report", return_value=True)
     @patch("orca_auto.orca.commands.monitor.DFTMonitor")
-    @patch("orca_auto.orca.commands.monitor.DFTIndex")
     def test_does_not_send_when_no_discoveries(
         self,
-        mock_index_cls: MagicMock,
         mock_monitor_cls: MagicMock,
         mock_notify: MagicMock,
     ) -> None:
@@ -196,10 +194,8 @@ class TestRunMonitor:
 
     @patch("orca_auto.orca.commands.monitor.notify_monitor_report", return_value=False)
     @patch("orca_auto.orca.commands.monitor.DFTMonitor")
-    @patch("orca_auto.orca.commands.monitor.DFTIndex")
     def test_returns_error_when_notification_send_fails(
         self,
-        mock_index_cls: MagicMock,
         mock_monitor_cls: MagicMock,
         mock_notify: MagicMock,
     ) -> None:
@@ -223,15 +219,12 @@ class TestRunMonitor:
             result = _run_monitor(cfg)
 
         assert result == 1
-        mock_index_cls.return_value.initialize.assert_called_once_with(str(allowed / "dft.db"))
         mock_notify.assert_called_once()
 
     @patch("orca_auto.orca.commands.monitor.notify_monitor_report", return_value=True)
     @patch("orca_auto.orca.commands.monitor.DFTMonitor")
-    @patch("orca_auto.orca.commands.monitor.DFTIndex")
     def test_sends_when_new_dft_discovery_exists(
         self,
-        mock_index_cls: MagicMock,
         mock_monitor_cls: MagicMock,
         mock_notify: MagicMock,
     ) -> None:
@@ -259,10 +252,8 @@ class TestRunMonitor:
 
     @patch("orca_auto.orca.commands.monitor.notify_monitor_report", return_value=True)
     @patch("orca_auto.orca.commands.monitor.DFTMonitor")
-    @patch("orca_auto.orca.commands.monitor.DFTIndex")
     def test_does_not_send_when_only_running_dft_updates_exist(
         self,
-        mock_index_cls: MagicMock,
         mock_monitor_cls: MagicMock,
         mock_notify: MagicMock,
     ) -> None:

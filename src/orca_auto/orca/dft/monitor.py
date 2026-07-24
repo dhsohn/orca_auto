@@ -1,7 +1,6 @@
-"""DFT calculation file change detection and automatic indexing.
+"""DFT calculation file change detection.
 
-Periodically scans kb_dirs to detect newly completed/changed ORCA calculations
-and registers them in the DFT index.
+Periodically scans kb_dirs to detect newly completed/changed ORCA calculations.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ from typing import Any
 
 from ..parser import parse_orca_output
 from .discovery import discover_orca_targets
-from .index import DFTIndex
 
 logger = logging.getLogger(__name__)
 
@@ -73,16 +71,14 @@ class _ScanAccumulator:
 
 
 class DFTMonitor:
-    """DFT calculation file change detection and automatic indexing."""
+    """DFT calculation file change detection."""
 
     def __init__(
         self,
-        dft_index: DFTIndex,
         kb_dirs: list[str],
         *,
         state_file: str | None = None,
     ) -> None:
-        self._index = dft_index
         self._kb_dirs = kb_dirs
         self._state_file = state_file
         self._last_seen: dict[str, FileSignature] = _load_state(state_file) if state_file else {}
@@ -93,7 +89,7 @@ class DFTMonitor:
         *,
         max_file_size_mb: int = 64,
     ) -> ScanReport:
-        """Detect new/changed ORCA files in kb_dirs and index them."""
+        """Detect new/changed ORCA files in kb_dirs."""
         max_bytes = max_file_size_mb * 1024 * 1024
         scan_state = _ScanAccumulator()
 
@@ -132,8 +128,7 @@ class DFTMonitor:
         try:
             result = parse_orca_output(spath)
             effective_status = status_override or result.status
-            if not self._record_scan_result(spath, canonical, signature, effective_status):
-                return
+            self._last_seen[canonical] = signature
             scan_state.state_dirty = True
             scan_state.new_results.append(
                 _monitor_result_from_orca(result, effective_status, canonical)
@@ -179,20 +174,6 @@ class DFTMonitor:
         if last_signature is not None and _same_signature(last_signature, signature):
             return False
         return canonical not in processed_this_scan
-
-    def _record_scan_result(
-        self,
-        spath: str,
-        canonical: str,
-        signature: FileSignature,
-        effective_status: str,
-    ) -> bool:
-        if effective_status != "running":
-            success = self._index.upsert_single(spath, status_override=effective_status)
-            if not success:
-                return False
-        self._last_seen[canonical] = signature
-        return True
 
 
 def _iter_target_signatures(

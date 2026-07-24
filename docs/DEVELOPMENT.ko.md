@@ -61,7 +61,7 @@ workflow SI에는 더 좁은 강제 방향이 있습니다.
 - `orca_auto queue ...`
 - `orca_auto run-dir <path>`
 - `orca_auto init`
-- `orca_auto scaffold <ts_search|conformer_search> <path>`
+- `orca_auto scaffold <ts_search|conformer_search|scan_ts> <path>`
 - `orca_auto scan-notify`
 
 장기 실행 서비스는 공개 CLI 표면의 일부가 아닙니다. 사용자는 오직 `systemd/` 유닛을

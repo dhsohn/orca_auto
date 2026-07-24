@@ -12,7 +12,6 @@ from orca_auto.core.admission import (
     build_slot_engine_process_registrar,
     get_slot,
 )
-from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED
 
 from ..child import entrypoint as _child_entrypoint
 from ..child.entrypoint import ChildWorkerEntrypointJob
@@ -312,15 +311,6 @@ def run_engine_worker_child_job(
     )
 
 
-def outcome_exit_code(
-    outcome: Any,
-    *,
-    success_statuses: set[str] | frozenset[str] = frozenset({STATUS_COMPLETED, STATUS_CANCELLED}),
-) -> int:
-    status = str(getattr(outcome.result, "status", "")).strip().lower()
-    return 0 if status in success_statuses else 1
-
-
 __all__ = [
     "WorkerChildCommandSpec",
     "WorkerChildRunSpec",
@@ -328,7 +318,6 @@ __all__ = [
     "await_parent_admission_handoff",
     "build_engine_worker_child_command",
     "load_engine_child_job",
-    "outcome_exit_code",
     "run_child_job_with_admission_scope",
     "run_engine_worker_child_job",
     "run_loaded_engine_child_job",

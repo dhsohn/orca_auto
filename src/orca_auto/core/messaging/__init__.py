@@ -10,7 +10,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-from .channel import MessageChannel, SendResult, send_ok
+from .channel import MessageChannel, SendResult
 from .render_discord import render_discord_embed
 from .richtext import (
     Field,
@@ -21,7 +21,6 @@ from .richtext import (
     Span,
     bold,
     code,
-    code_block,
     field_row,
     group,
     line,
@@ -75,7 +74,6 @@ __all__ = [
     "build_channel",
     "build_channel_from_config_path",
     "code",
-    "code_block",
     "field_row",
     "group",
     "line",
@@ -83,7 +81,6 @@ __all__ = [
     "load_required_messenger_config_from_file",
     "raw",
     "render_discord_embed",
-    "send_ok",
     "text",
     "title_heading",
 ]

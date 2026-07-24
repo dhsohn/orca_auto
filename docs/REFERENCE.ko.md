@@ -76,6 +76,7 @@ CLI, 설정, JSON 산출물, 워크플로우, systemd 표면 중 공개 계약�
     orca_auto-runtime@.target
     orca_auto-engine-workers@.target
     orca_auto-queue-worker@.service
+    orca_auto-workflow-worker@.service
   scripts/*.sh / *.py
   tests/
     integration/
@@ -606,7 +607,7 @@ orca_auto queue list --engine xtb
 
 `queue list`는 워크플로우와 엔진 활동을 한 화면에 보여주되, 워크플로우 자식
 시뮬레이션은 부모 워크플로우 아래에 들여쓰기되어 렌더링됩니다. 텍스트 뷰는 `Status`,
-`Job ID`, `Detail`, `Elapsed` 컬럼의 표를 출력하며, detail 필드는 `ts_search(nci)`,
+`Name`, `Detail`, `ID`, `Elapsed` 컬럼의 표를 출력하며, detail 필드는 `ts_search(nci)`,
 `IRC`, `NEB` 같은 워크플로우/작업 의도를 드러냅니다. 기본적으로 워크플로우 부모 아래에는
 ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 자식 작업은 잡음을 줄이기 위해 통합 텍스트
 뷰에서 숨겨지지만 `--engine ... --kind job` 필터와 `--json`으로는 여전히 확인할 수
@@ -683,6 +684,7 @@ wsl --shutdown
 - [`systemd/orca_auto-runtime@.target`](../systemd/orca_auto-runtime@.target)
 - [`systemd/orca_auto-engine-workers@.target`](../systemd/orca_auto-engine-workers@.target)
 - [`systemd/orca_auto-queue-worker@.service`](../systemd/orca_auto-queue-worker@.service)
+- [`systemd/orca_auto-workflow-worker@.service`](../systemd/orca_auto-workflow-worker@.service)
 
 권장 상시 가동 런타임 설치 흐름:
 

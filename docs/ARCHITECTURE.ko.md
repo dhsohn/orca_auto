@@ -345,7 +345,7 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   `si_block.md`(`report/si.py`)도 생성합니다 — 에너지, 열화학, Nimag, 좌표를
   담은 복사-붙여넣기용 Supporting Information 블록입니다. IRC route는 좌표
   없는 요약 전용 validation 블록을 생성합니다.
-- **인덱스:** `dft_index*.py`와 `core/indexing`이 탐색용 JSONL 작업 위치
+- **인덱스:** `job_locations/`와 `core/indexing`이 탐색용 JSONL 작업 위치
   인덱스를 유지합니다.
 
 ORCA가 다운스트림에 노출하는 필드("계약 동결")는
@@ -584,7 +584,7 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 `scripts/check.sh`가 로컬과 CI 공용 엔트리포인트입니다: `.venv`를 생성/복구하고
 `.[dev]`를 설치한 뒤 `ruff check`, `ruff format --check`, `mypy`, `lint-imports`, 그리고 커버리지
 게이트가 걸린 pytest 스위트를 실행합니다. CI는 추가로 Gitleaks, ShellCheck,
-렌더링된 systemd 유닛 검증, Python 3.11/3.12/3.13 매트릭스, 휠 타입 메타데이터
+Python 3.11/3.12/3.13 매트릭스, 휠 타입 메타데이터
 스모크 테스트를 실행합니다. 휠 스모크는 패키징된 Python module 목록이 `src/orca_auto`와
 정확히 같고 root `py.typed` marker가 하나뿐인지도 확인합니다.
 

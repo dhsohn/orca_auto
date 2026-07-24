@@ -2,8 +2,6 @@
 
 from .engine import (
     RECOVERY_PENDING_REASONS,
-    EngineStateAccess,
-    EngineStateFiles,
     coerce_dict,
     coerce_list,
     is_recovery_pending_state,
@@ -12,12 +10,9 @@ from .engine import (
     recovery_pending_payload,
     state_matches_fields,
     write_json_artifact,
-    write_text_artifact,
 )
 
 __all__ = [
-    "EngineStateFiles",
-    "EngineStateAccess",
     "RECOVERY_PENDING_REASONS",
     "coerce_dict",
     "coerce_list",
@@ -27,5 +22,4 @@ __all__ = [
     "recovery_pending_payload",
     "state_matches_fields",
     "write_json_artifact",
-    "write_text_artifact",
 ]

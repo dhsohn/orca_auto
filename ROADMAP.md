@@ -74,21 +74,6 @@ Discord messaging, durable Discord archive submission, richer conformer
 science outputs, and stricter resource and artifact provenance checks. The
 shipped details and upgrade note live in [CHANGELOG.md](CHANGELOG.md).
 
-## 0.2.x: Continue Public Contract Clarity
-
-The remainder of the 0.2 series should make the public surface easier to depend on.
-
-- Document the stable subset of queue, state, report, and workflow JSON fields.
-- Add migration notes for any renamed config keys, artifact fields, or reason
-  strings.
-- Provide a compact real-ORCA acceptance record template and store example
-  acceptance notes for changes that cannot be proven by fake engines.
-- Clarify which workflow templates are supported, experimental, or internal.
-- Make CLI JSON output and table output expectations more explicit for scripts
-  and human operators.
-- Consider packaging small sanitized parser fixtures that cover important ORCA
-  failure markers without committing large or private output files.
-
 The 0.3.0 release removes the standalone xTB-MD public engine, narrowing the
 supported public surface back to standalone ORCA plus the internal workflow xTB
 and CREST stages.

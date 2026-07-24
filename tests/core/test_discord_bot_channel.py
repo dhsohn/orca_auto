@@ -65,7 +65,7 @@ def test_discord_bot_channel_posts_confirmed_embed_without_mentions(
         return _FakeResponse()
 
     monkeypatch.setattr(bot_mod, "urlopen", fake_urlopen)
-    result = DiscordBotChannel(_bot_config()).send(Message(title="@everyone"), silent=True)
+    result = DiscordBotChannel(_bot_config()).send(Message(title="@everyone"))
 
     assert result.sent
     assert result.message_id == "999"
@@ -77,7 +77,7 @@ def test_discord_bot_channel_posts_confirmed_embed_without_mentions(
     assert payload["allowed_mentions"] == {"parse": []}
     assert len(payload["nonce"]) == 24
     assert payload["enforce_nonce"] is True
-    assert payload["flags"] == 1 << 12
+    assert "flags" not in payload
     assert captured["timeout"] == 5.0
 
 

@@ -35,11 +35,9 @@ from .engine_specs import (
     notify_crest_job_finished,
     notify_crest_job_queued,
     notify_crest_job_started,
-    notify_crest_job_terminal,
     notify_xtb_job_finished,
     notify_xtb_job_queued,
     notify_xtb_job_started,
-    notify_xtb_job_terminal,
 )
 
 __all__ = [
@@ -57,11 +55,9 @@ __all__ = [
     "notify_crest_job_finished",
     "notify_crest_job_queued",
     "notify_crest_job_started",
-    "notify_crest_job_terminal",
     "notify_xtb_job_finished",
     "notify_xtb_job_queued",
     "notify_xtb_job_started",
-    "notify_xtb_job_terminal",
     "optional_terminal_lines",
     "send_job_event",
     "send_lifecycle_event",

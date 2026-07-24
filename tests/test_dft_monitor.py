@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 
-from orca_auto.orca.dft.index import DFTIndex
 from orca_auto.orca.dft.monitor import DFTMonitor
 from tests.engine_artifact_helpers import orca_artifact_payload
 
@@ -52,13 +51,6 @@ _RUNNING_OPT_OUT = "\n".join(
 )
 
 
-def _make_index(tmp_path: Path) -> DFTIndex:
-    db_path = str(tmp_path / "dft.db")
-    index = DFTIndex()
-    index.initialize(db_path)
-    return index
-
-
 def _write_orca_state(job_dir: Path, *, status: str) -> None:
     (job_dir / "job_state.json").write_text(
         json.dumps(
@@ -95,9 +87,8 @@ def test_baseline_seed_prevents_restart_spam(tmp_path: Path) -> None:
     _write_orca_state(kb_dir, status="completed")
 
     state_file = str(tmp_path / "automation" / "dft_monitor_state.json")
-    index = _make_index(tmp_path)
 
-    monitor = DFTMonitor(index, [str(kb_dir)], state_file=state_file)
+    monitor = DFTMonitor([str(kb_dir)], state_file=state_file)
 
     # First run: only records baseline
     report1 = monitor.scan()
@@ -106,7 +97,7 @@ def test_baseline_seed_prevents_restart_spam(tmp_path: Path) -> None:
     assert Path(state_file).is_file()
 
     # After restart (new instance), no re-notification for the same file
-    monitor2 = DFTMonitor(index, [str(kb_dir)], state_file=state_file)
+    monitor2 = DFTMonitor([str(kb_dir)], state_file=state_file)
     report2 = monitor2.scan()
     assert report2.new_results == []
 
@@ -118,10 +109,8 @@ def test_baseline_seed_prevents_restart_spam(tmp_path: Path) -> None:
     assert len(report3.new_results) == 1
     assert report3.new_results[0].status == "completed"
 
-    index.close()
 
-
-def test_running_calc_not_indexed(tmp_path: Path) -> None:
+def test_running_calc_change_produces_running_notification(tmp_path: Path) -> None:
     kb_dir = tmp_path / "kb"
     kb_dir.mkdir(parents=True)
     out_file = kb_dir / "running.out"
@@ -129,9 +118,8 @@ def test_running_calc_not_indexed(tmp_path: Path) -> None:
     _write_orca_state(kb_dir, status="running")
 
     state_file = str(tmp_path / "automation" / "state.json")
-    index = _make_index(tmp_path)
 
-    monitor = DFTMonitor(index, [str(kb_dir)], state_file=state_file)
+    monitor = DFTMonitor([str(kb_dir)], state_file=state_file)
     monitor.scan()  # baseline
 
     out_file.write_text(_RUNNING_OPT_OUT + "\n# updated\n", encoding="utf-8")
@@ -140,10 +128,6 @@ def test_running_calc_not_indexed(tmp_path: Path) -> None:
     report = monitor.scan()
     assert len(report.new_results) == 1
     assert report.new_results[0].status == "running"
-    # Running calculations should not be stored in the index
-    assert index.query({}) == []
-
-    index.close()
 
 
 def test_running_calc_change_detected_even_if_mtime_moves_backward(tmp_path: Path) -> None:
@@ -153,10 +137,7 @@ def test_running_calc_change_detected_even_if_mtime_moves_backward(tmp_path: Pat
     out_file.write_text(_RUNNING_OPT_OUT, encoding="utf-8")
     _write_orca_state(kb_dir, status="running")
 
-    index = _make_index(tmp_path)
-    monitor = DFTMonitor(
-        index, [str(kb_dir)], state_file=str(tmp_path / "automation" / "state.json")
-    )
+    monitor = DFTMonitor([str(kb_dir)], state_file=str(tmp_path / "automation" / "state.json"))
     monitor.scan()
 
     baseline_mtime = os.path.getmtime(out_file)
@@ -166,9 +147,6 @@ def test_running_calc_change_detected_even_if_mtime_moves_backward(tmp_path: Pat
     report = monitor.scan()
     assert len(report.new_results) == 1
     assert report.new_results[0].status == "running"
-    assert index.query({}) == []
-
-    index.close()
 
 
 def test_symlink_dedup(tmp_path: Path) -> None:
@@ -183,15 +161,12 @@ def test_symlink_dedup(tmp_path: Path) -> None:
     _write_orca_state(run_dir, status="running")
 
     state_file = str(tmp_path / "automation" / "state.json")
-    index = _make_index(tmp_path)
 
     # Baseline with symlink path first
-    monitor1 = DFTMonitor(index, [str(link_dir)], state_file=state_file)
+    monitor1 = DFTMonitor([str(link_dir)], state_file=state_file)
     monitor1.scan()
 
     # Restart with real path — should not produce duplicate notifications
-    monitor2 = DFTMonitor(index, [str(run_dir)], state_file=state_file)
+    monitor2 = DFTMonitor([str(run_dir)], state_file=state_file)
     report = monitor2.scan()
     assert report.new_results == []
-
-    index.close()

@@ -45,18 +45,8 @@ def _optional_int_dict(
     return dict(value)
 
 
-def _optional_lines(values: Mapping[str, object], field_name: str) -> list[str] | None:
-    value = values.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise TypeError(f"{field_name} must be list[str] or None")
-    return list(value)
-
-
 __all__ = [
     "_optional_int_dict",
-    "_optional_lines",
     "_required_int",
     "_required_path",
     "_required_str",

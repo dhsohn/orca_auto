@@ -24,7 +24,6 @@ from orca_auto.flow.engines.xtb.ranking_selection import (
 )
 from tests.execution_snapshot_helpers import stage_execution_snapshot
 from tests.flow.engines.xtb.factories import (
-    CandidateSpDeps,
     FakeCandidateProcess,
     make_ranking_result,
 )
@@ -414,45 +413,6 @@ def test_run_candidate_sp_job_writes_scaffold_and_finalizes_result(
     assert manifest["input_xyz"] == "input.xyz"
 
 
-def test_wait_for_candidate_sp_result_handles_non_process_and_exit_paths(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    expected_result = object()
-    deps = CandidateSpDeps(expected_result)
-    monkeypatch.setattr(runner_mod, "finalize_xtb_job", deps.finalize_xtb_job)
-    no_process_running = SimpleNamespace(process=None)
-
-    assert (
-        runner_mod._wait_for_candidate_sp_result(
-            no_process_running,
-            should_cancel=None,
-            on_cancel=None,
-        )
-        is expected_result
-    )
-
-    process = FakeCandidateProcess([None, 0])
-    running = SimpleNamespace(process=process)
-    sleeps: list[float] = []
-
-    assert (
-        runner_mod._wait_for_candidate_sp_result(
-            running,
-            should_cancel=lambda: False,
-            on_cancel=None,
-            sleep_fn=sleeps.append,
-            poll_interval_seconds=0.25,
-        )
-        is expected_result
-    )
-
-    assert sleeps == [0.25]
-    assert deps.finalize_calls == [
-        (no_process_running, None, None),
-        (running, None, None),
-    ]
-
-
 def test_run_candidate_sp_job_cancels_process_and_clears_running_callback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -554,76 +514,6 @@ def test_run_candidate_sp_job_rejects_bound_input_mutation(
         result.analysis_summary["expected_input_sha256"]
         != result.analysis_summary["executed_input_sha256"]
     )
-
-
-def test_request_candidate_process_stop_uses_confirming_terminator(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    process = FakeCandidateProcess([None])
-
-    def terminate(actual_process: object) -> bool:
-        assert actual_process is process
-        process.terminate()
-        return True
-
-    monkeypatch.setattr(runner_mod, "terminate_process_group", terminate)
-    assert runner_mod._request_candidate_process_stop(
-        cast(subprocess.Popen[str], process), on_cancel=None
-    )
-    assert process.terminate_calls == 1
-
-    exited = FakeCandidateProcess([0])
-    assert runner_mod._request_candidate_process_stop(
-        cast(subprocess.Popen[str], exited),
-        on_cancel=None,
-    )
-    assert exited.terminate_calls == 0
-
-    callback_process = FakeCandidateProcess([None])
-    callback_calls: list[object] = []
-
-    def callback(actual_process: subprocess.Popen[str]) -> bool:
-        callback_calls.append(actual_process)
-        return True
-
-    assert runner_mod._request_candidate_process_stop(
-        cast(subprocess.Popen[str], callback_process),
-        on_cancel=callback,
-    )
-    assert callback_calls == [callback_process]
-
-
-def test_candidate_monitor_error_cleans_up_before_propagating(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    process = FakeCandidateProcess([None])
-    running = SimpleNamespace(process=process)
-    finalize_calls: list[object] = []
-    terminate_calls: list[object] = []
-
-    monkeypatch.setattr(
-        runner_mod,
-        "finalize_xtb_job",
-        lambda actual_running, **_kwargs: finalize_calls.append(actual_running),
-    )
-
-    def terminate(actual_process: Any) -> bool:
-        assert isinstance(actual_process, FakeCandidateProcess)
-        terminate_calls.append(actual_process)
-        actual_process.terminate()
-        return True
-
-    with pytest.raises(RuntimeError, match="queue read failed"):
-        runner_mod._wait_for_candidate_sp_result(
-            running,
-            should_cancel=lambda: (_ for _ in ()).throw(RuntimeError("queue read failed")),
-            on_cancel=terminate,
-            sleep_fn=lambda _seconds: None,
-        )
-
-    assert terminate_calls == [process]
-    assert process.poll() == -15
-    assert finalize_calls == []
 
 
 def test_run_xtb_ranking_job_requires_candidates(

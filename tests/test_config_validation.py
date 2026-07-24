@@ -210,29 +210,6 @@ class TestConfigValidation(unittest.TestCase):
             self.assertEqual(cfg.messenger.discord.max_attempts, 4)
             self.assertEqual(cfg.messenger.discord.retry_backoff_seconds, 0.25)
 
-    def test_legacy_top_level_telegram_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            allowed = root / "orca_runs"
-            allowed.mkdir()
-            fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
-
-            cfg_path = _write_orca_config(
-                root / "orca_auto.yaml",
-                {
-                    "runs_root": str(allowed),
-                    "paths": {"orca_executable": str(fake_orca)},
-                    "telegram": {
-                        "bot_token": "legacy-token",
-                        "chat_id": "legacy-chat",
-                    },
-                },
-            )
-
-            with self.assertRaisesRegex(ValueError, "no longer supported"):
-                load_config(str(cfg_path))
-
     def test_unknown_messenger_provider_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

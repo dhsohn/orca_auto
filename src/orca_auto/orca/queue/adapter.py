@@ -7,7 +7,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue import store as _queue_store
@@ -58,7 +58,6 @@ from .terminal_replay import (
 
 logger = logging.getLogger(__name__)
 
-_UNSET = object()
 _TOKEN_COLLISION_RETRY_LIMIT = 32
 
 __all__ = [
@@ -73,7 +72,6 @@ __all__ = [
     "TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY",
     "TERMINAL_REPLAY_METADATA_KEY",
     "cancel",
-    "cancel_pending_entry",
     "clear_terminal",
     "dequeue_entry_if_pending",
     "dequeue_next",
@@ -81,7 +79,6 @@ __all__ = [
     "get_active_entry_for_reaction_dir",
     "get_entry_by_id",
     "get_cancel_requested",
-    "has_pending_entries",
     "is_orca_queue_entry",
     "find_entry_by_target",
     "list_queue",
@@ -101,7 +98,6 @@ __all__ = [
     "queue_entries_same_publication_generation",
     "reconcile_orphaned_running_entries",
     "requeue_running_entry",
-    "update_running_entry_state",
     "update_terminal",
     "worker_log_path",
 ]
@@ -658,11 +654,6 @@ def get_entry_by_id(allowed_root: Path, queue_id: str) -> QueueEntry | None:
     return next((entry for entry in list_queue(allowed_root) if entry.queue_id == queue_id), None)
 
 
-def has_pending_entries(allowed_root: Path) -> bool:
-    """Return True when at least one pending entry exists."""
-    return any(entry.status == QueueStatus.PENDING for entry in list_queue(allowed_root))
-
-
 def get_active_entry_for_reaction_dir(allowed_root: Path, reaction_dir: str) -> QueueEntry | None:
     """Return the active queue entry for a reaction_dir, if one exists."""
     resolved = str(Path(reaction_dir).expanduser().resolve())
@@ -779,68 +770,6 @@ def update_terminal(
             error=error if error is not None else current.error,
             metadata=metadata,
         )
-        logger.info("Entry %s -> %s", queue_id, target_status)
-        return True, entry
-
-    return bool(
-        _queue_store.mutate_entry_by_id(
-            allowed_root,
-            queue_id,
-            update,
-            missing_result=False,
-            load_entries_fn=_load_entries,
-            save_entries_fn=_queue_store.save_entries,
-        )
-    )
-
-
-def cancel_pending_entry(entry: QueueEntry, *, finished_at: str) -> QueueEntry:
-    return replace(entry, status=QueueStatus.CANCELLED, finished_at=finished_at)
-
-
-def update_running_entry_state(
-    allowed_root: Path,
-    queue_id: str,
-    *,
-    status: str,
-    started_at: object = _UNSET,
-    finished_at: object = _UNSET,
-    cancel_requested: bool | None = None,
-    metadata_update: dict[str, Any] | None = None,
-    expected_entry: QueueEntry | None = None,
-    expected_task_id: str | None = None,
-) -> bool:
-    target_status = normalize_text(status).lower()
-    if target_status != QueueStatus.RUNNING.value:
-        # Active -> terminal writes must use mark/cancel so replay evidence is
-        # persisted in the same queue mutation.
-        return False
-
-    def update(current: QueueEntry) -> tuple[bool, QueueEntry | None]:
-        if not is_orca_queue_entry(current):
-            return False, None
-        if expected_entry is not None and not queue_entries_same_publication_generation(
-            current, expected_entry
-        ):
-            return False, None
-        if expected_task_id is not None and normalize_text(current.task_id) != normalize_text(
-            expected_task_id
-        ):
-            return False, None
-        if current.status != QueueStatus.RUNNING:
-            return False, None
-        updates: dict[str, Any] = {"status": QueueStatus(target_status)}
-        if started_at is not _UNSET:
-            updates["started_at"] = cast(str | None, started_at) or ""
-        if finished_at is not _UNSET:
-            updates["finished_at"] = cast(str | None, finished_at) or ""
-        if cancel_requested is not None:
-            updates["cancel_requested"] = cancel_requested
-        if metadata_update:
-            merged_metadata = dict(current.metadata)
-            merged_metadata.update(metadata_update)
-            updates["metadata"] = merged_metadata
-        entry = replace(current, **updates)
         logger.info("Entry %s -> %s", queue_id, target_status)
         return True, entry
 

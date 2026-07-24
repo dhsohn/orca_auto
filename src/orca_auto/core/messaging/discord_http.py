@@ -13,8 +13,6 @@ import math
 from collections.abc import Mapping
 from urllib.error import HTTPError
 
-# Discord message flag: SUPPRESS_NOTIFICATIONS (deliver silently).
-_SUPPRESS_NOTIFICATIONS = 1 << 12
 _MAX_RETRY_DELAY_SECONDS = 120.0
 _MAX_TOTAL_RETRY_DELAY_SECONDS = 120.0
 _MAX_ERROR_BODY_BYTES = 16_384

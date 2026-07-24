@@ -1,1 +1,1 @@
-"""DFT job discovery, indexing, and monitoring."""
+"""DFT job discovery and monitoring."""

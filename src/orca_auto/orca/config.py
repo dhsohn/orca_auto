@@ -122,7 +122,6 @@ def _scheduler_runtime_settings(
         default_max_active=RetryRuntimeConfig.max_concurrent,
         default_admission_root=default_shared_admission_root(runs_root),
         admission_limit_enabled=scheduler_enabled,
-        reject_nonpositive=True,
     )
     return settings.max_active, settings.admission_root, settings.admission_limit
 

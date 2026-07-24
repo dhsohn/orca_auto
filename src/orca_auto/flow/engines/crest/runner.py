@@ -523,10 +523,6 @@ def _build_command(
     return command
 
 
-def _count_xyz_structures(path: Path) -> int:
-    return len(load_output_xyz_frames(path))
-
-
 def _frame_atom_sequence(frame: Any) -> tuple[str, ...]:
     return tuple(line.split()[0].casefold() for line in frame.atom_lines)
 

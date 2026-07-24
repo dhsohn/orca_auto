@@ -337,18 +337,3 @@ def test_run_engine_worker_child_job_skips_recovery_when_requeue_cancels(
     assert requeued == [((tmp_path / "queue").resolve(), "queue-1")]
     assert recovery == []
     assert released == []
-
-
-def test_outcome_exit_code_maps_terminal_statuses() -> None:
-    assert (
-        engine_child.outcome_exit_code(SimpleNamespace(result=SimpleNamespace(status="completed")))
-        == 0
-    )
-    assert (
-        engine_child.outcome_exit_code(SimpleNamespace(result=SimpleNamespace(status="cancelled")))
-        == 0
-    )
-    assert (
-        engine_child.outcome_exit_code(SimpleNamespace(result=SimpleNamespace(status="failed")))
-        == 1
-    )

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -38,9 +37,6 @@ class AdmissionReservationRequest:
     queue_id: str = ""
     owner_pid: int | None = None
     engine_process_state: str = ""
-    exclude_work_dirs: set[str] | None = None
-    extra_active_count_fn: Callable[[Path, set[str], set[str]], int] | None = None
-    app_limit: int | None = None
 
 
 @dataclass(frozen=True)
