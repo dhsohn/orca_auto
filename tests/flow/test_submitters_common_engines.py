@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from orca_auto import cli_worker_specs
+from orca_auto import cli_workers as cli_worker_specs
 from orca_auto.core.queue import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,

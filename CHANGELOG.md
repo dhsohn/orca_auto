@@ -71,6 +71,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Merged the CLI parser-wiring modules into one `cli_parsers` module and the
+  worker spec/conflict helpers into `cli_workers`. The command surface, flags,
+  help text, and error styling are unchanged.
 - Flattened the remaining single-implementation queue-worker indirection:
   orphan reconciliation now lives in one module with direct calls, the
   worker-lifecycle hook mapping layer is gone (replay builds the core hooks

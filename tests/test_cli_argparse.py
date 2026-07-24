@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from orca_auto import cli as unified_cli
-from orca_auto.cli_argparse import _suggestion_hint
+from orca_auto.cli_parsers import _suggestion_hint
 
 
 def test_suggestion_hint_offers_close_match() -> None:

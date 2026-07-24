@@ -11,9 +11,9 @@ import pytest
 
 from orca_auto import cli_common
 from orca_auto import cli_handlers as cli_run_dir
-from orca_auto import cli_worker_conflicts as worker_conflicts
-from orca_auto import cli_worker_specs as worker_specs
 from orca_auto import cli_workers as unified_cli
+from orca_auto import cli_workers as worker_conflicts
+from orca_auto import cli_workers as worker_specs
 
 
 @pytest.fixture(autouse=True)
