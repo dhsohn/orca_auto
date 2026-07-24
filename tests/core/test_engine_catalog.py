@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from orca_auto import cli as unified_cli
-from orca_auto import cli_worker_specs
+from orca_auto import cli_workers as cli_worker_specs
 from orca_auto.core.engine_catalog import (
     activity_engine_entries,
     engine_catalog,

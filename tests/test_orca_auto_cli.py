@@ -12,10 +12,12 @@ from orca_auto import (
     cli_queue,
     cli_systemd_apply,
     cli_systemd_status,
-    cli_worker_conflicts,
 )
 from orca_auto import cli_handlers as cli_monitor
 from orca_auto import cli_handlers as cli_run_dir
+from orca_auto import (
+    cli_workers as cli_worker_conflicts,
+)
 
 
 @pytest.fixture(autouse=True)
