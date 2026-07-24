@@ -10,6 +10,7 @@ from ._models import (
     OrcaContractPayloadContext,
     OrcaContractResolvedFields,
 )
+from ._utils import normalize_text
 
 
 @dataclass(frozen=True)
@@ -43,13 +44,11 @@ def _resolved_path_fields(
     current_dir: Path | None,
     artifact_dir: Path | None,
     target: str,
-    deps: Any,
 ) -> _ResolvedPathFields:
     latest_known_path = _contract_payload.latest_known_path(
         record=payloads.record,
         current_dir=current_dir,
         target=target,
-        deps=deps,
     )
     if runtime.generation_invalid:
         return _ResolvedPathFields(
@@ -70,7 +69,6 @@ def _resolved_path_fields(
             report=payloads.report,
             current_dir=artifact_dir,
             latest_known_path=artifact_latest_known_path,
-            deps=deps,
         )
     )
     return _ResolvedPathFields(
@@ -86,7 +84,6 @@ def _resolved_status_fields(
     *,
     runtime: JobRuntimeContext,
     payloads: _contract_payload.RuntimePayloads,
-    deps: Any,
 ) -> _ResolvedStatusFields:
     if runtime.generation_invalid:
         return _ResolvedStatusFields(
@@ -101,10 +98,9 @@ def _resolved_status_fields(
         queue_entry=payloads.queue_entry,
         state=payloads.state,
         report=payloads.report,
-        deps=deps,
     )
     return _ResolvedStatusFields(
-        state_status=deps.normalize_text(payloads.state.get("status")).lower(),
+        state_status=normalize_text(payloads.state.get("status")).lower(),
         status=status,
         analyzer_status=analyzer_status,
         reason=reason,
@@ -115,12 +111,10 @@ def _resolved_status_fields(
 def _resolved_resource_fields(
     *,
     payloads: _contract_payload.RuntimePayloads,
-    deps: Any,
 ) -> _ResolvedResourceFields:
     resource_request, resource_actual = _contract_payload.runtime_resources(
         record=payloads.record,
         queue_entry=payloads.queue_entry,
-        deps=deps,
     )
     return _ResolvedResourceFields(
         resource_request=resource_request,
@@ -136,7 +130,6 @@ def resolved_contract_fields(
     artifact_dir: Path | None,
     target: str,
     run_id: str,
-    deps: Any,
 ) -> OrcaContractResolvedFields:
     path_fields = _resolved_path_fields(
         runtime=runtime,
@@ -144,17 +137,15 @@ def resolved_contract_fields(
         current_dir=current_dir,
         artifact_dir=artifact_dir,
         target=target,
-        deps=deps,
     )
-    status_fields = _resolved_status_fields(runtime=runtime, payloads=payloads, deps=deps)
-    resource_fields = _resolved_resource_fields(payloads=payloads, deps=deps)
+    status_fields = _resolved_status_fields(runtime=runtime, payloads=payloads)
+    resource_fields = _resolved_resource_fields(payloads=payloads)
     return OrcaContractResolvedFields(
         resolved_run_id=_contract_payload.resolved_run_id(
             run_id=run_id,
             state=payloads.state,
             report=payloads.report,
             queue_entry=payloads.queue_entry,
-            deps=deps,
         ),
         latest_known_path=path_fields.latest_known_path,
         state_status=status_fields.state_status,
@@ -177,7 +168,6 @@ def payload_context_from_runtime(
     target: str,
     run_id: str,
     reaction_dir: str,
-    deps: Any,
 ) -> OrcaContractPayloadContext:
     payloads = _contract_payload.runtime_payloads(runtime)
     resolved_target = "" if runtime.selector_miss else target
@@ -186,7 +176,6 @@ def payload_context_from_runtime(
         runtime,
         queue_entry=payloads.queue_entry,
         reaction_dir=resolved_reaction_dir,
-        deps=deps,
     )
     # Only a provenance-verified execution generation may expose runtime
     # state/report paths. The job root is not a report compatibility location.
@@ -198,7 +187,6 @@ def payload_context_from_runtime(
         artifact_dir=artifact_dir,
         target=resolved_target,
         run_id=run_id,
-        deps=deps,
     )
 
     return OrcaContractPayloadContext(
@@ -219,13 +207,12 @@ def payload_from_context(
     ctx: OrcaContractPayloadContext,
     *,
     queue_id: str,
-    deps: Any,
 ) -> dict[str, Any]:
     if ctx.missing:
         return {}
-    payload = _contract_payload.orca_contract_payload(ctx, deps=deps)
+    payload = _contract_payload.orca_contract_payload(ctx)
     if ctx.runtime.selector_miss:
         payload["reason"] = "queue_generation_not_found"
     if not payload["queue_id"]:
-        payload["queue_id"] = deps.normalize_text(queue_id)
+        payload["queue_id"] = normalize_text(queue_id)
     return payload

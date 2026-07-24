@@ -7,6 +7,10 @@ from typing import Any
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.orca.job_locations._generation import current_generation_payloads
 
+from . import _orca_local_lookup as _local_lookup
+from . import _orca_path_helpers as _path_helpers
+from . import _orca_tracking as _tracking
+
 
 @dataclass(frozen=True)
 class LoadRequest:
@@ -33,22 +37,13 @@ class LoaderContext:
     resolved_run_id: str = ""
 
 
-def resolve_roots(
-    orca_allowed_root: str | Path | None,
-    deps: Any,
-) -> LoadRoots:
-    allowed = (
-        deps.path_type(orca_allowed_root).expanduser().resolve() if orca_allowed_root else None
-    )
+def resolve_roots(orca_allowed_root: str | Path | None) -> LoadRoots:
+    allowed = Path(orca_allowed_root).expanduser().resolve() if orca_allowed_root else None
     return LoadRoots(allowed=allowed)
 
 
-def load_context(
-    request: LoadRequest,
-    roots: LoadRoots,
-    deps: Any,
-) -> LoaderContext:
-    runtime_context = deps.tracked_runtime_context_fn(
+def load_context(request: LoadRequest, roots: LoadRoots) -> LoaderContext:
+    runtime_context = _tracking.tracked_runtime_context_impl(
         index_root=roots.allowed,
         target=request.target,
         queue_id=request.queue_id,
@@ -58,13 +53,13 @@ def load_context(
     if runtime_context is not None:
         context = context_from_runtime(runtime_context)
     else:
-        tracked_dir, record, state, report = deps.tracked_artifact_context_fn(
+        tracked_dir, record, state, report = _tracking.tracked_artifact_context_impl(
             index_root=roots.allowed,
             targets=(request.target, request.run_id, request.reaction_dir),
         )
         context = LoaderContext(tracked_dir, tracked_dir, record, dict(state), dict(report), None)
     if context.queue_entry is None:
-        context.queue_entry = explicit_queue_entry(request, roots, deps)
+        context.queue_entry = explicit_queue_entry(request, roots)
     return context
 
 
@@ -80,18 +75,14 @@ def context_from_runtime(runtime_context: tuple[Any, ...]) -> LoaderContext:
     )
 
 
-def explicit_queue_entry(
-    request: LoadRequest,
-    roots: LoadRoots,
-    deps: Any,
-) -> dict[str, Any] | None:
+def explicit_queue_entry(request: LoadRequest, roots: LoadRoots) -> dict[str, Any] | None:
     if not (
         normalize_text(request.queue_id)
         or normalize_text(request.run_id)
         or normalize_text(request.reaction_dir)
     ):
         return None
-    return deps.find_queue_entry_fn(
+    return _local_lookup.find_queue_entry_impl(
         allowed_root=roots.allowed,
         target="",
         queue_id=request.queue_id,
@@ -100,23 +91,19 @@ def explicit_queue_entry(
     )
 
 
-def set_current_dir(
-    request: LoadRequest,
-    context: LoaderContext,
-    deps: Any,
-) -> None:
+def set_current_dir(request: LoadRequest, context: LoaderContext) -> None:
     context.current_dir = (
         context.tracked_dir
         or context.tracked_artifact_dir
-        or deps.direct_dir_target_fn(request.target)
-        or deps.resolve_candidate_path_fn(request.reaction_dir)
-        or deps.resolve_candidate_path_fn(
-            deps.queue_entry_metadata_value_fn(context.queue_entry, "reaction_dir")
+        or _path_helpers.direct_dir_target_impl(request.target)
+        or _path_helpers.resolve_candidate_path_impl(request.reaction_dir)
+        or _path_helpers.resolve_candidate_path_impl(
+            _local_lookup.queue_entry_metadata_value_impl(context.queue_entry, "reaction_dir")
         )
     )
 
 
-def load_context_payloads(context: LoaderContext, deps: Any) -> None:
+def load_context_payloads(context: LoaderContext) -> None:
     raw_state, raw_report = current_generation_payloads(
         context.queue_entry,
         context.state,
@@ -130,13 +117,13 @@ def load_context_payloads(context: LoaderContext, deps: Any) -> None:
     context.report = _flatten_orca_engine_payload(raw_report)
 
 
-def resolve_run_id(request: LoadRequest, context: LoaderContext, deps: Any) -> str:
+def resolve_run_id(request: LoadRequest, context: LoaderContext) -> str:
     queue = context.queue_entry or {}
     return (
         normalize_text(request.run_id)
         or normalize_text(context.state.get("run_id"))
         or normalize_text(context.report.get("run_id"))
-        or normalize_text(deps.queue_entry_metadata_value_fn(queue, "run_id"))
+        or normalize_text(_local_lookup.queue_entry_metadata_value_impl(queue, "run_id"))
     )
 
 

@@ -135,7 +135,7 @@ def test_adapter_rejects_same_spoofed_inner_pair_before_flattening() -> None:
         },
     )
 
-    load_context_payloads(context, deps=object())
+    load_context_payloads(context)
 
     assert context.state == {}
     assert context.report == {}

@@ -15,10 +15,25 @@ from orca_auto.core.queue.engine.snapshot_intent import SNAPSHOT_INTENT_TOKEN_KE
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.metadata import mapping_metadata_value as queue_entry_metadata_value
 
+from ..state import REPORT_JSON_NAME, STATE_FILE_NAME
 from ._generation import (
     current_generation_payloads,
     payload_generation_provenance,
     payload_matches_queue_generation,
+)
+from ._utils import (
+    attempt_count,
+    coerce_attempts,
+    derive_selected_input_xyz,
+    final_result_payload,
+    max_retries,
+    normalize_bool,
+    normalize_text,
+    prefer_orca_optimized_xyz,
+    resolve_artifact_path,
+    resolve_existing_job_dir,
+    resource_dict_from_any,
+    status_from_payloads,
 )
 
 
@@ -238,14 +253,13 @@ def runtime_current_dir(
     *,
     queue_entry: dict[str, Any] | None,
     reaction_dir: str,
-    deps: Any,
 ) -> Path | None:
     if runtime.selector_miss:
         return None
     return (
         runtime.artifact.job_dir
-        or deps.resolve_existing_job_dir(reaction_dir)
-        or deps.resolve_existing_job_dir(queue_entry_metadata_value(queue_entry, "reaction_dir"))
+        or resolve_existing_job_dir(reaction_dir)
+        or resolve_existing_job_dir(queue_entry_metadata_value(queue_entry, "reaction_dir"))
     )
 
 
@@ -255,13 +269,12 @@ def resolved_run_id(
     state: dict[str, Any],
     report: dict[str, Any],
     queue_entry: dict[str, Any] | None,
-    deps: Any,
 ) -> str:
     return (
-        deps.normalize_text(run_id)
-        or deps.normalize_text(state.get("run_id"))
-        or deps.normalize_text(report.get("run_id"))
-        or deps.normalize_text(queue_entry_metadata_value(queue_entry, "run_id"))
+        normalize_text(run_id)
+        or normalize_text(state.get("run_id"))
+        or normalize_text(report.get("run_id"))
+        or normalize_text(queue_entry_metadata_value(queue_entry, "run_id"))
     )
 
 
@@ -270,13 +283,12 @@ def latest_known_path(
     record: Any,
     current_dir: Path | None,
     target: str,
-    deps: Any,
 ) -> str:
-    if record is not None and deps.normalize_text(record.latest_known_path):
-        return deps.normalize_text(record.latest_known_path)
+    if record is not None and normalize_text(record.latest_known_path):
+        return normalize_text(record.latest_known_path)
     if current_dir is not None:
         return str(current_dir)
-    return deps.normalize_text(target)
+    return normalize_text(target)
 
 
 def selected_artifact_paths(
@@ -287,48 +299,45 @@ def selected_artifact_paths(
     report: dict[str, Any],
     current_dir: Path | None,
     latest_known_path: str,
-    deps: Any,
 ) -> tuple[str, str, str, str]:
     record_selected_inp = record.selected_input_xyz if record is not None else ""
-    if Path(deps.normalize_text(record_selected_inp)).suffix.lower() != ".inp":
+    if Path(normalize_text(record_selected_inp)).suffix.lower() != ".inp":
         record_selected_inp = ""
-    selected_inp = deps.resolve_artifact_path(
+    selected_inp = resolve_artifact_path(
         queue_entry_metadata_value(queue_entry, "selected_inp")
         or state.get("selected_inp")
         or report.get("selected_inp")
         or record_selected_inp,
         current_dir,
     )
-    if Path(deps.normalize_text(selected_inp)).suffix.lower() != ".inp":
+    if Path(normalize_text(selected_inp)).suffix.lower() != ".inp":
         selected_inp = ""
     state_final_result = state.get("final_result")
     state_final = state_final_result if isinstance(state_final_result, dict) else {}
     report_final_result = report.get("final_result")
     report_final = report_final_result if isinstance(report_final_result, dict) else {}
-    last_out_path = deps.resolve_artifact_path(
+    last_out_path = resolve_artifact_path(
         state_final.get("last_out_path") or report_final.get("last_out_path"),
         current_dir,
     )
-    selected_input_xyz = deps.resolve_artifact_path(
+    selected_input_xyz = resolve_artifact_path(
         _selected_xyz_source(
             record=record,
             queue_entry=queue_entry,
             state=state,
             report=report,
-            deps=deps,
         ),
         current_dir,
     )
     if not selected_input_xyz.lower().endswith(".xyz"):
         selected_input_xyz = ""
-    selected_input_xyz = selected_input_xyz or deps.derive_selected_input_xyz(selected_inp)
+    selected_input_xyz = selected_input_xyz or derive_selected_input_xyz(selected_inp)
     optimized_search_allowed, optimized_search_dir, excluded_xyz_paths = (
         _generation_optimized_xyz_policy(
             queue_entry=queue_entry,
             state=state,
             report=report,
             current_dir=current_dir,
-            deps=deps,
         )
     )
     optimized_xyz_path = ""
@@ -337,7 +346,7 @@ def selected_artifact_paths(
         optimized_latest_path = (
             str(optimized_search_dir) if optimized_search_dir is not None else latest_known_path
         )
-        optimized_xyz_path = deps.prefer_orca_optimized_xyz(
+        optimized_xyz_path = prefer_orca_optimized_xyz(
             selected_inp=selected_inp,
             selected_input_xyz=selected_input_xyz,
             current_dir=optimized_current_dir,
@@ -376,14 +385,13 @@ def _generation_optimized_xyz_policy(
     state: dict[str, Any],
     report: dict[str, Any],
     current_dir: Path | None,
-    deps: Any,
 ) -> tuple[bool, Path | None, tuple[str, ...]]:
     """Keep schema-2 staged XYZ inputs from masquerading as calculated outputs."""
 
     source, owner_token = _generation_optimized_source(queue_entry, state, report)
     if source is None:
         return True, None, ()
-    if not owner_token or not deps.coerce_attempts(state, report):
+    if not owner_token or not coerce_attempts(state, report):
         return False, None, ()
     materialized_inputs = source.get("materialized_inputs")
     mutable_roles = source.get("runtime_mutable_input_roles")
@@ -451,7 +459,7 @@ def _generation_optimized_xyz_policy(
     for role, raw_identity in materialized_inputs.items():
         if not isinstance(role, str) or not role or not isinstance(raw_identity, dict):
             return False, None, ()
-        raw_path_text = deps.normalize_text(raw_identity.get("path"))
+        raw_path_text = normalize_text(raw_identity.get("path"))
         try:
             raw_path = Path(raw_path_text).expanduser()
             materialized_path = raw_path.resolve(strict=True)
@@ -473,7 +481,7 @@ def _generation_optimized_xyz_policy(
                 original_size = int(raw_identity.get("size_bytes", -1))
             except (OSError, RuntimeError, TypeError, ValueError):
                 return False, None, ()
-            original_digest = deps.normalize_text(raw_identity.get("sha256"))
+            original_digest = normalize_text(raw_identity.get("sha256"))
             if (
                 original_digest
                 and original_size >= 0
@@ -499,7 +507,6 @@ def _selected_xyz_source(
     queue_entry: dict[str, Any] | None,
     state: dict[str, Any],
     report: dict[str, Any],
-    deps: Any,
 ) -> Any:
     candidates = (
         queue_entry_metadata_value(queue_entry, "selected_input_xyz"),
@@ -508,7 +515,7 @@ def _selected_xyz_source(
         record.selected_input_xyz if record is not None else "",
     )
     for candidate in candidates:
-        if Path(deps.normalize_text(candidate)).suffix.lower() == ".xyz":
+        if Path(normalize_text(candidate)).suffix.lower() == ".xyz":
             return candidate
     return ""
 
@@ -517,14 +524,13 @@ def runtime_resources(
     *,
     record: Any,
     queue_entry: dict[str, Any] | None,
-    deps: Any,
 ) -> tuple[dict[str, int], dict[str, int]]:
-    resource_request = deps.resource_dict_from_any(
+    resource_request = resource_dict_from_any(
         queue_entry_metadata_value(queue_entry, "resource_request")
-    ) or deps.resource_dict_from_any(record.resource_request if record is not None else {})
+    ) or resource_dict_from_any(record.resource_request if record is not None else {})
     resource_actual = (
-        deps.resource_dict_from_any(queue_entry_metadata_value(queue_entry, "resource_actual"))
-        or deps.resource_dict_from_any(record.resource_actual if record is not None else {})
+        resource_dict_from_any(queue_entry_metadata_value(queue_entry, "resource_actual"))
+        or resource_dict_from_any(record.resource_actual if record is not None else {})
         or dict(resource_request)
     )
     return resource_request, resource_actual
@@ -536,20 +542,19 @@ def resolved_status(
     queue_entry: dict[str, Any] | None,
     state: dict[str, Any],
     report: dict[str, Any],
-    deps: Any,
 ) -> tuple[str, str, str, str]:
-    status, analyzer_status, reason, completed_at = deps.status_from_payloads(
+    status, analyzer_status, reason, completed_at = status_from_payloads(
         queue_entry=queue_entry,
         state=state,
         report=report,
     )
-    tracked_status = deps.normalize_text(record.status if record is not None else "").lower()
+    tracked_status = normalize_text(record.status if record is not None else "").lower()
     if status == "unknown" and tracked_status:
         status = tracked_status
     return status, analyzer_status, reason, completed_at
 
 
-def orca_contract_payload(ctx: Any, *, deps: Any) -> dict[str, Any]:
+def orca_contract_payload(ctx: Any) -> dict[str, Any]:
     queue_entry = ctx.queue_entry or {}
     return {
         "run_id": ctx.resolved_run_id,
@@ -558,25 +563,27 @@ def orca_contract_payload(ctx: Any, *, deps: Any) -> dict[str, Any]:
         "state_status": ctx.state_status,
         "reaction_dir": str(current_dir)
         if (current_dir := ctx.current_dir) is not None
-        else deps.normalize_text(ctx.reaction_dir),
+        else normalize_text(ctx.reaction_dir),
         "latest_known_path": ctx.latest_known_path,
         "optimized_xyz_path": ctx.optimized_xyz_path,
-        "queue_id": deps.normalize_text(queue_entry.get("queue_id") or ""),
-        "queue_status": deps.normalize_text(queue_entry.get("status")).lower(),
-        "cancel_requested": deps.normalize_bool(queue_entry.get("cancel_requested")),
+        "queue_id": normalize_text(queue_entry.get("queue_id") or ""),
+        "queue_status": normalize_text(queue_entry.get("status")).lower(),
+        "cancel_requested": normalize_bool(queue_entry.get("cancel_requested")),
         "selected_inp": ctx.selected_inp,
         "selected_input_xyz": ctx.selected_input_xyz,
         "analyzer_status": ctx.analyzer_status,
         "completed_at": ctx.completed_at,
         "last_out_path": ctx.last_out_path,
-        **deps._runtime_paths(
+        **runtime_paths(
             getattr(ctx, "artifact_dir", ctx.current_dir),
+            state_file_name=STATE_FILE_NAME,
+            report_json_name=REPORT_JSON_NAME,
             queue_entry=ctx.queue_entry,
         ),
-        "attempt_count": deps.attempt_count(ctx.state, ctx.report),
-        "max_retries": deps.max_retries(ctx.state, ctx.report),
-        "attempts": deps.coerce_attempts(ctx.state, ctx.report),
-        "final_result": deps.final_result_payload(ctx.state, ctx.report),
+        "attempt_count": attempt_count(ctx.state, ctx.report),
+        "max_retries": max_retries(ctx.state, ctx.report),
+        "attempts": coerce_attempts(ctx.state, ctx.report),
+        "final_result": final_result_payload(ctx.state, ctx.report),
         "resource_request": ctx.resource_request,
         "resource_actual": ctx.resource_actual,
     }

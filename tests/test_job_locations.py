@@ -18,7 +18,8 @@ from orca_auto.core.queue.engine.input_snapshot import (
 )
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.execution_binding import orca_execution_provenance
-from orca_auto.orca.job_locations import _contracts as _job_location_contracts
+from orca_auto.orca.job_locations import _contract_payload as _job_location_payload
+from orca_auto.orca.job_locations import _runtime_context as _job_location_runtime
 from orca_auto.orca.job_locations import (
     index_root_for_cfg,
     load_job_artifact_context,
@@ -30,8 +31,17 @@ from orca_auto.orca.job_locations import (
     upsert_job_record,
 )
 from orca_auto.orca.job_locations._generation import payload_matches_queue_generation
-from orca_auto.orca.state import report_json_path, state_path
+from orca_auto.orca.state import REPORT_JSON_NAME, STATE_FILE_NAME, report_json_path, state_path
 from tests.engine_artifact_helpers import orca_artifact_payload
+
+
+def _runtime_paths(generation: Path) -> dict[str, str]:
+    return _job_location_payload.runtime_paths(
+        generation,
+        state_file_name=STATE_FILE_NAME,
+        report_json_name=REPORT_JSON_NAME,
+        queue_entry=None,
+    )
 
 
 @pytest.mark.parametrize(
@@ -105,7 +115,7 @@ def test_contract_queue_lookup_ignores_partial_and_foreign_rows(
         selected_reaction_dir = str(reaction_dir)
 
     assert (
-        _job_location_contracts._find_queue_entry(
+        _job_location_runtime._find_queue_entry(
             index_root=allowed_root,
             target=target,
             queue_id=queue_id,
@@ -1053,10 +1063,7 @@ def test_queue_absent_visible_generation_uses_provenance_and_rejects_unowned_rep
     publish(provenance)
 
     replacement = load_orca_contract_payload(allowed_root, str(generation))
-    replacement_paths = _job_location_contracts._runtime_paths(
-        generation,
-        queue_entry=None,
-    )
+    replacement_paths = _runtime_paths(generation)
 
     assert replacement["status"] == "unknown"
     assert replacement["reason"] == "queue_generation_verification_failed"
@@ -1082,7 +1089,7 @@ def test_runtime_paths_reject_mismatched_disk_payload_generations(tmp_path: Path
     report_engine_payload["run_id"] = "run_other"
     _write_json(report_json_path(generation), report_payload)
 
-    paths = _job_location_contracts._runtime_paths(generation, queue_entry=None)
+    paths = _runtime_paths(generation)
 
     assert paths == {
         "run_state_path": "",
@@ -1113,7 +1120,7 @@ def test_runtime_paths_reject_replacement_between_payload_reads(
 
     monkeypatch.setattr(_engine_process.os, "read", replacing_read)
 
-    paths = _job_location_contracts._runtime_paths(generation, queue_entry=None)
+    paths = _runtime_paths(generation)
 
     assert replaced
     assert paths == {
@@ -1785,22 +1792,6 @@ def test_load_orca_contract_payload_rejects_physical_paths_without_generation_id
 
     assert payload["run_state_path"] == ""
     assert payload["report_json_path"] == ""
-
-
-def test_load_orca_contract_payload_uses_single_dependency_resolver() -> None:
-    original_deps = _job_location_contracts._job_location_deps
-    call_count = 0
-
-    def counting_deps() -> object:
-        nonlocal call_count
-        call_count += 1
-        return original_deps()
-
-    with tempfile.TemporaryDirectory() as td:
-        with patch.object(_job_location_contracts, "_job_location_deps", counting_deps):
-            assert _job_location_contracts.load_orca_contract_payload(Path(td), "missing") == {}
-
-    assert call_count == 1
 
 
 def test_job_locations_uses_core_indexing_backend() -> None:
