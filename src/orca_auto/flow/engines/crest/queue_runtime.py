@@ -42,7 +42,6 @@ from orca_auto.core.queue import (
     requeue_running_entry,
 )
 from orca_auto.core.queue.engine import artifacts as _engine_artifacts
-from orca_auto.core.queue.engine.admission import mark_worker_start_error
 from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.worker import (
     BackgroundRunningJob as _RunningJob,
@@ -54,6 +53,7 @@ from orca_auto.core.queue.worker import (
 )
 from orca_auto.core.statuses import TERMINAL_STATUSES
 from orca_auto.core.utils import now_utc_iso
+from orca_auto.flow.engines import queue_runtime_common as _common
 from orca_auto.flow.engines.crest.execution import (
     _mark_recovery_pending_entry,
     _terminate_process,
@@ -180,26 +180,7 @@ def _reconcile_orphaned_running(worker: Any) -> None:
     )
 
 
-def _artifact_value(
-    state: dict[str, Any],
-    key: str,
-    default: Any = None,
-) -> Any:
-    if key in state:
-        return state[key]
-    state_engine_payload = state.get("engine_payload")
-    if isinstance(state_engine_payload, dict) and key in state_engine_payload:
-        return state_engine_payload[key]
-    return default
-
-
-def _terminal_reason(state: dict[str, Any]) -> str:
-    status_payload = state.get("status")
-    if isinstance(status_payload, dict):
-        reason = str(status_payload.get("reason") or "").strip()
-        if reason:
-            return reason
-    return "terminal_artifact_replay"
+_artifact_value = _common.artifact_value
 
 
 def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
@@ -216,43 +197,20 @@ def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
     if not job_dir.is_relative_to(resolved_queue_root):
         return False
     raw_state = load_state(job_dir) or {}
-    matched = _engine_artifacts.matching_terminal_state_for_entry(
-        state=raw_state,
-        entry=entry,
+    durable_status = _common.durable_entry_status(entry)
+    matched = _common.matched_terminal_state_for_adoption(
+        queue_root,
+        entry,
+        raw_state=raw_state,
         engine="crest",
         job_dir=job_dir,
+        mark_completed_fn=mark_completed,
+        mark_cancelled_fn=mark_cancelled,
+        mark_failed_fn=mark_failed,
     )
-    durable_status = str(getattr(getattr(entry, "status", None), "value", "")).strip().lower()
-    if matched is not None:
-        state = matched
-        matched_status_payload = state.get("status")
-        matched_status = (
-            str(matched_status_payload.get("state") or "").strip().lower()
-            if isinstance(matched_status_payload, dict)
-            else ""
-        )
-        if durable_status in TERMINAL_STATUSES and matched_status != durable_status:
-            _queue_execution.mark_terminal_repair_blocked(
-                queue_root,
-                entry,
-                durable_status=durable_status,
-                mark_completed_fn=mark_completed,
-                mark_cancelled_fn=mark_cancelled,
-                mark_failed_fn=mark_failed,
-            )
-            return False
-    elif durable_status in TERMINAL_STATUSES:
-        _queue_execution.mark_terminal_repair_blocked(
-            queue_root,
-            entry,
-            durable_status=durable_status,
-            mark_completed_fn=mark_completed,
-            mark_cancelled_fn=mark_cancelled,
-            mark_failed_fn=mark_failed,
-        )
+    if matched is None:
         return False
-    else:
-        return False
+    state = matched
     record = record_from_artifacts(job_dir=job_dir, state=state)
     if (
         record is None
@@ -263,19 +221,10 @@ def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
     entry_metadata = getattr(entry, "metadata", {})
     if not isinstance(entry_metadata, dict):
         return False
-    selected_input = str(entry_metadata.get("selected_input_xyz") or "").strip()
-    try:
-        selected_input_path = Path(selected_input).expanduser().resolve()
-    except (OSError, RuntimeError):
+    resolved_inputs = _common.resolve_adopted_selected_input(entry_metadata, record, job_dir)
+    if resolved_inputs is None:
         return False
-    if not selected_input or not selected_input_path.is_relative_to(job_dir):
-        return False
-    try:
-        artifact_selected_input_path = Path(str(record.selected_input_xyz)).expanduser().resolve()
-    except (OSError, RuntimeError):
-        return False
-    if not artifact_selected_input_path.is_relative_to(job_dir):
-        return False
+    selected_input_path, artifact_selected_input_path = resolved_inputs
 
     artifact_mode = str(_artifact_value(state, "mode", "standard") or "standard")
     artifact_molecule_key = str(_artifact_value(state, "molecule_key", record.molecule_key))
@@ -310,39 +259,12 @@ def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
     authoritative_payload = state
 
     def persist_terminal(status: str, reason: str) -> None:
-        source_status = authoritative_payload.get("status")
-        source_exit_code = (
-            source_status.get("exit_code") if isinstance(source_status, dict) else None
-        )
-        exit_code: int | None
-        if status == "completed":
-            exit_code = 0
-        elif status == "failed":
-            exit_code = (
-                source_exit_code
-                if (
-                    isinstance(source_status, dict)
-                    and str(source_status.get("state") or "").strip().lower() == status
-                    and type(source_exit_code) is int
-                )
-                else 1
-            )
-        else:
-            exit_code = (
-                source_exit_code
-                if (
-                    isinstance(source_status, dict)
-                    and str(source_status.get("state") or "").strip().lower() == status
-                    and type(source_exit_code) is int
-                )
-                else None
-            )
         payload = _engine_artifacts.canonical_terminal_state_payload(
             authoritative_payload,
             job_dir=job_dir,
             status=status,
             reason=reason,
-            exit_code=exit_code,
+            exit_code=_common.resolve_terminal_exit_code(authoritative_payload, status),
             generation=queue_entry_generation_token(entry),
             updated_at=now_utc_iso(),
         )
@@ -369,99 +291,40 @@ def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
         write_state(job_dir, payload)
         upsert_status(status)
 
-    terminal_reason = _terminal_reason(state)
-    target_status = durable_status if durable_status in TERMINAL_STATUSES else record.status
-    if target_status == "completed":
-        target_reason = "completed"
-    elif target_status == "cancelled":
-        target_reason = str(getattr(entry, "error", "") or "cancel_requested").strip()
-        if target_reason != "cancel_requested":
-            target_reason = "cancel_requested"
-    else:
-        target_reason = str(getattr(entry, "error", "") or terminal_reason).strip()
-        if not target_reason:
-            target_reason = "worker_failed"
-
-    terminal = _queue_execution.mark_terminal_status(
+    target_status, target_reason = _common.resolve_terminal_target(
+        entry,
+        state,
+        durable_status=durable_status,
+        record_status=record.status,
+    )
+    return _common.adopt_mark_terminal(
         queue_root,
-        entry.queue_id,
-        status=target_status,
-        reason=target_reason,
+        entry,
+        target_status=target_status,
+        target_reason=target_reason,
         metadata_update={
             "retained_conformer_count": int(
                 _artifact_value(state, "retained_conformer_count", 0) or 0
             ),
         },
+        persist_terminal_fn=persist_terminal,
+        get_cancel_requested_fn=get_cancel_requested,
         mark_completed_fn=mark_completed,
         mark_cancelled_fn=mark_cancelled,
         mark_failed_fn=mark_failed,
-        expected_entry=entry,
-        expected_task_id=str(entry.task_id),
-        before_update_fn=lambda: persist_terminal(target_status, target_reason),
     )
-    if terminal is not None:
-        return True
-    if not get_cancel_requested(
-        queue_root,
-        entry.queue_id,
-        expected_entry=entry,
-        expected_task_id=str(entry.task_id),
-    ):
-        return False
-
-    _queue_execution.mark_terminal_status(
-        queue_root,
-        entry.queue_id,
-        status="cancelled",
-        reason="cancel_requested",
-        metadata_update=None,
-        mark_completed_fn=mark_completed,
-        mark_cancelled_fn=mark_cancelled,
-        mark_failed_fn=mark_failed,
-        expected_entry=entry,
-        expected_task_id=str(entry.task_id),
-        before_update_fn=lambda: persist_terminal("cancelled", "cancel_requested"),
-    )
-    return False
 
 
 def _sync_terminal_running_entries(worker: Any) -> None:
-    monotonic_now = time.monotonic()
-    full_terminal_scan = monotonic_now >= float(
-        getattr(worker, "_orca_auto_terminal_repair_next_scan", 0.0) or 0.0
+    _common.sync_terminal_running_entries(
+        worker,
+        is_engine_entry_fn=_is_crest_queue_entry,
+        queue_entries_with_roots_fn=queue_entries_with_roots,
+        list_job_records_for_cfg_fn=list_job_records_for_cfg,
+        terminal_entry_needs_repair_fn=_terminal_entry_needs_repair,
+        adopt_terminal_artifacts_fn=_adopt_terminal_artifacts,
+        scan_interval_seconds=TERMINAL_REPAIR_SCAN_INTERVAL_SECONDS,
     )
-    indexed_by_job_id: dict[str, Any] = {}
-    if full_terminal_scan:
-        try:
-            indexed_by_job_id = {
-                record.job_id: record for _root, record in list_job_records_for_cfg(worker.cfg)
-            }
-        except (OSError, RuntimeError, ValueError):
-            indexed_by_job_id = {}
-    for queue_root, entry in queue_entries_with_roots(worker.cfg):
-        if not _is_crest_queue_entry(entry):
-            continue
-        status = str(getattr(getattr(entry, "status", None), "value", "")).strip().lower()
-        cancelled_marker_needs_repair = status == "cancelled" and (
-            bool(getattr(entry, "cancel_requested", False))
-            or str(getattr(entry, "error", "") or "").strip() != "cancel_requested"
-        )
-        if status == "running" or (
-            status in TERMINAL_STATUSES
-            and (full_terminal_scan or cancelled_marker_needs_repair)
-            and _terminal_entry_needs_repair(
-                worker.cfg,
-                entry,
-                status=status,
-                indexed_record=indexed_by_job_id.get(str(entry.task_id)),
-                index_loaded=full_terminal_scan,
-            )
-        ):
-            _adopt_terminal_artifacts(worker.cfg, queue_root, entry)
-    if full_terminal_scan:
-        worker._orca_auto_terminal_repair_next_scan = (
-            monotonic_now + TERMINAL_REPAIR_SCAN_INTERVAL_SECONDS
-        )
 
 
 def _terminal_entry_needs_repair(
@@ -556,38 +419,16 @@ def _is_crest_queue_entry(entry: Any) -> bool:
 
 
 def _repair_crest_queue_publications(worker: Any) -> bool:
-    from orca_auto.flow.submitters.internal_engine_submission import (
-        repair_internal_engine_queue_publication,
+    return _common.repair_engine_queue_publications(
+        worker,
+        queue_entries_with_roots_fn=queue_entries_with_roots,
+        is_engine_entry_fn=_is_crest_queue_entry,
+        record_queued_fn=_record_queued_submission,
     )
-
-    repaired_all = True
-    for queue_root, entry in queue_entries_with_roots(worker.cfg):
-        if not _is_crest_queue_entry(entry):
-            continue
-        try:
-            repaired = repair_internal_engine_queue_publication(
-                cfg=worker.cfg,
-                queue_root=queue_root,
-                entry=entry,
-                record_queued_fn=_record_queued_submission,
-                entry_matches_fn=_is_crest_queue_entry,
-            )
-        except Exception:  # noqa: BLE001
-            repaired = False
-        if not repaired:
-            repaired_all = False
-    return repaired_all
 
 
 def _after_crest_worker_init(worker: Any) -> None:
-    reserve_next_entry = worker._reserve_next_entry
-
-    def reserve_next_after_publication_repair() -> tuple[str, Any | None]:
-        if not _repair_crest_queue_publications(worker):
-            return "blocked", None
-        return reserve_next_entry()
-
-    worker.__dict__["_reserve_next_entry"] = reserve_next_after_publication_repair
+    _common.install_publication_repair_gate(worker, repair_fn=_repair_crest_queue_publications)
 
 
 def _reconcile_worker_state(worker: Any) -> None:
@@ -602,12 +443,12 @@ def _handle_worker_start_error(
     admission_token: str,
     exc: OSError,
 ) -> None:
-    mark_worker_start_error(
-        queue_root=queue_root,
-        entry=entry,
-        admission_token=admission_token,
-        exc=exc,
-        mark_entry_failed_and_release_fn=worker._mark_entry_failed_and_release,
+    _common.handle_worker_start_error(
+        worker,
+        queue_root,
+        entry,
+        admission_token,
+        exc,
         mark_failed_fn=mark_failed,
     )
 
