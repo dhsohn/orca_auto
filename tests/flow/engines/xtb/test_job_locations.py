@@ -8,7 +8,6 @@ import orca_auto.flow.engines.xtb.job_locations as job_locations_module
 from orca_auto.core.config import CommonRuntimeConfig
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 from orca_auto.core.indexing import JobLocationRecord, get_job_location, upsert_job_location
-from orca_auto.core.indexing import engine_job_locations as shared_job_locations
 from orca_auto.core.indexing.engines import resource_dict
 from orca_auto.flow.engines.xtb.engine import ENGINE_DEFINITION
 from orca_auto.flow.engines.xtb.job_locations import (
@@ -20,25 +19,7 @@ from orca_auto.flow.engines.xtb.job_locations import (
     upsert_job_record,
 )
 from orca_auto.flow.state import write_workflow_payload
-
-
-def _make_cfg(tmp_path: Path) -> tuple[AppConfig, Path]:
-    allowed_root = tmp_path / "allowed"
-    allowed_root.mkdir()
-    return (
-        AppConfig(
-            runtime=CommonRuntimeConfig(
-                allowed_root=str(allowed_root),
-            )
-        ),
-        allowed_root.resolve(),
-    )
-
-
-def _write_xyz(path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("1\nexample\nH 0.0 0.0 0.0\n", encoding="utf-8")
-    return path
+from tests.flow.test_job_locations_common_engines import _make_cfg, _write_xyz
 
 
 @pytest.mark.parametrize(
@@ -185,110 +166,6 @@ def test_resolve_latest_job_dir_prefers_indexed_candidates_and_direct_lookup(
     assert resolve_latest_job_dir(index_root, str(job_dir.resolve())) == job_dir.resolve()
 
 
-def test_resolve_latest_job_dir_falls_back_to_existing_target_directory(tmp_path: Path) -> None:
-    index_root = tmp_path / "allowed"
-    direct_dir = tmp_path / "orphan-job"
-    index_root.mkdir()
-    direct_dir.mkdir()
-
-    assert resolve_latest_job_dir(index_root, str(direct_dir)) == direct_dir.resolve()
-    assert resolve_latest_job_dir(index_root, str(tmp_path / "missing")) is None
-
-
-def test_resolve_latest_job_dir_returns_none_when_direct_target_cannot_resolve(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    index_root = tmp_path / "allowed"
-    broken_target = tmp_path / "broken-target"
-    index_root.mkdir()
-    real_resolve = Path.resolve
-
-    def fake_resolve(self: Path, strict: bool = False) -> Path:
-        if self == broken_target:
-            raise OSError("cannot resolve path")
-        return real_resolve(self, strict=strict)
-
-    monkeypatch.setattr(Path, "resolve", fake_resolve)
-
-    assert resolve_latest_job_dir(index_root, str(broken_target)) is None
-
-
-def test_resolve_latest_job_dir_skips_blank_and_unresolvable_indexed_candidates(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    index_root = tmp_path / "allowed"
-    fallback_dir = tmp_path / "runs" / "job-124"
-    broken_indexed_path = tmp_path / "broken-indexed"
-    index_root.mkdir()
-    fallback_dir.mkdir(parents=True)
-    real_resolve = Path.resolve
-
-    monkeypatch.setattr(
-        shared_job_locations,
-        "resolve_job_location",
-        lambda root, target: JobLocationRecord(
-            job_id="job-124",
-            app_name="orca_auto_xtb",
-            job_type="xtb_path_search",
-            status="completed",
-            original_run_dir=str(fallback_dir),
-            molecule_key="rxn-2",
-            selected_input_xyz="",
-            latest_known_path="",
-            resource_request={},
-            resource_actual={},
-        ),
-    )
-
-    def fake_resolve(self: Path, strict: bool = False) -> Path:
-        if self == broken_indexed_path:
-            raise OSError("cannot resolve indexed path")
-        return real_resolve(self, strict=strict)
-
-    monkeypatch.setattr(Path, "resolve", fake_resolve)
-
-    assert resolve_latest_job_dir(index_root, "job-124") == fallback_dir.resolve()
-
-
-def test_resolve_latest_job_dir_returns_none_when_indexed_candidates_are_unusable(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    index_root = tmp_path / "allowed"
-    broken_indexed_path = tmp_path / "broken-indexed"
-    missing_dir = tmp_path / "missing-dir"
-    index_root.mkdir()
-    real_resolve = Path.resolve
-
-    monkeypatch.setattr(
-        shared_job_locations,
-        "resolve_job_location",
-        lambda root, target: JobLocationRecord(
-            job_id="job-404",
-            app_name="orca_auto_xtb",
-            job_type="xtb_path_search",
-            status="failed",
-            original_run_dir=str(missing_dir),
-            molecule_key="sample",
-            selected_input_xyz="",
-            latest_known_path="",
-            resource_request={},
-            resource_actual={},
-        ),
-    )
-
-    def fake_resolve(self: Path, strict: bool = False) -> Path:
-        if self == broken_indexed_path:
-            raise OSError("cannot resolve indexed path")
-        return real_resolve(self, strict=strict)
-
-    monkeypatch.setattr(Path, "resolve", fake_resolve)
-
-    assert resolve_latest_job_dir(index_root, "job-404") is None
-
-
 def test_record_from_artifacts_merges_state_and_existing_values(tmp_path: Path) -> None:
     job_dir = tmp_path / "runs" / "job-300"
     selected_xyz = _write_xyz(tmp_path / "inputs" / "Fancy Name.xyz")
@@ -330,17 +207,6 @@ def test_record_from_artifacts_merges_state_and_existing_values(tmp_path: Path) 
     assert record.latest_known_path == str(job_dir.resolve())
     assert record.resource_request == {"max_cores": 8, "max_memory_gb": 16}
     assert record.resource_actual == {"max_cores": 2, "max_memory_gb": 3}
-
-
-def test_record_from_artifacts_returns_none_without_job_id(tmp_path: Path) -> None:
-    assert (
-        record_from_artifacts(
-            job_dir=tmp_path / "job-without-id",
-            state={},
-            existing=None,
-        )
-        is None
-    )
 
 
 def test_record_from_artifacts_defaults_invalid_resources_without_existing(
