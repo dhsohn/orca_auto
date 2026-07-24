@@ -30,7 +30,7 @@ from orca_auto.core.messaging import (
     text,
     title_heading,
 )
-from orca_auto.core.notifications._engine_transport import _lines_message
+from orca_auto.core.notifications.engines import _lines_message
 
 
 def test_neutral_messaging_import_does_not_eagerly_load_adapters() -> None:
@@ -183,7 +183,7 @@ def test_render_discord_embed_marks_inline_fields() -> None:
 
 
 def test_engine_terminal_presentation_uses_structured_status_and_fails_closed() -> None:
-    from orca_auto.core.notifications._engine_rendering import (
+    from orca_auto.core.notifications.engines import (
         terminal_headline,
         terminal_severity,
     )

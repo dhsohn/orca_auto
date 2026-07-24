@@ -71,6 +71,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Collapsed the internal engine-notification pipeline into a single module.
+  The rendered notification lines, severities, workflow-child suppression, and
+  the public `notify_{xtb,crest}_job_{queued,started,finished}` entry points
+  are unchanged.
 - Workflow-internal xTB and CREST jobs now use `job_state.json` as their only
   terminal metadata artifact. They no longer write or read `job_report.json`
   or `job_report.md`; report-only jobs, completed outputs without terminal
