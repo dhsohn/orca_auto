@@ -84,11 +84,10 @@ Operational consequences:
 
 ## 4) Required Environment
 
-- Linux (WSL2 or native Linux)
 - Access to an ORCA Linux binary path such as `/opt/orca/orca`
 - ORCA runtime dependencies such as OpenMPI and BLAS/LAPACK
-- Python 3.11+
-- An input root on a Linux filesystem
+- For the supported platform, Python version, and path requirements, see the
+  [Runtime Contract](PUBLIC_CONTRACTS.md#runtime-contract)
 
 ## 5) Installation and Initial Setup
 
@@ -103,17 +102,11 @@ bash scripts/bootstrap_wsl.sh
 - Installs Python dependencies and the repository itself into `.venv`
 - Seeds `config/orca_auto.yaml` if missing
 
-This reference standardizes on `orca_auto ...` for public
-commands:
-
-- `queue list`
-- `queue cancel`
-- `run-dir <path>`
-- `init`
-- `scaffold <ts_search|conformer_search|scan_ts>`
-- `scan-notify`
+This reference standardizes on `orca_auto ...` for public commands; the
+supported command list and the default config discovery order are specified in
+the [Public CLI Contract](PUBLIC_CONTRACTS.md#public-cli-contract) and the
+[Config Contract](PUBLIC_CONTRACTS.md#config-contract).
 Activate `.venv` first, or call `.venv/bin/orca_auto ...` directly.
-By default, config is resolved from `ORCA_AUTO_CONFIG`, then `<repo_root>/config/orca_auto.yaml`, then `~/orca_auto/config/orca_auto.yaml`.
 Add `--config <path>` only when you want to override default config discovery.
 
 ## 6) Configuration File
@@ -184,75 +177,26 @@ Field descriptions:
 
 Notes:
 
-- Shared config parsing accepts a document with no YAML node (including
-  comments-only) as an empty mapping, but rejects an explicit top-level
-  null/scalar/sequence, an otherwise-empty `---` document, and duplicate keys
-  at any depth.
-- Messenger identity fields are omission-aware and fail closed. The bot token
-  must be a string and the Discord channel ID must be a valid positive snowflake
-  ID. Explicit nulls and wrong scalar/collection shapes are not converted to text
-  or defaults. Empty strings intentionally disable delivery.
-- `default_max_retries=0` disables ORCA retries; any positive value enables the
-  calculation-type retry policy, which caps retries by ORCA route type
-- With `scratch_root` configured, ORCA runs against a private input closure in
-  tmpfs. Dependencies must use a single relative basename and remain
-  byte-identical; a missing final newline is added only to the selected working
-  copy. Only one scratch workspace is admitted. After the process tree exits,
-  every surviving regular file except ORCA `*.tmp`/`*.tmp.*` scratch files is
-  committed as a journaled file-set transaction into the inode-pinned durable
-  visible generation. Reserved runtime-state names fail closed. Durable
-  queue/state/process fences remain on disk. An unresolved or stale scratch
-  workspace is preserved and blocks new launches for operator inspection. A host
-  or WSL shutdown loses unpublished in-RAM output and checkpoints, so recovery
-  may restart from the last durable generation rather than the interrupted point.
-  Root/workspace descriptors stay pinned, and ORCA is released from a launch
-  gate only after its process-group identity is durable.
-- `scratch_min_free_gb` is checked before launch but is not a directory quota.
-  Launch also requires Linux `MemAvailable` to cover the configured per-task
-  memory cap, all currently free tmpfs space, and the configured host reserve.
-  This conservative snapshot
-  reduces swap pressure but cannot prevent later system activity or tmpfs swap;
-  keep the shared scheduler cap conservative and size `/dev/shm` for the largest
-  accepted calculation. Completed-attempt details are stored in
-  `scratch_provenance`; committed publication from an exception or worker
-  shutdown is stored in the run-level `scratch_publications` list.
-- Workflow-managed xTB and CREST run with their process working directory,
-  stdout/stderr logs, and engine intermediate files in the same private tmpfs
-  workspace. Their immutable input snapshots remain absolute, read-only durable
-  inputs. At process exit, xTB publishes only the canonical result set for its
-  job type plus stdout/stderr; CREST publishes its validated named ensemble
-  candidates plus stdout/stderr. Engine work trees and transient files are
-  recorded as omitted provenance and removed with the workspace. This does not
-  use CREST's native `--scratch` option.
-- Windows-style paths such as `C:\...`, `C:/...`, and `/mnt/c/...` are not supported in config
-- Configured executable paths for ORCA, xTB, and CREST must be absolute Linux
-  paths to existing executable files and must not end in `.exe`. If
-  `workflow.paths.xtb_executable` or `workflow.paths.crest_executable` is left
-  blank, submission resolves it from PATH and binds that executable identity to
-  the queued generation.
-- Only the paths listed in the public config contract are accepted. Unknown,
-  misspelled, and removed keys fail at their containing section; engine-scoped
-  copies of shared scheduler/resource/messenger settings are not aliases.
-  Explicit config sections must be mappings. Configured admission roots must be
-  absolute Linux paths, configured scheduler/resource limits must be positive
-  integers, and `orca.runtime.default_max_retries` must be a non-negative
-  integer. Omitted keys retain their documented defaults; malformed explicit
-  execution-control values are rejected instead of being replaced with
-  defaults.
-- Messenger delivery defaults likewise apply only when a key is omitted.
-  Explicit timeout/backoff values must be finite numbers and `max_attempts`
-  must be an integer; malformed values are rejected, while finite values outside
-  the documented delivery ranges are clamped.
+- Config parsing and validation behavior — YAML document and duplicate-key
+  rules, messenger identity and delivery clamping, tmpfs scratch closure
+  mechanics, the `MemAvailable` launch guard, unknown-key fail-closed
+  validation, and the Windows-path/executable-path rejection rules — is
+  specified in the [Config Contract](PUBLIC_CONTRACTS.md#config-contract).
+- When RAM scratch is enabled, keep the shared scheduler cap conservative and
+  size `/dev/shm` for the largest accepted calculation: the conservative
+  launch-time memory snapshot reduces swap pressure but cannot prevent later
+  system activity or tmpfs swap, and `scratch_min_free_gb` is a launch guard,
+  not a directory quota.
+- If `workflow.paths.xtb_executable` or `workflow.paths.crest_executable` is
+  left blank, submission resolves it from PATH and binds that executable
+  identity to the queued generation.
 
 ## 7) CLI Usage
 
-All public queue, submission, and scaffold commands should be
-documented through `orca_auto ...`.
-
-Public command surface:
-
-- ORCA public commands are exposed through `orca_auto ...`
-- General xTB and CREST work remains workflow-internal
+All public queue, submission, scaffold, and cleanup commands should be
+documented through `orca_auto ...`. The supported public command surface is
+listed in the [Public CLI Contract](PUBLIC_CONTRACTS.md#public-cli-contract);
+general xTB and CREST work remains workflow-internal.
 
 ### 7.1 `init`
 
@@ -294,59 +238,30 @@ Shared behavior:
 
 ORCA-specific notes:
 
-- Chooses the latest `*.inp` at submission, then creates a visible
-  `YYYYMMDD-HHMMSS-<8-hex>/` directly inside the submitted job
-  directory. The bound input keeps the selected `.inp` basename, supported
-  referenced files keep their source basenames, and raw ORCA outputs are
-  written at that same level. Editing a source after successful submission does
-  not change the queued calculation. The `YYYYMMDD-HHMMSS-<8-hex>` name shape
-  is reserved for these generations: a directory named this way anywhere under
-  `runs_root` is excluded from production scans and rejected as a `run-dir`
-  target, so avoid it for your own directories.
-- A fully closed job directory can be submitted again without `--force`; each
-  submission creates a new sibling generation. A pending/running/retrying/
-  cancel-pending row or an incomplete terminal replay still blocks another
-  generation for that job directory. `--force` does not bypass those safety
-  barriers.
-- If one input refers to different source paths that have the same basename,
-  submission fails closed even when their bytes are identical. Repeated
-  references to the same canonical source path remain one dependency and are
-  not a basename collision. Sharing only the selected input's stem is allowed
-  when ORCA does not produce that dependency name: for example, an SP `h2.inp`
-  may reference `h2.xyz`, and both exact basenames are preserved. For Opt,
-  OptTS, ScanTS, NEB, and IRC, a same-stem XYZ is normally an ORCA output. The
-  one supported collision is a sole main `* xyzfile` geometry: its coordinates
-  are inlined into the bound `.inp`, its exact XYZ basename remains visible,
-  and ORCA may update that file in place. A same-stem auxiliary NEB Product/TS
-  file is still rejected. Frequency-producing routes reserve `<stem>.hess`;
-  every route reserves `<stem>.out` and `<stem>.gbw`. Admission also rejects
-  the selected `.inp` basename and generation-owned `job_state.json`,
-  `job_report.json`, `orca.process.json`, and `.orca.process.lock` as dependency
-  basenames. Output-base overrides such as `%base` and NEB restart-GBW basename
-  controls are unsupported and fail closed so ORCA cannot write outside the
-  generation.
+- Visible-generation naming, the reserved `YYYYMMDD-HHMMSS-<8-hex>` name
+  shape, resubmission/`--force` barriers, dependency basename-collision and
+  reserved-name rules, ambiguous duplicate `%pal`/`nprocs`/`%maxcore`/
+  `%moinp`/`PALn` rejection, and the rejection of non-snapshot-bound external
+  include/program hooks are specified in the
+  [Queue And Activity Contract](PUBLIC_CONTRACTS.md#queue-and-activity-contract).
 - Queue workers execute by queue id rather than passing a direct
   `reaction_dir` command line. The queue entry still stores `reaction_dir`, and
   downstream ORCA/workflow contracts should keep using that field.
 - Standalone ORCA resource metadata comes from the selected input's `%pal`
   and `%maxcore` directives, with config defaults injected only when those
   directives are missing. The shared `--max-cores` and `--max-memory-gb`
-  flags do not override standalone ORCA input directives.
-- ORCA admission rejects ambiguous duplicate `%pal`/`nprocs`, `%maxcore`,
-  `%moinp`, or route `PALn` directives. Resource readers use the largest active
-  value before normalization so a later duplicate cannot hide a larger request.
-- External ORCA include/program hooks that are not snapshot-bound (for example
-  `ExtOpt`/`Prog*`, fragment/QM2 method files, `XTBINPUTSTRING`, and `GCP(FILE)`)
-  are unsupported and rejected before execution.
+  flags do not override standalone ORCA input directives. Resource readers use
+  the largest active value before normalization so a later duplicate cannot
+  hide a larger request.
 - Retry inputs and resumed worker-shutdown inputs add `MORead` plus `%moinp`
   when the source input has a matching non-empty `.gbw` checkpoint. Resumed
   inputs are written as `*.resume.inp` so the original user input is not mutated.
 
 Workflow notes:
 
-- Workflow directory names/IDs cannot contain `(` or `)`. Do not rename an
-  existing workflow directory; create a new workflow under the new name so the
-  persisted ID and artifact paths stay consistent.
+- Workflow name/ID restrictions (no `(` or `)`; never rename an existing
+  workflow directory) are specified in the
+  [Workflow Contract](PUBLIC_CONTRACTS.md#workflow-contract).
 - `run-dir` materializes a workflow only when `flow.yaml` is present in the target directory
 - Each run creates a timestamped generation directory (`YYYYMMDD-HHMMSS-<8hex>`)
   inside the submitted scaffold — the same layout standalone ORCA executions
@@ -417,89 +332,30 @@ Workflow notes:
   `formula|charge|multiplicity` group. This is a stoichiometric proxy rather than
   a connectivity identity: each retained minimum has statistical weight one,
   with no symmetry/degeneracy correction. Optional post-DFT deduplication validates
-  the full ensemble first, and its duplicate count is not a statistical weight. The parsed
-  thermochemistry temperature is used unless `boltzmann_temperature_k` pins it.
-  That optional key must be finite and strictly positive, is persisted in the
-  durable request at admission, and must agree with every parsed temperature
-  within 0.01 K. It cannot create thermochemistry at a temperature the frequency
-  jobs did not use; SI reads the durable request rather than a subsequently
-  edited source `flow.yaml`. Missing, non-finite, non-positive, or inconsistent
-  data cause populations to be omitted with a note rather than fabricated.
-  Markdown renders population as a percentage.
+  the full ensemble first, and its duplicate count is not a statistical weight.
+  The population temperature and the optional `boltzmann_temperature_k` pin
+  (admission validation, durable-request persistence, and the 0.01 K agreement
+  rule) are specified in the
+  [Workflow Contract](PUBLIC_CONTRACTS.md#workflow-contract).
 - `conformer_screening` accepts an optional `rmsd_dedup:` block that groups
-  optimized minima and keeps the lowest-energy representative. Converged
-  candidates are eligible when `Nimag` is absent or zero; a known nonzero value
-  excludes them. Comparable candidates also need identical selected-atom element
-  sequences, formula/electronic state, and exact optimization provenance.
-  Both the proper-rotation RMSD and maximum aligned-atom displacement must be
-  below `rmsd_threshold_angstrom` (default 0.25), and their effective energies
-  must differ by less than `energy_window_kcal` (default 0.1). A complete uniform
-  exact-provenance SP refinement supplies that energy; otherwise optimization
-  energy is used. A nondegenerate pair whose best unconstrained alignment
-  prefers a global reflection is retained separately. This is still a heuristic
-  and can merge nearby distinct or local stereochemical minima. All atoms are compared by
-  default; `heavy_atoms_only: true` ignores H/D/T and increases that risk. Inspect
-  merged groups before treating members as chemically identical. Population
-  completeness is checked before dedup, and the reported degeneracy is a
-  workflow duplicate count, not a statistical/symmetry weight.
+  optimized minima and keeps the lowest-energy representative; its eligibility,
+  threshold, provenance, and heuristic-risk rules are specified in the
+  [Workflow Contract](PUBLIC_CONTRACTS.md#workflow-contract).
 - `conformer_screening` accepts an optional `interaction_energy:` block that
-  reports ΔE_int = E(complex) − Σ E(fragment_i). It requires 2–8 fragments with
-  safe single-line labels and integer multiplicities in `[1, 100]`.
-  `{atom_indices (0-based), charge, multiplicity, label}` entries must form a
-  static, disjoint, exhaustive partition of every input atom. Fragment charges
-  must sum to the complex charge, and their spins must be able to couple to the
-  complex multiplicity under the generalized angular-momentum coupling manifold.
-  Each atom-derived electron count `N_e = ΣZ − charge` must be nonnegative;
-  `multiplicity − 1` must be no greater than `N_e` and have the same parity.
-  `sp_route_line` (default `! r2scan-3c TightSCF`) must be a pure single-point
-  route; job directives for optimization, frequency, gradients, IRC, MD, NEB,
-  GOAT, or scans are rejected.
-- The complex and each fragment run a fresh single point on the complex-optimized
-  geometry. Fan-out uses only valid terminal optimized minima and the RMSD
-  representatives. A terminal partial-success ensemble may use its completed,
-  converged subset after excluding known saddles. The same eligible set determines
-  the representative energy convention, so an unusable/saddle member cannot
-  switch the parent. When public dedup reporting is off, the all-atom
-  default grouping still bounds fan-out while the SI structure table stays
-  undeduplicated. The interaction generation fingerprint includes these RMSD
-  settings.
-- A resolved result needs exactly one completed current-generation complex SP
-  and one completed fragment SP per expected index. Selected input and parsed
-  output route/state, executed method/basis/solvation/ORCA version, optimized
-  complex geometry, indexed fragment subsets, and energy convention must match.
-  Missing, duplicate, running, stale, mixed, wrong-state/wrong-geometry, or
-  non-finite data omits ΔE_int rather than using a partial sum. Reportable
-  results land in the `workflow_si.md` interaction-energy section. No separate
-  Boys–Bernardi ghost-atom calculation is run; method-inherent corrections such
-  as r2SCAN-3c gCP are unaffected.
-- Restart preserves the interaction route, per-fragment state/resources, and
-  generation fingerprint. Interaction and RMSD grouping settings are immutable
-  after fan-out, and an original primary stage cannot be reopened while that
-  fan-out exists; disabling the feature retires its interaction stages. Restart
-  reloads the copied durable input XYZ to revalidate the full partition and each
-  fragment electron state before accepting an enabled config.
-- SI publication persists pending, attempt count, next-retry time, blocked state,
-  generation, and error in workflow/registry metadata. Transient failures retry
-  after 30/60/120/240-second exponential delays and block after the fifth failed
-  writer attempt; deterministic conflicts block immediately. Pre-writer
-  workflow/registry/report checkpoint failures do not consume this writer budget;
-  any persisted pending marker remains immediately due for infrastructure
-  reconciliation. Registry clear follows workflow-then-registry lock order and
-  rechecks authoritative workflow identity/status; publication-pending,
-  publication-blocked, final-child-sync-pending, identity-quarantined, or
-  authoritatively active records are not cleared as stale. Quarantined durable IDs
-  remain in the payload as evidence while the registry uses the trusted workspace
-  name as its unique key and records the observed ID in metadata. Fix the cause, then run
-  `orca_auto run-dir <workflow_dir> --force` to re-arm a blocked publication.
+  reports ΔE_int = E(complex) − Σ E(fragment_i): the complex and each fragment
+  run a fresh single point on the complex-optimized geometry, and
+  `sp_route_line` defaults to `! r2scan-3c TightSCF`. The fragment
+  partition/spin validation, fan-out eligibility, result-resolution and restart
+  rules, and SI publication checkpoint/retry/re-arm behavior are specified in
+  the [Workflow Contract](PUBLIC_CONTRACTS.md#workflow-contract).
 - Set `runs_root` in `orca_auto.yaml` (or `workflow_root`/`workflow.root` in
   `flow.yaml`) before submitting workflow directories.
 - Public workflow `run-dir` reads workflow type and XYZ inputs from `flow.yaml`
   or the standard filenames written by `scaffold`; it accepts only
   `--max-cores` and `--max-memory-gb` as workflow resource overrides.
-- `flow.yaml` and internal engine YAML job manifests must be single-link regular
-  UTF-8 files no larger than 1 MiB. The bounded loader admits at most 32 alias
-  uses, 10,000 parsed/expanded nodes, and 64 nesting levels; recursive/cyclic
-  aliases or object graphs fail closed.
+- The `flow.yaml`/engine-manifest YAML loader limits (file size, alias, node,
+  and nesting bounds) are specified in the
+  [Workflow Contract](PUBLIC_CONTRACTS.md#workflow-contract).
 - Manifest-controlled input paths (`reactant_xyz`, `product_xyz`, `input_xyz`,
   and `xtb.xcontrol_file`) default to the submitted workflow directory trust
   boundary: relative paths are resolved from `workflow_dir`, absolute paths or
@@ -517,14 +373,11 @@ Workflow notes:
   explicit `--chrg` and `--uhf` values plus `--norestart`, so an older restart
   file cannot silently alter a new generation.
 - CREST topology overrides can be placed under `crest:` in `flow.yaml`, including `gfn: ff`, `no_preopt: true`, `noreftopo: true`, `notopo: true`, and `nocbonds: true`
-- Workflow-level `orca.charge` and `orca.multiplicity` define the electronic
-  state for every CREST, xTB, and ORCA stage. Engine-local `charge`/`uhf` values
-  may repeat that state, but conflicting or malformed values are rejected. The
-  selected xTB/CREST input must contain known elements with atomic number at
-  most 86, leave a nonnegative electron count, and use a UHF unpaired-electron
-  count in range with electron-count-compatible parity.
-- Local geometry inputs are limited to 10,000 atoms. xTB Hessian jobs and ORCA
-  frequency/Hessian-producing inputs use a 1,000-atom limit.
+- The electronic-state authority of workflow-level
+  `orca.charge`/`orca.multiplicity`, the element/electron-count/UHF-parity
+  validation, and the 10,000-atom (1,000 for Hessian/frequency inputs)
+  admission caps are specified in the
+  [Workflow Contract](PUBLIC_CONTRACTS.md#workflow-contract).
 - CREST exit code 0 is accepted only when a retained output contains at least
   one strictly valid, finite XYZ frame. Every valid named retained ensemble is
   preserved: geometries found only in later rotamer outputs remain candidates,
@@ -554,18 +407,17 @@ Workflow notes:
   for `gfn2//gfnff`; `shake: 1` tightens that cap to 2.0 fs. Setting
   `allow_high_tstep: true` permits the native 0.001–2500 fs range but does not
   bypass the work budget. `mddump` is an integer in `1..2147483647`.
-  With an explicit `mdlen`, the default `max_md_steps` is 10,000,000 aggregate
-  steps across CREST's
-  estimated trajectory/restart/rotamer multiplicity: base 6 for `nci` or a
-  quick mode and 14 otherwise, multiplied by 1 restart for `mquick` or 5
+  The default aggregate `max_md_steps` budgets, the GFN-FF/`gfn2//gfnff`
+  requirement for a bounded `mdlen` or an explicit higher budget plus
+  `allow_high_cost_md: true`, and the absolute 50,000,000,000 atom-step ceiling
+  are specified in the
+  [Workflow Contract](PUBLIC_CONTRACTS.md#workflow-contract). The budget counts
+  CREST's estimated trajectory/restart/rotamer multiplicity: base 6 for `nci`
+  or a quick mode and 14 otherwise, multiplied by 1 restart for `mquick` or 5
   otherwise, then by 1 for `nci`, a quick mode, or `norotmd` and 2 otherwise.
   Without `mdlen`, CREST's automatic 2.5–500 ps range is admitted at its 500 ps
-  worst case with a default 14,000,000-step budget. This admits standard GFN-xTB
-  defaults. At the standard non-quick trajectory multiplicity, GFN-FF and
-  `gfn2//gfnff` exceed that budget and must provide a bounded `mdlen` or an
-  explicit higher `max_md_steps` plus `allow_high_cost_md: true`.
-  A larger bound, up to the
-  native integer limit, requires `allow_high_cost_md: true`. The default
+  worst case; this admits standard GFN-xTB defaults. A larger step bound, up to
+  the native integer limit, requires `allow_high_cost_md: true`. The default
   `max_dump_frames` is 100,000 estimated aggregate frames (aggregate simulated
   time divided by `mddump`); a larger bound
   requires `allow_high_volume_md: true`. `shake` is `0`, `1`, or `2`. The exact
@@ -575,9 +427,6 @@ Workflow notes:
   mutually exclusive. `cross: true` keeps CREST 3.0.2's default GC crossing
   without emitting its broken redundant `--cross` flag; `nocross: true` emits
   `--nocross`. Malformed values fail the job closed rather than reaching CREST.
-  Independently of the step bound, atom count multiplied by estimated aggregate
-  MD steps must not exceed the absolute local ceiling of 50,000,000,000
-  atom-steps.
 - xTB ranking admits at most 100 candidate evaluations by default. Local
   reaction-workflow manifests may set `xtb.max_ranking_evaluations` up to the native candidate
   cap of 1,000; values above 100 also require
@@ -593,49 +442,24 @@ There is no public direct-execution mode for new work. `run-dir` is the durable 
   bound input at 256 MiB; ORCA accepts at most 128 file-reference directives.
   CREST has the per-file limit but no separate aggregate limit. A downstream
   output XYZ materialization is bounded at 512 MiB.
-- Workflow-internal xTB/CREST snapshots keep their private per-submission
-  directories under `.orca_auto_input_snapshots/`; each namespace is unique and
-  reserved exclusively. A public task id alone is not the snapshot-ownership key.
-- A new ORCA submission creates exactly one visible direct child named
-  `YYYYMMDD-HHMMSS-<8-hex>/` in the job directory. Its bound `.inp`
-  keeps the source basename. Confined XYZ, GBW, Hessian, point-charge, IRC, and
-  NEB dependencies also keep their source basenames, with no `.inputs/` layer.
-  ORCA raw outputs are written beside those inputs. New ORCA submissions do not
-  create `.orca_auto_orca_executions/` or an ORCA
-  `.orca_auto_input_snapshots/` tree. Audit provenance still records source and
-  executed paths, SHA-256, and byte size; the readable names do not weaken
-  content-identity verification.
+- The visible-generation layout and provenance recording, snapshot namespaces,
+  the upgrade drain requirement for the ORCA visible-generation format, and
+  the xTB/CREST terminal-identity and state-only metadata rules are specified
+  in the
+  [Queue And Activity Contract](PUBLIC_CONTRACTS.md#queue-and-activity-contract);
+  the engine trust and isolation boundary (captured environment, qualified
+  distributions, same-UID processes) is specified in the
+  [Runtime Contract](PUBLIC_CONTRACTS.md#runtime-contract).
 - Snapshot and generation trees are retained for queue replay, retry,
   reconciliation, and audit. There is no standalone snapshot-GC command. Never
   edit or delete a generation used by a pending, running, retrying,
   cancel-pending, or repairable terminal row. Reclaim it only with an
   intentionally retired job/workflow after confirming that no queue or recovery
   record still references it.
-- xTB/CREST run with a job-local clean `HOME`/`XDG_CONFIG_HOME` and a captured
-  `PATH`, `LD_LIBRARY_PATH`, `XTBPATH`, and `XTBHOME`. Executable path, SHA-256,
-  and size are verified around execution. Contents reached through shared
-  libraries, `XTBPATH`, or `XTBHOME` are not snapshotted, and engine semantic
-  versions are not automatically probed. Keep the exact qualified
-  distribution and external parameters immutable for the job lifetime, and do
-  not treat other processes under the worker UID as hostile isolation tenants.
-- Before deploying the ORCA visible-generation format, drain all old-build
-  pending and active ORCA rows and finish every incomplete terminal replay and
-  snapshot intent. Alternatively cancel/clear affected work and resubmit it
-  after the upgrade. Old-format rows are not adopted in place. Existing
-  terminal `.orca_auto_orca_executions/` and ORCA
-  `.orca_auto_input_snapshots/` history stays where it is; the upgrade does not
-  migrate or rename it. The workflow-internal xTB/CREST snapshot layout is
-  unchanged.
-- New xTB/CREST terminal outputs carry content identities that are verified
-  before downstream parsing. Completed outputs without a terminal identity are
-  unsupported and fail closed; resubmit them. Readers do not hash later bytes
-  to backfill identity and do not remap stale paths by basename.
-- Internal xTB/CREST terminal metadata is state-only: `job_state.json` contains
-  status, command/provenance, resource use, retained-output identities, and
-  engine-specific result fields. These jobs do not write or read
-  `job_report.json`; report-only jobs are unsupported and must
-  be resubmitted. An unrecoverable exact-generation state is exposed as
-  `repair_blocked` instead of being reconstructed from a report.
+- xTB/CREST additionally run with a job-local clean `HOME`/`XDG_CONFIG_HOME`,
+  and their internal state-only `job_state.json` contains status,
+  command/provenance, resource use, retained-output identities, and
+  engine-specific result fields.
 
 ### 7.3 `queue cancel`
 
@@ -644,8 +468,9 @@ orca_auto queue cancel q_20260403_151220_ab12cd
 orca_auto queue cancel /absolute/path/to/orca_runs/Int1_DMSO
 ```
 
-`queue cancel` accepts workflow ids for whole-workflow cancellation plus queue ids, run ids,
-and known path aliases for individual jobs.
+`queue cancel` cancels a whole workflow when given a workflow id; the full set
+of accepted targets and aliases is specified in the
+[Public CLI Contract](PUBLIC_CONTRACTS.md#public-cli-contract).
 
 ### 7.4 `queue list`
 
@@ -707,15 +532,13 @@ than launching unmanaged worker processes.
 
 Behavior:
 
-- `orca_auto-engine-workers@.target` owns the default engine service
-- `orca_auto-queue-worker@.service` supervises one ORCA worker
-- `orca_auto-workflow-worker@.service` is opt-in and supervises workflow plus
-  the internal CREST/xTB workers
+- Target/service ownership — which target starts which unit, and the opt-in
+  workflow worker — is specified in the
+  [Systemd Contract](PUBLIC_CONTRACTS.md#systemd-contract)
 - ORCA, xTB, and CREST share the same admission cap. ORCA reserves a slot in
   the parent worker, attaches queue identity metadata after the child starts,
   and lets the ORCA child activate/release that reservation during execution.
 - Workflow notification alerts keep per-job ORCA messages, but summarize internal CREST and reaction-path xTB child phases in one message each after those phases finish
-- `orca_auto-runtime@.target` starts the engine-worker target
 
 ## 8) WSL systemd Setup
 
@@ -787,19 +610,10 @@ Opt mode completion:
 
 ## 10) Failure Classification and Automatic Recovery
 
-Representative statuses:
-
-- `completed`
-- `error_scf`
-- `error_scfgrad_abort`
-- `error_multiplicity_impossible`
-- `error_disk_io`
-- `error_memory`
-- `error_geometry` (for example ORCA zero-distance geometry collapse)
-- `geom_not_converged`
-- `ts_not_found`
-- `incomplete`
-- `unknown_failure`
+Representative statuses are the ORCA analyzer statuses listed in the
+[ORCA Job Artifact Contract](PUBLIC_CONTRACTS.md#orca-job-artifact-contract)
+(for example, `error_geometry` covers an ORCA zero-distance geometry
+collapse).
 
 Retry policy:
 
@@ -885,29 +699,23 @@ active, `orca.process.json` is present in its generation, and the job root
 carries the live `job_state.json` until terminal cleanup removes it.
 
 The generation's bound `.inp` has the exact selected source basename, so ORCA
-uses the expected output stem rather than adding `.run` or `.bound`. Referenced
-inputs likewise retain their original basenames. Each generation's
-`job_state.json` and reports retain the record for the run they describe;
-reports exist only inside a verified generation. Pre-relocation root reports
-remain untouched historical files until a one-time provenance-verified
-migration relocates or separately archives them; runtime readers do not use
-them. A run rejected before generation binding has no report, while its state
-and queue record retain the outcome. `run.lock` stays at the job root; the mere
+uses the expected output stem rather than adding `.run` or `.bound`. Report
+placement and verification rules — reports exist only inside a verified
+generation, pre-relocation root reports are untouched historical files pending
+a one-time provenance-verified migration, and a run rejected before generation
+binding has no report — are specified in the
+[ORCA Job Artifact Contract](PUBLIC_CONTRACTS.md#orca-job-artifact-contract).
+`run.lock` stays at the job root; the mere
 presence of its file is not proof that a process currently owns the lock.
 
-Important `job_state.json` fields:
+`job_state.json` and `job_report.json` use the normalized nested engine
+artifact schema (`schema_version` 1) described in the
+[ORCA Job Artifact Contract](PUBLIC_CONTRACTS.md#orca-job-artifact-contract):
+job identity lives under `job`, state under `status.state`/`status.reason`,
+and the ORCA-specific run details (`run_id`, `max_retries`, `attempts`,
+`final_result`) under `engine_payload`.
 
-- `job_id`
-- `run_id`
-- `reaction_dir`
-- `selected_inp`
-- `execution_provenance`
-- `max_retries`
-- `status`
-- `attempts[]`
-- `final_result`
-
-Important `attempts[]` fields:
+Important `engine_payload.attempts[]` fields:
 
 - `index`
 - `inp_path`
@@ -924,22 +732,11 @@ Important `attempts[]` fields:
 - `started_at`
 - `ended_at`
 
-Important `job_report.json` fields:
-
-- `job_id`
-- `run_id`
-- `reaction_dir`
-- `selected_inp`
-- `status`
-- `attempt_count`
-- `max_retries`
-- `attempts[]`
-- `final_result`
-
-For snapshot-bound jobs, `selected_inp`/attempt `inp_path` name the exact bound
-input in the visible generation. `execution_provenance.source_selected_inp`
-records the user-facing source selected at submission; the bound/materialized
-and attempt identity records carry their path, SHA-256, and byte size.
+For snapshot-bound jobs, the primary-input and attempt `inp_path` records name
+the exact bound input in the visible generation. ORCA execution provenance
+records the user-facing source input selected at submission; the
+bound/materialized and attempt identity records carry their path, SHA-256, and
+byte size.
 
 ## 11.1) Downstream Contract Freeze
 
