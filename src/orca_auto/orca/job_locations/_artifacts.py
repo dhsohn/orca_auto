@@ -7,9 +7,8 @@ from orca_auto.core.indexing import JobLocationRecord, resolve_job_location
 
 from ..state import load_state
 from ._models import JobArtifactContext
-from ._records import list_job_location_records, resolve_record_job_dir
-from ._tracking import TrackedJobDirDeps
-from ._tracking import matching_tracked_job_dirs as _matching_tracked_job_dirs
+from ._records import list_job_location_records
+from ._tracking import matching_tracked_job_dirs
 from ._utils import normalize_text, resolve_existing_job_dir
 
 
@@ -51,20 +50,6 @@ def job_artifact_context(
         job_dir=job_dir,
         state=dict(state) if isinstance(state, dict) else None,
         report=dict(report) if isinstance(report, dict) else None,
-    )
-
-
-def matching_tracked_job_dirs(index_root: str | Path, target: str) -> list[Path]:
-    return _matching_tracked_job_dirs(
-        index_root,
-        target,
-        deps=TrackedJobDirDeps(
-            normalize_text=normalize_text,
-            list_job_location_records=list_job_location_records,
-            resolve_record_job_dir=resolve_record_job_dir,
-            load_state=load_state,
-            resolve_existing_job_dir=resolve_existing_job_dir,
-        ),
     )
 
 

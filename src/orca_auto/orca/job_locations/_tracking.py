@@ -1,38 +1,25 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+
+from ..state import load_state
+from ._records import list_job_location_records, resolve_record_job_dir
+from ._utils import normalize_text
 
 
-@dataclass(frozen=True)
-class TrackedJobDirDeps:
-    normalize_text: Callable[[Any], str]
-    list_job_location_records: Callable[[str | Path], list[Any]]
-    resolve_record_job_dir: Callable[[Any], Path | None]
-    load_state: Callable[[Path], Any]
-    resolve_existing_job_dir: Callable[[Any], Path | None]
-
-
-def matching_tracked_job_dirs(
-    index_root: str | Path,
-    target: str,
-    *,
-    deps: TrackedJobDirDeps,
-) -> list[Path]:
-    target_text = deps.normalize_text(target)
+def matching_tracked_job_dirs(index_root: str | Path, target: str) -> list[Path]:
+    target_text = normalize_text(target)
     if not target_text:
         return []
 
     candidates: list[Path] = []
     seen: set[Path] = set()
-    for record in deps.list_job_location_records(index_root):
-        job_dir = deps.resolve_record_job_dir(record)
+    for record in list_job_location_records(index_root):
+        job_dir = resolve_record_job_dir(record)
         if job_dir is None or job_dir in seen:
             continue
 
-        state = deps.load_state(job_dir)
+        state = load_state(job_dir)
         state = state if isinstance(state, dict) else {}
 
         lookup_values = (
@@ -40,11 +27,11 @@ def matching_tracked_job_dirs(
             state.get("job_id"),
             state.get("run_id"),
         )
-        if any(deps.normalize_text(value) == target_text for value in lookup_values):
+        if any(normalize_text(value) == target_text for value in lookup_values):
             seen.add(job_dir)
             candidates.append(job_dir)
 
     return candidates
 
 
-__all__ = ["TrackedJobDirDeps", "matching_tracked_job_dirs"]
+__all__ = ["matching_tracked_job_dirs"]

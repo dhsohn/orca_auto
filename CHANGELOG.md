@@ -71,6 +71,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Replaced the single-implementation dependency-injection plumbing in the ORCA
+  job-location loaders and the workflow ORCA adapter with direct imports. The
+  loaded payloads, contracts, and error behavior are unchanged; the modules
+  regain static typing.
 - Collapsed the internal engine-notification pipeline into a single module.
   The rendered notification lines, severities, workflow-child suppression, and
   the public `notify_{xtb,crest}_job_{queued,started,finished}` entry points

@@ -1,15 +1,23 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_APP_NAME
-from orca_auto.core.utils.coercion import normalize_bool, normalize_text, safe_int
+from orca_auto.core.utils.coercion import (
+    coerce_int_mapping,
+    normalize_bool,
+    normalize_text,
+    safe_int,
+)
 from orca_auto.orca.job_locations import _contract_payload as _canonical_payload
+from orca_auto.orca.job_locations import _utils as _contract_status
 
+from ..contracts.orca import OrcaArtifactContract
 from . import _orca_contract_context as _contract_context
+from . import _orca_local_lookup as _local_lookup
+from . import _orca_path_helpers as _path_helpers
 
 ContractPayload = dict[str, Any]
 StatusTuple = tuple[str, str, str, str]
@@ -21,41 +29,6 @@ class _StatusPayload:
     analyzer_status: str
     reason: str
     completed_at: str
-
-
-@dataclass(frozen=True)
-class OrcaContractLoaderDeps:
-    path_type: type[Path]
-    tracked_runtime_context_fn: Callable[
-        ...,
-        tuple[
-            Path | None,
-            Path | None,
-            Any,
-            ContractPayload,
-            ContractPayload,
-            ContractPayload | None,
-        ]
-        | None,
-    ]
-    tracked_artifact_context_fn: Callable[
-        ..., tuple[Path | None, Any, ContractPayload, ContractPayload]
-    ]
-    find_queue_entry_fn: Callable[..., ContractPayload | None]
-    queue_entry_metadata_value_fn: Callable[[ContractPayload | None, str], Any]
-    resolve_candidate_path_fn: Callable[[Any], Path | None]
-    direct_dir_target_fn: Callable[[str], Path | None]
-    load_json_dict_fn: Callable[[Path], ContractPayload]
-    status_from_payloads_fn: Callable[..., StatusTuple]
-    resolve_artifact_path_fn: Callable[[Any, Path | None], str]
-    derive_selected_input_xyz_fn: Callable[[str], str]
-    prefer_orca_optimized_xyz_fn: Callable[..., str]
-    coerce_resource_dict_fn: Callable[[Any], dict[str, int]]
-    attempt_count_fn: Callable[[ContractPayload, ContractPayload], int]
-    max_retries_fn: Callable[[ContractPayload, ContractPayload], int]
-    coerce_attempts_fn: Callable[[ContractPayload, ContractPayload], tuple[ContractPayload, ...]]
-    final_result_payload_fn: Callable[[ContractPayload, ContractPayload], ContractPayload]
-    contract_cls: type
 
 
 @dataclass(frozen=True)
@@ -89,50 +62,6 @@ class _ContractPayloadContext:
     resource_actual: dict[str, int]
 
 
-class _ContractPayloadDeps:
-    def __init__(self, deps: OrcaContractLoaderDeps) -> None:
-        self._deps = deps
-
-    def normalize_text(self, value: Any) -> str:
-        return normalize_text(value)
-
-    def normalize_bool(self, value: Any) -> bool:
-        return normalize_bool(value)
-
-    def _runtime_paths(
-        self,
-        current_dir: Path | None,
-        *,
-        include_state: bool = True,
-        include_report: bool = True,
-        queue_entry: ContractPayload | None = None,
-    ) -> dict[str, str]:
-        return _canonical_payload.runtime_paths(
-            current_dir,
-            state_file_name="job_state.json",
-            report_json_name="job_report.json",
-            include_state=include_state,
-            include_report=include_report,
-            queue_entry=queue_entry,
-        )
-
-    def attempt_count(self, state: ContractPayload, report: ContractPayload) -> int:
-        return self._deps.attempt_count_fn(state, report)
-
-    def max_retries(self, state: ContractPayload, report: ContractPayload) -> int:
-        return self._deps.max_retries_fn(state, report)
-
-    def coerce_attempts(
-        self, state: ContractPayload, report: ContractPayload
-    ) -> tuple[ContractPayload, ...]:
-        return self._deps.coerce_attempts_fn(state, report)
-
-    def final_result_payload(
-        self, state: ContractPayload, report: ContractPayload
-    ) -> ContractPayload:
-        return self._deps.final_result_payload_fn(state, report)
-
-
 def load_orca_artifact_contract_impl(
     *,
     target: str,
@@ -140,14 +69,13 @@ def load_orca_artifact_contract_impl(
     queue_id: str,
     run_id: str,
     reaction_dir: str,
-    deps: OrcaContractLoaderDeps,
 ) -> Any:
     request = _contract_context.LoadRequest(
         target=target, queue_id=queue_id, run_id=run_id, reaction_dir=reaction_dir
     )
-    roots = _contract_context.resolve_roots(orca_allowed_root, deps)
-    context = _load_contract_context(request, roots, deps)
-    return _contract_from_context(request, roots, context, deps)
+    roots = _contract_context.resolve_roots(orca_allowed_root)
+    context = _load_contract_context(request, roots)
+    return _contract_from_context(request, roots, context)
 
 
 def contract_from_orca_payload_impl(
@@ -157,21 +85,19 @@ def contract_from_orca_payload_impl(
     queue_id: str,
     run_id: str,
     reaction_dir: str,
-    deps: OrcaContractLoaderDeps,
 ) -> Any:
     request = _contract_context.LoadRequest(
         target=target, queue_id=queue_id, run_id=run_id, reaction_dir=reaction_dir
     )
-    return _contract_from_payload(payload, request, deps)
+    return _contract_from_payload(payload, request)
 
 
 def _contract_from_payload(
     payload: ContractPayload,
     request: _contract_context.LoadRequest,
-    deps: OrcaContractLoaderDeps,
 ) -> Any:
     final_result = payload.get("final_result")
-    return deps.contract_cls(
+    return OrcaArtifactContract(
         run_id=normalize_text(payload.get("run_id")),
         status=normalize_text(payload.get("status")) or "unknown",
         reason=normalize_text(payload.get("reason")),
@@ -193,20 +119,19 @@ def _contract_from_payload(
         max_retries=safe_int(payload.get("max_retries"), default=0),
         attempts=_payload_attempts(payload),
         final_result=dict(final_result) if isinstance(final_result, dict) else {},
-        resource_request=deps.coerce_resource_dict_fn(payload.get("resource_request")),
-        resource_actual=deps.coerce_resource_dict_fn(payload.get("resource_actual")),
+        resource_request=coerce_int_mapping(payload.get("resource_request")),
+        resource_actual=coerce_int_mapping(payload.get("resource_actual")),
     )
 
 
 def _load_contract_context(
     request: _contract_context.LoadRequest,
     roots: _contract_context.LoadRoots,
-    deps: OrcaContractLoaderDeps,
 ) -> _contract_context.LoaderContext:
-    context = _contract_context.load_context(request, roots, deps)
-    _contract_context.set_current_dir(request, context, deps)
-    _contract_context.load_context_payloads(context, deps)
-    context.resolved_run_id = _contract_context.resolve_run_id(request, context, deps)
+    context = _contract_context.load_context(request, roots)
+    _contract_context.set_current_dir(request, context)
+    _contract_context.load_context_payloads(context)
+    context.resolved_run_id = _contract_context.resolve_run_id(request, context)
     return context
 
 
@@ -221,12 +146,10 @@ def _contract_from_context(
     request: _contract_context.LoadRequest,
     roots: _contract_context.LoadRoots,
     context: _contract_context.LoaderContext,
-    deps: OrcaContractLoaderDeps,
 ) -> Any:
     return _contract_from_payload(
-        _payload_from_context(request, roots, context, deps),
+        _payload_from_context(request, roots, context),
         request,
-        deps,
     )
 
 
@@ -234,12 +157,11 @@ def _payload_from_context(
     request: _contract_context.LoadRequest,
     roots: _contract_context.LoadRoots,
     context: _contract_context.LoaderContext,
-    deps: OrcaContractLoaderDeps,
 ) -> ContractPayload:
-    latest_known_path = _latest_known_path(request, context, deps)
-    status = _contract_status(context, deps)
-    paths = _artifact_paths(context, latest_known_path, deps)
-    resource_request, resource_actual = _resource_payloads(context, deps)
+    latest_known_path = _latest_known_path(request, context)
+    status = _contract_status_payload(context)
+    paths = _artifact_paths(context, latest_known_path)
+    resource_request, resource_actual = _resource_payloads(context)
     _ensure_orca_record(context.tracked_record)
     queue = dict(context.queue_entry) if context.queue_entry is not None else None
     payload_context = _ContractPayloadContext(
@@ -263,16 +185,12 @@ def _payload_from_context(
         resource_request=resource_request,
         resource_actual=resource_actual,
     )
-    return _canonical_payload.orca_contract_payload(
-        payload_context,
-        deps=_ContractPayloadDeps(deps),
-    )
+    return _canonical_payload.orca_contract_payload(payload_context)
 
 
 def _latest_known_path(
     request: _contract_context.LoadRequest,
     context: _contract_context.LoaderContext,
-    deps: OrcaContractLoaderDeps,
 ) -> str:
     record_path = (
         normalize_text(context.tracked_record.latest_known_path)
@@ -286,10 +204,8 @@ def _latest_known_path(
     return normalize_text(request.target)
 
 
-def _contract_status(
-    context: _contract_context.LoaderContext, deps: OrcaContractLoaderDeps
-) -> _StatusPayload:
-    status, analyzer_status, reason, completed_at = deps.status_from_payloads_fn(
+def _contract_status_payload(context: _contract_context.LoaderContext) -> _StatusPayload:
+    status, analyzer_status, reason, completed_at = _contract_status.status_from_payloads(
         queue_entry=context.queue_entry,
         state=context.state,
         report=context.report,
@@ -305,23 +221,26 @@ def _contract_status(
 def _artifact_paths(
     context: _contract_context.LoaderContext,
     latest_known_path: str,
-    deps: OrcaContractLoaderDeps,
 ) -> _ArtifactPaths:
-    selected_inp = deps.resolve_artifact_path_fn(
-        _selected_input_source(context, deps), context.current_dir
+    selected_inp = _path_helpers.resolve_artifact_path_impl(
+        _selected_input_source(context), context.current_dir
     )
     if Path(normalize_text(selected_inp)).suffix.lower() != ".inp":
         selected_inp = ""
-    last_out_path = deps.resolve_artifact_path_fn(_last_out_source(context), context.current_dir)
-    selected_input_xyz = deps.resolve_artifact_path_fn(
-        _selected_xyz_source(context, deps), context.current_dir
+    last_out_path = _path_helpers.resolve_artifact_path_impl(
+        _last_out_source(context), context.current_dir
+    )
+    selected_input_xyz = _path_helpers.resolve_artifact_path_impl(
+        _selected_xyz_source(context), context.current_dir
     )
     if not selected_input_xyz.lower().endswith(".xyz"):
         selected_input_xyz = ""
-    selected_input_xyz = selected_input_xyz or deps.derive_selected_input_xyz_fn(selected_inp)
+    selected_input_xyz = selected_input_xyz or _path_helpers.derive_selected_input_xyz_impl(
+        selected_inp
+    )
     optimized_xyz_path = ""
     if selected_inp and (context.state or context.report):
-        optimized_xyz_path = deps.prefer_orca_optimized_xyz_fn(
+        optimized_xyz_path = _path_helpers.prefer_orca_optimized_xyz_impl(
             selected_inp=selected_inp,
             selected_input_xyz=selected_input_xyz,
             current_dir=context.tracked_artifact_dir,
@@ -333,7 +252,6 @@ def _artifact_paths(
 
 def _selected_input_source(
     context: _contract_context.LoaderContext,
-    deps: OrcaContractLoaderDeps,
 ) -> Any:
     record_selected_inp = (
         context.tracked_record.selected_input_xyz if context.tracked_record is not None else ""
@@ -341,7 +259,7 @@ def _selected_input_source(
     if Path(normalize_text(record_selected_inp)).suffix.lower() != ".inp":
         record_selected_inp = ""
     return (
-        deps.queue_entry_metadata_value_fn(context.queue_entry, "selected_inp")
+        _local_lookup.queue_entry_metadata_value_impl(context.queue_entry, "selected_inp")
         or context.state.get("selected_inp")
         or context.report.get("selected_inp")
         or record_selected_inp
@@ -350,10 +268,9 @@ def _selected_input_source(
 
 def _selected_xyz_source(
     context: _contract_context.LoaderContext,
-    deps: OrcaContractLoaderDeps,
 ) -> Any:
     candidates = (
-        deps.queue_entry_metadata_value_fn(context.queue_entry, "selected_input_xyz"),
+        _local_lookup.queue_entry_metadata_value_impl(context.queue_entry, "selected_input_xyz"),
         context.state.get("selected_input_xyz"),
         context.report.get("selected_input_xyz"),
         context.tracked_record.selected_input_xyz if context.tracked_record is not None else "",
@@ -374,19 +291,18 @@ def _last_out_source(context: _contract_context.LoaderContext) -> Any:
 
 def _resource_payloads(
     context: _contract_context.LoaderContext,
-    deps: OrcaContractLoaderDeps,
 ) -> tuple[dict[str, int], dict[str, int]]:
     queue = context.queue_entry or {}
-    queue_request = deps.queue_entry_metadata_value_fn(queue, "resource_request")
-    queue_actual = deps.queue_entry_metadata_value_fn(queue, "resource_actual")
-    resource_request = deps.coerce_resource_dict_fn(
+    queue_request = _local_lookup.queue_entry_metadata_value_impl(queue, "resource_request")
+    queue_actual = _local_lookup.queue_entry_metadata_value_impl(queue, "resource_actual")
+    resource_request = coerce_int_mapping(
         queue_request if isinstance(queue_request, dict) else {}
-    ) or deps.coerce_resource_dict_fn(
+    ) or coerce_int_mapping(
         context.tracked_record.resource_request if context.tracked_record is not None else {}
     )
-    resource_actual = deps.coerce_resource_dict_fn(
+    resource_actual = coerce_int_mapping(
         queue_actual if isinstance(queue_actual, dict) else {}
-    ) or deps.coerce_resource_dict_fn(
+    ) or coerce_int_mapping(
         context.tracked_record.resource_actual if context.tracked_record is not None else {}
     )
     return resource_request, resource_actual or dict(resource_request)
@@ -402,7 +318,6 @@ def _ensure_orca_record(tracked_record: Any) -> None:
 
 
 __all__ = [
-    "OrcaContractLoaderDeps",
     "contract_from_orca_payload_impl",
     "load_orca_artifact_contract_impl",
 ]

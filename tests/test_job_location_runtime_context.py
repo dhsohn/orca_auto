@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
+
+import pytest
 
 from orca_auto.core.indexing import JobLocationRecord
-from orca_auto.orca.job_locations import _runtime_context as runtime_context
+from orca_auto.orca.job_locations import _tracking as tracking
 
 
 def _record(job_id: str, job_dir: Path, *, original_dir: Path | None = None) -> JobLocationRecord:
@@ -24,6 +25,7 @@ def _record(job_id: str, job_dir: Path, *, original_dir: Path | None = None) -> 
 
 def test_matching_tracked_job_dirs_matches_state_and_deduplicates(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     organized_dir = tmp_path / "organized"
     original_dir = tmp_path / "original"
@@ -34,18 +36,10 @@ def test_matching_tracked_job_dirs_matches_state_and_deduplicates(
         _record("job-duplicate", organized_dir, original_dir=original_dir),
     )
 
-    deps = SimpleNamespace(
-        normalize_text=lambda value: str(value or "").strip(),
-        list_job_location_records=lambda _index_root: records,
-        resolve_record_job_dir=lambda _record: organized_dir.resolve(),
-        load_state=lambda _job_dir: {"job_id": "state-job"},
-        resolve_existing_job_dir=lambda value: (
-            Path(value).resolve() if value and Path(value).exists() else None
-        ),
-    )
+    monkeypatch.setattr(tracking, "list_job_location_records", lambda _index_root: records)
+    monkeypatch.setattr(tracking, "resolve_record_job_dir", lambda _record: organized_dir.resolve())
+    monkeypatch.setattr(tracking, "load_state", lambda _job_dir: {"job_id": "state-job"})
 
-    assert runtime_context.matching_tracked_job_dirs(tmp_path, "", deps=deps) == []
-    assert runtime_context.matching_tracked_job_dirs(tmp_path, "state-job", deps=deps) == [
-        organized_dir.resolve()
-    ]
-    assert runtime_context.matching_tracked_job_dirs(tmp_path, "report-run", deps=deps) == []
+    assert tracking.matching_tracked_job_dirs(tmp_path, "") == []
+    assert tracking.matching_tracked_job_dirs(tmp_path, "state-job") == [organized_dir.resolve()]
+    assert tracking.matching_tracked_job_dirs(tmp_path, "report-run") == []
