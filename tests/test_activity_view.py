@@ -8,7 +8,7 @@ import pytest
 from orca_auto import activity_view
 
 
-def test_default_visible_items_hide_internal_workflow_children() -> None:
+def test_default_visible_items_include_all_workflow_children() -> None:
     items: list[dict[str, Any]] = [
         {"activity_id": "wf_1", "kind": "workflow"},
         {
@@ -34,8 +34,14 @@ def test_default_visible_items_hide_internal_workflow_children() -> None:
 
     visible = activity_view.queue_list_default_visible_items(items)
 
-    assert [item["activity_id"] for item in visible] == ["wf_1", "orca_1", "engine_job"]
-    assert visible[1]["parent_workflow_id"] == "wf_1"
+    assert [item["activity_id"] for item in visible] == [
+        "wf_1",
+        "crest_1",
+        "xtb_1",
+        "orca_1",
+        "engine_job",
+    ]
+    assert [item["parent_workflow_id"] for item in visible[1:4]] == ["wf_1"] * 3
 
 
 def test_normalize_activity_filter_values_deduplicates_case_insensitively() -> None:

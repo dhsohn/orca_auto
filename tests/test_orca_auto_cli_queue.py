@@ -471,7 +471,7 @@ def test_cmd_queue_list_tty_rail_never_overflows_terminal(
     assert max(display_width(line) for line in roomy) <= min_width + 2
 
 
-def test_cmd_queue_list_hides_non_orca_workflow_children_in_default_text_output(
+def test_cmd_queue_list_shows_all_workflow_children_in_default_text_output(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -582,12 +582,41 @@ def test_cmd_queue_list_hides_non_orca_workflow_children_in_default_text_output(
     assert "▶" in stdout
     assert "wf-1" in stdout
     assert "ts_search(nci)" in stdout
-    assert "xtb-q-1" not in stdout
-    assert "crest-q-1" not in stdout
+    assert "xtb-q-1" in stdout
+    assert "TS path" in stdout
+    assert "crest-q-1" in stdout
+    assert "conformer_search" in stdout
     assert "orca-q-1" in stdout
     assert "OptTS+Freq" in stdout
     assert "orca-q-engine-job" in stdout
     assert "NEB" in stdout
+
+
+def test_default_queue_list_collects_all_workflow_child_engines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_list_activities(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"count": 0, "activities": [], "sources": {}}
+
+    monkeypatch.setattr(unified_cli, "list_activities", fake_list_activities)
+    args = SimpleNamespace(
+        workflow_root=None,
+        orca_auto_config=None,
+        limit=0,
+        refresh=False,
+        engine=None,
+        status=None,
+        kind=None,
+        json=False,
+    )
+    request = unified_cli._queue_list_request(args)
+
+    unified_cli._queue_list_payload(args, request)
+
+    assert captured["child_job_engines"] is None
 
 
 def test_cmd_queue_list_shows_all_workflow_child_jobs(

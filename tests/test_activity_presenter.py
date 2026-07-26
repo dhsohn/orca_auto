@@ -10,6 +10,13 @@ def _workflow_payload() -> dict[str, list[dict[str, Any]]]:
         "activities": [
             {"activity_id": "wf_1", "kind": "workflow", "status": "running"},
             {
+                "activity_id": "crest_1",
+                "kind": "job",
+                "engine": "crest",
+                "status": "completed",
+                "metadata": {"workflow_id": "wf_1"},
+            },
+            {
                 "activity_id": "xtb_1",
                 "kind": "job",
                 "engine": "xtb",
@@ -40,12 +47,13 @@ def test_queue_list_display_rows_for_request_applies_default_visibility() -> Non
         _workflow_payload(),
         request=activity_presenter.QueueListPresentationRequest(
             default_visible_items=True,
-            visible_workflow_child_engines=("orca",),
         ),
     )
 
     assert [(indent, item["activity_id"]) for indent, item in rows] == [
         (0, "wf_1"),
+        (1, "crest_1"),
+        (1, "xtb_1"),
         (1, "orca_1"),
         (0, "standalone"),
     ]
@@ -56,7 +64,6 @@ def test_queue_list_text_presentation_reuses_display_row_request() -> None:
         _workflow_payload(),
         request=activity_presenter.QueueListPresentationRequest(
             default_visible_items=True,
-            visible_workflow_child_engines=("orca",),
             active_simulations=9,
             include_id=False,
         ),
@@ -65,6 +72,8 @@ def test_queue_list_text_presentation_reuses_display_row_request() -> None:
     assert presentation.active_simulations == 9
     assert [item["activity_id"] for _indent, item in presentation.display_rows] == [
         "wf_1",
+        "crest_1",
+        "xtb_1",
         "orca_1",
         "standalone",
     ]

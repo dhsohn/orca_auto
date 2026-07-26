@@ -257,7 +257,7 @@ def _queue_list_presentation_request(
         default_visible_items=request.default_combined_text_view,
         limit=request.limit,
         show_workflow_context=set(request.kind_values) != {"job"},
-        visible_workflow_child_engines=(("orca",) if request.default_combined_text_view else None),
+        visible_workflow_child_engines=None,
         active_simulations=active_simulations,
         now=now,
         max_width=max_width,
@@ -311,7 +311,7 @@ def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]
         crest_config=request.shared_config,
         xtb_config=request.shared_config,
         orca_config=request.shared_config,
-        child_job_engines=(() if request.default_combined_text_view else None),
+        child_job_engines=None,
     )
 
 
