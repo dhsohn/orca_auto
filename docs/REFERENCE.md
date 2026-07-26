@@ -479,10 +479,11 @@ orca_auto queue list --engine xtb
 `queue list` shows workflow and engine activity in one view, but workflow child simulations
 are rendered underneath their parent workflow with indentation. The text view prints a table
 with `Status`, `Name`, `Detail`, `ID`, and `Elapsed` columns, where the detail field surfaces
-workflow or job intent such as `ts_search(nci)`, `IRC`, or `NEB`. By default, only ORCA child
-jobs are expanded beneath workflow parents; internal xTB/CREST child jobs stay hidden in the
-combined text view to reduce noise, but remain available through `--engine ... --kind job`
-filters and `--json`. Top-level ORCA jobs remain top-level entries. The
+workflow or job intent such as `ts_search(nci)`, `IRC`, or `NEB`. CREST, xTB,
+and ORCA child jobs are all expanded beneath workflow parents in the default
+combined text view, so every queued workflow simulation and its current status
+are visible together. The `--engine ... --kind job` filters and `--json` expose
+the same jobs. Top-level ORCA jobs remain top-level entries. The
 `active_simulations` line counts only the currently running
 simulations that consume the shared `scheduler.max_active_simulations` slots.
 

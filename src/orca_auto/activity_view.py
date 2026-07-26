@@ -22,7 +22,6 @@ from orca_auto.flow.engine_runtime import engine_runtime_paths
 LOGGER = logging.getLogger(__name__)
 
 ACTIVE_SIMULATION_STATUSES = frozenset({STATUS_RUNNING, STATUS_RETRYING, STATUS_CANCEL_REQUESTED})
-DEFAULT_COMBINED_WORKFLOW_CHILD_ENGINES = frozenset({"orca"})
 ActivityItem = dict[str, Any]
 TopLevelToken = tuple[str, str | int]
 WORKFLOW_STAGE_DIRNAME_SET = frozenset(
@@ -99,23 +98,7 @@ def filter_activity_items(
 
 
 def queue_list_default_visible_items(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    visible: list[dict[str, Any]] = []
-    for raw_item in items:
-        item = activity_with_parent_hint(raw_item)
-        kind = normalize_text(item.get("kind")).lower()
-        if kind != "job":
-            visible.append(item)
-            continue
-
-        parent_workflow_id = normalize_text(item.get("parent_workflow_id"))
-        if not parent_workflow_id:
-            visible.append(item)
-            continue
-
-        engine = normalize_text(item.get("engine")).lower()
-        if engine in DEFAULT_COMBINED_WORKFLOW_CHILD_ENGINES:
-            visible.append(item)
-    return visible
+    return [activity_with_parent_hint(item) for item in items]
 
 
 def count_active_simulations(items: Sequence[dict[str, Any]]) -> int:

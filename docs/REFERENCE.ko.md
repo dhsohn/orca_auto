@@ -456,10 +456,10 @@ orca_auto queue list --engine xtb
 `queue list`는 워크플로우와 엔진 활동을 한 화면에 보여주되, 워크플로우 자식
 시뮬레이션은 부모 워크플로우 아래에 들여쓰기되어 렌더링됩니다. 텍스트 뷰는 `Status`,
 `Name`, `Detail`, `ID`, `Elapsed` 컬럼의 표를 출력하며, detail 필드는 `ts_search(nci)`,
-`IRC`, `NEB` 같은 워크플로우/작업 의도를 드러냅니다. 기본적으로 워크플로우 부모 아래에는
-ORCA 자식 작업만 펼쳐지고, 내부 xTB/CREST 자식 작업은 잡음을 줄이기 위해 통합 텍스트
-뷰에서 숨겨지지만 `--engine ... --kind job` 필터와 `--json`으로는 여전히 확인할 수
-있습니다. 최상위 ORCA 작업은 최상위 항목으로 남습니다. `active_simulations` 줄은 공유
+`IRC`, `NEB` 같은 워크플로우/작업 의도를 드러냅니다. CREST, xTB, ORCA 자식 작업은
+기본 통합 텍스트 뷰에서 모두 부모 아래에 펼쳐지므로 각 상세 잡의 진행 상태를 한 번에
+확인할 수 있습니다. `--engine ... --kind job` 필터와 `--json`도 같은 잡들을 제공합니다.
+최상위 ORCA 작업은 최상위 항목으로 남습니다. `active_simulations` 줄은 공유
 `scheduler.max_active_simulations` 슬롯을 소비하는 현재 실행 중 시뮬레이션만 셉니다.
 
 대화형 터미널에서는 텍스트 뷰가 스타일링됩니다. plain `active_simulations:` 줄 대신

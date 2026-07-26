@@ -8,6 +8,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Changed
+
+- `orca_auto queue list` now expands CREST, xTB, and ORCA child jobs beneath
+  each workflow by default, so the combined text view shows every queued
+  workflow simulation and its current status without requiring engine filters.
+
 ### Removed
 
 - Removed the write-only DFT SQLite index (`dft.db`). The `scan-notify` monitor
