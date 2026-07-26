@@ -85,8 +85,6 @@ _XTB_MANIFEST_KEYS = {
     "uhf",
     "solvent_model",
     "solvent",
-    "namespace",
-    "opt",
     "opt_level",
     "xcontrol",
     "dry_run",
@@ -237,16 +235,9 @@ def _build_submission_impl(
     runtime_identity = _engine_runner.engine_runtime_identity(job_dir)
     manifest_snapshot["_orca_auto_runtime_identity"] = runtime_identity
     opt_level = str(manifest_snapshot.get("opt_level") or "").strip().lower()
-    opt_alias = str(manifest_snapshot.get("opt") or "").strip().lower()
-    if opt_level and opt_alias and opt_level != opt_alias:
-        raise ValueError("xTB opt_level and opt aliases must match")
-    if opt_level or opt_alias:
-        manifest_snapshot["opt_level"] = opt_level or opt_alias
-    manifest_snapshot.pop("opt", None)
+    if opt_level:
+        manifest_snapshot["opt_level"] = opt_level
     _canonical_ts_validation_options(manifest_snapshot)
-    namespace = str(manifest_snapshot.get("namespace") or "").strip()
-    if namespace:
-        raise ValueError("xTB namespace is not supported by the canonical artifact contract")
 
     source_paths = {selected_source}
     secondary_source = job.get("secondary_input_xyz")

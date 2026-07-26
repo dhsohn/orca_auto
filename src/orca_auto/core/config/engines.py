@@ -114,58 +114,38 @@ def resource_request_from_manifest(cfg: Any, manifest: dict[str, Any]) -> dict[s
     resource_overrides = dict(resources or {})
     unknown_resource_keys = set(resource_overrides) - {
         "max_cores",
-        "max_cores_per_task",
         "max_memory_gb",
-        "max_memory_gb_per_task",
     }
     if unknown_resource_keys:
         raise ValueError(
             f"Unknown manifest resource fields: {sorted(str(key) for key in unknown_resource_keys)}"
         )
 
-    def explicit_positive_value(*values: tuple[str, Any]) -> int | None:
-        parsed_values: list[tuple[str, int]] = []
-        for label, raw in values:
-            if raw is None or raw == "":
-                continue
-            if isinstance(raw, bool):
-                raise ValueError(f"Manifest resource {label!r} must be a positive integer.")
-            if isinstance(raw, int):
-                parsed = raw
-            elif isinstance(raw, str) and raw.strip().isdigit():
-                parsed = int(raw.strip())
-            else:
-                raise ValueError(f"Manifest resource {label!r} must be a positive integer.")
-            if parsed < 1:
-                raise ValueError(f"Manifest resource {label!r} must be a positive integer.")
-            parsed_values.append((label, parsed))
-        if not parsed_values:
+    def explicit_positive_value(label: str, raw: Any) -> int | None:
+        if raw is None or raw == "":
             return None
-        if len({value for _label, value in parsed_values}) != 1:
-            labels = ", ".join(label for label, _value in parsed_values)
-            raise ValueError(f"Conflicting manifest resource aliases: {labels}")
-        return parsed_values[0][1]
+        if isinstance(raw, bool):
+            raise ValueError(f"Manifest resource {label!r} must be a positive integer.")
+        if isinstance(raw, int):
+            parsed = raw
+        elif isinstance(raw, str) and raw.strip().isdigit():
+            parsed = int(raw.strip())
+        else:
+            raise ValueError(f"Manifest resource {label!r} must be a positive integer.")
+        if parsed < 1:
+            raise ValueError(f"Manifest resource {label!r} must be a positive integer.")
+        return parsed
 
     default_cores = max(1, int(cfg.resources.max_cores_per_task))
     default_memory = max(1, int(cfg.resources.max_memory_gb_per_task))
     max_cores = (
-        explicit_positive_value(
-            ("resources.max_cores", resource_overrides.get("max_cores")),
-            ("resources.max_cores_per_task", resource_overrides.get("max_cores_per_task")),
-            ("max_cores", manifest.get("max_cores")),
-            ("max_cores_per_task", manifest.get("max_cores_per_task")),
-        )
+        explicit_positive_value("resources.max_cores", resource_overrides.get("max_cores"))
         or default_cores
     )
     max_memory_gb = (
         explicit_positive_value(
-            ("resources.max_memory_gb", resource_overrides.get("max_memory_gb")),
-            (
-                "resources.max_memory_gb_per_task",
-                resource_overrides.get("max_memory_gb_per_task"),
-            ),
-            ("max_memory_gb", manifest.get("max_memory_gb")),
-            ("max_memory_gb_per_task", manifest.get("max_memory_gb_per_task")),
+            "resources.max_memory_gb",
+            resource_overrides.get("max_memory_gb"),
         )
         or default_memory
     )

@@ -15,11 +15,6 @@ WORKFLOW_STAGE_DIRNAMES: dict[str, str] = {
         key=lambda entry: str(entry.workflow_stage_dirname),
     )
 }
-WORKFLOW_STAGE_DIRNAME_ALIASES = {
-    entry.engine_id: entry.workflow_stage_aliases
-    for entry in engine_catalog()
-    if entry.workflow_stage_aliases
-}
 
 
 def _parenthesis_free_workflow_id(workflow_id: str) -> str:
@@ -58,7 +53,7 @@ def validate_workflow_workspace_identity(
 ) -> str:
     workspace = Path(workspace_dir).expanduser().resolve()
     workspace_name = normalize_text(workspace.name)
-    persisted_id = normalize_text(workflow_id) or workspace_name
+    persisted_id = validate_workflow_id_path_segment(workflow_id)
     if persisted_id != workspace_name:
         raise ValueError(
             f"workflow directory name {workspace_name!r} does not match persisted "
@@ -66,7 +61,7 @@ def validate_workflow_workspace_identity(
             "supported; restore its original name or create a new workflow."
         )
     validate_workflow_id_path_segment(workspace_name)
-    return validate_workflow_id_path_segment(persisted_id)
+    return persisted_id
 
 
 WORKFLOW_SCAFFOLD_MANIFEST_NAME = "flow.yaml"
@@ -179,8 +174,7 @@ def workflow_stage_dirnames_for_engine(engine: str) -> tuple[str, ...]:
     if not engine_text:
         return ()
     primary = WORKFLOW_STAGE_DIRNAMES.get(engine_text) or f"stage_{engine_text}"
-    aliases = WORKFLOW_STAGE_DIRNAME_ALIASES.get(engine_text, ())
-    return tuple(dict.fromkeys((primary, *aliases)))
+    return (primary,)
 
 
 def workflow_workspace_internal_engine_paths_from_path(
@@ -316,7 +310,6 @@ def iter_workflow_runtime_workspaces(
 
 __all__ = [
     "WORKFLOW_FILE_NAME",
-    "WORKFLOW_STAGE_DIRNAME_ALIASES",
     "WORKFLOW_SCAFFOLD_MANIFEST_NAME",
     "WORKFLOW_STAGE_DIRNAMES",
     "directory_is_workflow_scaffold",

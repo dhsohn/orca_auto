@@ -248,7 +248,6 @@ class WorkflowStageXtbMutationMixin:
         job_dir: Path | str,
         manifest_path: Path | str,
         xcontrol_path: Path | str,
-        namespace: str,
         reaction_key: str,
         attempt_number: int,
         normalize_text: Callable[[Any], str],
@@ -262,7 +261,6 @@ class WorkflowStageXtbMutationMixin:
                 "job_dir": str(job_dir),
                 "manifest_path": str(manifest_path),
                 "xcontrol_path": str(xcontrol_path),
-                "namespace": namespace,
                 "reaction_key": reaction_key,
             },
         )

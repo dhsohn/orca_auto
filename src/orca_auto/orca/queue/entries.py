@@ -66,42 +66,8 @@ def normalize_metadata(raw: object) -> dict[str, Any]:
     return {str(key): value for key, value in raw.items()}
 
 
-def normalized_raw(raw: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(raw)
-    metadata = normalize_metadata(normalized.get("metadata"))
-    reaction_dir = normalize_text(metadata.get("reaction_dir"))
-    force = normalize_bool(metadata.get("force", False))
-    run_id = normalize_optional_text(metadata.get("run_id"))
-
-    if reaction_dir:
-        metadata["reaction_dir"] = reaction_dir
-    metadata["force"] = force
-    if run_id is not None:
-        metadata["run_id"] = run_id
-    else:
-        metadata.pop("run_id", None)
-
-    # Durable queue identity is evidence, not a legacy default.  Preserve
-    # missing fields as blank so the exact worker identity predicate can
-    # quarantine incomplete or foreign rows instead of promoting them to ORCA.
-    normalized["app_name"] = normalize_text(normalized.get("app_name"))
-    normalized["task_id"] = normalize_text(normalized.get("task_id"))
-    normalized["task_kind"] = normalize_text(normalized.get("task_kind"))
-    normalized["engine"] = normalize_text(normalized.get("engine"))
-    normalized["priority"] = normalize_priority(normalized.get("priority"), default=10)
-    normalized["status"] = (
-        normalize_text(normalized.get("status")).lower() or QueueStatus.PENDING.value
-    )
-    normalized["started_at"] = normalize_optional_text(normalized.get("started_at")) or ""
-    normalized["finished_at"] = normalize_optional_text(normalized.get("finished_at")) or ""
-    normalized["error"] = normalize_optional_text(normalized.get("error")) or ""
-    normalized["cancel_requested"] = normalize_bool(normalized.get("cancel_requested", False))
-    normalized["metadata"] = metadata
-    return normalized
-
-
 def entry_from_json_payload(raw: dict[str, Any]) -> QueueEntry:
-    return _core_queue.entry_from_dict(normalized_raw(raw))
+    return _core_queue.entry_from_dict(raw)
 
 
 def load_entries(allowed_root: Path) -> list[QueueEntry]:

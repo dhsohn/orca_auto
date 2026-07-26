@@ -74,13 +74,9 @@ def _write_xtb_path_manifest(
     reactant_target: Path,
     product_target: Path,
     stage_id: str,
-) -> tuple[str, str]:
+) -> str:
     overrides = _manifest_override_mapping(payload.get("job_manifest_overrides"))
     manifest_payload = _base_xtb_path_manifest(task_view, overrides)
-    namespace = normalize_text(recipe.get("namespace"))
-    override_namespace = str(overrides.get("namespace", "")).strip()
-    if namespace or override_namespace:
-        raise ValueError("xTB namespace is not supported by the canonical artifact contract")
     xcontrol_name = _write_xtb_recipe_xcontrol(job_dir, recipe)
     xcontrol_override_name = (
         "" if xcontrol_name else _materialize_xtb_override_xcontrol(job_dir, overrides=overrides)
@@ -99,7 +95,7 @@ def _write_xtb_path_manifest(
         yaml.safe_dump(manifest_payload, sort_keys=False, allow_unicode=False).encode("utf-8"),
         label="xTB path manifest",
     )
-    return namespace, selected_xcontrol_name
+    return selected_xcontrol_name
 
 
 def _record_xtb_path_job_payload(
@@ -143,7 +139,6 @@ def _record_xtb_path_attempt(
     recipe: dict[str, Any],
     job_dir: Path,
     selected_xcontrol_name: str,
-    namespace: str,
     attempt_number: int,
 ) -> None:
     stage_view.record_xtb_path_attempt(
@@ -153,7 +148,6 @@ def _record_xtb_path_attempt(
         xcontrol_path=(job_dir / selected_xcontrol_name).resolve()
         if selected_xcontrol_name
         else "",
-        namespace=namespace,
         reaction_key=normalize_text(payload.get("reaction_key")),
         attempt_number=attempt_number,
         normalize_text=normalize_text,
@@ -176,7 +170,7 @@ def write_xtb_path_job_impl(
     job_dir = _xtb_path_job_dir(xtb_allowed_root, stage_id, attempt_number)
     ensure_confined_directory(xtb_allowed_root, job_dir, label="xTB path stage job directory")
     reactant_target, product_target = _materialize_xtb_path_inputs(payload, job_dir=job_dir)
-    namespace, selected_xcontrol_name = _write_xtb_path_manifest(
+    selected_xcontrol_name = _write_xtb_path_manifest(
         task_view=task_view,
         payload=payload,
         recipe=recipe,
@@ -205,7 +199,6 @@ def write_xtb_path_job_impl(
         recipe=recipe,
         job_dir=job_dir,
         selected_xcontrol_name=selected_xcontrol_name,
-        namespace=namespace,
         attempt_number=attempt_number,
     )
     return str(job_dir)

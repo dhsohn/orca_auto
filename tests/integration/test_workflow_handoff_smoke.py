@@ -212,7 +212,7 @@ def _assert_planned_orca_handoff_stages(
         assert stage["status"] == "planned"
         assert task["status"] == "planned"
         assert reaction_dir.exists()
-        assert reaction_dir.is_relative_to(case.workspace_dir / "02_orca")
+        assert reaction_dir.is_relative_to(case.workspace_dir / "03_orca")
         assert selected_inp.exists()
         assert selected_input_xyz.exists()
         assert (reaction_dir / selected_inp.name).exists()

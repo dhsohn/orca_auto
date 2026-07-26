@@ -25,7 +25,6 @@ class EngineCatalogEntry:
     activity_role: ActivityRole
     workflow_stage_role: WorkflowStageRole
     workflow_stage_dirname: str | None
-    workflow_stage_aliases: tuple[str, ...]
     managed_admission: bool
     default_supervision_role: SupervisionRole
     supervision_order: int
@@ -44,7 +43,6 @@ _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
         activity_role="orca-run",
         workflow_stage_role="shared-root",
         workflow_stage_dirname="03_orca",
-        workflow_stage_aliases=("02_orca",),
         managed_admission=True,
         default_supervision_role="default",
         supervision_order=0,
@@ -61,7 +59,6 @@ _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
         activity_role="engine-queue",
         workflow_stage_role="workflow-stage",
         workflow_stage_dirname="02_xtb",
-        workflow_stage_aliases=(),
         managed_admission=True,
         default_supervision_role="with-workflow",
         supervision_order=3,
@@ -78,7 +75,6 @@ _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
         activity_role="engine-queue",
         workflow_stage_role="workflow-stage",
         workflow_stage_dirname="01_crest",
-        workflow_stage_aliases=(),
         managed_admission=True,
         default_supervision_role="with-workflow",
         supervision_order=2,

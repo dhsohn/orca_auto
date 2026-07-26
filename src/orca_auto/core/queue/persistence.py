@@ -9,7 +9,6 @@ from orca_auto.core.artifacts import QUEUE_FILE
 
 from ..utils.persistence import (
     atomic_write_json,
-    coerce_bool,
     load_json_list_file,
     resolve_root_path,
 )
@@ -18,6 +17,23 @@ from .types import QueueEntry, QueueStatus
 
 QUEUE_FILE_NAME = QUEUE_FILE
 QUEUE_LOCK_NAME = "queue.lock"
+_QUEUE_ENTRY_FIELDS = frozenset(
+    {
+        "queue_id",
+        "app_name",
+        "task_id",
+        "task_kind",
+        "engine",
+        "status",
+        "priority",
+        "enqueued_at",
+        "started_at",
+        "finished_at",
+        "cancel_requested",
+        "error",
+        "metadata",
+    }
+)
 
 
 class QueueStoreCorruptError(RuntimeError):
@@ -55,7 +71,36 @@ def entry_to_dict(entry: QueueEntry) -> dict[str, Any]:
 
 
 def _entry_from_dict(raw: dict[str, Any]) -> QueueEntry:
-    status_raw = str(raw.get("status", QueueStatus.PENDING.value)).strip().lower()
+    missing = _QUEUE_ENTRY_FIELDS - set(raw)
+    unknown = set(raw) - _QUEUE_ENTRY_FIELDS
+    if missing or unknown:
+        raise QueueStoreCorruptError(
+            "Queue entry fields do not match the canonical schema: "
+            f"missing={sorted(missing)} unknown={sorted(unknown)}"
+        )
+    for key in (
+        "queue_id",
+        "app_name",
+        "task_id",
+        "task_kind",
+        "engine",
+        "status",
+        "enqueued_at",
+        "started_at",
+        "finished_at",
+        "error",
+    ):
+        if not isinstance(raw[key], str):
+            raise QueueStoreCorruptError(f"Queue entry field {key!r} must be a string")
+    for key in ("queue_id", "app_name", "task_id", "task_kind", "engine"):
+        if not raw[key].strip():
+            raise QueueStoreCorruptError(f"Queue entry field {key!r} must not be blank")
+    if type(raw["priority"]) is not int:
+        raise QueueStoreCorruptError("Queue entry field 'priority' must be an integer")
+    if type(raw["cancel_requested"]) is not bool:
+        raise QueueStoreCorruptError("Queue entry field 'cancel_requested' must be boolean")
+
+    status_raw = raw["status"].strip().lower()
     try:
         status = QueueStatus(status_raw)
     except ValueError as exc:
@@ -66,22 +111,22 @@ def _entry_from_dict(raw: dict[str, Any]) -> QueueEntry:
 
     metadata = raw.get("metadata")
     if not isinstance(metadata, dict):
-        metadata = {}
+        raise QueueStoreCorruptError("Queue entry field 'metadata' must be a JSON object")
 
     return QueueEntry(
-        queue_id=str(raw.get("queue_id", "")).strip(),
-        app_name=str(raw.get("app_name", "")).strip(),
-        task_id=str(raw.get("task_id", "")).strip(),
-        task_kind=str(raw.get("task_kind", "")).strip(),
-        engine=str(raw.get("engine", "")).strip(),
+        queue_id=raw["queue_id"].strip(),
+        app_name=raw["app_name"].strip(),
+        task_id=raw["task_id"].strip(),
+        task_kind=raw["task_kind"].strip(),
+        engine=raw["engine"].strip(),
         status=status,
-        priority=normalize_queue_priority(raw.get("priority"), default=10),
-        enqueued_at=str(raw.get("enqueued_at", "")).strip(),
-        started_at=str(raw.get("started_at", "")).strip(),
-        finished_at=str(raw.get("finished_at", "")).strip(),
-        cancel_requested=coerce_bool(raw.get("cancel_requested", False)),
-        error=str(raw.get("error", "")).strip(),
-        metadata=metadata,
+        priority=normalize_queue_priority(raw["priority"], default=10),
+        enqueued_at=raw["enqueued_at"].strip(),
+        started_at=raw["started_at"].strip(),
+        finished_at=raw["finished_at"].strip(),
+        cancel_requested=raw["cancel_requested"],
+        error=raw["error"].strip(),
+        metadata=dict(metadata),
     )
 
 

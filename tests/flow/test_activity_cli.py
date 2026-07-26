@@ -608,7 +608,7 @@ def test_orca_records_keep_live_snapshot_despite_terminal_entry(
     monkeypatch.setattr(queue_adapter, "list_queue", lambda root: entries)
     monkeypatch.setattr(run_snapshot, "collect_run_snapshots", lambda root: snapshots)
     # A live run lock holds the dir -> the snapshot is a genuine in-progress re-run.
-    monkeypatch.setattr(_activity_orca, "active_run_lock_pid", lambda *a, **k: 4242)
+    monkeypatch.setattr(_activity_orca, "run_lock_is_held", lambda *a, **k: True)
 
     rows = _activity_orca.orca_records(
         config_path="/tmp/cfg.yaml",
@@ -648,16 +648,16 @@ def test_snapshot_display_status_marks_dead_running_as_failed(
     running = _snap("running")
 
     # No live run lock -> the run is gone; show it as failed, not in progress.
-    monkeypatch.setattr(_activity_orca, "active_run_lock_pid", lambda *a, **k: None)
+    monkeypatch.setattr(_activity_orca, "run_lock_is_held", lambda *a, **k: False)
     assert _activity_orca._snapshot_display_status(running) == "failed"
 
     # A live run lock -> genuinely running, leave it as running.
-    monkeypatch.setattr(_activity_orca, "active_run_lock_pid", lambda *a, **k: 4242)
+    monkeypatch.setattr(_activity_orca, "run_lock_is_held", lambda *a, **k: True)
     assert _activity_orca._snapshot_display_status(running) == "running"
 
     # Terminal statuses are never reinterpreted, regardless of the lock.
     done = _snap("completed")
-    monkeypatch.setattr(_activity_orca, "active_run_lock_pid", lambda *a, **k: None)
+    monkeypatch.setattr(_activity_orca, "run_lock_is_held", lambda *a, **k: False)
     assert _activity_orca._snapshot_display_status(done) == "completed"
 
 
@@ -899,7 +899,7 @@ def test_workspace_display_name_prefers_scaffold_for_generation_workspaces() -> 
         _workspace_display_name("/tmp/orca_runs/20260717-153816-966c453a", workflow_root=root)
         == "20260717-153816-966c453a"
     )
-    # Legacy non-generation workspace names display as themselves.
+    # Non-generation workspace names display as themselves.
     assert (
         _workspace_display_name("/tmp/orca_runs/wf_reaction_ts8", workflow_root=root)
         == "wf_reaction_ts8"

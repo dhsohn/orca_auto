@@ -105,23 +105,44 @@ def _command_arg(command: list[str], flag: str) -> str:
     return command[command.index(flag) + 1]
 
 
+def _current_orca_queue_metadata(
+    reaction_dir: Path,
+    extra: dict[str, object] | None = None,
+) -> dict[str, object]:
+    reaction_dir.mkdir(parents=True, exist_ok=True)
+    status = reaction_dir.stat()
+    return {
+        "reaction_dir": str(reaction_dir),
+        "execution_snapshot": {
+            "job_dir_identity": {
+                "device": int(status.st_dev),
+                "inode": int(status.st_ino),
+            }
+        },
+        **(extra or {}),
+    }
+
+
 def test_orca_worker_repairs_queued_publication_before_claim(tmp_path: Path) -> None:
     cfg = _make_cfg(str(tmp_path))
-    metadata = {
-        "reaction_dir": str(tmp_path / "rxn"),
-        "selected_input_xyz": str(tmp_path / "rxn" / "input.xyz"),
-        "job_type": "opt",
-        "molecule_key": "mol",
-        "resource_request": {"max_cores": 1, "max_memory_gb": 1},
-        **queue_record_sync_metadata(
-            QUEUE_RECORD_SYNC_REPAIR_PENDING,
-            token="repair-token",
-            owner_pid=0,
-        ),
-    }
+    reaction_dir = tmp_path / "rxn"
+    metadata = _current_orca_queue_metadata(
+        reaction_dir,
+        {
+            "selected_input_xyz": str(reaction_dir / "input.xyz"),
+            "job_type": "opt",
+            "molecule_key": "mol",
+            "resource_request": {"max_cores": 1, "max_memory_gb": 1},
+            **queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                token="repair-token",
+                owner_pid=0,
+            ),
+        },
+    )
     entry = enqueue(
         tmp_path,
-        str(tmp_path / "rxn"),
+        str(reaction_dir),
         task_id="task-repair",
         metadata=metadata,
     )
@@ -141,18 +162,19 @@ def test_orca_worker_repairs_queued_publication_before_claim(tmp_path: Path) -> 
 
 def test_orca_worker_keeps_failed_publication_repair_unclaimable(tmp_path: Path) -> None:
     cfg = _make_cfg(str(tmp_path))
+    reaction_dir = tmp_path / "rxn"
     entry = enqueue(
         tmp_path,
-        str(tmp_path / "rxn"),
+        str(reaction_dir),
         task_id="task-repair",
-        metadata={
-            "reaction_dir": str(tmp_path / "rxn"),
-            **queue_record_sync_metadata(
+        metadata=_current_orca_queue_metadata(
+            reaction_dir,
+            queue_record_sync_metadata(
                 QUEUE_RECORD_SYNC_REPAIR_PENDING,
                 token="repair-token",
                 owner_pid=0,
             ),
-        },
+        ),
     )
 
     with patch.object(
@@ -195,18 +217,19 @@ def test_orca_publication_repair_ignores_foreign_engine_row(tmp_path: Path) -> N
 
 def test_orca_publication_repair_reclaims_abandoned_live_pid_lease(tmp_path: Path) -> None:
     cfg = _make_cfg(str(tmp_path))
+    reaction_dir = tmp_path / "rxn"
     entry = enqueue(
         tmp_path,
-        str(tmp_path / "rxn"),
+        str(reaction_dir),
         task_id="task-live-publisher",
-        metadata={
-            "reaction_dir": str(tmp_path / "rxn"),
-            **queue_record_sync_metadata(
+        metadata=_current_orca_queue_metadata(
+            reaction_dir,
+            queue_record_sync_metadata(
                 "preparing",
                 token="live-token",
                 owner_pid=os.getpid(),
             ),
-        },
+        ),
     )
 
     with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
@@ -223,18 +246,19 @@ def test_orca_publication_repair_rejects_invalid_marker_after_lock_reload(
     changed_state: str,
 ) -> None:
     cfg = _make_cfg(str(tmp_path))
+    reaction_dir = tmp_path / "rxn"
     entry = enqueue(
         tmp_path,
-        str(tmp_path / "rxn"),
+        str(reaction_dir),
         task_id="task-marker-race",
-        metadata={
-            "reaction_dir": str(tmp_path / "rxn"),
-            **queue_record_sync_metadata(
+        metadata=_current_orca_queue_metadata(
+            reaction_dir,
+            queue_record_sync_metadata(
                 QUEUE_RECORD_SYNC_REPAIR_PENDING,
                 token="marker-race-token",
                 owner_pid=0,
             ),
-        },
+        ),
     )
     # The marker changes durably in the store after the prefilter read; the
     # repair claim re-reads under the publication lock and must refuse it.
@@ -281,16 +305,18 @@ def test_orca_publication_repair_validates_every_selected_input_path(tmp_path: P
         tmp_path,
         str(reaction_dir),
         task_id="task-conflicting-input-paths",
-        metadata={
-            "reaction_dir": str(reaction_dir),
-            "selected_inp": str(reaction_dir / "job.inp"),
-            "selected_input_xyz": str(tmp_path.parent / "outside.xyz"),
-            **queue_record_sync_metadata(
-                QUEUE_RECORD_SYNC_REPAIR_PENDING,
-                token="conflicting-input-token",
-                owner_pid=0,
-            ),
-        },
+        metadata=_current_orca_queue_metadata(
+            reaction_dir,
+            {
+                "selected_inp": str(reaction_dir / "job.inp"),
+                "selected_input_xyz": str(tmp_path.parent / "outside.xyz"),
+                **queue_record_sync_metadata(
+                    QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                    token="conflicting-input-token",
+                    owner_pid=0,
+                ),
+            },
+        ),
     )
 
     with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
@@ -2231,6 +2257,11 @@ class TestQueueWorkerInit(unittest.TestCase):
 
 class TestQueueWorkerMethods(unittest.TestCase):
     def setUp(self) -> None:
+        self._ticks_patcher = patch(
+            "orca_auto.core.admission.store._process_start_ticks",
+            side_effect=lambda pid: max(1, int(pid)),
+        )
+        self._ticks_patcher.start()
         self._signal_guard = preserved_signal_handlers(signal.SIGTERM, signal.SIGINT)
         self._signal_guard.__enter__()
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -2241,6 +2272,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
     def tearDown(self) -> None:
         self._signal_guard.__exit__(None, None, None)
         self._tmpdir.cleanup()
+        self._ticks_patcher.stop()
 
     def test_pid_file_write_and_remove(self) -> None:
         self.worker._write_pid_file()
@@ -4005,7 +4037,7 @@ class TestFillSlots(unittest.TestCase):
 
             rxn = root / "mol_A"
             rxn.mkdir()
-            enqueue(root, str(rxn))
+            enqueue(root, str(rxn), metadata=_current_orca_queue_metadata(rxn))
 
             with patch(
                 "orca_auto.orca.queue.worker.start_background_process"
@@ -4024,7 +4056,11 @@ class TestFillSlots(unittest.TestCase):
 
             rxn = root / "mol_identity"
             rxn.mkdir()
-            entry = enqueue(root, str(rxn))
+            entry = enqueue(
+                root,
+                str(rxn),
+                metadata=_current_orca_queue_metadata(rxn),
+            )
 
             with patch(
                 "orca_auto.orca.queue.worker.start_background_process"
@@ -4051,7 +4087,12 @@ class TestFillSlots(unittest.TestCase):
 
             rxn = root / "mol_task_identity"
             rxn.mkdir()
-            entry = enqueue(root, str(rxn), task_id="orca_task_preserved_123")
+            entry = enqueue(
+                root,
+                str(rxn),
+                task_id="orca_task_preserved_123",
+                metadata=_current_orca_queue_metadata(rxn),
+            )
             self.assertNotEqual(entry.queue_id, entry.task_id)
 
             with patch(
@@ -4092,7 +4133,7 @@ class TestFillSlots(unittest.TestCase):
             for name in ("a", "b"):
                 d = root / name
                 d.mkdir()
-                enqueue(root, str(d))
+                enqueue(root, str(d), metadata=_current_orca_queue_metadata(d))
 
             with patch(
                 "orca_auto.orca.queue.worker.start_background_process"
@@ -4112,7 +4153,11 @@ class TestFillSlots(unittest.TestCase):
             for name in ("p1", "p2", "p3", "p4"):
                 reaction_dir = root / name
                 reaction_dir.mkdir()
-                enqueue(root, str(reaction_dir))
+                enqueue(
+                    root,
+                    str(reaction_dir),
+                    metadata=_current_orca_queue_metadata(reaction_dir),
+                )
 
             with patch(
                 "orca_auto.orca.queue.worker.start_background_process"
@@ -4151,8 +4196,17 @@ class TestFillSlots(unittest.TestCase):
             first_dir.mkdir()
             second_dir.mkdir()
 
-            completed_entry = enqueue(root, str(first_dir), task_id="task_terminal_123")
-            pending_entry = enqueue(root, str(second_dir))
+            completed_entry = enqueue(
+                root,
+                str(first_dir),
+                task_id="task_terminal_123",
+                metadata=_current_orca_queue_metadata(first_dir),
+            )
+            pending_entry = enqueue(
+                root,
+                str(second_dir),
+                metadata=_current_orca_queue_metadata(second_dir),
+            )
             dequeue_next(root)
             _write_completed_run_state(first_dir)
 
@@ -4205,7 +4259,11 @@ class TestFillSlots(unittest.TestCase):
 
             queued = root / "queued_only"
             queued.mkdir()
-            enqueue(root, str(queued))
+            enqueue(
+                root,
+                str(queued),
+                metadata=_current_orca_queue_metadata(queued),
+            )
 
             token = reserve_slot(
                 worker.admission_root,
@@ -4251,7 +4309,11 @@ class TestFillSlots(unittest.TestCase):
 
             queued = root / "queued_only"
             queued.mkdir()
-            enqueue(root, str(queued))
+            enqueue(
+                root,
+                str(queued),
+                metadata=_current_orca_queue_metadata(queued),
+            )
 
             with patch(
                 "orca_auto.orca.queue.worker.start_background_process"

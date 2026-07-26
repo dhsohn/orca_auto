@@ -55,12 +55,7 @@ def _lines_message(lines: list[str], severity: Severity = "info") -> Message:
     return Message(
         title=title,
         severity=severity,
-        groups=(
-            group(
-                *(line(raw(text)) for text in lines[1:]),
-                heading=(raw(title),) if title else (),
-            ),
-        ),
+        groups=(group(*(line(raw(text)) for text in lines[1:])),),
         author="orca_auto",
     )
 

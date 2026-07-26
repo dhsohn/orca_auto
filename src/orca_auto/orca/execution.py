@@ -18,8 +18,7 @@ from orca_auto.core.admission import (
 from orca_auto.core.admission import activate_reserved_slot as _activate_reserved_slot
 from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.messaging import build_channel
-from orca_auto.core.utils.process_lock import parse_lock_info
-from orca_auto.core.utils.process_tracking import active_run_lock_pid
+from orca_auto.core.utils.process_tracking import run_lock_status
 
 from .attempt.engine import _exit_with_result, run_attempts
 from .completion_rules import detect_completion_mode
@@ -29,7 +28,6 @@ from .notifications import (
     notify_run_finished_event,
     notify_run_started_event,
 )
-from .orca_process import OrcaProcessRecoveryError, recover_orphaned_orca_process
 from .orca_runner import OrcaRunner
 from .out_analyzer import analyze_output
 from .retry_policy import retry_input_path
@@ -219,37 +217,8 @@ def _out_is_older_than_inputs(out_path: Path, *, selected_inp: Path, mode_inp: P
 
 
 def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool:
-    """Reap an orphaned ORCA group and recover a crashed run state.
-
-    MUST be called while holding the reaction dir's run lock. Holding it makes
-    us the exclusive owner, so any recorded ORCA group is an orphan of a
-    crashed or interrupted run — a legitimate concurrent run could not have
-    been granted the lock. Reaping here (rather than before acquiring the lock)
-    closes the window where another invocation grabs the lock and writes a
-    fresh ``orca.process.json`` we would otherwise mistake for an orphan and
-    kill.
-    """
+    """Recover resumable run state after admission has reconciled engine ownership."""
     state = load_state(reaction_dir)
-    process_record_dir = reaction_dir
-    if state:
-        selected_text = str(state.get("selected_inp") or "").strip()
-        if selected_text:
-            try:
-                selected_parent = Path(selected_text).expanduser().resolve().parent
-            except (OSError, RuntimeError):
-                selected_parent = reaction_dir
-            if selected_parent.is_dir() and selected_parent.is_relative_to(
-                reaction_dir.expanduser().resolve()
-            ):
-                process_record_dir = selected_parent
-
-    # Reap first, unconditionally: a local Ctrl-C ends the run
-    # failed/interrupted_by_user (not running/retrying), yet load_or_create_state
-    # still resumes that state, so gating the reap on the running/retrying
-    # status would let the resumed rerun start a second calculation over the
-    # same output while the interrupted run's PAL children are still alive. The
-    # reaper is a no-op when the record is absent or the group is already gone.
-    recover_orphaned_orca_process(process_record_dir, logger=logger)
     if not state:
         return False
 
@@ -275,20 +244,19 @@ def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool
 
 
 def active_direct_run_error(reaction_dir: Path, *, logger: logging.Logger) -> str | None:
-    lock_info = parse_lock_info(reaction_dir / LOCK_FILE_NAME)
-    lock_pid = active_run_lock_pid(
+    status = run_lock_status(
         reaction_dir,
         logger=logger,
         lock_file_name=LOCK_FILE_NAME,
     )
-    if lock_pid is None:
+    if not status.held:
         return None
 
-    started_at = lock_info.get("started_at")
-    started = started_at if isinstance(started_at, str) and started_at else "unknown"
+    owner = f"pid={status.pid}" if status.pid is not None else "pid=unknown"
+    started = status.started_at or "unknown"
     return (
         "Another orca_auto instance is already running in this directory "
-        f"(pid={lock_pid}, started_at={started}). Lock file: {reaction_dir / LOCK_FILE_NAME}"
+        f"({owner}, started_at={started}). Lock file: {reaction_dir / LOCK_FILE_NAME}"
     )
 
 
@@ -423,50 +391,7 @@ def execute_locked_run(
     runner_cls: type[Any],
 ) -> int:
     with acquire_run_lock(context.reaction_dir):
-        # Under the lock we are the exclusive owner, so this is where crashed
-        # state and orphaned ORCA groups are reconciled: reaping here (not
-        # before the lock) cannot mistake another invocation's freshly started
-        # run for an orphan.
-        legacy_recovery_prepared = False
-        if context.reservation_token:
-            slot = get_slot(context.admission_root, context.reservation_token)
-            if slot is not None and slot.engine_process_state:
-                build_slot_engine_process_preparer(
-                    context.admission_root,
-                    context.reservation_token,
-                )()
-                legacy_recovery_prepared = True
-        try:
-            recover_crashed_state(context.reaction_dir, logger=logger)
-        except OrcaProcessRecoveryError:
-            # An ambiguous process-recovery failure may leave an ORCA group
-            # alive. Keep the pending fence until an operator or a later
-            # recovery can establish that no engine process remains.
-            raise
-        except BaseException:
-            # Recovery itself never launches an engine. Do not leave a
-            # pre-recovery launch fence pending when state loading or another
-            # non-process-recovery step fails: the parent can then finalize
-            # the child and release this managed slot normally.
-            if legacy_recovery_prepared:
-                assert context.reservation_token is not None
-                completed = complete_slot_engine_process(
-                    context.admission_root,
-                    context.reservation_token,
-                )
-                if completed is None:
-                    raise RuntimeError(
-                        f"Admission slot disappeared: {context.reservation_token}"
-                    ) from None
-            raise
-        if legacy_recovery_prepared:
-            assert context.reservation_token is not None
-            completed = complete_slot_engine_process(
-                context.admission_root,
-                context.reservation_token,
-            )
-            if completed is None:
-                raise RuntimeError(f"Admission slot disappeared: {context.reservation_token}")
+        recover_crashed_state(context.reaction_dir, logger=logger)
         with _admission_context(
             admission_root=context.admission_root,
             reaction_dir=context.reaction_dir,
@@ -553,14 +478,9 @@ def execute_orca_run(
     logger.info("Selected input: %s", context.selected_inp)
 
     try:
-        # Crash/orphan recovery runs inside the run lock (see execute_locked_run),
-        # so it cannot race another invocation acquiring the lock.
+        # Run-state recovery stays inside the reaction lock. Engine-process
+        # ownership is reconciled independently through the admission store.
         return execute_locked_run(args, context, runner_cls=runner_cls)
-    except OrcaProcessRecoveryError:
-        # Keep the managed admission marker pending. Converting an ambiguous
-        # recovery failure to rc=1 would make the outer child scope complete
-        # and release capacity while an engine group may still be alive.
-        raise
     except AdmissionLimitReachedError as exc:
         _release_reservation_if_needed(context.admission_root, context.reservation_token)
         logger.error("%s", exc)

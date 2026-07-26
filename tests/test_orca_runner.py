@@ -14,11 +14,6 @@ from unittest.mock import MagicMock, call, patch
 from orca_auto.core import engine_scratch as scratch_mod
 from orca_auto.core.engine_scratch import scratch_provenance_from_exception
 from orca_auto.core.queue.cancellable import ProcessCleanupError
-from orca_auto.orca.orca_process import (
-    ORCA_PROCESS_RECORD_FILE_NAME,
-    OrcaProcessRecordCorruptError,
-    OrcaProcessRecoveryError,
-)
 from orca_auto.orca.orca_runner import (
     OrcaRunner,
     ShutdownSignalGuard,
@@ -41,12 +36,6 @@ def _installed_signal_handler(
 class OrcaRunnerTestCase(unittest.TestCase):
     def setUp(self) -> None:
         super().setUp()
-        ticks_patcher = patch(
-            "orca_auto.orca.orca_process.process_lock.process_start_ticks",
-            return_value=12345,
-        )
-        ticks_patcher.start()
-        self.addCleanup(ticks_patcher.stop)
         original_open = OrcaRunner._open_pinned_executable
 
         def open_test_executable(runner: OrcaRunner):
@@ -68,6 +57,12 @@ class OrcaRunnerTestCase(unittest.TestCase):
         executable_patcher.start()
         self.addCleanup(executable_patcher.stop)
 
+    @staticmethod
+    def managed_runner(executable: str) -> OrcaRunner:
+        runner = OrcaRunner(executable)
+        runner.set_running_job_registrar(lambda _running: None, prepare=lambda: None)
+        return runner
+
 
 class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
     def test_open_pinned_executable_rejects_fifo_without_blocking(self) -> None:
@@ -75,7 +70,7 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
             executable = Path(td) / "fake-orca"
             os.mkfifo(executable)
 
-            runner = OrcaRunner(str(executable))
+            runner = self.managed_runner(str(executable))
             with self.assertRaisesRegex(ValueError, "not a regular file"):
                 runner._open_pinned_executable()
 
@@ -85,7 +80,7 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
         mock_proc.wait.return_value = 0
         mock_popen.return_value = mock_proc
 
-        runner = OrcaRunner("/opt/orca/orca")
+        runner = self.managed_runner("/opt/orca/orca")
         with tempfile.TemporaryDirectory() as td:
             inp = Path(td) / "test.inp"
             inp.write_text("! Opt\n", encoding="utf-8")
@@ -118,7 +113,7 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
         mock_proc.wait.return_value = 0
         mock_popen.return_value = mock_proc
 
-        runner = OrcaRunner("/opt/orca/orca")
+        runner = self.managed_runner("/opt/orca/orca")
         with tempfile.TemporaryDirectory() as td:
             inp = Path(td) / "test.inp"
             inp.write_text("! Opt\n", encoding="utf-8")
@@ -136,7 +131,7 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
         # The rest of the inherited environment is preserved, not replaced.
         self.assertIn("PATH", env)
 
-    def test_ram_scratch_publishes_results_and_keeps_process_record_durable(self) -> None:
+    def test_ram_scratch_publishes_results(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             fake_shm = root / "shm"
@@ -156,7 +151,7 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
             inp = durable / "test.inp"
             inp.write_text("! SP\n", encoding="utf-8")
 
-            runner = OrcaRunner(str(executable))
+            runner = self.managed_runner(str(executable))
             with (
                 patch.object(scratch_mod, "_SCRATCH_ROOT_PARENT", fake_shm),
                 patch.object(
@@ -178,7 +173,6 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
             self.assertEqual(result.input_identity["path"], str(inp))
             self.assertTrue((durable / "test.gbw").is_file())
             self.assertFalse((durable / "test.EIJ.tmp").exists())
-            self.assertFalse((durable / ORCA_PROCESS_RECORD_FILE_NAME).exists())
             self.assertTrue(result.scratch_provenance["used"])
             self.assertEqual(
                 result.scratch_provenance["omitted_transient_files"],
@@ -203,7 +197,7 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
             inp = durable / "test.inp"
             inp.write_bytes(b"! SP")
 
-            runner = OrcaRunner(str(executable))
+            runner = self.managed_runner(str(executable))
             with (
                 patch.object(scratch_mod, "_SCRATCH_ROOT_PARENT", fake_shm),
                 patch.object(
@@ -255,7 +249,7 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
                 time.sleep(0.1)
                 return True
 
-            runner = OrcaRunner(str(executable))
+            runner = self.managed_runner(str(executable))
             runner.set_shutdown_requested(shutdown_requested)
             with (
                 patch.object(scratch_mod, "_SCRATCH_ROOT_PARENT", fake_shm),
@@ -303,7 +297,7 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
             inp.write_text("! SP\n", encoding="utf-8")
             moved_root = fake_shm / "orca_auto-moved"
 
-            runner = OrcaRunner(str(executable))
+            runner = self.managed_runner(str(executable))
             original_create = scratch_mod.EngineScratchWorkspace.create
 
             def replace_root_after_create(*args, **kwargs):
@@ -355,13 +349,13 @@ class TestOrcaRunnerCommandConstruction(OrcaRunnerTestCase):
 
 class TestOrcaRunnerTermination(OrcaRunnerTestCase):
     def test_terminate_noop_when_process_already_exited(self) -> None:
-        runner = OrcaRunner("/opt/orca/orca")
+        runner = self.managed_runner("/opt/orca/orca")
         mock_proc = MagicMock()
         mock_proc.poll.return_value = 0
         with (
             patch("orca_auto.orca.orca_runner.os.killpg") as killpg,
             patch(
-                "orca_auto.orca.orca_runner.process_group_is_alive",
+                "orca_auto.orca.orca_runner.process_group_exists",
                 return_value=False,
             ),
         ):
@@ -370,7 +364,7 @@ class TestOrcaRunnerTermination(OrcaRunnerTestCase):
 
     @patch("orca_auto.orca.orca_runner.os.killpg")
     def test_terminate_sends_sigterm_and_sigkill_on_timeout(self, mock_killpg: MagicMock) -> None:
-        runner = OrcaRunner("/opt/orca/orca")
+        runner = self.managed_runner("/opt/orca/orca")
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         mock_proc.pid = 99999
@@ -409,7 +403,7 @@ class TestOrcaRunnerTermination(OrcaRunnerTestCase):
         mock_proc.wait.side_effect = _wait
         mock_popen.return_value = mock_proc
 
-        runner = OrcaRunner("/opt/orca/orca")
+        runner = self.managed_runner("/opt/orca/orca")
         with patch.object(runner, "_terminate_subprocess_tree") as terminate:
             with tempfile.TemporaryDirectory() as td:
                 inp = Path(td) / "test.inp"
@@ -423,223 +417,137 @@ class TestOrcaRunnerTermination(OrcaRunnerTestCase):
         self.assertIn(call(signal.SIGINT, signal.SIG_DFL), mock_signal.call_args_list)
 
 
-class TestOrcaRunnerProcessRecordLifecycle(OrcaRunnerTestCase):
-    @patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False)
+class TestOrcaRunnerAdmissionLifecycle(OrcaRunnerTestCase):
     @patch("orca_auto.orca.orca_runner.subprocess.Popen")
-    def test_normal_exit_clears_process_record(
-        self, mock_popen: MagicMock, _group_alive: MagicMock
-    ) -> None:
-        mock_proc = MagicMock()
-        mock_proc.wait.return_value = 0
-        mock_proc.poll.return_value = 0
-        mock_proc.pid = 99999
-        mock_popen.return_value = mock_proc
-
-        runner = OrcaRunner("/opt/orca/orca")
-        with tempfile.TemporaryDirectory() as td:
-            inp = Path(td) / "test.inp"
-            inp.write_text("! Opt\n", encoding="utf-8")
-            runner.run(inp)
-            self.assertFalse((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
-
-    @patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=True)
-    @patch("orca_auto.orca.orca_runner.os.kill", return_value=None)
-    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
-    def test_normal_exit_does_not_signal_reused_pid_group(
-        self,
-        mock_popen: MagicMock,
-        _pid_exists: MagicMock,
-        group_alive: MagicMock,
-    ) -> None:
-        mock_proc = MagicMock()
-        mock_proc.wait.return_value = 0
-        mock_proc.poll.return_value = 0
-        mock_proc.pid = 99999
-        mock_popen.return_value = mock_proc
-
+    def test_unmanaged_runner_refuses_before_process_start(self, mock_popen: MagicMock) -> None:
         runner = OrcaRunner("/opt/orca/orca")
         with tempfile.TemporaryDirectory() as td:
             inp = Path(td) / "test.inp"
             inp.write_text("! SP\n", encoding="utf-8")
-            runner.run(inp)
-            self.assertFalse((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
 
-        group_alive.assert_not_called()
-
-    @patch("orca_auto.orca.orca_runner.process_group_is_alive")
-    @patch(
-        "orca_auto.orca.orca_runner.os.kill",
-        side_effect=OSError(errno.EIO, "probe failed"),
-    )
-    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
-    def test_normal_exit_retains_record_when_pid_reuse_probe_is_unknown(
-        self,
-        mock_popen: MagicMock,
-        _pid_probe: MagicMock,
-        group_alive: MagicMock,
-    ) -> None:
-        mock_proc = MagicMock()
-        mock_proc.wait.return_value = 0
-        mock_proc.poll.return_value = 0
-        mock_proc.pid = 99999
-        mock_popen.return_value = mock_proc
-
-        runner = OrcaRunner("/opt/orca/orca")
-        with tempfile.TemporaryDirectory() as td:
-            inp = Path(td) / "test.inp"
-            inp.write_text("! SP\n", encoding="utf-8")
-            with self.assertRaises(OrcaProcessRecoveryError):
+            with self.assertRaisesRegex(RuntimeError, "requires managed admission callbacks"):
                 runner.run(inp)
-            self.assertTrue((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
 
-        group_alive.assert_not_called()
+        mock_popen.assert_not_called()
 
     @patch("orca_auto.orca.orca_runner.subprocess.Popen")
-    def test_missing_start_ticks_aborts_launch_after_confirmed_cleanup(
+    def test_admission_identity_is_published_before_gate_release(
         self,
         mock_popen: MagicMock,
     ) -> None:
+        events: list[str] = []
         mock_proc = MagicMock()
         mock_proc.pid = 99999
         mock_proc.poll.return_value = 0
+        mock_proc.wait.return_value = 0
+        mock_proc.stdin.write.side_effect = lambda _value: events.append("gate_released")
         mock_popen.return_value = mock_proc
-        runner = OrcaRunner("/opt/orca/orca")
 
+        runner = OrcaRunner("/opt/orca/orca")
+        runner.set_running_job_registrar(
+            lambda running: events.append(
+                "admission_registered" if running is not None else "admission_cleared"
+            ),
+            prepare=lambda: events.append("admission_prepared"),
+        )
         with tempfile.TemporaryDirectory() as td:
             inp = Path(td) / "test.inp"
-            inp.write_text("! Opt\n", encoding="utf-8")
-            with patch(
-                "orca_auto.orca.orca_process.process_lock.process_start_ticks",
-                return_value=None,
-            ):
-                with patch.object(
-                    runner, "_terminate_subprocess_tree", return_value=True
-                ) as terminate:
-                    with self.assertRaises(OrcaProcessRecordCorruptError):
-                        runner.run(inp)
+            inp.write_text("! SP\n", encoding="utf-8")
+            runner.run(inp)
 
-            terminate.assert_called_once_with(mock_proc)
-            self.assertFalse((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
+        self.assertEqual(
+            events,
+            [
+                "admission_prepared",
+                "admission_registered",
+                "gate_released",
+                "admission_cleared",
+            ],
+        )
 
-    @patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False)
     @patch("orca_auto.orca.orca_runner.subprocess.Popen")
-    def test_launch_gate_release_failure_clears_durable_process_record(
+    def test_gate_release_failure_cleans_process_before_admission(
         self,
         mock_popen: MagicMock,
-        _group_alive: MagicMock,
     ) -> None:
+        events: list[str] = []
         mock_proc = MagicMock()
         mock_proc.pid = 99999
         mock_proc.poll.return_value = 0
         mock_proc.stdin.write.side_effect = OSError("release failed")
         mock_popen.return_value = mock_proc
-        runner = OrcaRunner("/opt/orca/orca")
 
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            inp = root / "test.inp"
+        runner = OrcaRunner("/opt/orca/orca")
+        runner.set_running_job_registrar(
+            lambda running: events.append(
+                "admission_registered" if running is not None else "admission_cleared"
+            ),
+            prepare=lambda: events.append("admission_prepared"),
+        )
+
+        def terminate(_proc: object) -> bool:
+            events.append("process_tree_reaped")
+            return True
+
+        with (
+            patch.object(
+                runner,
+                "_terminate_subprocess_tree",
+                side_effect=terminate,
+            ),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            inp = Path(td) / "test.inp"
             inp.write_text("! SP\n", encoding="utf-8")
-            with patch.object(runner, "_terminate_subprocess_tree", return_value=True):
-                with self.assertRaisesRegex(OSError, "release failed"):
-                    runner.run(inp)
+            with self.assertRaisesRegex(OSError, "release failed"):
+                runner.run(inp)
 
-            self.assertFalse((root / ORCA_PROCESS_RECORD_FILE_NAME).exists())
+        self.assertEqual(
+            events,
+            [
+                "admission_prepared",
+                "admission_registered",
+                "process_tree_reaped",
+                "admission_cleared",
+            ],
+        )
 
     @patch("orca_auto.orca.orca_runner.subprocess.Popen")
-    def test_record_init_cleanup_failure_keeps_marker_until_process_exit(
+    def test_admission_publish_failure_retains_fence_when_cleanup_is_unconfirmed(
         self,
         mock_popen: MagicMock,
     ) -> None:
+        events: list[str] = []
         mock_proc = MagicMock()
         mock_proc.pid = 99999
-        mock_popen.return_value = mock_proc
-        runner = OrcaRunner("/opt/orca/orca")
-
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            inp = root / "test.inp"
-            marker = root / ORCA_PROCESS_RECORD_FILE_NAME
-            inp.write_text("! Opt\n", encoding="utf-8")
-            poll_results = iter([None, 0])
-
-            def poll() -> int | None:
-                self.assertTrue(marker.exists())
-                return next(poll_results)
-
-            mock_proc.poll.side_effect = poll
-            with patch(
-                "orca_auto.orca.orca_process.process_lock.process_start_ticks",
-                return_value=None,
-            ):
-                with patch.object(runner, "_terminate_subprocess_tree", return_value=False):
-                    with self.assertRaises(ProcessCleanupError):
-                        runner.run(inp)
-
-            self.assertFalse(marker.exists())
-
-    @patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=True)
-    @patch("orca_auto.orca.orca_runner.signal.signal")
-    @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
-    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
-    def test_interrupt_keeps_record_while_group_survives(
-        self,
-        mock_popen: MagicMock,
-        _mock_getsignal: MagicMock,
-        mock_signal: MagicMock,
-        _group_alive: MagicMock,
-    ) -> None:
-        # Leader reaped but a PAL/child process in the group is still running:
-        # the record must survive so the next run's crash recovery reaps it.
-        mock_proc = MagicMock()
         mock_proc.poll.return_value = None
-        mock_proc.pid = 99999
-
-        def _wait(*_args: object, **_kwargs: object) -> int:
-            _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
-            return 0
-
-        mock_proc.wait.side_effect = _wait
         mock_popen.return_value = mock_proc
 
-        runner = OrcaRunner("/opt/orca/orca")
-        with tempfile.TemporaryDirectory() as td:
-            inp = Path(td) / "test.inp"
-            inp.write_text("! Opt\n", encoding="utf-8")
-            with patch.object(runner, "_terminate_subprocess_tree", return_value=True):
-                with self.assertRaises(WorkerShutdownInterrupt):
-                    runner.run(inp)
-            self.assertTrue((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
-
-    @patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False)
-    @patch("orca_auto.orca.orca_runner.signal.signal")
-    @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
-    @patch("orca_auto.orca.orca_runner.subprocess.Popen")
-    def test_interrupt_clears_record_when_group_gone(
-        self,
-        mock_popen: MagicMock,
-        _mock_getsignal: MagicMock,
-        mock_signal: MagicMock,
-        _group_alive: MagicMock,
-    ) -> None:
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        mock_proc.pid = 99999
-
-        def _wait(*_args: object, **_kwargs: object) -> int:
-            _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
-            return 0
-
-        mock_proc.wait.side_effect = _wait
-        mock_popen.return_value = mock_proc
+        def registrar(running: object | None) -> None:
+            if running is not None:
+                events.append("admission_publish_failed")
+                raise RuntimeError("publish failed")
+            events.append("admission_cleared")
 
         runner = OrcaRunner("/opt/orca/orca")
-        with tempfile.TemporaryDirectory() as td:
+        runner.set_running_job_registrar(registrar, prepare=lambda: events.append("prepared"))
+        with (
+            patch.object(runner, "_terminate_subprocess_tree", return_value=False),
+            patch(
+                "orca_auto.orca.orca_runner.retain_process_ownership_until_exit",
+                side_effect=lambda *_args, **_kwargs: events.append("ownership_retained"),
+            ),
+            tempfile.TemporaryDirectory() as td,
+        ):
             inp = Path(td) / "test.inp"
-            inp.write_text("! Opt\n", encoding="utf-8")
-            with patch.object(runner, "_terminate_subprocess_tree", return_value=True):
-                with self.assertRaises(WorkerShutdownInterrupt):
-                    runner.run(inp)
-            self.assertFalse((Path(td) / ORCA_PROCESS_RECORD_FILE_NAME).exists())
+            inp.write_text("! SP\n", encoding="utf-8")
+            with self.assertRaises(ProcessCleanupError):
+                runner.run(inp)
+
+        self.assertEqual(
+            events,
+            ["prepared", "admission_publish_failed", "ownership_retained"],
+        )
 
 
 class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
@@ -719,7 +627,7 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
             _installed_handler()(signal.SIGTERM, None)
             cleanup_completed.append(True)
 
-        runner = OrcaRunner("/opt/orca/orca")
+        runner = self.managed_runner("/opt/orca/orca")
         with patch.object(runner, "_retain_until_subprocess_tree_exits", side_effect=_cleanup):
             with tempfile.TemporaryDirectory() as td:
                 inp = Path(td) / "test.inp"
@@ -756,16 +664,14 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
             _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
             events.append("process_tree_reaped")
 
-        def _clear_record(*_args: object) -> None:
-            events.append("process_record_cleared")
-
-        runner = OrcaRunner("/opt/orca/orca")
-        runner.set_running_job_registrar(_registrar)
+        runner = self.managed_runner("/opt/orca/orca")
+        runner.set_running_job_registrar(_registrar, prepare=lambda: None)
         with (
-            patch("orca_auto.orca.orca_runner._reaped_pid_was_reused", return_value=False),
-            patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=True),
+            patch(
+                "orca_auto.orca.orca_runner.managed_process_group_has_exited",
+                return_value=False,
+            ),
             patch.object(runner, "_retain_until_subprocess_tree_exits", side_effect=_retain),
-            patch.object(runner, "_clear_process_record_if_group_gone", side_effect=_clear_record),
         ):
             with tempfile.TemporaryDirectory() as td:
                 inp = Path(td) / "test.inp"
@@ -778,7 +684,6 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
             [
                 "admission_registered",
                 "process_tree_reaped",
-                "process_record_cleared",
                 "admission_cleared",
             ],
         )
@@ -803,7 +708,7 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
             _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
             cleanup_completed.append(True)
 
-        runner = OrcaRunner("/opt/orca/orca")
+        runner = self.managed_runner("/opt/orca/orca")
         runner.set_shutdown_requested(MagicMock(side_effect=[False, True]))
         with patch.object(runner, "_retain_until_subprocess_tree_exits", side_effect=_cleanup):
             with tempfile.TemporaryDirectory() as td:
@@ -839,7 +744,7 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
             _installed_signal_handler(mock_signal, signal.SIGINT)(signal.SIGINT, None)
             cleanup_completed.append(True)
 
-        runner = OrcaRunner("/opt/orca/orca")
+        runner = self.managed_runner("/opt/orca/orca")
         with patch.object(runner, "_retain_until_subprocess_tree_exits", side_effect=_cleanup):
             with tempfile.TemporaryDirectory() as td:
                 inp = Path(td) / "test.inp"
@@ -877,21 +782,12 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
         def _registrar(running: object | None) -> None:
             events.append("admission_registered" if running is not None else "admission_cleared")
 
-        runner = OrcaRunner("/opt/orca/orca")
-        runner.set_running_job_registrar(_registrar)
-        with (
-            patch("orca_auto.orca.orca_runner._reaped_pid_was_reused", return_value=False),
-            patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=True),
-            patch.object(
-                runner,
-                "_retain_until_subprocess_tree_exits",
-                side_effect=lambda _proc: events.append("process_tree_reaped"),
-            ),
-            patch.object(
-                runner,
-                "_clear_process_record_if_group_gone",
-                side_effect=lambda *_args: events.append("process_record_cleared"),
-            ),
+        runner = self.managed_runner("/opt/orca/orca")
+        runner.set_running_job_registrar(_registrar, prepare=lambda: None)
+        with patch.object(
+            runner,
+            "_retain_until_subprocess_tree_exits",
+            side_effect=lambda _proc: events.append("process_tree_reaped"),
         ):
             with tempfile.TemporaryDirectory() as td:
                 inp = Path(td) / "test.inp"
@@ -919,28 +815,23 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
         events: list[str] = []
 
         def _registrar(running: object | None) -> None:
-            events.append("admission_registered" if running is not None else "admission_cleared")
+            if running is None:
+                _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
+                events.append("admission_cleared")
+            else:
+                events.append("admission_registered")
 
-        def _clear_record(*_args: object) -> None:
-            _installed_signal_handler(mock_signal)(signal.SIGTERM, None)
-            events.append("process_record_cleared")
-
-        runner = OrcaRunner("/opt/orca/orca")
-        runner.set_running_job_registrar(_registrar)
-        with (
-            patch("orca_auto.orca.orca_runner._reaped_pid_was_reused", return_value=False),
-            patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False),
-            patch.object(runner, "_clear_process_record_if_group_gone", side_effect=_clear_record),
-        ):
-            with tempfile.TemporaryDirectory() as td:
-                inp = Path(td) / "test.inp"
-                inp.write_text("! Opt\n", encoding="utf-8")
-                with self.assertRaises(WorkerShutdownInterrupt):
-                    runner.run(inp)
+        runner = self.managed_runner("/opt/orca/orca")
+        runner.set_running_job_registrar(_registrar, prepare=lambda: None)
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "test.inp"
+            inp.write_text("! Opt\n", encoding="utf-8")
+            with self.assertRaises(WorkerShutdownInterrupt):
+                runner.run(inp)
 
         self.assertEqual(
             events,
-            ["admission_registered", "process_record_cleared", "admission_cleared"],
+            ["admission_registered", "admission_cleared"],
         )
 
     @patch("orca_auto.orca.orca_runner.signal.signal")
@@ -964,7 +855,7 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
             OrcaRunner._write_interrupt_notice(failing_handle, message)
             events.append("notice_attempted")
 
-        runner = OrcaRunner("/opt/orca/orca")
+        runner = self.managed_runner("/opt/orca/orca")
         runner.set_shutdown_requested(MagicMock(side_effect=[False, True]))
         with (
             patch.object(
@@ -973,11 +864,6 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
                 side_effect=lambda _proc: events.append("process_tree_reaped"),
             ),
             patch.object(runner, "_write_interrupt_notice", side_effect=_failing_notice),
-            patch.object(
-                runner,
-                "_clear_process_record_if_group_gone",
-                side_effect=lambda *_args: events.append("process_record_cleared"),
-            ),
         ):
             with tempfile.TemporaryDirectory() as td:
                 inp = Path(td) / "test.inp"
@@ -987,7 +873,7 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
 
         self.assertEqual(
             events,
-            ["process_tree_reaped", "notice_attempted", "process_record_cleared"],
+            ["process_tree_reaped", "notice_attempted"],
         )
 
     def test_guard_blocks_cross_signal_until_both_handlers_are_installed(self) -> None:
@@ -1043,21 +929,18 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
         def _registrar(running: object | None) -> None:
             events.append("admission_registered" if running is not None else "admission_cleared")
 
-        runner = OrcaRunner("/opt/orca/orca")
-        runner.set_running_job_registrar(_registrar)
+        runner = self.managed_runner("/opt/orca/orca")
+        runner.set_running_job_registrar(_registrar, prepare=lambda: None)
         runner.set_shutdown_requested(MagicMock(side_effect=[False, RuntimeError("poll failed")]))
         with (
-            patch("orca_auto.orca.orca_runner._reaped_pid_was_reused", return_value=False),
-            patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=True),
+            patch(
+                "orca_auto.orca.orca_runner.managed_process_group_has_exited",
+                return_value=False,
+            ),
             patch.object(
                 runner,
                 "_retain_until_subprocess_tree_exits",
                 side_effect=lambda _proc: events.append("process_tree_reaped"),
-            ),
-            patch.object(
-                runner,
-                "_clear_process_record_if_group_gone",
-                side_effect=lambda *_args: events.append("process_record_cleared"),
             ),
         ):
             with tempfile.TemporaryDirectory() as td:
@@ -1071,7 +954,6 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
             [
                 "admission_registered",
                 "process_tree_reaped",
-                "process_record_cleared",
                 "admission_cleared",
             ],
         )
@@ -1110,24 +992,23 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
             handler(signal.SIGINT, None)
 
         def _registrar(running: object | None) -> None:
-            events.append("admission_registered" if running is not None else "admission_cleared")
+            if running is None:
+                _dispatch_sigint()
+                events.append("admission_cleared")
+            else:
+                events.append("admission_registered")
 
         def _cleanup(_proc: object) -> None:
             _dispatch_sigint()
             events.append("process_tree_reaped")
 
-        def _clear_record(*_args: object) -> None:
-            _dispatch_sigint()
-            events.append("process_record_cleared")
-
-        runner = OrcaRunner("/opt/orca/orca")
-        runner.set_running_job_registrar(_registrar)
+        runner = self.managed_runner("/opt/orca/orca")
+        runner.set_running_job_registrar(_registrar, prepare=lambda: None)
         runner.set_shutdown_requested(MagicMock(side_effect=[False, True]))
         with (
             patch("orca_auto.orca.orca_runner.signal.getsignal", side_effect=_getsignal),
             patch("orca_auto.orca.orca_runner.signal.signal", side_effect=_signal),
             patch.object(runner, "_retain_until_subprocess_tree_exits", side_effect=_cleanup),
-            patch.object(runner, "_clear_process_record_if_group_gone", side_effect=_clear_record),
         ):
             with tempfile.TemporaryDirectory() as td:
                 inp = Path(td) / "test.inp"
@@ -1141,7 +1022,6 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
             [
                 "admission_registered",
                 "process_tree_reaped",
-                "process_record_cleared",
                 "admission_cleared",
             ],
         )
@@ -1149,7 +1029,7 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
     @patch("orca_auto.orca.orca_runner.signal.signal")
     @patch("orca_auto.orca.orca_runner.signal.getsignal", return_value=signal.SIG_DFL)
     @patch("orca_auto.orca.orca_runner.subprocess.Popen")
-    def test_sigint_cannot_reenter_process_record_initialization_cleanup(
+    def test_sigint_cannot_reenter_admission_initialization_cleanup(
         self,
         mock_popen: MagicMock,
         _mock_getsignal: MagicMock,
@@ -1162,7 +1042,10 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
         events: list[str] = []
 
         def _registrar(running: object | None) -> None:
-            events.append("admission_registered" if running is not None else "admission_cleared")
+            if running is not None:
+                events.append("admission_registration_failed")
+                raise RuntimeError("record failed")
+            events.append("admission_cleared")
 
         def _terminate(_proc: object) -> bool:
             handler = _installed_signal_handler(mock_signal, signal.SIGINT)
@@ -1171,15 +1054,9 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
             events.append("process_tree_reaped")
             return True
 
-        runner = OrcaRunner("/opt/orca/orca")
-        runner.set_running_job_registrar(_registrar)
-        with (
-            patch(
-                "orca_auto.orca.orca_runner.write_orca_process_record",
-                side_effect=RuntimeError("record failed"),
-            ),
-            patch.object(runner, "_terminate_subprocess_tree", side_effect=_terminate),
-        ):
+        runner = self.managed_runner("/opt/orca/orca")
+        runner.set_running_job_registrar(_registrar, prepare=lambda: None)
+        with patch.object(runner, "_terminate_subprocess_tree", side_effect=_terminate):
             with tempfile.TemporaryDirectory() as td:
                 inp = Path(td) / "test.inp"
                 inp.write_text("! Opt\n", encoding="utf-8")
@@ -1188,5 +1065,9 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
 
         self.assertEqual(
             events,
-            ["admission_registered", "process_tree_reaped", "admission_cleared"],
+            [
+                "admission_registration_failed",
+                "process_tree_reaped",
+                "admission_cleared",
+            ],
         )

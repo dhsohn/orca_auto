@@ -74,7 +74,7 @@ def test_reaction_template_build_creates_request_and_role_stages(tmp_path: Path)
             orca_route_line="! test",
             charge=-1,
             multiplicity=2,
-            xtb_job_manifest={"opt": "tight"},
+            xtb_job_manifest={"opt_level": "tight"},
             endpoint_pairing={"strategy": "nearest"},
             source_job_id="source_1",
             source_job_type="imported",
@@ -106,7 +106,7 @@ def test_reaction_template_build_creates_request_and_role_stages(tmp_path: Path)
         "charge": -1,
         "multiplicity": 2,
         "crest_job_manifest": {"rthr": 0.5},
-        "xtb_job_manifest": {"opt": "tight"},
+        "xtb_job_manifest": {"opt_level": "tight"},
         "endpoint_pairing": {"strategy": "nearest"},
     }
     assert [artifact.kind for artifact in build.request.source_artifacts] == [

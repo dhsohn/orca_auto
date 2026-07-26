@@ -271,7 +271,7 @@ def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: P
     assert data.orca_results[0].rel_kcal == pytest.approx(0.0)
 
 
-def test_collect_ignores_legacy_root_engrad_for_verified_orca_generation(
+def test_collect_ignores_unbound_root_engrad_for_verified_orca_generation(
     tmp_path: Path,
 ) -> None:
     job_dir = tmp_path / "orca_reused_root"
@@ -281,7 +281,7 @@ def test_collect_ignores_legacy_root_engrad_for_verified_orca_generation(
         energy=-100.25,
         reason="normal_termination",
     )
-    (job_dir / "legacy.engrad").write_text(
+    (job_dir / "unbound.engrad").write_text(
         _ENGRAD_TEMPLATE.format(energy="-999.000000000000"),
         encoding="utf-8",
     )

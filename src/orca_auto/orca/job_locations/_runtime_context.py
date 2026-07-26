@@ -640,20 +640,6 @@ def _historical_generation_artifact(
     claim = _execution_generation_claim(inputs, artifact)
     generation = claim.generation
     if generation is None:
-        if not claim.required:
-            # A root-only legacy state/report has no execution-generation
-            # provenance. Keep the tracked record, but do not consume those
-            # artifacts or expose them as the current run.
-            return (
-                job_artifact_context(
-                    record=artifact.record,
-                    job_dir=artifact.job_dir,
-                    state=None,
-                    report=None,
-                ),
-                None,
-                False,
-            )
         return (
             job_artifact_context(
                 record=artifact.record,

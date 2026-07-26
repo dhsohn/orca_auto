@@ -2,12 +2,31 @@ from __future__ import annotations
 
 import errno
 import json
+import os
 import signal
 from pathlib import Path
 
 import pytest
 
 from orca_auto.core.utils import process as process_utils
+
+
+def test_is_process_alive_handles_absent_permission_and_unknown_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert not process_utils.is_process_alive(0)
+    monkeypatch.setattr(
+        os, "kill", lambda _pid, _signal: (_ for _ in ()).throw(ProcessLookupError())
+    )
+    assert not process_utils.is_process_alive(123)
+    monkeypatch.setattr(os, "kill", lambda _pid, _signal: (_ for _ in ()).throw(PermissionError()))
+    assert process_utils.is_process_alive(123)
+    monkeypatch.setattr(
+        os,
+        "kill",
+        lambda _pid, _signal: (_ for _ in ()).throw(OSError(errno.EBUSY, "busy")),
+    )
+    assert process_utils.is_process_alive(123)
 
 
 def test_linux_boot_id_reads_nonempty_proc_value(tmp_path: Path) -> None:
@@ -122,21 +141,22 @@ def test_boot_scoped_pid_payload_and_reader_reject_cross_boot_reuse(tmp_path: Pa
     assert not pid_path.exists()
 
 
-def test_pid_reader_keeps_legacy_and_unknown_current_boot_safe_biased(tmp_path: Path) -> None:
-    legacy_path = tmp_path / "legacy.pid"
-    legacy_path.write_text(
+def test_pid_reader_rejects_incomplete_or_unverifiable_identity(tmp_path: Path) -> None:
+    incomplete_path = tmp_path / "incomplete.pid"
+    incomplete_path.write_text(
         json.dumps({"pid": 123, "process_start_ticks": 456}),
         encoding="utf-8",
     )
     assert (
         process_utils.read_live_pid_file(
-            legacy_path,
+            incomplete_path,
             is_process_alive_fn=lambda _pid: True,
             process_start_ticks_fn=lambda _pid: 456,
             boot_id_fn=lambda: "boot-b",
         )
-        == 123
+        is None
     )
+    assert not incomplete_path.exists()
 
     scoped_path = tmp_path / "scoped.pid"
     scoped_path.write_text(
@@ -150,8 +170,9 @@ def test_pid_reader_keeps_legacy_and_unknown_current_boot_safe_biased(tmp_path: 
             process_start_ticks_fn=lambda _pid: 456,
             boot_id_fn=lambda: None,
         )
-        == 123
+        is None
     )
+    assert not scoped_path.exists()
 
 
 def test_memory_limit_preexec_applies_address_space_limit() -> None:

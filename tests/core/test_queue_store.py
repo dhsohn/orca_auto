@@ -212,6 +212,14 @@ def _entry(
     error: str = "",
     metadata: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    entry_metadata = {
+        **publication.queue_record_sync_metadata(
+            publication.QUEUE_RECORD_SYNC_COMPLETE,
+            token=queue_id,
+            owner_pid=0,
+        ),
+        **(metadata or {}),
+    }
     return {
         "queue_id": queue_id,
         "app_name": app_name,
@@ -225,7 +233,22 @@ def _entry(
         "finished_at": finished_at,
         "cancel_requested": cancel_requested,
         "error": error,
-        "metadata": metadata or {},
+        "metadata": entry_metadata,
+    }
+
+
+def _without_sync_metadata(metadata: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key
+        not in {
+            QUEUE_RECORD_SYNC_KEY,
+            QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
+            QUEUE_RECORD_SYNC_OWNER_PID_KEY,
+            QUEUE_RECORD_SYNC_OWNER_START_KEY,
+            QUEUE_RECORD_SYNC_TOKEN_KEY,
+        }
     }
 
 
@@ -389,7 +412,7 @@ def test_list_queue_handles_missing_and_rejects_corrupt_json(
         json.dumps([{**_entry("q-bad-priority"), "priority": False}], indent=2),
         encoding="utf-8",
     )
-    with pytest.raises(store.QueueStoreCorruptError, match="priority must be an integer"):
+    with pytest.raises(store.QueueStoreCorruptError, match="priority.*must be an integer"):
         store.list_queue(tmp_path)
 
     _queue_file(tmp_path).write_text(
@@ -402,10 +425,8 @@ def test_list_queue_handles_missing_and_rejects_corrupt_json(
         json.dumps([{**_entry("q-4"), "metadata": ["not", "a", "dict"]}], indent=2),
         encoding="utf-8",
     )
-    entries = store.list_queue(tmp_path)
-    assert len(entries) == 1
-    assert entries[0].status == QueueStatus.PENDING
-    assert entries[0].metadata == {}
+    with pytest.raises(store.QueueStoreCorruptError, match="metadata.*must be a JSON object"):
+        store.list_queue(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -1278,7 +1299,7 @@ def test_pending_cancel_metadata_callback_failure_aborts_queue_write(
     assert _queue_file(tmp_path).read_bytes() == before
     [unchanged] = store.list_queue(tmp_path)
     assert unchanged.status == QueueStatus.PENDING
-    assert unchanged.metadata == {"keep": "yes"}
+    assert _without_sync_metadata(unchanged.metadata) == {"keep": "yes"}
 
 
 def test_running_cancel_does_not_invoke_pending_cancel_callback(
@@ -1680,7 +1701,11 @@ def test_update_metadata_merges_without_changing_lifecycle_fields(
     assert updated is not None
     assert updated.status == entry.status
     assert updated.enqueued_at == entry.enqueued_at
-    assert updated.metadata == {"keep": "yes", "sync": "complete", "added": 1}
+    assert _without_sync_metadata(updated.metadata) == {
+        "keep": "yes",
+        "sync": "complete",
+        "added": 1,
+    }
     assert store.update_metadata(tmp_path, "missing", {"sync": "complete"}) is None
 
 
@@ -1763,7 +1788,7 @@ def test_requeue_running_entry_returns_running_entry_to_pending(
     assert updated.started_at == ""
     assert updated.cancel_requested is False
     assert updated.error == ""
-    assert updated.metadata == {"keep": "yes"}
+    assert _without_sync_metadata(updated.metadata) == {"keep": "yes"}
 
     entries = store.list_queue(tmp_path)
     assert len(entries) == 1
@@ -1869,7 +1894,7 @@ def test_requeue_cancel_metadata_callback_failure_aborts_queue_write(
     [unchanged] = store.list_queue(tmp_path)
     assert unchanged.status == QueueStatus.RUNNING
     assert unchanged.cancel_requested is True
-    assert unchanged.metadata == {"keep": "yes"}
+    assert _without_sync_metadata(unchanged.metadata) == {"keep": "yes"}
 
 
 def test_clear_terminal_removes_terminal_entries_and_can_keep_latest(
@@ -1997,7 +2022,11 @@ def test_mark_helpers_merge_metadata_updates(
 
     assert updated is not None
     assert updated.status == expected_status
-    assert updated.metadata == {"keep": "yes", "shared": "new", "added": 42}
+    assert _without_sync_metadata(updated.metadata) == {
+        "keep": "yes",
+        "shared": "new",
+        "added": 42,
+    }
     if helper_name != "mark_completed":
         assert updated.error == str(helper_kwargs["error"]).strip()
     assert helper(tmp_path, "missing-queue-id", **helper_kwargs) is None
@@ -2059,7 +2088,7 @@ def test_mark_helpers_merge_callback_metadata_under_queue_lock(
     )
 
     assert updated is not None and updated.status == expected_status
-    assert updated.metadata == {
+    assert _without_sync_metadata(updated.metadata) == {
         "keep": "yes",
         "shared": "dynamic",
         "static": True,
@@ -2106,7 +2135,7 @@ def test_mark_metadata_callback_failure_aborts_queue_write(
     [unchanged] = store.list_queue(tmp_path)
     assert unchanged.status == QueueStatus.PENDING
     assert unchanged.error == ""
-    assert unchanged.metadata == {"keep": "yes"}
+    assert _without_sync_metadata(unchanged.metadata) == {"keep": "yes"}
 
 
 def _write_single_running_entry(root: Path) -> None:

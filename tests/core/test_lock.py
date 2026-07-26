@@ -7,13 +7,19 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core.utils.lock import file_lock, file_lock_at
+from orca_auto.core.utils.lock import file_lock, file_lock_at, held_file_lock_payload
 
 
 def _hold_lock_until_released(lock_path: str, ready, release) -> None:
     with file_lock(Path(lock_path), timeout_seconds=1.0):
         ready.set()
         release.wait()
+
+
+def _hold_lock_then_crash(lock_path: str, ready) -> None:
+    with file_lock(Path(lock_path), timeout_seconds=1.0):
+        ready.set()
+        os._exit(0)
 
 
 def test_file_lock_writes_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -28,6 +34,23 @@ def test_file_lock_writes_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     assert lock_path.parent.exists()
     assert contents == "pid=4321\nacquired_at=2026-04-19T12:34:56+00:00\n"
+
+
+def test_file_lock_writes_custom_payload_and_reports_it_only_while_held(tmp_path: Path) -> None:
+    lock_path = tmp_path / "resource.lock"
+
+    with file_lock(lock_path, payload='{"pid":4321}'):
+        assert held_file_lock_payload(lock_path) == '{"pid":4321}\n'
+
+    assert held_file_lock_payload(lock_path) is None
+    assert lock_path.read_text(encoding="utf-8") == '{"pid":4321}\n'
+
+
+def test_held_file_lock_payload_ignores_unlocked_stale_file(tmp_path: Path) -> None:
+    lock_path = tmp_path / "resource.lock"
+    lock_path.write_text('{"pid":999999}', encoding="utf-8")
+
+    assert held_file_lock_payload(lock_path) is None
 
 
 def test_file_lock_times_out_when_lock_is_held(tmp_path: Path) -> None:
@@ -61,6 +84,20 @@ def test_file_lock_times_out_when_lock_is_held(tmp_path: Path) -> None:
         if process.is_alive():
             process.terminate()
             process.join(timeout=5)
+
+
+def test_file_lock_is_reacquired_after_owner_process_crashes(tmp_path: Path) -> None:
+    ctx = get_context("fork")
+    lock_path = tmp_path / "crashed.lock"
+    ready = ctx.Event()
+    process = ctx.Process(target=_hold_lock_then_crash, args=(str(lock_path), ready))
+    process.start()
+    assert ready.wait(5), "child process never acquired the lock"
+    process.join(timeout=5)
+    assert process.exitcode == 0
+
+    with file_lock(lock_path, timeout_seconds=0.1):
+        assert held_file_lock_payload(lock_path) is not None
 
 
 def test_file_lock_ignores_unlock_oserror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

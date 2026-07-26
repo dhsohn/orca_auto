@@ -118,52 +118,17 @@ class TestState(unittest.TestCase):
                 payload = json.loads(lock_path.read_text(encoding="utf-8"))
                 self.assertEqual(payload.get("pid"), os.getpid())
                 self.assertIsInstance(payload.get("started_at"), str)
-            self.assertFalse(lock_path.exists())
+            self.assertTrue(lock_path.exists())
 
     def test_active_lock_blocks_second_runner(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)
-            lock_path = reaction / "run.lock"
-            lock_path.write_text(
-                json.dumps({"pid": os.getpid(), "started_at": "2026-01-01T00:00:00+00:00"}) + "\n",
-                encoding="utf-8",
-            )
-
-            with self.assertRaises(RuntimeError):
-                with acquire_run_lock(reaction):
-                    pass
-
-    def test_active_lock_with_matching_process_ticks_blocks(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            reaction = Path(td)
-            lock_path = reaction / "run.lock"
-            lock_path.write_text(
-                json.dumps(
-                    {
-                        "pid": 12345,
-                        "started_at": "2026-01-01T00:00:00+00:00",
-                        "process_start_ticks": 111,
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-
-            with (
-                patch(
-                    "orca_auto.orca.runtime.run_lock.process_lock.is_process_alive",
-                    return_value=True,
-                ),
-                patch(
-                    "orca_auto.orca.runtime.run_lock.process_lock.process_start_ticks",
-                    return_value=111,
-                ),
-            ):
+            with acquire_run_lock(reaction):
                 with self.assertRaises(RuntimeError):
                     with acquire_run_lock(reaction):
                         pass
 
-    def test_pid_reused_lock_is_recovered_by_start_ticks(self) -> None:
+    def test_unlocked_stale_metadata_is_reused_without_pid_probe(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)
             lock_path = reaction / "run.lock"
@@ -179,23 +144,13 @@ class TestState(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with (
-                patch(
-                    "orca_auto.orca.runtime.run_lock.process_lock.is_process_alive",
-                    return_value=True,
-                ),
-                patch(
-                    "orca_auto.orca.runtime.run_lock.process_lock.process_start_ticks",
-                    return_value=222,
-                ),
-                patch(
-                    "orca_auto.orca.runtime.run_lock.current_process_lock_payload",
-                    return_value={
-                        "pid": os.getpid(),
-                        "started_at": "2026-03-22T00:00:00+00:00",
-                        "process_start_ticks": 333,
-                    },
-                ),
+            with patch(
+                "orca_auto.orca.runtime.run_lock.current_process_lock_payload",
+                return_value={
+                    "pid": os.getpid(),
+                    "started_at": "2026-03-22T00:00:00+00:00",
+                    "process_start_ticks": 333,
+                },
             ):
                 with acquire_run_lock(reaction):
                     payload = json.loads(lock_path.read_text(encoding="utf-8"))
@@ -346,8 +301,8 @@ class TestState(unittest.TestCase):
 
             write_report_files(reaction, state)
 
-            # Pre-relocation root copies are left for the one-time operational
-            # migration; the writer publishes only into the generation.
+            # Unbound root files are left untouched; the writer publishes only
+            # into the verified generation.
             self.assertTrue((reaction / "job_report.json").exists())
             self.assertTrue((generation / "job_report.json").is_file())
 
@@ -508,16 +463,16 @@ class TestState(unittest.TestCase):
             with acquire_run_lock(reaction):
                 lock_path = reaction / run_lock.LOCK_FILE_NAME
                 self.assertTrue(lock_path.exists())
-            self.assertFalse(lock_path.exists())
+            with acquire_run_lock(reaction):
+                self.assertTrue(lock_path.exists())
 
-    def test_unreadable_lock_pid_raises(self) -> None:
+    def test_unlocked_invalid_lock_payload_does_not_block(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)
             lock_path = reaction / "run.lock"
             lock_path.write_text(
                 json.dumps({"pid": "invalid", "started_at": "x"}) + "\n", encoding="utf-8"
             )
-            with self.assertRaises(RuntimeError) as ctx:
-                with acquire_run_lock(reaction):
-                    pass
-            self.assertIn("unreadable", str(ctx.exception).lower())
+            with acquire_run_lock(reaction):
+                payload = json.loads(lock_path.read_text(encoding="utf-8"))
+                self.assertEqual(payload["pid"], os.getpid())

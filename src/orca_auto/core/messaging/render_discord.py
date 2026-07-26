@@ -115,17 +115,13 @@ def _md_spans(spans: tuple[Span, ...], *, limit: int | None = None) -> str:
     return "".join(output)
 
 
-def _is_title_heading(heading: tuple[Span, ...], title: str) -> bool:
-    return bool(heading) and "".join(span.text for span in heading) == title
-
-
 def _collect(
     message: Message,
 ) -> tuple[list[tuple[Span, ...]], list[Field]]:
     description_lines: list[tuple[Span, ...]] = []
     fields: list[Field] = []
-    for index, group in enumerate(message.groups):
-        if group.heading and not (index == 0 and _is_title_heading(group.heading, message.title)):
+    for group in message.groups:
+        if group.heading:
             description_lines.append(group.heading)
         for item in group.items:
             if isinstance(item, Field):

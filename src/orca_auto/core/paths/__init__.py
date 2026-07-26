@@ -20,7 +20,6 @@ from .validation import (
 )
 from .workflow import (
     WORKFLOW_FILE_NAME,
-    WORKFLOW_STAGE_DIRNAME_ALIASES,
     WORKFLOW_STAGE_DIRNAMES,
     iter_workflow_runtime_workspaces,
     path_is_inside_workflow_workspace,
@@ -32,7 +31,6 @@ from .workflow import (
 
 __all__ = [
     "WORKFLOW_FILE_NAME",
-    "WORKFLOW_STAGE_DIRNAME_ALIASES",
     "WORKFLOW_STAGE_DIRNAMES",
     "ensure_directory",
     "first_existing_named_file",

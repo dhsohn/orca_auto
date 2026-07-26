@@ -62,10 +62,8 @@ ORCA_EXECUTION_SNAPSHOT_VERSION = 2
 MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES = 4 * MAX_INPUT_SNAPSHOT_BYTES
 _GENERATION_RUNTIME_FILE_NAMES = frozenset(
     {
-        ".orca.process.lock",
         "job_report.json",
         "job_state.json",
-        "orca.process.json",
     }
 )
 _XYZ_GEOMETRY_REFERENCE_KINDS = frozenset({"geometry", "neb_geometry"})

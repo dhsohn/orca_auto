@@ -74,7 +74,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(kw_only=True)
 class OrcaResult:
     """Calculation results extracted from an ORCA output file."""
 
@@ -107,7 +107,7 @@ class OrcaResult:
     elements: list[str] = field(default_factory=list)
     coordinates: list[AtomRow] = field(default_factory=list)
     # True only when charge/multiplicity were explicitly parsed from the
-    # executed output. Appended for positional compatibility.
+    # executed output.
     electronic_state_verified: bool = False
 
 

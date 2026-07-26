@@ -26,6 +26,8 @@ def _plain(message: Message) -> str:
     parts: list[str] = []
     if message.author:
         parts.append(message.author)
+    if message.title:
+        parts.append(message.title)
     for group in message.groups:
         if group.heading:
             parts.append("".join(span.text for span in group.heading))

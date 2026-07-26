@@ -28,7 +28,6 @@ from orca_auto.core.messaging import (
     raw,
     render_discord_embed,
     text,
-    title_heading,
 )
 from orca_auto.core.notifications.engines import _lines_message
 
@@ -59,17 +58,11 @@ if blocked:
 # --------------------------------------------------------------------------- #
 # Discord rendering (embed)
 # --------------------------------------------------------------------------- #
-def test_render_discord_embed_dedups_title_and_maps_fields() -> None:
+def test_render_discord_embed_maps_fields() -> None:
     message = Message(
         title="ORCA Started",
         severity="success",
-        groups=(
-            group(
-                field_row("Job", text("rxn")),
-                field_row("Attempt", raw("#3")),
-                heading=title_heading("ORCA Started"),
-            ),
-        ),
+        groups=(group(field_row("Job", text("rxn")), field_row("Attempt", raw("#3"))),),
     )
     embed = render_discord_embed(message)
     assert embed["title"] == "✅ ORCA Started"
@@ -85,10 +78,7 @@ def test_render_discord_embed_dedups_title_and_maps_fields() -> None:
 def test_render_discord_embed_routes_lines_and_headings_to_description() -> None:
     message = Message(
         title="T",
-        groups=(
-            group(heading=title_heading("T")),
-            group(line(raw("hello "), code("world")), heading=(bold("Section"),)),
-        ),
+        groups=(group(line(raw("hello "), code("world")), heading=(bold("Section"),)),),
     )
     embed = render_discord_embed(message)
     assert embed["description"] == "**Section**\nhello `world`"
@@ -109,12 +99,7 @@ def test_engine_line_message_uses_native_discord_title_without_description_dupli
 def test_render_discord_embed_escapes_markdown_and_embedded_backticks() -> None:
     message = Message(
         title="*literal*",
-        groups=(
-            group(
-                field_row("[key]", text("@everyone **not bold**"), code("a`b")),
-                heading=title_heading("*literal*"),
-            ),
-        ),
+        groups=(group(field_row("[key]", text("@everyone **not bold**"), code("a`b"))),),
     )
     embed = render_discord_embed(message)
     # The embed title is literal text on Discord (no Markdown), so it is not
@@ -249,28 +234,6 @@ def test_messenger_config_from_mapping() -> None:
 def test_messenger_config_rejects_malformed_sections(raw: object, expected: str) -> None:
     with pytest.raises(ValueError, match=expected):
         messenger_config_from_mapping(raw)
-
-
-def test_messenger_config_file_rejects_leftover_telegram_block(
-    tmp_path: Path,
-) -> None:
-    # Telegram is no longer supported: a leftover top-level block fails closed
-    # with a migration hint rather than silently disabling notifications.
-    config_path = tmp_path / "orca_auto.yaml"
-    config_path.write_text(
-        "telegram:\n  bot_token: legacy-token\n  chat_id: legacy-chat\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="no longer supported"):
-        load_messenger_config_from_file(config_path)
-
-    # A nested messenger.telegram block is likewise rejected as an unknown field.
-    config_path.write_text(
-        "messenger:\n  telegram:\n    chat_id: nested-chat\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="Unknown messenger config fields"):
-        load_messenger_config_from_file(config_path)
 
 
 def test_required_messenger_config_rejects_missing_and_invalid_files(tmp_path: Path) -> None:

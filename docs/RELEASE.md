@@ -34,11 +34,11 @@ Use the same structure in release PRs and GitHub release notes:
 - Patch version: bug fixes, documentation, tests, CI, or narrow retry/reporting
   hardening that preserves public contracts.
 - Minor version: new public CLI/config/report behavior, new workflow surfaces,
-  or meaningful compatibility additions.
+  or meaningful contract additions.
 - Major version: reserved for future stable public API breaks.
 
 Until the project declares a stable 1.0 contract, prefer conservative release
-notes that state exactly which surfaces are expected to remain compatible.
+notes that state exactly which surfaces are expected to remain stable.
 
 ## Pre-release checklist
 
@@ -48,7 +48,7 @@ Create a release-prep issue and branch from `origin/main`, then verify:
 - [ ] `pyproject.toml` version matches the changelog entry.
 - [ ] `README.md`, `docs/REFERENCE.md`, and example docs match current public
       CLI/config/report behavior.
-- [ ] Any behavior changes have tests and a clear migration note if needed.
+- [ ] Any behavior changes have tests and a clear cutover note if needed.
 - [ ] `bash scripts/check.sh` passes.
 - [ ] `bash examples/fake_orca_smoke/run.sh` passes.
 - [ ] A wheel can be built with a Python-module inventory exactly matching

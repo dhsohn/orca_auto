@@ -15,7 +15,6 @@ from orca_auto.core.messaging import (
     field_row,
     group,
     raw,
-    title_heading,
 )
 from orca_auto.core.utils import coerce_mapping, normalize_text
 
@@ -212,7 +211,7 @@ def _message(context: dict[str, str], *fields: Any) -> Message:
     return Message(
         title=title,
         severity=_severity_for(context["event_type"]),
-        groups=(group(*fields, heading=title_heading(title)),),
+        groups=(group(*fields),),
         author="orca_auto",
     )
 

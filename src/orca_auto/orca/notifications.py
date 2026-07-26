@@ -29,7 +29,6 @@ from orca_auto.core.messaging import (
     line,
     raw,
     text,
-    title_heading,
 )
 
 if TYPE_CHECKING:
@@ -74,7 +73,7 @@ def run_started_message(event: RunStartedNotification) -> Message:
     return Message(
         title=title,
         severity="info",
-        groups=(group(*fields, heading=title_heading(title)),),
+        groups=(group(*fields),),
         author="orca_auto",
     )
 
@@ -112,7 +111,7 @@ def retry_message(event: RetryNotification) -> Message:
     return Message(
         title="ORCA retry",
         severity="warning",
-        groups=(group(*fields, heading=title_heading("ORCA retry")),),
+        groups=(group(*fields),),
         author="orca_auto",
     )
 
@@ -150,7 +149,7 @@ def run_finished_message(event: RunFinishedNotification) -> Message:
     return Message(
         title=title,
         severity=severity,
-        groups=(group(*fields, heading=title_heading(title)),),
+        groups=(group(*fields),),
         author="orca_auto",
     )
 
@@ -168,7 +167,7 @@ def queue_enqueued_message(event: QueueEnqueuedNotification) -> Message:
     return Message(
         title="ORCA queued",
         severity="info",
-        groups=(group(*fields, heading=title_heading("ORCA queued")),),
+        groups=(group(*fields),),
         author="orca_auto",
     )
 

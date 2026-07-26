@@ -104,7 +104,7 @@ def test_normalize_work_dir_handles_none_blank_and_resolve_failure(
     assert store._normalize_work_dir(" relative/run ") == "relative/run"
 
 
-def test_slot_owner_alive_handles_dead_pid_and_missing_start_ticks(
+def test_slot_owner_alive_handles_dead_pid_and_unreadable_current_ticks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert (
@@ -113,6 +113,7 @@ def test_slot_owner_alive_handles_dead_pid_and_missing_start_ticks(
                 token="slot",
                 owner_pid=0,
                 process_start_ticks=1,
+                owner_boot_id="test-boot-id",
                 source="test",
                 acquired_at="2026-04-19T00:00:00+00:00",
             )
@@ -122,19 +123,7 @@ def test_slot_owner_alive_handles_dead_pid_and_missing_start_ticks(
 
     monkeypatch.setattr(store.os, "kill", lambda pid, sig: None)
     monkeypatch.setattr(store, "_process_start_ticks", lambda pid: None)
-
-    assert (
-        store._slot_owner_alive(
-            store.AdmissionSlot(
-                token="slot",
-                owner_pid=4242,
-                process_start_ticks=None,
-                source="test",
-                acquired_at="2026-04-19T00:00:00+00:00",
-            )
-        )
-        is True
-    )
+    monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
 
     assert (
         store._slot_owner_alive(
@@ -142,6 +131,7 @@ def test_slot_owner_alive_handles_dead_pid_and_missing_start_ticks(
                 token="slot",
                 owner_pid=4242,
                 process_start_ticks=777,
+                owner_boot_id="test-boot-id",
                 source="test",
                 acquired_at="2026-04-19T00:00:00+00:00",
             )
@@ -158,6 +148,7 @@ def test_slot_owner_alive_treats_permission_denied_as_live(
 
     monkeypatch.setattr(store.os, "kill", fake_kill)
     monkeypatch.setattr(store, "_process_start_ticks", lambda _pid: None)
+    monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
 
     assert (
         store._slot_owner_alive(
@@ -165,6 +156,7 @@ def test_slot_owner_alive_treats_permission_denied_as_live(
                 token="slot",
                 owner_pid=4242,
                 process_start_ticks=777,
+                owner_boot_id="test-boot-id",
                 source="test",
                 acquired_at="2026-04-19T00:00:00+00:00",
             )
@@ -181,6 +173,7 @@ def test_slot_owner_alive_still_rejects_permission_denied_pid_reuse(
 
     monkeypatch.setattr(store.os, "kill", fake_kill)
     monkeypatch.setattr(store, "_process_start_ticks", lambda _pid: 888)
+    monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
 
     assert (
         store._slot_owner_alive(
@@ -188,6 +181,7 @@ def test_slot_owner_alive_still_rejects_permission_denied_pid_reuse(
                 token="slot",
                 owner_pid=4242,
                 process_start_ticks=777,
+                owner_boot_id="test-boot-id",
                 source="test",
                 acquired_at="2026-04-19T00:00:00+00:00",
             )
@@ -196,12 +190,12 @@ def test_slot_owner_alive_still_rejects_permission_denied_pid_reuse(
     )
 
 
-def test_generic_slot_owner_identity_is_scoped_to_the_current_boot(
+def test_slot_owner_identity_is_scoped_to_the_current_boot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_deterministic_liveness(monkeypatch)
-    token = store.reserve_slot(tmp_path, 1, source="generic")
+    token = store.reserve_slot(tmp_path, 1, source="queue")
     assert token is not None
     slot = store.get_slot(tmp_path, token)
     assert slot is not None and slot.owner_boot_id == "test-boot-id"
@@ -256,7 +250,7 @@ def test_normalize_work_dir_handles_none_and_oserror_fallback(
     assert store._normalize_work_dir("relative/path") == "relative/path"
 
 
-def test_slot_owner_alive_handles_non_positive_pid_and_missing_process_start_ticks(
+def test_slot_owner_alive_handles_non_positive_pid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_kill(_pid: int, _sig: int) -> None:
@@ -270,27 +264,12 @@ def test_slot_owner_alive_handles_non_positive_pid_and_missing_process_start_tic
                 token="t-1",
                 owner_pid=0,
                 process_start_ticks=123,
+                owner_boot_id="test-boot-id",
                 source="source",
                 acquired_at="2026-04-19T00:00:00+00:00",
             )
         )
         is False
-    )
-
-    monkeypatch.setattr(store.os, "kill", lambda _pid, _sig: None)
-    monkeypatch.setattr(store, "_process_start_ticks", lambda _pid: None)
-
-    assert (
-        store._slot_owner_alive(
-            store.AdmissionSlot(
-                token="t-2",
-                owner_pid=4242,
-                process_start_ticks=None,
-                source="source",
-                acquired_at="2026-04-19T00:00:00+00:00",
-            )
-        )
-        is True
     )
 
 
@@ -312,20 +291,26 @@ def test_reconcile_stale_slots_removes_dead_entries_and_keeps_live_ones(
     )
 
     slots = [
-        {
-            "token": "live",
-            "owner_pid": 1111,
-            "process_start_ticks": 111,
-            "source": "live-source",
-            "acquired_at": "2026-04-19T00:00:00+00:00",
-        },
-        {
-            "token": "dead",
-            "owner_pid": 2222,
-            "process_start_ticks": 222,
-            "source": "dead-source",
-            "acquired_at": "2026-04-19T00:00:00+00:00",
-        },
+        store._slot_to_dict(
+            store.AdmissionSlot(
+                token="live",
+                owner_pid=1111,
+                process_start_ticks=111,
+                owner_boot_id="test-boot-id",
+                source="live-source",
+                acquired_at="2026-04-19T00:00:00+00:00",
+            )
+        ),
+        store._slot_to_dict(
+            store.AdmissionSlot(
+                token="dead",
+                owner_pid=2222,
+                process_start_ticks=222,
+                owner_boot_id="test-boot-id",
+                source="dead-source",
+                acquired_at="2026-04-19T00:00:00+00:00",
+            )
+        ),
     ]
     (tmp_path / store.ADMISSION_FILE_NAME).write_text(json.dumps(slots), encoding="utf-8")
 
@@ -337,6 +322,7 @@ def test_reconcile_stale_slots_removes_dead_entries_and_keeps_live_ones(
             token="live",
             owner_pid=1111,
             process_start_ticks=111,
+            owner_boot_id="test-boot-id",
             source="live-source",
             acquired_at="2026-04-19T00:00:00+00:00",
         )
@@ -346,6 +332,7 @@ def test_reconcile_stale_slots_removes_dead_entries_and_keeps_live_ones(
             "token": "live",
             "owner_pid": 1111,
             "process_start_ticks": 111,
+            "owner_boot_id": "test-boot-id",
             "source": "live-source",
             "acquired_at": "2026-04-19T00:00:00+00:00",
             "app_name": "",
@@ -354,6 +341,11 @@ def test_reconcile_stale_slots_removes_dead_entries_and_keeps_live_ones(
             "state": "active",
             "work_dir": "",
             "queue_id": "",
+            "engine_process_state": "idle",
+            "engine_pid": None,
+            "engine_pgid": None,
+            "engine_process_start_ticks": None,
+            "engine_process_boot_id": None,
         }
     ]
 
@@ -370,6 +362,7 @@ def test_read_active_slot_count_does_not_prune_or_rewrite(
                 token="dead",
                 owner_pid=2222,
                 process_start_ticks=222,
+                owner_boot_id="test-boot-id",
                 source="queue",
                 acquired_at="2026-04-19T00:00:00+00:00",
             )

@@ -16,7 +16,6 @@ from orca_auto.core.messaging import (
     line,
     raw,
     text,
-    title_heading,
 )
 from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED
 from orca_auto.core.utils import (
@@ -193,11 +192,11 @@ def _overview_fields(
         field_row(
             "Stages",
             code(_safe_int(snapshot.get("stage_count"), default=0)),
-            raw("  completed="),
+            raw(" | completed="),
             code(_result_count(snapshot, STATUS_COMPLETED)),
-            raw("  failed="),
+            raw(", failed="),
             code(_result_count(snapshot, STATUS_FAILED)),
-            raw("  cancelled="),
+            raw(", cancelled="),
             code(_result_count(snapshot, STATUS_CANCELLED)),
         ),
     ]
@@ -230,8 +229,7 @@ def _build_phase_summary_message(
 ) -> Message:
     title = f"{_phase_label(phase_engine)} phase summary"
     overview = group(
-        *_overview_fields(payload=payload, phase_engine=phase_engine, snapshot=snapshot),
-        heading=title_heading(title),
+        *_overview_fields(payload=payload, phase_engine=phase_engine, snapshot=snapshot)
     )
     groups: list[Group] = [overview]
 

@@ -167,11 +167,8 @@ def _append_crest_bool_flags(command: list[str], manifest: dict[str, Any]) -> No
         ("keepdir", "--keepdir"),
         ("no_preopt", "--noopt"),
         ("noreftopo", "--noreftopo"),
-        ("no_reftopo", "--noreftopo"),
         ("notopo", "--notopo"),
-        ("no_topo", "--notopo"),
         ("nocbonds", "--nocbonds"),
-        ("no_cbonds", "--nocbonds"),
     ):
         if _engine_runner.bool_flag(manifest, manifest_key):
             if option in command:
@@ -279,12 +276,7 @@ def _crest_int(manifest: dict[str, Any], key: str) -> int | None:
 
 
 def _resolve_mdlen(manifest: dict[str, Any]) -> str | None:
-    """``mdlen`` with its documented ``len`` alias; both present must agree."""
-    mdlen = _crest_positive_real(manifest, "mdlen")
-    length = _crest_positive_real(manifest, "len")
-    if mdlen is not None and length is not None and mdlen != length:
-        raise ValueError("CREST options 'mdlen' and 'len' are aliases and must match")
-    return mdlen if mdlen is not None else length
+    return _crest_positive_real(manifest, "mdlen")
 
 
 def _crest_bool(manifest: dict[str, Any], key: str) -> bool:
@@ -493,7 +485,7 @@ def _build_command(
     if not resolved_selected_xyz.is_relative_to(job_dir.resolve()):
         raise ValueError(f"CREST input must be inside the job directory: {selected_xyz}")
     # Keep the exact immutable input absolute. This is unambiguous for nested
-    # snapshots and avoids CREST's unsafe legacy shell-based scratch copier.
+    # snapshots and avoids CREST 3.0.2's unsafe shell-based scratch copier.
     selected_xyz_arg = str(resolved_selected_xyz)
     if selected_xyz_arg.startswith("-"):
         selected_xyz_arg = f"./{selected_xyz_arg}"

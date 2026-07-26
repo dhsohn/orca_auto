@@ -611,7 +611,6 @@ def repair_enqueue_publication(
     publish: Callable[[QueueEntry], None],
     label: str,
     same_generation: Callable[[QueueEntry, QueueEntry], bool] = queue_entries_same_generation,
-    repair_missing_lease: bool = False,
 ) -> bool:
     """Boolean form of :func:`repair_enqueue_publication_outcome`."""
 
@@ -621,7 +620,6 @@ def repair_enqueue_publication(
         publish=publish,
         label=label,
         same_generation=same_generation,
-        repair_missing_lease=repair_missing_lease,
     ).repaired
 
 
@@ -632,7 +630,6 @@ def repair_enqueue_publication_outcome(
     publish: Callable[[QueueEntry], None],
     label: str,
     same_generation: Callable[[QueueEntry, QueueEntry], bool] = queue_entries_same_generation,
-    repair_missing_lease: bool = False,
 ) -> RepairOutcome:
     """Re-publish one committed row whose queued record never landed.
 
@@ -640,8 +637,7 @@ def repair_enqueue_publication_outcome(
     not a live PID in the row, is the authoritative ownership proof), writes
     the queued job artifact, and marks the sync lease COMPLETE. Any failure
     parks the row as REPAIR_PENDING so it stays unclaimable rather than
-    running without its published record. ``repair_missing_lease`` extends
-    the claim to legacy rows carrying no sync lease at all.
+    running without its published record.
     """
 
     repair_token = timestamped_token("record_sync", token_bytes=16)
@@ -661,9 +657,7 @@ def repair_enqueue_publication_outcome(
                 return ("running", current), False
             if current.status != QueueStatus.PENDING:
                 return ("terminal", current), False
-            if sync_state not in REPAIRABLE_SYNC_STATES and (
-                sync_state or not repair_missing_lease
-            ):
+            if sync_state not in REPAIRABLE_SYNC_STATES:
                 return ("invalid_state", current), False
             metadata = dict(current.metadata)
             metadata.update(

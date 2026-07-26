@@ -12,7 +12,7 @@ from orca_auto.core.statuses import (
     TERMINAL_STATUSES,
 )
 from orca_auto.core.utils import normalize_text
-from orca_auto.core.utils.process_tracking import active_run_lock_pid
+from orca_auto.core.utils.process_tracking import run_lock_is_held
 
 from ._model import ActivityRecord
 
@@ -172,7 +172,7 @@ def _snapshot_display_status(snapshot: RunSnapshot) -> str:
     # An orphan snapshot still parked at a running status with no live run lock is
     # stale (the run was cancelled/killed/crashed); surface it as failed instead of
     # leaving it stuck "in progress" in the activity list.
-    if active_run_lock_pid(Path(reaction_dir), logger=_LOGGER) is None:
+    if not run_lock_is_held(Path(reaction_dir), logger=_LOGGER):
         return "failed"
     return status
 
@@ -261,7 +261,7 @@ def _snapshot_is_superseded(snapshot: RunSnapshot, superseded_dirs: set[str]) ->
     reaction_dir = snapshot_reaction_dir(snapshot)
     if reaction_dir not in superseded_dirs:
         return False
-    return active_run_lock_pid(Path(reaction_dir), logger=_LOGGER) is None
+    return not run_lock_is_held(Path(reaction_dir), logger=_LOGGER)
 
 
 def orca_records(

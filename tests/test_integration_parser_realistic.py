@@ -8,10 +8,12 @@ termination, runtime).
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
+from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
 from orca_auto.orca.dft.monitor import DFTMonitor
 from orca_auto.orca.parser import parse_orca_output
 from tests.engine_artifact_helpers import orca_artifact_payload
@@ -495,23 +497,57 @@ class TestParserRealisticOutputs:
 
 
 def _write_fixture(kb_dir: Path, name: str, content: str, status: str = "completed") -> Path:
-    """Write an ORCA output and job_state.json into a job directory."""
+    """Write a provenance-bound ORCA execution generation."""
     job_dir = kb_dir / name
     job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / "calc.out").write_text(content, encoding="utf-8")
+    generation_dir = job_dir / "20260726-010203-0123abcd"
+    generation_dir.mkdir()
+    selected_inp = generation_dir / "calc.inp"
+    selected_inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    (generation_dir / "calc.out").write_text(content, encoding="utf-8")
+    job_status = job_dir.stat()
+    generation_status = generation_dir.stat()
+    selected_payload = selected_inp.read_bytes()
+    owner_token = sha256(str(generation_dir.resolve()).encode()).hexdigest()
+    bind_direct_generation_owner(
+        job_dir,
+        namespace=generation_dir.name,
+        expected_job_identity=(int(job_status.st_dev), int(job_status.st_ino)),
+        expected_generation_identity=(
+            int(generation_status.st_dev),
+            int(generation_status.st_ino),
+        ),
+        owner_token=owner_token,
+    )
     (job_dir / "job_state.json").write_text(
         json.dumps(
             orca_artifact_payload(
                 job_id=name,
                 run_id=name,
                 reaction_dir=str(job_dir),
+                selected_inp=str(selected_inp),
                 status=status,
                 final_result={"status": status},
+                engine_payload_extra={
+                    "execution_provenance": {
+                        "execution_dir": str(generation_dir.resolve()),
+                        "execution_dir_identity": {
+                            "device": int(generation_status.st_dev),
+                            "inode": int(generation_status.st_ino),
+                        },
+                        "generation_owner_token": owner_token,
+                        "bound_selected_identity": {
+                            "path": str(selected_inp.resolve()),
+                            "sha256": sha256(selected_payload).hexdigest(),
+                            "size_bytes": len(selected_payload),
+                        },
+                    }
+                },
             )
         ),
         encoding="utf-8",
     )
-    return job_dir
+    return generation_dir
 
 
 def test_monitor_detects_new_completed_calculation(tmp_path: Path) -> None:

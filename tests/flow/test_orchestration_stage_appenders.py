@@ -1661,7 +1661,7 @@ def test_append_crest_orca_stages_materializes_orca_stages_from_completed_crest(
     )
 
     assert created is True
-    assert build_calls[0]["workspace_dir"] == (tmp_path / "wf_conf_01" / "02_orca").resolve()
+    assert build_calls[0]["workspace_dir"] == (tmp_path / "wf_conf_01" / "03_orca").resolve()
     assert build_calls[0]["stage_root_name"] == ""
     assert payload["stages"][-1]["stage_id"] == "orca_conformer_01"
     assert payload["stages"][-1]["task"]["engine"] == "orca"

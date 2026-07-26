@@ -9,7 +9,7 @@ from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.statuses import STATUS_CANCELLED
 from orca_auto.core.utils.lock import file_lock_at
-from orca_auto.core.utils.process_tracking import active_run_lock_pid
+from orca_auto.core.utils.process_tracking import run_lock_is_held
 
 from .queue.adapter import (
     ACTIVE_STATUSES,
@@ -80,7 +80,7 @@ def _queue_cleanup_reaction_dirs(
 
 
 def _snapshot_has_live_run_lock(snapshot: RunSnapshot) -> bool:
-    return active_run_lock_pid(snapshot.reaction_dir, logger=logger) is not None
+    return run_lock_is_held(snapshot.reaction_dir, logger=logger)
 
 
 def _queue_generation_blocks_state_cleanup(

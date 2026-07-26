@@ -26,7 +26,6 @@ from .richtext import (
     line,
     raw,
     text,
-    title_heading,
 )
 
 if TYPE_CHECKING:
@@ -82,5 +81,4 @@ __all__ = [
     "raw",
     "render_discord_embed",
     "text",
-    "title_heading",
 ]

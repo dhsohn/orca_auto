@@ -23,7 +23,6 @@ def xtb_retry_recipe_impl(attempt_number: int) -> dict[str, Any]:
             "attempt_number": 0,
             "recipe_id": "baseline",
             "recipe_label": "baseline",
-            "namespace": "",
             "xcontrol_name": "",
             "xcontrol_lines": (),
         }
@@ -32,7 +31,6 @@ def xtb_retry_recipe_impl(attempt_number: int) -> dict[str, Any]:
             "attempt_number": 1,
             "recipe_id": "path_input_recommended",
             "recipe_label": "recommended_path_input",
-            "namespace": "",
             "xcontrol_name": "path_retry_01.inp",
             "xcontrol_lines": (
                 "$path",
@@ -50,7 +48,6 @@ def xtb_retry_recipe_impl(attempt_number: int) -> dict[str, Any]:
         "attempt_number": attempt,
         "recipe_id": "path_input_refined",
         "recipe_label": "refined_path_input",
-        "namespace": "",
         "xcontrol_name": f"path_retry_{attempt:02d}.inp",
         "xcontrol_lines": (
             "$path",

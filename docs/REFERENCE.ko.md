@@ -351,9 +351,8 @@ ORCA 고유 노트:
   복사할 소스 파일을 지정하고, `xcontrol`은 xTB 작업 디렉터리 안에 구체화되는 일반
   파일명이어야 합니다.
 - `crest:`와 `xtb:` 엔진 mapping은 엔진 제출 시 strict합니다. 알 수 없는 옵션 이름은
-  무시하지 않고 거부합니다. 비어 있지 않은 예전 xTB `namespace`도 거부하므로 다시
-  제출하기 전에 제거하세요. xTB는 항상 명시적 `--chrg`, `--uhf`, `--norestart`를 내므로
-  오래된 restart 파일이 새 generation을 조용히 바꿀 수 없습니다.
+  무시하지 않고 거부합니다. xTB는 항상 명시적 `--chrg`, `--uhf`, `--norestart`를 내므로
+  restart 파일이 새 generation을 조용히 바꿀 수 없습니다.
 - CREST 토폴로지 재정의는 `flow.yaml`의 `crest:` 아래에 둘 수 있으며, `gfn: ff`,
   `no_preopt: true`, `noreftopo: true`, `notopo: true`, `nocbonds: true`를 포함합니다.
 - 워크플로우 수준 `orca.charge`/`orca.multiplicity`의 전자 상태 권위, 원소/전자
@@ -366,9 +365,10 @@ ORCA 고유 노트:
   후보에서 중복 제거합니다. 유한하지
   않은 xTB 에너지와 XYZ 좌표는 사용할 수 없고 ORCA 입력으로 materialize하지 않습니다.
 - CREST에는 변경 불가능한 입력 snapshot의 절대 경로와 명시적으로 고정한 xTB 실행 파일
-  (`-xnam`)을 전달합니다. CREST 3.0.2의 레거시 scratch copier가 안전하지 않은 shell 경로를
-  호출하므로 orca_auto는 `--scratch`를 전달하지 않습니다. `gfn2//gfnff` 합성 모드는 필요한
-  `--legacy`를 함께 내며, 중성 singlet 값까지 charge와 UHF를 항상 명시합니다.
+  (`-xnam`)을 전달합니다. CREST 3.0.2의 native scratch 구현이 안전하지 않은 shell 경로를
+  호출하므로 orca_auto는 `--scratch`를 전달하지 않습니다. `gfn2//gfnff` 합성 모드는
+  CREST가 요구하는 `--legacy` CLI flag를 내며, 중성 singlet 값까지 charge와 UHF를 항상
+  명시합니다.
 - `solvent_model`은 `gbsa` 또는 `alpb`여야 하고 `solvent`와 함께 써야 합니다. xTB와 CREST가
   받는 정규 solvent token은 다음뿐입니다: `acetone`, `acetonitrile`, `aniline`, `benzene`,
   `benzaldehyde`, `ch2cl2`, `chcl3`, `chloroform`, `cs2`, `dmf`, `dmso`, `dioxane`,
@@ -377,7 +377,7 @@ ORCA 고유 노트:
   `phenol`, `thf`, `toluene`, `water`, `woctanol`. 자유 형식 또는 여러 token으로 된 값과 shell 문법은 전달하지
   않고 거부합니다.
 - CREST conformer 탐색 노브는 CREST 3.0.2 semantics에 맞춰 `crest:` 아래에 둘 수 있습니다.
-  `mdlen`/`len`(MD 길이 ps이며 둘 다 쓰면 같아야 하는 별칭)과 `wscal`은 유한한 양의
+  `mdlen`(MD 길이 ps)과 `wscal`은 유한한 양의
   실수이며 지수 표기 없이 소수점 아래 최대 6자리로 렌더링됩니다. `0.000001`보다 작은
   값은 거부합니다. `tstep`과 `mddump`는 각각 명시적 MD 길이가 있어야 합니다. 전문가
   override가 없으면 `tstep`은 GFN-xTB에서 5.0 fs, GFN-FF에서 1.5 fs,
@@ -652,16 +652,15 @@ TS8(NEB-TS)/
     └── job_report.html
 ```
 
-이 예시는 모든 파일을 나열한 것이 아닙니다. 내부 동기화 파일인 `.orca.process.lock`은
-generation과/또는 작업 루트에, `.job_state.mutation.lock`은 작업 루트에 남을 수 있습니다.
-ORCA 프로세스 기록이 활성인 동안에는 해당 generation에 `orca.process.json`이 존재하고,
-작업 루트에는 terminal 정리로 제거되기 전까지 live `job_state.json`이 존재합니다.
+이 예시는 모든 파일을 나열한 것이 아닙니다. 내부 동기화 파일인
+`.job_state.mutation.lock`은 작업 루트에 남을 수 있고, 같은 루트에는 terminal 정리로
+제거되기 전까지 live `job_state.json`이 존재합니다. 활성 engine PID/PGID 소유권은
+generation이 아니라 공유 admission record에 저장합니다.
 
 generation의 실제 실행 `.inp`는 선택한 소스의 basename을 정확히 유지하므로 ORCA
 출력 stem에 `.run`이나 `.bound`를 더하지 않습니다. 리포트 배치와 검증 규칙 —
-리포트는 검증된 generation 안에만 존재하고, 이관 전 루트 리포트는 일회성
-provenance 검증 migration 전까지 보존되는 이력 파일이며, generation 바인딩 전에
-거부된 실행은 리포트가 없다는 것 — 은
+리포트는 검증된 generation 안에만 존재하고, 바인딩되지 않은 루트 리포트는 무시하며,
+generation 바인딩 전에 거부된 실행은 리포트가 없다는 것 — 은
 [ORCA 작업 산출물 계약](PUBLIC_CONTRACTS.ko.md#orca-작업-산출물-계약)에 명세되어
 있습니다.
 `run.lock`은 작업 루트에 남으며, 파일이 존재한다는 사실만으로 현재 프로세스가 lock을
@@ -750,14 +749,13 @@ ORCA 핸드오프 계약은 `orca_auto.flow` 같은 다운스트림 도구에 �
 - `resource_request`
 - `resource_actual`
 
-호환성 노트:
+큐 워커 참고:
 
 - `reaction_dir`는 ORCA 큐와 다운스트림 계약 필드로 남아 있습니다. 공유 core 헬퍼는
   다른 엔진을 위해 일반 `job_dir` 메타데이터도 이해할 수 있지만, ORCA 생산자는
   `reaction_dir`를 `job_dir`로 대체하면 안 됩니다.
 - 엔진 워커는 오직 큐 정체성으로만 실행됩니다. 통합 자식 진입점은
   `python -m orca_auto.core.engines.worker_child --engine <orca|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`입니다.
-  반응 디렉터리에 의한 레거시 ORCA 워커-작업 직접 실행은 지원되지 않습니다.
 
 ## 12) 권장 워크플로우
 
@@ -799,7 +797,7 @@ cd <repo_root>
 pytest -q
 ```
 
-모노레포 마이그레이션 중 사용한 집중 회귀 명령:
+집중 회귀 명령:
 
 ```bash
 pytest tests/flow -q

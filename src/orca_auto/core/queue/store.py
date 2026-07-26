@@ -17,6 +17,7 @@ from .generation import queue_entries_same_generation
 from .priority import normalize_queue_priority
 from .publication import (
     QUEUE_RECORD_SYNC_ABORTED,
+    QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
     QUEUE_RECORD_SYNC_OWNER_PID_KEY,
     QUEUE_RECORD_SYNC_OWNER_START_KEY,
@@ -27,6 +28,7 @@ from .publication import (
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
     queue_entry_is_claimable,
     queue_record_publication_lock,
+    queue_record_sync_metadata,
 )
 from .types import QueueEntry, QueueStatus
 
@@ -450,7 +452,21 @@ def enqueue_entry(
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
 ) -> QueueEntry:
     reject_duplicate = duplicate_policy or reject_active_task_duplicate
-    normalized_entry = replace(entry, priority=normalize_queue_priority(entry.priority))
+    metadata = dict(entry.metadata)
+    if QUEUE_RECORD_SYNC_KEY not in metadata:
+        metadata.update(
+            queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_COMPLETE,
+                token=entry.queue_id,
+                owner_pid=0,
+            )
+        )
+    normalized_entry = replace(
+        entry,
+        priority=normalize_queue_priority(entry.priority),
+        enqueued_at=entry.enqueued_at or now_utc_iso(),
+        metadata=metadata,
+    )
 
     def append(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
         reject_duplicate(entries, normalized_entry)
@@ -494,6 +510,15 @@ def enqueue(
                 "Could not allocate a unique queue id after "
                 f"{_TOKEN_COLLISION_RETRY_LIMIT} attempts"
             )
+        entry_metadata = dict(metadata or {})
+        if QUEUE_RECORD_SYNC_KEY not in entry_metadata:
+            entry_metadata.update(
+                queue_record_sync_metadata(
+                    QUEUE_RECORD_SYNC_COMPLETE,
+                    token=queue_id,
+                    owner_pid=0,
+                )
+            )
         entry = QueueEntry(
             queue_id=queue_id,
             app_name=app_name.strip(),
@@ -502,7 +527,7 @@ def enqueue(
             engine=engine.strip(),
             priority=normalized_priority,
             enqueued_at=now_utc_iso(),
-            metadata=dict(metadata or {}),
+            metadata=entry_metadata,
         )
         reject_duplicate(entries, entry)
         if before_commit_fn is not None:

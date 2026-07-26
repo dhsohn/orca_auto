@@ -4,11 +4,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class AdmissionSlot:
     token: str
     owner_pid: int
-    process_start_ticks: int | None
+    process_start_ticks: int
+    owner_boot_id: str
     source: str
     acquired_at: str
     app_name: str = ""
@@ -17,11 +18,10 @@ class AdmissionSlot:
     state: str = "active"
     work_dir: str = ""
     queue_id: str = ""
-    engine_process_state: str = ""
+    engine_process_state: str = "idle"
     engine_pid: int | None = None
     engine_pgid: int | None = None
     engine_process_start_ticks: int | None = None
-    owner_boot_id: str | None = None
     engine_process_boot_id: str | None = None
 
 
@@ -36,7 +36,7 @@ class AdmissionReservationRequest:
     work_dir: str | Path = ""
     queue_id: str = ""
     owner_pid: int | None = None
-    engine_process_state: str = ""
+    engine_process_state: str = "idle"
 
 
 @dataclass(frozen=True)
@@ -65,16 +65,7 @@ class AdmissionSlotMetadataUpdate:
 
 
 def slot_to_dict(slot: AdmissionSlot) -> dict[str, object]:
-    payload = asdict(slot)
-    if slot.owner_boot_id is None:
-        payload.pop("owner_boot_id", None)
-    if not slot.engine_process_state:
-        payload.pop("engine_process_state", None)
-        payload.pop("engine_pid", None)
-        payload.pop("engine_pgid", None)
-        payload.pop("engine_process_start_ticks", None)
-        payload.pop("engine_process_boot_id", None)
-    return payload
+    return asdict(slot)
 
 
 def _positive_optional_int(raw: dict[str, object], key: str) -> int | None:
@@ -99,18 +90,6 @@ def _engine_process_fields(
     raw: dict[str, object],
 ) -> tuple[str, int | None, int | None, int | None, str | None]:
     state = str(raw.get("engine_process_state", "") or "").strip().lower()
-    engine_keys_present = any(
-        key in raw
-        for key in (
-            "engine_process_state",
-            "engine_pid",
-            "engine_pgid",
-            "engine_process_start_ticks",
-            "engine_process_boot_id",
-        )
-    )
-    if not engine_keys_present:
-        return "", None, None, None, None
     if state not in {"pending", "active", "idle"}:
         raise ValueError(f"Invalid admission engine process state: {state!r}")
 
@@ -127,24 +106,27 @@ def _engine_process_fields(
 
 
 def slot_from_dict(raw: dict[str, object]) -> AdmissionSlot:
+    expected_fields = set(AdmissionSlot.__dataclass_fields__)
+    missing = expected_fields - set(raw)
+    unknown = set(raw) - expected_fields
+    if missing or unknown:
+        raise ValueError(
+            "Admission slot fields do not match the canonical schema: "
+            f"missing={sorted(missing)} unknown={sorted(unknown)}"
+        )
     engine_state, engine_pid, engine_pgid, engine_start_ticks, engine_boot_id = (
         _engine_process_fields(raw)
     )
-    owner_pid_raw = raw.get("owner_pid", 0)
-    if type(owner_pid_raw) is not int or owner_pid_raw < 0:
+    owner_pid_raw = raw.get("owner_pid")
+    if type(owner_pid_raw) is not int or owner_pid_raw <= 0:
         raise ValueError("Invalid admission owner PID")
     owner_start_ticks = _positive_optional_int(raw, "process_start_ticks")
     owner_boot_id = _nonempty_optional_string(raw, "owner_boot_id")
-    if engine_state and (owner_pid_raw <= 0 or owner_start_ticks is None):
-        raise ValueError("Managed admission slot owner identity is incomplete")
-    if engine_state == "active" and (owner_boot_id is None) != (engine_boot_id is None):
-        raise ValueError("Admission owner and engine boot identities are incomplete")
-    if (
-        engine_state == "active"
-        and owner_boot_id is not None
-        and engine_boot_id is not None
-        and owner_boot_id != engine_boot_id
-    ):
+    if owner_start_ticks is None or owner_boot_id is None:
+        raise ValueError("Admission slot owner identity is incomplete")
+    if engine_state == "active" and engine_boot_id is None:
+        raise ValueError("Active admission engine boot identity is incomplete")
+    if engine_state == "active" and owner_boot_id != engine_boot_id:
         raise ValueError("Admission owner and engine process boot IDs do not match")
     return AdmissionSlot(
         token=str(raw.get("token", "")).strip(),

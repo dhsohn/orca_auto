@@ -175,9 +175,6 @@ def _append_xtb_scalar_options(command: list[str], manifest: dict[str, Any]) -> 
 
 
 def _append_xtb_optional_text_options(command: list[str], manifest: dict[str, Any]) -> None:
-    namespace = str(manifest.get("namespace", "")).strip()
-    if namespace:
-        raise ValueError("xTB namespace is not supported by the canonical artifact contract")
     xcontrol = str(manifest.get("xcontrol", "")).strip()
     if xcontrol:
         command.extend(["--input", xcontrol])
@@ -196,10 +193,7 @@ def _append_xtb_job_type_options(
         command.extend(["--path", str(secondary_input_xyz)])
         return
     if job_type == "opt":
-        opt_level = (
-            str(manifest.get("opt_level", manifest.get("opt", "normal"))).strip().lower()
-            or "normal"
-        )
+        opt_level = str(manifest.get("opt_level", "normal")).strip().lower() or "normal"
         if opt_level not in {
             "crude",
             "sloppy",

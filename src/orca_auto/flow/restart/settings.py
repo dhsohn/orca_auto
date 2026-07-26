@@ -350,7 +350,7 @@ def _update_request_parameters(
         else:
             params["rmsd_dedup"] = rmsd_dedup
     # Revalidate the complete effective durable state, not only keys changed by
-    # this restart manifest. This also closes legacy/manual payload injection.
+    # this restart manifest.
     interaction_energy = _normalize_interaction_energy_block(params.get("interaction_energy"))
     rmsd_dedup = _normalize_rmsd_dedup_block(params.get("rmsd_dedup"))
     _validate_conformer_postprocessing_template(

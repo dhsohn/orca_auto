@@ -206,8 +206,7 @@ def test_maybe_notify_workflow_phase_summary_reports_exhausted_handoffs_as_faile
     fields = _fields(message)
     description = _description(message)
     assert fields["Outcome"] == "`failed`"
-    assert "completed=`0`" in fields["Stages"]
-    assert "failed=`9`" in fields["Stages"]
+    assert fields["Stages"] == r"`9` \| completed=`0`, failed=`9`, cancelled=`0`"
     assert fields["Ready for ORCA"] == "`0`"
     assert description.count("**Result**: `failed`") == 9
 

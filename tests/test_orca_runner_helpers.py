@@ -12,6 +12,12 @@ from orca_auto.orca.orca_runner import OrcaRunner
 from tests.process_helpers import patch_missing_process_group
 
 
+def _managed_runner(executable: str) -> OrcaRunner:
+    runner = OrcaRunner(executable)
+    runner.set_running_job_registrar(lambda _running: None, prepare=lambda: None)
+    return runner
+
+
 def test_ensure_trailing_newline_only_appends_when_needed(tmp_path: Path) -> None:
     runner = OrcaRunner("/opt/orca/orca")
 
@@ -40,7 +46,7 @@ def test_terminate_subprocess_tree_falls_back_to_terminate_when_sigterm_group_ki
 
     with (
         patch_missing_process_group("orca_auto.orca.orca_runner.os.killpg"),
-        patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False),
+        patch("orca_auto.orca.orca_runner.process_group_exists", return_value=False),
     ):
         assert runner._terminate_subprocess_tree(proc)
 
@@ -62,7 +68,7 @@ def test_terminate_subprocess_tree_falls_back_to_proc_kill_when_sigkill_group_ki
             "orca_auto.orca.orca_runner.os.killpg",
             side_effect=[None, ProcessLookupError("no pg kill")],
         ),
-        patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False),
+        patch("orca_auto.orca.orca_runner.process_group_exists", return_value=False),
     ):
         assert runner._terminate_subprocess_tree(proc)
 
@@ -81,7 +87,7 @@ def test_terminate_subprocess_tree_waits_after_sigkill() -> None:
 
     with (
         patch("orca_auto.orca.orca_runner.os.killpg") as killpg,
-        patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False),
+        patch("orca_auto.orca.orca_runner.process_group_exists", return_value=False),
     ):
         assert runner._terminate_subprocess_tree(proc)
 
@@ -106,7 +112,7 @@ def test_terminate_subprocess_tree_ignores_terminate_failure_when_sigterm_group_
 
     with (
         patch_missing_process_group("orca_auto.orca.orca_runner.os.killpg"),
-        patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=False),
+        patch("orca_auto.orca.orca_runner.process_group_exists", return_value=False),
     ):
         assert runner._terminate_subprocess_tree(proc)
 
@@ -131,7 +137,7 @@ def test_terminate_subprocess_tree_ignores_proc_kill_failure_when_sigkill_group_
             "orca_auto.orca.orca_runner.os.killpg",
             side_effect=[None, ProcessLookupError("no pg kill")],
         ),
-        patch("orca_auto.orca.orca_runner.process_group_is_alive", return_value=True),
+        patch("orca_auto.orca.orca_runner.process_group_exists", return_value=True),
     ):
         assert not runner._terminate_subprocess_tree(proc)
 
@@ -154,7 +160,7 @@ def test_run_handles_signal_install_value_error(
         executable = Path(td) / "fake-orca"
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         executable.chmod(0o755)
-        runner = OrcaRunner(str(executable))
+        runner = _managed_runner(str(executable))
         inp = Path(td) / "test.inp"
         inp.write_text("! Opt\n", encoding="utf-8")
         result = runner.run(inp)
@@ -186,7 +192,7 @@ def test_run_ignores_restore_signal_value_error(
             executable = Path(td) / "fake-orca"
             executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             executable.chmod(0o755)
-            runner = OrcaRunner(str(executable))
+            runner = _managed_runner(str(executable))
             inp = Path(td) / "test.inp"
             inp.write_text("! Opt\n", encoding="utf-8")
             result = runner.run(inp)

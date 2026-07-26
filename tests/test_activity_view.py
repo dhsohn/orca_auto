@@ -101,7 +101,7 @@ def test_queue_list_display_rows_groups_children_under_workflow_once() -> None:
     ]
 
 
-@pytest.mark.parametrize("stage_dirname", ["02_xtb", "02_orca", "03_orca"])
+@pytest.mark.parametrize("stage_dirname", ["02_xtb", "03_orca"])
 def test_activity_with_parent_hint_extracts_workflow_id_from_runtime_path(
     stage_dirname: str,
 ) -> None:

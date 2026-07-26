@@ -120,11 +120,6 @@ def group(*items: Item, heading: tuple[Span, ...] = ()) -> Group:
     return Group(heading=heading, items=tuple(items))
 
 
-def title_heading(title: str) -> tuple[Span, ...]:
-    """Build an explicit first-group title heading for legacy-stable layouts."""
-    return (bold(title),)
-
-
 __all__ = [
     "Field",
     "Group",
@@ -141,5 +136,4 @@ __all__ = [
     "line",
     "raw",
     "text",
-    "title_heading",
 ]

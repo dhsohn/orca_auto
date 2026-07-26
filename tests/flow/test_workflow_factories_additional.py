@@ -625,7 +625,7 @@ def test_workflow_factories_preserve_engine_manifest_overrides(
         product_xyz=str(product_xyz),
         workflow_root=tmp_path,
         crest_job_manifest={"speed": "squick", "solvent": "water", "gfn": "ff", "no_preopt": True},
-        xtb_job_manifest={"gfn": 1, "namespace": "rxn_a"},
+        xtb_job_manifest={"gfn": 1, "opt_level": "tight"},
     )
     request_params = reaction_payload["metadata"]["request"]["parameters"]
     assert request_params["crest_job_manifest"] == {
@@ -635,7 +635,7 @@ def test_workflow_factories_preserve_engine_manifest_overrides(
         "gfn": "ff",
         "no_preopt": True,
     }
-    assert request_params["xtb_job_manifest"] == {"gfn": 1, "namespace": "rxn_a"}
+    assert request_params["xtb_job_manifest"] == {"gfn": 1, "opt_level": "tight"}
     assert reaction_payload["stages"][0]["task"]["payload"]["job_manifest_overrides"] == {
         "rthr": 0.3,
         "speed": "squick",

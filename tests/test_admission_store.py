@@ -10,7 +10,6 @@ from orca_auto.core.admission import (
     activate_reserved_slot,
     active_slot_count,
     list_slots,
-    reconcile_stale_slots,
     release_slot,
     reserve_slot,
 )
@@ -122,85 +121,6 @@ class TestAdmissionStore(unittest.TestCase):
             self.assertIsNotNone(token)
             self.assertTrue((token or "").startswith("slot_"))
             self.assertEqual(active_slot_count(root), 1)
-
-    def test_reconcile_stale_slots_removes_dead_owner(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            payload = [
-                {
-                    "token": "slot_dead",
-                    "state": "active",
-                    "work_dir": str(root / "rxn"),
-                    "queue_id": None,
-                    "owner_pid": 987654321,
-                    "process_start_ticks": None,
-                    "source": "direct_run",
-                    "acquired_at": "2026-03-20T00:00:00+00:00",
-                }
-            ]
-            (root / ADMISSION_FILE_NAME).write_text(json.dumps(payload), encoding="utf-8")
-
-            removed = reconcile_stale_slots(root)
-
-            self.assertEqual(removed, 1)
-            self.assertEqual(active_slot_count(root), 0)
-
-    @patch("orca_auto.core.admission.store._process_start_ticks", return_value=999)
-    @patch("orca_auto.core.admission.store.os.kill", return_value=None)
-    def test_list_slots_treats_pid_reuse_as_stale(
-        self,
-        mock_alive,
-        mock_ticks,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            payload = [
-                {
-                    "token": "slot_reused",
-                    "state": "active",
-                    "work_dir": str(root / "rxn"),
-                    "queue_id": None,
-                    "owner_pid": os.getpid(),
-                    "process_start_ticks": 123,
-                    "source": "direct_run",
-                    "acquired_at": "2026-03-20T00:00:00+00:00",
-                }
-            ]
-            (root / ADMISSION_FILE_NAME).write_text(json.dumps(payload), encoding="utf-8")
-
-            slots = list_slots(root)
-
-            self.assertEqual(slots, [])
-            mock_alive.assert_called()
-            mock_ticks.assert_called()
-
-    @patch("orca_auto.core.admission.store.os.kill", return_value=None)
-    def test_list_slots_normalizes_work_dir_payload(self, mock_alive) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            reaction_dir = root / "rxn"
-            payload = [
-                {
-                    "token": "slot_work_dir",
-                    "state": "active",
-                    "work_dir": str(reaction_dir),
-                    "queue_id": "",
-                    "owner_pid": os.getpid(),
-                    "process_start_ticks": None,
-                    "source": "queue_run",
-                    "acquired_at": "2026-03-20T00:00:00+00:00",
-                    "app_name": "orca_auto_orca",
-                    "task_id": "task_123",
-                }
-            ]
-            (root / ADMISSION_FILE_NAME).write_text(json.dumps(payload), encoding="utf-8")
-
-            slots = list_slots(root)
-
-            self.assertEqual(len(slots), 1)
-            self.assertEqual(slots[0].work_dir, str(reaction_dir))
-            self.assertEqual(slots[0].task_id, "task_123")
-            mock_alive.assert_called()
 
     def test_update_slot_metadata_populates_reserved_slot_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

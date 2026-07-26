@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import errno
 import hashlib
 import logging
 import os
@@ -30,36 +29,16 @@ from orca_auto.core.queue.cancellable import (
     ProcessCleanupError,
     retain_process_ownership_until_exit,
 )
-from orca_auto.core.queue.processes import ProcessGroupTerminationDeps, terminate_process_group
-
-from .orca_process import (
-    OrcaProcessRecoveryError,
-    clear_orca_process_record,
-    clear_orca_process_record_snapshot,
-    orca_process_record_snapshot_from_exception,
-    process_group_is_alive,
-    write_orca_process_record,
+from orca_auto.core.queue.processes import (
+    ProcessGroupTerminationDeps,
+    managed_process_group_has_exited,
+    process_group_exists,
+    terminate_process_group,
 )
+
 from .scratch import OrcaScratchPolicy
 
 logger = logging.getLogger(__name__)
-
-
-def _reaped_pid_was_reused(pid: int) -> bool:
-    """Return definite reuse after Popen.wait/poll reaped the original leader."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError as exc:
-        if exc.errno == errno.ESRCH:
-            return False
-        raise OrcaProcessRecoveryError(
-            f"Cannot verify reaped ORCA process identity for pid={pid}"
-        ) from exc
-    return True
 
 
 class WorkerShutdownInterrupt(KeyboardInterrupt):
@@ -172,7 +151,7 @@ class OrcaRunner:
         self,
         registrar: Callable[[Any | None], None],
         *,
-        prepare: Callable[[], None] | None = None,
+        prepare: Callable[[], None],
     ) -> None:
         self._register_running_job = registrar
         self._prepare_running_job = prepare
@@ -272,7 +251,7 @@ class OrcaRunner:
             sigkill=signal.SIGKILL,
             deps=ProcessGroupTerminationDeps(
                 logger=logger,
-                process_group_exists=lambda pgid: process_group_is_alive(
+                process_group_exists=lambda pgid: process_group_exists(
                     pgid,
                     killpg_fn=os.killpg,
                 ),
@@ -327,16 +306,15 @@ class OrcaRunner:
             )
 
     def run(self, inp_path: Path) -> RunResult:
+        if self._prepare_running_job is None or self._register_running_job is None:
+            raise RuntimeError("ORCA execution requires managed admission callbacks")
         durable_input = require_confined_regular_file(
             inp_path.parent,
             inp_path,
             label="ORCA selected input",
         )
         if self._scratch_policy is None:
-            return self._run_in_place(
-                durable_input,
-                process_record_dir=durable_input.parent,
-            )
+            return self._run_in_place(durable_input)
         workspace = EngineScratchWorkspace.create(
             self._scratch_policy,
             durable_input,
@@ -347,7 +325,6 @@ class OrcaRunner:
             try:
                 result = self._run_in_place(
                     workspace.scratch_input,
-                    process_record_dir=durable_input.parent,
                     working_directory_fd=workspace.workspace_dir_fd,
                 )
             except BaseException as exc:
@@ -379,9 +356,12 @@ class OrcaRunner:
         self,
         inp_path: Path,
         *,
-        process_record_dir: Path,
         working_directory_fd: int | None = None,
     ) -> RunResult:
+        prepare_running_job = self._prepare_running_job
+        register_running_job = self._register_running_job
+        assert prepare_running_job is not None
+        assert register_running_job is not None
         if working_directory_fd is None:
             inp = require_confined_regular_file(
                 inp_path.parent,
@@ -426,10 +406,8 @@ class OrcaRunner:
                 proc: subprocess.Popen | None = None
                 admission_registered = False
                 process_start_attempted = False
-                process_record: dict[str, object] | None = None
                 try:
-                    if self._prepare_running_job is not None:
-                        self._prepare_running_job()
+                    prepare_running_job()
                     _raise_if_shutdown_requested()
                     process_start_attempted = True
                     executable_fd, observed_executable_identity = self._open_pinned_executable()
@@ -473,15 +451,8 @@ class OrcaRunner:
                         os.close(executable_fd)
                         if launch_gate_fd >= 0:
                             os.close(launch_gate_fd)
-                    if self._register_running_job is not None:
-                        self._register_running_job(SimpleNamespace(process=proc))
-                        admission_registered = True
-                    process_record = write_orca_process_record(
-                        inp_path=inp,
-                        out_path=out,
-                        pid=proc.pid,
-                        record_dir=process_record_dir,
-                    )
+                    register_running_job(SimpleNamespace(process=proc))
+                    admission_registered = True
                     if proc.stdin is None:
                         raise RuntimeError("ORCA launch gate has no release pipe")
                     proc.stdin.write("1")
@@ -489,10 +460,8 @@ class OrcaRunner:
                     proc.stdin.close()
                 except BaseException as exc:
                     if proc is None:
-                        if (
-                            not process_start_attempted or isinstance(exc, Exception)
-                        ) and self._register_running_job is not None:
-                            self._register_running_job(None)
+                        if not process_start_attempted or isinstance(exc, Exception):
+                            register_running_job(None)
                         raise
                     cleanup_error: ProcessCleanupError | None = None
                     try:
@@ -500,41 +469,22 @@ class OrcaRunner:
                         process_exited = proc.poll() is not None
                     except Exception as cleanup_exc:  # noqa: BLE001
                         cleanup_error = ProcessCleanupError(
-                            "Failed to clean up ORCA after process-record initialization failed: "
+                            "Failed to clean up ORCA after managed launch initialization failed: "
                             f"{cleanup_exc}"
                         )
                         terminated = False
                         process_exited = False
                     if not terminated or not process_exited:
                         cleanup_error = cleanup_error or ProcessCleanupError(
-                            "Failed to clean up ORCA after process-record initialization failed"
+                            "Failed to clean up ORCA after managed launch initialization failed"
                         )
                         retain_process_ownership_until_exit(
                             proc,
                             terminate_process=self._terminate_subprocess_tree,
                         )
-                    failed_record = orca_process_record_snapshot_from_exception(exc)
-                    if failed_record is not None:
-                        clear_orca_process_record_snapshot(
-                            process_record_dir,
-                            failed_record,
-                            pid=proc.pid,
-                        )
-                    if process_record is not None and terminated and process_exited:
+                    if terminated and process_exited:
                         try:
-                            self._clear_process_record_if_group_gone(
-                                process_record_dir,
-                                proc,
-                                process_record,
-                            )
-                        except Exception as record_clear_exc:  # noqa: BLE001
-                            cleanup_error = cleanup_error or ProcessCleanupError(
-                                "Failed to clear ORCA process record after launch-gate cleanup"
-                            )
-                            cleanup_error.__cause__ = record_clear_exc
-                    if self._register_running_job is not None:
-                        try:
-                            self._register_running_job(None)
+                            register_running_job(None)
                         except Exception as admission_exc:  # noqa: BLE001
                             cleanup_error = cleanup_error or ProcessCleanupError(
                                 "Failed to clear ORCA admission process record after cleanup"
@@ -545,13 +495,8 @@ class OrcaRunner:
                     raise
                 assert proc is not None
 
-                def _owned_process_group_is_alive() -> bool:
-                    if proc.poll() is None:
-                        return True
-                    return not _reaped_pid_was_reused(proc.pid) and process_group_is_alive(
-                        proc.pid,
-                        killpg_fn=os.killpg,
-                    )
+                def _owned_process_group_exists() -> bool:
+                    return not managed_process_group_has_exited(proc, killpg_fn=os.killpg)
 
                 try:
                     while True:
@@ -579,11 +524,11 @@ class OrcaRunner:
                 except BaseException:
                     # A failed wait/callback can race the leader's exit. Only
                     # terminate a reaped group after ruling out PID reuse.
-                    if _owned_process_group_is_alive():
+                    if _owned_process_group_exists():
                         self._retain_until_subprocess_tree_exits(proc)
                     raise
                 else:
-                    if _owned_process_group_is_alive():
+                    if _owned_process_group_exists():
                         logger.warning(
                             "ORCA launcher exited while its process group remained active; "
                             "retaining ownership until the group is gone"
@@ -596,13 +541,8 @@ class OrcaRunner:
                 finally:
                     # The state-only handlers remain installed through bookkeeping,
                     # so neither repeated SIGTERM nor Ctrl-C can strand ownership.
-                    self._clear_process_record_if_group_gone(
-                        process_record_dir,
-                        proc,
-                        process_record,
-                    )
-                    if admission_registered and self._register_running_job is not None:
-                        self._register_running_job(None)
+                    if admission_registered:
+                        register_running_job(None)
             # A signal received during normal process-tree/bookkeeping cleanup is
             # delivered only after ownership has been released. A worker's restored
             # handler may also have set the polling callback during handler restore.
@@ -621,39 +561,4 @@ class OrcaRunner:
             input_identity=input_identity,
             executable_identity=bound_executable_identity,
             output_identity=output_identity,
-        )
-
-    @staticmethod
-    def _clear_process_record_if_group_gone(
-        reaction_dir: Path,
-        proc: subprocess.Popen,
-        process_record: dict[str, object],
-    ) -> None:
-        """Clear the process record only when the whole ORCA group has exited.
-
-        ``terminate_process_group`` waits on the group LEADER, so its success
-        does not prove PAL/child processes in the same group are gone. Probe
-        the recorded process group directly: while any member survives — a
-        shutdown/interrupt whose children outlived the leader, or a launcher
-        that exited leaving compute children running — keep the record so the
-        next run's crash recovery reaps the orphan before starting a new
-        calculation over the same output.
-        """
-        recorded_pgid = process_record.get("pgid")
-        pgid = recorded_pgid if isinstance(recorded_pgid, int) else proc.pid
-        # Once poll() has reaped the Popen child, a live process at the same
-        # numeric PID proves reuse and must never be treated as our old group.
-        reaped = proc.poll() is not None
-        reused = reaped and _reaped_pid_was_reused(proc.pid)
-        if not reused and process_group_is_alive(pgid):
-            return
-        recorded_ticks = process_record.get("process_start_ticks")
-        recorded_boot_id = process_record.get("process_boot_id")
-        recorded_id = process_record.get("record_id")
-        clear_orca_process_record(
-            reaction_dir,
-            pid=proc.pid,
-            process_start_ticks=recorded_ticks if isinstance(recorded_ticks, int) else None,
-            process_boot_id=(recorded_boot_id if isinstance(recorded_boot_id, str) else None),
-            record_id=recorded_id if isinstance(recorded_id, str) else None,
         )

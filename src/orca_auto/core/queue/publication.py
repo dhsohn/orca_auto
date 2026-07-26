@@ -98,7 +98,7 @@ def process_start_token(process_id: int) -> str:
     if not start_ticks:
         return ""
     boot_id = _linux_boot_id()
-    return f"{boot_id}:{start_ticks}" if boot_id else start_ticks
+    return f"{boot_id}:{start_ticks}" if boot_id else ""
 
 
 def current_process_start_token() -> str:
@@ -125,17 +125,7 @@ def queue_record_sync_metadata(
 
 
 def _same_process_start(recorded: str, current: str) -> bool:
-    recorded_boot, recorded_separator, recorded_ticks = recorded.rpartition(":")
-    current_boot, current_separator, current_ticks = current.rpartition(":")
-    if not recorded_separator:
-        recorded_boot, recorded_ticks = "", recorded
-    if not current_separator:
-        current_boot, current_ticks = "", current
-    if recorded_ticks != current_ticks:
-        return False
-    # If one observer could not read boot_id, matching start ticks are the
-    # safe-biased result. When both boot IDs are known they also fence reboots.
-    return not (recorded_boot and current_boot) or recorded_boot == current_boot
+    return bool(recorded and current and ":" in recorded and recorded == current)
 
 
 def _publication_lock_path(root: str | Path, queue_id: str) -> Path:
@@ -186,12 +176,12 @@ def queue_record_sync_is_stale(entry: Any) -> bool:
 
 def queue_entry_is_claimable(entry: Any) -> bool:
     state = queue_record_sync_state(entry)
-    if not state or state == QUEUE_RECORD_SYNC_COMPLETE:
+    if state == QUEUE_RECORD_SYNC_COMPLETE:
         return True
     if state in _UNCLAIMABLE_SYNC_STATES:
         return queue_record_sync_is_stale(entry)
-    # REPAIR_PENDING, ABORTED, and unknown nonblank markers are never legacy.
-    # Only an explicit repair/cancellation path may make them executable.
+    # REPAIR_PENDING, ABORTED, missing, and unknown markers require an
+    # explicit repair/cancellation path.
     return False
 
 

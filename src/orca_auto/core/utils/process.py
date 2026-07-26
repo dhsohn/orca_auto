@@ -60,6 +60,24 @@ def linux_boot_id(*, proc_root: Path = Path("/proc")) -> str | None:
     return normalized or None
 
 
+def is_process_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError as exc:
+        return exc.errno != errno.ESRCH
+    return True
+
+
+def current_process_start_ticks() -> int | None:
+    return process_start_ticks(os.getpid(), proc_root=Path("/proc"))
+
+
 def _open_proc_pid_directory(pid: int) -> int:
     flags = os.O_RDONLY
     flags |= os.O_DIRECTORY
@@ -169,20 +187,19 @@ def current_pid_payload(
     now_fn: Callable[[], str],
     process_start_ticks_fn: Callable[[int], int | None],
     pid_fn: Callable[[], int] = os.getpid,
-    boot_id_fn: Callable[[], str | None] | None = None,
+    boot_id_fn: Callable[[], str | None] = linux_boot_id,
 ) -> dict[str, int | str]:
     pid = pid_fn()
-    payload: dict[str, int | str] = {
+    ticks = process_start_ticks_fn(pid)
+    boot_id = boot_id_fn()
+    if ticks is None or not isinstance(boot_id, str) or not boot_id.strip():
+        raise RuntimeError("Cannot determine the current boot-scoped process identity")
+    return {
         "pid": pid,
         "started_at": now_fn(),
+        "process_start_ticks": ticks,
+        "boot_id": boot_id.strip(),
     }
-    ticks = process_start_ticks_fn(pid)
-    if ticks is not None:
-        payload["process_start_ticks"] = ticks
-    boot_id = boot_id_fn() if boot_id_fn is not None else None
-    if isinstance(boot_id, str) and boot_id.strip():
-        payload["boot_id"] = boot_id.strip()
-    return payload
 
 
 def read_pid_payload(pid_path: Path) -> tuple[int | None, int | None, str | None]:
@@ -190,10 +207,6 @@ def read_pid_payload(pid_path: Path) -> tuple[int | None, int | None, str | None
         text = pid_path.read_text(encoding="utf-8").strip()
     except OSError:
         return None, None, None
-
-    pid = positive_int(text)
-    if pid is not None:
-        return pid, None, None
 
     try:
         raw = json.loads(text)
@@ -204,11 +217,11 @@ def read_pid_payload(pid_path: Path) -> tuple[int | None, int | None, str | None
 
     raw_boot_id = raw.get("boot_id")
     boot_id = raw_boot_id.strip() if isinstance(raw_boot_id, str) and raw_boot_id.strip() else None
-    return (
-        positive_int(raw.get("pid")),
-        positive_int(raw.get("process_start_ticks")),
-        boot_id,
-    )
+    pid = positive_int(raw.get("pid"))
+    ticks = positive_int(raw.get("process_start_ticks"))
+    if pid is None or ticks is None or boot_id is None:
+        return None, None, None
+    return pid, ticks, boot_id
 
 
 def remove_file_silent(path: Path) -> None:
@@ -227,21 +240,20 @@ def read_live_pid_file(
     if not pid_path.exists():
         return None
     pid, expected_ticks, expected_boot_id = read_pid_payload(pid_path)
-    if pid is None:
+    if pid is None or expected_ticks is None or expected_boot_id is None:
+        remove_file_fn(pid_path)
         return None
-    if expected_boot_id is not None:
-        observed_boot_id = boot_id_fn()
-        if observed_boot_id is not None and observed_boot_id.strip() != expected_boot_id:
-            remove_file_fn(pid_path)
-            return None
+    observed_boot_id = boot_id_fn()
+    if observed_boot_id is None or observed_boot_id.strip() != expected_boot_id:
+        remove_file_fn(pid_path)
+        return None
     if not is_process_alive_fn(pid):
         remove_file_fn(pid_path)
         return None
-    if expected_ticks is not None:
-        observed_ticks = process_start_ticks_fn(pid)
-        if observed_ticks is None or observed_ticks != expected_ticks:
-            remove_file_fn(pid_path)
-            return None
+    observed_ticks = process_start_ticks_fn(pid)
+    if observed_ticks is None or observed_ticks != expected_ticks:
+        remove_file_fn(pid_path)
+        return None
     return pid
 
 

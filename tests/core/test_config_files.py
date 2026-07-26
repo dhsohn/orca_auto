@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from orca_auto.core.config.files import (
-    config_with_canonical_messenger,
     engine_config_mapping,
     load_required_yaml_mapping,
     load_shared_config_mapping,
@@ -26,28 +25,7 @@ from orca_auto.core.config.files import (
 from orca_auto.core.messaging.config_io import load_required_messenger_config_from_file
 
 
-def test_messenger_mapping_rejects_legacy_top_level_telegram_block() -> None:
-    # The migration window is closed: a leftover top-level ``telegram`` block
-    # fails closed with a pointed hint instead of being read or silently
-    # ignored — even when the canonical nested block is also present.
-    legacy = {
-        "telegram": {"bot_token": "legacy-token", "chat_id": "legacy-chat"},
-    }
-    with pytest.raises(ValueError, match="no longer supported"):
-        messenger_mapping_from_root(legacy)
-    with pytest.raises(ValueError, match="no longer supported"):
-        messenger_mapping_from_root(
-            {
-                **legacy,
-                "messenger": {
-                    "provider": "telegram",
-                    "telegram": {"chat_id": "nested-chat"},
-                },
-            }
-        )
-    with pytest.raises(ValueError, match="no longer supported"):
-        config_with_canonical_messenger(legacy)
-
+def test_messenger_mapping_reads_messenger_section() -> None:
     canonical = {
         "messenger": {
             "provider": "discord",
@@ -55,7 +33,6 @@ def test_messenger_mapping_rejects_legacy_top_level_telegram_block() -> None:
         },
     }
     assert messenger_mapping_from_root(canonical) == canonical["messenger"]
-    assert config_with_canonical_messenger(canonical)["messenger"] == canonical["messenger"]
 
 
 @pytest.mark.parametrize("invalid", [None, "telegram", []])
@@ -86,21 +63,6 @@ def test_runs_root_from_mapping_accepts_only_top_level_key(tmp_path: Path) -> No
     assert runs_root_from_mapping({"runs_root": str(runs_root)}) == str(runs_root)
     assert runs_root_from_mapping({"runs_root": 0}) == ""
     assert runs_root_from_mapping({}) == ""
-
-
-def test_runs_root_from_mapping_ignores_removed_legacy_keys(tmp_path: Path) -> None:
-    runs_root = tmp_path / "runs"
-
-    # The old workflow.root / orca.runtime.allowed_root locations are gone.
-    assert (
-        runs_root_from_mapping(
-            {
-                "workflow": {"root": str(runs_root)},
-                "orca": {"runtime": {"allowed_root": str(runs_root)}},
-            }
-        )
-        == ""
-    )
 
 
 def test_validated_runs_root_text_rejects_windows_and_relative_values(tmp_path: Path) -> None:

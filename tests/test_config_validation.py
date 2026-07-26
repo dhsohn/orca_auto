@@ -253,28 +253,6 @@ class TestConfigValidation(unittest.TestCase):
             self.assertEqual(cfg.runtime.allowed_root, str(allowed))
             self.assertEqual(cfg.paths.orca_executable, str(fake_orca.resolve()))
 
-    def test_legacy_root_keys_are_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            allowed = root / "orca_runs"
-            allowed.mkdir()
-            fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
-
-            cfg_path = _write_orca_config(
-                root / "orca_auto.yaml",
-                {
-                    "workflow": {"root": str(allowed)},
-                    "runtime": {"allowed_root": str(allowed)},
-                    "paths": {"orca_executable": str(fake_orca)},
-                },
-            )
-
-            with self.assertRaisesRegex(
-                ValueError, "Unknown workflow config fields are not supported"
-            ):
-                load_config(str(cfg_path))
-
     def test_default_max_retries_can_exceed_five(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

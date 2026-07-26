@@ -269,7 +269,7 @@ def test_orca_execution_snapshot_rejects_same_stem_hessian_for_frequency(tmp_pat
 
 @pytest.mark.parametrize(
     "dependency_name",
-    ["h2.out", "h2.gbw", "job_state.json", ".orca.process.lock"],
+    ["h2.out", "h2.gbw", "job_state.json"],
 )
 def test_orca_execution_snapshot_rejects_generation_runtime_name_collisions(
     tmp_path: Path,
