@@ -251,7 +251,6 @@ def test_xtb_retry_helpers_and_job_writer_materialize_attempt_files(tmp_path: Pa
     assert attempt["attempt_number"] == 2
     assert attempt["recipe_id"] == "path_input_refined"
     assert attempt["job_dir"] == str(job_path)
-    assert attempt["namespace"] == ""
 
     metadata["xtb_active_attempt_number"] = 4
     assert xtb_current_attempt_number_impl(stage) == 4
@@ -588,7 +587,7 @@ def test_advance_workflow_reaction_ts_search_runs_append_sequence_and_sets_child
     assert synced and synced[-1]["metadata"]["sync_only"] is False
 
 
-def test_advance_workflow_quarantines_renamed_legacy_workflow_before_submission(
+def test_advance_workflow_quarantines_invalid_workflow_id_before_submission(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -643,19 +642,14 @@ def test_advance_workflow_quarantines_renamed_legacy_workflow_before_submission(
     assert payload["status"] == "failed"
     assert payload["stages"][0]["status"] == "cancelled"
     assert payload["stages"][0]["task"]["status"] == "cancelled"
+    identity_error = (
+        "workflow_id cannot contain parentheses '(' or ')': 'TS8(wf)'. Use a name such as 'TS8_wf'."
+    )
     assert payload["metadata"]["workflow_error"] == {
         "status": "failed",
         "scope": "workflow_identity_validation",
-        "reason": (
-            "workflow directory name 'TS8_wf' does not match persisted workflow_id "
-            "'TS8(wf)'. Renaming an existing workflow directory is not supported; "
-            "restore its original name or create a new workflow."
-        ),
-        "message": (
-            "workflow directory name 'TS8_wf' does not match persisted workflow_id "
-            "'TS8(wf)'. Renaming an existing workflow directory is not supported; "
-            "restore its original name or create a new workflow."
-        ),
+        "reason": identity_error,
+        "message": identity_error,
         "detected_at": "2026-07-10T06:00:00+00:00",
     }
     assert payload["metadata"]["sync_only"] is True

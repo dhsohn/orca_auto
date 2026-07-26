@@ -365,10 +365,9 @@ Workflow notes:
   `xcontrol_file` names the source file to copy, while `xcontrol` must be a
   plain file name materialized inside the xTB job directory.
 - The `crest:` and `xtb:` engine mappings are strict at engine submission:
-  unknown option names are rejected instead of ignored. A non-empty legacy xTB
-  `namespace` is also rejected; remove it before resubmitting. xTB always emits
-  explicit `--chrg` and `--uhf` values plus `--norestart`, so an older restart
-  file cannot silently alter a new generation.
+  unknown option names are rejected instead of ignored. xTB always emits
+  explicit `--chrg` and `--uhf` values plus `--norestart`, so a restart file
+  cannot silently alter a new generation.
 - CREST topology overrides can be placed under `crest:` in `flow.yaml`, including `gfn: ff`, `no_preopt: true`, `noreftopo: true`, `notopo: true`, and `nocbonds: true`
 - The electronic-state authority of workflow-level
   `orca.charge`/`orca.multiplicity`, the element/electron-count/UHF-parity
@@ -382,9 +381,9 @@ Workflow notes:
   coordinates are unusable and are never materialized for ORCA.
 - CREST receives an absolute immutable input-snapshot path and an explicitly
   bound xTB executable (`-xnam`). orca_auto does not pass `--scratch`, because
-  CREST 3.0.2's legacy scratch copier invokes an unsafe shell path. The
-  `gfn2//gfnff` composite emits the required `--legacy`; charge and UHF are
-  always explicit, including neutral singlet values.
+  CREST 3.0.2's native scratch implementation invokes an unsafe shell path.
+  The `gfn2//gfnff` composite emits CREST's required `--legacy` CLI flag;
+  charge and UHF are always explicit, including neutral singlet values.
 - `solvent_model` must be `gbsa` or `alpb` and must be paired with `solvent`.
   Both xTB and CREST accept only these canonical solvent tokens:
   `acetone`, `acetonitrile`, `aniline`, `benzene`, `benzaldehyde`, `ch2cl2`,
@@ -395,9 +394,8 @@ Workflow notes:
   `water`, and `woctanol`. Free-form or multi-token values and shell syntax are
   rejected rather than forwarded.
 - CREST conformational-search knobs are accepted under `crest:` with flag
-  semantics implemented against CREST 3.0.2. `mdlen`/`len` (MD length in ps;
-  aliases that must agree)
-  and `wscal` are finite positive reals rendered without exponent notation to
+  semantics implemented against CREST 3.0.2. `mdlen` (MD length in ps) and
+  `wscal` are finite positive reals rendered without exponent notation to
   at most six decimal places; values below `0.000001` are rejected.
   `tstep` and `mddump` each require an explicit MD length. Without an expert
   override, `tstep` is at most 5.0 fs for GFN-xTB, 1.5 fs for GFN-FF, and 2.0 fs
@@ -689,18 +687,17 @@ TS8(NEB-TS)/
     └── job_report.html
 ```
 
-This example is not an exhaustive file listing. Internal synchronization files
-may also remain: `.orca.process.lock` in the generation and/or job root and
-`.job_state.mutation.lock` at the job root. While an ORCA process record is
-active, `orca.process.json` is present in its generation, and the job root
-carries the live `job_state.json` until terminal cleanup removes it.
+This example is not an exhaustive file listing. The internal synchronization
+file `.job_state.mutation.lock` may remain at the job root, which also carries
+the live `job_state.json` until terminal cleanup removes it. Active engine
+PID/PGID ownership is stored in the shared admission record rather than the
+generation.
 
 The generation's bound `.inp` has the exact selected source basename, so ORCA
 uses the expected output stem rather than adding `.run` or `.bound`. Report
 placement and verification rules — reports exist only inside a verified
-generation, pre-relocation root reports are untouched historical files pending
-a one-time provenance-verified migration, and a run rejected before generation
-binding has no report — are specified in the
+generation, unbound root reports are ignored, and a run rejected before
+generation binding has no report — are specified in the
 [ORCA Job Artifact Contract](PUBLIC_CONTRACTS.md#orca-job-artifact-contract).
 `run.lock` stays at the job root; the mere
 presence of its file is not proof that a process currently owns the lock.
@@ -792,14 +789,13 @@ least these fields:
 - `resource_request`
 - `resource_actual`
 
-Compatibility note:
+Queue worker note:
 
 - `reaction_dir` remains the ORCA queue and downstream contract field.
   Shared core helpers may also understand generic `job_dir` metadata for other
   engines, but ORCA producers should not replace `reaction_dir` with `job_dir`.
 - Engine workers run only from queue identity. The unified child entrypoint is
   `python -m orca_auto.core.engines.worker_child --engine <orca|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`.
-  Legacy ORCA worker-job direct execution by reaction directory is not supported.
 
 ## 12) Recommended Workflow
 
@@ -841,7 +837,7 @@ cd <repo_root>
 pytest -q
 ```
 
-Focused regression commands used during the monorepo migration:
+Focused regression commands:
 
 ```bash
 pytest tests/flow -q

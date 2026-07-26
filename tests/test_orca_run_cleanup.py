@@ -465,7 +465,7 @@ def test_clear_terminal_entries_keeps_live_running_state_despite_terminal_queue(
         {queue_adapter.TERMINAL_REPLAY_METADATA_KEY: None},
     )
 
-    with patch("orca_auto.orca.run_cleanup.active_run_lock_pid", return_value=12345):
+    with patch("orca_auto.orca.run_cleanup.run_lock_is_held", return_value=True):
         assert run_cleanup.clear_terminal_entries(allowed_root) == (1, 0)
 
     assert queue_adapter.list_queue(allowed_root) == []

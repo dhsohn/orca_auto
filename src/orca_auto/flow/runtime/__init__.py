@@ -309,8 +309,7 @@ def _workflow_needs_terminal_child_sync(
         # validation pass even when cached and persisted IDs agree with each other.
         return True
     if authoritative_workflow_id != record_workflow_id:
-        # Upgrade/self-heal legacy cached rows that predate workspace-name
-        # normalization for payloads with an omitted workflow_id.
+        # Reconcile a cached row that disagrees with authoritative state.
         return True
     if payload_status and payload_status != previous_status:
         # A workflow mutation may have committed authoritative state and crashed

@@ -62,33 +62,22 @@ def discover_orca_targets(
 
         status = _state_status(data)
 
-        requires_visible_generation, generation_dir = _selected_visible_generation_dir(
+        generation_dir = _selected_visible_generation_dir(
             state_path=state_path,
             data=data,
             runs_root=kb_path,
         )
-        if not requires_visible_generation:
-            # Legacy path info (reaction_dir, last_out_path, and selected_inp)
-            # can be stale after a runtime move.  Preserve same-directory
-            # discovery unless state provenance claims a visible generation.
-            resolved = _find_latest_out_in_dir(state_path.parent)
-            if resolved is None or should_exclude_from_production_runs_scan(resolved, kb_path):
-                continue
-        else:
-            if generation_dir is None:
-                # A state that claims the schema-v2 visible layout must never
-                # fall back to stale outputs in the public job root.  Missing,
-                # replaced, or otherwise unverifiable generations fail closed.
-                continue
-            # Visible generations are deliberately pruned from production
-            # scans so their mirrored state is not indexed as another job.
-            # The public root state is the sole authority for this exception.
-            resolved = _find_latest_out_in_dir(
-                generation_dir,
-                require_direct_regular_files=True,
-            )
-            if resolved is None:
-                continue
+        if generation_dir is None:
+            continue
+        # Visible generations are deliberately pruned from production scans so
+        # their mirrored state is not indexed as another job. The public root
+        # state is the sole authority for this exception.
+        resolved = _find_latest_out_in_dir(
+            generation_dir,
+            require_direct_regular_files=True,
+        )
+        if resolved is None:
+            continue
         _add_if_valid_target(
             resolved=resolved,
             max_bytes=max_bytes,
@@ -119,15 +108,6 @@ def _execution_provenance(data: dict[str, Any]) -> dict[str, Any]:
         if isinstance(provenance, dict):
             return provenance
     return {}
-
-
-def _path_names_visible_generation(path_text: str) -> bool:
-    if not path_text:
-        return False
-    try:
-        return is_visible_generation_name(Path(path_text).parent.name)
-    except (OSError, RuntimeError, ValueError):
-        return False
 
 
 def _matches_bound_selected_identity(
@@ -171,7 +151,7 @@ def _selected_visible_generation_dir(
     state_path: Path,
     data: dict[str, Any],
     runs_root: Path,
-) -> tuple[bool, Path | None]:
+) -> Path | None:
     selected_text = _selected_input_text(data)
     provenance = _execution_provenance(data)
     execution_dir_text = str(provenance.get("execution_dir") or "").strip()
@@ -179,21 +159,13 @@ def _selected_visible_generation_dir(
     bound_selected_identity = provenance.get("bound_selected_identity")
     generation_owner_token = str(provenance.get("generation_owner_token") or "").strip()
 
-    claims_visible_generation = bool(
-        "execution_dir_identity" in provenance
-        or _path_names_visible_generation(selected_text)
-        or (execution_dir_text and is_visible_generation_name(Path(execution_dir_text).name))
-    )
-    if not claims_visible_generation:
-        return False, None
-
     if (
         not selected_text
         or not execution_dir_text
         or not generation_owner_token
         or not isinstance(raw_identity, dict)
     ):
-        return True, None
+        return None
 
     device = raw_identity.get("device")
     inode = raw_identity.get("inode")
@@ -205,7 +177,7 @@ def _selected_visible_generation_dir(
         or not isinstance(inode, int)
         or inode <= 0
     ):
-        return True, None
+        return None
 
     selected = Path(selected_text)
     raw_generation_dir = Path(execution_dir_text)
@@ -215,7 +187,7 @@ def _selected_visible_generation_dir(
         or not raw_generation_dir.is_absolute()
         or not is_visible_generation_name(raw_generation_dir.name)
     ):
-        return True, None
+        return None
 
     public_job_dir = state_path.parent
 
@@ -226,7 +198,7 @@ def _selected_visible_generation_dir(
             or selected.is_symlink()
             or not selected.is_file()
         ):
-            return True, None
+            return None
         resolved_root = runs_root.resolve(strict=True)
         resolved_job_dir = public_job_dir.resolve(strict=True)
         resolved_generation_dir = raw_generation_dir.resolve(strict=True)
@@ -235,7 +207,7 @@ def _selected_visible_generation_dir(
         job_status = resolved_job_dir.stat()
         resolved_job_dir.relative_to(resolved_root)
     except (OSError, RuntimeError, ValueError):
-        return True, None
+        return None
 
     if (
         raw_generation_dir != resolved_generation_dir
@@ -245,7 +217,7 @@ def _selected_visible_generation_dir(
         or (int(generation_status.st_dev), int(generation_status.st_ino)) != (device, inode)
         or not _matches_bound_selected_identity(resolved_selected, bound_selected_identity)
     ):
-        return True, None
+        return None
 
     try:
         require_direct_generation_owner(
@@ -256,7 +228,7 @@ def _selected_visible_generation_dir(
             owner_token=generation_owner_token,
         )
     except (OSError, RuntimeError, TypeError, ValueError):
-        return True, None
+        return None
 
     # iter_production_runs_artifacts preserves the caller's lexical runs-root
     # alias, while runtime state stores resolved physical paths.  Rebase the
@@ -266,15 +238,15 @@ def _selected_visible_generation_dir(
     public_selected = public_generation_dir / selected.name
     try:
         if public_generation_dir.is_symlink() or public_selected.is_symlink():
-            return True, None
+            return None
         if (
             public_generation_dir.resolve(strict=True) != resolved_generation_dir
             or public_selected.resolve(strict=True) != resolved_selected
         ):
-            return True, None
+            return None
     except (OSError, RuntimeError):
-        return True, None
-    return True, public_generation_dir
+        return None
+    return public_generation_dir
 
 
 def _find_latest_out_in_dir(

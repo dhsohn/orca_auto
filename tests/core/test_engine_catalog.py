@@ -20,7 +20,6 @@ from orca_auto.core.engine_catalog import (
 )
 from orca_auto.core.engines.registry import get_engine_definition
 from orca_auto.core.paths.workflow import (
-    WORKFLOW_STAGE_DIRNAME_ALIASES,
     WORKFLOW_STAGE_DIRNAMES,
     workflow_stage_dirnames_for_engine,
     workflow_workspace_internal_engine_paths,
@@ -169,12 +168,8 @@ def test_every_catalog_engine_has_registry_supervision_admission_and_stage_metad
         assert ("engine_process_state" in captured[0]) is entry.managed_admission
 
         assert WORKFLOW_STAGE_DIRNAMES[entry.engine_id] == entry.workflow_stage_dirname
-        assert (
-            WORKFLOW_STAGE_DIRNAME_ALIASES.get(entry.engine_id, ()) == entry.workflow_stage_aliases
-        )
         assert workflow_stage_dirnames_for_engine(entry.engine_id) == (
             entry.workflow_stage_dirname,
-            *entry.workflow_stage_aliases,
         )
         assert workflow_workspace_internal_engine_paths(
             tmp_path,

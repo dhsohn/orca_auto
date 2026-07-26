@@ -158,9 +158,8 @@ import-linter 계약으로 보호합니다.
   대한 공개 직접 실행 모드는 없습니다.
 - **워커는 큐 신원(queue identity)으로 실행합니다.** 워커는 `--queue-root/
   --queue-id`(및 `--admission-token`)로 통합 자식을 생성하고, 자식이 스스로 현재
-  큐 항목을 해석합니다. 레거시 ORCA `--reaction-dir` 직접 모드는 지원되지
-  않습니다. `reaction_dir` 필드는 다운스트림 계약으로서 큐 항목에 그대로
-  보존됩니다.
+  큐 항목을 해석합니다. `reaction_dir` 필드는 다운스트림 계약으로서 큐 항목에
+  그대로 보존됩니다.
 - **큐 generation은 제출 시점에 실행 입력을 바인딩합니다.** 워크플로우 xTB와 CREST는 콘텐츠 주소형 입력 snapshot을 제출마다
   배타적으로 예약한 고유 namespace에 만듭니다. ORCA는 제출한 작업 디렉터리 바로 아래에
   visible generation을 만들고 선택한 `.inp`와 의존성의 basename을 유지한 채 confined flat
@@ -287,9 +286,10 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   실행과 게시가 끝날 때까지 고정합니다. ORCA는 pathname을 다시 여는 대신 고정 descriptor를 통해
   workspace에 진입합니다.
   scratch-root lock은 workspace를 정확히 하나만 허용하고, 해석할 수 없거나 stale인 workspace는
-  운영자가 검사하거나 tmpfs를 초기화할 때까지 보존하면서 새 시작을 막습니다. ORCA process record,
-  queue, run state, lock은 durable generation에 유지합니다. process tree가 종료되면 남은 일반
-  파일을 staging한 다음 inode로 고정한 generation에 저널 기반 단일 file-set transaction으로
+  운영자가 검사하거나 tmpfs를 초기화할 때까지 보존하면서 새 시작을 막습니다. 공유 admission
+  process record는 scratch 밖에서 durable하며 queue, run state, lock도 durable storage에
+  유지합니다. process tree가 종료되면 남은 일반 파일을 staging한 다음 inode로 고정한
+  generation에 저널 기반 단일 file-set transaction으로
   commit하며, 일부 교체만 성공하면 기존 세트로 rollback합니다. runtime state 이름은 예약하고
   `*.tmp`/`*.tmp.*`는 폐기합니다. 과학 artifact를 손실할 수 있는 고정 allowlist 대신 알 수 없는
   non-temporary output도 보존합니다. staging input은 변경 불가능합니다. 완료 attempt는
@@ -305,9 +305,9 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   type별 canonical 결과와 log를, CREST는 named retained
   ensemble과 log를 게시하며 큰 엔진 work tree는 commit 뒤 제거합니다. CREST 자체의
   `--scratch` copier는 계속 사용하지 않습니다.
-  최종 process group에는 one-byte launch gate를 먼저 시작합니다. worker가 해당 PID/PGID를 durable
-  record에 확정한 뒤에만 gate가 ORCA를 `exec`하므로, 등록 전 parent hard failure가 소유권 없는
-  계산을 남기지 않습니다.
+  최종 process group에는 one-byte launch gate를 먼저 시작합니다. worker가 해당 PID/PGID를 공유
+  admission slot에 durable하게 확정한 뒤에만 gate가 ORCA를 `exec`하므로, 등록 전 parent hard
+  failure가 소유권 없는 계산을 남기지 않습니다.
 - **시도 엔진**(`attempt/engine.py`, `attempt/retry.py`, `attempt/resume.py`):
   시도를 실행하고 출력을 파싱·분류한 뒤 재시도 여부를 결정합니다.
 - **출력 분석**(`parser/`, `out_analyzer.py`, `output_status.py`,
@@ -448,8 +448,7 @@ stage 상한까지 배치합니다.
 
 이들의 종료 control-plane metadata는 durable 원본 `job_state.json` 하나만 사용합니다. 내부
 worker, repair 경로, index, adapter, workflow report가 이 상태를 직접 소비하며 중복 JSON이나
-Markdown report를 만들지 않습니다. report-only 호환 경로는 없고 해당 작업은 다시 제출해야
-합니다.
+Markdown report를 만들지 않습니다. report-only 작업은 다시 제출해야 합니다.
 
 ---
 

@@ -15,6 +15,7 @@ from orca_auto.orca.queue.adapter import (
     mark_completed,
     update_metadata,
 )
+from orca_auto.orca.runtime.run_lock import acquire_run_lock
 from orca_auto.orca.state import report_json_path, save_state, state_path
 from tests.engine_artifact_helpers import orca_artifact_payload
 
@@ -82,14 +83,7 @@ class _ListTestBase(unittest.TestCase):
         if status in {"running", "retrying"}:
             # A genuinely in-progress run holds a live run lock; without it the
             # activity list now treats the run as a stale/failed leftover.
-            from orca_auto.core.utils.process_tracking import (
-                RUN_LOCK_FILE_NAME,
-                current_process_lock_payload,
-            )
-
-            (reaction_dir / RUN_LOCK_FILE_NAME).write_text(
-                json.dumps(current_process_lock_payload()), encoding="utf-8"
-            )
+            self.enterContext(acquire_run_lock(reaction_dir))
 
 
 class TestListEmpty(_ListTestBase):

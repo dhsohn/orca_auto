@@ -99,19 +99,6 @@ def test_status_from_payloads_covers_priority_order(
     )
 
 
-def test_status_rejects_payload_for_identityless_legacy_queue_row() -> None:
-    assert _canonical_orca_status.status_from_payloads(
-        queue_entry={"status": "pending"},
-        state={"job_id": "job_old", "run_id": "run_old", "status": "failed"},
-        report={
-            "job_id": "job_old",
-            "run_id": "run_old",
-            "status": "failed",
-            "final_result": {"status": "failed", "reason": "old_failure"},
-        },
-    ) == ("queued", "", "", "")
-
-
 def test_status_ignores_terminal_payload_from_previous_queue_generation() -> None:
     old_final = {
         "status": "failed",

@@ -496,7 +496,6 @@ def _repair_queued_record(
         publish=publish,
         label=normalize_text(getattr(submission, "engine", "")) or "internal-engine",
         same_generation=_same_queue_generation,
-        repair_missing_lease=True,
     )
     if outcome.reason == "published":
         _append_warning(state, "queued job state/index repaired")

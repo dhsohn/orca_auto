@@ -798,49 +798,6 @@ def test_sync_prequarantine_identity_mismatch_stays_visible_by_workspace_key(
     assert record.metadata["identity_reconciliation_persisted_workflow_id"] == "wf_tampered"
 
 
-def test_sync_legacy_missing_identity_uses_workspace_key_without_mutating_payload(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _patch_file_locks(monkeypatch)
-    workspace = tmp_path / "wf_legacy"
-    workspace.mkdir()
-    payload = {
-        "template_name": "conformer_screening",
-        "status": "running",
-        "requested_at": "2026-04-19T00:00:00+00:00",
-        "stages": [],
-        "metadata": {},
-    }
-
-    record = registry.sync_workflow_registry(tmp_path, workspace, payload)
-
-    assert "workflow_id" not in payload
-    assert record.workflow_id == "wf_legacy"
-    assert "quarantined_persisted_workflow_id" not in record.metadata
-
-
-def test_clear_accepts_legacy_missing_identity_workspace_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _patch_file_locks(monkeypatch)
-    workspace = tmp_path / "wf_legacy"
-    workspace.mkdir()
-    payload = {
-        "template_name": "conformer_screening",
-        "status": "completed",
-        "requested_at": "2026-04-19T00:00:00+00:00",
-        "stages": [],
-        "metadata": {},
-    }
-    (workspace / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
-    registry.sync_workflow_registry(tmp_path, workspace, payload)
-
-    assert registry.clear_terminal_workflow_registry(tmp_path) == 1
-    assert registry.list_workflow_registry(tmp_path, reindex_if_missing=False) == []
-
-
 def test_identity_quarantine_resurrects_a_previously_cleared_workspace(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -20,6 +20,6 @@ Closes #
 
 ## Risk and scope
 
-<!-- Note docs-only/no-behavior-change status, backward compatibility concerns, migration needs, or follow-up work. -->
+<!-- Note docs-only/no-behavior-change status, contract cutover concerns, state impact, or follow-up work. -->
 
 -

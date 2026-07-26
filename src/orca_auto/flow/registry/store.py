@@ -179,18 +179,12 @@ def _record_for_workspace(
     workflow_error = metadata.get("workflow_error") if isinstance(metadata, dict) else None
     persisted_id = _normalize_text(payload.get("workflow_id"))
     try:
-        validated_id = validate_workflow_workspace_identity(workspace, payload.get("workflow_id"))
+        validate_workflow_workspace_identity(workspace, payload.get("workflow_id"))
     except (OSError, TypeError, ValueError):
         identity_valid = False
-        validated_id = ""
     else:
         identity_valid = True
-    if identity_valid and not persisted_id:
-        # Missing IDs are a supported legacy form: workspace identity is the
-        # authoritative fallback. Normalize only the registry view.
-        indexed_payload = dict(payload)
-        indexed_payload["workflow_id"] = validated_id
-    elif not identity_valid:
+    if not identity_valid:
         # Keep the durable payload untouched while the registry remains
         # addressable by its trusted workspace identity. Pre-quarantine rows
         # and invalid path segments must stay visible so cleared markers cannot

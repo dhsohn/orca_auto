@@ -222,7 +222,7 @@ def register_slot_engine_process(
         slot = get_slot(root, token)
         if slot is None:
             raise EngineProcessRecordError(f"Admission slot disappeared: {token}")
-        if slot.engine_process_state in {"", "idle"}:
+        if slot.engine_process_state == "idle":
             return
         if slot.engine_process_state == "pending":
             completed = complete_slot_engine_process(root, token)
@@ -346,7 +346,7 @@ def recover_slot_engine_process(
     """Reap one dead child's recorded engine group before releasing its slot."""
     active_deps = deps or EngineProcessRecoveryDeps()
     slot = get_slot(root, token)
-    if slot is None or slot.engine_process_state in {"", "idle"}:
+    if slot is None or slot.engine_process_state == "idle":
         return False
     if slot.engine_process_state == "pending":
         raise EngineProcessRecordPendingError(

@@ -178,7 +178,7 @@ def payload_context_from_runtime(
         reaction_dir=resolved_reaction_dir,
     )
     # Only a provenance-verified execution generation may expose runtime
-    # state/report paths. The job root is not a report compatibility location.
+    # state/report paths. Reports exist only inside their bound generation.
     artifact_dir = None if runtime.generation_invalid else runtime.artifact_dir
     resolved = resolved_contract_fields(
         runtime=runtime,

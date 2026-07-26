@@ -10,6 +10,8 @@ from pathlib import Path
 
 from .persistence import now_utc_iso
 
+_MAX_LOCK_PAYLOAD_BYTES = 16 * 1024
+
 
 @contextmanager
 def file_lock_at(
@@ -18,6 +20,7 @@ def file_lock_at(
     *,
     display_path: Path | None = None,
     timeout_seconds: float = 10.0,
+    payload: str | None = None,
 ) -> Iterator[None]:
     """Lock one single-link regular file relative to an already-pinned directory."""
 
@@ -45,7 +48,10 @@ def file_lock_at(
 
         handle.seek(0)
         handle.truncate()
-        handle.write(f"pid={os.getpid()}\nacquired_at={now_utc_iso()}\n")
+        lock_payload = (
+            payload if payload is not None else f"pid={os.getpid()}\nacquired_at={now_utc_iso()}"
+        )
+        handle.write(lock_payload.rstrip("\n") + "\n")
         handle.flush()
         os.fsync(handle.fileno())
         try:
@@ -56,7 +62,12 @@ def file_lock_at(
 
 
 @contextmanager
-def file_lock(lock_path: Path, *, timeout_seconds: float = 10.0) -> Iterator[None]:
+def file_lock(
+    lock_path: Path,
+    *,
+    timeout_seconds: float = 10.0,
+    payload: str | None = None,
+) -> Iterator[None]:
     if lock_path.parent.is_symlink():
         raise ValueError(f"Lock directory must not be a symlink: {lock_path.parent}")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,7 +81,44 @@ def file_lock(lock_path: Path, *, timeout_seconds: float = 10.0) -> Iterator[Non
             lock_path.name,
             display_path=lock_path,
             timeout_seconds=timeout_seconds,
+            payload=payload,
         ):
             yield
     finally:
+        os.close(directory_fd)
+
+
+def held_file_lock_payload(lock_path: Path) -> str | None:
+    """Return a held lock's short payload, or ``None`` when no lock is held."""
+    if lock_path.parent.is_symlink():
+        raise ValueError(f"Lock directory must not be a symlink: {lock_path.parent}")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        directory_fd = os.open(lock_path.parent, directory_flags)
+    except FileNotFoundError:
+        return None
+    descriptor = -1
+    try:
+        file_flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
+        try:
+            descriptor = os.open(lock_path.name, file_flags, dir_fd=directory_fd)
+        except FileNotFoundError:
+            return None
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
+            raise ValueError(f"Lock path must be a single-link regular file: {lock_path}")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            payload = os.read(descriptor, _MAX_LOCK_PAYLOAD_BYTES + 1)
+            if len(payload) > _MAX_LOCK_PAYLOAD_BYTES:
+                raise ValueError(f"Lock payload is too large: {lock_path}") from None
+            return payload.decode("utf-8", errors="strict")
+        else:
+            with suppress(OSError):
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            return None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
         os.close(directory_fd)

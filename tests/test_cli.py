@@ -28,6 +28,7 @@ from orca_auto.orca.execution import (
     select_latest_inp,
 )
 from orca_auto.orca.orca_runner import RunResult, WorkerShutdownInterrupt
+from orca_auto.orca.runtime.run_lock import acquire_run_lock
 from orca_auto.orca.state import load_state, save_state, state_path
 from orca_auto.orca.types import RunFinalResult, RunState
 
@@ -385,13 +386,10 @@ class TestCli(unittest.TestCase):
             (reaction / "rxn.out").write_text(
                 "****ORCA TERMINATED NORMALLY****\n", encoding="utf-8"
             )
-            (reaction / "run.lock").write_text(
-                json.dumps({"pid": os.getpid(), "started_at": "2026-02-24T00:00:00+00:00"}) + "\n",
-                encoding="utf-8",
-            )
             config = self._write_config(root, root / "orca_runs")
 
-            rc = main(["run-dir", "--config", str(config), str(reaction)])
+            with acquire_run_lock(reaction):
+                rc = main(["run-dir", "--config", str(config), str(reaction)])
 
         self.assertEqual(rc, 1)
         self.assertFalse(state_path(reaction).exists())

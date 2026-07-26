@@ -6,7 +6,6 @@ from .workflow.artifacts import workflow_artifacts
 from .workflow.store import (
     WORKFLOW_FILE_NAME,
     WORKFLOW_LOCK_NAME,
-    WORKFLOW_STAGE_DIRNAME_ALIASES,
     WORKFLOW_STAGE_DIRNAMES,
     acquire_workflow_create_lock,
     acquire_workflow_lock,
@@ -31,7 +30,6 @@ from .workflow.summary import (
 
 __all__ = [
     "WORKFLOW_FILE_NAME",
-    "WORKFLOW_STAGE_DIRNAME_ALIASES",
     "WORKFLOW_STAGE_DIRNAMES",
     "WORKFLOW_LOCK_NAME",
     "Path",

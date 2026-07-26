@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+from hashlib import sha256
 from pathlib import Path
 
+from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
 from orca_auto.orca.dft.monitor import DFTMonitor
 from tests.engine_artifact_helpers import orca_artifact_payload
 
@@ -51,19 +53,62 @@ _RUNNING_OPT_OUT = "\n".join(
 )
 
 
-def _write_orca_state(job_dir: Path, *, status: str) -> None:
+def _write_current_generation(
+    job_dir: Path,
+    *,
+    status: str,
+    out_content: str,
+    out_name: str,
+) -> Path:
+    job_dir.mkdir(parents=True, exist_ok=True)
+    generation_dir = job_dir / "20260726-010203-0123abcd"
+    generation_dir.mkdir()
+    selected_inp = generation_dir / "calc.inp"
+    selected_inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    out_file = generation_dir / out_name
+    out_file.write_text(out_content, encoding="utf-8")
+    job_status = job_dir.stat()
+    generation_status = generation_dir.stat()
+    selected_payload = selected_inp.read_bytes()
+    owner_token = sha256(str(generation_dir.resolve()).encode()).hexdigest()
+    bind_direct_generation_owner(
+        job_dir,
+        namespace=generation_dir.name,
+        expected_job_identity=(int(job_status.st_dev), int(job_status.st_ino)),
+        expected_generation_identity=(
+            int(generation_status.st_dev),
+            int(generation_status.st_ino),
+        ),
+        owner_token=owner_token,
+    )
+    execution_provenance = {
+        "execution_dir": str(generation_dir.resolve()),
+        "execution_dir_identity": {
+            "device": int(generation_status.st_dev),
+            "inode": int(generation_status.st_ino),
+        },
+        "generation_owner_token": owner_token,
+        "bound_selected_identity": {
+            "path": str(selected_inp.resolve()),
+            "sha256": sha256(selected_payload).hexdigest(),
+            "size_bytes": len(selected_payload),
+        },
+    }
     (job_dir / "job_state.json").write_text(
         json.dumps(
             orca_artifact_payload(
                 job_id=job_dir.name,
                 run_id=job_dir.name,
                 reaction_dir=str(job_dir),
+                selected_inp=str(selected_inp),
                 status=status,
                 final_result={"status": status},
+                engine_payload_extra={"execution_provenance": execution_provenance},
             )
         ),
         encoding="utf-8",
     )
+    return out_file
 
 
 def _advance_mtime(path: Path, *, delta_seconds: float = 5.0) -> None:
@@ -81,10 +126,12 @@ def _advance_mtime(path: Path, *, delta_seconds: float = 5.0) -> None:
 
 def test_baseline_seed_prevents_restart_spam(tmp_path: Path) -> None:
     kb_dir = tmp_path / "kb"
-    kb_dir.mkdir(parents=True)
-    out_file = kb_dir / "calc.out"
-    out_file.write_text(_COMPLETED_OUT, encoding="utf-8")
-    _write_orca_state(kb_dir, status="completed")
+    out_file = _write_current_generation(
+        kb_dir,
+        status="completed",
+        out_content=_COMPLETED_OUT,
+        out_name="calc.out",
+    )
 
     state_file = str(tmp_path / "automation" / "dft_monitor_state.json")
 
@@ -112,10 +159,12 @@ def test_baseline_seed_prevents_restart_spam(tmp_path: Path) -> None:
 
 def test_running_calc_change_produces_running_notification(tmp_path: Path) -> None:
     kb_dir = tmp_path / "kb"
-    kb_dir.mkdir(parents=True)
-    out_file = kb_dir / "running.out"
-    out_file.write_text(_RUNNING_OPT_OUT, encoding="utf-8")
-    _write_orca_state(kb_dir, status="running")
+    out_file = _write_current_generation(
+        kb_dir,
+        status="running",
+        out_content=_RUNNING_OPT_OUT,
+        out_name="running.out",
+    )
 
     state_file = str(tmp_path / "automation" / "state.json")
 
@@ -132,10 +181,12 @@ def test_running_calc_change_produces_running_notification(tmp_path: Path) -> No
 
 def test_running_calc_change_detected_even_if_mtime_moves_backward(tmp_path: Path) -> None:
     kb_dir = tmp_path / "kb"
-    kb_dir.mkdir(parents=True)
-    out_file = kb_dir / "running.out"
-    out_file.write_text(_RUNNING_OPT_OUT, encoding="utf-8")
-    _write_orca_state(kb_dir, status="running")
+    out_file = _write_current_generation(
+        kb_dir,
+        status="running",
+        out_content=_RUNNING_OPT_OUT,
+        out_name="running.out",
+    )
 
     monitor = DFTMonitor([str(kb_dir)], state_file=str(tmp_path / "automation" / "state.json"))
     monitor.scan()
@@ -156,9 +207,12 @@ def test_symlink_dedup(tmp_path: Path) -> None:
     link_dir = tmp_path / "run_link"
     link_dir.symlink_to(run_dir, target_is_directory=True)
 
-    out_file = run_dir / "running.out"
-    out_file.write_text(_RUNNING_OPT_OUT, encoding="utf-8")
-    _write_orca_state(run_dir, status="running")
+    _write_current_generation(
+        run_dir,
+        status="running",
+        out_content=_RUNNING_OPT_OUT,
+        out_name="running.out",
+    )
 
     state_file = str(tmp_path / "automation" / "state.json")
 

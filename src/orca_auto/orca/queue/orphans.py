@@ -11,7 +11,7 @@ from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import now_utc_iso
-from orca_auto.core.utils.process_tracking import active_run_lock_pid, read_pid_file
+from orca_auto.core.utils.process_tracking import read_pid_file, run_lock_is_held
 
 from ..job_locations._generation import payload_matches_queue_generation
 from ..state import load_state
@@ -36,19 +36,6 @@ logger = logging.getLogger(__name__)
 
 def _now_iso() -> str:
     return now_utc_iso()
-
-
-def active_lock_pid(reaction_dir: Path) -> int | None:
-    return active_run_lock_pid(
-        reaction_dir,
-        on_pid_reuse=lambda pid, expected_ticks, observed_ticks: logger.info(
-            "Ignoring stale run.lock due to PID reuse: reaction_dir=%s pid=%d expected=%d observed=%s",
-            reaction_dir,
-            pid,
-            expected_ticks,
-            observed_ticks,
-        ),
-    )
 
 
 def read_worker_pid(allowed_root: Path) -> int | None:
@@ -225,7 +212,7 @@ def _reconcile_entry(
         return None
     reaction_dir = Path(rdir)
 
-    if active_lock_pid(reaction_dir) is not None:
+    if run_lock_is_held(reaction_dir, logger=logger):
         return None
 
     queue_id = queue_entry_id(entry) or "?"

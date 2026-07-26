@@ -16,6 +16,10 @@ from orca_auto.core.engines.definitions import (
     EngineRunnerCallbacks,
 )
 from orca_auto.core.queue.engine.runtime import EngineQueueRuntime
+from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_COMPLETE,
+    QUEUE_RECORD_SYNC_KEY,
+)
 from orca_auto.core.queue.worker.execution_dependencies import (
     WorkerProcessDependencyCallbacks,
     build_worker_process_default_factories_from_callbacks,
@@ -53,7 +57,10 @@ def _internal_entry(engine: str, queue_id: str) -> SimpleNamespace:
         task_id=f"{engine}-task-{queue_id}",
         task_kind=task_kind,
         engine=engine,
-        metadata={"job_type": "opt"} if engine == "xtb" else {},
+        metadata={
+            **({"job_type": "opt"} if engine == "xtb" else {}),
+            QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_COMPLETE,
+        },
         status=SimpleNamespace(value="pending"),
     )
 
@@ -84,7 +91,7 @@ def test_engine_identity_rejects_conflicting_present_labels() -> None:
 
     assert not entry_matches_engine_identity(
         SimpleNamespace(
-            queue_id="q-crest-legacy",
+            queue_id="q-crest-invalid",
             app_name="orca_auto_crest",
             task_id="crest-1",
             task_kind="conformer_search",
@@ -122,6 +129,7 @@ def test_engine_queue_runtime_combines_roots_entries_and_next_entry(
         priority=1,
         enqueued_at="2026-01-01T00:00:00Z",
         cancel_requested=False,
+        metadata={QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_COMPLETE},
     )
     runtime = _runtime(
         tmp_path,

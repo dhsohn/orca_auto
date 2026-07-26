@@ -22,7 +22,6 @@ from orca_auto.core.artifacts import (
 from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.utils import process as process_utils
-from orca_auto.core.utils import process_lock
 from orca_auto.core.utils.lock import file_lock_at
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
 
@@ -43,8 +42,6 @@ _SCRATCH_CONTROL_FILE_NAMES = frozenset(
     {
         SCRATCH_MANIFEST_FILE_NAME,
         SCRATCH_RUNTIME_HOME_DIR_NAME,
-        "orca.process.json",
-        ".orca.process.lock",
     }
 )
 _DURABLE_RESERVED_FILE_NAMES = frozenset(
@@ -53,8 +50,6 @@ _DURABLE_RESERVED_FILE_NAMES = frozenset(
         RUN_REPORT_JSON_FILE,
         RUN_REPORT_HTML_FILE,
         SI_BLOCK_MD_FILE,
-        "orca.process.json",
-        ".orca.process.lock",
         RUN_LOCK_FILE_NAME,
         ".job_state.mutation.lock",
         _PUBLICATION_JOURNAL_FILE_NAME,
@@ -641,7 +636,7 @@ def _write_workspace_manifest(
     workspace_dir_fd: int,
 ) -> None:
     boot_id = process_utils.linux_boot_id(proc_root=Path("/proc"))
-    owner_ticks = process_lock.current_process_start_ticks()
+    owner_ticks = process_utils.current_process_start_ticks()
     if not boot_id or owner_ticks is None:
         raise EngineScratchError("Cannot bind engine scratch ownership to this boot and process")
     payload = {
@@ -672,9 +667,9 @@ def _manifest_owner_is_live(payload: dict[str, Any]) -> bool:
         return True
     if current_boot != owner_boot:
         return False
-    if not process_lock.is_process_alive(owner_pid):
+    if not process_utils.is_process_alive(owner_pid):
         return False
-    observed_ticks = process_lock.process_start_ticks(owner_pid)
+    observed_ticks = process_utils.process_start_ticks(owner_pid)
     if observed_ticks is None:
         return True
     return observed_ticks == owner_ticks

@@ -1,5 +1,4 @@
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from orca_auto.orca.commands.run_inp import cmd_run_inp
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.queue.adapter import enqueue, list_queue, queue_entry_metadata
+from orca_auto.orca.runtime.run_lock import acquire_run_lock
 from orca_auto.orca.submission import submit_reaction_dir_to_queue
 
 
@@ -107,12 +107,8 @@ class TestRunInpSubmit(unittest.TestCase):
             mock_load_config.return_value = _make_cfg(tmp)
             reaction_dir = root / "rxn"
             _write_inp(reaction_dir)
-            (reaction_dir / "run.lock").write_text(
-                json.dumps({"pid": os.getpid(), "started_at": "2026-03-20T00:00:00+00:00"}),
-                encoding="utf-8",
-            )
-
-            rc = cmd_run_inp(_make_args(root, reaction_dir))
+            with acquire_run_lock(reaction_dir):
+                rc = cmd_run_inp(_make_args(root, reaction_dir))
 
         self.assertEqual(rc, 1)
         mock_create_queued_submission.assert_not_called()

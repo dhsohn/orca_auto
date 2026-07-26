@@ -25,7 +25,7 @@ from orca_auto.flow.orchestration.stage_views import (
 from orca_auto.flow.orchestration.support import load_config_root_impl, required_stage_budget
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 
-_CONFORMER_ORCA_STAGE_DIRNAME = "02_orca"
+_CONFORMER_ORCA_STAGE_DIRNAME = "03_orca"
 
 
 @dataclass(frozen=True)

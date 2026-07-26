@@ -231,7 +231,7 @@ def assert_orca_job_publications(
     assert job_id and reason
 
     # Reports live inside the execution generation; the job root only keeps
-    # the live state (and pre-relocation legacy report copies).
+    # the live state and unrelated files.
     engine_payload = state.get("engine_payload")
     assert isinstance(engine_payload, dict)
     provenance = engine_payload.get("execution_provenance")

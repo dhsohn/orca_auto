@@ -42,21 +42,6 @@ def resolve_admission_limit(cfg: Any) -> int:
     return resolved_admission_limit(raw, fallback)
 
 
-def reserve_queue_worker_slot(
-    cfg: Any,
-    *,
-    source: str,
-    app_name: str,
-    reserve_slot_fn: Callable[..., str | None] = reserve_slot,
-) -> str | None:
-    return reserve_slot_fn(
-        resolve_admission_root(cfg),
-        resolve_admission_limit(cfg),
-        source=source,
-        app_name=app_name,
-    )
-
-
 def reserve_engine_queue_worker_slot(
     cfg: Any,
     *,
@@ -237,7 +222,6 @@ __all__ = [
     "queue_entry_by_id",
     "reserve_dequeued_entry",
     "reserve_engine_queue_worker_slot",
-    "reserve_queue_worker_slot",
     "resolve_admission_limit",
     "resolve_admission_root",
 ]

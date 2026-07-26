@@ -9,11 +9,11 @@ plumbing may change when the documented behavior stays intact.
 
 orca_auto is in the 0.x series, and this document is intentionally two-tiered.
 
-## Compatibility Level
+## Stability Level
 
 Only the **Stable Core** below is a committed contract. Everything else
 documented here is **Experimental**: accurate for the current release and safe
-to use, but it may change or be removed without a migration path as the tool
+to use, but it may change or be removed as the tool
 narrows toward 1.0. Script against the Stable Core (and `--json` or JSON
 artifacts); treat the rest as convenience that can move.
 
@@ -42,8 +42,8 @@ regardless of a surface's tier.
 ### Rules for both tiers
 
 - Additive JSON fields are allowed; consumers should ignore unknown fields.
-- Human-oriented Markdown, HTML, and terminal formatting may change without a
-  migration path; use `--json` or the Stable Core JSON artifacts for scripts.
+- Human-oriented Markdown, HTML, and terminal formatting may change; use
+  `--json` or the Stable Core JSON artifacts for scripts.
 - Internal worker entrypoints and Python helper modules are not a public API
   unless this document or [docs/REFERENCE.md](REFERENCE.md) says otherwise.
 - Changes to the Stable Core are deliberate, tested, documented, and called out
@@ -205,8 +205,8 @@ Behavior:
   omitted work trees and transient entries are recorded in
   `scratch_provenance`. CREST's native `--scratch` option remains unused.
   Root/workspace and generation directories are descriptor-pinned. A launch
-  gate may `exec` ORCA only after its PID/PGID process record is durable; EOF
-  before release exits without starting ORCA.
+  gate may `exec` ORCA only after the shared admission slot's PID/PGID process
+  record is durable; EOF before release exits without starting ORCA.
   Queue, state, and process ownership remain durable. Unpublished scratch output
   is intentionally not a recovery contract across host or WSL shutdown.
 - Outbound Discord delivery uses `messenger.provider: discord` plus non-empty
@@ -221,17 +221,6 @@ Behavior:
   the documented defaults and finite values outside those ranges are clamped;
   explicitly configured booleans, non-numeric values, fractions for attempts,
   NaN, and infinities are rejected rather than defaulted.
-
-Migration note:
-
-- Telegram messaging is no longer supported. A leftover top-level `telegram:`
-  block fails configuration loading with a pointed error; a nested
-  `messenger.telegram` block fails as an unknown `messenger` field. Remove
-  either one and use the nested `messenger.discord` bot fields.
-- Removed top-level `behavior`, `runtime`, and `paths` sections; `workflow.root`;
-  and engine-scoped `scheduler`, `resources`, or `messenger` blocks are not
-  compatibility aliases. Use the supported top-level shared sections and
-  `orca.runtime`/`orca.paths` paths above.
 
 ## Queue And Activity Contract
 
@@ -327,16 +316,12 @@ inlines its coordinates and ORCA may mutate the visible XYZ after launch.
 Same-stem auxiliary NEB Product/TS inputs remain unsupported. Frequency routes
 reserve `<stem>.hess`; every route reserves `<stem>.out` and `<stem>.gbw`.
 Submission also rejects the selected `.inp` basename and generation-owned
-`job_state.json`, `job_report.json`, `orca.process.json`, and
-`.orca.process.lock` as dependency basenames. Output-base overrides such as
-`%base` and NEB restart-GBW basename controls fail closed.
+`job_state.json` and `job_report.json` as dependency basenames. Output-base
+overrides such as `%base` and NEB restart-GBW basename controls fail closed.
 
-Before deploying this ORCA format, operators must drain all old-build pending
-and active ORCA rows and finish every incomplete terminal replay and snapshot
-intent, or cancel/clear affected work and resubmit it under the new build.
-In-place adoption or migration is not supported. Existing terminal hidden ORCA
-generations remain untouched as historical artifacts. Unverifiable artifacts
-fail closed instead of being attached to a newer generation.
+Only rows carrying the current execution snapshot, publication marker, and
+identity fields are executable. Rows that do not satisfy that contract fail
+closed and must be cleared or resubmitted.
 Workflow-internal xTB/CREST snapshots use a unique namespace that is exclusively
 reserved for the submission, rather than using the public task id alone as
 snapshot ownership.
@@ -393,12 +378,9 @@ canonical ORCA ownership tuple (`app_name`, `engine`, `task_kind`, `queue_id`,
 and `task_id`); partial or foreign rows are ignored even for an exact queue-id
 or reaction-path selector.
 
-Pre-relocation job-root report files are left untouched on disk but are no
-longer runtime inputs. Before removing those files, an operator must perform a
-one-time migration that verifies the report's job/run identity and generation
-provenance and then relocates it to that exact generation. Ambiguous or
-unbound reports must be archived separately rather than attached by path.
-There is no job-root compatibility reader or writer. Once a terminal run's
+Unbound job-root report files are not runtime inputs. They may be archived or
+removed by the operator, but must never be attached to a generation by path.
+Once a terminal run's
 root state has been cleaned, a from-scratch
 job-locations index rebuild no longer rediscovers that run: generation
 directories are deliberately excluded from production scans, and the rebuild
@@ -509,8 +491,7 @@ is reserved for exhaustion of a positive retry budget.
 ## Workflow Contract
 
 **Stability:** Experimental in its entirety. The workflow registry, journal,
-JSON fields, SI filenames, and report formats may change or be removed without a
-migration path.
+JSON fields, SI filenames, and report formats may change or be removed.
 
 Workflow input manifests are named `flow.yaml`.
 
@@ -581,10 +562,6 @@ Fragment labels are at most 80 characters. An enabled interaction-energy block
 requires 2–8 fragments; each multiplicity is an integer in `[1, 100]`, and
 `sp_route_line` must describe a pure single-point calculation. Fragment indices
 must be a static, gap-free, disjoint partition of every input atom.
-The former xTB `namespace` option is not part of the canonical artifact
-contract: an absent or empty compatibility field is harmless, but a non-empty
-value is rejected and must be removed before resubmission.
-
 For `reaction_ts_search`, `max_xtb_stages` and `max_orca_stages` are total hard
 caps, including stages already attempted before restart. Endpoint-pairing mode
 does not disable either cap. Workflow `orca.charge`/`orca.multiplicity` is the
@@ -756,7 +733,7 @@ include `scan_profile_no_barrier`, `ts_candidates_exhausted`,
 ## Systemd Contract
 
 **Stability:** Experimental. The exact unit filenames, install behavior, and
-`service` commands may change without a migration path.
+`service` commands may change.
 
 Supported unit filenames:
 

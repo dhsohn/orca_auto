@@ -71,11 +71,8 @@ _CREST_MANIFEST_KEYS = {
     "keepdir",
     "no_preopt",
     "noreftopo",
-    "no_reftopo",
     "notopo",
-    "no_topo",
     "nocbonds",
-    "no_cbonds",
     "gfn",
     "charge",
     "uhf",
@@ -87,7 +84,6 @@ _CREST_MANIFEST_KEYS = {
     "bthr",
     "cluster",
     "mdlen",
-    "len",
     "wscal",
     "tstep",
     "allow_high_tstep",
@@ -148,23 +144,6 @@ def _build_submission_impl(
     manifest_snapshot["_orca_auto_xtb_executable"] = executable_identities["xtb"]["path"]
     runtime_identity = _engine_runner.engine_runtime_identity(job_dir)
     manifest_snapshot["_orca_auto_runtime_identity"] = runtime_identity
-    for canonical_key, alias_key in (
-        ("noreftopo", "no_reftopo"),
-        ("notopo", "no_topo"),
-        ("nocbonds", "no_cbonds"),
-    ):
-        canonical_present = canonical_key in manifest_snapshot
-        alias_present = alias_key in manifest_snapshot
-        if canonical_present and alias_present:
-            if _engine_runner.bool_flag(
-                manifest_snapshot, canonical_key
-            ) != _engine_runner.bool_flag(manifest_snapshot, alias_key):
-                raise ValueError(f"CREST aliases {canonical_key!r} and {alias_key!r} must match")
-        if alias_present:
-            manifest_snapshot[canonical_key] = _engine_runner.bool_flag(
-                manifest_snapshot, alias_key
-            )
-        manifest_snapshot.pop(alias_key, None)
     selected_descriptor = snapshot_input_file(
         job_dir,
         selected_xyz,

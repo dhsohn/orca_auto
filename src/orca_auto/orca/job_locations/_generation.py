@@ -99,8 +99,8 @@ def payload_matches_queue_generation(
 
     A missing queue entry is accepted only for a self-identifying artifact;
     callers use that form after verifying the artifact's execution-generation
-    provenance. An existing legacy queue row without either identity is
-    unsupported and fails closed instead of adopting nearby artifacts.
+    provenance. An existing queue row without either identity fails closed
+    instead of adopting nearby artifacts.
     """
 
     queue_task_id, queue_run_id = _queue_generation(queue_entry)

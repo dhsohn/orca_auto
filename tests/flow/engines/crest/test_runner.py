@@ -222,7 +222,7 @@ def test_build_command_protects_dash_prefixed_input_name(
     assert command[1] == str(selected_xyz.resolve())
 
 
-def test_build_command_accepts_topology_aliases_without_duplicate_flags(
+def test_build_command_accepts_canonical_topology_flags(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -242,11 +242,8 @@ def test_build_command_accepts_topology_aliases_without_duplicate_flags(
         selected_xyz=selected_xyz,
         manifest={
             "noreftopo": True,
-            "no_reftopo": True,
             "notopo": True,
-            "no_topo": True,
             "nocbonds": True,
-            "no_cbonds": True,
         },
     )
 
@@ -665,17 +662,6 @@ def test_build_command_emits_verified_sampling_flags(
     assert "--norotmd" in command
     assert "--nocross" in command
     assert "--cross" not in command
-
-
-def test_build_command_len_is_an_alias_for_mdlen(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    command = _sampling_command(monkeypatch, tmp_path, {"len": 2.0})
-    assert command[command.index("--mdlen") + 1] == "2"
-    assert command.count("--mdlen") == 1
-
-    with pytest.raises(ValueError, match="must match"):
-        _sampling_command(monkeypatch, tmp_path, {"mdlen": 2.0, "len": 3.0})
 
 
 def test_build_command_shake_zero_is_emitted_not_dropped(

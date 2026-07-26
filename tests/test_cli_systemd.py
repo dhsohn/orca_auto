@@ -872,7 +872,7 @@ def test_cmd_service_restart_uses_active_runtime_only_when_enablement_is_unreada
     ]
 
 
-def test_cmd_service_restart_directs_legacy_install_to_current_installer(
+def test_cmd_service_restart_directs_missing_install_to_installer(
     capsys: Any,
 ) -> None:
     commands: list[tuple[str, ...]] = []
@@ -888,7 +888,7 @@ def test_cmd_service_restart_directs_legacy_install_to_current_installer(
         commands.append(tuple(argv))
         if argv[1] == "show":
             return subprocess.CompletedProcess(argv, 0, stdout="not-found\n", stderr="")
-        pytest.fail(f"legacy detection must stop before state mutation: {argv}")
+        pytest.fail(f"missing-unit detection must stop before state mutation: {argv}")
 
     result = cli_systemd_status.cmd_service_restart(
         Namespace(target_user="alice"),

@@ -10,11 +10,11 @@
 
 orca_auto는 0.x 시리즈이며, 이 문서는 의도적으로 2계층입니다.
 
-## 호환성 수준
+## 안정성 수준
 
 아래 **Stable Core**만 고정된 계약입니다. 이 문서의 나머지는 전부 **Experimental**입니다 —
-현재 릴리스 기준으로는 정확하고 사용해도 되지만, 1.0으로 좁혀 가는 과정에서 migration
-path 없이 바뀌거나 제거될 수 있습니다. 스크립트는 Stable Core(및 `--json`·JSON 산출물)에
+현재 릴리스 기준으로는 정확하고 사용해도 되지만, 1.0으로 좁혀 가는 과정에서
+바뀌거나 제거될 수 있습니다. 스크립트는 Stable Core(및 `--json`·JSON 산출물)에
 의존하고, 나머지는 이동할 수 있는 편의로 취급하세요.
 
 ### Stable Core
@@ -39,7 +39,7 @@ Experimental입니다. Experimental은 공개 API — 표면의 이름·형태·
 ### 두 계층 공통 규칙
 
 - JSON 필드 추가는 허용됩니다. 소비자는 알 수 없는 필드를 무시해야 합니다.
-- 사람을 위한 Markdown·HTML·터미널 출력은 migration path 없이 바뀔 수 있습니다. 스크립트는
+- 사람을 위한 Markdown·HTML·터미널 출력은 바뀔 수 있습니다. 스크립트는
   `--json` 또는 Stable Core JSON 산출물을 사용하세요.
 - 내부 워커 진입점과 Python helper 모듈은 이 문서나 [docs/REFERENCE.ko.md](REFERENCE.ko.md)에
   명시되지 않는 한 공개 API가 아닙니다.
@@ -188,9 +188,9 @@ Core입니다. 그 외 키와 검색 순서는 Experimental입니다.
   입력 snapshot은 durable하게 유지하고 tmpfs에서 실행한 뒤 canonical 결과/evidence allowlist만
   transaction으로 게시합니다. 생략한 work tree와 transient 항목은 `scratch_provenance`에
   기록하며 CREST 자체의 `--scratch` 옵션은 계속 사용하지 않습니다.
-  root/workspace와 generation directory는 descriptor로 고정합니다. launch gate는 자신의 PID/PGID
-  process record가 durable해진 뒤에만 ORCA를 `exec`할 수 있고, release 전 EOF면 ORCA를 시작하지
-  않고 종료합니다.
+  root/workspace와 generation directory는 descriptor로 고정합니다. launch gate는 공유 admission
+  slot의 PID/PGID process record가 durable해진 뒤에만 ORCA를 `exec`할 수 있고, release 전
+  EOF면 ORCA를 시작하지 않고 종료합니다.
   queue, state, process ownership은
   계속 durable합니다. host 또는 WSL 종료 전에
   게시되지 않은 scratch output은 recovery 계약이 아닙니다.
@@ -205,16 +205,6 @@ Core입니다. 그 외 키와 검색 순서는 Experimental입니다.
   유한한 retry backoff를 0~120초로 제한합니다. 생략하면 문서화된 기본값을 사용하고
   범위를 벗어난 유한값은 clamp하지만, 명시한 boolean·숫자가 아닌 값·분수 시도 횟수·
   NaN·무한대는 기본값으로 바꾸지 않고 거부합니다.
-
-마이그레이션 참고:
-
-- Telegram 메시징은 더 이상 지원하지 않습니다. 남아 있는 최상위 `telegram:` 블록은 명확한
-  오류로 설정 로딩에 실패하고, 중첩된 `messenger.telegram` 블록은 알 수 없는 `messenger`
-  필드로 실패합니다. 둘 중 무엇이든 제거하고 중첩된 `messenger.discord` bot 필드를
-  사용하세요.
-- 제거된 최상위 `behavior`, `runtime`, `paths` section, `workflow.root`, 엔진별
-  `scheduler`/`resources`/`messenger` 블록은 호환 별칭이 아닙니다. 위의 지원되는
-  최상위 공유 section과 `orca.runtime`/`orca.paths`를 사용하세요.
 
 ## 큐와 activity 계약
 
@@ -303,16 +293,12 @@ route에서도 주 `* xyzfile` 의존성 하나만 그 exact 이름을 쓰는 �
 바인딩 `.inp`에 그 좌표를 inline하고, 실행 뒤 ORCA가 visible XYZ를 갱신할 수 있습니다.
 같은 stem의 보조 NEB Product/TS 입력은 계속 지원하지 않습니다. 주파수 route는
 `<stem>.hess`를, 모든 route는 `<stem>.out`과 `<stem>.gbw`를 예약합니다. 선택 `.inp`
-basename과 generation이 소유하는 `job_state.json`, `job_report.json`,
-`orca.process.json`, `.orca.process.lock`도 의존성 basename으로 쓰면 제출 단계에서
-거부합니다. `%base`와 NEB restart-GBW basename 제어 같은 출력 base override도
-fail-closed합니다.
+basename과 generation이 소유하는 `job_state.json`, `job_report.json`도 의존성
+basename으로 쓰면 제출 단계에서 거부합니다. `%base`와 NEB restart-GBW basename
+제어 같은 출력 base override도 fail-closed합니다.
 
-이 ORCA 형식을 배포하기 전에는 이전 빌드의 pending/active ORCA 행을 모두 drain하고
-미완료 terminal replay와 snapshot intent를 끝내야 합니다. 또는 영향받는 작업을 취소/clear한 뒤
-새 빌드에서 다시 제출하세요. In-place adoption이나 migration은 지원하지 않습니다. 기존
-terminal 숨은 ORCA generation은 이력 산출물로 제자리에 보존합니다. 검증할 수 없는 산출물은
-새 generation에 연결하지 않고 fail-closed합니다.
+현재 execution snapshot, publication marker, identity 필드를 모두 가진 행만 실행할 수
+있습니다. 이 계약을 만족하지 않는 행은 fail-closed하며 clear하거나 다시 제출해야 합니다.
 워크플로우 내부 xTB/CREST snapshot은 공개 task id만으로 소유권을 정하지 않고 제출마다
 배타적으로 예약한 고유 namespace를 사용합니다.
 Generation 디렉터리를 만들기 전에 소유 queue root에 내부 durable intent를 기록합니다.
@@ -361,11 +347,8 @@ state와 큐 기록이 결과를 보존합니다. Reader는 검증된 generation
 `task_id`)을 요구하며, 부분 행이나 다른 엔진 행은 정확한 queue-id 또는 reaction-path
 selector로 요청해도 무시합니다.
 
-이관 전 작업 루트 리포트 파일은 디스크에서 삭제하지 않지만 runtime 입력으로는
-더 이상 읽지 않습니다. 해당 파일을 제거하기 전에 운영자가 일회성 migration으로
-리포트의 job/run identity와 generation provenance를 검증한 뒤 정확히 그 generation으로
-옮겨야 합니다. 모호하거나 generation에 바인딩되지 않은 리포트는 경로만 보고 연결하지
-말고 별도 보관해야 합니다. 작업 루트 호환 reader/writer는 없습니다. terminal 실행의
+generation에 바인딩되지 않은 작업 루트 리포트 파일은 runtime 입력이 아닙니다. 운영자가
+보관하거나 제거할 수 있지만 경로만 보고 generation에 연결해서는 안 됩니다. terminal 실행의
 루트 state가 정리된 뒤에는 job-locations 색인의
 처음부터 재구축이 그 실행을 재발견하지 못합니다: generation 디렉터리는 의도적으로
 production scan에서 제외되고 재구축은 upsert 전용이므로, 살아있는 색인은 기록을
@@ -469,7 +452,7 @@ ORCA analyzer 상태:
 ## 워크플로우 계약
 
 **안정성:** 전체가 Experimental입니다. 워크플로우 registry·journal·JSON 필드·SI 파일명·
-리포트 형식은 migration path 없이 바뀌거나 제거될 수 있습니다.
+리포트 형식은 바뀌거나 제거될 수 있습니다.
 
 워크플로우 입력 manifest 이름은 `flow.yaml`입니다.
 
@@ -536,9 +519,6 @@ ORCA analyzer 상태:
 활성 interaction-energy 블록은 fragment 2–8개를 요구하고 각 multiplicity는 `[1, 100]`
 정수여야 하며, `sp_route_line`은 순수 single-point 계산만 기술해야 합니다. fragment 인덱스는
 모든 입력 원자를 gap 없이 정적으로 완전 분할해야 합니다.
-예전 xTB `namespace` 옵션은 정규 artifact 계약에 포함되지 않습니다. 없거나 빈 호환 필드는
-무해하지만 비어 있지 않은 값은 거부되므로 다시 제출하기 전에 제거해야 합니다.
-
 `reaction_ts_search`에서 `max_xtb_stages`와 `max_orca_stages`는 재시작 전에 이미 시도한
 stage까지 포함하는 전체 hard cap입니다. endpoint-pairing 모드도 이 상한을 해제하지
 않습니다. 워크플로우 `orca.charge`/`orca.multiplicity`가 정규 전자 상태이며, 충돌하는
@@ -680,8 +660,8 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
 
 ## systemd 계약
 
-**안정성:** Experimental입니다. 정확한 unit 파일명·설치 동작·`service` 명령은 migration path
-없이 바뀔 수 있습니다.
+**안정성:** Experimental입니다. 정확한 unit 파일명·설치 동작·`service` 명령은 바뀔 수
+있습니다.
 
 지원되는 unit 파일 이름:
 

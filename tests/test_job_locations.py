@@ -633,7 +633,7 @@ def test_load_job_runtime_context_keeps_queue_but_ignores_root_only_artifacts() 
         assert report_json_path(job_dir).is_file()
 
 
-def test_root_only_legacy_payload_keeps_queue_and_record_fields_only() -> None:
+def test_root_only_payload_is_not_consumed() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         allowed_root = root / "runs"
@@ -726,23 +726,14 @@ def test_root_only_legacy_payload_keeps_queue_and_record_fields_only() -> None:
             "job_hist_5",
         )
 
-        assert payload["run_id"] == "run_hist_5"
-        assert payload["status"] == "completed"
-        assert payload["reason"] == ""
-        assert payload["reaction_dir"] == str(job_dir.resolve())
-        assert payload["latest_known_path"] == str(job_dir.resolve())
-        assert payload["queue_id"] == "q_hist_5"
-        assert payload["queue_status"] == "completed"
-        assert payload["selected_inp"] == str(inp.resolve())
-        assert payload["selected_input_xyz"] == str(xyz.resolve())
+        assert payload["status"] == "unknown"
+        assert payload["reason"] == "queue_generation_verification_failed"
         assert payload["optimized_xyz_path"] == ""
         assert payload["last_out_path"] == ""
         assert payload["attempt_count"] == 0
         assert payload["attempts"] == ()
-        assert payload["max_retries"] == 0
         assert payload["run_state_path"] == ""
         assert payload["report_json_path"] == ""
-        assert payload["resource_request"] == {"max_cores": 8, "max_memory_gb": 16}
 
 
 def test_load_orca_contract_payload_reads_exact_historical_visible_generation(
@@ -1260,7 +1251,7 @@ def test_visible_generation_rejects_out_of_generation_output_hints(
         assert payload["last_out_path"] == ""
 
     assert without_queue["status"] == "unknown"
-    assert without_queue["reason"] == ""
+    assert without_queue["reason"] == "queue_generation_verification_failed"
     assert without_queue["optimized_xyz_path"] == ""
     assert without_queue["last_out_path"] == ""
 
@@ -1781,12 +1772,12 @@ def test_load_orca_contract_payload_binds_runtime_paths_to_payload_directory(
 def test_load_orca_contract_payload_rejects_physical_paths_without_generation_identity(
     tmp_path: Path,
 ) -> None:
-    job_dir = tmp_path / "legacy_run"
+    job_dir = tmp_path / "unbound_run"
     job_dir.mkdir()
     state_file = state_path(job_dir)
     report_json = report_json_path(job_dir)
-    state_file.write_text("legacy state\n", encoding="utf-8")
-    report_json.write_text("legacy report\n", encoding="utf-8")
+    state_file.write_text("unbound state\n", encoding="utf-8")
+    report_json.write_text("unbound report\n", encoding="utf-8")
 
     payload = load_orca_contract_payload(tmp_path, str(job_dir))
 

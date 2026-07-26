@@ -23,6 +23,7 @@ from orca_auto.core.queue.dependencies import (
     resolve_dependency_groups,
 )
 from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
     QUEUE_RECORD_SYNC_OWNER_PID_KEY,
     QUEUE_RECORD_SYNC_PREPARING,
@@ -57,13 +58,15 @@ def _entry(
     cancel_requested: bool = False,
     metadata: dict[str, object] | None = None,
 ) -> SimpleNamespace:
+    entry_metadata: dict[str, object] = {QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_COMPLETE}
+    entry_metadata.update(metadata or {})
     return SimpleNamespace(
         status=SimpleNamespace(value=status),
         priority=priority,
         enqueued_at=enqueued_at,
         queue_id=queue_id,
         cancel_requested=cancel_requested,
-        metadata=dict(metadata or {}),
+        metadata=entry_metadata,
     )
 
 
@@ -170,24 +173,6 @@ def test_resolve_admission_limit_falls_back_and_handles_invalid_values() -> None
     )
     with pytest.raises(ValueError, match="admission_limit must be an integer >= 1"):
         worker_common.resolve_admission_limit(_cfg(resolved_admission_limit="bad"))
-
-
-def test_reserve_queue_worker_slot_uses_common_resolved_values() -> None:
-    calls: list[tuple[str, int, str, str]] = []
-
-    def reserve_slot(root: str, limit: int, *, source: str, app_name: str) -> str:
-        calls.append((root, limit, source, app_name))
-        return "slot-1"
-
-    result = worker_common.reserve_queue_worker_slot(
-        _cfg(admission_root="/admission", admission_limit=4),
-        source="source-name",
-        app_name="app-name",
-        reserve_slot_fn=reserve_slot,
-    )
-
-    assert result == "slot-1"
-    assert calls == [("/admission", 4, "source-name", "app-name")]
 
 
 def test_dequeue_next_across_roots_handles_single_root_idle_and_selected_entry(
@@ -358,15 +343,6 @@ def test_dequeue_next_across_roots_accept_entry_fn_skips_other_engine_entries(
     )
 
     assert result == (crest_root, crest_entry)
-
-    # Unlabeled entries stay claimable (malformed/legacy rows are not stranded).
-    unlabeled = _entry("q_bare", priority=1)
-    assert worker_common.dequeue_next_across_roots(
-        (orca_root, crest_root),
-        list_queue_fn=lambda root: {orca_root: [unlabeled], crest_root: []}.get(root, []),
-        dequeue_next_fn=lambda root: unlabeled,
-        accept_entry_fn=lambda entry: getattr(entry, "app_name", "") in ("", "orca_auto_crest"),
-    ) == (orca_root, unlabeled)
 
 
 def test_dequeue_next_across_roots_keeps_root_fifo_when_the_clock_steps_backwards(
@@ -1360,18 +1336,20 @@ def test_pid_helpers_handle_alive_missing_and_stale_pids(
     monkeypatch.setattr(process_helpers.os, "kill", lambda _pid, _signal: None)
     assert worker_common.pid_is_alive(123) is True
 
-    pid_path = tmp_path / "worker.pid"
-    pid_path.write_text("123\n", encoding="utf-8")
-    assert process_helpers.read_live_pid_file(pid_path) == 123
-
     json_pid_path = tmp_path / "json-worker.pid"
-    json_pid_path.write_text(json.dumps({"pid": 123, "process_start_ticks": 111}), encoding="utf-8")
+    boot_id = process_helpers.process_utils.linux_boot_id()
+    assert boot_id is not None
+    json_pid_path.write_text(
+        json.dumps({"pid": 123, "process_start_ticks": 111, "boot_id": boot_id}),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(process_helpers, "_process_start_ticks", lambda _pid: 111)
     assert process_helpers.read_live_pid_file(json_pid_path) == 123
 
     reused_pid_path = tmp_path / "reused-worker.pid"
     reused_pid_path.write_text(
-        json.dumps({"pid": 123, "process_start_ticks": 111}), encoding="utf-8"
+        json.dumps({"pid": 123, "process_start_ticks": 111, "boot_id": boot_id}),
+        encoding="utf-8",
     )
     monkeypatch.setattr(process_helpers, "_process_start_ticks", lambda _pid: 222)
     assert process_helpers.read_live_pid_file(reused_pid_path) is None
@@ -1383,8 +1361,8 @@ def test_pid_helpers_handle_alive_missing_and_stale_pids(
         lambda _pid, _signal: (_ for _ in ()).throw(OSError()),
     )
     assert worker_common.pid_is_alive(123) is False
-    assert process_helpers.read_live_pid_file(pid_path) is None
-    assert not pid_path.exists()
+    assert process_helpers.read_live_pid_file(json_pid_path) is None
+    assert not json_pid_path.exists()
 
     missing = tmp_path / "missing.pid"
     assert process_helpers.read_live_pid_file(missing) is None

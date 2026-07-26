@@ -743,7 +743,7 @@ def test_load_crest_artifact_contract_uses_index_target_without_organized_ref(
     assert contract.retained_conformer_paths == (str(conformer.resolve()),)
 
 
-def test_load_crest_artifact_contract_rejects_relocated_legacy_paths(
+def test_load_crest_artifact_contract_rejects_relocated_unbound_paths(
     tmp_path: Path,
 ) -> None:
     job_dir = tmp_path / "crest_remap"

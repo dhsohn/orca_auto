@@ -105,19 +105,18 @@ def _save_slots(root: Path, slots: list[AdmissionSlot]) -> None:
 
 def _process_identity_alive(
     pid: int,
-    expected_ticks: int | None,
-    expected_boot_id: str | None = None,
+    expected_ticks: int,
+    expected_boot_id: str,
 ) -> bool:
     if pid <= 0:
         return False
-    if expected_boot_id is not None:
-        observed_boot_id = _linux_boot_id()
-        if observed_boot_id is None:
-            # An unreadable boot identity is ambiguous. Keep the slot rather
-            # than declaring its owner dead and initiating engine recovery.
-            return True
-        if observed_boot_id != expected_boot_id:
-            return False
+    observed_boot_id = _linux_boot_id()
+    if observed_boot_id is None:
+        # An unreadable boot identity is ambiguous. Keep the slot rather than
+        # declaring its owner dead and initiating engine recovery.
+        return True
+    if observed_boot_id != expected_boot_id:
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -126,8 +125,6 @@ def _process_identity_alive(
         pass
     except OSError as exc:
         return exc.errno != errno.ESRCH
-    if expected_ticks is None:
-        return True
     observed = _process_start_ticks(pid)
     if observed is None:
         # A live PID whose /proc identity is temporarily unreadable is
@@ -138,7 +135,7 @@ def _process_identity_alive(
 
 def _inactive_engine_process_state(value: str) -> str:
     state = str(value or "").strip().lower()
-    if state not in {"", "pending", "idle"}:
+    if state not in {"pending", "idle"}:
         raise ValueError(
             "Engine process state can be made active only with set_slot_engine_process"
         )
@@ -199,15 +196,9 @@ def _slot_from_reservation_request(
         raise ValueError("Admission slot owner PID must be a positive integer")
     engine_process_state = _inactive_engine_process_state(request.engine_process_state)
     owner_start_ticks = _process_start_ticks(resolved_owner_pid)
-    # Start ticks are scoped to one Linux boot even for generic admission
-    # owners. Persist the boot ID whenever it is available so a stale slot
-    # cannot be mistaken for a coincidentally matching PID/tick pair after a
-    # reboot. Managed slots require the full identity because it also fences
-    # process-group recovery; generic slots retain legacy behavior when procfs
-    # does not expose a boot ID.
     owner_boot_id = _linux_boot_id()
-    if engine_process_state and (owner_start_ticks is None or owner_boot_id is None):
-        raise ValueError("Cannot verify managed admission slot owner process identity")
+    if owner_start_ticks is None or owner_boot_id is None:
+        raise ValueError("Cannot verify admission slot owner process identity")
     return AdmissionSlot(
         token=token,
         owner_pid=resolved_owner_pid,
@@ -240,18 +231,13 @@ def _activated_slot(slot: AdmissionSlot, update: AdmissionSlotActivation) -> Adm
         slot,
         update.engine_process_state,
     )
-    if engine_process_state and not slot.engine_process_state:
-        # This update opts an existing generic slot into managed engine
-        # signalling. Establish a fresh boot-scoped owner identity now rather
-        # than inheriting a legacy, boot-ambiguous start tick.
-        owner_start_ticks = _process_start_ticks(resolved_owner_pid)
-        owner_boot_id = _linux_boot_id()
-    elif resolved_owner_pid == slot.owner_pid:
+    owner_boot_id: str | None
+    if resolved_owner_pid == slot.owner_pid:
         owner_boot_id = slot.owner_boot_id
     else:
         owner_boot_id = _linux_boot_id()
-    if engine_process_state and (owner_start_ticks is None or owner_boot_id is None):
-        raise ValueError("Cannot verify managed admission slot owner process identity")
+    if owner_start_ticks is None or owner_boot_id is None:
+        raise ValueError("Cannot verify admission slot owner process identity")
     return replace(
         slot,
         state=update.state.strip() or slot.state or "active",
@@ -286,15 +272,13 @@ def _metadata_updated_slot(
         slot,
         update.engine_process_state,
     )
-    if engine_process_state and not slot.engine_process_state:
-        owner_start_ticks = _process_start_ticks(resolved_owner_pid)
-        owner_boot_id = _linux_boot_id()
-    elif resolved_owner_pid == slot.owner_pid:
+    owner_boot_id: str | None
+    if resolved_owner_pid == slot.owner_pid:
         owner_boot_id = slot.owner_boot_id
     else:
         owner_boot_id = _linux_boot_id()
-    if engine_process_state and (owner_start_ticks is None or owner_boot_id is None):
-        raise ValueError("Cannot verify managed admission slot owner process identity")
+    if owner_start_ticks is None or owner_boot_id is None:
+        raise ValueError("Cannot verify admission slot owner process identity")
     return replace(
         slot,
         state=slot.state if update.state is None else update.state.strip() or slot.state,
@@ -436,8 +420,7 @@ def read_active_slot_count(root: str | Path) -> int:
     Passive observers need the same conservative liveness semantics as
     :func:`list_slots`, but must not prune or rewrite durable worker state.
     Pending and active engine-process records therefore remain counted until
-    the explicit recovery path resolves them, while provably dead generic
-    owners are excluded from the observed count.
+    the explicit recovery path resolves them.
     """
 
     store = AdmissionStore.for_root(root)
@@ -464,7 +447,7 @@ def reserve_slot(
     work_dir: str | Path = "",
     queue_id: str = "",
     owner_pid: int | None = None,
-    engine_process_state: str = "",
+    engine_process_state: str = "idle",
 ) -> str | None:
     return reserve_slot_from_request(
         root,

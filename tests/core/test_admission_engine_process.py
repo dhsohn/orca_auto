@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import multiprocessing
 import signal
 from dataclasses import replace
@@ -17,11 +16,6 @@ from orca_auto.core.queue.cancellable import run_cancellable_engine_process
 from orca_auto.core.queue.engine.child import (
     ChildWorkerEntrypointJob,
     await_parent_admission_handoff,
-)
-from orca_auto.orca import execution as run_inp_execution
-from orca_auto.orca.orca_process import (
-    OrcaProcessRecordCorruptError,
-    OrcaProcessRecoveryError,
 )
 from orca_auto.orca.orca_runner import OrcaRunner
 
@@ -69,14 +63,6 @@ def _recover_absent_group(
         results.put(("error", repr(exc)))
     else:
         results.put(("ok", recovered))
-
-
-def test_boot_identity_fields_preserve_legacy_admission_slot_positionals() -> None:
-    slot = store.AdmissionSlot("slot", 1, 2, "source", "acquired", "legacy-app")
-
-    assert slot.app_name == "legacy-app"
-    assert slot.owner_boot_id is None
-    assert slot.engine_process_boot_id is None
 
 
 def test_engine_slot_state_machine_and_release_guards(
@@ -438,85 +424,6 @@ def test_cross_boot_pending_cas_retains_concurrent_replacement(
     assert slot.engine_process_state == "pending"
 
 
-def test_active_recovery_rejects_bootless_legacy_identity_without_signalling(
-    tmp_path: Path,
-) -> None:
-    payload = {
-        "token": "legacy-slot",
-        "owner_pid": 101,
-        "process_start_ticks": 1001,
-        "source": "test-engine",
-        "acquired_at": "2026-07-10T00:00:00+00:00",
-        "engine_process_state": "active",
-        "engine_pid": 202,
-        "engine_pgid": 202,
-        "engine_process_start_ticks": 2002,
-    }
-    (tmp_path / store.ADMISSION_FILE_NAME).write_text(
-        json.dumps([payload]),
-        encoding="utf-8",
-    )
-    signals: list[int] = []
-
-    def killpg(_pgid: int, signum: int) -> None:
-        if signum != 0:
-            signals.append(signum)
-
-    with pytest.raises(engine_process.EngineProcessRecordError, match="boot-scoped"):
-        engine_process.recover_slot_engine_process(
-            tmp_path,
-            "legacy-slot",
-            deps=engine_process.EngineProcessRecoveryDeps(
-                killpg=killpg,
-                kill=lambda *_args: pytest.fail("legacy PID must not be probed"),
-                process_start_ticks=lambda _pid: pytest.fail("legacy ticks must not be read"),
-            ),
-        )
-
-    assert signals == []
-    assert admission.get_slot(tmp_path, "legacy-slot") is not None
-
-
-def test_legacy_absent_group_clear_does_not_delete_boot_scoped_replacement(
-    tmp_path: Path,
-) -> None:
-    payload = {
-        "token": "legacy-slot",
-        "owner_pid": 101,
-        "process_start_ticks": 1001,
-        "source": "test-engine",
-        "acquired_at": "2026-07-10T00:00:00+00:00",
-        "engine_process_state": "active",
-        "engine_pid": 202,
-        "engine_pgid": 202,
-        "engine_process_start_ticks": 2002,
-    }
-    path = tmp_path / store.ADMISSION_FILE_NAME
-    path.write_text(json.dumps([payload]), encoding="utf-8")
-
-    def replace_then_report_absent(_pgid: int, signum: int) -> None:
-        assert signum == 0
-        replacement = dict(payload)
-        replacement["owner_boot_id"] = "current-boot"
-        replacement["engine_process_boot_id"] = "current-boot"
-        path.write_text(json.dumps([replacement]), encoding="utf-8")
-        raise ProcessLookupError
-
-    with pytest.raises(engine_process.EngineProcessRecordError, match="changed while clearing"):
-        engine_process.recover_slot_engine_process(
-            tmp_path,
-            "legacy-slot",
-            deps=engine_process.EngineProcessRecoveryDeps(
-                killpg=replace_then_report_absent,
-                secure_signal=lambda *_args: pytest.fail("absent group must not be signalled"),
-            ),
-        )
-
-    slot = admission.get_slot(tmp_path, "legacy-slot")
-    assert slot is not None
-    assert slot.engine_process_boot_id == "current-boot"
-
-
 def test_global_recovery_handles_active_before_retaining_dead_pending(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -812,50 +719,6 @@ def test_parent_handoff_waits_until_slot_owner_matches_child(
         sleep_fn=sleeps.append,
     )
     assert sleeps == [0.01]
-
-
-def test_unsafe_legacy_recovery_error_is_not_converted_to_exit_code(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    released: list[tuple[Path, str | None]] = []
-    context = SimpleNamespace(
-        selected_inp=tmp_path / "job.inp",
-        admission_root=tmp_path,
-        reservation_token="slot",
-    )
-    monkeypatch.setattr(
-        run_inp_execution,
-        "resolve_execution_context",
-        lambda *_args, **_kwargs: context,
-    )
-    monkeypatch.setattr(
-        run_inp_execution,
-        "execute_locked_run",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            OrcaProcessRecordCorruptError("unsafe recovery")
-        ),
-    )
-    monkeypatch.setattr(
-        run_inp_execution,
-        "_release_reservation_if_needed",
-        lambda root, token: released.append((root, token)),
-    )
-
-    with pytest.raises(OrcaProcessRecoveryError, match="unsafe recovery"):
-        run_inp_execution.execute_orca_run(
-            SimpleNamespace(),
-            runner_cls=OrcaRunner,
-            cfg=None,
-            reaction_dir=None,
-            selected_inp=None,
-            reservation_token=None,
-            admission_app_name=None,
-            admission_task_id=None,
-            logger=logging.getLogger("test.unsafe_legacy_recovery"),
-        )
-
-    assert released == []
 
 
 def test_global_dead_owner_recovery_escalates_term_to_kill(

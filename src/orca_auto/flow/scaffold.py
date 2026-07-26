@@ -87,7 +87,7 @@ def _manifest(workflow_type: str, crest_mode: str) -> str:
                 "#   notopo: true",
                 "#   nocbonds: true",
                 "# Optional CREST sampling knobs (native-safe; a bad value fails the job):",
-                "#   mdlen: 1.0     # MD length in ps (real; alias: len)",
+                "#   mdlen: 1.0     # MD length in ps (real)",
                 "#   wscal: 1.0     # ellipsoid wall-potential scaling (real)",
                 "#   tstep: 5.0     # MD time step in fs (positive real; 0.001..2500)",
                 "#   mddump: 100    # trajectory dump step (positive 32-bit integer)",
@@ -131,7 +131,7 @@ def _manifest(workflow_type: str, crest_mode: str) -> str:
                 "#   notopo: true",
                 "#   nocbonds: true",
                 "# Optional CREST sampling knobs (native-safe; a bad value fails the job):",
-                "#   mdlen: 1.0     # MD length in ps (real; alias: len)",
+                "#   mdlen: 1.0     # MD length in ps (real)",
                 "#   wscal: 1.0     # ellipsoid wall-potential scaling (real)",
                 "#   tstep: 5.0     # MD time step in fs (positive real; 0.001..2500)",
                 "#   mddump: 100    # trajectory dump step (positive 32-bit integer)",
@@ -225,7 +225,7 @@ def _readme(root: Path, workflow_type: str) -> str:
             "- Change `crest_mode: standard` to `crest_mode: nci` when you want NCI-mode CREST stages.",
             "- Put CREST overrides under `crest:` in `flow.yaml`, for example "
             "`gfn: ff`, `noreftopo: true`, `notopo: true`, or `nocbonds: true` "
-            "when topology filtering is too strict. Sampling knobs `mdlen`/`len`, "
+            "when topology filtering is too strict. Sampling knobs `mdlen`, "
             "`wscal`, `tstep`, `mddump`, `shake`, `norotmd`, and `cross`/`nocross` "
             "are also accepted with finite/native-safe values and exact boolean keys "
             "(a bad value fails the job).",
@@ -239,7 +239,7 @@ def _readme(root: Path, workflow_type: str) -> str:
             "- Change `crest_mode: standard` to `crest_mode: nci` when you want NCI-mode CREST stages.",
             "- Put CREST overrides under `crest:` in `flow.yaml`, for example "
             "`gfn: ff`, `noreftopo: true`, `notopo: true`, or `nocbonds: true` "
-            "when topology filtering is too strict. Sampling knobs `mdlen`/`len`, "
+            "when topology filtering is too strict. Sampling knobs `mdlen`, "
             "`wscal`, `tstep`, `mddump`, `shake`, `norotmd`, and `cross`/`nocross` "
             "are also accepted with finite/native-safe values and exact boolean keys "
             "(a bad value fails the job).",

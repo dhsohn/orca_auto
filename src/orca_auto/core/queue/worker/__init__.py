@@ -32,7 +32,6 @@ from .admission import (
     queue_entry_by_id,
     reserve_dequeued_entry,
     reserve_engine_queue_worker_slot,
-    reserve_queue_worker_slot,
     resolve_admission_limit,
     resolve_admission_root,
 )
@@ -88,7 +87,6 @@ __all__ = [
     "request_job_cancellation",
     "reserve_dequeued_entry",
     "reserve_engine_queue_worker_slot",
-    "reserve_queue_worker_slot",
     "resolve_admission_limit",
     "resolve_admission_root",
     "shutdown_child_process_with_grace",

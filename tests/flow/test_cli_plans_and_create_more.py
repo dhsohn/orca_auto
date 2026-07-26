@@ -762,7 +762,6 @@ def test_cmd_run_dir_for_reaction_uses_nested_engine_sections(
                 "  nocbonds: true",
                 "xtb:",
                 "  gfn: 1",
-                "  namespace: rxn_case",
                 "  xcontrol_file: path.inp",
                 "  endpoint_pairing:",
                 "    enabled: true",
@@ -830,7 +829,6 @@ def test_cmd_run_dir_for_reaction_uses_nested_engine_sections(
     }
     assert captured["xtb_job_manifest"] == {
         "gfn": 1,
-        "namespace": "rxn_case",
         "xcontrol_file": str((workflow_dir / "path.inp").resolve()),
     }
     assert captured["endpoint_pairing"] == {

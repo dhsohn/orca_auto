@@ -1,9 +1,4 @@
-"""Resolve a :class:`MessageChannel` from a config file on disk.
-
-The ``messenger:`` block selects the provider and owns all adapter settings.
-A leftover top-level ``telegram:`` block fails closed because Telegram is no
-longer supported.
-"""
+"""Resolve a :class:`MessageChannel` from a config file on disk."""
 
 from __future__ import annotations
 

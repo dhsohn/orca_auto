@@ -52,13 +52,10 @@ def _orca_publication_job_dir_issue(queue_root: Path, entry: QueueEntry) -> str:
     metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
     snapshot = metadata.get("execution_snapshot")
     if not isinstance(snapshot, Mapping):
-        # Legacy rows predate the bound directory identity. Keep their existing
-        # repair behavior; their immutable input verification remains the final
-        # execution boundary.
-        return ""
+        return "execution_snapshot_missing"
     identity = snapshot.get("job_dir_identity")
     if identity is None:
-        return ""
+        return "job_dir_identity_missing"
     if not isinstance(identity, Mapping):
         return "job_dir_identity_invalid"
     try:

@@ -235,12 +235,12 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
 
 def test_orca_worker_rejects_snapshotless_persisted_generation(tmp_path: Path) -> None:
     queue_root = tmp_path / "queue"
-    reaction_dir = queue_root / "legacy-rxn"
+    reaction_dir = queue_root / "snapshotless-rxn"
     reaction_dir.mkdir(parents=True)
     entry = QueueEntry(
-        queue_id="queue-legacy",
+        queue_id="queue-snapshotless",
         app_name="orca_auto_orca",
-        task_id="task-legacy",
+        task_id="task-snapshotless",
         task_kind="orca_run_inp",
         engine="orca",
         status=QueueStatus.RUNNING,
@@ -257,7 +257,7 @@ def test_orca_worker_rejects_snapshotless_persisted_generation(tmp_path: Path) -
             cfg,
             entry,
             worker_config_path="/tmp/config.yaml",
-            admission_token="slot-legacy",
+            admission_token="slot-snapshotless",
         )
 
 

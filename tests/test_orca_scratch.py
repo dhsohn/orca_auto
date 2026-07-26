@@ -57,8 +57,6 @@ def test_scratch_publishes_surviving_results_once_and_omits_tmp(
     (workspace.path / "sp.property.txt").write_text("properties\n")
     (workspace.path / "sp.EIJ.tmp").write_bytes(b"x" * 4096)
     (workspace.path / "sp.cpscfdata.tmp.7").write_bytes(b"y" * 2048)
-    (workspace.path / "orca.process.json").write_text("{}\n", encoding="utf-8")
-    (workspace.path / ".orca.process.lock").write_text("", encoding="utf-8")
 
     publication = workspace.publish()
 
@@ -76,8 +74,6 @@ def test_scratch_publishes_surviving_results_once_and_omits_tmp(
     assert selected.with_name("input.xyz").read_bytes() == original_geometry
     assert selected.with_suffix(".gbw").read_bytes() == b"checkpoint"
     assert not selected.with_name("sp.EIJ.tmp").exists()
-    assert not selected.with_name("orca.process.json").exists()
-    assert not selected.with_name(".orca.process.lock").exists()
 
     workspace.cleanup()
     assert not workspace.path.exists()
@@ -245,8 +241,8 @@ def test_alive_owner_with_unreadable_start_ticks_is_preserved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(scratch_mod.process_utils, "linux_boot_id", lambda **_kwargs: "boot")
-    monkeypatch.setattr(scratch_mod.process_lock, "is_process_alive", lambda _pid: True)
-    monkeypatch.setattr(scratch_mod.process_lock, "process_start_ticks", lambda _pid: None)
+    monkeypatch.setattr(scratch_mod.process_utils, "is_process_alive", lambda _pid: True)
+    monkeypatch.setattr(scratch_mod.process_utils, "process_start_ticks", lambda _pid: None)
 
     assert scratch_mod._manifest_owner_is_live(
         {

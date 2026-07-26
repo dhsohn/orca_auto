@@ -1,5 +1,4 @@
 import json
-import os
 import tempfile
 import unittest
 from dataclasses import replace
@@ -8,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from orca_auto.core.queue import store as queue_store
+from orca_auto.core.queue.processes import write_worker_pid_file
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.engine import ENGINE_DEFINITION
 from orca_auto.orca.queue.adapter import (
@@ -693,7 +693,7 @@ class TestQueueStore(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        (self.root / "queue_worker.pid").write_text(str(os.getpid()), encoding="utf-8")
+        write_worker_pid_file(self.root)
 
         changed = reconcile_orphaned_running_entries(self.root)
 

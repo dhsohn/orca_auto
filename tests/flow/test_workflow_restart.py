@@ -701,7 +701,7 @@ def test_restart_failed_workflow_rejects_active_sibling_before_cancellation_fini
     ("directory_name", "workflow_id", "error_text"),
     [
         ("TS8(wf)", "TS8(wf)", "cannot contain parentheses"),
-        ("TS8_wf", "TS8(wf)", "does not match persisted workflow_id"),
+        ("TS8_renamed", "TS8_original", "does not match persisted workflow_id"),
     ],
 )
 def test_restart_rejects_parenthesized_or_renamed_workflow_without_mutation(
@@ -747,7 +747,7 @@ def test_flow_run_dir_reports_renamed_existing_workflow_without_restarting(
     _write_workflow(
         workspace,
         {
-            "workflow_id": "TS8(wf)",
+            "workflow_id": "TS8_original",
             "template_name": "reaction_ts_search",
             "status": "failed",
             "stages": [],
@@ -768,7 +768,7 @@ def test_flow_run_dir_reports_renamed_existing_workflow_without_restarting(
     captured = capsys.readouterr()
     assert rc == 1
     assert captured.out == ""
-    assert "does not match persisted workflow_id 'TS8(wf)'" in captured.err
+    assert "does not match persisted workflow_id 'TS8_original'" in captured.err
     assert "Renaming an existing workflow directory is not supported" in captured.err
     assert (workspace / "workflow.json").read_bytes() == workflow_before
     assert not (root / "workflow_registry.json").exists()

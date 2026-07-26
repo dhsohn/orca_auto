@@ -13,11 +13,13 @@ from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
     QUEUE_RECORD_SYNC_OWNER_PID_KEY,
     QUEUE_RECORD_SYNC_OWNER_START_KEY,
     QUEUE_RECORD_SYNC_TOKEN_KEY,
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
+    queue_record_sync_metadata,
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import now_utc_iso, timestamped_token
@@ -277,6 +279,14 @@ def enqueue(
             extra=metadata,
         )
         queue_metadata["worker_log"] = str(worker_log_path(allowed_root, queue_id))
+        if QUEUE_RECORD_SYNC_KEY not in queue_metadata:
+            queue_metadata.update(
+                queue_record_sync_metadata(
+                    QUEUE_RECORD_SYNC_COMPLETE,
+                    token=queue_id,
+                    owner_pid=0,
+                )
+            )
         entry = QueueEntry(
             queue_id=queue_id,
             app_name=QUEUE_APP_NAME,

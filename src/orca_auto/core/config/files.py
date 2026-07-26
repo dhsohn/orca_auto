@@ -298,7 +298,6 @@ def _validate_optional_text_field(
 def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
     """Validate the complete public shared-config shape before any defaults apply."""
 
-    # Fail closed on a leftover top-level Telegram block before any other validation.
     messenger_raw = messenger_mapping_from_root(raw)
     _reject_unknown_config_fields(
         raw,
@@ -421,33 +420,14 @@ def load_required_shared_config_mapping(
 
 
 def messenger_mapping_from_root(raw: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return the canonical ``messenger`` mapping.
-
-    ``messenger`` is the only supported location. A leftover top-level
-    ``telegram`` block fails closed because Telegram is no longer supported,
-    instead of being silently ignored, which would silently disable
-    notifications.
-    """
+    """Return the configured ``messenger`` mapping."""
     root = raw if isinstance(raw, Mapping) else {}
-    if "telegram" in root:
-        raise ValueError(
-            "Telegram messaging is no longer supported; "
-            "remove the top-level 'telegram' config block."
-        )
     if "messenger" not in root:
         return {}
     messenger_raw = root.get("messenger")
     if isinstance(messenger_raw, Mapping):
         return dict(messenger_raw)
     raise ValueError("messenger section must be a mapping when configured.")
-
-
-def config_with_canonical_messenger(raw: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a shallow config copy whose shared messenger block is canonical."""
-    resolved = dict(raw)
-    if "messenger" in raw or "telegram" in raw:
-        resolved["messenger"] = messenger_mapping_from_root(raw)
-    return resolved
 
 
 def resolve_configured_path(value: Any) -> Path | None:

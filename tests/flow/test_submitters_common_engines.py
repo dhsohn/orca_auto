@@ -14,6 +14,7 @@ import pytest
 from orca_auto import cli_workers as cli_worker_specs
 from orca_auto.core.queue import (
     QUEUE_RECORD_SYNC_ABORTED,
+    QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
     DuplicateQueueEntryError,
     QueueEntry,
@@ -186,26 +187,6 @@ def test_engine_runtime_paths_rejects_invalid_runs_root_before_resolving(
     config_path.write_text("runs_root: '/mnt/c/runs'\n", encoding="utf-8")
     with pytest.raises(ValueError, match="Linux path"):
         engine_runtime.engine_runtime_paths(str(config_path), engine="xtb")
-
-
-def test_engine_runtime_paths_ignores_legacy_root_keys(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "workflow:",
-                "  root: /tmp/wf",
-                "orca:",
-                "  runtime:",
-                "    allowed_root: /tmp/runs",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="Unknown workflow config fields are not supported"):
-        engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
 
 
 @pytest.mark.parametrize(
@@ -628,7 +609,14 @@ def test_active_replay_cleans_only_new_unowned_generation_snapshot(tmp_path: Pat
         task_kind=submission.task_kind,
         engine=submission.engine,
         priority=submission.priority,
-        metadata={"job_dir": str(job_dir)},
+        metadata={
+            "job_dir": str(job_dir),
+            **queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_COMPLETE,
+                token="existing-publication",
+                owner_pid=0,
+            ),
+        },
     )
 
     result = _submit_with_enqueue(
@@ -1103,60 +1091,6 @@ def test_active_replay_quarantines_unknown_publication_marker(
         persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY]
         == "future_protocol_state"
     )
-
-
-def test_legacy_pending_entry_without_sync_marker_is_repaired(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    job_dir = (tmp_path / "job").resolve()
-    queue_root = tmp_path / "queue"
-    legacy = enqueue(
-        queue_root,
-        app_name="orca_auto_crest",
-        task_id="crest-legacy",
-        task_kind="crest_conformer_search",
-        engine="crest",
-        metadata={"job_dir": str(job_dir), "mode": "nci"},
-    )
-    record_calls: list[tuple[str, bool]] = []
-
-    monkeypatch.setattr(crest_submitter, "load_config", lambda _path: object())
-    monkeypatch.setattr(crest_submitter, "resolve_job_dir", lambda *_args: job_dir)
-    monkeypatch.setattr(crest_submitter, "load_job_manifest", lambda _job_dir: {})
-    monkeypatch.setattr(
-        crest_submitter,
-        "build_submission",
-        lambda _cfg, _job_dir, _manifest, args: SimpleNamespace(
-            queue_root=queue_root,
-            app_name="orca_auto_crest",
-            task_id="crest-new",
-            task_kind="crest_conformer_search",
-            engine="crest",
-            priority=int(args.priority),
-            metadata={"job_dir": str(job_dir), "mode": "standard"},
-            context={},
-        ),
-    )
-    monkeypatch.setattr(
-        crest_submitter,
-        "record_queued",
-        lambda _cfg, submission, _entry: record_calls.append(
-            (
-                submission.task_id,
-                bool(submission.context.get("suppress_queued_notification", False)),
-            )
-        ),
-    )
-
-    replay = crest_submitter.submit_job_dir(
-        job_dir=str(job_dir), priority=8, config_path="/tmp/config.yaml"
-    )
-
-    assert replay["job_id"] == legacy.task_id
-    assert record_calls == [("crest-legacy", True)]
-    repaired = list_queue(queue_root)[0]
-    assert repaired.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
 
 
 def test_active_cancellation_returns_blocked_until_terminal(

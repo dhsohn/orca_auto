@@ -13,7 +13,6 @@ from orca_auto.core.config import (
 )
 from orca_auto.core.config import engines as _config_engines
 from orca_auto.core.config.files import (
-    config_with_canonical_messenger,
     default_shared_admission_root,
     engine_config_mapping,
     load_required_shared_config_mapping,
@@ -140,7 +139,6 @@ def load_config(config_path: str) -> AppConfig:
     raw = _load_raw_config(path)
     runs_root_raw = _config_engines.as_nonempty_str(runs_root_from_mapping(raw), "")
     runs_root = validated_runs_root_text(runs_root_raw) if runs_root_raw else ""
-    raw = config_with_canonical_messenger(raw)
     raw = engine_config_mapping(raw, "orca", inherit_keys=("resources", "messenger", "scheduler"))
     scheduler_raw = _section_mapping(raw, "scheduler")
     runtime_raw = _section_mapping(raw, "runtime")

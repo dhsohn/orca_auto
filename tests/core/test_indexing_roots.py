@@ -61,15 +61,13 @@ def test_runtime_roots_for_cfg_deduplicates_workflow_engine_roots(
     )
 
 
-def test_runtime_roots_for_cfg_includes_conformer_and_reaction_orca_roots(
+def test_runtime_roots_for_cfg_includes_canonical_orca_root(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
     workflow_root = tmp_path / "workflows"
     workspace = workflow_root / "wf-orca"
-    conformer_orca_root = workspace / "02_orca"
     reaction_orca_root = workspace / "03_orca"
-    conformer_orca_root.mkdir(parents=True)
     reaction_orca_root.mkdir(parents=True)
 
     monkeypatch.setattr(
@@ -84,7 +82,6 @@ def test_runtime_roots_for_cfg_includes_conformer_and_reaction_orca_roots(
     ) == (
         (tmp_path / "fallback").resolve(),
         reaction_orca_root.resolve(),
-        conformer_orca_root.resolve(),
     )
 
 

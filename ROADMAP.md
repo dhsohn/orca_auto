@@ -29,7 +29,7 @@ expectations belong in [docs/VALIDATION.md](docs/VALIDATION.md).
 The canonical contract list lives in
 [docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md), which is two-tiered: a small
 committed **Stable Core** and a larger **Experimental** surface that is
-documented but may change or be removed without a migration path before 1.0.
+documented but may change or be removed before 1.0.
 
 The Stable Core — the only surface that changes cautiously, with tests, docs, and
 release notes — is:
@@ -83,14 +83,14 @@ and CREST stages.
 orca_auto should only approach a 1.0 label once its everyday public contracts are
 boring in the best sense: predictable, documented, and recoverable.
 
-- Define a backward-compatibility policy for CLI flags, config keys, persisted
+- Keep one canonical contract for CLI flags, config keys, persisted
   state/report fields, and workflow layout.
 - Keep the import-layer contract enforced by CI and document any intentional
   plugin-style exceptions.
 - Decide which workflow templates are first-class public features.
 - Require real-engine acceptance evidence for changes to ORCA invocation,
   restart/resume, resource rewriting, or output classification.
-- Keep release notes user-centered: motivation, behavior changes, migration
+- Keep release notes user-centered: motivation, behavior changes, cutover
   impact, and verification evidence.
 - Reassess whether PyPI packaging, archived releases, or DOI registration are
   useful for users. These are optional project-distribution choices, not current

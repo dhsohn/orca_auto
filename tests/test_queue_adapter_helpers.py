@@ -7,8 +7,11 @@ from unittest.mock import patch
 
 import pytest
 
-from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue import store as queue_store
+from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_COMPLETE,
+    queue_record_sync_metadata,
+)
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import entries as queue_entries
@@ -41,13 +44,18 @@ def _entry(
         "status": status,
         "priority": priority,
         "enqueued_at": "2026-03-10T00:00:00+00:00",
-        "started_at": started_at,
-        "finished_at": finished_at,
+        "started_at": started_at or "",
+        "finished_at": finished_at or "",
         "cancel_requested": cancel_requested,
-        "error": error,
+        "error": error or "",
         "metadata": {
             "reaction_dir": reaction_dir,
             "force": False,
+            **queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_COMPLETE,
+                token=queue_id,
+                owner_pid=0,
+            ),
         },
     }
     if run_id is not None:
@@ -105,6 +113,11 @@ def _foreign_entry(
             "job_type": "sp",
             "job_dir": reaction_dir,
             "reaction_dir": reaction_dir,
+            **queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_COMPLETE,
+                token=queue_id,
+                owner_pid=0,
+            ),
         },
     )
 
@@ -122,24 +135,31 @@ def test_load_entries_cover_edge_cases(tmp_path: Path) -> None:
         _load_entries(tmp_path)
 
     queue_path.write_text(
-        json.dumps([{"queue_id": "q_ok", "status": "pending"}, "bad", []]),
+        json.dumps(
+            [
+                {
+                    "queue_id": "q_ok",
+                    "app_name": "orca_auto_orca",
+                    "task_id": "task_ok",
+                    "task_kind": "orca_run_inp",
+                    "engine": "orca",
+                    "status": "pending",
+                    "priority": 10,
+                    "enqueued_at": "2026-03-10T00:00:00+00:00",
+                    "started_at": "",
+                    "finished_at": "",
+                    "cancel_requested": False,
+                    "error": "",
+                    "metadata": {},
+                },
+                "bad",
+                [],
+            ]
+        ),
         encoding="utf-8",
     )
     with pytest.raises(queue_store.QueueStoreCorruptError, match="must be a JSON object"):
         _load_entries(tmp_path)
-
-    queue_path.write_text(
-        json.dumps([{"queue_id": "q_ok", "status": "pending"}]),
-        encoding="utf-8",
-    )
-    [entry] = _load_entries(tmp_path)
-    assert entry.queue_id == "q_ok"
-    assert entry.status == QueueStatus.PENDING
-    assert entry.app_name == ""
-    assert entry.task_id == ""
-    assert entry.task_kind == ""
-    assert entry.engine == ""
-    assert not entry_matches_engine_identity(entry, "orca")
 
 
 def test_enqueue_overwrites_worker_log_metadata_with_safe_queue_log(tmp_path: Path) -> None:
@@ -275,38 +295,6 @@ def test_orca_queue_view_and_mutations_ignore_foreign_rows(tmp_path: Path) -> No
     assert created.engine == "orca"
 
 
-def test_list_queue_quarantines_partial_entries_without_synthesizing_identity(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "queue_root"
-    root.mkdir()
-    _save_entries(
-        root,
-        [
-            queue_entries.entry_from_json_payload(
-                {
-                    "queue_id": "q_partial",
-                    "status": QueueStatus.PENDING.value,
-                    "metadata": {
-                        "reaction_dir": str(root / "rxn"),
-                        "force": False,
-                    },
-                }
-            ),
-        ],
-    )
-
-    [entry] = _load_entries(root)
-    assert entry.app_name == ""
-    assert entry.task_id == ""
-    assert entry.task_kind == ""
-    assert entry.engine == ""
-    assert not entry_matches_engine_identity(entry, "orca")
-    assert entry.metadata["reaction_dir"] == str(root / "rxn")
-    assert entry.metadata["force"] is False
-    assert queue_adapter.list_queue(root) == []
-
-
 def test_queue_entry_accessors_read_common_fields_from_metadata(tmp_path: Path) -> None:
     entry = queue_entries.entry_from_json_payload(
         {
@@ -317,6 +305,11 @@ def test_queue_entry_accessors_read_common_fields_from_metadata(tmp_path: Path) 
             "engine": "orca",
             "status": "PENDING",
             "priority": 7,
+            "enqueued_at": "2026-03-10T00:00:00+00:00",
+            "started_at": "",
+            "finished_at": "",
+            "cancel_requested": False,
+            "error": "",
             "metadata": {
                 "reaction_dir": str(tmp_path / "rxn"),
                 "force": True,
@@ -349,6 +342,12 @@ def test_save_entries_uses_core_queue_entry_as_storage_model(tmp_path: Path) -> 
                     "task_kind": "orca_run_inp",
                     "engine": "orca",
                     "status": QueueStatus.RUNNING.value,
+                    "priority": 10,
+                    "enqueued_at": "2026-03-10T00:00:00+00:00",
+                    "started_at": "2026-03-10T00:01:00+00:00",
+                    "finished_at": "",
+                    "cancel_requested": False,
+                    "error": "",
                     "metadata": {
                         "reaction_dir": str(root / "rxn"),
                         "force": True,
@@ -435,8 +434,8 @@ def test_reconcile_orphaned_running_entries_covers_state_terminal_paths_and_pend
     with (
         patch("orca_auto.orca.queue.orphans.read_worker_pid", return_value=None),
         patch(
-            "orca_auto.orca.queue.orphans.active_lock_pid",
-            return_value=None,
+            "orca_auto.orca.queue.orphans.run_lock_is_held",
+            return_value=False,
         ),
         patch(
             "orca_auto.orca.queue.orphans.load_state",
@@ -484,8 +483,8 @@ def test_reconcile_orphaned_running_entries_skips_blank_dirs_and_active_locks(
     with (
         patch("orca_auto.orca.queue.orphans.read_worker_pid", return_value=None),
         patch(
-            "orca_auto.orca.queue.orphans.active_lock_pid",
-            side_effect=lambda reaction_dir: 999 if reaction_dir == locked_dir else None,
+            "orca_auto.orca.queue.orphans.run_lock_is_held",
+            side_effect=lambda reaction_dir, **_kwargs: reaction_dir == locked_dir,
         ),
     ):
         changed = queue_orphans.reconcile_orphaned_running_entries(root)

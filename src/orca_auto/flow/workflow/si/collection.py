@@ -1178,8 +1178,8 @@ def collect_workflow_si_data(
         [entry for entry in stationary if id(entry.block) not in eligible_blocks],
         remaining_single_points,
     )
-    # Stage IDs in corrupt/legacy payloads are not guaranteed unique. The SiBlock
-    # identity is stable through dataclass replacement and keeps this merge 1:1.
+    # Corrupt payloads may repeat stage IDs. SiBlock identity is stable through
+    # dataclass replacement and keeps this merge 1:1.
     paired_by_block = {id(entry.block): entry for entry in (*eligible_paired, *ineligible_paired)}
     pre_dedup_ranked = [paired_by_block.get(id(entry.block), entry) for entry in stationary]
 
