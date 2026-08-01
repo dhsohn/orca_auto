@@ -35,6 +35,9 @@ def make_cfg(tmp_path: Path) -> SimpleNamespace:
             max_concurrent=2,
             admission_root=str(admission_root),
             admission_limit=2,
+            # A real runtime config always exposes these; the fake must too.
+            resolved_admission_root=str(admission_root),
+            resolved_admission_limit=2,
         ),
         resources=SimpleNamespace(max_cores_per_task=4, max_memory_gb_per_task=8),
         messenger=SimpleNamespace(discord=SimpleNamespace(bot_token="", default_channel_id="")),

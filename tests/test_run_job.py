@@ -136,6 +136,8 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
             admission_root=str(tmp_path / "admission"),
             admission_limit=1,
             max_concurrent=1,
+            resolved_admission_root=str(tmp_path / "admission"),
+            resolved_admission_limit=1,
         )
     )
     entry = QueueEntry(
@@ -337,6 +339,8 @@ def test_run_worker_child_job_finds_real_queue_entry_and_releases_slot(
             admission_root=str(admission_root),
             admission_limit=1,
             max_concurrent=1,
+            resolved_admission_root=str(admission_root),
+            resolved_admission_limit=1,
         )
     )
     calls: dict[str, Any] = {}
@@ -391,6 +395,8 @@ def test_run_worker_child_job_requeues_on_worker_shutdown(
             admission_root=str(admission_root),
             admission_limit=1,
             max_concurrent=1,
+            resolved_admission_root=str(admission_root),
+            resolved_admission_limit=1,
         )
     )
 
@@ -429,6 +435,8 @@ def test_run_worker_child_job_releases_slot_when_entry_not_running(
             admission_root=str(admission_root),
             admission_limit=1,
             max_concurrent=1,
+            resolved_admission_root=str(admission_root),
+            resolved_admission_limit=1,
         )
     )
 

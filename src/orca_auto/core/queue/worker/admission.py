@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from orca_auto.core.admission import reserve_slot
-from orca_auto.core.config.schema import resolved_admission_limit
 from orca_auto.core.engine_catalog import find_engine_catalog_entry
 
 from ..child.execution import find_queue_entry_by_id
@@ -24,22 +23,12 @@ def engine_queue_worker_source(engine: str) -> str:
 
 
 def resolve_admission_root(cfg: Any) -> str:
-    return str(
-        getattr(cfg.runtime, "resolved_admission_root", None)
-        or getattr(cfg.runtime, "admission_root", "")
-        or cfg.runtime.allowed_root
-    )
+    """Adapt the runtime's admission root to the callable the workers inject.
 
-
-def resolve_admission_limit(cfg: Any) -> int:
-    raw = getattr(cfg.runtime, "resolved_admission_limit", None)
-    if raw not in (None, "", 0):
-        return resolved_admission_limit(raw, 1)
-    raw = getattr(cfg.runtime, "admission_limit", None)
-    fallback = getattr(cfg.runtime, "max_concurrent", 1)
-    if raw in (None, "", 0):
-        raw = fallback
-    return resolved_admission_limit(raw, fallback)
+    The resolution itself belongs to the config: two engine worker modules pass
+    this function as a value, so a property alone cannot serve them.
+    """
+    return str(cfg.runtime.resolved_admission_root)
 
 
 def reserve_engine_queue_worker_slot(
@@ -60,7 +49,7 @@ def reserve_engine_queue_worker_slot(
         reservation_kwargs["engine_process_state"] = "idle"
     return reserve_slot_fn(
         resolve_admission_root(cfg),
-        resolve_admission_limit(cfg),
+        cfg.runtime.resolved_admission_limit,
         **reservation_kwargs,
     )
 
@@ -222,6 +211,5 @@ __all__ = [
     "queue_entry_by_id",
     "reserve_dequeued_entry",
     "reserve_engine_queue_worker_slot",
-    "resolve_admission_limit",
     "resolve_admission_root",
 ]
