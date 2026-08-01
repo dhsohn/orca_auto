@@ -379,14 +379,16 @@ def test_maybe_notify_journal_event_sends_message_and_swallows_channel_errors(
         tmp_path,
     )
 
-    assert len(sent_messages) == 2
+    # The opt-in above was widened to every event type, so every event sends —
+    # including the two stage events. Nothing overrides an explicit opt-in.
+    assert len(sent_messages) == 4
     status_fields = {
         item["name"]: item["value"]
         for item in render_discord_embed(sent_messages[0]).get("fields", [])
     }
     phase_fields = {
         item["name"]: item["value"]
-        for item in render_discord_embed(sent_messages[1]).get("fields", [])
+        for item in render_discord_embed(sent_messages[3]).get("fields", [])
     }
     assert status_fields["Workflow"] == "`wf_notify`"
     assert phase_fields["Phase"] == "`xTB`"
@@ -395,7 +397,7 @@ def test_maybe_notify_journal_event_sends_message_and_swallows_channel_errors(
         registry_notifications, "messenger_channel_from_env", lambda: FakeChannel(fail=True)
     )
     workflow_journal._maybe_notify_journal_event(event, tmp_path)
-    assert len(sent_messages) == 2
+    assert len(sent_messages) == 4
 
 
 def test_clear_terminal_workflow_registry_removes_only_terminal_rows(

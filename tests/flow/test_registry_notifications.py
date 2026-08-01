@@ -160,13 +160,6 @@ def test_severity_maps_from_event_type() -> None:
     )
 
 
-def test_should_suppress_stage_notification() -> None:
-    suppressed = _event(event_type="workflow_stage_completed", metadata={"engine": "crest"})
-    assert notifications.should_suppress_stage_notification(suppressed) is True
-    kept = _event(event_type="workflow_status_changed", metadata={"engine": "crest"})
-    assert notifications.should_suppress_stage_notification(kept) is False
-
-
 def test_workflow_event_renders_workspace_directory(tmp_path) -> None:
     """Workflow-scoped notifications show the workspace directory (the
     generation inside its scaffold), mirroring standalone ORCA's Directory

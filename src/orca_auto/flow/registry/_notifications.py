@@ -18,7 +18,7 @@ from orca_auto.core.messaging import (
 )
 from orca_auto.core.utils import coerce_mapping, normalize_text
 
-from ..workflow._phases import SUPPRESSED_STAGE_NOTIFICATION_ENGINES, WORKFLOW_PHASE_FINISHED_EVENT
+from ..workflow._phases import WORKFLOW_PHASE_FINISHED_EVENT
 from ..workflow.store import resolve_workflow_workspace
 
 DEFAULT_NOTIFICATION_EVENT_TYPES = frozenset(
@@ -360,15 +360,6 @@ def journal_event_message(event: dict[str, Any], workflow_root: str | Path) -> M
     return default_journal_event_message(context)
 
 
-def should_suppress_stage_notification(event: dict[str, Any]) -> bool:
-    event_type = normalize_text(event.get("event_type"))
-    engine = event_text(event, coerce_mapping(event.get("metadata")), "engine")
-    return (
-        event_type in STAGE_STATUS_EVENT_TYPES | STAGE_HANDOFF_EVENT_TYPES
-        and engine.lower() in SUPPRESSED_STAGE_NOTIFICATION_ENGINES
-    )
-
-
 __all__ = [
     "DEFAULT_NOTIFICATION_EVENT_TYPES",
     "STAGE_HANDOFF_EVENT_TYPES",
@@ -376,5 +367,4 @@ __all__ = [
     "journal_event_message",
     "journal_notification_enabled",
     "messenger_channel_from_env",
-    "should_suppress_stage_notification",
 ]

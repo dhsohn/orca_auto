@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from orca_auto.core.messaging import (
@@ -35,6 +36,7 @@ from orca_auto.core.utils import (
 )
 
 from ._phases import phase_snapshot
+from .report import count_xyz_frames
 
 LOGGER = logging.getLogger(__name__)
 
@@ -75,6 +77,24 @@ def _count_output_artifacts(stage: dict[str, Any]) -> int:
     )
 
 
+def _crest_conformer_count(stage: dict[str, Any]) -> int | None:
+    """Conformers CREST actually retained, or ``None`` when unreadable.
+
+    ``output_artifacts`` counts the named ensemble FILES that survived
+    validation, which is capped at four by the engine's candidate list — it is
+    not a conformer count. The ensemble file itself carries the real number.
+    """
+    for artifact in _coerce_sequence(stage.get("output_artifacts")):
+        if not isinstance(artifact, dict):
+            continue
+        if _normalize_text(artifact.get("kind")) != "crest_conformer":
+            continue
+        path_text = _normalize_text(artifact.get("path"))
+        if path_text.endswith("crest_conformers.xyz"):
+            return count_xyz_frames(Path(path_text))
+    return None
+
+
 def _xtb_candidate_count(stage: dict[str, Any]) -> int:
     metadata = _coerce_mapping(stage.get("metadata"))
     attempts = [
@@ -104,12 +124,13 @@ def _phase_stage_row(
     status = _normalize_text(snapshot_row.get("status")).lower() or "unknown"
     result = _normalize_text(snapshot_row.get("result")).lower() or STATUS_FAILED
     if phase_engine == "crest":
+        conformers = _crest_conformer_count(raw_stage)
         return _PhaseStageRow(
             stage_label=stage_label,
             result=result,
             metrics=(
                 ("Status", status),
-                ("Retained conformers", _count_output_artifacts(raw_stage)),
+                ("Conformers", "-" if conformers is None else conformers),
             ),
         )
     if phase_engine == "xtb":
