@@ -607,13 +607,16 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
   기능을 끄면 저장된 interaction stage를 retire합니다. 활성 config를 받기 전에는 복사해 둔
   durable input XYZ를 다시 읽어 완전 partition과 fragment별 전자상태도 재검증합니다.
 - SI publish는 workflow와 registry에 `si_publish_pending`, `si_publish_attempts`,
-  `si_publish_next_retry_at`, `si_publish_blocked`, generation, error metadata로 checkpoint됩니다.
-  SI writer의 일시적 실패는 30/60/120/240초 지수 backoff를 쓰고 5번째 실패 뒤 block합니다.
+  `si_publish_blocked`, generation, error metadata로 checkpoint됩니다.
+  pending 상태의 publication은 worker cycle마다 재시도하고 5번째 writer 실패 뒤 block합니다.
   결정적 충돌은 즉시 block합니다. writer 전 workflow/registry/report checkpoint 실패는 이 writer
   budget을 소모하지 않으며, 성공적으로 저장된 pending marker는 인프라 복구를 위해 즉시 due로
   남습니다. Registry clear는 workflow→registry lock 순서를 지키고 authoritative identity/status를
   다시 확인하므로 publication pending·blocked, final-child-sync pending, identity quarantine,
-  authoritative active record는 stale로 지울 수 없습니다. 격리된 payload의 관측 durable ID는
+  authoritative active record는 stale로 지울 수 없습니다. 아직 격리되지 않은 identity 불일치는
+  registry에 캐시된 marker를 남기지 않습니다 — 캐시 상태가 아니라 그 authoritative 재확인이
+  잡으므로, cleared marker에 이미 가려진 row는 운영자가 조치할 때까지 가려진 채로 남습니다.
+  격리된 payload의 관측 durable ID는
   증거로 보존하고, registry의 단일 row는 신뢰할 수 있는 workspace 이름으로 key를 지정하면서
   관측 ID를 metadata에 기록합니다. 원인을 고친 뒤 운영자는
   `orca_auto run-dir <workflow_dir> --force`로 blocked publication을 다시 arm할 수 있습니다.

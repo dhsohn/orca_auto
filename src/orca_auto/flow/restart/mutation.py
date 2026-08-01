@@ -209,6 +209,8 @@ def _reset_restartable_stages(
         metadata["si_publish_pending"] = True
         metadata.pop("si_publish_blocked", None)
         metadata.pop("si_publish_attempts", None)
+        # Legacy key from the removed retry ladder; scrub it while re-arming so
+        # a pre-upgrade payload does not carry it forever.
         metadata.pop("si_publish_next_retry_at", None)
         metadata.pop("si_publish_error", None)
         restarted_stages.append(

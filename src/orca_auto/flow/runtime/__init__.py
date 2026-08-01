@@ -259,13 +259,7 @@ def _workflow_needs_terminal_child_sync(
                 record_metadata.get("quarantined_persisted_workflow_id")
             )
         )
-        record_reconciliation_marker = isinstance(record_metadata, dict) and bool(
-            record_metadata.get("identity_reconciliation_required")
-            or _runtime_common.normalize_text(
-                record_metadata.get("identity_reconciliation_persisted_workflow_id")
-            )
-        )
-        if not identity_quarantined and (record_quarantine_marker or record_reconciliation_marker):
+        if not identity_quarantined and record_quarantine_marker:
             # Identity recovery may have committed in workflow.json before the
             # normalized registry marker was cleared. Refresh that cached row.
             return True

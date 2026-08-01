@@ -671,16 +671,19 @@ Workflow runtime artifacts:
   enabled config, restart reloads the copied durable input XYZ and revalidates
   its exhaustive partition and per-fragment electron states.
 - SI publication is checkpointed in workflow and registry state with
-  `si_publish_pending`, `si_publish_attempts`, `si_publish_next_retry_at`,
-  `si_publish_blocked`, generation, and error metadata. Transient failures use
-  30/60/120/240-second exponential backoff and block after the fifth failed
-  writer attempt. Deterministic conflicts block immediately. Pre-writer
-  workflow/registry/report checkpoint failures do not consume this writer budget;
-  any successfully persisted pending marker remains immediately due for infrastructure
-  reconciliation. Registry clear uses workflow-then-registry lock order and
-  rechecks authoritative workflow identity/status; publication-pending,
-  publication-blocked, final-child-sync-pending, identity-quarantined, or
-  authoritatively active records cannot be cleared as stale. A quarantined payload
+  `si_publish_pending`, `si_publish_attempts`, `si_publish_blocked`, generation,
+  and error metadata. A pending publication is retried on every worker cycle and
+  blocks after the fifth failed writer attempt. Deterministic conflicts block
+  immediately. Pre-writer workflow/registry/report checkpoint failures do not
+  consume this writer budget; any successfully persisted pending marker remains
+  immediately due for infrastructure reconciliation. Registry clear uses
+  workflow-then-registry lock order and rechecks authoritative workflow
+  identity/status; publication-pending, publication-blocked,
+  final-child-sync-pending, identity-quarantined, or authoritatively active
+  records cannot be cleared as stale. An identity mismatch that has not yet been
+  quarantined carries no cached registry marker: it is caught by that
+  authoritative recheck, not by cached state, so a row already hidden by a
+  cleared marker stays hidden until an operator acts. A quarantined payload
   keeps its observed durable ID as evidence while the registry keys the single row
   by the trusted workspace name and records the observed ID in metadata. After fixing
   the cause, an operator can re-arm a blocked publication with

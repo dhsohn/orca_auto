@@ -95,7 +95,7 @@ def _patch_advance_operations(
         monkeypatch.setattr(advance_phases_module, name, operation)
 
 
-def test_nonterminal_si_publication_honors_backoff_without_resetting_attempts(
+def test_transient_si_publication_retries_every_cycle_until_the_budget_is_spent(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -117,15 +117,25 @@ def test_nonterminal_si_publication_honors_backoff_without_resetting_attempts(
     monkeypatch.setattr(advance_module, "write_workflow_html_report", lambda *args: None)
     deps = _si_publication_test_deps(monkeypatch, tmp_path, payload)
 
-    orchestration.advance_workflow(target="wf_si_backoff", workflow_root=tmp_path, services=deps)
-    assert payload["metadata"]["si_publish_attempts"] == 1
-    assert payload["metadata"]["si_publish_pending"] is True
-    retry_at = payload["metadata"]["si_publish_next_retry_at"]
-
+    # A transient failure retries on the next cycle rather than waiting out a
+    # backoff timestamp; the attempt budget is the only thing that bounds it.
     orchestration.advance_workflow(target="wf_si_backoff", workflow_root=tmp_path, services=deps)
     assert writer_calls == 1
     assert payload["metadata"]["si_publish_attempts"] == 1
-    assert payload["metadata"]["si_publish_next_retry_at"] == retry_at
+    assert payload["metadata"]["si_publish_pending"] is True
+    assert "si_publish_next_retry_at" not in payload["metadata"]
+
+    orchestration.advance_workflow(target="wf_si_backoff", workflow_root=tmp_path, services=deps)
+    assert writer_calls == 2
+    assert payload["metadata"]["si_publish_attempts"] == 2
+    assert payload["metadata"]["si_publish_pending"] is True
+
+    for _ in range(4):
+        orchestration.advance_workflow(
+            target="wf_si_backoff", workflow_root=tmp_path, services=deps
+        )
+    assert payload["metadata"]["si_publish_blocked"] is True
+    assert payload["metadata"]["si_publish_pending"] is False
 
 
 def test_permanent_si_publication_error_blocks_without_automatic_retry(

@@ -795,9 +795,14 @@ def test_sync_prequarantine_identity_mismatch_stays_visible_by_workspace_key(
 
     record = registry.sync_workflow_registry(tmp_path, workspace, payload)
 
+    # The durable payload is left alone and the row stays addressable by its
+    # trusted workspace identity. A row that has not been quarantined yet
+    # carries no cached identity marker; the authoritative recheck happens
+    # under the lock at clear time.
     assert payload["workflow_id"] == "wf_tampered"
     assert record.workflow_id == "wf_expected"
-    assert record.metadata["identity_reconciliation_persisted_workflow_id"] == "wf_tampered"
+    assert "identity_reconciliation_persisted_workflow_id" not in record.metadata
+    assert "identity_quarantined" not in record.metadata
 
 
 def test_identity_quarantine_resurrects_a_previously_cleared_workspace(

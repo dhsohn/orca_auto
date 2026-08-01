@@ -35,6 +35,27 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   queue id and root with its traceback before the sweep moves on, which no
   engine reported before.
 
+- A pending SI publication is retried on every worker cycle instead of waiting
+  out an exponential backoff. `si_publish_next_retry_at` is gone, along with the
+  30/60/120/240-second ladder; the attempt budget is unchanged, so a repeatedly
+  failing publication now blocks after about two minutes at the default 30-second
+  cycle rather than about seven and a half. A transient outage lasting longer
+  than that will block the workflow and need
+  `orca_auto run-dir <workflow_dir> --force`. This is a public contract change.
+  Upgrading with a workflow mid-backoff makes it immediately due: nothing reads
+  the stored timestamp any more, so it is retried on the first cycle after the
+  worker restarts, and the key is scrubbed the next time the workflow is
+  re-armed.
+
+- An identity mismatch that has not been quarantined yet no longer writes a
+  reconciliation marker into the registry. That marker existed to keep such a row
+  visible, but the authoritative identity recheck at clear time already covers
+  the case, and the marker is derived state recomputed on every sync. One
+  behavior goes with it: a row that was already hidden by a cleared marker before
+  the mismatch appeared now stays hidden rather than being resurrected on the
+  next reindex. Quarantined rows are unaffected — they keep their marker and are
+  still protected from being cleared as stale.
+
 - Writing `workflow_si.md` fails closed on every path. `write_workflow_si` and
   `collect_workflow_si_data` had switches that logged and degraded instead of
   raising, so a failure inside a configured SI feature could publish a document
