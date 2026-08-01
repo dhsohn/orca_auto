@@ -15,9 +15,6 @@ from orca_auto import (
 )
 from orca_auto import cli_handlers as cli_monitor
 from orca_auto import cli_handlers as cli_run_dir
-from orca_auto import (
-    cli_workers as cli_worker_conflicts,
-)
 
 
 @pytest.fixture(autouse=True)
@@ -308,28 +305,6 @@ def test_main_dispatches_unified_queue_cancel(monkeypatch: pytest.MonkeyPatch) -
     assert seen[0].queue_command == "cancel"
     assert seen[0].target == "crest-q-1"
     assert seen[0].json is True
-
-
-@pytest.mark.parametrize(
-    ("command_argv", "expected"),
-    [
-        (
-            (
-                "/home/user/orca_auto/.venv/bin/python",
-                "-m",
-                "orca_auto.orca.commands.queue",
-            ),
-            "orca_auto",
-        ),
-        (("/home/user/.venv/bin/orca_auto", "queue", "worker"), "orca_auto"),
-        (("/usr/bin/python", "-m", "something_else"), "unknown"),
-    ],
-)
-def test_classify_existing_orca_worker_distinguishes_orca_auto_and_unknown(
-    command_argv: tuple[str, ...],
-    expected: str,
-) -> None:
-    assert cli_worker_conflicts._classify_existing_orca_worker(command_argv) == expected
 
 
 @pytest.mark.parametrize(

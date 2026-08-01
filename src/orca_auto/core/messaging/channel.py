@@ -13,8 +13,6 @@ class SendResult:
     sent: bool
     skipped: bool = False
     error: str = ""
-    provider: str | None = None
-    message_id: str | None = None
 
 
 @runtime_checkable

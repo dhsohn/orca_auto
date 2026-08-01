@@ -171,25 +171,26 @@ def test_fsync_parent_dir_opens_fsyncs_and_closes(
     assert events == [("open", tmp_path), ("fsync", 42), ("close", 42)]
 
 
-def test_fsync_parent_dir_ignores_unsupported_open_error(
+def test_fsync_parent_dir_propagates_open_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "payload.json"
 
     def fake_open(target: str | Path, flags: int) -> int:
-        raise OSError(errno.EINVAL, "directory fsync unsupported")
+        raise OSError(errno.EINVAL, "directory open refused")
 
     def fail_fsync(fd: int) -> None:
-        raise AssertionError("fsync should not run when opening the directory fails")
+        raise AssertionError("fsync must not run when opening the directory fails")
 
     monkeypatch.setattr(persistence.os, "open", fake_open)
     monkeypatch.setattr(persistence.os, "fsync", fail_fsync)
 
-    persistence._fsync_parent_dir(path)
+    with pytest.raises(OSError):
+        persistence._fsync_parent_dir(path)
 
 
-def test_fsync_parent_dir_closes_after_unsupported_fsync_error(
+def test_fsync_parent_dir_closes_after_fsync_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -200,7 +201,7 @@ def test_fsync_parent_dir_closes_after_unsupported_fsync_error(
         return 42
 
     def fake_fsync(fd: int) -> None:
-        raise OSError(errno.EINVAL, "directory fsync unsupported")
+        raise OSError(errno.EIO, "directory fsync failed")
 
     def fake_close(fd: int) -> None:
         closed.append(fd)
@@ -209,7 +210,10 @@ def test_fsync_parent_dir_closes_after_unsupported_fsync_error(
     monkeypatch.setattr(persistence.os, "fsync", fake_fsync)
     monkeypatch.setattr(persistence.os, "close", fake_close)
 
-    persistence._fsync_parent_dir(path)
+    # A durability barrier that cannot be established is reported, not skipped:
+    # callers compensate for a write that may already be visible.
+    with pytest.raises(OSError):
+        persistence._fsync_parent_dir(path)
 
     assert closed == [42]
 

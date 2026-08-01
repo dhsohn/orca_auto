@@ -79,23 +79,12 @@ class DiscordBotChannel:
         with urlopen(request, timeout=_bounded_timeout(self.config.timeout_seconds)) as response:
             status = int(getattr(response, "status", response.getcode()))
             if status != 200:
-                return SendResult(
-                    sent=False,
-                    error="discord_unconfirmed_delivery",
-                    provider="discord",
-                )
-            message_id = _response_message_id(response)
-            if not message_id:
-                return SendResult(
-                    sent=False,
-                    error="discord_invalid_response",
-                    provider="discord",
-                )
-            return SendResult(
-                sent=True,
-                provider="discord",
-                message_id=message_id,
-            )
+                return SendResult(sent=False, error="discord_unconfirmed_delivery")
+            # The id is not retained, but a response without one is not a
+            # confirmed delivery.
+            if not _response_message_id(response):
+                return SendResult(sent=False, error="discord_invalid_response")
+            return SendResult(sent=True)
 
     def _post_attempt(self, data: bytes) -> tuple[SendResult, bool, float | None]:
         try:
@@ -106,41 +95,20 @@ class DiscordBotChannel:
             if status == 429:
                 retry_after, retry_error = _retry_after_from_error(exc)
                 if retry_error:
-                    return (
-                        SendResult(sent=False, error=retry_error, provider="discord"),
-                        False,
-                        None,
-                    )
+                    return SendResult(sent=False, error=retry_error), False, None
             else:
                 _close_http_error(exc)
             return (
-                SendResult(
-                    sent=False,
-                    error=f"discord_http_{status or 'unknown'}",
-                    provider="discord",
-                ),
+                SendResult(sent=False, error=f"discord_http_{status or 'unknown'}"),
                 _is_retryable_status(status),
                 retry_after,
             )
         except (URLError, OSError):
-            return (
-                SendResult(
-                    sent=False,
-                    error="discord_network_error",
-                    provider="discord",
-                ),
-                True,
-                None,
-            )
+            return SendResult(sent=False, error="discord_network_error"), True, None
 
     def send(self, message: Message) -> SendResult:
         if not self.enabled:
-            return SendResult(
-                sent=False,
-                skipped=True,
-                error="discord_bot_disabled",
-                provider="discord",
-            )
+            return SendResult(sent=False, skipped=True, error="discord_bot_disabled")
 
         data = json.dumps(
             self._payload(message),
@@ -149,7 +117,7 @@ class DiscordBotChannel:
         ).encode("utf-8")
         attempts = _bounded_attempts(self.config.max_attempts)
         total_delay = 0.0
-        result = SendResult(sent=False, error="discord_not_attempted", provider="discord")
+        result = SendResult(sent=False, error="discord_not_attempted")
         for attempt_index in range(1, attempts + 1):
             result, retryable, retry_after = self._post_attempt(data)
             if result.sent or attempt_index >= attempts or not retryable:
@@ -159,11 +127,7 @@ class DiscordBotChannel:
             if delay is None:
                 delay = _DEFAULT_RETRY_BACKOFF_SECONDS
             if not math.isfinite(delay) or delay > _MAX_TOTAL_RETRY_DELAY_SECONDS - total_delay:
-                result = SendResult(
-                    sent=False,
-                    error="discord_retry_budget_exceeded",
-                    provider="discord",
-                )
+                result = SendResult(sent=False, error="discord_retry_budget_exceeded")
                 break
             total_delay += delay
             if delay > 0:

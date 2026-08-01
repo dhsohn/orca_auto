@@ -68,7 +68,6 @@ def test_discord_bot_channel_posts_confirmed_embed_without_mentions(
     result = DiscordBotChannel(_bot_config()).send(Message(title="@everyone"))
 
     assert result.sent
-    assert result.message_id == "999"
     request = captured["request"]
     assert request.full_url == "https://discord.com/api/v10/channels/123/messages"  # type: ignore[attr-defined]
     assert request.get_header("Authorization") == "Bot secret-token"  # type: ignore[attr-defined]
