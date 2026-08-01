@@ -7,7 +7,6 @@ from typing import Any
 
 from ..child.execution import build_queue_entry_lookup as _build_queue_entry_lookup
 from ..child.execution import find_queue_entry_by_id as _find_queue_entry_by_id
-from ..dependencies import build_dependency_container
 from ..engine.worker_execution import (
     EngineWorkerQueueDependencies,
     EngineWorkerTimingDependencies,
@@ -267,11 +266,13 @@ def build_worker_execution_dependency_container(
     *,
     execute_queue_entry_fn: Callable[..., Any] | None = None,
 ) -> Any:
-    return build_dependency_container(
-        container_builder,
-        overrides,
-        default_factories,
-        extra_fields={"execute_queue_entry_fn": execute_queue_entry_fn},
+    resolved: dict[str, Any] = {}
+    for name, default_factory in default_factories.items():
+        override = overrides.get(name)
+        resolved[name] = default_factory() if override is None else override
+    return container_builder(
+        **resolved,
+        execute_queue_entry_fn=execute_queue_entry_fn,
     )
 
 

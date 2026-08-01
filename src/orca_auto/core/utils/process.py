@@ -115,10 +115,7 @@ def _read_proc_identity_from_directory_fd(directory_fd: int) -> tuple[int, int, 
 
 
 def _pidfd_send_signal(pidfd: int, signum: int, flags: int) -> None:
-    sender = getattr(signal, "pidfd_send_signal", None)
-    if sender is None:
-        raise OSError(errno.ENOSYS, "pidfd_send_signal is unavailable")
-    sender(pidfd, signum, None, flags)
+    signal.pidfd_send_signal(pidfd, signum, None, flags)
 
 
 @dataclass(frozen=True)

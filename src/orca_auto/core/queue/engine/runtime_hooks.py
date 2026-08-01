@@ -39,14 +39,12 @@ def shutdown_child_job(
     worker: Any,
     job: Any,
     *,
-    terminate_process_fn: Callable[[Any], Any],
     finalize_child_exit_fn: Callable[..., Any],
     grace_seconds: float,
     sleep_fn: Callable[[float], None],
 ) -> bool:
     return _queue_lifecycle.shutdown_running_job(
         job,
-        terminate_process_fn=terminate_process_fn,
         finalize_child_exit_fn=lambda current_job, rc: finalize_child_exit_fn(
             worker,
             current_job,
@@ -94,7 +92,6 @@ def build_child_worker_hooks(
         shutdown_child_job(
             worker,
             job,
-            terminate_process_fn=terminate_process_fn,
             finalize_child_exit_fn=finalize_child_exit_fn,
             grace_seconds=shutdown_grace_seconds,
             sleep_fn=sleep_fn,

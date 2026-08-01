@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .workflow.artifacts import workflow_artifacts
 from .workflow.store import (
     WORKFLOW_FILE_NAME,
     WORKFLOW_LOCK_NAME,
@@ -43,7 +42,6 @@ __all__ = [
     "workflow_has_active_downstream",
     "workflow_create_lock_path",
     "workflow_lock_path",
-    "workflow_artifacts",
     "workflow_file_path",
     "workflow_root_dir",
     "workflow_stage_dirnames_for_engine",

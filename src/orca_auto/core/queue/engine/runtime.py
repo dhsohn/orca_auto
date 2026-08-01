@@ -163,7 +163,6 @@ class EngineQueueRuntime:
         worker: Any,
         job: Any,
         *,
-        terminate_process_fn: Callable[[Any], Any],
         finalize_child_exit_fn: Callable[..., Any],
         grace_seconds: float,
         sleep_fn: Callable[[float], None],
@@ -171,7 +170,6 @@ class EngineQueueRuntime:
         shutdown_child_job(
             worker,
             job,
-            terminate_process_fn=terminate_process_fn,
             finalize_child_exit_fn=finalize_child_exit_fn,
             grace_seconds=grace_seconds,
             sleep_fn=sleep_fn,
