@@ -7,9 +7,7 @@ from typing import Any
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_APP_NAME
 from orca_auto.core.utils.coercion import (
     coerce_int_mapping,
-    normalize_bool,
     normalize_text,
-    safe_int,
 )
 from orca_auto.orca.job_locations import _contract_payload as _canonical_payload
 from orca_auto.orca.job_locations import _utils as _contract_status
@@ -96,31 +94,33 @@ def _contract_from_payload(
     payload: ContractPayload,
     request: _contract_context.LoadRequest,
 ) -> Any:
-    final_result = payload.get("final_result")
+    # The payload producers already normalize every key they emit. Only the
+    # three request fallbacks below take raw caller input, so they keep their
+    # normalization; the rest pass straight through.
     return OrcaArtifactContract(
-        run_id=normalize_text(payload.get("run_id")),
-        status=normalize_text(payload.get("status")) or "unknown",
-        reason=normalize_text(payload.get("reason")),
-        state_status=normalize_text(payload.get("state_status")),
-        reaction_dir=normalize_text(payload.get("reaction_dir") or request.reaction_dir),
-        latest_known_path=normalize_text(payload.get("latest_known_path") or request.target),
-        optimized_xyz_path=normalize_text(payload.get("optimized_xyz_path")),
-        queue_id=normalize_text(payload.get("queue_id") or request.queue_id),
-        queue_status=normalize_text(payload.get("queue_status")).lower(),
-        cancel_requested=normalize_bool(payload.get("cancel_requested")),
-        selected_inp=normalize_text(payload.get("selected_inp")),
-        selected_input_xyz=normalize_text(payload.get("selected_input_xyz")),
-        analyzer_status=normalize_text(payload.get("analyzer_status")),
-        completed_at=normalize_text(payload.get("completed_at")),
-        last_out_path=normalize_text(payload.get("last_out_path")),
-        run_state_path=normalize_text(payload.get("run_state_path")),
-        report_json_path=normalize_text(payload.get("report_json_path")),
-        attempt_count=safe_int(payload.get("attempt_count"), default=0),
-        max_retries=safe_int(payload.get("max_retries"), default=0),
-        attempts=_payload_attempts(payload),
-        final_result=dict(final_result) if isinstance(final_result, dict) else {},
-        resource_request=coerce_int_mapping(payload.get("resource_request")),
-        resource_actual=coerce_int_mapping(payload.get("resource_actual")),
+        run_id=payload.get("run_id", ""),
+        status=payload.get("status") or "unknown",
+        reason=payload.get("reason", ""),
+        state_status=payload.get("state_status", ""),
+        reaction_dir=payload.get("reaction_dir") or normalize_text(request.reaction_dir),
+        latest_known_path=payload.get("latest_known_path") or normalize_text(request.target),
+        optimized_xyz_path=payload.get("optimized_xyz_path", ""),
+        queue_id=payload.get("queue_id") or normalize_text(request.queue_id),
+        queue_status=payload.get("queue_status", ""),
+        cancel_requested=payload.get("cancel_requested", False),
+        selected_inp=payload.get("selected_inp", ""),
+        selected_input_xyz=payload.get("selected_input_xyz", ""),
+        analyzer_status=payload.get("analyzer_status", ""),
+        completed_at=payload.get("completed_at", ""),
+        last_out_path=payload.get("last_out_path", ""),
+        run_state_path=payload.get("run_state_path", ""),
+        report_json_path=payload.get("report_json_path", ""),
+        attempt_count=payload.get("attempt_count", 0),
+        max_retries=payload.get("max_retries", 0),
+        attempts=payload.get("attempts", ()),
+        final_result=payload.get("final_result", {}),
+        resource_request=payload.get("resource_request", {}),
+        resource_actual=payload.get("resource_actual", {}),
     )
 
 
@@ -133,13 +133,6 @@ def _load_contract_context(
     _contract_context.load_context_payloads(context)
     context.resolved_run_id = _contract_context.resolve_run_id(request, context)
     return context
-
-
-def _payload_attempts(payload: ContractPayload) -> tuple[ContractPayload, ...]:
-    attempts_payload = payload.get("attempts")
-    if not isinstance(attempts_payload, (list, tuple)):
-        return ()
-    return tuple(dict(item) for item in attempts_payload if isinstance(item, dict))
 
 
 def _contract_from_context(

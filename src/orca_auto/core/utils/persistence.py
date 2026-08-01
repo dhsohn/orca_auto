@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import errno
 import json
 import os
 import tempfile
@@ -13,18 +12,6 @@ from typing import Any
 from .coercion import safe_int as _safe_int
 
 JSON_LOAD_EXCEPTIONS = (OSError, UnicodeDecodeError, json.JSONDecodeError)
-
-_DIR_FSYNC_UNSUPPORTED_ERRNOS = {
-    code
-    for code in (
-        errno.EINVAL,
-        getattr(errno, "ENOSYS", None),
-        getattr(errno, "ENOTSUP", None),
-        getattr(errno, "ENOTTY", None),
-        getattr(errno, "EOPNOTSUPP", None),
-    )
-    if code is not None
-}
 
 
 def now_utc_iso() -> str:
@@ -117,29 +104,15 @@ def load_json_mapping_list_file(path: Path) -> list[dict[str, Any]]:
     return [item for item in raw if isinstance(item, dict)]
 
 
-def _is_unsupported_dir_fsync_error(exc: OSError) -> bool:
-    return exc.errno in _DIR_FSYNC_UNSUPPORTED_ERRNOS
-
-
 def fsync_directory(path: str | Path) -> None:
-    """Durably publish directory-entry changes when the filesystem supports it."""
+    """Durably publish directory-entry changes."""
 
     flags = os.O_RDONLY
     flags |= os.O_DIRECTORY
 
+    dir_fd = os.open(str(Path(path)), flags)
     try:
-        dir_fd = os.open(str(Path(path)), flags)
-    except OSError as exc:
-        if _is_unsupported_dir_fsync_error(exc):
-            return
-        raise
-
-    try:
-        try:
-            os.fsync(dir_fd)
-        except OSError as exc:
-            if not _is_unsupported_dir_fsync_error(exc):
-                raise
+        os.fsync(dir_fd)
     finally:
         os.close(dir_fd)
 

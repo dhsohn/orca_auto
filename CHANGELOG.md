@@ -35,8 +35,34 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   queue id and root with its traceback before the sweep moves on, which no
   engine reported before.
 
+- A directory fsync that fails is now reported instead of being skipped. Five
+  errno values (`EINVAL`, `ENOSYS`, `ENOTSUP`, `ENOTTY`, `EOPNOTSUPP`) used to be
+  swallowed on the assumption that the filesystem could not fsync directories,
+  which meant a durable artifact could be published with no durability barrier
+  while the caller was told it had one. Every supported filesystem fsyncs
+  directories, and callers already compensate for a barrier that fails after the
+  rename made the file visible.
+
+- `orca_auto queue worker` no longer labels a conflicting worker as `orca_auto`
+  or `unknown`. The refusal, its exit code, and the `command:` line naming the
+  process that holds the queue root are unchanged; only the label and the
+  wording it selected are gone.
+
 ### Removed
 
+- Removed two internal surfaces with no readers: the `provider` and `message_id`
+  fields on `SendResult`, which nothing read once the messenger became a one-way
+  notifier (the response is still checked for a message id, since a response
+  without one is not a confirmed delivery), and the re-normalization of payload
+  keys that their producer already normalizes. Both the loader path and the
+  context path build that payload through one function, so the assembler was
+  normalizing its own output. The three request fallbacks keep their
+  normalization, because those read caller input rather than producer output.
+- Removed the `/proc` cmdline classifier behind the worker-conflict message. It
+  was not dead code — it ran whenever a conflicting worker was detected — but
+  its only effect was choosing between two wordings of the same refusal. The
+  surviving message names the holder's argv, which identifies it more precisely
+  than the label did.
 - Removed the owner-liveness helpers behind the claimability decision above:
   `queue_record_sync_is_stale`, which `orca_auto.core.queue` also re-exported,
   and the private `/proc`-based probes it called. `process_start_token` and

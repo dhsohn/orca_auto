@@ -261,7 +261,6 @@ class _ExistingWorkerConflict:
     app: str
     pid: int
     allowed_root: str
-    source: str
     command: str
 
 
@@ -274,39 +273,6 @@ def _read_process_command(pid: int) -> tuple[str, ...]:
         return ()
     parts = [part.decode("utf-8", errors="replace") for part in raw.split(b"\0") if part]
     return tuple(parts)
-
-
-def _command_invokes_module(command_argv: Sequence[str], module_name: str) -> bool:
-    target = normalize_text(module_name).lower()
-    if not target:
-        return False
-
-    normalized = [normalize_text(part).lower() for part in command_argv]
-    for index, part in enumerate(normalized[:-1]):
-        if part == "-m" and normalized[index + 1] == target:
-            return True
-    return False
-
-
-def _command_program_name(command_argv: Sequence[str]) -> str:
-    if not command_argv:
-        return ""
-    raw = normalize_text(command_argv[0])
-    if not raw:
-        return ""
-    return Path(raw).stem.lower()
-
-
-def _classify_existing_orca_worker(command_argv: Sequence[str]) -> str:
-    program_name = _command_program_name(command_argv)
-    if (
-        program_name == "orca_auto"
-        or _command_invokes_module(command_argv, "orca_auto.cli")
-        or _command_invokes_module(command_argv, "orca_auto.orca.commands.queue")
-        or _command_invokes_module(command_argv, _ENGINE_WORKER_MODULES["orca"])
-    ):
-        return "orca_auto"
-    return "unknown"
 
 
 def _format_command_argv(command_argv: Sequence[str]) -> str:
@@ -350,7 +316,6 @@ def _detect_existing_orca_worker_conflict(
         app="orca",
         pid=existing_pid,
         allowed_root=str(allowed_root),
-        source=_classify_existing_orca_worker(command_argv),
         command=_format_command_argv(command_argv),
     )
 
@@ -365,16 +330,10 @@ def _emit_existing_orca_worker_conflict(
         f"error: existing ORCA queue worker detected for allowed_root {conflict.allowed_root} "
         f"(pid={conflict.pid})."
     )
-    if conflict.source == "orca_auto":
-        print("source: orca_auto queue worker")
-        print("This queue root is already being managed by a running orca_auto worker.")
-    else:
-        print("source: existing queue worker")
+    # The recorded argv identifies the holder far better than a two-way label
+    # ever did, and the refusal is the same either way.
     print(f"command: {conflict.command}")
-    if conflict.source == "orca_auto":
-        print("Stop the existing queue-worker service before starting another worker.")
-    else:
-        print("Stop the existing worker before starting another worker.")
+    print("Stop the existing worker before starting another worker.")
     return 1
 
 

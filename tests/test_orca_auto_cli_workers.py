@@ -337,7 +337,6 @@ def test_cmd_queue_worker_reports_existing_orca_auto_orca_worker_conflict(
             app="orca",
             pid=3589996,
             allowed_root="/home/user/orca_runs",
-            source="orca_auto",
             command="/home/user/orca_auto/.venv/bin/python -m orca_auto.orca.commands.queue --config /tmp/orca_auto.yaml",
         ),
     )
@@ -352,8 +351,8 @@ def test_cmd_queue_worker_reports_existing_orca_auto_orca_worker_conflict(
     assert result == 1
     out = capsys.readouterr().out
     assert "existing ORCA queue worker detected" in out
-    assert "source: orca_auto queue worker" in out
-    assert "Stop the existing queue-worker service before starting another worker." in out
+    assert "-m orca_auto.orca.commands.queue" in out
+    assert "Stop the existing worker before starting another worker." in out
 
 
 def test_spawn_supervised_worker_starts_each_worker_in_a_new_session(
@@ -713,12 +712,6 @@ def test_worker_spec_to_dict_omits_empty_allowed_environment() -> None:
 
 def test_worker_command_and_selection_helpers_cover_edges() -> None:
     assert worker_conflicts._read_process_command(999999999) == ()
-    assert worker_conflicts._command_invokes_module(
-        ("python", "-m", "orca_auto.cli"), "orca_auto.cli"
-    )
-    assert not worker_conflicts._command_invokes_module(("python", "-m"), "orca_auto.cli")
-    assert not worker_conflicts._command_invokes_module(("python", "-m", "orca_auto.cli"), "")
-    assert worker_conflicts._command_program_name(()) == ""
     assert worker_conflicts._format_command_argv(()) == "<unavailable>"
     assert worker_conflicts._format_command_argv(("python", "-m", "orca_auto.cli")) == (
         "python -m orca_auto.cli"
@@ -906,6 +899,5 @@ def test_detect_existing_orca_worker_conflict_edges(
         app="orca",
         pid=43210,
         allowed_root=str(allowed_root.resolve()),
-        source="unknown",
         command="python worker.py",
     )
