@@ -27,46 +27,12 @@ QUEUE_RECORD_SYNC_ABORTED = "aborted"
 QUEUE_RECORD_PUBLICATION_LOCK_TIMEOUT_SECONDS = 300.0
 _QUEUE_RECORD_PUBLICATION_LOCK_DIR = ".queue-publication-locks"
 
-_UNCLAIMABLE_SYNC_STATES = frozenset(
-    {
-        QUEUE_RECORD_SYNC_PREPARING,
-        QUEUE_RECORD_SYNC_REPAIRING,
-    }
-)
-
 
 def queue_record_sync_state(entry: Any) -> str:
     metadata = getattr(entry, "metadata", {})
     if not isinstance(metadata, dict):
         return ""
     return str(metadata.get(QUEUE_RECORD_SYNC_KEY, "")).strip().lower()
-
-
-def _owner_process_alive(owner_pid: int) -> bool:
-    if owner_pid <= 0:
-        return False
-    try:
-        os.kill(owner_pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except (OSError, OverflowError):
-        return False
-    try:
-        stat_text = Path(f"/proc/{owner_pid}/stat").read_text(encoding="utf-8")
-    except OSError:
-        # Non-Linux platforms (or an unreadable procfs) retain the safe-biased
-        # signal probe result.
-        return True
-    _prefix, separator, fields_text = stat_text.rpartition(")")
-    if not separator:
-        return True
-    fields = fields_text.strip().split()
-    # A zombie still answers ``kill(pid, 0)`` but cannot resume publication.
-    # Treat it as dead so its PREPARING/REPAIRING lease cannot strand the job
-    # until its parent eventually reaps it.
-    return not fields or fields[0] != "Z"
 
 
 def _linux_boot_id() -> str:
@@ -124,10 +90,6 @@ def queue_record_sync_metadata(
     }
 
 
-def _same_process_start(recorded: str, current: str) -> bool:
-    return bool(recorded and current and ":" in recorded and recorded == current)
-
-
 def _publication_lock_path(root: str | Path, queue_id: str) -> Path:
     resolved_root = resolve_root_path(root)
     digest = sha256(str(queue_id).encode("utf-8")).hexdigest()
@@ -153,36 +115,14 @@ def queue_record_publication_lock(
         yield
 
 
-def queue_record_sync_is_stale(entry: Any) -> bool:
-    metadata = getattr(entry, "metadata", {})
-    if not isinstance(metadata, dict):
-        return False
-    try:
-        owner_pid = int(metadata.get(QUEUE_RECORD_SYNC_OWNER_PID_KEY, 0) or 0)
-    except (TypeError, ValueError):
-        return False
-    if owner_pid <= 0:
-        return False
-    if not _owner_process_alive(owner_pid):
-        return True
-    owner_start = str(metadata.get(QUEUE_RECORD_SYNC_OWNER_START_KEY, "") or "").strip()
-    current_owner_start = process_start_token(owner_pid)
-    return bool(
-        owner_start
-        and current_owner_start
-        and not _same_process_start(owner_start, current_owner_start)
-    )
-
-
 def queue_entry_is_claimable(entry: Any) -> bool:
-    state = queue_record_sync_state(entry)
-    if state == QUEUE_RECORD_SYNC_COMPLETE:
-        return True
-    if state in _UNCLAIMABLE_SYNC_STATES:
-        return queue_record_sync_is_stale(entry)
-    # REPAIR_PENDING, ABORTED, missing, and unknown markers require an
-    # explicit repair/cancellation path.
-    return False
+    # Only a committed publication makes a row claimable. Every other marker —
+    # PREPARING, REPAIRING, REPAIR_PENDING, ABORTED, missing, and unknown —
+    # requires the repair or cancellation path, which owns the lease under the
+    # publication lock. Liveness of the recorded owner PID is deliberately not
+    # consulted: the lock, not a live PID in the row, is the authoritative
+    # ownership proof.
+    return queue_record_sync_state(entry) == QUEUE_RECORD_SYNC_COMPLETE
 
 
 __all__ = [
@@ -203,6 +143,5 @@ __all__ = [
     "queue_entry_is_claimable",
     "queue_record_publication_lock",
     "queue_record_sync_metadata",
-    "queue_record_sync_is_stale",
     "queue_record_sync_state",
 ]

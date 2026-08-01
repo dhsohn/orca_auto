@@ -14,8 +14,34 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   each workflow by default, so the combined text view shows every queued
   workflow simulation and its current status without requiring engine filters.
 
+- A queued row is claimable only once its publication is committed. Owner-PID
+  liveness is no longer consulted in that decision. Previously a row left in
+  `preparing` or `repairing` became claimable as soon as the recorded publisher
+  PID looked dead, reused, or zombied. Each engine worker already repaired
+  publications before reserving work, so in practice this only decided rows that
+  appeared between that repair pass and the reservation read — but for those it
+  let a worker start a calculation whose durable queued record had never been
+  written, and moving the row to `running` then permanently prevented the repair
+  path from ever writing it. This also contradicted the documented contract that
+  only rows carrying a publication marker are executable. Such a row is now
+  parked until the repair pass publishes the record and marks the lease
+  complete. Recovery from a dead or reused publisher is unchanged in capability:
+  the repair pass reclaims a lease under the publication lock whether or not the
+  recorded owner is alive.
+
+- The xTB and CREST workers now report a publication-repair problem instead of
+  stalling admission silently. A blocked reservation logs the same warning the
+  ORCA worker has always logged, and a repair that raises now logs the failing
+  queue id and root with its traceback before the sweep moves on, which no
+  engine reported before.
+
 ### Removed
 
+- Removed the owner-liveness helpers behind the claimability decision above:
+  `queue_record_sync_is_stale`, which `orca_auto.core.queue` also re-exported,
+  and the private `/proc`-based probes it called. `process_start_token` and
+  `current_process_start_token` are unaffected, and publication leases still
+  record the owner pid and its start token.
 - Removed the write-only DFT SQLite index (`dft.db`). The `scan-notify` monitor
   keeps its own change-detection state file and its notifications are
   unchanged; nothing read the database, so it is no longer created or updated.

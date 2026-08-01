@@ -8,6 +8,7 @@ monkeypatching the engine module attributes.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -17,6 +18,8 @@ from orca_auto.core.queue import execution as _queue_execution
 from orca_auto.core.queue.engine import artifacts as _engine_artifacts
 from orca_auto.core.queue.engine.admission import mark_worker_start_error
 from orca_auto.core.statuses import TERMINAL_STATUSES
+
+logger = logging.getLogger(__name__)
 
 
 def artifact_value(
@@ -251,6 +254,7 @@ def sync_terminal_running_entries(
 def repair_engine_queue_publications(
     worker: Any,
     *,
+    engine: str,
     queue_entries_with_roots_fn: Callable[[Any], Iterable[tuple[Path, Any]]],
     is_engine_entry_fn: Callable[[Any], bool],
     record_queued_fn: Callable[..., Any],
@@ -271,7 +275,13 @@ def repair_engine_queue_publications(
                 record_queued_fn=record_queued_fn,
                 entry_matches_fn=is_engine_entry_fn,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - one bad row must not stop the sweep
+            logger.exception(
+                "%s queued publication repair raised: queue_id=%s queue_root=%s",
+                engine,
+                getattr(entry, "queue_id", "unknown"),
+                queue_root,
+            )
             repaired = False
         if not repaired:
             repaired_all = False
@@ -281,12 +291,20 @@ def repair_engine_queue_publications(
 def install_publication_repair_gate(
     worker: Any,
     *,
+    engine: str,
     repair_fn: Callable[[Any], bool],
 ) -> None:
     reserve_next_entry = worker._reserve_next_entry
 
     def reserve_next_after_publication_repair() -> tuple[str, Any | None]:
         if not repair_fn(worker):
+            # Repair is the only path that makes an unpublished row claimable,
+            # so a persistent failure here stalls admission silently unless it
+            # is reported on every attempt.
+            logger.warning(
+                "Queue admission paused until %s queued publication repair succeeds",
+                engine,
+            )
             return "blocked", None
         return reserve_next_entry()
 
