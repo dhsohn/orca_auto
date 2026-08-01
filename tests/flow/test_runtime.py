@@ -1090,7 +1090,7 @@ def test_invalid_workspace_segment_quarantines_then_idles(
     assert records[0].metadata["quarantined_persisted_workflow_id"] == (persisted_id or "")
 
 
-def test_previously_cleared_identity_mismatch_is_reindexed_and_quarantined(
+def test_previously_cleared_identity_mismatch_stays_hidden_until_quarantined(
     tmp_path: Path,
 ) -> None:
     workflow_root = tmp_path / "workflow_root"
