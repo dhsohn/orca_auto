@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -428,28 +427,21 @@ def test_workflow_needs_terminal_sync_retries_pending_si_publication(
     assert runtime._workflow_needs_terminal_sync("/tmp/workflow_workspace") is True
 
 
-def test_si_publish_retry_due_respects_backoff_and_blocked_state() -> None:
-    now = datetime(2026, 7, 12, tzinfo=UTC)
+def test_si_publish_retry_due_tracks_pending_and_blocked_state() -> None:
+    # Every worker cycle retries a pending publication; only the blocked flag
+    # and the attempt budget stop it.
+    assert runtime.si_publish_retry_due({"si_publish_pending": True}) is True
+    assert runtime.si_publish_retry_due({}) is False
     assert (
-        runtime.si_publish_retry_due(
-            {"si_publish_pending": True, "si_publish_next_retry_at": "2026-07-12T00:00:01+00:00"},
-            now=now,
-        )
+        runtime.si_publish_retry_due({"si_publish_pending": True, "si_publish_blocked": True})
         is False
     )
+    # A leftover timestamp from the removed retry ladder is inert.
     assert (
         runtime.si_publish_retry_due(
-            {"si_publish_pending": True, "si_publish_next_retry_at": "2026-07-11T23:59:59+00:00"},
-            now=now,
+            {"si_publish_pending": True, "si_publish_next_retry_at": "2099-01-01T00:00:00+00:00"}
         )
         is True
-    )
-    assert (
-        runtime.si_publish_retry_due(
-            {"si_publish_pending": True, "si_publish_blocked": True},
-            now=now,
-        )
-        is False
     )
 
 
@@ -961,64 +953,6 @@ def test_quarantined_identity_repairs_wrong_cached_registry_id_once(
     ]
 
 
-def test_prequarantine_identity_uses_current_workspace_when_cached_path_is_stale(
-    tmp_path: Path,
-) -> None:
-    workflow_root = tmp_path / "workflow_root"
-    workspace = workflow_root / "wf_expected"
-    workspace.mkdir(parents=True)
-    payload = {
-        "workflow_id": "wf_tampered",
-        "template_name": "conformer_screening",
-        "status": "completed",
-        "requested_at": "2026-07-12T00:00:00+00:00",
-        "stages": [],
-        "metadata": {"si_publish_blocked": True},
-    }
-    (workspace / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
-    registry_store._save_records(
-        workflow_root,
-        [
-            registry.WorkflowRegistryRecord(
-                workflow_id="wf_expected",
-                template_name="conformer_screening",
-                status="completed",
-                source_job_id="",
-                source_job_type="",
-                reaction_key="",
-                requested_at="2026-07-12T00:00:00+00:00",
-                workspace_dir=str(workflow_root / "old_missing"),
-                workflow_file=str(workflow_root / "old_missing" / "workflow.json"),
-                metadata={
-                    "si_publish_blocked": True,
-                    "identity_reconciliation_required": True,
-                    "identity_reconciliation_persisted_workflow_id": "wf_tampered",
-                },
-            )
-        ],
-    )
-
-    first = runtime.advance_workflow_registry_once(
-        workflow_root=workflow_root,
-        submit_ready=False,
-        worker_session_id="reconciliation-stale-path-1",
-        lease_seconds=0,
-    )
-    second = runtime.advance_workflow_registry_once(
-        workflow_root=workflow_root,
-        submit_ready=False,
-        worker_session_id="reconciliation-stale-path-2",
-        lease_seconds=0,
-    )
-
-    assert (first["advanced_count"], first["failed_count"]) == (1, 0)
-    assert (second["advanced_count"], second["skipped_count"]) == (0, 1)
-    record = registry.list_workflow_registry(workflow_root, reindex_if_missing=False)[0]
-    assert record.workflow_id == "wf_expected"
-    assert Path(record.workspace_dir) == workspace
-    assert record.metadata["identity_quarantined"] is True
-
-
 def test_missing_stale_terminal_workspace_stays_visible_without_hot_loop(
     tmp_path: Path,
 ) -> None:
@@ -1156,7 +1090,7 @@ def test_invalid_workspace_segment_quarantines_then_idles(
     assert records[0].metadata["quarantined_persisted_workflow_id"] == (persisted_id or "")
 
 
-def test_previously_cleared_identity_mismatch_is_reindexed_and_quarantined(
+def test_previously_cleared_identity_mismatch_stays_hidden_until_quarantined(
     tmp_path: Path,
 ) -> None:
     workflow_root = tmp_path / "workflow_root"
@@ -1190,14 +1124,13 @@ def test_previously_cleared_identity_mismatch_is_reindexed_and_quarantined(
         lease_seconds=0,
     )
 
-    assert first["discovered_count"] == 1
-    assert (first["advanced_count"], first["failed_count"]) == (1, 0)
-    assert (second["advanced_count"], second["skipped_count"]) == (0, 1)
-    records = registry.list_workflow_registry(workflow_root, reindex_if_missing=False)
-    assert [(record.workflow_id, record.status) for record in records] == [
-        ("wf_expected", "failed")
-    ]
-    assert records[0].metadata["quarantined_persisted_workflow_id"] == "wf_tampered"
+    # An identity mismatch that appears after the row was cleared stays hidden:
+    # only a quarantined row carries a marker that survives clearing, and a
+    # mismatch is not quarantined until a worker validates it. Recovering such a
+    # row is a deliberate operator action, not an automatic resurrection.
+    assert first["discovered_count"] == 0
+    assert (second["advanced_count"], second["skipped_count"]) == (0, 0)
+    assert registry.list_workflow_registry(workflow_root, reindex_if_missing=False) == []
 
 
 @pytest.mark.parametrize(

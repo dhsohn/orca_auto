@@ -140,7 +140,6 @@ def _record_from_summary(summary: dict[str, Any]) -> WorkflowRegistryRecord:
         "si_publish_generation",
         "si_published_generation",
         "si_publish_error",
-        "si_publish_next_retry_at",
     ):
         value = _normalize_text(summary.get(key))
         if value:
@@ -186,9 +185,7 @@ def _record_for_workspace(
         identity_valid = True
     if not identity_valid:
         # Keep the durable payload untouched while the registry remains
-        # addressable by its trusted workspace identity. Pre-quarantine rows
-        # and invalid path segments must stay visible so cleared markers cannot
-        # hide reconciliation.
+        # addressable by its trusted workspace identity.
         quarantined = (
             _normalize_text(payload.get("status")).lower() == "failed"
             and isinstance(workflow_error, dict)
@@ -199,24 +196,14 @@ def _record_for_workspace(
     else:
         quarantined = False
     record = _record_from_summary(workflow_summary(workspace, indexed_payload))
-    if identity_valid:
+    if identity_valid or not quarantined:
         return record
-    identity_metadata = (
-        {
-            "identity_quarantined": True,
-            "quarantined_persisted_workflow_id": persisted_id,
-        }
-        if quarantined
-        else {
-            "identity_reconciliation_required": True,
-            "identity_reconciliation_persisted_workflow_id": persisted_id,
-        }
-    )
     return replace(
         record,
         metadata={
             **record.metadata,
-            **identity_metadata,
+            "identity_quarantined": True,
+            "quarantined_persisted_workflow_id": persisted_id,
         },
     )
 

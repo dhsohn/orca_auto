@@ -181,9 +181,6 @@ def workflow_summary(
         si_publish_attempts = 0
     if si_publish_attempts:
         summary["si_publish_attempts"] = si_publish_attempts
-    si_publish_next_retry_at = _normalize_text(metadata.get("si_publish_next_retry_at"))
-    if si_publish_next_retry_at:
-        summary["si_publish_next_retry_at"] = si_publish_next_retry_at
     return summary
 
 

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
-from orca_auto.core.utils import normalize_text, parse_iso_utc
+from orca_auto.core.utils import normalize_text
 from orca_auto.flow.engine_options import WorkflowEngineOptions
 from orca_auto.flow.orchestration.advance_phases import (
     AdvanceContext as _AdvanceContext,
@@ -30,8 +29,6 @@ from orca_auto.flow.workflow.si.publication import write_workflow_si
 logger = logging.getLogger(__name__)
 
 _SI_PUBLISH_MAX_ATTEMPTS = 5
-_SI_PUBLISH_RETRY_BASE_SECONDS = 30
-_SI_PUBLISH_RETRY_MAX_SECONDS = 30 * 60
 
 
 def _workflow_metadata(payload: dict[str, Any]) -> dict[str, Any]:
@@ -145,19 +142,14 @@ def advance_workflow(
 
         _finalize_advanced_workflow(payload, context, config)
         metadata = _workflow_metadata(payload)
-        was_pending = bool(metadata.get("si_publish_pending"))
         was_blocked = bool(metadata.get("si_publish_blocked"))
         try:
             previous_attempts = max(0, int(metadata.get("si_publish_attempts", 0)))
         except (TypeError, ValueError):
             previous_attempts = 0
-        now = parse_iso_utc(resolved.clock.now_utc_iso())
-        retry_at = parse_iso_utc(metadata.get("si_publish_next_retry_at"))
-        if was_blocked or (
-            was_pending and retry_at is not None and now is not None and retry_at > now
-        ):
-            # Engine reconciliation may continue, but a blocked/not-yet-due SI
-            # publication is not retried by ordinary worker cycles.
+        if was_blocked:
+            # Engine reconciliation may continue, but a blocked SI publication
+            # is not retried by ordinary worker cycles.
             resolved.persistence.write_workflow_payload(workspace_dir, payload)
             resolved.persistence.sync_workflow_registry(
                 workflow_root_path,
@@ -170,7 +162,6 @@ def advance_workflow(
         generation = str(metadata.get("last_advanced_at") or "").strip()
         metadata["si_publish_pending"] = True
         metadata["si_publish_generation"] = generation
-        metadata.pop("si_publish_next_retry_at", None)
         resolved.persistence.write_workflow_payload(workspace_dir, payload)
         resolved.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
         write_workflow_html_report(workspace_dir, payload)
@@ -199,17 +190,8 @@ def advance_workflow(
             if permanent or attempts >= _SI_PUBLISH_MAX_ATTEMPTS:
                 metadata["si_publish_pending"] = False
                 metadata["si_publish_blocked"] = True
-                metadata.pop("si_publish_next_retry_at", None)
                 logger.warning("Workflow SI publication is blocked for %s", workspace_dir)
             else:
-                delay_seconds = min(
-                    _SI_PUBLISH_RETRY_MAX_SECONDS,
-                    _SI_PUBLISH_RETRY_BASE_SECONDS * (2 ** (attempts - 1)),
-                )
-                if now is not None:
-                    metadata["si_publish_next_retry_at"] = (
-                        now + timedelta(seconds=delay_seconds)
-                    ).isoformat()
                 logger.warning("Workflow SI publication remains pending for %s", workspace_dir)
         else:
             metadata["si_publish_pending"] = False
@@ -217,7 +199,6 @@ def advance_workflow(
             metadata.pop("si_publish_error", None)
             metadata.pop("si_publish_blocked", None)
             metadata.pop("si_publish_attempts", None)
-            metadata.pop("si_publish_next_retry_at", None)
         # Commit publication reconciliation independently from engine state. If
         # this write is ambiguous, the first checkpoint still says pending and a
         # terminal worker cycle retries the idempotent publication.

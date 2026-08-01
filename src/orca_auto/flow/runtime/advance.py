@@ -77,12 +77,6 @@ def _workspace_matches_registry_record(
             record_metadata.get("identity_quarantined")
             or deps.normalize_text_fn(record_metadata.get("quarantined_persisted_workflow_id"))
         )
-        cached_reconciliation = isinstance(record_metadata, dict) and bool(
-            record_metadata.get("identity_reconciliation_required")
-            or deps.normalize_text_fn(
-                record_metadata.get("identity_reconciliation_persisted_workflow_id")
-            )
-        )
         quarantine_match = bool(
             deps.normalize_text_fn(payload.get("status")).lower() == "failed"
             and isinstance(workflow_error, dict)
@@ -91,14 +85,7 @@ def _workspace_matches_registry_record(
             and deps.normalize_text_fn(record_metadata.get("quarantined_persisted_workflow_id"))
             == persisted_raw_id
         )
-        reconciliation_match = bool(
-            cached_reconciliation
-            and deps.normalize_text_fn(
-                record_metadata.get("identity_reconciliation_persisted_workflow_id")
-            )
-            == persisted_raw_id
-        )
-        return workspace_name == record_id and (quarantine_match or reconciliation_match)
+        return workspace_name == record_id and quarantine_match
     return persisted_id == record_id
 
 

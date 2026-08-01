@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +14,6 @@ from orca_auto.core.statuses import (
     STATUS_RUNNING,
     STATUS_SUBMITTED,
 )
-from orca_auto.core.utils import parse_iso_utc
 
 from . import _common as _runtime_common
 from .models import WorkflowAdvanceResult
@@ -33,15 +31,12 @@ ACTIVE_TERMINAL_SYNC_STATUSES = frozenset(
 )
 
 
-def si_publish_retry_due(
-    metadata: dict[str, Any],
-    *,
-    now: datetime | None = None,
-) -> bool:
-    if bool(metadata.get("si_publish_blocked")) or not bool(metadata.get("si_publish_pending")):
+def si_publish_retry_due(metadata: dict[str, Any]) -> bool:
+    """Whether a pending SI publication should be retried this cycle."""
+
+    if bool(metadata.get("si_publish_blocked")):
         return False
-    retry_at = parse_iso_utc(metadata.get("si_publish_next_retry_at"))
-    return retry_at is None or retry_at <= (now or datetime.now(UTC))
+    return bool(metadata.get("si_publish_pending"))
 
 
 def workflow_advance_failed_result(
