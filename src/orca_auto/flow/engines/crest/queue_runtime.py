@@ -421,6 +421,7 @@ def _is_crest_queue_entry(entry: Any) -> bool:
 def _repair_crest_queue_publications(worker: Any) -> bool:
     return _common.repair_engine_queue_publications(
         worker,
+        engine="CREST",
         queue_entries_with_roots_fn=queue_entries_with_roots,
         is_engine_entry_fn=_is_crest_queue_entry,
         record_queued_fn=_record_queued_submission,
@@ -428,7 +429,11 @@ def _repair_crest_queue_publications(worker: Any) -> bool:
 
 
 def _after_crest_worker_init(worker: Any) -> None:
-    _common.install_publication_repair_gate(worker, repair_fn=_repair_crest_queue_publications)
+    _common.install_publication_repair_gate(
+        worker,
+        engine="CREST",
+        repair_fn=_repair_crest_queue_publications,
+    )
 
 
 def _reconcile_worker_state(worker: Any) -> None:

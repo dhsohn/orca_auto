@@ -15,12 +15,14 @@ from pathlib import Path
 import pytest
 
 from orca_auto.core.queue import publication, store
+from orca_auto.core.queue.enqueue_publication import repair_enqueue_publication
 from orca_auto.core.queue.generation import (
     queue_entries_same_generation,
     queue_entry_generation_token,
 )
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
+    QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
     QUEUE_RECORD_SYNC_OWNER_PID_KEY,
     QUEUE_RECORD_SYNC_OWNER_START_KEY,
@@ -1491,16 +1493,29 @@ def test_request_cancel_revokes_transient_publication_ownership(
     assert cancelled.metadata[QUEUE_RECORD_SYNC_TOKEN_KEY] == ""
 
 
+@pytest.mark.parametrize("owner_recorded", [True, False])
 @pytest.mark.parametrize(
     "sync_state",
     [QUEUE_RECORD_SYNC_PREPARING, QUEUE_RECORD_SYNC_REPAIRING],
 )
-def test_dequeue_skips_live_queue_record_publishers(
+def test_dequeue_skips_transient_publication_and_claims_the_next_row(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     sync_state: str,
+    owner_recorded: bool,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
+    metadata: dict[str, object] = {
+        QUEUE_RECORD_SYNC_KEY: sync_state,
+        QUEUE_RECORD_SYNC_UPDATED_AT_KEY: "2000-01-01T00:00:00+00:00",
+    }
+    if owner_recorded:
+        # Owner metadata is recorded in half the matrix and absent in the other
+        # half: an uncommitted publication is unclaimable either way. The case
+        # where the recorded owner is genuinely dead is pinned separately by
+        # test_sigkilled_publisher_row_stays_parked_until_repair_publishes.
+        metadata[QUEUE_RECORD_SYNC_OWNER_PID_KEY] = os.getpid()
+        metadata[QUEUE_RECORD_SYNC_OWNER_START_KEY] = current_process_start_token()
     blocked = store.enqueue(
         tmp_path,
         app_name="app",
@@ -1508,13 +1523,7 @@ def test_dequeue_skips_live_queue_record_publishers(
         task_kind="kind",
         engine="engine",
         priority=1,
-        metadata={
-            QUEUE_RECORD_SYNC_KEY: sync_state,
-            QUEUE_RECORD_SYNC_OWNER_PID_KEY: os.getpid(),
-            QUEUE_RECORD_SYNC_OWNER_START_KEY: current_process_start_token(),
-            # Even a wildly old lease cannot fence a matching live process.
-            QUEUE_RECORD_SYNC_UPDATED_AT_KEY: "2000-01-01T00:00:00+00:00",
-        },
+        metadata=metadata,
     )
     ready = store.enqueue(
         tmp_path,
@@ -1528,40 +1537,9 @@ def test_dequeue_skips_live_queue_record_publishers(
     assert store.dequeue_entry_if_pending(tmp_path, blocked.queue_id) is None
     claimed = store.dequeue_next(tmp_path)
 
+    # A parked publication must not stall the rows behind it.
     assert claimed is not None
     assert claimed.queue_id == ready.queue_id
-
-
-@pytest.mark.parametrize(
-    "owner_pid",
-    [None, 0, "invalid"],
-)
-@pytest.mark.parametrize(
-    "sync_state",
-    [QUEUE_RECORD_SYNC_PREPARING, QUEUE_RECORD_SYNC_REPAIRING],
-)
-def test_dequeue_quarantines_ownerless_transient_publication(
-    tmp_path: Path,
-    owner_pid: object,
-    sync_state: str,
-) -> None:
-    metadata: dict[str, object] = {
-        QUEUE_RECORD_SYNC_KEY: sync_state,
-        QUEUE_RECORD_SYNC_UPDATED_AT_KEY: "2000-01-01T00:00:00+00:00",
-    }
-    if owner_pid is not None:
-        metadata[QUEUE_RECORD_SYNC_OWNER_PID_KEY] = owner_pid
-    blocked = store.enqueue(
-        tmp_path,
-        app_name="app",
-        task_id="blocked",
-        task_kind="kind",
-        engine="engine",
-        metadata=metadata,
-    )
-
-    assert store.dequeue_entry_if_pending(tmp_path, blocked.queue_id) is None
-    assert store.dequeue_next(tmp_path) is None
 
 
 @pytest.mark.parametrize("sync_state", ["repair_pendng", QUEUE_RECORD_SYNC_ABORTED])
@@ -1582,7 +1560,7 @@ def test_dequeue_quarantines_unknown_or_aborted_publication_state(
     assert store.dequeue_next(tmp_path) is None
 
 
-def test_dequeue_recovers_preparing_entry_after_publisher_is_sigkilled(
+def test_sigkilled_publisher_row_stays_parked_until_repair_publishes(
     tmp_path: Path,
 ) -> None:
     ctx = get_context("fork")
@@ -1599,6 +1577,8 @@ def test_dequeue_recovers_preparing_entry_after_publisher_is_sigkilled(
     process.join(timeout=10)
     assert process.exitcode == -signal.SIGKILL
 
+    # The kernel released the publication lock the dead publisher held, so
+    # recovery is never blocked on the crashed process.
     with publication.queue_record_publication_lock(
         tmp_path,
         queue_id,
@@ -1606,76 +1586,28 @@ def test_dequeue_recovers_preparing_entry_after_publisher_is_sigkilled(
     ):
         pass
 
+    # The row is still not claimable: its queued record was never published,
+    # and the dead owner PID is not a licence to run the job without one.
+    assert store.dequeue_next(tmp_path) is None
+    [parked] = store.list_queue(tmp_path)
+    assert parked.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_PREPARING
+
+    published: list[str] = []
+    assert repair_enqueue_publication(
+        tmp_path,
+        parked,
+        publish=lambda current: published.append(current.queue_id),
+        label="test",
+    )
+    assert published == [queue_id]
+
+    [repaired] = store.list_queue(tmp_path)
+    assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+
     claimed = store.dequeue_next(tmp_path)
 
     assert claimed is not None
     assert claimed.queue_id == queue_id
-
-
-def test_dequeue_recovers_when_publisher_pid_was_reused(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-    monkeypatch.setattr(publication, "_owner_process_alive", lambda _pid: True)
-    monkeypatch.setattr(publication, "process_start_token", lambda _pid: "new-process")
-    entry = store.enqueue(
-        tmp_path,
-        app_name="app",
-        task_id="pid-reused",
-        task_kind="kind",
-        engine="engine",
-        metadata={
-            QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING,
-            QUEUE_RECORD_SYNC_OWNER_PID_KEY: 1234,
-            QUEUE_RECORD_SYNC_OWNER_START_KEY: "original-publisher",
-            QUEUE_RECORD_SYNC_UPDATED_AT_KEY: datetime.now(UTC).isoformat(),
-        },
-    )
-
-    claimed = store.dequeue_next(tmp_path)
-
-    assert claimed is not None
-    assert claimed.queue_id == entry.queue_id
-
-
-def test_dequeue_recovers_publication_owned_by_zombie_process(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-    owner_pid = 1234
-    monkeypatch.setattr(publication.os, "kill", lambda _pid, _signal: None)
-    original_read_text = Path.read_text
-
-    def read_proc_stat(
-        path: Path,
-        encoding: str | None = None,
-        errors: str | None = None,
-    ) -> str:
-        if path == Path(f"/proc/{owner_pid}/stat"):
-            return f"{owner_pid} (publisher) Z 1 1 1"
-        return original_read_text(path, encoding=encoding, errors=errors)
-
-    monkeypatch.setattr(Path, "read_text", read_proc_stat)
-    entry = store.enqueue(
-        tmp_path,
-        app_name="app",
-        task_id="zombie-publisher",
-        task_kind="kind",
-        engine="engine",
-        metadata={
-            QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING,
-            QUEUE_RECORD_SYNC_OWNER_PID_KEY: owner_pid,
-            QUEUE_RECORD_SYNC_OWNER_START_KEY: "same-process",
-            QUEUE_RECORD_SYNC_UPDATED_AT_KEY: datetime.now(UTC).isoformat(),
-        },
-    )
-
-    claimed = store.dequeue_next(tmp_path)
-
-    assert claimed is not None
-    assert claimed.queue_id == entry.queue_id
 
 
 def test_update_metadata_merges_without_changing_lifecycle_fields(

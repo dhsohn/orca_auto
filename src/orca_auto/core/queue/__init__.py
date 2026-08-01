@@ -16,7 +16,6 @@ from .publication import (
     process_start_token,
     queue_entry_is_claimable,
     queue_record_publication_lock,
-    queue_record_sync_is_stale,
     queue_record_sync_metadata,
     queue_record_sync_state,
 )
@@ -74,7 +73,6 @@ __all__ = [
     "queue_entry_is_claimable",
     "queue_record_publication_lock",
     "queue_record_sync_metadata",
-    "queue_record_sync_is_stale",
     "queue_record_sync_state",
     "requeue_running_entry",
     "request_cancel",
