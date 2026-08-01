@@ -39,7 +39,7 @@ def _boltzmann_temperature_override(
         return None, "(populations omitted: durable boltzmann_temperature_k is invalid)"
 
 
-def _remove_si_artifacts(*paths: Path, raise_on_error: bool = False) -> None:
+def _remove_si_artifacts(*paths: Path) -> None:
     first_error: OSError | None = None
     for path in paths:
         try:
@@ -47,22 +47,21 @@ def _remove_si_artifacts(*paths: Path, raise_on_error: bool = False) -> None:
         except OSError as exc:
             first_error = first_error or exc
             logger.warning("Failed to remove inconsistent SI artifact %s", path, exc_info=True)
-    if raise_on_error and first_error is not None:
+    if first_error is not None:
         raise first_error
 
 
 def write_workflow_si(
     workspace_dir: Path,
     payload: Mapping[str, Any],
-    *,
-    raise_on_error: bool = False,
 ) -> Path | None:
     """Write ``workflow_si.md``.
 
     A workflow without ORCA stages has no SI: a stale file from an earlier
     template is removed so nothing obsolete can be pasted into a paper.
-    Errors are logged and suppressed by default; ``raise_on_error=True`` exposes
-    them to the durable publication retry state machine.
+    Errors are logged and re-raised for the durable publication retry state
+    machine; ``None`` means the workflow has no SI, never that writing it
+    failed.
     """
     md_path = workspace_dir / WORKFLOW_SI_MD_FILE
     try:
@@ -94,15 +93,14 @@ def write_workflow_si(
             payload,
             boltzmann_temperature_k=override,
             population_blocker=population_blocker,
-            raise_feature_errors=True,
         )
         if not data.has_orca_stages():
-            _remove_si_artifacts(md_path, raise_on_error=raise_on_error)
+            _remove_si_artifacts(md_path)
             return None
         atomic_write_text(md_path, render_workflow_si_md(data))
         return md_path
-    except Exception:  # noqa: BLE001
+    except Exception:
+        # advance.py persists only a truncated one-line summary, so this is the
+        # only place the traceback is recorded.
         logger.warning("Workflow SI generation failed for %s", workspace_dir, exc_info=True)
-        if raise_on_error:
-            raise
-        return None
+        raise
