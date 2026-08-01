@@ -247,16 +247,15 @@ def reconcile_orphaned_child_queue_entries(
 def shutdown_child_process_with_grace(
     job: Any,
     *,
-    terminate_process_fn: Callable[[Any], object],
     finalize_child_exit_fn: Callable[[Any, int], object],
     grace_seconds: float,
     sleep_fn: Callable[[float], None],
 ) -> bool:
     # The child may be deliberately retaining admission ownership while it
-    # cleans up an engine process in a separate session.  Never force-kill the
-    # owner here: doing so can orphan that engine and make the parent release
-    # the only durable ownership record.
-    del terminate_process_fn
+    # cleans up an engine process in a separate session.  Only a plain
+    # ``terminate`` is sent here and no force-kill escalation exists: killing
+    # the owner can orphan that engine and make the parent release the only
+    # durable ownership record.
     if job.process.poll() is None:
         try:
             job.process.terminate()
@@ -267,7 +266,8 @@ def shutdown_child_process_with_grace(
     while job.process.poll() is None and time.monotonic() < deadline:
         sleep_fn(0.1)
 
-    if job.process.poll() is None:
+    returncode = job.process.poll()
+    if returncode is None:
         LOGGER.error(
             "Child worker still owns a live engine cleanup after shutdown grace; "
             "retaining queue state and admission ownership (child_pid=%s)",
@@ -275,14 +275,7 @@ def shutdown_child_process_with_grace(
         )
         return False
 
-    rc = job.process.poll()
-    if rc is None:
-        LOGGER.error(
-            "Child worker process is still running after forced termination; "
-            "skipping queue finalization for now"
-        )
-        return False
-    finalize_child_exit_fn(job, int(rc) if rc is not None else 0)
+    finalize_child_exit_fn(job, int(returncode))
     return True
 
 

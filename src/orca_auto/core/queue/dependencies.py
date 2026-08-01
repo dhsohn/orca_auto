@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, TypeVar
-
-T = TypeVar("T")
+from typing import Any, Protocol
 
 
 class SleepTimer(Protocol):
@@ -56,40 +54,10 @@ class ChildQueueWorkerDeps:
     try_reserve_admission_slot: AdmissionReserver
 
 
-def dependency_group(value: T | None, default_factory: Callable[[], T]) -> T:
-    return value if value is not None else default_factory()
-
-
-def resolve_dependency_groups(
-    overrides: Mapping[str, Any],
-    default_factories: Mapping[str, Callable[[], Any]],
-) -> dict[str, Any]:
-    return {
-        name: dependency_group(overrides.get(name), default_factory)
-        for name, default_factory in default_factories.items()
-    }
-
-
-def build_dependency_container(
-    container_type: Callable[..., T],
-    overrides: Mapping[str, Any],
-    default_factories: Mapping[str, Callable[[], Any]],
-    *,
-    extra_fields: Mapping[str, Any] | None = None,
-) -> T:
-    resolved = resolve_dependency_groups(overrides, default_factories)
-    if extra_fields:
-        resolved.update(extra_fields)
-    return container_type(**resolved)
-
-
 __all__ = [
     "ChildQueueWorkerDeps",
     "BackgroundJobProcessStarter",
     "DequeuedEntryReserver",
-    "build_dependency_container",
-    "dependency_group",
-    "resolve_dependency_groups",
     "QueueEntryDequeuer",
     "SleepTimer",
     "SlotReleaser",

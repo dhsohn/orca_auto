@@ -17,11 +17,6 @@ from orca_auto.core.queue import lifecycle as lifecycle_helpers
 from orca_auto.core.queue import processes as process_helpers
 from orca_auto.core.queue import worker as worker_common
 from orca_auto.core.queue.child import process as child_process_helpers
-from orca_auto.core.queue.dependencies import (
-    build_dependency_container,
-    dependency_group,
-    resolve_dependency_groups,
-)
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
@@ -29,6 +24,7 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_PREPARING,
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
 )
+from orca_auto.core.queue.worker import execution_dependencies as worker_dependency_helpers
 from orca_auto.core.queue.worker import process as worker_process_helpers
 from tests.process_helpers import FakeManagedProcess, recording_killpg
 
@@ -92,46 +88,14 @@ def _process_lifecycle_hooks(
     return lifecycle_helpers.EngineQueueProcessLifecycleHooks(**callbacks)
 
 
-def test_dependency_group_prefers_explicit_value_and_lazily_builds_default() -> None:
-    calls = 0
-
-    def default_factory() -> str:
-        nonlocal calls
-        calls += 1
-        return "default"
-
-    assert dependency_group("explicit", default_factory) == "explicit"
-    assert calls == 0
-    assert dependency_group(None, default_factory) == "default"
-    assert calls == 1
-
-
-def test_resolve_dependency_groups_prefers_overrides_and_lazily_builds_missing() -> None:
-    calls: list[str] = []
-
-    def default_a() -> str:
-        calls.append("a")
-        return "default-a"
-
-    def default_b() -> str:
-        calls.append("b")
-        return "default-b"
-
-    resolved = resolve_dependency_groups(
-        {"a": "override-a", "b": None},
-        {"a": default_a, "b": default_b},
-    )
-
-    assert resolved == {"a": "override-a", "b": "default-b"}
-    assert calls == ["b"]
-
-
-def test_build_dependency_container_resolves_groups_and_extra_fields() -> None:
+def test_worker_execution_dependency_container_prefers_overrides_and_builds_defaults_lazily() -> (
+    None
+):
     @dataclass(frozen=True)
     class Container:
         a: str
         b: str
-        extra: str
+        execute_queue_entry_fn: object
 
     calls: list[str] = []
 
@@ -143,14 +107,21 @@ def test_build_dependency_container_resolves_groups_and_extra_fields() -> None:
         calls.append("b")
         return "default-b"
 
-    container = build_dependency_container(
+    def execute_queue_entry(entry: object) -> str:
+        return "executed"
+
+    container = worker_dependency_helpers.build_worker_execution_dependency_container(
         Container,
         {"a": "override-a", "b": None},
         {"a": default_a, "b": default_b},
-        extra_fields={"extra": "value"},
+        execute_queue_entry_fn=execute_queue_entry,
     )
 
-    assert container == Container(a="override-a", b="default-b", extra="value")
+    assert container == Container(
+        a="override-a",
+        b="default-b",
+        execute_queue_entry_fn=execute_queue_entry,
+    )
     assert calls == ["b"]
 
 
@@ -2114,13 +2085,8 @@ def test_shutdown_child_process_with_grace_retains_live_child_after_deadline(
 
     monkeypatch.setattr(child_process_helpers.time, "monotonic", lambda: next(monotonic_values))
 
-    def force_terminate(proc: Process) -> None:
-        calls.append("force")
-        proc.rc = 9
-
     result = child_process_helpers.shutdown_child_process_with_grace(
         job,
-        terminate_process_fn=force_terminate,
         finalize_child_exit_fn=lambda job_arg, rc: finalized.append((job_arg, rc)),
         grace_seconds=0.1,
         sleep_fn=lambda seconds: calls.append(f"sleep:{seconds}"),
@@ -2131,7 +2097,7 @@ def test_shutdown_child_process_with_grace_retains_live_child_after_deadline(
     assert finalized == []
 
 
-def test_shutdown_child_process_with_grace_skips_finalize_when_force_fails(
+def test_shutdown_child_process_with_grace_does_not_sleep_past_the_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -2149,13 +2115,8 @@ def test_shutdown_child_process_with_grace_skips_finalize_when_force_fails(
 
     monkeypatch.setattr(child_process_helpers.time, "monotonic", lambda: next(monotonic_values))
 
-    def force_terminate(_proc: Process) -> bool:
-        calls.append("force")
-        return False
-
     result = child_process_helpers.shutdown_child_process_with_grace(
         job,
-        terminate_process_fn=force_terminate,
         finalize_child_exit_fn=lambda _job, rc: finalized.append(rc),
         grace_seconds=0.1,
         sleep_fn=lambda seconds: calls.append(f"sleep:{seconds}"),
@@ -2166,7 +2127,7 @@ def test_shutdown_child_process_with_grace_skips_finalize_when_force_fails(
     assert finalized == []
 
 
-def test_shutdown_child_process_with_grace_retains_when_signal_raises(
+def test_shutdown_child_process_with_grace_retains_when_terminate_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Process:
@@ -2186,7 +2147,6 @@ def test_shutdown_child_process_with_grace_retains_when_signal_raises(
 
     result = child_process_helpers.shutdown_child_process_with_grace(
         job,
-        terminate_process_fn=lambda proc: setattr(proc, "rc", 9),
         finalize_child_exit_fn=lambda _job, rc: finalized.append(rc),
         grace_seconds=0.0,
         sleep_fn=lambda _seconds: pytest.fail("sleep should not run after deadline"),
