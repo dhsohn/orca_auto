@@ -363,18 +363,15 @@ def bool_flag(manifest: dict[str, Any], key: str) -> bool:
 def manifest_int(
     manifest: dict[str, Any],
     key: str,
-    *,
-    zero_is_absent: bool = False,
 ) -> int | None:
     value = manifest.get(key)
-    absent_values = (None, "", 0, "0") if zero_is_absent else (None, "")
-    if value in absent_values:
+    if value in (None, ""):
         return None
     if isinstance(value, bool):
         raise ValueError(f"Manifest field {key!r} must be an integer, not a boolean.")
     if isinstance(value, str):
         stripped = value.strip()
-        if not stripped or (zero_is_absent and stripped == "0"):
+        if not stripped:
             return None
         if not _INTEGER_TEXT_RE.fullmatch(stripped):
             raise ValueError(f"Manifest field {key!r} must be an integer-compatible value.")

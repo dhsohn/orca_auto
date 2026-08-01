@@ -181,7 +181,7 @@ def sp_report_meta_html(data: SpReportData) -> str:
     )
 
 
-def _metric_cards(data: SpReportData, *, include_attempts: bool = True) -> str:
+def _metric_cards(data: SpReportData) -> str:
     cards: list[str] = []
     result = data.result
     if result is not None and result.energy_hartree is not None:
@@ -198,36 +198,27 @@ def _metric_cards(data: SpReportData, *, include_attempts: bool = True) -> str:
         )
     if data.imaginary_count is not None:
         cards.append(metric_card("Imaginary frequencies", str(data.imaginary_count), ""))
-    if include_attempts:
-        cards.append(
-            metric_card(
-                "Attempts",
-                str(len(data.attempts)),
-                data.total_duration_text and f"total wall time {data.total_duration_text}",
-            )
+    cards.append(
+        metric_card(
+            "Attempts",
+            str(len(data.attempts)),
+            data.total_duration_text and f"total wall time {data.total_duration_text}",
         )
+    )
     return "".join(cards)
 
 
-def sp_report_component(
-    data: SpReportData,
-    *,
-    include_attempt_metric: bool = True,
-    include_attempt_chain: bool = True,
-    include_vibrational: bool = True,
-    include_si_block: bool = True,
-) -> ReportComponent:
+def sp_report_component(data: SpReportData) -> ReportComponent:
     sections: list[tuple[str, str]] = [("Energy summary", _energy_section_html(data))]
-    if include_vibrational and data.mode_summaries:
+    if data.mode_summaries:
         sections.append(("Vibrational summary", mode_section_html(data.mode_summaries, None)))
-    if include_attempt_chain:
-        sections.append(
-            (
-                "Attempt chain",
-                attempts_table_html(data.attempts, "Detail") + terminal_actions_html(data.attempts),
-            )
+    sections.append(
+        (
+            "Attempt chain",
+            attempts_table_html(data.attempts, "Detail") + terminal_actions_html(data.attempts),
         )
-    if include_si_block and data.si_block_text:
+    )
+    if data.si_block_text:
         sections.append(
             (
                 "SI block",
@@ -236,10 +227,7 @@ def sp_report_component(
                 "next to this report.</p>",
             )
         )
-    return ReportComponent(
-        metrics_html=_metric_cards(data, include_attempts=include_attempt_metric),
-        sections=tuple(sections),
-    )
+    return ReportComponent(metrics_html=_metric_cards(data), sections=tuple(sections))
 
 
 __all__ = [

@@ -308,21 +308,18 @@ def irc_report_component(
     *,
     include_attempt_metric: bool = True,
     include_attempt_chain: bool = True,
-    include_common_summary: bool = True,
     include_common_metric: bool = True,
     include_optimization: bool = True,
-    include_vibrational: bool = True,
 ) -> ReportComponent:
     sections: list[tuple[str, str]] = []
-    if include_common_summary:
-        common_html = _calculation_summary_html(data)
-        if common_html:
-            sections.append(("Calculation summary", common_html))
+    common_html = _calculation_summary_html(data)
+    if common_html:
+        sections.append(("Calculation summary", common_html))
     if include_optimization:
         opt_html = _optimization_section_html(data)
         if opt_html:
             sections.append((_optimization_section_title(data), opt_html))
-    if include_vibrational and data.mode_summaries:
+    if data.mode_summaries:
         sections.append(("Vibrational summary", mode_section_html(data.mode_summaries, None)))
     chart = _path_chart_svg(data) or (
         '<p class="muted">No IRC path-summary points were parsed from the attempt outputs.</p>'
@@ -345,7 +342,6 @@ def irc_report_component(
             include_attempts=include_attempt_metric,
             include_common=include_common_metric,
             include_optimization=include_optimization,
-            include_vibrational=include_vibrational,
         ),
         sections=tuple(sections),
     )
@@ -665,7 +661,6 @@ def _metric_cards(
     include_attempts: bool = True,
     include_common: bool = True,
     include_optimization: bool = True,
-    include_vibrational: bool = True,
 ) -> str:
     cards = []
     if data.path_points:
@@ -706,7 +701,7 @@ def _metric_cards(
                 "converged" if data.optimization_converged else "not converged",
             )
         )
-    if include_vibrational and data.imaginary_count is not None:
+    if data.imaginary_count is not None:
         expected = 1 if _is_ts_route(data.route_line) else 0
         cards.append(
             metric_card(

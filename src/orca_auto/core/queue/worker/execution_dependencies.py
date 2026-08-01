@@ -95,26 +95,6 @@ def worker_process_dependency_callbacks_from_attrs(
     )
 
 
-def worker_process_dependency_callback_kwargs(
-    callbacks: WorkerProcessDependencyCallbacks,
-    *,
-    include_engine_runner_dependencies: bool = False,
-) -> dict[str, Any]:
-    kwargs = {
-        "terminate_process": callbacks.terminate_process,
-        "wait_for_cancellable_process": callbacks.wait_for_cancellable_process,
-        "sleep": callbacks.sleep,
-        "now_utc_iso": callbacks.now_utc_iso,
-        "get_cancel_requested": callbacks.get_cancel_requested,
-        "mark_completed": callbacks.mark_completed,
-        "mark_cancelled": callbacks.mark_cancelled,
-        "mark_failed": callbacks.mark_failed,
-    }
-    if include_engine_runner_dependencies:
-        kwargs.update(callbacks.engine_runner_dependencies)
-    return kwargs
-
-
 def queue_entry_by_id(
     queue_root: Path | str,
     queue_id: str,
@@ -131,12 +111,8 @@ def queue_entry_by_id(
 def build_queue_entry_lookup(
     *,
     list_queue_fn: Callable[[str | Path], Any],
-    coerce_root_to_path: bool = False,
 ) -> Callable[[str | Path, str], Any | None]:
-    return _build_queue_entry_lookup(
-        list_queue_fn=list_queue_fn,
-        coerce_root_to_path=coerce_root_to_path,
-    )
+    return _build_queue_entry_lookup(list_queue_fn=list_queue_fn)
 
 
 def build_worker_config_dependencies(
@@ -290,6 +266,5 @@ __all__ = [
     "build_worker_process_default_factories",
     "build_worker_process_default_factories_from_callbacks",
     "queue_entry_by_id",
-    "worker_process_dependency_callback_kwargs",
     "worker_process_dependency_callbacks_from_attrs",
 ]

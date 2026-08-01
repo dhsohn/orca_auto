@@ -390,20 +390,19 @@ def _append_warning(state: _InternalEngineSubmissionState, warning: str) -> None
 def _submission_for_existing_entry(
     submission: Any,
     entry: QueueEntry,
-    *,
-    suppress_queued_notification: bool = True,
 ) -> EngineRunDirSubmission:
     metadata = dict(entry.metadata)
     job_dir = Path(str(metadata.get("job_dir", ""))).expanduser().resolve()
     resource_request = metadata.get("resource_request")
     if not isinstance(resource_request, dict):
         resource_request = {}
+    # Replaying an existing entry never re-announces it: the queued
+    # notification was already delivered when the row was first published.
     context = {
         "job_dir": job_dir,
         "resource_request": resource_request,
+        SUPPRESS_QUEUED_NOTIFICATION_CONTEXT_KEY: True,
     }
-    if suppress_queued_notification:
-        context[SUPPRESS_QUEUED_NOTIFICATION_CONTEXT_KEY] = True
     return EngineRunDirSubmission(
         queue_root=Path(submission.queue_root).expanduser().resolve(),
         app_name=entry.app_name,
@@ -470,7 +469,6 @@ def _repair_queued_record(
     cfg: Any,
     state: _InternalEngineSubmissionState,
     record_queued_fn: Callable[[Any, Any, Any], Any],
-    suppress_queued_notification: bool = True,
 ) -> None:
     submission = state.submission
     entry = state.entry
@@ -481,11 +479,7 @@ def _repair_queued_record(
         # From the moment the repair claim commits, the publication belongs to
         # the repair lease, including reconstruction of the replay submission.
         _set_state_entry(state, current)
-        state.submission = _submission_for_existing_entry(
-            submission,
-            current,
-            suppress_queued_notification=suppress_queued_notification,
-        )
+        state.submission = _submission_for_existing_entry(submission, current)
         notification_delivered = record_queued_fn(cfg, state.submission, state.entry)
         if notification_delivered is False:
             _notification_failure_warning(state)
@@ -502,11 +496,7 @@ def _repair_queued_record(
         return
     if outcome.entry is not None and outcome.reason not in {"failed", "claim_failed"}:
         _set_state_entry(state, outcome.entry)
-        state.submission = _submission_for_existing_entry(
-            submission,
-            outcome.entry,
-            suppress_queued_notification=suppress_queued_notification,
-        )
+        state.submission = _submission_for_existing_entry(submission, outcome.entry)
     if outcome.reason == "cancelled":
         state.deferred_reason = STATUS_CANCEL_REQUESTED
     elif outcome.reason == "invalid_state":
@@ -628,7 +618,6 @@ def repair_internal_engine_queue_publication(
         cfg=cfg,
         state=state,
         record_queued_fn=record_queued_fn,
-        suppress_queued_notification=True,
     )
 
     def reload(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:

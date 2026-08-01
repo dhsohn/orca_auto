@@ -137,12 +137,11 @@ def _require_interaction_text(
     *,
     field: str,
     maximum_length: int,
-    allow_empty: bool = False,
 ) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field} must be a string")
     text = value.strip()
-    if not text and not allow_empty:
+    if not text:
         raise ValueError(f"{field} must not be empty")
     if len(text) > maximum_length:
         raise ValueError(f"{field} must be at most {maximum_length} characters")

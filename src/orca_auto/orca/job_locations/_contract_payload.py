@@ -66,22 +66,12 @@ def runtime_paths(
     *,
     state_file_name: str,
     report_json_name: str,
-    include_state: bool = True,
-    include_report: bool = True,
     queue_entry: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     state_path = current_dir / state_file_name if current_dir is not None else None
     report_json_path = current_dir / report_json_name if current_dir is not None else None
-    visible_state = (
-        _runtime_payload_for_generation(state_path, current_dir, queue_entry)
-        if include_state
-        else None
-    )
-    visible_report = (
-        _runtime_payload_for_generation(report_json_path, current_dir, queue_entry)
-        if include_report
-        else None
-    )
+    visible_state = _runtime_payload_for_generation(state_path, current_dir, queue_entry)
+    visible_report = _runtime_payload_for_generation(report_json_path, current_dir, queue_entry)
     current_state, current_report = current_generation_payloads(
         queue_entry,
         visible_state.payload if visible_state is not None else {},
