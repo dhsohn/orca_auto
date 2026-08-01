@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -44,9 +45,18 @@ def _field_labels(message: Message) -> list[str]:
     ]
 
 
-def test_maybe_notify_workflow_phase_summary_sends_crest_summary_once(monkeypatch: Any) -> None:
+def test_maybe_notify_workflow_phase_summary_sends_crest_summary_once(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
     channel = _RecordingChannel()
     _patch_channel(monkeypatch, channel)
+    # Three conformers in one ensemble file. The count must come from the file,
+    # not from the number of ensemble files, which the engine caps at four.
+    conformers = tmp_path / "crest_conformers.xyz"
+    conformers.write_text(
+        "".join(f"2\nframe {index}\nH 0.0 0.0 0.0\nH 0.0 0.0 {index}.0\n" for index in range(3)),
+        encoding="utf-8",
+    )
     payload: dict[str, Any] = {
         "workflow_id": "wf_crest_1",
         "template_name": "reaction_ts_search",
@@ -61,7 +71,10 @@ def test_maybe_notify_workflow_phase_summary_sends_crest_summary_once(monkeypatc
                     "payload": {"input_role": "reactant"},
                 },
                 "metadata": {},
-                "output_artifacts": [{"path": "a.xyz"}, {"path": "b.xyz"}],
+                "output_artifacts": [
+                    {"kind": "crest_conformer", "path": str(conformers)},
+                    {"kind": "crest_conformer", "path": str(tmp_path / "crest_best.xyz")},
+                ],
             },
             {
                 "stage_id": "crest_product",
@@ -92,9 +105,11 @@ def test_maybe_notify_workflow_phase_summary_sends_crest_summary_once(monkeypatc
     assert "CREST phase summary" in embed["title"]
     assert fields["Stages"].startswith("`2`")
     assert "**Stage**: reactant" in description
-    assert "**Retained conformers**: `2`" in description
+    # Two ensemble files, three conformers — the old metric reported `2` here.
+    assert "**Conformers**: `3`" in description
     assert "**Stage**: product" in description
-    assert "**Retained conformers**: `0`" in description
+    # A stage with no ensemble file reports no count rather than a false zero.
+    assert "**Conformers**: `-`" in description
     assert payload["metadata"]["phase_notifications"]["crest_summary"]["sent_at"]
 
 

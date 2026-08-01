@@ -58,6 +58,21 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   directories, and callers already compensate for a barrier that fails after the
   rename made the file visible.
 
+- `ORCA_AUTO_FLOW_NOTIFY_EVENT_TYPES` now works for stage events. Setting it to
+  include a stage event type had no effect: a second gate dropped every stage
+  notification whose engine was CREST, xTB, or ORCA — which is all of them — so
+  the opt-in was silently inert for exactly the operator who had configured it.
+  The opt-in is now the only thing deciding which journal events notify. The
+  default set still excludes stage events, so an operator who has not set the
+  variable sees no change.
+
+- The CREST phase summary reports the conformers CREST actually retained.
+  "Retained conformers" counted the named ensemble *files* that survived
+  validation, which the engine caps at four, so a run that produced dozens was
+  reported as `2`. The metric is now "Conformers" and counts the frames in
+  `crest_conformers.xyz`, the same number the HTML report already showed. A
+  stage with no readable ensemble file reports `-` rather than a false `0`.
+
 - A non-string identity value in `orca_auto.yaml` now reports "must be a string"
   rather than "must be a string or integer". The integer form was never accepted
   on any key that used this validator, so the old wording described an option

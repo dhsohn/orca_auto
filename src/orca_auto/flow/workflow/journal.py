@@ -39,8 +39,6 @@ def _maybe_notify_journal_event(event: dict[str, Any], workflow_root: str | Path
     event_type = _normalize_text(event.get("event_type"))
     if not _notifications.journal_notification_enabled(event_type):
         return
-    if _notifications.should_suppress_stage_notification(event):
-        return
     try:
         channel = _notifications.messenger_channel_from_env()
         if channel is None:

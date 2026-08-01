@@ -19,7 +19,6 @@ from orca_auto.core.utils.coercion import (
 )
 
 WORKFLOW_PHASE_FINISHED_EVENT = "workflow_phase_finished"
-SUPPRESSED_STAGE_NOTIFICATION_ENGINES = frozenset({"crest", "xtb", "orca"})
 TERMINAL_STAGE_STATUSES = STAGE_TERMINAL_STATUSES
 BASE_PHASE_DEFINITIONS = ({"phase": "crest", "phase_label": "CREST", "engine": "crest"},)
 TEMPLATE_PHASE_DEFINITIONS = {
@@ -321,7 +320,6 @@ def phase_transition_event_payloads(
 
 
 __all__ = [
-    "SUPPRESSED_STAGE_NOTIFICATION_ENGINES",
     "TERMINAL_STAGE_STATUSES",
     "WORKFLOW_PHASE_FINISHED_EVENT",
     "phase_finished",
