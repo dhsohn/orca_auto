@@ -101,11 +101,13 @@ def test_process_one_returns_idle_and_releases_reserved_slot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # An empty admission_root resolves to allowed_root in the config itself, so
+    # that is what the runtime exposes.
     cfg = SimpleNamespace(
         runtime=SimpleNamespace(
             allowed_root=str(tmp_path / "allowed"),
             admission_root="",
-            resolved_admission_root=None,
+            resolved_admission_root=str(tmp_path / "allowed"),
         )
     )
     released: list[tuple[str, str | None]] = []

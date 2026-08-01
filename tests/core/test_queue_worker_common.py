@@ -125,25 +125,15 @@ def test_worker_execution_dependency_container_prefers_overrides_and_builds_defa
     assert calls == ["b"]
 
 
-def test_resolve_admission_root_and_limit_prefer_resolved_values() -> None:
+def test_resolve_admission_root_reads_the_runtime_property() -> None:
     cfg = _cfg(
         resolved_admission_root="/resolved",
-        resolved_admission_limit="5",
         admission_root="/configured",
-        admission_limit=2,
     )
 
+    # The config owns the resolution; this adapter only exposes it as a callable
+    # for the worker modules that inject it as a value.
     assert worker_common.resolve_admission_root(cfg) == "/resolved"
-    assert worker_common.resolve_admission_limit(cfg) == 5
-
-
-def test_resolve_admission_limit_falls_back_and_handles_invalid_values() -> None:
-    assert (
-        worker_common.resolve_admission_limit(_cfg(resolved_admission_limit=0, max_concurrent=7))
-        == 7
-    )
-    with pytest.raises(ValueError, match="admission_limit must be an integer >= 1"):
-        worker_common.resolve_admission_limit(_cfg(resolved_admission_limit="bad"))
 
 
 def test_dequeue_next_across_roots_handles_single_root_idle_and_selected_entry(

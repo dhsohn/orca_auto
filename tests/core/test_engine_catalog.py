@@ -150,6 +150,8 @@ def test_every_catalog_engine_has_registry_supervision_admission_and_stage_metad
                         "admission_root": str(tmp_path / ".admission"),
                         "admission_limit": 2,
                         "max_concurrent": 2,
+                        "resolved_admission_root": str(tmp_path / ".admission"),
+                        "resolved_admission_limit": 2,
                     },
                 )()
             },

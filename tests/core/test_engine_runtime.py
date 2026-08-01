@@ -153,6 +153,8 @@ def test_engine_queue_runtime_common_accessors(tmp_path: Path) -> None:
             admission_root="/tmp/admission",
             admission_limit=1,
             max_concurrent=1,
+            resolved_admission_root="/tmp/admission",
+            resolved_admission_limit=1,
         )
     )
 
@@ -241,6 +243,8 @@ def test_engine_queue_runtime_builds_child_worker_deps(tmp_path: Path) -> None:
             admission_root="/tmp/admission",
             admission_limit=1,
             max_concurrent=1,
+            resolved_admission_root="/tmp/admission",
+            resolved_admission_limit=1,
         )
     )
     released: list[tuple[str, str]] = []
@@ -413,6 +417,8 @@ def test_engine_queue_runtime_reserves_admission_slot(tmp_path: Path) -> None:
             admission_root="/tmp/admission",
             admission_limit=2,
             max_concurrent=4,
+            resolved_admission_root="/tmp/admission",
+            resolved_admission_limit=2,
         )
     )
     calls: list[dict[str, Any]] = []
