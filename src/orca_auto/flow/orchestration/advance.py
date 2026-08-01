@@ -192,7 +192,7 @@ def advance_workflow(
             write_workflow_html_report(workspace_dir, payload)
             return payload
         try:
-            write_workflow_si(workspace_dir, payload, raise_on_error=True)
+            write_workflow_si(workspace_dir, payload)
         except Exception as exc:  # noqa: BLE001 - durable pending marker drives retry
             metadata["si_publish_error"] = f"{type(exc).__name__}: {exc}"[:500]
             permanent = isinstance(exc, (FileExistsError, ValueError))

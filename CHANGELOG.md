@@ -35,6 +35,21 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   queue id and root with its traceback before the sweep moves on, which no
   engine reported before.
 
+- Writing `workflow_si.md` fails closed on every path. `write_workflow_si` and
+  `collect_workflow_si_data` had switches that logged and degraded instead of
+  raising, so a failure inside a configured SI feature could publish a document
+  that reads as complete but is not. For the interaction-energy assembly that
+  meant a missing section; for the RMSD re-dedup it was worse, because the
+  degraded path returns the un-deduplicated ensemble — the merged duplicate
+  reappears as a second row and the Boltzmann populations are recomputed over a
+  double-counted ensemble, so the published numbers are wrong rather than
+  absent. Production already passed the strict value at both call sites; the
+  lenient default was what nothing selected, and it is gone. A failure now
+  leaves the last known-good `workflow_si.md` untouched and reaches the durable
+  publication retry state machine, which retries or blocks the workflow.
+  `write_workflow_si` returning `None` now means only that the workflow has no
+  ORCA stages, never that publication failed.
+
 - A directory fsync that fails is now reported instead of being skipped. Five
   errno values (`EINVAL`, `ENOSYS`, `ENOTSUP`, `ENOTTY`, `EOPNOTSUPP`) used to be
   swallowed on the assumption that the filesystem could not fsync directories,

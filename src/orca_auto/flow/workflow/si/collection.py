@@ -1068,7 +1068,6 @@ def collect_workflow_si_data(
     *,
     boltzmann_temperature_k: float | None = None,
     population_blocker: str = "",
-    raise_feature_errors: bool = False,
 ) -> WorkflowSiData:
     template_name = _text(payload.get("template_name"))
     workflow_status = _text(payload.get("status"))
@@ -1211,38 +1210,27 @@ def collect_workflow_si_data(
         logger.warning("Pre-dedup population validation failed", exc_info=True)
         population_blocker = "(populations omitted: population validation failed)"
 
-    # RMSD re-dedup and interaction-energy assembly are additive report-time
-    # features isolated behind their own guards: a failure in either omits only
-    # that feature and still renders the base SI (methods, table, structures).
+    # RMSD re-dedup and interaction-energy assembly are requested explicitly, so
+    # a failure in either aborts the whole publication rather than quietly
+    # dropping the feature: an SI that silently omits a section the workflow
+    # asked for reads as complete and is not. The last known-good SI stays on
+    # disk and the durable publication state machine retries or blocks.
     rmsd_groups: tuple[RmsdGroup, ...] = ()
     ranked = pre_dedup_ranked
     if rmsd_cfg is not None:
-        try:
-            ranked, rmsd_groups = _dedup_minima(pre_dedup_ranked, rmsd_cfg)
-        except Exception:  # noqa: BLE001
-            if raise_feature_errors:
-                raise
-            logger.warning("Workflow SI RMSD dedup failed", exc_info=True)
-            rmsd_groups = ()
-            ranked = pre_dedup_ranked
+        ranked, rmsd_groups = _dedup_minima(pre_dedup_ranked, rmsd_cfg)
     unpaired = pre_dedup_unpaired
 
     interaction_energies: tuple[InteractionEnergyResult, ...] = ()
     if interaction_cfg is not None:
-        try:
-            interaction_energies = _interaction_energy_results(
-                interaction_raw_stages,
-                stationary,
-                single_points,
-                interaction_cfg,
-                parameters,
-                rmsd_cfg,
-            )
-        except Exception:  # noqa: BLE001
-            if raise_feature_errors:
-                raise
-            logger.warning("Workflow SI interaction-energy assembly failed", exc_info=True)
-            interaction_energies = ()
+        interaction_energies = _interaction_energy_results(
+            interaction_raw_stages,
+            stationary,
+            single_points,
+            interaction_cfg,
+            parameters,
+            rmsd_cfg,
+        )
 
     # A population bug must never replace a valid SI with stale files: isolate the
     # computation so the base document (methods, relative-energy table, structures)

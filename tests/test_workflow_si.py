@@ -936,7 +936,10 @@ def test_write_workflow_si_keeps_last_good_file_when_publish_fails(
 
     monkeypatch.setattr(si_publication, "atomic_write_text", fail_write)
 
-    assert si_publication.write_workflow_si(workspace, payload) is None
+    # A failed publish is reported so the durable retry state machine sees it,
+    # and it never destroys the last known-good SI.
+    with pytest.raises(OSError, match="publish failed"):
+        si_publication.write_workflow_si(workspace, payload)
     assert md_path.read_text(encoding="utf-8") == "old md"
 
 
@@ -1933,12 +1936,12 @@ def test_invalid_durable_interaction_config_preserves_last_good_artifacts(
     workspace = tmp_path / "ws"
     workspace.mkdir()
     payload = _interaction_payload(tmp_path)
-    write_workflow_si(workspace, payload, raise_on_error=True)
+    write_workflow_si(workspace, payload)
     md_path = workspace / WORKFLOW_SI_MD_FILE
     before = md_path.read_bytes()
     payload["metadata"]["request"]["parameters"]["interaction_energy"]["typo"] = True
     with pytest.raises(ValueError, match="unknown key"):
-        write_workflow_si(workspace, payload, raise_on_error=True)
+        write_workflow_si(workspace, payload)
     assert md_path.read_bytes() == before
 
 
@@ -1946,13 +1949,13 @@ def test_unsupported_template_feature_preserves_last_good_artifacts(tmp_path: Pa
     workspace = tmp_path / "ws"
     workspace.mkdir()
     payload = _interaction_payload(tmp_path)
-    write_workflow_si(workspace, payload, raise_on_error=True)
+    write_workflow_si(workspace, payload)
     md_path = workspace / WORKFLOW_SI_MD_FILE
     before = md_path.read_bytes()
     payload["template_name"] = "reaction_ts_search"
 
     with pytest.raises(ValueError, match="supported only for conformer_screening"):
-        write_workflow_si(workspace, payload, raise_on_error=True)
+        write_workflow_si(workspace, payload)
 
     assert md_path.read_bytes() == before
 
@@ -1963,14 +1966,14 @@ def test_corrupt_interaction_stage_metadata_preserves_last_good_artifacts(
     workspace = tmp_path / "ws"
     workspace.mkdir()
     payload = _interaction_payload(tmp_path)
-    write_workflow_si(workspace, payload, raise_on_error=True)
+    write_workflow_si(workspace, payload)
     md_path = workspace / WORKFLOW_SI_MD_FILE
     before = md_path.read_bytes()
     fragment = next(stage for stage in payload["stages"] if stage["stage_id"] == "ie_f0")
     fragment["metadata"]["fragment_atom_indices"] = 0
 
     with pytest.raises(TypeError):
-        write_workflow_si(workspace, payload, raise_on_error=True)
+        write_workflow_si(workspace, payload)
 
     assert md_path.read_bytes() == before
 
@@ -1995,7 +1998,6 @@ def test_strict_no_orca_cleanup_propagates_unlink_failure(
         write_workflow_si(
             workspace,
             {"workflow_id": "wf_empty", "template_name": "conformer_screening", "stages": []},
-            raise_on_error=True,
         )
 
 
@@ -2024,6 +2026,47 @@ def test_rmsd_dedup_collapses_degenerate_minima(tmp_path: Path) -> None:
     assert group.degeneracy == 2
     assert list(group.merged_stage_ids) == ["orca_conf_drop"]
     assert "RMSD representatives" in render_workflow_si_md(data)
+
+
+def test_rmsd_dedup_failure_preserves_last_good_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    keep = _stage_dir(tmp_path, "keep", route=_OPT_ROUTE, energy=-50.00005, coords=_COORDS_C)
+    drop = _stage_dir(tmp_path, "drop", route=_OPT_ROUTE, energy=-50.0, coords=_COORDS_C)
+    payload = _params_payload(
+        [
+            _orca_stage("orca_conf_keep", keep, label="keep"),
+            _orca_stage("orca_conf_drop", drop, label="drop"),
+        ],
+        rmsd_dedup={
+            "enabled": True,
+            "rmsd_threshold_angstrom": 0.25,
+            "energy_window_kcal": 1.0,
+            "heavy_atoms_only": True,
+        },
+    )
+    write_workflow_si(workspace, payload)
+    md_path = workspace / WORKFLOW_SI_MD_FILE
+    before = md_path.read_bytes()
+    # The good SI collapses the degenerate pair to one representative, so its
+    # table and its Boltzmann populations cover one conformer, not two.
+    assert [entry.block.name for entry in collect_workflow_si_data(payload).entries] == ["keep"]
+
+    def fail_dedup(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("rmsd dedup bug")
+
+    monkeypatch.setattr(si_evidence, "_dedup_minima", fail_dedup)
+
+    # Degrading instead of raising would return the un-deduplicated ensemble,
+    # putting the merged duplicate back as a second table row and recomputing
+    # the populations over a double-counted ensemble — wrong numbers in a
+    # document written to be pasted into a paper.
+    with pytest.raises(RuntimeError, match="rmsd dedup bug"):
+        write_workflow_si(workspace, payload)
+
+    assert md_path.read_bytes() == before
 
 
 def test_rmsd_dedup_cannot_hide_an_unusable_population_member(tmp_path: Path) -> None:
