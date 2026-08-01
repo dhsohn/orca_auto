@@ -14,7 +14,8 @@ from orca_auto.core.statuses import (
 from orca_auto.core.utils import normalize_text
 from orca_auto.core.utils.process_tracking import run_lock_is_held
 
-from ._model import ActivityRecord
+from ..engine_runtime import engine_runtime_paths
+from ._model import ActivityRecord, path_aliases, timestamp_metadata, unique_texts
 
 if TYPE_CHECKING:
     from orca_auto.orca.run_snapshot import RunSnapshot
@@ -97,7 +98,6 @@ def queue_record(
     snapshot: RunSnapshot | None,
     *,
     allowed_root: Path,
-    deps: Any,
 ) -> ActivityRecord:
     entry_metadata_loader = getattr(queue_adapter, "queue_entry_metadata", None)
     entry_metadata = dict(entry_metadata_loader(entry)) if callable(entry_metadata_loader) else {}
@@ -134,8 +134,8 @@ def queue_record(
         submitted_at=submitted_at,
         updated_at=updated_at,
         cancel_target=queue_id or run_id or reaction_dir,
-        aliases=deps._unique_texts(
-            [queue_id, task_id, run_id, *list(deps._path_aliases(reaction_dir, root=allowed_root))]
+        aliases=unique_texts(
+            [queue_id, task_id, run_id, *list(path_aliases(reaction_dir, root=allowed_root))]
         ),
         metadata={
             "queue_id": queue_id,
@@ -148,7 +148,7 @@ def queue_record(
             "reaction_dir": reaction_dir,
             "allowed_root": str(allowed_root),
             "priority": queue_adapter.queue_entry_priority(entry),
-            **deps._timestamp_metadata(
+            **timestamp_metadata(
                 enqueued_at=submitted_at, started_at=started_at, finished_at=finished_at
             ),
         },
@@ -177,7 +177,7 @@ def _snapshot_display_status(snapshot: RunSnapshot) -> str:
     return status
 
 
-def snapshot_record(snapshot: RunSnapshot, *, allowed_root: Path, deps: Any) -> ActivityRecord:
+def snapshot_record(snapshot: RunSnapshot, *, allowed_root: Path) -> ActivityRecord:
     reaction_dir = snapshot_reaction_dir(snapshot)
     run_id = normalize_text(snapshot.run_id)
     label = (
@@ -197,10 +197,10 @@ def snapshot_record(snapshot: RunSnapshot, *, allowed_root: Path, deps: Any) -> 
         submitted_at=started_at,
         updated_at=completed_at or normalize_text(snapshot.updated_at) or started_at,
         cancel_target=run_id or reaction_dir,
-        aliases=deps._unique_texts(
+        aliases=unique_texts(
             [
                 run_id,
-                *list(deps._path_aliases(reaction_dir, root=allowed_root)),
+                *list(path_aliases(reaction_dir, root=allowed_root)),
                 normalize_text(snapshot.name),
             ]
         ),
@@ -213,7 +213,7 @@ def snapshot_record(snapshot: RunSnapshot, *, allowed_root: Path, deps: Any) -> 
             # RunSnapshot carries no job_type; orphan-snapshot rows have always had
             # this empty. Kept for metadata-shape parity with queue_record.
             "job_type": "",
-            **deps._timestamp_metadata(started_at=started_at, finished_at=completed_at),
+            **timestamp_metadata(started_at=started_at, finished_at=completed_at),
         },
     )
 
@@ -267,12 +267,11 @@ def _snapshot_is_superseded(snapshot: RunSnapshot, superseded_dirs: set[str]) ->
 def orca_records(
     *,
     config_path: str,
-    deps: Any,
 ) -> list[ActivityRecord]:
     from orca_auto.orca import run_snapshot
     from orca_auto.orca.queue import adapter as queue_adapter
 
-    runtime_paths = deps.engine_runtime_paths(config_path, engine="orca")
+    runtime_paths = engine_runtime_paths(config_path, engine="orca")
     allowed_root = runtime_paths["allowed_root"]
     reconcile = getattr(queue_adapter, "reconcile_orphaned_running_entries", None)
     if callable(reconcile):
@@ -291,9 +290,7 @@ def orca_records(
 
     for entry in queue_entries:
         snapshot = snapshot_matches_entry(queue_adapter, entry, snapshot_by_run_id, snapshot_by_dir)
-        rows.append(
-            queue_record(queue_adapter, entry, snapshot, allowed_root=allowed_root, deps=deps)
-        )
+        rows.append(queue_record(queue_adapter, entry, snapshot, allowed_root=allowed_root))
         if snapshot is not None and queue_represents_snapshot(queue_adapter, entry, snapshot):
             represented_snapshot_keys.add(normalize_text(snapshot.key))
 
@@ -303,6 +300,6 @@ def orca_records(
             continue
         if _snapshot_is_superseded(snapshot, superseded_dirs):
             continue
-        rows.append(snapshot_record(snapshot, allowed_root=allowed_root, deps=deps))
+        rows.append(snapshot_record(snapshot, allowed_root=allowed_root))
 
     return rows
