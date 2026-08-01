@@ -197,12 +197,10 @@ def _report_components(
                 parts.irc,
                 include_attempt_metric=primary is parts.irc,
                 include_attempt_chain=primary is parts.irc,
-                include_common_summary=True,
                 include_common_metric=primary is parts.irc,
                 include_optimization=(
                     parts.opt is None and parts.neb is None and parts.scants is None
                 ),
-                include_vibrational=True,
             )
         )
     if parts.sp is not None:

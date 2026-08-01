@@ -58,6 +58,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   directories, and callers already compensate for a barrier that fails after the
   rename made the file visible.
 
+- A non-string identity value in `orca_auto.yaml` now reports "must be a string"
+  rather than "must be a string or integer". The integer form was never accepted
+  on any key that used this validator, so the old wording described an option
+  that did not exist.
+
 - `orca_auto queue worker` no longer labels a conflicting worker as `orca_auto`
   or `unknown`. The refusal, its exit code, and the `command:` line naming the
   process that holds the queue root are unchanged; only the label and the
@@ -65,6 +70,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Removed
 
+- Removed thirteen keyword switches whose non-default branch production never
+  selected, and the one function that existed only to feed one of them. The HTML
+  report components lose the toggles the composer always passed at the same
+  value, `manifest_int` loses `zero_is_absent`, `runtime_paths` loses
+  `include_state`/`include_report`, the workflow worker parser loses
+  `include_json`, and the internal-engine replay loses
+  `suppress_queued_notification` — replaying an existing entry never re-announces
+  it, so the context key is now written unconditionally. The three switches that
+  look inert but are flipped through a dict literal, an engine definition table,
+  and a late-bound local are untouched.
 - Removed two internal surfaces with no readers: the `provider` and `message_id`
   fields on `SendResult`, which nothing read once the messenger became a one-way
   notifier (the response is still checked for a message id, since a response

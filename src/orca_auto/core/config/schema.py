@@ -117,14 +117,10 @@ def _optional_identity_text(
     value: object,
     *,
     field_name: str,
-    allow_integer: bool = False,
 ) -> str:
     if isinstance(value, str):
         return value.strip()
-    if allow_integer and isinstance(value, int) and not isinstance(value, bool):
-        return str(value)
-    expected = "a string or integer" if allow_integer else "a string"
-    raise ValueError(f"{field_name} must be {expected} when configured.")
+    raise ValueError(f"{field_name} must be a string when configured.")
 
 
 def positive_int(value: Any) -> int | None:

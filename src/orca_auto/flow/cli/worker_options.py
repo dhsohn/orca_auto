@@ -20,7 +20,6 @@ class WorkflowWorkerOptionConfig:
     interval_seconds_help: str = "Workflow worker sleep interval"
     lock_timeout_seconds_default: float = 0.0
     lock_timeout_seconds_help: str = "Workflow worker lock timeout"
-    include_json: bool = True
     json_help: str = "Print JSON output"
 
 
@@ -83,8 +82,7 @@ def add_workflow_worker_cli_options(
         default=config.lock_timeout_seconds_default,
         help=config.lock_timeout_seconds_help,
     )
-    if config.include_json:
-        parser.add_argument("--json", action="store_true", help=config.json_help)
+    parser.add_argument("--json", action="store_true", help=config.json_help)
 
 
 __all__ = [

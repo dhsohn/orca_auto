@@ -637,7 +637,6 @@ def _metric_cards(
     data: NebReportData,
     *,
     include_attempts: bool = True,
-    include_energy: bool = True,
     include_frequency: bool = True,
 ) -> str:
     cards = []
@@ -672,7 +671,7 @@ def _metric_cards(
                 f"{last.phase} image {last.image}",
             )
         )
-    if include_energy and data.final_energy is not None:
+    if data.final_energy is not None:
         cards.append(
             metric_card(
                 "Final TS energy",
@@ -769,7 +768,6 @@ def neb_report_component(
     *,
     include_attempt_metric: bool = True,
     include_attempt_chain: bool = True,
-    include_energy_metric: bool = True,
     include_frequency_metric: bool = True,
     include_vibrational: bool = True,
 ) -> ReportComponent:
@@ -805,7 +803,6 @@ def neb_report_component(
         metrics_html=_metric_cards(
             data,
             include_attempts=include_attempt_metric,
-            include_energy=include_energy_metric,
             include_frequency=include_frequency_metric,
         ),
         sections=tuple(sections),

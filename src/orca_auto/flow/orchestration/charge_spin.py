@@ -53,8 +53,7 @@ def manifest_with_charge_spin(
 ) -> dict[str, Any] | None:
     """Manifest overrides with authoritative workflow ``charge``/``uhf``.
 
-    Zero values are omitted (the engines' ``zero_is_absent`` reading treats
-    them as defaults anyway). Explicit engine values may repeat the canonical
+    Zero values are omitted. Explicit engine values may repeat the canonical
     workflow state, but a conflicting value is rejected before CREST/xTB can
     screen on a different potential-energy surface than downstream ORCA.
     Returns ``None`` when nothing remains, matching the builders' "no

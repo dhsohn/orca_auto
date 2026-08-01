@@ -25,7 +25,6 @@ from orca_auto.core.queue.worker.execution_dependencies import (
     build_worker_process_default_factories_from_callbacks,
     build_worker_process_dependency_callbacks,
     build_worker_process_dependency_groups,
-    worker_process_dependency_callback_kwargs,
     worker_process_dependency_callbacks_from_attrs,
 )
 
@@ -314,20 +313,21 @@ def test_worker_process_dependency_callbacks_from_attrs_maps_common_callbacks() 
         source,
         engine_runner_dependency_names=("run_demo_job",),
     )
-    kwargs = worker_process_dependency_callback_kwargs(callbacks)
-    kwargs_with_runner = worker_process_dependency_callback_kwargs(
-        callbacks,
-        include_engine_runner_dependencies=True,
-    )
     rebuilt = build_worker_process_dependency_callbacks(
-        **kwargs,
+        terminate_process=callbacks.terminate_process,
+        wait_for_cancellable_process=callbacks.wait_for_cancellable_process,
+        sleep=callbacks.sleep,
+        now_utc_iso=callbacks.now_utc_iso,
+        get_cancel_requested=callbacks.get_cancel_requested,
+        mark_completed=callbacks.mark_completed,
+        mark_cancelled=callbacks.mark_cancelled,
+        mark_failed=callbacks.mark_failed,
         engine_runner_dependencies=callbacks.engine_runner_dependencies,
     )
 
     assert callbacks.terminate_process is source.terminate_process
     assert callbacks.engine_runner_dependencies["run_demo_job"] is source.run_demo_job
-    assert kwargs["mark_failed"] is source.mark_failed
-    assert kwargs_with_runner["run_demo_job"] is source.run_demo_job
+    assert rebuilt.mark_failed is source.mark_failed
     assert rebuilt.sleep() == "sleep"
     assert rebuilt.engine_runner_dependencies["run_demo_job"]() == "run"
 
