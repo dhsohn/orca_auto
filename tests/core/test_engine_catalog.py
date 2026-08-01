@@ -28,7 +28,7 @@ from orca_auto.core.queue.worker.admission import (
     engine_queue_worker_source,
     reserve_engine_queue_worker_slot,
 )
-from orca_auto.flow import activity
+from orca_auto.flow.activity import _cancel as activity_cancel
 from orca_auto.flow.activity import _clear as activity_clear
 from orca_auto.flow.activity import _list as activity_list
 from orca_auto.flow.engines.xtb.job_inputs import SUPPORTED_JOB_TYPES
@@ -215,19 +215,15 @@ def test_every_catalog_engine_has_queue_filter_list_cancel_and_clear_coverage() 
         "workflow",
     ]
 
-    provider_sources = {
-        provider.source
-        for provider in activity_list.activity_list_providers(activity._activity_list_deps())
-    }
-    cancel_deps = activity._activity_cancel_deps()
+    provider_sources = {provider.source for provider in activity_list.activity_list_providers()}
     clear_counts = activity_clear._clear_counts()
     for entry in engine_catalog():
         assert entry.source_id in provider_sources
         assert f"{entry.engine_id}_queue_entries" in clear_counts
         if entry.workflow_stage_role == "workflow-stage":
-            assert entry.engine_id in cancel_deps.cancel_engine_targets
+            assert entry.engine_id in activity_cancel._CANCEL_ENGINE_TARGETS
         elif entry.activity_role == "orca-run":
-            assert callable(cancel_deps.cancel_orca_target)
+            assert callable(activity_cancel.cancel_orca_target)
         else:
-            assert callable(cancel_deps.request_cancel)
-            assert callable(cancel_deps.engine_queue_roots)
+            assert callable(activity_cancel.request_cancel)
+            assert callable(activity_cancel.engine_queue_roots)

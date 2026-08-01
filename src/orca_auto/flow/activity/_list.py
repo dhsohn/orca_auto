@@ -6,13 +6,14 @@ from typing import Any
 from orca_auto.core.engine_catalog import activity_engine_entries
 from orca_auto.core.utils import normalize_text
 
+from . import _sources
 from ._collectors import (
+    ActivityListProvider,
     activity_list_providers,
     collect_activity_records,
     collect_activity_records_from_request,
     collect_workflow_activity,
 )
-from ._list_deps import ActivityListDeps, ActivityListProvider
 from ._model import ActivityListRequest, ActivitySourceRequest
 from ._queue_records import (
     collect_catalog_engine_activity,
@@ -42,7 +43,6 @@ def list_activities(
     xtb_config: str | None = None,
     orca_config: str | None = None,
     child_job_engines: tuple[str, ...] | None = None,
-    deps: ActivityListDeps,
 ) -> dict[str, Any]:
     request = ActivityListRequest(
         sources=ActivitySourceRequest(
@@ -56,7 +56,7 @@ def list_activities(
         limit=limit,
         child_job_engines=child_job_engines,
     )
-    resolved = deps._resolved_activity_sources_for_request(request.sources)
+    resolved = _sources.resolve_activity_source_request(request.sources)
     records = collect_activity_records(
         workflow_root=resolved.workflow_root,
         refresh=request.refresh,
@@ -64,7 +64,6 @@ def list_activities(
         xtb_config=resolved.xtb_config,
         orca_config=resolved.orca_config,
         child_job_engines=request.child_job_engines,
-        deps=deps,
     )
     if request.limit > 0:
         records = records[: request.limit]
@@ -87,7 +86,6 @@ def list_activities(
 
 
 __all__ = [
-    "ActivityListDeps",
     "ActivityListProvider",
     "activity_list_providers",
     "collect_activity_records",

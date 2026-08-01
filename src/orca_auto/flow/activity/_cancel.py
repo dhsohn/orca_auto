@@ -7,12 +7,23 @@ from orca_auto.core.engine_catalog import (
     EngineCatalogEntry,
     find_engine_catalog_entry_by_source_id,
 )
-from orca_auto.core.engines import entry_matches_engine_identity
+from orca_auto.core.engines import entry_matches_engine_identity, get_engine_definition
+from orca_auto.core.queue import list_queue, request_cancel
 from orca_auto.core.queue.generation import queue_entries_same_generation
 from orca_auto.core.utils import normalize_text
 
 from ..orchestration import cancel_materialized_workflow
+from ..submitters.crest import cancel_target as cancel_crest_target
+from ..submitters.orca import cancel_target as cancel_orca_target
+from ..submitters.xtb import cancel_target as cancel_xtb_target
+from . import _sources
 from ._model import ActivityCancelRequest, ActivityRecord, ResolvedActivitySources
+from ._queue_records import engine_queue_roots
+
+_CANCEL_ENGINE_TARGETS = {
+    "crest": cancel_crest_target,
+    "xtb": cancel_xtb_target,
+}
 
 
 def match_activity_record(records: list[ActivityRecord], target: str) -> ActivityRecord:
@@ -82,8 +93,6 @@ def cancel_workflow_stage_engine_activity(
     record: ActivityRecord,
     resolved: ResolvedActivitySources,
     request: ActivityCancelRequest,
-    *,
-    deps: Any,
 ) -> dict[str, Any]:
     del request
     config_path = normalize_text(resolved.config_for_engine(entry.engine_id))
@@ -91,7 +100,7 @@ def cancel_workflow_stage_engine_activity(
         raise ValueError(
             f"{entry.engine_id}_config is required to cancel {entry.engine_id} activities."
         )
-    cancel_target = deps.cancel_engine_targets.get(entry.engine_id)
+    cancel_target = _CANCEL_ENGINE_TARGETS.get(entry.engine_id)
     if cancel_target is None:
         raise ValueError(f"No cancellation handler for catalog engine: {entry.engine_id}")
     return cancel_target(
@@ -104,16 +113,14 @@ def cancel_orca_activity(
     record: ActivityRecord,
     resolved: ResolvedActivitySources,
     request: ActivityCancelRequest,
-    *,
-    deps: Any,
 ) -> dict[str, Any]:
     config_path = normalize_text(resolved.orca_config)
     if not config_path:
         raise ValueError("orca_auto_config is required to cancel orca_auto ORCA activities.")
-    return deps.cancel_orca_target(
+    return cancel_orca_target(
         target=record.cancel_target,
         config_path=config_path,
-        repo_root=deps._discover_orca_repo_root(request.engine_options.orca.repo_root),
+        repo_root=_sources.discover_orca_repo_root(request.engine_options.orca.repo_root),
     )
 
 
@@ -135,8 +142,6 @@ def cancel_standalone_queue_engine_activity(
     record: ActivityRecord,
     resolved: ResolvedActivitySources,
     request: ActivityCancelRequest,
-    *,
-    deps: Any,
 ) -> dict[str, Any]:
     del request
     config_path = normalize_text(resolved.config_for_engine(entry.engine_id))
@@ -147,8 +152,8 @@ def cancel_standalone_queue_engine_activity(
 
     target = normalize_text(record.cancel_target) or normalize_text(record.activity_id)
     matches: list[tuple[Any, Any]] = []
-    for queue_root in deps.engine_queue_roots(config_path, engine=entry.engine_id):
-        for queued in deps.list_queue(queue_root):
+    for queue_root in engine_queue_roots(config_path, engine=entry.engine_id):
+        for queued in list_queue(queue_root):
             if not entry_matches_engine_identity(queued, entry.engine_id):
                 continue
             if target not in {
@@ -167,7 +172,7 @@ def cancel_standalone_queue_engine_activity(
         }
 
     queue_root, queued = matches[0]
-    definition = deps.get_engine_definition(entry.engine_id)
+    definition = get_engine_definition(entry.engine_id)
     cancellation_hooks = getattr(definition, "cancellation_hooks", None)
     before_pending_cancel = getattr(cancellation_hooks, "before_pending_cancel", None)
     before_pending_cancel_fn = (
@@ -176,7 +181,7 @@ def cancel_standalone_queue_engine_activity(
         else None
     )
     try:
-        updated = deps.request_cancel(
+        updated = request_cancel(
             queue_root,
             normalize_text(getattr(queued, "queue_id", "")),
             accept_entry_fn=lambda current: entry_matches_engine_identity(current, entry.engine_id),
@@ -187,7 +192,7 @@ def cancel_standalone_queue_engine_activity(
         try:
             recovered = [
                 current
-                for current in deps.list_queue(queue_root)
+                for current in list_queue(queue_root)
                 if normalize_text(getattr(current, "queue_id", ""))
                 == normalize_text(getattr(queued, "queue_id", ""))
                 and entry_matches_engine_identity(current, entry.engine_id)
@@ -220,8 +225,6 @@ def cancel_non_workflow_activity(
     record: ActivityRecord,
     resolved: ResolvedActivitySources,
     request: ActivityCancelRequest,
-    *,
-    deps: Any,
 ) -> dict[str, Any]:
     entry = find_engine_catalog_entry_by_source_id(record.source)
     if entry is None:
@@ -232,16 +235,14 @@ def cancel_non_workflow_activity(
             record,
             resolved,
             request,
-            deps=deps,
         )
     if entry.activity_role == "orca-run":
-        return cancel_orca_activity(record, resolved, request, deps=deps)
+        return cancel_orca_activity(record, resolved, request)
     if entry.activity_role == "engine-queue":
         return cancel_standalone_queue_engine_activity(
             entry,
             record,
             resolved,
             request,
-            deps=deps,
         )
     raise ValueError(f"Unsupported activity role for source {record.source}: {entry.activity_role}")

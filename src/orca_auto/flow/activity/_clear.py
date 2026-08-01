@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,21 +9,14 @@ from orca_auto.core.engine_catalog import (
     workflow_stage_engine_entries,
 )
 from orca_auto.core.engines import own_engine_accept_entry
+from orca_auto.core.queue import clear_terminal as clear_queue_terminal
 from orca_auto.core.utils import normalize_text
 
+from ..engine_runtime import engine_runtime_paths
+from ..registry import clear_terminal_workflow_registry
+from . import _sources
 from ._model import ActivitySourceRequest, ResolvedActivitySources
-
-
-@dataclass(frozen=True)
-class ActivityClearDeps:
-    _resolved_activity_sources_for_request: Callable[
-        [ActivitySourceRequest], ResolvedActivitySources
-    ]
-    clear_terminal_workflow_registry: Callable[..., int]
-    clear_queue_terminal: Callable[..., int]
-    _engine_queue_roots: Callable[..., tuple[Path, ...]]
-    engine_runtime_paths: Callable[..., dict[str, Path]]
-
+from ._queue_records import engine_queue_roots
 
 _ENGINE_QUEUE_CLEAR_SOURCES = tuple(
     (entry.engine_id, f"{entry.engine_id}_queue_entries")
@@ -53,7 +44,6 @@ def _clear_engine_queue(
     resolved: ResolvedActivitySources,
     *,
     engine: str,
-    deps: ActivityClearDeps,
 ) -> int:
     config_path = normalize_text(resolved.config_for_engine(engine))
     if not config_path:
@@ -62,23 +52,22 @@ def _clear_engine_queue(
     if entry.workflow_stage_role == "workflow-stage" and not normalize_text(resolved.workflow_root):
         return 0
     return sum(
-        deps.clear_queue_terminal(
+        clear_queue_terminal(
             root,
             select_entry_fn=own_engine_accept_entry(engine),
         )
-        for root in deps._engine_queue_roots(config_path, engine=engine)
+        for root in engine_queue_roots(config_path, engine=engine)
     )
 
 
 def _clear_workflow_registry(
     resolved: ResolvedActivitySources,
     *,
-    clearable_terminal_statuses: Iterable[str],
-    deps: ActivityClearDeps,
+    clearable_terminal_statuses: frozenset[str],
 ) -> int:
     if not normalize_text(resolved.workflow_root):
         return 0
-    return deps.clear_terminal_workflow_registry(
+    return clear_terminal_workflow_registry(
         str(resolved.workflow_root),
         statuses=clearable_terminal_statuses,
     )
@@ -86,23 +75,18 @@ def _clear_workflow_registry(
 
 def _clear_engine_queues(
     resolved: ResolvedActivitySources,
-    *,
-    deps: ActivityClearDeps,
 ) -> dict[str, int]:
     cleared = {cleared_key: 0 for _, cleared_key in _ENGINE_QUEUE_CLEAR_SOURCES}
     for engine, cleared_key in _ENGINE_QUEUE_CLEAR_SOURCES:
         cleared[cleared_key] += _clear_engine_queue(
             resolved,
             engine=engine,
-            deps=deps,
         )
     return cleared
 
 
 def _clear_orca_terminal_entries(
     resolved: ResolvedActivitySources,
-    *,
-    deps: ActivityClearDeps,
 ) -> tuple[int, int]:
     if not normalize_text(resolved.orca_config):
         return 0, 0
@@ -110,9 +94,7 @@ def _clear_orca_terminal_entries(
         clear_terminal_entries as clear_orca_terminal_entries,
     )
 
-    allowed_root = deps.engine_runtime_paths(str(resolved.orca_config), engine="orca")[
-        "allowed_root"
-    ]
+    allowed_root = engine_runtime_paths(str(resolved.orca_config), engine="orca")["allowed_root"]
     return clear_orca_terminal_entries(allowed_root)
 
 
@@ -136,8 +118,7 @@ def clear_activities(
     crest_config: str | None = None,
     xtb_config: str | None = None,
     orca_config: str | None = None,
-    clearable_terminal_statuses: Iterable[str],
-    deps: ActivityClearDeps,
+    clearable_terminal_statuses: frozenset[str],
 ) -> dict[str, Any]:
     source_request = ActivitySourceRequest(
         workflow_root=workflow_root,
@@ -146,17 +127,16 @@ def clear_activities(
         xtb_config=xtb_config,
         orca_config=orca_config,
     )
-    resolved = deps._resolved_activity_sources_for_request(source_request)
+    resolved = _sources.resolve_activity_source_request(source_request)
 
     cleared = _clear_counts()
     cleared["workflows"] = _clear_workflow_registry(
         resolved,
         clearable_terminal_statuses=clearable_terminal_statuses,
-        deps=deps,
     )
-    for key, count in _clear_engine_queues(resolved, deps=deps).items():
+    for key, count in _clear_engine_queues(resolved).items():
         cleared[key] += count
-    queue_count, run_count = _clear_orca_terminal_entries(resolved, deps=deps)
+    queue_count, run_count = _clear_orca_terminal_entries(resolved)
     cleared["orca_queue_entries"] += queue_count
     cleared["orca_run_states"] += run_count
 

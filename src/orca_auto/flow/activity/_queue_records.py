@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.config.files import shared_workflow_root_from_config
 from orca_auto.core.engine_catalog import (
     EngineCatalogEntry,
     find_engine_catalog_entry,
@@ -10,11 +11,24 @@ from orca_auto.core.engine_catalog import (
 )
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.paths.workflow import workflow_stage_dirnames_for_engine
+from orca_auto.core.queue import list_queue
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.utils import normalize_text
 
-from ._list_deps import ActivityListDeps
-from ._model import ActivityListRequest, ActivityRecord, ResolvedActivitySources
+from ..engine_runtime import engine_runtime_paths
+from ..state import (
+    iter_workflow_runtime_workspaces,
+    workflow_workspace_internal_engine_paths,
+)
+from . import _orca
+from ._model import (
+    ActivityListRequest,
+    ActivityRecord,
+    ResolvedActivitySources,
+    path_aliases,
+    timestamp_metadata,
+    unique_texts,
+)
 
 
 def queue_entry_status(entry: QueueEntry) -> str:
@@ -31,32 +45,30 @@ def runtime_paths_for_engine(
     config_path: str,
     *,
     engine: str,
-    deps: ActivityListDeps,
 ) -> dict[str, Path]:
-    return deps.engine_runtime_paths(config_path, engine=engine)
+    return engine_runtime_paths(config_path, engine=engine)
 
 
 def engine_queue_roots(
     config_path: str,
     *,
     engine: str,
-    deps: ActivityListDeps,
 ) -> tuple[Path, ...]:
-    runtime_paths = runtime_paths_for_engine(config_path, engine=engine, deps=deps)
+    runtime_paths = runtime_paths_for_engine(config_path, engine=engine)
     entry = find_engine_catalog_entry(engine)
     if entry is None or entry.workflow_stage_role != "workflow-stage":
         engine_roots: list[Path] = [runtime_paths["allowed_root"]]
         return tuple(engine_roots)
 
-    workflow_root = deps.shared_workflow_root_from_config(config_path)
+    workflow_root = shared_workflow_root_from_config(config_path)
     if not workflow_root:
         return (runtime_paths["allowed_root"],)
 
     roots: list[Path] = []
 
-    for workspace_dir in deps.iter_workflow_runtime_workspaces(workflow_root, engine=engine):
+    for workspace_dir in iter_workflow_runtime_workspaces(workflow_root, engine=engine):
         for stage_dirname in workflow_stage_dirnames_for_engine(engine):
-            runtime_paths = deps.workflow_workspace_internal_engine_paths(
+            runtime_paths = workflow_workspace_internal_engine_paths(
                 workspace_dir,
                 engine=engine,
                 stage_dirname=stage_dirname,
@@ -84,13 +96,12 @@ def _queue_record_aliases(
     path_text: str,
     *,
     allowed_root: Path,
-    deps: ActivityListDeps,
 ) -> tuple[str, ...]:
-    return deps._unique_texts(
+    return unique_texts(
         [
             normalize_text(entry.queue_id),
             normalize_text(entry.task_id),
-            *list(deps._path_aliases(path_text, root=allowed_root)),
+            *list(path_aliases(path_text, root=allowed_root)),
         ]
     )
 
@@ -101,7 +112,6 @@ def _engine_queue_record(
     app_name: str,
     engine: str,
     allowed_root: Path,
-    deps: ActivityListDeps,
 ) -> ActivityRecord:
     metadata = dict(entry.metadata)
     workflow_id = normalize_text(metadata.get("workflow_id"))
@@ -127,7 +137,6 @@ def _engine_queue_record(
             entry,
             path_text,
             allowed_root=allowed_root,
-            deps=deps,
         ),
         metadata={
             "queue_id": normalize_text(entry.queue_id),
@@ -141,7 +150,7 @@ def _engine_queue_record(
             "priority": int(entry.priority),
             "repair_blocked_reason": repair_blocked_reason,
             "queue_error": normalize_text(getattr(entry, "error", "")),
-            **deps._timestamp_metadata(
+            **timestamp_metadata(
                 enqueued_at=enqueued_at,
                 started_at=started_at,
                 finished_at=finished_at,
@@ -155,11 +164,10 @@ def engine_queue_records(
     app_name: str,
     engine: str,
     config_path: str,
-    deps: ActivityListDeps,
 ) -> list[ActivityRecord]:
     rows: list[ActivityRecord] = []
-    for allowed_root in engine_queue_roots(config_path, engine=engine, deps=deps):
-        for entry in deps.list_queue(allowed_root):
+    for allowed_root in engine_queue_roots(config_path, engine=engine):
+        for entry in list_queue(allowed_root):
             if not entry_matches_engine_identity(entry, engine):
                 continue
             rows.append(
@@ -168,7 +176,6 @@ def engine_queue_records(
                     app_name=app_name,
                     engine=engine,
                     allowed_root=allowed_root,
-                    deps=deps,
                 )
             )
     return rows
@@ -190,7 +197,6 @@ def collect_child_queue_activity(
     app_name: str,
     engine: str,
     config_path: str | None,
-    deps: ActivityListDeps,
 ) -> list[ActivityRecord]:
     include_all_children, include_children = requested_child_engines(request)
     if (
@@ -203,43 +209,32 @@ def collect_child_queue_activity(
         app_name=app_name,
         engine=engine,
         config_path=str(config_path),
-        deps=deps,
     )
 
 
 def collect_crest_activity(
     resolved: ResolvedActivitySources,
     request: ActivityListRequest,
-    *,
-    deps: ActivityListDeps,
 ) -> list[ActivityRecord]:
-    return collect_catalog_engine_activity(
-        get_engine_catalog_entry("crest"), resolved, request, deps=deps
-    )
+    return collect_catalog_engine_activity(get_engine_catalog_entry("crest"), resolved, request)
 
 
 def collect_xtb_activity(
     resolved: ResolvedActivitySources,
     request: ActivityListRequest,
-    *,
-    deps: ActivityListDeps,
 ) -> list[ActivityRecord]:
-    return collect_catalog_engine_activity(
-        get_engine_catalog_entry("xtb"), resolved, request, deps=deps
-    )
+    return collect_catalog_engine_activity(get_engine_catalog_entry("xtb"), resolved, request)
 
 
 def collect_orca_activity(
     resolved: ResolvedActivitySources,
     request: ActivityListRequest,
-    *,
-    deps: ActivityListDeps,
 ) -> list[ActivityRecord]:
     del request
     config_path = normalize_text(resolved.config_for_engine("orca"))
     if not config_path:
         return []
-    return deps._orca_records(
+    return _orca.orca_records(
         config_path=config_path,
     )
 
@@ -247,8 +242,6 @@ def collect_orca_activity(
 def collect_standalone_queue_activity(
     entry: EngineCatalogEntry,
     resolved: ResolvedActivitySources,
-    *,
-    deps: ActivityListDeps,
 ) -> list[ActivityRecord]:
     config_path = normalize_text(resolved.config_for_engine(entry.engine_id))
     if not config_path:
@@ -257,7 +250,6 @@ def collect_standalone_queue_activity(
         app_name=entry.source_id,
         engine=entry.engine_id,
         config_path=config_path,
-        deps=deps,
     )
 
 
@@ -265,11 +257,9 @@ def collect_catalog_engine_activity(
     entry: EngineCatalogEntry,
     resolved: ResolvedActivitySources,
     request: ActivityListRequest,
-    *,
-    deps: ActivityListDeps,
 ) -> list[ActivityRecord]:
     if entry.activity_role == "orca-run":
-        return collect_orca_activity(resolved, request, deps=deps)
+        return collect_orca_activity(resolved, request)
     if entry.workflow_stage_role == "workflow-stage":
         return collect_child_queue_activity(
             resolved,
@@ -277,10 +267,9 @@ def collect_catalog_engine_activity(
             app_name=entry.source_id,
             engine=entry.engine_id,
             config_path=resolved.config_for_engine(entry.engine_id),
-            deps=deps,
         )
     if entry.activity_role == "engine-queue":
-        return collect_standalone_queue_activity(entry, resolved, deps=deps)
+        return collect_standalone_queue_activity(entry, resolved)
     raise ValueError(
         f"Unsupported catalog activity role for {entry.engine_id}: {entry.activity_role}"
     )

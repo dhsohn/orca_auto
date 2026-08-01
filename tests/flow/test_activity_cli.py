@@ -15,10 +15,13 @@ from orca_auto.core.app_ids import (
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.flow import activity
 from orca_auto.flow.activity import _cancel as _activity_cancel
+from orca_auto.flow.activity import _clear as _activity_clear
 from orca_auto.flow.activity import _list as _activity_list
 from orca_auto.flow.activity import _model as _activity_model
 from orca_auto.flow.activity import _orca as _activity_orca
+from orca_auto.flow.activity import _queue_records as _activity_queue_records
 from orca_auto.flow.activity import _sources as _activity_sources
+from orca_auto.flow.activity import _workflow_records as _activity_workflow_records
 
 
 def _shared_config(tmp_path: Path) -> tuple[Path, Path]:
@@ -45,9 +48,13 @@ def test_list_activities_merges_workflows_and_standalone_sources(monkeypatch) ->
         metadata={"last_restarted_at": "2026-04-20T10:05:00+00:00"},
     )
 
-    monkeypatch.setattr(activity, "list_workflow_registry", lambda workflow_root: [workflow_record])
     monkeypatch.setattr(
-        activity,
+        _activity_workflow_records,
+        "list_workflow_registry",
+        lambda workflow_root: [workflow_record],
+    )
+    monkeypatch.setattr(
+        _activity_workflow_records,
         "list_workflow_summaries",
         lambda workflow_root: [
             {
@@ -72,7 +79,7 @@ def test_list_activities_merges_workflows_and_standalone_sources(monkeypatch) ->
         ],
     )
     monkeypatch.setattr(
-        activity,
+        _activity_queue_records,
         "engine_runtime_paths",
         lambda config_path, *, engine: {
             "allowed_root": Path("/tmp/crest_root" if engine == "crest" else "/tmp/xtb_root"),
@@ -108,7 +115,7 @@ def test_list_activities_merges_workflows_and_standalone_sources(monkeypatch) ->
         },
     )
     monkeypatch.setattr(
-        activity,
+        _activity_queue_records,
         "list_queue",
         # Shared or malformed roots can expose foreign rows. Each catalog
         # collector must retain only its complete canonical identity.
@@ -176,9 +183,13 @@ def test_list_activities_treats_submission_failed_stage_as_terminal_for_current_
         updated_at="2026-04-20T10:06:00+00:00",
     )
 
-    monkeypatch.setattr(activity, "list_workflow_registry", lambda workflow_root: [workflow_record])
     monkeypatch.setattr(
-        activity,
+        _activity_workflow_records,
+        "list_workflow_registry",
+        lambda workflow_root: [workflow_record],
+    )
+    monkeypatch.setattr(
+        _activity_workflow_records,
         "list_workflow_summaries",
         lambda workflow_root: [
             {
@@ -207,7 +218,7 @@ def test_list_activities_treats_submission_failed_stage_as_terminal_for_current_
         "resolve_activity_source_request",
         lambda request: _activity_model.ResolvedActivitySources("/tmp/wf", None, None, None),
     )
-    monkeypatch.setattr(activity, "list_queue", lambda root: [])
+    monkeypatch.setattr(_activity_queue_records, "list_queue", lambda root: [])
     monkeypatch.setattr(_activity_orca, "orca_records", lambda **kwargs: [])
 
     payload = activity.list_activities(workflow_root="/tmp/wf")
@@ -273,9 +284,9 @@ def test_cancel_activity_routes_xtb_targets(monkeypatch) -> None:
             )
         ],
     )
-    monkeypatch.setattr(
-        activity,
-        "cancel_xtb_target",
+    monkeypatch.setitem(
+        _activity_cancel._CANCEL_ENGINE_TARGETS,
+        "xtb",
         lambda **kwargs: {"status": "cancel_requested", "queue_id": kwargs["target"]},
     )
 
@@ -341,17 +352,17 @@ def test_runtime_path_and_engine_root_edges(
         del config_path
         return {"allowed_root": allowed}
 
-    monkeypatch.setattr(activity, "engine_runtime_paths", fake_engine_runtime_paths)
+    monkeypatch.setattr(_activity_queue_records, "engine_runtime_paths", fake_engine_runtime_paths)
     assert _activity_list.engine_queue_roots(
         "/tmp/cfg.yaml",
         engine="orca",
-        deps=activity._activity_list_deps(),
     ) == (allowed,)
-    monkeypatch.setattr(activity, "shared_workflow_root_from_config", lambda config_path: "")
+    monkeypatch.setattr(
+        _activity_queue_records, "shared_workflow_root_from_config", lambda config_path: ""
+    )
     assert _activity_list.engine_queue_roots(
         "/tmp/cfg.yaml",
         engine="xtb",
-        deps=activity._activity_list_deps(),
     ) == (allowed,)
 
     workspace_a = tmp_path / "wf" / "a"
@@ -361,15 +372,17 @@ def test_runtime_path_and_engine_root_edges(
     runtime_a.mkdir()
     runtime_b.mkdir()
     monkeypatch.setattr(
-        activity, "shared_workflow_root_from_config", lambda config_path: str(tmp_path / "wf")
+        _activity_queue_records,
+        "shared_workflow_root_from_config",
+        lambda config_path: str(tmp_path / "wf"),
     )
     monkeypatch.setattr(
-        activity,
+        _activity_queue_records,
         "iter_workflow_runtime_workspaces",
         lambda workflow_root, *, engine: [workspace_a, workspace_b, workspace_a],
     )
     monkeypatch.setattr(
-        activity,
+        _activity_queue_records,
         "workflow_workspace_internal_engine_paths",
         lambda workspace_dir, *, engine, stage_dirname=None: {
             "allowed_root": runtime_a if workspace_dir == workspace_a else runtime_b,
@@ -378,7 +391,6 @@ def test_runtime_path_and_engine_root_edges(
     assert _activity_list.engine_queue_roots(
         "/tmp/cfg.yaml",
         engine="crest",
-        deps=activity._activity_list_deps(),
     ) == (runtime_a, runtime_b)
 
 
@@ -469,7 +481,9 @@ def test_orca_records_merge_queue_entries_and_snapshots(
     from orca_auto.orca.queue import adapter as queue_adapter
 
     monkeypatch.setattr(
-        activity, "engine_runtime_paths", lambda config_path, *, engine: {"allowed_root": allowed}
+        _activity_orca,
+        "engine_runtime_paths",
+        lambda config_path, *, engine: {"allowed_root": allowed},
     )
     monkeypatch.setattr(
         queue_adapter, "reconcile_orphaned_running_entries", lambda root: reconciled.append(root)
@@ -479,7 +493,6 @@ def test_orca_records_merge_queue_entries_and_snapshots(
 
     rows = _activity_orca.orca_records(
         config_path="/tmp/cfg.yaml",
-        deps=activity._orca_activity_deps(),
     )
 
     assert reconciled == [allowed]
@@ -541,7 +554,9 @@ def test_orca_records_suppress_stale_snapshot_for_terminal_entry(
     from orca_auto.orca.queue import adapter as queue_adapter
 
     monkeypatch.setattr(
-        activity, "engine_runtime_paths", lambda config_path, *, engine: {"allowed_root": allowed}
+        _activity_orca,
+        "engine_runtime_paths",
+        lambda config_path, *, engine: {"allowed_root": allowed},
     )
     monkeypatch.setattr(queue_adapter, "reconcile_orphaned_running_entries", lambda root: None)
     monkeypatch.setattr(queue_adapter, "list_queue", lambda root: entries)
@@ -549,7 +564,6 @@ def test_orca_records_suppress_stale_snapshot_for_terminal_entry(
 
     rows = _activity_orca.orca_records(
         config_path="/tmp/cfg.yaml",
-        deps=activity._orca_activity_deps(),
     )
 
     # Only the cancelled queue record remains; the stale running snapshot is gone.
@@ -602,7 +616,9 @@ def test_orca_records_keep_live_snapshot_despite_terminal_entry(
     from orca_auto.orca.queue import adapter as queue_adapter
 
     monkeypatch.setattr(
-        activity, "engine_runtime_paths", lambda config_path, *, engine: {"allowed_root": allowed}
+        _activity_orca,
+        "engine_runtime_paths",
+        lambda config_path, *, engine: {"allowed_root": allowed},
     )
     monkeypatch.setattr(queue_adapter, "reconcile_orphaned_running_entries", lambda root: None)
     monkeypatch.setattr(queue_adapter, "list_queue", lambda root: entries)
@@ -612,7 +628,6 @@ def test_orca_records_keep_live_snapshot_despite_terminal_entry(
 
     rows = _activity_orca.orca_records(
         config_path="/tmp/cfg.yaml",
-        deps=activity._orca_activity_deps(),
     )
 
     # Both the terminal queue row and the live running snapshot row are present.
@@ -731,10 +746,14 @@ def test_cancel_activity_routes_crest_and_orca_targets(monkeypatch: pytest.Monke
     monkeypatch.setattr(
         _activity_list, "collect_activity_records", lambda **kwargs: list(records.values())
     )
-    monkeypatch.setattr(
-        activity, "cancel_crest_target", lambda **kwargs: {"status": "cancel_requested", **kwargs}
+    monkeypatch.setitem(
+        _activity_cancel._CANCEL_ENGINE_TARGETS,
+        "crest",
+        lambda **kwargs: {"status": "cancel_requested", **kwargs},
     )
-    monkeypatch.setattr(activity, "cancel_orca_target", lambda **kwargs: {"status": "", **kwargs})
+    monkeypatch.setattr(
+        _activity_cancel, "cancel_orca_target", lambda **kwargs: {"status": "", **kwargs}
+    )
     monkeypatch.setattr(
         _activity_sources, "discover_orca_repo_root", lambda explicit: "/tmp/orca-repo"
     )
@@ -759,10 +778,10 @@ def test_clear_activities_clears_workflow_and_engine_terminal_sources(monkeypatc
         return 2
 
     monkeypatch.setattr(
-        activity, "clear_terminal_workflow_registry", fake_clear_terminal_workflow_registry
+        _activity_clear, "clear_terminal_workflow_registry", fake_clear_terminal_workflow_registry
     )
     monkeypatch.setattr(
-        _activity_list,
+        _activity_clear,
         "engine_queue_roots",
         lambda config_path, *, engine, **kwargs: (
             (Path("/tmp/xtb_root_a"), Path("/tmp/xtb_root_b"))
@@ -782,9 +801,9 @@ def test_clear_activities_clears_workflow_and_engine_terminal_sources(monkeypatc
             return 2
         return 3
 
-    monkeypatch.setattr(activity, "clear_queue_terminal", fake_clear_queue_terminal)
+    monkeypatch.setattr(_activity_clear, "clear_queue_terminal", fake_clear_queue_terminal)
     monkeypatch.setattr(
-        activity,
+        _activity_clear,
         "engine_runtime_paths",
         lambda config_path, *, engine="orca": {"allowed_root": Path("/tmp/orca_root")},
     )
