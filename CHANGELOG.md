@@ -50,6 +50,19 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   summaries simply stop carrying an always-empty mapping. Registry ordering is
   unchanged — with the field always absent, the fallback already resolved to
   the record-build timestamp.
+- Removed the producer side of the submission-intent-token plumbing. Its only
+  producer of a non-empty token was the workflow-level submitter cluster
+  removed in 1.0.0, so `submit_reaction_dir` loses its always-empty
+  `submission_intent_token` parameter, the trace-kwarg branch is gone, and
+  queue submission no longer carries the dead metadata write. The restart
+  stale-key scrub keeps clearing `submission_intent_token` out of durable
+  stage metadata written by earlier releases, so old workflows are unaffected.
+- Removed three helpers in `orca/commands/_helpers.py` whose consumers died
+  releases ago: `_human_bytes` (its last production callers went with the
+  cleanup and monitor command removals; the messenger reduction later removed
+  a separate same-named duplicate elsewhere), `finalize_batch_apply` (last
+  consumer removed with the organize feature), and the unused
+  `_MAX_SAMPLE_FILES` constant, together with the module's unused logger.
 
 ## [1.0.0] - 2026-08-02
 

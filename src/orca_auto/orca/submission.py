@@ -25,9 +25,6 @@ from orca_auto.core.queue.enqueue_publication import (
     run_enqueue_publication,
 )
 from orca_auto.core.queue.priority import normalize_queue_priority
-from orca_auto.core.queue.publication import (
-    QUEUE_SUBMISSION_INTENT_KEY,
-)
 from orca_auto.core.queue.store import QueueAfterCommitError
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import timestamped_token
@@ -276,9 +273,6 @@ def build_queue_metadata(
         "resource_request": requested,
         "resource_actual": dict(requested),
     }
-    intent_token = str(getattr(args, "submission_intent_token", "") or "").strip()
-    if intent_token:
-        metadata[QUEUE_SUBMISSION_INTENT_KEY] = intent_token
     execution_snapshot = build_orca_execution_snapshot(
         reaction_dir,
         selected_inp,

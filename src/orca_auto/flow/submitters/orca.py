@@ -7,7 +7,6 @@ from typing import Any
 
 from orca_auto.core.commands.queue import display_status
 from orca_auto.core.queue.priority import normalize_queue_priority
-from orca_auto.core.queue.publication import QUEUE_SUBMISSION_INTENT_KEY
 from orca_auto.core.statuses import STATUS_WAITING_FOR_SLOT
 from orca_auto.core.utils import normalize_text as _normalize_text
 
@@ -24,7 +23,6 @@ class _OrcaDirectSubmitRequest:
     reaction_dir: str
     priority: int
     force: bool
-    submission_intent_token: str
 
 
 @dataclass(frozen=True)
@@ -223,19 +221,15 @@ def _submit_request(
     max_cores: int | None,
     max_memory_gb: int | None,
     force: bool,
-    submission_intent_token: str = "",
 ) -> _OrcaDirectSubmitRequest:
     normalized_config = _normalize_text(config_path)
     priority_value = normalize_queue_priority(priority)
     force_value = bool(force)
-    intent_token = _normalize_text(submission_intent_token)
     trace_kwargs: dict[str, Any] = {
         "reaction_dir": reaction_dir,
         "priority": priority_value,
         "force": force_value,
     }
-    if intent_token:
-        trace_kwargs[QUEUE_SUBMISSION_INTENT_KEY] = intent_token
     return _OrcaDirectSubmitRequest(
         command_argv=_trace_argv(
             api_name=_SUBMIT_API_NAME,
@@ -249,12 +243,10 @@ def _submit_request(
             force=force_value,
             max_cores=max_cores,
             max_memory_gb=max_memory_gb,
-            submission_intent_token=intent_token,
         ),
         reaction_dir=reaction_dir,
         priority=priority_value,
         force=force_value,
-        submission_intent_token=intent_token,
     )
 
 
@@ -307,7 +299,6 @@ def submit_reaction_dir(
     max_memory_gb: int | None = None,
     force: bool = False,
     repo_root: str | None = None,
-    submission_intent_token: str = "",
 ) -> dict[str, Any]:
     del repo_root
     request = _submit_request(
@@ -317,7 +308,6 @@ def submit_reaction_dir(
         max_cores=max_cores,
         max_memory_gb=max_memory_gb,
         force=force,
-        submission_intent_token=submission_intent_token,
     )
     try:
         submission = _submit_reaction_dir_to_queue(request.args)
