@@ -564,6 +564,13 @@ def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[b
         if not stat.S_ISREG(candidate_before.st_mode) or candidate_before.st_nlink != 1:
             return None
 
+        # The parent is opened by its already-resolved path. O_NOFOLLOW rejects a
+        # symlink only at the final component, so this does NOT prove by
+        # construction that the parent is still inside the root — a walk from the
+        # root would. That stronger guarantee is traded away deliberately: a
+        # concurrent path swap by another process on this account is outside this
+        # tool's declared operating model, and the inode comparison below covers
+        # every swap that happens after the stat.
         directory_flags = os.O_RDONLY | os.O_CLOEXEC
         directory_flags |= os.O_DIRECTORY | os.O_NOFOLLOW
         parent_fd = os.open(resolved.parent, directory_flags)
@@ -574,8 +581,10 @@ def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[b
         output_flags |= os.O_NONBLOCK | os.O_NOFOLLOW
         output_fd = os.open(relative.parts[-1], output_flags, dir_fd=parent_fd)
         opened = os.fstat(output_fd)
-        # The fd pins one inode. Comparing it against the pre-open lstat is what
-        # catches an ancestor swapped to a symlink after the path was resolved.
+        # The fd pins one inode. Comparing it against the pre-open stat rejects
+        # anything swapped between that stat and this open. A swap that already
+        # happened before the stat is not covered: both sides would then observe
+        # the substituted file and agree.
         if (
             not stat.S_ISREG(opened.st_mode)
             or opened.st_nlink != 1
