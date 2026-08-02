@@ -49,73 +49,6 @@ def workflow_has_active_children_impl(
     return workflow_has_active_downstream_fn(payload)
 
 
-def latest_child_stage_summary_impl(
-    stage_summaries: list[dict[str, Any]],
-    *,
-    normalize_text_fn: Callable[[Any], str],
-) -> dict[str, Any]:
-    if not stage_summaries:
-        return {}
-    priority = {
-        "running": 5,
-        "submitted": 4,
-        "queued": 3,
-        "planned": 2,
-        "cancel_requested": 1,
-    }
-    chosen = stage_summaries[-1]
-    best_priority = -1
-    for item in stage_summaries:
-        status = normalize_text_fn(item.get("status")).lower()
-        task_status = normalize_text_fn(item.get("task_status")).lower()
-        score = max(priority.get(status, 0), priority.get(task_status, 0))
-        if score >= best_priority:
-            best_priority = score
-            chosen = item
-    return {
-        "stage_id": normalize_text_fn(chosen.get("stage_id")),
-        "stage_kind": normalize_text_fn(chosen.get("stage_kind")),
-        "engine": normalize_text_fn(chosen.get("engine")),
-        "task_kind": normalize_text_fn(chosen.get("task_kind")),
-        "status": normalize_text_fn(chosen.get("status")),
-        "task_status": normalize_text_fn(chosen.get("task_status")),
-        "analyzer_status": normalize_text_fn(chosen.get("analyzer_status")),
-        "reason": normalize_text_fn(chosen.get("reason")),
-        "queue_id": normalize_text_fn(chosen.get("queue_id")),
-        "run_id": normalize_text_fn(chosen.get("run_id")),
-        "latest_known_path": normalize_text_fn(chosen.get("latest_known_path")),
-        "completed_at": normalize_text_fn(chosen.get("completed_at")),
-    }
-
-
-def downstream_terminal_result_impl(
-    child_payload: dict[str, Any],
-    child_summary: dict[str, Any],
-    *,
-    normalize_text_fn: Callable[[Any], str],
-) -> dict[str, Any]:
-    status = normalize_text_fn(child_summary.get("status")).lower()
-    if not is_stage_terminal_status(status):
-        return {}
-    metadata = child_payload.get("metadata")
-    workflow_error: dict[str, Any] = {}
-    if isinstance(metadata, dict) and isinstance(metadata.get("workflow_error"), dict):
-        workflow_error = metadata.get("workflow_error") or {}
-    last_completed_at = ""
-    for stage in child_summary.get("stage_summaries", []):
-        if not isinstance(stage, dict):
-            continue
-        completed_at = normalize_text_fn(stage.get("completed_at"))
-        if completed_at:
-            last_completed_at = completed_at
-    return {
-        "status": normalize_text_fn(child_summary.get("status")),
-        "completed_at": last_completed_at,
-        "failure_reason": normalize_text_fn(workflow_error.get("reason")),
-        "failure_scope": normalize_text_fn(workflow_error.get("scope")),
-    }
-
-
 def stage_failure_is_recoverable_impl(
     stage: dict[str, Any],
     *,
@@ -132,8 +65,6 @@ def stage_failure_is_recoverable_impl(
     metadata = stage_metadata_fn(stage)
     if engine == "xtb":
         return normalize_text_fn(metadata.get("reaction_handoff_status")) == "ready"
-    if engine == "orca":
-        return normalize_text_fn(metadata.get("reaction_candidate_status")) == "superseded"
     return False
 
 
@@ -304,9 +235,7 @@ def recompute_workflow_status_impl(
 
 
 __all__ = [
-    "downstream_terminal_result_impl",
     "effective_stage_status_impl",
-    "latest_child_stage_summary_impl",
     "recompute_workflow_status_impl",
     "stage_failure_is_recoverable_impl",
     "workflow_has_active_children_impl",

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.contracts import XtbDownstreamPolicy
-from orca_auto.flow.contracts.workflow import workflow_stage_metadata, workflow_task_payload_dict
+from orca_auto.flow.contracts.workflow import workflow_stage_metadata
 from orca_auto.flow.orchestration.services import (
     OrchestrationServices,
     resolve_orchestration_services,
@@ -74,14 +74,6 @@ def required_stage_budget(params: dict[str, Any], key: str) -> Any:
             f"workflow payload is missing parameters.{key}; refusing to guess a stage budget"
         )
     return value
-
-
-def stage_metadata_impl(stage: dict[str, Any]) -> dict[str, Any]:
-    return workflow_stage_metadata(stage)
-
-
-def task_payload_dict_impl(task: dict[str, Any]) -> dict[str, Any]:
-    return workflow_task_payload_dict(task)
 
 
 def select_valid_ts_guess_inputs(
@@ -182,26 +174,6 @@ def reaction_orca_source_candidate_path_impl(stage: dict[str, Any]) -> str:
     return ""
 
 
-def reaction_orca_allows_next_candidate_impl(stage: dict[str, Any]) -> bool:
-    status = normalize_text(stage.get("status")).lower()
-    if status not in {"failed", "cancel_failed"}:
-        return False
-    metadata = workflow_stage_metadata(stage)
-    if normalize_text(metadata.get("reaction_candidate_status")) == "superseded":
-        return False
-    analyzer_status = normalize_text(metadata.get("analyzer_status")).lower()
-    latest_attempt_status = normalize_text(metadata.get("orca_latest_attempt_status")).lower()
-    reason = normalize_text(metadata.get("reason")).lower()
-    allowed = {
-        "ts_not_found",
-        "geom_not_converged",
-        "incomplete",
-        "error_scf",
-        "error_scfgrad_abort",
-    }
-    return any(item in allowed for item in (analyzer_status, latest_attempt_status, reason) if item)
-
-
 def clear_reaction_xtb_handoff_error_if_recovering_impl(payload: dict[str, Any]) -> None:
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
@@ -232,10 +204,7 @@ def clear_reaction_xtb_handoff_error_if_recovering_impl(payload: dict[str, Any])
 __all__ = [
     "clear_reaction_xtb_handoff_error_if_recovering_impl",
     "load_config_root_impl",
-    "reaction_orca_allows_next_candidate_impl",
     "reaction_orca_source_candidate_path_impl",
     "reaction_ts_guess_error_impl",
-    "stage_metadata_impl",
     "submission_target_impl",
-    "task_payload_dict_impl",
 ]
