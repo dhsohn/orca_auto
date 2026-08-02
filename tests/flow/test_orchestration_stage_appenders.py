@@ -19,10 +19,10 @@ from orca_auto.flow.orchestration import (
     reaction_materialization,
     reaction_orca_materialization,
 )
-from orca_auto.flow.orchestration.materialization import (
-    append_crest_orca_stages_impl,
+from orca_auto.flow.orchestration.crest_orca_materialization import append_crest_orca_stages_impl
+from orca_auto.flow.orchestration.reaction_materialization import append_reaction_xtb_stages_impl
+from orca_auto.flow.orchestration.reaction_orca_materialization import (
     append_reaction_orca_stages_impl,
-    append_reaction_xtb_stages_impl,
 )
 from tests.flow.orchestration_services import orchestration_services
 

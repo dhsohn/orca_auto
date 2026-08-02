@@ -6,11 +6,10 @@ from typing import Any
 import pytest
 
 from orca_auto.flow.contracts import WorkflowStageInput
+from orca_auto.flow.contracts.workflow import workflow_stage_metadata
 from orca_auto.flow.contracts.xtb import XtbArtifactContract, XtbCandidateArtifact
 from orca_auto.flow.orchestration.lifecycle import (
-    downstream_terminal_result_impl,
     effective_stage_status_impl,
-    latest_child_stage_summary_impl,
     recompute_workflow_status_impl,
     stage_failure_is_recoverable_impl,
     workflow_has_active_children_impl,
@@ -44,13 +43,7 @@ from orca_auto.flow.orchestration.support import (
     load_config_root_impl as _load_config_root,
 )
 from orca_auto.flow.orchestration.support import (
-    reaction_orca_allows_next_candidate_impl as _reaction_orca_allows_next_candidate,
-)
-from orca_auto.flow.orchestration.support import (
     reaction_ts_guess_error_impl as _reaction_ts_guess_error,
-)
-from orca_auto.flow.orchestration.support import (
-    stage_metadata_impl as _stage_metadata,
 )
 from orca_auto.flow.orchestration.support import (
     submission_target_impl as _submission_target,
@@ -113,7 +106,7 @@ def _stage_failure_is_recoverable(stage: dict[str, Any]) -> bool:
     return stage_failure_is_recoverable_impl(
         stage,
         normalize_text_fn=_normalize_text,
-        stage_metadata_fn=_stage_metadata,
+        stage_metadata_fn=workflow_stage_metadata,
     )
 
 
@@ -169,69 +162,6 @@ def test_workflow_sync_only_and_active_children_cover_stage_task_and_downstream(
             {"stages": [{"status": "completed", "task": {"status": "completed"}}]}
         )
         is False
-    )
-
-
-def test_latest_child_stage_summary_and_terminal_result_extract_relevant_fields() -> None:
-    stage_summaries = [
-        {"stage_id": "s1", "status": "planned", "task_status": "planned", "completed_at": ""},
-        {
-            "stage_id": "s2",
-            "stage_kind": "orca_stage",
-            "engine": "orca",
-            "task_kind": "opt",
-            "status": "running",
-            "task_status": "completed",
-            "analyzer_status": "running",
-            "reason": "working",
-            "queue_id": "q_1",
-            "run_id": "run_1",
-            "latest_known_path": "/tmp/rxn",
-            "completed_at": "2026-04-19T00:10:00+00:00",
-        },
-        {
-            "stage_id": "s3",
-            "status": "queued",
-            "task_status": "queued",
-            "completed_at": "2026-04-19T00:05:00+00:00",
-        },
-    ]
-
-    summary = latest_child_stage_summary_impl(stage_summaries, normalize_text_fn=_normalize_text)
-
-    assert summary == {
-        "stage_id": "s2",
-        "stage_kind": "orca_stage",
-        "engine": "orca",
-        "task_kind": "opt",
-        "status": "running",
-        "task_status": "completed",
-        "analyzer_status": "running",
-        "reason": "working",
-        "queue_id": "q_1",
-        "run_id": "run_1",
-        "latest_known_path": "/tmp/rxn",
-        "completed_at": "2026-04-19T00:10:00+00:00",
-    }
-
-    terminal = downstream_terminal_result_impl(
-        {"metadata": {"workflow_error": {"reason": "boom", "scope": "orca"}}},
-        {"status": "failed", "stage_summaries": stage_summaries},
-        normalize_text_fn=_normalize_text,
-    )
-    assert terminal == {
-        "status": "failed",
-        "completed_at": "2026-04-19T00:05:00+00:00",
-        "failure_reason": "boom",
-        "failure_scope": "orca",
-    }
-    assert (
-        downstream_terminal_result_impl(
-            {},
-            {"status": "running", "stage_summaries": []},
-            normalize_text_fn=_normalize_text,
-        )
-        == {}
     )
 
 
@@ -364,11 +294,11 @@ def test_stage_candidate_and_failure_helpers_cover_recoverable_paths() -> None:
     orca_stage = {
         "status": "cancel_failed",
         "task": {"engine": "orca"},
-        "metadata": {"reaction_candidate_status": "superseded"},
+        "metadata": {},
     }
     plain_stage = {"status": "failed", "task": {"engine": "crest"}, "metadata": {}}
     assert _stage_failure_is_recoverable(xtb_stage) is True
-    assert _stage_failure_is_recoverable(orca_stage) is True
+    assert _stage_failure_is_recoverable(orca_stage) is False
     assert _stage_failure_is_recoverable(plain_stage) is False
     assert (
         effective_stage_status_impl(
@@ -386,14 +316,6 @@ def test_stage_candidate_and_failure_helpers_cover_recoverable_paths() -> None:
         )
         == "running"
     )
-
-    failing_orca: dict[str, Any] = {
-        "status": "failed",
-        "metadata": {"analyzer_status": "ts_not_found"},
-    }
-    assert _reaction_orca_allows_next_candidate(failing_orca) is True
-    failing_orca["metadata"]["reaction_candidate_status"] = "superseded"
-    assert _reaction_orca_allows_next_candidate(failing_orca) is False
 
 
 def test_clear_reaction_xtb_handoff_error_and_unique_artifact_helpers() -> None:

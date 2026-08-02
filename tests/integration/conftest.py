@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
 import textwrap
 import time
 from dataclasses import dataclass
@@ -21,12 +19,6 @@ def _pythonpath() -> str:
     if existing:
         roots.append(existing)
     return ":".join(roots)
-
-
-def _app_env() -> dict[str, str]:
-    env = dict(os.environ)
-    env["PYTHONPATH"] = _pythonpath()
-    return env
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -180,36 +172,6 @@ def smoke_workspace(tmp_path: Path) -> SmokeWorkspace:
     )
 
 
-@pytest.fixture
-def app_runner(smoke_workspace: SmokeWorkspace):
-    def _run(repo_root: Path, module_name: str, *argv: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [sys.executable, "-m", module_name, *argv],
-            cwd=repo_root,
-            env=_app_env(),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    return _run
-
-
-@pytest.fixture
-def spawn_app(smoke_workspace: SmokeWorkspace):
-    def _spawn(repo_root: Path, module_name: str, *argv: str) -> subprocess.Popen[str]:
-        return subprocess.Popen(
-            [sys.executable, "-m", module_name, *argv],
-            cwd=repo_root,
-            env=_app_env(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-
-    return _spawn
-
-
 def _write_xyz(path: Path, *, comment: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -228,7 +190,7 @@ def _write_xyz(path: Path, *, comment: str) -> None:
 
 
 @pytest.fixture
-def xtb_opt_job(smoke_workspace: SmokeWorkspace, app_runner) -> Path:
+def xtb_opt_job(smoke_workspace: SmokeWorkspace) -> Path:
     job_dir = smoke_workspace.xtb_allowed_root / "manual_xtb"
     _write_xyz(job_dir / "input.xyz", comment="manual xTB opt")
     (job_dir / "xtb_job.yaml").write_text(
@@ -239,30 +201,7 @@ def xtb_opt_job(smoke_workspace: SmokeWorkspace, app_runner) -> Path:
 
 
 @pytest.fixture
-def xtb_path_search_job(smoke_workspace: SmokeWorkspace, app_runner) -> Path:
-    job_dir = smoke_workspace.xtb_allowed_root / "manual_path_search"
-    _write_xyz(job_dir / "reactants" / "r1.xyz", comment="manual xTB reactant")
-    _write_xyz(job_dir / "products" / "p1.xyz", comment="manual xTB product")
-    (job_dir / "xtb_job.yaml").write_text(
-        "\n".join(
-            [
-                "job_type: path_search",
-                "gfn: 2",
-                "charge: 0",
-                "uhf: 0",
-                "reactant_xyz: r1.xyz",
-                "product_xyz: p1.xyz",
-                "dry_run: true",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    return job_dir
-
-
-@pytest.fixture
-def crest_job(smoke_workspace: SmokeWorkspace, app_runner) -> Path:
+def crest_job(smoke_workspace: SmokeWorkspace) -> Path:
     job_dir = smoke_workspace.crest_allowed_root / "manual_crest"
     _write_xyz(job_dir / "input.xyz", comment="manual CREST input")
     (job_dir / "crest_job.yaml").write_text(
