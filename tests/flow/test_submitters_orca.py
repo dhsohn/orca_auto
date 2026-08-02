@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -401,3 +402,62 @@ def test_cancel_target_recovers_committed_cancel_after_save_error(
     [cancelled] = queue_adapter.list_queue(allowed_root)
     assert cancelled.queue_id == entry.queue_id
     assert cancelled.status == QueueStatus.CANCELLED
+
+
+def test_cancel_target_adopts_only_the_same_generation_cancelled_row(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A cancel that reports nothing is adopted only from the identical row.
+
+    `queue_adapter.cancel` returns None when it did not transition the row
+    itself. The row may still have been cancelled by a concurrent writer just
+    before this call, so cancel_target re-reads it by id — but adopting that
+    re-read as success is only safe when it is the same publication generation
+    and actually cancelled. A successor generation or a still-live row must
+    report already_terminal instead of a false cancellation.
+    """
+    allowed_root = tmp_path / "allowed"
+    reaction_dir = tmp_path / "reaction"
+    entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
+    monkeypatch.setattr(
+        orca_config,
+        "load_config",
+        lambda _config_path: SimpleNamespace(
+            runtime=SimpleNamespace(allowed_root=str(allowed_root))
+        ),
+    )
+    monkeypatch.setattr(
+        queue_adapter,
+        "cancel",
+        lambda _root, _queue_id, *, expected_entry=None: None,
+    )
+
+    def _cancel_with_reread(current: QueueEntry | None) -> dict[str, Any]:
+        monkeypatch.setattr(queue_adapter, "get_entry_by_id", lambda _root, _queue_id: current)
+        return orca_submitter.cancel_target(
+            target=entry.queue_id,
+            config_path="/tmp/orca.yaml",
+        )
+
+    adopted = _cancel_with_reread(replace(entry, status=QueueStatus.CANCELLED))
+    assert adopted["status"] == "cancelled"
+    assert adopted["returncode"] == 0
+    assert adopted["queue_id"] == entry.queue_id
+
+    for label, current in (
+        ("row disappeared", None),
+        ("still live", replace(entry, status=QueueStatus.RUNNING)),
+        (
+            "successor generation",
+            replace(entry, status=QueueStatus.CANCELLED, task_id=f"{entry.task_id}_2"),
+        ),
+        (
+            "different row",
+            replace(entry, status=QueueStatus.CANCELLED, queue_id=f"{entry.queue_id}_2"),
+        ),
+    ):
+        rejected = _cancel_with_reread(current)
+        assert rejected["status"] == "failed", label
+        assert rejected["reason"] == "already_terminal", label
+        assert rejected["stderr"] == f"queue target already terminal: {entry.queue_id}\n", label
