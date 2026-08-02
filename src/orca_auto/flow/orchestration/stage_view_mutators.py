@@ -100,7 +100,12 @@ class WorkflowStageOrcaMutationMixin:
                 "latest_known_path": contract.latest_known_path,
                 "optimized_xyz_path": contract.optimized_xyz_path,
                 "analyzer_status": contract.analyzer_status,
-                "reason": getattr(contract, "reason", ""),
+                # Preserve like queue_id/run_id: a submission-failed stage has
+                # no run, so the contract loader returns an unknown contract
+                # with an empty reason every tick, and writing that "" would
+                # erase the rejection reason the submission recorder just put
+                # on the stage. A contract with a real reason still wins.
+                "reason": getattr(contract, "reason", "") or normalize_text(metadata.get("reason")),
                 "completed_at": contract.completed_at,
                 "state_status": contract.state_status,
                 "attempt_count": contract.attempt_count,

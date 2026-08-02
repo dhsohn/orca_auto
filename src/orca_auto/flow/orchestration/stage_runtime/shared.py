@@ -154,6 +154,36 @@ def _clear_submission_deferred_metadata(stage_metadata: dict[str, Any]) -> None:
     stage_metadata.pop("last_submission_attempt_at", None)
 
 
+_SUBMISSION_ERROR_DETAIL_LIMIT = 1000
+
+
+def _record_submission_failure_metadata(
+    stage_metadata: dict[str, Any], submission: dict[str, Any]
+) -> None:
+    # A rejected submission must leave its reason on the stage. Regression for
+    # the reaction_ts_search run whose OptTS submissions were rejected by the
+    # execution-snapshot basename gate with no reason recorded anywhere: the
+    # payload kept the stderr on task.submission_result, but the stage summary
+    # row, stage events, and the workflow error message all read stage
+    # metadata, which stayed silent.
+    stage_metadata["reason"] = (
+        str(submission.get("reason", "")).strip() or "queue_submission_failed"
+    )
+    failure_detail = (
+        str(submission.get("stderr", "")).strip() or str(submission.get("stdout", "")).strip()
+    )[:_SUBMISSION_ERROR_DETAIL_LIMIT]
+    if failure_detail:
+        stage_metadata["submission_error_detail"] = failure_detail
+
+
+def _clear_submission_failure_metadata(stage_metadata: dict[str, Any]) -> None:
+    # A successful resubmission must clear the previous failure's traces, or a
+    # stage retried after submission_failed stays tagged with the stale reason
+    # through queued/running/completed and the final report surfaces it.
+    stage_metadata.pop("reason", None)
+    stage_metadata.pop("submission_error_detail", None)
+
+
 def _apply_submission_result(
     *,
     stage: dict[str, Any],
@@ -181,6 +211,10 @@ def _apply_submission_result(
     )
     for metadata_key, submission_key in metadata_fields:
         stage_metadata[metadata_key] = submission.get(submission_key, "")
+    if submitted:
+        _clear_submission_failure_metadata(stage_metadata)
+    else:
+        _record_submission_failure_metadata(stage_metadata, submission)
     stage_metadata.update(active_metadata or {})
     _clear_submission_deferred_metadata(stage_metadata)
     return True

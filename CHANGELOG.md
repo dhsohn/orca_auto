@@ -22,6 +22,35 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   to the internal-engine (xTB/CREST) submission path, which duplicates the
   marker logic and emitted the same spurious warning.
 
+- A rejected stage submission now records its reason on the stage. When a
+  workflow stage submission fails, stage metadata gains `reason` (the
+  submission's reason, or `queue_submission_failed` when it reports none) and
+  `submission_error_detail` (the stderr, or stdout when stderr is empty,
+  truncated to 1,000 characters), and a later successful resubmission clears
+  both. The stage summary row, stage events, and the workflow report read
+  stage metadata, so a rejection's cause now reaches all three — previously
+  the detail survived only on the stage's raw `submission_result` payload,
+  while the workflow error message told the reader to "see each stage's
+  submission_error_detail", a field nothing wrote. This applies to ORCA, xTB,
+  and CREST stages alike. For ORCA stages the contract-metadata writer also
+  needed the same preserve-on-empty rule that `queue_id` and `run_id` already
+  had: a submission-failed stage has no run, so the contract loader returns
+  an unknown contract with an empty reason on the same sync tick and every
+  later one, and writing that empty value would have erased the recorded
+  reason immediately. The regression tests for the original incident (OptTS
+  submissions rejected with no recorded reason) now run against this path,
+  including an integration test through the ORCA stage sync.
+
+### Removed
+
+- Removed the workflow registry's dead `submission_summary` plumbing: the
+  record field, its `updated_at` fallback, and the workflow-summary key. Its
+  only writer was removed with the unreachable submitter cluster in 1.0.0 and
+  no production run ever produced the data, so registry rows and workflow
+  summaries simply stop carrying an always-empty mapping. Registry ordering is
+  unchanged — with the field always absent, the fallback already resolved to
+  the record-build timestamp.
+
 ## [1.0.0] - 2026-08-02
 
 orca_auto's first stable release. Every surface documented in
