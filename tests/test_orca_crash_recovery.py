@@ -825,10 +825,14 @@ def test_marker_finalize_is_quiet_when_worker_already_retired_the_intent(
     # The worker retires an intent as soon as a committed queue row references it.
     discard_snapshot_intent(queue_root, token)
 
-    with caplog.at_level(logging.INFO, logger="orca_auto.orca.submission"):
+    with caplog.at_level(logging.INFO, logger="orca_auto.core.queue.engine.snapshot_intent"):
         assert mark_orca_snapshot_owned(queue_root, token) is None
 
-    records = [record for record in caplog.records if record.name == "orca_auto.orca.submission"]
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "orca_auto.core.queue.engine.snapshot_intent"
+    ]
     assert not [record for record in records if record.levelno >= logging.WARNING]
     assert any("already retired" in record.getMessage() for record in records)
 

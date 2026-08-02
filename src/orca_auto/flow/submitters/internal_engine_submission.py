@@ -33,10 +33,10 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_STATE_CREATING,
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
-    SNAPSHOT_INTENT_STATE_OWNED,
     SNAPSHOT_INTENT_TOKEN_KEY,
-    discard_snapshot_intent,
+    SNAPSHOT_OWNERSHIP_REPAIR_PENDING_WARNING,
     discard_snapshot_intent_if_generations_absent,
+    mark_snapshot_intent_owned,
     transition_snapshot_intent,
 )
 from orca_auto.core.queue.enqueue_publication import (
@@ -144,30 +144,20 @@ def _submission_snapshot_intent(submission: Any) -> tuple[Path, str] | None:
 def _mark_submission_snapshot_owned(submission: Any, state: _InternalEngineSubmissionState) -> None:
     try:
         intent = _submission_snapshot_intent(submission)
-        if intent is None:
-            return
-        intent_root, intent_token = intent
-        transition_snapshot_intent(
-            intent_root,
-            intent_token,
-            target_state=SNAPSHOT_INTENT_STATE_OWNED,
-            expected_states={SNAPSHOT_INTENT_STATE_ENQUEUEING},
-        )
-        discard_snapshot_intent(intent_root, intent_token)
-    except FileNotFoundError:
-        # The worker retires any intent already referenced by a committed queue
-        # row; losing that race leaves nothing to own or repair.
-        logger.info(
-            "queued snapshot intent already retired by the worker; "
-            "durable queue entry retains ownership"
-        )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "queued snapshot ownership marker update failed; durable queue entry retains ownership: %s",
             exc,
             exc_info=True,
         )
-        _append_warning(state, "queued snapshot ownership marker repair is pending")
+        _append_warning(state, SNAPSHOT_OWNERSHIP_REPAIR_PENDING_WARNING)
+        return
+    if intent is None:
+        return
+    intent_root, intent_token = intent
+    warning = mark_snapshot_intent_owned(intent_root, intent_token)
+    if warning:
+        _append_warning(state, warning)
 
 
 def _active_job_dir_key(entry: QueueEntry) -> tuple[str, str] | None:

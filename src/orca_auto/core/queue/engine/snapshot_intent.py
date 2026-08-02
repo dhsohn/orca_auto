@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -20,11 +21,15 @@ from orca_auto.core.utils.persistence import (
     now_utc_iso,
 )
 
+logger = logging.getLogger(__name__)
+
 SNAPSHOT_INTENT_TOKEN_KEY = "snapshot_intent_token"
 SNAPSHOT_INTENT_QUEUE_ROOT_KEY = "snapshot_intent_queue_root"
 SNAPSHOT_INTENT_STATE_CREATING = "creating"
 SNAPSHOT_INTENT_STATE_ENQUEUEING = "enqueueing"
 SNAPSHOT_INTENT_STATE_OWNED = "owned"
+
+SNAPSHOT_OWNERSHIP_REPAIR_PENDING_WARNING = "queued snapshot ownership marker repair is pending"
 
 _INTENT_DIR_NAME = ".orca_auto_snapshot_intents"
 _MAINTENANCE_LOCK_NAME = ".orca_auto_snapshot_intents.lock"
@@ -365,6 +370,44 @@ def discard_snapshot_intent(queue_root: str | Path, token: str) -> None:
         except FileNotFoundError:
             return
         _unlink_intent(intent_path)
+
+
+def mark_snapshot_intent_owned(
+    queue_root: str | Path,
+    token: str,
+    *,
+    intent_label: str = "queued snapshot",
+) -> str | None:
+    """Transition an ENQUEUEING intent to OWNED and retire it after commit.
+
+    Returns the repair-pending warning when the marker update fails; returns
+    None when the marker was retired here or already retired by the worker.
+    """
+    try:
+        transition_snapshot_intent(
+            queue_root,
+            token,
+            target_state=SNAPSHOT_INTENT_STATE_OWNED,
+            expected_states={SNAPSHOT_INTENT_STATE_ENQUEUEING},
+        )
+        discard_snapshot_intent(queue_root, token)
+    except FileNotFoundError:
+        # The worker retires any intent already referenced by a committed queue
+        # row; losing that race leaves nothing to own or repair.
+        logger.info(
+            "%s intent already retired by the worker; durable queue entry retains ownership",
+            intent_label,
+        )
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s ownership marker update failed; durable queue entry retains ownership: %s",
+            intent_label,
+            exc,
+            exc_info=True,
+        )
+        return SNAPSHOT_OWNERSHIP_REPAIR_PENDING_WARNING
+    return None
 
 
 def discard_snapshot_intent_if_generations_absent(
