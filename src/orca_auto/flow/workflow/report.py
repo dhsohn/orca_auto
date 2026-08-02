@@ -549,53 +549,8 @@ def _stage_diagnostic(
     return reason, explanation, details_href
 
 
-def _same_file_snapshot(left: os.stat_result, right: os.stat_result) -> bool:
-    return (
-        left.st_dev,
-        left.st_ino,
-        left.st_mode,
-        left.st_nlink,
-        left.st_size,
-        left.st_mtime_ns,
-        left.st_ctime_ns,
-    ) == (
-        right.st_dev,
-        right.st_ino,
-        right.st_mode,
-        right.st_nlink,
-        right.st_size,
-        right.st_mtime_ns,
-        right.st_ctime_ns,
-    )
-
-
-def _same_node(left: os.stat_result, right: os.stat_result) -> bool:
-    return (left.st_dev, left.st_ino, left.st_mode) == (
-        right.st_dev,
-        right.st_ino,
-        right.st_mode,
-    )
-
-
-def _open_absolute_directory_nofollow(path: Path, flags: int) -> int:
-    """Open an absolute directory without following any path-component symlink."""
-    if not path.is_absolute() or path.anchor != os.path.sep:
-        raise OSError("expected an absolute POSIX directory path")
-    descriptor = os.open(path.anchor, flags)
-    try:
-        for component in path.parts[1:]:
-            next_descriptor = os.open(component, flags, dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = next_descriptor
-    except BaseException:
-        os.close(descriptor)
-        raise
-    return descriptor
-
-
 def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[bytes, int] | None:
     """Read at most the bounded tail of one confined, stable regular output."""
-    root_fd = -1
     parent_fd = -1
     output_fd = -1
     try:
@@ -608,36 +563,23 @@ def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[b
         candidate_before = os.stat(candidate, follow_symlinks=False)
         if not stat.S_ISREG(candidate_before.st_mode) or candidate_before.st_nlink != 1:
             return None
-        root_before = os.stat(root, follow_symlinks=False)
-        if not stat.S_ISDIR(root_before.st_mode):
-            return None
 
         directory_flags = os.O_RDONLY | os.O_CLOEXEC
         directory_flags |= os.O_DIRECTORY | os.O_NOFOLLOW
-        root_fd = _open_absolute_directory_nofollow(root, directory_flags)
-        root_opened = os.fstat(root_fd)
-        if not stat.S_ISDIR(root_opened.st_mode) or not _same_node(root_before, root_opened):
-            return None
-
-        parent_fd = root_fd
-        for component in relative.parts[:-1]:
-            next_fd = os.open(component, directory_flags, dir_fd=parent_fd)
-            if parent_fd != root_fd:
-                os.close(parent_fd)
-            parent_fd = next_fd
-            if not stat.S_ISDIR(os.fstat(parent_fd).st_mode):
-                return None
+        parent_fd = os.open(resolved.parent, directory_flags)
 
         output_flags = os.O_RDONLY | os.O_CLOEXEC
+        # O_NONBLOCK covers the stat-to-open race: without it a path swapped to a
+        # FIFO between the two would block the report writer indefinitely.
         output_flags |= os.O_NONBLOCK | os.O_NOFOLLOW
         output_fd = os.open(relative.parts[-1], output_flags, dir_fd=parent_fd)
         opened = os.fstat(output_fd)
-        named_opened = os.stat(relative.parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+        # The fd pins one inode. Comparing it against the pre-open lstat is what
+        # catches an ancestor swapped to a symlink after the path was resolved.
         if (
             not stat.S_ISREG(opened.st_mode)
             or opened.st_nlink != 1
-            or not _same_file_snapshot(candidate_before, opened)
-            or not _same_file_snapshot(opened, named_opened)
+            or (candidate_before.st_dev, candidate_before.st_ino) != (opened.st_dev, opened.st_ino)
         ):
             return None
 
@@ -655,15 +597,13 @@ def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[b
             tail.extend(chunk)
 
         after = os.fstat(output_fd)
-        named_after = os.stat(relative.parts[-1], dir_fd=parent_fd, follow_symlinks=False)
-        candidate_after = os.stat(candidate, follow_symlinks=False)
-        root_after = os.stat(root, follow_symlinks=False)
-        if (
-            len(tail) != read_size
-            or not _same_file_snapshot(opened, after)
-            or not _same_file_snapshot(after, named_after)
-            or not _same_file_snapshot(named_after, candidate_after)
-            or not _same_node(root_opened, root_after)
+        # A file that grew under the read must be rejected, not parsed. The
+        # energy marker's `$` also matches at the end of the tail buffer, so a
+        # half-written number would parse as a complete value and be displayed
+        # as a wrong energy in the delta-E table.
+        if len(tail) != read_size or (opened.st_size, opened.st_mtime_ns) != (
+            after.st_size,
+            after.st_mtime_ns,
         ):
             return None
         return bytes(tail), read_offset
@@ -672,10 +612,8 @@ def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[b
     finally:
         if output_fd >= 0:
             os.close(output_fd)
-        if parent_fd >= 0 and parent_fd != root_fd:
+        if parent_fd >= 0:
             os.close(parent_fd)
-        if root_fd >= 0:
-            os.close(root_fd)
 
 
 def _final_single_point_energy_from_output(output_root: Path, candidate: Path) -> float | None:
