@@ -718,6 +718,14 @@ Behavior:
 - `service status` reports the runtime and engine-worker targets, the default
   ORCA engine service, and the opt-in workflow worker. The opt-in worker
   is informational and is not required for worker-only or full-runtime health.
+- `service status` also compares the installed distribution metadata against the
+  source tree the process imports. A deployment running from an editable install
+  whose metadata froze at an earlier version reports `version_drift` with the
+  `installed` and `source` versions, writes the mismatch and its recovery hint to
+  stderr, and exits non-zero. `ok` continues to describe unit health alone, so a
+  drifting deployment with healthy units reports `ok: true` and still exits
+  non-zero. An install with no source `pyproject.toml`, such as a wheel install,
+  has nothing to compare and reports `version_drift: null`.
 - `service restart` clears the ORCA engine service's start-limit failure state.
   It restarts the runtime target when enabled; otherwise it restarts the
   engine-worker target.

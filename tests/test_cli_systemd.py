@@ -553,6 +553,7 @@ def test_cmd_service_status_prints_compact_systemd_state(capsys: Any) -> None:
             default_service_user=lambda: "alice",
             run=_fake_run,
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+            installed_version_drift=lambda: None,
         ),
     )
 
@@ -603,6 +604,7 @@ def test_cmd_service_status_worker_only_requires_only_worker(capsys: Any) -> Non
             collect_service_status=lambda target_user, run: statuses,
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+            installed_version_drift=lambda: None,
         ),
     )
 
@@ -650,6 +652,7 @@ def test_cmd_service_status_hides_runtime_managed_enabled_noise(
             collect_service_status=lambda target_user, run: statuses,
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+            installed_version_drift=lambda: None,
         ),
     )
 
@@ -693,6 +696,7 @@ def test_cmd_service_status_emits_json(capsys: Any) -> None:
             default_service_user=lambda: "alice",
             run=_fake_run,
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+            installed_version_drift=lambda: None,
         ),
     )
 
@@ -703,6 +707,72 @@ def test_cmd_service_status_emits_json(capsys: Any) -> None:
     assert payload["ok"] is False
     worker = next(s for s in payload["services"] if s["label"] == "worker")
     assert worker["active"] == "failed"
+
+
+def _healthy_worker_only_statuses() -> tuple[Any, ...]:
+    return (
+        cli_systemd_status.ServiceUnitStatus(
+            label="runtime",
+            unit="orca_auto-runtime@alice.target",
+            active="inactive",
+            enabled="disabled",
+        ),
+        cli_systemd_status.ServiceUnitStatus(
+            label="engines",
+            unit="orca_auto-engine-workers@alice.target",
+            active="active",
+            enabled="enabled",
+        ),
+        cli_systemd_status.ServiceUnitStatus(
+            label="worker",
+            unit="orca_auto-queue-worker@alice.service",
+            active="active",
+            enabled="enabled",
+        ),
+    )
+
+
+def test_cmd_service_status_gates_on_stale_installed_metadata(capsys: Any) -> None:
+    statuses = _healthy_worker_only_statuses()
+
+    result = cli_systemd_status.cmd_service_status(
+        Namespace(target_user="alice", json=True),
+        deps=cli_systemd_status.ServiceCliDeps(
+            collect_service_status=lambda target_user, run: statuses,
+            run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+            installed_version_drift=lambda: ("0.1.0", "1.0.0"),
+        ),
+    )
+
+    # Every required unit is active, so the deployment is only unhealthy
+    # because it reports a version it no longer runs.
+    assert result == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["ok"] is True
+    assert payload["version_drift"] == {"installed": "0.1.0", "source": "1.0.0"}
+    assert "installed metadata declares 0.1.0" in captured.err
+    assert "pip install -e ." in captured.err
+
+
+def test_cmd_service_status_reports_no_drift_for_a_current_install(capsys: Any) -> None:
+    statuses = _healthy_worker_only_statuses()
+
+    result = cli_systemd_status.cmd_service_status(
+        Namespace(target_user="alice", json=True),
+        deps=cli_systemd_status.ServiceCliDeps(
+            collect_service_status=lambda target_user, run: statuses,
+            run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+            installed_version_drift=lambda: None,
+        ),
+    )
+
+    assert result == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["version_drift"] is None
+    assert captured.err == ""
 
 
 def test_cmd_service_status_fails_when_systemctl_is_missing(capsys: Any) -> None:
@@ -1298,6 +1368,7 @@ def test_cmd_service_status_returns_failure_when_any_unit_failed(capsys: Any) ->
             collect_service_status=lambda target_user, run: statuses,
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+            installed_version_drift=lambda: None,
         ),
     )
 

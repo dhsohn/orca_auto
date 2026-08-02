@@ -8,6 +8,18 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Added
+
+- `service status` compares the installed distribution metadata against the
+  source tree the process imports and gates on a mismatch. An editable install
+  freezes its metadata at install time, so a deployment that fast-forwards its
+  checkout without rerunning the install runs one version's code while every
+  version report names another; that state went unnoticed for two months. The
+  command now reports `version_drift` in its JSON payload, writes the two
+  versions and a `pip install -e .` hint to stderr, and exits non-zero. `ok`
+  still describes unit health alone, and an install with no source
+  `pyproject.toml` reports `version_drift: null` rather than a verdict.
+
 ### Fixed
 
 - Submitting to a queue whose worker is already running no longer logs a

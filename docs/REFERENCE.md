@@ -515,6 +515,11 @@ released plain table.
 - `orca_auto --version` prints the installed version, and running `orca_auto` with no
   command prints help. Errors and recovery hints are written to stderr.
 - `orca_auto service status --json` emits machine-readable output for scripting.
+- `orca_auto service status` also gates the deployment's declared version. An
+  editable install freezes its metadata at install time, so a checkout that has
+  moved on keeps reporting the version it was installed at; the command reports
+  that mismatch as `version_drift`, prints it with a `pip install -e .` hint on
+  stderr, and exits non-zero.
 
 ### 7.6 Long-Running Services
 
