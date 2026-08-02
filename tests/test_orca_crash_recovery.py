@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_STATE_CREATING,
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
     SNAPSHOT_INTENT_TOKEN_KEY,
+    discard_snapshot_intent,
     transition_snapshot_intent,
 )
 from orca_auto.core.queue.generation import is_visible_generation_name
@@ -803,6 +805,32 @@ def test_recovery_checkpoint_prefers_the_newest_attempt_gbw(tmp_path: Path) -> N
         expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
         expected_max_retries=3,
     )
+
+
+def test_marker_finalize_is_quiet_when_worker_already_retired_the_intent(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    queue_root = tmp_path / "queue"
+    queue_root.mkdir(exist_ok=True)
+    job_dir, selected, executable = _mutable_job(queue_root, job_name="rxn")
+    snapshot = _build(job_dir, selected, executable, queue_root=queue_root)
+    token = snapshot[SNAPSHOT_INTENT_TOKEN_KEY]
+    transition_snapshot_intent(
+        queue_root,
+        token,
+        target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
+        expected_states={SNAPSHOT_INTENT_STATE_CREATING},
+    )
+    # The worker retires an intent as soon as a committed queue row references it.
+    discard_snapshot_intent(queue_root, token)
+
+    with caplog.at_level(logging.INFO, logger="orca_auto.orca.submission"):
+        assert mark_orca_snapshot_owned(queue_root, token) is None
+
+    records = [record for record in caplog.records if record.name == "orca_auto.orca.submission"]
+    assert not [record for record in records if record.levelno >= logging.WARNING]
+    assert any("already retired" in record.getMessage() for record in records)
 
 
 def test_checkpoint_verify_is_independent_of_later_source_edits(tmp_path: Path) -> None:

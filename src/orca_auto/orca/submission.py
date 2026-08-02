@@ -83,6 +83,14 @@ def mark_orca_snapshot_owned(
             expected_states={SNAPSHOT_INTENT_STATE_ENQUEUEING},
         )
         discard_snapshot_intent(intent_root, intent_token)
+    except FileNotFoundError:
+        # The worker retires any intent already referenced by a committed queue
+        # row; losing that race leaves nothing to own or repair.
+        logger.info(
+            "queued ORCA snapshot intent already retired by the worker; "
+            "durable queue entry retains ownership"
+        )
+        return None
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "queued ORCA snapshot ownership marker update failed; "

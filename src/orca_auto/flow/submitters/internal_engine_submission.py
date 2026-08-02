@@ -154,6 +154,13 @@ def _mark_submission_snapshot_owned(submission: Any, state: _InternalEngineSubmi
             expected_states={SNAPSHOT_INTENT_STATE_ENQUEUEING},
         )
         discard_snapshot_intent(intent_root, intent_token)
+    except FileNotFoundError:
+        # The worker retires any intent already referenced by a committed queue
+        # row; losing that race leaves nothing to own or repair.
+        logger.info(
+            "queued snapshot intent already retired by the worker; "
+            "durable queue entry retains ownership"
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "queued snapshot ownership marker update failed; durable queue entry retains ownership: %s",
