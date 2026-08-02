@@ -5,11 +5,13 @@ import getpass
 import json
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from orca_auto import cli_style
+from orca_auto._version import installed_version_drift
 from orca_auto.cli_errors import emit_error
 from orca_auto.cli_systemd_apply import _run_command
 from orca_auto.core.utils.coercion import normalize_text
@@ -147,7 +149,9 @@ def _print_service_status(target_user: str, statuses: Sequence[ServiceUnitStatus
 
 
 def _service_status_payload(
-    target_user: str, statuses: Sequence[ServiceUnitStatus]
+    target_user: str,
+    statuses: Sequence[ServiceUnitStatus],
+    drift: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     mode = _selected_service_mode(statuses)
     required_labels = _required_service_labels(mode)
@@ -155,6 +159,18 @@ def _service_status_payload(
         "target_user": target_user,
         "mode": mode,
         "ok": _required_services_active(statuses, required_labels=required_labels),
+        "version_drift": (
+            None
+            if drift is None
+            else {
+                "installed": drift[0],
+                "source": drift[1],
+                # A host can hold several editable installs of one checkout —
+                # here, the units' virtualenv and the operator's shell — so the
+                # verdict is only meaningful with the interpreter it describes.
+                "interpreter": sys.executable,
+            }
+        ),
         "services": [
             {
                 "label": status.label,
@@ -286,6 +302,7 @@ class ServiceCliDeps:
     default_service_user: Callable[[], str] | None = None
     collect_service_status: Callable[..., tuple[ServiceUnitStatus, ...]] | None = None
     restart_unit_for_user: Callable[..., str] | None = None
+    installed_version_drift: Callable[[], tuple[str, str] | None] | None = None
 
 
 def _service_target_user(args: argparse.Namespace, deps: ServiceCliDeps) -> str:
@@ -307,12 +324,23 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceCliDeps | None 
     except ValueError as exc:
         emit_error(exc)
         return 1
-    payload = _service_status_payload(target_user, statuses)
+    drift = (deps.installed_version_drift or installed_version_drift)()
+    payload = _service_status_payload(target_user, statuses, drift)
     if bool(getattr(args, "json", False)):
         print(json.dumps(payload, ensure_ascii=True, indent=2))
     else:
         _print_service_status(target_user, statuses)
-    return 0 if payload["ok"] else 1
+    if drift is not None:
+        # This interpreter runs the checkout's code but declares the version its
+        # last install froze, so every version it reports is wrong until the
+        # editable install is refreshed. The verdict covers only the interpreter
+        # that ran this command, which need not be the one the units run.
+        installed, source = drift
+        emit_error(
+            f"{sys.executable} declares orca_auto {installed} but runs the source tree at {source}",
+            hint=f"rerun `{sys.executable} -m pip install -e .`",
+        )
+    return 0 if payload["ok"] and drift is None else 1
 
 
 def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceCliDeps | None = None) -> int:

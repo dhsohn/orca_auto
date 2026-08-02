@@ -109,7 +109,13 @@ After the tag and GitHub release exist:
 - [ ] On each deployment that runs from an editable install, rerun
       `.venv/bin/python -m pip install -e .` after fast-forwarding: the
       editable metadata is frozen at install time, so without the refresh
-      `orca_auto --version` keeps reporting the previous release.
+      `orca_auto --version` keeps reporting the previous release. Refresh every
+      interpreter that runs the checkout, not just the one on `PATH`: the
+      systemd units use the interpreter their unit files name, which need not
+      be the `orca_auto` your shell resolves. Confirm each with
+      `<interpreter> -m orca_auto.cli service status`, which names the
+      interpreter it inspected and exits non-zero while that install still
+      trails the checkout.
 - [ ] Install from the tag in a fresh temporary virtual environment when a user
       report or release risk justifies it.
 - [ ] Open follow-up issues for any deferred docs, Korean translations, or manual

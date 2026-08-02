@@ -488,6 +488,12 @@ orca_auto queue list --engine xtb
 - `orca_auto --version`은 설치된 버전을 출력하고, 명령 없이 `orca_auto`를 실행하면
   도움말이 표시됩니다. 오류와 복구 힌트는 stderr로 출력됩니다.
 - `orca_auto service status --json`은 스크립팅을 위한 기계 판독용 출력을 내보냅니다.
+- `orca_auto service status`는 자신을 실행한 인터프리터가 선언한 버전도 게이트합니다.
+  editable install은 설치 시점에 메타데이터가 동결되므로 체크아웃이 앞서 나가도 설치
+  당시 버전을 계속 보고합니다. 이 명령은 그 불일치를 `version_drift`로 보고하고 검사한
+  인터프리터를 함께 밝히며, `pip install -e .` 힌트를 stderr에 출력하고 0이 아닌 코드로
+  종료합니다. `orca_auto --version`은 여전히 설치된 버전만 출력하므로, 버전을 되읽는
+  대신 `service status`로 확인해야 합니다.
 
 ### 7.6 장기 실행 서비스
 
