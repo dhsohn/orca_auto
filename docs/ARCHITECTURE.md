@@ -56,7 +56,7 @@ src/orca_auto/
 │   └── utils/           # Locks, persistence, process tracking, coercion
 │
 ├── orca/                # Canonical ORCA implementation (source of truth)
-│   ├── commands/        # Thin CLI adapters: init, run_inp, queue, monitor
+│   ├── commands/        # Thin CLI adapters: init, run_inp, queue
 │   ├── submission.py    # Durable run-dir submission and publication
 │   ├── run_context.py   # Submission/execution target resolution
 │   ├── execution.py     # Locked ORCA execution and recovery
@@ -290,8 +290,8 @@ logic. Notable pieces:
   to serialize use of the reusable source directory. A fully closed submission can therefore be
   followed by a new sibling generation without overwriting old raw files. An
   invisible filesystem owner token binds state/report publication, historical
-  lookup, cleanup, and DFT discovery to the originally submitted directory
-  rather than only its reusable pathname or inode number.
+  lookup, and cleanup to the originally submitted directory rather than only
+  its reusable pathname or inode number.
 - **Optional RAM scratch with durable publication:** when
   `orca.runtime.scratch_root` is configured, an attempt stages only its bound
   flat, basename-relative input closure into a private `/dev/shm` workspace.
@@ -608,7 +608,6 @@ status-aware colorized table rendering (`terminal_table.py`, `activity_*.py`,
 - `run-dir <path>` — durable submission (ORCA or workflow, auto-routed)
 - `queue list` / `queue cancel` / `queue list clear` — inspect/maintain the queue
 - `service status` / `service restart` — runtime status (via systemd)
-- `scan-notify` — one-shot discovery scan + active-messenger alerts
 - `systemd install` — render and enable units
 
 Engine-specific CLI modules are runtime-only worker entrypoints and are not a

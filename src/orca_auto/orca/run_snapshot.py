@@ -19,7 +19,6 @@ from orca_auto.core.paths import (
 from orca_auto.core.utils import parse_iso_utc as _parse_iso_utc
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
-from .dft.discovery import _find_latest_out_in_dir
 from .job_locations import list_job_location_records, resolve_record_job_dir
 from .state import STATE_FILE_NAME, _state_from_normalized_payload
 
@@ -81,6 +80,22 @@ def _compute_elapsed(state: Mapping[str, Any]) -> float:
             return (ended - started).total_seconds()
 
     return (datetime.now(UTC) - started).total_seconds()
+
+
+def _find_latest_out_in_dir(directory: Path) -> Path | None:
+    if not directory.is_dir():
+        return None
+    latest: tuple[float, Path] | None = None
+    for candidate in directory.glob("*.out"):
+        if not candidate.is_file():
+            continue
+        try:
+            mtime = candidate.stat().st_mtime
+        except OSError:
+            continue
+        if latest is None or mtime > latest[0]:
+            latest = (mtime, candidate)
+    return latest[1] if latest is not None else None
 
 
 def _latest_out_path(reaction_dir: Path, state: Mapping[str, Any]) -> Path | None:

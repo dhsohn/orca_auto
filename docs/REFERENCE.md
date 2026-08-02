@@ -509,18 +509,7 @@ released plain table.
   command prints help. Errors and recovery hints are written to stderr.
 - `orca_auto service status --json` emits machine-readable output for scripting.
 
-### 7.6 `scan-notify`
-
-```bash
-orca_auto scan-notify
-```
-
-Behavior:
-
-- `scan-notify` runs a one-shot scan of the configured ORCA root and sends
-  discovery alerts to the configured Discord channel, then exits. It is not a live monitor.
-
-### 7.7 Long-Running Services
+### 7.6 Long-Running Services
 
 Long-running worker processes are managed through `systemd`.
 The public `systemd install` and `service` commands operate on those units rather

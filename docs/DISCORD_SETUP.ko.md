@@ -26,7 +26,7 @@ Discord에서 **사용자 설정 → 고급 → 개발자 모드**를 켠 뒤 �
 [ID 안내](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID)에
 나와 있습니다.
 
-- `default_channel_id`: 예약 알림과 워커 알림이 도착할 채널입니다.
+- `default_channel_id`: 큐 알림과 워커 알림이 도착할 채널입니다.
 
 ## 3. orca_auto 설정
 
@@ -68,11 +68,12 @@ chmod 600 config/orca_auto.yaml
 .venv/bin/orca_auto service status
 ```
 
-orca_auto는 실행이 종료 상태에 도달하면 알림을 게시합니다. 작업을 기다리지 않고 전송을
-확인하려면 단일 스캔을 실행합니다.
+orca_auto는 실행이 큐에 들어갈 때 한 번, 종료 상태에 도달할 때 다시 알림을 게시합니다.
+큐 카드는 제출 시점에 전송되므로 작은 ORCA 입력을 아무거나 제출하면 계산이 끝나기를
+기다리지 않고 전송을 확인할 수 있습니다.
 
 ```bash
-.venv/bin/orca_auto scan-notify
+.venv/bin/orca_auto run-dir <path>
 ```
 
 그런 다음 알림 채널에서 메시지 카드가 도착했는지 확인합니다.

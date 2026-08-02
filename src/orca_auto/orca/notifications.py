@@ -12,27 +12,21 @@ keeping it out of the title.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from orca_auto.core.activity_icons import activity_status_icon
 from orca_auto.core.messaging import (
-    Group,
     Message,
     MessageChannel,
     Severity,
-    bold,
     code,
     field_row,
     group,
-    line,
     raw,
     text,
 )
 
 if TYPE_CHECKING:
-    from .dft.monitor import ScanReport
     from .types import (
         QueueEnqueuedNotification,
         RetryNotification,
@@ -41,12 +35,6 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
-
-_MONITOR_DIVIDER = "─" * 28
-
-
-def _status_icon(status: str) -> str:
-    return activity_status_icon(status)
 
 
 # --------------------------------------------------------------------------- #
@@ -173,84 +161,6 @@ def queue_enqueued_message(event: QueueEnqueuedNotification) -> Message:
 
 
 # --------------------------------------------------------------------------- #
-# Monitor scan report
-# --------------------------------------------------------------------------- #
-def _notifiable_monitor_results(report: ScanReport) -> list:
-    return [
-        result for result in report.new_results if str(result.status).strip().lower() != "running"
-    ]
-
-
-def has_monitor_updates(report: ScanReport) -> bool:
-    return bool(_notifiable_monitor_results(report) or report.failures)
-
-
-def _monitor_dft_groups(report: ScanReport) -> list[Group]:
-    results = _notifiable_monitor_results(report)
-    if not results:
-        return []
-    groups: list[Group] = [
-        group(
-            line(raw("\U0001f9ea "), bold("New Calculations Detected"), raw(f"  ({len(results)})"))
-        )
-    ]
-    for result in results:
-        icon = _status_icon(str(result.status))
-        calc_label = result.calc_type.upper() if result.calc_type else "-"
-        items = [
-            line(raw(f"{icon} "), bold(result.formula), raw("  ["), text(calc_label), raw("]")),
-            line(raw("   \U0001f9ec "), text(result.method_basis)),
-            line(raw("   ⚡ "), text(result.energy)),
-            line(raw("   \U0001f4c2 "), code(result.path)),
-        ]
-        if result.note:
-            items.append(line(raw("   ⚠️ "), text(result.note.strip("() "))))
-        groups.append(group(*items))
-    return groups
-
-
-def _monitor_failure_groups(report: ScanReport) -> list[Group]:
-    if not report.failures:
-        return []
-    count = len(report.failures)
-    groups: list[Group] = [group(line(raw("⚠️ "), bold("Scan Parse Failures"), raw(f"  ({count})")))]
-    for failure in report.failures[:5]:
-        groups.append(
-            group(
-                line(raw("❌ "), code(failure.path)),
-                line(raw("   "), text(failure.error_type), raw(": "), text(failure.error)),
-            )
-        )
-    if count > 5:
-        groups.append(group(line(raw(f"   ... and {count - 5} more"))))
-    return groups
-
-
-def monitor_message(report: ScanReport, *, now: datetime | None = None) -> Message:
-    if now is None:
-        current_time = datetime.now().astimezone()
-    elif now.tzinfo is None:
-        current_time = now.astimezone()
-    else:
-        current_time = now
-    timestamp = current_time.strftime("%Y-%m-%d %H:%M %Z")
-
-    groups: list[Group] = [
-        group(line(raw("⚙️ "), bold("scan-notify"), raw("  "), code(timestamp))),
-        group(line(raw(_MONITOR_DIVIDER))),
-        group(
-            line(raw("\U0001f50d "), bold("Scope")),
-            line(
-                raw("Filesystem discovery only. Use run-dir alerts for immediate lifecycle events.")
-            ),
-        ),
-    ]
-    groups.extend(_monitor_dft_groups(report))
-    groups.extend(_monitor_failure_groups(report))
-    return Message(title="scan-notify", severity="info", groups=tuple(groups), author="orca_auto")
-
-
-# --------------------------------------------------------------------------- #
 # Patch-action humanisation (shared with retry rendering)
 # --------------------------------------------------------------------------- #
 def _format_patch_actions(actions: list[str]) -> str | None:
@@ -329,12 +239,6 @@ def notify_queue_enqueued_event(channel: MessageChannel, event: QueueEnqueuedNot
     return sent
 
 
-def notify_monitor_report(channel: MessageChannel, report: ScanReport) -> bool:
-    if not has_monitor_updates(report):
-        return False
-    return channel.send(monitor_message(report)).sent
-
-
 def _log_delivery(kind: str, sent: bool, **context: object) -> None:
     detail = " ".join(f"{key}={value}" for key, value in context.items())
     if sent:
@@ -344,9 +248,6 @@ def _log_delivery(kind: str, sent: bool, **context: object) -> None:
 
 
 __all__ = [
-    "has_monitor_updates",
-    "monitor_message",
-    "notify_monitor_report",
     "notify_queue_enqueued_event",
     "notify_retry_event",
     "notify_run_finished_event",

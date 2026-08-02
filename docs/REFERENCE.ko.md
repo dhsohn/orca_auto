@@ -483,18 +483,7 @@ orca_auto queue list --engine xtb
   도움말이 표시됩니다. 오류와 복구 힌트는 stderr로 출력됩니다.
 - `orca_auto service status --json`은 스크립팅을 위한 기계 판독용 출력을 내보냅니다.
 
-### 7.6 `scan-notify`
-
-```bash
-orca_auto scan-notify
-```
-
-동작:
-
-- `scan-notify`는 설정된 ORCA 루트를 일회성으로 스캔해 설정된 Discord 채널로 발견
-  알림을 보낸 뒤 종료합니다. 실시간 모니터가 아닙니다.
-
-### 7.7 장기 실행 서비스
+### 7.6 장기 실행 서비스
 
 장기 실행 워커 프로세스는 `systemd`로 관리됩니다. 공개 `systemd install`과
 `service` 명령은 관리되지 않는 워커 프로세스를 직접 띄우지 않고 해당 unit을 조작합니다.

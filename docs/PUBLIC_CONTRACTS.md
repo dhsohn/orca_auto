@@ -87,7 +87,7 @@ Unsupported path and process assumptions:
 
 **Stability:** `run-dir`, `queue list`, and `queue cancel` (with `--json`) are
 Stable Core. Every other command here — `init`, `scaffold`, `queue list clear`,
-`service`, `systemd install`, `scan-notify` — is Experimental.
+`service`, `systemd install` — is Experimental.
 
 The public user/operator CLI is `orca_auto ...`.
 
@@ -104,7 +104,6 @@ Supported commands:
 - `orca_auto service status`
 - `orca_auto service restart`
 - `orca_auto systemd install --user <name> --repo <path>`
-- `orca_auto scan-notify`
 
 Behavior:
 

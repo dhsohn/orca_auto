@@ -53,7 +53,7 @@ workflow:
   # xTB/ORCA Hessian-producing jobs.
 
 messenger:
-  # Selects where outbound run/queue/monitor notifications are delivered.
+  # Selects where outbound run/queue notifications are delivered.
   # `discord` is the only supported provider. Delivery is one-way: orca_auto
   # sends notifications and never accepts inbound commands.
   provider: discord  # discord
