@@ -211,7 +211,9 @@ The shared parent-worker lifecycle lives under `core.queue.engine`; common
 worker execution dependencies live in `core.queue.engine.worker_execution`,
 and child entrypoints use `core.queue.engine.child` directly. The xTB engine
 definition explicitly owns the workflow-aware runtime-root resolver, while
-publication repair and live child-PID slot protection remain xTB policies.
+live child-PID slot protection remains an xTB policy. Publication repair is
+shared: `flow/engines/queue_runtime_common.py` owns the sweep and the
+pre-reservation gate, and both the xTB and CREST workers install it.
 Crash-generation rebind, retry, publication repair, durable engine-process
 recovery, cancellation, and terminal replay remain ORCA-owned policies. Do not
 reintroduce an engine-local or generic forwarding facade around these canonical
@@ -222,8 +224,9 @@ the shared engine runtime to `publication_repair`, `cancellation`, `replay`, and
 `worker_tracking`; changes to those policies belong in their owning modules.
 
 `core/engines/registry.py` resolves an engine id to its `EngineDefinition` by
-importing the module and reading `ENGINE_DEFINITION`. This registry is the only
-place that knows the engine-id → module mapping.
+importing the module named in the catalog entry and reading `ENGINE_DEFINITION`.
+The engine-id → module mapping itself lives in `core/engine_catalog.py`, which
+is the only place that declares it.
 
 ### Unified child entrypoint
 
@@ -531,8 +534,8 @@ providers.
 (`render_discord.py`) and delivers it over the bot-authenticated Discord API; its
 shared HTTP retry/backoff helpers live in `discord_http.py`.
 
-`core/notifications/` holds the engine notification hook layer (`engine_notifier.py`,
-`engine_delivery.py`). Each `EngineDefinition` can register `job_started` /
+`core/notifications/` holds the engine notification hook layer (`engines.py`).
+Each `EngineDefinition` can register `job_started` /
 `job_finished` / `retry` hooks. Workflow alerts keep per-job ORCA messages but
 summarize internal CREST and reaction-path xTB child phases into one message each.
 

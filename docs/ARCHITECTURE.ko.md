@@ -207,7 +207,9 @@ predicate, 큐 항목 조회를 한 곳에서 설치합니다. 모든 엔진이 
 공용 부모 워커 라이프사이클은 `core.queue.engine`에, 공통 워커 실행 의존성은
 `core.queue.engine.worker_execution`에 두며 자식 진입점은 `core.queue.engine.child`를
 직접 사용합니다. workflow-aware runtime-root resolver는 엔진 정의가 명시적으로
-소유하고 publication repair와 live child-PID slot 보호는 xTB 정책으로 유지됩니다.
+소유하고 live child-PID slot 보호는 xTB 정책으로 유지됩니다. publication repair는
+공용입니다 — `flow/engines/queue_runtime_common.py`가 sweep과 예약 직전 게이트를
+소유하고 xTB·CREST 워커가 모두 그것을 설치합니다.
 crash-generation rebind, 재시도, publication repair, 내구성 engine-process 복구, 취소,
 terminal replay는 ORCA 소유 정책으로 유지됩니다. 이 canonical owner 주위에 엔진 로컬
 또는 범용 전달 facade를 다시 만들지 않습니다.
@@ -216,9 +218,10 @@ ORCA 부모 `queue.worker`는 정책 소유자가 아니라 composition root입�
 런타임을 `publication_repair`, `cancellation`, `replay`, `worker_tracking`에 연결하며,
 각 정책 변경은 해당 소유 모듈에 둡니다.
 
-`core/engines/registry.py`는 모듈을 임포트하고 `ENGINE_DEFINITION`을 읽어 엔진
-id를 `EngineDefinition`으로 해석합니다. 이 레지스트리가 엔진 id → 모듈 매핑을
-아는 유일한 장소입니다.
+`core/engines/registry.py`는 catalog 엔트리가 지정한 모듈을 임포트하고
+`ENGINE_DEFINITION`을 읽어 엔진 id를 `EngineDefinition`으로 해석합니다.
+엔진 id → 모듈 매핑 자체는 `core/engine_catalog.py`에 있으며, 그것을 선언하는
+유일한 장소입니다.
 
 ### 통합 자식 엔트리포인트
 
@@ -499,7 +502,7 @@ orca_auto는 단방향 발신 알림만 전송합니다. 작업 및 워크플로
 렌더링해 bot 인증 Discord API로 전송하며, 공유 HTTP 재시도/백오프 헬퍼는
 `discord_http.py`에 있습니다.
 
-`core/notifications/`는 엔진 알림 훅 계층(`engine_notifier.py`, `engine_delivery.py`)을
+`core/notifications/`는 엔진 알림 훅 계층(`engines.py`)을
 유지합니다. 각 `EngineDefinition`은 `job_started` / `job_finished` / `retry` 훅을 등록할
 수 있습니다. 워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST 및 반응 경로
 xTB 자식 페이즈는 각각 한 메시지로 요약합니다.

@@ -245,8 +245,10 @@ ORCA-specific notes:
   `reaction_dir` command line. The queue entry still stores `reaction_dir`, and
   downstream ORCA/workflow contracts should keep using that field.
 - Standalone ORCA resource metadata comes from the selected input's `%pal`
-  and `%maxcore` directives, with config defaults injected only when those
-  directives are missing. The shared `--max-cores` and `--max-memory-gb`
+  and `%maxcore` directives, with config defaults applied only when those
+  directives are missing. The defaults are resolved for the run and recorded in
+  the private execution snapshot; the input file you selected is never modified.
+  The shared `--max-cores` and `--max-memory-gb`
   flags do not override standalone ORCA input directives. Resource readers use
   the largest active value before normalization so a later duplicate cannot
   hide a larger request.

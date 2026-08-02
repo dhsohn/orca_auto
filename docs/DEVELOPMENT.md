@@ -26,13 +26,13 @@ stage, materialization, and lifecycle operations directly. Tests must reject
 unknown outer-service overrides and patch the owning module when isolating an
 internal operation.
 
-Workflow SI has a narrower enforced direction:
+Workflow SI is a flat package of three modules — `collection.py`, `publication.py`,
+and `rendering.py`. Import them directly; `flow.workflow.si.__init__` is empty and
+is not a facade. There is no import-linter contract for this package, so the
+following is a convention the reviewer enforces, not the build:
 
-- `flow.workflow.si.__init__` is the supported SI facade. Internally, dependencies
-  follow the allowed order publication → collection → rendering → science →
-  evidence → models. Layers may be skipped, but reverse imports fail
-  import-linter. Publication is the only file-writing SI owner; rendering stays
-  text-only.
+- Dependencies run publication → collection → rendering. Publication is the only
+  file-writing SI owner; rendering stays text-only.
 
 ## Current Package Layout
 
