@@ -58,10 +58,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   stale-key scrub keeps clearing `submission_intent_token` out of durable
   stage metadata written by earlier releases, so old workflows are unaffected.
 - Removed three helpers in `orca/commands/_helpers.py` whose consumers died
-  releases ago: `_human_bytes` (last consumer removed with the messenger
-  reduction), `finalize_batch_apply` (last consumer removed with the organize
-  feature), and the unused `_MAX_SAMPLE_FILES` constant, together with the
-  module's unused logger.
+  releases ago: `_human_bytes` (its last production callers went with the
+  cleanup and monitor command removals; the messenger reduction later removed
+  a separate same-named duplicate elsewhere), `finalize_batch_apply` (last
+  consumer removed with the organize feature), and the unused
+  `_MAX_SAMPLE_FILES` constant, together with the module's unused logger.
 
 ## [1.0.0] - 2026-08-02
 
