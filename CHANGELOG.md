@@ -117,6 +117,21 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Removed
 
+- Removed the workflow-level ORCA submitter cluster:
+  `flow/submitters/orca_submission.py`, `flow/submitters/orca_cancellation.py`,
+  and the `submit_reaction_ts_search_workflow` /
+  `cancel_reaction_ts_search_workflow` entry points they backed, together with
+  `recover_exact_reaction_dir_submission`, which only they called. This pair
+  submitted and cancelled an entire reaction_ts_search workflow in one call by
+  walking its stages itself. Nothing reached it: `default_orchestration_services()`
+  wires the per-stage path instead, and no command, adapter, or orchestration
+  module imported either function. The per-stage path — `sync_orca_stage_impl`
+  through `services.engines.submit_reaction_dir`, and workflow cancellation
+  through `services.engines.orca_cancel_target` — is unchanged and remains the
+  only way stages are submitted and cancelled. `submit_reaction_dir` and
+  `cancel_target` in `flow/submitters/orca.py` are untouched. This also settles
+  the `skip_submitted` keyword deferred in the earlier switch removal: it was a
+  parameter of the removed entry point and goes with it.
 - Removed the `orca_auto scan-notify` command and the DFT monitor subsystem
   behind it, including the public `has_monitor_updates`, `monitor_message`, and
   `notify_monitor_report` helpers. The command scanned the runs root for ORCA
