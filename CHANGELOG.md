@@ -115,6 +115,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   process that holds the queue root are unchanged; only the label and the
   wording it selected are gone.
 
+- The public contract document no longer carries the 0.x Stable
+  Core / Experimental tier split: every documented surface is committed. As part
+  of the promotion, `systemd install --worker-only` and `--config` appear in
+  `--help` instead of being hidden, and the workflow notification environment
+  variables `ORCA_AUTO_FLOW_NOTIFY_EVENT_TYPES` and
+  `ORCA_AUTO_FLOW_NOTIFY_DISABLED` are documented in the reference. Behavior of
+  all four is unchanged.
+
 - `queue.json` rows are now validated against the canonical schema instead of
   being defaulted field by field. A row that is missing any of the thirteen
   fields, carries an unknown one, or holds a value of the wrong type raises
@@ -379,6 +387,65 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `rm /etc/systemd/system/orca_auto-bot@.service`, then
   `systemctl daemon-reload`). The installer no longer renders that unit, and a
   stale runtime target would otherwise pull in a unit whose `ExecStart` is gone.
+
+### Upgrading from 0.2.x
+
+An audit of every commit in the 0.2 series found behavior that shipped without
+a changelog entry. The published 0.2.x sections are left as they shipped; what
+still matters on an upgrade to this release is recorded here instead.
+
+- **Workflow directory names cannot contain `(` or `)`, and an existing
+  workflow directory must never be renamed.** Since 0.2.0, `scaffold` and
+  `run-dir` reject a parenthesised name, and advancing a workflow whose
+  directory name no longer matches its persisted `workflow_id` fails it with
+  `workflow_error.scope = workflow_identity_validation`. Restore a renamed
+  directory to its original name, or create a new workflow.
+- **A config that still holds a top-level `telegram:` block fails loading**
+  with `Unknown top-level config fields are not supported.` — the error names
+  no key, so this note is the recovery path. 0.2.0 moved messenger settings
+  under `messenger:` behind a compatibility shim that has since been removed,
+  and the Telegram provider itself is gone. Delete the block and configure
+  `messenger.discord`.
+- **Your ORCA `.inp` files are no longer edited in place.** Through 0.2.0,
+  submission rewrote the selected input to inject `%pal nprocs` / `%maxcore`
+  when missing, logging `Updated ORCA input resource directives in <path>`.
+  Since 0.2.1 the values are resolved in memory into the private execution
+  snapshot and the log line reads `Prepared private ORCA input resource
+  directives for <path>`. The resources the job runs with are unchanged; a
+  script that read the injected directives back out of the input will now find
+  the original values.
+- **`flow.yaml` and engine job manifests must be plain single-link regular
+  UTF-8 files.** A symlinked or hardlinked manifest has failed closed since
+  0.2.0; replace it with a real copy.
+- **Elements above atomic number 86 no longer pass xTB/CREST admission**, and
+  charge/multiplicity must leave a non-negative electron count with
+  parity-consistent unpaired electrons. Manifests that silently defaulted a
+  malformed `multiplicity` in 0.1.x now fail.
+- **`job_report.json` `input.primary_path` points at the bound executed input**
+  under the execution generation, not the source path you submitted. Scripts
+  that resolved sibling files relative to it should use the recorded
+  source-path provenance instead.
+- **Reaction endpoint pairs are ordered by rank gap** since 0.2.0, so a capped
+  fan-out samples both endpoint ensembles instead of exhausting the first
+  reactant's conformers. Comparisons against 0.1.x runs should not expect the
+  same candidates under a cap.
+- **TS-guess screening is tunable** via the `xtb.ts_guess_validation` manifest
+  block (`enabled`, `bond_scale`, `max_spurious_bond_changes`,
+  `reacting_bond_stretch_scale`); a rejected guess fails its handoff with
+  reason `xtb_ts_guess_geometry_invalid`.
+- **Messenger delivery knobs are clamped**, not honoured verbatim:
+  `timeout_seconds` to 0.1–120 s, `max_attempts` to 1–10,
+  `retry_backoff_seconds` to 0–120 s.
+- **A malformed config reports only `Invalid YAML syntax: <path>`.** The
+  parser's line/column detail is withheld because config files carry
+  credentials; locate the error with your own YAML tooling.
+- **`queue list` no longer prunes stale admission slots** (since 0.2.1). The
+  `active_simulations:` count is a lock-free read; reclaiming capacity left by
+  a crashed worker is solely the recovery path's job.
+- **Housekeeping:** a `.job_state.mutation.lock` dotfile at each ORCA job root
+  is internal and expected (since 0.2.1); execution snapshots under
+  `.orca_auto_input_snapshots/` and `.orca_auto_orca_executions/` are retained
+  with no GC command — budget disk and reclaim them only with the retired job.
 
 ## [0.3.0] - 2026-07-21
 

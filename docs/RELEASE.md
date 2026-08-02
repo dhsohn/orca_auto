@@ -35,10 +35,11 @@ Use the same structure in release PRs and GitHub release notes:
   hardening that preserves public contracts.
 - Minor version: new public CLI/config/report behavior, new workflow surfaces,
   or meaningful contract additions.
-- Major version: reserved for future stable public API breaks.
+- Major version: any change that breaks a behavior documented in
+  [docs/PUBLIC_CONTRACTS.md](PUBLIC_CONTRACTS.md).
 
-Until the project declares a stable 1.0 contract, prefer conservative release
-notes that state exactly which surfaces are expected to remain stable.
+From 1.0.0 on, every surface in PUBLIC_CONTRACTS is committed, so release notes
+must name every documented behavior a release changes and its cutover impact.
 
 ## Pre-release checklist
 

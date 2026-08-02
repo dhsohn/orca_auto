@@ -27,23 +27,12 @@ expectations belong in [docs/VALIDATION.md](docs/VALIDATION.md).
 ## Current Public Contracts
 
 The canonical contract list lives in
-[docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md), which is two-tiered: a small
-committed **Stable Core** and a larger **Experimental** surface that is
-documented but may change or be removed before 1.0.
-
-The Stable Core — the only surface that changes cautiously, with tests, docs, and
-release notes — is:
-
-- `orca_auto run-dir` (queue-first submission), `orca_auto queue list`, and
-  `orca_auto queue cancel`, including their `--json` output.
-- Queue-first execution with cancellation and crash/orphan recovery.
-- `runs_root`, the ORCA/xTB/CREST executable paths, and the shared concurrency
-  limit `scheduler.max_active_simulations`.
-- `job_state.json` and `job_report.json` as durable machine artifacts.
-
-Everything else that PUBLIC_CONTRACTS documents — the other CLI commands, other
-config keys, queue field/status details, other artifacts and reason strings, the
-workflow contract, and the `systemd/` assets — is Experimental.
+[docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md). As of 1.0.0 every surface
+it documents is committed: the 0.x two-tier split (Stable Core plus
+Experimental) was resolved before the tag by promoting or removing every
+Experimental surface. Changes to any documented surface are deliberate, tested,
+and recorded in release notes; breaking a documented behavior requires a major
+version.
 
 ## 0.1.x: Initial Public Surface (Released)
 
@@ -78,23 +67,31 @@ The 0.3.0 release removes the standalone xTB-MD public engine, narrowing the
 supported public surface back to standalone ORCA plus the internal workflow xTB
 and CREST stages.
 
-## Toward 1.0: Stability Readiness
+## 1.0: Stable Public Surface
 
-orca_auto should only approach a 1.0 label once its everyday public contracts are
-boring in the best sense: predictable, documented, and recoverable.
+The 1.0.0 cut closes the stability-readiness track. What it settles:
 
-- Keep one canonical contract for CLI flags, config keys, persisted
-  state/report fields, and workflow layout.
-- Keep the import-layer contract enforced by CI and document any intentional
-  plugin-style exceptions.
-- Decide which workflow templates are first-class public features.
-- Require real-engine acceptance evidence for changes to ORCA invocation,
-  restart/resume, resource rewriting, or output classification.
-- Keep release notes user-centered: motivation, behavior changes, cutover
+- One canonical contract for CLI flags, config keys, persisted state/report
+  fields, and workflow layout, with the Experimental tier dissolved — every
+  documented surface promoted or removed before the tag.
+- The import-layer contract stays enforced by CI (four import-linter contracts
+  in `pyproject.toml`); cross-layer engine wiring goes through the declared
+  catalog, not ad-hoc imports.
+- The three scaffold templates (`ts_search`, `conformer_search`, `scan_ts`) are
+  the first-class workflow features; general xTB and CREST stay
+  workflow-internal.
+- Changes to ORCA invocation, restart/resume, resource handling, or output
+  classification require real-engine acceptance evidence per
+  [docs/VALIDATION.md](docs/VALIDATION.md).
+- Release notes stay user-centered: motivation, behavior changes, cutover
   impact, and verification evidence.
-- Reassess whether PyPI packaging, archived releases, or DOI registration are
-  useful for users. These are optional project-distribution choices, not current
-  roadmap requirements.
+
+## Maintenance Mode
+
+After 1.0.0 the project is in maintenance: bug fixes, documentation accuracy,
+and dependency upkeep. New capabilities need a deliberate scope decision first.
+PyPI packaging, archived releases, and DOI registration remain optional
+distribution choices to revisit on demand, not roadmap items.
 
 ## Deliberate Non-Goals
 
