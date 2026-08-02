@@ -27,8 +27,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   means every required unit is active, and the new non-zero case is a stale
   installed version. Callers that treat any non-zero exit as a dead worker
   should read `version_drift` to tell the two apart.
-- `orca_auto --version` names the source tree it is running when the installed
-  metadata disagrees with it, instead of printing the frozen version alone.
 
 ### Fixed
 

@@ -520,8 +520,8 @@ released plain table.
   checkout that has moved on keeps reporting the version it was installed at;
   the command reports that mismatch as `version_drift`, names the interpreter it
   inspected, prints a `pip install -e .` hint on stderr, and exits non-zero.
-  `orca_auto --version` names the source tree in the same situation instead of
-  printing the frozen number alone.
+  `orca_auto --version` keeps reporting the installed version alone, so use
+  `service status` rather than reading the version back.
 
 ### 7.6 Long-Running Services
 

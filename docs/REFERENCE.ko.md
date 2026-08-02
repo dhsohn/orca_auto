@@ -492,8 +492,8 @@ orca_auto queue list --engine xtb
   editable install은 설치 시점에 메타데이터가 동결되므로 체크아웃이 앞서 나가도 설치
   당시 버전을 계속 보고합니다. 이 명령은 그 불일치를 `version_drift`로 보고하고 검사한
   인터프리터를 함께 밝히며, `pip install -e .` 힌트를 stderr에 출력하고 0이 아닌 코드로
-  종료합니다. 같은 상황에서 `orca_auto --version`도 동결된 숫자만 내놓지 않고 실행 중인
-  소스 트리의 버전을 함께 밝힙니다.
+  종료합니다. `orca_auto --version`은 여전히 설치된 버전만 출력하므로, 버전을 되읽는
+  대신 `service status`로 확인해야 합니다.
 
 ### 7.6 장기 실행 서비스
 

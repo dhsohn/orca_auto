@@ -18,7 +18,7 @@ import re
 from typing import NoReturn, cast
 
 from orca_auto import cli_handlers, cli_queue, cli_workers
-from orca_auto._version import installed_version_drift, package_version
+from orca_auto._version import package_version
 from orca_auto.cli_errors import emit_error
 from orca_auto.cli_systemd_apply import cmd_systemd_install
 from orca_auto.cli_systemd_status import cmd_service_restart, cmd_service_status
@@ -367,13 +367,7 @@ def add_service_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
 
 
 def _orca_auto_version() -> str:
-    version = package_version()
-    drift = installed_version_drift()
-    if drift is None:
-        return version
-    # Reporting the frozen number alone is what let a stale editable install go
-    # unnoticed for two months; name the source tree this interpreter runs.
-    return f"{version} (running the source tree at {drift[1]}; rerun `pip install -e .`)"
+    return package_version()
 
 
 _EXAMPLES_EPILOG = """\

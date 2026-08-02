@@ -3,32 +3,7 @@ from __future__ import annotations
 import pytest
 
 from orca_auto import cli as unified_cli
-from orca_auto import cli_parsers
-from orca_auto.cli_parsers import _orca_auto_version, _suggestion_hint
-
-
-def test_version_names_the_source_tree_when_the_install_is_stale(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # `--version` is where the frozen number surfaced, so it must not report it
-    # bare while the interpreter runs a different source tree.
-    monkeypatch.setattr(cli_parsers, "package_version", lambda: "0.1.0")
-    monkeypatch.setattr(cli_parsers, "installed_version_drift", lambda: ("0.1.0", "1.0.0"))
-
-    text = _orca_auto_version()
-
-    assert text.startswith("0.1.0")
-    assert "1.0.0" in text
-    assert "pip install -e ." in text
-
-
-def test_version_stays_bare_when_the_install_is_current(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(cli_parsers, "package_version", lambda: "1.0.0")
-    monkeypatch.setattr(cli_parsers, "installed_version_drift", lambda: None)
-
-    assert _orca_auto_version() == "1.0.0"
+from orca_auto.cli_parsers import _suggestion_hint
 
 
 def test_suggestion_hint_offers_close_match() -> None:
