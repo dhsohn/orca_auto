@@ -47,6 +47,8 @@ Create a release-prep issue and branch from `origin/main`, then verify:
 
 - [ ] `CHANGELOG.md` has an entry for the release version and date.
 - [ ] `pyproject.toml` version matches the changelog entry.
+- [ ] `CITATION.cff` `version` and `date-released` match the release
+      (`tests/test_release_metadata.py` gates the version; the date is manual).
 - [ ] `README.md`, `docs/REFERENCE.md`, and example docs match current public
       CLI/config/report behavior.
 - [ ] Any behavior changes have tests and a clear cutover note if needed.
@@ -104,6 +106,10 @@ After the tag and GitHub release exist:
 
 - [ ] Confirm the tag points at the intended merge commit.
 - [ ] Confirm GitHub Actions completed for the release commit or tag.
+- [ ] On each deployment that runs from an editable install, rerun
+      `.venv/bin/python -m pip install -e .` after fast-forwarding: the
+      editable metadata is frozen at install time, so without the refresh
+      `orca_auto --version` keeps reporting the previous release.
 - [ ] Install from the tag in a fresh temporary virtual environment when a user
       report or release risk justifies it.
 - [ ] Open follow-up issues for any deferred docs, Korean translations, or manual
