@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from orca_auto.core.engine_process import atomic_write_confined_bytes, ensure_confined_directory
@@ -19,17 +19,10 @@ def _safe_xcontrol_target_name(value: Any, *, fallback_name: str) -> str:
     if not text or text in {".", ".."}:
         raise ValueError("xcontrol target must be a plain file name")
 
-    posix = PurePosixPath(text)
-    windows = PureWindowsPath(text)
-    if (
-        posix.is_absolute()
-        or windows.is_absolute()
-        or bool(windows.drive)
-        or ".." in posix.parts
-        or ".." in windows.parts
-    ):
-        raise ValueError(f"xcontrol target must be a plain file name: {text!r}")
-    if "/" in text or "\\" in text:
+    # A bare drive prefix ("C:escape.inp") carries no separator, so the
+    # separator test alone cannot see it. Windows drive paths are a declared
+    # non-goal (ROADMAP.md), so they stay rejected here.
+    if "/" in text or "\\" in text or bool(PureWindowsPath(text).drive):
         raise ValueError(f"xcontrol target must be a plain file name: {text!r}")
     return text
 

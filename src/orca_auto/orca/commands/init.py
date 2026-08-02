@@ -17,8 +17,7 @@ from orca_auto.core.config.files import (
     secure_config_file_permissions,
 )
 from orca_auto.core.config.schema import discord_config_from_mapping
-from orca_auto.core.engine_runner import validate_executable_file
-from orca_auto.core.paths import is_rejected_windows_path
+from orca_auto.core.paths import is_rejected_windows_path, validate_configured_executable_path
 from orca_auto.core.utils.persistence import atomic_write_text
 
 from ..config import load_config
@@ -96,21 +95,15 @@ def _normalize_linux_path(raw: str, *, label: str) -> Path | None:
     return path.resolve(strict=False)
 
 
-def _prompt_executable_path(prompt_label: str, *, label: str) -> str:
+def _prompt_executable_path(prompt_label: str, label: str, display_name: str) -> str:
+    # The prompt applies the rule the config loader will apply later, so a
+    # path accepted here cannot be rejected at startup.
     while True:
-        raw = _prompt_text(prompt_label)
-        path = _normalize_linux_path(raw, label=label)
-        if path is None:
-            continue
-        if str(path).lower().endswith(".exe"):
-            print(f"{label} must point to a Linux binary, not a Windows .exe.")
-            continue
         try:
-            executable = validate_executable_file(
-                path,
-                missing_message=lambda resolved: f"File not found: {resolved}",
-                not_file_message=lambda resolved: f"Path is not a file: {resolved}",
-                not_executable_message=lambda resolved: f"Path is not executable: {resolved}",
+            executable = validate_configured_executable_path(
+                _prompt_text(prompt_label),
+                label=label,
+                display_name=display_name,
             )
         except ValueError as exc:
             print(str(exc))
@@ -119,15 +112,15 @@ def _prompt_executable_path(prompt_label: str, *, label: str) -> str:
 
 
 def _prompt_orca_executable() -> str:
-    return _prompt_executable_path("ORCA executable path", label="orca_executable")
+    return _prompt_executable_path("ORCA executable path", "orca_executable", "ORCA")
 
 
 def _prompt_xtb_executable() -> str:
-    return _prompt_executable_path("xTB executable path", label="xtb_executable")
+    return _prompt_executable_path("xTB executable path", "xtb_executable", "xTB")
 
 
 def _prompt_crest_executable() -> str:
-    return _prompt_executable_path("CREST executable path", label="crest_executable")
+    return _prompt_executable_path("CREST executable path", "crest_executable", "CREST")
 
 
 def _prompt_directory_path(label: str, *, default: str | None = None) -> Path:

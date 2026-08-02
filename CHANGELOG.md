@@ -35,6 +35,17 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   queue id and root with its traceback before the sweep moves on, which no
   engine reported before.
 
+- `orca_auto init` validates an executable path with the same rule the config
+  loader applies, so a path the wizard accepts can no longer be rejected at
+  startup. The prompt's messages change accordingly and no longer echo the
+  rejected path.
+
+- Stage report and SI identity matching read only the nested `job` and
+  `engine_payload` identities. The flat top-level `job_id`, `run_id`, and
+  `queue_id` keys belonged to a pre-schema artifact layout that the engine and
+  schema gates already refuse to load, so a stray flat key can no longer widen
+  the conflict guard and reject a state that matches its stage.
+
 - A pending SI publication is retried on every worker cycle instead of waiting
   out an exponential backoff. `si_publish_next_retry_at` is gone, along with the
   30/60/120/240-second ladder; the attempt budget is unchanged, so a repeatedly

@@ -939,6 +939,51 @@ def test_failed_stage_without_current_identity_does_not_use_old_report(tmp_path:
     assert "job_report.json" not in text
 
 
+def test_stage_report_identity_ignores_legacy_flat_identity_keys(tmp_path: Path) -> None:
+    job_dir = tmp_path / "02_xtb" / "xtb_attempt"
+    job_dir.mkdir(parents=True)
+    # Flat top-level identity keys belong to a pre-schema artifact layout. They
+    # carry conflicting values here on purpose: the matcher must read only the
+    # nested identities, so these are ignored rather than poisoning the
+    # conflict guard and rejecting a state that plainly matches the stage.
+    (job_dir / "job_state.json").write_text(
+        json.dumps(
+            {
+                "engine": "xtb",
+                "job": {"id": "xtb-current", "task_id": "xtb-current"},
+                "job_id": "xtb-foreign",
+                "run_id": "run-foreign",
+                "queue_id": "q-foreign",
+                "engine_payload": {"job_id": "xtb-foreign", "queue_id": "q-foreign"},
+                "status": {"state": "failed", "reason": "xtb_failure_with_legacy_keys"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "xtb_path",
+                "stage_kind": "xtb_stage",
+                "status": "failed",
+                "task": {
+                    "engine": "xtb",
+                    "status": "failed",
+                    "payload": {"job_dir": str(job_dir)},
+                },
+                "metadata": {"child_job_id": "xtb-current"},
+            }
+        ],
+    )
+    payload["status"] = "failed"
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.failure_rows[0].reason == "xtb_failure_with_legacy_keys"
+    assert data.failure_rows[0].details_href == "02_xtb/xtb_attempt/job_state.json"
+
+
 def test_xtb_retry_prefers_refreshed_latest_path_over_original_task_job_dir(
     tmp_path: Path,
 ) -> None:

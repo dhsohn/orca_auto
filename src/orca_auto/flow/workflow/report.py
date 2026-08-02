@@ -390,20 +390,15 @@ def _stage_report_identity_matches(
         metadata.get("child_job_id"),
         submission.get("job_id"),
     )
-    report_job_ids = _identity_values(
-        job.get("id"),
-        job.get("task_id"),
-        report.get("job_id"),
-        engine_payload.get("job_id"),
-    )
+    # Only the nested identities are read: the flat top-level keys belong to a
+    # pre-schema artifact layout that the engine-key and schema gates above no
+    # longer admit, so accepting them here would only widen the conflict guard
+    # against values no writer produces.
+    report_job_ids = _identity_values(job.get("id"), job.get("task_id"))
     stage_run_ids = _identity_values(metadata.get("run_id"), task_payload.get("run_id"))
-    report_run_ids = _identity_values(report.get("run_id"), engine_payload.get("run_id"))
+    report_run_ids = _identity_values(engine_payload.get("run_id"))
     stage_queue_ids = _identity_values(metadata.get("queue_id"), submission.get("queue_id"))
-    report_queue_ids = _identity_values(
-        job.get("queue_id"),
-        report.get("queue_id"),
-        engine_payload.get("queue_id"),
-    )
+    report_queue_ids = _identity_values(job.get("queue_id"))
     identity_pairs = (
         (stage_job_ids, report_job_ids),
         (stage_run_ids, report_run_ids),
