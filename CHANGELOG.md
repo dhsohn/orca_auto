@@ -117,6 +117,31 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Removed
 
+- Removed the workflow-level ORCA submitter cluster:
+  `flow/submitters/orca_submission.py`, `flow/submitters/orca_cancellation.py`,
+  `flow/submitters/orca_models.py`, and the
+  `submit_reaction_ts_search_workflow` / `cancel_reaction_ts_search_workflow`
+  entry points they backed, together with
+  `recover_exact_reaction_dir_submission`, whose only caller in `src` they were.
+  This pair submitted and cancelled an entire reaction_ts_search workflow in one
+  call by walking its stages itself. Nothing reached it:
+  `default_orchestration_services()` wires the per-stage path instead, and no
+  command, adapter, or orchestration module imported either function. ORCA
+  stages are still submitted and cancelled the way production already did it —
+  `sync_orca_stage_impl` through `services.engines.submit_reaction_dir`, and
+  workflow cancellation through `services.engines.orca_cancel_target`, both
+  unchanged; CREST and xTB stages have their own submitters and are untouched.
+  `submit_reaction_dir` and `cancel_target` in `flow/submitters/orca.py` are
+  untouched. This also settles the `skip_submitted` keyword deferred in the
+  earlier switch removal: it was a parameter of the removed entry point and goes
+  with it.
+- Two workflow metadata keys lose their only writer with the cluster and are no
+  longer produced: `submission_error_detail`, the stderr excerpt promoted onto a
+  stage whose submission was rejected, and `submission_summary`, the per-workflow
+  submission rollup. Both were written only from the unreachable path, so no run
+  that this release replaces produced them either. The rejection `reason` and
+  `stderr` themselves are unaffected: they are still recorded on the stage's
+  `submission_result` and still surface in the workflow report.
 - Removed the `orca_auto scan-notify` command and the DFT monitor subsystem
   behind it, including the public `has_monitor_updates`, `monitor_message`, and
   `notify_monitor_report` helpers. The command scanned the runs root for ORCA

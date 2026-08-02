@@ -7,24 +7,11 @@ from typing import Any
 
 from orca_auto.core.commands.queue import display_status
 from orca_auto.core.queue.priority import normalize_queue_priority
-from orca_auto.core.queue.publication import (
-    QUEUE_SUBMISSION_INTENT_KEY,
-    queue_entry_is_claimable,
-)
+from orca_auto.core.queue.publication import QUEUE_SUBMISSION_INTENT_KEY
 from orca_auto.core.statuses import STATUS_WAITING_FOR_SLOT
 from orca_auto.core.utils import normalize_text as _normalize_text
-from orca_auto.core.utils import now_utc_iso
 
-from ..registry import sync_workflow_registry
-from ..state import (
-    acquire_workflow_lock,
-    load_workflow_payload,
-    resolve_workflow_workspace,
-    write_workflow_payload,
-)
 from . import internal_engine_models as _engine_models
-from . import orca_cancellation as _cancellation
-from . import orca_submission as _submission
 
 _SUBMIT_API_NAME = "orca_auto.orca.direct_submit"
 _CANCEL_API_NAME = "orca_auto.orca.direct_cancel"
@@ -45,13 +32,6 @@ class _OrcaDirectCancelRequest:
     command_argv: list[str]
     config_path: str
     target: str
-
-
-@dataclass(frozen=True)
-class _RecoveredQueuedSubmission:
-    entry: Any
-    reaction_dir: Path
-    worker_info: Any
 
 
 def _trace_argv(*, api_name: str, config_path: str, kwargs: dict[str, Any]) -> list[str]:
@@ -289,120 +269,6 @@ def _submission_reaction_dir(submission: Any, default_reaction_dir: str) -> str:
     return str(context.reaction_dir) if context is not None else default_reaction_dir
 
 
-def _entry_matches_submission_request(
-    entry: Any,
-    *,
-    reaction_dir: Path,
-    priority: int,
-    force: bool,
-    submission_intent_token: str,
-    allow_unclaimable_active: bool = False,
-) -> bool:
-    from orca_auto.orca.queue import adapter as queue_adapter
-
-    status = queue_adapter.queue_entry_status(entry)
-    if status in queue_adapter.ACTIVE_STATUSES:
-        eligible_status = not bool(getattr(entry, "cancel_requested", False)) and (
-            allow_unclaimable_active or bool(queue_entry_is_claimable(entry))
-        )
-    else:
-        eligible_status = status in queue_adapter.TERMINAL_STATUSES
-    return bool(
-        eligible_status
-        and queue_adapter.queue_entry_app_name(entry) == queue_adapter.QUEUE_APP_NAME
-        and _normalize_text(getattr(entry, "task_kind", "")) == queue_adapter.QUEUE_TASK_KIND
-        and _normalize_text(getattr(entry, "engine", "")) == queue_adapter.QUEUE_ENGINE
-        and queue_adapter.queue_entry_reaction_dir(entry) == str(reaction_dir)
-        and queue_adapter.queue_entry_priority(entry) == priority
-        and queue_adapter.queue_entry_force(entry) is force
-        and _normalize_text(
-            queue_adapter.queue_entry_metadata(entry).get(QUEUE_SUBMISSION_INTENT_KEY)
-        )
-        == submission_intent_token
-    )
-
-
-def recover_exact_reaction_dir_submission(
-    *,
-    reaction_dir: str,
-    priority: int,
-    config_path: str,
-    max_cores: int | None = None,
-    max_memory_gb: int | None = None,
-    force: bool = False,
-    repo_root: str | None = None,
-    submission_intent_token: str = "",
-    allow_unclaimable_active: bool = False,
-    raise_on_lookup_error: bool = False,
-) -> dict[str, Any] | None:
-    """Adopt the exact ORCA row created by a replayed workflow submission."""
-    del max_cores, max_memory_gb, repo_root
-    from orca_auto.orca.config import load_config
-    from orca_auto.orca.queue import adapter as queue_adapter
-    from orca_auto.orca.run_context import WorkerStatusInfo
-
-    request = _submit_request(
-        reaction_dir=reaction_dir,
-        priority=priority,
-        config_path=config_path,
-        max_cores=None,
-        max_memory_gb=None,
-        force=force,
-        submission_intent_token=submission_intent_token,
-    )
-    if not request.submission_intent_token:
-        return None
-    try:
-        cfg = load_config(request.args.config)
-        allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
-        resolved_reaction_dir = Path(reaction_dir).expanduser().resolve()
-        entries = queue_adapter.list_queue(allowed_root)
-    except (OSError, ValueError):
-        if raise_on_lookup_error:
-            raise
-        return None
-    matches = [
-        entry
-        for entry in entries
-        if _entry_matches_submission_request(
-            entry,
-            reaction_dir=resolved_reaction_dir,
-            priority=request.priority,
-            force=request.force,
-            submission_intent_token=request.submission_intent_token,
-            allow_unclaimable_active=allow_unclaimable_active,
-        )
-    ]
-    if not matches:
-        return None
-    if len(matches) > 1:
-        return _deferred_payload(
-            command_argv=request.command_argv,
-            reaction_dir=str(resolved_reaction_dir),
-            stderr=(
-                "multiple queue entries match the workflow submission intent; "
-                "refusing to choose an ambiguous queue generation"
-            ),
-            reason="ambiguous_submission_recovery",
-        )
-    entry = matches[0]
-    entry_status = queue_adapter.queue_entry_status(entry)
-    return _queued_payload(
-        command_argv=request.command_argv,
-        result=_RecoveredQueuedSubmission(
-            entry=entry,
-            reaction_dir=resolved_reaction_dir,
-            worker_info=WorkerStatusInfo(
-                detail=(
-                    f"recovered exact {entry_status} queue entry after workflow submission replay"
-                )
-            ),
-        ),
-        priority=request.priority,
-        force=request.force,
-    )
-
-
 def _failure_payload_for_submission(
     *,
     request: _OrcaDirectSubmitRequest,
@@ -556,71 +422,7 @@ def cancel_target(
     return _cancel_success_payload(command_argv=request.command_argv, updated=updated)
 
 
-def _submission_deps() -> _submission.SubmissionDeps:
-    return _submission.SubmissionDeps(
-        normalize_text=_normalize_text,
-        now_utc_iso=now_utc_iso,
-        resolve_workflow_workspace=resolve_workflow_workspace,
-        acquire_workflow_lock=acquire_workflow_lock,
-        load_workflow_payload=load_workflow_payload,
-        write_workflow_payload=write_workflow_payload,
-        sync_workflow_registry=sync_workflow_registry,
-        submit_reaction_dir=submit_reaction_dir,
-        recover_exact_reaction_dir_submission=recover_exact_reaction_dir_submission,
-    )
-
-
-def submit_reaction_ts_search_workflow(
-    *,
-    workflow_target: str,
-    workflow_root: str | Path | None,
-    orca_config: str,
-    orca_repo_root: str | None = None,
-    skip_submitted: bool = True,
-) -> dict[str, Any]:
-    return _submission.submit_reaction_ts_search_workflow(
-        workflow_target=workflow_target,
-        workflow_root=workflow_root,
-        orca_config=orca_config,
-        orca_repo_root=orca_repo_root,
-        skip_submitted=skip_submitted,
-        deps=_submission_deps(),
-    )
-
-
-def _cancellation_deps() -> _cancellation.CancellationDeps:
-    return _cancellation.CancellationDeps(
-        normalize_text=_normalize_text,
-        now_utc_iso=now_utc_iso,
-        resolve_workflow_workspace=resolve_workflow_workspace,
-        acquire_workflow_lock=acquire_workflow_lock,
-        load_workflow_payload=load_workflow_payload,
-        write_workflow_payload=write_workflow_payload,
-        sync_workflow_registry=sync_workflow_registry,
-        cancel_target=cancel_target,
-        recover_exact_reaction_dir_submission=recover_exact_reaction_dir_submission,
-    )
-
-
-def cancel_reaction_ts_search_workflow(
-    *,
-    workflow_target: str,
-    workflow_root: str | Path | None,
-    orca_config: str | None = None,
-    orca_repo_root: str | None = None,
-) -> dict[str, Any]:
-    return _cancellation.cancel_reaction_ts_search_workflow(
-        workflow_target=workflow_target,
-        workflow_root=workflow_root,
-        orca_config=orca_config,
-        orca_repo_root=orca_repo_root,
-        deps=_cancellation_deps(),
-    )
-
-
 __all__ = [
     "cancel_target",
-    "cancel_reaction_ts_search_workflow",
     "submit_reaction_dir",
-    "submit_reaction_ts_search_workflow",
 ]
