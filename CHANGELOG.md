@@ -115,8 +115,68 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   process that holds the queue root are unchanged; only the label and the
   wording it selected are gone.
 
+- Re-scoped `docs/PUBLIC_CONTRACTS.md` into two tiers. The document had grown to
+  declare almost the whole surface — CLI, config, queue, artifacts, workflow,
+  systemd — as stable, which made every removal read as a breaking change. Only
+  a small Stable Core is now a committed contract: `run-dir`, `queue list`, and
+  `queue cancel` with their queue-first, cancellation, and recovery semantics;
+  `runs_root`; the engine executable paths; the shared concurrency limit; and
+  `job_state.json` / `job_report.json` as durable machine artifacts. Everything
+  else the document describes is accurate for the release but may change. This
+  re-scopes only the public API — naming, shape, and presence. It does not relax
+  the fail-closed validation, durability, and recovery behavior the
+  implementation applies regardless of tier.
+
+- The ORCA output-tail reader used for the delta-E table no longer re-derives
+  the path it already holds open. A component-by-component directory walk, a
+  root-node round trip, three by-name stats duplicating what the descriptor had
+  pinned, and five seven-field stat comparisons are gone. The descriptor-based
+  confinement that remains is a narrower guarantee than the walk it replaces:
+  the walk was timing-independent, while the parent-directory open proves
+  containment only at the moment it runs. No output the reader produces changes.
+
+- Merged the CLI parser-wiring modules into one `cli_parsers` module and the
+  worker spec/conflict helpers into `cli_workers`. The command surface, flags,
+  help text, and error styling are unchanged.
+
+- Flattened the remaining single-implementation queue-worker indirection:
+  orphan reconciliation now lives in one module with direct calls, the
+  worker-lifecycle hook mapping layer is gone (replay builds the core hooks
+  directly), and the file-lock helper lost its grouped-options wrapper.
+  Reconciliation decisions, lock semantics, and log/error messages are
+  unchanged.
+
+- Replaced the single-implementation dependency-injection plumbing in the ORCA
+  job-location loaders and the workflow ORCA adapter with direct imports. The
+  loaded payloads, contracts, and error behavior are unchanged; the modules
+  regain static typing.
+
+- Collapsed the internal engine-notification pipeline into a single module.
+  The rendered notification lines, severities, workflow-child suppression, and
+  the public `notify_{xtb,crest}_job_{queued,started,finished}` entry points
+  are unchanged.
+
 ### Removed
 
+- Removed six engine manifest keys. `crest:` no longer accepts `no_reftopo`,
+  `no_topo`, `no_cbonds`, or `len`; `xtb:` no longer accepts `namespace` or
+  `opt`. Both mappings are strict, so a `flow.yaml` still carrying any of them
+  fails submission with `Unknown CREST manifest fields:` or
+  `Unknown xTB manifest fields:` rather than ignoring the key. Four have a
+  surviving spelling that means the same thing and should be used instead:
+  `no_reftopo` → `noreftopo`, `no_topo` → `notopo`, `no_cbonds` → `nocbonds`,
+  and `len` → `mdlen`. `xtb.namespace` and `xtb.opt` have no replacement and
+  should simply be deleted; `namespace` was already rejected when non-empty in
+  0.3.0, and is now rejected whatever its value.
+- Reduced per-run report output to one machine artifact and one human artifact.
+  `job_report.md` is gone, along with the `artifacts.report_markdown_commit`
+  marker embedded in `job_report.json` and the `report_md_path` runtime lookup;
+  stage detail links now go `job_report.html` → `job_report.json`. The two
+  format duplicates of the SI dataset, `si_data.csv` and
+  `interaction_energy.csv`, are also gone together with the latter's
+  ownership-marker file. `job_report.json`, `job_report.html`, and
+  `workflow_si.md` are unaffected, and the science they carry is unchanged.
+  Existing files from earlier runs are left in place and are no longer read.
 - Removed the workflow-level ORCA submitter cluster:
   `flow/submitters/orca_submission.py`, `flow/submitters/orca_cancellation.py`,
   `flow/submitters/orca_models.py`, and the
@@ -222,8 +282,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   - Dropped the `discord.py` dependency.
 
   Before upgrading, remove `messenger.telegram`, any top-level `telegram:`
-  block, and `messenger.discord.uploads` from `orca_auto.yaml`; those keys now
-  fail configuration loading. After upgrading, rerun
+  block, and `messenger.discord.uploads`, `messenger.discord.channel_ids`, and
+  `messenger.discord.allowed_user_ids` from `orca_auto.yaml`; those keys now
+  fail configuration loading. `channel_ids` and `allowed_user_ids` were valid
+  `messenger.discord` keys in 0.3.0 and served the interactive bot, which is
+  gone; outbound delivery uses `default_channel_id` alone. The error names the
+  section rather than the offending key, so this list is the recovery path.
+  After upgrading, rerun
   `orca_auto systemd install --user <name> --repo <path>` to rewrite the runtime
   target, and, if the `orca_auto-bot@<user>.service` unit was installed, remove
   it by hand (`systemctl disable --now orca_auto-bot@<user>.service`,
@@ -250,23 +315,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
-- Merged the CLI parser-wiring modules into one `cli_parsers` module and the
-  worker spec/conflict helpers into `cli_workers`. The command surface, flags,
-  help text, and error styling are unchanged.
-- Flattened the remaining single-implementation queue-worker indirection:
-  orphan reconciliation now lives in one module with direct calls, the
-  worker-lifecycle hook mapping layer is gone (replay builds the core hooks
-  directly), and the file-lock helper lost its grouped-options wrapper.
-  Reconciliation decisions, lock semantics, and log/error messages are
-  unchanged.
-- Replaced the single-implementation dependency-injection plumbing in the ORCA
-  job-location loaders and the workflow ORCA adapter with direct imports. The
-  loaded payloads, contracts, and error behavior are unchanged; the modules
-  regain static typing.
-- Collapsed the internal engine-notification pipeline into a single module.
-  The rendered notification lines, severities, workflow-child suppression, and
-  the public `notify_{xtb,crest}_job_{queued,started,finished}` entry points
-  are unchanged.
 - Workflow-internal xTB and CREST jobs now use `job_state.json` as their only
   terminal metadata artifact. They no longer write or read `job_report.json`
   or `job_report.md`; report-only jobs, completed outputs without terminal
