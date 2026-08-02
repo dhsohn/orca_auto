@@ -280,7 +280,7 @@ def QueueWorker(
         config_path=config_path,
         default_config_path=_default_config_path,
         engine="orca",
-        max_concurrent=max_concurrent,
+        max_concurrent=configured_max,
         deps=_queue_worker_deps(),
         hooks=_queue_worker_hooks(),
         worker_pid_file_name=ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
@@ -295,7 +295,6 @@ def QueueWorker(
         reconcile_orphaned_running=replay.reconcile_worker_state,
         check_cancel_requests=_check_orca_cancel_requests,
         reserve_gate=_orca_reserve_gate,
-        normalize_max_concurrent=True,
         worker_builder=build_engine_queue_worker,
     )
     return worker

@@ -212,23 +212,14 @@ def build_runtime_engine_queue_worker(
     reconcile_orphaned_running: WorkerCallback | None = None,
     check_cancel_requests: WorkerCallback | None = None,
     reserve_gate: WorkerCallback | None = None,
-    normalize_max_concurrent: bool = False,
     worker_builder: Callable[..., EngineQueueWorker] = build_engine_queue_worker,
 ) -> EngineQueueWorker:
     resolved_config_path = str(config_path or "").strip() or default_config_path()
-    resolved_max_concurrent = max_concurrent
-    if normalize_max_concurrent:
-        raw_max_concurrent: Any = (
-            max_concurrent
-            if max_concurrent is not None
-            else getattr(cfg.runtime, "max_concurrent", 1)
-        )
-        resolved_max_concurrent = max(1, int(raw_max_concurrent))
     return worker_builder(
         cfg,
         config_path=resolved_config_path,
         engine=engine,
-        max_concurrent=resolved_max_concurrent,
+        max_concurrent=max_concurrent,
         deps=deps,
         hooks=hooks,
         worker_pid_file_name=worker_pid_file_name,

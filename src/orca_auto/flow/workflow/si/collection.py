@@ -185,22 +185,15 @@ def _mapping(value: Any) -> Mapping[str, Any]:
 def _identity_values(payload: Mapping[str, Any], dimension: str) -> frozenset[str]:
     job = _mapping(payload.get("job"))
     engine_payload = _mapping(payload.get("engine_payload"))
+    # Flat top-level identity keys are a pre-schema artifact layout that no
+    # writer emits and the loaders no longer admit; only the nested ones count.
     values: tuple[Any, ...]
     if dimension == "job":
-        values = (
-            job.get("id"),
-            job.get("task_id"),
-            payload.get("job_id"),
-            engine_payload.get("job_id"),
-        )
+        values = (job.get("id"), job.get("task_id"))
     elif dimension == "run":
-        values = (payload.get("run_id"), engine_payload.get("run_id"))
+        values = (engine_payload.get("run_id"),)
     else:
-        values = (
-            job.get("queue_id"),
-            payload.get("queue_id"),
-            engine_payload.get("queue_id"),
-        )
+        values = (job.get("queue_id"),)
     return frozenset(text for value in values if (text := _text(value)))
 
 

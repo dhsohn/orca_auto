@@ -30,7 +30,6 @@ def cmd_queue_worker(args: Any) -> int:
         config_path_fn=lambda worker_args: str(worker_args.config),
         read_worker_pid_fn=read_worker_pid,
         existing_pid_report_fn=_log_existing_worker,
-        max_concurrent_fn=lambda cfg: max(1, int(cfg.runtime.max_concurrent)),
         worker_factory=lambda cfg, config_path, **kwargs: QueueWorker(
             cfg,
             config_path,

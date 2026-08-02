@@ -38,7 +38,7 @@ def test_prompt_yes_no_handles_defaults_and_reprompts(capsys) -> None:
 
 def test_normalize_linux_path_rejects_blank_windows_and_relative(capsys, tmp_path: Path) -> None:
     assert init._normalize_linux_path("", label="allowed_root") is None
-    assert init._normalize_linux_path(r"C:\\orca.exe", label="orca_executable") is None
+    assert init._normalize_linux_path(r"C:\\runs", label="runs_root") is None
     assert init._normalize_linux_path("relative/path", label="allowed_root") is None
 
     resolved = init._normalize_linux_path(str(tmp_path / "runs"), label="allowed_root")
@@ -72,11 +72,15 @@ def test_prompt_orca_executable_retries_until_existing_file(capsys, tmp_path: Pa
     ):
         assert init._prompt_orca_executable() == str(real_bin.resolve())
 
+    # The wizard now reports exactly what the config loader reports, so a path
+    # the prompt accepts cannot be rejected at startup. These messages also do
+    # not echo the rejected path, matching the validator's redaction contract.
     output = capsys.readouterr().out
-    assert "Windows .exe" in output
-    assert "File not found" in output
-    assert "Path is not a file" in output
-    assert "Path is not executable" in output
+    assert "must point to a Linux ORCA binary, not a Windows executable" in output
+    assert "orca_executable not found" in output
+    assert "orca_executable is not a file." in output
+    assert "orca_executable is not executable." in output
+    assert str(tmp_path / "missing.exe") not in output
 
 
 def test_prompt_directory_path_retries_when_existing_path_is_file(capsys, tmp_path: Path) -> None:
