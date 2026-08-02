@@ -1,8 +1,7 @@
 """Single source of truth for status icons across every surface.
 
-The unified queue table (``activity_rendering``), the messenger bot, ORCA run
-snapshots (``orca_auto.orca.run_snapshot``), and ORCA lifecycle notifications
-(``orca_auto.orca.notifications``) all route through
+The unified queue table (``activity_rendering``), the messenger bot, and ORCA
+run snapshots (``orca_auto.orca.run_snapshot``) all route through
 :func:`activity_status_icon` so a given status always looks the same everywhere.
 """
 

@@ -12,7 +12,6 @@ import orca_auto.orca.commands._helpers as command_helpers
 from orca_auto.orca.commands._helpers import (
     CONFIG_ENV_VAR,
     _human_bytes,
-    _validate_root_scan_dir,
     default_config_path,
     finalize_batch_apply,
 )
@@ -79,29 +78,6 @@ class TestCommandPathValidators(unittest.TestCase):
 
             resolved = _validate_reaction_dir(cfg, str(reaction))
             self.assertEqual(resolved, reaction.resolve())
-
-    def test_root_validators_require_exact_root(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            allowed = root / "allowed"
-            allowed.mkdir()
-            cfg = _cfg(allowed)
-
-            with self.subTest("allowed_root_exact"):
-                self.assertEqual(_validate_root_scan_dir(cfg, str(allowed)), allowed.resolve())
-            with self.subTest("allowed_root_mismatch"):
-                with self.assertRaises(ValueError):
-                    _validate_root_scan_dir(cfg, str(allowed / "nested"))
-
-    def test_validate_root_scan_dir_requires_existing_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            allowed = root / "allowed"
-            allowed.mkdir()
-            cfg = _cfg(allowed)
-
-            with self.assertRaises(ValueError):
-                _validate_root_scan_dir(cfg, str(root / "missing"))
 
 
 class TestHelperUtilities(unittest.TestCase):

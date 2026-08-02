@@ -118,17 +118,24 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 ### Removed
 
 - Removed the `orca_auto scan-notify` command and the DFT monitor subsystem
-  behind it. The command scanned the runs root for ORCA outputs, diffed them
-  against a state file, and posted a digest of what had changed since the last
-  scan. Queue and workflow notifications now cover the same ground from the
-  runtime itself: a card is posted when a run is queued and again when it
-  reaches a terminal state, without a periodic scan. Operators who invoked
-  `scan-notify` from cron or a timer should drop that entry. The monitor's
-  `<runs_root>/.dft_monitor_state.json` is no longer read or written and can be
-  deleted. `docs/DISCORD_SETUP.md` now verifies delivery with `run-dir`.
-- Removed the DFT discovery module, whose only caller was the monitor. Run
-  snapshots keep the one helper they used from it — the latest-`.out` lookup
-  inside a run directory — so `queue list` behavior is unchanged.
+  behind it, including the public `has_monitor_updates`, `monitor_message`, and
+  `notify_monitor_report` helpers. The command scanned the runs root for ORCA
+  outputs, diffed them against a state file, and posted a digest of what had
+  changed since the last scan. The runtime's own lifecycle notifications cover
+  the same events without a periodic scan: a card is posted when a run is
+  queued and again when it reaches a terminal state. They do not carry the
+  digest's parsed chemistry — molecular formula, method/basis, final energy,
+  calculation type, and the `NOT CONVERGED` / imaginary-frequency notes are no
+  longer pushed to the channel, and neither is the digest's scan-parse-failure
+  list. That detail remains in `job_report.json` and the HTML report. Operators
+  who invoked `scan-notify` from cron or a timer should drop that entry. The
+  monitor's `<runs_root>/.dft_monitor_state.json` is no longer read or written
+  and can be deleted. `docs/DISCORD_SETUP.md` now verifies delivery with
+  `run-dir`.
+- Removed the DFT discovery module. Its scan entry point was reachable only
+  from the monitor; run snapshots keep the one helper they imported from it —
+  the latest-`.out` lookup inside a run directory — so `queue list` behavior is
+  unchanged.
 - Removed thirteen keyword switches whose non-default branch production never
   selected, and the one function that existed only to feed one of them. The HTML
   report components lose the toggles the composer always passed at the same

@@ -12,7 +12,7 @@ renderer can preserve the intended text semantics:
 * :func:`text`, :func:`bold`, :func:`code` normalise their value with
   ``str(value).strip()``.
 * :func:`raw` keeps the string verbatim (significant leading whitespace, e.g.
-  indented monitor rows) and is only HTML-escaped, never stripped.
+  indented stage rows) and is only HTML-escaped, never stripped.
 """
 
 from __future__ import annotations

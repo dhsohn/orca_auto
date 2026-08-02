@@ -233,8 +233,8 @@ def path_is_inside_workflow_workspace(path: str | Path, root: str | Path) -> boo
     """True when *path* sits inside a workflow workspace under *root*.
 
     With workflow workspaces living under the same runs root as standalone
-    ORCA jobs, standalone filesystem scans (reindex, run snapshots, discovery
-    alerts) must skip anything owned by a workflow: a directory is inside a
+    ORCA jobs, standalone filesystem scans (reindex, run snapshots) must skip
+    anything owned by a workflow: a directory is inside a
     workspace when any ancestor at or below *root* (excluding *root* itself)
     carries a ``workflow.json``.
     """

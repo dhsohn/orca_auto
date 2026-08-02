@@ -1,4 +1,4 @@
-"""Integration tests: realistic ORCA outputs → parser and monitor.
+"""Integration tests: realistic ORCA outputs → parser.
 
 Each fixture mirrors the structure of a real ORCA .out file with representative
 sections (input line, coordinates, energy, convergence, frequencies, thermo,
@@ -484,8 +484,3 @@ class TestParserRealisticOutputs:
     def test_nonexistent_file_raises(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
             parse_orca_output(str(tmp_path / "does_not_exist.out"))
-
-
-# ---------------------------------------------------------------------------
-# Monitor end-to-end over realistic outputs
-# ---------------------------------------------------------------------------
