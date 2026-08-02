@@ -682,6 +682,13 @@ include `scan_profile_no_barrier`, `ts_candidates_exhausted`,
 `reaction_ts_search_xtb_phase_failed`, `conformers_failed`, and
 `xtb_ts_guess_missing`.
 
+A stage rejected before execution records `reason` (the submitter's reason, or
+`queue_submission_failed` when it gives none) and, when the submitter wrote
+anything to stderr or stdout, `submission_error_detail` in its stage metadata,
+truncated to 1,000 characters. The candidates-exhausted workflow error names
+that key as where to read each rejection. A successful resubmission clears both,
+so a stage retried after `submission_failed` carries no stale failure text.
+
 ## Systemd Contract
 
 Supported unit filenames:
