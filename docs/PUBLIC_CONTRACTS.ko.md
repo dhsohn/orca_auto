@@ -618,6 +618,13 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
 `scan_profile_no_barrier`, `ts_candidates_exhausted`,
 `reaction_ts_search_xtb_phase_failed`, `conformers_failed`, `xtb_ts_guess_missing`입니다.
 
+실행 전에 거부된 스테이지는 스테이지 메타데이터에 `reason`(제출기가 제시한
+사유, 없으면 `queue_submission_failed`)을 기록하고, 제출기가 stderr 또는
+stdout에 무언가를 남긴 경우 `submission_error_detail`을 1,000자로 잘라
+함께 기록합니다. 후보 소진 워크플로우 오류 메시지는 각 거부 사유를 읽을
+위치로 이 키를 지목합니다. 재제출이 성공하면 두 값 모두 지워지므로,
+`submission_failed` 이후 재시도된 스테이지에는 낡은 실패 문구가 남지 않습니다.
+
 ## systemd 계약
 
 지원되는 unit 파일 이름:
