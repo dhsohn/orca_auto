@@ -106,6 +106,10 @@ After the tag and GitHub release exist:
 
 - [ ] Confirm the tag points at the intended merge commit.
 - [ ] Confirm GitHub Actions completed for the release commit or tag.
+- [ ] On each deployment that runs from an editable install, rerun
+      `.venv/bin/python -m pip install -e .` after fast-forwarding: the
+      editable metadata is frozen at install time, so without the refresh
+      `orca_auto --version` keeps reporting the previous release.
 - [ ] Install from the tag in a fresh temporary virtual environment when a user
       report or release risk justifies it.
 - [ ] Open follow-up issues for any deferred docs, Korean translations, or manual
