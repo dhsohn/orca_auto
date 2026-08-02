@@ -115,8 +115,151 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   process that holds the queue root are unchanged; only the label and the
   wording it selected are gone.
 
+- `queue.json` rows are now validated against the canonical schema instead of
+  being defaulted field by field. A row that is missing any of the thirteen
+  fields, carries an unknown one, or holds a value of the wrong type raises
+  `Queue entry fields do not match the canonical schema: missing=… unknown=…`.
+  Validation is whole-file and fail-closed, so one malformed row makes the queue
+  unreadable to `queue list` and to every worker until it is repaired. 0.3.0
+  silently substituted defaults in each of those cases.
+- Admission slot records changed shape and are validated on load.
+  `owner_boot_id` is now required rather than optional, `engine_process_state`
+  defaults to `"idle"` instead of an empty string, and serialization no longer
+  omits unset keys. **This is an upgrade hazard.** 0.3.0 wrote generic
+  queue-worker slots that omit the five engine keys and can omit
+  `owner_boot_id`; such a record now raises
+  `Admission slot file contains an invalid process record: <path>` for the
+  entire shared admission file, which blocks admission for every engine until
+  the file is removed. Drain the queue and delete
+  `<runs_root>/.admission` (or the configured `scheduler.admission_root`) before
+  starting workers on this release if any 0.3.0-era slot file survives.
+- The ORCA run lock is now a kernel `flock` rather than a JSON file with
+  stale-owner recovery. Its payload keeps `pid` and `started_at` and drops
+  `boot_id` and `process_start_ticks`. `Lock file exists but owner PID is
+  unreadable. Remove manually: <path>` and `Detected stale lock but failed to
+  remove it (pid=…)` no longer occur, and the surviving conflict message can
+  now report `pid=unknown`.
+- A workflow workspace whose persisted `workflow_id` is blank is now
+  quarantined with `workflow_id is required` instead of falling back to the
+  directory name.
+- Reworded four admission error messages, dropping "managed" from three
+  (`Managed admission slot owner identity is incomplete` →
+  `Admission slot owner identity is incomplete`, and likewise for the two
+  identity-verification messages) and narrowing
+  `Admission owner and engine boot identities are incomplete` to
+  `Active admission engine boot identity is incomplete`. The workflow
+  phase-summary notification changed from `Stages 5  completed=3  failed=1` to
+  `Stages 5 | completed=3, failed=1`.
+- Replaced the transactional systemd installer with a plain write-and-reload
+  installer. A failed or interrupted `orca_auto systemd install` no longer rolls
+  back: the new unit files are already in place, and the command stops with the
+  failed step's exit status after reporting
+  `systemd install command failed after unit files were updated; fix the failure
+  and rerun \`orca_auto systemd install\``. Recovery is to fix the cause and
+  rerun the install. Concurrent installs are no longer serialized, since the
+  install lock is gone. `dry-run`, the warnings, and
+  `service status` / `service restart` are unchanged.
+- Re-scoped `docs/PUBLIC_CONTRACTS.md` into two tiers. The document had grown to
+  declare almost the whole surface — CLI, config, queue, artifacts, workflow,
+  systemd — as stable, which made every removal read as a breaking change. Only
+  a small Stable Core is now a committed contract: `run-dir`, `queue list`, and
+  `queue cancel` with their queue-first, cancellation, and recovery semantics;
+  `runs_root`; the engine executable paths; the shared concurrency limit; and
+  `job_state.json` / `job_report.json` as durable machine artifacts. Everything
+  else the document describes is accurate for the release but may change. This
+  re-scopes only the public API — naming, shape, and presence. It does not relax
+  the fail-closed validation, durability, and recovery behavior the
+  implementation applies regardless of tier.
+
+- The ORCA output-tail reader used for the delta-E table no longer re-derives
+  the path it already holds open. A component-by-component directory walk, a
+  root-node round trip, three by-name stats duplicating what the descriptor had
+  pinned, and five seven-field stat comparisons are gone. What remains is a
+  weaker containment guarantee, and deliberately so: the removed walk proved
+  from the root downward that no component had been swapped, whereas the
+  surviving check is a path resolution taken before the file is opened plus a
+  device/inode comparison. Opening the parent with `O_NOFOLLOW` rejects only
+  that final component being a symlink; a swapped intermediate ancestor is
+  followed silently. For any run whose runs root is not being manipulated
+  underneath it, the reader returns exactly what it returned before.
+
+- Merged the CLI parser-wiring modules into one `cli_parsers` module and the
+  worker spec/conflict helpers into `cli_workers`. The command surface, flags,
+  help text, and error styling are unchanged.
+
+- Flattened the remaining single-implementation queue-worker indirection:
+  orphan reconciliation now lives in one module with direct calls, the
+  worker-lifecycle hook mapping layer is gone (replay builds the core hooks
+  directly), and the file-lock helper lost its grouped-options wrapper.
+  Reconciliation decisions, lock semantics, and log/error messages are
+  unchanged.
+
+- Replaced the single-implementation dependency-injection plumbing in the ORCA
+  job-location loaders and the workflow ORCA adapter with direct imports. The
+  loaded payloads, contracts, and error behavior are unchanged; the modules
+  regain static typing.
+
+- Collapsed the internal engine-notification pipeline into a single module.
+  The rendered notification lines, severities, workflow-child suppression, and
+  the public `notify_{xtb,crest}_job_{queued,started,finished}` entry points
+  are unchanged.
+
 ### Removed
 
+- Removed the `resources.max_cores_per_task` and `resources.max_memory_gb_per_task`
+  manifest aliases. A `flow.yaml` setting either under a `crest:` or `xtb:`
+  block's `resources:` mapping now fails with
+  `Unknown manifest resource fields: [...]`; use `max_cores` and
+  `max_memory_gb`, which mean the same thing. The
+  `Conflicting manifest resource aliases:` error is gone with them. The config
+  keys of the same name under the top-level `resources:` section are unaffected.
+- Removed the `--resolve-pending-restart` flag from `orca_auto systemd install`,
+  together with the install transaction directory
+  `/etc/systemd/system/.orca_auto-install-transaction/` (`owner.json`,
+  `manifest.json`, `committed.json`, `backup/`) and the install lock. The flag
+  was hidden from `--help` but was the documented recovery procedure in
+  `systemd/README.md`, and passing it now fails as an unrecognized argument. A
+  transaction directory left behind by 0.3.0 is ignored rather than recovered
+  and can be deleted; the 0.3.0 instructions to preserve it no longer apply.
+  About twenty transaction-specific error messages went with it.
+- Removed the ORCA process record: `<generation>/orca.process.json` and
+  `.orca.process.lock` are no longer written, and PID/PGID ownership lives in
+  the shared admission record instead. Both names were documented in 0.3.0. As a
+  consequence they are also no longer rejected as ORCA dependency basenames or
+  reserved as scratch/durable artifact names, so a submission 0.3.0 refused on
+  that ground now succeeds. Files left by 0.3.0 are inert and can be deleted.
+- Removed the `02_orca` workflow stage-directory alias; only `03_orca` is
+  recognized. A workspace still carrying an `02_orca` stage directory from an
+  older layout is no longer discovered by `queue list`, the activity views, or
+  indexing. Rename the directory to `03_orca` to keep such a workspace visible.
+- Removed six engine manifest keys. `crest:` no longer accepts `no_reftopo`,
+  `no_topo`, `no_cbonds`, or `len`; `xtb:` no longer accepts `namespace` or
+  `opt`. Both mappings are strict, so a `flow.yaml` still carrying any of them
+  fails submission with `Unknown CREST manifest fields:` or
+  `Unknown xTB manifest fields:` rather than ignoring the key. Five of the six
+  were aliases and must be renamed, not deleted: `no_reftopo` → `noreftopo`,
+  `no_topo` → `notopo`, `no_cbonds` → `nocbonds`, `len` → `mdlen`, and
+  `opt` → `opt_level`. **Deleting `xtb.opt` instead of renaming it silently
+  changes the calculation**: `opt` set the xTB optimization level, and without
+  it the run falls back to `--opt normal`, so an `opt: tight` job becomes a
+  looser optimization with no error. `len` is the same shape — it set the CREST
+  MD length in ps and 0.3.0 documented it as an alias of `mdlen` that had to
+  agree — so a working manifest can quietly change meaning if the key is dropped
+  rather than renamed. Only `xtb.namespace` has no replacement and should simply
+  be deleted; it was already rejected when non-empty in 0.3.0, and is now
+  rejected whatever its value.
+- Reduced per-run report output to one machine artifact and one human artifact.
+  `job_report.md` is gone, along with the `artifacts.report_markdown_commit`
+  marker embedded in `job_report.json` and the `report_md_path` runtime lookup;
+  stage detail links now go `job_report.html` → `job_report.json`. The two
+  format duplicates of the SI dataset, `si_data.csv` and
+  `interaction_energy.csv`, are also gone together with the latter's
+  ownership-marker file. `job_report.json` keeps every field except the
+  `report_markdown_commit` marker, `job_report.html` is unchanged, and
+  `workflow_si.md` loses one clause: the RMSD-representative note no longer
+  points readers at the removed `si_data.csv` for per-structure degeneracy. No
+  computed value in any surviving artifact changes. Existing files from earlier
+  runs are left in place and are no longer read.
 - Removed the workflow-level ORCA submitter cluster:
   `flow/submitters/orca_submission.py`, `flow/submitters/orca_cancellation.py`,
   `flow/submitters/orca_models.py`, and the
@@ -189,9 +332,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   and the private `/proc`-based probes it called. `process_start_token` and
   `current_process_start_token` are unaffected, and publication leases still
   record the owner pid and its start token.
-- Removed the write-only DFT SQLite index (`dft.db`). The `scan-notify` monitor
-  keeps its own change-detection state file and its notifications are
-  unchanged; nothing read the database, so it is no longer created or updated.
+- Removed the write-only DFT SQLite index (`dft.db`). Nothing read the database,
+  so it is no longer created or updated. (The `scan-notify` monitor, which kept
+  a separate change-detection state file, is also removed in this release — see
+  below.)
 - Removed dead internal surfaces with no remaining callers: the ORCA
   job-location reindex chain, the five standalone per-job-type HTML page
   renderers superseded by the report composer, unused queue-adapter and
@@ -222,8 +366,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   - Dropped the `discord.py` dependency.
 
   Before upgrading, remove `messenger.telegram`, any top-level `telegram:`
-  block, and `messenger.discord.uploads` from `orca_auto.yaml`; those keys now
-  fail configuration loading. After upgrading, rerun
+  block, and `messenger.discord.uploads`, `messenger.discord.channel_ids`, and
+  `messenger.discord.allowed_user_ids` from `orca_auto.yaml`; those keys now
+  fail configuration loading. `channel_ids` and `allowed_user_ids` were valid
+  `messenger.discord` keys in 0.3.0 and served the interactive bot, which is
+  gone; outbound delivery uses `default_channel_id` alone. The error names the
+  section rather than the offending key, so this list is the recovery path.
+  After upgrading, rerun
   `orca_auto systemd install --user <name> --repo <path>` to rewrite the runtime
   target, and, if the `orca_auto-bot@<user>.service` unit was installed, remove
   it by hand (`systemctl disable --now orca_auto-bot@<user>.service`,
@@ -250,23 +399,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
-- Merged the CLI parser-wiring modules into one `cli_parsers` module and the
-  worker spec/conflict helpers into `cli_workers`. The command surface, flags,
-  help text, and error styling are unchanged.
-- Flattened the remaining single-implementation queue-worker indirection:
-  orphan reconciliation now lives in one module with direct calls, the
-  worker-lifecycle hook mapping layer is gone (replay builds the core hooks
-  directly), and the file-lock helper lost its grouped-options wrapper.
-  Reconciliation decisions, lock semantics, and log/error messages are
-  unchanged.
-- Replaced the single-implementation dependency-injection plumbing in the ORCA
-  job-location loaders and the workflow ORCA adapter with direct imports. The
-  loaded payloads, contracts, and error behavior are unchanged; the modules
-  regain static typing.
-- Collapsed the internal engine-notification pipeline into a single module.
-  The rendered notification lines, severities, workflow-child suppression, and
-  the public `notify_{xtb,crest}_job_{queued,started,finished}` entry points
-  are unchanged.
 - Workflow-internal xTB and CREST jobs now use `job_state.json` as their only
   terminal metadata artifact. They no longer write or read `job_report.json`
   or `job_report.md`; report-only jobs, completed outputs without terminal
