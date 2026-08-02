@@ -38,7 +38,7 @@ Use the same structure in release PRs and GitHub release notes:
 - Major version: any change that breaks a behavior documented in
   [docs/PUBLIC_CONTRACTS.md](PUBLIC_CONTRACTS.md).
 
-Since 1.0.0 every surface in PUBLIC_CONTRACTS is committed, so release notes
+From 1.0.0 on, every surface in PUBLIC_CONTRACTS is committed, so release notes
 must name every documented behavior a release changes and its cutover impact.
 
 ## Pre-release checklist

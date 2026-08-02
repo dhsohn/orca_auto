@@ -310,7 +310,7 @@ def add_systemd_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     install_parser.add_argument(
         "--config",
         default=None,
-        help=argparse.SUPPRESS,
+        help="config path rendered into the units when it differs from the default",
     )
     install_parser.add_argument(
         "--unit-dir",

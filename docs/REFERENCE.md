@@ -544,6 +544,11 @@ worker; they do not affect standalone ORCA queue notifications):
 - `ORCA_AUTO_FLOW_NOTIFY_DISABLED`: `1`, `true`, `yes`, or `on` disables all
   workflow journal notifications regardless of the event-type list.
 
+Each variable is read by the process that appends the journal event. Every
+event in the default set is emitted by the workflow worker; if you opt into
+`workflow_restarted`, note it is emitted by the `run-dir` CLI process, so the
+variable must be set in that shell too.
+
 ## 8) WSL systemd Setup
 
 WSL should have `systemd` enabled:
@@ -581,10 +586,12 @@ Assumptions of the unified runtime templates:
 - Config path: `/home/<user>/orca_auto/config/orca_auto.yaml`
 
 The installer renders these paths into every unit; pass explicit `--repo` and
-`--config` values when the defaults differ. `--worker-only` enables only the
-engine-worker target instead of the full runtime target — use it on a machine
-that should execute queued work without the rest of the runtime; `service
-status` reports such an install as `worker-only`.
+`--config` values when the defaults differ. `--worker-only` selects the
+engine-worker target as the boot target instead of the full runtime target;
+`service status` reports such an install as `worker-only`. The runtime target
+currently pulls in only the engine-worker target, so both modes start the same
+unit set today — the flag fixes the boot selection, and a worker-only install
+stays worker-only if the runtime target later grows.
 
 The default engine-worker target starts the ORCA
 service. A configured workflow root does not implicitly start the workflow or

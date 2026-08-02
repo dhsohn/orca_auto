@@ -517,6 +517,10 @@ orca_auto queue list --engine xtb
 - `ORCA_AUTO_FLOW_NOTIFY_DISABLED`: `1`, `true`, `yes`, `on`이면 이벤트 타입
   목록과 무관하게 워크플로우 journal 알림을 전부 끕니다.
 
+각 변수는 journal 이벤트를 기록하는 프로세스가 읽습니다. 기본 집합의 이벤트는
+모두 워크플로우 워커가 내지만, `workflow_restarted`를 옵트인하면 그 이벤트는
+`run-dir` CLI 프로세스가 내므로 그 shell에도 변수를 설정해야 합니다.
+
 ## 8) WSL systemd 설정
 
 WSL에 `systemd`가 활성화되어 있어야 합니다:
@@ -554,9 +558,11 @@ journalctl -u "orca_auto-queue-worker@$(whoami)" -f
 - 설정 경로: `/home/<user>/orca_auto/config/orca_auto.yaml`
 
 기본값과 경로가 다르면 installer에 명시적 `--repo`와 `--config` 값을 넘기세요. installer가
-모든 unit에 해당 경로를 렌더링합니다. `--worker-only`는 full runtime target 대신
-engine-worker target만 활성화합니다 — 나머지 런타임 없이 큐 작업만 실행할 머신에
-사용하며, 그런 설치는 `service status`가 `worker-only`로 보고합니다.
+모든 unit에 해당 경로를 렌더링합니다. `--worker-only`는 boot target으로 full runtime
+target 대신 engine-worker target을 선택합니다. 그런 설치는 `service status`가
+`worker-only`로 보고합니다. 현재 runtime target은 engine-worker target만 끌어오므로
+오늘은 두 모드가 같은 unit 집합을 시작합니다 — 플래그는 boot 선택을 고정하며,
+runtime target이 나중에 커져도 worker-only 설치는 worker-only로 남습니다.
 
 기본 engine-worker target은 ORCA 서비스를 시작합니다.
 workflow root가 설정돼 있어도 workflow나 내부 엔진 워커를 암묵적으로 시작하지

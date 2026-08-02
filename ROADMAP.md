@@ -69,7 +69,7 @@ and CREST stages.
 
 ## 1.0: Stable Public Surface
 
-The 1.0.0 cut closes the stability-readiness track. What it settled:
+The 1.0.0 cut closes the stability-readiness track. What it settles:
 
 - One canonical contract for CLI flags, config keys, persisted state/report
   fields, and workflow layout, with the Experimental tier dissolved — every

@@ -115,6 +115,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   process that holds the queue root are unchanged; only the label and the
   wording it selected are gone.
 
+- The public contract document no longer carries the 0.x Stable
+  Core / Experimental tier split: every documented surface is committed. As part
+  of the promotion, `systemd install --worker-only` and `--config` appear in
+  `--help` instead of being hidden, and the workflow notification environment
+  variables `ORCA_AUTO_FLOW_NOTIFY_EVENT_TYPES` and
+  `ORCA_AUTO_FLOW_NOTIFY_DISABLED` are documented in the reference. Behavior of
+  all four is unchanged.
+
 - `queue.json` rows are now validated against the canonical schema instead of
   being defaulted field by field. A row that is missing any of the thirteen
   fields, carries an unknown one, or holds a value of the wrong type raises

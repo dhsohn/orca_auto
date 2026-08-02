@@ -719,8 +719,8 @@ Behavior:
 
 ## Non-Contracts
 
-These are outside both tiers — not documented behavior at all, and never safe to
-depend on:
+These are outside this document — not documented behavior at all, and never safe
+to depend on:
 
 - Private Python functions and modules, including helper modules under
   `src/orca_auto`.
