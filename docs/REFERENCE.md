@@ -532,6 +532,18 @@ Behavior:
   and lets the ORCA child activate/release that reservation during execution.
 - Workflow notification alerts keep per-job ORCA messages, but summarize internal CREST and reaction-path xTB child phases in one message each after those phases finish
 
+Two environment variables gate workflow journal notifications in the worker's
+environment (set them in the systemd unit or shell that runs the workflow
+worker; they do not affect standalone ORCA queue notifications):
+
+- `ORCA_AUTO_FLOW_NOTIFY_EVENT_TYPES`: comma-separated event types to deliver.
+  Unset or blank means the default set `workflow_status_changed`,
+  `workflow_advance_failed`, `worker_started`, `worker_stopped`,
+  `worker_interrupted`, `worker_lock_error`. Naming event types replaces the
+  default set rather than adding to it.
+- `ORCA_AUTO_FLOW_NOTIFY_DISABLED`: `1`, `true`, `yes`, or `on` disables all
+  workflow journal notifications regardless of the event-type list.
+
 ## 8) WSL systemd Setup
 
 WSL should have `systemd` enabled:
@@ -569,7 +581,10 @@ Assumptions of the unified runtime templates:
 - Config path: `/home/<user>/orca_auto/config/orca_auto.yaml`
 
 The installer renders these paths into every unit; pass explicit `--repo` and
-`--config` values when the defaults differ.
+`--config` values when the defaults differ. `--worker-only` enables only the
+engine-worker target instead of the full runtime target — use it on a machine
+that should execute queued work without the rest of the runtime; `service
+status` reports such an install as `worker-only`.
 
 The default engine-worker target starts the ORCA
 service. A configured workflow root does not implicitly start the workflow or

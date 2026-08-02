@@ -320,7 +320,7 @@ def add_systemd_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     install_parser.add_argument(
         "--worker-only",
         action="store_true",
-        help=argparse.SUPPRESS,
+        help="enable only the engine-worker target instead of the full runtime",
     )
     install_parser.add_argument(
         "--no-enable",
