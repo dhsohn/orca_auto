@@ -83,6 +83,18 @@ def test_installed_version_drift_returns_no_verdict_without_a_source_tree(
     assert _version.installed_version_drift(tmp_path / "empty") is None
 
 
+def test_installed_version_drift_reads_this_checkout_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Faking only the installed side leaves the default source-root derivation
+    # and the project-name literal under test. Without this, an off-by-one in
+    # `parents[...]` or a PEP 503 rename to `orca-auto` would leave every
+    # deployment reporting "no verdict" forever while the suite stayed green.
+    monkeypatch.setattr(_version, "package_version", lambda: "0.0.0+stale")
+
+    assert _version.installed_version_drift() == ("0.0.0+stale", _pyproject_version())
+
+
 def test_installed_version_drift_ignores_an_unrelated_pyproject(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

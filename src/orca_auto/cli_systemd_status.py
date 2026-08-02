@@ -5,6 +5,7 @@ import getpass
 import json
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -158,7 +159,18 @@ def _service_status_payload(
         "target_user": target_user,
         "mode": mode,
         "ok": _required_services_active(statuses, required_labels=required_labels),
-        "version_drift": (None if drift is None else {"installed": drift[0], "source": drift[1]}),
+        "version_drift": (
+            None
+            if drift is None
+            else {
+                "installed": drift[0],
+                "source": drift[1],
+                # A host can hold several editable installs of one checkout —
+                # here, the units' virtualenv and the operator's shell — so the
+                # verdict is only meaningful with the interpreter it describes.
+                "interpreter": sys.executable,
+            }
+        ),
         "services": [
             {
                 "label": status.label,
@@ -319,13 +331,14 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceCliDeps | None 
     else:
         _print_service_status(target_user, statuses)
     if drift is not None:
-        # The deployment runs the checkout's code but declares the version its
-        # last install froze, so every version report here is wrong until the
-        # editable install is refreshed.
+        # This interpreter runs the checkout's code but declares the version its
+        # last install froze, so every version it reports is wrong until the
+        # editable install is refreshed. The verdict covers only the interpreter
+        # that ran this command, which need not be the one the units run.
         installed, source = drift
         emit_error(
-            f"installed metadata declares {installed} but the source tree it runs is {source}",
-            hint="rerun `pip install -e .` in the deployment environment",
+            f"{sys.executable} declares orca_auto {installed} but runs the source tree at {source}",
+            hint=f"rerun `{sys.executable} -m pip install -e .`",
         )
     return 0 if payload["ok"] and drift is None else 1
 

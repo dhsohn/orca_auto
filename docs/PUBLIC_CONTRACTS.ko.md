@@ -654,12 +654,15 @@ stdout에 무언가를 남긴 경우 `submission_error_detail`을 1,000자로 �
   worker를 보고합니다. opt-in worker는 정보용이며 worker-only 또는 full-runtime
   health의 필수 조건이 아닙니다.
 - `service status`는 설치된 배포 메타데이터를 프로세스가 import하는 소스 트리와도
-  대조합니다. editable install의 메타데이터가 이전 버전에서 동결된 채 배포가 돌고
-  있으면 `installed`·`source` 버전을 담은 `version_drift`를 보고하고, 불일치와 복구
-  힌트를 stderr에 쓰며, 0이 아닌 코드로 종료합니다. `ok`는 여전히 유닛 health만
-  뜻하므로, 유닛이 정상인 채 드리프트만 있는 배포는 `ok: true`를 보고하면서도 0이
-  아닌 코드로 종료합니다. 휠 설치처럼 소스 `pyproject.toml`이 없어 대조 대상이 없으면
-  `version_drift: null`입니다.
+  대조합니다. 이 명령을 실행한 인터프리터가 editable install이고 그 메타데이터가 이전
+  버전에서 동결돼 있으면 `installed`·`source` 버전과 검사한 `interpreter`를 담은
+  `version_drift`를 보고하고, 불일치와 복구 힌트를 stderr에 쓰며, 0이 아닌 코드로
+  종료합니다. 판정 범위는 그 인터프리터 하나입니다 — 한 호스트가 같은 체크아웃의
+  editable install을 여럿 가질 수 있고 유닛은 자기 unit 파일이 지정한 인터프리터로
+  돌기 때문에, 점검하려는 인터프리터로 직접 실행해야 합니다. `ok`는 여전히 유닛
+  health만 뜻하므로, 유닛이 정상인 채 드리프트만 있는 배포는 `ok: true`를 보고하면서도
+  0이 아닌 코드로 종료합니다. 휠 설치처럼 소스 `pyproject.toml`이 없어 대조 대상이
+  없으면 `version_drift: null`입니다.
 - `service restart`는 ORCA 엔진 서비스의 start-limit 실패 상태를 지웁니다. runtime target이
   활성화되어 있으면 그것을 재시작하고, 아니면 engine-worker target을 재시작합니다.
 - 엔진 워커 감독자가 정상 종료되면 중단 상태를 유지합니다. 각 자식 감독자는 제한된 재시작

@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from argparse import Namespace
 from pathlib import Path
 from typing import Any
@@ -751,9 +752,38 @@ def test_cmd_service_status_gates_on_stale_installed_metadata(capsys: Any) -> No
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert payload["ok"] is True
-    assert payload["version_drift"] == {"installed": "0.1.0", "source": "1.0.0"}
-    assert "installed metadata declares 0.1.0" in captured.err
+    assert payload["version_drift"] == {
+        "installed": "0.1.0",
+        "source": "1.0.0",
+        "interpreter": sys.executable,
+    }
+    # The host runs one editable install per interpreter, so a verdict that did
+    # not name its own is not actionable.
+    assert sys.executable in captured.err
+    assert "declares orca_auto 0.1.0" in captured.err
     assert "pip install -e ." in captured.err
+
+
+def test_cmd_service_status_consults_the_real_detector_by_default(
+    capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every other status test injects the verdict, which leaves the production
+    # wiring itself untested: unhooking the default would disable the gate with
+    # a green suite.
+    statuses = _healthy_worker_only_statuses()
+    monkeypatch.setattr(cli_systemd_status, "installed_version_drift", lambda: ("0.1.0", "1.0.0"))
+
+    result = cli_systemd_status.cmd_service_status(
+        Namespace(target_user="alice", json=True),
+        deps=cli_systemd_status.ServiceCliDeps(
+            collect_service_status=lambda target_user, run: statuses,
+            run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+        ),
+    )
+
+    assert result == 1
+    assert json.loads(capsys.readouterr().out)["version_drift"]["installed"] == "0.1.0"
 
 
 def test_cmd_service_status_reports_no_drift_for_a_current_install(capsys: Any) -> None:

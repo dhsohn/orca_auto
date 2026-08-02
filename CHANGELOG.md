@@ -12,13 +12,23 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 - `service status` compares the installed distribution metadata against the
   source tree the process imports and gates on a mismatch. An editable install
-  freezes its metadata at install time, so a deployment that fast-forwards its
-  checkout without rerunning the install runs one version's code while every
-  version report names another; that state went unnoticed for two months. The
-  command now reports `version_drift` in its JSON payload, writes the two
-  versions and a `pip install -e .` hint to stderr, and exits non-zero. `ok`
-  still describes unit health alone, and an install with no source
+  freezes its metadata at install time, so a checkout that fast-forwards without
+  rerunning the install runs one version's code while every version report names
+  another; that state went unnoticed for two months. The command reports
+  `version_drift` in its JSON payload with the interpreter it inspected, writes
+  the mismatch and a `pip install -e .` hint to stderr, and exits non-zero. The
+  verdict covers only the interpreter that ran the command, since a host may
+  hold several editable installs of one checkout. An install with no source
   `pyproject.toml` reports `version_drift: null` rather than a verdict.
+
+### Changed
+
+- `service status` can now exit non-zero while reporting `ok: true`: `ok` still
+  means every required unit is active, and the new non-zero case is a stale
+  installed version. Callers that treat any non-zero exit as a dead worker
+  should read `version_drift` to tell the two apart.
+- `orca_auto --version` names the source tree it is running when the installed
+  metadata disagrees with it, instead of printing the frozen version alone.
 
 ### Fixed
 
