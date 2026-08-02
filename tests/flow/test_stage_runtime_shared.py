@@ -74,6 +74,154 @@ def test_rejected_submission_without_reason_gets_the_generic_reason() -> None:
     assert stage_metadata["submission_error_detail"] == "engine refused the submission"
 
 
+def test_rejected_submission_detail_truncates_and_omits_when_blank() -> None:
+    stage_metadata: dict[str, Any] = {}
+    _apply(
+        stage_metadata,
+        {
+            "status": "failed",
+            "reason": "invalid_submission_input",
+            "returncode": 1,
+            "stderr": "x" * 5000,
+            "stdout": "",
+            "submitted_at": "2026-08-02T00:00:00+00:00",
+        },
+    )
+    assert len(stage_metadata["submission_error_detail"]) == 1000
+
+    blank_metadata: dict[str, Any] = {}
+    _apply(
+        blank_metadata,
+        {
+            "status": "failed",
+            "reason": "invalid_submission_input",
+            "returncode": 1,
+            "stderr": "  ",
+            "stdout": "",
+            "submitted_at": "2026-08-02T00:00:00+00:00",
+        },
+    )
+    assert "submission_error_detail" not in blank_metadata
+    assert blank_metadata["reason"] == "invalid_submission_input"
+
+
+def test_deferred_submission_leaves_failure_metadata_untouched() -> None:
+    stage_metadata: dict[str, Any] = {
+        "reason": "invalid_submission_input",
+        "submission_error_detail": "old failure detail",
+    }
+    stage, _task = _apply(
+        stage_metadata,
+        {
+            "status": "waiting_for_slot",
+            "reason": "submission_conflict",
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "",
+            "submitted_at": "2026-08-02T00:00:00+00:00",
+        },
+    )
+    # Mirrors the removed recorder: deferral neither records nor clears the
+    # failure keys; only a submit or a fail transition owns them.
+    assert stage["status"] == "planned"
+    assert stage_metadata["reason"] == "invalid_submission_input"
+    assert stage_metadata["submission_error_detail"] == "old failure detail"
+
+
+def test_orca_sync_keeps_the_rejection_reason_across_the_contract_pass() -> None:
+    """Integration regression: the same sync tick must not clobber the reason.
+
+    For an ORCA stage the contract loader never raises — a stage whose
+    submission was rejected gets an unknown contract with an empty reason on
+    the same tick and every later tick, and the contract metadata writer used
+    to overwrite the recorded rejection reason with that "".
+    """
+    from unittest.mock import Mock
+
+    from orca_auto.flow.contracts import OrcaArtifactContract
+    from orca_auto.flow.orchestration.stage_runtime.orca import sync_orca_stage_impl
+    from tests.flow.orchestration_services import orchestration_services
+
+    stage: dict[str, Any] = {
+        "stage_id": "orca_optts_freq_01",
+        "stage_kind": "orca_stage",
+        "status": "planned",
+        "metadata": {},
+        "task": {
+            "engine": "orca",
+            "task_kind": "geometry_opt",
+            "status": "planned",
+            "payload": {"reaction_dir": "/tmp/rxn_rejected", "selected_inp": ""},
+            "enqueue_payload": {"reaction_dir": "/tmp/rxn_rejected", "priority": 10},
+        },
+    }
+    rejection = {
+        "status": "failed",
+        "reason": "invalid_submission_input",
+        "returncode": 1,
+        "stderr": (
+            "ORCA referenced input basename conflicts with a generation "
+            "runtime/output file: ts_guess.hess\n"
+        ),
+        "stdout": "",
+        "parsed_stdout": {},
+    }
+    unknown_contract = OrcaArtifactContract(
+        run_id="",
+        status="unknown",
+        reason="",
+        state_status="",
+        reaction_dir="/tmp/rxn_rejected",
+        latest_known_path="",
+        optimized_xyz_path="",
+        queue_id="",
+        queue_status="",
+        cancel_requested=False,
+        selected_inp="",
+        selected_input_xyz="",
+        analyzer_status="",
+        completed_at="",
+        last_out_path="",
+        run_state_path="",
+        report_json_path="",
+        attempt_count=0,
+        max_retries=0,
+        attempts=(),
+        final_result={},
+    )
+    deps = orchestration_services(
+        overrides={
+            "submit_reaction_dir": Mock(return_value=rejection),
+            "load_orca_artifact_contract": Mock(return_value=unknown_contract),
+        }
+    )
+
+    sync_orca_stage_impl(
+        stage,
+        orca_config="/tmp/orca_auto.yaml",
+        orca_repo_root=None,
+        submit_ready=True,
+        services=deps,
+    )
+
+    metadata = stage["metadata"]
+    assert isinstance(metadata, dict)
+    assert stage["status"] == "submission_failed"
+    assert metadata["reason"] == "invalid_submission_input"
+    assert "ts_guess.hess" in metadata["submission_error_detail"]
+
+    # Later ticks keep reloading the unknown contract; the reason must survive
+    # those too.
+    sync_orca_stage_impl(
+        stage,
+        orca_config="/tmp/orca_auto.yaml",
+        orca_repo_root=None,
+        submit_ready=True,
+        services=deps,
+    )
+    assert metadata["reason"] == "invalid_submission_input"
+
+
 def test_successful_resubmission_clears_stale_failure_detail() -> None:
     stage_metadata: dict[str, Any] = {
         "reason": "invalid_submission_input",

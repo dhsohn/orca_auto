@@ -32,9 +32,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   the detail survived only on the stage's raw `submission_result` payload,
   while the workflow error message told the reader to "see each stage's
   submission_error_detail", a field nothing wrote. This applies to ORCA, xTB,
-  and CREST stages alike; the two regression tests for the original incident
-  (OptTS submissions rejected with no recorded reason) now run against this
-  path.
+  and CREST stages alike. For ORCA stages the contract-metadata writer also
+  needed the same preserve-on-empty rule that `queue_id` and `run_id` already
+  had: a submission-failed stage has no run, so the contract loader returns
+  an unknown contract with an empty reason on the same sync tick and every
+  later one, and writing that empty value would have erased the recorded
+  reason immediately. The regression tests for the original incident (OptTS
+  submissions rejected with no recorded reason) now run against this path,
+  including an integration test through the ORCA stage sync.
 
 ### Removed
 
