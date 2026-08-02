@@ -14,9 +14,8 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_STATE_CREATING,
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
-    SNAPSHOT_INTENT_STATE_OWNED,
     SNAPSHOT_INTENT_TOKEN_KEY,
-    discard_snapshot_intent,
+    mark_snapshot_intent_owned,
     transition_snapshot_intent,
 )
 from orca_auto.core.queue.enqueue_publication import (
@@ -72,31 +71,11 @@ def mark_orca_snapshot_owned(
     intent_root: Path,
     intent_token: str,
 ) -> str | None:
-    try:
-        transition_snapshot_intent(
-            intent_root,
-            intent_token,
-            target_state=SNAPSHOT_INTENT_STATE_OWNED,
-            expected_states={SNAPSHOT_INTENT_STATE_ENQUEUEING},
-        )
-        discard_snapshot_intent(intent_root, intent_token)
-    except FileNotFoundError:
-        # The worker retires any intent already referenced by a committed queue
-        # row; losing that race leaves nothing to own or repair.
-        logger.info(
-            "queued ORCA snapshot intent already retired by the worker; "
-            "durable queue entry retains ownership"
-        )
-        return None
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "queued ORCA snapshot ownership marker update failed; "
-            "durable queue entry retains ownership: %s",
-            exc,
-            exc_info=True,
-        )
-        return "queued snapshot ownership marker repair is pending"
-    return None
+    return mark_snapshot_intent_owned(
+        intent_root,
+        intent_token,
+        intent_label="queued ORCA snapshot",
+    )
 
 
 @dataclass(frozen=True)

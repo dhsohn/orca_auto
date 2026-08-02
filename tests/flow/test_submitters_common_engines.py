@@ -1946,12 +1946,11 @@ def test_snapshot_marker_is_quiet_when_worker_already_retired_the_intent(
     discard_snapshot_intent(queue_root, token)
     state = internal_engine_submission._InternalEngineSubmissionState(resolved_job_dir=job_dir)
 
-    with caplog.at_level(logging.INFO, logger=internal_engine_submission.__name__):
+    marker_logger = "orca_auto.core.queue.engine.snapshot_intent"
+    with caplog.at_level(logging.INFO, logger=marker_logger):
         internal_engine_submission._mark_submission_snapshot_owned(submission, state)
 
     assert state.warning == ""
-    records = [
-        record for record in caplog.records if record.name == internal_engine_submission.__name__
-    ]
+    records = [record for record in caplog.records if record.name == marker_logger]
     assert not [record for record in records if record.levelno >= logging.WARNING]
     assert any("already retired" in record.getMessage() for record in records)
