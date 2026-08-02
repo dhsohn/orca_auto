@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from contextlib import contextmanager
@@ -30,8 +31,12 @@ from orca_auto.core.queue import enqueue_publication as core_enqueue_publication
 from orca_auto.core.queue.engine.input_snapshot import snapshot_input_file
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
+    SNAPSHOT_INTENT_STATE_CREATING,
+    SNAPSHOT_INTENT_STATE_ENQUEUEING,
     SNAPSHOT_INTENT_TOKEN_KEY,
     create_snapshot_intent,
+    discard_snapshot_intent,
+    transition_snapshot_intent,
 )
 from orca_auto.core.queue.publication import queue_record_sync_metadata
 from orca_auto.flow import engine_runtime
@@ -1920,3 +1925,33 @@ def test_internal_cancel_recovers_durable_post_commit_error(
     assert result["returncode"] == 0
     [cancelled] = list_queue(queue_root)
     assert cancelled.status == QueueStatus.CANCELLED
+
+
+def test_snapshot_marker_is_quiet_when_worker_already_retired_the_intent(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    queue_root, job_dir, submission, _snapshot_path = _submission_with_generation_snapshot(
+        tmp_path,
+        task_id="crest-retired-intent",
+    )
+    token = submission.metadata["execution_snapshot"][SNAPSHOT_INTENT_TOKEN_KEY]
+    transition_snapshot_intent(
+        queue_root,
+        token,
+        target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
+        expected_states={SNAPSHOT_INTENT_STATE_CREATING},
+    )
+    # The worker retires an intent as soon as a committed queue row references it.
+    discard_snapshot_intent(queue_root, token)
+    state = internal_engine_submission._InternalEngineSubmissionState(resolved_job_dir=job_dir)
+
+    with caplog.at_level(logging.INFO, logger=internal_engine_submission.__name__):
+        internal_engine_submission._mark_submission_snapshot_owned(submission, state)
+
+    assert state.warning == ""
+    records = [
+        record for record in caplog.records if record.name == internal_engine_submission.__name__
+    ]
+    assert not [record for record in records if record.levelno >= logging.WARNING]
+    assert any("already retired" in record.getMessage() for record in records)

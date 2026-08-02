@@ -8,6 +8,20 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- Submitting to a queue whose worker is already running no longer logs a
+  warning with a full traceback when the worker retires the snapshot intent
+  marker first. Once the durable queue row is committed, the worker's
+  reconciliation pass may unlink the intent before the submitting process
+  performs its own retirement; that race is expected and leaves nothing to
+  repair, so it is now reported as a single INFO line and `run-dir` no longer
+  prints `worker_detail: queued snapshot ownership marker repair is pending`
+  for it. Any other marker-update failure still logs the warning with its
+  traceback and reports the repair detail. The same reclassification applies
+  to the internal-engine (xTB/CREST) submission path, which duplicates the
+  marker logic and emitted the same spurious warning.
+
 ## [1.0.0] - 2026-08-02
 
 orca_auto's first stable release. Every surface documented in
