@@ -245,8 +245,10 @@ ORCA-specific notes:
   `reaction_dir` command line. The queue entry still stores `reaction_dir`, and
   downstream ORCA/workflow contracts should keep using that field.
 - Standalone ORCA resource metadata comes from the selected input's `%pal`
-  and `%maxcore` directives, with config defaults injected only when those
-  directives are missing. The shared `--max-cores` and `--max-memory-gb`
+  and `%maxcore` directives, with config defaults applied only when those
+  directives are missing. The defaults are resolved for the run and recorded in
+  the private execution snapshot; the input file you selected is never modified.
+  The shared `--max-cores` and `--max-memory-gb`
   flags do not override standalone ORCA input directives. Resource readers use
   the largest active value before normalization so a later duplicate cannot
   hide a larger request.
@@ -374,6 +376,11 @@ Workflow notes:
   validation, and the 10,000-atom (1,000 for Hessian/frequency inputs)
   admission caps are specified in the
   [Workflow Contract](PUBLIC_CONTRACTS.md#workflow-contract).
+- xTB exit code 0 alone does not complete an opt, sp, or hess job: the run must
+  also yield a valid artifact. An optimization without xTB's `.xtboptok` success
+  marker, an SP without a finite energy, and a Hessian without a valid matrix
+  are failed with `xtb_opt_no_valid_geometry`, `xtb_sp_no_finite_energy`, or
+  `xtb_hess_invalid_hessian` respectively.
 - CREST exit code 0 is accepted only when a retained output contains at least
   one strictly valid, finite XYZ frame. Every valid named retained ensemble is
   preserved: geometries found only in later rotamer outputs remain candidates,

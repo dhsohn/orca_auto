@@ -27,12 +27,14 @@ import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 직접 import합니다. 테스트는 알 수 없는 외부 서비스 override를 거부해야 하며, 내부
 동작을 격리할 때는 그 동작을 소유한 모듈을 patch해야 합니다.
 
-workflow SI에는 더 좁은 강제 방향이 있습니다.
+workflow SI는 `collection.py`·`publication.py`·`rendering.py` 세 모듈의 평평한
+패키지입니다. 직접 임포트하세요. `flow.workflow.si.__init__`은 아무것도 export하지
+않으며 facade가 아닙니다. 이 패키지에 대한 import-linter 계약은 없으므로, 아래는
+빌드가 아니라 리뷰어가 강제하는 관례입니다.
 
-- `flow.workflow.si.__init__`이 지원되는 SI facade입니다. 내부 의존성의 허용 순서는
-  publication → collection → rendering → science → evidence → models입니다. 중간 layer를
-  건너뛸 수 있지만 역방향 import는 import-linter가 실패시킵니다. publication만 SI 파일을
-  쓰며 rendering은 text 생성만 담당합니다.
+- 의존성은 publication → rendering → collection 순서입니다 — publication이 두 형제를
+  임포트하고, rendering이 collection을 임포트하며, collection은 어느 쪽도 임포트하지
+  않습니다. publication만 SI 파일을 쓰며 rendering은 text 생성만 담당합니다.
 
 ## 현재 패키지 레이아웃
 

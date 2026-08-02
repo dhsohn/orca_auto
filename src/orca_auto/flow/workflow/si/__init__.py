@@ -1,1 +1,1 @@
-"""Workflow Supporting Information collection, science, rendering, and publication."""
+"""Workflow Supporting Information collection, rendering, and publication."""

@@ -58,16 +58,6 @@ orca_auto queue list --engine orca
 버전 핀 — 은 [docs/PUBLIC_CONTRACTS.ko.md](docs/PUBLIC_CONTRACTS.ko.md)에 있습니다.
 README는 의도적으로 짧게 유지합니다.
 
-## 왜 shell 루프가 아닌가?
-
-내구성 있는 경로는 구체적이고 실제적인 실패를 막기 위해 존재합니다:
-
-- **불확실한 commit**은 성공/실패로 추측하지 않고 조정(reconciliation)을 위해 보존합니다
-- **중단되거나 고아가 된 generation은 종료 실패**로 확정하며, 조용히 재큐하거나 이중 실행하지 않습니다
-- 제출 입력의 **basename 충돌**은 잘못된 파일을 실행하기 전에 거부합니다
-- xTB **false-success 마커**(`emergency exit`, `taking it as converged`)는 fail-closed — 종료 코드 0만으로는 신뢰하지 않습니다
-- 모든 것이 단일 `runs_root` 아래, generation별로 눈에 보이는 상태·리포트 기록과 함께 놓입니다
-
 ## 서비스·테스트·전체 문서
 
 - 감독 런타임(`systemd`, WSL/Linux) → [systemd/README.ko.md](systemd/README.ko.md)

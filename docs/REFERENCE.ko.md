@@ -245,7 +245,9 @@ ORCA 고유 노트:
   여전히 `reaction_dir`를 저장하며, 다운스트림 ORCA/워크플로우 계약은 그 필드를 계속
   사용해야 합니다.
 - 단독 ORCA 자원 메타데이터는 선택된 입력의 `%pal` 및 `%maxcore` 지시어에서 오며,
-  그 지시어가 없을 때만 설정 기본값이 주입됩니다. 공유 `--max-cores`와
+  그 지시어가 없을 때만 설정 기본값을 적용합니다. 기본값은 실행용으로 해석되어
+  private execution snapshot에 기록되며, 선택한 입력 파일 자체는 수정하지 않습니다.
+  공유 `--max-cores`와
   `--max-memory-gb` 플래그는 단독 ORCA 입력 지시어를 재정의하지 않습니다. 정규화 전
   자원 reader는 모든 활성값 중 최댓값을 사용하므로 뒤쪽 중복값으로 더 큰 요청을
   숨길 수 없습니다.
@@ -359,6 +361,10 @@ ORCA 고유 노트:
   수/UHF parity 검증, 10,000원자(Hessian/frequency 입력은 1,000원자) admission
   상한은 [워크플로우 계약](PUBLIC_CONTRACTS.ko.md#워크플로우-계약)에 명세되어
   있습니다.
+- xTB 종료 코드 0만으로는 opt·sp·hess 작업이 완료되지 않습니다. 유효한 산출물이
+  함께 있어야 합니다: xTB의 `.xtboptok` 성공 마커가 없는 최적화, 유한한 에너지가 없는
+  SP, 유효한 행렬이 없는 Hessian은 각각 `xtb_opt_no_valid_geometry`,
+  `xtb_sp_no_finite_energy`, `xtb_hess_invalid_hessian`으로 실패 처리합니다.
 - CREST 종료 코드가 0이어도 보존 출력에 엄격히 유효하고 유한한 XYZ frame이 하나 이상
   있어야 성공으로 인정합니다. 유효한 named retained ensemble을 모두 보존하므로 뒤쪽
   rotamer 출력에만 있는 geometry도 후보로 남고, 파일 사이에서 겹치는 geometry만 downstream
