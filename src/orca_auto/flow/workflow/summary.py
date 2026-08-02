@@ -150,7 +150,6 @@ def workflow_summary(
         "stage_count": len(stages),
         "stage_status_counts": status_counts,
         "task_status_counts": task_status_counts,
-        "submission_summary": _coerce_mapping(metadata.get("submission_summary")),
         "request_parameters": workflow_request_parameters(data),
         "downstream_reaction_workflow": downstream,
         "precomplex_handoff": precomplex_handoff,

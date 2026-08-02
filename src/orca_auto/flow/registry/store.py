@@ -63,7 +63,6 @@ class WorkflowRegistryRecord:
     updated_at: str = ""
     stage_status_counts: dict[str, int] = field(default_factory=dict)
     task_status_counts: dict[str, int] = field(default_factory=dict)
-    submission_summary: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -114,10 +113,7 @@ def _coerce_counts(value: Any) -> dict[str, int]:
 
 def _record_from_summary(summary: dict[str, Any]) -> WorkflowRegistryRecord:
     workspace_dir = _normalize_text(summary.get("workspace_dir"))
-    updated_at = (
-        _normalize_text(_coerce_mapping(summary.get("submission_summary")).get("updated_at"))
-        or now_utc_iso()
-    )
+    updated_at = now_utc_iso()
     metadata = {
         "downstream_reaction_workflow": _coerce_mapping(
             summary.get("downstream_reaction_workflow")
@@ -163,7 +159,6 @@ def _record_from_summary(summary: dict[str, Any]) -> WorkflowRegistryRecord:
         updated_at=updated_at,
         stage_status_counts=_coerce_counts(summary.get("stage_status_counts")),
         task_status_counts=_coerce_counts(summary.get("task_status_counts")),
-        submission_summary=_coerce_mapping(summary.get("submission_summary")),
         metadata=metadata,
     )
 
@@ -227,7 +222,6 @@ def _record_from_dict(raw: dict[str, Any]) -> WorkflowRegistryRecord:
         updated_at=_normalize_text(raw.get("updated_at")),
         stage_status_counts=_coerce_counts(raw.get("stage_status_counts")),
         task_status_counts=_coerce_counts(raw.get("task_status_counts")),
-        submission_summary=_coerce_mapping(raw.get("submission_summary")),
         metadata=_coerce_mapping(raw.get("metadata")),
     )
 

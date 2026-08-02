@@ -42,7 +42,6 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
             "stage_count": "2",
             "stage_status_counts": {"planned": "2", "bad": "nan"},
             "task_status_counts": {"submitted": 1},
-            "submission_summary": {"updated_at": "2026-04-19T00:30:00+00:00", "submitted_count": 1},
             "downstream_reaction_workflow": {"workflow_id": "child_1"},
             "precomplex_handoff": {"reactant_xyz": "/tmp/reactant.xyz"},
             "parent_workflow": {"workflow_id": "parent_1"},
@@ -55,7 +54,7 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
     assert record.workflow_id == "wf_1"
     assert record.workflow_file == str(Path("/tmp/workspace_1").resolve() / "workflow.json")
     assert record.stage_count == 2
-    assert record.updated_at == "2026-04-19T00:30:00+00:00"
+    assert record.updated_at  # stamped at record-build time
     assert record.stage_status_counts == {"planned": 2}
     assert record.task_status_counts == {"submitted": 1}
     assert record.metadata == {
@@ -1530,7 +1529,6 @@ def test_list_workflow_registry_reindexes_when_missing_and_reindex_skips_bad_wor
             "stage_count": 1,
             "stage_status_counts": {"planned": 1},
             "task_status_counts": {"planned": 1},
-            "submission_summary": {},
         }
     }
 
