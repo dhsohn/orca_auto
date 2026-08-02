@@ -376,6 +376,11 @@ Workflow notes:
   validation, and the 10,000-atom (1,000 for Hessian/frequency inputs)
   admission caps are specified in the
   [Workflow Contract](PUBLIC_CONTRACTS.md#workflow-contract).
+- xTB exit code 0 alone does not complete an opt, sp, or hess job: the run must
+  also yield a valid artifact. An optimization without xTB's `.xtboptok` success
+  marker, an SP without a finite energy, and a Hessian without a valid matrix
+  are failed with `xtb_opt_no_valid_geometry`, `xtb_sp_no_finite_energy`, or
+  `xtb_hess_invalid_hessian` respectively.
 - CREST exit code 0 is accepted only when a retained output contains at least
   one strictly valid, finite XYZ frame. Every valid named retained ensemble is
   preserved: geometries found only in later rotamer outputs remain candidates,

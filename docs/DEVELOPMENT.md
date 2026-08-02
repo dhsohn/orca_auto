@@ -27,12 +27,13 @@ unknown outer-service overrides and patch the owning module when isolating an
 internal operation.
 
 Workflow SI is a flat package of three modules — `collection.py`, `publication.py`,
-and `rendering.py`. Import them directly; `flow.workflow.si.__init__` is empty and
-is not a facade. There is no import-linter contract for this package, so the
-following is a convention the reviewer enforces, not the build:
+and `rendering.py`. Import them directly; `flow.workflow.si.__init__` exports
+nothing and is not a facade. There is no import-linter contract for this package,
+so the following is a convention the reviewer enforces, not the build:
 
-- Dependencies run publication → collection → rendering. Publication is the only
-  file-writing SI owner; rendering stays text-only.
+- Dependencies run publication → rendering → collection: publication imports
+  both siblings, rendering imports collection, collection imports neither.
+  Publication is the only file-writing SI owner; rendering stays text-only.
 
 ## Current Package Layout
 

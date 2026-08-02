@@ -361,6 +361,10 @@ ORCA 고유 노트:
   수/UHF parity 검증, 10,000원자(Hessian/frequency 입력은 1,000원자) admission
   상한은 [워크플로우 계약](PUBLIC_CONTRACTS.ko.md#워크플로우-계약)에 명세되어
   있습니다.
+- xTB 종료 코드 0만으로는 opt·sp·hess 작업이 완료되지 않습니다. 유효한 산출물이
+  함께 있어야 합니다: xTB의 `.xtboptok` 성공 마커가 없는 최적화, 유한한 에너지가 없는
+  SP, 유효한 행렬이 없는 Hessian은 각각 `xtb_opt_no_valid_geometry`,
+  `xtb_sp_no_finite_energy`, `xtb_hess_invalid_hessian`으로 실패 처리합니다.
 - CREST 종료 코드가 0이어도 보존 출력에 엄격히 유효하고 유한한 XYZ frame이 하나 이상
   있어야 성공으로 인정합니다. 유효한 named retained ensemble을 모두 보존하므로 뒤쪽
   rotamer 출력에만 있는 geometry도 후보로 남고, 파일 사이에서 겹치는 geometry만 downstream
