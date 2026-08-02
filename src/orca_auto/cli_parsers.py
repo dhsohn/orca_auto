@@ -179,21 +179,6 @@ def add_scaffold_parser(subparsers: argparse._SubParsersAction[argparse.Argument
         )
 
 
-def add_monitor_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    # ``scan-notify`` performs a single filesystem scan and sends messenger
-    # alerts, then exits.
-    monitor_parser = subparsers.add_parser(
-        "scan-notify",
-        help=(
-            "Run a one-shot scan for newly discovered DFT results (or scan "
-            "failures) and send ORCA messenger alerts. Not a live monitor."
-        ),
-    )
-    add_engine_config_argument(monitor_parser)
-    add_orca_logging_arguments(monitor_parser)
-    monitor_parser.set_defaults(func=cli_handlers.cmd_orca_monitor)
-
-
 def _add_queue_list_parser(
     queue_subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
@@ -424,7 +409,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_run_dir_parser(subparsers)
     add_init_parser(subparsers)
     add_scaffold_parser(subparsers)
-    add_monitor_parser(subparsers)
     add_systemd_parser(subparsers)
     add_service_parser(subparsers)
     return parser

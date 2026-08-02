@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,7 +13,6 @@ from orca_auto import (
     cli_systemd_apply,
     cli_systemd_status,
 )
-from orca_auto import cli_handlers as cli_monitor
 from orca_auto import cli_handlers as cli_run_dir
 
 
@@ -186,7 +185,7 @@ def test_run_dir_parser_rejects_internal_workflow_options(removed_option: str) -
         parser.parse_args(["run-dir", "/tmp/workflow-inputs", removed_option, "value"])
 
 
-def test_build_parser_parses_unified_init_scaffold_and_scan_notify_commands() -> None:
+def test_build_parser_parses_unified_init_and_scaffold_commands() -> None:
     parser = unified_cli.build_parser()
 
     init_args = parser.parse_args(["init", "--orca_auto-config", "/tmp/orca_auto.yaml", "--force"])
@@ -194,7 +193,6 @@ def test_build_parser_parses_unified_init_scaffold_and_scan_notify_commands() ->
     shortcut_scaffold_args = parser.parse_args(
         ["scaffold", "conformer_search", "/tmp/conformer-inputs"]
     )
-    monitor_args = parser.parse_args(["scan-notify", "--orca_auto-config", "/tmp/orca_auto.yaml"])
 
     assert init_args.command == "init"
     assert init_args.force is True
@@ -213,10 +211,6 @@ def test_build_parser_parses_unified_init_scaffold_and_scan_notify_commands() ->
     assert shortcut_scaffold_args.workflow_type == "conformer_screening"
     assert getattr(shortcut_scaffold_args, "crest_mode", None) is None
     assert shortcut_scaffold_args.func is cli_run_dir.cmd_workflow_scaffold
-
-    assert monitor_args.command == "scan-notify"
-    assert monitor_args.config == "/tmp/orca_auto.yaml"
-    assert monitor_args.func is cli_monitor.cmd_orca_monitor
 
 
 def test_build_parser_parses_systemd_install_command() -> None:
@@ -333,12 +327,6 @@ def test_main_dispatches_unified_queue_cancel(monkeypatch: pytest.MonkeyPatch) -
             },
             24,
         ),
-        (
-            ["scan-notify", "--orca_auto-config", "/tmp/orca_auto.yaml"],
-            "cmd_orca_monitor",
-            {"command": "scan-notify", "config": "/tmp/orca_auto.yaml"},
-            29,
-        ),
     ],
 )
 def test_main_dispatches_unified_engine_commands(
@@ -354,12 +342,7 @@ def test_main_dispatches_unified_engine_commands(
         seen.append(args)
         return expected_result
 
-    target_module: ModuleType
-    if attr_name == "cmd_orca_monitor":
-        target_module = cli_monitor
-    else:
-        target_module = cli_run_dir
-    monkeypatch.setattr(target_module, attr_name, fake_cmd)
+    monkeypatch.setattr(cli_run_dir, attr_name, fake_cmd)
 
     result = unified_cli.main(argv)
 

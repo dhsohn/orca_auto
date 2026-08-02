@@ -117,6 +117,18 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Removed
 
+- Removed the `orca_auto scan-notify` command and the DFT monitor subsystem
+  behind it. The command scanned the runs root for ORCA outputs, diffed them
+  against a state file, and posted a digest of what had changed since the last
+  scan. Queue and workflow notifications now cover the same ground from the
+  runtime itself: a card is posted when a run is queued and again when it
+  reaches a terminal state, without a periodic scan. Operators who invoked
+  `scan-notify` from cron or a timer should drop that entry. The monitor's
+  `<runs_root>/.dft_monitor_state.json` is no longer read or written and can be
+  deleted. `docs/DISCORD_SETUP.md` now verifies delivery with `run-dir`.
+- Removed the DFT discovery module, whose only caller was the monitor. Run
+  snapshots keep the one helper they used from it — the latest-`.out` lookup
+  inside a run directory — so `queue list` behavior is unchanged.
 - Removed thirteen keyword switches whose non-default branch production never
   selected, and the one function that existed only to feed one of them. The HTML
   report components lose the toggles the composer always passed at the same

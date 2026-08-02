@@ -78,7 +78,7 @@ Experimental입니다. Experimental은 공개 API — 표면의 이름·형태·
 ## 공개 CLI 계약
 
 **안정성:** `run-dir`·`queue list`·`queue cancel`(및 `--json`)은 Stable Core입니다. 그 외
-명령 — `init`·`scaffold`·`queue list clear`·`service`·`systemd install`·`scan-notify` — 은
+명령 — `init`·`scaffold`·`queue list clear`·`service`·`systemd install` — 은
 Experimental입니다.
 
 사용자/운영자 대상 공개 CLI는 `orca_auto ...`입니다.
@@ -96,7 +96,6 @@ Experimental입니다.
 - `orca_auto service status`
 - `orca_auto service restart`
 - `orca_auto systemd install --user <name> --repo <path>`
-- `orca_auto scan-notify`
 
 동작:
 

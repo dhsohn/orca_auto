@@ -56,7 +56,7 @@ src/orca_auto/
 │   └── utils/           # 락, 영속화, 프로세스 추적, 형 변환
 │
 ├── orca/                # 정규 ORCA 구현 (단일 진실 공급원)
-│   ├── commands/        # 얇은 CLI adapter: init, run_inp, queue, monitor
+│   ├── commands/        # 얇은 CLI adapter: init, run_inp, queue
 │   ├── submission.py    # 내구성 run-dir 제출과 publication
 │   ├── run_context.py   # 제출/실행 대상 해석
 │   ├── execution.py     # 락으로 보호된 ORCA 실행과 복구
@@ -278,7 +278,7 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   generation에 보존합니다. 작업 루트에는 terminal cleanup 전까지 live `job_state.json`만
   함께 존재하며 `run.lock`이 재사용하는 소스 디렉터리 사용을 직렬화합니다. 완전히 닫힌 제출 뒤에는 기존 raw 파일을
   덮어쓰지 않고 새 sibling generation을 만들 수 있습니다. 보이지 않는 filesystem
-  owner token은 상태/리포트 게시, 이력 조회, cleanup, DFT discovery를 재사용 가능한
+  owner token은 상태/리포트 게시, 이력 조회, cleanup을 재사용 가능한
   경로나 inode 번호만이 아니라 실제 제출 때 만든 디렉터리에 바인딩합니다.
 - **선택적 RAM scratch와 durable 게시:** `orca.runtime.scratch_root`를 설정하면 attempt는
   바인딩된 flat basename-relative input closure만 private `/dev/shm` workspace에 staging합니다.
@@ -570,7 +570,6 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 - `run-dir <path>` — 내구성 제출 (ORCA 또는 워크플로우, 자동 라우팅)
 - `queue list` / `queue cancel` / `queue list clear` — 큐 점검/유지보수
 - `service status` / `service restart` — 런타임 상태 (systemd 경유)
-- `scan-notify` — 일회성 탐색 스캔 + 활성 메신저 알림
 - `systemd install` — 유닛 렌더링 및 활성화
 
 엔진별 CLI 모듈은 런타임 전용 워커 엔트리포인트이며, 사용자 명령을 추가하는

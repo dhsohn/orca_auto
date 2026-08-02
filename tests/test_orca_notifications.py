@@ -9,11 +9,7 @@ from __future__ import annotations
 from typing import Literal
 
 from orca_auto.core.messaging import Message, SendResult
-from orca_auto.orca.dft.monitor import MonitorResult, ScanReport
 from orca_auto.orca.notifications import (
-    _status_icon,
-    has_monitor_updates,
-    notify_monitor_report,
     notify_queue_enqueued_event,
     notify_retry_event,
     notify_run_finished_event,
@@ -89,32 +85,6 @@ def _queued_event() -> QueueEnqueuedNotification:
     }
 
 
-def _sample_report() -> ScanReport:
-    return ScanReport(
-        new_results=[
-            MonitorResult(
-                formula="CH4",
-                method_basis="B3LYP/def2-SVP",
-                energy="E = -40.5 Eh",
-                status="completed",
-                calc_type="opt",
-                path="orca_outputs/opt/CH4/calc.out",
-                note="",
-            ),
-            MonitorResult(
-                formula="C6H6",
-                method_basis="PBE0/def2-TZVP",
-                energy="E = -232.1 Eh",
-                status="failed",
-                calc_type="opt+freq",
-                path="orca_outputs/opt/C6H6/calc.out",
-                note=" (NOT CONVERGED)",
-            ),
-        ],
-        scanned_files=10,
-    )
-
-
 def test_run_finished_cancelled_title_and_severity() -> None:
     event = _finished_event()
     event["status"] = "cancelled"
@@ -131,15 +101,6 @@ def test_run_finished_completed_is_success_severity() -> None:
     assert run_finished_message(_finished_event()).severity == "success"
 
 
-def test_status_icon() -> None:
-    assert _status_icon("completed") == "✅"
-    assert _status_icon("failed") == "❌"
-    assert _status_icon("unknown") == "•"
-
-
-# --------------------------------------------------------------------------- #
-# Delivery through a channel
-# --------------------------------------------------------------------------- #
 class _FakeChannel:
     def __init__(self, *, enabled: bool = True, sent: bool = True) -> None:
         self._enabled = enabled
@@ -174,20 +135,6 @@ def test_notify_skips_when_channel_disabled() -> None:
 def test_notify_returns_false_when_send_fails() -> None:
     channel = _FakeChannel(sent=False)
     assert notify_run_finished_event(channel, _finished_event()) is False
-    assert len(channel.sent_messages) == 1
-
-
-def test_notify_monitor_report_skips_empty_report() -> None:
-    channel = _FakeChannel()
-    assert notify_monitor_report(channel, ScanReport(new_results=[], scanned_files=0)) is False
-    assert channel.sent_messages == []
-
-
-def test_notify_monitor_report_sends_when_updates_exist() -> None:
-    channel = _FakeChannel()
-    report = _sample_report()
-    assert has_monitor_updates(report) is True
-    assert notify_monitor_report(channel, report) is True
     assert len(channel.sent_messages) == 1
 
 

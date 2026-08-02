@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from orca_auto.orca import run_snapshot
 from orca_auto.orca.run_snapshot import (
     RunSnapshot,
     _compute_elapsed,
+    _find_latest_out_in_dir,
     _latest_out_path,
     collect_run_snapshots,
     elapsed_text,
@@ -52,6 +55,47 @@ def _snapshot(
         elapsed=0.0,
         elapsed_text="0s",
     )
+
+
+def test_find_latest_out_in_dir_handles_non_dir_stat_errors_and_latest_selection(
+    tmp_path: Path,
+) -> None:
+    missing_dir = tmp_path / "missing"
+    assert _find_latest_out_in_dir(missing_dir) is None
+
+    run_dir = tmp_path / "run_dir"
+    run_dir.mkdir()
+    skipped_dir = run_dir / "skip.out"
+    skipped_dir.mkdir()
+    bad_out = run_dir / "bad.out"
+    bad_out.write_text("bad", encoding="utf-8")
+    old_out = run_dir / "old.out"
+    newest_out = run_dir / "new.out"
+    old_out.write_text("old", encoding="utf-8")
+    newest_out.write_text("new", encoding="utf-8")
+
+    now = datetime.now(UTC).timestamp()
+    os.utime(old_out, (now - 20, now - 20))
+    os.utime(newest_out, (now - 5, now - 5))
+
+    original_is_file = Path.is_file
+    original_stat = Path.stat
+
+    def _is_file(self: Path) -> bool:
+        if self == bad_out:
+            return True
+        return original_is_file(self)
+
+    def _stat(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if self == bad_out:
+            raise OSError("boom")
+        return original_stat(self, follow_symlinks=follow_symlinks)
+
+    with (
+        patch("pathlib.Path.is_file", autospec=True, side_effect=_is_file),
+        patch("pathlib.Path.stat", autospec=True, side_effect=_stat),
+    ):
+        assert _find_latest_out_in_dir(run_dir) == newest_out
 
 
 def test_parse_iso_utc_handles_invalid_z_naive_and_offset_values() -> None:

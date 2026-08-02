@@ -30,7 +30,7 @@ Enable **User Settings → Advanced → Developer Mode** in Discord. Then use
 [ID guide](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID)
 shows where the control is.
 
-- `default_channel_id`: destination for scheduled and worker notifications.
+- `default_channel_id`: destination for queue and worker notifications.
 
 ## 3. Configure orca_auto
 
@@ -71,11 +71,12 @@ From the repository root:
 .venv/bin/orca_auto service status
 ```
 
-orca_auto posts a notification when a run reaches a terminal state. To confirm
-delivery without waiting for a job, run a single scan:
+orca_auto posts a notification when a run is queued and again when it reaches a
+terminal state. The queued card is sent at submission time, so submitting any
+small ORCA input confirms delivery without waiting for the calculation:
 
 ```bash
-.venv/bin/orca_auto scan-notify
+.venv/bin/orca_auto run-dir <path>
 ```
 
 Then check the notification channel for the message card.

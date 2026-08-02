@@ -62,7 +62,6 @@ User-facing docs should standardize on these command forms:
 - `orca_auto run-dir <path>`
 - `orca_auto init`
 - `orca_auto scaffold <ts_search|conformer_search|scan_ts> <path>`
-- `orca_auto scan-notify`
 
 Long-running services are not part of the public CLI surface. Users should run
 them only through the `systemd/` units.
