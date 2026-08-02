@@ -9,12 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import orca_auto.orca.commands._helpers as command_helpers
-from orca_auto.orca.commands._helpers import (
-    CONFIG_ENV_VAR,
-    _human_bytes,
-    default_config_path,
-    finalize_batch_apply,
-)
+from orca_auto.orca.commands._helpers import CONFIG_ENV_VAR, default_config_path
 from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.execution import _emit
 from orca_auto.orca.run_context import _validate_reaction_dir
@@ -131,12 +126,6 @@ class TestHelperUtilities(unittest.TestCase):
             ):
                 self.assertEqual(default_config_path(), str(repo_default))
 
-    def test_human_bytes_formats_values(self) -> None:
-        self.assertEqual(_human_bytes(1), "1.0 B")
-        self.assertEqual(_human_bytes(1536), "1.5 KB")
-        self.assertEqual(_human_bytes(1024**2), "1.0 MB")
-        self.assertEqual(_human_bytes(1024**4), "1.0 TB")
-
     def test_emit_prints_only_known_keys(self) -> None:
         payload = {
             "status": "completed",
@@ -157,27 +146,3 @@ class TestHelperUtilities(unittest.TestCase):
         self.assertIn("job_dir: /tmp/rxn", output)
         self.assertIn("report_json: /tmp/report.json", output)
         self.assertNotIn("ignored", output)
-
-
-class TestFinalizeBatchApply(unittest.TestCase):
-    def test_returns_zero_when_no_failures(self) -> None:
-        emitted = []
-
-        def _emit(payload):
-            emitted.append(payload)
-
-        rc = finalize_batch_apply(
-            {"action": "apply", "failed": 0},
-            _emit,
-            [],
-        )
-        self.assertEqual(rc, 0)
-        self.assertEqual(emitted, [{"action": "apply", "failed": 0}])
-
-    def test_returns_one_when_failures_exist(self) -> None:
-        rc = finalize_batch_apply(
-            {"action": "apply", "failed": 1},
-            lambda _payload: None,
-            [{"run_id": "run_001", "reason": "apply_failed"}],
-        )
-        self.assertEqual(rc, 1)

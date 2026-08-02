@@ -16,6 +16,9 @@ QUEUE_RECORD_SYNC_UPDATED_AT_KEY = "_orca_auto_queued_record_sync_updated_at"
 QUEUE_RECORD_SYNC_OWNER_PID_KEY = "_orca_auto_queued_record_sync_owner_pid"
 QUEUE_RECORD_SYNC_OWNER_START_KEY = "_orca_auto_queued_record_sync_owner_start"
 QUEUE_RECORD_SYNC_TOKEN_KEY = "_orca_auto_queued_record_sync_token"
+# No producer since the workflow-level submitter cluster was removed; the
+# constant survives only so the restart stale-key scrub can keep clearing the
+# key out of durable stage metadata written by earlier releases.
 QUEUE_SUBMISSION_INTENT_KEY = "submission_intent_token"
 
 QUEUE_RECORD_SYNC_PREPARING = "preparing"
