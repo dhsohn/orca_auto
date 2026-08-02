@@ -36,7 +36,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: Lint shell scripts
-        run: shellcheck scripts/*.sh
+        run: shellcheck scripts/*.sh examples/fake_orca_smoke/run.sh
 
   test:
     runs-on: ubuntu-latest

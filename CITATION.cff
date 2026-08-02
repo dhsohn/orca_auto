@@ -8,7 +8,8 @@ authors:
 repository-code: "https://github.com/dhsohn/orca_auto"
 url: "https://github.com/dhsohn/orca_auto"
 license: MIT
-version: "0.3.0"
+version: "1.0.0"
+date-released: "2026-08-02"
 keywords:
   - computational chemistry
   - ORCA
@@ -19,6 +20,5 @@ keywords:
 abstract: >-
   orca_auto is a queue-first runtime and observability layer for ORCA-centered
   computational chemistry workflows on Linux and WSL. It submits work durably,
-  runs jobs under supervised workers, records per-job state and reports, and
-  organizes completed outputs while keeping ORCA input files as the chemistry-facing
-  contract.
+  runs jobs under supervised workers, and records per-job state and reports,
+  keeping ORCA input files as the chemistry-facing contract.

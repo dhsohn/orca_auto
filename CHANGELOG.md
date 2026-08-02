@@ -8,6 +8,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-02
+
+orca_auto's first stable release. Every surface documented in
+[docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md) is now a committed
+contract; from here on, breaking a documented behavior requires a major
+version. Readers upgrading from 0.2.x should also read the
+"Upgrading from 0.2.x" section at the end of this release's notes.
+
 ### Changed
 
 - `orca_auto queue list` now expands CREST, xTB, and ORCA child jobs beneath

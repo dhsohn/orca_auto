@@ -47,6 +47,8 @@ Create a release-prep issue and branch from `origin/main`, then verify:
 
 - [ ] `CHANGELOG.md` has an entry for the release version and date.
 - [ ] `pyproject.toml` version matches the changelog entry.
+- [ ] `CITATION.cff` `version` and `date-released` match the release
+      (`tests/test_release_metadata.py` gates the version; the date is manual).
 - [ ] `README.md`, `docs/REFERENCE.md`, and example docs match current public
       CLI/config/report behavior.
 - [ ] Any behavior changes have tests and a clear cutover note if needed.
