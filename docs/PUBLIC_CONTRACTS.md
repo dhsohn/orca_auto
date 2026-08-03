@@ -730,6 +730,18 @@ Behavior:
   deployment with healthy units reports `ok: true` and still exits non-zero. An
   install with no source `pyproject.toml`, such as a wheel install, has nothing
   to compare and reports `version_drift: null`.
+- `service status` also compares each active worker process against the
+  checkout's HEAD commit. The units import the checkout live but never reload,
+  so a deploy that lands after a worker started leaves that process running a
+  torn mix of cached pre-deploy modules and freshly imported post-deploy code.
+  A worker service whose main process started before HEAD was committed is
+  reported under `worker_staleness.stale` with its unit, PID, and start time;
+  an active worker whose process cannot be inspected is reported under
+  `worker_staleness.undetermined` rather than assumed fresh. Either finding
+  writes the affected unit and a `service restart` hint to stderr and exits
+  non-zero; `ok` continues to describe unit health alone. A source tree that is
+  not a git checkout has nothing to compare and reports
+  `worker_staleness: null`. Inactive units are not judged.
 - `service restart` clears the ORCA engine service's start-limit failure state.
   It restarts the runtime target when enabled; otherwise it restarts the
   engine-worker target.

@@ -494,6 +494,12 @@ orca_auto queue list --engine xtb
   인터프리터를 함께 밝히며, `pip install -e .` 힌트를 stderr에 출력하고 0이 아닌 코드로
   종료합니다. `orca_auto --version`은 여전히 설치된 버전만 출력하므로, 버전을 되읽는
   대신 `service status`로 확인해야 합니다.
+- `orca_auto service status`는 실행 중인 워커 프로세스의 나이도 게이트합니다.
+  워커는 체크아웃을 라이브로 import하지만 리로드하지 않으므로, 워커 시작 이후에
+  랜딩한 배포는 그 프로세스를 배포 전 코드에 남겨둡니다. 이 명령은 그런 워커를
+  `worker_staleness`(stale 또는 undetermined, unit·PID 포함)로 보고하고 `service
+  restart` 힌트를 stderr에 출력하며 0이 아닌 코드로 종료합니다. 워커가 import하는
+  코드를 건드린 배포 뒤에는 유휴 창에서 워커를 재시작해야 합니다.
 
 ### 7.6 장기 실행 서비스
 

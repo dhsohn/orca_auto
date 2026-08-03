@@ -10,6 +10,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Added
 
+- `service status` compares each active worker process against the checkout's
+  HEAD commit and gates on workers older than the last deploy. The units import
+  the checkout live (editable install) but never reload, so a deploy that adds
+  a symbol to an already-imported module leaves a long-running worker on a torn
+  module graph; one such worker rejected every reaction TS candidate submission
+  with an `ImportError` and failed the workflow as candidate exhaustion. The
+  command reports `worker_staleness` in its JSON payload (stale and
+  undetermined workers, with unit, PID, and start time), writes a
+  `service restart` hint to stderr, and exits non-zero. A source tree that is
+  not a git checkout reports `worker_staleness: null` rather than a verdict.
 - `service status` compares the installed distribution metadata against the
   source tree the process imports and gates on a mismatch. An editable install
   freezes its metadata at install time, so a checkout that fast-forwards without
@@ -24,9 +34,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 ### Changed
 
 - `service status` can now exit non-zero while reporting `ok: true`: `ok` still
-  means every required unit is active, and the new non-zero case is a stale
-  installed version. Callers that treat any non-zero exit as a dead worker
-  should read `version_drift` to tell the two apart.
+  means every required unit is active, and the new non-zero cases are a stale
+  installed version and a stale (or uninspectable) worker process. Callers that
+  treat any non-zero exit as a dead worker should read `version_drift` and
+  `worker_staleness` to tell the cases apart.
 
 ### Fixed
 

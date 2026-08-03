@@ -522,6 +522,13 @@ released plain table.
   inspected, prints a `pip install -e .` hint on stderr, and exits non-zero.
   `orca_auto --version` keeps reporting the installed version alone, so use
   `service status` rather than reading the version back.
+- `orca_auto service status` also gates the age of the running worker
+  processes. The workers import the checkout live but never reload, so a deploy
+  that lands after a worker started leaves that process on pre-deploy code; the
+  command reports such workers as `worker_staleness` (stale or undetermined,
+  with the unit and PID), prints a `service restart` hint on stderr, and exits
+  non-zero. Restart the workers in an idle window after every deploy that
+  touches code they import.
 
 ### 7.6 Long-Running Services
 

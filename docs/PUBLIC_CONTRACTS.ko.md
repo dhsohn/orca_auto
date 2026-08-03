@@ -663,6 +663,16 @@ stdout에 무언가를 남긴 경우 `submission_error_detail`을 1,000자로 �
   health만 뜻하므로, 유닛이 정상인 채 드리프트만 있는 배포는 `ok: true`를 보고하면서도
   0이 아닌 코드로 종료합니다. 휠 설치처럼 소스 `pyproject.toml`이 없어 대조 대상이
   없으면 `version_drift: null`입니다.
+- `service status`는 활성 워커 프로세스 각각을 체크아웃의 HEAD 커밋과도 대조합니다.
+  유닛은 체크아웃을 라이브로 import하지만 리로드하지 않으므로, 워커 시작 이후에
+  랜딩한 배포는 그 프로세스를 배포 전 캐시 모듈과 배포 후 새로 import된 코드가 섞인
+  상태로 남깁니다. main 프로세스가 HEAD 커밋보다 먼저 시작된 워커 서비스는
+  `worker_staleness.stale`에 unit·PID·시작 시각과 함께 보고되고, 프로세스를 검사할
+  수 없는 활성 워커는 fresh로 간주되는 대신 `worker_staleness.undetermined`에
+  보고됩니다. 어느 쪽이든 해당 unit과 `service restart` 힌트를 stderr에 쓰고 0이
+  아닌 코드로 종료하며, `ok`는 여전히 유닛 health만 뜻합니다. 소스 트리가 git
+  체크아웃이 아니면 대조 대상이 없어 `worker_staleness: null`입니다. 비활성 유닛은
+  판정하지 않습니다.
 - `service restart`는 ORCA 엔진 서비스의 start-limit 실패 상태를 지웁니다. runtime target이
   활성화되어 있으면 그것을 재시작하고, 아니면 engine-worker target을 재시작합니다.
 - 엔진 워커 감독자가 정상 종료되면 중단 상태를 유지합니다. 각 자식 감독자는 제한된 재시작

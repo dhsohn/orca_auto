@@ -555,6 +555,7 @@ def test_cmd_service_status_prints_compact_systemd_state(capsys: Any) -> None:
             run=_fake_run,
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
             installed_version_drift=lambda: None,
+            collect_worker_staleness=lambda statuses, run=None: None,
         ),
     )
 
@@ -606,6 +607,7 @@ def test_cmd_service_status_worker_only_requires_only_worker(capsys: Any) -> Non
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
             installed_version_drift=lambda: None,
+            collect_worker_staleness=lambda statuses, run=None: None,
         ),
     )
 
@@ -654,6 +656,7 @@ def test_cmd_service_status_hides_runtime_managed_enabled_noise(
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
             installed_version_drift=lambda: None,
+            collect_worker_staleness=lambda statuses, run=None: None,
         ),
     )
 
@@ -698,6 +701,7 @@ def test_cmd_service_status_emits_json(capsys: Any) -> None:
             run=_fake_run,
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
             installed_version_drift=lambda: None,
+            collect_worker_staleness=lambda statuses, run=None: None,
         ),
     )
 
@@ -743,6 +747,7 @@ def test_cmd_service_status_gates_on_stale_installed_metadata(capsys: Any) -> No
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
             installed_version_drift=lambda: ("0.1.0", "1.0.0"),
+            collect_worker_staleness=lambda statuses, run=None: None,
         ),
     )
 
@@ -779,6 +784,7 @@ def test_cmd_service_status_consults_the_real_detector_by_default(
             collect_service_status=lambda target_user, run: statuses,
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+            collect_worker_staleness=lambda statuses, run=None: None,
         ),
     )
 
@@ -796,6 +802,7 @@ def test_cmd_service_status_reports_no_drift_for_a_current_install(capsys: Any) 
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
             installed_version_drift=lambda: None,
+            collect_worker_staleness=lambda statuses, run=None: None,
         ),
     )
 
@@ -803,6 +810,314 @@ def test_cmd_service_status_reports_no_drift_for_a_current_install(capsys: Any) 
     captured = capsys.readouterr()
     assert json.loads(captured.out)["version_drift"] is None
     assert captured.err == ""
+
+
+def test_cmd_service_status_gates_on_stale_worker_process(capsys: Any) -> None:
+    statuses = _healthy_worker_only_statuses()
+    verdict = {
+        "head_commit_epoch": 1_000_000,
+        "stale": [
+            {
+                "label": "worker",
+                "unit": "orca_auto-queue-worker@alice.service",
+                "pid": 4242,
+                "started_epoch": 900_000,
+            }
+        ],
+        "undetermined": [],
+    }
+
+    result = cli_systemd_status.cmd_service_status(
+        Namespace(target_user="alice", json=True),
+        deps=cli_systemd_status.ServiceCliDeps(
+            collect_service_status=lambda target_user, run: statuses,
+            run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+            installed_version_drift=lambda: None,
+            collect_worker_staleness=lambda statuses, run=None: verdict,
+        ),
+    )
+
+    # Every required unit is active and the metadata is current, so the
+    # deployment is only unhealthy because a worker still runs pre-deploy code.
+    assert result == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["ok"] is True
+    assert payload["worker_staleness"] == verdict
+    assert "orca_auto-queue-worker@alice.service (pid 4242)" in captured.err
+    assert "pre-deploy code" in captured.err
+    assert "orca_auto service restart" in captured.err
+
+
+def test_cmd_service_status_gates_on_undetermined_worker_process(capsys: Any) -> None:
+    statuses = _healthy_worker_only_statuses()
+    verdict = {
+        "head_commit_epoch": 1_000_000,
+        "stale": [],
+        "undetermined": [
+            {
+                "label": "worker",
+                "unit": "orca_auto-queue-worker@alice.service",
+                "detail": "no readable main PID",
+            }
+        ],
+    }
+
+    result = cli_systemd_status.cmd_service_status(
+        Namespace(target_user="alice", json=True),
+        deps=cli_systemd_status.ServiceCliDeps(
+            collect_service_status=lambda target_user, run: statuses,
+            run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+            installed_version_drift=lambda: None,
+            collect_worker_staleness=lambda statuses, run=None: verdict,
+        ),
+    )
+
+    # A worker that cannot be inspected must not pass for fresh.
+    assert result == 1
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["worker_staleness"] == verdict
+    assert "cannot judge worker code freshness" in captured.err
+    assert "no readable main PID" in captured.err
+
+
+def test_cmd_service_status_accepts_fresh_worker_processes(capsys: Any) -> None:
+    statuses = _healthy_worker_only_statuses()
+    verdict = {"head_commit_epoch": 1_000_000, "stale": [], "undetermined": []}
+
+    result = cli_systemd_status.cmd_service_status(
+        Namespace(target_user="alice", json=True),
+        deps=cli_systemd_status.ServiceCliDeps(
+            collect_service_status=lambda target_user, run: statuses,
+            run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+            installed_version_drift=lambda: None,
+            collect_worker_staleness=lambda statuses, run=None: verdict,
+        ),
+    )
+
+    assert result == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["worker_staleness"] == verdict
+    assert captured.err == ""
+
+
+def test_cmd_service_status_consults_the_real_staleness_collector_by_default(
+    capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every other status test injects the verdict, which leaves the production
+    # wiring itself untested: unhooking the default would disable the gate with
+    # a green suite.
+    statuses = _healthy_worker_only_statuses()
+    verdict = {
+        "head_commit_epoch": 1_000_000,
+        "stale": [
+            {
+                "label": "worker",
+                "unit": "orca_auto-queue-worker@alice.service",
+                "pid": 4242,
+                "started_epoch": 900_000,
+            }
+        ],
+        "undetermined": [],
+    }
+    monkeypatch.setattr(
+        cli_systemd_status, "collect_worker_staleness", lambda statuses, run=None: verdict
+    )
+
+    result = cli_systemd_status.cmd_service_status(
+        Namespace(target_user="alice", json=True),
+        deps=cli_systemd_status.ServiceCliDeps(
+            collect_service_status=lambda target_user, run: statuses,
+            run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+            installed_version_drift=lambda: None,
+        ),
+    )
+
+    assert result == 1
+    assert json.loads(capsys.readouterr().out)["worker_staleness"] == verdict
+
+
+def _write_fake_proc(proc_root: Path, *, boot_epoch: int, pid_start_epochs: dict[int, int]) -> None:
+    ticks_per_sec = os.sysconf("SC_CLK_TCK")
+    proc_root.mkdir()
+    (proc_root / "stat").write_text(f"cpu 0 0 0 0\nbtime {boot_epoch}\n", encoding="ascii")
+    for pid, start_epoch in pid_start_epochs.items():
+        start_ticks = (start_epoch - boot_epoch) * ticks_per_sec
+        pid_dir = proc_root / str(pid)
+        pid_dir.mkdir()
+        # The comm field carries a space and parentheses on purpose: fields only
+        # split cleanly after the last ')'. After comm the first token is the
+        # state (field 3), so starttime (field 22) is 19 tokens later.
+        (pid_dir / "stat").write_text(
+            f"{pid} (queue (work) er) S " + " ".join(["0"] * 18) + f" {start_ticks}\n",
+            encoding="ascii",
+        )
+
+
+def test_collect_worker_staleness_flags_workers_started_before_head(tmp_path: Path) -> None:
+    head_epoch = 1_000_000
+    source_root = tmp_path / "checkout"
+    (source_root / ".git").mkdir(parents=True)
+    proc_root = tmp_path / "proc"
+    _write_fake_proc(
+        proc_root,
+        boot_epoch=500_000,
+        pid_start_epochs={41: head_epoch - 3600, 42: head_epoch + 3600},
+    )
+    pids = {
+        "orca_auto-queue-worker@alice.service": "41",
+        "orca_auto-workflow-worker@alice.service": "42",
+    }
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        if argv[0] == "git":
+            assert argv[1:3] == ["-C", str(source_root)]
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{head_epoch}\n", stderr="")
+        assert argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]
+        return subprocess.CompletedProcess(argv, 0, stdout=f"{pids[argv[4]]}\n", stderr="")
+
+    statuses = (
+        cli_systemd_status.ServiceUnitStatus(
+            label="engines",
+            unit="orca_auto-engine-workers@alice.target",
+            active="active",
+            enabled="enabled",
+        ),
+        cli_systemd_status.ServiceUnitStatus(
+            label="worker",
+            unit="orca_auto-queue-worker@alice.service",
+            active="active",
+            enabled="enabled",
+        ),
+        cli_systemd_status.ServiceUnitStatus(
+            label="workflow",
+            unit="orca_auto-workflow-worker@alice.service",
+            active="active",
+            enabled="disabled",
+        ),
+    )
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        statuses,
+        run=_fake_run,
+        source_root=source_root,
+        proc_root=proc_root,
+    )
+
+    assert verdict is not None
+    assert verdict["head_commit_epoch"] == head_epoch
+    assert verdict["undetermined"] == []
+    # Only the pre-HEAD worker service is stale; the fresh workflow worker and
+    # the non-service engines target are not inspected as stale.
+    assert [entry["unit"] for entry in verdict["stale"]] == ["orca_auto-queue-worker@alice.service"]
+    assert verdict["stale"][0]["pid"] == 41
+    assert verdict["stale"][0]["started_epoch"] == head_epoch - 3600
+
+
+def test_collect_worker_staleness_skips_inactive_workers_and_reports_lost_pids(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "checkout"
+    (source_root / ".git").mkdir(parents=True)
+    proc_root = tmp_path / "proc"
+    _write_fake_proc(proc_root, boot_epoch=500_000, pid_start_epochs={})
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        if argv[0] == "git":
+            return subprocess.CompletedProcess(argv, 0, stdout="1000000\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="0\n", stderr="")
+
+    statuses = (
+        cli_systemd_status.ServiceUnitStatus(
+            label="worker",
+            unit="orca_auto-queue-worker@alice.service",
+            active="active",
+            enabled="enabled",
+        ),
+        cli_systemd_status.ServiceUnitStatus(
+            label="workflow",
+            unit="orca_auto-workflow-worker@alice.service",
+            active="inactive",
+            enabled="disabled",
+        ),
+    )
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        statuses,
+        run=_fake_run,
+        source_root=source_root,
+        proc_root=proc_root,
+    )
+
+    # The inactive workflow worker is not a running process to judge, while the
+    # active worker with no readable PID must surface instead of passing.
+    assert verdict is not None
+    assert verdict["stale"] == []
+    assert [entry["unit"] for entry in verdict["undetermined"]] == [
+        "orca_auto-queue-worker@alice.service"
+    ]
+    assert "no readable main PID" in verdict["undetermined"][0]["detail"]
+
+
+def test_collect_worker_staleness_returns_none_outside_a_git_checkout(tmp_path: Path) -> None:
+    source_root = tmp_path / "wheel-install"
+    source_root.mkdir()
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        (),
+        run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
+        source_root=source_root,
+        proc_root=tmp_path / "proc",
+    )
+
+    assert verdict is None
+
+
+def test_collect_worker_staleness_fails_closed_on_unreadable_history(tmp_path: Path) -> None:
+    source_root = tmp_path / "checkout"
+    (source_root / ".git").mkdir(parents=True)
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        assert argv[0] == "git"
+        return subprocess.CompletedProcess(argv, 128, stdout="", stderr="fatal: bad revision\n")
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        (),
+        run=_fake_run,
+        source_root=source_root,
+        proc_root=tmp_path / "proc",
+    )
+
+    assert verdict is not None
+    assert verdict["head_commit_epoch"] is None
+    assert verdict["stale"] == []
+    assert "cannot read HEAD commit" in verdict["undetermined"][0]["detail"]
+    assert "fatal: bad revision" in verdict["undetermined"][0]["detail"]
 
 
 def test_cmd_service_status_fails_when_systemctl_is_missing(capsys: Any) -> None:
@@ -1399,6 +1714,7 @@ def test_cmd_service_status_returns_failure_when_any_unit_failed(capsys: Any) ->
             run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
             installed_version_drift=lambda: None,
+            collect_worker_staleness=lambda statuses, run=None: None,
         ),
     )
 
@@ -1437,6 +1753,7 @@ def test_cmd_service_status_full_mode_rejects_any_non_active_required_unit(
                 collect_service_status=lambda target_user, run: statuses,
                 run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
                 which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+                collect_worker_staleness=lambda statuses, run=None: None,
             ),
         )
 
