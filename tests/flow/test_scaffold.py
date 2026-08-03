@@ -36,7 +36,11 @@ def test_cmd_scaffold_creates_reaction_workflow_scaffold(
     # The template writes the pair-expansion cap explicitly so a default
     # scaffold explores every 3x3 conformer pairing.
     assert manifest["max_xtb_stages"] == 9
-    assert "max_orca_stages" not in manifest
+    # The ORCA candidate budget is written out with its default so the cap is
+    # visible and adjustable: a TS8-shaped run (5 handed-off candidates,
+    # limit 3) silently dropped 2 candidates its operator expected to run.
+    assert manifest["max_orca_stages"] == 3
+    assert "# Total ORCA OptTS+Freq attempts." in flow_text
     assert "workflow_type: reaction_ts_search" in output
     assert "crest_mode: standard" in output
     assert "created_file: reactant.xyz" in output
