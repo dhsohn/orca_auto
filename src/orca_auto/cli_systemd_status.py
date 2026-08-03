@@ -3,11 +3,14 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from orca_auto import cli_style
@@ -152,6 +155,7 @@ def _service_status_payload(
     target_user: str,
     statuses: Sequence[ServiceUnitStatus],
     drift: tuple[str, str] | None = None,
+    staleness: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     mode = _selected_service_mode(statuses)
     required_labels = _required_service_labels(mode)
@@ -159,6 +163,7 @@ def _service_status_payload(
         "target_user": target_user,
         "mode": mode,
         "ok": _required_services_active(statuses, required_labels=required_labels),
+        "worker_staleness": staleness,
         "version_drift": (
             None
             if drift is None
@@ -224,6 +229,138 @@ def _required_services_active(
     return all(
         label in by_label and by_label[label].active == "active" for label in required_labels
     )
+
+
+_WORKER_PROCESS_LABELS = frozenset({"worker", "workflow"})
+
+
+def _unit_main_pid(
+    unit: str,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+) -> int:
+    try:
+        completed = run(
+            ["systemctl", "show", "--property=MainPID", "--value", unit],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except OSError:
+        return 0
+    try:
+        return int(_single_line_command_output(completed))
+    except ValueError:
+        return 0
+
+
+def _proc_boot_epoch(proc_root: Path) -> int:
+    for line in (proc_root / "stat").read_text(encoding="ascii").splitlines():
+        if line.startswith("btime "):
+            return int(line.split()[1])
+    raise ValueError(f"no btime line in {proc_root / 'stat'}")
+
+
+def _process_start_epoch(pid: int, *, proc_root: Path = Path("/proc")) -> float:
+    stat_text = (proc_root / str(pid) / "stat").read_text(encoding="ascii", errors="replace")
+    # The comm field may itself contain spaces and parentheses, so the numeric
+    # fields only split cleanly after the last ')'.
+    fields_after_comm = stat_text.rsplit(")", 1)[1].split()
+    start_ticks = int(fields_after_comm[19])  # starttime, field 22 of proc(5) stat
+    return _proc_boot_epoch(proc_root) + start_ticks / os.sysconf("SC_CLK_TCK")
+
+
+def _head_commit_epoch(
+    source_root: Path,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+) -> int:
+    completed = run(
+        ["git", "-C", str(source_root), "log", "-1", "--format=%ct"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise ValueError(
+            normalize_text(completed.stderr).splitlines()[0]
+            if normalize_text(completed.stderr)
+            else f"git log exited {completed.returncode}"
+        )
+    return int(_single_line_command_output(completed))
+
+
+def _epoch_iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def collect_worker_staleness(
+    statuses: Sequence[ServiceUnitStatus],
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+    source_root: Path | None = None,
+    proc_root: Path = Path("/proc"),
+) -> dict[str, Any] | None:
+    """Compare each active worker process against the checkout's HEAD commit.
+
+    The units import the checkout live (editable install) but never reload, so
+    a deploy that lands after a worker started leaves that process running a
+    torn mix of cached pre-deploy modules and freshly imported post-deploy
+    code. A worker whose process predates HEAD is reported stale; an active
+    worker whose process cannot be inspected is reported undetermined rather
+    than assumed fresh. Returns ``None`` when the source tree is not a git
+    checkout, which is the normal shape of a wheel install rather than a
+    verdict — mirroring ``installed_version_drift``.
+    """
+    root = source_root if source_root is not None else Path(__file__).resolve().parents[2]
+    if not (root / ".git").exists():
+        return None
+    try:
+        head_epoch = _head_commit_epoch(root, run=run)
+    except (OSError, ValueError, IndexError) as exc:
+        # A .git directory with an unreadable history is an anomaly, not a
+        # wheel install, so it cannot vouch for the workers.
+        return {
+            "head_commit_epoch": None,
+            "stale": [],
+            "undetermined": [
+                {"label": "", "unit": "", "detail": f"cannot read HEAD commit: {exc}"}
+            ],
+        }
+    stale: list[dict[str, Any]] = []
+    undetermined: list[dict[str, Any]] = []
+    for status in statuses:
+        if status.label not in _WORKER_PROCESS_LABELS or status.active != "active":
+            continue
+        pid = _unit_main_pid(status.unit, run=run)
+        if pid <= 0:
+            undetermined.append(
+                {"label": status.label, "unit": status.unit, "detail": "no readable main PID"}
+            )
+            continue
+        try:
+            started_epoch = _process_start_epoch(pid, proc_root=proc_root)
+        except (OSError, ValueError, IndexError) as exc:
+            undetermined.append(
+                {
+                    "label": status.label,
+                    "unit": status.unit,
+                    "detail": f"cannot read process start of pid {pid}: {exc}",
+                }
+            )
+            continue
+        if started_epoch < head_epoch:
+            stale.append(
+                {
+                    "label": status.label,
+                    "unit": status.unit,
+                    "pid": pid,
+                    "started_epoch": int(started_epoch),
+                }
+            )
+    return {"head_commit_epoch": head_epoch, "stale": stale, "undetermined": undetermined}
 
 
 def _systemctl_available(*, which: Callable[[str], str | None] = shutil.which) -> bool:
@@ -303,6 +440,7 @@ class ServiceCliDeps:
     collect_service_status: Callable[..., tuple[ServiceUnitStatus, ...]] | None = None
     restart_unit_for_user: Callable[..., str] | None = None
     installed_version_drift: Callable[[], tuple[str, str] | None] | None = None
+    collect_worker_staleness: Callable[..., dict[str, Any] | None] | None = None
 
 
 def _service_target_user(args: argparse.Namespace, deps: ServiceCliDeps) -> str:
@@ -325,7 +463,10 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceCliDeps | None 
         emit_error(exc)
         return 1
     drift = (deps.installed_version_drift or installed_version_drift)()
-    payload = _service_status_payload(target_user, statuses, drift)
+    staleness = (deps.collect_worker_staleness or collect_worker_staleness)(
+        statuses, run=deps.run or subprocess.run
+    )
+    payload = _service_status_payload(target_user, statuses, drift, staleness)
     if bool(getattr(args, "json", False)):
         print(json.dumps(payload, ensure_ascii=True, indent=2))
     else:
@@ -340,7 +481,25 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceCliDeps | None 
             f"{sys.executable} declares orca_auto {installed} but runs the source tree at {source}",
             hint=f"rerun `{sys.executable} -m pip install -e .`",
         )
-    return 0 if payload["ok"] and drift is None else 1
+    staleness_ok = staleness is None or not (staleness["stale"] or staleness["undetermined"])
+    if staleness is not None:
+        # Stale entries only exist once HEAD was read, so the epoch is present.
+        head_epoch = float(staleness["head_commit_epoch"] or 0)
+        for entry in staleness["stale"]:
+            emit_error(
+                f"{entry['unit']} (pid {entry['pid']}) started "
+                f"{_epoch_iso(entry['started_epoch'])}, before the checkout's HEAD commit "
+                f"{_epoch_iso(head_epoch)}; the process still runs pre-deploy code",
+                hint="restart the workers in an idle window: orca_auto service restart",
+            )
+        for entry in staleness["undetermined"]:
+            emit_error(
+                "cannot judge worker code freshness"
+                + (f" for {entry['unit']}" if entry["unit"] else "")
+                + f": {entry['detail']}",
+                hint="restart the workers in an idle window: orca_auto service restart",
+            )
+    return 0 if payload["ok"] and drift is None and staleness_ok else 1
 
 
 def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceCliDeps | None = None) -> int:
@@ -393,4 +552,5 @@ __all__ = [
     "cmd_service_restart",
     "cmd_service_status",
     "collect_service_status",
+    "collect_worker_staleness",
 ]
