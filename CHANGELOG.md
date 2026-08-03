@@ -45,6 +45,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   installed version and a stale (or uninspectable) worker process. Callers that
   treat any non-zero exit as a dead worker should read `version_drift` and
   `worker_staleness` to tell the cases apart.
+- The `reaction_ts_search` scaffold manifest now writes `max_orca_stages: 3`
+  explicitly, with a comment stating that it is a total attempt budget consumed
+  in xTB stage order. The default and the semantics are unchanged, but the knob
+  was previously invisible: a run that handed off five TS candidates silently
+  dropped the last two at the default limit, and nothing in the scaffolded
+  `flow.yaml` said such a limit existed.
 
 ### Fixed
 
