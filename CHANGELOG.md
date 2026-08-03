@@ -20,6 +20,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   undetermined workers, with unit, PID, and start time), writes a
   `service restart` hint to stderr, and exits non-zero. A source tree that is
   not a git checkout reports `worker_staleness: null` rather than a verdict.
+  The worker start time is systemd's `ExecMainStartTimestamp`, which snapshots
+  the real-time clock when the process forks; deriving it from
+  `/proc/<pid>/stat` ticks plus `btime` was tried first and gave a false fresh
+  verdict in the very deploy that shipped the gate — on WSL2 the wall clock is
+  stepped forward after host sleeps while the monotonic clock stands still, so
+  every `btime`-derived start time drifts forward past a HEAD it actually
+  predates.
 - `service status` compares the installed distribution metadata against the
   source tree the process imports and gates on a mismatch. An editable install
   freezes its metadata at install time, so a checkout that fast-forwards without

@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -255,20 +254,46 @@ def _unit_main_pid(
         return 0
 
 
-def _proc_boot_epoch(proc_root: Path) -> int:
-    for line in (proc_root / "stat").read_text(encoding="ascii").splitlines():
-        if line.startswith("btime "):
-            return int(line.split()[1])
-    raise ValueError(f"no btime line in {proc_root / 'stat'}")
+def _unit_start_epoch(
+    unit: str,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+) -> float:
+    """Epoch at which the unit's main process started, from systemd's record.
 
-
-def _process_start_epoch(pid: int, *, proc_root: Path = Path("/proc")) -> float:
-    stat_text = (proc_root / str(pid) / "stat").read_text(encoding="ascii", errors="replace")
-    # The comm field may itself contain spaces and parentheses, so the numeric
-    # fields only split cleanly after the last ')'.
-    fields_after_comm = stat_text.rsplit(")", 1)[1].split()
-    start_ticks = int(fields_after_comm[19])  # starttime, field 22 of proc(5) stat
-    return _proc_boot_epoch(proc_root) + start_ticks / os.sysconf("SC_CLK_TCK")
+    systemd snapshots CLOCK_REALTIME when it forks the main process, so the
+    value stays true after later clock steps. Deriving the start from
+    ``/proc/<pid>/stat`` ticks plus ``btime`` does not: ``btime`` is recomputed
+    from the current wall clock minus the monotonic uptime, and on WSL2 the
+    wall clock is stepped forward after host sleeps while the monotonic clock
+    stood still, which shifts every derived start time forward and can mask a
+    genuinely stale worker (observed live: +32 min).
+    """
+    try:
+        completed = run(
+            [
+                "systemctl",
+                "show",
+                "--property=ExecMainStartTimestamp",
+                "--value",
+                "--timestamp=utc",
+                unit,
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except OSError as exc:
+        raise ValueError(f"systemctl show failed: {exc}") from exc
+    value = _single_line_command_output(completed)
+    # "Mon 2026-08-03 09:33:12 UTC" — parse without the weekday token so the
+    # verdict does not depend on the CLI locale.
+    tokens = value.split()
+    if len(tokens) != 4 or tokens[3] != "UTC":
+        raise ValueError(f"unrecognized ExecMainStartTimestamp: {value!r}")
+    started = datetime.strptime(f"{tokens[1]} {tokens[2]}", "%Y-%m-%d %H:%M:%S")
+    return started.replace(tzinfo=UTC).timestamp()
 
 
 def _head_commit_epoch(
@@ -301,18 +326,17 @@ def collect_worker_staleness(
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
     source_root: Path | None = None,
-    proc_root: Path = Path("/proc"),
 ) -> dict[str, Any] | None:
     """Compare each active worker process against the checkout's HEAD commit.
 
     The units import the checkout live (editable install) but never reload, so
     a deploy that lands after a worker started leaves that process running a
     torn mix of cached pre-deploy modules and freshly imported post-deploy
-    code. A worker whose process predates HEAD is reported stale; an active
-    worker whose process cannot be inspected is reported undetermined rather
-    than assumed fresh. Returns ``None`` when the source tree is not a git
-    checkout, which is the normal shape of a wheel install rather than a
-    verdict — mirroring ``installed_version_drift``.
+    code. A worker whose systemd-recorded start predates HEAD is reported
+    stale; an active worker whose start cannot be read is reported
+    undetermined rather than assumed fresh. Returns ``None`` when the source
+    tree is not a git checkout, which is the normal shape of a wheel install
+    rather than a verdict — mirroring ``installed_version_drift``.
     """
     root = source_root if source_root is not None else Path(__file__).resolve().parents[2]
     if not (root / ".git").exists():
@@ -334,20 +358,14 @@ def collect_worker_staleness(
     for status in statuses:
         if status.label not in _WORKER_PROCESS_LABELS or status.active != "active":
             continue
-        pid = _unit_main_pid(status.unit, run=run)
-        if pid <= 0:
-            undetermined.append(
-                {"label": status.label, "unit": status.unit, "detail": "no readable main PID"}
-            )
-            continue
         try:
-            started_epoch = _process_start_epoch(pid, proc_root=proc_root)
-        except (OSError, ValueError, IndexError) as exc:
+            started_epoch = _unit_start_epoch(status.unit, run=run)
+        except ValueError as exc:
             undetermined.append(
                 {
                     "label": status.label,
                     "unit": status.unit,
-                    "detail": f"cannot read process start of pid {pid}: {exc}",
+                    "detail": f"cannot read unit start time: {exc}",
                 }
             )
             continue
@@ -356,7 +374,7 @@ def collect_worker_staleness(
                 {
                     "label": status.label,
                     "unit": status.unit,
-                    "pid": pid,
+                    "pid": _unit_main_pid(status.unit, run=run),
                     "started_epoch": int(started_epoch),
                 }
             )
