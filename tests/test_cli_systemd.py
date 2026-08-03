@@ -941,34 +941,17 @@ def test_cmd_service_status_consults_the_real_staleness_collector_by_default(
     assert json.loads(capsys.readouterr().out)["worker_staleness"] == verdict
 
 
-def _write_fake_proc(proc_root: Path, *, boot_epoch: int, pid_start_epochs: dict[int, int]) -> None:
-    ticks_per_sec = os.sysconf("SC_CLK_TCK")
-    proc_root.mkdir()
-    (proc_root / "stat").write_text(f"cpu 0 0 0 0\nbtime {boot_epoch}\n", encoding="ascii")
-    for pid, start_epoch in pid_start_epochs.items():
-        start_ticks = (start_epoch - boot_epoch) * ticks_per_sec
-        pid_dir = proc_root / str(pid)
-        pid_dir.mkdir()
-        # The comm field carries a space and parentheses on purpose: fields only
-        # split cleanly after the last ')'. After comm the first token is the
-        # state (field 3), so starttime (field 22) is 19 tokens later.
-        (pid_dir / "stat").write_text(
-            f"{pid} (queue (work) er) S " + " ".join(["0"] * 18) + f" {start_ticks}\n",
-            encoding="ascii",
-        )
-
-
 def test_collect_worker_staleness_flags_workers_started_before_head(tmp_path: Path) -> None:
-    head_epoch = 1_000_000
+    # 2026-08-03 09:02:30 UTC; the stale worker's systemd record predates it by
+    # an hour and the fresh one follows it by an hour.
+    head_epoch = 1_785_747_750
     source_root = tmp_path / "checkout"
     (source_root / ".git").mkdir(parents=True)
-    proc_root = tmp_path / "proc"
-    _write_fake_proc(
-        proc_root,
-        boot_epoch=500_000,
-        pid_start_epochs={41: head_epoch - 3600, 42: head_epoch + 3600},
-    )
-    pids = {
+    start_stamps = {
+        "orca_auto-queue-worker@alice.service": "Mon 2026-08-03 08:02:30 UTC",
+        "orca_auto-workflow-worker@alice.service": "Mon 2026-08-03 10:02:30 UTC",
+    }
+    main_pids = {
         "orca_auto-queue-worker@alice.service": "41",
         "orca_auto-workflow-worker@alice.service": "42",
     }
@@ -984,8 +967,13 @@ def test_collect_worker_staleness_flags_workers_started_before_head(tmp_path: Pa
         if argv[0] == "git":
             assert argv[1:3] == ["-C", str(source_root)]
             return subprocess.CompletedProcess(argv, 0, stdout=f"{head_epoch}\n", stderr="")
+        if argv[:4] == ["systemctl", "show", "--property=ExecMainStartTimestamp", "--value"]:
+            assert argv[4] == "--timestamp=utc"
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=f"{start_stamps[argv[5]]}\n", stderr=""
+            )
         assert argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]
-        return subprocess.CompletedProcess(argv, 0, stdout=f"{pids[argv[4]]}\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout=f"{main_pids[argv[4]]}\n", stderr="")
 
     statuses = (
         cli_systemd_status.ServiceUnitStatus(
@@ -1012,7 +1000,6 @@ def test_collect_worker_staleness_flags_workers_started_before_head(tmp_path: Pa
         statuses,
         run=_fake_run,
         source_root=source_root,
-        proc_root=proc_root,
     )
 
     assert verdict is not None
@@ -1025,13 +1012,11 @@ def test_collect_worker_staleness_flags_workers_started_before_head(tmp_path: Pa
     assert verdict["stale"][0]["started_epoch"] == head_epoch - 3600
 
 
-def test_collect_worker_staleness_skips_inactive_workers_and_reports_lost_pids(
+def test_collect_worker_staleness_skips_inactive_workers_and_reports_unreadable_starts(
     tmp_path: Path,
 ) -> None:
     source_root = tmp_path / "checkout"
     (source_root / ".git").mkdir(parents=True)
-    proc_root = tmp_path / "proc"
-    _write_fake_proc(proc_root, boot_epoch=500_000, pid_start_epochs={})
 
     def _fake_run(
         argv: list[str],
@@ -1043,7 +1028,9 @@ def test_collect_worker_staleness_skips_inactive_workers_and_reports_lost_pids(
         del check, stdout, stderr, text
         if argv[0] == "git":
             return subprocess.CompletedProcess(argv, 0, stdout="1000000\n", stderr="")
-        return subprocess.CompletedProcess(argv, 0, stdout="0\n", stderr="")
+        # An empty ExecMainStartTimestamp is what systemd reports when it has
+        # no start record to offer.
+        return subprocess.CompletedProcess(argv, 0, stdout="\n", stderr="")
 
     statuses = (
         cli_systemd_status.ServiceUnitStatus(
@@ -1064,17 +1051,16 @@ def test_collect_worker_staleness_skips_inactive_workers_and_reports_lost_pids(
         statuses,
         run=_fake_run,
         source_root=source_root,
-        proc_root=proc_root,
     )
 
     # The inactive workflow worker is not a running process to judge, while the
-    # active worker with no readable PID must surface instead of passing.
+    # active worker with no readable start record must surface instead of passing.
     assert verdict is not None
     assert verdict["stale"] == []
     assert [entry["unit"] for entry in verdict["undetermined"]] == [
         "orca_auto-queue-worker@alice.service"
     ]
-    assert "no readable main PID" in verdict["undetermined"][0]["detail"]
+    assert "cannot read unit start time" in verdict["undetermined"][0]["detail"]
 
 
 def test_collect_worker_staleness_returns_none_outside_a_git_checkout(tmp_path: Path) -> None:
@@ -1085,7 +1071,6 @@ def test_collect_worker_staleness_returns_none_outside_a_git_checkout(tmp_path: 
         (),
         run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
         source_root=source_root,
-        proc_root=tmp_path / "proc",
     )
 
     assert verdict is None
@@ -1110,7 +1095,6 @@ def test_collect_worker_staleness_fails_closed_on_unreadable_history(tmp_path: P
         (),
         run=_fake_run,
         source_root=source_root,
-        proc_root=tmp_path / "proc",
     )
 
     assert verdict is not None
