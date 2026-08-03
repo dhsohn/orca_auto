@@ -447,7 +447,9 @@ stage 상한까지 배치합니다.
 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은
 **오직** `<runs root>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`,
 `03_orca`) 아래에만 존재합니다. 이들은 공개 CLI 표면의 일부가 아니며, 사용자는
-워크플로우 `run-dir`을 통해 제출합니다.
+워크플로우 `run-dir`을 통해 제출합니다. ORCA 전용 `scan_ts_search` 템플릿은 엔진
+루트를 쓰지 않습니다: ORCA 스테이지가 워크스페이스 바로 아래 워크플로우 순번
+디렉터리(`01_scan`, `02_scan_maximum`, …)로 생성됩니다.
 
 이들의 종료 control-plane metadata는 durable 원본 `job_state.json` 하나만 사용합니다. 내부
 worker, repair 경로, index, adapter, workflow report가 이 상태를 직접 소비하며 중복 JSON이나

@@ -594,7 +594,10 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
   단일 출력 XYZ의 materialization 상한은 512 MiB이며, 더 큰 출력 ensemble은 제한 없이
   메모리에 올리지 않고 fail-closed합니다.
 - 내부 엔진 큐와 출력은 `<runs root>/<workflow_id>/01_crest`, `02_xtb`, `03_orca` 같은
-  워크플로우 단계 디렉터리 아래에 있습니다.
+  워크플로우 단계 디렉터리 아래에 있습니다. `scan_ts_search`는 ORCA 전용이라 엔진
+  루트를 쓰지 않습니다: 단계들이 워크스페이스 바로 아래에 워크플로우 순번 디렉터리
+  (`01_scan`, `02_scan_maximum`, …)로 생성되고, 소스 지오메트리의 `inputs/` 사본도
+  만들지 않습니다 — 지오메트리는 첫 스캔 단계로 바로 materialize됩니다.
 
 워크플로우와 stage 상태는 가능한 경우 공용 상태 어휘를 사용합니다:
 

@@ -89,6 +89,12 @@ def test_scan_ts_workflow_completes_fake_orca_lifecycle(
     assert all(stage["status"] == "completed" for stage in stages)
     job_dirs = orca_job_directories(payload)
     assert len(job_dirs) == 2
+    # scan_ts_search stages sit directly under the workspace as workflow-ordered
+    # directories: no 03_orca engine root and no inputs/ copy of the geometry.
+    assert job_dirs[0] == workspace_dir / "01_scan"
+    assert job_dirs[1] == workspace_dir / "02_scan_maximum"
+    assert not (workspace_dir / "03_orca").exists()
+    assert not (workspace_dir / "inputs").exists()
     assert_orca_job_publications(job_dirs[0], expected_status="completed", expect_si=False)
     optts_state = assert_orca_job_publications(
         job_dirs[1], expected_status="completed", expect_si=True
