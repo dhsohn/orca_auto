@@ -39,7 +39,6 @@ from orca_auto.flow.contracts.workflow import workflow_request_parameters
 from orca_auto.flow.orchestration.charge_spin import strict_int
 from orca_auto.flow.orchestration.support import required_stage_budget
 from orca_auto.flow.orchestration.template_builders import scan_geom_block
-from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 from orca_auto.orca.scants import (
     ScanCoordinateSpec,
     ScanTSSurfacePoint,
@@ -65,6 +64,15 @@ def _stage_dicts(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(stages, list):
         return []
     return [stage for stage in stages if isinstance(stage, dict)]
+
+
+def _next_stage_key(payload: dict[str, Any], kind: str) -> str:
+    """Workflow-ordered stage directory name: 01_scan, 02_scan_maximum, ...
+
+    scan_ts_search stages live directly under the workspace (no engine root),
+    so the key numbering runs across the whole workflow in creation order.
+    """
+    return f"{len(_stage_dicts(payload)) + 1:02d}_{kind}"
 
 
 def _stage_status(stage: dict[str, Any]) -> str:
@@ -253,7 +261,6 @@ def _append_optts_candidate_stages(
     candidates: list[tuple[dict[str, Any], Path, int, float]],
     direction: str,
 ) -> None:
-    orca_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="orca")
     workflow_id = normalize_text(payload.get("workflow_id"))
     reaction_key = normalize_text(payload.get("reaction_key"))
     route_line = normalize_text(parameters.get("orca_optts_route_line")) or (
@@ -287,9 +294,9 @@ def _append_optts_candidate_stages(
             workflow_id=workflow_id,
             template_name="scan_ts_search",
             stage_id=f"{_OPTTS_STAGE_PREFIX}{stage_number:02d}",
-            stage_key=f"{stage_number:02d}_scan_maximum",
+            stage_key=_next_stage_key(payload, "scan_maximum"),
             stage_root_name="",
-            workspace_dir=orca_paths["allowed_root"],
+            workspace_dir=workspace_dir,
             input_artifact_kind="scan_maximum",
             candidate=candidate,
             task_kind="optts_freq",
@@ -313,12 +320,11 @@ def _append_scan_stage(
     workspace_dir: Path,
     parameters: dict[str, Any],
     stage_id: str,
-    stage_key: str,
+    stage_kind: str,
     spec: ScanCoordinateSpec,
     direction: str,
     start_xyz: Path,
 ) -> None:
-    orca_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="orca")
     scan_coordinate = format_scan_coordinate(spec)
     candidate = WorkflowStageInput(
         source_job_id="",
@@ -336,9 +342,9 @@ def _append_scan_stage(
         workflow_id=normalize_text(payload.get("workflow_id")),
         template_name="scan_ts_search",
         stage_id=stage_id,
-        stage_key=stage_key,
+        stage_key=_next_stage_key(payload, stage_kind),
         stage_root_name="",
-        workspace_dir=orca_paths["allowed_root"],
+        workspace_dir=workspace_dir,
         input_artifact_kind="scan_endpoint",
         candidate=candidate,
         task_kind="relaxed_scan",
@@ -449,7 +455,7 @@ def _advance_forward(
                 workspace_dir=workspace_dir,
                 parameters=parameters,
                 stage_id=f"{_FORWARD_SCAN_STAGE_PREFIX}{next_index:02d}",
-                stage_key=f"{next_index:02d}_scan_extension",
+                stage_kind="scan_extension",
                 spec=extension,
                 direction="forward",
                 start_xyz=endpoint_xyz,
@@ -499,7 +505,7 @@ def _advance_reverse(
             workspace_dir=workspace_dir,
             parameters=parameters,
             stage_id=REVERSE_SCAN_STAGE_ID,
-            stage_key="01_scan_reverse",
+            stage_kind="scan_reverse",
             spec=reverse,
             direction="reverse",
             start_xyz=endpoint_xyz,

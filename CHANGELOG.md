@@ -8,6 +8,20 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Changed
+
+- `scan_ts_search` generations now materialize their ORCA stages directly
+  under the generation workspace as workflow-ordered directories (`01_scan`,
+  then `02_scan_maximum`/`02_scan_extension`, ... in creation order) instead
+  of nesting them under a `03_orca` engine root, and no longer keep an
+  `inputs/` copy of the source geometry — the scan stage materializes it
+  straight from the scaffold source. The engine-numbered root encodes the
+  crest → xtb → orca pipeline order, which carries no information in an
+  ORCA-only template, and the `inputs/` copy was a leftover of the conformer
+  builder this template reused: the geometry existed three times per
+  generation. Existing generations keep their old layout and remain valid;
+  ORCA queue entries live in the shared runs-root queue either way.
+
 ### Added
 
 - `service status` compares each active worker process against the checkout's

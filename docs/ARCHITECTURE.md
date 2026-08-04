@@ -476,6 +476,9 @@ Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs
 live **only** under `<runs root>/<workflow_id>/<NN_engine>` (`01_crest`,
 `02_xtb`, `03_orca`). They are not
 part of the public CLI surface; users submit them through workflow `run-dir`.
+The ORCA-only `scan_ts_search` template uses no engine root: its ORCA stages
+are workflow-ordered directories directly under the workspace (`01_scan`,
+`02_scan_maximum`, ...).
 
 Their terminal control-plane metadata has one durable source: `job_state.json`.
 The internal workers, repair path, index, adapters, and workflow report consume

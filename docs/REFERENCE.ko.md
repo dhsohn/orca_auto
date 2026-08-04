@@ -291,7 +291,11 @@ ORCA 고유 노트:
   실패합니다. 정방향 후보가 전부 TS 검증에 실패하면 정방향 끝점 지오메트리에서
   전체 범위를 되짚는 역방향 scan 스테이지가 붙고 그 내부 maximum들이 2차
   후보로 fan-out됩니다. 그것까지 소진되면 `ts_candidates_exhausted`로
-  실패합니다. 스캐폴드 단축 명령은 `orca_auto scaffold scan_ts <path>`입니다.
+  실패합니다. ORCA 전용 템플릿이라 스테이지들은 `03_orca` 엔진 루트 없이
+  generation 워크스페이스 바로 아래에 워크플로우 순번 디렉터리(`01_scan`,
+  이후 생성 순서대로 `02_scan_maximum`/`02_scan_extension`, …)로 생성되고,
+  소스 지오메트리의 `inputs/` 사본도 만들지 않습니다. 스캐폴드 단축 명령은
+  `orca_auto scaffold scan_ts <path>`입니다.
 - 워크플로우가 advance될 때마다 워크스페이스에 `workflow_report.html`을 다시
   씁니다: 스테이지 체인, CREST → (xTB) → ORCA 깔때기 요약, ORCA 결과 순위표
   (상대 에너지, 허수 진동수, 개별 작업 `job_report.html` 링크)를 담은 단일 파일

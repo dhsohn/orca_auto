@@ -337,7 +337,7 @@ def _copy_reaction_inputs(
 
 
 def _copy_conformer_input(
-    request: ConformerScreeningWorkflowRequest | ScanTsSearchWorkflowRequest,
+    request: ConformerScreeningWorkflowRequest,
     workspace: _WorkflowWorkspace,
     context: WorkflowCreationContext,
 ) -> _ConformerWorkflowInput:
@@ -348,6 +348,23 @@ def _copy_conformer_input(
     return _ConformerWorkflowInput(
         input_xyz=copied_input,
         reaction_key=Path(copied_input).stem,
+    )
+
+
+def _resolved_scan_ts_input(request: ScanTsSearchWorkflowRequest) -> _ConformerWorkflowInput:
+    """Validate the scan input in place — no workspace ``inputs/`` copy.
+
+    scan_ts_search materializes the geometry straight into its first ORCA
+    stage at creation time, so an intermediate workspace copy would only
+    duplicate the scaffold source.
+    """
+    src = Path(request.input_xyz).expanduser().resolve()
+    if not src.exists():
+        raise FileNotFoundError(f"Input XYZ not found: {src}")
+    validated_xyz_atom_count(src)
+    return _ConformerWorkflowInput(
+        input_xyz=str(src),
+        reaction_key=src.stem,
     )
 
 
@@ -375,6 +392,7 @@ __all__ = [
     "_copy_conformer_input",
     "_copy_input_impl",
     "_copy_reaction_inputs",
+    "_resolved_scan_ts_input",
     "_cleanup_reserved_workflow_workspace",
     "_ensure_new_workflow_workspace",
     "_merge_manifest_defaults",

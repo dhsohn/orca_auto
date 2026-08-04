@@ -28,7 +28,6 @@ from orca_auto.flow.orchestration.workflow_builders import (
     _ReactionWorkflowInputs,
     _WorkflowWorkspace,
 )
-from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 
 
 def scan_geom_block(scan_coordinate: str) -> str:
@@ -268,17 +267,18 @@ def _conformer_template_build(
 def _scan_ts_scan_stage(
     request: ScanTsSearchWorkflowRequest,
     workspace: _WorkflowWorkspace,
-    copied_input: _ConformerWorkflowInput,
+    source_input: _ConformerWorkflowInput,
 ) -> WorkflowStagePayload:
-    orca_paths = workflow_workspace_internal_engine_paths(workspace.workspace_dir, engine="orca")
+    # scan_ts_search is ORCA-only: stages live directly under the workspace as
+    # workflow-ordered directories (01_scan, 02_..., ...) with no engine root.
     candidate = WorkflowStageInput(
         source_job_id="",
         source_job_type="raw_xyz",
-        reaction_key=copied_input.reaction_key,
-        selected_input_xyz=copied_input.input_xyz,
+        reaction_key=source_input.reaction_key,
+        selected_input_xyz=source_input.input_xyz,
         rank=1,
         kind="scan_input",
-        artifact_path=copied_input.input_xyz,
+        artifact_path=source_input.input_xyz,
         selected=True,
         score=0.0,
         metadata={"input_role": "molecule"},
@@ -289,7 +289,7 @@ def _scan_ts_scan_stage(
         stage_id="orca_scan_01",
         stage_key="01_scan",
         stage_root_name="",
-        workspace_dir=orca_paths["allowed_root"],
+        workspace_dir=workspace.workspace_dir,
         input_artifact_kind="input_xyz",
         candidate=candidate,
         task_kind="relaxed_scan",
@@ -318,14 +318,14 @@ def _scan_ts_scan_stage(
 def _scan_ts_template_request(
     request: ScanTsSearchWorkflowRequest,
     workspace: _WorkflowWorkspace,
-    copied_input: _ConformerWorkflowInput,
+    source_input: _ConformerWorkflowInput,
 ) -> WorkflowTemplateRequest:
     return WorkflowTemplateRequest(
         workflow_id=workspace.workflow_id,
         template_name="scan_ts_search",
         source_job_id="",
         source_job_type="raw_xyz",
-        reaction_key=copied_input.reaction_key,
+        reaction_key=source_input.reaction_key,
         status="planned",
         requested_at=workspace.requested_at,
         parameters={
@@ -342,7 +342,7 @@ def _scan_ts_template_request(
             "multiplicity": strict_int(request.multiplicity, field="multiplicity", minimum=1),
         },
         source_artifacts=(
-            WorkflowArtifactRef(kind="input_xyz", path=copied_input.input_xyz, selected=True),
+            WorkflowArtifactRef(kind="input_xyz", path=source_input.input_xyz, selected=True),
         ),
     )
 
@@ -350,11 +350,11 @@ def _scan_ts_template_request(
 def _scan_ts_template_build(
     request: ScanTsSearchWorkflowRequest,
     workspace: _WorkflowWorkspace,
-    copied_input: _ConformerWorkflowInput,
+    source_input: _ConformerWorkflowInput,
 ) -> _WorkflowTemplateBuild:
     return _WorkflowTemplateBuild(
-        request=_scan_ts_template_request(request, workspace, copied_input),
-        stages=[_scan_ts_scan_stage(request, workspace, copied_input)],
+        request=_scan_ts_template_request(request, workspace, source_input),
+        stages=[_scan_ts_scan_stage(request, workspace, source_input)],
     )
 
 

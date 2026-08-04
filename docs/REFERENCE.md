@@ -292,8 +292,11 @@ Workflow notes:
   finishes without verifying a TS, a reverse scan stage walks the full range
   back from the forward endpoint geometry and its interior maxima fan out as a
   second candidate batch; only when those are exhausted too does the workflow
-  fail with `ts_candidates_exhausted`. The scaffold shortcut is
-  `orca_auto scaffold scan_ts <path>`.
+  fail with `ts_candidates_exhausted`. Being ORCA-only, its stages live
+  directly under the generation workspace as workflow-ordered directories
+  (`01_scan`, then `02_scan_maximum`/`02_scan_extension`, ... in creation
+  order) with no `03_orca` engine root and no `inputs/` copy of the source
+  geometry. The scaffold shortcut is `orca_auto scaffold scan_ts <path>`.
 - Every workflow advance rewrites `workflow_report.html` in the workflow
   workspace: a self-contained visual summary with the stage chain, the
   CREST → (xTB) → ORCA funnel, and a ranked ORCA results table (relative

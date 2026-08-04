@@ -22,6 +22,7 @@ from orca_auto.flow.orchestration.workflow_builders import (
     _merge_manifest_defaults,
     _persist_workflow,
     _persistence_context,
+    _resolved_scan_ts_input,
     _resolved_source_inputs,
     _validate_reaction_atom_sequence,
     _workflow_workspace,
@@ -106,8 +107,8 @@ def create_scan_ts_search_workflow_impl(
         context=context,
     )
     try:
-        copied_input = _copy_conformer_input(request, workspace, context)
-        template_build = _scan_ts_template_build(request, workspace, copied_input)
+        source_input = _resolved_scan_ts_input(request)
+        template_build = _scan_ts_template_build(request, workspace, source_input)
         return _persist_workflow(
             persistence_context=_persistence_context(workspace, template_build.request),
             request=template_build.request,

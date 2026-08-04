@@ -69,6 +69,15 @@ def test_creation_materializes_scan_stage_with_geom_block(tmp_path: Path) -> Non
     stage = payload["stages"][0]
     assert stage["stage_id"] == "orca_scan_01"
     assert stage["task"]["payload"]["task_kind"] == "relaxed_scan"
+    # ORCA-only template: stages sit directly under the workspace as
+    # workflow-ordered directories, with no engine root and no inputs/ copy.
+    workspace = tmp_path / "root" / "wf_scan_ts_test"
+    assert Path(stage["task"]["payload"]["reaction_dir"]) == workspace / "01_scan"
+    assert not (workspace / "03_orca").exists()
+    assert not (workspace / "inputs").exists()
+    assert payload["metadata"]["request"]["source_artifacts"][0]["path"] == str(
+        (tmp_path / "input.xyz").resolve()
+    )
     inp_text = Path(stage["task"]["payload"]["selected_inp"]).read_text(encoding="utf-8")
     assert "! Opt r2scan-3c TightSCF" in inp_text
     assert "%geom" in inp_text
@@ -100,6 +109,11 @@ def test_completed_scan_fans_out_ranked_optts_candidates(tmp_path: Path) -> None
     assert created
     optts = payload["stages"][1:]
     assert [stage["stage_id"] for stage in optts] == ["orca_optts_freq_01", "orca_optts_freq_02"]
+    # Candidate stages continue the workflow-ordered top-level numbering.
+    assert [Path(stage["task"]["payload"]["reaction_dir"]) for stage in optts] == [
+        workspace / "02_scan_maximum",
+        workspace / "03_scan_maximum",
+    ]
     first_meta = optts[0]["input_artifacts"][0]["metadata"]
     second_meta = optts[1]["input_artifacts"][0]["metadata"]
     # Ranked by prominence; surface point indices 2 and 4, endpoint 6 excluded.
@@ -168,6 +182,7 @@ def test_barrierless_scan_extends_then_finds_barrier_in_extension(tmp_path: Path
     assert created
     extension = payload["stages"][1]
     assert extension["stage_id"] == "orca_scan_02"
+    assert Path(extension["task"]["payload"]["reaction_dir"]) == workspace / "02_scan_extension"
     assert extension["metadata"]["scan_direction"] == "forward"
     assert extension["metadata"]["workflow_fatal"] is True
     # Original spec "B 0 1 = 1.20, 3.00, 10" -> step 0.2, extension of
@@ -223,6 +238,7 @@ def test_failed_forward_candidates_trigger_reverse_scan_and_fanout(tmp_path: Pat
     # walking the full range back from the forward endpoint.
     assert append_scan_optts_stages_impl(payload, workspace_dir=workspace)
     reverse = next(s for s in payload["stages"] if s["stage_id"] == "orca_scan_reverse_01")
+    assert Path(reverse["task"]["payload"]["reaction_dir"]) == workspace / "04_scan_reverse"
     assert reverse["metadata"]["scan_direction"] == "reverse"
     assert reverse["metadata"]["workflow_fatal"] is True
     assert reverse["metadata"]["scan_coordinate"] == "B 0 1 = 3, 1.2, 10"

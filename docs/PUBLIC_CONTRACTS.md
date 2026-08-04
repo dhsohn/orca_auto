@@ -658,6 +658,10 @@ Workflow runtime artifacts:
   loaded without a bound.
 - Internal engine queues and outputs live under workflow stage directories such
   as `<runs root>/<workflow_id>/01_crest`, `02_xtb`, and `03_orca`.
+  `scan_ts_search` is ORCA-only and uses no engine root: its stages are
+  workflow-ordered directories directly under the workspace (`01_scan`,
+  `02_scan_maximum`, ...), and no `inputs/` copy of the source geometry is
+  kept — the geometry is materialized straight into the first scan stage.
 
 Workflow and stage statuses use the shared status vocabulary where applicable:
 
