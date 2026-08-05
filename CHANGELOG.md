@@ -15,8 +15,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   on the deploy host, so a worker kept serving pre-deploy code while the
   command reported success — and the opt-in workflow worker belongs to no
   target at all, which made it unreachable through the very command
-  `service status` names when it reports that worker as stale. A workflow
-  worker that is not running stays stopped; supervision remains opt-in.
+  `service status` names when it reports that worker as stale. The workflow
+  worker is included once it is running, starting up, or failed — a crash loop
+  is where a bad deploy leaves it, and clearing its start limit is what the
+  command is for. One that is stopped or stopping stays that way, and an
+  unreadable state now changes nothing and exits non-zero rather than
+  reporting a restart that did not happen. Two consequences worth planning
+  for: the command now ends in-flight ORCA work, so run it in an idle window,
+  and a worker whose restart fails is left stopped instead of running stale
+  code.
 - `service status` and `service restart` now resolve the account behind `sudo`
   instead of reporting root. Both commands act on system units, so operators
   run them through `sudo`, where `getpass.getuser()` returned root and every

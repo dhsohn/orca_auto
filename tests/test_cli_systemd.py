@@ -1468,9 +1468,11 @@ def test_cmd_service_restart_restarts_a_running_workflow_worker() -> None:
     assert ("systemctl", "restart", "orca_auto-workflow-worker@alice.service") in commands
 
 
-def test_cmd_service_restart_leaves_a_stopped_workflow_worker_stopped() -> None:
-    """Workflow supervision is opt-in: a restart must not start it for you."""
-
+def _service_restart_with_workflow_state(
+    workflow_state: str,
+    *,
+    workflow_returncode: int = 0,
+) -> tuple[int, list[tuple[str, ...]]]:
     commands: list[tuple[str, ...]] = []
 
     def _fake_run(
@@ -1487,7 +1489,9 @@ def test_cmd_service_restart_leaves_a_stopped_workflow_worker_stopped() -> None:
         if argv[1] == "is-enabled":
             return subprocess.CompletedProcess(argv, 0, stdout="enabled\n", stderr="")
         if argv[1] == "is-active":
-            return subprocess.CompletedProcess(argv, 3, stdout="inactive\n", stderr="")
+            return subprocess.CompletedProcess(
+                argv, workflow_returncode, stdout=f"{workflow_state}\n", stderr=""
+            )
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
     result = cli_systemd_status.cmd_service_restart(
@@ -1498,6 +1502,31 @@ def test_cmd_service_restart_leaves_a_stopped_workflow_worker_stopped() -> None:
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
         ),
     )
+    return result, commands
+
+
+@pytest.mark.parametrize("workflow_state", ["failed", "activating", "reloading"])
+def test_cmd_service_restart_recovers_a_broken_workflow_worker(workflow_state: str) -> None:
+    """A crash loop is exactly where a bad deploy leaves the opt-in worker.
+
+    `Restart=on-failure` with a start limit parks it in activating, then
+    failed. Skipping those states would report success while the unit the
+    operator was told to restart keeps running pre-deploy code -- and its
+    tripped start limit would never be cleared.
+    """
+
+    result, commands = _service_restart_with_workflow_state(workflow_state)
+
+    assert result == 0
+    assert ("systemctl", "reset-failed", "orca_auto-workflow-worker@alice.service") in commands
+    assert ("systemctl", "restart", "orca_auto-workflow-worker@alice.service") in commands
+
+
+@pytest.mark.parametrize("workflow_state", ["inactive", "deactivating", "unknown"])
+def test_cmd_service_restart_leaves_a_stopped_workflow_worker_alone(workflow_state: str) -> None:
+    """Supervision is opt-in, and a stop in flight is the operator's decision."""
+
+    result, commands = _service_restart_with_workflow_state(workflow_state)
 
     assert result == 0
     assert not any(
@@ -1505,6 +1534,21 @@ def test_cmd_service_restart_leaves_a_stopped_workflow_worker_stopped() -> None:
         and command[1] in {"restart", "start", "reset-failed"}
         for command in commands
     )
+
+
+def test_cmd_service_restart_stops_when_the_workflow_state_is_unreadable(capsys: Any) -> None:
+    """An unreadable state must not be reported as a clean restart."""
+
+    result, commands = _service_restart_with_workflow_state(
+        "Failed to connect to bus: No such file or directory",
+        workflow_returncode=1,
+    )
+
+    assert result == 1
+    assert not any(command[1] in {"restart", "reset-failed"} for command in commands), (
+        "nothing may be mutated once the workflow worker's state is unknown"
+    )
+    assert "cannot tell whether" in capsys.readouterr().err
 
 
 def test_default_service_user_resolves_the_account_behind_sudo(

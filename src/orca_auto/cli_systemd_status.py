@@ -417,6 +417,15 @@ def _workflow_worker_unit_for_user(target_user: str) -> str:
     return f"orca_auto-workflow-worker@{target_user}.service"
 
 
+# A unit reaches any of these only because someone started it, so restarting it
+# honors the opt-in rather than overriding it -- including out of the crash loop
+# and tripped start limit a bad deploy leaves behind, which is the state the
+# restart exists to clear.
+_WORKFLOW_RUNNING_STATES = frozenset({"active", "activating", "reloading", "failed"})
+# Stopped, or being stopped by the operator right now: leave it alone.
+_WORKFLOW_STOPPED_STATES = frozenset({"inactive", "deactivating", "unknown", ""})
+
+
 def _restartable_worker_units(
     target_user: str,
     *,
@@ -424,15 +433,22 @@ def _restartable_worker_units(
 ) -> tuple[str, ...]:
     """Worker services a restart must reload code in, in restart order.
 
-    The workflow worker is opt-in and belongs to no target, so it is restarted
-    only when it is already running; starting an inactive one would opt the
-    operator in behind their back.
+    The workflow worker is opt-in and belongs to no target, so no target restart
+    reaches it. It joins the list once it is running, and is never started from
+    a stopped state. An unreadable state is not a licence to guess: skipping it
+    would report success over a worker still running pre-deploy code.
     """
 
     units = [_worker_unit_for_user(target_user)]
     workflow_unit = _workflow_worker_unit_for_user(target_user)
-    if _query_systemctl("is-active", workflow_unit, run=run) == "active":
+    state = _query_systemctl("is-active", workflow_unit, run=run)
+    if state in _WORKFLOW_RUNNING_STATES:
         units.append(workflow_unit)
+    elif state not in _WORKFLOW_STOPPED_STATES:
+        raise ValueError(
+            f"cannot tell whether {workflow_unit} is running; systemctl answered "
+            f"{state!r}. Restart it yourself, or rerun once systemctl responds."
+        )
     return tuple(units)
 
 
@@ -573,11 +589,11 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceCliDeps | None
     target_user = _service_target_user(args, deps)
     try:
         unit = restart_unit_for_user(target_user, run=run)
+        worker_units = _restartable_worker_units(target_user, run=run)
     except ValueError as exc:
         emit_error(exc)
         return 1
 
-    worker_units = _restartable_worker_units(target_user, run=run)
     for reset_unit in worker_units:
         print(f"Resetting service failure state for {reset_unit}")
         rc = _run_command(
@@ -593,11 +609,13 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceCliDeps | None
     if rc != 0:
         return rc
 
-    # Restarting the target does not reload the workers: a target restart left
-    # both workers' ExecMainStartTimestamp untouched on this systemd, and the
-    # opt-in workflow worker is a member of no target at all. The workers
-    # import the checkout live, so a deploy only reaches them here -- which is
-    # what `service status` promises when it reports a stale worker.
+    # The target restart above is not enough to reload the workers. The opt-in
+    # workflow worker is structurally out of reach: it belongs to no target. The
+    # ORCA worker is a member, but `systemctl restart
+    # orca_auto-runtime@<user>.target` still left its ExecMainStartTimestamp
+    # untouched on the deploy host. Both import the checkout live and never
+    # reload, so restarting the services is what carries a deploy to them --
+    # which is what `service status` promises when it reports a stale worker.
     for worker_unit in worker_units:
         print(f"Restarting {worker_unit}")
         rc = _run_command(("systemctl", "restart", worker_unit), use_sudo=use_sudo, run=run)
