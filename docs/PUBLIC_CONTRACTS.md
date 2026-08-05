@@ -762,9 +762,17 @@ Behavior:
   non-zero; `ok` continues to describe unit health alone. A source tree that is
   not a git checkout has nothing to compare and reports
   `worker_staleness: null`. Inactive units are not judged.
-- `service restart` clears the ORCA engine service's start-limit failure state.
-  It restarts the runtime target when enabled; otherwise it restarts the
-  engine-worker target.
+- `service restart` clears the start-limit failure state of every worker service
+  it is about to restart. It restarts the runtime target when enabled, otherwise
+  the engine-worker target, and then restarts the ORCA engine service itself
+  plus the workflow worker when that opt-in unit is already active. Restarting a
+  target does not reload the services under it, and the workflow worker is a
+  member of no target, so these explicit service restarts are what make a deploy
+  reach the running workers. A workflow worker that is not running stays
+  stopped.
+- Both service commands act on the units of the account that invoked them,
+  reading `SUDO_USER` when they run as root through `sudo`. A genuine root
+  session still addresses `@root` units.
 - A clean engine-worker supervisor exit remains stopped. Each child supervisor
   opens a bounded restart circuit, and systemd applies a bounded delayed restart.
 

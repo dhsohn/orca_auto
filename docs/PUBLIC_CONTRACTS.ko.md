@@ -691,8 +691,14 @@ stdout에 무언가를 남긴 경우 `submission_error_detail`을 1,000자로 �
   아닌 코드로 종료하며, `ok`는 여전히 유닛 health만 뜻합니다. 소스 트리가 git
   체크아웃이 아니면 대조 대상이 없어 `worker_staleness: null`입니다. 비활성 유닛은
   판정하지 않습니다.
-- `service restart`는 ORCA 엔진 서비스의 start-limit 실패 상태를 지웁니다. runtime target이
-  활성화되어 있으면 그것을 재시작하고, 아니면 engine-worker target을 재시작합니다.
+- `service restart`는 재시작할 워커 서비스 각각의 start-limit 실패 상태를 지웁니다. runtime
+  target이 활성화되어 있으면 그것을, 아니면 engine-worker target을 재시작한 뒤, ORCA 엔진
+  서비스와 — opt-in workflow 유닛이 이미 활성일 때만 — workflow 워커를 직접 재시작합니다.
+  target 재시작은 그 아래 서비스를 다시 적재하지 않고 workflow 워커는 어떤 target의 멤버도
+  아니므로, 배포가 실행 중인 워커에 닿게 하는 것은 이 명시적 서비스 재시작입니다. 실행 중이
+  아닌 workflow 워커는 중단 상태를 유지합니다.
+- 두 service 명령은 자신을 호출한 계정의 유닛을 대상으로 하며, `sudo`로 root에서 실행되면
+  `SUDO_USER`를 읽습니다. 실제 root 세션은 그대로 `@root` 유닛을 가리킵니다.
 - 엔진 워커 감독자가 정상 종료되면 중단 상태를 유지합니다. 각 자식 감독자는 제한된 재시작
   circuit을 열고, systemd는 제한된 지연 재시작을 적용합니다.
 

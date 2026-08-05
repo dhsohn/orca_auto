@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -53,6 +54,17 @@ class ServiceUnitStatus:
 
 
 def _default_service_user() -> str:
+    # These commands act on system units, so operators reach for `sudo
+    # orca_auto service ...`. getpass.getuser() reports root under sudo, and
+    # every unit name then resolves to an @root instance nobody installed.
+    # systemd treats those as success rather than error -- `reset-failed`
+    # exits 0 on a unit it reports as "not loaded" -- so the command claims to
+    # have restarted workers it never touched. Template units cannot catch this
+    # either: they load for any instance name. Prefer the invoking account.
+    if _is_root():
+        invoking_user = normalize_text(os.environ.get("SUDO_USER"))
+        if invoking_user and invoking_user != "root":
+            return invoking_user
     return getpass.getuser()
 
 
@@ -401,6 +413,29 @@ def _worker_unit_for_user(target_user: str) -> str:
     return f"orca_auto-queue-worker@{target_user}.service"
 
 
+def _workflow_worker_unit_for_user(target_user: str) -> str:
+    return f"orca_auto-workflow-worker@{target_user}.service"
+
+
+def _restartable_worker_units(
+    target_user: str,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+) -> tuple[str, ...]:
+    """Worker services a restart must reload code in, in restart order.
+
+    The workflow worker is opt-in and belongs to no target, so it is restarted
+    only when it is already running; starting an inactive one would opt the
+    operator in behind their back.
+    """
+
+    units = [_worker_unit_for_user(target_user)]
+    workflow_unit = _workflow_worker_unit_for_user(target_user)
+    if _query_systemctl("is-active", workflow_unit, run=run) == "active":
+        units.append(workflow_unit)
+    return tuple(units)
+
+
 def _require_current_restart_units(
     target_user: str,
     *,
@@ -542,10 +577,8 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceCliDeps | None
         emit_error(exc)
         return 1
 
-    reset_units = [
-        _worker_unit_for_user(target_user),
-    ]
-    for reset_unit in reset_units:
+    worker_units = _restartable_worker_units(target_user, run=run)
+    for reset_unit in worker_units:
         print(f"Resetting service failure state for {reset_unit}")
         rc = _run_command(
             ("systemctl", "reset-failed", reset_unit),
@@ -557,10 +590,23 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceCliDeps | None
 
     print(f"Restarting {unit}")
     rc = _run_command(("systemctl", "restart", unit), use_sudo=use_sudo, run=run)
-    if rc == 0:
-        print("Restart requested successfully.")
-        print("Check status with: orca_auto service status")
-    return rc
+    if rc != 0:
+        return rc
+
+    # Restarting the target does not reload the workers: a target restart left
+    # both workers' ExecMainStartTimestamp untouched on this systemd, and the
+    # opt-in workflow worker is a member of no target at all. The workers
+    # import the checkout live, so a deploy only reaches them here -- which is
+    # what `service status` promises when it reports a stale worker.
+    for worker_unit in worker_units:
+        print(f"Restarting {worker_unit}")
+        rc = _run_command(("systemctl", "restart", worker_unit), use_sudo=use_sudo, run=run)
+        if rc != 0:
+            return rc
+
+    print("Restart requested successfully.")
+    print("Check status with: orca_auto service status")
+    return 0
 
 
 __all__ = [

@@ -49,7 +49,10 @@ orca_auto service restart
 
 `service status` shows the runtime and engine-worker targets, the default ORCA
 engine service, and the opt-in workflow service.
-`service restart` restarts the runtime target.
+`service restart` restarts the runtime target and then the worker services
+themselves, including the workflow worker when it is already running — a target
+restart on its own does not reload them. Run it after every deploy that touches
+code the workers import.
 
 ## 5) Submit Work
 

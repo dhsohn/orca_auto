@@ -1143,9 +1143,10 @@ def test_cmd_service_restart_prefers_runtime_when_enabled(capsys: Any) -> None:
     )
 
     assert result == 0
-    assert commands[-2:] == [
+    assert commands[-3:] == [
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
         ("systemctl", "restart", "orca_auto-runtime@alice.target"),
+        ("systemctl", "restart", "orca_auto-queue-worker@alice.service"),
     ]
     assert "Restarting orca_auto-runtime@alice.target" in capsys.readouterr().out
 
@@ -1179,9 +1180,10 @@ def test_cmd_service_restart_falls_back_to_engine_target_when_runtime_is_disable
     )
 
     assert result == 0
-    assert commands[-2:] == [
+    assert commands[-3:] == [
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
         ("systemctl", "restart", "orca_auto-engine-workers@alice.target"),
+        ("systemctl", "restart", "orca_auto-queue-worker@alice.service"),
     ]
 
 
@@ -1228,10 +1230,17 @@ def test_cmd_service_restart_prefers_enabled_engine_target_over_active_runtime()
 
     assert cli_systemd_status._selected_service_mode(statuses) == "worker-only"
     assert result == 0
-    assert not any(command[1] == "is-active" for command in commands)
-    assert commands[-2:] == [
+    # Unit selection reads enablement only; is-active is reserved for deciding
+    # whether the opt-in workflow worker is running.
+    assert not any(
+        command[1] == "is-active" and command[2].endswith(".target") for command in commands
+    )
+    assert commands[-5:] == [
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-workflow-worker@alice.service"),
         ("systemctl", "restart", "orca_auto-engine-workers@alice.target"),
+        ("systemctl", "restart", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "restart", "orca_auto-workflow-worker@alice.service"),
     ]
 
 
@@ -1265,9 +1274,12 @@ def test_cmd_service_restart_uses_active_runtime_only_when_enablement_is_unreada
     )
 
     assert result == 0
-    assert commands[-2:] == [
+    assert commands[-5:] == [
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "reset-failed", "orca_auto-workflow-worker@alice.service"),
         ("systemctl", "restart", "orca_auto-runtime@alice.target"),
+        ("systemctl", "restart", "orca_auto-queue-worker@alice.service"),
+        ("systemctl", "restart", "orca_auto-workflow-worker@alice.service"),
     ]
 
 
@@ -1308,10 +1320,16 @@ def test_cmd_service_restart_directs_missing_install_to_installer(
 def test_cmd_service_restart_uses_sudo_for_non_root_user() -> None:
     commands: list[tuple[str, ...]] = []
 
-    def _fake_run(argv: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
-        del check
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
         commands.append(tuple(argv))
-        return subprocess.CompletedProcess(argv, 0)
+        return subprocess.CompletedProcess(argv, 0, stdout="inactive\n", stderr="")
 
     result = cli_systemd_status.cmd_service_restart(
         Namespace(target_user=None),
@@ -1327,19 +1345,28 @@ def test_cmd_service_restart_uses_sudo_for_non_root_user() -> None:
     )
 
     assert result == 0
+    # The is-active probe is a plain query, so it carries no sudo prefix.
     assert commands == [
+        ("systemctl", "is-active", "orca_auto-workflow-worker@alice.service"),
         ("sudo", "systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
         ("sudo", "systemctl", "restart", "orca_auto-runtime@alice.target"),
+        ("sudo", "systemctl", "restart", "orca_auto-queue-worker@alice.service"),
     ]
 
 
 def test_cmd_service_restart_stops_when_reset_failed_cannot_clear_start_limit() -> None:
     commands: list[tuple[str, ...]] = []
 
-    def _fake_run(argv: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
-        del check
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
         commands.append(tuple(argv))
-        return subprocess.CompletedProcess(argv, 5)
+        return subprocess.CompletedProcess(argv, 5, stdout="inactive\n", stderr="")
 
     result = cli_systemd_status.cmd_service_restart(
         Namespace(target_user=None),
@@ -1356,8 +1383,176 @@ def test_cmd_service_restart_stops_when_reset_failed_cannot_clear_start_limit() 
 
     assert result == 5
     assert commands == [
+        ("systemctl", "is-active", "orca_auto-workflow-worker@alice.service"),
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
     ]
+
+
+def test_cmd_service_restart_reloads_the_worker_the_target_leaves_running() -> None:
+    """A target restart does not reload its member services; the workers must.
+
+    Restarting only `orca_auto-runtime@<user>.target` left both workers'
+    ExecMainStartTimestamp untouched on the deploy host, so a worker kept
+    serving pre-deploy code while the command reported success.
+    """
+
+    commands: list[tuple[str, ...]] = []
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        commands.append(tuple(argv))
+        if argv[1] == "show":
+            return subprocess.CompletedProcess(argv, 0, stdout="loaded\n", stderr="")
+        if argv[1] == "is-enabled":
+            return subprocess.CompletedProcess(argv, 0, stdout="enabled\n", stderr="")
+        if argv[1] == "is-active":
+            return subprocess.CompletedProcess(argv, 3, stdout="inactive\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    result = cli_systemd_status.cmd_service_restart(
+        Namespace(target_user="alice"),
+        deps=cli_systemd_status.ServiceCliDeps(
+            is_root=lambda: True,
+            run=_fake_run,
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+        ),
+    )
+
+    assert result == 0
+    assert ("systemctl", "restart", "orca_auto-queue-worker@alice.service") in commands
+
+
+def test_cmd_service_restart_restarts_a_running_workflow_worker() -> None:
+    """The opt-in workflow worker belongs to no target, so only this reaches it.
+
+    `service status` reports it and tells the operator to run `service restart`
+    when it is stale, which is the unit that served stale code in the 8/3
+    submission failures.
+    """
+
+    commands: list[tuple[str, ...]] = []
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        commands.append(tuple(argv))
+        if argv[1] == "show":
+            return subprocess.CompletedProcess(argv, 0, stdout="loaded\n", stderr="")
+        if argv[1] == "is-enabled":
+            return subprocess.CompletedProcess(argv, 0, stdout="enabled\n", stderr="")
+        if argv[1] == "is-active":
+            return subprocess.CompletedProcess(argv, 0, stdout="active\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    result = cli_systemd_status.cmd_service_restart(
+        Namespace(target_user="alice"),
+        deps=cli_systemd_status.ServiceCliDeps(
+            is_root=lambda: True,
+            run=_fake_run,
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+        ),
+    )
+
+    assert result == 0
+    assert ("systemctl", "restart", "orca_auto-workflow-worker@alice.service") in commands
+
+
+def test_cmd_service_restart_leaves_a_stopped_workflow_worker_stopped() -> None:
+    """Workflow supervision is opt-in: a restart must not start it for you."""
+
+    commands: list[tuple[str, ...]] = []
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        commands.append(tuple(argv))
+        if argv[1] == "show":
+            return subprocess.CompletedProcess(argv, 0, stdout="loaded\n", stderr="")
+        if argv[1] == "is-enabled":
+            return subprocess.CompletedProcess(argv, 0, stdout="enabled\n", stderr="")
+        if argv[1] == "is-active":
+            return subprocess.CompletedProcess(argv, 3, stdout="inactive\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    result = cli_systemd_status.cmd_service_restart(
+        Namespace(target_user="alice"),
+        deps=cli_systemd_status.ServiceCliDeps(
+            is_root=lambda: True,
+            run=_fake_run,
+            which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
+        ),
+    )
+
+    assert result == 0
+    assert not any(
+        "orca_auto-workflow-worker@alice.service" in command
+        and command[1] in {"restart", "start", "reset-failed"}
+        for command in commands
+    )
+
+
+def test_default_service_user_resolves_the_account_behind_sudo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under sudo, getpass reports root and every unit becomes an @root instance.
+
+    systemd calls those a success -- `reset-failed` exits 0 on a unit it says is
+    not loaded -- so the restart silently misses the real workers.
+    """
+
+    monkeypatch.setattr(cli_systemd_status, "_is_root", lambda: True)
+    monkeypatch.setattr(cli_systemd_status.getpass, "getuser", lambda: "root")
+    monkeypatch.setenv("SUDO_USER", "alice")
+
+    assert cli_systemd_status._default_service_user() == "alice"
+
+
+def test_default_service_user_keeps_root_for_a_real_root_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli_systemd_status, "_is_root", lambda: True)
+    monkeypatch.setattr(cli_systemd_status.getpass, "getuser", lambda: "root")
+    monkeypatch.delenv("SUDO_USER", raising=False)
+
+    assert cli_systemd_status._default_service_user() == "root"
+
+
+def test_default_service_user_ignores_a_root_sudo_invoker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli_systemd_status, "_is_root", lambda: True)
+    monkeypatch.setattr(cli_systemd_status.getpass, "getuser", lambda: "root")
+    monkeypatch.setenv("SUDO_USER", "root")
+
+    assert cli_systemd_status._default_service_user() == "root"
+
+
+def test_default_service_user_ignores_sudo_user_without_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale SUDO_USER in a normal shell must not redirect the units."""
+
+    monkeypatch.setattr(cli_systemd_status, "_is_root", lambda: False)
+    monkeypatch.setattr(cli_systemd_status.getpass, "getuser", lambda: "alice")
+    monkeypatch.setenv("SUDO_USER", "bob")
+
+    assert cli_systemd_status._default_service_user() == "alice"
 
 
 def _single_unit_plan(

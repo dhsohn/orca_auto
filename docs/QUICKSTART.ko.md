@@ -50,7 +50,9 @@ orca_auto service restart
 ```
 
 `service status`는 런타임과 engine-worker 타깃, 기본 ORCA 엔진 서비스, opt-in workflow 서비스를
-보여줍니다. `service restart`는 런타임 타깃을 재시작합니다.
+보여줍니다. `service restart`는 런타임 타깃에 이어 워커 서비스 자체를(이미 실행 중이면 workflow
+워커까지) 재시작합니다 — 타깃만 재시작해서는 워커가 코드를 다시 적재하지 않습니다. 워커가
+import하는 코드를 건드린 배포 뒤에는 매번 실행하세요.
 
 ## 5) 작업 제출
 
