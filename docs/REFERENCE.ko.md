@@ -645,8 +645,8 @@ collapse를 포함합니다).
 visible 실행 generation이 남습니다. 각 generation이 그 실행의 상태/리포트를
 보관합니다:
 
-- `job_state.json`
-- `job_report.json`
+- `job_state.json` (내부 상태와 복구)
+- `machine.json` (유일한 공개 기계 metadata)
 - `job_report.html` (Opt, OptTS, NEB-TS, ScanTS, IRC, relaxed scan 작업): 공통
   페이지 틀과 계산 component를 조합한 단일 파일 시각 리포트입니다. 파싱된
   route/output에 따라 scan 에너지 프로파일(ScanTS 및 일반 relaxed scan —
@@ -679,7 +679,7 @@ TS8(NEB-TS)/
     ├── nebts.gbw
     ├── nebts.NEB.log
     ├── job_state.json
-    ├── job_report.json
+    ├── machine.json
     └── job_report.html
 ```
 
@@ -697,12 +697,12 @@ generation 바인딩 전에 거부된 실행은 리포트가 없다는 것 — �
 `run.lock`은 작업 루트에 남으며, 파일이 존재한다는 사실만으로 현재 프로세스가 lock을
 소유한다고 판정할 수는 없습니다.
 
-`job_state.json`과 `job_report.json`은
-[ORCA 작업 산출물 계약](PUBLIC_CONTRACTS.ko.md#orca-작업-산출물-계약)에 기술된
-정규화된 중첩 엔진 산출물 스키마(`schema_version` 1)를 사용합니다. 작업 정체성은
-`job` 아래에, 상태는 `status.state`/`status.reason`에, ORCA 고유 실행 세부
-정보(`run_id`, `max_retries`, `attempts`, `final_result`)는 `engine_payload`
-아래에 있습니다.
+`job_state.json`은 내부 정규화 엔진 산출물 스키마(`schema_version` 1)를 사용합니다.
+공개 `machine.json`은 `factory/machine-observation` version 1과
+`chemistry/results-bundle` payload, 정확한 artifact receipt를 사용하며 절대 runtime
+경로를 담지 않습니다. 전체 경계는
+[ORCA 작업 산출물 계약](PUBLIC_CONTRACTS.ko.md#orca-작업-산출물-계약)에 기술되어
+있습니다.
 
 주요 `engine_payload.attempts[]` 필드:
 
@@ -795,7 +795,7 @@ ORCA 핸드오프 계약은 `orca_auto.flow` 같은 다운스트림 도구에 �
 3. `status: queued`를 확인합니다.
 4. 원한다면 제출 터미널을 닫습니다.
 5. `list` 또는 `journalctl`로 모니터링합니다.
-6. 완료 후 `job_report.html`(또는 `job_report.json`)을 검토합니다.
+6. 완료 후 사람은 `job_report.html`을 검토하고 자동화는 `machine.json`을 읽습니다.
 7. 완전히 닫힌 standalone ORCA 디렉터리를 재실행하려면 그냥 다시 제출합니다.
    `--force` 없이 새 sibling generation이 생깁니다.
 

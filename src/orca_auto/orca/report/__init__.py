@@ -1,4 +1,4 @@
-"""Self-contained HTML job reports written next to ``job_report.json``.
+"""Self-contained HTML job reports written next to ``machine.json``.
 
 ``write_job_html_report`` builds a shared report context from the selected
 input and then composes the applicable sections: optimization convergence,

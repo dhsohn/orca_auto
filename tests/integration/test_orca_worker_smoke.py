@@ -318,7 +318,7 @@ def test_orca_queue_worker_reuses_job_directory_without_overwriting_prior_genera
     assert first_state is not None
     assert first_report is not None
     first_state_bytes = (first_generation / "job_state.json").read_bytes()
-    first_report_bytes = (first_generation / "job_report.json").read_bytes()
+    first_report_bytes = report_json_path(first_generation).read_bytes()
 
     assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
     entries = list_queue(allowed_root)
@@ -336,7 +336,7 @@ def test_orca_queue_worker_reuses_job_directory_without_overwriting_prior_genera
     assert all(entry.status == QueueStatus.COMPLETED for entry in completed_entries)
     assert counter_path.read_text(encoding="utf-8") == "2"
     assert (first_generation / "job_state.json").read_bytes() == first_state_bytes
-    assert (first_generation / "job_report.json").read_bytes() == first_report_bytes
+    assert report_json_path(first_generation).read_bytes() == first_report_bytes
     second_state = load_state(second_generation)
     second_report = load_report_json(second_generation)
     assert second_state is not None
@@ -397,9 +397,9 @@ def test_orca_worker_preflight_failure_publishes_generation_reports(
     # ineligible for the public generation reader.
     assert generation_report is None
     raw_generation_report = json.loads(report_json_path(generation).read_text(encoding="utf-8"))
-    assert raw_generation_report["status"]["state"] == "failed"
+    assert raw_generation_report["lifecycle"]["outcome"] == "failed"
     assert load_report_json(reaction_dir) is None
-    assert raw_generation_report["job"]["id"] == entry.task_id
+    assert raw_generation_report["operation"]["id"] == entry.task_id
 
 
 def test_orca_worker_generation_replacement_never_receives_synthetic_artifacts(

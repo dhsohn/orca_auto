@@ -18,9 +18,10 @@ The script:
 3. writes a minimal `orca_auto.yaml` pointing at the fake executable;
 4. submits `water_opt.inp` through `orca_auto run-dir`;
 5. runs one queue-worker poll;
-6. asserts that the queue entry, `job_state.json`, and `job_report.json` all
-   report completion, then follows `artifacts.last_out_path` to the confined
-   generation output and verifies the normal-termination marker.
+6. asserts that the queue entry and private `job_state.json` completed and that
+   public `machine.json` reports a consumable completion, then follows the
+   verified result to the confined generation output and checks the
+   normal-termination marker.
 
 Pass an explicit work directory if you want to inspect the generated files after
 success:

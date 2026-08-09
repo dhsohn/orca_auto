@@ -134,16 +134,16 @@ execution_dir = Path(execution_dir_text).resolve()
 if execution_dir.parent != reaction_dir.resolve() or not execution_dir.is_dir():
     raise SystemExit(f"execution directory escaped the submitted run-dir: {execution_dir}")
 
-report = load_report_json(execution_dir)
+report = load_report_json(execution_dir, require_consumable_success=True)
 if report is None or report.get("status", {}).get("state") != "completed":
-    raise SystemExit(f"job_report.json did not complete: {report}")
+    raise SystemExit(f"machine.json did not publish a consumable completion: {report}")
 
 artifacts = report.get("artifacts")
 if not isinstance(artifacts, dict):
-    raise SystemExit(f"job_report.json artifacts are invalid: {artifacts}")
+    raise SystemExit(f"machine.json artifacts are invalid: {artifacts}")
 out_path_text = artifacts.get("last_out_path")
 if not isinstance(out_path_text, str) or not out_path_text.strip():
-    raise SystemExit(f"job_report.json has no last_out_path: {artifacts}")
+    raise SystemExit(f"machine.json has no last_out_path: {artifacts}")
 out_path = Path(out_path_text).resolve()
 try:
     out_path.relative_to(reaction_dir.resolve())
@@ -157,5 +157,5 @@ if "****ORCA TERMINATED NORMALLY****" not in out_path.read_text(encoding="utf-8"
 print("fake ORCA smoke passed")
 print(f"workdir: {workdir}")
 print(f"state: {reaction_dir / 'job_state.json'}")
-print(f"report: {execution_dir / 'job_report.json'}")
+print(f"report: {execution_dir / 'machine.json'}")
 PY

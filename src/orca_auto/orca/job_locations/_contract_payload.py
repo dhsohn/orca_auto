@@ -15,7 +15,7 @@ from orca_auto.core.queue.engine.snapshot_intent import SNAPSHOT_INTENT_TOKEN_KE
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.metadata import mapping_metadata_value as queue_entry_metadata_value
 
-from ..state import REPORT_JSON_NAME, STATE_FILE_NAME
+from ..state import REPORT_JSON_NAME, STATE_FILE_NAME, load_report_json
 from ._generation import (
     current_generation_payloads,
     payload_generation_provenance,
@@ -72,6 +72,12 @@ def runtime_paths(
     report_json_path = current_dir / report_json_name if current_dir is not None else None
     visible_state = _runtime_payload_for_generation(state_path, current_dir, queue_entry)
     visible_report = _runtime_payload_for_generation(report_json_path, current_dir, queue_entry)
+    if (
+        report_json_path is not None
+        and _direct_runtime_file(report_json_path, current_dir) is not None
+        and visible_report is None
+    ):
+        visible_state = None
     current_state, current_report = current_generation_payloads(
         queue_entry,
         visible_state.payload if visible_state is not None else {},
@@ -150,17 +156,26 @@ def _runtime_payload_for_generation(
     if direct_file is None:
         return None
     try:
-        raw_payload = json.loads(
-            read_confined_text(
+        if path.name == REPORT_JSON_NAME:
+            loaded_report = load_report_json(
                 current_dir,
-                path,
-                label="ORCA generation runtime payload",
-                max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
+                require_consumable_success=True,
             )
-        )
-        if not isinstance(raw_payload, dict):
-            return None
-        payload = raw_payload
+            if loaded_report is None:
+                return None
+            payload = loaded_report
+        else:
+            raw_payload = json.loads(
+                read_confined_text(
+                    current_dir,
+                    path,
+                    label="ORCA generation runtime payload",
+                    max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
+                )
+            )
+            if not isinstance(raw_payload, dict):
+                return None
+            payload = raw_payload
         schema_version = int(payload.get("schema_version", -1))
     except (OSError, RuntimeError, TypeError, UnicodeError, ValueError):
         return None

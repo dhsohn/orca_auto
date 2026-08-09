@@ -273,7 +273,7 @@ inlines its coordinates and ORCA may mutate the visible XYZ after launch.
 Same-stem auxiliary NEB Product/TS inputs remain unsupported. Frequency routes
 reserve `<stem>.hess`; every route reserves `<stem>.out` and `<stem>.gbw`.
 Submission also rejects the selected `.inp` basename and generation-owned
-`job_state.json` and `job_report.json` as dependency basenames. Output-base
+`job_state.json` and `machine.json` as dependency basenames. Output-base
 overrides such as `%base` and NEB restart-GBW basename controls fail closed.
 
 Only rows carrying the current execution snapshot, publication marker, and
@@ -297,20 +297,19 @@ identity. Completed artifacts without a terminal identity are unsupported and
 fail closed; they must be resubmitted. Readers do not backfill an identity from
 the bytes observed later, and do not remap stale artifact paths by basename.
 
-Workflow-internal xTB and CREST jobs use `job_state.json` as their only terminal
-metadata artifact. They do not create `job_report.json`, and
+Workflow-internal xTB and CREST jobs use `job_state.json` as their internal
+terminal state. They do not create an independent `machine.json`, and
 adapters, indexing, repair, and workflow diagnostics do not read those files.
 Report-only jobs are unsupported and must be resubmitted. This does not
 change the separate ORCA report contract below.
 
 ## ORCA Job Artifact Contract
 
-The submitted ORCA job root keeps the user inputs, the coordination lock
-files, and one visible execution generation per submission. Job reports live
-inside the generation that produced them:
+The submitted ORCA job root keeps the user inputs, coordination locks, and one
+visible execution generation per submission. The generation contains:
 
-- `<generation>/job_state.json`
-- `<generation>/job_report.json`
+- `<generation>/job_state.json` as private mutable/recovery state
+- `<generation>/machine.json` as the only public machine metadata file
 - `<generation>/job_report.html` when a report renderer applies
 - `<generation>/si_block.md` for completed jobs ending on a stationary point
   (a copy-paste Supporting Information block: route, energies,
@@ -343,9 +342,10 @@ record repair use the root state or durable queue/index record, never a root
 report. A root report-only job neither locates a job nor terminalizes a queue
 row. Workflow diagnostic fallback accepts only a direct visible-generation
 report whose generation provenance and stage identity both verify.
-The public ORCA JSON report reader likewise accepts only the canonical
-`<visible-generation>/job_report.json` whose directory owner, inode, bound
-input identity, and payload provenance verify; its raw JSON loader is private.
+The public ORCA machine reader likewise accepts only the canonical
+`<visible-generation>/machine.json` whose directory owner, inode, artifact
+receipts, bound input identity, operation identity, and payload provenance
+verify. Its raw JSON loader and `job_state.json` reader are private.
 
 Every new submission owns one visible
 `YYYYMMDD-HHMMSS-<8-hex>/` direct child. The name shape is reserved: any
@@ -355,12 +355,13 @@ excluded from production scans, and rejected as a `run-dir` submission
 target — do not use this shape for your own directories. That directory contains the
 bound `.inp` under the exact source basename, supported dependencies under their
 exact source basenames, raw ORCA outputs, and the generation's
-`job_state.json`, `job_report.json`, and (when applicable)
+`job_state.json`, `machine.json`, and (when applicable)
 `job_report.html` and `si_block.md`. Generation files retain the record for
 the generation they describe. The existence of the root `run.lock`
 file alone does not mean its advisory lock is currently owned.
 
-`job_state.json` and `job_report.json` use the normalized engine artifact shape:
+`job_state.json` uses the normalized engine artifact shape below. It is an
+orca_auto implementation detail, not a Hermes handoff contract:
 
 - `schema_version`
 - `engine`
@@ -393,9 +394,24 @@ Top-level expectations:
   `engine_payload.attempts`, and `engine_payload.final_result` carry the
   ORCA-specific run details.
 
-`artifacts` is an extensible capability map. Consumers must ignore unknown
-additive keys and must treat only documented path/log keys as path strings;
-an additive capability value may be a structured object.
+The public `machine.json` uses `factory/machine-observation` version 1 and has
+exactly nine top-level fields: `contract`, `producer`, `operation`, `lifecycle`,
+`handoff`, `delivery`, `artifacts`, `lineage`, and `payload`. ORCA generations
+use operation kind `chemistry/orca-run`; workflow roots use
+`chemistry/workflow`. Both carry a `chemistry/results-bundle` version 1 payload.
+
+An ORCA-run payload has `result_kind: "engine-run"`, `engine: "orca"`, a compact
+`summary`, sanitized `results`, and `artifact_refs`. Artifact receipts use
+generation-relative POSIX paths and bind the exact byte count and SHA-256. A
+successful ORCA run is ready only when every required receipt, including the
+bound input and final ORCA output, is available. Calculation outcome and
+delivery remain separate: a successful calculation with a missing required
+file is `succeeded / blocked / incomplete`.
+
+Human HTML and SI files are written first. Terminal `machine.json` is written
+last and is immutable. Consumers must reject hash or receipt mismatches rather
+than reconstructing metadata from nearby files. Internal `job_state.json`, queue
+rows, locks, and workflow state are never alternate public machine contracts.
 
 `engine_payload.final_result`, when present, contains:
 

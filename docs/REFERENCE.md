@@ -682,8 +682,8 @@ The submitted ORCA job directory keeps the user-authored inputs, `run.lock`,
 and one visible execution generation per submission. Each generation holds
 that run's state and reports:
 
-- `job_state.json`
-- `job_report.json`
+- `job_state.json` (internal state and recovery)
+- `machine.json` (the only public machine metadata)
 - `job_report.html` (Opt, OptTS, NEB-TS, ScanTS, IRC, and relaxed-scan jobs):
   self-contained visual report assembled from common page chrome plus
   calculation components. Depending on the parsed route/output it may include
@@ -719,7 +719,7 @@ TS8(NEB-TS)/
     ├── nebts.gbw
     ├── nebts.NEB.log
     ├── job_state.json
-    ├── job_report.json
+    ├── machine.json
     └── job_report.html
 ```
 
@@ -738,12 +738,12 @@ generation binding has no report — are specified in the
 `run.lock` stays at the job root; the mere
 presence of its file is not proof that a process currently owns the lock.
 
-`job_state.json` and `job_report.json` use the normalized nested engine
-artifact schema (`schema_version` 1) described in the
-[ORCA Job Artifact Contract](PUBLIC_CONTRACTS.md#orca-job-artifact-contract):
-job identity lives under `job`, state under `status.state`/`status.reason`,
-and the ORCA-specific run details (`run_id`, `max_retries`, `attempts`,
-`final_result`) under `engine_payload`.
+`job_state.json` uses the internal normalized engine artifact schema
+(`schema_version` 1). Public `machine.json` uses
+`factory/machine-observation` version 1 with a `chemistry/results-bundle`
+payload, exact artifact receipts, and no absolute runtime paths. The full
+boundary is described in the
+[ORCA Job Artifact Contract](PUBLIC_CONTRACTS.md#orca-job-artifact-contract).
 
 Important `engine_payload.attempts[]` fields:
 
@@ -840,7 +840,7 @@ Queue worker note:
 3. Confirm `status: queued`
 4. Close the submission terminal if desired
 5. Monitor with `list` or `journalctl`
-6. Review `job_report.html` (or `job_report.json`) after completion
+6. Review `job_report.html`; automation reads `machine.json` after completion
 7. To rerun a fully closed standalone ORCA directory, submit it again; a new
    sibling generation is created without `--force`
 

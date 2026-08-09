@@ -7,6 +7,8 @@ from typing import Any
 
 import pytest
 
+from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE, RUN_STATE_FILE
+from orca_auto.core.machine_observation import machine_json_bytes
 from orca_auto.flow.workflow import report as workflow_report
 from orca_auto.flow.workflow.report import (
     _energy_axis_ticks,
@@ -16,6 +18,7 @@ from orca_auto.flow.workflow.report import (
     latest_engrad_energy,
     write_workflow_html_report,
 )
+from orca_auto.orca import state as orca_state
 from tests.engine_artifact_helpers import bind_report_generation
 
 _ENGRAD_TEMPLATE = """#
@@ -46,9 +49,15 @@ def _write_orca_generation_report(job_dir: Path, report: dict[str, Any]) -> Path
     report["engine"] = "orca"
     report["input"] = {"primary_path": provenance["bound_selected_identity"]["path"]}
     report["execution_provenance"] = provenance
-    report_path = generation / "job_report.json"
-    report_path.write_text(json.dumps(report), encoding="utf-8")
-    return report_path
+    return _publish_orca_machine(generation, report)
+
+
+def _publish_orca_machine(generation: Path, report: dict[str, Any]) -> Path:
+    (generation / RUN_STATE_FILE).write_text(json.dumps(report), encoding="utf-8")
+    observation = orca_state._machine_observation(generation, report)
+    path = generation / RUN_REPORT_JSON_FILE
+    path.write_bytes(machine_json_bytes(observation))
+    return path
 
 
 def _orca_generation(job_dir: Path) -> tuple[Path, dict[str, Any]]:
@@ -66,9 +75,13 @@ def _orca_stage_dir(root: Path, name: str, *, energy: float, reason: str) -> Pat
     (generation / "opt.engrad").write_text(
         _ENGRAD_TEMPLATE.format(energy=f"{energy:.12f}"), encoding="utf-8"
     )
+    output = generation / "orca.out"
+    output.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
     report = {
         "schema_version": 1,
         "engine": "orca",
+        "job": {"id": name},
+        "status": {"state": "completed", "reason": reason},
         "input": {"primary_path": provenance["bound_selected_identity"]["path"]},
         "execution_provenance": provenance,
         "engine_payload": {
@@ -78,22 +91,24 @@ def _orca_stage_dir(root: Path, name: str, *, energy: float, reason: str) -> Pat
                     "markers": {"imaginary_frequency_count": 0},
                 }
             ],
-            "final_result": {"reason": reason},
+            "final_result": {
+                "reason": reason,
+                "last_out_path": str(output),
+            },
         },
     }
-    (generation / "job_report.json").write_text(json.dumps(report), encoding="utf-8")
+    _publish_orca_machine(generation, report)
     (generation / "job_report.html").write_text("<html></html>", encoding="utf-8")
     return generation
 
 
 def _orca_stage(stage_id: str, stage_dir: Path, *, status: str, label: str) -> dict[str, Any]:
-    report_path = stage_dir / "job_report.json"
-    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = json.loads((stage_dir / RUN_STATE_FILE).read_text(encoding="utf-8"))
     report["job"] = {"id": stage_id}
     engine_payload = report.setdefault("engine_payload", {})
     run_id = str(engine_payload.get("run_id") or f"run-{stage_id}")
     engine_payload["run_id"] = run_id
-    report_path.write_text(json.dumps(report), encoding="utf-8")
+    _publish_orca_machine(stage_dir, report)
     return {
         "stage_id": stage_id,
         "stage_kind": "orca_stage",
@@ -105,7 +120,7 @@ def _orca_stage(stage_id: str, stage_dir: Path, *, status: str, label: str) -> d
         },
         "output_artifacts": [
             {"kind": "orca_output_dir", "path": str(stage_dir)},
-            {"kind": "orca_report_json", "path": str(stage_dir / "job_report.json")},
+            {"kind": "orca_report_json", "path": str(stage_dir / RUN_REPORT_JSON_FILE)},
         ],
     }
 
@@ -242,6 +257,7 @@ def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: P
         "schema_version": 1,
         "engine": "orca",
         "job": {"id": "orca_conformer_01"},
+        "status": {"state": "completed", "reason": "normal_termination"},
         "input": {"primary_path": provenance["bound_selected_identity"]["path"]},
         "execution_provenance": provenance,
         "engine_payload": {
@@ -258,7 +274,7 @@ def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: P
             },
         },
     }
-    (stage_dir / "job_report.json").write_text(json.dumps(report), encoding="utf-8")
+    _publish_orca_machine(stage_dir, report)
     (stage_dir / "job_report.html").write_text("<html></html>", encoding="utf-8")
     payload = _payload(
         tmp_path,
@@ -486,7 +502,7 @@ def test_completed_orca_stage_rejects_noncanonical_generation_json(tmp_path: Pat
     )
     planted = canonical.with_name("other.json")
     planted_payload = json.loads(canonical.read_text(encoding="utf-8"))
-    planted_payload["engine_payload"]["final_result"]["reason"] = "planted_reason"
+    planted_payload["payload"]["data"]["summary"]["reason"] = "planted_reason"
     planted.write_text(json.dumps(planted_payload), encoding="utf-8")
     payload = _payload(
         tmp_path,

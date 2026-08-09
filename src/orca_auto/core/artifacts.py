@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 RUN_STATE_FILE = "job_state.json"
-RUN_REPORT_JSON_FILE = "job_report.json"
+RUN_REPORT_JSON_FILE = "machine.json"
 RUN_REPORT_HTML_FILE = "job_report.html"
 MAX_RUN_ARTIFACT_JSON_BYTES = 64 * 1024 * 1024
 WORKFLOW_REPORT_HTML_FILE = "workflow_report.html"

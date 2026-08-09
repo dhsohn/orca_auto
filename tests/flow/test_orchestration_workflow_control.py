@@ -21,6 +21,7 @@ from orca_auto.flow.orchestration.stage_runtime.xtb_retry import (
     xtb_path_retry_limit_impl,
     xtb_retry_recipe_impl,
 )
+from orca_auto.flow.workflow.machine import write_workflow_machine_observation
 from tests.flow.orchestration_services import orchestration_services
 
 
@@ -93,6 +94,70 @@ def _patch_advance_operations(
         raise TypeError(f"unknown advance operation override(s): {', '.join(unknown)}")
     for name, operation in operations.items():
         monkeypatch.setattr(advance_phases_module, name, operation)
+
+
+def test_readvance_of_published_terminal_workflow_leaves_pinned_artifacts_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_republished",
+        "template_name": "conformer_screening",
+        "status": "completed",
+        "reaction_key": "R01-P01",
+        "requested_at": "2026-08-09T12:00:00+00:00",
+        "stages": [],
+        "metadata": {"last_advanced_at": "2026-08-09T12:30:00+00:00"},
+    }
+    workspace = tmp_path / "wf_republished"
+    workspace.mkdir()
+    html_path = workspace / "workflow_report.html"
+    html_path.write_text("<html>done</html>\n", encoding="utf-8")
+    machine_path = write_workflow_machine_observation(workspace, payload)
+    assert machine_path is not None
+    machine_bytes = machine_path.read_bytes()
+    html_bytes = html_path.read_bytes()
+
+    # The harness clock differs from last_advanced_at, so a regenerated HTML
+    # report would carry new bytes and invalidate the immutable receipt.
+    deps = _si_publication_test_deps(monkeypatch, tmp_path, payload)
+    advanced = orchestration.advance_workflow(
+        target="wf_republished", workflow_root=tmp_path, services=deps
+    )
+
+    assert advanced["status"] == "completed"
+    assert machine_path.read_bytes() == machine_bytes
+    assert html_path.read_bytes() == html_bytes
+    assert "si_publish_pending" not in payload["metadata"]
+
+
+def test_readvance_fails_closed_on_a_corrupt_machine_observation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_corrupt",
+        "template_name": "conformer_screening",
+        "status": "completed",
+        "reaction_key": "R01-P01",
+        "requested_at": "2026-08-09T12:00:00+00:00",
+        "stages": [],
+        "metadata": {"last_advanced_at": "2026-08-09T12:30:00+00:00"},
+    }
+    workspace = tmp_path / "wf_corrupt"
+    workspace.mkdir()
+    html_path = workspace / "workflow_report.html"
+    html_path.write_text("<html>done</html>\n", encoding="utf-8")
+    (workspace / "machine.json").write_text("junk", encoding="utf-8")
+    html_bytes = html_path.read_bytes()
+
+    deps = _si_publication_test_deps(monkeypatch, tmp_path, payload)
+    with pytest.raises(ValueError, match="invalid"):
+        orchestration.advance_workflow(target="wf_corrupt", workflow_root=tmp_path, services=deps)
+
+    # Fail closed happens before any pinned artifact could be rewritten.
+    assert html_path.read_bytes() == html_bytes
+    assert (workspace / "machine.json").read_text(encoding="utf-8") == "junk"
 
 
 def test_transient_si_publication_retries_every_cycle_until_the_budget_is_spent(

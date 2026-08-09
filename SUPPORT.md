@@ -27,7 +27,8 @@ artifacts when available:
 - Python version and orca_auto commit or release;
 - ORCA/xTB/CREST versions if the issue depends on real engines;
 - selected `.inp` snippet, output tail, and terminal marker;
-- `job_state.json`, `job_report.json`, and queue entry snippets;
+- terminal generation `machine.json`, plus relevant sanitized `job_state.json`
+  or queue snippets for private recovery-state diagnosis;
 - retry attempt number and generated retry input name, if applicable.
 
 Remove messenger bot tokens, channel IDs, private paths, proprietary structures, and

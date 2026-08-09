@@ -81,7 +81,7 @@ bash examples/fake_orca_smoke/run.sh
 
 The script creates a temporary runtime root, writes a fake ORCA executable,
 submits a minimal input with `orca_auto run-dir`, runs one worker poll, and
-asserts that queue status, `job_state.json`, and `job_report.json` reach a
+asserts that queue status, internal `job_state.json`, and public `machine.json` reach a
 completed state.
 
 This check is appropriate for docs/release-hygiene PRs and for queue/reporting
