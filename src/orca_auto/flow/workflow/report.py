@@ -321,7 +321,7 @@ def _stage_job_report(stage: Mapping[str, Any]) -> tuple[Path | None, dict[str, 
             else visible_generation_children(job_dir)
         )
         for candidate_dir in candidate_dirs:
-            report_path = candidate_dir / "job_report.json"
+            report_path = candidate_dir / RUN_REPORT_JSON_FILE
             report = _verified_orca_stage_report(stage, report_path)
             if report is not None:
                 return report_path, report
@@ -347,7 +347,7 @@ def _verified_orca_stage_report(
             return None
     except OSError:
         return None
-    report = load_report_json(report_path.parent)
+    report = load_report_json(report_path.parent, require_consumable_success=True)
     if report is None or not _stage_report_identity_matches(stage, report):
         return None
     return report

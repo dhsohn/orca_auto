@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -22,6 +24,13 @@ from orca_auto.orca.state import (
     write_report_json,
     write_state,
 )
+from orca_auto.orca.types import RunFinalResult
+
+
+def _validate_common_machine(path: Path) -> None:
+    validator = os.environ.get("FACTORY_MACHINE_CONTRACT_VALIDATOR")
+    if validator:
+        subprocess.run([sys.executable, validator, "--machine", str(path)], check=True)
 
 
 def _bind_generation(reaction: Path, *, token: str) -> tuple[Path, dict]:
@@ -171,7 +180,7 @@ class TestState(unittest.TestCase):
             self.assertIsInstance(loaded, dict)
 
             write_report_files(reaction, state)
-            self.assertTrue((generation / "job_report.json").exists())
+            self.assertTrue(state_module.report_json_path(generation).exists())
             self.assertFalse((reaction / "job_report.json").exists())
 
             self.assertEqual(list(reaction.glob("*.tmp.*")), [])
@@ -297,14 +306,14 @@ class TestState(unittest.TestCase):
                 "generation_owner_token": owner_token,
                 "bound_selected_identity": executable_identity(inp),
             }
-            (reaction / "job_report.json").write_text("{}", encoding="utf-8")
+            state_module.report_json_path(reaction).write_text("{}", encoding="utf-8")
 
             write_report_files(reaction, state)
 
             # Unbound root files are left untouched; the writer publishes only
             # into the verified generation.
-            self.assertTrue((reaction / "job_report.json").exists())
-            self.assertTrue((generation / "job_report.json").is_file())
+            self.assertTrue(state_module.report_json_path(reaction).exists())
+            self.assertTrue(state_module.report_json_path(generation).is_file())
 
     def test_replaced_visible_generation_never_receives_state_or_report(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -420,10 +429,23 @@ class TestState(unittest.TestCase):
                 "completed_at": "2026-01-01T00:00:00+00:00",
                 "last_out_path": str(reaction / "rxn.out"),
             }
+            write_state(reaction, state)
             result = write_report_files(reaction, state)
             report_json_path = Path(result["report_json"])
 
-            report = json.loads(report_json_path.read_text(encoding="utf-8"))
+            observation = json.loads(report_json_path.read_text(encoding="utf-8"))
+            _validate_common_machine(report_json_path)
+            self.assertEqual(
+                observation["contract"],
+                {"name": "factory/machine-observation", "version": 1},
+            )
+            self.assertEqual(observation["operation"]["kind"], "chemistry/orca-run")
+            self.assertEqual(observation["lifecycle"]["outcome"], "succeeded")
+            self.assertEqual(observation["handoff"]["status"], "blocked")
+            self.assertEqual(observation["delivery"]["status"], "incomplete")
+            report = load_report_json(generation)
+            assert report is not None
+            self.assertIsNone(load_report_json(generation, require_consumable_success=True))
             self.assertEqual(report["status"]["state"], "completed")
             self.assertEqual(report["engine_payload"]["max_retries"], 3)
             self.assertEqual(len(report["engine_payload"]["attempts"]), 1)
@@ -433,6 +455,75 @@ class TestState(unittest.TestCase):
                 state["execution_provenance"],
             )
             self.assertIsNotNone(report["engine_payload"]["final_result"])
+
+    def test_write_report_files_reentry_preserves_published_terminal_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            generation, provenance = _bind_generation(reaction, token="reentry-terminal-tok-01")
+            inp = generation / "nebts.inp"
+            state = new_state(reaction, inp, max_retries=0)
+            state["status"] = "completed"
+            state["execution_provenance"] = provenance
+            state["final_result"] = {
+                "status": "completed",
+                "analyzer_status": "completed",
+                "reason": "normal_termination",
+                "completed_at": "2026-01-01T00:00:00+00:00",
+                "last_out_path": str(reaction / "rxn.out"),
+            }
+            write_state(reaction, state)
+            first = write_report_files(reaction, state)
+            report_json_path = Path(first["report_json"])
+            published = {
+                path.name: path.read_bytes()
+                for path in report_json_path.parent.iterdir()
+                if path.is_file()
+            }
+
+            changed = dict(state)
+            changed["updated_at"] = "2026-02-02T00:00:00+00:00"
+            second = write_report_files(reaction, changed)
+
+            self.assertEqual(second["report_json"], first["report_json"])
+            for name, data in published.items():
+                self.assertEqual(
+                    (report_json_path.parent / name).read_bytes(),
+                    data,
+                    f"re-entry modified published artifact {name}",
+                )
+
+    def test_terminal_machine_observation_is_immutable(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            generation, provenance = _bind_generation(
+                reaction,
+                token="immutable-machine-token-0001",
+            )
+            state = new_state(reaction, generation / "nebts.inp", max_retries=0)
+            state["status"] = "failed"
+            state["execution_provenance"] = provenance
+            final_result: RunFinalResult = {
+                "status": "failed",
+                "analyzer_status": "incomplete",
+                "reason": "runner_exception",
+            }
+            state["final_result"] = final_result
+            write_state(reaction, state)
+
+            path = write_report_json(reaction, dict(state))
+            assert path is not None
+            original_identity = (path.stat().st_dev, path.stat().st_ino)
+
+            self.assertEqual(write_report_json(reaction, dict(state)), path)
+            self.assertEqual((path.stat().st_dev, path.stat().st_ino), original_identity)
+
+            changed = dict(state)
+            changed["final_result"] = {
+                **final_result,
+                "reason": "cancel_requested",
+            }
+            with self.assertRaisesRegex(RuntimeError, "terminal machine observation is immutable"):
+                write_report_json(reaction, changed)
 
     def test_load_report_json_returns_none_for_missing_invalid_and_non_dict(self) -> None:
         with tempfile.TemporaryDirectory() as td:

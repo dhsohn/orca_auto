@@ -360,8 +360,9 @@ logic. Notable pieces:
 - **Restart/resume:** for retry/resume it generates a restart input with
   `MORead` + `%moinp` when a matching non-empty `.gbw` checkpoint exists; resumed
   inputs are written as `*.resume.inp` so user input is never mutated.
-- **State & reports:** `state.py`/`state_machine.py` persist `job_state.json`;
-  completion writes `job_report.json`; Opt, OptTS, NEB-TS,
+- **State & reports:** `state.py`/`state_machine.py` persist private
+  `job_state.json`; completion publishes the common `machine.json` last. Opt,
+  OptTS, NEB-TS,
   ScanTS, IRC, and relaxed-scan jobs also get `job_report.html` (`report/`), a
   self-contained visual report assembled by `report/composer.py` from common
   page chrome plus calculation components — scan energy profile (ScanTS and
@@ -499,7 +500,8 @@ durable mutation. The main on-disk artifacts:
 | `queue.json`                | core/queue       | Durable per-engine queue (source of truth)|
 | admission slot file         | core/admission   | Active concurrency slots (machine-wide)  |
 | `job_state.json`            | orca (state)     | Per-job attempts + status                |
-| `job_report.json` / `.html` | orca (reporting) | Machine/human completion report          |
+| `machine.json`              | orca/flow       | Public machine observation               |
+| `job_report.html`           | orca (reporting) | Human completion report                 |
 | job-location index (JSONL)  | core/indexing    | Where each job's outputs currently live  |
 | `workflow.json`             | flow             | Durable workflow payload                 |
 | `workflow_report.html`      | flow (report)    | Live visual workflow summary             |

@@ -257,7 +257,7 @@ route에서도 주 `* xyzfile` 의존성 하나만 그 exact 이름을 쓰는 �
 바인딩 `.inp`에 그 좌표를 inline하고, 실행 뒤 ORCA가 visible XYZ를 갱신할 수 있습니다.
 같은 stem의 보조 NEB Product/TS 입력은 계속 지원하지 않습니다. 주파수 route는
 `<stem>.hess`를, 모든 route는 `<stem>.out`과 `<stem>.gbw`를 예약합니다. 선택 `.inp`
-basename과 generation이 소유하는 `job_state.json`, `job_report.json`도 의존성
+basename과 generation이 소유하는 `job_state.json`, `machine.json`도 의존성
 basename으로 쓰면 제출 단계에서 거부합니다. `%base`와 NEB restart-GBW basename
 제어 같은 출력 base override도 fail-closed합니다.
 
@@ -278,19 +278,18 @@ reader는 현재 파일을 그 종료 정체성과 대조합니다. 종료 정�
 않고 fail-closed하며 다시 제출해야 합니다. Reader는 나중에 관찰한 바이트에서 정체성을
 backfill하지 않고 오래된 산출물 경로를 basename으로 remap하지도 않습니다.
 
-워크플로우 내부 xTB와 CREST 작업은 `job_state.json`만 종료 metadata 산출물로 사용합니다.
-`job_report.json`을 만들지 않으며 adapter, index, repair, workflow
+워크플로우 내부 xTB와 CREST 작업은 `job_state.json`만 내부 종료 state로 사용합니다.
+독립 `machine.json`을 만들지 않으며 adapter, index, repair, workflow
 diagnostic도 이 파일을 읽지 않습니다. report-only 작업은 지원하지 않고 다시 제출해야
 합니다. 아래의 별도 ORCA report 계약은 바뀌지 않습니다.
 
 ## ORCA 작업 산출물 계약
 
 제출한 ORCA 작업 루트는 사용자 입력, 조정용 lock 파일, 제출당 하나의 visible
-실행 generation을 둡니다. 작업 리포트는 그 리포트를 만든 generation 안에
-있습니다:
+실행 generation을 둡니다. Generation에는 다음 파일이 있습니다:
 
-- `<generation>/job_state.json`
-- `<generation>/job_report.json`
+- private mutable/recovery state인 `<generation>/job_state.json`
+- 유일한 공개 기계 metadata인 `<generation>/machine.json`
 - 적용 가능한 리포트 렌더러가 있을 때 `<generation>/job_report.html`
 - 정류점으로 끝나는 완료 작업에는 `<generation>/si_block.md` (route, 에너지,
   열화학, Nimag, 좌표를 담은 복사-붙여넣기용 Supporting Information 블록),
@@ -318,9 +317,10 @@ production scan에서 제외되고 재구축은 upsert 전용이므로, 살아�
 작업은 작업 위치를 찾거나 큐 행을 종료 상태로 만들 수 없습니다. 워크플로우 진단 fallback은
 generation provenance와 stage identity가 모두 검증되는 직접 visible-generation 리포트만
 허용합니다.
-공개 ORCA JSON 리포트 reader도 디렉터리 owner·inode·바인딩 입력 identity·payload
-provenance가 검증되는 정규 `<visible-generation>/job_report.json`만 허용하며 raw JSON
-loader는 private입니다.
+공개 ORCA machine reader도 디렉터리 owner·inode·artifact receipt·바인딩 입력
+identity·operation identity·payload provenance가 검증되는 정규
+`<visible-generation>/machine.json`만 허용합니다. raw JSON loader와
+`job_state.json` reader는 private입니다.
 
 각 새 제출은 직접 하위 visible `YYYYMMDD-HHMMSS-<8자리 hex>/`
 하나를 소유합니다. 이 이름 형태는 예약되어 있습니다: ASCII 날짜·시각·소문자
@@ -328,12 +328,13 @@ loader는 private입니다.
 있든 실행 generation으로 간주되어 production scan에서 제외되고 `run-dir` 제출
 대상으로 거부되므로, 직접 만드는 디렉터리에는 이 형태를 쓰지 마십시오. 그 디렉터리에는 소스 basename을 정확히 유지한 바인딩 `.inp`, 지원하는
 의존성, raw ORCA 출력, 그리고 그 generation의 `job_state.json`,
-`job_report.json`(적용 시 `job_report.html`·`si_block.md`)이
+`machine.json`(적용 시 `job_report.html`·`si_block.md`)이
 들어갑니다. generation 파일은 자신이 설명하는 generation의 기록을 보존합니다.
 루트에 `run.lock` 파일이 존재한다는 사실만으로 현재 advisory lock이 소유된다고
 판정할 수는 없습니다.
 
-`job_state.json`과 `job_report.json`은 정규화된 엔진 산출물 형태를 사용합니다:
+`job_state.json`은 아래의 정규화된 엔진 산출물 형태를 사용합니다. 이것은
+orca_auto 내부 구현 상태이며 Hermes handoff 계약이 아닙니다:
 
 - `schema_version`
 - `engine`
@@ -364,9 +365,23 @@ loader는 private입니다.
 - `engine_payload.run_id`, `engine_payload.max_retries`, `engine_payload.attempts`,
   `engine_payload.final_result`는 ORCA 고유 실행 세부 정보입니다.
 
-`artifacts`는 확장 가능한 capability map입니다. 소비자는 알지 못하는 additive key를
-무시해야 하며, 문서화된 path/log key만 경로 문자열로 취급해야 합니다. additive
-capability 값은 구조화된 객체일 수 있습니다.
+공개 `machine.json`은 `factory/machine-observation` version 1을 사용하며 최상위에는
+`contract`, `producer`, `operation`, `lifecycle`, `handoff`, `delivery`, `artifacts`,
+`lineage`, `payload` 아홉 필드만 있습니다. ORCA generation은 operation kind
+`chemistry/orca-run`, workflow root는 `chemistry/workflow`를 사용합니다. 둘 다
+`chemistry/results-bundle` version 1 payload를 담습니다.
+
+ORCA-run payload에는 `result_kind: "engine-run"`, `engine: "orca"`, 간결한 `summary`,
+정리된 `results`, `artifact_refs`가 있습니다. Artifact receipt는 generation-relative
+POSIX 경로와 정확한 byte 수·SHA-256을 연결합니다. 성공한 ORCA 실행은 바인딩 입력과
+최종 ORCA 출력을 포함한 모든 required receipt가 available일 때만 ready입니다. 계산
+결과와 전달은 독립이므로, 계산은 성공했지만 required 파일이 없으면
+`succeeded / blocked / incomplete`입니다.
+
+사람용 HTML과 SI 파일을 먼저 쓰고 terminal `machine.json`을 마지막에 쓰며 이후
+변경하지 않습니다. 소비자는 hash나 receipt가 맞지 않으면 주변 파일로 metadata를
+재구성하지 말고 거부해야 합니다. 내부 `job_state.json`, queue 행, lock, workflow
+state는 대체 공개 기계 계약이 아닙니다.
 
 `engine_payload.final_result`가 있을 때 포함하는 필드:
 

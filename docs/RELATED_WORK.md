@@ -16,7 +16,7 @@ orca_auto is useful when that script layer needs durable state:
 
 - queue entries that survive terminal restarts;
 - supervised workers instead of foreground-only runs;
-- consistent `job_state.json` and `job_report.json` outputs;
+- consistent internal `job_state.json` and public `machine.json` outputs;
 - retry and resume decisions that are recorded rather than implicit;
 - a compact activity view across multiple ORCA and workflow jobs.
 

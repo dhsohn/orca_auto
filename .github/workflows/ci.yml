@@ -64,3 +64,20 @@ jobs:
         run: |
           python -m pip wheel . --no-deps -w /tmp/orca_auto-wheel-smoke
           python scripts/check_wheel_contents.py /tmp/orca_auto-wheel-smoke/orca_auto-*.whl
+
+      - name: Check out machine observation contract
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: dhsohn/machine-contracts
+          ref: bc252035d01edddf1314e6641689c6d5cb88af92
+          path: .machine-contracts
+          persist-credentials: false
+
+      - name: Verify emitted machine.json files against the common contract
+        env:
+          FACTORY_MACHINE_CONTRACT_VALIDATOR: ${{ github.workspace }}/.machine-contracts/scripts/validate.py
+        run: |
+          .venv/bin/python -m pip install -r .machine-contracts/requirements.txt
+          .venv/bin/python -m pytest -q \
+            tests/test_workflow_machine.py::test_completed_workflow_publishes_one_ready_machine_observation \
+            tests/test_state.py::TestState::test_write_report_files_json_fields

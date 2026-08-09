@@ -10,6 +10,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- ORCA generations and terminal workflow roots now expose exactly one public
+  machine metadata file, `machine.json`, using
+  `factory/machine-observation` v1 with a `chemistry/results-bundle` v1
+  payload. Artifact receipts bind package-relative paths to exact bytes and
+  SHA-256, terminal observations publish last, and the former public
+  `job_report.json` is removed. `job_state.json` and `workflow.json` remain
+  private durable recovery state; human HTML and SI files remain artifacts.
 - `scan_ts_search` generations now materialize their ORCA stages directly
   under the generation workspace as workflow-ordered directories (`01_scan`,
   then `02_scan_maximum`/`02_scan_extension`, ... in creation order) instead

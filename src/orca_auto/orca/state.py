@@ -8,11 +8,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
+from orca_auto import __version__
 from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.artifacts import (
     MAX_RUN_ARTIFACT_JSON_BYTES,
+    RUN_REPORT_HTML_FILE,
     RUN_REPORT_JSON_FILE,
     RUN_STATE_FILE,
+    SI_BLOCK_MD_FILE,
 )
 from orca_auto.core.engine_process import (
     atomic_write_confined_bytes,
@@ -27,6 +30,18 @@ from orca_auto.core.engines.artifacts import (
     EngineArtifactStatus,
     EngineArtifactTimestamps,
     build_engine_artifact_payload,
+)
+from orca_auto.core.machine_observation import (
+    MACHINE_CONTRACT_NAME,
+    MACHINE_CONTRACT_VERSION,
+    RESULTS_PAYLOAD_CONTRACT_NAME,
+    RESULTS_PAYLOAD_CONTRACT_VERSION,
+    artifact_receipt,
+    machine_code,
+    machine_json_bytes,
+    required_delivery_complete,
+    results_payload_from_observation,
+    verify_available_artifacts,
 )
 from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
 from orca_auto.core.queue.generation import is_visible_generation_name
@@ -274,7 +289,11 @@ def load_generation_state(
     return payload, normalized
 
 
-def load_report_json(generation_dir: Path) -> dict[str, Any] | None:
+def load_report_json(
+    generation_dir: Path,
+    *,
+    require_consumable_success: bool = False,
+) -> dict[str, Any] | None:
     """Load one provenance-verified ORCA report from an exact visible generation."""
 
     raw_generation_dir = generation_dir.expanduser()
@@ -289,7 +308,7 @@ def load_report_json(generation_dir: Path) -> dict[str, Any] | None:
         resolved_generation_dir = raw_generation_dir.resolve(strict=True)
         generation_before = resolved_generation_dir.stat()
         before = report_path.lstat()
-        payload = json.loads(
+        observation = json.loads(
             read_confined_text(
                 resolved_generation_dir,
                 report_path,
@@ -304,15 +323,80 @@ def load_report_json(generation_dir: Path) -> dict[str, Any] | None:
         or not stat.S_ISDIR(generation_before.st_mode)
         or not stat.S_ISREG(before.st_mode)
         or before.st_nlink != 1
-        or not isinstance(payload, dict)
+        or not isinstance(observation, dict)
     ):
         return None
-    try:
-        schema_version = int(payload.get("schema_version", 0) or 0)
-    except (TypeError, ValueError):
+    result_data = results_payload_from_observation(observation)
+    if result_data is None:
         return None
-    if schema_version != 1 or _text(payload.get("engine")) != "orca":
+    if (
+        observation.get("producer", {}).get("name") != "orca_auto"
+        or observation.get("operation", {}).get("kind") != "chemistry/orca-run"
+        or result_data.get("result_kind") != "engine-run"
+        or result_data.get("engine") != "orca"
+        or not verify_available_artifacts(observation, resolved_generation_dir)
+    ):
         return None
+    loaded_state = load_generation_state(resolved_generation_dir)
+    if loaded_state is None:
+        return None
+    payload, _state = loaded_state
+    job = _dict(payload.get("job"))
+    status = _dict(payload.get("status"))
+    input_payload = _dict(payload.get("input"))
+    engine_payload = _dict(payload.get("engine_payload"))
+    final_result = _dict(engine_payload.get("final_result"))
+    summary = _dict(result_data.get("summary"))
+    results = _dict(result_data.get("results"))
+    operation_id = _text(observation.get("operation", {}).get("id"))
+    expected_phase, expected_outcome = _machine_lifecycle(_text(status.get("state")))
+    lifecycle = _dict(observation.get("lifecycle"))
+    attempts = engine_payload.get("attempts")
+    attempt_count = len(attempts) if isinstance(attempts, list) else 0
+    if (
+        operation_id not in {_text(job.get("id")), _text(engine_payload.get("run_id"))}
+        or lifecycle.get("phase") != expected_phase
+        or lifecycle.get("outcome") != expected_outcome
+        or summary.get("status") != _text(status.get("state"))
+        or summary.get("reason") != _text(final_result.get("reason") or status.get("reason"))
+        or summary.get("analyzer_status") != _text(final_result.get("analyzer_status"))
+        or results.get("run_id") != _text(engine_payload.get("run_id"))
+        or results.get("attempt_count") != attempt_count
+        or results.get("max_retries") != int(engine_payload.get("max_retries", 0) or 0)
+        or results.get("resumed") != bool(final_result.get("resumed", False))
+        or results.get("skipped_execution") != bool(final_result.get("skipped_execution", False))
+        or results.get("runner_error") != _text(final_result.get("runner_error"))
+    ):
+        return None
+    artifacts = observation.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        return None
+    expected_input = artifact_receipt(
+        resolved_generation_dir,
+        Path(_text(input_payload.get("primary_path"))),
+        required=True,
+        role="source",
+        media_type="text/plain",
+    )
+    if artifacts.get("input") != expected_input:
+        return None
+    outcome = expected_outcome
+    last_out_path = _text(final_result.get("last_out_path"))
+    if last_out_path or outcome == "succeeded":
+        expected_output = artifact_receipt(
+            resolved_generation_dir,
+            Path(last_out_path) if last_out_path else None,
+            required=outcome == "succeeded",
+            role="log",
+            media_type="text/plain",
+        )
+        if artifacts.get("orca-output") != expected_output:
+            return None
+    if require_consumable_success and outcome == "succeeded":
+        handoff = _dict(observation.get("handoff"))
+        delivery = _dict(observation.get("delivery"))
+        if handoff.get("status") != "ready" or delivery.get("status") != "complete":
+            return None
     target = _visible_generation_artifact_dir(resolved_generation_dir.parent, payload)
     if target is None or target[0] != resolved_generation_dir:
         return None
@@ -516,11 +600,141 @@ def _normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any])
     )
 
 
+def _machine_lifecycle(status: str) -> tuple[str, str]:
+    normalized = status.strip().lower()
+    if normalized in {"created", "pending", "queued"}:
+        return "queued", "pending"
+    if normalized in {"running", "retrying"}:
+        return "running", "pending"
+    if normalized == "completed":
+        return "finished", "succeeded"
+    if normalized == "cancelled":
+        return "finished", "cancelled"
+    if normalized == "failed":
+        return "finished", "failed"
+    return "finished", "uncertain"
+
+
+def _machine_observation(
+    generation_dir: Path,
+    report_payload: Mapping[str, Any],
+    *,
+    published_artifacts: Mapping[str, tuple[Path, str, str]] | None = None,
+) -> dict[str, Any]:
+    job = _dict(report_payload.get("job"))
+    status_payload = _dict(report_payload.get("status"))
+    input_payload = _dict(report_payload.get("input"))
+    engine_payload = _dict(report_payload.get("engine_payload"))
+    final_result = _dict(engine_payload.get("final_result"))
+    status = _text(status_payload.get("state"))
+    reason = _text(final_result.get("reason") or status_payload.get("reason"))
+    analyzer_status = _text(final_result.get("analyzer_status"))
+    phase, outcome = _machine_lifecycle(status)
+    operation_id = _text(job.get("id")) or _text(engine_payload.get("run_id"))
+
+    artifacts: dict[str, dict[str, Any]] = {
+        "input": artifact_receipt(
+            generation_dir,
+            Path(_text(input_payload.get("primary_path")))
+            if _text(input_payload.get("primary_path"))
+            else None,
+            required=True,
+            role="source",
+            media_type="text/plain",
+        )
+    }
+    last_out_path = _text(final_result.get("last_out_path"))
+    if last_out_path or outcome == "succeeded":
+        artifacts["orca-output"] = artifact_receipt(
+            generation_dir,
+            Path(last_out_path) if last_out_path else None,
+            required=outcome == "succeeded",
+            role="log",
+            media_type="text/plain",
+        )
+    for artifact_id, (path, role, media_type) in sorted((published_artifacts or {}).items()):
+        artifacts[artifact_id] = artifact_receipt(
+            generation_dir,
+            path,
+            required=False,
+            role=role,
+            media_type=media_type,
+        )
+
+    complete = required_delivery_complete(artifacts)
+    if phase != "finished":
+        handoff_status = "pending"
+        delivery_status = "pending"
+        handoff_codes: list[str] = []
+        delivery_codes: list[str] = []
+    else:
+        delivery_status = "complete" if complete else "incomplete"
+        delivery_codes = [] if complete else ["orca_auto/required_artifact_unavailable"]
+        if outcome == "succeeded" and complete:
+            handoff_status = "ready"
+            handoff_codes = []
+        else:
+            handoff_status = "blocked"
+            handoff_codes = [
+                machine_code(
+                    "orca_auto",
+                    reason if outcome != "succeeded" else "required_artifact_unavailable",
+                    fallback="operation_not_ready",
+                )
+            ]
+    lifecycle_codes = (
+        []
+        if outcome in {"pending", "succeeded"}
+        else [machine_code("orca_auto", reason or outcome, fallback="operation_failed")]
+    )
+    attempts = engine_payload.get("attempts")
+    attempt_count = len(attempts) if isinstance(attempts, list) else 0
+    result_details = {
+        "run_id": _text(engine_payload.get("run_id")),
+        "analyzer_status": analyzer_status,
+        "reason": reason,
+        "attempt_count": attempt_count,
+        "max_retries": int(engine_payload.get("max_retries", 0) or 0),
+        "resumed": bool(final_result.get("resumed", False)),
+        "skipped_execution": bool(final_result.get("skipped_execution", False)),
+        "runner_error": _text(final_result.get("runner_error")),
+    }
+    return {
+        "contract": {"name": MACHINE_CONTRACT_NAME, "version": MACHINE_CONTRACT_VERSION},
+        "producer": {"name": "orca_auto", "version": __version__},
+        "operation": {"id": operation_id, "kind": "chemistry/orca-run"},
+        "lifecycle": {"phase": phase, "outcome": outcome, "codes": lifecycle_codes},
+        "handoff": {"status": handoff_status, "codes": handoff_codes},
+        "delivery": {"status": delivery_status, "codes": delivery_codes},
+        "artifacts": artifacts,
+        "lineage": {"trace_id": None, "upstream": []},
+        "payload": {
+            "contract": {
+                "name": RESULTS_PAYLOAD_CONTRACT_NAME,
+                "version": RESULTS_PAYLOAD_CONTRACT_VERSION,
+            },
+            "data": {
+                "result_kind": "engine-run",
+                "engine": "orca",
+                "summary": {
+                    "status": status,
+                    "reason": reason,
+                    "analyzer_status": analyzer_status,
+                    "attempt_count": attempt_count,
+                },
+                "results": result_details,
+                "artifact_refs": sorted(artifacts),
+            },
+        },
+    }
+
+
 def write_report_json(
     reaction_dir: Path,
     report_payload: dict[str, Any],
     *,
     generation_target: tuple[Path, tuple[int, int]] | None = None,
+    published_artifacts: Mapping[str, tuple[Path, str, str]] | None = None,
 ) -> Path | None:
     if int(report_payload.get("schema_version", 0) or 0) == 1:
         payload = report_payload
@@ -547,9 +761,65 @@ def write_report_json(
             "report JSON not published: no verified execution generation for %s", reaction_dir
         )
         return None
+    observation = _machine_observation(
+        generation_target[0],
+        payload,
+        published_artifacts=published_artifacts,
+    )
     path = report_json_path(generation_target[0])
-    _write_generation_json(generation_target, path, payload)
+    observation_bytes = machine_json_bytes(observation)
+    if path.exists() or path.is_symlink():
+        try:
+            existing_text = read_confined_text(
+                generation_target[0],
+                path,
+                label="ORCA generation machine observation",
+                max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
+            )
+            existing = json.loads(existing_text)
+        except (OSError, RuntimeError, TypeError, UnicodeError, ValueError) as exc:
+            raise RuntimeError(f"existing machine observation is invalid: {path}") from exc
+        existing_lifecycle = _dict(existing.get("lifecycle")) if isinstance(existing, dict) else {}
+        if existing_lifecycle.get("phase") == "finished":
+            if existing_text.encode("utf-8") == observation_bytes:
+                return path
+            raise RuntimeError(f"terminal machine observation is immutable: {path}")
+    _write_generation_bytes(generation_target, path, observation_bytes)
     return path
+
+
+def _existing_terminal_report_paths(
+    generation_dir: Path,
+) -> tuple[dict[str, str], str] | None:
+    """Published report paths and recorded outcome of a terminal ``machine.json``.
+
+    ``None`` means no terminal observation is published yet and reports may be
+    written. An unreadable or corrupt existing observation fails closed.
+    """
+    path = report_json_path(generation_dir)
+    if path.is_symlink() or not path.exists():
+        return None
+    try:
+        existing_text = read_confined_text(
+            generation_dir,
+            path,
+            label="ORCA generation machine observation",
+            max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
+        )
+        existing = json.loads(existing_text)
+    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError) as exc:
+        raise RuntimeError(f"existing machine observation is invalid: {path}") from exc
+    lifecycle = _dict(existing.get("lifecycle")) if isinstance(existing, dict) else {}
+    if lifecycle.get("phase") != "finished":
+        return None
+    reports = {"report_json": str(path)}
+    html_path = generation_dir / RUN_REPORT_HTML_FILE
+    if html_path.is_file():
+        reports["report_html"] = str(html_path)
+    si_path = generation_dir / SI_BLOCK_MD_FILE
+    if si_path.is_file():
+        reports["si_block"] = str(si_path)
+    return reports, _text(lifecycle.get("outcome"))
 
 
 def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str, str]:
@@ -567,17 +837,42 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
             "job reports not published: no verified execution generation for %s", reaction_dir
         )
         return {}
+    existing_terminal = _existing_terminal_report_paths(generation_target[0])
+    if existing_terminal is not None:
+        # The published terminal machine.json pins its artifacts' exact bytes
+        # and is immutable; re-entry must not regenerate or remove any of them.
+        existing_reports, existing_outcome = existing_terminal
+        current_status = _text(_dict(report_payload.get("status")).get("state"))
+        if _machine_lifecycle(current_status)[1] != existing_outcome:
+            logger.warning(
+                "terminal machine observation outcome %r no longer matches job state %r "
+                "for %s; the immutable generation is preserved unchanged",
+                existing_outcome,
+                current_status,
+                generation_target[0],
+            )
+        return existing_reports
     reports: dict[str, str] = {}
-    json_path = write_report_json(
-        reaction_dir,
-        report_payload,
-        generation_target=generation_target,
-    )
-    reports["report_json"] = str(json_path)
     html_path = write_job_html_report(reaction_dir, state, generation_target=generation_target)
     if html_path is not None:
         reports["report_html"] = str(html_path)
     si_path = write_si_block(reaction_dir, state, generation_target=generation_target)
     if si_path is not None:
         reports["si_block"] = str(si_path)
+    published_artifacts: dict[str, tuple[Path, str, str]] = {}
+    if html_path is not None:
+        published_artifacts["human-report"] = (html_path, "human-report", "text/html")
+    if si_path is not None:
+        published_artifacts["supporting-information"] = (
+            si_path,
+            "supporting-information",
+            "text/markdown",
+        )
+    json_path = write_report_json(
+        reaction_dir,
+        report_payload,
+        generation_target=generation_target,
+        published_artifacts=published_artifacts,
+    )
+    reports["report_json"] = str(json_path)
     return reports

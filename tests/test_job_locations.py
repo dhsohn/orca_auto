@@ -12,10 +12,13 @@ import pytest
 
 from orca_auto.core import engine_process as _engine_process
 from orca_auto.core.engine_runner import executable_identity
+from orca_auto.core.machine_observation import machine_json_bytes
 from orca_auto.core.queue.engine.input_snapshot import (
     bind_direct_generation_owner,
     require_direct_generation_owner,
 )
+from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.orca import state as orca_state
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.execution_binding import orca_execution_provenance
 from orca_auto.orca.job_locations import _contract_payload as _job_location_payload
@@ -147,8 +150,18 @@ def _write_json(path: Path, payload: object) -> None:
             row.setdefault("task_kind", "orca_run_inp")
             normalized.append(row)
         payload = normalized
+    if (
+        path.name == REPORT_JSON_NAME
+        and is_visible_generation_name(path.parent.name)
+        and isinstance(payload, dict)
+        and payload.get("contract") is None
+    ):
+        payload = orca_state._machine_observation(path.parent, payload)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+    if path.name == REPORT_JSON_NAME and isinstance(payload, dict) and payload.get("contract"):
+        path.write_bytes(machine_json_bytes(payload))
+    else:
+        path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
 def _orca_payload(
@@ -1071,13 +1084,7 @@ def test_runtime_paths_reject_mismatched_disk_payload_generations(tmp_path: Path
     _allowed_root, generation = _verified_queue_absent_report_generation(tmp_path)
     report_payload = json.loads(report_json_path(generation).read_text(encoding="utf-8"))
     assert isinstance(report_payload, dict)
-    report_job = report_payload["job"]
-    report_engine_payload = report_payload["engine_payload"]
-    assert isinstance(report_job, dict)
-    assert isinstance(report_engine_payload, dict)
-    report_job["id"] = "job_other"
-    report_job["task_id"] = "job_other"
-    report_engine_payload["run_id"] = "run_other"
+    report_payload["operation"]["id"] = "job_other"
     _write_json(report_json_path(generation), report_payload)
 
     paths = _runtime_paths(generation)

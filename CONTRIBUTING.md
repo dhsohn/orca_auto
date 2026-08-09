@@ -168,6 +168,7 @@ research data into AI tools.
 ## Reporting issues
 
 Please use the issue templates when possible. For calculation failures, include
-sanitized `job_state.json`, `job_report.json`, the command used, the calculation
-type, and the exact terminal/error marker when available. Remove secrets and
-private system paths before posting logs.
+the terminal generation's sanitized `machine.json`, the command used, the
+calculation type, and the exact terminal/error marker when available. A sanitized
+`job_state.json` excerpt may help diagnose private recovery state, but it is not a
+result contract. Remove secrets and private system paths before posting logs.

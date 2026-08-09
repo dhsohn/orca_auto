@@ -336,8 +336,8 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
 - **재시작/재개:** 재시도/재개 시, 일치하는 비어 있지 않은 `.gbw` 체크포인트가
   있으면 `MORead` + `%moinp`로 재시작 입력을 생성합니다. 재개된 입력은
   `*.resume.inp`로 기록되어 사용자 입력이 변경되지 않습니다.
-- **상태 & 리포트:** `state.py`/`state_machine.py`가 `job_state.json`을
-  영속화하고, 완료 시 `job_report.json`을 작성합니다. Opt,
+- **상태 & 리포트:** `state.py`/`state_machine.py`가 private `job_state.json`을
+  영속화하고, 완료 시 공통 `machine.json`을 마지막에 발행합니다. Opt,
   OptTS, NEB-TS, ScanTS, IRC, relaxed scan 작업은 추가로
   `job_report.html`(`report/`)을 생성합니다 — `report/composer.py`가 공통
   페이지 틀과 계산 component를 조합해 만드는 단일 파일 시각 리포트입니다. 여기에는
@@ -468,7 +468,8 @@ orca_auto는 scheduling, ownership, 공개 artifact를 모두 디스크 기반�
 | `queue.json`                | core/queue       | 엔진별 내구성 큐 (진실 공급원)          |
 | 어드미션 슬롯 파일          | core/admission   | 활성 동시성 슬롯 (머신 전역)            |
 | `job_state.json`            | orca (state)     | 작업별 시도 + 상태                       |
-| `job_report.json` / `.html` | orca (reporting) | 기계/사람용 완료 리포트                  |
+| `machine.json`              | orca/flow       | 공개 machine observation                 |
+| `job_report.html`           | orca (reporting) | 사람용 완료 리포트                      |
 | 작업 위치 인덱스 (JSONL)    | core/indexing    | 각 작업 출력의 현재 위치                 |
 | `workflow.json`             | flow             | 내구성 워크플로우 페이로드               |
 | `workflow_report.html`      | flow (report)    | 실시간 갱신 워크플로우 시각 요약         |

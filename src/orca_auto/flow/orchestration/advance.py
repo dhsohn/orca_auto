@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.artifacts import MAX_RUN_ARTIFACT_JSON_BYTES
+from orca_auto.core.engine_process import read_confined_text
+from orca_auto.core.machine_observation import MACHINE_OBSERVATION_FILE
 from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.engine_options import WorkflowEngineOptions
@@ -23,12 +27,47 @@ from orca_auto.flow.orchestration.services import (
 from orca_auto.flow.orchestration.workflow_cancellation import (
     cancel_materialized_workflow,
 )
+from orca_auto.flow.workflow.machine import write_workflow_machine_observation
 from orca_auto.flow.workflow.report import write_workflow_html_report
 from orca_auto.flow.workflow.si.publication import write_workflow_si
 
 logger = logging.getLogger(__name__)
 
 _SI_PUBLISH_MAX_ATTEMPTS = 5
+
+
+def _terminal_observation_published(workspace_dir: Path) -> bool:
+    """True when this workspace already published its immutable ``machine.json``.
+
+    The terminal observation pins the exact bytes of ``workflow_report.html``
+    and ``workflow_si.md``; once it exists, no advance may regenerate a pinned
+    artifact. An unsafe or unparseable existing observation fails closed with
+    an error — before any pinned artifact could be rewritten — instead of
+    silently freezing report publication behind a junk file.
+    """
+    machine_path = workspace_dir / MACHINE_OBSERVATION_FILE
+    if machine_path.is_symlink():
+        raise ValueError(f"workflow machine observation is unsafe: {machine_path}")
+    if not machine_path.exists():
+        return False
+    try:
+        payload = json.loads(
+            read_confined_text(
+                workspace_dir,
+                machine_path,
+                label="workflow machine observation",
+                max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
+            )
+        )
+    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError) as exc:
+        raise ValueError(
+            f"existing workflow machine observation is invalid: {machine_path}"
+        ) from exc
+    lifecycle = payload.get("lifecycle") if isinstance(payload, dict) else None
+    phase = lifecycle.get("phase") if isinstance(lifecycle, dict) else None
+    if phase != "finished":
+        raise ValueError(f"existing workflow machine observation is not terminal: {machine_path}")
+    return True
 
 
 def _workflow_metadata(payload: dict[str, Any]) -> dict[str, Any]:
@@ -88,7 +127,19 @@ def _validate_or_quarantine_workflow_identity(
         }
         services.persistence.write_workflow_payload(workspace_dir, payload)
         services.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
-        write_workflow_html_report(workspace_dir, payload)
+        try:
+            observation_published = _terminal_observation_published(workspace_dir)
+        except (OSError, RuntimeError, ValueError):
+            # Quarantine must still persist; with the observation state unsafe
+            # or unreadable, leave every possibly-pinned artifact untouched.
+            logger.warning(
+                "Workflow machine observation is unreadable during quarantine for %s",
+                workspace_dir,
+                exc_info=True,
+            )
+            observation_published = True
+        if not observation_published:
+            write_workflow_html_report(workspace_dir, payload)
         # Persist the quarantine before any child sync, then continue in
         # sync-only mode. This blocks new submissions while allowing the
         # normal finalization path to cancel and drain active children.
@@ -141,6 +192,18 @@ def advance_workflow(
             _run_advance_phase(payload, context, phase)
 
         _finalize_advanced_workflow(payload, context, config)
+        if _terminal_observation_published(workspace_dir):
+            # Re-advance of a published terminal workflow (crash/marker
+            # reconciliation, manual CLI re-run) checkpoints private durable
+            # state only; regenerating the HTML report here would invalidate
+            # the immutable observation's receipt.
+            resolved.persistence.write_workflow_payload(workspace_dir, payload)
+            resolved.persistence.sync_workflow_registry(
+                workflow_root_path,
+                workspace_dir,
+                payload,
+            )
+            return payload
         metadata = _workflow_metadata(payload)
         was_blocked = bool(metadata.get("si_publish_blocked"))
         try:
@@ -157,6 +220,7 @@ def advance_workflow(
                 payload,
             )
             write_workflow_html_report(workspace_dir, payload)
+            write_workflow_machine_observation(workspace_dir, payload)
             return payload
         attempts = previous_attempts + 1
         generation = str(metadata.get("last_advanced_at") or "").strip()
@@ -181,6 +245,7 @@ def advance_workflow(
                 payload,
             )
             write_workflow_html_report(workspace_dir, payload)
+            write_workflow_machine_observation(workspace_dir, payload)
             return payload
         try:
             write_workflow_si(workspace_dir, payload)
@@ -205,6 +270,7 @@ def advance_workflow(
         resolved.persistence.write_workflow_payload(workspace_dir, payload)
         resolved.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
         write_workflow_html_report(workspace_dir, payload)
+        write_workflow_machine_observation(workspace_dir, payload)
         return payload
 
 

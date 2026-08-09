@@ -10,13 +10,15 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.artifacts import WORKFLOW_SI_MD_FILE
+from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE, WORKFLOW_SI_MD_FILE
 from orca_auto.core.engine_runner import confined_output_identity, executable_identity
+from orca_auto.core.machine_observation import machine_json_bytes
 from orca_auto.flow.manifest import interaction_energy_config_fingerprint
 from orca_auto.flow.workflow.si import collection as si_evidence
 from orca_auto.flow.workflow.si.collection import collect_workflow_si_data
 from orca_auto.flow.workflow.si.publication import write_workflow_si
 from orca_auto.flow.workflow.si.rendering import render_workflow_si_md
+from orca_auto.orca.state import _machine_observation
 from tests.engine_artifact_helpers import bind_report_generation
 
 _COORDS_A = (
@@ -39,6 +41,11 @@ _COORDS_D = (
 _MIN_FREQS = (10.0, 20.0, 30.0, 40.0, 80.0, 120.0)
 _ALT_MIN_FREQS = (12.0, 22.0, 35.0, 45.0, 90.0, 110.0)
 _ONE_IMAG_FREQS = (-500.0, 20.0, 30.0, 40.0, 80.0, 120.0)
+
+
+def _write_machine(stage_dir: Path, state: dict[str, Any]) -> None:
+    observation = _machine_observation(stage_dir, state)
+    (stage_dir / RUN_REPORT_JSON_FILE).write_bytes(machine_json_bytes(observation))
 
 
 def _out_text(
@@ -169,24 +176,24 @@ def _stage_dir(
         "execution_provenance": binding_state["execution_provenance"],
     }
     (generation / "job_state.json").write_text(json.dumps(state), encoding="utf-8")
-    (generation / "job_report.json").write_text(json.dumps(state), encoding="utf-8")
+    _write_machine(generation, state)
     return generation
 
 
 def _orca_stage(
     stage_id: str, stage_dir: Path, *, status: str = "completed", label: str = ""
 ) -> dict[str, Any]:
-    report_path = stage_dir / "job_report.json"
+    report_path = stage_dir / RUN_REPORT_JSON_FILE
     if stage_id:
-        for artifact_name in ("job_state.json", "job_report.json"):
-            artifact_path = stage_dir / artifact_name
-            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-            payload["job"]["id"] = stage_id
-            if "task_id" in payload["job"]:
-                payload["job"]["task_id"] = stage_id
-            artifact_path.write_text(json.dumps(payload), encoding="utf-8")
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    run_id = str(report.get("engine_payload", {}).get("run_id", ""))
+        state_path = stage_dir / "job_state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["job"]["id"] = stage_id
+        if "task_id" in state["job"]:
+            state["job"]["task_id"] = stage_id
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        _write_machine(stage_dir, state)
+    state = json.loads((stage_dir / "job_state.json").read_text(encoding="utf-8"))
+    run_id = str(state.get("engine_payload", {}).get("run_id", ""))
     return {
         "stage_id": stage_id,
         "stage_kind": "orca_stage",
@@ -582,8 +589,8 @@ def test_workflow_si_discovers_verified_generation_without_report_artifact(
     assert data.excluded == ()
 
 
-@pytest.mark.parametrize("dimension", ("job", "run", "queue"))
-def test_workflow_si_rejects_state_report_identity_conflict(
+@pytest.mark.parametrize("dimension", ("job", "run"))
+def test_workflow_si_rejects_state_machine_identity_conflict(
     tmp_path: Path,
     dimension: str,
 ) -> None:
@@ -603,14 +610,12 @@ def test_workflow_si_rejects_state_report_identity_conflict(
         state["job"]["id"] = "foreign_job"
     elif dimension == "run":
         state["engine_payload"]["run_id"] = "foreign_run"
-    else:
-        state["job"]["queue_id"] = "foreign_queue"
     state_path.write_text(json.dumps(state), encoding="utf-8")
 
     data = collect_workflow_si_data(_payload([stage]))
 
     assert data.entries == ()
-    assert data.excluded[0].reason == "job state identity differs from verified report"
+    assert data.excluded[0].reason == "no verified report generation recorded"
 
 
 def test_workflow_si_rejects_foreign_state_provenance(tmp_path: Path) -> None:
@@ -636,9 +641,7 @@ def test_workflow_si_rejects_foreign_state_provenance(tmp_path: Path) -> None:
     data = collect_workflow_si_data(_payload([stage]))
 
     assert data.entries == ()
-    assert data.excluded[0].reason == (
-        "job state execution provenance differs from verified report"
-    )
+    assert data.excluded[0].reason == "no verified report generation recorded"
 
 
 def test_workflow_si_rejects_state_selected_input_conflict(tmp_path: Path) -> None:
@@ -662,7 +665,7 @@ def test_workflow_si_rejects_state_selected_input_conflict(tmp_path: Path) -> No
     data = collect_workflow_si_data(_payload([stage]))
 
     assert data.entries == ()
-    assert data.excluded[0].reason == "job state selected input differs from verified report"
+    assert data.excluded[0].reason == "no verified report generation recorded"
 
 
 def test_workflow_si_rejects_output_outside_verified_generation(tmp_path: Path) -> None:
@@ -687,7 +690,7 @@ def test_workflow_si_rejects_output_outside_verified_generation(tmp_path: Path) 
     data = collect_workflow_si_data(_payload([stage]))
 
     assert data.entries == ()
-    assert data.excluded[0].reason == "job state terminal output differs from verified report"
+    assert data.excluded[0].reason == "no verified report generation recorded"
 
 
 def test_workflow_si_rejects_replaced_terminal_output(tmp_path: Path) -> None:
@@ -707,7 +710,7 @@ def test_workflow_si_rejects_replaced_terminal_output(tmp_path: Path) -> None:
     data = collect_workflow_si_data(_payload([stage]))
 
     assert data.entries == ()
-    assert data.excluded[0].reason == ("job output no longer matches its terminal content identity")
+    assert data.excluded[0].reason == "no verified report generation recorded"
 
 
 def test_workflow_si_rejects_state_report_output_identity_mismatch(tmp_path: Path) -> None:
@@ -729,7 +732,7 @@ def test_workflow_si_rejects_state_report_output_identity_mismatch(tmp_path: Pat
     data = collect_workflow_si_data(_payload([stage]))
 
     assert data.entries == ()
-    assert data.excluded[0].reason == "job output content identity differs from verified report"
+    assert data.excluded[0].reason == "job output no longer matches its terminal content identity"
 
 
 def test_workflow_si_rechecks_terminal_output_after_parsing(
@@ -868,12 +871,7 @@ def test_workflow_si_rejects_symlinked_generation_evidence(
     data = collect_workflow_si_data(_payload([stage]))
 
     assert data.entries == ()
-    if artifact_name == "job_state.json":
-        assert data.excluded[0].reason == "no job state found"
-    else:
-        assert data.excluded[0].reason == (
-            "job output no longer matches its terminal content identity"
-        )
+    assert data.excluded[0].reason == "no verified report generation recorded"
 
 
 def test_nonfinite_parsed_thermochemistry_is_excluded_from_workflow_si(tmp_path: Path) -> None:
@@ -1632,18 +1630,17 @@ def _interaction_stage(
             }
         )
     artifacts = [{"kind": "orca_output_dir", "path": str(stage_dir)}]
-    report_path = stage_dir / "job_report.json"
+    report_path = stage_dir / RUN_REPORT_JSON_FILE
     if report_path.is_file():
-        for artifact_name in ("job_state.json", "job_report.json"):
-            artifact_path = stage_dir / artifact_name
-            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-            payload["job"]["id"] = stage_id
-            if "task_id" in payload["job"]:
-                payload["job"]["task_id"] = stage_id
-            artifact_path.write_text(json.dumps(payload), encoding="utf-8")
-        report = json.loads(report_path.read_text(encoding="utf-8"))
+        state_path = stage_dir / "job_state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["job"]["id"] = stage_id
+        if "task_id" in state["job"]:
+            state["job"]["task_id"] = stage_id
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        _write_machine(stage_dir, state)
         metadata["child_job_id"] = stage_id
-        metadata["run_id"] = str(report.get("engine_payload", {}).get("run_id", ""))
+        metadata["run_id"] = str(state.get("engine_payload", {}).get("run_id", ""))
         artifacts.append({"kind": "orca_report_json", "path": str(report_path)})
     return {
         "stage_id": stage_id,
@@ -1659,12 +1656,12 @@ def _refresh_bound_input_identity(generation: Path) -> None:
 
     selected = generation / "job.inp"
     identity = executable_identity(selected)
-    for name in ("job_state.json", "job_report.json"):
-        path = generation / name
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        payload["execution_provenance"]["bound_selected_identity"] = identity
-        payload["engine_payload"]["execution_provenance"]["bound_selected_identity"] = identity
-        path.write_text(json.dumps(payload), encoding="utf-8")
+    path = generation / "job_state.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["execution_provenance"]["bound_selected_identity"] = identity
+    payload["engine_payload"]["execution_provenance"]["bound_selected_identity"] = identity
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    _write_machine(generation, payload)
 
 
 def _refresh_output_identity(generation: Path) -> None:
@@ -1672,11 +1669,11 @@ def _refresh_output_identity(generation: Path) -> None:
 
     out = generation / "job.out"
     identity = confined_output_identity(generation, out)
-    for name in ("job_state.json", "job_report.json"):
-        path = generation / name
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        payload["engine_payload"]["attempts"][0]["output_identity"] = identity
-        path.write_text(json.dumps(payload), encoding="utf-8")
+    path = generation / "job_state.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["engine_payload"]["attempts"][0]["output_identity"] = identity
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    _write_machine(generation, payload)
 
 
 def _params_payload(

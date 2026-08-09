@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core import engine_runner as _engine_runner
+from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE, RUN_STATE_FILE
 from orca_auto.core.engine_process import (
     atomic_write_confined_bytes,
     require_confined_regular_file,
@@ -62,8 +63,8 @@ ORCA_EXECUTION_SNAPSHOT_VERSION = 2
 MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES = 4 * MAX_INPUT_SNAPSHOT_BYTES
 _GENERATION_RUNTIME_FILE_NAMES = frozenset(
     {
-        "job_report.json",
-        "job_state.json",
+        RUN_REPORT_JSON_FILE,
+        RUN_STATE_FILE,
     }
 )
 _XYZ_GEOMETRY_REFERENCE_KINDS = frozenset({"geometry", "neb_geometry"})
