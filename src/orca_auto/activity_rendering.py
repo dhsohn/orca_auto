@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
@@ -8,34 +7,6 @@ from typing import Any
 from orca_auto import activity_labels as _activity_labels
 from orca_auto import terminal_table as _terminal_table
 from orca_auto.core.utils import normalize_text
-
-
-def _queue_table_now() -> datetime:
-    return _activity_labels.queue_table_now()
-
-
-def _queue_elapsed_text(item: dict[str, Any], *, now: datetime | None = None) -> str:
-    return _activity_labels.queue_elapsed_text(item, now=now, now_factory=_queue_table_now)
-
-
-def _queue_status_icon(item: dict[str, Any]) -> str:
-    return _activity_labels.queue_status_icon(item)
-
-
-def _queue_detail_text(item: dict[str, Any]) -> str:
-    return _activity_labels.queue_detail_text(item)
-
-
-def _queue_name_text(item: dict[str, Any]) -> str:
-    return _activity_labels.queue_name_text(item)
-
-
-def _queue_display_width(value: str) -> int:
-    return _terminal_table.display_width(value)
-
-
-def _terminal_max_width() -> int | None:
-    return _terminal_table.terminal_max_width(get_terminal_size=shutil.get_terminal_size)
 
 
 def _tree_prefixes(indents: Sequence[int]) -> list[str]:
@@ -78,10 +49,10 @@ def _prepare_queue_table_rows(
     use_tree_glyphs: bool = False,
 ) -> list[dict[str, str]]:
     prepared: list[dict[str, str]] = []
-    resolved_now = now or _queue_table_now()
+    resolved_now = now or _activity_labels.queue_table_now()
     prefixes = _tree_prefixes([indent for indent, _ in rows]) if use_tree_glyphs else None
     for position, (indent, item) in enumerate(rows):
-        name = _queue_name_text(item)
+        name = _activity_labels.queue_name_text(item)
         if prefixes is not None:
             name = prefixes[position] + name
         elif int(indent) > 0:
@@ -89,11 +60,11 @@ def _prepare_queue_table_rows(
         item_id = normalize_text(item.get("activity_id")) or "-"
         prepared.append(
             {
-                "status": _queue_status_icon(item),
+                "status": _activity_labels.queue_status_icon(item),
                 "name": name,
-                "detail": _queue_detail_text(item),
+                "detail": _activity_labels.queue_detail_text(item),
                 "id": item_id,
-                "elapsed": _queue_elapsed_text(item, now=resolved_now),
+                "elapsed": _activity_labels.queue_elapsed_text(item, now=resolved_now),
             }
         )
     return prepared

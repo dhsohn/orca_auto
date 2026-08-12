@@ -7,8 +7,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from orca_auto import activity_labels, cli_common, cli_style, terminal_table
 from orca_auto import activity_rendering as _activity_rendering
-from orca_auto import cli_common, cli_style, terminal_table
 from orca_auto.activity_view import (
     activity_counter_config_path,
     activity_with_parent_hint,
@@ -58,22 +58,6 @@ def _activity_counter_config_path(
         config_hints=(config_hint,),
         prefer_hints=True,
     )
-
-
-def _queue_table_now() -> Any:
-    return _activity_rendering._queue_table_now()
-
-
-def _queue_elapsed_text(item: dict[str, Any], *, now: Any | None = None) -> str:
-    return _activity_rendering._queue_elapsed_text(item, now=now)
-
-
-def _queue_display_width(value: str) -> int:
-    return _activity_rendering._queue_display_width(value)
-
-
-def _queue_terminal_width() -> int | None:
-    return _activity_rendering._terminal_max_width()
 
 
 def _stdout_isatty() -> bool:
@@ -173,7 +157,7 @@ def _queue_header_band_lines(
         (
             styled
             for styled, plain in title_candidates
-            if max_width is None or _queue_display_width(plain) <= max_width
+            if max_width is None or terminal_table.display_width(plain) <= max_width
         ),
         cli_style.paint(
             terminal_table.truncate(active_plain, max_width=max(0, max_width or 0)),
@@ -190,7 +174,7 @@ def _queue_header_band_lines(
             if (
                 current
                 and max_width is not None
-                and _queue_display_width(candidate_plain) > max_width
+                and terminal_table.display_width(candidate_plain) > max_width
             ):
                 rows.append(current)
                 current = [segment]
@@ -202,7 +186,7 @@ def _queue_header_band_lines(
         separator = cli_style.paint(" · ", cli_style.DIM)
         for row in rows:
             plain = "  " + " · ".join(text for text, _color in row)
-            if max_width is not None and _queue_display_width(plain) > max_width:
+            if max_width is not None and terminal_table.display_width(plain) > max_width:
                 # Only possible when one segment is wider than the terminal.
                 # Keep a visible, bounded prefix instead of dropping the bucket.
                 text, color = row[0]
@@ -226,16 +210,12 @@ def _queue_list_text_lines(
     return _activity_rendering.queue_list_text_lines(
         rows,
         active_simulations=active_simulations,
-        now=now or _queue_table_now(),
-        max_width=max_width if max_width is not None else _queue_terminal_width(),
+        now=now or activity_labels.queue_table_now(),
+        max_width=max_width if max_width is not None else terminal_table.terminal_max_width(),
         include_id=include_id,
         empty_message=empty_message,
         use_tree_glyphs=_layout_interactive(),
     )
-
-
-def _queue_clear_lines(payload: dict[str, Any]) -> list[str]:
-    return _activity_rendering.queue_clear_lines(payload)
 
 
 def _queue_list_request(args: Any) -> _QueueListRequest:
@@ -272,7 +252,7 @@ def _cmd_queue_list_clear(args: Any, request: _QueueListRequest) -> int:
     if request.json_output:
         print(json.dumps(payload, ensure_ascii=True, indent=2))
         return 0
-    for line in _queue_clear_lines(payload):
+    for line in _activity_rendering.queue_clear_lines(payload):
         print(line)
     return 0
 
@@ -321,8 +301,8 @@ def _print_queue_list_text(
     request: _QueueListRequest,
 ) -> int:
     tty = _layout_interactive()
-    term_width = _queue_terminal_width()
-    rail_width = _queue_display_width(_QUEUE_RAIL)
+    term_width = terminal_table.terminal_max_width()
+    rail_width = terminal_table.display_width(_QUEUE_RAIL)
     display_items = list(filtered_activities)
     if request.default_combined_text_view:
         display_items = queue_list_default_visible_items(display_items)
@@ -337,7 +317,7 @@ def _print_queue_list_text(
     lines = _queue_list_text_lines(
         display_rows,
         active_simulations=active_simulations,
-        now=_queue_table_now(),
+        now=activity_labels.queue_table_now(),
         max_width=term_width,
     )
 
@@ -374,7 +354,7 @@ def _print_queue_list_text(
     # could not shrink that far (a very narrow terminal leaves it at its column
     # floor), the rail would push the block past the edge, so drop the rail and
     # keep the historical width rather than forcing a wrap.
-    table_width = _queue_display_width(lines[2])
+    table_width = terminal_table.display_width(lines[2])
     show_rail = term_width is None or table_width + rail_width <= term_width
     gutter = " " * rail_width if show_rail else ""
     print(gutter + cli_style.paint(lines[1], cli_style.BOLD))

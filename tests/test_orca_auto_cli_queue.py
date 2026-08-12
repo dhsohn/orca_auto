@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from orca_auto import cli_common, cli_style, terminal_table
+from orca_auto import activity_labels, cli_common, cli_style, terminal_table
 from orca_auto import cli_queue as unified_cli
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -54,7 +54,7 @@ def test_queue_list_stays_plain_under_force_color_pipe(
     # band / tree glyphs / rail — while still emitting color codes.
     monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: False)
     monkeypatch.setattr(
-        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+        activity_labels, "queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
     monkeypatch.setattr(
         unified_cli,
@@ -173,7 +173,7 @@ def test_queue_elapsed_prefers_attempt_anchor_metadata() -> None:
     now = datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
 
     assert (
-        unified_cli._queue_elapsed_text(
+        activity_labels.queue_elapsed_text(
             {
                 "status": "running",
                 "submitted_at": "2026-04-26T01:00:00+00:00",
@@ -185,7 +185,7 @@ def test_queue_elapsed_prefers_attempt_anchor_metadata() -> None:
         == "00:15:00"
     )
     assert (
-        unified_cli._queue_elapsed_text(
+        activity_labels.queue_elapsed_text(
             {
                 "status": "completed",
                 "submitted_at": "2026-04-26T01:00:00+00:00",
@@ -203,7 +203,7 @@ def test_cmd_queue_list_filters_text_output(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
-        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+        activity_labels, "queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
     monkeypatch.setattr(
         unified_cli,
@@ -284,7 +284,7 @@ def test_cmd_queue_list_tty_renders_styled_view(
 ) -> None:
     monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
     monkeypatch.setattr(
-        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+        activity_labels, "queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
     monkeypatch.setattr(
         unified_cli,
@@ -372,7 +372,7 @@ def test_cmd_queue_list_tty_rail_never_overflows_terminal(
     from orca_auto.terminal_table import display_width
 
     monkeypatch.setattr(
-        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+        activity_labels, "queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
     monkeypatch.setattr(
         unified_cli,
@@ -431,7 +431,7 @@ def test_cmd_queue_list_tty_rail_never_overflows_terminal(
     )
 
     def _render(width: int, *, color: bool) -> str:
-        monkeypatch.setattr(unified_cli, "_queue_terminal_width", lambda: width)
+        monkeypatch.setattr(terminal_table, "terminal_max_width", lambda: width)
         # Interactive layout needs a real terminal; color alone (e.g. FORCE_COLOR)
         # must not restructure. color=False stays plain via color_enabled anyway.
         monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
@@ -476,7 +476,7 @@ def test_cmd_queue_list_shows_all_workflow_children_in_default_text_output(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
-        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+        activity_labels, "queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
     monkeypatch.setattr(
         unified_cli,
@@ -597,7 +597,7 @@ def test_cmd_queue_list_shows_all_workflow_child_jobs(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
-        unified_cli, "_queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
+        activity_labels, "queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
     child_rows = [
         {
