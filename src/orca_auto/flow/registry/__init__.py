@@ -1,12 +1,6 @@
 from __future__ import annotations
 
-from ..worker_state_store import (
-    WORKFLOW_WORKER_STATE_FILE_NAME,
-    load_workflow_worker_state,
-    workflow_worker_state_path,
-    write_workflow_worker_state,
-)
-from ..workflow.journal import (
+from .journal import (
     WORKFLOW_JOURNAL_FILE_NAME,
     append_workflow_journal_event,
     list_workflow_journal,
@@ -25,6 +19,12 @@ from .store import (
     resolve_workflow_registry_record,
     sync_workflow_registry,
     upsert_workflow_registry_record,
+)
+from .worker_state_store import (
+    WORKFLOW_WORKER_STATE_FILE_NAME,
+    load_workflow_worker_state,
+    workflow_worker_state_path,
+    write_workflow_worker_state,
 )
 
 __all__ = [

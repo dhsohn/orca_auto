@@ -12,10 +12,11 @@ from orca_auto.core.messaging import (
     SendResult,
     render_discord_embed,
 )
-from orca_auto.flow import registry, worker_state_store
+from orca_auto.flow import registry
 from orca_auto.flow.registry import _notifications as registry_notifications
+from orca_auto.flow.registry import journal as workflow_journal
 from orca_auto.flow.registry import store as registry_store
-from orca_auto.flow.workflow import journal as workflow_journal
+from orca_auto.flow.registry import worker_state_store
 from tests.flow.registry_test_helpers import (
     patch_file_locks as _patch_file_locks,
 )

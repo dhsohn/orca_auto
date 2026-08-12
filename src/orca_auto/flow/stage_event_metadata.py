@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .runtime import _common as _runtime_common
-from .runtime.models import StageTransitionContext
+from orca_auto.core.utils.coercion import normalize_text, safe_int
+
+if TYPE_CHECKING:
+    from .runtime.models import StageTransitionContext
 
 
 def stage_key(stage: dict[str, Any], index: int) -> str:
-    stage_id = _runtime_common.normalize_text(stage.get("stage_id"))
+    stage_id = normalize_text(stage.get("stage_id"))
     if stage_id:
         return stage_id
     return f"index:{index}"
@@ -45,11 +47,11 @@ def stage_event_metadata(stage: dict[str, Any]) -> dict[str, Any]:
         "output_artifact_count",
     )
     for field in text_fields:
-        text = _runtime_common.normalize_text(stage.get(field))
+        text = normalize_text(stage.get(field))
         if text:
             metadata[field] = text
     for field in int_fields:
-        value = _runtime_common.safe_int(stage.get(field))
+        value = safe_int(stage.get(field), default=None)
         if value is not None:
             metadata[field] = value
     return metadata
@@ -61,8 +63,8 @@ def stage_status_event_type(
     *,
     suppress_terminal_event: bool,
 ) -> str:
-    previous_status = _runtime_common.normalize_text(previous_stage.get("status")).lower()
-    current_status = _runtime_common.normalize_text(current_stage.get("status")).lower()
+    previous_status = normalize_text(previous_stage.get("status")).lower()
+    current_status = normalize_text(current_stage.get("status")).lower()
     if not current_status or current_status == previous_status:
         return ""
     if current_status == "queued":
@@ -81,20 +83,14 @@ def stage_status_event_type(
 
 
 def stage_handoff_event_type(previous_stage: dict[str, Any], current_stage: dict[str, Any]) -> str:
-    engine = _runtime_common.normalize_text(
-        current_stage.get("engine") or previous_stage.get("engine")
-    ).lower()
-    task_kind = _runtime_common.normalize_text(
+    engine = normalize_text(current_stage.get("engine") or previous_stage.get("engine")).lower()
+    task_kind = normalize_text(
         current_stage.get("task_kind") or previous_stage.get("task_kind")
     ).lower()
     if engine != "xtb" or task_kind != "path_search":
         return ""
-    previous_handoff = _runtime_common.normalize_text(
-        previous_stage.get("reaction_handoff_status")
-    ).lower()
-    current_handoff = _runtime_common.normalize_text(
-        current_stage.get("reaction_handoff_status")
-    ).lower()
+    previous_handoff = normalize_text(previous_stage.get("reaction_handoff_status")).lower()
+    current_handoff = normalize_text(current_stage.get("reaction_handoff_status")).lower()
     if not current_handoff or current_handoff == previous_handoff:
         return ""
     if current_handoff == "ready":
@@ -111,23 +107,17 @@ def stage_transition_context(
     current_stage: dict[str, Any],
 ) -> StageTransitionContext:
     return {
-        "previous_stage_status": _runtime_common.normalize_text(
-            previous_stage.get("status")
-        ).lower(),
-        "current_stage_status": _runtime_common.normalize_text(current_stage.get("status")).lower(),
-        "previous_handoff_status": _runtime_common.normalize_text(
+        "previous_stage_status": normalize_text(previous_stage.get("status")).lower(),
+        "current_stage_status": normalize_text(current_stage.get("status")).lower(),
+        "previous_handoff_status": normalize_text(
             previous_stage.get("reaction_handoff_status")
         ).lower(),
-        "current_handoff_status": _runtime_common.normalize_text(
+        "current_handoff_status": normalize_text(
             current_stage.get("reaction_handoff_status")
         ).lower(),
-        "stage_id": _runtime_common.normalize_text(
-            current_stage.get("stage_id") or previous_stage.get("stage_id")
-        ),
-        "engine": _runtime_common.normalize_text(
-            current_stage.get("engine") or previous_stage.get("engine")
-        ),
-        "task_kind": _runtime_common.normalize_text(
+        "stage_id": normalize_text(current_stage.get("stage_id") or previous_stage.get("stage_id")),
+        "engine": normalize_text(current_stage.get("engine") or previous_stage.get("engine")),
+        "task_kind": normalize_text(
             current_stage.get("task_kind") or previous_stage.get("task_kind")
         ),
     }

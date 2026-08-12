@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .runtime import _common as _runtime_common
-from .runtime.models import StageTransitionContext, WorkflowJournalEventPayload
+from orca_auto.core.utils.coercion import normalize_text
+
 from .stage_event_metadata import (
     stage_event_metadata,
     stage_handoff_event_type,
@@ -15,6 +15,9 @@ from .stage_event_metadata import (
     stage_transition_context,
     stage_transition_metadata,
 )
+
+if TYPE_CHECKING:
+    from .runtime.models import StageTransitionContext, WorkflowJournalEventPayload
 
 
 @dataclass(frozen=True)
@@ -56,7 +59,7 @@ class _StageTransitionEventRequest:
     def status_payload(self) -> WorkflowJournalEventPayload:
         reason = ""
         if self.event_type in {"workflow_stage_failed", "workflow_stage_cancelled"}:
-            reason = _runtime_common.normalize_text(self.current_stage.get("reason"))
+            reason = normalize_text(self.current_stage.get("reason"))
         payload = self.base_payload()
         payload.update(
             {
@@ -78,7 +81,7 @@ class _StageTransitionEventRequest:
             {
                 "status": self.context["current_handoff_status"],
                 "previous_status": self.context["previous_handoff_status"],
-                "reason": _runtime_common.normalize_text(
+                "reason": normalize_text(
                     self.current_stage.get("reaction_handoff_reason")
                     or self.current_stage.get("reason")
                 ),
@@ -294,7 +297,7 @@ def append_workflow_advanced_events(
     append_workflow_journal_event_fn: Callable[..., Any],
     append_phase_transition_events_fn: Callable[..., None],
     append_stage_transition_events_fn: Callable[..., None],
-    normalize_text_fn: Callable[[Any], str] = _runtime_common.normalize_text,
+    normalize_text_fn: Callable[[Any], str] = normalize_text,
 ) -> None:
     status = normalize_text_fn(payload.get("status")).lower()
     workflow_id = normalize_text_fn(payload.get("workflow_id")) or record.workflow_id

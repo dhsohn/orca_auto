@@ -18,7 +18,7 @@ from orca_auto.core.utils import (
 )
 from orca_auto.core.utils.lock import file_lock
 
-from .registry.store import (
+from .store import (
     WorkflowRegistryCorruptError,
     _read_existing_json,
     _registry_lock_path,

@@ -24,8 +24,8 @@ from orca_auto.core.utils import (
 from orca_auto.core.utils.lock import file_lock
 from orca_auto.core.utils.persistence import fsync_directory
 
-from ..registry import _notifications as _notifications
-from ..registry.store import _registry_lock_path
+from . import _notifications as _notifications
+from .store import _registry_lock_path
 
 LOGGER = logging.getLogger(__name__)
 
