@@ -8,7 +8,11 @@ import pytest
 
 from orca_auto.flow import endpoint_pairing as endpoint_pairing_module
 from orca_auto.flow._orca_stage_materialization import render_orca_input
-from orca_auto.flow.contracts import CrestDownstreamPolicy, WorkflowStageInput
+from orca_auto.flow.contracts import (
+    CrestDownstreamPolicy,
+    WorkflowStageInput,
+    XtbCandidateArtifact,
+)
 from orca_auto.flow.endpoint_pairing import (
     MAX_ENDPOINT_PAIRING_COMPARISON_ATOMS,
     EndpointPairingPolicy,
@@ -40,6 +44,12 @@ def _candidate(
     score: float = 0.0,
     metadata: dict[str, Any] | None = None,
 ) -> WorkflowStageInput:
+    candidate_metadata = metadata
+    if candidate_metadata is None and kind == "ts_guess":
+        candidate_metadata = {
+            "geometry_valid": True,
+            "geometry_validation": {"valid": True, "reasons": []},
+        }
     return WorkflowStageInput(
         source_job_id=source_job_id,
         source_job_type=source_job_type,
@@ -50,7 +60,7 @@ def _candidate(
         artifact_path=path,
         selected=selected,
         score=score,
-        metadata=metadata or {},
+        metadata=dict(candidate_metadata or {}),
     )
 
 
@@ -1020,6 +1030,95 @@ def test_append_reaction_xtb_stages_waits_for_latest_product_crest_stage(
 
     assert created is False
     assert all(stage.get("task", {}).get("engine") != "xtb" for stage in payload["stages"])
+
+
+@pytest.mark.parametrize(
+    "validation_metadata",
+    [
+        {},
+        {
+            "geometry_valid": True,
+            "geometry_validation": {
+                "valid": True,
+                "error": "endpoint validation failed",
+            },
+        },
+        {
+            "geometry_valid": True,
+            "geometry_validation": {
+                "valid": True,
+                "reasons": ["rearranged: 2 bond changes"],
+            },
+        },
+    ],
+)
+def test_append_reaction_orca_stages_rejects_unvalidated_ts_guess(
+    tmp_path: Path,
+    validation_metadata: dict[str, Any],
+) -> None:
+    candidate = _candidate(
+        "/tmp/unvalidated-ts.xyz",
+        source_job_id="xtb_job_unvalidated",
+        source_job_type="path_search",
+        reaction_key="rxn_unvalidated",
+        rank=1,
+        kind="ts_guess",
+        metadata=validation_metadata,
+    )
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_reaction_unvalidated",
+        "metadata": {"request": {"parameters": {"max_orca_stages": 1}}},
+        "stages": [
+            {
+                "stage_id": "xtb_path_search_01",
+                "status": "completed",
+                "metadata": {},
+                "task": {
+                    "engine": "xtb",
+                    "payload": {"job_dir": "/tmp/xtb_job_unvalidated"},
+                },
+            }
+        ],
+    }
+    contract = SimpleNamespace(
+        job_id="xtb_job_unvalidated",
+        job_type="path_search",
+        candidate_details=(
+            XtbCandidateArtifact(
+                rank=1,
+                kind="ts_guess",
+                path=candidate.artifact_path,
+                selected=True,
+                metadata=validation_metadata,
+            ),
+        ),
+        selected_candidate_paths=(candidate.artifact_path,),
+    )
+    deps = orchestration_services(
+        overrides={
+            "engine_runtime_paths": lambda path, **kwargs: {
+                "allowed_root": tmp_path / str(kwargs.get("engine") or "orca")
+            },
+            "load_xtb_artifact_contract": lambda **kwargs: contract,
+            "select_xtb_downstream_inputs": lambda *args, **kwargs: (candidate,),
+            "build_materialized_orca_stage": lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("unvalidated candidate must not materialize an ORCA stage")
+            ),
+        }
+    )
+
+    created = append_reaction_orca_stages_impl(
+        payload,
+        workspace_dir=tmp_path,
+        xtb_config="/tmp/xtb.yaml",
+        orca_config="/tmp/orca.yaml",
+        services=deps,
+    )
+
+    assert created is False
+    assert len(payload["stages"]) == 1
+    assert payload["stages"][0]["metadata"]["reaction_handoff_status"] == "failed"
+    assert payload["metadata"]["workflow_error"]["reason"] == ("xtb_ts_guess_geometry_unvalidated")
 
 
 def test_append_reaction_orca_stages_sets_xtb_handoff_workflow_error_when_no_candidate_survives(

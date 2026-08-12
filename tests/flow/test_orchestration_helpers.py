@@ -220,6 +220,10 @@ def test_xtb_handoff_status_and_ts_guess_error_cover_ready_and_failure() -> None
         kind="ts_guess",
         artifact_path="/tmp/ts.xyz",
         selected=True,
+        metadata={
+            "geometry_valid": True,
+            "geometry_validation": {"valid": True, "reasons": []},
+        },
     )
     contract = _empty_xtb_contract()
 
@@ -257,7 +261,15 @@ def test_xtb_handoff_status_and_ts_guess_error_cover_ready_and_failure() -> None
         job_dir="",
         latest_known_path="",
         candidate_details=(
-            XtbCandidateArtifact(rank=1, kind="ts_guess", path="/tmp/xtbpath_ts.xyz"),
+            XtbCandidateArtifact(
+                rank=1,
+                kind="ts_guess",
+                path="/tmp/xtbpath_ts.xyz",
+                metadata={
+                    "geometry_valid": True,
+                    "geometry_validation": {"valid": True, "reasons": []},
+                },
+            ),
         ),
     )
     deps = orchestration_services(

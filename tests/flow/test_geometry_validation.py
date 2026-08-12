@@ -272,6 +272,19 @@ def test_xtb_handoff_status_rejects_geometry_invalid_candidate(tmp_path: Path) -
     assert status["reason"] == "xtb_ts_guess_geometry_invalid"
 
 
+def test_xtb_handoff_status_rejects_candidate_without_geometry_verdict(tmp_path: Path) -> None:
+    """A syntactically valid XYZ is not enough to authorize an ORCA handoff."""
+    contract = _invalid_ts_contract(tmp_path)
+    candidate = replace(contract.candidate_details[0], metadata={})
+    contract = replace(contract, candidate_details=(candidate,))
+
+    status = xtb_handoff_status_impl(contract)
+
+    assert status["status"] == "failed"
+    assert status["reason"] == "xtb_ts_guess_geometry_unvalidated"
+    assert status["artifact_path"] == ""
+
+
 def test_xtb_handoff_status_keeps_valid_lower_ranked_guess(tmp_path: Path) -> None:
     """A geometry-invalid top-ranked guess must not hide a valid runner-up."""
     invalid = _invalid_ts_contract(tmp_path)
@@ -284,7 +297,10 @@ def test_xtb_handoff_status_keeps_valid_lower_ranked_guess(tmp_path: Path) -> No
         kind="ts_guess",
         path=str(runner_up_path),
         selected=True,
-        metadata={"geometry_valid": True},
+        metadata={
+            "geometry_valid": True,
+            "geometry_validation": {"valid": True, "reasons": []},
+        },
     )
     contract = replace(
         invalid,
