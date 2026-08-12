@@ -16,6 +16,7 @@ def _patch_deterministic_liveness(
     current_pid: int = 4242,
     live_pids: set[int] | None = None,
     ticks: dict[int, int] | None = None,
+    patch_token: bool = True,
 ) -> None:
     live = live_pids or {current_pid}
     tick_map = {current_pid: 12345}
@@ -31,7 +32,8 @@ def _patch_deterministic_liveness(
     monkeypatch.setattr(store.os, "kill", fake_kill)
     monkeypatch.setattr(store, "_process_start_ticks", lambda pid: tick_map.get(pid))
     monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
-    monkeypatch.setattr(store, "timestamped_token", lambda prefix: f"{prefix}_fixed")
+    if patch_token:
+        monkeypatch.setattr(store, "timestamped_token", lambda prefix: f"{prefix}_fixed")
     monkeypatch.setattr(store, "now_utc_iso", lambda: "2026-04-19T00:00:00+00:00")
 
 
@@ -378,14 +380,22 @@ def test_read_active_slot_count_does_not_prune_or_rewrite(
 def test_reserve_slot_honors_capacity_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _patch_deterministic_liveness(monkeypatch)
+    _patch_deterministic_liveness(
+        monkeypatch,
+        live_pids={4242, 5151},
+        ticks={5151: 5151},
+        patch_token=False,
+    )
 
-    first = store.reserve_slot(tmp_path, 1, source="queue-1")
+    first = store.reserve_slot(tmp_path, 1, source="queue-1", owner_pid=5151)
     second = store.reserve_slot(tmp_path, 1, source="queue-2")
 
-    assert first == "slot_fixed"
+    assert first is not None and first.startswith("slot_")
     assert second is None
     assert store.active_slot_count(tmp_path) == 1
+    [stored] = _read_slots_file(tmp_path)
+    assert stored["owner_pid"] == 5151
+    assert stored["process_start_ticks"] == 5151
     monkeypatch.setattr(store, "timestamped_token", lambda prefix: f"{prefix}_second")
     assert store.reserve_slot(tmp_path, 2, source="queue-4") == "slot_second"
     assert store.reserve_slot(tmp_path, 1, source="queue-3") is None
@@ -470,8 +480,6 @@ def test_reserve_activate_and_release_slot_lifecycle(
         tmp_path,
         2,
         source="reserve-source",
-        app_name="chem-app",
-        task_id="task-7",
         workflow_id="wf-9",
         state="reserved",
         work_dir="subdir/run",
@@ -487,6 +495,8 @@ def test_reserve_activate_and_release_slot_lifecycle(
         queue_id="queue-b",
         owner_pid=5151,
         source="activate-source",
+        app_name="chem-app",
+        task_id="task-7",
     )
     assert activated == store.AdmissionSlot(
         token="slot_fixed",
@@ -508,7 +518,49 @@ def test_reserve_activate_and_release_slot_lifecycle(
     assert store.list_slots(tmp_path) == []
 
 
-def test_activate_reserved_slot_returns_none_for_missing_token(
+def test_update_slot_metadata_updates_reserved_identity_and_reports_missing_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_deterministic_liveness(
+        monkeypatch,
+        live_pids={4242, 5151},
+        ticks={5151: 5151},
+    )
+    token = store.reserve_slot(tmp_path, 1, source="queue-worker", state="reserved")
+    assert token == "slot_fixed"
+
+    assert store.update_slot_metadata(tmp_path, "slot_missing", queue_id="q_missing") is None
+    updated = store.update_slot_metadata(
+        tmp_path,
+        token,
+        state="active",
+        queue_id="q_123",
+        app_name="orca_auto_orca",
+        task_id="orca_task_123",
+        workflow_id="wf_123",
+        work_dir=tmp_path / "rxn",
+        owner_pid=5151,
+    )
+
+    assert updated == store.AdmissionSlot(
+        token="slot_fixed",
+        owner_pid=5151,
+        process_start_ticks=5151,
+        source="queue-worker",
+        acquired_at="2026-04-19T00:00:00+00:00",
+        app_name="orca_auto_orca",
+        task_id="orca_task_123",
+        workflow_id="wf_123",
+        state="active",
+        work_dir=str((tmp_path / "rxn").resolve()),
+        queue_id="q_123",
+        owner_boot_id="test-boot-id",
+    )
+    assert store.get_slot(tmp_path, token) == updated
+
+
+def test_missing_slot_mutations_and_blank_activation_work_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -516,6 +568,17 @@ def test_activate_reserved_slot_returns_none_for_missing_token(
 
     assert store.reserve_slot(tmp_path, 1, source="reserve-source") == "slot_fixed"
     assert store.activate_reserved_slot(tmp_path, "missing-token") is None
+    assert store.release_slot(tmp_path, "missing-token") is False
+    assert store.update_slot_metadata(tmp_path, "missing-token", queue_id="missing") is None
+
+    activated = store.activate_reserved_slot(
+        tmp_path,
+        "slot_fixed",
+        work_dir="   ",
+        source="activate-source",
+    )
+    assert activated is not None
+    assert activated.work_dir == ""
 
 
 @pytest.mark.parametrize("bad_payload", ["{not json", json.dumps({"token": "oops"})])
