@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -16,11 +15,8 @@ from ..registry import (
     reindex_workflow_registry,
 )
 from ..stage_transition_events import (
-    append_phase_transition_events,
-    append_stage_transition_events,
     append_workflow_advance_failed_event,
     append_workflow_advanced_events,
-    stage_transition_event_payloads,
 )
 from ..state import (
     load_workflow_payload,
@@ -28,7 +24,6 @@ from ..state import (
     workflow_has_active_downstream,
     workflow_summary,
 )
-from ..workflow._phases import phase_transition_event_payloads
 from . import _common as _runtime_common
 from . import admission as runtime_admission
 from . import advance as runtime_advance
@@ -85,81 +80,6 @@ def _safe_workflow_summary(
         return workflow_summary(workspace_dir, payload=payload)
     except (FileNotFoundError, ValueError, TypeError):
         return {}
-
-
-def _append_stage_transition_events(
-    workflow_root: str | Path,
-    *,
-    previous_summary: dict[str, Any],
-    current_summary: dict[str, Any],
-    workflow_id: str,
-    template_name: str,
-    worker_session_id: str,
-    append_workflow_journal_event_fn: Callable[..., Any],
-) -> None:
-    _append_summary_transition_events(
-        workflow_root,
-        previous_summary=previous_summary,
-        current_summary=current_summary,
-        workflow_id=workflow_id,
-        template_name=template_name,
-        worker_session_id=worker_session_id,
-        append_fn=append_stage_transition_events,
-        payloads_kwarg="stage_transition_event_payloads_fn",
-        payloads_fn=stage_transition_event_payloads,
-        append_workflow_journal_event_fn=append_workflow_journal_event_fn,
-    )
-
-
-def _append_summary_transition_events(
-    workflow_root: str | Path,
-    *,
-    previous_summary: dict[str, Any],
-    current_summary: dict[str, Any],
-    workflow_id: str,
-    template_name: str,
-    worker_session_id: str,
-    append_fn: Any,
-    payloads_kwarg: str,
-    payloads_fn: Any,
-    append_workflow_journal_event_fn: Callable[..., Any],
-) -> None:
-    append_fn(
-        workflow_root,
-        previous_summary=previous_summary,
-        current_summary=current_summary,
-        workflow_id=workflow_id,
-        template_name=template_name,
-        worker_session_id=worker_session_id,
-        **{
-            payloads_kwarg: payloads_fn,
-            "append_workflow_journal_event_fn": append_workflow_journal_event_fn,
-        },
-    )
-
-
-def _append_phase_transition_events(
-    workflow_root: str | Path,
-    *,
-    previous_summary: dict[str, Any],
-    current_summary: dict[str, Any],
-    workflow_id: str,
-    template_name: str,
-    worker_session_id: str,
-    append_workflow_journal_event_fn: Callable[..., Any],
-) -> None:
-    _append_summary_transition_events(
-        workflow_root,
-        previous_summary=previous_summary,
-        current_summary=current_summary,
-        workflow_id=workflow_id,
-        template_name=template_name,
-        worker_session_id=worker_session_id,
-        append_fn=append_phase_transition_events,
-        payloads_kwarg="phase_transition_event_payloads_fn",
-        payloads_fn=phase_transition_event_payloads,
-        append_workflow_journal_event_fn=append_workflow_journal_event_fn,
-    )
 
 
 def workflow_worker_lock_path(workflow_root: str | Path) -> Path:
@@ -349,28 +269,6 @@ def _start_workflow_cycle(
 
 
 def _workflow_advance_deps() -> WorkflowAdvanceDeps:
-    append_workflow_journal_event_fn = append_workflow_journal_event
-
-    def append_phase_transition_events_fn(
-        workflow_root: str | Path,
-        **kwargs: Any,
-    ) -> None:
-        _append_phase_transition_events(
-            workflow_root,
-            append_workflow_journal_event_fn=append_workflow_journal_event_fn,
-            **kwargs,
-        )
-
-    def append_stage_transition_events_fn(
-        workflow_root: str | Path,
-        **kwargs: Any,
-    ) -> None:
-        _append_stage_transition_events(
-            workflow_root,
-            append_workflow_journal_event_fn=append_workflow_journal_event_fn,
-            **kwargs,
-        )
-
     return WorkflowAdvanceDeps(
         advance_workflow_fn=advance_workflow,
         resolve_workflow_workspace_fn=resolve_workflow_workspace,
@@ -380,9 +278,7 @@ def _workflow_advance_deps() -> WorkflowAdvanceDeps:
         workflow_needs_terminal_child_sync_fn=_workflow_needs_terminal_child_sync,
         append_workflow_advance_failed_event_fn=append_workflow_advance_failed_event,
         append_workflow_advanced_events_fn=append_workflow_advanced_events,
-        append_phase_transition_events_fn=append_phase_transition_events_fn,
-        append_stage_transition_events_fn=append_stage_transition_events_fn,
-        append_workflow_journal_event_fn=append_workflow_journal_event_fn,
+        append_workflow_journal_event_fn=append_workflow_journal_event,
         workflow_skipped_terminal_result_fn=workflow_skipped_terminal_result,
         workflow_advance_failed_result_fn=workflow_advance_failed_result,
         workflow_advanced_result_fn=workflow_advanced_result,

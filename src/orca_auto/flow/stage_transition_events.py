@@ -15,6 +15,7 @@ from .stage_event_metadata import (
     stage_transition_context,
     stage_transition_metadata,
 )
+from .workflow._phases import phase_transition_event_payloads
 
 if TYPE_CHECKING:
     from .runtime.models import StageTransitionContext, WorkflowJournalEventPayload
@@ -218,48 +219,6 @@ def stage_transition_event_payloads(
     return event_payloads
 
 
-def append_stage_transition_events(
-    workflow_root: str | Path,
-    *,
-    previous_summary: dict[str, Any],
-    current_summary: dict[str, Any],
-    workflow_id: str,
-    template_name: str,
-    worker_session_id: str,
-    stage_transition_event_payloads_fn: Callable[..., list[WorkflowJournalEventPayload]],
-    append_workflow_journal_event_fn: Callable[..., Any],
-) -> None:
-    for payload in stage_transition_event_payloads_fn(
-        previous_summary=previous_summary,
-        current_summary=current_summary,
-        workflow_id=workflow_id,
-        template_name=template_name,
-        worker_session_id=worker_session_id,
-    ):
-        append_workflow_journal_event_fn(workflow_root, **payload)
-
-
-def append_phase_transition_events(
-    workflow_root: str | Path,
-    *,
-    previous_summary: dict[str, Any],
-    current_summary: dict[str, Any],
-    workflow_id: str,
-    template_name: str,
-    worker_session_id: str,
-    phase_transition_event_payloads_fn: Callable[..., list[dict[str, Any]]],
-    append_workflow_journal_event_fn: Callable[..., Any],
-) -> None:
-    for payload in phase_transition_event_payloads_fn(
-        previous_summary=previous_summary,
-        current_summary=current_summary,
-        workflow_id=workflow_id,
-        template_name=template_name,
-        worker_session_id=worker_session_id,
-    ):
-        append_workflow_journal_event_fn(workflow_root, **payload)
-
-
 def append_workflow_advance_failed_event(
     workflow_root: str | Path,
     record: Any,
@@ -295,8 +254,6 @@ def append_workflow_advanced_events(
     worker_session_id: str,
     reason: str = "",
     append_workflow_journal_event_fn: Callable[..., Any],
-    append_phase_transition_events_fn: Callable[..., None],
-    append_stage_transition_events_fn: Callable[..., None],
     normalize_text_fn: Callable[[Any], str] = normalize_text,
 ) -> None:
     status = normalize_text_fn(payload.get("status")).lower()
@@ -312,30 +269,28 @@ def append_workflow_advanced_events(
         if reason:
             event_kwargs["reason"] = reason
         append_workflow_journal_event_fn(workflow_root, **event_kwargs)
-    append_phase_transition_events_fn(
-        workflow_root,
+    for phase_payload in phase_transition_event_payloads(
         previous_summary=previous_summary,
         current_summary=current_summary,
         workflow_id=workflow_id,
         template_name=template_name,
         worker_session_id=worker_session_id,
-    )
-    append_stage_transition_events_fn(
-        workflow_root,
+    ):
+        append_workflow_journal_event_fn(workflow_root, **phase_payload)
+    for stage_payload in stage_transition_event_payloads(
         previous_summary=previous_summary,
         current_summary=current_summary,
         workflow_id=workflow_id,
         template_name=template_name,
         worker_session_id=worker_session_id,
-    )
+    ):
+        append_workflow_journal_event_fn(workflow_root, **stage_payload)
 
 
 __all__ = [
     "_StageTransitionEventRequest",
     "_WorkflowEventContext",
     "_stage_transition_event_request",
-    "append_phase_transition_events",
-    "append_stage_transition_events",
     "append_workflow_advance_failed_event",
     "append_workflow_advanced_events",
     "handoff_transition_event_payload",
