@@ -273,18 +273,15 @@ def test_attempt_helpers_preserve_mapping_markers() -> None:
 
 
 @pytest.mark.parametrize(
-    ("target", "queue_id", "run_id", "reaction_dir", "expected_queue_id"),
+    ("queue_id", "run_id", "reaction_dir", "expected_queue_id"),
     [
-        ("unused", "q_2", "", "", "q_2"),
-        ("task_3", "", "", "", "q_3"),
-        ("run_4", "", "", "", "q_4"),
-        ("unused", "", "run_5", "", "q_5"),
-        ("unused", "", "", "__TMP_RXN_6__", "q_6"),
+        ("q_2", "", "", "q_2"),
+        ("", "run_5", "", "q_5"),
+        ("", "", "__TMP_RXN_6__", "q_6"),
     ],
 )
 def test_find_queue_entry_matches_multiple_identifier_types(
     tmp_path: Path,
-    target: str,
     queue_id: str,
     run_id: str,
     reaction_dir: str,
@@ -334,7 +331,6 @@ def test_find_queue_entry_matches_multiple_identifier_types(
 
     entry = _orca_local_lookup.find_queue_entry_impl(
         allowed_root=allowed_root,
-        target=target,
         queue_id=queue_id,
         run_id=run_id,
         reaction_dir=reaction_dir,
@@ -344,7 +340,7 @@ def test_find_queue_entry_matches_multiple_identifier_types(
     assert entry["queue_id"] == expected_queue_id
 
 
-@pytest.mark.parametrize("selector", ("queue_id", "target", "reaction_dir"))
+@pytest.mark.parametrize("selector", ("queue_id", "reaction_dir"))
 def test_find_queue_entry_ignores_partial_and_foreign_rows(
     tmp_path: Path,
     selector: str,
@@ -377,20 +373,16 @@ def test_find_queue_entry_ignores_partial_and_foreign_rows(
         ),
         encoding="utf-8",
     )
-    target = "unused"
     queue_id = ""
     selected_reaction_dir = ""
     if selector == "queue_id":
         queue_id = "q_partial"
-    elif selector == "target":
-        target = "q_foreign"
     else:
         selected_reaction_dir = str(reaction_dir)
 
     assert (
         _orca_local_lookup.find_queue_entry_impl(
             allowed_root=allowed_root,
-            target=target,
             queue_id=queue_id,
             run_id="",
             reaction_dir=selected_reaction_dir,

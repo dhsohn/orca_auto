@@ -244,25 +244,8 @@ def _record_orca_exhaustion_after_sync_phase(
 ) -> None:
     if context.sync_only or not _all_orca_stages_terminal(payload):
         return
-    if context.template_name == "reaction_ts_search" and _reaction_orca_ready(payload, context):
-        append_reaction_orca_stages_impl(
-            payload,
-            workspace_dir=context.workspace_dir,
-            xtb_config=config.xtb_config,
-            orca_config=config.orca_config,
-            services=context.services,
-        )
-    elif context.template_name == "conformer_screening":
-        append_crest_orca_stages_impl(
-            payload,
-            template_name="conformer_screening",
-            crest_config=config.crest_config,
-            orca_config=config.orca_config,
-            stage_id_prefix="orca_conformer",
-            xyz_filename="conformer_guess.xyz",
-            inp_filename="conformer_opt.inp",
-            services=context.services,
-        )
+    _append_reaction_orca_phase(payload, context, config)
+    _append_conformer_orca_phase(payload, context, config)
 
 
 def _append_scan_optts_phase(

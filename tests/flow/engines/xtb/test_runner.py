@@ -16,8 +16,8 @@ from orca_auto.core.config import ScratchConfig
 from orca_auto.core.config.engines import (
     WorkflowEngineAppConfig as AppConfig,
 )
+from orca_auto.flow.engines.xtb import ranking_inputs, runner_artifacts
 from orca_auto.flow.engines.xtb import runner as runner_mod
-from orca_auto.flow.engines.xtb import runner_artifacts, runner_ranking
 from orca_auto.flow.engines.xtb.ranking_selection import (
     rank_usable_candidates,
     usable_ranking_candidates,
@@ -289,7 +289,7 @@ def test_runner_helper_functions_cover_invalid_and_fallback_paths(
     assert runner_artifacts._safe_float("not-a-number") is None
     assert runner_artifacts._safe_float(True) is None
     with pytest.raises(ValueError, match="top_n must be a positive integer"):
-        runner_ranking.ranking_top_n({"top_n": "bad"})
+        ranking_inputs.ranking_top_n({"top_n": "bad"})
 
     job_dir = tmp_path / "job"
     job_dir.mkdir()

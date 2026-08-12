@@ -6,7 +6,7 @@ from typing import Any
 
 from orca_auto.core.activity_icons import activity_status_icon
 from orca_auto.core.statuses import QUEUE_ACTIVE_STATUSES
-from orca_auto.core.utils import normalize_text
+from orca_auto.core.utils import normalize_text, parse_iso_utc
 from orca_auto.flow.templates import workflow_template_label
 
 _ORCA_SELECTED_INP_HINTS = (
@@ -22,21 +22,6 @@ def queue_table_now() -> datetime:
     return datetime.now(UTC)
 
 
-def parse_activity_timestamp(value: Any) -> datetime | None:
-    text = normalize_text(value)
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
-
-
 def queue_elapsed_started_at(item: dict[str, Any]) -> datetime | None:
     metadata = item.get("metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
@@ -49,7 +34,7 @@ def queue_elapsed_started_at(item: dict[str, Any]) -> datetime | None:
         item.get("submitted_at"),
         item.get("updated_at"),
     ):
-        parsed = parse_activity_timestamp(value)
+        parsed = parse_iso_utc(value)
         if parsed is not None:
             return parsed
     return None
@@ -65,7 +50,7 @@ def queue_elapsed_text(
         return "--:--:--"
 
     status = normalize_text(item.get("status")).lower()
-    end_at = parse_activity_timestamp(item.get("updated_at"))
+    end_at = parse_iso_utc(item.get("updated_at"))
     if status in QUEUE_ACTIVE_STATUSES or end_at is None:
         end_at = now or queue_table_now()
     if end_at < started_at:
@@ -232,7 +217,6 @@ def queue_name_text(item: dict[str, Any]) -> str:
 __all__ = [
     "crest_detail_text",
     "infer_orca_detail_from_metadata",
-    "parse_activity_timestamp",
     "queue_detail_text",
     "queue_elapsed_started_at",
     "queue_elapsed_text",

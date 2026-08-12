@@ -332,9 +332,37 @@ def test_activity_helper_edges_and_discovery_paths(
     assert (
         _activity_sources.shared_config_hint("", None, " /tmp/shared.yaml ") == "/tmp/shared.yaml"
     )
-    assert _activity_model.parse_iso("") < _activity_model.parse_iso("2026-04-26T00:00:00Z")
-    assert _activity_model.parse_iso("bad") < _activity_model.parse_iso("2026-04-26T00:00:00+09:00")
-    assert _activity_model.parse_iso("2026-04-26T00:00:00").tzinfo is not None
+    empty_timestamp = _activity_model.ActivityRecord(
+        "empty", "job", "x", "running", "", "", "", "", ""
+    )
+    bad_timestamp = _activity_model.ActivityRecord(
+        "bad", "job", "x", "running", "", "", "bad", "bad", ""
+    )
+    valid_timestamp = _activity_model.ActivityRecord(
+        "valid",
+        "job",
+        "x",
+        "running",
+        "",
+        "",
+        "2026-04-26T00:00:00Z",
+        "2026-04-26T00:00:00+09:00",
+        "",
+    )
+    naive_timestamp = _activity_model.ActivityRecord(
+        "naive",
+        "job",
+        "x",
+        "running",
+        "",
+        "",
+        "2026-04-26T00:00:00",
+        "2026-04-26T00:00:00",
+        "",
+    )
+    assert _activity_model.sort_key(empty_timestamp) < _activity_model.sort_key(valid_timestamp)
+    assert _activity_model.sort_key(bad_timestamp) < _activity_model.sort_key(valid_timestamp)
+    assert _activity_model.sort_key(naive_timestamp)[0].tzinfo is not None
     assert _activity_model.unique_texts([" a ", "", "a", "b"]) == ("a", "b")
     assert _activity_model.mapping_text({"key": " value "}, "key") == "value"
     assert _activity_model.path_aliases("", root=tmp_path) == ()

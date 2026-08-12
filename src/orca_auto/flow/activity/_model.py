@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.engine_catalog import activity_engine_entries
-from orca_auto.core.utils import normalize_text
+from orca_auto.core.utils import normalize_text, parse_iso_utc
 
 from ..engine_options import WorkflowEngineOptions
 
@@ -88,25 +88,10 @@ class ActivityRecord:
         }
 
 
-def parse_iso(value: str) -> datetime:
-    text = normalize_text(value)
-    if not text:
-        return datetime.min.replace(tzinfo=UTC)
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return datetime.min.replace(tzinfo=UTC)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
-
-
 def sort_key(record: ActivityRecord) -> tuple[datetime, datetime, str]:
     return (
-        parse_iso(record.updated_at),
-        parse_iso(record.submitted_at),
+        parse_iso_utc(record.updated_at) or datetime.min.replace(tzinfo=UTC),
+        parse_iso_utc(record.submitted_at) or datetime.min.replace(tzinfo=UTC),
         record.activity_id,
     )
 
