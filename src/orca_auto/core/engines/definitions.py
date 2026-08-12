@@ -49,11 +49,6 @@ class EngineNotificationHooks:
 
 
 @dataclass(frozen=True)
-class EngineCancellationHooks:
-    before_pending_cancel: Callable[..., Any] | None = None
-
-
-@dataclass(frozen=True)
 class EngineDefinition:
     engine: str
     load_config: Callable[[str], Any]
@@ -63,7 +58,6 @@ class EngineDefinition:
     context_builder: EngineContextBuilder | None = None
     artifact_adapter: EngineArtifactAdapter | None = None
     notification_hooks: EngineNotificationHooks | None = None
-    cancellation_hooks: EngineCancellationHooks | None = None
     queue_worker_runner: Callable[[list[str]], int] | None = None
 
     def build_queue_runtime(self) -> EngineQueueRuntime:
@@ -112,7 +106,6 @@ class EngineDefinition:
 
 __all__ = [
     "EngineArtifactAdapter",
-    "EngineCancellationHooks",
     "EngineContextBuilder",
     "EngineDefinition",
     "EngineNotificationHooks",

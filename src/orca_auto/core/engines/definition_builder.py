@@ -14,7 +14,6 @@ from .artifacts import (
 )
 from .definitions import (
     EngineArtifactAdapter,
-    EngineCancellationHooks,
     EngineDefinition,
     EngineNotificationHooks,
     EngineQueueFunctions,
@@ -39,10 +38,6 @@ def _lazy_callable(module_name: str, function_name: str) -> Callable[..., Any]:
         return function(*args, **kwargs)
 
     return call
-
-
-def build_lazy_engine_callback(module_name: str, function_name: str) -> Callable[..., Any]:
-    return _lazy_callable(module_name, function_name)
 
 
 def build_lazy_worker_child_runner(
@@ -143,7 +138,6 @@ def build_queue_engine_definition(
     job_started: NotificationHook | None = None,
     job_finished: NotificationHook | None = None,
     retry: NotificationHook | None = None,
-    before_pending_cancel: NotificationHook | None = None,
 ) -> EngineDefinition:
     engine_id = str(engine).strip().lower()
     runtime_roots = runtime_roots_for_cfg or build_engine_runtime_roots(engine)
@@ -178,16 +172,12 @@ def build_queue_engine_definition(
             job_finished=job_finished,
             retry=retry,
         ),
-        cancellation_hooks=EngineCancellationHooks(
-            before_pending_cancel=before_pending_cancel,
-        ),
         queue_worker_runner=queue_worker_runner,
     )
 
 
 __all__ = [
     "build_engine_runtime_roots",
-    "build_lazy_engine_callback",
     "build_lazy_queue_worker_runner",
     "build_lazy_worker_child_runner",
     "build_queue_engine_definition",

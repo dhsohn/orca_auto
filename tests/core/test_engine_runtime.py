@@ -8,7 +8,6 @@ import pytest
 
 from orca_auto.core.engines import (
     entry_matches_engine_identity,
-    get_engine_definition,
     own_engine_accept_entry,
 )
 from orca_auto.core.engines.definitions import (
@@ -113,14 +112,6 @@ def test_engine_identity_rejects_conflicting_present_labels() -> None:
         partial = dict(canonical_orca_mapping)
         partial.pop(missing_field)
         assert not entry_matches_engine_identity(partial, "orca")
-
-
-@pytest.mark.parametrize("engine", ["crest", "xtb"])
-def test_internal_engine_definitions_register_pending_cancel_hook(engine: str) -> None:
-    definition = get_engine_definition(engine)
-
-    assert definition.cancellation_hooks is not None
-    assert callable(definition.cancellation_hooks.before_pending_cancel)
 
 
 def test_engine_queue_runtime_combines_roots_entries_and_next_entry(

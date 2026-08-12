@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from orca_auto.core.config.engines import load_xtb_config
 from orca_auto.core.engines import (
-    build_lazy_engine_callback,
     build_lazy_queue_worker_runner,
     build_lazy_worker_child_runner,
     build_queue_engine_definition,
@@ -26,10 +25,6 @@ ENGINE_DEFINITION = build_queue_engine_definition(
     runtime_roots_for_cfg=runtime_roots_for_cfg,
     job_started=notify_xtb_job_started,
     job_finished=notify_xtb_job_finished,
-    before_pending_cancel=build_lazy_engine_callback(
-        "orca_auto.flow.engines.xtb.execution",
-        "publish_pending_cancel",
-    ),
 )
 build_worker_child_command = ENGINE_DEFINITION.runner_callbacks.build_worker_child_command
 
