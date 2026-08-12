@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -59,7 +59,6 @@ def queue_elapsed_text(
     item: dict[str, Any],
     *,
     now: datetime | None = None,
-    now_factory: Callable[[], datetime] | None = None,
 ) -> str:
     started_at = queue_elapsed_started_at(item)
     if started_at is None:
@@ -68,7 +67,7 @@ def queue_elapsed_text(
     status = normalize_text(item.get("status")).lower()
     end_at = parse_activity_timestamp(item.get("updated_at"))
     if status in QUEUE_ACTIVE_STATUSES or end_at is None:
-        end_at = now or (now_factory or queue_table_now)()
+        end_at = now or queue_table_now()
     if end_at < started_at:
         end_at = started_at
     total_seconds = max(0, int((end_at - started_at).total_seconds()))
