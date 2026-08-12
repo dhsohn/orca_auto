@@ -103,22 +103,41 @@ def test_upstream_lineage_reads_only_inside_the_workspace(tmp_path: Path) -> Non
     assert (
         write_workflow_machine_observation(inside_job, _payload(inside_job, stages=[])) is not None
     )
+    second_inside_job = workspace / "jobs" / "step2"
+    second_inside_job.mkdir()
+    (second_inside_job / "workflow_report.html").write_text("<html>done</html>\n", encoding="utf-8")
+    second_payload = {
+        **_payload(second_inside_job, stages=[]),
+        "workflow_id": "wf-machine-02",
+    }
+    assert write_workflow_machine_observation(second_inside_job, second_payload) is not None
+    wrong_basename = inside_job / "not-machine.json"
+    wrong_basename.write_bytes((inside_job / "machine.json").read_bytes())
 
     report_data = SimpleNamespace(
-        orca_results=[
-            SimpleNamespace(report_href="jobs/step1/job_report.html"),
-            SimpleNamespace(report_href="../outside/job_report.html"),
-            SimpleNamespace(report_href=str(outside / "job_report.html")),
+        consumed_orca_machine_paths=[
+            second_inside_job / "machine.json",
+            inside_job / "machine.json",
+            second_inside_job / "machine.json",
+            wrong_basename,
+            outside / "machine.json",
+            Path("jobs/step1/machine.json"),
         ]
     )
 
     upstream = _upstream_orca_observations(workspace, report_data)
 
-    assert len(upstream) == 1
-    assert upstream[0]["operation_id"] == "wf-machine-01"
+    assert [entry["operation_id"] for entry in upstream] == [
+        "wf-machine-02",
+        "wf-machine-01",
+    ]
 
 
-def test_upstream_lineage_skips_symlinked_observations(tmp_path: Path) -> None:
+@pytest.mark.parametrize("link_kind", ("symlink", "hardlink"))
+def test_upstream_lineage_skips_linked_observations(
+    tmp_path: Path,
+    link_kind: str,
+) -> None:
     from types import SimpleNamespace
 
     from orca_auto.flow.workflow.machine import _upstream_orca_observations
@@ -131,13 +150,13 @@ def test_upstream_lineage_skips_symlinked_observations(tmp_path: Path) -> None:
 
     linked_job = workspace / "jobs" / "step2"
     linked_job.mkdir()
-    (linked_job / "machine.json").symlink_to(real_job / "machine.json")
+    linked_machine = linked_job / "machine.json"
+    if link_kind == "symlink":
+        linked_machine.symlink_to(real_job / "machine.json")
+    else:
+        os.link(real_job / "machine.json", linked_machine)
 
-    report_data = SimpleNamespace(
-        orca_results=[
-            SimpleNamespace(report_href="jobs/step2/job_report.html"),
-        ]
-    )
+    report_data = SimpleNamespace(consumed_orca_machine_paths=[linked_machine])
 
     assert _upstream_orca_observations(workspace, report_data) == []
 
