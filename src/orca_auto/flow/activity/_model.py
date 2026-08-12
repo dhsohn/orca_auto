@@ -25,7 +25,6 @@ class ActivityListRequest:
     sources: ActivitySourceRequest
     refresh: bool = False
     limit: int = 0
-    child_job_engines: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

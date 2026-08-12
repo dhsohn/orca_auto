@@ -24,7 +24,6 @@ from ._queue_records import (
     engine_queue_records,
     engine_queue_roots,
     queue_entry_status,
-    requested_child_engines,
     runtime_paths_for_engine,
 )
 from ._workflow_records import (
@@ -42,7 +41,6 @@ def list_activities(
     crest_config: str | None = None,
     xtb_config: str | None = None,
     orca_config: str | None = None,
-    child_job_engines: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     request = ActivityListRequest(
         sources=ActivitySourceRequest(
@@ -54,7 +52,6 @@ def list_activities(
         ),
         refresh=refresh,
         limit=limit,
-        child_job_engines=child_job_engines,
     )
     resolved = _sources.resolve_activity_source_request(request.sources)
     records = collect_activity_records(
@@ -63,7 +60,6 @@ def list_activities(
         crest_config=resolved.crest_config,
         xtb_config=resolved.xtb_config,
         orca_config=resolved.orca_config,
-        child_job_engines=request.child_job_engines,
     )
     if request.limit > 0:
         records = records[: request.limit]
@@ -100,7 +96,6 @@ __all__ = [
     "engine_queue_roots",
     "list_activities",
     "queue_entry_status",
-    "requested_child_engines",
     "runtime_paths_for_engine",
     "workflow_elapsed_metadata",
     "workflow_records",

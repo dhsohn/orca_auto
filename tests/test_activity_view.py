@@ -96,7 +96,6 @@ def test_queue_list_display_rows_groups_children_under_workflow_once() -> None:
         all_items=[workflow],
         visible_items=visible_items,
         show_workflow_context=True,
-        visible_workflow_child_engines=["orca"],
     )
 
     assert [(indent, item["activity_id"]) for indent, item in rows] == [

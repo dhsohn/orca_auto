@@ -73,7 +73,6 @@ def collect_activity_records(
     crest_config: str | None = None,
     xtb_config: str | None = None,
     orca_config: str | None = None,
-    child_job_engines: tuple[str, ...] | None = None,
 ) -> list[ActivityRecord]:
     return collect_activity_records_from_request(
         ActivityListRequest(
@@ -85,7 +84,6 @@ def collect_activity_records(
                 orca_config=orca_config,
             ),
             refresh=refresh,
-            child_job_engines=child_job_engines,
         ),
     )
 
