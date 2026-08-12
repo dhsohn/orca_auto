@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from . import _contract_payload as _contract_payload
+from . import _runtime_context as _runtime_context
 from ._models import (
     JobRuntimeContext,
     OrcaContractPayloadContext,
@@ -13,50 +14,45 @@ from ._models import (
 from ._utils import normalize_text
 
 
-@dataclass(frozen=True)
-class _ResolvedPathFields:
-    latest_known_path: str
-    selected_inp: str
-    selected_input_xyz: str
-    last_out_path: str
-    optimized_xyz_path: str
-
-
-@dataclass(frozen=True)
-class _ResolvedStatusFields:
-    state_status: str
-    status: str
-    analyzer_status: str
-    reason: str
-    completed_at: str
-
-
-@dataclass(frozen=True)
-class _ResolvedResourceFields:
-    resource_request: dict[str, int]
-    resource_actual: dict[str, int]
-
-
-def _resolved_path_fields(
+def resolved_contract_fields(
     *,
     runtime: JobRuntimeContext,
     payloads: _contract_payload.RuntimePayloads,
     current_dir: Path | None,
     artifact_dir: Path | None,
     target: str,
-) -> _ResolvedPathFields:
+    run_id: str,
+) -> OrcaContractResolvedFields:
+    resolved_run_id = _contract_payload.resolved_run_id(
+        run_id=run_id,
+        state=payloads.state,
+        report=payloads.report,
+        queue_entry=payloads.queue_entry,
+    )
     latest_known_path = _contract_payload.latest_known_path(
         record=payloads.record,
         current_dir=current_dir,
         target=target,
     )
+    resource_request, resource_actual = _contract_payload.runtime_resources(
+        record=payloads.record,
+        queue_entry=payloads.queue_entry,
+    )
     if runtime.generation_invalid:
-        return _ResolvedPathFields(
+        return OrcaContractResolvedFields(
+            resolved_run_id=resolved_run_id,
             latest_known_path=latest_known_path,
+            state_status="",
+            status="unknown",
+            analyzer_status="",
+            reason="queue_generation_verification_failed",
+            completed_at="",
             selected_inp="",
             selected_input_xyz="",
             last_out_path="",
             optimized_xyz_path="",
+            resource_request=resource_request,
+            resource_actual=resource_actual,
         )
     artifact_latest_known_path = (
         str(runtime.artifact_dir) if runtime.artifact_dir is not None else latest_known_path
@@ -71,94 +67,26 @@ def _resolved_path_fields(
             latest_known_path=artifact_latest_known_path,
         )
     )
-    return _ResolvedPathFields(
-        latest_known_path=latest_known_path,
-        selected_inp=selected_inp,
-        selected_input_xyz=selected_input_xyz,
-        last_out_path=last_out_path,
-        optimized_xyz_path=optimized_xyz_path,
-    )
-
-
-def _resolved_status_fields(
-    *,
-    runtime: JobRuntimeContext,
-    payloads: _contract_payload.RuntimePayloads,
-) -> _ResolvedStatusFields:
-    if runtime.generation_invalid:
-        return _ResolvedStatusFields(
-            state_status="",
-            status="unknown",
-            analyzer_status="",
-            reason="queue_generation_verification_failed",
-            completed_at="",
-        )
     status, analyzer_status, reason, completed_at = _contract_payload.resolved_status(
         record=payloads.record,
         queue_entry=payloads.queue_entry,
         state=payloads.state,
         report=payloads.report,
     )
-    return _ResolvedStatusFields(
+    return OrcaContractResolvedFields(
+        resolved_run_id=resolved_run_id,
+        latest_known_path=latest_known_path,
         state_status=normalize_text(payloads.state.get("status")).lower(),
         status=status,
         analyzer_status=analyzer_status,
         reason=reason,
         completed_at=completed_at,
-    )
-
-
-def _resolved_resource_fields(
-    *,
-    payloads: _contract_payload.RuntimePayloads,
-) -> _ResolvedResourceFields:
-    resource_request, resource_actual = _contract_payload.runtime_resources(
-        record=payloads.record,
-        queue_entry=payloads.queue_entry,
-    )
-    return _ResolvedResourceFields(
+        selected_inp=selected_inp,
+        selected_input_xyz=selected_input_xyz,
+        last_out_path=last_out_path,
+        optimized_xyz_path=optimized_xyz_path,
         resource_request=resource_request,
         resource_actual=resource_actual,
-    )
-
-
-def resolved_contract_fields(
-    *,
-    runtime: JobRuntimeContext,
-    payloads: _contract_payload.RuntimePayloads,
-    current_dir: Path | None,
-    artifact_dir: Path | None,
-    target: str,
-    run_id: str,
-) -> OrcaContractResolvedFields:
-    path_fields = _resolved_path_fields(
-        runtime=runtime,
-        payloads=payloads,
-        current_dir=current_dir,
-        artifact_dir=artifact_dir,
-        target=target,
-    )
-    status_fields = _resolved_status_fields(runtime=runtime, payloads=payloads)
-    resource_fields = _resolved_resource_fields(payloads=payloads)
-    return OrcaContractResolvedFields(
-        resolved_run_id=_contract_payload.resolved_run_id(
-            run_id=run_id,
-            state=payloads.state,
-            report=payloads.report,
-            queue_entry=payloads.queue_entry,
-        ),
-        latest_known_path=path_fields.latest_known_path,
-        state_status=status_fields.state_status,
-        status=status_fields.status,
-        analyzer_status=status_fields.analyzer_status,
-        reason=status_fields.reason,
-        completed_at=status_fields.completed_at,
-        selected_inp=path_fields.selected_inp,
-        selected_input_xyz=path_fields.selected_input_xyz,
-        last_out_path=path_fields.last_out_path,
-        optimized_xyz_path=path_fields.optimized_xyz_path,
-        resource_request=resource_fields.resource_request,
-        resource_actual=resource_fields.resource_actual,
     )
 
 
@@ -216,3 +144,27 @@ def payload_from_context(
     if not payload["queue_id"]:
         payload["queue_id"] = normalize_text(queue_id)
     return payload
+
+
+def load_orca_contract_payload(
+    index_root: str | Path,
+    target: str,
+    *,
+    queue_id: str = "",
+    run_id: str = "",
+    reaction_dir: str = "",
+) -> dict[str, Any]:
+    runtime = _runtime_context.load_job_runtime_context(
+        index_root,
+        target,
+        queue_id=queue_id,
+        run_id=run_id,
+        reaction_dir=reaction_dir,
+    )
+    ctx = payload_context_from_runtime(
+        runtime=runtime,
+        target=target,
+        run_id=run_id,
+        reaction_dir=reaction_dir,
+    )
+    return payload_from_context(ctx, queue_id=queue_id)
