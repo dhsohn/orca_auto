@@ -1534,7 +1534,7 @@ def test_cmd_service_restart_recovers_a_broken_workflow_worker(workflow_state: s
 
 @pytest.mark.parametrize(
     ("workflow_state", "workflow_returncode"),
-    [("inactive", 3), ("deactivating", 0), ("unknown", 4), ("", 3)],
+    [("inactive", 3), ("deactivating", 0), ("unknown", 3), ("", 3)],
 )
 def test_cmd_service_restart_leaves_a_stopped_workflow_worker_alone(
     workflow_state: str,
@@ -1574,6 +1574,7 @@ def test_cmd_service_restart_stops_when_the_workflow_state_is_unreadable(capsys:
     ("workflow_returncode", "workflow_state", "workflow_stderr"),
     [
         (4, "", ""),
+        (4, "unknown", ""),
         (1, "active", "Failed to connect to bus: No such file or directory"),
     ],
 )

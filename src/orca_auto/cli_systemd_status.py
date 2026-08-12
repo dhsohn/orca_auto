@@ -431,7 +431,7 @@ _WORKFLOW_STATE_RETURN_CODES = {
     "failed": frozenset({3}),
     "inactive": frozenset({3}),
     "deactivating": frozenset({0, 3}),
-    "unknown": frozenset({3, 4}),
+    "unknown": frozenset({3}),
     "": frozenset({3}),
 }
 
