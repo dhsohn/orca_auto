@@ -25,8 +25,6 @@ class WorkflowAdvanceDeps:
     workflow_needs_terminal_child_sync_fn: Callable[..., bool]
     append_workflow_advance_failed_event_fn: Callable[..., Any]
     append_workflow_advanced_events_fn: Callable[..., Any]
-    append_phase_transition_events_fn: Callable[..., Any]
-    append_stage_transition_events_fn: Callable[..., Any]
     append_workflow_journal_event_fn: Callable[..., Any]
     workflow_skipped_terminal_result_fn: Callable[..., WorkflowAdvanceResult]
     workflow_advance_failed_result_fn: Callable[..., WorkflowAdvanceResult]
@@ -193,8 +191,6 @@ def advanced_workflow_outcome(
         worker_session_id=cycle.session_id,
         reason=reason,
         append_workflow_journal_event_fn=deps.append_workflow_journal_event_fn,
-        append_phase_transition_events_fn=deps.append_phase_transition_events_fn,
-        append_stage_transition_events_fn=deps.append_stage_transition_events_fn,
         normalize_text_fn=deps.normalize_text_fn,
     )
     return WorkflowAdvanceOutcome(
