@@ -20,15 +20,7 @@ from ._queue_records import engine_queue_roots
 
 _ENGINE_QUEUE_CLEAR_SOURCES = tuple(
     (entry.engine_id, f"{entry.engine_id}_queue_entries")
-    for entry in (
-        *workflow_stage_engine_entries(),
-        *(
-            candidate
-            for candidate in activity_engine_entries()
-            if candidate.activity_role == "engine-queue"
-            and candidate.workflow_stage_role != "workflow-stage"
-        ),
-    )
+    for entry in workflow_stage_engine_entries()
 )
 
 

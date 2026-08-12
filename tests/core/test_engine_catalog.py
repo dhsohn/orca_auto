@@ -222,8 +222,8 @@ def test_every_catalog_engine_has_queue_filter_list_cancel_and_clear_coverage() 
         assert f"{entry.engine_id}_queue_entries" in clear_counts
         if entry.workflow_stage_role == "workflow-stage":
             assert entry.engine_id in activity_cancel._CANCEL_ENGINE_TARGETS
-        elif entry.activity_role == "orca-run":
-            assert callable(activity_cancel.cancel_orca_target)
         else:
-            assert callable(activity_cancel.request_cancel)
-            assert callable(activity_cancel.engine_queue_roots)
+            # Any other combination has no cancel handler and the dispatcher
+            # fails closed with ValueError, so the catalog must not grow one.
+            assert entry.activity_role == "orca-run"
+            assert callable(activity_cancel.cancel_orca_target)

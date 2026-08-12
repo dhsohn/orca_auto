@@ -239,20 +239,6 @@ def collect_orca_activity(
     )
 
 
-def collect_standalone_queue_activity(
-    entry: EngineCatalogEntry,
-    resolved: ResolvedActivitySources,
-) -> list[ActivityRecord]:
-    config_path = normalize_text(resolved.config_for_engine(entry.engine_id))
-    if not config_path:
-        return []
-    return engine_queue_records(
-        app_name=entry.source_id,
-        engine=entry.engine_id,
-        config_path=config_path,
-    )
-
-
 def collect_catalog_engine_activity(
     entry: EngineCatalogEntry,
     resolved: ResolvedActivitySources,
@@ -268,8 +254,6 @@ def collect_catalog_engine_activity(
             engine=entry.engine_id,
             config_path=resolved.config_for_engine(entry.engine_id),
         )
-    if entry.activity_role == "engine-queue":
-        return collect_standalone_queue_activity(entry, resolved)
     raise ValueError(
         f"Unsupported catalog activity role for {entry.engine_id}: {entry.activity_role}"
     )
@@ -283,7 +267,6 @@ __all__ = [
     "collect_catalog_engine_activity",
     "collect_crest_activity",
     "collect_orca_activity",
-    "collect_standalone_queue_activity",
     "collect_xtb_activity",
     "engine_queue_records",
     "engine_queue_roots",
