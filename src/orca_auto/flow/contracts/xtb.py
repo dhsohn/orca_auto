@@ -130,6 +130,18 @@ class WorkflowStageInput:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
+    def geometry_validated(self) -> bool:
+        """True only for an explicit, self-consistent upstream geometry verdict."""
+        validation = self.metadata.get("geometry_validation")
+        return (
+            self.metadata.get("geometry_valid") is True
+            and isinstance(validation, dict)
+            and validation.get("valid") is True
+            and "error" not in validation
+            and validation.get("reasons") == []
+        )
+
+    @property
     def geometry_invalid(self) -> bool:
         """True when upstream geometry validation explicitly rejected this candidate."""
         return self.metadata.get("geometry_valid") is False

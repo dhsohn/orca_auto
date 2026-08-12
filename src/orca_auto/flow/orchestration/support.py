@@ -101,7 +101,7 @@ def select_valid_ts_guess_inputs(
         ),
         require_geometry=True,
     )
-    return [candidate for candidate in inputs if not candidate.geometry_invalid]
+    return [candidate for candidate in inputs if candidate.geometry_validated]
 
 
 def reaction_ts_guess_error_impl(
@@ -136,6 +136,21 @@ def reaction_ts_guess_error_impl(
             "message": (
                 "xTB produced xtbpath_ts.xyz but its geometry failed validation against "
                 f"the reactant/product endpoints{detail_text}; refusing ORCA handoff."
+            ),
+        }
+    validation = candidate.metadata.get("geometry_validation")
+    if not (
+        candidate.metadata.get("geometry_valid") is True
+        and isinstance(validation, dict)
+        and validation.get("valid") is True
+        and "error" not in validation
+        and validation.get("reasons") == []
+    ):
+        return {
+            "reason": "xtb_ts_guess_geometry_unvalidated",
+            "message": (
+                "xTB produced xtbpath_ts.xyz without an explicit successful geometry validation "
+                "against the reactant/product endpoints; refusing ORCA handoff."
             ),
         }
     _, metadata = o.engines.choose_orca_geometry_frame(candidate.path, candidate_kind="ts_guess")
