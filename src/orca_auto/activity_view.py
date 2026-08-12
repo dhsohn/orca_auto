@@ -169,13 +169,6 @@ def count_global_active_simulations(
     return count_active_simulations(items)
 
 
-def _visible_workflow_child_filter(engines: Sequence[str] | None) -> tuple[bool, set[str]]:
-    return (
-        engines is not None,
-        {normalize_text(engine).lower() for engine in (engines or ()) if normalize_text(engine)},
-    )
-
-
 def _workflow_items_by_id(items: Sequence[dict[str, Any]]) -> dict[str, ActivityItem]:
     workflows: dict[str, ActivityItem] = {}
     for item in items:
@@ -214,8 +207,6 @@ def _queue_display_indexes(
     visible_items: Sequence[dict[str, Any]],
     workflow_by_id: dict[str, ActivityItem],
     show_workflow_context: bool,
-    filter_workflow_children: bool,
-    visible_child_engines: set[str],
 ) -> tuple[list[TopLevelToken], dict[tuple[str, int], ActivityItem], dict[str, list[ActivityItem]]]:
     workflow_children: dict[str, list[ActivityItem]] = {}
     standalone_items: dict[tuple[str, int], ActivityItem] = {}
@@ -227,14 +218,6 @@ def _queue_display_indexes(
         kind = normalize_text(item.get("kind")).lower()
         if kind == "job":
             parent_workflow_id = normalize_text(item.get("parent_workflow_id"))
-            engine = normalize_text(item.get("engine")).lower()
-            if (
-                filter_workflow_children
-                and parent_workflow_id
-                and engine
-                and engine not in visible_child_engines
-            ):
-                continue
             if (
                 show_workflow_context
                 and parent_workflow_id
@@ -298,18 +281,12 @@ def queue_list_display_rows(
     all_items: Sequence[dict[str, Any]],
     visible_items: Sequence[dict[str, Any]],
     show_workflow_context: bool,
-    visible_workflow_child_engines: Sequence[str] | None = None,
 ) -> list[tuple[int, dict[str, Any]]]:
-    filter_workflow_children, visible_child_engines = _visible_workflow_child_filter(
-        visible_workflow_child_engines
-    )
     workflow_by_id = _workflow_items_by_id(all_items)
     top_level_tokens, standalone_items, workflow_children = _queue_display_indexes(
         visible_items=visible_items,
         workflow_by_id=workflow_by_id,
         show_workflow_context=show_workflow_context,
-        filter_workflow_children=filter_workflow_children,
-        visible_child_engines=visible_child_engines,
     )
     return _queue_display_rows_from_indexes(
         top_level_tokens=top_level_tokens,

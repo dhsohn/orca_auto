@@ -592,33 +592,6 @@ def test_cmd_queue_list_shows_all_workflow_children_in_default_text_output(
     assert "NEB" in stdout
 
 
-def test_default_queue_list_collects_all_workflow_child_engines(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-
-    def fake_list_activities(**kwargs: Any) -> dict[str, Any]:
-        captured.update(kwargs)
-        return {"count": 0, "activities": [], "sources": {}}
-
-    monkeypatch.setattr(unified_cli, "list_activities", fake_list_activities)
-    args = SimpleNamespace(
-        workflow_root=None,
-        orca_auto_config=None,
-        limit=0,
-        refresh=False,
-        engine=None,
-        status=None,
-        kind=None,
-        json=False,
-    )
-    request = unified_cli._queue_list_request(args)
-
-    unified_cli._queue_list_payload(args, request)
-
-    assert captured["child_job_engines"] is None
-
-
 def test_cmd_queue_list_shows_all_workflow_child_jobs(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

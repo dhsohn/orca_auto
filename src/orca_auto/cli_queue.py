@@ -9,18 +9,14 @@ from typing import Any
 
 from orca_auto import activity_rendering as _activity_rendering
 from orca_auto import cli_common, cli_style, terminal_table
-from orca_auto.activity_presenter import (
-    QueueListPresentationDeps,
-    QueueListPresentationRequest,
-    queue_list_display_rows_for_request,
-    queue_list_text_presentation,
-)
 from orca_auto.activity_view import (
     activity_counter_config_path,
     activity_with_parent_hint,
     count_global_active_simulations,
     filter_activity_items,
     normalize_activity_filter_values,
+    queue_list_default_visible_items,
+    queue_list_display_rows,
 )
 from orca_auto.cli_common import (
     _effective_shared_config_text,
@@ -242,28 +238,6 @@ def _queue_clear_lines(payload: dict[str, Any]) -> list[str]:
     return _activity_rendering.queue_clear_lines(payload)
 
 
-def _queue_list_presentation_request(
-    request: _QueueListRequest,
-    *,
-    visible_items: Sequence[dict[str, Any]],
-    active_simulations: int | None = None,
-    now: Any | None = None,
-    max_width: int | None = None,
-) -> QueueListPresentationRequest:
-    return QueueListPresentationRequest(
-        visible_items=visible_items,
-        config_hints=(request.shared_config,),
-        prefer_config_hints=True,
-        default_visible_items=request.default_combined_text_view,
-        limit=request.limit,
-        show_workflow_context=set(request.kind_values) != {"job"},
-        visible_workflow_child_engines=None,
-        active_simulations=active_simulations,
-        now=now,
-        max_width=max_width,
-    )
-
-
 def _queue_list_request(args: Any) -> _QueueListRequest:
     explicit_config = _effective_shared_config_text(args) or None
     return _QueueListRequest(
@@ -311,7 +285,6 @@ def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]
         crest_config=request.shared_config,
         xtb_config=request.shared_config,
         orca_config=request.shared_config,
-        child_job_engines=None,
     )
 
 
@@ -340,21 +313,6 @@ def _filtered_queue_payload(
     }, activities
 
 
-def _queue_list_display_rows(
-    *,
-    payload: dict[str, Any],
-    filtered_activities: Sequence[dict[str, Any]],
-    request: _QueueListRequest,
-) -> list[tuple[int, dict[str, Any]]]:
-    return queue_list_display_rows_for_request(
-        payload,
-        request=_queue_list_presentation_request(
-            request,
-            visible_items=filtered_activities,
-        ),
-    )
-
-
 def _print_queue_list_text(
     *,
     payload: dict[str, Any],
@@ -365,28 +323,30 @@ def _print_queue_list_text(
     tty = _layout_interactive()
     term_width = _queue_terminal_width()
     rail_width = _queue_display_width(_QUEUE_RAIL)
-    presentation = queue_list_text_presentation(
-        payload,
-        request=_queue_list_presentation_request(
-            request,
-            visible_items=filtered_activities,
-            active_simulations=filtered_payload["active_simulations"],
-            now=_queue_table_now(),
-            max_width=term_width,
-        ),
-        deps=QueueListPresentationDeps(
-            queue_list_text_lines=_queue_list_text_lines,
-        ),
+    display_items = list(filtered_activities)
+    if request.default_combined_text_view:
+        display_items = queue_list_default_visible_items(display_items)
+    if request.limit > 0:
+        display_items = display_items[: request.limit]
+    display_rows = queue_list_display_rows(
+        all_items=list(payload.get("activities", [])),
+        visible_items=display_items,
+        show_workflow_context=set(request.kind_values) != {"job"},
     )
-    display_rows = presentation.display_rows
-    lines = presentation.lines
+    active_simulations = filtered_payload["active_simulations"]
+    lines = _queue_list_text_lines(
+        display_rows,
+        active_simulations=active_simulations,
+        now=_queue_table_now(),
+        max_width=term_width,
+    )
 
     # Header: a styled summary band on a TTY, else the byte-stable
     # ``active_simulations: N`` line that piped/scripted/`--json` consumers parse.
     if tty:
         for band_line in _queue_header_band_lines(
             display_rows,
-            active_simulations=presentation.active_simulations,
+            active_simulations=active_simulations,
             max_width=term_width,
         ):
             print(band_line)

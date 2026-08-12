@@ -29,7 +29,6 @@ def list_activities(
     crest_config: str | None = None,
     xtb_config: str | None = None,
     orca_config: str | None = None,
-    child_job_engines: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     return _activity_list.list_activities(
         workflow_root=workflow_root,
@@ -39,7 +38,6 @@ def list_activities(
         crest_config=crest_config,
         xtb_config=xtb_config,
         orca_config=orca_config,
-        child_job_engines=child_job_engines,
     )
 
 

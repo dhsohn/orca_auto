@@ -181,15 +181,6 @@ def engine_queue_records(
     return rows
 
 
-def requested_child_engines(request: ActivityListRequest) -> tuple[bool, set[str]]:
-    include_children = {
-        normalize_text(engine).lower()
-        for engine in (request.child_job_engines or ())
-        if normalize_text(engine)
-    }
-    return request.child_job_engines is None, include_children
-
-
 def collect_child_queue_activity(
     resolved: ResolvedActivitySources,
     request: ActivityListRequest,
@@ -198,12 +189,8 @@ def collect_child_queue_activity(
     engine: str,
     config_path: str | None,
 ) -> list[ActivityRecord]:
-    include_all_children, include_children = requested_child_engines(request)
-    if (
-        not normalize_text(resolved.workflow_root)
-        or not normalize_text(config_path)
-        or (not include_all_children and engine not in include_children)
-    ):
+    del request
+    if not normalize_text(resolved.workflow_root) or not normalize_text(config_path):
         return []
     return engine_queue_records(
         app_name=app_name,
@@ -271,6 +258,5 @@ __all__ = [
     "engine_queue_records",
     "engine_queue_roots",
     "queue_entry_status",
-    "requested_child_engines",
     "runtime_paths_for_engine",
 ]
