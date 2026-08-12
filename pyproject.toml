@@ -107,7 +107,6 @@ module = [
     "orca_auto.core.queue.resource_requests",
     "orca_auto.core.queue.types",
     "orca_auto.core.queue.worker.models",
-    "orca_auto.core.queue.worker.signals",
     "orca_auto.core.statuses",
     "orca_auto.core.utils.coercion",
     "orca_auto.core.utils.lock",

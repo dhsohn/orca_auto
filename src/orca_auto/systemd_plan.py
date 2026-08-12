@@ -203,14 +203,6 @@ def _normalize_path(value: str | Path) -> Path:
     return Path(value).expanduser().resolve(strict=False)
 
 
-def _enabled_unit_for_args(*, target_user: str, worker_only: bool, no_enable: bool) -> str | None:
-    if no_enable:
-        return None
-    if worker_only:
-        return f"orca_auto-engine-workers@{target_user}.target"
-    return f"orca_auto-runtime@{target_user}.target"
-
-
 def _runtime_unit_for_user(target_user: str) -> str:
     return f"orca_auto-runtime@{target_user}.target"
 
@@ -221,6 +213,18 @@ def _engine_workers_unit_for_user(target_user: str) -> str:
 
 def _worker_unit_for_user(target_user: str) -> str:
     return f"orca_auto-queue-worker@{target_user}.service"
+
+
+def _workflow_worker_unit_for_user(target_user: str) -> str:
+    return f"orca_auto-workflow-worker@{target_user}.service"
+
+
+def _enabled_unit_for_args(*, target_user: str, worker_only: bool, no_enable: bool) -> str | None:
+    if no_enable:
+        return None
+    if worker_only:
+        return _engine_workers_unit_for_user(target_user)
+    return _runtime_unit_for_user(target_user)
 
 
 def _systemctl_transition_commands(

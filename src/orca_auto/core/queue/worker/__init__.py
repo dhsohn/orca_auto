@@ -15,8 +15,8 @@ from ..child.process import (
 )
 from ..processes import (
     ManagedProcess,
-    ShutdownSignalDeps,
     current_worker_pid_payload,
+    install_shutdown_signal_handlers,
     pid_is_alive,
     read_worker_pid_file,
     remove_worker_pid_file,
@@ -51,7 +51,6 @@ from .process import (
     PidFileChildProcessQueueWorker,
     PidFileChildProcessQueueWorkerHooks,
     QueueWorkerPidFileMixin,
-    install_shutdown_signal_handlers,
 )
 
 __all__ = [
@@ -66,7 +65,6 @@ __all__ = [
     "PidFileChildProcessQueueWorkerHooks",
     "ReservedQueueEntry",
     "SlotFillResult",
-    "ShutdownSignalDeps",
     "build_background_worker_command",
     "config_path_for_worker",
     "current_worker_pid_payload",
